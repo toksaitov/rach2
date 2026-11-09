@@ -72,6 +72,7 @@ case krffsprobe.write volume:krffs:krffsvol:attached mountns log -- krffsprobe w
 case krffsprobe.writers volume:krffs:krffsvol:attached mountns log -- krffsprobe writers
 case limitprobe stage:hello ids:1000,1001 -- \
     limitprobe hello=hello scratch=limitprobe.f
+case limitsprobe ids:1000 -- limitsprobe
 # loadprobe leaves out the check that no request was quarantined, since
 # /proc/disk counts the requests of every disk of the machine. The pinger
 # pings the gateway the peer gives.

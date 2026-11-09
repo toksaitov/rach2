@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.limits",
+  "summary": "Calls that Debian 13's graphics stack makes, answered as Linux answers them: rseq, SCHED_BATCH and SCHED_IDLE for an ordinary user, guard regions, get_mempolicy, and process_vm_readv with process_vm_writev; the case boots the test image on two processors and runs limitsprobe",
+  "cases": [
+    {
+      "case_id": "guest.limits.limitsprobe",
+      "behavior": "rseq, SCHED_BATCH and SCHED_IDLE for an ordinary user, guard regions, get_mempolicy, process_vm_readv and process_vm_writev answer as Linux 6.12's, and the guard advice as Linux 6.13's",
+      "units": ["limitsprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "limitsprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "rseq-auxv", "checks": "the auxiliary vector gives AT_RSEQ_FEATURE_SIZE 28 and AT_RSEQ_ALIGN 32", "source": "program"},
+        {"assertion_id": "rseq-register", "checks": "an area registered as glibc 2.44 registers it reads the processor getcpu gives in cpu_id and cpu_id_start, node 0 and an mm_cid below the processors' count", "source": "program"},
+        {"assertion_id": "rseq-errors", "checks": "registering the same area again is EBUSY, with another signature EPERM, another area or an unknown flag EINVAL", "source": "program"},
+        {"assertion_id": "rseq-migrate", "checks": "an affinity of another processor alone moves the caller there, and its area follows", "source": "program"},
+        {"assertion_id": "rseq-abort", "checks": "a signal taken inside a critical section returns to the section's abort handler, with rseq_cs cleared", "source": "program"},
+        {"assertion_id": "rseq-fork", "checks": "a forked child has its parent's area, current on its processor, and an abort handler without the signature kills it with SIGSEGV", "source": "program"},
+        {"assertion_id": "rseq-unregister", "checks": "unregistering with another signature is EPERM, with another length EINVAL; with the registered ones it leaves cpu_id -1, and again is EINVAL; an area of 16 bytes or not aligned to 32 is EINVAL", "source": "program"},
+        {"assertion_id": "sched-user", "checks": "an ordinary user sets and reads back SCHED_BATCH and SCHED_IDLE, is refused leaving SCHED_IDLE with EPERM, and SCHED_IDLE with priority 1 is EINVAL", "source": "program"},
+        {"assertion_id": "guard-install", "checks": "MADV_GUARD_INSTALL over a locked page is EINVAL; over an anonymous page it keeps the neighbours' contents, and a write(2) from the guard is EFAULT", "source": "program"},
+        {"assertion_id": "guard-fault", "checks": "a read of a guard page in a child is SIGSEGV with SEGV_MAPERR at the page's address", "source": "program"},
+        {"assertion_id": "guard-remove", "checks": "MADV_GUARD_REMOVE ends the guard, and the page reads 0", "source": "program"},
+        {"assertion_id": "mempolicy-default", "checks": "get_mempolicy gives MPOL_DEFAULT and clears a mask of 128 nodes", "source": "program"},
+        {"assertion_id": "mempolicy-allowed", "checks": "MPOL_F_MEMS_ALLOWED gives node 0 alone", "source": "program"},
+        {"assertion_id": "mempolicy-node", "checks": "MPOL_F_NODE with MPOL_F_ADDR gives node 0 for a page of the stack", "source": "program"},
+        {"assertion_id": "mempolicy-errors", "checks": "MPOL_F_NODE alone, an address without MPOL_F_ADDR, a mask with maxnode 0, MPOL_F_MEMS_ALLOWED with MPOL_F_NODE and an unknown flag are EINVAL, and MPOL_F_ADDR of a hole EFAULT", "source": "program"},
+        {"assertion_id": "vm-read", "checks": "root reads with process_vm_readv a string its child wrote after the fork, into two buffers", "source": "program"},
+        {"assertion_id": "vm-partial", "checks": "a remote range that runs into a hole gives the bytes before it, one inside the hole is EFAULT, and a flag EINVAL", "source": "program"},
+        {"assertion_id": "vm-write", "checks": "root writes with process_vm_writev into its child, which finds the bytes", "source": "program"},
+        {"assertion_id": "vm-refused", "checks": "an ordinary user's child is refused its root parent's memory with EPERM, and a reaped child's pid is ESRCH", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [{"name": "limitsprobe", "node": "tests/limitsprobe", "per_architecture": true}, {"name": "kernel", "node": "rach2/kernel", "per_architecture": true}, {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true}, {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "ids", "count": 1}]}
+    }
+  ]
+}
