@@ -430,6 +430,33 @@ int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups)
     return 0;
 }
 
+uint32_t netlink_memberships(struct socket *sock, uint32_t *words, uint32_t max)
+{
+    const struct netlink_state *st = state_of(sock);
+    const struct nl_group *g;
+    uint32_t i, n, flags;
+
+    for (i = 0; i < max; i++) {
+        words[i] = 0;
+    }
+    flags = net_lock();
+    n = st->groups != 0;
+    if (max > 0) {
+        words[0] = st->groups;
+    }
+    for (g = st->extra_groups; g; g = g->next) {
+        i = (g->id - 1) / 32;
+        if (i + 1 > n) {
+            n = i + 1;
+        }
+        if (i < max) {
+            words[i] |= 1u << ((g->id - 1) % 32);
+        }
+    }
+    net_unlock(flags);
+    return n;
+}
+
 int32_t netlink_setsockopt(struct socket *sock, int optname, int val, int optlen)
 {
     struct netlink_state *st = state_of(sock);
