@@ -211,6 +211,10 @@ int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, ch
  */
 int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t errlen);
 
+/** Read the menu slot whole, `bs->menu.size` bytes, into `out`; fails for a
+ *  volume that has no slot. */
+int bootslot_read_menu(struct bootslot *bs, uint8_t *out, char *err, size_t errlen);
+
 /** Read the environment block, BOOTSLOT_ENV_BYTES bytes, into `out`. */
 int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errlen);
 

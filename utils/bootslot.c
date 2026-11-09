@@ -961,6 +961,21 @@ int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t er
     return env_edit(bs, NULL, NULL, key, err, errlen);
 }
 
+int bootslot_read_menu(struct bootslot *bs, uint8_t *out, char *err, size_t errlen)
+{
+    uint32_t s;
+
+    if (!bs->have_menu) {
+        return fail(err, errlen, "this disk has no menu slot");
+    }
+    for (s = 0; s < bs->menu.size / BOOTSLOT_SECTOR; s++) {
+        if (file_read_sector(bs, &bs->menu, s, out + s * BOOTSLOT_SECTOR) != 0) {
+            return fail(err, errlen, "the menu slot does not read");
+        }
+    }
+    return 0;
+}
+
 int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errlen)
 {
     uint32_t s;
