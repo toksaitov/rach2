@@ -17,6 +17,9 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     here = Path(__file__).resolve().parent
     ref = here.parent / 'debian-ref/debian-ref.sh'
+    site = Path(os.environ.get('ETUDE_SITE', '/etc/rach2/etude-site'))
+    fields = dict(line.split(' ', 1) for line in site.read_text().splitlines() if ' ' in line)
+    ledger = Path(fields['ledger']) / 'claims'
     children, logs = [], []
     command = None
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
@@ -57,7 +60,6 @@ def main():
             child.wait()
         for log in logs:
             log.close()
-        ledger = Path('/var/lib/rach2-etude/ledger/claims')
         if ledger.exists():
             text = ledger.read_text()
             (out / 'ledger-after').write_text(text)
