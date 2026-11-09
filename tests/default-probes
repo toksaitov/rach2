@@ -15,6 +15,7 @@ auxvprobe
 tlsprobe i686
 fsbaseprobe
 wow64probe x86_64
+futexvprobe
 errnoprobe
 vmprobe
 mmapdevprobe

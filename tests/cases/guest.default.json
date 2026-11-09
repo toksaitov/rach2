@@ -348,7 +348,7 @@
     },
     {
       "case_id": "guest.default.wow64probe",
-      "behavior": "On x86-64 a 64-bit process runs 32-bit code in the GDT's 32-bit code segment and makes i386 calls by int $0x80 through the compat table, with set_thread_area's TLS entries, signals taken in 32-bit code, seccomp and ptrace judging each call's architecture.",
+      "behavior": "On x86-64 a 64-bit process runs 32-bit code in the GDT's 32-bit code segment and makes i386 calls by int $0x80 through the compat table, with set_thread_area's TLS entries, signals taken in 32-bit code, seccomp and ptrace judging each call's architecture, futex_waitv through the compat table, and MAP_32BIT and hints below 4 GiB placing memory a 32-bit pointer reaches.",
       "units": ["default", "wow64probe"],
       "domain": "guest",
       "architectures": ["x86_64"],
@@ -369,7 +369,11 @@
         {"assertion_id": "signal-return", "checks": "the handler's return resumes the 32-bit code, which comes back to 64-bit code with kill's result", "source": "program"},
         {"assertion_id": "seccomp-native-kept", "checks": "a child installs a filter that kills AUDIT_ARCH_I386 number 20, and its x86-64 call of number 20, writev, is allowed", "source": "program"},
         {"assertion_id": "seccomp-i386-killed", "checks": "its i386 getpid by int $0x80 ends it with SIGSYS", "source": "program"},
-        {"assertion_id": "ptrace-arch", "checks": "PTRACE_GET_SYSCALL_INFO reports AUDIT_ARCH_I386 and number 20 at the entry of a tracee's int $0x80 getpid, and AUDIT_ARCH_X86_64 and number 60 at its exit call's", "source": "program"}
+        {"assertion_id": "ptrace-arch", "checks": "PTRACE_GET_SYSCALL_INFO reports AUDIT_ARCH_I386 and number 20 at the entry of a tracee's int $0x80 getpid, and AUDIT_ARCH_X86_64 and number 60 at its exit call's", "source": "program"},
+        {"assertion_id": "map32bit", "checks": "an mmap of two pages with MAP_32BIT is placed from 1 GiB to 2 GiB and keeps its bytes", "source": "program"},
+        {"assertion_id": "map32bit-hint", "checks": "MAP_32BIT with the hint 0x90000000 is still placed from 1 GiB to 2 GiB, and with the free hint 0x31000000 is placed there", "source": "program"},
+        {"assertion_id": "low-hint", "checks": "an mmap without MAP_32BIT takes the free hint 0xC0000000, below 4 GiB", "source": "program"},
+        {"assertion_id": "futexv-int80", "checks": "futex_waitv, i386 number 449, by int $0x80 fails with EAGAIN for a word that differs and ETIMEDOUT at a passed deadline on CLOCK_MONOTONIC, and a child's FUTEX_WAKE of the third of three words in a shared MAP_32BIT page ends it with index 2", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -378,6 +382,39 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "wow64probe", "node": "tests/wow64probe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.default.futexvprobe",
+      "behavior": "futex_waitv sleeps on up to 128 words until a wake of any of them and returns its index, on private words woken by another thread and shared words woken by another process, and answers a changed word, its deadlines on both clocks and the arguments Linux refuses as Linux does.",
+      "units": ["default", "futexvprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "futexvprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "private-wake", "checks": "a thread waits on 128 words with FUTEX2_PRIVATE, another thread's FUTEX_WAKE with FUTEX_PRIVATE_FLAG of the last wakes one waiter, and the wait returns 127", "source": "program"},
+        {"assertion_id": "shared-wake", "checks": "the probe waits without FUTEX2_PRIVATE on four words of a shared anonymous page, a child's FUTEX_WAKE of the second without FUTEX_PRIVATE_FLAG wakes one waiter, and the wait returns 1", "source": "program"},
+        {"assertion_id": "eagain", "checks": "a wait on three words whose second does not hold its value fails with EAGAIN", "source": "program"},
+        {"assertion_id": "timeout-monotonic", "checks": "a deadline 20 ms ahead on CLOCK_MONOTONIC ends the wait with ETIMEDOUT, and the clock has reached it", "source": "program"},
+        {"assertion_id": "timeout-realtime", "checks": "the same on CLOCK_REALTIME", "source": "program"},
+        {"assertion_id": "timeout-passed", "checks": "a deadline of time 0 on either clock ends the wait with ETIMEDOUT", "source": "program"},
+        {"assertion_id": "einval", "checks": "flags of 1, counts of 0 and 129, a NULL array, clock 2 with a deadline, 64-bit and 8-bit sizes, FUTEX2_NUMA, a reserved word of 1, a value past 32 bits and a word two bytes off alignment each fail with EINVAL", "source": "program"},
+        {"assertion_id": "efault", "checks": "an array or a deadline at address 8, and a word in a page just unmapped, each fail with EFAULT", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "futexvprobe", "node": "tests/futexvprobe", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}

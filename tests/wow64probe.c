@@ -21,6 +21,15 @@
  * a tracee makes, AUDIT_ARCH_I386 for `int $0x80`; like Linux, it reports a
  * system call stop only with PTRACE_O_TRACESYSGOOD.
  *
+ * An mmap with MAP_32BIT must place the mapping between 1 GiB and 2 GiB,
+ * also when its hint is above 2 GiB, and must take a free hint below 2 GiB;
+ * without the flag, a free hint below 4 GiB must be taken as it is. The
+ * i386 futex_waitv, number 449, made by `int $0x80` with the same structure
+ * and 64-bit deadline, must fail with EAGAIN for a word that differs and
+ * with ETIMEDOUT for a deadline that has passed, and a child's wake of the
+ * third of three words in a shared page that MAP_32BIT placed must end it
+ * with index 2.
+ *
  * Everything the 32-bit code touches lies below 4 GiB: the probe is linked
  * at 0x400000, and its 32-bit stack and the buffers it passes to i386 calls
  * are static.
@@ -49,14 +58,17 @@
 #define I386_NO_CALL         222
 #define I386_SET_THREAD_AREA 243
 #define I386_GET_THREAD_AREA 244
+#define I386_FUTEX_WAITV     449
 
 #define SYS_PRCTL   157
 #define SYS_SECCOMP 317
 
-#define ENOSYS  38
-#define SIGUSR1 10
-#define SIGSTOP 19
-#define SIGSYS  31
+#define ENOSYS    38
+#define EAGAIN    11
+#define ETIMEDOUT 110
+#define SIGUSR1   10
+#define SIGSTOP   19
+#define SIGSYS    31
 
 #define SA_SIGINFO  0x00000004ul
 #define SA_RESTORER 0x04000000ul
@@ -87,6 +99,21 @@
 #define PTRACE_O_TRACESYSGOOD     1
 #define PTRACE_GET_SYSCALL_INFO   0x420E
 #define PTRACE_SYSCALL_INFO_ENTRY 1
+
+/* mmap's protections and flags, MAP_32BIT x86-64's, and where it places. */
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
+#define MAP_SHARED    0x01
+#define MAP_PRIVATE   0x02
+#define MAP_ANONYMOUS 0x20
+#define MAP_32BIT     0x40
+#define LOW_1G        0x40000000ul
+#define LOW_2G        0x80000000ul
+#define PAGE          4096ul
+
+#define FUTEX_WAKE      1
+#define FUTEX2_SIZE_U32 0x02
+#define CLOCK_MONOTONIC 1
 
 /* The x86-64 exit call, whose entry stop the tracer looks for. */
 #define X86_64_EXIT 60
@@ -129,7 +156,11 @@ static const char *const assertion_id[] = {"far-call",
                                            "signal-return",
                                            "seccomp-native-kept",
                                            "seccomp-i386-killed",
-                                           "ptrace-arch"};
+                                           "ptrace-arch",
+                                           "map32bit",
+                                           "map32bit-hint",
+                                           "low-hint",
+                                           "futexv-int80"};
 
 /** Print "WOW64PROBE FAIL: " and `why`, end the report at the assertion that
  * `why` fails, and exit 1. */
@@ -279,6 +310,20 @@ static int int80(long nr, unsigned long a, unsigned long b, unsigned long c)
     __asm__ __volatile__("int $0x80"
                          : "=a"(r)
                          : "a"(nr), "b"(a), "c"(b), "d"(c)
+                         : "memory", "r8", "r9", "r10", "r11");
+    return (int)r;
+}
+
+/** The i386 call `nr` by `int $0x80` from 64-bit code, with five
+ * arguments, each below 4 GiB; the result as the 32-bit EAX gives it. */
+static int int80_5(long nr, unsigned long a, unsigned long b, unsigned long c, unsigned long d,
+                   unsigned long e)
+{
+    long r;
+
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "a"(nr), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
                          : "memory", "r8", "r9", "r10", "r11");
     return (int)r;
 }
@@ -516,6 +561,125 @@ static void run_ptrace(void)
     report_held();
 }
 
+/** An anonymous mapping of `len` bytes at the hint `addr` with `flags`
+ * beside MAP_ANONYMOUS; its address, or a negated errno. */
+static unsigned long map(unsigned long addr, unsigned long len, long flags)
+{
+    return (unsigned long)syscall6(SYS_MMAP, (long)addr, (long)len, PROT_READ | PROT_WRITE,
+                                   flags | MAP_ANONYMOUS, -1, 0);
+}
+
+/** Whether [a, a + len) lies from 1 GiB to 2 GiB. */
+static int in_low_window(unsigned long a, unsigned long len)
+{
+    return a >= LOW_1G && a <= LOW_2G - len;
+}
+
+/** MAP_32BIT's window and hints, and a hint below 4 GiB without it. */
+static void run_map32(void)
+{
+    volatile unsigned char *m;
+    unsigned long a;
+
+    a = map(0, 2 * PAGE, MAP_PRIVATE | MAP_32BIT);
+    if (sys_failed((long)a) || !in_low_window(a, 2 * PAGE)) {
+        fail("an mmap with MAP_32BIT was not placed from 1 GiB to 2 GiB");
+    }
+    m = (volatile unsigned char *)a;
+    m[0] = 0x5A;
+    m[2 * PAGE - 1] = 0xA5;
+    if (m[0] != 0x5A || m[2 * PAGE - 1] != 0xA5) {
+        fail("the MAP_32BIT mapping did not keep its bytes");
+    }
+    syscall2(SYS_MUNMAP, (long)a, 2 * PAGE);
+    report_held();
+    a = map(0x90000000ul, PAGE, MAP_PRIVATE | MAP_32BIT);
+    if (sys_failed((long)a) || !in_low_window(a, PAGE)) {
+        fail("an mmap with MAP_32BIT and a hint above 2 GiB was not placed from 1 GiB to 2 GiB");
+    }
+    syscall2(SYS_MUNMAP, (long)a, PAGE);
+    a = map(0x31000000ul, PAGE, MAP_PRIVATE | MAP_32BIT);
+    if (a != 0x31000000ul) {
+        fail("an mmap with MAP_32BIT did not take the free hint 0x31000000");
+    }
+    syscall2(SYS_MUNMAP, (long)a, PAGE);
+    report_held();
+    a = map(0xC0000000ul, PAGE, MAP_PRIVATE);
+    if (a != 0xC0000000ul) {
+        fail("an mmap did not take the free hint 0xC0000000, below 4 GiB");
+    }
+    syscall2(SYS_MUNMAP, (long)a, PAGE);
+    report_held();
+}
+
+/** Linux's struct futex_waitv and struct __kernel_timespec, alike in both
+ * ABIs. */
+struct futex_waitv {
+    unsigned long long val;
+    unsigned long long uaddr;
+    unsigned int flags;
+    unsigned int reserved;
+};
+
+struct timespec64 {
+    long long tv_sec;
+    long long tv_nsec;
+};
+
+/** futex_waitv by `int $0x80`: a word that differs, a deadline that has
+ * passed, and a wake by a child of a word in a shared page. */
+static void run_futexv(void)
+{
+    static struct futex_waitv w[3];
+    static struct timespec64 past;
+    volatile unsigned int *words;
+    unsigned long page;
+    long pid;
+    int i, r, status = 0;
+
+    page = map(0, PAGE, MAP_SHARED | MAP_32BIT);
+    if (sys_failed((long)page)) {
+        fail("an mmap of a shared page with MAP_32BIT failed");
+    }
+    words = (volatile unsigned int *)page;
+    for (i = 0; i < 3; i++) {
+        w[i].val = 0;
+        w[i].uaddr = (unsigned long)&words[i];
+        w[i].flags = FUTEX2_SIZE_U32;
+        w[i].reserved = 0;
+    }
+    w[1].val = 9;
+    if (int80_5(I386_FUTEX_WAITV, (unsigned long)w, 3, 0, 0, 0) != -EAGAIN) {
+        fail("the i386 futex_waitv did not fail with EAGAIN for a word that differs");
+    }
+    w[1].val = 0;
+    if (int80_5(I386_FUTEX_WAITV, (unsigned long)w, 3, 0, (unsigned long)&past, CLOCK_MONOTONIC) !=
+        -ETIMEDOUT) {
+        fail("the i386 futex_waitv did not fail with ETIMEDOUT at a deadline that had passed");
+    }
+    pid = syscall0(SYS_FORK);
+    if (pid < 0) {
+        fail("fork");
+    }
+    if (pid == 0) {
+        while (!words[8]) {
+            if (syscall3(SYS_FUTEX, (long)&words[2], FUTEX_WAKE, 1) == 1) {
+                sys_exit(0);
+            }
+            syscall0(SYS_SCHED_YIELD);
+        }
+        sys_exit(2);
+    }
+    r = int80_5(I386_FUTEX_WAITV, (unsigned long)w, 3, 0, 0, 0);
+    words[8] = 1;
+    if (child_status(pid) != 0 || r != 2) {
+        fail("a child's wake of the third shared word did not end the i386 futex_waitv with "
+             "index 2");
+    }
+    syscall2(SYS_MUNMAP, (long)page, PAGE);
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -534,6 +698,8 @@ void probe_main(unsigned long *sp)
     run_signal();
     run_seccomp();
     run_ptrace();
+    run_map32();
+    run_futexv();
     report_end();
     say("WOW64PROBE OK\n");
     sys_exit(0);
