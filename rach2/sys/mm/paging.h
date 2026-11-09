@@ -257,12 +257,26 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write);
 
 /**
  * Bring in the pages of [start, end) of the current process's regions as
- * faults would, for mmap's MAP_POPULATE: those of a private writable region
- * for a write, the others for a read. It stops at the first page that cannot
- * be had, since a populate that falls short leaves the rest to be faulted in
- * later, and never fails. It may sleep.
+ * faults would, for mmap's MAP_POPULATE and for the locked regions of the
+ * mlock calls: those of a private writable region for a write, the others
+ * for a read; a region with no access or of device memory is passed over.
+ * It stops at the first page that cannot be had, since a populate that
+ * falls short leaves the rest to be faulted in later: 0, or -1 when it
+ * stopped short, which mmap ignores and mlock answers with EAGAIN. It may
+ * sleep.
  */
-void vm_populate(uintptr_t start, uintptr_t end);
+int vm_populate(uintptr_t start, uintptr_t end);
+
+/**
+ * Whether the current process may have `pages` more pages locked or pinned
+ * when `have` are already, by its soft RLIMIT_MEMLOCK: always for a
+ * privileged process, which has Linux's CAP_IPC_LOCK, and for the kernel
+ * outside any process. The mlock calls ask it with the pages of the locked
+ * regions (`vm_locked`) and the pins with the pages already pinned
+ * (`struct mm`'s `pinned`), each bounded on its own, as Linux bounds
+ * locked_vm and pinned_vm.
+ */
+int mem_lock_room(unsigned long have, unsigned long pages);
 
 /**
  * Drop the reference of every present user page in `dir`'s own tables and
@@ -500,11 +514,17 @@ extern page_dir_t *_kernel_dir;
  * by frame number. 0 means the frame is free; N below `FRAME_REF_MAX` means
  * N mappings share it. A fresh allocation sets the count to 1; copy-on-write
  * fork raises it; freeing a mapping lowers it, and the frame returns to the
- * pool only when the last reference is gone. The words at and above
- * `FRAME_REF_MAX` are states and not counts: a frame the map does not offer.
+ * pool only when the last reference is gone. A pin for a device
+ * (`frame_pin`) adds `FRAME_PIN_BIAS` and not 1, as Linux's
+ * GUP_PIN_COUNTING_BIAS, so the word tells a pinned frame apart and its
+ * mappings are the word modulo the bias: copy-on-write and fork read the
+ * mappings, and a frame pinned and mapped once is still this address
+ * space's alone. The words at and above `FRAME_REF_MAX` are states and not
+ * counts: a frame the map does not offer.
  */
-#define FRAME_REF_MAX 0xFFFFFF00u
-#define FRAME_ABSENT  0xFFFFFFFFu
+#define FRAME_REF_MAX  0xFFFFFF00u
+#define FRAME_ABSENT   0xFFFFFFFFu
+#define FRAME_PIN_BIAS 0x100000u
 extern uint32_t *_frames;
 extern size_t _frames_number; /* the words of the table, the map's top frame */
 
@@ -523,5 +543,20 @@ void frame_ref(uintptr_t phys);
  * is returned as it is and nothing changes.
  */
 uint32_t frame_unref(uintptr_t phys);
+
+/**
+ * Pin the frame at `phys` for a device: it stays out of the pool until
+ * `frame_unpin`, whatever mappings go. 0, or -1 for a free frame, one past
+ * the table, a state word, or a frame with no room for one more pin, some
+ * four thousand.
+ */
+int frame_pin(uintptr_t phys);
+
+/** Drop a pin `frame_pin` took; the frame goes back to the pool when
+ * nothing else refers to it. Nothing for a frame without a pin. */
+void frame_unpin(uintptr_t phys);
+
+/** Whether the frame at `phys` has a pin. */
+int frame_pinned(uintptr_t phys);
 
 #endif

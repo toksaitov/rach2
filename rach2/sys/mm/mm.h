@@ -76,6 +76,14 @@ struct mm {
      * that its caller may not read, and once any sharer's effective ids
      * move; PR_SET_DUMPABLE sets it, and fork's copy takes it. */
     uint32_t dumpable;
+    /* The ranges drivers registered to hear of changes to the pages
+     * (notify.h), among them those of the pins charged to the address
+     * space (pin.h); a fork's copy has none. */
+    struct mmn_range *notify;
+    /* The pages pinned for devices and charged here, VmPin of
+     * /proc/PID/status, which RLIMIT_MEMLOCK bounds apart from the locked
+     * regions' VmLck, as Linux's pinned_vm. */
+    unsigned long pinned;
 };
 
 /** A new, empty, dumpable address space with one user and one hold; NULL
@@ -134,11 +142,12 @@ void mm_get(struct mm *mm);
  * one: 1 when taken, 0 once the last user's put has freed the pages. */
 int mm_get_live(struct mm *mm);
 
-/** Drop a user's count; the last frees the pages, the page tables, the
- * directory and the regions, lets go of the program's file and releases the
- * files its regions mapped, either of which may sleep, and then drops the
- * users' hold. Its directory must not be the one in use, which the caller
- * switches away from first. */
+/** Drop a user's count; the last tells the ranges drivers registered and
+ * releases the pins charged to the space (`mmn_release`), frees the pages,
+ * the page tables, the directory and the regions, lets go of the program's
+ * file and releases the files its regions mapped, either of which may
+ * sleep, and then drops the users' hold. Its directory must not be the one
+ * in use, which the caller switches away from first. */
 void mm_put(struct mm *mm);
 
 /** Keep the record of `mm`, and nothing of its memory. */

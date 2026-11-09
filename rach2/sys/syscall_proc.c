@@ -56,6 +56,7 @@
 #include "mm/pressure.h"
 #include "mm/pagecache.h"
 #include "mm/heap.h"
+#include "mm/notify.h"
 #include "mm/usercopy.h"
 #include "mm/vm.h"
 #include "lib/kuser.h"
@@ -5762,7 +5763,7 @@ long sys_getgroups(isr_params_t *params)
     return (int32_t)p->ngroups;
 }
 
-/* The resources: six are kept in the record and enforced, and the rest
+/* The resources: seven are kept in the record and enforced, and the rest
  * are unlimited. */
 #define RLIMIT_FSIZE_RES 1
 
@@ -5773,6 +5774,8 @@ long sys_getgroups(isr_params_t *params)
 #define RLIMIT_NPROC_RES 6
 
 #define RLIMIT_NOFILE_RES 7
+
+#define RLIMIT_MEMLOCK_RES 8
 
 #define RLIMIT_AS_RES 9
 
@@ -5792,6 +5795,8 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_CORE;
     case RLIMIT_FSIZE_RES:
         return RLIM_FSIZE;
+    case RLIMIT_MEMLOCK_RES:
+        return RLIM_MEMLOCK;
     default:
         return -1;
     }
@@ -6002,6 +6007,14 @@ long sys_prlimit64(isr_params_t *params)
 /* Round 'v' up to the next page boundary. */
 #define PAGE_UP(v) (((v) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
+/** Whether the caller may lock memory at all, Linux's can_do_mlock: its
+ * soft RLIMIT_MEMLOCK is above 0, or it is privileged, which has
+ * CAP_IPC_LOCK. */
+static int mlock_allowed(void)
+{
+    return current_proc->rlim[RLIM_MEMLOCK].cur != 0 || proc_privileged(current_proc);
+}
+
 /**
  * Set the program break, the heap's top (brk(2)). Its argument is the
  * requested break. Returns the resulting break: the new value on success, or
@@ -6014,7 +6027,9 @@ long sys_prlimit64(isr_params_t *params)
  * [heap_start, page_up(brk)), which mprotect may have cut into regions of
  * different protection: growing adds a read-write region at the top, which
  * merges with a read-write top piece, and shrinking removes the range above
- * the new top and frees its pages.
+ * the new top and frees its pages. Under mlockall(MCL_FUTURE) the growth is
+ * locked and counts against RLIMIT_MEMLOCK, past which the break stays, and
+ * its pages are brought in unless MCL_ONFAULT was given, as on Linux.
  */
 long sys_brk(isr_params_t *params)
 {
@@ -6042,13 +6057,24 @@ long sys_brk(isr_params_t *params)
         if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
             return (long)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
         }
-        if (vm_insert(vm, old_top, new_top, VM_PROT_READ | VM_PROT_WRITE, VM_HEAP) != 0) {
+        if ((vm->def_prot & VM_PROT_LOCKED) &&
+            !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
             return (long)vm->brk;
+        }
+        if (vm_insert(vm, old_top, new_top, VM_PROT_READ | VM_PROT_WRITE | vm->def_prot, VM_HEAP) !=
+            0) {
+            return (long)vm->brk;
+        }
+        if ((vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
+            vm->brk = req;
+            (void)vm_populate(old_top, new_top);
+            return (long)req;
         }
     } else if (new_top < old_top) {
         if (vm_remove(vm, new_top, old_top) != 0) {
             return (long)vm->brk;
         }
+        mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
         unmap_user_range(_curr_dir, new_top, old_top);
     }
 
@@ -6334,6 +6360,7 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
     if (rc == 0 && (flags & MAP_FIXED)) {
         if (vm_reserve(vm, 2) == 0) {
             vm_remove(vm, base, base + len);
+            mmn_notify(current_proc->mm, MMN_UNMAP, base, base + len);
             unmap_user_range(_curr_dir, base, base + len);
         } else {
             rc = -ENOMEM;
@@ -6372,12 +6399,20 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
  * MAP_NONBLOCK is given too, or with MAP_LOCKED, they are backed before the
  * call returns, as far as memory allows (`vm_populate`); a device's pages
  * are always backed on first touch.
+ *
+ * MAP_LOCKED locks the mapping, as mlock does, and so does mlockall's
+ * MCL_FUTURE, with its MCL_ONFAULT; a device's mapping is never locked.
+ * MAP_LOCKED is EPERM for a process without privilege whose RLIMIT_MEMLOCK
+ * is 0, and a locked mapping that would take the locked pages past the
+ * limit is EAGAIN, as on Linux, which counts the new length whatever a
+ * MAP_FIXED range replaces.
  */
 long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
                      unsigned long pgoff)
 {
     struct map_source src;
     uintptr_t len;
+    uint32_t locks;
     int32_t rc;
     long base;
 
@@ -6403,6 +6438,17 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
          pgoff + len / PAGE_SIZE > 0xFFFFFFFFul)) {
         return -EOVERFLOW;
     }
+    locks = current_proc->mm->vm.def_prot;
+    if (flags & MAP_LOCKED) {
+        if (!mlock_allowed()) {
+            return -EPERM;
+        }
+        locks = VM_PROT_LOCKED;
+    }
+    if ((locks & VM_PROT_LOCKED) &&
+        !mem_lock_room(vm_locked(&current_proc->mm->vm) / PAGE_SIZE, len / PAGE_SIZE)) {
+        return -EAGAIN;
+    }
     mem_balance();
     src.prot = vm_prot_of(prot);
     src.pgoff = (uint32_t)pgoff;
@@ -6410,10 +6456,14 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
     if (rc != 0) {
         return rc;
     }
+    if (!(src.prot & VM_PROT_IO)) {
+        src.prot |= locks;
+    }
     base = mmap_install(addr, len, flags, &src);
     if ((unsigned long)base < (unsigned long)-4095L &&
-        ((flags & MAP_LOCKED) || (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE)) {
-        vm_populate((uintptr_t)base, (uintptr_t)base + len);
+        ((locks & VM_PROT_LOCKS) == VM_PROT_LOCKED ||
+         (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE)) {
+        (void)vm_populate((uintptr_t)base, (uintptr_t)base + len);
     }
     return base;
 }
@@ -6487,6 +6537,7 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
         vma_exhausted("shmdt");
         return -ENOMEM;
     }
+    mmn_notify(current_proc->mm, MMN_UNMAP, addr, end);
     unmap_user_range(_curr_dir, addr, end);
     vm_file_reap();
     return 0;
@@ -6545,6 +6596,7 @@ long sys_munmap(isr_params_t *params)
         vma_exhausted("munmap");
         return -ENOMEM;
     }
+    mmn_notify(current_proc->mm, MMN_UNMAP, start, end);
     unmap_user_range(_curr_dir, start, end);
     vm_file_reap();
     return 0;
@@ -6609,6 +6661,7 @@ long sys_mprotect(isr_params_t *params)
         vma_exhausted("mprotect");
         return -ENOMEM;
     }
+    mmn_notify(current_proc->mm, MMN_PROTECT, addr, end);
     protect_resident(addr, end, vmprot);
     return 0;
 }
@@ -6638,6 +6691,7 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
     if (paging_move_range(_curr_dir, addr, to, moved) != 0) {
         return -ENOMEM;
     }
+    mmn_notify(current_proc->mm, MMN_UNMAP, addr, addr + len);
     vm_file_get(file);
     vm_remove(vm, addr, addr + len);
     unmap_user_range(_curr_dir, addr, addr + len);
@@ -6680,6 +6734,7 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
         return -ENOMEM;
     }
     vm_remove(vm, to, to + new_len);
+    mmn_notify(current_proc->mm, MMN_UNMAP, to, to + new_len);
     unmap_user_range(_curr_dir, to, to + new_len);
     return remap_move(vm, vm_find(vm, addr), addr, old_len, to, new_len);
 }
@@ -6703,61 +6758,27 @@ static int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len
 }
 
 /**
- * Resize a mapping, or move it (mremap(2)). Its arguments are old address,
- * old length, new length, flags and new address with MREMAP_FIXED. The old
- * range must lie in one region. With MREMAP_FIXED the mapping moves, pages
- * and all, to the new address, whatever was there going first
- * (`remap_fixed`). Otherwise a shrink cuts its end, and a growth takes the
- * range after it when that is free, or with MREMAP_MAYMOVE moves the whole
- * mapping to a free range of the new length. Returns the mapping's address,
- * or -errno: EINVAL for arguments that fail `remap_args_valid`, and for a
- * mapping of a file whose last page at the new length would not fit in 32
- * bits; EFAULT for a range not in one region, or for a growth of device
- * memory; ENOMEM when it cannot grow in place and may not move, when no range
- * is free, or past RLIMIT_AS. MREMAP_DONTUNMAP is not implemented, and is
- * EINVAL.
+ * The change `sys_mremap` makes once its arguments are checked: give
+ * [addr, addr + old_len), which lies in the region `r`, `new_len` bytes, at
+ * `to` under MREMAP_FIXED, in place when it shrinks or the range after it
+ * is free, and elsewhere under MREMAP_MAYMOVE. Returns the mapping's
+ * address, or -ENOMEM. The caller reaps the files the change let go.
  */
-long sys_mremap(isr_params_t *params)
+static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t new_len,
+                         uint32_t flags, uintptr_t to)
 {
-    uintptr_t addr = SC_ARG(params, 0);
-    uint32_t flags = (uint32_t)SC_ARG(params, 3);
-    uintptr_t to = SC_ARG(params, 4);
-    uintptr_t old_len, new_len;
-    vm_space_t *vm;
-    vma_t *r;
-    long rc;
+    vm_space_t *vm = &current_proc->mm->vm;
 
-    if (!current_proc || !current_proc->mm) {
-        return -ESRCH;
-    }
-    vm = &current_proc->mm->vm;
-    if (!remap_args_valid(addr, SC_ARG(params, 1), SC_ARG(params, 2), flags)) {
-        return -EINVAL;
-    }
-    old_len = PAGE_UP(SC_ARG(params, 1));
-    new_len = PAGE_UP(SC_ARG(params, 2));
-    r = vm_find(vm, addr);
-    if (!r || addr + old_len > r->end) {
-        return -EFAULT;
-    }
-    if (r->file && new_len / PAGE_SIZE > 0xFFFFFFFFu - (r->pgoff + (addr - r->start) / PAGE_SIZE)) {
-        return -EINVAL;
-    }
-    if ((r->prot & VM_PROT_IO) && new_len > old_len) {
-        return -EFAULT; /* device memory does not grow, as Linux's VM_DONTEXPAND */
-    }
     if (flags & MREMAP_FIXED) {
-        rc = remap_fixed(vm, addr, old_len, to, new_len);
-        vm_file_reap();
-        return rc;
+        return remap_fixed(vm, addr, old_len, to, new_len);
     }
     if (new_len <= old_len) {
         if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {
             vma_exhausted("mremap");
             return -ENOMEM;
         }
+        mmn_notify(current_proc->mm, MMN_UNMAP, addr + new_len, addr + old_len);
         unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
-        vm_file_reap();
         return (long)addr;
     }
     if (vm_total(vm) + (new_len - old_len) > current_proc->rlim[RLIM_AS].cur) {
@@ -6779,8 +6800,66 @@ long sys_mremap(isr_params_t *params)
     if (to == 0) {
         return -ENOMEM;
     }
-    rc = remap_move(vm, r, addr, old_len, to, new_len);
+    return remap_move(vm, r, addr, old_len, to, new_len);
+}
+
+/**
+ * Resize a mapping, or move it (mremap(2)). Its arguments are old address,
+ * old length, new length, flags and new address with MREMAP_FIXED. The old
+ * range must lie in one region. With MREMAP_FIXED the mapping moves, pages
+ * and all, to the new address, whatever was there going first
+ * (`remap_fixed`). Otherwise a shrink cuts its end, and a growth takes the
+ * range after it when that is free, or with MREMAP_MAYMOVE moves the whole
+ * mapping to a free range of the new length. Returns the mapping's address,
+ * or -errno: EINVAL for arguments that fail `remap_args_valid`, and for a
+ * mapping of a file whose last page at the new length would not fit in 32
+ * bits; EFAULT for a range not in one region, or for a growth of device
+ * memory; ENOMEM when it cannot grow in place and may not move, when no range
+ * is free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping
+ * would take the locked pages past RLIMIT_MEMLOCK. The growth of a locked
+ * mapping is locked and brought in, unless it was locked on fault, as on
+ * Linux. MREMAP_DONTUNMAP is not implemented, and is EINVAL.
+ */
+long sys_mremap(isr_params_t *params)
+{
+    uintptr_t addr = SC_ARG(params, 0);
+    uint32_t flags = (uint32_t)SC_ARG(params, 3);
+    uintptr_t to = SC_ARG(params, 4);
+    uintptr_t old_len, new_len;
+    vm_space_t *vm;
+    vma_t *r;
+    int locked;
+    long rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    vm = &current_proc->mm->vm;
+    if (!remap_args_valid(addr, SC_ARG(params, 1), SC_ARG(params, 2), flags)) {
+        return -EINVAL;
+    }
+    old_len = PAGE_UP(SC_ARG(params, 1));
+    new_len = PAGE_UP(SC_ARG(params, 2));
+    r = vm_find(vm, addr);
+    if (!r || addr + old_len > r->end) {
+        return -EFAULT;
+    }
+    if (r->file && new_len / PAGE_SIZE > 0xFFFFFFFFu - (r->pgoff + (addr - r->start) / PAGE_SIZE)) {
+        return -EINVAL;
+    }
+    if ((r->prot & VM_PROT_IO) && new_len > old_len) {
+        return -EFAULT; /* device memory does not grow, as Linux's VM_DONTEXPAND */
+    }
+    locked = (r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED;
+    if ((r->prot & VM_PROT_LOCKED) && new_len > old_len &&
+        !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_len - old_len) / PAGE_SIZE)) {
+        return -EAGAIN;
+    }
+    rc = remap_resize(r, addr, old_len, new_len, flags, to);
     vm_file_reap();
+    if (locked && new_len > old_len && (unsigned long)rc < (unsigned long)-4095L) {
+        (void)vm_populate((uintptr_t)rc + old_len, (uintptr_t)rc + new_len);
+    }
     return rc;
 }
 
@@ -6806,12 +6885,38 @@ static int madvise_known(uint32_t advice)
 }
 
 /**
+ * Whether `advice` over [start, end), which regions of `vm` cover without a
+ * gap, is EINVAL for a region it meets: the dropping advice and
+ * MADV_DOFORK over device memory, and MADV_DONTNEED and MADV_FREE over a
+ * locked region.
+ */
+static int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
+{
+    int drop = advice == MADV_DONTNEED || advice == MADV_FREE;
+    uintptr_t at;
+
+    if (!drop && advice != MADV_DONTNEED_LOCKED && advice != MADV_DOFORK) {
+        return 0;
+    }
+    for (at = start; at < end; at = vm_find(vm, at)->end) {
+        uint32_t prot = vm_find(vm, at)->prot;
+
+        if ((prot & VM_PROT_IO) || (drop && (prot & VM_PROT_LOCKED))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Advice about a range (madvise(2)). Its arguments are address, length and
  * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
  * pages go: a private anonymous page reads as zeros again, a private page of a
  * file reads the file again, and a shared page reads what the shared memory
  * holds. Those three are EINVAL over device memory, which has no pages to read
- * again, as on Linux for VM_PFNMAP. MADV_DONTFORK marks the regions so that a
+ * again, as on Linux for VM_PFNMAP, and MADV_DONTNEED and MADV_FREE are EINVAL
+ * over a locked region, whose pages MADV_DONTNEED_LOCKED alone drops, as on
+ * Linux for VM_LOCKED. MADV_DONTFORK marks the regions so that a
  * fork's child does not get them, and MADV_DOFORK clears the mark; DOFORK is
  * EINVAL over device memory, as on Linux for VM_IO, and either is ENOMEM
  * when a region cannot be split. Any other advice `madvise_known` takes changes
@@ -6825,7 +6930,7 @@ long sys_madvise(isr_params_t *params)
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t advice = (uint32_t)SC_ARG(params, 2);
     vm_space_t *vm;
-    uintptr_t len, at;
+    uintptr_t len;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -6842,13 +6947,8 @@ long sys_madvise(isr_params_t *params)
     if (vm_covered(vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
-    if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE ||
-        advice == MADV_DOFORK) {
-        for (at = addr; at < addr + len; at = vm_find(vm, at)->end) {
-            if (vm_find(vm, at)->prot & VM_PROT_IO) {
-                return -EINVAL;
-            }
-        }
+    if (madvise_refused(vm, addr, addr + len, advice)) {
+        return -EINVAL;
     }
     if (advice == MADV_DONTFORK || advice == MADV_DOFORK) {
         if (vm_advise(vm, addr, addr + len, advice == MADV_DONTFORK ? VM_PROT_DONTFORK : 0u,
@@ -6857,6 +6957,7 @@ long sys_madvise(isr_params_t *params)
             return -ENOMEM;
         }
     } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
+        mmn_notify(current_proc->mm, MMN_DROP, addr, addr + len);
         unmap_user_range(_curr_dir, addr, addr + len);
     }
     return 0;
@@ -7461,74 +7562,177 @@ long sys_sched_getaffinity(isr_params_t *params)
     return (long)bytes;
 }
 
-/** Whether [`addr`, `addr` + `len`) is a range the current process's
- * regions cover without a gap, as mlock requires: -EINVAL for a range that
- * wraps past the end of the address space, -ENOMEM for a gap, 0. */
-static int32_t lock_range(uintptr_t addr, uintptr_t len)
+/**
+ * The page-aligned range of [`addr`, `addr` + `len`) in `*start` and `*end`,
+ * as the mlock calls take it: the address rounded down and the length,
+ * with what that adds, rounded up. 0, or -EINVAL for a range that wraps
+ * past the end of the address space.
+ */
+static int32_t lock_range(uintptr_t addr, uintptr_t len, uintptr_t *start, uintptr_t *end)
 {
-    uintptr_t start = addr & ~(uintptr_t)(PAGE_SIZE - 1);
-    uintptr_t end = addr + len;
-
-    if (end < addr) {
+    *start = addr & ~(uintptr_t)(PAGE_SIZE - 1);
+    *end = addr + len;
+    if (*end < addr) {
         return -EINVAL;
     }
-    end = (end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
-    if (end < start) {
-        return -EINVAL;
-    }
-    return vm_covered(&current_proc->mm->vm, start, end) == end - start ? 0 : -ENOMEM;
+    *end = (*end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
+    return *end < *start ? -EINVAL : 0;
 }
 
 /**
- * mlock, munlock and mlock2: lock or unlock the pages of a
- * range, which must be mapped without a gap. There is no swap, so every page
- * already stays in memory; the calls check the range, and mlock2 its flags,
- * 0 or MLOCK_ONFAULT, and change nothing. RLIMIT_MEMLOCK is not kept.
+ * Bring in the pages of the regions of [start, end) that are locked and not
+ * on fault, region by region, so that a lock over a large reservation walks
+ * only what is mapped. 0, or -1 when a page could not be had.
  */
-long sys_mlock(isr_params_t *params)
+static int lock_populate(uintptr_t start, uintptr_t end)
 {
-    if (!current_proc || !current_proc->mm) {
-        return -ESRCH;
-    }
-    return lock_range(SC_ARG(params, 0), SC_ARG(params, 1));
-}
+    uintptr_t at = start;
 
-/** munlock: mlock's check of the range. */
-long sys_munlock(isr_params_t *params)
-{
-    return sys_mlock(params);
-}
+    while (at < end) {
+        const vma_t *r = vm_lower(&current_proc->mm->vm, at);
+        uintptr_t stop;
 
-/** mlock2: mlock's check of the range, after its flags; -EINVAL for a flag
- * other than MLOCK_ONFAULT (1). */
-long sys_mlock2(isr_params_t *params)
-{
-    if (SC_ARG(params, 2) & ~1u) {
-        return -EINVAL;
-    }
-    return sys_mlock(params);
-}
-
-/**
- * mlockall and munlockall: lock or unlock every page, which the
- * machine keeps in memory anyway. mlockall's flags are any of MCL_CURRENT (1),
- * MCL_FUTURE (2) and MCL_ONFAULT (4), but not MCL_ONFAULT alone and not none;
- * -EINVAL otherwise.
- */
-long sys_mlockall(isr_params_t *params)
-{
-    uint32_t flags = (uint32_t)SC_ARG(params, 0);
-
-    if (flags == 0 || (flags & ~7u) || flags == 4u) {
-        return -EINVAL;
+        if (!r || r->start >= end) {
+            break;
+        }
+        if (r->start > at) {
+            at = r->start;
+        }
+        stop = r->end < end ? r->end : end;
+        if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
+            return -1;
+        }
+        at = stop;
     }
     return 0;
 }
 
-/** munlockall: every page stays in memory, and the call returns 0. */
+/**
+ * Lock [addr, addr + len) with the lock bits `bits`, VM_PROT_LOCKED with or
+ * without VM_PROT_LOCKONFAULT, or unlock it with 0, as Linux's do_mlock and
+ * munlock: the range must be mapped without a gap, and a device's regions
+ * in it are left as they are. A lock is EPERM for a process without
+ * privilege whose RLIMIT_MEMLOCK is 0, and ENOMEM when the pages the range
+ * would add to those already locked pass it; the pages are then brought in
+ * unless locked on fault, and EAGAIN tells that memory ran out first, with
+ * the range locked. -ENOMEM for a gap, or when a split has no room.
+ */
+static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
+{
+    vm_space_t *vm;
+    uintptr_t start, end, have;
+    int32_t rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    vm = &current_proc->mm->vm;
+    if (bits && !mlock_allowed()) {
+        return -EPERM;
+    }
+    rc = lock_range(addr, len, &start, &end);
+    if (rc != 0 || start == end) {
+        return rc;
+    }
+    if (bits) {
+        have = (vm_locked(vm) - vm_locked_in(vm, start, end)) / PAGE_SIZE;
+        if (!mem_lock_room(have, (end - start) / PAGE_SIZE)) {
+            return -ENOMEM;
+        }
+    }
+    rc = vm_lock(vm, start, end, bits);
+    if (rc == -2) {
+        vma_exhausted("mlock");
+    }
+    if (rc != 0) {
+        return -ENOMEM;
+    }
+    if ((bits & VM_PROT_LOCKS) == VM_PROT_LOCKED && lock_populate(start, end) != 0) {
+        return -EAGAIN;
+    }
+    return 0;
+}
+
+/**
+ * mlock(addr, len): lock the pages of a range in memory, as `do_mlock`
+ * says. There is no swap, so a page stays in memory whether or not it is
+ * locked; the lock brings the pages in, counts them in VmLck, holds them to
+ * RLIMIT_MEMLOCK and keeps madvise from dropping them.
+ */
+long sys_mlock(isr_params_t *params)
+{
+    return do_mlock(SC_ARG(params, 0), SC_ARG(params, 1), VM_PROT_LOCKED);
+}
+
+/** munlock(addr, len): unlock the pages of a range, which must be mapped
+ * without a gap; -ENOMEM otherwise. */
+long sys_munlock(isr_params_t *params)
+{
+    return do_mlock(SC_ARG(params, 0), SC_ARG(params, 1), 0);
+}
+
+/** mlock2(addr, len, flags): mlock, or with MLOCK_ONFAULT (1) a lock of
+ * the pages as they are touched; -EINVAL for another flag. */
+long sys_mlock2(isr_params_t *params)
+{
+    uint32_t flags = (uint32_t)SC_ARG(params, 2);
+
+    if (flags & ~1u) {
+        return -EINVAL;
+    }
+    return do_mlock(SC_ARG(params, 0), SC_ARG(params, 1),
+                    VM_PROT_LOCKED | (flags ? VM_PROT_LOCKONFAULT : 0u));
+}
+
+/**
+ * mlockall(flags): lock every region now with MCL_CURRENT (1), and every
+ * region mmap and brk make from now on with MCL_FUTURE (2), each on fault
+ * with MCL_ONFAULT (4); a device's regions are never locked. -EINVAL for
+ * no flag, MCL_ONFAULT alone or an unknown one; -EPERM for a process
+ * without privilege whose RLIMIT_MEMLOCK is 0; -ENOMEM under MCL_CURRENT
+ * when the whole address space is larger than the limit, as Linux compares
+ * total_vm. A flag set replaces the last: MCL_FUTURE given and then left
+ * out stops locking new regions. MCL_CURRENT brings the pages in unless
+ * MCL_ONFAULT is given.
+ */
+long sys_mlockall(isr_params_t *params)
+{
+    uint32_t flags = (uint32_t)SC_ARG(params, 0);
+    uint32_t bits = VM_PROT_LOCKED | ((flags & 4u) ? VM_PROT_LOCKONFAULT : 0u);
+    vm_space_t *vm;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    if (flags == 0 || (flags & ~7u) || flags == 4u) {
+        return -EINVAL;
+    }
+    if (!mlock_allowed()) {
+        return -EPERM;
+    }
+    vm = &current_proc->mm->vm;
+    if ((flags & 1u) && !mem_lock_room(0, vm_total(vm) / PAGE_SIZE)) {
+        return -ENOMEM;
+    }
+    vm->def_prot = (flags & 2u) ? bits : 0u;
+    if (flags & 1u) {
+        vm_lock_all(vm, bits);
+        if (!(flags & 4u)) {
+            (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX);
+        }
+    }
+    return 0;
+}
+
+/** munlockall(): unlock every region and stop locking new ones; 0. */
 long sys_munlockall(isr_params_t *params)
 {
     (void)params;
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    current_proc->mm->vm.def_prot = 0;
+    vm_lock_all(&current_proc->mm->vm, 0);
     return 0;
 }
 
@@ -7542,7 +7746,7 @@ long sys_mincore(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t pages;
-    uintptr_t i;
+    uintptr_t i, start, end;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -7551,9 +7755,12 @@ long sys_mincore(isr_params_t *params)
     if (addr & (PAGE_SIZE - 1)) {
         return -EINVAL;
     }
-    rc = lock_range(addr, SC_ARG(params, 1));
+    rc = lock_range(addr, SC_ARG(params, 1), &start, &end);
     if (rc != 0) {
         return rc;
+    }
+    if (vm_covered(&current_proc->mm->vm, start, end) != end - start) {
+        return -ENOMEM;
     }
     pages = (SC_ARG(params, 1) + PAGE_SIZE - 1) / PAGE_SIZE;
     for (i = 0; i < pages; i++) {

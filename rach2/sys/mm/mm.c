@@ -5,6 +5,7 @@
 #include "mm.h"
 
 #include "kheap.h"
+#include "notify.h"
 #include "paging.h"
 #include "../fs/fd.h"
 #include "../fs/vfs.h"
@@ -55,6 +56,7 @@ void mm_put(struct mm *mm)
     if (!mm || --mm->users != 0) {
         return;
     }
+    mmn_release(mm);
     smp_space_release(mm->dir);
     free_user_pages(mm->dir);
     free_page_directory(mm->dir);

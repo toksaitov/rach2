@@ -85,6 +85,8 @@ C_SRC_SHARED = kernel.c \
     sys/mm/usercopy.c \
     sys/mm/vm.c \
     sys/mm/mm.c \
+    sys/mm/notify.c \
+    sys/mm/pin.c \
     sys/mm/filemap.c \
     sys/mm/shmem.c \
     sys/mm/filecache.c \

@@ -1733,15 +1733,20 @@ Anonymous, Swap, SwapPss and Locked, and a VmFlags line of
 .Ql ex ,
 .Ql sh ,
 .Ql gd ,
+.Ql lo
+for a locked region,
 .Ql io
 and
 .Ql pf
-for a mapping of a device object, and
+for a mapping of a device object,
 .Ql dc
 for a range
 .Xr madvise 2 Ns 's
 .Dv MADV_DONTFORK
-marked.
+marked, and
+.Ql lf
+for a region locked on fault
+.Pq see Xr mlock 2 .
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
 Anonymous counts every page of a private region of no file, and the
@@ -1749,7 +1754,8 @@ dirty pages of a private region read from a file, which Linux has copied
 from the file; gdb's gcore leaves the other regions of a file out of a
 core.
 The kernel does not count the processes that map a page, so Pss is Rss.
-Swap, SwapPss and Locked read 0.
+Swap and SwapPss read 0, and Locked is Rss for a locked region and 0
+for another.
 BusyBox's
 .Xr pmap 1
 and smemcap read it.
@@ -1757,7 +1763,11 @@ and smemcap read it.
 Lines of a name, a colon, a tab and a value:
 Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,
 effective, saved and file-system IDs), FDSize, Groups, the memory sizes
-VmPeak to VmSwap in kilobytes, Threads, the signal sets SigPnd, ShdPnd,
+VmPeak to VmSwap in kilobytes, of which VmLck is the size of the regions
+locked by
+.Xr mlock 2
+and VmPin the pages drivers pinned for devices and charged to the
+process, Threads, the signal sets SigPnd, ShdPnd,
 SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets,
 NoNewPrivs, Seccomp and Seccomp_filters, the thread's seccomp mode and
 the number of its filters

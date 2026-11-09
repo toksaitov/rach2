@@ -6,6 +6,7 @@
 
 #include "kheap.h"
 #include "mm.h"
+#include "notify.h"
 #include "paging.h"
 #include "shmem.h"
 #include "../irq.h"
@@ -622,6 +623,7 @@ void filemap_shmem_cut(struct shmem *sh, uint32_t first)
             }
             from =
                 r->pgoff < first ? r->start + (uintptr_t)(first - r->pgoff) * PAGE_SIZE : r->start;
+            mmn_notify(p->mm, MMN_TRUNCATE, from, r->end);
             unmap_user_range(p->mm->dir, from, r->end);
         }
     }

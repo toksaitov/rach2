@@ -389,6 +389,7 @@ void vm_init(vm_space_t *vm)
     vm->total = 0;
     vm->gap_len = 0;
     vm->heap_start = vm->brk = vm->stack_limit = vm->mmap_base = 0;
+    vm->def_prot = 0;
 }
 
 void vm_free(vm_space_t *vm)
@@ -415,13 +416,15 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     dst->count = dst->cap = 0;
     dst->total = 0;
     dst->gap_len = 0;
+    dst->def_prot = 0;
     if (vm_nodes_reserve(dst, src->count) != 0) {
         vm_free(dst);
         return -1;
     }
     for (r = vm_first(src); r; r = vm_next(r)) {
         if (!(r->prot & VM_PROT_DONTFORK)) {
-            (void)vm_link(dst, r->start, r->end, r->prot, r->type, r->file, r->pgoff);
+            (void)vm_link(dst, r->start, r->end, r->prot & ~(uint32_t)VM_PROT_LOCKS, r->type,
+                          r->file, r->pgoff);
         }
     }
     return 0;
@@ -501,18 +504,25 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
     return 0;
 }
 
+/* An option of `vm_change`, above every protection bit: a region with
+ * VM_PROT_NOWRITE stops the change. */
+#define VM_CHANGE_NOWRITE 0x80000000u
+
 /**
  * Give each region of [start, end) the protection `(prot & ~mask) | bits`,
- * for `vm_protect` and `vm_advise`, splitting the regions the range cuts at
- * its ends and merging the pieces with neighbours that then match. With
- * `nowrite`, a region with VM_PROT_NOWRITE stops the change with -3. An
- * empty range changes nothing. 0, -1 for a gap, -2 when a split has no
- * room, or -3; of -1 and -3, the one met first in address order, and every
- * error leaves the regions as they were.
+ * for `vm_protect`, `vm_advise` and `vm_lock`, splitting the regions the
+ * range cuts at its ends and merging the pieces with neighbours that then
+ * match. `opts` holds protection bits, a region with any of which keeps its
+ * protection, and VM_CHANGE_NOWRITE, with which a region with
+ * VM_PROT_NOWRITE stops the change with -3. An empty range changes nothing.
+ * 0, -1 for a gap, -2 when a split has no room, or -3; of -1 and -3, the
+ * one met first in address order, and every error leaves the regions as
+ * they were.
  */
 static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t mask, uint32_t bits,
-                     int nowrite)
+                     uint32_t opts)
 {
+    uint32_t skip = opts & ~(uint32_t)VM_CHANGE_NOWRITE;
     uintptr_t at = start;
     vma_t *r, *first, *last = NULL;
     uint32_t splits;
@@ -525,7 +535,7 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
         if (r->start > at) {
             break;
         }
-        if (nowrite && (r->prot & VM_PROT_NOWRITE)) {
+        if ((opts & VM_CHANGE_NOWRITE) && (r->prot & VM_PROT_NOWRITE)) {
             return -3;
         }
         at = r->end;
@@ -545,7 +555,9 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
         if (r->end > end) {
             (void)vm_split(vm, r, end);
         }
-        r->prot = (r->prot & ~mask) | bits;
+        if (!(r->prot & skip)) {
+            r->prot = (r->prot & ~mask) | bits;
+        }
     }
     r = first->prev ? first->prev : first;
     while (r && r->next && r->next->start <= end) {
@@ -559,7 +571,7 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
 {
     return vm_change(vm, start, end, ~(uint32_t)VM_PROT_KEPT, prot & ~(uint32_t)VM_PROT_KEPT,
-                     (prot & VM_PROT_WRITE) != 0);
+                     (prot & VM_PROT_WRITE) ? VM_CHANGE_NOWRITE : 0u);
 }
 
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
@@ -567,6 +579,60 @@ int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint
     uint32_t mask = (set | clear) & VM_PROT_DONTFORK;
 
     return vm_change(vm, start, end, mask, set & mask, 0);
+}
+
+int vm_lock(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t bits)
+{
+    return vm_change(vm, start, end, VM_PROT_LOCKS, bits & VM_PROT_LOCKS, VM_PROT_IO);
+}
+
+void vm_lock_all(vm_space_t *vm, uint32_t bits)
+{
+    vma_t *r;
+
+    for (r = vm->first; r; r = r->next) {
+        if (!(r->prot & VM_PROT_IO)) {
+            r->prot = (r->prot & ~(uint32_t)VM_PROT_LOCKS) | (bits & VM_PROT_LOCKS);
+        }
+    }
+    r = vm->first;
+    while (r && r->next) {
+        if (!vm_merge(vm, r)) {
+            r = r->next;
+        }
+    }
+}
+
+uintptr_t vm_locked_in(const vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    uintptr_t total = 0;
+    const vma_t *r;
+
+    if (start >= end) {
+        return 0;
+    }
+    for (r = vm_lower(vm, start); r && r->start < end; r = vm_next(r)) {
+        if (r->prot & VM_PROT_LOCKED) {
+            uintptr_t s = r->start > start ? r->start : start;
+            uintptr_t e = r->end < end ? r->end : end;
+
+            total += e - s;
+        }
+    }
+    return total;
+}
+
+uintptr_t vm_locked(const vm_space_t *vm)
+{
+    uintptr_t total = 0;
+    const vma_t *r;
+
+    for (r = vm->first; r; r = r->next) {
+        if (r->prot & VM_PROT_LOCKED) {
+            total += r->end - r->start;
+        }
+    }
+    return total;
 }
 
 uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi)
