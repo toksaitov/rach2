@@ -5,13 +5,17 @@
 #   build.sh fetch      download the tarballs that `pins` names and check them
 #   build.sh mesa       build Mesa 26.1.6 with Intel's virtio path
 #   build.sh virgl      build virglrenderer 1.3.0 with the i915 renderer
-#   build.sh image      make nctx.qcow2: the backports kernel, QEMU 11.1 and
-#                       both builds on the prepared reference image
+#   build.sh qemu       build Debian's QEMU 11.1.2 against that virglrenderer
+#   build.sh image      make nctx.qcow2: the backports kernel and QEMU
+#                       packages and the three builds on the prepared
+#                       reference image
 #   build.sh check      boot nctx.qcow2 and print what it holds
+#   build.sh run CMD    boot nctx.qcow2 and run CMD in it, in a copy of this
+#                       directory
 #   build.sh all        all of the above, in that order
 #
-# The tarballs, the builds (mesa-nctx.tar.xz, virglrenderer-nctx.tar.xz, each
-# with its .log) and the image are in NCTX_CACHE, by default build/cache/nctx
+# The tarballs, the builds (mesa-nctx.tar.xz, virglrenderer-nctx.tar.xz and
+# qemu-nctx.tar.xz, each with its .log) and the image are in NCTX_CACHE, by default build/cache/nctx
 # of the clone whose worktree this is. The builder is a new overlay of
 # debian-ref's prepared image for each build, removed afterwards; `prepare`
 # that image first. ACCEL chooses the accelerator as rach2/qemu_devices.sh
@@ -140,13 +144,13 @@ session()
     snapshot > "$work/snapshot"
 }
 
-# build NAME STEP: build in a new overlay of the prepared image and bring
-# NAME-nctx.tar.xz and its log out.
+# build NAME STEP INPUT: build in a new overlay of the prepared image from
+# INPUT, a file of the cache, and bring NAME-nctx.tar.xz and its log out.
 build()
 {
     session
-    tarball=$cache/$(basename "$(pin "${2}_url")")
-    [ -f "$tarball" ] || die "$tarball: missing; run build.sh fetch"
+    tarball=$cache/$3
+    [ -f "$tarball" ] || die "$tarball: missing; run build.sh fetch or the build that makes it"
     qemu-img create -q -f qcow2 -F qcow2 -b "$ref/prepared.qcow2" "$work/build.qcow2" 32G
     boot "$work/build.qcow2"
     echo "nctx: building $1 in the builder guest; console in $work/console.log"
@@ -161,7 +165,7 @@ build()
 image()
 {
     session
-    for f in mesa virglrenderer; do
+    for f in mesa virglrenderer qemu; do
         [ -f "$cache/$f-nctx.tar.xz" ] || die "$f-nctx.tar.xz: missing; build it first"
     done
     rm -f "$cache/nctx.qcow2"
@@ -169,8 +173,9 @@ image()
     boot "$work/nctx.qcow2"
     echo "nctx: making the image; console in $work/console.log"
     put "$here/guest.sh" "$here/pins" "$work/snapshot" "$here/qemu-nctx" "$here/nctx-env" \
-        "$cache/mesa-nctx.tar.xz" "$cache/virglrenderer-nctx.tar.xz"
-    in_guest "sh guest.sh image mesa-nctx.tar.xz virglrenderer-nctx.tar.xz" | sed 's/^/nctx: /'
+        "$cache/mesa-nctx.tar.xz" "$cache/virglrenderer-nctx.tar.xz" "$cache/qemu-nctx.tar.xz"
+    in_guest "sh guest.sh image mesa-nctx.tar.xz virglrenderer-nctx.tar.xz qemu-nctx.tar.xz" > "$work/image.log"
+    sed 's/^/nctx: /' "$work/image.log"
     in_guest "cd && rm -rf nctx"
     halt
     mv "$work/nctx.qcow2" "$cache/nctx.qcow2"
@@ -178,26 +183,40 @@ image()
     echo "nctx: result: $cache/nctx.qcow2"
 }
 
-check()
+# variant CMD: run CMD in ~/nctx of a new overlay of nctx.qcow2, with this
+# directory's files copied in, and print its output.
+variant()
 {
     session
     [ -f "$cache/nctx.qcow2" ] || die "no nctx.qcow2; run build.sh image"
-    qemu-img create -q -f qcow2 -F qcow2 -b "$cache/nctx.qcow2" "$work/check.qcow2"
-    boot "$work/check.qcow2"
+    qemu-img create -q -f qcow2 -F qcow2 -b "$cache/nctx.qcow2" "$work/run.qcow2"
+    boot "$work/run.qcow2"
     put "$here/guest.sh" "$here/pins" "$work/snapshot"
-    in_guest "sh guest.sh check" | sed 's/^/nctx: /'
+    status=0
+    in_guest "$1" > "$work/run.log" || status=$?
+    sed 's/^/nctx: /' "$work/run.log"
     halt
+    return "$status"
 }
 
 case ${1:-} in
     fetch) fetch ;;
-    mesa) build mesa mesa ;;
-    virgl) build virglrenderer virgl ;;
+    mesa) build mesa mesa "$(basename "$(pin mesa_url)")" ;;
+    virgl) build virglrenderer virgl "$(basename "$(pin virgl_url)")" ;;
+    qemu) build qemu qemu virglrenderer-nctx.tar.xz ;;
     image) image ;;
-    check) check ;;
-    all) fetch; (build mesa mesa); (build virglrenderer virgl); (image); check ;;
+    check) variant 'sh guest.sh check' ;;
+    run) shift; variant "$*" ;;
+    all)
+        fetch
+        (build mesa mesa "$(basename "$(pin mesa_url)")")
+        (build virglrenderer virgl "$(basename "$(pin virgl_url)")")
+        (build qemu qemu virglrenderer-nctx.tar.xz)
+        (image)
+        variant 'sh guest.sh check'
+        ;;
     *)
-        echo "usage: build.sh fetch | mesa | virgl | image | check | all" >&2
+        echo "usage: build.sh fetch | mesa | virgl | qemu | image | check | run CMD | all" >&2
         exit 2
         ;;
 esac
