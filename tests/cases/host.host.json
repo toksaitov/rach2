@@ -326,6 +326,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ia32_ipc",
+          "checks": "tests/host/ia32_ipc_hosttest.c checks the i386 System V IPC records with and without IPC_64, msgbuf, the ipc msgrcv pair, mq_attr, rlimit, rusage, sysinfo, tms, the robust list head and the old utsname sizes of the x86-64 kernel's compat calls against Linux 6.12 under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "syncobj",
           "checks": "tests/host/syncobj_hosttest.c drives binary and timeline syncobjs, out-of-order points, waits, transfers, queries, eventfds, files, a failed producer's error and the driver features under ASan and UBSan",
           "source": "scenario"
