@@ -42,8 +42,9 @@ hardware: the fake answers as the Lenovo's HD 4400, so the function's
 entries report 8086:0a16, revision 0b, board 17aa:380c and class
 0x030000, and libdrm and Mesa find a Haswell GT2; its rings complete each
 command as it is handed over, without reading batches; its message is a
-real MSI of the edu function; and it has no stolen memory and nothing
-behind its aperture.
+real MSI of the edu function; it has no stolen memory; and its aperture is
+memory the fake fills from each page the GTT maps there and writes back
+when it syncs, detiled through the fence registers as the chip would.
 Its file
 .Pa /sys/kernel/debug/dri/DEVICE/i915_fake
 injects faults, as
@@ -141,10 +142,96 @@ and
 are not yet served and fail with
 .Er EINVAL .
 .Ss Buffers
-.Dv DRM_IOCTL_I915_GEM_CREATE ,
-the mapping, domain, caching, tiling, busy and wait calls are not yet
-served and fail with
-.Er EINVAL .
+Buffer objects follow Linux's i915 on an LLC part.
+Their pages are anonymous memory, written back, and are bound into the
+global GTT when the aperture or the GPU needs them.
+These calls are served on the card node and the render node alike:
+.Bl -tag -width DRM_IOCTL_I915_GEM_SET_CACHING
+.It Dv DRM_IOCTL_I915_GEM_CREATE
+An object of
+.Fa size
+bytes rounded up to a page, and its handle.
+.Er EINVAL
+for 0 and
+.Er E2BIG
+past what an object holds.
+.It Dv DRM_IOCTL_I915_GEM_PREAD , DRM_IOCTL_I915_GEM_PWRITE
+Copy bytes out of the object or into it, after its work is done.
+PREAD reads through the processor's view; PWRITE writes through the
+aperture when the object's caching would need the processor's lines
+flushed, and otherwise through the processor's view.
+An object imported from another device has no pages of its own and is
+read and written through the aperture.
+.Er EINVAL
+past the object's end,
+.Er EFAULT
+for a buffer outside the caller's memory.
+.It Dv DRM_IOCTL_I915_GEM_SET_DOMAIN , DRM_IOCTL_I915_GEM_SW_FINISH
+Move the object into the CPU, GTT or WC domain before the caller touches a
+map of it, flushing and invalidating what the move needs; SW_FINISH
+flushes the processor's writes of an object that is scanned out.
+.Er EINVAL
+for a GPU domain or a write domain other than the read domains.
+.It Dv DRM_IOCTL_I915_GEM_MMAP_OFFSET
+The offset to give
+.Xr mmap 2
+on the node for a map of the kind
+.Fa flags
+names:
+.Dv I915_MMAP_OFFSET_GTT
+through the aperture, detiled by a fence;
+.Dv I915_MMAP_OFFSET_WB
+the object's pages written back;
+.Dv I915_MMAP_OFFSET_WC
+and
+.Dv I915_MMAP_OFFSET_UC
+write-combining and uncached.
+.Dv DRM_IOCTL_I915_GEM_MMAP_GTT
+shares the call's number and gives the GTT kind.
+.Er ENODEV
+for WC and UC without PAT, for
+.Dv I915_MMAP_OFFSET_FIXED ,
+and for a map of an import's pages;
+.Er EINVAL
+for an extension, since none is defined.
+.It Dv DRM_IOCTL_I915_GEM_SET_TILING , DRM_IOCTL_I915_GEM_GET_TILING
+Set or read the object's layout, linear, X or Y, its stride, and the
+swizzle of bit 6 programs must apply to address a tiled object's pages:
+on Haswell none, or 9 and 10 for X tiles and 9 for Y when the memory
+controller interleaves its two channels.
+A stride must be a multiple of the tile's width, 512 bytes for X and 128
+for Y, and at most 256 KiB.
+GTT maps of the object fault again after a change.
+.It Dv DRM_IOCTL_I915_GEM_SET_CACHING , DRM_IOCTL_I915_GEM_GET_CACHING
+Set or read the object's level in the processor's caches:
+.Dv I915_CACHING_NONE ,
+.Dv I915_CACHING_CACHED ,
+or
+.Dv I915_CACHING_DISPLAY ,
+which Haswell's GT2 serves uncached.
+.It Dv DRM_IOCTL_I915_GEM_BUSY , DRM_IOCTL_I915_GEM_WAIT
+Whether engines still read or write the object, and a wait for them of
+.Fa timeout_ns ,
+for ever when it is negative, with the time left written back;
+.Er ETIME
+when the object is still busy at the timeout.
+.El
+.Pp
+A fault on a GTT map binds the object inside the aperture whole when it
+fits, or else a view of at least 1 MiB around the page in whole tile
+rows, and gives it one of the 32 fence registers, the least recently used
+that no fault holds.
+A map whose binding or fence is taken away faults again on its next
+touch; one that finds no room or no fence raises
+.Dv SIGBUS .
+.Pp
+The core's PRIME calls export an object as a dma-buf, which
+.Dv DMA_BUF_IOCTL_SYNC
+moves into the CPU domain and back to the GTT's, and import another
+device's dma-buf as an object.
+All of these calls fail with
+.Er ENOENT
+for a handle that names no object.
 .Ss Contexts
 .Dv DRM_IOCTL_I915_GEM_CONTEXT_CREATE
 and the context calls are not yet served and fail with
@@ -213,6 +300,7 @@ The milliseconds the GT has spent in RC6 since the bind, in decimal,
 wrapping at 2^32.
 .El
 .Sh SEE ALSO
+.Xr mmap 2 ,
 .Xr backlight 4 ,
 .Xr drm 4 ,
 .Xr watchdog 4 ,
