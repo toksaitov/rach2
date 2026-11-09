@@ -550,6 +550,11 @@ void drm_send_event(struct drm_pending_event *e);
  * it. */
 void drm_event_cancel_free(struct drm_pending_event *e);
 
+/** Release what `file` holds of its device's display, as its release does:
+ * each framebuffer it made, taken off the planes that show it first, as
+ * RMFB does, and each blob it made. May sleep in the commit. */
+void drm_mode_file_release(struct drm_file *file);
+
 /**
  * The DRM ioctl dispatcher, Linux's drm_ioctl: the handler of `cmd` from
  * the core's table, or for numbers DRM_COMMAND_BASE to DRM_COMMAND_END - 1
@@ -564,55 +569,109 @@ int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg);
 
 /* ------------------------------------------------------------------------
  * Display state: mode objects and their atomic state (76-5a, 76-5b)
+ *
+ * A device's display is Linux's KMS: CRTCs, planes, encoders and
+ * connectors, which its driver makes once (drm_mode.c's init calls), and
+ * framebuffers and blobs, which programs and the core make and free. Each
+ * is a mode object with an ID from 1, the lowest free, as Linux's idr gives
+ * them, and a list of properties. The state a program sets lives in each
+ * CRTC's, plane's and connector's `state`, which a commit replaces whole:
+ * it duplicates the states it changes into a `struct drm_atomic_state`,
+ * checks them, and swaps them in (drm_atomic.c). Every state a commit can
+ * change is taken under the device's commit lock (`drm_modeset_lock`).
  */
 
-/* A mode object's ID and type (DRM_MODE_OBJECT_*), and its properties,
- * each an ID and the value an atomic state does not hold itself. */
+/* A mode object: its ID, its DRM_MODE_OBJECT_* type, and its properties
+ * with the values an atomic state does not hold itself (the immutable ones,
+ * and every one of a driver without DRIVER_ATOMIC). */
 #define DRM_OBJECT_MAX_PROPERTY 64
+struct drm_property;
 struct drm_mode_object {
     uint32_t id;
     uint32_t type;
     uint32_t refs; /* framebuffers and blobs; 0 for the fixed objects */
     uint32_t count_props;
-    uint32_t prop_ids[DRM_OBJECT_MAX_PROPERTY];
+    struct drm_property *props[DRM_OBJECT_MAX_PROPERTY];
     uint64_t prop_values[DRM_OBJECT_MAX_PROPERTY];
 };
 
-/* A property: its name, its DRM_MODE_PROP_* flags, the range's two values
- * or the enum's and bitmask's values with their names. */
+/* A rectangle from (x1, y1) to (x2, y2), exclusive; in pixels, or in 16.16
+ * fixed point for a plane's source. */
+struct drm_rect {
+    int32_t x1, y1, x2, y2;
+};
+
+/* One value of an enum or bitmask property and its name; for a bitmask the
+ * value is the bit's number. */
+struct drm_prop_enum_list {
+    int type;
+    const char *name;
+};
+
+/*
+ * A property: its name, its DRM_MODE_PROP_* flags and its values: a range's
+ * two bounds, an object property's object type, or an enum's values and a
+ * bitmask's bit numbers with a name for each. Made by the core's and the
+ * drivers' init and freed with the device's mode configuration.
+ */
 struct drm_property {
     struct drm_mode_object base;
+    struct drm_device *dev;
     char name[DRM_PROP_NAME_LEN];
     uint32_t flags;
     uint32_t num_values;
     uint64_t *values;
-    const char *const *enum_names; /* one per value for enums and bitmasks */
+    const char **enum_names; /* one per value for enums and bitmasks, else NULL */
     struct drm_property *next;
 };
 
 /* A blob: bytes a property names by ID, made by the kernel or by
- * CREATEPROPBLOB, and freed by its last holder. */
+ * CREATEPROPBLOB, and freed by its last holder. While its maker holds it,
+ * `owner` names the file, which DESTROYPROPBLOB and close let go of. */
 struct drm_property_blob {
     struct drm_mode_object base;
-    struct drm_file *owner; /* its maker, NULL for the kernel */
+    struct drm_device *dev;
+    struct drm_file *owner; /* its maker while it holds it, NULL for the kernel */
     uint32_t length;
     void *data;
     struct drm_property_blob *next;
 };
 
-/* A framebuffer: up to four planes of buffer objects in a fourcc format. */
+/* A pixel format as Linux's drm_format_info: its depth for ADDFB and
+ * GETFB, its planes, the bytes of a pixel in each, and the subsampling of
+ * every plane but the first. */
+struct drm_format_info {
+    uint32_t format;
+    uint8_t depth;
+    uint8_t num_planes;
+    uint8_t cpp[3];
+    uint8_t hsub, vsub;
+    uint8_t has_alpha;
+};
+
+/** The format `format`'s description, or NULL for one the core does not
+ * know. */
+const struct drm_format_info *drm_format_info(uint32_t format);
+/** ADDFB's format for `bpp` and `depth`, Linux's drm_mode_legacy_fb_format,
+ * or DRM_FORMAT_INVALID. */
+uint32_t drm_mode_legacy_fb_format(uint32_t bpp, uint32_t depth);
+
+/* A framebuffer: up to four planes of buffer objects in a fourcc format.
+ * Held by its ID while its maker has it (`owner`), by each plane state that
+ * shows it and by each lookup; the last put frees it. */
 struct drm_framebuffer {
     struct drm_mode_object base;
     struct drm_device *dev;
     struct drm_file *owner; /* its maker, until RMFB, CLOSEFB or close */
-    uint32_t format;        /* DRM_FORMAT_* */
-    uint64_t modifier;      /* DRM_FORMAT_MOD_LINEAR unless ADDFB2 gave one */
-    uint32_t flags;         /* DRM_MODE_FB_* */
+    const struct drm_format_info *info;
+    uint32_t format;   /* DRM_FORMAT_* */
+    uint64_t modifier; /* DRM_FORMAT_MOD_LINEAR unless ADDFB2 gave one */
+    uint32_t flags;    /* DRM_MODE_FB_* */
     uint32_t width, height;
     uint32_t pitches[4], offsets[4];
-    struct drm_gem_object *obj[4];     /* held */
+    struct drm_gem_object *obj[4];     /* held; the same object may repeat */
     struct drm_framebuffer *next;      /* the device's list */
-    struct drm_framebuffer *file_next; /* the owner's list */
+    struct drm_framebuffer *file_next; /* the owner's list, newest first */
 };
 
 #define DRM_PLANE_TYPE_OVERLAY 0
@@ -622,7 +681,10 @@ struct drm_framebuffer {
 /*
  * A plane's state: the framebuffer it shows (held), where on its CRTC in
  * pixels, and which part of the framebuffer in 16.16 fixed point; the
- * fence to wait for before scanning out (IN_FENCE_FD, held).
+ * fence to wait for before scanning out (IN_FENCE_FD, held), and the damage
+ * since the last commit (FB_DAMAGE_CLIPS, held). `src`, `dst` and `visible`
+ * are set by `drm_atomic_helper_check_plane_state` for the driver: the
+ * source and the destination clipped to the CRTC's mode.
  */
 struct drm_plane_state {
     struct drm_plane *plane;
@@ -637,15 +699,17 @@ struct drm_plane_state {
     int32_t hotspot_x, hotspot_y;
     struct dma_fence *fence;
     struct drm_property_blob *fb_damage_clips;
-    int visible; /* set by the check: the plane shows something */
+    struct drm_rect src, dst;
+    int visible;
 };
 
 /*
- * A CRTC's state: whether it is on, its mode (with the blob MODE_ID names),
- * the planes and connectors it feeds, the colour blobs, and the event to
- * send and the out-fence to signal when the commit that made this state
- * reaches the screen. The `_changed` marks are the check's, for the
- * commit's helpers.
+ * A CRTC's state: whether it is on, its mode (with the blob MODE_ID names,
+ * held), the planes and connectors it feeds, the colour blobs, and the
+ * event to send and the out-fence to signal when the commit that made this
+ * state reaches the screen. The `_changed` marks are the check's, for the
+ * commit: a CRTC needs a modeset (`drm_atomic_crtc_needs_modeset`) when its
+ * mode, its enable, its active or its connectors change.
  */
 struct drm_crtc_state {
     struct drm_crtc *crtc;
@@ -653,29 +717,32 @@ struct drm_crtc_state {
     int active;
     struct drm_mode_modeinfo mode;
     struct drm_property_blob *mode_blob;
-    uint32_t plane_mask;     /* bit N: plane N */
-    uint32_t connector_mask; /* bit N: connector N */
+    uint32_t plane_mask;     /* bit N: the plane of index N */
+    uint32_t connector_mask; /* bit N: the connector of index N */
     struct drm_property_blob *degamma_lut, *ctm, *gamma_lut;
     int vrr_enabled;
-    int mode_changed, active_changed, planes_changed;
+    int mode_changed, active_changed, connectors_changed, planes_changed;
+    int color_mgmt_changed;
+    int async_flip;
     struct drm_pending_event *event;
     int32_t __user *out_fence_ptr;
 };
 
-/* A connector's state: the CRTC it is routed to and its encoder. */
+/* A connector's state: the CRTC it is routed to and the encoder that drives
+ * it there, which the check chooses. */
 struct drm_connector_state {
     struct drm_connector *connector;
     struct drm_crtc *crtc;
-    uint32_t encoder_id;
+    struct drm_encoder *best_encoder;
     uint32_t link_status; /* DRM_MODE_LINK_STATUS_* */
     uint32_t content_protection;
 };
 
 /*
  * A plane's hooks. `atomic_check` refuses a state the hardware cannot show
- * with -EINVAL; `atomic_update` makes the new state the hardware's and
- * `atomic_disable` turns the plane off, between the CRTC's `atomic_begin`
- * and `atomic_flush`. They may sleep in a blocking commit.
+ * with -EINVAL or -ERANGE; `atomic_update` makes the new state the
+ * hardware's and `atomic_disable` turns the plane off, between the CRTC's
+ * `atomic_begin` and `atomic_flush`. They may sleep in a blocking commit.
  */
 struct drm_plane_funcs {
     int32_t (*atomic_check)(struct drm_plane *plane, struct drm_atomic_state *state);
@@ -683,7 +750,12 @@ struct drm_plane_funcs {
     void (*atomic_disable)(struct drm_plane *plane, struct drm_atomic_state *state);
 };
 
-/* A plane: a layer a CRTC composes. */
+/*
+ * A plane: a layer a CRTC composes. `formats` and `modifiers` are the
+ * driver's, kept for the plane's life; NULL `modifiers` is
+ * DRM_FORMAT_MOD_LINEAR alone. The optional properties are NULL until
+ * their create call attaches them.
+ */
 struct drm_plane {
     struct drm_mode_object base;
     struct drm_device *dev;
@@ -692,20 +764,24 @@ struct drm_plane {
     uint32_t possible_crtcs;
     const uint32_t *formats;
     uint32_t format_count;
-    const uint64_t *modifiers; /* NULL: DRM_FORMAT_MOD_LINEAR alone */
+    const uint64_t *modifiers;
     uint32_t modifier_count;
     const struct drm_plane_funcs *funcs;
     struct drm_plane_state *state;
+    struct drm_property *rotation_property, *zpos_property, *alpha_property;
+    struct drm_property *hotspot_x_property, *hotspot_y_property;
 };
 
 /*
  * A CRTC's hooks. The atomic ones run in a commit as Linux's helpers run
- * them; `enable_vblank` and `disable_vblank` start and stop the vblank
- * interrupt (76-5b), whose handler calls `drm_crtc_handle_vblank`. The CRC
- * hooks serve debugfs's crc/control (76-18b): `set_crc_source` starts or,
- * for NULL, stops the source `name` and says how many values each frame's
- * entry has; `verify_crc_source` answers whether `name` is one, without
- * starting it; `get_crc_sources` lists them.
+ * them; `mode_valid` answers 0 for a mode the CRTC can drive, checked when
+ * a commit changes the mode. `enable_vblank` and `disable_vblank` start and
+ * stop the vblank interrupt (76-5b), whose handler calls
+ * `drm_crtc_handle_vblank`. The CRC hooks serve debugfs's crc/control
+ * (76-18b): `set_crc_source` starts or, for NULL, stops the source `name`
+ * and says how many values each frame's entry has; `verify_crc_source`
+ * answers whether `name` is one, without starting it; `get_crc_sources`
+ * lists them.
  */
 struct drm_crtc_funcs {
     int32_t (*atomic_check)(struct drm_crtc *crtc, struct drm_atomic_state *state);
@@ -713,6 +789,7 @@ struct drm_crtc_funcs {
     void (*atomic_disable)(struct drm_crtc *crtc, struct drm_atomic_state *state);
     void (*atomic_begin)(struct drm_crtc *crtc, struct drm_atomic_state *state);
     void (*atomic_flush)(struct drm_crtc *crtc, struct drm_atomic_state *state);
+    int32_t (*mode_valid)(struct drm_crtc *crtc, const struct drm_mode_modeinfo *mode);
     int32_t (*enable_vblank)(struct drm_crtc *crtc);
     void (*disable_vblank)(struct drm_crtc *crtc);
     int32_t (*set_crc_source)(struct drm_crtc *crtc, const char *name);
@@ -737,14 +814,17 @@ struct drm_crtc_crc_entry {
     uint32_t crcs[DRM_MAX_CRC_NR];
 };
 
-/* A CRTC: a scanout engine that reads planes and drives connectors. */
+/* A CRTC: a scanout engine that reads planes and drives connectors. The
+ * cursor's place is the last MODE_CURSOR moved it to. */
 struct drm_crtc {
     struct drm_mode_object base;
     struct drm_device *dev;
     uint32_t index;
     char name[32];
     struct drm_plane *primary, *cursor;
+    int32_t cursor_x, cursor_y;
     uint32_t gamma_size;
+    uint16_t *gamma_store; /* gamma_size red, then green, then blue */
     const struct drm_crtc_funcs *funcs;
     struct drm_crtc_state *state;
     struct drm_vblank vblank;
@@ -752,8 +832,8 @@ struct drm_crtc {
     uint32_t crc_values;    /* values in each entry */
 };
 
-/* An encoder, which Linux keeps for its interface: one per connector here,
- * fixed to the CRTCs it can take. */
+/* An encoder, which Linux keeps for its interface: fixed to the CRTCs it
+ * can take, and to the CRTC it drives after the last commit. */
 struct drm_encoder {
     struct drm_mode_object base;
     struct drm_device *dev;
@@ -776,10 +856,11 @@ struct drm_encoder {
 
 /*
  * A connector's hooks. `detect` answers DRM_CONNECTOR_* and may sleep on a
- * probe of the sink; `get_modes` reads the sink's EDID and modes into the
- * connector (`drm_connector_update_edid`) and returns how many; `mode_valid`
- * answers 0 for a mode the hardware can drive. `force` tells the driver the
- * debug force changed, after the core has set `force` (76-18b).
+ * probe of the sink, NULL for one always connected; `get_modes` reads the
+ * sink's EDID and modes into the connector (`drm_connector_update_edid`,
+ * `drm_mode_probed_add`) and returns how many; `mode_valid` answers 0 for a
+ * mode the hardware can drive. `force` tells the driver the debug force
+ * changed, after the core has set `force` (76-18b).
  */
 struct drm_connector_funcs {
     int (*detect)(struct drm_connector *connector, int force_probe);
@@ -796,10 +877,13 @@ struct drm_display_mode {
 
 /*
  * A connector: an output a sink is plugged into. Its name is Linux's,
- * the type's name and `type_id` ("Virtual-1", "eDP-1"), which /sys and
- * Weston's configuration use. `edid` is the blob of the sink's EDID, or of
- * `edid_override` while debugfs set one (76-18b), which replaces the
- * sink's whenever the modes are read.
+ * the type's name and `connector_type_id` ("Virtual-1", "eDP-1"), which
+ * /sys and Weston's configuration use. `modes` are the modes the last probe
+ * kept, preferred first, and `probed_modes` those a probe's `get_modes`
+ * gathers before they are checked. `edid` is the blob of the sink's EDID,
+ * or of `edid_override` while debugfs set one (76-18b), which replaces the
+ * sink's whenever the modes are read. `dpms` is the legacy DPMS property's
+ * value. `encoder` is the encoder that drives it after the last commit.
  */
 struct drm_connector {
     struct drm_mode_object base;
@@ -810,10 +894,14 @@ struct drm_connector {
     char name[DRM_CONNECTOR_NAME_LEN];
     int status; /* DRM_CONNECTOR_* */
     int force;  /* DRM_FORCE_* */
+    int dpms;   /* DRM_MODE_DPMS_ON or DRM_MODE_DPMS_OFF */
+    int interlace_allowed, doublescan_allowed;
     uint32_t mm_width, mm_height;
     uint32_t subpixel;
+    uint32_t possible_encoders; /* bit N: the encoder of index N */
     struct drm_encoder *encoder;
     struct drm_display_mode *modes;
+    struct drm_display_mode *probed_modes;
     struct drm_property_blob *edid;
     struct drm_property_blob *edid_override;
     const struct drm_connector_funcs *funcs;
@@ -823,16 +911,18 @@ struct drm_connector {
 /*
  * An atomic state: a commit's new states, by object index, with the old
  * ones they replace kept for the hooks and freed after; NULL where the
- * commit leaves an object alone. `flags` are DRM_MODE_ATOMIC_* and
- * DRM_MODE_PAGE_FLIP_*.
+ * commit leaves an object alone. Before the swap, `*_old` are the objects'
+ * states and `*_new` the commit's; after it, the objects hold `*_new`.
+ * `allow_modeset` is set unless the atomic ioctl left out ALLOW_MODESET.
  */
 #define DRM_MAX_CRTCS      8
 #define DRM_MAX_PLANES     32
 #define DRM_MAX_CONNECTORS 16
 struct drm_atomic_state {
     struct drm_device *dev;
-    uint32_t flags;
+    uint32_t flags; /* DRM_MODE_ATOMIC_* and DRM_MODE_PAGE_FLIP_* */
     int allow_modeset;
+    int legacy_cursor_update;
     struct drm_plane_state *planes_old[DRM_MAX_PLANES], *planes_new[DRM_MAX_PLANES];
     struct drm_crtc_state *crtcs_old[DRM_MAX_CRTCS], *crtcs_new[DRM_MAX_CRTCS];
     struct drm_connector_state *connectors_old[DRM_MAX_CONNECTORS],
@@ -840,12 +930,16 @@ struct drm_atomic_state {
 };
 
 /*
- * A device's display: its limits, its objects, and the two commit hooks.
- * `atomic_check` refuses a state the device cannot show, with Linux's
- * errors; `atomic_commit` makes a checked state the device's, at once or,
- * when `nonblock` is set, from a worker, sending each CRTC's event and
- * signalling its out-fence when the new state reaches the screen. NULL
- * hooks take the core's helpers (drm_atomic.c).
+ * A device's display: its limits, its objects, the properties every device
+ * has, and the two commit hooks. `atomic_check` refuses a state the device
+ * cannot show, with Linux's errors; `atomic_commit` makes a checked state
+ * the device's, at once or, when `nonblock` is set, before the vblank,
+ * sending each CRTC's event and signalling its out-fence when the new state
+ * reaches the screen. NULL hooks take the core's helpers,
+ * `drm_atomic_helper_check` and `drm_atomic_helper_commit`. `fb_dirty` says
+ * DIRTYFB sends its rectangles to the planes that show the framebuffer as
+ * FB_DAMAGE_CLIPS, as Linux's drm_atomic_helper_dirtyfb does; without it
+ * DIRTYFB answers ENOSYS.
  */
 struct drm_mode_config {
     uint32_t min_width, max_width, min_height, max_height;
@@ -853,6 +947,7 @@ struct drm_mode_config {
     uint32_t preferred_depth;
     int prefer_shadow;
     int async_page_flip;
+    int fb_dirty;
     uint32_t num_crtc, num_plane, num_connector, num_encoder;
     struct drm_crtc *crtcs[DRM_MAX_CRTCS];
     struct drm_plane *planes[DRM_MAX_PLANES];
@@ -861,10 +956,354 @@ struct drm_mode_config {
     struct drm_framebuffer *fbs;
     struct drm_property *properties;
     struct drm_property_blob *blobs;
-    uint32_t next_id;
+    /* The standard properties, Linux's, made by drm_mode_config_init. */
+    struct drm_property *edid_property, *dpms_property, *path_property, *tile_property;
+    struct drm_property *link_status_property, *non_desktop_property, *plane_type_property;
+    struct drm_property *prop_src_x, *prop_src_y, *prop_src_w, *prop_src_h;
+    struct drm_property *prop_crtc_x, *prop_crtc_y, *prop_crtc_w, *prop_crtc_h;
+    struct drm_property *prop_fb_id, *prop_in_fence_fd, *prop_out_fence_ptr, *prop_crtc_id;
+    struct drm_property *prop_fb_damage_clips, *prop_active, *prop_mode_id, *prop_vrr_enabled;
+    struct drm_property *degamma_lut_property, *degamma_lut_size_property, *ctm_property;
+    struct drm_property *gamma_lut_property, *gamma_lut_size_property;
+    struct drm_property *modifiers_property, *size_hints_property;
     int32_t (*atomic_check)(struct drm_device *dev, struct drm_atomic_state *state);
     int32_t (*atomic_commit)(struct drm_device *dev, struct drm_atomic_state *state, int nonblock);
 };
+
+/* The index masks of Linux's drm_crtc_mask, drm_plane_mask and
+ * drm_connector_mask. */
+#define drm_crtc_mask(crtc)           (1u << (crtc)->index)
+#define drm_plane_mask(plane)         (1u << (plane)->index)
+#define drm_connector_mask(connector) (1u << (connector)->index)
+
+/* ---- Making a device's display, in drm_mode.c ---- */
+
+/** Give `dev` its display: the standard properties and the default limits.
+ * 0 or -ENOMEM. Called once by a driver with DRIVER_MODESET before it makes
+ * its CRTCs, planes, encoders and connectors. */
+int32_t drm_mode_config_init(struct drm_device *dev);
+/** Free what the core made for `dev`'s display: its framebuffers, blobs,
+ * properties, the objects' states, modes and gamma tables. For the
+ * driver's `release`, once no file is open. */
+void drm_mode_config_cleanup(struct drm_device *dev);
+/** Make `plane` a plane of `dev` of DRM_PLANE_TYPE_* `type` on the CRTCs of
+ * `possible_crtcs` (0: the CRTC whose primary or cursor it becomes), with
+ * the `format_count` formats `formats` and the modifiers `modifiers` up to
+ * DRM_FORMAT_MOD_INVALID, or NULL for linear alone: its ID, its properties
+ * (IN_FORMATS among them) and its first state, off. 0, -EINVAL past
+ * DRM_MAX_PLANES, or -ENOMEM. */
+int32_t drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane,
+                                 uint32_t possible_crtcs, const struct drm_plane_funcs *funcs,
+                                 const uint32_t *formats, uint32_t format_count,
+                                 const uint64_t *modifiers, int type);
+/** Make `crtc` a CRTC of `dev` with its primary plane `primary` and cursor
+ * plane `cursor` (or NULL), named "crtc-N": its ID, its properties and its
+ * first state, off. 0, -EINVAL past DRM_MAX_CRTCS, or -ENOMEM. */
+int32_t drm_crtc_init_with_planes(struct drm_device *dev, struct drm_crtc *crtc,
+                                  struct drm_plane *primary, struct drm_plane *cursor,
+                                  const struct drm_crtc_funcs *funcs);
+/** Give `crtc` a gamma table of `size` entries for GETGAMMA and SETGAMMA,
+ * a linear ramp. 0 or -ENOMEM. */
+int32_t drm_mode_crtc_set_gamma_size(struct drm_crtc *crtc, uint32_t size);
+/** Make `encoder` an encoder of `dev` of DRM_MODE_ENCODER_* `type`; the
+ * driver sets `possible_crtcs`. 0 or -EINVAL past the table. */
+int32_t drm_encoder_init(struct drm_device *dev, struct drm_encoder *encoder, uint32_t type);
+/** Make `connector` a connector of `dev` of DRM_MODE_CONNECTOR_* `type`,
+ * named by the type and the lowest free number of that type, with Linux's
+ * standard properties (EDID on all but virtual and writeback connectors)
+ * and its first state, unrouted. 0, -EINVAL past DRM_MAX_CONNECTORS, or
+ * -ENOMEM. */
+int32_t drm_connector_init(struct drm_device *dev, struct drm_connector *connector,
+                           const struct drm_connector_funcs *funcs, uint32_t type);
+/** Let `encoder` drive `connector`. 0. */
+int32_t drm_connector_attach_encoder(struct drm_connector *connector, struct drm_encoder *encoder);
+/** Give a virtual connector the EDID property, for a driver whose virtual
+ * sink has an EDID (virtio-gpu, bochs). */
+void drm_connector_attach_edid_property(struct drm_connector *connector);
+/** Attach FB_DAMAGE_CLIPS to `plane`, for a driver that copies only damage. */
+void drm_plane_enable_fb_damage_clips(struct drm_plane *plane);
+/** Attach "rotation", the bitmask of `supported` DRM_MODE_ROTATE_* and
+ * DRM_MODE_REFLECT_* bits, starting at `rotation`. 0 or -ENOMEM. */
+int32_t drm_plane_create_rotation_property(struct drm_plane *plane, uint32_t rotation,
+                                           uint32_t supported);
+/** Attach "zpos", a range from `min` to `max` starting at `zpos`, immutable
+ * when `min` and `max` are equal. 0 or -ENOMEM. */
+int32_t drm_plane_create_zpos_property(struct drm_plane *plane, uint32_t zpos, uint32_t min,
+                                       uint32_t max);
+/** Attach "alpha", a range from 0 to 0xffff starting opaque. 0 or
+ * -ENOMEM. */
+int32_t drm_plane_create_alpha_property(struct drm_plane *plane);
+
+/* ---- Properties ---- */
+
+/** A new property of `dev` named `name` with DRM_MODE_PROP_* `flags` and
+ * room for `num_values` values, or NULL with no memory. The make calls
+ * below fill the values. */
+struct drm_property *drm_property_create(struct drm_device *dev, uint32_t flags, const char *name,
+                                         uint32_t num_values);
+struct drm_property *drm_property_create_range(struct drm_device *dev, uint32_t flags,
+                                               const char *name, uint64_t min, uint64_t max);
+struct drm_property *drm_property_create_signed_range(struct drm_device *dev, uint32_t flags,
+                                                      const char *name, int64_t min, int64_t max);
+struct drm_property *drm_property_create_bool(struct drm_device *dev, uint32_t flags,
+                                              const char *name);
+struct drm_property *drm_property_create_enum(struct drm_device *dev, uint32_t flags,
+                                              const char *name,
+                                              const struct drm_prop_enum_list *list, uint32_t n);
+/** A bitmask of the bits of `list` that `supported` has. */
+struct drm_property *drm_property_create_bitmask(struct drm_device *dev, uint32_t flags,
+                                                 const char *name,
+                                                 const struct drm_prop_enum_list *list, uint32_t n,
+                                                 uint64_t supported);
+struct drm_property *drm_property_create_object(struct drm_device *dev, uint32_t flags,
+                                                const char *name, uint32_t type);
+/** Attach `prop` to `obj` with the value `value`; nothing past
+ * DRM_OBJECT_MAX_PROPERTY. */
+void drm_object_attach_property(struct drm_mode_object *obj, struct drm_property *prop,
+                                uint64_t value);
+/** Set the value `obj` keeps for `prop`, the immutable ones' way: 0, or
+ * -EINVAL when `prop` is not attached. */
+int32_t drm_object_property_set_value(struct drm_mode_object *obj, struct drm_property *prop,
+                                      uint64_t value);
+/** The value of `prop` on `obj` as GETPROPERTIES reports it: from the
+ * object's state for a mutable property of an atomic driver, else the kept
+ * one. 0 or -EINVAL. */
+int32_t drm_object_property_get_value(struct drm_mode_object *obj, struct drm_property *prop,
+                                      uint64_t *value);
+/** The property of ID `id` attached to `obj`, or NULL. */
+struct drm_property *drm_object_find_property(const struct drm_mode_object *obj, uint32_t id);
+/** Whether `value` may be set on `prop`, Linux's
+ * drm_property_change_valid_get: in range, among the enum's values, of the
+ * bitmask's bits, or naming a blob or an object of the property's type. */
+int drm_property_change_valid(struct drm_property *prop, uint64_t value);
+
+/** A blob of `dev` of `length` bytes copied from `data`, or zeroed for
+ * NULL, with one reference, the caller's; NULL with *err -EINVAL for a
+ * length of 0 or -ENOMEM. */
+struct drm_property_blob *drm_property_create_blob(struct drm_device *dev, uint32_t length,
+                                                   const void *data, int32_t *err);
+/** The blob of ID `id`, with a reference taken, or NULL. */
+struct drm_property_blob *drm_property_lookup_blob(struct drm_device *dev, uint32_t id);
+struct drm_property_blob *drm_property_blob_get(struct drm_property_blob *blob);
+/** Drop a reference; the last frees the blob and its ID. NULL is
+ * allowed. */
+void drm_property_blob_put(struct drm_property_blob *blob);
+/**
+ * Replace the blob `*slot` with the blob of ID `id`, or none for 0, as
+ * Linux's drm_property_replace_blob_from_id: -EINVAL for an ID of no blob,
+ * or of one whose length is not `expected_size` (when not negative) or not
+ * a whole number of `expected_elem_size` (when not negative). `*replaced`
+ * says whether the slot changed.
+ */
+int32_t drm_property_replace_blob_from_id(struct drm_device *dev, struct drm_property_blob **slot,
+                                          uint64_t id, int32_t expected_size,
+                                          int32_t expected_elem_size, int *replaced);
+
+/* ---- Finding objects ---- */
+
+/** The mode object of ID `id` and DRM_MODE_OBJECT_* `type`, or of any type
+ * for DRM_MODE_OBJECT_ANY, with a reference taken on a framebuffer or a
+ * blob; NULL for none. `file` is the caller's, NULL for the kernel. */
+struct drm_mode_object *drm_mode_object_find(struct drm_device *dev, struct drm_file *file,
+                                             uint32_t id, uint32_t type);
+/** Drop the reference `drm_mode_object_find` took, if any. */
+void drm_mode_object_put(struct drm_mode_object *obj);
+struct drm_crtc *drm_crtc_find(struct drm_device *dev, struct drm_file *file, uint32_t id);
+struct drm_plane *drm_plane_find(struct drm_device *dev, struct drm_file *file, uint32_t id);
+struct drm_encoder *drm_encoder_find(struct drm_device *dev, struct drm_file *file, uint32_t id);
+struct drm_connector *drm_connector_lookup(struct drm_device *dev, struct drm_file *file,
+                                           uint32_t id);
+/** The framebuffer of ID `id`, with a reference taken, or NULL. */
+struct drm_framebuffer *drm_framebuffer_lookup(struct drm_device *dev, struct drm_file *file,
+                                               uint32_t id);
+void drm_framebuffer_get(struct drm_framebuffer *fb);
+/** Drop a reference; the last frees the framebuffer, its ID and its holds
+ * on its buffer objects. NULL is allowed. */
+void drm_framebuffer_put(struct drm_framebuffer *fb);
+/** Whether `plane` takes `format` with `modifier`. */
+int drm_plane_has_format(const struct drm_plane *plane, uint32_t format, uint64_t modifier);
+/** -ENOSPC unless the 16.16 source rectangle lies inside `fb`. */
+int32_t drm_framebuffer_check_src_coords(uint32_t src_x, uint32_t src_y, uint32_t src_w,
+                                         uint32_t src_h, const struct drm_framebuffer *fb);
+/**
+ * A framebuffer of `file`'s buffer objects as `r` describes it, Linux's
+ * drm_internal_framebuffer_create, with one reference, the caller's, and
+ * no owner; NULL with *err set: -EINVAL for flags, sizes, a format, pitch,
+ * offset or modifier the device refuses, -ERANGE for a size past 32 bits,
+ * -ENOENT for a handle of no object, -ENOMEM.
+ */
+struct drm_framebuffer *drm_internal_framebuffer_create(struct drm_device *dev,
+                                                        const struct drm_mode_fb_cmd2 *r,
+                                                        struct drm_file *file, int32_t *err);
+
+/* ---- Modes and probing ---- */
+
+/** The refresh rate of `mode` in Hz, rounded, as Linux's drm_mode_vrefresh. */
+uint32_t drm_mode_vrefresh(const struct drm_mode_modeinfo *mode);
+/** Name `mode` "WxH", with "i" for an interlaced one. */
+void drm_mode_set_name(struct drm_mode_modeinfo *mode);
+/** Whether two modes have the same timings, clock and flags. */
+int drm_mode_equal(const struct drm_mode_modeinfo *a, const struct drm_mode_modeinfo *b);
+/** Linux's drm_mode_validate_basic: 0 for a mode whose type, flags, clock
+ * and timings are sane, else -EINVAL. */
+int32_t drm_mode_validate_basic(const struct drm_mode_modeinfo *mode);
+/** A program's mode `in` as the kernel keeps it, Linux's
+ * drm_mode_convert_umode: its type cut to the known bits. 0, -ERANGE for a
+ * clock or refresh past INT_MAX, -EINVAL for an unknown aspect ratio or a
+ * mode `drm_mode_validate_basic` refuses. */
+int32_t drm_mode_convert_umode(struct drm_mode_modeinfo *out, const struct drm_mode_modeinfo *in);
+/** `n` divided by `d`, which is not 0: the kernel links no libgcc, whose
+ * `__udivdi3` an i686 64-bit division would call. */
+uint64_t drm_div64(uint64_t n, uint64_t d);
+/** Add a copy of `mode` to `connector`'s probed modes. 0 or -ENOMEM. */
+int32_t drm_mode_probed_add(struct drm_connector *connector, const struct drm_mode_modeinfo *mode);
+/**
+ * Probe `connector` as Linux's drm_helper_probe_single_connector_modes:
+ * its status by `detect` and the debug force, its modes by `get_modes` when
+ * connected, or the modes up to 1024x768 when it gave none, each kept only
+ * if sane, at most `max_width` by `max_height` (0: no limit), of flags the
+ * connector allows and valid to the driver, without duplicates, sorted
+ * preferred first, then by area, refresh and clock. Returns the number of
+ * modes. May sleep in `detect` and `get_modes`.
+ */
+int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uint32_t max_width,
+                                            uint32_t max_height);
+/** Add the modes of Linux's DMT table no larger than `hdisplay` by
+ * `vdisplay` and no faster than 61 Hz, Linux's drm_add_modes_noedid. The
+ * number added. */
+int drm_add_modes_noedid(struct drm_connector *connector, uint32_t hdisplay, uint32_t vdisplay);
+/** Parse the EDID `edid` of `len` bytes into its modes, in the order Linux
+ * adds them, through `add(mode, arg)` for each; the number added, 0 for an
+ * EDID that is not valid. For drm_connector_update_edid and its tests. */
+int drm_edid_parse_modes(const uint8_t *edid, uint32_t len,
+                         int (*add)(const struct drm_mode_modeinfo *mode, void *arg), void *arg);
+
+/* ---- The commit lock and the atomic commit, in drm_atomic.c ---- */
+
+/** Take `dev`'s commit lock, sleeping while another commit holds it:
+ * 0, or -EINTR for a signal. */
+int32_t drm_modeset_lock(struct drm_device *dev);
+/** Take the commit lock with signals ignored, for a release that must
+ * take a framebuffer off the display whatever the caller's signals. */
+void drm_modeset_lock_nointr(struct drm_device *dev);
+/** Let the commit lock go and wake the next taker. */
+void drm_modeset_unlock(struct drm_device *dev);
+
+/** A new empty atomic state of `dev`, with ALLOW_MODESET; NULL with no
+ * memory. Freed with `drm_atomic_state_free`. */
+struct drm_atomic_state *drm_atomic_state_alloc(struct drm_device *dev);
+/** Free `state`: the states it holds that no object took, with their
+ * references and their unsent events. */
+void drm_atomic_state_free(struct drm_atomic_state *state);
+/** Free a plane's or a CRTC's state and drop what it holds: its
+ * framebuffer, fence and blobs, and a CRTC's unsent event. NULL is
+ * allowed. */
+void drm_plane_state_destroy(struct drm_plane_state *ps);
+void drm_crtc_state_destroy(struct drm_crtc_state *cs);
+/** A new FLIP_COMPLETE event of `crtc` with `user_data`, not yet reserved,
+ * or NULL with no memory; for the ATOMIC and PAGE_FLIP ioctls. */
+struct drm_pending_event *drm_crtc_flip_event(struct drm_crtc *crtc, uint64_t user_data);
+/** The commit's state of each object, duplicated from the object's on first
+ * use, with the states it depends on (a plane's and a connector's CRTC);
+ * NULL with no memory. */
+struct drm_crtc_state *drm_atomic_get_crtc_state(struct drm_atomic_state *state,
+                                                 struct drm_crtc *crtc);
+struct drm_plane_state *drm_atomic_get_plane_state(struct drm_atomic_state *state,
+                                                   struct drm_plane *plane);
+struct drm_connector_state *drm_atomic_get_connector_state(struct drm_atomic_state *state,
+                                                           struct drm_connector *connector);
+/** The new and old states of an object in `state`, or NULL when the commit
+ * leaves it alone; for the drivers' hooks. */
+#define drm_atomic_get_new_crtc_state(s, c)  ((s)->crtcs_new[(c)->index])
+#define drm_atomic_get_old_crtc_state(s, c)  ((s)->crtcs_old[(c)->index])
+#define drm_atomic_get_new_plane_state(s, p) ((s)->planes_new[(p)->index])
+#define drm_atomic_get_old_plane_state(s, p) ((s)->planes_old[(p)->index])
+/** Route a plane state to `crtc` (or none), keeping both CRTCs' plane
+ * masks. 0 or -ENOMEM. */
+int32_t drm_atomic_set_crtc_for_plane(struct drm_atomic_state *state,
+                                      struct drm_plane_state *plane_state, struct drm_crtc *crtc);
+/** Make a plane state show `fb` (or nothing), moving the reference. */
+void drm_atomic_set_fb_for_plane(struct drm_plane_state *plane_state, struct drm_framebuffer *fb);
+/** Route a connector state to `crtc` (or none), keeping both CRTCs'
+ * connector masks. 0 or -ENOMEM. */
+int32_t drm_atomic_set_crtc_for_connector(struct drm_atomic_state *state,
+                                          struct drm_connector_state *conn_state,
+                                          struct drm_crtc *crtc);
+/** Set a CRTC state's mode, through a new MODE_ID blob, and enable it; or
+ * clear and disable it for NULL. 0 or -ENOMEM. */
+int32_t drm_atomic_set_mode_for_crtc(struct drm_crtc_state *crtc_state,
+                                     const struct drm_mode_modeinfo *mode);
+/** Set a CRTC state's mode from the MODE_ID blob `blob`, or clear it for
+ * NULL: 0, or -EINVAL for a blob that is not one sane mode. */
+int32_t drm_atomic_set_mode_prop_for_crtc(struct drm_crtc_state *crtc_state,
+                                          struct drm_property_blob *blob);
+/** Add every connector routed to `crtc`, and every plane it shows, to
+ * `state`. 0 or -ENOMEM. */
+int32_t drm_atomic_add_affected_connectors(struct drm_atomic_state *state, struct drm_crtc *crtc);
+int32_t drm_atomic_add_affected_planes(struct drm_atomic_state *state, struct drm_crtc *crtc);
+/** Set `prop` of `obj` to `value` in `state`, as the atomic ioctl does:
+ * 0, -EINVAL for a value the property refuses or a property the object
+ * cannot set, -EACCES for a CRTC_ID of no CRTC, -ENOMEM, -EFAULT. */
+int32_t drm_atomic_set_property(struct drm_atomic_state *state, struct drm_file *file,
+                                struct drm_mode_object *obj, struct drm_property *prop,
+                                uint64_t value);
+/** The value of a mutable property in an object's current state. 0 or
+ * -EINVAL. */
+int32_t drm_atomic_get_property(struct drm_mode_object *obj, struct drm_property *prop,
+                                uint64_t *value);
+/** Whether a CRTC state needs a full modeset: its mode, enable, active or
+ * connectors changed. */
+#define drm_atomic_crtc_needs_modeset(cs) \
+    ((cs)->mode_changed || (cs)->active_changed || (cs)->connectors_changed)
+/** Check `state` as Linux's drm_atomic_check_only: the core's checks of each
+ * plane, CRTC and connector, the driver's `atomic_check`, and the refusal of
+ * a modeset without ALLOW_MODESET. 0 or Linux's error. */
+int32_t drm_atomic_check_only(struct drm_atomic_state *state);
+/** Check and commit `state`, waiting for it to reach the hardware, or, for
+ * the nonblocking call, returning before the vblank it waits for. 0 or the
+ * check's error; `state` stays the caller's to free. May sleep. */
+int32_t drm_atomic_commit(struct drm_atomic_state *state);
+int32_t drm_atomic_nonblocking_commit(struct drm_atomic_state *state);
+/** The core's check, Linux's drm_atomic_helper_check: routing, modeset
+ * marks, the CRTCs' `mode_valid`, then the planes' and CRTCs'
+ * `atomic_check`. */
+int32_t drm_atomic_helper_check(struct drm_device *dev, struct drm_atomic_state *state);
+/** The core's commit, Linux's drm_atomic_helper_commit with its default
+ * tail: swap the states in, disable the CRTCs that go off or change mode,
+ * update the planes between each CRTC's begin and flush, enable the CRTCs
+ * that come on, send the events, free the old states. -EBUSY for a
+ * nonblocking commit while one is pending on a CRTC it touches. */
+int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state *state,
+                                 int nonblock);
+/**
+ * Clip a plane state to its CRTC as Linux's
+ * drm_atomic_helper_check_plane_state: set `src`, `dst` and `visible`.
+ * `min_scale` and `max_scale` bound src/dst in 16.16 (DRM_PLANE_NO_SCALING
+ * for none); `can_position` lets a visible plane cover less than the CRTC;
+ * `can_update_disabled` lets it change on a CRTC that is off. 0, -ERANGE
+ * for a scale out of bounds, or -EINVAL.
+ */
+#define DRM_PLANE_NO_SCALING (1 << 16)
+int32_t drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
+                                            const struct drm_crtc_state *crtc_state,
+                                            int32_t min_scale, int32_t max_scale, int can_position,
+                                            int can_update_disabled);
+
+/* A legacy mode set, Linux's drm_mode_set: a CRTC, the framebuffer it shows
+ * from (x, y), the mode, or NULL to turn it off, and its connectors. */
+struct drm_mode_set {
+    struct drm_crtc *crtc;
+    struct drm_framebuffer *fb;
+    uint32_t x, y;
+    const struct drm_mode_modeinfo *mode;
+    struct drm_connector **connectors;
+    uint32_t num_connectors;
+};
+
+/** Commit `set` as Linux's drm_atomic_helper_set_config, the legacy
+ * SETCRTC and the console's mode set; the caller holds the commit lock.
+ * 0 or the commit's error. May sleep. */
+int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
 
 /* ------------------------------------------------------------------------
  * Devices
@@ -1007,9 +1446,10 @@ int drm_crtc_handle_vblank(struct drm_crtc *crtc);
  * path. 0, or -EINVAL while no source runs. (76-18b) */
 int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t frame,
                                const uint32_t *crcs);
-/** Set `connector`'s EDID blob from the sink's `edid`, `len` bytes, or
- * from its override, and its modes from the blob; the number of modes.
- * (76-5a) */
+/** Set `connector`'s EDID property and size in millimetres from the sink's
+ * `edid` of `len` bytes, or from its override, cleaned as Linux cleans it,
+ * and add the modes it names to the probed modes; the number added. NULL
+ * `edid` with no override clears the property. */
 int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len);
 /** Tell user space that `dev`'s outputs changed: the uevent `change` of
  * its card with HOTPLUG=1, which compositors listen for. (drm_sysfs.c) */
