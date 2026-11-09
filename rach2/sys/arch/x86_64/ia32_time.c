@@ -70,7 +70,7 @@ static int get_times32(uintptr_t u, long *t, int n)
 /* Copy `n` pairs of `t` out as i386 times to `u`; 0 or -EFAULT. */
 static int put_times32(uintptr_t u, const long *t, int n)
 {
-    int32_t w[4];
+    int32_t w[4] = {0, 0, 0, 0};
     int i;
 
     for (i = 0; i < 2 * n; i++) {

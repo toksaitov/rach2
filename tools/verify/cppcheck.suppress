@@ -127,6 +127,12 @@ badBitmaskCheck:*sys/arch/x86_64/percpu.c
 unusedStructMember:*sys/ipc/sysv.c
 unusedStructMember:*sys/ipc/mqueue.c
 
+# The compat calls' conversion buffers hold Linux's x86-64 sigevent and
+# sysinfo, which the x86-64 handler fills or reads whole: the padding is the
+# layout, not dead code.
+unusedStructMember:*sys/arch/x86_64/ia32_misc.c
+unusedStructMember:*sys/arch/x86_64/ia32_time.c
+
 # fp_access keeps the floating-point image in the 16-byte-aligned part of a
 # buffer, which it writes through the aligned pointer cppcheck does not follow.
 unassignedVariable:*sys/proc/ptrace.c
