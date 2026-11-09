@@ -67,7 +67,7 @@ The `venus` profile gives the guest Vulkan through Venus, over the host's lavapi
 
 * `GALLIUM_DRIVER=llvmpipe`: Venus's frames are black when QEMU's GL is Mesa's d3d12 driver on the RTX 4080, so Venus and `virgl` are two profiles (run 2, step 6).
 * `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`: virglrenderer's render server, which QEMU starts and which inherits the environment, takes lavapipe as the Vulkan device it relays.
-* `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libm.so.6`: llvmpipe's compiled shaders look libm's functions up in the process's global scope, and `/usr/libexec/virgl_render_server` links only libvulkan and libc, so without the preload a shader that calls one, such as dEQP-VK's `float_controls2` cases on Mesa 26.1's Venus, calls address 0 and the render server dies of a segmentation fault at address 0.
+* `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libm.so.6`: llvmpipe's compiled shaders look libm's functions up in the process's global scope, and `/usr/libexec/virgl_render_server` links only libvulkan and libc, so without the preload a shader that calls one, such as dEQP-VK's `float_controls2` cases on Mesa 26.1's Venus, calls address 0, and the render server dies of the segmentation fault.
 
 lavapipe exports memory and fences as dma-bufs and sync files only through `/dev/udmabuf`, which WSL's kernel lacks; without it lavapipe drops `VK_EXT_image_drm_format_modifier`, `VK_KHR_external_fence_fd` and `VK_KHR_external_semaphore_fd`, and Venus stops at Vulkan 1.2 with no swapchain. Root loads the module after each start of WSL ([tools/Readme.md](../../tools/Readme.md#the-testing-host)), and the account that runs QEMU must be in `kvm`, the group of `/dev/udmabuf`.
 
