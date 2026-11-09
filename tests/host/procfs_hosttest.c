@@ -76,6 +76,12 @@ static const char *sysfs_wlan_driver(int index);
 #include "ns_first.h"
 
 /** No backlight is registered in this model. */
+int backlight_count(void)
+{
+    return 0;
+}
+
+/** No backlight has attributes. */
 int backlight_show(int index, int attr, char *out, int cap)
 {
     (void)index;
@@ -86,6 +92,13 @@ int backlight_show(int index, int attr, char *out, int cap)
 }
 
 /** No radio switch is registered in this model. */
+int rfkill_present(int index)
+{
+    (void)index;
+    return 0;
+}
+
+/** No radio switch has attributes. */
 int rfkill_show(int index, int attr, char *out, int cap)
 {
     (void)index;
@@ -1839,23 +1852,23 @@ static void pci_uevent_rows(void)
     static const char change[] = "change 01234567-89ab-cdef-0123-456789abcdef SEAT=seat0\n";
     uint32_t mark = uevents_len;
 
-    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, "add\n", 4) == 4 &&
+    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, 0, "add\n", 4) == 4 &&
               __builtin_strcmp(uevents + mark, "add@/devices/pci0000:00/0000:00:04.0") == 0 &&
               uevent_has(mark, 0, "SUBSYSTEM=pci") && uevent_has(mark, 0, "SYNTH_UUID=0") &&
               uevent_has(mark, 0, "PCI_ID=1AF4:1050") &&
               uevent_has(mark, 0, "PCI_SLOT_NAME=0000:00:04.0"),
           "a write of add to a PCI function's uevent sends its add");
     mark = uevents_len;
-    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, change, sizeof(change) - 1) ==
+    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, 0, change, sizeof(change) - 1) ==
                   (int32_t)sizeof(change) - 1 &&
               uevent_has(mark, 0, "ACTION=change") &&
               uevent_has(mark, 0, "SYNTH_UUID=01234567-89ab-cdef-0123-456789abcdef") &&
               uevent_has(mark, 0, "SYNTH_ARG_SEAT=seat0"),
           "and passes a UUID and arguments on");
     mark = uevents_len;
-    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, "plug\n", 5) == -EINVAL &&
-              procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, "add 1234\n", 9) == -EINVAL &&
-              procfs_uevent_write(SYSFS_PCI_DEVICE, 0x28, "add\n", 4) == -ENOENT &&
+    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, 0, "plug\n", 5) == -EINVAL &&
+              procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, 0, "add 1234\n", 9) == -EINVAL &&
+              procfs_uevent_write(SYSFS_PCI_DEVICE, 0x28, 0, "add\n", 4) == -ENOENT &&
               uevents_len == mark,
           "and refuses another word, a short UUID and a function that is gone");
 }
