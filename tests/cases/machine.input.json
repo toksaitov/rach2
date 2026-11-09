@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.input",
-  "summary": "The keyboards' event devices, /dev/input/eventN, and OSS's mixer, /dev/mixer, each case a boot of its own that tests/cases/machine/input_scenario.c drives",
+  "summary": "The keyboards' and mice's event devices, /dev/input/eventN, and OSS's mixer, /dev/mixer, each case a boot of its own that tests/cases/machine/input_scenario.c drives",
   "cases": [
     {
       "case_id": "machine.input.ps2",
@@ -317,6 +317,324 @@
         "plan": "none",
         "class": "QEMU",
         "reason": "the keys are pressed through QEMU's monitor on its USB keyboard"
+      }
+    },
+    {
+      "case_id": "machine.input.mouse",
+      "behavior": "the PS/2 mouse's motion, buttons and wheel reach its event device, ImExPS/2 Generic Explorer Mouse, as Linux's psmouse reports them, stamped by each open's clock",
+      "units": [
+        "evdev",
+        "ps2mouse",
+        "evprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "input_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine to the debug shell",
+          "machine": "input"
+        },
+        {
+          "step_id": "mouse",
+          "stage": "execute",
+          "does": "run evprobe mouse, move the mouse by 10 and 5, press and release the left button and turn the wheel up and down through QMP",
+          "machine": "input"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "input",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mouse",
+          "checks": "evprobe finds the PS/2 mouse's event device by its name, with bus 0x11, vendor 2, product 6, isa0060/serio1/input0, EV_REL with REL_X, REL_Y, REL_HWHEEL and REL_WHEEL, BTN_LEFT to BTN_EXTRA, INPUT_PROP_POINTER and EINVAL for EVIOCGABS; a revoked open reads ENODEV; a monotonic open and a real-time one each read the motion of 10 and 5, the left button pressed and released and REL_WHEEL of 1 and -1, every record stamped between the clock_gettime calls around it, and evprobe prints `EVPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 270000000,
+          "ceiling_us": 810000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "input_scenario",
+          "node": "tests/cases/machine/input_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the mouse is moved through QEMU's QMP"
+      }
+    },
+    {
+      "case_id": "machine.input.usb-mouse",
+      "behavior": "a USB boot-protocol mouse's motion, buttons and wheel reach its event device, USB HIDBP Mouse, with REL_WHEEL_HI_RES, stamped by each open's clock",
+      "units": [
+        "evdev",
+        "hid",
+        "evprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "input_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine to the debug shell",
+          "machine": "input"
+        },
+        {
+          "step_id": "mouse",
+          "stage": "execute",
+          "does": "run evprobe usbmouse, move the mouse by 10 and 5, press and release the left button and turn the wheel up and down through QMP",
+          "machine": "input"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "input",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "qemu-xhci",
+                "id": "xhci"
+              },
+              {
+                "model": "usb-mouse",
+                "bus": "xhci.0"
+              }
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "device",
+          "checks": "the kernel records the mouse configured, class 3 protocol 2",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mouse",
+          "checks": "evprobe finds the USB mouse's event device by its name, with bus 0x03, a usb- place, EV_REL with REL_X, REL_Y, REL_WHEEL and REL_WHEEL_HI_RES, BTN_LEFT to BTN_EXTRA, no property and EINVAL for EVIOCGABS; a revoked open reads ENODEV; a monotonic open and a real-time one each read the motion of 10 and 5, the left button pressed and released, REL_WHEEL of 1 and -1 and REL_WHEEL_HI_RES of 120 and -120, every record stamped between the clock_gettime calls around it, and evprobe prints `EVPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 270000000,
+          "ceiling_us": 810000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "input_scenario",
+          "node": "tests/cases/machine/input_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the mouse is moved through QEMU's QMP on its USB mouse"
       }
     },
     {

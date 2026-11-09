@@ -1,6 +1,7 @@
 /*
  * input_scenario.c: the scenarios of tests/cases/machine.input.json, the
- * keyboards' event devices and the mixer, each case a boot of its own.
+ * keyboards' and mice's event devices and the mixer, each case a boot of its
+ * own.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -11,8 +12,9 @@
  * rest. */
 #define FAMILY "machine.input."
 
-/* The kernel's record of a configured USB keyboard. */
+/* The kernel's records of a configured USB keyboard and mouse. */
 #define KEYBOARD "class 3 protocol 1"
+#define MOUSE    "class 3 protocol 2"
 
 /* The keys evprobe reads first, as the monitor's sendkey names them, and
  * the twelve that overflow the queue of the reader that reads nothing. */
@@ -21,7 +23,8 @@
 
 /** Begin step `boot`, boot the machine `input` into `b`, wait for `record`
  * on its console when it is not NULL and then for the debug shell, and
- * report assertion `shell`, and `keyboard` with a record. */
+ * report assertion `shell`, and `keyboard` with a keyboard's record or
+ * `device` with a mouse's. */
 static void booted(struct usb_case *u, struct usb_boot *b, const char *record)
 {
     usb_step(u, "boot");
@@ -31,7 +34,7 @@ static void booted(struct usb_case *u, struct usb_boot *b, const char *record)
     usb_wait(b, USB_SHELL);
     usb_assert(u, "shell", 1, "");
     if (record != NULL)
-        usb_assert(u, "keyboard", 1, "");
+        usb_assert(u, strcmp(record, MOUSE) == 0 ? "device" : "keyboard", 1, "");
 }
 
 /** Run `command`, evprobe of a keyboard, press its keys when it asks for
@@ -53,6 +56,52 @@ static int keys(struct usb_case *u, const char *record, const char *command)
     usb_probe(u, "keys", &r, "EVPROBE");
     free(r.text);
     return usb_end(u);
+}
+
+/** Send QMP's input-send-event with the events `events`, a JSON array. */
+static void send(struct usb_boot *b, const char *events)
+{
+    usb_qmp(b, "input-send-event", "{\"events\": %s}", events);
+}
+
+/** Run `command`, evprobe of a mouse; when it asks, move the mouse by 10
+ * and 5, press and release the left button, and turn the wheel up and down,
+ * each a QMP command of its own so that each is a packet; report assertion
+ * `mouse` of its run. */
+static int mouse(struct usb_case *u, const char *record, const char *command)
+{
+    struct usb_boot b;
+    struct usb_run r;
+    uint64_t from;
+
+    booted(u, &b, record);
+    usb_step(u, "mouse");
+    from = usb_start(&b, command);
+    usb_wait(&b, "EVPROBE: move the mouse");
+    send(&b, "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
+             "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-up\"}}, "
+             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-up\"}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-down\"}}, "
+             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-down\"}}]");
+    usb_finish(&b, from, &r);
+    usb_probe(u, "mouse", &r, "EVPROBE");
+    free(r.text);
+    return usb_end(u);
+}
+
+/** The PS/2 mouse's event device. */
+static int ps2_mouse(struct usb_case *u)
+{
+    return mouse(u, NULL, "/evprobe mouse");
+}
+
+/** A USB mouse's event device. */
+static int usb_mouse_case(struct usb_case *u)
+{
+    return mouse(u, MOUSE, "/evprobe usbmouse");
 }
 
 /** The PS/2 keyboard's event device. */
@@ -100,6 +149,8 @@ static const struct {
 } scenarios[] = {
     {"ps2", ps2},
     {"usb", usb},
+    {"mouse", ps2_mouse},
+    {"usb-mouse", usb_mouse_case},
     {"mixer-hda", mixer_hda},
     {"mixer-sb16", mixer_sb16},
 };
