@@ -1,9 +1,20 @@
-/* vgpu3d_model.h: a virgl device over the 2D test's queues and backing. */
+/* vgpu3d_model.h: a virgl device over the 2D test's queues and backing. A
+ * test that defines VGPU_BLOB_TEST gives `execute_blob` the commands this
+ * model does not know. */
 #ifndef VGPU3D_MODEL_H
 #define VGPU3D_MODEL_H
 
+#ifdef VGPU_BLOB_TEST
+static uint32_t execute_blob(const uint8_t *req, uint32_t n, uint8_t *resp, uint32_t *ok);
+#endif
+
 static struct {
     uint32_t contexts[64];
+    uint32_t context_init[64]; /* by slot of `contexts` */
+    char name[64];             /* the last CTX_CREATE's debug name */
+    uint32_t capsets[8];       /* the ids offered; none means 1 and 2 */
+    uint32_t ncapsets;
+    uint32_t submit_flags, submit_ring; /* the last SUBMIT_3D's header */
     uint32_t creates, destroys, attaches, detaches, submits;
     uint32_t cap_queries;
     struct virtio_gpu_resource_create_3d resource;
@@ -49,6 +60,28 @@ static void backing_write(struct model_res *r, uint64_t off, const uint8_t *src,
     CHECK(!len, "the readback fits the backing entries");
 }
 
+/** The id of capability set `i` the model offers, or 0 past them. */
+static uint32_t capset_id(uint32_t i)
+{
+    if (!three.ncapsets) {
+        return i < 2 ? i + 1 : 0;
+    }
+    return i < three.ncapsets ? three.capsets[i] : 0;
+}
+
+/** Whether the model offers capability set `id`. */
+static int capset_offered(uint32_t id)
+{
+    uint32_t i;
+
+    for (i = 0; capset_id(i); i++) {
+        if (capset_id(i) == id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Interpret the 3D wire commands against contexts and byte resources.
  * Capability bytes are an independent repeating sequence spanning two pages. */
 static uint32_t execute_3d(const uint8_t *req, uint32_t n, uint8_t *resp, uint32_t *ok)
@@ -67,17 +100,17 @@ static uint32_t execute_3d(const uint8_t *req, uint32_t n, uint8_t *resp, uint32
     switch (hdr->type) {
     case VIRTIO_GPU_CMD_GET_CAPSET_INFO:
         i = ((const struct virtio_gpu_get_capset_info *)(const void *)req)->index;
-        CHECK(n == 32 && i < 2, "capset info has the wire size and index");
+        CHECK(n == 32 && capset_id(i), "capset info has the wire size and index");
         info = (void *)resp;
-        info->id = i + 1;
+        info->id = capset_id(i);
         info->version = 2;
-        info->size = i == 0 ? 512 : 5000;
+        info->size = info->id == 1 ? 512 : 5000;
         *ok = VIRTIO_GPU_RESP_OK_CAPSET_INFO;
         three.cap_queries++;
         return 40;
     case VIRTIO_GPU_CMD_GET_CAPSET:
         caps = (const void *)req;
-        CHECK(n == 32 && caps->id >= 1 && caps->id <= 2 && caps->version <= 2,
+        CHECK(n == 32 && capset_offered(caps->id) && caps->version <= 2,
               "GET_CAPSET carries id and version, not index");
         for (i = 0; i < (caps->id == 1 ? 512u : 5000u); i++) {
             resp[24 + i] = (uint8_t)(i * 7 + caps->id);
@@ -92,6 +125,12 @@ static uint32_t execute_3d(const uint8_t *req, uint32_t n, uint8_t *resp, uint32
         CHECK(i < 64, "the model has context room");
         if (i < 64) {
             three.contexts[i] = hdr->ctx_id;
+            three.context_init[i] =
+                ((const struct virtio_gpu_ctx_create *)(const void *)req)->context_init;
+            k_memset(three.name, 0, sizeof(three.name));
+            k_memcpy(three.name,
+                     ((const struct virtio_gpu_ctx_create *)(const void *)req)->debug_name,
+                     ((const struct virtio_gpu_ctx_create *)(const void *)req)->nlen & 63);
         }
         three.creates++;
         break;
@@ -146,14 +185,20 @@ static uint32_t execute_3d(const uint8_t *req, uint32_t n, uint8_t *resp, uint32
         CHECK(context_present(hdr->ctx_id) && n == 32 + s->size,
               "SUBMIT_3D appends exactly its size of command bytes");
         three.submitted_size = s->size;
+        three.submit_flags = hdr->flags;
+        three.submit_ring = hdr->ring_idx;
         if (s->size <= sizeof(three.submitted)) {
             k_memcpy(three.submitted, req + 32, s->size);
         }
         three.submits++;
         break;
     default:
+#ifdef VGPU_BLOB_TEST
+        return execute_blob(req, n, resp, ok);
+#else
         *ok = VIRTIO_GPU_RESP_ERR_UNSPEC;
         break;
+#endif
     }
     id = hdr->ctx_id;
     (void)id;

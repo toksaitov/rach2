@@ -12,6 +12,7 @@
 struct vgpu_submit {
     struct drm_gem_object **bos; /* held until the device answers */
     uint32_t nbos;
+    struct drm_pending_event *event; /* sent at the answer, for a polled ring */
 };
 
 struct vgpu_submit_sync {
@@ -21,13 +22,17 @@ struct vgpu_submit_sync {
     uint32_t flags;
 };
 
-/** Drop all held buffers, including a partially built list. */
+/** Drop all held buffers, including a partially built list, and an event
+ * not sent. */
 static void submit_free(struct vgpu_submit *s)
 {
     uint32_t i;
 
     if (!s) {
         return;
+    }
+    if (s->event) {
+        drm_event_cancel_free(s->event);
     }
     for (i = 0; i < s->nbos; i++) {
         drm_gem_object_put(s->bos[i]);
@@ -36,10 +41,40 @@ static void submit_free(struct vgpu_submit *s)
     kfree(s);
 }
 
-/** The device has finished with the command and every buffer it names. */
+/** The device has finished with the command and every buffer it names: a
+ * polled ring's file gets its event, unless the device was lost first. */
 static void submit_done(struct virtio_gpu_cmd *cmd)
 {
-    submit_free(cmd->arg);
+    struct vgpu_submit *s = cmd->arg;
+
+    if (s->event && cmd->resp_type) {
+        drm_send_event(s->event);
+        s->event = NULL;
+    }
+    submit_free(s);
+}
+
+/**
+ * Reserve the event of a submission on a polled ring, Linux's
+ * virtio_gpu_fence_event_create: a bare VIRTGPU_EVENT_FENCE_SIGNALED the
+ * file reads once the fence signals. 0, or -ENOMEM.
+ */
+static int32_t submit_event(struct drm_file *file, struct vgpu_submit *s)
+{
+    struct drm_pending_event *e = kzalloc(sizeof(*e));
+
+    if (!e) {
+        return -ENOMEM;
+    }
+    e->event.base.type = VIRTGPU_EVENT_FENCE_SIGNALED;
+    e->event.base.length = sizeof(e->event.base);
+    e->length = sizeof(e->event.base);
+    if (drm_event_reserve(file, e) != 0) {
+        kfree(e);
+        return -ENOMEM;
+    }
+    s->event = e;
+    return 0;
 }
 
 /** Release parsed sync objects, including unused timeline chains. */
@@ -61,7 +96,7 @@ static void sync_free(struct vgpu_submit_sync *syncs, uint32_t n)
  * are waited on now; output objects and chains are held until publication.
  * Failure leaves a partial array for the caller's cleanup. May sleep. */
 static int32_t sync_parse(struct virtio_gpu_device *vg, struct drm_file *file,
-                          struct drm_virtgpu_execbuffer *args, int out,
+                          struct drm_virtgpu_execbuffer *args, int out, uint64_t context,
                           struct vgpu_submit_sync **result)
 {
     struct drm_virtgpu_execbuffer_syncobj a;
@@ -111,7 +146,7 @@ static int32_t sync_parse(struct virtio_gpu_device *vg, struct drm_file *file,
             if (rc) {
                 return rc;
             }
-            rc = vgpu_wait_dependency(vg, f);
+            rc = vgpu_wait_dependency(vg, f, context);
             dma_fence_put(f);
             if (rc) {
                 return rc;
@@ -166,7 +201,7 @@ static int32_t submit_buffers(struct virtio_gpu_device *vg, struct drm_file *fil
 /** Wait only for foreign producers, then attach each buffer in queue order.
  * Held buffer references survive every wait. Return 0 or -errno. */
 static int32_t submit_dependencies(struct virtio_gpu_device *vg, struct drm_file *file,
-                                   struct vgpu_submit *s)
+                                   struct vgpu_submit *s, uint64_t context)
 {
     struct dma_fence *f;
     uint32_t i;
@@ -174,7 +209,7 @@ static int32_t submit_dependencies(struct virtio_gpu_device *vg, struct drm_file
 
     for (i = 0; i < s->nbos; i++) {
         f = dma_resv_snapshot(s->bos[i]->resv, 1);
-        rc = f ? vgpu_wait_dependency(vg, f) : -ENOMEM;
+        rc = f ? vgpu_wait_dependency(vg, f, context) : -ENOMEM;
         dma_fence_put(f);
         if (rc) {
             return rc;
@@ -209,8 +244,46 @@ static void submit_sync_publish(struct virtio_gpu_cmd *cmd, struct vgpu_submit_s
 }
 
 /**
- * Submit copied virgl commands asynchronously after foreign dependencies;
- * return 0 or -errno.
+ * Put a submission on ring `a->ring_idx` of the file's context, whose fence
+ * context is `context`, reserving the event its answer sends when the ring
+ * is in the context's poll mask. 0 or -ENOMEM.
+ */
+static int32_t submit_ring(struct drm_file *file, const struct drm_virtgpu_execbuffer *a,
+                           uint64_t context, struct virtio_gpu_cmd *cmd, struct vgpu_submit *s)
+{
+    struct vgpu_context *ctx = file->driver_priv;
+
+    cmd->fence_ctx = context;
+    cmd->ring = 1;
+    cmd->ring_idx = a->ring_idx;
+    return ((ctx->ring_mask >> a->ring_idx) & 1u) ? submit_event(file, s) : 0;
+}
+
+/** With VIRTGPU_EXECBUF_FENCE_FD_IN, wait for the in-fence's producers on
+ * fence contexts other than `context`. 0, -EINVAL for a descriptor with no
+ * fence, or the wait's error. May sleep. */
+static int32_t submit_fence_in(struct virtio_gpu_device *vg, const struct drm_virtgpu_execbuffer *a,
+                               uint64_t context)
+{
+    struct dma_fence *f;
+    int32_t rc;
+
+    if (!(a->flags & VIRTGPU_EXECBUF_FENCE_FD_IN)) {
+        return 0;
+    }
+    f = sync_file_get_fence(a->fence_fd);
+    rc = f ? vgpu_wait_dependency(vg, f, context) : -EINVAL;
+    dma_fence_put(f);
+    return rc;
+}
+
+/**
+ * Submit copied commands asynchronously after foreign dependencies, as
+ * Linux's virtio_gpu_execbuffer_ioctl: with VIRTGPU_EXECBUF_RING_IDX on a
+ * ring CONTEXT_INIT gave the file's context, whose fence context the
+ * submission's fence takes, and which sends the file an event at the
+ * answer when the ring is in its poll mask. Return 0 or -errno: EINVAL for
+ * an unknown flag or a ring the context lacks.
  */
 int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
@@ -220,7 +293,8 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     struct virtio_gpu_submit_3d *req;
     struct vgpu_submit *s = NULL;
     struct vgpu_submit_sync *ins = NULL, *outs = NULL;
-    struct dma_fence *f;
+    struct vgpu_context *ctx = file->driver_priv;
+    uint64_t context = vg->fence_context;
     uint32_t i;
     int32_t rc, fd = -1;
 
@@ -230,14 +304,21 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (!vg->has_virgl) {
         return -ENOSYS;
     }
-    if (a->flags & ~(VIRTGPU_EXECBUF_FENCE_FD_IN | VIRTGPU_EXECBUF_FENCE_FD_OUT)) {
+    if (a->flags & ~VIRTGPU_EXECBUF_FLAGS) {
         return -EINVAL;
+    }
+    if (a->flags & VIRTGPU_EXECBUF_RING_IDX) {
+        if (!ctx || a->ring_idx >= ctx->num_rings || !ctx->base_fence_ctx) {
+            return -EINVAL;
+        }
+        context = ctx->base_fence_ctx + a->ring_idx;
     }
     vgpu_reap(vg);
     rc = vgpu_context_ensure(vg, file);
     if (rc) {
         return rc;
     }
+    ctx = file->driver_priv;
     cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D, sizeof(*req));
     s = kzalloc(sizeof(*s));
     if (!cmd || !s) {
@@ -245,9 +326,12 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
         goto out;
     }
     req = (struct virtio_gpu_submit_3d *)(void *)cmd->page;
-    req->hdr.ctx_id = ((struct vgpu_context *)file->driver_priv)->id;
+    req->hdr.ctx_id = ctx->id;
     req->size = a->size;
-    rc = vgpu_cmd_payload(cmd, a->command, a->size, 0);
+    rc = (a->flags & VIRTGPU_EXECBUF_RING_IDX) ? submit_ring(file, a, context, cmd, s) : 0;
+    if (!rc) {
+        rc = vgpu_cmd_payload(cmd, a->command, a->size, 0);
+    }
     if (rc) {
         goto out;
     }
@@ -255,22 +339,17 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (rc) {
         goto out;
     }
-    if (a->flags & VIRTGPU_EXECBUF_FENCE_FD_IN) {
-        f = sync_file_get_fence(a->fence_fd);
-        rc = f ? vgpu_wait_dependency(vg, f) : -EINVAL;
-        dma_fence_put(f);
-        if (rc) {
-            goto out;
-        }
-    }
-    rc = sync_parse(vg, file, a, 1, &outs);
+    rc = submit_fence_in(vg, a, context);
     if (!rc) {
-        rc = sync_parse(vg, file, a, 0, &ins);
+        rc = sync_parse(vg, file, a, 1, context, &outs);
+    }
+    if (!rc) {
+        rc = sync_parse(vg, file, a, 0, context, &ins);
     }
     if (rc) {
         goto out;
     }
-    rc = submit_dependencies(vg, file, s);
+    rc = submit_dependencies(vg, file, s, context);
     if (rc) {
         goto out;
     }

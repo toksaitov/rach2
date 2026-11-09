@@ -1,6 +1,7 @@
 /* vgpu3d_hosttest.c: virgl commands, pipelining and reset over the 2D model.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * Returns 0 when the new 3D rows pass. The included 2D rows do not run. */
+ * Returns 0 when the new 3D rows pass. The included 2D rows do not run, and
+ * a test that defines VGPU_BLOB_TEST brings its own main. */
 #define VGPU_3D_TEST 1
 #define main         vgpu_2d_rows_main
 #include "virtio_gpu_hosttest.c"
@@ -453,6 +454,7 @@ static void release_failure(int no_memory)
     CHECK(!allocations && !irq_depth, "the forced release failure leaves no allocations or locks");
 }
 
+#ifndef VGPU_BLOB_TEST
 /** Run only the new 3D rows against the real driver and fence code. */
 int main(void)
 {
@@ -488,3 +490,4 @@ int main(void)
     printf("vgpu3d-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }
+#endif
