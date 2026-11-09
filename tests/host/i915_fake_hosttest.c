@@ -14,6 +14,7 @@
  * host-deps: rach2/sys/drm/i915/intel_opregion.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/mm/frame.c tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
  *
  * i915_fake.c is included whole, which reaches its record and its
  * debugfs file's operations. The bus holds one edu function, 00:04.0,
@@ -503,6 +504,24 @@ int32_t drm_dev_register(struct drm_device *dev)
     dev->index = 1;
     k_strncpy(dev->unique, "pci:0000:00:04.0", sizeof(dev->unique) - 1);
     return 0;
+}
+
+/* The driver's buffers, i915_gem.c and the files beside it, which the bind
+ * reaches only through the DRM core's hooks and the unplug. */
+const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
+
+struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev, struct dma_buf *buf,
+                                             int32_t *err)
+{
+    (void)dev;
+    (void)buf;
+    *err = -ENODEV;
+    return 0;
+}
+
+void i915_gem_unplug(struct drm_i915_private *i915)
+{
+    (void)i915;
 }
 
 void drm_dev_get(struct drm_device *dev)

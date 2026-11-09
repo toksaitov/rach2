@@ -47,6 +47,7 @@ int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_
     const struct i915_ggtt *ggtt = &i915->ggtt;
     uint64_t size =
         ((uint64_t)bytes + I915_GTT_PAGE_SIZE - 1) & ~(uint64_t)(I915_GTT_PAGE_SIZE - 1);
+    const struct i915_vma *vma;
     uint64_t start;
     int i;
 
@@ -56,6 +57,12 @@ int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_
     start = gt->ggtt_bottom - size;
     for (i = 0; i < ggtt->nkept; i++) {
         if (start < ggtt->kept[i].end && gt->ggtt_bottom > ggtt->kept[i].start) {
+            return -ENOSPC;
+        }
+    }
+    /* Nor the space a buffer's binding holds. */
+    for (vma = i915->gem.bound; vma; vma = vma->ggtt_next) {
+        if (start < vma->start + vma->node_size && gt->ggtt_bottom > vma->start) {
             return -ENOSPC;
         }
     }

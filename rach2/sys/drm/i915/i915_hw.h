@@ -63,6 +63,17 @@ struct i915_hw;
  * * `attach` is told of the device once it is registered, `detach` at its
  *   unplug, and `release` when its record goes, after which `priv` is
  *   not used again.
+ * * `aperture_page` and `aperture_sync` stand in for the aperture, BAR 2,
+ *   where nothing backs it: `aperture_page` gives in `*phys` the frame
+ *   that holds the aperture's page at `offset`, which a mapping into a
+ *   program or the kernel then reaches in place of the BAR, and returns 0
+ *   or -1; `aperture_sync` copies [offset, offset + size) of the aperture
+ *   between those frames and the memory the GTT's entries map, through
+ *   the fence that covers it, into memory when `to_memory` is set and out
+ *   of it otherwise. The chip's aperture needs neither: the driver calls
+ *   the sync only where the chip would be coherent by itself, before it
+ *   reads the aperture, after it writes it, when an object moves into the
+ *   GTT's domain and when its writes through the GTT are flushed.
  */
 struct drm_i915_private;
 
@@ -77,6 +88,8 @@ struct i915_hw_ops {
     void (*attach)(struct i915_hw *hw, struct drm_i915_private *i915);
     void (*detach)(struct i915_hw *hw);
     void (*release)(struct i915_hw *hw);
+    int (*aperture_page)(struct i915_hw *hw, uint64_t offset, uintptr_t *phys);
+    void (*aperture_sync)(struct i915_hw *hw, uint64_t offset, uint64_t size, int to_memory);
 };
 
 /*
@@ -208,5 +221,74 @@ int32_t i915_hw_fault(struct i915_hw *hw, int point);
  * @return 0, or -ENOMEM when the kernel's device window has no room left.
  */
 int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size);
+
+/*
+ * The aperture, BAR 2 (i915_aperture.c): the first `size` bytes of the
+ * global GTT as the processor sees them, through the fences, at the
+ * physical address `phys`. A program's mapping reaches it by physical
+ * address. The kernel reaches it a page at a time through windows, as
+ * Linux's io_mapping does, since the aperture, 256 MiB on the Lenovo, is
+ * larger than the kernel's device region, 128 MiB (cpu.h's KVA_MMIO):
+ * I915_APERTURE_WINDOWS windows of I915_APERTURE_WINDOW bytes each, mapped
+ * write-combining where they are needed and moved, the least recently used
+ * first, when another part is. A window's `users` counts the pages of it
+ * handed out and not yet given back, and while it is not 0 the window
+ * stays. `used` orders the windows by their last use. `maps` counts the
+ * windows mapped since the bind, for a test. A backend that stands in for
+ * the aperture (`aperture_page`) gives its pages through temporary
+ * mappings instead, and no window is mapped.
+ */
+#define I915_APERTURE_WINDOW  0x200000u
+#define I915_APERTURE_WINDOWS 4
+
+struct i915_aperture_window {
+    uintptr_t va; /* 0 while it maps nothing */
+    uint64_t offset;
+    uint32_t size; /* I915_APERTURE_WINDOW, less at the aperture's end */
+    uint32_t users;
+    uint32_t used;
+};
+
+struct i915_aperture {
+    uint64_t phys;
+    uint64_t size;
+    uint32_t clock;
+    uint32_t maps;
+    struct i915_aperture_window win[I915_APERTURE_WINDOWS];
+};
+
+/** Make `ap` the aperture of `size` bytes at `phys`, with no window mapped. */
+void i915_aperture_init(struct i915_aperture *ap, uint64_t phys, uint64_t size);
+
+/** Take every window away; none may be in use. */
+void i915_aperture_fini(struct i915_aperture *ap);
+
+/**
+ * The physical address a program's mapping of the aperture's page at
+ * `offset`, a whole page below `ap->size`, maps, in `*phys`: the BAR's, or
+ * the backend's frame (`aperture_page`).
+ *
+ * @return 0, or -EINVAL past the aperture or where the backend has none.
+ */
+int32_t i915_aperture_phys(struct i915_hw *hw, const struct i915_aperture *ap, uint64_t offset,
+                           uintptr_t *phys);
+
+/**
+ * The kernel's address of the aperture's page at `offset`, a whole page
+ * below `ap->size`, valid until `i915_aperture_kunmap`; the caller may
+ * sleep while it holds it. A window that holds the page is used, or the
+ * least recently used window that no one holds is moved over it.
+ *
+ * @return the address, or NULL past the aperture, when every window is
+ *         held, or when the kernel's device region or the temporary slots
+ *         have no room.
+ */
+void *i915_aperture_kmap(struct i915_hw *hw, struct i915_aperture *ap, uint64_t offset);
+
+/** Give back a page `i915_aperture_kmap` returned at `va`. */
+void i915_aperture_kunmap(struct i915_hw *hw, struct i915_aperture *ap, void *va);
+
+/** The backend's `aperture_sync`, where it has one; nothing on the chip. */
+void i915_aperture_sync(struct i915_hw *hw, uint64_t offset, uint64_t size, int to_memory);
 
 #endif /* _I915_HW_H_ */

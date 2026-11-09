@@ -79,6 +79,7 @@ static void i915_ggtt_find_firmware(struct drm_i915_private *i915)
                ((i915_read(hw, DSPOFFSET(pipe)) >> 16) & 0xfffu);
         if (ctl & DISP_TILED) {
             rows = (rows + 7u) & ~7u;
+            ggtt->fw_tiled = 1;
         }
         bytes = ((uint64_t)stride * rows + I915_GTT_PAGE_SIZE - 1) &
                 ~(uint64_t)(I915_GTT_PAGE_SIZE - 1);

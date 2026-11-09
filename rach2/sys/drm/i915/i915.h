@@ -6,6 +6,7 @@
 #define _I915_H_
 
 #include "../drm.h"
+#include "../../mm/shmem.h"
 #include "../../fs/sysfs.h"
 #include "../../lib/spinlock.h"
 #include "../../proc/wait_queue.h"
@@ -147,6 +148,8 @@ struct i915_gtt_range {
  * `scratch_pte`. `kept` holds the `nkept` ranges of the firmware's
  * surfaces, which the bind left as it found them and which the GTT's calls
  * refuse to change, since the console draws there through the aperture.
+ * `fw_tiled` is set when one of them is X-tiled, so that the swizzle the
+ * firmware chose stands (Linux's preserve_bios_swizzle).
  */
 struct i915_ggtt {
     uint64_t total;
@@ -155,6 +158,7 @@ struct i915_ggtt {
     uint32_t scratch_pte;
     int nkept;
     struct i915_gtt_range kept[I915_GGTT_KEPT_MAX];
+    uint8_t fw_tiled;
 };
 
 /*
@@ -336,6 +340,160 @@ struct i915_rps {
 };
 
 /*
+ * Buffers: Linux's GEM objects for i915 (i915_gem.c and the files beside
+ * it, which the Readme's buffer section tells).
+ */
+
+struct drm_i915_gem_object;
+struct i915_vma;
+struct pin;
+
+/* The kinds of mapping MMAP_OFFSET gives, by its I915_MMAP_OFFSET_ number:
+ * through the aperture, and of the pages write-combining, cached and
+ * uncached. */
+#define I915_MMAP_TYPES 4
+
+/*
+ * A place in the device's mmap space for one kind of mapping of an object,
+ * Linux's i915_mmap_offset. `node.offset` is 0 until MMAP_OFFSET first
+ * asks for it. A mapping of it is a device region whose object is this
+ * record, so that the mappings of one kind are revoked by themselves
+ * (paging_zap_device); the region holds a reference to the object.
+ */
+struct i915_mmap_offset {
+    struct drm_mmap_node node;
+    int type; /* I915_MMAP_OFFSET_* */
+};
+
+/*
+ * A fence register, which detiles the aperture's accesses to a range of
+ * the global GTT, Linux's i915_fence_reg. `vma` is the binding it serves,
+ * NULL while free; `pin_count` counts its users that may not lose it;
+ * `dirty` says the binding's tiling changed since it was written; `used`
+ * orders the fences by their last use, the least recent stolen first.
+ */
+struct i915_fence_reg {
+    int id;
+    struct i915_vma *vma;
+    uint32_t pin_count;
+    uint32_t used;
+    uint8_t dirty;
+};
+
+#define I915_NUM_FENCES 32
+
+/* What `i915_vma_pin` is asked: the binding inside the aperture, from the
+ * top of the space down, and no eviction to make room. */
+#define I915_PIN_MAPPABLE 0x1u
+#define I915_PIN_HIGH     0x2u
+#define I915_PIN_NOEVICT  0x4u
+
+/*
+ * A binding of an object, or of a part of it, into the global GTT, Linux's
+ * i915_vma. The view is the whole object when `view_pages` is 0, or the
+ * `view_pages` pages from `view_offset`, a partial view, which a GTT map
+ * of an object too large for the aperture binds a piece at a time. It lies
+ * at [start, start + node_size) of the GTT, whose first `size` bytes map
+ * the view's pages; `node_size` is the fence's size for a tiled object
+ * inside the aperture, so that a fence covers it. `mappable` is set when
+ * the node lies inside the aperture, and `cache` is the level its entries
+ * were written with. `pin_count` counts the users that keep it bound.
+ * `fence` is the fence register it holds, or NULL, and `fence_size` and
+ * `fence_alignment` what a fence needs of it for the object's tiling.
+ * `userfault` is set while programs map it through the aperture, and
+ * `ggtt_write` while writes through the aperture may not have reached
+ * memory.
+ */
+struct i915_vma {
+    struct drm_i915_gem_object *obj;
+    uint64_t start;
+    uint64_t node_size;
+    uint64_t size;
+    uint32_t view_offset;
+    uint32_t view_pages;
+    uint32_t pin_count;
+    uint32_t fence_size;
+    uint32_t fence_alignment;
+    struct i915_fence_reg *fence;
+    uint8_t mappable;
+    uint8_t cache;
+    uint8_t userfault;
+    uint8_t ggtt_write;
+    struct i915_vma *obj_next;  /* the object's bindings */
+    struct i915_vma *ggtt_next; /* the GTT's, by offset */
+};
+
+/* What the object's caching makes coherent between the processor and the
+ * GPU without a flush, Linux's I915_BO_CACHE_COHERENT_FOR_ bits. */
+#define I915_BO_CACHE_COHERENT_FOR_READ  0x1u
+#define I915_BO_CACHE_COHERENT_FOR_WRITE 0x2u
+
+/*
+ * An object, Linux's drm_i915_gem_object. Its pages are a shmem table,
+ * given as they are first touched, or, for an import, the pages of the
+ * dma-buf `base.import`. While anything needs them where the GPU reads,
+ * `pages_pin_count` is above 0 and `frames` holds each page's physical
+ * address, the object's own pinned through `pin` (sys/mm/pin.h); the
+ * array stays until the object goes.
+ *
+ * `cache_level` is the I915_CACHE_ level its GTT entries take, and
+ * `cache_coherent` what that leaves coherent; `cache_dirty` is set when
+ * the processor's cache may hold lines the GPU must not miss.
+ * `read_domains` and `write_domain` are the I915_GEM_DOMAIN_ bits it was
+ * last moved to (SET_DOMAIN). `tiling` and `stride` are its layout
+ * (SET_TILING), `vmas` its bindings, `mmo` its mmap offsets by kind, and
+ * `userfault_count` how many of its bindings programs map through the
+ * aperture. The device's list of objects holds it (`base.dev_next`).
+ */
+struct drm_i915_gem_object {
+    struct drm_gem_object base;
+    struct shmem pages;
+    uintptr_t *frames;
+    struct pin *pin;
+    uint32_t pages_pin_count;
+    uint8_t cache_level;
+    uint8_t cache_coherent;
+    uint8_t cache_dirty;
+    uint32_t read_domains;
+    uint32_t write_domain;
+    uint32_t tiling;
+    uint32_t stride;
+    struct i915_vma *vmas;
+    struct i915_mmap_offset mmo[I915_MMAP_TYPES];
+    uint32_t userfault_count;
+};
+
+/*
+ * A fence of the driver's own, which work on one of its engines signals:
+ * `uabi_class` is the engine's class as programs name it (Linux's
+ * I915_ENGINE_CLASS_), which BUSY reports. The submission makes them.
+ */
+struct i915_fence {
+    struct dma_fence base;
+    uint16_t uabi_class;
+};
+
+extern const struct dma_fence_ops i915_fence_ops;
+
+/*
+ * The device's buffer state (i915_gem.c, i915_vma.c, i915_gem_tiling.c).
+ * `bound` lists the bindings by GTT offset. `fences` are the fence
+ * registers and `fence_clock` their use's clock. `swizzle_x` and
+ * `swizzle_y` are the swizzles of bit 6 the memory controller gives X and
+ * Y tiles (I915_BIT_6_SWIZZLE_): none, 9 or 9/10 on Haswell, whose
+ * controller never swizzles by bit 17. `aperture` reaches the aperture for
+ * the kernel's own accesses.
+ */
+struct i915_gem {
+    struct i915_vma *bound;
+    struct i915_fence_reg fences[I915_NUM_FENCES];
+    uint32_t fence_clock;
+    uint32_t swizzle_x;
+    uint32_t swizzle_y;
+    struct i915_aperture aperture;
+};
+
+/*
  * A bound device. `drm` is first, and its `driver_priv` points back here.
  * `pci` is the function as the probe found it. `hw` reaches its registers.
  * `mmio_phys` is BAR 0's physical address and `gmadr_phys` BAR 2's, the
@@ -378,6 +536,7 @@ struct drm_i915_private {
     struct i915_rps rps;
     struct intel_opregion opregion;
     struct intel_vbt vbt;
+    struct i915_gem gem;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -652,7 +811,8 @@ void i915_gt_fini(struct drm_i915_private *i915);
  * Take `bytes` from the top of the global GTT's free space for one of the
  * GT's own objects, page-aligned, and store its offset in `*offset`.
  *
- * @return 0, or -ENOSPC when it would reach a kept range or offset 0.
+ * @return 0, or -ENOSPC when it would reach a kept range, a buffer's
+ *         binding or offset 0.
  */
 int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_t *offset);
 
@@ -920,5 +1080,247 @@ void i915_sysfs_register(struct drm_i915_private *i915);
  *         breadcrumb or the interrupt did not come.
  */
 int32_t i915_firstlight_run(struct drm_i915_private *i915);
+
+/*
+ * Buffers (i915_gem.c, i915_vma.c, i915_gem_tiling.c, i915_gem_mman.c,
+ * i915_gem_prime.c, i915_gem_evict.c and i915_fence.c). Every one is
+ * called under the big kernel lock; those that wait may sleep, and the lock
+ * is let go while they do.
+ */
+
+extern const struct drm_gem_object_funcs i915_gem_object_funcs;
+
+/* The driver's own ioctls, for the DRM core. */
+#define I915_NUM_IOCTLS 12
+extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
+
+/**
+ * Hold the object's pages where the GPU reads them, as Linux's
+ * i915_gem_object_pin_pages: a shmem object's pages are all given and
+ * pinned at the first pin, an import's are its dma-buf's. The physical
+ * addresses stay in `obj->frames` until the object goes.
+ *
+ * @return 0, -ENOMEM, -EFAULT when a page cannot be had, or -ENODEV once
+ *         the device is gone.
+ */
+int32_t i915_gem_object_pin_pages(struct drm_i915_gem_object *obj);
+
+/** Drop a pin `i915_gem_object_pin_pages` took. */
+void i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj);
+
+/** The physical address of the object's page `pgoff`, a shmem page given
+ * on the first touch; 0 past its end or when none can be had. */
+uintptr_t i915_gem_object_frame(struct drm_i915_gem_object *obj, uint32_t pgoff);
+
+/** Set the cache level of the object's GTT entries and what it leaves
+ * coherent, as Linux's i915_gem_object_set_cache_coherency; nothing is
+ * rebound. */
+void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int level);
+
+/** A new object of `size` bytes, a whole number of pages, with one
+ * reference, its pages in the CPU's domains and cached in the LLC; NULL
+ * without memory. */
+struct drm_i915_gem_object *i915_gem_object_alloc(struct drm_i915_private *i915, uint64_t size);
+
+/** A new object of `size` bytes rounded up to pages, in `*out`: 0, -EINVAL
+ * for 0, -E2BIG past what an object holds, or -ENOMEM. */
+int32_t i915_gem_object_create(struct drm_i915_private *i915, uint64_t size,
+                               struct drm_i915_gem_object **out);
+
+/** The driver's object of `handle` in `file` with a reference, or NULL
+ * for no handle or another driver's object. */
+struct drm_i915_gem_object *i915_gem_object_lookup(struct drm_file *file, uint32_t handle);
+
+/** Drop a reference; NULL is ignored. */
+void i915_gem_object_put(struct drm_i915_gem_object *obj);
+
+/**
+ * Wait for the object's writers, or with `all` for its readers too, for
+ * `timeout_ns`, for ever when it is negative, as Linux's
+ * i915_gem_object_wait.
+ *
+ * @return 0, -ETIME when one is busy at the timeout (at once for 0),
+ *         -EINTR for a signal, or -ENOMEM.
+ */
+int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t timeout_ns);
+
+/** Whether a write by the processor must be flushed from its cache for
+ * the GPU to see it, as Linux's i915_gem_cpu_write_needs_clflush. */
+int i915_gem_cpu_write_needs_clflush(const struct drm_i915_gem_object *obj);
+
+/** Make the writes of the object's write domain, if it is one of
+ * `flush_domains`, reach memory, and leave it with none, as Linux's
+ * flush_write_domain. */
+void i915_gem_object_flush_write_domain(struct drm_i915_gem_object *obj, uint32_t flush_domains);
+
+/**
+ * Move the object into the write-combining, aperture or processor's
+ * domain for reading, or with `write` for writing, as Linux's
+ * i915_gem_object_set_to_wc_domain, _gtt_domain and _cpu_domain: its work
+ * waited for and the old domain's writes flushed.
+ *
+ * @return 0, or the errors of `i915_gem_object_wait` and
+ *         `i915_gem_object_pin_pages`.
+ */
+int32_t i915_gem_object_set_to_wc_domain(struct drm_i915_gem_object *obj, int write);
+int32_t i915_gem_object_set_to_gtt_domain(struct drm_i915_gem_object *obj, int write);
+int32_t i915_gem_object_set_to_cpu_domain(struct drm_i915_gem_object *obj, int write);
+
+/** Give the object the cache level `level`, its work waited for and its
+ * bindings undone, as Linux's i915_gem_object_set_cache_level: 0, the
+ * wait's errors, or -EAGAIN when a binding is held. */
+int32_t i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj, int level);
+
+/* The ioctls, as Linux's of the same names; each one's comment is at its
+ * definition. */
+int32_t i915_gem_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_pread_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_pwrite_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_set_domain_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_sw_finish_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_set_caching_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_get_caching_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_busy_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_wait_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_set_tiling_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_get_tiling_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+
+/** Revoke every program's mapping of every object, once the device is
+ * unplugged, so that the next access faults to a device that refuses it. */
+void i915_gem_unplug(struct drm_i915_private *i915);
+
+/**
+ * Reserve `size` bytes of the global GTT, inside the aperture with
+ * I915_PIN_MAPPABLE, for the kernel's own use, as Linux's
+ * i915_gem_gtt_reserve, into `*offset`. The entries are the caller's to
+ * write and clear.
+ *
+ * @return 0, -ENOSPC, or -ENOMEM.
+ */
+int32_t i915_ggtt_reserve(struct drm_i915_private *i915, uint64_t size, uint32_t flags,
+                          uint64_t *offset);
+
+/** Give back the range `i915_ggtt_reserve` gave at `offset`. */
+void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset);
+
+/**
+ * Bind the object's view of `view_pages` pages from `view_offset`, or the
+ * whole object for 0, into the global GTT and pin the binding, as Linux's
+ * i915_gem_object_ggtt_pin: a binding that exists is reused unless it is
+ * outside the aperture with I915_PIN_MAPPABLE or not aligned to `align`,
+ * when it is undone first. With I915_PIN_MAPPABLE the binding is sized
+ * and aligned for a fence of the object's tiling. In `*out`.
+ *
+ * @return 0; -EINVAL for a view past the object; -ENOSPC without room or
+ *         when a binding to move is held; or the errors of
+ *         `i915_gem_object_pin_pages` and `i915_ggtt_insert`.
+ */
+int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
+                     uint32_t flags, uint32_t align, struct i915_vma **out);
+
+/** Drop a pin `i915_vma_pin` took; the binding stays. */
+void i915_vma_unpin(struct i915_vma *vma);
+
+/** Unmap the binding's pages from every program that maps them through
+ * the aperture, as Linux's i915_vma_revoke_mmap. */
+void i915_vma_revoke_mmap(struct i915_vma *vma);
+
+/** Make the writes through the binding's aperture reach memory, as Linux's
+ * i915_vma_flush_writes. */
+void i915_vma_flush_writes(struct i915_vma *vma);
+
+/**
+ * Undo a binding, as Linux's __i915_vma_unbind: programs' maps revoked,
+ * writes flushed, its fence let go, its entries cleared and its record
+ * freed.
+ *
+ * @return 0, or -EAGAIN while it is pinned.
+ */
+int32_t i915_vma_unbind(struct i915_vma *vma);
+
+/** Undo every binding of the object: 0, or -EAGAIN when one is pinned. */
+int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj);
+
+/** The object's binding inside the aperture that maps page `pgoff`, or
+ * NULL. */
+struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgoff);
+
+/** Recompute what a fence needs of the binding after its object's tiling
+ * changed, and whether it still serves a GTT map and a fence. */
+void i915_vma_update_fenceable(struct i915_vma *vma);
+
+/** Make room in [start, end) of the global GTT for `size` bytes aligned
+ * to `align`, as Linux's i915_gem_evict_something: -ENOSPC, since nothing
+ * is evicted yet. */
+int32_t i915_gem_evict_something(struct drm_i915_private *i915, uint64_t size, uint64_t align,
+                                 uint64_t start, uint64_t end);
+
+/** The bytes of a tile row, `stride` times the tile's height, for
+ * `tiling`; 0 untiled. */
+uint32_t i915_gem_tile_row_size(uint32_t tiling, uint32_t stride);
+
+/** The size a fence of `tiling` and `stride` covers for `size` bytes, as
+ * Linux's i915_gem_fence_size: whole tile rows, or `size` untiled. */
+uint32_t i915_gem_fence_size(struct drm_i915_private *i915, uint32_t size, uint32_t tiling,
+                             uint32_t stride);
+
+/** The alignment a binding needs for a fence of `tiling`, as Linux's
+ * i915_gem_fence_alignment: a page on Haswell. */
+uint32_t i915_gem_fence_alignment(struct drm_i915_private *i915, uint32_t tiling);
+
+/**
+ * Give the binding the fence its object's tiling needs and pin it, as
+ * Linux's i915_vma_pin_fence: its own when it has one and the tiling has
+ * not changed, otherwise a free one or the least recently used, whose old
+ * binding's GTT maps are revoked; an untiled object's fence is let go.
+ *
+ * @return 0, -ENOBUFS when every fence is pinned, or -EINVAL for a binding
+ *         that cannot take a fence.
+ */
+int32_t i915_vma_pin_fence(struct i915_vma *vma);
+
+/** Drop a pin `i915_vma_pin_fence` took. */
+void i915_vma_unpin_fence(struct i915_vma *vma);
+
+/** Take the binding's fence away and clear the register, as Linux's
+ * i915_vma_revoke_fence; the fence must not be pinned. */
+void i915_vma_revoke_fence(struct i915_vma *vma);
+
+/** Revoke every program's GTT map of the object, as Linux's
+ * i915_gem_object_release_mmap_gtt, its writes through them flushed. */
+void i915_gem_object_release_mmap_gtt(struct drm_i915_gem_object *obj);
+
+/** The `mmap` of an object's mmap offset (`struct drm_mmap_node`): a device
+ * region over its pages or through the aperture, by the offset's kind. */
+int32_t i915_gem_mmo_mmap(struct drm_mmap_node *node, vma_t *vma);
+
+/** The `mmap` of an object for its dma-buf: its pages write-back, or
+ * -ENODEV for an import. */
+int32_t i915_gem_object_mmap_cpu(struct drm_gem_object *base, vma_t *vma);
+
+/** The object of another device's dma-buf `buf`, for the core's PRIME, as
+ * Linux's i915_gem_prime_import: its pages are the buffer's, in a domain
+ * coherent with memory. NULL with `*err` -E2BIG, -EINVAL for a buffer
+ * without pages, or -ENOMEM. */
+struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev, struct dma_buf *buf,
+                                             int32_t *err);
+
+/** The `cpu_access` of an exported object, for DMA_BUF_IOCTL_SYNC: into
+ * the processor's domain at the start of an access, back to the aperture's
+ * at its end, as Linux's i915_gem_begin_cpu_access and _end_cpu_access. */
+int32_t i915_gem_object_cpu_access(struct drm_gem_object *base, uint64_t flags);
+
+/** Write fence register `id` (i915_fence.c), whose comment says more. */
+void i915_fence_write(struct drm_i915_private *i915, int id, uint64_t start, uint64_t size,
+                      uint32_t stride, uint32_t tiling);
+
+/** Read the swizzle, clear every fence and set the GPU's swizzling, once
+ * at the bind. */
+void i915_gem_init_hw(struct drm_i915_private *i915);
+
+/** Where byte `v` of a linear surface lies once tiled and swizzled, the
+ * arithmetic a fence does (i915_fence.c). */
+uint32_t i915_tiled_offset(uint32_t tiling, uint32_t stride, uint32_t swizzle, uint32_t v);
 
 #endif /* _I915_H_ */

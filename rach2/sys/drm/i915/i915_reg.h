@@ -106,6 +106,8 @@
 #define MCHBAR_MIRROR_BASE_SNB 0x140000
 #define MAD_DIMM_C0            (MCHBAR_MIRROR_BASE_SNB + 0x5004)
 #define MAD_DIMM_C1            (MCHBAR_MIRROR_BASE_SNB + 0x5008)
+#define MAD_DIMM_B_SIZE_MASK   (0xffu << 8)
+#define MAD_DIMM_A_SIZE_MASK   (0xffu << 0)
 #define GEN6_GT_PERF_STATUS    (MCHBAR_MIRROR_BASE_SNB + 0x5948)
 #define GEN6_RP_STATE_LIMITS   (MCHBAR_MIRROR_BASE_SNB + 0x5994)
 #define GEN6_RP_STATE_CAP      (MCHBAR_MIRROR_BASE_SNB + 0x5998)
@@ -263,6 +265,7 @@
 #define ERROR_GEN6            0x40a0
 #define DONE_REG              0x40b0
 #define ARB_MODE              0x4030
+#define ARB_MODE_SWIZZLE_IVB  (1u << 5)
 #define HSW_GTT_CACHE_EN      0x4024
 #define CACHE_MODE_0_GEN7     0x7000
 #define CACHE_MODE_1          0x7004

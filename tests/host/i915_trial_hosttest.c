@@ -18,6 +18,7 @@
  * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/drm/i915/intel_bios.c
  * host-deps: rach2/sys/drm/i915/intel_opregion.c
+ * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_opregion.bin
  *
  * i915_pci.c is included whole, and the driver is bound through
@@ -560,6 +561,37 @@ int32_t drm_dev_register(struct drm_device *dev)
     return 0;
 }
 
+/* The driver's buffers, i915_gem.c and the files beside it, which the bind
+ * reaches only through the DRM core's hooks and the unplug. */
+const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
+
+struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev, struct dma_buf *buf,
+                                             int32_t *err)
+{
+    (void)dev;
+    (void)buf;
+    *err = -ENODEV;
+    return 0;
+}
+
+void i915_gem_unplug(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+/* A page of a backend that stands in for the aperture, which the chip's
+ * backend here has not. */
+void *kmap_temp(uintptr_t phys)
+{
+    (void)phys;
+    return 0;
+}
+
+void kunmap_temp(void *va)
+{
+    (void)va;
+}
+
 void drm_dev_put(struct drm_device *dev)
 {
     if (--dev->refs == 0 && dev->driver->release) {
@@ -630,7 +662,11 @@ static void on_delay(struct i915_model *m)
  * the power well's takeover from the BIOS and the pcode mailbox; in the
  * GT, RC6's and RPS's registers, as Linux's gen6_rc6_enable and
  * gen6_rps_enable write them, with the idle limits of the video and
- * video enhancement engines, whose rings the driver does not start. */
+ * video enhancement engines, whose rings the driver does not start; and
+ * the swizzle of tiles, in the display's arbiter, the GT's tile control
+ * and ARB_MODE, as Linux's intel_gt_init_swizzling sets it on the
+ * Lenovo, whose firmware's surface is linear. The fence registers, which
+ * the bind clears, are `write_ok`'s. */
 static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      GEN6_PCODE_DATA,
                                      GEN6_PCODE_DATA1,
@@ -678,16 +714,21 @@ static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      SDEIER,
                                      SERR_INT,
                                      HSW_PWR_WELL_CTL1,
-                                     HSW_PWR_WELL_CTL2};
+                                     HSW_PWR_WELL_CTL2,
+                                     DISP_ARB_CTL,
+                                     TILECTL,
+                                     ARB_MODE};
 
 /** Whether `reg`, written, belongs to what the bind may write: the GT's
- * forcewake, the render and blitter rings and their status page
- * registers, or a register of `writes_ok`, RC6's and RPS's among them. */
+ * forcewake, the fence registers, the render and blitter rings and their
+ * status page registers, or a register of `writes_ok`, RC6's and RPS's
+ * among them. */
 static int write_ok(uint32_t reg)
 {
     unsigned i;
 
     if (reg == FORCEWAKE_MT || reg == RENDER_HWS_PGA_GEN7 || reg == BLT_HWS_PGA_GEN7 ||
+        (reg >= FENCE_REG_GEN6_LO(0) && reg < FENCE_REG_GEN6_LO(I915_NUM_FENCES)) ||
         (reg >= RENDER_RING_BASE && reg < RENDER_RING_BASE + 0x1000u) ||
         (reg >= BLT_RING_BASE && reg < BLT_RING_BASE + 0x1000u)) {
         return 1;
