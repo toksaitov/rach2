@@ -621,22 +621,23 @@ static int msi_compose(struct msi_record *r, uint8_t vector, uint32_t *address, 
     return 0;
 }
 
-/** `pci_msi_disable` with the lock held. */
+/** `pci_msi_disable` with the lock held. The enable bit is cleared before
+ * a remapped message is written back and its entry given back, so that the
+ * device sends nothing the remapper would refuse. */
 static void msi_disable_locked(const pci_device_t *dev)
 {
     uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
     struct msi_record *r = msi_record_find(dev, MSI_KIND_MSI);
     uint16_t control;
 
+    if (cap != 0) {
+        control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                           (uint16_t)(control & ~PCI_MSI_ENABLE));
+    }
     if (r != NULL) {
         msi_record_drop(r);
     }
-    if (cap == 0) {
-        return;
-    }
-    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
-    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
-                       (uint16_t)(control & ~PCI_MSI_ENABLE));
 }
 
 /**
