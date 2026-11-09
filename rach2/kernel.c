@@ -1763,6 +1763,64 @@ static int krffs_disk_mark_clean(void)
    holds up ends well within it, and a dead disk's never does. */
 #define SHUTDOWN_WRITERS_MS 10000
 
+/**
+ * Write out the file system of mount `m` and mark it unmounted cleanly, for
+ * a power off: its type's `shutdown`, which waits SHUTDOWN_WRITERS_MS at
+ * most for the writers inside, or else its namespace lock, taken and never
+ * given back, and `prepare_unmount`. May sleep. @return 1 when it was
+ * marked clean.
+ */
+static int shutdown_mount(struct vfs_mount *m)
+{
+    const struct vfs_ops *ops = m->type->ops;
+
+    if (ops->shutdown) {
+        return ops->shutdown(m, tick_count() + MS_TO_TICKS(SHUTDOWN_WRITERS_MS)) == 0;
+    }
+    vfs_ns_lock(m);
+    return !ops->prepare_unmount || ops->prepare_unmount(m) == 0;
+}
+
+/**
+ * Write out each writable file system on a disk but the root, newest mount
+ * first, as `shutdown_mount` does, so that a volume mounted from a file of
+ * another, through a loop device, goes before the volume that holds the
+ * file. A bind mount shows its base's file system, and a mount whose disk
+ * has gone has nothing to write to; both are passed over. Each is logged
+ * as `shutdown: SOURCE: unmounted`, or as failed, after which its next mount
+ * checks it. May sleep.
+ */
+static void shutdown_others(void)
+{
+    uint32_t below = 0xffffffffu;
+    struct vfs_mount *m, *pick;
+    int i;
+
+    for (;;) {
+        pick = 0;
+        for (i = 1; i < vfs_mount_slots(); i++) {
+            m = vfs_mount_at(i);
+            if (m && m->seq < below && (!pick || m->seq > pick->seq)) {
+                pick = m;
+            }
+        }
+        if (!pick) {
+            return;
+        }
+        below = pick->seq;
+        if (pick->state != VFS_ACTIVE || !pick->dev || pick->bind_of ||
+            (pick->flags & VFS_MS_RDONLY) || pick == vfs_root_mount() || vfs_mount_gone(pick)) {
+            continue;
+        }
+        if (shutdown_mount(pick)) {
+            klog(KLOG_INFO, "shutdown", "%s: unmounted", pick->source);
+        } else {
+            klog(KLOG_WARN, "shutdown", "%s: the unmount failed; the next mount checks it",
+                 pick->source);
+        }
+    }
+}
+
 /* Whether a shutdown has begun; a second caller sleeps on `shutdown_wq`,
    which nothing wakes, until the machine stops. */
 static int shutdown_started;
@@ -1786,22 +1844,25 @@ static int shutdown_never(void *arg)
  * The first caller goes on, and a second one sleeps for good
  * (`shutdown_started`).
  *
- * A root of a type other than KRFFS is unmounted first: its buffers written
- * and its valid bit set, so that the next mount does not check it, once no
- * process is left that could change it after. An ext2 root closes itself to
- * new writers and waits for those inside (`shutdown` of `vfs_ops`), since
- * its writers take node locks and not the mount's; a writer stuck in a disk
- * wait that SIGKILL cannot end would otherwise change the volume after its
- * valid bit was written, and lose those changes at the power off. The wait
- * ends after SHUTDOWN_WRITERS_MS, holding no lock, so that a disk that never
- * answers cannot keep the machine up; the valid bit then stays clear and the
- * next mount checks the volume. A type without that operation has its
- * namespace lock taken and never given back, which keeps its writers out,
- * and is prepared as mount(2) prepares an unmount. Either is done with
- * scheduling still on, since another process may hold a lock or a buffer
- * the unmount needs, or be a writer it waits for, and only that process
- * can let it go: a shutdown that waited for it with scheduling off would
- * wait for ever on an idle machine.
+ * Each writable file system on a disk but the root is written out and marked
+ * clean first, newest mount first (`shutdown_others`), as Linux's inits unmount
+ * every file system before they call reboot(2): a volume left marked in use
+ * would be checked at its next mount. A root of a type other than KRFFS is
+ * unmounted after them: its buffers written and its valid bit set, so that the
+ * next mount does not check it, once no process is left that could change it
+ * after. Each is done as `shutdown_mount` says. An ext2 file system closes
+ * itself to new writers and waits for those inside (`shutdown` of `vfs_ops`),
+ * since its writers take node locks and not the mount's; a writer stuck in a
+ * disk wait that SIGKILL cannot end would otherwise change the volume after its
+ * valid bit was written, and lose those changes at the power off. The wait ends
+ * after SHUTDOWN_WRITERS_MS, holding no lock, so that a disk that never answers
+ * cannot keep the machine up; the valid bit then stays clear and the next mount
+ * checks the volume. A type without that operation has its namespace lock taken
+ * and never given back, which keeps its writers out, and is prepared as
+ * mount(2) prepares an unmount. Either is done with scheduling still on, since
+ * another process may hold a lock or a buffer the unmount needs, or be a writer
+ * it waits for, and only that process can let it go: a shutdown that waited for
+ * it with scheduling off would wait for ever on an idle machine.
  *
  * Scheduling is disabled next, so that a second caller cannot exist: the
  * timer does not switch away from a system call (`in_syscall`),
@@ -1844,17 +1905,10 @@ void kernel_shutdown(int how)
     }
     shutdown_started = 1;
     power_prepare(how);
+    shutdown_others();
     if (!_krffs_on_disk && vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
-        const struct vfs_ops *ops;
-
         root = vfs_root_mount();
-        ops = root->type->ops;
-        if (ops->shutdown) {
-            unmounted = ops->shutdown(root, tick_count() + MS_TO_TICKS(SHUTDOWN_WRITERS_MS)) == 0;
-        } else {
-            vfs_ns_lock(root);
-            unmounted = !ops->prepare_unmount || ops->prepare_unmount(root) == 0;
-        }
+        unmounted = shutdown_mount(root);
     }
     sched_disable();
 
@@ -1869,7 +1923,7 @@ void kernel_shutdown(int how)
     } else if (pc_sync() != 0) {
         klog(KLOG_WARN, "shutdown", "page cache flush failed");
     } else {
-        klog(KLOG_INFO, "shutdown", "no disk mount; nothing to unmount");
+        klog(KLOG_INFO, "shutdown", "root: not on a disk; nothing to unmount");
     }
     klog(KLOG_INFO, "shutdown", "Stopping the system. Goodbye!");
     usb_stop();

@@ -2449,10 +2449,11 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
 }
 
 /**
- * The `shutdown` of `vfs_ops`, for the root at a power off: admission closed
- * for good and the writers inside waited for until the tick `deadline`
- * (`em_close_until`), then `ext2_prepare_unmount`, in the remount's order,
- * so that no writer changes the volume once its valid bit is written.
+ * The `shutdown` of `vfs_ops`, for each writable mount at a power off, the root
+ * last (`kernel_shutdown`): admission closed for good and the writers inside
+ * waited for until the tick `deadline` (`em_close_until`), then
+ * `ext2_prepare_unmount`, in the remount's order, so that no writer changes the
+ * volume once its valid bit is written.
  *
  * At the deadline nothing more is done and -EBUSY returned: a writer still
  * inside may hold `em->meta`, a node lock or a buffer, and waits on a disk

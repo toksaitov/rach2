@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd November 9, 2026
 .Dt REBOOT 2
 .Os
 .Sh NAME
@@ -36,6 +36,18 @@ keyboard reboot is not implemented.
 Other commands are rejected.
 The three stop commands perform the kernel shutdown procedure and do
 not return.
+It writes out each writable file system on a disk, the newest mount first
+and the root last, and marks it unmounted cleanly, as an unmount does;
+Linux's
+.Fn reboot
+writes nothing, and its callers sync and unmount first.
+A file system with a writer still inside after ten seconds, or with a
+file removed but still open, is left marked in use, and its next writable
+mount checks it.
+.Xr init 8
+ends every other process before it calls
+.Fn reboot ,
+so that no file is still open.
 A restart that fails to reset the platform also ends in a halt.
 .Pp
 The i386 system call number is 88, and the x86-64 one 169, where the three
