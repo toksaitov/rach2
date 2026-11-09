@@ -10,6 +10,13 @@
  * every cell whose line differs from the one above it, and no blank cell
  * under a blank one.
  *
+ * The screen is the loader's framebuffer until a DRM driver's client
+ * (sys/drm/drm_client.c) moves the console onto a buffer of its own
+ * (`fbcon_attach`); the columns and rows stay those of the first screen, at
+ * the largest scale the new one holds. While a DRM master has the screen the
+ * console is detached: the cells, the cursor and the picture's state go on
+ * changing, and nothing is drawn until it is attached again.
+ *
  * The caller holds the console's lock around a byte's work, as vga_text.c
  * says.
  */
@@ -66,9 +73,17 @@ static uint32_t cursor;
 static uint16_t drawn[TEXTCON_COLS_MAX * TEXTCON_ROWS_MAX];
 static uint32_t drawn_cursor = NO_CELL;
 
-/* The loader's description of the screen, kept for the colors of a
- * picture's palette. */
+/* The description of the screen, the loader's or a DRM buffer's, kept for
+ * the colors of a picture's palette and for FB_GETINFO. */
 static struct boot_framebuffer fb_desc;
+
+/* The kernel's address of the screen's first byte, or NULL for the loader's
+ * framebuffer, which `fbcon_window` reaches; whether the console is
+ * detached from it, drawing nothing; and whether the screen is gone, so
+ * that the native mode has none until the next `fbcon_attach`. */
+static volatile uint8_t *screen_base;
+static int detached;
+static int gone;
 
 /*
  * The program that holds /fb (vga_gfx.c) has the screen to itself while
@@ -120,6 +135,16 @@ static uint32_t nearest_index(const struct boot_framebuffer *fb, uint32_t c)
     return best;
 }
 
+/** The screen's first byte to draw at, or NULL while nothing may be drawn:
+ * the console is detached or the screen cannot be reached. */
+static volatile uint8_t *screen(void)
+{
+    if (detached) {
+        return NULL;
+    }
+    return screen_base ? screen_base : fbcon_window();
+}
+
 /** Store the pixel `v` at `p`, in as many bytes as the screen's pixel has. */
 static void put_pixel(volatile uint8_t *p, uint32_t v)
 {
@@ -142,7 +167,8 @@ static void put_pixel(volatile uint8_t *p, uint32_t v)
 }
 
 /** Draw screen cell `i` as `cell` shows it, underlined when the cursor is
- * on it. */
+ * on it; nothing for a cell past the screen's edge, which a screen smaller
+ * than the grid leaves out. */
 static void draw_cell(volatile uint8_t *base, uint32_t i, uint16_t cell, int with_cursor)
 {
     const uint8_t *rows = vga_font_all[cell & 0xFF].rows;
@@ -153,6 +179,9 @@ static void draw_cell(volatile uint8_t *base, uint32_t i, uint16_t cell, int wit
     volatile uint8_t *line = base + top * fb_pitch + left * fb_bytes;
     uint32_t r, s, c, t;
 
+    if (left + GLYPH_WIDTH * fb_scale > fb_width || top + GLYPH_HEIGHT * fb_scale > fb_height) {
+        return;
+    }
     for (r = 0; r < GLYPH_HEIGHT; r++) {
         uint32_t bits = rows[r];
 
@@ -203,45 +232,43 @@ static void refresh(volatile uint8_t *base, uint32_t i)
     }
 }
 
-int fbcon_init(const struct boot_framebuffer *fb)
+/** Whether the console can draw on the screen `fb`: direct color at 8 to
+ * 32 bits a pixel or indexed color at 8, with a pitch that holds a row. */
+static int screen_usable(const struct boot_framebuffer *fb)
 {
-    volatile uint8_t *base;
-    uint32_t i, col, row;
-
     if (fb->type == BOOT_FB_RGB) {
         if (fb->bpp < 8 || fb->bpp > 32) {
-            return -1;
+            return 0;
         }
     } else if (fb->type != BOOT_FB_INDEXED || fb->bpp != 8) {
-        return -1;
+        return 0;
     }
+    return fb->width != 0 && fb->height != 0 && fb->width <= fb->pitch / ((fb->bpp + 7u) / 8u);
+}
+
+/**
+ * Take `fb` as the screen's geometry and colors, for the grid of
+ * `textcon_cols` by `textcon_rows` cells: the largest whole scale at which
+ * the grid fits, at least 1, and the grid centered, or from the top left
+ * corner when even scale 1 does not fit, the cells past the edge left out.
+ */
+static void set_geometry(const struct boot_framebuffer *fb)
+{
+    uint32_t i, grid_w, grid_h;
+
     fb_bytes = (fb->bpp + 7) / 8;
-    if (fb->width / GLYPH_WIDTH < MIN_COLS || fb->height / GLYPH_HEIGHT < MIN_ROWS ||
-        fb->width > fb->pitch / fb_bytes) {
-        return -1;
-    }
-    base = fbcon_window();
-    if (base == NULL) {
-        return -1;
-    }
-    for (fb_scale = 1; fb->width / (GLYPH_WIDTH * (fb_scale + 1)) >= MIN_COLS &&
-                       fb->height / (GLYPH_HEIGHT * (fb_scale + 1)) >= MIN_ROWS;
+    for (fb_scale = 1; textcon_cols * GLYPH_WIDTH * (fb_scale + 1) <= fb->width &&
+                       textcon_rows * GLYPH_HEIGHT * (fb_scale + 1) <= fb->height;
          fb_scale++) {
-    }
-    textcon_cols = fb->width / (GLYPH_WIDTH * fb_scale);
-    textcon_rows = fb->height / (GLYPH_HEIGHT * fb_scale);
-    if (textcon_cols > TEXTCON_COLS_MAX) {
-        textcon_cols = TEXTCON_COLS_MAX;
-    }
-    if (textcon_rows > TEXTCON_ROWS_MAX) {
-        textcon_rows = TEXTCON_ROWS_MAX;
     }
     fb_desc = *fb;
     fb_pitch = fb->pitch;
     fb_width = fb->width;
     fb_height = fb->height;
-    grid_left = (fb_width - textcon_cols * GLYPH_WIDTH * fb_scale) / 2;
-    grid_top = (fb_height - textcon_rows * GLYPH_HEIGHT * fb_scale) / 2;
+    grid_w = textcon_cols * GLYPH_WIDTH * fb_scale;
+    grid_h = textcon_rows * GLYPH_HEIGHT * fb_scale;
+    grid_left = grid_w < fb_width ? (fb_width - grid_w) / 2 : 0;
+    grid_top = grid_h < fb_height ? (fb_height - grid_h) / 2 : 0;
     for (i = 0; i < 16; i++) {
         if (fb->type == BOOT_FB_RGB) {
             pixel[i] = color_field(vga_rgb[i][0], fb->red_shift, fb->red_bits) |
@@ -251,6 +278,35 @@ int fbcon_init(const struct boot_framebuffer *fb)
             pixel[i] = nearest_index(fb, i);
         }
     }
+}
+
+int fbcon_init(const struct boot_framebuffer *fb)
+{
+    volatile uint8_t *base;
+    uint32_t i, col, row, scale;
+
+    if (!screen_usable(fb) || fb->width / GLYPH_WIDTH < MIN_COLS ||
+        fb->height / GLYPH_HEIGHT < MIN_ROWS) {
+        return -1;
+    }
+    base = fbcon_window();
+    if (base == NULL) {
+        return -1;
+    }
+    for (scale = 1; fb->width / (GLYPH_WIDTH * (scale + 1)) >= MIN_COLS &&
+                    fb->height / (GLYPH_HEIGHT * (scale + 1)) >= MIN_ROWS;
+         scale++) {
+    }
+    textcon_cols = fb->width / (GLYPH_WIDTH * scale);
+    textcon_rows = fb->height / (GLYPH_HEIGHT * scale);
+    if (textcon_cols > TEXTCON_COLS_MAX) {
+        textcon_cols = TEXTCON_COLS_MAX;
+    }
+    if (textcon_rows > TEXTCON_ROWS_MAX) {
+        textcon_rows = TEXTCON_ROWS_MAX;
+    }
+    set_geometry(fb);
+    screen_base = NULL;
 
     for (row = 0; row < fb_height; row++) {
         volatile uint8_t *p = base + row * fb_pitch;
@@ -282,7 +338,7 @@ void fbcon_stored(uint32_t at)
     if (!fbcon_active || gfx_on || blank_on || at < start || at >= start + SCREEN_CELLS) {
         return;
     }
-    base = fbcon_window();
+    base = screen();
     if (base != NULL) {
         refresh(base, at - start);
     }
@@ -294,7 +350,7 @@ void fbcon_set_start(uint32_t cell)
     uint32_t i;
 
     start = cell;
-    base = fbcon_window();
+    base = screen();
     if (!fbcon_active || gfx_on || blank_on || base == NULL) {
         return;
     }
@@ -309,7 +365,7 @@ void fbcon_set_cursor(uint32_t cell)
     uint32_t was = drawn_cursor;
 
     cursor = cell;
-    base = fbcon_window();
+    base = screen();
     if (!fbcon_active || gfx_on || blank_on || base == NULL) {
         return;
     }
@@ -365,14 +421,10 @@ static uint32_t rgb_pixel(const uint8_t *rgb)
     return best;
 }
 
-void fbcon_gfx_begin(void)
+/** Place the 320x200 picture on the screen: its size and its top left
+ * corner, as fbcon_gfx_begin says. */
+static void gfx_place(void)
 {
-    volatile uint8_t *base = fbcon_window();
-    uint32_t i;
-
-    if (!fbcon_active || base == NULL) {
-        return;
-    }
     if (fb_width * GFX_HEIGHT >= fb_height * GFX_WIDTH) {
         gfx_height = fb_height;
         gfx_width = gfx_height * GFX_WIDTH / GFX_HEIGHT;
@@ -386,12 +438,25 @@ void fbcon_gfx_begin(void)
     }
     gfx_left = (fb_width - gfx_width) / 2;
     gfx_top = (fb_height - gfx_height) / 2;
+}
+
+void fbcon_gfx_begin(void)
+{
+    volatile uint8_t *base = screen();
+    uint32_t i;
+
+    if (!fbcon_active) {
+        return;
+    }
+    gfx_place();
     for (i = 0; i < 256; i++) {
         gfx_pixel[i] = pixel[i < 16 ? i : 0];
     }
     gfx_on = 1;
     native_on = 0;
-    clear_screen(base);
+    if (base != NULL) {
+        clear_screen(base);
+    }
 }
 
 int fbcon_screen(struct fb_screen *s)
@@ -420,15 +485,17 @@ int fbcon_screen(struct fb_screen *s)
 
 volatile uint8_t *fbcon_native_begin(void)
 {
-    volatile uint8_t *base = fbcon_window();
+    volatile uint8_t *base = screen_base ? screen_base : fbcon_window();
 
-    if (!fbcon_active || base == NULL || fb_desc.type != BOOT_FB_RGB ||
+    if (!fbcon_active || gone || base == NULL || fb_desc.type != BOOT_FB_RGB ||
         (fb_desc.bpp != 15 && fb_desc.bpp != 16 && fb_desc.bpp != 24 && fb_desc.bpp != 32)) {
         return NULL;
     }
     gfx_on = 1;
     native_on = 1;
-    clear_screen(base);
+    if (!detached) {
+        clear_screen(base);
+    }
     return base;
 }
 
@@ -443,7 +510,7 @@ void fbcon_gfx_palette(const uint8_t *rgb)
 
 void fbcon_gfx_frame(const uint8_t *pixels)
 {
-    volatile uint8_t *base = fbcon_window();
+    volatile uint8_t *base = screen();
     uint32_t line, col, row = 0, n = gfx_width * fb_bytes;
 
     if (!gfx_on || native_on || base == NULL) {
@@ -475,7 +542,7 @@ void fbcon_gfx_frame(const uint8_t *pixels)
 
 void fbcon_gfx_end(void)
 {
-    volatile uint8_t *base = fbcon_window();
+    volatile uint8_t *base = screen();
     uint32_t i;
 
     if (!gfx_on) {
@@ -493,7 +560,7 @@ void fbcon_gfx_end(void)
 
 void fbcon_blank(int blank)
 {
-    volatile uint8_t *base = fbcon_window();
+    volatile uint8_t *base = screen();
     uint32_t i;
 
     if (!fbcon_active || (blank != 0) == blank_on) {
@@ -509,4 +576,54 @@ void fbcon_blank(int blank)
             refresh(base, i);
         }
     }
+}
+
+void fbcon_detach(int forget)
+{
+    detached = 1;
+    if (forget) {
+        screen_base = NULL;
+        gone = 1;
+    }
+}
+
+int fbcon_attach(const struct boot_framebuffer *fb, volatile uint8_t *base)
+{
+    uint32_t i;
+    int was_active = fbcon_active;
+
+    if (!screen_usable(fb) || (base == NULL && fbcon_window() == NULL)) {
+        return -1;
+    }
+    set_geometry(fb);
+    screen_base = base;
+    detached = 0;
+    gone = 0;
+    if (gfx_on) {
+        gfx_place();
+    }
+    if (!was_active) {
+        for (i = 0; i < FBCON_CELLS; i++) {
+            fbcon_cells[i] = BLANK_CELL;
+        }
+        start = 0;
+        cursor = NO_CELL;
+        fbcon_active = true;
+    }
+    base = screen();
+    clear_screen(base);
+    if (!gfx_on && !blank_on) {
+        for (i = 0; i < SCREEN_CELLS; i++) {
+            refresh(base, i);
+        }
+    }
+    if (!was_active) {
+        textcon_sync();
+    }
+    return 0;
+}
+
+uint32_t fbcon_scale(void)
+{
+    return fbcon_active ? fb_scale : 0;
 }

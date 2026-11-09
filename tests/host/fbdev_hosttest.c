@@ -272,6 +272,13 @@ void fb_present(void)
     presents++;
 }
 
+/** Take the mode in force again on a new screen: nothing in the model,
+ * whose screen never moves. */
+void fb_redraw(void)
+{
+    CHECK(locked == 1, "the mode is drawn again under the console's lock");
+}
+
 static struct open_file description;
 static fd_entry_t entry;
 

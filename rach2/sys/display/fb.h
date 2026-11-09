@@ -72,6 +72,16 @@ uint8_t *fb_enter_native(void);
  * mode; 0, or -1 when the console is on the VGA's text mode. */
 int fb_screen(struct fb_screen *s);
 
+/**
+ * Take the mode in force again on a screen that the console has just been
+ * given (fbcon.h's `fbcon_attach`), new or back from a DRM master: the
+ * native mode's pixels where the screen is now, at its size, painted black;
+ * mode 13h's picture placed anew, which `fb_set_palette` and `fb_present`
+ * then draw. A native mode the new screen cannot have becomes mode 13h.
+ * Nothing in text mode or on the VGA's text console.
+ */
+void fb_redraw(void);
+
 /** Leave the graphics mode, either, and return to the text console,
  * redrawn: on a VGA mode 3, with its palette and the saved font loaded
  * again. Out of the modes, it does nothing. */
@@ -114,5 +124,26 @@ uint32_t fb_size(void);
 /** Release the stack entry for thread group `pid`, active or suspended,
  * before its process record can be reaped. Process context, big lock held. */
 void fb_release_if_owner(uint32_t pid);
+
+/**
+ * A DRM master takes the screen (sys/drm/drm_client.c): until `fb_unhold`,
+ * writes to /fb wait, poll reports no POLLOUT, an open by any process but
+ * the owner's fails with EBUSY, and the owner on top reads
+ * FB_EVENT_LOST. The modes may still change; nothing is drawn. A second
+ * hold does nothing. The caller holds the console lock.
+ */
+void fb_hold(void);
+
+/** The console has the screen back: the owner on top, if any, has its
+ * mode drawn again (`fb_redraw`) and reads FB_EVENT_REGAINED, and the
+ * writes go on. The caller holds the console lock. */
+void fb_unhold(void);
+
+/** The console moved to another screen while it had the screen, as on a
+ * new mode after a hotplug: the owner on top has its mode drawn again, and
+ * at the native mode, whose pixels are gone, reads FB_EVENT_LOST and
+ * FB_EVENT_REGAINED, to draw them again. The caller holds the console
+ * lock. */
+void fb_screen_moved(void);
 
 #endif /* _FB_H_ */

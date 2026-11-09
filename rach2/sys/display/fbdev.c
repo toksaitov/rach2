@@ -48,6 +48,7 @@ static struct kd_state fb_console;
  * it. Keep the queue alive independently of the replaced owner record. */
 static wait_queue_t fb_wq;
 static uint32_t fb_epoch; /* changes at every transfer or change of mode */
+static int fb_held;       /* a DRM master has the screen: writes wait */
 
 /** The owner attached to `e`, or NULL before its open has taken the screen. */
 static struct fb_owner *fb_client(const fd_entry_t *e)
@@ -120,7 +121,10 @@ static void fb_unlink(struct fb_owner *o)
         }
         fb_set_palette(fb_top->palette);
         kd_state_restore(&fb_top->keyboard);
-        fb_event(fb_top);
+        /* Under a DRM master the screen comes back at `fb_unhold`. */
+        if (!fb_held) {
+            fb_event(fb_top);
+        }
     } else {
         kd_state_restore(&fb_console);
         fb_exit();
@@ -149,6 +153,9 @@ int32_t fb_take(fd_entry_t *e)
     uint32_t flags;
 
     if (fb_top && !fb_descendant(fb_top->pid)) {
+        return -EBUSY;
+    }
+    if (fb_held && (!fb_top || fb_top->pid != current_proc->tgid)) {
         return -EBUSY;
     }
     if (!h) {
@@ -290,16 +297,188 @@ static short fb_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (!o->linked) {
         return (mask & events) | POLLHUP;
     }
-    if (fb_owned(e)) {
+    if (fb_owned(e) && !fb_held) {
         mask |= POLLOUT;
     }
     return mask & events;
+}
+
+/** Draw the mode of the owner on top again on a screen the console was just
+ * given: its pixels where they are now, its palette and its picture. The
+ * caller holds the console lock. */
+static void fb_redraw_top(void)
+{
+    if (!fb_top) {
+        return;
+    }
+    fb_redraw();
+    fb_set_palette(fb_top->palette);
+    fb_present();
+}
+
+void fb_hold(void)
+{
+    if (fb_held) {
+        return;
+    }
+    fb_held = 1;
+    fb_epoch++;
+    if (fb_top) {
+        fb_event(fb_top);
+    }
+}
+
+void fb_unhold(void)
+{
+    if (!fb_held) {
+        return;
+    }
+    fb_held = 0;
+    fb_epoch++;
+    fb_redraw_top();
+    if (fb_top) {
+        fb_event(fb_top);
+    }
+    wq_wake_all(&fb_wq);
+}
+
+void fb_screen_moved(void)
+{
+    if (fb_held || !fb_top) {
+        return;
+    }
+    fb_epoch++;
+    fb_redraw_top();
+    if (gfx_current.mode == GFX_MODE_NATIVE) {
+        fb_event(fb_top);
+        fb_event(fb_top);
+    }
+}
+
+/** Whether a write may go on: no DRM master has the screen, or `arg`'s
+ * description has lost it, which the write then reports. */
+static int fb_writable(void *arg)
+{
+    return !fb_held || !fb_owned((fd_entry_t *)arg);
 }
 
 /** The byte extent of the active mode, for seeks and bounded writes. */
 uint32_t fb_size(void)
 {
     return gfx_current.size;
+}
+
+/**
+ * Wait while a DRM master has the screen and `e` owns it. 0 when the write
+ * may go on, -EAGAIN at once on a nonblocking description, or -EINTR when
+ * a signal ends the wait. Process context.
+ */
+static int32_t fb_wait_screen(fd_entry_t *e)
+{
+    while (fb_held && fb_owned(e)) {
+        if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&fb_wq, fb_writable, e) < 0) {
+            return -EINTR;
+        }
+    }
+    return 0;
+}
+
+/* What a write found when it began: the mode in force, its size in bytes,
+ * the byte offset it writes at, and `fb_epoch`. */
+struct fb_shot {
+    gfx_mode_t mode;
+    uint32_t size;
+    uint32_t at;
+    uint32_t epoch;
+};
+
+/**
+ * Copy `count` bytes of `buf` to the pixels at `shot->at` in pieces of
+ * FB_CHUNK through `chunk`, each stored under the console's lock while `e`
+ * still owns the screen as `shot` found it. Returns the bytes stored, fewer
+ * when the copy from the caller faults or the screen changes.
+ */
+static uint32_t fb_store(fd_entry_t *e, const char __user *buf, uint32_t count, uint8_t *chunk,
+                         const struct fb_shot *shot)
+{
+    uint32_t done = 0;
+
+    while (done < count) {
+        uint32_t n = count - done < FB_CHUNK ? count - done : FB_CHUNK;
+        uint32_t flags;
+        int same;
+
+        if (copy_from_user(chunk, (const void __user *)(buf + done), n) != 0) {
+            break;
+        }
+        flags = console_lock();
+        same = fb_owned(e) && gfx_current.mode == shot->mode && gfx_current.size == shot->size &&
+               fb_epoch == shot->epoch;
+        if (same) {
+            k_memcpy(gfx_current.framebuffer + shot->at + done, chunk, n);
+        }
+        console_unlock(flags);
+        if (!same) {
+            break;
+        }
+        done += n;
+    }
+    return done;
+}
+
+/**
+ * One pass of `fb_write` in the mode in force: the bytes written, or
+ * -errno; 0 when a DRM master took the screen before the first byte, for
+ * the caller to wait and start again.
+ */
+static int32_t fb_write_pass(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    gfx_mode_t mode = gfx_current.mode;
+    uint64_t at = e->ofd ? e->ofd->offset : 0;
+    uint32_t size = gfx_current.size;
+    uint32_t epoch = fb_epoch;
+    struct fb_shot shot;
+    uint32_t done;
+    uint8_t *chunk;
+
+    if (!fb_owned(e) || mode == GFX_MODE_NONE) {
+        return -EBUSY;
+    }
+    if (at > size) {
+        return -EFBIG;
+    }
+    if (count > size - (uint32_t)at) {
+        count = size - (uint32_t)at;
+    }
+    if (count == 0) {
+        return -ENOSPC;
+    }
+    chunk = (uint8_t *)kmalloc(FB_CHUNK);
+    if (chunk == NULL) {
+        return -ENOMEM;
+    }
+    shot.mode = mode;
+    shot.size = size;
+    shot.at = (uint32_t)at;
+    shot.epoch = epoch;
+    done = fb_store(e, buf, count, chunk, &shot);
+    kfree(chunk);
+    if (done == 0 && fb_held && fb_owned(e)) {
+        return 0;
+    }
+    if (done == 0) {
+        return fb_owned(e) && fb_epoch == epoch ? -EFAULT : -EBUSY;
+    }
+    if (mode == GFX_MODE_NATIVE && e->ofd) {
+        e->ofd->offset = at + done;
+    }
+    if (mode == GFX_MODE_VGA_13H && fb_owned(e) && fb_epoch == epoch) {
+        fb_present();
+    }
+    return (int32_t)done;
 }
 
 /**
@@ -324,63 +503,24 @@ uint32_t fb_size(void)
  * held, under which the mode and the owner are checked again: a mode left
  * meanwhile by another thread of the owner ends the write, so that no pixel
  * lands on the console's text.
+ *
+ * While a DRM master has the screen (`fb_hold`) a write waits until the
+ * console has it back, interruptibly, or answers -EAGAIN on a nonblocking
+ * description; one that a master's arrival stops before its first byte
+ * waits and starts again.
  */
 static int32_t fb_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    gfx_mode_t mode = gfx_current.mode;
-    uint64_t at = e->ofd ? e->ofd->offset : 0;
-    uint32_t size = gfx_current.size;
-    uint32_t done = 0;
-    uint32_t epoch = fb_epoch;
-    uint8_t *chunk;
+    int32_t r;
 
-    if (!fb_owned(e) || mode == GFX_MODE_NONE) {
-        return -EBUSY;
-    }
-    if (at > size) {
-        return -EFBIG;
-    }
-    if (count > size - (uint32_t)at) {
-        count = size - (uint32_t)at;
-    }
-    if (count == 0) {
-        return -ENOSPC;
-    }
-    chunk = (uint8_t *)kmalloc(FB_CHUNK);
-    if (chunk == NULL) {
-        return -ENOMEM;
-    }
-    while (done < count) {
-        uint32_t n = count - done < FB_CHUNK ? count - done : FB_CHUNK;
-        uint32_t flags;
-        int same;
-
-        if (copy_from_user(chunk, (const void __user *)(buf + done), n) != 0) {
-            break;
+    for (;;) {
+        if ((r = fb_wait_screen(e)) != 0) {
+            return r;
         }
-        flags = console_lock();
-        same = fb_owned(e) && gfx_current.mode == mode && gfx_current.size == size &&
-               fb_epoch == epoch;
-        if (same) {
-            k_memcpy(gfx_current.framebuffer + (uint32_t)at + done, chunk, n);
+        if ((r = fb_write_pass(e, buf, count)) != 0) {
+            return r;
         }
-        console_unlock(flags);
-        if (!same) {
-            break;
-        }
-        done += n;
     }
-    kfree(chunk);
-    if (done == 0) {
-        return fb_owned(e) && fb_epoch == epoch ? -EFAULT : -EBUSY;
-    }
-    if (mode == GFX_MODE_NATIVE && e->ofd) {
-        e->ofd->offset = at + done;
-    }
-    if (mode == GFX_MODE_VGA_13H && fb_owned(e) && fb_epoch == epoch) {
-        fb_present();
-    }
-    return (int32_t)done;
 }
 
 /** Put the description's offset back at the first pixel, as a change of
