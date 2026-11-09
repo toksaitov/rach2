@@ -92,3 +92,25 @@ $(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
 	@$(GNU_ASSET_STEP) -n gnu-webgl -t $@ $(STEP_INPUTS) -o webgl \
 	    -- $(call GNU_STEP_RUN,vendor/gnu/debian/fetch_webgl.sh)
+
+# IGT's tests, built from Debian's intel-gpu-tools source in the Debian
+# builder guest (vendor/gnu/igt/build_igt.sh), for x86-64 alone. The guest is
+# an x86-64 QEMU machine, so the step runs where the layer builds on an
+# x86-64 Linux host, and mk/gnu-image.mk's rule for that host alone stages
+# it; a root made in the tooling machine has no IGT. The builder's files are
+# inputs, so that a changed guest builds the tests again.
+GNU_IGT_STAMP = $(GNU_OUT)/igt.stamp
+GNU_STEP_STAMPS += $(GNU_IGT_STAMP)
+GNU_IGT_SOURCES = vendor/gnu/igt/build_igt.sh vendor/gnu/igt/sources.txt vendor/gnu/debian/fetch_asset.sh \
+                  $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages setup.sh.in \
+                      user-data.in meta-data network-config) \
+                  tests/graphics/guest-env.sh rach2/qemu_devices.sh
+
+.PHONY: gnu-igt
+gnu-igt: $(GNU_IGT_STAMP)
+
+$(GNU_IGT_STAMP): $(GNU_IGT_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_ASSET_STEP) -n gnu-igt -t $@ $(STEP_INPUTS) -o igt -o work/igt \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/igt/build_igt.sh)
+	@test -x $(GNU_OUT)/igt/usr/bin/igt_runner || { echo "gnu: igt: the root has no usr/bin/igt_runner" >&2; exit 1; }
