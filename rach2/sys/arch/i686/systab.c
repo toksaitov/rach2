@@ -338,6 +338,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_CLOCK_GETRES_TIME64] = sys_clock_getres_time64;
     table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
+    table[SYS_FUTEX_WAITV] = sys_futex_waitv;
     table[SYS_EXIT_GROUP] = sys_exit_group;
     table[SYS_SOCKET] = sys_socket;
     table[SYS_SOCKETPAIR] = sys_socketpair;

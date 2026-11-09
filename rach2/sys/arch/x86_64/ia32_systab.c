@@ -535,7 +535,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_LANDLOCK_RESTRICT_SELF] = NULL;
     table[SYS_MEMFD_SECRET] = NULL;
     table[SYS_PROCESS_MRELEASE] = NULL;
-    table[SYS_FUTEX_WAITV] = NULL;
+    table[SYS_FUTEX_WAITV] = sys_futex_waitv;
     table[SYS_SET_MEMPOLICY_HOME_NODE] = NULL;
     table[SYS_CACHESTAT] = NULL;
     table[SYS_FCHMODAT2] = NULL;

@@ -353,6 +353,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_UNSHARE] = sys_unshare;
     table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
+    table[SYS_FUTEX_WAITV] = sys_futex_waitv;
     table[SYS_SPLICE] = sys_splice;
     table[SYS_TEE] = sys_tee;
     table[SYS_COPY_FILE_RANGE] = sys_copy_file_range;

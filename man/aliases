@@ -145,6 +145,7 @@ ftruncate 2 truncate
 ftruncate64 2 truncate
 fuser 1 busybox-procps
 futex_time64 2 futex
+futex_waitv 2 futex
 get_robust_list 2 futex
 get_thread_area 2 set_thread_area
 getcpu 2 sched_setscheduler

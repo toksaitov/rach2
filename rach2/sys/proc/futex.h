@@ -23,6 +23,21 @@
 long sys_futex(isr_params_t *params);
 
 /**
+ * futex_waitv takes an array of struct futex_waitv, their count, flags, an
+ * absolute timeout as a struct __kernel_timespec or NULL, and the clock it
+ * is read on, CLOCK_MONOTONIC or CLOCK_REALTIME. It sleeps while each of
+ * the 1 to 128 words holds its value, until a wake of any of them, and
+ * returns that futex's index. -EAGAIN when a word does not hold its value,
+ * -ETIMEDOUT, -EINTR, which the dispatcher restarts since the timeout is
+ * absolute; -EINVAL for flags other than 0, a count out of range, a NULL
+ * array, another clock with a timeout, an entry whose size is not 32 bits,
+ * whose flags are unknown, whose reserved word is not 0, whose value does
+ * not fit 32 bits or whose address is not aligned to four; -EFAULT for an
+ * array, timeout or word the caller cannot read; -ENOMEM.
+ */
+long sys_futex_waitv(isr_params_t *params);
+
+/**
  * Whether the futex call `params` describes, which a signal ended with
  * EINTR, may be restarted: a wait with no timeout may, and a timed one may
  * not, since a restart would measure its timeout again from the start and a
