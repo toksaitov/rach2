@@ -22,6 +22,9 @@
 #include "mm.h"
 #include "pressure.h"
 
+/* SIGBUS's code for an address with no object behind it (Linux's). */
+#define BUS_ADRERR 2
+
 page_dir_t *_kernel_dir;
 
 uint32_t *_frames;
@@ -380,6 +383,61 @@ static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
     return rc < 0 ? -1 : 0;
 }
 
+/** The cache bits of a page table entry for a device region of protection
+ * `prot`: write-combining for VM_PROT_WC (`arch_pte_wc`), PTE_NOCACHE for
+ * VM_PROT_UC, and none for a cached region. */
+static pte_t device_cache(uint32_t prot)
+{
+    if (prot & VM_PROT_WC) {
+        return arch_pte_wc();
+    }
+    return (prot & VM_PROT_UC) ? PTE_NOCACHE : 0;
+}
+
+/**
+ * Back a page of a device region (`vm_device_map`): map the physical
+ * address the object gives for it, writable when the region is, with the
+ * region's cache type, and take a reference for the mapping, which counts
+ * only a frame the allocator counts and which unmapping drops. The object's
+ * `page` may sleep, so the file is held across it and the region is looked
+ * up again after, as `shared_fault` does. 1 with the page mapped; 0 when the
+ * object has no page there, with `bus_fault` set for the fault handler's
+ * SIGBUS, or when no page table could be had; -1 to resolve again.
+ */
+static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
+{
+    struct vm_file *f = vma->file;
+    uintptr_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
+    uint32_t prot = vma->prot;
+    uintptr_t phys = 0;
+    int got;
+
+    vm_file_get(f);
+    got = f->device(f, pgoff, &phys);
+    vma = vm_find(vm, page);
+    if (!vma || vma->file != f || vma->prot != prot ||
+        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
+        vm_file_put(f);
+        return -1;
+    }
+    vm_file_put(f);
+    if (got != 0) {
+        if (current_proc) {
+            current_proc->bus_fault = 1;
+        }
+        return 0;
+    }
+    if (map_user_frame(dir, page, phys,
+                       PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) | paging_noexec(prot) |
+                           device_cache(prot)) != 0) {
+        return 0;
+    }
+    frame_ref(phys);
+    fault_count(0);
+    return 1;
+}
+
 /** Whether the region `vma` allows the access: a write needs write, and a
  * read needs read, which mmap and the ELF loader give every region with
  * write or execute. */
@@ -435,7 +493,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
             return 1;
         }
         if (vma->prot & VM_PROT_IO) {
-            return 0;
+            return vma->file && vma->file->device ? device_fault(dir, vm, vma, addr) : 0;
         }
         if (vma->file) {
             return vma->type == VM_SHARED ? shared_fault(dir, vm, vma, addr)
@@ -477,8 +535,9 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  * instruction forever.
  *
  * A missing page is anonymous memory (heap, stack, an anonymous mapping or
- * a segment's pages past its file bytes) or a page of a file, a segment's
- * or a mapping's; a page of device memory is never backed here. An
+ * a segment's pages past its file bytes), a page of a file, a segment's
+ * or a mapping's, or a page of a device object, which the object gives
+ * (`device_fault`) or, gone, answers with SIGBUS. An
  * anonymous one gets a zeroed frame, read-only in the PTE when its region
  * is, so a later write faults; a grown stack page stays writable. A file's
  * page is read into its frame, which may sleep, and when the regions
@@ -586,8 +645,9 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
  * which gives each its own frame now, as Linux's populate breaks the sharing
  * of copy-on-write pages; any other for a read, so that a shared page is not
  * made dirty for nothing. A region with no access, or of device memory,
- * which mmap maps whole, is passed over. Each page brought in counts as a
- * fault (`fault_count`), as Linux counts its populate's.
+ * is passed over, as Linux's populate passes a VM_IO region over. Each
+ * page brought in counts as a fault (`fault_count`), as Linux counts its
+ * populate's.
  */
 void vm_populate(uintptr_t start, uintptr_t end)
 {
@@ -716,7 +776,7 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
     uint8_t *map;
 
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
-        !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
+        !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) || (vma->prot & VM_PROT_IO)) {
         return -EIO;
     }
     if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
@@ -784,6 +844,38 @@ static int fetch_refused(uintptr_t addr, const isr_params_t *p)
 }
 
 /**
+ * Signal the current process for its user fault `params` at `addr` that no
+ * resolution made legal, a `write` or a read: with `bus`, SIGBUS with
+ * BUS_ADRERR, for a device region whose object had no page there; else
+ * SIGSEGV, SEGV_ACCERR when a region holds the address and SEGV_MAPERR when
+ * none does. Either is forced as Linux forces it, and the death is logged
+ * only when no handler and no tracer will see a SIGSEGV.
+ */
+static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, int bus)
+{
+    struct k_siginfo info;
+    int signo = bus ? SIGBUS : SIGSEGV;
+
+    k_memset(&info, 0, sizeof(info));
+    if (bus) {
+        info.code = BUS_ADRERR;
+    } else {
+        info.code = vm_find(&current_proc->mm->vm, addr) ? SEGV_ACCERR : SEGV_MAPERR;
+    }
+    info.addr = addr;
+    current_proc->trap_nr = PAGE_FAULT_VECTOR;
+    current_proc->trap_err = (uint32_t)params->error_code;
+    current_proc->trap_addr = addr;
+    signal_force(current_proc, signo, &info);
+    if (!bus && current_proc->sigacts[SIGSEGV].handler == KSIG_DFL &&
+        !(current_proc->ptrace & PT_TRACED)) {
+        klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%lx (err 0x%x)",
+             current_proc->pid, write ? "write" : "read", (unsigned long)addr,
+             (uint32_t)params->error_code);
+    }
+}
+
+/**
  * Resolve a page fault, or end what caused it.
  *
  * Tried in order. Any fault at a user-space address of a live user process
@@ -800,6 +892,9 @@ static int fetch_refused(uintptr_t addr, const isr_params_t *p)
  * supervisor-only page the fill maps, is not filled and falls through to
  * the segfault.
  *
+ * A user fault in a device region whose object has no page there now
+ * (`device_fault`) is SIGBUS with BUS_ADRERR and the address, forced as
+ * the SIGSEGV below is, as Linux answers a driver's VM_FAULT_SIGBUS.
  * A user fault of a legal access that no frame could be had for ends the
  * process with SIGKILL, which no handler sees, as Linux's OOM killer does;
  * a SIGSEGV handler that returned would fault again. Any other user fault
@@ -831,6 +926,7 @@ static void _page_fault_handler(isr_params_t *params)
 
     if (have_user_proc && in_user_range) {
         current_proc->frame_refused = 0;
+        current_proc->bus_fault = 0;
         if (!fetch_refused(fault_address, params) && vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
         }
@@ -859,21 +955,7 @@ static void _page_fault_handler(isr_params_t *params)
     }
 
     if (user_mode && have_user_proc) {
-        struct k_siginfo info;
-
-        k_memset(&info, 0, sizeof(info));
-        info.code = vm_find(&current_proc->mm->vm, fault_address) ? SEGV_ACCERR : SEGV_MAPERR;
-        info.addr = fault_address;
-        current_proc->trap_nr = PAGE_FAULT_VECTOR;
-        current_proc->trap_err = (uint32_t)params->error_code;
-        current_proc->trap_addr = fault_address;
-        signal_force(current_proc, SIGSEGV, &info);
-        if (current_proc->sigacts[SIGSEGV].handler == KSIG_DFL &&
-            !(current_proc->ptrace & PT_TRACED)) {
-            klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%lx (err 0x%x)",
-                 current_proc->pid, write ? "write" : "read", (unsigned long)fault_address,
-                 (uint32_t)params->error_code);
-        }
+        fault_signal(params, fault_address, write, in_user_range && current_proc->bus_fault);
         return;
     }
 
@@ -1499,6 +1581,36 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
     }
 }
 
+/**
+ * Each thread of a process has its own record on the process list and the
+ * address space of its process, so a space shared by threads is walked
+ * once for each of them, the later walks finding nothing to unmap.
+ */
+void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
+{
+    process_t *p;
+    const vma_t *r;
+    uint32_t end = count > 0xFFFFFFFFu - pgoff ? 0xFFFFFFFFu : pgoff + count;
+
+    if (!obj) {
+        return;
+    }
+    for (p = proc_list; p; p = p->next) {
+        const vm_space_t *vm = p->mm ? &p->mm->vm : NULL;
+
+        for (r = vm ? vm_first(vm) : NULL; r; r = vm_next(r)) {
+            uint32_t last = r->pgoff + (uint32_t)((r->end - r->start) / PAGE_SIZE);
+            uint32_t from = r->pgoff > pgoff ? r->pgoff : pgoff;
+            uint32_t to = last < end ? last : end;
+
+            if (from < to && vm_device_object(r->file) == obj) {
+                unmap_user_range(p->mm->dir, r->start + (uintptr_t)(from - r->pgoff) * PAGE_SIZE,
+                                 r->start + (uintptr_t)(to - r->pgoff) * PAGE_SIZE);
+            }
+        }
+    }
+}
+
 /** The tables of the new range are made first, so that the move cannot
  * stop half way. */
 int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len)
@@ -1624,6 +1736,9 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
     for (region = vm_first(&from->vm); region; region = vm_next(region)) {
         uintptr_t va, next;
 
+        if (region->prot & VM_PROT_DONTFORK) {
+            continue;
+        }
         for (va = region->start; va < region->end; va = next) {
             pte_t *table = user_span(parent_dir, va, region->end, &next);
 

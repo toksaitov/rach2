@@ -4,6 +4,7 @@
  */
 
 #include "pat.h"
+#include "../arch.h"
 
 #include "kcpu.h"
 
@@ -93,4 +94,9 @@ void pat_setup(void)
 int pat_write_combining(void)
 {
     return pat_wc;
+}
+
+pte_t arch_pte_wc(void)
+{
+    return pat_wc ? PTE_WC : PTE_NOCACHE;
 }

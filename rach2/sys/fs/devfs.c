@@ -21,6 +21,7 @@
 #include "../lib/kerrno.h"
 #include "../mm/paging.h"
 #include "../mm/kheap.h"
+#include "../mm/vm.h"
 #include "../io/poll.h"
 #include "../tty/pty.h"
 #include "../block/block.h"
@@ -1114,8 +1115,55 @@ static int32_t dev_mem_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     return dev_mem_rw(e, NULL, buf, count);
 }
 
+/** The `page` of a /dev/mem mapping: page `pgoff` is the frame of that
+ * number, which `dev_mem_mmap` allowed. */
+static int dev_mem_page(void *obj, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)obj;
+    *phys = (uintptr_t)pgoff * PAGE_SIZE;
+    return 0;
+}
+
+/** The `put` of a /dev/mem mapping: the mapping holds no object. */
+static void dev_mem_put(void *obj)
+{
+    (void)obj;
+}
+
+static const struct vm_device_ops dev_mem_vm_ops = {dev_mem_page, dev_mem_put};
+
+/**
+ * mmap of /dev/mem: a shared mapping of the frames from the page offset,
+ * uncached, for a privileged caller, of the frames `dev_mem_rw` reaches,
+ * all of them below 4 GiB. Its pages are mapped as they are touched. EINVAL
+ * for a private mapping, EPERM for another caller or another frame, ENOMEM
+ * with no memory for the region's record.
+ */
+static int32_t dev_mem_mmap(fd_entry_t *e, struct vma *vma)
+{
+    uintptr_t pages = (vma->end - vma->start) / PAGE_SIZE;
+    uintptr_t i;
+
+    (void)e;
+    if (vma->type != VM_SHARED) {
+        return -EINVAL;
+    }
+    if (!proc_privileged(current_proc) || pages > DEVMEM_SIZE / PAGE_SIZE ||
+        vma->pgoff > DEVMEM_SIZE / PAGE_SIZE - pages) {
+        return -EPERM;
+    }
+    for (i = 0; i < pages; i++) {
+        uintptr_t at = ((uintptr_t)vma->pgoff + i) * PAGE_SIZE;
+
+        if (at >= DEVMEM_LOW && !paging_frame_is_device(at)) {
+            return -EPERM;
+        }
+    }
+    return vm_device_map(vma, &dev_mem_vm_ops, NULL, VM_PROT_UC);
+}
+
 static const struct file_ops mem_ops = {dev_mem_read, dev_mem_write, dev_poll, dev_ioctl,
-                                        NULL,         NULL,          NULL};
+                                        NULL,         dev_mem_mmap,  NULL};
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl,
                                          NULL,         NULL,           NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl,

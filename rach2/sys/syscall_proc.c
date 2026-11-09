@@ -6097,12 +6097,12 @@ struct map_source {
 };
 
 /** 0 when the descriptor `e` may be mapped, shared or not, with the
- * protection `prot`: ENODEV for what is not a file, and EACCES for a
- * descriptor not open for reading, or for a writable shared mapping, not
- * open for writing. */
+ * protection `prot`: ENODEV for what is neither a file nor an object whose
+ * operations map it (`file_ops.mmap`), and EACCES for a descriptor not open
+ * for reading, or for a writable shared mapping, not open for writing. */
 static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
 {
-    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt) {
+    if (!(e->ops && e->ops->mmap) && (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt)) {
         return -ENODEV;
     }
     if (!(e->flags & FD_FLAG_READ) ||
@@ -6168,62 +6168,50 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
 }
 
 /**
- * A shared mapping of `len` bytes of /dev/mem from the page offset in `src`:
- * a shared region marked VM_PROT_IO, whose pages `mmap_devmem_fill` maps,
- * for a privileged caller, of the frames /dev/mem's reads reach. EPERM for
- * another caller or another frame, EINVAL for a private mapping, ENOMEM
- * with no memory for the region's object.
+ * The half of `mmap_backing` for a descriptor `e`, number `fd`, whose object
+ * maps itself (`file_ops.mmap`): a region of `len` bytes with the protection
+ * and page offset in `src`, VM_SHARED for a shared mapping and VM_FILE for a
+ * private one, is given to the operation, which sets its file, kind and
+ * protection, and those go into `src`. A shared mapping through a
+ * descriptor not open for writing is given VM_PROT_NOWRITE, as `mmap_file`
+ * gives it. The region the call builds is not in the address space, so
+ * its start is 0 and its end the length. The operation's error, or
+ * `mmap_file_check`'s; ENOMEM with no memory for the path.
  */
-static int32_t mmap_devmem(uint32_t flags, uintptr_t len, struct map_source *src)
+static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, struct map_source *src)
 {
-    uint32_t i;
+    vma_t vma;
+    int32_t rc = mmap_file_check(e, shared, src->prot);
 
-    if ((flags & MAP_TYPE) == MAP_PRIVATE) {
-        return -EINVAL;
+    if (rc != 0) {
+        return rc;
     }
-    if (!proc_privileged(current_proc) || src->pgoff > 0x100000u - len / PAGE_SIZE) {
-        return -EPERM;
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = len;
+    vma.prot = src->prot | ((shared && !(e->flags & FD_FLAG_WRITE)) ? VM_PROT_NOWRITE : 0u);
+    vma.type = shared ? VM_SHARED : VM_FILE;
+    vma.pgoff = src->pgoff;
+    rc = e->ops->mmap(e, &vma);
+    if (rc != 0) {
+        return rc;
     }
-    for (i = 0; i < len / PAGE_SIZE; i++) {
-        uint32_t frame = src->pgoff + i;
-
-        if (frame >= 0x100u && !paging_frame_is_device((uintptr_t)frame * PAGE_SIZE)) {
-            return -EPERM;
-        }
+    src->file = vma.file;
+    src->type = vma.type;
+    src->prot = vma.prot;
+    src->pgoff = vma.pgoff;
+    if (src->file && !src->file->path) {
+        src->file->path = fd_path_copy(fd);
     }
-    src->file = filemap_anon_shared();
-    src->type = VM_SHARED;
-    src->prot |= VM_PROT_IO;
-    return src->file ? 0 : -ENOMEM;
-}
-
-/** Map the frames of the /dev/mem region at `base`, `len` bytes from the
- * page offset `pgoff`, uncached, then give them the region's protection
- * `prot`. Each mapping takes a reference, which a frame the allocator counts,
- * one of the first megabyte, keeps while unmapping drops it; the others have
- * no count. 0, or -ENOMEM with no memory for a page table. */
-static int32_t mmap_devmem_fill(uintptr_t base, uintptr_t len, uint32_t pgoff, uint32_t prot)
-{
-    uint32_t i;
-
-    for (i = 0; i < len / PAGE_SIZE; i++) {
-        /* present, writable, user, write-through and cache-disabled */
-        if (map_user_frame(_curr_dir, base + i * PAGE_SIZE, (pgoff + i) * PAGE_SIZE,
-                           PTE_P | PTE_W | PTE_U | PTE_NOCACHE) != 0) {
-            return -ENOMEM;
-        }
-        frame_ref((pgoff + i) * PAGE_SIZE);
-    }
-    paging_protect_range(_curr_dir, base, base + len, prot | VM_PROT_SHARED);
     return 0;
 }
 
 /**
  * The file or shared memory a new mapping of `len` bytes maps, with the
  * region kind it makes, into `src`, whose protection and page offset the
- * caller set from its arguments: a mapping of a file (`mmap_file`), shared
- * anonymous memory (VM_SHARED), device memory (`mmap_devmem`), or NULL for
- * private anonymous memory (VM_ANON). /dev/zero maps as anonymous memory.
+ * caller set from its arguments: an object that maps itself, a device's or
+ * a driver's (`mmap_object`), a mapping of a file (`mmap_file`), shared
+ * anonymous memory (VM_SHARED), or NULL for private anonymous memory
+ * (VM_ANON). /dev/zero maps as anonymous memory.
  * Anonymous memory has its pages from its own first on, so its offset is
  * set to 0, as Linux ignores it. It may sleep, finding a file's path.
  */
@@ -6239,8 +6227,8 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
         if (!e) {
             return -EBADF;
         }
-        if (devfs_rdev(e) == ((1u << 8) | 1u)) { /* /dev/mem, 1:1 */
-            return mmap_devmem(flags, len, src);
+        if (e->ops && e->ops->mmap) {
+            return mmap_object(e, fd, shared, len, src);
         }
         if (devfs_rdev(e) != ((1u << 8) | 5u)) { /* /dev/zero, 1:5, maps as anonymous memory */
             return mmap_file(e, fd, shared, src);
@@ -6294,9 +6282,9 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
 
 /**
  * Put the region `src` describes, `len` bytes, where `mmap_place` finds for
- * `addr` and `flags`, replacing what a MAP_FIXED range held, and map a
- * /dev/mem region's frames at once. The region takes its own reference to
- * the file, and the caller's is put here. Returns the address, or -errno.
+ * `addr` and `flags`, replacing what a MAP_FIXED range held. The region
+ * takes its own reference to the file, and the caller's is put here.
+ * Returns the address, or -errno.
  * Under MAP_FIXED the two entries that a split in the removal and the new
  * region take are reserved before the old mapping is removed, so that a
  * failure leaves the old mapping in place.
@@ -6320,11 +6308,6 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
         vm_insert_file(vm, base, base + len, src->prot, src->type, src->file, src->pgoff) != 0) {
         rc = -ENOMEM;
         vma_exhausted("mmap");
-    } else if (rc == 0 && (src->prot & VM_PROT_IO) &&
-               mmap_devmem_fill(base, len, src->pgoff, src->prot) != 0) {
-        vm_remove(vm, base, base + len);
-        unmap_user_range(_curr_dir, base, base + len);
-        rc = -ENOMEM;
     }
     vm_file_put(src->file);
     vm_file_reap();
@@ -6342,15 +6325,17 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
  * base address, or -errno.
  *
  * What is mapped is `mmap_backing`'s: anonymous memory, private or shared, a
- * file, private or shared, or /dev/mem; where it goes is `mmap_place`'s. The
- * backing is found first, since finding it may sleep, and the place after, so
+ * file, private or shared, or an object that maps itself, such as /dev/mem;
+ * where it goes is `mmap_place`'s. The backing is found first, since
+ * finding it may sleep, and the place after, so
  * that nothing sleeps between the checks on the range and the insertion: a
  * thread sharing the address space cannot map the range meanwhile, and
  * MAP_FIXED_NOREPLACE cannot replace what it put there. MAP_FIXED replaces
  * whatever the range held. Pages are backed on first touch: zeroed, read from
  * the file, or the shared page itself; with MAP_POPULATE, unless
  * MAP_NONBLOCK is given too, or with MAP_LOCKED, they are backed before the
- * call returns, as far as memory allows (`vm_populate`).
+ * call returns, as far as memory allows (`vm_populate`); a device's pages
+ * are always backed on first touch.
  */
 long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
                      unsigned long pgoff)
@@ -6767,6 +6752,7 @@ long sys_mremap(isr_params_t *params)
 #define MADV_FREE            8
 #define MADV_REMOVE          9
 #define MADV_DONTFORK        10
+#define MADV_DOFORK          11
 #define MADV_DONTNEED_LOCKED 24
 #define MADV_COLLAPSE        25
 
@@ -6789,9 +6775,12 @@ static int madvise_known(uint32_t advice)
  * pages go: a private anonymous page reads as zeros again, a private page of a
  * file reads the file again, and a shared page reads what the shared memory
  * holds. Those three are EINVAL over device memory, which has no pages to read
- * again, as on Linux for VM_PFNMAP. Any other advice `madvise_known` takes
- * changes nothing, and the rest is EINVAL, as Linux refuses an advice it does
- * not define. A range with a page in no region is ENOMEM, as in Linux. A range
+ * again, as on Linux for VM_PFNMAP. MADV_DONTFORK marks the regions so that a
+ * fork's child does not get them, and MADV_DOFORK clears the mark; DOFORK is
+ * EINVAL over device memory, as on Linux for VM_IO, and either is ENOMEM
+ * when a region cannot be split. Any other advice `madvise_known` takes changes
+ * nothing, and the rest is EINVAL, as Linux refuses an advice it does not
+ * define. A range with a page in no region is ENOMEM, as in Linux. A range
  * that runs past user space is EINVAL, judged by the length as given: a length
  * within a page of 4 GiB rounds up to 0, which would pass for an empty range.
  */
@@ -6799,11 +6788,13 @@ long sys_madvise(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t advice = (uint32_t)SC_ARG(params, 2);
-    uintptr_t len;
+    vm_space_t *vm;
+    uintptr_t len, at;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
+    vm = &current_proc->mm->vm;
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
         SC_ARG(params, 1) > USER_ADDR_MAX - addr || !madvise_known(advice)) {
         return -EINVAL;
@@ -6812,17 +6803,24 @@ long sys_madvise(isr_params_t *params)
     if (len == 0) {
         return 0;
     }
-    if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
+    if (vm_covered(vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
-    if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
-        uintptr_t at;
-
-        for (at = addr; at < addr + len; at = vm_find(&current_proc->mm->vm, at)->end) {
-            if (vm_find(&current_proc->mm->vm, at)->prot & VM_PROT_IO) {
+    if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE ||
+        advice == MADV_DOFORK) {
+        for (at = addr; at < addr + len; at = vm_find(vm, at)->end) {
+            if (vm_find(vm, at)->prot & VM_PROT_IO) {
                 return -EINVAL;
             }
         }
+    }
+    if (advice == MADV_DONTFORK || advice == MADV_DOFORK) {
+        if (vm_advise(vm, addr, addr + len, advice == MADV_DONTFORK ? VM_PROT_DONTFORK : 0u,
+                      advice == MADV_DOFORK ? VM_PROT_DONTFORK : 0u) != 0) {
+            vma_exhausted("madvise");
+            return -ENOMEM;
+        }
+    } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
         unmap_user_range(_curr_dir, addr, addr + len);
     }
     return 0;

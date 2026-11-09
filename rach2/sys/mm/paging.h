@@ -107,7 +107,9 @@ struct mm;
  * both, so that the first write on either side takes a copy of its own; a
  * read-only page is shared as it is, and a write to it still faults; a page
  * of a shared region keeps its rights in both, so that a store is seen by
- * both. Returns 0, or -1 when a page table of the child cannot be had.
+ * both. A region marked VM_PROT_DONTFORK is passed over, since the child
+ * does not get it (`vm_copy`). Returns 0, or -1 when a page table of the
+ * child cannot be had.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child);
 
@@ -278,6 +280,16 @@ void free_user_pages(page_dir_t *dir);
  * and a brk that shrinks the heap call it.
  */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end);
+
+/**
+ * Unmap, in every address space, the pages of the device object `obj`
+ * (`vm_device_map`) from its page `pgoff` for `count` pages, as Linux's
+ * unmap_mapping_range does: a driver calls it when a page moves, when the
+ * object frees it, and when the device goes. The regions stay, and the next
+ * access to a page faults to the object's `page` again, which maps the page
+ * where it is now or, with -1, raises SIGBUS. It does not sleep.
+ */
+void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count);
 
 /**
  * Move the entries of [from, from + len) in `dir` to [to, to + len), for

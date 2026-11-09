@@ -341,6 +341,11 @@ void arch_dma_fence(void);
  * the caller has not tracked one by one. */
 void arch_dma_flush_all(void);
 
+/** The bits of a page table entry that map a page write-combining: PTE_WC
+ * where the boot processor's page attribute table gives the type, and
+ * uncached bits where it does not (arch/x86/pat.c on a PC). */
+pte_t arch_pte_wc(void);
+
 /* The two calls `drm_start` (sys/drm/drm.h) makes of `arch_drm_probe`: the
  * platform's native display drivers first, which take the firmware's
  * framebuffer from its driver, then that driver on what they left. */
