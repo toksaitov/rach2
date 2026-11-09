@@ -343,17 +343,19 @@ int eventfd_hook_add(struct eventfd *ev, struct eventfd_hook *h)
     return r;
 }
 
-void eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt)
+int eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt)
 {
     struct eventfd_hook **p;
     uint64_t value = 0;
     uint32_t flags;
+    int found = 0;
 
     flags = spin_lock_irqsave(&ev->lock);
     for (p = &ev->hooks; *p; p = &(*p)->next) {
         if (*p == h) {
             *p = h->next;
             h->next = NULL;
+            found = 1;
             break;
         }
     }
@@ -365,4 +367,5 @@ void eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *c
     if (value != 0) {
         wq_wake(&ev->wq, WQ_ROOM);
     }
+    return found;
 }

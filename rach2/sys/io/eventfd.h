@@ -60,10 +60,11 @@ void eventfd_signal(struct eventfd *ev);
  * `h` is not added and its hangup runs at once: -1. */
 int eventfd_hook_add(struct eventfd *ev, struct eventfd_hook *h);
 
-/** Take `h` off the counter's list; nothing for a hook not on it. The
- * counter's value, taken as a read would, goes into `*cnt` unless NULL,
- * as Linux's eventfd_ctx_remove_wait_queue. */
-void eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt);
+/** Take `h` off the counter's list: 1 when it was on it, 0 when it was
+ * not, as after the last close, whose hangup of `h` then runs or has run.
+ * The counter's value, taken as a read would, goes into `*cnt` unless
+ * NULL, as Linux's eventfd_ctx_remove_wait_queue. */
+int eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt);
 
 /** eventfd2(2) takes the initial value and the flags EFD_CLOEXEC,
  * EFD_NONBLOCK and EFD_SEMAPHORE, and eventfd(2) the value alone. Returns
