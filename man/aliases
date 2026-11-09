@@ -542,6 +542,7 @@ framefail 4 bootlog
 tty 4 console
 ptmx 4 console
 pts 4 console
+dri 4 drm
 bootpart 4 disk
 grubcore 4 disk
 loop-control 4 loop
