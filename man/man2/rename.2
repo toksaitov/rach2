@@ -170,7 +170,12 @@ and
 .Pa /proc
 namespaces are read-only: a rename in either returns
 .Er EROFS
-after the parent write checks.
+after the parent write checks, except a rename of a directory or link made
+under
+.Pa /dev
+to a name that no device has, within the directories that
+.Xr mkdir 2
+names.
 On the KRFFS boot root, replacing a different file that backs an attached
 loop device returns
 .Er EBUSY .

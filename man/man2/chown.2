@@ -146,6 +146,9 @@ A pseudo-terminal slave under
 .Pa /dev/pts
 stores its own owner and group, but changing either requires effective
 user ID 0.
+A directory or link made under
+.Pa /dev
+stores its owner and group as a file does.
 Other synthetic objects under
 .Pa /dev
 and

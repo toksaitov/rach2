@@ -4,7 +4,7 @@
  * the loop devices of rach2/sys/block/loop.c and the file mappings of
  * rach2/sys/mm/filemap.c, on a model mounted type and a model KRFFS root.
  *
- * host-deps: tests/host/compat/vfs_name_none.c
+ * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
@@ -1714,6 +1714,14 @@ const struct synth_dev_dir *synth_dev_dir_at(int n)
     (void)n;
     check(0, "unexpected directory of /dev");
     return NULL;
+}
+
+/** No row names a directory of /dev's table: -1. */
+int synth_dev_dir_find(const char *name, int len)
+{
+    (void)name;
+    (void)len;
+    return -1;
 }
 
 /** Fail the row: no row names a synthetic directory. */

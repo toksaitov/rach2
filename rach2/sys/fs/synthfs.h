@@ -76,6 +76,7 @@ enum vnode_kind {
     VNODE_PROC_ACPI_CALL,    /* /proc/acpi/call: an ACPI method evaluated by its path */
     VNODE_PROC_FS_DIR,       /* /proc/fs: the directory of lockwait */
     VNODE_PROC_FS_LOCKWAIT,  /* /proc/fs/lockwait: each kind of lock's longest disk wait */
+    VNODE_DEV_MADE,          /* a directory or link root made under /dev, by `syskey` (devtree.h) */
     VNODE_ENOENT,            /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR            /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -186,7 +187,8 @@ struct vpath {
     int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
     int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
     int sysent;    /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
-    int syskey;    /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`) */
+    int syskey;    /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
+                    * VNODE_DEV_MADE: the entry's id (devtree.h) */
     int sysreg;    /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
 };
 
@@ -229,9 +231,10 @@ struct synth_dir {
  * `kind` with the coordinates struct synth_dir has: `pid`, and `tid` when it
  * is not 0, for a process's or a thread's directory; the entry in `pid` for
  * a directory of /proc/sys; the node and the key in `pid` and `tid` for one
- * of /sys; the row in `pid` for a directory of /dev's table. An unknown
- * kind gives "/". The path is NUL-terminated and cut to
- * fit; nothing is written when `cap` is not positive.
+ * of /sys; the row in `pid` for a directory of /dev's table, and the id for
+ * one made under /dev (`devtree_path`). An unknown kind gives "/". The path
+ * is NUL-terminated and cut to fit; nothing is written when `cap` is not
+ * positive.
  */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 

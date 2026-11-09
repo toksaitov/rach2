@@ -134,10 +134,20 @@ effective user ID 0.
 Write permission on the entry alone does not permit removal.
 The parent write check precedes the sticky check.
 .Pp
-Neither call changes the synthetic namespaces under
-.Pa /dev
-and
-.Pa /proc .
+Neither call changes
+.Pa /proc ,
+.Pa /sys ,
+or the devices of
+.Pa /dev ,
+which return
+.Er EROFS .
+.Pa /dev ,
+.Pa /dev/input ,
+.Pa /dev/dri ,
+and the directories made in them take new directories, which
+.Fn rmdir
+removes, under the write permission of the parent, as Linux's devtmpfs
+does; the first three are root's.
 Changes on a read-only mount return
 .Er EROFS .
 A name that exists, in those namespaces or on a read-only mount, returns

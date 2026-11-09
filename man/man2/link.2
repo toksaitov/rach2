@@ -176,7 +176,13 @@ A mount point is busy, and the synthetic
 .Pa /dev
 and
 .Pa /proc
-namespaces are read-only.
+namespaces are read-only, but for the directories and links made under
+.Pa /dev ,
+which
+.Fn unlink
+removes as
+.Xr mkdir 2
+says.
 .Pp
 The i386 system call numbers are 9 for
 .Nm link ,

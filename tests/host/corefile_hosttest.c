@@ -2,7 +2,7 @@
  * corefile_hosttest.c: the core file `fs_core_file` writes, its descriptor
  * and its limit, and the limit of an append that brings its buffer in again.
  *
- * host-deps: tests/host/compat/vfs_name_none.c
+ * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/nodelock_none.c
@@ -898,6 +898,14 @@ const struct synth_dev_dir *synth_dev_dir_at(int n)
 {
     (void)n;
     return NULL;
+}
+
+/** No row names a directory of /dev's table: -1. */
+int synth_dev_dir_find(const char *name, int len)
+{
+    (void)name;
+    (void)len;
+    return -1;
 }
 
 /** No row has a descriptor on a directory of /dev, /proc or /sys: "/". */

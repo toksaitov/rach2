@@ -135,6 +135,7 @@ C_SRC_SHARED = kernel.c \
     sys/fs/tmpfs.c \
     sys/fs/pathbuf.c \
     sys/fs/devfs.c \
+    sys/fs/devtree.c \
     sys/fs/synthfs.c \
     sys/fs/sysfs.c \
     sys/fs/procfs.c \

@@ -47,6 +47,7 @@
 #include "fs/fat32.h"
 #include "fs/exfat.h"
 #include "fs/devfs.h"
+#include "fs/devtree.h"
 #include "fs/synthfs.h"
 #include "fs/sysfs.h"
 #include "fs/vfs.h"
@@ -2473,6 +2474,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
         return synth_open_dir(vp, flags);
+    case VNODE_DEV_MADE:
+        return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(vp, flags) : -ENOENT;
     case VNODE_ENOTDIR:
         return -ENOTDIR;
     case VNODE_PROC_FD_LINK:
@@ -2508,7 +2511,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
  * to those who may trace it (`procfs_may_read`). A process, or a device of
  * /sys, that is gone is -ENOENT, as is a directory of /dev that is absent
  * (`devfs_subdir_present`), and a record the heap has no room for is
- * -ENFILE.
+ * -ENFILE. A directory made under /dev is one the caller found there.
  */
 static int32_t synth_open_dir(const struct vpath *vp, int flags)
 {
@@ -2545,6 +2548,8 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
     } else if (vp->kind == VNODE_DEV_SUBDIR) {
         sd = synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
+    } else if (vp->kind == VNODE_DEV_MADE) {
+        sd = synth_dir_alloc(VNODE_DEV_MADE, vp->syskey, 0);
     } else {
         sd = synth_dir_alloc(
             vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : (int)pid_seen((uint32_t)pid),
@@ -5887,6 +5892,148 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
 }
 
+/** The entry root made under /dev (devtree.h) that the descriptor `e` is
+ * open on, a directory or an O_PATH descriptor of one, or 0. */
+static int synth_fd_made(const fd_entry_t *e)
+{
+    if (e->type == FD_TYPE_SYNTH_DIR && e->priv &&
+        ((const struct synth_dir *)e->priv)->kind == VNODE_DEV_MADE) {
+        return ((const struct synth_dir *)e->priv)->pid;
+    }
+    if (e->type == FD_TYPE_SYNTH_PATH && e->priv &&
+        ((const struct vpath *)e->priv)->kind == VNODE_DEV_MADE) {
+        return ((const struct vpath *)e->priv)->syskey;
+    }
+    return 0;
+}
+
+/** Whether the synthetic node `vp` is a directory: one of its kind's
+ * (`synth_kind_is_dir`), or one root made under /dev that is still there. */
+static int synth_vp_is_dir(const struct vpath *vp)
+{
+    return synth_kind_is_dir(vp->kind) ||
+           (vp->kind == VNODE_DEV_MADE && devtree_is_dir(vp->syskey) == 1);
+}
+
+/** The parent (devtree.h) that the synthetic directory `parent` holds is to
+ * an entry root makes in it: /dev, a directory of its table that is there,
+ * or a directory made there. DEVTREE_NONE for any other node, /dev/pts,
+ * /proc and /sys among them, and for a mount made read-only. */
+static int synth_dev_parent(const struct vfs_ref *parent)
+{
+    const struct vpath *vp = vfs_synth_vpath(parent->mnt, parent->node);
+
+    if (!vp || (parent->mnt->flags & VFS_MS_RDONLY)) {
+        return DEVTREE_NONE;
+    }
+    if (vp->kind == VNODE_DEV_DIR) {
+        return DEVTREE_ROOT;
+    }
+    if (vp->kind == VNODE_DEV_SUBDIR && devfs_subdir_present(vp->devdir)) {
+        return DEVTREE_ROW(vp->devdir);
+    }
+    if (vp->kind == VNODE_DEV_MADE && devtree_is_dir(vp->syskey) == 1) {
+        return vp->syskey;
+    }
+    return DEVTREE_NONE;
+}
+
+/**
+ * Make `leaf` in the synthetic directory `parent`, as mkdir(2) and
+ * symlink(2) do under /dev: a directory with the permission bits of `mode`
+ * when `target` is NULL, else a link to the `target` text, owned by the
+ * caller's effective ids (devtree.h). The caller has refused a name the
+ * directory has; a directory of /dev's table that is absent now is -EEXIST
+ * too, since its name is the table's. 0, -EROFS for a directory that takes
+ * no entry
+ * (`synth_dev_parent`), the write permission's error, or `devtree_make`'s.
+ */
+static int32_t synth_dev_make(const struct vfs_ref *parent, const char *leaf, uint32_t mode,
+                              const char *target)
+{
+    int where = synth_dev_parent(parent);
+    int32_t rc;
+
+    if (where == DEVTREE_NONE) {
+        return -EROFS;
+    }
+    if (where == DEVTREE_ROOT && synth_dev_dir_find(leaf, (int)k_strlen(leaf)) >= 0) {
+        return -EEXIST; /* a directory of the table, absent now */
+    }
+    rc = cred_access_ref(parent, CRED_W, 0);
+    if (rc == 0) {
+        rc = devtree_make(where, leaf, mode, target, current_proc->euid, current_proc->egid);
+    }
+    return rc < 0 ? rc : 0;
+}
+
+/**
+ * The answer of unlink(2) to `leaf/`, `leaf` an entry root made in the
+ * synthetic directory `parent`, for which it removes nothing: -EISDIR for a
+ * directory, -ENOTDIR for a link, which Linux judges by the name itself, or
+ * -EROFS for a name that is no such entry.
+ */
+static int32_t synth_dev_slash(const struct vfs_ref *parent, const char *leaf)
+{
+    int where = synth_dev_parent(parent);
+    int id = where == DEVTREE_NONE ? 0 : devtree_child(where, leaf, (uint32_t)k_strlen(leaf));
+
+    return !id ? -EROFS : devtree_is_dir(id) == 1 ? -EISDIR : -ENOTDIR;
+}
+
+/* The one renameat2 flag this kernel takes: do not replace the new name. */
+#define RENAME_NOREPLACE 1
+/* Not a renameat2 flag: a slash after either name, for `synth_dev_rename`. */
+#define RENAME_SLASH     0x80000000u
+
+static int32_t synth_name_exists(const char *path);
+
+/**
+ * Rename `oleaf`, an entry root made in the synthetic directory `opar`, to
+ * `nleaf` in `npar`, the last name of `new_path`, both directories that
+ * take entries (`synth_dev_parent`), with rename(2)'s rules
+ * (`devtree_rename`): RENAME_NOREPLACE in `flags` keeps an entry there, and
+ * RENAME_SLASH, a slash after either name, asks for a directory. The caller
+ * has checked the write permission of both. 0; -EROFS for a name that is no
+ * such entry, a device among them, or a new name that another kind of entry
+ * of /dev has; -ENOTDIR for a link under RENAME_SLASH; or `devtree_rename`'s.
+ */
+static int32_t synth_dev_rename(const struct vfs_ref *opar, const char *oleaf,
+                                const struct vfs_ref *npar, const char *nleaf, const char *new_path,
+                                uint32_t flags)
+{
+    int from = synth_dev_parent(opar), to = synth_dev_parent(npar);
+    int id = from == DEVTREE_NONE ? 0 : devtree_child(from, oleaf, (uint32_t)k_strlen(oleaf));
+
+    if (!id || to == DEVTREE_NONE ||
+        (!devtree_child(to, nleaf, (uint32_t)k_strlen(nleaf)) &&
+         synth_name_exists(new_path) == -EEXIST)) {
+        return -EROFS;
+    }
+    if ((flags & RENAME_SLASH) && devtree_is_dir(id) != 1) {
+        return -ENOTDIR;
+    }
+    return devtree_rename(from, oleaf, to, nleaf, (flags & RENAME_NOREPLACE) != 0);
+}
+
+/**
+ * Remove `leaf`, an entry root made, from the synthetic directory `parent`,
+ * as unlink(2) does when `dir` is 0 and rmdir(2) when it is 1. 0; -EROFS for
+ * a name that is not such an entry, a device among them; the write
+ * permission's error, or `devtree_remove`'s.
+ */
+static int32_t synth_dev_remove(const struct vfs_ref *parent, const char *leaf, int dir)
+{
+    int where = synth_dev_parent(parent);
+    int32_t rc;
+
+    if (where == DEVTREE_NONE || !devtree_child(where, leaf, (uint32_t)k_strlen(leaf))) {
+        return -EROFS;
+    }
+    rc = cred_access_ref(parent, CRED_W, 0);
+    return rc != 0 ? rc : devtree_remove(where, leaf, dir);
+}
+
 /**
  * Make `path`, the canonical path of the directory at (`mnt`, `node`), the
  * working directory, and hold the mount it is on: `vfs_cwd_set` takes no hold
@@ -5944,6 +6091,45 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
 }
 
 /**
+ * Write into the path page `path` the canonical path of the synthetic
+ * directory `vp`, for `do_chdir`: a /sys directory by its node and key, any
+ * other by its kind and its coordinates, with /proc/self resolved to the
+ * caller's pid so that a later relative name classifies right. Returns 0;
+ * -ENOENT for a /proc directory whose process has exited, a /sys directory
+ * whose device is gone or a directory made under /dev that is removed; or
+ * -ENOTDIR for anything that is no directory.
+ */
+static int32_t synth_chdir_path(const struct vpath *vp, char *path)
+{
+    int at = vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent
+             : vp->kind == VNODE_DEV_SUBDIR ? vp->devdir
+             : vp->kind == VNODE_DEV_MADE   ? vp->syskey
+                                            : 0;
+
+    if (synth_dir_of_proc(vp->kind)) {
+        if (procfs_resolve_id(vp) < 0) {
+            return -ENOENT;
+        }
+        at = procfs_resolve_pid(vp->pid);
+    }
+    if (vp->kind == VNODE_DEV_MADE && devtree_is_dir(vp->syskey) < 0) {
+        return -ENOENT;
+    }
+    if (!synth_vp_is_dir(vp)) {
+        return -ENOTDIR;
+    }
+    if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
+        if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
+            return -ENOENT;
+        }
+        synth_sys_path(vp->sysent, vp->syskey, path, VFS_PATH_MAX);
+    } else {
+        synth_dir_path(vp->kind, at, vp->tid, path, VFS_PATH_MAX);
+    }
+    return 0;
+}
+
+/**
  * Change the working directory to `path`, an absolute canonical path in a
  * path page, which this may write over.
  *
@@ -5996,28 +6182,10 @@ static int32_t do_chdir(char *path)
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (svp) {
         struct vpath vp = *svp;
-        int rpid = 0;
 
         vfs_ref_release(&ref);
-        if (synth_dir_of_proc(vp.kind)) {
-            if (procfs_resolve_id(&vp) < 0) {
-                return -ENOENT;
-            }
-            rpid = procfs_resolve_pid(vp.pid);
-        }
-        if (!synth_kind_is_dir(vp.kind)) {
-            return -ENOTDIR;
-        }
-        if (vp.kind == VNODE_SYS_DIR || vp.kind == VNODE_SYS_LINK) {
-            if (SYSFS_KEYED(vp.sysent) && !sysfs_device_exists(vp.sysent, vp.syskey)) {
-                return -ENOENT;
-            }
-            synth_sys_path(vp.sysent, vp.syskey, path, VFS_PATH_MAX);
-        } else {
-            synth_dir_path(vp.kind, vp.kind == VNODE_PROC_SYS_DIR ? vp.sysent : rpid, vp.tid, path,
-                           VFS_PATH_MAX);
-        }
-        return cwd_enter(path, NULL, NULL);
+        rc = synth_chdir_path(&vp, path);
+        return rc != 0 ? rc : cwd_enter(path, NULL, NULL);
     }
     node = ref.node;
     if (!mnt_is_root(ref.mnt)) {
@@ -6163,7 +6331,7 @@ static int32_t root_check(const struct vfs_ref *ref)
     int32_t rc = 0;
 
     if (vp) {
-        rc = synth_kind_is_dir(vp->kind) ? 0 : -ENOTDIR;
+        rc = synth_vp_is_dir(vp) ? 0 : -ENOTDIR;
     } else if (mnt_is_root(ref->mnt)) {
         rc = (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) ? 0 : -ENOTDIR;
         if (rc == 0) {
@@ -6708,17 +6876,45 @@ static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
  * comparison of (st_dev, st_ino) ttyname makes matches. */
 #define PTS_INO_BASE 0x1000u
 
-/** Fill `kst` for row `row` of /dev's directories: a directory of /dev's
- * mount with the row's inode, or -ENOENT while it is absent
- * (`devfs_subdir_present`). */
-static int32_t synth_stat_dev_dir(int row, struct kstat *kst)
+/** Fill `kst` for an entry root made under /dev, `id` (devtree.h): its
+ * own type, mode, owner, size and times; or -ENOENT once it is removed. */
+static int32_t synth_stat_made(int id, struct kstat *kst)
 {
-    if (!devfs_subdir_present(row)) {
+    struct devtree_attr a;
+
+    if (devtree_attr(id, &a) != 0) {
         return -ENOENT;
     }
+    kst->st_mode = a.mode;
+    kst->st_ino = a.ino;
+    kst->st_nlink = a.nlink;
+    kst->st_uid = a.uid;
+    kst->st_gid = a.gid;
+    kst->st_size = (int64_t)a.size;
+    kst->st_atime = a.atime;
+    kst->st_atime_nsec = (uint32_t)a.atime_ns;
+    kst->st_mtime = a.mtime;
+    kst->st_mtime_nsec = (uint32_t)a.mtime_ns;
+    kst->st_ctime = a.ctime;
+    kst->st_ctime_nsec = (uint32_t)a.ctime_ns;
+    return 0;
+}
+
+/** Fill `kst` for a directory of /dev that `vp` names, a row of its table
+ * or an entry root made: a directory of /dev's mount with the row's inode,
+ * or -ENOENT while the row is absent (`devfs_subdir_present`); a made
+ * entry as `synth_stat_made` gives it. */
+static int32_t synth_stat_dev_dir(const struct vpath *vp, struct kstat *kst)
+{
     kst->st_dev = DEVFS_FSID;
+    if (vp->kind == VNODE_DEV_MADE) {
+        return synth_stat_made(vp->syskey, kst);
+    }
+    if (!devfs_subdir_present(vp->devdir)) {
+        return -ENOENT;
+    }
     kst->st_mode = S_IFDIR | 0755;
-    kst->st_ino = synth_dev_dir_at(row)->ino;
+    kst->st_ino = synth_dev_dir_at(vp->devdir)->ino;
     return 0;
 }
 
@@ -7028,7 +7224,8 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_ino = PTS_INO_DIR;
         return 0;
     case VNODE_DEV_SUBDIR:
-        return synth_stat_dev_dir(vp->devdir, kst);
+    case VNODE_DEV_MADE:
+        return synth_stat_dev_dir(vp, kst);
     case VNODE_PTS: {
         /* Linux's major for a Unix98 pty slave is 136. */
         struct pty *pt = pty_get(vp->pts_index);
@@ -7466,7 +7663,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
         return -ENOMEM;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
-    if (!svp) {
+    if (!svp || svp->kind == VNODE_DEV_MADE) {
         n = ref.mnt->type->ops->readlink
                 ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, VFS_PATH_MAX)
                 : -EINVAL;
@@ -7586,7 +7783,8 @@ long sys_readlinkat(isr_params_t *params)
 }
 
 /** Whether the synthetic node `vp` is a link when not followed, by the mode
- * `synth_stat` gives it: a /proc link, a /sys device link or /dev/log. */
+ * `synth_stat` gives it: a /proc link, a /sys device link, /dev/log or a
+ * link made under /dev. */
 static int synth_is_link(const struct vpath *vp)
 {
     struct kstat lst;
@@ -7807,7 +8005,7 @@ static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_moun
 static uint32_t statfs_magic_for_kind(int kind)
 {
     if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR || kind == VNODE_PTS ||
-        kind == VNODE_DEV_LINK || kind == VNODE_DEV_SUBDIR) {
+        kind == VNODE_DEV_LINK || kind == VNODE_DEV_SUBDIR || kind == VNODE_DEV_MADE) {
         return STATFS_MAGIC_DEVFS;
     }
     if (kind == VNODE_KRFFS) {
@@ -8845,9 +9043,10 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
  * and the store are one hold of the mount's namespace lock. A pty slave
  * (/dev/pts/N) stores the bits on the pty, its owner or a privileged caller
  * only, which dropbear does before it hands the terminal to the user;
- * -ENOENT when the pty is gone. Every other /dev, /proc or /sys node has
- * fixed metadata: a caller whose effective uid is 0 succeeds without a
- * change, and anyone else is -EPERM.
+ * -ENOENT when the pty is gone. An entry root made under /dev keeps its
+ * own (`chmod_made`). Every other /dev, /proc or /sys node has fixed
+ * metadata: a caller whose effective uid is 0 succeeds without a change,
+ * and anyone else is -EPERM.
  *
  * The walk takes the lock of the mount it ends on, where the type asks for
  * one, and the lookup, the check and the store are one hold of it: a node of
@@ -8855,6 +9054,49 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
  * lock would move, and a store made at the offset the walk found would
  * change whatever the volume put there since.
  */
+/**
+ * chmod of the entry `id` root made under /dev (devtree.h): its owner or a
+ * privileged caller sets its permission bits, an unprivileged one losing
+ * setgid on an entry whose group is not one of the caller's. 0, -ENOENT for
+ * an entry that is gone, or -EPERM.
+ */
+static int32_t chmod_made(int id, uint32_t mode)
+{
+    struct devtree_attr a;
+
+    if (devtree_attr(id, &a) != 0) {
+        return -ENOENT;
+    }
+    if (!cred_privileged() && current_proc->euid != a.uid) {
+        return -EPERM;
+    }
+    if (!cred_privileged() && !cred_in_group(a.gid)) {
+        mode &= ~02000u;
+    }
+    return devtree_setattr(id, mode & 07777u, (uint32_t)-1, (uint32_t)-1);
+}
+
+/**
+ * chown of the entry `id` root made under /dev: a new owner takes a
+ * privileged caller, and a new group a privileged caller or the owner
+ * naming one of its groups, as on Linux; -1 leaves a field. 0, -ENOENT for
+ * an entry that is gone, or -EPERM.
+ */
+static int32_t chown_made(int id, uint32_t uid, uint32_t gid)
+{
+    struct devtree_attr a;
+
+    if (devtree_attr(id, &a) != 0) {
+        return -ENOENT;
+    }
+    if (!cred_privileged() && ((uid != (uint32_t)-1 && uid != a.uid) ||
+                               (gid != (uint32_t)-1 && gid != a.gid &&
+                                (current_proc->euid != a.uid || !cred_in_group(gid))))) {
+        return -EPERM;
+    }
+    return devtree_setattr(id, (uint32_t)-1, uid, gid);
+}
+
 static int32_t do_chmod(const char *name, uint32_t mode, int dir)
 {
     struct vpath vp;
@@ -8882,6 +9124,9 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir)
             }
             pt->mode = (uint16_t)(mode & 0777u);
             return 0;
+        }
+        if (vp.kind == VNODE_DEV_MADE) {
+            return chmod_made(vp.syskey, mode);
         }
         return current_proc->euid == 0 ? 0 : -EPERM; /* fixed metadata root owns */
     }
@@ -8979,12 +9224,16 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
  * chown of the /dev or /proc node `vp`, for the path forms and for a
  * descriptor opened with O_PATH on one. A pty slave keeps its owner and group
  * on the pty, and changing either takes root, since the login server that
- * chowns a pty is root. Every other node has fixed root ownership: a request
+ * chowns a pty is root. An entry root made under /dev keeps its own
+ * (`chown_made`). Every other node has fixed root ownership: a request
  * for 0 or -1 in each field succeeds and changes nothing, and any other is
  * -EPERM.
  */
 static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 {
+    if (vp->kind == VNODE_DEV_MADE) {
+        return chown_made(vp->syskey, uid, gid);
+    }
     if (vp->kind == VNODE_PTS) {
         struct pty *pt = pty_get(vp->pts_index);
         int uid_changes;
@@ -9143,6 +9392,32 @@ long sys_fchmodat(isr_params_t *params)
  * change, and anyone else is -EPERM. A descriptor that is not open, or was
  * opened with O_PATH, is -EBADF, as on Linux.
  */
+/**
+ * fchmod of the descriptor `entry` when it is on no file of a file system:
+ * a pty slave stores the bits on the pty under the owner-or-root rule
+ * (-EBADF when the pty is gone), a directory made under /dev on the entry
+ * (`chmod_made`), and any other has fixed metadata, which root's request
+ * leaves as it is and anyone else's is -EPERM.
+ */
+static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
+{
+    if (synth_fd_made(entry)) {
+        return chmod_made(synth_fd_made(entry), mode);
+    }
+    if (entry->type == FD_TYPE_PTS) {
+        struct pty *pt = pty_get(pty_slave_index(entry));
+        if (!pt) {
+            return -EBADF;
+        }
+        if (!cred_privileged() && current_proc->euid != pt->uid) {
+            return -EPERM;
+        }
+        pt->mode = (uint16_t)(mode & 0777u);
+        return 0;
+    }
+    return current_proc->euid == 0 ? 0 : -EPERM;
+}
+
 long sys_fchmod(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
@@ -9190,18 +9465,7 @@ long sys_fchmod(isr_params_t *params)
         }
         return rc;
     }
-    if (entry->type == FD_TYPE_PTS) {
-        struct pty *pt = pty_get(pty_slave_index(entry));
-        if (!pt) {
-            return -EBADF;
-        }
-        if (!cred_privileged() && current_proc->euid != pt->uid) {
-            return -EPERM;
-        }
-        pt->mode = (uint16_t)(mode & 0777u);
-        return 0;
-    }
-    return current_proc->euid == 0 ? 0 : -EPERM;
+    return fchmod_synth(entry, mode);
 }
 
 /**
@@ -9360,21 +9624,56 @@ long sys_fchown(isr_params_t *params)
 }
 
 /**
- * chown of the file descriptor `entry` refers to, for fchown(2) and for
- * fchownat(2) with AT_EMPTY_PATH, which takes an O_PATH descriptor too: a
- * KRFFS node or a node of a mounted type by the rules of the path forms, a
- * /dev or /proc node opened with O_PATH by `chown_synth`, a pty slave on the
- * pty, -EBADF when the pty is gone, and every other kind with fixed root
- * ownership: a request that changes nothing succeeds, and any other is
- * -EPERM. On a mounted type the read, the plan and the store are one step
- * under the mount's namespace lock, as in `do_chown`, and for the same
- * reason.
+ * chown_fd of a descriptor on no file of a file system: a /dev or /proc
+ * node opened with O_PATH by `chown_synth`, a directory made under /dev by
+ * `chown_made`, a pty slave on the pty, -EBADF when the pty is gone, and
+ * every other kind with fixed root ownership.
  */
-static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
+static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
     if (entry->type == FD_TYPE_SYNTH_PATH) {
         return entry->priv ? chown_synth((const struct vpath *)entry->priv, uid, gid) : -EBADF;
     }
+    if (synth_fd_made(entry)) {
+        return chown_made(synth_fd_made(entry), uid, gid);
+    }
+    if (entry->type == FD_TYPE_PTS) {
+        struct pty *pt = pty_get(pty_slave_index(entry));
+        int uid_changes;
+        int gid_changes;
+        if (!pt) {
+            return -EBADF;
+        }
+        uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
+        gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
+        if ((uid_changes || gid_changes) && !cred_privileged()) {
+            return -EPERM;
+        }
+        if (uid != (uint32_t)-1) {
+            pt->uid = uid;
+        }
+        if (gid != (uint32_t)-1) {
+            pt->gid = gid;
+        }
+        return 0;
+    }
+    if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
+        return -EPERM;
+    }
+    return 0;
+}
+
+/**
+ * chown of the file descriptor `entry` refers to, for fchown(2) and for
+ * fchownat(2) with AT_EMPTY_PATH, which takes an O_PATH descriptor too: a
+ * KRFFS node or a node of a mounted type by the rules of the path forms, and
+ * any other kind as `chown_fd_synth` says; fixed root ownership takes a
+ * request that changes nothing, and any other is -EPERM. On a mounted type
+ * the read, the plan and the store are one step under the mount's namespace
+ * lock, as in `do_chown`, and for the same reason.
+ */
+static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
+{
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
         int rc = krffs_chown_node(entry->node, uid, gid);
 
@@ -9406,30 +9705,7 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         }
         return rc;
     }
-    if (entry->type == FD_TYPE_PTS) {
-        struct pty *pt = pty_get(pty_slave_index(entry));
-        int uid_changes;
-        int gid_changes;
-        if (!pt) {
-            return -EBADF;
-        }
-        uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
-        gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
-        if ((uid_changes || gid_changes) && !cred_privileged()) {
-            return -EPERM;
-        }
-        if (uid != (uint32_t)-1) {
-            pt->uid = uid;
-        }
-        if (gid != (uint32_t)-1) {
-            pt->gid = gid;
-        }
-        return 0;
-    }
-    if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
-        return -EPERM;
-    }
-    return 0;
+    return chown_fd_synth(entry, uid, gid);
 }
 
 /**
@@ -9809,8 +10085,9 @@ out:
  * negative errno: -ENOENT for an empty target, as on Linux; -EEXIST for the
  * root as the new name (`new_name_parent`); for a new name that named a
  * directory by its end, `end`, what `make_dir_end` answers; -EEXIST for a
- * new name that exists (`new_name_taken`); then -EROFS in /dev, /proc and
- * /sys and on a read-only mount, -EPERM on the KRFFS root and on a type
+ * new name that exists (`new_name_taken`); then a directory of /dev takes the
+ * link (`synth_dev_make`), and the rest of /dev, /proc and /sys and a
+ * read-only mount are -EROFS, -EPERM on the KRFFS root and on a type
  * without symbolic links, and the directory's write permission. The type
  * makes the link under the directory's lock (`dir_lock`).
  */
@@ -9835,7 +10112,12 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
         vfs_ref_release(&parent);
         return rc;
     }
-    if (vfs_synth_vpath(parent.mnt, parent.node) || (parent.mnt->flags & VFS_MS_RDONLY)) {
+    if (vfs_synth_vpath(parent.mnt, parent.node)) {
+        rc = synth_dev_make(&parent, leaf, 0777u, target);
+        vfs_ref_release(&parent);
+        return rc;
+    }
+    if (parent.mnt->flags & VFS_MS_RDONLY) {
         rc = -EROFS;
     } else if (mnt_is_root(parent.mnt) || !parent.mnt->type->ops->symlink) {
         rc = -EPERM;
@@ -12112,7 +12394,8 @@ static int32_t unlink_named(const char *path, int end)
     if (leaf_is_dot(leaf)) {
         rc = -EISDIR;
     } else if (vfs_synth_vpath(parent.mnt, parent.node)) {
-        rc = -EROFS;
+        rc = end == PATH_END_SLASH ? synth_dev_slash(&parent, leaf)
+                                   : synth_dev_remove(&parent, leaf, 0);
     } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
         rc = -EBUSY;
     } else if (mnt_is_root(vfs_mount_base(parent.mnt))) {
@@ -12282,7 +12565,8 @@ out:
  * file system, which refuses it as it refuses a full volume (ENOSPC on the
  * KRFFS root) or a failing one (EIO on a KRFFS volume). A name that exists
  * in /dev, /proc or /sys is -EEXIST too, before the -EROFS of a name that
- * does not, as on Linux. On a type that sets `file_locked` the walk holds
+ * does not, as on Linux; a directory of /dev takes a new directory
+ * (`synth_dev_make`). On a type that sets `file_locked` the walk holds
  * nothing, and the directory's own lock covers the creation alone, with the
  * permission and the mounts checked again under it (`dir_lock`), so a name
  * made meanwhile is the type's -EEXIST. Returns 0 or a negative errno.
@@ -12298,7 +12582,7 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
         return rc;
     }
     if (vfs_synth_vpath(parent->mnt, parent->node)) {
-        return -EROFS; /* nothing is created under /dev or /proc */
+        return synth_dev_make(parent, leaf, mode & 07777u & ~current_proc->fs->umask, NULL);
     }
     if (!mnt_is_root(parent->mnt)) {
         rc = cred_access_ref(parent, CRED_W, 0);
@@ -12615,8 +12899,9 @@ static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf)
  * (-ENOENT, -ENOTDIR, -EBUSY, -ENOTEMPTY). The root is -EBUSY, a last name
  * of "." -EINVAL and one of ".." -ENOTEMPTY once the walk to them is made, as
  * on Linux, whatever the directory holds. A mount point and a process's root
- * are -EBUSY, a directory in /dev, /proc or /sys -EROFS, and any path
- * -ENOENT before the root file system is mounted.
+ * are -EBUSY, a directory in /dev, /proc or /sys -EROFS but one root made
+ * under /dev (`synth_dev_remove`), and any path -ENOENT before the root file
+ * system is mounted.
  *
  * The walk keeps the parent's namespace lock, where its type takes one,
  * until the directory is gone: on the KRFFS root the use `rmdir_root_name`
@@ -12645,7 +12930,7 @@ static int32_t do_rmdir(const char *pathbuf)
     if (leaf_is_dot(leaf)) {
         rc = leaf[1] == '\0' ? -EINVAL : -ENOTEMPTY;
     } else if (vfs_synth_vpath(parent.mnt, parent.node)) {
-        rc = -EROFS;
+        rc = synth_dev_remove(&parent, leaf, 1);
     } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
                vfs_leaf_root(parent.mnt, parent.node, leaf)) {
         rc = -EBUSY;
@@ -12723,9 +13008,6 @@ long sys_unlinkat(isr_params_t *params)
     path_buf_put(path);
     return rc;
 }
-
-/* The one renameat2 flag this kernel takes: do not replace the new name. */
-#define RENAME_NOREPLACE 1
 
 /**
  * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
@@ -12988,7 +13270,9 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
                                    : cred_access_ref(&npar, CRED_W, 0);
     }
     if (rc == 0 && vfs_synth_vpath(opar.mnt, opar.node)) {
-        rc = -EROFS;
+        rc = synth_dev_rename(&opar, oleaf, &npar, nleaf, new_buf,
+                              (uint32_t)flags | (slash ? RENAME_SLASH : 0u));
+        goto out;
     }
     if (rc != 0) {
         goto out;
@@ -14141,6 +14425,41 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
     return 1;
 }
 
+/* The room for the name of a synthetic directory's entry, the NUL with it. */
+#define SYNTH_DIRENT_NAME 256
+
+/**
+ * The `n`th entry of /dev past "." and "..", or of the directory of its
+ * table in `row` when `row` is not negative, or of the directory made under
+ * /dev that `made` is when it is above 0: first the entries
+ * `synth_dev_dirent` or `synth_dev_dir_dirent` gives, then those root made
+ * there (`devtree_dirent`). 1, or 0 past the last.
+ */
+static int synth_dev_any_dirent(int row, int made, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    const char *mn;
+    uint32_t mino;
+    int table = 0, parent = made > 0 ? made : row >= 0 ? DEVTREE_ROW(row) : DEVTREE_ROOT;
+
+    if (made <= 0) {
+        if (row >= 0 ? synth_dev_dir_dirent(row, n, name, ino, dtype)
+                     : synth_dev_dirent(n, name, ino, dtype)) {
+            return 1;
+        }
+        while (row >= 0 ? synth_dev_dir_dirent(row, table, name, ino, dtype)
+                        : synth_dev_dirent(table, name, ino, dtype)) {
+            table++;
+        }
+    }
+    if (!devtree_dirent(parent, n - table, &mn, &mino, dtype)) {
+        return 0;
+    }
+    k_strncpy(name, mn, SYNTH_DIRENT_NAME - 1);
+    name[SYNTH_DIRENT_NAME - 1] = '\0';
+    *ino = mino;
+    return 1;
+}
+
 /**
  * The entry at position `*pos` of a synthetic directory, from the directory
  * descriptor's record `sd`, its kind, pid and tid: fills name/ino/dtype and
@@ -14158,6 +14477,9 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
  * `devfs_dirent` gives, with the registry's inodes. `devfs_dirent` skips a
  * device that is absent, so a device after an absent one is still listed,
  * and a directory of the table lists its devices present in the same way.
+ * Each directory of /dev lists after these the entries root made in it
+ * (`synth_dev_any_dirent`), and a directory root made lists those alone.
+ * `name` has room for SYNTH_DIRENT_NAME bytes.
  * /dev/pts has an entry for each allocated pseudoterminal, named by its
  * index; /proc/acpi has `call`; a directory
  * of /proc/sys has the entries of the table under it; and /proc has its
@@ -14188,10 +14510,13 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     n -= 2;
 
     if (kind == VNODE_DEV_DIR) {
-        return synth_dev_dirent(n, name, ino, dtype);
+        return synth_dev_any_dirent(-1, 0, n, name, ino, dtype);
     }
     if (kind == VNODE_DEV_SUBDIR) {
-        return synth_dev_dir_dirent(sd->pid, n, name, ino, dtype);
+        return synth_dev_any_dirent(sd->pid, 0, n, name, ino, dtype);
+    }
+    if (kind == VNODE_DEV_MADE) {
+        return synth_dev_any_dirent(-1, sd->pid, n, name, ino, dtype);
     }
     if (kind == VNODE_PROC_ACPI_DIR) {
         return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);
@@ -14322,14 +14647,14 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
     const struct synth_dir *sd = e->priv ? (const struct synth_dir *)e->priv : &none;
     uint32_t written = 0;
     int idx = (int)e->ofd->offset;
-    char name[32];
+    char name[SYNTH_DIRENT_NAME];
     uint64_t ino;
     uint8_t dtype;
 
     while (synth_dirent_at(sd, &idx, name, &ino, &dtype)) {
         union {
             struct linux_dirent64 rec;
-            uint8_t bytes[64];
+            uint8_t bytes[SYNTH_DIRENT_NAME + 24];
         } recbuf;
         uint32_t name_len = (uint32_t)k_strlen(name);
         uint32_t rec_len =

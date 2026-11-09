@@ -139,6 +139,16 @@ int sysfs_block_loop(int key)
     return -1;
 }
 
+/** The path of an entry made under /dev, which the model has none of. */
+void devtree_path(int id, char *out, int cap)
+{
+    (void)id;
+    if (cap > 1) {
+        out[0] = '/';
+        out[1] = '\0';
+    }
+}
+
 /** The backlight named by the `len` bytes at `name`: 0 for
  *  intel_backlight, the one backlight of the model, and -1 for any other. */
 int backlight_find(const char *name, int len)
