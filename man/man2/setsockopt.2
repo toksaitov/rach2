@@ -101,6 +101,21 @@ on a socket of another family other than
 .Dv AF_UNIX
 .Pq Xr unix 7
 it is accepted, changes nothing and reads back 0.
+.It Dv SO_TIMESTAMP , SO_TIMESTAMPNS
+Set or get whether a UDP, raw or packet socket's receives give the time
+each datagram was queued
+.Pq Xr recv 2 ,
+and an AF_UNIX datagram or sequenced-packet socket's the time each was sent
+.Pq Xr unix 7 ;
+SO_TIMESTAMP in microseconds and SO_TIMESTAMPNS in nanoseconds.
+The old options, 29 and 35, give it in the caller's
+.Vt struct timeval
+or
+.Vt struct timespec ;
+the new ones, 63 and 64, in two 64-bit words.
+As on Linux, turning one on turns the others off, turning any off turns
+all off, and each reads back 1 only while it is the one on.
+Other sockets accept them and give no timestamps.
 .It Dv SO_RCVTIMEO , SO_SNDTIMEO
 Accepted without effect on an Internet, packet or netlink socket.
 It does not bound a wait, and getting it returns a zero
@@ -331,6 +346,8 @@ an
 .Dv SO_BROADCAST ,
 .Dv SO_KEEPALIVE ,
 .Dv SO_PASSCRED ,
+.Dv SO_TIMESTAMP ,
+.Dv SO_TIMESTAMPNS ,
 .Dv SO_RCVBUF ,
 .Dv IP_MTU_DISCOVER ,
 .Dv IP_TTL ,

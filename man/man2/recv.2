@@ -235,6 +235,31 @@ The message header, vector entries, nonempty data buffers, and the
 portion of the address buffer to be written are checked before input
 is consumed.
 .Pp
+A UDP, raw or packet socket, or an AF_UNIX one as
+.Xr unix 7
+says, that asked for it with
+.Dv SO_TIMESTAMP
+or
+.Dv SO_TIMESTAMPNS
+.Pq Xr setsockopt 2
+receives first, at level
+.Dv SOL_SOCKET
+and with the option's number as its type, the time the datagram was
+queued by the realtime clock:
+.Dv SO_TIMESTAMP_OLD
+(29) a
+.Vt struct timeval
+and
+.Dv SO_TIMESTAMPNS_OLD
+(35) a
+.Vt struct timespec ,
+each two of the caller's longs, two 32-bit words for an i386 program on
+the x86-64 kernel;
+.Dv SO_TIMESTAMP_NEW
+(63) and
+.Dv SO_TIMESTAMPNS_NEW
+(64) two 64-bit words in every ABI.
+.Pp
 An IPv4 raw or ICMP datagram socket that asked for it with
 .Dv IP_RECVTTL
 .Pq Xr setsockopt 2
@@ -242,7 +267,8 @@ receives the datagram's TTL, an integer, at level
 .Dv IPPROTO_IP
 and type
 .Dv IP_TTL .
-Any other IPv4 socket, and a packet socket, supplies no ancillary data:
+Any other IPv4 socket, and a packet socket, supplies no other ancillary
+data, and one that asked for none supplies none:
 the control buffer is unused and
 .Fa msg Ns ->msg_controllen
 is set to zero, and

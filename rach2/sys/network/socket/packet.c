@@ -278,6 +278,7 @@ void packet_consume(struct socket *sock)
         d = sock_dgq_pop(&sock->rq);
         if (d) {
             keep_addr(q, d);
+            sock->rx_last = d->info;
         }
     }
     net_unlock(flags);
@@ -293,6 +294,7 @@ void packet_note_head(struct socket *sock)
     q = queue_of(sock);
     if (q && sock->rq.head) {
         keep_addr(q, sock->rq.head);
+        sock->rx_last = sock->rq.head->info;
     }
     net_unlock(flags);
 }

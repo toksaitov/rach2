@@ -405,6 +405,40 @@ uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16])
     return (uint32_t)sizeof(t);
 }
 
+/** The wall clock a message is stamped with when sent: the epoch. */
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 0;
+    *nanoseconds = 0;
+}
+
+/** The timestamp bits as syscall_net.c keeps them: on asks for SO_TIMESTAMP
+ * alone, which these rows use, and off for none. */
+uint8_t sock_tstamp_set(uint8_t bits, int optname, int val)
+{
+    (void)optname;
+    return (uint8_t)((bits & ~0xE0u) | (val ? SOCK_RX_TSTAMP : 0u));
+}
+
+/** Whether SO_TIMESTAMP is the one asked for. */
+int sock_tstamp_get(uint8_t bits, int optname)
+{
+    (void)optname;
+    return (bits & 0xE0u) == SOCK_RX_TSTAMP;
+}
+
+/** A native SO_TIMESTAMP_OLD timeval of `sec` and `nsec`. */
+uint32_t sock_tstamp_put(uint8_t bits, int64_t sec, int32_t nsec, int *type, uint8_t out[16])
+{
+    int64_t tv[2];
+
+    (void)bits;
+    tv[0] = sec;
+    tv[1] = nsec / 1000;
+    *type = SO_TIMESTAMP_OLD;
+    return sock_timeo_put(SO_RCVTIMEO_OLD, tv, out);
+}
+
 /**
  * A wait: it ends when `cond` holds. A sibling whose condition does not
  * hold sleeps, and tests the condition again each time it is resumed; the

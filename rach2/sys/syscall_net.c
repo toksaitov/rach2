@@ -2174,6 +2174,8 @@ static int32_t do_shutdown(int fd, int how)
 #define SO_PASSCRED     16
 #define SCM_CREDENTIALS 2
 
+#define SOCK_RX_TSALL (SOCK_RX_TSTAMP | SOCK_RX_TSTAMPNS | SOCK_RX_TSNEW)
+
 #define IPPROTO_TCP 6
 
 #define TCP_NODELAY 1
@@ -2515,18 +2517,68 @@ static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintp
     return 0;
 }
 
+/** Whether `optname` is a timestamp option (syscall_internal.h). */
+int sock_tstamp_opt(int optname)
+{
+    return optname == SO_TIMESTAMP_OLD || optname == SO_TIMESTAMPNS_OLD ||
+           optname == SO_TIMESTAMP_NEW || optname == SO_TIMESTAMPNS_NEW;
+}
+
+/** The timestamp bits turning the timestamp option `optname` on asks for. */
+static uint8_t tstamp_bits(int optname)
+{
+    uint8_t bits = SOCK_RX_TSTAMP;
+
+    if (optname == SO_TIMESTAMPNS_OLD || optname == SO_TIMESTAMPNS_NEW) {
+        bits |= SOCK_RX_TSTAMPNS;
+    }
+    if (optname == SO_TIMESTAMP_NEW || optname == SO_TIMESTAMPNS_NEW) {
+        bits |= SOCK_RX_TSNEW;
+    }
+    return bits;
+}
+
+/** setsockopt of a timestamp option (syscall_internal.h). */
+uint8_t sock_tstamp_set(uint8_t bits, int optname, int val)
+{
+    return (uint8_t)((bits & ~SOCK_RX_TSALL) | (val ? tstamp_bits(optname) : 0));
+}
+
+/** getsockopt of a timestamp option (syscall_internal.h). */
+int sock_tstamp_get(uint8_t bits, int optname)
+{
+    return (bits & SOCK_RX_TSALL) == tstamp_bits(optname);
+}
+
+/** SO_TIMESTAMP_OLD is a timeval and SO_TIMESTAMPNS_OLD a timespec, each
+ * two of the caller's longs, and the new ones two 64-bit words in every
+ * ABI, as Linux's __sock_recv_timestamp writes them. */
+uint32_t sock_tstamp_put(uint8_t bits, int64_t sec, int32_t nsec, int *type, uint8_t out[16])
+{
+    int ns = (bits & SOCK_RX_TSTAMPNS) != 0;
+    int wide = (bits & SOCK_RX_TSNEW) != 0;
+    int64_t tv[2];
+
+    tv[0] = sec;
+    tv[1] = ns ? nsec : nsec / 1000;
+    *type = wide ? (ns ? SO_TIMESTAMPNS_NEW : SO_TIMESTAMP_NEW)
+                 : (ns ? SO_TIMESTAMPNS_OLD : SO_TIMESTAMP_OLD);
+    return sock_timeo_put(wide ? SO_RCVTIMEO_NEW : SO_RCVTIMEO_OLD, tv, out);
+}
+
 /** Whether `optname` is one of the SOL_SOCKET flags `socket_flag_set` and
  * `socket_flag_get` keep. */
 static int socket_flag(int optname)
 {
     return optname == SO_BROADCAST || optname == SO_REUSEADDR || optname == SO_KEEPALIVE ||
-           optname == SO_PASSCRED;
+           optname == SO_PASSCRED || sock_tstamp_opt(optname);
 }
 
-/** setsockopt's SOL_SOCKET flags, SO_BROADCAST, SO_REUSEADDR, SO_KEEPALIVE
- * and SO_PASSCRED, set from `val`; SO_PASSCRED counts on a netlink socket
- * alone, whose receives carry credentials here. Another option is passed
- * over. 0, or -EINVAL for a value shorter than an int. */
+/** setsockopt's SOL_SOCKET flags, SO_BROADCAST, SO_REUSEADDR, SO_KEEPALIVE,
+ * SO_PASSCRED and the timestamp options, set from `val`; SO_PASSCRED counts
+ * on a netlink socket alone, whose receives carry credentials here, and a
+ * timestamp on a UDP, raw or packet socket (`put_rx_control`). Another
+ * option is passed over. 0, or -EINVAL for a value shorter than an int. */
 static int32_t socket_flag_set(struct socket *sock, int optname, int val, int optlen)
 {
     if (!socket_flag(optname)) {
@@ -2535,7 +2587,9 @@ static int32_t socket_flag_set(struct socket *sock, int optname, int val, int op
     if (optlen < (int)sizeof(int)) {
         return -EINVAL;
     }
-    if (optname == SO_PASSCRED) {
+    if (sock_tstamp_opt(optname)) {
+        sock->rxopt = sock_tstamp_set(sock->rxopt, optname, val);
+    } else if (optname == SO_PASSCRED) {
         if (sock->family == AF_NETLINK) {
             sock->rxopt =
                 (uint8_t)(val ? sock->rxopt | SOCK_RX_CREDS : sock->rxopt & ~SOCK_RX_CREDS);
@@ -2553,6 +2607,9 @@ static int32_t socket_flag_set(struct socket *sock, int optname, int val, int op
 /** getsockopt's value of the SOL_SOCKET flag `optname`. */
 static int socket_flag_get(const struct socket *sock, int optname)
 {
+    if (sock_tstamp_opt(optname)) {
+        return sock_tstamp_get(sock->rxopt, optname);
+    }
     return optname == SO_BROADCAST   ? sock->broadcast
            : optname == SO_REUSEADDR ? sock->reuseaddr
            : optname == SO_KEEPALIVE ? sock->keepalive
@@ -3109,11 +3166,18 @@ uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16])
 
 /** Whether a receive on `sock` answers with control messages: an AF_INET6
  * UDP or raw socket that asked for one (IPV6_RECV*), an AF_INET one that
- * asked for IP_RECVTTL, or an AF_NETLINK one with SO_PASSCRED. */
+ * asked for IP_RECVTTL, a UDP, raw or packet socket that asked for a
+ * timestamp, or an AF_NETLINK one with SO_PASSCRED. */
 static int rx_control(const struct socket *sock)
 {
-    return (sock->family == AF_INET6 || sock->family == AF_INET || sock->family == AF_NETLINK) &&
-           sock->type != SOCK_STREAM && sock->rxopt != 0;
+    if (sock->type == SOCK_STREAM) {
+        return 0;
+    }
+    if (sock->family == AF_NETLINK) {
+        return (sock->rxopt & SOCK_RX_CREDS) != 0;
+    }
+    return (sock->family == AF_INET6 || sock->family == AF_INET || sock->family == AF_PACKET) &&
+           sock->rxopt != 0;
 }
 
 /**
@@ -3152,9 +3216,27 @@ static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, 
 }
 
 /**
+ * Write the timestamp control message the socket `sock` asked for about the
+ * datagram `info` describes, the time it was queued (`sock_tstamp_put`).
+ * Returns 0, or -EFAULT.
+ */
+static int32_t put_tstamp(const struct socket *sock, const struct net_rxinfo *info,
+                          uintptr_t control, uint32_t controllen, uint32_t *used,
+                          unsigned int *mflags)
+{
+    uint8_t out[16];
+    uint32_t len;
+    int type;
+
+    len = sock_tstamp_put(sock->rxopt, info->tsec, info->tnsec, &type, out);
+    return put_cmsg(control, controllen, used, SOL_SOCKET, type, out, len, mflags);
+}
+
+/**
  * Write the control messages the socket `sock` asked for (`rxopt`) about
  * the datagram a receive took, which `rx_last` describes, in the order
- * Linux writes them: for an AF_INET socket IP_TTL, an int, when the
+ * Linux writes them: first its timestamp, when asked for (`put_tstamp`);
+ * then for an AF_INET socket IP_TTL, an int, when the
  * datagram's is known; for an AF_INET6 one IPV6_PKTINFO, its destination
  * and the interface it came in on, an IPv4 one's destination mapped, and
  * IPV6_HOPLIMIT and IPV6_TCLASS, each an int, when the datagram's are
@@ -3170,6 +3252,12 @@ static int32_t put_rx_control(struct socket *sock, uintptr_t control, uint32_t c
     int v;
 
     *used = 0;
+    if (sock->family != AF_NETLINK && (sock->rxopt & SOCK_RX_TSTAMP)) {
+        r = put_tstamp(sock, info, control, controllen, used, mflags);
+        if (r != 0 || sock->family == AF_PACKET) {
+            return r;
+        }
+    }
     if (sock->family == AF_NETLINK) {
         int32_t cred[3];
 
