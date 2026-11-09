@@ -15,6 +15,11 @@ Root can run a program as that account with
 .Xr init 8
 supervises
 .Pa /usr/libexec/rach2-desktop .
+It makes
+.Pa /tmp/.X11-unix
+and
+.Pa /tmp/.ICE-unix ,
+mode 1777, where Xwayland listens.
 It starts Debian's systemd-udevd, triggers existing devices, waits for
 their events, then starts seatd as root with
 .Ql SEATD_VTBOUND=0 .
@@ -36,9 +41,11 @@ and
 The compositor and sound server's output goes to
 .Pa /var/log/services .
 .Sh SOUND
-PulseAudio loads module-oss over
+PulseAudio runs
+.Pa /etc/pulse/rach2.pa
+alone, which loads module-oss over
 .Pa /dev/dsp
-without mmap.
+without mmap as the sink oss_output and the source oss_input.
 Browsers use the user's native PulseAudio socket.
 ALSA's default PCM converts formats with plug and opens its OSS plugin;
 its control device is
