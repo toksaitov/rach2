@@ -10290,7 +10290,8 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
 
 /**
  * A regular file is read at the offset under the description's lock, as read(2)
- * reads it, and a device or a /proc snapshot through `pio_view`.
+ * reads it, and a device, a /proc snapshot or a debugfs file, whose
+ * operations read, through `pio_view`.
  */
 long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos)
 {
@@ -10303,7 +10304,7 @@ long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos)
     if (rc != 0 || count == 0) {
         return rc;
     }
-    if (entry->type == FD_TYPE_FILE) {
+    if (entry->type == FD_TYPE_FILE && !entry->ops) {
         return file_read(entry, buf, count, &at);
     }
     if (!entry->ops || !entry->ops->read || !entry->ofd) {
@@ -10324,7 +10325,7 @@ long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos
     if (rc != 0 || count == 0) {
         return rc;
     }
-    if (entry->type == FD_TYPE_FILE) {
+    if (entry->type == FD_TYPE_FILE && !entry->ops) {
         return file_write(entry, buf, count, &at);
     }
     if (!entry->ops || !entry->ops->write || !entry->ofd) {
