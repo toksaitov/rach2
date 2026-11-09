@@ -139,8 +139,8 @@ static void model_delay_us(struct i915_hw *hw, uint32_t us)
     }
 }
 
-static const struct i915_hw_ops i915_model_ops = {"model", model_read32, model_write32,
-                                                  model_delay_us, 0};
+static const struct i915_hw_ops i915_model_ops = {
+    "model", model_read32, model_write32, model_delay_us, 0, 0, 0, 0, 0, 0};
 
 uint32_t i915_model_config(const struct i915_model *m, unsigned at, unsigned width)
 {

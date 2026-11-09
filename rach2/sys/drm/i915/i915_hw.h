@@ -6,13 +6,14 @@
 #define _I915_HW_H_
 
 #include "../../lib/kint.h"
+#include "../../pci.h"
 
 /*
  * The driver reaches its device only through a `struct i915_hw`, so that
  * what stands behind it may change: the registers of BAR 0 mapped
  * uncached (`i915_hw_mmio_init`), the host model of the HD 4400
- * (tests/host/i915_model.c), or a backend that completes work at once for
- * tests in QEMU. A register is its offset in BAR 0,
+ * (tests/host/i915_model.c), or the fake chip that completes work at once
+ * for tests in QEMU (i915_fake.c). A register is its offset in BAR 0,
  * as i915_reg.h gives it, and every access is 32 bits wide. A backend
  * answers for the first `size` bytes: the MMIO backend for the registers,
  * the first half of BAR 0, since the GTT's half is the global GTT's, which
@@ -49,13 +50,33 @@ struct i915_hw;
  * address `phys`, which the MMIO backend maps write-combining and reaches
  * through `gsm`. A backend without it answers for the entries as it does
  * for registers, at I915_GSM_OFFSET and up, and its `size` must cover them.
+ *
+ * The rest a backend that stands in for the chip gives, and the MMIO
+ * backend and the host model leave NULL:
+ *
+ * * `config_read32` answers for the chip's identity in configuration
+ *   space, the dword at `offset`, a multiple of 4: the ids, the class and
+ *   revision, the board's ids, the GMCH control word, BDSM and MSAC. The
+ *   driver then reads those from it and the PCI function's own command
+ *   word and capabilities from the function (i915_hw_config32).
+ * * `fault` answers at a fault point (I915_FAULT_*, i915_hw_fault).
+ * * `attach` is told of the device once it is registered, `detach` at its
+ *   unplug, and `release` when its record goes, after which `priv` is
+ *   not used again.
  */
+struct drm_i915_private;
+
 struct i915_hw_ops {
     const char *name;
     uint32_t (*read32)(struct i915_hw *hw, uint32_t reg);
     void (*write32)(struct i915_hw *hw, uint32_t reg, uint32_t value);
     void (*delay_us)(struct i915_hw *hw, uint32_t us);
     int32_t (*gtt_map)(struct i915_hw *hw, uint64_t phys, uint32_t size);
+    uint32_t (*config_read32)(struct i915_hw *hw, uint32_t offset);
+    int32_t (*fault)(struct i915_hw *hw, int point);
+    void (*attach)(struct i915_hw *hw, struct drm_i915_private *i915);
+    void (*detach)(struct i915_hw *hw);
+    void (*release)(struct i915_hw *hw);
 };
 
 /*
@@ -66,7 +87,8 @@ struct i915_hw_ops {
  * their bound and `last_timeout` names the last of them, or is NULL.
  * `gtt_entries` is how many entries of the global GTT `i915_hw_gtt_init`
  * made reachable, 0 before it, and `gsm` the kernel address of the first
- * where the backend's `gtt_map` mapped them, or NULL.
+ * where the backend's `gtt_map` mapped them, or NULL. `faults` counts the
+ * errors the backend injected at fault points.
  */
 struct i915_hw {
     const struct i915_hw_ops *ops;
@@ -76,7 +98,17 @@ struct i915_hw {
     const char *last_timeout;
     uint32_t gtt_entries;
     void *gsm;
+    uint32_t faults;
 };
+
+/*
+ * Fault points: the operations of the driver that a backend standing in
+ * for the chip may fail, so that a test reaches the driver's error paths.
+ * The chip itself never fails them; a hang and a lost interrupt, which it
+ * can give, the backend gives through its registers.
+ */
+#define I915_FAULT_SUBMIT 0 /* work handed to a ring: -EIO, as a wedged GPU */
+#define I915_FAULT_BIND   1 /* pages bound into the global GTT: -ENOSPC */
 
 /** The register at `reg` of `hw`; all ones for an offset past the
  * backend's size, which a device that has gone also reads as. */
@@ -147,6 +179,23 @@ uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index);
  * cache (GFX_FLSH_CNTL_GEN6), a write to a register, which also drains
  * the processor's write-combining buffers. */
 void i915_gtt_write(struct i915_hw *hw, uint32_t index, uint32_t pte);
+
+/**
+ * The word at `offset`, a multiple of 2, of the configuration space of
+ * the device on `pdev`: the backend's where it answers for one
+ * (`config_read32`), and the function's otherwise. `i915_hw_config32` is
+ * the dword at `offset`, a multiple of 4.
+ */
+uint16_t i915_hw_config16(struct i915_hw *hw, const pci_device_t *pdev, uint32_t offset);
+uint32_t i915_hw_config32(struct i915_hw *hw, const pci_device_t *pdev, uint32_t offset);
+
+/**
+ * Ask the backend whether the operation at the fault point `point`
+ * (I915_FAULT_*) fails this time. Counted in `faults` when it does.
+ *
+ * @return 0 to go on, or the -errno the backend injects.
+ */
+int32_t i915_hw_fault(struct i915_hw *hw, int point);
 
 /**
  * Make `hw` the backend over BAR 0's registers, `size` bytes at the

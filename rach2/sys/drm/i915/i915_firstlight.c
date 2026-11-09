@@ -60,15 +60,20 @@ static int32_t firstlight_fail(struct drm_i915_private *i915, struct i915_engine
 
 int32_t i915_firstlight(struct drm_i915_private *i915)
 {
-    struct i915_engine *e = &i915->gt.engine[I915_RCS0];
-    struct firstlight f;
-    uint32_t *page;
-    uint32_t ggtt, *cs, got;
-    int32_t err = 0;
-
     if (!kcmdline_has("rach2.i915.firstlight")) {
         return -ENODEV;
     }
+    return i915_firstlight_run(i915);
+}
+
+int32_t i915_firstlight_run(struct drm_i915_private *i915)
+{
+    struct i915_engine *e = &i915->gt.engine[I915_RCS0];
+    struct firstlight f;
+    uint32_t *page;
+    uint32_t ggtt, *cs, got, faults;
+    int32_t err = 0;
+
     if (!e->running) {
         klog(KLOG_ERR, "i915", "first light: the render ring is not running");
         return -EIO;
@@ -83,9 +88,12 @@ int32_t i915_firstlight(struct drm_i915_private *i915)
     f.irq_seen = e->irq_seen;
     i915_engine_irq_get(i915, e);
 
+    faults = i915->hw.faults;
     cs = i915_ring_begin(e, i915, 4);
     if (!cs) {
-        err = firstlight_fail(i915, e, "no room in the ring", -EIO);
+        err = firstlight_fail(
+            i915, e, i915->hw.faults != faults ? "submission refused" : "no room in the ring",
+            -EIO);
         goto out;
     }
     cs[0] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;

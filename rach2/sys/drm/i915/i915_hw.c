@@ -168,6 +168,39 @@ void i915_gtt_write(struct i915_hw *hw, uint32_t index, uint32_t pte)
     i915_write(hw, I915_GSM_OFFSET + index * 4u, pte);
 }
 
+uint16_t i915_hw_config16(struct i915_hw *hw, const pci_device_t *pdev, uint32_t offset)
+{
+    if (hw->ops->config_read32) {
+        return (uint16_t)(hw->ops->config_read32(hw, offset & ~3u) >> ((offset & 2u) * 8u));
+    }
+    return pci_read_config16(pdev->bus, pdev->device, pdev->function, (uint8_t)offset);
+}
+
+uint32_t i915_hw_config32(struct i915_hw *hw, const pci_device_t *pdev, uint32_t offset)
+{
+    if (hw->ops->config_read32) {
+        return hw->ops->config_read32(hw, offset);
+    }
+    /* Two words, so that a host test's configuration space needs only
+     * pci_read_config16. */
+    return (uint32_t)i915_hw_config16(hw, pdev, offset + 2u) << 16 |
+           i915_hw_config16(hw, pdev, offset);
+}
+
+int32_t i915_hw_fault(struct i915_hw *hw, int point)
+{
+    int32_t err;
+
+    if (!hw->ops->fault) {
+        return 0;
+    }
+    err = hw->ops->fault(hw, point);
+    if (err < 0) {
+        hw->faults++;
+    }
+    return err;
+}
+
 /* ---- the backend over BAR 0 ---- */
 
 /** A register of the mapped half of BAR 0, by one uncached load. */
@@ -206,8 +239,8 @@ static int32_t i915_mmio_gtt_map(struct i915_hw *hw, uint64_t phys, uint32_t siz
     return 0;
 }
 
-static const struct i915_hw_ops i915_mmio_ops = {"mmio", i915_mmio_read, i915_mmio_write,
-                                                 i915_mmio_delay, i915_mmio_gtt_map};
+static const struct i915_hw_ops i915_mmio_ops = {
+    "mmio", i915_mmio_read, i915_mmio_write, i915_mmio_delay, i915_mmio_gtt_map, 0, 0, 0, 0, 0};
 
 int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
 {
@@ -227,5 +260,6 @@ int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
     hw->last_timeout = 0;
     hw->gtt_entries = 0;
     hw->gsm = 0;
+    hw->faults = 0;
     return 0;
 }
