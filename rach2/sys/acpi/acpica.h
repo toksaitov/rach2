@@ -22,6 +22,13 @@ void acpica_boot(uint64_t rsdp);
 int acpica_up(void);
 
 /**
+ * The firmware's table of signature `signature`, four letters, mapped, with
+ * its length in `*len`: NULL when ACPICA is not up or there is none. The
+ * mapping stays.
+ */
+const uint8_t *acpica_table(const char *signature, uint32_t *len);
+
+/**
  * Make the kernel thread that runs ACPICA's deferred work: the notify
  * handlers and the methods of GPEs. Called once, when the first program
  * starts, so that the thread takes a pid after init's 1; until then the

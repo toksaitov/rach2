@@ -23,6 +23,26 @@ int acpica_up(void)
     return up;
 }
 
+const uint8_t *acpica_table(const char *signature, uint32_t *len)
+{
+    ACPI_TABLE_HEADER *t;
+    char sig[ACPI_NAMESEG_SIZE + 1];
+    int i;
+
+    if (!up) {
+        return NULL;
+    }
+    for (i = 0; i < ACPI_NAMESEG_SIZE; i++) {
+        sig[i] = signature[i];
+    }
+    sig[ACPI_NAMESEG_SIZE] = 0;
+    if (ACPI_FAILURE(AcpiGetTable(sig, 1, &t))) {
+        return NULL;
+    }
+    *len = t->Length;
+    return (const uint8_t *)t;
+}
+
 /** A node of the namespace, counted into the `uint32_t` at `context`. */
 static ACPI_STATUS count_object(ACPI_HANDLE object, UINT32 depth, void *context, void **ret)
 {
