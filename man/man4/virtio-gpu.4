@@ -1,0 +1,224 @@
+.Dd November 10, 2026
+.Dt VIRTIO-GPU 4
+.Os
+.Sh NAME
+.Nm virtio-gpu ,
+.Nm virtio_gpu ,
+.Nm virtio-vga
+.Nd DRM driver of the virtio GPU, as a 2D display
+.Sh SYNOPSIS
+.In drm/drm.h
+.In drm/drm_mode.h
+.In drm/virtgpu_drm.h
+.Pp
+.Pa /dev/dri/cardN
+.Pa /dev/dri/renderD128+N
+.Sh DESCRIPTION
+The
+.Nm
+driver binds the virtio GPU of virtio 1.2, device 16, on the PCI bus:
+QEMU's
+.Ql -device virtio-gpu-pci ,
+a display controller, and
+.Ql -device virtio-vga ,
+which is a VGA controller as well, as Linux 6.12's virtio_gpu does.
+It takes the device's EDID feature when offered, and neither 3D, blob
+resources nor context types.
+Under virtio-vga the driver first removes the firmware's framebuffer from
+every memory BAR of the device, so that
+.Xr fbdrm 4
+leaves the screen to it and the machine has one card.
+.Pp
+A bound device is a DRM device, as
+.Xr drm 4
+describes, registered as
+.Ql virtio_gpu
+with Linux's identity: description
+.Ql virtio GPU ,
+version 0.1.0 and date 0, on the PCI bus.
+It has a card node and a render node, and the features
+.Dv DRIVER_GEM ,
+.Dv DRIVER_MODESET ,
+.Dv DRIVER_ATOMIC ,
+.Dv DRIVER_RENDER ,
+.Dv DRIVER_SYNCOBJ ,
+.Dv DRIVER_SYNCOBJ_TIMELINE
+and
+.Dv DRIVER_CURSOR_HOTSPOT ;
+a device with no scanout has no
+.Dv DRIVER_MODESET
+or
+.Dv DRIVER_ATOMIC ,
+and a render node alone serves it.
+The kernel logs the device's PCI function as
+.Dq virtio_gpu: pci: virtio-vga detected at 0000:BB:DD.F
+or
+.Dq virtio-gpu-pci ,
+the features as Linux's
+.Dq features: -virgl +edid -resource_blob -host_visible
+and
+.Dq features: -context_init ,
+the number of scanouts and of capability sets, and each scanout's size
+whenever it reads the displays.
+.Ss Commands
+Every command goes to the device on its control queue, and the cursor's on
+the cursor queue.
+Each control command carries a fence whose id is the next of the device's
+timeline, in the order the commands reach the queue; the device's answer
+signals it, and an error answer fails it with
+.Er EIO .
+When the queue is full, commands wait in order for answers to make room.
+A command the driver waits for that has no answer in five seconds fails
+with
+.Er ETIMEDOUT
+and is logged; its late answer is still taken.
+Error answers to commands nobody waits for are logged.
+.Ss Display
+Each scanout has one CRTC with a primary plane of format XRGB8888 and a
+cursor plane of ARGB8888, an encoder of type
+.Dv DRM_MODE_ENCODER_VIRTUAL
+and a connector of type
+.Dv DRM_MODE_CONNECTOR_VIRTUAL ,
+.Ql Virtual-1
+and on, connected while the device says its scanout is enabled.
+The first scanout counts as enabled at 1024x768 until the device answers.
+.Pp
+With the EDID feature the connector has the
+.Ql EDID
+property and its modes are the EDID's: QEMU's lists 26 at its default
+1280x800, which is preferred, and its
+.Ql xres
+and
+.Ql yres
+choose another.
+Without it the modes are the DMT modes up to 8192x8192, with the
+scanout's size added as a CVT mode at 60 Hz and preferred, or 1024x768
+preferred while the device gives no size.
+Framebuffers are 32 to 8192 pixels on a side.
+Format modifiers are not supported: planes have no
+.Ql IN_FORMATS
+property,
+.Dv DRM_CAP_ADDFB2_MODIFIERS
+is 0, and
+.Dv DRM_IOCTL_MODE_ADDFB2
+with
+.Dv DRM_MODE_FB_MODIFIERS
+fails with
+.Er EINVAL .
+.Pp
+A commit that shows a buffer copies the damaged part of a dumb buffer to
+the host's resource with
+.Dv VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D ,
+sets the scanout again when the buffer, its source rectangle or the mode
+changed, and flushes the damaged part to the screen, waiting for the
+flush.
+The damage is the union of the plane's
+.Ql FB_DAMAGE_CLIPS
+inside its source, or the whole source when the buffer or the source
+changed;
+.Dv DRM_IOCTL_MODE_DIRTYFB
+sets the clips.
+A plane with no buffer, or a CRTC turned off, leaves the scanout showing
+nothing.
+The cursor plane sends its buffer's pixels and
+.Dv VIRTIO_GPU_CMD_UPDATE_CURSOR
+with its hotspot when its buffer changes, and
+.Dv VIRTIO_GPU_CMD_MOVE_CURSOR
+when it only moves.
+.Ss Display changes
+When the device reports a display change, such as a resized QEMU window
+or a VNC client's
+.Ql SetDesktopSize ,
+the driver reads the EDIDs and the displays again, clears the event, and
+sends the card's
+.Dq change
+uevent with
+.Ql HOTPLUG=1 ,
+as Linux does.
+The change is served by the kernel thread
+.Ql virtio_gpu ,
+made at the first open of one of the device's nodes; a change before that
+open is served by the open itself, and sends its uevent then.
+A program then reads the new modes with
+.Dv DRM_IOCTL_MODE_GETCONNECTOR .
+.Ss Buffers
+Each buffer object is a host resource over pages of system memory, which
+are given when the object is made and passed to the device in runs of
+adjacent pages; resource ids are the lowest free from 1.
+Dumb buffers take 32 bits a pixel alone, have rows of the width's bytes,
+unpadded, and a whole number of pages, and their resources are XRGB8888.
+Mappings are cached.
+When the last reference to a buffer goes, its resource is unreferenced on
+the device and its pages are freed once the device answers.
+.Ss Ioctls
+The render node and the card take Linux's virtio_gpu ioctls, as a driver
+without 3D answers them:
+.Bl -tag -width Ds
+.It Dv DRM_IOCTL_VIRTGPU_MAP
+The mmap offset of a buffer.
+.It Dv DRM_IOCTL_VIRTGPU_GETPARAM
+.Dv VIRTGPU_PARAM_CAPSET_QUERY_FIX
+is 1 and every other known parameter 0.
+.It Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE
+A 2D resource, target 2, of the given format and size over a new buffer of
+the given size, or a page for 0, with its handle and resource id.
+.It Dv DRM_IOCTL_VIRTGPU_RESOURCE_INFO
+A buffer's size and resource id.
+.It Dv DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST
+Copies a box of a buffer to its resource, not waited for; the command's
+fence joins the buffer's reservation.
+.It Dv DRM_IOCTL_VIRTGPU_WAIT
+Waits up to 15 seconds for a buffer's outstanding work, or with
+.Dv VIRTGPU_WAIT_NOWAIT
+says whether there is any.
+.It Dv DRM_IOCTL_VIRTGPU_EXECBUFFER , Dv DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST , Dv DRM_IOCTL_VIRTGPU_GET_CAPS
+Fail with
+.Er ENOSYS .
+.It Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB , Dv DRM_IOCTL_VIRTGPU_CONTEXT_INIT
+Fail with
+.Er EINVAL .
+.El
+.Sh FILES
+.Bl -tag -width /dev/dri/renderD128+N
+.It Pa /dev/dri/cardN
+The card node of a bound device.
+.It Pa /dev/dri/renderD128+N
+Its render node.
+.El
+.Sh ERRORS
+Besides those of
+.Xr drm 4 :
+.Bl -tag -width Er
+.It Er EBUSY
+.Dv DRM_IOCTL_VIRTGPU_WAIT
+while the buffer still has work.
+.It Er EINVAL
+A dumb buffer of other than 32 bits a pixel; a
+.Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE
+of a 3D target, depth, array, sample count or more than one level; an
+unknown
+.Dv DRM_IOCTL_VIRTGPU_GETPARAM
+parameter; a format modifier.
+.It Er EIO
+The device answered a command with an error.
+.It Er ENOENT
+No buffer of the handle given.
+.It Er ENOSPC
+Every resource id is taken.
+.It Er ENOSYS
+A 3D call.
+.It Er ETIMEDOUT
+The device did not answer in five seconds.
+.El
+.Sh SEE ALSO
+.Xr drm 4 ,
+.Xr fbdrm 4 ,
+.Xr drm-kms 7
+.Sh HISTORY
+The driver follows Linux 6.12's virtio_gpu without 3D.
+Its commands are those of virtio 1.2, section 5.7.
+.Sh BUGS
+Under virtio-vga the screen is QEMU's VGA picture, the firmware's
+console, until the driver's first command, and then the device's scanout,
+which shows nothing until a program sets a mode, since the console does
+not draw on a DRM card.
