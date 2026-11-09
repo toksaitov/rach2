@@ -22,10 +22,10 @@
  * says, and the order of the locks the driver takes beside it, outermost
  * first, is: a DRM device's `commit_lock`; the driver's locks of objects
  * and contexts, which may sleep; then the locks of the hardware, which a
- * holder takes with interrupts off and never sleeps under: the register
- * lock of forcewake and of any read and write the interrupt handler also
- * makes, then the interrupt mask's. The interrupt handler takes only the
- * hardware locks.
+ * holder takes with interrupts off and never sleeps under: the frequency
+ * lock of RPS, then the register lock of forcewake and of any read and
+ * write the interrupt handler also makes, then the interrupt mask's. The
+ * interrupt handler takes only the hardware locks.
  *
  * Interrupts. Every source is masked and its enable cleared before the
  * device's message is enabled, and a source is unmasked only once the
@@ -183,7 +183,9 @@ typedef void (*i915_irq_fn)(struct drm_i915_private *i915, uint32_t iir, void *d
  * taken, `spurious` those that found no identity bit set, and `unclaimed`
  * the identity bits that had no handler, each of which is masked and
  * disabled again when it is seen. `installed` is set once the master
- * enable is on.
+ * enable is on. `deferred`, when set, runs at the end of each message once
+ * the handler has let go of the lock, for the work a source's handler
+ * leaves to it, as RPS's does (i915_rps.c).
  */
 struct i915_irq {
     struct spinlock lock;
@@ -195,6 +197,7 @@ struct i915_irq {
     uint32_t spurious;
     uint32_t unclaimed;
     uint8_t installed;
+    void (*deferred)(struct drm_i915_private *i915);
 };
 
 /* The engines this part of the driver starts, the render and blitter
@@ -259,6 +262,78 @@ struct i915_gt {
 };
 
 /*
+ * RC6, the GT's sleep while it is idle (i915_rc6.c), as Linux's
+ * intel_rc6.c runs it on Haswell. `ctl_enable` is GEN6_RC_CONTROL while
+ * the GT is awake: RC6 under the hardware's timers. `manual` is set when
+ * a parked GT is sent into RC6 at once, by software, as Linux does
+ * wherever RC6 is enabled. The residency counter, GEN6_GT_GFX_RC6, counts
+ * 1.28 us units in 32 bits; `prev_hw` is its value at the last read and
+ * `cur` the units counted since the bind, so that a wrap between two reads
+ * is not lost. Both are under the register lock. `supported` is set once
+ * RC6 is sanitized and `enabled` once its thresholds are written.
+ */
+struct i915_rc6 {
+    uint32_t ctl_enable;
+    uint32_t prev_hw;
+    uint64_t cur;
+    uint8_t supported;
+    uint8_t enabled;
+    uint8_t manual;
+};
+
+/* Linux's power modes of RPS, which choose its evaluation intervals. */
+#define I915_RPS_LOW_POWER  0
+#define I915_RPS_BETWEEN    1
+#define I915_RPS_HIGH_POWER 2
+
+/*
+ * RPS, the GPU's frequency (i915_rps.c), as Linux's intel_rps.c runs it on
+ * Haswell. Every frequency is in the chip's units of 50 MHz. `rp0_freq`,
+ * `rp1_freq` and `min_freq` are the chip's limits, RP0, RP1 and RPn, from
+ * GEN6_RP_STATE_CAP; `max_freq` is RP0, or the overclocking limit the
+ * pcode reports; `efficient_freq` is RPe, from the pcode's duty cycle
+ * control. The softlimits are what gt_min_freq_mhz and gt_max_freq_mhz
+ * set, inside [min_freq, max_freq]. `cur_freq` is the frequency asked for,
+ * which gt_cur_freq_mhz shows, and `last_freq` the last written to
+ * GEN6_RPNSWREQ, -1 for none. `last_adj` is the last step the interrupts
+ * took. `power_mode` is an I915_RPS_ mode, -1 for none written, and
+ * `up_threshold` and `down_threshold` its busy percentages.
+ *
+ * `pm_events` are the up and down interrupts RPS takes, and
+ * `pm_intrmsk_mbz` the bits GEN6_PMINTRMSK must never mask; `pm_iir`
+ * holds the events the interrupt latched and the deferred work has yet to
+ * take, under the interrupt mask's lock. `enabled` is set once RPS runs,
+ * `active` while the GT is unparked, `interrupts` once the up and down
+ * interrupts drive it. `lock` is the frequency lock of i915.h's order,
+ * over the rest. `work_runs` counts the events the work acted on.
+ */
+struct i915_rps {
+    struct spinlock lock;
+    int rp0_freq;
+    int rp1_freq;
+    int min_freq;
+    int max_freq;
+    int efficient_freq;
+    int min_freq_softlimit;
+    int max_freq_softlimit;
+    int boost_freq;
+    int idle_freq;
+    int cur_freq;
+    int last_freq;
+    int last_adj;
+    int power_mode;
+    int up_threshold;
+    int down_threshold;
+    uint32_t pm_events;
+    uint32_t pm_intrmsk_mbz;
+    uint32_t pm_iir;
+    uint32_t work_runs;
+    uint8_t enabled;
+    uint8_t active;
+    uint8_t interrupts;
+};
+
+/*
  * A bound device. `drm` is first, and its `driver_priv` points back here.
  * `pci` is the function as the probe found it. `hw` reaches its registers.
  * `mmio_phys` is BAR 0's physical address and `gmadr_phys` BAR 2's, the
@@ -287,6 +362,8 @@ struct drm_i915_private {
     struct i915_ggtt ggtt;
     struct i915_irq irq;
     struct i915_gt gt;
+    struct i915_rc6 rc6;
+    struct i915_rps rps;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -458,8 +535,9 @@ uint32_t i915_ggtt_pte(struct drm_i915_private *i915, uint64_t offset);
 /**
  * Mask and clear every interrupt source of the device and clear every
  * enable, the display engine's master enable among them, as Linux's
- * ilk_irq_reset does on Haswell, and forget every handler: the state the
- * bind starts from and the unplug leaves. Takes the interrupt mask's lock.
+ * ilk_irq_reset does on Haswell, and forget every handler and the
+ * deferred work: the state the bind starts from and the unplug leaves.
+ * Takes the interrupt mask's lock.
  */
 void i915_irq_reset(struct drm_i915_private *i915);
 
@@ -493,14 +571,19 @@ void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits);
 /** Mask the bits `bits` of `bank` again, with a posting read. */
 void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits);
 
+/** Mask the bits `bits` of `bank`, with a posting read, from a source's
+ * handler, which runs with the interrupt mask's lock held. */
+void i915_irq_mask_locked(struct drm_i915_private *i915, int bank, uint32_t bits);
+
 /**
  * The device's interrupt, as Linux's ilk_irq_handler: the master enable
  * and the south display's off, then each bank's identity read, written
  * back and handed to its handlers, the GT's first, then the display
  * engine's with the south display's behind its PCH event, then power
- * management's; then the enables restored. Counts the message, a message
- * with no bit set as spurious, and a bit with no handler as unclaimed,
- * which it masks and disables. Any context the handler runs in.
+ * management's; then the enables restored, the lock let go, and the
+ * `deferred` work run. Counts the message, a message with no bit set as
+ * spurious, and a bit with no handler as unclaimed, which it masks and
+ * disables. Any context the handler runs in.
  */
 void i915_irq_handle(struct drm_i915_private *i915);
 
@@ -622,5 +705,169 @@ int32_t i915_ppgtt_enable_ring(struct drm_i915_private *i915, struct i915_engine
  *         did not come, or -EIO when the value read back is wrong.
  */
 int32_t i915_firstlight(struct drm_i915_private *i915);
+
+/* ---- i915_rc6.c ---- */
+
+/**
+ * Make RC6 known and turn it off until the driver is ready, as Linux's
+ * intel_rc6_init: GEN6_RC_CONTROL and GEN6_RC_STATE cleared under
+ * forcewake, whatever the firmware left. Before the rings start.
+ */
+void i915_rc6_init(struct drm_i915_private *i915);
+
+/**
+ * Enable RC6 as Linux's gen6_rc6_enable on Haswell: the wake rate limits,
+ * the evaluation interval and idle hysteresis, each engine's idle limit,
+ * and the RC1e, RC6, RC6p and RC6pp thresholds, under forcewake; the
+ * pcode's RC6 voltages read, as Linux reads them; and `ctl_enable` made
+ * RC6 under the hardware's timers, which the GT takes when it unparks.
+ * Nothing is written to GEN6_RC_CONTROL here.
+ */
+void i915_rc6_enable(struct drm_i915_private *i915);
+
+/** Turn RC6 off, GEN6_RC_CONTROL and GEN6_RC_STATE cleared, as Linux's
+ * intel_rc6_disable: for the unplug. */
+void i915_rc6_disable(struct drm_i915_private *i915);
+
+/** The GT goes idle: RC6's timers off and the GT sent into RC6 at once,
+ * as Linux's intel_rc6_park on a part with RC6 alone. */
+void i915_rc6_park(struct drm_i915_private *i915);
+
+/** The GT takes work again: RC6 back under the hardware's timers. */
+void i915_rc6_unpark(struct drm_i915_private *i915);
+
+/**
+ * The milliseconds the GT has spent in RC6 since the bind, as Linux's
+ * rc6_residency_ms: the 32-bit counter of 1.28 us units read and extended
+ * across its wraps, which a read at least every 91 minutes keeps whole.
+ * Takes the register lock. 0 when RC6 is not supported.
+ */
+uint64_t i915_rc6_residency_ms(struct drm_i915_private *i915);
+
+/**
+ * Bring the GT's power up at the bind, as Linux's intel_gt_resume and the
+ * park that follows it: RPS enabled, the ring's frequency table written,
+ * RC6 enabled, then the GT parked, since no work runs yet, so that it
+ * enters RC6 at once.
+ */
+void i915_gt_pm_enable(struct drm_i915_private *i915);
+
+/** Turn RPS and RC6 off, for the unplug and a failed bind. */
+void i915_gt_pm_disable(struct drm_i915_private *i915);
+
+/**
+ * The GT takes work: RC6 under its timers and RPS active from the last
+ * frequency asked for, with its up and down interrupts, as Linux's
+ * __gt_unpark. The code that submits work calls it with the first request
+ * and `i915_gt_park` when the last retires. Process context.
+ */
+void i915_gt_unpark(struct drm_i915_private *i915);
+
+/** The GT is idle: RPS's interrupts off and its frequency at the idle
+ * frequency, then RC6 at once, as Linux's __gt_park. */
+void i915_gt_park(struct drm_i915_private *i915);
+
+/* ---- i915_rps.c ---- */
+
+/**
+ * Read the pcode mailbox's command `mbox`, as Linux's snb_pcode_read: the
+ * data written, the command posted with GEN6_PCODE_READY, the ready bit
+ * waited for, 20.5 ms at most, then the data read back into `*val` and,
+ * when `val1` is not NULL, `*val1`. The callers hold the big kernel lock,
+ * which keeps one command in the mailbox at a time, as Linux's sb_lock;
+ * never from an interrupt.
+ *
+ * @return 0; -EAGAIN when a command is in the mailbox already; -ETIMEDOUT
+ *         when it was not taken, named "pcode mailbox"; or the pcode's
+ *         error as Linux's gen7_check_mailbox_status maps it: -ENXIO,
+ *         -EINVAL, -EBUSY, -EACCES or -EOVERFLOW.
+ */
+int32_t i915_pcode_read(struct drm_i915_private *i915, uint32_t mbox, uint32_t *val,
+                        uint32_t *val1);
+
+/** Write `val` to the pcode mailbox's command `mbox`, as Linux's
+ * snb_pcode_write: 0, or `i915_pcode_read`'s errors. */
+int32_t i915_pcode_write(struct drm_i915_private *i915, uint32_t mbox, uint32_t val);
+
+/**
+ * Read the frequency limits, as Linux's gen6_rps_init and intel_rps_init on
+ * Haswell: RP0, RP1 and RPn from GEN6_RP_STATE_CAP, RPe from the pcode's
+ * duty cycle control, the overclocking limit from its parameters, the
+ * softlimits the whole range, 95 and 85 percent as the up and down
+ * thresholds, and the start at RPe; then RPS's interrupts off. Registers
+ * the up and down interrupts' handler, masked.
+ */
+void i915_rps_init(struct drm_i915_private *i915);
+
+/**
+ * Enable RPS as Linux's gen6_rps_enable, under forcewake: the down timeout
+ * of 50 ms and the idle hysteresis written, the up and down interrupts
+ * chosen, and the frequency reset to RPn with its thresholds; then the
+ * ring's frequency table loaded into the pcode for each GPU frequency, as
+ * Linux's gen6_update_ring_freq. RPS stays inactive until the GT unparks.
+ * Leaves RPS disabled when the chip has no range to move in.
+ */
+void i915_rps_enable(struct drm_i915_private *i915);
+
+/** Turn RPS off, its interrupts off and GEN6_RP_CONTROL cleared, as
+ * Linux's intel_rps_disable. */
+void i915_rps_disable(struct drm_i915_private *i915);
+
+/** The GT unparks: RPS active at the frequency asked for, within the
+ * softlimits, and its interrupts on, as Linux's intel_rps_unpark. */
+void i915_rps_unpark(struct drm_i915_private *i915);
+
+/** The GT parks: RPS's interrupts off, the idle frequency written under
+ * forcewake, and the frequency to start from next stepped down, as
+ * Linux's intel_rps_park. */
+void i915_rps_park(struct drm_i915_private *i915);
+
+/**
+ * Act on the up and down interrupts the handler latched, as Linux's
+ * rps_work: step the frequency up or down, or to RPe or RPn on the down
+ * timeout, within the softlimits, then unmask the events again. Runs as
+ * the interrupt's `deferred` work, with no lock of the driver held, and
+ * may be called from anywhere else; it takes the frequency lock.
+ */
+void i915_rps_work(struct drm_i915_private *i915);
+
+/**
+ * Set the frequency `val`, in the chip's units, as Linux's intel_rps_set:
+ * while RPS is active, GEN6_RPNSWREQ, the thresholds of its power mode,
+ * the interrupt limits and GEN6_PMINTRMSK; `cur_freq` either way. Under
+ * the frequency lock. 0, or -EINVAL for a frequency outside
+ * [min_freq, max_freq].
+ */
+int32_t i915_rps_set_locked(struct drm_i915_private *i915, int val);
+
+/** The frequency the GPU runs at, in MHz, from GEN6_RPSTAT1's CAGF, as
+ * Linux's intel_rps_read_actual_frequency. */
+uint32_t i915_rps_read_actual_mhz(struct drm_i915_private *i915);
+
+/**
+ * Set the softlimit gt_max_freq_mhz or gt_min_freq_mhz shows, `val` in
+ * MHz, rounded to the nearest 50, as Linux's set_max_freq and
+ * set_min_freq, and ask for the current frequency again within the new
+ * limits.
+ *
+ * @return 0, or -EINVAL for a value outside [min_freq, max_freq] or past
+ *         the other softlimit.
+ */
+int32_t i915_rps_set_max_mhz(struct drm_i915_private *i915, uint32_t val);
+int32_t i915_rps_set_min_mhz(struct drm_i915_private *i915, uint32_t val);
+
+/** Set the boost frequency, gt_boost_freq_mhz, `val` in MHz: 0, or
+ * -EINVAL outside [min_freq, max_freq]. */
+int32_t i915_rps_set_boost_mhz(struct drm_i915_private *i915, uint32_t val);
+
+/**
+ * Add the device's /sys files below its card's directory, as Linux's
+ * intel_gt_sysfs_pm_init on Haswell: gt_act_freq_mhz, gt_boost_freq_mhz,
+ * gt_cur_freq_mhz, gt_max_freq_mhz, gt_min_freq_mhz, gt_RP0_freq_mhz,
+ * gt_RP1_freq_mhz and gt_RPn_freq_mhz, and power/rc6_enable and
+ * power/rc6_residency_ms. Once the DRM device is registered; they go with
+ * the card's directory. A file that cannot be added is logged.
+ */
+void i915_sysfs_register(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */

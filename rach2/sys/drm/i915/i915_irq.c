@@ -83,6 +83,7 @@ void i915_irq_reset(struct drm_i915_private *i915)
     }
     i915_write(hw, SERR_INT, 0xffffffffu);
     irq->installed = 0;
+    irq->deferred = 0;
     spin_unlock_irqrestore(&irq->lock, flags);
 }
 
@@ -216,10 +217,9 @@ void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits)
     spin_unlock_irqrestore(&irq->lock, flags);
 }
 
-void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits)
+void i915_irq_mask_locked(struct drm_i915_private *i915, int bank, uint32_t bits)
 {
     struct i915_irq *irq = &i915->irq;
-    uint32_t flags;
 
     if (bank < 0 || bank >= I915_IRQ_BANKS) {
         return;
@@ -227,11 +227,17 @@ void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits)
     if (bank == I915_IRQ_DE) {
         bits &= ~DE_RESERVED;
     }
-    flags = spin_lock_irqsave(&irq->lock);
     irq->imr[bank] |= bits;
     i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
     i915_posting_read(&i915->hw, REG_IMR(bank));
-    spin_unlock_irqrestore(&irq->lock, flags);
+}
+
+void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits)
+{
+    uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
+
+    i915_irq_mask_locked(i915, bank, bits);
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
 }
 
 /**
@@ -337,4 +343,7 @@ void i915_irq_handle(struct drm_i915_private *i915)
         i915_write(hw, SDEIER, irq->ier[I915_IRQ_SDE]);
     }
     spin_unlock_irqrestore(&irq->lock, flags);
+    if (irq->deferred) {
+        irq->deferred(i915);
+    }
 }
