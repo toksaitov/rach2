@@ -51,6 +51,7 @@ case fatwriteprobe.vfat volume:vfat:fatwrite-vfat:attached mountns log -- \
 case fdfull root:ext2-dir stage:hello -- fdfull
 # A volume of 10 MiB, which the leak loops' 16 MB cannot fit twice.
 case fdstale root:krffs:10 -- fdstale
+case fenceprobe -- fenceprobe
 case forkro -- forkro
 case forktest -- forktest
 case fpuprobe stage:fpuprobe -- fpuprobe
