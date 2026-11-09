@@ -321,4 +321,15 @@ void arch_dma_fence(void);
  * the caller has not tracked one by one. */
 void arch_dma_flush_all(void);
 
+/* The two calls `drm_start` (sys/drm/drm.h) makes of `arch_drm_probe`: the
+ * platform's native display drivers first, which take the firmware's
+ * framebuffer from its driver, then that driver on what they left. */
+#define ARCH_DRM_NATIVE   0
+#define ARCH_DRM_FIRMWARE 1
+
+/** Probe the platform's own display drivers of `phase`, ARCH_DRM_NATIVE
+ * or ARCH_DRM_FIRMWARE; at boot, once each, in that order. Defined by the
+ * platform's display code, sys/drm/drm_pc.c on a PC. */
+void arch_drm_probe(int phase);
+
 #endif /* _ARCH_H_ */

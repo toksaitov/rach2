@@ -60,7 +60,7 @@ $(ACPICA)/.unpacked: $(ACPICA).tar.bz2
 	tar -xmojf $(ACPICA).tar.bz2 -C $(ACPICA)
 	touch $@
 
-kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/sources.mk sys/acpi/sources.mk
+kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/sources.mk sys/acpi/sources.mk sys/drm/sources.mk sys/drm/pc.mk sys/dmabuf/sources.mk sys/virtio/sources.mk
 	printf '%s\n' $(OBJS) > kernel.objs.new
 	mv kernel.objs.new kernel.objs
 
