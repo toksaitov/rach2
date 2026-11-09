@@ -89,17 +89,20 @@ typedef enum {
  * reads the file's page `pgoff` into the frame `phys`, with zeros past the
  * end of the file: 0 when the file cache had the page, 1 when it was read
  * through the file system, which makes the fault a major one, or -1 when
- * the read fails; it may sleep. A shared
- * mapping's `share` gives the frame of page `pgoff` itself, with a reference
- * taken for the mapping, or 0 when none can be had; it does not sleep. A
- * device region's `device`, set by `vm_device_map` alone, gives the physical
- * address of page `pgoff` in `*phys` and returns 0, or -1 when the object
- * has no page there now, which raises SIGBUS; it may sleep.
+ * the read fails; it may sleep. A file with `share` instead lends its
+ * resident frame in `*phys`, with a reference for the mapping: a shared
+ * region writes it in place and a private region copies it on its first
+ * write. It returns 0 for a resident page, 1 after a file-system read,
+ * -ENXIO past EOF, or another negative errno when no page can be had, and
+ * may sleep. A device region's `device`, set by `vm_device_map` alone,
+ * gives the physical address of page `pgoff` in `*phys` and returns 0, or
+ * -1 when the object has no page there now, which raises SIGBUS; it may
+ * sleep.
  */
 struct vm_file {
     uint32_t refs;
     int (*fill)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
-    uintptr_t (*share)(struct vm_file *f, uint32_t pgoff);
+    int (*share)(struct vm_file *f, uint32_t pgoff, uintptr_t *phys);
     void (*release)(struct vm_file *f);
     char *path;           /* the file's path for /proc/PID/maps, or NULL */
     struct vm_file *dead; /* the next file waiting for `vm_file_reap` */

@@ -172,8 +172,13 @@ after it share, so a store by one is seen by all.
 .It A private mapping of a file
 The file
 .Fa fd
-is open on, from the page offset: a page is read from the file on first
-access, and a store changes the page and never the file.
+is open on, from the page offset.
+On tmpfs and ext2 a clean page maps the file's resident frame, so shared
+stores and descriptor writes are visible until the mapping first writes.
+That write makes a private copy and never changes the file.
+A truncation removes private copies wholly past the new end too; a later
+access raises SIGBUS.
+On another file system a page is read from the file on first access.
 The descriptor must be open for reading.
 The mapping keeps the file open, so
 .Fa fd
@@ -204,9 +209,8 @@ of the bytes they hold, and the bytes a
 puts in the file are copied into them.
 A page goes back whole, up to the file's size, since the kernel does not
 ask the page tables which pages were stored to, and never past the size:
-a store past the end of the file is lost, where Linux sends
-.Dv SIGBUS
-for an access to a page wholly past it.
+an access to a page wholly past the end raises
+.Dv SIGBUS .
 A truncation takes the pages past the new end out of every mapping.
 A page that cannot go back when its last mapping goes is lost, and the
 kernel's log says so.
@@ -222,9 +226,7 @@ mapping that may be written is refused with
 .Er ENODEV ,
 and a read-only one is served as a private one that may never be made
 writable.
-A read-only shared mapping through a descriptor not open for writing is
-served as a private one, which reads the same bytes, unless another
-shared mapping has the file's pages in memory, which it then maps too.
+On ext2 a read-only shared mapping also maps the file's resident pages.
 A writable shared mapping needs a descriptor open for writing.
 .It A device object
 A descriptor of a device or driver object that maps itself, such as

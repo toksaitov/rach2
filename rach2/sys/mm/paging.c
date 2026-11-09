@@ -359,9 +359,9 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
 }
 
 /**
- * Back a page of a shared region: map the frame the region's file or shared
- * memory has for it, writable when the region is. The frame is the same one
- * every mapping of that page maps, so a store is seen by all of them.
+ * Borrow a resident file or shared-memory page. A shared region maps it
+ * writable when allowed; a private region maps it copy-on-write and copies
+ * immediately when resolving a store. ENXIO raises SIGBUS past EOF.
  *
  * The share of a disk file's pages reads a page from the file the first
  * time, which may sleep, so the file is held across it and the region is
@@ -369,31 +369,39 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
  * page backed meanwhile, has the resolution run again. 1 with the page
  * mapped, 0 when no frame could be had, -1 to resolve again.
  */
-static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
+static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
+    page_dir_t *dir = mm->dir;
+    vm_space_t *vm = &mm->vm;
     struct vm_file *f = vma->file;
+    int private = vma->type != VM_SHARED;
+    int got;
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot;
-    uintptr_t phys;
+    uintptr_t phys = 0;
     int rc = 1;
 
     vm_file_get(f);
-    phys = f->share(f, pgoff);
+    got = f->share(f, pgoff, &phys);
     vma = vm_find(vm, page);
     if (!vma || vma->file != f || vma->prot != prot ||
         vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
         rc = -1;
     }
     vm_file_put(f);
-    if (phys == 0) {
+    if (rc == 1 && got == -ENXIO && current_proc) {
+        current_proc->bus_fault = 1;
+    }
+    if (got < 0) {
         return rc < 0 ? -1 : 0;
     }
-    if (rc == 1 && map_user_frame(dir, page, phys,
-                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                                      paging_noexec(prot)) == 0) {
-        fault_count(0);
-        return 1;
+    if (rc == 1 &&
+        map_user_frame(dir, page, phys,
+                       PTE_P | PTE_U | (private ? PTE_COW : ((prot & VM_PROT_WRITE) ? PTE_W : 0)) |
+                           paging_noexec(prot)) == 0) {
+        fault_count(got > 0);
+        return private && write ? cow_fault(mm, page) : 1;
     }
     free_frame(phys);
     return rc < 0 ? -1 : 0;
@@ -530,8 +538,8 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
             return vma->file && vma->file->device ? device_fault(dir, vm, vma, addr) : 0;
         }
         if (vma->file) {
-            return vma->type == VM_SHARED ? shared_fault(dir, vm, vma, addr)
-                                          : file_fault(dir, vm, vma, addr);
+            return vma->file->share ? shared_fault(mm, vma, addr, write)
+                                    : file_fault(dir, vm, vma, addr);
         }
     }
 
@@ -2060,7 +2068,7 @@ static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type
             return -1;
         }
         if (paging_copy_frame(copy, parent_phys) != 0 ||
-            map_user_frame(child_dir, va, copy, pte & PTE_FLAGS & ~(pte_t)PTE_COW) != 0) {
+            map_user_frame(child_dir, va, copy, pte & PTE_FLAGS) != 0) {
             free_frame(copy);
             return -1;
         }

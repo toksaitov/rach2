@@ -27,6 +27,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strncmp(id, "machine.d3d-vkd3d.", 18) == 0) {
         snprintf(family, sizeof(family), "vkd3d");
         snprintf(row, sizeof(row), "%s", tail);
+    } else if (strcmp(id, "machine.d3d.private") == 0) {
+        snprintf(family, sizeof(family), "private");
+        snprintf(row, sizeof(row), "files");
     } else if (strncmp(id, "machine.d3d.", 12) == 0) {
         snprintf(family, sizeof(family), "probe");
         snprintf(row, sizeof(row), "%s", tail);
