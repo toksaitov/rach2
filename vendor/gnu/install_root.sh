@@ -59,7 +59,7 @@ DEBIAN="$OUT/work/debian/desktop"
 SKIP="libc6 libgcc-s1 libstdc++6 libatomic1 libgomp1 zlib1g liblzma5 libpcre2-8-0
 libmount1 libblkid1 libuuid1 libsmartcols1 libfdisk1 libffi8 libsqlite3-0 libbz2-1.0
 libzstd1 libcrypt1 libcap2 libcap2-bin libevent-2.1-7t64 libgcrypt20 libgpg-error0
-libreadline8t64 libtinfo6 libncurses6 libncursesw6 libbrotli1 gcc-14-base debconf
+libreadline8t64 libncurses6 libncursesw6 libbrotli1 gcc-14-base debconf
 lsb-base sysvinit-utils base-files dpkg debianutils init-system-helpers systemd
 systemd-sysv dbus-user-session gawk mount procps tar tzdata netbase python3
 python3-minimal libpython3-stdlib readline-common libpam-modules
@@ -409,6 +409,9 @@ fi
 # Debian's cursor-theme alternative is normally made by a maintainer script.
 mkdir -p "$TREE/usr/share/icons/default"
 printf '[Icon Theme]\nInherits=Adwaita\n' > "$TREE/usr/share/icons/default/index.theme"
+for pair in dnd-copy:copy dnd-none:no-drop; do
+    ln -s "${pair#*:}" "$TREE/usr/share/icons/Adwaita/cursors/${pair%%:*}"
+done
 
 # Build the caches normally made by Debian's package maintainer scripts.
 # Target programs run through the same loader as tic; no host libraries enter.
