@@ -94,13 +94,6 @@ Measured on the testing PC with the module loaded, by `debian-ref.sh run -p venu
 
 QEMU on Windows gives no Venus. The test engine's QEMU 11.1.2 (`rach2-whpx-d0`, `D:/rach2/build/qemu`) has no `virtio-vga-gl` and no display but `none`. The stock QEMU 11.1.0 (`v11.1.0-12130-ge470268ff4`, `C:/Program Files/qemu`) has the device with its `venus`, `blob` and `hostmem` options, but its virglrenderer is built without the render server: started once under WHPX with `venus=on,blob=on,hostmem=1G` and egl-headless, it logs "Render server support was not enabled in virglrenderer", "failed to initialize venus renderer" and "virgl could not be initialized: -1", and keeps running; the Debian guest's virtio-gpu offers `+virgl +edid +resource_blob +host_visible +context_init` and 2 capability sets, times out reading the first (`timed out waiting for cap set 0`), and falls back to its own llvmpipe for GL and lavapipe for Vulkan.
 
-## Limits
-
-* `virgl` and `venus` are the testing PC's alone: the render node's path, the adapter's name and the libraries' paths are its own, the test engine's QEMU on Windows has no GL display, and etude refuses both there.
-* `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded.
-* On Rach2 `drmcapture` needs a card, which in QEMU no driver gives yet: Rach2's std-vga and virtio-gpu drivers are stubs ([rach2/sys/drm/Readme.md](../../rach2/sys/drm/Readme.md)).
-* The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
-
 ### Direct3D on lavapipe
 
 `make ARCH=x86_64 build/tests/graphics/d3d/bundle.tar` compiles three 64-bit Windows probes, Wine 11.0's seven Direct3D test executables and the native vkd3d-proton suite in the Debian builder guest. [`d3d/sources.txt`](d3d/sources.txt) pins the official source archives, including vkd3d-proton's nested submodules at GE-Proton11-12's revisions. The build installs its dependencies from the guest's dated Debian snapshot; it runs no tests. `build/tests/graphics/d3d/data.ext2` puts that payload on a separate ext2 disk, mounted read-only by the cases. The payload also carries the reference guest's Xvfb and its non-libc dependencies, used privately by the runner, since the desktop root has Xwayland alone. No test executable is installed in the product's root.
@@ -113,4 +106,15 @@ All three families boot an overlay of the GNU root on `virtio-vga`, without virg
 
 [`d3d/ref/linux.json`](d3d/ref/linux.json) records run 2's Debian reference on Mesa 25.0.7-2+deb13u1 and GE-Proton11-12. Wine's units match their recorded exits, the presence of a summary and the failure count. In particular, five Proton units exit with 5 and `d3d9:visual` with 245 before their summary; these exits do not become passes with a missing result. WineD3D's DXGI unit is stopped when its second `dxgi.c:8040` present-count record matches Linux's last progress. The runner reports that observation explicitly; it assigns no timeout exit code to it. The native vkd3d units compare their failure counts with those recorded on Linux, allowing a new pass, and accept a segmentation fault only for the six named tests that run 2's 16-GiB probe attributed to lavapipe. A killed process and a missing summary on any other test fail. The upstream fault is recorded in [the upstream index](../../dev-log/upstream.md).
 
+[`d3d/ref/author.json`](d3d/ref/author.json) records the author's Debian run: the three pixel probes, 5,041 checks with no failures in `d3d10:effect` on each Wine path, and 17 with no failures in `test_create_device`.
+
 For an author's single-unit run, unpack `bundle.tar` in the Debian guest, place the pinned Proton release at `/opt/proton`, and run `python3 run.py probe 11 /tmp/d3d-11`, `python3 run.py wine proton/d3d10:effect /tmp/d3d-effect`, or `python3 run.py vkd3d test_create_device /tmp/d3d-device`. `D3D_PROTON` may name the same release elsewhere. The output directory must be new and is kept as evidence. The registered families use the same commands on Rach2. The 32-bit programs belong to the compat milestone. lavapipe's recorded limit is feature level 11_1 and shader model 6.0; no feature-level override is passed.
+
+
+## Limits
+
+* `virgl` and `venus` are the testing PC's alone: the render node's path, the adapter's name and the libraries' paths are its own, the test engine's QEMU on Windows has no GL display, and etude refuses both there.
+* `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded.
+* On Rach2 `drmcapture` needs a card, which in QEMU no driver gives yet: Rach2's std-vga and virtio-gpu drivers are stubs ([rach2/sys/drm/Readme.md](../../rach2/sys/drm/Readme.md)).
+* The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
+
