@@ -7,6 +7,7 @@ intrprobe usb
 keylatprobe usb
 evprobe input
 drmprobe screen
+sysdrmprobe screen
 stdintest console
 pingtest ping
 packetprobe packet

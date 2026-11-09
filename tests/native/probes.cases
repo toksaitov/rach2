@@ -160,6 +160,9 @@ case stickyprobe root:krffs ids:1000,1001 -- stickyprobe
 case stressprobe volume:krffs:krffs48 -- stressprobe dir=vol0
 case sudoprobe root:krffs ids:1000,1001 -- sudoprobe
 case suidprobe root:krffs ids:1000,5 -- suidprobe
+# Under fbdrm the Lenovo's card is a platform device; the uevent row writes
+# the card's add.
+case sysdrmprobe -- sysdrmprobe
 case tcptest peer:echo -- tcptest closed=9
 case timeprobe -- timeprobe
 case trapprobe -- trapprobe
