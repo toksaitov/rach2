@@ -111,6 +111,17 @@ void k_udelay(uint32_t usec)
     (void)usec;
 }
 
+/** Configuration space, which i915_hw.c's words read and no row reaches:
+ * all ones, as an absent function answers. */
+uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    (void)bus;
+    (void)device;
+    (void)function;
+    (void)offset;
+    return 0xffffu;
+}
+
 /* The MMIO backend, which no row uses. */
 int pat_write_combining(void)
 {
