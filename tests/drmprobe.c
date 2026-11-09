@@ -4,28 +4,33 @@
  * buffers.
  *
  * The probe opens /dev/dri/card0 to card15 in turn and takes the first that
- * answers GET_CAP with DRM_CAP_DUMB_BUFFER set. It reads VERSION with a
- * name, opens the render node of the same index, whose VERSION gives the
- * same name and which refuses CREATE_DUMB with EACCES, and checks the
- * master role: the card's descriptor drops it, a second open takes it and
- * the first's SET_MASTER is EBUSY, and back again; a magic of a third open
- * is spent by AUTH_MAGIC once and refused the second time. It creates a
- * dumb buffer of 64 by 64 pixels at 32 bits, maps it with MAP_DUMB and
- * mmap, writes a pattern and reads it back through a second mapping, and
- * destroys it: MAP_DUMB of the handle is then ENOENT while the mappings
- * still read the pattern, since they hold the buffer until munmap. Last,
- * PRIME exports a buffer, reuses self-import and repeated import handles,
- * and retains the mapping after its handles and dma-buf descriptors close.
- * kcmp(2) says a dup of the card's descriptor is the same open file and
- * the second open is not.
+ * answers GET_CAP with DRM_CAP_DUMB_BUFFER set. It reads VERSION with a name,
+ * opens the render node of the same index, whose VERSION gives the same name
+ * and which refuses CREATE_DUMB with EACCES, or skips that row for a driver
+ * with a card alone, as bochs-drm and simpledrm are, and checks the master
+ * role: the card's descriptor drops it, a second open takes it and the first's
+ * SET_MASTER is EBUSY, and back again; a magic of a third open is spent by
+ * AUTH_MAGIC once and refused the second time. It creates a dumb buffer of 64
+ * by 64 pixels at 32 bits, maps it with MAP_DUMB and mmap, writes a pattern
+ * and reads it back through a second mapping, and destroys it: MAP_DUMB of the
+ * handle is then ENOENT while the mappings still read the pattern, since they
+ * hold the buffer until munmap. Last, PRIME exports a buffer, reuses
+ * self-import and repeated import handles, and retains the mapping after its
+ * handles and dma-buf descriptors close. kcmp(2) says a dup of the card's
+ * descriptor is the same open file and the second open is not. Then, as the
+ * master, it sets every mode the first connected connector lists, each on a
+ * dumb buffer of its size shown on the first CRTC by SETCRTC, and reads it
+ * back with GETCRTC; the buffer's pattern reads the same through its mapping
+ * after the mode is set, since a driver may move a buffer to scan it out. Each
+ * mode set prints "DRMPROBE MODE NAME".
  *
  * Prints "DRMPROBE OK" and exits 0 when every check passes, and otherwise
  * "DRMPROBE FAIL: what" and exits 1 at the first failure. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each check in order: `open`, `version`, `render`, `master`, `auth`,
- * `create`, `map`, `destroy`, `prime` and `kcmp`. The master rows skip
- * while another process holds the role. Freestanding; direct system calls
- * (probe.h).
+ * `create`, `map`, `destroy`, `prime`, `kcmp` and `modes`. The master rows
+ * and `modes` skip while another process holds the role. Freestanding;
+ * direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -108,6 +113,69 @@ struct drm_prime_handle {
     int fd;
 };
 
+struct drm_mode_card_res {
+    u64 fb_id_ptr;
+    u64 crtc_id_ptr;
+    u64 connector_id_ptr;
+    u64 encoder_id_ptr;
+    u32 count_fbs;
+    u32 count_crtcs;
+    u32 count_connectors;
+    u32 count_encoders;
+    u32 min_width, max_width;
+    u32 min_height, max_height;
+};
+
+struct drm_mode_modeinfo {
+    u32 clock;
+    unsigned short hdisplay, hsync_start, hsync_end, htotal, hskew;
+    unsigned short vdisplay, vsync_start, vsync_end, vtotal, vscan;
+    u32 vrefresh;
+    u32 flags;
+    u32 type;
+    char name[32];
+};
+
+struct drm_mode_get_connector {
+    u64 encoders_ptr;
+    u64 modes_ptr;
+    u64 props_ptr;
+    u64 prop_values_ptr;
+    u32 count_modes;
+    u32 count_props;
+    u32 count_encoders;
+    u32 encoder_id;
+    u32 connector_id;
+    u32 connector_type;
+    u32 connector_type_id;
+    u32 connection;
+    u32 mm_width;
+    u32 mm_height;
+    u32 subpixel;
+    u32 pad;
+};
+
+struct drm_mode_crtc {
+    u64 set_connectors_ptr;
+    u32 count_connectors;
+    u32 crtc_id;
+    u32 fb_id;
+    u32 x, y;
+    u32 gamma_size;
+    u32 mode_valid;
+    struct drm_mode_modeinfo mode;
+};
+
+struct drm_mode_fb_cmd {
+    u32 fb_id;
+    u32 width;
+    u32 height;
+    u32 pitch;
+    u32 bpp;
+    u32 depth;
+    u32 handle;
+};
+
 #define DRM_CLOEXEC 02000000
 #define DRM_RDWR    2
 
@@ -129,7 +197,24 @@ struct drm_mode_destroy_dumb {
 #define DRM_IOCTL_MODE_MAP_DUMB     DRM_IOWR(0xB3, struct drm_mode_map_dumb)
 #define DRM_IOCTL_MODE_DESTROY_DUMB DRM_IOWR(0xB4, struct drm_mode_destroy_dumb)
 
+#define DRM_IOCTL_MODE_GETRESOURCES DRM_IOWR(0xA0, struct drm_mode_card_res)
+#define DRM_IOCTL_MODE_GETCRTC      DRM_IOWR(0xA1, struct drm_mode_crtc)
+#define DRM_IOCTL_MODE_SETCRTC      DRM_IOWR(0xA2, struct drm_mode_crtc)
+#define DRM_IOCTL_MODE_GETCONNECTOR DRM_IOWR(0xA7, struct drm_mode_get_connector)
+#define DRM_IOCTL_MODE_ADDFB        DRM_IOWR(0xAE, struct drm_mode_fb_cmd)
+#define DRM_IOCTL_MODE_RMFB         DRM_IOWR(0xAF, unsigned int)
+
 #define DRM_CAP_DUMB_BUFFER 0x1
+
+/* GETCONNECTOR's `connection` of a connected sink. */
+#define DRM_MODE_CONNECTED 1
+
+/* The most connectors, CRTCs and modes the mode row reads. */
+#define MAX_IDS   16
+#define MAX_MODES 64
+
+/* The words of each mode's buffer the mode row writes and reads back. */
+#define MODE_WORDS 4096
 
 /* The dumb buffer's size in pixels and bits per pixel. */
 #define DUMB_SIDE 64
@@ -276,6 +361,10 @@ static void render_row(int index, const char *name)
 
     node_path(path, "/dev/dri/renderD", 128 + index);
     fd = open_node(path);
+    if (fd == -ENOENT) {
+        report_skip("the driver has a card node alone");
+        return;
+    }
     if (fd < 0) {
         fail("open of the card's render node");
     }
@@ -486,6 +575,143 @@ static void kcmp_row(int fd, int other)
     report_held();
 }
 
+/** Whether two modes are the same mode: timings, clock, flags and name. */
+static int same_mode(const struct drm_mode_modeinfo *a, const struct drm_mode_modeinfo *b)
+{
+    return a->clock == b->clock && a->hdisplay == b->hdisplay && a->htotal == b->htotal &&
+           a->hsync_start == b->hsync_start && a->hsync_end == b->hsync_end &&
+           a->vdisplay == b->vdisplay && a->vtotal == b->vtotal &&
+           a->vsync_start == b->vsync_start && a->vsync_end == b->vsync_end &&
+           a->flags == b->flags && same_name(a->name, b->name);
+}
+
+/** The first connected connector of the card at `fd` with modes into
+ * `*conn` and its modes into `modes`, and the first CRTC's ID: the number
+ * of modes, at most MAX_MODES. */
+static u32 mode_list(int fd, struct drm_mode_get_connector *conn, struct drm_mode_modeinfo *modes,
+                     u32 *crtc)
+{
+    static u32 crtcs[MAX_IDS], conns[MAX_IDS];
+    struct drm_mode_card_res res;
+    u32 i;
+
+    zero(&res, sizeof(res));
+    res.crtc_id_ptr = (u64)(unsigned long)crtcs;
+    res.connector_id_ptr = (u64)(unsigned long)conns;
+    res.count_crtcs = MAX_IDS;
+    res.count_connectors = MAX_IDS;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res) != 0 || res.count_crtcs == 0 ||
+        res.count_connectors == 0) {
+        fail("GETRESOURCES gives no CRTC or no connector");
+    }
+    *crtc = crtcs[0];
+    for (i = 0; i < res.count_connectors && i < MAX_IDS; i++) {
+        zero(conn, sizeof(*conn));
+        conn->connector_id = conns[i];
+        if (drm_ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, conn) != 0) {
+            fail("GETCONNECTOR's probe");
+        }
+        if (conn->connection != DRM_MODE_CONNECTED || conn->count_modes == 0) {
+            continue;
+        }
+        if (conn->count_modes > MAX_MODES) {
+            conn->count_modes = MAX_MODES;
+        }
+        conn->modes_ptr = (u64)(unsigned long)modes;
+        conn->count_encoders = 0;
+        conn->count_props = 0;
+        if (drm_ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, conn) != 0) {
+            fail("GETCONNECTOR's modes");
+        }
+        return conn->count_modes > MAX_MODES ? MAX_MODES : conn->count_modes;
+    }
+    fail("no connector is connected with modes");
+    return 0;
+}
+
+/** Set `mode` on `crtc` and `conn` from a dumb buffer of its size with a
+ * pattern, read the CRTC back, and take the buffer down. */
+static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo *mode)
+{
+    struct drm_mode_create_dumb c;
+    struct drm_mode_map_dumb m;
+    struct drm_mode_destroy_dumb d;
+    struct drm_mode_fb_cmd f;
+    struct drm_mode_crtc set, get;
+    long map;
+
+    zero(&c, sizeof(c));
+    c.width = mode->hdisplay;
+    c.height = mode->vdisplay;
+    c.bpp = 32;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &c) != 0) {
+        fail("CREATE_DUMB of a mode's size");
+    }
+    zero(&m, sizeof(m));
+    m.handle = c.handle;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &m) != 0 ||
+        sys_failed(map = map_drm(fd, (long)c.size, m.offset))) {
+        fail("a mode's buffer is not mapped");
+    }
+    fill((volatile u32 *)map, MODE_WORDS, 0x600DF00Du);
+    zero(&f, sizeof(f));
+    f.width = mode->hdisplay;
+    f.height = mode->vdisplay;
+    f.pitch = c.pitch;
+    f.bpp = 32;
+    f.depth = 24;
+    f.handle = c.handle;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_ADDFB, &f) != 0) {
+        fail("ADDFB of a mode's buffer");
+    }
+    zero(&set, sizeof(set));
+    set.set_connectors_ptr = (u64)(unsigned long)&conn;
+    set.count_connectors = 1;
+    set.crtc_id = crtc;
+    set.fb_id = f.fb_id;
+    set.mode_valid = 1;
+    set.mode = *mode;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &set) != 0) {
+        probe_line("DRMPROBE FAIL MODE ", mode->name, 0);
+        fail("SETCRTC of a listed mode");
+    }
+    zero(&get, sizeof(get));
+    get.crtc_id = crtc;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &get) != 0 || !get.mode_valid ||
+        get.fb_id != f.fb_id || !same_mode(&get.mode, mode)) {
+        probe_line("DRMPROBE FAIL MODE ", mode->name, 0);
+        fail("GETCRTC does not read back the mode set");
+    }
+    if (!holds((volatile u32 *)map, MODE_WORDS, 0x600DF00Du)) {
+        fail("a buffer's mapping changed when its mode was set");
+    }
+    probe_line("DRMPROBE MODE ", mode->name, 0);
+    d.handle = c.handle;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) != 0 ||
+        syscall2(SYS_MUNMAP, map, (long)c.size) != 0 ||
+        drm_ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d) != 0) {
+        fail("a mode's framebuffer and buffer are not taken down");
+    }
+}
+
+/** As the master, set each mode of the first connected connector. */
+static void modes_row(int fd)
+{
+    static struct drm_mode_modeinfo modes[MAX_MODES];
+    struct drm_mode_get_connector conn;
+    u32 crtc, n, i;
+
+    if (drm_ioctl(fd, DRM_IOCTL_SET_MASTER, 0) != 0) {
+        report_skip("another process holds the master role");
+        return;
+    }
+    n = mode_list(fd, &conn, modes, &crtc);
+    for (i = 0; i < n; i++) {
+        mode_set(fd, crtc, conn.connector_id, &modes[i]);
+    }
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -493,8 +719,8 @@ PROBE_SP_ENTRY;
 /** Run the rows in order; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
-    static const char *const ids[] = {"open",   "version", "render",  "master", "auth",
-                                      "create", "map",     "destroy", "prime",  "kcmp"};
+    static const char *const ids[] = {"open", "version", "render", "master", "auth", "create",
+                                      "map",  "destroy", "prime",  "kcmp",   "modes"};
     char name[64], path[32];
     int fd, other, index = 0;
     unsigned i;
@@ -515,6 +741,7 @@ void probe_main(unsigned long *sp)
     prime_row(fd, other);
     kcmp_row(fd, other);
     syscall1(SYS_CLOSE, other);
+    modes_row(fd);
     syscall1(SYS_CLOSE, fd);
     report_end();
     probe_line("DRMPROBE OK", 0, 0);
