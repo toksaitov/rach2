@@ -219,6 +219,23 @@ uintptr_t vdso32_vsyscall_at(uintptr_t base);
 struct process;
 long ia32_clone_tls(unsigned long uptr, uint32_t *entry, uint64_t *desc);
 void ia32_clone_tls_set(struct process *child, uint32_t entry, uint64_t desc);
+
+/* The words of i386's `user_regs_struct`. */
+#define IA32_GREGS 17
+
+/** Fill `regs` with the IA32_GREGS registers of `t`, an i386 program's
+ * thread stopped or dumping core, in the order of i386's
+ * `user_regs_struct`, each the low 32 bits of the x86-64 register, as
+ * Linux's `getreg32` gives them (x86_64/ia32_core.c). */
+void ia32_regs_get(const struct process *t, uint32_t *regs);
+
+/** The bytes of the floating-point and TLS notes of one thread of an i386
+ * program's core file, at most. */
+uint32_t ia32_core_fp_size(void);
+
+/** Put the floating-point and TLS notes of the thread `t` of an i386
+ * program at `*p`, with `core_note_put`, and step past them. */
+void ia32_core_fp_notes(uint8_t **p, const struct process *t);
 #endif
 
 /*

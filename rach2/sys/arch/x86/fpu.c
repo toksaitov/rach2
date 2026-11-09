@@ -92,7 +92,6 @@ static uint32_t mxcsr_mask = 0xFFBFu; /* what `fxsave` reports, or the default *
 static uint32_t comp_size[XFEATURE_COUNT];
 static uint32_t comp_offset[XFEATURE_COUNT];
 
-#if !defined(FPU_X86_64)
 /** The little-endian 16-bit value at `p`. */
 static uint32_t get16(const uint8_t *p)
 {
@@ -105,7 +104,6 @@ static void put16(uint8_t *p, uint32_t v)
     p[0] = (uint8_t)v;
     p[1] = (uint8_t)(v >> 8);
 }
-#endif
 
 /** The little-endian 32-bit value at `p`. */
 static uint32_t get32(const uint8_t *p)
@@ -274,26 +272,6 @@ int fpu_xstate_set(void *area, const uint8_t *in)
     return 0;
 }
 
-#if defined(FPU_X86_64)
-
-/** The frame's state without XSAVE, `struct _fpstate_64`: the image, with
- * the software bytes zero, so that no XSAVE image is announced. */
-static void to_linux(const void *area, uint8_t *out)
-{
-    k_memcpy(out, area, FPU_LINUX_SIZE);
-    k_memset(out + FX_SW, 0, FX_SIZE - FX_SW);
-}
-
-/** An area from a frame's `struct _fpstate_64` without XSAVE; 0, or -1 for
- * an image `fxrstor` would fault on. */
-static int from_linux(const uint8_t *in, void *area)
-{
-    k_memcpy(area, in, FPU_LINUX_SIZE);
-    return (get32(in + FX_MXCSR) & ~mxcsr_mask) ? -1 : 0;
-}
-
-#else
-
 /* Byte offsets in the `fnsave` layout of `user_i387_struct`, which opens
  * `_fpstate_32`. */
 #define FN_CWD 0
@@ -399,6 +377,26 @@ void fpu_env_set(void *area, const uint8_t *env)
     env_to_fx(env, area);
     mark_in_use(area, XFEATURE_X87);
 }
+
+#if defined(FPU_X86_64)
+
+/** The frame's state without XSAVE, `struct _fpstate_64`: the image, with
+ * the software bytes zero, so that no XSAVE image is announced. */
+static void to_linux(const void *area, uint8_t *out)
+{
+    k_memcpy(out, area, FPU_LINUX_SIZE);
+    k_memset(out + FX_SW, 0, FX_SIZE - FX_SW);
+}
+
+/** An area from a frame's `struct _fpstate_64` without XSAVE; 0, or -1 for
+ * an image `fxrstor` would fault on. */
+static int from_linux(const uint8_t *in, void *area)
+{
+    k_memcpy(area, in, FPU_LINUX_SIZE);
+    return (get32(in + FX_MXCSR) & ~mxcsr_mask) ? -1 : 0;
+}
+
+#else
 
 /**
  * The frame's state without XSAVE, `struct _fpstate_32`. In both formats

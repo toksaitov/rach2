@@ -297,6 +297,17 @@ void ia32_clone_tls_set(process_t *child, uint32_t entry, uint64_t desc)
     child->regs.tls[entry - GDT_TLS_MIN] = desc;
 }
 
+uint32_t ia32_tls_get(const process_t *t, struct user_desc *u)
+{
+    uint32_t i, set = 0;
+
+    for (i = 0; i <= GDT_TLS_MAX - GDT_TLS_MIN; i++) {
+        desc_to_ud(t->regs.tls[i], GDT_TLS_MIN + i, &u[i]);
+        set += t->regs.tls[i] != 0;
+    }
+    return set;
+}
+
 /**
  * get_thread_area(2), i386's 244: EBX points at a `struct user_desc` whose
  * `entry_number`, 12 to 14, names the TLS entry to describe; the whole
