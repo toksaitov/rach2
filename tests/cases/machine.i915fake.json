@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.i915fake.crocus",
-      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo picks crocus for it, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo's surfaceless platform picks crocus for it, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
       "units": [
         "rach2/sys/drm/i915/i915_fake.c",
         "drmdevice",
@@ -50,7 +50,7 @@
           "step_id": "probe",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run drmdevice, eglinfo with the loader's debug log on, and first light from /sys/kernel/debug/dri/N/i915_fake plain and under the submit, bind, irq and hang faults"
+          "does": "run drmdevice, eglinfo -p surfaceless with EGL's debug log on, whose exit is not judged while the driver's own ioctls answer EINVAL, and first light from /sys/kernel/debug/dri/N/i915_fake plain and under the submit, bind, irq and hang faults"
         }
       ],
       "machines": [
@@ -93,7 +93,7 @@
         },
         {
           "assertion_id": "loader",
-          "checks": "Mesa's loader logs the pci id 8086:0a16 with driver crocus",
+          "checks": "Mesa's loader logs the pci id 8086:0a16 with driver crocus, and eglinfo names crocus as the EGL driver",
           "source": "scenario"
         },
         {
