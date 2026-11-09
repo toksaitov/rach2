@@ -32,6 +32,51 @@ The session has its own D-Bus bus and runtime directory,
 owned by desktop with mode 0700.
 Weston uses headless with Pixman when no connector is connected.
 A connected display uses DRM with Pixman, or GL when a render node exists.
+.Sh DISPLAY
+Weston runs the DRM backend as the card's master and holds the keyboard.
+On QEMU's standard VGA, under
+.Xr bochs 4 ,
+it draws with Pixman on the output Virtual-1; on virtio-gpu, under
+.Xr virtio-gpu 4 ,
+with GL through Mesa's EGL on the render node, which is llvmpipe unless
+the host gives virgl; on the firmware's framebuffer, under
+.Xr fbdrm 4 ,
+with Pixman on the output Unknown-1.
+Weston's log in
+.Pa /var/log/services
+names the renderer and each output's modes, the current one marked.
+udev gives
+.Pa /dev/dri/cardN
+the group video,
+.Pa /dev/dri/renderDN
+the group render and each
+.Pa /dev/input/eventN
+the group input, each mode 0660, as Debian's rules do.
+.Pp
+An output's resolution is set by a section of
+.Pa /etc/xdg/weston/weston.ini
+and a restart of the session:
+.Bd -literal -offset indent
+[output]
+name=Virtual-1
+mode=1024x768
+.Ed
+.Pp
+.Ql kill -HUP $(cat /run/rach2-desktop.pid)
+ends the session and starts it again; Weston reads the file when it
+starts.
+.Pp
+When Weston ends, by quitting or by a signal, SIGKILL among them, the
+console takes the screen and the keyboard back and redraws its text, so
+that the screen shows what it showed before Weston started, as
+.Xr console 4
+says.
+The supervisor logs
+.Dq rach2-desktop: session: ended; SIGHUP starts it again
+and starts no session until SIGHUP.
+The device services go on; when one ends the supervisor exits and
+.Xr init 8
+starts it again.
 .Pp
 A program started from another session needs
 .Ql XDG_RUNTIME_DIR=/run/user/1001 ,
@@ -54,7 +99,9 @@ The kernel mixes both routes.
 .Sh FILES
 .Bl -tag -width /etc/xdg/weston/weston.ini
 .It Pa /etc/xdg/weston/weston.ini
-Compositor shell, Xwayland and idle settings.
+Compositor shell, Xwayland, idle and output settings.
+.It Pa /run/rach2-desktop.pid
+The supervisor's process id, which SIGHUP restarts the session by.
 .It Pa /etc/pulse/rach2.pa
 PulseAudio modules.
 .It Pa /etc/asound.conf
@@ -63,5 +110,10 @@ ALSA's default PCM and control device.
 .Sh SEE ALSO
 .Xr pulseaudio 1 ,
 .Xr weston 1 ,
+.Xr bochs 4 ,
+.Xr console 4 ,
+.Xr drm 4 ,
+.Xr fbdrm 4 ,
 .Xr input 4 ,
+.Xr virtio-gpu 4 ,
 .Xr init 8
