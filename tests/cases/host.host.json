@@ -526,6 +526,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_power",
+          "checks": "tests/host/i915_power_hosttest.c enables the Intel graphics driver's RC6 and frequency control on the HD 4400's host model, RC6 entered at idle with its residency read in milliseconds across the counter's wrap, the pcode mailbox bounded, every frequency request within the limits under the up and down interrupts, and the card's /sys files under Linux's names, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_ring",
           "checks": "tests/host/i915_ring_hosttest.c starts the Intel graphics driver's render and blitter rings on the HD 4400's host model, takes their user interrupts through the handler table with every other source masked, wakes breadcrumb waiters from the interrupt, and runs first light end to end, under ASan and UBSan and exits 0",
           "source": "scenario"
