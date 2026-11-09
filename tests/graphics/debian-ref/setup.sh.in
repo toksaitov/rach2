@@ -1,10 +1,12 @@
 #!/bin/sh
 # setup.sh.in: the reference guest's setup, which cloud-init runs as root on
 # the preparing boot. debian-ref.sh puts the snapshot's date in place of
-# @SNAPSHOT@ and the package list in place of @PACKAGES@. It points apt at
-# Debian's snapshot of that date, installs the packages, turns cloud-init off
-# so that every later boot is the same, and reports on the serial console,
-# which debian-ref.sh reads.
+# @SNAPSHOT@, the package list in place of @PACKAGES@, and the URL and SHA-256
+# of the package that Rach2's Venus driver comes from in place of @VENUS_URL@
+# and @VENUS_SHA256@. It points apt at Debian's snapshot of that date,
+# installs the packages and the Venus driver, turns cloud-init off so that
+# every later boot is the same, and reports on the serial console, which
+# debian-ref.sh reads.
 set -eu
 
 say()
@@ -42,6 +44,25 @@ say "installing"
 # shellcheck disable=SC2086 # the list is words
 apt-get -q -y install @PACKAGES@
 
+# Mesa 26.1.6's Venus driver beside the other drivers of 25.0.7, as Rach2's
+# root has it (vendor/gnu/debian/fetch_venus.sh): its library under a path of
+# its own and its ICD naming that path, with 25.0.7's Venus ICD and library
+# diverted to names the loader does not read.
+say "installing venus"
+curl -sSfL --retry 3 -o /root/venus.deb "@VENUS_URL@"
+echo "@VENUS_SHA256@  /root/venus.deb" | sha256sum -c --quiet -
+mkdir /root/venus
+dpkg-deb -x /root/venus.deb /root/venus
+lib=/usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so
+install -D -m 755 /root/venus/usr/lib/x86_64-linux-gnu/libvulkan_virtio.so "$lib"
+sed "s|\"libvulkan_virtio.so\"|\"$lib\"|" /root/venus/usr/share/vulkan/icd.d/virtio_icd.json \
+    > /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+grep -q "\"$lib\"" /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+for f in /usr/share/vulkan/icd.d/virtio_icd.json /usr/lib/x86_64-linux-gnu/libvulkan_virtio.so; do
+    dpkg-divert --quiet --local --rename --divert "$f.mesa25" --add "$f"
+done
+rm -rf /root/venus /root/venus.deb
+
 # Debian's kernel is built without vkms (CONFIG_DRM_VKMS is not set), which
 # the `none` profile's runs load; build it from the source of the running
 # kernel's own version, against its headers, into updates/, unloaded until a
@@ -65,6 +86,7 @@ say "version: vkms $(modinfo -F vermagic vkms)"
 for p in libgl1-mesa-dri mesa-vulkan-drivers weston; do
     say "version: $p $(dpkg-query -W -f '${Version}' $p)"
 done
+say "version: venus @VENUS_VERSION@"
 say "version: kernel $(uname -r)"
 trap - EXIT
 say "prepared"
