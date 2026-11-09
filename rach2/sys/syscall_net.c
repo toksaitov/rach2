@@ -1144,6 +1144,20 @@ static int32_t netlink_send_user(struct socket *sock, uintptr_t buf_ptr, int len
     return rc;
 }
 
+/** The sockaddr_nl of the sender of the datagram `sock` read last into `sa`,
+ * which is zeroed: the kernel, port id 0, with the bit of the group a
+ * notification went to in nl_groups. */
+static void netlink_sender(struct socket *sock, uint8_t *sa)
+{
+    uint32_t group = netlink_last_group(sock);
+
+    sa[0] = (uint8_t)AF_NETLINK;
+    sa[8] = (uint8_t)group;
+    sa[9] = (uint8_t)(group >> 8);
+    sa[10] = (uint8_t)(group >> 16);
+    sa[11] = (uint8_t)(group >> 24);
+}
+
 /** Copy the sockaddr_nl `nl` to the caller's (sa_ptr, salen_ptr), truncated
  * to its capacity, with the true length written back. Returns 0 or -EFAULT. */
 static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr_t salen_ptr)
@@ -1434,7 +1448,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
 
         k_memset(sa, 0, sizeof(sa));
         if (entry->sock->family == AF_NETLINK) {
-            sa[0] = (uint8_t)AF_NETLINK; /* the kernel, port id 0 */
+            netlink_sender(entry->sock, sa);
         } else if (entry->sock->family == AF_PACKET) {
             if (packet_last_addr(entry->sock, sa) == 0) {
                 addr_len = 0;
@@ -3023,7 +3037,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
 
         k_memset(sa, 0, sizeof(sa));
         if (entry->sock->family == AF_NETLINK) {
-            sa[0] = (uint8_t)AF_NETLINK; /* the kernel, port id 0 */
+            netlink_sender(entry->sock, sa);
         } else if (entry->sock->family == AF_PACKET) {
             if (packet_last_addr(entry->sock, sa) == 0) {
                 addr_len = 0;
