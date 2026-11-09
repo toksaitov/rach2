@@ -96,7 +96,8 @@ int sysfs_add_uevent(int dir, sysfs_show_t show, void *obj, int arg);
  * the directory's `subsystem` link), the lines of `env`, `KEY=value` each
  * ended by a newline, or NULL, the variables of the directory's `uevent`
  * file, and SEQNUM, each ended by a NUL. 0, -ENOENT for a directory that is
- * gone, -ENOMEM, or -E2BIG past 2048 bytes, Linux's limit. A "remove" is
+ * gone, -ENOMEM, or -E2BIG when the variables pass 2048 bytes, Linux's
+ * limit, which leaves out the first line. A "remove" is
  * sent before the directory is removed, while its files are there.
  */
 int32_t sysfs_uevent(int dir, const char *action, const char *env);
