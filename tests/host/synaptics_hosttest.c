@@ -919,6 +919,31 @@ static void mouse_rows(void)
     mouse_clear_packets();
 }
 
+/** The events a program writes to a mouse's event device, as mousedev takes
+ * them: a packet at each SYN_REPORT after a change, its motion up positive. */
+static void written_rows(void)
+{
+    struct mouse_packet p[4];
+    int n;
+
+    mouse_clear_packets();
+    mouse_written(EV_REL, REL_X, 5);
+    mouse_written(EV_REL, REL_Y, 3);
+    mouse_written(EV_SYN, SYN_REPORT, 0);
+    n = mouse_packets(p, 4);
+    CHECK("a written motion is a packet", n == 1 && p[0].dx == 5 && p[0].dy == -3);
+    mouse_written(EV_KEY, BTN_LEFT, 1);
+    mouse_written(EV_SYN, SYN_REPORT, 0);
+    mouse_written(EV_SYN, SYN_REPORT, 0);
+    n = mouse_packets(p, 4);
+    CHECK("a written press is one packet", n == 1 && p[0].buttons == 1 && p[0].dx == 0);
+    mouse_written(EV_KEY, BTN_LEFT, 0);
+    mouse_written(EV_SYN, SYN_REPORT, 0);
+    n = mouse_packets(p, 4);
+    CHECK("and its release another", n == 1 && p[0].buttons == 0);
+    mouse_clear_packets();
+}
+
 /** Whether the last warning says the touchpad did not answer a query. */
 static int warned_query(void)
 {
@@ -976,6 +1001,7 @@ int main(void)
     capability_rows();
     packet_rows();
     mouse_rows();
+    written_rows();
     fallback_rows();
     if (fails == 0) {
         printf("synaptics-test: pass\n");

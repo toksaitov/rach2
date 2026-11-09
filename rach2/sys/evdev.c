@@ -13,6 +13,7 @@
 #include "lib/spinlock.h"
 #include "mm/kheap.h"
 #include "mm/usercopy.h"
+#include "mouse.h"
 #include "proc/wait_queue.h"
 #include "rtc.h"
 #include "syscall.h"
@@ -1506,20 +1507,23 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
  * Linux's input_inject_event: an event of a type the device lacks is
  * dropped; a keyboard's EV_LED and EV_REP go to the LEDs and the repeat
  * every keyboard shares (`input_written`), whose change each keyboard's
- * opens get; any other event takes a driver's path (`evdev_report`), and a
- * keyboard's key that goes out to its opens with no grab held goes on to the
- * console (`input_written`), as Linux's input core gives an injected key to
- * the console's handler.
+ * opens get; any other event takes a driver's path (`evdev_report`), and
+ * one that goes out to the opens with no grab held goes on as Linux's input
+ * core gives an injected event to its other handlers: a keyboard's key to
+ * the console (`input_written`), and a mouse's motion and buttons to the
+ * mouse queue (`mouse_written`), unless the mouse has a handler of its own,
+ * a touchpad's, which `evdev_report` gave it already.
  */
 static void inject(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
 {
     uint8_t types[EVDEV_KEY_BYTES];
     uint32_t flags;
-    int keyboard, grabbed;
+    int keyboard, pointer, grabbed;
 
     flags = spin_lock_irqsave(&evdev_lock);
     type_bytes(dev, 0, types);
     keyboard = (dev->flags & EVDEV_KEYBOARD) != 0;
+    pointer = !keyboard && !dev->handler && bit_on(dev->rel, REL_X);
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (type >= EV_CNT || !bit_on(types, type)) {
         return;
@@ -1528,8 +1532,13 @@ static void inject(struct evdev *dev, uint16_t type, uint16_t code, int32_t valu
         input_written(type, code, value);
         return;
     }
-    if (report(dev, type, code, value, &grabbed) && type == EV_KEY && keyboard && !grabbed) {
+    if (!report(dev, type, code, value, &grabbed) || grabbed) {
+        return;
+    }
+    if (type == EV_KEY && keyboard) {
         input_written(type, code, value);
+    } else if (pointer) {
+        mouse_written(type, code, value);
     }
 }
 

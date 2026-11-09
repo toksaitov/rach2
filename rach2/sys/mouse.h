@@ -69,7 +69,8 @@ struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustyp
  * The event device gets the buttons that changed, the motion that is not 0
  * and SYN_REPORT, with each turn in 120ths too on a MOUSE_HI_RES mouse; the
  * mouse queue gets the packet as `mouse_push_packet` takes it, `dy` turned
- * the other way up, without the wheels.
+ * the other way up, without the wheels, unless an open of the event device
+ * holds the grab, as Linux's grab keeps the events from mousedev.
  */
 void mouse_report(struct evdev *dev, unsigned int buttons, int dx, int dy, int wheel, int hwheel);
 
@@ -86,6 +87,17 @@ void mouse_report(struct evdev *dev, unsigned int buttons, int dx, int dy, int w
  * ignored. Called once the device is set up, before it reports.
  */
 void mouse_attach_touchpad(struct evdev *dev);
+
+/**
+ * An event a program wrote to a mouse's event device (`evdev_write`) that
+ * passed the input core's filters with no grab held, for a mouse with no
+ * handler of its own: REL_X and REL_Y move, BTN_LEFT, BTN_RIGHT and
+ * BTN_MIDDLE, and the other buttons `mouse_attach_touchpad` names, are held
+ * and let go, and a SYN_REPORT after a change gives the mouse queue a
+ * packet, as Linux's mousedev gives /dev/input/mice an injected event.
+ * Process context.
+ */
+void mouse_written(uint16_t type, uint16_t code, int32_t value);
 
 /** Drain up to `max_count` packets into `buf` without waiting; returns the
  * count copied, which may be zero. */

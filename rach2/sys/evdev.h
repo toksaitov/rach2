@@ -374,8 +374,9 @@ int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count);
  * EV_REP sets the repeat's delay or period, of every keyboard
  * (`input_set_leds`, `input_set_repeat`); any other event goes through the
  * input core's filters to the opens of the device, or to the open that
- * holds the grab, as `evdev_report` gives it, and a keyboard's key that
- * reaches them with no grab held reaches the console too. Returns the bytes
+ * holds the grab, as `evdev_report` gives it; one that reaches them with no
+ * grab held goes on to the console, a keyboard's key, or to the mouse queue,
+ * a mouse's motion and buttons (`mouse_written`). Returns the bytes
  * taken, 0 for a `count` of 0, -EINVAL for a `count` from 1 to one record
  * less one byte, -EFAULT, or -ENODEV once the device has gone or the open
  * was revoked.

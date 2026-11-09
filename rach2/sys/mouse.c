@@ -112,7 +112,9 @@ void mouse_report(struct evdev *dev, unsigned int buttons, int dx, int dy, int w
     evdev_report(dev, EV_REL, REL_HWHEEL, hwheel);
     evdev_report(dev, EV_REL, REL_HWHEEL_HI_RES, hwheel * 120);
     evdev_report(dev, EV_SYN, SYN_REPORT, 0);
-    mouse_push_packet((uint8_t)(buttons & 0x07u), dx, -dy);
+    if (!evdev_grabbed(dev)) {
+        mouse_push_packet((uint8_t)(buttons & 0x07u), dx, -dy);
+    }
 }
 
 /* A touch shorter than this is a tap, a click of the left button, as
@@ -190,35 +192,37 @@ static void pad_touch(int down)
     pad.frac_dy = 0;
 }
 
-/** Hold or let go of the button `code` names, as mousedev's
- * `mousedev_key_event`; a key it does not name is ignored. */
-static void pad_key(uint16_t code, int down)
+/** The button bit, as `mouse_report` numbers them, of the key `code`, as
+ * mousedev's `mousedev_key_event` names them, or 0 for a key it does not
+ * name. */
+static unsigned int button_bit(uint16_t code)
 {
-    unsigned int bit;
-
     switch (code) {
     case BTN_0:
     case BTN_LEFT:
-        bit = MOUSE_LEFT;
-        break;
+        return MOUSE_LEFT;
     case BTN_1:
     case BTN_RIGHT:
-        bit = MOUSE_RIGHT;
-        break;
+        return MOUSE_RIGHT;
     case BTN_FORWARD:
     case BTN_MIDDLE:
-        bit = MOUSE_MIDDLE;
-        break;
+        return MOUSE_MIDDLE;
     case BTN_BACK:
     case BTN_SIDE:
-        bit = MOUSE_BUTTON_SIDE;
-        break;
+        return MOUSE_BUTTON_SIDE;
     case BTN_EXTRA:
-        bit = MOUSE_BUTTON_EXTRA;
-        break;
+        return MOUSE_BUTTON_EXTRA;
     default:
-        return;
+        return 0;
     }
+}
+
+/** Hold or let go of the button `code` names; a key that names none is
+ * ignored. */
+static void pad_key(uint16_t code, int down)
+{
+    unsigned int bit = button_bit(code);
+
     pad.buttons = down ? pad.buttons | bit : pad.buttons & ~bit;
 }
 
@@ -270,6 +274,49 @@ static void pad_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t v
         mouse_push_packet((uint8_t)pad.buttons, pad.dx, pad.dy);
         pad.dx = 0;
         pad.dy = 0;
+        break;
+    default:
+        break;
+    }
+}
+
+/* The packet under way of the events written to a mouse's event device, as
+ * mousedev accumulates a relative device's: the movement, up positive, and
+ * the buttons held, and those of the last packet pushed. */
+static struct {
+    int dx;
+    int dy;
+    unsigned int buttons;
+    unsigned int pushed;
+} written;
+
+void mouse_written(uint16_t type, uint16_t code, int32_t value)
+{
+    unsigned int bit;
+
+    switch (type) {
+    case EV_REL:
+        if (code == REL_X) {
+            written.dx += value;
+        } else if (code == REL_Y) {
+            written.dy -= value;
+        }
+        break;
+    case EV_KEY:
+        bit = button_bit(code);
+        if (value != 2) {
+            written.buttons = value ? written.buttons | bit : written.buttons & ~bit;
+        }
+        break;
+    case EV_SYN:
+        if (code != SYN_REPORT ||
+            (written.dx == 0 && written.dy == 0 && written.buttons == written.pushed)) {
+            break;
+        }
+        mouse_push_packet((uint8_t)written.buttons, written.dx, written.dy);
+        written.pushed = written.buttons;
+        written.dx = 0;
+        written.dy = 0;
         break;
     default:
         break;
