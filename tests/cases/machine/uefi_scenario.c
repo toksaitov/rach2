@@ -734,13 +734,13 @@ static int wide(struct etude_case *c, int uefi)
     /* The answers, in the order rach2-install asks: the disk, root's password
      * twice, the first account and its password twice, the demonstration key
      * the recovery system was reached with as that account's authorized key,
-     * no key for the recovery system, the grow it offers, and the disk's name
-     * again. */
+     * no key for the recovery system, `whole` for a root grown into the whole
+     * disk with no data partition, and the disk's name again. */
     static const char answers[] =
         "n=$(awk '$1 == \"disk\" && $3 == \"nvme\" { print $2 }' /proc/disk)\n"
         "[ -n \"$n\" ] || { echo \"no NVMe disk\"; exit 1; }\n"
         "printf '%s\\n' \"/dev/disk$n\" uefi-big uefi-big owner owner-big owner-big \\\n"
-        "    /root/.ssh/authorized_keys \"\" \"\" \"/dev/disk$n\" | rach2-install\n"
+        "    /root/.ssh/authorized_keys \"\" whole \"/dev/disk$n\" | rach2-install\n"
         "echo \"INSTALL STATUS $?\"\n"
         "sync\n";
     char script[4096], line[160], device[32];

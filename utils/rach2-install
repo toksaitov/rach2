@@ -21,6 +21,7 @@
 #
 # Usage: rach2-install [--source DIR]
 #        rach2-install [--console term] --update IMAGE DISK
+#        rach2-install --data DISK SIZE
 #
 # `--source DIR` takes the image and its manifest from a directory already
 # mounted, which is how the tests drive it without a stick.
@@ -47,7 +48,20 @@
 #
 # A new install writes the image's table, a GUID table on the images this
 # system builds, and moves its backup to the disk's last sectors, where a
-# reader looks for it on a disk larger than the image.
+# reader looks for it on a disk larger than the image. It grows the root to
+# the size asked for, 64 GiB unless another is given, and makes the rest of
+# the disk the data partition, entry 6, an ext2 volume labelled `Rach2 data`
+# for what the machine keeps across updates of its root: games, the disks of
+# virtual machines, caches and the trial roots `bootctl rootimage` boots. An
+# update writes the root's partition and nothing else, so it never touches
+# the data partition.
+#
+# `--data DISK SIZE` makes room for the data partition on a disk installed
+# without one, from the recovery system: it checks the root, shrinks its file
+# system to SIZE with `resize2fs`, gives its entry that length with `diskctl
+# shrink`, makes entry 6 over the sectors freed with `diskctl data` and its
+# file system with `mke2fs`. Each step is one that a run stopped after it
+# finds done and passes, so the command can be run again.
 #
 
 set -u
@@ -163,8 +177,16 @@ source_dir=""
 update_image=""
 update_disk=""
 update_console=""
+data_disk=""
+data_size=""
 while [ $# -gt 0 ]; do
     case "$1" in
+        --data)
+            [ $# -ge 3 ] || die "--data takes a disk and the root's size"
+            data_disk=$2
+            data_size=$3
+            shift 3
+            ;;
         --source)
             [ $# -ge 2 ] || die "--source takes a directory"
             source_dir=$2
@@ -183,7 +205,7 @@ while [ $# -gt 0 ]; do
             shift 3
             ;;
         *)
-            die "usage: $ME [--source DIR] | $ME [--console term] --update IMAGE DISK"
+            die "usage: $ME [--source DIR] | $ME [--console term] --update IMAGE DISK | $ME --data DISK SIZE"
             ;;
     esac
 done
@@ -845,6 +867,120 @@ system is made again, so it boots by BIOS alone"
     say "converted: $update_disk keeps its MBR and boots by UEFI as well, from $boot"
 }
 
+# ---- the data partition ----
+#
+# Entry 6 of a GUID table, after the root. On a new install the root keeps
+# the size asked for and the data partition takes the rest of the disk, when
+# that is DATA_MIN_SECTORS or more; a disk with less, or an MBR, has none,
+# and its root grows into the whole of it.
+
+# The root's size when the person gives none, 64 GiB, in sectors.
+ROOT_DEFAULT=64G
+# The least data partition worth making, 64 MiB, in sectors.
+DATA_MIN_SECTORS=131072
+
+# Prints SIZE, a number of mebibytes, gibibytes or tebibytes such as 64G, as
+# sectors. Status 1 for anything else.
+size_sectors() { # size_sectors SIZE
+    case "$1" in
+        "" | *[!0-9MGT]* | [MGT]* | *[MGT]?*) return 1 ;;
+        *M) echo $((${1%M} * 2048)) ;;
+        *G) echo $((${1%G} * 2097152)) ;;
+        *T) echo $((${1%T} * 2147483648)) ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints the sector where the data partition of disk N begins, after the
+# root's entry ENTRY when the root keeps WANT sectors from its start, or more
+# when the entry has more already: the next mebibyte boundary. Prints nothing
+# when the disk has no GUID table or the sectors left after it, to the last
+# the table may use, are fewer than DATA_MIN_SECTORS.
+data_start() { # data_start N ENTRY WANT
+    [ "$(disk_field "$1" 6)" = gpt ] || return 0
+    root_start=$(grep "^part $1 $2 " /proc/disk | head -1 | cut -d' ' -f4)
+    root_count=$(grep "^part $1 $2 " /proc/disk | head -1 | cut -d' ' -f5)
+    [ -n "$root_start" ] && [ -n "$root_count" ] || return 0
+    keep=$3
+    [ "$keep" -ge "$root_count" ] || keep=$root_count
+    first=$(((root_start + keep + 2047) / 2048 * 2048))
+    # The backup table's 33 sectors end the disk.
+    last=$(($(disk_field "$1" 5) - 34))
+    [ $((last - first + 1)) -ge "$DATA_MIN_SECTORS" ] || return 0
+    echo "$first"
+}
+
+# Makes entry 6 of disk N the data partition from sector START to the next
+# partition or the table's end, with `diskctl data`, and its ext2 file system,
+# labelled `Rach2 data`, unless it has one that checks, which a run stopped
+# after mke2fs leaves. Nothing of the disk may be mounted. `-T huge` gives an
+# inode to each 64 KiB, which a volume of large files and caches needs, and
+# keeps the inode tables mke2fs writes to a quarter of its default's. A
+# failure ends the run.
+make_data() { # make_data N START
+    diskctl data "/dev/disk$1" "$2" ||
+        die "the data partition was not made in /dev/disk$1's table"
+    [ -e "/dev/disk$1p6" ] || die "/dev/disk$1p6 did not appear after the table was read"
+    if [ "$(dd if="/dev/disk$1p6" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 53ef ] &&
+        e2fsck -fn "/dev/disk$1p6" > /dev/null 2>&1; then
+        say "/dev/disk$1p6 has its file system already"
+        return 0
+    fi
+    say "making the data partition's file system on /dev/disk$1p6"
+    mke2fs -q -t ext2 -T huge -L "Rach2 data" "/dev/disk$1p6" ||
+        die "the data partition's file system was not made on /dev/disk$1p6"
+}
+
+# ---- making room for the data partition ----
+#
+# A disk installed without a data partition, whose root fills the space up
+# to the next partition, as the Lenovo's p3 does, gets one from recovery: the
+# root is checked and shrunk to SIZE, its entry shortened to match, and the
+# sectors freed become entry 6. Nothing of the disk may be mounted, and the
+# kernel must be the recovery kernel, the one that writes a whole disk.
+
+if [ -n "$data_disk" ]; then
+    case "$data_disk" in
+        /dev/disk[0-9] | /dev/disk[0-9][0-9]) ;;
+        *) die "$data_disk is not a whole disk of this machine" ;;
+    esac
+    [ -e "$data_disk" ] || die "$data_disk is not there"
+    target=${data_disk#/dev/disk}
+    [ "$(disk_field "$target" 6)" = gpt ] ||
+        die "$data_disk has no GUID table, and the data partition is entry 6 of one"
+    want=$(size_sectors "$data_size") || die "$data_size is not a size such as 64G"
+    root_entry=""
+    for p in 4 3 2 1; do
+        [ -e "${data_disk}p${p}" ] || continue
+        mkdir -p "$TARGET_MNT" 2>/dev/null
+        mount -t ext2 -o ro "${data_disk}p${p}" "$TARGET_MNT" 2>/dev/null || continue
+        mounted_root=$TARGET_MNT
+        [ -f "$TARGET_MNT/etc/passwd" ] && [ -d "$TARGET_MNT/etc/rach2" ] && root_entry=$p
+        umount "$TARGET_MNT" || die "${data_disk}p${p} would not unmount"
+        mounted_root=""
+        [ -z "$root_entry" ] || break
+    done
+    [ -n "$root_entry" ] || die "$data_disk carries no root of this system"
+    root_node="${data_disk}p${root_entry}"
+    root_count=$(grep "^part $target $root_entry " /proc/disk | head -1 | cut -d' ' -f5)
+    [ "$want" -le "$root_count" ] ||
+        die "$root_node has $root_count sectors, fewer than the $want of $data_size"
+    say "checking $root_node before it is shrunk"
+    e2fsck -fp "$root_node"
+    [ $? -le 1 ] || die "$root_node did not check clean; run e2fsck -f on it first"
+    say "shrinking the file system on $root_node to $data_size"
+    resize2fs "$root_node" "${want}s" || die "$root_node's file system was not shrunk to $data_size"
+    if [ "$root_count" -gt "$want" ]; then
+        diskctl shrink "$data_disk" "$root_entry" "$want" ||
+            die "$root_node's entry was not shortened; its file system is $data_size already"
+    fi
+    start=$(data_start "$target" "$root_entry" "$want")
+    [ -n "$start" ] || die "the space freed after $root_node is too small for a data partition"
+    make_data "$target" "$start"
+    say "made room: $root_node is $data_size, and ${data_disk}p6 is the data partition"
+    exit 0
+fi
+
 # ---- the update ----
 #
 # A machine that is already installed, given a new root file system. The
@@ -852,7 +988,9 @@ system is made again, so it boots by BIOS alone"
 # accounts log in with are copied off the root first. The image goes into the
 # root's own partition, and no partition moves. Besides the root, the update
 # writes the boot partition's environment block, the root's entry, which
-# growroot grows, and the archive on the recovery partition. The conversion
+# growroot grows up to the data partition when the disk has one, and the
+# archive on the recovery partition; the data partition is not written, and
+# its entry is kept as every other is. The conversion
 # of an MBR disk for UEFI also writes the boot partition's type, its loader
 # and, when it has too few clusters, its file system.
 
@@ -1532,12 +1670,29 @@ while :; do
     rm -f "$key_copy"
     tell "$recovery_keys $fault. Try again, or type nothing for no key."
 done
-printf 'Grow the root into the whole disk? [yes] '
-read -r grow_answer || [ -n "$grow_answer" ] || no_answer
-case "$grow_answer" in
-    "" | y | yes) grow=yes ;;
-    *) grow=no ;;
-esac
+# The root's size: the root grows to it and the rest of the disk becomes the
+# data partition. `whole`, or `yes` as the question was once answered, grows
+# the root into the whole disk with no data partition, and `no` leaves the
+# disk as the image has it.
+tell "The root grows to the size you give, and the rest of the disk becomes the data"
+tell "partition, which keeps games and the disks of virtual machines across updates."
+tell "Give a size such as 64G, whole for no data partition, or no to grow nothing."
+while :; do
+    printf 'Grow the root to what size? [%s] ' "$ROOT_DEFAULT"
+    read -r grow_answer || [ -n "$grow_answer" ] || no_answer
+    grow=yes
+    root_size=$grow_answer
+    case "$grow_answer" in
+        "") root_size=$ROOT_DEFAULT ;;
+        whole | y | yes) root_size="" ;;
+        n | no)
+            grow=no
+            root_size=""
+            ;;
+    esac
+    { [ -z "$root_size" ] || size_sectors "$root_size" > /dev/null; } && break
+    tell "$grow_answer is not a size such as 64G, nor whole or no."
+done
 
 # Everything that was answered, on one screen, before the one step that cannot
 # be taken back. A person who has answered six questions in a row should not
@@ -1569,7 +1724,10 @@ if [ -n "$recovery_keys" ]; then
 else
     tell "Key for the recovery system: none"
 fi
-if [ "$grow" = "yes" ]; then
+if [ "$grow" = "yes" ] && [ -n "$root_size" ]; then
+    tell "Root partition: grown to $root_size, with the rest of the disk the data partition"
+    tell "  when there is room for one. This takes some minutes."
+elif [ "$grow" = "yes" ]; then
     tell "Root partition: grown to fill the disk. This takes some minutes."
 else
     tell "Root partition: left at the size the image has"
@@ -1793,16 +1951,30 @@ say "the accounts are root and $user_name, and root may log in over SSH with a p
 # ---- the root's size ----
 #
 # The image is as large as it was built and the disk is usually larger. The root
-# is the last partition on the disk, so the space after it is free, and
-# `growroot` puts the entry and then the file system on it: the entry first,
-# then the checker, then the resizer, each of which a run stopped in the middle
-# leaves for the next run to finish. It runs on a volume nothing has mounted,
-# which is why it comes after the accounts and not before them.
+# is the last partition of the image, so the space after it is free. The data
+# partition is made first, after the root's room, when the disk has space for
+# one, and `growroot` then grows the root's entry up to it, or to the disk's
+# end, and the file system with it: the entry first, then the checker, then
+# the resizer, each of which a run stopped in the middle leaves for the next
+# run to finish. Both run on volumes nothing has mounted, which is why they
+# come after the accounts and not before them.
 
 if [ "$grow" = "yes" ]; then
     spec=$(disk_identity "$target") || die "the disk's identity could not be read"
-    say "growing the root into the rest of the disk: a check, a repair pass and the \
+    data_from=""
+    if [ -n "$root_size" ]; then
+        data_from=$(data_start "$target" "$root_entry" "$(size_sectors "$root_size")")
+        [ -n "$data_from" ] ||
+            say "the disk has no room for a data partition after a root of $root_size"
+    fi
+    if [ -n "$data_from" ]; then
+        make_data "$target" "$data_from"
+        say "growing the root to $root_size, up to the data partition: a check, a repair \
+pass and the resize, each of which takes minutes and is quiet while it runs"
+    else
+        say "growing the root into the rest of the disk: a check, a repair pass and the \
 resize, each of which takes minutes and is quiet while it runs"
+    fi
     growroot "$spec,$root_entry" ||
         die "the root was not grown; the disk carries the image and boots as it is"
 fi

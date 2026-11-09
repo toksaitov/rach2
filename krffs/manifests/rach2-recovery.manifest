@@ -9,9 +9,9 @@
 # authenticate nobody, the key it was built with if it was built with one,
 # the programs that repair a disk (`reflash` for the raw device, `bootctl`
 # for the boot partition, `rach2-install` and `rach2-recover` for the root,
-# `growroot` with `e2fsck` and `resize2fs` for the file system, and
-# `diskctl`, `growset` and `growboot` beside them), and the pages of the
-# manual that describe them.
+# `growroot` with `e2fsck` and `resize2fs` for the file system, `mke2fs` for
+# the data partition's, and `diskctl`, `growset` and `growboot` beside them),
+# and the pages of the manual that describe them.
 
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
@@ -63,11 +63,14 @@ dir 0755 /sbin
 # The ext2 checker, for a root that was not unmounted: when the boot line has
 # rach2.fsck, init runs it on each ext2 partition before anything else, and
 # it can be run by hand over SSH. The resizer beside it is what `growroot`
-# runs after it has enlarged the root's partition entry. They are the only
-# programs of e2fsprogs here, since checking and growing are the uses
-# recovery has for it.
+# runs after it has enlarged the root's partition entry, and that shrinks the
+# root when `rach2-install --data` makes room for the data partition, whose
+# file system mke2fs makes, there and on a new install. They are the only
+# programs of e2fsprogs here, since checking, resizing and making the data
+# partition are the uses recovery has for it.
 file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
 file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
+file 0755 /sbin/mke2fs build/vendor/e2fsprogs/mke2fs
 # The recovery system starts a shell on the console without a login: the
 # person who chose this boot has the machine in hand, and the image has none
 # of the machine's accounts to check a password against. The installed
