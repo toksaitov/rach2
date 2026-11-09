@@ -25,6 +25,7 @@
 #define SYS_CREAT             8
 #define SYS_UNLINK            10
 #define SYS_EXECVE            11
+#define SYS_EXECVEAT          358
 #define SYS_CHDIR             12
 #define SYS_FCHDIR            133
 #define SYS_CHROOT            61

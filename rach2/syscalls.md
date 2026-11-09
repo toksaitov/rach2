@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 297 calls, the x86-64 kernel 273, and its compat table 194. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 298 calls, the x86-64 kernel 274, and its compat table 199. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -31,7 +31,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `clock_nanosleep_time64` | none | none | 407 | [nanosleep(2)](../man/man2/nanosleep.2) |
 | `clock_settime` | 264 | 227 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
 | `clock_settime64` | 404 | none | 404 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `clone` | 120 | 56 | none | [fork(2)](../man/man2/fork.2) |
+| `clone` | 120 | 56 | 120 | [fork(2)](../man/man2/fork.2) |
 | `clone3` | 435 | 435 | 435 | [fork(2)](../man/man2/fork.2) |
 | `close` | 6 | 3 | 6 | [open(2)](../man/man2/open.2) |
 | `close_range` | 436 | 436 | 436 | [open(2)](../man/man2/open.2) |
@@ -49,7 +49,8 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `epoll_wait` | 256 | 232 | 256 | [epoll(2)](../man/man2/epoll.2) |
 | `eventfd` | 323 | 284 | 323 | [eventfd(2)](../man/man2/eventfd.2) |
 | `eventfd2` | 328 | 290 | 328 | [eventfd(2)](../man/man2/eventfd.2) |
-| `execve` | 11 | 59 | none | [execve(2)](../man/man2/execve.2) |
+| `execve` | 11 | 59 | 11 | [execve(2)](../man/man2/execve.2) |
+| `execveat` | 358 | 322 | 358 | [execve(2)](../man/man2/execve.2) |
 | `exit` | 1 | 60 | 1 | [exit(2)](../man/man2/exit.2) |
 | `exit_group` | 252 | 231 | 252 | [exit(2)](../man/man2/exit.2) |
 | `faccessat` | 307 | 269 | 307 | [access(2)](../man/man2/access.2) |
@@ -153,8 +154,8 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `mlock` | 150 | 149 | 150 | [brk(2)](../man/man2/brk.2) |
 | `mlock2` | 376 | 325 | 376 | [brk(2)](../man/man2/brk.2) |
 | `mlockall` | 152 | 151 | 152 | [brk(2)](../man/man2/brk.2) |
-| `mmap` | none | 9 | none | [brk(2)](../man/man2/brk.2) |
-| `mmap2` | 192 | none | none | [brk(2)](../man/man2/brk.2) |
+| `mmap` | none | 9 | 90 | [brk(2)](../man/man2/brk.2) |
+| `mmap2` | 192 | none | 192 | [brk(2)](../man/man2/brk.2) |
 | `mount` | 21 | 165 | 21 | [mount(2)](../man/man2/mount.2) |
 | `mprotect` | 125 | 10 | 125 | [brk(2)](../man/man2/brk.2) |
 | `mq_getsetattr` | 282 | 245 | none | [mq_open(2)](../man/man2/mq_open.2) |

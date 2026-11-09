@@ -737,6 +737,22 @@ static void exec_file_close(struct exec_file *f)
 /* The most of a script's first line that execve reads to parse it. */
 #define EXEC_SHEBANG_MAX 128
 
+/* execveat(2)'s flags, as <fcntl.h> numbers them. */
+#define EXEC_AT_FDCWD            (-100)
+#define EXEC_AT_SYMLINK_NOFOLLOW 0x100u
+#define EXEC_AT_EMPTY_PATH       0x1000u
+
+/* How execve or execveat named the program: the directory a relative path
+ * is taken from, a descriptor or EXEC_AT_FDCWD; the path; the vectors; and
+ * execveat's flags, 0 for execve. */
+struct exec_call {
+    int dirfd;
+    const char __user *path;
+    char *const __user *argv;
+    char *const __user *envp;
+    uint32_t flags;
+};
+
 /*
  * Where execve has the program's path, the new image's arguments and the
  * new image itself until it commits.
@@ -769,6 +785,8 @@ struct exec_state {
     int regains;          /* whether it holds any its caller lost */
     int secure;           /* AT_SECURE */
     int unreadable;       /* an image loaded is one the caller may not read */
+    int compat;           /* the program is an i386 one (`exec_classify`) */
+    int path_gone;        /* its path is a close-on-exec descriptor's (`exec_name`) */
     uintptr_t entry;      /* where the new image starts */
     /* The new image's layout (`exec_layout`): the address just past its
      * stack, its mmap base, a position-independent program's base, and how
@@ -1059,6 +1077,26 @@ static uintptr_t exec_stack_window(const struct exec_state *s, uintptr_t bottom,
 }
 
 /**
+ * Read pointer `i` of the user vector `vec` into `*ptr`: a pointer of the
+ * caller's ABI, 4 bytes for an i386 call, as Linux's `get_user_arg_ptr`
+ * reads a compat execve's. 0, or -EFAULT.
+ */
+static int32_t exec_vec_get(char *const __user *vec, uint32_t i, uintptr_t *ptr)
+{
+    if (sizeof(void *) > 4u && in_compat_syscall()) {
+        uint32_t p32;
+
+        if (copy_from_user(&p32, (const void __user *)((uintptr_t)vec + (uintptr_t)i * 4u), 4u) !=
+            0) {
+            return -EFAULT;
+        }
+        *ptr = p32;
+        return 0;
+    }
+    return copy_from_user(ptr, (const void __user *)&vec[i], sizeof(*ptr)) != 0 ? -EFAULT : 0;
+}
+
+/**
  * Count the pointers of the user vector `vec` before its NULL into `*n`, as
  * Linux's `count` counts them; a NULL `vec` has none. More than `max` is
  * -E2BIG, found without reading on to the end, and a pointer that cannot be
@@ -1075,7 +1113,7 @@ static int32_t exec_count(char *const __user *vec, uint32_t max, uint32_t *n)
     for (i = 0;; i++) {
         uintptr_t ptr;
 
-        if (copy_from_user(&ptr, (const void __user *)&vec[i], sizeof(ptr)) != 0) {
+        if (exec_vec_get(vec, i, &ptr) != 0) {
             return -EFAULT;
         }
         if (ptr == 0) {
@@ -1104,7 +1142,7 @@ static int32_t exec_copy_strings(struct uimage *u, char *const __user *vec, uint
         int32_t rc;
 
         n--;
-        if (copy_from_user(&ptr, (const void __user *)&vec[n], sizeof(ptr)) != 0) {
+        if (exec_vec_get(vec, n, &ptr) != 0) {
             return -EFAULT;
         }
         rc = uimage_push_user(u, (const char __user *)ptr);
@@ -1116,21 +1154,25 @@ static int32_t exec_copy_strings(struct uimage *u, char *const __user *vec, uint
 }
 
 /**
- * Copy the program's path and the caller's vectors onto the new stack in
- * `s`, and count them into `*argc` and `*envc`, as Linux's
+ * Copy the program's path and the vectors of the call `c` onto the new
+ * stack in `s`, and count them into `s->argc` and `s->envc`, as Linux's
  * `do_execveat_common` does.
  *
  * Both vectors are counted first, and their pointers are measured against
  * the budget `uimage_start` sets from the soft RLIMIT_STACK. The strings
- * follow, the path the caller passed at the top, then the environment and
- * then the arguments, each vector last string first. An empty argv gets one
- * empty string, so a program that starts reading at argv[1] does not read
- * the environment. 0, -E2BIG, -EFAULT or -ENOMEM.
+ * follow, the path the caller passed at the top, or `name` in its place
+ * when it is not NULL, then the environment and then the arguments, each
+ * vector last string first. An empty argv gets one empty string, so a
+ * program that starts reading at argv[1] does not read the environment. 0,
+ * -E2BIG, -EFAULT or -ENOMEM.
  */
-static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path,
-                              char *const __user *user_argv, char *const __user *user_envp,
-                              uint32_t *argc, uint32_t *envc)
+static int32_t exec_copy_args(struct exec_state *s, const struct exec_call *c, const char *name)
 {
+    const char __user *user_path = c->path;
+    char *const __user *user_argv = c->argv;
+    char *const __user *user_envp = c->envp;
+    uint32_t *argc = &s->argc;
+    uint32_t *envc = &s->envc;
     unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
     uint32_t max = uimage_budget(limit) / 4u;
     int32_t rc;
@@ -1143,7 +1185,7 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
         rc = uimage_start(&s->args, USER_ADDR_MAX, limit, *argc, *envc);
     }
     if (rc == 0) {
-        rc = uimage_push_user(&s->args, user_path);
+        rc = name != NULL ? uimage_push(&s->args, name) : uimage_push_user(&s->args, user_path);
     }
     if (rc == 0) {
         rc = exec_copy_strings(&s->args, user_envp, *envc);
@@ -1259,6 +1301,97 @@ static void exec_keep_entry(struct mm *keep, const struct open_file *link, struc
     *entry = NULL;
 }
 
+/* How `exec_open` finds the file: by a walk of its path that follows every
+ * symbolic link, or one whose last component may not be a link, as
+ * execveat's AT_SYMLINK_NOFOLLOW has it; a `how` of 0 or more is instead a
+ * descriptor, whose file is opened. */
+#define EXEC_WALK          (-1)
+#define EXEC_WALK_NOFOLLOW (-2)
+
+/**
+ * The file the caller's descriptor `fd` is open on, for execveat's
+ * AT_EMPTY_PATH, into `ref` as `proc_fd_file` leaves it, with `*held` the
+ * description: the file /proc/self/fd/N reaches, without the walk to it,
+ * so a process whose root has no /proc runs it too, as on Linux. 0,
+ * -EBADF for a descriptor that is not open, or `proc_fd_file`'s error.
+ */
+static int32_t exec_fd_file(int fd, struct vfs_ref *ref, struct open_file **held)
+{
+    struct vpath vp;
+
+    if (fd_get(current_proc->fds, fd) == NULL) {
+        return -EBADF;
+    }
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_PROC_FD_LINK;
+    vp.pid = SYNTH_PID_SELF;
+    vp.procfd = fd;
+    return proc_fd_file(&vp, ref, held);
+}
+
+/** Whether the node `ref` a walk that did not follow its last component
+ * ended on is a symbolic link: a link of a mounted volume or of the KRFFS
+ * root, or a /proc/PID/fd/N link, which execveat with AT_SYMLINK_NOFOLLOW
+ * refuses as Linux does. */
+static int exec_is_link(const struct vfs_ref *ref)
+{
+    const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
+    struct vfs_stat vst;
+
+    if (vp != NULL) {
+        return vp->kind == VNODE_PROC_FD_LINK;
+    }
+    if (mnt_is_root(ref->mnt)) {
+        return krffs_mode_type(((const krffs_node_t *)ref->node)->mode) == 0120000u;
+    }
+    return vfs_getattr(ref->mnt, ref->node, &vst) == 0 && (vst.mode & 0170000u) == 0120000u;
+}
+
+/**
+ * Check that the node `ref` an exec's walk ended on is a program the caller
+ * may run, as `exec_open` says, and open it into `f`: its mode and owner go
+ * in `*vst`, and a file off the KRFFS root is opened and its reference kept
+ * in `f->ref`, held until `exec_file_close`. `keep` is exec_open's. 0 or a
+ * negative errno.
+ */
+static int32_t exec_check(struct exec_file *f, const struct vfs_ref *ref, const struct mm *keep,
+                          struct vfs_stat *vst)
+{
+    int32_t rc;
+
+    if (vfs_synth_vpath(ref->mnt, ref->node) || (ref->mnt->flags & VFS_MS_NOEXEC)) {
+        return -EACCES;
+    }
+    if (vfs_getattr(ref->mnt, ref->node, vst) == 0 && (vst->mode & 0170000u) == 0040000u) {
+        return -EACCES;
+    }
+    if (mnt_is_root(ref->mnt)) {
+        const krffs_node_t *node = ref->node;
+
+        rc = cred_access_node(node, CRED_X, 0);
+        f->readable = cred_access_node(node, CRED_R, 0) == 0;
+        if (rc == 0 && keep == NULL && krffs_node_path(ref->node, f->path, sizeof(f->path)) != 0) {
+            rc = -ENAMETOOLONG;
+        }
+        vst->mode = node->mode;
+        vst->uid = node->uid;
+        vst->gid = node->gid;
+        return rc;
+    }
+    rc = cred_access_ref(ref, CRED_X, 0);
+    if (rc == 0) {
+        f->readable = cred_access_ref(ref, CRED_R, 0) == 0;
+        rc = vfs_getattr(ref->mnt, ref->node, vst);
+    }
+    if (rc == 0) {
+        rc = vfs_open_node(ref->mnt, ref->node, 0, &f->handle);
+    }
+    if (rc == 0) {
+        f->ref = *ref;
+    }
+    return rc;
+}
+
 /**
  * Open the file at the absolute, canonical `path` into `f` for execve to
  * read, and when `id` is not NULL, say in it what the file's set-id bits
@@ -1279,7 +1412,10 @@ static void exec_keep_entry(struct mm *keep, const struct open_file *link, struc
  * reach one, and the walk that finds the file answers for it
  * (`resolve_named`): a file so named is -ENOTDIR. The node it checked is the
  * node opened, so a symbolic link replaced while the walk waits for a disk
- * cannot hand the open a program the check never saw.
+ * cannot hand the open a program the check never saw. `how` is EXEC_WALK;
+ * EXEC_WALK_NOFOLLOW, for which a last component that is a symbolic link is
+ * -ELOOP; or a descriptor of the caller's, whose file is opened in place of
+ * a walk (`exec_fd_file`), `path` naming it.
  *
  * A walk that ends on a /proc/PID/fd/N link goes on to the file the
  * descriptor is open on (`proc_fd_file`), as Linux's does, which is how
@@ -1301,8 +1437,8 @@ static void exec_keep_entry(struct mm *keep, const struct open_file *link, struc
  * nothing here implements. On a mount with MS_NOSUID the bits are read and
  * ignored. 0 or a negative errno.
  */
-static int32_t exec_open(struct exec_file *f, const char *path, int end, struct exec_setid *id,
-                         struct mm *keep)
+static int32_t exec_open(struct exec_file *f, const char *path, int end, int how,
+                         struct exec_setid *id, struct mm *keep)
 {
     struct open_file *link = NULL;
     struct vfs_name *entry = NULL;
@@ -1321,9 +1457,21 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     if (real == NULL) {
         return -ENOMEM;
     }
-    rc = resolve_named_entry(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref, real, &entry);
-    if (rc == 0) {
-        rc = exec_follow_fd(&ref, &link);
+    real[0] = '\0';
+    if (how >= 0) {
+        rc = exec_fd_file(how, &ref, &link);
+    } else {
+        rc =
+            resolve_named_entry(path + (path[0] == '/'),
+                                VFS_WALK_LOCK | (how == EXEC_WALK_NOFOLLOW ? VFS_WALK_NOFOLLOW : 0),
+                                end, &ref, real, &entry);
+        if (rc == 0 && how == EXEC_WALK_NOFOLLOW && exec_is_link(&ref)) {
+            vfs_walk_unlock(ref.mnt);
+            vfs_ref_release(&ref);
+            rc = -ELOOP;
+        } else if (rc == 0) {
+            rc = exec_follow_fd(&ref, &link);
+        }
     }
     if (rc != 0) {
         vfs_name_put(entry);
@@ -1331,34 +1479,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
         return rc;
     }
     nosuid = (ref.mnt->flags & VFS_MS_NOSUID) != 0;
-    if (vfs_synth_vpath(ref.mnt, ref.node) || (ref.mnt->flags & VFS_MS_NOEXEC)) {
-        rc = -EACCES;
-    } else if (vfs_getattr(ref.mnt, ref.node, &vst) == 0 && (vst.mode & 0170000u) == 0040000u) {
-        rc = -EACCES;
-    } else if (mnt_is_root(ref.mnt)) {
-        const krffs_node_t *node = ref.node;
-
-        rc = cred_access_node(node, CRED_X, 0);
-        f->readable = cred_access_node(node, CRED_R, 0) == 0;
-        if (rc == 0 && keep == NULL && krffs_node_path(ref.node, f->path, sizeof(f->path)) != 0) {
-            rc = -ENAMETOOLONG;
-        }
-        vst.mode = node->mode;
-        vst.uid = node->uid;
-        vst.gid = node->gid;
-    } else {
-        rc = cred_access_ref(&ref, CRED_X, 0);
-        if (rc == 0) {
-            f->readable = cred_access_ref(&ref, CRED_R, 0) == 0;
-            rc = vfs_getattr(ref.mnt, ref.node, &vst);
-        }
-        if (rc == 0) {
-            rc = vfs_open_node(ref.mnt, ref.node, 0, &f->handle);
-        }
-        if (rc == 0) {
-            f->ref = ref; /* held until exec_file_close */
-        }
-    }
+    rc = exec_check(f, &ref, keep, &vst);
     if (rc == 0) {
         rc = exec_map(f, &ref, &vst);
     }
@@ -1400,7 +1521,10 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
  * bits would be unsafe, since the interpreter can be made to read a
  * different file than the one whose bits were checked. An interpreter that
  * is itself a script is -ENOEXEC: nothing here needs a chain of them, and a
- * chain could loop. 0, -ENOEXEC, or an error of the open or the read.
+ * chain could loop. A script execveat reached through a close-on-exec
+ * descriptor is -ENOENT, since its interpreter could not open it, as Linux's
+ * BINPRM_FLAGS_PATH_INACCESSIBLE has it. 0, -ENOEXEC, -ENOENT, or an error
+ * of the open or the read.
  */
 static int32_t exec_script(struct exec_state *s)
 {
@@ -1420,8 +1544,11 @@ static int32_t exec_script(struct exec_state *s)
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOEXEC;
     }
+    if (s->path_gone) {
+        return -ENOENT;
+    }
     s->id.mode = 0;
-    rc = exec_open(&s->prog, s->path, s->path_end, NULL, s->mm);
+    rc = exec_open(&s->prog, s->path, s->path_end, EXEC_WALK, NULL, s->mm);
     if (rc != 0) {
         return rc;
     }
@@ -1621,9 +1748,16 @@ static uintptr_t aslr_pages(uintptr_t pages)
  * number of pages and the entry stack pointer by a random multiple of 16
  * bytes, the mmap base is lowered and the program's base raised by random
  * numbers of pages, and at 2 the heap's start is raised by one.
+ *
+ * An i386 program on the x86-64 kernel (`s->compat`) has the layout Linux
+ * gives a compat task, the IA32_ addresses and bounds of cpu.h, and its
+ * stack's words are 4 bytes, with AT_PLATFORM "i686", Linux's
+ * COMPAT_ELF_PLATFORM.
  */
 static void exec_layout(struct exec_state *s)
 {
+    uintptr_t stack_pages = ASLR_STACK_PAGES;
+    uintptr_t mmap_pages = ASLR_MMAP_PAGES;
     uint32_t pad = 0;
 
     s->persona = current_proc->persona;
@@ -1633,14 +1767,25 @@ static void exec_layout(struct exec_state *s)
     s->stack_top = USER_ADDR_MAX;
     s->mmap_base = USER_MMAP_BASE;
     s->dyn_base = ELF_ET_DYN_BASE;
+#if ELF_IA32
+    if (s->compat) {
+        s->stack_top = IA32_TASK_SIZE;
+        s->mmap_base = IA32_MMAP_BASE;
+        s->dyn_base = IA32_ET_DYN_BASE;
+        stack_pages = IA32_ASLR_STACK_PAGES;
+        mmap_pages = IA32_ASLR_MMAP_PAGES;
+        s->args.word = 4u;
+        s->args.platform = "i686";
+    }
+#endif
     s->heap_shift = 0;
     if (randomize_va_space != 0 && !(s->persona & ADDR_NO_RANDOMIZE)) {
-        s->stack_top -= aslr_pages(ASLR_STACK_PAGES);
+        s->stack_top -= aslr_pages(stack_pages);
         if (ASLR_SP_BYTES != 0) {
             pad = krandom_u32() & (uint32_t)(ASLR_SP_BYTES - 1u) & ~15u;
         }
-        s->mmap_base -= aslr_pages(ASLR_MMAP_PAGES);
-        s->dyn_base += aslr_pages(ASLR_MMAP_PAGES);
+        s->mmap_base -= aslr_pages(mmap_pages);
+        s->dyn_base += aslr_pages(mmap_pages);
         if (randomize_va_space >= 2) {
             s->heap_shift = aslr_pages(ASLR_BRK_PAGES);
         }
@@ -1660,9 +1805,11 @@ static void exec_layout(struct exec_state *s)
  * the one walk of the open: one that names a directory by its end must
  * reach one, so a file so named is -ENOTDIR and a directory the open's
  * -EACCES, as Linux's open of the interpreter answers. 0, -ENOENT, -ENOTDIR,
- * -EACCES, -ELIBBAD for a file that is not an interpreter this kernel loads,
- * -ENOMEM for one that would cover the program or for memory its load could
- * not have, -EIO or a mount's error for a read that failed.
+ * -EACCES, -ELIBBAD for a file that is not an interpreter this kernel loads
+ * or one of another class than the program's, an i386 interpreter of an
+ * x86-64 program or the reverse, -ENOMEM for one that would cover the
+ * program or for memory its load could not have, -EIO or a mount's error
+ * for a read that failed.
  */
 static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
 {
@@ -1674,7 +1821,7 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
     if (rc < 0) {
         return rc;
     }
-    rc = exec_open(&s->prog, s->layout.interp, end, NULL, s->mm);
+    rc = exec_open(&s->prog, s->layout.interp, end, EXEC_WALK, NULL, s->mm);
     if (rc != 0) {
         return rc;
     }
@@ -1684,6 +1831,9 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
     rc = elf_read_layout(exec_file_read, &s->prog, 0, &s->ilayout);
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ELIBBAD);
+    }
+    if (s->ilayout.cls != s->layout.cls) {
+        return -ELIBBAD;
     }
     if (s->ilayout.type == ET_DYN) {
         bias = s->mmap_base - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
@@ -1711,11 +1861,15 @@ typedef char
 /**
  * Build the new image in `s`'s address space of its own while the caller's
  * still runs, as Linux's `load_elf_binary` builds one, in the layout
- * `exec_layout` chose: the program, at its base when it is position-independent
- * and linked below ELF_ET_DYN_BASE; the interpreter its PT_INTERP names; the
- * vDSO, one free page above the range mmap places mappings in, so that no
- * mapping there ends against it (`vdso_map`); the regions; and the stack, with
- * the pointers and the auxiliary vector below its strings. Each of the program
+ * `exec_layout` chose for the program whose layout `exec_classify` read: the
+ * program, at its base when it is position-independent and linked below
+ * ELF_ET_DYN_BASE, or IA32_ET_DYN_BASE for an i386 one; the interpreter its
+ * PT_INTERP names; the vDSO of the program's ABI, one free page above the
+ * range mmap places mappings in, so that no mapping there ends against it
+ * (`vdso_map`); the regions; and the stack, with the pointers and the
+ * auxiliary vector below its strings, an i386 program's with AT_HWCAP and
+ * AT_SYSINFO beside the rest. The address space is marked an i386 one for
+ * such a program, and keeps the vDSO's address. Each of the program
  * and the interpreter maps its segments from its file where it can, and the
  * reference to the file's mapping goes from the open file to the image, which
  * keeps it until `exec_release`. The stack may grow to the soft RLIMIT_STACK,
@@ -1731,15 +1885,19 @@ static int32_t exec_build(struct exec_state *s)
     uintptr_t bottom = uimage_bottom(&s->args);
     uintptr_t vdso_at = s->mmap_base + PAGE_SIZE;
     unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
+    uintptr_t dyn_floor = ELF_ET_DYN_BASE;
+    int abi = s->compat ? VDSO_IA32 : VDSO_NATIVE;
     uint8_t random16[16];
     intptr_t ehdr = 0;
     int32_t rc;
 
-    rc = elf_read_layout(exec_file_read, &s->prog, 1, &s->layout);
-    if (rc != 0) {
-        return exec_load_err(&s->prog, rc, -ENOEXEC);
+    k_memset(&aux, 0, sizeof(aux));
+#if ELF_IA32
+    if (s->compat) {
+        dyn_floor = IA32_ET_DYN_BASE;
     }
-    if (s->layout.type == ET_DYN && s->layout.lo < ELF_ET_DYN_BASE) {
+#endif
+    if (s->layout.type == ET_DYN && s->layout.lo < dyn_floor) {
         bias = s->dyn_base - s->layout.lo;
     }
     rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, s->prog.map, &s->img);
@@ -1764,12 +1922,20 @@ static int32_t exec_build(struct exec_state *s)
                        s->stack_top - PAGE_SIZE, exec_stack_window(s, bottom, limit),
                        s->mmap_base) != 0 ||
         (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
-        (ehdr = vdso_map(&s->mm->vm, vdso_at)) < 0 ||
+        (ehdr = vdso_map(&s->mm->vm, vdso_at, abi)) < 0 ||
         (bottom < s->stack_top - PAGE_SIZE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY)) ||
         vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
     }
     aux.sysinfo_ehdr = (uintptr_t)ehdr;
+#if ELF_IA32
+    if (s->compat) {
+        aux.hwcap = ia32_hwcap();
+        aux.sysinfo = ehdr != 0 ? vdso32_vsyscall_at((uintptr_t)ehdr) : 0;
+    }
+#endif
+    s->mm->compat = (uint32_t)s->compat;
+    s->mm->vdso = (uintptr_t)ehdr;
     aux.uid = current_proc->ruid;
     aux.euid = s->euid;
     aux.gid = current_proc->rgid;
@@ -2095,46 +2261,141 @@ int32_t proc_fs_unshare(void)
 }
 
 /**
- * Replace the current process image with a new program, in the workspace
- * `s`; the body of `sys_execve`.
- *
- * The call's arguments are path, argv[] and envp[]. Makes the new image's
- * address space, resolves the path and checks the execute right, keeping the
- * program's file with the address space, copies the path, argv and envp onto
- * the new stack's pages, resolves a `#!` script to its interpreter, builds the
- * new image, with the dynamic linker it names, in that address space, sets
- * aside the storage of a descriptor table of the caller's own, ends the
- * process's other threads, and only then commits, so every refusal and every
- * failure of the load returns to the caller with its image and its descriptor
- * table intact. Returns 0 once the image is committed, with the return frame
- * at the new image's entry, or a negative errno.
+ * Read the layout of the program `s` has open into `s->layout`, and from its
+ * class whether it is an i386 program, which the x86-64 kernel runs beside
+ * its own (`s->compat`), as Linux's binfmt handlers each recognize their
+ * class, before the layout is chosen. 0, -ENOEXEC for a file that is not a
+ * program this kernel loads, or a read's error (`exec_load_err`).
  */
-static int32_t exec_run(isr_params_t *params, struct exec_state *s)
+static int32_t exec_classify(struct exec_state *s)
 {
-    const char __user *user_path = (const char __user *)SC_ARG(params, 0);
+    int32_t rc = elf_read_layout(exec_file_read, &s->prog, 1, &s->layout);
+
+    if (rc != 0) {
+        return exec_load_err(&s->prog, rc, -ENOEXEC);
+    }
+    s->compat = s->layout.cls != ELF_CLASS;
+    return 0;
+}
+
+/**
+ * Find the program the call `c` names into `s->path`, and how `exec_open`
+ * reaches it into `*how`, as Linux's `do_execveat_common` names it: a path
+ * copied and made canonical, from the working directory or from the
+ * directory `c->dirfd` is open on, walked to its end, or under
+ * AT_SYMLINK_NOFOLLOW with a last component that may not be a link; or,
+ * for an empty path with AT_EMPTY_PATH, the file `c->dirfd` is open on,
+ * named "/dev/fd/N". AT_EXECFN, the stack's first string, is the caller's
+ * path when it is absolute or taken from the working directory, and
+ * otherwise "/dev/fd/N/path", or "/dev/fd/N" for the descriptor itself, as
+ * Linux's `bprm->filename`; such a name goes into the page `*name`, which
+ * the caller gives back, and is NULL for the caller's own. Such a program
+ * reached through a close-on-exec descriptor has no path the new image
+ * could open, which `s->path_gone` records. An empty path with
+ * AT_EMPTY_PATH and the working directory names a directory, -EACCES. 0,
+ * -EFAULT, -EINVAL for an unknown flag, -EBADF for a descriptor that is not
+ * open, -ENOMEM, or the path's error.
+ */
+static int32_t exec_name(struct exec_state *s, const struct exec_call *c, int *how, char **name)
+{
+    fd_entry_t *e;
+    char first = 0;
+    int n;
     int32_t rc;
 
-    if (!user_path) {
+    *how = EXEC_WALK;
+    *name = NULL;
+    if (c->path == NULL || copy_from_user(&first, (const void __user *)c->path, 1) != 0) {
         return -EFAULT;
     }
-    rc = copy_path_cwd(s->path, sizeof(s->path), user_path, &s->path_end);
+    if ((c->flags & ~(EXEC_AT_SYMLINK_NOFOLLOW | EXEC_AT_EMPTY_PATH)) != 0) {
+        return -EINVAL;
+    }
+    if (first == '\0' && (c->flags & EXEC_AT_EMPTY_PATH)) {
+        if (c->dirfd == EXEC_AT_FDCWD) {
+            return -EACCES;
+        }
+        if (c->dirfd < 0 || fd_get(current_proc->fds, c->dirfd) == NULL) {
+            return -EBADF;
+        }
+        *how = c->dirfd;
+        s->path_end = 0;
+        k_memcpy(s->path, "/dev/fd/", 9);
+        k_itoa(c->dirfd, s->path + 8, sizeof(s->path) - 8u, 10, false);
+    } else {
+        rc = copy_path_exec_at(s->path, sizeof(s->path), c->dirfd, c->path, &s->path_end);
+        if (rc < 0) {
+            return rc;
+        }
+        if (c->flags & EXEC_AT_SYMLINK_NOFOLLOW) {
+            *how = EXEC_WALK_NOFOLLOW;
+        }
+        if (c->dirfd == EXEC_AT_FDCWD || first == '/') {
+            return 0;
+        }
+    }
+    e = fd_get(current_proc->fds, c->dirfd);
+    s->path_gone = e != NULL && (e->flags & FD_FLAG_CLOEXEC) != 0;
+    *name = path_buf_get();
+    if (*name == NULL) {
+        return -ENOMEM;
+    }
+    k_memcpy(*name, "/dev/fd/", 9);
+    k_itoa(c->dirfd, *name + 8, VFS_PATH_MAX - 8u, 10, false);
+    if (*how >= 0) {
+        return 0;
+    }
+    n = (int)k_strlen(*name);
+    (*name)[n++] = '/';
+    rc = strncpy_from_user(*name + n, c->path, VFS_PATH_MAX - (uint32_t)n);
     if (rc < 0) {
         return rc;
     }
-    s->mm = mm_new();
-    if (s->mm == NULL) {
-        return -ENOMEM;
+    return rc == (int32_t)(VFS_PATH_MAX - (uint32_t)n) ? -ENAMETOOLONG : 0;
+}
+
+/**
+ * Replace the current process image with the program the call `c` names,
+ * in the workspace `s`; the body of `sys_execve` and `sys_execveat`.
+ *
+ * Makes the new image's address space, resolves the path (`exec_name`) and
+ * checks the execute right, keeping the program's file with the address
+ * space, copies the path, argv and envp onto the new stack's pages, resolves
+ * a `#!` script to its interpreter, builds the new image, with the dynamic
+ * linker it names, in that address space, sets aside the storage of a
+ * descriptor table of the caller's own, ends the process's other threads,
+ * and only then commits, so every refusal and every failure of the load
+ * returns to the caller with its image and its descriptor table intact. The
+ * vectors are of the caller's ABI, 4-byte pointers for an i386 call
+ * (`exec_vec_get`). Returns 0 once the image is committed, with the return
+ * frame at the new image's entry, or a negative errno.
+ */
+static int32_t exec_run(isr_params_t *params, struct exec_state *s, const struct exec_call *c)
+{
+    char *name = NULL;
+    int how;
+    int32_t rc;
+
+    rc = exec_name(s, c, &how, &name);
+    if (rc == 0) {
+        s->mm = mm_new();
+        rc = s->mm == NULL ? -ENOMEM : 0;
     }
-    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
+    if (rc == 0) {
+        rc = exec_open(&s->prog, s->path, s->path_end, how, &s->id, s->mm);
+    }
     if (rc == 0) {
         rc = exec_link_name(s);
     }
     if (rc == 0) {
-        rc = exec_copy_args(s, user_path, (char *const __user *)SC_ARG(params, 1),
-                            (char *const __user *)SC_ARG(params, 2), &s->argc, &s->envc);
+        rc = exec_copy_args(s, c, name);
     }
+    path_buf_put(name);
     if (rc == 0) {
         rc = exec_script(s);
+    }
+    if (rc == 0) {
+        rc = exec_classify(s);
     }
     if (rc == 0) {
         exec_ids(s);
@@ -2163,13 +2424,12 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 }
 
 /**
- * Replace the current process image with a new program (execve(2)).
- *
- * Gives the call a workspace of its own, which `exec_run` does the work in,
- * and gives it back when that returns, whether the exec failed or the new
- * image is about to be entered.
+ * Run the program the call `c` names in place of the caller's image: give
+ * the call a workspace of its own, which `exec_run` does the work in, and
+ * give it back when that returns, whether the exec failed or the new image
+ * is about to be entered.
  */
-long sys_execve(isr_params_t *params)
+static long exec_call_run(isr_params_t *params, const struct exec_call *c)
 {
     struct exec_state *s;
     int32_t rc;
@@ -2183,9 +2443,43 @@ long sys_execve(isr_params_t *params)
         return -ENOMEM;
     }
     current_proc->exec_ws = s;
-    rc = exec_run(params, s);
+    rc = exec_run(params, s, c);
     exec_release();
     return rc;
+}
+
+/** Replace the current process image with a new program (execve(2)): the
+ * path, argv[] and envp[], the path taken from the working directory. */
+long sys_execve(isr_params_t *params)
+{
+    struct exec_call c;
+
+    c.dirfd = EXEC_AT_FDCWD;
+    c.path = (const char __user *)SC_ARG(params, 0);
+    c.argv = (char *const __user *)SC_ARG(params, 1);
+    c.envp = (char *const __user *)SC_ARG(params, 2);
+    c.flags = 0;
+    return exec_call_run(params, &c);
+}
+
+/**
+ * execveat(2): execve with a directory descriptor, from which a relative
+ * path is taken, and flags: AT_SYMLINK_NOFOLLOW, under which a path whose
+ * last component is a symbolic link is ELOOP, and AT_EMPTY_PATH, under
+ * which an empty path runs the file the descriptor is open on, as glibc's
+ * fexecve does through it (`exec_name`). Its arguments are the descriptor,
+ * the path, argv[], envp[] and the flags.
+ */
+long sys_execveat(isr_params_t *params)
+{
+    struct exec_call c;
+
+    c.dirfd = (int)SC_ARG(params, 0);
+    c.path = (const char __user *)SC_ARG(params, 1);
+    c.argv = (char *const __user *)SC_ARG(params, 2);
+    c.envp = (char *const __user *)SC_ARG(params, 3);
+    c.flags = (uint32_t)SC_ARG(params, 4);
+    return exec_call_run(params, &c);
 }
 
 /* clone(2) flags; the low byte is the signal the parent gets at the child's
@@ -2216,7 +2510,9 @@ long sys_execve(isr_params_t *params)
  * CLONE_CHILD_CLEARTID name, each 0 for none, the TLS base CLONE_SETTLS
  * gives the child, the parent's address CLONE_PIDFD stores the child's pidfd
  * at, and whether the child's handlers go back to their defaults, clone3's
- * CLONE_CLEAR_SIGHAND. */
+ * CLONE_CLEAR_SIGHAND. An i386 call's CLONE_SETTLS gives the child a TLS
+ * descriptor in place of a base (`ia32_clone_tls`): `tls_desc_set`, with
+ * the entry and the descriptor. */
 struct fork_req {
     uint32_t flags;
     uintptr_t newsp;
@@ -2226,6 +2522,9 @@ struct fork_req {
     uintptr_t tls;
     uintptr_t pidfd;
     uint32_t clear_sighand;
+    uint32_t tls_desc_set;
+    uint32_t tls_entry;
+    uint64_t tls_desc;
 };
 
 /* The parents that wait in vfork until their child calls execve or ends. */
@@ -2501,10 +2800,17 @@ static void fork_store_ids(process_t *child, const struct fork_req *req)
  * trap frame `params`: the architecture copies the frame with 0 for fork's
  * result and the new stack pointer a clone gives, and above it what its
  * `switch_context` pops on the way back to user mode (`arch_fork_frame`).
+ * The TLS descriptor an i386 clone's CLONE_SETTLS gave goes in the child's
+ * thread-area slots, which its first switch loads.
  */
 static void fork_frame(process_t *child, const isr_params_t *params, const struct fork_req *req)
 {
     arch_fork_frame(child, params, req->newsp);
+#if ELF_IA32
+    if (req->tls_desc_set) {
+        ia32_clone_tls_set(child, req->tls_entry, req->tls_desc);
+    }
+#endif
 }
 
 /**
@@ -2588,7 +2894,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (rc != 0) {
         goto fail_built;
     }
-    child->tls_base = (req->flags & CLONE_SETTLS) ? req->tls : arch_tls_get();
+    child->tls_base = (req->flags & CLONE_SETTLS) && !req->tls_desc_set ? req->tls : arch_tls_get();
     fpu_save(child->fpu);
 
     rc = fork_shares(child, parent, req->flags);
@@ -2654,7 +2960,7 @@ fail_built:
  * whose end sends the caller SIGCHLD (`do_fork`). */
 long sys_fork(isr_params_t *params)
 {
-    struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0, 0, 0};
+    struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
 }
@@ -2667,21 +2973,55 @@ long sys_fork(isr_params_t *params)
  */
 long sys_vfork(isr_params_t *params)
 {
-    struct fork_req req = {CLONE_VM | CLONE_VFORK | SIGCHLD, 0, 0, 0, 0, 0, 0, 0};
+    struct fork_req req = {CLONE_VM | CLONE_VFORK | SIGCHLD, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
+}
+
+/**
+ * Put the thread pointer that CLONE_SETTLS in `flags` gives, from the TLS
+ * argument `tls`, in `req`: a base (`arch_clone_tls`), or in an i386 call on
+ * x86-64 the descriptor of the `struct user_desc` at `tls`
+ * (`ia32_clone_tls`), as Linux's `set_new_tls` has it. Without the flag
+ * `req` gets none. 0 or the error of either.
+ */
+static long clone_tls(uint32_t flags, unsigned long tls, struct fork_req *req)
+{
+    uintptr_t base = 0;
+    long err = 0;
+
+    req->tls = 0;
+    req->tls_desc_set = 0;
+    req->tls_entry = 0;
+    req->tls_desc = 0;
+    if (!(flags & CLONE_SETTLS)) {
+        return 0;
+    }
+#if ELF_IA32
+    if (in_compat_syscall()) {
+        err = ia32_clone_tls(tls, &req->tls_entry, &req->tls_desc);
+        req->tls_desc_set = err == 0;
+        return err;
+    }
+#endif
+    err = arch_clone_tls(tls, &base);
+    req->tls = base;
+    return err;
 }
 
 /** Make the clone `sys_clone` describes, from the arguments of `clone` or of
  * `clone3`; `params` is the caller's frame, which the child's is copied from,
  * `pidfd` the address CLONE_PIDFD stores at, and `clear_sighand` clone3's
- * CLONE_CLEAR_SIGHAND. The child's id, -EINVAL for a set of flags
- * `sys_clone` does not take, or the error of `arch_clone_tls` or of
- * `do_fork`. */
+ * CLONE_CLEAR_SIGHAND. In an i386 call on x86-64 the TLS argument of
+ * CLONE_SETTLS is a `struct user_desc`, whose descriptor the child gets in
+ * place of a thread pointer, as Linux's `set_new_tls` has it. The child's
+ * id, -EINVAL for a set of flags `sys_clone` does not take, or the error of
+ * `arch_clone_tls`, `ia32_clone_tls` or `do_fork`. */
 static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp, uintptr_t ptid,
                           unsigned long tls, uintptr_t ctid, uintptr_t pidfd, int clear_sighand)
 {
     struct fork_req req;
+    long err;
 
     if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_PIDFD |
                    CLONE_VFORK | CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
@@ -2696,15 +3036,9 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
         (clear_sighand && (flags & CLONE_SIGHAND))) {
         return -EINVAL;
     }
-    req.tls = 0;
-    if (flags & CLONE_SETTLS) {
-        uintptr_t base = 0;
-        long err = arch_clone_tls(tls, &base);
-
-        if (err != 0) {
-            return (int32_t)err;
-        }
-        req.tls = base;
+    err = clone_tls(flags, tls, &req);
+    if (err != 0) {
+        return (int32_t)err;
     }
     req.flags = flags;
     req.newsp = newsp;
@@ -2748,6 +3082,15 @@ long sys_clone(isr_params_t *params)
     return clone_with(params, (uint32_t)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2),
                       SC_ARG(params, SC_CLONE_TLS), SC_ARG(params, SC_CLONE_CTID),
                       SC_ARG(params, 2), 0);
+}
+
+/** clone(2) from arguments its caller has read in its own order, the i386
+ * call's (`compat_sys_ia32_clone`): the flags, the new stack, the parent
+ * tid address, the TLS argument and the child tid address. */
+long ksys_clone(isr_params_t *params, uint32_t flags, uintptr_t newsp, uintptr_t ptid,
+                unsigned long tls, uintptr_t ctid)
+{
+    return clone_with(params, flags, newsp, ptid, tls, ctid, ptid, 0);
 }
 
 /* clone3's structure, Linux's struct clone_args as the eight 64-bit fields
@@ -6314,29 +6657,65 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
 }
 
 /**
+ * The end of the calling process's address space, Linux's TASK_SIZE:
+ * IA32_TASK_SIZE for an i386 program on x86-64, whose every mapping lies
+ * below 4 GiB, and USER_ADDR_MAX for any other.
+ */
+static uintptr_t task_size(void)
+{
+#if ELF_IA32
+    if (current_proc->mm->compat) {
+        return IA32_TASK_SIZE;
+    }
+#endif
+    return USER_ADDR_MAX;
+}
+
+/**
+ * The range of `vm` a mapping without a hint is placed in, from `*lo` to
+ * `*hi`: from the heap's top to the mmap base, and in an i386 call of a
+ * 64-bit program below IA32_MMAP_BASE, Linux's mmap_compat_base, so that the
+ * call's 32-bit result holds the address, from the bottom of user space
+ * when the heap lies above it.
+ */
+static void mmap_range(const vm_space_t *vm, uintptr_t *lo, uintptr_t *hi)
+{
+    *lo = PAGE_UP(vm->brk);
+    *hi = vm->mmap_base;
+#if ELF_IA32
+    if (in_compat_syscall() && *hi > IA32_MMAP_BASE) {
+        *hi = IA32_MMAP_BASE;
+    }
+#endif
+    if (*lo > *hi) {
+        *lo = USER_ADDR_MIN;
+    }
+}
+
+/**
  * Where a new mapping of `len` bytes goes, in `*base`: `addr` itself under
  * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
- * use; otherwise the hint rounded down to its page when that range is free
+ * use and with ENOMEM for one past the address space's end (`task_size`);
+ * otherwise the hint rounded down to its page when that range is free
  * below the stack's growth window, and without one the highest free range
- * below the mmap base and above the heap's top, so the ranges munmap frees
- * are used again. MAP_32BIT in a 64-bit call, as on Linux, rounds the hint
- * up, takes it only when its range ends by 2 GiB, and otherwise takes the
- * highest free range from 1 GiB to 2 GiB; a 32-bit call ignores it, its
- * every address being below 4 GiB. RLIMIT_AS counts the range, less what a
- * fixed mapping replaces. 0, -ENOMEM or -EEXIST. Nothing here sleeps, so
- * the range is still as it was found when the caller inserts the region
- * straight after.
+ * of `mmap_range`, so the ranges munmap frees are used again. MAP_32BIT in
+ * a 64-bit call, as on Linux, rounds the hint up, takes it only when its
+ * range ends by 2 GiB, and otherwise takes the highest free range from
+ * 1 GiB to 2 GiB; a 32-bit call ignores it, its every address being below
+ * 4 GiB. RLIMIT_AS counts the range, less what a fixed mapping replaces. 0,
+ * -ENOMEM or -EEXIST. Nothing here sleeps, so the range is still as it was
+ * found when the caller inserts the region straight after.
  */
 static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_t flags,
                           uintptr_t *base)
 {
     unsigned long limit = current_proc->rlim[RLIM_AS].cur;
-    uintptr_t lo = PAGE_UP(vm->brk);
-    uintptr_t hi = vm->mmap_base;
     uintptr_t top = vm->stack_limit;
+    uintptr_t lo, hi;
 
+    mmap_range(vm, &lo, &hi);
     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
-        if (addr < USER_ADDR_MIN || addr > USER_ADDR_MAX - len) {
+        if (addr < USER_ADDR_MIN || len > task_size() || addr > task_size() - len) {
             return -ENOMEM;
         }
         if ((flags & MAP_FIXED_NOREPLACE) && vm_overlaps(vm, addr, addr + len)) {
@@ -6447,7 +6826,7 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
         (flags & MAP_TYPE) != MAP_SHARED_VALIDATE) {
         return -EINVAL;
     }
-    if (length > USER_ADDR_MAX - USER_ADDR_MIN) {
+    if (length > task_size() - USER_ADDR_MIN) {
         return -ENOMEM;
     }
     len = PAGE_UP(length);
@@ -6606,7 +6985,7 @@ long sys_munmap(isr_params_t *params)
     if (length == 0 || (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
-    if (addr >= USER_ADDR_MAX || length > USER_ADDR_MAX - addr) {
+    if (addr >= task_size() || length > task_size() - addr) {
         return -EINVAL;
     }
 
@@ -6666,7 +7045,7 @@ long sys_mprotect(isr_params_t *params)
     if (length == 0) {
         return 0;
     }
-    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || length > USER_ADDR_MAX - addr) {
+    if (addr < USER_ADDR_MIN || addr >= task_size() || length > task_size() - addr) {
         return -ENOMEM;
     }
     end = PAGE_UP(addr + length);
@@ -6742,7 +7121,7 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
     unsigned long limit = current_proc->rlim[RLIM_AS].cur;
     uintptr_t rest;
 
-    if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > USER_ADDR_MAX - new_len ||
+    if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > task_size() - new_len ||
         (to < addr + old_len && addr < to + new_len)) {
         return -EINVAL;
     }
@@ -6764,7 +7143,8 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
  * Whether mremap's arguments name ranges it can work on: a page-aligned
  * address and two lengths that are not zero, flags it knows with
  * MREMAP_FIXED only beside MREMAP_MAYMOVE, an old range that ends inside
- * user space and a new length that fits in it. The lengths are judged as
+ * the caller's address space (`task_size`) and a new length that fits in
+ * it. The lengths are judged as
  * they are given, before they are rounded up to pages, so that neither
  * range can wrap past the end of the address space: with an old length
  * near 4 GiB the old range would seem to end below its start, and a fixed
@@ -6774,8 +7154,8 @@ static int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len
 {
     return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&
            (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&
-           (!(flags & MREMAP_FIXED) || (flags & MREMAP_MAYMOVE)) && addr <= USER_ADDR_MAX &&
-           old_len <= USER_ADDR_MAX - addr && new_len <= USER_ADDR_MAX - USER_ADDR_MIN;
+           (!(flags & MREMAP_FIXED) || (flags & MREMAP_MAYMOVE)) && addr <= task_size() &&
+           old_len <= task_size() - addr && new_len <= task_size() - USER_ADDR_MIN;
 }
 
 /**
@@ -6789,6 +7169,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
                          uint32_t flags, uintptr_t to)
 {
     vm_space_t *vm = &current_proc->mm->vm;
+    uintptr_t lo, hi;
 
     if (flags & MREMAP_FIXED) {
         return remap_fixed(vm, addr, old_len, to, new_len);
@@ -6805,7 +7186,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     if (vm_total(vm) + (new_len - old_len) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
     }
-    if (addr + old_len == r->end && addr <= USER_ADDR_MAX - new_len &&
+    if (addr + old_len == r->end && addr <= task_size() - new_len &&
         addr + new_len <= vm->stack_limit && !vm_overlaps(vm, addr + old_len, addr + new_len)) {
         if (vm_insert_file(vm, addr + old_len, addr + new_len, r->prot, r->type, r->file,
                            r->pgoff + (uint32_t)((addr + old_len - r->start) / PAGE_SIZE)) != 0) {
@@ -6817,7 +7198,8 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     if (!(flags & MREMAP_MAYMOVE)) {
         return -ENOMEM;
     }
-    to = vm_find_free(vm, new_len, PAGE_UP(vm->brk), vm->mmap_base);
+    mmap_range(vm, &lo, &hi);
+    to = vm_find_free(vm, new_len, lo, hi);
     if (to == 0) {
         return -ENOMEM;
     }

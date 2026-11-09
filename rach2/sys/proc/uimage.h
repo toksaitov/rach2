@@ -11,9 +11,11 @@
 
 struct page_dir;
 
-/* The auxiliary vector's entries, AT_NULL included; an image without a
- * vDSO has a second AT_NULL in place of AT_SYSINFO_EHDR. */
-#define UIMAGE_AUXV 19u
+/* The auxiliary vector's entries, AT_NULL included: an i386 image on the
+ * x86-64 kernel has all of them, and another, which lacks AT_HWCAP,
+ * AT_PLATFORM and AT_SYSINFO, and AT_SYSINFO_EHDR without a vDSO, has
+ * AT_NULL in their places. */
+#define UIMAGE_AUXV 22u
 
 /* Linux's limits on the strings of an execve (fs/exec.c): one string, its
  * NUL included, is at most 32 pages; the strings with their pointers take a
@@ -37,6 +39,12 @@ struct page_dir;
  */
 struct uimage {
     uintptr_t *frames; /* `cap` entries, in the heap */
+    /* The bytes of a word of the information block, a pointer's of the
+     * image: sizeof(unsigned long), or 4 for an i386 image on the x86-64
+     * kernel; and AT_PLATFORM's string, NULL for none. `uimage_start`
+     * sets the native word and no string. */
+    uint32_t word;
+    const char *platform;
     uint32_t cap;
     uint32_t nframes; /* frames taken, from the top page down */
     uint32_t given;   /* frames a page directory has taken over */
@@ -45,7 +53,7 @@ struct uimage {
     uintptr_t execfn; /* the first string, the program's path: AT_EXECFN */
     /* Where `uimage_write` found argv's strings to begin and the
      * environment's to begin and end, and the auxiliary vector it wrote,
-     * in words of a pointer's width. */
+     * in words of `word` bytes packed from the array's start. */
     uintptr_t arg_start;
     uintptr_t env_start;
     uintptr_t env_end;
@@ -106,19 +114,21 @@ void uimage_move(struct uimage *u, uintptr_t top, uint32_t pad);
 
 /**
  * Place the information block of `argc` and `envc` strings below the
- * strings and the pad, and take the frames it needs. Below them go the 16 bytes
- * AT_RANDOM points at, and below them argc, the argv pointers and their
- * NULL, the envp pointers and theirs, and the auxiliary vector, each a word
- * of a pointer's width. Their start, the entry stack pointer, is aligned
- * down to 16 bytes, as the call ABIs of i386 and x86-64 have it. 0, -E2BIG
- * or -ENOMEM.
+ * strings and the pad, and take the frames it needs. Below them goes
+ * AT_PLATFORM's string, when there is one, then the 16 bytes AT_RANDOM
+ * points at, and below them argc, the argv pointers and their NULL, the
+ * envp pointers and theirs, and the auxiliary vector, each a word of
+ * `word` bytes, as Linux's `create_elf_tables` lays them. Their start, the
+ * entry stack pointer, is aligned down to 16 bytes, as the call ABIs of
+ * i386 and x86-64 have it. 0, -E2BIG or -ENOMEM.
  */
 int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc);
 
 /* What the auxiliary vector says beside the program's image: where the
  * interpreter was loaded (AT_BASE, 0 without one), where the vDSO's image
  * is (AT_SYSINFO_EHDR, 0 without one, and then no entry), the ids the image
- * runs with, and AT_SECURE. */
+ * runs with, AT_SECURE, and for an i386 image AT_HWCAP and the vDSO's
+ * __kernel_vsyscall (AT_SYSINFO), each 0 for no entry. */
 struct uimage_aux {
     uintptr_t base;
     uintptr_t sysinfo_ehdr;
@@ -127,6 +137,8 @@ struct uimage_aux {
     uint32_t gid;
     uint32_t egid;
     int secure;
+    uint32_t hwcap;
+    uintptr_t sysinfo;
 };
 
 /**
@@ -135,11 +147,12 @@ struct uimage_aux {
  * strings of argv and then the `envc` of the environment, each array ending
  * in NULL, and the auxiliary vector (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY,
  * AT_PAGESZ, AT_CLKTCK 100, AT_SECURE, AT_RANDOM, AT_BASE, AT_UID, AT_EUID,
- * AT_GID, AT_EGID, AT_EXECFN, AT_MINSIGSTKSZ, AT_SYSINFO_EHDR where there
- * is a vDSO, and AT_NULL, which fills the vector's rest), which a dynamic
- * linker reads to find itself and the program it loads. The vector and the
- * bounds of the strings are kept in `u` too. 0, or -1 when no temporary
- * mapping was free.
+ * AT_GID, AT_EGID, AT_EXECFN, AT_MINSIGSTKSZ, AT_RSEQ_FEATURE_SIZE,
+ * AT_RSEQ_ALIGN, AT_HWCAP, AT_PLATFORM and AT_SYSINFO where `aux` and `u`
+ * give them, AT_SYSINFO_EHDR where there is a vDSO, and AT_NULL, which
+ * fills the vector's rest), which a dynamic linker reads to find itself and
+ * the program it loads. The vector and the bounds of the strings are kept
+ * in `u` too. 0, or -1 when no temporary mapping was free.
  */
 int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image_t *img,
                  const uint8_t random16[16], const struct uimage_aux *aux);

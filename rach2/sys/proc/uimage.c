@@ -91,6 +91,7 @@ int uimage_start(struct uimage *u, uintptr_t top, unsigned long stack_limit, uin
     uint32_t pointers;
 
     k_memset(u, 0, sizeof(*u));
+    u->word = word;
     u->top = top;
     if (argc > limit / word || envc > limit / word) {
         return -E2BIG;
@@ -246,35 +247,90 @@ void uimage_move(struct uimage *u, uintptr_t top, uint32_t pad)
     u->pad = pad;
 }
 
-/** Where the 16 bytes AT_RANDOM points at go: below the strings and the
- * pad, aligned down to 16 bytes as Linux aligns them, so no word of them
- * crosses a page. */
+/** Where AT_PLATFORM's string goes, just below the strings and the pad,
+ * as Linux's `create_elf_tables` copies it; the pad's end without one. */
+static uintptr_t uimage_platform_at(const struct uimage *u)
+{
+    uintptr_t at = u->top - u->used - u->pad;
+
+    return u->platform != NULL ? at - (k_strlen(u->platform) + 1u) : at;
+}
+
+/** Where the 16 bytes AT_RANDOM points at go: below the strings, the pad
+ * and AT_PLATFORM's string, aligned down to 16 bytes as Linux aligns them,
+ * so no word of them crosses a page. */
 static uintptr_t uimage_random_at(const struct uimage *u)
 {
-    return (u->top - u->used - u->pad - 16u) & ~(uintptr_t)15u;
+    return (uimage_platform_at(u) - 16u) & ~(uintptr_t)15u;
 }
 
 int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc)
 {
     uint32_t words = 3u + argc + envc + 2u * UIMAGE_AUXV;
 
-    u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)15u;
+    u->sp = (uimage_random_at(u) - words * u->word) & ~(uintptr_t)15u;
     return uimage_grow(u, (uint32_t)(u->top - u->sp));
 }
 
-/** Write the word `value` at `*at` through `w`, and step `*at` past it; 0,
- * or -1 when no temporary mapping was free. The information block is
- * aligned, so no word crosses a page. */
+/** Write the word `value`, of `w`'s stack's word size, at `*at` through `w`,
+ * and step `*at` past it; 0, or -1 when no temporary mapping was free. The
+ * information block is aligned, so no word crosses a page. */
 static int uimage_put(struct uwin *w, uintptr_t *at, unsigned long value)
 {
     uint8_t *p = uwin_at(w, *at);
+    uint32_t v32 = (uint32_t)value;
 
     if (p == NULL) {
         return -1;
     }
-    k_memcpy(p, &value, sizeof(value));
-    *at += sizeof(value);
+    if (w->u->word == 4u) {
+        k_memcpy(p, &v32, sizeof(v32));
+    } else {
+        k_memcpy(p, &value, sizeof(value));
+    }
+    *at += w->u->word;
     return 0;
+}
+
+/** Copy the string `s`, its NUL included, to the stack address `at`
+ * through `w`, a byte at a time, since it may cross a page; 0, or -1 when
+ * no temporary mapping was free. */
+static int uimage_put_string(struct uwin *w, uintptr_t at, const char *s)
+{
+    do {
+        uint8_t *p = uwin_at(w, at++);
+
+        if (p == NULL) {
+            return -1;
+        }
+        *p = (uint8_t)*s;
+    } while (*s++ != '\0');
+    return 0;
+}
+
+/** Append the pair `type`, `value` to the vector `aux` at `*n` words. */
+static void uimage_aux_add(unsigned long *aux, uint32_t *n, unsigned long type, unsigned long value)
+{
+    aux[(*n)++] = type;
+    aux[(*n)++] = value;
+}
+
+/** Keep the vector `aux`, 2 * UIMAGE_AUXV words, in `u->auxv` as the stack
+ * has it: in words of `u->word` bytes, packed from the array's start. */
+static void uimage_keep_auxv(struct uimage *u, const unsigned long *aux)
+{
+    uint32_t i;
+
+    if (u->word != 4u) {
+        k_memcpy(u->auxv, aux, sizeof(u->auxv));
+        return;
+    }
+    k_memset(u->auxv, 0, sizeof(u->auxv));
+    for (i = 0; i < 2u * UIMAGE_AUXV; i++) {
+        uint32_t v = (uint32_t)aux[i];
+
+        k_memcpy((uint8_t *)u->auxv + i * 4u, &v, sizeof(v));
+    }
 }
 
 /** Step `*str` from the start of a string on the stack to the start of the
@@ -311,50 +367,48 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     uintptr_t str = u->top - u->used;
     uint8_t *random;
     uint32_t i;
+    uint32_t n = 0;
     int rc = 0;
 
-    aux[0] = AT_PHDR;
-    aux[1] = img->phdr_vaddr;
-    aux[2] = AT_PHENT;
-    aux[3] = img->phent;
-    aux[4] = AT_PHNUM;
-    aux[5] = img->phnum;
-    aux[6] = AT_ENTRY;
-    aux[7] = img->entry;
-    aux[8] = AT_PAGESZ;
-    aux[9] = PAGE_SIZE;
-    aux[10] = AT_CLKTCK;
-    aux[11] = USER_HZ;
-    aux[12] = AT_SECURE;
-    aux[13] = ids->secure ? 1u : 0u;
-    aux[14] = AT_RANDOM;
-    aux[15] = random_at;
-    aux[16] = AT_BASE;
-    aux[17] = ids->base;
-    aux[18] = AT_UID;
-    aux[19] = ids->uid;
-    aux[20] = AT_EUID;
-    aux[21] = ids->euid;
-    aux[22] = AT_GID;
-    aux[23] = ids->gid;
-    aux[24] = AT_EGID;
-    aux[25] = ids->egid;
-    aux[26] = AT_EXECFN;
-    aux[27] = u->execfn;
-    aux[28] = AT_MINSIGSTKSZ;
-    aux[29] = sigframe_stack_bytes();
-    aux[30] = AT_RSEQ_FEATURE_SIZE;
-    aux[31] = RSEQ_FEATURE_SIZE;
-    aux[32] = AT_RSEQ_ALIGN;
-    aux[33] = RSEQ_ALIGN;
-    aux[34] = ids->sysinfo_ehdr ? AT_SYSINFO_EHDR : AT_NULL;
-    aux[35] = ids->sysinfo_ehdr;
-    aux[36] = AT_NULL;
-    aux[37] = 0;
+    uimage_aux_add(aux, &n, AT_PHDR, img->phdr_vaddr);
+    uimage_aux_add(aux, &n, AT_PHENT, img->phent);
+    uimage_aux_add(aux, &n, AT_PHNUM, img->phnum);
+    uimage_aux_add(aux, &n, AT_ENTRY, img->entry);
+    uimage_aux_add(aux, &n, AT_PAGESZ, PAGE_SIZE);
+    uimage_aux_add(aux, &n, AT_CLKTCK, USER_HZ);
+    uimage_aux_add(aux, &n, AT_SECURE, ids->secure ? 1u : 0u);
+    uimage_aux_add(aux, &n, AT_RANDOM, random_at);
+    uimage_aux_add(aux, &n, AT_BASE, ids->base);
+    uimage_aux_add(aux, &n, AT_UID, ids->uid);
+    uimage_aux_add(aux, &n, AT_EUID, ids->euid);
+    uimage_aux_add(aux, &n, AT_GID, ids->gid);
+    uimage_aux_add(aux, &n, AT_EGID, ids->egid);
+    uimage_aux_add(aux, &n, AT_EXECFN, u->execfn);
+    uimage_aux_add(aux, &n, AT_MINSIGSTKSZ, sigframe_stack_bytes());
+    uimage_aux_add(aux, &n, AT_RSEQ_FEATURE_SIZE, RSEQ_FEATURE_SIZE);
+    uimage_aux_add(aux, &n, AT_RSEQ_ALIGN, RSEQ_ALIGN);
+    if (ids->hwcap != 0) {
+        uimage_aux_add(aux, &n, AT_HWCAP, ids->hwcap);
+    }
+    if (u->platform != NULL) {
+        uimage_aux_add(aux, &n, AT_PLATFORM, uimage_platform_at(u));
+    }
+    if (ids->sysinfo != 0) {
+        uimage_aux_add(aux, &n, AT_SYSINFO, ids->sysinfo);
+    }
+    if (ids->sysinfo_ehdr != 0) {
+        uimage_aux_add(aux, &n, AT_SYSINFO_EHDR, ids->sysinfo_ehdr);
+    }
+    while (n < 2u * UIMAGE_AUXV) {
+        uimage_aux_add(aux, &n, AT_NULL, 0);
+    }
 
     uwin_open(&out, u);
     uwin_open(&in, u);
-    random = uwin_at(&out, random_at);
+    if (u->platform != NULL && uimage_put_string(&out, uimage_platform_at(u), u->platform) != 0) {
+        rc = -1;
+    }
+    random = rc == 0 ? uwin_at(&out, random_at) : NULL;
     if (random == NULL) {
         rc = -1;
     } else {
@@ -391,7 +445,7 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     for (i = 0; i < 2u * UIMAGE_AUXV && rc == 0; i++) {
         rc = uimage_put(&out, &at, aux[i]);
     }
-    k_memcpy(u->auxv, aux, sizeof(u->auxv));
+    uimage_keep_auxv(u, aux);
     uwin_close(&out);
     uwin_close(&in);
     return rc;

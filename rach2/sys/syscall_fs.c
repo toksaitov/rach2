@@ -1730,6 +1730,11 @@ int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath, int *e
     return copy_path_at(pathbuf, size, AT_FDCWD, upath, end);
 }
 
+int copy_path_exec_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath, int *end)
+{
+    return copy_path_at(pathbuf, size, dirfd, upath, end);
+}
+
 int canonicalize_named(char *path, int *end)
 {
     int len;

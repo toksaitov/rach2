@@ -203,6 +203,11 @@ int canonicalize_abs(char *path);
  */
 int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath, int *end);
 
+/** The path of execveat(2), as `copy_path_cwd` copies execve's but joined
+ * to the directory `dirfd` is open on when it is relative, or -EBADF for a
+ * descriptor that is not open. */
+int copy_path_exec_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath, int *end);
+
 /**
  * Make the absolute path `path`, which the kernel read from a file, canonical
  * in place, as `copy_path_cwd` makes execve's, with `*end` saying how it named
@@ -558,6 +563,8 @@ long sys_lstat(isr_params_t *params);
 
 long sys_execve(isr_params_t *params);
 
+long sys_execveat(isr_params_t *params);
+
 long sys_fork(isr_params_t *params);
 
 long sys_vfork(isr_params_t *params);
@@ -791,6 +798,12 @@ long sys_madvise(isr_params_t *params);
 long sys_msync(isr_params_t *params);
 
 long sys_clone(isr_params_t *params);
+
+/** clone with its arguments given apart, as an ABI that orders them its own
+ * way passes them: the flags, the new stack, the parent tid address, the
+ * TLS argument and the child tid address (`sys_clone`). */
+long ksys_clone(isr_params_t *params, uint32_t flags, uintptr_t newsp, uintptr_t ptid,
+                unsigned long tls, uintptr_t ctid);
 
 long sys_clone3(isr_params_t *params);
 

@@ -252,6 +252,23 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v);
 #define AUDIT_ARCH  0xC000003Eu /* AUDIT_ARCH_X86_64 */
 #define ARCH_NAME   "x86_64"
 
+/*
+ * An i386 program's address space, an ELFCLASS32 image of EM_386 that the
+ * loader takes beside the native class, as Linux lays out a compat task's:
+ * it ends at IA32_TASK_SIZE, which is its stack's top; a mapping without a
+ * hint goes below IA32_MMAP_BASE, 128 MiB below that, Linux's least gap for
+ * the stack; a position-independent program linked at 0 goes at
+ * IA32_ET_DYN_BASE. Randomized, the stack's top goes down by less than
+ * 8 MiB and the mmap base down and a program's base up by less than 1 MiB,
+ * the bounds of Linux's mmap_rnd_compat_bits and its compat STACK_RND_MASK;
+ * the heap and the stack pointer move as a 64-bit program's do.
+ */
+#define IA32_TASK_SIZE        0xFFFFE000UL
+#define IA32_MMAP_BASE        0xF7FFE000UL
+#define IA32_ET_DYN_BASE      0x00400000UL
+#define IA32_ASLR_STACK_PAGES 0x00000800UL
+#define IA32_ASLR_MMAP_PAGES  0x00000100UL
+
 /* The calls seccomp's strict mode allows, by this ABI's numbers: read,
  * write, exit and rt_sigreturn, as Linux's `mode1_syscalls` has them. */
 #define SECCOMP_NR_READ      0u

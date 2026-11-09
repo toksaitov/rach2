@@ -233,8 +233,11 @@ struct k_siginfo;
 int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                         const struct k_siginfo *info, uint64_t oldmask);
 
-/** Whether the kernel has a 32-bit vDSO to give an i386 program
- * (vdso32.c). */
-int vdso32_present(void);
+/** The address of the 32-bit vDSO's __kernel_rt_sigreturn when `rt` is
+ * set, else of __kernel_sigreturn, in the calling thread's address space,
+ * the restorer an i386 signal frame returns to without SA_RESTORER, as
+ * Linux's `ia32_setup_frame` finds it; 0 where the image is not an i386
+ * program's or has no vDSO (vdso32.c). */
+uintptr_t ia32_vdso_sigreturn(int rt);
 
 #endif /* _X86_64_IA32_H_ */

@@ -212,6 +212,8 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     to->env_end = from->env_end;
     k_memcpy(to->auxv, from->auxv, sizeof(to->auxv));
     to->dumpable = from->dumpable;
+    to->compat = from->compat;
+    to->vdso = from->vdso;
 }
 
 unsigned long mm_resident(const struct mm *mm)

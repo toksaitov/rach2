@@ -107,6 +107,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MKNODAT] = sys_mknodat;
     table[SYS_RMDIR] = sys_rmdir;
     table[SYS_EXECVE] = sys_execve;
+    table[SYS_EXECVEAT] = sys_execveat;
     table[SYS_CHDIR] = sys_chdir;
     table[SYS_FCHDIR] = sys_fchdir;
     table[SYS_CHROOT] = sys_chroot;

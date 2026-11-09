@@ -36,13 +36,15 @@ uint32_t vclock_resolution_ns(void)
     return 0;
 }
 
-uint32_t vdso_image_pages(void)
+uint32_t vdso_image_pages(int abi)
 {
+    (void)abi;
     return 0;
 }
 
-uintptr_t vdso_frame(uint32_t page)
+uintptr_t vdso_frame(int abi, uint32_t page)
 {
+    (void)abi;
     (void)page;
     return 0;
 }

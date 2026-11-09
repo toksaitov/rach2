@@ -104,19 +104,44 @@ uint16_t elf_program_header_count(const void *data)
     return ehdr->e_phnum;
 }
 
+/** Whether the identification bytes at `id` are those of a little-endian
+ * ELF file of the current version, of any class. */
+static bool elf_ident_ok(const uint8_t *id)
+{
+    return id[EI_MAG0] == ELFMAG0 && id[EI_MAG1] == ELFMAG1 && id[EI_MAG2] == ELFMAG2 &&
+           id[EI_MAG3] == ELFMAG3 && id[EI_DATA] == ELFDATA2LSB && id[EI_VERSION] == EV_CURRENT;
+}
+
+#if ELF_IA32
+/** Whether the ELF32 header `e` is an i386 program's that the x86-64
+ * kernel loads: ET_EXEC or ET_DYN, EM_386, and a nonempty table of ELF32
+ * program headers. */
+static bool elf_valid_ia32(const Elf32_Ehdr *e)
+{
+    return (e->e_type == ET_EXEC || e->e_type == ET_DYN) && e->e_machine == EM_386 &&
+           e->e_phoff != 0 && e->e_phnum != 0 && e->e_phentsize == sizeof(Elf32_Phdr);
+}
+#endif
+
 bool elf_valid_exec(const void *ehdr, uint32_t len)
 {
     const Elf_Ehdr *e = (const Elf_Ehdr *)ehdr;
 
-    if (len < sizeof(Elf_Ehdr)) {
+    if (len < EI_NIDENT || !elf_ident_ok(e->e_ident)) {
         return false;
     }
-    if (e->e_ident[EI_MAG0] != ELFMAG0 || e->e_ident[EI_MAG1] != ELFMAG1 ||
-        e->e_ident[EI_MAG2] != ELFMAG2 || e->e_ident[EI_MAG3] != ELFMAG3) {
-        return false;
+#if ELF_IA32
+    if (e->e_ident[EI_CLASS] == ELFCLASS32) {
+        Elf32_Ehdr e32;
+
+        if (len < sizeof(e32)) {
+            return false;
+        }
+        k_memcpy(&e32, ehdr, sizeof(e32));
+        return elf_valid_ia32(&e32);
     }
-    if (e->e_ident[EI_CLASS] != ELF_CLASS || e->e_ident[EI_DATA] != ELFDATA2LSB ||
-        e->e_ident[EI_VERSION] != EV_CURRENT) {
+#endif
+    if (len < sizeof(Elf_Ehdr) || e->e_ident[EI_CLASS] != ELF_CLASS) {
         return false;
     }
     if ((e->e_type != ET_EXEC && e->e_type != ET_DYN) || e->e_machine != ELF_MACHINE) {
@@ -144,26 +169,122 @@ static int elf_read_exact(elf_read_fn readfn, void *ctx, void *dst, uint32_t cou
     return got == (int)count ? 0 : -ENOEXEC;
 }
 
+#if ELF_IA32
+/**
+ * Turn the ELF32 header at the start of `ehdr` and the `phnum` ELF32 program
+ * headers at the start of `phdrs`, an i386 program's as read from its file,
+ * into the native class's, in place. The headers are rewritten from the
+ * last, whose native form lies wholly past the ELF32 entries not yet
+ * rewritten, since a native entry is the larger.
+ */
+static void elf_widen(Elf_Ehdr *ehdr, Elf_Phdr *phdrs, uint16_t phnum)
+{
+    Elf32_Ehdr e32;
+    uint16_t i = phnum;
+
+    k_memcpy(&e32, ehdr, sizeof(e32));
+    ehdr->e_type = e32.e_type;
+    ehdr->e_machine = e32.e_machine;
+    ehdr->e_version = e32.e_version;
+    ehdr->e_entry = e32.e_entry;
+    ehdr->e_phoff = e32.e_phoff;
+    ehdr->e_shoff = e32.e_shoff;
+    ehdr->e_flags = e32.e_flags;
+    ehdr->e_ehsize = e32.e_ehsize;
+    ehdr->e_phentsize = e32.e_phentsize;
+    ehdr->e_phnum = e32.e_phnum;
+    ehdr->e_shentsize = e32.e_shentsize;
+    ehdr->e_shnum = e32.e_shnum;
+    ehdr->e_shstrndx = e32.e_shstrndx;
+    while (i > 0) {
+        Elf32_Phdr p32;
+        Elf_Phdr *ph;
+
+        i--;
+        k_memcpy(&p32, (const uint8_t *)phdrs + (uint32_t)i * sizeof(p32), sizeof(p32));
+        ph = &phdrs[i];
+        ph->p_type = p32.p_type;
+        ph->p_flags = p32.p_flags;
+        ph->p_offset = p32.p_offset;
+        ph->p_vaddr = p32.p_vaddr;
+        ph->p_paddr = p32.p_paddr;
+        ph->p_filesz = p32.p_filesz;
+        ph->p_memsz = p32.p_memsz;
+        ph->p_align = p32.p_align;
+    }
+}
+#endif
+
+/**
+ * Read an image's ELF header into `ehdr` and its program headers into
+ * `phdrs`, ELF_MAX_PHNUM long, in the native class's form, and its class
+ * into `*cls`: an i386 program's under ELF_IA32 are read in their own form
+ * and widened (`elf_widen`), its `e_phentsize` staying the 32 bytes of its
+ * file's entries. 0, -ENOEXEC for an image `elf_valid_exec` refuses or with
+ * more than ELF_MAX_PHNUM program headers, or `elf_read_exact`'s error.
+ */
+static int elf_read_headers(elf_read_fn readfn, void *ctx, Elf_Ehdr *ehdr, Elf_Phdr *phdrs,
+                            uint8_t *cls)
+{
+    int rc = elf_read_exact(readfn, ctx, ehdr, sizeof(*ehdr), 0);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (!elf_valid_exec(ehdr, sizeof(*ehdr))) {
+        return -ENOEXEC;
+    }
+    *cls = ehdr->e_ident[EI_CLASS];
+#if ELF_IA32
+    if (*cls == ELFCLASS32) {
+        Elf32_Ehdr e32;
+
+        k_memcpy(&e32, ehdr, sizeof(e32));
+        if (e32.e_phnum > ELF_MAX_PHNUM) {
+            return -ENOEXEC;
+        }
+        rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)e32.e_phnum * sizeof(Elf32_Phdr),
+                            e32.e_phoff);
+        if (rc == 0) {
+            elf_widen(ehdr, phdrs, e32.e_phnum);
+        }
+        return rc;
+    }
+#endif
+    if (ehdr->e_phnum > ELF_MAX_PHNUM) {
+        return -ENOEXEC;
+    }
+    return elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr->e_phnum * sizeof(Elf_Phdr),
+                          (uint32_t)ehdr->e_phoff);
+}
+
+/** The end of the address space an image of class `cls` is loaded in: the
+ * stack's top page for the native class, IA32_TASK_SIZE for an i386 one. */
+static uintptr_t elf_user_max(uint8_t cls)
+{
+#if ELF_IA32
+    if (cls == ELFCLASS32) {
+        return IA32_TASK_SIZE;
+    }
+#endif
+    (void)cls;
+    return ELF_USER_MAX;
+}
+
 int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out)
 {
     Elf_Phdr phdrs[ELF_MAX_PHNUM];
     Elf_Ehdr ehdr;
+    uintptr_t top;
     uint16_t i;
     int rc;
 
     k_memset(out, 0, sizeof(*out));
-    rc = elf_read_exact(readfn, ctx, &ehdr, sizeof(ehdr), 0);
+    rc = elf_read_headers(readfn, ctx, &ehdr, phdrs, &out->cls);
     if (rc != 0) {
         return rc;
     }
-    if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
-        return -ENOEXEC;
-    }
-    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf_Phdr),
-                        (uint32_t)ehdr.e_phoff);
-    if (rc != 0) {
-        return rc;
-    }
+    top = out->cls == ELF_CLASS ? USER_ADDR_MAX : elf_user_max(out->cls);
     out->type = ehdr.e_type;
     out->lo = ~(uintptr_t)0;
     for (i = 0; i < ehdr.e_phnum; i++) {
@@ -172,7 +293,7 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out
         if (ph->p_type == PT_LOAD) {
             uintptr_t end = (uintptr_t)(ph->p_vaddr + ph->p_memsz);
 
-            if (end < ph->p_vaddr || end > USER_ADDR_MAX) {
+            if (end < ph->p_vaddr || end > top) {
                 return -ENOEXEC;
             }
             if ((ph->p_vaddr & ~(uintptr_t)(PAGE_SIZE - 1)) < out->lo) {
@@ -203,11 +324,11 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out
  * The segment must contain the whole table, not just its first byte, so
  * that AT_PHDR names a complete table. The subtractions run only after the
  * bounds that keep them from underflowing, and `table_bytes` cannot
- * overflow, since `phnum` has 16 bits.
+ * overflow, since `phnum` has 16 bits and `phent` is a header's size.
  */
-uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff)
+uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint32_t phent, uint64_t phoff)
 {
-    uint32_t table_bytes = (uint32_t)phnum * (uint32_t)sizeof(Elf_Phdr);
+    uint32_t table_bytes = (uint32_t)phnum * phent;
     uint16_t i;
 
     for (i = 0; i < phnum; i++) {
@@ -223,7 +344,9 @@ uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff)
 
 int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *out)
 {
-    return elf_load_image_at(readfn, ctx, dir, 0, NULL, out);
+    int rc = elf_load_image_at(readfn, ctx, dir, 0, NULL, out);
+
+    return rc == 0 && out->cls != ELF_CLASS ? -ENOEXEC : rc;
 }
 
 /* Bytes of the file the loader copies: `count` of them from the offset
@@ -312,6 +435,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
     Elf_Ehdr ehdr;
     uint16_t i;
     uintptr_t prev_end = ELF_USER_MIN; /* page-aligned end of the previous PT_LOAD */
+    uintptr_t top;
     int nload = 0;
     int rc;
 
@@ -323,22 +447,14 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
     out->image_end = 0;
     out->file = file;
 
-    rc = elf_read_exact(readfn, ctx, &ehdr, sizeof(ehdr), 0);
+    rc = elf_read_headers(readfn, ctx, &ehdr, phdrs, &out->cls);
     if (rc != 0) {
         return rc;
-    }
-    if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
-        return -ENOEXEC;
     }
     if ((ehdr.e_type == ET_EXEC && bias != 0) || (bias & (PAGE_SIZE - 1)) != 0) {
         return -ENOEXEC;
     }
-
-    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf_Phdr),
-                        (uint32_t)ehdr.e_phoff);
-    if (rc != 0) {
-        return rc;
-    }
+    top = elf_user_max(out->cls);
 
     for (i = 0; i < ehdr.e_phnum; i++) {
         const Elf_Phdr *ph = &phdrs[i];
@@ -361,7 +477,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
             !ELF_FITS32(ph->p_offset + ph->p_filesz)) {
             return -ENOEXEC;
         }
-        if (vaddr < ELF_USER_MIN || vaddr_end > ELF_USER_MAX) {
+        if (vaddr < ELF_USER_MIN || vaddr_end > top) {
             return -ENOEXEC;
         }
         if ((vaddr & ~(uintptr_t)(PAGE_SIZE - 1)) < prev_end) {
@@ -420,12 +536,12 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
         }
     }
 
-    out->phdr_vaddr = elf_phdr_vaddr(phdrs, ehdr.e_phnum, ehdr.e_phoff);
+    out->phdr_vaddr = elf_phdr_vaddr(phdrs, ehdr.e_phnum, ehdr.e_phentsize, ehdr.e_phoff);
     if (nload == 0 || out->phdr_vaddr == 0) {
         return -ENOEXEC;
     }
     out->phdr_vaddr += bias;
-    if (ehdr.e_entry + bias < ELF_USER_MIN || ehdr.e_entry + bias >= ELF_USER_MAX) {
+    if (ehdr.e_entry + bias < ELF_USER_MIN || ehdr.e_entry + bias >= top) {
         return -ENOEXEC;
     }
     out->entry = (uintptr_t)ehdr.e_entry + bias;

@@ -9,6 +9,7 @@
 
 #include "../arch.h"
 
+#include "../../mm/mm.h"
 #include "../../mm/paging.h"
 #include "../../proc/process.h"
 #include "../../lib/kstring.h"
@@ -204,27 +205,32 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
  * take the null selector, as Linux gives a 64-bit program, the GS base goes
  * back to 0, in the processor and in the record, and the TLS descriptors
  * are cleared, as Linux's exec clears them; the caller sets the FS base,
- * after the selector load here.
+ * after the selector load here. An i386 image, which the process's address
+ * space marks, starts in 32-bit code, CS 0x23, with DS and ES the user's
+ * data selector, as Linux's `start_thread_ia32` starts it.
  */
 void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
 {
+    int compat = current_proc && current_proc->mm && current_proc->mm->compat;
+    uint16_t data = compat ? (uint16_t)GDT_USER_DATA : (uint16_t)0;
+
     k_memset(p, 0, (size_t)((char *)&p->vector - (char *)p));
     p->rip = entry;
     p->rsp = sp;
-    p->cs = GDT_USER_CODE;
+    p->cs = compat ? GDT_USER_CODE32 : GDT_USER_CODE;
     p->ss = GDT_USER_DATA;
     p->rflags = RFLAGS_START;
     if (current_proc) {
-        current_proc->regs.ds_sel = 0;
-        current_proc->regs.es_sel = 0;
+        current_proc->regs.ds_sel = data;
+        current_proc->regs.es_sel = data;
         current_proc->regs.fs_sel = 0;
         current_proc->regs.gs_sel = 0;
         current_proc->regs.gs_base = 0;
         k_memset(current_proc->regs.tls, 0, sizeof(current_proc->regs.tls));
         arch_tls_load(current_proc);
     }
-    x86_64_ds_load(0);
-    x86_64_es_load(0);
+    x86_64_ds_load(data);
+    x86_64_es_load(data);
     x86_64_fs_load(0);
     x86_64_gs_load(0);
     msr_write(MSR_KERNEL_GS_BASE, 0);

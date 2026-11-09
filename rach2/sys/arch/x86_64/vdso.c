@@ -2,7 +2,8 @@
  * vdso.c: the x86-64's vDSO image, a shared object of one page that the
  * kernel lays out at boot around the code of vdsocode.s, as a linker would lay
  * out Linux's linux-vdso.so.1, so that a C library, GDB and readelf read it
- * as they read that one (../../vdso.h).
+ * as they read that one (../../vdso.h); and the dispatch to the 32-bit image
+ * of vdso32.c, which the boot builds with it.
  */
 
 #include "../../vdso.h"
@@ -141,9 +142,7 @@ static uint32_t reserve(uint32_t len, uint32_t align)
     return off;
 }
 
-/** The System V ABI's hash of a symbol's or a version's name, which the
- * hash table and a version's definition hold. */
-static uint32_t elf_hash(const char *name)
+uint32_t vdso_elf_hash(const char *name)
 {
     uint32_t h = 0, g;
 
@@ -255,7 +254,7 @@ static void versions(uint32_t off, const uint32_t names[2])
         vd.vd_flags = i == 0 ? VER_FLG_BASE : 0;
         vd.vd_ndx = (uint16_t)(i + 1u);
         vd.vd_cnt = 1;
-        vd.vd_hash = elf_hash(text[i]);
+        vd.vd_hash = vdso_elf_hash(text[i]);
         vd.vd_aux = sizeof(vd);
         vd.vd_next = i == 0 ? each : 0;
         va.vda_name = names[i];
@@ -276,7 +275,7 @@ static void versions(uint32_t off, const uint32_t names[2])
 static void symbol(uint32_t symoff, uint32_t stroff, uint32_t *hash, uint16_t *versym, uint32_t n,
                    const vdso_sym_t *sym)
 {
-    uint32_t b = elf_hash((const char *)image + stroff + sym->st_name) % VDSO_BUCKETS;
+    uint32_t b = vdso_elf_hash((const char *)image + stroff + sym->st_name) % VDSO_BUCKETS;
 
     put(symoff + n * (uint32_t)sizeof(*sym), sym, sizeof(*sym));
     versym[n] = 2;
@@ -333,6 +332,7 @@ static void symbols(uint32_t symoff, uint32_t veroff, uint32_t hashoff, uint32_t
  * definitions, the dynamic table, the code at VDSO_TEXT_OFFSET, then the
  * section names and the section headers, all inside the one page, whose
  * address is the image's base, so that every address in it is its offset.
+ * The 32-bit image is built after it (`vdso32_build`).
  */
 int vdso_build(void)
 {
@@ -428,15 +428,21 @@ int vdso_build(void)
     section(shoff, SEC_SHSTRTAB, shname[SEC_SHSTRTAB], SHT_STRTAB, 0, shstr.off, shstr.len, 0, 0, 1,
             0);
     headers(dynoff, sizeof(dyn), shoff);
-    return 0;
+    return vdso32_build();
 }
 
-uint32_t vdso_image_pages(void)
+uint32_t vdso_image_pages(int abi)
 {
+    if (abi == VDSO_IA32) {
+        return vdso32_image_pages();
+    }
     return image ? 1u : 0u;
 }
 
-uintptr_t vdso_frame(uint32_t page)
+uintptr_t vdso_frame(int abi, uint32_t page)
 {
-    return page == VDSO_DATA_PAGE ? vdso_data_frame() : image_phys;
+    if (page == VDSO_DATA_PAGE) {
+        return vdso_data_frame();
+    }
+    return abi == VDSO_IA32 ? vdso32_image_frame() : image_phys;
 }

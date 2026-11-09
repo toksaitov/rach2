@@ -187,6 +187,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_FORK] = sys_fork;
     table[SYS_VFORK] = sys_vfork;
     table[SYS_EXECVE] = sys_execve;
+    table[SYS_EXECVEAT] = sys_execveat;
     table[SYS_EXIT] = sys_exit;
     table[SYS_WAIT4] = sys_wait4;
     table[SYS_KILL] = sys_kill;
