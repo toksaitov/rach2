@@ -8,31 +8,22 @@
 static void stage(struct net_case *u, struct net_boot *b, const char *mode)
 {
     struct net_run r;
-    const char *artifact;
     const char *argv[] = {"/bin/bash", "-c", NULL, NULL};
+    const char *command = "mkdir -p /tmp/graphics /tmp/browser-out && "
+                          "mount -t ext2 -o ro /dev/disk1 /tmp/graphics && "
+                          "chown desktop /tmp/browser-out";
 
     memset(&r, 0, sizeof(r));
-    if (net_step(u, "stage") == ETUDE_OK) {
-        artifact = etude_artifact(u->c, "browser-files");
-        if (artifact == NULL ||
-            etude_guest_put(b->m, artifact, "/tmp/browser.tar.gz", "0644") != ETUDE_OK)
-            net_fail(u, "the browser files could not be staged");
-        if (net_ok(u) && strncmp(mode, "video-", 6) == 0) {
-            artifact = etude_artifact(u->c, "clips");
-            if (artifact == NULL ||
-                etude_guest_put(b->m, artifact, "/tmp/clips.tar", "0644") != ETUDE_OK)
-                net_fail(u, "the video clips could not be staged");
-        }
-    }
-    if (net_ok(u)) {
-        argv[2] = "mkdir -p /tmp/graphics && tar -xzf /tmp/browser.tar.gz -C /tmp/graphics && "
-                  "rm /tmp/browser.tar.gz && if [ -f /tmp/clips.tar ]; then "
-                  "mkdir /tmp/graphics/clips && tar -xf /tmp/clips.tar -C /tmp/graphics/clips && "
-                  "rm /tmp/clips.tar; fi && chown -R desktop /tmp/graphics";
-        if (net_guest(u, b->m, argv, NULL, NULL, "stage", &r) == ETUDE_OK && !net_exited0(&r))
-            net_fail(u, "the browser archive could not be unpacked");
-        net_run_free(&r);
-    }
+    if (strncmp(mode, "video-", 6) == 0)
+        command = "mkdir -p /tmp/graphics /tmp/browser-out && "
+                  "mount -t ext2 -o ro /dev/disk1 /tmp/graphics && "
+                  "mount -t ext2 -o ro /dev/disk2 /tmp/graphics/clips && "
+                  "chown desktop /tmp/browser-out";
+    argv[2] = command;
+    if (net_step(u, "stage") == ETUDE_OK &&
+        net_guest(u, b->m, argv, NULL, NULL, "stage", &r) == ETUDE_OK && !net_exited0(&r))
+        net_fail(u, "the browser data disk could not be mounted");
+    net_run_free(&r);
 }
 
 /**
@@ -70,14 +61,14 @@ int etude_scenario(struct etude_case *c)
              "su desktop -s /bin/sh -c 'GRAPHICS_CLASS=conformance GRAPHICS_DONE=1; "
              "export GRAPHICS_CLASS GRAPHICS_DONE; . /tmp/graphics/guest-env.sh && "
              "graphics_env > /tmp/graphics.env && sh /tmp/graphics/browser/run.sh %s %s "
-             "/tmp/graphics/out'",
+             "/tmp/browser-out'",
              browser, mode);
     if (strcmp(mode, "sound") == 0)
         snprintf(command, sizeof(command),
-                 "python3 /tmp/graphics/browser/sound.py oss %s /tmp/graphics/out", browser);
+                 "python3 /tmp/graphics/browser/sound.py oss %s /tmp/browser-out", browser);
     else if (strcmp(mode, "sandbox") == 0 && strcmp(browser, "chromium") == 0)
         snprintf(command, sizeof(command),
-                 "python3 /tmp/graphics/browser/sandbox.py desktop %s /tmp/graphics/out", browser);
+                 "python3 /tmp/graphics/browser/sandbox.py desktop %s /tmp/browser-out", browser);
     argv[2] = command;
     if (net_step(&u, "run") == ETUDE_OK &&
         net_guest(&u, b.m, argv, NULL, NULL, "browser", &r) == ETUDE_OK) {
@@ -95,7 +86,7 @@ int etude_scenario(struct etude_case *c)
                "the browser acceptance case did not complete; see browser evidence");
     snprintf(command, sizeof(command),
              "python3 /tmp/graphics/browser/judge.py %s %s /tmp/graphics/browser/ref "
-             "/tmp/graphics/out",
+             "/tmp/browser-out",
              browser, mode);
     if (net_step(&u, "judge") == ETUDE_OK &&
         net_guest(&u, b.m, argv, NULL, NULL, "judge", &r) == ETUDE_OK) {
@@ -107,7 +98,7 @@ int etude_scenario(struct etude_case *c)
     net_assert(&u, "as-debian", judged,
                "the browser acceptance differs from Debian; see judge evidence");
     if (net_step(&u, "collect") == ETUDE_OK) {
-        argv[2] = "tar -czf /tmp/browser-out.tar.gz -C /tmp/graphics/out .";
+        argv[2] = "tar -czf /tmp/browser-out.tar.gz -C /tmp/browser-out .";
         if (net_guest(&u, b.m, argv, NULL, NULL, "pack", &r) == ETUDE_OK && net_exited0(&r)) {
             if (etude_guest_get(b.m, "/tmp/browser-out.tar.gz", "browser-out.tar.gz") != ETUDE_OK)
                 net_fail(&u, "the browser output could not be fetched");
