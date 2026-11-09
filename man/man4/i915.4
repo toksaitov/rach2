@@ -14,6 +14,10 @@
 .Pa /dev/dri/cardN
 .Pp
 .Pa /dev/dri/renderD Ns Ar M
+.Pp
+.Pa /sys/class/drm/cardN/gt_*_freq_mhz
+.Pp
+.Pa /sys/class/drm/cardN/power/rc6_*
 .Sh DESCRIPTION
 The
 .Nm
@@ -70,6 +74,22 @@ display code runs, and the kernel logs
 or the failure by name: no room in the ring, no breadcrumb, the value read
 back, or no user interrupt.
 .Pp
+The GT sleeps in RC6 while it is idle, with Linux's thresholds: under the
+hardware's timers after 64 ms without work, and at once while the driver
+holds it parked.
+Its frequency moves in steps of 50 MHz between RPn and RP0, the chip's
+limits, which the bind reads with the efficient frequency RPe from the
+chip's power controller.
+While the GT has work the chip's up and down interrupts move the
+frequency, in steps that double while they go one way: up when the GT was
+busy for more than 95% of an interval of 16 ms at low frequencies, 13 ms
+between and 10 ms near RP0; down when it was busy for less than 85% of
+32 ms; and on the down timeout, to RPe and then RPn.
+Parked, the GT runs at RPn.
+The bind leaves the GT parked, and logs
+.Dq i915: rps:
+with RPn, RP1, RP0, RPe and the highest frequency allowed.
+.Pp
 The kernel logs
 .Dq i915: found
 with the device's place, id, subplatform and revision, and
@@ -112,6 +132,54 @@ Mode setting is not yet served; see above.
 The card node of a bound device.
 .It Pa /dev/dri/renderD Ns Ar M
 Its render node.
+.El
+.Ss The card in /sys
+The card's directory,
+.Pa /sys/class/drm/cardN ,
+holds Linux's files of the GT's frequency, each a decimal number of MHz
+and a newline:
+.Bl -tag -width gt_boost_freq_mhz
+.It Pa gt_act_freq_mhz
+The frequency the GT runs at, as the chip reports it.
+.It Pa gt_cur_freq_mhz
+The frequency the driver last asked for.
+.It Pa gt_boost_freq_mhz
+The frequency a boost would ask for; at bind the highest frequency
+allowed: RP0, or the overclocking limit of a chip that has one.
+.It Pa gt_max_freq_mhz
+The highest frequency the driver asks for; RP0 at bind, and up to the
+overclocking limit of a chip that has one.
+.It Pa gt_min_freq_mhz
+The lowest frequency the driver asks for; RPn at bind.
+.It Pa gt_RP0_freq_mhz , gt_RP1_freq_mhz , gt_RPn_freq_mhz
+The chip's highest frequency, its guaranteed one, and its lowest.
+.El
+.Pp
+The boost, max and min files are written by root with a number in
+decimal, in hexadecimal after
+.Ql 0x
+or in octal after
+.Ql 0 ,
+and at most one newline, as Linux's
+.Fn kstrtou32
+reads it; the number is rounded to the nearest 50 MHz.
+A write fails with
+.Er EINVAL
+when it is no number, when it lies outside RPn and the highest frequency
+allowed, or when it would put max below min or min above max, and with
+.Er ERANGE
+when it does not fit in 32 bits.
+A new max or min moves the frequency into the new limits at once.
+.Pp
+Below it,
+.Pa power
+holds RC6's files:
+.Bl -tag -width rc6_residency_ms
+.It Pa power/rc6_enable
+The RC6 states enabled, in hexadecimal: 1 for RC6, 0 without it.
+.It Pa power/rc6_residency_ms
+The milliseconds the GT has spent in RC6 since the bind, in decimal,
+wrapping at 2^32.
 .El
 .Sh SEE ALSO
 .Xr backlight 4 ,
