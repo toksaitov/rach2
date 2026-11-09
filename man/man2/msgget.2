@@ -85,8 +85,15 @@ and 402
 .Pq Fn msgctl ;
 musl reaches the same through
 .Xr ipc 2 .
+.Fn msgctl
+takes the 64-bit layout;
+.Xr ipc 2
+without
+.Dv IPC_64
+takes the old one.
 .Pp
-On x86-64
+On x86-64 an i386 program has the same calls, with the i386 records and a
+message whose type is a 32-bit long, and an x86-64 program's
 .Nm msgget
 is call 68,
 .Nm msgsnd

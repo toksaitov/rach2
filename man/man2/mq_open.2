@@ -156,9 +156,14 @@ or 0, then takes
 .Dv O_NONBLOCK
 alone from the new ones.
 .Pp
-On x86-64 the numbers are 240 to 245 in the same order, the timed calls
-take timespecs of 64-bit fields, and there are
-no time64 forms.
+On x86-64 an i386 program has the same calls, with i386's 32-bit
+.Vt mq_attr
+and
+.Vt sigevent
+and the high word of a 64-bit timeout's nanoseconds ignored, as Linux
+does.
+An x86-64 program's numbers are 240 to 245 in the same order, the timed
+calls take timespecs of 64-bit fields, and there are no time64 forms.
 .Sh RETURN VALUES
 .Fn mq_open
 returns a descriptor,

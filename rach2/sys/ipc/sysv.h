@@ -36,7 +36,9 @@ struct sysv_row {
 /* The handlers of the System V calls, which arch_syscall_init enters in the
  * table. i686 registers every one but sys_semop, which only x86-64 has;
  * x86-64 has no ipc, and its semtimedop is sys_semtimedop_time64, since a
- * timespec there is 64-bit. */
+ * timespec there is 64-bit. x86-64's compat table registers the i386 ones,
+ * ipc among them, which read and write an i386 caller's records
+ * (ipc32.h). */
 long sys_ipc(struct isr_params *params);
 long sys_semop(struct isr_params *params);
 long sys_semget(struct isr_params *params);

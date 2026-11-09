@@ -106,18 +106,3 @@ long compat_sys_futex_time32(isr_params_t *params)
                        (uint32_t)SC_ARG(params, 2), a3, UPTR(SC_ARG(params, 4)),
                        (uint32_t)SC_ARG(params, 5));
 }
-
-/** set_robust_list (311): the thread's list of 32-bit words, a head of 12
- * bytes, which the x86-64 handler keeps beside the native list for an i386
- * call (proc/futex.c). */
-long compat_sys_set_robust_list(isr_params_t *params)
-{
-    return sys_set_robust_list(params);
-}
-
-/** get_robust_list (312): the head of a thread's list of 32-bit words and
- * its size, each a 32-bit word, from the x86-64 handler (proc/futex.c). */
-long compat_sys_get_robust_list(isr_params_t *params)
-{
-    return sys_get_robust_list(params);
-}

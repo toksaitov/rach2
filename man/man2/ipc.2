@@ -59,7 +59,25 @@ and 0 returned; version 1 is
 .Fn shmctl first second ptr .
 .El
 .Pp
-x86-64 has no
+A control command with
+.Dv IPC_64
+(0x100) in
+.Fa second
+reads and writes the 64-bit records, as the direct calls do; one without
+it reads and writes the old records, with 16-bit ids, mode and pids and a
+message queue's counts in 16 bits, as Linux's
+.Dv IPC_OLD
+layouts are.
+musl and GNU libc always pass
+.Dv IPC_64 .
+.Pp
+On x86-64,
+.Nm ipc
+is the i386 program's call 117, with i386's operations, versions and
+records, the times' high words beside the low ones in the
+.Dv IPC_64
+records.
+An x86-64 program has no
 .Nm ipc :
 .Nm semget
 (64),
