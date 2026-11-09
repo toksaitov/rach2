@@ -461,10 +461,13 @@ cppcheck_files() {
 }
 
 # clang_warnings: the case `clang` on the changed kernel files, under its
-# recorded version alone, on i686, as the case's first run reads them.
+# recorded version alone, on i686, as the case's first run reads them: the
+# files the i686 kernel builds (print-c-src), not x86-64's own.
 clang_warnings() {
     _want=$(sed -n 's/^clang: //p' "$REPO/tools/setup/judges")
-    grep '^rach2/.*\.c$' "$FILES" | grep -v '^rach2/sys/acpi/' >"$WORK/kc2" || return 0
+    make -s -C "$TREE/rach2" print-c-src | tr ' ' '\n' | sed 's|^|rach2/|' >"$WORK/kc2src"
+    grep '^rach2/.*\.c$' "$FILES" | grep -v '^rach2/sys/acpi/' | grep -Fx -f "$WORK/kc2src" >"$WORK/kc2" ||
+        return 0
     [ "$(clang --version 2>/dev/null | head -n 1)" = "$_want" ] || {
         warn "clang is not $_want here; its warnings were left out"
         return 0
