@@ -24,6 +24,8 @@
 #   webgl     the pinned conformance suite under /usr/share/webgl
 #   igt       IGT's tests under /usr/libexec/igt-gpu-tools and its runner,
 #             when GNU_IGT is 1, on x86-64
+#   vk-gl-cts VK-GL-CTS 1.4.1.1 and 1.4.7.1 under /opt/vk-gl-cts-VERSION,
+#             when GNU_VK_GL_CTS is 1, on x86-64
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
@@ -86,6 +88,10 @@ if [ ! -f "$DEBIAN/closure.txt" ]; then
 fi
 if [ "${GNU_IGT:-}" = 1 ] && [ ! -d "$OUT/igt" ]; then
     echo "gnu: install: no $OUT/igt; run make ARCH=x86_64 gnu-igt" >&2
+    exit 1
+fi
+if [ "${GNU_VK_GL_CTS:-}" = 1 ] && [ ! -d "$OUT/vk-gl-cts" ]; then
+    echo "gnu: install: no $OUT/vk-gl-cts; run make ARCH=x86_64 gnu-vk-gl-cts" >&2
     exit 1
 fi
 for name in ${GNU_AGENTS:-}; do
@@ -294,6 +300,9 @@ install_part proton
 install_part webgl
 if [ "${GNU_IGT:-}" = 1 ]; then
     install_part igt
+fi
+if [ "${GNU_VK_GL_CTS:-}" = 1 ]; then
+    install_part vk-gl-cts
 fi
 
 # These alternatives are made by Debian's postinst, which is not run here.
