@@ -1011,12 +1011,13 @@ void drm_client_dev_unregister(struct drm_device *dev);
 
 /* ------------------------------------------------------------------------
  * The drivers' probes. Each finds its devices, binds and registers them,
- * and returns how many it bound, or -errno. bochs and fbdrm reach PC-only
- * code and are called through `arch_drm_probe` (sys/arch/arch.h).
+ * and returns how many it bound, or -errno. bochs, i915 and fbdrm reach
+ * PC-only code and are called through `arch_drm_probe` (sys/arch/arch.h).
  */
 
 int32_t bochs_probe(void);
 int32_t fbdrm_probe(void);
+int32_t i915_probe(void);
 int32_t virtio_gpu_probe(void);
 int32_t vkms_probe(void);
 

@@ -10,19 +10,21 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 
-void arch_drm_probe(int phase)
+/** Log a probe's error by its driver's name; ENODEV, no device, is not
+ * one. */
+static void drm_pc_report(const char *name, int32_t n)
 {
-    int32_t n;
-    const char *name;
-
-    if (phase == ARCH_DRM_NATIVE) {
-        n = bochs_probe();
-        name = "bochs";
-    } else {
-        n = fbdrm_probe();
-        name = "fbdrm";
-    }
     if (n < 0 && n != -ENODEV) {
         klog(KLOG_WARN, "drm", "%s: error %d", name, (int)n);
+    }
+}
+
+void arch_drm_probe(int phase)
+{
+    if (phase == ARCH_DRM_NATIVE) {
+        drm_pc_report("bochs", bochs_probe());
+        drm_pc_report("i915", i915_probe());
+    } else {
+        drm_pc_report("fbdrm", fbdrm_probe());
     }
 }
