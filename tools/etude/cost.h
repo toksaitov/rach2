@@ -41,8 +41,8 @@ int etude_cpu_class(const char *cpu_class, uint64_t processors, uint64_t *millis
 /**
  * Put the processor claim of case `c`'s class in place of the reservation
  * that history gave `cost`, when the case's `resources` name a `cpu_class`;
- * the processors are its QEMU profile's. A class fixes the claim, since a
- * guest that runs a process on each of its processors uses them all
+ * the claim sums the class reservation of each QEMU profile. A class fixes
+ * the claim, since a guest that runs a process on each CPU uses them all
  * whatever an earlier run measured, and a performance run needs them free.
  *
  * @return 1 when the class set the claim, 0 when the case has none, and -1

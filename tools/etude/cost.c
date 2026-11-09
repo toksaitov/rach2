@@ -235,20 +235,44 @@ int etude_cpu_class(const char *cpu_class, uint64_t processors, uint64_t *millis
     return 0;
 }
 
+/** Return a QEMU profile's class reservation, or -1 for an invalid profile. */
+static int profile_class(const struct json *qemu, const char *cpu_class, uint64_t *millis)
+{
+    const struct json *processors = json_member(qemu, "processors");
+
+    if (processors == NULL || processors->type != JSON_INTEGER || processors->integer < 1 ||
+        etude_cpu_class(cpu_class, (uint64_t)processors->integer, millis) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
 int etude_cost_class(const struct json *c, struct etude_cost *cost)
 {
     const char *cpu_class = json_text(json_member(c, "resources"), "cpu_class");
     const struct json *qemu = json_member(json_member(c, "requirements"), "qemu");
-    const struct json *processors = json_member(qemu, "processors");
-    uint64_t millis;
+    const struct json *machines = json_member(c, "machines");
+    uint64_t total = 0, millis;
+    size_t i, count = qemu != NULL ? 1 : machines != NULL ? machines->count : 0;
 
     if (cpu_class == NULL)
         return 0;
-    if (processors == NULL || processors->type != JSON_INTEGER || processors->integer < 1 ||
-        etude_cpu_class(cpu_class, (uint64_t)processors->integer, &millis) != 0) {
+    if (count == 0) {
         errno = EINVAL;
         return -1;
     }
-    cost->cpu_millis = millis;
+    for (i = 0; i < count; i++) {
+        if (qemu == NULL)
+            qemu = json_member(machines->item[i], "qemu");
+        if (profile_class(qemu, cpu_class, &millis) != 0 || total > UINT64_MAX - millis) {
+            errno = EINVAL;
+            return -1;
+        }
+        total += millis;
+        if (machines != NULL)
+            qemu = NULL;
+    }
+    cost->cpu_millis = total;
     return 1;
 }

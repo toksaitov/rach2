@@ -170,6 +170,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -379,6 +380,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -588,6 +590,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -797,6 +800,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -1012,6 +1016,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -1232,6 +1237,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -1452,6 +1458,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -1672,6 +1679,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -1892,6 +1900,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -2112,6 +2121,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -2326,6 +2336,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -2535,6 +2546,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -2744,6 +2756,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -2953,6 +2966,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -3162,6 +3176,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -3371,6 +3386,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -3586,6 +3602,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -3806,6 +3823,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -4026,6 +4044,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -4246,6 +4265,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -4466,6 +4486,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
@@ -4686,6 +4707,7 @@
         }
       },
       "resources": {
+        "cpu_class": "bound",
         "cpu_millis": 4000,
         "cpu_ceiling_millis": 4000,
         "memory_bytes": 9663676416,
