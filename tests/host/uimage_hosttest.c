@@ -293,10 +293,14 @@ static void random_bytes(uint8_t rnd[16])
 }
 
 /** The interpreter's base, the ids and AT_SECURE for the auxiliary vector:
- * a set-user-id image when `secure`. */
+ * a set-user-id image when `secure`, with no vDSO and none of an i386
+ * program's entries. */
 static void aux_ids(struct uimage_aux *aux, int secure)
 {
     aux->base = 0xAFF00000u;
+    aux->sysinfo_ehdr = 0;
+    aux->hwcap = 0;
+    aux->sysinfo = 0;
     aux->uid = 1000u;
     aux->euid = secure ? 0u : 1000u;
     aux->gid = 100u;
