@@ -149,7 +149,7 @@ case $mode in
     local) sh -s < "$work/script" > "$work/out" ;;
     remote)
         if [ "$windows" = 1 ]; then
-            remote='C:\msys64\usr\bin\env.exe PATH=/usr/bin:/ucrt64/bin sh -s'
+            remote='C:/msys64/usr/bin/env.exe PATH=/usr/bin:/ucrt64/bin sh -s'
         else
             remote='sh -s'
         fi

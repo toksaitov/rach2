@@ -85,16 +85,19 @@ etude_list()
         done
         exit
     fi
+    # MSYS2's sha256sum marks each file read in binary mode with ` *` in
+    # place of the two spaces; the list keeps the two spaces either way.
     printf '%s\n' "$output" | LC_ALL=C awk -v paths="$paths" '
         BEGIN { count = split(paths, names, "[|]") - 1 }
         {
             sum = substr($0, 1, 64)
+            mark = substr($0, 65, 2)
             if (NR > count || length(sum) != 64 || sum ~ /[^0-9a-f]/ ||
-                substr($0, 65, 2) != "  " || substr($0, 67) != names[NR])
+                (mark != "  " && mark != " *") || substr($0, 67) != names[NR])
                 bad = 1
         }
         END { if (bad || NR != count) exit 1 }
-        { print }
+        { print sum "  " substr($0, 67) }
     '
 )
 
