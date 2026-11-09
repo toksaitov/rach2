@@ -2712,7 +2712,8 @@ static int ioctl_restartable(const isr_params_t *params)
  * (`sysv_ipc_restartable`); an ioctl of KVM's (`ioctl_restartable`); and
  * the two returns from a handler, whose result register is the interrupted
  * call's. The call is told by its handler, since
- * its number differs between the architectures.
+ * its number differs between the architectures; an i386 call on the x86-64
+ * kernel by its compat handler, which `ia32_never_restarts` judges.
  */
 static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
 {
@@ -2725,6 +2726,11 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
     if (fn == sys_ipc) {
         return sysv_ipc_restartable(params);
     }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (ia32_never_restarts(fn)) {
+        return 0;
+    }
+#endif
     return fn != sys_pause && fn != sys_select && fn != sys_sigreturn && fn != sys__newselect &&
            fn != sys_nanosleep && fn != sys_poll && fn != sys_rt_sigreturn &&
            fn != sys_rt_sigtimedwait && fn != sys_rt_sigsuspend && fn != sys_epoll_wait &&

@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 10, 2026
 .Dt SELECT 2
 .Os
 .Sh NAME
@@ -162,9 +162,16 @@ or
 For positive seconds above the signed 32-bit maximum, both library functions
 first try
 .Nm pselect6_time64
-(413), which this kernel answers with
+(413), which the i686 kernel answers with
 .Er ENOSYS ,
 then fall back with clamped seconds.
+The x86-64 kernel runs
+.Nm pselect6_time64 ,
+whose timespec has 64-bit fields, for a program that enters it by
+.Ql int $0x80 ,
+as it runs i386's other three calls, which
+.Xr ia32 7
+describes.
 .Pp
 On x86-64
 .Nm select

@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd November 10, 2026
 .Dt GETDENTS64 2
 .Os
 .Sh NAME
@@ -48,6 +48,22 @@ Its wrapper limits
 to
 .Dv INT_MAX
 and invokes system call 220 on i386 and 217 on x86-64.
+.Pp
+The x86-64 kernel also runs, for a program that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, i386's
+.Nm getdents
+(141), whose records have a 32-bit inode number and offset, the length,
+the name and its NUL, and the type in the record's last byte, each a
+multiple of 4 bytes; and
+.Nm readdir
+(89), which gives one record of a 32-bit inode number and offset, the
+name's length and the name, and returns 1, or 0 at the end.
+An inode number or offset past 32 bits is
+.Er EOVERFLOW ,
+or ends the call after the records before it.
 .Ss Record layout
 Each record has the Linux
 .Vt linux_dirent64

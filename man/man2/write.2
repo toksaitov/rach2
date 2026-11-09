@@ -1,4 +1,4 @@
-.Dd October 4, 2026
+.Dd November 10, 2026
 .Dt WRITE 2
 .Os
 .Sh NAME
@@ -251,6 +251,34 @@ writes one, each at the place the ones before it reached, from
 .Fa offset ;
 the vector is checked whole before a byte is written, and a short write
 ends the call.
+.Pp
+The x86-64 kernel runs, for a program that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, i386's
+.Nm writev
+(146), whose vector is of 32-bit addresses and lengths;
+.Nm pwritev
+(334), whose offset is in the fourth and fifth arguments, low word first;
+and
+.Nm pwritev2
+(379), which adds flags in the sixth.
+.Nm pwritev2
+writes as
+.Nm writev
+at offset -1, and after a write with
+.Dv RWF_DSYNC
+or
+.Dv RWF_SYNC
+does what
+.Fn fdatasync
+or
+.Fn fsync
+does; another flag but
+.Dv RWF_HIPRI
+is
+.Er EOPNOTSUPP .
 .Sh RETURN VALUES
 On success, these functions return the number of bytes written.
 .Fn writev

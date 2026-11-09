@@ -1,4 +1,4 @@
-.Dd October 4, 2026
+.Dd November 10, 2026
 .Dt READ 2
 .Os
 .Sh NAME
@@ -234,6 +234,29 @@ whole, as
 checks it, before a byte is read, and a short read ends the call.
 The offset's high half, the call's fifth argument, is not read, as on
 Linux, since the fourth holds the whole of it.
+.Pp
+The x86-64 kernel runs, for a program that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, i386's
+.Nm readv
+(145), whose vector is of 32-bit addresses and lengths;
+.Nm preadv
+(333), whose offset is in the fourth and fifth arguments, low word first;
+and
+.Nm preadv2
+(378), which adds flags in the sixth.
+.Nm preadv2
+reads as
+.Nm readv
+at offset -1, takes
+.Dv RWF_HIPRI ,
+.Dv RWF_DSYNC
+and
+.Dv RWF_SYNC
+and refuses another flag with
+.Er EOPNOTSUPP .
 .Sh RETURN VALUES
 On success, these functions return the number of bytes read.
 Zero denotes end of a file or stream, a zero-length request, an empty

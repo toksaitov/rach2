@@ -236,6 +236,11 @@ uint32_t ia32_core_fp_size(void);
 /** Put the floating-point and TLS notes of the thread `t` of an i386
  * program at `*p`, with `core_note_put`, and step past them. */
 void ia32_core_fp_notes(uint8_t **p, const struct process *t);
+
+/** Whether `fn`, a compat handler, waits for a signal or a deadline as the
+ * x86-64 calls the dispatcher never restarts do, so that an i386 call it
+ * answers is not restarted either (x86_64/ia32_time.c). */
+int ia32_never_restarts(syscall_fn_t fn);
 #endif
 
 /*
