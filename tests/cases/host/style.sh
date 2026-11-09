@@ -175,15 +175,15 @@ built() {
 }
 
 # Print the in-house C files and headers: the kernel, any in-house file under
-# vendor/musl, the KRFFS host tools, the utilities, the ish shell, the tests
-# and the tools. The vendored trees are left out (the musl source and install,
-# termbox2 under krffs/vendor, and krffs/vs-dokany), and ports/doom is not
-# read.
+# vendor/musl, the KRFFS host tools, the utilities, the ish shell, the tests,
+# the testbed's programs under bed/ and the tools. The vendored trees are left
+# out (the musl source and install, termbox2 under krffs/vendor, and
+# krffs/vs-dokany), and ports/doom is not read.
 inhouse_ch() {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
-    find krffs utils ish term tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
+    find krffs utils ish term tests bed -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
          -o \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     find tools \( -name '*.c' -o -name '*.h' \) 2>/dev/null
 }
@@ -811,7 +811,7 @@ in_tooling() {
     fi
     echo "style: $CASE: the case runs in etude's tooling machine"
     git -C "$REPO" ls-files -co --exclude-standard -- .clang-format mk rach2 krffs utils ish term \
-        tests tools vendor/musl | while IFS= read -r f; do
+        tests bed tools vendor/musl | while IFS= read -r f; do
         [ ! -f "$REPO/$f" ] || printf '%s\n' "$f"
     done >"$VDIR/files"
     # The machine's tree cannot unpack ACPICA, so its headers go with it.
