@@ -25,7 +25,12 @@
  * mode set prints "DRMPROBE MODE NAME". On the first mode it flips once to a
  * second buffer with PAGE_FLIP, reads the FLIP_COMPLETE event from the card,
  * which the core sends at once on a CRTC without vblanks, reads the CRTC back
- * and prints "DRMPROBE FLIP NAME".
+ * and prints "DRMPROBE FLIP NAME". Last, it chooses the CRC source "auto"
+ * of the first CRTC through debugfs's dri/N/crtc-0/crc/control, as IGT
+ * does, shows the first mode again, and reads two lines of crc/data in
+ * Linux 6.12's text, a frame number as 0x%08x or ten X's, then each value as
+ * " 0x%08x", a newline and a NUL, the second of a later frame; a driver
+ * without CRCs, which refuses the source with EINVAL, skips it.
  *
  * With the arguments `hold SECONDS` it is a master that leaves without a
  * word, for the console's handover: it opens the first card with dumb
@@ -38,14 +43,16 @@
  * "DRMPROBE FAIL: what" and exits 1 at the first failure. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each check in order: `open`, `version`, `render`, `master`, `auth`,
- * `create`, `map`, `destroy`, `prime`, `kcmp` and `modes`. The master rows
- * and `modes` skip while another process holds the role. Freestanding;
- * direct system calls (probe.h).
+ * `create`, `map`, `destroy`, `prime`, `kcmp`, `modes` and `crc`. The
+ * master rows, `modes` and `crc` skip while another process holds the
+ * role. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_report.h"
 
+#define O_RDONLY  0
+#define O_WRONLY  1
 #define O_RDWR    2
 #define O_CLOEXEC 02000000
 
@@ -765,23 +772,32 @@ static void flip_row(int fd, u32 crtc, const struct drm_mode_modeinfo *mode)
     fb_drop(fd, &b);
 }
 
+/** Show the framebuffer `fb_id` in `mode` on `crtc` and `conn` by SETCRTC:
+ * 0, or a negated errno. */
+static long set_crtc(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo *mode, u32 fb_id)
+{
+    struct drm_mode_crtc set;
+
+    zero(&set, sizeof(set));
+    set.set_connectors_ptr = (u64)(unsigned long)&conn;
+    set.count_connectors = 1;
+    set.crtc_id = crtc;
+    set.fb_id = fb_id;
+    set.mode_valid = 1;
+    set.mode = *mode;
+    return drm_ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &set);
+}
+
 /** Set `mode` on `crtc` and `conn` from a dumb buffer of its size with a
  * pattern, read the CRTC back, flip once if `flip` is set, and take the
  * buffer down. */
 static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo *mode, int flip)
 {
-    struct drm_mode_crtc set, get;
+    struct drm_mode_crtc get;
     struct mode_fb b;
 
     fb_make(fd, mode, &b, 0x600DF00Du);
-    zero(&set, sizeof(set));
-    set.set_connectors_ptr = (u64)(unsigned long)&conn;
-    set.count_connectors = 1;
-    set.crtc_id = crtc;
-    set.fb_id = b.fb_id;
-    set.mode_valid = 1;
-    set.mode = *mode;
-    if (drm_ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &set) != 0) {
+    if (set_crtc(fd, crtc, conn, mode, b.fb_id) != 0) {
         probe_line("DRMPROBE FAIL MODE ", mode->name, 0);
         fail("SETCRTC of a listed mode");
     }
@@ -802,6 +818,11 @@ static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo 
     fb_drop(fd, &b);
 }
 
+/* The first mode `modes_row` set, on `first_crtc` and `first_conn`, for
+ * `crc_row`; `first_crtc` is 0 when it set none. */
+static struct drm_mode_modeinfo first_mode;
+static u32 first_crtc, first_conn;
+
 /** As the master, set each mode of the first connected connector, and
  * flip once on the first. */
 static void modes_row(int fd)
@@ -818,6 +839,126 @@ static void modes_row(int fd)
     for (i = 0; i < n; i++) {
         mode_set(fd, crtc, conn.connector_id, &modes[i], i == 0);
     }
+    first_mode = modes[0];
+    first_crtc = crtc;
+    first_conn = conn.connector_id;
+    report_held();
+}
+
+/* A line of crc/data with ten values, Linux's LINE_LEN(10). */
+#define CRC_LINE (10 + 11 * 10 + 1 + 1)
+
+/** Append `s` to the string `out` of `cap` bytes, as far as it goes. */
+static void append(char *out, unsigned long cap, const char *s)
+{
+    unsigned long n = 0;
+
+    while (out[n]) {
+        n++;
+    }
+    while (*s && n + 1 < cap) {
+        out[n++] = *s++;
+    }
+    out[n] = '\0';
+}
+
+/** Whether the ten bytes at `s` are "0x" and eight lowercase hex digits,
+ * with their value in `*v`. */
+static int crc_hex(const char *s, u32 *v)
+{
+    int i;
+
+    if (s[0] != '0' || s[1] != 'x') {
+        return 0;
+    }
+    for (*v = 0, i = 2; i < 10; i++) {
+        if (s[i] >= '0' && s[i] <= '9') {
+            *v = *v * 16 + (u32)(s[i] - '0');
+        } else if (s[i] >= 'a' && s[i] <= 'f') {
+            *v = *v * 16 + (u32)(s[i] - 'a' + 10);
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Read one line of the open crc/data `fd` into `line` and check Linux's
+ * text: the frame as 0x%08x, or ten X's, into `*frame`, with `*counted`
+ * set when it is a number, then one value or more as " 0x%08x", a newline
+ * and a NUL. Leaves the line in `line` without its newline. */
+static void crc_line(int fd, char *line, u32 *frame, int *counted)
+{
+    long n, at;
+    u32 v;
+
+    n = syscall3(SYS_READ, fd, (long)line, CRC_LINE);
+    if (n < 10 + 11 + 2 || line[n - 1] != '\0' || line[n - 2] != '\n' || (n - 12) % 11 != 0) {
+        fail("crc/data gives no line of a frame and its values");
+    }
+    *counted = crc_hex(line, frame);
+    for (at = 0; !*counted && at < 10; at++) {
+        if (line[at] != 'X') {
+            fail("crc/data's line begins with neither a frame nor ten X's");
+        }
+    }
+    for (at = 10; at < n - 2; at += 11) {
+        if (line[at] != ' ' || !crc_hex(line + at + 1, &v)) {
+            fail("crc/data's values are not \" 0x%08x\" each");
+        }
+    }
+    line[n - 2] = '\0';
+}
+
+/** As the master, choose the source "auto" of the first CRTC, show the
+ * first mode again, read two lines of crc/data, the second of a later
+ * frame, and take the mode down; skipped on a driver without CRCs. The
+ * card is card `index`, whose debugfs directory is dri/`index`. */
+static void crc_row(int fd, int index)
+{
+    char control[64], data[64], line[CRC_LINE];
+    u32 frame, next;
+    int counted, counted_next, data_fd;
+    long c, w;
+    struct mode_fb b;
+
+    if (!first_crtc) {
+        report_skip("no mode was set");
+        return;
+    }
+    node_path(control, "/sys/kernel/debug/dri/", index);
+    node_path(data, "/sys/kernel/debug/dri/", index);
+    append(control, sizeof(control), "/crtc-0/crc/control");
+    append(data, sizeof(data), "/crtc-0/crc/data");
+    c = syscall3(SYS_OPEN, (long)control, O_WRONLY | O_CLOEXEC, 0);
+    if (c < 0) {
+        fail("no crtc-0/crc/control in debugfs");
+    }
+    w = syscall3(SYS_WRITE, c, (long)"auto", 4);
+    syscall1(SYS_CLOSE, c);
+    if (w == -EINVAL) {
+        report_skip("the driver has no CRCs");
+        return;
+    }
+    if (w != 4) {
+        fail("crc/control does not take the source auto");
+    }
+    fb_make(fd, &first_mode, &b, 0xC3C3C3C3u);
+    if (set_crtc(fd, first_crtc, first_conn, &first_mode, b.fb_id) != 0) {
+        fail("SETCRTC of the first mode again");
+    }
+    data_fd = (int)syscall3(SYS_OPEN, (long)data, O_RDONLY | O_CLOEXEC, 0);
+    if (data_fd < 0) {
+        fail("crc/data does not open on a CRTC that is on");
+    }
+    crc_line(data_fd, line, &frame, &counted);
+    crc_line(data_fd, line, &next, &counted_next);
+    if (counted != counted_next || (counted && next <= frame)) {
+        fail("crc/data's second line is not of a later frame");
+    }
+    syscall1(SYS_CLOSE, data_fd);
+    probe_line("DRMPROBE CRC ", line, 0);
+    fb_drop(fd, &b);
     report_held();
 }
 
@@ -907,8 +1048,8 @@ PROBE_SP_ENTRY;
 /** Run the rows in order; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
-    static const char *const ids[] = {"open", "version", "render", "master", "auth", "create",
-                                      "map",  "destroy", "prime",  "kcmp",   "modes"};
+    static const char *const ids[] = {"open", "version", "render", "master", "auth",  "create",
+                                      "map",  "destroy", "prime",  "kcmp",   "modes", "crc"};
     char name[64], path[32];
     char **argv = (char **)(sp + 1);
     int fd, other, index = 0;
@@ -940,6 +1081,7 @@ void probe_main(unsigned long *sp)
     kcmp_row(fd, other);
     syscall1(SYS_CLOSE, other);
     modes_row(fd);
+    crc_row(fd, index);
     syscall1(SYS_CLOSE, fd);
     report_end();
     probe_line("DRMPROBE OK", 0, 0);
