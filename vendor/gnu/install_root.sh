@@ -406,6 +406,10 @@ if [ ! -f "$TREE/usr/share/terminfo/x/xterm-256color" ]; then
     exit 1
 fi
 
+# Debian's cursor-theme alternative is normally made by a maintainer script.
+mkdir -p "$TREE/usr/share/icons/default"
+printf '[Icon Theme]\nInherits=Adwaita\n' > "$TREE/usr/share/icons/default/index.theme"
+
 # Build the caches normally made by Debian's package maintainer scripts.
 # Target programs run through the same loader as tic; no host libraries enter.
 libpath="$TREE/lib:$TREE/usr/lib:$TREE/usr/lib/$GNU_MULTIARCH"
