@@ -251,6 +251,32 @@ int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_
     return 0;
 }
 
+/* The mode the mount gives every entry stands in for the bits FAT cannot
+ * store, so a requested mode is cut by the umask before it is compared, as
+ * fat_sanitize_mode_change in Linux's vfat does: chmod 0755 on a mount with
+ * umask=077 asks for 0700, which is the mount's own. */
+int fat_mode_change(uint32_t umask, uint32_t mode, int *read_only)
+{
+    uint32_t perm = mode & 0777u & ~umask;
+    uint32_t writable = 0222u & ~umask;
+
+    if (mode & 07000u) {
+        return -EPERM;
+    }
+    if ((perm & 0555u) != (0555u & ~umask)) {
+        return -EPERM;
+    }
+    if (writable == 0) {
+        *read_only = -1;
+        return 0;
+    }
+    if ((perm & 0222u) != 0 && (perm & 0222u) != writable) {
+        return -EPERM;
+    }
+    *read_only = (perm & 0222u) == 0;
+    return 0;
+}
+
 /* Timestamps. */
 
 /* FAT keeps local time with no zone, and this driver reads it as UTC. The

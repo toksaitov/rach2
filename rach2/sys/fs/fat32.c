@@ -2004,25 +2004,24 @@ out:
 }
 
 /** The `setattr` operation, for what the volume can store: the access and
- * modification times, and the write bits as the read-only attribute. A
- * change of the mode outside the write bits, of the owner or of the group
+ * modification times, and the write bits as the read-only attribute. A mode
+ * that `fat_mode_change` refuses, or a change of the owner or of the group,
  * is -EPERM, as Linux's vfat answers; the root, which has no entry, takes
  * any change it allows and stores none. */
 static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = node;
+    int read_only = -1;
     int rc;
 
     if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME)) {
         return -EPERM;
     }
     if (what & VFS_SET_MODE) {
-        uint32_t base = 0777u & ~fm->umask;
-        uint32_t want = st->mode & 07777u;
-
-        if ((want & ~0222u) != (base & ~0222u)) {
-            return -EPERM;
+        rc = fat_mode_change(fm->umask, st->mode, &read_only);
+        if (rc != 0) {
+            return rc;
         }
     }
     if (n->is_dir && n->first == fm->root_cluster) {
@@ -2035,12 +2034,10 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
     assert_locked(mnt);
     rc = mark_dirty(fm);
     if (rc == 0) {
-        if (what & VFS_SET_MODE) {
-            if (st->mode & 0222u) {
-                n->attr = (uint8_t)(n->attr & ~ATTR_READ_ONLY);
-            } else {
-                n->attr |= ATTR_READ_ONLY;
-            }
+        if ((what & VFS_SET_MODE) && read_only == 0) {
+            n->attr = (uint8_t)(n->attr & ~ATTR_READ_ONLY);
+        } else if ((what & VFS_SET_MODE) && read_only == 1) {
+            n->attr |= ATTR_READ_ONLY;
         }
         if (what & VFS_SET_ATIME) {
             uint16_t unused;

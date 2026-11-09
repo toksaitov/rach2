@@ -5,10 +5,10 @@
 
 /*
  * fatcommon: what the FAT32 and exFAT drivers both need and neither owns:
- * the check and conversion of a name, the mount options, the DOS timestamp
- * bit fields, the inode numbers, the first-fit allocation hint, and the
- * dirty-volume walk's bitmap with its lock. Everything on disk stays with
- * its driver.
+ * the check and conversion of a name, the mount options and the mode rule,
+ * the DOS timestamp bit fields, the inode numbers, the first-fit allocation
+ * hint, and the dirty-volume walk's bitmap with its lock. Everything on disk
+ * stays with its driver.
  */
 
 /** The most UTF-16 units in a name. */
@@ -54,6 +54,19 @@ int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t ca
  *         or past 32 bits, or `ro=`.
  */
 int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_t *umask);
+
+/**
+ * Judge a chmod to `mode` on a mount with `umask`, by the rule of Linux's
+ * vfat and exfat: the requested bits are first cut by the umask; of those,
+ * the read and execute bits must be the mount's, and the write bits all the
+ * mount allows or none.
+ *
+ * @return 0 with `*read_only` 1 to set the read-only attribute, 0 to clear
+ *         it, or -1 to leave it, when the umask allows no write bit; -EPERM
+ *         for set-user-ID, set-group-ID or sticky bits, or a mode the rule
+ *         refuses.
+ */
+int fat_mode_change(uint32_t umask, uint32_t mode, int *read_only);
 
 /** The epoch second of a DOS date and time, read as UTC; a field out of
  * range reads as 1980-01-01. */
