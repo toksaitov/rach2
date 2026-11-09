@@ -189,6 +189,62 @@ bytes in place.
 The driver chooses the mapping's cache type: the dumb buffers of a display
 are mapped write-combining, so stores go to memory in bursts, and a
 program reads them back slowly.
+.Ss PRIME
+.Dv DRM_IOCTL_PRIME_HANDLE_TO_FD
+exports a buffer handle as a dma-buf descriptor using a
+.Vt struct drm_prime_handle :
+.Va handle
+selects the object,
+.Va flags
+accepts only
+.Dv DRM_CLOEXEC
+and
+.Dv DRM_RDWR ,
+and
+.Va fd
+receives the descriptor.
+The first export chooses read-only access without
+.Dv DRM_RDWR
+and read/write access with it; further exports retain that access mode.
+.Dv DRM_CLOEXEC
+applies separately to each descriptor.
+.Pp
+.Dv DRM_IOCTL_PRIME_FD_TO_HANDLE
+imports the dma-buf descriptor in
+.Va fd
+and returns its handle in
+.Va handle ;
+it ignores
+.Va flags ,
+as Linux does.
+Both calls work on card and render nodes without authentication.
+.Dv DRM_CAP_PRIME
+reports
+.Dv DRM_PRIME_CAP_IMPORT
+and
+.Dv DRM_PRIME_CAP_EXPORT .
+.Pp
+Repeated exports share one dma-buf, and repeated imports into the same DRM
+file return the same handle while it remains open.
+A self-import on the exporting device uses the original buffer object;
+an import on another device shares its pages and implicit fences.
+An imported buffer reexports the original dma-buf.
+Sealed memfd ranges exported through
+.Xr udmabuf 4
+can be imported too.
+A driver can refuse memory it cannot use.
+.Pp
+A dma-buf descriptor maps its pages with shared
+.Xr mmap 2
+at offsets within its size.
+.Dv DRM_IOCTL_MODE_MAP_DUMB
+refuses imported objects with
+.Er EINVAL ;
+map the dma-buf descriptor instead.
+Handles, dma-buf descriptors and mappings hold their own references.
+Closing the exporting file or all buffer handles leaves descriptors and
+mappings valid; closing all descriptors leaves existing mappings valid
+until their final unmap.
 .Ss Events
 .Xr read 2
 gives the file's queued events, each a
@@ -230,6 +286,8 @@ The file lacks what the call's flags need: privilege, authentication, the
 master role or a card node; or
 .Xr mmap 2
 of a buffer the file holds no handle to.
+.It Er EBADF
+PRIME import of a descriptor that is not open.
 .It Er EBUSY
 An open with
 .Dv O_EXCL ,
@@ -239,7 +297,9 @@ while another file is master.
 .It Er EFAULT
 The argument cannot be read or written.
 .It Er EINVAL
-A call the core and the driver do not have, an argument out of range, a
+Unknown PRIME export flags, PRIME import of another descriptor type or
+unusable memory, MAP_DUMB of an imported object,
+a call the core and the driver do not have, an argument out of range, a
 magic unknown or spent,
 .Dv DRM_IOCTL_GEM_CLOSE
 of a handle the file does not hold, or
@@ -249,7 +309,8 @@ at an offset no buffer has, longer than its buffer, or private.
 The device was unplugged.
 .It Er ENOENT
 A handle the file does not hold, for
-.Dv DRM_IOCTL_GEM_FLINK
+.Dv DRM_IOCTL_GEM_FLINK ,
+.Dv DRM_IOCTL_PRIME_HANDLE_TO_FD
 and
 .Dv DRM_IOCTL_MODE_MAP_DUMB ,
 or a name no buffer has, for
@@ -267,4 +328,6 @@ A feature the driver does not have, such as buffers or mode setting.
 .Xr ioctl 2 ,
 .Xr kcmp 2 ,
 .Xr mmap 2 ,
-.Xr mem 4
+.Xr mem 4 ,
+.Xr udmabuf 4 ,
+.Xr dma-buf 7

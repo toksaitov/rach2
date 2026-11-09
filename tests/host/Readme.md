@@ -28,6 +28,8 @@ The `genetlink_hosttest.c` model registers a family against the real generic dis
 
 ## Results
 
+`drm_prime_hosttest.c` and `drm_prime64_hosttest.c` check PRIME on both kernel ABIs over the real GEM, dma-buf, fence and udmabuf code. They model frames, sealed memfds, descriptor tables and mappings. The cases cover descriptor modes, self-import and repeated import identity, cross-device and udmabuf pages, shared reservations, reexport after handle close, exporter exit, mappings retained after every descriptor closes, allocation failures and all reference counts returned to their baseline.
+
 `rc_hosttest.c` checks the wireless rate controller with recorded retry completions and modeled clean, lossy and recovered links. It also checks per-series ACK attribution, capability intersections and reset on a peer change, without files or child processes.
 
 The driver prints one result, assertion and progress record per completed check, and the assertion `listed` for agreement between the manifest, source tree and prepared inventory. A source check missing from the manifest is not executed and fails `listed`; a declared check missing from the inventory fails its assertion and `listed`.

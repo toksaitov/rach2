@@ -253,6 +253,8 @@ void drm_dev_unplug(struct drm_device *dev)
 {
     struct drm_gem_object *obj;
     struct drm_file *f;
+    struct drm_gem_object *imported;
+    int i;
 
     if (dev->unplugged) {
         return;
@@ -266,6 +268,19 @@ void drm_dev_unplug(struct drm_device *dev)
     }
     for (obj = dev->objects; obj; obj = obj->dev_next) {
         paging_zap_device(obj, 0, (uint32_t)(obj->size >> PAGE_SHIFT));
+        if (!obj->dma_buf) {
+            continue;
+        }
+        for (i = 0; i < DRM_MAX_DEVICES; i++) {
+            if (!devices[i]) {
+                continue;
+            }
+            for (imported = devices[i]->objects; imported; imported = imported->dev_next) {
+                if (imported->import == obj->dma_buf) {
+                    paging_zap_device(imported, 0, (uint32_t)(imported->size >> PAGE_SHIFT));
+                }
+            }
+        }
     }
     for (f = dev->files; f; f = f->dev_next) {
         wq_wake_all(&f->event_wait);

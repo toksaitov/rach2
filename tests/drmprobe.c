@@ -14,6 +14,8 @@
  * mmap, writes a pattern and reads it back through a second mapping, and
  * destroys it: MAP_DUMB of the handle is then ENOENT while the mappings
  * still read the pattern, since they hold the buffer until munmap. Last,
+ * PRIME exports a buffer, reuses self-import and repeated import handles,
+ * and retains the mapping after its handles and dma-buf descriptors close.
  * kcmp(2) says a dup of the card's descriptor is the same open file and
  * the second open is not.
  *
@@ -21,8 +23,8 @@
  * "DRMPROBE FAIL: what" and exits 1 at the first failure. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each check in order: `open`, `version`, `render`, `master`, `auth`,
- * `create`, `map`, `destroy` and `kcmp`. The master rows are not run when
- * another process holds the role. Freestanding; direct system calls
+ * `create`, `map`, `destroy`, `prime` and `kcmp`. The master rows skip
+ * while another process holds the role. Freestanding; direct system calls
  * (probe.h).
  */
 
@@ -95,9 +97,27 @@ struct drm_mode_map_dumb {
     u64 offset;
 };
 
+struct drm_gem_close {
+    u32 handle;
+    u32 pad;
+};
+
+struct drm_prime_handle {
+    u32 handle;
+    u32 flags;
+    int fd;
+};
+
+#define DRM_CLOEXEC 02000000
+#define DRM_RDWR    2
+
 struct drm_mode_destroy_dumb {
     u32 handle;
 };
+
+#define DRM_IOCTL_GEM_CLOSE          DRM_IOW(0x09, struct drm_gem_close)
+#define DRM_IOCTL_PRIME_HANDLE_TO_FD DRM_IOWR(0x2d, struct drm_prime_handle)
+#define DRM_IOCTL_PRIME_FD_TO_HANDLE DRM_IOWR(0x2e, struct drm_prime_handle)
 
 #define DRM_IOCTL_VERSION           DRM_IOWR(0x00, struct drm_version)
 #define DRM_IOCTL_GET_MAGIC         DRM_IOR(0x02, struct drm_auth)
@@ -382,6 +402,68 @@ static void dumb_rows(int fd)
     report_held();
 }
 
+/** Export a dumb buffer, import it twice, and retain its pages after close. */
+static void prime_row(int fd, int other)
+{
+    struct drm_mode_create_dumb c;
+    struct drm_mode_destroy_dumb d;
+    struct drm_prime_handle out, self, in, again, back;
+    struct drm_gem_close close;
+    long map;
+    u64 size;
+
+    zero(&c, sizeof(c));
+    c.width = DUMB_SIDE;
+    c.height = DUMB_SIDE;
+    c.bpp = DUMB_BPP;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &c) != 0) {
+        fail("PRIME source dumb buffer");
+    }
+    zero(&out, sizeof(out));
+    out.handle = c.handle;
+    out.flags = DRM_CLOEXEC | DRM_RDWR;
+    if (drm_ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &out) != 0) {
+        fail("PRIME export");
+    }
+    zero(&self, sizeof(self));
+    self.fd = out.fd;
+    if (drm_ioctl(fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &self) != 0 || self.handle != c.handle) {
+        fail("PRIME self-import returns another handle");
+    }
+    zero(&in, sizeof(in));
+    in.fd = out.fd;
+    again = in;
+    if (drm_ioctl(other, DRM_IOCTL_PRIME_FD_TO_HANDLE, &in) != 0 ||
+        drm_ioctl(other, DRM_IOCTL_PRIME_FD_TO_HANDLE, &again) != 0 || in.handle != again.handle) {
+        fail("PRIME repeated import returns another handle");
+    }
+    map = map_drm(out.fd, (long)c.size, 0);
+    if (sys_failed(map)) {
+        fail("PRIME dma-buf mmap");
+    }
+    fill((volatile u32 *)map, (long)(c.size / 4), 0x11223344u);
+    size = c.size;
+    d.handle = c.handle;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d) != 0) {
+        fail("PRIME close source handle");
+    }
+    zero(&back, sizeof(back));
+    back.handle = in.handle;
+    back.flags = DRM_CLOEXEC | DRM_RDWR;
+    if (drm_ioctl(other, DRM_IOCTL_PRIME_HANDLE_TO_FD, &back) != 0) {
+        fail("PRIME export after source handle close");
+    }
+    zero(&close, sizeof(close));
+    close.handle = in.handle;
+    if (drm_ioctl(other, DRM_IOCTL_GEM_CLOSE, &close) != 0 || syscall1(SYS_CLOSE, out.fd) != 0 ||
+        syscall1(SYS_CLOSE, back.fd) != 0 ||
+        !holds((volatile u32 *)map, (long)(size / 4), 0x11223344u) ||
+        syscall2(SYS_MUNMAP, map, (long)size) != 0) {
+        fail("PRIME mapping lifetime");
+    }
+    report_held();
+}
+
 /** kcmp of the card's descriptor `fd` against a dup, the same open file,
  * and against the second open `other`, which is not. */
 static void kcmp_row(int fd, int other)
@@ -412,7 +494,7 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     static const char *const ids[] = {"open",   "version", "render",  "master", "auth",
-                                      "create", "map",     "destroy", "kcmp"};
+                                      "create", "map",     "destroy", "prime",  "kcmp"};
     char name[64], path[32];
     int fd, other, index = 0;
     unsigned i;
@@ -430,6 +512,7 @@ void probe_main(unsigned long *sp)
     }
     master_rows(fd, other, path);
     dumb_rows(fd);
+    prime_row(fd, other);
     kcmp_row(fd, other);
     syscall1(SYS_CLOSE, other);
     syscall1(SYS_CLOSE, fd);

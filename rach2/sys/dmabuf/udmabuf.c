@@ -63,7 +63,15 @@ static void udma_release(struct dma_buf *b)
     udma_free(b->priv);
 }
 
-static const struct dma_buf_ops udma_ops = {udma_mmap, udma_release, NULL};
+/** Return a pinned physical page to a device importer, or 0 past the end. */
+static uintptr_t udma_buf_page(struct dma_buf *b, uint32_t pgoff)
+{
+    struct udmabuf *u = b->priv;
+
+    return pgoff < u->count ? u->pages[pgoff] : 0;
+}
+
+static const struct dma_buf_ops udma_ops = {udma_mmap, udma_release, NULL, udma_buf_page};
 
 /** Validate and pin each range, concatenating its pages into one buffer. */
 static int32_t udma_create(uint32_t flags, uint32_t count, struct udmabuf_create_item *items)

@@ -10,6 +10,8 @@ struct dma_buf_ops {
     int32_t (*mmap)(struct dma_buf *buf, vma_t *vma);
     void (*release)(struct dma_buf *buf);
     int32_t (*cpu_access)(struct dma_buf *buf, uint64_t flags);
+    /* Borrow a physical page for a device import, or 0 on failure. */
+    uintptr_t (*page)(struct dma_buf *buf, uint32_t pgoff);
 };
 
 /* Each exported buffer holds its exporter until the last descriptor or
@@ -25,6 +27,8 @@ struct dma_buf {
     uint64_t size, ino;
     const struct dma_buf_ops *ops;
     void *priv;
+    int read_only;      /* export descriptor mode; 0 for read/write */
+    uint32_t map_flags; /* VM_PROT_WC or VM_PROT_UC, 0 for cached RAM */
     struct dma_resv *resv;
     struct dma_resv own;
     wait_queue_t wq;
@@ -41,6 +45,7 @@ struct dma_buf *dma_buf_ref(struct dma_buf *buf);
 /** Release a reference, accepting NULL. */
 void dma_buf_put(struct dma_buf *buf);
 /** Install a descriptor holding its own reference; flags is O_CLOEXEC or 0.
+ * Access is read-only when buf->read_only is set, otherwise read/write.
  * Return the descriptor or -errno; retain the caller's reference. */
 int32_t dma_buf_fd(struct dma_buf *buf, uint32_t flags);
 /** Get a referenced buffer from the caller's descriptor, or NULL. */
