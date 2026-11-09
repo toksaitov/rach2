@@ -1640,6 +1640,34 @@ static struct drm_property_blob row_edid;
 static uint8_t row_edid_bytes[128];
 static pci_device_t row_pci;
 
+/* The commit lock and the probe of drm_mode.c, which a write of a
+ * connector's status calls: the probe finds the connector off when forced
+ * off and connected otherwise, as for a sink with no detect, and counts
+ * itself. */
+static int row_probes;
+
+int32_t drm_modeset_lock(struct drm_device *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+void drm_modeset_unlock(struct drm_device *dev)
+{
+    (void)dev;
+}
+
+int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uint32_t max_width,
+                                            uint32_t max_height)
+{
+    (void)max_width;
+    (void)max_height;
+    row_probes++;
+    connector->status =
+        connector->force == DRM_FORCE_OFF ? DRM_CONNECTOR_DISCONNECTED : DRM_CONNECTOR_CONNECTED;
+    return 0;
+}
+
 /** Fill the device the DRM rows register. */
 static void row_device(void)
 {
@@ -1765,6 +1793,7 @@ static void drm_event_rows(void)
 {
     uint32_t mark = uevents_len;
     int sent = uevents_sent;
+    int probes;
 
     drm_kms_hotplug_event(&row_dev);
     check(uevents_sent == sent + 1 &&
@@ -1780,9 +1809,19 @@ static void drm_event_rows(void)
     check(sysfs_node_store(child(row_card, "uevent"), "plug\n", 5) == -EINVAL,
           "and another word is refused");
     mark = uevents_len;
+    probes = row_probes;
     check(sysfs_node_store(child(row_conn_dir, "status"), "off\n", 4) == 4 &&
               row_conn.force == DRM_FORCE_OFF && uevent_has(mark, 0, "HOTPLUG=1"),
           "a forced status is set and told as a hotplug");
+    check(row_probes == probes + 1 && row_conn.status == DRM_CONNECTOR_DISCONNECTED,
+          "and the connector is probed again at once, as status_store does");
+    sent = uevents_sent;
+    check(sysfs_node_store(child(row_conn_dir, "status"), "off", 3) == 3 &&
+              row_probes == probes + 1 && uevents_sent == sent,
+          "the same force again probes nothing and sends nothing");
+    check(sysfs_node_store(child(row_conn_dir, "status"), "detect\n", 7) == 7 &&
+              row_conn.force == DRM_FORCE_UNSPECIFIED && row_probes == probes + 2,
+          "detect probes again");
     mark = uevents_len;
     sent = uevents_sent;
     drm_sysfs_unregister(&row_dev);

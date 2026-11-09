@@ -225,14 +225,18 @@ static int word_is(const char *s, uint32_t len, const char *w)
 
 /**
  * Take a write of a connector's `status`, as Linux's status_store: detect,
- * on, on-digital or off sets what the connector is forced to, which the
- * driver's `force` hook hears, and a change is told as a hotplug. -EINVAL
- * for any other word.
+ * on, on-digital or off sets what the connector is forced to, and a change,
+ * or detect, probes it again under the commit lock, so that its status and
+ * modes, and the driver's `force` hook, follow at once; a change is told as
+ * a hotplug. -EINVAL for any other word, or -EINTR for a signal while the
+ * lock is taken.
  */
 static int32_t store_connector_status(void *obj, int arg, const char *buf, uint32_t len)
 {
     struct drm_connector *c = (struct drm_connector *)obj;
-    int force;
+    struct drm_device *dev = c->dev;
+    int force, old;
+    int32_t rc;
 
     (void)arg;
     if (word_is(buf, len, "detect")) {
@@ -246,12 +250,19 @@ static int32_t store_connector_status(void *obj, int arg, const char *buf, uint3
     } else {
         return -EINVAL;
     }
-    if (force != c->force) {
-        c->force = force;
-        if (c->funcs && c->funcs->force) {
-            c->funcs->force(c);
-        }
-        drm_kms_hotplug_event(c->dev);
+    rc = drm_modeset_lock(dev);
+    if (rc != 0) {
+        return rc;
+    }
+    old = c->force;
+    c->force = force;
+    if (old != force || force == DRM_FORCE_UNSPECIFIED) {
+        drm_helper_probe_single_connector_modes(c, dev->mode_config.max_width,
+                                                dev->mode_config.max_height);
+    }
+    drm_modeset_unlock(dev);
+    if (old != force) {
+        drm_kms_hotplug_event(dev);
     }
     return (int32_t)len;
 }
