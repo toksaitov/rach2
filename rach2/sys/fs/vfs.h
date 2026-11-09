@@ -286,13 +286,13 @@ struct vfs_ops {
      * for any other type, whose changes the mount's namespace lock covers. */
     void (*lock_node)(struct vfs_mount *mnt, void *node);
     void (*unlock_node)(struct vfs_mount *mnt, void *node);
-    /* Leave the root for a power off, for a type whose namespace lock does
-     * not keep its writers out (`file_locked`): close it to new writers for
-     * good, wait until the tick `deadline` for those inside, holding no
-     * lock, and then do what `prepare_unmount` does. 0 when the volume is
-     * marked clean; -EBUSY when a writer is still inside at the deadline,
-     * or another change is still owed, which leaves the volume marked in
-     * use; or the error of the write. NULL for any other type, whose
+    /* Leave a mount for a power off, the root last (`kernel_shutdown`), for a
+     * type whose namespace lock does not keep its writers out (`file_locked`):
+     * close it to new writers for good, wait until the tick `deadline` for
+     * those inside, holding no lock, and then do what `prepare_unmount` does. 0
+     * when the volume is marked clean; -EBUSY when a writer is still inside at
+     * the deadline, or another change is still owed, which leaves the volume
+     * marked in use; or the error of the write. NULL for any other type, whose
      * shutdown takes the namespace lock and calls `prepare_unmount`. */
     int (*shutdown)(struct vfs_mount *mnt, uint64_t deadline);
 };
