@@ -264,8 +264,9 @@ static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int fx, int set
  * `user_i387_struct`; NT_PRXFPREG, the `fxsave` image, which a processor
  * without FXSR lacks; and NT_X86_XSTATE, the XSAVE image, which one without
  * XSAVE lacks. */
-long arch_regset_size(unsigned long type, uint32_t *unit)
+long arch_regset_size(const process_t *t, unsigned long type, uint32_t *unit)
 {
+    (void)t;
     *unit = 4u;
     switch (type) {
     case NT_PRSTATUS:

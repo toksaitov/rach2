@@ -1,10 +1,11 @@
 /*
  * sigframe.c: the Linux x86-64 signal frame.
  *
- * x86-64 has one frame, `struct rt_sigframe`, for every handler, with or
- * without SA_SIGINFO: the address the handler returns to, the ucontext with
- * the registers in a `struct sigcontext`, and the siginfo. The
- * floating-point state, the XSAVE image or, without XSAVE, the 512-byte
+ * x86-64 has one frame, `struct rt_sigframe`, for every 64-bit handler,
+ * with or without SA_SIGINFO; an i386 program's handlers get i386's
+ * (sigframe32.c). The frame holds the address the handler returns to, the
+ * ucontext with the registers in a `struct sigcontext`, and the siginfo.
+ * The floating-point state, the XSAVE image or, without XSAVE, the 512-byte
  * `fxsave` image Linux calls `struct _fpstate_64` (../x86/fpu.h), lies
  * above the frame at a 64-byte boundary, and the sigcontext points at it.
  * The handler returns to `sa_restorer`, which calls rt_sigreturn: Linux
@@ -14,6 +15,7 @@
 
 #include "../../proc/sigframe.h"
 
+#include "ia32.h"
 #include "percpu.h"
 
 #include "../x86/fpu.h"
@@ -136,7 +138,7 @@ static uint64_t get64(const uint8_t *p)
 /** Whether `sel` names a present writable data segment at DPL 3, one an
  * `iretq` to user mode may load into SS, as Linux's `force_valid_ss`
  * tests: `lar` leaves its 0 where the descriptor is out of reach. */
-static int ss_valid(unsigned int sel)
+int sigframe_ss_valid(unsigned int sel)
 {
     uint32_t ar = 0;
 
@@ -253,18 +255,24 @@ static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, ui
 }
 
 /** The frame's alignment in `sigframe_setup` costs up to 15 bytes, and the
- * 8 below the 16-byte boundary 8 more. */
+ * 8 below the 16-byte boundary 8 more; an i386 frame may take more, and the
+ * larger is given. */
 uintptr_t sigframe_stack_bytes(void)
 {
-    return fpu_frame_bytes() + sizeof(struct lx_rt_sigframe) + 15u + 8u;
+    uintptr_t native = fpu_frame_bytes() + sizeof(struct lx_rt_sigframe) + 15u + 8u;
+    uintptr_t ia32 = ia32_sigframe_bytes();
+
+    return native > ia32 ? native : ia32;
 }
 
 /**
- * Every handler gets the rt frame, with or without SA_SIGINFO, and an
- * action without SA_RESTORER is refused with -1, since the frame has no
- * return code. The frame goes below the red zone of the interrupted code,
- * or at the top of the alternate stack, with the floating-point state above
- * it (`fpu_frame_place`), and starts 8 bytes below a 16-byte boundary, as a
+ * A handler whose action an i386 call installed, marked SA_IA32_ABI, gets
+ * the i386 frame instead (`ia32_sigframe_setup`). Every other handler gets
+ * the rt frame, with or without SA_SIGINFO, and an action without
+ * SA_RESTORER is refused with -1, since the frame has no return code. The
+ * frame goes below the red zone of the interrupted code, or at the top of
+ * the alternate stack, with the floating-point state above it
+ * (`fpu_frame_place`), and starts 8 bytes below a 16-byte boundary, as a
  * function's stack does after the call that entered it. The ucontext's
  * `ss_flags` are what sigaltstack would have read where the signal came, as
  * Linux saves them: SS_ONSTACK only when the thread was already on the
@@ -287,6 +295,9 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     uintptr_t sp = tf->rsp - RED_ZONE;
     uintptr_t fp_addr, frame_addr;
 
+    if (sa->flags & SA_IA32_ABI) {
+        return ia32_sigframe_setup(tf, signo, sa, info, oldmask);
+    }
     if (!(sa->flags & SA_RESTORER)) {
         return -1;
     }
@@ -333,7 +344,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     tf->rdx = frame_addr + offsetof(struct lx_rt_sigframe, uc);
     tf->rax = 0;
     tf->cs = GDT_USER_CODE;
-    if (tf->ss != GDT_USER_DATA && !ss_valid((unsigned int)tf->ss)) {
+    if (tf->ss != GDT_USER_DATA && !sigframe_ss_valid((unsigned int)tf->ss)) {
         tf->ss = GDT_USER_DATA;
     }
     tf->rflags &= ~(uint64_t)(EFLAGS_DF | EFLAGS_TF | EFLAGS_RF);
@@ -341,7 +352,9 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 }
 
 /**
- * The frame starts 8 bytes below the stack pointer, since the handler's
+ * A sigreturn or rt_sigreturn made by `int $0x80` returns from an i386
+ * frame (`ia32_sigframe_restore`), as Linux's compat calls do. Otherwise
+ * the frame starts 8 bytes below the stack pointer, since the handler's
  * `ret` took `pretcode`. There is no plain sigreturn on x86-64, and a call
  * without `rt` is refused with -1. CS and SS are the frame's, at RPL 3, as
  * Linux restores them: CS must be the user's 64-bit or 32-bit code
@@ -363,6 +376,9 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     uintptr_t frame_addr = tf->rsp - 8u;
     uint64_t cs, ss;
 
+    if (SC_COMPAT(tf)) {
+        return ia32_sigframe_restore(tf, rt, mask);
+    }
     if (!rt) {
         return -1;
     }
@@ -375,7 +391,7 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
                             : cs != GDT_USER_CODE32 || sc->rip >= CODE32_END) {
         return -1;
     }
-    if (!ss_valid((unsigned int)ss)) {
+    if (!sigframe_ss_valid((unsigned int)ss)) {
         if ((frame.uc.uc_flags & UC_STRICT_RESTORE_SS) || cs != GDT_USER_CODE) {
             return -1;
         }

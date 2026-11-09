@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 298 calls, the x86-64 kernel 274, and its compat table 199. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 298 calls, the x86-64 kernel 274, and its compat table 221. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -184,7 +184,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `personality` | 136 | 135 | 136 | [prctl(2)](../man/man2/prctl.2) |
 | `pidfd_getfd` | 438 | 438 | 438 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
 | `pidfd_open` | 434 | 434 | 434 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
-| `pidfd_send_signal` | 424 | 424 | none | [pidfd_open(2)](../man/man2/pidfd_open.2) |
+| `pidfd_send_signal` | 424 | 424 | 424 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
 | `pipe` | 42 | 22 | 42 | [pipe(2)](../man/man2/pipe.2) |
 | `pipe2` | 331 | 293 | 331 | [pipe(2)](../man/man2/pipe.2) |
 | `pivot_root` | 217 | 155 | 217 | [pivot_root(2)](../man/man2/pivot_root.2) |
@@ -197,7 +197,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `process_vm_readv` | 347 | 310 | 347 | [process_vm_readv(2)](../man/man2/process_vm_readv.2) |
 | `process_vm_writev` | 348 | 311 | 348 | [process_vm_readv(2)](../man/man2/process_vm_readv.2) |
 | `pselect6` | 308 | 270 | none | [select(2)](../man/man2/select.2) |
-| `ptrace` | 26 | 101 | none | [ptrace(2)](../man/man2/ptrace.2) |
+| `ptrace` | 26 | 101 | 26 | [ptrace(2)](../man/man2/ptrace.2) |
 | `pwrite64` | 181 | 18 | none | [write(2)](../man/man2/write.2) |
 | `pwritev` | none | 296 | none | [write(2)](../man/man2/write.2) |
 | `rach2_ping` | none | 400 | none | [ping(2)](../man/man2/ping.2) |
@@ -216,14 +216,15 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `renameat2` | 353 | 316 | 353 | [rename(2)](../man/man2/rename.2) |
 | `rmdir` | 40 | 84 | 40 | [mkdir(2)](../man/man2/mkdir.2) |
 | `rseq` | 386 | 334 | 386 | [rseq(2)](../man/man2/rseq.2) |
-| `rt_sigaction` | 174 | 13 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigpending` | 176 | 127 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigprocmask` | 175 | 14 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigqueueinfo` | 178 | 129 | none | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
-| `rt_sigreturn` | 173 | 15 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigsuspend` | 179 | 130 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigtimedwait` | 177 | 128 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_tgsigqueueinfo` | 335 | 297 | none | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
+| `rt_sigaction` | 174 | 13 | 174 | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigpending` | 176 | 127 | 176 | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigprocmask` | 175 | 14 | 175 | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigqueueinfo` | 178 | 129 | 178 | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
+| `rt_sigreturn` | 173 | 15 | 173 | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigsuspend` | 179 | 130 | 179 | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigtimedwait` | 177 | 128 | 177 | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigtimedwait_time64` | none | none | 421 | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_tgsigqueueinfo` | 335 | 297 | 335 | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
 | `sched_get_priority_max` | 159 | 146 | 159 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_get_priority_min` | 160 | 147 | 160 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_getaffinity` | 242 | 204 | none | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
@@ -275,20 +276,26 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `setuid` | none | 105 | none | [setuid(2)](../man/man2/setuid.2) |
 | `setuid32` | 213 | none | 213 | [setuid(2)](../man/man2/setuid.2) |
 | `setxattr` | 226 | 188 | 226 | [getxattr(2)](../man/man2/getxattr.2) |
+| `sgetmask` | none | none | 68 | [sigaction(2)](../man/man2/sigaction.2) |
 | `shmat` | 397 | 30 | none | [shmget(2)](../man/man2/shmget.2) |
 | `shmctl` | 396 | 31 | none | [shmget(2)](../man/man2/shmget.2) |
 | `shmdt` | 398 | 67 | 398 | [shmget(2)](../man/man2/shmget.2) |
 | `shmget` | 395 | 29 | 395 | [shmget(2)](../man/man2/shmget.2) |
 | `shutdown` | 373 | 48 | 373 | [shutdown(2)](../man/man2/shutdown.2) |
-| `sigaltstack` | 186 | 131 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `signalfd` | 321 | 282 | none | [signalfd(2)](../man/man2/signalfd.2) |
-| `signalfd4` | 327 | 289 | none | [signalfd(2)](../man/man2/signalfd.2) |
-| `sigprocmask` | 126 | none | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `sigreturn` | 119 | none | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `sigaction` | none | none | 67 | [sigaction(2)](../man/man2/sigaction.2) |
+| `sigaltstack` | 186 | 131 | 186 | [sigaction(2)](../man/man2/sigaction.2) |
+| `signal` | none | none | 48 | [sigaction(2)](../man/man2/sigaction.2) |
+| `signalfd` | 321 | 282 | 321 | [signalfd(2)](../man/man2/signalfd.2) |
+| `signalfd4` | 327 | 289 | 327 | [signalfd(2)](../man/man2/signalfd.2) |
+| `sigpending` | none | none | 73 | [sigaction(2)](../man/man2/sigaction.2) |
+| `sigprocmask` | 126 | none | 126 | [sigaction(2)](../man/man2/sigaction.2) |
+| `sigreturn` | 119 | none | 119 | [sigaction(2)](../man/man2/sigaction.2) |
+| `sigsuspend` | none | none | 72 | [sigaction(2)](../man/man2/sigaction.2) |
 | `socket` | 359 | 41 | 359 | [socket(2)](../man/man2/socket.2) |
 | `socketcall` | 102 | none | none | [socketcall(2)](../man/man2/socketcall.2) |
 | `socketpair` | 360 | 53 | 360 | [socket(2)](../man/man2/socket.2) |
 | `splice` | 313 | 275 | 313 | [splice(2)](../man/man2/splice.2) |
+| `ssetmask` | none | none | 69 | [sigaction(2)](../man/man2/sigaction.2) |
 | `stat` | 106 | 4 | none | [stat(2)](../man/man2/stat.2) |
 | `stat64` | 195 | none | none | [stat(2)](../man/man2/stat.2) |
 | `statfs` | none | 137 | none | [statfs(2)](../man/man2/statfs.2) |
