@@ -15,13 +15,13 @@
 
 /* Region protection bits; the first three are the values of PROT_READ,
  * PROT_WRITE and PROT_EXEC. */
-#define VM_PROT_READ    0x1u
-#define VM_PROT_WRITE   0x2u
-#define VM_PROT_EXEC    0x4u
+#define VM_PROT_READ     0x1u
+#define VM_PROT_WRITE    0x2u
+#define VM_PROT_EXEC     0x4u
 /* Given to paging_protect_range, and not kept in a region, for a shared
  * region, whose pages are shared on purpose: a write goes to the frame they
  * share, never to a copy. */
-#define VM_PROT_SHARED  0x8u
+#define VM_PROT_SHARED   0x8u
 /* Kept in a region's protection beside the three access bits: the region
  * may never be made writable. A shared mapping of a file opened without
  * write access has it, and so has a shared mapping of a file on a disk,
@@ -30,12 +30,24 @@
  * while it is set, as Linux's mprotect answers EACCES for a mapping without
  * VM_MAYWRITE; splits, merges, copies and moves keep it with the rest of
  * the protection. */
-#define VM_PROT_NOWRITE 0x10u
-/* Kept the same way: the region maps device memory through /dev/mem, whose
- * frames are not the allocator's. Nothing reads it on a process's behalf, a
- * core file or /proc/PID/mem, since a read of a device register can change
- * the device, and a page of it is never backed by a fault. */
-#define VM_PROT_IO      0x20u
+#define VM_PROT_NOWRITE  0x10u
+/* Kept the same way: the region maps device memory, a device object's
+ * pages (`vm_device_map`), whose fault asks the object for the page and
+ * whose frames need not be the allocator's. Nothing reads it on a process's
+ * behalf, a core file or /proc/PID/mem, since a read of a device register
+ * can change the device. */
+#define VM_PROT_IO       0x20u
+/* Kept the same way, beside VM_PROT_IO: the pages are mapped
+ * write-combining (PTE_WC), or uncached where the processor has no
+ * write-combining; with VM_PROT_UC, uncached (PTE_NOCACHE); with neither,
+ * cached, as for a page of RAM. */
+#define VM_PROT_WC       0x40u
+#define VM_PROT_UC       0x80u
+/* Kept the same way: a fork's child does not get the region, as Linux's
+ * VM_DONTCOPY, which MADV_DONTFORK sets and MADV_DOFORK clears. */
+#define VM_PROT_DONTFORK 0x100u
+/* The bits a change of the access bits keeps. */
+#define VM_PROT_KEPT     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -60,7 +72,10 @@ typedef enum {
  * through the file system, which makes the fault a major one, or -1 when
  * the read fails; it may sleep. A shared
  * mapping's `share` gives the frame of page `pgoff` itself, with a reference
- * taken for the mapping, or 0 when none can be had; it does not sleep.
+ * taken for the mapping, or 0 when none can be had; it does not sleep. A
+ * device region's `device`, set by `vm_device_map` alone, gives the physical
+ * address of page `pgoff` in `*phys` and returns 0, or -1 when the object
+ * has no page there now, which raises SIGBUS; it may sleep.
  */
 struct vm_file {
     uint32_t refs;
@@ -69,6 +84,23 @@ struct vm_file {
     void (*release)(struct vm_file *f);
     char *path;           /* the file's path for /proc/PID/maps, or NULL */
     struct vm_file *dead; /* the next file waiting for `vm_file_reap` */
+    int (*device)(struct vm_file *f, uint32_t pgoff, uintptr_t *phys);
+};
+
+/*
+ * What a device object does for a mapping of it (`vm_device_map`), Linux's
+ * vm_operations_struct for a mapping of device memory. `page` gives the
+ * physical address of the object's page `pgoff` in `*phys`: a frame of the
+ * object's own, which it keeps at least until it zaps the mappings of the
+ * page (`paging_zap_device`), or a frame of a device's range. It returns 0,
+ * or -1 when the object has no page there now, past its end, revoked or
+ * gone with its device, and the access then raises SIGBUS as on Linux. It
+ * may sleep. `put` drops the reference to the object that the mapping
+ * held. Called under the big kernel lock.
+ */
+struct vm_device_ops {
+    int (*page)(void *obj, uint32_t pgoff, uintptr_t *phys);
+    void (*put)(void *obj);
 };
 
 /* A single virtual memory area: [start, end) page-aligned. A region that
@@ -132,9 +164,9 @@ void vm_init(vm_space_t *vm);
  * empty after. */
 void vm_free(vm_space_t *vm);
 
-/** Make `dst`, which owns no nodes, a copy of `src`, whose regions take a
- * reference each to the files they map; 0, or -1 with no memory, with `dst`
- * left empty. */
+/** Make `dst`, which owns no nodes, a copy of `src` without its regions
+ * marked VM_PROT_DONTFORK, whose regions take a reference each to the files
+ * they map; 0, or -1 with no memory, with `dst` left empty. */
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /** The region that holds `addr` (`start <= addr < end`), or NULL. */
@@ -156,7 +188,7 @@ int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /**
  * Add the region [start, end) with the protection `prot`, the access bits
- * and VM_PROT_NOWRITE or VM_PROT_IO as the region needs, and the kind
+ * and those of VM_PROT_KEPT the region needs, and the kind
  * `type`. The range must be non-empty, page-aligned at both ends and clear
  * of every region. The region is merged with a neighbour it touches that
  * has the same kind and protection and maps no file, or the same file
@@ -169,6 +201,24 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
  * takes a reference of its own. */
 int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff);
+
+/**
+ * Give `vma`, a region mmap made for a file's `mmap` operation
+ * (sys/fs/file.h), the backing of the device object `obj`: its pages are
+ * faulted in through `ops->page` and mapped with the cache type `cache`,
+ * VM_PROT_WC, VM_PROT_UC or 0 for cached. The region becomes VM_SHARED with
+ * VM_PROT_IO and `cache` in its protection, and its file a new record that
+ * takes over the caller's reference to `obj`, which `ops->put` drops when
+ * the last region mapping it goes: at munmap, exec or exit. A fork's copy
+ * of the region shares the record. 0; -EINVAL for a private mapping, whose
+ * type mmap set to VM_FILE, since device memory has no copy-on-write; or
+ * -ENOMEM; on an error the reference is still the caller's.
+ */
+int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache);
+
+/** The object a device region's file `f` maps (`vm_device_map`), or NULL
+ * when `f` is NULL or no device's. */
+void *vm_device_object(const struct vm_file *f);
 
 /** Take a reference to `f`; NULL is ignored. */
 void vm_file_get(struct vm_file *f);
@@ -195,7 +245,7 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /**
  * Give [start, end), which regions must cover without a gap, the access bits
- * `prot`, each region keeping its VM_PROT_NOWRITE and VM_PROT_IO; the
+ * `prot`, each region keeping its bits of VM_PROT_KEPT; the
  * regions the range cuts are split at its ends, and the pieces merge with
  * neighbours that then match. An empty range changes nothing. Returns 0; -1
  * for a gap, as Linux's mprotect answers ENOMEM; -2 when a split has no
@@ -205,6 +255,15 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
  * they were.
  */
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
+
+/**
+ * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK in the
+ * protection of each region of [start, end), which regions must cover
+ * without a gap, splitting and merging as `vm_protect` does. Returns 0; -1
+ * for a gap; -2 when a split has no room. An error leaves the regions as
+ * they were.
+ */
+int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear);
 
 /** Make room for `n` more regions now, so the changes after cannot fail;
  * 0 ok, -1 at the limit or with no memory. */

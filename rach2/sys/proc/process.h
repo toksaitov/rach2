@@ -239,6 +239,9 @@ struct process {
     /* The frame allocator refused this thread a user page since its last
      * page fault began: the fault is one of memory, not of the address. */
     uint32_t frame_refused;
+    /* A device object had no page for this thread's access since its last
+     * page fault began (`device_fault`): the fault raises SIGBUS. */
+    uint32_t bus_fault;
     /* It waits, with its registers and floating-point state saved, for the
      * core another thread of its process writes (`core_park`). */
     uint32_t core_parked;

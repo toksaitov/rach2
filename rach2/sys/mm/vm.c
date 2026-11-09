@@ -4,6 +4,7 @@
 
 #include "../arch/arch.h"
 #include "../lib/kdef.h"
+#include "../lib/kerrno.h"
 #include "kheap.h"
 
 #define VM_PAGE_MASK  0xFFFu
@@ -39,6 +40,62 @@ void vm_file_put(struct vm_file *f)
         f->dead = vm_dead;
         vm_dead = f;
     }
+}
+
+/* The file of a device region: the object it maps and what the object
+ * does, which the record's reference to the object keeps alive. */
+struct vm_device {
+    struct vm_file vf; /* first, so that the file is the record */
+    const struct vm_device_ops *ops;
+    void *obj;
+};
+
+/** The `device` operation of a device region's file: the object's page. */
+static int vm_device_page(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
+{
+    struct vm_device *d = (struct vm_device *)f;
+
+    return d->ops->page(d->obj, pgoff, phys);
+}
+
+/** Release a device region's file: drop its reference to the object. */
+static void vm_device_release(struct vm_file *f)
+{
+    struct vm_device *d = (struct vm_device *)f;
+
+    d->ops->put(d->obj);
+    kfree(d->vf.path);
+    kfree(d);
+}
+
+int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache)
+{
+    struct vm_device *d;
+
+    if (vma->type != VM_SHARED) {
+        return -EINVAL;
+    }
+    d = kmalloc(sizeof(*d));
+    if (!d) {
+        return -ENOMEM;
+    }
+    d->vf.refs = 1;
+    d->vf.fill = NULL;
+    d->vf.share = NULL;
+    d->vf.release = vm_device_release;
+    d->vf.path = NULL;
+    d->vf.dead = NULL;
+    d->vf.device = vm_device_page;
+    d->ops = ops;
+    d->obj = obj;
+    vma->file = &d->vf;
+    vma->prot |= VM_PROT_IO | (cache & (VM_PROT_WC | VM_PROT_UC));
+    return 0;
+}
+
+void *vm_device_object(const struct vm_file *f)
+{
+    return f && f->device == vm_device_page ? ((const struct vm_device *)f)->obj : NULL;
 }
 
 void vm_file_reap(void)
@@ -357,12 +414,15 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     dst->chunks = NULL;
     dst->count = dst->cap = 0;
     dst->total = 0;
+    dst->gap_len = 0;
     if (vm_nodes_reserve(dst, src->count) != 0) {
         vm_free(dst);
         return -1;
     }
     for (r = vm_first(src); r; r = vm_next(r)) {
-        (void)vm_link(dst, r->start, r->end, r->prot, r->type, r->file, r->pgoff);
+        if (!(r->prot & VM_PROT_DONTFORK)) {
+            (void)vm_link(dst, r->start, r->end, r->prot, r->type, r->file, r->pgoff);
+        }
     }
     return 0;
 }
@@ -441,7 +501,17 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
     return 0;
 }
 
-int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
+/**
+ * Give each region of [start, end) the protection `(prot & ~mask) | bits`,
+ * for `vm_protect` and `vm_advise`, splitting the regions the range cuts at
+ * its ends and merging the pieces with neighbours that then match. With
+ * `nowrite`, a region with VM_PROT_NOWRITE stops the change with -3. An
+ * empty range changes nothing. 0, -1 for a gap, -2 when a split has no
+ * room, or -3; of -1 and -3, the one met first in address order, and every
+ * error leaves the regions as they were.
+ */
+static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t mask, uint32_t bits,
+                     int nowrite)
 {
     uintptr_t at = start;
     vma_t *r, *first, *last = NULL;
@@ -455,7 +525,7 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
         if (r->start > at) {
             break;
         }
-        if ((prot & VM_PROT_WRITE) && (r->prot & VM_PROT_NOWRITE)) {
+        if (nowrite && (r->prot & VM_PROT_NOWRITE)) {
             return -3;
         }
         at = r->end;
@@ -475,7 +545,7 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
         if (r->end > end) {
             (void)vm_split(vm, r, end);
         }
-        r->prot = prot | (r->prot & (VM_PROT_NOWRITE | VM_PROT_IO));
+        r->prot = (r->prot & ~mask) | bits;
     }
     r = first->prev ? first->prev : first;
     while (r && r->next && r->next->start <= end) {
@@ -484,6 +554,19 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
         }
     }
     return 0;
+}
+
+int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
+{
+    return vm_change(vm, start, end, ~(uint32_t)VM_PROT_KEPT, prot & ~(uint32_t)VM_PROT_KEPT,
+                     (prot & VM_PROT_WRITE) != 0);
+}
+
+int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
+{
+    uint32_t mask = (set | clear) & VM_PROT_DONTFORK;
+
+    return vm_change(vm, start, end, mask, set & mask, 0);
 }
 
 uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi)
