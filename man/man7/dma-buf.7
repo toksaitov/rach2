@@ -94,10 +94,15 @@ records through
 .Ar sync_fence_info .
 A smaller array is
 .Er EINVAL .
+A record is a leaf fence: each fence of a merge, or of a sync object's
+timeline point, its own and those of earlier points not yet signalled.
 Each record has the driver and timeline names, monotonic completion
 time in nanoseconds and status: zero active, one complete, or a negative
 producer error.
-The file's status gives the combined result.
+With records asked for, the file's status is the first record's that is
+zero or negative, else one; without, it is the file's fence's own, which
+for a timeline point is one once every point up to it has signalled,
+whatever their errors.
 .It Dv SYNC_IOC_SET_DEADLINE
 Read a
 .Vt struct sync_set_deadline
@@ -146,4 +151,5 @@ when none was supplied.
 .Xr mmap 2 ,
 .Xr poll 2 ,
 .Xr udmabuf 4 ,
-.Xr debugfs 5
+.Xr debugfs 5 ,
+.Xr drm-syncobj 7

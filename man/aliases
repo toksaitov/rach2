@@ -739,3 +739,5 @@ dmabuf 7 dma-buf
 sync_file 7 dma-buf
 sw_sync 7 dma-buf
 kms 7 drm-kms
+syncobj 7 drm-syncobj
+drm_syncobj 7 drm-syncobj

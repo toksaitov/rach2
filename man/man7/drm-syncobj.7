@@ -1,0 +1,176 @@
+.Dd November 10, 2026
+.Dt DRM-SYNCOBJ 7
+.Os
+.Sh NAME
+.Nm drm-syncobj ,
+.Nm syncobj ,
+.Nm drm_syncobj
+.Nd sync objects on a DRM card or render node
+.Sh DESCRIPTION
+A sync object holds a fence of
+.Xr dma-buf 7 :
+none, one fence, or, on a timeline, a chain of numbered points, each of
+which signals once its own fence and every earlier point's have.
+A program creates one on a card or render node of
+.Xr drm 4 ,
+names it by a handle of its open file, waits on it, signals or resets it,
+moves fences between sync objects, and shares it with other files and
+processes as a descriptor, or its fence as a sync file.
+The structures and numbers are those of
+.In drm/drm.h
+in Linux 6.12.
+.Pp
+The calls answer only where the driver offers sync objects, as
+.Dv DRM_IOCTL_GET_CAP
+reports them:
+.Dv DRM_CAP_SYNCOBJ
+for the binary calls and
+.Dv DRM_CAP_SYNCOBJ_TIMELINE
+for
+.Dv DRM_IOCTL_SYNCOBJ_TRANSFER ,
+.Dv DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT ,
+.Dv DRM_IOCTL_SYNCOBJ_EVENTFD ,
+.Dv DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL
+and
+.Dv DRM_IOCTL_SYNCOBJ_QUERY .
+virtio_gpu and i915 offer both; bochs-drm, simpledrm and vkms neither.
+.Ss Points
+Point 0 names a sync object's newest fence, and a binary sync object has
+no other.
+A point added to a timeline continues it when it is above the newest;
+one at or below the newest is numbered as the newest and starts a
+timeline of its own, which hides the earlier points from
+.Dv DRM_IOCTL_SYNCOBJ_QUERY
+until it signals.
+Point
+.Ar N
+is covered by the newest point at or above
+.Ar N
+whose predecessor on its timeline is below
+.Ar N ;
+a wait for
+.Ar N
+waits for that point.
+Points that have signalled are dropped as later ones arrive.
+.Ss Calls
+.Bl -tag -width DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL
+.It Dv DRM_IOCTL_SYNCOBJ_CREATE
+A new sync object in
+.Ar handle ,
+the lowest free from 1, signalled at once with
+.Dv DRM_SYNCOBJ_CREATE_SIGNALED .
+.It Dv DRM_IOCTL_SYNCOBJ_DESTROY
+Drop a handle; the object lives while any handle, descriptor or waiter
+holds it.
+.It Dv DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD
+A close-on-exec descriptor of the object, shown as
+.Ql anon_inode:syncobj_file ;
+with
+.Dv DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE ,
+a sync file of its newest fence instead.
+.It Dv DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE
+A handle to the object of such a descriptor, from any device; with
+.Dv DRM_SYNCOBJ_FD_TO_HANDLE_FLAGS_IMPORT_SYNC_FILE ,
+the fence of the sync file in
+.Ar fd
+becomes the fence of the object in
+.Ar handle .
+.It Dv DRM_IOCTL_SYNCOBJ_WAIT
+Wait for the newest fence of each of
+.Ar count_handles
+objects to signal: any one, or all with
+.Dv DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL ,
+until the absolute
+.Dv CLOCK_MONOTONIC
+time
+.Ar timeout_nsec
+in nanoseconds, where 0 or a time past asks once.
+An object without a fence is
+.Er EINVAL ,
+unless
+.Dv DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT
+waits for one to be given first.
+.Dv DRM_SYNCOBJ_WAIT_FLAGS_WAIT_DEADLINE
+passes
+.Ar deadline_nsec
+to the fences as a hint.
+.Ar first_signaled
+is the index of the first object found signalled.
+A fence's error does not fail the wait; a sync file of the fence reports
+it.
+.It Dv DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT
+The same at the points in
+.Ar points ,
+and with
+.Dv DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE
+only until each point is submitted.
+.It Dv DRM_IOCTL_SYNCOBJ_RESET
+Take each object's fence away.
+.It Dv DRM_IOCTL_SYNCOBJ_SIGNAL
+Give each object a signalled fence.
+.It Dv DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL
+Add a signalled point to each object at its point in
+.Ar points ,
+or for point 0 give it a signalled fence.
+.It Dv DRM_IOCTL_SYNCOBJ_QUERY
+Write the point each object has reached into
+.Ar points ,
+0 for a binary object; with
+.Dv DRM_SYNCOBJ_QUERY_FLAGS_LAST_SUBMITTED ,
+its newest point.
+.It Dv DRM_IOCTL_SYNCOBJ_TRANSFER
+Give the fence of
+.Ar src_point
+of one object to
+.Ar dst_point
+of another, or make it the other's fence for point 0;
+.Ar flags
+may hold
+.Dv DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT ,
+which waits up to five seconds for the source point.
+.It Dv DRM_IOCTL_SYNCOBJ_EVENTFD
+Signal the
+.Xr eventfd 2
+.Ar fd
+once
+.Ar point
+signals, or with
+.Dv DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE
+once it is submitted.
+.El
+.Pp
+Each array call takes
+.Ar count_handles
+handles at the address
+.Ar handles .
+Padding and unused flags must be zero.
+.Ss Errors
+.Bl -tag -width EOPNOTSUPP
+.It Er EFAULT
+A bad address of handles or points.
+.It Er EINVAL
+No handles, an unknown flag or nonzero padding; a point not yet
+submitted; a handle
+.Dv DRM_IOCTL_SYNCOBJ_DESTROY
+or
+.Dv DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD
+does not know; a descriptor that is no sync object or sync file.
+.It Er EINTR
+A signal ended a wait.
+.It Er ENOENT
+A handle of no sync object, in every other call.
+.It Er ENOMEM
+No memory.
+.It Er EOPNOTSUPP
+A driver without the feature.
+.It Er ETIME
+The wait's time passed.
+.El
+.Sh SEE ALSO
+.Xr eventfd 2 ,
+.Xr ioctl 2 ,
+.Xr drm 4 ,
+.Xr dma-buf 7
+.Sh STANDARDS
+The calls, structures, errors and the numbering of points are Linux
+6.12's.
