@@ -839,6 +839,8 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
         return -1;
     if (!sock->tcb)
         return sock->shut_down ? 0 : -ENOTCONN;
+    if (sock->tcb->state == TCP_LISTEN)
+        return -ENOTCONN;
 
     for (;;) {
         rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
@@ -876,6 +878,10 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
     return (int)copy_len;
 }
 
+/**
+ * Read queued stream bytes without waiting, leaving them queued for a peek.
+ * Return SOCK_EAGAIN without input, or -ENOTCONN on a listener.
+ */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 {
     struct tcb *tcb;
@@ -886,6 +892,8 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
     if (!sock->tcb)
         return sock->shut_down ? 0 : -ENOTCONN;
     tcb = sock->tcb;
+    if (tcb->state == TCP_LISTEN)
+        return -ENOTCONN;
 
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0) {
