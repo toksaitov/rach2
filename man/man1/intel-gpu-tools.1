@@ -15,4 +15,6 @@ reads or writes device registers;
 .Nm intel_vbt_decode
 reads the Video BIOS Table.
 Each tool has its own arguments.
-The full IGT test binaries are built separately from these packaged tools.
+IGT's tests are not in the package; the x86-64 GNU root has them, built from the same source, and
+.Xr igt_runner 1
+runs them.

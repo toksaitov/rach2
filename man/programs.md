@@ -355,7 +355,7 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 | `xvinfo` | `x11-utils` | `/usr/bin/xvinfo` | [xvinfo(1)](man1/xvinfo.1) |
 | `xwininfo` | `x11-utils` | `/usr/bin/xwininfo` | [xwininfo(1)](man1/xwininfo.1) |
 
-GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos's WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt).
+GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos's WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt). IGT's tests, built from Debian's intel-gpu-tools source in the Debian builder guest, are under `/usr/libexec/igt-gpu-tools` on x86-64, with its runner `igt_runner` ([igt_runner(1)](man1/igt_runner.1)), `igt_resume` and `igt_results` ([igt_resume(1)](man1/igt_resume.1)) and `igt_comms_decoder` in `/usr/bin`; the source is pinned in [igt/sources.txt](../vendor/gnu/igt/sources.txt).
 
 ### Compilers, debugger and browser
 
