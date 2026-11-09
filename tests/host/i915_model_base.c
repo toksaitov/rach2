@@ -173,10 +173,10 @@ static uint32_t fifo_read(struct i915_model *m, void *priv, uint32_t reg)
 static void fifo_tick(struct i915_model *m, void *priv, uint32_t us)
 {
     struct i915_model_fifo *f = (struct i915_model_fifo *)priv;
-    uint64_t free = (uint64_t)f->free + (uint64_t)f->refill_per_us * us;
+    uint64_t room = (uint64_t)f->free + (uint64_t)f->refill_per_us * us;
 
     (void)m;
-    f->free = free > f->max ? f->max : (uint32_t)free;
+    f->free = room > f->max ? f->max : (uint32_t)room;
 }
 
 static const struct i915_model_block i915_model_base_fifo = {
