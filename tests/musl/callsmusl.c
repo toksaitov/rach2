@@ -32,8 +32,11 @@
  * of a root process under /proc, and reads its own. Its /proc directory is
  * root's while a change of ids leaves it not dumpable, and its own once
  * PR_SET_DUMPABLE makes it so, as on Linux, and so is a descriptor open on its
- * maps. mlock, munlock, mlockall and munlockall accept a mapped range, and
- * mlock fails on a gap with ENOMEM; mincore reports a touched page resident.
+ * maps. mlock, mlock2, munlock, mlockall and munlockall accept a mapped
+ * range and count in VmLck, a mapping made under MCL_FUTURE is locked, an
+ * unprivileged mlock past RLIMIT_MEMLOCK fails with ENOMEM and with a limit
+ * of 0 with EPERM, and mlock fails on a gap with ENOMEM; mincore reports a
+ * touched page resident.
  * getcpu reports a processor of the caller's affinity and node 0, and
  * personality keeps and returns its value. On x86-64 the ids 0xfffffffe read
  * back from getuid, geteuid, getgid and getegid unsigned, not as an error.
@@ -877,26 +880,116 @@ static int signals(void)
     return zombies();
 }
 
+/** VmLck of /proc/self/status in KiB, or -1 when it cannot be read. Read
+ * with no stdio, whose buffer would be memory that MCL_FUTURE locks. */
+static long locked_kb(void)
+{
+    static char text[4096];
+    int fd = open("/proc/self/status", O_RDONLY);
+    ssize_t n = fd < 0 ? -1 : read(fd, text, sizeof(text) - 1);
+    char *at;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = '\0';
+    at = strstr(text, "VmLck:");
+    return at ? strtol(at + 6, NULL, 10) : -1;
+}
+
 /**
- * Check mlock, munlock, mlockall and munlockall on a mapped range, mlock across
- * a gap, and mincore of a touched page. Returns 0, or 1 after the failure is
+ * In a child made unprivileged, with RLIMIT_MEMLOCK of one page: mlock of
+ * two pages fails with ENOMEM and of one succeeds, and with a limit of 0
+ * mlock fails with EPERM, as Linux's can_do_mlock answers. The child's
+ * status is 0, or the number of the check that failed.
+ */
+static int memlock_limit(char *p, long page)
+{
+    struct rlimit one = {(rlim_t)page, (rlim_t)page}, none = {0, 0};
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        if (setrlimit(RLIMIT_MEMLOCK, &one) != 0 || (geteuid() == 0 && setuid(65534) != 0)) {
+            _exit(1);
+        }
+        if (mlock(p, 2 * page) != -1 || errno != ENOMEM) {
+            _exit(2);
+        }
+        if (mlock(p, page) != 0 || locked_kb() != page / 1024 || munlock(p, page) != 0) {
+            _exit(3);
+        }
+        if (setrlimit(RLIMIT_MEMLOCK, &none) != 0 || mlock(p, page) != -1 || errno != EPERM) {
+            _exit(4);
+        }
+        _exit(0);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return 9;
+    }
+    return WEXITSTATUS(status);
+}
+
+/**
+ * Check mlockall and munlockall with VmLck, which held `base` KiB before,
+ * read after each, and that a mapping made under MCL_FUTURE is locked.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int lock_all(long page, long base)
+{
+    long kb = page / 1024;
+    char *q;
+
+    if (mlockall(MCL_CURRENT) != 0 || locked_kb() < base + 2 * kb || munlockall() != 0 ||
+        locked_kb() != 0) {
+        return fail("mlockall, and VmLck after mlockall and munlockall");
+    }
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0 || (base = locked_kb()) < 2 * kb) {
+        return fail("mlockall with MCL_FUTURE");
+    }
+    q = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED || locked_kb() != base + kb || munlockall() != 0 || locked_kb() != 0) {
+        return fail("a mapping under MCL_FUTURE is locked");
+    }
+    munmap(q, page);
+    return 0;
+}
+
+/**
+ * Check mlock, mlock2 with MLOCK_ONFAULT and munlock on a mapped range, with
+ * VmLck read after each call, and RLIMIT_MEMLOCK's errors; mlockall and
+ * munlockall, and MCL_FUTURE's lock of a later mapping; mlock across a gap;
+ * and mincore of a touched page. Returns 0, or 1 after the failure is
  * printed.
  */
 static int memory(void)
 {
-    long page = sysconf(_SC_PAGESIZE);
+    long page = sysconf(_SC_PAGESIZE), kb = page / 1024, base;
     unsigned char vec[2];
     char *p = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int rc;
 
-    if (p == MAP_FAILED) {
-        return fail("mmap");
+    if (p == MAP_FAILED || (base = locked_kb()) < 0) {
+        return fail("mmap, or VmLck of /proc/self/status");
     }
-    if (mlock(p, 2 * page) != 0 || munlock(p, 2 * page) != 0) {
-        return fail("mlock of a mapped range");
+    if (mlock(p, 2 * page) != 0 || locked_kb() != base + 2 * kb || munlock(p, 2 * page) != 0 ||
+        locked_kb() != base) {
+        return fail("mlock of a mapped range, and VmLck after mlock and munlock");
+    }
+    if (syscall(SYS_mlock2, p, page, 1 /* MLOCK_ONFAULT */) != 0 || locked_kb() != base + kb ||
+        munlock(p, page) != 0 || locked_kb() != base) {
+        return fail("mlock2 with MLOCK_ONFAULT, and VmLck after it");
+    }
+    if ((rc = memlock_limit(p, page)) != 0) {
+        errno = rc;
+        return fail("RLIMIT_MEMLOCK: ENOMEM past it, EPERM at 0 (errno is the check)");
     }
     held();
-    if (mlockall(MCL_CURRENT) != 0 || munlockall() != 0) {
-        return fail("mlockall");
+    if (lock_all(page, base) != 0) {
+        return 1;
     }
     held();
     munmap(p + page, page);
