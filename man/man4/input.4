@@ -145,6 +145,13 @@ x86-64, as
 .In linux/input.h
 lays it out under the C library's 64-bit
 .Vt time_t .
+An i386 program on the x86-64 kernel reads records of 16 bytes, and the
+bit sets of
+.Dv EVIOCGBIT
+and its kin in 32-bit
+.Vt long Ns s ,
+as Linux gives them
+.Pq Xr ia32 7 .
 Every record of a packet has the time of the packet's first event, read on
 the clock the open chose with
 .Dv EVIOCSCLOCKID :

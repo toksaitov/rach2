@@ -125,6 +125,27 @@ are the i386 calls' own.
 .Pa rach2/syscalls.md
 lists the calls the table runs in its compat column.
 .Pp
+An i386
+.Xr ioctl 2
+is taken by the type of its command, the second byte of its number, as
+Linux's
+.Fn compat_ioctl
+handlers take it.
+A command whose argument has one layout in both interfaces runs as the
+x86-64 call; one whose structure differs, such as
+.Dv DRM_IOCTL_VERSION ,
+.Dv SIOCGIFCONF
+or
+.Dv LOOP_GET_STATUS ,
+is translated to the x86-64 structure and its result back to the i386
+one; a command of a type no family takes, or one Linux refuses from
+i386 code, returns
+.Er ENOTTY .
+A read of an evdev node gives an i386 caller records of 16 bytes, with
+32-bit seconds and microseconds.
+.Pa rach2/ia32.md
+lists the families and what each translates.
+.Pp
 For a call that entered by
 .Ql int $0x80 ,
 a
