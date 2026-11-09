@@ -481,6 +481,42 @@ out:
  * Damage
  */
 
+/** Commit `damage` as FB_DAMAGE_CLIPS on each plane that shows `fb`, NULL
+ * for the whole framebuffer. The caller holds the commit lock. 0 or
+ * -errno. */
+static int32_t dirty_commit(struct drm_device *dev, struct drm_framebuffer *fb,
+                            struct drm_property_blob *damage)
+{
+    struct drm_atomic_state *state;
+    struct drm_plane_state *ps;
+    struct drm_plane *plane;
+    int32_t rc = 0;
+    uint32_t i;
+
+    state = drm_atomic_state_alloc(dev);
+    if (!state) {
+        return -ENOMEM;
+    }
+    for (i = 0; rc == 0 && i < dev->mode_config.num_plane; i++) {
+        plane = dev->mode_config.planes[i];
+        if (plane->state->fb != fb) {
+            continue;
+        }
+        ps = drm_atomic_get_plane_state(state, plane);
+        if (!ps) {
+            rc = -ENOMEM;
+            break;
+        }
+        drm_property_blob_put(ps->fb_damage_clips);
+        ps->fb_damage_clips = drm_property_blob_get(damage);
+    }
+    if (rc == 0) {
+        rc = drm_atomic_commit(state);
+    }
+    drm_atomic_state_free(state);
+    return rc;
+}
+
 /**
  * DIRTYFB, Linux's drm_mode_dirtyfb_ioctl with drm_atomic_helper_dirtyfb:
  * give the planes that show a framebuffer its changed rectangles as
@@ -492,7 +528,6 @@ int32_t drm_mode_dirtyfb_ioctl(struct drm_device *dev, void *data, struct drm_fi
     struct drm_mode_fb_dirty_cmd *req = (struct drm_mode_fb_dirty_cmd *)data;
     struct drm_property_blob *damage = NULL;
     struct drm_clip_rect *clips = NULL;
-    struct drm_atomic_state *state;
     struct drm_framebuffer *fb;
     struct drm_mode_rect *rects;
     uint32_t i, n = req->num_clips, flags = req->flags & DRM_MODE_FB_DIRTY_FLAGS, step = 1;
@@ -547,34 +582,32 @@ int32_t drm_mode_dirtyfb_ioctl(struct drm_device *dev, void *data, struct drm_fi
     if (rc != 0) {
         goto out;
     }
-    state = drm_atomic_state_alloc(dev);
-    if (!state) {
-        rc = -ENOMEM;
-    }
-    for (i = 0; state && rc == 0 && i < dev->mode_config.num_plane; i++) {
-        struct drm_plane *plane = dev->mode_config.planes[i];
-        struct drm_plane_state *ps;
-
-        if (plane->state->fb != fb) {
-            continue;
-        }
-        ps = drm_atomic_get_plane_state(state, plane);
-        if (!ps) {
-            rc = -ENOMEM;
-            break;
-        }
-        drm_property_blob_put(ps->fb_damage_clips);
-        ps->fb_damage_clips = drm_property_blob_get(damage);
-    }
-    if (rc == 0) {
-        rc = drm_atomic_commit(state);
-    }
-    drm_atomic_state_free(state);
+    rc = dirty_commit(dev, fb, damage);
     drm_modeset_unlock(dev);
 out:
     drm_property_blob_put(damage);
     kfree(clips);
     drm_framebuffer_put(fb);
+    return rc;
+}
+
+int32_t drm_framebuffer_dirty(struct drm_device *dev, struct drm_framebuffer *fb,
+                              const struct drm_mode_rect *rect)
+{
+    struct drm_property_blob *damage;
+    int32_t rc = 0;
+
+    if (!dev->mode_config.fb_dirty) {
+        return -ENOSYS;
+    }
+    damage = drm_property_create_blob(dev, (uint32_t)sizeof(*rect), rect, &rc);
+    if (!damage) {
+        return rc != 0 ? rc : -ENOMEM;
+    }
+    drm_modeset_lock_nointr(dev);
+    rc = dirty_commit(dev, fb, damage);
+    drm_modeset_unlock(dev);
+    drm_property_blob_put(damage);
     return rc;
 }
 

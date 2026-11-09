@@ -1404,6 +1404,13 @@ struct drm_mode_set {
  * SETCRTC and the console's mode set; the caller holds the commit lock.
  * 0 or the commit's error. May sleep. */
 int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
+
+/** Flush `rect` of `fb` to the display, the commit DIRTYFB makes, for the
+ * console's shadow: each plane that shows `fb` gets it as FB_DAMAGE_CLIPS.
+ * Takes the commit lock. 0, -ENOSYS for a device whose framebuffers need
+ * no flush (`fb_dirty` unset), or the commit's error. May sleep. */
+int32_t drm_framebuffer_dirty(struct drm_device *dev, struct drm_framebuffer *fb,
+                              const struct drm_mode_rect *rect);
 /** Run every nonblocking commit whose in-fences have all signalled, in the
  * order they were made: its planes and CRTCs programmed and its events
  * armed for the next vblank. The commit worker's body, and the host tests'
