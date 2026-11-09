@@ -1041,6 +1041,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "virtqueue",
+          "checks": "tests/host/virtqueue_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "vm",
           "checks": "tests/host/vm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
