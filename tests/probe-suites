@@ -62,4 +62,5 @@ musl/audioclientsmusl audio
 watchdogprobe watchdog
 udmabufprobe dmabuf
 fenceprobe dmabuf
+drmfuzz dmabuf
 vgpuprobe vgpu

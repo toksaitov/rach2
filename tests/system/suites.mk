@@ -190,8 +190,10 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # answer as Linux's, by limitsprobe's table. It is the case of
 # tests/cases/guest.limits.json, which etude runs, and has no target here.
 # `tests/run dmabuf`: sealed memfd ranges exported as dma-bufs, shared
-# pages across fork and close, and sync-file export, merge, info and import.
-# The guest case is tests/cases/guest.dmabuf.json and has no make target.
+# pages across fork and close, and sync-file export, merge, info and import;
+# and drmfuzz, an ordinary user's random ioctls on every node of the display
+# stack, in a boot with vkms, ended with no fault the kernel records. The
+# guest cases are tests/cases/guest.dmabuf.json and have no make target.
 # `tests/run vgpu`: QEMU's virtio-vga-gl with a virgl renderer under Rach2's
 # virtio-gpu driver: the capability sets, a context for each open, a 3D
 # texture uploaded and read back, a submission's sync-file out-fence passed

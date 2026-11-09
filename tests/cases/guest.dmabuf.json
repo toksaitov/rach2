@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "guest.dmabuf",
-  "summary": "udmabuf sharing, sync-file descriptors and fences with slow, concurrent and failing producers",
+  "summary": "udmabuf sharing, sync-file descriptors and fences with slow, concurrent and failing producers, and an ordinary user's random ioctls on every node of the display stack",
   "cases": [
     {
       "case_id": "guest.dmabuf.udmabuf",
@@ -320,6 +320,135 @@
             "fixture": "workspace"
           }
         ]
+      }
+    },
+    {
+      "case_id": "guest.dmabuf.drmfuzz",
+      "behavior": "An ordinary user's random ioctls, for a fixed count, on every display, dma-buf, sync-file and input node, the cards' handed over by root as seatd hands them, end with no fault the kernel records",
+      "units": [
+        "drmfuzz"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "100000",
+          "1"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "rach2.vkms"
+          ]
+        }
+      },
+      "execution": {
+        "program": "drmfuzz",
+        "stdin": null,
+        "role": "boot",
+        "privileges": "root, which opens the nodes before its child drops to uid 65534",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the child closes every descriptor by exiting, and the probe makes no file"
+      },
+      "assertions": [
+        {
+          "assertion_id": "open",
+          "checks": "root opens at least one node of the display stack: a DRM card or render node, an evdev node, /dev/udmabuf or sw_sync's file",
+          "source": "program"
+        },
+        {
+          "assertion_id": "calls",
+          "checks": "the child, as uid 65534 with no groups, makes every call of the count and exits by itself, with no signal",
+          "source": "program"
+        },
+        {
+          "assertion_id": "records",
+          "checks": "the kernel's log since the run began has no record of critical level or worse, which only a fault of the kernel writes",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 805306368,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "drmfuzz",
+          "node": "tests/drmfuzz",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "vkms is there only on a boot whose line has rach2.vkms, and on a running machine the cards are its own GPU's, which the fuzzer must not drive"
       }
     }
   ]
