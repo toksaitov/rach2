@@ -255,6 +255,37 @@ else
     row "[OPTIONAL]" "FUSE" "(make -C krffs mount); $(hint fuse)"
 fi
 
+# The testing PC's GPU, under WSL, where /dev/dxg reaches it: QEMU's virgl
+# display (tests/graphics/Readme.md) draws through Mesa's d3d12 driver with
+# the profile's environment and opens the render node, which the group
+# `render` alone may. Surfaceless EGL, since `-p gbm` would open card0, which
+# belongs to `video`. A renderer that is not the GPU's, llvmpipe above all,
+# would let virgl's runs measure the host's CPU.
+GPU_RENDERER="D3D12 (NVIDIA GeForce RTX 4080 SUPER)"
+if [ -e /dev/dxg ]; then
+    echo
+    echo "The testing PC's GPU, for the virgl display:"
+    if ! command -v eglinfo >/dev/null 2>&1; then
+        row "[MISSING]" "eglinfo" "$(hint mesa-utils-bin)"
+        missing=$((missing + 1))
+    else
+        found=$(GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA eglinfo -B -p surfaceless 2>/dev/null |
+            sed -n 's/^OpenGL core profile renderer: //p' | head -1)
+        if [ "$found" = "$GPU_RENDERER" ]; then
+            row "[PASS]" "GL renderer" "$found, for $(id -un)"
+        else
+            row "[FAIL]" "GL renderer" "${found:-none} for $(id -un); virgl needs $GPU_RENDERER"
+            missing=$((missing + 1))
+        fi
+    fi
+    if [ -r /dev/dri/renderD128 ] && [ -w /dev/dri/renderD128 ]; then
+        row "[PASS]" "render node" "/dev/dri/renderD128 opens for $(id -un)"
+    else
+        row "[FAIL]" "render node" "/dev/dri/renderD128 is closed to $(id -un); the account joins the group render"
+        missing=$((missing + 1))
+    fi
+fi
+
 # The judges: each tool's version beside the one tools/setup/judges records
 # from the testing host. A different version is reported, not counted
 # missing: the tree builds and runs with it, and only the recorded one
