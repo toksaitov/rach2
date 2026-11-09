@@ -8,6 +8,7 @@
 
 #include "../display/backlight.h"
 #include "../rfkill.h"
+#include "sysfs.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -15,12 +16,18 @@ struct comp {
     int len;
 };
 
-/* The components of the deepest path under /dev, /proc or /sys,
- * /sys/class/rtc/rtc0/device/power/wakeup. A path is split into one more
- * than this, so a longer one is counted past every depth a rule accepts and
- * answers ENOENT or ENOTDIR, where one cut at this depth would name a
- * shorter path. */
-#define SYNTH_MAXC 7
+/* The components of the deepest path under /dev, /proc or /sys: a
+ * connector's attribute below a PCI function, as
+ * /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-Virtual-1/edid, has
+ * eight, and a driver's entries may go two deeper. A path is split into one
+ * more than this, so a longer one is counted past every depth a rule
+ * accepts and answers ENOENT or ENOTDIR, where one cut at this depth would
+ * name a shorter path. */
+#define SYNTH_MAXC 10
+
+/* The links a path below /sys may go through to a fixed directory with
+ * more of the path after it, each of which classifies a new path. */
+#define SYNTH_SYS_HOPS 6
 
 /**
  * Split `path` at its slashes into at most `max` components in `c`,
@@ -885,6 +892,8 @@ const char *sysfs_attr(int node, int n)
     static const char *const backlight[] = {"actual_brightness", "bl_power", "brightness",
                                             "max_brightness",    "type",     0};
     static const char *const phy[] = {"index", "name", "macaddress", "uevent", 0};
+    static const char *const kernel[] = {"uevent_seqnum", 0};
+    static const char *const drm[] = {"version", 0};
     /* In the order of rfkill.h's RFKILL_ATTR_ numbers. */
     static const char *const rfkill[] = {"hard",       "hard_block_reasons",
                                          "index",      "name",
@@ -908,6 +917,8 @@ const char *sysfs_attr(int node, int n)
                               : node == SYSFS_BLOCK_DEV    ? device
                               : node == SYSFS_BLOCK_LOOP   ? loop
                               : node == SYSFS_BACKLIGHT    ? backlight
+                              : node == SYSFS_KERNEL       ? kernel
+                              : node == SYSFS_CLASS_DRM    ? drm
                                                            : 0;
     int i;
 
@@ -921,6 +932,20 @@ int sysfs_attr_writable(int node, int attr)
     return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1) ||
            (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
            (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE));
+}
+
+int sysfs_file_writable(int node, int key, int attr)
+{
+    return node == SYSFS_REG ? sysfs_node_writable(key) : sysfs_attr_writable(node, attr);
+}
+
+const char *sysfs_pci_attr(int attr)
+{
+    static const char *const names[SYSFS_PCI_ATTRS] = {
+        "uevent",           0,       "config",   "vendor",  "device", "subsystem_vendor",
+        "subsystem_device", "class", "revision", "boot_vga"};
+
+    return attr >= 0 && attr < SYSFS_PCI_ATTRS ? names[attr] : 0;
 }
 
 /** The part of a disk node's /sys path below the disk's directory: its
@@ -985,6 +1010,31 @@ static void synth_sys_radio_path(int node, int key, char *out, int cap, int *pos
     }
 }
 
+/** The path of a registered entry, or of a fixed directory numbered from
+ * SYSFS_KERNEL, into `out` of `cap` bytes: 1, with nothing written when
+ * `cap` is not positive, or 0 for any other node. */
+static int synth_sys_later_path(int node, int key, char *out, int cap)
+{
+    static const char *const later[] = {
+        "/sys/kernel",           "/sys/kernel/debug", "/sys/class/drm",           "/sys/dev/char",
+        "/sys/devices/platform", "/sys/bus/platform", "/sys/bus/platform/devices"};
+    int pos = 0;
+
+    if (cap <= 0) {
+        return 1;
+    }
+    if (node == SYSFS_REG) {
+        sysfs_node_path(key, out, cap);
+        return 1;
+    }
+    if (node < SYSFS_KERNEL || node > SYSFS_PLATFORM_LINKS) {
+        return 0;
+    }
+    synth_put(out, cap, &pos, later[node - SYSFS_KERNEL]);
+    out[pos] = '\0';
+    return 1;
+}
+
 void synth_sys_path(int node, int key, char *out, int cap)
 {
     static const char *const paths[] = {"/sys",
@@ -998,7 +1048,7 @@ void synth_sys_path(int node, int key, char *out, int cap)
                                         "/sys/devices/usb"};
     int pos = 0;
 
-    if (cap <= 0) {
+    if (synth_sys_later_path(node, key, out, cap)) {
         return;
     }
     if (SYSFS_IS_RADIO(node)) {
@@ -1078,14 +1128,33 @@ void synth_sys_path(int node, int key, char *out, int cap)
     out[pos] = '\0';
 }
 
+static int synth_classify_sysfs_fixed(const struct comp *c, int n, struct vpath *vp);
+
+/** The file of a PCI function's directory named `name`, SYSFS_PCI_*, or -1. */
+static int sys_pci_attr_of(struct comp name)
+{
+    int attr;
+
+    for (attr = 0; attr < SYSFS_PCI_ATTRS; attr++) {
+        if (sysfs_pci_attr(attr) && comp_eq(name, sysfs_pci_attr(attr))) {
+            return attr;
+        }
+    }
+    return -1;
+}
+
 /** A device's node, SYSFS_PCI_DEVICE or SYSFS_USB_DEVICE, at `c` of `n`
  * components below its parent `dir`, which is SYSFS_PCI_LINKS or
- * SYSFS_PCI_ROOT or a USB one: the link or directory, its uevent, or a PCI
- * function's config. */
+ * SYSFS_PCI_ROOT or a USB one: the link or directory, its uevent, a PCI
+ * function's other files (`sysfs_pci_attr`), or its `subsystem`, a link to
+ * /sys/bus/pci, which a path goes on through. */
 static int synth_classify_sys_device(const struct comp *c, int n, int dir, struct vpath *vp)
 {
+    static const struct comp bus_pci[2] = {{"bus", 3}, {"pci", 3}};
+    struct comp via[SYNTH_MAXC + 1];
     int pci = dir == SYSFS_PCI_LINKS || dir == SYSFS_PCI_ROOT;
     int key = pci ? sys_pci_key(c[0]) : sys_usb_key(c[0]);
+    int i;
 
     if (key < 0) {
         vp->kind = VNODE_ENOENT;
@@ -1096,9 +1165,23 @@ static int synth_classify_sys_device(const struct comp *c, int n, int dir, struc
     if (n == 1) {
         vp->kind =
             dir == SYSFS_PCI_LINKS || dir == SYSFS_USB_LINKS ? VNODE_SYS_LINK : VNODE_SYS_DIR;
-    } else if (comp_eq(c[1], "uevent") || (pci && comp_eq(c[1], "config"))) {
-        vp->procfile = comp_eq(c[1], "config") ? SYSFS_PCI_CONFIG : 0;
+    } else if (pci && sys_pci_attr_of(c[1]) >= 0) {
+        vp->procfile = sys_pci_attr_of(c[1]);
         vp->kind = n == 2 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+    } else if (!pci && comp_eq(c[1], "uevent")) {
+        vp->procfile = 0;
+        vp->kind = n == 2 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+    } else if (pci && comp_eq(c[1], "subsystem")) {
+        via[0] = bus_pci[0];
+        via[1] = bus_pci[1];
+        for (i = 2; i < n; i++) {
+            via[i] = c[i];
+        }
+        vp->syskey = 0;
+        synth_classify_sysfs_fixed(via, n, vp);
+        if (n == 2) {
+            vp->kind = VNODE_SYS_LINK;
+        }
     } else {
         vp->kind = VNODE_ENOENT;
     }
@@ -1322,6 +1405,11 @@ static int synth_classify_sys_block(const struct comp *c, int n, int dev, struct
     int key;
 
     vp->kind = VNODE_SYS_DIR;
+    if (dev && n >= 1 && comp_eq(c[0], "char")) {
+        vp->sysent = SYSFS_DEV_CHAR;
+        vp->kind = n == 1 ? VNODE_SYS_DIR : VNODE_ENOENT;
+        return vp->kind;
+    }
     if (dev && (n == 0 || !comp_eq(c[0], "block"))) {
         vp->sysent = SYSFS_DEV;
         vp->kind = n == 0 ? VNODE_SYS_DIR : VNODE_ENOENT;
@@ -1409,6 +1497,8 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
         return synth_classify_rfkill(c + 2, n - 2, rfkill_lookup(c[1].s, c[1].len), vp);
     } else if (comp_eq(c[0], "rtc")) {
         return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_CLASS_RTC, vp);
+    } else if (comp_eq(c[0], "drm")) {
+        return synth_classify_sys_attr(c + 1, n - 1, SYSFS_CLASS_DRM, 0, vp);
     } else if (comp_eq(c[0], "backlight") && n == 1) {
         vp->sysent = SYSFS_CLASS_BACKLIGHT;
     } else if (comp_eq(c[0], "backlight") && backlight_find(c[1].s, c[1].len) >= 0) {
@@ -1421,13 +1511,44 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
 }
 
 /**
- * Classify the components `c` of `n` below /sys: the fixed directories by
- * their names, a device by its name below a bus's `devices` or below the
- * directory of its bus under /sys/devices, and the rest through the
- * classifiers of /sys/block and /sys/dev, /sys/class, /sys/power and
- * /sys/devices/system.
+ * Classify the components `c` of `n`, at least one, below /sys among the
+ * fixed directories numbered from SYSFS_KERNEL, which hold drivers'
+ * entries: /sys/bus/platform and its `devices`, /sys/kernel with its
+ * `debug` and its attribute, and /sys/devices/platform. The kind, with any
+ * other name below them VNODE_ENOENT, or -1 for a path outside them.
  */
-static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
+static int synth_classify_sys_later(const struct comp *c, int n, struct vpath *vp)
+{
+    vp->kind = VNODE_SYS_DIR;
+    if (n >= 2 && comp_eq(c[0], "bus") && comp_eq(c[1], "platform")) {
+        vp->sysent = n == 2 ? SYSFS_BUS_PLATFORM : SYSFS_PLATFORM_LINKS;
+        if (n > 3 || (n == 3 && !comp_eq(c[2], "devices"))) {
+            vp->kind = VNODE_ENOENT;
+        }
+    } else if (n >= 2 && comp_eq(c[0], "kernel") && comp_eq(c[1], "debug")) {
+        vp->sysent = SYSFS_KERNEL_DEBUG;
+        vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
+    } else if (comp_eq(c[0], "kernel")) {
+        return synth_classify_sys_attr(c + 1, n - 1, SYSFS_KERNEL, 0, vp);
+    } else if (n >= 2 && comp_eq(c[0], "devices") && comp_eq(c[1], "platform")) {
+        vp->sysent = SYSFS_PLATFORM;
+        vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
+    } else {
+        return -1;
+    }
+    return vp->kind;
+}
+
+/**
+ * Classify the components `c` of `n` below /sys among the fixed nodes: the
+ * fixed directories by their names, a device by its name below a bus's
+ * `devices` or below the directory of its bus under /sys/devices, and the
+ * rest through the classifiers of /sys/block and /sys/dev, /sys/class,
+ * /sys/power and /sys/devices/system. A name the fixed nodes do not have is
+ * VNODE_ENOENT, which `synth_classify_sys_at` then looks for among the
+ * entries drivers added.
+ */
+static int synth_classify_sysfs_fixed(const struct comp *c, int n, struct vpath *vp)
 {
     int at;
 
@@ -1438,6 +1559,8 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
     }
     if (comp_eq(c[0], "bus") && n == 1) {
         vp->sysent = SYSFS_BUS;
+    } else if (synth_classify_sys_later(c, n, vp) >= 0) {
+        return vp->kind;
     } else if (comp_eq(c[0], "bus") && (comp_eq(c[1], "pci") || comp_eq(c[1], "usb"))) {
         at = comp_eq(c[1], "pci") ? SYSFS_BUS_PCI : SYSFS_BUS_USB;
         if (n == 2) {
@@ -1470,6 +1593,158 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
         vp->kind = VNODE_ENOENT;
     }
     return vp->kind;
+}
+
+static int synth_classify_sys_at(const struct comp *c, int n, struct vpath *vp, int hops);
+
+/** Clear the /sys coordinates of `vp` before a registered entry fills them. */
+static void synth_sys_clear(struct vpath *vp)
+{
+    vp->sysent = 0;
+    vp->syskey = 0;
+    vp->procfile = 0;
+    vp->sysreg = 0;
+}
+
+static int synth_sys_reg_walk(int h, const struct comp *c, int n, struct vpath *vp, int hops);
+
+/**
+ * Classify the components `c` of `n` below the directory `target`, a
+ * registered one or an anchor, which a link led to. Below an anchor a new
+ * path is made, the fixed directory's and the components after it, and
+ * classified whole, which costs one of the SYNTH_SYS_HOPS.
+ */
+static int synth_sys_reg_enter(int target, const struct comp *c, int n, struct vpath *vp, int hops)
+{
+    char path[192];
+    struct comp parts[SYNTH_MAXC + 1];
+    int node, key, pos, i, count;
+
+    if (sysfs_node_kind(target) == SYSFS_NODE_DIR) {
+        return synth_sys_reg_walk(target, c, n, vp, hops);
+    }
+    sysfs_node_anchor(target, &node, &key);
+    if (node < 0) {
+        vp->kind = VNODE_ENOENT;
+        return vp->kind;
+    }
+    if (n == 0) {
+        vp->sysent = node;
+        vp->syskey = key;
+        vp->kind = VNODE_SYS_DIR;
+        return vp->kind;
+    }
+    if (hops >= SYNTH_SYS_HOPS) {
+        vp->kind = VNODE_ENOENT;
+        return vp->kind;
+    }
+    synth_sys_path(node, key, path, (int)sizeof(path));
+    for (pos = 0; path[pos] != '\0'; pos++) {
+    }
+    for (i = 0; i < n; i++) {
+        int k;
+
+        if (pos + 1 + c[i].len >= (int)sizeof(path)) {
+            vp->kind = VNODE_ENOENT;
+            return vp->kind;
+        }
+        path[pos++] = '/';
+        for (k = 0; k < c[i].len; k++) {
+            path[pos++] = c[i].s[k];
+        }
+    }
+    path[pos] = '\0';
+    count = synth_split(path, parts, SYNTH_MAXC + 1);
+    return synth_classify_sys_at(parts + 1, count - 1, vp, hops + 1);
+}
+
+/**
+ * Classify the components `c` of `n` below the registered entry `h`, which
+ * the path reached by name: an attribute is a file, with `h` its key, and a
+ * path past it VNODE_ENOTDIR; a directory is a directory, and the path goes
+ * on among its entries; a link is classified as what it leads to, and a
+ * path that ends on it as VNODE_SYS_LINK with the link in `sysreg`.
+ */
+static int synth_sys_reg_walk(int h, const struct comp *c, int n, struct vpath *vp, int hops)
+{
+    int kind, child;
+
+    for (;;) {
+        kind = sysfs_node_kind(h);
+        synth_sys_clear(vp);
+        if (kind == SYSFS_NODE_ATTR) {
+            vp->sysent = SYSFS_REG;
+            vp->syskey = h;
+            vp->kind = n == 0 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+            return vp->kind;
+        }
+        if (kind == SYSFS_NODE_LINK) {
+            synth_sys_reg_enter(sysfs_node_target(h), c, n, vp, hops);
+            if (n == 0 && vp->kind == VNODE_SYS_DIR) {
+                vp->kind = VNODE_SYS_LINK;
+                vp->sysreg = h;
+            }
+            return vp->kind;
+        }
+        if (kind != SYSFS_NODE_DIR) {
+            vp->kind = VNODE_ENOENT;
+            return vp->kind;
+        }
+        if (n == 0) {
+            vp->sysent = SYSFS_REG;
+            vp->syskey = h;
+            vp->kind = VNODE_SYS_DIR;
+            return vp->kind;
+        }
+        child = sysfs_node_child(h, c[0].s, c[0].len);
+        if (child <= 0) {
+            vp->kind = VNODE_ENOENT;
+            return vp->kind;
+        }
+        h = child;
+        c++;
+        n--;
+    }
+}
+
+/**
+ * Classify the components `c` of `n` below /sys: among the fixed nodes
+ * first, and for a name they do not have, among the entries drivers added
+ * (sysfs.h) below the deepest fixed directory the path reaches. `hops`
+ * counts the links already gone through to a fixed directory.
+ */
+static int synth_classify_sys_at(const struct comp *c, int n, struct vpath *vp, int hops)
+{
+    struct vpath prefix;
+    int k, anchor, h;
+
+    if (synth_classify_sysfs_fixed(c, n, vp) != VNODE_ENOENT) {
+        return vp->kind;
+    }
+    for (k = n - 1; k >= 0; k--) {
+        prefix = *vp;
+        synth_sys_clear(&prefix);
+        if (synth_classify_sysfs_fixed(c, k, &prefix) != VNODE_ENOENT) {
+            break;
+        }
+    }
+    vp->kind = VNODE_ENOENT;
+    if (k < 0 || (prefix.kind != VNODE_SYS_DIR && prefix.kind != VNODE_SYS_LINK)) {
+        return vp->kind;
+    }
+    anchor = sysfs_anchor_find(prefix.sysent, prefix.syskey);
+    h = anchor > 0 ? sysfs_node_child(anchor, c[k].s, c[k].len) : 0;
+    if (h <= 0) {
+        return vp->kind;
+    }
+    return synth_sys_reg_walk(h, c + k + 1, n - k - 1, vp, hops);
+}
+
+/** Classify the components `c` of `n` below /sys, as `synth_classify_sys_at`
+ * does. */
+static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
+{
+    return synth_classify_sys_at(c, n, vp, 0);
 }
 
 /** Classify the components `c` of `n` below /proc/net/stat: the directory
@@ -1672,6 +1947,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->devdir = -1;
     vp->sysent = 0;
     vp->syskey = 0;
+    vp->sysreg = 0;
 
     n = synth_split(path, c, SYNTH_MAXC + 1);
 

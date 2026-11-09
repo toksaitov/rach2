@@ -29,6 +29,7 @@
 
 #include "../block/loop.h"
 #include "synthfs.h"
+#include "sysfs.h"
 #include "fd.h"
 #include "file.h"
 #include "devfs.h"
@@ -146,6 +147,7 @@
 #define SYSFS_INO_CPU       0x05000000u
 #define SYSFS_INO_BACKLIGHT 0x06000000u
 #define SYSFS_INO_RFKILL    0x08000000u
+#define SYSFS_INO_REG       0x09000000u
 #define SYSFS_INO_USB       0x80000000u
 #define SYSFS_INO_FILE      0x40000000u
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
@@ -4627,6 +4629,9 @@ int procfs_fd_is_sys(struct fd_entry *e)
 
 uint32_t sysfs_ino(int node, int key, int file)
 {
+    if (node == SYSFS_REG) {
+        return SYSFS_INO_REG + ((uint32_t)key & (SYSFS_NODES_MAX - 1u));
+    }
     if (node >= SYSFS_WLAN_PHY && node <= SYSFS_WLAN_DRIVER)
         return 0x07000000u | ((uint32_t)(node - SYSFS_WLAN_PHY) << 20) | ((uint32_t)key << 8) |
                (uint32_t)file;
@@ -4654,7 +4659,7 @@ uint32_t sysfs_ino(int node, int key, int file)
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
     if (node == SYSFS_PCI_DEVICE) {
-        return SYSFS_INO_PCI + ((uint32_t)key << 2) + (uint32_t)file;
+        return SYSFS_INO_PCI + ((uint32_t)key << 4) + ((uint32_t)file & 15u);
     }
     if (node == SYSFS_USB_DEVICE && file == 2) {
         return SYSFS_INO_FILE | (uint32_t)key;
@@ -4699,12 +4704,65 @@ static int sysfs_usb_find(int key, struct usb_sys_row *r)
 
 /** Whether the PCI function `key` answers: its vendor is not all ones, and
  * a function past the first is one of a device that has several. */
-static int sysfs_pci_present(int key)
+static int sysfs_pci_real(int key)
 {
     uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31);
 
     return pci_read_config16(bus, dev, (uint8_t)(key & 7), 0x00) != 0xFFFFu &&
            ((key & 7) == 0 || (pci_read_config8(bus, dev, 0, 0x0E) & 0x80) != 0);
+}
+
+/** Whether the PCI function `key` is there: a real one, or one a driver
+ * reports (`sysfs_pci_virtual`). */
+static int sysfs_pci_present(int key)
+{
+    return sysfs_pci_real(key) || sysfs_pci_virtual(key, NULL);
+}
+
+/**
+ * The identity of the PCI function `key` into `*id`: from its configuration
+ * space, or the one a driver reports for a function with no device behind
+ * it. boot_vga is 1 for the first VGA function in bus order that decodes
+ * memory and I/O, the one the firmware's display ran on, as Linux's VGA
+ * arbiter takes it. 0, or -ENOENT for a function that is not there.
+ */
+static int sysfs_pci_ident(int key, struct sysfs_pci_ident *id)
+{
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
+    pci_device_t p;
+    uint32_t sub = 0, ids;
+    int n, k;
+
+    if (!sysfs_pci_real(key)) {
+        return sysfs_pci_virtual(key, id) ? 0 : -ENOENT;
+    }
+    ids = pci_read_config32(bus, dev, fn, 0x00);
+    if ((pci_read_config8(bus, dev, fn, 0x0E) & 0x7F) == 0) {
+        sub = pci_read_config32(bus, dev, fn, 0x2C);
+    }
+    id->vendor = (uint16_t)(ids & 0xFFFFu);
+    id->device = (uint16_t)(ids >> 16);
+    id->subsystem_vendor = (uint16_t)(sub & 0xFFFFu);
+    id->subsystem_device = (uint16_t)(sub >> 16);
+    id->class = pci_read_config32(bus, dev, fn, 0x08) >> 8;
+    id->revision = pci_read_config8(bus, dev, fn, 0x08);
+    id->boot_vga = 0;
+    for (n = 0; (id->class >> 8) == 0x0300u && pci_nth(n, &p); n++) {
+        k = p.bus << 8 | p.device << 3 | p.function;
+        if (p.class_code == 0x03 && p.subclass == 0x00 &&
+            (pci_read_config16(p.bus, p.device, p.function, 0x04) & 3u) == 3u) {
+            id->boot_vga = k == key;
+            break;
+        }
+    }
+    return 0;
+}
+
+int sysfs_pci_is_vga(int key)
+{
+    struct sysfs_pci_ident id;
+
+    return sysfs_pci_ident(key, &id) == 0 && (id.class >> 8) == 0x0300u;
 }
 
 int sysfs_device_key(int node, int n)
@@ -4714,7 +4772,18 @@ int sysfs_device_key(int node, int n)
     int i, key, seen = 0;
 
     if (node == SYSFS_PCI_DEVICE) {
-        return pci_nth(n, &p) ? p.bus << 8 | p.device << 3 | p.function : -1;
+        if (pci_nth(n, &p)) {
+            return p.bus << 8 | p.device << 3 | p.function;
+        }
+        for (i = 0; pci_nth(i, &p); i++) {
+        }
+        n -= i;
+        for (i = 0; (key = sysfs_pci_virtual_nth(i)) >= 0; i++) {
+            if (!sysfs_pci_real(key) && n-- == 0) {
+                return key;
+            }
+        }
+        return -1;
     }
     if (node == SYSFS_CPUN) {
         for (i = 0; i < NR_CPUS; i++) {
@@ -5017,6 +5086,9 @@ int sysfs_device_exists(int node, int key)
     if (node == SYSFS_RFKILL) {
         return rfkill_present(key);
     }
+    if (node == SYSFS_REG) {
+        return sysfs_node_kind(key) != 0;
+    }
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
 }
 
@@ -5063,6 +5135,16 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
 
     if (!sysfs_attr(node, attr)) {
         return -ENOENT;
+    }
+    if (node == SYSFS_KERNEL) {
+        ap_u32(t, sysfs_uevent_seqnum());
+        ap_ch(t, '\n');
+        return t->len;
+    }
+    if (node == SYSFS_CLASS_DRM) {
+        /* Linux's drm_sysfs.c: the core's version and date. */
+        ap_str(t, "drm 1.1.0 20060810\n");
+        return t->len;
     }
     if (node == SYSFS_RTC_POWER) {
         ap_str(t, "enabled\n");
@@ -5267,9 +5349,9 @@ static void ap_u32_3(struct procfs_text *t, uint32_t v)
 static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
 {
     struct usb_sys_row r;
+    struct sysfs_pci_ident id;
     char name[16];
-    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
-    uint32_t cls, ids, sub = 0;
+    uint32_t cls, ids, sub;
 
     if (node == SYSFS_USB_DEVICE) {
         if (sysfs_usb_find(key, &r) < 0) {
@@ -5288,14 +5370,12 @@ static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
         ap_str(t, "\nDEVTYPE=usb_device\n");
         return t->len;
     }
-    if (!sysfs_pci_present(key)) {
+    if (sysfs_pci_ident(key, &id) != 0) {
         return -ENOENT;
     }
-    cls = pci_read_config32(bus, dev, fn, 0x08) >> 8;
-    ids = pci_read_config32(bus, dev, fn, 0x00);
-    if ((pci_read_config8(bus, dev, fn, 0x0E) & 0x7F) == 0) {
-        sub = pci_read_config32(bus, dev, fn, 0x2C);
-    }
+    cls = id.class;
+    ids = (uint32_t)id.vendor | (uint32_t)id.device << 16;
+    sub = (uint32_t)id.subsystem_vendor | (uint32_t)id.subsystem_device << 16;
     synth_sys_device_name(SYSFS_PCI_DEVICE, key, name, sizeof(name));
     ap_str(t, "PCI_CLASS=");
     ap_hex(t, cls, cls > 0xFFFFFu ? 6 : cls > 0xFFFFu ? 5 : 4);
@@ -5451,9 +5531,33 @@ static int procfs_gen_pciconfig(struct procfs_text *t, int key)
 {
     uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
     uint32_t size = 256, off, v;
+    struct sysfs_pci_ident id;
+    uint8_t header[256];
 
-    if (!sysfs_pci_present(key)) {
-        return -ENOENT;
+    if (!sysfs_pci_real(key)) {
+        if (sysfs_pci_ident(key, &id) != 0) {
+            return -ENOENT;
+        }
+        /* A reported function's header: its IDs, revision, class and
+         * subsystem IDs at their offsets, a type 0 header, and zeros. */
+        k_memset(header, 0, sizeof(header));
+        header[0x00] = (uint8_t)id.vendor;
+        header[0x01] = (uint8_t)(id.vendor >> 8);
+        header[0x02] = (uint8_t)id.device;
+        header[0x03] = (uint8_t)(id.device >> 8);
+        header[0x08] = id.revision;
+        header[0x09] = (uint8_t)id.class;
+        header[0x0A] = (uint8_t)(id.class >> 8);
+        header[0x0B] = (uint8_t)(id.class >> 16);
+        header[0x2C] = (uint8_t)id.subsystem_vendor;
+        header[0x2D] = (uint8_t)(id.subsystem_vendor >> 8);
+        header[0x2E] = (uint8_t)id.subsystem_device;
+        header[0x2F] = (uint8_t)(id.subsystem_device >> 8);
+        size = proc_privileged(current_proc) ? 256u : 64u;
+        for (off = 0; off < size; off++) {
+            ap_ch(t, (char)header[off]);
+        }
+        return t->len;
     }
     if (pci_read_config32_ext(bus, dev, fn, 0x100) != 0xFFFFFFFFu) {
         size = 4096;
@@ -5470,6 +5574,73 @@ static int procfs_gen_pciconfig(struct procfs_text *t, int key)
         ap_ch(t, (char)(v >> 24));
     }
     return t->len;
+}
+
+/**
+ * Render the file `attr` of the PCI function `key`, a SYSFS_PCI_* past its
+ * config, as Linux's pci-sysfs.c writes it: the IDs as 0x and four hex
+ * digits, the class as 0x and six, the revision as 0x and two, and
+ * boot_vga as 0 or 1, which only a VGA function has. -ENOENT for a
+ * function, or a boot_vga, that is not there.
+ */
+static int procfs_gen_pciattr(struct procfs_text *t, int key, int attr)
+{
+    static const char digits[] = "0123456789abcdef";
+    struct sysfs_pci_ident id;
+    uint32_t v;
+    int width = 4, i;
+
+    if (sysfs_pci_ident(key, &id) != 0) {
+        return -ENOENT;
+    }
+    if (attr == SYSFS_PCI_BOOT_VGA) {
+        if ((id.class >> 8) != 0x0300u) {
+            return -ENOENT;
+        }
+        ap_str(t, id.boot_vga ? "1\n" : "0\n");
+        return t->len;
+    }
+    v = attr == SYSFS_PCI_VENDOR             ? id.vendor
+        : attr == SYSFS_PCI_DEVICE_ID        ? id.device
+        : attr == SYSFS_PCI_SUBSYSTEM_VENDOR ? id.subsystem_vendor
+        : attr == SYSFS_PCI_SUBSYSTEM_DEVICE ? id.subsystem_device
+        : attr == SYSFS_PCI_CLASS            ? id.class
+                                             : id.revision;
+    width = attr == SYSFS_PCI_CLASS ? 6 : attr == SYSFS_PCI_REVISION ? 2 : 4;
+    ap_str(t, "0x");
+    for (i = width - 1; i >= 0; i--) {
+        ap_ch(t, digits[(v >> (i * 4)) & 0xFu]);
+    }
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/**
+ * Render the registered attribute `handle` (sysfs.h) through its `show`,
+ * into room that grows to what the show asks for, up to SYSFS_SHOW_MAX:
+ * its length, or the show's error, -ENOMEM when the heap has no room.
+ */
+static int procfs_gen_regattr(struct procfs_text *t, int handle)
+{
+    int32_t want = 4096, got;
+
+    for (;;) {
+        if (procfs_text_room(t, t->len + want) != 0) {
+            return -ENOMEM;
+        }
+        got = sysfs_node_show(handle, t->buf + t->len, (uint32_t)(t->cap - 1 - t->len));
+        if (got < 0) {
+            return got;
+        }
+        if (got <= t->cap - 1 - t->len) {
+            t->len += got;
+            return t->len;
+        }
+        if ((uint32_t)got > SYSFS_SHOW_MAX) {
+            return -EFBIG;
+        }
+        want = got;
+    }
 }
 
 /**
@@ -5509,8 +5680,14 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
         return procfs_gen_sysattr(t, vp->sysent, vp->procfile);
     }
     *key = vp->syskey;
+    if (vp->sysent == SYSFS_REG) {
+        return procfs_gen_regattr(t, vp->syskey);
+    }
     if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile == SYSFS_PCI_CONFIG) {
         return procfs_gen_pciconfig(t, vp->syskey);
+    }
+    if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile >= SYSFS_PCI_VENDOR) {
+        return procfs_gen_pciattr(t, vp->syskey, vp->procfile);
     }
     return procfs_gen_uevent(t, vp->sysent, vp->syskey);
 }
@@ -5860,6 +6037,9 @@ int procfs_fd_writable(struct fd_entry *e)
     }
     f = (const struct procfs_file *)e->priv;
     if (f->origin_file == SYNTH_SYS_UEVENT) {
+        if (f->origin_task >> 8 == SYSFS_REG) {
+            return sysfs_node_writable(f->origin_pid) ? (int)sysfs_node_mode(f->origin_pid) : 0;
+        }
         return sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255) ? 0644 : 0;
     }
     if (f->origin_file == SYNTH_PROC_ACPI_CALL) {
@@ -6548,6 +6728,8 @@ static int32_t procfs_sysattr_read(fd_entry_t *e, char __user *buf, uint32_t cou
               ? procfs_gen_backlight(&t, f->origin_pid, f->origin_task & 255)
           : f->origin_task >> 8 == SYSFS_RFKILL
               ? procfs_gen_rfkill(&t, f->origin_pid, f->origin_task & 255)
+          : f->origin_task >> 8 == SYSFS_REG
+              ? procfs_gen_regattr(&t, f->origin_pid)
               : procfs_gen_sysattr(&t, f->origin_task >> 8, f->origin_task & 255);
     if (len < 0 || t.nomem) {
         kfree(t.buf);
@@ -6594,6 +6776,26 @@ static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
     return v;
 }
 
+/** Write the registered attribute `handle` (sysfs.h): the `count` bytes at
+ * `buf`, at most 4096, Linux's page, go to its `store` as written. Its
+ * result, -EINVAL past 4096 bytes, -EFAULT or -ENOMEM. */
+static int32_t procfs_regattr_write(int handle, const char __user *buf, uint32_t count)
+{
+    char *copy;
+    int32_t rc;
+
+    if (count > 4096) {
+        return -EINVAL;
+    }
+    copy = kmalloc(count ? count : 1u);
+    if (!copy) {
+        return -ENOMEM;
+    }
+    rc = copy_from_user(copy, buf, count) != 0 ? -EFAULT : sysfs_node_store(handle, copy, count);
+    kfree(copy);
+    return rc;
+}
+
 /**
  * Write a writable /sys attribute, as Linux's do. rtc0's wakealarm takes
  * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
@@ -6607,7 +6809,9 @@ static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
  * the errors above. A backlight's brightness and bl_power take what
  * `backlight_store` takes, and have its errors; a radio switch's soft and
  * state take what `rfkill_store` takes. A write of more than 31 bytes,
- * which would be read in part, is -EINVAL and changes nothing.
+ * which would be read in part, is -EINVAL and changes nothing. A registered
+ * attribute (sysfs.h) takes the bytes as written, at most 4096, Linux's
+ * page, through its `store`.
  */
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -6619,6 +6823,9 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     int relative;
     int32_t rc;
 
+    if (f->origin_task >> 8 == SYSFS_REG) {
+        return procfs_regattr_write(f->origin_pid, buf, count);
+    }
     if (count > sizeof(text) - 1) {
         return -EINVAL;
     }
@@ -7117,7 +7324,7 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_PROC_ACPI_CALL) {
         return procfs_open_acpicall(flags);
     }
-    if (vp->kind == VNODE_SYS_FILE && sysfs_attr_writable(vp->sysent, vp->procfile) &&
+    if (vp->kind == VNODE_SYS_FILE && sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) &&
         (flags & 3) != 0) {
         return procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
     }

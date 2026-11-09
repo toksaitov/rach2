@@ -235,6 +235,10 @@ int sysfs_device_key(int node, int n);
  * /sys directory `node` (SYSFS_KEYED) is there. */
 int sysfs_device_exists(int node, int key);
 
+/** Whether the PCI function `key` is there and of the VGA class, so that
+ * its directory has boot_vga. */
+int sysfs_pci_is_vga(int key);
+
 /** The inode an open descriptor of /proc or /sys, `e`, has by the file it
  * was opened on, so that fstat reports what the stat of its path does; 0
  * when `e` is no such descriptor. */
