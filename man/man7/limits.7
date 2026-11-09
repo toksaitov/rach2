@@ -5,7 +5,7 @@
 .Nm limits
 .Nd process resource limits
 .Sh DESCRIPTION
-Each process has six resource limits.
+Each process has seven resource limits.
 Each has an enforced soft value and a hard value that bounds the soft value.
 .Xr prlimit64 2
 maintains them;
@@ -63,6 +63,26 @@ The bytes of the stack an exec gives a program, 8 MiB soft by default.
 The bytes of a core file, 0 soft by default, which leaves none, as
 .Xr core 5
 describes.
+.It Dv RLIMIT_MEMLOCK
+The bytes of memory a process may lock, 8 MiB soft and hard by default,
+as on Linux:
+the pages of its regions locked by
+.Xr mlock 2 ,
+.Xr mlockall 2
+or
+.Dv MAP_LOCKED ,
+and the pages a driver pins for a device on its behalf.
+A caller with effective user ID 0 is exempt.
+.Fn mlock
+past the soft limit fails with
+.Er ENOMEM ,
+and with a soft limit of 0 with
+.Er EPERM ;
+.Dv MAP_LOCKED
+and growth under
+.Dv MCL_FUTURE
+fail with
+.Er EAGAIN .
 .It Dv RLIMIT_FSIZE
 The bytes a file the process writes may reach, no limit by default.
 A write that would pass the soft limit writes the bytes below it, and one
