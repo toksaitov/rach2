@@ -17,12 +17,14 @@
 
 #define DFS_IFDIR 0040000u
 #define DFS_IFREG 0100000u
+#define DFS_IFLNK 0120000u
 
 /*
- * A directory or a file. A directory's children are a list in the order
- * they were made, which is the order it lists them. `refs` counts the
- * holds of the walks and of the descriptions open on the node; a node taken
- * out (`removed`) is off its parent's list and is freed by its last put.
+ * A directory, a file or a symbolic link. A directory's children are a
+ * list in the order they were made, which is the order it lists them.
+ * `refs` counts the holds of the walks and of the descriptions open on the
+ * node; a node taken out (`removed`) is off its parent's list and is freed
+ * by its last put, which drops its hold on its owner.
  */
 struct debugfs_node {
     char name[DEBUGFS_NAME_MAX + 1];
@@ -34,20 +36,24 @@ struct debugfs_node {
     uint64_t ino;
     uint32_t refs;
     int removed;
-    const struct file_ops *ops; /* a file's */
-    debugfs_open_fn open;       /* a file's, or NULL */
-    void *data;                 /* a file's registrant's, its descriptors' `priv` */
-    int64_t time_s, time_ns;    /* when it was made: its access, change and modification */
+    const struct file_ops *ops;            /* a file's */
+    debugfs_open_fn open;                  /* a file's, or NULL */
+    const struct debugfs_text_ops *text;   /* a text file's, or NULL */
+    void *data;                            /* a file's registrant's, its descriptors' `priv` */
+    char *target;                          /* a link's, kmalloc'd */
+    uint64_t size;                         /* a file's, 0 until a truncation sets it */
+    const struct debugfs_owner *owner_ops; /* what the node holds, or NULL */
+    void *owner;
+    int64_t time_s, time_ns; /* when it was made: its access, change and modification */
 };
 
 /* The root directory, which lasts the life of the kernel. Linux's default
  * mode is 0700, root's: no one else may look below /sys/kernel/debug. */
-static struct debugfs_node root = {"",   &root, NULL, NULL, DFS_IFDIR | 0700u, 0, 0, 1, 1, 0, NULL,
-                                   NULL, NULL,  0,    0};
+static struct debugfs_node root = {
+    "",   &root, NULL, NULL, DFS_IFDIR | 0700u, 0, 0, 1, 1, 0, NULL, NULL, NULL, NULL, NULL, 0,
+    NULL, NULL,  0,    0};
 static uint64_t last_ino = 1;
 static int started;
-
-static int32_t sync_info_open(fd_entry_t *e, int flags);
 
 /** Whether `n` is a directory. */
 static int is_dir(const struct debugfs_node *n)
@@ -79,7 +85,7 @@ static struct debugfs_node *child(const struct debugfs_node *d, const char *name
 }
 
 /** A new node `name[0..len)` of `mode` at the end of `d`'s list, stamped
- * now; NULL when the heap has no room. */
+ * now and holding `d`'s owner; NULL when the heap has no room. */
 static struct debugfs_node *make(struct debugfs_node *d, const char *name, uint32_t len,
                                  uint32_t mode)
 {
@@ -94,6 +100,11 @@ static struct debugfs_node *make(struct debugfs_node *d, const char *name, uint3
     n->parent = d;
     n->mode = mode;
     n->ino = ++last_ino;
+    n->owner_ops = d->owner_ops;
+    n->owner = d->owner;
+    if (n->owner_ops) {
+        n->owner_ops->get(n->owner);
+    }
     get_current_time(&n->time_s, &n->time_ns);
     for (link = &d->children; *link; link = &(*link)->next) {
     }
@@ -101,11 +112,19 @@ static struct debugfs_node *make(struct debugfs_node *d, const char *name, uint3
     return n;
 }
 
-/** Free `n` once it is taken out and nothing holds it. */
+/** Free `n` once it is taken out and nothing holds it, then let go of its
+ * owner, which may free what the owner's files use. */
 static void settle(struct debugfs_node *n)
 {
     if (n != &root && n->removed && n->refs == 0 && !n->children) {
+        const struct debugfs_owner *ops = n->owner_ops;
+        void *owner = n->owner;
+
+        kfree(n->target);
         kfree(n);
+        if (ops) {
+            ops->put(owner);
+        }
     }
 }
 
@@ -135,14 +154,18 @@ static const char *next_name(const char *path, int *len)
     return path;
 }
 
-int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops,
-                            debugfs_open_fn open, void *data)
+/**
+ * Make the node `path` of `mode`, its type bits among them, and the
+ * directories on the way: the node in `*out`, or -EINVAL, -EEXIST,
+ * -ENOTDIR or -ENOMEM as `debugfs_create_file` gives them.
+ */
+static int32_t create(const char *path, uint32_t mode, struct debugfs_node **out)
 {
     struct debugfs_node *d = &root, *n;
     const char *name, *rest;
     int len;
 
-    if (!ops || !path || !next_name(path, &len)) {
+    if (!path || !next_name(path, &len)) {
         return -EINVAL;
     }
     for (rest = path; (name = next_name(rest, &len)) != NULL; rest = name + len) {
@@ -172,13 +195,90 @@ int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_o
     if (n) {
         return -EEXIST;
     }
-    n = make(d, name, (uint32_t)(rest - name), DFS_IFREG | (mode & 07777u));
+    n = make(d, name, (uint32_t)(rest - name), mode);
     if (!n) {
         return -ENOMEM;
     }
-    n->ops = ops;
-    n->open = open;
-    n->data = data;
+    *out = n;
+    return 0;
+}
+
+int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops,
+                            debugfs_open_fn open, void *data)
+{
+    struct debugfs_node *n;
+    int32_t rc;
+
+    if (!ops) {
+        return -EINVAL;
+    }
+    rc = create(path, DFS_IFREG | (mode & 07777u), &n);
+    if (rc == 0) {
+        n->ops = ops;
+        n->open = open;
+        n->data = data;
+    }
+    return rc;
+}
+
+static const struct file_ops text_ops;
+
+int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugfs_text_ops *ops,
+                            void *data)
+{
+    struct debugfs_node *n;
+    int32_t rc;
+
+    if (!ops || !ops->show) {
+        return -EINVAL;
+    }
+    rc = create(path, DFS_IFREG | (mode & 07777u), &n);
+    if (rc == 0) {
+        n->ops = &text_ops;
+        n->text = ops;
+        n->data = data;
+    }
+    return rc;
+}
+
+int32_t debugfs_create_dir(const char *path, const struct debugfs_owner *ops, void *owner)
+{
+    struct debugfs_node *n;
+    int32_t rc = create(path, DFS_IFDIR | 0755u, &n);
+
+    if (rc == 0 && ops) {
+        if (n->owner_ops) {
+            n->owner_ops->put(n->owner);
+        }
+        n->owner_ops = ops;
+        n->owner = owner;
+        ops->get(owner);
+    }
+    return rc;
+}
+
+int32_t debugfs_create_symlink(const char *path, const char *target)
+{
+    struct debugfs_node *n;
+    uint32_t len;
+    char *copy;
+    int32_t rc;
+
+    if (!target) {
+        return -EINVAL;
+    }
+    len = (uint32_t)k_strlen(target);
+    copy = kmalloc(len + 1u);
+    if (!copy) {
+        return -ENOMEM;
+    }
+    k_memcpy(copy, target, len + 1u);
+    rc = create(path, DFS_IFLNK | 0777u, &n);
+    if (rc != 0) {
+        kfree(copy);
+        return rc;
+    }
+    n->target = copy;
     return 0;
 }
 
@@ -218,19 +318,18 @@ void debugfs_remove(const char *path)
     }
 }
 
+static int32_t text_bind(const struct debugfs_node *n, fd_entry_t *e);
+
 int32_t debugfs_bind(void *node, fd_entry_t *e, int flags)
 {
     struct debugfs_node *n = node;
-    int32_t rc;
 
+    if (n->text) {
+        return text_bind(n, e);
+    }
     e->ops = n->ops;
     e->priv = n->data;
-    rc = n->open ? n->open(e, flags) : 0;
-    if (rc != 0) {
-        e->ops = NULL;
-        e->priv = NULL;
-    }
-    return rc;
+    return n->open ? n->open(e, flags) : 0;
 }
 
 /* The VFS operations. A node handle is a `struct debugfs_node`; NULL is the
@@ -289,7 +388,8 @@ static void dfs_put(struct vfs_mount *mnt, void *node)
 }
 
 /** The `getattr` of debugfs: a directory has two links and one for each
- * subdirectory, a file one, and both a size of 0, as Linux's debugfs has. */
+ * subdirectory, a file or a symbolic link one, and each a size of 0 until a
+ * truncation sets a file's, as Linux's debugfs has. */
 static int dfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct debugfs_node *n = node_of(node), *c;
@@ -300,6 +400,7 @@ static int dfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->uid = n->uid;
     st->gid = n->gid;
     st->nlink = 1;
+    st->size = n->size;
     if (is_dir(n)) {
         st->nlink = n->removed ? 0 : 2;
         for (c = n->children; c; c = c->next) {
@@ -353,6 +454,37 @@ static int dfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return 1;
 }
 
+/** The `truncate` of debugfs, as Linux's simple_setattr: a file keeps no
+ * bytes, so it takes the size, which stat reports, and nothing else. */
+static int dfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    struct debugfs_node *n = node_of(handle);
+
+    (void)mnt;
+    if (is_dir(n)) {
+        return -EISDIR;
+    }
+    n->size = size;
+    return 0;
+}
+
+/** The `readlink` of debugfs: a link's target, cut to `cap` bytes, without
+ * a NUL; its length, or -EINVAL for a node that is no link. */
+static int dfs_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    struct debugfs_node *n = node_of(node);
+    uint32_t len;
+
+    (void)mnt;
+    if (!n->target) {
+        return -EINVAL;
+    }
+    len = (uint32_t)k_strlen(n->target);
+    len = len < cap ? len : cap;
+    k_memcpy(buf, n->target, len);
+    return (int)len;
+}
+
 /** The `statfs` of debugfs, which has no blocks. */
 static int dfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
@@ -403,35 +535,42 @@ static int dfs_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 }
 
 const struct vfs_ops debugfs_vops = {
-    dfs_lookup,  0,                       /* lookup_rest */
-    dfs_hold,    dfs_put, dfs_getattr, 0, /* setattr */
-    0,                                    /* open */
-    0,                                    /* release */
-    0,                                    /* read: the descriptor's operations read a file */
-    0,                                    /* write */
-    0,                                    /* truncate */
-    0,                                    /* fsync */
-    dfs_readdir, 0,                       /* create */
-    0,                                    /* unlink */
-    0,                                    /* mkdir */
-    0,                                    /* rmdir */
-    0,                                    /* rename */
-    0,                                    /* link */
-    0,                                    /* readlink */
-    dfs_statfs,  0,                       /* sync */
-    0,                                    /* prepare_unmount */
-    0,                                    /* abort_unmount */
-    0,                                    /* unmount */
-    dfs_path,    0,                       /* symlink */
-    0,                                    /* mknod */
-    0,                                    /* pin */
-    0,                                    /* unpin */
-    0,                                    /* remount */
-    0,                                    /* fallocate */
-    0,                                    /* fdatasync */
-    0,                                    /* lock_node */
-    0,                                    /* unlock_node */
-    0,                                    /* shutdown */
+    dfs_lookup,
+    0, /* lookup_rest */
+    dfs_hold,
+    dfs_put,
+    dfs_getattr,
+    0,            /* setattr */
+    0,            /* open */
+    0,            /* release */
+    0,            /* read: the descriptor's operations read a file */
+    0,            /* write */
+    dfs_truncate, /* truncate */
+    0,            /* fsync */
+    dfs_readdir,
+    0,            /* create */
+    0,            /* unlink */
+    0,            /* mkdir */
+    0,            /* rmdir */
+    0,            /* rename */
+    0,            /* link */
+    dfs_readlink, /* readlink */
+    dfs_statfs,
+    0, /* sync */
+    0, /* prepare_unmount */
+    0, /* abort_unmount */
+    0, /* unmount */
+    dfs_path,
+    0, /* symlink */
+    0, /* mknod */
+    0, /* pin */
+    0, /* unpin */
+    0, /* remount */
+    0, /* fallocate */
+    0, /* fdatasync */
+    0, /* lock_node */
+    0, /* unlock_node */
+    0, /* shutdown */
 };
 
 /** The number at the start of `s` in `base`, 8 or 10, its end in `*end`. */
@@ -487,22 +626,67 @@ static void root_options(const char *options)
     }
 }
 
-/* The operations of sync/info, a text made at the open (`sync_info_open`):
- * a `struct dfs_text` in the descriptor's `priv`, read at the description's
- * offset. */
+/*
+ * The operations of a text file (`debugfs_create_text`): a `struct
+ * dfs_text` in the descriptor's `priv` with the registrant's hooks and
+ * data and the text the last read from offset 0 made, read at the
+ * description's offset.
+ */
 struct dfs_text {
+    const struct debugfs_text_ops *ops;
+    void *data;
+    char *text; /* kmalloc'd, or NULL before the first read */
     uint32_t len;
-    char text[1];
 };
 
-/** Read the text from the description's offset; bytes read, 0 at its end,
- * or -EFAULT. */
+/** Make `t`'s text anew through its `show`, sizing it first and again if
+ * it grew between the two calls. 0, `show`'s -errno or -ENOMEM. */
+static int32_t text_fill(struct dfs_text *t)
+{
+    int32_t len, n;
+    char *text;
+
+    for (;;) {
+        len = t->ops->show(t->data, NULL, 0);
+        if (len < 0) {
+            return len;
+        }
+        text = kmalloc((uint32_t)len + 1u);
+        if (!text) {
+            return -ENOMEM;
+        }
+        n = t->ops->show(t->data, text, (uint32_t)len + 1u);
+        if (n >= 0 && n <= len) {
+            break;
+        }
+        kfree(text);
+        if (n < 0) {
+            return n;
+        }
+    }
+    kfree(t->text);
+    t->text = text;
+    t->len = (uint32_t)n;
+    return 0;
+}
+
+/** Read the text from the description's offset, made anew at offset 0, as
+ * seq_read does; bytes read, 0 at its end, `show`'s -errno, -ENOMEM or
+ * -EFAULT. */
 static int32_t text_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct dfs_text *t = e->priv;
-    uint64_t off = e->ofd->offset;
+    struct open_file *ofd = e->ofd;
+    uint64_t off = ofd->offset;
     uint32_t n;
+    int32_t rc;
 
+    if (off == 0 || !t->text) {
+        rc = text_fill(t);
+        if (rc != 0) {
+            return rc;
+        }
+    }
     if (off >= t->len) {
         return 0;
     }
@@ -511,18 +695,25 @@ static int32_t text_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (copy_to_user(buf, t->text + off, n) != 0) {
         return -EFAULT;
     }
-    e->ofd->offset = off + n;
+    ofd->offset = off + n;
     return (int32_t)n;
 }
 
-/** Move the description's offset in the text: SEEK_SET, SEEK_CUR and
- * SEEK_END, -EINVAL for a negative result or another `whence`. */
-static int64_t text_llseek(fd_entry_t *e, int64_t offset, int whence)
+/** Give a write to the file's `store`; -EINVAL for a file without one. */
+static int32_t text_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct dfs_text *t = e->priv;
-    int64_t base = whence == 0 ? 0 : whence == 1 ? (int64_t)e->ofd->offset : (int64_t)t->len;
 
-    if (whence < 0 || whence > 2 || base + offset < 0) {
+    return t->ops->store ? t->ops->store(t->data, buf, count) : -EINVAL;
+}
+
+/** Move the description's offset in the text, as seq_lseek: SEEK_SET and
+ * SEEK_CUR, -EINVAL for a negative result or another `whence`. */
+static int64_t text_llseek(fd_entry_t *e, int64_t offset, int whence)
+{
+    int64_t base = whence == 1 ? (int64_t)e->ofd->offset : 0;
+
+    if ((whence != 0 && whence != 1) || base + offset < 0) {
         return -EINVAL;
     }
     return base + offset;
@@ -531,28 +722,41 @@ static int64_t text_llseek(fd_entry_t *e, int64_t offset, int whence)
 /** Free the text at the last close. */
 static void text_close(fd_entry_t *e)
 {
-    kfree(e->priv);
+    struct dfs_text *t = e->priv;
+
+    kfree(t->text);
+    kfree(t);
     e->priv = NULL;
 }
 
-static const struct file_ops text_ops = {text_read,  NULL, NULL,       NULL,
-                                         text_close, NULL, text_llseek};
+static const struct file_ops text_ops = {text_read,  text_write, NULL,       NULL,
+                                         text_close, NULL,       text_llseek};
 
-/** Make sync/info's text, the software timelines and their points as
- * `sw_sync_info` writes them, for the descriptor `e`. 0, or -ENOMEM. */
-static int32_t sync_info_open(fd_entry_t *e, int flags)
+/** Bind the text file `n` to `e`: a `struct dfs_text` with no text yet.
+ * 0, or -ENOMEM. */
+static int32_t text_bind(const struct debugfs_node *n, fd_entry_t *e)
 {
-    uint32_t len = sw_sync_info(NULL, 0);
-    struct dfs_text *t = kmalloc(sizeof(*t) + len);
+    struct dfs_text *t = kzalloc(sizeof(*t));
 
-    (void)flags;
     if (!t) {
         return -ENOMEM;
     }
-    t->len = sw_sync_info(t->text, len + 1);
+    t->ops = n->text;
+    t->data = n->data;
+    e->ops = &text_ops;
     e->priv = t;
     return 0;
 }
+
+/** sync/info's text: the software timelines and their points as
+ * `sw_sync_info` writes them. */
+static int32_t sync_info_show(void *data, char *buf, uint32_t cap)
+{
+    (void)data;
+    return (int32_t)sw_sync_info(buf, cap);
+}
+
+static const struct debugfs_text_ops sync_info_ops = {sync_info_show, NULL};
 
 /** Dispatch sw_sync's open, whose descriptor is a timeline of its own. */
 static int32_t sw_sync_bind(fd_entry_t *e, int flags)
@@ -571,7 +775,7 @@ int debugfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, co
     if (!started) {
         int32_t a =
             debugfs_create_file("sync/sw_sync", 0644u, &sw_sync_unbound, sw_sync_bind, NULL);
-        int32_t b = debugfs_create_file("sync/info", 0444u, &text_ops, sync_info_open, NULL);
+        int32_t b = debugfs_create_text("sync/info", 0444u, &sync_info_ops, NULL);
 
         if (a != 0 || b != 0) {
             debugfs_remove("sync");
