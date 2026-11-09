@@ -19,6 +19,11 @@
  *
  * The other way, a keyboard's LEDs are its one output report, a byte the
  * core sends when it differs from what the keyboard was last sent.
+ *
+ * A mouse is an event device as Linux's boot-protocol driver, usbmouse.c,
+ * makes one, "USB HIDBP Mouse VVVV:PPPP" with five buttons and a wheel, and
+ * reports each turn of the wheel in 120ths too, REL_WHEEL_HI_RES, as Linux's
+ * generic HID driver does.
  */
 
 #include "hid.h"
@@ -30,6 +35,7 @@
 #include "../kbd.h"
 #include "../kd.h"
 #include "../klog.h"
+#include "../mouse.h"
 #include "core.h"
 
 /* A boot keyboard's report: one byte of modifiers, one reserved, and up to six
@@ -37,6 +43,7 @@
  * signed movements, with a wheel byte on devices that have one. */
 #define KEYBOARD_REPORT 8
 #define MOUSE_REPORT    3
+#define MOUSE_WHEELED   4
 #define KEYS_IN_REPORT  6
 
 /* A boot keyboard's output report: one byte, an LED a bit. */
@@ -93,7 +100,8 @@ struct hid_state {
     int keyboard;             /* a keyboard is attached, from `hid_attach` to `hid_gone` */
     int leds_shown;           /* the output report last taken, -1 before one */
     int leds_failed;          /* a report failed since the keyboard was attached */
-    char name[24];            /* its name, "USB keyboard N" */
+    struct evdev *mouse;      /* a mouse's event device, or NULL */
+    char name[32];            /* its name, "USB keyboard N" or "USB HIDBP Mouse V:P" */
     char phys[24];            /* its EVIOCGPHYS, "usb-N/input0" */
 };
 
@@ -124,14 +132,61 @@ static void append_number(char *out, size_t size, int n)
     append(out, size, digits);
 }
 
+/** Append `n` to the string in `out` as four hexadecimal digits, as Linux
+ * prints a vendor or a product. */
+static void append_hex4(char *out, size_t size, unsigned n)
+{
+    static const char hex[] = "0123456789abcdef";
+    char digits[5];
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        digits[i] = hex[(n >> (12 - 4 * i)) & 0xFu];
+    }
+    digits[4] = 0;
+    append(out, size, digits);
+}
+
+/** Write the EVIOCGPHYS of `device`, "usb-N/input0", into `state`. */
+static void name_phys(struct hid_state *state, int device)
+{
+    state->phys[0] = 0;
+    append(state->phys, sizeof(state->phys), "usb-");
+    append_number(state->phys, sizeof(state->phys), device);
+    append(state->phys, sizeof(state->phys), "/input0");
+}
+
+/** Register the mouse `device` of `state` as its event device, once. */
+static void attach_mouse(struct hid_state *state, int device, uint16_t vendor, uint16_t product)
+{
+    if (state->mouse) {
+        return;
+    }
+    state->name[0] = 0;
+    append(state->name, sizeof(state->name), "USB HIDBP Mouse ");
+    append_hex4(state->name, sizeof(state->name), vendor);
+    append(state->name, sizeof(state->name), ":");
+    append_hex4(state->name, sizeof(state->name), product);
+    name_phys(state, device);
+    state->mouse = mouse_register(state->name, state->phys, EVDEV_BUS_USB, vendor, product,
+                                  MOUSE_WHEEL | MOUSE_HI_RES | MOUSE_SIDE);
+}
+
 void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
 {
     struct hid_state *state;
 
-    if (device <= 0 || device > USB_MAX_DEVICES || kind != HID_KEYBOARD) {
+    if (device <= 0 || device > USB_MAX_DEVICES) {
         return;
     }
     state = &states[device];
+    if (kind == HID_MOUSE) {
+        attach_mouse(state, device, vendor, product);
+        return;
+    }
+    if (kind != HID_KEYBOARD) {
+        return;
+    }
     state->keyboard = 1;
     state->leds_shown = -1;
     state->leds_failed = 0;
@@ -141,10 +196,7 @@ void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
     state->name[0] = 0;
     append(state->name, sizeof(state->name), "USB keyboard ");
     append_number(state->name, sizeof(state->name), device);
-    state->phys[0] = 0;
-    append(state->phys, sizeof(state->phys), "usb-");
-    append_number(state->phys, sizeof(state->phys), device);
-    append(state->phys, sizeof(state->phys), "/input0");
+    name_phys(state, device);
     input_keyboard_attach(&state->kb, state->name, state->phys, EVDEV_BUS_USB, vendor, product);
 }
 
@@ -262,8 +314,10 @@ void hid_report(int device, int kind, const uint8_t *report, int length)
         if (length < MOUSE_REPORT) {
             return;
         }
-        /* Negated: a USB report's Y is positive toward the user. */
-        input_mouse((int)(int8_t)report[1], -(int)(int8_t)report[2], report[0] & 0x07);
+        /* A report's Y is positive toward the user, as REL_Y is. */
+        mouse_report(state->mouse, report[0] & 0x1Fu, (int)(int8_t)report[1],
+                     (int)(int8_t)report[2], length >= MOUSE_WHEELED ? (int)(int8_t)report[3] : 0,
+                     0);
         return;
     }
 }
@@ -321,6 +375,8 @@ void hid_gone(int device)
     }
     state = &states[device];
     input_keyboard_detach(&state->kb);
+    evdev_unregister(state->mouse);
+    state->mouse = NULL;
     state->keyboard = 0;
     state->modifiers = 0;
     for (i = 0; i < KEYS_IN_REPORT; i++) {

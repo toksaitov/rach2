@@ -1,6 +1,6 @@
 /*
  * input.c: every keyboard's keys, held keys and repeat, and the mouse's
- * presence and its USB reports.
+ * presence.
  *
  * Nothing about a keystroke's way is particular to the 8042: the held keys,
  * the repeat and the hand-off to the console's keyboard (kd.c), which
@@ -19,7 +19,6 @@
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
 #include "kbd.h"
-#include "mouse.h"
 #include "timer.h"
 
 /* The boot processor's tick, TICK_HZ a second, in milliseconds. */
@@ -150,11 +149,6 @@ int input_mouse_present(void)
 void input_mouse_found(void)
 {
     mouse_present = 1;
-}
-
-void input_mouse(int dx, int dy, int buttons)
-{
-    mouse_push_packet((uint8_t)buttons, dx, dy);
 }
 
 unsigned int input_modifiers(void)

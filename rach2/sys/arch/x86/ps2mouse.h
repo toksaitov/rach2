@@ -2,13 +2,15 @@
 #define _PS2MOUSE_H_
 
 /*
- * The PS/2 mouse, on the 8042's auxiliary port: IRQ 12, three-byte
- * movement packets, which it puts in the mouse queue (../../mouse.h).
+ * The PS/2 mouse, on the 8042's auxiliary port: IRQ 12, movement packets of
+ * three bytes, or four with a wheel, which it reports through its event
+ * device and the mouse queue (../../mouse.h).
  */
 
 /**
- * Bring up the PS/2 mouse: the 8042's auxiliary port, its interrupt, and
- * the mouse's reporting, with the handler on vector 44. Returns 0 once
+ * Bring up the PS/2 mouse: the 8042's auxiliary port, its interrupt, the
+ * mouse's protocol, its event device, and its reporting, with the handler on
+ * vector 44. Returns 0 once
  * reporting is on, -1 with the reason in the log when the controller or the
  * mouse does not answer. Turns interrupts off for the handshake and on
  * again before it returns, whatever they were. Called once, at boot, from
