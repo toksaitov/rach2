@@ -220,6 +220,27 @@ install_debian()
     tar -cf "$WORK/debian.tar" -C "$stage" --no-recursion -T "$WORK/debian.order"
     tar -xpf "$WORK/debian.tar" -C "$TREE"
     writable
+    # Debian's executable Python scripts use its matching dist-packages.
+    python3 - "$TREE" "$WORK/debian.list" <<'PYTHON'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for relative in pathlib.Path(sys.argv[2]).read_text().splitlines():
+    path = root / relative.removeprefix('./')
+    if path.is_symlink() or not path.is_file() or not path.stat().st_mode & 0o111:
+        continue
+    with path.open('rb') as stream:
+        if stream.read(2) != b'#!':
+            continue
+        first = b'#!' + stream.readline()
+    versioned = re.sub(rb'^#![ \t]*/usr/bin/(?:env[ \t]+)?python3(?=[ \t\r\n]|$)',
+                       b'#!/usr/bin/python3.13', first)
+    if first != versioned:
+        data = path.read_bytes()
+        path.write_bytes(versioned + data[len(first):])
+PYTHON
     echo "gnu: install: $1: $(wc -l < "$WORK/new" | tr -d ' ') files"
 
 }
@@ -242,13 +263,6 @@ ln -s ../lib/chromium/chromium-headless-shell "$TREE/usr/bin/chromium-headless-s
 
 install_part proton
 install_part webgl
-
-# Debian's Python tools use its versioned interpreter and dist-packages.
-# The GNU port keeps /usr/bin/python3 and its independent site-packages.
-for f in "$TREE/usr/bin/piglit" "$TREE/usr/bin/libinput"; do
-    [ -f "$f" ] && [ ! -L "$f" ] || continue
-    sed -i '1s|^#!/usr/bin/python3$|#!/usr/bin/python3.13|' "$f"
-done
 
 # These alternatives are made by Debian's postinst, which is not run here.
 for name in blas lapack; do
