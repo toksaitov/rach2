@@ -9,8 +9,10 @@
  * linked. The processor is a model of the Lenovo's Haswell: its CPUID,
  * with VMX, AVX and XSAVE of x87, SSE and AVX. The backend is a fake whose
  * entry either refuses, as the stubs do, or reports the exits a script
- * gives, and the memory slots, the interrupt routing and the in-kernel bus
- * are fakes that answer the capabilities their tasks will make true.
+ * gives, and the memory slots, the interrupt routing, the in-kernel bus and
+ * the local APIC are fakes that answer the capabilities their files make
+ * true and act as those files do for a VM with no split controller, which
+ * tests/host/kvm_irq_hosttest.c covers.
  *
  * The rows: the structures' sizes and the ioctl numbers against Linux's;
  * /dev/kvm registered as 10:232 when the backend probes; QEMU 10's
@@ -519,16 +521,17 @@ int32_t kvm_irq_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
+/** The split controller once a vCPU exists, which Linux refuses. */
 int32_t kvm_irq_enable_split(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
 {
-    (void)vm;
     (void)cap;
-    return -EINVAL;
+    return vm->nr_vcpus ? -EEXIST : -EINVAL;
 }
 
 int32_t kvm_irq_check_extension(long cap)
 {
-    return cap == KVM_CAP_IRQ_ROUTING || cap == KVM_CAP_IRQFD || cap == KVM_CAP_SIGNAL_MSI;
+    return cap == KVM_CAP_IRQ_ROUTING || cap == KVM_CAP_IRQFD || cap == KVM_CAP_SIGNAL_MSI ||
+           cap == KVM_CAP_SPLIT_IRQCHIP;
 }
 
 void kvm_irq_free(struct kvm_vm *vm)
@@ -579,6 +582,73 @@ int kvm_lapic_halt(struct kvm_vcpu *v)
 void kvm_lapic_free(struct kvm_vcpu *v)
 {
     (void)v;
+}
+
+int kvm_lapic_create(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
+int kvm_lapic_mmio(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
+int kvm_lapic_ready(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
+int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
+uint64_t kvm_lapic_cr8(struct kvm_vcpu *v)
+{
+    return v->sregs.cr8;
+}
+
+void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8)
+{
+    v->sregs.cr8 = cr8;
+}
+
+int kvm_lapic_set_base(struct kvm_vcpu *v, uint64_t value, int host)
+{
+    (void)host;
+    v->sregs.apic_base = value;
+    return 0;
+}
+
+/** The APIC's MSRs with no APIC in the kernel, as vlapic.c answers them:
+ * the TSC deadline reads 0 and takes any write; the rest are not its. */
+int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+{
+    (void)v;
+    (void)host;
+    if (index != 0x6E0) {
+        return 1;
+    }
+    if (!write) {
+        *value = 0;
+    }
+    return 0;
+}
+
+/** The compare-and-exchange, on one processor. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int cur = *p;
+
+    if (cur == old) {
+        *p = value;
+    }
+    return cur;
 }
 
 /* /dev/kvm's descriptor. */
@@ -728,7 +798,7 @@ static void startup_caps(int vm)
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_MCE) == KVM_MAX_MCE_BANKS, "KVM_CAP_MCE is the banks");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_COALESCED_MMIO) == 0, "a capability not offered is 0");
     CHECK(dev(KVM_CHECK_EXTENSION, 100000) == 0, "an unknown capability is 0");
-    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SPLIT_IRQCHIP) == 0, "no split irqchip yet");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SPLIT_IRQCHIP) == 1, "the split irqchip is offered");
 }
 
 /** kvm_get_supported_msrs: the index list, its count first, which starts
@@ -767,7 +837,7 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
         CHECK(!(e->ecx & (1u << 5)), "leaf 1 has no VMX");
         CHECK(!(e->ecx & (1u << 27)) && (e->ecx & (1u << 31)), "no OSXSAVE, and HYPERVISOR");
         CHECK((e->ecx & (1u << 28)) && (e->ecx & (1u << 26)), "leaf 1 keeps AVX and XSAVE");
-        CHECK(!(e->ecx & (1u << 21)), "leaf 1 has no x2APIC without the local APIC");
+        CHECK(e->ecx & (1u << 21), "leaf 1 offers x2APIC, which the kernel's local APIC emulates");
     }
     if (e->function == 7 && e->index == 0) {
         CHECK((e->ebx & 0x20u) && !(e->edx & (1u << 26)), "leaf 7 keeps AVX2, drops SPEC_CTRL");
@@ -1374,7 +1444,7 @@ static void vm_rows(int vm, int vcpu)
 
     k_memset(&cap, 0, sizeof(cap));
     cap.cap = KVM_CAP_SPLIT_IRQCHIP;
-    CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == -EINVAL, "the split irqchip, not yet");
+    CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == -EEXIST, "the split irqchip after a vCPU");
     cap.flags = 1;
     CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == -EINVAL, "KVM_ENABLE_CAP with flags");
     CHECK(fdio(vm, 0xAEFF, 0) == -ENOTTY, "an unknown VM ioctl");

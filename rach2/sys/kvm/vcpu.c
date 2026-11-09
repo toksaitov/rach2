@@ -125,21 +125,18 @@ static void reset_seg(struct kvm_segment *s, uint16_t sel, uint64_t base, uint8_
     s->s = 1;
 }
 
-/**
- * Give `v` the state of a processor at power-on, as Linux's
- * kvm_vcpu_reset gives it: real mode at 0xFFFF0 below the reset vector's
- * segment, family 6 in EDX, CR0 with CD, NW and ET, the
- * local APIC at its default address, the boot vCPU's marked, the x87 and
- * SSE units at their initial state with XCR0 naming x87 alone, the debug
- * registers at reset, and the TSC at 0.
- */
-static void vcpu_reset(struct kvm_vcpu *v)
+/** The architectural state a reset and an INIT both give, as Linux's
+ * kvm_vcpu_reset: real mode at 0xFFFF0 below the reset vector's segment,
+ * EDX the family, model and stepping of the guest's CPUID, or 0x600 before
+ * KVM_SET_CPUID2, CR0 with CD, NW and ET, no event waiting, and the debug
+ * registers at reset; the APIC base cleared for the caller to set. */
+static void reset_arch(struct kvm_vcpu *v)
 {
-    uint64_t bv = XFEATURE_X87 | XFEATURE_SSE;
+    const struct kvm_cpuid_entry2 *l1 = kvm_cpuid_find(v, 1, 0);
 
     k_memset(&v->regs, 0, sizeof(v->regs));
     k_memset(&v->sregs, 0, sizeof(v->sregs));
-    v->regs.rdx = 0x600; /* the signature Linux gives before KVM_SET_CPUID2 */
+    v->regs.rdx = l1 ? l1->eax : 0x600;
     v->regs.rip = 0xFFF0;
     v->regs.rflags = 0x2;
     reset_seg(&v->sregs.cs, 0xF000, 0xFFFF0000ull, 0xB);
@@ -155,6 +152,25 @@ static void vcpu_reset(struct kvm_vcpu *v)
     v->sregs.gdt.limit = 0xFFFF;
     v->sregs.idt.limit = 0xFFFF;
     v->sregs.cr0 = CR0_CD | CR0_NW | CR0_ET;
+    k_memset(&v->events, 0, sizeof(v->events));
+    v->nmi_queued = 0;
+    k_memset(&v->debugregs, 0, sizeof(v->debugregs));
+    v->debugregs.dr6 = DR6_RESET;
+    v->debugregs.dr7 = DR7_RESET;
+}
+
+/**
+ * Give `v` the state of a processor at power-on, as Linux's
+ * kvm_vcpu_reset gives it: the state an INIT gives, the local APIC at its
+ * default address, the boot vCPU's marked, the x87 and SSE units at their
+ * initial state with XCR0 naming x87 alone, the MSRs at reset, and the TSC
+ * at 0.
+ */
+static void vcpu_reset(struct kvm_vcpu *v)
+{
+    uint64_t bv = XFEATURE_X87 | XFEATURE_SSE;
+
+    reset_arch(v);
     v->sregs.apic_base = APIC_BASE_DEFAULT | APIC_BASE_ENABLE;
     if (v->id == v->vm->boot_cpu_id) {
         v->sregs.apic_base |= APIC_BASE_BSP;
@@ -166,16 +182,20 @@ static void vcpu_reset(struct kvm_vcpu *v)
     v->xsave[25] = 0x1F;
     k_memcpy(v->xsave + XSAVE_HDR, &bv, sizeof(bv));
     v->xcr0 = XFEATURE_X87;
-    k_memset(&v->events, 0, sizeof(v->events));
-    v->nmi_queued = 0;
-    k_memset(&v->debugregs, 0, sizeof(v->debugregs));
-    v->debugregs.dr6 = DR6_RESET;
-    v->debugregs.dr7 = DR7_RESET;
     k_memset(&v->guest_debug, 0, sizeof(v->guest_debug));
     v->mp_state = KVM_MP_STATE_RUNNABLE;
     v->tsc_offset = -(int64_t)arch_cycles();
     kvm_msr_reset(v);
     v->dirty = KVM_PART_ALL;
+}
+
+void kvm_vcpu_init_reset(struct kvm_vcpu *v)
+{
+    uint64_t base = v->sregs.apic_base;
+
+    reset_arch(v);
+    v->sregs.apic_base = base;
+    v->dirty |= KVM_PART_REGS | KVM_PART_SREGS | KVM_PART_EVENTS | KVM_PART_DEBUG | KVM_PART_CR8;
 }
 
 /** The page `pgoff` of the run pages of the vCPU `obj`, for a fault of a
@@ -355,6 +375,12 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->pio = (uint8_t *)v->run + KVM_PIO_PAGE_OFFSET * 4096u;
     v->xsave = (uint8_t *)(((uintptr_t)v->xsave_mem + 63u) & ~(uintptr_t)63u);
     vcpu_reset(v);
+    if (vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        r = kvm_lapic_create(v);
+        if (r != 0) {
+            goto fail;
+        }
+    }
     if (kvm_backend->vcpu_init) {
         r = kvm_backend->vcpu_init(v);
         if (r != 0) {
@@ -379,9 +405,34 @@ fail:
     return r;
 }
 
+/** OR `bits` into `v`'s requests atomically, since another processor's
+ * kick may set one at the same time. */
+static void req_set(struct kvm_vcpu *v, uint32_t bits)
+{
+    uint32_t old;
+
+    do {
+        old = v->requests;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&v->requests, old, old | bits) != old);
+}
+
+int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request)
+{
+    uint32_t old;
+
+    do {
+        old = v->requests;
+        if (!(old & request)) {
+            return 0;
+        }
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&v->requests, old, old & ~request) !=
+             old);
+    return 1;
+}
+
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
 {
-    v->requests |= request;
+    req_set(v, request);
     if (v->mode == KVM_MODE_IN_GUEST && v->cpu >= 0 && (unsigned int)v->cpu != arch_cpu_id()) {
         smp_kick(v->cpu);
     }
@@ -397,7 +448,7 @@ static void queue_exception(struct kvm_vcpu *v, uint8_t nr)
     v->events.exception.has_error_code = 0;
     v->events.exception.error_code = 0;
     v->dirty |= KVM_PART_EVENTS;
-    v->requests |= KVM_REQ_EVENT;
+    req_set(v, KVM_REQ_EVENT);
 }
 
 /** Fill the run page's fields every return of KVM_RUN gives, as Linux's
@@ -407,10 +458,15 @@ static void run_post(struct kvm_vcpu *v)
     struct kvm_run *run = v->run;
 
     run->if_flag = (uint8_t)(v->if_flag != 0);
-    run->cr8 = v->sregs.cr8;
     run->apic_base = v->sregs.apic_base;
-    run->ready_for_interrupt_injection = (uint8_t)(v->vm->irqchip == KVM_IRQCHIP_NONE &&
-                                                   v->irq_allowed && !v->events.interrupt.injected);
+    if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        run->cr8 = kvm_lapic_cr8(v);
+        run->ready_for_interrupt_injection = (uint8_t)kvm_lapic_ready(v);
+    } else {
+        run->cr8 = v->sregs.cr8;
+        run->ready_for_interrupt_injection =
+            (uint8_t)(v->irq_allowed && !v->events.interrupt.injected);
+    }
     run->flags = 0;
 }
 
@@ -466,7 +522,7 @@ static int32_t run_exit(struct kvm_vcpu *v)
         }
         return 1;
     case KVM_X_MMIO:
-        if (ex->mmio.is_write && kvm_iobus_write(v)) {
+        if (kvm_lapic_mmio(v) || (ex->mmio.is_write && kvm_iobus_write(v))) {
             return 0;
         }
         run->exit_reason = KVM_EXIT_MMIO;
@@ -488,6 +544,12 @@ static int32_t run_exit(struct kvm_vcpu *v)
         run->exit_reason = KVM_EXIT_SHUTDOWN;
         return 1;
     case KVM_X_IRQ_WINDOW:
+        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            /* The window the APIC's interrupt waited for; the loop gives
+             * it to the caller too when the caller asked. */
+            req_set(v, KVM_REQ_EVENT);
+            return 0;
+        }
         run->exit_reason = KVM_EXIT_IRQ_WINDOW_OPEN;
         return 1;
     case KVM_X_INTERNAL:
@@ -555,12 +617,16 @@ static int32_t run_enter(struct kvm_vcpu *v)
  * the backend the answer to the last exit's read, take CR8 from the run
  * page with no local APIC in the kernel, end at once under immediate_exit,
  * then enter until an exit the caller answers, a signal, or a request to
- * leave. Returns 0 with `exit_reason` set, -EINTR with it KVM_EXIT_INTR
- * for a signal or a kick, or -errno.
+ * leave. With the local APIC in the kernel, `kvm_lapic_prepare` readies
+ * each entry, and an exit the kernel took ends the call when the caller
+ * asked for an interrupt window and may inject now. Returns 0 with
+ * `exit_reason` set, -EINTR with it KVM_EXIT_INTR for a signal or a kick,
+ * or -errno.
  */
 static int32_t run_loop(struct kvm_vcpu *v)
 {
     struct kvm_run *run = v->run;
+    int split = v->vm->irqchip == KVM_IRQCHIP_SPLIT;
     int32_t r;
 
     if (v->vm->irqchip == KVM_IRQCHIP_NONE && run->cr8 != v->sregs.cr8) {
@@ -577,18 +643,21 @@ static int32_t run_loop(struct kvm_vcpu *v)
         return -EINTR;
     }
     for (;;) {
-        if (v->requests & KVM_REQ_TRIPLE_FAULT) {
-            v->requests &= ~KVM_REQ_TRIPLE_FAULT;
+        if (kvm_vcpu_test_clear(v, KVM_REQ_TRIPLE_FAULT)) {
             run->exit_reason = KVM_EXIT_SHUTDOWN;
             return 0;
         }
-        if ((v->requests & KVM_REQ_EXIT) || signal_pending()) {
-            v->requests &= ~KVM_REQ_EXIT;
+        if (kvm_vcpu_test_clear(v, KVM_REQ_EXIT) || signal_pending()) {
             run->exit_reason = KVM_EXIT_INTR;
             return -EINTR;
         }
-        if (v->requests & KVM_REQ_EVENT) {
-            v->requests &= ~KVM_REQ_EVENT;
+        if (split) {
+            r = kvm_lapic_prepare(v);
+            if (r != 0) {
+                return r > 0 ? 0 : r;
+            }
+        }
+        if (kvm_vcpu_test_clear(v, KVM_REQ_EVENT)) {
             if (kvm_backend->inject) {
                 kvm_backend->inject(v);
             }
@@ -607,6 +676,10 @@ static int32_t run_loop(struct kvm_vcpu *v)
         r = run_exit(v);
         if (r != 0) {
             return r > 0 ? 0 : r;
+        }
+        if (split && run->request_interrupt_window && kvm_lapic_ready(v)) {
+            run->exit_reason = KVM_EXIT_IRQ_WINDOW_OPEN;
+            return 0;
         }
     }
 }
@@ -736,6 +809,9 @@ static int32_t get_sregs(struct kvm_vcpu *v, uintptr_t arg)
 
     vcpu_save(v, KVM_PART_SREGS | KVM_PART_EVENTS);
     s = v->sregs;
+    if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        s.cr8 = kvm_lapic_cr8(v);
+    }
     k_memset(s.interrupt_bitmap, 0, sizeof(s.interrupt_bitmap));
     if (v->events.interrupt.injected && !v->events.interrupt.soft) {
         s.interrupt_bitmap[v->events.interrupt.nr / 64u] |= 1ull << (v->events.interrupt.nr % 64u);
@@ -744,7 +820,8 @@ static int32_t get_sregs(struct kvm_vcpu *v, uintptr_t arg)
 }
 
 /** KVM_SET_SREGS: the special registers, and the first interrupt of the
- * bitmap queued for injection. 0, -EINVAL for a state Linux refuses, or
+ * bitmap queued for injection; with the local APIC in the kernel, its base
+ * and its TPR from CR8 too. 0, -EINVAL for a state Linux refuses, or
  * -EFAULT. */
 static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
 {
@@ -757,6 +834,10 @@ static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
     if (!sregs_valid(v, &s)) {
         return -EINVAL;
     }
+    if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        kvm_lapic_set_base(v, s.apic_base, 1);
+        kvm_lapic_set_cr8(v, s.cr8);
+    }
     v->sregs = s;
     k_memset(v->sregs.interrupt_bitmap, 0, sizeof(v->sregs.interrupt_bitmap));
     v->dirty |= KVM_PART_SREGS;
@@ -766,7 +847,7 @@ static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
             v->events.interrupt.nr = (uint8_t)i;
             v->events.interrupt.soft = 0;
             v->dirty |= KVM_PART_EVENTS;
-            v->requests |= KVM_REQ_EVENT;
+            req_set(v, KVM_REQ_EVENT);
             break;
         }
     }
@@ -1138,7 +1219,7 @@ static int32_t set_events(struct kvm_vcpu *v, uintptr_t arg)
         v->events.sipi_vector = ev.sipi_vector;
     }
     v->dirty |= KVM_PART_EVENTS;
-    v->requests |= KVM_REQ_EVENT;
+    req_set(v, KVM_REQ_EVENT);
     return 0;
 }
 
@@ -1226,7 +1307,7 @@ static int32_t interrupt(struct kvm_vcpu *v, uintptr_t arg)
     v->events.interrupt.nr = (uint8_t)irq.irq;
     v->events.interrupt.soft = 0;
     v->dirty |= KVM_PART_EVENTS;
-    v->requests |= KVM_REQ_EVENT;
+    req_set(v, KVM_REQ_EVENT);
     return 0;
 }
 
@@ -1308,7 +1389,7 @@ static int32_t set_mce(struct kvm_vcpu *v, uintptr_t arg)
         }
         vcpu_save(v, KVM_PART_SREGS);
         if ((v->mcg_status & MCG_STATUS_MCIP) || !(v->sregs.cr4 & CR4_MCE)) {
-            v->requests |= KVM_REQ_TRIPLE_FAULT;
+            req_set(v, KVM_REQ_TRIPLE_FAULT);
             return 0;
         }
         if (b[1] & MCI_STATUS_VAL) {
@@ -1385,7 +1466,7 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
             return -EFAULT;
         }
         v->dirty |= KVM_PART_REGS;
-        v->requests |= KVM_REQ_EVENT;
+        req_set(v, KVM_REQ_EVENT);
         return 0;
     case KVM_GET_SREGS:
         return get_sregs(v, arg);
@@ -1413,9 +1494,15 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return get_cpuid(v, arg);
     case KVM_GET_MP_STATE:
         vcpu_save(v, KVM_PART_MP);
+        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            return kvm_lapic_ioctl(v, request, arg);
+        }
         mp.mp_state = v->mp_state;
         return copy_to_user((void __user *)arg, &mp, sizeof(mp)) ? -EFAULT : 0;
     case KVM_SET_MP_STATE:
+        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            return kvm_lapic_ioctl(v, request, arg);
+        }
         return set_mp_state(v, arg);
     case KVM_GET_VCPU_EVENTS:
         return get_events(v, arg);
@@ -1434,7 +1521,7 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
             v->nmi_queued++;
         }
         v->dirty |= KVM_PART_EVENTS;
-        v->requests |= KVM_REQ_EVENT;
+        req_set(v, KVM_REQ_EVENT);
         return 0;
     case KVM_X86_SETUP_MCE:
         return setup_mce(v, arg);

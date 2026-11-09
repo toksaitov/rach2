@@ -22,11 +22,13 @@
  * is not yet in the kernel. Leaf 1, ECX: SSE3, PCLMULQDQ, SSSE3, FMA,
  * CX16, PCID, SSE4.1, SSE4.2, MOVBE, POPCNT, AES, XSAVE, AVX, F16C and
  * RDRAND; not MONITOR, DS-CPL, VMX, SMX, EST, TM2, xTPR, PDCM or DCA, nor
- * OSXSAVE, which the guest's CR4 gives, nor x2APIC and the TSC deadline,
- * which only the local APIC in the kernel offers; HYPERVISOR is set. EDX:
- * all but PSN, DS, ACPI, HTT, TM and PBE.
+ * OSXSAVE, which the guest's CR4 gives, nor the TSC deadline, which
+ * KVM_CAP_TSC_DEADLINE_TIMER offers instead; x2APIC and HYPERVISOR are
+ * set whatever the host has, since the local APIC in the kernel emulates
+ * x2APIC, as Linux sets it. EDX: all but PSN, DS, ACPI, HTT, TM and PBE.
  */
 #define L1_ECX            0x76DA3203u
+#define L1_ECX_X2APIC     (1u << 21)
 #define L1_EDX            0x0F8BFBFFu
 #define L1_ECX_HYPERVISOR (1u << 31)
 /* Leaf 1's AVX and what needs its state: FMA, AVX and F16C; and XSAVE. */
@@ -108,7 +110,7 @@ static int filter(struct kvm_cpuid_entry2 *e, uint64_t xcr0)
 {
     switch (e->function) {
     case 1:
-        e->ecx = (e->ecx & L1_ECX) | L1_ECX_HYPERVISOR;
+        e->ecx = (e->ecx & L1_ECX) | L1_ECX_X2APIC | L1_ECX_HYPERVISOR;
         e->edx &= L1_EDX;
         if (!(xcr0 & XFEATURE_YMM)) {
             e->ecx &= ~L1_ECX_AVX;

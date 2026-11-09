@@ -139,6 +139,7 @@
 #define KVM_CAP_ASYNC_PF                    59
 #define KVM_CAP_TSC_CONTROL                 60
 #define KVM_CAP_GET_TSC_KHZ                 61
+#define KVM_CAP_TSC_DEADLINE_TIMER          72
 #define KVM_CAP_MAX_VCPUS                   66
 #define KVM_CAP_SIGNAL_MSI                  77
 #define KVM_CAP_READONLY_MEM                81
@@ -170,6 +171,7 @@
 #define KVM_EXIT_NMI             16
 #define KVM_EXIT_INTERNAL_ERROR  17
 #define KVM_EXIT_SYSTEM_EVENT    24
+#define KVM_EXIT_IOAPIC_EOI      26
 
 #define KVM_EXIT_IO_IN  0
 #define KVM_EXIT_IO_OUT 1
@@ -280,6 +282,7 @@ struct kvm_cpuid2 {
 #define KVM_MP_STATE_INIT_RECEIVED 2
 #define KVM_MP_STATE_HALTED        3
 #define KVM_MP_STATE_SIPI_RECEIVED 4
+#define KVM_MP_STATE_AP_RESET_HOLD 9
 
 struct kvm_mp_state {
     uint32_t mp_state;
@@ -431,6 +434,104 @@ struct kvm_guest_debug {
     uint64_t debugreg[8];
 };
 
+/* struct kvm_lapic_state: the local APIC's register page, KVM_GET_LAPIC
+ * and KVM_SET_LAPIC. */
+#define KVM_APIC_REG_SIZE 0x400u
+
+struct kvm_lapic_state {
+    uint8_t regs[KVM_APIC_REG_SIZE];
+};
+
+/* struct kvm_irq_level: KVM_IRQ_LINE's line and level, and the status
+ * KVM_IRQ_LINE_STATUS writes back in the same word. */
+struct kvm_irq_level {
+    int32_t irq; /* the GSI in; the status out */
+    uint32_t level;
+};
+
+/* The routes of KVM_SET_GSI_ROUTING: one entry a GSI for an MSI, as
+ * Linux's struct kvm_irq_routing_entry of 48 bytes. */
+#define KVM_IRQ_ROUTING_IRQCHIP    1u
+#define KVM_IRQ_ROUTING_MSI        2u
+#define KVM_IRQ_ROUTING_S390       3u
+#define KVM_IRQ_ROUTING_HV_SINT    4u
+#define KVM_IRQ_ROUTING_XEN_EVTCHN 5u
+
+/* The most routes, and the GSIs below which they lie, Linux's
+ * KVM_MAX_IRQ_ROUTES on x86. */
+#define KVM_MAX_IRQ_ROUTES 4096u
+
+#define KVM_MSI_VALID_DEVID 1u
+
+struct kvm_irq_routing_irqchip {
+    uint32_t irqchip;
+    uint32_t pin;
+};
+
+struct kvm_irq_routing_msi {
+    uint32_t address_lo;
+    uint32_t address_hi;
+    uint32_t data;
+    uint32_t devid;
+};
+
+struct kvm_irq_routing_entry {
+    uint32_t gsi;
+    uint32_t type;
+    uint32_t flags;
+    uint32_t pad;
+    union {
+        struct kvm_irq_routing_irqchip irqchip;
+        struct kvm_irq_routing_msi msi;
+        uint32_t pad[8];
+    } u;
+};
+
+/* struct kvm_irq_routing, followed by `nr` entries. */
+struct kvm_irq_routing {
+    uint32_t nr;
+    uint32_t flags;
+};
+
+/* struct kvm_irqfd: an eventfd that raises the GSI `gsi` when signalled. */
+#define KVM_IRQFD_FLAG_DEASSIGN 1u
+#define KVM_IRQFD_FLAG_RESAMPLE 2u
+
+struct kvm_irqfd {
+    uint32_t fd;
+    uint32_t gsi;
+    uint32_t flags;
+    uint32_t resamplefd;
+    uint8_t pad[16];
+};
+
+/* struct kvm_msi: KVM_SIGNAL_MSI's message. */
+struct kvm_msi {
+    uint32_t address_lo;
+    uint32_t address_hi;
+    uint32_t data;
+    uint32_t flags;
+    uint32_t devid;
+    uint8_t pad[12];
+};
+
+/* struct kvm_ioeventfd: an eventfd that a guest's write to a port or an
+ * MMIO address signals. */
+#define KVM_IOEVENTFD_FLAG_DATAMATCH         1u
+#define KVM_IOEVENTFD_FLAG_PIO               2u
+#define KVM_IOEVENTFD_FLAG_DEASSIGN          4u
+#define KVM_IOEVENTFD_FLAG_VIRTIO_CCW_NOTIFY 8u
+#define KVM_IOEVENTFD_VALID_FLAG_MASK        15u
+
+struct kvm_ioeventfd {
+    uint64_t datamatch;
+    uint64_t addr; /* a port with KVM_IOEVENTFD_FLAG_PIO, else guest-physical */
+    uint32_t len;  /* 0, 1, 2, 4 or 8 bytes; 0 matches any write */
+    int32_t fd;
+    uint32_t flags;
+    uint8_t pad[36];
+};
+
 /* The exit-specific part of struct kvm_run, a union of 256 bytes. */
 struct kvm_run_io {
     uint8_t direction; /* KVM_EXIT_IO_IN or KVM_EXIT_IO_OUT */
@@ -466,6 +567,12 @@ struct kvm_run_debug {
     uint64_t dr7;
 };
 
+/* KVM_EXIT_IOAPIC_EOI: the vector of a level-triggered interrupt the
+ * guest ended, for the caller's I/O APIC. */
+struct kvm_run_eoi {
+    uint8_t vector;
+};
+
 struct kvm_run_system_event {
     uint32_t type;
     uint32_t ndata;
@@ -493,6 +600,7 @@ struct kvm_run {
         struct kvm_run_internal internal;
         struct kvm_run_debug debug;
         struct kvm_run_system_event system_event;
+        struct kvm_run_eoi eoi;
         char padding[KVM_RUN_EXIT_BYTES];
     } u;
     uint64_t kvm_valid_regs;
