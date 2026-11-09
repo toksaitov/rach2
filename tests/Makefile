@@ -33,7 +33,7 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
 PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe evprobe \
         rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe frag6probe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe fsbaseprobe wow64probe futexvprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe i915gemprobe drmprobe drmcompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
+        tlsprobe ldtprobe fsbaseprobe wow64probe futexvprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe i915gemprobe drmprobe drmcompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
         usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
@@ -42,11 +42,13 @@ PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe 
 
 # The probes of an interface only i386 has, built for i686 alone: tlsprobe
 # tests set_thread_area and the %gs thread pointer, where x86-64 keeps the
-# thread pointer in the FS base, and drmcompatprobe makes the DRM requests
-# whose i386 layouts the x86-64 kernel translates, which an x86-64 build would
-# make in x86-64's. A probe whose rows only partly test such an interface
-# builds those rows for i686 alone and is built for both.
-I686_ONLY = tlsprobe drmcompatprobe
+# thread pointer in the FS base, ldtprobe modify_ldt and the 32-bit vDSO's
+# entry, which the x86-64 kernel gives an i386 program, and drmcompatprobe
+# makes the DRM requests whose i386 layouts the x86-64 kernel translates,
+# which an x86-64 build would make in x86-64's. A probe whose rows only
+# partly test such an interface builds those rows for i686 alone and is
+# built for both.
+I686_ONLY = tlsprobe ldtprobe drmcompatprobe
 ifeq ($(ARCH),x86_64)
 PROGS := $(filter-out $(I686_ONLY),$(PROGS))
 endif

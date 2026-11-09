@@ -5,6 +5,7 @@ drmcompatprobe the DRM core's i386 layouts through the x86-64 kernel's compat io
 hello program that other probes, suites and host tests run or open
 hotplugprobe manual display hotplug check: a QEMU window resize or a VNC SetDesktopSize reaches it as a uevent and a new preferred mode (rach2/sys/drm/Readme.md)
 idreport identity and environment fixture for account probes
+ldtprobe i386 modify_ldt and __kernel_vsyscall check for the x86-64 kernel, run by hand there, since no suite yet runs i686 programs on that kernel
 lenovoacpi Lenovo ACPI acceptance run by the native collection on each release
 musl/budgetmusl manual resource budget diagnostic
 musl/catfile manual file reader
