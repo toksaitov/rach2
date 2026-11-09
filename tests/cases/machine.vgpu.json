@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.vgpu",
+  "summary": "Virtio GPU virgl 3D and device loss",
+  "cases": [
+    {
+      "case_id": "machine.vgpu.virgl",
+      "behavior": "Virgl capability sets, contexts, 3D texture upload and readback, asynchronous submissions, sync files, waits and a reset that invalidates old handles",
+      "units": [
+        "vgpuprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 268435456,
+          "firmware": "direct",
+          "devices": [],
+          "boot_options": [],
+          "display": "virgl"
+        },
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "vgpuprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root, for the debugfs reset trigger",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "params",
+          "checks": "Virgl and both capability sets are advertised and readable",
+          "source": "program"
+        },
+        {
+          "assertion_id": "context",
+          "checks": "A second open creates and closes its own context",
+          "source": "program"
+        },
+        {
+          "assertion_id": "resource",
+          "checks": "A 3D texture is created, described and mapped",
+          "source": "program"
+        },
+        {
+          "assertion_id": "transfer",
+          "checks": "All 64 uploaded texture bytes read back unchanged and ordinary virgl strides are refused",
+          "source": "program"
+        },
+        {
+          "assertion_id": "submit",
+          "checks": "A submission naming a buffer returns a sync-file out-fence",
+          "source": "program"
+        },
+        {
+          "assertion_id": "out-fence",
+          "checks": "The sync file can be inspected and passed as an in-fence",
+          "source": "program"
+        },
+        {
+          "assertion_id": "wait",
+          "checks": "Blocking WAIT completes the work and NOWAIT reports idle",
+          "source": "program"
+        },
+        {
+          "assertion_id": "reset",
+          "checks": "Reset fails every still-pending fence and old buffer handles return ENODEV",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 402653184,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "udmabufprobe",
+          "node": "tests/udmabufprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "This case requires QEMU virtio-vga-gl and resets that virtual GPU; it uses the guest probe runner under the virgl display profile"
+      }
+    }
+  ]
+}
