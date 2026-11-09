@@ -680,6 +680,29 @@ fail with
 .Er ENOPKG ,
 as Linux's do when neither module is in its kernel: there are no
 bridges or VLANs.
+.Ss Socket timestamps
+.Bl -tag -width SIOCGSTAMPNS_NEW
+.It Dv SIOCGSTAMP , SIOCGSTAMPNS
+On an AF_INET, AF_INET6 or packet socket, write the time the datagram a
+receive last took or peeked was queued, the one
+.Dv SO_TIMESTAMP
+reports
+.Pq Xr recv 2 ,
+in microseconds or nanoseconds.
+The old requests, 0x8906 and 0x8907, write the caller's
+.Vt struct timeval
+or
+.Vt struct timespec ,
+two 32-bit words from an i386 program on the x86-64 kernel; the new ones,
+0x80108906 and 0x80108907, two 64-bit words in every ABI.
+Before the socket's first receive, and always on a TCP socket, they fail
+with
+.Er ENOENT ,
+as on Linux; an AF_UNIX or netlink socket does not answer them.
+Linux gives the time of the call instead to the first request after a
+receive when no socket on the machine has asked for timestamps, since it
+then stamps no datagram; Rach2 stamps every one.
+.El
 .Sh RETURN VALUES
 .Fn ioctl
 returns 0 or the request's result on success.
@@ -747,6 +770,11 @@ or
 found no framebuffer, or
 .Dv FB_MODE_NATIVE
 a framebuffer without a native mode.
+.It Bq Er ENOENT
+.Dv SIOCGSTAMP
+or
+.Dv SIOCGSTAMPNS
+on a socket that has received no datagram.
 .It Bq Er ENOMEM
 The kernel had no memory for the console's channel of
 .Dv AUDIO_START .

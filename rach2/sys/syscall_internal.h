@@ -257,6 +257,17 @@ int sock_tstamp_get(uint8_t bits, int optname);
  * returns the payload's bytes (`sock_timeo_put`). */
 uint32_t sock_tstamp_put(uint8_t bits, int64_t sec, int32_t nsec, int *type, uint8_t out[16]);
 
+/**
+ * SIOCGSTAMP and SIOCGSTAMPNS, old and new, on the socket `sock`: the time
+ * the datagram a receive last took or peeked was queued, written at `arg`
+ * in microseconds or nanoseconds, the old requests in the caller's two
+ * longs and the new ones in two 64-bit words, as Linux's sock_gettstamp
+ * writes it. Sets `*handled` for those four requests on an AF_INET,
+ * AF_INET6 or AF_PACKET socket, and clears it otherwise. Returns 0,
+ * -ENOENT before any datagram, which a stream never has, or -EFAULT.
+ */
+int32_t socket_gettstamp(const struct socket *sock, uint32_t request, uintptr_t arg, int *handled);
+
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
 

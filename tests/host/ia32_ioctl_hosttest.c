@@ -276,10 +276,18 @@ static void test_path(void)
     CHECK("KDFONTOP is ENOTTY", ioctl32(FD_DEV, 0x4B72, 0x1000) == -ENOTTY);
     CHECK("GIO_UNIMAP is ENOTTY", ioctl32(FD_DEV, 0x4B66, 0x1000) == -ENOTTY);
     CHECK("PIO_UNIMAP is ENOTTY", ioctl32(FD_DEV, 0x4B67, 0x1000) == -ENOTTY);
-    CHECK("the old SIOCGSTAMP is ENOTTY", ioctl32(FD_INET, 0x8906, 0x1000) == -ENOTTY);
     CHECK("SIOCETHTOOL is ENOTTY", ioctl32(FD_INET, 0x8946, 0x1000) == -ENOTTY);
     CHECK("SIOCDEVPRIVATE is ENOTTY", ioctl32(FD_INET, 0x89F0, 0x1000) == -ENOTTY);
     CHECK("no native call for a refused request", native_calls == 0);
+
+    fresh();
+    native_rc = 7;
+    CHECK("the old SIOCGSTAMP passes, for the native i386 answer",
+          ioctl32(FD_INET, 0x8906, 0x1000) == 7 && native_cmd == 0x8906 && native_arg == 0x1000);
+    fresh();
+    native_rc = 7;
+    CHECK("the old SIOCGSTAMPNS passes, for the native i386 answer",
+          ioctl32(FD_INET, 0x8907, 0x1000) == 7 && native_cmd == 0x8907 && native_arg == 0x1000);
 }
 
 /** The families whose arguments have one layout pass the number and the

@@ -3215,6 +3215,44 @@ static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, 
     return 0;
 }
 
+/* SIOCGSTAMP and SIOCGSTAMPNS: the old ones of the caller's longs, the new
+ * ones of two 64-bit words, _IOR(0x89, 6 or 7, long long[2]). */
+#define SIOCGSTAMP_OLD   0x8906u
+#define SIOCGSTAMPNS_OLD 0x8907u
+#define SIOCGSTAMP_NEW   0x80108906u
+#define SIOCGSTAMPNS_NEW 0x80108907u
+
+/** The time is the one SO_TIMESTAMP reports (`sock_tstamp_put`), so that a
+ * caller of either sees the same; Linux gives the time of the call instead
+ * when no socket on the machine has asked for timestamps, since it then
+ * stamps no datagram. */
+int32_t socket_gettstamp(const struct socket *sock, uint32_t request, uintptr_t arg, int *handled)
+{
+    uint8_t bits = SOCK_RX_TSTAMP;
+    uint8_t out[16];
+    uint32_t len;
+    int type;
+
+    *handled = 0;
+    if ((request != SIOCGSTAMP_OLD && request != SIOCGSTAMPNS_OLD && request != SIOCGSTAMP_NEW &&
+         request != SIOCGSTAMPNS_NEW) ||
+        (sock->family != AF_INET && sock->family != AF_INET6 && sock->family != AF_PACKET)) {
+        return 0;
+    }
+    *handled = 1;
+    if (!sock->rx_any || sock->type == SOCK_STREAM) {
+        return -ENOENT;
+    }
+    if (request == SIOCGSTAMPNS_OLD || request == SIOCGSTAMPNS_NEW) {
+        bits |= SOCK_RX_TSTAMPNS;
+    }
+    if (request == SIOCGSTAMP_NEW || request == SIOCGSTAMPNS_NEW) {
+        bits |= SOCK_RX_TSNEW;
+    }
+    len = sock_tstamp_put(bits, sock->rx_last.tsec, sock->rx_last.tnsec, &type, out);
+    return copy_to_user((void __user *)arg, out, len) != 0 ? -EFAULT : 0;
+}
+
 /**
  * Write the timestamp control message the socket `sock` asked for about the
  * datagram `info` describes, the time it was queued (`sock_tstamp_put`).

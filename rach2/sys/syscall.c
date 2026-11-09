@@ -2184,7 +2184,8 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
  * request, as on Linux. The requests then go, in order, to: FIONBIO, which
  * every descriptor answers (`fd_ioctl_nbio`); FS_IOC_GETFLAGS and the other
  * file attribute requests (`fs_flags_ioctl`); FICLONE and FICLONERANGE
- * (`fs_clone_ioctl`); the interface requests of
+ * (`fs_clone_ioctl`); SIOCGSTAMP and SIOCGSTAMPNS on an Internet or packet
+ * socket (`socket_gettstamp`); the interface requests of
  * `netif_ioctl` on a socket of any family, as on Linux, where glibc's
  * if_nametoindex uses an AF_UNIX one and a DHCP client sets the machine's
  * address; the termios and session requests of `tty_common_ioctl` on the
@@ -2228,6 +2229,14 @@ long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
         }
     }
 
+    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+        int handled;
+        int32_t r = socket_gettstamp(entry->sock, request, arg, &handled);
+
+        if (handled) {
+            return r;
+        }
+    }
     if ((entry->type == FD_TYPE_SOCKET && entry->sock) || entry->type == FD_TYPE_UNIX) {
         int handled;
         int32_t r = netif_ioctl(
