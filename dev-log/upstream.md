@@ -75,3 +75,4 @@ The bullets state only what the records show. A fact the records do not hold, su
 | QEMU's intel-iommu leaves CFIS clear when CFI is set | QEMU 10.2.1 | 82 | unreported | [82-assign/upstream.md](82-assign/upstream.md#qemus-intel-iommu-leaves-cfis-clear-when-cfi-is-set) |
 | Mesa's vtest client counts a put's data in words but sends it unpadded | Mesa 26.0.8 | 83 | unreported | [83-testbed/upstream.md](83-testbed/upstream.md#mesas-vtest-client-counts-a-puts-data-in-words-but-sends-it-unpadded) |
 | Debian's virgl-server does not depend on an EGL loader | Debian's virglrenderer 1.1.0-2 | 83 | unreported | [83-testbed/upstream.md](83-testbed/upstream.md#debians-virgl-server-does-not-depend-on-an-egl-loader) |
+| QEMU aborts in libepoxy on exit after virgl fails to initialize | QEMU 11.1.2 | 83 | unreported | [83-testbed/upstream.md](83-testbed/upstream.md#qemu-aborts-in-libepoxy-on-exit-after-virgl-fails-to-initialize) |

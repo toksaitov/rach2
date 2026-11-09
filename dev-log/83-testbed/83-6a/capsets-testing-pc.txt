@@ -1,0 +1,41 @@
+# build.sh run 'sh guest.sh capsets; QEMU="env LD_LIBRARY_PATH=/opt/rach2-nctx/virglrenderer/lib qemu-system-x86_64" sh guest.sh capsets'
+# in nctx.qcow2 on the testing PC, 2026-11-09; the first run is the bed's QEMU, the second Debian's with virglrenderer 1.3.0. The shell reported the first QEMU Aborted.
+host: qemu /opt/rach2-nctx/qemu-nctx, render node /dev/dri/renderD128
+MESA-LOADER: failed to retrieve device information
+MESA-LOADER: failed to retrieve device information
+MESA-LOADER: failed to retrieve device information
+failed to initialize drm rendererqemu-system-x86_64: virgl could not be initialized: -19
+[    7.344903] [drm:virtio_gpu_init.cold [virtio_gpu]] *ERROR* timed out waiting for cap set 0
+guest: [    2.199117] [drm] pci: virtio-gpu-pci detected at 0000:00:01.0
+guest: [    2.199637] [drm] Host memory window: 0xe0000000 +0x10000000
+guest: [    2.199688] [drm] features: +virgl +edid +resource_blob +host_visible
+guest: [    2.199704] [drm] features: +context_init -blob_alignment
+guest: [    2.204541] [drm] number of scanouts: 1
+guest: [    2.204563] [drm] number of cap sets: 3
+guest: [    7.344903] [drm:virtio_gpu_init.cold [virtio_gpu]] *ERROR* timed out waiting for cap set 0
+guest: [   12.467652] virtio-pci 0000:00:01.0: [drm] Registered 1 planes with drm panic
+guest: [   12.467876] [drm] Initialized virtio_gpu 0.1.0 for 0000:00:01.0 on minor 0
+guest: [   12.574495] virtio-pci 0000:00:01.0: [drm] fb0: virtio_gpudrmfb frame buffer device
+guest: context init     : yes
+guest: cap sets         : 0
+[   15.661737] reboot: Power down
+qemu-system-x86_64: ../src/dispatch_common.c:872: epoxy_get_proc_address: Assertion `0 && "Couldn't find current GLX or EGL context.\n"' failed.
+host: qemu env LD_LIBRARY_PATH=/opt/rach2-nctx/virglrenderer/lib qemu-system-x86_64, render node /dev/dri/renderD128
+MESA-LOADER: failed to retrieve device information
+MESA-LOADER: failed to retrieve device information
+MESA-LOADER: failed to retrieve device information
+qemu-system-x86_64: drm requires egl display and virglrenderer >= 1.2.0
+[    7.349308] [drm:virtio_gpu_init.cold [virtio_gpu]] *ERROR* timed out waiting for cap set 0
+guest: [    2.264986] [drm] pci: virtio-gpu-pci detected at 0000:00:01.0
+guest: [    2.265456] [drm] Host memory window: 0xe0000000 +0x10000000
+guest: [    2.265502] [drm] features: +virgl +edid +resource_blob +host_visible
+guest: [    2.265518] [drm] features: +context_init -blob_alignment
+guest: [    2.269535] [drm] number of scanouts: 1
+guest: [    2.269558] [drm] number of cap sets: 3
+guest: [    7.349308] [drm:virtio_gpu_init.cold [virtio_gpu]] *ERROR* timed out waiting for cap set 0
+guest: [   12.472613] virtio-pci 0000:00:01.0: [drm] Registered 1 planes with drm panic
+guest: [   12.473057] [drm] Initialized virtio_gpu 0.1.0 for 0000:00:01.0 on minor 0
+guest: [   12.613294] virtio-pci 0000:00:01.0: [drm] fb0: virtio_gpudrmfb frame buffer device
+guest: context init     : yes
+guest: cap sets         : 0
+[   15.701243] reboot: Power down

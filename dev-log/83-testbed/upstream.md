@@ -23,3 +23,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the guest's package list adds `libegl1` and `libopengl0`.
 * Status: unreported.
 * Next: read Debian's `debian/control` for virglrenderer and check whether a recommended package pulls the loader in, since the guest installs no recommends; if none does, report it on Debian's tracker against virglrenderer.
+
+## QEMU aborts in libepoxy on exit after virgl fails to initialize
+
+* Project: QEMU 11.1.2, Debian's source `qemu_11.1.2+ds-3~bpo13+4` with its patches, built for x86-64 by `bed/nctx/build.sh qemu` against virglrenderer 1.3.0, with libepoxy 1.5.10 and Mesa 25.0.7 on Debian 13 with Linux 7.2.12.
+* Fails: with `-device virtio-gpu-gl-pci,blob=true,hostmem=256M,drm_native_context=on` and `-display egl-headless` on a host with no GPU that virglrenderer's DRM renderer supports, virglrenderer's initialization fails ("failed to initialize drm renderer", then QEMU's "virgl could not be initialized: -19"), the guest runs on without capsets, and when the guest powers off QEMU aborts on libepoxy's assertion "Couldn't find current GLX or EGL context" (`src/dispatch_common.c:872` of libepoxy 1.5.10). Which of QEMU's calls reaches libepoxy on that path was not traced.
+* Found: 2026-11-09, on the testing PC, milestone 83, task 83-6a, by the capset probe of `bed/nctx/guest.sh` in the bed's variant image under KVM, its own guest under TCG with the GL drawn on vgem.
+* Reproduction: `sh bed/nctx/build.sh run 'sh guest.sh capsets'` on a host without i915, after `build.sh all`.
+* Evidence: `dev-log/83-testbed/83-6a/capsets-testing-pc.txt`, the first run.
+* Rach2: nothing; the bed runs native context only where i915 is present.
+* Status: unreported.
+* Next: take QEMU's backtrace at the abort to find the call, and repeat with upstream QEMU's current release before a report.
