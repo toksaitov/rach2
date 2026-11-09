@@ -184,36 +184,3 @@ uint32_t vtd_hw_apic_id(void)
 {
     return lapic_id();
 }
-
-/**
- * Linux's set_msi_sid, over the walk of pci_for_each_dma_alias: a bridge
- * that is not PCI Express, or a PCI Express bridge to conventional PCI,
- * puts its own requester id, or its secondary bus's, on what passes it, so
- * the topmost such bridge decides, and the entry then checks the bus range
- * from there to the device's bus, which is the one bus when the bridge's
- * secondary bus is the device's own.
- */
-void vtd_hw_msi_source(uint8_t bus, uint8_t devfn, unsigned int *svt, uint16_t *sid)
-{
-    pci_device_t br;
-    uint8_t at = bus;
-    int alias_bus = -1, guard;
-
-    *svt = 1;
-    *sid = (uint16_t)((bus << 8) | devfn);
-    for (guard = 0; at != 0 && guard < 256 && pci_find_bridge_for_bus(at, &br); guard++) {
-        uint8_t exp = pci_find_capability(br.bus, br.device, br.function, PCI_CAP_ID_PCIE);
-
-        if (exp == 0) {
-            alias_bus = br.bus;
-        } else if (((pci_read_config16(br.bus, br.device, br.function, (uint8_t)(exp + 2)) >> 4) &
-                    0xFu) == 0x7u) {
-            alias_bus = at;
-        }
-        at = br.bus;
-    }
-    if (alias_bus >= 0) {
-        *svt = 2;
-        *sid = (uint16_t)((alias_bus << 8) | bus);
-    }
-}
