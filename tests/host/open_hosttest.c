@@ -93,6 +93,7 @@ static long sys_pivot_root(isr_params_t *params);
 static long sys_faccessat2(isr_params_t *params);
 static long sys_splice(isr_params_t *params);
 static long sys_tee(isr_params_t *params);
+static long sys_vmsplice(isr_params_t *params);
 static long sys_sendfile(isr_params_t *params);
 static long sys_sendfile32(isr_params_t *params);
 static long sys_copy_file_range(isr_params_t *params);
@@ -418,6 +419,22 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     k_memcpy(dst, src, n);
     return 0;
+}
+
+/** Whether the call is an i386 one on the x86-64 kernel, which no call of
+ * the model is. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
+
+/** Whether a buffer is user memory, which in the model every buffer is. */
+int user_buffer_ok(uintptr_t addr, size_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
 }
 
 /** Take a path page from the model's four; every one must come back. */
