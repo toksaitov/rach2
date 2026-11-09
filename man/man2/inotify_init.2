@@ -35,7 +35,9 @@ number 292 on i386 and 254 on x86-64, watches the file
 names for the events of
 .Fa mask
 and returns the watch's descriptor, which each event of it carries.
-The path is followed through a final symbolic link unless
+The path is followed through a final symbolic link, and a
+.Pa /proc/ Ns Ar pid Ns Pa /fd/ Ns Ar n
+link to the file or directory its descriptor is open on, unless
 .Fa mask
 has
 .Dv IN_DONT_FOLLOW ,
