@@ -1201,8 +1201,10 @@ static void do_cvt(struct edid_parse *p, const uint8_t *d, void *closure)
             width = height * 4 / 3;
             break;
         }
+        /* Linux's loop starts at bit 1, so it never asks for the reduced
+         * blanking that bit 0 offers. */
         for (j = 1; j < 5; j++) {
-            if ((code[2] & (1 << j)) && cvt_mode(width, height, rates[j], j == 0, 0, 0, &m)) {
+            if ((code[2] & (1 << j)) && cvt_mode(width, height, rates[j], 0, 0, 0, &m)) {
                 parse_add(p, &m);
             }
         }

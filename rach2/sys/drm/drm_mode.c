@@ -234,14 +234,13 @@ struct drm_framebuffer *drm_framebuffer_lookup(struct drm_device *dev, struct dr
 /** Copy `name` into a property's name, cut to fit. */
 static void prop_name(char *dst, const char *name)
 {
-    uint32_t i;
+    uint32_t n = (uint32_t)k_strlen(name);
 
-    for (i = 0; i + 1 < DRM_PROP_NAME_LEN && name[i]; i++) {
-        dst[i] = name[i];
+    if (n > DRM_PROP_NAME_LEN - 1) {
+        n = DRM_PROP_NAME_LEN - 1;
     }
-    while (i < DRM_PROP_NAME_LEN) {
-        dst[i++] = '\0';
-    }
+    k_memcpy(dst, name, n);
+    k_memset(dst + n, 0, DRM_PROP_NAME_LEN - n);
 }
 
 struct drm_property *drm_property_create(struct drm_device *dev, uint32_t flags, const char *name,
