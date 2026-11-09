@@ -1,0 +1,8 @@
+# Graphics diagnostics and conformance tools, also available for i386.
+intel-gpu-tools
+piglit
+glmark2-x11
+glmark2-wayland
+glmark2-drm
+libdrm-tests
+vulkan-tools
