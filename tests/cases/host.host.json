@@ -291,6 +291,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drm_vblank",
+          "checks": "tests/host/drm_vblank_hosttest.c checks vblank counts, WAIT_VBLANK, the CRTC sequence ioctls, the off-delay, event order, in-fences of sw_sync that signal late, out-fences, connector forcing, the EDID override and CRC entries against a timer-driven fake driver under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drm_vblank64",
+          "checks": "tests/host/drm_vblank64_hosttest.c runs the vblank rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "drm_prime",
           "checks": "tests/host/drm_prime_hosttest.c checks PRIME exports, import caching, self-import, cross-device and udmabuf pages, lifetimes and failures under ASan and UBSan",
           "source": "scenario"

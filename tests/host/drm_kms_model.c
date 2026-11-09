@@ -1,12 +1,16 @@
 /*
  * drm_kms_model.c: the kernel around rach2/sys/drm's display code, for the
- * host tests that include drm_mode.c, drm_atomic.c, drm_legacy.c and
- * drm_edid.c whole: allocation with a live count, user copies, the clock,
- * waits that never sleep, events, buffer objects and fences.
+ * host tests that include drm_mode.c, drm_atomic.c, drm_vblank.c,
+ * drm_legacy.c and drm_edid.c whole: allocation with a live count, user
+ * copies, a clock the test may move, waits that never sleep, events,
+ * buffer objects and fences. A test that defines KMS_MODEL_FENCES brings
+ * the real fences and sync files and their descriptors itself, and one that
+ * sets `model_wait` makes a wait's condition come true, as a sleep would.
  */
 
 #include "drm/drm_mode.c"
 #include "drm/drm_atomic.c"
+#include "drm/drm_vblank.c"
 #include "drm/drm_legacy.c"
 #include "drm/drm_edid.c"
 
@@ -92,11 +96,20 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
 
 /* ---- time and waits: one thread, so the commit lock is always free ---- */
 
-/** A fixed monotonic time, 5.25 s. */
+/* The monotonic time, 5.25 s unless the test moves it. */
+static int64_t model_now_ns = 5250000000ll;
+
+/** The model's monotonic time. */
 void rtc_monotonic(int64_t *sec, int64_t *nsec)
 {
-    *sec = 5;
-    *nsec = 250000000;
+    *sec = model_now_ns / 1000000000ll;
+    *nsec = model_now_ns % 1000000000ll;
+}
+
+/** The ticks of the model's time, a millisecond each. */
+uint64_t rtc_ticks_now(void)
+{
+    return (uint64_t)(model_now_ns / 1000000);
 }
 
 /** Initialize a queue. */
@@ -114,10 +127,17 @@ void wq_wake_all(wait_queue_t *wq)
     wakes++;
 }
 
-/** A wait whose condition holds, as nothing else runs. */
+/* The test's stand-in for what runs while a waiter sleeps, or NULL. */
+static void (*model_wait)(wq_cond_fn cond, void *arg);
+
+/** A wait whose condition holds once `model_wait` has run, as nothing else
+ * runs. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
+    if (model_wait && !cond(arg)) {
+        model_wait(cond, arg);
+    }
     CHECK(cond(arg), "a wait's condition holds in one thread");
     return 0;
 }
@@ -132,6 +152,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
 #define MAX_SENT 16
 static struct drm_event_vblank sent[MAX_SENT];
+static struct drm_event_crtc_sequence sent_seq[MAX_SENT]; /* the same bytes as a sequence event */
 static int nsent, reserved;
 
 /** Reserve `e` on `file`, as drm.c does. */
@@ -146,22 +167,33 @@ int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
     return 0;
 }
 
-/** Record `e`'s bytes, give back its space and free it. */
+/** Signal `e`'s fence and record its bytes when it has a file, in the
+ * order a reader would read them; give back its space and free it. */
 void drm_send_event(struct drm_pending_event *e)
 {
-    if (nsent < MAX_SENT) {
-        sent[nsent++] = e->event.vbl;
+    if (e->fence) {
+        dma_fence_signal(e->fence);
+        dma_fence_put(e->fence);
     }
-    e->file->event_space += e->length;
-    reserved--;
+    if (e->file) {
+        if (nsent < MAX_SENT) {
+            sent_seq[nsent] = e->event.seq;
+            sent[nsent++] = e->event.vbl;
+        }
+        e->file->event_space += e->length;
+        reserved--;
+    }
     kfree(e);
 }
 
-/** Take back a reserved `e`. */
+/** Take back a reserved `e`, or a commit's that has no file. */
 void drm_event_cancel_free(struct drm_pending_event *e)
 {
-    e->file->event_space += e->length;
-    reserved--;
+    dma_fence_put(e->fence);
+    if (e->file) {
+        e->file->event_space += e->length;
+        reserved--;
+    }
     kfree(e);
 }
 
@@ -266,6 +298,7 @@ int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
     return -EINVAL;
 }
 
+#ifndef KMS_MODEL_FENCES
 /* ---- fences: descriptor 5 is a sync file of one fence ---- */
 
 static struct dma_fence in_fence;
@@ -297,6 +330,95 @@ int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline
     CHECK(intr, "a commit waits for its fences interruptibly");
     fence_waits++;
     return fence_wait_rc;
+}
+
+/** Take a reference; NULL is allowed. */
+struct dma_fence *dma_fence_get(struct dma_fence *fence)
+{
+    if (fence) {
+        fence_refs++;
+    }
+    return fence;
+}
+
+/** Whether the fence has signalled: the model's has. */
+int dma_fence_is_signaled(struct dma_fence *fence)
+{
+    (void)fence;
+    return 1;
+}
+
+/** No callback is added to a fence that has signalled. */
+int32_t dma_fence_add_callback(struct dma_fence *fence, struct dma_fence_cb *cb,
+                               void (*func)(struct dma_fence *, struct dma_fence_cb *))
+{
+    (void)fence;
+    (void)cb;
+    (void)func;
+    return -ENOENT;
+}
+
+/** Record nothing of an error. */
+void dma_fence_set_error(struct dma_fence *fence, int32_t error)
+{
+    (void)fence;
+    (void)error;
+}
+
+/** Signal: nothing waits in the model. */
+int32_t dma_fence_signal(struct dma_fence *fence)
+{
+    (void)fence;
+    return 0;
+}
+
+/** The first of `num` contexts. */
+uint64_t dma_fence_context_alloc(uint32_t num)
+{
+    (void)num;
+    return 1;
+}
+
+/** A new fence, counted as held. */
+void dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops, uint64_t context,
+                    uint64_t seqno)
+{
+    fence->ops = ops;
+    fence->context = context;
+    fence->seqno = seqno;
+    fence_refs++;
+}
+
+/** No descriptor table: a sync file cannot be made. */
+int32_t sync_file_create(struct dma_fence *fence, const char *name)
+{
+    (void)fence;
+    (void)name;
+    return -EMFILE;
+}
+
+/** Nothing to free. */
+int fd_free(fd_table_t *table, int fd)
+{
+    (void)table;
+    (void)fd;
+    return 0;
+}
+#endif
+
+/* ---- devices: a hold is a count; the test's device is never freed ---- */
+
+/** Take a hold on `dev`. */
+void drm_dev_get(struct drm_device *dev)
+{
+    dev->refs++;
+}
+
+/** Let a hold go. */
+void drm_dev_put(struct drm_device *dev)
+{
+    CHECK(dev->refs > 0, "a device is put no more than it is held");
+    dev->refs--;
 }
 
 /* ---- files ---- */

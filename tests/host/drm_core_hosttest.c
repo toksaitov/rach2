@@ -473,6 +473,13 @@ FOREIGN(drm_syncobj_signal_ioctl)
 FOREIGN(drm_syncobj_timeline_signal_ioctl)
 FOREIGN(drm_syncobj_query_ioctl)
 
+/** drm_vblank.c's turning off of an unplugged device's CRTCs: the model's
+ * devices have none. */
+void drm_vblank_unplug(struct drm_device *dev)
+{
+    (void)dev;
+}
+
 /** drm_mode.c's release of a file's framebuffers and blobs: the model's
  * files make none. */
 void drm_mode_file_release(struct drm_file *file)
