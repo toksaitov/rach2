@@ -995,16 +995,16 @@ static void grant_seed(struct etude_ledger *l, const char *ledger)
     CHECK(etude_ledger_finish(l, q.id, ETUDE_CLEANUP_CONFIRMED) != 0 && errno == ENOENT,
           "grant write failure leaves no claim");
     q.res[0].amount = 21;
-    CHECK(admit(l, "grant-cpu", q.account, q.res, q.cap, 0) != 0 && errno == ERANGE,
-          "measured preparation cannot exceed CPU capacity");
+    q.id = "grant-cpu";
+    CHECK(admit(l, &q) != 0 && errno == ERANGE, "measured preparation cannot exceed CPU capacity");
     q.res[0].amount = 1;
     q.res[2].amount = 21;
-    CHECK(admit(l, "grant-disk", q.account, q.res, q.cap, 0) != 0 && errno == ERANGE,
-          "measured preparation cannot exceed disk capacity");
+    q.id = "grant-disk";
+    CHECK(admit(l, &q) != 0 && errno == ERANGE, "measured preparation cannot exceed disk capacity");
     unsetenv("ETUDE_PREPARATION_GRANT");
     q.res[0].amount = 21;
-    CHECK(!admit(l, "compatibility", q.account, q.res, q.cap, 0),
-          "unmeasured compatibility admission still reserves only memory");
+    q.id = "compatibility";
+    CHECK(!admit(l, &q), "unmeasured compatibility admission still reserves only memory");
     CHECK(!etude_ledger_finish(l, "compatibility", ETUDE_CLEANUP_CONFIRMED),
           "compatibility fixture claim ends");
 }

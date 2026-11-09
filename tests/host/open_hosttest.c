@@ -329,6 +329,47 @@ static int fl_move(void *olddir, const char *oldname, void *newdir, const char *
 static void fl_note(const char *token);
 static int fl_holds(void *at);
 
+static uint32_t interrupt_flags = 0x200u;
+
+/** Save and clear the model's interrupt-enable bit. */
+uint32_t kirq_save(void)
+{
+    uint32_t flags = interrupt_flags;
+
+    interrupt_flags = 0;
+    return flags;
+}
+
+/** Restore the model's saved flags. */
+void kirq_restore(uint32_t flags)
+{
+    interrupt_flags = flags;
+}
+
+/** Whether the model allows interrupts. */
+int kirq_enabled(void)
+{
+    return (interrupt_flags & 0x200u) != 0;
+}
+
+/** Enable interrupts in the model. */
+void arch_irq_enable(void)
+{
+    interrupt_flags |= 0x200u;
+}
+
+/** Whether the modeled thread is in a system call. */
+int proc_in_syscall(void)
+{
+    return current_proc && current_proc->in_syscall;
+}
+
+/** Model devices have no partition view; return their own flags. */
+uint32_t block_flags(block_device_t *device)
+{
+    return device->flags;
+}
+
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
 {
