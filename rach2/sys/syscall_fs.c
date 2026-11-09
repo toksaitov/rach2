@@ -31,6 +31,7 @@
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
+#include "dmabuf/dmabuf.h"
 #include "fs/lock.h"
 #include "fs/pathbuf.h"
 #include "ipc/pipe.h"
@@ -4972,6 +4973,25 @@ static int seek_data_hole(uint64_t size, long long off, int whence, long long *a
     return 0;
 }
 
+/** Seek one of devfs's windows, logs or zero-position devices. */
+static long device_lseek(fd_entry_t *entry, long long offset, int whence, uint64_t limit)
+{
+    int seek_rc;
+    long long at;
+    if (devfs_fd_is_raw(entry)) {
+        return raw_lseek(entry, offset, whence, limit);
+    }
+    if (devfs_fd_log_size(entry, NULL)) {
+        seek_rc = seek_bootlog(entry, offset, whence, limit, 1, &at);
+        return seek_rc != 0 ? seek_rc : (long)at;
+    }
+    if (devfs_lseek_zero(entry)) {
+        entry->ofd->offset = 0;
+        return 0;
+    }
+    return -ESPIPE;
+}
+
 /**
  * lseek(2): move the offset of the descriptor in argument 0 by the offset
  * in argument 1, a signed register's worth, and the whence in argument 2;
@@ -5012,22 +5032,20 @@ long sys_lseek(isr_params_t *params)
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
+    if (entry->ops && entry->ops->llseek) {
+        at = entry->ops->llseek(entry, offset, whence);
+        if (at < 0)
+            return (long)at;
+        if ((uint64_t)at > limit)
+            return -EOVERFLOW;
+        entry->ofd->offset = (uint64_t)at;
+        return (long)at;
+    }
     if (entry->type == FD_TYPE_PIPE) {
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
-        if (devfs_fd_is_raw(entry)) {
-            return raw_lseek(entry, offset, whence, limit);
-        }
-        if (devfs_fd_log_size(entry, NULL)) {
-            seek_rc = seek_bootlog(entry, offset, whence, limit, 1, &at);
-            return seek_rc != 0 ? seek_rc : (long)at;
-        }
-        if (devfs_lseek_zero(entry)) {
-            entry->ofd->offset = 0;
-            return 0;
-        }
-        return -ESPIPE;
+        return device_lseek(entry, offset, whence, limit);
     }
     if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
         return -ESPIPE;
@@ -7876,7 +7894,13 @@ static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
     }
     kst->st_nlink = 1;
     kst->st_blksize = 4096;
-    if (nsfs_ns(entry)) {
+    if (is_dma_buf_file(entry)) {
+        struct dma_buf *buf = entry->priv;
+        kst->st_mode = S_IFREG | 0600;
+        kst->st_ino = buf->ino;
+        kst->st_size = (int64_t)buf->size;
+        kst->st_blocks = (buf->size + 511) >> 9;
+    } else if (nsfs_ns(entry)) {
         kst->st_dev = NSFS_DEV;
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = nsfs_ns(entry)->inum;
@@ -10019,6 +10043,21 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
     return -EBADF;
 }
 
+/** Seek a devfs descriptor and copy its 64-bit position to the caller. */
+static int32_t device_llseek(fd_entry_t *entry, long long off, int whence, long long __user *result)
+{
+    if (devfs_fd_is_raw(entry)) {
+        return llseek_raw(entry, off, whence, result);
+    }
+    if (devfs_fd_log_size(entry, NULL)) {
+        return llseek_bootlog(entry, off, whence, result);
+    }
+    if (devfs_lseek_zero(entry)) {
+        return llseek_zero(entry, result);
+    }
+    return -ESPIPE;
+}
+
 /**
  * _llseek(2), i386's 64-bit lseek: the descriptor, the high and low words of
  * the displacement, the address of the 64-bit result and `whence`. Moves the
@@ -10062,20 +10101,20 @@ long sys__llseek(isr_params_t *params)
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
+    if (entry->ops && entry->ops->llseek) {
+        new_off = entry->ops->llseek(entry, off_from(offset_high, offset_low), whence);
+        if (new_off < 0)
+            return (long)new_off;
+        if (copy_to_user(result, &new_off, sizeof(new_off)))
+            return -EFAULT;
+        entry->ofd->offset = (uint64_t)new_off;
+        return 0;
+    }
     if (entry->type == FD_TYPE_PIPE) {
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
-        if (devfs_fd_is_raw(entry)) {
-            return llseek_raw(entry, off_from(offset_high, offset_low), whence, result);
-        }
-        if (devfs_fd_log_size(entry, NULL)) {
-            return llseek_bootlog(entry, off_from(offset_high, offset_low), whence, result);
-        }
-        if (devfs_lseek_zero(entry)) {
-            return llseek_zero(entry, result);
-        }
-        return -ESPIPE;
+        return device_llseek(entry, off_from(offset_high, offset_low), whence, result);
     }
     if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
         return -ESPIPE;
