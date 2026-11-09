@@ -271,6 +271,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "evdev",
+          "checks": "tests/host/evdev_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "eventfd",
           "checks": "tests/host/eventfd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
