@@ -57,8 +57,10 @@ struct socket;
  * `ss` judges each socket by its filter again.
  *
  * A socket of NETLINK_KOBJECT_UEVENT, which udev's monitors open to hear of
- * devices that come and go, is made, bound and polled like the other and
- * hears nothing: the kernel sends no uevents. What is sent on it is dropped.
+ * devices that come and go, hears the kernel's uevents in group 1 once it
+ * joins it (`netlink_uevent`), each a datagram of NUL-ended strings from
+ * port id 0, with nl_groups 1 in the sender's address. What is sent on it
+ * is dropped.
  *
  * Opening one is anyone's, as on Linux; a change needs privilege.
  */
@@ -124,6 +126,17 @@ void netlink_name(struct socket *sock, uint8_t *sa);
  * unbound socket is bound first, as by `netlink_bind` with 0. On a socket of
  * NETLINK_KOBJECT_UEVENT the messages are dropped. */
 int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len);
+
+/** Send the uevent of `len` bytes at `msg` to every NETLINK_KOBJECT_UEVENT
+ * socket of the first network namespace in group 1, as Linux broadcasts
+ * kobject uevents; a socket whose queue would pass NL_NOTIFY_QUEUE_MAX
+ * misses it, as a notification is missed. Takes net_lock. */
+void netlink_uevent(const uint8_t *msg, uint32_t len);
+
+/** The nl_groups of the sender's address of the datagram `sock` read or
+ * peeked at last: the bit of the group it was sent to, as Linux's
+ * netlink_group_mask gives it, and 0 for an answer or a group above 32. */
+uint32_t netlink_last_group(struct socket *sock);
 
 /** Bytes in the oldest queued datagram, or -1 when none is queued. */
 int netlink_pending(struct socket *sock);

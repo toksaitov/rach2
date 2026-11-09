@@ -71,13 +71,16 @@
 /* The multicast groups of NETLINK_ROUTE that notifications go to, Linux's
  * RTNLGRP_ numbers; a socket is in group N when bit N - 1 of its groups is
  * set, by bind or by NETLINK_ADD_MEMBERSHIP. */
-#define RTNLGRP_LINK        1
-#define RTNLGRP_IPV4_IFADDR 5
-#define RTNLGRP_IPV4_ROUTE  7
-#define RTNLGRP_IPV6_IFADDR 9
-#define RTNLGRP_IPV6_ROUTE  11
-#define RTNLGRP_ND_USEROPT  20
-#define GROUP_BIT(g)        (1u << ((g) - 1))
+#define RTNLGRP_LINK           1
+#define RTNLGRP_IPV4_IFADDR    5
+#define RTNLGRP_IPV4_ROUTE     7
+#define RTNLGRP_IPV6_IFADDR    9
+#define RTNLGRP_IPV6_ROUTE     11
+#define RTNLGRP_ND_USEROPT     20
+#define GROUP_BIT(g)           (1u << ((g) - 1))
+/* The group of NETLINK_KOBJECT_UEVENT the kernel's uevents go to; udev
+ * sends its own, after its rules, to group 2. */
+#define NL_UEVENT_GROUP_KERNEL 1u
 #define WATCH_GROUPS                                                                            \
     (GROUP_BIT(RTNLGRP_LINK) | GROUP_BIT(RTNLGRP_IPV4_IFADDR) | GROUP_BIT(RTNLGRP_IPV4_ROUTE) | \
      GROUP_BIT(RTNLGRP_IPV6_IFADDR) | GROUP_BIT(RTNLGRP_IPV6_ROUTE))
@@ -212,10 +215,13 @@
  * router's address as an attribute. */
 #define NL_USEROPT_MAX (NLMSG_HDRLEN + NDUSEROPT_MSG_LEN + 255u * 8u + 4u + 16u)
 
-/* One queued datagram; its bytes follow the record. */
+/* One queued datagram; its bytes follow the record. `group` is the
+ * multicast group a notification went to, which the receiver's sockaddr_nl
+ * gives as Linux does, and 0 for an answer. */
 struct nl_dgram {
     struct nl_dgram *next;
     uint32_t len;
+    uint32_t group;
 };
 
 struct nl_group {
@@ -247,6 +253,7 @@ struct netlink_state {
      * and the receive path queue notifications. */
     struct nl_dgram *head, *tail;
     uint32_t queued;
+    uint32_t last_group; /* the `group` of the datagram read last */
 };
 
 static struct netlink_state *states;
@@ -487,9 +494,11 @@ void netlink_name(struct socket *sock, uint8_t *sa)
     put32(sa + 8, st->groups);
 }
 
-/** Queue a copy of the `len` bytes at `data` on `st` as one datagram and
- * wake a reader; 0, or -ENOMEM. The caller holds net_lock. */
-static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
+/** Queue a copy of the `len` bytes at `data` on `st` as one datagram sent
+ * to the multicast `group`, 0 for an answer, and wake a reader; 0, or
+ * -ENOMEM. The caller holds net_lock. */
+static int enqueue_group(struct netlink_state *st, const uint8_t *data, uint32_t len,
+                         uint32_t group)
 {
     struct nl_dgram *d = kmalloc(sizeof(*d) + len);
 
@@ -498,6 +507,7 @@ static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
     }
     d->next = 0;
     d->len = len;
+    d->group = group;
     k_memcpy(d + 1, data, len);
     if (st->tail) {
         st->tail->next = d;
@@ -508,6 +518,12 @@ static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
     st->queued += len;
     wq_wake(&st->sock->waiters, WQ_DATA);
     return 0;
+}
+
+/** Queue an answer, as `enqueue_group` with no group. */
+static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
+{
+    return enqueue_group(st, data, len, 0);
 }
 
 /** Queue a generic reply for the same socket and port that sent the request.
@@ -562,7 +578,7 @@ int netlink_genl_multicast(uint32_t group, const uint8_t *data, unsigned len)
             joined = g->id == group;
         }
         if (joined && (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
-                       enqueue(st, data, len) != 0)) {
+                       enqueue_group(st, data, len, group) != 0)) {
             rc = -ENOBUFS;
             if (!st->no_enobufs) {
                 st->sock->so_error = ENOBUFS;
@@ -704,7 +720,7 @@ static void notify(uint32_t group, int del, uint8_t *msg)
             continue;
         }
         if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
-            enqueue(st, msg, len) != 0) {
+            enqueue_group(st, msg, len, group) != 0) {
             if (!st->no_enobufs) {
                 st->sock->so_error = ENOBUFS;
                 wq_wake(&st->sock->waiters, WQ_DATA);
@@ -2887,8 +2903,42 @@ int netlink_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
         n = (uint32_t)len;
     }
     k_memcpy(buf, (const uint8_t *)(st->head + 1) + offset, n);
+    st->last_group = st->head->group;
     net_unlock(flags);
     return (int)n;
+}
+
+uint32_t netlink_last_group(struct socket *sock)
+{
+    struct netlink_state *st = state_of(sock);
+    uint32_t group = st ? st->last_group : 0;
+
+    return group >= 1 && group <= 32 ? GROUP_BIT(group) : 0;
+}
+
+void netlink_uevent(const uint8_t *msg, uint32_t len)
+{
+    struct netlink_state *st;
+    uint32_t flags;
+
+    if (len > NL_DGRAM_MAX) {
+        return;
+    }
+    flags = net_lock();
+    for (st = states; st; st = st->next) {
+        if (st->protocol != NETLINK_KOBJECT_UEVENT || !st->seen ||
+            !(st->groups & GROUP_BIT(NL_UEVENT_GROUP_KERNEL))) {
+            continue;
+        }
+        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+            enqueue_group(st, msg, len, NL_UEVENT_GROUP_KERNEL) != 0) {
+            if (!st->no_enobufs) {
+                st->sock->so_error = ENOBUFS;
+                wq_wake(&st->sock->waiters, WQ_DATA);
+            }
+        }
+    }
+    net_unlock(flags);
 }
 
 void netlink_consume(struct socket *sock)
