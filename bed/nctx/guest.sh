@@ -38,6 +38,7 @@ apt_get()
 {
     a=$HOME/apt-$1.log
     shift
+    # shellcheck disable=SC2024 # the log is the user's, not root's
     sudo DEBIAN_FRONTEND=noninteractive apt-get -q -y "$@" > "$a" 2>&1 ||
         { tail -n 30 "$a" >&2; die "apt-get $*: failed"; }
     grep -E '^(Need to get|Fetched) ' "$a" | sed 's/^/apt: /' >> "$log" || true
@@ -250,7 +251,7 @@ capsets()
         echo '/bin/busybox --install -s /bin'
         echo 'mount -t proc proc /proc; mount -t sysfs sys /sys'
         echo 'mount -t debugfs debugfs /sys/kernel/debug'
-        for m in $(cat "$w/order"); do
+        while read -r m; do
             f=$(/sbin/modinfo -k "$k" -F filename "$m")
             case $f in
                 *.xz) xz -dc "$f" > "$w/root/m/$m.ko" ;;
@@ -258,7 +259,7 @@ capsets()
                 *) continue ;;
             esac
             echo "insmod /m/$m.ko"
-        done
+        done < "$w/order"
         echo 'sleep 3'
         echo 'dmesg | grep -i -E "virtio.gpu|\[drm\]|cap set" | sed "s/^/guest: /"'
         echo 'grep -E "cap sets|context init" /sys/kernel/debug/dri/0/virtio-gpu-features | sed "s/^/guest: /"'
