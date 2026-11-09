@@ -177,6 +177,10 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 /* The handlers of the i386 calls a frame's SC_COMPAT marks, by i386's
  * numbers, which `ia32_syscall_init` fills. */
 static syscall_fn_t _ia32_syscall_table[IA32_SYSCALL_TABLE_SIZE];
+
+/* The compat ioctl (arch/x86_64/ia32_ioctl.c), which restarts as ioctl does
+ * (`syscall_restartable`). */
+long compat_sys_ioctl(isr_params_t *params);
 #endif
 
 /** The table the call in `params` is numbered in, and its size in `size`:
@@ -2189,13 +2193,16 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
  * master, -ENOTTY when it has none; the framebuffer's operations answer
  * its FB_* requests (display/fbdev.c). The console answers its sound
  * requests (`console_ioctl`), by the descriptor's type, so a descriptor 1
- * reopened onto a regular file never reaches the speaker.
+ * reopened onto a regular file never reaches the speaker. `ioctl_fd` is the
+ * call with its arguments taken out of the frame.
  */
 long sys_ioctl(isr_params_t *params)
 {
-    int fd_num = (int)SC_ARG(params, 0);
-    uint32_t request = (uint32_t)SC_ARG(params, 1);
-    uintptr_t arg = SC_ARG(params, 2);
+    return ioctl_fd((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), SC_ARG(params, 2));
+}
+
+long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
+{
     fd_entry_t *entry;
 
     if (!current_proc) {
@@ -2709,7 +2716,8 @@ static int ioctl_restartable(const isr_params_t *params)
  * the ones Linux never restarts after a handler, which wait for a signal or
  * for a deadline, a timed futex wait among them (`futex_restartable`), or
  * for a System V semaphore or queue, those through ipc(2) among them
- * (`sysv_ipc_restartable`); an ioctl of KVM's (`ioctl_restartable`); and
+ * (`sysv_ipc_restartable`); an ioctl of KVM's, by either ABI
+ * (`ioctl_restartable`); and
  * the two returns from a handler, whose result register is the interrupted
  * call's. The call is told by its handler, since
  * its number differs between the architectures; an i386 call on the x86-64
@@ -2720,6 +2728,11 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
     if (fn == sys_ioctl) {
         return ioctl_restartable(params);
     }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (fn == compat_sys_ioctl) {
+        return ioctl_restartable(params);
+    }
+#endif
     if (fn == sys_futex) {
         return futex_restartable(params);
     }

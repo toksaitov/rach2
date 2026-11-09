@@ -18,6 +18,15 @@ void init_syscall(void);
  */
 int in_compat_syscall(void);
 
+/**
+ * ioctl(2) of the request `request` with the argument `arg` on the
+ * descriptor `fd`, as `sys_ioctl` answers it from a frame. The compat
+ * ioctl calls it with a translated argument, a kernel buffer the thread's
+ * user-copy window covers (`user_window_open`). Returns what the request
+ * returns, or -errno.
+ */
+long ioctl_fd(int fd, uint32_t request, uintptr_t arg);
+
 struct krffs_node;
 
 /**
