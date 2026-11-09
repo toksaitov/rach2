@@ -100,7 +100,7 @@ machine_sh()
     if [ "$mode" = local ]; then
         sh -s
     elif [ "$windows" = 1 ]; then
-        ssh -T -o BatchMode=yes -- "$host" 'C:\msys64\usr\bin\env.exe PATH=/usr/bin:/ucrt64/bin sh -s'
+        ssh -T -o BatchMode=yes -- "$host" 'C:/msys64/usr/bin/env.exe PATH=/usr/bin:/ucrt64/bin sh -s'
     else
         ssh -T -o BatchMode=yes -- "$host" 'sh -s'
     fi

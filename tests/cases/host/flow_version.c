@@ -87,7 +87,7 @@ static int version_ssh_mock(int argc, char **argv)
     }
     shell[strcspn(shell, "\r\n")] = 0;
     prefix[strcspn(prefix, "\r\n")] = 0;
-    if (!strcmp(command, "C:\\msys64\\usr\\bin\\env.exe PATH=/usr/bin:/ucrt64/bin sh -s")) {
+    if (!strcmp(command, "C:/msys64/usr/bin/env.exe PATH=/usr/bin:/ucrt64/bin sh -s")) {
         command = "sh -s";
         snprintf(path, sizeof(path), "%s/windows:%s%s%s", ev("FLOW_WORK"), prefix,
                  *prefix ? ":" : "", ev("PATH"));
@@ -834,7 +834,7 @@ static int version_windows_version(struct version *value)
     ok = fx_check(f,
                   result(&v, "built", vp("appdata/etude")) &&
                       fx_equal(vp("ssh.log"),
-                               "-T -o BatchMode=yes -- machine C:\\msys64\\usr\\bin\\env.exe "
+                               "-T -o BatchMode=yes -- machine C:/msys64/usr/bin/env.exe "
                                "PATH=/usr/bin:/ucrt64/bin sh -s\n"),
                   "Windows remote command") &&
          ok;

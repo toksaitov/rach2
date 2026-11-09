@@ -129,7 +129,7 @@ static int ssh_mock(int argc, char **argv)
     if (!strncmp(command, "powershell -NoProfile -NonInteractive -EncodedCommand ",
                  strlen("powershell -NoProfile -NonInteractive -EncodedCommand ")))
         return powershell(strrchr(command, ' ') + 1);
-    if (!strcmp(command, "C:\\msys64\\usr\\bin\\env.exe PATH=/usr/bin:/ucrt64/bin sh -s")) {
+    if (!strcmp(command, "C:/msys64/usr/bin/env.exe PATH=/usr/bin:/ucrt64/bin sh -s")) {
         strcpy(command, "sh -s");
         snprintf(path, sizeof(path), "%s/windows:%s/mbin:%s", ev("FLOW_WORK"), ev("FLOW_WORK"),
                  ev("PATH"));
@@ -881,9 +881,8 @@ static int windows_row(struct deploy *d)
                 "C:/Program Files/qemu/share/edk2-x86_64-code.fd", NULL);
     {
         char *calls = fx_read(dp("ssh.log"));
-        const char *p = calls, *wanted =
-                                   "-T -o BatchMode=yes -- machine C:\\msys64\\usr\\bin\\env.exe "
-                                   "PATH=/usr/bin:/ucrt64/bin sh -s\n";
+        const char *p = calls, *wanted = "-T -o BatchMode=yes -- machine C:/msys64/usr/bin/env.exe "
+                                         "PATH=/usr/bin:/ucrt64/bin sh -s\n";
         unsigned n = 0;
         while ((p = strstr(p, wanted))) {
             n++;
