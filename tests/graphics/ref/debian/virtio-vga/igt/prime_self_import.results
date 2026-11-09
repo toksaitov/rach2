@@ -1,0 +1,8 @@
+igt@prime_self_import@basic-llseek-bad skip
+igt@prime_self_import@basic-llseek-size skip
+igt@prime_self_import@basic-with_fd_dup skip
+igt@prime_self_import@basic-with_one_bo skip
+igt@prime_self_import@basic-with_one_bo_two_files skip
+igt@prime_self_import@basic-with_two_bos skip
+igt@prime_self_import@export-vs-gem_close-race skip
+igt@prime_self_import@reimport-vs-gem_close-race skip

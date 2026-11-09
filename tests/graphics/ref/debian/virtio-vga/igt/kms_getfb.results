@@ -1,0 +1,14 @@
+igt@kms_getfb@getfb-addfb-different-handles pass
+igt@kms_getfb@getfb-handle-closed pass
+igt@kms_getfb@getfb-handle-not-fb pass
+igt@kms_getfb@getfb-handle-protection pass
+igt@kms_getfb@getfb-handle-valid pass
+igt@kms_getfb@getfb-handle-zero pass
+igt@kms_getfb@getfb-reject-ccs skip
+igt@kms_getfb@getfb-repeated-different-handles pass
+igt@kms_getfb@getfb2-accept-ccs skip
+igt@kms_getfb@getfb2-handle-closed pass
+igt@kms_getfb@getfb2-handle-not-fb pass
+igt@kms_getfb@getfb2-handle-protection pass
+igt@kms_getfb@getfb2-handle-zero pass
+igt@kms_getfb@getfb2-into-addfb2 pass

@@ -1,0 +1,3 @@
+igt@core_setmaster@master-drop-set-root pass
+igt@core_setmaster@master-drop-set-shared-fd pass
+igt@core_setmaster@master-drop-set-user pass

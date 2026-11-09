@@ -1,0 +1,12 @@
+igt@syncobj_basic@bad-create-flags skip
+igt@syncobj_basic@bad-destroy skip
+igt@syncobj_basic@bad-destroy-pad skip
+igt@syncobj_basic@bad-fd-to-handle skip
+igt@syncobj_basic@bad-flags-fd-to-handle skip
+igt@syncobj_basic@bad-flags-handle-to-fd skip
+igt@syncobj_basic@bad-handle-to-fd skip
+igt@syncobj_basic@bad-pad-fd-to-handle skip
+igt@syncobj_basic@bad-pad-handle-to-fd skip
+igt@syncobj_basic@create-signaled skip
+igt@syncobj_basic@illegal-fd-to-handle skip
+igt@syncobj_basic@test-valid-cycle skip

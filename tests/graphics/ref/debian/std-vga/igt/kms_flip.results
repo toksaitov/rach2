@@ -1,0 +1,8 @@
+igt@kms_flip@basic-flip-vs-dpms pass
+igt@kms_flip@basic-flip-vs-dpms@a-virtual1 pass
+igt@kms_flip@basic-flip-vs-modeset pass
+igt@kms_flip@basic-flip-vs-modeset@a-virtual1 pass
+igt@kms_flip@basic-flip-vs-wf_vblank skip
+igt@kms_flip@basic-flip-vs-wf_vblank@a-virtual1 skip
+igt@kms_flip@basic-plain-flip pass
+igt@kms_flip@basic-plain-flip@a-virtual1 pass

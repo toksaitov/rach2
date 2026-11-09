@@ -1,0 +1,12 @@
+igt@syncobj_basic@bad-create-flags pass
+igt@syncobj_basic@bad-destroy pass
+igt@syncobj_basic@bad-destroy-pad pass
+igt@syncobj_basic@bad-fd-to-handle pass
+igt@syncobj_basic@bad-flags-fd-to-handle pass
+igt@syncobj_basic@bad-flags-handle-to-fd pass
+igt@syncobj_basic@bad-handle-to-fd pass
+igt@syncobj_basic@bad-pad-fd-to-handle pass
+igt@syncobj_basic@bad-pad-handle-to-fd pass
+igt@syncobj_basic@create-signaled pass
+igt@syncobj_basic@illegal-fd-to-handle pass
+igt@syncobj_basic@test-valid-cycle pass

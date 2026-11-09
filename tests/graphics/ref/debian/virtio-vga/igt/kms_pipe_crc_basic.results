@@ -1,0 +1,10 @@
+igt@kms_pipe_crc_basic@bad-source skip
+igt@kms_pipe_crc_basic@compare-crc-sanitycheck-nv12 skip
+igt@kms_pipe_crc_basic@compare-crc-sanitycheck-xr24 skip
+igt@kms_pipe_crc_basic@disable-crc-after-crtc skip
+igt@kms_pipe_crc_basic@hang-read-crc skip
+igt@kms_pipe_crc_basic@nonblocking-crc skip
+igt@kms_pipe_crc_basic@nonblocking-crc-frame-sequence skip
+igt@kms_pipe_crc_basic@read-crc skip
+igt@kms_pipe_crc_basic@read-crc-frame-sequence skip
+igt@kms_pipe_crc_basic@suspend-read-crc skip

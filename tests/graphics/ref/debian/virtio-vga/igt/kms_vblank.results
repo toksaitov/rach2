@@ -1,0 +1,8 @@
+igt@kms_vblank@accuracy-idle fail
+igt@kms_vblank@accuracy-idle@pipe-a-virtual-1 fail
+igt@kms_vblank@query-idle fail
+igt@kms_vblank@query-idle@pipe-a-virtual-1 fail
+igt@kms_vblank@ts-continuation-idle fail
+igt@kms_vblank@ts-continuation-idle@pipe-a-virtual-1 fail
+igt@kms_vblank@wait-idle fail
+igt@kms_vblank@wait-idle@pipe-a-virtual-1 fail
