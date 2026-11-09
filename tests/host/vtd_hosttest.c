@@ -1728,6 +1728,10 @@ static void row_ir_lenovo(void)
     check(m_msi(M(1), 0x0200, msix_tables[1][0], msix_tables[1][2]) == 51, "the RTL8168's");
     check(m_rte(M(1), 0xF0F8, rtes[0].low, rtes[0].high) == 33, "the ioapic's line");
     check(m_rte(M(1), 0x00F8, rtes[0].low, rtes[0].high) == -1, "only from the ioapic");
+    check(logged(": ioapic 2, vector 33 to apic 0, ") && logged(", sid 0xf0f8 svt 1") &&
+              logged(": msi of 2:0.0, vector 51 to apic 0, edge, sid 0x0200 svt 1") &&
+              log_count("vtd: irte: dmar0 ") == 1 && log_count("vtd: irte: dmar1 ") == 4,
+          "each entry logged");
     row_end();
 }
 
