@@ -512,7 +512,7 @@ uint32_t seccomp_filter_count(const process_t *p)
  * program. An i386 caller on x86-64 passes Linux's `compat_sock_fprog`,
  * whose address is 32 bits wide. The filter is the caller's to free. NULL
  * with `*err` set: -EFAULT, -EINVAL for an empty, long or invalid program,
- * or -ENOMEM.
+ * -EACCES without no_new_privs or privilege, or -ENOMEM.
  */
 static struct seccomp_filter *filter_from_user(uintptr_t uprog, int32_t *err)
 {
@@ -541,6 +541,10 @@ static struct seccomp_filter *filter_from_user(uintptr_t uprog, int32_t *err)
     len = prog.len;
     if (len == 0 || len > BPF_MAXINSNS) {
         *err = -EINVAL;
+        return NULL;
+    }
+    if (!current_proc->no_new_privs && !proc_privileged(current_proc)) {
+        *err = -EACCES;
         return NULL;
     }
     f = kmalloc(sizeof(*f) + (len - 1u) * sizeof(struct sock_filter));
@@ -645,9 +649,6 @@ static int32_t set_mode_filter(uint32_t flags, uintptr_t uprog)
 
     if ((flags & ~SECCOMP_FILTER_FLAGS) != 0 || self->seccomp_mode == SECCOMP_MODE_STRICT) {
         return -EINVAL;
-    }
-    if (!self->no_new_privs && !proc_privileged(self)) {
-        return -EACCES;
     }
     f = filter_from_user(uprog, &err);
     if (!f) {

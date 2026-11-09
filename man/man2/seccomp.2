@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 10, 2026
 .Dt SECCOMP 2
 .Os
 .Sh NAME
@@ -92,6 +92,10 @@ at
 .Fa args
 describes, of at most 4096 instructions.
 The caller must have set no_new_privs or be privileged.
+The program descriptor and its length are checked before this privilege;
+a null descriptor fails with
+.Er EFAULT
+even for an unprivileged caller.
 .Dv SECCOMP_FILTER_FLAG_TSYNC
 gives every thread of the process the caller's new chain, which each must
 already share, and returns the id of a thread that does not;
