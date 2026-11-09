@@ -740,13 +740,41 @@ step()
     }
 }
 
+# settled N: print the state of issue N and its Status on the board, joined
+# by a tab, read again after CHECK_SETTLE seconds, 15 unless it is set.
+# finish and step close an issue and set its Status in two calls, a second
+# or two apart, and a check that reads the board between them would report a
+# card that is about to be right.
+settled()
+{
+    sleep "${CHECK_SETTLE:-15}"
+    ask -f query='query($o: String!, $r: String!, $n: Int!) {
+        repository(owner: $o, name: $r) { issue(number: $n) { state
+            projectItems(first: 20) { nodes { project { number }
+                fieldValueByName(name: "Status") {
+                    ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } }' \
+        -f o="$OWNER" -f r="${REPO#*/}" -F n="$1" --jq "
+        .data.repository.issue | .state + \"\t\" +
+        ([.projectItems.nodes[] | select(.project.number == $BOARD) |
+          .fieldValueByName.name // \"\"] | first // \"\")"
+}
+
 check()
 {
     read_board all
+    printf '%s\n' "$board" | awk -F '\t' 'NF >= 12 &&
+        (($4 == "OPEN" && $2 == "Done") || ($4 == "CLOSED" && $2 != "Done")) { print $3 }' |
+        while read -r n; do
+            now=$(settled "$n") || continue
+            case $now in
+                OPEN"$(printf '\t')"Done) echo "board: #$n is open but Done" ;;
+                CLOSED"$(printf '\t')"Done) ;;
+                CLOSED"$(printf '\t')") echo "board: #$n is closed but has no Status" ;;
+                CLOSED*) echo "board: #$n is closed but ${now#*"$(printf '\t')"}" ;;
+            esac
+        done
     printf '%s\n' "$board" | awk -F '\t' -v held=" $* " '
         NF < 12 { next }
-        $4 == "OPEN" && $2 == "Done" { print "board: #" $3 " is open but Done" }
-        $4 == "CLOSED" && $2 != "Done" { print "board: #" $3 " is closed but " ($2 == "" ? "has no Status" : $2) }
         $4 == "OPEN" && $2 == "In progress" && $6 == "" { print "board: #" $3 " is In progress with no assignee" }
         $4 == "OPEN" && $2 == "Ready" && $6 != "" && $8 == "" { print "board: #" $3 " is Ready but assigned to " $6 }
         $4 == "OPEN" && $2 == "In progress" && held != "  " && $8 == "" && index(held, " " $3 " ") == 0 &&
