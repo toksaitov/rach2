@@ -81,5 +81,12 @@
         "matched": true
       }
     }
+  },
+  "i686_private_mapping": {
+    "run_id": "tests.i686.20261109T212111Z.80082",
+    "case": "guest.default.privatefilemusl",
+    "backend": "tmpfs",
+    "result": "pass",
+    "cleanup": "confirmed"
   }
 }
