@@ -11,8 +11,11 @@
 # `fetch` downloads the pinned cloud image that `image` names and checks its
 # size and SHA-512. `prepare` makes the prepared image, an overlay of it:
 # one boot with the seed, whose `network-config` is empty, runs setup.sh.in,
-# which installs `packages` from the dated snapshot and turns cloud-init off;
-# with -n it does nothing when the prepared image exists.
+# which installs `packages` from the dated snapshot and the Venus driver that
+# vendor/gnu/debian/venus.list pins, and turns cloud-init off. The image's
+# key, the SHA-256 of the seed's files and the image's pins, is kept beside
+# it; with -n `prepare` does nothing when an image of the same key exists,
+# and `run` refuses an image of another key.
 # `run` boots a new overlay of the prepared image with the display PROFILE
 # (std-vga by default), CPUS processors (8) and MIB of memory (8192), copies
 # tests/graphics/guest-env.sh to /tmp/guest-env.sh and each FILE of -i to
@@ -59,6 +62,16 @@ url=$(pin url)
 base=$cache/$(basename "$url")
 prepared=$cache/prepared.qcow2
 key=$cache/id_ed25519
+venus=$(awk '$1 == "mesa-vulkan-drivers-amd64"' "$tree/vendor/gnu/debian/venus.list")
+[ -n "$venus" ] || die "vendor/gnu/debian/venus.list has no amd64 line"
+
+# seedkey: the key of the image that the seed's files and the pins make.
+seedkey()
+{
+    sha256sum "$here/setup.sh.in" "$here/packages" "$here/user-data.in" \
+        "$here/meta-data" "$here/network-config" "$here/image" |
+        awk '{ print $1 }' | { cat; echo "$venus"; } | sha256sum | awk '{ print $1 }'
+}
 
 fetch()
 {
@@ -129,7 +142,10 @@ watch()
 
 prepare()
 {
-    [ "${1:-}" != -n ] || [ ! -f "$prepared" ] || return 0
+    if [ "${1:-}" = -n ] && [ -f "$prepared" ] &&
+        [ "$(cat "$prepared.key" 2>/dev/null)" = "$(seedkey)" ]; then
+        return 0
+    fi
     fetch
     command -v xorriso >/dev/null || die "xorriso makes the seed; install it"
     [ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C debian-ref -f "$key"
@@ -137,14 +153,17 @@ prepare()
     rm -rf "$work"
     mkdir -p "$work/seed"
     trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
+    # shellcheck disable=SC2086 # the line's fields
+    set -- $venus
     sed -e "s|@SNAPSHOT@|$(pin snapshot)|" \
         -e "s|@PACKAGES@|$(grep -v '^#' "$here/packages" | tr '\n' ' ')|" \
+        -e "s|@VENUS_VERSION@|$2|" -e "s|@VENUS_URL@|$3|" -e "s|@VENUS_SHA256@|$4|" \
         "$here/setup.sh.in" > "$work/setup.sh"
     sed -e "s|@KEY@|$(cat "$key.pub")|" -e "s|@SETUP@|$(base64 -w0 < "$work/setup.sh")|" \
         "$here/user-data.in" > "$work/seed/user-data"
     cp "$here/meta-data" "$here/network-config" "$work/seed/"
     xorriso -as mkisofs -quiet -o "$work/seed.iso" -V cidata -J -r "$work/seed"
-    rm -f "$prepared"
+    rm -f "$prepared" "$prepared.key"
     qemu-img create -q -f qcow2 -F qcow2 -b "$base" "$work/prepared.qcow2" 32G
     port=$(free_port)
     machine std-vga 8 8192 "$work/prepared.qcow2"
@@ -159,6 +178,7 @@ prepare()
     grep -aq 'debian-ref: prepared' "$work/console.log" || die "result: preparation failed"
     mv "$work/prepared.qcow2" "$prepared"
     chmod a-w "$prepared"
+    seedkey > "$prepared.key"
     echo "debian-ref: result: prepared $prepared"
 }
 
@@ -210,6 +230,8 @@ run()
     done
     [ $# -ge "$OPTIND" ] || die "run: no command"
     [ -f "$prepared" ] || die "no prepared image; run debian-ref.sh prepare"
+    [ "$(cat "$prepared.key" 2>/dev/null)" = "$(seedkey)" ] ||
+        die "the prepared image is not the one this tree's seed makes; run debian-ref.sh prepare"
     if [ -z "${DEBIAN_REF_CLAIM:-}" ] && [ -f "$site" ]; then
         admitted "$@"
     fi
