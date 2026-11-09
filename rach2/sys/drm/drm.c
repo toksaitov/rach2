@@ -1,15 +1,57 @@
 /*
- * drm.c: the DRM core: the start of the display devices, the firmware
- * framebuffer's handoff and the core's own ioctls. Its devices, nodes and
- * dispatcher are 76-4a's; until then its identity handlers answer
- * -EOPNOTSUPP, as Linux does for a driver without the feature.
+ * drm.c: the DRM core: the start of the display devices, their card and
+ * render nodes, the open files and their events, the ioctl dispatcher with
+ * the core's table, the firmware framebuffer's handoff and the core's own
+ * ioctls of identity and capabilities.
  */
 
 #include "drm.h"
 
 #include "../arch/arch.h"
+#include "../fs/devfs.h"
+#include "../fs/file.h"
+#include "../io/poll.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kstring.h"
+#include "../mm/kheap.h"
+#include "../mm/paging.h"
+#include "../mm/usercopy.h"
+#include "../proc/percpu.h"
+#include "../proc/process.h"
+
+/* Linux's O_EXCL, which an open of a node refuses with EBUSY. */
+#define DRM_O_EXCL 0200
+
+/* The interface version SET_VERSION answers, Linux's DRM_IF_MAJOR and
+ * DRM_IF_MINOR. */
+#define DRM_IF_MAJOR 1
+#define DRM_IF_MINOR 4
+
+/* The bytes of events a file may have queued, Linux's at open. */
+#define DRM_EVENT_SPACE 4096
+
+/* An argument of up to this many bytes is copied to the stack, a larger one
+ * to the heap, as Linux's drm_ioctl does. */
+#define DRM_IOCTL_STACK 128
+
+/* GET_CLIENT's uid, Linux's overflowuid. */
+#define DRM_OVERFLOW_UID 65534
+
+/* A device's node: its registry record, its name and its type. */
+struct drm_minor {
+    struct devfs_node node;
+    char name[DEVFS_NODE_NAME_MAX];
+    struct drm_device *dev;
+    int type; /* DRM_MINOR_PRIMARY or DRM_MINOR_RENDER */
+};
+
+/* The devices by card index, from registration to the release of the
+ * record, and the two nodes of each. */
+static struct drm_device *devices[DRM_MAX_DEVICES];
+static struct drm_minor minors[DRM_MAX_DEVICES][2];
+
+static struct drm_master_notifier *master_notifiers;
 
 /* A firmware device's range of the framebuffer, while it drives it. */
 struct drm_aperture {
@@ -40,6 +82,676 @@ void drm_start(void)
         klog(KLOG_WARN, "drm", "vkms: error %d", (int)n);
     }
 }
+
+/* ------------------------------------------------------------------------
+ * Devices
+ */
+
+void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
+{
+    k_memset(dev, 0, sizeof(*dev));
+    dev->driver = driver;
+    dev->features = driver->ident.features;
+    dev->index = -1;
+    dev->refs = 1;
+    wait_queue_init(&dev->commit_wait);
+}
+
+void drm_dev_get(struct drm_device *dev)
+{
+    dev->refs++;
+}
+
+void drm_dev_put(struct drm_device *dev)
+{
+    if (!dev || --dev->refs > 0) {
+        return;
+    }
+    if (dev->index >= 0 && devices[dev->index] == dev) {
+        devices[dev->index] = NULL;
+    }
+    if (dev->driver->release) {
+        dev->driver->release(dev);
+    }
+}
+
+struct drm_device *drm_dev_at(int index)
+{
+    struct drm_device *dev;
+
+    if (index < 0 || index >= DRM_MAX_DEVICES) {
+        return NULL;
+    }
+    dev = devices[index];
+    return dev && dev->registered && !dev->unplugged ? dev : NULL;
+}
+
+/** Append `n` in decimal to `s` at `*at`, within `room`. */
+static void put_dec(char *s, uint32_t *at, uint32_t room, uint32_t n)
+{
+    char digits[10];
+    int i = 0;
+
+    do {
+        digits[i++] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n);
+    while (i > 0 && *at + 1 < room) {
+        s[(*at)++] = digits[--i];
+    }
+    s[*at] = '\0';
+}
+
+/** Append `n` as `width` lowercase hex digits to `s` at `*at`. */
+static void put_hex(char *s, uint32_t *at, uint32_t room, uint32_t n, int width)
+{
+    while (width-- > 0 && *at + 1 < room) {
+        s[(*at)++] = "0123456789abcdef"[(n >> (4 * width)) & 0xf];
+    }
+    s[*at] = '\0';
+}
+
+/** Append the string `t` to `s` at `*at`. */
+static void put_str(char *s, uint32_t *at, uint32_t room, const char *t)
+{
+    while (*t && *at + 1 < room) {
+        s[(*at)++] = *t++;
+    }
+    s[*at] = '\0';
+}
+
+/** GET_UNIQUE's name when the driver gave none: Linux's drm_pci_set_busid,
+ * "pci:0000:BB:DD.F", for a PCI function, else the driver's name. */
+static void default_unique(struct drm_device *dev)
+{
+    uint32_t at = 0;
+
+    if (dev->pci) {
+        put_str(dev->unique, &at, sizeof(dev->unique), "pci:0000:");
+        put_hex(dev->unique, &at, sizeof(dev->unique), dev->pci->bus, 2);
+        put_str(dev->unique, &at, sizeof(dev->unique), ":");
+        put_hex(dev->unique, &at, sizeof(dev->unique), dev->pci->device, 2);
+        put_str(dev->unique, &at, sizeof(dev->unique), ".");
+        put_dec(dev->unique, &at, sizeof(dev->unique), dev->pci->function);
+    } else {
+        put_str(dev->unique, &at, sizeof(dev->unique), dev->driver->ident.name);
+    }
+}
+
+static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags);
+static const struct file_ops drm_fops;
+
+/** Fill node `type` of card `index` for `dev`: "dri/cardN" at minor N or
+ * "dri/renderD(128 + N)" at minor 128 + N. */
+static struct drm_minor *minor_fill(struct drm_device *dev, int index, int type)
+{
+    struct drm_minor *m = &minors[index][type == DRM_MINOR_RENDER];
+    uint32_t at = 0;
+    int minor = type == DRM_MINOR_RENDER ? DRM_MINOR_RENDER_BASE + index : index;
+
+    put_str(m->name, &at, sizeof(m->name), type == DRM_MINOR_RENDER ? "dri/renderD" : "dri/card");
+    put_dec(m->name, &at, sizeof(m->name), (uint32_t)minor);
+    m->dev = dev;
+    m->type = type;
+    m->node.name = m->name;
+    m->node.major = DRM_MAJOR;
+    m->node.minor = (uint16_t)minor;
+    /* udev's modes on Linux: the card for its group, the render node for
+     * everyone. The registry's nodes are root's. */
+    m->node.mode = type == DRM_MINOR_RENDER ? 0666 : 0660;
+    m->node.ops = &drm_fops;
+    m->node.open = drm_node_open;
+    m->node.priv = m;
+    return m;
+}
+
+int32_t drm_dev_register(struct drm_device *dev)
+{
+    struct drm_minor *card, *render = NULL;
+    int32_t rc;
+    int i;
+
+    for (i = 0; i < DRM_MAX_DEVICES && devices[i]; i++) {
+    }
+    if (i == DRM_MAX_DEVICES) {
+        return -ENOSPC;
+    }
+    if (!dev->unique[0]) {
+        default_unique(dev);
+    }
+    card = minor_fill(dev, i, DRM_MINOR_PRIMARY);
+    rc = devfs_node_register(&card->node);
+    if (rc != 0) {
+        return rc;
+    }
+    if (drm_core_check_feature(dev, DRIVER_RENDER)) {
+        render = minor_fill(dev, i, DRM_MINOR_RENDER);
+        rc = devfs_node_register(&render->node);
+        if (rc != 0) {
+            devfs_node_unregister(&card->node);
+            return rc;
+        }
+    }
+    devices[i] = dev;
+    dev->index = i;
+    dev->registered = 1;
+    klog(KLOG_INFO, "drm", "%s: card%d", dev->driver->ident.name, i);
+    drm_client_dev_register(dev);
+    return 0;
+}
+
+void drm_dev_unplug(struct drm_device *dev)
+{
+    struct drm_gem_object *obj;
+    struct drm_file *f;
+
+    if (dev->unplugged) {
+        return;
+    }
+    dev->unplugged = 1;
+    if (dev->registered) {
+        devfs_node_unregister(&minors[dev->index][0].node);
+        devfs_node_unregister(&minors[dev->index][1].node);
+        drm_client_dev_unregister(dev);
+    }
+    for (obj = dev->objects; obj; obj = obj->dev_next) {
+        paging_zap_device(obj, 0, (uint32_t)(obj->size >> PAGE_SHIFT));
+    }
+    for (f = dev->files; f; f = f->dev_next) {
+        wq_wake_all(&f->event_wait);
+    }
+    if (dev->driver->unplug) {
+        dev->driver->unplug(dev);
+    }
+    drm_dev_put(dev);
+}
+
+/* ------------------------------------------------------------------------
+ * The master role's listeners
+ */
+
+void drm_master_notifier_register(struct drm_master_notifier *n)
+{
+    n->next = master_notifiers;
+    master_notifiers = n;
+}
+
+void drm_master_notifier_unregister(struct drm_master_notifier *n)
+{
+    struct drm_master_notifier **link;
+
+    for (link = &master_notifiers; *link; link = &(*link)->next) {
+        if (*link == n) {
+            *link = n->next;
+            return;
+        }
+    }
+}
+
+void drm_master_changed(struct drm_device *dev, struct drm_file *master)
+{
+    struct drm_master_notifier *n;
+
+    for (n = master_notifiers; n; n = n->next) {
+        n->changed(dev, master);
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * Open files and their events
+ */
+
+/**
+ * The open of a node, its registry's `open`: a new file of the device on
+ * the descriptor `e`, which the driver's `open` sees, master of a card with
+ * none. ENODEV for a device unplugged, EBUSY under O_EXCL, ENOMEM, or the
+ * driver's error.
+ */
+static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
+{
+    struct drm_minor *m = (struct drm_minor *)node->priv;
+    struct drm_device *dev = m->dev;
+    struct drm_file *file;
+    int32_t rc;
+
+    if (!dev || dev->unplugged) {
+        return -ENODEV;
+    }
+    if (flags & DRM_O_EXCL) {
+        return -EBUSY;
+    }
+    file = kzalloc(sizeof(*file));
+    if (!file) {
+        return -ENOMEM;
+    }
+    file->dev = dev;
+    file->minor_type = m->type;
+    file->pid = current_proc ? current_proc->tgid : 0;
+    file->uid = current_proc ? current_proc->euid : 0;
+    /* Linux: capable(CAP_SYS_ADMIN) at open. */
+    file->authenticated = current_proc && proc_privileged(current_proc);
+    file->event_space = DRM_EVENT_SPACE;
+    wait_queue_init(&file->event_wait);
+    drm_dev_get(dev);
+    if (dev->driver->open) {
+        rc = dev->driver->open(dev, file);
+        if (rc != 0) {
+            drm_dev_put(dev);
+            kfree(file);
+            return rc;
+        }
+    }
+    file->dev_next = dev->files;
+    dev->files = file;
+    dev->open_count++;
+    if (file->minor_type == DRM_MINOR_PRIMARY) {
+        drm_master_open(file);
+    }
+    e->priv = file;
+    return 0;
+}
+
+/** Free the events queued for `file` and leave its reserved ones to their
+ * senders, unattached. */
+static void events_release(struct drm_file *file)
+{
+    struct drm_pending_event *e;
+
+    while ((e = file->pending) != NULL) {
+        file->pending = e->pending_next;
+        e->pending_next = NULL;
+        e->file = NULL;
+    }
+    while ((e = file->events) != NULL) {
+        file->events = e->next;
+        kfree(e);
+    }
+    file->events_tail = NULL;
+}
+
+/**
+ * The release of a file, as Linux's drm_file_free: its events, its
+ * handles, its master role, then the driver's `postclose`, and the device's
+ * reference.
+ */
+static void drm_file_release(struct drm_file *file)
+{
+    struct drm_device *dev = file->dev;
+    struct drm_file **link;
+
+    events_release(file);
+    drm_gem_release(file);
+    if (file->minor_type == DRM_MINOR_PRIMARY) {
+        drm_master_release(file);
+    }
+    if (dev->driver->postclose) {
+        dev->driver->postclose(dev, file);
+    }
+    for (link = &dev->files; *link; link = &(*link)->dev_next) {
+        if (*link == file) {
+            *link = file->dev_next;
+            break;
+        }
+    }
+    dev->open_count--;
+    kfree(file);
+    drm_dev_put(dev);
+}
+
+/** The close of a node's last descriptor of an open file description. */
+static void drm_node_close(fd_entry_t *e)
+{
+    struct drm_file *file = (struct drm_file *)e->priv;
+
+    if (file) {
+        e->priv = NULL;
+        drm_file_release(file);
+    }
+}
+
+int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
+{
+    if (file->event_space < e->length) {
+        return -ENOMEM;
+    }
+    file->event_space -= e->length;
+    e->file = file;
+    e->next = NULL;
+    e->pending_next = file->pending;
+    file->pending = e;
+    return 0;
+}
+
+/** Take `e` off its file's reserved events. */
+static void pending_unlink(struct drm_pending_event *e)
+{
+    struct drm_pending_event **link;
+
+    for (link = &e->file->pending; *link; link = &(*link)->pending_next) {
+        if (*link == e) {
+            *link = e->pending_next;
+            break;
+        }
+    }
+    e->pending_next = NULL;
+}
+
+void drm_send_event(struct drm_pending_event *e)
+{
+    struct drm_file *file = e->file;
+
+    if (!file) {
+        kfree(e);
+        return;
+    }
+    pending_unlink(e);
+    e->next = NULL;
+    if (file->events_tail) {
+        file->events_tail->next = e;
+    } else {
+        file->events = e;
+    }
+    file->events_tail = e;
+    wq_wake(&file->event_wait, WQ_DATA);
+}
+
+void drm_event_cancel_free(struct drm_pending_event *e)
+{
+    if (e->file) {
+        pending_unlink(e);
+        e->file->event_space += e->length;
+    }
+    kfree(e);
+}
+
+/** Whether a reader of `arg`, a file, has an event or its device is gone. */
+static int events_readable(void *arg)
+{
+    struct drm_file *file = (struct drm_file *)arg;
+
+    return file->events != NULL || file->dev->unplugged;
+}
+
+/**
+ * read of a node: the queued events that fit in `count` bytes, whole, as
+ * Linux's drm_read; 0 when the first does not fit. Blocks for one unless
+ * O_NONBLOCK, which answers EAGAIN. With none queued, ENODEV once the
+ * device is unplugged; EINTR for a signal, EFAULT for a bad buffer before
+ * any event was read.
+ */
+static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct drm_file *file = (struct drm_file *)e->priv;
+    uint32_t done = 0;
+
+    for (;;) {
+        struct drm_pending_event *ev = file->events;
+
+        if (!ev) {
+            if (done) {
+                return (int32_t)done;
+            }
+            if (file->dev->unplugged) {
+                return -ENODEV;
+            }
+            if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
+                return -EAGAIN;
+            }
+            if (wq_wait_event(&file->event_wait, events_readable, file) < 0) {
+                return -EINTR;
+            }
+            continue;
+        }
+        if (ev->length > count - done) {
+            return (int32_t)done;
+        }
+        /* The event stays queued while the copy may sleep. */
+        if (copy_to_user(buf + done, &ev->event, ev->length) != 0) {
+            return done ? (int32_t)done : -EFAULT;
+        }
+        if (file->events != ev) {
+            continue; /* another reader took it meanwhile */
+        }
+        file->events = ev->next;
+        if (!file->events) {
+            file->events_tail = NULL;
+        }
+        file->event_space += ev->length;
+        done += ev->length;
+        kfree(ev);
+    }
+}
+
+/** poll of a node: POLLIN while an event is queued, POLLERR | POLLHUP once
+ * the device is unplugged. */
+static short drm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    struct drm_file *file = (struct drm_file *)e->priv;
+
+    *wq = &file->event_wait;
+    if (file->dev->unplugged) {
+        return POLLERR | POLLHUP;
+    }
+    return (short)(events & (file->events ? POLLIN : 0));
+}
+
+/** ioctl of a node: the dispatcher. */
+static int32_t drm_node_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    return drm_ioctl((struct drm_file *)e->priv, request, arg);
+}
+
+/** mmap of a node: a buffer object's pages (`drm_gem_mmap`). */
+static int32_t drm_node_mmap(fd_entry_t *e, struct vma *vma)
+{
+    return drm_gem_mmap((struct drm_file *)e->priv, vma);
+}
+
+static const struct file_ops drm_fops = {drm_read,       NULL,          drm_poll, drm_node_ioctl,
+                                         drm_node_close, drm_node_mmap, NULL};
+
+/* ------------------------------------------------------------------------
+ * The dispatcher
+ */
+
+#define DRM_IOCTL_DEF(cmd, func, flags) {cmd, flags, func, #cmd}
+
+/* The core's ioctls, Linux 6.12's drm_ioctls with their flags. A number no
+ * row names answers EINVAL. */
+static const struct drm_ioctl_desc drm_ioctls[] = {
+    DRM_IOCTL_DEF(DRM_IOCTL_VERSION, drm_version, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_GET_UNIQUE, drm_getunique, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_GET_MAGIC, drm_getmagic, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_GET_CLIENT, drm_getclient, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_GET_STATS, drm_getstats, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_GET_CAP, drm_getcap, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SET_CLIENT_CAP, drm_setclientcap, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_SET_VERSION, drm_setversion, DRM_MASTER),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_SET_UNIQUE, drm_invalid_op, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
+    DRM_IOCTL_DEF(DRM_IOCTL_BLOCK, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
+    DRM_IOCTL_DEF(DRM_IOCTL_UNBLOCK, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
+    DRM_IOCTL_DEF(DRM_IOCTL_AUTH_MAGIC, drm_authmagic, DRM_MASTER),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_SET_MASTER, drm_setmaster_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_DROP_MASTER, drm_dropmaster_ioctl, 0),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_ADD_DRAW, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
+    DRM_IOCTL_DEF(DRM_IOCTL_RM_DRAW, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
+    DRM_IOCTL_DEF(DRM_IOCTL_FINISH, drm_noop, DRM_AUTH),
+    DRM_IOCTL_DEF(DRM_IOCTL_WAIT_VBLANK, drm_wait_vblank_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_UPDATE_DRAW, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_GEM_CLOSE, drm_gem_close_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_GEM_FLINK, drm_gem_flink_ioctl, DRM_AUTH),
+    DRM_IOCTL_DEF(DRM_IOCTL_GEM_OPEN, drm_gem_open_ioctl, DRM_AUTH),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETRESOURCES, drm_mode_getresources, 0),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_PRIME_HANDLE_TO_FD, drm_prime_handle_to_fd_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_PRIME_FD_TO_HANDLE, drm_prime_fd_to_handle_ioctl, DRM_RENDER_ALLOW),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPLANERESOURCES, drm_mode_getplane_res, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETCRTC, drm_mode_getcrtc, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETCRTC, drm_mode_setcrtc, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPLANE, drm_mode_getplane, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETPLANE, drm_mode_setplane, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CURSOR, drm_mode_cursor_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETGAMMA, drm_mode_gamma_get_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETGAMMA, drm_mode_gamma_set_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETENCODER, drm_mode_getencoder, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETCONNECTOR, drm_mode_getconnector, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ATTACHMODE, drm_noop, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DETACHMODE, drm_noop, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPROPERTY, drm_mode_getproperty_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETPROPERTY, drm_connector_property_set_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPROPBLOB, drm_mode_getblob_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB, drm_mode_getfb, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB2, drm_mode_getfb2_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB, drm_mode_addfb_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB2, drm_mode_addfb2_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_RMFB, drm_mode_rmfb_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CLOSEFB, drm_mode_closefb_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_PAGE_FLIP, drm_mode_page_flip_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DIRTYFB, drm_mode_dirtyfb_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATE_DUMB, drm_mode_create_dumb_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_MAP_DUMB, drm_mode_mmap_dumb_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DESTROY_DUMB, drm_mode_destroy_dumb_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_OBJ_GETPROPERTIES, drm_mode_obj_get_properties_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_OBJ_SETPROPERTY, drm_mode_obj_set_property_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CURSOR2, drm_mode_cursor2_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ATOMIC, drm_mode_atomic_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATEPROPBLOB, drm_mode_createblob_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DESTROYPROPBLOB, drm_mode_destroyblob_ioctl, 0),
+
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_CREATE, drm_syncobj_create_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_DESTROY, drm_syncobj_destroy_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, drm_syncobj_handle_to_fd_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE, drm_syncobj_fd_to_handle_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_TRANSFER, drm_syncobj_transfer_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_WAIT, drm_syncobj_wait_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, drm_syncobj_timeline_wait_ioctl,
+                  DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_EVENTFD, drm_syncobj_eventfd_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_RESET, drm_syncobj_reset_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_SIGNAL, drm_syncobj_signal_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL, drm_syncobj_timeline_signal_ioctl,
+                  DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_QUERY, drm_syncobj_query_ioctl, DRM_RENDER_ALLOW),
+    DRM_IOCTL_DEF(DRM_IOCTL_CRTC_GET_SEQUENCE, drm_crtc_get_sequence_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_CRTC_QUEUE_SEQUENCE, drm_crtc_queue_sequence_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATE_LEASE, drm_mode_create_lease_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_LIST_LESSEES, drm_mode_list_lessees_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GET_LEASE, drm_mode_get_lease_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_REVOKE_LEASE, drm_mode_revoke_lease_ioctl, DRM_MASTER),
+};
+
+#define DRM_CORE_IOCTLS ((int)(sizeof(drm_ioctls) / sizeof(drm_ioctls[0])))
+
+/** The row of `nr` in `table` of `n` rows, or NULL. */
+static const struct drm_ioctl_desc *ioctl_row(const struct drm_ioctl_desc *table, int n,
+                                              uint32_t nr)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (UAPI_IOC_NR(table[i].cmd) == nr) {
+            return &table[i];
+        }
+    }
+    return NULL;
+}
+
+/** Whether `file` may call an ioctl of the flags `flags`, Linux's
+ * drm_ioctl_permit: 0 or -EACCES. */
+static int32_t ioctl_permit(uint32_t flags, const struct drm_file *file)
+{
+    int render = file->minor_type == DRM_MINOR_RENDER;
+
+    if ((flags & DRM_ROOT_ONLY) && !(current_proc && proc_privileged(current_proc))) {
+        return -EACCES;
+    }
+    if ((flags & DRM_AUTH) && !render && !file->authenticated) {
+        return -EACCES;
+    }
+    if ((flags & DRM_MASTER) && !drm_is_current_master(file)) {
+        return -EACCES;
+    }
+    if (!(flags & DRM_RENDER_ALLOW) && render) {
+        return -EACCES;
+    }
+    return 0;
+}
+
+int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
+{
+    struct drm_device *dev = file->dev;
+    const struct drm_ioctl_desc *row;
+    uint32_t nr = UAPI_IOC_NR(cmd);
+    uint32_t in_size, out_size, ksize;
+    char stack[DRM_IOCTL_STACK];
+    char *kdata;
+    int32_t rc;
+
+    if (dev->unplugged) {
+        return -ENODEV;
+    }
+    if (UAPI_IOC_TYPE(cmd) != DRM_IOCTL_BASE) {
+        return -ENOTTY;
+    }
+    if (nr >= DRM_COMMAND_BASE && nr < DRM_COMMAND_END) {
+        row = dev->driver->ioctls ? ioctl_row(dev->driver->ioctls, dev->driver->num_ioctls, nr)
+                                  : NULL;
+    } else {
+        row = ioctl_row(drm_ioctls, DRM_CORE_IOCTLS, nr);
+    }
+    if (!row || !row->func) {
+        return -EINVAL;
+    }
+    in_size = out_size = UAPI_IOC_SIZE(cmd);
+    if (!(UAPI_IOC_DIR(cmd) & UAPI_IOC_DIR(row->cmd) & UAPI_IOC_WRITE)) {
+        in_size = 0;
+    }
+    if (!(UAPI_IOC_DIR(cmd) & UAPI_IOC_DIR(row->cmd) & UAPI_IOC_READ)) {
+        out_size = 0;
+    }
+    ksize = in_size > out_size ? in_size : out_size;
+    if (UAPI_IOC_SIZE(row->cmd) > ksize) {
+        ksize = UAPI_IOC_SIZE(row->cmd);
+    }
+    kdata = ksize <= sizeof(stack) ? stack : (char *)kmalloc(ksize);
+    if (!kdata) {
+        return -ENOMEM;
+    }
+    if (in_size && copy_from_user(kdata, (const void __user *)arg, in_size) != 0) {
+        rc = -EFAULT;
+        goto out;
+    }
+    if (ksize > in_size) {
+        k_memset(kdata + in_size, 0, ksize - in_size);
+    }
+    /* Linux's drm_file_update_pid: a file passed on is the user's now,
+     * unless it was master, whose owner the master rules keep. */
+    if (!file->was_master && current_proc) {
+        file->pid = current_proc->tgid;
+    }
+    rc = dev->unplugged ? -ENODEV : ioctl_permit(row->flags, file);
+    if (rc == 0) {
+        rc = row->func(dev, kdata, file);
+    }
+    if (out_size && copy_to_user((void __user *)arg, kdata, out_size) != 0) {
+        rc = -EFAULT;
+    }
+out:
+    if (kdata != stack) {
+        kfree(kdata);
+    }
+    return rc;
+}
+
+/* ------------------------------------------------------------------------
+ * The firmware framebuffer's handoff
+ */
 
 int32_t drm_aperture_acquire_firmware(struct drm_device *dev, uint64_t base, uint64_t size,
                                       void (*remove)(struct drm_device *dev))
@@ -89,6 +801,10 @@ int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char
     return 0;
 }
 
+/* ------------------------------------------------------------------------
+ * The core's ioctls of identity and capabilities
+ */
+
 int32_t drm_noop(struct drm_device *dev, void *data, struct drm_file *file)
 {
     (void)dev;
@@ -105,58 +821,237 @@ int32_t drm_invalid_op(struct drm_device *dev, void *data, struct drm_file *file
     return -EINVAL;
 }
 
+/**
+ * Copy `value` to the user's `buf` of `*len` bytes, cut to fit and without
+ * a terminator, and set `*len` to its whole length, as Linux's
+ * drm_copy_field: 0, or -EFAULT.
+ */
+static int32_t copy_field(char __user *buf, size_t *len, const char *value)
+{
+    size_t n = k_strlen(value);
+    size_t cut = n > *len ? *len : n;
+
+    *len = n;
+    if (cut && buf && copy_to_user(buf, value, cut) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/** VERSION: the driver's version, and its name, date and description cut
+ * to the user's lengths, which are set to the whole ones. */
 int32_t drm_version(struct drm_device *dev, void *data, struct drm_file *file)
 {
-    (void)dev;
-    (void)data;
+    struct drm_version *v = (struct drm_version *)data;
+    const struct drm_ident *id = &dev->driver->ident;
+    int32_t rc;
+
     (void)file;
-    return -EOPNOTSUPP;
+    v->version_major = id->major;
+    v->version_minor = id->minor;
+    v->version_patchlevel = id->patchlevel;
+    rc = copy_field(v->name, &v->name_len, id->name);
+    if (rc == 0) {
+        rc = copy_field(v->date, &v->date_len, id->date);
+    }
+    if (rc == 0) {
+        rc = copy_field(v->desc, &v->desc_len, id->desc);
+    }
+    return rc;
 }
 
+/** GET_UNIQUE: the bus name, copied whole when it fits the user's length,
+ * which is set to its length either way. */
 int32_t drm_getunique(struct drm_device *dev, void *data, struct drm_file *file)
 {
-    (void)dev;
-    (void)data;
+    struct drm_unique *u = (struct drm_unique *)data;
+    size_t n = k_strlen(dev->unique);
+
     (void)file;
-    return -EOPNOTSUPP;
+    if (u->unique_len >= n && copy_to_user(u->unique, dev->unique, n) != 0) {
+        return -EFAULT;
+    }
+    u->unique_len = n;
+    return 0;
 }
 
+/** GET_CLIENT: index 0 is the caller, whose authentication libva reads;
+ * every other index EINVAL, as Linux 6.12 keeps no list. */
 int32_t drm_getclient(struct drm_device *dev, void *data, struct drm_file *file)
 {
+    struct drm_client *c = (struct drm_client *)data;
+
     (void)dev;
-    (void)data;
-    (void)file;
-    return -EOPNOTSUPP;
+    if (c->idx != 0) {
+        return -EINVAL;
+    }
+    c->auth = file->authenticated;
+    c->pid = current_proc ? current_proc->tgid : 0;
+    c->uid = DRM_OVERFLOW_UID;
+    c->magic = 0;
+    c->iocs = 0;
+    return 0;
 }
 
+/** GET_STATS: no counters, as Linux 6.12. */
 int32_t drm_getstats(struct drm_device *dev, void *data, struct drm_file *file)
 {
     (void)dev;
-    (void)data;
     (void)file;
-    return -EOPNOTSUPP;
+    k_memset(data, 0, sizeof(struct drm_stats));
+    return 0;
 }
 
+/** GET_CAP, as Linux 6.12's drm_getcap: the caps of rendering for every
+ * driver, the rest only for one with DRIVER_MODESET, EOPNOTSUPP without,
+ * and EINVAL for a cap unknown. */
 int32_t drm_getcap(struct drm_device *dev, void *data, struct drm_file *file)
 {
-    (void)dev;
-    (void)data;
+    struct drm_get_cap *req = (struct drm_get_cap *)data;
+    const struct drm_mode_config *mc = &dev->mode_config;
+
     (void)file;
-    return -EOPNOTSUPP;
+    req->value = 0;
+    switch (req->capability) {
+    case DRM_CAP_TIMESTAMP_MONOTONIC:
+        req->value = 1;
+        return 0;
+    case DRM_CAP_PRIME:
+        req->value = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;
+        return 0;
+    case DRM_CAP_SYNCOBJ:
+        req->value = drm_core_check_feature(dev, DRIVER_SYNCOBJ);
+        return 0;
+    case DRM_CAP_SYNCOBJ_TIMELINE:
+        req->value = drm_core_check_feature(dev, DRIVER_SYNCOBJ_TIMELINE);
+        return 0;
+    default:
+        break;
+    }
+    if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
+        return -EOPNOTSUPP;
+    }
+    switch (req->capability) {
+    case DRM_CAP_DUMB_BUFFER:
+        req->value = dev->driver->dumb_create != NULL;
+        break;
+    case DRM_CAP_VBLANK_HIGH_CRTC:
+    case DRM_CAP_CRTC_IN_VBLANK_EVENT:
+    case DRM_CAP_ADDFB2_MODIFIERS:
+        req->value = 1;
+        break;
+    case DRM_CAP_DUMB_PREFERRED_DEPTH:
+        req->value = mc->preferred_depth;
+        break;
+    case DRM_CAP_DUMB_PREFER_SHADOW:
+        req->value = (uint64_t)mc->prefer_shadow;
+        break;
+    case DRM_CAP_ASYNC_PAGE_FLIP:
+        req->value = (uint64_t)mc->async_page_flip;
+        break;
+    case DRM_CAP_PAGE_FLIP_TARGET:
+        /* Linux answers 1 only when every CRTC has page_flip_target, which
+         * no CRTC here has. */
+        req->value = mc->num_crtc == 0;
+        break;
+    case DRM_CAP_CURSOR_WIDTH:
+        req->value = mc->cursor_width ? mc->cursor_width : 64;
+        break;
+    case DRM_CAP_CURSOR_HEIGHT:
+        req->value = mc->cursor_height ? mc->cursor_height : 64;
+        break;
+    case DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP:
+        req->value = drm_core_check_feature(dev, DRIVER_ATOMIC) && mc->async_page_flip;
+        break;
+    default:
+        return -EINVAL;
+    }
+    return 0;
 }
 
+/** SET_CLIENT_CAP, as Linux 6.12's drm_setclientcap, with its refusal of
+ * atomic to a program whose name begins with X, the modesetting DDX. */
 int32_t drm_setclientcap(struct drm_device *dev, void *data, struct drm_file *file)
 {
-    (void)dev;
-    (void)data;
-    (void)file;
-    return -EOPNOTSUPP;
+    struct drm_set_client_cap *req = (struct drm_set_client_cap *)data;
+
+    if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
+        return -EOPNOTSUPP;
+    }
+    switch (req->capability) {
+    case DRM_CLIENT_CAP_STEREO_3D:
+        if (req->value > 1) {
+            return -EINVAL;
+        }
+        file->stereo_allowed = (int)req->value;
+        break;
+    case DRM_CLIENT_CAP_UNIVERSAL_PLANES:
+        if (req->value > 1) {
+            return -EINVAL;
+        }
+        file->universal_planes = (int)req->value;
+        break;
+    case DRM_CLIENT_CAP_ATOMIC:
+        if (!drm_core_check_feature(dev, DRIVER_ATOMIC)) {
+            return -EOPNOTSUPP;
+        }
+        if (current_proc && current_proc->comm[0] == 'X' && req->value == 1) {
+            klog(KLOG_INFO, "drm", "broken atomic modeset userspace detected, disabling atomic");
+            return -EOPNOTSUPP;
+        }
+        if (req->value > 2) {
+            return -EINVAL;
+        }
+        file->atomic = (int)req->value;
+        file->universal_planes = (int)req->value;
+        file->aspect_ratio = (int)req->value;
+        break;
+    case DRM_CLIENT_CAP_ASPECT_RATIO:
+        if (req->value > 1) {
+            return -EINVAL;
+        }
+        file->aspect_ratio = (int)req->value;
+        break;
+    case DRM_CLIENT_CAP_WRITEBACK_CONNECTORS:
+        if (!file->atomic || req->value > 1) {
+            return -EINVAL;
+        }
+        file->writeback_connectors = (int)req->value;
+        break;
+    case DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT:
+        if (!drm_core_check_feature(dev, DRIVER_CURSOR_HOTSPOT)) {
+            return -EOPNOTSUPP;
+        }
+        if (!file->atomic || req->value > 1) {
+            return -EINVAL;
+        }
+        file->supports_virtualized_cursor_plane = (int)req->value;
+        break;
+    default:
+        return -EINVAL;
+    }
+    return 0;
 }
 
+/** SET_VERSION, as Linux 6.12: EINVAL for an interface or a driver version
+ * this one is not; the versions it has go back either way. */
 int32_t drm_setversion(struct drm_device *dev, void *data, struct drm_file *file)
 {
-    (void)dev;
-    (void)data;
+    struct drm_set_version *sv = (struct drm_set_version *)data;
+    const struct drm_ident *id = &dev->driver->ident;
+    int32_t rc = 0;
+
     (void)file;
-    return -EOPNOTSUPP;
+    if (sv->drm_di_major != -1 && (sv->drm_di_major != DRM_IF_MAJOR || sv->drm_di_minor < 0 ||
+                                   sv->drm_di_minor > DRM_IF_MINOR)) {
+        rc = -EINVAL;
+    } else if (sv->drm_dd_major != -1 && (sv->drm_dd_major != id->major || sv->drm_dd_minor < 0 ||
+                                          sv->drm_dd_minor > id->minor)) {
+        rc = -EINVAL;
+    }
+    sv->drm_di_major = DRM_IF_MAJOR;
+    sv->drm_di_minor = DRM_IF_MINOR;
+    sv->drm_dd_major = id->major;
+    sv->drm_dd_minor = id->minor;
+    return rc;
 }
