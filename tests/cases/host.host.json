@@ -586,6 +586,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kvm_decode",
+          "checks": "tests/host/kvm_decode_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "lag",
           "checks": "tests/host/lag_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1202,7 +1207,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 225
+          "limit": 226
         }
       ],
       "bounds": {
