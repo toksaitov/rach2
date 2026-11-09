@@ -163,6 +163,7 @@ case suidprobe root:krffs ids:1000,5 -- suidprobe
 case tcptest peer:echo -- tcptest closed=9
 case timeprobe -- timeprobe
 case trapprobe -- trapprobe
+case udmabufprobe -- udmabufprobe
 case udptest peer:echo ports:12345 -- udptest
 case unlinkdirprobe.ext2 -- unlinkdirprobe dir=unlinkdir
 case unlinkdirprobe.krffs volume:krffs:krffs16 -- unlinkdirprobe dir=vol0/unlinkdir

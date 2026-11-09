@@ -511,6 +511,10 @@ reports what
 reports for a file, a directory, a pipe, a socket and a device, and the
 working directory for
 .Dv AT_FDCWD .
+A dma-buf descriptor reports a regular file of mode 0600, its exported
+byte size and an inode distinct from every other export.
+See
+.Xr dma-buf 7 .
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES

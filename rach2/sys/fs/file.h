@@ -19,8 +19,9 @@ struct vma;
  *
  * Any operation may be NULL: a read or write then fails with EBADF, an ioctl
  * with ENOTTY, a poll falls back to the dispatch on the type, and a close
- * has nothing to release; an mmap fails with ENODEV. The seek calls do not
- * call `llseek` yet (sys/fs/Readme.md).
+ * has nothing to release; an mmap fails with ENODEV. The seek calls try
+ * `llseek`
+ * before dispatching on the descriptor type (sys/fs/Readme.md).
  */
 struct file_ops {
     /* Read up to count bytes into the user buffer; bytes read (>=0) or

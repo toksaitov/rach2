@@ -266,6 +266,16 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
                 a->count++;
             a->fences[k] = dma_fence_get(f);
         }
+    if (a->count < 2) {
+        f = a->count ? a->fences[0] : kzalloc(sizeof(*f));
+        if (!a->count && f) {
+            dma_fence_init(f, NULL, dma_fence_context_alloc(1), 1);
+            dma_fence_signal(f);
+        }
+        a->count = 0;
+        array_release(&a->base);
+        return f;
+    }
     a->pending = a->count;
     for (i = 0; i < a->count; i++) {
         a->callbacks[i].array = a;

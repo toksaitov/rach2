@@ -98,6 +98,14 @@ Seeks on
 and
 .Pa /dev/full
 always return position 0, ignoring the displacement and origin.
+A dma-buf descriptor accepts offset zero with
+.Dv SEEK_END
+to report its size, or with
+.Dv SEEK_SET
+to rewind; other seeks fail with
+.Er EINVAL .
+See
+.Xr dma-buf 7 .
 Every other descriptor does not seek and returns
 .Er ESPIPE :
 pipes, sockets, the console, pseudo-terminals, the mouse, event objects
