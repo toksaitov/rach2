@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!-- probe.html: WebGL 1 and 2 draw an orange triangle on navy and read two
+     pixels back; WebGPU names its adapter and doubles 64 numbers in a compute
+     pass. The result is posted as JSON to /result. -->
+<html><body><script>
+const r = {ua: navigator.userAgent};
+function gl(kind) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext(kind, {preserveDrawingBuffer: true});
+  if (!g) return {ok: false, why: 'no context'};
+  const d = g.getExtension('WEBGL_debug_renderer_info');
+  const o = {renderer: d ? g.getParameter(d.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER),
+             version: g.getParameter(g.VERSION)};
+  const sh = (t, s) => { const x = g.createShader(t); g.shaderSource(x, s); g.compileShader(x); return x; };
+  const p = g.createProgram();
+  g.attachShader(p, sh(g.VERTEX_SHADER, 'attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }'));
+  g.attachShader(p, sh(g.FRAGMENT_SHADER, 'precision mediump float; void main() { gl_FragColor = vec4(1.0, 0.5, 0.0, 1.0); }'));
+  g.linkProgram(p); g.useProgram(p);
+  g.bindBuffer(g.ARRAY_BUFFER, g.createBuffer());
+  g.bufferData(g.ARRAY_BUFFER, new Float32Array([0, 1, 1, -1, -1, -1]), g.STATIC_DRAW);
+  g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 2, g.FLOAT, false, 0, 0);
+  g.viewport(0, 0, 64, 64); g.clearColor(0, 0, 0.5, 1); g.clear(g.COLOR_BUFFER_BIT);
+  g.drawArrays(g.TRIANGLES, 0, 3);
+  const a = new Uint8Array(4), b = new Uint8Array(4);
+  g.readPixels(32, 15, 1, 1, g.RGBA, g.UNSIGNED_BYTE, a);  /* GL rows count up */
+  g.readPixels(2, 61, 1, 1, g.RGBA, g.UNSIGNED_BYTE, b);
+  const near = (x, y) => x.every((v, i) => Math.abs(v - y[i]) <= 1);
+  o.inside = Array.from(a); o.outside = Array.from(b);
+  o.ok = near(a, [255, 128, 0, 255]) && near(b, [0, 0, 128, 255]);
+  return o;
+}
+async function gpu() {
+  if (!navigator.gpu) return {ok: false, why: 'no navigator.gpu'};
+  let ad = await navigator.gpu.requestAdapter({powerPreference: 'high-performance'});
+  const o = {highPerformance: !!ad};
+  if (!ad) ad = await navigator.gpu.requestAdapter({forceFallbackAdapter: true});
+  if (!ad) { o.ok = false; o.why = 'no adapter'; return o; }
+  const i = ad.info || {};
+  Object.assign(o, {vendor: i.vendor, architecture: i.architecture, device: i.device,
+                    description: i.description, fallback: !!(i.isFallbackAdapter || ad.isFallbackAdapter)});
+  const dev = await ad.requestDevice();
+  const n = 64, src = new Float32Array(n).map((_, k) => k);
+  const buf = dev.createBuffer({size: n * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
+  const rd = dev.createBuffer({size: n * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+  dev.queue.writeBuffer(buf, 0, src);
+  const pl = dev.createComputePipeline({layout: 'auto', compute: {entryPoint: 'main', module: dev.createShaderModule({code:
+    '@group(0) @binding(0) var<storage, read_write> v: array<f32>;\n' +
+    '@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) { v[id.x] = v[id.x] * 2.0; }'})}});
+  const e = dev.createCommandEncoder(), pass = e.beginComputePass();
+  pass.setPipeline(pl);
+  pass.setBindGroup(0, dev.createBindGroup({layout: pl.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: buf}}]}));
+  pass.dispatchWorkgroups(1); pass.end();
+  e.copyBufferToBuffer(buf, 0, rd, 0, n * 4); dev.queue.submit([e.finish()]);
+  await rd.mapAsync(GPUMapMode.READ);
+  const got = new Float32Array(rd.getMappedRange());
+  o.ok = got.every((v, k) => v === 2 * k);
+  return o;
+}
+(async () => {
+  for (const k of ['webgl', 'webgl2']) { try { r[k] = gl(k); } catch (e) { r[k] = {ok: false, why: String(e)}; } }
+  try { r.webgpu = await gpu(); } catch (e) { r.webgpu = {ok: false, why: String(e)}; }
+  document.body.textContent = JSON.stringify(r);
+  await fetch('/result', {method: 'POST', body: JSON.stringify(r)});
+})();
+</script></body></html>
