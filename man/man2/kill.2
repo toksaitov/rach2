@@ -1,4 +1,4 @@
-.Dd October 15, 2026
+.Dd November 9, 2026
 .Dt KILL 2
 .Os
 .Sh NAME
@@ -28,8 +28,15 @@ Select the caller's process group.
 Select the process group whose ID is
 .No - Ns Fa pid .
 .It Fa pid No = -1
-Broadcast to all processes is not implemented and returns
-.Er ESRCH .
+Select every process the caller may signal, except the caller's own
+process, the init of the caller's PID namespace and the kernel's
+threads, as on Linux.
+An init sends
+.Dv SIGTERM
+and
+.Dv SIGKILL
+so at a shutdown; see
+.Xr init 8 .
 .El
 .Pp
 A signal to a process is pending for the process as a whole, and any of
@@ -37,7 +44,9 @@ its threads that does not block it takes it: the kernel wakes the first
 such thread, the one the ID names if it qualifies.
 A process whose threads have all ended remains a target until its parent
 reaps it, as on Linux: the signal is discarded and the call succeeds.
-A group request posts the signal to every member the caller may signal.
+A group request, and a request with a
+.Fa pid
+of \-1, posts the signal to every member the caller may signal.
 It succeeds if at least one member is permitted, returns
 .Er EPERM
 if members exist but none is permitted, and returns

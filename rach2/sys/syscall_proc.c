@@ -4010,9 +4010,45 @@ static int32_t kill_group(int pgid, int signo)
     return allowed ? 0 : -EPERM;
 }
 
+/** Post `signo` to every process the caller sees and may signal, but its
+ * own, the init of its PID namespace and the kernel's threads, which
+ * kill(2) selects with a pid of -1, as Linux does; an init ends the others
+ * so at a shutdown. Each thread of a process is posted to, and the posts
+ * merge in the one pending set. The outcome is `kill_group`'s: 0, -EPERM
+ * or -ESRCH. */
+static int32_t kill_all(int signo)
+{
+    int found = 0;
+    int allowed = 0;
+    process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE || p == proc_idle ||
+            p->space_root == 0 || p->tg == current_proc->tg || pid_seen(p->tgid) <= 1) {
+            continue;
+        }
+        found = 1;
+        if (!cred_may_signal(p, signo)) {
+            continue;
+        }
+        allowed = 1;
+        if (signo != 0) {
+            struct k_siginfo info;
+
+            sender_info(&info, SI_USER, p);
+            signal_post_info(p, signo, &info);
+        }
+    }
+    if (!found) {
+        return -ESRCH;
+    }
+    return allowed ? 0 : -EPERM;
+}
+
 /** kill(2): pid > 0 a single process, which the id of any of its threads
- * names; pid == 0 the caller's process group; pid < -1 the group (-pid).
- * pid == -1, every process, is -ESRCH, since it is not supported here.
+ * names; pid == 0 the caller's process group; pid < -1 the group (-pid);
+ * pid == -1 every process the caller may signal but itself and its PID
+ * namespace's init (`kill_all`).
  * signo 0 just probes existence and permission. A process whose threads
  * have all ended exists until its parent reaps it, and takes a signal and
  * discards it, as on Linux, where `kill -0` of a zombie succeeds. 0,
@@ -4036,7 +4072,7 @@ static int32_t do_kill(int pid, int signo)
                                          : -ESRCH;
     }
     if (pid == -1) {
-        return -ESRCH; /* broadcast-to-all is not supported */
+        return current_proc ? kill_all(signo) : -ESRCH;
     }
     target = proc_named((uint32_t)pid);
     if (!target || target->state == PROC_UNUSED) {
