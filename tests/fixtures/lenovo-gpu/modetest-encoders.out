@@ -1,0 +1,10 @@
+opened device `Intel Graphics` on driver `i915` (version 1.6.0 at 0)
+Encoders:
+id	crtc	type	possible crtcs	possible clones	
+84	49	TMDS	0x00000007	0x00000001
+91	0	TMDS	0x00000007	0x00000002
+98	0	TMDS	0x00000007	0x00000004
+100	0	DPMST	0x00000007	0x00000008
+101	0	DPMST	0x00000007	0x00000010
+102	0	DPMST	0x00000007	0x00000020
+

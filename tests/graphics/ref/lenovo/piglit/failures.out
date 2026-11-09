@@ -1,0 +1,274 @@
+tests 44333
+pass           36445
+skip           7669
+fail           210
+warn           6
+crash          3
+first start to last end: 1910 s
+
+crash           3 spec/ext_external_objects
+fail           86 spec/arb_gl_spirv
+fail           29 spec/arb_gpu_shader5
+fail           13 spec/!opengl 1.1
+fail           12 spec/arb_texture_gather
+fail            8 spec/arb_texture_multisample
+fail            5 spec/!opengl 3.2
+fail            4 spec/khr_texture_compression_astc
+fail            3 spec/arb_copy_image
+fail            3 spec/ext_external_objects
+fail            3 spec/glsl-1.50
+fail            3 spec/nv_copy_image
+fail            3 spec/arb_framebuffer_object
+fail            3 spec/arb_tessellation_shader
+fail            2 spec/!opengl 1.0
+fail            2 spec/arb_texture_buffer_object
+fail            2 spec/egl 1.4
+fail            2 spec/egl_khr_gl_image
+fail            2 spec/ext_transform_feedback
+fail            2 spec/ext_shader_framebuffer_fetch_non_coherent
+fail            1 shaders/glsl-bug-110796
+fail            1 spec/amd_performance_monitor
+fail            1 spec/arb_gpu_shader_fp64
+fail            1 spec/arb_indirect_parameters
+fail            1 spec/arb_shader_image_load_store
+fail            1 spec/arb_shader_texture_lod
+fail            1 spec/arb_texture_rg
+fail            1 spec/arb_texture_view
+fail            1 spec/arb_timer_query
+fail            1 spec/egl_ext_device_query
+fail            1 spec/egl_ext_image_dma_buf_import_modifiers
+fail            1 spec/egl_ext_surface_compression
+fail            1 spec/egl_khr_get_all_proc_addresses
+fail            1 spec/egl_khr_surfaceless_context
+fail            1 spec/egl_mesa_query_driver
+fail            1 spec/ext_framebuffer_blit
+fail            1 spec/ext_image_dma_buf_import
+fail            1 spec/ext_packed_float
+fail            1 spec/ext_texture_integer
+fail            1 spec/intel_performance_query
+fail            1 spec/oes_texture_view
+fail            1 spec/glsl-1.20
+fail            1 spec/oes_shader_io_blocks
+warn            3 spec/ext_transform_feedback
+warn            2 spec/glsl-1.10
+warn            1 spec/arb_query_buffer_object
+
+fail shaders@glsl-bug-110796
+fail spec@!opengl 1.0@depth-clear-precision-check
+fail spec@!opengl 1.0@gl-1.0-swapbuffers-behavior
+fail spec@!opengl 1.1@line-smooth-coverage
+fail spec@!opengl 1.1@line-smooth-stipple
+fail spec@!opengl 1.1@linestipple
+fail spec@!opengl 1.1@read-front
+fail spec@!opengl 1.1@read-front clear-front-first
+fail spec@!opengl 1.1@read-front clear-front-first samples=2
+fail spec@!opengl 1.1@read-front clear-front-first samples=4
+fail spec@!opengl 1.1@read-front clear-front-first samples=6
+fail spec@!opengl 1.1@read-front clear-front-first samples=8
+fail spec@!opengl 1.1@read-front samples=2
+fail spec@!opengl 1.1@read-front samples=4
+fail spec@!opengl 1.1@read-front samples=6
+fail spec@!opengl 1.1@read-front samples=8
+fail spec@!opengl 3.2@gl-3.2-adj-prims cull-back pv-first
+fail spec@!opengl 3.2@gl-3.2-adj-prims cull-front pv-first
+fail spec@!opengl 3.2@gl-3.2-adj-prims line cull-back pv-first
+fail spec@!opengl 3.2@gl-3.2-adj-prims line cull-front pv-first
+fail spec@!opengl 3.2@gl-3.2-adj-prims pv-first
+fail spec@amd_performance_monitor@measure
+fail spec@arb_copy_image@arb_copy_image-formats --samples=2
+fail spec@arb_copy_image@arb_copy_image-formats --samples=4
+fail spec@arb_copy_image@arb_copy_image-formats --samples=8
+fail spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage
+fail spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one
+fail spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one_write-z
+fail spec@arb_gl_spirv@execution@ssbo@aoa
+fail spec@arb_gl_spirv@execution@ssbo@aoa-2
+fail spec@arb_gl_spirv@execution@ssbo@array
+fail spec@arb_gl_spirv@execution@ssbo@array-indirect
+fail spec@arb_gl_spirv@execution@ssbo@array-inside-ssbo
+fail spec@arb_gl_spirv@execution@ssbo@array-of-arrays-inside-ssbo
+fail spec@arb_gl_spirv@execution@ssbo@matrix@column-major
+fail spec@arb_gl_spirv@execution@ssbo@matrix@column-vs-row
+fail spec@arb_gl_spirv@execution@ssbo@matrix@complex
+fail spec@arb_gl_spirv@execution@ssbo@matrix@indirect-column-major
+fail spec@arb_gl_spirv@execution@ssbo@matrix@indirect-row-major
+fail spec@arb_gl_spirv@execution@ssbo@matrix@row-major
+fail spec@arb_gl_spirv@execution@ssbo@simple
+fail spec@arb_gl_spirv@execution@ssbo@two-ssbo
+fail spec@arb_gl_spirv@execution@ssbo@two-ssbo-different-layouts
+fail spec@arb_gl_spirv@execution@ssbo@two-stages
+fail spec@arb_gl_spirv@execution@ssbo@unsized-array
+fail spec@arb_gl_spirv@execution@ssbo@unsized-array-length
+fail spec@arb_gl_spirv@execution@ubo@aoa
+fail spec@arb_gl_spirv@execution@ubo@aoa-2
+fail spec@arb_gl_spirv@execution@ubo@array
+fail spec@arb_gl_spirv@execution@ubo@array-complex
+fail spec@arb_gl_spirv@execution@ubo@array-different-array-stride-ubo
+fail spec@arb_gl_spirv@execution@ubo@array-indirect
+fail spec@arb_gl_spirv@execution@ubo@array-inside-ubo
+fail spec@arb_gl_spirv@execution@ubo@array-inside-ubo-copy
+fail spec@arb_gl_spirv@execution@ubo@array-of-arrays-inside-ubo
+fail spec@arb_gl_spirv@execution@ubo@explicit-offset
+fail spec@arb_gl_spirv@execution@ubo@explicit-offset-nested-struct
+fail spec@arb_gl_spirv@execution@ubo@location-0-crash
+fail spec@arb_gl_spirv@execution@ubo@matrix@column-major
+fail spec@arb_gl_spirv@execution@ubo@matrix@column-vs-row
+fail spec@arb_gl_spirv@execution@ubo@matrix@complex
+fail spec@arb_gl_spirv@execution@ubo@matrix@different-matrix-stride
+fail spec@arb_gl_spirv@execution@ubo@matrix@indirect-column-major
+fail spec@arb_gl_spirv@execution@ubo@matrix@indirect-row-major
+fail spec@arb_gl_spirv@execution@ubo@matrix@row-major
+fail spec@arb_gl_spirv@execution@ubo@simple
+fail spec@arb_gl_spirv@execution@ubo@two-stages
+fail spec@arb_gl_spirv@execution@ubo@two-ubos
+fail spec@arb_gl_spirv@execution@uniform@array
+fail spec@arb_gl_spirv@execution@uniform@arrays-of-arrays
+fail spec@arb_gl_spirv@execution@uniform@atomic-uint-aoa-cs
+fail spec@arb_gl_spirv@execution@uniform@atomic-uint-aoa-fs
+fail spec@arb_gl_spirv@execution@uniform@atomic-uint-array-cs
+fail spec@arb_gl_spirv@execution@uniform@atomic-uint-array-fs
+fail spec@arb_gl_spirv@execution@uniform@atomic-uint-cs
+fail spec@arb_gl_spirv@execution@uniform@atomic-uint-mixing-with-normal-uniforms
+fail spec@arb_gl_spirv@execution@uniform@atomic-uint-several-slots
+fail spec@arb_gl_spirv@execution@uniform@embedded-structs
+fail spec@arb_gl_spirv@execution@uniform@index-matches-location
+fail spec@arb_gl_spirv@execution@uniform@initializer
+fail spec@arb_gl_spirv@execution@uniform@initializer-complex
+fail spec@arb_gl_spirv@execution@uniform@initializer-dvec4
+fail spec@arb_gl_spirv@execution@uniform@initializer-mat4x3
+fail spec@arb_gl_spirv@execution@uniform@nonsequential-locations
+fail spec@arb_gl_spirv@execution@uniform@sampler2d
+fail spec@arb_gl_spirv@execution@uniform@sampler2d-binding
+fail spec@arb_gl_spirv@execution@uniform@sampler2d-binding-array
+fail spec@arb_gl_spirv@execution@uniform@sampler2d-nonconst-nested-array
+fail spec@arb_gl_spirv@execution@uniform@sampler2d-struct
+fail spec@arb_gl_spirv@execution@uniform@simple
+fail spec@arb_gl_spirv@execution@uniform@simple-without-names
+fail spec@arb_gl_spirv@execution@uniform@struct
+fail spec@arb_gl_spirv@execution@uniform@struct-array
+fail spec@arb_gl_spirv@execution@uniform@two-uniforms
+fail spec@arb_gl_spirv@execution@va64-simple
+fail spec@arb_gl_spirv@execution@vs-ps-simple
+fail spec@arb_gl_spirv@execution@vs-ps-specializations
+fail spec@arb_gl_spirv@execution@xfb@vs_aoa
+fail spec@arb_gl_spirv@execution@xfb@vs_block
+fail spec@arb_gl_spirv@execution@xfb@vs_block_array
+fail spec@arb_gl_spirv@execution@xfb@vs_block_array_offset_per_member
+fail spec@arb_gl_spirv@execution@xfb@vs_double
+fail spec@arb_gl_spirv@execution@xfb@vs_lines
+fail spec@arb_gl_spirv@execution@xfb@vs_simple
+fail spec@arb_gl_spirv@execution@xfb@vs_simple_multiple_samples
+fail spec@arb_gl_spirv@execution@xfb@vs_struct
+fail spec@arb_gl_spirv@execution@xfb@vs_struct_array
+fail spec@arb_gl_spirv@execution@xfb@vs_triangles
+fail spec@arb_gl_spirv@execution@xfb@vs_two_block
+fail spec@arb_gl_spirv@execution@xfb@vs_two_sets
+fail spec@arb_gl_spirv@execution@xfb@vs_two_sets_ifc
+fail spec@arb_gl_spirv@execution@xfb@vs_two_sets_struct
+fail spec@arb_gl_spirv@linker@uniform@multisampler
+fail spec@arb_gl_spirv@linker@uniform@multisampler-array
+fail spec@arb_gpu_shader5@arb_gpu_shader5-xfb-streams-without-invocations spirv
+fail spec@arb_gpu_shader5@texturegather@fs-rg-1-float-2d
+fail spec@arb_gpu_shader5@texturegather@fs-rg-1-float-2darray
+fail spec@arb_gpu_shader5@texturegather@fs-rg-1-float-2drect
+fail spec@arb_gpu_shader5@texturegather@fs-rg-1-float-cube
+fail spec@arb_gpu_shader5@texturegather@fs-rg-1-float-cubearray
+fail spec@arb_gpu_shader5@texturegather@vs-rg-1-float-2d
+fail spec@arb_gpu_shader5@texturegather@vs-rg-1-float-2darray
+fail spec@arb_gpu_shader5@texturegather@vs-rg-1-float-2drect
+fail spec@arb_gpu_shader5@texturegather@vs-rg-1-float-cube
+fail spec@arb_gpu_shader5@texturegather@vs-rg-1-float-cubearray
+fail spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2d
+fail spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2d-const
+fail spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2darray
+fail spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2darray-const
+fail spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2drect
+fail spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2drect-const
+fail spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2d
+fail spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2d-const
+fail spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2darray
+fail spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2darray-const
+fail spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2drect
+fail spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2drect-const
+fail spec@arb_gpu_shader5@texturegatheroffsets@fs-rg-1-float-2d
+fail spec@arb_gpu_shader5@texturegatheroffsets@fs-rg-1-float-2darray
+fail spec@arb_gpu_shader5@texturegatheroffsets@fs-rg-1-float-2drect
+fail spec@arb_gpu_shader5@texturegatheroffsets@vs-rg-1-float-2d
+fail spec@arb_gpu_shader5@texturegatheroffsets@vs-rg-1-float-2darray
+fail spec@arb_gpu_shader5@texturegatheroffsets@vs-rg-1-float-2drect
+fail spec@arb_gpu_shader_fp64@execution@arb_gpu_shader_fp64-vs-non-uniform-control-flow-ssbo
+fail spec@arb_indirect_parameters@conditional-render
+warn spec@arb_query_buffer_object@qbo
+fail spec@arb_shader_image_load_store@early-z
+fail spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgradcube
+fail spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-quads
+fail spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-quads-dlist
+fail spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-tris
+fail spec@arb_texture_buffer_object@formats (fs, arb)
+fail spec@arb_texture_buffer_object@formats (vs, arb)
+fail spec@arb_texture_gather@texturegather@fs-rg-green-float-2d
+fail spec@arb_texture_gather@texturegather@fs-rg-green-float-2darray
+fail spec@arb_texture_gather@texturegather@fs-rg-green-float-cube
+fail spec@arb_texture_gather@texturegather@fs-rg-green-float-cubearray
+fail spec@arb_texture_gather@texturegather@vs-rg-green-float-2d
+fail spec@arb_texture_gather@texturegather@vs-rg-green-float-2darray
+fail spec@arb_texture_gather@texturegather@vs-rg-green-float-cube
+fail spec@arb_texture_gather@texturegather@vs-rg-green-float-cubearray
+fail spec@arb_texture_gather@texturegatheroffset@fs-rg-green-float-2d
+fail spec@arb_texture_gather@texturegatheroffset@fs-rg-green-float-2darray
+fail spec@arb_texture_gather@texturegatheroffset@vs-rg-green-float-2d
+fail spec@arb_texture_gather@texturegatheroffset@vs-rg-green-float-2darray
+fail spec@arb_texture_multisample@texturesize@fs-texturesize-isampler2dms
+fail spec@arb_texture_multisample@texturesize@fs-texturesize-isampler2dmsarray
+fail spec@arb_texture_multisample@texturesize@gs-texturesize-isampler2dms
+fail spec@arb_texture_multisample@texturesize@gs-texturesize-isampler2dmsarray
+fail spec@arb_texture_multisample@texturesize@tes-texturesize-isampler2dms
+fail spec@arb_texture_multisample@texturesize@tes-texturesize-isampler2dmsarray
+fail spec@arb_texture_multisample@texturesize@vs-texturesize-isampler2dms
+fail spec@arb_texture_multisample@texturesize@vs-texturesize-isampler2dmsarray
+fail spec@arb_texture_rg@multisample-fast-clear gl_arb_texture_rg-int
+fail spec@arb_texture_view@rendering-formats
+fail spec@arb_timer_query@timestamp-get
+fail spec@egl 1.4@egl-context-priority
+fail spec@egl 1.4@eglterminate then unbind context
+fail spec@egl_ext_device_query@conformance
+fail spec@egl_ext_image_dma_buf_import_modifiers@conformance
+fail spec@egl_ext_surface_compression@conformance
+fail spec@egl_khr_get_all_proc_addresses@conformance
+fail spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_depth_component24
+fail spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_rgba
+fail spec@egl_khr_surfaceless_context@viewport
+fail spec@egl_mesa_query_driver@conformance
+fail spec@ext_external_objects@vk-depth-display
+fail spec@ext_external_objects@vk-ping-pong-multi-sem
+crash spec@ext_external_objects@vk-ping-pong-single-sem
+crash spec@ext_external_objects@vk-pix-buf-update-errors
+fail spec@ext_external_objects@vk-stencil-display
+crash spec@ext_external_objects@vk-vert-buf-update-errors
+fail spec@ext_framebuffer_blit@fbo-blit-check-limits
+fail spec@ext_image_dma_buf_import@ext_image_dma_buf_import-export-tex
+fail spec@ext_packed_float@query-rgba-signed-components
+fail spec@ext_shader_framebuffer_fetch_non_coherent@execution@gles3@integer-ms2
+fail spec@ext_shader_framebuffer_fetch_non_coherent@execution@gles3@integer-ms8
+fail spec@ext_texture_integer@multisample-fast-clear gl_ext_texture_integer
+fail spec@ext_transform_feedback@builtin-varyings gl_pointsize
+warn spec@ext_transform_feedback@tessellation polygon flat_last
+warn spec@ext_transform_feedback@tessellation quad_strip flat_last
+warn spec@ext_transform_feedback@tessellation quads flat_last
+fail spec@ext_transform_feedback@tessellation triangle_fan flat_first
+warn spec@glsl-1.10@execution@fs-dfdx-accuracy
+warn spec@glsl-1.10@execution@fs-dfdy-accuracy
+fail spec@glsl-1.20@compiler@invalid-vec4-array-to-vec3-array-conversion.vert
+fail spec@glsl-1.50@execution@geometry@primitive-types gl_line_loop
+fail spec@glsl-1.50@execution@primitive-id-no-gs-quad-strip
+fail spec@glsl-1.50@execution@primitive-id-no-gs-quads
+fail spec@intel_performance_query@intel_performance_query-issue_2235
+fail spec@khr_texture_compression_astc@miptree-gl srgb-fp
+fail spec@khr_texture_compression_astc@miptree-gles srgb-fp
+fail spec@khr_texture_compression_astc@sliced-3d-miptree-gl srgb-fp
+fail spec@khr_texture_compression_astc@sliced-3d-miptree-gles srgb-fp
+fail spec@nv_copy_image@nv_copy_image-formats --samples=2
+fail spec@nv_copy_image@nv_copy_image-formats --samples=4
+fail spec@nv_copy_image@nv_copy_image-formats --samples=8
+fail spec@oes_shader_io_blocks@compiler@layout-location-aliasing.vert
+fail spec@oes_texture_view@rendering-formats

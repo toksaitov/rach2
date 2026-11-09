@@ -1,0 +1,1 @@
+fbcon size: 1366 x 768, depth 24, 32 bpp, modifier 0x0, refcount 3, obj 00000000c682510b:         4128KiB 41 00  UC (ggtt offset: 00000000, size: 00408000, pages: 4K, normal) (pinned x 1) (stolen: 00000000) (fb)

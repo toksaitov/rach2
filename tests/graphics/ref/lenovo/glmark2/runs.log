@@ -1,0 +1,12 @@
+17:19:47 start drm-gl: glmark2-drm
+17:22:33 end drm-gl: rc 143,  s, 
+17:22:33 start drm-es2: glmark2-es2-drm
+17:22:44 end drm-es2: rc 143,  s, 
+17:22:45 start wayland-gl: runuser -u gfx -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 glmark2-wayland --fullscreen
+17:28:18 end wayland-gl: rc 0,  s,                                   glmark2 Score: 1199 
+17:28:18 start wayland-es2: runuser -u gfx -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 glmark2-es2-wayland --fullscreen
+17:33:51 end wayland-es2: rc 0,  s,                                   glmark2 Score: 1203 
+17:33:59 start drm-gl-xrgb: glmark2-drm --visual-config a=0
+17:39:32 end drm-gl-xrgb: rc 0,  s,                                   glmark2 Score: 614 
+17:39:32 start drm-es2-xrgb: glmark2-es2-drm --visual-config a=0
+17:45:05 end drm-es2-xrgb: rc 0,  s,                                   glmark2 Score: 610 

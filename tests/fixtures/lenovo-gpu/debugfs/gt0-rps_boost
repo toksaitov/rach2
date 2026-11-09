@@ -1,0 +1,11 @@
+RPS enabled? yes
+RPS active? no
+GPU busy? no, 273ms
+Boosts outstanding? 0
+Interactive? 0
+Frequency requested 200, actual 200
+  min hard:200, soft:200; max soft:1000, hard:1000
+  idle:200, efficient:500, boost:1000
+Wait boosts: 0
+
+RPS Autotuning inactive

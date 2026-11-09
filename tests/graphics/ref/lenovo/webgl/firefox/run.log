@@ -1,0 +1,2 @@
+18:36:57 start firefox http://127.0.0.1:8001/webgl-conformance-tests.html?version=2.0.1&run=1&postResults=1&quiet=1&skip=^deqp/
+19:23:59 end firefox after 2822 s, finish yes

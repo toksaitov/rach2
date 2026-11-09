@@ -1,0 +1,200 @@
+opened device `Intel Graphics` on driver `i915` (version 1.6.0 at 0)
+Connectors:
+id	encoder	status		name		size (mm)	modes	encoders
+85	84	connected	eDP-1          	340x190		1	84
+  modes:
+	index name refresh (Hz) hdisp hss hse htot vdisp vss vse vtot
+  #0 1366x768 60.02 1366 1374 1384 1558 768 771 772 816 76300 flags: nhsync, nvsync; type: preferred, driver
+  props:
+	1 EDID:
+		flags: immutable blob
+		blobs:
+
+		value:
+			00ffffffffffff0006afec4000000000
+			291701049522137802bbf59455549027
+			23505400000001010101010101010101
+			010101010101ce1d56c050003030080a
+			310058c1100000180000000f00000000
+			00000000000000000020000000fe0041
+			554f0a202020202020202020000000fe
+			004231353658544e30342e30200a00ee
+	2 DPMS:
+		flags: enum
+		enums: On=0 Standby=1 Suspend=2 Off=3
+		value: 0
+	5 link-status:
+		flags: enum
+		enums: Good=0 Bad=1
+		value: 0
+	6 non-desktop:
+		flags: immutable range
+		values: 0 1
+		value: 0
+	4 TILE:
+		flags: immutable blob
+		blobs:
+
+		value:
+	87 scaling mode:
+		flags: enum
+		enums: Full=1 Center=2 Full aspect=3
+		value: 3
+	88 Broadcast RGB:
+		flags: enum
+		enums: Automatic=0 Full=1 Limited 16:235=2
+		value: 0
+	89 max bpc:
+		flags: range
+		values: 6 12
+		value: 12
+	90 Colorspace:
+		flags: enum
+		enums: Default=0 BT709_YCC=2 XVYCC_601=3 XVYCC_709=4 SYCC_601=5 opYCC_601=6 opRGB=7 BT2020_CYCC=8 BT2020_RGB=9 BT2020_YCC=10 DCI-P3_RGB_D65=11 RGB_WIDE_FIXED=13 RGB_WIDE_FLOAT=14 BT601_YCC=15
+		value: 0
+92	0	disconnected	HDMI-A-1       	0x0		0	91
+  props:
+	1 EDID:
+		flags: immutable blob
+		blobs:
+
+		value:
+	2 DPMS:
+		flags: enum
+		enums: On=0 Standby=1 Suspend=2 Off=3
+		value: 3
+	5 link-status:
+		flags: enum
+		enums: Good=0 Bad=1
+		value: 0
+	6 non-desktop:
+		flags: immutable range
+		values: 0 1
+		value: 0
+	4 TILE:
+		flags: immutable blob
+		blobs:
+
+		value:
+	93 audio:
+		flags: enum
+		enums: force-dvi=18446744073709551614 off=18446744073709551615 auto=0 on=1
+		value: 0
+	88 Broadcast RGB:
+		flags: enum
+		enums: Automatic=0 Full=1 Limited 16:235=2
+		value: 0
+	94 aspect ratio:
+		flags: enum
+		enums: Automatic=0 4:3=1 16:9=2
+		value: 0
+	95 Colorspace:
+		flags: enum
+		enums: Default=0 SMPTE_170M_YCC=1 BT709_YCC=2 XVYCC_601=3 XVYCC_709=4 SYCC_601=5 opYCC_601=6 opRGB=7 BT2020_CYCC=8 BT2020_RGB=9 BT2020_YCC=10 DCI-P3_RGB_D65=11 DCI-P3_RGB_Theater=12
+		value: 0
+	96 content type:
+		flags: enum
+		enums: No Data=0 Graphics=1 Photo=2 Cinema=3 Game=4
+		value: 0
+	97 max bpc:
+		flags: range
+		values: 8 12
+		value: 12
+99	0	disconnected	DP-1           	0x0		0	98
+  props:
+	1 EDID:
+		flags: immutable blob
+		blobs:
+
+		value:
+	2 DPMS:
+		flags: enum
+		enums: On=0 Standby=1 Suspend=2 Off=3
+		value: 3
+	5 link-status:
+		flags: enum
+		enums: Good=0 Bad=1
+		value: 0
+	6 non-desktop:
+		flags: immutable range
+		values: 0 1
+		value: 0
+	4 TILE:
+		flags: immutable blob
+		blobs:
+
+		value:
+	103 subconnector:
+		flags: immutable enum
+		enums: Unknown=0 VGA=1 DVI-D=3 HDMI=11 DP=10 Wireless=18 Native=15
+		value: 0
+	93 audio:
+		flags: enum
+		enums: force-dvi=18446744073709551614 off=18446744073709551615 auto=0 on=1
+		value: 0
+	88 Broadcast RGB:
+		flags: enum
+		enums: Automatic=0 Full=1 Limited 16:235=2
+		value: 0
+	104 max bpc:
+		flags: range
+		values: 6 12
+		value: 12
+	105 Colorspace:
+		flags: enum
+		enums: Default=0 BT709_YCC=2 XVYCC_601=3 XVYCC_709=4 SYCC_601=5 opYCC_601=6 opRGB=7 BT2020_CYCC=8 BT2020_RGB=9 BT2020_YCC=10 DCI-P3_RGB_D65=11 RGB_WIDE_FIXED=13 RGB_WIDE_FLOAT=14 BT601_YCC=15
+		value: 0
+	7 HDR_OUTPUT_METADATA:
+		flags: blob
+		blobs:
+
+		value:
+106	0	disconnected	HDMI-A-2       	0x0		0	98
+  props:
+	1 EDID:
+		flags: immutable blob
+		blobs:
+
+		value:
+	2 DPMS:
+		flags: enum
+		enums: On=0 Standby=1 Suspend=2 Off=3
+		value: 3
+	5 link-status:
+		flags: enum
+		enums: Good=0 Bad=1
+		value: 0
+	6 non-desktop:
+		flags: immutable range
+		values: 0 1
+		value: 0
+	4 TILE:
+		flags: immutable blob
+		blobs:
+
+		value:
+	93 audio:
+		flags: enum
+		enums: force-dvi=18446744073709551614 off=18446744073709551615 auto=0 on=1
+		value: 0
+	88 Broadcast RGB:
+		flags: enum
+		enums: Automatic=0 Full=1 Limited 16:235=2
+		value: 0
+	94 aspect ratio:
+		flags: enum
+		enums: Automatic=0 4:3=1 16:9=2
+		value: 0
+	107 Colorspace:
+		flags: enum
+		enums: Default=0 SMPTE_170M_YCC=1 BT709_YCC=2 XVYCC_601=3 XVYCC_709=4 SYCC_601=5 opYCC_601=6 opRGB=7 BT2020_CYCC=8 BT2020_RGB=9 BT2020_YCC=10 DCI-P3_RGB_D65=11 DCI-P3_RGB_Theater=12
+		value: 0
+	96 content type:
+		flags: enum
+		enums: No Data=0 Graphics=1 Photo=2 Cinema=3 Game=4
+		value: 0
+	108 max bpc:
+		flags: range
+		values: 8 12
+		value: 12
+

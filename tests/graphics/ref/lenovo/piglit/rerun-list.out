@@ -1,0 +1,219 @@
+shaders@glsl-bug-110796
+spec@!opengl 1.0@depth-clear-precision-check
+spec@!opengl 1.0@gl-1.0-swapbuffers-behavior
+spec@!opengl 1.1@line-smooth-coverage
+spec@!opengl 1.1@line-smooth-stipple
+spec@!opengl 1.1@linestipple
+spec@!opengl 1.1@read-front
+spec@!opengl 1.1@read-front clear-front-first
+spec@!opengl 1.1@read-front clear-front-first samples=2
+spec@!opengl 1.1@read-front clear-front-first samples=4
+spec@!opengl 1.1@read-front clear-front-first samples=6
+spec@!opengl 1.1@read-front clear-front-first samples=8
+spec@!opengl 1.1@read-front samples=2
+spec@!opengl 1.1@read-front samples=4
+spec@!opengl 1.1@read-front samples=6
+spec@!opengl 1.1@read-front samples=8
+spec@!opengl 3.2@gl-3.2-adj-prims cull-back pv-first
+spec@!opengl 3.2@gl-3.2-adj-prims cull-front pv-first
+spec@!opengl 3.2@gl-3.2-adj-prims line cull-back pv-first
+spec@!opengl 3.2@gl-3.2-adj-prims line cull-front pv-first
+spec@!opengl 3.2@gl-3.2-adj-prims pv-first
+spec@amd_performance_monitor@measure
+spec@arb_copy_image@arb_copy_image-formats --samples=2
+spec@arb_copy_image@arb_copy_image-formats --samples=4
+spec@arb_copy_image@arb_copy_image-formats --samples=8
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one_write-z
+spec@arb_gl_spirv@execution@ssbo@aoa
+spec@arb_gl_spirv@execution@ssbo@aoa-2
+spec@arb_gl_spirv@execution@ssbo@array
+spec@arb_gl_spirv@execution@ssbo@array-indirect
+spec@arb_gl_spirv@execution@ssbo@array-inside-ssbo
+spec@arb_gl_spirv@execution@ssbo@array-of-arrays-inside-ssbo
+spec@arb_gl_spirv@execution@ssbo@matrix@column-major
+spec@arb_gl_spirv@execution@ssbo@matrix@column-vs-row
+spec@arb_gl_spirv@execution@ssbo@matrix@complex
+spec@arb_gl_spirv@execution@ssbo@matrix@indirect-column-major
+spec@arb_gl_spirv@execution@ssbo@matrix@indirect-row-major
+spec@arb_gl_spirv@execution@ssbo@matrix@row-major
+spec@arb_gl_spirv@execution@ssbo@simple
+spec@arb_gl_spirv@execution@ssbo@two-ssbo
+spec@arb_gl_spirv@execution@ssbo@two-ssbo-different-layouts
+spec@arb_gl_spirv@execution@ssbo@two-stages
+spec@arb_gl_spirv@execution@ssbo@unsized-array
+spec@arb_gl_spirv@execution@ssbo@unsized-array-length
+spec@arb_gl_spirv@execution@ubo@aoa
+spec@arb_gl_spirv@execution@ubo@aoa-2
+spec@arb_gl_spirv@execution@ubo@array
+spec@arb_gl_spirv@execution@ubo@array-complex
+spec@arb_gl_spirv@execution@ubo@array-different-array-stride-ubo
+spec@arb_gl_spirv@execution@ubo@array-indirect
+spec@arb_gl_spirv@execution@ubo@array-inside-ubo
+spec@arb_gl_spirv@execution@ubo@array-inside-ubo-copy
+spec@arb_gl_spirv@execution@ubo@array-of-arrays-inside-ubo
+spec@arb_gl_spirv@execution@ubo@explicit-offset
+spec@arb_gl_spirv@execution@ubo@explicit-offset-nested-struct
+spec@arb_gl_spirv@execution@ubo@location-0-crash
+spec@arb_gl_spirv@execution@ubo@matrix@column-major
+spec@arb_gl_spirv@execution@ubo@matrix@column-vs-row
+spec@arb_gl_spirv@execution@ubo@matrix@complex
+spec@arb_gl_spirv@execution@ubo@matrix@different-matrix-stride
+spec@arb_gl_spirv@execution@ubo@matrix@indirect-column-major
+spec@arb_gl_spirv@execution@ubo@matrix@indirect-row-major
+spec@arb_gl_spirv@execution@ubo@matrix@row-major
+spec@arb_gl_spirv@execution@ubo@simple
+spec@arb_gl_spirv@execution@ubo@two-stages
+spec@arb_gl_spirv@execution@ubo@two-ubos
+spec@arb_gl_spirv@execution@uniform@array
+spec@arb_gl_spirv@execution@uniform@arrays-of-arrays
+spec@arb_gl_spirv@execution@uniform@atomic-uint-aoa-cs
+spec@arb_gl_spirv@execution@uniform@atomic-uint-aoa-fs
+spec@arb_gl_spirv@execution@uniform@atomic-uint-array-cs
+spec@arb_gl_spirv@execution@uniform@atomic-uint-array-fs
+spec@arb_gl_spirv@execution@uniform@atomic-uint-cs
+spec@arb_gl_spirv@execution@uniform@atomic-uint-mixing-with-normal-uniforms
+spec@arb_gl_spirv@execution@uniform@atomic-uint-several-slots
+spec@arb_gl_spirv@execution@uniform@embedded-structs
+spec@arb_gl_spirv@execution@uniform@index-matches-location
+spec@arb_gl_spirv@execution@uniform@initializer
+spec@arb_gl_spirv@execution@uniform@initializer-complex
+spec@arb_gl_spirv@execution@uniform@initializer-dvec4
+spec@arb_gl_spirv@execution@uniform@initializer-mat4x3
+spec@arb_gl_spirv@execution@uniform@nonsequential-locations
+spec@arb_gl_spirv@execution@uniform@sampler2d
+spec@arb_gl_spirv@execution@uniform@sampler2d-binding
+spec@arb_gl_spirv@execution@uniform@sampler2d-binding-array
+spec@arb_gl_spirv@execution@uniform@sampler2d-nonconst-nested-array
+spec@arb_gl_spirv@execution@uniform@sampler2d-struct
+spec@arb_gl_spirv@execution@uniform@simple
+spec@arb_gl_spirv@execution@uniform@simple-without-names
+spec@arb_gl_spirv@execution@uniform@struct
+spec@arb_gl_spirv@execution@uniform@struct-array
+spec@arb_gl_spirv@execution@uniform@two-uniforms
+spec@arb_gl_spirv@execution@va64-simple
+spec@arb_gl_spirv@execution@vs-ps-simple
+spec@arb_gl_spirv@execution@vs-ps-specializations
+spec@arb_gl_spirv@execution@xfb@vs_aoa
+spec@arb_gl_spirv@execution@xfb@vs_block
+spec@arb_gl_spirv@execution@xfb@vs_block_array
+spec@arb_gl_spirv@execution@xfb@vs_block_array_offset_per_member
+spec@arb_gl_spirv@execution@xfb@vs_double
+spec@arb_gl_spirv@execution@xfb@vs_lines
+spec@arb_gl_spirv@execution@xfb@vs_simple
+spec@arb_gl_spirv@execution@xfb@vs_simple_multiple_samples
+spec@arb_gl_spirv@execution@xfb@vs_struct
+spec@arb_gl_spirv@execution@xfb@vs_struct_array
+spec@arb_gl_spirv@execution@xfb@vs_triangles
+spec@arb_gl_spirv@execution@xfb@vs_two_block
+spec@arb_gl_spirv@execution@xfb@vs_two_sets
+spec@arb_gl_spirv@execution@xfb@vs_two_sets_ifc
+spec@arb_gl_spirv@execution@xfb@vs_two_sets_struct
+spec@arb_gl_spirv@linker@uniform@multisampler
+spec@arb_gl_spirv@linker@uniform@multisampler-array
+spec@arb_gpu_shader5@arb_gpu_shader5-xfb-streams-without-invocations spirv
+spec@arb_gpu_shader5@texturegather@fs-rg-1-float-2d
+spec@arb_gpu_shader5@texturegather@fs-rg-1-float-2darray
+spec@arb_gpu_shader5@texturegather@fs-rg-1-float-2drect
+spec@arb_gpu_shader5@texturegather@fs-rg-1-float-cube
+spec@arb_gpu_shader5@texturegather@fs-rg-1-float-cubearray
+spec@arb_gpu_shader5@texturegather@vs-rg-1-float-2d
+spec@arb_gpu_shader5@texturegather@vs-rg-1-float-2darray
+spec@arb_gpu_shader5@texturegather@vs-rg-1-float-2drect
+spec@arb_gpu_shader5@texturegather@vs-rg-1-float-cube
+spec@arb_gpu_shader5@texturegather@vs-rg-1-float-cubearray
+spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2d
+spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2d-const
+spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2darray
+spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2darray-const
+spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2drect
+spec@arb_gpu_shader5@texturegatheroffset@fs-rg-1-float-2drect-const
+spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2d
+spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2d-const
+spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2darray
+spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2darray-const
+spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2drect
+spec@arb_gpu_shader5@texturegatheroffset@vs-rg-1-float-2drect-const
+spec@arb_gpu_shader5@texturegatheroffsets@fs-rg-1-float-2d
+spec@arb_gpu_shader5@texturegatheroffsets@fs-rg-1-float-2darray
+spec@arb_gpu_shader5@texturegatheroffsets@fs-rg-1-float-2drect
+spec@arb_gpu_shader5@texturegatheroffsets@vs-rg-1-float-2d
+spec@arb_gpu_shader5@texturegatheroffsets@vs-rg-1-float-2darray
+spec@arb_gpu_shader5@texturegatheroffsets@vs-rg-1-float-2drect
+spec@arb_gpu_shader_fp64@execution@arb_gpu_shader_fp64-vs-non-uniform-control-flow-ssbo
+spec@arb_indirect_parameters@conditional-render
+spec@arb_query_buffer_object@qbo
+spec@arb_shader_image_load_store@early-z
+spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgradcube
+spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-quads
+spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-quads-dlist
+spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-tris
+spec@arb_texture_buffer_object@formats (fs, arb)
+spec@arb_texture_buffer_object@formats (vs, arb)
+spec@arb_texture_gather@texturegather@fs-rg-green-float-2d
+spec@arb_texture_gather@texturegather@fs-rg-green-float-2darray
+spec@arb_texture_gather@texturegather@fs-rg-green-float-cube
+spec@arb_texture_gather@texturegather@fs-rg-green-float-cubearray
+spec@arb_texture_gather@texturegather@vs-rg-green-float-2d
+spec@arb_texture_gather@texturegather@vs-rg-green-float-2darray
+spec@arb_texture_gather@texturegather@vs-rg-green-float-cube
+spec@arb_texture_gather@texturegather@vs-rg-green-float-cubearray
+spec@arb_texture_gather@texturegatheroffset@fs-rg-green-float-2d
+spec@arb_texture_gather@texturegatheroffset@fs-rg-green-float-2darray
+spec@arb_texture_gather@texturegatheroffset@vs-rg-green-float-2d
+spec@arb_texture_gather@texturegatheroffset@vs-rg-green-float-2darray
+spec@arb_texture_multisample@texturesize@fs-texturesize-isampler2dms
+spec@arb_texture_multisample@texturesize@fs-texturesize-isampler2dmsarray
+spec@arb_texture_multisample@texturesize@gs-texturesize-isampler2dms
+spec@arb_texture_multisample@texturesize@gs-texturesize-isampler2dmsarray
+spec@arb_texture_multisample@texturesize@tes-texturesize-isampler2dms
+spec@arb_texture_multisample@texturesize@tes-texturesize-isampler2dmsarray
+spec@arb_texture_multisample@texturesize@vs-texturesize-isampler2dms
+spec@arb_texture_multisample@texturesize@vs-texturesize-isampler2dmsarray
+spec@arb_texture_rg@multisample-fast-clear gl_arb_texture_rg-int
+spec@arb_texture_view@rendering-formats
+spec@arb_timer_query@timestamp-get
+spec@egl 1.4@egl-context-priority
+spec@egl 1.4@eglterminate then unbind context
+spec@egl_ext_device_query@conformance
+spec@egl_ext_image_dma_buf_import_modifiers@conformance
+spec@egl_ext_surface_compression@conformance
+spec@egl_khr_get_all_proc_addresses@conformance
+spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_depth_component24
+spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_rgba
+spec@egl_khr_surfaceless_context@viewport
+spec@egl_mesa_query_driver@conformance
+spec@ext_external_objects@vk-depth-display
+spec@ext_external_objects@vk-ping-pong-multi-sem
+spec@ext_external_objects@vk-ping-pong-single-sem
+spec@ext_external_objects@vk-pix-buf-update-errors
+spec@ext_external_objects@vk-stencil-display
+spec@ext_external_objects@vk-vert-buf-update-errors
+spec@ext_framebuffer_blit@fbo-blit-check-limits
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-export-tex
+spec@ext_packed_float@query-rgba-signed-components
+spec@ext_shader_framebuffer_fetch_non_coherent@execution@gles3@integer-ms2
+spec@ext_shader_framebuffer_fetch_non_coherent@execution@gles3@integer-ms8
+spec@ext_texture_integer@multisample-fast-clear gl_ext_texture_integer
+spec@ext_transform_feedback@builtin-varyings gl_pointsize
+spec@ext_transform_feedback@tessellation polygon flat_last
+spec@ext_transform_feedback@tessellation quad_strip flat_last
+spec@ext_transform_feedback@tessellation quads flat_last
+spec@ext_transform_feedback@tessellation triangle_fan flat_first
+spec@glsl-1.10@execution@fs-dfdx-accuracy
+spec@glsl-1.10@execution@fs-dfdy-accuracy
+spec@glsl-1.20@compiler@invalid-vec4-array-to-vec3-array-conversion.vert
+spec@glsl-1.50@execution@geometry@primitive-types gl_line_loop
+spec@glsl-1.50@execution@primitive-id-no-gs-quad-strip
+spec@glsl-1.50@execution@primitive-id-no-gs-quads
+spec@intel_performance_query@intel_performance_query-issue_2235
+spec@khr_texture_compression_astc@miptree-gl srgb-fp
+spec@khr_texture_compression_astc@miptree-gles srgb-fp
+spec@khr_texture_compression_astc@sliced-3d-miptree-gl srgb-fp
+spec@khr_texture_compression_astc@sliced-3d-miptree-gles srgb-fp
+spec@nv_copy_image@nv_copy_image-formats --samples=2
+spec@nv_copy_image@nv_copy_image-formats --samples=4
+spec@nv_copy_image@nv_copy_image-formats --samples=8
+spec@oes_shader_io_blocks@compiler@layout-location-aliasing.vert
+spec@oes_texture_view@rendering-formats

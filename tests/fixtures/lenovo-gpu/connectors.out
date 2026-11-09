@@ -1,0 +1,5 @@
+== /sys/class/drm/card1-DP-1: disconnected disabled
+== /sys/class/drm/card1-HDMI-A-1: disconnected disabled
+== /sys/class/drm/card1-HDMI-A-2: disconnected disabled
+== /sys/class/drm/card1-eDP-1: connected enabled
+1366x768

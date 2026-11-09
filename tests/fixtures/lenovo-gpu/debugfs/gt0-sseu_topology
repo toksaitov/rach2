@@ -1,0 +1,3 @@
+slice0: 2 subslice(s) (0x00000003):
+	subslice0: 10 EUs (0x3ff)
+	subslice1: 10 EUs (0x3ff)

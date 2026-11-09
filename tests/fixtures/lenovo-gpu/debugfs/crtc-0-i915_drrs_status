@@ -1,0 +1,5 @@
+DRRS capable: yes
+DRRS enabled: no
+DRRS active: no
+DRRS refresh rate: high
+DRRS busy frontbuffer bits: 0x0

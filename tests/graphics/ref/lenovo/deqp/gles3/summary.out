@@ -1,0 +1,6 @@
+cases 44778, wall 567.7 s, jobs 4
+CompatibilityWarning 4
+Fail 1
+NotSupported 211
+Pass 44521
+QualityWarning 41

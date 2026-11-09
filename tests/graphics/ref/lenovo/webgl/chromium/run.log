@@ -1,0 +1,2 @@
+17:59:09 start chromium http://127.0.0.1:8001/webgl-conformance-tests.html?version=2.0.1&run=1&postResults=1&quiet=1&skip=^deqp/
+18:36:40 end chromium after 2251 s, finish yes

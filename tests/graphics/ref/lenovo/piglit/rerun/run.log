@@ -1,0 +1,30 @@
+22:03:02 start 
+22:04:42 end rc 0 after 100 s
+summary:
+       name:  results
+       ----  --------
+       pass:     3753
+       fail:      879
+      crash:        3
+       skip:      121
+    timeout:        0
+       warn:       13
+ incomplete:        0
+ dmesg-warn:        0
+ dmesg-fail:        0
+    changes:        0
+      fixes:        0
+regressions:        0
+      total:     4773
+       time: 00:01:38
+Nov 08 22:03:19 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251292]
+Nov 08 22:03:25 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251296]
+Nov 08 22:03:31 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251299]
+Nov 08 22:03:38 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251302]
+Nov 08 22:03:43 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251317]
+Nov 08 22:03:49 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251320]
+Nov 08 22:03:55 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251324]
+Nov 08 22:04:01 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in read-front [251327]
+Nov 08 22:04:07 lenovo-debian kernel: i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:ebdffffe
+Nov 08 22:04:34 lenovo-debian kernel: ext_external_ob[252033]: segfault at 55ddc2898000 ip 00007f2142999798 sp 00007fff47b1e1e0 error 6 in libgallium-25.0.7-2+deb13u1.so[599798,7f21424e1000+173b000] likely on CPU 3 (core 1, socket 0)
+Nov 08 22:04:34 lenovo-debian kernel: ext_external_ob[252044]: segfault at 88 ip 00007fe9033fc88c sp 00007ffd6ba91140 error 4 in libgallium-25.0.7-2+deb13u1.so[dfc88c,7fe9026e1000+173b000] likely on CPU 3 (core 1, socket 0)

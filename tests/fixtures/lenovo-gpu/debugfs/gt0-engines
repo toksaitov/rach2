@@ -1,0 +1,162 @@
+rcs0
+	Awake? 0
+	Barriers?: no
+	Latency: 77us
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x00002000
+	CCID: 0x7ffa5109
+	RING_START: 0x7fffa000
+	RING_HEAD:  0x00003118
+	RING_TAIL:  0x00003118
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00004200 [idle]
+	RING_IMR:   0xffffffdf
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_00003118
+	BBADDR: 0x00000000_0042202c
+	DMA_FADDR: 0x00000000_7fffd118
+	IPEIR: 0x00000000
+	IPEHR: 0x780c0000
+	PP_DIR_BASE: 0x7fda0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000001 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[0020] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+[0100] 00000019 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[0120] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: disabled
+bcs0
+	Awake? 0
+	Barriers?: no
+	Latency: 29us
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x00022000
+	RING_START: 0x7ffa0000
+	RING_HEAD:  0x00000630
+	RING_TAIL:  0x00000630
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00000200 [idle]
+	RING_IMR:   0xffffffff
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_00000630
+	BBADDR: 0x00000000_00000000
+	DMA_FADDR: 0x00000000_7ffa0630
+	IPEIR: 0x00000000
+	IPEHR: 0x00000000
+	PP_DIR_BASE: 0x7fda0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+[0100] 00000003 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[0120] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: disabled
+vcs0
+	Awake? 0
+	Barriers?: no
+	Latency: 27us
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x00012000
+	RING_START: 0x7fd9b000
+	RING_HEAD:  0x00000630
+	RING_TAIL:  0x00000630
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00000200 [idle]
+	RING_IMR:   0xffffffff
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_00000630
+	BBADDR: 0x00000000_00000000
+	DMA_FADDR: 0x00000000_7fd9b630
+	IPEIR: 0x00000000
+	IPEHR: 0x00000000
+	PP_DIR_BASE: 0x7fda0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+[0100] 00000003 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[0120] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: disabled
+vecs0
+	Awake? 0
+	Barriers?: no
+	Latency: 31us
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x0001a000
+	RING_START: 0x7fd96000
+	RING_HEAD:  0x00000630
+	RING_TAIL:  0x00000630
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00000200 [idle]
+	RING_IMR:   0xffffffff
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_00000630
+	BBADDR: 0x00000000_00000000
+	DMA_FADDR: 0x00000000_7fd96630
+	IPEIR: 0x00000000
+	IPEHR: 0x00000000
+	PP_DIR_BASE: 0x7fda0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+[0100] 00000003 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[0120] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: disabled

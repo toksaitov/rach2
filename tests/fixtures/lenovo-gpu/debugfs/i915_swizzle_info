@@ -1,0 +1,8 @@
+bit6 swizzle for X-tiling = bit9/bit10
+bit6 swizzle for Y-tiling = bit9
+MAD_DIMM_C0 = 0x00620020
+MAD_DIMM_C1 = 0x00620020
+MAD_DIMM_C2 = 0x00600000
+TILECTL = 0x00000001
+ARB_MODE = 0x00000020
+DISP_ARB_CTL = 0x16663056
