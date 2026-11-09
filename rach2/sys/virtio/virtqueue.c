@@ -94,13 +94,13 @@ int virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues)
         return virtio_fail(d, -EIO);
     }
     d->features = accept;
+    klog(KLOG_INFO, "virtio", "features: %s: offered %x:%x, taken %x:%x", d->name,
+         (unsigned)(offered >> 32), (unsigned)offered, (unsigned)(accept >> 32), (unsigned)accept);
     r = d->ops->irq_setup(d, nqueues);
     if (r != 0) {
         return virtio_fail(d, r);
     }
     d->nqueues = nqueues;
-    klog(KLOG_INFO, "virtio", "features: %s: offered %x:%x, taken %x:%x", d->name,
-         (unsigned)(offered >> 32), (unsigned)offered, (unsigned)(accept >> 32), (unsigned)accept);
     return 0;
 }
 
