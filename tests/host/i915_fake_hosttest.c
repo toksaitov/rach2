@@ -8,7 +8,10 @@
  * host-deps: rach2/sys/drm/i915/i915_stolen.c rach2/sys/drm/i915/i915_gtt.c
  * host-deps: rach2/sys/drm/i915/i915_irq.c rach2/sys/drm/i915/i915_ring.c
  * host-deps: rach2/sys/drm/i915/i915_ppgtt.c
- * host-deps: rach2/sys/drm/i915/i915_firstlight.c
+ * host-deps: rach2/sys/drm/i915/i915_firstlight.c rach2/sys/drm/i915/i915_rc6.c
+ * host-deps: rach2/sys/drm/i915/i915_rps.c rach2/sys/tick.c
+ * host-deps: rach2/sys/drm/i915/intel_bios.c
+ * host-deps: rach2/sys/drm/i915/intel_opregion.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/mm/frame.c tests/host/compat/spinlock_host.c
  *
@@ -45,9 +48,11 @@
  */
 
 #include <stdarg.h>
+#include <stdio.h>
 
 #include "drm/i915/i915_fake.c"
 #include "fs/fd.h"
+#include "fs/sysfs.h"
 #include "iommu.h"
 #include "lib/kirq.h"
 #include "proc/percpu.h"
@@ -513,6 +518,58 @@ void drm_dev_put(struct drm_device *dev)
     }
 }
 
+/** The path of a file in the device's debugfs directory, by its PCI
+ * function as on the machine. */
+void drm_debugfs_path(const struct drm_device *dev, const char *name, char *path, uint32_t cap)
+{
+    (void)dev;
+    snprintf(path, cap, "dri/0000:00:04.0/%s", name);
+}
+
+/** The card's directory in /sys: none, so the driver adds no files. */
+int drm_sysfs_card_dir(const struct drm_device *dev)
+{
+    (void)dev;
+    return -ENOENT;
+}
+
+int sysfs_add_dir(int parent, const char *name)
+{
+    (void)parent;
+    (void)name;
+    return -ENOENT;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return -ENOENT;
+}
+
+int sysfs_node_child(int dir, const char *name, int len)
+{
+    (void)dir;
+    (void)name;
+    (void)len;
+    return -ENOENT;
+}
+
+/* DRM's mode helpers, which the panel's decoding calls and the bind does
+ * not reach. */
+uint32_t drm_mode_vrefresh(const struct drm_mode_modeinfo *mode)
+{
+    (void)mode;
+    return 0;
+}
+
+void drm_mode_set_name(struct drm_mode_modeinfo *mode)
+{
+    mode->name[0] = '\0';
+}
+
 /* debugfs: the one file made, while it is there. */
 static char dfs_path[64];
 static const struct file_ops *dfs_ops;
@@ -666,7 +723,7 @@ static void check_after_bind(struct i915_fake *f)
           (edu_config[PCI_COMMAND] & (PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER)) ==
               (PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER));
     CHECK("probe: the file made", dfs_ops == &fake_file_ops &&
-                                      strcmp(dfs_path, "dri/1/i915_fake") == 0 &&
+                                      strcmp(dfs_path, "dri/0000:00:04.0/i915_fake") == 0 &&
                                       dfs_mode == 0600u && dfs_data == f && f->i915 == bound);
     CHECK("probe: edu's registers mapped", edu_maps == 1 && f->doorbell == (uintptr_t)edu_regs);
     CHECK("probe: every source masked but the user interrupts and the master enable",

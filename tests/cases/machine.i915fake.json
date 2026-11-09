@@ -50,7 +50,7 @@
           "step_id": "probe",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run drmdevice, eglinfo -p surfaceless with EGL's debug log on, whose exit is not judged while the driver's own ioctls answer EINVAL, and first light from /sys/kernel/debug/dri/N/i915_fake plain and under the submit, bind, irq and hang faults"
+          "does": "run drmdevice, eglinfo -p surfaceless with EGL's debug log on, whose exit is not judged while the driver's own ioctls answer EINVAL, and first light from /sys/kernel/debug/dri/DEVICE/i915_fake plain and under the submit, bind, irq and hang faults"
         }
       ],
       "machines": [
