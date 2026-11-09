@@ -1068,18 +1068,18 @@ static int put_abs(int fd, int code, int min, int max)
     }
     puts("EVPROBE: abs ");
     put_hex(code);
-    puts(" value min max fuzz flat res ");
-    put_dec(a.value);
-    puts(" ");
+    puts(" min ");
     put_dec(a.minimum);
-    puts(" ");
+    puts(" max ");
     put_dec(a.maximum);
-    puts(" ");
+    puts(" fuzz ");
     put_dec(a.fuzz);
-    puts(" ");
+    puts(" flat ");
     put_dec(a.flat);
-    puts(" ");
+    puts(" res ");
     put_dec(a.resolution);
+    puts(" value ");
+    put_dec(a.value);
     puts("\n");
     return max < min || (a.minimum == min && a.maximum == max);
 }
@@ -1087,12 +1087,13 @@ static int put_abs(int fd, int code, int min, int max)
 /**
  * The run of `evprobe touchpad`: find the Synaptics touchpad's event device,
  * print its block as /proc/bus/input/devices gives it and EVIOCGABS of each
- * axis it has, for comparison with Debian's on the same machine, and fail
- * unless they are what Linux gives the Lenovo's pad, model 1 with firmware
- * 8.1, capabilities 0xd00123/0x840300/0x2a800, in absolute mode: the bits
- * of tests/host/synaptics_hosttest.c and the coordinates Debian's psmouse
- * logged (dev-log/70-wifi-chip/linux/dmesg.txt). The resolution is printed
- * and not judged, since that log does not give it.
+ * axis it has, in the form tools/lenovo/debian-ref/touchpad.sh prints
+ * Debian's, the value last since it is only the pad's last reading, and
+ * fail unless they are what Linux gives the Lenovo's pad, model 1 with
+ * firmware 8.1, capabilities 0xd00123/0x840300/0x2a800, in absolute mode:
+ * the bits of tests/host/synaptics_hosttest.c and the coordinates Debian's
+ * psmouse logged (dev-log/70-wifi-chip/linux/dmesg.txt). The resolution is
+ * printed and not judged, since that log does not give it.
  */
 static void touchpad(void)
 {
