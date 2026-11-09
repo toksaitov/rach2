@@ -1,5 +1,5 @@
-# common.sh: what the browser runners share, sourced by webgl.sh and
-# video.sh inside the guest, Rach2's or Debian's, and run on the host as
+# common.sh: what the runners share, sourced by webgl.sh, video.sh and
+# deqp.sh inside the guest, Rach2's or Debian's, and run on the host as
 # `sh common.sh host` for the host's half of a run's record.
 # shellcheck shell=sh
 #
@@ -37,9 +37,10 @@ runner_busy()
     awk '$1 == "cpu" { t = 0; for (i = 2; i <= NF; i++) t += $i; print t - $5 - $6, t; exit }' /proc/stat
 }
 
-# runner_start: begin the record with what the guest is: its system, CPUs,
-# memory, Mesa, the IOMMU's state, the caches' preparation and the other
-# processes that run beside the runner.
+# runner_start [plain]: begin the record with what the guest is: its system,
+# CPUs, memory, Mesa, the IOMMU's state, the caches' preparation and the
+# other processes that run beside the runner. `plain`, for a runner that
+# starts no browser, leaves out the browser's profile and the window's size.
 runner_start()
 {
     mkdir -p "$RUNNER_OUT"
@@ -56,8 +57,10 @@ runner_start()
     runner_record "mesa $(dpkg-query -W -f '${Version}' libgl1-mesa-dri 2>/dev/null || echo unknown)"
     runner_iommu
     runner_record "cache mesa $(find "${MESA_SHADER_CACHE_DIR:-/nonexistent}" -type f 2>/dev/null | wc -l) files in ${MESA_SHADER_CACHE_DIR:-none}, emptied at start: ${GRAPHICS_DONE:-0}"
-    runner_record "cache browser a new profile for each browser started"
-    runner_record "size ${RUNNER_WIDTH}x$RUNNER_HEIGHT"
+    if [ "${1:-}" != plain ]; then
+        runner_record "cache browser a new profile for each browser started"
+        runner_record "size ${RUNNER_WIDTH}x$RUNNER_HEIGHT"
+    fi
     runner_record "load start $(cut -d' ' -f1-3 /proc/loadavg)"
     runner_record "processes start $(ps -e -o pid= 2>/dev/null | wc -l)"
     RUNNER_BUSY0=$(runner_busy)
