@@ -289,12 +289,9 @@ static int32_t sysv_perm_set(struct sysv_perm *p, const struct ipc64_perm *in)
 #define REC_I386   1
 #define REC_OLD    2
 
-/** Whether the call is an i386 call on x86-64, whose records and message
+/* Whether the call is an i386 call on x86-64, whose records and message
  * types have 32-bit longs. */
-static int sysv_compat(void)
-{
-    return sizeof(long) > 4u && in_compat_syscall();
-}
+#define sysv_compat() (sizeof(long) > 4u && in_compat_syscall())
 
 /** The layout of the record of a control command of `version`, IPC_64 or
  * 0 for the old one. */
