@@ -962,7 +962,7 @@ static int32_t loopctl_write(fd_entry_t *entry, const char __user *buffer, uint3
 }
 
 static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_poll, loop_node_ioctl,
-                                         loop_node_close};
+                                         loop_node_close, NULL, NULL};
 
 /** write of /dev/framefail: the count its first 16 bytes begin with arms
  * the test switch of the frame allocator (`paging_framefail_arm`). Returns
@@ -993,7 +993,7 @@ static int32_t framefail_write(fd_entry_t *entry, const char __user *buffer, uin
 }
 
 static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev_poll, dev_ioctl,
-                                              NULL};
+                                              NULL, NULL, NULL};
 
 /** LOOP_CTL_GET_FREE, LOOP_CTL_ADD and LOOP_CTL_REMOVE, which losetup and
  * mount make before they attach a file (`loop_control_ioctl`); another
@@ -1006,7 +1006,7 @@ static int32_t loopctl_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, loopctl_ioctl,
-                                            NULL};
+                                            NULL, NULL, NULL};
 
 /* /dev/mem's size: the physical addresses 32 bits reach; and the first
  * megabyte, which it reaches whoever owns it, firmware's tables among it. */
@@ -1086,11 +1086,11 @@ static int32_t dev_mem_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     return dev_mem_rw(e, NULL, buf, count);
 }
 
-static const struct file_ops mem_ops = {dev_mem_read, dev_mem_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
+static const struct file_ops mem_ops = {dev_mem_read, dev_mem_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
 
 /**
  * read of /dev/bootlog: the kernel's records in its ring, from the boot and
@@ -1189,7 +1189,7 @@ static int32_t dev_screenlog_write(fd_entry_t *e, const char __user *buf, uint32
 }
 
 static const struct file_ops screenlog_ops = {dev_screenlog_read, dev_screenlog_write, dev_poll,
-                                              dev_ioctl, NULL};
+                                              dev_ioctl, NULL, NULL, NULL};
 
 /*
  * /dev/rtc0: the CMOS clock, which `hwclock` reads and sets through Linux's
@@ -1496,28 +1496,28 @@ static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_poll, dev_rtc_ioctl,
-                                        NULL};
+                                        NULL, NULL, NULL};
 
 /* The event devices' operations are evdev.c's, the mixer's mixer.c's and the
    audio device's dsp.c's. */
-static const struct file_ops evdev_ops = {evdev_read, NULL, evdev_poll, evdev_ioctl, evdev_close};
+static const struct file_ops evdev_ops = {evdev_read, NULL, evdev_poll, evdev_ioctl, evdev_close, NULL, NULL};
 /* /dev/wsim: the medium of a software radio (wsim(4)). */
-static const struct file_ops wsim_ops = {wsim_read, wsim_write, wsim_poll, wsim_ioctl, wsim_close};
-static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL};
+static const struct file_ops wsim_ops = {wsim_read, wsim_write, wsim_poll, wsim_ioctl, wsim_close, NULL, NULL};
+static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL, NULL, NULL};
 static const struct file_ops dsp_ops = {dspdev_read, dspdev_write, dspdev_poll, dspdev_ioctl,
-                                        dspdev_close};
+                                        dspdev_close, NULL, NULL};
 /* /dev/rfkill's are rfkill.c's. */
 static const struct file_ops rfkill_ops = {rfkill_read, rfkill_write, rfkill_poll, rfkill_ioctl,
-                                           rfkill_close};
+                                           rfkill_close, NULL, NULL};
 
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
-                                             dev_ioctl, dev_grubcore_close};
+                                             dev_ioctl, dev_grubcore_close, NULL, NULL};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
-                                             dev_ioctl, dev_bootpart_close};
+                                             dev_ioctl, dev_bootpart_close, NULL, NULL};
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
-                                            NULL};
+                                            NULL, NULL, NULL};
 static const struct file_ops diskwin_ops = {dev_disk_read, dev_disk_write, dev_poll, dev_ioctl,
-                                            dev_disk_close};
+                                            dev_disk_close, NULL, NULL};
 
 /** Whether `dev` is a raw window a write may reach, for the writer
  * reservation: the whole disks and the two boot windows in every build, the

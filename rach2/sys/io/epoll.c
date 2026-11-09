@@ -592,7 +592,7 @@ static void epoll_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops epoll_ops = {NULL, NULL, epoll_poll, NULL, epoll_close};
+static const struct file_ops epoll_ops = {NULL, NULL, epoll_poll, NULL, epoll_close, NULL, NULL};
 
 /** The epoll set the caller's descriptor `fd` is, or NULL when `fd` is not
  * open or not a set. */

@@ -295,7 +295,8 @@ static void timerfd_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops timerfd_ops = {timerfd_read, NULL, timerfd_poll, NULL, timerfd_close};
+static const struct file_ops timerfd_ops = {timerfd_read,  NULL, timerfd_poll, NULL,
+                                            timerfd_close, NULL, NULL};
 
 /** The timer of the caller's descriptor `fd`, or NULL when `fd` is not open
  * or not a timerfd. */

@@ -86,7 +86,8 @@ static void pidfd_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops pidfd_ops = {pidfd_read, pidfd_write, pidfd_poll, NULL, pidfd_close};
+static const struct file_ops pidfd_ops = {pidfd_read,  pidfd_write, pidfd_poll, NULL,
+                                          pidfd_close, NULL,        NULL};
 
 struct pidfd *pidfd_new(process_t *p)
 {

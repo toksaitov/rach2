@@ -87,7 +87,7 @@ static short model_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(m->ready & (events | POLLERR | POLLHUP));
 }
 
-static const struct file_ops model_ops = {NULL, NULL, model_poll, NULL, NULL};
+static const struct file_ops model_ops = {NULL, NULL, model_poll, NULL, NULL, NULL, NULL};
 
 /** No wait in these rows sleeps, so nothing is scheduled. */
 void schedule(void)

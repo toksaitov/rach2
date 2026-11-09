@@ -380,8 +380,8 @@ static void inotify_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops inotify_ops = {inotify_read, NULL, inotify_poll, inotify_ioctl,
-                                            inotify_close};
+static const struct file_ops inotify_ops = {inotify_read,  NULL, inotify_poll, inotify_ioctl,
+                                            inotify_close, NULL, NULL};
 
 int inotify_is(int fd)
 {

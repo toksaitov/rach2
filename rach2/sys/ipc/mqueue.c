@@ -190,7 +190,7 @@ static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count);
 static short mq_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 static void mq_close(fd_entry_t *e);
 
-static const struct file_ops mq_ops = {mq_read, NULL, mq_poll, NULL, mq_close};
+static const struct file_ops mq_ops = {mq_read, NULL, mq_poll, NULL, mq_close, NULL, NULL};
 
 /** The queue the caller's descriptor `fd` is open on, with the descriptor
  * in `*ep`, or NULL when `fd` is no queue's. */

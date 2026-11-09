@@ -8,6 +8,7 @@
 #include "fd.h"
 
 struct wait_queue;
+struct vma;
 
 /*
  * The operations of a descriptor's object, Linux's `struct file_operations`.
@@ -18,7 +19,8 @@ struct wait_queue;
  *
  * Any operation may be NULL: a read or write then fails with EBADF, an ioctl
  * with ENOTTY, a poll falls back to the dispatch on the type, and a close
- * has nothing to release.
+ * has nothing to release. The mmap and seek calls do not call `mmap` and
+ * `llseek` yet (sys/fs/Readme.md).
  */
 struct file_ops {
     /* Read up to count bytes into the user buffer; bytes read (>=0) or
@@ -36,6 +38,20 @@ struct file_ops {
     /* Release the object when the last descriptor of its open file
      * description closes. */
     void (*close)(fd_entry_t *e);
+    /* Map the object into `vma`, a new region whose start, end, protection
+     * and page offset the mmap call has set and which no address space
+     * holds yet: give the region its backing, with a reference on the
+     * object, which munmap, exec and exit drop and fork copies (mm/vm.h).
+     * 0, or -ENODEV for an object that cannot be mapped, -EINVAL for a
+     * range outside it, -EACCES for a protection it refuses, or -ENOMEM.
+     * It may sleep. */
+    int32_t (*mmap)(fd_entry_t *e, struct vma *vma);
+    /* Seek: the offset `whence` (0 SEEK_SET, 1 SEEK_CUR, 2 SEEK_END) and
+     * `offset` give, from the description's offset for SEEK_CUR. Returns
+     * the new offset, which the call stores in the description, or -errno:
+     * -EINVAL for a negative result or an unknown `whence`, -ESPIPE for an
+     * object with no position. */
+    int64_t (*llseek)(fd_entry_t *e, int64_t offset, int whence);
 };
 
 #endif /* _FILE_H_ */
