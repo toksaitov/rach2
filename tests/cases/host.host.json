@@ -496,6 +496,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_ring",
+          "checks": "tests/host/i915_ring_hosttest.c starts the Intel graphics driver's render and blitter rings on the HD 4400's host model, takes their user interrupts through the handler table with every other source masked, wakes breadcrumb waiters from the interrupt, and runs first light end to end, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "icmp",
           "checks": "tests/host/icmp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

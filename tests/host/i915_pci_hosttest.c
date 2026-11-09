@@ -8,7 +8,9 @@
  * host-deps: rach2/sys/drm/i915/i915_stolen.c rach2/sys/drm/i915/i915_gtt.c
  * host-deps: tests/host/compat/kheap_host.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c rach2/sys/mm/frame.c
- * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/spinlock_host.c rach2/sys/drm/i915/i915_irq.c
+ * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_ppgtt.c
+ * host-deps: rach2/sys/drm/i915/i915_firstlight.c
  *
  * i915_pci.c is included whole. The bus holds the model's 00:02.0, whose
  * configuration space the PCI calls read and write; the DRM core is a
@@ -18,12 +20,15 @@
  * maps BAR 0 through the MMIO backend; `map_mmio_typed` then hands out a
  * buffer of the test's in place of the chip's registers, and another in
  * place of the GTT's entries. The bind's base, forcewake, the power well,
- * stolen memory and the GTT, is i915_base_hosttest.c's; here the frame
- * allocator hands out one frame and the IOMMU is off.
+ * stolen memory and the GTT, is i915_base_hosttest.c's, and its rings and
+ * interrupts i915_ring_hosttest.c's; here the frame allocator hands out
+ * one frame, the heap's pages have made-up physical addresses, and the
+ * IOMMU is off.
  *
  * The rows: the id table against Linux 6.12's Haswell GT2 ids; the probe
  * without and with rach2.i915; the bind to the model, with every source
- * masked and cleared before the message is enabled, the configuration
+ * masked and cleared before the message is enabled and only the master
+ * enable and the rings' user interrupts enabled after, the configuration
  * words read, the command word's decoding and mastering on, and the DRM
  * device's identity and features; the refusals of another function, an
  * unset BAR 0, another vendor and an unknown id; a machine without
@@ -38,6 +43,8 @@
 #include "iommu.h"
 #include "lib/kirq.h"
 #include "mm/paging.h"
+#include "proc/percpu.h"
+#include "rtc.h"
 #include "udelay.h"
 #include "i915_model.h"
 #include "i915_lenovo.h"
@@ -152,6 +159,40 @@ int paging_frame_is_device(uintptr_t phys)
 }
 
 int iommu_present(void)
+{
+    return 0;
+}
+
+/** A made-up physical page for the heap's address `va`, never 0; the
+ * host's heap does not align its pages, so the offset is dropped. */
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    return (uintptr_t)(0x60000000u + ((va >> 12) & 0xffffu) * 4096u);
+}
+
+void arch_dma_fence(void)
+{}
+
+/* No process waits on a ring in these rows. */
+struct percpu cpu_table[NR_CPUS];
+
+void wait_queue_init(wait_queue_t *wq)
+{
+    wq->head = 0;
+}
+
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINVAL;
+}
+
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+uint64_t rtc_ticks_now(void)
 {
     return 0;
 }
@@ -421,8 +462,8 @@ static void row_probe_mmio(void)
     CHECK("probe: through the MMIO backend", i915 && strcmp(i915->hw.ops->name, "mmio") == 0 &&
                                                  i915->hw.priv == (void *)map_buffer &&
                                                  i915->hw.size == I915_MMIO_SIZE);
-    CHECK("probe: the display engine's interrupts masked and off",
-          map_buffer[DEIMR / 4] == 0xffffffffu && map_buffer[DEIER / 4] == 0);
+    CHECK("probe: the display engine's interrupts masked and off but the master enable",
+          map_buffer[DEIMR / 4] == 0xffffffffu && map_buffer[DEIER / 4] == DE_MASTER_IRQ_CONTROL);
     CHECK("probe: the south display's masked and off",
           map_buffer[SDEIMR / 4] == 0xffffffffu && map_buffer[SDEIER / 4] == 0);
     CHECK("probe: no register reached the model", m.nlog == 0);
@@ -436,11 +477,14 @@ static long at(const struct i915_model *m, uint32_t reg, uint32_t value)
     return i < 0 ? 1L << 30 : i;
 }
 
-/** The interrupt registers of each source: mask, enable and identity. */
-static const uint32_t banks[][3] = {{DEIMR, DEIER, DEIIR},
-                                    {GTIMR, GTIER, GTIIR},
-                                    {GEN6_PMIMR, GEN6_PMIER, GEN6_PMIIR},
-                                    {SDEIMR, SDEIER, SDEIIR}};
+/** The interrupt registers of each source: mask, enable and identity, and
+ * the enable the bind leaves: the display engine's master enable, and the
+ * user interrupts of the rings it started, each still masked. */
+static const uint32_t banks[][4] = {
+    {DEIMR, DEIER, DEIIR, DE_MASTER_IRQ_CONTROL},
+    {GTIMR, GTIER, GTIIR, GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT},
+    {GEN6_PMIMR, GEN6_PMIER, GEN6_PMIIR, 0},
+    {SDEIMR, SDEIER, SDEIIR, 0}};
 
 /**
  * Check that the bind masked, disabled and cleared every source of `m`, in
@@ -469,9 +513,9 @@ static void check_masks(struct i915_model *m)
         CHECK("bind: each bank masked, then off, then cleared", mask < off && off < clear);
         CHECK("bind: each bank's identity cleared twice",
               i915_model_count(m, I915_MODEL_WRITE, banks[i][2]) == 2);
-        CHECK("bind: each bank masked and off now",
+        CHECK("bind: each bank masked now, and off but the master and the rings",
               i915_model_peek(m, banks[i][0]) == 0xffffffffu &&
-                  i915_model_peek(m, banks[i][1]) == 0);
+                  i915_model_peek(m, banks[i][1]) == banks[i][3]);
         CHECK("bind: each source masked before the message", msi_enabled_at > clear);
         posting += i915_model_count(m, I915_MODEL_READ, banks[i][0]) +
                    i915_model_count(m, I915_MODEL_READ, banks[i][2]);
