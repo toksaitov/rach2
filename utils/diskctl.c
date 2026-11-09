@@ -1,7 +1,7 @@
 /**
  * The things a program that writes a whole disk needs: `diskctl reread DEV`,
- * `diskctl id DEV`, `diskctl relocate DEV`, `diskctl shrink DEV N SECTORS`
- * and `diskctl esp DEV`.
+ * `diskctl id DEV`, `diskctl relocate DEV`, `diskctl shrink DEV N SECTORS`,
+ * `diskctl data DEV START` and `diskctl esp DEV`.
  *
  * A program that writes a whole disk changes the table under a kernel that
  * read the old one at boot, and the nodes for the partitions it just made do
@@ -35,6 +35,16 @@
  * `growroot` can be timed growing that root on the disk itself:
  * `tools/dev/machine_grow.sh` writes such a root and then this table over
  * sectors it has saved.
+ *
+ * `data` gives a GUID table the data partition, entry 6, `Rach2 data`, of a
+ * Linux file system's type: `diskctl data DEV START` makes it over the free
+ * sectors from START, rounded up to a mebibyte, to the next partition or the
+ * last sector the table may use, with the backup moved to the disk's end as
+ * `relocate` moves it, and asks for the reread. The installer makes it after
+ * the root's room on a new install, and `rach2-install --data` after the
+ * root it has shrunk; the file system on it is `mke2fs`'s. An entry 6 that
+ * is already the data partition is left as it is, so that a run stopped
+ * after the table was written can be run again.
  *
  * `esp` gives entry 1 of an MBR the EFI system partition's type, 0xEF, which
  * UEFI firmware boots from on an MBR disk, and asks the kernel to read the
@@ -235,6 +245,135 @@ static int shrink(int fd, const char *path, const char *text, const char *count)
     return 0;
 }
 
+/* The data partition's entry and name, and a Linux file system's type GUID,
+ * 0FC63DAF-8483-4772-8E79-3D69D8477DE4, as the table stores it. */
+#define DATA_ENTRY 6
+static const char data_name[] = "Rach2 data";
+static const unsigned char type_linux[16] = {0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47,
+                                             0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4};
+
+/** Whether entry `e` is named `data_name`, its UTF-16LE name read as ASCII. */
+static int named_data(const unsigned char *e)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(data_name); i++) {
+        if (e[56 + 2 * i] != (unsigned char)data_name[i] || e[57 + 2 * i] != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * The last sector of the free run that starts at `start` in `table`, which
+ * must lie in no used entry: the sector before the next entry's first, or
+ * the last sector the table may use once its backup is at the disk's end.
+ * Returns 0 when `start` lies in a used entry or past that sector.
+ */
+static unsigned long long free_run_end(unsigned long long start)
+{
+    unsigned long long end =
+        table.sectors - 2 - (table.entries * table.entry_size) / GPTDISK_SECTOR;
+    unsigned char *e;
+    uint32_t i;
+
+    if (start > end) {
+        return 0;
+    }
+    for (i = 1; i <= table.entries; i++) {
+        e = gptdisk_entry(&table, (int)i);
+        if (!e || !gptdisk_used(e)) {
+            continue;
+        }
+        if (start >= gptdisk_le64(e + 32) && start <= gptdisk_le64(e + 40)) {
+            return 0;
+        }
+        if (gptdisk_le64(e + 32) > start && gptdisk_le64(e + 32) - 1 < end) {
+            end = gptdisk_le64(e + 32) - 1;
+        }
+    }
+    return end;
+}
+
+/**
+ * Make entry DATA_ENTRY of the GUID table of the disk open on `fd` the data
+ * partition over the free sectors from `text`, decimal, rounded up to a
+ * mebibyte, to the end of their run, with a new random unique GUID; write
+ * both copies and have the table read again. Returns 0, or 1 having said why
+ * not: the disk has no GUID table, the entry is used by another partition,
+ * or the run is shorter than a mebibyte.
+ */
+static int make_data(int fd, const char *path, const char *text)
+{
+    const char *why = "";
+    unsigned char *e;
+    unsigned long long start, end;
+    char *stop;
+    size_t i;
+    int kind = read_table(fd, path), rnd;
+
+    if (kind <= 0) {
+        if (kind == 0) {
+            fprintf(stderr, "diskctl: %s has an MBR and no GUID table\n", path);
+        }
+        return 1;
+    }
+    e = gptdisk_entry(&table, DATA_ENTRY);
+    if (e && gptdisk_used(e) && named_data(e)) {
+        printf("diskctl: result: %s: entry %d is the data partition already, sectors %llu to "
+               "%llu\n",
+               path, DATA_ENTRY, (unsigned long long)gptdisk_le64(e + 32),
+               (unsigned long long)gptdisk_le64(e + 40));
+        return reread(fd, path);
+    }
+    if (!e || gptdisk_used(e)) {
+        fprintf(stderr, "diskctl: %s: entry %d is another partition's\n", path, DATA_ENTRY);
+        return 1;
+    }
+    errno = 0;
+    start = strtoull(text, &stop, 10);
+    if (*text < '0' || *text > '9' || *stop != '\0' || errno != 0) {
+        fprintf(stderr, "diskctl: %s: %s is not a sector number\n", path, text);
+        return 1;
+    }
+    start = (start + 2047) / 2048 * 2048;
+    end = free_run_end(start);
+    if (end < start + 2047) {
+        fprintf(stderr, "diskctl: %s: there is not a mebibyte free from sector %llu\n", path,
+                start);
+        return 1;
+    }
+    memset(e, 0, table.entry_size);
+    memcpy(e, type_linux, sizeof(type_linux));
+    rnd = open("/dev/urandom", O_RDONLY);
+    if (rnd < 0 || read(rnd, e + 16, 16) != 16) {
+        fprintf(stderr, "diskctl: %s: no random GUID could be made\n", path);
+        if (rnd >= 0) {
+            close(rnd);
+        }
+        return 1;
+    }
+    close(rnd);
+    e[16 + 7] = (unsigned char)((e[16 + 7] & 0x0F) | 0x40); /* version 4 */
+    e[16 + 8] = (unsigned char)((e[16 + 8] & 0x3F) | 0x80); /* RFC 4122 variant */
+    gptdisk_put64(e + 32, start);
+    gptdisk_put64(e + 40, end);
+    for (i = 0; data_name[i] != '\0'; i++) {
+        e[56 + 2 * i] = (unsigned char)data_name[i];
+    }
+    if (gptdisk_write(fd, &table, &why) != 0) {
+        fprintf(stderr, "diskctl: %s: %s\n", path, why);
+        return 1;
+    }
+    if (reread(fd, path) != 0) {
+        return 1;
+    }
+    printf("diskctl: result: %s: entry %d, %s, is sectors %llu to %llu\n", path, DATA_ENTRY,
+           data_name, start, end);
+    return 0;
+}
+
 /** Give entry 1 of the MBR of the disk open on `fd` the type 0xEF, and have
  *  the table read again; 0, or 1 having said why not. */
 static int make_esp(int fd, const char *path)
@@ -272,22 +411,24 @@ static int make_esp(int fd, const char *path)
 }
 
 /** Run the command on DEVICE, opened for writing only for `relocate`,
- *  `shrink` and `esp`. Exits 0, 1 on a failure and 2 on a usage error. */
+ *  `shrink`, `data` and `esp`. Exits 0, 1 on a failure and 2 on a usage
+ *  error. */
 int main(int argc, char **argv)
 {
     int fd, rc;
     int writing;
     int shrinking = argc == 5 && strcmp(argv[1], "shrink") == 0;
+    int data = argc == 4 && strcmp(argv[1], "data") == 0;
 
-    if (!shrinking &&
+    if (!shrinking && !data &&
         (argc != 3 || (strcmp(argv[1], "reread") != 0 && strcmp(argv[1], "id") != 0 &&
                        strcmp(argv[1], "relocate") != 0 && strcmp(argv[1], "esp") != 0))) {
         fprintf(stderr, "usage: diskctl reread DEVICE | diskctl id DEVICE | "
                         "diskctl relocate DEVICE | diskctl shrink DEVICE N SECTORS | "
-                        "diskctl esp DEVICE\n");
+                        "diskctl data DEVICE START | diskctl esp DEVICE\n");
         return 2;
     }
-    writing = shrinking || strcmp(argv[1], "relocate") == 0 || strcmp(argv[1], "esp") == 0;
+    writing = shrinking || data || strcmp(argv[1], "relocate") == 0 || strcmp(argv[1], "esp") == 0;
     fd = open(argv[2], writing ? O_RDWR : O_RDONLY);
     if (fd < 0) {
         fprintf(stderr, "diskctl: cannot open %s: %s\n", argv[2], strerror(errno));
@@ -299,6 +440,8 @@ int main(int argc, char **argv)
         rc = make_esp(fd, argv[2]);
     } else if (shrinking) {
         rc = shrink(fd, argv[2], argv[3], argv[4]);
+    } else if (data) {
+        rc = make_data(fd, argv[2], argv[3]);
     } else if (writing) {
         rc = relocate(fd, argv[2]);
     } else {
