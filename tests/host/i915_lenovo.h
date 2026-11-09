@@ -7,8 +7,9 @@
  * 200, the RMRR, and 319 to 322, the BARs) and from
  * tests/fixtures/lenovo-gpu/facts.out and lspci-igd.out (Debian 13's
  * Linux 6.12 on the machine): the board's ids, the GMCH control word,
- * BDSM, the OpRegion's address and the capability list. 78-10a adds the
- * VBT and the OpRegion's bytes.
+ * BDSM, the OpRegion's address and the capability list. The OpRegion
+ * and the VBT it holds are the files named below, with what Linux showed
+ * of the outputs and the panel they describe.
  *
  * Include it after i915_model.h.
  */
@@ -125,5 +126,44 @@ static const struct lenovo_gpu_field lenovo_gpu_config[] = {
     {LENOVO_GPU_CAP_AF + 3, 1, 0x03}, /* TP and FLR */
     {0xfc, 4, LENOVO_GPU_ASLS},
 };
+
+/*
+ * The OpRegion at ASLS and the VBT of its mailbox 4, as Debian 13's Linux
+ * 6.12 read them from i915's debugfs (tests/fixtures/lenovo-gpu/Readme.md):
+ * version 2.0.0, the mailboxes ACPI, SWSCI, ASLE, 4 and ASLE extension
+ * (MBOX 0x1f), no RVDA. The VBT is "$VBT HASWELL", BDB version 177, 4400
+ * of its 6144 bytes in use.
+ */
+#define LENOVO_OPREGION_FILE   "tests/fixtures/lenovo-gpu/i915_opregion.bin"
+#define LENOVO_OPREGION_BYTES  8192
+#define LENOVO_OPREGION_MBOXES 0x1fu
+#define LENOVO_VBT_FILE        "tests/fixtures/lenovo-gpu/i915_vbt.bin"
+#define LENOVO_VBT_BYTES       6144
+#define LENOVO_VBT_VERSION     177
+#define LENOVO_VBT_SIGNATURE   "$VBT HASWELL        "
+
+/*
+ * The outputs Linux made from it (debugfs/i915_display_info and
+ * drm_info.out, Alpine's Linux 6.18): eDP-1 on DDI A, HDMI-A-1 alone on
+ * DDI B's encoder, and DP-1 and HDMI-A-2 sharing DDI C's, so that DDI C is
+ * dual mode; no output on DDI D or E. The panel's link carried 6 bits a
+ * colour ("max bpc: 6", "bpp=18") on 1 lane.
+ */
+#define LENOVO_EDP_BPP   18
+#define LENOVO_EDP_LANES 1
+
+/*
+ * The panel's power sequence in milliseconds, debugfs/eDP-1-i915_panel_timings
+ * under Linux 6.18: power up (T1+T3), power down (T10), power cycle
+ * (T11+T12), backlight on (T8) and off (T9). Each is the table's value in
+ * units of 100 us, rounded up, and above the firmware's registers, which
+ * Linux takes when larger (PP_ON_DELAYS 0x07d00000 and PP_OFF_DELAYS
+ * 0x01f407d0 in firmware-dump.txt).
+ */
+#define LENOVO_PANEL_POWER_UP_MS    200
+#define LENOVO_PANEL_POWER_DOWN_MS  50
+#define LENOVO_PANEL_POWER_CYCLE_MS 500
+#define LENOVO_PANEL_BL_ON_MS       1
+#define LENOVO_PANEL_BL_OFF_MS      200
 
 #endif /* _I915_LENOVO_H_ */

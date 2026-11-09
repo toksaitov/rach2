@@ -541,6 +541,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "intel_bios",
+          "checks": "tests/host/intel_bios_hosttest.c finds the Lenovo's OpRegion through ASLS and refuses a bad one, and decodes the VBT it holds to the outputs and panel timings Linux reported, with Linux's defaults when there is no table, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "icmp",
           "checks": "tests/host/icmp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
