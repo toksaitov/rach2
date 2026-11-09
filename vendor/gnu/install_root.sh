@@ -20,6 +20,8 @@
 #   debian    the desktop closure, including chromium-headless-shell
 #   proton    GE-Proton under /opt/proton, on x86-64
 #   webgl     the pinned conformance suite under /usr/share/webgl
+#   igt       IGT's tests under /usr/libexec/igt-gpu-tools and its runner,
+#             when GNU_IGT is 1, on x86-64
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
@@ -78,6 +80,10 @@ for part in root native gdb js debian/desktop proton webgl; do
 done
 if [ ! -f "$DEBIAN/closure.txt" ]; then
     echo "gnu: install: no $DEBIAN/closure.txt; run make gnu-desktop" >&2
+    exit 1
+fi
+if [ "${GNU_IGT:-}" = 1 ] && [ ! -d "$OUT/igt" ]; then
+    echo "gnu: install: no $OUT/igt; run make ARCH=x86_64 gnu-igt" >&2
     exit 1
 fi
 for name in ${GNU_AGENTS:-}; do
@@ -263,6 +269,9 @@ ln -s ../lib/chromium/chromium-headless-shell "$TREE/usr/bin/chromium-headless-s
 
 install_part proton
 install_part webgl
+if [ "${GNU_IGT:-}" = 1 ]; then
+    install_part igt
+fi
 
 # These alternatives are made by Debian's postinst, which is not run here.
 for name in blas lapack; do
