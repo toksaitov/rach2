@@ -20,9 +20,11 @@
 # the products the manifest stages, etude, which runs the machine, and the
 # digest tool that checks the image the machine sends back.
 #
-# os-real-gnu.ext2 for x86-64 made on that host also has IGT's tests
-# (mk/gnu-extra.mk), which install_root.sh stages when GNU_IGT is 1; the
-# tooling machine cannot run the builder guest, so an image it makes has none.
+# os-real-gnu.ext2 for x86-64 made on that host also has IGT's tests and
+# VK-GL-CTS (mk/gnu-extra.mk), which install_root.sh stages when GNU_IGT and
+# GNU_VK_GL_CTS are 1, and gnu-test.ext2, which the machine cases boot, has
+# VK-GL-CTS; the tooling machine cannot run the builder guest, so an image it
+# makes has neither.
 GNU_TOOLING ?= $(if $(filter Linux_x86_64,$(shell uname -s)_$(shell uname -m)),,yes)
 OS_REAL_GNU_EXT2 = $(IMAGES_DIR)/os-real-gnu.ext2
 OS_REAL_GNU_AGENTS_EXT2 = $(IMAGES_DIR)/os-real-gnu-agents.ext2
@@ -71,15 +73,16 @@ os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 ifeq ($(GNU_TOOLING),)
 $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
     $(GNU_SANITIZERS_STAMP) $(GNU_HOST_PRODUCTS_STAMP) $(GNU_FSTOOLS_STAMP) \
-    $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_STAMP)) | $(GNU_IMAGE_ORDER)
+    $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_STAMP) $(GNU_VK_GL_CTS_STAMP)) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 \
+	    GNU_VK_GL_CTS=$(if $(filter x86_64,$(ARCH)),1) \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    krffs/manifests/os-real-gnu.manifest $@ 24576
 
 GNU_IGT_ON = $(if $(filter x86_64,$(ARCH)),1)
 $(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
-                     $(if $(GNU_IGT_ON),$(GNU_IGT_STAMP)) tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
-	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_IGT=$(GNU_IGT_ON) sh tools/image/mkext2.sh \
+                     $(if $(GNU_IGT_ON),$(GNU_IGT_STAMP) $(GNU_VK_GL_CTS_STAMP)) tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_IGT=$(GNU_IGT_ON) GNU_VK_GL_CTS=$(GNU_IGT_ON) sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 	$(GNU_STAGE_LOGINS)
 

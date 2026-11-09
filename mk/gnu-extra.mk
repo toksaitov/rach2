@@ -124,3 +124,24 @@ $(GNU_IGT_STAMP): $(GNU_IGT_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@$(GNU_ASSET_STEP) -n gnu-igt -t $@ $(STEP_INPUTS) -o igt -o work/igt \
 	    -- $(call GNU_STEP_RUN,vendor/gnu/igt/build_igt.sh)
 	@test -x $(GNU_OUT)/igt/usr/bin/igt_runner || { echo "gnu: igt: the root has no usr/bin/igt_runner" >&2; exit 1; }
+
+# VK-GL-CTS 1.4.1.1 and 1.4.7.1, deqp-vk and glcts for the surfaceless EGL
+# target, built in the same builder guest as IGT's tests
+# (vendor/gnu/vk-gl-cts/build_vk_gl_cts.sh), for x86-64 alone and only where
+# that guest runs.
+GNU_VK_GL_CTS_STAMP = $(GNU_OUT)/vk-gl-cts.stamp
+GNU_STEP_STAMPS += $(GNU_VK_GL_CTS_STAMP)
+GNU_VK_GL_CTS_SOURCES = vendor/gnu/vk-gl-cts/build_vk_gl_cts.sh vendor/gnu/vk-gl-cts/sources.txt \
+                        vendor/gnu/debian/fetch_asset.sh vendor/gnu/debian/venus.list \
+                        $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages setup.sh.in \
+                            user-data.in meta-data network-config) \
+                        tests/graphics/guest-env.sh rach2/qemu_devices.sh
+
+.PHONY: gnu-vk-gl-cts
+gnu-vk-gl-cts: $(GNU_VK_GL_CTS_STAMP)
+
+$(GNU_VK_GL_CTS_STAMP): $(GNU_VK_GL_CTS_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_ASSET_STEP) -n gnu-vk-gl-cts -t $@ $(STEP_INPUTS) -o vk-gl-cts -o work/vk-gl-cts \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/vk-gl-cts/build_vk_gl_cts.sh)
+	@test -x $(GNU_OUT)/vk-gl-cts/opt/vk-gl-cts-1.4.7.1/vulkan/deqp-vk || { echo "gnu: vk-gl-cts: the root has no opt/vk-gl-cts-1.4.7.1/vulkan/deqp-vk" >&2; exit 1; }
