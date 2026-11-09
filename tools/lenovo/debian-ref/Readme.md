@@ -21,11 +21,12 @@ In order, from the repository's root on the Mac:
 | The fault | `mac.sh run efault` | at `never` the probe draws and the trace shows no refusal; at `always` QMP reports `internal-error` and the trace prints the refused page |
 | eDP | `mac.sh run edp` | `intel_reg-dump.txt` and the named registers |
 | WebGPU on Venus | `mac.sh run venus` | one result per switch set in `venus/ref80-webgpu/` |
+| Venus's semaphores | `extsem.c` built with `cc -o extsem extsem.c -lvulkan` and run in step 10's guest (`qemu.sh start NAME headless`, then `g`) and on the host as gfx | each device's external memory extensions and its opaque-fd and sync-fd semaphore features |
 | Notice | a "Lenovo notice:" comment on the issue | ten minutes pass before the next step |
-| Games | `mac.sh run games stk stk-1`, `stk-2`, `mac.sh run games 0ad 0ad-1`, `0ad-2` | `frames.txt` with percentiles for each run |
+| Games | `mac.sh run games record rec`, then `games stk stk-1`, `stk-2`, `games 0ad 0ad-1`, `0ad-2`; `SDLV=x11` runs a game on Xwayland | the replay in `/root/ref80/replays/0ad-mainland/`; `frames.txt` with percentiles for each run |
 | Video | `mac.sh run video` | two results, each with no VA-API decoder in Firefox's log |
-| Crysis | `mac.sh run crysis prep`, then `crysis flyby direct direct-1`, `crysis flyby umu umu-1` | four loops each, `compare` lines from `crysis-frames.py` |
-| The suit's reboot | `crysis start ROUTE NAME`, `uinput-play.py` steps, `crysis stop` | the HUD's state after the reboot, read back by `sys_flash_info` and the dialog log |
+| Crysis | `mac.sh run crysis prep`, then `crysis flyby direct direct-1`, `crysis flyby umu umu-1` | the Dummy card in `aplay -l`; four loops each, with FMOD-EX on "Dummy PCM" in `Game.log` and each loop's frame times from `crysis-frames.py` |
+| The suit's reboot | `crysis start ROUTE NAME`, 60 s for the main menu, `crysis hud NAME`, `crysis stop` | the dialog's line times, Show's delay after the boot sequence and the save's `hudShow`, with screenshots of the HUD and of `sys_flash_info` |
 | Fetch | `mac.sh fetch` | `build/runs/80-2/out/` |
 | Leave | `mac.sh leave`, `mac.sh wait-rach2`, `mac.sh restore`, `mac.sh unlock` | p1's SHA-256 equal to `p1-before.sha256`; `bootctl status` as before |
 
@@ -35,7 +36,9 @@ In order, from the repository's root on the Mac:
 * `arm` writes p1 only through Rach2's `/dev/bootpart`, which takes root's writes on every kernel: Debian's kernel and initrd as run2's `p1-run2.img` has them, then the menu through `bootctl config` and the one boot through `bootctl trial recovery`. `restore` writes back the runs of sectors that differ from the p1 that `arm` saved and checks the hash. p5 is never written from Rach2.
 * `setup.sh` holds Mesa, the kernel, the browsers and QEMU while it installs, so that no dependency moves the configuration the earlier references were taken in.
 * Frame times come from Gallium's HUD dump (`GALLIUM_HUD_DUMP_DIR`), Mesa's own reading, which Rach2's runs of the same games take on the same driver.
-* Crysis's two routes share step 9's prefix, profile and GE-Proton; umu runs with `GAMEID=0` and protonfixes off, so that the Steam Linux Runtime's container is the only difference.
+* Crysis's two routes share step 9's prefix, profile and GE-Proton; umu runs with `GAMEID=0` and protonfixes off, so that the Steam Linux Runtime's container is the only difference. umu also gets `STEAM_COMPAT_INSTALL_PATH` set to the game's directory, since with its default GE-Proton maps drive `S:` to that directory and Crysis, run from the drive's root, finds no language; and the launch clears root's `DBUS_SESSION_BUS_ADDRESS`, which bwrap refuses to bind for gfx.
+* The games run with `SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0`: SDL 2.32 on Wayland under cage 0.2.0 waits forever on its libdecor path and draws nothing.
+* `snd-dummy` is a sound card with no output: the game's sound runs and nothing is heard. `prep` waits for udev before opening the card's nodes to gfx.
 
 ## Limits
 
