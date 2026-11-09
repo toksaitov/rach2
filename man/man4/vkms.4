@@ -1,0 +1,142 @@
+.Dd November 10, 2026
+.Dt VKMS 4
+.Os
+.Sh NAME
+.Nm vkms
+.Nd virtual kernel mode setting, a display in software
+.Sh SYNOPSIS
+.Cm rach2.vkms
+.Op Cm vkms.enable_cursor Ns = Ns Ar bool
+.Op Cm vkms.enable_overlay Ns = Ns Ar bool
+.Pp
+.In drm/drm.h
+.In drm/drm_mode.h
+.Pp
+.Pa /dev/dri/cardN
+.Sh DESCRIPTION
+The
+.Nm
+driver is a display with no hardware behind it, as Linux 6.12's vkms is:
+it takes commits, counts vblanks at the rate of the mode set, and composes
+each frame in memory to give its CRC, so that IGT's tests of mode setting,
+vblanks and CRCs run on a machine without a display.
+It starts only when
+.Cm rach2.vkms
+is on the kernel command line, after the other display drivers, and binds
+one device.
+Linux's module parameters
+.Cm vkms.enable_cursor ,
+on by default, and
+.Cm vkms.enable_overlay ,
+off by default, choose its planes; a value of
+.Ql y ,
+.Ql Y ,
+.Ql 1
+or
+.Ql on
+is true and
+.Ql n ,
+.Ql N ,
+.Ql 0
+or
+.Ql off
+false.
+.Pp
+The device is a DRM device, as
+.Xr drm 4
+describes, registered as
+.Ql vkms
+with Linux's identity: description
+.Ql Virtual Kernel Mode Setting ,
+version 1.0.0 and date 20180514, on the platform bus as
+.Pa /sys/devices/platform/vkms ,
+whose GET_UNIQUE name is
+.Ql vkms .
+It has a card node alone, and the features
+.Dv DRIVER_MODESET ,
+.Dv DRIVER_ATOMIC
+and
+.Dv DRIVER_GEM .
+Its dumb buffers are kept in memory and may be shared through PRIME.
+The kernel logs
+.Dq vkms: registered
+with the number of planes and the card.
+.Ss Display
+The device has one CRTC, and planes in Linux's order, which is their order
+from the bottom up: the primary, eight overlays with
+.Cm vkms.enable_overlay ,
+and the cursor unless
+.Cm vkms.enable_cursor
+is false.
+Each plane takes ARGB8888, XRGB8888, XRGB16161616, ARGB16161616 and
+RGB565, linear, has the
+.Ql rotation
+property with every rotation and reflection, and is placed anywhere on the
+CRTC, clipped to it, but not scaled.
+The CRTC has the
+.Ql GAMMA_LUT
+property, with
+.Ql GAMMA_LUT_SIZE
+256, and a legacy gamma table of 256 entries.
+One encoder of type
+.Dv DRM_MODE_ENCODER_VIRTUAL
+drives one connector of type
+.Dv DRM_MODE_CONNECTOR_VIRTUAL ,
+.Ql Virtual-1 ,
+always connected, whose modes are the DMT modes up to 8192x8192 and 61 Hz,
+with 1024x768 preferred.
+Framebuffers are from 10x10 to 8192x8192 pixels, and a cursor up to
+512x512.
+.Pp
+While a holder wants vblanks the CRTC counts one each frame of the mode
+set, its pixels with blanking over its clock, from the kernel's tick; an
+event or a wait for a vblank therefore comes up to a millisecond after
+the frame ends.
+A tick that comes more than eight frames late counts eight and starts
+the frames again from then.
+.Ss CRCs
+The CRTC's one CRC source is
+.Ql auto ,
+with one value a frame.
+While the source runs, each vblank asks the composer thread,
+.Ql kvkms ,
+for its frame: the planes the last commit showed, each pixel widened to 16
+bits a channel, blended in order over opaque black as premultiplied
+alpha, and passed through the gamma table, as Linux's vkms composes them.
+The value is the CRC-32 of the frame's rows, pixel by pixel as four
+little-endian 16-bit values, alpha, red, green and blue, with no
+inversion, Linux's
+.Fn crc32_le
+from 0.
+A composer that falls behind gives the frames it missed the CRC of the
+frame it composed.
+The same frame gives the same CRC; the values are not those Linux gives
+for a rotated plane, whose composition this driver does not copy.
+.Sh FILES
+.Bl -tag -width /dev/dri/cardN
+.It Pa /dev/dri/cardN
+The card node of the device.
+.El
+.Sh ERRORS
+Besides those of
+.Xr drm 4
+and
+.Xr drm-kms 7 :
+.Bl -tag -width Er
+.It Er EINVAL
+A commit whose
+.Ql GAMMA_LUT
+has more than 256 entries; a scaled plane; a CRC source other than
+.Ql auto .
+.El
+.Sh SEE ALSO
+.Xr bochs 4 ,
+.Xr drm 4 ,
+.Xr fbdrm 4 ,
+.Xr drm-kms 7
+.Sh HISTORY
+The driver follows Linux 6.12's vkms: its objects, limits, formats,
+blending, gamma table, vblank timer and CRC source.
+It has no writeback connector, which Linux's has unless
+.Cm vkms.enable_writeback
+is false.
