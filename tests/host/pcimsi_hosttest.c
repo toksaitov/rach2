@@ -2,6 +2,7 @@
  * pcimsi_hosttest.c: `pci_msi_enable` against a model of configuration space.
  *
  * host-deps: rach2/sys/pci.c rach2/sys/arch/x86/pciconf.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The rows check the order of the writes: a device told to send messages
  * while its address is half written sends them to a wrong address, and the
