@@ -221,7 +221,10 @@ anything else, or more than 11 bytes, fails with
 .It Pa dri/DEVICE/CONNECTOR/edid_override
 Mode 0644.
 A write of an EDID, of the blocks its base block names, stands in for the
-sink's from the next probe on, and a write of
+sink's from the next probe on, where the driver reads the sink's EDID or
+finds no mode without one, as on Linux; vkms finds its modes without one
+and keeps them.
+A write of
 .Ql reset
 drops it;
 .Er EINVAL

@@ -34,7 +34,9 @@
  *   "unspecified", takes "off", which the next probe reports as
  *   disconnected, and "unspecified" back; `edid_override`, opened with
  *   O_TRUNC as IGT opens it, takes an EDID of 520 by 290 mm, reads it back
- *   and gives the next probe that size, and "reset" empties it; and the
+ *   and, on a connector whose /sys `edid` reads the sink's, gives the next
+ *   probe that size, where a driver that reads no EDID, as vkms, keeps the
+ *   size it had, as on Linux, and "reset" empties it; and the
  *   connector's /sys `status` reads "disconnected" at once after "off" and
  *   "connected" after "detect", as status_store probes. Not run on a
  *   machine with no card, and the connector's part not on a card without
@@ -754,12 +756,20 @@ static void dri_force(long fd, unsigned id, const char *dir, const char *conn)
 }
 
 /** `edid_override`, opened with O_TRUNC, takes the probe's EDID and gives
- * it back, the next probe has its size, and reset empties it. */
+ * it back, the next probe has its size where the driver reads an EDID and
+ * its old size where it reads none, and reset empties it. */
 static void dri_edid(long fd, unsigned id, const char *dir, const char *conn)
 {
     char path[160], text[256], num[16];
-    unsigned mm, i, sum = 0;
+    unsigned mm, old, i, sum = 0;
+    int reads;
 
+    /* Linux's probe uses the override where the driver reads an EDID, or
+     * where its get_modes finds no mode; vkms's and simpledrm's find modes
+     * without one. */
+    conn_sys(path, sizeof(path), conn, "edid");
+    reads = read_file(path, text, sizeof(text)) > 0;
+    get_connector(fd, id, &old);
     conn_file(path, sizeof(path), dir, conn, "edid_override");
     for (i = 0; i < 127; i++) {
         sum += probe_edid[i];
@@ -774,15 +784,18 @@ static void dri_edid(long fd, unsigned id, const char *dir, const char *conn)
             fail2("edid_override gives back other bytes: ", path);
         }
     }
-    if (get_connector(fd, id, &mm) != DRM_CONNECTED || mm != 520) {
+    if (get_connector(fd, id, &mm) != DRM_CONNECTED || mm != (reads ? 520u : old)) {
         decimal(num, mm);
-        fail2("the probe after the override does not give 520 mm but ", num);
+        fail2(reads ? "the probe after the override does not give 520 mm but "
+                    : "the probe after the override changes the size of a connector without an "
+                      "EDID to ",
+              num);
     }
     if (write_file(path, "reset", 5, O_TRUNC) != 5 || read_file(path, text, sizeof(text)) != 0) {
         fail2("edid_override is not empty after reset: ", path);
     }
-    if (get_connector(fd, id, &mm) != DRM_CONNECTED || mm == 520) {
-        fail2("the probe after reset keeps the override's size: ", conn);
+    if (get_connector(fd, id, &mm) != DRM_CONNECTED || mm != old) {
+        fail2("the probe after reset does not give back the connector's own size: ", conn);
     }
 }
 

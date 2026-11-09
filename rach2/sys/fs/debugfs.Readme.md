@@ -34,5 +34,5 @@ A file's size is 0 and its times are those of its making, as on Linux; a truncat
 ## Tests
 
 * `tests/host/debugfs_hosttest.c` drives the tree, its VFS operations and the sync files, with a fence made, signalled and read through `sync/sw_sync` and `sync/info` ([../../../tests/host/Readme.md](../../../tests/host/Readme.md)).
-* `tests/sysdrmprobe.c`'s `dri` row checks the first card's files in a boot: `dri/0` as a link to a directory, `name` and `clients` against the device, the CRC files and a connector forced off and given an EDID through `force`, `edid_override` and its `/sys` status, each seen by the next `GETCONNECTOR` ([../drm/Readme.md](../drm/Readme.md)).
+* `tests/sysdrmprobe.c`'s `dri` row checks the first card's files in a boot: `dri/0` as a link to a directory, `name` and `clients` against the device, the CRC files and a connector forced off through `force` and its `/sys` status and given an EDID through `edid_override`, each seen by the next `GETCONNECTOR` where Linux's would see it ([../drm/Readme.md](../drm/Readme.md)).
 * `tests/sysdrmprobe.c`'s `debugfs` row checks the mount in a boot and on the Lenovo: root's directory of mode 0700 on a device of its own, `..` as `/sys/kernel`, the listing of `sync`, root's open of `sw_sync` and `EACCES` for uid 65534.
