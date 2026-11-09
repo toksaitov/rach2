@@ -56,3 +56,4 @@ musl/procfilesmusl procfiles
 blankprobe screen
 musl/vdsomusl vdso
 musl/audioclientsmusl audio
+watchdogprobe watchdog

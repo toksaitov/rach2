@@ -21,6 +21,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 
 | Fault | Project | Milestone | Status | Entry |
 |---|---|---|---|---|
+| QEMU replaces TCO status bits on a write that should clear them | QEMU 10.0.0 and 11.1.3 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#qemu-replaces-tco-status-bits-on-a-write-that-should-clear-them) |
 | BusyBox uses a freed set-id configuration | BusyBox 1.36.1 | 19 | unreported | [19-busybox-first/upstream.md](19-busybox-first/upstream.md#busybox-uses-a-freed-set-id-configuration) |
 | termbox2 misspells its Windows unsupported message | termbox2 2.7.0-dev | 27 | unreported | [27-prose/upstream.md](27-prose/upstream.md#termbox2-misspells-its-windows-unsupported-message) |
 | BusyBox time reports four times the peak memory | BusyBox 1.36.1 | 54 | unreported | [54-gnu/upstream.md](54-gnu/upstream.md#busybox-time-reports-four-times-the-peak-memory) |

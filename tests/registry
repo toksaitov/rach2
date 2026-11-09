@@ -141,3 +141,4 @@ codexapi|qemu|full||4096|x86_64
 museapi|qemu|full||4096|x86_64
 conload|qemu,mformat|core
 textbusy|qemu|full||128|x86_64
+watchdog|qemu|full|watchdog/*|128

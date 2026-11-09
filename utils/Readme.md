@@ -60,6 +60,8 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 
 ### Other programs
 
+* [gfxtool(8)](../man/man8/gfxtool.8) dumps the registers of an unbound Haswell HD 4400, reads a pipe's CRCs and captures a linear primary plane through `/dev/mem`. It builds under `sbin/` for explicit staging by a diagnostic image.
+
 * [halt(8)](../man/man8/halt.8) powers the machine off or restarts it. On the BusyBox images the shell runs BusyBox's `halt`, `poweroff` and `reboot` applets instead.
 * [loopctl(8)](../man/man8/loopctl.8) attaches a file to a loop device, so that a file system in a file can be mounted, detaches one, or lists them.
 * [audiotest(1)](../man/man1/audiotest.1) plays a test tone through the console's audio interface, on HDA or SB16, or a scale through `/dev/dsp`, and records through `/dev/dsp`.

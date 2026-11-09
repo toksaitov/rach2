@@ -921,6 +921,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpi_scenario \
                       build/tests/cases/machine/selfbuild_scenario \
                       build/tests/cases/machine/servicelog_scenario \
                       build/tests/cases/machine/shutdown_scenario \
+                      build/tests/cases/machine/watchdog_scenario \
                       build/tests/cases/machine/smp_scenario
 DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
                  build/tests/cases/machine/diskrate_scenario
