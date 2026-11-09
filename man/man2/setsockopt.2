@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 10, 2026
 .Dt SETSOCKOPT 2
 .Os
 .Sh NAME
@@ -92,6 +92,15 @@ A datagram that arrives with the budget spent is dropped.
 Set or get a boolean stored on the socket, which on a TCP socket turns on
 the keepalive probes of
 .Xr tcp 7 .
+.It Dv SO_PASSCRED
+Set or get whether a netlink socket's receives give each datagram's
+sender's credentials as
+.Dv SCM_CREDENTIALS
+.Pq Xr netlink 7 ;
+on a socket of another family other than
+.Dv AF_UNIX
+.Pq Xr unix 7
+it is accepted, changes nothing and reads back 0.
 .It Dv SO_RCVTIMEO
 Accepted without effect.
 It does not bound a receive wait.
@@ -315,6 +324,7 @@ an
 .Dv SO_REUSEADDR ,
 .Dv SO_BROADCAST ,
 .Dv SO_KEEPALIVE ,
+.Dv SO_PASSCRED ,
 .Dv SO_RCVBUF ,
 .Dv IP_MTU_DISCOVER ,
 .Dv IP_TTL ,

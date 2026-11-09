@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 10, 2026
 .Dt NETLINK 7
 .Os
 .Sh NAME
@@ -100,9 +100,31 @@ A socket of protocol
 .Dv NETLINK_KOBJECT_UEVENT
 (15), which udev's monitors open to hear of devices that come and go, is
 made, bound and polled like one of
-.Dv NETLINK_ROUTE
-and hears nothing, since the kernel sends no uevents; what is sent on it
-is dropped.
+.Dv NETLINK_ROUTE .
+In group 1 it hears the kernel's uevents, from port 0, each a datagram of
+.Ql ACTION@DEVPATH
+and the device's variables, each ended by a NUL, as
+.Xr sysfs 5
+describes.
+A datagram root sends on it to a group, the lowest bit of
+.Fa nl_groups ,
+goes whole to every such socket in that group, the sender's among them,
+and one to a port to the socket of that port, from the sender's port, as
+udevd passes a device on to libudev's monitors in group 2; a port no
+socket has is
+.Er ECONNREFUSED ,
+and a sender without privilege is refused with
+.Er EPERM .
+What is sent to the kernel is dropped.
+.Pp
+With
+.Dv SO_PASSCRED
+set on a netlink socket,
+.Xr recvmsg 2
+gives each datagram's
+.Dv SCM_CREDENTIALS ,
+the sender's process and real user and group ids, all 0 for the kernel,
+as libudev requires of a uevent before it takes it.
 Another protocol is
 .Er EPROTONOSUPPORT .
 .Pp
@@ -622,5 +644,6 @@ reports the kernel.
 .Xr setsockopt 2 ,
 .Xr socket 2 ,
 .Xr proc 5 ,
+.Xr sysfs 5 ,
 .Xr genetlink 7 ,
 .Xr ipv6 7
