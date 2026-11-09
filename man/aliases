@@ -52,6 +52,7 @@ clock_getres_time64 2 gettimeofday
 clock_gettime 2 gettimeofday
 clock_gettime64 2 gettimeofday
 clock_nanosleep 2 nanosleep
+clock_nanosleep_time64 2 nanosleep
 clock_settime 2 gettimeofday
 clock_settime64 2 gettimeofday
 clone 2 fork
@@ -143,7 +144,9 @@ ftpput 1 busybox-networking
 ftruncate 2 truncate
 ftruncate64 2 truncate
 fuser 1 busybox-procps
+futex_time64 2 futex
 get_robust_list 2 futex
+get_thread_area 2 set_thread_area
 getcpu 2 sched_setscheduler
 getcwd 2 chdir
 getegid32 2 getuid
@@ -357,6 +360,7 @@ sched_getaffinity 2 sched_setscheduler
 sched_getparam 2 sched_setscheduler
 sched_getscheduler 2 sched_setscheduler
 sched_rr_get_interval 2 sched_setscheduler
+sched_rr_get_interval_time64 2 sched_setscheduler
 sched_setaffinity 2 sched_setscheduler
 sched_setparam 2 sched_setscheduler
 sched_yield 2 sched_setscheduler

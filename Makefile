@@ -1221,7 +1221,8 @@ $(MANCHECK): tools/verify/mancheck.c
 	@mkdir -p build/tools/verify
 	$(HOST_LINK)
 # `make mancheck`: every program, applet and call has a page; see the tool.
-# The calls are both architectures', each table read with its own numbers.
+# The calls are both architectures' and x86-64's compat table of i386 calls,
+# each table read with its own numbers.
 .PHONY: mancheck mancheck-prepared
 mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
 mancheck-prepared: $(MANCHECK)
@@ -1230,17 +1231,21 @@ mancheck mancheck-prepared:
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
 	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest \
 	    krffs/manifests/rach2-term.manifest
-	$(MANCHECK) man rach2/sys/arch/x86_64/sysnr.h rach2/sys/arch/x86_64/systab.c $(BUSYBOX_STAGE)/applet_tables-main.h \
+	$(MANCHECK) man rach2/sys/arch/x86_64/sysnr.h \
+	    rach2/sys/arch/x86_64/systab.c:rach2/sys/arch/x86_64/ia32_sysnr.h=rach2/sys/arch/x86_64/ia32_systab.c \
+	    $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
 	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest \
 	    krffs/manifests/rach2-term.manifest
-# `make syscalls` writes rach2/syscalls.md, the calls both tables register
-# with their numbers and pages, or the file SYSCALLS_MD names.
+# `make syscalls` writes rach2/syscalls.md, the calls the i686, x86-64 and
+# compat tables register with their numbers and pages, or the file
+# SYSCALLS_MD names.
 SYSCALLS_MD = rach2/syscalls.md
 .PHONY: syscalls
 syscalls: $(MANCHECK)
 	$(MANCHECK) --calls man rach2/sys/arch/i686/sysnr.h rach2/sys/arch/i686/systab.c \
-	    rach2/sys/arch/x86_64/sysnr.h rach2/sys/arch/x86_64/systab.c >$(SYSCALLS_MD).tmp \
+	    rach2/sys/arch/x86_64/sysnr.h rach2/sys/arch/x86_64/systab.c \
+	    rach2/sys/arch/x86_64/ia32_sysnr.h rach2/sys/arch/x86_64/ia32_systab.c >$(SYSCALLS_MD).tmp \
 	    || { rm -f $(SYSCALLS_MD).tmp; exit 1; }
 	mv $(SYSCALLS_MD).tmp $(SYSCALLS_MD)
 
