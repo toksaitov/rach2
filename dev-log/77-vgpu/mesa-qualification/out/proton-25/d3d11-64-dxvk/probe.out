@@ -1,0 +1,2 @@
+d3d11probe: 64-bit
+d3d11probe: CreateDXGIFactory1 failed, hr=0x80004005

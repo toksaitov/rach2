@@ -1,0 +1,3 @@
+d3d11probe: 32-bit
+d3d11probe: adapter "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))" vendor 0x0005 device 0x0000, 4095 MiB dedicated
+d3d11probe: feature level b_1

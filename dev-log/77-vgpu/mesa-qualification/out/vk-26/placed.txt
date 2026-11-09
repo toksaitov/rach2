@@ -1,0 +1,11 @@
+	minPlacedMemoryMapAlignment = 0x00001000
+
+VkPhysicalDeviceMultiDrawPropertiesEXT:
+---------------------------------------
+--
+	memoryMapPlaced      = true
+	memoryMapRangePlaced = false
+	memoryUnmapReserve   = true
+
+VkPhysicalDeviceMultiDrawFeaturesEXT:
+-------------------------------------

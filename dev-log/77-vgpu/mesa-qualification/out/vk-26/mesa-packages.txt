@@ -1,0 +1,12 @@
+libegl-mesa0:amd64	26.1.6-1~bpo13+1
+libgbm1:amd64	26.1.6-1~bpo13+1
+libgl1-mesa-dri:amd64	26.1.6-1~bpo13+1
+libglx-mesa0:amd64	26.1.6-1~bpo13+1
+mesa-common-dev	
+mesa-libgallium:amd64	26.1.6-1~bpo13+1
+mesa-utils	9.0.0-2+b2
+mesa-utils-bin:amd64	9.0.0-2+b2
+mesa-utils-extra	
+mesa-va-drivers:amd64	26.1.6-1~bpo13+1
+mesa-vdpau-drivers:amd64	26.1.6-1~bpo13+1
+mesa-vulkan-drivers:amd64	26.1.6-1~bpo13+1

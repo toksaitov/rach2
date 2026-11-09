@@ -1,0 +1,10 @@
+libllvm21:amd64	1:21.1.8-6ubuntu1
+libvirglrenderer1:amd64	1.2.0-2ubuntu2
+libvulkan1:amd64	1.4.341.0-1
+mesa-vulkan-drivers:amd64	26.0.8-1ubuntu0.3
+qemu-system-x86	1:10.2.1+ds-1ubuntu3.3
+6.18.54.1-microsoft-standard-WSL2
+
+readelf -d /usr/libexec/virgl_render_server:
+ 0x0000000000000001 (NEEDED)             Shared library: [libvulkan.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]

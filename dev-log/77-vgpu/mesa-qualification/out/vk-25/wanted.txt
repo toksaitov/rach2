@@ -1,0 +1,11 @@
+VK_KHR_load_store_op_none no
+VK_EXT_load_store_op_none yes
+VK_KHR_maintenance5 yes
+VK_KHR_maintenance6 no
+VK_EXT_map_memory_placed no
+VK_EXT_external_memory_host no
+VK_KHR_swapchain yes
+VK_KHR_synchronization2 yes
+VK_EXT_robustness2 yes
+VK_KHR_robustness2 no
+VK_EXT_graphics_pipeline_library yes

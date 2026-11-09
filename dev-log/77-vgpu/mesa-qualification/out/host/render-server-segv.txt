@@ -1,0 +1,18 @@
+thread 1591857
+r15=0x765a530a4010 r14=0x0 r13=0x765a530a4000 r12=0x0 rbp=0x765a52a98570 rbx=0x765a4810a2e0 r11=0x161 r10=0x0 r9=0x0 r8=0x10 rax=0x765a530a3000 rcx=0x765a441469e0 rdx=0x60 rsi=0x765a501c4040 rdi=0x765a52a98500 orig_rax=0xffffffffffffffff rip=0x0 cs=0x33 eflags=0x10202 rsp=0x765a52a981d8
+return address 0x765a501c542b in no file mapping (anonymous memory)
+code.bin: the 64 bytes before it; objdump --adjust-vma=0x765a501c53eb
+0000765a501c53eb <.data>:
+    765a501c53eb:	c5 fd 7f 8c 24 c0 02 	vmovdqa %ymm1,0x2c0(%rsp)
+    765a501c53f2:	00 00 
+    765a501c53f4:	62 f1 7d a9 6f cb    	vmovdqa32 %ymm3,%ymm1{%k1}{z}
+    765a501c53fa:	c5 fd 7f 8c 24 a0 02 	vmovdqa %ymm1,0x2a0(%rsp)
+    765a501c5401:	00 00 
+    765a501c5403:	c4 e2 79 13 c0       	vcvtph2ps %xmm0,%xmm0
+    765a501c5408:	c5 fa 59 44 24 0c    	vmulss 0xc(%rsp),%xmm0,%xmm0
+    765a501c540e:	c4 e3 79 1d c0 04    	vcvtps2ph $0x4,%xmm0,%xmm0
+    765a501c5414:	c5 f8 29 44 24 40    	vmovaps %xmm0,0x40(%rsp)
+    765a501c541a:	c5 f8 57 44 24 30    	vxorps 0x30(%rsp),%xmm0,%xmm0
+    765a501c5420:	c4 e2 79 13 c0       	vcvtph2ps %xmm0,%xmm0
+    765a501c5425:	c5 f8 77             	vzeroupper
+    765a501c5428:	41 ff d4             	call   *%r12

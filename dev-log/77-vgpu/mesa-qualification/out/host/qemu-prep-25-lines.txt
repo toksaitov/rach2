@@ -1,0 +1,18 @@
+     44 virtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1200
+      4 virgl_render_server: vkr: ring_submit_cmd: vn_dispatch_command failed
+      3 virgl_render_server: vkr: vkAllocateMemory resulted in CS error
+      1 virtio_gpu_virgl_process_cmd: ctrl 0x208, error 0x1203
+      1 virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203
+      1 virgl_render_server: vkr: vkFreeMemory resulted in CS error
+      1 virgl_render_server: vkr: failed to look up object 7034 of type 8
+      1 virgl_render_server: vkr: failed to import resource: invalid res_id 763
+      1 virgl_render_server: vkr: failed to import resource: invalid res_id 721
+      1 virgl_render_server: vkr: failed to import resource: invalid res_id 707
+      1 proxy: proxy server with pid 1102194GLSL feature level 450
+      1 proxy: failed to submit cmdvirtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1203
+      1 proxy: failed to receive message: Connection reset by peer
+      1 proxy: failed to get reply of blob 58virtio_gpu_virgl_process_cmd: ctrl 0x10c, error 0x1200
+      1 proxy: exported res 763 to unexpected fd_type -1
+      1 proxy: exported res 721 to unexpected fd_type -1
+      1 proxy: exported res 707 to unexpected fd_type -1
+      1 gl_version 45 - core profile enabled
