@@ -65,7 +65,7 @@ TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 # reinstalled compiler rebuilds every probe. The purge names only this
 # Makefile's products, since build/tests/musl belongs to tests/musl/build.sh,
 # which may be compiling there in a parallel build.
-CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS)
+CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS) $(UDMABUF_CFLAGS)
 CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d
 include ../mk/fingerprint.mk
 
@@ -78,10 +78,10 @@ $(TARGETS): $(CONFIG)
 # headers it includes in the .d that -MF names, so a changed header rebuilds it.
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $<
+	$(CC) $(CFLAGS) $(if $(filter udmabufprobe,$*),$(UDMABUF_CFLAGS)) -MF $(BUILD)/$*.d -o $@ $<
 
 # The shared kernel ABI header uses C89's bool typedef.
-$(BUILD)/udmabufprobe: CFLAGS += -std=c99
+UDMABUF_CFLAGS = -std=c99
 
 # dnstest links the stub resolver of utils/ to test its parser on crafted
 # replies and resolve_host() against a live server, and links the ported musl
