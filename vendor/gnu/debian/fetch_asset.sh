@@ -1,6 +1,7 @@
 # shellcheck shell=sh
-# Fetch a source-extra.txt asset into this clone's build cache and check it.
-# The caller sets GNU and REPO; asset NAME prints only the checked path.
+# Fetch a pinned asset into this clone's build cache and check it. The caller
+# sets GNU and REPO; asset NAME [LIST] prints only the checked path. LIST is
+# the manifest that pins NAME, sources-extra.txt by default.
 
 asset()
 (
@@ -10,7 +11,7 @@ asset()
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    line=$(awk -v n="$1" '$1 == n { print; exit }' "$GNU/sources-extra.txt")
+    line=$(awk -v n="$1" '$1 == n { print; exit }' "${2:-$GNU/sources-extra.txt}")
     [ -n "$line" ] || { echo "gnu: asset: no pin for $1" >&2; return 1; }
     # shellcheck disable=SC2086 # the manifest has four fields
     set -- $line

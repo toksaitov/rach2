@@ -1,0 +1,14 @@
+# The pinned source package of IGT's tests: Debian trixie's intel-gpu-tools
+# 2.0-1, from the snapshot of 2026-09-27T08:21:44Z that the desktop layer's
+# fetcher reads (vendor/gnu/debian/fetch_debs.sh). Each line gives a name,
+# version, URL and SHA-256, in the format of ../sources.txt; build_igt.sh
+# fetches and checks each with ../debian/fetch_asset.sh.
+#
+# The digests are those of the suite's Sources index, whose SHA-256,
+# 6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9, the
+# suite's InRelease lists; that InRelease is the one fetch_debs.sh pins by
+# digest and checks with the archive keys.
+intel-gpu-tools-dsc 2.0-1 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/i/intel-gpu-tools/intel-gpu-tools_2.0-1.dsc 5a59cd35da1b96b78612fc02cf17d227388fba1bab6267dc463ff25065ea90e1
+intel-gpu-tools-orig 2.0 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/i/intel-gpu-tools/intel-gpu-tools_2.0.orig.tar.xz ab060a2652509e3bbaeb19d8b227c3b063074c9a905a37508830360435d2bb8f
+intel-gpu-tools-orig-asc 2.0 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/i/intel-gpu-tools/intel-gpu-tools_2.0.orig.tar.xz.asc 44f34e67e88cbcaa957fe4d92fa923e9e8d3f045e942253d78f935af4f1d58f3
+intel-gpu-tools-debian 2.0-1 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/i/intel-gpu-tools/intel-gpu-tools_2.0-1.debian.tar.xz d6d0486581d626e2f4f48d0462860add33a2d7c0987c7b660169823b45a129c4
