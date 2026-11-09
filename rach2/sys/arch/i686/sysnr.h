@@ -300,23 +300,24 @@
 
 /* The direct socket calls (syscall_net.c), socketcall's sub-calls by
  * number. */
-#define SYS_SOCKET      359
-#define SYS_SOCKETPAIR  360
-#define SYS_BIND        361
-#define SYS_CONNECT     362
-#define SYS_LISTEN      363
-#define SYS_ACCEPT4     364
-#define SYS_GETSOCKOPT  365
-#define SYS_SETSOCKOPT  366
-#define SYS_GETSOCKNAME 367
-#define SYS_GETPEERNAME 368
-#define SYS_SENDTO      369
-#define SYS_SENDMSG     370
-#define SYS_RECVFROM    371
-#define SYS_RECVMSG     372
-#define SYS_SHUTDOWN    373
-#define SYS_RECVMMSG    337
-#define SYS_SENDMMSG    345
+#define SYS_SOCKET          359
+#define SYS_SOCKETPAIR      360
+#define SYS_BIND            361
+#define SYS_CONNECT         362
+#define SYS_LISTEN          363
+#define SYS_ACCEPT4         364
+#define SYS_GETSOCKOPT      365
+#define SYS_SETSOCKOPT      366
+#define SYS_GETSOCKNAME     367
+#define SYS_GETPEERNAME     368
+#define SYS_SENDTO          369
+#define SYS_SENDMSG         370
+#define SYS_RECVFROM        371
+#define SYS_RECVMSG         372
+#define SYS_SHUTDOWN        373
+#define SYS_RECVMMSG        337
+#define SYS_SENDMMSG        345
+#define SYS_RECVMMSG_TIME64 417
 
 /* eventfd, epoll and timerfd (io/eventfd.c, io/epoll.c, io/timerfd.c). */
 #define SYS_EPOLL_CREATE      254

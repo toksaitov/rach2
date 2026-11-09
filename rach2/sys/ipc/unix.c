@@ -46,6 +46,8 @@
 #define UNIX_MAX_FDS    253u
 /* Policy: the connections a listener queues at most, Linux's somaxconn. */
 #define UNIX_SOMAXCONN  4096
+/* A socket time limit that waits not at all, which negative seconds set. */
+#define UNIX_TIMEO_NOW  (~(uint64_t)0)
 
 #define MSG_OOB          0x1
 #define MSG_PEEK         0x2
@@ -70,8 +72,6 @@
 #define SO_PEERCRED    17
 #define SO_RCVLOWAT    18
 #define SO_SNDLOWAT    19
-#define SO_RCVTIMEO    20
-#define SO_SNDTIMEO    21
 #define SO_ACCEPTCONN  30
 #define SO_SNDBUFFORCE 32
 #define SO_RCVBUFFORCE 33
@@ -177,7 +177,7 @@ struct unix_sock {
     uint32_t acc_len;
     uint32_t sndbuf; /* bytes */
     uint32_t rcvbuf;
-    uint64_t rcvtimeo; /* ticks, 0 for none */
+    uint64_t rcvtimeo; /* ticks, 0 for none, UNIX_TIMEO_NOW for no wait */
     uint64_t sndtimeo;
     wait_queue_t wq;
     /* A bind in progress, which holds the socket across the file system's
@@ -755,14 +755,18 @@ static int timed_ready(void *arg)
 
 /**
  * Wait on `wq` until `cond(arg)`, a signal, or the end of the socket time
- * limit `timeo` in ticks, 0 for none. Returns 0 when the condition holds,
- * -EINTR for a signal, -EAGAIN when the time ran out, as Linux reports it.
+ * limit `timeo` in ticks, 0 for none and UNIX_TIMEO_NOW for no wait at all.
+ * Returns 0 when the condition holds, -EINTR for a signal, -EAGAIN when the
+ * time ran out, as Linux reports it.
  */
 static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint64_t timeo)
 {
     struct timed_cond t;
     int rc;
 
+    if (timeo == UNIX_TIMEO_NOW) {
+        return cond(arg) ? 0 : -EAGAIN;
+    }
     t.cond = cond;
     t.arg = arg;
     t.timed = timeo != 0;
@@ -1528,16 +1532,31 @@ int32_t unix_shutdown(fd_entry_t *e, int how)
     return 0;
 }
 
-/** A time limit of SO_RCVTIMEO or SO_SNDTIMEO, a struct timeval of two
- * longs, in ticks into `*ticks`, 0 for none (`tick_span`); -EDOM for a
- * timeval out of range. */
-static int32_t timeval_ticks(const long tv[2], uint64_t *ticks)
+/** A time limit of SO_RCVTIMEO or SO_SNDTIMEO, seconds and microseconds,
+ * in ticks into `*ticks`, 0 for none (`tick_span`), as Linux's
+ * sock_set_timeout keeps it: negative seconds wait not at all
+ * (UNIX_TIMEO_NOW). -EDOM for microseconds out of range. */
+static int32_t timeval_ticks(const int64_t tv[2], uint64_t *ticks)
 {
-    if (tv[0] < 0 || tv[1] < 0 || tv[1] >= 1000000) {
+    if (tv[1] < 0 || tv[1] >= 1000000) {
         return -EDOM;
     }
-    *ticks = tick_span(tv[0], (uint32_t)tv[1] * 1000u);
+    *ticks = tv[0] < 0 ? UNIX_TIMEO_NOW : tick_span(tv[0], (uint32_t)tv[1] * 1000u);
     return 0;
+}
+
+/** The seconds and microseconds of the time limit `ticks` into `tv`, 0 for
+ * none or none to wait, as Linux's sock_get_timeout gives it. */
+static void ticks_timeval(uint64_t ticks, int64_t tv[2])
+{
+    uint32_t rem = 0;
+
+    tv[0] = 0;
+    tv[1] = 0;
+    if (ticks != UNIX_TIMEO_NOW && ticks != 0) {
+        tv[0] = (int64_t)tick_div(ticks, TICK_HZ, &rem);
+        tv[1] = (int64_t)rem * TICK_US;
+    }
 }
 
 /** A buffer size set by SO_SNDBUF or SO_RCVBUF: twice the value asked, at
@@ -1561,20 +1580,19 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
     if (level != SOL_SOCKET) {
         return -ENOPROTOOPT;
     }
-    if (name == SO_RCVTIMEO || name == SO_SNDTIMEO) {
-        long tv[2];
+    if (name == SO_RCVTIMEO_OLD || name == SO_SNDTIMEO_OLD || name == SO_RCVTIMEO_NEW ||
+        name == SO_SNDTIMEO_NEW) {
+        int64_t tv[2];
         uint64_t ticks;
+        int32_t rc = sock_timeo_get(name, val, len, tv);
 
-        if (len < sizeof(tv)) {
-            return -EINVAL;
-        }
-        if (copy_from_user(tv, (const void __user *)val, sizeof(tv)) != 0) {
-            return -EFAULT;
+        if (rc != 0) {
+            return rc;
         }
         if (timeval_ticks(tv, &ticks) != 0) {
             return -EDOM;
         }
-        if (name == SO_RCVTIMEO) {
+        if (name == SO_RCVTIMEO_OLD || name == SO_RCVTIMEO_NEW) {
             s->rcvtimeo = ticks;
         } else {
             s->sndtimeo = ticks;
@@ -1623,9 +1641,10 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
 {
     struct unix_sock *s = sock_of(e);
     struct unix_cred c;
-    uint8_t out[sizeof(struct unix_cred)];
+    uint8_t out[16];
     uint32_t n = 4;
     int32_t given, v = 0;
+    int64_t tv[2];
 
     if (level != SOL_SOCKET) {
         return -ENOPROTOOPT;
@@ -1680,12 +1699,23 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
         }
         n = sizeof(c);
         break;
+    case SO_RCVTIMEO_OLD:
+    case SO_RCVTIMEO_NEW:
+        ticks_timeval(s->rcvtimeo, tv);
+        n = sock_timeo_put(name, tv, out);
+        break;
+    case SO_SNDTIMEO_OLD:
+    case SO_SNDTIMEO_NEW:
+        ticks_timeval(s->sndtimeo, tv);
+        n = sock_timeo_put(name, tv, out);
+        break;
     default:
         return -ENOPROTOOPT;
     }
     if (name == SO_PEERCRED) {
         k_memcpy(out, &c, sizeof(c));
-    } else {
+    } else if (name != SO_RCVTIMEO_OLD && name != SO_RCVTIMEO_NEW && name != SO_SNDTIMEO_OLD &&
+               name != SO_SNDTIMEO_NEW) {
         k_memcpy(out, &v, sizeof(v));
     }
     if ((uint32_t)given < n) {
@@ -1800,37 +1830,38 @@ static int32_t get_cred(uintptr_t data, struct unix_out *out)
     return 0;
 }
 
-/** Read the caller's control messages into `out`: -EINVAL for a malformed
+/** Read the caller's control messages, in its layout (`cmsg_get`), into
+ * `out`: -EINVAL for a malformed
  * header, a level other than SOL_SOCKET or another type, and the errors of
  * `get_rights` and `get_cred`. */
 static int32_t get_control(uintptr_t control, uint32_t controllen, struct unix_out *out)
 {
     uint32_t off = 0;
 
-    while (off + CMSG_HDR <= controllen) {
+    while (off + cmsg_hdr() <= controllen) {
         struct kernel_cmsghdr hdr;
+        uint32_t head = cmsg_hdr();
         int32_t rc;
 
-        if (copy_from_user(&hdr, (const void __user *)(control + off), sizeof(hdr)) != 0) {
+        if (cmsg_get(&hdr, control + off) != 0) {
             return -EFAULT;
         }
-        if (hdr.cmsg_len < CMSG_HDR || hdr.cmsg_len > controllen - off ||
+        if (hdr.cmsg_len < head || hdr.cmsg_len > controllen - off ||
             hdr.cmsg_level != SOL_SOCKET) {
             return -EINVAL;
         }
         if (hdr.cmsg_type == SCM_RIGHTS) {
-            rc =
-                get_rights(control + off + CMSG_HDR, (uint32_t)(hdr.cmsg_len - CMSG_HDR) / 4u, out);
+            rc = get_rights(control + off + head, (uint32_t)(hdr.cmsg_len - head) / 4u, out);
         } else if (hdr.cmsg_type == SCM_CREDENTIALS &&
-                   hdr.cmsg_len == CMSG_HDR + sizeof(struct unix_cred)) {
-            rc = get_cred(control + off + CMSG_HDR, out);
+                   hdr.cmsg_len == head + sizeof(struct unix_cred)) {
+            rc = get_cred(control + off + head, out);
         } else {
             rc = -EINVAL;
         }
         if (rc != 0) {
             return rc;
         }
-        off += (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
+        off += cmsg_align((uint32_t)hdr.cmsg_len);
     }
     return 0;
 }
@@ -2375,7 +2406,7 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
         if (fd < 0) {
             break;
         }
-        if (copy_to_user((void __user *)(at + CMSG_HDR + 4u * given), &fd, sizeof(fd)) != 0) {
+        if (copy_to_user((void __user *)(at + cmsg_hdr() + 4u * given), &fd, sizeof(fd)) != 0) {
             fd_free(table(), fd);
             break;
         }
@@ -2398,14 +2429,16 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
 }
 
 /**
- * Write the control messages of a receive to the caller's buffer: the
- * credentials, and the descriptors, each installed as a new descriptor.
+ * Write the control messages of a receive to the caller's buffer, in its
+ * layout (`cmsg_put`): the credentials, and the descriptors, each installed
+ * as a new descriptor.
  * Returns the bytes of the buffer used, a message's padding to the next
  * alignment counted only as far as the buffer goes, as Linux's `put_cmsg`
  * counts it, so that the length given back covers no byte past the buffer.
  */
 static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_in *in, int flags)
 {
+    uint32_t head = cmsg_hdr();
     uint32_t used = 0;
     struct kernel_cmsghdr hdr;
     uint32_t given;
@@ -2414,32 +2447,30 @@ static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_
     k_memset(&hdr, 0, sizeof(hdr));
     if (in->has_cred) {
         seen = cred_seen(in->cred);
-        hdr.cmsg_len = CMSG_HDR + sizeof(seen);
+        hdr.cmsg_len = head + sizeof(seen);
         hdr.cmsg_level = SOL_SOCKET;
         hdr.cmsg_type = SCM_CREDENTIALS;
-        if (!control || controllen < hdr.cmsg_len ||
-            copy_to_user((void __user *)control, &hdr, sizeof(hdr)) != 0 ||
-            copy_to_user((void __user *)(control + CMSG_HDR), &seen, sizeof(seen)) != 0) {
+        if (!control || controllen < hdr.cmsg_len || cmsg_put(control, &hdr) != 0 ||
+            copy_to_user((void __user *)(control + head), &seen, sizeof(seen)) != 0) {
             in->flags |= MSG_CTRUNC;
         } else {
-            used = (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
+            used = cmsg_align((uint32_t)hdr.cmsg_len);
             used = used > controllen ? controllen : used;
         }
     }
     if (in->nfds == 0) {
         return used;
     }
-    given = put_rights(control + used,
-                       (control && controllen > used + CMSG_HDR)
-                           ? (uint32_t)(controllen - used - CMSG_HDR) / 4u
-                           : 0u,
-                       in, flags);
+    given = put_rights(
+        control + used,
+        (control && controllen > used + head) ? (uint32_t)(controllen - used - head) / 4u : 0u, in,
+        flags);
     if (given > 0) {
-        hdr.cmsg_len = CMSG_HDR + 4u * given;
+        hdr.cmsg_len = head + 4u * given;
         hdr.cmsg_level = SOL_SOCKET;
         hdr.cmsg_type = SCM_RIGHTS;
-        if (copy_to_user((void __user *)(control + used), &hdr, sizeof(hdr)) == 0) {
-            used += (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
+        if (cmsg_put(control + used, &hdr) == 0) {
+            used += cmsg_align((uint32_t)hdr.cmsg_len);
             used = used > controllen ? controllen : used;
         }
     }
@@ -2502,7 +2533,8 @@ int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uin
     return rc;
 }
 
-/** The caller's iovec array in `*iov`, copied in and checked, with its
+/** The caller's iovec array in `*iov`, copied in in its layout
+ * (`iov_fetch`) and checked, with its
  * total length in `*total`: 0, or -EMSGSIZE past IOV_MAX_LOCAL vectors,
  * -EINVAL for a total past 2^31 - 1, -ENOMEM, -EFAULT. The caller frees the
  * array, whatever the result. */
@@ -2523,11 +2555,10 @@ static int32_t get_iov(uintptr_t uiov, unsigned long iovlen, struct kernel_iovec
     if (!*iov) {
         return -ENOMEM;
     }
-    if (copy_from_user(*iov, (const void __user *)uiov, sizeof(struct kernel_iovec) * iovlen) !=
-        0) {
-        return -EFAULT;
-    }
     for (i = 0; i < iovlen; i++) {
+        if (iov_fetch(&(*iov)[i], uiov, (uint32_t)i) != 0) {
+            return -EFAULT;
+        }
         if ((*iov)[i].iov_len > 0x7FFFFFFFu - *total) {
             return -EINVAL;
         }
@@ -2546,7 +2577,7 @@ int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags)
     uint32_t total;
     int32_t rc;
 
-    if (copy_from_user(&hdr, (const void __user *)msg, sizeof(hdr)) != 0) {
+    if (msghdr_get(&hdr, msg) != 0) {
         return -EFAULT;
     }
     named = hdr.msg_name != 0 && hdr.msg_namelen != 0;
@@ -2580,10 +2611,10 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
     uint32_t total;
     int32_t rc;
 
-    if (copy_from_user(&hdr, (const void __user *)msg, sizeof(hdr)) != 0) {
+    if (msghdr_get(&hdr, msg) != 0) {
         return -EFAULT;
     }
-    if (!user_buffer_ok(msg, sizeof(hdr), 1) ||
+    if (!user_buffer_ok(msg, msghdr_size(), 1) ||
         (hdr.msg_control && !user_buffer_ok(hdr.msg_control, USER_LEN32(hdr.msg_controllen), 1))) {
         return -EFAULT;
     }
@@ -2617,7 +2648,7 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
         hdr.msg_namelen = full;
     }
     hdr.msg_flags = in.flags;
-    if (copy_to_user((void __user *)msg, &hdr, sizeof(hdr)) != 0) {
+    if (msghdr_put(msg, &hdr) != 0) {
         return -EFAULT;
     }
     return rc;

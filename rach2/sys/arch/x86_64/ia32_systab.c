@@ -430,7 +430,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_PWRITEV] = compat_sys_pwritev;
     table[SYS_RT_TGSIGQUEUEINFO] = compat_sys_rt_tgsigqueueinfo;
     table[SYS_PERF_EVENT_OPEN] = NULL;
-    table[SYS_RECVMMSG] = compat_sys_recvmmsg_time32;
+    table[SYS_RECVMMSG] = sys_recvmmsg;
     table[SYS_FANOTIFY_INIT] = NULL;
     table[SYS_FANOTIFY_MARK] = compat_sys_fanotify_mark;
     table[SYS_PRLIMIT64] = sys_prlimit64;
@@ -438,7 +438,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_OPEN_BY_HANDLE_AT] = compat_sys_open_by_handle_at;
     table[SYS_CLOCK_ADJTIME] = sys_clock_adjtime;
     table[SYS_SYNCFS] = sys_syncfs;
-    table[SYS_SENDMMSG] = compat_sys_sendmmsg;
+    table[SYS_SENDMMSG] = sys_sendmmsg;
     table[SYS_SETNS] = sys_setns;
     table[SYS_PROCESS_VM_READV] = sys_process_vm_readv;
     table[SYS_PROCESS_VM_WRITEV] = sys_process_vm_writev;
@@ -458,14 +458,14 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_CONNECT] = sys_connect;
     table[SYS_LISTEN] = sys_listen;
     table[SYS_ACCEPT4] = sys_accept4;
-    table[SYS_GETSOCKOPT] = compat_sys_getsockopt;
-    table[SYS_SETSOCKOPT] = compat_sys_setsockopt;
+    table[SYS_GETSOCKOPT] = sys_getsockopt;
+    table[SYS_SETSOCKOPT] = sys_setsockopt;
     table[SYS_GETSOCKNAME] = sys_getsockname;
     table[SYS_GETPEERNAME] = sys_getpeername;
     table[SYS_SENDTO] = sys_sendto;
-    table[SYS_SENDMSG] = compat_sys_sendmsg;
-    table[SYS_RECVFROM] = compat_sys_recvfrom;
-    table[SYS_RECVMSG] = compat_sys_recvmsg;
+    table[SYS_SENDMSG] = sys_sendmsg;
+    table[SYS_RECVFROM] = sys_recvfrom;
+    table[SYS_RECVMSG] = sys_recvmsg;
     table[SYS_SHUTDOWN] = sys_shutdown;
     table[SYS_USERFAULTFD] = NULL;
     table[SYS_MEMBARRIER] = NULL;
@@ -503,7 +503,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_PSELECT6_TIME64] = compat_sys_pselect6_time64;
     table[SYS_PPOLL_TIME64] = compat_sys_ppoll_time64;
     table[SYS_IO_PGETEVENTS_TIME64] = compat_sys_io_pgetevents_time64;
-    table[SYS_RECVMMSG_TIME64] = compat_sys_recvmmsg_time64;
+    table[SYS_RECVMMSG_TIME64] = sys_recvmmsg_time64;
     table[SYS_MQ_TIMEDSEND_TIME64] = sys_mq_timedsend;
     table[SYS_MQ_TIMEDRECEIVE_TIME64] = sys_mq_timedreceive;
     table[SYS_SEMTIMEDOP_TIME64] = sys_semtimedop_time64;

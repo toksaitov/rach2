@@ -325,6 +325,7 @@ realpath 1 busybox-coreutils
 reboot 8 busybox-init
 recvfrom 2 recv
 recvmmsg 2 recv
+recvmmsg_time64 2 recv
 recvmsg 2 recv
 reformime 1 busybox-mailutils
 remove-shell 8 busybox-loginutils

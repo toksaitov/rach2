@@ -163,14 +163,27 @@ as
 receives one, storing each message's count in its
 .Va msg_len ,
 and returns how many it received, or the first error when none came.
-It waits for the first message only, as with
-.Dv MSG_WAITFORONE ,
-and takes the rest that have already come; it does not read
-.Fa timeout .
-Linux waits for all
-.Fa vlen
-messages or the timeout without
-.Dv MSG_WAITFORONE .
+Each receive waits as the socket's would; with
+.Dv MSG_WAITFORONE
+only the first does, and the rest take what has already come.
+With a
+.Fa timeout ,
+the call ends after the message during which the time ran out, and
+.Fa timeout
+is given back the time that remains, zero once it has run out, when a
+message came; as on Linux, the timeout does not end a wait for a
+message.
+A timeout with negative seconds or nanoseconds past a second fails with
+.Er EINVAL .
+On i686
+.Fa timeout
+is a
+.Vt struct timespec
+of 32-bit words, and the call
+.Nm recvmmsg_time64 ,
+417, takes Linux's
+.Vt struct __kernel_timespec
+of 64-bit words instead, the high word of its nanoseconds ignored.
 .Pp
 Among Internet and packet sockets,
 .Fn recvmsg
@@ -298,6 +311,11 @@ is 47 and
 .Vt struct msghdr
 has the x86-64 layout, with 64-bit lengths, and control messages are
 aligned to 8 bytes.
+An i386 program on the x86-64 kernel passes the i386 layout, with 32-bit
+pointers and lengths and control messages aligned to 4 bytes, through
+the i386 numbers or
+.Xr socketcall 2 ,
+and gets it back, as on Linux.
 .Sh RETURN VALUES
 On success,
 .Fn recv ,

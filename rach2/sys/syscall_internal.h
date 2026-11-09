@@ -186,6 +186,51 @@ struct kernel_cmsghdr {
 #define CMSG_ALIGN(n) (((n) + sizeof(unsigned long) - 1u) & ~(sizeof(unsigned long) - 1u))
 #define CMSG_HDR      CMSG_ALIGN(sizeof(struct kernel_cmsghdr))
 
+/*
+ * The caller's msghdr and control messages, in its layout: an i386 call's
+ * on the x86-64 kernel (`in_compat_syscall`), as Linux's MSG_CMSG_COMPAT
+ * picks it, else the kernel's own (syscall_net.c). A header read is held in
+ * a struct kernel_msghdr or kernel_cmsghdr either way.
+ */
+
+/** The bytes of the caller's struct msghdr. */
+uint32_t msghdr_size(void);
+
+/** Read the caller's msghdr at `u` into `h`; 0 or -EFAULT. */
+int msghdr_get(struct kernel_msghdr *h, uintptr_t u);
+
+/** Write what a receive gives back into the caller's msghdr at `u`: the
+ * name's length when `h` has a name, the control length and the flags, as
+ * Linux's recvmsg writes them; 0 or -EFAULT. */
+int msghdr_put(uintptr_t u, const struct kernel_msghdr *h);
+
+/** The bytes of the caller's control message header, after which its data
+ * begins, and `n` rounded up to the alignment of its messages. */
+uint32_t cmsg_hdr(void);
+uint32_t cmsg_align(uint32_t n);
+
+/** Read or write the caller's control message header at `at`; 0 or
+ * -EFAULT. */
+int cmsg_get(struct kernel_cmsghdr *h, uintptr_t at);
+int cmsg_put(uintptr_t at, const struct kernel_cmsghdr *h);
+
+/* The socket time limits: the old options take the caller's struct timeval,
+ * of longs, two 32-bit words for an i386 call; the new ones Linux's
+ * __kernel_sock_timeval, two 64-bit words in every ABI. */
+#define SO_RCVTIMEO_OLD 20
+#define SO_SNDTIMEO_OLD 21
+#define SO_RCVTIMEO_NEW 66
+#define SO_SNDTIMEO_NEW 67
+
+/** Read the time limit of the option `name` from the caller's `len` bytes
+ * at `val` into seconds and microseconds `tv`, unchecked; 0, -EINVAL for a
+ * value shorter than the option's structure, or -EFAULT. */
+int32_t sock_timeo_get(int name, uintptr_t val, uint32_t len, int64_t tv[2]);
+
+/** Lay out the seconds and microseconds `tv` as the option `name`'s
+ * structure in the caller's layout at `out`; returns its bytes. */
+uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16]);
+
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
 
@@ -759,6 +804,15 @@ int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, co
 
 long sys_socketcall(isr_params_t *params);
 
+/** The count of argument words socketcall's sub-call `call` takes, or 0
+ * for a sub-call it does not have (syscall_net.c). */
+int socketcall_nargs(int call);
+
+/** Run socketcall's sub-call `call` with its arguments `args`, each
+ * zero-extended where the caller's words are 32 bits, for socketcall, the
+ * direct socket calls and i386's socketcall on the x86-64 kernel. */
+int32_t socket_call(int call, unsigned long *args);
+
 long sys_socket(isr_params_t *params);
 
 long sys_socketpair(isr_params_t *params);
@@ -790,6 +844,8 @@ long sys_recvmsg(isr_params_t *params);
 long sys_shutdown(isr_params_t *params);
 
 long sys_recvmmsg(isr_params_t *params);
+
+long sys_recvmmsg_time64(isr_params_t *params);
 
 long sys_sendmmsg(isr_params_t *params);
 

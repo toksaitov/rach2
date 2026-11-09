@@ -101,11 +101,17 @@ on a socket of another family other than
 .Dv AF_UNIX
 .Pq Xr unix 7
 it is accepted, changes nothing and reads back 0.
-.It Dv SO_RCVTIMEO
-Accepted without effect.
-It does not bound a receive wait.
-Getting it returns an integer zero, truncated to the supplied capacity,
-rather than a timeval.
+.It Dv SO_RCVTIMEO , SO_SNDTIMEO
+Accepted without effect on an Internet, packet or netlink socket.
+It does not bound a wait, and getting it returns a zero
+.Vt struct timeval ,
+no limit, truncated to the supplied capacity.
+The old options, 20 and 21, take the caller's
+.Vt struct timeval
+of longs, two 32-bit words from an i386 program on the x86-64 kernel;
+the new ones, 66 and 67, take Linux's
+.Vt struct __kernel_sock_timeval
+of two 64-bit words in every ABI.
 .El
 .Pp
 The

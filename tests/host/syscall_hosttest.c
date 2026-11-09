@@ -63,6 +63,20 @@ static long sys_setsockopt(isr_params_t *params);
 static long sys_shutdown(isr_params_t *params);
 static long sys_socket(isr_params_t *params);
 static long sys_socketpair(isr_params_t *params);
+struct kernel_msghdr;
+struct kernel_cmsghdr;
+static int socketcall_nargs(int call);
+static int32_t socket_call(int call, unsigned long *args);
+static long sys_recvmmsg_time64(isr_params_t *params);
+static uint32_t msghdr_size(void);
+static int msghdr_get(struct kernel_msghdr *h, uintptr_t u);
+static int msghdr_put(uintptr_t u, const struct kernel_msghdr *h);
+static uint32_t cmsg_hdr(void);
+static uint32_t cmsg_align(uint32_t n);
+static int cmsg_get(struct kernel_cmsghdr *h, uintptr_t at);
+static int cmsg_put(uintptr_t at, const struct kernel_cmsghdr *h);
+static int32_t sock_timeo_get(int name, uintptr_t val, uint32_t len, int64_t tv[2]);
+static uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16]);
 #include "syscall.c"
 #include "syscall_net.c"
 #include "ns_first.h"
