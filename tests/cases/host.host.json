@@ -616,6 +616,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "mmnotify",
+          "checks": "tests/host/mmnotify_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mmnotify64",
+          "checks": "tests/host/mmnotify64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "modlayout",
           "checks": "tests/host/modlayout_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -743,6 +753,16 @@
         {
           "assertion_id": "pciwalk",
           "checks": "tests/host/pciwalk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pin",
+          "checks": "tests/host/pin_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pin64",
+          "checks": "tests/host/pin64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1147,7 +1167,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 217
+          "limit": 221
         }
       ],
       "bounds": {
