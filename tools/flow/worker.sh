@@ -17,8 +17,8 @@
 # assignee. Write a number to STATE/issue to give a loop a task to resume.
 #
 # The session's prompt is `worker.txt`, with @ISSUE@ replaced by the task's
-# number and @BRANCH@ by its milestone's branch, which `board.sh branch`
-# reads before each session.
+# number, @BRANCH@ by its milestone's branch, which `board.sh branch` reads
+# before each session, and @BOARD@ by STATE/run/board.sh, master's copy.
 #
 # AGENT is the program a session runs: Claude Code, `claude`, the default, or
 # the Codex CLI, `codex`, at the model and effort below. A Claude Code session
@@ -35,8 +35,8 @@
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
 # another, so that a build they start stops before it fills the disk, and
 # with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
-# loop's task empties STATE/issue and another loop of the same account can
-# take the task at once without this one going on with it. Codex
+# loop's task empties STATE/issue under the claim lock and another loop of
+# the same account can take the task without this one going on with it. Codex
 # reads at most DOC_BYTES of AGENTS.md, since its own limit, 32 KiB, cuts the
 # file short.
 #
@@ -95,7 +95,8 @@ claim()
 session()
 {
     t=$(date -u '+%m%d-%H%M%S')
-    prompt=$(sed "s|@ISSUE@|$1|g; s|@BRANCH@|$2|g" "$state/run/worker.txt")
+    prompt=$(sed "s|@ISSUE@|$1|g; s|@BRANCH@|$2|g; s|@BOARD@|$state/run/board.sh|g" \
+        "$state/run/worker.txt")
     log "session $t on #$1 starts"
     started=$(date +%s)
     case $agent in

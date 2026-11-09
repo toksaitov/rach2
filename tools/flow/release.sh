@@ -141,12 +141,14 @@
 # * hold: while STATE/hold exists, the release does not first touch the
 #   Lenovo; it says the file's line and exits 75, and is started again once a
 #   person's check of a trial boot there has ended and the file is removed.
-# * lock: before it first touches the Lenovo, the release takes the Lenovo's
-#   lock, `build/flow/lenovo` of the main working tree as the machine skill
-#   says, with `release M` in its `issue`, or exits 75 while a task holds it.
-#   It keeps the lock through a failure, which may leave a trial armed, and
-#   through a release started again, and removes it once the Lenovo runs the
-#   committed release and names SHA.
+# * lock: each time it comes to the Lenovo, before the preflight and again
+#   before its first step there, the release takes the Lenovo's lock,
+#   `build/flow/lenovo` of the main working tree as the machine skill says,
+#   with `release M` in its `issue`, or finds it its own, and exits 75 while
+#   a task holds it. An exit 75 before the release has touched the Lenovo
+#   removes the lock. It keeps the lock through a failure, which may leave a
+#   trial armed, and through a release started again, and removes it once
+#   the Lenovo runs the committed release and names SHA.
 # * recovery: the Lenovo boots its recovery system from its recovery
 #   partition; the recovery kernel and image on that partition are replaced
 #   when they differ from the build's, keeping the partition's recovery key
@@ -418,6 +420,7 @@ fail()
 later()
 {
     [ -z "$detached" ] || { failure windows "$wid" runner; say "windows: $1"; exit 1; }
+    grep -q '^touched ' "$state/record" 2> /dev/null || free_lenovo
     say "waiting: $1"
     exit 75
 }
@@ -1806,7 +1809,17 @@ take_lenovo()
 # free_lenovo: remove the Lenovo's lock when this release holds it.
 free_lenovo()
 {
-    [ "$(cat "$lock/issue" 2> /dev/null)" != "release $milestone" ] || rm -rf "$lock"
+    [ -z "$lock" ] || [ "$(cat "$lock/issue" 2> /dev/null)" != "release $milestone" ] ||
+        rm -rf "$lock"
+}
+
+# enter_lenovo: before the release first touches the Lenovo, exit 75 while
+# STATE/hold exists; then take the Lenovo's lock or find it this release's.
+enter_lenovo()
+{
+    grep -q '^touched ' "$state/record" || [ ! -e "$state/hold" ] ||
+        later "the Lenovo is held: $(sed -n 1p "$state/hold")"
+    take_lenovo
 }
 
 # unfailed MACHINE: print why MACHINE's last run in the record cannot start
@@ -1974,6 +1987,7 @@ close()
 main()
 {
     state=
+    lock=
     macrun=
     rerun=
     prepare=
@@ -2109,6 +2123,7 @@ main()
         windows
     fi
     if ! runs_failed && ! done_ accept; then
+        enter_lenovo
         preflight
     fi
     if ! runs_failed && ! done_ build; then
@@ -2123,6 +2138,7 @@ main()
         windows_wait
     fi
     ! runs_failed || tests_failed
+    enter_lenovo
     cd "$state/wt" || fail build "no worktree"
     chmod 600 krffs/rach2_demo_ed25519
 
@@ -2132,9 +2148,6 @@ main()
         case $now in
             recovery) ;;
             system*)
-                grep -q '^touched ' "$state/record" || [ ! -e "$state/hold" ] ||
-                    later "the Lenovo is held: $(sed -n 1p "$state/hold")"
-                grep -q '^touched ' "$state/record" || take_lenovo
                 ! grep -q '^install started ' "$state/record" ||
                     fail install "the machine runs $now after the installer was started, so a reboot came before the release saw its result; check the root by hand"
                 note "touched $(date -u '+%FT%TZ')"

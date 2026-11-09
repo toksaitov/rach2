@@ -89,13 +89,17 @@
 # runs on the Mac. `release N trial` does the same but sets Backlog, for a
 # step that boots code never run on the Lenovo, which waits there for the
 # manager's go and `ready N`. When RACH2_WORKER_STATE names the state
-# directory of the loop whose session releases N, and its `issue` file
-# holds N, `release` empties that file before it unassigns this account, so
-# that a loop of the same account that takes N at once is its only writer.
-# A step that fails exits 1 with N still
-# assigned to this account, so that its worker keeps it and can release it
-# again. A closed issue is set Done and nothing else is changed, since its
-# commit may have closed it before its worker hands it back.
+# directory of the loop that holds N, its `issue` file holding N, `release`
+# takes that loop's claim lock, as worker.sh's `claim` does, empties the
+# file and unassigns this account under it, so that a loop of the same
+# account that takes N afterwards is its only writer; the file gets N back
+# only when GitHub is read to show N still assigned to this account. A step
+# that fails exits 1 with N still assigned to this account, so that its
+# worker keeps it and can release it again; an unassignment that fails and
+# whose result cannot be read leaves the file empty, so that at worst N
+# waits for another release, never for two writers. A closed issue is set
+# Done and nothing else is changed, since its commit may have closed it
+# before its worker hands it back.
 #
 # `branch N` prints the branch that the description of N's milestone names,
 # and fails when N has no milestone or the milestone names no branch.
@@ -134,9 +138,11 @@
 # with no assignee, or one that no worker loop holds when HELD lists the
 # issues the loops hold, a card Done or closed whose state or Status
 # disagrees, and an open milestone whose cards are all closed while no other
-# open milestone with an open card names its branch, since the milestones of
-# a stack wait on one branch for the stack's release. status.sh runs it on
-# every check.
+# open milestone with an open card names its branch, which says that it
+# waits for its release: right at the end of a lone milestone or a stack,
+# and a fault at any other time. A milestone of a stack is not listed while
+# another of the stack has work open, since they release together. status.sh
+# runs it on every check.
 #
 # `archive [M]` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
@@ -562,21 +568,38 @@ release()
         echo "board: #$1: set $status, but cannot label it $label; release it again" >&2
         exit 1
     fi
-    if [ "$label" = owner-only ] && ! gh issue edit "$1" --repo "$REPO" --remove-label linux-host > /dev/null 2>&1 &&
-        gh issue view "$1" --repo "$REPO" --json labels --jq '.labels[].name' | grep -qx linux-host; then
-        echo "board: #$1: set $status, but cannot remove linux-host; release it again" >&2
-        exit 1
+    if [ "$label" = owner-only ] &&
+        ! gh issue edit "$1" --repo "$REPO" --remove-label linux-host > /dev/null 2>&1; then
+        if ! labels=$(gh issue view "$1" --repo "$REPO" --json labels --jq '.labels[].name') ||
+            printf '%s\n' "$labels" | grep -qx linux-host; then
+            echo "board: #$1: set $status, but cannot remove linux-host; release it again" >&2
+            exit 1
+        fi
     fi
-    claimed=
-    if [ -n "$RACH2_WORKER_STATE" ] && [ "$(cat "$RACH2_WORKER_STATE/issue" 2> /dev/null)" = "$1" ]; then
-        claimed=$RACH2_WORKER_STATE/issue
-        : > "$claimed"
-    fi
-    if ! unassign "$1" "$me"; then
-        [ -z "$claimed" ] || echo "$1" > "$claimed"
+    if [ -z "$RACH2_WORKER_STATE" ] || [ "$(cat "$RACH2_WORKER_STATE/issue" 2> /dev/null)" != "$1" ]; then
+        unassign "$1" "$me" && return 0
         echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
         exit 1
     fi
+    lock=$(cd "$(cat "$RACH2_WORKER_STATE/repo")" && cd "$(git rev-parse --git-common-dir)/.." &&
+        pwd)/build/flow/claim.lock || {
+        echo "board: #$1: set $status, but cannot find the claim lock; release it again" >&2
+        exit 1
+    }
+    {
+        perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX) or
+            die "board: claim lock: $!\n"' || exit 1
+        : > "$RACH2_WORKER_STATE/issue"
+        unassign "$1" "$me" && return 0
+        who=$(gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login') || {
+            echo "board: #$1: set $status, but cannot tell whether $me is unassigned; release it again" >&2
+            exit 1
+        }
+        printf '%s\n' "$who" | grep -qx "$me" || return 0
+        echo "$1" > "$RACH2_WORKER_STATE/issue"
+        echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
+        exit 1
+    } 9>> "$lock"
 }
 
 branch()
@@ -716,7 +739,7 @@ check()
         END {
             for (m in cards)
                 if (!open[m] && !shared[branch[m]])
-                    print "board: milestone " m " is open but all its tasks are closed"
+                    print "board: milestone " m " has all its tasks closed and waits for its release"
         }'
     printf '%s\n' "$board" | awk -F '\t' '$4 == "OPEN" && $8 == "" && $11 != "" { print $3 " " $11 }' |
         while read -r n b; do
@@ -934,8 +957,9 @@ case "$1" in
     milestones) milestones ;;
     watch) watch "$2" ;;
     move)
-        case $2$3 in ''|*[!0-9]*) exit 2 ;; esac
-        [ -z "$4" ] || exit 2
+        [ $# -eq 2 ] || [ $# -eq 3 ] || exit 2
+        case $2 in ''|*[!0-9]*) exit 2 ;; esac
+        [ $# -eq 2 ] || case $3 in ''|*[!0-9]*) exit 2 ;; esac
         board_ids=$(ids); move "$2" "$3" ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
 esac
