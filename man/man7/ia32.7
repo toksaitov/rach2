@@ -61,7 +61,7 @@ A call interrupted by a signal is restarted by executing the
 again, as on i686.
 .Pp
 The table has a row for each of Linux 6.12's i386 numbers, 452 of them.
-212 rows run the x86-64 handler of a call whose arguments and structures
+213 rows run the x86-64 handler of a call whose arguments and structures
 have one layout in both interfaces, such as
 .Xr getpid 2 ,
 .Xr kill 2
@@ -75,7 +75,7 @@ to 4 bytes,
 .Xr recvmmsg 2
 timeout and time-limit options are the i386 ones
 .Pq Xr send 2 , Xr recv 2 , Xr setsockopt 2 ;
-89 run a compat handler, which turns the i386 structures and the 64-bit
+90 run a compat handler, which turns the i386 structures and the 64-bit
 arguments i386 splits over two registers, low word first, into the x86-64
 handler's and its results back, as Linux's compat calls do, or, for
 .Xr execve 2 ,
@@ -86,7 +86,7 @@ the old
 and
 .Fn mmap2 ,
 does the i386 call's own work;
-62 run a compat handler that returns
+60 run a compat handler that returns
 .Er ENOSYS
 until its translation is written; 89 are empty, where Linux has no call
 or this kernel has no handler, and return
