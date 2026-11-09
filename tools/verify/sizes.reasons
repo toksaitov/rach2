@@ -77,7 +77,7 @@ rach2/sys/display/vga_gfx.c:vga_set_mode params 9 the parameters are the fields 
 
 rach2/sys/drm/drm_atomic.c:check_modeset complexity 32 Linux's drm_atomic_helper_check_modeset, its steps in Linux's order so the two read side by side
 
-rach2/sys/drm/drm_edid.c:cvt_mode params 7 Linux's drm_cvt_mode, with its parameters, so the two read side by side
+rach2/sys/drm/drm_edid.c:drm_cvt_mode params 7 Linux's drm_cvt_mode, with its parameters, so the two read side by side
 rach2/sys/drm/drm_edid.c:gtf_mode_complex params 10 Linux's drm_gtf_mode_complex, with the formula's parameters as Linux passes them
 rach2/sys/drm/drm_edid.c:mode_std complexity 28 Linux's drm_mode_std, one rule of the EDID standard timing each branch, in Linux's order
 

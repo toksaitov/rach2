@@ -760,8 +760,8 @@ static int timing_level(struct edid_parse *p)
  * Linux's drm_cvt_mode, with its integer arithmetic: with reduced blanking,
  * interlace or margins as asked. 0 for a size of 0.
  */
-static int cvt_mode(int hdisplay, int vdisplay, int vrefresh, int reduced, int interlaced,
-                    int margins, struct drm_mode_modeinfo *m)
+int drm_cvt_mode(int hdisplay, int vdisplay, int vrefresh, int reduced, int interlaced, int margins,
+                 struct drm_mode_modeinfo *m)
 {
     unsigned int vfieldrate, hperiod;
     int hdisplay_rnd, hmargin, vdisplay_rnd, vmargin, vsync, interlace, tmp1, tmp2;
@@ -1204,7 +1204,7 @@ static void do_cvt(struct edid_parse *p, const uint8_t *d, void *closure)
         /* Linux's loop starts at bit 1, so it never asks for the reduced
          * blanking that bit 0 offers. */
         for (j = 1; j < 5; j++) {
-            if ((code[2] & (1 << j)) && cvt_mode(width, height, rates[j], 0, 0, 0, &m)) {
+            if ((code[2] & (1 << j)) && drm_cvt_mode(width, height, rates[j], 0, 0, 0, &m)) {
                 parse_add(p, &m);
             }
         }
@@ -1246,7 +1246,7 @@ static int mode_std(struct edid_parse *p, uint8_t hbyte, uint8_t vbyte, struct d
         }
     }
     if (hsize == 1366 && vsize == 768 && refresh == 60) {
-        if (!cvt_mode(1366, 768, refresh, 0, 0, 0, m)) {
+        if (!drm_cvt_mode(1366, 768, refresh, 0, 0, 0, m)) {
             return 0;
         }
         m->hdisplay = 1366;
@@ -1264,7 +1264,7 @@ static int mode_std(struct edid_parse *p, uint8_t hbyte, uint8_t vbyte, struct d
     case LEVEL_GTF2:
         return gtf2_mode(p, hsize, vsize, refresh, m);
     case LEVEL_CVT:
-        return cvt_mode(hsize, vsize, refresh, 0, 0, 0, m);
+        return drm_cvt_mode(hsize, vsize, refresh, 0, 0, 0, m);
     default:
         return 0;
     }
@@ -1533,7 +1533,7 @@ static void do_inferred(struct edid_parse *p, const uint8_t *t, void *closure)
     }
     for (i = 0; i < NELEM(extra_modes); i++) {
         if (t[10] == RANGE_CVT) {
-            ok = cvt_mode(extra_modes[i].w, extra_modes[i].h, extra_modes[i].r, rb, 0, 0, &m);
+            ok = drm_cvt_mode(extra_modes[i].w, extra_modes[i].h, extra_modes[i].r, rb, 0, 0, &m);
         } else if (t[10] == RANGE_SECONDARY_GTF) {
             ok = gtf2_mode(p, extra_modes[i].w, extra_modes[i].h, extra_modes[i].r, &m);
         } else {
