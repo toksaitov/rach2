@@ -10,7 +10,8 @@
  * requires given back with the time left, and on i386 again through
  * recvmmsg_time64. A sixth asks an AF_UNIX pair and a UDP socket on the
 loopback for timestamps, SO_TIMESTAMP and SO_TIMESTAMPNS, old and new, and
-requires each control message in the probe's own layout. It exits 0 when
+requires each control message in the probe's own layout, and SIOCGSTAMP and
+SIOCGSTAMPNS, old and new, answered with the last datagram's time. It exits 0 when
 the six tests pass and 1 otherwise.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
@@ -66,6 +67,13 @@ struct cmsghdr {
 #define SO_TIMESTAMPNS_OLD 35
 #define SO_TIMESTAMP_NEW   63
 #define SO_TIMESTAMPNS_NEW 64
+
+#define SIOCGSTAMP_OLD   0x8906ul
+#define SIOCGSTAMPNS_OLD 0x8907ul
+#define SIOCGSTAMP_NEW   0x80108906ul
+#define SIOCGSTAMPNS_NEW 0x80108907ul
+#define ENOENT           2
+#define ENOTTY           25
 
 /** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -477,11 +485,36 @@ static int stamp_one(int tx, int rx, int name, unsigned long *to, unsigned long 
 }
 
 /**
+ * Require SIOCGSTAMP and SIOCGSTAMPNS, old and new, of `fd` answered as
+ * Linux answers them after a receive: the time more than 0 seconds with its
+ * fraction in range, as the caller's two longs for an old request and two
+ * 64-bit words for a new one, each request's seconds the same. 1 when it was.
+ */
+static int got_ioctl_stamps(int fd)
+{
+    long t[2], ns[2];
+    unsigned int w[4], wns[4];
+
+    if (syscall3(SYS_IOCTL, fd, (long)SIOCGSTAMP_OLD, (long)t) != 0 ||
+        syscall3(SYS_IOCTL, fd, (long)SIOCGSTAMPNS_OLD, (long)ns) != 0 ||
+        syscall3(SYS_IOCTL, fd, (long)SIOCGSTAMP_NEW, (long)w) != 0 ||
+        syscall3(SYS_IOCTL, fd, (long)SIOCGSTAMPNS_NEW, (long)wns) != 0) {
+        return 0;
+    }
+    return t[0] > 0 && t[1] >= 0 && t[1] < 1000000L && ns[0] == t[0] && ns[1] >= 0 &&
+           ns[1] < 1000000000L && w[0] == (unsigned int)t[0] && w[1] < 0x80000000u &&
+           w[2] < 1000000u && w[3] == 0 && wns[0] == w[0] && wns[1] == w[1] &&
+           wns[2] < 1000000000u && wns[3] == 0;
+}
+
+/**
  * Test 6: each of SO_TIMESTAMP and SO_TIMESTAMPNS, old and new, turned on
  * alone, reads back 1 while the others read 0, and has a datagram given
  * with its control message alone, in the probe's layout: on an AF_UNIX pair
  * and on a UDP socket that sends to itself on the loopback. Turning one off
- * turns all off.
+ * turns all off. SIOCGSTAMP fails with ENOENT on the UDP socket before its
+ * first receive and answers after it (`got_ioctl_stamps`); an AF_UNIX
+ * socket does not answer it, ENOTTY, as on Linux.
  */
 static int timestamps(void)
 {
@@ -505,7 +538,8 @@ static int timestamps(void)
             return verdict(0, 1 + i);
         }
     }
-    if (!opt_set(sv[1], SO_TIMESTAMP_OLD, 0) || opt_get(sv[1], SO_TIMESTAMPNS_NEW) != 0) {
+    if (!opt_set(sv[1], SO_TIMESTAMP_OLD, 0) || opt_get(sv[1], SO_TIMESTAMPNS_NEW) != 0 ||
+        syscall3(SYS_IOCTL, sv[1], (long)SIOCGSTAMP_OLD, (long)sa) != -ENOTTY) {
         return verdict(0, 5);
     }
     sys_close(sv[0]);
@@ -517,7 +551,8 @@ static int timestamps(void)
     args[0] = (unsigned long)u;
     args[1] = (unsigned long)sa;
     args[2] = 16;
-    if (u < 0 || socketcall(SC_BIND, args) != 0) {
+    if (u < 0 || syscall3(SYS_IOCTL, u, (long)SIOCGSTAMP_OLD, (long)sa) != -ENOENT ||
+        socketcall(SC_BIND, args) != 0) {
         return verdict(0, 6);
     }
     args[2] = (unsigned long)&salen;
@@ -528,6 +563,9 @@ static int timestamps(void)
         if (!stamp_one(u, u, names[i], sa, 16)) {
             return verdict(0, 8 + i);
         }
+    }
+    if (!got_ioctl_stamps(u)) {
+        return verdict(0, 12);
     }
     sys_close(u);
     return verdict(1, -1);

@@ -348,7 +348,7 @@
     },
     {
       "case_id": "guest.default.wow64probe",
-      "behavior": "On x86-64 a 64-bit process runs 32-bit code in the GDT's 32-bit code segment and makes i386 calls by int $0x80 through the compat table, with set_thread_area's TLS entries, signals taken in 32-bit code by 64-bit and by i386 handlers, seccomp and ptrace judging each call's architecture, futex_waitv through the compat table, and MAP_32BIT and hints below 4 GiB placing memory a 32-bit pointer reaches.",
+      "behavior": "On x86-64 a 64-bit process runs 32-bit code in the GDT's 32-bit code segment and makes i386 calls by int $0x80 through the compat table, with set_thread_area's TLS entries, signals taken in 32-bit code by 64-bit and by i386 handlers, seccomp and ptrace judging each call's architecture, futex_waitv and the SIOCGSTAMP ioctls through the compat table, and MAP_32BIT and hints below 4 GiB placing memory a 32-bit pointer reaches.",
       "units": ["default", "wow64probe"],
       "domain": "guest",
       "architectures": ["x86_64"],
@@ -376,7 +376,8 @@
         {"assertion_id": "map32bit", "checks": "an mmap of two pages with MAP_32BIT is placed from 1 GiB to 2 GiB and keeps its bytes", "source": "program"},
         {"assertion_id": "map32bit-hint", "checks": "MAP_32BIT with the hint 0x90000000 is still placed from 1 GiB to 2 GiB, and with the free hint 0x31000000 is placed there", "source": "program"},
         {"assertion_id": "low-hint", "checks": "an mmap without MAP_32BIT takes the free hint 0xC0000000, below 4 GiB", "source": "program"},
-        {"assertion_id": "futexv-int80", "checks": "futex_waitv, i386 number 449, by int $0x80 fails with EAGAIN for a word that differs and ETIMEDOUT at a passed deadline on CLOCK_MONOTONIC, and a child's FUTEX_WAKE of the third of three words in a shared MAP_32BIT page ends it with index 2", "source": "program"}
+        {"assertion_id": "futexv-int80", "checks": "futex_waitv, i386 number 449, by int $0x80 fails with EAGAIN for a word that differs and ETIMEDOUT at a passed deadline on CLOCK_MONOTONIC, and a child's FUTEX_WAKE of the third of three words in a shared MAP_32BIT page ends it with index 2", "source": "program"},
+        {"assertion_id": "sockstamp-int80", "checks": "the i386 ioctl, number 54, by int $0x80 on a UDP socket fails with ENOENT for SIOCGSTAMP before its first receive, and after it receives a datagram from itself on the loopback gives SIOCGSTAMP and SIOCGSTAMPNS in two 32-bit words, an old_timeval32 and old_timespec32, of the seconds the native SIOCGSTAMP_NEW gives, with the fraction in range and the next 8 bytes untouched", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -1346,7 +1347,7 @@
         {"assertion_id": "fork-share", "checks": "A forked child closes a shared socket and exits 0, the socket is still counted, and the parent's close returns the count to the start.", "source": "program"},
         {"assertion_id": "exit-release", "checks": "Each of 30 children that make a socket and exit without closing it exits 0, and the count is back at the start after each reap.", "source": "program"},
         {"assertion_id": "recvmmsg-timeout", "checks": "One recvmmsg with a 5 s timeout takes the two datagrams queued on an AF_UNIX pair with their counts and gives back the time left, more than 0 and at most 5 s; a timeout of 10^9 ns fails with EINVAL; on i686 recvmmsg_time64 does the same with the high word of its nanoseconds ignored and given back 0.", "source": "program"},
-        {"assertion_id": "timestamps", "checks": "Each of SO_TIMESTAMP and SO_TIMESTAMPNS, old and new, turned on alone reads back 1 while the others read 0, and a datagram on an AF_UNIX pair and on a UDP socket sending to itself on the loopback comes with that timestamp alone, of its option's type, in the caller's layout, more than 0 seconds with its fraction in range; turning one off turns all off.", "source": "program"}
+        {"assertion_id": "timestamps", "checks": "Each of SO_TIMESTAMP and SO_TIMESTAMPNS, old and new, turned on alone reads back 1 while the others read 0, and a datagram on an AF_UNIX pair and on a UDP socket sending to itself on the loopback comes with that timestamp alone, of its option's type, in the caller's layout, more than 0 seconds with its fraction in range; turning one off turns all off. SIOCGSTAMP fails with ENOENT on the UDP socket before its first receive and ENOTTY on the AF_UNIX one, and after the receives SIOCGSTAMP and SIOCGSTAMPNS, old and new, give one time, more than 0 seconds with its fraction in range, in the caller's layout.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
