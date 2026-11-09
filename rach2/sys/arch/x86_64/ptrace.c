@@ -423,12 +423,12 @@ static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 /** An i386 tracer's PTRACE_PEEKUSER: the 4-byte word at byte `off` of
  * `struct user32`, a register or a debug register, and 0 for its other
  * fields, as Linux's `getreg32`. -EIO for an offset not aligned to 4 or
- * past the structure's end, which Linux reads as 0. */
+ * outside the structure. */
 static int user32_peek(const process_t *t, unsigned long off, uint32_t *out)
 {
     uint32_t r[R32_COUNT];
 
-    if ((off & 3u) != 0 || off > USER32_SIZE) {
+    if ((off & 3u) != 0 || off >= USER32_SIZE) {
         return -EIO;
     }
     *out = 0;
@@ -446,7 +446,7 @@ static int user32_peek(const process_t *t, unsigned long off, uint32_t *out)
  * Linux's `putreg32` does. -EIO as `user32_peek`, or from the register. */
 static int user32_poke(process_t *t, unsigned long off, uint32_t v)
 {
-    if ((off & 3u) != 0 || off > USER32_SIZE) {
+    if ((off & 3u) != 0 || off >= USER32_SIZE) {
         return -EIO;
     }
     if (off < R32_COUNT * 4u) {
