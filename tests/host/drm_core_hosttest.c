@@ -480,6 +480,13 @@ void drm_mode_file_release(struct drm_file *file)
     (void)file;
 }
 
+/** drm_syncobj.c's release of a file's sync objects: the model's files make
+ * none. */
+void drm_syncobj_release(struct drm_file *file)
+{
+    (void)file;
+}
+
 /* ---- the fake driver ---- */
 
 struct fake_echo {

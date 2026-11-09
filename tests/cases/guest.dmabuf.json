@@ -308,7 +308,7 @@
       "timing": [
         {
           "kind": "injected_delay",
-          "where": "tests/fenceprobe.c:292",
+          "where": "tests/fenceprobe.c:294",
           "assumes": "a producer sleeps a fifth of a second after its go as the stimulus, so that the consumer is asleep on the fence; the probe judges only the fence states and the bytes that follow, never elapsed time",
           "uncertainty_us": null
         }

@@ -152,12 +152,14 @@ static long advance(int tl)
     return syscall3(SYS_IOCTL, tl, SW_SYNC_IOC_INC, (long)&step);
 }
 
+/* The rows FILE_INFO writes when status() asks for them. */
+static struct sync_fence_info row[PRODUCERS];
+
 /** A sync file's status and count of leaves, with rows asked for when
  * `rows` is set. */
 static int status(int fd, int rows, uint32_t *count)
 {
     struct sync_file_info info;
-    struct sync_fence_info row[PRODUCERS];
     unsigned char *p = (unsigned char *)&info;
     unsigned i;
     for (i = 0; i < sizeof(info); i++)
@@ -295,11 +297,17 @@ static void produce(int go, unsigned char *p, unsigned n, unsigned char v, int t
     child_exit((how & FAIL) || advance(tl) == 0);
 }
 
+/** pipe(2) into `ends`: 0, or a negative errno. */
+static long make_pipe(int *ends)
+{
+    return syscall1(SYS_PIPE, (long)ends);
+}
+
 /** A pipe whose read end the producers wait on; the write end is `*go`. */
 static int go_pipe(int *go)
 {
     int ends[2];
-    check(syscall1(SYS_PIPE, (long)ends) == 0, "pipe");
+    check(make_pipe(ends) == 0, "pipe");
     keep(ends[0]);
     *go = keep(ends[1]);
     return ends[0];
@@ -308,7 +316,7 @@ static int go_pipe(int *go)
 /** Release `n` producers waiting on the pipe. */
 static void release(int go, int n)
 {
-    char bytes[PRODUCERS] = {1, 1, 1, 1, 1, 1, 1, 1};
+    const char bytes[PRODUCERS] = {1, 1, 1, 1, 1, 1, 1, 1};
     check(syscall3(SYS_WRITE, go, (long)bytes, n) == n, "release producers");
 }
 
@@ -430,6 +438,18 @@ static int find_node(uint64_t cap, uint64_t bits)
     return -1;
 }
 
+/** The point the timeline syncobj `*handle` has reached, into `*reached`:
+ * 0, or a negative errno. */
+static long query_point(int dev, uint32_t *handle, uint64_t *reached)
+{
+    struct drm_syncobj_timeline_array q;
+    q.handles = (uintptr_t)handle;
+    q.points = (uintptr_t)reached;
+    q.count_handles = 1;
+    q.flags = 0;
+    return syscall3(SYS_IOCTL, dev, DRM_IOCTL_SYNCOBJ_QUERY, (long)&q);
+}
+
 /** A syncobj handle on `dev`. */
 static uint32_t syncobj(int dev)
 {
@@ -528,7 +548,6 @@ static void syncobj_rows(int dev, int timelines)
     check(status(fd, 0, 0) == 1 && holds(b.map, SIZE, 0x77), "syncobj fence, then buffer");
     if (timelines) {
         struct drm_syncobj_timeline_wait w;
-        struct drm_syncobj_timeline_array q;
         uint64_t pt = 1, reached = 0;
         unsigned char *p = (unsigned char *)&w;
         unsigned j;
@@ -540,12 +559,7 @@ static void syncobj_rows(int dev, int timelines)
         w.timeout_nsec = 0x7fffffffffffffffll;
         check(syscall3(SYS_IOCTL, dev, DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, (long)&w) == 0,
               "timeline point wait");
-        q.handles = (uintptr_t)&tlh;
-        q.points = (uintptr_t)&reached;
-        q.count_handles = 1;
-        q.flags = 0;
-        check(syscall3(SYS_IOCTL, dev, DRM_IOCTL_SYNCOBJ_QUERY, (long)&q) == 0 && reached == 1,
-              "timeline reached point 1");
+        check(query_point(dev, &tlh, &reached) == 0 && reached == 1, "timeline reached point 1");
     }
     reap("the syncobj's producer exits");
     report_held();
