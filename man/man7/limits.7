@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 10, 2026
 .Dt LIMITS 7
 .Os
 .Sh NAME
@@ -144,6 +144,11 @@ only at the descriptor limit.
 These allocations are outside the resource-limit table.
 Other fixed capacities are the loopback ring, 64 frames;
 the USB device table, sixteen records; and the disk registry, eight records.
+A KVM virtual machine,
+.Xr kvm 4 ,
+has at most 64 vCPUs, with ids below 256, and 256 memory slots;
+a vCPU takes at most 256 CPUID entries, and fewer than 256 MSRs in one
+call.
 .Sh FILES
 .Bl -tag -width /etc/rach2/limits
 .It Pa /etc/rach2/limits
@@ -159,5 +164,6 @@ by name.
 .Sh SEE ALSO
 .Xr sh 1 ,
 .Xr prlimit64 2 ,
+.Xr kvm 4 ,
 .Xr core 5 ,
 .Xr memory 7
