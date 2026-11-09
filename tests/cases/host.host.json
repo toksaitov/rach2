@@ -1181,6 +1181,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "virtio_gpu",
+          "checks": "tests/host/virtio_gpu_hosttest.c binds the virtio GPU driver to a model of QEMU's device and checks the commands and their fences, the EDID and DMT modes, the scanout, damage, scattered backing, a full queue, error and missing answers, the cursor, a display change, the driver's ioctls, a buffer's release and the unplug under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "virtio_gpu64",
+          "checks": "tests/host/virtio_gpu64_hosttest.c runs the virtio GPU rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtqueue",
           "checks": "tests/host/virtqueue_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
