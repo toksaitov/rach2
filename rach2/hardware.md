@@ -74,10 +74,12 @@ Every keyboard feeds one input layer, with one US English keymap, and is an even
 
 * The VGA's text mode, 80 by 25 cells at 0xB8000, with the kernel's font loaded into the adapter's character memory.
 * The VGA's mode 13h, 320 by 200 with a palette of 256 colors, which a program opens as `/fb`.
-* A linear framebuffer the loader left, as GRUB does under UEFI: direct color of 8 to 32 bits a pixel or 8-bit indexed color, at least 640 by 384 pixels and below 4 GiB. The console draws its cells on it, and `/fb`'s picture is scaled onto it.
+* A linear framebuffer the loader left, as GRUB does under UEFI: direct color of 8 to 32 bits a pixel or 8-bit indexed color, at least 640 by 384 pixels and below 4 GiB. The console draws its cells on it, and `/fb`'s picture is scaled onto it. In one of simpledrm's layouts it is the DRM device `simpledrm` ([fbdrm(4)](../man/man4/fbdrm.4)) when no native driver takes the screen, as with `nomodeset`; Weston draws on it with Pixman, its output `Unknown-1`.
+* QEMU's standard VGA, 1234:1111, as the DRM device `bochs-drm` ([bochs(4)](../man/man4/bochs.4)): its modes from its EDID, one plane and no rendering. Weston draws on it with Pixman, its output `Virtual-1`.
+* QEMU's virtio-gpu, 1af4:1050, as `virtio-vga` or `virtio-gpu-pci`, as the DRM device `virtio_gpu` ([virtio-gpu(4)](../man/man4/virtio-gpu.4)), with a render node: its scanouts' modes from their EDID, and 3D through virgl or Venus when the host gives them. Without them Mesa renders on the processor with llvmpipe, and Weston uses GL on the render node, its output `Virtual-1`.
 * Intel Haswell GT2 graphics, the HD 4400 (8086:0A16) among the twenty ids Linux 6.12 gives Haswell GT2, at 00:02.0: bound under `rach2.i915` as the DRM device `i915`, with its interrupts masked, forcewake, the display power well, stolen memory and the global GTT up, the firmware's framebuffer's GTT entries kept, and its MSI message on ([i915(4)](../man/man4/i915.4)). Its stolen memory is kept from the frame allocator at every boot, bound or not. It adopts the panel's picture the firmware lit on pipe A, without a mode set, and drives its planes, cursor, page flips, vblanks, pipe CRC and backlight; it renders nothing and sets no mode of its own yet.
 
-There is no driver for a graphics card's own modes or acceleration. [Display](sys/display/Readme.md) and [console(4)](../man/man4/console.4) describe the screen.
+The console is a client of the first card; a DRM master such as Weston takes the screen and the keyboard from it, and it takes them back when the master ends. On the GNU root Weston starts on the card at boot ([desktop(7)](../man/man7/desktop.7)). Rach2 runs no graphics processor's own rendering engine. [Display](sys/display/Readme.md) and [console(4)](../man/man4/console.4) describe the screen.
 
 ## Audio
 
@@ -129,6 +131,7 @@ There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RT
 | VT-d | `-machine q35 -device intel-iommu,intremap=on` | VT-d | none; checked by hand, as [VT-d](sys/arch/x86/iommu/Readme.md#tests) records |
 | Network cards | `rtl8139`, `e1000` | RTL8139, e1000 | `socket`, `e1000` |
 | A card of another model | `e1000e` | refused | `e1000` |
+| Display | `VGA`, `virtio-vga`, `virtio-gpu-pci`, each with `edid=on,xres=1280,yres=800` | bochs-drm, virtio-gpu, fbdrm | `graphics`, `desktop` |
 | Sound | `intel-hda` with `hda-output` on the `wav` backend, which records the output, or with `hda-duplex` on `none` or `sdl`, which give an input, silence or a file; `sb16` | HDA, SB16 | `audio` |
 
 ## The Lenovo G50-70

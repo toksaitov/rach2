@@ -1,10 +1,11 @@
 #!/bin/bash
 # Start the desktop's device services and its ordinary user's session.
 set -eu
-udev='' seat='' session=''
+udev='' seat='' session='' restart=0
 cleanup()
 {
     trap - EXIT HUP INT TERM
+    rm -f /run/rach2-desktop.pid
     for child in "$session" "$seat" "$udev"; do
         [ -z "$child" ] || kill -TERM "-$child" 2>/dev/null || :
     done
@@ -13,12 +14,13 @@ cleanup()
     done
 }
 trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
+trap 'exit 1' INT TERM
+trap 'restart=1' HUP
 mkdir -p /run/udev /run/user
 install -d -m 0700 -o desktop -g desktop /run/user/1001
 # The X servers' socket directories, which Debian's tmpfiles.d/x11.conf makes.
 install -d -m 1777 /tmp/.X11-unix /tmp/.ICE-unix
-setsid /usr/lib/systemd/systemd-udevd --resolve-names=never &
+setsid /usr/lib/systemd/systemd-udevd --resolve-names=early &
 udev=$!
 until udevadm control --ping 2>/dev/null; do
     kill -0 "$udev"
@@ -32,7 +34,41 @@ while [ ! -S /run/seatd.sock ]; do
     kill -0 "$seat"
     sleep 1
 done
-setsid su -s /bin/bash desktop -c 'exec /usr/libexec/rach2-session' &
-session=$!
-# Any child ending restarts the whole service under init's supervision.
-wait -n "$udev" "$seat" "$session"
+echo $$ > /run/rach2-desktop.pid
+# The session leads a process group of its own, which a restart ends whole.
+start_session()
+{
+    setsid su -s /bin/bash desktop -c 'exec /usr/libexec/rach2-session' &
+    session=$!
+    echo "rach2-desktop: session: started as $session"
+}
+start_session
+while :; do
+    ended=''
+    [ "$restart" = 1 ] || wait -n -p ended "$udev" "$seat" ${session:+"$session"} || :
+    if [ "$restart" = 1 ]; then
+        restart=0
+        if [ -n "$session" ] && [ "$ended" != "$session" ]; then
+            kill -TERM "-$session" 2>/dev/null || :
+            wait "$session" 2>/dev/null || :
+        fi
+        start_session
+        continue
+    fi
+    case $ended in
+    '')
+        ;;
+    "$session")
+        # Weston's end, by quitting or a signal, leaves the screen to the
+        # console until SIGHUP starts the session again.
+        session=''
+        echo "rach2-desktop: session: ended; SIGHUP starts it again"
+        ;;
+    *)
+        # A device service ending restarts the whole service under init.
+        if [ "$ended" = "$udev" ]; then udev=''; else seat=''; fi
+        echo "rach2-desktop: device service $ended ended" >&2
+        exit 1
+        ;;
+    esac
+done
