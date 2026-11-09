@@ -338,7 +338,9 @@ static int dfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         (*cursor)++;
         return 1;
     }
-    for (c = d->children, i = 2; c && i < *cursor; c = c->next, i++) {
+    i = 2;
+    for (c = d->children; c && i < *cursor; c = c->next) {
+        i++;
     }
     if (!c) {
         return 0;
