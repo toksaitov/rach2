@@ -1051,6 +1051,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vtd",
+          "checks": "tests/host/vtd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "wait_queue",
           "checks": "tests/host/wait_queue_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
