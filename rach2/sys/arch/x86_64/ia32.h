@@ -229,6 +229,14 @@ long ia32_native(const isr_params_t *params, syscall_fn_t fn, void *win, uint32_
 int ia32_get_timespec(uintptr_t u, long ts[2]);
 int ia32_get_timespec64(uintptr_t u, long ts[2]);
 
+/** Run the native ioctl `cmd` on `fd` with its argument in the `len` bytes
+ * of kernel memory at `buf`, a structure a translation built, which the
+ * thread's user-copy window covers for the call, so that the native code
+ * copies from and to it as from a user's (`user_window_open`); a pointer
+ * inside the structure is the caller's and is checked as one. Returns what
+ * the request returns (ia32_ioctl.c). */
+long ia32_ioctl_native(unsigned int fd, unsigned int cmd, void *buf, uint32_t len);
+
 /** The ioctl translations of the DRM core and of the GPU drivers, for the
  * compat ioctl path: each answers the call `cmd` on `fd` with `arg`, or
  * -ENOTTY where it has no translation (ia32_ioctl_drm.c, ia32_ioctl_gpu.c). */
