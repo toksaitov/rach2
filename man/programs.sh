@@ -437,7 +437,7 @@ BEGIN {
     }
     close("vendor/gnu/debian/commands")
     print ""
-    print "GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos'"'"'s WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt). IGT'"'"'s tests, built from Debian'"'"'s intel-gpu-tools source in the Debian builder guest, are under `/usr/libexec/igt-gpu-tools` on x86-64, with its runner `igt_runner` ([igt_runner(1)](man1/igt_runner.1)), `igt_resume` and `igt_results` ([igt_resume(1)](man1/igt_resume.1)) and `igt_comms_decoder` in `/usr/bin`; the source is pinned in [igt/sources.txt](../vendor/gnu/igt/sources.txt)."
+    print "GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos'"'"'s WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt). IGT'"'"'s tests, built from Debian'"'"'s intel-gpu-tools source in the Debian builder guest, are under `/usr/libexec/igt-gpu-tools` on x86-64, with its runner `igt_runner` ([igt_runner(1)](man1/igt_runner.1)), `igt_resume` and `igt_results` ([igt_resume(1)](man1/igt_resume.1)) and `igt_comms_decoder` in `/usr/bin`; the source is pinned in [igt/sources.txt](../vendor/gnu/igt/sources.txt). VK-GL-CTS 1.4.1.1 and 1.4.7.1, built in the same guest, are under `/opt/vk-gl-cts-VERSION` on x86-64, with `deqp-vk` and `glcts` ([deqp-vk(1)](man1/deqp-vk.1)); their sources are pinned in [vk-gl-cts/sources.txt](../vendor/gnu/vk-gl-cts/sources.txt)."
     print ""
     print "### Compilers, debugger and browser"
     print ""
