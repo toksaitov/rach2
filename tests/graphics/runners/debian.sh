@@ -23,7 +23,9 @@
 # the clips of DIR of `clips`, by default build/cache/graphics-clips of the
 # main clone; igt the IGT stage of this tree, which it builds with `make
 # ARCH=x86_64 gnu-igt` when it is missing, unpacked over the guest's /usr,
-# with intel-gpu-tools installed for the libraries it links; modetest
+# with intel-gpu-tools installed for the libraries it links and Linux's
+# sw_sync loaded by ../debian-ref/sw_sync.sh, which Debian's kernel lacks;
+# modetest
 # drmcapture, built there from its source; piglit piglit, installed from the
 # snapshot. igt and modetest run their runner as root, with vkms loaded in
 # the profile `none`, and the others as the guest's user.
@@ -108,8 +110,9 @@ run()
             [ -x "$stage/usr/bin/igt_runner" ] || make -s -C "$tree" ARCH=x86_64 gnu-igt ||
                 die "the IGT stage could not be built"
             tar -czf "$work/igt.tar.gz" -C "$stage" usr
-            ins="$ins -i $work/igt.tar.gz"
+            ins="$ins -i $work/igt.tar.gz -i $tree/tests/graphics/debian-ref/sw_sync.sh"
             prep="$prep && sudo tar -xzf igt.tar.gz -C / && rm igt.tar.gz && $(install intel-gpu-tools libjson-c5)"
+            prep="$prep && sudo sh sw_sync.sh"
             as='sudo -E'
             ;;
         modetest)
