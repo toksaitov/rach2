@@ -63,6 +63,10 @@ struct drm_aperture {
 
 static struct drm_aperture apertures[DRM_APERTURE_MAX];
 
+/* Set once a native driver has removed the firmware devices: no firmware
+ * device binds after, as Linux's sysfb_disable. */
+static int aperture_native;
+
 void drm_start(void)
 {
     int32_t n;
@@ -793,6 +797,9 @@ int32_t drm_aperture_acquire_firmware(struct drm_device *dev, uint64_t base, uin
 {
     int i, free = -1;
 
+    if (aperture_native) {
+        return -EBUSY;
+    }
     for (i = 0; i < DRM_APERTURE_MAX; i++) {
         if (!apertures[i].dev) {
             if (free < 0) {
@@ -813,10 +820,22 @@ int32_t drm_aperture_acquire_firmware(struct drm_device *dev, uint64_t base, uin
     return 0;
 }
 
+void drm_aperture_release_firmware(struct drm_device *dev)
+{
+    int i;
+
+    for (i = 0; i < DRM_APERTURE_MAX; i++) {
+        if (apertures[i].dev == dev) {
+            apertures[i].dev = NULL;
+        }
+    }
+}
+
 int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char *name)
 {
     int i;
 
+    aperture_native = 1;
     for (i = 0; i < DRM_APERTURE_MAX; i++) {
         struct drm_aperture a = apertures[i];
 

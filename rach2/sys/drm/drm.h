@@ -1434,15 +1434,22 @@ void drm_master_open(struct drm_file *file);
  * when that registers. The native driver
  * registers after the removal, so the card the console and programs find
  * is the native one. bochs, virtio-vga and i915 do this; fbdrm, on a
- * machine with none of them, keeps the screen.
+ * machine with none of them, keeps the screen. The native drivers probe
+ * first at boot (`drm_start`), and a removal closes the table to firmware
+ * devices, so fbdrm does not bind behind a native driver either.
  */
 #define DRM_APERTURE_MAX 4
 
 /** Record that `dev` drives the firmware framebuffer at physical `base`,
  * `size` bytes, and is removed through `remove`. 0, or -EBUSY when
- * another firmware device has the range or the table is full. */
+ * another firmware device has the range, the table is full, or a native
+ * driver has already removed the firmware devices, after which none binds,
+ * as Linux's sysfb_disable. */
 int32_t drm_aperture_acquire_firmware(struct drm_device *dev, uint64_t base, uint64_t size,
                                       void (*remove)(struct drm_device *dev));
+/** Forget the ranges `dev` acquired, for a firmware driver whose bind
+ * failed after it acquired them; the removal hook is not called. */
+void drm_aperture_release_firmware(struct drm_device *dev);
 /** Remove every firmware device whose range overlaps [base, base + size),
  * for the native driver `name`, which the log names. 0. */
 int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char *name);
