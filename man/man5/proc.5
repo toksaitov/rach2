@@ -1731,9 +1731,17 @@ Anonymous, Swap, SwapPss and Locked, and a VmFlags line of
 .Ql rd ,
 .Ql wr ,
 .Ql ex ,
-.Ql sh
+.Ql sh ,
+.Ql gd ,
+.Ql io
 and
-.Ql gd .
+.Ql pf
+for a mapping of a device object, and
+.Ql dc
+for a range
+.Xr madvise 2 Ns 's
+.Dv MADV_DONTFORK
+marked.
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
 Anonymous counts every page of a private region of no file, and the
