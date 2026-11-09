@@ -72,6 +72,7 @@ void drm_start(void)
     int32_t n;
 
     klog(KLOG_INFO, "drm", "start");
+    drm_debugfs_init();
     n = udmabuf_start();
     if (n < 0) {
         klog(KLOG_WARN, "drm", "udmabuf: error %d", (int)n);
@@ -248,6 +249,7 @@ int32_t drm_dev_register(struct drm_device *dev)
     }
     devices[i] = dev;
     dev->registered = 1;
+    drm_debugfs_register(dev);
     klog(KLOG_INFO, "drm", "%s: card%d", dev->driver->ident.name, i);
     drm_client_dev_register(dev);
     return 0;
@@ -265,6 +267,7 @@ void drm_dev_unplug(struct drm_device *dev)
     }
     dev->unplugged = 1;
     if (dev->registered) {
+        drm_debugfs_unregister(dev);
         drm_sysfs_unregister(dev);
         devfs_node_unregister(&minors[dev->index][0].node);
         devfs_node_unregister(&minors[dev->index][1].node);
@@ -1105,20 +1108,26 @@ int32_t drm_setclientcap(struct drm_device *dev, void *data, struct drm_file *fi
 }
 
 /** SET_VERSION, as Linux 6.12: EINVAL for an interface or a driver version
- * this one is not; the versions it has go back either way. */
+ * this one is not; the versions it has go back either way. An interface of
+ * 1.1 or later ties the master to its bus, Linux's drm_set_busid, which
+ * debugfs's `name` shows. */
 int32_t drm_setversion(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_set_version *sv = (struct drm_set_version *)data;
     const struct drm_ident *id = &dev->driver->ident;
     int32_t rc = 0;
 
-    (void)file;
     if (sv->drm_di_major != -1 && (sv->drm_di_major != DRM_IF_MAJOR || sv->drm_di_minor < 0 ||
                                    sv->drm_di_minor > DRM_IF_MINOR)) {
         rc = -EINVAL;
-    } else if (sv->drm_dd_major != -1 && (sv->drm_dd_major != id->major || sv->drm_dd_minor < 0 ||
-                                          sv->drm_dd_minor > id->minor)) {
-        rc = -EINVAL;
+    } else {
+        if (sv->drm_di_major != -1 && sv->drm_di_minor >= 1) {
+            file->set_busid = 1;
+        }
+        if (sv->drm_dd_major != -1 && (sv->drm_dd_major != id->major || sv->drm_dd_minor < 0 ||
+                                       sv->drm_dd_minor > id->minor)) {
+            rc = -EINVAL;
+        }
     }
     sv->drm_di_major = DRM_IF_MAJOR;
     sv->drm_di_minor = DRM_IF_MINOR;

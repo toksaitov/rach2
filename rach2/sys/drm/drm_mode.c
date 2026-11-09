@@ -1349,6 +1349,9 @@ struct drm_framebuffer *drm_internal_framebuffer_create(struct drm_device *dev,
         fb->offsets[i] = r->offsets[i];
     }
     fb->dev = dev;
+    if (current_proc) {
+        k_memcpy(fb->comm, current_proc->comm, sizeof(fb->comm) - 1u);
+    }
     fb->info = info;
     fb->format = r->pixel_format;
     fb->modifier = modifier;
