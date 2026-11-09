@@ -118,6 +118,26 @@ The bytes of a core file, holes excepted; a soft limit below a page
 leaves none, as
 .Xr core 5
 describes.
+.It Dv RLIMIT_MEMLOCK
+The bytes of memory a process may lock, 8 MiB soft and hard by default,
+as on Linux:
+the pages of its regions locked by
+.Xr mlock 2 ,
+.Xr mlockall 2
+or
+.Dv MAP_LOCKED ,
+and the pages a driver pins for a device on its behalf.
+A caller with effective user ID 0 is exempt.
+.Fn mlock
+past the soft limit fails with
+.Er ENOMEM ,
+and with a soft limit of 0 with
+.Er EPERM ;
+.Dv MAP_LOCKED
+and growth under
+.Dv MCL_FUTURE
+fail with
+.Er EAGAIN .
 .It Dv RLIMIT_FSIZE
 The bytes a regular file may reach through
 .Xr write 2 ,
@@ -141,14 +161,15 @@ ID 0 may raise a hard limit.
 Fork inherits both values and exec preserves them.
 The kernel's initial soft and hard limits are 4096 processes,
 1024 descriptors, and unlimited address space; the stack's are 8 MiB
-soft and unlimited hard, the core file's 0 soft and unlimited hard, and a
-file's size unlimited, which are Linux's.
+soft and unlimited hard, the core file's 0 soft and unlimited hard, a
+file's size unlimited, and locked memory 8 MiB soft and hard, which are
+Linux's.
 Init may replace these defaults as described in
 .Xr limits 7 .
 .Pp
 Every other resource number, including an unknown number, reports
 unlimited values.
-Setting any resource other than the six stored resources succeeds
+Setting any resource other than the seven stored resources succeeds
 without changing anything, even if its soft value exceeds its hard value.
 .Pp
 Linux measures each growth of the stack against the limit in force when

@@ -188,7 +188,7 @@ A thread holds Linux's 41 capabilities, numbered 0 to 40, but those it gave up (
 
 ### Resource limits
 
-A record has six limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `fd_nr_open`, fs.nr_open, with `EPERM` even to root, as Linux does. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
+A record has seven limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `fd_nr_open`, fs.nr_open, with `EPERM` even to root, as Linux does. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
 
 | Limit | Default soft, hard | Enforced by |
 | --- | --- | --- |
@@ -198,6 +198,7 @@ A record has six limits, `RLIM_COUNT` in `process.h`, each a soft value that is 
 | `RLIMIT_STACK` | 8 MiB (`RLIM_STACK_DEFAULT`), none | `execve`: the room for the strings and their pointers, and how far the new stack may grow |
 | `RLIMIT_CORE` | 0, none | a core file: none below one page, and the file stops at the soft value |
 | `RLIMIT_FSIZE` | none, none | a write, a truncation or an `fallocate` past it fails with `EFBIG` and sends `SIGXFSZ` (`fsize_refused` in `rach2/sys/syscall_fs.c`) |
+| `RLIMIT_MEMLOCK` | 8 MiB (`RLIM_MEMLOCK_DEFAULT`), 8 MiB | the `mlock` calls, `MAP_LOCKED`, the growth of locked memory under `MCL_FUTURE` and a driver's pins (`mem_lock_room` in `rach2/sys/mm/paging.c`); a privileged caller is exempt ([memory's Readme](../mm/Readme.md#locked-memory-and-pins)) |
 
 Init sets the machine's defaults from `/etc/rach2/limits` before its first child, as [limits(7)](../../../man/man7/limits.7) describes.
 
@@ -228,7 +229,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * A thread has at most 8 supplementary groups, where Linux allows 65536.
 * `clone` refuses `CLONE_SIGHAND` without `CLONE_THREAD`, an exit signal other than zero or `SIGCHLD` for a process, `CLONE_PIDFD`, and the cgroup and time namespaces. No descriptor refers to a process, so `waitid`'s `P_PIDFD` fails with `EBADF`.
 * `execve` follows one level of `#!`, and reads a first line of at most 128 bytes.
-* Six resource limits are kept; `RLIMIT_MEMLOCK`, `RLIMIT_NICE`, `RLIMIT_RTPRIO` and Linux's others read as unlimited.
+* Seven resource limits are kept; `RLIMIT_NICE`, `RLIMIT_RTPRIO` and Linux's others read as unlimited.
 * `getrusage` and `wait4` report the CPU time and `ru_maxrss` alone, and `ru_maxrss` is sampled where an address space ends, not at every fault.
 * `prctl` takes twelve options, the parent-death signal, the dumpable flag, the name, the child subreaper flag, `no_new_privs` and the seccomp mode, each set and read; any other is `EINVAL`.
 * seccomp has no user notification: a filter cannot be installed with a listener, and `SECCOMP_RET_USER_NOTIF` fails the call with `ENOSYS`. `SECCOMP_RET_LOG` allows the call and logs nothing.

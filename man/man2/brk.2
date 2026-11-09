@@ -450,29 +450,84 @@ given, before rounding it up to a page boundary: a range that runs past
 the top of user space is refused, a length that would round up to 0 among
 them.
 .Ss Locking and residency
-There is no swap, so every page a process has stays in memory.
+There is no swap, so every page a process has stays in memory; locking
+brings the pages in and counts them, as Linux does.
 .Fn mlock ,
-.Fn munlock
-and
+call 150, brings in each page of the range and marks its regions locked;
 .Fn mlock2 ,
-calls 150, 151 and 376, check that mappings cover the range, with
+call 376, does the same, or with
+.Dv MLOCK_ONFAULT
+marks them and brings each page in at its first touch;
+.Fn munlock ,
+call 151, takes the mark off.
+The range is rounded out to whole pages and must be covered by mappings,
+with
 .Er ENOMEM
-for a gap, and
-.Fn mlock2
-that its flags are 0 or
-.Dv MLOCK_ONFAULT ;
-they change nothing.
+for a gap.
+A region of device memory is passed over.
 .Fn mlockall ,
-call 152, takes
+call 152, locks every region with
 .Dv MCL_CURRENT ,
-.Dv MCL_FUTURE
-and
-.Dv MCL_ONFAULT ,
-not the last alone, and
+each region made later, by
+.Fn mmap
+or
+.Fn brk ,
+with
+.Dv MCL_FUTURE ,
+and with
+.Dv MCL_ONFAULT
+brings the pages in at their first touch;
 .Fn munlockall ,
-call 153, takes nothing; neither changes anything.
-.Dv RLIMIT_MEMLOCK
-is not kept.
+call 153, unlocks every region and ends
+.Dv MCL_FUTURE .
+.Dv MAP_LOCKED
+locks a new mapping as
+.Fn mlock
+would.
+The bytes locked are VmLck of
+.Pa /proc/PID/status
+and the Locked line of each locked region in
+.Pa /proc/PID/smaps .
+.Pp
+The locked bytes are bounded by the soft
+.Dv RLIMIT_MEMLOCK ,
+8 MiB by default, for a caller without effective user ID 0:
+.Fn mlock
+and
+.Fn mlock2
+past it fail with
+.Er ENOMEM ,
+and with a limit of 0 with
+.Er EPERM ;
+.Fn mlockall
+with
+.Dv MCL_CURRENT
+fails with
+.Er ENOMEM
+when the address space is larger than the limit;
+.Dv MAP_LOCKED ,
+a mapping made under
+.Dv MCL_FUTURE
+and a
+.Fn mremap
+that grows a locked region fail past it with
+.Er EAGAIN ,
+and
+.Fn brk
+under
+.Dv MCL_FUTURE
+leaves the break where it was.
+A locked stack grows within it alone.
+A child made by
+.Xr fork 2
+inherits no lock and no
+.Dv MCL_FUTURE ,
+and
+.Dv MADV_DONTNEED
+and
+.Dv MADV_FREE
+over a locked region fail with
+.Er EINVAL .
 .Pp
 .Fn mincore ,
 call 218, stores a byte for each page of a page-aligned range the
