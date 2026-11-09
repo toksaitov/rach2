@@ -1968,6 +1968,7 @@ static int synth_dir_of_proc(int kind)
 }
 
 static int32_t open_path(const char *name, int flags);
+static int32_t proc_fd_open_path(const struct vpath *vp, int flags);
 
 static int32_t open_named(const char *name, int flags, uint32_t mode, int end);
 
@@ -7198,8 +7199,8 @@ static int32_t open_named(const char *name, int flags, uint32_t mode, int end)
  *
  * The /proc links are classified, not resolved, so the O_NOFOLLOW choice is
  * made here: /proc/self is the process directory unless O_NOFOLLOW names the
- * link, and a /proc/PID/fd link is -ENOENT unless O_NOFOLLOW, as open(2)
- * answers for one; Linux follows it to the descriptor's file. O_DIRECTORY on
+ * link, and a /proc/PID/fd link follows its descriptor to the mounted or
+ * synthetic object unless O_NOFOLLOW names the link itself. O_DIRECTORY on
  * anything but a directory is -ENOTDIR, and a node that is gone, a process
  * that exited among them, is -ENOENT.
  */
@@ -7212,7 +7213,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     int fd;
 
     if (follow && vp->kind == VNODE_PROC_FD_LINK) {
-        return -ENOENT;
+        return proc_fd_open_path(vp, flags);
     }
     if (synth_stat(vp, &kst, follow) != 0) {
         return -ENOENT;
@@ -7312,6 +7313,54 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
     entry->flags = FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    return fd;
+}
+
+/**
+ * Open the object of a proc descriptor link with O_PATH and no device open.
+ * Mounted files keep their inode through path_install; synthetic objects
+ * keep the source description, which O_PATH cannot read or advance.
+ * The caller has the kernel lock. Return a descriptor or a negative errno.
+ */
+static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
+{
+    struct vfs_ref ref;
+    struct vfs_mount *mnt;
+    struct open_file *held;
+    process_t *p;
+    fd_entry_t *src;
+    int32_t rc;
+    int fd;
+
+    rc = proc_fd_entry(vp, &p, &src);
+    if (rc != 0) {
+        return rc;
+    }
+    if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
+        rc = proc_fd_file(vp, &ref, &held);
+        if (rc != 0) {
+            return rc;
+        }
+        mnt = ref.mnt;
+        fd = path_install(&ref, held->dirpath ? path_name(held->dirpath) : "", flags);
+        if (fd >= 0) {
+            current_proc->fds->entries[fd].ofd->name = vfs_name_ref(held->name);
+        }
+        vfs_walk_unlock(mnt);
+        fd_ofd_unref(held);
+        return fd;
+    }
+    if (src->type != FD_TYPE_SYNTH_DIR && src->type != FD_TYPE_SYNTH_PATH) {
+        return -ENOENT;
+    }
+    if ((flags & O_DIRECTORY) && src->type != FD_TYPE_SYNTH_DIR) {
+        return -ENOTDIR;
+    }
+    fd = proc_fd_share(p->fds, vp->procfd, flags);
+    if (fd >= 0) {
+        current_proc->fds->entries[fd].flags =
+            FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    }
     return fd;
 }
 
