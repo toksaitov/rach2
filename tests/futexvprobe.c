@@ -318,6 +318,7 @@ static void run_alone(void)
     static volatile unsigned int words[4];
     struct futex_waitv w[4];
     struct timespec64 at;
+    unsigned long unmapped = 8;
     long gone;
 
     entries(w, words, 3, FUTEX2_SIZE_U32 | FUTEX2_PRIVATE);
@@ -386,8 +387,8 @@ static void run_alone(void)
     if (sys_failed(gone) || syscall2(SYS_MUNMAP, gone, PAGE) != 0) {
         fail("mmap and munmap of a page");
     }
-    if (futex_waitv((struct futex_waitv *)8, 1, 0, 0, 0) != -EFAULT ||
-        futex_waitv(w, 2, 0, (struct timespec64 *)8, CLOCK_MONOTONIC) != -EFAULT) {
+    if (futex_waitv((struct futex_waitv *)unmapped, 1, 0, 0, 0) != -EFAULT ||
+        futex_waitv(w, 2, 0, (struct timespec64 *)unmapped, CLOCK_MONOTONIC) != -EFAULT) {
         fail("an array or a deadline at address 8 was not refused with EFAULT");
     }
     w[1].uaddr = (unsigned long)gone;

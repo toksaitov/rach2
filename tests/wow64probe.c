@@ -635,7 +635,7 @@ static void run_futexv(void)
     volatile unsigned int *words;
     unsigned long page;
     long pid;
-    int i, r, status = 0;
+    int i, r;
 
     page = map(0, PAGE, MAP_SHARED | MAP_32BIT);
     if (sys_failed((long)page)) {

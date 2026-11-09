@@ -276,12 +276,30 @@ vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
     return NULL;
 }
 
-/** The model has no pages: 0. */
+/** The model's user memory is always present, at a frame past its own
+ * offset; any other address has no page. */
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
 {
     (void)dir;
-    (void)addr;
-    return 0;
+    return in_user(addr, 1) ? 0x100000u + addr : 0;
+}
+
+/** Whether [addr, addr + len) is user memory: the model's. */
+int user_range_ok(uintptr_t addr, size_t len)
+{
+    return in_user(addr, len);
+}
+
+/** futex_waitv's vector, from the host's heap. */
+void *kmalloc(size_t size)
+{
+    return calloc(1, size);
+}
+
+/** Give back what `kmalloc` returned. */
+void kfree(void *p)
+{
+    free(p);
 }
 
 /** File the model's waiter on the word at `uaddr`, as a sleeping FUTEX_WAIT
