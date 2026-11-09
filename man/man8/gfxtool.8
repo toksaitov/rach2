@@ -20,15 +20,27 @@ uses
 to inspect the Intel Haswell HD 4400 at PCI function 0000:00:02.0.
 It refuses any identity but 8086:0a16, disabled memory decoding, BARs
 above 4 GiB and an aperture other than 256 MiB.
-It checks the PCI driver link, uevent and DRM device identities and
-refuses a bound GPU or an ownership check it cannot complete.
-Run it as root, with driver binding stopped for the session.
+It checks the PCI driver link, uevent and DRM device identities.
+A GPU that a driver owns, or whose ownership check cannot complete, is
+refused by
+.Cm crc ;
+.Cm dump
+and
+.Cm capture
+read it through a read-only mapping, write no register, and say so on
+standard error.
+Run it as root.
 .Pp
 .Cm dump
-prints named display, panel power, PWM, power-well and forcewake
-registers, the render, video, blitter and video-enhancement rings,
-and all 65536 GGTT entries of the CPU-visible aperture.
-Ring reads temporarily request forcewake; a prior request is preserved.
+prints named display, panel power, PWM, power-well, forcewake, GT FIFO,
+status-page and interrupt registers, among them
+.Dv GEN7_ERR_INT ,
+whose low bits latch the pipes' FIFO underruns, the render, video,
+blitter and video-enhancement rings, and all 65536 GGTT entries of the
+CPU-visible aperture.
+On an unbound GPU, ring reads temporarily request forcewake; a prior
+request is preserved.
+On an owned GPU they read the GT as its driver left it.
 .Pp
 .Cm crc
 enables the selected pipe's post-panel-fitter CRC source, skips the
