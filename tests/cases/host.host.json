@@ -2305,6 +2305,11 @@
           "assertion_id": "packet",
           "checks": "every input of tests/fuzz/corpus/packet/, of which there is at least one, passes through tests/fuzz/packet_fuzz.c built as a replay program under ASan and UBSan",
           "source": "scenario"
+        },
+        {
+          "assertion_id": "x86dec",
+          "checks": "every input of tests/fuzz/corpus/x86dec/, of which there is at least one, passes through tests/fuzz/x86dec_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
         }
       ],
       "branches": [],
@@ -2323,7 +2328,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 10
+          "limit": 11
         }
       ],
       "bounds": {
