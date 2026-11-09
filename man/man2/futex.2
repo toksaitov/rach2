@@ -95,9 +95,9 @@ whatever the handler's flags, as on Linux, and also when no handler runs,
 where Linux restarts it with its first deadline.
 .Fa uaddr2
 is ignored.
-The requeue, wake-and-modify and priority-inheritance operations, and
-i386's time64 form, number 422, are not implemented; x86-64 has no such
-form.
+The requeue, wake-and-modify and priority-inheritance operations are not
+implemented, nor on i686 is i386's time64 form, number 422; x86-64 has no
+such form of its own, and takes 422 from an i386 program, below.
 .Ss Waiting on several words
 .Nm futex_waitv ,
 number 449 on i386 and on x86-64, sleeps while each of
@@ -210,6 +210,17 @@ is call 202, with a timespec of 64-bit fields, and the robust list's head,
 which
 .Nm set_robust_list
 (273) takes, is 24 bytes.
+An i386 program on the x86-64 kernel
+.Pq see Xr ia32 7
+has i386's numbers: 240 with the 32-bit timespec, 422 with the 64-bit
+one, whose nanoseconds' high word is ignored as Linux ignores it, and a
+robust list of 32-bit words with a head of 12 bytes.
+That list is kept beside the thread's native one, as Linux keeps both, and
+the kernel walks both when the thread ends;
+.Nm get_robust_list
+by
+.Ql int $0x80
+reports it, its head and size as 32-bit words.
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 .Nm futex_waitv
