@@ -15,6 +15,8 @@
  *     bootctl cancel         clear an armed trial
  *     bootctl fallback       copy the committed candidate into the fallback
  *     bootctl env KEY [VAL]  read, or set, one allowlisted grubenv key
+ *     bootctl rootimage SPEC:/PATH
+ *                            boot a root image on a partition once
  *
  * `--target PARTITION` before the verb selects a boot partition other than
  * `/dev/bootpart`, for every verb but `grub` and `commit`.
@@ -40,6 +42,15 @@
  * state machine depends on, through an allowlist, not as a general editor,
  * because that block has no checksum and GRUB parses it at boot with no
  * recourse if it is malformed.
+ *
+ * `rootimage` is the trial root: an unreleased system kept as an ext2 image
+ * file on a partition, the data partition of an installed machine, booted
+ * once with the candidate kernel and `rach2.rootimage=SPEC:/PATH`, so that
+ * the installed root is not written to try it. It writes an entry
+ * `trialroot`, between two marker lines, at the end of the menu slot, keeping
+ * the rest of the menu, and arms it. The stub knows no `trialroot`, and it
+ * sets its default after it sources the slot, so the block consumes the
+ * trial itself and boots it at once; the next boot takes the saved default.
  */
 
 #include <errno.h>
@@ -289,8 +300,96 @@ static void print_booted(void)
         printf("bootctl: booted: fallback\n");
     } else if (cmdline_has("rach2.slot=recovery")) {
         printf("bootctl: booted: recovery, from the recovery partition and neither slot\n");
+    } else if (cmdline_has("rach2.slot=trialroot")) {
+        printf("bootctl: booted: trialroot, the candidate's kernel on a root image\n");
     } else {
         printf("bootctl: booted: not from a slot (no rach2.slot= on /proc/cmdline)\n");
+    }
+}
+
+/* The lines that open and close the trial root's block in the menu slot. */
+static const char TRIAL_BEGIN[] = "# bootctl rootimage: one boot of a root image\n";
+static const char TRIAL_END[] = "# bootctl rootimage: end\n";
+
+/* The menu slot's text, and its length without the `#` a write pads with. */
+static uint8_t menu[SLOT_MAX];
+static uint32_t menu_len;
+
+/**
+ * Read the menu slot of the open volume into `menu`, its length into
+ * `menu_len`. Returns 0, or -1 having said why: the disk has no slot, or it
+ * does not read.
+ */
+static int menu_load(void)
+{
+    if (!bs.have_menu) {
+        fprintf(stderr, "bootctl: this disk has no menu slot; it was built before one existed\n");
+        return -1;
+    }
+    if (bs.menu.size > sizeof(menu)) {
+        fprintf(stderr, "bootctl: the menu slot is larger than this tool reads\n");
+        return -1;
+    }
+    if (bootslot_read_menu(&bs, menu, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return -1;
+    }
+    menu_len = bs.menu.size;
+    while (menu_len > 0 && menu[menu_len - 1] == '#') {
+        menu_len--;
+    }
+    return 0;
+}
+
+/** The first line of `menu` from `from` on that is `line`, with its newline,
+ *  as an offset; `menu_len` when there is none. */
+static uint32_t menu_line(uint32_t from, const char *line)
+{
+    size_t n = strlen(line);
+    uint32_t at;
+
+    for (at = from; at + n <= menu_len; at++) {
+        if ((at == 0 || menu[at - 1] == '\n') && memcmp(menu + at, line, n) == 0) {
+            return at;
+        }
+    }
+    return menu_len;
+}
+
+/**
+ * Where the trial root's block is in `menu`: `*from` its first byte and `*to`
+ * the byte past its end line, or past the menu when a cut write lost that
+ * line. Returns 1, or 0 when the menu has no block.
+ */
+static int trial_block(uint32_t *from, uint32_t *to)
+{
+    *from = menu_line(0, TRIAL_BEGIN);
+    if (*from == menu_len) {
+        return 0;
+    }
+    *to = menu_line(*from, TRIAL_END);
+    *to = *to == menu_len ? menu_len : *to + (uint32_t)strlen(TRIAL_END);
+    return 1;
+}
+
+/** Print what `rach2.rootimage=` the trial block in `menu` names, as
+ *  `bootctl: trial root: SPEC:/PATH`; nothing when it has no block. */
+static void print_trial_root(void)
+{
+    static const char key[] = "rach2.rootimage=";
+    uint32_t from, to, at, end;
+
+    if (!trial_block(&from, &to)) {
+        return;
+    }
+    for (at = from; at + sizeof(key) - 1 <= to; at++) {
+        if (memcmp(menu + at, key, sizeof(key) - 1) == 0) {
+            at += sizeof(key) - 1;
+            for (end = at; end < to && menu[end] != ' ' && menu[end] != '\n'; end++) {
+            }
+            printf("bootctl: trial root: %.*s\n", (int)(end - at), (const char *)menu + at);
+            return;
+        }
     }
 }
 
@@ -318,6 +417,9 @@ static int cmd_status(void)
     }
     print_env(env, "saved_entry", 0);
     print_env(env, "next_entry", 1);
+    if (bs.have_menu && menu_load() == 0) {
+        print_trial_root();
+    }
     print_booted();
     return 0;
 }
@@ -577,15 +679,227 @@ static int cmd_env(const char *key, const char *value)
     return 0;
 }
 
+/**
+ * Whether `word` of `len` bytes is one a trial root's line leaves out: one
+ * that chooses the root, the slot or the debug shell, which the block sets
+ * itself or which would take its place, and a path a loader put first.
+ */
+static int trial_drops(const char *word, size_t len)
+{
+    static const char *const prefixes[] = {
+        "rach2.root=", "rach2.rootfstype=", "rach2.rootimage=", "rach2.slot=", "init="};
+    static const char *const flags[] = {"rach2.fsdisk", "rach2.fswindow", "rach2.rescue"};
+    size_t i;
+
+    if (word[0] == '/') {
+        return 1;
+    }
+    for (i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+        if (len >= strlen(prefixes[i]) && strncmp(word, prefixes[i], strlen(prefixes[i])) == 0) {
+            return 1;
+        }
+    }
+    for (i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+        if (len == strlen(flags[i]) && strncmp(word, flags[i], len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The kernel keeps a line of this many bytes and cuts a longer one
+ * (rach2/cmdline.md). */
+#define KERNEL_LINE_MAX 510
+/* The longest `rach2.rootimage=` value the kernel reads. */
+#define ROOT_IMAGE_MAX  95
+
+/**
+ * Put in `tokens`, each after a space, the words of this boot's line that a
+ * trial root keeps, those `trial_drops` does not leave out, and their length
+ * in `*used`. Returns 0, or -1 having said why: they do not fit the kernel's
+ * line.
+ */
+static int trial_tokens(char tokens[KERNEL_LINE_MAX + 1], size_t *used)
+{
+    const char *p;
+    size_t n;
+
+    *used = 0;
+    tokens[0] = '\0';
+    for (p = cmdline; *p != '\0'; p += n) {
+        while (*p == ' ' || *p == '\t' || *p == '\n') {
+            p++;
+        }
+        for (n = 0; p[n] != '\0' && p[n] != ' ' && p[n] != '\t' && p[n] != '\n'; n++) {
+        }
+        if (n == 0 || trial_drops(p, n)) {
+            continue;
+        }
+        if (*used + n + 2 > KERNEL_LINE_MAX + 1) {
+            fprintf(stderr, "bootctl: this boot's line is too long to carry to the trial\n");
+            return -1;
+        }
+        tokens[(*used)++] = ' ';
+        memcpy(tokens + *used, p, n);
+        *used += n;
+        tokens[*used] = '\0';
+    }
+    return 0;
+}
+
+/**
+ * Put the open boot partition's FAT serial in `serial`, as GRUB's `search
+ * --fs-uuid` names it, `XXXX-XXXX` in upper case: the stub's entries find
+ * their kernel by it. Returns 0, or -1 having said why: the first sector
+ * does not read.
+ */
+static int boot_serial(char serial[10])
+{
+    uint8_t sector[BOOTSLOT_SECTOR];
+    uint32_t id;
+    int at;
+
+    if (dev_read(0, 0, sector) != 0) {
+        fprintf(stderr, "bootctl: the boot partition's first sector does not read\n");
+        return -1;
+    }
+    at = memcmp(sector + 82, "FAT32   ", 8) == 0 ? 67 : 39; /* BS_VolID of FAT32, or FAT12/16 */
+    id = (uint32_t)sector[at] | (uint32_t)sector[at + 1] << 8 | (uint32_t)sector[at + 2] << 16 |
+         (uint32_t)sector[at + 3] << 24;
+    sprintf(serial, "%04X-%04X", (unsigned)(id >> 16), (unsigned)(id & 0xFFFFu));
+    return 0;
+}
+
+/**
+ * Write the menu slot as `menu` with its trial block, if it has one, taken
+ * out and a new one at its end that boots `spec` with `tokens` once, from
+ * the kernel on the partition of serial `serial`. Returns 0, or -1 having
+ * said why: it does not fit the slot, or the slot does not write.
+ */
+static int write_trial_menu(const char *spec, const char *serial, const char *tokens)
+{
+    static uint8_t text[SLOT_MAX];
+    uint32_t from, to, len = menu_len;
+    int w;
+
+    memcpy(text, menu, len);
+    if (trial_block(&from, &to)) {
+        memmove(text + from, text + to, len - to);
+        len -= to - from;
+    }
+    if (len > 0 && text[len - 1] != '\n') {
+        text[len++] = '\n';
+    }
+    w = snprintf((char *)text + len, sizeof(text) - len,
+                 "%s"
+                 "menuentry \"Start Rach2 once from the root image %s\" --id trialroot {\n"
+                 "    search --no-floppy --fs-uuid --set=root %s\n"
+                 "    multiboot2 /boot/kernel rach2.rootimage=%s rach2.slot=trialroot%s\n"
+                 "    if [ \"$grub_platform\" = pc ]; then set gfxpayload=auto; fi\n"
+                 "    boot\n"
+                 "}\n"
+                 "if [ \"${next_entry}\" = \"trialroot\" ]; then\n"
+                 "    set next_entry=\n"
+                 "    save_env next_entry\n"
+                 "    search --no-floppy --fs-uuid --set=root %s\n"
+                 "    multiboot2 /boot/kernel rach2.rootimage=%s rach2.slot=trialroot%s\n"
+                 "    if [ \"$grub_platform\" = pc ]; then set gfxpayload=auto; fi\n"
+                 "    boot\n"
+                 "fi\n"
+                 "%s",
+                 TRIAL_BEGIN, spec, serial, spec, tokens, serial, spec, tokens, TRIAL_END);
+    if (w < 0 || (size_t)w >= sizeof(text) - len || len + (uint32_t)w > bs.menu.size) {
+        fprintf(stderr,
+                "bootctl: the menu with the trial root's entry does not fit the %u-byte slot\n",
+                (unsigned)bs.menu.size);
+        return -1;
+    }
+    if (bootslot_write_menu(&bs, text, len + (uint32_t)w, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return -1;
+    }
+    return 0;
+}
+
+/** Whether `spec` is `SPEC:/PATH` of at most ROOT_IMAGE_MAX bytes, of the
+ *  characters a boot line carries as they are; says why not. */
+static int root_image_spec(const char *spec)
+{
+    const char *colon = strstr(spec, ":/");
+    const char *p;
+
+    for (p = spec; *p != '\0'; p++) {
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
+              strchr("._,=:/+-", *p))) {
+            fprintf(stderr, "bootctl: '%s' has a character a boot line cannot carry\n", spec);
+            return 0;
+        }
+    }
+    if (!colon || colon == spec || colon[2] == '\0' || strlen(spec) > ROOT_IMAGE_MAX) {
+        fprintf(stderr, "bootctl: '%s' is not SPEC:/PATH of at most %d bytes\n", spec,
+                ROOT_IMAGE_MAX);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * Stage a one-boot entry for the root image `spec`, `SPEC:/PATH`, and arm
+ * it. `SPEC` names the partition by the forms of `rach2.root=` that have no
+ * space in them, `PARTUUID=`, `GPTID=GUID,N`, `UUID=` or `/dev/diskNpM`.
+ *
+ * The entry boots the candidate slot's kernel, which `bootctl kernel` may
+ * have just staged, with `rach2.rootimage=SPEC:/PATH`, `rach2.slot=trialroot`
+ * and the rest of this boot's line, so that the trial root has this
+ * machine's network and console; the two come first, so that a line the
+ * kernel cuts keeps them. The entry goes into the menu slot between
+ * TRIAL_BEGIN and TRIAL_END, in place of an earlier one; the rest of the
+ * menu is kept. Returns 0, or 1 having said why not.
+ */
+static int cmd_rootimage(const char *spec)
+{
+    static char tokens[KERNEL_LINE_MAX + 1];
+    char serial[10];
+    size_t used;
+
+    if (!root_image_spec(spec) || open_slot() != 0 || menu_load() != 0 ||
+        trial_tokens(tokens, &used) != 0) {
+        return 1;
+    }
+    if (strlen("rach2.rootimage= rach2.slot=trialroot") + strlen(spec) + used > KERNEL_LINE_MAX) {
+        fprintf(stderr, "bootctl: the trial's line would pass the kernel's %d bytes\n",
+                KERNEL_LINE_MAX);
+        return 1;
+    }
+    if (boot_serial(serial) != 0 || write_trial_menu(spec, serial, tokens) != 0) {
+        return 1;
+    }
+    if (bootslot_env_set(&bs, "next_entry", "trialroot", errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: armed: the next boot starts the candidate's kernel on %s once; the boot "
+           "after it takes the saved default\n",
+           spec);
+    return 0;
+}
+
 /** Arm one boot of `id`, and only of an entry the stub defines; 0, or 1
  *  having said why not. */
 static int cmd_trial(const char *id)
 {
-    if (!allowed(ENTRY_IDS, ENTRY_ID_COUNT, id)) {
+    uint32_t from, to;
+
+    if (strcmp(id, "trialroot") != 0 && !allowed(ENTRY_IDS, ENTRY_ID_COUNT, id)) {
         fprintf(stderr, "bootctl: not a menu entry this disk has: '%s'\n", id);
         return 1;
     }
     if (open_slot() != 0) {
+        return 1;
+    }
+    if (strcmp(id, "trialroot") == 0 && (menu_load() != 0 || !trial_block(&from, &to))) {
+        fprintf(stderr, "bootctl: the menu has no trial root; stage one with "
+                        "`bootctl rootimage SPEC:/PATH`\n");
         return 1;
     }
     if (bootslot_env_set(&bs, "next_entry", id, errbuf, sizeof(errbuf)) != 0) {
@@ -803,6 +1117,7 @@ static void usage(void)
     fprintf(stderr, "       bootctl cancel\n");
     fprintf(stderr, "       bootctl fallback\n");
     fprintf(stderr, "       bootctl env <key> [value]\n");
+    fprintf(stderr, "       bootctl rootimage <spec>:<path>\n");
     fprintf(stderr, "       bootctl --target <partition> <command> ...\n");
 }
 
@@ -861,6 +1176,8 @@ int main(int argc, char **argv)
         return cmd_trial(arg);
     case BOOTVERB_ENV:
         return cmd_env(arg, arg2);
+    case BOOTVERB_ROOTIMAGE:
+        return cmd_rootimage(arg);
     default:
         break;
     }
