@@ -2,17 +2,22 @@
  * synthfs_hosttest.c: the path classifier of rach2/sys/fs/synthfs.c, which
  * sorts a path among the KRFFS root, /dev, /proc and /sys.
  *
- * host-deps: rach2/sys/fs/synthfs.c
+ * host-deps: rach2/sys/fs/synthfs.c rach2/sys/fs/sysfs.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * Every path call classifies its path, and the split into components and
  * the parsing of process ids and descriptor numbers are where an error of
  * one is easy to make, so the rows run here under the sanitizers. The model
  * has a wired interface eth0, a wireless wlan0 with its switch rfkill3, and
  * no disks; its interfaces' slots hold lo, eth0, wlan0 and wlan4, a radio
- * registered after others were removed.
+ * registered after others were removed. A driver's entries are added to
+ * /sys through sysfs.c, the registry the classifier reads.
  */
 
 #include "fs/synthfs.h"
+#include "fs/sysfs.h"
+#include "lib/kerrno.h"
+#include "mm/kheap.h"
 #include "rfkill.h"
 
 static int fails;
@@ -158,6 +163,29 @@ const char *backlight_name(int i)
     return i == 0 ? "intel_backlight" : 0;
 }
 
+/** The host's allocator, for the registry's entries. */
+void *kmalloc(size_t size)
+{
+    return __builtin_malloc(size);
+}
+
+void *kzalloc(size_t size)
+{
+    return __builtin_calloc(1, size);
+}
+
+void kfree(void *ptr)
+{
+    __builtin_free(ptr);
+}
+
+/** No uevent is sent here. */
+void netlink_uevent(const uint8_t *msg, uint32_t len)
+{
+    (void)msg;
+    (void)len;
+}
+
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -210,7 +238,9 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/bus/usb/devices/1", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:20.0", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1F.2", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_PCI_VENDOR);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendors", &vp) == VNODE_ENOENT);
 }
 
 /** Check radio attributes and both routes to the driver link. */
@@ -545,6 +575,107 @@ static void ipv6_conf(void)
  *
  * Returns the count of failed checks, at most 255.
  */
+/**
+ * The fixed directories drivers add below, /sys/kernel/debug, the PCI
+ * function's attribute files and its `subsystem` link to /sys/bus/pci.
+ */
+static void sys_later(void)
+{
+    struct vpath vp;
+    char path[64];
+
+    CHECK(synth_classify("sys/kernel", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_KERNEL);
+    CHECK(synth_classify("sys/kernel/debug", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_KERNEL_DEBUG);
+    CHECK(synth_classify("sys/kernel/debug/dri", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/kernel/uevent_seqnum", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_KERNEL);
+    CHECK(synth_classify("sys/class/drm", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_CLASS_DRM);
+    CHECK(synth_classify("sys/class/drm/version", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_CLASS_DRM);
+    CHECK(synth_classify("sys/class/drm/card0", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/dev/char", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_DEV_CHAR);
+    CHECK(synth_classify("sys/devices/platform", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_PLATFORM);
+    CHECK(synth_classify("sys/bus/platform", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_BUS_PLATFORM);
+    CHECK(synth_classify("sys/bus/platform/devices", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_PLATFORM_LINKS);
+    synth_sys_path(SYSFS_PLATFORM_LINKS, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/bus/platform/devices"));
+    synth_sys_path(SYSFS_KERNEL_DEBUG, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/kernel/debug"));
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/vendor", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_PCI_DEVICE && vp.syskey == 0x10 && vp.procfile == SYSFS_PCI_VENDOR);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:02.0/boot_vga", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_PCI_BOOT_VGA);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/subsystem_device", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_PCI_SUBSYSTEM_DEVICE);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/class/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/subsystem", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_BUS_PCI);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/subsystem/devices", &vp) ==
+              VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_PCI_LINKS);
+}
+
+/**
+ * A driver's entries: a directory below a PCI function with an attribute
+ * and links to a class and back, reached by name, through each link, and
+ * through a link to a fixed directory with more path after it; the links
+ * read relative to themselves; and once removed, nothing is reached.
+ */
+static void sys_registry(void)
+{
+    static const struct sysfs_attr dev = {"dev", 0444u, 0, 0};
+    struct vpath vp;
+    char path[96];
+    int pci = sysfs_anchor(SYSFS_PCI_DEVICE, 0x10), drm_class = sysfs_anchor(SYSFS_CLASS_DRM, 0);
+    int card = sysfs_add_dir(sysfs_add_dir(pci, "drm"), "card0");
+    int devf = sysfs_add_attr(card, &dev, 0, 0), sub = sysfs_add_link(card, "subsystem", drm_class);
+    int up = sysfs_add_link(card, "device", pci), cl = sysfs_add_link(drm_class, "card0", card);
+    int ch = sysfs_add_link(sysfs_anchor(SYSFS_DEV_CHAR, 0), "226:0", card);
+
+    CHECK(card > 0 && devf > 0 && sub > 0 && up > 0 && cl > 0 && ch > 0);
+    CHECK(sysfs_add_dir(card, "dev") == -EEXIST && sysfs_add_dir(devf, "x") == -ENOENT);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/drm/card0", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_REG && vp.syskey == card);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/drm/card0/dev", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_REG && vp.syskey == devf);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/drm/card0/dev/x", &vp) ==
+          VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/drm/card1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/drm/card0", &vp) == VNODE_SYS_LINK && vp.sysreg == cl &&
+          vp.sysent == SYSFS_REG && vp.syskey == card);
+    CHECK(synth_classify("sys/class/drm/card0/dev", &vp) == VNODE_SYS_FILE && vp.syskey == devf);
+    CHECK(synth_classify("sys/dev/char/226:0/device", &vp) == VNODE_SYS_LINK && vp.sysreg == up &&
+          vp.sysent == SYSFS_PCI_DEVICE && vp.syskey == 0x10);
+    CHECK(synth_classify("sys/dev/char/226:0/device/vendor", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_PCI_DEVICE && vp.procfile == SYSFS_PCI_VENDOR);
+    CHECK(synth_classify("sys/dev/char/226:0/device/drm/card0/dev", &vp) == VNODE_SYS_FILE &&
+          vp.syskey == devf);
+    CHECK(synth_classify("sys/dev/char/226:0/subsystem/card0/subsystem/version", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_CLASS_DRM);
+    sysfs_node_path(card, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/devices/pci0000:00/0000:00:02.0/drm/card0"));
+    path[sysfs_link_text(cl, path, (int)sizeof(path) - 1)] = '\0';
+    CHECK(eq(path, "../../devices/pci0000:00/0000:00:02.0/drm/card0"));
+    path[sysfs_link_text(up, path, (int)sizeof(path) - 1)] = '\0';
+    CHECK(eq(path, "../../../0000:00:02.0"));
+    path[sysfs_link_text(sub, path, (int)sizeof(path) - 1)] = '\0';
+    CHECK(eq(path, "../../../../../class/drm"));
+    sysfs_remove(sysfs_node_parent(card));
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/drm", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/drm/card0", &vp) == VNODE_ENOENT);
+    CHECK(sysfs_link_text(cl, path, (int)sizeof(path)) == -ENOENT);
+    sysfs_remove(cl);
+    sysfs_remove(ch);
+    CHECK(sysfs_node_count(drm_class) == 0 && sysfs_node_kind(cl) == 0);
+}
+
 int main(void)
 {
     struct vpath vp;
@@ -630,6 +761,8 @@ int main(void)
     past_a_name();
     paths();
     sys_tree();
+    sys_later();
+    sys_registry();
     sys_class();
     sys_wireless();
     sys_rfkill();
