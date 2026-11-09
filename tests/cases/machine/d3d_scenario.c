@@ -42,11 +42,14 @@ int etude_scenario(struct etude_case *c)
     if (net_login(&b, "root", password, "# ") == ETUDE_OK && etude_guest_open(b.m) != ETUDE_OK)
         net_fail(&u, "the GNU guest command channel did not open");
     snprintf(command, sizeof(command),
-             "mkdir -p /tmp/d3d && mount -t ext2 -o ro /dev/disk1 /tmp/d3d && "
+             "mkdir -p /tmp/d3d /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix && "
+             "mount -t ext2 -o ro /dev/disk1 /tmp/d3d && "
              "su -s /bin/bash test -c 'python3 /tmp/d3d/run.py %s %s /tmp/d3d-results'",
              family, row);
     if (net_step(&u, "row") == ETUDE_OK &&
         net_guest(&u, b.m, argv, NULL, NULL, "direct3d", &r) == ETUDE_OK) {
+        fputs(r.out, stdout);
+        fputs(r.err, stderr);
         snprintf(marker, sizeof(marker), "D3DROW OK %s %s", family, row);
         matched = net_exited0(&r) && net_find(r.out, marker) != NULL;
         net_assert(&u, "row", matched, "Direct3D row did not match Linux; see direct3d evidence");
