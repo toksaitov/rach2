@@ -263,9 +263,11 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
     int ok = type >= VIRTIO_GPU_RESP_OK_NODATA && type < VIRTIO_GPU_RESP_ERR_UNSPEC;
     uint32_t flags;
     struct virtio_gpu_cmd *prior;
+    int valid_fence =
+        !cmd->fence || (len >= sizeof(*resp) && (resp->flags & VIRTIO_GPU_FLAG_FENCE) &&
+                        resp->fence_id == cmd->fence->seqno);
 
-    if (cmd->fence &&
-        (!(resp->flags & VIRTIO_GPU_FLAG_FENCE) || resp->fence_id != cmd->fence->seqno)) {
+    if (!valid_fence) {
         ok = 0;
         type = VIRTIO_GPU_RESP_ERR_UNSPEC;
     }
@@ -274,9 +276,13 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
         if (!ok) {
             dma_fence_set_error(cmd->fence, -EIO);
         }
-        for (prior = vg->live; prior; prior = prior->live_next) {
-            if (prior->queued && prior->fence && prior->fence->seqno <= cmd->fence->seqno) {
-                dma_fence_signal(prior->fence);
+        if (!valid_fence) {
+            dma_fence_signal(cmd->fence);
+        } else {
+            for (prior = vg->live; prior; prior = prior->live_next) {
+                if (prior->queued && prior->fence && prior->fence->seqno <= cmd->fence->seqno) {
+                    dma_fence_signal(prior->fence);
+                }
             }
         }
     }
