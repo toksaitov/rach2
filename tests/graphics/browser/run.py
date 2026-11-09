@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import ssl
 import subprocess
@@ -186,6 +187,9 @@ class Browser:
         if self.client:
             self.client.close()
         stop(self.child)
+        dumps = self.work / "profile/minidumps"
+        if dumps.exists() and any(dumps.iterdir()):
+            shutil.copytree(dumps, self.out / "minidumps", dirs_exist_ok=True)
         if self.log:
             self.log.close()
 
@@ -261,7 +265,7 @@ def pages(b, url):
     assert result["storage"] == {"local": "rach2-local", "session": "rach2-session",
         "indexed": "rach2-indexed", "cookie": "acceptance=rach2-cookie", "cache": "rach2-cache"}, result
     b.click("#form button")
-    result["form"] = b.until(lambda: b.script("results.form"))
+    result["form"] = b.until(lambda: b.script("results.form || results.error"))
     assert result["form"] == "?value=rach2-form", result
     upload = b.work / "input.txt"
     upload.write_bytes(PAYLOAD)
@@ -271,7 +275,7 @@ def pages(b, url):
         b.client.call("DOM.setFileInputFiles", {"nodeId": node, "files": [str(upload)]}, b.session)
     else:
         b.client.call("WebDriver:ElementSendKeys", {"id": b.element("#upload"), "text": str(upload)})
-    result["upload"] = b.until(lambda: b.script("results.upload"))
+    result["upload"] = b.until(lambda: b.script("results.upload || results.error"))
     assert result["upload"] == "rach2-upload", result
     b.click("#download")
     path = b.downloads / "acceptance.txt"

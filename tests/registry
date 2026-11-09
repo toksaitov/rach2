@@ -165,5 +165,5 @@ d3dvenus|qemu,mke2fs|full||17408|x86_64
 games-wine|qemu,mke2fs|full||8192|x86_64
 desktop|qemu,python3|full|desktop-test*|4096|
 vgpu|qemu|full||256
-browser|qemu|full||8192|x86_64
+browser|qemu|full|browser-test*|8192|x86_64
 gpucompat|qemu|full||640|i686

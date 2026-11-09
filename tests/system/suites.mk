@@ -1924,6 +1924,19 @@ build/tests/graphics/desktop.py: tests/graphics/desktop.py
 
 # `tests/run browser`: HTTPS pages, browser sandbox diagnostics, WebGPU,
 # concurrent sound, GPU recovery, and the fixed WebGL and video comparisons.
+BROWSER_TEST_EXT2 = $(IMAGES_DIR)/browser-test.ext2
+BROWSER_TEST_DISK = $(IMAGES_DIR)/browser-test.disk
+$(BROWSER_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" sh tools/image/mkext2.sh \
+	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
+$(BROWSER_TEST_DISK): $(BROWSER_TEST_EXT2) $(MKMBR)
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	mib=$$(($$(wc -c < $(BROWSER_TEST_EXT2)) / 1048576)) && \
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null && \
+	dd if=$(BROWSER_TEST_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
+	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
+	mv $@.tmp $@
 BROWSER_FILES = $(wildcard tests/graphics/browser/*) $(GRAPHICS_FILES) \
                 $(wildcard tests/graphics/browser/ref/*/*)
 build/tests/cases/browser/seat.so: tests/graphics/browser/seat.c tests/graphics/browser/seat-build.sh
@@ -1931,6 +1944,27 @@ build/tests/cases/browser/seat.so: tests/graphics/browser/seat.c tests/graphics/
 build/tests/cases/browser/files.tar.gz: $(BROWSER_FILES) build/tests/cases/browser/seat.so
 	@mkdir -p $(@D)
 	python3 tests/graphics/browser/assets.py $@
+
+build/tests/cases/browser/data.ext2: build/tests/cases/browser/files.tar.gz
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/browser-data.XXXXXX); \
+	tar -xzf $< -C "$$work"; mkdir -p "$$work/clips"; \
+	mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp 65536; \
+	mv $@.tmp $@
+
+build/tests/cases/browser/clips.ext2: build/tests/cases/graphics/clips.tar
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/browser-clips.XXXXXX); \
+	tar -xf $< -C "$$work"; \
+	mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp 65536; \
+	mv $@.tmp $@
+
 build/tests/graphics/desktop_display.py: tests/graphics/desktop_display.py
 	@mkdir -p $(@D)
 	cp $< $@
