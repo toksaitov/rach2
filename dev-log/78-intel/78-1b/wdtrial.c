@@ -1,5 +1,5 @@
-/* wdtrial: arm /dev/watchdog, feed it, then stop feeding until it resets the
- * machine; 78-1b's Lenovo trial, built there with `tcc` and run over SSH. */
+/* wdtrial: arm /dev/watchdog, feed it, then stop it or stop feeding until it
+ * resets the machine; 78-1b's Lenovo trial, built there with `tcc`. */
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -71,11 +71,13 @@ static void sleep_until(double when)
     }
 }
 
-/** wdtrial TIMEOUT FEED: arm at TIMEOUT seconds, feed every 10 s for FEED
- * seconds, alternating write and WDIOC_KEEPALIVE, then feed no more and
- * print the time left each second. A version 2 TCO resets 2 x TIMEOUT
- * seconds after the last feed; if the machine still runs at 4 x TIMEOUT +
- * 30 s, or a signal comes, the timer is halted by magic close. */
+/** wdtrial TIMEOUT FEED [stop]: arm at TIMEOUT seconds, feed every 10 s for
+ * FEED seconds, alternating write and WDIOC_KEEPALIVE. With `stop`, then read
+ * the time left for five seconds and halt the timer by magic close. Without
+ * it, feed no more and print the time left each second: a version 2 TCO
+ * resets 2 x TIMEOUT seconds after the last feed; if the machine still runs
+ * at 4 x TIMEOUT + 30 s, or a signal comes, the timer is halted by magic
+ * close. */
 int main(int argc, char **argv)
 {
     struct {
@@ -83,11 +85,12 @@ int main(int argc, char **argv)
         char identity[32];
     } info;
     struct sigaction action;
-    int timeout, feed, value, n;
+    int timeout, feed, value, n, halt;
     double last;
 
-    if (argc != 3 || (timeout = atoi(argv[1])) < 3 || (feed = atoi(argv[2])) < 0) {
-        fprintf(stderr, "wdtrial: usage: wdtrial TIMEOUT FEED\n");
+    halt = argc == 4 && strcmp(argv[3], "stop") == 0;
+    if ((argc != 3 && !halt) || (timeout = atoi(argv[1])) < 3 || (feed = atoi(argv[2])) < 0) {
+        fprintf(stderr, "wdtrial: usage: wdtrial TIMEOUT FEED [stop]\n");
         return 2;
     }
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -135,6 +138,14 @@ int main(int argc, char **argv)
     }
     if (stop) {
         disarm(2, "signal while feeding");
+    }
+    if (halt) {
+        for (n = 1; n <= 5 && !stop; n++) {
+            sleep_until(last + n);
+            printf("wdtrial: %.1f s: left %d s, unfed\n", since(),
+                   get(WDIOC_GETTIMELEFT, "GETTIMELEFT"));
+        }
+        disarm(stop ? 2 : 0, stop ? "signal while unfed" : "stopped as asked");
     }
     printf("wdtrial: %.1f s: feeding stopped; a reset is due by %.1f s\n", last,
            last + 2.0 * timeout);
