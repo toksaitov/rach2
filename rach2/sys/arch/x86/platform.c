@@ -45,6 +45,7 @@
 #include "../../boot.h"
 #include "../../cmdline.h"
 #include "../../input.h"
+#include "../../iommu.h"
 #include "../../klog.h"
 #include "../../mm/paging.h"
 #include "../../network/wireless/work.h"
@@ -417,9 +418,14 @@ void platform_board_init(void)
     }
 }
 
+/** ACPICA first, since the VT-d units are found through its tables; the
+ * units only on x86-64, whose VMs are given devices. */
 void platform_firmware_start(void)
 {
     acpica_boot(acpi_get()->found ? acpi_get()->rsdp : 0);
+#if defined(__x86_64__)
+    iommu_boot();
+#endif
 }
 
 void platform_threads_start(void)
