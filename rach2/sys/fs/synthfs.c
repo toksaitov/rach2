@@ -931,10 +931,24 @@ const char *sysfs_attr(int node, int n)
     return list && n >= 0 ? list[i] : 0;
 }
 
+int sysfs_attr_uevent(int node, int attr)
+{
+    const char *name = sysfs_attr(node, attr);
+    const char *uevent = "uevent";
+    int i;
+
+    if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
+        return attr == 0;
+    }
+    for (i = 0; name && name[i] == uevent[i] && name[i] != '\0'; i++) {
+    }
+    return name && name[i] == uevent[i];
+}
+
 int sysfs_attr_writable(int node, int attr)
 {
     return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1) ||
-           ((node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) && attr == 0) ||
+           sysfs_attr_uevent(node, attr) ||
            (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
            (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE));
 }
