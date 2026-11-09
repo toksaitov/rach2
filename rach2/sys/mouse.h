@@ -73,6 +73,20 @@ struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustyp
  */
 void mouse_report(struct evdev *dev, unsigned int buttons, int dx, int dy, int wheel, int hwheel);
 
+/**
+ * Make the touchpad `dev`, an event device with absolute axes and
+ * BTN_TOOL_FINGER, move the mouse queue's pointer as Linux's mousedev moves
+ * the pointer of /dev/input/mice: while a finger touches, from the third
+ * packet on, each change of ABS_X or ABS_Y gives the movement since two
+ * packets before, scaled so that the pad's width is 256 counts, ABS_Y by
+ * the width as well, with the fractions carried; a touch shorter than 200
+ * ms is a click of the left button; BTN_LEFT, BTN_RIGHT and BTN_MIDDLE,
+ * and BTN_0, BTN_1 and BTN_FORWARD in their places, are the buttons. Each
+ * SYN_REPORT gives a packet. One touchpad at a time; a NULL `dev` is
+ * ignored. Called once the device is set up, before it reports.
+ */
+void mouse_attach_touchpad(struct evdev *dev);
+
 /** Drain up to `max_count` packets into `buf` without waiting; returns the
  * count copied, which may be zero. */
 int mouse_read_packets(struct mouse_packet *buf, int max_count);
