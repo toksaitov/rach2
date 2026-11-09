@@ -1,0 +1,35 @@
+.Dd November 9, 2026
+.Dt PROTON 1
+.Os
+.Sh NAME
+.Nm proton
+.Nd run Windows programs with the GE-Proton compatibility runtime
+.Sh SYNOPSIS
+.Nm /opt/proton/proton
+.Ar command
+.Op Ar argument ...
+.Sh DESCRIPTION
+The x86-64 GNU root installs GE-Proton11-12 under
+.Pa /opt/proton .
+The launcher uses the compatibility directory named by
+.Ev STEAM_COMPAT_DATA_PATH .
+A caller supplies the prefix and launch environment before running a Windows program.
+Steam is not installed by the image.
+.Pp
+The release contains Wine, DXVK and vkd3d-proton.
+DXVK and vkd3d-proton use Vulkan;
+.Ev PROTON_USE_WINED3D=1
+selects WineD3D instead.
+.Ev PROTON_USE_WOW64=1
+selects the release's WoW64 path.
+The graphics runners choose and record the renderer and prefix.
+.Pp
+On lavapipe the qualified Direct3D limit is feature level 11_1 and shader model 6.0.
+Haswell uses WineD3D rather than these Vulkan translators.
+.Sh FILES
+.Bl -tag -width /opt/proton
+.It Pa /opt/proton
+The pinned release, its launcher, runtime, licenses and notices.
+.El
+.Sh SEE ALSO
+.Xr vulkaninfo 1
