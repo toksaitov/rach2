@@ -100,13 +100,13 @@ void console_set_blank_time(unsigned int seconds)
 
 /* The framebuffer: room for 2560x1600 at 32 bits, with the 64 bytes past
  * each line that `use_rgb` gives the pitch. */
-static uint8_t screen[(2560 * 4 + 64) * 1600];
+static uint8_t fb_mem[(2560 * 4 + 64) * 1600];
 static int reachable = 1; /* 0: the framebuffer cannot be mapped */
 
-/** The framebuffer's mapping: `screen`, or NULL when it is out of reach. */
+/** The framebuffer's mapping: `fb_mem`, or NULL when it is out of reach. */
 volatile uint8_t *fbcon_window(void)
 {
-    return reachable ? screen : NULL;
+    return reachable ? fb_mem : NULL;
 }
 
 static int failures;
@@ -148,7 +148,7 @@ static int use_rgb(uint32_t w, uint32_t h, uint8_t bpp)
     fb.height = h;
     fb.bpp = bpp;
     fb.pitch = w * ((bpp + 7u) / 8u) + 64;
-    memset(screen, 0x5A, (unsigned long)fb.pitch * h);
+    memset(fb_mem, 0x5A, (unsigned long)fb.pitch * h);
     if (bpp == 16) {
         fb.red_shift = 11;
         fb.red_bits = 5;
@@ -174,7 +174,7 @@ static int use_rgb(uint32_t w, uint32_t h, uint8_t bpp)
 /** The pixel at (`px`, `py`) as its `fb_bytes` bytes, little-endian. */
 static uint32_t pixel_at(uint32_t px, uint32_t py)
 {
-    const uint8_t *p = screen + py * fb.pitch + px * fb_bytes;
+    const uint8_t *p = fb_mem + py * fb.pitch + px * fb_bytes;
 
     switch (fb_bytes) {
     case 4:
@@ -244,7 +244,7 @@ static void row_init(void)
     }
     CHECK(clear, "the whole framebuffer is cleared, outside the cells too");
     CHECK(cell_shows(0, 0, ' ', GREY, BLACK, 1), "and the cursor is at the first cell");
-    CHECK(screen[1280 * 4] == 0x5A, "the bytes past a line's pixels are left alone");
+    CHECK(fb_mem[1280 * 4] == 0x5A, "the bytes past a line's pixels are left alone");
     CHECK(textcon_load_font() == vga_font_map, "the font is the console's own");
 
     fb.width = 600;
@@ -401,13 +401,13 @@ static void row_scroll(void)
     CHECK(cell_shows(0, 0, 'a', GREY, BLACK, 0) && cell_shows(0, 24, 'y', GREY, BLACK, 0),
           "a screen of lines a to y");
     marked = (grid_top + 10 * 16 + 3) * fb.pitch + (grid_left + 70 * 8 + 3) * 4;
-    screen[marked] = 0x77;
-    screen[(grid_top + 3) * fb.pitch + (grid_left + 3) * 4] = 0x77;
+    fb_mem[marked] = 0x77;
+    fb_mem[(grid_top + 3) * fb.pitch + (grid_left + 3) * 4] = 0x77;
     put("\nz");
     CHECK(cell_shows(0, 0, 'b', GREY, BLACK, 0) && cell_shows(0, 23, 'y', GREY, BLACK, 0) &&
               cell_shows(0, 24, 'z', GREY, BLACK, 0),
           "a scroll moves every line up one");
-    CHECK(screen[marked] == 0x77, "a blank cell under a blank one is not drawn again");
+    CHECK(fb_mem[marked] == 0x77, "a blank cell under a blank one is not drawn again");
     CHECK(cell_shows(0, 0, 'b', GREY, BLACK, 0), "a cell whose line moved is drawn again");
 
     for (n = 0; n < 200; n++) {
@@ -551,7 +551,7 @@ static void row_native(void)
           "the screen is reported as the loader described it");
     put("text");
     pixels = fbcon_native_begin();
-    CHECK(pixels == screen && pixel_at(0, 0) == BLACK && !cell_shows(0, 0, 't', GREY, BLACK, 0),
+    CHECK(pixels == fb_mem && pixel_at(0, 0) == BLACK && !cell_shows(0, 0, 't', GREY, BLACK, 0),
           "the native mode is the screen itself, given black");
     pixels[0] = 0x30;
     pixels[1] = 0x20;
@@ -567,7 +567,7 @@ static void row_native(void)
               cell_shows(4, 0, 'm', GREY, BLACK, 0),
           "the cells are drawn again once the program gives the screen back");
     fbcon_gfx_begin();
-    CHECK(fbcon_native_begin() == screen && pixel_at(1365, 767) == BLACK, "the picture gives way");
+    CHECK(fbcon_native_begin() == fb_mem && pixel_at(1365, 767) == BLACK, "the picture gives way");
     fbcon_gfx_frame(picture);
     CHECK(pixel_at(203, 84) == BLACK, "and draws nothing after");
     fbcon_gfx_begin();
