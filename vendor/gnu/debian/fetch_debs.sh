@@ -88,7 +88,12 @@ download()
 # get URL FILE SHA256: leave FILE with that digest, downloading it when it is
 # missing or has another.
 get()
-{
+(
+    part=
+    trap '[ -z "$part" ] || rm -f "$part"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     if [ -f "$2" ]; then
         got="$(sha256_of "$2")"
         if [ "$got" != "$3" ]; then
@@ -98,19 +103,19 @@ get()
         fi
         return 0
     fi
-    download "$1" "$2.part" || {
-        rm -f "$2.part"
+    part=$(mktemp "$2.part.XXXXXX")
+    download "$1" "$part" || {
         echo "gnu: debian: download failed: $1" >&2
         return 1
     }
-    mv "$2.part" "$2"
-    got="$(sha256_of "$2")"
+    got="$(sha256_of "$part")"
     if [ "$got" != "$3" ]; then
-        rm -f "$2"
         echo "gnu: debian: refused: $1: sha256 $got, expected $3" >&2
         return 1
     fi
-}
+    mv -f "$part" "$2"
+    part=
+)
 
 keyring()
 {
