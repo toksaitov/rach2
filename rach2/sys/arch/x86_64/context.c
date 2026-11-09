@@ -78,11 +78,14 @@ static void arch_tls_load(const process_t *p)
     }
 }
 
-/** Load `p`'s TLS descriptors, then its selectors where `sel_reload` says,
- * then its bases, since a load into FS or GS sets the base as well. */
+/** Load `p`'s TLS descriptors and its address space's LDT, then its
+ * selectors where `sel_reload` says, then its bases, since a load into FS
+ * or GS sets the base as well. A selector whose descriptor is no longer
+ * loadable is loaded as the null one (`x86_64_fault_fixup`). */
 static void arch_bases_load(const process_t *p)
 {
     arch_tls_load(p);
+    ldt_switch(p->mm);
     if (sel_reload(x86_64_ds_read(), p->regs.ds_sel)) {
         x86_64_ds_load(p->regs.ds_sel);
     }
@@ -111,8 +114,9 @@ static void arch_bases_load(const process_t *p)
  * descriptor's, 0. Then the incoming thread's kernel stack becomes the one
  * the next entry from user mode takes; its selectors and bases are loaded
  * (`arch_bases_load`), the GS base where the `swapgs` of the return finds
- * it; and its page directory is loaded when it has one and the processor
- * does not have it loaded, or a shootdown passed it by.
+ * it; SS gets the kernel's data selector, for a return by `sysretl`
+ * (`x86_64_ss_kernel`); and its page directory is loaded when it has one
+ * and the processor does not have it loaded, or a shootdown passed it by.
  *
  * A thread with no directory of its own, an idle task or a kernel thread,
  * runs in whatever is loaded, whose upper half is every directory's, so a
@@ -131,6 +135,7 @@ void switch_context(process_t *old, process_t *new_proc)
     arch_bases_save(old);
     cpu_set_kernel_stack(new_proc->kernel_stack);
     arch_bases_load(new_proc);
+    x86_64_ss_kernel();
 
     if (new_proc->space_root != 0 && (new_proc->page_dir != cpu->space || cpu->space_stale)) {
         cpu->space = new_proc->page_dir;
@@ -205,7 +210,8 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
  * take the null selector, as Linux gives a 64-bit program, the GS base goes
  * back to 0, in the processor and in the record, and the TLS descriptors
  * are cleared, as Linux's exec clears them; the caller sets the FS base,
- * after the selector load here. An i386 image, which the process's address
+ * after the selector load here. The new address space has no LDT, which
+ * the processor takes now. An i386 image, which the process's address
  * space marks, starts in 32-bit code, CS 0x23, with DS and ES the user's
  * data selector, as Linux's `start_thread_ia32` starts it.
  */
@@ -228,6 +234,7 @@ void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
         current_proc->regs.gs_base = 0;
         k_memset(current_proc->regs.tls, 0, sizeof(current_proc->regs.tls));
         arch_tls_load(current_proc);
+        ldt_switch(current_proc->mm);
     }
     x86_64_ds_load(data);
     x86_64_es_load(data);
@@ -249,4 +256,41 @@ void arch_enter_user(uintptr_t pc, uintptr_t sp)
         arch_bases_load(current_proc);
     }
     x86_64_enter_user(pc, sp);
+}
+
+/* The loads of a selector that may fault, and where each resumes
+ * (switch.s). */
+extern const char x86_64_ds_load_insn[], x86_64_ds_load_null[];
+extern const char x86_64_es_load_insn[], x86_64_es_load_null[];
+extern const char x86_64_fs_load_insn[], x86_64_fs_load_null[];
+extern const char x86_64_gs_load_insn[], x86_64_gs_load_null[];
+
+/**
+ * The load of a selector faults with #NP for a segment not present, #SS
+ * for SS, and #GP for any other refusal. The fault of the load into GS
+ * comes in with the user's GS base loaded, which the common entry has
+ * swapped already (isr_handler.s), and its resumption swaps back.
+ */
+int x86_64_fault_fixup(isr_params_t *p)
+{
+    static const struct {
+        const char *insn, *resume;
+    } fixups[] = {
+        {x86_64_ds_load_insn, x86_64_ds_load_null},
+        {x86_64_es_load_insn, x86_64_es_load_null},
+        {x86_64_fs_load_insn, x86_64_fs_load_null},
+        {x86_64_gs_load_insn, x86_64_gs_load_null},
+    };
+    unsigned int i;
+
+    if (p->vector < 11 || p->vector > 13) {
+        return 0;
+    }
+    for (i = 0; i < sizeof(fixups) / sizeof(fixups[0]); i++) {
+        if (p->rip == (uint64_t)(uintptr_t)fixups[i].insn) {
+            p->rip = (uint64_t)(uintptr_t)fixups[i].resume;
+            return 1;
+        }
+    }
+    return 0;
 }

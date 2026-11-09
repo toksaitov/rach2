@@ -57,6 +57,7 @@ void mm_put(struct mm *mm)
         return;
     }
     mmn_release(mm);
+    arch_mm_release(mm);
     smp_space_release(mm->dir);
     free_user_pages(mm->dir);
     free_page_directory(mm->dir);

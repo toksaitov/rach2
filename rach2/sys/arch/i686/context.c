@@ -120,6 +120,20 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
     child->regs.esp = (uint32_t)sp;
 }
 
+/** The i686 kernel keeps nothing with an address space beside its pages:
+ * it has no modify_ldt. */
+void arch_mm_release(struct mm *mm)
+{
+    (void)mm;
+}
+
+int arch_mm_copy(struct mm *to, const struct mm *from)
+{
+    (void)to;
+    (void)from;
+    return 0;
+}
+
 void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
 {
     p->eip = (uint32_t)entry;

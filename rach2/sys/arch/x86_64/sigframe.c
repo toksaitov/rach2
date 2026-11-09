@@ -357,8 +357,9 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
  * the frame starts 8 bytes below the stack pointer, since the handler's
  * `ret` took `pretcode`. There is no plain sigreturn on x86-64, and a call
  * without `rt` is refused with -1. CS and SS are the frame's, at RPL 3, as
- * Linux restores them: CS must be the user's 64-bit or 32-bit code
- * selector, with a return address in the lower half or below 4 GiB, and SS
+ * Linux restores them: CS must be the user's 64-bit code selector, with a
+ * return address in the lower half, or the 32-bit one or a code segment of
+ * the LDT (`ldt_code_valid`), with one below 4 GiB, and SS
  * one `iretq` can load, or the call is refused with -1, the SIGSEGV that
  * Linux's faulting `iretq` gives. A frame without UC_STRICT_RESTORE_SS that
  * returns to 64-bit code takes the user's data selector for an SS that
@@ -388,7 +389,8 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     cs = (uint64_t)(sc->cs | 3u);
     ss = (uint64_t)(sc->ss | 3u);
     if (cs == GDT_USER_CODE ? sc->rip >= LOWER_HALF_END
-                            : cs != GDT_USER_CODE32 || sc->rip >= CODE32_END) {
+                            : (cs != GDT_USER_CODE32 && !ldt_code_valid((unsigned int)cs)) ||
+                                  sc->rip >= CODE32_END) {
         return -1;
     }
     if (!sigframe_ss_valid((unsigned int)ss)) {

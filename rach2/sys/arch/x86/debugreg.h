@@ -60,6 +60,16 @@ void debugreg_defer(void);
 int debugreg_defer_user(uintptr_t pc);
 
 /**
+ * Take a debug exception in the kernel at `pc` inside x86-64's `sysenter`
+ * entry, from its first instruction to `sysenter_stepped`, where the
+ * program's TF steps the processor until the entry clears it: record it as
+ * `debugreg_defer` does, less the single step, for the caller to return
+ * with TF kept. 1 for such a `pc`; 0, with the debug state unchanged, for
+ * any other, and always on i686.
+ */
+int debugreg_defer_sysenter(uintptr_t pc);
+
+/**
  * Post the current thread's deferred debug exceptions, this processor's and
  * those a switch saved in the thread, and clear both records: a user hit as
  * a forced SIGTRAP, and a kernel hit of a breakpoint the thread still has

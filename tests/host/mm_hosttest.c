@@ -113,6 +113,12 @@ void smp_space_release(const page_dir_t *dir)
     CHECK(dir != NULL, "the other processors are asked to give the directory back");
 }
 
+/** The architecture keeps nothing with an address space here. */
+void arch_mm_release(struct mm *mm)
+{
+    (void)mm;
+}
+
 /** Count a free of the pages. */
 void free_user_pages(page_dir_t *dir)
 {

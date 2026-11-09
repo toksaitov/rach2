@@ -31,6 +31,13 @@
 extern void sched_preempt(void);
 extern int sched_tick_waits(void);
 
+#if defined(__x86_64__)
+/* The resumption of a faulting load of a selector, and the LDT loaded on a
+ * processor that had not loaded it (arch/x86_64/context.c and ldt.c). */
+int x86_64_fault_fixup(isr_params_t *p);
+int ldt_fault(const isr_params_t *p);
+#endif
+
 /* The saved flags register of a frame: EFLAGS, or RFLAGS on x86-64. */
 #if defined(__x86_64__)
 #define FRAME_FLAGS(p) ((p)->rflags)
@@ -255,7 +262,14 @@ static void _exception_handler(isr_params_t *params)
 
     if ((params->cs & 3) == 3) {
         struct k_siginfo info;
-        int signo = _exception_signal(params, &info);
+        int signo;
+
+#if defined(__x86_64__)
+        if (ldt_fault(params)) {
+            return;
+        }
+#endif
+        signo = _exception_signal(params, &info);
 
         if (signo == 0) {
             return;
@@ -279,6 +293,9 @@ static void _exception_handler(isr_params_t *params)
     }
 
 #if defined(__x86_64__)
+    if (x86_64_fault_fixup(params)) {
+        return;
+    }
     klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, rip 0x%lx)", name,
          (uint32_t)params->vector, (uint32_t)params->error_code, (unsigned long)params->rip);
 #else

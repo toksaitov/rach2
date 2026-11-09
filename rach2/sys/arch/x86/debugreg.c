@@ -15,6 +15,9 @@
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
 extern void syscall_entry(void);
 #define DEBUG_SYSCALL_ENTRY syscall_entry
+/* The `sysenter` entry's first instruction, and the first one a single
+ * step through it reaches with TF clear (isr_handler.s). */
+extern const char sysenter_entry[], sysenter_stepped[];
 #else
 extern void isr128(void);
 #define DEBUG_SYSCALL_ENTRY isr128
@@ -160,6 +163,36 @@ int debugreg_defer_user(uintptr_t pc)
         deferred[cpu] |= DEFER_USER;
     }
     return 1;
+}
+
+/** A single step through the `sysenter` entry is the program's TF, which
+ * the instruction leaves set, and goes on until the entry clears it; the
+ * step's DR6 bit is dropped. At the first instruction a user data
+ * breakpoint the processor delayed past `sysenter` is marked as at
+ * `syscall_entry`, where DR6 shows a breakpoint or no step. */
+int debugreg_defer_sysenter(uintptr_t pc)
+{
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    unsigned int cpu;
+    unsigned long before, fresh;
+
+    if (pc < (uintptr_t)sysenter_entry || pc > (uintptr_t)sysenter_stepped) {
+        return 0;
+    }
+    cpu = arch_cpu_id();
+    before = deferred[cpu];
+    debugreg_defer();
+    fresh = deferred[cpu] & ~before;
+    deferred[cpu] &= ~(fresh & DR6_BS);
+    if (pc == (uintptr_t)sysenter_entry && ((fresh & DR6_HITS) || !(fresh & DR6_BS)) &&
+        current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {
+        deferred[cpu] |= DEFER_USER;
+    }
+    return 1;
+#else
+    (void)pc;
+    return 0;
+#endif
 }
 
 /** The system call's exit reports a single step in the kernel, so only a

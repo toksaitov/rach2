@@ -2580,6 +2580,10 @@ static struct mm *fork_mm(struct mm *mm, uint32_t flags)
     }
     if (copy && mm) {
         mm_copy_info(copy, mm);
+        if (arch_mm_copy(copy, mm) != 0) {
+            mm_put(copy);
+            return NULL;
+        }
     }
     return copy;
 }

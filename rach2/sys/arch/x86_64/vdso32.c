@@ -6,14 +6,25 @@
  */
 
 #include "ia32.h"
+#include "percpu.h"
 #include "vdsoimg.h"
 
 #include "../../lib/kstring.h"
 #include "../../mm/mm.h"
 #include "../../mm/paging.h"
+#include "../../mm/usercopy.h"
 #include "../../proc/elf.h"
 #include "../../proc/process.h"
+#include "../../proc/smp.h"
 #include "../../vdso.h"
+
+/* The router of a system call's frame and the return after it (isr.c). */
+void _isr_router(isr_params_t *params);
+void isr_leave(isr_params_t *params);
+
+/* The flags only `iretq` restores: TF, and RF, which `sysret` clears. */
+#define RFLAGS_TF 0x00100u
+#define RFLAGS_RF 0x10000u
 
 /*
  * The ELF32 structures the image has that the loader's elf.h does not: a
@@ -75,6 +86,7 @@ typedef struct {
 /* The code of vdso32code.s: its bounds, and each function's. */
 extern const char vdso32_text_start[], vdso32_text_end[];
 extern const char vdso32_vsyscall[], vdso32_vsyscall_end[];
+extern const char vdso32_vsyscall_entry[], vdso32_landing[];
 extern const char vdso32_sigreturn[], vdso32_sigreturn_end[];
 extern const char vdso32_rt_sigreturn[], vdso32_rt_sigreturn_end[];
 extern const char vdso32_clock_gettime[], vdso32_clock_gettime_end[];
@@ -320,6 +332,32 @@ static void symbols(uint32_t symoff, uint32_t veroff, uint32_t hashoff, uint32_t
 }
 
 /**
+ * Write the entry of __kernel_vsyscall this machine's processors take into
+ * the image's four bytes at vdso32_vsyscall_entry, as Linux's
+ * X86_FEATURE_SYSENTER32 and X86_FEATURE_SYSCALL32 patch it: `movl %esp,
+ * %ebp; sysenter`, since `sysenter` keeps no stack pointer, or `movl %ecx,
+ * %ebp; syscall`, since `syscall` overwrites ECX; elsewhere the nops stay
+ * and the call goes by `int $0x80`.
+ */
+static void vsyscall_patch(void)
+{
+    static const uint8_t by_sysenter[4] = {0x89, 0xE5, 0x0F, 0x34};
+    static const uint8_t by_syscall[4] = {0x89, 0xCD, 0x0F, 0x05};
+    uint32_t at = VDSO_TEXT_OFFSET + (uint32_t)(vdso32_vsyscall_entry - vdso32_text_start);
+
+    switch (cpu_ia32_entry()) {
+    case IA32_ENTRY_SYSENTER:
+        put(at, by_sysenter, sizeof(by_sysenter));
+        break;
+    case IA32_ENTRY_SYSCALL:
+        put(at, by_syscall, sizeof(by_syscall));
+        break;
+    default:
+        break;
+    }
+}
+
+/**
  * The layout is the 64-bit image's (vdso.c): the headers, the hash table,
  * the symbols, their names, their versions and the versions' definitions,
  * the dynamic table, the code at VDSO_TEXT_OFFSET, then the section names
@@ -392,6 +430,7 @@ int vdso32_build(void)
 
     cursor = VDSO_TEXT_OFFSET;
     put(reserve(text_len, 16), vdso32_text_start, text_len);
+    vsyscall_patch();
     shstr.off = reserve(0, 1);
     shstr.len = 0;
     for (i = 0; i < SEC_COUNT; i++) {
@@ -452,4 +491,46 @@ uintptr_t ia32_vdso_sigreturn(int rt)
         return 0;
     }
     return vdso32_at(base, rt ? vdso32_rt_sigreturn : vdso32_sigreturn);
+}
+
+/**
+ * The entry's registers are i386's convention for __kernel_vsyscall's
+ * `sysenter` and `syscall`, which Linux's `do_fast_syscall_32` turns into
+ * the frame of the `int $0x80` before the landing pad: RIP the landing pad,
+ * so that a restart's rewind of two bytes lands on that `int $0x80`; for
+ * `sysenter`, RSP from EBP, where __kernel_vsyscall left the stack pointer;
+ * and EBP, the sixth argument, from the stack, where it pushed it. A stack
+ * that cannot be read gives -EFAULT without the call, as Linux's does. The
+ * landing pad is the i386 image's; an image without one, a 64-bit one's
+ * among them, has it as at address 0, in the first page, where the program
+ * takes SIGSEGV.
+ *
+ * After the call, and the signal its return delivers (`isr_leave`), the
+ * return may be by `sysretl`, as Linux's opportunistic SYSRETL: when the
+ * frame still returns to the landing pad, below 4 GiB, in the user's
+ * 32-bit code and data selectors, without TF or RF, which only `iretq`
+ * restores.
+ */
+int ia32_fast_syscall(isr_params_t *p, int sysenter)
+{
+    struct mm *mm = current_proc ? current_proc->mm : NULL;
+    uintptr_t base = mm && mm->compat ? mm->vdso : 0;
+    uintptr_t landing = vdso32_at(base, vdso32_landing);
+    uint32_t ebp;
+
+    p->rip = landing;
+    if (sysenter) {
+        p->rsp = (uint32_t)p->rbp;
+    }
+    if (copy_from_user(&ebp, (const void __user *)(uintptr_t)(uint32_t)p->rsp, sizeof(ebp)) != 0) {
+        current_proc->orig_nr = (int32_t)(uint32_t)p->rax;
+        p->rax = (uint64_t)(int64_t)-EFAULT;
+        bkl_enter();
+    } else {
+        p->rbp = ebp;
+        _isr_router(p);
+    }
+    isr_leave(p);
+    return p->rip == landing && landing <= 0xFFFFFFFFu && p->cs == GDT_USER_CODE32 &&
+           p->ss == GDT_USER_DATA && (p->rflags & (RFLAGS_TF | RFLAGS_RF)) == 0;
 }

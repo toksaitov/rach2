@@ -22,8 +22,9 @@
  *   0x10  the kernel's code          0x40  the TSS, two entries long in
  *   0x18  the kernel's data                long mode
  *   0x23  the user's 32-bit code     0x50  the LDT's descriptor, two
- *   0x2B  the user's data                  entries, empty: no LDT is loaded
- *   0x33  the user's 64-bit code     0x63, 0x6B, 0x73  the thread's three
+ *   0x2B  the user's data                  entries, the running process's
+ *   0x33  the user's 64-bit code           LDT, or none (ldt.c)
+ *                                    0x63, 0x6B, 0x73  the thread's three
  *                                          TLS descriptors, entries 12 to 14
  *
  * `syscall` and `sysret` take the selectors from IA32_STAR and require this
@@ -31,10 +32,12 @@
  * the return, 0x23, the 32-bit code there, the data 8 bytes after it and the
  * 64-bit code 16 bytes after it. A far call or jump to 0x23 enters
  * compatibility mode, as on Linux; such code makes system calls by
- * `int $0x80` (idt.c). The TLS entries are the running thread's, which a
- * switch writes from its record (context.c) and set_thread_area sets
- * (tls.c). Entry 1, Linux's 32-bit kernel code, and entry 15, its per-CPU
- * segment for `lsl`, stay empty: no program uses either.
+ * `int $0x80` (idt.c), or through the 32-bit vDSO by `sysenter` on Intel's
+ * processors and by `syscall` on AMD's (isr_handler.s). The TLS entries
+ * are the running thread's, which a switch writes from its record
+ * (context.c) and set_thread_area sets (tls.c). Entry 1, Linux's 32-bit
+ * kernel code, and entry 15, its per-CPU segment for `lsl`, stay empty: no
+ * program uses either.
  */
 
 #define GDT_KERNEL_CODE 0x10u
@@ -94,6 +97,7 @@ struct cpu {
     uint32_t id;         /* the processor's index in `cpus` */
     uint64_t gdt[GDT_ENTRIES];
     struct tss64 tss;
+    const void *ldt; /* the LDT loaded here, an address space's; NULL for none */
 };
 
 extern struct cpu cpus[NR_CPUS];
@@ -116,6 +120,12 @@ static __inline__ struct cpu *cpu_self(void)
 #define MSR_FS_BASE        0xC0000100u
 #define MSR_GS_BASE        0xC0000101u
 #define MSR_KERNEL_GS_BASE 0xC0000102u
+
+/* The MSRs of `sysenter`: the kernel's code selector, the stack pointer and
+ * the entry (Intel SDM Vol. 3B, 5.8.7). */
+#define MSR_SYSENTER_CS  0x174u
+#define MSR_SYSENTER_ESP 0x175u
+#define MSR_SYSENTER_EIP 0x176u
 
 #define EFER_SCE 0x001u /* syscall and sysret */
 #define EFER_LME 0x100u /* long mode */
@@ -149,6 +159,20 @@ void x86_64_es_load(unsigned int sel);
  * 0 where lar refuses it (switch.s). */
 unsigned int x86_64_lar(unsigned int sel);
 
+/* Load the kernel's data selector into SS where it holds another, for a
+ * later `sysretl` on AMD's processors; and load the LDT register from the
+ * GDT's descriptor `sel`, or with no LDT for 0 (switch.s). */
+void x86_64_ss_kernel(void);
+void x86_64_lldt(unsigned int sel);
+
+/**
+ * Resume a fault of the kernel's load of a selector into DS, ES, FS or GS
+ * (switch.s), vector 11, 12 or 13 in the frame `p`, at the place that loads
+ * the null selector in its place: 1 when `p` was such a fault, now
+ * resumable, else 0 (context.c).
+ */
+int x86_64_fault_fixup(isr_params_t *p);
+
 /**
  * Fill the boot processor's record, with its GDT and its TSS, load the GDT,
  * and make the record GS's base, with 0 as the program's base in
@@ -156,10 +180,24 @@ unsigned int x86_64_lar(unsigned int sel);
  */
 void init_gdt(void);
 
+/* How 32-bit code enters the kernel through the vDSO on this machine's
+ * processors, as Linux's X86_FEATURE_SYSENTER32 and X86_FEATURE_SYSCALL32
+ * choose (`cpu_ia32_entry`). */
+#define IA32_ENTRY_INT80    0 /* `int $0x80` alone */
+#define IA32_ENTRY_SYSENTER 1 /* Intel's, Centaur's and Zhaoxin's */
+#define IA32_ENTRY_SYSCALL  2 /* AMD's and Hygon's */
+
+/** The entry 32-bit code takes through the vDSO, IA32_ENTRY_*, by the
+ * vendor `cpuid` names: in long mode AMD's processors refuse `sysenter` and
+ * Intel's refuse `syscall` from 32-bit code, both with #UD. */
+int cpu_ia32_entry(void);
+
 /**
  * Make the kernel stack ending at `kernel_stack` the running processor's
  * (`cpu_set_kernel_stack`), load its task register, and turn `syscall` on:
- * IA32_STAR, IA32_LSTAR, IA32_CSTAR, IA32_FMASK and EFER.SCE. The
+ * IA32_STAR, IA32_LSTAR, IA32_CSTAR, IA32_FMASK and EFER.SCE; where
+ * `cpu_ia32_entry` says 32-bit code enters by `sysenter`, set its MSRs too.
+ * The
  * processor's GS base must be its record already, and its GDT loaded: the
  * boot processor calls this after `init_gdt`, and a started one from
  * `arch_ap_tables`.
@@ -176,5 +214,15 @@ void init_idt(void);
  * `syscall` (`kernel_rsp`).
  */
 void cpu_set_kernel_stack(uintptr_t top);
+
+struct mm;
+
+/**
+ * Load the LDT of the address space `mm` on the running processor, through
+ * the GDT's LDT descriptor, or no LDT for a NULL `mm` or one without; a
+ * processor that has it loaded already does nothing (ldt.c). The switch
+ * calls it for the incoming thread before it loads that thread's selectors.
+ */
+void ldt_switch(const struct mm *mm);
 
 #endif /* _X86_64_PERCPU_H_ */

@@ -51,14 +51,27 @@ vdso32_text_start:
 
 # __kernel_vsyscall: the system call in EAX with the arguments in EBX,
 # ECX, EDX, ESI, EDI and EBP, as `int $0x80` takes them, which AT_SYSINFO
-# names. ECX, EDX and EBP are saved around the entry, the frame Linux's
-# entries by sysenter and syscall need, which the int $0x80 entry keeps.
+# names, as Linux's. ECX, EDX and EBP are saved around the entry. The four
+# bytes at vdso32_vsyscall_entry are nops here, which vdso32.c replaces at
+# boot, as Linux's ALTERNATIVE_2 does: with `movl %esp, %ebp; sysenter`
+# where the processors are Intel's, and with `movl %ecx, %ebp; syscall`
+# where they are AMD's. The kernel returns from either to the landing pad,
+# vdso32_landing, with EBP restored and ECX and EDX as the pops leave them;
+# a call it restarts goes back to the `int $0x80` before it.
 .globl vdso32_vsyscall
 vdso32_vsyscall:
     pushl %ecx
     pushl %edx
     pushl %ebp
+.globl vdso32_vsyscall_entry
+vdso32_vsyscall_entry:
+    nop
+    nop
+    nop
+    nop
     int $0x80
+.globl vdso32_landing
+vdso32_landing:
     popl %ebp
     popl %edx
     popl %ecx

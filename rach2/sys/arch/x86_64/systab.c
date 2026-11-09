@@ -9,6 +9,7 @@
  * socketcall it is on i386.
  */
 
+#include "ia32.h"
 #include "sysnr.h"
 #include "tls.h"
 
@@ -275,6 +276,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MUNLOCK] = sys_munlock;
     table[SYS_MLOCKALL] = sys_mlockall;
     table[SYS_MUNLOCKALL] = sys_munlockall;
+    table[SYS_MODIFY_LDT] = sys_modify_ldt;
     table[SYS_PRCTL] = sys_prctl;
     table[SYS_ARCH_PRCTL] = sys_arch_prctl;
     table[SYS_ADJTIMEX] = sys_adjtimex;

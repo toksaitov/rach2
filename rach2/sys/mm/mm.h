@@ -99,6 +99,13 @@ struct mm {
      * /proc/PID/status, which RLIMIT_MEMLOCK bounds apart from the locked
      * regions' VmLck, as Linux's pinned_vm. */
     unsigned long pinned;
+    /* The x86-64's local descriptor table, which modify_ldt makes and every
+     * thread of the space loads (arch/x86_64/ldt.c), from the heap; NULL
+     * for none, and always on i686. A fork's copy has a copy of it
+     * (`arch_mm_copy`), and the last user's put frees it
+     * (`arch_mm_release`). */
+    void *ldt;
+    uint32_t ldt_entries; /* the entries up to the highest written */
 };
 
 /** A new, empty, dumpable address space with one user and one hold; NULL

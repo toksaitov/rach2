@@ -98,13 +98,32 @@ x86_64_lar:
 # void x86_64_es_load(unsigned int sel)
 #
 # Load sel into DS or ES. Long mode ignores both bases, so nothing follows.
+#
+# Each load into DS, ES, FS or GS may fault on a selector whose LDT or TLS
+# entry the program changed; the fault resumes at the routine's *_null
+# label (x86_64_fault_fixup, context.c), which loads the null selector in
+# its place and returns, as the fault fixup of Linux's `loadsegment` does.
 .globl x86_64_ds_load
 x86_64_ds_load:
+.globl x86_64_ds_load_insn
+x86_64_ds_load_insn:
+    movw %di, %ds
+    ret
+.globl x86_64_ds_load_null
+x86_64_ds_load_null:
+    xorl %edi, %edi
     movw %di, %ds
     ret
 
 .globl x86_64_es_load
 x86_64_es_load:
+.globl x86_64_es_load_insn
+x86_64_es_load_insn:
+    movw %di, %es
+    ret
+.globl x86_64_es_load_null
+x86_64_es_load_null:
+    xorl %edi, %edi
     movw %di, %es
     ret
 
@@ -117,9 +136,19 @@ x86_64_es_load:
 # sets IA32_GS_BASE, the kernel's base, so it runs between two `swapgs`
 # with interrupts off: the user's slot takes the descriptor's base, and an
 # NMI between the two finds a lower-half base in IA32_GS_BASE, which the
-# paranoid entry swaps as it does for any entry with the user's base loaded.
+# paranoid entry swaps as it does for any entry with the user's base loaded,
+# and the common entry swaps for a fault of the load itself
+# (isr_handler.s), which resumes at x86_64_gs_load_null with the kernel's
+# base loaded.
 .globl x86_64_fs_load
 x86_64_fs_load:
+.globl x86_64_fs_load_insn
+x86_64_fs_load_insn:
+    movw %di, %fs
+    ret
+.globl x86_64_fs_load_null
+x86_64_fs_load_null:
+    xorl %edi, %edi
     movw %di, %fs
     ret
 
@@ -128,9 +157,46 @@ x86_64_gs_load:
     pushfq
     cli
     swapgs
+.globl x86_64_gs_load_insn
+x86_64_gs_load_insn:
     movw %di, %gs
     swapgs
     popfq
+    ret
+.globl x86_64_gs_load_null
+x86_64_gs_load_null:
+    swapgs
+    xorl %edi, %edi
+    movw %di, %gs
+    swapgs
+    popfq
+    ret
+
+# void x86_64_ss_kernel(void)
+#
+# Load the kernel's data selector into SS unless SS has it. An interrupt
+# from user mode loads the null selector into SS, and on AMD's processors a
+# `sysret` with SS null leaves SS's cached descriptor unusable to 32-bit
+# code, so the switch makes SS valid before any thread returns by `sysretl`,
+# as Linux's __switch_to does for X86_BUG_SYSRET_SS_ATTRS.
+.globl x86_64_ss_kernel
+x86_64_ss_kernel:
+    xorl %eax, %eax
+    movw %ss, %ax
+    cmpl $GDT_KERNEL_DATA, %eax
+    je 1f
+    movw $GDT_KERNEL_DATA, %ax
+    movw %ax, %ss
+1:
+    ret
+
+# void x86_64_lldt(unsigned int sel)
+#
+# Load the LDT register from the GDT's descriptor sel, or with no LDT for
+# the null selector.
+.globl x86_64_lldt
+x86_64_lldt:
+    lldt %di
     ret
 
 # void x86_64_load_idt(const void *ptr)
