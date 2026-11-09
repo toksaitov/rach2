@@ -13,7 +13,10 @@
  * cell only when it shows something other than what it showed, since every
  * pixel is a store to the display's memory. It also draws the picture of
  * /fb's mode 13h, and gives the screen to a program that writes it at its
- * native mode, while a program holds /fb.
+ * native mode, while a program holds /fb. The screen is the loader's
+ * framebuffer, or the buffer a DRM device scans out for the console
+ * (sys/drm/drm_client.c), and while a DRM master has the screen the console
+ * draws nothing.
  */
 
 #ifndef _FBCON_H_
@@ -88,10 +91,12 @@ int fbcon_screen(struct fb_screen *s);
 /**
  * Give the whole screen, painted black, to a program that writes its pixels
  * at the screen's own format, the native mode of /fb: no cell and no picture
- * is drawn until `fbcon_gfx_end`. Returns the framebuffer's first byte, as
- * `fbcon_window` gives it, or NULL, with nothing changed, when the console
- * is on no framebuffer or on one that is not RGB at 15, 16, 24 or 32 bits a
- * pixel. From mode 13h's picture it goes straight to the native mode.
+ * is drawn until `fbcon_gfx_end`. Returns the screen's first byte, the
+ * console's DRM buffer or the loader's framebuffer as `fbcon_window` gives
+ * it, or NULL, with nothing changed, when the console is on no framebuffer,
+ * its screen is gone (`fbcon_detach`), or the screen is not RGB at 15, 16,
+ * 24 or 32 bits a pixel. A detached console leaves the screen unpainted.
+ * From mode 13h's picture it goes straight to the native mode.
  */
 volatile uint8_t *fbcon_native_begin(void);
 
@@ -103,6 +108,34 @@ void fbcon_gfx_end(void);
 /** Paint the screen black and draw no cell while `blank` is set; when it
  * is clear, draw every cell again, as `fbcon_gfx_end` does. */
 void fbcon_blank(int blank);
+
+/**
+ * Stop drawing, for a DRM master that takes the screen: the cells, the
+ * cursor, the blank and the modes of /fb go on changing, and nothing is drawn
+ * until `fbcon_attach`. With `forget` set the screen is gone, its device
+ * removed or its memory moved, and `fbcon_native_begin` returns NULL until
+ * then, so that /fb's native mode cannot write where it was. The caller
+ * holds the console's lock.
+ */
+void fbcon_detach(int forget);
+
+/**
+ * Draw on the screen `fb` from now on, at the kernel's address `base`, or
+ * at the loader's framebuffer (`fbcon_window`) for NULL, and draw it whole:
+ * every cell, or, while a program holds /fb, the screen cleared for
+ * `fb_redraw` (fb.h) to draw the program's mode again. The columns and rows
+ * stay as they are, at the largest whole scale of the font at which they
+ * fit on `fb`, centered; a screen too small for them at scale 1 shows the
+ * cells from the top left corner that fit. A console on the VGA's text mode
+ * becomes a framebuffer console here, its text drawn again from the
+ * scrollback. Returns 0, or -1 with nothing changed for a screen that is
+ * neither direct color at 8 to 32 bits a pixel nor indexed color at 8, or
+ * one that cannot be reached. The caller holds the console's lock.
+ */
+int fbcon_attach(const struct boot_framebuffer *fb, volatile uint8_t *base);
+
+/** The font's scale on the screen, 0 on the VGA's text mode; for the log. */
+uint32_t fbcon_scale(void);
 
 /**
  * The kernel's address of the framebuffer's first byte now, or NULL when

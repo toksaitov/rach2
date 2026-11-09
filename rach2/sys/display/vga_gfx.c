@@ -389,6 +389,47 @@ int fb_screen(struct fb_screen *s)
     return fbcon_screen(s);
 }
 
+void fb_redraw(void)
+{
+    uint32_t flags = kirq_save();
+    struct fb_screen screen;
+    volatile uint8_t *base = NULL;
+
+    if (!fbcon_active || gfx_current.mode == GFX_MODE_NONE) {
+        kirq_restore(flags);
+        return;
+    }
+    if (gfx_current.mode == GFX_MODE_NATIVE) {
+        if (fbcon_screen(&screen) == 0) {
+            base = fbcon_native_begin();
+        }
+        if (base != NULL) {
+            gfx_current.width = screen.width;
+            gfx_current.height = screen.height;
+            gfx_current.bpp = screen.bpp;
+            gfx_current.pitch = screen.pitch;
+            gfx_current.framebuffer = (uint8_t *)(uintptr_t)base;
+            gfx_current.size = screen.pitch * screen.height;
+            kirq_restore(flags);
+            return;
+        }
+        /* A screen the native mode cannot have: the program gets mode 13h. */
+        gfx_current.mode = GFX_MODE_NONE;
+        vga_graphics_mode = false;
+        kirq_restore(flags);
+        fb_enter();
+        return;
+    }
+    if (gfx_current.framebuffer != gfx_shadow) {
+        /* Mode 13h on the VGA, whose console has just moved to a
+         * framebuffer: the picture goes on in memory. */
+        k_memset(gfx_shadow, 0, VGA_GFX_SIZE);
+        gfx_current.framebuffer = gfx_shadow;
+    }
+    fbcon_gfx_begin();
+    kirq_restore(flags);
+}
+
 /**
  * Load the classic 16-color CGA/EGA palette into the DAC for text mode.
  *
