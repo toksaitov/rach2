@@ -2,6 +2,7 @@
 import hashlib
 import multiprocessing
 import signal
+import sys
 import time
 
 
@@ -18,7 +19,7 @@ def main():
     children = []
     counters = [multiprocessing.Value('Q', 0) for _ in range(8)]
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        signal.signal(sig, lambda *_: exit(0))
+        signal.signal(sig, lambda *_: sys.exit(0))
     try:
         for counter in counters:
             child = multiprocessing.Process(target=burn, args=(counter,))
