@@ -10,6 +10,21 @@ import time
 from run import stop
 
 
+def admit(here, fields):
+    """Claim the three load guests together before any of them starts."""
+    claim = os.environ.get('BROWSER_LOAD_CLAIM')
+    if claim:
+        return claim
+    claim = 'browser-load:%d:%d' % (os.getpid(), time.time_ns())
+    etude = here.parents[2] / 'build/tools/etude/etude'
+    args = [str(etude), 'admit', '-c', '-d', fields['locks'], '-w', fields['wait'],
+            fields['ledger'], claim, subprocess.check_output(['id', '-un'], text=True).strip(),
+            'shared', '24000,6442450944,1', fields['capacity'], fields['seconds'],
+            '/usr/bin/env', 'BROWSER_LOAD_CLAIM=' + claim, sys.executable,
+            str(Path(__file__).resolve())] + sys.argv[1:]
+    os.execv(etude, args)
+
+
 def main():
     """Watch the load guests, retain their records, and stop and reap all children."""
     out = Path(sys.argv[1]).resolve()
@@ -20,6 +35,7 @@ def main():
     site = Path(os.environ.get('ETUDE_SITE', '/etc/rach2/etude-site'))
     fields = dict(line.split(' ', 1) for line in site.read_text().splitlines() if ' ' in line)
     ledger = Path(fields['ledger']) / 'claims'
+    claim = admit(here, fields)
     children, logs = [], []
     command = None
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
@@ -33,6 +49,7 @@ def main():
                     'python3 -u /tmp/load.py']
             (out / ('load-%d.argv.json' % i)).write_text(json.dumps(args) + '\n')
             children.append(subprocess.Popen(args, stdout=log, stderr=log,
+                                              env=dict(os.environ, DEBIAN_REF_CLAIM=claim),
                                               start_new_session=True))
         while True:
             assert all(c.poll() is None for c in children), 'load guest exited; see load logs'
