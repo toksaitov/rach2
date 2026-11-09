@@ -1694,3 +1694,8 @@ $(IMAGES_DIR)/procfiles-real.krffs: $(ARCH_BUILD)/tests/musl/procfilesmusl $(DEM
 	$(MKIMAGE) $(@D)/procfiles/os-real.manifest $@ $(OS_REAL_MIB)
 
 $(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-programs
+
+# `tests/run d3d`: Direct3D 9, 11 and 12 pixels on lavapipe through GE-Proton.
+# `tests/run d3d-wine`: Wine's Direct3D units on both paths against Debian.
+# `tests/run d3d-vkd3d`: vkd3d-proton's units on lavapipe against Debian.
+include tests/graphics/d3d/rules.mk

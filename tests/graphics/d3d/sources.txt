@@ -1,0 +1,11 @@
+# name version official-url sha256
+# Wine's digest matches the release's published sha512sums.asc; the commit
+# archives and nested submodules are the exact GE-Proton11-12 revisions.
+wine 11.0 https://dl.winehq.org/wine/source/11.0/wine-11.0.tar.xz c07a6857933c1fc60dff5448d79f39c92481c1e9db5aa628db9d0358446e0701
+vkd3d 8293130eb https://github.com/HansKristian-Work/vkd3d-proton/archive/8293130ebe370b1deb761898ae0d397d680837de.tar.gz eb90ee96bd84e4482d47ea2d432f37d0a8bb32d62b9edec0c98ec2f519c9512b
+dxil-spirv 8b48f0e03 https://github.com/HansKristian-Work/dxil-spirv/archive/8b48f0e0392d76be4fdcea2a3ba3ea99dddaae5b.tar.gz 9df5d5c8c322b65f39f6c76ef0974e37fdba07136b28174fc9a09f56f1dfdc08
+spirv-dxil c63848ec https://github.com/KhronosGroup/SPIRV-Headers/archive/c63848ecf2200425511319fd8bf2c17b751e501e.tar.gz e62af3ae847d3dd4b4cf87ee70a3180bd527594c9f18c20f7434224a2ab20139
+dxbc-spirv 8dae2d857 https://github.com/doitsujin/dxbc-spirv/archive/8dae2d8573af08378c6059aca3d5987da99d20b5.tar.gz 9d423accde3fa56b3b56fc3778a2a4308ce13a2343cd9945fc4f41899de8fee4
+spirv-dxbc c8ad050f https://github.com/KhronosGroup/SPIRV-Headers/archive/c8ad050fcb29e42a2f57d9f59e97488f465c436d.tar.gz 5b6f38b430f1c68c7395c570053403da14eb4cecc7fcb4040e7a5248c2f63874
+spirv f88a2d766 https://github.com/KhronosGroup/SPIRV-Headers/archive/f88a2d766840fc825af1fc065977953ba1fa4a91.tar.gz 028424e4934f2ed8567319939e79d0a87e529ac7c504501b8b406f98598bdadd
+vulkan ee2ec5fd https://github.com/KhronosGroup/Vulkan-Headers/archive/ee2ec5fd83dafce291024683b50dc89219333076.tar.gz df7a152381a7fdaf98e36de7716b8d6d6ead776764bc76d1a1aef9049d1bca89
