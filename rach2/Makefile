@@ -207,6 +207,13 @@ check-arch :
 print-c-src :
 	@echo $(C_SRC)
 
+# Print the shared kernel sources, C_SRC_SHARED, expanded, with whatever the
+# sub-manifests that sources.mk includes add to it, for the commit hook's
+# check-arch over the changed shared files (tools/verify/quickcheck.sh).
+.PHONY : print-c-src-shared
+print-c-src-shared :
+	@echo $(C_SRC_SHARED)
+
 # ACPICA's list, by its paths in the core, for the same guard.
 .PHONY : print-acpica-src
 print-acpica-src :

@@ -195,7 +195,9 @@ markers() {
 }
 
 # arch_layer: `make -C rach2 check-arch` over the changed shared kernel files.
-# A changed shared header is read by that check whichever file it is given.
+# The shared list is make's own expansion of C_SRC_SHARED, so that a file a
+# sub-manifest of rach2/sources.mk adds is judged too. A changed shared
+# header is read by that check whichever file it is given.
 arch_layer() {
     [ -f "$TREE/rach2/sources.mk" ] || return 0
     touched '^rach2/.*\.[ch]$' || return 0
@@ -203,8 +205,13 @@ arch_layer() {
         warn 'no clang here; check-arch was left out'
         return 0
     fi
+    if ! make --no-print-directory -s -C "$TREE/rach2" CROSS_CC=true print-c-src-shared \
+        >"$WORK/shared" 2>"$WORK/make.err"; then
+        warn "make print-c-src-shared failed; check-arch was left out: $(head -n 1 "$WORK/make.err")"
+        return 0
+    fi
     sed -n 's|^rach2/\(.*\.c\)$|\1|p' "$FILES" >"$WORK/kc"
-    _shared=$(tr -s ' \\\t' '\n' <"$TREE/rach2/sources.mk" | grep -Fx -f "$WORK/kc" | tr '\n' ' ')
+    _shared=$(tr -s ' \t' '\n' <"$WORK/shared" | grep -Fx -f "$WORK/kc" | tr '\n' ' ')
     if [ -z "$_shared" ]; then
         grep -E '^rach2/sys/.*\.h$' "$FILES" | grep -qv '^rach2/sys/arch/' || return 0
         _shared=kernel.c
