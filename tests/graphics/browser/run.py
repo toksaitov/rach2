@@ -203,6 +203,7 @@ class Browser:
         self.target = target
         self.session = self.client.call("Target.attachToTarget", {
             "targetId": target, "flatten": True})["sessionId"]
+        self.client.call("Page.enable", {}, self.session)
         self.client.call("Target.activateTarget", {"targetId": target})
         self.client.call("Page.bringToFront", {}, self.session)
 
@@ -222,12 +223,12 @@ class Browser:
                 "awaitPromise": True, "returnByValue": True, "userGesture": True}, self.session)
             assert "exceptionDetails" not in value, value
             return value["result"].get("value")
-        value = self.client.call("WebDriver:ExecuteAsyncScript", {
-            "script": "const done = arguments[arguments.length - 1]; Promise.resolve().then(() => (" +
-                      expression + ")).then(v => done({value:v}), e => done({error:String(e)}));",
-            "args": [], "newSandbox": True, "sandbox": None})["value"]
-        assert "error" not in value, value
-        return value.get("value")
+        reply = self.client.call("WebDriver:ExecuteScript", {
+            "script": "return (" + expression + ");",
+            "args": [], "newSandbox": True, "sandbox": None})
+        with (self.out / "marionette.jsonl").open("a") as log:
+            log.write(json.dumps({"expression": expression, "reply": reply}) + "\n")
+        return reply["value"]
 
     def element(self, selector):
         """Find a Firefox element by CSS selector for native input operations."""
@@ -339,11 +340,13 @@ def webgpu(b, url):
     got = result["readback"]
     assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got
     assert "swiftshader" in json.dumps(got["adapter"]).lower(), got
+    save(b.out / "partial.json", result)
     b.navigate(url + "/cts.html")
     b.until(lambda: b.script("window.done"))
     assert not b.script("window.error"), b.script("window.error")
     result["cts"] = b.script("window.result")
     assert result["cts"]["results"] and all(row[1]["status"] == "pass" for row in result["cts"]["results"]), result
+    save(b.out / "partial.json", result)
     source = (HERE / "sample.js").read_text()
     ident = b.client.call("Page.addScriptToEvaluateOnNewDocument", {"source": source}, b.session)["identifier"]
     try:

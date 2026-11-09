@@ -100,8 +100,9 @@ class Marionette:
         self.sock = socket.create_connection(("127.0.0.1", port))
         self.serial = 0
         assert self.message()["marionetteProtocol"] == 3
-        self.call("WebDriver:NewSession", {"capabilities": {"alwaysMatch": {
-            "acceptInsecureCerts": True}}})
+        self.capabilities = self.call("WebDriver:NewSession", {"acceptInsecureCerts": True})["capabilities"]
+        assert self.capabilities["acceptInsecureCerts"] is True
+        self.call("WebDriver:SetTimeouts", {"script": None})
 
     def message(self):
         """Read a length-prefixed UTF-8 JSON message."""

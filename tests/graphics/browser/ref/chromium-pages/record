@@ -1,0 +1,27 @@
+runner browser
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 8138032
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.00 0.00 0.00
+processes start 158
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=8138032
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case chromium pages
+compositor weston 14.0.2 headless pixman kiosk
+load end 0.00 0.00 0.00
+busy 29.7%
+host SFW-DPC Linux 6.18.54.1-microsoft-standard-WSL2
+host_load 4.72 5.36 5.13
+host_claims none: no ledger at /var/lib/rach2-etude/ledger/claims
