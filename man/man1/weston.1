@@ -1,0 +1,376 @@
+.Dd November 9, 2026
+.Dt WESTON 1
+.Os
+.Sh NAME
+.Nm weston
+.Nd the reference Wayland server
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     weston
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     weston is the reference implementation of a Wayland server. A Wayland
+     server is a display server, a window manager, and a compositor all in
+     one. Weston has several backends as loadable modules: it can run on Linux
+     KMS (kernel modesetting via DRM), as an X client, or inside another
+     Wayland server instance.
+
+     Weston supports fundamentally different graphical user interface
+     paradigms via shell plugins. Two plugins are provided: the desktop shell,
+     and the kiosk shell.
+
+     Weston also supports X clients via Xwayland, see below.
+.Ed
+.Ss "BACKENDS"
+.Bd -literal
+     drm    The DRM backend uses Linux KMS for output and evdev devices for
+            input.  It supports multiple monitors in a unified desktop with
+            DPMS. See weston-drm(7), if installed.
+
+     wayland
+            The Wayland backend runs on another Wayland server, a different
+            Weston instance, for example. Weston shows up as a single desktop
+            window on the parent server.
+
+     x11    The X11 backend runs on an X server. Each Weston output becomes an
+            X window. This is a cheap way to test multi-monitor support of a
+            Wayland shell, desktop, or applications.
+
+     rdp    The RDP backend runs in memory without the need of graphical
+            hardware. Access to the desktop is done by using the RDP protocol.
+            Each connecting client has its own seat making it a cheap way to
+            test multi-seat support. See weston-rdp(7), if installed.
+
+     vnc    The VNC backend runs in memory without the need of graphical
+            hardware. Access to the desktop is done by using the RFB protocol.
+            Currently only one connecting client is supported. See
+            weston-vnc(7), if installed.
+
+     pipewire
+            The PipeWire backend runs in memory without the need of graphical
+            hardware and creates a PipeWire node for each output. It can be
+            used to capture Weston outputs for processing with another
+            application.
+
+     headless
+            The headless backend runs in memory. It can be used to capture
+            Weston outputs or to test client applications.
+.Ed
+.Ss "SHELLS"
+.Bd -literal
+     Weston's user interface is implemented by individual 'shell' plugins.  A
+     number of shells are provided for different usecases.
+
+     desktop
+            The desktop shell is Weston's default mode. It provides an example
+            of a desktop-like environment, featuring a panel with launchers
+            and a clock, a background, and an interactive task switcher.
+            Whilst not intended to be a full-fledged desktop environment in
+            and of itself, it is an example of how such an environment can be
+            built.
+
+     kiosk  The kiosk shell is intended for environments which want to run a
+            single application at a time. Applications will be made full
+            screen and activated as they are started.
+
+     fullscreen
+            The fullscreen shell is a deprecated implementation of the ideas
+            behind the kiosk shell. It requires specific client support for
+            the zwp_fullscreen_shell_v1 interface.
+
+     ivi    The IVI shell is a special-purpose shell which exposes an API
+            compatible with the GENIVI Layer Manager to user-provided HMI
+            controller modules.  It is intended for use in automotive
+            environments.
+.Ed
+.Ss "XWAYLAND"
+.Bd -literal
+     Weston can support X11 clients running within a Weston session via an X
+     server called Xwayland.  Xwayland is built as a separate executable,
+     provided by X.Org. Once built and installed, it can be activated with the
+     --xwayland option. Weston will listen on a new X11 display socket and
+     export it through the DISPLAY environment variable.
+
+     It has also its own X window manager where cursor themes and sizes can be
+     chosen using XCURSOR_PATH and XCURSOR_SIZE environment variables. See
+     ENVIRONMENT.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+   Weston core options:
+     -Bbackend1,backend2, --backend=backend1,backend2
+            Load the comma-separated list of backends instead of the default
+            backend, see BACKENDS.  The backend modules are searched for in
+            /usr/lib/x86_64-linux-gnu/weston.  The default backend is drm
+            unless the environment suggests otherwise, see DISPLAY and
+            WAYLAND_DISPLAY.  The first backend is the primary backend, and it
+            provides the renderer. Not all backends support being loaded as
+            secondary backends, which reuse the primary backend's renderer.
+
+     -cconfig.ini, --config=config.ini
+            Load config.ini instead of weston.ini.  The argument can also be
+            an absolute path starting with a /.  If the path is not absolute,
+            it will be searched in the normal config paths, see weston.ini(5).
+            This option is ignored if the --no-config option is passed.
+
+     --debug
+            Enable debug protocol extension weston_debug_v1 which any client
+            can use to receive debugging messages from the compositor.
+
+            WARNING: This is risky for two reasons. First, a client may cause
+            a denial-of-service blocking the compositor by providing an
+            unsuitable file descriptor, and second, the debug messages may
+            expose sensitive information.  Additionally this will expose
+            weston-screenshooter interface allowing the user to take
+            screenshots of the outputs using weston-screenshooter application,
+            which can lead to silently leaking the output contents.  This
+            option should not be used in production.
+
+     -fscope1,scope2, --flight-rec-scopes=scope1,scope2
+            Specify to which scopes should subscribe to. Useful to control
+            which streams to write data into the flight recorder. Flight
+            recorder has limited space, once the flight recorder is full new
+            data will overwrite the old data. Without any scopes specified, it
+            subscribes to 'log' and 'drm-backend' scopes. Passing an empty
+            value would disable the flight recorder entirely.
+
+     -h, --help
+            Print a summary of command line options, and quit.
+
+     -iN, --idle-time=N
+            Set the idle timeout to N seconds. The default timeout is 300
+            seconds. When there has not been any user input for the idle
+            timeout, Weston enters an inactive mode. The screen fades to
+            black, monitors may switch off, and the shell may lock the
+            session.  A value of 0 effectively disables the timeout.
+
+     --log=file.log
+            Append log messages to the file file.log instead of writing them
+            to stderr.
+
+     -lscope1,scope2, --logger-scopes=scope1,scope2
+            Specify to which log scopes should subscribe to. When no scopes
+            are supplied, the log "log" scope will be subscribed by default.
+            Useful to control which streams to write data into the logger and
+            can be helpful in diagnosing early start-up code.
+
+     --modules=module1.so,module2.so
+            Load the comma-separated list of modules. Only used by the test
+            suite. The file is searched for in
+            /usr/lib/x86_64-linux-gnu/weston, or you can pass an absolute
+            path.
+
+     --no-config
+            Do not read weston.ini for the compositor. Avoids e.g. loading
+            compositor modules via the configuration file, which is useful for
+            unit tests.
+
+     --renderer=renderer
+            Select which renderer to use for Weston's internal composition.
+            Defaults to automatic selection.
+
+     --shell=shell
+            Select which shell to load to provide Weston's user interface. See
+            ENVIRONMENT.
+
+     -Sname, --socket=name
+            Weston will listen in the Wayland socket called name.  Weston will
+            export WAYLAND_DISPLAY with this value in the environment for all
+            child processes to allow them to connect to the right server
+            automatically.  --version Print the program version.
+
+     --wait-for-debugger
+            Raises SIGSTOP before initializing the compositor. This allows the
+            user to attach with a debugger and continue execution by sending
+            SIGCONT. This is useful for debugging a crash on start-up when it
+            would be inconvenient to launch weston directly from a debugger.
+            There is also a weston.ini option to do the same.
+
+     --xwayland
+            Support X11 clients through the Xwayland server.
+
+   DRM backend options:
+     See weston-drm(7).
+
+   Wayland backend options:
+     --display=display
+            Name of the Wayland display to connect to, see also
+            WAYLAND_DISPLAY of the environment.
+
+     --fullscreen
+            Create a single fullscreen output
+
+     --output-count=N
+            Create N Wayland windows to emulate the same number of outputs.
+
+     --width=W, --height=H
+            Make all outputs have a size of WxH pixels.
+
+     --scale=N
+            Give all outputs a scale factor of N.
+
+     --use-pixman
+            Deprecated in favour of the --renderer option.  Use the pixman
+            renderer.  By default weston will try to use EGL and GLES2 for
+            rendering and will fall back to the pixman-based renderer for
+            software compositing if EGL cannot be used.  Passing this option
+            will force weston to use the pixman renderer.
+
+   X11 backend options:
+     --fullscreen
+
+     --no-input
+            Do not provide any input devices. Used for testing input-less
+            Weston.
+
+     --output-count=N
+            Create N X windows to emulate the same number of outputs.
+
+     --width=W, --height=H
+            Make the default size of each X window WxH pixels.
+
+     --scale=N
+            Give all outputs a scale factor of N.
+
+     --use-pixman
+            Deprecated in favour of the --renderer option.  Use the pixman
+            renderer.  By default weston will try to use EGL and GLES2 for
+            rendering.  Passing this option will make weston use the pixman
+            library for software compsiting.
+
+   RDP backend options:
+     See weston-rdp(7).
+
+   VNC backend options:
+     See weston-vnc(7).
+
+   headless backend options:
+     --width=W, --height=H
+            Make the default size of each output WxH pixels.
+
+     --scale=N
+            Give all outputs a scale factor of N.
+
+     --transform=transform
+            Transform for the output, which can be rotated in 90-degree steps
+            and possibly flipped. Possible values are normal, rotate-90,
+            rotate-180, rotate-270,  flipped, flipped-rotate-90,
+            flipped-rotate-180, and  flipped-rotate-270.
+
+     --no-outputs
+            Do not create any virtual outputs.
+
+     --refresh-rate=N
+            Give all outputs a refresh rate of N mHz (60,000 mHz by default).
+            Supported values range from 0 mHz to 1,000,000 mHz. 0 is a special
+            value that repaints as soon as possible on capture requests only,
+            not on damages.
+.Ed
+.Ss "FILES"
+.Bd -literal
+     If the environment variable is set, the configuration file is read from
+     the respective path.
+
+     $XDG_CONFIG_HOME/weston.ini
+     $HOME/.config/weston.ini
+.Ed
+.Ss "ENVIRONMENT"
+.Bd -literal
+     DISPLAY
+            The X display. If DISPLAY is set, and WAYLAND_DISPLAY is not set,
+            the default backend becomes x11.
+
+     WAYLAND_DEBUG
+            If set to any value, causes libwayland to print the live protocol
+            to stderr.
+
+     WAYLAND_DISPLAY
+            The name of the display (socket) of an already running Wayland
+            server, without the path. The directory path is always taken from
+            XDG_RUNTIME_DIR.  If WAYLAND_DISPLAY is not set, the socket name
+            is "wayland-0".
+
+            If WAYLAND_DISPLAY is already set, the default backend becomes
+            wayland.  This allows launching Weston as a nested server.
+
+     WAYLAND_SOCKET
+            For Wayland clients, holds the file descriptor of an open local
+            socket to a Wayland server.
+
+     WESTON_CONFIG_FILE
+            Weston sets this variable to the absolute path of the
+            configuration file it loads, or to the empty string if no file is
+            used. Programs that use weston.ini will read the file specified by
+            this variable instead, or do not read any file if it is empty.
+            Unset variable causes falling back to the default name weston.ini.
+
+     XCURSOR_PATH
+            Set the list of paths to look for cursors in. It changes both
+            libwayland-cursor and libXcursor, so it affects both Wayland and
+            X11 based clients. See xcursor (3).
+
+     XCURSOR_SIZE
+            This variable can be set for choosing an specific size of cursor.
+            Affect Wayland and X11 clients. See xcursor (3).
+
+     XDG_CONFIG_HOME
+            If set, specifies the directory where to look for weston.ini.
+
+     XDG_RUNTIME_DIR
+            The directory for Weston's socket and lock files.  Wayland clients
+            will automatically use this.
+.Ed
+.Ss "PROGRAM EXECUTION"
+.Bd -literal
+     It is possible to execute a program that will be run by Weston.
+
+     By using this syntax :
+            weston [options] -- [program [arguments]]
+
+     The '--' here is mandatory to execute a program. There are examples in
+     the EXAMPLES section.
+.Ed
+.Ss "BUGS"
+.Bd -literal
+     Bugs should be reported to
+     https://gitlab.freedesktop.org/wayland/weston/.
+.Ed
+.Ss "WWW"
+.Bd -literal
+     https://wayland.freedesktop.org/
+.Ed
+.Ss "EXAMPLES"
+.Bd -literal
+     Launch Weston with the DRM backend on a VT
+            weston
+
+     Launch Weston with the DRM backend and XWayland support
+            weston --xwayland
+
+     Launch Weston (wayland-1) nested in another Weston instance (wayland-0)
+            WAYLAND_DISPLAY=wayland-0 weston -Swayland-1
+
+     From an X terminal, launch Weston with the x11 backend
+            weston
+
+     Launch Weston and make it start weston-terminal
+            weston -- /usr/local/bin/weston-terminal
+
+     Launch Weston with the kiosk shell and make it start weston-simple-egl
+            weston --shell=kiosk-shell.so -- /usr/local/bin/weston-simple-egl
+
+     Launch Weston with the kiosk shell and open a pdf document with mupdf
+            weston --shell=kiosk-shell.so -- mupdf
+            /home/user/Documents/krh/wayland.pdf
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     weston-bindings(7), weston-debug(1), weston-drm(7), weston-rdp(7),
+     weston-vnc(7), weston.ini(5)
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/weston/copyright .

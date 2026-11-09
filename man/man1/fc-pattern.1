@@ -1,0 +1,61 @@
+.Dd November 9, 2026
+.Dt FC-PATTERN 1
+.Os
+.Sh NAME
+.Nm fc-pattern
+.Nd parse and show pattern
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     fc-pattern [ -cdVh ]  [ --config ]  [ --default ]  [  [ -f format ]  [
+     --format format ]  ]  [ --version ]  [ --help ]
+
+      [ pattern  [ element... ]   ]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     fc-pattern parses pattern (empty pattern by default) and shows the parsed
+     result.  If --config is given, config substitution is performed on the
+     pattern before being displayed.  If --default is given, default
+     substitution is performed on the pattern before being displayed.
+
+     If any elements are specified, only those are printed.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     This program follows the usual GNU command line syntax, with long options
+     starting with two dashes (`-'). A summary of options is included below.
+
+     -c     Perform config substitution on pattern.
+
+     -d     Perform default substitution on pattern.
+
+     -f     Format output according to the format specifier format.
+
+     -V     Show version of the program and exit.
+
+     -h     Show summary of options.
+
+     pattern
+            Parses and displays pattern (uses empty pattern by default).
+
+     element
+            If set, the element property is displayed for parsed pattern.
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     FcNameParse(3) FcConfigSubstitute(3) FcDefaultSubstitute(3)
+     FcPatternPrint(3) FcPatternFormat(3) fc-cat(1) fc-cache(1) fc-list(1) fc-
+     match(1) fc-query(1) fc-scan(1)
+
+     The fontconfig user's guide, in HTML format:
+     /usr/share/doc/fontconfig/fontconfig-user.html.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     This manual page was updated by Behdad Esfahbod <behdad@behdad.org>.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/fontconfig/copyright .

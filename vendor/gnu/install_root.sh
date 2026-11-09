@@ -62,7 +62,8 @@ libzstd1 libcrypt1 libcap2 libcap2-bin libevent-2.1-7t64 libgcrypt20 libgpg-erro
 libreadline8t64 libtinfo6 libncurses6 libncursesw6 libbrotli1 gcc-14-base debconf
 lsb-base sysvinit-utils base-files dpkg debianutils init-system-helpers systemd
 systemd-sysv dbus-user-session gawk mount procps tar tzdata netbase python3
-python3-minimal libpython3-stdlib readline-common"
+python3-minimal libpython3-stdlib readline-common libpam-modules
+libpam-modules-bin libpam-runtime"
 
 TREE="$1"
 if [ -z "$TREE" ] || [ ! -d "$TREE" ]; then
@@ -390,6 +391,24 @@ if [ ! -f "$TREE/usr/share/terminfo/x/xterm-256color" ]; then
     echo "gnu: install: refused: ncurses installed no xterm-256color, the terminal term names" >&2
     exit 1
 fi
+
+# Build the caches normally made by Debian's package maintainer scripts.
+# Target programs run through the same loader as tic; no host libraries enter.
+libpath="$TREE/lib:$TREE/usr/lib:$TREE/usr/lib/$GNU_MULTIARCH"
+glib="$TREE/usr/lib/$GNU_MULTIARCH/glib-2.0/glib-compile-schemas"
+"$TREE$GNU_LOADER" --library-path "$libpath" "$glib" \
+    "$TREE/usr/share/glib-2.0/schemas"
+pixbuf="$TREE/usr/lib/$GNU_MULTIARCH/gdk-pixbuf-2.0"
+GDK_PIXBUF_MODULEDIR="$pixbuf/2.10.0/loaders" \
+    "$TREE$GNU_LOADER" --library-path "$libpath" "$pixbuf/gdk-pixbuf-query-loaders" \
+    > "$WORK/loaders.cache"
+awk -v root="$TREE" '{
+    while ((at = index($0, root)) != 0)
+        $0 = substr($0, 1, at - 1) substr($0, at + length(root))
+    print
+}' "$WORK/loaders.cache" > "$pixbuf/2.10.0/loaders.cache"
+"$TREE$GNU_LOADER" --library-path "$libpath" "$TREE/usr/bin/update-mime-database" \
+    "$TREE/usr/share/mime"
 
 # Debian's D-Bus activation helper has no privileged activation on Rach2.
 if [ -f "$TREE/usr/lib/dbus-1.0/dbus-daemon-launch-helper" ]; then

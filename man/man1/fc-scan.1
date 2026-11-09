@@ -1,0 +1,53 @@
+.Dd November 9, 2026
+.Dt FC-SCAN 1
+.Os
+.Sh NAME
+.Nm fc-scan
+.Nd scan font files or directories
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     fc-scan [ -Vh ]
+
+      [  [ -f format ]  [ --format format ]  ]  [ --version ]  [ --help ]
+     file...
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     fc-scan scans file(s) recursively and prints out font pattern for each
+     face found.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     This program follows the usual GNU command line syntax, with long options
+     starting with two dashes (`-'). A summary of options is included below.
+
+     -f     Format output according to the format specifier format.
+
+     -V     Show version of the program and exit.
+
+     -h     Show summary of options.
+
+     file   Scan file recursively for font faces.
+.Ed
+.Ss "RETURN CODES"
+.Bd -literal
+     fc-scan returns error code 0 if at least one font was found or 1
+     otherwise.
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     fc-query(1) FcFileScan(3) FcDirScan(3) FcPatternFormat(3) fc-cat(1) fc-
+     cache(1) fc-list(1) fc-match(1) fc-pattern(1)
+
+     The fontconfig user's guide, in HTML format:
+     /usr/share/doc/fontconfig/fontconfig-user.html.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     This manual page was updated by Behdad Esfahbod <behdad@behdad.org>.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/fontconfig/copyright .

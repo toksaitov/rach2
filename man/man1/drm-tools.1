@@ -1,0 +1,21 @@
+.Dd November 9, 2026
+.Dt DRM-TOOLS 1
+.Os
+.Sh NAME
+.Nm drm-tools
+.Nd inspect and exercise DRM devices
+.Sh DESCRIPTION
+The libdrm-tests package installs
+.Nm modetest ,
+.Nm modeprint ,
+.Nm proptest ,
+.Nm drmdevice ,
+.Nm vbltest
+and
+.Nm amdgpu_stress .
+.Nm modetest
+lists connectors, modes, planes and properties and can set modes.
+.Nm drmdevice
+lists DRM devices.
+The tools require access to the device nodes and, for display changes, DRM master.
+Choose devices by driver identity rather than a fixed card number.

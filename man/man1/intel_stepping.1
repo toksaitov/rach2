@@ -1,0 +1,39 @@
+.Dd November 9, 2026
+.Dt INTEL_STEPPING 1
+.Os
+.Sh NAME
+.Nm intel_stepping
+.Nd Display the stepping information for an Intel GPU
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     intel_stepping
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     intel_stepping is a tool to print the stepping information for an Intel
+     GPU, along with the PCI ID and revision used to determine it. It requires
+     root privilege to map the graphics device.
+.Ed
+.Ss "BUGS"
+.Bd -literal
+     Not all the known stepping IDs or chipsets are included, so the output on
+     some devices may not be as specific as possible.
+.Ed
+.Ss "REPORTING BUGS"
+.Bd -literal
+     Report bugs on fd.o GitLab:
+     <https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues>
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     IGT Developers <igt-dev@lists.freedesktop.org>
+.Ed
+.Ss "COPYRIGHT"
+.Bd -literal
+     2009,2012,2016 Intel Corporation
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/intel-gpu-tools/copyright .

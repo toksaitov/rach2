@@ -1,0 +1,52 @@
+.Dd November 9, 2026
+.Dt INTEL_INFOFRAMES 1
+.Os
+.Sh NAME
+.Nm intel_infoframes
+.Nd View and change HDMI InfoFrames
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     intel_infoframes [OPTIONS]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     intel_infoframes is a tool to view and change the HDMI InfoFrames sent by
+     the GPU. Its main purpose is to be used as a debugging tool. In some
+     cases (e.g., when changing modes) the Kernel will undo the changes made
+     by this tool.
+
+     Descriptions of the InfoFrame fields can be found on the HDMI and CEA-861
+     specifications.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     -h, --help
+            Display comprehensive help on the tool.
+.Ed
+.Ss "LIMITATIONS"
+.Bd -literal
+     Not all HDMI monitors respect the InfoFrames sent to them. Only GEN 4 or
+     newer hardware is supported yet.
+.Ed
+.Ss "REPORTING BUGS"
+.Bd -literal
+     Report bugs on fd.o GitLab:
+     <https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues>
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     HDMI specification, CEA-861 specification.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     IGT Developers <igt-dev@lists.freedesktop.org>
+.Ed
+.Ss "COPYRIGHT"
+.Bd -literal
+     2012,2016 Intel Corporation
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/intel-gpu-tools/copyright .

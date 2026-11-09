@@ -1,0 +1,18 @@
+.Dd November 9, 2026
+.Dt INTEL-GPU-TOOLS 1
+.Os
+.Sh NAME
+.Nm intel-gpu-tools
+.Nd inspect and exercise GPU devices
+.Sh DESCRIPTION
+The intel-gpu-tools package installs DRM diagnostic and measurement programs.
+The tools inspect PCI devices, decode registers and firmware, collect performance data and exercise display paths.
+They require the corresponding DRM driver and access to its device nodes.
+.Nm intel_gpu_top
+shows engine use;
+.Nm intel_reg
+reads or writes device registers;
+.Nm intel_vbt_decode
+reads the Video BIOS Table.
+Each tool has its own arguments.
+The full IGT test binaries are built separately from these packaged tools.

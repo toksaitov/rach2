@@ -1,0 +1,38 @@
+.Dd November 9, 2026
+.Dt INTEL_BIOS_DUMPER 1
+.Os
+.Sh NAME
+.Nm intel_bios_dumper
+.Nd Save the Intel video BIOS contents to a file
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     intel_bios_dumper FILENAME
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     intel_bios_dumper is a tool to save the contents of the Intel video BIOS
+     to a file. It can then be parsed offline for debugging issues with the
+     video bios table handling.
+.Ed
+.Ss "REPORTING BUGS"
+.Bd -literal
+     Report bugs on fd.o GitLab:
+     <https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues>
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     intel_vbt_decode(1)
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     IGT Developers <igt-dev@lists.freedesktop.org>
+.Ed
+.Ss "COPYRIGHT"
+.Bd -literal
+     2010,2012,2016 Intel Corporation
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/intel-gpu-tools/copyright .

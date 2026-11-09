@@ -1,0 +1,57 @@
+.Dd November 9, 2026
+.Dt XLSATOMS 1
+.Os
+.Sh NAME
+.Nm xlsatoms
+.Nd list interned atoms defined on server
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     xlsatoms [-options ...]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     Xlsatoms lists the interned atoms.  By default, all atoms starting from 1
+     (the lowest atom value defined by the protocol) are listed until unknown
+     atom is found.  If an explicit range is given, xlsatoms will try all
+     atoms in the range, regardless of whether or not any are undefined.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     -display dpy
+             This option specifies the X server to which to connect.
+
+     -format string
+             This option specifies a printf-style string used to list each
+             atom <value,name> pair, printed in that order (value is an
+             unsigned long and name is a char *).  Xlsatoms will supply a
+             newline at the end of each line.  The default is %lu\et%s.
+
+     -range [low]-[high]
+             This option specifies the range of atom values to check.  If low
+             is not given, a value of 1 assumed.  If high is not given,
+             xlsatoms will stop at the first undefined atom at or above low.
+
+     -name string
+             This option specifies the name of an atom to list.  If the atom
+             does not exist, a message will be printed on the standard error.
+
+     -version
+             Print out the program version and exit.
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     X(7), Xserver(1), xprop(1)
+.Ed
+.Ss "ENVIRONMENT"
+.Bd -literal
+     DISPLAY to get the default host and display to use.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     Jim Fulton, MIT X Consortium
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/x11-utils/copyright .

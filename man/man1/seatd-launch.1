@@ -1,0 +1,64 @@
+.Dd November 9, 2026
+.Dt SEATD-LAUNCH 1
+.Os
+.Sh NAME
+.Nm seatd-launch
+.Nd Start a process with its own seatd instance
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     seatd-launch [options] [--] command
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     -l <loglevel>
+         Log-level to pass to seatd. See seatd(1) for information about
+         available log-levels.
+
+     -h
+         Show help message and quit.
+
+     -v
+         Show the version number and quit.
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     seatd-launch starts a seatd instance with a dedicated socket path, waits
+     for it to be ready, and starts the specified command with SEATD_SOCK set
+     appropriately.  Once the specified command terminates, the seatd instance
+     is also terminated.
+
+     seatd requires root privileges to perform its tasks. This can be achieved
+     through SUID of seatd-launch or by running seatd-launch as root. seatd-
+     launch will drop privileges from the effective user to the real user
+     before running the specified command. If the real user is root, this is
+     simply a noop. You should only run seatd-launch as root if you intend for
+     the specified command to run as root as well.
+
+     seatd-launch serves a similar purpose to the libseat "builtin" backend,
+     but is superior to it for two reasons:
+     1.  The specified command never runs as root
+     2.  The standard seatd executable and libseat backend is used
+.Ed
+.Ss "EXIT STATUS"
+.Bd -literal
+     seatd-launch exits with the status of its child. When the child
+     terminates on a signal N, seatd-launch exits with the status 128 + N.
+
+     If seatd-launch fails because of another error, it exits with a non-zero
+     status.
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     The libseat library, <libseat.h>, seatd(8)
+.Ed
+.Ss "AUTHORS"
+.Bd -literal
+     Maintained by Kenny Levinsen <contact@kl.wtf>, who is assisted by other
+     open-source contributors. For more information about seatd development,
+     see https://sr.ht/~kennylevinsen/seatd.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/seatd/copyright .

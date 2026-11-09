@@ -1,0 +1,21 @@
+.Dd November 9, 2026
+.Dt WESTON-CLIENTS 1
+.Os
+.Sh NAME
+.Nm weston-clients
+.Nd run Weston example clients
+.Sh DESCRIPTION
+Weston's example clients draw, accept input, exercise protocol extensions and demonstrate rendering paths.
+They connect to the socket named by
+.Ev WAYLAND_DISPLAY
+under
+.Ev XDG_RUNTIME_DIR .
+.Nm weston-simple-shm
+uses shared memory;
+.Nm weston-simple-egl
+uses EGL;
+.Nm weston-terminal
+runs a terminal.
+Programs with dmabuf in their name also need a usable DRM render node.
+.Nm wcap-decode
+reads Weston's captured output.

@@ -1,0 +1,79 @@
+.Dd November 9, 2026
+.Dt LISTRES 1
+.Os
+.Sh NAME
+.Nm listres
+.Nd list resources in widgets
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     listres [-option ...]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     The listres program generates a list of a widget's resource database.
+     The class in which each resource is first defined, the instance and class
+     name, and the type of each resource is listed.  If no specific widgets or
+     the -all switch are given, a two-column list of widget names and their
+     class hierarchies is printed.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     Listres accepts all of the standard toolkit command line options along
+     with those listed below:
+
+     -all    This option indicates that listres should print information for
+             all known widgets and objects.
+
+     -nosuper
+             This option indicates that resources that are inherited from a
+             superclass should not be listed.  This is useful for determining
+             which resources are new to a subclass.
+
+     -variable
+             This option indicates that widgets should be identified by the
+             names of the class record variables rather than the class name
+             given in the variable.  This is useful for distinguishing
+             subclasses that have the same class name as their superclasses.
+
+     -top name
+             This option specifies the name of the widget to be treated as the
+             top of the hierarchy.  Case is not significant, and the name may
+             match either the class variable name or the class name.  The
+             default is ``core''.
+
+     -format printf-string
+             This option specifies the printf-style format string to be used
+             to print out the name, instance, class, and type of each
+             resource.
+
+     -help   This option indicates that listres should print a usage message
+             and exit.
+
+     -version
+             This option indicates that listres should print version info and
+             exit.
+.Ed
+.Ss "X DEFAULTS"
+.Bd -literal
+     To be written.
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     X(7), xrdb(1), appropriate widget documents
+.Ed
+.Ss "BUGS"
+.Bd -literal
+     On operating systems that do not support dynamic linking of run-time
+     routines, this program must have all of its known widgets compiled in.
+     The sources provide several tools for automating this process for various
+     widget sets.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     Jim Fulton, MIT X Consortium
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/x11-utils/copyright .

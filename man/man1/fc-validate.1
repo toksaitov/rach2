@@ -1,0 +1,53 @@
+.Dd November 9, 2026
+.Dt FC-VALIDATE 1
+.Os
+.Sh NAME
+.Nm fc-validate
+.Nd validate font files
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     fc-validate [ -Vhv ]
+
+      [  [ -i index ]  [ --index index ]  ]  [  [ -l lang ]  [ --lang lang ]
+     ]  [ --verbose ]  [ --version ]  [ --help ]  font-file...
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     fc-validate validates font-file(s) if each fonts satisfies the language
+     coverage according to the orthography files in fontconfig.  If --index is
+     given, only one face of each file is validated, otherwise all faces are
+     validated.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     This program follows the usual GNU command line syntax, with long options
+     starting with two dashes (`-'). A summary of options is included below.
+
+     -i     Only query face indexed index of each file.
+
+     -l     Set lang as a language instead of current locale. this is used for
+            -m.
+
+     -v     Show more detailed information.
+
+     -V     Show version of the program and exit.
+
+     -h     Show summary of options.
+
+     font-file
+            Query font-file for font faces.
+.Ed
+.Ss "RETURN CODES"
+.Bd -literal
+     fc-validate returns error code 0 for successful parsing, or 1 if any
+     errors occurred or if at least one font face could not be opened.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     This manual page was updated by Akira TAGOH <akira@tagoh.org>.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/fontconfig/copyright .

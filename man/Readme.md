@@ -10,7 +10,7 @@ On the machine, `man NAME` or `man SECTION NAME` shows a page through the pager,
 
 ### Layout
 
-A page is `man/manN/NAME.N`, in the directory of its section: `man1` for programs, `man2` for system calls, `man4` for devices, `man5` for file formats, `man7` for overviews and `man8` for administration. There is no section 3.
+A page is `man/manN/NAME.N`, in the directory of its section: `man1` for programs, `man2` for system calls, `man4` for devices, `man5` for file formats, `man7` for overviews and `man8` for administration. There is no section 3. The desktop command pages retain Debian's manual text as rendered ASCII inside mdoc pages; the corresponding package notices are under `vendor/gnu/debian/copyright`. Utilities without a packaged manual share the local family pages. The GNU root renders the original Debian pages beside them under `gnu/catN`.
 
 `man/aliases` lists the names a page answers for besides its own, one `NAME SECTION TARGET` a line. Every BusyBox applet is an alias of its family page, `busybox-DIR` in section 1 or 8 for the applets of BusyBox's source directory `DIR`; every member of a system call family is an alias of the family's page; and a call's 32-bit form is an alias of the plain call. `man/recovery` lists the pages the recovery image stages, one `NAME SECTION` a line: the programs the installer and the recovery menu direct a person to, and `man(1)`.
 
