@@ -1,4 +1,5 @@
 /* files.c: UTF-8 files, durable publication and file locks on Windows. */
+#include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -452,12 +453,49 @@ int etude_win_closedir(struct etude_win_dir *d)
 /** Return the native temporary directory as UTF-8. */
 const char *etude_win_temp(void);
 /** Locate a program on native PATH, including its .exe suffix. */
+/**
+ * Give in `out` the native path of `name`, an absolute path of MSYS2's, such
+ * as `/usr/bin/env` or `/c/Windows`, under the root of the MSYS2 whose sh is
+ * on native PATH. A command that MSYS2 starts with MSYS2_ARG_CONV_EXCL set
+ * passes such paths on unconverted, as the installed launcher's `command -v
+ * env` reaches `etude admit`.
+ *
+ * @return 0, or -1 for another name, no MSYS2 or a path too long.
+ */
+static int msys_native(const char *name, char *out, size_t size)
+{
+    const char *shell, *tail = "/usr/bin/sh.exe";
+    size_t root, k = strlen(tail);
+    int n;
+
+    if (name[0] != '/' || name[1] == '/')
+        return -1;
+    if (isalpha((unsigned char)name[1]) && (name[2] == '/' || name[2] == 0)) {
+        n = snprintf(out, size, "%c:%s", name[1], name[2] ? name + 2 : "/");
+        return n < 0 || (size_t)n >= size ? -1 : 0;
+    }
+    shell = etude_win_shell();
+    if (shell == NULL || (root = strlen(shell)) <= k || _stricmp(shell + root - k, tail) != 0)
+        return -1;
+    root -= k;
+    if (strncmp(name, "/bin/", 5) == 0)
+        n = snprintf(out, size, "%.*s/usr%s", (int)root, shell, name);
+    else
+        n = snprintf(out, size, "%.*s%s", (int)root, shell, name);
+    return n < 0 || (size_t)n >= size ? -1 : 0;
+}
+
 int etude_win_program(const char *name, char *out, size_t size)
 {
     wchar_t *w = etude_win_wide(name), path[32768];
-    char *u;
+    char *u, native[4096];
     DWORD n = w != NULL ? SearchPathW(NULL, w, L".exe", 32768, path, NULL) : 0;
     free(w);
+    if ((n == 0 || n >= 32768) && msys_native(name, native, sizeof native) == 0 &&
+        (w = etude_win_wide(native)) != NULL) {
+        n = SearchPathW(NULL, w, L".exe", 32768, path, NULL);
+        free(w);
+    }
     if (n == 0 || n >= 32768) {
         errno = ENOENT;
         return -1;
