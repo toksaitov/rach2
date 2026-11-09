@@ -1606,17 +1606,9 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
         len = connector->edid_override->length;
     }
     clean = edid_clean(edid, len, &blocks);
-    if (clean && connector->edid && connector->edid->length == blocks * EDID_LENGTH) {
-        uint32_t i;
-
-        for (i = 0; i < blocks * EDID_LENGTH && clean[i] == ((uint8_t *)connector->edid->data)[i];
-             i++) {
-        }
-        if (i == blocks * EDID_LENGTH) {
-            blob = drm_property_blob_get(connector->edid);
-        }
-    }
-    if (clean && !blob) {
+    /* A new blob each time, made before the old one goes, as Linux's
+     * drm_property_replace_global_blob makes it. */
+    if (clean) {
         blob = drm_property_create_blob(dev, blocks * EDID_LENGTH, clean, &err);
     }
     drm_property_blob_put(connector->edid);
