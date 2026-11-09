@@ -15,7 +15,8 @@ ARCH_ASM_SRC = sys/arch/x86_64/loader.s \
     sys/arch/x86_64/isr_handler.s \
     sys/arch/x86_64/switch.s \
     sys/arch/x86_64/trampoline.s \
-    sys/arch/x86_64/vdsocode.s
+    sys/arch/x86_64/vdsocode.s \
+    sys/arch/x86_64/vdso32code.s
 
 ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/context.c \
@@ -28,4 +29,18 @@ ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/systab.c \
     sys/arch/x86_64/vclock.c \
     sys/arch/x86_64/vdso.c \
+    sys/arch/x86_64/ia32_systab.c \
+    sys/arch/x86_64/ia32_exec.c \
+    sys/arch/x86_64/vdso32.c \
+    sys/arch/x86_64/ldt.c \
+    sys/arch/x86_64/sigframe32.c \
+    sys/arch/x86_64/ia32_signal.c \
+    sys/arch/x86_64/ia32_fs.c \
+    sys/arch/x86_64/ia32_time.c \
+    sys/arch/x86_64/ia32_ioctl.c \
+    sys/arch/x86_64/ia32_ioctl_drm.c \
+    sys/arch/x86_64/ia32_ioctl_gpu.c \
+    sys/arch/x86_64/ia32_net.c \
+    sys/arch/x86_64/ia32_ipc.c \
+    sys/arch/x86_64/ia32_misc.c \
     $(PC_C_SRC)

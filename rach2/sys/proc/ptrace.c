@@ -20,26 +20,31 @@
 #include "../syscall_internal.h"
 
 /* The requests. */
-#define PTRACE_TRACEME     0
-#define PTRACE_PEEKTEXT    1
-#define PTRACE_PEEKDATA    2
-#define PTRACE_POKETEXT    4
-#define PTRACE_POKEDATA    5
-#define PTRACE_CONT        7
-#define PTRACE_KILL        8
-#define PTRACE_SINGLESTEP  9
-#define PTRACE_ATTACH      16
-#define PTRACE_DETACH      17
-#define PTRACE_SYSCALL     24
-#define PTRACE_SETOPTIONS  0x4200
-#define PTRACE_GETEVENTMSG 0x4201
-#define PTRACE_GETSIGINFO  0x4202
-#define PTRACE_SETSIGINFO  0x4203
-#define PTRACE_GETREGSET   0x4204
-#define PTRACE_SETREGSET   0x4205
-#define PTRACE_SEIZE       0x4206
-#define PTRACE_INTERRUPT   0x4207
-#define PTRACE_LISTEN      0x4208
+#define PTRACE_TRACEME          0
+#define PTRACE_PEEKTEXT         1
+#define PTRACE_PEEKDATA         2
+#define PTRACE_POKETEXT         4
+#define PTRACE_POKEDATA         5
+#define PTRACE_CONT             7
+#define PTRACE_KILL             8
+#define PTRACE_SINGLESTEP       9
+#define PTRACE_ATTACH           16
+#define PTRACE_DETACH           17
+#define PTRACE_SYSCALL          24
+#define PTRACE_SETOPTIONS       0x4200
+#define PTRACE_GETEVENTMSG      0x4201
+#define PTRACE_GETSIGINFO       0x4202
+#define PTRACE_SETSIGINFO       0x4203
+#define PTRACE_GETREGSET        0x4204
+#define PTRACE_SETREGSET        0x4205
+#define PTRACE_SEIZE            0x4206
+#define PTRACE_INTERRUPT        0x4207
+#define PTRACE_LISTEN           0x4208
+#define PTRACE_GET_SYSCALL_INFO 0x420E
+
+/* The event message of a system call stop, at its entry and at its exit. */
+#define PTRACE_EVENTMSG_SYSCALL_ENTRY 1u
+#define PTRACE_EVENTMSG_SYSCALL_EXIT  2u
 
 /* The options: an event's bit is 1 << the event, and the rest. */
 #define PTRACE_O_TRACESYSGOOD 0x00000001u
@@ -248,7 +253,13 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     if (!leaving) {
         SC_RET(tf) = (unsigned long)-ENOSYS;
     }
+    if (!stepping) {
+        self->ptrace_msg = leaving ? PTRACE_EVENTMSG_SYSCALL_EXIT : PTRACE_EVENTMSG_SYSCALL_ENTRY;
+    }
     sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);
+    if (!stepping) {
+        self->ptrace_msg = 0;
+    }
     if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
         self->orig_nr = -1;
     }
@@ -704,6 +715,96 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
  * the memory requests take a reference to the address space themselves
  * (`tracee_memory`).
  */
+/* What PTRACE_GET_SYSCALL_INFO reports, Linux's `struct
+ * ptrace_syscall_info`, 88 bytes with its padding: the kind of stop, the
+ * architecture, the instruction and stack pointers, then by the kind the
+ * call's number and arguments, its result, or both and the data of the
+ * seccomp filter's SECCOMP_RET_TRACE. */
+struct syscall_info {
+    uint8_t op;
+    uint8_t pad[3];
+    uint32_t arch;
+    uint64_t instruction_pointer;
+    uint64_t stack_pointer;
+    uint64_t nr;      /* entry.nr, seccomp.nr; exit.rval at the same place */
+    uint64_t args[6]; /* entry.args, seccomp.args; exit.is_error in args[0] */
+    uint32_t ret_data;
+    uint32_t pad2;
+};
+
+#define PTRACE_SYSCALL_INFO_NONE    0
+#define PTRACE_SYSCALL_INFO_ENTRY   1
+#define PTRACE_SYSCALL_INFO_EXIT    2
+#define PTRACE_SYSCALL_INFO_SECCOMP 3
+
+/* The sizes Linux returns for each kind: up to the union, through the
+ * arguments, through `is_error`, through `ret_data`. */
+#define SYSCALL_INFO_NONE_SIZE    24u
+#define SYSCALL_INFO_ENTRY_SIZE   80u
+#define SYSCALL_INFO_EXIT_SIZE    33u
+#define SYSCALL_INFO_SECCOMP_SIZE 84u
+
+/**
+ * PTRACE_GET_SYSCALL_INFO: describe the stop of `t` into the `size` bytes
+ * at the caller's `data`, as Linux's `ptrace_get_syscall_info`. The kind
+ * comes from the stop: a system call stop reported as SIGTRAP | 0x80, that
+ * is with PTRACE_O_TRACESYSGOOD, at the entry or the exit by its event
+ * message, or a PTRACE_EVENT_SECCOMP stop; any other stop is
+ * PTRACE_SYSCALL_INFO_NONE. The architecture is the call's, i386's for one
+ * by `int $0x80` on x86-64 (SC_AUDIT_ARCH). An exit's result is an error
+ * when it is -4095 to -1, taken in 32 bits for an i386 call, and is
+ * otherwise the result register as it is. Returns the
+ * size of the whole description, of which at most `size` bytes are
+ * written, or -EFAULT.
+ */
+static long syscall_info(const process_t *t, uintptr_t size, uintptr_t data)
+{
+    const isr_params_t *tf = proc_user_frame(t);
+    struct syscall_info info;
+    uint32_t code = (t->ptrace_status >> 8) & 0xFFFFu, actual = SYSCALL_INFO_NONE_SIZE;
+    long rval;
+
+    k_memset(&info, 0, sizeof(info));
+    info.op = PTRACE_SYSCALL_INFO_NONE;
+    info.arch = SC_AUDIT_ARCH(tf);
+    info.instruction_pointer = FRAME_PC(tf);
+    info.stack_pointer = FRAME_SP(tf);
+    if (code == ((uint32_t)SIGTRAP | 0x80u) && t->ptrace_msg == PTRACE_EVENTMSG_SYSCALL_EXIT) {
+        info.op = PTRACE_SYSCALL_INFO_EXIT;
+        rval = (long)SC_RET(tf);
+        if (SC_COMPAT(tf)) {
+            rval = (long)(int32_t)rval;
+        }
+        info.args[0] = rval < 0 && rval >= -4095;
+        info.nr = info.args[0] ? (uint64_t)rval : (uint64_t)SC_RET(tf);
+        actual = SYSCALL_INFO_EXIT_SIZE;
+    } else if ((code == ((uint32_t)SIGTRAP | 0x80u) &&
+                t->ptrace_msg == PTRACE_EVENTMSG_SYSCALL_ENTRY) ||
+               code == ((uint32_t)SIGTRAP | ((uint32_t)PTRACE_EVENT_SECCOMP << 8))) {
+        info.op = code == ((uint32_t)SIGTRAP | 0x80u) ? PTRACE_SYSCALL_INFO_ENTRY
+                                                      : PTRACE_SYSCALL_INFO_SECCOMP;
+        info.nr = (uint64_t)(int64_t)t->orig_nr;
+        info.args[0] = SC_ARG(tf, 0);
+        info.args[1] = SC_ARG(tf, 1);
+        info.args[2] = SC_ARG(tf, 2);
+        info.args[3] = SC_ARG(tf, 3);
+        info.args[4] = SC_ARG(tf, 4);
+        info.args[5] = SC_ARG(tf, 5);
+        actual = SYSCALL_INFO_ENTRY_SIZE;
+        if (info.op == PTRACE_SYSCALL_INFO_SECCOMP) {
+            info.ret_data = t->ptrace_msg;
+            actual = SYSCALL_INFO_SECCOMP_SIZE;
+        }
+    }
+    if (size > actual) {
+        size = actual;
+    }
+    if (copy_to_user((void __user *)data, &info, size) != 0) {
+        return -EFAULT;
+    }
+    return (long)actual;
+}
+
 static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t addr,
                            unsigned long data)
 {
@@ -750,6 +851,8 @@ static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t a
     case PTRACE_GETREGSET:
     case PTRACE_SETREGSET:
         return regset_access(pid, t, addr, data, request == PTRACE_SETREGSET);
+    case PTRACE_GET_SYSCALL_INFO:
+        return syscall_info(t, addr, data);
     default:
         return arch_ptrace(t, pid, request, addr, data);
     }

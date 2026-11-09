@@ -10,6 +10,14 @@
  * `rach2.trace=enosys` from the command line. */
 void init_syscall(void);
 
+/**
+ * Whether the current thread is in a system call it made by i386's
+ * convention, `int $0x80` on x86-64, as Linux's `in_compat_syscall`: a
+ * handler shared by both tables asks it where the two ABIs' structures
+ * differ. Always 0 on a kernel with one ABI.
+ */
+int in_compat_syscall(void);
+
 struct krffs_node;
 
 /**
@@ -58,7 +66,9 @@ void uts_set_hostname(const char *name, uint32_t len);
 void uts_set_domainname(const char *name, uint32_t len);
 
 /* The calls only some architectures have, each defined in the directory of
- * one that has it: set_thread_area, i386's (arch/i686/tls.c). */
+ * one that has it: set_thread_area, i386's (arch/i686/tls.c, and on x86-64
+ * arch/x86_64/tls.c for the compat table, with get_thread_area). */
 long sys_set_thread_area(isr_params_t *params);
+long sys_get_thread_area(isr_params_t *params);
 
 #endif

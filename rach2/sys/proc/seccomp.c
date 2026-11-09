@@ -48,10 +48,27 @@
     (SECCOMP_FILTER_FLAG_TSYNC | SECCOMP_FILTER_FLAG_LOG | SECCOMP_FILTER_FLAG_SPEC_ALLOW | \
      SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
 
-/* The architecture the filters see is AUDIT_ARCH, and the calls the strict
- * mode allows SECCOMP_NR_READ, SECCOMP_NR_WRITE, SECCOMP_NR_EXIT and
- * SECCOMP_NR_SIGRETURN, from the architecture's cpu.h; SIGSYS's code for a
- * call a filter trapped is ksignal.h's SIGSYS_SECCOMP. */
+/* The architecture the filters see is the call's, SC_AUDIT_ARCH (arch.h):
+ * AUDIT_ARCH, or AUDIT_ARCH_I386 for an i386 call on x86-64, whose number is
+ * then i386's. The calls the strict mode allows are SECCOMP_NR_READ,
+ * SECCOMP_NR_WRITE, SECCOMP_NR_EXIT and SECCOMP_NR_SIGRETURN, from the
+ * architecture's cpu.h, and for an i386 call on x86-64 the SECCOMP_NR32_
+ * ones. SIGSYS's code for a call a filter trapped is ksignal.h's
+ * SIGSYS_SECCOMP. */
+
+/** Whether the strict mode allows the call `nr` of the frame `tf`. */
+static int strict_allows(const isr_params_t *tf, uint32_t nr)
+{
+#if defined(SECCOMP_NR32_READ)
+    if (SC_COMPAT(tf)) {
+        return nr == SECCOMP_NR32_READ || nr == SECCOMP_NR32_WRITE || nr == SECCOMP_NR32_EXIT ||
+               nr == SECCOMP_NR32_SIGRETURN;
+    }
+#endif
+    (void)tf;
+    return nr == SECCOMP_NR_READ || nr == SECCOMP_NR_WRITE || nr == SECCOMP_NR_EXIT ||
+           nr == SECCOMP_NR_SIGRETURN;
+}
 
 /* Linux's limits: instructions in one program, and in a chain, each filter
  * counted with four more; the scratch words; and the largest errno a
@@ -325,7 +342,7 @@ static uint32_t chain_action(const process_t *p, const isr_params_t *tf, uint32_
 
     k_memset(&d, 0, sizeof(d));
     d.w[0] = nr;
-    d.w[1] = AUDIT_ARCH;
+    d.w[1] = SC_AUDIT_ARCH(tf);
     put_u64(&d, 2, (uint64_t)FRAME_PC(tf));
     put_u64(&d, 4, (uint64_t)SC_ARG(tf, 0));
     put_u64(&d, 6, (uint64_t)SC_ARG(tf, 1));
@@ -369,7 +386,7 @@ static void seccomp_trap(isr_params_t *tf, uint32_t nr, uint32_t data)
     info.addr = FRAME_PC(tf);
     info.pid = (uint32_t)FRAME_PC(tf);
     info.uid = nr;
-    info.status = (int32_t)AUDIT_ARCH;
+    info.status = (int32_t)SC_AUDIT_ARCH(tf);
     info.err = (int32_t)data;
     SC_RET(tf) = nr;
     signal_force(current_proc, SIGSYS, &info);
@@ -415,8 +432,7 @@ int seccomp_permit(isr_params_t *tf, uint32_t nr, long *ret)
     uint32_t action, data;
 
     if (self->seccomp_mode == SECCOMP_MODE_STRICT) {
-        if (nr == SECCOMP_NR_READ || nr == SECCOMP_NR_WRITE || nr == SECCOMP_NR_EXIT ||
-            nr == SECCOMP_NR_SIGRETURN) {
+        if (strict_allows(tf, nr)) {
             return 1;
         }
         klog(KLOG_INFO, "seccomp", "pid %d: call %d outside the strict mode", (int)self->pid,

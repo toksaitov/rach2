@@ -36,8 +36,14 @@ struct idt_gate {
 static struct idt_gate idt[256];
 
 /* The double fault's stub (isr_handler.s), which x86/isr.h does not
- * declare: on i686 the vector has a task gate and no stub. */
+ * declare: on i686 the vector has a task gate and no stub; and the i386
+ * system call's. */
 extern void isr8(void);
+extern void int80_isr(void);
+
+/* The vector of `int $0x80`, which the system call entries give their
+ * frames too (sysnr.h). */
+#define INT80_VECTOR 0x80
 
 /* Load the IDTR (switch.s). */
 extern void x86_64_load_idt(const void *ptr);
@@ -66,15 +72,15 @@ static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t i
 }
 
 /**
- * Every vector of i686's IDT but 0x80 has an interrupt gate here, the
- * double fault's included: the 32 exceptions, the sixteen 8259 lines on 32
- * to 47, the sixteen message vectors on 48 to 63, the interprocessor
- * interrupt at IPI_VECTOR and the APIC's spurious vector 255. The
- * breakpoint and overflow gates are DPL 3, so that `int3` reaches its
- * handler from user mode; `into` does not exist in 64-bit mode. There is no
- * gate at 0x80: a program enters the kernel by `syscall`, and an
- * `int $0x80` is a general-protection fault, a SIGSEGV, as it is on a Linux
- * without its 32-bit emulation.
+ * Every vector of i686's IDT has an interrupt gate here, the double
+ * fault's included: the 32 exceptions, the sixteen 8259 lines on 32 to 47,
+ * the sixteen message vectors on 48 to 63, `int $0x80` at 0x80, the
+ * interprocessor interrupt at IPI_VECTOR and the APIC's spurious vector 255.
+ * The breakpoint and overflow gates are DPL 3, so that `int3` reaches its
+ * handler from user mode; `into` does not exist in 64-bit mode. So is the
+ * gate of 0x80, by which a program, 32-bit or 64-bit, makes an i386 system
+ * call, as on a Linux with its 32-bit emulation; a 64-bit program's own
+ * calls come by `syscall`.
  *
  * Four exceptions run on interrupt stacks of their own (percpu.h): the
  * double fault, whose cause may be the stack in use; the NMI and the
@@ -156,6 +162,7 @@ void init_idt(void)
     set_gate(62, msi14, GATE_KERNEL, 0);
     set_gate(63, msi15, GATE_KERNEL, 0);
 
+    set_gate(INT80_VECTOR, int80_isr, GATE_USER, 0);
     set_gate(255, spurious_isr, GATE_KERNEL, 0);
     set_gate(IPI_VECTOR, ipi_isr, GATE_KERNEL, 0);
 
@@ -177,14 +184,14 @@ void idt_load(void)
 
 /**
  * Hand the frame of `isr_common_handler`, or of a debug exception from user
- * mode, to its router: an exception, a vector below 32, to `_isr_router`,
- * and an interrupt, a line on 32 to 47 or a message on 48 to 63, to
- * `_irq_router`. On i686 the two kinds have entries of their own; here they
- * share one, and the vector tells them apart.
+ * mode, to its router: an exception, a vector below 32, and the i386 system
+ * call, 0x80, to `_isr_router`, and an interrupt, a line on 32 to 47 or a
+ * message on 48 to 63, to `_irq_router`. On i686 the two kinds have entries
+ * of their own; here they share one, and the vector tells them apart.
  */
 void x86_64_route(isr_params_t *params)
 {
-    if (params->vector < 32) {
+    if (params->vector < 32 || params->vector == INT80_VECTOR) {
         _isr_router(params);
     } else {
         _irq_router(params);

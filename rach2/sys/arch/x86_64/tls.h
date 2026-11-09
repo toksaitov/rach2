@@ -11,7 +11,13 @@
  * `regs.gs_base`) with the FS and GS selectors, read back from the
  * registers when the thread switches away and loaded when it switches in
  * (context.c): a selector the program loads into FS or GS changes the base
- * too, to the descriptor's 0.
+ * too, to the descriptor's.
+ *
+ * For 32-bit code there are also Linux's three TLS descriptors, GDT entries
+ * 12 to 14 (percpu.h), which set_thread_area fills through `int $0x80` and
+ * which the record keeps in `regs.tls`: a program loads a selector of one,
+ * `(entry << 3) | 3`, into a segment register, usually GS, and addresses
+ * its block through it.
  */
 
 /* arch_prctl's codes, as Linux numbers them. */
@@ -31,5 +37,22 @@
  * code, -ESRCH with no current process.
  */
 long sys_arch_prctl(isr_params_t *params);
+
+/* Linux's `struct user_desc`, set_thread_area's argument, 16 bytes in both
+ * ABIs, and the bits of its `flags`, in their order in Linux's bit-fields. */
+struct user_desc {
+    uint32_t entry_number;
+    uint32_t base_addr;
+    uint32_t limit;
+    uint32_t flags;
+};
+#define UD_SEG_32BIT       0x01u
+#define UD_CONTENTS_MASK   0x06u
+#define UD_CONTENTS_SHIFT  1
+#define UD_READ_EXEC_ONLY  0x08u
+#define UD_LIMIT_IN_PAGES  0x10u
+#define UD_SEG_NOT_PRESENT 0x20u
+#define UD_USEABLE         0x40u
+#define UD_LM              0x80u
 
 #endif /* _X86_64_TLS_H_ */

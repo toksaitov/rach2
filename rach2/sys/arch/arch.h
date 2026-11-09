@@ -31,6 +31,11 @@
  *   SC_NR(p)               the system call number in a saved frame
  *   SC_ARG(p, n)           the call's argument n, 0 to 5, as unsigned long
  *   SC_RET(p)              the register the call's result goes in (an lvalue)
+ *   SC_COMPAT(p)           whether the call is of a second ABI's table,
+ *                          i386's by `int $0x80` on x86-64; 0 elsewhere
+ *   SC_AUDIT_ARCH(p)       the architecture seccomp and ptrace see for the
+ *                          call; AUDIT_ARCH where there is one ABI
+ *   IA32_SYSCALL_TABLE_SIZE  the compat table's size, where there is one
  *   FRAME_PC(p), FRAME_SP(p)  the interrupted instruction and stack pointers
  *   FRAME_USER(p)          whether the entry came from user mode
  *   SYSCALL_INSN_LEN       the bytes of the instruction a system call is
@@ -80,6 +85,14 @@
 
 #include "../lib/kdef.h"
 #include "../lib/kint.h"
+
+/* An architecture with one system call ABI. */
+#ifndef SC_COMPAT
+#define SC_COMPAT(p) 0
+#endif
+#ifndef SC_AUDIT_ARCH
+#define SC_AUDIT_ARCH(p) AUDIT_ARCH
+#endif
 
 /*
  * The processor's primitives, each the architecture's to define
@@ -184,6 +197,13 @@ typedef long (*syscall_fn_t)(isr_params_t *params);
  * selects: on i686 the gate of `int $0x80`, on x86-64 the vector
  * `syscall_entry` gives its frame before it calls `_isr_router`. */
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params));
+
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+/** Fill `table`, IA32_SYSCALL_TABLE_SIZE entries, with the handler of each
+ * i386 number, for the calls a frame's SC_COMPAT marks (x86_64/ia32_systab.c).
+ * The entry is the one `arch_syscall_init` routes. */
+void ia32_syscall_init(syscall_fn_t *table);
+#endif
 
 /*
  * Tracing and core files. The shared ptrace(2) answers the requests every
