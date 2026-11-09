@@ -17,7 +17,8 @@ cd "$repo"
 # etude_legacy lists tests/cases at run time, so the directory goes whole.
 PATHS='AGENTS.md CLAUDE.md Readme.md mk/host-check.mk mk/host-fixtures.mk
     tests/host tests/fuzz tests/native tests/cases tests/system/checkers
-    tests/system/fakeapi tests/fixtures/agents tests/musl tests/clockref.h tests/registry
+    tests/system/fakeapi tests/fixtures/agents tests/fixtures/lenovo-gpu/i915_opregion.bin
+    tests/fixtures/lenovo-gpu/i915_vbt.bin tests/musl tests/clockref.h tests/registry
     tools/etude tools/inspect tools/verify tools/image tools/ci tools/font
     tools/flow/test_status.py tools/setup/e2fsprogs_path.sh tools/host_files.h
     rach2/sys rach2/kernel.h rach2/vendor rach2/include krffs utils ish term ports/doom
