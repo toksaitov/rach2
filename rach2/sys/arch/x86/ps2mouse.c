@@ -13,10 +13,16 @@
  * turn as a signed byte, and the IntelliMouse Explorer (ID 4) a wheel's turn
  * with two more buttons, decoded as Linux's psmouse decodes them. The event
  * device has Linux's name, numbers and capabilities for each protocol.
+ *
+ * Before the knocks the bring-up asks for a Synaptics touchpad, as Linux's
+ * psmouse does: one that answers speaks its own absolute protocol from then
+ * on, and synaptics.c takes its bytes; one whose setup fails is set back to
+ * relative mode and goes on as a mouse named a Synaptics TouchPad.
  */
 #include "i8042.h"
 #include "portio.h"
 #include "ps2mouse.h"
+#include "synaptics.h"
 #include "../arch.h"
 #include "../../platform.h"
 #include "../../evdev.h"
@@ -70,6 +76,10 @@ static int packet_size = 3;
 /* The protocol the mouse speaks, PROTO_*, and its event device. */
 static int protocol = PROTO_PS2;
 static struct evdev *mouse_dev;
+
+/* What `synaptics_init` found: 1 a touchpad in absolute mode, whose bytes
+ * synaptics.c takes, 0 no touchpad, -1 a touchpad set up as a mouse. */
+static int touchpad;
 
 /* The side and extra buttons held, MOUSE_BUTTON_*: an Explorer's packet
  * of a wheel's turn of more than 7 does not carry them. */
@@ -152,6 +162,16 @@ static int mouse_send_command(uint8_t cmd)
     }
 
     return -1;
+}
+
+int ps2mouse_send(uint8_t cmd)
+{
+    return mouse_send_command(cmd);
+}
+
+int ps2mouse_receive(void)
+{
+    return ps2_wait_mouse_output() < 0 ? -1 : inb(PS2_DATA_PORT);
 }
 
 /**
@@ -239,17 +259,19 @@ static void detect_protocol(void)
 }
 
 /** Register the event device of the mouse, with Linux's name, numbers and
- * capabilities for its protocol. */
+ * capabilities for its protocol: the protocol's name, then the vendor and
+ * the device, "Synaptics TouchPad" for a touchpad that answered the
+ * Synaptics knock. */
 static void register_mouse(void)
 {
-    const char *name = "PS/2 Generic Mouse";
+    const char *name = touchpad ? "PS/2 Synaptics TouchPad" : "PS/2 Generic Mouse";
     unsigned int caps = MOUSE_POINTER;
 
     if (protocol == PROTO_IMPS) {
-        name = "ImPS/2 Generic Wheel Mouse";
+        name = touchpad ? "ImPS/2 Synaptics TouchPad" : "ImPS/2 Generic Wheel Mouse";
         caps |= MOUSE_WHEEL;
     } else if (protocol == PROTO_IMEX) {
-        name = "ImExPS/2 Generic Explorer Mouse";
+        name = touchpad ? "ImExPS/2 Synaptics TouchPad" : "ImExPS/2 Generic Explorer Mouse";
         caps |= MOUSE_WHEEL | MOUSE_HWHEEL | MOUSE_SIDE;
     }
     mouse_dev = mouse_register(name, "isa0060/serio1/input0", EVDEV_BUS_I8042, 0x0002,
@@ -334,6 +356,10 @@ static void mouse_irq_handler(isr_params_t *params)
         return;
     }
     data = inb(PS2_DATA_PORT);
+    if (touchpad > 0) {
+        synaptics_byte(data);
+        return;
+    }
 
     /* Byte 0 has the always-1 framing bit (bit 3). */
     if (packet_index == 0) {
@@ -423,8 +449,11 @@ int init_mouse(void)
         klog(KLOG_WARN, "mouse", "the device refused the default settings");
     }
 
-    detect_protocol();
-    register_mouse();
+    touchpad = synaptics_init();
+    if (touchpad <= 0) {
+        detect_protocol();
+        register_mouse();
+    }
 
     response = mouse_send_command(MOUSE_CMD_ENABLE);
     if (response < 0) {
