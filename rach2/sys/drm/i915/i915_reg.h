@@ -38,6 +38,14 @@
 #define INTEL_BSM      0x5c
 #define INTEL_BSM_MASK 0xfff00000u
 
+/* The aperture's size, BAR 2's, by its code in bits 2:1 (Haswell's
+ * datasheet, MSAC of device 2): 0 128 MiB, 1 256 MiB, 3 512 MiB. Linux
+ * takes the size from the BAR, which the kernel does not size here, since
+ * the console draws through it. */
+#define HSW_MSAC            0x62
+#define HSW_MSAC_SIZE_SHIFT 1
+#define HSW_MSAC_SIZE_MASK  0x3
+
 #define ASLE  0xe4
 #define SWSCI 0xe8
 #define LBPC  0xf4
@@ -80,6 +88,12 @@
 #define FORCEWAKE_KERNEL_FALLBACK       (1u << 15)
 #define GEN6_GT_THREAD_STATUS_REG       0x13805c
 #define GEN6_GT_THREAD_STATUS_CORE_MASK 0x7u
+#define GEN6_STOLEN_RESERVED            0x1082c0 /* i915_reg.h */
+#define GEN7_STOLEN_RESERVED_ADDR_MASK  (0x3fffu << 18)
+#define GEN7_STOLEN_RESERVED_SIZE_MASK  (1u << 5)
+#define GEN7_STOLEN_RESERVED_1M         (0u << 5)
+#define GEN7_STOLEN_RESERVED_256K       (1u << 5)
+#define GEN6_STOLEN_RESERVED_ENABLE     (1u << 0)
 #define FPGA_DBG                        0x42300
 #define FPGA_DBG_RM_NOCLAIM             (1u << 31)
 
@@ -297,6 +311,8 @@
 #define HSW_WT_ELLC_LLC_AGE0           HSW_CACHEABILITY_CONTROL(0x6u)
 #define HSW_PTE_UNCACHED               0u
 #define HSW_GTT_ADDR_ENCODE(addr)      ((uint32_t)(addr) | ((uint32_t)((uint64_t)(addr) >> 28) & 0x7f0u))
+#define GFX_FLSH_CNTL_GEN6             0x101008 /* the GTT's cache */
+#define GFX_FLSH_CNTL_EN               (1u << 0)
 #define GEN6_PDE_SHIFT                 22
 #define GEN6_PDE_VALID                 (1u << 0)
 
@@ -420,6 +436,7 @@
 #define DISP_TILED                (1u << 10)
 #define DSPSTRIDE(p)              (0x70188 + (p) * 0x1000)
 #define DSPSURF(p)                (0x7019c + (p) * 0x1000)
+#define DISP_ADDR_MASK            0xfffff000u
 #define DSPOFFSET(p)              (0x701a4 + (p) * 0x1000) /* y << 16 | x */
 #define DSPSURFLIVE(p)            (0x701ac + (p) * 0x1000)
 

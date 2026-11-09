@@ -43,12 +43,19 @@ struct i915_hw;
  * offset into BAR 0 that is a multiple of 4. `delay_us` lets at least `us`
  * microseconds pass on the device: a spin on the machine, the model's clock
  * moved forward in a test. `name` is the backend's, for the log.
+ *
+ * `gtt_map`, which a backend may leave NULL, makes the global GTT's
+ * entries reachable: `size` bytes of BAR 0's second half at the physical
+ * address `phys`, which the MMIO backend maps write-combining and reaches
+ * through `gsm`. A backend without it answers for the entries as it does
+ * for registers, at I915_GSM_OFFSET and up, and its `size` must cover them.
  */
 struct i915_hw_ops {
     const char *name;
     uint32_t (*read32)(struct i915_hw *hw, uint32_t reg);
     void (*write32)(struct i915_hw *hw, uint32_t reg, uint32_t value);
     void (*delay_us)(struct i915_hw *hw, uint32_t us);
+    int32_t (*gtt_map)(struct i915_hw *hw, uint64_t phys, uint32_t size);
 };
 
 /*
@@ -57,6 +64,9 @@ struct i915_hw_ops {
  * how many bytes of BAR 0 the backend answers for; an access at or past it
  * is refused by the calls below. `timeouts` counts the waits that reached
  * their bound and `last_timeout` names the last of them, or is NULL.
+ * `gtt_entries` is how many entries of the global GTT `i915_hw_gtt_init`
+ * made reachable, 0 before it, and `gsm` the kernel address of the first
+ * where the backend's `gtt_map` mapped them, or NULL.
  */
 struct i915_hw {
     const struct i915_hw_ops *ops;
@@ -64,6 +74,8 @@ struct i915_hw {
     uint32_t size;
     uint32_t timeouts;
     const char *last_timeout;
+    uint32_t gtt_entries;
+    void *gsm;
 };
 
 /** The register at `reg` of `hw`; all ones for an offset past the
@@ -117,11 +129,32 @@ int32_t i915_wait_until(struct i915_hw *hw, const char *what, int (*done)(struct
                         void *arg, uint32_t bound_us);
 
 /**
+ * Make the first `size` bytes of the global GTT's entries reachable, at
+ * the physical address `phys` of BAR 0's second half: through the
+ * backend's `gtt_map`, or as registers from I915_GSM_OFFSET where it has
+ * none.
+ *
+ * @return 0, -ENXIO when a backend without `gtt_map` does not answer for
+ *         them, or the error of `gtt_map`.
+ */
+int32_t i915_hw_gtt_init(struct i915_hw *hw, uint64_t phys, uint32_t size);
+
+/** Entry `index` of the global GTT; all ones past `gtt_entries`. */
+uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index);
+
+/** Write `pte` to entry `index` of the global GTT; nothing past
+ * `gtt_entries`. The chip sees it once the caller has flushed the GTT's
+ * cache (GFX_FLSH_CNTL_GEN6), a write to a register, which also drains
+ * the processor's write-combining buffers. */
+void i915_gtt_write(struct i915_hw *hw, uint32_t index, uint32_t pte);
+
+/**
  * Make `hw` the backend over BAR 0's registers, `size` bytes at the
  * physical address `phys`, mapped uncached (map_mmio_typed with
  * PTE_NOCACHE), as Linux maps them, so that a read is never stale and a
  * write is never merged or held back. The GTT's half of BAR 0 is not
- * mapped here: the global GTT maps it write-combining, as Linux does.
+ * mapped here: `i915_hw_gtt_init` maps it write-combining, as Linux does,
+ * where the processor has a page attribute table, and uncached otherwise.
  *
  * @return 0, or -ENOMEM when the kernel's device window has no room left.
  */

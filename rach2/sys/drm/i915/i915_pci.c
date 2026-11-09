@@ -191,10 +191,31 @@ static void i915_unplug(struct drm_device *dev)
     i915_devices_remove(i915);
 }
 
-/** The DRM core's release hook: free the record. */
+/** The DRM core's release hook: give the scratch page back and free the
+ * record. */
 static void i915_release(struct drm_device *dev)
 {
+    i915_ggtt_fini(to_i915(dev));
     kfree(to_i915(dev));
+}
+
+/**
+ * Bring up the parts later ones build on, in Linux's order: forcewake and
+ * the GT FIFO, the display power well, stolen memory and the global GTT.
+ * A well that does not come on and stolen memory that fails its checks are
+ * logged and the bind goes on, as on Linux; 0, or the GTT's error.
+ */
+static int32_t i915_base_init(struct drm_i915_private *i915)
+{
+    int32_t err;
+
+    i915_uncore_init(i915);
+    err = i915_power_init(i915);
+    if (err < 0) {
+        klog(KLOG_WARN, "i915", "power: the display well did not come on: error %d", (int)err);
+    }
+    i915_stolen_init(i915);
+    return i915_ggtt_init(i915);
 }
 
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
@@ -228,8 +249,12 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     pci_enable_memory_space(&i915->pci);
     pci_enable_bus_master(&i915->pci);
     i915_irq_quiesce(&i915->hw);
-    err = i915_devices_add(i915);
+    err = i915_base_init(i915);
+    if (err == 0) {
+        err = i915_devices_add(i915);
+    }
     if (err < 0) {
+        i915_ggtt_fini(i915);
         pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
         kfree(i915);
         return err;

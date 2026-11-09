@@ -4,7 +4,9 @@
  */
 
 #include "i915_hw.h"
+#include "i915_reg.h"
 
+#include "../../arch/x86/pat.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../mm/paging.h"
@@ -127,6 +129,45 @@ int32_t i915_wait_until(struct i915_hw *hw, const char *what, int (*done)(struct
     }
 }
 
+int32_t i915_hw_gtt_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
+{
+    int32_t err;
+
+    if (hw->ops->gtt_map) {
+        err = hw->ops->gtt_map(hw, phys, size);
+        if (err < 0) {
+            return err;
+        }
+    } else if (hw->size < I915_GSM_OFFSET || size > hw->size - I915_GSM_OFFSET) {
+        return -ENXIO;
+    }
+    hw->gtt_entries = size / 4u;
+    return 0;
+}
+
+uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index)
+{
+    if (index >= hw->gtt_entries) {
+        return 0xffffffffu;
+    }
+    if (hw->gsm) {
+        return mmio_read32((uintptr_t)hw->gsm + index * 4u);
+    }
+    return i915_read(hw, I915_GSM_OFFSET + index * 4u);
+}
+
+void i915_gtt_write(struct i915_hw *hw, uint32_t index, uint32_t pte)
+{
+    if (index >= hw->gtt_entries) {
+        return;
+    }
+    if (hw->gsm) {
+        mmio_write32((uintptr_t)hw->gsm + index * 4u, pte);
+        return;
+    }
+    i915_write(hw, I915_GSM_OFFSET + index * 4u, pte);
+}
+
 /* ---- the backend over BAR 0 ---- */
 
 /** A register of the mapped half of BAR 0, by one uncached load. */
@@ -148,8 +189,25 @@ static void i915_mmio_delay(struct i915_hw *hw, uint32_t us)
     k_udelay(us);
 }
 
+/** Map the GTT's entries write-combining where the processor has a page
+ * attribute table, as Linux's ioremap_wc, and uncached otherwise. */
+static int32_t i915_mmio_gtt_map(struct i915_hw *hw, uint64_t phys, uint32_t size)
+{
+    uintptr_t gsm;
+
+    if (size < 4u || phys + size > (uint64_t)(uintptr_t)-1) {
+        return -ENOMEM;
+    }
+    gsm = map_mmio_typed((uintptr_t)phys, size, pat_write_combining() ? PTE_WC : PTE_NOCACHE);
+    if (gsm == 0) {
+        return -ENOMEM;
+    }
+    hw->gsm = (void *)gsm;
+    return 0;
+}
+
 static const struct i915_hw_ops i915_mmio_ops = {"mmio", i915_mmio_read, i915_mmio_write,
-                                                 i915_mmio_delay};
+                                                 i915_mmio_delay, i915_mmio_gtt_map};
 
 int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
 {
@@ -167,5 +225,7 @@ int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
     hw->size = size;
     hw->timeouts = 0;
     hw->last_timeout = 0;
+    hw->gtt_entries = 0;
+    hw->gsm = 0;
     return 0;
 }
