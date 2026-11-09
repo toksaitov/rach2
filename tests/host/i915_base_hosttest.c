@@ -331,6 +331,7 @@ static void row_forcewake_slow_stuck(void)
 {
     struct i915_model m;
     struct drm_i915_private *i915 = fresh(&m);
+    struct i915_model_fw *fw;
 
     i915_uncore_init(i915);
     i915_model_forcewake(&m)->ack_delay_us = 3000;
@@ -347,8 +348,9 @@ static void row_forcewake_slow_stuck(void)
     done(&m);
 
     i915 = fresh(&m);
+    fw = i915_model_forcewake(&m);
     i915_uncore_init(i915);
-    i915_model_forcewake(&m)->ack_stuck = 1;
+    fw->ack_stuck = 1;
     m.now_us = 0;
     CHECK("stuck ack: fails", i915_forcewake_get(i915) == -ETIMEDOUT);
     CHECK("stuck ack: by name", i915->hw.last_timeout &&
@@ -356,8 +358,8 @@ static void row_forcewake_slow_stuck(void)
                                     logged("forcewake ack: timeout after 50000 us"));
     CHECK("stuck ack: at its bound of 50 ms", m.now_us == 50000);
     CHECK("stuck ack: no reference held, the request withdrawn",
-          i915->uncore.wake_count == 0 && i915_model_forcewake(&m)->req == 0);
-    i915_model_forcewake(&m)->ack_stuck = 0;
+          i915->uncore.wake_count == 0 && fw->req == 0);
+    fw->ack_stuck = 0;
     CHECK("stuck ack: a later get once it answers",
           i915_forcewake_get(i915) == 0 && i915->uncore.wake_count == 1);
     done(&m);
@@ -843,7 +845,6 @@ static void row_ggtt_insert(void)
     CHECK("clear: flushed",
           i915_model_count(&m, I915_MODEL_WRITE, GFX_FLSH_CNTL_GEN6) == flushes + 2);
 
-    writes = m.writes;
     CHECK("refuse: inside the firmware's framebuffer",
           i915_ggtt_insert(i915, 0x1000u, pages, 1, I915_CACHE_NONE) == -EBUSY);
     CHECK("refuse: across its end",
