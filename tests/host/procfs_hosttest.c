@@ -75,6 +75,89 @@ static const char *sysfs_wlan_driver(int index);
 #include "arch/i686/mmu.h"
 #include "ns_first.h"
 
+/** No backlight is registered in this model. */
+int backlight_show(int index, int attr, char *out, int cap)
+{
+    (void)index;
+    (void)attr;
+    (void)out;
+    (void)cap;
+    return -ENOENT;
+}
+
+/** No radio switch is registered in this model. */
+int rfkill_show(int index, int attr, char *out, int cap)
+{
+    (void)index;
+    (void)attr;
+    (void)out;
+    (void)cap;
+    return -ENOENT;
+}
+
+/** No disk has a sysfs row in this model. */
+int devfs_disk_row(int index, struct devfs_disk_row *row)
+{
+    (void)index;
+    (void)row;
+    return 0;
+}
+
+/** No loop device has a backing file. */
+const char *loop_backing(int index, int *autoclear)
+{
+    (void)index;
+    *autoclear = 0;
+    return NULL;
+}
+
+/** No radio is registered. */
+struct wlan *wlan_by_index(unsigned index)
+{
+    (void)index;
+    return NULL;
+}
+
+/** The frame allocator is absent from this model. */
+size_t frame_total_count(void)
+{
+    return 0;
+}
+
+/** The clock is absent from this model. */
+int rtc_read_clock(rtc_time_t *out)
+{
+    (void)out;
+    return -EIO;
+}
+
+/** No successful clock read supplies a date for conversion. */
+int64_t rtc_seconds_of(const rtc_time_t *t)
+{
+    (void)t;
+    return 0;
+}
+
+/** No RTC wake alarm is armed. */
+int64_t devfs_rtc_wakealarm(void)
+{
+    return -1;
+}
+
+/** Each model processor has its own core in package zero. */
+void cpuinfo_place(int cpu, struct cpu_place *p)
+{
+    k_memset(p, 0, sizeof(*p));
+    p->core = (uint32_t)cpu;
+}
+
+/** Only CPU zero is online in this model. */
+uint64_t cpuinfo_siblings(int cpu, int level)
+{
+    (void)level;
+    return cpu == 0 ? 1 : 0;
+}
+
 /* The counters /proc/net/snmp reports, which net_core.c defines, and those
  * /proc/net/snmp6 reports, which ip6.c defines. */
 struct net_mib net_mib;
@@ -92,6 +175,12 @@ static int lock_depth;
 int netdev_count(void)
 {
     return iface != 0;
+}
+
+/** The model's interface belongs to the caller's network namespace. */
+int net_ns_seen(void)
+{
+    return netdev_count();
 }
 
 /** Every interface is in the caller's network namespace. */
