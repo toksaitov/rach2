@@ -8,12 +8,16 @@
  * as one gone too soon or a kernel fault. A fifth test receives two
  * datagrams of an AF_UNIX pair with one recvmmsg and a timeout, which it
  * requires given back with the time left, and on i386 again through
- * recvmmsg_time64. It exits 0 when the five tests pass and 1 otherwise.
+ * recvmmsg_time64. A sixth asks an AF_UNIX pair and a UDP socket on the
+loopback for timestamps, SO_TIMESTAMP and SO_TIMESTAMPNS, old and new, and
+requires each control message in the probe's own layout. It exits 0 when
+the six tests pass and 1 otherwise.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names: `sockstat`, that the count can be read, and an assertion for each
- * test, `create-close`, `dup2-share`, `fork-share`, `exit-release` and
- * `recvmmsg-timeout`, which are not run when the count cannot be read.
+ * test, `create-close`, `dup2-share`, `fork-share`, `exit-release`,
+ * `recvmmsg-timeout` and `timestamps`, which are not run when the count
+ * cannot be read.
  */
 
 #include "probe.h"
@@ -48,6 +52,20 @@ struct mmsghdr {
     struct msghdr msg_hdr;
     unsigned int msg_len;
 };
+
+/* The struct cmsghdr of the probe's ABI: 12 bytes on i386 and 16 on x86-64,
+ * each its data's offset. */
+struct cmsghdr {
+    size_t cmsg_len;
+    int cmsg_level;
+    int cmsg_type;
+};
+
+#define SOL_SOCKET         1
+#define SO_TIMESTAMP_OLD   29
+#define SO_TIMESTAMPNS_OLD 35
+#define SO_TIMESTAMP_NEW   63
+#define SO_TIMESTAMPNS_NEW 64
 
 /** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -354,6 +372,167 @@ static int recvmmsg_timeout(void)
     return verdict(1, -1);
 }
 
+/** Set the SOL_SOCKET option `name` of `fd` to `val`; 1 when it took. */
+static int opt_set(int fd, int name, int val)
+{
+    unsigned long args[5];
+
+    args[0] = (unsigned long)fd;
+    args[1] = SOL_SOCKET;
+    args[2] = (unsigned long)name;
+    args[3] = (unsigned long)&val;
+    args[4] = sizeof(val);
+    return socketcall(SC_SETSOCKOPT, args) == 0;
+}
+
+/** The SOL_SOCKET option `name` of `fd`, an int, or -1 on failure. */
+static int opt_get(int fd, int name)
+{
+    unsigned long args[5];
+    int val = -1;
+    unsigned int len = sizeof(val);
+
+    args[0] = (unsigned long)fd;
+    args[1] = SOL_SOCKET;
+    args[2] = (unsigned long)name;
+    args[3] = (unsigned long)&val;
+    args[4] = (unsigned long)&len;
+    return socketcall(SC_GETSOCKOPT, args) == 0 && len == sizeof(val) ? val : -1;
+}
+
+/**
+ * Receive one datagram on `fd` and require it given with one control
+ * message alone, the timestamp the option `name` asks for: its type the
+ * option's number, and the time more than 0 seconds with its fraction in
+ * range, as the caller's two longs for an old option and two 64-bit words
+ * for a new one. 1 when it was.
+ */
+static int got_stamp(int fd, int name)
+{
+    unsigned long args[3];
+    struct msghdr h;
+    struct iovec iov;
+    struct cmsghdr *c;
+    unsigned long control[16];
+    char buf[8];
+    int wide = name == SO_TIMESTAMP_NEW || name == SO_TIMESTAMPNS_NEW;
+    int ns = name == SO_TIMESTAMPNS_OLD || name == SO_TIMESTAMPNS_NEW;
+    unsigned long limit = ns ? 1000000000ul : 1000000ul;
+    size_t len = wide ? 16 : 2 * sizeof(long);
+
+    iov.iov_base = buf;
+    iov.iov_len = sizeof(buf);
+    h.msg_name = 0;
+    h.msg_namelen = 0;
+    h.msg_iov = &iov;
+    h.msg_iovlen = 1;
+    h.msg_control = control;
+    h.msg_controllen = sizeof(control);
+    h.msg_flags = 0;
+    args[0] = (unsigned long)fd;
+    args[1] = (unsigned long)&h;
+    args[2] = 0;
+    if (socketcall(SC_RECVMSG, args) != 1 || h.msg_flags != 0 ||
+        h.msg_controllen != ((sizeof(*c) + len + sizeof(size_t) - 1) & ~(sizeof(size_t) - 1))) {
+        return 0;
+    }
+    c = (struct cmsghdr *)control;
+    if (c->cmsg_len != sizeof(*c) + len || c->cmsg_level != SOL_SOCKET || c->cmsg_type != name) {
+        return 0;
+    }
+    if (wide) {
+        const unsigned int *w = (const unsigned int *)(c + 1);
+
+        return (w[0] > 0 || w[1] > 0) && w[1] < 0x80000000u && w[3] == 0 && w[2] < limit;
+    } else {
+        const long *t = (const long *)(c + 1);
+
+        return t[0] > 0 && t[1] >= 0 && (unsigned long)t[1] < limit;
+    }
+}
+
+/** Send the byte "x" from `tx` and require it received on `rx` with the
+ * timestamp of `name`, which `rx` is set to ask for alone. 1 when it was. */
+static int stamp_one(int tx, int rx, int name, unsigned long *to, unsigned long tolen)
+{
+    unsigned long args[6];
+    int names[4] = {SO_TIMESTAMP_OLD, SO_TIMESTAMPNS_OLD, SO_TIMESTAMP_NEW, SO_TIMESTAMPNS_NEW};
+    int i;
+
+    if (!opt_set(rx, name, 1)) {
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        if (opt_get(rx, names[i]) != (names[i] == name)) {
+            return 0;
+        }
+    }
+    args[0] = (unsigned long)tx;
+    args[1] = (unsigned long)"x";
+    args[2] = 1;
+    args[3] = 0;
+    args[4] = (unsigned long)to;
+    args[5] = tolen;
+    return socketcall(to ? SC_SENDTO : SC_SEND, args) == 1 && got_stamp(rx, name);
+}
+
+/**
+ * Test 6: each of SO_TIMESTAMP and SO_TIMESTAMPNS, old and new, turned on
+ * alone, reads back 1 while the others read 0, and has a datagram given
+ * with its control message alone, in the probe's layout: on an AF_UNIX pair
+ * and on a UDP socket that sends to itself on the loopback. Turning one off
+ * turns all off.
+ */
+static int timestamps(void)
+{
+    int names[4] = {SO_TIMESTAMP_OLD, SO_TIMESTAMPNS_OLD, SO_TIMESTAMP_NEW, SO_TIMESTAMPNS_NEW};
+    unsigned long args[4];
+    unsigned long sa[4];
+    unsigned int salen = 16;
+    int sv[2];
+    int u, i;
+
+    print("Test 6: SO_TIMESTAMP and SO_TIMESTAMPNS... ");
+    args[0] = AF_UNIX;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    args[3] = (unsigned long)sv;
+    if (socketcall(SC_SOCKETPAIR, args) != 0) {
+        return verdict(0, 0);
+    }
+    for (i = 0; i < 4; i++) {
+        if (!stamp_one(sv[0], sv[1], names[i], 0, 0)) {
+            return verdict(0, 1 + i);
+        }
+    }
+    if (!opt_set(sv[1], SO_TIMESTAMP_OLD, 0) || opt_get(sv[1], SO_TIMESTAMPNS_NEW) != 0) {
+        return verdict(0, 5);
+    }
+    sys_close(sv[0]);
+    sys_close(sv[1]);
+    u = make_socket();
+    sa[0] = sa[1] = sa[2] = sa[3] = 0;
+    ((unsigned short *)sa)[0] = AF_INET;
+    ((unsigned int *)sa)[1] = 0x0100007Fu; /* 127.0.0.1 in network order */
+    args[0] = (unsigned long)u;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (u < 0 || socketcall(SC_BIND, args) != 0) {
+        return verdict(0, 6);
+    }
+    args[2] = (unsigned long)&salen;
+    if (socketcall(SC_GETSOCKNAME, args) != 0) {
+        return verdict(0, 7);
+    }
+    for (i = 0; i < 4; i++) {
+        if (!stamp_one(u, u, names[i], sa, 16)) {
+            return verdict(0, 8 + i);
+        }
+    }
+    sys_close(u);
+    return verdict(1, -1);
+}
+
 /** Report the test `id`: held when `ok`, or failed with `why`; return `ok`. */
 static int report_test(const char *id, int ok, const char *why)
 {
@@ -369,7 +548,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe: the five tests in order, each printed OK or FAILED. `_start`
+/** The probe: the six tests in order, each printed OK or FAILED. `_start`
  * calls it with the initial stack, whose environment gives the case's
  * identity. */
 void probe_main(unsigned long *sp)
@@ -389,6 +568,7 @@ void probe_main(unsigned long *sp)
         report_plan("fork-share");
         report_plan("exit-release");
         report_plan("recvmmsg-timeout");
+        report_plan("timestamps");
         report_stop("/proc/net/sockstat has no UDP count");
         sys_exit(1);
     }
@@ -404,8 +584,11 @@ void probe_main(unsigned long *sp)
     passed += report_test("recvmmsg-timeout", recvmmsg_timeout(),
                           "recvmmsg did not take both datagrams, give back the time left or "
                           "refuse a timeout out of range");
+    passed += report_test("timestamps", timestamps(),
+                          "a timestamp option did not read back alone, or a datagram did not "
+                          "come with its timestamp alone in the caller's layout");
     report_end();
-    failed = 5 - passed;
+    failed = 6 - passed;
 
     puts("");
     print("Results: ");
