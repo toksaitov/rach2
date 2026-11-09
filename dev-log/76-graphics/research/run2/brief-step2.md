@@ -1,0 +1,8 @@
+# Step 2: what runs on guest lavapipe
+
+Row 2 of `run2-plan.md`, in the environment step 1 chose (`run2/step1.md` names it and how to start the guest there). It steers whether task 74-6 moves onto guest lavapipe in milestone 73, task 73-13's Mesa pin and 77-1's pin.
+
+* In a Debian 13 guest under that engine (your own overlay), on the guest's own lavapipe and llvmpipe, Mesa 25.0.7: Vulkan (`vulkaninfo`, vkcube offscreen, the version and the features DXVK and vkd3d-proton ask for), OpenGL and GLES (`eglinfo`, glmark2 offscreen), WebGL 1 and 2 with the first run's probe page (`tonight/lenovo-probe/probe.html`, `probe-server.py`, `cdp.py`), Weston 14 headless with Chromium and Firefox ESR on it with their sandboxes on (say whether Chromium's GPU process runs sandboxed, and why not if it does not), and WebGPU on SwiftShader in Chromium.
+* Wine on lavapipe: Debian's Wine with WineD3D on GL and on Vulkan; then the GE-Proton release the plan names, or the newest one if it names none, from its GitHub release page with its checksum, run outside Steam in WoW64 mode, with its DXVK (Direct3D 9 to 11) and vkd3d-proton (Direct3D 12). A Direct3D 9, 11 and 12 program each that draws and reads back, built with MinGW in the guest from `tonight/lenovo-probe/d3d11probe.c` as a model. Name the Vulkan version and features each asks for and whether lavapipe gives them; DXVK 3.x may ask for Vulkan 1.4.
+* Close with what runs, what does not and why, and what the plan's 74-6, 73-13 and 77-1 should say.
+* Step 1 chose WSL with KVM (`run2/step1.md`): reuse its prepared Debian image, overlay recipe and login key under `/home/testing/rach2/build/cache/run2/step1/` (copy the key, leave its files in place), and set LP_NUM_THREADS to the guest's CPU count.
