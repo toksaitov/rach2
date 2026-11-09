@@ -88,16 +88,17 @@
 # the owner's accounts can do, and removes `linux-host`, since the step left
 # runs on the Mac. `release N trial` does the same but sets Backlog, for a
 # step that boots code never run on the Lenovo, which waits there for the
-# manager's go and `ready N`. When RACH2_WORKER_STATE names the state
-# directory of the loop that holds N, its `issue` file holding N, `release`
-# takes that loop's claim lock, as worker.sh's `claim` does, empties the
-# file and unassigns this account under it, so that a loop of the same
-# account that takes N afterwards is its only writer; the file gets N back
-# only when GitHub is read to show N still assigned to this account. A step
-# that fails exits 1 with N still assigned to this account, so that its
-# worker keeps it and can release it again; an unassignment that fails and
-# whose result cannot be read leaves the file empty, so that at worst N
-# waits for another release, never for two writers. A closed issue is set
+# manager's go and `ready N`. When RACH2_WORKER_STATE names a loop's state
+# directory, as it does in the loop's sessions, `release` takes that loop's
+# claim lock, as worker.sh's `claim` does, and changes nothing unless the
+# loop's `issue` file holds N; under the lock it empties the file and
+# unassigns this account, so that a loop of the same account that takes N
+# afterwards is its only writer, and the file gets N back only when GitHub is
+# read to show N still assigned to this account. A step that fails exits 1
+# with N still assigned to this account, so that its worker keeps it and can
+# release it again; an unassignment that fails and whose result cannot be
+# read leaves the file empty, so that N waits, Ready and assigned, for the
+# manager, which `check` tells, never for two writers. A closed issue is set
 # Done and nothing else is changed, since its commit may have closed it
 # before its worker hands it back.
 #
@@ -135,9 +136,12 @@
 # `check [HELD...]` prints a line `board: LINE` for each inconsistency of
 # the board it can see: an open task that no loop in HELD holds whose branch
 # `task/N` its milestone's branch already contains, an open card In progress
-# with no assignee, or one that no worker loop holds when HELD lists the
-# issues the loops hold, a card Done or closed whose state or Status
-# disagrees, and an open milestone whose cards are all closed while no other
+# with no assignee, an open task Ready with one, which `take` and `release`
+# leave for a moment and a failed `release` for good, so that it is read
+# again before it is acted on, or a card In progress that no worker loop
+# holds when HELD lists the issues the loops hold, a card Done or closed
+# whose state or Status disagrees, and an open milestone whose cards are all
+# closed while no other
 # open milestone with an open card names its branch, which says that it
 # waits for its release: right at the end of a lone milestone or a stack,
 # and a fault at any other time. A milestone of a stack is not listed while
@@ -553,13 +557,50 @@ release()
     if finished "$1"; then
         return 0
     fi
-    me=$(gh api user --jq .login)
+    login
     status=Ready label=
     case $2 in
         owner) status=Backlog label=owner ;;
         owner-only) label=owner-only ;;
         trial) status=Backlog label=owner-only ;;
     esac
+    if [ -z "$RACH2_WORKER_STATE" ]; then
+        hand_back "$1"
+        unassign "$1" "$me" && return 0
+        echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
+        exit 1
+    fi
+    lock=$(cd "$(cat "$RACH2_WORKER_STATE/repo")" && cd "$(git rev-parse --git-common-dir)/.." &&
+        pwd)/build/flow/claim.lock || {
+        echo "board: #$1: cannot find the claim lock of the loop in $RACH2_WORKER_STATE" >&2
+        exit 1
+    }
+    {
+        perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX) or
+            die "board: claim lock: $!\n"' || exit 1
+        if [ "$(cat "$RACH2_WORKER_STATE/issue" 2> /dev/null)" != "$1" ]; then
+            echo "board: #$1: the loop in $RACH2_WORKER_STATE does not hold it, so it is left as it is" >&2
+            exit 1
+        fi
+        hand_back "$1"
+        : > "$RACH2_WORKER_STATE/issue"
+        unassign "$1" "$me" && return 0
+        who=$(gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login') || {
+            echo "board: #$1: set $status, but cannot tell whether $me is unassigned; the manager checks it" >&2
+            exit 1
+        }
+        printf '%s\n' "$who" | grep -qx "$me" || return 0
+        echo "$1" > "$RACH2_WORKER_STATE/issue"
+        echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
+        exit 1
+    } 9>> "$lock"
+}
+
+# hand_back N: set N's Status to $status and add $label, removing
+# `linux-host` with `owner-only`, for `release`; exit 1 with N unchanged in
+# its assignees when a step fails.
+hand_back()
+{
     if ! set_status "$1" "$status"; then
         echo "board: #$1: cannot set it $status; it is still assigned to $me" >&2
         exit 1
@@ -576,30 +617,6 @@ release()
             exit 1
         fi
     fi
-    if [ -z "$RACH2_WORKER_STATE" ] || [ "$(cat "$RACH2_WORKER_STATE/issue" 2> /dev/null)" != "$1" ]; then
-        unassign "$1" "$me" && return 0
-        echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
-        exit 1
-    fi
-    lock=$(cd "$(cat "$RACH2_WORKER_STATE/repo")" && cd "$(git rev-parse --git-common-dir)/.." &&
-        pwd)/build/flow/claim.lock || {
-        echo "board: #$1: set $status, but cannot find the claim lock; release it again" >&2
-        exit 1
-    }
-    {
-        perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX) or
-            die "board: claim lock: $!\n"' || exit 1
-        : > "$RACH2_WORKER_STATE/issue"
-        unassign "$1" "$me" && return 0
-        who=$(gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login') || {
-            echo "board: #$1: set $status, but cannot tell whether $me is unassigned; release it again" >&2
-            exit 1
-        }
-        printf '%s\n' "$who" | grep -qx "$me" || return 0
-        echo "$1" > "$RACH2_WORKER_STATE/issue"
-        echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
-        exit 1
-    } 9>> "$lock"
 }
 
 branch()
@@ -730,6 +747,7 @@ check()
         $4 == "OPEN" && $2 == "Done" { print "board: #" $3 " is open but Done" }
         $4 == "CLOSED" && $2 != "Done" { print "board: #" $3 " is closed but " ($2 == "" ? "has no Status" : $2) }
         $4 == "OPEN" && $2 == "In progress" && $6 == "" { print "board: #" $3 " is In progress with no assignee" }
+        $4 == "OPEN" && $2 == "Ready" && $6 != "" && $8 == "" { print "board: #" $3 " is Ready but assigned to " $6 }
         $4 == "OPEN" && $2 == "In progress" && held != "  " && $8 == "" && index(held, " " $3 " ") == 0 &&
             $12 !~ /^Release milestone / { print "board: #" $3 " is In progress but no loop holds it" }
         $8 == "" && $9 != "" && $10 == "OPEN" {

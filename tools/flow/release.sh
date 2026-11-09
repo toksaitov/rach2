@@ -1804,13 +1804,17 @@ take_lenovo()
     elif [ "$(cat "$lock/issue" 2> /dev/null)" != "release $milestone" ]; then
         later "the Lenovo's lock is held by $(cat "$lock/issue" 2> /dev/null || echo 'an unnamed holder')"
     fi
+    lenovo_mine=1
 }
 
-# free_lenovo: remove the Lenovo's lock when this release holds it.
+# free_lenovo: remove the Lenovo's lock when this run of the release took it
+# or found it its own, so that a second run of M that stops on STATE/lock
+# leaves the first one's alone.
 free_lenovo()
 {
-    [ -z "$lock" ] || [ "$(cat "$lock/issue" 2> /dev/null)" != "release $milestone" ] ||
-        rm -rf "$lock"
+    [ -n "$lenovo_mine" ] || return 0
+    [ "$(cat "$lock/issue" 2> /dev/null)" != "release $milestone" ] || rm -rf "$lock"
+    lenovo_mine=
 }
 
 # enter_lenovo: before the release first touches the Lenovo, exit 75 while
@@ -1988,6 +1992,7 @@ main()
 {
     state=
     lock=
+    lenovo_mine=
     macrun=
     rerun=
     prepare=
