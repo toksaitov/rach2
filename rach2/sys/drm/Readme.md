@@ -33,7 +33,7 @@ The opening comment of `drm.h` is the design every file keeps: locking under the
 
 The handoff follows Linux's aperture helpers. fbdrm drives the framebuffer the loader left and records its range. A native driver, before it touches its hardware, removes every firmware device in the ranges its device decodes; the console leaves the removed device and moves to the native one when that registers. So a machine shows one card for its screen, the native one when there is one.
 
-The files of `sys/drm/` that every architecture compiles are listed in [`sources.mk`](sources.mk), and those that reach PC-only code, bochs, fbdrm, the console's client and the PC's probes, in [`pc.mk`](pc.mk), which `sys/arch/x86/sources.mk` includes; `sys/dmabuf/sources.mk` and `sys/virtio/sources.mk`, empty until the virtio transport comes, are included by `rach2/sources.mk`. Each stub's opening comment names the work that replaces it.
+The files of `sys/drm/` that every architecture compiles are listed in [`sources.mk`](sources.mk), and those that reach PC-only code, bochs, fbdrm, the console's client and the PC's probes, in [`pc.mk`](pc.mk), which `sys/arch/x86/sources.mk` includes; `sys/dmabuf/sources.mk` and `sys/virtio/sources.mk`, the [virtio transport](../virtio/Readme.md)'s, are included by `rach2/sources.mk`. Each stub's opening comment names the work that replaces it.
 
 ## Limits
 

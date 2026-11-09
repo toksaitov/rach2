@@ -1,0 +1,46 @@
+# `virtio/`: the virtio transport and its queues
+
+A virtio device is driven through a status byte, feature bits, a configuration space and split virtqueues, the same on every bus (virtio 1.2). `virtqueue.c` is the part every transport shares: a device's reset, its feature negotiation and bring-up, and its queues. `virtio_pci.c` is the first transport, virtio 1.x over PCI: it finds a function by its device type, reads its vendor capabilities and maps the windows they name, and gives it interrupts by MSI-X or by its INTx line. A driver, virtio-gpu first, reaches its device only through `virtio.h`, and a transport only through the table of operations there, so that another transport, such as one over a single shared region of memory, is a file of its own that fills the same table.
+
+## Interfaces
+
+A driver finds its device with `virtio_pci_find(id, nth, &dev)`, by its type (`VIRTIO_ID_GPU` and the others of virtio 1.2, 5) and its place among the functions of that type, counting from zero. It then brings the device up in the order virtio 1.2, 3.1.1 gives:
+
+1. `virtio_init(dev, wanted, nqueues)` resets the device, waiting at most 100 ms for its status to clear, sets ACKNOWLEDGE and DRIVER, and takes the device's own bits of `wanted` that the device offers, with `VIRTIO_F_VERSION_1`, which it must offer, and the bits the core handles: `VIRTIO_F_INDIRECT_DESC`, `VIRTIO_F_ACCESS_PLATFORM` and `VIRTIO_F_ORDER_PLATFORM`. It sets FEATURES_OK, checks that the device kept it, and prepares interrupts for `nqueues` queues. A legacy device, one that refuses the features or one whose reset does not end is refused and marked FAILED.
+2. `virtio_queue_setup(dev, index, done, priv, &vq)` for each queue.
+3. `virtio_ready(dev)` lets the interrupts through and sets DRIVER_OK.
+
+A buffer is a list of segments, `struct virtio_sg`, each an address the device reads and a length: first those the device reads, then those it writes. `virtqueue_add(vq, sg, out, in, token)` publishes one at once, and `virtqueue_kick(vq)` tells the device, unless it has asked not to be told. When the device returns the buffer, `done(vq, token, len)` is called with the bytes it wrote, from the interrupt handler or from `virtqueue_reap(vq)` in a driver that polls, with the queue's lock released, so `done` may add to its own queue. `-ENOSPC` from `virtqueue_add` means the queue is full until a completion.
+
+Memory the device reads or writes comes from `virtio_dma_alloc(dev, bytes, &addr)`, at most a page, page-aligned and zeroed, with the address the device uses for it; a larger buffer, such as a resource's backing, is a list of pages. On virtio-pci the page is a frame of the DMA pool below 4 GiB and the address is its physical address. `virtio_config_read` reads the device-specific configuration as one snapshot, again while its generation changes, at most eight times; `virtio_shm_region` gives a shared memory region the device exposes (virtio 1.2, 2.10), such as virtio-gpu's host-visible memory. `dev->config_changed`, when the driver sets it, is called from the handler on a configuration change.
+
+`virtio_teardown(dev)` resets the device, stops its interrupts and frees its queues; buffers still queued are dropped without their `done`. When the reset does not end, the memory the device was given is kept, since the device may still write it. The device can then be brought up again from `virtio_init`.
+
+The transport's table, `struct virtio_ops`, has the status byte, the feature bits, the configuration and its generation, a queue's size, enabling and notification, the interrupts' setup, start and release, the device's memory and its shared memory regions. `virtio.h` states each operation's contract.
+
+The core logs under `virtio`: `found:` with the function, its type, the BAR and offset of each capability, the notification multiplier and the queue count, and each shared memory region; `features:` with the bits offered and taken; `interrupts:` with the plan; `queue:` with each queue's size, vector and whether it has indirect tables; `refused:` with the reason a device was not taken.
+
+## Design
+
+| File | What it does |
+| --- | --- |
+| `virtio.h` | the status and feature bits, the split ring's layout, `struct virtqueue`, `struct virtio_ops`, `struct virtio_dev` and the calls of the core and of virtio-pci |
+| `virtqueue.c` | reset, negotiation, bring-up and teardown through the table; the split virtqueue |
+| `virtio_pci.c` | virtio 1.x over PCI: discovery, the capabilities and their windows, the common configuration, notification and interrupts |
+
+A queue is at most `VIRTQ_MAX_SIZE`, 128 entries, the device's size cut to the largest power of two no larger than it, so that its descriptors and both rings, 3342 bytes, lie in one page in that order, each at the alignment virtio 1.2, 2.7 asks. Free descriptors are a list through their `next` fields. A chain goes into the queue's descriptors when enough are free; when they are not and `VIRTIO_F_INDIRECT_DESC` was taken, into one of 16 tables of 16 descriptors in a page of the queue's own, at the cost of one descriptor. The driver's ring index is published after a fence that orders the chain and its ring entry before it, and the device's flags are read after a fence that orders the index before them. A returned head that is not in use, or a device index more than the queue's length ahead, is logged and not acted on.
+
+virtio-pci walks the function's capability list, at most 48 links, for the vendor capabilities, and takes the first common, notification, ISR and device capability whose BAR is a programmed memory BAR the kernel can address; one in an I/O BAR is passed over for a later one. It maps up to 64 KiB of each window. The common, notification and ISR capabilities are required, and the device configuration is optional. A shared memory capability is recorded, not mapped, since virtio-gpu's is 4 GiB high above the kernel's device window. Both device ids are taken: 0x1040 plus the type for a device of virtio 1.x alone, and 0x1000 to 0x103F for a transitional one, whose type is its subsystem id.
+
+Interrupts follow Linux's virtio_pci: an MSI-X entry for the configuration and one for each queue when the table and the free vectors allow; else one entry for the configuration and one the queues share; else the INTx line, whose handler reads each device's ISR status, which says whether it raised the line and why; else none, and the driver polls with `virtqueue_reap`. While the entries are programmed MSI-X is held, enabled with the function masked, and `virtio_ready` lifts the mask. A handler is given only the saved registers, so each of the 16 interrupt slots that the devices share has a handler of its own that names its slot. The transport holds four devices.
+
+## Limits
+
+* Split virtqueues only: `VIRTIO_F_RING_PACKED`, `VIRTIO_F_EVENT_IDX` and `VIRTIO_F_NOTIFICATION_DATA` are not taken, nor is a queue reset of its own.
+* A queue has at most 128 entries, and a buffer in an indirect table at most 16 segments.
+* A device has at most `VIRTIO_MAX_QUEUES`, 8, queues, and the transport four devices and 16 interrupt slots among them.
+* The device-specific fields are read and written as they are, which is right on the little-endian processors Rach2 runs on.
+
+## Tests
+
+`tests/host/virtqueue_hosttest.c` runs `virtqueue.c` against a model device through the table, at device addresses that are not host addresses ([host tests](../../../tests/host/Readme.md)). No boot reaches the transport until virtio-gpu's driver calls it; a probe that brought virtio-gpu up and sent it `GET_DISPLAY_INFO` was answered by interrupt on both architectures with `-device virtio-gpu-pci` (an MSI-X entry for each queue), `virtio-gpu-pci,vectors=2` (the shared entry), `virtio-gpu-pci,vectors=0` (the INTx line) and `virtio-vga`.
