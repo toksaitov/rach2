@@ -5,8 +5,10 @@
  *
  * The probe checks, in order:
  *
- * * `debugfs`: /sys/kernel/debug is an empty directory, where debugfs is
- *   mounted.
+ * * `debugfs`: debugfs is mounted at /sys/kernel/debug, root's with mode
+ *   0700, on a device of its own, with /sys/kernel as its `..`; it lists
+ *   sync's sw_sync and info, which root opens, and refuses uid 65534 with
+ *   EACCES.
  * * `class`: /sys/class/drm is a directory whose `version` reads
  *   "drm 1.1.0 20060810".
  * * `pci`: every function of /sys/bus/pci/devices has `vendor`, `device`,
@@ -324,14 +326,74 @@ static long each_entry(const char *path, void (*each)(const char *, void *), voi
     return n < 0 ? n : count;
 }
 
-/** /sys/kernel/debug is a directory with no entry. */
+/** Stat `path` into `st`, or fail naming it. */
+static void stat_of(const char *path, unsigned long long *st)
+{
+    if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
+        fail2("no stat of ", path);
+    }
+}
+
+/** The device and inode numbers of the stat `st`, as one comparison. */
+static int same_file(const unsigned long long *a, const unsigned long long *b)
+{
+    return *(const unsigned long long *)((const char *)a + KSTAT_DEV) ==
+               *(const unsigned long long *)((const char *)b + KSTAT_DEV) &&
+           *(const unsigned long long *)((const char *)a + KSTAT_INO) ==
+               *(const unsigned long long *)((const char *)b + KSTAT_INO);
+}
+
+/** Count sync's two files, sw_sync and info, by their names. */
+static void sync_file(const char *name, void *arg)
+{
+    if (str_eq(name, "sw_sync") || str_eq(name, "info")) {
+        ++*(int *)arg;
+    }
+}
+
+/**
+ * debugfs is mounted at /sys/kernel/debug, root's with mode 0700, on a
+ * device of its own, and `..` there is /sys/kernel; it lists sync with
+ * sw_sync and info, which root opens, and a process of uid 65534 is refused
+ * at the mount's root.
+ */
 static void debugfs_row(void)
 {
-    if ((file_mode("/sys/kernel/debug", 0) & S_IFMT) != S_IFDIR) {
-        fail("/sys/kernel/debug is no directory");
+    unsigned long long dbg[KSTAT_SIZE / 8 + 1], up[KSTAT_SIZE / 8 + 1], kern[KSTAT_SIZE / 8 + 1];
+    unsigned mode;
+    int count = 0, status = 0;
+    long fd, pid;
+
+    stat_of("/sys/kernel/debug", dbg);
+    stat_of("/sys/kernel/debug/..", up);
+    stat_of("/sys/kernel", kern);
+    mode = *(unsigned *)((char *)dbg + KSTAT_MODE);
+    if (mode != (S_IFDIR | 0700) || *(unsigned *)((char *)dbg + KSTAT_UID) != 0) {
+        fail("/sys/kernel/debug is not root's directory of mode 0700");
     }
-    if (each_entry("/sys/kernel/debug", 0, 0) != 0) {
-        fail("/sys/kernel/debug is not empty");
+    if (!same_file(up, kern)) {
+        fail("/sys/kernel/debug/.. is not /sys/kernel");
+    }
+    if (*(unsigned long long *)((char *)dbg + KSTAT_DEV) ==
+        *(unsigned long long *)((char *)kern + KSTAT_DEV)) {
+        fail("/sys/kernel/debug is on /sys's device, not a mount of its own");
+    }
+    if (each_entry("/sys/kernel/debug/sync", sync_file, &count) < 0 || count != 2) {
+        fail("/sys/kernel/debug/sync does not list sw_sync and info");
+    }
+    fd = syscall3(SYS_OPEN, (long)"/sys/kernel/debug/sync/sw_sync", 2 | O_CLOEXEC, 0);
+    if (fd < 0) {
+        fail("root cannot open /sys/kernel/debug/sync/sw_sync");
+    }
+    syscall1(SYS_CLOSE, fd);
+    pid = syscall0(SYS_FORK);
+    if (pid == 0) {
+        syscall3(SYS_SETRESUID, 65534, 65534, 65534);
+        fd = syscall3(SYS_OPEN, (long)"/sys/kernel/debug/sync/info", O_RDONLY, 0);
+        sys_exit(fd == -13 ? 0 : 1);
+    }
+    if (pid < 0 || syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
+        fail("uid 65534 is not refused below /sys/kernel/debug with EACCES");
     }
     report_held();
 }

@@ -301,6 +301,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "debugfs",
+          "checks": "tests/host/debugfs_hosttest.c drives debugfs's tree and makes, signals and reads a software fence through sync/sw_sync and sync/info under the sanitizers and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "dsp",
           "checks": "tests/host/dsp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
