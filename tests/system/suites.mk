@@ -1539,6 +1539,11 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 # writes, syncs and memory pressure on four processors, judged after the
 # machine without that kernel. It is the machine case of
 # tests/cases/machine.punch.json, which etude runs, and has no target here.
+# `tests/run ext2stop`: an ext2 volume stopped under writes, judged by Rach2's
+# next writable mount and its check first, then the host's e2fsck -fn and the
+# sentinel files, against the same volume powered off in order. It is the
+# machine case of tests/cases/machine.ext2stop.json, which etude runs, and has
+# no target here.
 # `tests/run grow`: a 1 GiB ext2 root grown by `growroot` on the recovery
 # system to a partition the size of the installed machine's disk, its
 # writes checked against the grow set, a grow stopped in resize2fs and

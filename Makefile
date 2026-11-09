@@ -904,6 +904,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpi_scenario \
                       build/tests/cases/machine/etudeexec_scenario \
                       build/tests/cases/machine/exitline_scenario \
                       build/tests/cases/machine/ext2_scenario \
+                      build/tests/cases/machine/ext2stop_scenario \
                       build/tests/cases/machine/fswrite_scenario \
                       build/tests/cases/machine/krffsmount_scenario \
                       build/tests/cases/machine/large_scenario \
