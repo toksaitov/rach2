@@ -1670,8 +1670,8 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
     int n = 0;
 
     if (connector->edid_override) {
-        edid = (const uint8_t *)connector->edid_override->data;
-        len = connector->edid_override->length;
+        edid = connector->edid_override;
+        len = connector->edid_override_len;
     }
     clean = edid_clean(edid, len, &blocks);
     /* A new blob each time, made before the old one goes, as Linux's
@@ -1690,6 +1690,46 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
     }
     kfree(clean);
     return n;
+}
+
+int32_t drm_edid_override_set(struct drm_connector *connector, const void *edid, uint32_t len)
+{
+    const uint8_t *bytes = (const uint8_t *)edid;
+    uint8_t block[EDID_LENGTH];
+    uint32_t blocks, i;
+    uint8_t *copy;
+
+    /* Linux's drm_edid_valid: every block the base names there and valid,
+     * judged on a copy, since the check mends a header in place. */
+    if (!edid || len < EDID_LENGTH) {
+        return -EINVAL;
+    }
+    blocks = 1u + bytes[0x7e];
+    if (blocks * EDID_LENGTH > len) {
+        return -EINVAL;
+    }
+    for (i = 0; i < blocks; i++) {
+        k_memcpy(block, bytes + i * EDID_LENGTH, EDID_LENGTH);
+        if (!block_valid(block, i == 0)) {
+            return -EINVAL;
+        }
+    }
+    copy = (uint8_t *)kmalloc(len);
+    if (!copy) {
+        return -ENOMEM;
+    }
+    k_memcpy(copy, bytes, len);
+    kfree(connector->edid_override);
+    connector->edid_override = copy;
+    connector->edid_override_len = len;
+    return 0;
+}
+
+void drm_edid_override_reset(struct drm_connector *connector)
+{
+    kfree(connector->edid_override);
+    connector->edid_override = NULL;
+    connector->edid_override_len = 0;
 }
 
 int drm_add_modes_noedid(struct drm_connector *connector, uint32_t hdisplay, uint32_t vdisplay)

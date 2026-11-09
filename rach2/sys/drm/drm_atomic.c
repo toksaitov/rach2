@@ -5,12 +5,20 @@
  */
 
 #include "drm.h"
+#include "../dmabuf/dmabuf.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
-#include "../rtc.h"
+#include "../proc/percpu.h"
+#include "../proc/process.h"
+#ifndef RACH2_HOSTTEST
+#include "../arch/arch.h"
+#include "../klog.h"
+#include "../lib/kirq.h"
+#include "../proc/sched.h"
+#endif
 
 #define DRM_INT_MAX 0x7fffffffL
 
@@ -1098,25 +1106,6 @@ int32_t drm_atomic_helper_check_plane_state(struct drm_plane_state *ps,
  * The commit
  */
 
-/** Send the event a CRTC's new state still holds, as Linux's fake vblank
- * does for a CRTC without vblank interrupts: stamped with the CRTC's
- * vblank count and the time now. */
-static void send_crtc_event(struct drm_crtc_state *cs)
-{
-    struct drm_pending_event *e = cs->event;
-    int64_t sec, nsec;
-
-    if (!e) {
-        return;
-    }
-    cs->event = NULL;
-    rtc_monotonic(&sec, &nsec);
-    e->event.vbl.tv_sec = (uint32_t)sec;
-    e->event.vbl.tv_usec = (uint32_t)nsec / 1000u;
-    e->event.vbl.sequence = (uint32_t)cs->crtc->vblank.count;
-    drm_send_event(e);
-}
-
 /** Make the commit's states the objects', Linux's
  * drm_atomic_helper_swap_state: afterwards `*_old` are the states the
  * commit owns and frees, and `*_new` the objects'. */
@@ -1158,6 +1147,9 @@ static void commit_disables(struct drm_atomic_state *state)
         }
         if (crtc->funcs && crtc->funcs->atomic_disable) {
             crtc->funcs->atomic_disable(crtc, state);
+        }
+        if (drm_crtc_has_vblank(crtc)) {
+            drm_crtc_vblank_off(crtc);
         }
     }
     for (i = 0; i < mc->num_connector; i++) {
@@ -1236,42 +1228,63 @@ static void commit_enables(struct drm_atomic_state *state)
         if (cs->crtc->funcs && cs->crtc->funcs->atomic_enable) {
             cs->crtc->funcs->atomic_enable(cs->crtc, state);
         }
+        if (drm_crtc_has_vblank(cs->crtc)) {
+            drm_crtc_vblank_on(cs->crtc);
+        }
     }
 }
 
-int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state *state,
-                                 int nonblock)
+/** Arm each CRTC's event for the vblank after the commit, as Linux's
+ * drivers do in `atomic_flush`, or send it now on a CRTC without vblanks
+ * or that is off, as drm_atomic_helper_fake_vblank and the drivers'
+ * `atomic_disable` do. An unplugged device's out-fences signal -ENODEV. */
+static void commit_signal(struct drm_atomic_state *state)
 {
-    int32_t rc;
     int i;
 
-    (void)dev;
-    (void)nonblock;
-    /* Every commit completes before it returns, so none is ever pending and
-     * a nonblocking one never meets EBUSY. 76-5b moves a nonblocking
-     * commit's tail to the vblank, after its fences. */
+    for (i = 0; i < DRM_MAX_CRTCS; i++) {
+        struct drm_crtc_state *cs = state->crtcs_new[i];
+        struct drm_pending_event *e;
+
+        if (!cs || !(e = cs->event)) {
+            continue;
+        }
+        cs->event = NULL;
+        if (e->flip_crtc && cs->crtc->flip_pending == DRM_FLIP_QUEUED) {
+            cs->crtc->flip_pending = DRM_FLIP_ARMED;
+            wq_wake_all(&cs->crtc->vblank.wait);
+        }
+        if (state->dev->unplugged) {
+            dma_fence_set_error(e->fence, -ENODEV);
+        }
+        if (cs->active && drm_crtc_vblank_get(cs->crtc) == 0) {
+            drm_crtc_arm_vblank_event(cs->crtc, e);
+        } else {
+            drm_crtc_send_vblank_event(cs->crtc, e);
+        }
+    }
+}
+
+/** The commit's tail, Linux's commit_tail after the swap: the in-fences let
+ * go, the CRTCs and planes programmed, the events armed, and the old
+ * states freed, which leaves `state` holding nothing. May sleep in the
+ * drivers' hooks. */
+static void commit_tail(struct drm_atomic_state *state)
+{
+    int i;
+
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = state->planes_new[i];
 
-        if (!ps || !ps->fence) {
-            continue;
+        if (ps && ps->fence) {
+            dma_fence_put(ps->fence);
+            ps->fence = NULL;
         }
-        rc = dma_fence_wait_until(ps->fence, 1, -1);
-        if (rc != 0) {
-            return rc;
-        }
-        dma_fence_put(ps->fence);
-        ps->fence = NULL;
     }
-    swap_state(state);
     commit_disables(state);
     commit_planes(state);
     commit_enables(state);
-    for (i = 0; i < DRM_MAX_CRTCS; i++) {
-        if (state->crtcs_new[i]) {
-            send_crtc_event(state->crtcs_new[i]);
-        }
-    }
+    commit_signal(state);
     /* The objects own the new states now; the commit owns the old ones. */
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         if (state->planes_new[i]) {
@@ -1289,6 +1302,318 @@ int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state
         if (state->connectors_new[i]) {
             kfree(state->connectors_old[i]);
             state->connectors_old[i] = state->connectors_new[i] = NULL;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * The commit worker
+ */
+
+/*
+ * A nonblocking commit whose in-fences had not all signalled, which the
+ * worker finishes once they have: the commit's states, moved from the
+ * caller's after the swap, a callback on each plane's fence, how many have
+ * yet to signal, and a hold on the device. The queue is in the order the
+ * commits were made.
+ */
+struct commit_work;
+struct commit_fence_cb {
+    struct dma_fence_cb cb; /* first, so that the callback finds its record */
+    struct commit_work *work;
+};
+struct commit_work {
+    struct drm_atomic_state state;
+    struct commit_fence_cb cbs[DRM_MAX_PLANES];
+    uint32_t waiting;
+    struct commit_work *next;
+};
+
+static struct commit_work *works;
+/* The worker sleeps here; static storage starts it empty. */
+static wait_queue_t work_wait;
+
+/** A fence of a queued commit signalled: one fewer to wait for. In the
+ * signaller's context, which may be an interrupt. */
+static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
+{
+    struct commit_work *w = ((struct commit_fence_cb *)cb)->work;
+
+    (void)fence;
+    if (--w->waiting == 0) {
+        wq_wake_all(&work_wait);
+    }
+}
+
+int drm_atomic_commit_work(void)
+{
+    struct commit_work **link = &works, *w;
+    struct drm_device *dev;
+    int n = 0;
+
+    while ((w = *link) != NULL) {
+        if (w->waiting) {
+            link = &w->next;
+            continue;
+        }
+        *link = w->next;
+        dev = w->state.dev;
+        commit_tail(&w->state);
+        drm_dev_put(dev);
+        kfree(w);
+        n++;
+    }
+    return n;
+}
+
+#ifndef RACH2_HOSTTEST
+static process_t *commit_thread;
+
+/** Whether a queued commit has all its fences. */
+static int work_ready(void *arg)
+{
+    const struct commit_work *w;
+
+    (void)arg;
+    for (w = works; w; w = w->next) {
+        if (!w->waiting) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** The worker, kdrm: sleep in an idle wait until a queued commit has its
+ * fences, then finish what is ready, holding the big lock as kernel code
+ * does. */
+static void commit_thread_main(void)
+{
+    arch_irq_enable();
+    for (;;) {
+        (void)wq_wait_event_idle(&work_wait, work_ready, NULL);
+        (void)drm_atomic_commit_work();
+    }
+}
+
+/** Start the worker on the first commit that needs it: 0, or -ENOMEM. */
+static int32_t commit_worker_start(void)
+{
+    process_t *p;
+    uintptr_t base;
+    uint32_t flags;
+
+    if (commit_thread) {
+        return 0;
+    }
+    flags = kirq_save();
+    base = kstack_alloc();
+    p = base ? alloc_process() : NULL;
+    if (!p) {
+        if (base) {
+            kstack_free(base + KERNEL_STACK_SIZE);
+        }
+        kirq_restore(flags);
+        klog(KLOG_ERR, "drm", "worker: refused: no record or stack for it");
+        return -ENOMEM;
+    }
+    p->kernel_stack = base + KERNEL_STACK_SIZE;
+    p->space_root = 0;
+    p->page_dir = NULL;
+    p->parent_pid = 0;
+    proc_set_comm(p, "kdrm");
+    setup_process_stack(p, commit_thread_main);
+    commit_thread = p;
+    sched_make_ready(p);
+    kirq_restore(flags);
+    klog(KLOG_DEBUG, "drm", "worker: kdrm is pid %d", (int)p->pid);
+    return 0;
+}
+#else
+/** The host tests run the queue themselves (`drm_atomic_commit_work`). */
+static int32_t commit_worker_start(void)
+{
+    return 0;
+}
+#endif
+
+/** Queue the commit `state`, swapped in, for the worker: its states move
+ * to `w`, which takes a callback on each in-fence not yet signalled. */
+static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
+{
+    struct commit_work **link;
+    int i;
+
+    w->state = *state;
+    k_memset(state->planes_old, 0, sizeof(state->planes_old));
+    k_memset(state->planes_new, 0, sizeof(state->planes_new));
+    k_memset(state->crtcs_old, 0, sizeof(state->crtcs_old));
+    k_memset(state->crtcs_new, 0, sizeof(state->crtcs_new));
+    k_memset(state->connectors_old, 0, sizeof(state->connectors_old));
+    k_memset(state->connectors_new, 0, sizeof(state->connectors_new));
+    /* One count of its own while the callbacks go on, so that a fence
+     * signalled meanwhile cannot make it ready early. */
+    w->waiting = 1;
+    for (i = 0; i < DRM_MAX_PLANES; i++) {
+        struct drm_plane_state *ps = w->state.planes_new[i];
+
+        if (!ps || !ps->fence) {
+            continue;
+        }
+        w->cbs[i].work = w;
+        w->waiting++;
+        if (dma_fence_add_callback(ps->fence, &w->cbs[i].cb, work_fence_done) != 0) {
+            w->waiting--;
+        }
+    }
+    w->waiting--;
+    drm_dev_get(w->state.dev);
+    for (link = &works; *link; link = &(*link)->next) {
+    }
+    w->next = NULL;
+    *link = w;
+    wq_wake_all(&work_wait);
+}
+
+/** Give each CRTC the commit leaves or makes active an event, the caller's
+ * or one of the core's, which ends the flip when it is sent, as Linux's
+ * drm_atomic_helper_setup_commit does for its flip_done. A legacy cursor
+ * update has none. 0 or -ENOMEM. */
+static int32_t setup_flips(struct drm_atomic_state *state)
+{
+    int i;
+
+    if (state->legacy_cursor_update) {
+        return 0;
+    }
+    for (i = 0; i < DRM_MAX_CRTCS; i++) {
+        struct drm_crtc_state *cs = state->crtcs_new[i];
+
+        if (!cs || (!cs->active && !state->crtcs_old[i]->active)) {
+            continue;
+        }
+        if (!cs->event) {
+            cs->event = drm_crtc_flip_event(cs->crtc, 0);
+            if (!cs->event) {
+                return -ENOMEM;
+            }
+        }
+        cs->event->flip_crtc = cs->crtc;
+    }
+    return 0;
+}
+
+/** Wait for every in-fence of `state`, interruptibly when `intr`: 0 or
+ * -EINTR. */
+static int32_t wait_for_fences(struct drm_atomic_state *state, int intr)
+{
+    int32_t rc;
+    int i;
+
+    for (i = 0; i < DRM_MAX_PLANES; i++) {
+        struct drm_plane_state *ps = state->planes_new[i];
+
+        if (ps && ps->fence && (rc = dma_fence_wait_until(ps->fence, intr, -1)) != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Linux's stall_checks: a nonblocking commit may not get ahead of a flip; a
+ * blocking one waits for it, at once for one the worker has yet to program,
+ * whose states it would otherwise replace under it, then at most 10 s for
+ * its vblank. 0, -EBUSY or -EINTR.
+ */
+static int32_t stall_checks(struct drm_atomic_state *state, int nonblock)
+{
+    int32_t rc;
+    int i;
+
+    for (i = 0; i < DRM_MAX_CRTCS; i++) {
+        struct drm_crtc_state *cs = state->crtcs_new[i];
+
+        if (!cs || !cs->crtc->flip_pending) {
+            continue;
+        }
+        if (nonblock) {
+            return -EBUSY;
+        }
+        rc = drm_crtc_wait_flip(cs->crtc, DRM_FLIP_QUEUED, 1, 0);
+        if (rc == 0) {
+            rc = drm_crtc_wait_flip(cs->crtc, DRM_FLIP_ARMED, 1, 10000);
+        }
+        if (rc == -EINTR) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+/** The work that defers a nonblocking `state` with an in-fence not yet
+ * signalled to the commit worker, or NULL: the commit blocks, no fence
+ * waits, or the work or the worker could not be had. */
+static struct commit_work *defer_work(struct drm_atomic_state *state, int nonblock)
+{
+    struct commit_work *w;
+    int i;
+
+    for (i = 0; i < DRM_MAX_PLANES && nonblock; i++) {
+        struct drm_plane_state *ps = state->planes_new[i];
+
+        if (ps && ps->fence && !dma_fence_is_signaled(ps->fence)) {
+            w = (struct commit_work *)kzalloc(sizeof(*w));
+            if (w && commit_worker_start() != 0) {
+                kfree(w);
+                w = NULL;
+            }
+            return w;
+        }
+    }
+    return NULL;
+}
+
+int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state *state,
+                                 int nonblock)
+{
+    struct commit_work *w;
+    uint32_t flips = 0;
+    int32_t rc;
+    int i;
+
+    rc = stall_checks(state, nonblock);
+    if (rc != 0) {
+        return rc;
+    }
+    w = defer_work(state, nonblock);
+    /* Linux waits before the swap for a blocking commit; here also for a
+     * nonblocking one the worker cannot take. */
+    if (!w && (rc = wait_for_fences(state, 1)) != 0) {
+        return rc;
+    }
+    rc = setup_flips(state);
+    if (rc != 0) {
+        kfree(w);
+        return rc;
+    }
+    swap_state(state);
+    for (i = 0; i < DRM_MAX_CRTCS; i++) {
+        struct drm_crtc_state *cs = state->crtcs_new[i];
+
+        if (cs && cs->event && cs->event->flip_crtc) {
+            cs->crtc->flip_pending = w ? DRM_FLIP_QUEUED : DRM_FLIP_ARMED;
+            flips |= 1u << i;
+        }
+    }
+    if (w) {
+        work_queue(w, state);
+        return 0;
+    }
+    commit_tail(state);
+    /* Linux's wait for the flips, which a blocking commit makes. */
+    for (i = 0; i < DRM_MAX_CRTCS && !nonblock; i++) {
+        if (flips & (1u << i)) {
+            (void)drm_crtc_wait_flip(dev->mode_config.crtcs[i], DRM_FLIP_ARMED, 0, 100);
         }
     }
     return 0;
@@ -1335,12 +1660,95 @@ struct drm_pending_event *drm_crtc_flip_event(struct drm_crtc *crtc, uint64_t us
  * The ATOMIC ioctl
  */
 
-/** Give each CRTC of the commit its flip event when the caller asked for
- * events, Linux's prepare_signaling: -EINVAL when no CRTC would send one,
- * or the reservation's error. */
-static int32_t prepare_signaling(struct drm_atomic_state *state, const struct drm_mode_atomic *arg,
-                                 struct drm_file *file)
+/* An out-fence of a CRTC: a point on the CRTC's timeline, signalled when
+ * the commit's event is sent. The names live in the fence, which a sync
+ * file may keep after the device has gone. */
+struct crtc_fence {
+    struct dma_fence base; /* first: the record is freed with kfree */
+    const char *driver;
+    char timeline[DRM_PROP_NAME_LEN];
+};
+
+/** An out-fence's driver name, the device's driver's. */
+static const char *crtc_fence_driver(struct dma_fence *fence)
 {
+    return ((struct crtc_fence *)fence)->driver;
+}
+
+/** An out-fence's timeline name, Linux's "CRTC:ID-NAME". */
+static const char *crtc_fence_timeline(struct dma_fence *fence)
+{
+    return ((struct crtc_fence *)fence)->timeline;
+}
+
+static const struct dma_fence_ops crtc_fence_ops = {crtc_fence_driver, crtc_fence_timeline, NULL,
+                                                    NULL};
+
+/** Append the string `src` to `out` of `cap` bytes at `*at`, cut to fit. */
+static void put_str(char *out, uint32_t cap, uint32_t *at, const char *src)
+{
+    while (*src && *at + 1 < cap) {
+        out[(*at)++] = *src++;
+    }
+    out[*at] = '\0';
+}
+
+/** Append the decimal `v` to `out` of `cap` bytes at `*at`. */
+static void put_dec(char *out, uint32_t cap, uint32_t *at, uint64_t v)
+{
+    char digits[24];
+    int n = 0;
+
+    do {
+        digits[n++] = (char)('0' + (int)(v - drm_div64(v, 10) * 10));
+        v = drm_div64(v, 10);
+    } while (v);
+    while (n > 0 && *at + 1 < cap) {
+        out[(*at)++] = digits[--n];
+    }
+    out[*at] = '\0';
+}
+
+/** A new out-fence of `crtc`, Linux's drm_crtc_create_fence, with one
+ * reference, the caller's; NULL with no memory. */
+static struct dma_fence *crtc_create_fence(struct drm_crtc *crtc)
+{
+    struct crtc_fence *f = (struct crtc_fence *)kzalloc(sizeof(*f));
+    uint32_t at = 0;
+
+    if (!f) {
+        return NULL;
+    }
+    if (!crtc->fence_context) {
+        crtc->fence_context = dma_fence_context_alloc(1);
+    }
+    dma_fence_init(&f->base, &crtc_fence_ops, crtc->fence_context, ++crtc->fence_seqno);
+    f->driver = crtc->dev->driver->ident.name;
+    put_str(f->timeline, sizeof(f->timeline), &at, "CRTC:");
+    put_dec(f->timeline, sizeof(f->timeline), &at, crtc->base.id);
+    put_str(f->timeline, sizeof(f->timeline), &at, "-");
+    put_str(f->timeline, sizeof(f->timeline), &at, crtc->name);
+    return &f->base;
+}
+
+/** The out-fences of an ATOMIC call, by CRTC index: each fence, held, and
+ * where its descriptor goes. */
+struct out_fences {
+    struct dma_fence *fence[DRM_MAX_CRTCS];
+    int32_t __user *ptr[DRM_MAX_CRTCS];
+};
+
+/**
+ * Give each CRTC of the commit its event when the caller asked for events
+ * or an out-fence, Linux's prepare_signaling: a reserved FLIP_COMPLETE, and
+ * for OUT_FENCE_PTR a new fence of the CRTC that the event signals, kept
+ * in `out` too. -EINVAL when no CRTC would send an asked event, -ENOMEM, or
+ * the reservation's error.
+ */
+static int32_t prepare_signaling(struct drm_atomic_state *state, const struct drm_mode_atomic *arg,
+                                 struct drm_file *file, struct out_fences *out)
+{
+    struct dma_fence *fence;
     int i, crtcs = 0;
     int32_t rc;
 
@@ -1357,24 +1765,77 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
         if (arg->flags & DRM_MODE_PAGE_FLIP_ASYNC) {
             cs->async_flip = 1;
         }
-        if (!(arg->flags & DRM_MODE_PAGE_FLIP_EVENT)) {
+        if (!(arg->flags & DRM_MODE_PAGE_FLIP_EVENT) && !cs->out_fence_ptr) {
             continue;
         }
         cs->event = drm_crtc_flip_event(cs->crtc, arg->user_data);
         if (!cs->event) {
             return -ENOMEM;
         }
-        rc = drm_event_reserve(file, cs->event);
-        if (rc != 0) {
-            kfree(cs->event);
-            cs->event = NULL;
-            return rc;
+        if (arg->flags & DRM_MODE_PAGE_FLIP_EVENT) {
+            rc = drm_event_reserve(file, cs->event);
+            if (rc != 0) {
+                kfree(cs->event);
+                cs->event = NULL;
+                return rc;
+            }
+        }
+        if (cs->out_fence_ptr) {
+            fence = crtc_create_fence(cs->crtc);
+            if (!fence) {
+                return -ENOMEM;
+            }
+            cs->event->fence = fence;
+            out->fence[i] = dma_fence_get(fence);
+            out->ptr[i] = cs->out_fence_ptr;
         }
     }
     if (crtcs == 0 && (arg->flags & DRM_MODE_PAGE_FLIP_EVENT)) {
         return -EINVAL;
     }
     return 0;
+}
+
+/**
+ * Give the caller a sync file of each out-fence of a commit that `rc` says
+ * succeeded, its descriptor written where OUT_FENCE_PTR points, as Linux's
+ * complete_signaling installs them; drop the fences either way. A failed
+ * commit leaves the -1 written when the property was set. Returns `rc`, or
+ * the error of a sync file that could not be made or written.
+ */
+static int32_t complete_signaling(struct drm_crtc **crtcs, struct out_fences *out, int32_t rc)
+{
+    char name[32];
+    uint32_t at;
+    int32_t fd;
+    int i;
+
+    for (i = 0; i < DRM_MAX_CRTCS; i++) {
+        struct dma_fence *f = out->fence[i];
+
+        if (!f) {
+            continue;
+        }
+        if (rc == 0) {
+            /* Linux's sync_file_get_name of a file given no name. */
+            at = 0;
+            put_str(name, sizeof(name), &at, crtcs[i]->dev->driver->ident.name);
+            put_str(name, sizeof(name), &at, "-");
+            put_str(name, sizeof(name), &at, crtc_fence_timeline(f));
+            put_dec(name, sizeof(name), &at, f->context);
+            put_str(name, sizeof(name), &at, "-");
+            put_dec(name, sizeof(name), &at, f->seqno);
+            fd = sync_file_create(f, name);
+            if (fd < 0) {
+                rc = fd;
+            } else if (copy_to_user(out->ptr[i], &fd, sizeof(fd)) != 0) {
+                fd_free(current_proc->fds, fd);
+                rc = -EFAULT;
+            }
+        }
+        dma_fence_put(f);
+    }
+    return rc;
 }
 
 /** Read the 32-bit element `i` of the user array at `ptr` into `*v`. */
@@ -1439,6 +1900,7 @@ int32_t drm_mode_atomic_ioctl(struct drm_device *dev, void *data, struct drm_fil
 {
     struct drm_mode_atomic *arg = (struct drm_mode_atomic *)data;
     struct drm_atomic_state *state;
+    struct out_fences out;
     int32_t rc;
 
     if (!drm_core_check_feature(dev, DRIVER_ATOMIC)) {
@@ -1467,9 +1929,10 @@ int32_t drm_mode_atomic_ioctl(struct drm_device *dev, void *data, struct drm_fil
         drm_atomic_state_free(state);
         return rc;
     }
+    k_memset(&out, 0, sizeof(out));
     rc = set_properties(dev, file, state, arg);
     if (rc == 0) {
-        rc = prepare_signaling(state, arg, file);
+        rc = prepare_signaling(state, arg, file, &out);
     }
     if (rc == 0) {
         if (arg->flags & DRM_MODE_ATOMIC_TEST_ONLY) {
@@ -1480,6 +1943,7 @@ int32_t drm_mode_atomic_ioctl(struct drm_device *dev, void *data, struct drm_fil
             rc = drm_atomic_commit(state);
         }
     }
+    rc = complete_signaling(dev->mode_config.crtcs, &out, rc);
     /* A failed commit's events go back unsent with its states. */
     drm_atomic_state_free(state);
     drm_modeset_unlock(dev);

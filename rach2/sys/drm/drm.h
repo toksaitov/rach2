@@ -462,12 +462,19 @@ int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
 #define DRM_MINOR_PRIMARY 0
 #define DRM_MINOR_RENDER  2
 
-/* An event queued for a file's reader, the bytes of one uapi event. */
+/* An event queued for a file's reader, the bytes of one uapi event. Before
+ * it is sent, `next` links it on its CRTC's vblank list while it waits
+ * there for the count `sequence`; after, on its file's queue. `flip_crtc`
+ * names the CRTC whose pending flip its sending completes, for a commit's
+ * event (drm_vblank.c). A commit's event may have no file, when it serves
+ * an out-fence or the flip's tracking alone. */
 struct drm_pending_event {
     struct drm_pending_event *next;
     struct drm_pending_event *pending_next; /* the file's reserved events */
     struct drm_file *file;                  /* NULL once the file is released unsent */
     struct dma_fence *fence;                /* the sender signals it as it sends, or NULL */
+    uint64_t sequence;                      /* the vblank count it waits for */
+    struct drm_crtc *flip_crtc;             /* the CRTC whose flip it completes, or NULL */
     uint32_t length;
     union {
         struct drm_event base;
@@ -782,12 +789,19 @@ struct drm_plane {
  * A CRTC's hooks. The atomic ones run in a commit as Linux's helpers run
  * them; `mode_valid` answers 0 for a mode the CRTC can drive, checked when
  * a commit changes the mode. `enable_vblank` and `disable_vblank` start and
- * stop the vblank interrupt (76-5b), whose handler calls
- * `drm_crtc_handle_vblank`. The CRC hooks serve debugfs's crc/control
- * (76-18b): `set_crc_source` starts or, for NULL, stops the source `name`
- * and says how many values each frame's entry has; `verify_crc_source`
- * answers whether `name` is one, without starting it; `get_crc_sources`
- * lists them.
+ * stop the CRTC's vblank interrupt or timer, whose handler calls
+ * `drm_crtc_handle_vblank` once a frame; a CRTC with `enable_vblank` has
+ * vblanks (drm_vblank.c), and one without sends a commit's events as the
+ * commit ends. `enable_vblank` answers 0 or -errno; `disable_vblank` may be
+ * called from inside `drm_crtc_handle_vblank`, which turns the interrupt
+ * off from there once nobody has wanted vblanks for the off-delay. The CRC
+ * hooks serve debugfs's crc/control and crc/data (76-18b):
+ * `set_crc_source` starts the source `name`, or stops it for NULL, after
+ * which the driver adds one entry a frame with `drm_crtc_add_crc_entry`;
+ * `verify_crc_source` answers 0 when `name` is one and sets how many values
+ * each frame's entry has, without starting it, or -EINVAL; and
+ * `get_crc_sources` lists them. A CRTC without `set_crc_source` and
+ * `verify_crc_source` has no CRCs.
  */
 struct drm_crtc_funcs {
     int32_t (*atomic_check)(struct drm_crtc *crtc, struct drm_atomic_state *state);
@@ -803,25 +817,66 @@ struct drm_crtc_funcs {
     const char *const *(*get_crc_sources)(struct drm_crtc *crtc, uint32_t *count);
 };
 
-/* A CRTC's vblank count and the time of the last, from CLOCK_MONOTONIC. */
+/*
+ * A CRTC's vblanks, Linux's drm_vblank_crtc: the count of vblanks and the
+ * CLOCK_MONOTONIC time of the last, 0 until one comes after the CRTC is
+ * turned on. `refs` counts the holders that keep the interrupt on: each
+ * waiter, each queued event, and while the CRTC is off (`inmodeset`) one
+ * that keeps it off, since a hold taken then would never see a vblank.
+ * `put_ns` is when the last holder let go, from which the off-delay runs.
+ * `events` are the events waiting for a count, in the order queued. `wait`
+ * wakes at each vblank, when vblanks stop, and when a commit's flip on the
+ * CRTC completes.
+ */
 struct drm_vblank {
     uint64_t count;
     int64_t time_ns;
-    uint32_t refs; /* waiters and events that keep the interrupt on */
-    int enabled;
+    uint32_t refs;
+    int enabled;   /* the driver's interrupt is on */
+    int inmodeset; /* the CRTC is off, and `refs` holds one for it */
+    int64_t put_ns;
+    struct drm_pending_event *events, *events_tail;
     wait_queue_t wait;
 };
 
-/* One frame's CRC entry, which debugfs's crc/data reads. */
-#define DRM_MAX_CRC_NR 10
+/* One frame's CRC entry, which debugfs's crc/data reads, and the entries
+ * a CRTC keeps while crc/data is open, a power of two. */
+#define DRM_MAX_CRC_NR     10
+#define DRM_CRC_ENTRIES_NR 128
 struct drm_crtc_crc_entry {
     int has_frame_counter;
     uint32_t frame;
     uint32_t crcs[DRM_MAX_CRC_NR];
 };
 
+/*
+ * A CRTC's CRCs, Linux's drm_crtc_crc. `source` is what crc/control last
+ * chose, "auto" at first. While crc/data is open (`opened`) the driver
+ * fills `entries` from `head` and the reader takes them from `tail`; an
+ * entry that finds them full is dropped and sets `overflow`. `values` is
+ * how many values each entry has.
+ */
+struct drm_crtc_crc {
+    char source[32];
+    int opened, overflow;
+    struct drm_crtc_crc_entry *entries; /* DRM_CRC_ENTRIES_NR while open, else NULL */
+    uint32_t head, tail;
+    uint32_t values;
+    wait_queue_t wait; /* wakes the reader at each entry */
+};
+
+/* A commit's flip on a CRTC, from the swap of its state until its event is
+ * sent at the vblank that shows it: queued while the commit worker has yet
+ * to program it, armed once it waits only for the vblank. */
+#define DRM_FLIP_NONE   0
+#define DRM_FLIP_ARMED  1
+#define DRM_FLIP_QUEUED 2
+
 /* A CRTC: a scanout engine that reads planes and drives connectors. The
- * cursor's place is the last MODE_CURSOR moved it to. */
+ * cursor's place is the last MODE_CURSOR moved it to. `flip_pending` is its
+ * flip, DRM_FLIP_*; a nonblocking commit meanwhile is EBUSY and a blocking
+ * one waits. `fence_context` is the timeline of its out-fences, 0 until
+ * the first, and `fence_seqno` the last point made on it. */
 struct drm_crtc {
     struct drm_mode_object base;
     struct drm_device *dev;
@@ -834,8 +889,9 @@ struct drm_crtc {
     const struct drm_crtc_funcs *funcs;
     struct drm_crtc_state *state;
     struct drm_vblank vblank;
-    const char *crc_source; /* NULL while none runs */
-    uint32_t crc_values;    /* values in each entry */
+    struct drm_crtc_crc crc;
+    int flip_pending;
+    uint64_t fence_context, fence_seqno;
 };
 
 /* An encoder, which Linux keeps for its interface: fixed to the CRTCs it
@@ -888,8 +944,10 @@ struct drm_display_mode {
  * kept, preferred first, and `probed_modes` those a probe's `get_modes`
  * gathers before they are checked. `edid` is the blob of the sink's EDID,
  * or of `edid_override` while debugfs set one (76-18b), which replaces the
- * sink's whenever the modes are read. `dpms` is the legacy DPMS property's
- * value. `encoder` is the encoder that drives it after the last commit.
+ * sink's whenever the modes are read; the override is kept bytes, not a
+ * blob, so it has no ID a program could name. `dpms` is the legacy DPMS
+ * property's value. `encoder` is the encoder that drives it after the last
+ * commit.
  */
 struct drm_connector {
     struct drm_mode_object base;
@@ -909,7 +967,8 @@ struct drm_connector {
     struct drm_display_mode *modes;
     struct drm_display_mode *probed_modes;
     struct drm_property_blob *edid;
-    struct drm_property_blob *edid_override;
+    uint8_t *edid_override; /* kmalloc'd, or NULL */
+    uint32_t edid_override_len;
     const struct drm_connector_funcs *funcs;
     struct drm_connector_state *state;
 };
@@ -1272,20 +1331,32 @@ int32_t drm_atomic_get_property(struct drm_mode_object *obj, struct drm_property
  * plane, CRTC and connector, the driver's `atomic_check`, and the refusal of
  * a modeset without ALLOW_MODESET. 0 or Linux's error. */
 int32_t drm_atomic_check_only(struct drm_atomic_state *state);
-/** Check and commit `state`, waiting for it to reach the hardware, or, for
- * the nonblocking call, returning before the vblank it waits for. 0 or the
- * check's error; `state` stays the caller's to free. May sleep. */
+/** Check and commit `state`, waiting for it to reach the screen, or, for
+ * the nonblocking call, returning before the vblank it waits for. 0, the
+ * check's error, or the commit's; `state` stays the caller's to free, and
+ * holds nothing of a commit that succeeded. May sleep. */
 int32_t drm_atomic_commit(struct drm_atomic_state *state);
 int32_t drm_atomic_nonblocking_commit(struct drm_atomic_state *state);
 /** The core's check, Linux's drm_atomic_helper_check: routing, modeset
  * marks, the CRTCs' `mode_valid`, then the planes' and CRTCs'
  * `atomic_check`. */
 int32_t drm_atomic_helper_check(struct drm_device *dev, struct drm_atomic_state *state);
-/** The core's commit, Linux's drm_atomic_helper_commit with its default
- * tail: swap the states in, disable the CRTCs that go off or change mode,
- * update the planes between each CRTC's begin and flush, enable the CRTCs
- * that come on, send the events, free the old states. -EBUSY for a
- * nonblocking commit while one is pending on a CRTC it touches. */
+/**
+ * The core's commit, Linux's drm_atomic_helper_commit with its default
+ * tail: wait for a flip pending on a CRTC it touches, or for a nonblocking
+ * commit answer -EBUSY; for a blocking one wait for the in-fences
+ * (-EINTR for a signal); swap the states in; then disable the CRTCs that
+ * go off or change mode, update the planes between each CRTC's begin and
+ * flush, enable the CRTCs that come on, arm each CRTC's event for its next
+ * vblank, or send it now on a CRTC without vblanks or that went off, and
+ * free the old states. A blocking commit then waits for its flips, at most
+ * 100 ms; a nonblocking one returns before them, and when an in-fence has
+ * not signalled it leaves the tail to the commit worker, which runs it once
+ * the fences signal. Each CRTC the commit leaves or makes active has an
+ * event, the caller's or one of the core's, whose sending ends its pending
+ * flip; a legacy cursor update has none and waits for no flip of its own.
+ * 0, -EBUSY, -EINTR or -ENOMEM.
+ */
 int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state *state,
                                  int nonblock);
 /**
@@ -1317,6 +1388,111 @@ struct drm_mode_set {
  * SETCRTC and the console's mode set; the caller holds the commit lock.
  * 0 or the commit's error. May sleep. */
 int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
+/** Run every nonblocking commit whose in-fences have all signalled, in the
+ * order they were made: its planes and CRTCs programmed and its events
+ * armed for the next vblank. The commit worker's body, and the host tests'
+ * stand-in for it; returns how many ran. May sleep in the drivers' hooks. */
+int drm_atomic_commit_work(void);
+
+/* ---- Vblanks, their events and CRCs, in drm_vblank.c ---- */
+
+/*
+ * Linux's drm_vblank.c. A CRTC whose driver gives `enable_vblank` has
+ * vblanks; a device has them when any CRTC does. The count rises by one at
+ * each `drm_crtc_handle_vblank` while the interrupt is on, and by one more
+ * each time the CRTC is turned on, so that a program never sees the same
+ * count across a modeset. A holder of vblanks (`drm_crtc_vblank_get`)
+ * turns the interrupt on; once the last has let go for
+ * DRM_VBLANK_OFFDELAY_MS, the next vblank turns it off, as Linux's
+ * drm_vblank_offdelay does. The core's commit turns a CRTC's vblanks off
+ * before its `atomic_disable` returns and on after its `atomic_enable`, and
+ * arms each commit's event for the vblank after the commit has programmed
+ * the CRTC; a driver with its own `atomic_commit` does both itself.
+ */
+#define DRM_VBLANK_OFFDELAY_MS 5000
+
+/** Whether `crtc` has vblanks: its driver gives `enable_vblank`. */
+#define drm_crtc_has_vblank(crtc) ((crtc)->funcs && (crtc)->funcs->enable_vblank)
+/** Whether any CRTC of `dev` has vblanks, Linux's drm_dev_has_vblank. */
+int drm_dev_has_vblank(const struct drm_device *dev);
+/** Give a new CRTC its vblank and CRC records, off, with the CRC source
+ * "auto"; from `drm_crtc_init_with_planes`. */
+void drm_crtc_vblank_init(struct drm_crtc *crtc);
+/** Take a hold on `crtc`'s vblanks, turning the interrupt on for the first:
+ * 0, -EINVAL for a CRTC without vblanks or one that is off, or
+ * `enable_vblank`'s error. Any context. */
+int32_t drm_crtc_vblank_get(struct drm_crtc *crtc);
+/** Let a hold go; the off-delay runs from the last. Any context. */
+void drm_crtc_vblank_put(struct drm_crtc *crtc);
+/** The vblank count of `crtc`, and the time of the last vblank in
+ * `*time_ns` when it is not NULL. */
+uint64_t drm_crtc_vblank_count_and_time(struct drm_crtc *crtc, int64_t *time_ns);
+/** Queue the commit event `e` for the next vblank of `crtc`, with the hold
+ * the caller took, which the sending lets go. */
+void drm_crtc_arm_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *e);
+/** Send `e` now, stamped as Linux's drm_crtc_send_vblank_event stamps it:
+ * the last vblank's count and time on a device with vblanks, else count 0
+ * and the time now. */
+void drm_crtc_send_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *e);
+/** Turn `crtc`'s vblanks off, sending its queued events with the count
+ * reached and waking its waiters, and keep them off until
+ * `drm_crtc_vblank_on`. */
+void drm_crtc_vblank_off(struct drm_crtc *crtc);
+/** Let `crtc`'s vblanks come again, counting one, and turn the interrupt
+ * on if anyone holds them. */
+void drm_crtc_vblank_on(struct drm_crtc *crtc);
+/**
+ * Wait until `crtc`'s `flip_pending` is below `below`, DRM_FLIP_ARMED for
+ * no flip at all and DRM_FLIP_QUEUED for one programmed, or for
+ * `timeout_ms`, 0 for no limit; sleeps. 0 once it is, -ETIME at the limit,
+ * or -EINTR for a signal when `intr` is set.
+ */
+int32_t drm_crtc_wait_flip(struct drm_crtc *crtc, int below, int intr, uint32_t timeout_ms);
+/** Turn every CRTC of a device being unplugged off, as `drm_dev_unplug`
+ * does: each queued event sent, its fence signalled with -ENODEV. */
+void drm_vblank_unplug(struct drm_device *dev);
+/** Free what `crtc` still holds of events and CRC entries, for
+ * `drm_mode_config_cleanup`. */
+void drm_crtc_vblank_cleanup(struct drm_crtc *crtc);
+
+/*
+ * The CRC files of debugfs (76-18b), Linux's drm_debugfs_crc.c, on kernel
+ * buffers: crc/control's write chooses a source, crc/data's open starts it
+ * and its release stops it, and each read takes one entry as a line.
+ */
+
+/** crc/control's write of `len` bytes at `buf`: the source named, a final
+ * newline dropped, which the driver must know. `len`, 0 for 0, -EINVAL for
+ * a CRTC without CRCs or a source the driver refuses, -E2BIG past a page
+ * less a byte, or -EBUSY while crc/data is open. */
+int32_t drm_crtc_crc_set_source(struct drm_crtc *crtc, const char *buf, uint32_t len);
+/** crc/data's open: 0, -EIO while the CRTC is off, -EINVAL for a CRTC
+ * without CRCs or a source the driver refuses, -EBUSY while it is open
+ * already, -ENOMEM, or `set_crc_source`'s error. Takes the commit lock;
+ * -EINTR for a signal while waiting for it. */
+int32_t drm_crtc_crc_open(struct drm_crtc *crtc);
+/** crc/data's release: stop the source and drop the entries. */
+void drm_crtc_crc_release(struct drm_crtc *crtc);
+/** crc/data's read: the oldest entry as Linux writes it, "0x%08x" frame or
+ * ten X's, then " 0x%08x" for each value, a newline and a NUL, into `buf`
+ * of `count` bytes, waiting for one unless `nonblock`; sleeps. Returns the
+ * line's length with its NUL, 0 for a CRTC without CRCs, -EAGAIN, -EINTR,
+ * or -EINVAL for a buffer shorter than a line. */
+int32_t drm_crtc_crc_read(struct drm_crtc *crtc, char *buf, uint32_t count, int nonblock);
+/** Whether crc/data has an entry to read, for its poll. */
+int drm_crtc_crc_ready(const struct drm_crtc *crtc);
+
+/** debugfs's `force` write of a connector, Linux's connector_write: "on",
+ * "digital", "off" or "unspecified", with spaces about them, set its
+ * DRM_FORCE_* for the next probe. `len`, or -EINVAL. (drm_mode.c) */
+int32_t drm_connector_force_write(struct drm_connector *connector, const char *buf, uint32_t len);
+/** debugfs's `edid_override` write, Linux's drm_edid_override_set: keep a
+ * copy of the `len` bytes at `edid` as the connector's EDID from the next
+ * probe on: 0, -EINVAL for bytes that are not a valid EDID of the blocks
+ * they name, or -ENOMEM. (drm_edid.c) */
+int32_t drm_edid_override_set(struct drm_connector *connector, const void *edid, uint32_t len);
+/** Drop the override, for the write "reset". (drm_edid.c) */
+void drm_edid_override_reset(struct drm_connector *connector);
 
 /* ------------------------------------------------------------------------
  * Devices
@@ -1458,12 +1634,14 @@ int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char
  * Helpers the drivers call
  */
 
-/** Count a vblank of `crtc` and stamp it, send its due events and wake its
- * waiters; from the driver's vblank interrupt or timer. 1 while vblanks
- * are on, 0 when they went off. (76-5b) */
+/** Count a vblank of `crtc` and stamp it, wake its waiters and send its
+ * due events; from the driver's vblank interrupt or timer, in any context.
+ * When nobody has held vblanks for the off-delay it turns them off through
+ * `disable_vblank`. 1 while vblanks are on, 0 when they are off. */
 int drm_crtc_handle_vblank(struct drm_crtc *crtc);
-/** Queue one frame's CRC values for crc/data, from the driver's vblank
- * path. 0, or -EINVAL while no source runs. (76-18b) */
+/** Queue one frame's CRC values, `crc.values` of them, for crc/data, from
+ * the driver's vblank path, in any context: 0, -EINVAL while crc/data is
+ * not open, or -ENOBUFS when the reader has left no room. */
 int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t frame,
                                const uint32_t *crcs);
 /** Set `connector`'s EDID property and size in millimetres from the sink's

@@ -286,6 +286,9 @@ void drm_dev_unplug(struct drm_device *dev)
             }
         }
     }
+    if (drm_core_check_feature(dev, DRIVER_MODESET)) {
+        drm_vblank_unplug(dev);
+    }
     for (f = dev->files; f; f = f->dev_next) {
         wq_wake_all(&f->event_wait);
     }
