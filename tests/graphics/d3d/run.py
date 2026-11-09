@@ -78,6 +78,12 @@ def main():
     family, row, output = sys.argv[1:]
     if os.geteuid() == 0:
         raise SystemExit("d3d: run as an ordinary user")
+    if family == "private" and row == "files":
+        status = subprocess.call([str(HERE / "privatefilemusl"), "/tmp"])
+        if status:
+            raise SystemExit(status)
+        print("D3DROW OK private files", flush=True)
+        return
     out = Path(output).resolve()
     out.mkdir(parents=True, exist_ok=False)
     ref = json.loads((HERE / "ref" / "linux.json").read_text())

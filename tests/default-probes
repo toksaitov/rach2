@@ -208,3 +208,4 @@ searchprobe
 # staged directories of its sticky pair, and two more directories at the image
 # root, and removes every one of them again.
 stickyprobe
+musl/privatefilemusl

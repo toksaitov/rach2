@@ -6187,15 +6187,6 @@ static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
     return 0;
 }
 
-/** Whether a shared mapping through `e` maps its file's pages in memory
- * (`filemap_disk_shared`): those of a file on ext2 opened for writing, or of
- * one such a mapping maps already. */
-static int mmap_disk_shares(const fd_entry_t *e)
-{
-    return e->ofd->vmnt->type == &vfs_ext2_type &&
-           ((e->flags & FD_FLAG_WRITE) || filemap_disk_mapped(e->ofd->vmnt, e->ofd->ino));
-}
-
 /**
  * The file half of `mmap_backing`: the file the descriptor `e`, number `fd`, is
  * open on, mapped shared or not. A private mapping of it is VM_FILE, and a
@@ -6205,7 +6196,9 @@ static int mmap_disk_shares(const fd_entry_t *e)
  * are written back from (`filemap_disk_shared`), when the descriptor is open
  * for writing or another shared mapping has the pages in memory already:
  * ext2's inode number names one file for as long as anything holds it, which
- * is what the pages are found by. Through a descriptor open for writing, such
+ * is what the pages are found by. Private tmpfs and ext2 mappings borrow
+ * those same pages until their first store makes a copy. Through a descriptor
+ * open for writing, such
  * a mapping of a file that backs a loop device fails with EBUSY, as write(2)
  * to the file does. A shared mapping of a file of another disk file system,
  * whose inode numbers follow names, is served as a private one when it is
@@ -6223,19 +6216,22 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
     if (rc != 0) {
         return rc;
     }
-    sh = (shared && e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode) : NULL;
-    disk = shared && mmap_disk_shares(e);
+    sh = (e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode) : NULL;
+    disk = e->ofd->vmnt->type == &vfs_ext2_type;
     if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {
         return -ENODEV;
     }
-    if (disk && (e->flags & FD_FLAG_WRITE) && loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
+    if (shared && disk && (e->flags & FD_FLAG_WRITE) && loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
         return -EBUSY;
     }
     if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {
         src->prot |= VM_PROT_NOWRITE;
     }
-    src->file = sh ? filemap_shared(e, sh) : disk ? filemap_disk_shared(e) : filemap_new(e);
-    src->type = sh || disk ? VM_SHARED : VM_FILE;
+    src->file = !shared ? filemap_private(e, sh, disk)
+                : sh    ? filemap_shared(e, sh)
+                : disk  ? filemap_disk_shared(e)
+                        : filemap_new(e);
+    src->type = shared && (sh || disk) ? VM_SHARED : VM_FILE;
     if (src->file) {
         src->file->path = fd_path_copy(fd);
     }

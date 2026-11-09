@@ -104,3 +104,4 @@ case musl/vforkmusl -- musl/vforkmusl
 case musl/vmamusl -- musl/vmamusl
 case musl/waitidmusl -- musl/waitidmusl
 case musl/pidfdmusl -- musl/pidfdmusl
+case musl/privatefilemusl -- musl/privatefilemusl

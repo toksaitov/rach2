@@ -8,35 +8,32 @@
 
 #include "../mm/paging.h"
 #include "../mm/vm.h"
+#include "../lib/kerrno.h"
 
 /** The frame of page `pgoff` of the image, with a reference for the
- * mapping, or 0 past its end. */
-static uintptr_t vdso_share_image(struct vm_file *f, uint32_t pgoff)
+ * mapping, 0 on success, or ENXIO past its end. */
+static int vdso_share_image(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
 {
-    uintptr_t phys;
-
     (void)f;
     if (pgoff >= vdso_image_pages()) {
-        return 0;
+        return -ENXIO;
     }
-    phys = vdso_frame(pgoff);
-    frame_ref(phys);
-    return phys;
+    *phys = vdso_frame(pgoff);
+    frame_ref(*phys);
+    return 0;
 }
 
-/** The data page's frame, with a reference for the mapping, or 0 past
- * it. */
-static uintptr_t vdso_share_data(struct vm_file *f, uint32_t pgoff)
+/** The data page's frame, with a reference for the mapping, 0 on success, or
+ * ENXIO past it. */
+static int vdso_share_data(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
 {
-    uintptr_t phys;
-
     (void)f;
     if (pgoff != 0) {
-        return 0;
+        return -ENXIO;
     }
-    phys = vdso_frame(VDSO_DATA_PAGE);
-    frame_ref(phys);
-    return phys;
+    *phys = vdso_frame(VDSO_DATA_PAGE);
+    frame_ref(*phys);
+    return 0;
 }
 
 /** The files are the kernel's and never released. */

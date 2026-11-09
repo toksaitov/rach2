@@ -3,7 +3,8 @@
  * descriptor would, with a copy of the descriptor that holds its open file
  * description, for as long as a region maps it, so a program may close the
  * descriptor after mmap as it may on Linux. A page of a private mapping is
- * read from the file when it is first touched; a page of a shared mapping is
+ * borrowed from tmpfs or ext2 until its first write, or read from another
+ * file system when first touched; a page of a shared mapping is
  * the page of the file in memory, or of the shared anonymous memory, itself
  * (mm/paging.c).
  */
@@ -22,6 +23,12 @@ struct shmem;
  * when the heap has no room.
  */
 struct vm_file *filemap_new(const fd_entry_t *e);
+
+/** A private mapping through `e`, borrowing `sh` for tmpfs, or with `disk`
+ * the ext2 file's pages,
+ * until its first store makes a copy. Other file systems use `filemap_new`.
+ * Returns one reference, or NULL when the heap has no room. */
+struct vm_file *filemap_private(const fd_entry_t *e, struct shmem *sh, int disk);
 
 /**
  * The same for a shared mapping of the file in memory whose pages are `sh`
@@ -51,6 +58,16 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 /** Whether the file `ino` of `mnt` has its pages in memory for a shared
  * mapping, which a new shared mapping of it then maps too. */
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);
+
+/** Whether any shared mapping holds this disk file's pages. Private
+ * mappings alone do not prevent a loop device attaching the file. */
+int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino);
+
+/** After a disk write, copy the `len` bytes at `off` from kernel buffer
+ * `buf` into the resident clean pages of the file `ino` on `mnt`. The
+ * caller holds the file's lock. Does not sleep or allocate. */
+void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
+                          uint32_t len);
 
 /*
  * The system calls on a file's descriptors call the five functions below,

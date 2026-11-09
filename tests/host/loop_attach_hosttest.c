@@ -206,11 +206,22 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle)
 }
 
 /** Report whether a shared mapping has the file's pages in memory. */
-int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
+int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
 {
     (void)mnt;
     (void)ino;
     return mapped;
+}
+
+/** No row keeps resident file pages for a private mapping. */
+void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
+                          uint32_t len)
+{
+    (void)mnt;
+    (void)ino;
+    (void)off;
+    (void)buf;
+    (void)len;
 }
 
 /** Report the modeled writer's descriptor state. */

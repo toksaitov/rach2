@@ -188,7 +188,7 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
         return -EFBIG;
     }
     keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);
-    if (sh->maps && keep < sh->npages) {
+    if (sh->maps && size < sh->size) {
         filemap_shmem_cut(sh, keep);
     }
     for (leaf = keep / SHMEM_LEAF; leaf < sh->nleaves; leaf++) {

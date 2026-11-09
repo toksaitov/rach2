@@ -55,7 +55,8 @@ struct filemap {
     struct shmem *sh;
     struct shmem own;
     struct dshare *ds;
-    int going; /* being released, and no writer for its file's pages */
+    int shared; /* stores may change the file, and may be written back */
+    int going;  /* being released, and no writer for its file's pages */
 };
 
 static struct filemap *maps;
@@ -149,15 +150,17 @@ static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 
 /** A page of a shared mapping of memory: shared anonymous memory has every
  * page, and a file in memory those its size reaches, as on Linux, where a
- * touch past a file's end is SIGBUS; 0 for any other. */
-static uintptr_t filemap_share(struct vm_file *f, uint32_t pgoff)
+ * touch past a file's end is SIGBUS. Returns 0 with a reference in `phys`,
+ * ENXIO past EOF, or ENOMEM when no frame can be had. */
+static int filemap_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
 {
     struct filemap *m = (struct filemap *)f;
 
     if (m->sh != &m->own && (uint64_t)pgoff << 12 >= m->sh->size) {
-        return 0;
+        return -ENXIO;
     }
-    return shmem_map_page(m->sh, pgoff);
+    *phys = shmem_map_page(m->sh, pgoff);
+    return *phys ? 0 : -ENOMEM;
 }
 
 /** The KRFFS boot-root node the mapping's file is now, including through a
@@ -188,7 +191,7 @@ static struct filemap *dshare_mapping(const struct dshare *ds, int writer)
     struct filemap *m;
 
     for (m = maps; m && !(m->ds == ds && m->vf.refs > 0 && !m->going &&
-                          (!writer || (m->entry.flags & FD_FLAG_WRITE)));
+                          (!writer || (m->shared && (m->entry.flags & FD_FLAG_WRITE))));
          m = m->next) {
     }
     return m;
@@ -323,7 +326,7 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
     }
     if (m) {
         vm_file_get(&m->vf);
-        if (m->entry.flags & FD_FLAG_WRITE) {
+        if (m->shared && (m->entry.flags & FD_FLAG_WRITE)) {
             rc = dshare_write_back(ds, m, first, end);
         }
         if (rc == 0 && flush) {
@@ -335,30 +338,82 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
     return rc;
 }
 
-/**
- * The share of a shared mapping of a disk file: the page in memory, read
- * from the file first when it is not there. The read may sleep, and a page
- * another fault read meanwhile is the one used (`shmem_adopt`); the fault
- * looks the region up again after it (`shared_fault`).
- */
-static uintptr_t filemap_share_disk(struct vm_file *f, uint32_t pgoff)
+/** Read or borrow disk page `pgoff` under its file's lock, which excludes
+ * a write or truncation until the page joins the file's resident pages.
+ * Returns 0 with a resident mapping reference in `phys`, 1 after reading
+ * the file, or a negative errno. */
+static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
+{
+    struct vfs_ref file;
+    struct vfs_stat st;
+    uint8_t *page;
+    int32_t got;
+    int rc = 0;
+
+    file.mnt = m->entry.ofd->vmnt;
+    file.node = m->entry.ofd->vnode;
+    vfs_node_lock(&file);
+    if (vfs_getattr(file.mnt, file.node, &st) != 0) {
+        vfs_node_unlock(&file);
+        return -EIO;
+    }
+    m->sh->size = st.size;
+    if ((uint64_t)pgoff * PAGE_SIZE >= st.size) {
+        rc = -ENXIO;
+    } else if ((*phys = shmem_resident(m->sh, pgoff)) != 0) {
+        frame_ref(*phys);
+    } else if ((*phys = alloc_user_frame()) == 0) {
+        rc = -ENOMEM;
+    } else {
+        page = kmap_temp(*phys);
+        got = page ? filemap_read(m, page, pgoff) : -EIO;
+        if (got >= 0 && got < (int32_t)PAGE_SIZE) {
+            k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
+        }
+        if (page) {
+            kunmap_temp(page);
+        }
+        if (got < 0) {
+            free_frame(*phys);
+            *phys = 0;
+            rc = got;
+        } else {
+            *phys = shmem_adopt(m->sh, pgoff, *phys);
+            rc = *phys ? 1 : -ENOMEM;
+        }
+    }
+    vfs_node_unlock(&file);
+    return rc;
+}
+
+/** Borrow the file's disk page, enabling sleep across its lock and read
+ * when faulting outside a system call, as `filemap_read` does. The caller
+ * holds the mapping. Returns 0 for a resident page, 1 after a read, ENXIO
+ * past EOF, or another negative errno. */
+static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
 {
     struct filemap *m = (struct filemap *)f;
-    uintptr_t phys = shmem_resident(m->sh, pgoff);
+    const struct vfs_mount *mnt = m->entry.ofd->vmnt;
+    uint32_t flags = 0;
+    int entered = 0;
+    int rc;
 
-    if (phys) {
-        frame_ref(phys);
-        return phys;
+    if (!(kirq_enabled() && proc_in_syscall())) {
+        if (current_proc && !current_proc->in_syscall) {
+            current_proc->in_syscall = 1;
+            flags = kirq_save();
+            arch_irq_enable();
+            entered = 1;
+        } else if (!filemap_fault_readable(mnt)) {
+            return -EIO;
+        }
     }
-    phys = alloc_user_frame();
-    if (phys == 0) {
-        return 0;
+    rc = filemap_disk_page(m, pgoff, phys);
+    if (entered) {
+        kirq_restore(flags);
+        current_proc->in_syscall = 0;
     }
-    if (filemap_fill(f, pgoff, phys) < 0) {
-        free_frame(phys);
-        return 0;
-    }
-    return shmem_adopt(m->sh, pgoff, phys);
+    return rc;
 }
 
 /**
@@ -381,7 +436,7 @@ static void filemap_release(struct vm_file *f)
     struct vfs_mount *locked;
 
     m->going = 1;
-    if (m->ds && (m->entry.flags & FD_FLAG_WRITE)) {
+    if (m->ds && m->shared && (m->entry.flags & FD_FLAG_WRITE)) {
         int rc;
 
         m->ds->leaving++;
@@ -456,6 +511,7 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh)
 
     if (f) {
         ((struct filemap *)f)->sh = sh;
+        ((struct filemap *)f)->shared = 1;
         sh->maps++;
         f->fill = NULL;
         f->share = filemap_share;
@@ -487,6 +543,7 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e)
         }
         return NULL;
     }
+    m->shared = 1;
     m->ds = ds;
     m->sh = &ds->sh;
     ds->users++;
@@ -494,6 +551,36 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e)
     m->vf.fill = NULL;
     m->vf.share = filemap_share_disk;
     return &m->vf;
+}
+
+struct vm_file *filemap_private(const fd_entry_t *e, struct shmem *sh, int disk)
+{
+    struct vm_file *f;
+
+    if (sh) {
+        f = filemap_shared(e, sh);
+    } else if (disk) {
+        f = filemap_disk_shared(e);
+    } else {
+        return filemap_new(e);
+    }
+    if (f) {
+        ((struct filemap *)f)->shared = 0;
+    }
+    return f;
+}
+
+int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
+{
+    const struct dshare *ds = dshare_of(mnt, ino);
+    const struct filemap *m;
+
+    for (m = maps; ds && m; m = m->next) {
+        if (m->ds == ds && m->shared) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
@@ -516,14 +603,10 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
 {
     struct dshare *ds = dshares && e->ofd ? dshare_of(e->ofd->vmnt, e->ofd->ino) : NULL;
     uint64_t stop = off + len;
-    uint8_t *buf;
+    uint8_t buf[512];
     uint32_t i;
 
     if (!ds || len == 0) {
-        return;
-    }
-    buf = kmalloc(PAGE_SIZE);
-    if (!buf) {
         return;
     }
     ds->users++;
@@ -537,18 +620,47 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
         if (!shmem_resident(&ds->sh, i)) {
             continue;
         }
-        got = fs_read_at(e, buf, (uint32_t)(to - from), from);
-        if (got <= 0 || !shmem_resident(&ds->sh, i)) {
-            continue;
-        }
-        page = kmap_temp(shmem_resident(&ds->sh, i));
-        if (page) {
-            k_memcpy(page + (from - base), buf, (uint32_t)got);
-            kunmap_temp(page);
+        while (from < to) {
+            uint32_t take = to - from > sizeof(buf) ? sizeof(buf) : (uint32_t)(to - from);
+
+            got = fs_read_at(e, buf, take, from);
+            if (got <= 0 || !shmem_resident(&ds->sh, i)) {
+                break;
+            }
+            page = kmap_temp(shmem_resident(&ds->sh, i));
+            if (page) {
+                k_memcpy(page + (from - base), buf, (uint32_t)got);
+                kunmap_temp(page);
+            }
+            from += (uint32_t)got;
         }
     }
     dshare_put(ds);
-    kfree(buf);
+}
+
+void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
+                          uint32_t len)
+{
+    struct dshare *ds = dshare_of(mnt, ino);
+    const uint8_t *in = buf;
+
+    while (ds && len) {
+        uint32_t at = (uint32_t)(off % PAGE_SIZE);
+        uint32_t take = PAGE_SIZE - at;
+        uintptr_t phys = shmem_resident(&ds->sh, (uint32_t)(off / PAGE_SIZE));
+        uint8_t *page = phys ? kmap_temp(phys) : NULL;
+
+        if (take > len) {
+            take = len;
+        }
+        if (page) {
+            k_memcpy(page + at, in, take);
+            kunmap_temp(page);
+        }
+        in += take;
+        off += take;
+        len -= take;
+    }
 }
 
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size)
@@ -615,7 +727,7 @@ void filemap_shmem_cut(struct shmem *sh, uint32_t first)
             uintptr_t pages = (r->end - r->start) / PAGE_SIZE;
             uintptr_t from;
 
-            if (r->type != VM_SHARED || !r->file ||
+            if (!r->file ||
                 (r->file->share != filemap_share && r->file->share != filemap_share_disk) ||
                 ((const struct filemap *)r->file)->sh != sh ||
                 (r->pgoff < first && pages <= first - r->pgoff)) {

@@ -125,6 +125,7 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 {
     struct loop_device *loop = loop_of(device);
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
+    struct vfs_ref file;
     int32_t wrote;
 
     if (!loop->attached || !loop_bounded(loop, lba, count)) {
@@ -134,7 +135,15 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
         return -EROFS;
     }
     loop->in_flight++;
+    file.mnt = loop->mnt;
+    file.node = loop->node;
+    vfs_node_lock(&file);
     wrote = vfs_write(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
+    if (wrote > 0) {
+        filemap_disk_written(loop->mnt, loop->ino, lba * BLOCK_SECTOR_SIZE, buffer,
+                             (uint32_t)wrote);
+    }
+    vfs_node_unlock(&file);
     loop->writes++;
     loop->dev.unflushed = 1;
     loop_transfer_ended(loop);
@@ -451,7 +460,7 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
         rc = -EINVAL;
     }
     if (rc == 0 && (fd_node_busy(ref->mnt, ref->node) || loop_backs(ref->mnt, ref->node) ||
-                    filemap_disk_mapped(ref->mnt, st->ino))) {
+                    filemap_disk_shared_mapped(ref->mnt, st->ino))) {
         rc = -EBUSY;
     }
     return rc;
@@ -534,7 +543,7 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return -EINVAL; /* whole sectors only */
     }
-    if (loop_backs(ref.mnt, ref.node) || filemap_disk_mapped(ref.mnt, st.ino)) {
+    if (loop_backs(ref.mnt, ref.node) || filemap_disk_shared_mapped(ref.mnt, st.ino)) {
         vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
