@@ -1186,6 +1186,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vgpu3d",
+          "checks": "Virgl capability sets, contexts, 3D resource transfers, submissions without sleeps, foreign dependencies, sync-file and syncobj fences, out-of-order completions and reset against the device model under ASan and UBSan",
+          "source": "program"
+        },
+        {
+          "assertion_id": "vgpu3d64",
+          "checks": "The virgl model rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "program"
+        },
+        {
           "assertion_id": "virtio_gpu",
           "checks": "tests/host/virtio_gpu_hosttest.c binds the virtio GPU driver to a model of QEMU's device and checks the commands and their fences, the EDID and DMT modes, the scanout, damage, scattered backing, a full queue, error and missing answers, the cursor, a display change, the driver's ioctls, a buffer's release and the unplug under ASan and UBSan",
           "source": "scenario"

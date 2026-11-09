@@ -37,6 +37,16 @@
 #define VIRTIO_GPU_CMD_GET_CAPSET_INFO          0x0108u
 #define VIRTIO_GPU_CMD_GET_CAPSET               0x0109u
 #define VIRTIO_GPU_CMD_GET_EDID                 0x010Au
+#define VIRTIO_GPU_CMD_CTX_CREATE               0x0200u
+#define VIRTIO_GPU_CMD_CTX_DESTROY              0x0201u
+#define VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE      0x0202u
+#define VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE      0x0203u
+#define VIRTIO_GPU_CMD_RESOURCE_CREATE_3D       0x0204u
+#define VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D      0x0205u
+#define VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D    0x0206u
+#define VIRTIO_GPU_CMD_SUBMIT_3D                0x0207u
+#define VIRTIO_GPU_RESP_OK_CAPSET_INFO          0x1102u
+#define VIRTIO_GPU_RESP_OK_CAPSET               0x1103u
 #define VIRTIO_GPU_CMD_UPDATE_CURSOR            0x0300u
 #define VIRTIO_GPU_CMD_MOVE_CURSOR              0x0301u
 #define VIRTIO_GPU_RESP_OK_NODATA               0x1100u
@@ -149,6 +159,46 @@ struct virtio_gpu_resource_attach_backing {
     uint32_t nr_entries;
 };
 
+struct virtio_gpu_get_capset_info {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t index, padding;
+};
+
+struct virtio_gpu_capset_info {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t id, version, size, padding;
+};
+
+struct virtio_gpu_get_capset {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t id, version;
+};
+
+struct virtio_gpu_ctx_create {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t nlen, context_init;
+    char debug_name[64];
+};
+
+struct virtio_gpu_resource_create_3d {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t resource_id, target, format, bind;
+    uint32_t width, height, depth, array_size;
+    uint32_t last_level, nr_samples, flags, padding;
+};
+
+struct virtio_gpu_transfer_3d {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t x, y, z, w, h, d;
+    uint64_t offset;
+    uint32_t resource_id, level, stride, layer_stride;
+};
+
+struct virtio_gpu_submit_3d {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t size, padding;
+};
+
 struct virtio_gpu_cursor_pos {
     uint32_t scanout_id;
     uint32_t x, y;
@@ -193,6 +243,16 @@ struct drm_virtgpu_map {
     uint64_t offset; /* for mmap */
     uint32_t handle;
     uint32_t pad;
+};
+
+#define VIRTGPU_EXECBUF_FENCE_FD_IN   1u
+#define VIRTGPU_EXECBUF_FENCE_FD_OUT  2u
+#define VIRTGPU_EXECBUF_RING_IDX      4u
+#define VIRTGPU_EXECBUF_SYNCOBJ_RESET 1u
+
+struct drm_virtgpu_execbuffer_syncobj {
+    uint32_t handle, flags;
+    uint64_t point;
 };
 
 struct drm_virtgpu_execbuffer {
@@ -347,6 +407,11 @@ struct drm_virtgpu_context_init {
 
 struct virtio_gpu_device;
 
+struct vgpu_dma_page {
+    void *page;
+    uint64_t addr;
+};
+
 struct virtio_gpu_cmd {
     struct virtio_gpu_cmd *next;
     struct virtio_gpu_cmd *live_next;
@@ -358,9 +423,16 @@ struct virtio_gpu_cmd {
     uint64_t extra_addr[VIRTIO_GPU_CMD_EXTRA];
     uint32_t nextra;
     struct virtio_sg sg[VIRTIO_GPU_CMD_SGS];
+    struct virtio_sg *segments; /* sg unless a payload needs more slots */
+    struct vgpu_dma_page *payload;
+    uint32_t npayload;
+    uint32_t response_size; /* 0 uses the inline response */
+    uint32_t response_len;  /* bytes the device returned */
+    uint32_t nin;
     uint32_t nout;           /* segments the device reads, then one it writes */
     struct dma_fence *fence; /* held; NULL on the cursor queue */
     uint32_t resp_type;      /* the answer's type, once `done` */
+    int prepared;            /* the fence has its number and one reference */
     int queued;              /* started: its fence is live */
     int done;
     int waited;
@@ -397,12 +469,34 @@ struct virtio_gpu_output {
  * is set by the configuration interrupt and cleared by the worker, which
  * rereads the displays.
  */
+struct vgpu_capset {
+    uint32_t id, version, size;
+};
+
+struct vgpu_attachment {
+    struct vgpu_attachment *next;
+    struct virtio_gpu_object *bo; /* borrowed; its free detaches every context */
+};
+
+struct vgpu_context {
+    struct vgpu_context *next;
+    uint32_t id;
+    struct vgpu_attachment *attached;
+    int created;
+};
+
 struct virtio_gpu_device {
     struct drm_device drm;
     struct virtio_dev *vdev;
     struct virtqueue *ctrlq, *cursorq;
     const pci_device_t *pci;
     int vga; /* a virtio-vga, which has a VGA's BARs */
+    int has_virgl;
+    struct vgpu_capset *capsets;
+    uint32_t capset_mask;
+    struct vgpu_context *contexts;
+    struct virtio_gpu_object *resources; /* includes objects awaiting UNREF */
+    char reset_path[48];
     int has_edid;
     int has_indirect;
     uint32_t num_scanouts;
@@ -432,7 +526,77 @@ struct virtio_gpu_object {
     uint32_t res_id;
     uint32_t format; /* VIRTIO_GPU_FORMAT_* */
     uint32_t width, height;
+    struct virtio_gpu_object *next;
     int dumb;
 };
+
+/**
+ * The driver record and buffer record of core objects, or NULL for a
+ * foreign buffer.
+ */
+struct virtio_gpu_device *vgpu_device(struct drm_device *dev);
+struct virtio_gpu_object *vgpu_bo(struct drm_gem_object *obj);
+/** Allocate a control or cursor command, or NULL; process context. */
+struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtqueue *vq,
+                                    uint32_t type, uint32_t bytes);
+/** Free an unsubmitted or completed command and its DMA pages. */
+void vgpu_cmd_free(struct virtio_gpu_cmd *cmd);
+/** Number and initialize a command's fence once, before exporting it. */
+void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd);
+/**
+ * Send without waiting; complete owns arg until the process-context reaper
+ * calls it.
+ */
+void vgpu_cmd_send(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
+                   void *arg);
+/** Send, wait, copy an inline response and free the command; 0 or -errno. */
+int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes);
+/*
+ * * Append user command bytes, or allocate response pages when response is
+ * nonzero.
+ * 0 or -errno. No page becomes visible to the device before submission. */
+int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response);
+/** Copy a completed response after its header to user; 0 or -EFAULT. */
+int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes);
+/** Free completed commands; process context. */
+void vgpu_reap(struct virtio_gpu_device *vg);
+/** Stop DMA, fail commands and free backing and contexts; process context. */
+void vgpu_kill(struct virtio_gpu_device *vg);
+/**
+ * Create a buffer and 2D or 3D resource; caller owns one reference, NULL
+ * sets err.
+ */
+struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t size,
+                                          const struct drm_virtgpu_resource_create *params,
+                                          int virgl, int32_t *err);
+/** Read capability descriptions after DRIVER_OK; 0 or -errno. */
+int32_t vgpu_capsets_read(struct virtio_gpu_device *vg);
+/** Create a file's context lazily; 0 or -errno, may sleep. */
+int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file);
+/** Allocate and release a file's context record. */
+int32_t vgpu_context_open(struct virtio_gpu_device *vg, struct drm_file *file);
+void vgpu_context_close(struct drm_device *dev, struct drm_file *file);
+/**
+ * Attach a resource to the file's context; ordered before its next
+ * submission.
+ */
+int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
+                            struct virtio_gpu_object *bo);
+/** Detach a resource before its UNREF, or after reset, without sleeping. */
+void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+/** The driver's 3D, fence and blob ioctl handlers; core copies arguments. */
+int32_t vgpu_execbuffer_ioctl(struct drm_device *, void *, struct drm_file *);
+int32_t vgpu_get_caps_ioctl(struct drm_device *, void *, struct drm_file *);
+int32_t vgpu_transfer_3d_ioctl(struct drm_device *, void *, struct drm_file *, int);
+int32_t vgpu_wait_ioctl(struct drm_device *, void *, struct drm_file *);
+int32_t vgpu_blob_ioctl(struct drm_device *, void *, struct drm_file *);
+/*
+ * * Wait for foreign leaves of a dependency; this device's queue already
+ * orders its own.
+ * 0 or -errno, interruptible, process context. */
+int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence);
+/** Register or remove the reset trigger; registration returns 0 or -errno. */
+int32_t vgpu_reset_register(struct virtio_gpu_device *vg);
+void vgpu_reset_remove(struct virtio_gpu_device *vg);
 
 #endif /* _VIRTIO_GPU_H_ */

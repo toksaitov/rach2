@@ -38,6 +38,10 @@
 #include "drm/drm_vblank.c"
 #include "dmabuf/fence.c"
 #include "drm/virtio_gpu.c"
+#include "drm/virtio_gpu_fence.c"
+#include "drm/virtio_gpu_3d.c"
+#include "drm/virtio_gpu_submit.c"
+#include "drm/virtio_gpu_blob.c"
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long n, unsigned long size);
@@ -47,6 +51,9 @@ extern int strcmp(const char *a, const char *b);
 struct percpu cpu_table[NR_CPUS];
 static process_t self;
 static int failures;
+#ifdef VGPU_3D_TEST
+static void model_wait_step(void);
+#endif
 
 #define CHECK(c, s)                                     \
     do {                                                \
@@ -232,6 +239,9 @@ void wq_wake_all(wait_queue_t *wq)
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
+#ifdef VGPU_3D_TEST
+    model_wait_step();
+#endif
     CHECK(cond(arg), "a wait's condition holds in one thread");
     return 0;
 }
@@ -276,6 +286,7 @@ void drm_event_cancel_free(struct drm_pending_event *e)
     drm_send_event(e);
 }
 
+#ifndef VGPU_3D_TEST
 /** No sync files. */
 struct dma_fence *sync_file_get_fence(int32_t fd)
 {
@@ -290,6 +301,8 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name)
     (void)name;
     return -EMFILE;
 }
+
+#endif
 
 /** Nothing to free. */
 int fd_free(fd_table_t *table, int fd)
@@ -572,6 +585,70 @@ int32_t dma_resv_add_fence(struct dma_resv *resv, struct dma_fence *fence, int w
     }
     return -ENOMEM;
 }
+
+#ifndef VGPU_3D_TEST
+/** The 2D rows never create sync objects. */
+struct drm_syncobj *drm_syncobj_find(struct drm_file *file, uint32_t h)
+{
+    (void)file;
+    (void)h;
+    return NULL;
+}
+
+void drm_syncobj_put(struct drm_syncobj *s)
+{
+    (void)s;
+}
+void drm_syncobj_replace_fence(struct drm_syncobj *s, struct dma_fence *f)
+{
+    (void)s;
+    (void)f;
+}
+void drm_syncobj_add_point(struct drm_syncobj *s, struct dma_fence_chain *c, struct dma_fence *f,
+                           uint64_t p)
+{
+    (void)s;
+    (void)c;
+    (void)f;
+    (void)p;
+}
+int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t h, uint64_t p, uint32_t flags,
+                               struct dma_fence **f)
+{
+    (void)file;
+    (void)h;
+    (void)p;
+    (void)flags;
+    (void)f;
+    return -ENOENT;
+}
+#endif
+
+/** Register the reset trigger, keeping its operations in the 3D model. */
+#ifndef VGPU_3D_TEST
+int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops,
+                            debugfs_open_fn open, void *data)
+{
+    (void)path;
+    (void)mode;
+    (void)ops;
+    (void)open;
+    (void)data;
+    return 0;
+}
+void debugfs_remove(const char *path)
+{
+    (void)path;
+}
+void drm_dev_unplug(struct drm_device *d)
+{
+    if (!d->unplugged) {
+        d->unplugged = 1;
+        vgpu_unplug(d);
+        drm_dev_put(d);
+    }
+}
+#endif
 
 static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL, NULL};
 
@@ -865,6 +942,10 @@ static uint32_t exec_scanout(const struct virtio_gpu_set_scanout *s)
     return VIRTIO_GPU_RESP_OK_NODATA;
 }
 
+#ifdef VGPU_3D_TEST
+#include "vgpu3d_model.h"
+#endif
+
 /** Carry out the request `req` of `n` bytes, logging its type and fence
  * id, and write the answer into `resp`: its length. */
 static uint32_t execute(const uint8_t *req, uint32_t n, uint8_t *resp)
@@ -910,7 +991,11 @@ static uint32_t execute(const uint8_t *req, uint32_t n, uint8_t *resp)
         gpu.cursor_cmd = type;
         break;
     default:
+#ifdef VGPU_3D_TEST
+        len = execute_3d(req, n, resp, &ok);
+#else
         ok = VIRTIO_GPU_RESP_ERR_UNSPEC;
+#endif
         break;
     }
     if (type == gpu.fail_type) {
@@ -953,8 +1038,12 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
     static uint8_t req[PAGE_SIZE * (VIRTIO_GPU_CMD_EXTRA + 1)];
     struct model_queue *q = mq(vq);
     uint32_t n;
+#ifdef VGPU_3D_TEST
+    uint32_t i, room = 0, off = 0;
+    uint8_t *response;
+#endif
 
-    CHECK(in == 1 && out >= 1, "a command has its request and one answer");
+    CHECK(in >= 1 && out >= 1, "a command has its request and answer");
     if (gpu.torn_down) {
         return -EIO;
     }
@@ -965,8 +1054,22 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
     q->flight[q->nflight].token = token;
     q->flight[q->nflight].resp = sg[out].addr;
     q->flight[q->nflight].resp_len = sg[out].len;
+#ifdef VGPU_3D_TEST
+    for (i = 0; i < in; i++) {
+        room += sg[out + i].len;
+    }
+    response = calloc(1, room);
+    q->flight[q->nflight].len = execute(req, n, response);
+    CHECK(q->flight[q->nflight].len <= room, "the answer fits its segments");
+    for (i = 0; i < in; i++) {
+        k_memcpy((void *)(uintptr_t)sg[out + i].addr, response + off, sg[out + i].len);
+        off += sg[out + i].len;
+    }
+    free(response);
+#else
     q->flight[q->nflight].len = execute(req, n, (uint8_t *)(uintptr_t)sg[out].addr);
     CHECK(q->flight[q->nflight].len <= sg[out].len, "the answer fits its segment");
+#endif
     q->flight[q->nflight].answered = gpu.answer != ANSWER_NEVER;
     q->nflight++;
     return 0;
@@ -1280,7 +1383,7 @@ static struct virtio_gpu_object *dumb(uint32_t w, uint32_t h, uint32_t *handle)
               c.size == ((uint64_t)w * 4 * h + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE,
           "the dumb buffer's pitch and size");
     *handle = c.handle;
-    return to_bo(drm_gem_object_lookup(&file, c.handle));
+    return vgpu_bo(drm_gem_object_lookup(&file, c.handle));
 }
 
 /** A framebuffer of the dumb buffer `handle`. */
@@ -1477,7 +1580,7 @@ static void row_error(void)
     gpu.fail_type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
     gpu.answer = ANSWER_REAP;
     cmd = vgpu_transfer_cmd(vg, shown_bo->res_id, 0, rect_of(0, 0, 4, 4));
-    cmd_send(cmd, NULL, NULL);
+    vgpu_cmd_send(cmd, NULL, NULL);
     f = dma_fence_get(cmd->fence);
     warnings = 0;
     vgpu_reap(vg);
@@ -1486,7 +1589,7 @@ static void row_error(void)
     dma_fence_put(f);
     gpu.answer = ANSWER_KICK;
     cmd = vgpu_transfer_cmd(vg, shown_bo->res_id, 0, rect_of(0, 0, 4, 4));
-    CHECK(cmd_send_wait(cmd, NULL, 0) == -EIO, "a waiter gets EIO");
+    CHECK(vgpu_cmd_send_wait(cmd, NULL, 0) == -EIO, "a waiter gets EIO");
     gpu.fail_type = 0;
 }
 
@@ -1500,7 +1603,7 @@ static void row_timeout(void)
 
     gpu.answer = ANSWER_NEVER;
     cmd = vgpu_transfer_cmd(vg, shown_bo->res_id, 0, rect_of(0, 0, 4, 4));
-    CHECK(cmd_send_wait(cmd, NULL, 0) == -ETIMEDOUT, "no answer in five seconds");
+    CHECK(vgpu_cmd_send_wait(cmd, NULL, 0) == -ETIMEDOUT, "no answer in five seconds");
     CHECK(now_ns - start >= 5000000000ll && now_ns - start < 5100000000ll,
           "the waiter gave up at five seconds");
     gpu.q[0].flight[0].answered = 1;
@@ -1643,7 +1746,7 @@ static void row_ioctls(void)
               vgpu_get_caps_ioctl(dev, NULL, &file) == -ENOSYS &&
               vgpu_transfer_from_host_ioctl(dev, NULL, &file) == -ENOSYS,
           "the 3D calls are ENOSYS");
-    CHECK(vgpu_einval_ioctl(dev, NULL, &file) == -EINVAL, "blobs and contexts are EINVAL");
+    CHECK(vgpu_blob_ioctl(dev, NULL, &file) == -EINVAL, "blobs and contexts are EINVAL");
 }
 
 /** A buffer's last reference: UNREF, and its pages once answered. */
@@ -1725,7 +1828,7 @@ static void row_unplug(void)
     CHECK(bind() == 1, "a bind to unplug");
     gpu.answer = ANSWER_NEVER;
     cmd = vgpu_transfer_cmd(vg, 0, 0, rect_of(0, 0, 1, 1));
-    cmd_send(cmd, NULL, NULL);
+    vgpu_cmd_send(cmd, NULL, NULL);
     f = dma_fence_get(cmd->fence);
     unbind();
     CHECK(dma_fence_is_signaled(f) && f->error == -ENODEV, "an unanswered fence fails with ENODEV");

@@ -1,0 +1,5 @@
+/* vgpu3d64_hosttest.c: the virgl rows with x86-64 kernel structures.
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -DRACH2_HOST_X86_64
+ * Returns 0 when every 3D row passes. */
+#include "vgpu3d_hosttest.c"
