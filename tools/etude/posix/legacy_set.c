@@ -150,6 +150,11 @@ struct command {
     int alone;     /* its old host lock is taken alone */
     int ports;     /* its claim takes a port block, as a guest case's does */
     int claim;     /* its claim is in the ledger */
+    /* A case of a processor class in a run inside a launcher claim also
+     * claims its processors in the site's shared ledger: 0 for no such
+     * claim, 1 while it is asked for, 2 once it is held. */
+    int site;
+    char site_id[300];
     struct etude_bridge *bridge;
     uint64_t tried_us;                 /* when the old locks were last tried */
     char out[PATH_LEN], err[PATH_LEN]; /* complete stdout and stderr */
@@ -247,6 +252,7 @@ struct set {
     char collection_claim[256];
     int uncertain;
     struct etude_ledger *l;
+    struct etude_ledger *site_l; /* the site's shared ledger, or NULL */
     struct etude_supervisor *sup;
     struct etude_ledger_res cap[3];
     size_t ncap;
@@ -1350,7 +1356,8 @@ static int learn_costs(struct set *x)
         struct cmp_key key;
         cmp_item_key(plan, item, &key);
         if (etude_cost_of(&x->baseline, &key, m->k->expected_us, m->k->cpu_millis,
-                          m->k->cpu_ceiling_millis, &m->cost))
+                          m->k->cpu_ceiling_millis, &m->cost) ||
+            etude_cost_class(m->k->json, &m->cost) < 0)
             goto done;
         say(x, "etude run: cost: %s %s: %llu us (%lu samples), CPU %llu (%lu samples)",
             m->k->case_id, m->k->arch, (unsigned long long)m->cost.elapsed_us,
@@ -1620,6 +1627,27 @@ static enum etude_cleanup stop_load(struct command *c, enum etude_cleanup cleanu
     return cleanup;
 }
 
+/**
+ * End or withdraw the processor claim of command `c` in the site's ledger.
+ * It registers no process, since the case's processes are claims of the
+ * run's own ledger, so it ends as confirmed: recovery would free it in any
+ * case once etude has exited.
+ */
+static void site_release(struct set *x, struct command *c)
+{
+    int rc = 0;
+
+    if (c->site == 1)
+        rc = etude_ledger_withdraw(x->site_l, c->site_id) != 0 && errno != ENOENT;
+    else if (c->site == 2)
+        rc = etude_ledger_finish(x->site_l, c->site_id, ETUDE_CLEANUP_CONFIRMED) != 0;
+    if (rc) {
+        x->failed = 1;
+        say(x, "etude run: the claim %s could not be ended: %s", c->site_id, strerror(errno));
+    }
+    c->site = 0;
+}
+
 /** End the claim of command `c` with `cleanup`, and let its locks go with
  * it, or leave them with the claim when the cleanup is not confirmed. */
 static enum etude_cleanup release(struct set *x, struct command *c, enum etude_cleanup cleanup)
@@ -1633,6 +1661,7 @@ static enum etude_cleanup release(struct set *x, struct command *c, enum etude_c
         say(x, "etude run: the claim %s could not be ended: %s", c->id, strerror(errno));
     }
     c->claim = 0;
+    site_release(x, c);
     if (!ok || cleanup != ETUDE_CLEANUP_CONFIRMED)
         x->uncertain = 1;
     if (c->bridge != NULL) {
@@ -3663,6 +3692,64 @@ static void stop_on_suites(struct set *x)
     }
 }
 
+/**
+ * Ask the site's ledger for the processors of command `c`, its claim of the
+ * run's own ledger held, waiting in the site's ledger as any request does.
+ *
+ * @return 1 once they are held or the command needs none, 0 while the
+ *         request waits, and -1 with the reason in `c` when it is refused.
+ */
+static int site_claim(struct set *x, struct command *c)
+{
+    struct etude_ledger_res cpu = {"cpu_millis", 0}, cap = {"cpu_millis", x->o->site_cpu};
+    size_t i;
+
+    if (x->site_l == NULL || c->site_id[0] == 0 || c->site == 2)
+        return 1;
+    for (i = 0; i < c->nres; i++)
+        if (strcmp(c->res[i].name, "cpu_millis") == 0)
+            cpu.amount = c->res[i].amount;
+    if (cpu.amount == 0)
+        return 1;
+    c->site = 1;
+    if (etude_ledger_admit(x->site_l, c->site_id, x->o->account, &cpu, 1, &cap, 1, 1) == 0) {
+        c->site = 2;
+        return 1;
+    }
+    if (errno == EAGAIN)
+        return 0;
+    c->site = 0;
+    came_out(c, INCOMPLETE, 1, "the site's ledger did not admit its processors: %s",
+             errno == ERANGE   ? "the site's limits cannot hold them"
+             : errno == ENOSPC ? "they cannot fit beside claims only a person can release"
+                               : strerror(errno));
+    return -1;
+}
+
+/**
+ * Take the site's processors for member `m` before its locks: say whether
+ * they are held, and end the member when the site refuses them or it has
+ * waited too long for them.
+ */
+static int site_step(struct set *x, struct member *m)
+{
+    struct command *c = &m->c;
+    int rc = site_claim(x, c);
+
+    if (rc > 0)
+        return 1;
+    if (rc == 0) {
+        c->tried_us = posix_now_us();
+        if (!waited_out(x, c) || signalled(x))
+            return 0;
+        came_out(c, INCOMPLETE, 1, "it waited more than %u s for the site's processors",
+                 x->o->wait);
+    }
+    not_run(x, c, INCOMPLETE, c->reason, 1);
+    write_attempt(x, m);
+    return 0;
+}
+
 /** Move member `m` on: from its admission to its locks, and from its locks
  * to its start, or end it when it waited too long. */
 static void advance(struct set *x, size_t i)
@@ -3706,6 +3793,8 @@ static void advance(struct set *x, size_t i)
         }
     }
     if (c->state != LOCKING || posix_now_us() - c->tried_us < LOCK_US)
+        return;
+    if (!site_step(x, m))
         return;
     if (c->exclusive)
         status(x, 1);
@@ -4133,6 +4222,9 @@ static int case_command(struct set *x, struct member *m)
     c->cwd = m->work;
     m->arch = k->arch;
     if (case_cpu(x, m, &want[ETUDE_LEGACY_CPU]))
+        return -1;
+    if (x->site_l != NULL && json_text(json_member(k->json, "resources"), "cpu_class") != NULL &&
+        fit(c->site_id, sizeof(c->site_id), "%s:cpu", c->id) != 0)
         return -1;
     want[ETUDE_LEGACY_MEMORY] = legacy_case_memory(k, x->o->prepared ? 0 : TOOLING_HOST);
     want[ETUDE_LEGACY_DISK] = k->disk_bytes;
@@ -4687,6 +4779,10 @@ static int set_up(struct set *x)
         say(x, "etude run: result: error: %s: %s", o->ledger, strerror(errno));
         return 2;
     }
+    if (o->site_ledger != NULL && (x->site_l = etude_ledger_open(o->site_ledger)) == NULL) {
+        say(x, "etude run: result: error: %s: %s", o->site_ledger, strerror(errno));
+        return 2;
+    }
     if (collection_locks(x) != 0)
         return refuse(x, "the native collection's host and port locks could not be taken");
     for (i = 0; i < 3; i++) {
@@ -4766,6 +4862,10 @@ static void cleanup_owned(struct set *x)
     if (x->l) {
         etude_ledger_close(x->l);
         x->l = NULL;
+    }
+    if (x->site_l) {
+        etude_ledger_close(x->site_l);
+        x->site_l = NULL;
     }
     if (x->o->status && remove(x->o->status) && errno != ENOENT)
         x->cleanup_failed = 1;

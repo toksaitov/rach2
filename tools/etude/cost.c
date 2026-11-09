@@ -4,6 +4,7 @@
  */
 #include "cost.h"
 #include "etude/sched.h"
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -214,4 +215,40 @@ out:
     free(cpu);
     free(cpu_elapsed);
     return rc;
+}
+
+int etude_cpu_class(const char *cpu_class, uint64_t processors, uint64_t *millis)
+{
+    if (cpu_class == NULL || processors == 0 || processors > UINT64_MAX / 1000) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (strcmp(cpu_class, "bound") == 0)
+        *millis = processors * 1000;
+    else if (strcmp(cpu_class, "light") == 0)
+        *millis =
+            processors * 1000 < ETUDE_CPU_LIGHT_MILLIS ? processors * 1000 : ETUDE_CPU_LIGHT_MILLIS;
+    else {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+int etude_cost_class(const struct json *c, struct etude_cost *cost)
+{
+    const char *cpu_class = json_text(json_member(c, "resources"), "cpu_class");
+    const struct json *qemu = json_member(json_member(c, "requirements"), "qemu");
+    const struct json *processors = json_member(qemu, "processors");
+    uint64_t millis;
+
+    if (cpu_class == NULL)
+        return 0;
+    if (processors == NULL || processors->type != JSON_INTEGER || processors->integer < 1 ||
+        etude_cpu_class(cpu_class, (uint64_t)processors->integer, &millis) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    cost->cpu_millis = millis;
+    return 1;
 }

@@ -24,6 +24,10 @@
  * history; a cost comes from the samples measured where the case will run,
  * and not from failed runs, another architecture or another accelerator.
  * Jobs of both architectures share one order, by preparation and cost.
+ * A guest of a processor class claims every processor when it is CPU-bound
+ * and two when it is light, whatever its history measured; on a site of 32
+ * processors four bound guests of 8 run at once and a fifth, or a light
+ * guest, waits until one has ended.
  *
  * A blocked request is protected: a claim that would take what it needs is
  * refused, though it fits now, and one that takes none of it is admitted.
@@ -388,6 +392,87 @@ static void test_cost(void)
         CHECK(cost.samples == 0 && cost.elapsed_us == 77 && cost.cpu_millis == 1500, "cost");
     }
     cmp_free(&h);
+}
+
+/** Give what `cpu_class` claims for a case of `processors` processors, or 0. */
+static uint64_t class_claim(const char *cpu_class, int processors)
+{
+    char text[256];
+    struct json *c = NULL;
+    struct etude_cost cost = {0, 0, 0, 777};
+    int rc;
+
+    snprintf(text, sizeof(text),
+             "{\"resources\":{\"cpu_class\":\"%s\"},"
+             "\"requirements\":{\"qemu\":{\"processors\":%d}}}",
+             cpu_class, processors);
+    if (json_parse(text, strlen(text), 1, &c, NULL, 0) != 0)
+        return 0;
+    rc = etude_cost_class(c, &cost);
+    json_free(c);
+    return rc == 1 ? cost.cpu_millis : 0;
+}
+
+/**
+ * The claims of the classes: a CPU-bound guest claims each of its
+ * processors and a light one two; a case without a class keeps the
+ * reservation of its history, and a class without a QEMU profile is refused.
+ * Four bound guests of 8 fill a site of 32 processors, and a fifth and a
+ * light guest wait until one ends.
+ */
+static void test_class(void)
+{
+    struct etude_ledger_res cap = {CPU, 32000}, want = {CPU, 0};
+    struct etude_ledger *l;
+    struct etude_cost cost = {0, 0, 0, 777};
+    struct json *c = NULL;
+    uint64_t millis = 0;
+    char id[16];
+    int i;
+
+    CHECK(etude_cpu_class("bound", 8, &millis) == 0 && millis == 8000, "class");
+    CHECK(etude_cpu_class("bound", 1, &millis) == 0 && millis == 1000, "class");
+    CHECK(etude_cpu_class("light", 8, &millis) == 0 && millis == 2000, "class");
+    CHECK(etude_cpu_class("light", 1, &millis) == 0 && millis == 1000, "class");
+    CHECK(etude_cpu_class("heavy", 8, &millis) == -1 && errno == EINVAL, "class");
+    CHECK(etude_cpu_class("bound", 0, &millis) == -1 && errno == EINVAL, "class");
+    CHECK(class_claim("bound", 8) == 8000 && class_claim("light", 16) == 2000, "class");
+    CHECK(json_parse("{\"resources\":{}}", 16, 1, &c, NULL, 0) == 0 &&
+              etude_cost_class(c, &cost) == 0 && cost.cpu_millis == 777,
+          "class");
+    json_free(c);
+    c = NULL;
+    CHECK(json_parse("{\"resources\":{\"cpu_class\":\"bound\"}}", 35, 1, &c, NULL, 0) == 0 &&
+              etude_cost_class(c, &cost) == -1 && errno == EINVAL && cost.cpu_millis == 777,
+          "class");
+    json_free(c);
+    if ((l = etude_ledger_open(fix_path("class"))) == NULL) {
+        CHECK(0, "class");
+        return;
+    }
+    want.amount = class_claim("bound", 8);
+    for (i = 0; i < 4; i++) {
+        snprintf(id, sizeof(id), "bound%d", i);
+        CHECK(etude_ledger_admit(l, id, "a", &want, 1, &cap, 1, 1) == 0, "class");
+    }
+    CHECK(refused(etude_ledger_admit(l, "bound4", "b", &want, 1, &cap, 1, 1), EAGAIN) &&
+              state_is(l, "bound4", "blocked"),
+          "class");
+    want.amount = class_claim("light", 8);
+    CHECK(refused(etude_ledger_admit(l, "light", "c", &want, 1, &cap, 1, 1), EAGAIN) &&
+              state_is(l, "light", "waiting"),
+          "class");
+    CHECK(done(l, "bound0") == 0, "class");
+    want.amount = class_claim("bound", 8);
+    CHECK(etude_ledger_admit(l, "bound4", "b", &want, 1, &cap, 1, 1) == 0, "class");
+    want.amount = class_claim("light", 8);
+    CHECK(refused(etude_ledger_admit(l, "light", "c", &want, 1, &cap, 1, 1), EAGAIN), "class");
+    CHECK(done(l, "bound1") == 0 && etude_ledger_admit(l, "light", "c", &want, 1, &cap, 1, 1) == 0,
+          "class");
+    CHECK(done(l, "bound2") == 0 && done(l, "bound3") == 0 && done(l, "bound4") == 0 &&
+              done(l, "light") == 0 && empty(l),
+          "class");
+    etude_ledger_close(l);
 }
 
 /* ---- The order of a schedule. ---- */
@@ -842,6 +927,7 @@ int main(void)
     signal(SIGHUP, stopped);
     test_cpu();
     test_cost();
+    test_class();
     test_order();
     test_backfill();
     test_beside();

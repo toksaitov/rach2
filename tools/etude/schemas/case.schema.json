@@ -377,6 +377,7 @@
       "properties": {
         "cpu_millis": {"$ref": "#/$defs/positive"},
         "cpu_ceiling_millis": {"$ref": "#/$defs/positive"},
+        "cpu_class": {"enum": ["bound", "light"]},
         "memory_bytes": {"$ref": "#/$defs/positive"},
         "tooling_memory_bytes": {"$ref": "#/$defs/positive"},
         "disk_bytes": {"$ref": "#/$defs/count"},

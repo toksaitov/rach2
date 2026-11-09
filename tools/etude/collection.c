@@ -64,6 +64,10 @@ struct collection {
     unsigned width, cpus;
     uint64_t memory;
     uint64_t cap[3];
+    /* Inside a launcher claim, the site's shared ledger and its processor
+     * limit, where cases of a processor class claim their processors. */
+    char site_ledger[PATH_SIZE];
+    uint64_t site_cpu;
     int stop_on_fail, list, boots_machines;
     struct etude_portlock ports;
 };
@@ -1048,6 +1052,8 @@ static int run_admission(struct collection *c)
         return -1;
     if (!c->site[0] || strcmp(c->outer, c->site))
         return 0;
+    strcpy(c->site_ledger, c->ledger);
+    c->site_cpu = c->cap[0];
     memcpy(c->cap, own, sizeof(own));
     strcpy(c->ledger, ledger);
     return 1;
@@ -1170,6 +1176,8 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     o.history_path = stream;
     o.history_path_size = sizeof(stream);
     o.site = c->site[0] ? c->site : NULL;
+    o.site_ledger = enclosed && c->site_ledger[0] ? c->site_ledger : NULL;
+    o.site_cpu = c->site_cpu;
     o.kernel = getenv("RACH2_KERNEL");
     memcpy(o.cap, c->cap, sizeof(o.cap));
     printf("run: starting: architecture %s, workers %u, accelerator %s", c->arches, c->width,
