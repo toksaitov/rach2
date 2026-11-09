@@ -38,6 +38,7 @@
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
 #include "../../proc/rseq.h"
+#include "../../proc/process_vm.h"
 #include "../../mm/mempolicy.h"
 #include "../../proc/pidfd.h"
 #include "../../lib/krandom.h"
@@ -439,8 +440,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SYNCFS] = sys_syncfs;
     table[SYS_SENDMMSG] = compat_sys_sendmmsg;
     table[SYS_SETNS] = sys_setns;
-    table[SYS_PROCESS_VM_READV] = NULL;
-    table[SYS_PROCESS_VM_WRITEV] = NULL;
+    table[SYS_PROCESS_VM_READV] = sys_process_vm_readv;
+    table[SYS_PROCESS_VM_WRITEV] = sys_process_vm_writev;
     table[SYS_KCMP] = sys_kcmp;
     table[SYS_FINIT_MODULE] = NULL;
     table[SYS_SCHED_SETATTR] = NULL;
