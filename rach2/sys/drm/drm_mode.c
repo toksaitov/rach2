@@ -2234,7 +2234,10 @@ static int32_t object_properties(struct drm_mode_object *obj, int atomic, uint64
 /** Whether a mode goes to a client: not a stereo one without the stereo
  * cap, nor, without the aspect-ratio cap, one equal but for its aspect to
  * a mode already given, as Linux's drm_mode_expose_to_userspace. `given`
- * is the list's first mode and `mode` a later one. */
+ * is the list's first mode and `mode` a later one. An earlier mode equal
+ * to `mode` has its stereo flags, and the first of those was given, so any
+ * earlier equal mode means one was given; no check recurses, so the list
+ * costs its length squared. */
 static int mode_exposed(const struct drm_display_mode *given, const struct drm_display_mode *mode,
                         const struct drm_file *file)
 {
@@ -2246,8 +2249,7 @@ static int mode_exposed(const struct drm_display_mode *given, const struct drm_d
     }
     if (!file->aspect_ratio) {
         for (m = given; m != mode; m = m->next) {
-            if (mode_exposed(given, m, file) && m->info.clock == mode->info.clock &&
-                m->info.hdisplay == mode->info.hdisplay &&
+            if (m->info.clock == mode->info.clock && m->info.hdisplay == mode->info.hdisplay &&
                 m->info.hsync_start == mode->info.hsync_start &&
                 m->info.hsync_end == mode->info.hsync_end && m->info.htotal == mode->info.htotal &&
                 m->info.hskew == mode->info.hskew && m->info.vdisplay == mode->info.vdisplay &&
