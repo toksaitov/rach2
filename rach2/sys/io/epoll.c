@@ -471,6 +471,25 @@ int epoll_is_set(const fd_entry_t *e)
     return is_set(e);
 }
 
+int32_t epoll_target(const fd_entry_t *e, int tfd, uint32_t toff, const struct open_file **ofd)
+{
+    const struct epitem *it;
+
+    if (!e || !is_set(e)) {
+        return -EINVAL;
+    }
+    for (it = ((const struct epoll *)e->priv)->items; it; it = it->next) {
+        if (it->fd != tfd || !fd_ofd_live(it->ofd, it->serial)) {
+            continue;
+        }
+        if (toff-- == 0) {
+            *ofd = it->ofd;
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
 short epoll_poll_set(fd_entry_t *e, short events, struct wait_queue **wqs, uint32_t room,
                      uint32_t *n)
 {

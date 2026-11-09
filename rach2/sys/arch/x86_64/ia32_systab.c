@@ -36,6 +36,7 @@
 #include "../../proc/ptrace.h"
 #include "../../proc/seccomp.h"
 #include "../../proc/ns.h"
+#include "../../proc/kcmp.h"
 #include "../../proc/pidfd.h"
 #include "../../lib/krandom.h"
 #include "../../lib/kerrno.h"
@@ -438,7 +439,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SETNS] = sys_setns;
     table[SYS_PROCESS_VM_READV] = NULL;
     table[SYS_PROCESS_VM_WRITEV] = NULL;
-    table[SYS_KCMP] = NULL;
+    table[SYS_KCMP] = sys_kcmp;
     table[SYS_FINIT_MODULE] = NULL;
     table[SYS_SCHED_SETATTR] = NULL;
     table[SYS_SCHED_GETATTR] = NULL;

@@ -1,0 +1,138 @@
+.Dd November 9, 2026
+.Dt KCMP 2
+.Os
+.Sh NAME
+.Nm kcmp
+.Nd whether two processes share a kernel object
+.Sh SYNOPSIS
+.In linux/kcmp.h
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fn syscall SYS_kcmp "pid_t pid1" "pid_t pid2" "int type" "unsigned long idx1" "unsigned long idx2"
+.Sh DESCRIPTION
+.Fn kcmp
+tells whether the processes or threads
+.Fa pid1
+and
+.Fa pid2 ,
+numbered in the caller's PID namespace, hold the same kernel object of the
+kind
+.Fa type ,
+as Linux's call does.
+Mesa asks it of two descriptors of DRM nodes, to learn whether they are one
+open file.
+.Bl -tag -width "KCMP_EPOLL_TFD"
+.It Dv KCMP_FILE
+The open file descriptions of descriptor
+.Fa idx1
+of
+.Fa pid1
+and descriptor
+.Fa idx2
+of
+.Fa pid2 .
+A
+.Xr dup 2 ,
+a descriptor a
+.Xr fork 2
+copied, and one passed over a socket are the same; two
+.Xr open 2
+calls of one file are not.
+.It Dv KCMP_VM
+The address spaces, shared by threads and by
+.Dv CLONE_VM .
+.It Dv KCMP_FILES
+The descriptor tables, shared by threads and by
+.Dv CLONE_FILES .
+.It Dv KCMP_FS
+The working and root directories with the umask, shared by threads and by
+.Dv CLONE_FS .
+.It Dv KCMP_SIGHAND
+The signal dispositions, which a thread group shares.
+.It Dv KCMP_IO
+The I/O contexts.
+A process has none until
+.Xr ioprio_set 2
+sets its priority, and then one of its own, since no call shares one; two
+processes without are the same.
+.It Dv KCMP_SYSVSEM
+The System V semaphore adjustments
+.Dv SEM_UNDO
+made, which a thread group shares.
+A process has none until its first such
+.Xr semop 2 ;
+two processes without are the same.
+.It Dv KCMP_EPOLL_TFD
+The open file of descriptor
+.Fa idx1
+of
+.Fa pid1
+against the file registered in an epoll set of
+.Fa pid2 .
+.Fa idx2
+is the address of a
+.Vt struct kcmp_epoll_slot ,
+whose
+.Va efd
+is the set's descriptor in
+.Fa pid2 ,
+.Va tfd
+the descriptor number registered and
+.Va toff
+which of the registrations of that number, from 0.
+.El
+.Pp
+The caller must be allowed to read both processes as
+.Xr ptrace 2
+allows it: its own thread group, a privileged caller, or one whose real
+user and group IDs are each of the target's three, with the target
+dumpable and not privileged.
+.Sh RETURN VALUES
+0 when the objects are the same.
+Otherwise 1 or 2, by the order of the objects' addresses under a key drawn
+at random once per boot: 1 when the first is below the second, 2 when it
+is above.
+The order is the same for every call of a boot, so a program may sort
+objects by it, and tells nothing of the addresses.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/host/drm_core_hosttest.c
+compares a
+.Xr dup 2
+of a DRM node's descriptor, a forked child's copy and two opens of the node.
+.Sh ERRORS
+.Bl -tag -width "[ESRCH]"
+.It Bq Er EBADF
+A descriptor named is not open, or for
+.Dv KCMP_EPOLL_TFD
+the set's descriptor is not.
+.It Bq Er EFAULT
+The
+.Vt struct kcmp_epoll_slot
+cannot be read.
+.It Bq Er EINVAL
+.Fa type
+is none of the above, or the
+.Va efd
+of
+.Dv KCMP_EPOLL_TFD
+is no epoll set.
+.It Bq Er ENOENT
+The epoll set has no such registration.
+.It Bq Er EPERM
+The caller may not read one of the processes.
+.It Bq Er ESRCH
+.Fa pid1
+or
+.Fa pid2
+names no process or thread the caller can see.
+.El
+.Sh SEE ALSO
+.Xr dup 2 ,
+.Xr epoll 2 ,
+.Xr fork 2 ,
+.Xr ptrace 2 ,
+.Xr drm 4

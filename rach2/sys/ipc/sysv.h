@@ -58,6 +58,11 @@ long sys_semtimedop_time64(struct isr_params *params);
  */
 int sysv_ipc_restartable(const struct isr_params *params);
 
+/** The semaphore adjustments of the thread group `tg`, which kcmp's
+ * KCMP_SYSVSEM compares as Linux compares undo lists: `tg` while it has
+ * any, NULL while it has none. */
+const void *sysv_sem_undo_list(const struct tgroup *tg);
+
 /**
  * Apply and drop the SEM_UNDO adjustments of `tg`, whose last thread is
  * ending, as Linux does at exit: each value moves by its adjustment, kept
