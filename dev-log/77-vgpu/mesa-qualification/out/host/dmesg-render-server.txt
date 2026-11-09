@@ -1,0 +1,20 @@
+[54708.941535] virgl_render_server: llvmpipe-0: potentially unexpected fatal signal 11.
+[106912.339134] virgl_render_server: llvmpipe-0: potentially unexpected fatal signal 11.
+[107932.331455] vkr-ring-7[20756]: segfault at 0 ip 0000000000000000 sp 00007e186ba711d8 error 14 likely on CPU 9 (core 4, socket 0)
+[107932.331470] virgl_render_server: vkr-ring-7: potentially unexpected fatal signal 11.
+[107932.331475] CPU: 9 UID: 1004 PID: 20756 Comm: vkr-ring-7 Tainted: G           O        6.18.54.1-microsoft-standard-WSL2 #1 PREEMPT(none) 
+[108101.681939] vkr-ring-4[15414]: segfault at 0 ip 0000000000000000 sp 00007e186ba711d8 error 14 likely on CPU 4 (core 2, socket 0)
+[108101.681954] virgl_render_server: vkr-ring-4: potentially unexpected fatal signal 11.
+[108101.681958] CPU: 4 UID: 1004 PID: 15414 Comm: vkr-ring-4 Tainted: G           O        6.18.54.1-microsoft-standard-WSL2 #1 PREEMPT(none) 
+[108106.953583] vkr-ring-4[17260]: segfault at 0 ip 0000000000000000 sp 00007e186ba711d8 error 14 likely on CPU 16 (core 8, socket 0)
+[108106.953595] virgl_render_server: vkr-ring-4: potentially unexpected fatal signal 11.
+[108106.953598] CPU: 16 UID: 1004 PID: 17260 Comm: vkr-ring-4 Tainted: G           O        6.18.54.1-microsoft-standard-WSL2 #1 PREEMPT(none) 
+[108125.224929] vkr-ring-4[22848]: segfault at 0 ip 0000000000000000 sp 00007e186ba711d8 error 14 likely on CPU 11 (core 5, socket 0)
+[108125.224943] virgl_render_server: vkr-ring-4: potentially unexpected fatal signal 11.
+[108125.224947] CPU: 11 UID: 1004 PID: 22848 Comm: vkr-ring-4 Tainted: G           O        6.18.54.1-microsoft-standard-WSL2 #1 PREEMPT(none) 
+[108143.645863] vkr-ring-4[24724]: segfault at 0 ip 0000000000000000 sp 00007e186ba711d8 error 14 likely on CPU 29 (core 14, socket 0)
+[108143.645879] virgl_render_server: vkr-ring-4: potentially unexpected fatal signal 11.
+[108143.645884] CPU: 29 UID: 1004 PID: 24724 Comm: vkr-ring-4 Tainted: G           O        6.18.54.1-microsoft-standard-WSL2 #1 PREEMPT(none) 
+[108201.155618] vkr-ring-3[32335]: segfault at 0 ip 0000000000000000 sp 0000765a52a981d8 error 14 likely on CPU 21 (core 10, socket 0)
+[108201.155629] virgl_render_server: vkr-ring-3: potentially unexpected fatal signal 11.
+[108201.155633] CPU: 21 UID: 1004 PID: 32335 Comm: vkr-ring-3 Tainted: G           O        6.18.54.1-microsoft-standard-WSL2 #1 PREEMPT(none) 

@@ -1,0 +1,7 @@
+d3d12probe: 32-bit
+d3d12probe: adapter "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))" vendor 0x0005 device 0x0000, 3072 MiB dedicated
+d3d12probe: highest level 11_1
+d3d12probe: shader model 6.0
+d3d12probe: binding tier 3, tiled tier 1, heap tier 2, typed UAV loads 1
+d3d12probe: (32,48) 255 128 0 255, (2,2) 0 0 128 255
+d3d12probe: draw OK

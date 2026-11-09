@@ -1,0 +1,18 @@
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_FOGENABLE) (0x1c) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_SPECULARENABLE) (0x1d) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_COLORKEYENABLE) (0x29) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_RANGEFOGENABLE) (0x30) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_LIGHTING) (0x89) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_COLORVERTEX) (0x8d) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_LOCALVIEWER) (0x8e) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_NORMALIZENORMALS) (0x8f) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_DIFFUSEMATERIALSOURCE) (0x91) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_SPECULARMATERIALSOURCE) (0x92) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_AMBIENTMATERIALSOURCE) (0x93) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_EMISSIVEMATERIALSOURCE) (0x94) should have a representative.
+ 86.342:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_VERTEXBLEND) (0x97) should have a representative.
+ 86.419:014c:0198:fixme:vulkan:win32u_vkMapMemory2KHR returned mapping 0x7f0297f24000 does not fit 32-bit pointer
+ 86.419:014c:0198:err:d3d:wined3d_allocator_chunk_vk_map Failed to map chunk memory, vr VK_ERROR_OUT_OF_HOST_MEMORY.
+ 86.419:014c:0198:err:d3d:wined3d_bo_vk_map Failed to map chunk.
+ 86.419:014c:0198:err:d3d:adapter_vk_map_bo_address Failed to map bo.
+Unhandled exception: page fault on read access to 0x0000020b in wow64 32-bit code (0x7bf98765).

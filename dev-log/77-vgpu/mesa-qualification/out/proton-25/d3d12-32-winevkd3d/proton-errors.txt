@@ -1,0 +1,5 @@
+ 91.349:014c:0150:fixme:vulkan:win32u_vkMapMemory2KHR returned mapping 0x7f4a2ec8d000 does not fit 32-bit pointer
+vkd3d:0150:err:vkd3d:d3d12_heap_init Failed to map memory, vr -1.
+ 91.365:014c:0150:fixme:vulkan:win32u_vkMapMemory2KHR returned mapping 0x7f4a2ec8d000 does not fit 32-bit pointer
+vkd3d:0150:err:vkd3d:d3d12_heap_init Failed to map memory, vr -1.
+Unhandled exception: page fault on write access to 0x00000cd8 in wow64 32-bit code (0x7b009aa6).

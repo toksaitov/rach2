@@ -1,0 +1,1 @@
+ 40.687:014c:019c:info:vkd3d-proton:vkd3d_pipeline_library_disk_cache_initial_setup: Failed to map read-only cache: vkd3d-proton.cache.

@@ -1,0 +1,5 @@
+      1 virgl_render_server: vkr: vkFreeMemory resulted in CS error
+      1 virgl_render_server: vkr: ring_submit_cmd: vn_dispatch_command failed
+      1 virgl_render_server: vkr: failed to look up object 12 of type 8
+      1 proxy: proxy server with pid 1688626GLSL feature level 450
+      1 gl_version 45 - core profile enabled

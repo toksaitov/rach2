@@ -1,0 +1,2 @@
+d3d12probe: 64-bit
+d3d12probe: CreateDXGIFactory2 failed, hr=0x80004005

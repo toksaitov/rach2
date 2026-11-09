@@ -1,0 +1,13 @@
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_FOGENABLE) (0x1c) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_SPECULARENABLE) (0x1d) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_COLORKEYENABLE) (0x29) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_RANGEFOGENABLE) (0x30) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_LIGHTING) (0x89) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_COLORVERTEX) (0x8d) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_LOCALVIEWER) (0x8e) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_NORMALIZENORMALS) (0x8f) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_DIFFUSEMATERIALSOURCE) (0x91) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_SPECULARMATERIALSOURCE) (0x92) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_AMBIENTMATERIALSOURCE) (0x93) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_EMISSIVEMATERIALSOURCE) (0x94) should have a representative.
+ 65.065:014c:0150:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_VERTEXBLEND) (0x97) should have a representative.

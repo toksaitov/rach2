@@ -1,0 +1,768 @@
+Date: 2026-11-09 UTC
+[17:05:14.166] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[17:05:14.166] Command line: weston --backend=drm --renderer=gl --shell=kiosk --xwayland --idle-time=0 --log=/home/gfx/out/weston.log
+[17:05:14.166] OS: Linux, 6.12.116+deb13-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.116-1 (2026-11-07), x86_64
+[17:05:14.166] Flight recorder: enabled
+[17:05:14.166] Starting with no config file.
+[17:05:14.168] Output repaint window is 7 ms maximum.
+[17:05:14.168] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[17:05:14.173] initializing drm backend
+[17:05:14.173] Trying libseat launcher...
+[17:05:14.174] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[17:05:14.174] [libseat/backend/seatd.c:212] Enabling seat
+[17:05:14.174] libseat: session control granted
+[17:05:14.176] using /dev/dri/card0
+[17:05:14.176] DRM: supports atomic modesetting
+[17:05:14.176] DRM: does not support GBM modifiers
+[17:05:14.176] DRM: does not support Atomic async page flip
+[17:05:14.176] DRM: supports picture aspect ratio
+[17:05:14.437] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[17:05:14.446] Using rendering device: /dev/dri/renderD128
+[17:05:14.446] EGL version: 1.5
+[17:05:14.446] EGL vendor: Mesa Project
+[17:05:14.446] EGL client APIs: OpenGL OpenGL_ES 
+[17:05:14.446] EGL features:
+               EGL Wayland extension: yes
+               context priority: no
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[17:05:14.461] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[17:05:14.461] GLSL version: OpenGL ES GLSL ES 3.20
+[17:05:14.461] GL vendor: Mesa
+[17:05:14.461] GL renderer: virgl (LLVMPIPE (LLVM 21.1.8, 256 bits))
+[17:05:14.516] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[17:05:14.516] Using GL renderer
+[17:05:14.531] event3  - Power Button: is tagged by udev as: Keyboard
+[17:05:14.531] event3  - Power Button: device is a keyboard
+[17:05:14.532] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[17:05:14.532] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[17:05:14.533] event2  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:05:14.533] event2  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:05:14.535] event1  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:05:14.535] event1  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:05:14.544] libinput: configuring device "Power Button".
+[17:05:14.545] libinput: configuring device "AT Translated Set 2 keyboard".
+[17:05:14.545] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:05:14.545] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:05:14.545] input device event1 has no enabled output associated (none named), skipping calibration for now.
+[17:05:14.545] DRM: EDID for the following head fails conformity:
+Block 1, CTA-861 Extension Block:
+  Padding: Contains non-zero bytes.
+
+[17:05:14.545] DRM: head 'Virtual-1' found, connector 37 is connected, EDID make 'Red Hat, Inc.', model 'QEMU Monitor', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[17:05:14.545] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[17:05:14.545] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[17:05:14.545] Color manager: no-op
+                 protocol support: no
+[17:05:14.545] Output 'Virtual-1' attempts EOTF mode SDR and colorimetry mode default.
+[17:05:14.545] Output 'Virtual-1' using color profile: stock sRGB color profile
+[17:05:14.546] Chosen EGL config details: id:  61 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[17:05:14.546] Output Virtual-1 (crtc 36) video modes:
+               1280x800@75.0, preferred, current, 107.3 MHz
+               5120x2160@50.0 64:27, 742.5 MHz
+               4096x2160@50.0 256:135, 594.0 MHz
+               3840x2160@60.0 16:9, 594.0 MHz
+               3840x2160@59.9 16:9, 593.4 MHz
+               3840x2160@50.0 16:9, 594.0 MHz
+               1920x1440@60.0, 234.0 MHz
+               2560x1080@50.0 64:27, 185.6 MHz
+               1856x1392@60.0, 218.2 MHz
+               1792x1344@60.0, 204.8 MHz
+               2048x1152@60.0, 162.0 MHz
+               1920x1200@59.9, 193.2 MHz
+               1920x1080@60.0, 148.5 MHz
+               1920x1080@50.0 16:9, 148.5 MHz
+               1600x1200@60.0, 162.0 MHz
+               1680x1050@60.0, 146.2 MHz
+               1400x1050@60.0, 121.8 MHz
+               1280x1024@60.0, 108.0 MHz
+               1440x900@59.9, 106.5 MHz
+               1280x960@60.0, 108.0 MHz
+               1360x768@60.0, 85.5 MHz
+               1280x768@59.9, 79.5 MHz
+               1024x768@60.0, 65.0 MHz
+               800x600@60.3, 40.0 MHz
+               640x480@60.0 4:3, 25.2 MHz
+               640x480@59.9, 25.2 MHz
+[17:05:14.546] associating input device event3 with output Virtual-1 (none by udev)
+[17:05:14.546] associating input device event0 with output Virtual-1 (none by udev)
+[17:05:14.546] associating input device event2 with output Virtual-1 (none by udev)
+[17:05:14.546] associating input device event1 with output Virtual-1 (none by udev)
+[17:05:14.546] Output 'Virtual-1' enabled with head(s) Virtual-1
+[17:05:14.546] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[17:05:14.546] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[17:05:14.547] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[17:05:14.577] Registered plugin API 'weston_xwayland_v3' of size 32
+[17:05:14.577] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[17:05:14.577] xserver listening on display :0
+[17:05:27.247] launching '/usr/bin/Xwayland'
+[17:05:27.406] xfixes version: 6.0
+[17:05:27.437] created wm, root 1021
+[17:05:41.760] Detected an unmapped surface or view in the layer list, which should not occur.
+               Warning: the above message will not be printed again.
+[17:12:00.215] caught signal 15
+[17:12:00.216] xserver exited, will restart on demand
+[17:12:00.222] event3  - Power Button: device removed
+[17:12:00.261] event0  - AT Translated Set 2 keyboard: device removed
+[17:12:00.394] event2  - VirtualPS/2 VMware VMMouse: device removed
+[17:12:00.485] event1  - VirtualPS/2 VMware VMMouse: device removed
+Date: 2026-11-09 UTC
+[17:12:01.327] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[17:12:01.327] Command line: weston --backend=drm --renderer=gl --shell=kiosk --xwayland --idle-time=0 --debug --log=/home/gfx/out/weston.log
+[17:12:01.327] OS: Linux, 6.12.116+deb13-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.116-1 (2026-11-07), x86_64
+[17:12:01.327] Flight recorder: enabled
+[17:12:01.327] Starting with no config file.
+[17:12:01.327] Output repaint window is 7 ms maximum.
+[17:12:01.327] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[17:12:01.328] initializing drm backend
+[17:12:01.328] Trying libseat launcher...
+[17:12:01.329] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[17:12:01.329] [libseat/backend/seatd.c:212] Enabling seat
+[17:12:01.329] libseat: session control granted
+[17:12:01.331] using /dev/dri/card0
+[17:12:01.331] DRM: supports atomic modesetting
+[17:12:01.331] DRM: does not support GBM modifiers
+[17:12:01.331] DRM: does not support Atomic async page flip
+[17:12:01.331] DRM: supports picture aspect ratio
+[17:12:01.407] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[17:12:01.413] Using rendering device: /dev/dri/renderD128
+[17:12:01.413] EGL version: 1.5
+[17:12:01.413] EGL vendor: Mesa Project
+[17:12:01.413] EGL client APIs: OpenGL OpenGL_ES 
+[17:12:01.413] EGL features:
+               EGL Wayland extension: yes
+               context priority: no
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[17:12:01.470] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[17:12:01.470] GLSL version: OpenGL ES GLSL ES 3.20
+[17:12:01.470] GL vendor: Mesa
+[17:12:01.470] GL renderer: virgl (LLVMPIPE (LLVM 21.1.8, 256 bits))
+[17:12:01.517] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[17:12:01.518] Using GL renderer
+[17:12:01.526] event3  - Power Button: is tagged by udev as: Keyboard
+[17:12:01.526] event3  - Power Button: device is a keyboard
+[17:12:01.528] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[17:12:01.528] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[17:12:01.529] event2  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:12:01.529] event2  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:12:01.530] event1  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:12:01.531] event1  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:12:01.535] libinput: configuring device "Power Button".
+[17:12:01.535] libinput: configuring device "AT Translated Set 2 keyboard".
+[17:12:01.535] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:12:01.535] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:12:01.535] input device event1 has no enabled output associated (none named), skipping calibration for now.
+[17:12:01.536] DRM: EDID for the following head fails conformity:
+Block 1, CTA-861 Extension Block:
+  Padding: Contains non-zero bytes.
+
+[17:12:01.536] DRM: head 'Virtual-1' found, connector 37 is connected, EDID make 'Red Hat, Inc.', model 'QEMU Monitor', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[17:12:01.536] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[17:12:01.536] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[17:12:01.536] Color manager: no-op
+                 protocol support: no
+[17:12:01.537] Output 'Virtual-1' attempts EOTF mode SDR and colorimetry mode default.
+[17:12:01.537] Output 'Virtual-1' using color profile: stock sRGB color profile
+[17:12:01.537] Chosen EGL config details: id:  61 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[17:12:01.537] Output Virtual-1 (crtc 36) video modes:
+               1280x800@75.0, preferred, current, 107.3 MHz
+               5120x2160@50.0 64:27, 742.5 MHz
+               4096x2160@50.0 256:135, 594.0 MHz
+               3840x2160@60.0 16:9, 594.0 MHz
+               3840x2160@59.9 16:9, 593.4 MHz
+               3840x2160@50.0 16:9, 594.0 MHz
+               1920x1440@60.0, 234.0 MHz
+               2560x1080@50.0 64:27, 185.6 MHz
+               1856x1392@60.0, 218.2 MHz
+               1792x1344@60.0, 204.8 MHz
+               2048x1152@60.0, 162.0 MHz
+               1920x1200@59.9, 193.2 MHz
+               1920x1080@60.0, 148.5 MHz
+               1920x1080@50.0 16:9, 148.5 MHz
+               1600x1200@60.0, 162.0 MHz
+               1680x1050@60.0, 146.2 MHz
+               1400x1050@60.0, 121.8 MHz
+               1280x1024@60.0, 108.0 MHz
+               1440x900@59.9, 106.5 MHz
+               1280x960@60.0, 108.0 MHz
+               1360x768@60.0, 85.5 MHz
+               1280x768@59.9, 79.5 MHz
+               1024x768@60.0, 65.0 MHz
+               800x600@60.3, 40.0 MHz
+               640x480@60.0 4:3, 25.2 MHz
+               640x480@59.9, 25.2 MHz
+[17:12:01.537] associating input device event3 with output Virtual-1 (none by udev)
+[17:12:01.537] associating input device event0 with output Virtual-1 (none by udev)
+[17:12:01.537] associating input device event2 with output Virtual-1 (none by udev)
+[17:12:01.537] associating input device event1 with output Virtual-1 (none by udev)
+[17:12:01.537] Output 'Virtual-1' enabled with head(s) Virtual-1
+[17:12:01.537] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[17:12:01.537] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[17:12:01.538] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[17:12:01.547] Registered plugin API 'weston_xwayland_v3' of size 32
+[17:12:01.547] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[17:12:01.548] xserver listening on display :0
+[17:16:59.538] launching '/usr/bin/Xwayland'
+[17:17:00.289] xfixes version: 6.0
+[17:17:00.302] created wm, root 1021
+[17:18:12.530] caught signal 15
+[17:18:12.531] xserver exited, will restart on demand
+[17:18:12.534] event3  - Power Button: device removed
+[17:18:12.569] event0  - AT Translated Set 2 keyboard: device removed
+[17:18:12.609] event2  - VirtualPS/2 VMware VMMouse: device removed
+[17:18:12.641] event1  - VirtualPS/2 VMware VMMouse: device removed
+Date: 2026-11-09 UTC
+[17:19:13.607] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[17:19:13.607] Command line: weston --backend=drm --renderer=gl --shell=kiosk --xwayland --idle-time=0 --debug --log=/home/gfx/out/weston.log
+[17:19:13.607] OS: Linux, 6.12.116+deb13-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.116-1 (2026-11-07), x86_64
+[17:19:13.607] Flight recorder: enabled
+[17:19:13.608] Starting with no config file.
+[17:19:13.609] Output repaint window is 7 ms maximum.
+[17:19:13.609] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[17:19:13.612] initializing drm backend
+[17:19:13.612] Trying libseat launcher...
+[17:19:13.613] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[17:19:13.613] [libseat/backend/seatd.c:212] Enabling seat
+[17:19:13.613] libseat: session control granted
+[17:19:13.615] using /dev/dri/card0
+[17:19:13.615] DRM: supports atomic modesetting
+[17:19:13.615] DRM: does not support GBM modifiers
+[17:19:13.615] DRM: does not support Atomic async page flip
+[17:19:13.615] DRM: supports picture aspect ratio
+[17:19:13.887] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[17:19:13.898] Using rendering device: /dev/dri/renderD128
+[17:19:13.898] EGL version: 1.5
+[17:19:13.898] EGL vendor: Mesa Project
+[17:19:13.898] EGL client APIs: OpenGL OpenGL_ES 
+[17:19:13.898] EGL features:
+               EGL Wayland extension: no
+               context priority: no
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[17:19:13.911] GL version: OpenGL ES 3.2 Mesa 26.1.6-1~bpo13+1
+[17:19:13.911] GLSL version: OpenGL ES GLSL ES 3.20
+[17:19:13.911] GL vendor: Mesa
+[17:19:13.911] GL renderer: virgl (LLVMPIPE (LLVM 21.1.8, 256 bits))
+[17:19:13.948] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[17:19:13.948] Using GL renderer
+[17:19:13.962] event3  - Power Button: is tagged by udev as: Keyboard
+[17:19:13.962] event3  - Power Button: device is a keyboard
+[17:19:13.963] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[17:19:13.963] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[17:19:13.964] event2  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:19:13.964] event2  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:19:13.965] event1  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:19:13.965] event1  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:19:13.974] libinput: configuring device "Power Button".
+[17:19:13.974] libinput: configuring device "AT Translated Set 2 keyboard".
+[17:19:13.974] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:19:13.974] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:19:13.974] input device event1 has no enabled output associated (none named), skipping calibration for now.
+[17:19:13.974] DRM: EDID for the following head fails conformity:
+Block 1, CTA-861 Extension Block:
+  Padding: Contains non-zero bytes.
+
+[17:19:13.974] DRM: head 'Virtual-1' found, connector 37 is connected, EDID make 'Red Hat, Inc.', model 'QEMU Monitor', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[17:19:13.974] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[17:19:13.974] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[17:19:13.974] Color manager: no-op
+                 protocol support: no
+[17:19:13.974] Output 'Virtual-1' attempts EOTF mode SDR and colorimetry mode default.
+[17:19:13.974] Output 'Virtual-1' using color profile: stock sRGB color profile
+[17:19:13.975] Chosen EGL config details: id:  61 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[17:19:13.975] Output Virtual-1 (crtc 36) video modes:
+               1280x800@75.0, preferred, current, 107.3 MHz
+               5120x2160@50.0 64:27, 742.5 MHz
+               4096x2160@50.0 256:135, 594.0 MHz
+               3840x2160@60.0 16:9, 594.0 MHz
+               3840x2160@59.9 16:9, 593.4 MHz
+               3840x2160@50.0 16:9, 594.0 MHz
+               1920x1440@60.0, 234.0 MHz
+               2560x1080@50.0 64:27, 185.6 MHz
+               1856x1392@60.0, 218.2 MHz
+               1792x1344@60.0, 204.8 MHz
+               2048x1152@60.0, 162.0 MHz
+               1920x1200@59.9, 193.2 MHz
+               1920x1080@60.0, 148.5 MHz
+               1920x1080@50.0 16:9, 148.5 MHz
+               1600x1200@60.0, 162.0 MHz
+               1680x1050@60.0, 146.2 MHz
+               1400x1050@60.0, 121.8 MHz
+               1280x1024@60.0, 108.0 MHz
+               1440x900@59.9, 106.5 MHz
+               1280x960@60.0, 108.0 MHz
+               1360x768@60.0, 85.5 MHz
+               1280x768@59.9, 79.5 MHz
+               1024x768@60.0, 65.0 MHz
+               800x600@60.3, 40.0 MHz
+               640x480@60.0 4:3, 25.2 MHz
+               640x480@59.9, 25.2 MHz
+[17:19:13.975] associating input device event3 with output Virtual-1 (none by udev)
+[17:19:13.975] associating input device event0 with output Virtual-1 (none by udev)
+[17:19:13.975] associating input device event2 with output Virtual-1 (none by udev)
+[17:19:13.975] associating input device event1 with output Virtual-1 (none by udev)
+[17:19:13.975] Output 'Virtual-1' enabled with head(s) Virtual-1
+[17:19:13.975] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[17:19:13.975] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[17:19:13.976] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[17:19:14.000] Registered plugin API 'weston_xwayland_v3' of size 32
+[17:19:14.001] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[17:19:14.001] xserver listening on display :0
+[17:19:18.314] launching '/usr/bin/Xwayland'
+[17:19:18.492] xfixes version: 6.0
+[17:19:18.534] created wm, root 1021
+[17:20:04.278] Detected an unmapped surface or view in the layer list, which should not occur.
+               Warning: the above message will not be printed again.
+Date: 2026-11-09 UTC
+[17:27:09.100] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[17:27:09.100] Command line: weston --backend=drm --renderer=gl --shell=kiosk --xwayland --idle-time=0 --debug --log=/home/gfx/out/weston.log
+[17:27:09.100] OS: Linux, 6.12.116+deb13-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.116-1 (2026-11-07), x86_64
+[17:27:09.100] Flight recorder: enabled
+[17:27:09.100] Starting with no config file.
+[17:27:09.101] Output repaint window is 7 ms maximum.
+[17:27:09.102] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[17:27:09.105] initializing drm backend
+[17:27:09.105] Trying libseat launcher...
+[17:27:09.105] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[17:27:09.105] [libseat/backend/seatd.c:212] Enabling seat
+[17:27:09.105] libseat: session control granted
+[17:27:09.106] using /dev/dri/card0
+[17:27:09.106] DRM: supports atomic modesetting
+[17:27:09.106] DRM: does not support GBM modifiers
+[17:27:09.106] DRM: does not support Atomic async page flip
+[17:27:09.106] DRM: supports picture aspect ratio
+[17:27:09.356] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[17:27:09.366] Using rendering device: /dev/dri/renderD128
+[17:27:09.366] EGL version: 1.5
+[17:27:09.366] EGL vendor: Mesa Project
+[17:27:09.366] EGL client APIs: OpenGL OpenGL_ES 
+[17:27:09.366] EGL features:
+               EGL Wayland extension: no
+               context priority: no
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[17:27:09.379] GL version: OpenGL ES 3.2 Mesa 26.1.6-1~bpo13+1
+[17:27:09.379] GLSL version: OpenGL ES GLSL ES 3.20
+[17:27:09.379] GL vendor: Mesa
+[17:27:09.379] GL renderer: virgl (LLVMPIPE (LLVM 21.1.8, 256 bits))
+[17:27:09.414] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[17:27:09.414] Using GL renderer
+[17:27:09.425] event3  - Power Button: is tagged by udev as: Keyboard
+[17:27:09.425] event3  - Power Button: device is a keyboard
+[17:27:09.425] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[17:27:09.425] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[17:27:09.426] event2  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:27:09.426] event2  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:27:09.427] event1  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:27:09.427] event1  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:27:09.435] libinput: configuring device "Power Button".
+[17:27:09.435] libinput: configuring device "AT Translated Set 2 keyboard".
+[17:27:09.435] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:27:09.435] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:27:09.435] input device event1 has no enabled output associated (none named), skipping calibration for now.
+[17:27:09.436] DRM: EDID for the following head fails conformity:
+Block 1, CTA-861 Extension Block:
+  Padding: Contains non-zero bytes.
+
+[17:27:09.436] DRM: head 'Virtual-1' found, connector 37 is connected, EDID make 'Red Hat, Inc.', model 'QEMU Monitor', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[17:27:09.436] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[17:27:09.436] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[17:27:09.436] Color manager: no-op
+                 protocol support: no
+[17:27:09.436] Output 'Virtual-1' attempts EOTF mode SDR and colorimetry mode default.
+[17:27:09.436] Output 'Virtual-1' using color profile: stock sRGB color profile
+[17:27:09.436] Chosen EGL config details: id:  61 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[17:27:09.436] Output Virtual-1 (crtc 36) video modes:
+               1280x800@75.0, preferred, current, 107.3 MHz
+               5120x2160@50.0 64:27, 742.5 MHz
+               4096x2160@50.0 256:135, 594.0 MHz
+               3840x2160@60.0 16:9, 594.0 MHz
+               3840x2160@59.9 16:9, 593.4 MHz
+               3840x2160@50.0 16:9, 594.0 MHz
+               1920x1440@60.0, 234.0 MHz
+               2560x1080@50.0 64:27, 185.6 MHz
+               1856x1392@60.0, 218.2 MHz
+               1792x1344@60.0, 204.8 MHz
+               2048x1152@60.0, 162.0 MHz
+               1920x1200@59.9, 193.2 MHz
+               1920x1080@60.0, 148.5 MHz
+               1920x1080@50.0 16:9, 148.5 MHz
+               1600x1200@60.0, 162.0 MHz
+               1680x1050@60.0, 146.2 MHz
+               1400x1050@60.0, 121.8 MHz
+               1280x1024@60.0, 108.0 MHz
+               1440x900@59.9, 106.5 MHz
+               1280x960@60.0, 108.0 MHz
+               1360x768@60.0, 85.5 MHz
+               1280x768@59.9, 79.5 MHz
+               1024x768@60.0, 65.0 MHz
+               800x600@60.3, 40.0 MHz
+               640x480@60.0 4:3, 25.2 MHz
+               640x480@59.9, 25.2 MHz
+[17:27:09.436] associating input device event3 with output Virtual-1 (none by udev)
+[17:27:09.436] associating input device event0 with output Virtual-1 (none by udev)
+[17:27:09.436] associating input device event2 with output Virtual-1 (none by udev)
+[17:27:09.436] associating input device event1 with output Virtual-1 (none by udev)
+[17:27:09.436] Output 'Virtual-1' enabled with head(s) Virtual-1
+[17:27:09.436] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[17:27:09.436] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[17:27:09.437] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[17:27:09.460] Registered plugin API 'weston_xwayland_v3' of size 32
+[17:27:09.460] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[17:27:09.460] xserver listening on display :0
+Date: 2026-11-09 UTC
+[17:29:07.661] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[17:29:07.661] Command line: weston --backend=drm --renderer=gl --shell=kiosk --xwayland --idle-time=0 --debug --log=/home/gfx/out/weston.log
+[17:29:07.661] OS: Linux, 6.12.116+deb13-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.116-1 (2026-11-07), x86_64
+[17:29:07.661] Flight recorder: enabled
+[17:29:07.661] Starting with no config file.
+[17:29:07.662] Output repaint window is 7 ms maximum.
+[17:29:07.662] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[17:29:07.665] initializing drm backend
+[17:29:07.665] Trying libseat launcher...
+[17:29:07.665] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[17:29:07.665] [libseat/backend/seatd.c:212] Enabling seat
+[17:29:07.665] libseat: session control granted
+[17:29:07.666] using /dev/dri/card0
+[17:29:07.666] DRM: supports atomic modesetting
+[17:29:07.666] DRM: does not support GBM modifiers
+[17:29:07.666] DRM: does not support Atomic async page flip
+[17:29:07.666] DRM: supports picture aspect ratio
+[17:29:07.876] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[17:29:07.886] Using rendering device: /dev/dri/renderD128
+[17:29:07.886] EGL version: 1.5
+[17:29:07.886] EGL vendor: Mesa Project
+[17:29:07.886] EGL client APIs: OpenGL OpenGL_ES 
+[17:29:07.886] EGL features:
+               EGL Wayland extension: no
+               context priority: no
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[17:29:07.898] GL version: OpenGL ES 3.2 Mesa 26.1.6-1~bpo13+1
+[17:29:07.898] GLSL version: OpenGL ES GLSL ES 3.20
+[17:29:07.898] GL vendor: Mesa
+[17:29:07.898] GL renderer: virgl (LLVMPIPE (LLVM 21.1.8, 256 bits))
+[17:29:07.933] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[17:29:07.933] Using GL renderer
+[17:29:07.944] event3  - Power Button: is tagged by udev as: Keyboard
+[17:29:07.944] event3  - Power Button: device is a keyboard
+[17:29:07.945] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[17:29:07.945] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[17:29:07.945] event2  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:29:07.945] event2  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:29:07.946] event1  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:29:07.946] event1  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:29:07.954] libinput: configuring device "Power Button".
+[17:29:07.954] libinput: configuring device "AT Translated Set 2 keyboard".
+[17:29:07.954] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:29:07.954] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:29:07.954] input device event1 has no enabled output associated (none named), skipping calibration for now.
+[17:29:07.955] DRM: EDID for the following head fails conformity:
+Block 1, CTA-861 Extension Block:
+  Padding: Contains non-zero bytes.
+
+[17:29:07.955] DRM: head 'Virtual-1' found, connector 37 is connected, EDID make 'Red Hat, Inc.', model 'QEMU Monitor', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[17:29:07.955] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[17:29:07.955] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[17:29:07.955] Color manager: no-op
+                 protocol support: no
+[17:29:07.955] Output 'Virtual-1' attempts EOTF mode SDR and colorimetry mode default.
+[17:29:07.955] Output 'Virtual-1' using color profile: stock sRGB color profile
+[17:29:07.955] Chosen EGL config details: id:  61 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[17:29:07.955] Output Virtual-1 (crtc 36) video modes:
+               1280x800@75.0, preferred, current, 107.3 MHz
+               5120x2160@50.0 64:27, 742.5 MHz
+               4096x2160@50.0 256:135, 594.0 MHz
+               3840x2160@60.0 16:9, 594.0 MHz
+               3840x2160@59.9 16:9, 593.4 MHz
+               3840x2160@50.0 16:9, 594.0 MHz
+               1920x1440@60.0, 234.0 MHz
+               2560x1080@50.0 64:27, 185.6 MHz
+               1856x1392@60.0, 218.2 MHz
+               1792x1344@60.0, 204.8 MHz
+               2048x1152@60.0, 162.0 MHz
+               1920x1200@59.9, 193.2 MHz
+               1920x1080@60.0, 148.5 MHz
+               1920x1080@50.0 16:9, 148.5 MHz
+               1600x1200@60.0, 162.0 MHz
+               1680x1050@60.0, 146.2 MHz
+               1400x1050@60.0, 121.8 MHz
+               1280x1024@60.0, 108.0 MHz
+               1440x900@59.9, 106.5 MHz
+               1280x960@60.0, 108.0 MHz
+               1360x768@60.0, 85.5 MHz
+               1280x768@59.9, 79.5 MHz
+               1024x768@60.0, 65.0 MHz
+               800x600@60.3, 40.0 MHz
+               640x480@60.0 4:3, 25.2 MHz
+               640x480@59.9, 25.2 MHz
+[17:29:07.955] associating input device event3 with output Virtual-1 (none by udev)
+[17:29:07.955] associating input device event0 with output Virtual-1 (none by udev)
+[17:29:07.955] associating input device event2 with output Virtual-1 (none by udev)
+[17:29:07.955] associating input device event1 with output Virtual-1 (none by udev)
+[17:29:07.955] Output 'Virtual-1' enabled with head(s) Virtual-1
+[17:29:07.955] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[17:29:07.955] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[17:29:07.956] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[17:29:07.978] Registered plugin API 'weston_xwayland_v3' of size 32
+[17:29:07.978] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[17:29:07.978] xserver listening on display :0
+[17:32:24.305] launching '/usr/bin/Xwayland'
+[17:32:25.434] xfixes version: 6.0
+[17:32:25.573] created wm, root 1021
+[17:32:37.196] Detected an unmapped surface or view in the layer list, which should not occur.
+               Warning: the above message will not be printed again.
+Date: 2026-11-09 UTC
+[17:35:19.232] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[17:35:19.232] Command line: weston --backend=drm --renderer=gl --shell=kiosk --xwayland --idle-time=0 --debug --log=/home/gfx/out/weston.log
+[17:35:19.232] OS: Linux, 6.12.116+deb13-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.116-1 (2026-11-07), x86_64
+[17:35:19.232] Flight recorder: enabled
+[17:35:19.232] Starting with no config file.
+[17:35:19.233] Output repaint window is 7 ms maximum.
+[17:35:19.233] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[17:35:19.241] initializing drm backend
+[17:35:19.241] Trying libseat launcher...
+[17:35:19.241] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[17:35:19.241] [libseat/backend/seatd.c:212] Enabling seat
+[17:35:19.241] libseat: session control granted
+[17:35:19.241] using /dev/dri/card0
+[17:35:19.241] DRM: supports atomic modesetting
+[17:35:19.241] DRM: does not support GBM modifiers
+[17:35:19.241] DRM: does not support Atomic async page flip
+[17:35:19.241] DRM: supports picture aspect ratio
+[17:35:19.432] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[17:35:19.443] Using rendering device: /dev/dri/renderD128
+[17:35:19.443] EGL version: 1.5
+[17:35:19.443] EGL vendor: Mesa Project
+[17:35:19.443] EGL client APIs: OpenGL OpenGL_ES 
+[17:35:19.443] EGL features:
+               EGL Wayland extension: no
+               context priority: no
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[17:35:19.458] GL version: OpenGL ES 3.2 Mesa 26.1.6-1~bpo13+1
+[17:35:19.458] GLSL version: OpenGL ES GLSL ES 3.20
+[17:35:19.458] GL vendor: Mesa
+[17:35:19.458] GL renderer: virgl (LLVMPIPE (LLVM 21.1.8, 256 bits))
+[17:35:19.497] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[17:35:19.497] Using GL renderer
+[17:35:19.508] event3  - Power Button: is tagged by udev as: Keyboard
+[17:35:19.508] event3  - Power Button: device is a keyboard
+[17:35:19.509] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[17:35:19.509] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[17:35:19.509] event2  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:35:19.509] event2  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:35:19.510] event1  - VirtualPS/2 VMware VMMouse: is tagged by udev as: Mouse
+[17:35:19.510] event1  - VirtualPS/2 VMware VMMouse: device is a pointer
+[17:35:19.519] libinput: configuring device "Power Button".
+[17:35:19.519] libinput: configuring device "AT Translated Set 2 keyboard".
+[17:35:19.519] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:35:19.519] libinput: configuring device "VirtualPS/2 VMware VMMouse".
+[17:35:19.519] input device event1 has no enabled output associated (none named), skipping calibration for now.
+[17:35:19.519] DRM: EDID for the following head fails conformity:
+Block 1, CTA-861 Extension Block:
+  Padding: Contains non-zero bytes.
+
+[17:35:19.519] DRM: head 'Virtual-1' found, connector 37 is connected, EDID make 'Red Hat, Inc.', model 'QEMU Monitor', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[17:35:19.519] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[17:35:19.519] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[17:35:19.519] Color manager: no-op
+                 protocol support: no
+[17:35:19.519] Output 'Virtual-1' attempts EOTF mode SDR and colorimetry mode default.
+[17:35:19.519] Output 'Virtual-1' using color profile: stock sRGB color profile
+[17:35:19.519] Chosen EGL config details: id:  61 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[17:35:19.519] Output Virtual-1 (crtc 36) video modes:
+               1280x800@75.0, preferred, current, 107.3 MHz
+               5120x2160@50.0 64:27, 742.5 MHz
+               4096x2160@50.0 256:135, 594.0 MHz
+               3840x2160@60.0 16:9, 594.0 MHz
+               3840x2160@59.9 16:9, 593.4 MHz
+               3840x2160@50.0 16:9, 594.0 MHz
+               1920x1440@60.0, 234.0 MHz
+               2560x1080@50.0 64:27, 185.6 MHz
+               1856x1392@60.0, 218.2 MHz
+               1792x1344@60.0, 204.8 MHz
+               2048x1152@60.0, 162.0 MHz
+               1920x1200@59.9, 193.2 MHz
+               1920x1080@60.0, 148.5 MHz
+               1920x1080@50.0 16:9, 148.5 MHz
+               1600x1200@60.0, 162.0 MHz
+               1680x1050@60.0, 146.2 MHz
+               1400x1050@60.0, 121.8 MHz
+               1280x1024@60.0, 108.0 MHz
+               1440x900@59.9, 106.5 MHz
+               1280x960@60.0, 108.0 MHz
+               1360x768@60.0, 85.5 MHz
+               1280x768@59.9, 79.5 MHz
+               1024x768@60.0, 65.0 MHz
+               800x600@60.3, 40.0 MHz
+               640x480@60.0 4:3, 25.2 MHz
+               640x480@59.9, 25.2 MHz
+[17:35:19.519] associating input device event3 with output Virtual-1 (none by udev)
+[17:35:19.519] associating input device event0 with output Virtual-1 (none by udev)
+[17:35:19.519] associating input device event2 with output Virtual-1 (none by udev)
+[17:35:19.519] associating input device event1 with output Virtual-1 (none by udev)
+[17:35:19.519] Output 'Virtual-1' enabled with head(s) Virtual-1
+[17:35:19.519] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[17:35:19.520] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[17:35:19.520] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[17:35:19.544] Registered plugin API 'weston_xwayland_v3' of size 32
+[17:35:19.544] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[17:35:19.544] xserver listening on display :0
