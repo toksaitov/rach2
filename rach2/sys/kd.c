@@ -82,6 +82,12 @@ static unsigned char kd_holders[KM_NR_KEYS];
 
 static int kd_ready;
 
+/* While a DRM master holds the screen (`kd_hold`) the keyboard is in K_OFF,
+ * and the mode the requests and the screen's owners set is kept here, to
+ * be put in force when the console has the screen back. */
+static int kd_held;
+static int kd_held_mode;
+
 /** Fill the keymap, strings and accents from keymap.c's built-in ones, and
  * the locks from nothing, the first time any is needed: the first request,
  * or the first key. Any context. */
@@ -174,13 +180,12 @@ static int kd_mode_translates(int mode)
     return mode == K_XLATE || mode == K_UNICODE;
 }
 
-/** Put the keyboard in mode `mode`, K_*, for KDSKBMODE and a restore: stop
- * a held key's repeat and discard the console's unread input, as Linux does
- * after the request. Leaving a mode that does not translate rebuilds the
- * translator's held modifiers from the keys down now, since it saw none of
- * their presses and releases meanwhile. -EINVAL for a mode that is none of
- * the five. */
-static int32_t kd_set_mode(int mode)
+/** Put the keyboard in mode `mode`, K_*, now: stop a held key's repeat and
+ * discard the console's unread input, as Linux does after KDSKBMODE.
+ * Leaving a mode that does not translate rebuilds the translator's held
+ * modifiers from the keys down now, since it saw none of their presses and
+ * releases meanwhile. -EINVAL for a mode that is none of the five. */
+static int32_t kd_apply_mode(int mode)
 {
     unsigned char held[KM_NR_KEYS / 8];
     struct keymap map;
@@ -213,6 +218,48 @@ static int32_t kd_set_mode(int mode)
     return 0;
 }
 
+/** Set the keyboard's mode `mode` for KDSKBMODE and a restore: in force at
+ * once, or while a DRM master holds the screen the mode the console gets
+ * back. -EINVAL for a mode that is none of the five. */
+static int32_t kd_set_mode(int mode)
+{
+    if (mode < K_RAW || mode > K_OFF) {
+        return -EINVAL;
+    }
+    if (kd_held) {
+        kd_held_mode = mode;
+        return 0;
+    }
+    return kd_apply_mode(mode);
+}
+
+/** The keyboard's mode as KDGKBMODE and a save read it: the one held for
+ * the console while a DRM master has the screen. */
+static int kd_visible_mode(void)
+{
+    return kd_held ? kd_held_mode : kd_mode;
+}
+
+void kd_hold(void)
+{
+    kd_init();
+    if (kd_held) {
+        return;
+    }
+    kd_held_mode = kd_mode;
+    kd_apply_mode(K_OFF);
+    kd_held = 1;
+}
+
+void kd_unhold(void)
+{
+    if (!kd_held) {
+        return;
+    }
+    kd_held = 0;
+    kd_apply_mode(kd_held_mode);
+}
+
 /**
  * KDGKBENT's entry of key `index` in table `table`: a table that does not
  * exist reads as K_NOSUCHMAP at key 0 and K_HOLE at every other, and a code
@@ -232,7 +279,7 @@ static unsigned int kd_get_entry(unsigned int table, unsigned int index)
         v = tables[table][index];
     }
     spin_unlock_irqrestore(&kd_lock, flags);
-    if (kd_mode == K_XLATE && KM_TYPE(v) >= KD_NR_TYPES) {
+    if (kd_visible_mode() == K_XLATE && KM_TYPE(v) >= KD_NR_TYPES) {
         v = KM_HOLE;
     }
     return v;
@@ -551,7 +598,7 @@ int32_t kd_ioctl(uint32_t request, uintptr_t arg)
     case KDGKBTYPE:
         return put_byte(arg, KB_101);
     case KDGKBMODE:
-        return put_int(arg, kd_mode);
+        return put_int(arg, kd_visible_mode());
     case KDGKBMETA:
         return put_int(arg, kd_meta);
     case KDGETLED:
@@ -810,7 +857,7 @@ void kd_state_save(struct kd_state *st)
 
     kd_init();
     flags = spin_lock_irqsave(&kd_lock);
-    st->kbmode = kd_mode;
+    st->kbmode = kd_visible_mode();
     st->meta = kd_meta;
     st->locks = kd_kb.locks;
     st->slocks = kd_kb.slocks;

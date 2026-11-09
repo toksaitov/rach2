@@ -221,4 +221,18 @@ void kd_state_save(struct kd_state *st);
  */
 void kd_state_restore(const struct kd_state *st);
 
+/**
+ * Give the keyboard up while a DRM master holds the screen
+ * (sys/drm/drm_client.c): save its mode and set K_OFF, so that no key
+ * reaches the console's input. Until `kd_unhold`, KDGKBMODE and
+ * `kd_state_save` read the saved mode, and KDSKBMODE and `kd_state_restore`
+ * set it in place of the live one, which stays K_OFF. A second hold does
+ * nothing. Process context.
+ */
+void kd_hold(void);
+
+/** Put the mode `kd_hold` saved, or set since, in force again, as KDSKBMODE
+ * does; nothing while the keyboard is not held. Process context. */
+void kd_unhold(void);
+
 #endif
