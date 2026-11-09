@@ -37,6 +37,82 @@ static const char *const nic_models[] = {"rtl8139", "e1000", NULL};
 /* The members of a device that the launcher sets, which a property cannot. */
 static const char *const set_members[] = {"id", "bus", "port", "drive", "netdev", "mac", NULL};
 
+/* A display profile: the device it attaches and whether the host's GL draws
+ * its frames, through QEMU's egl-headless display. */
+struct display {
+    const char *name;
+    const char *device; /* QEMU's model, or NULL for no display device */
+    int gl;
+};
+
+static const struct display displays[] = {
+    {"none", NULL, 0},
+    {"std-vga", "VGA", 0},
+    {"virtio-vga", "virtio-vga", 0},
+    {"virtio-gpu", "virtio-gpu-pci", 0},
+    {"virgl", "virtio-vga-gl", 1},
+    {NULL, NULL, 0},
+};
+
+/* The properties of every display device: an EDID whose preferred mode is
+ * the window's fixed size, 1280x800. */
+#define DISPLAY_WINDOW "edid=on,xres=1280,yres=800"
+
+/* The host's render node, which egl-headless opens; on the testing PC it is
+ * WSL's vgem, and Mesa's d3d12 driver draws on the GPU behind /dev/dxg. */
+#define DISPLAY_RENDER_NODE "/dev/dri/renderD128"
+
+/* The environment that puts QEMU's GL on the testing PC's GPU, not llvmpipe. */
+static const char *const display_gl_env[] = {
+    "GALLIUM_DRIVER=d3d12",
+    "MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA",
+    NULL,
+};
+
+/* The device models that a display profile replaces, so that a profile with
+ * one has no other display, and the USB tablet, since its pointer is the PS/2
+ * mouse. */
+static const char *const display_models[] = {
+    "vga",
+    "VGA",
+    "virtio-vga",
+    "virtio-vga-gl",
+    "virtio-gpu",
+    "virtio-gpu-pci",
+    "virtio-gpu-gl",
+    "virtio-gpu-gl-pci",
+    "bochs-display",
+    "cirrus-vga",
+    "qxl",
+    "qxl-vga",
+    "vmware-svga",
+    "ramfb",
+    "secondary-vga",
+    "usb-tablet",
+    NULL,
+};
+
+/** Find the display profile called `name`, or NULL. */
+static const struct display *display_find(const char *name)
+{
+    const struct display *d;
+
+    for (d = displays; name != NULL && d->name != NULL; d++)
+        if (strcmp(d->name, name) == 0)
+            return d;
+    return NULL;
+}
+
+int etude_qemu_display_device(const char *model)
+{
+    size_t i;
+
+    for (i = 0; model != NULL && display_models[i] != NULL; i++)
+        if (strcmp(display_models[i], model) == 0)
+            return 1;
+    return 0;
+}
+
 const char *etude_accel_name(enum etude_accel accel)
 {
     return (unsigned)accel < ETUDE_ACCEL_COUNT ? accel_names[accel] : NULL;
@@ -1000,9 +1076,9 @@ int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memo
             strcmp(p->architecture, "x86_64") != 0 || p->cpu == NULL ||
             strcmp(p->cpu, "max-nopdpe1gb") != 0 || p->processors != 1 ||
             p->memory_bytes != ETUDE_BIGMEM_CONFIGURED || p->firmware != ETUDE_FIRMWARE_DIRECT ||
-            p->initrd == NULL || p->audio != NULL || disk_count(p->disks) != 0 ||
-            device_count(p->devices) != 0 || p->no_i8042 || p->q35 || count(p->boot_options) != 1 ||
-            strcmp(p->boot_options[0], "rach2.rescue") != 0)
+            p->initrd == NULL || p->audio != NULL || p->display != NULL ||
+            disk_count(p->disks) != 0 || device_count(p->devices) != 0 || p->no_i8042 || p->q35 ||
+            count(p->boot_options) != 1 || strcmp(p->boot_options[0], "rach2.rescue") != 0)
             return EINVAL;
         m.resident_bytes = ETUDE_BIGMEM_RESIDENT;
         m.overhead_bytes = ETUDE_BIGMEM_OVERHEAD;
@@ -1049,6 +1125,26 @@ static int firmware_check(const struct etude_qemu_profile *p)
                                                                                         : EINVAL;
 }
 
+/**
+ * Check the display of profile `p`: a known profile, and with one no other
+ * display device, no USB tablet and an 8042 for the PS/2 mouse.
+ *
+ * @return 0, or EINVAL.
+ */
+static int display_check(const struct etude_qemu_profile *p)
+{
+    size_t i;
+
+    if (p->display == NULL)
+        return 0;
+    if (display_find(p->display) == NULL || p->no_i8042)
+        return EINVAL;
+    for (i = 0; i < device_count(p->devices); i++)
+        if (etude_qemu_display_device(p->devices[i].model))
+            return EINVAL;
+    return 0;
+}
+
 /** Check what QEMU's command line cannot express or would ignore. */
 static int profile_check(const struct etude_qemu_profile *p)
 {
@@ -1074,6 +1170,8 @@ static int profile_check(const struct etude_qemu_profile *p)
     if (forward_check(p) != 0 || captures_check(p) != 0)
         return EINVAL;
     if (p->smbios_vendor != NULL && !text(p->smbios_vendor, ETUDE_SMBIOS_VENDOR_MAX))
+        return EINVAL;
+    if (display_check(p) != 0)
         return EINVAL;
     return firmware_check(p);
 }
@@ -1154,6 +1252,31 @@ static const char *acpi_table_path(const char *path)
 }
 
 /**
+ * Give a display profile under KVM the host's processor: `cpu`, the processor
+ * profile's model and features, becomes QEMU's `host` model with the same
+ * features and an invariant time-stamp counter, which Rach2's vDSO clock
+ * reads. QEMU's named models ask for features that nested KVM may lack, and
+ * a graphics run is measured against a Linux guest on the same processor.
+ *
+ * @return 0, or E2BIG when `size` bytes do not hold the result.
+ */
+static int display_cpu(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
+                       char *cpu, size_t size)
+{
+    const char *features = strchr(cpu, ',');
+    char host[256];
+    int n;
+
+    if (p->display == NULL || s->accel != ETUDE_ACCEL_KVM)
+        return 0;
+    n = snprintf(host, sizeof(host), "host%s,invtsc=on", features != NULL ? features : "");
+    if (n < 0 || (size_t)n >= sizeof(host) || (size_t)n >= size)
+        return E2BIG;
+    memcpy(cpu, host, (size_t)n + 1);
+    return 0;
+}
+
+/**
  * Check profile `p` against site `s`, the audio file `audio` and the size of
  * `out`, and write the -cpu value into `cpu`, of `size` bytes.
  *
@@ -1175,10 +1298,27 @@ static int argv_check(const struct etude_qemu_profile *p, const struct etude_qem
         return EINVAL;
     if (p->firmware == ETUDE_FIRMWARE_OVMF && (x86_64 ? s->ovmf_x86_64 : s->ovmf_i686) == NULL)
         return ENOENT;
+#ifdef _WIN32
+    if (p->display != NULL && display_find(p->display)->gl)
+        return ENOTSUP;
+#endif
     if (out->max < 1 || out->size < 1 ||
         etude_processor_cpu(etude_processor_find(p->cpu), cpu, size) != 0)
         return E2BIG;
-    return 0;
+    return display_cpu(p, s, cpu, size);
+}
+
+/**
+ * Attach profile `p`'s display device, at the window's fixed size.
+ */
+static void add_display(struct line *l, const struct etude_qemu_profile *p)
+{
+    const struct display *d = display_find(p->display);
+
+    if (d == NULL || d->device == NULL)
+        return;
+    add(l, 0, "-device");
+    add(l, 0, "%s,%s", d->device, DISPLAY_WINDOW);
 }
 
 /**
@@ -1249,7 +1389,10 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add(&l, 0, "%s", accel_option(s->accel));
     add(&l, 0, "-nodefaults");
     add(&l, 0, "-display");
-    add(&l, 0, "none");
+    if (p->display != NULL && display_find(p->display)->gl)
+        add(&l, 0, "egl-headless,rendernode=%s", DISPLAY_RENDER_NODE);
+    else
+        add(&l, 0, "none");
     add(&l, 0, "-no-reboot");
     add(&l, 0, "-S");
     add(&l, 0, "-cpu");
@@ -1264,6 +1407,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add_boundary_memory(&l, number);
     if ((e = add_machine(&l, p)) != 0)
         return e;
+    add_display(&l, p);
     add_firmware(&l, p, ovmf);
     add_ahci(&l, p);
     for (i = 0; i < disk_count(p->disks); i++)
@@ -1304,6 +1448,19 @@ static int sdl_audio_variable(const char *entry)
     return strncmp(entry, "SDL_AUDIO", 9) == 0 || strncmp(entry, "SDL_DISKAUDIO", 13) == 0;
 }
 
+/** Say whether `entry` of an environment sets a variable of display_gl_env. */
+static int gl_variable(const char *entry)
+{
+    size_t i, n;
+
+    for (i = 0; display_gl_env[i] != NULL; i++) {
+        n = (size_t)(strchr(display_gl_env[i], '=') - display_gl_env[i]) + 1;
+        if (strncmp(entry, display_gl_env[i], n) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const char *input,
                    const struct etude_qemu_line *out)
 {
@@ -1314,16 +1471,19 @@ int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const 
 #endif
     struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};
     size_t i;
-    int e;
+    int e, gl;
 
     if ((e = audio_check(p, "wav")) != 0)
         return e;
     if (out->max == 0)
         return E2BIG;
     out->argv[0] = NULL;
+    gl = p->display != NULL && display_find(p->display) != NULL && display_find(p->display)->gl;
     for (i = 0; envp != NULL && envp[i] != NULL; i++)
-        if (!sdl_audio_variable(envp[i]))
+        if (!sdl_audio_variable(envp[i]) && !(gl && gl_variable(envp[i])))
             add(&l, 0, "%s", envp[i]);
+    for (i = 0; gl && display_gl_env[i] != NULL; i++)
+        add(&l, 0, "%s", display_gl_env[i]);
     if (p->audio != NULL && strcmp(audio_backend(p), "sdl") == 0) {
         if (input == NULL || *input == '\0')
             return EINVAL;

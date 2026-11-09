@@ -184,6 +184,13 @@ struct etude_qemu_profile {
     const char *audio_input;                   /* with "sdl" alone, a file of raw
                                                   PCM, S16LE, two channels at
                                                   48000 Hz; NULL otherwise */
+    const char *display;                       /* NULL, or the display profile:
+                                                  "none", "std-vga",
+                                                  "virtio-vga", "virtio-gpu" or
+                                                  "virgl"; a profile with one is
+                                                  a graphics boot, which takes
+                                                  the host's processor under
+                                                  KVM */
 };
 
 /* The longest SMBIOS vendor a profile may name. */
@@ -281,9 +288,12 @@ struct etude_qemu_line {
  *         profile's `ports`, a local port forwarded twice by one protocol or
  *         both to the guest and from it, a guest forward that QEMU could not
  *         make, a capture of a card the profile lacks and an ACPI table
- *         whose path keeps a colon; ENOENT for a
+ *         whose path keeps a colon, and a display that is not one of
+ *         `display`'s or that has another display device, a USB tablet or no
+ *         8042 beside it; ENOENT for a
  *         firmware the site lacks, E2BIG when `out` is too small; ENOTSUP for
- *         a lazy boundary profile the site has not enabled.
+ *         a lazy boundary profile the site has not enabled, and on Windows
+ *         for the `virgl` display.
  */
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
@@ -295,14 +305,23 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
  * SDL_DISKAUDIO, and under the `sdl` backend SDL_AUDIODRIVER=disk,
  * SDL_DISKAUDIOFILEIN set to `input` and SDL_DISKAUDIOFILE to the null
  * device, so that SDL's disk driver reads the profile's input file as the
- * card's input and writes its output nowhere. `input` is the profile's
- * `audio_input` as the QEMU that runs names it.
+ * card's input and writes its output nowhere. Under the `virgl` display it
+ * sets GALLIUM_DRIVER=d3d12 and MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA in
+ * place of the caller's, which put QEMU's GL on the testing PC's GPU.
+ * `input` is the profile's `audio_input` as the QEMU that runs names it.
  *
  * @return 0, or an error number: EINVAL for audio etude_qemu_argv refuses
  *         or an `sdl` profile without `input`, E2BIG when `out` is too small.
  */
 int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const char *input,
                    const struct etude_qemu_line *out);
+
+/**
+ * Say whether device `model` is one that a profile with a display may not
+ * have beside it: another display device, or the USB tablet, since a
+ * display's pointer is the PS/2 mouse.
+ */
+int etude_qemu_display_device(const char *model);
 
 /**
  * Say whether device `model` of a profile is a network card, which the
