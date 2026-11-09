@@ -316,6 +316,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ia32_fs",
+          "checks": "tests/host/ia32_fs_hosttest.c checks the i386 stat, statfs, dirent, flock, iovec, time, sigevent and select structures of the x86-64 kernel's compat calls and the joining of split 64-bit arguments against Linux 6.12 under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "syncobj",
           "checks": "tests/host/syncobj_hosttest.c drives binary and timeline syncobjs, out-of-order points, waits, transfers, queries, eventfds, files, a failed producer's error and the driver features under ASan and UBSan",
           "source": "scenario"
