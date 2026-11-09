@@ -348,7 +348,8 @@ int32_t evdev_open(fd_entry_t *e, int n);
 
 /**
  * Read whole records into `buf`: as many as fit in `count` bytes, in the
- * caller's layout, 16 bytes each on i686 and 24 on x86-64. A reader that
+ * caller's layout, 16 bytes each on i686 and 24 on x86-64, where an i386
+ * caller's call (`in_compat_syscall`) takes them in 16. A reader that
  * fell behind finds the oldest records dropped and a SYN_DROPPED in their
  * place. Sleeps while the queue is empty, unless the description is
  * nonblocking (-EAGAIN). Returns the bytes read, -EINVAL for a `count`

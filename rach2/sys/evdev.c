@@ -15,6 +15,7 @@
 #include "mm/usercopy.h"
 #include "proc/wait_queue.h"
 #include "rtc.h"
+#include "syscall.h"
 
 /*
  * A record is Linux's `struct input_event` as the caller's C library lays
@@ -25,6 +26,16 @@
 struct input_event {
     unsigned long sec;
     unsigned long usec;
+    uint16_t type;
+    uint16_t code;
+    int32_t value;
+};
+
+/* A record as an i386 program reads it from the x86-64 kernel, Linux's
+ * `input_event_compat`: 32-bit seconds and microseconds, 16 bytes. */
+struct input_event32 {
+    uint32_t sec;
+    uint32_t usec;
     uint16_t type;
     uint16_t code;
     int32_t value;
@@ -1085,13 +1096,40 @@ static int evdev_readable(void *arg)
     return c->packet != c->tail || dead(c);
 }
 
+/** The `n` records of `ev` as the reader takes them: as they are when they
+ * are `size` bytes, the native size, and otherwise put into `ev32` with
+ * their time in 32 bits, as Linux's input_event_to_user gives them to a
+ * compat caller. Returns the records to copy. */
+static const void *records(const struct input_event *ev, struct input_event32 *ev32, int n,
+                           uint32_t size)
+{
+    int i;
+
+    if (size == sizeof(*ev)) {
+        return ev;
+    }
+    for (i = 0; i < n; i++) {
+        ev32[i].sec = (uint32_t)ev[i].sec;
+        ev32[i].usec = (uint32_t)ev[i].usec;
+        ev32[i].type = ev[i].type;
+        ev32[i].code = ev[i].code;
+        ev32[i].value = ev[i].value;
+    }
+    return ev32;
+}
+
 int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct evdev_client *c = (struct evdev_client *)e->priv;
     struct input_event ev[8];
+    struct input_event32 ev32[8];
+    uint32_t size = sizeof(ev[0]);
     uint32_t done = 0;
 
-    if (count < sizeof(struct input_event)) {
+    if (in_compat_syscall()) {
+        size = sizeof(ev32[0]);
+    }
+    if (count < size) {
         return -EINVAL;
     }
     for (;;) {
@@ -1103,16 +1141,16 @@ int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
             spin_unlock_irqrestore(&evdev_lock, flags);
             return done ? (int32_t)done : -ENODEV;
         }
-        while (n < 8 && c->tail != c->packet && done + (n + 1) * sizeof(ev[0]) <= count) {
+        while (n < 8 && c->tail != c->packet && done + (n + 1) * size <= count) {
             ev[n++] = c->queue[c->tail];
             c->tail = (c->tail + 1) & c->qmask;
         }
         spin_unlock_irqrestore(&evdev_lock, flags);
         if (n > 0) {
-            if (copy_to_user(buf + done, ev, n * sizeof(ev[0])) != 0) {
+            if (copy_to_user(buf + done, records(ev, ev32, n, size), n * size) != 0) {
                 return -EFAULT;
             }
-            done += n * sizeof(ev[0]);
+            done += n * size;
             continue;
         }
         if (done) {
