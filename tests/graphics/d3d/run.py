@@ -74,18 +74,22 @@ def summaries(text, expression):
 def main():
     """Run FAMILY ROW in OUT and compare each unit with the recorded Linux outcomes."""
     if len(sys.argv) != 4:
-        raise SystemExit("usage: run.py probe|wine|vkd3d ROW OUT")
+        raise SystemExit("usage: run.py probe|wine|vkd3d|private ROW OUT")
     family, row, output = sys.argv[1:]
     if os.geteuid() == 0:
         raise SystemExit("d3d: run as an ordinary user")
+    out = Path(output).resolve()
+    out.mkdir(parents=True, exist_ok=False)
     if family == "private" and row == "files":
-        status = subprocess.call([str(HERE / "privatefilemusl"), "/tmp"])
+        status, _ = run_command([str(HERE / "privatefilemusl"), "/tmp"],
+                                os.environ.copy(), out / "private.log")
+        for line in (out / "private.log").read_text(errors="replace").splitlines():
+            if not line.startswith("@etude "):
+                print(line, flush=True)
         if status:
             raise SystemExit(status)
         print("D3DROW OK private files", flush=True)
         return
-    out = Path(output).resolve()
-    out.mkdir(parents=True, exist_ok=False)
     ref = json.loads((HERE / "ref" / "linux.json").read_text())
     env = os.environ.copy()
     for key in ("PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
@@ -205,7 +209,8 @@ def main():
                 counts = summaries(text, VK_SUMMARY)
                 expected = ref["vkd3d"][name]
                 # The discovery's SIGKILLs are memory exhaustion, never flakes.
-                flake = rc in (-signal.SIGSEGV, 128 + signal.SIGSEGV) and name in ref["lavapipe_flakes"]
+                flake = (rc in (-signal.SIGSEGV, 128 + signal.SIGSEGV) and
+                         name in ref["lavapipe_flakes"] and name + " begin" in text)
                 matched = flake or (counts is not None and name + " begin" in text and
                                     name + " end" in text and rc in (0, 1) and
                                     counts[1] in expected["failures"] and counts[0] >= expected["min_checks"] and
