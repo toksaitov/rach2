@@ -205,6 +205,9 @@ while a line waits.
 .It Pa dri/DEVICE/encoder-N/bridges
 Mode 0444.
 The bridges of the encoder's chain, which no driver has; empty.
+.It Pa dri/DEVICE/virtio_gpu_reset
+Mode 0200, for a virtio GPU with virgl; see
+.Xr virtio-gpu 4 .
 .It Pa dri/DEVICE/CONNECTOR/force
 Mode 0644, for each connector, by its name, such as
 .Pa Virtual-1 .

@@ -399,7 +399,7 @@ static void reset_pending(uint32_t h)
     pending = sync_file_get_fence(a.fence_fd);
     k_memset(&e, 0, sizeof(e));
     e.priv = reset_file_data;
-    CHECK(!strcmp(registered_path, "dri/0/virtio_gpu_reset") && reset_file_open(&e, 1) == 0,
+    CHECK(!strcmp(registered_path, "dri/DEV/virtio_gpu_reset") && reset_file_open(&e, 1) == 0,
           "the root reset entry opens and holds the device");
     CHECK(reset_file_ops->write(&e, "x", 1) == -EINVAL && !vg->dead,
           "invalid reset text does nothing");

@@ -1744,6 +1744,12 @@ void drm_debugfs_init(void);
 void drm_debugfs_register(struct drm_device *dev);
 /** Take `dev`'s files and links out of debugfs; for `drm_dev_unplug`. */
 void drm_debugfs_unregister(struct drm_device *dev);
+/** The path from debugfs's root of the file `name` in `dev`'s directory,
+ * `dri/DIR/name`, into the `cap` bytes at `path`, cut to fit: where a
+ * driver makes its own files, after `drm_dev_register`, as Linux's drivers
+ * make theirs in `dev->debugfs_root`. `dri/N` is a link, which no path
+ * that makes a file may pass. */
+void drm_debugfs_path(const struct drm_device *dev, const char *name, char *path, uint32_t cap);
 
 /* ------------------------------------------------------------------------
  * The console as a DRM client, in drm_client.c
