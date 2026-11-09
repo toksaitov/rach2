@@ -907,13 +907,14 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver);
 /** Register the device under the lowest free card index: its card node,
  * and its render node when it has DRIVER_RENDER, through the devfs
  * registry, with GET_UNIQUE's name made from `pci` or the driver's name
- * when the driver left `unique` empty; then tell the console
- * (`drm_client_dev_register`). 0, -ENOSPC past DRM_MAX_DEVICES, or the
- * registry's error, with nothing registered. The index stays the device's
- * until its record is released. */
+ * when the driver left `unique` empty; then make its /sys entries
+ * (`drm_sysfs_register`) and tell the console (`drm_client_dev_register`).
+ * 0, -ENOSPC past DRM_MAX_DEVICES, or the registry's error, with nothing
+ * registered. The index stays the device's until its record is released. */
 int32_t drm_dev_register(struct drm_device *dev);
-/** Unplug the device: the device loss above. Any later ioctl of its files
- * answers ENODEV; the record stays until its last holder lets go. */
+/** Unplug the device: the device loss above, its /sys entries removed
+ * (`drm_sysfs_unregister`). Any later ioctl of its files answers ENODEV;
+ * the record stays until its last holder lets go. */
 void drm_dev_unplug(struct drm_device *dev);
 /** Take and drop a reference to a device. */
 void drm_dev_get(struct drm_device *dev);
@@ -995,9 +996,47 @@ int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t fr
  * from its override, and its modes from the blob; the number of modes.
  * (76-5a) */
 int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len);
-/** Tell every listener that `dev`'s outputs changed: the console and, as
- * a uevent with HOTPLUG=1, user space. (76-8, 76-9a) */
+/** Tell user space that `dev`'s outputs changed: the uevent `change` of
+ * its card with HOTPLUG=1, which compositors listen for. (drm_sysfs.c) */
 void drm_kms_hotplug_event(struct drm_device *dev);
+/** The same for one connector, with CONNECTOR=its object's ID, as Linux's
+ * drm_sysfs_connector_hotplug_event sends after a probe of one output. */
+void drm_sysfs_connector_hotplug_event(struct drm_connector *connector);
+
+/* ------------------------------------------------------------------------
+ * The device in /sys, in drm_sysfs.c
+ */
+
+/*
+ * A registered device has Linux's entries: below its PCI function's
+ * directory, or below /sys/devices/platform/UNIQUE for a platform device,
+ * a `drm` directory holding cardN and, with DRIVER_RENDER, renderD(128+N),
+ * each with `dev`, `uevent` and the links `subsystem` and `device`, and
+ * below cardN a directory cardN-NAME for each connector with `status`,
+ * `enabled`, `dpms`, `modes`, `edid`, `connector_id` and `uevent`. Each
+ * node and connector has its link in /sys/class/drm, and each node its
+ * link MAJOR:MINOR in /sys/dev/char. Each comes with the uevent `add` and
+ * goes with `remove`. A device with no PCI function behind it that reports
+ * one (`sysfs_pci_virtual_add`, ../fs/sysfs.h) sets `pci` as a real one
+ * does. A driver adds files of its own below `drm_sysfs_card_dir` through
+ * ../fs/sysfs.h.
+ */
+
+/** Make the entries of `dev`, whose `index` is set, and send their `add`
+ * uevents; called by `drm_dev_register`. 0, or -errno, with nothing left
+ * made. */
+int32_t drm_sysfs_register(struct drm_device *dev);
+/** Send the `remove` uevents of `dev` and remove its entries, and the
+ * platform device's directory when its registration made it. */
+void drm_sysfs_unregister(struct drm_device *dev);
+/** Add the entries of a connector of a registered device, by its `index`,
+ * and send its `add`; `drm_sysfs_register` adds those the device has, and
+ * a driver calls this for one that comes later. 0, or -errno. */
+int32_t drm_sysfs_connector_add(struct drm_connector *connector);
+/** Remove a connector's entries, after its `remove`. */
+void drm_sysfs_connector_remove(struct drm_connector *connector);
+/** The handle (../fs/sysfs.h) of the cardN directory of `dev`, or 0. */
+int drm_sysfs_card_dir(const struct drm_device *dev);
 
 /* ------------------------------------------------------------------------
  * The console as a DRM client, in drm_client.c (76-11a)
