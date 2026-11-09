@@ -1427,13 +1427,6 @@ int sysfs_device_key(int node, int n)
     return -1;
 }
 
-/** The mode of a driver's /sys file, which no row stats: 0. */
-uint32_t sysfs_node_mode(int handle)
-{
-    (void)handle;
-    return 0;
-}
-
 /** No row's descriptor is a /sys file: 0. */
 int procfs_fd_is_sys(struct fd_entry *e)
 {
