@@ -12,6 +12,7 @@
  */
 
 #include "seccomp.h"
+#include "ns.h"
 #include "ptrace.h"
 #include "tgroup.h"
 #include "../../kernel.h"
@@ -543,7 +544,7 @@ static struct seccomp_filter *filter_from_user(uintptr_t uprog, int32_t *err)
         *err = -EINVAL;
         return NULL;
     }
-    if (!current_proc->no_new_privs && !proc_privileged(current_proc)) {
+    if (!current_proc->no_new_privs && !ns_privileged(current_proc, proc_userns(current_proc))) {
         *err = -EACCES;
         return NULL;
     }

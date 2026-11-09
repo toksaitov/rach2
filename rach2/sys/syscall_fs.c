@@ -6432,8 +6432,8 @@ long sys_fchdir(isr_params_t *params)
 /**
  * Whether the node `ref` holds may be a process's root: a directory, which
  * the KRFFS root is whatever its stored mode says, that the caller may
- * search, and a caller who is root, checked in that order, as Linux checks
- * them. A directory of /dev or /proc is EINVAL: those types take the rest
+ * search, and a caller with CAP_SYS_CHROOT, checked in Linux's order.
+ * A directory of /dev or /proc is EINVAL: those types take the rest
  * of a path in one call, and the resolver could not stop `..` inside it.
  * The exception is a /proc/PID/fdinfo the caller may read, which a
  * browser's sandbox enters to have a root that holds nothing once that
@@ -6467,7 +6467,7 @@ static int32_t root_check(const struct vfs_ref *ref)
         (procfs_resolve_id(vp) < 0 || !procfs_may_read(procfs_resolve_pid(vp->pid)))) {
         rc = -EACCES;
     }
-    if (rc == 0 && !ns_privileged(current_proc, proc_userns(current_proc))) {
+    if (rc == 0 && !cap_holds(current_proc, CAP_SYS_CHROOT)) {
         rc = -EPERM;
     }
     return rc == 0 && vp && vp->kind != VNODE_PROC_FDINFO_DIR ? -EINVAL : rc;

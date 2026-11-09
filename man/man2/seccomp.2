@@ -91,7 +91,9 @@ Add the filter the
 at
 .Fa args
 describes, of at most 4096 instructions.
-The caller must have set no_new_privs or be privileged.
+The caller must have set no_new_privs or hold
+.Dv CAP_SYS_ADMIN
+in its user namespace.
 The program descriptor and its length are checked before this privilege;
 a null descriptor fails with
 .Er EFAULT

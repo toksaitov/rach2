@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 10, 2026
 .Dt CHROOT 2
 .Os
 .Sh NAME
@@ -157,9 +157,9 @@ The kernel had no memory for the path.
 .Fa path ,
 or a component of it, is not a directory.
 .It Bq Er EPERM
-The caller is not privileged in its user namespace: in the first, its
-effective user ID is not 0; see
-.Xr unshare 2 .
+The caller lacks
+.Dv CAP_SYS_CHROOT
+in its user namespace.
 The errors above come first, as on Linux.
 .El
 .Sh SEE ALSO
