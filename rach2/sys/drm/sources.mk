@@ -12,6 +12,7 @@ DRM_C_SRC = sys/drm/drm.c \
     sys/drm/drm_mode.c \
     sys/drm/drm_prime.c \
     sys/drm/drm_syncobj.c \
+    sys/drm/drm_sysfs.c \
     sys/drm/drm_vblank.c \
     sys/drm/virtio_gpu.c \
     sys/drm/vkms.c
