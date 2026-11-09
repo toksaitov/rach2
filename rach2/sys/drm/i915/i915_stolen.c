@@ -63,14 +63,6 @@ uint64_t i915_stolen_reserve_early(struct frame_map *map)
     return map->reserved_bytes - before;
 }
 
-#if defined(__x86_64__)
-/** The device's number and function, as the IOMMU's calls take them. */
-static uint8_t i915_devfn(const struct drm_i915_private *i915)
-{
-    return (uint8_t)((i915->pci.device << 3) | i915->pci.function);
-}
-#endif
-
 /** Whether the frame allocator owns a frame of [base, base + size). */
 static int i915_stolen_allocator_owns(uint64_t base, uint64_t size)
 {
@@ -84,15 +76,21 @@ static int i915_stolen_allocator_owns(uint64_t base, uint64_t size)
     return 0;
 }
 
+#if defined(__x86_64__)
+/** The device's number and function, as the IOMMU's calls take them. */
+static uint8_t i915_devfn(const struct drm_i915_private *i915)
+{
+    return (uint8_t)((i915->pci.device << 3) | i915->pci.function);
+}
+
 /**
  * Check [base, base + size) against the reserved regions the firmware's
  * DMAR table names for the device: 1 when it lies inside one, 0 when the
  * table names some and it lies outside them all, and -1 when it names
- * none, as without VT-d and on i686, whose kernel does not read the table.
+ * none, as without VT-d. Only x86-64's kernel reads the table.
  */
 static int i915_stolen_in_rmrr(struct drm_i915_private *i915, uint64_t base, uint64_t size)
 {
-#if defined(__x86_64__)
     struct iommu_region r[8];
     int i, n, named = 0;
 
@@ -107,25 +105,8 @@ static int i915_stolen_in_rmrr(struct drm_i915_private *i915, uint64_t base, uin
         }
     }
     return named ? 0 : -1;
-#else
-    (void)i915;
-    (void)base;
-    (void)size;
-    return -1;
-#endif
 }
-
-/** Whether VT-d translates for the device, as Linux's i915_vtd_active:
- * never on i686, whose kernel brings no unit up. */
-static int i915_vtd_active(struct drm_i915_private *i915)
-{
-#if defined(__x86_64__)
-    return iommu_present() && iommu_unit_of(i915->pci.bus, i915_devfn(i915)) >= 0;
-#else
-    (void)i915;
-    return 0;
 #endif
-}
 
 /**
  * The part at the top of stolen memory that the firmware keeps, from
@@ -165,8 +146,11 @@ static int i915_stolen_reserved(struct drm_i915_private *i915, struct i915_stole
 void i915_stolen_init(struct drm_i915_private *i915)
 {
     struct i915_stolen *st = &i915->stolen;
+    const char *where = "", *dmar = "";
     uint64_t base, size;
+#if defined(__x86_64__)
     int rmrr;
+#endif
 
     k_memset(st, 0, sizeof(*st));
     i915_stolen_range(i915->gmch_ctrl, i915->bsm, &base, &size);
@@ -183,6 +167,7 @@ void i915_stolen_init(struct drm_i915_private *i915)
              (unsigned long)base, (unsigned long)(base + size - 1));
         return;
     }
+#if defined(__x86_64__)
     rmrr = i915_stolen_in_rmrr(i915, base, size);
     if (rmrr == 0) {
         klog(KLOG_ERR, "i915",
@@ -190,18 +175,27 @@ void i915_stolen_init(struct drm_i915_private *i915)
              (unsigned long)base, (unsigned long)(base + size - 1));
         return;
     }
+#endif
     st->base = base;
     st->size = size;
     if (i915_stolen_reserved(i915, st) < 0) {
         k_memset(st, 0, sizeof(*st));
         return;
     }
-    st->in_rmrr = rmrr == 1;
-    /* As Linux on a chip before graphics version 8: no buffers in stolen
-     * memory while VT-d translates for the device. */
-    st->for_objects = !i915_vtd_active(i915);
+    st->for_objects = 1;
+#if defined(__x86_64__)
+    if (rmrr == 1) {
+        st->in_rmrr = 1;
+        where = ", inside the device's reserved region";
+    }
+    /* As Linux on a chip before graphics version 8 (i915_vtd_active): no
+     * buffers in stolen memory while VT-d translates for the device. i686's
+     * kernel brings no unit up. */
+    if (iommu_present() && iommu_unit_of(i915->pci.bus, i915_devfn(i915)) >= 0) {
+        st->for_objects = 0;
+        dmar = "; DMAR active, no buffers in it";
+    }
+#endif
     klog(KLOG_INFO, "i915", "stolen: [mem 0x%lx-0x%lx], %lu KiB usable%s%s", (unsigned long)base,
-         (unsigned long)(base + size - 1), (unsigned long)(st->usable_size / 1024),
-         st->in_rmrr ? ", inside the device's reserved region" : "",
-         st->for_objects ? "" : "; DMAR active, no buffers in it");
+         (unsigned long)(base + size - 1), (unsigned long)(st->usable_size / 1024), where, dmar);
 }
