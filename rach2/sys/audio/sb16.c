@@ -250,7 +250,14 @@ static uint8_t dsp_read(void)
  * write 0, then poll the read port for the 0xAA byte the DSP emits once it has
  * come back up.
  *
- * @return true if 0xAA arrived, false on timeout (no SB16 at this base).
+ * An ISA port that nothing decodes reads as all ones, so where no card is
+ * the read-status port says a byte is ready and the data port gives 0xFF,
+ * which a DSP never sends after a reset: the probe ends there, as Linux's
+ * `sb_dsp_reset` ends at its one read of the data port, rather than waiting
+ * 100 times on 100 reads of port 0x80, 10,000 exits under a hypervisor.
+ *
+ * @return true if 0xAA arrived, false when the port reads all ones or on
+ * timeout (no SB16 at this base).
  */
 static bool dsp_reset(void)
 {
@@ -266,8 +273,13 @@ static bool dsp_reset(void)
 
     for (i = 0; i < 100; i++) {
         if (dsp_read_ready()) {
-            if (inb(sb16_base + SB16_READ_DATA) == 0xAA) {
+            uint8_t data = inb(sb16_base + SB16_READ_DATA);
+
+            if (data == 0xAA) {
                 return true;
+            }
+            if (data == 0xFF) {
+                return false;
             }
         }
         for (j = 0; j < 100; j++) {
