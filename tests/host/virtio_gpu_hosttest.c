@@ -35,6 +35,7 @@
 #include "drm/drm_atomic.c"
 #include "drm/drm_legacy.c"
 #include "drm/drm_edid.c"
+#include "drm/drm_vblank.c"
 #include "dmabuf/fence.c"
 #include "drm/virtio_gpu.c"
 
@@ -252,10 +253,20 @@ int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
     return 0;
 }
 
-/** Give back an event's space and free it. */
+/** Signal an event's fence, give back its space, if it has a file, and
+ * free it. */
 void drm_send_event(struct drm_pending_event *e)
 {
-    e->file->event_space += e->length;
+    struct dma_fence *fence = e->fence;
+
+    e->fence = NULL;
+    if (fence) {
+        dma_fence_signal(fence);
+        dma_fence_put(fence);
+    }
+    if (e->file) {
+        e->file->event_space += e->length;
+    }
     kfree(e);
 }
 
@@ -270,6 +281,22 @@ struct dma_fence *sync_file_get_fence(int32_t fd)
 {
     (void)fd;
     return NULL;
+}
+
+/** No descriptor table: a sync file cannot be made. */
+int32_t sync_file_create(struct dma_fence *fence, const char *name)
+{
+    (void)fence;
+    (void)name;
+    return -EMFILE;
+}
+
+/** Nothing to free. */
+int fd_free(fd_table_t *table, int fd)
+{
+    (void)table;
+    (void)fd;
+    return 0;
 }
 
 /* ---- the device's record and its objects, as drm.c and drm_gem.c ---- */
