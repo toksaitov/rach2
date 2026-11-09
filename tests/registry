@@ -147,6 +147,7 @@ museapi|qemu|full||4096|x86_64
 conload|qemu,mformat|core
 textbusy|qemu|full||128|x86_64
 watchdog|qemu|full|watchdog/*|128
+i915fake|qemu|full||2048|x86_64
 d3d|qemu,mke2fs|full||17408|x86_64
 d3d-wine|qemu,mke2fs|full||17408|x86_64
 d3d-vkd3d|qemu,mke2fs|full||17408|x86_64
