@@ -14,6 +14,7 @@
  * host-deps: rach2/sys/drm/i915/i915_rps.c rach2/sys/tick.c
  * host-deps: rach2/sys/drm/i915/intel_bios.c
  * host-deps: rach2/sys/drm/i915/intel_opregion.c
+ * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
  *
  * i915_pci.c is included whole. The bus holds the model's 00:02.0, whose
  * configuration space the PCI calls read and write; the DRM core is a
@@ -427,6 +428,37 @@ int32_t drm_dev_register(struct drm_device *dev)
     dev->index = 0;
     k_strncpy(dev->unique, "pci:0000:00:02.0", sizeof(dev->unique) - 1);
     return 0;
+}
+
+/* The driver's buffers, i915_gem.c and the files beside it, which the bind
+ * reaches only through the DRM core's hooks and the unplug. */
+const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
+
+struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev, struct dma_buf *buf,
+                                             int32_t *err)
+{
+    (void)dev;
+    (void)buf;
+    *err = -ENODEV;
+    return 0;
+}
+
+void i915_gem_unplug(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+/* A page of a backend that stands in for the aperture, which the chip's
+ * backend here has not. */
+void *kmap_temp(uintptr_t phys)
+{
+    (void)phys;
+    return 0;
+}
+
+void kunmap_temp(void *va)
+{
+    (void)va;
 }
 
 void drm_dev_put(struct drm_device *dev)

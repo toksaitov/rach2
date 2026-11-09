@@ -53,10 +53,10 @@ static struct drm_i915_private *i915_devices[4];
 static void i915_unplug(struct drm_device *dev);
 static void i915_release(struct drm_device *dev);
 
-/* What the driver says of itself: Linux's i915, whose own ioctls the later
- * parts add. */
-static const struct drm_driver i915_drm_driver = {DRM_IDENT_I915, 0, 0, 0,           0,
-                                                  i915_unplug,    0, 0, i915_release};
+/* What the driver says of itself: Linux's i915, with its buffer ioctls. */
+static const struct drm_driver i915_drm_driver = {
+    DRM_IDENT_I915,  0,           0, 0, i915_gem_prime_import, i915_unplug, i915_ioctls,
+    I915_NUM_IOCTLS, i915_release};
 
 const struct i915_id *i915_id_lookup(uint16_t device_id)
 {
@@ -150,8 +150,9 @@ static void i915_devices_remove(struct drm_i915_private *i915)
 
 /**
  * The DRM core's unplug hook: RPS and RC6 turned off, the device stops
- * interrupting, its message and vector are given back, and its rings stop
- * and give their pages back. The record stays until its last reference.
+ * interrupting, its message and vector are given back, its rings stop and
+ * give their pages back, and programs' maps of its buffers are revoked.
+ * The record stays until its last reference.
  */
 static void i915_unplug(struct drm_device *dev)
 {
@@ -165,14 +166,16 @@ static void i915_unplug(struct drm_device *dev)
     i915_msi_stop(i915);
     i915_devices_remove(i915);
     i915_gt_fini(i915);
+    i915_gem_unplug(i915);
 }
 
-/** The DRM core's release hook: give the scratch page back and free the
- * record. */
+/** The DRM core's release hook: unmap the aperture's windows, give the
+ * scratch page back and free the record. */
 static void i915_release(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
+    i915_aperture_fini(&i915->gem.aperture);
     i915_ggtt_fini(i915);
     intel_bios_fini(&i915->vbt);
     intel_opregion_fini(&i915->opregion);
@@ -314,6 +317,8 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     err = i915_base_init(i915);
     if (err == 0) {
         i915_bios_setup(i915, command);
+        i915_aperture_init(&i915->gem.aperture, i915->gmadr_phys, i915->ggtt.mappable_end);
+        i915_gem_init_hw(i915);
         err = i915_devices_add(i915);
     }
     if (err < 0) {

@@ -5,6 +5,7 @@
  */
 
 #include "i915.h"
+#include "i915_drm.h"
 #include "i915_reg.h"
 
 #include "../../fs/debugfs.h"
@@ -44,6 +45,20 @@
  * 0 for the overclocking parameters and the RC6 voltages, the frequency
  * table taken, and any other command refused as an illegal one. The
  * GTT's entries are memory of the size the GMCH control word gives.
+ *
+ * The aperture. Nothing backs BAR 2, so the fake gives each page of the
+ * aperture that is reached a shadow page of its own (`aperture_page`),
+ * filled from the memory the GTT's entry maps, or, inside a fence, from
+ * where the fence's tiling and the controller's swizzle put each byte, as
+ * the chip's detiler does; the controller swizzles as the chip's on the
+ * Lenovo, bits 9 and 10 for X and 9 for Y, while its channels' DIMMs
+ * (MAD_DIMM_C0 and C1) are of one size. A shadow page remembers the entry
+ * and the fence it was filled under and is filled again when either has
+ * changed. The driver moves the bytes between a shadow and memory where
+ * the chip's aperture would have (`aperture_sync`): to memory once writes
+ * through it are flushed, and from memory when the object moves into the
+ * aperture's domain; a shadow whose entry or fence has changed since it
+ * was filled is not written back.
  *
  * Rings. A ring runs from its head to its tail whenever the driver writes
  * its tail, its control or its MI_MODE, while it is valid, not stopped and
@@ -130,6 +145,28 @@
 
 static const char *const fake_fault_names[FAKE_NFAULTS] = {"submit", "bind", "hang", "irq"};
 
+/* The aperture's pages, 256 MiB of them, and the shadow pages that stand
+ * in for them, in directories of FAKE_SHADOW_DIR made as they are used. */
+#define FAKE_APERTURE_PAGES (0x10000000u >> 12)
+#define FAKE_SHADOW_DIR     512u
+#define FAKE_SHADOW_DIRS    (FAKE_APERTURE_PAGES / FAKE_SHADOW_DIR)
+
+/* The bytes the detiler moves together: a run of a Y tile's row, inside
+ * which neither the tiling nor the swizzle moves a byte. */
+#define FAKE_DETILE_RUN 16u
+
+/* The shadow of one page of the aperture: `va` its kernel address and
+ * `phys` its frame, NULL and 0 until it is first reached; `pte` the GTT's
+ * entry and `fence_lo` and `fence_hi` the fence over it when it was last
+ * filled, 0 for none. */
+struct fake_shadow {
+    uint8_t *va;
+    uintptr_t phys;
+    uint32_t pte;
+    uint32_t fence_lo;
+    uint32_t fence_hi;
+};
+
 /* One of the two rings the driver starts. `hung` is set from a hang until
  * a reset of `domain`; `commands` and `batches` count what it ran. */
 struct fake_ring {
@@ -151,13 +188,16 @@ struct fake_ring {
  * `raise_pending` is set by a rise until the access that made it ends.
  * `raise` sends the message: the write to edu's `doorbell` in the kernel,
  * the test's own in a host test. `i915` is the device once registered,
- * and `light` first light's last result, or 1 before it ran.
+ * and `light` first light's last result, or 1 before it ran. `shadow`
+ * holds the aperture's shadow pages, FAKE_SHADOW_DIR to a directory, each
+ * made at its first use.
  */
 struct i915_fake {
     struct spinlock lock;
     uint32_t *regs;
     uint32_t *gtt;
     uint32_t gtt_entries;
+    struct fake_shadow *shadow[FAKE_SHADOW_DIRS];
     struct fake_ring ring[2];
     uint32_t armed[FAKE_NFAULTS];
     uint32_t injected[FAKE_NFAULTS];
@@ -697,12 +737,213 @@ static int32_t fake_fault(struct i915_hw *hw, int point)
     return err;
 }
 
+/* ---- the aperture ---- */
+
+/** The fence over the aperture's offset `addr`, by its two registers, in
+ * `*lo` and `*hi`; both 0 when no valid fence covers it. */
+static void fake_fence_at(struct i915_fake *f, uint32_t addr, uint32_t *lo, uint32_t *hi)
+{
+    int i;
+
+    *lo = *hi = 0;
+    for (i = 0; i < I915_NUM_FENCES; i++) {
+        uint32_t l = R(f, FENCE_REG_GEN6_LO(i)), h = R(f, FENCE_REG_GEN6_HI(i));
+
+        if ((l & I965_FENCE_REG_VALID) && addr >= (l & 0xfffff000u) &&
+            addr < (h & 0xfffff000u) + 4096u) {
+            *lo = l;
+            *hi = h;
+            return;
+        }
+    }
+}
+
+/** The swizzle the fake's controller gives tiles of `tiling`, as the
+ * driver reads it: bits 9 and 10 for X and 9 for Y when both channels
+ * hold DIMMs of one size. */
+static uint32_t fake_swizzle(struct i915_fake *f, uint32_t tiling)
+{
+    uint32_t mask = MAD_DIMM_A_SIZE_MASK | MAD_DIMM_B_SIZE_MASK;
+
+    if ((R(f, MAD_DIMM_C0) & mask) != (R(f, MAD_DIMM_C1) & mask)) {
+        return I915_BIT_6_SWIZZLE_NONE;
+    }
+    return tiling == I915_TILING_X ? I915_BIT_6_SWIZZLE_9_10 : I915_BIT_6_SWIZZLE_9;
+}
+
+/**
+ * Copy the aperture's page at `addr` between its shadow `sh` and memory,
+ * to memory when `to_memory`, a run at a time through the GTT's entries
+ * and, under the fence `lo` and `hi`, through its tiling. A run the GTT
+ * maps nothing at reads as zeroes and is not written.
+ */
+static void fake_shadow_copy(struct i915_fake *f, struct fake_shadow *sh, uint32_t addr,
+                             uint32_t lo, uint32_t hi, int to_memory)
+{
+    uint32_t start = lo & 0xfffff000u, stride = ((hi & 0xfffu) + 1u) * 128u;
+    uint32_t tiling = (lo & (1u << I965_FENCE_TILING_Y_SHIFT)) ? I915_TILING_Y : I915_TILING_X;
+    uint32_t swizzle = fake_swizzle(f, tiling), off;
+    uintptr_t mapped = 0;
+    uint8_t *page = 0;
+
+    for (off = 0; off < 4096u; off += FAKE_DETILE_RUN) {
+        uint32_t at = addr + off;
+        uint64_t phys;
+
+        if (lo) {
+            at = start + (uint32_t)i915_tiled_offset(tiling, stride, swizzle, at - start);
+        }
+        phys = fake_gtt_phys(f, at);
+        if (phys == 0 || phys > (uint64_t)(uintptr_t)-1) {
+            if (!to_memory) {
+                k_memset(sh->va + off, 0, FAKE_DETILE_RUN);
+            }
+            continue;
+        }
+        if (!page || mapped != (uintptr_t)(phys & ~(uint64_t)0xfffu)) {
+            if (page) {
+                kunmap_temp(page);
+            }
+            mapped = (uintptr_t)(phys & ~(uint64_t)0xfffu);
+            page = (uint8_t *)kmap_temp(mapped);
+            if (!page) {
+                return;
+            }
+        }
+        if (to_memory) {
+            k_memcpy(page + (phys & 0xfffu), sh->va + off, FAKE_DETILE_RUN);
+        } else {
+            k_memcpy(sh->va + off, page + (phys & 0xfffu), FAKE_DETILE_RUN);
+        }
+    }
+    if (page) {
+        kunmap_temp(page);
+    }
+}
+
+/** The shadow of the aperture's page `index`, made when `make`; NULL when
+ * there is none or no memory for it. */
+static struct fake_shadow *fake_shadow_of(struct i915_fake *f, uint32_t index, int make)
+{
+    struct fake_shadow **dir = &f->shadow[index / FAKE_SHADOW_DIR];
+    struct fake_shadow *sh;
+
+    if (!*dir) {
+        if (!make) {
+            return 0;
+        }
+        *dir = (struct fake_shadow *)kzalloc(FAKE_SHADOW_DIR * sizeof(**dir));
+        if (!*dir) {
+            return 0;
+        }
+    }
+    sh = &(*dir)[index % FAKE_SHADOW_DIR];
+    if (!sh->va && make) {
+        sh->va = (uint8_t *)kalloc_pages(1, &sh->phys);
+    }
+    return sh->va ? sh : 0;
+}
+
+/** Fill the shadow `sh` of the aperture's page at `addr` from memory and
+ * remember the entry and fence it was filled under. */
+static void fake_shadow_fill(struct i915_fake *f, struct fake_shadow *sh, uint32_t addr)
+{
+    fake_fence_at(f, addr, &sh->fence_lo, &sh->fence_hi);
+    sh->pte = f->gtt && (addr >> 12) < f->gtt_entries ? f->gtt[addr >> 12] : 0;
+    fake_shadow_copy(f, sh, addr, sh->fence_lo, sh->fence_hi, 0);
+}
+
+/** Whether the shadow `sh` of the page at `addr` was filled under the
+ * entry and fence over it now. */
+static int fake_shadow_current(struct i915_fake *f, const struct fake_shadow *sh, uint32_t addr)
+{
+    uint32_t lo, hi, pte = f->gtt && (addr >> 12) < f->gtt_entries ? f->gtt[addr >> 12] : 0;
+
+    fake_fence_at(f, addr, &lo, &hi);
+    return sh->pte == pte && sh->fence_lo == lo && sh->fence_hi == hi;
+}
+
+/**
+ * i915_hw.h's `aperture_page`: the shadow of the aperture's page at
+ * `offset`, made and filled at its first use and filled again when its
+ * entry or fence has changed. The driver calls it under the big kernel
+ * lock, as it does every aperture operation, and the interrupt handler
+ * changes neither the entries nor the fences, so the fake's lock is not
+ * taken. 0, or -1 past the aperture or without memory.
+ */
+static int fake_aperture_page(struct i915_hw *hw, uint64_t offset, uintptr_t *phys)
+{
+    struct i915_fake *f = (struct i915_fake *)hw->priv;
+    uint32_t index = (uint32_t)(offset >> 12), addr = index << 12;
+    struct fake_shadow *sh;
+    int fresh;
+
+    if (offset >= (uint64_t)FAKE_APERTURE_PAGES << 12) {
+        return -1;
+    }
+    fresh = !fake_shadow_of(f, index, 0);
+    sh = fake_shadow_of(f, index, 1);
+    if (!sh) {
+        return -1;
+    }
+    if (fresh || !fake_shadow_current(f, sh, addr)) {
+        fake_shadow_fill(f, sh, addr);
+    }
+    *phys = sh->phys;
+    return 0;
+}
+
+/** i915_hw.h's `aperture_sync`: the shadows of [offset, offset + size)
+ * written to memory, those filled under the entry and fence over them
+ * now, or filled from it. */
+static void fake_aperture_sync(struct i915_hw *hw, uint64_t offset, uint64_t size, int to_memory)
+{
+    struct i915_fake *f = (struct i915_fake *)hw->priv;
+    uint64_t at, end = offset + size;
+
+    if (end > (uint64_t)FAKE_APERTURE_PAGES << 12) {
+        end = (uint64_t)FAKE_APERTURE_PAGES << 12;
+    }
+    for (at = offset & ~(uint64_t)0xfffu; at < end; at += 4096u) {
+        struct fake_shadow *sh = fake_shadow_of(f, (uint32_t)(at >> 12), 0);
+
+        if (!sh) {
+            continue;
+        }
+        if (!to_memory) {
+            fake_shadow_fill(f, sh, (uint32_t)at);
+        } else if (fake_shadow_current(f, sh, (uint32_t)at)) {
+            fake_shadow_copy(f, sh, (uint32_t)at, sh->fence_lo, sh->fence_hi, 1);
+        }
+    }
+}
+
+/** Free the aperture's shadow pages. */
+static void fake_shadow_free(struct i915_fake *f)
+{
+    uint32_t d, i;
+
+    for (d = 0; d < FAKE_SHADOW_DIRS; d++) {
+        if (!f->shadow[d]) {
+            continue;
+        }
+        for (i = 0; i < FAKE_SHADOW_DIR; i++) {
+            if (f->shadow[d][i].va) {
+                kfree_pages(f->shadow[d][i].va, 1);
+            }
+        }
+        kfree(f->shadow[d]);
+        f->shadow[d] = 0;
+    }
+}
+
 /** Free the fake and its memory. */
 static void i915_fake_free(struct i915_fake *f)
 {
     if (!f) {
         return;
     }
+    fake_shadow_free(f);
     kfree(f->gtt);
     kfree(f->regs);
     kfree(f);
@@ -1020,8 +1261,8 @@ static void fake_release(struct i915_hw *hw)
 }
 
 static const struct i915_hw_ops fake_ops = {
-    "fake",     fake_read32, fake_write32, fake_delay_us, fake_gtt_map, fake_config_read32,
-    fake_fault, fake_attach, fake_detach,  fake_release};
+    "fake",     fake_read32, fake_write32, fake_delay_us, fake_gtt_map,       fake_config_read32,
+    fake_fault, fake_attach, fake_detach,  fake_release,  fake_aperture_page, fake_aperture_sync};
 
 /**
  * Make a fake chip at power-on, with every interrupt source masked, every

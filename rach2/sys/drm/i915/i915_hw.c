@@ -240,7 +240,8 @@ static int32_t i915_mmio_gtt_map(struct i915_hw *hw, uint64_t phys, uint32_t siz
 }
 
 static const struct i915_hw_ops i915_mmio_ops = {
-    "mmio", i915_mmio_read, i915_mmio_write, i915_mmio_delay, i915_mmio_gtt_map, 0, 0, 0, 0, 0};
+    "mmio", i915_mmio_read, i915_mmio_write, i915_mmio_delay, i915_mmio_gtt_map, 0, 0, 0, 0, 0, 0,
+    0};
 
 int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
 {
