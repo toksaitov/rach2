@@ -444,6 +444,7 @@ taskset 1 busybox-util-linux
 tcpsvd 1 busybox-networking
 tee 1 busybox-coreutils
 tee 2 splice
+vmsplice 2 splice
 telnet 1 busybox-networking
 telnetd 1 busybox-networking
 test 1 busybox-coreutils

@@ -240,6 +240,7 @@
 #define SYS_GET_ROBUST_LIST        274
 #define SYS_SPLICE                 275
 #define SYS_TEE                    276
+#define SYS_VMSPLICE               278
 #define SYS_UTIMENSAT              280
 #define SYS_EPOLL_PWAIT            281
 #define SYS_SIGNALFD               282

@@ -49,6 +49,7 @@
 #define SYS_SENDFILE64        239
 #define SYS_SPLICE            313
 #define SYS_TEE               315
+#define SYS_VMSPLICE          316
 #define SYS_COPY_FILE_RANGE   377
 #define SYS_CLOSE_RANGE       436
 #define SYS_CLONE3            435

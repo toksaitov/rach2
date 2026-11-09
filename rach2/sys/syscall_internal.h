@@ -54,10 +54,13 @@ long sys_ftruncate(isr_params_t *params);
 /* A call's argument `n` of the frame `p` as a signed value of the
  * register's width, and the largest such value: 32 bits on i686 and 64 on
  * x86-64, by the width of the frame's own registers, so a host test of the
- * i686 kernel reads them as the kernel does whatever `long` is there. */
-#define SC_SIGNED(p, n) \
-    (sizeof(SC_RET(p)) == 4 ? (long long)(int32_t)SC_ARG(p, n) : (long long)SC_ARG(p, n))
-#define SC_SIGNED_MAX(p) (~(uint64_t)0 >> (65 - 8 * sizeof(SC_RET(p))))
+ * i686 kernel reads them as the kernel does whatever `long` is there. An i386
+ * call on the x86-64 kernel (SC_COMPAT) passes 32-bit registers, and so has
+ * i686's width: its lseek, truncate and ftruncate take a signed 32-bit
+ * offset, as Linux's compat_sys_lseek and the others do. */
+#define SC_WORD32(p)     (sizeof(SC_RET(p)) == 4 || SC_COMPAT(p))
+#define SC_SIGNED(p, n)  (SC_WORD32(p) ? (long long)(int32_t)SC_ARG(p, n) : (long long)SC_ARG(p, n))
+#define SC_SIGNED_MAX(p) (SC_WORD32(p) ? (uint64_t)0x7FFFFFFF : ~(uint64_t)0 >> 1)
 
 /*
  * The cores of the calls whose arguments differ in shape between i386 and
@@ -155,6 +158,11 @@ struct kernel_iovec {
     uintptr_t iov_base;
     unsigned long iov_len;
 };
+
+/** Read element `i` of the caller's vector at `uvec` into `iov`, in the
+ * caller's layout: an i386 call's iovec on the x86-64 kernel is two 32-bit
+ * words. 0, or -EFAULT. */
+int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i);
 
 /* Linux's `struct user_msghdr`, which sendmsg(2) and recvmsg(2) take. */
 struct kernel_msghdr {
@@ -546,6 +554,8 @@ long sys_memfd_create(isr_params_t *params);
 long sys_splice(isr_params_t *params);
 
 long sys_tee(isr_params_t *params);
+
+long sys_vmsplice(isr_params_t *params);
 
 long sys_sendfile(isr_params_t *params);
 

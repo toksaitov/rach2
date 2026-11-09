@@ -985,6 +985,29 @@ long sys_write(isr_params_t *params)
                     USER_RW_LEN(SC_ARG(params, 2)));
 }
 
+/** Element `i` of the vector of struct iovec at `uvec`, in the caller's
+ * layout, as Linux's iovec_from_user reads it: two 32-bit words for an i386
+ * call on the x86-64 kernel (`in_compat_syscall`), whose length is then never
+ * past 0xFFFFFFFF. 0, or -EFAULT. */
+int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
+{
+    if (in_compat_syscall()) {
+        uint32_t w[2];
+
+        if (copy_from_user(w, (const void __user *)(uvec + (uintptr_t)i * sizeof(w)), sizeof(w)) !=
+            0) {
+            return -EFAULT;
+        }
+        iov->iov_base = w[0];
+        iov->iov_len = w[1];
+        return 0;
+    }
+    return copy_from_user(iov, (const void __user *)(uvec + (uintptr_t)i * sizeof(*iov)),
+                          sizeof(*iov)) != 0
+               ? -EFAULT
+               : 0;
+}
+
 /**
  * Before a writev to `fd` open for writing on a tmpfs file: take the
  * mount's namespace lock, which every write and size change of the file
@@ -1013,10 +1036,8 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
     }
     ofd = entry->ofd;
     for (i = 0; i < iovcnt; i++) {
-        if (copy_from_user(
-                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
-                sizeof(iov)) != 0 ||
-            iov.iov_len > 0x7FFFFFFFu || extent > 0x7FFFFFFFu - iov.iov_len ||
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0 || iov.iov_len > 0x7FFFFFFFu ||
+            extent > 0x7FFFFFFFu - iov.iov_len ||
             (iov.iov_len > 0 && !user_buffer_ok(iov.iov_base, iov.iov_len, 0))) {
             break;
         }
@@ -1055,9 +1076,7 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
     for (i = 0; i < iovcnt; i++) {
         int32_t r;
 
-        if (copy_from_user(
-                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
-                sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             return (total > 0) ? total : -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -5535,9 +5554,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
     for (i = 0; i < iovcnt; i++) {
         uint32_t n;
 
-        if (copy_from_user(
-                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
-                sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             break;
         }
         n = USER_LEN32(iov.iov_len);
@@ -5593,9 +5610,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
     for (i = 0; i < iovcnt && (int)offset < taken; i++) {
         uint32_t chunk;
 
-        if (copy_from_user(
-                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
-                sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             break;
         }
         if (iov.iov_len == 0) {
@@ -5670,9 +5685,7 @@ long sys_readv(isr_params_t *params)
     }
 
     for (i = 0; i < iovcnt; i++) {
-        if (copy_from_user(
-                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
-                sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             return -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -5700,9 +5713,7 @@ long sys_readv(isr_params_t *params)
     for (i = 0; i < iovcnt; i++) {
         int32_t r;
 
-        if (copy_from_user(
-                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
-                sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             return (total > 0) ? total : -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -10738,8 +10749,7 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
         return -EINVAL;
     }
     for (i = 0; i < iovcnt; i++) {
-        if (copy_from_user(&iov, (const void __user *)(iov_user + (uintptr_t)i * sizeof(iov)),
-                           sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             return -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -10759,8 +10769,7 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     for (i = 0; i < iovcnt; i++) {
         long r;
 
-        if (copy_from_user(&iov, (const void __user *)(iov_user + (uintptr_t)i * sizeof(iov)),
-                           sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             return total > 0 ? total : -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -11493,6 +11502,149 @@ long sys_tee(isr_params_t *params)
     }
     return pipe_tee(in, out, len,
                     (flags & SPLICE_F_NONBLOCK) || copy_nonblock(in) || copy_nonblock(out), 0);
+}
+
+/* The bytes vmsplice moves from a pipe through the kernel stack at a time. */
+#define VMSPLICE_CHUNK 512u
+
+/**
+ * Copy the pipe of the read end `e` into the `iovcnt` buffers of the
+ * caller's vector at `uiov`, in order, for vmsplice: the first buffer waits
+ * for bytes unless `nonblock`, as a read does, and the rest take only what
+ * the pipe holds, as Linux's vmsplice_to_user stops at an empty pipe once it
+ * has copied. Bytes leave the pipe only once copied out. Returns the bytes
+ * copied, 0 for an empty pipe with no writer, or the first error.
+ */
+static long vmsplice_read(fd_entry_t *e, uintptr_t uiov, int iovcnt, int nonblock)
+{
+    uint8_t chunk[VMSPLICE_CHUNK];
+    struct kernel_iovec iov;
+    long total = 0;
+    int i;
+
+    for (i = 0; i < iovcnt; i++) {
+        uintptr_t done = 0;
+
+        if (iov_fetch(&iov, uiov, (uint32_t)i) != 0) {
+            return total > 0 ? total : -EFAULT;
+        }
+        while (done < iov.iov_len) {
+            uint32_t want = iov.iov_len - done > VMSPLICE_CHUNK ? VMSPLICE_CHUNK
+                                                                : (uint32_t)(iov.iov_len - done);
+            int32_t got = pipe_splice_peek(e, chunk, want, nonblock || total > 0);
+
+            if (got <= 0) {
+                return total > 0 ? total : got;
+            }
+            if (copy_to_user((void __user *)(iov.iov_base + done), chunk, (uint32_t)got) != 0) {
+                pipe_splice_consume(e, 0);
+                return total > 0 ? total : -EFAULT;
+            }
+            pipe_splice_consume(e, (uint32_t)got);
+            done += (uint32_t)got;
+            total += got;
+        }
+    }
+    return total;
+}
+
+/**
+ * Copy the `iovcnt` buffers of the caller's vector at `uiov` into the pipe
+ * of the write end `e`, in order, for vmsplice, each as a write of the pipe
+ * does, waiting for room unless `nonblock`. A short write ends the call.
+ * Returns the bytes copied, or the first error when none were.
+ */
+static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, int nonblock)
+{
+    struct kernel_iovec iov;
+    long total = 0;
+    int i;
+
+    for (i = 0; i < iovcnt; i++) {
+        int32_t r;
+
+        if (iov_fetch(&iov, uiov, (uint32_t)i) != 0) {
+            return total > 0 ? total : -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        r = pipe_splice_write(e, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len,
+                              nonblock);
+        if (r < 0) {
+            return total > 0 ? total : r;
+        }
+        total += r;
+        if ((uint32_t)r < iov.iov_len) {
+            break;
+        }
+    }
+    return total;
+}
+
+/**
+ * vmsplice(2): the descriptor of a pipe, a vector of the caller's buffers,
+ * its count and the flags. Into a write end it copies the buffers into the
+ * pipe, and from a read end the pipe into the buffers; a descriptor open
+ * both ways writes, as Linux's does. Linux gives the pipe the caller's pages
+ * where it can; this kernel copies the bytes, which is the same for a caller
+ * that does not change a buffer after a SPLICE_F_GIFT. The pipe end waits
+ * unless SPLICE_F_NONBLOCK or its description's O_NONBLOCK. Returns the bytes
+ * moved or a negative errno, in Linux's order: -EINVAL for an unknown flag,
+ * -EBADF for a descriptor not open, -EINVAL for a count past IOV_MAX_LOCAL,
+ * buffers of 2 GiB or more, or one of a negative length, -EFAULT for a
+ * vector or a buffer the caller cannot reach, 0 for buffers of no bytes,
+ * -EBADF for a descriptor that is no pipe, or the pipe's error.
+ */
+long sys_vmsplice(isr_params_t *params)
+{
+    uintptr_t uiov = SC_ARG(params, 1);
+    unsigned long cnt = SC_ARG(params, 2);
+    uint32_t flags = (uint32_t)SC_ARG(params, 3);
+    struct kernel_iovec iov;
+    uint32_t wanted = 0;
+    fd_entry_t *e;
+    int write, nonblock;
+    uint32_t i;
+
+    if (flags & ~SPLICE_F_ALL) {
+        return -EINVAL;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    e = copy_fd((int)SC_ARG(params, 0));
+    if (!e || !(e->flags & (FD_FLAG_READ | FD_FLAG_WRITE))) {
+        return -EBADF;
+    }
+    write = (e->flags & FD_FLAG_WRITE) != 0;
+    if (cnt > IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+    for (i = 0; i < (uint32_t)cnt; i++) {
+        if (iov_fetch(&iov, uiov, i) != 0) {
+            return -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (iov.iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov.iov_len) {
+            return -EINVAL;
+        }
+        if (!user_buffer_ok(iov.iov_base, iov.iov_len, !write)) {
+            return -EFAULT;
+        }
+        wanted += (uint32_t)iov.iov_len;
+    }
+    if (wanted == 0) {
+        return 0;
+    }
+    if (!pipe_is(e)) {
+        return -EBADF;
+    }
+    nonblock = (flags & SPLICE_F_NONBLOCK) || copy_nonblock(e);
+    return write ? vmsplice_write(e, uiov, (int)cnt, nonblock)
+                 : vmsplice_read(e, uiov, (int)cnt, nonblock);
 }
 
 /**

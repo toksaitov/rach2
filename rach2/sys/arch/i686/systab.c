@@ -162,6 +162,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SENDFILE64] = sys_sendfile;
     table[SYS_SPLICE] = sys_splice;
     table[SYS_TEE] = sys_tee;
+    table[SYS_VMSPLICE] = sys_vmsplice;
     table[SYS_COPY_FILE_RANGE] = sys_copy_file_range;
     table[SYS_CLOSE_RANGE] = sys_close_range;
     table[SYS_CLONE3] = sys_clone3;
