@@ -30,6 +30,7 @@
  * Returns 0 when every row passes, 1 otherwise.
  */
 
+#define KMS_MODEL_DEVICES
 #include "drm_kms_model.c"
 #include "drm/bochs.c"
 
@@ -189,6 +190,12 @@ int32_t drm_dev_register(struct drm_device *d)
     last_dev = d;
     registered++;
     return 0;
+}
+
+/** Take a reference. */
+void drm_dev_get(struct drm_device *d)
+{
+    d->refs++;
 }
 
 /** Drop a reference; the last releases the record through the driver. */

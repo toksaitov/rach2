@@ -4,8 +4,9 @@
  * drm_legacy.c and drm_edid.c whole: allocation with a live count, user
  * copies, a clock the test may move, waits that never sleep, events,
  * buffer objects and fences. A test that defines KMS_MODEL_FENCES brings
- * the real fences and sync files and their descriptors itself, and one that
- * sets `model_wait` makes a wait's condition come true, as a sleep would.
+ * the real fences and sync files and their descriptors itself, one that
+ * defines KMS_MODEL_DEVICES its own device holds, and one that sets
+ * `model_wait` makes a wait's condition come true, as a sleep would.
  */
 
 #include "drm/drm_mode.c"
@@ -406,6 +407,7 @@ int fd_free(fd_table_t *table, int fd)
 }
 #endif
 
+#ifndef KMS_MODEL_DEVICES
 /* ---- devices: a hold is a count; the test's device is never freed ---- */
 
 /** Take a hold on `dev`. */
@@ -420,6 +422,7 @@ void drm_dev_put(struct drm_device *dev)
     CHECK(dev->refs > 0, "a device is put no more than it is held");
     dev->refs--;
 }
+#endif
 
 /* ---- files ---- */
 
