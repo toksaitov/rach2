@@ -17,10 +17,9 @@
 #   native    GCC and binutils
 #   gdb       GDB and gdbserver
 #   js        the SpiderMonkey shell
-#   chromium  chromium-headless-shell in /usr/lib/chromium and the libraries
-#             it needs in /usr/lib/i386-linux-gnu or /usr/lib/x86_64-linux-gnu,
-#             as Debian's packages have them, from the packages
-#             fetch_chromium.sh unpacked
+#   debian    the desktop closure, including chromium-headless-shell
+#   proton    GE-Proton under /opt/proton, on x86-64
+#   webgl     the pinned conformance suite under /usr/share/webgl
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
@@ -52,36 +51,32 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
 . "$DIR/arch.sh"
 OUT="$GNU_OUT"
-DEBIAN="$OUT/work/chromium"
+DEBIAN="$OUT/work/debian/desktop"
 
-# The packages of the browser's closure that are not installed: libc6,
-# whose glibc the root's newer one replaces; the libraries the root has its
-# own builds of, of the same sonames and newer: GCC's in libgcc-s1,
-# libstdc++6 and libatomic1, zlib1g, liblzma5, libpcre2-8-0, util-linux's
-# libmount1, libblkid1 and libuuid1, libffi8, libsqlite3-0, libbz2-1.0 and
-# libzstd1, with gcc-14-base, which only documents GCC's three; and the
-# programs chromium-common's dependencies bring that a headless shell does
-# not run, in debconf, lsb-base, sysvinit-utils, x11-utils and xdg-utils. A
-# library of both would be found in Debian's directory first, which
-# /etc/ld.so.conf lists, by the root's programs too, and util-linux's mount
-# asks its libmount for a version Debian's lacks.
-SKIP="libc6 libgcc-s1 libstdc++6 libatomic1 zlib1g liblzma5 libpcre2-8-0 libmount1 libblkid1
-libuuid1 libffi8 libsqlite3-0 libbz2-1.0 libzstd1 gcc-14-base debconf lsb-base sysvinit-utils
-x11-utils xdg-utils"
+# Libraries and programs already supplied by the GNU ports or image manifest
+# are kept out of Debian's search directory. Distinct sonames (OpenSSL 3,
+# FFmpeg 7 and Python 3.13) stay beside the ports' newer ABI versions.
+SKIP="libc6 libgcc-s1 libstdc++6 libatomic1 libgomp1 zlib1g liblzma5 libpcre2-8-0
+libmount1 libblkid1 libuuid1 libsmartcols1 libfdisk1 libffi8 libsqlite3-0 libbz2-1.0
+libzstd1 libcrypt1 libcap2 libcap2-bin libevent-2.1-7t64 libgcrypt20 libgpg-error0
+libreadline8t64 libtinfo6 libncurses6 libncursesw6 libbrotli1 gcc-14-base debconf
+lsb-base sysvinit-utils base-files dpkg debianutils init-system-helpers systemd
+systemd-sysv dbus-user-session gawk mount procps tar tzdata netbase python3
+python3-minimal libpython3-stdlib readline-common"
 
 TREE="$1"
 if [ -z "$TREE" ] || [ ! -d "$TREE" ]; then
     echo "usage: install_root.sh TREE" >&2
     exit 2
 fi
-for part in root native gdb js chromium; do
+for part in root native gdb js debian/desktop proton webgl; do
     if [ ! -d "$OUT/$part" ]; then
-        echo "gnu: install: no $OUT/$part; run make gnu-ports gnu-native gnu-gdb gnu-js gnu-chromium" >&2
+        echo "gnu: install: no $OUT/$part; run make gnu-ports gnu-native gnu-gdb gnu-js gnu-desktop gnu-proton gnu-webgl" >&2
         exit 1
     fi
 done
 if [ ! -f "$DEBIAN/closure.txt" ]; then
-    echo "gnu: install: no $DEBIAN/closure.txt; run make gnu-chromium" >&2
+    echo "gnu: install: no $DEBIAN/closure.txt; run make gnu-desktop" >&2
     exit 1
 fi
 for name in ${GNU_AGENTS:-}; do
@@ -197,29 +192,38 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
     writable
 fi
 
-# The browser's packages. Each package's list is the listing of its unpack,
-# where /bin, /lib and /sbin were links into /usr, as trixie has them; here
-# they are directories of the musl system, so those paths are taken under
-# /usr, where the unpack put their files. The archive is written whole
-# before it is read, so that a failure to write it stops the install. Its list
-# has each directory's whole contents right after it, sorted with the slash
-# below every other byte, since tar gives a directory its mode once it has
-# left it, and a mode from the store has no write permission.
-: > "$WORK/debian"
-while read -r name _; do
-    skipped "$name" && continue
-    sed -e 's|^\./bin/|./usr/bin/|' -e 's|^\./lib/|./usr/lib/|' \
-        -e 's|^\./sbin/|./usr/sbin/|' -e 's|/$||' "$DEBIAN/files/$name" >> "$WORK/debian"
-done < "$DEBIAN/closure.txt"
-grep -v '^\.$' "$WORK/debian" | LC_ALL=C sort -u > "$WORK/debian.list"
-nodes "$OUT/chromium" > "$WORK/debian.have"
-LC_ALL=C comm -12 "$WORK/debian.list" "$WORK/debian.have" > "$WORK/new"
-fresh "$WORK/new"
-tr / '\001' < "$WORK/debian.list" | LC_ALL=C sort | tr '\001' / > "$WORK/debian.order"
-tar -cf "$WORK/debian.tar" -C "$OUT/chromium" --no-recursion -T "$WORK/debian.order"
-tar -xpf "$WORK/debian.tar" -C "$TREE"
-writable
-echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
+# install_debian LAYER: copy a named closure, refusing replaced root files.
+install_debian()
+{
+    meta="$OUT/work/debian/$1"
+    stage="$OUT/debian/$1"
+    # Each package's list is the listing of its unpack, where /bin, /lib
+    # and /sbin were links into /usr, as trixie has them; here
+    # they are directories of the musl system, so those paths are taken under
+    # /usr, where the unpack put their files. The archive is written whole
+    # before it is read, so a failed write stops the install. Its list
+    # has each directory's whole contents right after it, sorted with the slash
+    # below every other byte, since tar gives a directory its mode once it has
+    # left it, and a mode from the store has no write permission.
+    : > "$WORK/debian"
+    while read -r name _; do
+        skipped "$name" && continue
+        sed -e 's|^\./bin/|./usr/bin/|' -e 's|^\./lib/|./usr/lib/|' \
+            -e 's|^\./sbin/|./usr/sbin/|' -e 's|/$||' "$meta/files/$name" >> "$WORK/debian"
+    done < "$meta/closure.txt"
+    grep -v '^\.$' "$WORK/debian" | LC_ALL=C sort -u > "$WORK/debian.list"
+    nodes "$stage" > "$WORK/debian.have"
+    LC_ALL=C comm -12 "$WORK/debian.list" "$WORK/debian.have" > "$WORK/new"
+    fresh "$WORK/new"
+    tr / '\001' < "$WORK/debian.list" | LC_ALL=C sort | tr '\001' / > "$WORK/debian.order"
+    tar -cf "$WORK/debian.tar" -C "$stage" --no-recursion -T "$WORK/debian.order"
+    tar -xpf "$WORK/debian.tar" -C "$TREE"
+    writable
+    echo "gnu: install: $1: $(wc -l < "$WORK/new" | tr -d ' ') files"
+
+}
+
+install_debian desktop
 
 # Debian's /usr/bin/chromium-headless-shell is a shell script that runs the
 # browser as its child, so a signal to the process a caller started reaches
@@ -234,6 +238,24 @@ if [ ! -x "$TREE/usr/lib/chromium/chromium-headless-shell" ] ||
 fi
 rm "$TREE/usr/bin/chromium-headless-shell"
 ln -s ../lib/chromium/chromium-headless-shell "$TREE/usr/bin/chromium-headless-shell"
+
+install_part proton
+install_part webgl
+
+# Debian's Python tools use its versioned interpreter and dist-packages.
+# The GNU port keeps /usr/bin/python3 and its independent site-packages.
+for f in "$TREE/usr/bin/piglit" "$TREE/usr/bin/libinput"; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    sed -i '1s|^#!/usr/bin/python3$|#!/usr/bin/python3.13|' "$f"
+done
+
+# These alternatives are made by Debian's postinst, which is not run here.
+for name in blas lapack; do
+    libdir="$TREE/usr/lib/$GNU_MULTIARCH"
+    if [ -f "$libdir/$name/lib$name.so.3" ]; then
+        ln -s "$name/lib$name.so.3" "$libdir/lib$name.so.3"
+    fi
+done
 
 for name in ${GNU_AGENTS:-}; do
     install_part "agents/$name"
@@ -367,6 +389,11 @@ printf 'Etc/UTC\n' > "$TREE/etc/timezone"
 if [ ! -f "$TREE/usr/share/terminfo/x/xterm-256color" ]; then
     echo "gnu: install: refused: ncurses installed no xterm-256color, the terminal term names" >&2
     exit 1
+fi
+
+# Debian's D-Bus activation helper has no privileged activation on Rach2.
+if [ -f "$TREE/usr/lib/dbus-1.0/dbus-daemon-launch-helper" ]; then
+    chmod 0755 "$TREE/usr/lib/dbus-1.0/dbus-daemon-launch-helper"
 fi
 
 # The ports' manual pages, rendered to the plain text the system's man

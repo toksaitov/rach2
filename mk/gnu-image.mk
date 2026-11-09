@@ -1,9 +1,9 @@
 # mk/gnu-image.mk: the GNU system's root (vendor/gnu/Readme.md), the os-real
 # system of krffs/manifests/os-real-gnu.manifest with the GNU layer installed
 # over it by vendor/gnu/install_root.sh, as an ext2 volume the kernel boots
-# with rach2.root=ext2. It is not part of `all`. 4096 MiB: the system takes
-# 1.2 GiB of it, and the rest is room for what the machine compiles and
-# fetches. The root has the packages of the agents layer that GNU_AGENTS
+# with rach2.root=ext2. It is not part of `all`. 16384 MiB: the desktop,
+# Proton and WebGL sources share the root with the compiler and ports,
+# with room for profiles and shader caches. The root has the agents GNU_AGENTS
 # names (mk/gnu-agents.mk); os-real-gnu-agents.ext2, the root of `tests/run
 # agents`, has every package the layer has.
 #
@@ -27,7 +27,7 @@ GNU_TEST_EXT2 = $(IMAGES_DIR)/gnu-test.ext2
 # rules share the ordinary component producers; no kernel is rebuilt here.
 $(GNU_TEST_EXT2): build/tests/host-suite/scripts-assets.tar $(KERNEL) $(METAL_KERNEL)
 GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
-                   $(GNU_JS_STAMP) $(GNU_CHROMIUM_STAMP)
+                   $(GNU_JS_STAMP) $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP)
 GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
@@ -57,7 +57,8 @@ ifneq ($(GNU_IN_COPY),)
 $(GNU_STEP_STAMPS) $(GNU_AGENTS_ALL_STAMPS): gnu-in-copy
 endif
 
-.PHONY: os-real-gnu-ext2 os-real-gnu-agents-ext2
+.PHONY: gnu-image os-real-gnu-ext2 os-real-gnu-agents-ext2
+gnu-image: os-real-gnu-ext2
 os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)
 os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 
@@ -67,21 +68,22 @@ $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
     $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_STAMP)) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
-	    krffs/manifests/os-real-gnu.manifest $@ 12288
+	    krffs/manifests/os-real-gnu.manifest $@ 24576
 
 $(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
                      tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" sh tools/image/mkext2.sh \
-	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 4096
+	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 	$(GNU_STAGE_LOGINS)
 
 $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_STAMPS) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" sh tools/image/mkext2.sh \
-	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 4096
+	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 else
 GNU_TOOLING_DEPS = $(filter-out $(GNU_IMAGE_STAMPS),$(GNU_IMAGE_DEPS)) \
                    $(sort $(GNU_TOOLCHAIN_SOURCES) $(GNU_PORTS_SOURCES) $(GNU_NATIVE_SOURCES) \
-                          $(GNU_GDB_SOURCES) $(GNU_JS_SOURCES) $(GNU_CHROMIUM_SOURCES)) \
+                          $(GNU_GDB_SOURCES) $(GNU_JS_SOURCES) $(GNU_DEBIAN_SOURCES) $(GNU_PROTON_SOURCES) \
+                          $(GNU_WEBGL_SOURCES)) \
                    $(GNU_PORTS_LINK) vendor/gnu/tooling_image.sh vendor/gnu/tooling_job.sh \
                    tools/setup/elfwrap.sh
 GNU_TOOLING_ORDER = $(GNU_IMAGE_ORDER) $(ETUDE) $(SHA256TOOL)
@@ -95,19 +97,19 @@ $(GNU_TEST_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" \
 	    GNU_TEST_PRODUCTS=1 MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) \
-	    sh vendor/gnu/tooling_image.sh $@ 12288
+	    sh vendor/gnu/tooling_image.sh $@ 24576
 
 $(OS_REAL_GNU_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
                      $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) $(GNU_LOGINS_STAMP) \
                      tools/image/stage_logins.sh | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" \
-	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 4096
+	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 16384
 	$(GNU_STAGE_LOGINS)
 
 $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_RECIPES) \
                             $(GNU_AGENTS_SOURCES) | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_LINK="$(GNU_LINK)" \
-	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 4096
+	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 16384
 endif
 
 # `make machine`: everything an installed machine is given, in one target, so
