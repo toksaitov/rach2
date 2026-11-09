@@ -243,14 +243,21 @@ int usb_core_busy(void);
 
 /* A running device as /sys/bus/usb/devices names it: its bus, the number
  * of its controller from 1; its ports from the root port down, each from 1,
- * `depth` of them; the controller's slot, which is its device number; and
- * its descriptor's vendor, product and release. */
+ * `depth` of them; the controller's slot, which is its device number; its
+ * descriptor's vendor, product and release; and the configuration and the
+ * interface this kernel drives, which name the interface's directory,
+ * B-P:C.I. */
 struct usb_sys_row {
     int bus;
     int depth;
     int ports[USB_TREE_TIERS + 1];
     int devnum;
     uint16_t vendor, product, release;
+    int config;     /* bConfigurationValue */
+    int ifnum;      /* bInterfaceNumber */
+    int ifclass;    /* bInterfaceClass, 3 for a keyboard or a mouse */
+    int ifsubclass; /* bInterfaceSubClass, 1 for the boot protocol */
+    int ifprotocol; /* bInterfaceProtocol, 1 a keyboard and 2 a mouse */
 };
 
 /** Fill `row` for the device of table entry `index`; 0, or -1 when that

@@ -2012,6 +2012,11 @@ int usb_core_row(int index, struct usb_sys_row *row)
     row->vendor = d->vendor;
     row->product = d->product;
     row->release = d->release;
+    row->config = d->interface.config_value;
+    row->ifnum = d->interface.number;
+    row->ifclass = d->interface.class_code;
+    row->ifsubclass = d->interface.subclass;
+    row->ifprotocol = d->interface.protocol;
     while (d != 0 && depth <= USB_TREE_TIERS) {
         chain[depth++] = d->port + 1;
         d = d->owner >= 0 ? dev_at(d->owner) : 0;
