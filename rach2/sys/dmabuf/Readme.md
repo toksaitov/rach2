@@ -23,7 +23,7 @@ Udmabuf takes a frame reference for each page before publishing a descriptor. Th
 
 ## Limits
 
-Udmabuf uses Linux's default bounds of 1,024 ranges and 64 MiB per export. It supports tmpfs files; Rach2 has no hugetlbfs files. Shared mappings use cached RAM and need no cache maintenance on x86. An exporter for other memory supplies its own mapping and CPU-access hooks. The software timeline's debugfs path is published by the debugfs subsystem.
+Udmabuf uses Linux's default bounds of 1,024 ranges and 64 MiB per export. It supports tmpfs files; Rach2 has no hugetlbfs files. Shared mappings use cached RAM and need no cache maintenance on x86. An exporter for other memory supplies its own mapping and CPU-access hooks. The software timeline operations are available through `sw_sync_open`; debugfs does not yet publish `sync/sw_sync`.
 
 ## Tests
 
