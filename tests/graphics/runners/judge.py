@@ -3,6 +3,9 @@
 Usage:
   python3 -I judge.py webgl REF GOT
   python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT
+  python3 -I judge.py results REF GOT
+  python3 -I judge.py modes REF GOT
+  python3 -I judge.py glmark2 REF GOT
 
 `webgl` compares two pages files of webgl.sh, a chunk's, by page: the lists
 must name the same pages at the same indexes, and a page is worse here when
@@ -16,6 +19,22 @@ least the fewest frames the reference showed, the median of the drops no
 more than the most the reference dropped in one play, since browser numbers
 in QEMU vary from play to play, and the decoder the same as the
 reference's, the first line of each decoders file.
+
+`results` compares two results files of igt.sh or piglit.sh, `NAME RESULT`
+a line, by name: a test or subtest that passed in the reference must pass
+here, one the reference skipped must skip here, as Linux's skips are the
+guest's answers about its devices, and one that failed or crashed in the
+reference may end as it likes. A name the reference has and this run lacks
+is worse, and so is one this run alone has that neither passes nor skips.
+
+`modes` compares two modes files of modetest.sh by mode: the same modes in
+the same order, and each mode that the reference set and read back set here
+too, read back at its size with the reference's checksum.
+
+`glmark2` compares two validations files of glmark2.sh by scene: the same
+scenes, and each that the reference validated as Success a Success here.
+The scores are recorded beside them and not judged, since they measure the
+host's load as much as the guest.
 
 Each prints `judge: worse: ...` for each difference and one line, `judge:
 result: pass ...` or `judge: result: fail ...`, and exits 0 or 1.
@@ -97,13 +116,81 @@ def video(ref_path, got_path, ref_dec, got_dec):
     return not worse
 
 
+def named(path):
+    """The `NAME RESULT` lines of PATH as a dictionary; a name may hold blanks."""
+    with open(path, encoding="utf-8") as f:
+        return dict(line.rstrip("\n").rsplit(None, 1) for line in f
+                    if line.strip() and not line.startswith("#"))
+
+
+def results(ref_path, got_path):
+    ref, got = named(ref_path), named(got_path)
+    worse = []
+    for name in sorted(ref):
+        r, g = ref[name], got.get(name)
+        if g is None:
+            worse.append("%s: not run here, %s in the reference" % (name, r))
+        elif r in ("pass", "skip") and g != r:
+            worse.append("%s: %s here, %s in the reference" % (name, g, r))
+    for name in sorted(set(got) - set(ref)):
+        if got[name] not in ("pass", "skip"):
+            worse.append("%s: %s here, not in the reference" % (name, got[name]))
+    for w in worse:
+        print("judge: worse: %s" % w)
+    verdict = "fail" if worse else "pass"
+    print("judge: result: %s results %d in the reference, %d here, %d worse than Debian's" %
+          (verdict, len(ref), len(got), len(worse)))
+    return not worse
+
+
+def modes(ref_path, got_path):
+    ref, got = lines(ref_path), lines(got_path)
+    worse = []
+    if [f[:4] for f in ref] != [f[:4] for f in got]:
+        worse.append("modes %s here, %s in the reference" %
+                     (" ".join("%s@%s" % (f[2], f[3]) for f in got),
+                      " ".join("%s@%s" % (f[2], f[3]) for f in ref)))
+    else:
+        for r, g in zip(ref, got):
+            if r[4] == "set" and g[4:] != r[4:]:
+                worse.append("%s mode %s %s: %s here, %s in the reference" %
+                             (r[0], r[1], r[2], " ".join(g[4:]), " ".join(r[4:])))
+    for w in worse:
+        print("judge: worse: %s" % w)
+    verdict = "fail" if worse else "pass"
+    print("judge: result: %s modes %d in the reference, %d here, %d worse than Debian's" %
+          (verdict, len(ref), len(got), len(worse)))
+    return not worse
+
+
+def glmark2(ref_path, got_path):
+    ref = {f[0]: f[1] for f in lines(ref_path)}
+    got = {f[0]: f[1] for f in lines(got_path)}
+    worse = []
+    for scene in sorted(ref):
+        g = got.get(scene)
+        if g is None:
+            worse.append("%s: not run here" % scene)
+        elif ref[scene] == "Success" and g != "Success":
+            worse.append("%s: %s here, Success in the reference" % (scene, g))
+    for w in worse:
+        print("judge: worse: %s" % w)
+    verdict = "fail" if worse else "pass"
+    print("judge: result: %s glmark2 %d scenes, %d validated here, %d worse than Debian's" %
+          (verdict, len(ref), sum(1 for v in got.values() if v == "Success"), len(worse)))
+    return not worse
+
+
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "webgl":
         ok = webgl(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 6 and sys.argv[1] == "video":
         ok = video(*sys.argv[2:6])
+    elif len(sys.argv) == 4 and sys.argv[1] in ("results", "modes", "glmark2"):
+        ok = {"results": results, "modes": modes, "glmark2": glmark2}[sys.argv[1]](*sys.argv[2:4])
     else:
-        sys.exit("usage: judge.py webgl REF GOT | video REF GOT DECODERS-REF DECODERS-GOT")
+        sys.exit("usage: judge.py webgl REF GOT | video REF GOT DECODERS-REF DECODERS-GOT"
+                 " | results|modes|glmark2 REF GOT")
     sys.exit(0 if ok else 1)
 
 

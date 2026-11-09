@@ -1,0 +1,23 @@
+# igt-76.list: the IGT subtests of milestone 76, which runners/igt.sh runs.
+#
+# A line is `igt@TEST`, every subtest of the test program TEST, or
+# `igt@TEST@PATTERN`, its subtests that the shell pattern PATTERN matches in
+# the IGT stage's subtest-list.txt. The display tests run on vkms, bochs-drm
+# and virtio-gpu; the sync object tests on virtio-gpu, the one of the three
+# with sync objects, where they skip on the others as on Linux.
+igt@core_getversion
+igt@core_auth
+igt@core_setmaster
+igt@kms_addfb_basic
+igt@kms_atomic
+igt@kms_prop_blob
+igt@kms_getfb
+igt@kms_flip@basic-*
+igt@kms_vblank@*-idle
+igt@kms_pipe_crc_basic
+igt@kms_cursor_crc@*-64x64
+igt@prime_self_import
+igt@sw_sync
+igt@syncobj_basic
+igt@syncobj_wait
+igt@syncobj_timeline
