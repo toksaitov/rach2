@@ -886,6 +886,20 @@ int synth_classify(const char *path, struct vpath *vp)
     return vp->kind;
 }
 
+/** No row reaches a directory of /dev's table: none is present. */
+int devfs_subdir_present(int row)
+{
+    (void)row;
+    return 0;
+}
+
+/** No row reaches /dev's table of directories: it has no rows. */
+const struct synth_dev_dir *synth_dev_dir_at(int n)
+{
+    (void)n;
+    return NULL;
+}
+
 /** No row has a descriptor on a directory of /dev, /proc or /sys: "/". */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {

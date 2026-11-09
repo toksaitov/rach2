@@ -1626,6 +1626,22 @@ int synth_classify(const char *path, struct vpath *vp)
     return vp->kind;
 }
 
+/** Fail the row: no row reaches a directory of /dev's table. Returns 0. */
+int devfs_subdir_present(int row)
+{
+    (void)row;
+    check(0, "unexpected directory of /dev");
+    return 0;
+}
+
+/** Fail the row: no row reaches /dev's table of directories. Returns NULL. */
+const struct synth_dev_dir *synth_dev_dir_at(int n)
+{
+    (void)n;
+    check(0, "unexpected directory of /dev");
+    return NULL;
+}
+
 /** Fail the row: no row names a synthetic directory. */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
