@@ -3,9 +3,11 @@
  * and its allocation, /proc/uptime, the CPU times of a process and of a
  * thread, task ids, descriptor links, /proc/PID/mem, /proc/PID/exe, the
  * paths of /proc/PID/maps, a read of a process's arguments while the process
- * is reaped, and oom_score_adj.
+ * is reaped, oom_score_adj, and the /sys entries and uevents of a DRM device
+ * and of a driver's own attributes, links and PCI identity.
  *
  * host-deps: tests/host/compat/vm_iter_host.c
+ * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
  * host-deps: rach2/sys/fs/name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c
@@ -66,6 +68,7 @@ static int sysfs_block_loop(int key);
 static int sysfs_net_wiphy(int index);
 static const char *sysfs_wlan_driver(int index);
 #include "fs/procfs.c"
+#include "drm/drm.h"
 #include "arch/i686/mmu.h"
 #include "ns_first.h"
 
@@ -644,14 +647,94 @@ int synth_net_slot(int origin)
     return -1;
 }
 
-/** No device of /sys is opened here. */
+/** The paths of the fixed /sys directories the DRM rows add below, as
+ * synthfs.c gives them, and the empty string for any other. */
 void synth_sys_path(int node, int key, char *out, int cap)
 {
-    (void)node;
-    (void)key;
-    if (cap > 0) {
-        out[0] = '\0';
+    const char *path = node == SYSFS_CLASS_DRM  ? "/sys/class/drm"
+                       : node == SYSFS_DEV_CHAR ? "/sys/dev/char"
+                       : node == SYSFS_KERNEL   ? "/sys/kernel"
+                       : node == SYSFS_PLATFORM ? "/sys/devices/platform"
+                       : node == SYSFS_BUS_PCI  ? "/sys/bus/pci"
+                       : node == SYSFS_PCI_ROOT ? "/sys/devices/pci0000:00"
+                                                : "";
+
+    if (node == SYSFS_PCI_DEVICE && cap >= 32) {
+        __builtin_snprintf(out, (unsigned long)cap, "/sys/devices/pci0000:00/0000:%02x:%02x.%x",
+                           (unsigned)(key >> 8), (unsigned)((key >> 3) & 31), (unsigned)(key & 7));
+        return;
     }
+    if (cap > 0) {
+        k_strncpy(out, path, (size_t)cap - 1);
+        out[cap - 1] = '\0';
+    }
+}
+
+/** A PCI function's name, as synthfs.c gives it; only PCI is asked here. */
+void synth_sys_device_name(int node, int key, char *out, int cap)
+{
+    (void)node;
+    __builtin_snprintf(out, (unsigned long)cap, "0000:%02x:%02x.%x", (unsigned)(key >> 8),
+                       (unsigned)((key >> 3) & 31), (unsigned)(key & 7));
+}
+
+/** The kernel log, which the rows do not read. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
+/* The uevents sent, NUL-ended strings one after another, and their bytes. */
+static char uevents[8192];
+static uint32_t uevents_len;
+static int uevents_sent;
+
+/** Keep the uevent `msg` of `len` bytes after those before it. */
+void netlink_uevent(const uint8_t *msg, uint32_t len)
+{
+    if (uevents_len + len <= sizeof(uevents)) {
+        k_memcpy(uevents + uevents_len, msg, len);
+        uevents_len += len;
+    }
+    uevents_sent++;
+}
+
+/** No PCI function answers on this machine: every read is all ones. */
+uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    (void)bus;
+    (void)device;
+    (void)function;
+    (void)offset;
+    return 0xFFFFFFFFu;
+}
+
+uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    return (uint16_t)pci_read_config32(bus, device, function, offset);
+}
+
+uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    return (uint8_t)pci_read_config32(bus, device, function, offset);
+}
+
+/** The bus has no function to list. */
+bool pci_nth(int nth, pci_device_t *out)
+{
+    (void)nth;
+    (void)out;
+    return false;
+}
+
+/** The USB stack has no device. */
+int usb_core_row(int index, struct usb_sys_row *row)
+{
+    (void)index;
+    (void)row;
+    return -1;
 }
 
 /** Whether the stat line `line` has the user and system times `user` and
@@ -1303,6 +1386,339 @@ static void reaped_during_read(void)
  * command in parentheses and the state. Returns 0 when every check passed
  * and 1 otherwise.
  */
+/** Whether the uevents sent since `from` hold the variable `var`, a whole
+ * NUL-ended string, in the uevent numbered `nth` from there. */
+static int uevent_has(uint32_t from, int nth, const char *var)
+{
+    uint32_t at = from, n = (uint32_t)__builtin_strlen(var) + 1;
+
+    for (; nth > 0 && at < uevents_len; at++) {
+        if (uevents[at] == '\0' && at + 1 < uevents_len &&
+            __builtin_strncmp(uevents + at + 1, "SEQNUM=", 7) == 0) {
+            at += 1 + (uint32_t)__builtin_strlen(uevents + at + 1);
+            nth--;
+        }
+    }
+    for (; at + n <= uevents_len; at += (uint32_t)__builtin_strlen(uevents + at) + 1) {
+        if (__builtin_memcmp(uevents + at, var, n) == 0) {
+            return 1;
+        }
+        if (__builtin_strncmp(uevents + at, "SEQNUM=", 7) == 0) {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/** The text of the registered attribute `h`, as an open renders it, NUL-
+ * terminated into `out` of `cap` bytes; its length, or the error. */
+static int reg_text(int h, char *out, int cap)
+{
+    struct procfs_text text;
+    struct vpath vp;
+    int key = 0, len;
+
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = SYSFS_REG;
+    vp.syskey = h;
+    procfs_text_init(&text);
+    len = procfs_gen_sysfile(&text, &vp, &key);
+    if (len >= 0 && len < cap) {
+        k_memcpy(out, text.buf, (size_t)len);
+        out[len] = '\0';
+    }
+    kfree(text.buf);
+    return len;
+}
+
+/** The entry below `dir` named `name`. */
+static int child(int dir, const char *name)
+{
+    return sysfs_node_child(dir, name, (int)__builtin_strlen(name));
+}
+
+/** Whether the link `h` reads `want`. */
+static int link_reads(int h, const char *want)
+{
+    char text[128];
+    int n = sysfs_link_text(h, text, (int)sizeof(text) - 1);
+
+    if (n < 0) {
+        return 0;
+    }
+    text[n] = '\0';
+    return __builtin_strcmp(text, want) == 0;
+}
+
+/*
+ * A virtio_gpu device at 0000:00:02.0, card 0 with render node 128, and its
+ * one connector, Virtual-1, connected, with one mode and an EDID, as the
+ * DRM rows register them.
+ */
+static const struct drm_driver row_driver = {DRM_IDENT_VIRTIO_GPU};
+static struct drm_device row_dev;
+static struct drm_connector row_conn;
+static struct drm_display_mode row_mode;
+static struct drm_property_blob row_edid;
+static uint8_t row_edid_bytes[128];
+static pci_device_t row_pci;
+
+/** Fill the device the DRM rows register. */
+static void row_device(void)
+{
+    int i;
+
+    row_pci.bus = 0;
+    row_pci.device = 2;
+    row_pci.function = 0;
+    row_dev.driver = &row_driver;
+    row_dev.features = row_driver.ident.features;
+    row_dev.index = 0;
+    row_dev.pci = &row_pci;
+    k_memcpy(row_dev.unique, "pci:0000:00:02.0", 17);
+    for (i = 0; i < 128; i++) {
+        row_edid_bytes[i] = (uint8_t)(i * 7);
+    }
+    row_edid.length = 128;
+    row_edid.data = row_edid_bytes;
+    k_memcpy(row_mode.info.name, "1024x768", 9);
+    row_conn.dev = &row_dev;
+    row_conn.index = 0;
+    row_conn.base.id = 34;
+    k_memcpy(row_conn.name, "Virtual-1", 10);
+    row_conn.status = DRM_CONNECTOR_CONNECTED;
+    row_conn.modes = &row_mode;
+    row_conn.edid = &row_edid;
+    row_dev.mode_config.num_connector = 1;
+    row_dev.mode_config.connectors[0] = &row_conn;
+}
+
+/* The entries the DRM rows find after registering. */
+static int row_class, row_char, row_pci_dir, row_card, row_render, row_conn_dir;
+
+/** Whether the registered attribute `h` reads `want` whole. */
+static int reg_is(int h, const char *want)
+{
+    char text[256];
+
+    return reg_text(h, text, (int)sizeof(text)) >= 0 && __builtin_strcmp(text, want) == 0;
+}
+
+/**
+ * A registered DRM device sends an `add` uevent for its card, then its
+ * render node, then its connector, each with the variables udev reads.
+ */
+static void drm_register_rows(void)
+{
+    row_device();
+    check(drm_sysfs_register(&row_dev) == 0, "a DRM device registers its /sys entries");
+    check(uevents_sent == 3 &&
+              __builtin_strcmp(uevents, "add@/devices/pci0000:00/0000:00:02.0/drm/card0") == 0,
+          "with the uevent add of its card first");
+    check(uevent_has(0, 0, "ACTION=add") && uevent_has(0, 0, "SUBSYSTEM=drm") &&
+              uevent_has(0, 0, "DEVPATH=/devices/pci0000:00/0000:00:02.0/drm/card0") &&
+              uevent_has(0, 0, "MAJOR=226") && uevent_has(0, 0, "MINOR=0") &&
+              uevent_has(0, 0, "DEVNAME=dri/card0") && uevent_has(0, 0, "DEVTYPE=drm_minor") &&
+              uevent_has(0, 0, "SEQNUM=1"),
+          "which carries the card's variables and its sequence number");
+    check(uevent_has(0, 1, "DEVNAME=dri/renderD128") && uevent_has(0, 1, "MINOR=128") &&
+              uevent_has(0, 2, "DEVTYPE=drm_connector"),
+          "then the render node's and the connector's");
+}
+
+/**
+ * The card, the render node and the connector are below the PCI function's
+ * `drm`, linked from /sys/class/drm and each node from /sys/dev/char, with
+ * Linux's relative link texts.
+ */
+static void drm_link_rows(void)
+{
+    row_class = sysfs_anchor_find(SYSFS_CLASS_DRM, 0);
+    row_char = sysfs_anchor_find(SYSFS_DEV_CHAR, 0);
+    row_pci_dir = sysfs_anchor_find(SYSFS_PCI_DEVICE, 2 << 3);
+    row_card = child(child(row_pci_dir, "drm"), "card0");
+    row_render = child(child(row_pci_dir, "drm"), "renderD128");
+    row_conn_dir = child(row_card, "card0-Virtual-1");
+    check(row_card > 0 && row_render > 0 && row_conn_dir > 0,
+          "card0, renderD128 and the connector are there");
+    check(
+        link_reads(child(row_class, "card0"), "../../devices/pci0000:00/0000:00:02.0/drm/card0") &&
+            link_reads(child(row_class, "renderD128"),
+                       "../../devices/pci0000:00/0000:00:02.0/drm/renderD128") &&
+            link_reads(child(row_class, "card0-Virtual-1"),
+                       "../../devices/pci0000:00/0000:00:02.0/drm/card0/card0-Virtual-1"),
+        "/sys/class/drm links each node and the connector");
+    check(link_reads(child(row_char, "226:0"), "../../devices/pci0000:00/0000:00:02.0/drm/card0") &&
+              link_reads(child(row_char, "226:128"),
+                         "../../devices/pci0000:00/0000:00:02.0/drm/renderD128"),
+          "/sys/dev/char links each node by its numbers");
+    check(link_reads(child(row_card, "device"), "../../../0000:00:02.0") &&
+              link_reads(child(row_card, "subsystem"), "../../../../../class/drm") &&
+              link_reads(child(row_conn_dir, "device"), "../../card0"),
+          "a node's device is the PCI function and its subsystem the class");
+}
+
+/** The files of the nodes and the connector read as Linux's do. */
+static void drm_file_rows(void)
+{
+    char text[256];
+
+    check(reg_is(child(row_card, "dev"), "226:0\n") &&
+              reg_is(child(row_render, "dev"), "226:128\n"),
+          "dev gives each node's numbers");
+    check(reg_is(child(row_card, "uevent"),
+                 "MAJOR=226\nMINOR=0\nDEVNAME=dri/card0\nDEVTYPE=drm_minor\n"),
+          "a node's uevent file has its variables");
+    check(reg_is(child(row_conn_dir, "status"), "connected\n") &&
+              reg_is(child(row_conn_dir, "enabled"), "disabled\n") &&
+              reg_is(child(row_conn_dir, "dpms"), "Off\n") &&
+              reg_is(child(row_conn_dir, "modes"), "1024x768\n") &&
+              reg_is(child(row_conn_dir, "connector_id"), "34\n"),
+          "the connector gives its status, enabled, dpms, modes and ID");
+    check(reg_text(child(row_conn_dir, "edid"), text, (int)sizeof(text)) == 128 &&
+              __builtin_memcmp(text, row_edid_bytes, 128) == 0,
+          "and the sink's EDID whole");
+}
+
+/**
+ * A hotplug, a write of a uevent file and a forced status send their
+ * uevents, and unregistering sends `remove` and leaves nothing.
+ */
+static void drm_event_rows(void)
+{
+    uint32_t mark = uevents_len;
+    int sent = uevents_sent;
+
+    drm_kms_hotplug_event(&row_dev);
+    check(uevents_sent == sent + 1 &&
+              __builtin_strcmp(uevents + mark,
+                               "change@/devices/pci0000:00/0000:00:02.0/drm/card0") == 0 &&
+              uevent_has(mark, 0, "HOTPLUG=1") && uevent_has(mark, 0, "DEVNAME=dri/card0"),
+          "a hotplug is the card's change with HOTPLUG=1");
+    mark = uevents_len;
+    check(sysfs_node_store(child(row_card, "uevent"), "add\n", 4) == 4 &&
+              __builtin_strncmp(uevents + mark, "add@", 4) == 0 &&
+              uevent_has(mark, 0, "SYNTH_UUID=0"),
+          "a write of add to a uevent file sends add again");
+    check(sysfs_node_store(child(row_card, "uevent"), "plug\n", 5) == -EINVAL,
+          "and another word is refused");
+    mark = uevents_len;
+    check(sysfs_node_store(child(row_conn_dir, "status"), "off\n", 4) == 4 &&
+              row_conn.force == DRM_FORCE_OFF && uevent_has(mark, 0, "HOTPLUG=1"),
+          "a forced status is set and told as a hotplug");
+    mark = uevents_len;
+    sent = uevents_sent;
+    drm_sysfs_unregister(&row_dev);
+    check(uevents_sent == sent + 3 && __builtin_strncmp(uevents + mark, "remove@", 7) == 0 &&
+              uevent_has(mark, 0, "DEVTYPE=drm_connector") &&
+              uevent_has(mark, 2, "DEVNAME=dri/card0"),
+          "unregistering sends remove for the connector, the render node and the card");
+    check(!child(row_class, "card0") && !child(row_char, "226:0") && !child(row_pci_dir, "drm") &&
+              sysfs_node_kind(row_card) == 0 && sysfs_node_kind(row_conn_dir) == 0,
+          "and leaves no entry");
+}
+
+/* What the driver's attribute in the registration rows holds. */
+static char override[16];
+
+/** The driver's attribute: what was written last. */
+static int32_t show_override(void *obj, int arg, char *buf, uint32_t cap)
+{
+    uint32_t n = (uint32_t)__builtin_strlen((const char *)obj);
+
+    (void)arg;
+    if (n <= cap) {
+        k_memcpy(buf, obj, n);
+    }
+    return (int32_t)n;
+}
+
+/** Take a write of the driver's attribute, up to 15 bytes. */
+static int32_t store_override(void *obj, int arg, const char *buf, uint32_t len)
+{
+    (void)arg;
+    if (len >= sizeof(override)) {
+        return -EINVAL;
+    }
+    k_memcpy(obj, buf, len);
+    ((char *)obj)[len] = '\0';
+    return (int32_t)len;
+}
+
+/**
+ * A driver adds an attribute it reads and writes and a link of its own
+ * below a PCI function, and a directory below /sys/kernel the link leads
+ * to; both read back as an open renders them. A function a driver reports
+ * with no device behind it has the identity it gave in each file.
+ */
+static void sysfs_reg_rows(void)
+{
+    static const struct sysfs_attr attr = {"driver_override", 0644u, show_override, store_override};
+    struct sysfs_pci_ident id;
+    struct procfs_text t;
+    char text[64];
+    int pci = sysfs_anchor(SYSFS_PCI_DEVICE, 0x10), groups, group, h, link;
+
+    groups = sysfs_add_dir(sysfs_anchor(SYSFS_KERNEL, 0), "iommu_groups");
+    group = sysfs_add_dir(groups, "3");
+    h = sysfs_add_attr(pci, &attr, override, 0);
+    link = sysfs_add_link(pci, "iommu_group", group);
+    check(pci > 0 && groups > 0 && group > 0 && h > 0 && link > 0,
+          "a driver adds an attribute, directories and a link");
+    check(sysfs_add_attr(pci, &attr, override, 0) == -EEXIST, "a name is taken once");
+    check(sysfs_node_writable(h) && sysfs_node_mode(h) == 0644u,
+          "the attribute takes writes, as its mode says");
+    check(sysfs_node_store(h, "vfio-pci", 8) == 8 && reg_text(h, text, (int)sizeof(text)) == 8 &&
+              __builtin_strcmp(text, "vfio-pci") == 0,
+          "and reads back what was written");
+    check(link_reads(link, "../../../kernel/iommu_groups/3"), "the link reads relative to itself");
+    sysfs_remove(groups);
+    check(sysfs_node_kind(group) == 0 && sysfs_link_text(link, text, (int)sizeof(text)) == -ENOENT,
+          "removing a directory removes what is below it, and its links lead nowhere");
+    sysfs_remove(link);
+    sysfs_remove(h);
+    check(sysfs_node_count(pci) == 0, "and the function has nothing left of the driver's");
+
+    k_memset(&id, 0, sizeof(id));
+    id.vendor = 0x8086;
+    id.device = 0x0a16;
+    id.subsystem_vendor = 0x17aa;
+    id.subsystem_device = 0x2214;
+    id.class = 0x030000;
+    id.revision = 0x0b;
+    id.boot_vga = 1;
+    check(sysfs_pci_virtual_add(0xA0, &id) == 0 && sysfs_pci_virtual_add(0xA0, &id) == -EEXIST,
+          "a driver reports a PCI function once");
+    check(sysfs_device_exists(SYSFS_PCI_DEVICE, 0xA0) &&
+              sysfs_device_key(SYSFS_PCI_DEVICE, 0) == 0xA0,
+          "which is there and listed");
+    procfs_text_init(&t);
+    check(procfs_gen_pciattr(&t, 0xA0, SYSFS_PCI_VENDOR) == 7 &&
+              __builtin_memcmp(t.buf, "0x8086\n", 7) == 0,
+          "its vendor is the one reported");
+    t.len = 0;
+    check(procfs_gen_pciattr(&t, 0xA0, SYSFS_PCI_DEVICE_ID) == 7 &&
+              __builtin_memcmp(t.buf, "0x0a16\n", 7) == 0,
+          "and its device");
+    t.len = 0;
+    check(procfs_gen_pciattr(&t, 0xA0, SYSFS_PCI_CLASS) == 9 &&
+              __builtin_memcmp(t.buf, "0x030000\n", 9) == 0,
+          "and its class");
+    t.len = 0;
+    check(procfs_gen_pciattr(&t, 0xA0, SYSFS_PCI_BOOT_VGA) == 2 &&
+              __builtin_memcmp(t.buf, "1\n", 2) == 0,
+          "and its boot_vga");
+    t.len = 0;
+    check(procfs_gen_uevent(&t, SYSFS_PCI_DEVICE, 0xA0) > 0 && t.buf &&
+              __builtin_strstr(t.buf, "PCI_ID=8086:0A16\n") &&
+              __builtin_strstr(t.buf, "PCI_SLOT_NAME=0000:00:14.0\n"),
+          "and its uevent the IDs and slot libdrm parses");
+    kfree(t.buf);
+    sysfs_pci_virtual_remove(0xA0);
+    check(!sysfs_device_exists(SYSFS_PCI_DEVICE, 0xA0), "a withdrawn function is gone");
+}
+
 int main(void)
 {
     struct procfs_text text;
@@ -1348,11 +1764,17 @@ int main(void)
     oom_values();
     oom_floor();
     oom_open_errors();
+    drm_register_rows();
+    drm_link_rows();
+    drm_file_rows();
+    drm_event_rows();
+    sysfs_reg_rows();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
                "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
-               "sum and an interface's counts\n");
+               "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
+               "driver's attribute, link and PCI identity\n");
     }
     return failures != 0;
 }

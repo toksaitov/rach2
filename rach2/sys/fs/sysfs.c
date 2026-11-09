@@ -406,7 +406,7 @@ void sysfs_node_path(int handle, char *out, int cap)
 int sysfs_link_text(int handle, char *out, int cap)
 {
     char from[256], to[256];
-    int f = 0, t = 0, common = 0, n = 0, i;
+    int f = 0, t = 0, common = 0, n = 0, i, last = 0;
     struct sysfs_node *link = node_of(handle);
 
     if (!link || link->kind != SYSFS_NODE_LINK || !is_dir(node_of(link->target))) {
@@ -421,6 +421,16 @@ int sysfs_link_text(int handle, char *out, int cap)
         if ((from[f] == '/' || from[f] == '\0') && (to[t] == '/' || to[t] == '\0')) {
             common = f;
         }
+    }
+    /* As kernfs, climb to an ancestor of the target's parent, so that a
+     * link to a directory above it still names that directory. */
+    for (i = 0; to[i] != '\0'; i++) {
+        if (to[i] == '/') {
+            last = i;
+        }
+    }
+    if (common > last) {
+        common = last;
     }
     t = common;
     for (i = common; from[i] != '\0'; i++) {
