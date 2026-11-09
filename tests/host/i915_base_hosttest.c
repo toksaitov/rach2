@@ -276,6 +276,7 @@ static void row_uncore_init(void)
     done(&m);
 
     i915 = fresh(&m);
+    i915_model_poke(&m, FPGA_DBG, 0);
     i915_uncore_init(i915);
     CHECK("init: a clean chip has nothing to clear",
           i915_model_count(&m, I915_MODEL_WRITE, FPGA_DBG) == 0 &&

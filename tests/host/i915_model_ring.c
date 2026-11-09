@@ -104,8 +104,9 @@ int i915_model_take_message(struct i915_model *m)
     return 1;
 }
 
-/** The interrupts at power-on: every source masked and off, nothing
- * latched. */
+/** The interrupts as the Lenovo's firmware leaves them: every source
+ * masked and nothing pending, but PM's sources enabled and an unclaimed
+ * access latched in GEN7_ERR_INT. */
 static void irq_reset(struct i915_model *m, void *priv)
 {
     int bank;
@@ -117,6 +118,8 @@ static void irq_reset(struct i915_model *m, void *priv)
         i915_model_poke(m, model_irq_regs[bank][2], 0);
         i915_model_poke(m, model_irq_regs[bank][3], 0);
     }
+    i915_model_poke(m, GEN6_PMIER, LENOVO_FW_PMIER);
+    i915_model_poke(m, GEN7_ERR_INT, LENOVO_FW_ERR_INT);
 }
 
 /** A write to an interrupt register: an identity register, or the error
