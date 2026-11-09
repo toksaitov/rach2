@@ -61,7 +61,7 @@ A call interrupted by a signal is restarted by executing the
 again, as on i686.
 .Pp
 The table has a row for each of Linux 6.12's i386 numbers, 452 of them.
-213 rows run the x86-64 handler of a call whose arguments and structures
+232 rows run the x86-64 handler of a call whose arguments and structures
 have one layout in both interfaces, such as
 .Xr getpid 2 ,
 .Xr kill 2
@@ -74,8 +74,15 @@ and the socket calls, whose message headers, control messages aligned
 to 4 bytes,
 .Xr recvmmsg 2
 timeout and time-limit options are the i386 ones
-.Pq Xr send 2 , Xr recv 2 , Xr setsockopt 2 ;
-90 run a compat handler, which turns the i386 structures and the 64-bit
+.Pq Xr send 2 , Xr recv 2 , Xr setsockopt 2 ,
+the System V IPC and message queue calls, whose records without
+.Dv IPC_64 ,
+with it and of a message are the i386 ones
+.Pq Xr ipc 2 , Xr mq_open 2 ,
+.Xr futex 2
+with its 32-bit robust list, and the calls that write a resource usage
+or a CPU mask;
+118 run a compat handler, which turns the i386 structures and the 64-bit
 arguments i386 splits over two registers, low word first, into the x86-64
 handler's and its results back, as Linux's compat calls do, or, for
 .Xr execve 2 ,
@@ -86,7 +93,7 @@ the old
 and
 .Fn mmap2 ,
 does the i386 call's own work;
-60 run a compat handler that returns
+13 run a compat handler that returns
 .Er ENOSYS
 until its translation is written; 89 are empty, where Linux has no call
 or this kernel has no handler, and return
@@ -109,9 +116,20 @@ the vectored reads and writes,
 and
 .Nm poll
 in their forms, the time calls with both the 32-bit and the 64-bit
-timespec, and
+timespec,
 .Xr socketcall 2 ,
-whose arguments are 32-bit words.
+whose arguments are 32-bit words, the calls of 16-bit user and group IDs,
+.Nm nice ,
+.Nm umount ,
+the old
+.Xr uname 2
+forms, the limits of
+.Xr prlimit64 2 Ns 's
+older calls,
+.Nm sysinfo ,
+.Nm times
+and
+.Nm sched_rr_get_interval .
 A value too wide for its i386 field is
 .Er EOVERFLOW
 where Linux's compat call answers so.
