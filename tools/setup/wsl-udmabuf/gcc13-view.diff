@@ -1,0 +1,40 @@
+--- a/arch/Kconfig
++++ b/arch/Kconfig
+@@ -1821,7 +1821,7 @@
+ 	# Detect availability of the GCC option -fmin-function-alignment which
+ 	# guarantees minimal alignment for all functions, unlike
+ 	# -falign-functions which the compiler ignores for cold functions.
+-	def_bool $(cc-option, -fmin-function-alignment=8)
++	def_bool n
+ 
+ config CC_HAS_SANE_FUNCTION_ALIGNMENT
+ 	# Set if the guaranteed alignment with -fmin-function-alignment is
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -92,6 +92,7 @@
+ config GCC_ASM_GOTO_OUTPUT_BROKEN
+ 	bool
+ 	depends on CC_IS_GCC
++	default y
+ 	default y if GCC_VERSION < 110500
+ 	default y if GCC_VERSION >= 120000 && GCC_VERSION < 120400
+ 	default y if GCC_VERSION >= 130000 && GCC_VERSION < 130300
+--- a/lib/Kconfig.kasan
++++ b/lib/Kconfig.kasan
+@@ -35,7 +35,7 @@
+ 	def_bool $(cc-option, -fsanitize=kernel-address)
+ 
+ config CC_HAS_KASAN_SW_TAGS
+-	def_bool $(cc-option, -fsanitize=kernel-hwaddress)
++	def_bool n
+ 
+ # This option is only required for software KASAN modes.
+ # Old GCC versions do not have proper support for no_sanitize_address.
+--- a/include/linux/compiler-gcc.h
++++ b/include/linux/compiler-gcc.h
+@@ -142,4 +142,4 @@
+  * Bindgen uses LLVM even if our C compiler is GCC, so we cannot
+  * rely on the auto-detected CONFIG_CC_HAS_TYPEOF_UNQUAL.
+  */
+-#define CC_HAS_TYPEOF_UNQUAL (__GNUC__ >= 14)
++#define CC_HAS_TYPEOF_UNQUAL 0

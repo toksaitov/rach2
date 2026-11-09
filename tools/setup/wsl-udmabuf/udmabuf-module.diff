@@ -1,0 +1,41 @@
+--- a/drivers/dma-buf/udmabuf.c	2026-11-09 08:08:20
++++ b/drivers/dma-buf/udmabuf.c	2026-11-09 08:08:20
+@@ -16,6 +16,22 @@
+ #include <linux/vmalloc.h>
+ #include <linux/iosys-map.h>
+ 
++/*
++ * Built out of tree as a module for a kernel configured without
++ * CONFIG_UDMABUF: memfd_fcntl() is not exported, so the seals are read
++ * here as memfd_get_seals() in mm/memfd.c reads them.
++ */
++static int udmabuf_get_seals(struct file *file)
++{
++	if (shmem_file(file))
++		return SHMEM_I(file_inode(file))->seals;
++#ifdef CONFIG_HUGETLBFS
++	if (is_file_hugepages(file))
++		return HUGETLBFS_I(file_inode(file))->seals;
++#endif
++	return -EINVAL;
++}
++
+ static int list_limit = 1024;
+ module_param(list_limit, int, 0644);
+ MODULE_PARM_DESC(list_limit, "udmabuf_create_list->count limit. Default is 1024.");
+@@ -301,7 +317,7 @@
+ 	if (!shmem_file(memfd) && !is_file_hugepages(memfd))
+ 		return -EBADFD;
+ 
+-	seals = memfd_fcntl(memfd, F_GET_SEALS, 0);
++	seals = udmabuf_get_seals(memfd);
+ 	if (seals == -EINVAL)
+ 		return -EBADFD;
+ 
+@@ -574,3 +590,6 @@
+ module_exit(udmabuf_dev_exit)
+ 
+ MODULE_AUTHOR("Gerd Hoffmann <kraxel@redhat.com>");
++MODULE_DESCRIPTION("userspace dmabuf misc driver");
++MODULE_LICENSE("GPL");
++MODULE_IMPORT_NS("DMA_BUF");
