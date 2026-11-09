@@ -45,11 +45,11 @@ done
 # Accounts and the base runtime come from the Rach2 manifest and GNU ports.
 UNFOLLOWED="adduser"
 
-SNAPSHOT=20260927T082144Z
+SNAPSHOT=20261108T000000Z
 
 # Each suite as archive:suite:SHA-256 of its InRelease at SNAPSHOT.
 SUITES="debian:trixie:0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675
-debian-security:trixie-security:07731db874e977c02ed7da0a721ec9c53ed793f1360beb1e19dab65194b2edb7"
+debian-security:trixie-security:fa9db169adac7380297ee3cf1ba5f7741ffe6e7a2505f33bfb2b84b7003e8d6b"
 
 # The keys that sign the two suites, each as its name in sources-extra.txt, a
 # colon, and its primary fingerprint, which ftp-master.debian.org publishes

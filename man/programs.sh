@@ -375,7 +375,7 @@ BEGIN {
         if (line !~ /^#/) version[f[1]] = f[2]
     }
     close("vendor/gnu/sources-extra.txt")
-    while ((getline line < "vendor/gnu/chromium/fetch_chromium.sh") > 0) {
+    while ((getline line < "vendor/gnu/debian/fetch_debs.sh") > 0) {
         if (line ~ /^SNAPSHOT=/) {
             sub(/^SNAPSHOT=/, "", line)
             snapshot = line
@@ -385,7 +385,7 @@ BEGIN {
             suite = f[2]
         }
     }
-    close("vendor/gnu/chromium/fetch_chromium.sh")
+    close("vendor/gnu/debian/fetch_debs.sh")
     version["SpiderMonkey"] = version["firefox"]
     version["chromium-headless-shell"] = "Debian " suite " at " snapshot
     version["GCC"] = version["gcc"]
@@ -610,8 +610,8 @@ BEGIN {
     version["binutils, GCC, GDB"] = grab("vendor/gnu/sources.txt", "^binutils ", " .*") ", " \
         grab("vendor/gnu/sources.txt", "^gcc ", " .*") ", " grab("vendor/gnu/sources.txt", "^gdb ", " .*")
     version["SpiderMonkey"] = grab("vendor/gnu/sources-extra.txt", "^firefox ", " .*")
-    version["chromium-headless-shell"] = "Debian " grab("vendor/gnu/chromium/fetch_chromium.sh", "^SUITES=\"[a-z-]*:", ":.*") \
-        " at " grab("vendor/gnu/chromium/fetch_chromium.sh", "^SNAPSHOT=", "")
+    version["chromium-headless-shell"] = "Debian " grab("vendor/gnu/debian/fetch_debs.sh", "^SUITES=\"[a-z-]*:", ":.*") \
+        " at " grab("vendor/gnu/debian/fetch_debs.sh", "^SNAPSHOT=", "")
     version["termbox2"] = grab("krffs/vendor/termbox2.h", "^#define TB_VERSION_STR \"", "\".*")
     version["Unifont"] = grab("mk/unifont.mk", "^UNIFONT_HEX *= *vendor/unifont/unifont_all-", "\\.hex\\.gz$")
     version["Multiboot header"] = "none given"

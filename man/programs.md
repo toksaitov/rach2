@@ -428,7 +428,7 @@ GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)
 | [GCC](../vendor/gnu/native/Readme.md) | 16.2.0 | the C and C++ compiler, run on Rach2 |
 | [GDB](../vendor/gnu/native/Readme.md) | 18.1 | the debugger, with gdbserver |
 | [SpiderMonkey](../vendor/gnu/spidermonkey/Readme.md) | 140.16.0esr | js, the shell of Firefox's JavaScript engine, with its JIT |
-| [chromium-headless-shell](../vendor/gnu/chromium/Readme.md) | Debian trixie at 20260927T082144Z | Debian's Chromium without a display, with D-Bus's system bus |
+| [chromium-headless-shell](../vendor/gnu/chromium/Readme.md) | Debian trixie at 20261108T000000Z | Debian's Chromium without a display, with D-Bus's system bus |
 
 ### The ports
 
@@ -562,7 +562,7 @@ The third-party code of the repository, each with the version the build pins, it
 | GNU ports | [each its own](#the-ports) | each port its own, which its tarball has | [vendor/gnu/Readme.md](../vendor/gnu/Readme.md) |
 | binutils, GCC, GDB | 2.47, 16.2.0, 18.1 | GPL 3 or later | [vendor/gnu/native/Readme.md](../vendor/gnu/native/Readme.md) |
 | SpiderMonkey | 140.16.0esr | MPL 2.0 | [vendor/gnu/spidermonkey/Readme.md](../vendor/gnu/spidermonkey/Readme.md) |
-| chromium-headless-shell | Debian trixie at 20260927T082144Z | BSD 3-clause | [vendor/gnu/chromium/Readme.md](../vendor/gnu/chromium/Readme.md) |
+| chromium-headless-shell | Debian trixie at 20261108T000000Z | BSD 3-clause | [vendor/gnu/chromium/Readme.md](../vendor/gnu/chromium/Readme.md) |
 | termbox2 | 2.7.0-dev | MIT | [krffs/Readme.md](../krffs/Readme.md) |
 | Unifont | 18.0.01 | SIL OFL 1.1, or GPL 2 or later with the font embedding exception | [vendor/unifont/Readme.md](../vendor/unifont/Readme.md) |
 | Multiboot header | none given | MIT-style | [rach2/vendor/multiboot.h](../rach2/vendor/multiboot.h) |
