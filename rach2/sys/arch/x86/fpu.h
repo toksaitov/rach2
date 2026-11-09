@@ -193,4 +193,49 @@ int fpu_frame_take(uintptr_t fp, void *area);
  * -1 for a frame it refuses or an area the heap cannot give. */
 int fpu_frame_load(uintptr_t fp);
 
+#if defined(FPU_X86_64)
+/*
+ * The i386 forms on the x86-64 kernel, for a 32-bit program's signal frame
+ * and for its tracer: Linux's `user_i387_ia32_struct` and the frame's
+ * `struct _fpstate_32`, which Linux's 64-bit kernel builds from the
+ * `fxsave64` or XSAVE image. The state is placed with the image 64-byte
+ * aligned and the 112 bytes of the x87 part, the status word and the magic
+ * word 0 before it; without XSAVE the image's software bytes are zero, as
+ * in the kernel's own frames.
+ */
+
+/** Write the x87 part of `area` into `env` as the 108-byte
+ * `user_i387_ia32_struct`, as Linux's `convert_from_fxsr` does on x86-64:
+ * the pointers' low halves, the code selector `cs` whole and the data
+ * selector `ds`, since `fxsave64` keeps neither selector. */
+void fpu_env32_get(const void *area, uint8_t *env, uint32_t cs, uint32_t ds);
+
+/** Put the 108-byte `user_i387_ia32_struct` `env` into the x87 part of
+ * `area`, as Linux's `convert_to_fxsr` does on x86-64; with XSAVE the x87
+ * state is then marked in use. */
+void fpu_env32_set(void *area, const uint8_t *env);
+
+/** The address of the `struct _fpstate_32` of an i386 frame below the stack
+ * pointer `sp`, as Linux's `fpu__alloc_mathframe` places it. */
+uintptr_t fpu_frame32_place(uintptr_t sp);
+
+/** The most bytes `fpu_frame32_place` puts between a stack pointer and the
+ * state it places. */
+uintptr_t fpu_frame32_bytes(void);
+
+/** Write the state in `area` into an i386 frame at the user address `fp`,
+ * with `cs` and `ds` the selectors of its x87 part (`fpu_env32_get`).
+ * Returns 0, or -1 when the stack cannot be written. */
+int fpu_frame32_put(uintptr_t fp, const void *area, uint32_t cs, uint32_t ds);
+
+/** Build `area` from the i386 frame's state at the user address `fp`, as
+ * `fpu_frame_take` does, with the x87 state from the 108-byte part, as
+ * Linux's `__fpu_restore_sig` folds it in. 0, or -1 for a frame refused. */
+int fpu_frame32_take(uintptr_t fp, void *area);
+
+/** Load the live state from the i386 frame's state at the user address
+ * `fp`, as `fpu_frame_load` does. */
+int fpu_frame32_load(uintptr_t fp);
+#endif
+
 #endif /* _X86_FPU_H_ */

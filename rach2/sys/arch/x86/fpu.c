@@ -66,15 +66,19 @@
 #define FP_XSTATE_MAGIC1 0x46505853u
 #define FP_XSTATE_MAGIC2 0x46505845u
 
-/* The bytes of a frame's state before its `fxsave` or XSAVE image: none on
- * x86-64; on i686 the x87 part, the status word and the magic word of
- * `struct _fpstate_32`. */
+/* The bytes of `struct _fpstate_32` before its `fxsave` or XSAVE image:
+ * the x87 part, the status word and the magic word. A frame's state has
+ * them on i686, and on x86-64 in an i386 program's frame alone. */
+#define LX_PREFIX 112u
+#define LX_STATUS 108
+#define LX_MAGIC  110
+
+/* The bytes of a frame's state before its image, by the kernel's own
+ * layout: none on x86-64. */
 #if defined(FPU_X86_64)
 #define FRAME_PREFIX 0u
 #else
-#define FRAME_PREFIX 112u
-#define LX_STATUS    108
-#define LX_MAGIC     110
+#define FRAME_PREFIX LX_PREFIX
 #endif
 
 /* The state a process starts with: written once at boot from the unit
@@ -328,6 +332,59 @@ static uint32_t abridged_tag(uint32_t tags)
     return abridged;
 }
 
+#if defined(FPU_X86_64)
+
+/**
+ * The 64-bit kernel keeps the x87 unit's instruction and operand pointers
+ * whole, from `fxsave64`, and not their selectors, so the environment
+ * takes the low halves of the pointers and the selectors from `cs` and
+ * `ds`, as Linux's `convert_from_fxsr` takes them from the thread's frame
+ * and DS; the opcode is left out.
+ */
+void fpu_env32_get(const void *area, uint8_t *env, uint32_t cs, uint32_t ds)
+{
+    const uint8_t *fx = area;
+    uint32_t i;
+
+    put32(env + FN_CWD, get16(fx + FX_CWD) | 0xFFFF0000u);
+    put32(env + FN_SWD, get16(fx + FX_SWD) | 0xFFFF0000u);
+    put32(env + FN_TWD, full_tag(fx));
+    put32(env + FN_FIP, get32(fx + FX_FIP));
+    put32(env + FN_FCS, cs);
+    put32(env + FN_FOO, get32(fx + FX_FOO));
+    put32(env + FN_FOS, ds | 0xFFFF0000u);
+    for (i = 0; i < 8; i++) {
+        k_memcpy(env + FN_ST + i * 10u, fx + FX_ST + i * 16u, 10);
+    }
+}
+
+/** Fold the `user_i387_ia32_struct` `env` into the x87 part of the
+ * `fxsave64` image `fx`, as Linux's `convert_to_fxsr` does on x86-64: the
+ * opcode from the high half of the code selector's word, the pointers
+ * zero-extended, the selectors ignored. */
+static void env32_to_fx(const uint8_t *env, uint8_t *fx)
+{
+    uint32_t i;
+
+    put16(fx + FX_CWD, get32(env + FN_CWD));
+    put16(fx + FX_SWD, get32(env + FN_SWD));
+    fx[FX_TWD] = (uint8_t)abridged_tag(get32(env + FN_TWD));
+    put16(fx + FX_FOP, get32(env + FN_FCS) >> 16);
+    put64(fx + FX_FIP, get32(env + FN_FIP));
+    put64(fx + FX_FOO, get32(env + FN_FOO));
+    for (i = 0; i < 8; i++) {
+        k_memcpy(fx + FX_ST + i * 16u, env + FN_ST + i * 10u, 10);
+    }
+}
+
+void fpu_env32_set(void *area, const uint8_t *env)
+{
+    env32_to_fx(env, area);
+    mark_in_use(area, XFEATURE_X87);
+}
+
+#endif
+
 void fpu_env_get(const void *area, uint8_t *env)
 {
     const uint8_t *fx = area;
@@ -458,12 +515,13 @@ uintptr_t fpu_frame_bytes(void)
 }
 
 /** Write the software bytes `sw` of a frame's XSAVE image, Linux's
- * `struct _fpx_sw_bytes`. */
-static void sw_bytes_put(uint8_t *sw)
+ * `struct _fpx_sw_bytes`, for a frame whose state has `prefix` bytes
+ * before its image. */
+static void sw_bytes_put(uint8_t *sw, uint32_t prefix)
 {
     k_memset(sw, 0, FX_SIZE - FX_SW);
     put32(sw, FP_XSTATE_MAGIC1);
-    put32(sw + 4, FRAME_PREFIX + area_size + 4u);
+    put32(sw + 4, prefix + area_size + 4u);
     put64(sw + 8, xfeatures);
     put32(sw + 16, area_size);
 }
@@ -484,33 +542,56 @@ uint32_t fpu_frame_uc_flags(void)
     return use_xsave ? UC_FP_XSTATE : 0u;
 }
 
-int fpu_frame_put(uintptr_t fp, const void *area)
+/**
+ * Write the XSAVE image of `area` into a frame at the user address `fp`,
+ * after the `prefix` bytes of `head`, which are the x87 part, the status
+ * word and the magic word of `struct _fpstate_32`, or none: the legacy part
+ * with the reserved bytes zero and the software bytes Linux writes, the
+ * header with x87 and SSE marked in use, the extended part, and
+ * FP_XSTATE_MAGIC2 after it. `head` may be NULL when `prefix` is 0. 0, or
+ * -1 when the stack cannot be written.
+ */
+static int frame_put_xsave(uintptr_t fp, const void *area, const uint8_t *head, uint32_t prefix)
 {
     const uint8_t *a = area;
-    uint8_t head[FRAME_PREFIX + XSAVE_EXT];
-    uint8_t *img = head + FRAME_PREFIX;
+    uint8_t buf[LX_PREFIX + XSAVE_EXT];
+    uint8_t *img = buf + prefix;
     uint8_t magic2[4];
+
+    if (prefix != 0) {
+        k_memcpy(buf, head, prefix);
+    }
+    k_memcpy(img, a, XSAVE_EXT);
+    k_memset(img + FX_PAD, 0, FX_SW - FX_PAD);
+    sw_bytes_put(img + FX_SW, prefix);
+    put64(img + XSAVE_HDR, get64(img + XSAVE_HDR) | XFEATURE_X87 | XFEATURE_SSE);
+    put32(magic2, FP_XSTATE_MAGIC2);
+    if (copy_to_user((void __user *)fp, buf, prefix + XSAVE_EXT) != 0 ||
+        copy_to_user((void __user *)(fp + prefix + XSAVE_EXT), a + XSAVE_EXT,
+                     area_size - XSAVE_EXT) != 0 ||
+        copy_to_user((void __user *)(fp + prefix + area_size), magic2, sizeof(magic2)) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int fpu_frame_put(uintptr_t fp, const void *area)
+{
+#if !defined(FPU_X86_64)
+    uint8_t head[LX_PREFIX];
+#endif
 
     if (!use_xsave) {
         return frame_put_legacy(fp, area);
     }
-#if !defined(FPU_X86_64)
+#if defined(FPU_X86_64)
+    return frame_put_xsave(fp, area, NULL, 0);
+#else
     fpu_env_get(area, head);
-    put16(head + LX_STATUS, get16(a + FX_SWD));
+    put16(head + LX_STATUS, get16((const uint8_t *)area + FX_SWD));
     put16(head + LX_MAGIC, 0);
+    return frame_put_xsave(fp, area, head, FRAME_PREFIX);
 #endif
-    k_memcpy(img, a, XSAVE_EXT);
-    k_memset(img + FX_PAD, 0, FX_SW - FX_PAD);
-    sw_bytes_put(img + FX_SW);
-    put64(img + XSAVE_HDR, get64(img + XSAVE_HDR) | XFEATURE_X87 | XFEATURE_SSE);
-    put32(magic2, FP_XSTATE_MAGIC2);
-    if (copy_to_user((void __user *)fp, head, sizeof(head)) != 0 ||
-        copy_to_user((void __user *)(fp + sizeof(head)), a + XSAVE_EXT, area_size - XSAVE_EXT) !=
-            0 ||
-        copy_to_user((void __user *)(fp + FRAME_PREFIX + area_size), magic2, sizeof(magic2)) != 0) {
-        return -1;
-    }
-    return 0;
 }
 
 /**
@@ -544,26 +625,19 @@ static int frame_take_legacy(uintptr_t fp, void *area)
     return from_linux(img, area);
 }
 
-int fpu_frame_take(uintptr_t fp, void *area)
+/**
+ * Build `area` from a frame's XSAVE image at the user address `image`, as
+ * `fpu_frame_take` describes it, but for the x87 part before the image of
+ * an i386 frame, which the caller folds in. 0, or -1 for a frame refused.
+ */
+static int frame_take_xsave(uintptr_t image, void *area)
 {
     uint8_t *a = area;
-    uintptr_t image = fp + FRAME_PREFIX;
     uint32_t size, magic2 = 0;
     uint64_t bv = XFEATURE_X87 | XFEATURE_SSE;
     uint64_t rfbm;
     int i;
-#if !defined(FPU_X86_64)
-    uint8_t env[FPU_ENV_SIZE];
-#endif
 
-    if (!use_xsave) {
-        return frame_take_legacy(fp, area);
-    }
-#if !defined(FPU_X86_64)
-    if (copy_from_user(env, (const void __user *)fp, sizeof(env)) != 0) {
-        return -1;
-    }
-#endif
     if (copy_from_user(a, (const void __user *)image, FX_SIZE) != 0) {
         return -1;
     }
@@ -588,14 +662,88 @@ int fpu_frame_take(uintptr_t fp, void *area)
         bv = get64(a + XSAVE_HDR) & rfbm;
     }
     put64(a + XSAVE_HDR, bv);
-    if (get32(a + FX_MXCSR) & ~mxcsr_mask) {
+    return (get32(a + FX_MXCSR) & ~mxcsr_mask) ? -1 : 0;
+}
+
+int fpu_frame_take(uintptr_t fp, void *area)
+{
+#if !defined(FPU_X86_64)
+    uint8_t env[FPU_ENV_SIZE];
+#endif
+
+    if (!use_xsave) {
+        return frame_take_legacy(fp, area);
+    }
+#if !defined(FPU_X86_64)
+    if (copy_from_user(env, (const void __user *)fp, sizeof(env)) != 0) {
+        return -1;
+    }
+#endif
+    if (frame_take_xsave(fp + FRAME_PREFIX, area) != 0) {
         return -1;
     }
 #if !defined(FPU_X86_64)
-    env_to_fx(env, a);
+    env_to_fx(env, area);
 #endif
     return 0;
 }
+
+#if defined(FPU_X86_64)
+
+/** The bytes of an i386 frame's image: the XSAVE image and
+ * FP_XSTATE_MAGIC2, or the `fxsave64` image. */
+static uint32_t frame32_image_bytes(void)
+{
+    return use_xsave ? area_size + 4u : FX_SIZE;
+}
+
+uintptr_t fpu_frame32_place(uintptr_t sp)
+{
+    return ((sp - frame32_image_bytes()) & ~(uintptr_t)63u) - LX_PREFIX;
+}
+
+uintptr_t fpu_frame32_bytes(void)
+{
+    return frame32_image_bytes() + 63u + LX_PREFIX;
+}
+
+int fpu_frame32_put(uintptr_t fp, const void *area, uint32_t cs, uint32_t ds)
+{
+    uint8_t buf[LX_PREFIX + FX_SIZE];
+
+    fpu_env32_get(area, buf, cs, ds);
+    put16(buf + LX_STATUS, get16((const uint8_t *)area + FX_SWD));
+    put16(buf + LX_MAGIC, 0);
+    if (use_xsave) {
+        return frame_put_xsave(fp, area, buf, LX_PREFIX);
+    }
+    k_memcpy(buf + LX_PREFIX, area, FX_SW);
+    k_memset(buf + LX_PREFIX + FX_SW, 0, FX_SIZE - FX_SW);
+    return copy_to_user((void __user *)fp, buf, sizeof(buf)) == 0 ? 0 : -1;
+}
+
+int fpu_frame32_take(uintptr_t fp, void *area)
+{
+    uint8_t env[FPU_ENV_SIZE];
+
+    if (copy_from_user(env, (const void __user *)fp, sizeof(env)) != 0) {
+        return -1;
+    }
+    if (use_xsave) {
+        if (frame_take_xsave(fp + LX_PREFIX, area) != 0) {
+            return -1;
+        }
+    } else {
+        if (copy_from_user(area, (const void __user *)(fp + LX_PREFIX), FX_SIZE) != 0 ||
+            (get32((const uint8_t *)area + FX_MXCSR) & ~mxcsr_mask)) {
+            return -1;
+        }
+    }
+    env32_to_fx(env, area);
+    return 0;
+}
+
+#endif
 
 #if !defined(RACH2_HOSTTEST)
 
@@ -812,11 +960,15 @@ void fpu_reset(void)
 }
 
 /**
+ * Load the live state from the frame's state at the user address `fp`, as
+ * `take` builds it, through an area from the heap: 0, or -1 for a frame
+ * `take` refuses or an area the heap cannot give.
+ *
  * The frame cannot be taken into the process's own area: the copy from the
  * stack may sleep for a page, and the switch away would save the registers
  * over what it had copied.
  */
-int fpu_frame_load(uintptr_t fp)
+static int frame_load(uintptr_t fp, int (*take)(uintptr_t, void *))
 {
     void *area = fpu_area_alloc();
     int rc;
@@ -824,12 +976,24 @@ int fpu_frame_load(uintptr_t fp)
     if (!area) {
         return -1;
     }
-    rc = fpu_frame_take(fp, area);
+    rc = take(fp, area);
     if (rc == 0) {
         load_state(area);
     }
     fpu_area_free(area);
     return rc;
 }
+
+int fpu_frame_load(uintptr_t fp)
+{
+    return frame_load(fp, fpu_frame_take);
+}
+
+#if defined(FPU_X86_64)
+int fpu_frame32_load(uintptr_t fp)
+{
+    return frame_load(fp, fpu_frame32_take);
+}
+#endif
 
 #endif /* !RACH2_HOSTTEST */
