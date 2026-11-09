@@ -122,12 +122,15 @@ CRTC; without it such a commit is
 .Er EINVAL .
 .It Dv DRM_MODE_ATOMIC_NONBLOCK
 Return before the new state reaches the screen.
+A commit whose in-fences have not signalled is finished by the kernel's
+.Ql kdrm
+thread once they have.
 .It Dv DRM_MODE_PAGE_FLIP_EVENT
 Queue a
 .Dv DRM_EVENT_FLIP_COMPLETE
 for each CRTC of the state, with the call's
 .Fa user_data ,
-when the state reaches the screen.
+sent at the vblank that shows the state.
 .It Dv DRM_MODE_PAGE_FLIP_ASYNC
 Flip without waiting for the vblank, on a driver that can.
 .El
@@ -150,7 +153,8 @@ and
 .Ql CRTC_H
 its place in pixels.
 .Ql IN_FENCE_FD
-is a sync file the commit waits for.
+is a sync file whose fence the commit waits for before the plane is
+programmed.
 A CRTC's
 .Ql ACTIVE
 turns it on,
@@ -163,10 +167,95 @@ and
 .Ql CTM
 are colour blobs, and
 .Ql OUT_FENCE_PTR
-is where to write a fence's descriptor.
+is where to write the descriptor of a sync file whose fence signals at the
+vblank that shows the state.
 A connector's
 .Ql CRTC_ID
 routes it.
+.Pp
+A commit that leaves a CRTC on or turns it on or off ends at the vblank
+that shows its state: it is pending until then, and its events are sent and
+its out-fence signals then.
+A blocking commit waits for the flip it makes, and for a flip pending on
+any CRTC it changes; a
+.Dv DRM_MODE_ATOMIC_NONBLOCK
+commit on a CRTC with a flip pending is
+.Er EBUSY .
+The descriptors of the out-fences are written once the commit has
+succeeded; a commit that fails writes \-1 to each.
+.Ss Vblanks and events
+A CRTC whose driver takes its vblank interrupt counts the vblanks it scans
+out, in 64 bits, and stamps each with the
+.Dv CLOCK_MONOTONIC
+time.
+The interrupt is on while a wait or a queued event holds it, and goes off at
+the first vblank five seconds after the last holder lets go, as Linux's
+default
+.Ql vblankoffdelay
+does; the count does not move while it is off.
+A CRTC that comes on adds one to its count.
+.Pp
+Each call takes a CRTC that is on, and is
+.Er EINVAL
+for one that is off.
+A count requested in 32 bits is taken as the 64-bit count nearest the
+current one, and a count at most 2^23 behind the current one has passed.
+.Bl -tag -width DRM_IOCTL_CRTC_QUEUE_SEQUENCE
+.It Dv DRM_IOCTL_WAIT_VBLANK
+Wait on the CRTC whose index the bits of
+.Dv _DRM_VBLANK_HIGH_CRTC_MASK
+give, or 1 with
+.Dv _DRM_VBLANK_SECONDARY ,
+or 0, for a count:
+.Dv _DRM_VBLANK_ABSOLUTE
+or
+.Dv _DRM_VBLANK_RELATIVE
+to the current one, and with
+.Dv _DRM_VBLANK_NEXTONMISS
+the next vblank when that count has passed.
+The reply holds the count reached and its time.
+A wait ends at the latest after 3 seconds, with
+.Er EBUSY .
+With
+.Dv _DRM_VBLANK_EVENT
+the call returns at once and queues a
+.Dv DRM_EVENT_VBLANK
+with
+.Fa request.signal
+as its user data; the reply holds the count it waits for.
+.It Dv DRM_IOCTL_CRTC_GET_SEQUENCE
+Whether a CRTC is enabled, its count, and the time of its last vblank in
+nanoseconds.
+.It Dv DRM_IOCTL_CRTC_QUEUE_SEQUENCE
+Queue a
+.Dv DRM_EVENT_CRTC_SEQUENCE
+for a count, absolute or with
+.Dv DRM_CRTC_SEQUENCE_RELATIVE
+relative to the current one, the next with
+.Dv DRM_CRTC_SEQUENCE_NEXT_ON_MISS
+when it has passed;
+.Fa sequence
+is set to the count it waits for.
+.El
+.Pp
+An event is sent at the vblank its count names, or at once when that count
+has passed, and events are read from the card's descriptor in the order
+they are sent, as
+.Xr drm 4
+says: by count, and at one count in the order they were queued.
+A
+.Dv DRM_EVENT_VBLANK
+or
+.Dv DRM_EVENT_FLIP_COMPLETE
+holds the count in 32 bits, the time in seconds and microseconds and the
+CRTC's ID; a
+.Dv DRM_EVENT_CRTC_SEQUENCE
+holds the count in 64 bits and the time in nanoseconds.
+A CRTC that goes off sends every event it has queued at once, with the
+count it reached.
+On a driver without vblank interrupts the vblank calls are
+.Er EOPNOTSUPP ,
+and a commit's events are sent as it ends, with count 0.
 .Ss The calls before atomic
 Each is made one commit, as Linux's helpers make it.
 .Bl -tag -width DRM_IOCTL_MODE_OBJ_SETPROPERTY
@@ -205,7 +294,11 @@ A plane's or connector's
 .Ql CRTC_ID
 of no CRTC.
 .It Er EBUSY
-A page flip of a CRTC whose primary plane shows nothing.
+A page flip of a CRTC whose primary plane shows nothing; a
+.Dv DRM_MODE_ATOMIC_NONBLOCK
+commit or page flip on a CRTC whose flip is pending; a
+.Dv DRM_IOCTL_WAIT_VBLANK
+that waited 3 seconds.
 .It Er EFAULT
 An array or a value out of the caller's memory.
 .It Er EINVAL
@@ -215,12 +308,21 @@ an event without a CRTC;
 a format, modifier, pitch or size the device does not take; a framebuffer
 a plane cannot show; a route an encoder cannot take; a page flip that
 changes the format or names a target vblank; a blob of length 0 or of no
-ID; or
+ID; a vblank call on a CRTC that is off, of an index the device does not
+have, with
+.Dv _DRM_VBLANK_SIGNAL
+or with an unknown flag; or
 .Dv DRM_IOCTL_MODE_ATOMIC
 by a file without the atomic capability.
+.It Er EINTR
+A signal came during a blocking commit's wait for a pending flip or for its
+in-fences, or during
+.Dv DRM_IOCTL_WAIT_VBLANK .
 .It Er ENOENT
 An ID of no object of the kind asked, a property an atomic commit names
 that the object does not have, or a framebuffer of another file.
+.It Er ENOMEM
+No room for another event in the file's 4096 bytes.
 .It Er ENOSPC
 A plane's source outside its framebuffer.
 .It Er ENOSYS
@@ -233,7 +335,8 @@ on a driver that needs no flush.
 on a CRTC without a cursor.
 .It Er EOPNOTSUPP
 A device without mode setting, an atomic call on a driver without atomic
-commits, or a lease call.
+commits, a vblank call on a driver without vblank interrupts, or a lease
+call.
 .It Er EPERM
 .Dv DRM_IOCTL_MODE_DESTROYPROPBLOB
 of a blob another file owns.
@@ -250,12 +353,9 @@ offset past 16 bits.
 The calls, structures, properties, errors, mode lists and the order of
 object IDs are Linux 6.12's.
 .Sh BUGS
-A commit completes before the call returns, so
-.Dv DRM_MODE_ATOMIC_NONBLOCK
-waits, and an event is sent as the commit ends, not at the vblank.
-.Ql OUT_FENCE_PTR
-is written \-1, and a target vblank of a page flip is
-.Er EINVAL .
+A target vblank of a page flip is
+.Er EINVAL ,
+as Linux answers for a driver without one.
 The lease calls are
 .Er EOPNOTSUPP .
 The EDID's quirks, DisplayID blocks, stereo modes and tiles are not read.
