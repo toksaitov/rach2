@@ -10,7 +10,10 @@
 # own with no display server, the same in both guests (Rach2's root has no
 # Xvfb), on llvmpipe, which LIBGL_ALWAYS_SOFTWARE=1 names, so that EGL tries
 # no render node of the display first. GL tests that need a window system
-# skip or crash there, on both sides alike. The
+# skip or crash there, on both sides alike. PIGLIT_NO_FAST_SKIP=1 makes each
+# test check its own requirements: piglit's fast skip asks wflinfo for the
+# GL versions, which it does not give on this platform, and skips every test
+# that names one. The
 # parts, by the name of the patterns:
 #
 #   gl-1.0 gl-1.1  the OpenGL 1.0 and 1.1 tests
@@ -80,9 +83,9 @@ runner_record "case piglit quick $*"
 runner_record "warmup 0"
 runner_record "repetitions 1"
 runner_record "piglit $(dpkg-query -W -f '${Version}' piglit 2> /dev/null || echo unknown), platform surfaceless_egl, a process on each CPU"
-PIGLIT_COMPRESSION=none LIBGL_ALWAYS_SOFTWARE=1
-export PIGLIT_COMPRESSION LIBGL_ALWAYS_SOFTWARE
-runner_record "env LIBGL_ALWAYS_SOFTWARE=1"
+PIGLIT_COMPRESSION=none LIBGL_ALWAYS_SOFTWARE=1 PIGLIT_NO_FAST_SKIP=1
+export PIGLIT_COMPRESSION LIBGL_ALWAYS_SOFTWARE PIGLIT_NO_FAST_SKIP
+runner_record "env LIBGL_ALWAYS_SOFTWARE=1 PIGLIT_NO_FAST_SKIP=1"
 
 status=0
 for part; do
