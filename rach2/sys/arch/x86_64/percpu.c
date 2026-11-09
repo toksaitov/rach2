@@ -45,8 +45,10 @@ static uint8_t debug_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16))
  * kernel starts with interrupts off and the direction flag clear. */
 #define SYSCALL_FMASK 0x47700u
 
-/* The `syscall` entry (isr_handler.s). */
+/* The `syscall` entry of 64-bit code, and the one of 32-bit code, which
+ * answers ENOSYS (isr_handler.s). */
 extern void syscall_entry(void);
+extern void syscall32_ignore(void);
 
 /* The operand of `lgdt`, and the routine that loads it and reloads the
  * segment registers (switch.s). */
@@ -78,6 +80,8 @@ void msr_write(uint32_t msr, uint64_t value)
 #define DESC_KERNEL_DATA 0x00CF92000000FFFFUL /* present, DPL 0, writable data */
 #define DESC_USER_DATA   0x00CFF2000000FFFFUL /* present, DPL 3, writable data */
 #define DESC_USER_CODE   0x00AFFA000000FFFFUL /* present, DPL 3, code, L */
+/* Present, DPL 3, readable code, D: 32-bit, a 4 GiB limit in pages. */
+#define DESC_USER_CODE32 0x00CFFA000000FFFFUL
 
 /**
  * Fill processor `id`'s record: the GDT with the TSS's descriptor, which is
@@ -97,6 +101,7 @@ static void cpu_fill(uint32_t id)
 
     c->gdt[GDT_KERNEL_CODE >> 3] = DESC_KERNEL_CODE;
     c->gdt[GDT_KERNEL_DATA >> 3] = DESC_KERNEL_DATA;
+    c->gdt[GDT_USER_CODE32 >> 3] = DESC_USER_CODE32;
     c->gdt[GDT_USER_DATA >> 3] = DESC_USER_DATA;
     c->gdt[GDT_USER_CODE >> 3] = DESC_USER_CODE;
     /* Present, DPL 0, type 9: an available 64-bit TSS. */
@@ -129,15 +134,19 @@ void init_gdt(void)
  * IA32_STAR has the kernel's code selector for the entry in bits 32 to 47,
  * and the base of the user's selectors for the return in bits 48 to 63
  * (percpu.h); IA32_LSTAR has the entry, and IA32_FMASK the flags the entry
- * clears.
+ * clears. IA32_CSTAR has the entry of a `syscall` from compatibility mode,
+ * which AMD's processors take and Intel's refuse with #UD; it answers
+ * ENOSYS, as Linux's `ignore_sysret`, since a 32-bit program enters by
+ * `int $0x80`.
  */
 void init_tss(uintptr_t kernel_stack)
 {
     cpu_set_kernel_stack(kernel_stack);
     __asm__ __volatile__("ltr %w0" : : "r"(GDT_TSS));
 
-    msr_write(MSR_STAR, ((uint64_t)(GDT_USER_DATA - 8u) << 48) | ((uint64_t)GDT_KERNEL_CODE << 32));
+    msr_write(MSR_STAR, ((uint64_t)GDT_USER_CODE32 << 48) | ((uint64_t)GDT_KERNEL_CODE << 32));
     msr_write(MSR_LSTAR, (uint64_t)(uintptr_t)syscall_entry);
+    msr_write(MSR_CSTAR, (uint64_t)(uintptr_t)syscall32_ignore);
     msr_write(MSR_FMASK, SYSCALL_FMASK);
     msr_write(MSR_EFER, msr_read(MSR_EFER) | EFER_SCE);
 }

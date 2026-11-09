@@ -27,7 +27,9 @@
 #
 # Vectors with an error code from the processor (8, 10 to 14, 17, 21, 29 and
 # 30) push only their vector; the others push a zero first, so the frame has
-# one shape. There is no gate for int $0x80 (idt.c).
+# one shape. The gate of `int $0x80`, the i386 system call, pushes the
+# error code SC_ENTRY_IA32 (cpu.h) and the vector SYSCALL_VECTOR, which
+# x86_64_route (idt.c) hands to the system call's handler.
 
 # Byte offsets in the frame, struct isr_params (cpu.h).
 .set F_R11,    32
@@ -42,9 +44,14 @@
 .set CPU_USER_RSP,   16
 
 # The user's selectors (percpu.h) and the system call's vector (sysnr.h).
+.set GDT_USER_CODE32, 0x23
 .set GDT_USER_DATA,  0x2B
 .set GDT_USER_CODE,  0x33
 .set SYSCALL_VECTOR, 128
+.set SC_ENTRY_IA32,  0x80
+
+# -ENOSYS, the result of a `syscall` from compatibility mode.
+.set ENOSYS_RESULT, -38
 
 # The flags only `iretq` restores: TF, and RF, which `sysret` clears.
 .set RFLAGS_TF_RF, 0x10100
@@ -295,17 +302,25 @@ isr_return:
     call isr_leave
 
 # Restore the frame and return with `iretq`, interrupts off until the flags
-# it loads. A return to user mode at a non-canonical address, one whose bits
-# 47 to 63 are not all equal, would fault `iretq` itself, in ring 0 with the
-# user's GS; the address becomes 0 instead, below USER_ADDR_MIN, where the
-# program takes its SIGSEGV in user mode. Only a frame a tracer wrote can
-# have one. Shifted right by 47 with its sign, a canonical address is 0 or
-# -1, and one more than that is at most 1.
+# it loads. A return to user mode at an address `iretq` would fault on, in
+# ring 0 with the user's GS, gets the address 0 instead, below
+# USER_ADDR_MIN, where the program takes its SIGSEGV in user mode: in 64-bit
+# code a non-canonical address, one whose bits 47 to 63 are not all equal,
+# and in 32-bit code one past the code segment's 4 GiB limit. Only a frame a
+# tracer or a signal return wrote can have one. Shifted right by 47 with its
+# sign, a canonical address is 0 or -1, and one more than that is at most 1.
 .globl isr_exit
 isr_exit:
     testb $3, F_CS(%rsp)
     jz .exit_restore
     movq F_RIP(%rsp), %rax
+    cmpq $GDT_USER_CODE32, F_CS(%rsp)
+    jne .exit_canonical
+    shrq $32, %rax
+    jz .exit_restore
+    movq $0, F_RIP(%rsp)
+    jmp .exit_restore
+.exit_canonical:
     sarq $47, %rax
     incq %rax
     cmpq $1, %rax
@@ -530,6 +545,27 @@ syscall_entry:
     movq 40(%rsp), %rsp
     swapgs
     sysretq
+
+# The entry of a `syscall` from compatibility mode, IA32_CSTAR's, which only
+# AMD's processors take: it answers -ENOSYS and returns at once by
+# `sysretl`, the form without REX.W, which returns to the 32-bit code
+# segment STAR names, touching no memory, the stack or GS, as Linux's
+# `ignore_sysret`. A 32-bit program enters by `int $0x80`.
+.globl syscall32_ignore
+syscall32_ignore:
+    movl $ENOSYS_RESULT, %eax
+    # sysretl, which TinyCC's assembler does not name.
+    .byte 0x0f, 0x07
+
+# The i386 system call, the gate of vector 0x80 at DPL 3, from 32-bit code
+# or 64-bit: the frame of an interrupt, with SC_ENTRY_IA32 for its error
+# code, so that the dispatcher takes the number and the arguments from
+# i386's registers and the compat table.
+.globl int80_isr
+int80_isr:
+    pushq $SC_ENTRY_IA32
+    pushq $SYSCALL_VECTOR
+    jmp isr_common_handler
 
 # Interrupt stubs: the 8259's lines 0 through 15 on vectors 32 through 47.
 # They enter as the exceptions do; x86_64_route tells the two apart by the

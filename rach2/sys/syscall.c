@@ -173,6 +173,32 @@ struct audio_write_params {
  */
 static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+/* The handlers of the i386 calls a frame's SC_COMPAT marks, by i386's
+ * numbers, which `ia32_syscall_init` fills. */
+static syscall_fn_t _ia32_syscall_table[IA32_SYSCALL_TABLE_SIZE];
+#endif
+
+/** The table the call in `params` is numbered in, and its size in `size`:
+ * the compat table for a call SC_COMPAT marks, else the native one. */
+static syscall_fn_t *syscall_table_of(const isr_params_t *params, uint32_t *size)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (SC_COMPAT(params)) {
+        *size = IA32_SYSCALL_TABLE_SIZE;
+        return _ia32_syscall_table;
+    }
+#endif
+    (void)params;
+    *size = SYSCALL_TABLE_SIZE;
+    return _syscall_table;
+}
+
+int in_compat_syscall(void)
+{
+    return current_proc && current_proc->in_syscall && SC_COMPAT(proc_user_frame(current_proc));
+}
+
 /* The magics Linux's reboot(2) demands, which musl passes for the caller: a
  * first word, one of four accepted second words, and then the command. */
 #define REBOOT_MAGIC1 0xfee1deadu
@@ -2703,9 +2729,12 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
  * the last reported. A program that makes one missing call in a loop prints
  * one line, but two processes alternating on one number, or one process
  * alternating between two numbers past the table, print a line each time.
+ * An i386 call, `compat` set, is named so, and shares the native number's
+ * entry.
  */
-static void syscall_missing(uint32_t syscall_num)
+static void syscall_missing(uint32_t syscall_num, int compat)
 {
+    const char *abi = compat ? "i386 call " : "";
     uint32_t pid = current_proc ? current_proc->pid : 0;
     const char *who = current_proc ? current_proc->comm : "?";
 
@@ -2716,20 +2745,23 @@ static void syscall_missing(uint32_t syscall_num)
         if (_enosys_big_num != syscall_num || _enosys_big_pid != pid) {
             _enosys_big_num = syscall_num;
             _enosys_big_pid = pid;
-            klog(KLOG_WARN, "syscall", "%d: not implemented, and past the table (asked for by %s)",
+            klog(KLOG_WARN, "syscall",
+                 "%s%d: not implemented, and past the table (asked for by %s)", abi,
                  (int)syscall_num, who);
         }
     } else if (_enosys_last_pid[syscall_num] != pid) {
         _enosys_last_pid[syscall_num] = pid;
-        klog(KLOG_WARN, "syscall", "%d: not implemented (asked for by %s)", (int)syscall_num, who);
+        klog(KLOG_WARN, "syscall", "%s%d: not implemented (asked for by %s)", abi, (int)syscall_num,
+             who);
     }
 }
 
 /**
  * The system call entry's handler: dispatch on the call's number.
  *
- * Looks up the number in _syscall_table and calls the handler, storing the
- * result in the result register (SC_RET) for the return to user mode. A
+ * Looks up the number in _syscall_table, or for a call SC_COMPAT marks in
+ * the compat table, and calls the handler, storing the result in the result
+ * register (SC_RET) for the return to user mode. A
  * number with no handler answers -ENOSYS, on which musl falls back to another
  * call rather than taking it for a failure. Marks the process non-preemptible
  * (in_syscall) around the dispatch and runs the body with interrupts on, so
@@ -2777,6 +2809,8 @@ static void syscall_missing(uint32_t syscall_num)
 static void _syscall_handler(isr_params_t *params)
 {
     uint32_t syscall_num = (uint32_t)SC_NR(params);
+    uint32_t size;
+    syscall_fn_t *table = syscall_table_of(params, &size);
     long ret = -ENOSYS;
     int skip = 0;
 
@@ -2803,18 +2837,17 @@ static void _syscall_handler(isr_params_t *params)
     }
     if (skip) {
         ret = (long)SC_RET(params);
-    } else if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
-        ret = _syscall_table[syscall_num](params);
+    } else if (syscall_num < size && table[syscall_num]) {
+        ret = table[syscall_num](params);
     } else {
-        syscall_missing(syscall_num);
+        syscall_missing(syscall_num, SC_COMPAT(params));
     }
 
     fd_holds_release();
     if (current_proc) {
         current_proc->restart_nr = 0;
-        if (!skip && ret == -EINTR && syscall_num < SYSCALL_TABLE_SIZE &&
-            _syscall_table[syscall_num] &&
-            syscall_restartable(_syscall_table[syscall_num], params)) {
+        if (!skip && ret == -EINTR && syscall_num < size && table[syscall_num] &&
+            syscall_restartable(table[syscall_num], params)) {
             current_proc->restart_nr = syscall_num + 1u;
         }
     }
@@ -2849,6 +2882,12 @@ void init_syscall(void)
         _syscall_table[i] = NULL;
     }
     arch_syscall_init(_syscall_table, _syscall_handler);
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    for (i = 0; i < IA32_SYSCALL_TABLE_SIZE; i++) {
+        _ia32_syscall_table[i] = NULL;
+    }
+    ia32_syscall_init(_ia32_syscall_table);
+#endif
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 }

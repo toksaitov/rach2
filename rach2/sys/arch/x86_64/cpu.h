@@ -14,7 +14,9 @@
  * processor's own frame, which in long mode always has the stack pointer
  * and segment. The `syscall` entry builds the same frame, with the vector
  * SYSCALL_VECTOR, the user's RIP and RFLAGS from RCX and R11, and the user
- * selectors (isr_handler.s).
+ * selectors (isr_handler.s). The gate of `int $0x80` gives its frame the
+ * same vector, and the error code SC_ENTRY_IA32 where `syscall` gives 0,
+ * so that the frame says which table its call is in (SC_COMPAT).
  */
 struct isr_params {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
@@ -33,11 +35,15 @@ typedef uint64_t phys_addr_t;
  * built for its first switch; the user's GS base, which arch_prctl's
  * ARCH_SET_GS sets, the switch away saves and the switch in loads; and the
  * DS, ES, FS and GS selectors, which the switch saves and loads in the same
- * way. The FS base, the thread pointer, is the record's `tls_base`.
+ * way; and the three TLS descriptors of GDT entries 12 to 14, which
+ * set_thread_area sets and the switch in writes into the processor's GDT
+ * (percpu.h). The FS base, the thread pointer, is the record's `tls_base`.
  */
+#define ARCH_TLS_ENTRIES 3
 struct cpu_regs {
     uint64_t rsp;
     uint64_t gs_base;
+    uint64_t tls[ARCH_TLS_ENTRIES]; /* each 0 for none */
     /* Each null or a user segment's selector at any RPL; DS and ES of a
      * thread that runs only in the kernel may have its data selector. */
     uint16_t ds_sel;
@@ -48,21 +54,49 @@ struct cpu_regs {
 
 typedef struct cpu_regs cpu_regs_t;
 
-/* Linux x86-64's system call convention: the number in RAX, the arguments
- * in RDI, RSI, RDX, R10, R8 and R9, the result in RAX. */
+/*
+ * Linux x86-64's system call convention: the number in RAX, the arguments
+ * in RDI, RSI, RDX, R10, R8 and R9, the result in RAX. A call by
+ * `int $0x80` (SC_COMPAT) is i386's, from 32-bit code or 64-bit, as on
+ * Linux: the number in EAX, the arguments in EBX, ECX, EDX, ESI, EDI and
+ * EBP, each taken as 32 bits and zero-extended, and a number of the compat
+ * table (ia32_systab.c). The result goes into RAX either way.
+ */
+#define SC_ENTRY_IA32  0x80u
+#define SC_COMPAT(p)   ((p)->vector == 0x80u && (p)->error_code == SC_ENTRY_IA32)
 #define SC_NR(p)       ((p)->rax)
 #define SC_RET(p)      ((p)->rax)
 #define SC_ARG(p, n)   SC_ARG_N(p, n)
 #define SC_ARG_N(p, n) SC_ARG_##n(p)
-#define SC_ARG_0(p)    ((unsigned long)(p)->rdi)
-#define SC_ARG_1(p)    ((unsigned long)(p)->rsi)
-#define SC_ARG_2(p)    ((unsigned long)(p)->rdx)
-#define SC_ARG_3(p)    ((unsigned long)(p)->r10)
-#define SC_ARG_4(p)    ((unsigned long)(p)->r8)
-#define SC_ARG_5(p)    ((unsigned long)(p)->r9)
+#define SC_ARG_X(p, r64, r32) \
+    (SC_COMPAT(p) ? (unsigned long)(uint32_t)(p)->r32 : (unsigned long)(p)->r64)
+#define SC_ARG_0(p) SC_ARG_X(p, rdi, rbx)
+#define SC_ARG_1(p) SC_ARG_X(p, rsi, rcx)
+#define SC_ARG_2(p) SC_ARG_X(p, rdx, rdx)
+#define SC_ARG_3(p) SC_ARG_X(p, r10, rsi)
+#define SC_ARG_4(p) SC_ARG_X(p, r8, rdi)
+#define SC_ARG_5(p) SC_ARG_X(p, r9, rbp)
 
-/* The length of the instruction a system call is made by, `syscall`'s two
- * bytes, which a restart rewinds the return address over. */
+/* The architecture of the call in a frame, as seccomp's filters and
+ * ptrace's system call information see it: i386's for an i386 call or for
+ * a frame of 32-bit code, its CS 0x23 (percpu.h), as Linux's
+ * `syscall_get_arch`. */
+#define AUDIT_ARCH_I386  0x40000003u
+#define SC_AUDIT_ARCH(p) ((SC_COMPAT(p) || (p)->cs == 0x23u) ? AUDIT_ARCH_I386 : AUDIT_ARCH)
+
+/* The compat table's size, one more than Linux i386's highest number, 462
+ * (ia32_sysnr.h), and the calls seccomp's strict mode allows by i386's
+ * numbers, as Linux's `mode1_syscalls_32`: read, write, exit and
+ * sigreturn. */
+#define IA32_SYSCALL_TABLE_SIZE 463
+#define SECCOMP_NR32_READ       3u
+#define SECCOMP_NR32_WRITE      4u
+#define SECCOMP_NR32_EXIT       1u
+#define SECCOMP_NR32_SIGRETURN  119u
+
+/* The length of the instruction a system call is made by, two bytes for
+ * `syscall` and for `int $0x80`, which a restart rewinds the return address
+ * over. */
 #define SYSCALL_INSN_LEN 2u
 
 #define FRAME_PC(p)   ((p)->rip)

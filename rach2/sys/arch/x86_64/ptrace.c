@@ -117,13 +117,19 @@ void arch_regs_get(const process_t *t, unsigned long *r)
 /**
  * Set the DS, ES, FS or GS selector, by `i`, of the stopped thread `t` to
  * `sel`, which the switch in loads, before the bases. The selector must be
- * null, at RPL 0 or 3, or the user data or code selector: the selectors
- * Linux takes from a tracer that this GDT has, since any other could fault
- * when the kernel loads it. Returns 0, or -EIO.
+ * null, at RPL 0 or 3, a user code or data selector, or the selector at
+ * RPL 3 of one of the thread's TLS entries that holds a descriptor: the
+ * selectors Linux takes from a tracer that this GDT has, since any other
+ * could fault when the kernel loads it. Returns 0, or -EIO.
  */
 static int sel_set(process_t *t, int i, unsigned long sel)
 {
-    if (sel != 0 && sel != 3 && sel != GDT_USER_DATA && sel != GDT_USER_CODE) {
+    unsigned long entry = sel >> 3;
+    int tls = (sel & 7u) == 3u && entry >= GDT_TLS_MIN && entry <= GDT_TLS_MAX &&
+              t->regs.tls[entry - GDT_TLS_MIN] != 0;
+
+    if (sel != 0 && sel != 3 && sel != GDT_USER_DATA && sel != GDT_USER_CODE &&
+        sel != GDT_USER_CODE32 && !tls) {
         return -EIO;
     }
     switch (i) {
@@ -145,8 +151,9 @@ static int sel_set(process_t *t, int i, unsigned long sel)
 /**
  * Set the user register `i` of the stopped thread `t` to `v`, as Linux's
  * `putreg` does: the flags only where a program may change them, a base
- * only to a user address, CS and SS only to the ones they have, since a
- * return to user mode with any other would fault in the kernel, and DS, ES,
+ * only to a user address, CS to the user's 64-bit or 32-bit code selector
+ * and SS to its data selector, since a return to user mode with any other
+ * would fault in the kernel (isr_exit guards the address), and DS, ES,
  * FS and GS only to a selector `sel_set` takes. An orig_rax of -1 stops an
  * interrupted system call from being restarted; it is kept in 32 bits, as
  * the system call number is. Returns 0, or -EIO.
@@ -211,9 +218,10 @@ static int regs_set(process_t *t, int i, unsigned long v)
         tf->rip = v;
         break;
     case R_CS:
-        if ((v & 0xFFFFu) != GDT_USER_CODE) {
+        if ((v & 0xFFFFu) != GDT_USER_CODE && (v & 0xFFFFu) != GDT_USER_CODE32) {
             return -EIO;
         }
+        tf->cs = v & 0xFFFFu;
         break;
     case R_EFLAGS:
         tf->rflags = (tf->rflags & ~(uint64_t)FLAG_MASK) | (v & FLAG_MASK);

@@ -60,10 +60,22 @@ struct lx_rt_sigframe {
 #define SS_ONSTACK 1u
 #define SS_DISABLE 2u
 
-/* uc_flags: the sigcontext's `ss` is the saved one, and a return restores
- * it, as Linux 4.12 and later say. */
+/* uc_flags: the sigcontext's `ss` is the saved one; and a return restores
+ * it as it is, where without the flag a return to 64-bit code with an SS
+ * that would fault takes the user's data selector instead. Linux sets the
+ * second only for a signal taken in 64-bit code. */
 #define UC_SIGCONTEXT_SS     0x2u
 #define UC_STRICT_RESTORE_SS 0x4u
+
+/* The access rights `lar` reads (Intel SDM Vol. 3A, 3.4.5), Linux's AR_
+ * names: the type without its accessed bit, the S bit, the DPL and the
+ * present bit; and the two types a stack segment may have. */
+#define AR_TYPE_MASK           0x0E00u
+#define AR_TYPE_RWDATA         0x0200u
+#define AR_TYPE_RWDATA_EXPDOWN 0x0600u
+#define AR_S                   0x1000u
+#define AR_DPL3                0x6000u
+#define AR_P                   0x8000u
 
 /* The flags a frame may change: the arithmetic flags, the direction and
  * trap flags, resume and alignment check. */
@@ -76,6 +88,10 @@ struct lx_rt_sigframe {
  * function for its own use without moving the pointer, which a frame must
  * not overwrite. */
 #define RED_ZONE 128u
+
+/* The end of the 32-bit code segment's 4 GiB limit: a return address past
+ * it faults the `iretq` into compatibility mode. */
+#define CODE32_END 0x100000000UL
 
 /* The lower half's end: a return address at or past it is not one `iretq`
  * can take (isr_handler.s). */
@@ -115,6 +131,19 @@ static uint64_t get64(const uint8_t *p)
 
     k_memcpy(&v, p, sizeof(v));
     return v;
+}
+
+/** Whether `sel` names a present writable data segment at DPL 3, one an
+ * `iretq` to user mode may load into SS, as Linux's `force_valid_ss`
+ * tests: `lar` leaves its 0 where the descriptor is out of reach. */
+static int ss_valid(unsigned int sel)
+{
+    uint32_t ar = 0;
+
+    __asm__ __volatile__("larl %1, %0" : "+r"(ar) : "r"((uint32_t)sel));
+    ar &= AR_TYPE_MASK | AR_S | AR_DPL3 | AR_P;
+    return ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA) ||
+           ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA_EXPDOWN);
 }
 
 /** Whether `signo` with `code` is a seccomp filter's SIGSYS, whose union
@@ -244,7 +273,11 @@ uintptr_t sigframe_stack_bytes(void)
  * The handler starts with the initial floating-point state, as a new image
  * does, its arguments in RDI, RSI and RDX, and RAX 0, which a variadic
  * handler reads, in AL, as the count of its arguments in vector registers.
- * DF, TF and RF are cleared, and CS and SS are the user's.
+ * DF, TF and RF are cleared. The handler runs in 64-bit code, CS the
+ * user's 64-bit selector even for a signal taken in 32-bit code, and SS
+ * stays as it was where `iretq` can load it, else becomes the user's data
+ * selector, as on Linux. `uc_flags` has UC_SIGCONTEXT_SS, and
+ * UC_STRICT_RESTORE_SS only for a signal taken in 64-bit code.
  */
 int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask)
@@ -277,7 +310,10 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 
     k_memset(&frame, 0, sizeof(frame));
     frame.pretcode = (uintptr_t)sa->restorer;
-    frame.uc.uc_flags = UC_SIGCONTEXT_SS | UC_STRICT_RESTORE_SS | fpu_frame_uc_flags();
+    frame.uc.uc_flags = UC_SIGCONTEXT_SS | fpu_frame_uc_flags();
+    if (tf->cs == GDT_USER_CODE) {
+        frame.uc.uc_flags |= UC_STRICT_RESTORE_SS;
+    }
     frame.uc.uc_stack.ss_sp = (uintptr_t)current_proc->altstack_sp;
     frame.uc.uc_stack.ss_size = (uintptr_t)current_proc->altstack_size;
     frame.uc.uc_stack.ss_flags =
@@ -297,7 +333,9 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     tf->rdx = frame_addr + offsetof(struct lx_rt_sigframe, uc);
     tf->rax = 0;
     tf->cs = GDT_USER_CODE;
-    tf->ss = GDT_USER_DATA;
+    if (tf->ss != GDT_USER_DATA && !ss_valid((unsigned int)tf->ss)) {
+        tf->ss = GDT_USER_DATA;
+    }
     tf->rflags &= ~(uint64_t)(EFLAGS_DF | EFLAGS_TF | EFLAGS_RF);
     return 0;
 }
@@ -305,10 +343,14 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 /**
  * The frame starts 8 bytes below the stack pointer, since the handler's
  * `ret` took `pretcode`. There is no plain sigreturn on x86-64, and a call
- * without `rt` is refused with -1. A return address outside the lower half
- * is refused too: `iretq` itself would fault on it. CS and SS are the
- * user's whatever the frame says, and a frame without floating-point state
- * gets the initial one.
+ * without `rt` is refused with -1. CS and SS are the frame's, at RPL 3, as
+ * Linux restores them: CS must be the user's 64-bit or 32-bit code
+ * selector, with a return address in the lower half or below 4 GiB, and SS
+ * one `iretq` can load, or the call is refused with -1, the SIGSEGV that
+ * Linux's faulting `iretq` gives. A frame without UC_STRICT_RESTORE_SS that
+ * returns to 64-bit code takes the user's data selector for an SS that
+ * would fault, as Linux's `force_valid_ss`. A frame without floating-point
+ * state gets the initial one.
  *
  * The frame's alternate stack comes back as sigaltstack would take it,
  * unless the restored stack pointer is on the alternate stack now in use; a
@@ -319,6 +361,7 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     struct lx_rt_sigframe frame;
     const struct lx_sigcontext *sc = &frame.uc.mc;
     uintptr_t frame_addr = tf->rsp - 8u;
+    uint64_t cs, ss;
 
     if (!rt) {
         return -1;
@@ -326,8 +369,17 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     if (copy_from_user(&frame, (const void __user *)frame_addr, sizeof(frame)) != 0) {
         return -1;
     }
-    if (sc->rip >= LOWER_HALF_END) {
+    cs = (uint64_t)(sc->cs | 3u);
+    ss = (uint64_t)(sc->ss | 3u);
+    if (cs == GDT_USER_CODE ? sc->rip >= LOWER_HALF_END
+                            : cs != GDT_USER_CODE32 || sc->rip >= CODE32_END) {
         return -1;
+    }
+    if (!ss_valid((unsigned int)ss)) {
+        if ((frame.uc.uc_flags & UC_STRICT_RESTORE_SS) || cs != GDT_USER_CODE) {
+            return -1;
+        }
+        ss = GDT_USER_DATA;
     }
     *mask = frame.uc.sigmask;
 
@@ -356,8 +408,8 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     tf->rcx = sc->rcx;
     tf->rsp = sc->rsp;
     tf->rip = sc->rip;
-    tf->cs = GDT_USER_CODE;
-    tf->ss = GDT_USER_DATA;
+    tf->cs = cs;
+    tf->ss = ss;
     tf->rflags = (tf->rflags & ~(uint64_t)FIX_EFLAGS) | (sc->eflags & FIX_EFLAGS);
 
     if (!sigframe_on_altstack(tf->rsp)) {

@@ -17,22 +17,42 @@
  * mode swaps first and every return to it swaps last (isr_handler.s).
  *
  * The GDT is Linux's x86-64 layout, so a program sees the selectors it
- * would see there: the kernel's code and data at 0x10 and 0x18, the user's
- * data at 0x2B and code at 0x33, and the TSS, two entries long in long
- * mode, at 0x38. `syscall` and `sysret` take the selectors from IA32_STAR
- * and require this order: the kernel's data after its code, and the user's
- * code 16 bytes and its data 8 bytes after the base STAR names, 0x23. The
- * entry at 0x20, where a 32-bit user code segment would be, is empty: no
- * program can enter compatibility mode, and the `syscall` of one, whose
- * entry IA32_CSTAR would name, never happens.
+ * would see there:
+ *
+ *   0x10  the kernel's code          0x40  the TSS, two entries long in
+ *   0x18  the kernel's data                long mode
+ *   0x23  the user's 32-bit code     0x50  the LDT's descriptor, two
+ *   0x2B  the user's data                  entries, empty: no LDT is loaded
+ *   0x33  the user's 64-bit code     0x63, 0x6B, 0x73  the thread's three
+ *                                          TLS descriptors, entries 12 to 14
+ *
+ * `syscall` and `sysret` take the selectors from IA32_STAR and require this
+ * order: the kernel's data after its code, and from the base STAR names for
+ * the return, 0x23, the 32-bit code there, the data 8 bytes after it and the
+ * 64-bit code 16 bytes after it. A far call or jump to 0x23 enters
+ * compatibility mode, as on Linux; such code makes system calls by
+ * `int $0x80` (idt.c). The TLS entries are the running thread's, which a
+ * switch writes from its record (context.c) and set_thread_area sets
+ * (tls.c). Entry 1, Linux's 32-bit kernel code, and entry 15, its per-CPU
+ * segment for `lsl`, stay empty: no program uses either.
  */
 
 #define GDT_KERNEL_CODE 0x10u
 #define GDT_KERNEL_DATA 0x18u
+#define GDT_USER_CODE32 0x23u
 #define GDT_USER_DATA   0x2Bu
 #define GDT_USER_CODE   0x33u
-#define GDT_TSS         0x38u
-#define GDT_ENTRIES     9
+#define GDT_TSS         0x40u
+#define GDT_LDT         0x50u
+#define GDT_TLS_MIN     12 /* the first TLS entry, by index */
+#define GDT_TLS_MAX     14 /* the last */
+#define GDT_ENTRIES     16
+
+/* Whether `sel` names a descriptor of the running thread's own, one of its
+ * TLS entries or one of an LDT, which the switch must load again even when
+ * the register already holds it (context.c). */
+#define GDT_SEL_PER_THREAD(sel) \
+    (((sel) & 4u) != 0 || (((sel) >> 3) >= GDT_TLS_MIN && ((sel) >> 3) <= GDT_TLS_MAX))
 
 /*
  * The 64-bit TSS (Intel SDM Vol. 3A, 8.7): no task state, only the stacks
@@ -91,6 +111,7 @@ static __inline__ struct cpu *cpu_self(void)
 #define MSR_EFER           0xC0000080u
 #define MSR_STAR           0xC0000081u
 #define MSR_LSTAR          0xC0000082u
+#define MSR_CSTAR          0xC0000083u
 #define MSR_FMASK          0xC0000084u
 #define MSR_FS_BASE        0xC0000100u
 #define MSR_GS_BASE        0xC0000101u
@@ -134,9 +155,10 @@ void init_gdt(void);
 /**
  * Make the kernel stack ending at `kernel_stack` the running processor's
  * (`cpu_set_kernel_stack`), load its task register, and turn `syscall` on:
- * IA32_STAR, IA32_LSTAR, IA32_FMASK and EFER.SCE. The processor's GS base
- * must be its record already, and its GDT loaded: the boot processor calls
- * this after `init_gdt`, and a started one from `arch_ap_tables`.
+ * IA32_STAR, IA32_LSTAR, IA32_CSTAR, IA32_FMASK and EFER.SCE. The
+ * processor's GS base must be its record already, and its GDT loaded: the
+ * boot processor calls this after `init_gdt`, and a started one from
+ * `arch_ap_tables`.
  */
 void init_tss(uintptr_t kernel_stack);
 
