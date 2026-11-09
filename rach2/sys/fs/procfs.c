@@ -4720,9 +4720,9 @@ static int sysfs_pci_present(int key)
 }
 
 /**
- * The identity of the PCI function `key` into `*id`: from its configuration
- * space, or the one a driver reports for a function with no device behind
- * it. boot_vga is 1 for the first VGA function in bus order that decodes
+ * The identity of the PCI function `key` into `*id`: the one a driver
+ * reports for it (`sysfs_pci_virtual`), or else from its configuration
+ * space. boot_vga is 1 for the first VGA function in bus order that decodes
  * memory and I/O, the one the firmware's display ran on, as Linux's VGA
  * arbiter takes it. 0, or -ENOENT for a function that is not there.
  */
@@ -4733,8 +4733,11 @@ static int sysfs_pci_ident(int key, struct sysfs_pci_ident *id)
     uint32_t sub = 0, ids;
     int n, k;
 
+    if (sysfs_pci_virtual(key, id)) {
+        return 0;
+    }
     if (!sysfs_pci_real(key)) {
-        return sysfs_pci_virtual(key, id) ? 0 : -ENOENT;
+        return -ENOENT;
     }
     ids = pci_read_config32(bus, dev, fn, 0x00);
     if ((pci_read_config8(bus, dev, fn, 0x0E) & 0x7F) == 0) {
@@ -5520,12 +5523,32 @@ static int procfs_gen_phy(struct procfs_text *t, int key, int attr)
     return t->nomem ? -1 : t->len;
 }
 
+/** Write the identity `id` into the configuration header `header` at the
+ * offsets of its IDs, revision, class and subsystem IDs. */
+static void pci_header_ident(uint8_t *header, const struct sysfs_pci_ident *id)
+{
+    header[0x00] = (uint8_t)id->vendor;
+    header[0x01] = (uint8_t)(id->vendor >> 8);
+    header[0x02] = (uint8_t)id->device;
+    header[0x03] = (uint8_t)(id->device >> 8);
+    header[0x08] = id->revision;
+    header[0x09] = (uint8_t)id->class;
+    header[0x0A] = (uint8_t)(id->class >> 8);
+    header[0x0B] = (uint8_t)(id->class >> 16);
+    header[0x2C] = (uint8_t)id->subsystem_vendor;
+    header[0x2D] = (uint8_t)(id->subsystem_vendor >> 8);
+    header[0x2E] = (uint8_t)id->subsystem_device;
+    header[0x2F] = (uint8_t)(id->subsystem_device >> 8);
+}
+
 /**
  * Render the configuration space of the PCI function `key` as Linux's
  * `config` gives it: its 256 bytes, or 4096 when an ECAM window reaches its
  * extended space, read a dword at a time; only the 64 bytes of the header
  * to a reader without privilege, since some devices act on a read of their
- * own registers. -ENOENT for a function that is not there.
+ * own registers. A reported identity (`sysfs_pci_virtual`) replaces the
+ * IDs in the header, and a reported function with no device behind it has
+ * a type 0 header of zeros besides. -ENOENT for a function not there.
  */
 static int procfs_gen_pciconfig(struct procfs_text *t, int key)
 {
@@ -5533,41 +5556,33 @@ static int procfs_gen_pciconfig(struct procfs_text *t, int key)
     uint32_t size = 256, off, v;
     struct sysfs_pci_ident id;
     uint8_t header[256];
+    int reported = sysfs_pci_virtual(key, &id), real = sysfs_pci_real(key);
 
-    if (!sysfs_pci_real(key)) {
-        if (sysfs_pci_ident(key, &id) != 0) {
-            return -ENOENT;
-        }
-        /* A reported function's header: its IDs, revision, class and
-         * subsystem IDs at their offsets, a type 0 header, and zeros. */
-        k_memset(header, 0, sizeof(header));
-        header[0x00] = (uint8_t)id.vendor;
-        header[0x01] = (uint8_t)(id.vendor >> 8);
-        header[0x02] = (uint8_t)id.device;
-        header[0x03] = (uint8_t)(id.device >> 8);
-        header[0x08] = id.revision;
-        header[0x09] = (uint8_t)id.class;
-        header[0x0A] = (uint8_t)(id.class >> 8);
-        header[0x0B] = (uint8_t)(id.class >> 16);
-        header[0x2C] = (uint8_t)id.subsystem_vendor;
-        header[0x2D] = (uint8_t)(id.subsystem_vendor >> 8);
-        header[0x2E] = (uint8_t)id.subsystem_device;
-        header[0x2F] = (uint8_t)(id.subsystem_device >> 8);
-        size = proc_privileged(current_proc) ? 256u : 64u;
-        for (off = 0; off < size; off++) {
-            ap_ch(t, (char)header[off]);
-        }
-        return t->len;
+    if (!real && !reported) {
+        return -ENOENT;
     }
-    if (pci_read_config32_ext(bus, dev, fn, 0x100) != 0xFFFFFFFFu) {
+    if (real && pci_read_config32_ext(bus, dev, fn, 0x100) != 0xFFFFFFFFu) {
         size = 4096;
     }
     if (!proc_privileged(current_proc)) {
         size = 64;
     }
-    for (off = 0; off < size; off += 4) {
-        v = off < 256 ? pci_read_config32(bus, dev, fn, (uint8_t)off)
-                      : pci_read_config32_ext(bus, dev, fn, (uint16_t)off);
+    k_memset(header, 0, sizeof(header));
+    for (off = 0; real && off < size && off < 256; off += 4) {
+        v = pci_read_config32(bus, dev, fn, (uint8_t)off);
+        header[off] = (uint8_t)v;
+        header[off + 1] = (uint8_t)(v >> 8);
+        header[off + 2] = (uint8_t)(v >> 16);
+        header[off + 3] = (uint8_t)(v >> 24);
+    }
+    if (reported) {
+        pci_header_ident(header, &id);
+    }
+    for (off = 0; off < size && off < 256; off++) {
+        ap_ch(t, (char)header[off]);
+    }
+    for (; off < size; off += 4) {
+        v = pci_read_config32_ext(bus, dev, fn, (uint16_t)off);
         ap_ch(t, (char)(v & 0xFFu));
         ap_ch(t, (char)((v >> 8) & 0xFFu));
         ap_ch(t, (char)((v >> 16) & 0xFFu));

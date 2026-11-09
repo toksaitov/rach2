@@ -170,12 +170,13 @@ void sysfs_node_path(int handle, char *out, int cap);
 int sysfs_link_text(int handle, char *out, int cap);
 
 /*
- * PCI functions with no device behind them: a driver that stands in for a
- * device reports the identity Linux would read from the function's
- * configuration space, and the function then has its directory, its
- * attributes and its links under /sys/devices/pci0000:00 and
- * /sys/bus/pci/devices as a real one has, made from that identity. A real
- * function at the same address hides it.
+ * Reported PCI identities: a driver that stands in for a device reports the
+ * identity Linux would read from the function's configuration space. A
+ * function with no device behind it then has its directory, its attributes
+ * and its links under /sys/devices/pci0000:00 and /sys/bus/pci/devices as a
+ * real one has, made from that identity; a real function at the same
+ * address shows the reported identity in place of its own, in its files,
+ * its uevent and the header of its `config`.
  */
 #define SYSFS_PCI_VIRTUAL_MAX 8
 
