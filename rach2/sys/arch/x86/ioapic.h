@@ -42,4 +42,29 @@ void ioapic_mask_line(int line);
  * a line not routed. */
 int ioapic_line_pending(int line);
 
+/*
+ * An interrupt remapper's way to the redirection entries. `map` takes an
+ * entry of the remapper's table for the compatibility-format redirection
+ * entry (low, high) of the I/O APIC of id `id`, and gives the high half
+ * that names it in the remapped format, the low half staying: the entry's
+ * handle, or -1. `unmap` gives a handle's entry back.
+ */
+struct ioapic_remap {
+    int (*map)(uint8_t id, uint32_t low, uint32_t high, uint32_t *rhigh);
+    void (*unmap)(int handle);
+};
+
+/**
+ * Send every line routed, and every line routed from now on, through `ops`:
+ * each routed entry is rewritten in the remapped format by the one write of
+ * its high half. 0, or -1 when an entry could not be had, in which case
+ * every line is as it was. The remapper takes compatibility-format
+ * interrupts until this returns.
+ */
+int ioapic_remap_start(const struct ioapic_remap *ops);
+
+/** Rewrite every routed entry in the compatibility format and give its entry
+ * back; lines routed from now on are not remapped. */
+void ioapic_remap_stop(void);
+
 #endif /* _IOAPIC_H_ */

@@ -14,6 +14,7 @@
 #include "kio.h"
 #include "lib/kirq.h"
 #include "lib/kstring.h"
+#include "lib/spinlock.h"
 #include "mm/kheap.h"
 
 /** The word is taken from its aligned dword, the half that bit 1 of the
@@ -481,6 +482,163 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
     return false;
 }
 
+/*
+ * The messages enabled through this file, kept so that an interrupt
+ * remapper that starts or stops later can rewrite each one: a device's MSI,
+ * and entry 0 of its MSI-X table. Each holds the compatibility-format
+ * message `pci_msi_message` made and the remapper's entry, if any; the
+ * device has the remapped message while the entry is held.
+ */
+#define MSI_RECORDS   64
+#define MSI_KIND_MSI  1
+#define MSI_KIND_MSIX 2
+
+static struct msi_record {
+    pci_device_t dev;
+    uint8_t kind;     /* 0 for a free record, MSI_KIND_MSI or MSI_KIND_MSIX */
+    uint8_t cap;      /* the MSI capability's offset */
+    uint16_t control; /* its control word, for the place of the data */
+    uintptr_t entry;  /* the MSI-X table entry, mapped */
+    uint32_t address; /* the compatibility-format message */
+    uint32_t data;
+    int handle; /* the remapper's entry, or -1 */
+} msi_records[MSI_RECORDS];
+
+/* The remapper in place, or NULL; it and the records are under the lock,
+ * which is held across each device's writes so that a remapper starting on
+ * another processor never meets a message half written. */
+static const struct pci_msi_remap *msi_remap;
+static struct spinlock msi_lock = SPINLOCK_INIT;
+
+/** The record of `dev`'s message of `kind`, or NULL. */
+static struct msi_record *msi_record_find(const pci_device_t *dev, int kind)
+{
+    int i;
+
+    for (i = 0; i < MSI_RECORDS; i++) {
+        struct msi_record *r = &msi_records[i];
+
+        if (r->kind == kind && r->dev.bus == dev->bus && r->dev.device == dev->device &&
+            r->dev.function == dev->function) {
+            return r;
+        }
+    }
+    return NULL;
+}
+
+/** The record of `dev`'s message of `kind`, a free one taken when it has
+ * none: NULL when every record is taken. */
+static struct msi_record *msi_record_get(const pci_device_t *dev, int kind)
+{
+    struct msi_record *r = msi_record_find(dev, kind);
+    int i;
+
+    for (i = 0; r == NULL && i < MSI_RECORDS; i++) {
+        if (msi_records[i].kind == 0) {
+            r = &msi_records[i];
+            r->dev = *dev;
+            r->kind = (uint8_t)kind;
+            r->handle = -1;
+        }
+    }
+    if (r == NULL) {
+        klog(KLOG_WARN, "pci", "msi: %x:%x.%d: every record of a message is taken", dev->bus,
+             dev->device, dev->function);
+    }
+    return r;
+}
+
+/**
+ * Write the message (address, data) of record `r` to its device. Moving to
+ * the remapped format, the address goes first, since it alone names the
+ * remapper's entry and its data is not read; moving back, the data goes
+ * first, so that each single write leaves a whole message of one format.
+ */
+static void msi_record_write(const struct msi_record *r, uint32_t address, uint32_t data,
+                             int remapped)
+{
+    const pci_device_t *dev = &r->dev;
+
+    if (r->kind == MSI_KIND_MSI) {
+        uint8_t data_at = (uint8_t)(r->cap + ((r->control & PCI_MSI_64BIT) ? 12u : 8u));
+
+        if (!remapped) {
+            pci_write_config16(dev->bus, dev->device, dev->function, data_at, (uint16_t)data);
+        }
+        pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(r->cap + 4), address);
+        if (remapped) {
+            pci_write_config16(dev->bus, dev->device, dev->function, data_at, (uint16_t)data);
+        }
+        return;
+    }
+    if (!remapped) {
+        mmio_write32(r->entry + 8, data);
+    }
+    mmio_write32(r->entry, address);
+    if (remapped) {
+        mmio_write32(r->entry + 8, data);
+    }
+}
+
+/** Free record `r`: a remapped message is written back in the compatibility
+ * format and its entry given back. Called with the lock held. */
+static void msi_record_drop(struct msi_record *r)
+{
+    if (r->handle >= 0 && msi_remap != NULL) {
+        msi_record_write(r, r->address, r->data, 0);
+        msi_remap->unmap(r->handle);
+    }
+    r->kind = 0;
+    r->handle = -1;
+}
+
+/**
+ * The message `dev` is to send for `vector`, in `*address` and `*data`: the
+ * remapper's, with its entry in `*handle`, while one is in place, and the
+ * compatibility format's otherwise, with `*handle` -1. The compatibility
+ * format's message goes to `r`. 0, or -1, with `r` as it was, when the
+ * remapper has no entry to give. Called with the lock held.
+ */
+static int msi_compose(struct msi_record *r, uint8_t vector, uint32_t *address, uint32_t *data,
+                       int *handle)
+{
+    uint32_t was_address = r->address, was_data = r->data;
+
+    pci_msi_message(vector, &r->address, &r->data);
+    *address = r->address;
+    *data = r->data;
+    *handle = -1;
+    if (msi_remap != NULL) {
+        *handle = msi_remap->map(&r->dev, r->address, r->data, address, data);
+        if (*handle < 0) {
+            r->address = was_address;
+            r->data = was_data;
+            klog(KLOG_WARN, "pci", "msi: %x:%x.%d: no remapping entry", r->dev.bus, r->dev.device,
+                 r->dev.function);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/** `pci_msi_disable` with the lock held. */
+static void msi_disable_locked(const pci_device_t *dev)
+{
+    uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
+    struct msi_record *r = msi_record_find(dev, MSI_KIND_MSI);
+    uint16_t control;
+
+    if (r != NULL) {
+        msi_record_drop(r);
+    }
+    if (cap == 0) {
+        return;
+    }
+    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control & ~PCI_MSI_ENABLE));
+}
+
 /**
  * The order is the one the PCI specification requires and no other: the
  * enable bit is cleared first, in case firmware left it set, and the count
@@ -491,7 +649,8 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
  * may have left it set and the vector would then be programmed, enabled and
  * silent; and the enable bit is written last, when everything it acts on is
  * written. A count of zero tells a device that offers several vectors to use
- * one.
+ * one. A remapping entry the device held before is given back once the new
+ * message is written.
  *
  * `last` is the last byte the writes reach: the data's, or with per-vector
  * masking the mask register's, past the data. A capability that would run
@@ -502,9 +661,11 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
     uint8_t msix = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
+    struct msi_record *r, *rx;
     uint16_t control;
-    uint32_t address, data;
+    uint32_t address, data, flags;
     unsigned int last;
+    int handle, old;
 
     if (cap == 0) {
         klog(KLOG_WARN, "pci", "msi: %x:%x.%d has no msi capability", dev->bus, dev->device,
@@ -523,18 +684,35 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
         return -1;
     }
 
+    flags = spin_lock_irqsave(&msi_lock);
+    r = msi_record_get(dev, MSI_KIND_MSI);
+    if (r == NULL) {
+        spin_unlock_irqrestore(&msi_lock, flags);
+        return -1;
+    }
+    old = r->handle;
+    if (msi_compose(r, vector, &address, &data, &handle) != 0) {
+        if (old < 0) {
+            r->kind = 0;
+        }
+        spin_unlock_irqrestore(&msi_lock, flags);
+        return -1;
+    }
     control = (uint16_t)(control & ~(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_ENABLE));
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2), control);
     if (msix != 0) {
         uint16_t mxc = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2));
 
+        rx = msi_record_find(dev, MSI_KIND_MSIX);
+        if (rx != NULL) {
+            msi_record_drop(rx);
+        }
         if ((mxc & PCI_MSIX_ENABLE) != 0) {
             /* MSI beside an enabled MSI-X is undefined by the specification. */
             pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2),
                                (uint16_t)(mxc & ~PCI_MSIX_ENABLE));
         }
     }
-    pci_msi_message(vector, &address, &data);
     pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 4), address);
     if ((control & PCI_MSI_64BIT) != 0) {
         pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), 0);
@@ -552,8 +730,15 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     }
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)(control | PCI_MSI_ENABLE));
-    klog(KLOG_DEBUG, "pci", "msi: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function,
-         vector);
+    r->cap = cap;
+    r->control = control;
+    r->handle = handle;
+    if (old >= 0) {
+        msi_remap->unmap(old);
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+    klog(KLOG_DEBUG, "pci", "msi: %x:%x.%d on vector %d%s", dev->bus, dev->device, dev->function,
+         vector, handle >= 0 ? ", remapped" : "");
     return 0;
 }
 
@@ -585,8 +770,8 @@ int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint
     return 0;
 }
 
-/** MSI goes down first, since a device with both enabled is undefined. */
-int pci_msix_hold(const pci_device_t *dev)
+/** `pci_msix_hold` with the lock held. */
+static int msix_hold_locked(const pci_device_t *dev)
 {
     uint8_t cap = pci_msix_capability(dev);
     uint16_t control;
@@ -594,52 +779,155 @@ int pci_msix_hold(const pci_device_t *dev)
     if (cap == 0) {
         return -1;
     }
-    pci_msi_disable(dev);
+    msi_disable_locked(dev);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)(control | PCI_MSIX_ENABLE | PCI_MSIX_MASK_ALL));
     return 0;
 }
 
+/** MSI goes down first, since a device with both enabled is undefined. */
+int pci_msix_hold(const pci_device_t *dev)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    int r = msix_hold_locked(dev);
+
+    spin_unlock_irqrestore(&msi_lock, flags);
+    return r;
+}
+
 /**
  * MSI-X is held first, enabled with every vector masked, because some
  * devices answer their table only while MSI-X is enabled; the entry is
- * written with the same address and data MSI sends, and its own mask
- * cleared; and the function mask comes off last, when the entry is whole.
+ * written with the same address and data MSI sends, or the remapper's, and
+ * its own mask cleared; and the function mask comes off last, when the
+ * entry is whole.
  */
 int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
 {
     uint8_t cap = pci_msix_capability(dev);
+    struct msi_record *r;
     uint16_t control;
-    uint32_t address, data;
+    uint32_t address, data, flags;
+    int handle, old;
 
-    if (!table || pci_msix_hold(dev) != 0) {
+    flags = spin_lock_irqsave(&msi_lock);
+    if (!table || msix_hold_locked(dev) != 0) {
+        spin_unlock_irqrestore(&msi_lock, flags);
         klog(KLOG_WARN, "pci", "msi-x: %x:%x.%d has no usable msi-x capability", dev->bus,
              dev->device, dev->function);
         return -1;
     }
+    r = msi_record_get(dev, MSI_KIND_MSIX);
+    if (r == NULL) {
+        spin_unlock_irqrestore(&msi_lock, flags);
+        return -1;
+    }
+    old = r->handle;
+    if (msi_compose(r, vector, &address, &data, &handle) != 0) {
+        if (old < 0) {
+            r->kind = 0;
+        }
+        spin_unlock_irqrestore(&msi_lock, flags);
+        return -1;
+    }
+    r->entry = table;
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
-    pci_msi_message(vector, &address, &data);
     mmio_write32(table, address);
     mmio_write32(table + 4, 0);
     mmio_write32(table + 8, data);
     mmio_write32(table + 12, 0);
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)((control | PCI_MSIX_ENABLE) & ~PCI_MSIX_MASK_ALL));
-    klog(KLOG_DEBUG, "pci", "msi-x: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function,
-         vector);
+    r->handle = handle;
+    if (old >= 0) {
+        msi_remap->unmap(old);
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+    klog(KLOG_DEBUG, "pci", "msi-x: %x:%x.%d on vector %d%s", dev->bus, dev->device, dev->function,
+         vector, handle >= 0 ? ", remapped" : "");
     return 0;
 }
 
-void pci_msi_disable(const pci_device_t *dev)
+/** The function mask goes on before the entry is rewritten, so that the
+ * device sends nothing between its last remapped message and the end. */
+void pci_msix_disable(const pci_device_t *dev)
 {
-    uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
+    uint8_t cap = pci_msix_capability(dev);
+    struct msi_record *r;
     uint16_t control;
+    uint32_t flags;
 
     if (cap == 0) {
         return;
     }
+    flags = spin_lock_irqsave(&msi_lock);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    r = msi_record_find(dev, MSI_KIND_MSIX);
+    if (r != NULL) {
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                           (uint16_t)(control | PCI_MSIX_MASK_ALL));
+        msi_record_drop(r);
+    }
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
-                       (uint16_t)(control & ~PCI_MSI_ENABLE));
+                       (uint16_t)((control | PCI_MSIX_MASK_ALL) & ~PCI_MSIX_ENABLE));
+    spin_unlock_irqrestore(&msi_lock, flags);
+}
+
+void pci_msi_disable(const pci_device_t *dev)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+
+    msi_disable_locked(dev);
+    spin_unlock_irqrestore(&msi_lock, flags);
+}
+
+int pci_msi_remap_start(const struct pci_msi_remap *ops)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    int i, j;
+
+    for (i = 0; i < MSI_RECORDS; i++) {
+        struct msi_record *r = &msi_records[i];
+        uint32_t address, data;
+
+        if (r->kind == 0) {
+            continue;
+        }
+        r->handle = ops->map(&r->dev, r->address, r->data, &address, &data);
+        if (r->handle < 0) {
+            for (j = 0; j < i; j++) {
+                if (msi_records[j].kind != 0 && msi_records[j].handle >= 0) {
+                    msi_record_write(&msi_records[j], msi_records[j].address, msi_records[j].data,
+                                     0);
+                    ops->unmap(msi_records[j].handle);
+                    msi_records[j].handle = -1;
+                }
+            }
+            spin_unlock_irqrestore(&msi_lock, flags);
+            return -1;
+        }
+        msi_record_write(r, address, data, 1);
+    }
+    msi_remap = ops;
+    spin_unlock_irqrestore(&msi_lock, flags);
+    return 0;
+}
+
+void pci_msi_remap_stop(void)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    int i;
+
+    for (i = 0; i < MSI_RECORDS; i++) {
+        struct msi_record *r = &msi_records[i];
+
+        if (r->kind != 0 && r->handle >= 0 && msi_remap != NULL) {
+            msi_record_write(r, r->address, r->data, 0);
+            msi_remap->unmap(r->handle);
+            r->handle = -1;
+        }
+    }
+    msi_remap = NULL;
+    spin_unlock_irqrestore(&msi_lock, flags);
 }
