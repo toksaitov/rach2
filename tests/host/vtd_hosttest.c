@@ -25,11 +25,12 @@
  * one. The Lenovo's DMAR table is rebuilt from Linux's boot log
  * (dev-log/70-wifi-chip/linux/dmesg.txt:77 and 190-200): its length, 0xB0,
  * the two units with their capabilities, the reserved regions and the
- * I/O APIC and HPET ids are the log's; the scopes of the reserved regions
- * (the USB controllers at 00:14.0 and 00:1d.0, and the GPU at 00:02.0) and
- * the I/O APIC's and HPET's requester ids (f0:1f.0 and 00:0f.0) are the
- * usual ones of Intel's chipsets, which the length confirms but the log
- * does not give.
+ * I/O APIC and HPET ids are the log's; the units' scopes, the GPU at 00:02.0,
+ * the I/O APIC at f0:1f.0 and the HPET at f0:0f.0, are as the trial of 81-6d
+ * read them on the machine (dev-log/81-kvm/81-6d.md); the scopes of the
+ * reserved regions (the USB controllers at 00:14.0 and 00:1d.0, and the GPU)
+ * are the usual ones of Intel's chipsets, which the length confirms but
+ * neither log gives.
  */
 
 #include "../../rach2/sys/arch/x86/iommu/dmar.c"
@@ -1380,7 +1381,7 @@ static void tb_lenovo(void)
     tb_scope(1, 0, 0, 1, gpu);
     tb_drhd(DMAR_INCLUDE_ALL, 0xfed91000ull);
     tb_scope(3, 2, 0xF0, 1, ioapic);
-    tb_scope(4, 0, 0, 1, hpet);
+    tb_scope(4, 0, 0xF0, 1, hpet);
     tb_rmrr(0xaae11000ull, 0xaae30fffull);
     tb_scope(1, 0, 0, 1, ehci);
     tb_scope(1, 0, 0, 1, xhci);
