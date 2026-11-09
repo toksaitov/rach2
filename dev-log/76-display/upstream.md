@@ -23,6 +23,7 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `rach2/sys/drm/vkms.c`'s `vkms_atomic_check` divides by the entry's size, so both architectures take 256 entries, in task 2685's vkms commit.
 * Status: unreported.
 * Next: run the reproduction on i386, then send the one-character patch to dri-devel.
+
 ## Linux's bochs-drm lets a mode set zero other buffers
 
 * Project: Linux 6.12, `drivers/gpu/drm/tiny/bochs.c`, with QEMU's standard VGA as the device; the QEMU here is 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3). Rach2 keeps no copy of either source.
@@ -33,4 +34,3 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `bochs_set_mode` enables with `VBE_DISPI_NOCLEARMEM`, in task 2544's bochs commit.
 * Status: unreported, draft record from Rach2's run.
 * Next: read the current `bochs_hw_setmode` and QEMU's `vbe_ioport_write_data`, reproduce under Linux with two clients, and check whether TTM's placement there ever puts a buffer in the cleared range.
-
