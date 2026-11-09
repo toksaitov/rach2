@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 10, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -416,7 +416,7 @@ An ioctl-only socket was passed to kernel operation 10 or to recvfrom, or an IPv
 .Dv SOCK_DGRAM
 was passed to recvmsg.
 .It Er ENOTCONN
-The stream has no TCP control block and has not been shut down.
+The stream is listening, or has no TCP control block and has not been shut down.
 .It Er ETIMEDOUT
 A stream connection timed out.
 .El
