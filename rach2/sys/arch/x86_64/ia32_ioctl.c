@@ -380,16 +380,17 @@ static long kvm(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned
  * Sockets and network devices, as Linux's compat_sock_ioctl takes them.
  */
 
-#define SIOCADDRT       0x890Bu
-#define SIOCDELRT       0x890Cu
-#define SIOCGIFCONF     0x8912u
-#define SIOCSIFADDR     0x8916u
-#define SIOCDIFADDR     0x8936u
-#define SIOCGSTAMP_OLD  0x8906u
-#define IFNAMSIZ        16u
-#define IFREQ32_LEN     32u /* i386's `struct ifreq`, Linux's compat_ifreq */
-#define RTENTRY32_LEN   84u
-#define IN6_RTMSG32_LEN 72u
+#define SIOCADDRT        0x890Bu
+#define SIOCDELRT        0x890Cu
+#define SIOCGIFCONF      0x8912u
+#define SIOCSIFADDR      0x8916u
+#define SIOCDIFADDR      0x8936u
+#define SIOCGSTAMP_OLD   0x8906u
+#define SIOCGSTAMPNS_OLD 0x8907u
+#define IFNAMSIZ         16u
+#define IFREQ32_LEN      32u /* i386's `struct ifreq`, Linux's compat_ifreq */
+#define RTENTRY32_LEN    84u
+#define IN6_RTMSG32_LEN  72u
 
 /* The native `struct ifreq`: its name and a union of 24 bytes, whose
  * `ifmap` of two longs makes it 8 bytes longer than i386's. */
@@ -555,12 +556,14 @@ static long route(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsign
  * The requests of type 0x89, by Linux's compat_sock_ioctl_trans: the
  * interface requests with i386's `ifreq`, SIOCGIFCONF and the routes
  * translated; the ones of an `int`, an `arpreq`, a bridge's or a VLAN's
- * argument, SIOCGSKNS and the 64-bit SIOCGSTAMP pass, as do the AF_INET6
- * address requests, whose `in6_ifreq` has one layout; the rest, the old
- * SIOCGSTAMP, the requests that carry an `ifr_data` pointer and the private
- * ones among them, which Linux translates and Rach2 does not answer, are
- * -ENOTTY. A descriptor that is no socket passes, for the native path's
- * answer.
+ * argument, SIOCGSKNS and SIOCGSTAMP and SIOCGSTAMPNS pass, as do the
+ * AF_INET6 address requests, whose `in6_ifreq` has one layout; the old
+ * SIOCGSTAMP and SIOCGSTAMPNS write i386's `old_timeval32` and
+ * `old_timespec32` themselves while `in_compat_syscall` is true
+ * (`socket_gettstamp`); the rest, the requests that carry an `ifr_data`
+ * pointer and the private ones among them, which Linux translates and Rach2
+ * does not answer, are -ENOTTY. A descriptor that is no socket passes, for
+ * the native path's answer.
  */
 static long sock(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned long arg)
 {
@@ -579,11 +582,13 @@ static long sock(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigne
             return pass(fd, cmd, arg);
         }
         return ifreq(fd, cmd, arg);
-    case 0x8901u:     /* FIOSETOWN */
-    case 0x8902u:     /* SIOCSPGRP */
-    case 0x8903u:     /* FIOGETOWN */
-    case 0x8904u:     /* SIOCGPGRP */
-    case 0x8905u:     /* SIOCATMARK */
+    case 0x8901u: /* FIOSETOWN */
+    case 0x8902u: /* SIOCSPGRP */
+    case 0x8903u: /* FIOGETOWN */
+    case 0x8904u: /* SIOCGPGRP */
+    case 0x8905u: /* SIOCATMARK */
+    case SIOCGSTAMP_OLD:
+    case SIOCGSTAMPNS_OLD:
     case 0x80108906u: /* SIOCGSTAMP_NEW */
     case 0x80108907u: /* SIOCGSTAMPNS_NEW */
     case 0x8940u:     /* SIOCGIFBR */

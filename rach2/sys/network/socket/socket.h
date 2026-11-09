@@ -280,6 +280,9 @@ typedef struct socket {
      * recently taken or peeked (`socket_dgram_consume`,
      * `socket_dgram_sender`), for recvmsg's ancillary data. */
     struct net_rxinfo rx_last;
+    /* Whether one has been, so that `rx_last` holds a datagram's: what
+     * SIOCGSTAMP reports (`socket_gettstamp`). */
+    uint8_t rx_any;
 
     /* The processes and pollers waiting for data, room, a connection or an
      * accept. A wake from the receive path wakes every one; each checks its

@@ -464,12 +464,14 @@ void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src
             netlink_consume(sock);
         } else {
             packet_consume(sock);
+            sock->rx_any = 1;
         }
         return;
     }
     if (sock->type == SOCK_RAW) {
         raw_consume(sock);
         raw_last_info(sock, &sock->rx_last);
+        sock->rx_any = 1;
         if (src_ip) {
             raw_last_address(sock, src_ip);
         }
@@ -492,6 +494,7 @@ void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src
         *src_port = d->port;
     }
     sock->rx_last = d->info;
+    sock->rx_any = 1;
     net_unlock(flags);
     kfree(d);
 }
@@ -504,16 +507,19 @@ void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_
 
     if (sock->family == AF_PACKET) {
         packet_note_head(sock);
+        sock->rx_any = 1;
     } else if (sock->family != AF_NETLINK) {
         if (sock->type == SOCK_RAW) {
             raw_head_address(sock, &ip);
             raw_head_info(sock, &sock->rx_last);
+            sock->rx_any = 1;
         } else {
             flags = net_lock();
             if (sock->rq.head) {
                 ip = sock->rq.head->src;
                 port = sock->rq.head->port;
                 sock->rx_last = sock->rq.head->info;
+                sock->rx_any = 1;
             }
             net_unlock(flags);
         }
