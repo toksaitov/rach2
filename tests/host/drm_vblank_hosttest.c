@@ -763,7 +763,10 @@ static void row_force(void)
               conn[1].status == DRM_CONNECTOR_DISCONNECTED && !conn[1].modes && !conn[1].edid &&
               force_calls == calls + 1,
           "the probe finds it disconnected and tells the driver");
-    CHECK(drm_connector_force_write(&conn[1], " on ", 4) == 4 && conn[1].force == DRM_FORCE_ON,
+    CHECK(drm_connector_force_write(&conn[1], " on ", 4) == -EINVAL &&
+              drm_connector_force_write(&conn[1], "on\n\n", 4) == -EINVAL,
+          "spaces or two newlines about the word: EINVAL, as sysfs_streq");
+    CHECK(drm_connector_force_write(&conn[1], "on", 2) == 2 && conn[1].force == DRM_FORCE_ON,
           "force on");
     CHECK(drm_helper_probe_single_connector_modes(&conn[1], 0, 0) == 1 &&
               conn[1].status == DRM_CONNECTOR_CONNECTED && conn[1].edid,

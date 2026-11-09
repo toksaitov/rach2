@@ -1925,42 +1925,34 @@ static void modes_sort(struct drm_display_mode **list)
     *list = sorted;
 }
 
-/** Whether `c` is a space as Linux's strim takes one. */
-static int force_space(char c)
+/** Whether the `len` bytes at `buf`, up to a NUL, are the string `lit`
+ * with or without one newline after it, as Linux's sysfs_streq. */
+static int force_word(const char *buf, uint32_t len, const char *lit)
 {
-    return c == ' ' || (c >= '\t' && c <= '\r');
-}
+    uint32_t i = 0;
 
-/** Whether the `n` bytes at `word` are the string `lit`. */
-static int force_word(const char *word, uint32_t n, const char *lit)
-{
-    uint32_t i;
-
-    for (i = 0; i < n && lit[i] == word[i]; i++) {
+    while (i < len && buf[i] && buf[i] == *lit) {
+        i++;
+        lit++;
     }
-    return i == n && lit[n] == '\0';
+    if (i < len && buf[i] == '\n') {
+        i++;
+    }
+    return *lit == '\0' && (i == len || buf[i] == '\0');
 }
 
 int32_t drm_connector_force_write(struct drm_connector *connector, const char *buf, uint32_t len)
 {
-    uint32_t start = 0, end = len;
-
     if (len > 11) {
         return -EINVAL;
     }
-    while (start < end && force_space(buf[start])) {
-        start++;
-    }
-    while (end > start && force_space(buf[end - 1])) {
-        end--;
-    }
-    if (force_word(buf + start, end - start, "on")) {
+    if (force_word(buf, len, "on")) {
         connector->force = DRM_FORCE_ON;
-    } else if (force_word(buf + start, end - start, "digital")) {
+    } else if (force_word(buf, len, "digital")) {
         connector->force = DRM_FORCE_ON_DIGITAL;
-    } else if (force_word(buf + start, end - start, "off")) {
+    } else if (force_word(buf, len, "off")) {
         connector->force = DRM_FORCE_OFF;
-    } else if (force_word(buf + start, end - start, "unspecified")) {
+    } else if (force_word(buf, len, "unspecified")) {
         connector->force = DRM_FORCE_UNSPECIFIED;
     } else {
         return -EINVAL;

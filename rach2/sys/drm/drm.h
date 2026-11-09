@@ -1506,8 +1506,9 @@ int32_t drm_crtc_crc_read(struct drm_crtc *crtc, char *buf, uint32_t count, int 
 int drm_crtc_crc_ready(const struct drm_crtc *crtc);
 
 /** debugfs's `force` write of a connector, Linux's connector_write: "on",
- * "digital", "off" or "unspecified", with spaces about them, set its
- * DRM_FORCE_* for the next probe. `len`, or -EINVAL. (drm_mode.c) */
+ * "digital", "off" or "unspecified", with or without a newline, up to a
+ * NUL, as sysfs_streq takes them, set its DRM_FORCE_* for the next probe.
+ * `len`, or -EINVAL past eleven bytes or for another word. (drm_mode.c) */
 int32_t drm_connector_force_write(struct drm_connector *connector, const char *buf, uint32_t len);
 /** debugfs's `edid_override` write, Linux's drm_edid_override_set: keep a
  * copy of the `len` bytes at `edid` as the connector's EDID from the next
