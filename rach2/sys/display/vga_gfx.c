@@ -430,6 +430,11 @@ void fb_redraw(void)
     kirq_restore(flags);
 }
 
+void fb_native_damage(uint32_t offset, uint32_t len)
+{
+    fbcon_damage(offset, len);
+}
+
 /**
  * Load the classic 16-color CGA/EGA palette into the DAC for text mode.
  *
