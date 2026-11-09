@@ -1922,6 +1922,13 @@ build/tests/graphics/desktop.py: tests/graphics/desktop.py
 	@mkdir -p $(@D)
 	cp $< $@
 
+# `tests/run browser`: HTTPS pages, browser sandbox diagnostics, WebGPU,
+# concurrent sound, GPU recovery, and the fixed WebGL and video comparisons.
+BROWSER_FILES = $(wildcard tests/graphics/browser/*) $(GRAPHICS_FILES) \
+                $(wildcard tests/graphics/browser/ref/*/*)
+build/tests/cases/browser/files.tar.gz: $(BROWSER_FILES)
+	@mkdir -p $(@D)
+	python3 tests/graphics/browser/assets.py $@
 build/tests/graphics/desktop_display.py: tests/graphics/desktop_display.py
 	@mkdir -p $(@D)
 	cp $< $@

@@ -1,0 +1,4533 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.browser",
+  "summary": "Ordinary browsers under Weston match Debian on HTTPS, sandboxing, video, WebGL, WebGPU, sound and GPU recovery",
+  "cases": [
+    {
+      "case_id": "machine.browser.chromium-pages",
+      "behavior": "HTTPS forms, persistent storage, native files, clipboard, fonts and WebGL pixels in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "pages"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-sandbox",
+      "behavior": "the browser diagnostics and process sandbox policy equal the same binaries on Debian in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "sandbox"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-sound",
+      "behavior": "three concurrent audio tabs contain 440, 660 and 880 Hz in the kernel loopback in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "sound"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-webgl",
+      "behavior": "chunk 00 of the WebGL 2.0.1 suite matches Debian page by page in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "webgl"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-video-h264-720p",
+      "behavior": "counted video frames and the named decoder match Debian for h264-720p in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "video-h264-720p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-video-h264-1080p",
+      "behavior": "counted video frames and the named decoder match Debian for h264-1080p in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "video-h264-1080p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-video-vp9-720p",
+      "behavior": "counted video frames and the named decoder match Debian for vp9-720p in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "video-vp9-720p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-video-vp9-1080p",
+      "behavior": "counted video frames and the named decoder match Debian for vp9-1080p in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "video-vp9-1080p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-video-av1-720p",
+      "behavior": "counted video frames and the named decoder match Debian for av1-720p in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "video-av1-720p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-video-av1-1080p",
+      "behavior": "counted video frames and the named decoder match Debian for av1-1080p in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "video-av1-1080p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-webgpu",
+      "behavior": "SwiftShader compute and pixels read back correctly, with the pinned CTS subset and upstream samples in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "webgpu"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.chromium-recovery",
+      "behavior": "a killed GPU process is replaced and the same page recovers its WebGL context in chromium",
+      "units": [
+        "tests/graphics/browser",
+        "chromium"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "chromium",
+          "case": "recovery"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-pages",
+      "behavior": "HTTPS forms, persistent storage, native files, clipboard, fonts and WebGL pixels in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "pages"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-sandbox",
+      "behavior": "the browser diagnostics and process sandbox policy equal the same binaries on Debian in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "sandbox"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-sound",
+      "behavior": "three concurrent audio tabs contain 440, 660 and 880 Hz in the kernel loopback in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "sound"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-webgl",
+      "behavior": "chunk 00 of the WebGL 2.0.1 suite matches Debian page by page in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "webgl"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-video-h264-720p",
+      "behavior": "counted video frames and the named decoder match Debian for h264-720p in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "video-h264-720p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-video-h264-1080p",
+      "behavior": "counted video frames and the named decoder match Debian for h264-1080p in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "video-h264-1080p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-video-vp9-720p",
+      "behavior": "counted video frames and the named decoder match Debian for vp9-720p in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "video-vp9-720p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-video-vp9-1080p",
+      "behavior": "counted video frames and the named decoder match Debian for vp9-1080p in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "video-vp9-1080p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-video-av1-720p",
+      "behavior": "counted video frames and the named decoder match Debian for av1-720p in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "video-av1-720p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.firefox-video-av1-1080p",
+      "behavior": "counted video frames and the named decoder match Debian for av1-1080p in firefox",
+      "units": [
+        "tests/graphics/browser",
+        "firefox"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "firefox",
+          "case": "video-av1-1080p"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "unpack the pinned browser files and references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the ordinary browser acceptance case"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "compare the complete result with the pinned Debian evidence"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the acceptance record and results"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "desktop-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virtio-vga",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "the runner exits zero after completing every operation and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the browser evidence is complete and equals Debian by policy, case and count",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "desktop-image",
+          "node": "images/desktop-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-files",
+          "node": "tests/cases/browser/files.tar.gz",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "clips",
+          "node": "tests/cases/graphics/clips.tar",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    }
+  ]
+}

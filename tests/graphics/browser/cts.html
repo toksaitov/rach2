@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGPU CTS subset</title>
+<pre id="results"></pre>
+<script type="module">
+import {DefaultTestFileLoader} from './assets/cts/common/internal/file_loader.js';
+import {Logger} from './assets/cts/common/internal/logging/logger.js';
+import {parseQuery} from './assets/cts/common/internal/query/parseQuery.js';
+import {setDefaultRequestAdapterOptions} from './assets/cts/common/util/navigator_gpu.js';
+setDefaultRequestAdapterOptions({forceFallbackAdapter: true});
+window.done = false;
+window.error = null;
+try {
+ const loader = new DefaultTestFileLoader(), logger = new Logger();
+ for (const query of [
+  'webgpu:api,operation,command_buffer,copyBufferToBuffer:copy_order:*',
+  'webgpu:api,operation,command_buffer,copyBufferToBuffer:state_transitions:*'
+ ]) {
+  for (const test of await loader.loadCases(parseQuery(query))) {
+   const [recorder] = logger.record(test.query.toString());
+   await test.run(recorder);
+   document.querySelector('pre').textContent = logger.asJSON(2);
+  }
+ }
+ window.result = JSON.parse(logger.asJSON());
+} catch (e) { window.error = String(e.stack || e); }
+window.done = true;
+</script>
