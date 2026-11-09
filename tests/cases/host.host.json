@@ -1193,12 +1193,12 @@
         {
           "assertion_id": "vgpu3d",
           "checks": "Virgl capability sets, contexts, 3D resource transfers, submissions without sleeps, foreign dependencies, sync-file and syncobj fences, out-of-order completions and reset against the device model under ASan and UBSan",
-          "source": "program"
+          "source": "scenario"
         },
         {
           "assertion_id": "vgpu3d64",
           "checks": "The virgl model rows with x86-64 kernel structures under ASan and UBSan",
-          "source": "program"
+          "source": "scenario"
         },
         {
           "assertion_id": "virtio_gpu",

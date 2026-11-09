@@ -192,6 +192,12 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # `tests/run dmabuf`: sealed memfd ranges exported as dma-bufs, shared
 # pages across fork and close, and sync-file export, merge, info and import.
 # The guest case is tests/cases/guest.dmabuf.json and has no make target.
+# `tests/run vgpu`: QEMU's virtio-vga-gl with a virgl renderer under Rach2's
+# virtio-gpu driver: the capability sets, a context for each open, a 3D
+# texture uploaded and read back, a submission's sync-file out-fence passed
+# on as an in-fence, blocking and non-blocking waits, and a reset that fails
+# the pending fences. The machine case is tests/cases/machine.vgpu.json and
+# has no make target.
 
 # `tests/run vdso`: the vDSO, on two processors: under `rach2.tscreliable` the
 # x86-64 kernel keeps its clock from the TSC and vdsomusl's clock calls make
