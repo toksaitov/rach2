@@ -14,7 +14,13 @@
  * get_thread_area must read the entry back. A signal taken in 32-bit code
  * must run its 64-bit handler with the interrupted CS, 0x23, and SS in the
  * frame, UC_SIGCONTEXT_SS set and UC_STRICT_RESTORE_SS clear, and its return
- * must resume the 32-bit code. A seccomp filter that kills the i386 getpid,
+ * must resume the 32-bit code. A handler that the i386 rt_sigaction installs
+ * with SA_ONSTACK, on an alternate stack that the i386 sigaltstack sets,
+ * must run in 32-bit code on that stack with Linux's i386 rt frame: the
+ * signal in EAX and on the stack, the stack 4 bytes past a 16-byte boundary,
+ * the i386 siginfo and the ucontext with the interrupted EIP and CS, 0x23;
+ * its return through the i386 rt_sigreturn must resume the 32-bit code and
+ * leave the alternate stack set. A seccomp filter that kills the i386 getpid,
  * judging the architecture and the number, must leave the x86-64 call of the
  * same number alone and kill the process that makes the i386 one with
  * SIGSYS. PTRACE_GET_SYSCALL_INFO must report the architecture of each call
@@ -55,6 +61,8 @@
 /* The i386 numbers the probe makes by `int $0x80`. */
 #define I386_GETPID          20
 #define I386_KILL            37
+#define I386_RT_SIGACTION    174
+#define I386_SIGALTSTACK     186
 #define I386_NO_CALL         222
 #define I386_SET_THREAD_AREA 243
 #define I386_GET_THREAD_AREA 244
@@ -72,6 +80,7 @@
 
 #define SA_SIGINFO  0x00000004ul
 #define SA_RESTORER 0x04000000ul
+#define SA_ONSTACK  0x08000000ul
 
 /* uc_flags bits, and the offsets in Linux x86-64's ucontext of uc_flags,
  * the saved RIP and the word that holds CS in bits 0-15 and SS in 48-63. */
@@ -154,6 +163,8 @@ static const char *const assertion_id[] = {"far-call",
                                            "get-thread-area",
                                            "signal-frame",
                                            "signal-return",
+                                           "ia32-altstack-frame",
+                                           "ia32-altstack-return",
                                            "seccomp-native-kept",
                                            "seccomp-i386-killed",
                                            "ptrace-arch",
@@ -213,6 +224,14 @@ static unsigned int child_block[4] = {0x6B6B5678u};
 static volatile unsigned long seen_flags, seen_rip, seen_csgsfs;
 static volatile int handled;
 
+/* The i386 handler's alternate stack, and what it saw, by the indexes of
+ * H32_*: EAX at entry, the signal on its stack, its ESP, its CS, and from
+ * the frame uc_stack's flags, the saved EIP and CS and the siginfo's signal
+ * and pid. Not static, since the 32-bit code stores to it by name. */
+static unsigned char alt32[16384] __attribute__((aligned(16)));
+volatile unsigned int h32[9];
+enum { H32_EAX, H32_SIG, H32_ESP, H32_CS, H32_SSFLAGS, H32_EIP, H32_UCCS, H32_SIGNO, H32_PID };
+
 /* The RSP of the 64-bit code while the 32-bit code runs. */
 unsigned long saved_rsp;
 
@@ -229,9 +248,14 @@ unsigned long saved_rsp;
  * user_desc at EDX; tls32 loads the selector in EDX into GS and returns the
  * word at GS:0; kill32 sends SIGUSR1 to the process EDX names and returns
  * kill's result once the handler has returned to it.
+ *
+ * handler32 is an i386 SA_SIGINFO handler, which records into h32 what it
+ * finds and returns to its restorer, restorer32, which makes the i386
+ * rt_sigreturn.
  */
 long call32(void *entry, void *stack_top, unsigned long arg);
 extern char mode32[], getpid32[], nocall32[], set32[], tls32[], kill32[], kill32_int80[];
+extern char handler32[], restorer32[];
 
 __asm__(".text\n"
         ".code64\n"
@@ -299,6 +323,33 @@ __asm__(".text\n"
         "kill32_int80:\n"
         "    int $0x80\n"
         "    ljmp $0x33, $back64\n"
+        ".globl handler32\n"
+        "handler32:\n"
+        "    movl %eax, h32\n"
+        "    movl 4(%esp), %eax\n"
+        "    movl %eax, h32+4\n"
+        "    movl %esp, h32+8\n"
+        "    movl %cs, %eax\n"
+        "    movzwl %ax, %eax\n"
+        "    movl %eax, h32+12\n"
+        "    movl 12(%esp), %eax\n"
+        "    movl 12(%eax), %ecx\n"
+        "    movl %ecx, h32+16\n"
+        "    movl 76(%eax), %ecx\n"
+        "    movl %ecx, h32+20\n"
+        "    movl 80(%eax), %ecx\n"
+        "    movl %ecx, h32+24\n"
+        "    movl 8(%esp), %eax\n"
+        "    movl (%eax), %ecx\n"
+        "    movl %ecx, h32+28\n"
+        "    movl 12(%eax), %ecx\n"
+        "    movl %ecx, h32+32\n"
+        "    ret\n"
+        ".globl restorer32\n"
+        "restorer32:\n"
+        "    movl $173, %eax\n"
+        "    int $0x80\n"
+        "    hlt\n"
         ".code64\n");
 
 /** The i386 call `nr` by `int $0x80` from 64-bit code, with three arguments,
@@ -463,6 +514,54 @@ static void run_signal(void)
     report_held();
     if (r != 0) {
         fail("the return from the handler did not resume the 32-bit code");
+    }
+    report_held();
+}
+
+/** Linux's `compat_sigaction` and `compat_stack_t`, as the i386 calls take
+ * them. */
+struct sigaction32 {
+    unsigned int handler, flags, restorer, mask[2];
+};
+
+struct stack32 {
+    unsigned int sp;
+    int flags;
+    unsigned int size;
+};
+
+/** A signal taken in 32-bit code by an i386 handler on an alternate stack,
+ * with the i386 rt frame, and its return there. */
+static void run_ia32_signal(void)
+{
+    static struct sigaction32 ka;
+    static struct stack32 ss, old;
+    unsigned long base = (unsigned long)alt32, pid = (unsigned long)syscall0(SYS_GETPID);
+    long r;
+
+    ss.sp = (unsigned int)base;
+    ss.flags = 0;
+    ss.size = sizeof(alt32);
+    ka.handler = (unsigned int)(unsigned long)handler32;
+    ka.flags = (unsigned int)(SA_SIGINFO | SA_RESTORER | SA_ONSTACK);
+    ka.restorer = (unsigned int)(unsigned long)restorer32;
+    if (int80(I386_SIGALTSTACK, (unsigned long)&ss, 0, 0) != 0 ||
+        int80_5(I386_RT_SIGACTION, SIGUSR1, (unsigned long)&ka, 0, 8, 0) != 0) {
+        fail("the i386 sigaltstack or rt_sigaction failed");
+    }
+    r = run32(kill32, pid);
+    if (h32[H32_EAX] != SIGUSR1 || h32[H32_SIG] != SIGUSR1 || h32[H32_CS] != GDT_USER_CODE32 ||
+        h32[H32_ESP] <= base || h32[H32_ESP] >= base + sizeof(alt32) ||
+        ((h32[H32_ESP] + 4) & 15) != 0 || h32[H32_SSFLAGS] != 0 ||
+        h32[H32_EIP] != (unsigned int)(unsigned long)kill32_int80 + 2 ||
+        h32[H32_UCCS] != GDT_USER_CODE32 || h32[H32_SIGNO] != SIGUSR1 || h32[H32_PID] != pid) {
+        fail("an i386 handler on the alternate stack did not run in 32-bit code with the i386 "
+             "rt frame");
+    }
+    report_held();
+    if (r != 0 || int80(I386_SIGALTSTACK, 0, (unsigned long)&old, 0) != 0 ||
+        old.sp != (unsigned int)base || old.size != sizeof(alt32) || old.flags != 0) {
+        fail("the i386 rt_sigreturn did not resume the 32-bit code with the alternate stack set");
     }
     report_held();
 }
@@ -696,6 +795,7 @@ void probe_main(unsigned long *sp)
     run_entry();
     run_tls();
     run_signal();
+    run_ia32_signal();
     run_seccomp();
     run_ptrace();
     run_map32();
