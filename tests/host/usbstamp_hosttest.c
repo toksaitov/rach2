@@ -192,6 +192,12 @@ void fpu_restore(const void *area)
     (void)area;
 }
 
+/** No rseq area is registered in the host switch model. */
+void rseq_preempt(process_t *p)
+{
+    (void)p;
+}
+
 /** No debug register is set in the host switch model. */
 void arch_debug_switch(struct process *old, const struct process *next)
 {

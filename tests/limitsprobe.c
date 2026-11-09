@@ -144,7 +144,6 @@ struct rseq_area {
     u32 flags;
     u32 node_id;
     u32 mm_cid;
-    u32 pad;
 } __attribute__((aligned(32)));
 
 /* Linux's struct rseq_cs. */
@@ -310,6 +309,14 @@ static void on_usr1(int signo)
     usr1_taken++;
 }
 
+/** Open a pipe into `fds`, its read end first. */
+static void open_pipe(int fds[2])
+{
+    fds[0] = -1;
+    fds[1] = -1;
+    check(syscall1(SYS_PIPE, (long)fds) == 0, "pipe");
+}
+
 /** Fork; the child's 0, or the parent's child pid. */
 static long fork_child(void)
 {
@@ -441,7 +448,7 @@ static void set_section(struct rseq_cs *cs, char *abort_ip)
     cs->version = 0;
     cs->flags = 0;
     cs->start_ip = (unsigned long)lp_cs_start;
-    cs->post_commit_offset = (unsigned long)(lp_cs_post - lp_cs_start);
+    cs->post_commit_offset = (unsigned long)lp_cs_post - (unsigned long)lp_cs_start;
     cs->abort_ip = (unsigned long)abort_ip;
 }
 
@@ -573,7 +580,7 @@ static void guard_rows(void)
     check(syscall2(SYS_MUNLOCK, map + 2 * PAGE, PAGE) == 0, "munlock");
     check(syscall3(SYS_MADVISE, map + PAGE, PAGE, MADV_GUARD_INSTALL) == 0, "MADV_GUARD_INSTALL");
     check(page[0] == 'a' && page[2 * PAGE] == 'c', "a guard's neighbour lost its contents");
-    check(syscall1(SYS_PIPE, (long)fds) == 0, "pipe");
+    open_pipe(fds);
     check(syscall3(SYS_WRITE, fds[1], map + PAGE, 1) == -EFAULT,
           "a write from a guard is not EFAULT");
     report_held();
@@ -704,7 +711,8 @@ static void vm_rows(void)
 
     check(!sys_failed(map) && syscall2(SYS_MUNMAP, map + PAGE, PAGE) == 0, "a page beside a hole");
     fill((void *)map, 'm', PAGE);
-    check(syscall1(SYS_PIPE, (long)ready) == 0 && syscall1(SYS_PIPE, (long)go) == 0, "pipes");
+    open_pipe(ready);
+    open_pipe(go);
     pid = fork_child();
     if (pid == 0) {
         vm_child(ready[1], go[0]);
