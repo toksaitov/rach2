@@ -424,7 +424,7 @@ static void fill(volatile u32 *at, long n, u32 seed)
     long i;
 
     for (i = 0; i < n; i++) {
-        at[i] = seed ^ (u32)(i * 2654435761u);
+        at[i] = seed ^ (u32)i * 2654435761u;
     }
 }
 
@@ -434,7 +434,7 @@ static int holds(const volatile u32 *at, long n, u32 seed)
     long i;
 
     for (i = 0; i < n; i++) {
-        if (at[i] != (seed ^ (u32)(i * 2654435761u))) {
+        if (at[i] != (seed ^ (u32)i * 2654435761u)) {
             return 0;
         }
     }
@@ -596,6 +596,8 @@ static u32 mode_list(int fd, struct drm_mode_get_connector *conn, struct drm_mod
     u32 i;
 
     zero(&res, sizeof(res));
+    zero(crtcs, sizeof(crtcs));
+    zero(conns, sizeof(conns));
     res.crtc_id_ptr = (u64)(unsigned long)crtcs;
     res.connector_id_ptr = (u64)(unsigned long)conns;
     res.count_crtcs = MAX_IDS;

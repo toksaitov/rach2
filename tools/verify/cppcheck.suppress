@@ -71,6 +71,11 @@ unusedStructMember:*tests/evprobe.c
 # control characters, and the members between them are the layout.
 unusedStructMember:*tests/keylatprobe.c
 
+# `struct drm_mode_modeinfo` in the DRM probe is Linux's, which GETCONNECTOR
+# fills and SETCRTC and GETCRTC copy whole; the probe compares and prints
+# some members, and the rest are the layout.
+unusedStructMember:*tests/drmprobe.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 and x86-64 signal frames, statx, the rusage, the siginfo a wait
