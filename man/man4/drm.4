@@ -284,8 +284,10 @@ The device is freed when its last file and its last mapping go.
 .Pa /dev/dri/cardN
 has mode 0660 and
 .Pa /dev/dri/renderDM
-mode 0666, as udev gives them on Linux; both are owned by root and its
-group.
+mode 0666 when the driver registers them, owned by root and its group.
+On the GNU system udev then gives the card the group video and the render
+node the group render with mode 0660, as Debian's rules give them on
+Linux.
 .Sh ERRORS
 .Bl -tag -width EOPNOTSUPP
 .It Er EACCES

@@ -1,10 +1,11 @@
-.Dd October 3, 2026
+.Dd November 10, 2026
 .Dt CHMOD 2
 .Os
 .Sh NAME
 .Nm chmod ,
 .Nm fchmod ,
-.Nm fchmodat
+.Nm fchmodat ,
+.Nm fchmodat2
 .Nd change file permission bits
 .Sh SYNOPSIS
 .In sys/stat.h
@@ -15,6 +16,8 @@
 .In fcntl.h
 .Ft int
 .Fn fchmodat "int dirfd" "const char *path" "mode_t mode" "int flags"
+.Ft long
+.Fn syscall "SYS_fchmodat2" "int dirfd" "const char *path" "mode_t mode" "int flags"
 .Sh DESCRIPTION
 .Fn chmod
 changes the permission and special mode bits of
@@ -41,9 +44,7 @@ finds the descriptor open, as a
 .Fn chmod
 of
 .Pa /proc/self/fd/N ,
-which the kernel treats as fixed synthetic metadata: root then receives
-success without a change, and other callers
-.Er EPERM .
+which the kernel follows to the descriptor's file, as Linux does.
 .Pp
 Relative paths are resolved from the current working directory.
 .Fn fchmodat
@@ -67,12 +68,32 @@ returns
 .Er ENOTDIR ,
 as on Linux.
 .Pp
+.Fn fchmodat2
+takes Linux's flags.
+.Dv AT_SYMLINK_NOFOLLOW
+leaves a final symbolic link unfollowed; the mode of a link does not
+change, and the call gives
+.Er EOPNOTSUPP .
+.Dv AT_EMPTY_PATH
+with an empty path changes what
+.Fa dirfd
+is open on, a descriptor opened with
+.Dv O_PATH
+included, or the working directory for
+.Dv AT_FDCWD .
+Any other flag gives
+.Er EINVAL .
+systemd's udevd sets the mode of a device node through it.
+.Pp
 The kernel calls are 15 for
 .Fn chmod ,
 94 for
-.Fn fchmod
-and 306 for
-.Fn fchmodat .
+.Fn fchmod ,
+306 for
+.Fn fchmodat
+and 452 for
+.Fn fchmodat2 ,
+on i686 and on x86-64 alike for the last.
 Call 306 takes no flags argument.
 Pass zero as the musl
 .Fa flags
@@ -83,9 +104,7 @@ through a separate sequence of calls; a symbolic-link target gives
 .Er EOPNOTSUPP ,
 and for another target the sequence ends in a call on
 .Pa /proc/self/fd/N ,
-which the kernel treats as fixed synthetic metadata: root then receives
-success without a change, and other callers
-.Er EPERM .
+which the kernel follows to the target.
 Other flags give
 .Er EINVAL .
 .Ss Stored modes
@@ -123,7 +142,14 @@ stores the low nine permission bits on the terminal, by path or descriptor,
 under the owner-or-root rule.
 A directory or link made under
 .Pa /dev
-stores its permission bits under the same rule.
+stores its permission bits under the same rule, and so does a device under
+.Pa /dev ,
+whose bits the next open checks, as udev sets those of Linux's devtmpfs
+nodes; a device registered anew, such as a display that comes again,
+starts with its driver's mode.
+A
+.Pa /proc/ Ns Ar PID Ns Pa /fd/ Ns Ar N
+link changes what the descriptor is open on.
 Other synthetic objects and descriptors have fixed metadata.
 For these, effective user ID 0 receives success without a change;
 other callers receive
@@ -164,6 +190,10 @@ and for one whose pseudoterminal no longer exists; musl's
 retries the error through
 .Pa /proc/self/fd/N ,
 as the description says.
+.Fn fchmodat2
+returns it for an
+.Dv AT_EMPTY_PATH
+call on a descriptor that is not open.
 .It Er EBUSY
 Path resolution enters a mount being mounted or unmounted.
 .It Er EFAULT
@@ -172,7 +202,13 @@ The path cannot be read from user memory.
 Musl rejects the
 .Fa flags
 argument to
-.Fn fchmodat .
+.Fn fchmodat ,
+or
+.Fn fchmodat2
+is given a flag other than
+.Dv AT_SYMLINK_NOFOLLOW
+and
+.Dv AT_EMPTY_PATH .
 .It Er EIO
 Path lookup or metadata access fails, including access to a removed device.
 .It Er ELOOP
@@ -206,7 +242,9 @@ reaches something else.
 .It Er EOPNOTSUPP
 Musl's
 .Dv AT_SYMLINK_NOFOLLOW
-handling encountered a symbolic link.
+handling, or
+.Fn fchmodat2
+with that flag, met a symbolic link.
 .It Er EPERM
 The caller is neither owner nor root, an unprivileged caller addresses
 fixed metadata, FAT32 or exFAT cannot represent the requested mode, or

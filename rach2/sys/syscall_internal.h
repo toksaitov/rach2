@@ -604,6 +604,7 @@ long sys_inotify_add_watch(isr_params_t *params);
 long sys_chmod(isr_params_t *params);
 
 long sys_fchmodat(isr_params_t *params);
+long sys_fchmodat2(isr_params_t *params);
 
 long sys_fchmod(isr_params_t *params);
 

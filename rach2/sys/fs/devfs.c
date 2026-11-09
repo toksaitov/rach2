@@ -211,7 +211,7 @@ struct devfs_entry {
     uint16_t major;
     uint16_t minor;
     uint8_t lseek_zero; /* 1: an lseek returns 0 (`devfs_lseek_zero`) */
-    uint16_t mode;      /* the nine permission bits; the owner is root */
+    uint16_t mode;      /* the nine permission bits, unless `devfs_setattr` gave others */
     const struct file_ops *ops;
 };
 
@@ -557,6 +557,56 @@ static const struct reg_slot *reg_slot_of(const struct devfs_entry *dev)
     uintptr_t off = (uintptr_t)dev - (uintptr_t)reg_slots;
 
     return off < sizeof(reg_slots) ? (const struct reg_slot *)dev : 0;
+}
+
+/*
+ * The devices root gave an owner, group or mode (`devfs_setattr`), as udev
+ * gives Linux's devtmpfs nodes theirs; every other device is root's with
+ * its entry's mode. A record whose `dev` is NULL is free.
+ */
+struct devfs_owned {
+    const struct devfs_entry *dev;
+    uint32_t uid;
+    uint32_t gid;
+    uint16_t mode; /* the nine permission bits */
+};
+
+static struct devfs_owned owned[DEVFS_OWNED_MAX];
+
+/** The record of `dev`, or NULL for a device that has none. A reader that
+ * races a chmod or chown sees the bits before it or after it. */
+static const struct devfs_owned *owned_of(const struct devfs_entry *dev)
+{
+    int i;
+
+    for (i = 0; i < DEVFS_OWNED_MAX; i++) {
+        if (owned[i].dev == dev) {
+            return &owned[i];
+        }
+    }
+    return NULL;
+}
+
+/** Drop the record of `dev`, which a node registered anew does not keep. */
+static void owned_drop(const struct devfs_entry *dev)
+{
+    uint32_t flags = kirq_save();
+    int i;
+
+    for (i = 0; i < DEVFS_OWNED_MAX; i++) {
+        if (owned[i].dev == dev) {
+            owned[i].dev = NULL;
+        }
+    }
+    kirq_restore(flags);
+}
+
+/** The permission bits of `dev`: its record's, else its entry's. */
+static uint32_t dev_mode(const struct devfs_entry *dev)
+{
+    const struct devfs_owned *o = owned_of(dev);
+
+    return o ? o->mode : dev->mode;
 }
 
 static const struct file_ops diskwin_ops;
@@ -2375,7 +2425,7 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
         return -1;
     }
     if (mode) {
-        *mode = devfs_type_bits(dev) | (uint32_t)dev->mode;
+        *mode = devfs_type_bits(dev) | dev_mode(dev);
     }
     if (rdev) {
         *rdev = ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
@@ -2659,6 +2709,7 @@ int32_t devfs_node_register(struct devfs_node *node)
     slot->entry.mode = (uint16_t)(node->mode & 0777u);
     slot->entry.ops = node->ops;
     slot->node = node;
+    owned_drop(&slot->entry);
     return 0;
 }
 
@@ -2669,6 +2720,7 @@ void devfs_node_unregister(struct devfs_node *node)
     for (i = 0; i < reg_slot_count; i++) {
         if (reg_slots[i].node == node) {
             reg_slots[i].node = NULL;
+            owned_drop(&reg_slots[i].entry);
         }
     }
 }
@@ -2681,7 +2733,83 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
         return 0;
     }
     dev = e->dev;
-    return devfs_type_bits(dev) | (uint32_t)dev->mode;
+    return devfs_type_bits(dev) | dev_mode(dev);
+}
+
+/** The owner and group of `dev` into `*uid` and `*gid`. */
+static void dev_owner(const struct devfs_entry *dev, uint32_t *uid, uint32_t *gid)
+{
+    uint32_t flags = kirq_save();
+    const struct devfs_owned *o = owned_of(dev);
+
+    *uid = o ? o->uid : 0;
+    *gid = o ? o->gid : 0;
+    kirq_restore(flags);
+}
+
+int devfs_owner(const char *name, uint32_t *uid, uint32_t *gid)
+{
+    const struct devfs_entry *dev = name[0] != '\0' ? devfs_find(name) : NULL;
+
+    *uid = 0;
+    *gid = 0;
+    if (name[0] == '\0') {
+        return 0;
+    }
+    if (!dev) {
+        return -1;
+    }
+    dev_owner(dev, uid, gid);
+    return 0;
+}
+
+void devfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+{
+    *uid = 0;
+    *gid = 0;
+    if (e && e->type == FD_TYPE_DEVICE && e->dev) {
+        dev_owner(e->dev, uid, gid);
+    }
+}
+
+int32_t devfs_setattr(const char *name, uint32_t mode, uint32_t uid, uint32_t gid)
+{
+    const struct devfs_entry *dev = name[0] != '\0' ? devfs_find(name) : NULL;
+    struct devfs_owned *o = NULL;
+    uint32_t flags;
+    int i;
+
+    if (!dev) {
+        return -ENOENT;
+    }
+    flags = kirq_save();
+    for (i = 0; i < DEVFS_OWNED_MAX && !o; i++) {
+        if (owned[i].dev == dev) {
+            o = &owned[i];
+        }
+    }
+    for (i = 0; i < DEVFS_OWNED_MAX && !o; i++) {
+        if (!owned[i].dev) {
+            o = &owned[i];
+            o->dev = dev;
+            o->uid = 0;
+            o->gid = 0;
+            o->mode = dev->mode;
+        }
+    }
+    if (o) {
+        if (mode != (uint32_t)-1) {
+            o->mode = (uint16_t)(mode & 0777u);
+        }
+        if (uid != (uint32_t)-1) {
+            o->uid = uid;
+        }
+        if (gid != (uint32_t)-1) {
+            o->gid = gid;
+        }
+    }
+    kirq_restore(flags);
+    return o ? 0 : -ENOSPC;
 }
 
 void devfs_disk_withdraw(void)
