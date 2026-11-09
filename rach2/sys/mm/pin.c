@@ -109,6 +109,7 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
 {
     uintptr_t start = addr & ~(uintptr_t)(PAGE_SIZE - 1);
     uintptr_t end = addr + len;
+    uintptr_t pages;
     struct pin *pin;
     int rc;
 
@@ -122,10 +123,11 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     if (start < USER_ADDR_MIN || end > USER_ADDR_MAX) {
         return -EFAULT;
     }
-    if ((end - start) / PAGE_SIZE > 0xFFFFFFFFu) {
-        return -ENOMEM;
+    pages = (end - start) / PAGE_SIZE;
+    if (pages != (uint32_t)pages) {
+        return -ENOMEM; /* more than a record counts */
     }
-    rc = pin_new(mm, (uint32_t)((end - start) / PAGE_SIZE), holder, &pin);
+    rc = pin_new(mm, (uint32_t)pages, holder, &pin);
     if (rc != 0) {
         return rc;
     }

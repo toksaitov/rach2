@@ -1214,9 +1214,11 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     }
 #endif
     first = mmio_find(pages, align, phase);
+#if KVA_MMIO_LARGE
     if (first >= MMIO_PAGES && align > 1) {
-        first = mmio_find(pages, 1, 0);
+        first = mmio_find(pages, 1, 0); /* any run, in 4 KiB pages */
     }
+#endif
     if (first >= MMIO_PAGES) {
         klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
              (unsigned long)pages);
