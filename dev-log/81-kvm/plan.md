@@ -34,6 +34,8 @@ The owner approved the graphics plan, draft 6i, with `tasks.md`, for all eight m
 
 Standing decisions: one shared branch, `milestone/76-display`; Steam stays out of the build.
 
+On 2026-11-10, asked about the corpus's exclusions, the owner excluded nested virtualization ("Skip them, please. Nested was not part of the scope."): the 38 tests of `tests/kvm/unit-tests.list` and `tests/kvm/selftests.list` that need SVM or VMX inside a guest of Rach2's KVM, and the selftest hyperv_svm_test, which needs it too, are excluded with that reason, and no task or milestone adds it. The other exclusions Linux passes are fixed in 81: Hyper-V's ten in 81-8 and the PMU's in 81-9.
+
 ## Tasks
 
 Each task below is an issue in the GitHub milestone `81 kvm`, and each subtask a sub-issue under it; a wait is a blocker on GitHub. Faults found in other projects' code go in `upstream.md` beside this file, in the format [dev-log/upstream.md](../upstream.md) gives.
