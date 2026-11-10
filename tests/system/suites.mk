@@ -1987,6 +1987,10 @@ include tests/graphics/d3d/rules.mk
 # on virgl: a new prefix with WineD3D's video memory set, GL and Direct3D 9
 # pixels, 64-bit and 32-bit, against the Debian guest's in the same QEMU, and
 # the preloader's reserved ranges against Linux's maps.
+# `tests/run games-wm`: in the boot session's Weston on kiosk-shell, xplace's
+# and Wine's fullscreen windows placed, focused, scaled and dumped through
+# QMP, raw motion under a confining grab, Wine's tone through the loopback
+# and DirectInput's devices; the same payload, with wm.py.
 include tests/system/games/rules.mk
 
 # `tests/run desktop`: an ordinary headless Weston session at boot, input

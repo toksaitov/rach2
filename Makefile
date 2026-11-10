@@ -972,6 +972,7 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 NET_SCENARIOS = build/tests/cases/machine/d3d_scenario build/tests/cases/machine/games_scenario \
                 build/tests/cases/machine/bedforward_scenario \
                 build/tests/cases/machine/browser_scenario \
+                build/tests/cases/machine/gameswm_scenario \
                 build/tests/cases/machine/desktop_scenario \
                 build/tests/cases/machine/i915fake_scenario \
                 build/tests/cases/machine/diskdiag_scenario \
