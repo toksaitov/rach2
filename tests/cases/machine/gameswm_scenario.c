@@ -98,6 +98,10 @@ static void row(struct net_case *u, struct net_boot *b, const char *row)
                 move(u, b, -200, 0);
             for (i = 0; i < 5; i++)
                 move(u, b, 0, 40);
+            /* The i8042 passes the key's bytes before the mouse's that
+             * wait, so press it once the kernel has every move. */
+            if (etude_guest_output_wait(b->m, "wm: moved") != ETUDE_OK)
+                net_fail(u, "wm.py never printed \"wm: moved\"");
         }
         escape(u, b);
     }

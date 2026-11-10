@@ -30,12 +30,19 @@ SESSION = Path("/usr/libexec/rach2-session")
 WORK = Path("/tmp/games-wm")
 # Where weston-screenshooter writes, through XDG_PICTURES_DIR.
 SHOTS = WORK / "shots"
-# The output, and the points of it whose colours show a window at its
-# origin drawing its left half red and its right half green across the
+# The output, and the points of it whose colours, r, g or k for black, show
+# a window drawing its left half red and its right half green across the
 # whole output, scaled or not: each half's corners and the two sides of the
-# middle, as (x, y, red).
+# middle. GE-Proton scales a lower mode to the output keeping its aspect, so
+# Wine's 800x600 is 1024x768 between black bars of 171 columns.
 SCREEN = (1366, 768)
-POINTS = ((8, 8, 1), (8, 759, 1), (670, 384, 1), (696, 384, 0), (1357, 8, 0), (1357, 759, 0))
+POINTS = ((8, 8, "r"), (8, 759, "r"), (670, 384, "r"), (696, 384, "g"), (1357, 8, "g"),
+          (1357, 759, "g"))
+BARRED = ((8, 384, "k"), (179, 8, "r"), (179, 759, "r"), (670, 384, "r"), (696, 384, "g"),
+          (1187, 8, "g"), (1187, 759, "g"), (1357, 384, "k"))
+COLOURS = {"r": lambda r, g, b: r > 200 and g < 60 and b < 60,
+           "g": lambda r, g, b: r < 60 and g > 200 and b < 60,
+           "k": lambda r, g, b: r < 40 and g < 40 and b < 40}
 GAME_ID = "2734"
 UID = 1001
 # CVT's 1366x768 at 60 Hz, which Weston sets when the EDID lists no such mode.
@@ -99,11 +106,13 @@ def session(mode):
                        re.escape(output[-1]), text)
     wanted = mode if listed and re.search(r"^\s+%s@" % mode, listed.group(1), re.M) else MODELINE
     # --debug lets weston-screenshooter capture the output, since QEMU's
-    # screendump has no surface while virgl scans out a GL resource.
+    # screendump has no surface while virgl scans out a GL resource; the
+    # window manager's scope logs what it does with each X window.
     text = SESSION.read_text()
     if "weston --debug " not in text:
         assert text.count("weston --backend=") == 1, "rach2-session starts no weston"
-        SESSION.write_text(text.replace("weston --backend=", "weston --debug --backend="))
+        SESSION.write_text(text.replace("weston --backend=", "weston --debug "
+                                        "--logger-scopes=log,xwm-wm-x11 --backend="))
     core = INI.read_text().split("\n[output]")[0].rstrip("\n")
     INI.write_text(core + "\n[output]\nname=%s\nmode=%s\n" % (output[-1], wanted))
     offset = SERVICES.stat().st_size
@@ -116,6 +125,15 @@ def session(mode):
             break
         assert not re.search(r"fatal: |Segmentation fault", text), text[-3000:]
         time.sleep(0.2)
+    # Xwayland starts on the first client, and the session's restart can
+    # leave the display refusing clients for a moment.
+    for _ in range(100):
+        probe = subprocess.run(desktop("exec %s -q none" % (PROBES / "xplace")),
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if "cannot open the display" not in probe.stdout:
+            break
+        time.sleep(0.2)
+    assert "cannot open the display" not in probe.stdout, log_from(offset)[-3000:]
     check("mode", True, "output %s mode %s by %s" % (output[-1], mode,
                                                     "name" if wanted == mode else "modeline"))
     return output[-1]
@@ -129,6 +147,40 @@ def keyboard():
         if caps and int(caps[-1], 16) & (0x3ff << 16) == 0x3ff << 16:
             return os.open("/dev/input/" + entry.name, os.O_RDONLY)
     raise AssertionError("no keyboard in /sys/class/input")
+
+
+def kernel_motion(stop, sums):
+    """
+    Sum the REL_X and REL_Y events of the mouse's event device into SUMS, a
+    list of dx, dy and events, until STOP, so that motion lost in the kernel
+    tells apart from motion lost above it. Print "wm: moved" once the sums
+    reach MOTION: the scenario presses its key only then, since the i8042
+    passes a key's bytes before the mouse's that wait.
+    """
+    for entry in sorted(Path("/sys/class/input").glob("event*")):
+        caps = (entry / "device/capabilities/rel").read_text().split()
+        if caps and int(caps[-1], 16) & 3 == 3:
+            break
+    else:
+        return
+    fd = os.open("/dev/input/" + entry.name, os.O_RDONLY | os.O_NONBLOCK)
+    size = struct.calcsize("llHHi")
+    try:
+        while not stop.is_set():
+            try:
+                data = os.read(fd, size * 64)
+            except BlockingIOError:
+                time.sleep(0.01)
+                continue
+            for at in range(0, len(data) - size + 1, size):
+                _, _, kind, code, value = struct.unpack("llHHi", data[at:at + size])
+                if kind == 2 and code in (0, 1):
+                    sums[code] += value
+                    sums[2] += 1
+                    if tuple(sums[:2]) == MOTION:
+                        say("moved")
+    finally:
+        os.close(fd)
 
 
 def wait_key(fd):
@@ -147,6 +199,15 @@ def start(argv, out=subprocess.PIPE):
                             text=True, start_new_session=True)
     CHILDREN.append(proc)
     return proc
+
+
+def xwm_trace(offset):
+    """Print the window manager's map and configure lines of the services
+    log from byte OFFSET."""
+    lines = re.findall(r"\[xwm-wm-x11\] (XCB_(?:MAP_REQUEST|CONFIGURE_REQUEST|"
+                       r"CONFIGURE_NOTIFY|REPARENT_NOTIFY|CREATE_NOTIFY)[^\n]*)", log_from(offset))
+    for line in lines[:80]:
+        say("xwm: " + line)
 
 
 def png_rows(path, last):
@@ -190,10 +251,10 @@ def png_rows(path, last):
     return width, height, bpp, rows
 
 
-def screen(name):
+def screen(name, points=POINTS):
     """
     Capture the output with weston-screenshooter and check, as NAME, that it
-    is SCREEN's size and that each of POINTS has its half's colour.
+    is SCREEN's size and that each of POINTS has its colour.
     """
     shutil.rmtree(SHOTS, ignore_errors=True)
     SHOTS.mkdir(mode=0o755)
@@ -205,14 +266,14 @@ def screen(name):
         check(name, False, "weston-screenshooter: status %d %s" % (run.returncode,
                                                                   run.stdout.strip()))
         return
-    width, height, bpp, rows = png_rows(shots[-1], max(y for _, y, _ in POINTS))
+    width, height, bpp, rows = png_rows(shots[-1], max(y for _, y, _ in points))
     off = []
-    for x, y, red in POINTS if (width, height) == SCREEN else ():
+    for x, y, colour in points if (width, height) == SCREEN else ():
         r, g, b = rows[y][x * bpp:x * bpp + 3]
-        if not (r > 200 and g < 60 and b < 60 if red else r < 60 and g > 200 and b < 60):
-            off.append("%d,%d is %d %d %d" % (x, y, r, g, b))
-    check(name, (width, height) == SCREEN and not off, "%dx%d, %d points off the left-red, "
-          "right-green halves %s" % (width, height, len(off), off))
+        if not COLOURS[colour](r, g, b):
+            off.append("%d,%d is %d %d %d, not %s" % (x, y, r, g, b, colour))
+    check(name, (width, height) == SCREEN and not off, "%dx%d, %d points off %s" % (
+        width, height, len(off), off))
 
 
 def xplace(width, height):
@@ -221,14 +282,19 @@ def xplace(width, height):
     its report, which it ends when the scenario's key arrives.
     """
     proc = start(desktop("exec %s %d %d" % (PROBES / "xplace", width, height)))
-    lines = []
+    lines, ready = [], False
     for line in proc.stdout:
         lines.append(line.rstrip("\n"))
         print(line, end="", flush=True)
         if line.startswith("xplace: ready"):
             screen("screen-xplace-%d" % width)
             say("ready: xplace-%d" % width)
+            ready = True
     status = proc.wait()
+    if not ready:
+        # The scenario waits for each ready line in turn; its key then
+        # finds nothing to end.
+        say("ready: xplace-%d" % width)
     check("xplace-%d-exit" % width, status == 0, "status %d" % status)
     return "\n".join(lines)
 
@@ -293,12 +359,13 @@ def full(width, height):
         text = wait_text(output, "full: ready", proc)
         check("full-%d-ready" % width, text is not None, (text or "").strip())
         if text is None:
+            say("ready: full-%d" % width)
             return
         query = subprocess.run(desktop("exec %s -q fullprobe" % (PROBES / "xplace")),
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         print(query.stdout, end="", flush=True)
         placed("full-%d" % width, query.stdout, 1366, 768)
-        screen("screen-full-%d" % width)
+        screen("screen-full-%d" % width, POINTS if width == 1366 else BARRED)
         say("ready: full-%d" % width)
         wait_key(fd)
         go.touch()
@@ -311,7 +378,17 @@ def full(width, height):
 def row_place():
     """xplace and Wine's window at the output's 1366x768, and xplace's raw motion."""
     session("1366x768")
-    report = xplace(1366, 768)
+    offset = SERVICES.stat().st_size
+    stop, sums = threading.Event(), [0, 0, 0]
+    reader = threading.Thread(target=kernel_motion, args=(stop, sums))
+    reader.start()
+    try:
+        report = xplace(1366, 768)
+    finally:
+        stop.set()
+        reader.join()
+    say("kernel motion: dx %d dy %d events %d" % tuple(sums))
+    xwm_trace(offset)
     placed("xplace-1366", report, 1366, 768)
     check("xplace-1366-grab", "grab 0" in report, "")
     raw = re.findall(r"raw (.*) dx (-?\d+) dy (-?\d+) events (\d+) relative", report)
@@ -321,7 +398,9 @@ def row_place():
     check("xplace-1366-confined", pointer is not None and pointer.group(3) == "0" and
           0 <= int(pointer.group(4)) < 768, pointer.group(0) if pointer else "no pointer")
     make_prefix()
+    offset = SERVICES.stat().st_size
     full(1366, 768)
+    xwm_trace(offset)
 
 
 def row_scaled():
@@ -358,18 +437,24 @@ def tone_windows(data):
     the loud windows, so that the tone's ends tell apart from gaps within it.
     """
     values = struct.unpack("<%dh" % (len(data) // 2), data)
-    good, off, loud = 0, [], 0
+    good, off, loud, kinds = 0, [], 0, ""
     for at in range(0, len(values) - 2400, 2400):
         block = values[at:at + 2400]
         rms = math.sqrt(sum(x * x for x in block) / len(block))
         if rms < 200:
+            kinds += "."
             continue
         hz = sum(a <= 0 < b for a, b in zip(block, block[1:])) * 20
         if abs(hz - 440) <= 40:
             good += 1
+            kinds += "#"
         else:
             off.append((loud, int(rms), hz))
+            kinds += "x"
         loud += 1
+    # The windows from the tone's first to its last: # at 440 Hz, x loud at
+    # another, . quiet.
+    say("tone windows: %s" % kinds.strip("."))
     return good, off
 
 
