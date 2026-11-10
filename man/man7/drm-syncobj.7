@@ -98,6 +98,7 @@ to the fences as a hint.
 is the index of the first object found signalled.
 A fence's error does not fail the wait; a sync file of the fence reports
 it.
+A wait on no handles returns 0 at once.
 .It Dv DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT
 The same at the points in
 .Ar points ,
@@ -110,8 +111,9 @@ Take each object's fence away.
 Give each object a signalled fence.
 .It Dv DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL
 Add a signalled point to each object at its point in
-.Ar points ,
-or for point 0 give it a signalled fence.
+.Ar points .
+A point at or below the object's newest, 0 among them, takes the newest's
+number on a timeline of its own, as Linux chains it.
 .It Dv DRM_IOCTL_SYNCOBJ_QUERY
 Write the point each object has reached into
 .Ar points ,
@@ -149,7 +151,8 @@ Padding and unused flags must be zero.
 .It Er EFAULT
 A bad address of handles or points.
 .It Er EINVAL
-No handles, an unknown flag or nonzero padding; a point not yet
+No handles for a call but the two waits, an unknown flag or nonzero
+padding; a point not yet
 submitted; a handle
 .Dv DRM_IOCTL_SYNCOBJ_DESTROY
 or
