@@ -799,6 +799,22 @@ static void row_queued_off(void)
           "CRTC 1 on again");
 }
 
+/* The OUT_FENCE_PTR target of row_out_fence_fault. */
+static int32_t *out_fence_target;
+
+/** Before the copy of the descriptor: undo the -1 the property's copy
+ * wrote, so that only the error path's write can leave -1. */
+static void out_fence_spoil(void)
+{
+    *out_fence_target = 77;
+}
+
+/** Before the property's copy of -1: spoil what it writes at the next. */
+static void out_fence_arm(void)
+{
+    copy_hook = out_fence_spoil;
+}
+
 /** An out-fence descriptor that cannot be written refuses the commit
  * before it takes effect, as Linux's setup_out_fence, and leaves no sync
  * file or descriptor and -1 where OUT_FENCE_PTR points. */
@@ -811,11 +827,14 @@ static void row_out_fence_fault(void)
 
     req_flip(&r, 0, before == fb_a ? fb_b : fb_a);
     req_add(&r, &crtc[0].base, mc->prop_out_fence_ptr, UPTR(&out_fd));
+    out_fence_target = &out_fd;
+    copy_hook = out_fence_arm;
     copy_fault_after = 1; /* the -1 of the property passes; the descriptor faults */
     CHECK(req_commit(&r, 0, 0) == -EFAULT, "an out-fence that cannot be written: EFAULT");
     copy_fault_after = -1;
     ticks(2);
     CHECK(primary[0].state->fb->base.id == before && nshown == at, "and no flip");
+    copy_hook = NULL;
     CHECK(out_fd == -1 && allocations == made, "-1 written, and no sync file left");
 }
 

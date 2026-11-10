@@ -114,12 +114,13 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     k_memcpy(dst, src, n);
     return 0;
 }
-/** Allocate a descriptor in the model's bounded table. */
+/** Allocate a descriptor in the model's bounded table, skipping a slot
+ * that is in use or reserved, which has its description set. */
 int fd_alloc(fd_table_t *t)
 {
     int i;
     for (i = 0; i < 64; i++)
-        if (t->entries[i].type == FD_TYPE_NONE) {
+        if (t->entries[i].type == FD_TYPE_NONE && !t->entries[i].ofd) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
             t->entries[i].ofd = &descriptions[i];
             return i;
@@ -376,12 +377,12 @@ static void timeline_cases(void)
     close_fd(&table, data.fence);
     dma_fence_put(f);
 }
-/** Whether only descriptor `fd` is in use. */
+/** Whether only descriptor `fd` is in use or reserved. */
 static int only_fd(int fd)
 {
     int i;
     for (i = 0; i < 64; i++)
-        if ((slots[i].type != FD_TYPE_NONE) != (i == fd))
+        if ((slots[i].type != FD_TYPE_NONE || slots[i].ofd != NULL) != (i == fd))
             return 0;
     return 1;
 }
