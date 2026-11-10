@@ -404,15 +404,57 @@ static int32_t con_shadow_make(struct drm_device *dev, uint32_t h, volatile uint
     return 0;
 }
 
+/** The console's buffer for `w` by `h` on `dev` in `*fb` and `*obj`, with a
+ * reference of the caller's on each: the one it has when it is that size,
+ * else a new one. 0 or the error of con_buffer_make. */
+static int32_t con_buffer_get(struct drm_device *dev, uint32_t w, uint32_t h,
+                              struct drm_framebuffer **fb, struct drm_gem_object **obj)
+{
+    if (con.fb && con.fb->width == w && con.fb->height == h) {
+        *fb = con.fb;
+        *obj = con.obj;
+        drm_framebuffer_get(*fb);
+        drm_gem_object_get(*obj);
+        return 0;
+    }
+    return con_buffer_make(dev, w, h, fb, obj);
+}
+
+/** After the commits that lit `fb`: make `fb` and `obj`, which the caller
+ * holds, the console's buffer when `err` is 0 and the console still has
+ * `dev`, which an unregister in the commits' sleep may have ended; else, or
+ * when they are already its buffer, let the caller's references go. */
+static void con_buffer_keep(struct drm_device *dev, int32_t err, struct drm_framebuffer *fb,
+                            struct drm_gem_object *obj)
+{
+    if (!fb) {
+        return;
+    }
+    if (err == 0 && con.dev == dev && fb != con.fb) {
+        drm_framebuffer_put(con.fb);
+        drm_gem_object_put(con.obj);
+        con.fb = fb;
+        con.obj = obj;
+        return;
+    }
+    drm_framebuffer_put(fb);
+    drm_gem_object_put(obj);
+}
+
 /**
  * Light the console's outputs on `dev`, as the comment at the top says, and
  * describe where fbcon draws in `*screen` and `*base`: the loader's
  * framebuffer and NULL on the firmware's device, else the console's buffer
- * and the kernel's address of it. 0 or -errno: -ENODEV for no output or a
- * buffer the kernel cannot reach, or the error of the buffer or a commit.
+ * and the kernel's address of it. `gen` is the console's generation when
+ * the caller decided to place it; a master or a device that came while the
+ * commit lock was waited for changed it, and the console then commits
+ * nothing, as Linux's client holds the master lock across its commit. 0 or
+ * -errno: -EAGAIN for a changed generation, -ENODEV for no output, a buffer
+ * the kernel cannot reach or a device unregistered during the commits, or
+ * the error of the buffer or a commit.
  * May sleep.
  */
-static int32_t con_place(struct drm_device *dev, struct boot_framebuffer *screen,
+static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_framebuffer *screen,
                          volatile uint8_t **base)
 {
     struct con_output outs[DRM_MAX_CRTCS];
@@ -422,31 +464,21 @@ static int32_t con_place(struct drm_device *dev, struct boot_framebuffer *screen
     int32_t err = 0;
 
     drm_modeset_lock_nointr(dev);
-    if (!con.firmware && (n = con_outputs(dev, outs)) == 0) {
+    if (con.dev != dev || con.gen != gen || dev->master) {
+        err = -EAGAIN;
+    } else if (!con.firmware && (n = con_outputs(dev, outs)) == 0) {
         err = -ENODEV;
     }
     con_extent(outs, n, &w, &h, &vw, &vh);
     if (err == 0 && !con.firmware) {
-        if (con.fb && con.fb->width == w && con.fb->height == h) {
-            fb = con.fb;
-            obj = con.obj;
-        } else {
-            err = con_buffer_make(dev, w, h, &fb, &obj);
-        }
+        err = con_buffer_get(dev, w, h, &fb, &obj);
     }
     if (err == 0) {
         err = con_light(dev, outs, n, fb);
     }
-    if (fb && fb != con.fb) {
-        if (err == 0) {
-            drm_framebuffer_put(con.fb);
-            drm_gem_object_put(con.obj);
-            con.fb = fb;
-            con.obj = obj;
-        } else {
-            drm_framebuffer_put(fb);
-            drm_gem_object_put(obj);
-        }
+    con_buffer_keep(dev, err, fb, obj);
+    if (err == 0 && con.dev != dev) {
+        err = -ENODEV; /* unregistered while the commits slept */
     }
     drm_modeset_unlock(dev);
     if (err != 0) {
@@ -681,7 +713,7 @@ static void con_take_back(struct drm_device *dev)
     uint32_t gen = con.gen, flags;
     int32_t rc;
 
-    rc = con_place(dev, &screen, &base);
+    rc = con_place(dev, gen, &screen, &base);
     if (con.dev != dev || con.gen != gen) {
         return;
     }
@@ -765,7 +797,7 @@ void drm_client_dev_register(struct drm_device *dev)
         con_probe(dev);
         return;
     }
-    rc = con_place(dev, &screen, &base);
+    rc = con_place(dev, gen, &screen, &base);
     if (con.dev != dev || con.gen != gen) {
         return;
     }
@@ -842,7 +874,7 @@ void drm_client_dev_hotplug(struct drm_device *dev)
     if (dev != con.dev || con.handed || con.firmware || dev->master || !fbcon_active) {
         return;
     }
-    rc = con_place(dev, &screen, &base);
+    rc = con_place(dev, gen, &screen, &base);
     if (con.dev != dev || con.gen != gen) {
         return;
     }

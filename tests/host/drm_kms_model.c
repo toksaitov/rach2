@@ -213,7 +213,7 @@ void drm_event_cancel_free(struct drm_pending_event *e)
 
 /* ---- buffer objects: a table of handles over a few objects ---- */
 
-#define MAX_GEM     8
+#define MAX_GEM     16
 #define MAX_HANDLES 32
 static struct drm_gem_object gem[MAX_GEM];
 static struct {
