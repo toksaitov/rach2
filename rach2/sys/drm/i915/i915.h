@@ -3132,6 +3132,12 @@ const struct drm_mode_modeinfo *intel_panel_fixed_mode(struct drm_i915_private *
  * intel_panel_mode_valid, else -EINVAL. */
 int32_t intel_panel_mode_valid(struct drm_i915_private *i915, const struct drm_mode_modeinfo *mode);
 
+/** Linux's intel_cpu_transcoder_mode_valid for display version 5 and up: 0
+ * for a mode of at least 64 pixels across with 32 of horizontal blanking,
+ * 5 lines of vertical blanking and an hsync after the active area, else
+ * -EINVAL. */
+int32_t intel_cpu_transcoder_mode_valid(const struct drm_mode_modeinfo *m);
+
 /** Replace the user's `mode` with the fixed mode that drives it, Linux's
  * intel_panel_compute_config: 0, or -EINVAL for a rate more than a hertz
  * from the panel's. */

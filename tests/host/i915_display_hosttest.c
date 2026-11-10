@@ -1060,6 +1060,29 @@ static void row_cursor_unpin(void)
     frame();
 }
 
+/** The pipe's mode check refuses the transcoder's least blanking and an
+ * hsync at the end of the active area, as Linux's
+ * intel_cpu_transcoder_mode_valid does for every encoder. */
+static void row_mode_limits(void)
+{
+    struct drm_mode_modeinfo m = pa->hw.mode;
+    int ok = intel_crtc_mode_valid(&pa->base, &m) == 0;
+
+    m.hsync_start = m.hdisplay;
+    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
+    m = pa->hw.mode;
+    m.htotal = (uint16_t)(m.hdisplay + 16u);
+    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
+    m = pa->hw.mode;
+    m.vtotal = (uint16_t)(m.vdisplay + 4u);
+    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
+    m = pa->hw.mode;
+    m.hdisplay = 32;
+    m.hsync_start = 40;
+    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
+    CHECK(ok, "mode: the panel's mode taken; no front porch, a short blank or 32 pixels refused");
+}
+
 /** Write `text` to attribute `attr` of backlight 0. */
 static int bl_store(int attr, const char *text)
 {
@@ -1333,6 +1356,7 @@ int main(void)
     row_sprite();
     row_cursor();
     row_cursor_unpin();
+    row_mode_limits();
     row_backlight();
     row_crc();
     row_modeset();
