@@ -6,6 +6,7 @@
 .Nd run a Windows game through Proton and WineD3D on OpenGL
 .Sh SYNOPSIS
 .Nm
+.Op Fl -umu
 .Op Fl -id Ar id
 .Op Fl -prefix Ar directory
 .Op Fl -print
@@ -48,6 +49,44 @@ through Proton and prints
 .Dl rach2-game: prefix: made DIR
 on standard error before it starts the program.
 WineD3D takes the video memory from the GL driver, as under Linux.
+.Ss umu
+.Fl -umu
+runs Proton through
+.Xr umu-run 1 ,
+in the container of the pinned Steam Linux Runtime 3.0, sniper, as games
+run outside Steam under Linux.
+The settings and the prefix are the direct route's.
+umu takes the compatibility directory as
+.Ev WINEPREFIX
+and links its
+.Pa pfx
+to the directory itself unless
+.Pa pfx
+is already a directory, as in one the direct route made.
+.Pp
+umu keeps the runtime in
+.Pa $XDG_DATA_HOME/umu/steamrt3
+or
+.Pa $HOME/.local/share/umu/steamrt3 .
+When that copy's
+.Pa VERSIONS.txt
+differs from
+.Pa /opt/umu/VERSIONS.txt ,
+or it has none,
+.Nm
+unpacks
+.Pa /opt/umu/SteamLinuxRuntime_sniper.tar.xz
+there, under umu's lock
+.Pa umu.lock
+beside it, replacing the old copy, and prints
+.Dl rach2-game: umu: unpacked the Steam Linux Runtime VERSION in DIR
+on standard error.
+The copy takes 810 MB.
+umu checks it with
+.Nm pv-verify
+on the first start and downloads nothing; with
+.Ev UMU_RUNTIME_UPDATE
+set to 0 it does not update the runtime either.
 .Pp
 .Fl -print
 prints the effective settings, one
@@ -130,6 +169,33 @@ The chosen game ID.
 1, enabling Proton's log and DLL load records.
 .El
 .Pp
+With
+.Fl -umu
+it also sets these for umu:
+.Bl -tag -width UMU_RUNTIME_UPDATE
+.It Ev PROTONPATH
+.Pa /opt/proton .
+.It Ev GAMEID
+.Li umu- Ns Ar id ,
+from which umu sets
+.Ev SteamGameId
+and
+.Ev SteamAppId
+to
+.Ar id .
+.It Ev WINEPREFIX
+The compatibility directory.
+.It Ev UMU_RUNTIME_UPDATE
+0, turning the runtime's update off.
+.El
+.Fl -print
+then also prints these and
+.Ev UMU_RUNTIME ,
+the runtime's directory.
+umu sets
+.Ev STEAM_COMPAT_CLIENT_INSTALL_PATH
+to the empty string inside the container.
+.Pp
 .Ev PROTON_LOG_DIR
 chooses the log directory; its default is
 .Pa logs
@@ -158,14 +224,17 @@ A failed
 .Li wineboot
 or
 .Li reg
-in a new prefix exits with status 1.
-Otherwise the exit status is Proton's.
+in a new prefix, or a failed unpacking of the runtime, exits with status 1.
+Otherwise the exit status is Proton's, or umu's with
+.Fl -umu .
 .Sh EXAMPLES
 .Bd -literal -offset indent
 rach2-game --id 17300 --prefix /data/crysis/compat /data/crysis/Bin64/Crysis.exe -dx9
+rach2-game --umu --id 17300 --prefix /data/crysis/compat /data/crysis/Bin64/Crysis.exe -dx9
 rach2-game --id 17300 --print
 .Ed
 .Sh SEE ALSO
 .Xr innoextract 1 ,
 .Xr proton 1 ,
+.Xr umu-run 1 ,
 .Xr desktop 7
