@@ -560,9 +560,19 @@ static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *
     return modeset || !cfg.active ? 0 : intel_wm_intermediate(&c->wm_optimal, &wm);
 }
 
+int32_t intel_cpu_transcoder_mode_valid(const struct drm_mode_modeinfo *m)
+{
+    if (m->hdisplay < 64 || m->htotal < m->hdisplay + 32u || m->vtotal < m->vdisplay + 5u ||
+        m->hsync_start == m->hdisplay) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
 /** The modes a pipe drives, Linux's intel_mode_valid for Haswell: no
  * vertical scan, skew, composite sync or the like, a clock the CD clock
- * takes, and the transcoder's sizes. */
+ * takes, and the transcoder's sizes; and the transcoder's least blanking
+ * and front porch, which Linux's encoders check in compute_config. */
 static int32_t intel_crtc_mode_valid(struct drm_crtc *crtc, const struct drm_mode_modeinfo *m)
 {
     struct drm_i915_private *i915 = to_intel_crtc(crtc)->i915;
@@ -578,7 +588,7 @@ static int32_t intel_crtc_mode_valid(struct drm_crtc *crtc, const struct drm_mod
         m->vdisplay > 4096 || m->vsync_start > 8192 || m->vsync_end > 8192 || m->vtotal > 8192) {
         return -EINVAL;
     }
-    return 0;
+    return intel_cpu_transcoder_mode_valid(m);
 }
 
 /** Nothing more: `intel_crtc_begin` turned the pipe on before the planes,

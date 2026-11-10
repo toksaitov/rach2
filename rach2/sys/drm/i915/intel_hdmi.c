@@ -361,8 +361,7 @@ static int32_t intel_hdmi_mode_valid(struct drm_connector *connector,
     int has_hdmi_sink = p->hdmi.info.is_hdmi, bpc;
     uint32_t clock = mode->clock;
 
-    if (mode->hdisplay < 64 || mode->htotal < mode->hdisplay + 32u ||
-        mode->vtotal < mode->vdisplay + 5u || mode->hsync_start == mode->hdisplay) {
+    if (intel_cpu_transcoder_mode_valid(mode) != 0) {
         return -EINVAL;
     }
     if (clock > intel_max_dotclock(p->dp.i915)) {
