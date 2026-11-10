@@ -23,3 +23,14 @@ Each entry follows [the upstream fault format](../upstream.md).
 * Rach2: `rach2/sys/drm/i915/intel_bios.c`, `vbt_get_panel_type`, checks the second panel's type as the first's and returns -1 for one out of range, in the commit that adds the decoders.
 * Status: unreported.
 * Next: check current upstream's `vbt_get_panel_type`, confirm the read past the tables with KASAN and a crafted table, and send the one-line range check as a patch to intel-gfx.
+
+## Linux's graphics 7 command parser allows the timestamp of the video ring's old base
+
+* Project: Linux 6.12, `drivers/gpu/drm/i915/i915_cmd_parser.c` and `i915_reg.h` from the upstream Git tag. No source archive is pinned by this task.
+* Fails: `gen7_render_regs` and `gen7_blt_regs`, at lines 631 and 678 of `i915_cmd_parser.c`, allow `RING_TIMESTAMP(BSD_RING_BASE)` and its upper half, which `BSD_RING_BASE` (0x04000, `i915_reg.h` line 290) puts at 0x4358 and 0x435c. From graphics 6 the video ring is at `GEN6_BSD_RING_BASE`, 0x12000, as `intel_engine_cs.c`'s table of engines gives it at line 139, so on Ivybridge and Haswell the allowlist names 0x4358, which is not the video ring's timestamp, and refuses 0x12358, which is. A user batch may then read or write 0x4358 through the privileged shadow.
+* Found: 2026-11-10 in a worker's clone under WSL, milestone 78, while transcribing the parser's tables for task 78-8b.
+* Reproduction: not run on Linux. On a Haswell, an unprivileged batch with `MI_STORE_REGISTER_MEM` of 0x12358 is run unprivileged and that of 0x4358 privileged, which `drm.debug` shows as a rejected register for the first only. What register, if any, answers at 0x4358 on graphics 7 is not known.
+* Evidence: [Linux 6.12's gen7_render_regs](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/i915_cmd_parser.c#L631), [its gen7_blt_regs](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/i915_cmd_parser.c#L678) and [its engine bases](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/gt/intel_engine_cs.c#L139). `tests/host/i915_parser_hosttest.c`, rows `tables: 0x4358` and `tables: Haswell's own video ring timestamp`, check that Rach2 judges both as Linux does.
+* Rach2: nothing; `rach2/sys/drm/i915/i915_cmd_parser.c` keeps Linux's tables, since its parser must judge every batch as Linux's does, in the commit that ports them.
+* Status: unreported.
+* Next: find what 0x4358 is on graphics 7 from Intel's register reference, check current upstream's tables, and propose `GEN6_BSD_RING_BASE` for graphics 7, keeping 0x4358 only if a user of it is found.
