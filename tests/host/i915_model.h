@@ -87,6 +87,7 @@ struct i915_model {
     uint64_t now_us;
     struct i915_model_access log[I915_MODEL_LOG];
     uint32_t nlog, log_lost;
+    int quiet_gtt; /* set, the GTT's entries are kept out of the log */
     uint32_t reads, writes, delays;
     void *priv[I915_MODEL_BLOCKS];
     void *test;

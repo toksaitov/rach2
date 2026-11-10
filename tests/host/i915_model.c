@@ -78,6 +78,9 @@ static const struct i915_model_block *block_for(uint32_t reg, int *at)
 /** Add one access to the log, or count it as lost when the log is full. */
 static void log_access(struct i915_model *m, int op, uint32_t reg, uint32_t value)
 {
+    if (m->quiet_gtt && op != I915_MODEL_DELAY && reg >= I915_GSM_OFFSET) {
+        return;
+    }
     if (m->nlog < I915_MODEL_LOG) {
         m->log[m->nlog].op = (uint8_t)op;
         m->log[m->nlog].reg = reg;
