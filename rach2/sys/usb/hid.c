@@ -526,6 +526,7 @@ static int leds_report(struct hid_state *state, uint8_t *out, int size, int *val
     unsigned int leds = leds_wanted();
 
     if (state->mode == HID_REPORT) {
+        leds |= hidinput_leds_lit(state->hid);
         return hidinput_led_report(state->hid, leds, out, size, value);
     }
     if (state->mode != HID_KEYBOARD || size < 1) {

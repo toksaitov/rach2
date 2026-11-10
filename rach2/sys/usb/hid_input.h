@@ -97,6 +97,13 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size);
 int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value);
 
 /**
+ * The LEDs of `hid` beyond Num, Caps and Scroll Lock that programs have lit
+ * on its event devices, a bit 1 << LED_* each, for `hidinput_led_report`;
+ * the first three are the console's, which every keyboard shares.
+ */
+unsigned int hidinput_leds_lit(struct hid_dev *hid);
+
+/**
  * Build the Feature report that sets each Resolution Multiplier of `hid`
  * to its logical maximum, as Linux's `hidinput_change_resolution_multipliers`
  * does, in `out` of `size` bytes, and its wValue in `*value`. Returns the

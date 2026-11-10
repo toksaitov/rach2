@@ -207,6 +207,10 @@ int in_compat_syscall(void)
 #define KEY_A   30
 #define KEY_KP1 79
 
+/* LEDs beyond a keyboard's three. */
+#define LED_COMPOSE 3
+#define LED_MAIL    9
+
 /* The ioctls, by Linux's macros. */
 #define IOC(dir, nr, size) (((uint32_t)(dir) << 30) | ((uint32_t)(size) << 16) | ('E' << 8) | (nr))
 #define EVIOCGNAME(n)      IOC(IOC_READ, NR_GNAME, n)
@@ -214,6 +218,7 @@ int in_compat_syscall(void)
 #define EVIOCGUNIQ(n)      IOC(IOC_READ, NR_GUNIQ, n)
 #define EVIOCGPROP(n)      IOC(IOC_READ, NR_GPROP, n)
 #define EVIOCGKEY(n)       IOC(IOC_READ, NR_GKEY, n)
+#define EVIOCGLED(n)       IOC(IOC_READ, NR_GLED, n)
 #define EVIOCGBIT(t, n)    IOC(IOC_READ, NR_GBIT + (t), n)
 #define EVIOCGABS(a)       IOC(IOC_READ, NR_GABS + (a), sizeof(struct input_absinfo))
 #define EVIOCSABS(a, n)    IOC(IOC_WRITE, NR_SABS + (a), n)
@@ -808,6 +813,63 @@ static void write_keyboard_rows(void)
     evdev_unregister(kbd);
 }
 
+/** A device's LEDs beyond Num, Caps and Scroll Lock: lit by a write on
+ * that device alone, reported, and given by EVIOCGLED; and EV_KEY offered
+ * only by a device with keys. */
+static void led_rows(void)
+{
+    uint8_t keys[EVDEV_KEY_BYTES], bits[8], leds[2];
+    struct input_event ev[2];
+    struct opened a, b;
+    struct evdev *kbd, *pad;
+
+    k_memset(keys, 0, sizeof(keys));
+    pad = evdev_register("pad", EVDEV_BUS_USB, 1, 4, keys);
+    evdev_set_capability(pad, EV_REL, REL_X);
+    open_dev(&a, 0);
+    evdev_ioctl(&a.e, EVIOCGBIT(0, 8), (uintptr_t)bits);
+    CHECK("a device with no keys has no EV_KEY", bits[0] == (1u << EV_SYN | 1u << EV_REL));
+    evdev_close(&a.e);
+    evdev_unregister(pad);
+
+    keys[KEY_A >> 3] |= (uint8_t)(1u << (KEY_A & 7));
+    kbd = evdev_register("Keyboard", EVDEV_BUS_USB, 1, 5, keys);
+    evdev_describe(kbd, "usb-1/input0", EVDEV_SCAN | EVDEV_KEYBOARD);
+    evdev_set_capability(kbd, EV_LED, LED_COMPOSE);
+    evdev_set_capability(kbd, EV_LED, LED_MAIL);
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    n_written = 0;
+    event(&ev[0], EV_LED, LED_MAIL, 1);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("a written Mail LED is lit on the device, not every keyboard's",
+          n_written == 0 && evdev_leds_lit(kbd) == 1u << LED_MAIL);
+    CHECK("its opens read it", take(&b) > 0 && n_got == 2 && is(0, EV_LED, LED_MAIL, 1));
+    k_memset(leds, 0, sizeof(leds));
+    CHECK("EVIOCGLED gives it in its second byte",
+          evdev_ioctl(&a.e, EVIOCGLED(2), (uintptr_t)leds) == 2 && leds[0] == 0 &&
+              leds[1] == 1u << (LED_MAIL - 8));
+    put(&a, ev, 2);
+    CHECK("writing it lit again changes nothing", take(&b) == -EAGAIN);
+    evdev_report_leds(kbd, 1u << LED_CAPSL);
+    CHECK("the console's LEDs leave it lit",
+          evdev_leds_lit(kbd) == (1u << LED_MAIL | 1u << LED_CAPSL));
+    event(&ev[0], EV_LED, LED_COMPOSE, 7);
+    put(&a, ev, 2);
+    CHECK("Compose is lit by any value but 0",
+          evdev_leds_lit(kbd) == (1u << LED_MAIL | 1u << LED_CAPSL | 1u << LED_COMPOSE));
+    event(&ev[0], EV_LED, 10, 1);
+    put(&a, ev, 2);
+    CHECK("an LED it lacks is dropped", (evdev_leds_lit(kbd) & 1u << 10) == 0 && n_written == 0);
+    event(&ev[0], EV_LED, LED_CAPSL, 0);
+    put(&a, ev, 1);
+    CHECK("Caps Lock still goes to every keyboard", n_written == 1 && written_code == LED_CAPSL);
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(kbd);
+}
+
 /** A mouse's written motion goes on to mouse.c with no grab held, as
  * Linux's mousedev takes it, and a grab keeps it from mouse.c. */
 static void write_pointer_rows(void)
@@ -967,6 +1029,7 @@ int main(void)
     compat_rows();
     write_rows();
     write_keyboard_rows();
+    led_rows();
     write_pointer_rows();
     console_key_rows();
     write_compat_rows();

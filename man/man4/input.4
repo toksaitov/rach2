@@ -582,6 +582,11 @@ as a packet at each
 as Linux's mousedev takes them.
 A keyboard's
 .Dv EV_LED
+of
+.Dv LED_NUML ,
+.Dv LED_CAPSL
+or
+.Dv LED_SCROLLL
 lights or puts out that LED, and its
 .Dv EV_REP
 sets the repeat's
@@ -590,6 +595,14 @@ or
 .Dv REP_PERIOD ,
 of every keyboard, as the console's LEDs and repeat are shared; the
 change reaches each keyboard's opens as a packet of its own.
+Any other
+.Dv EV_LED
+the device has, such as a USB keyboard's
+.Dv LED_COMPOSE
+and
+.Dv LED_KANA ,
+lights or puts out that LED on that device alone, and reaches its opens,
+as on Linux.
 .Pp
 The ioctls are Linux's:
 .Bl -tag -width EVIOCGBIT
@@ -619,11 +632,14 @@ Linux's usbkbd and usbmouse give none.
 .It Dv EVIOCGBIT
 The bits of the event types the device reports,
 .Dv EV_SYN ,
+for a device with keys or buttons
 .Dv EV_KEY ,
 for a mouse
 .Dv EV_REL ,
 for a device with absolute axes
 .Dv EV_ABS ,
+for a device with LEDs
+.Dv EV_LED ,
 and, for a keyboard,
 .Dv EV_MSC ,
 .Dv EV_LED
@@ -634,19 +650,20 @@ of its
 .Dv EV_MSC
 codes,
 .Dv MSC_SCAN ;
-and of a keyboard's LEDs,
+and of its LEDs, for a keyboard
 .Dv LED_NUML ,
 .Dv LED_CAPSL
 and
-.Dv LED_SCROLLL .
+.Dv LED_SCROLLL
+among them.
 The other types answer no bits, and
 .Dv EV_REP
 answers
 .Er EINVAL ,
 as on Linux.
 .It Dv EVIOCGKEY , EVIOCGLED
-The bits of the keys down now, or of a keyboard's LEDs lit, none for
-another device.
+The bits of the keys down now, or of the LEDs lit, none for a device
+without.
 As on Linux, the records of that type still queued for the open are taken
 out of its queue, since the state read includes them, and a packet left
 empty goes with them.

@@ -313,6 +313,16 @@ int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, in
     return 1;
 }
 
+/* The LEDs beyond the first three that programs lit, a bit each. */
+static unsigned int model_lit;
+
+/** Answer `model_lit`. */
+unsigned int hidinput_leds_lit(struct hid_dev *hid)
+{
+    (void)hid;
+    return model_lit;
+}
+
 /** The multiplier report, Feature report 2 at 1, or -1 without
  * `model_multiplier`. */
 int hidinput_multiplier_report(struct hid_dev *hid, uint8_t *out, int size, int *value)
@@ -539,6 +549,11 @@ static void report_rows(void)
     hid_output_sent(9, 1);
     CHECK("report: and nothing while they stay",
           hid_output_report(9, out, sizeof(out), &value) == -1);
+    model_lit = 1u << 4;
+    CHECK("report: a program lighting Kana sends it with Num Lock",
+          hid_output_report(9, out, sizeof(out), &value) == 1 &&
+              out[0] == ((1u << LED_NUML) | (1u << 4)));
+    model_lit = 0;
     hid_gone(9);
     model_multiplier = 0;
 
