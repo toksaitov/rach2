@@ -419,9 +419,13 @@ So is execute over a mapping of
 .Xr memfd_secret 2 .
 The whole range is checked before anything changes, except that a sealed
 mapping stops the call with
-.Er EPERM
-after the mappings below it in the range have taken the new protection,
-as Linux changes one mapping after another.
+.Er EPERM ,
+or
+.Er EACCES
+when its allowed rights require that error first.
+The mappings and resident pages below it take the new protection and
+notify their users before that error is returned, as Linux changes one
+mapping after another.
 .Ss Resizing and advice
 .Fn mremap ,
 kernel call 163, resizes the mapping at the page-aligned

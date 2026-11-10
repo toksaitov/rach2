@@ -49,7 +49,7 @@ refuses them.
 The caller must be allowed to read the process's memory, as
 .Xr ptrace 2
 allows a read: the process is its own, or the caller is privileged, or
-its effective user and group IDs are each of the process's three and the
+its file system user and group IDs are each of the process's three and the
 process is dumpable and not privileged.
 Advice about another process's memory needs privilege, Linux's
 .Dv CAP_SYS_NICE ,

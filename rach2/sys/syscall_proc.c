@@ -7635,12 +7635,12 @@ static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t leng
  * the range is not mapped or a split finds no room for its region. EACCES
  * for write asked of a shared mapping that may never be written (the
  * VM_PROT_NOWRITE `mmap_file` and `mmap_shm` give) or for execute asked of
- * a mapping of memfd_secret, with nothing changed. A sealed region
- * (mseal) is EPERM, and the regions below it in the range take the new
- * protection first, as Linux changes region by region and stops at the
- * sealed one. The regions take the new protection first and the resident
- * pages after, so a fault in between reads the protection the call is
- * setting.
+ * a mapping of memfd_secret. A sealed region (mseal) is EPERM unless
+ * its rights already require EACCES; the regions and pages below it take
+ * the new protection and their notifiers run before either error is
+ * returned, as Linux changes region by region and stops at the sealed one.
+ * The regions take the new protection first and the resident pages after,
+ * so a fault in between reads the protection the call is setting.
  *
  * The regions take `key`; with -1, PROT_EXEC alone takes the execute-only
  * key where the keys are on (`pkey_exec_only`), any other protection moves
@@ -7677,6 +7677,10 @@ static long mprotect_key(isr_params_t *params, int key)
     }
     sealed = vm_sealed_at(&mm->vm, addr, end);
     rc = vm_protect_key(&mm->vm, addr, sealed, vmprot, key, exec_key);
+    if (rc == 0) {
+        mmn_notify(mm, MMN_PROTECT, addr, sealed);
+        protect_resident(addr, sealed, vmprot);
+    }
     if (rc == 0 && sealed < end) {
         const vma_t *r = vm_find(&mm->vm, sealed);
 
@@ -7695,8 +7699,6 @@ static long mprotect_key(isr_params_t *params, int key)
         vma_exhausted("mprotect");
         return -ENOMEM;
     }
-    mmn_notify(mm, MMN_PROTECT, addr, sealed);
-    protect_resident(addr, sealed, vmprot);
     return rc == -4 ? -EPERM : 0;
 }
 
