@@ -211,8 +211,10 @@ struct i915_gpu_error *i915_gpu_coredump(struct drm_i915_private *i915, uint32_t
     err->derrmr = i915_uncore_read(i915, DERRMR);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if (i915->gt.engine[i].running) {
-            err->engine[i].hung = (engine_mask >> i) & 1u;
             capture_engine(i915, i, &err->engine[i]);
+            /* As Linux's capture_engine, which passes over an engine with
+             * no incomplete request. */
+            err->engine[i].hung = ((engine_mask >> i) & 1u) && err->engine[i].nrequests > 0;
         }
     }
     return err;

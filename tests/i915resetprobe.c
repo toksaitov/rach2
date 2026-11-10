@@ -493,10 +493,11 @@ static void files_row(void)
 
 /** A write of i915_error_state clears the state, which /sys then reports
  * not collected; a write of Linux's VCS0 bit, 0x400, to i915_wedged
- * captures a state of vcs0, whose message names the video class, 4, and
- * resets nothing, since vcs0 is idle and Linux's __intel_engine_reset_bh
- * passes over an engine that is not awake; and a write of
- * i915_gem_drop_caches takes every bit. */
+ * captures a state with no engine hung, "ecode 7:0:00000000", since vcs0
+ * is idle and Linux's capture_engine passes over an engine with no
+ * incomplete request, and resets nothing, since Linux's
+ * __intel_engine_reset_bh passes over an engine that is not awake; and a
+ * write of i915_gem_drop_caches takes every bit. */
 static void writes_row(void)
 {
     uint32_t vcs0 = fake_count("resets", "vcs0"), rcs = fake_count("resets", "rcs0");
@@ -507,8 +508,8 @@ static void writes_row(void)
     require(slurp(epath) > 0 && begins(body, "No error state collected\n"),
             "writes: no error state in /sys");
     require(put(dfile("i915_wedged"), "0x400\n"), "writes: i915_wedged takes 0x400");
-    require(slurp(dfile("i915_error_state")) > 0 && begins(body, "GPU HANG: ecode 7:4:"),
-            "writes: the state captured of vcs0, the video class");
+    require(slurp(dfile("i915_error_state")) > 0 && begins(body, "GPU HANG: ecode 7:0:00000000"),
+            "writes: the state captured with idle vcs0 not hung");
     require(fake_count("resets", "vcs0") == vcs0 && fake_count("resets", "rcs0") == rcs &&
                 fake_count("resets", "full") == full,
             "writes: no reset of an idle engine");
