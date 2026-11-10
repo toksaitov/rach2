@@ -639,11 +639,6 @@ void i915_gem_shrinker_unregister(struct drm_i915_private *i915)
     (void)i915;
 }
 
-void i915_debugfs_register(struct drm_i915_private *i915)
-{
-    (void)i915;
-}
-
 /* The release and the bring-up through /sys, i915_handoff.c, which
  * i915_handoff_hosttest.c tests; no row here unbinds the driver. */
 void i915_handoff_bound(struct drm_i915_private *i915)
@@ -932,6 +927,40 @@ static void fresh(struct i915_model *m, struct i915_hw *hw, int firstlight, int 
     fw_maps = fw_unmaps = 0;
 }
 
+/** Whether the bind made the display, or under rach2.i915.disable_display
+ * left it and the firmware's framebuffer device alone. */
+static void check_display_bind(int nodisplay)
+{
+    if (nodisplay) {
+        CHECK("display: left alone under rach2.i915.disable_display",
+              display_inits == 0 && aperture_removes == 0 &&
+                  !(last_registered->features & (DRIVER_MODESET | DRIVER_ATOMIC)) &&
+                  (last_registered->features & DRIVER_RENDER) &&
+                  logged("display: disabled by rach2.i915.disable_display"));
+    } else {
+        CHECK("display: the firmware's device removed, then the display made",
+              display_inits == 1 && aperture_removes == 1 &&
+                  (last_registered->features & DRIVER_MODESET));
+    }
+}
+
+/** Whether first light ran as its option says: ok, its interrupt taken or
+ * latched and its page given back, or nothing run without the option. */
+static void check_light(struct drm_i915_private *i915, struct i915_model_ring *rcs, int firstlight,
+                        int interrupts)
+{
+    if (firstlight) {
+        CHECK("light: ok, the interrupt taken or latched",
+              logged("first light: ok: rcs0 wrote 0x1915f157") &&
+                  logged(interrupts ? "user interrupt taken" : "user interrupt latched"));
+        CHECK("light: the value page given back",
+              i915->gt.engine[I915_RCS0].irq_refs == 0 && pages_live == 10);
+    } else {
+        CHECK("bind: no first light without its option",
+              !logged("first light") && rcs->executed == 0 && i915->gt.engine[I915_RCS0].tail == 0);
+    }
+}
+
 /**
  * Bind the driver to a fresh model of the Lenovo's chip with the boot
  * options of one of the trial's boots, the processor's interrupts on or
@@ -963,32 +992,12 @@ static void run(int firstlight, int interrupts, int nodisplay)
         CHECK("bind: the VBT from the OpRegion's mailbox 4, three outputs",
               fw_maps == 1 && i915->vbt.present && i915->vbt.version == LENOVO_VBT_VERSION &&
                   i915->vbt.nencoders == 3 && logged("VBT in mailbox 4"));
-        if (nodisplay) {
-            CHECK("display: left alone under rach2.i915.disable_display",
-                  display_inits == 0 && aperture_removes == 0 &&
-                      !(last_registered->features & (DRIVER_MODESET | DRIVER_ATOMIC)) &&
-                      (last_registered->features & DRIVER_RENDER) &&
-                      logged("display: disabled by rach2.i915.disable_display"));
-        } else {
-            CHECK("display: the firmware's device removed, then the display made",
-                  display_inits == 1 && aperture_removes == 1 &&
-                      (last_registered->features & DRIVER_MODESET));
-        }
+        check_display_bind(nodisplay);
         check_display(&m, i915);
         check_interrupts(&m);
         CHECK("gpu: no memory reached but the driver's pages", !rcs->faulted && !bcs->faulted);
         CHECK("gpu: nothing run on the blitter", bcs->executed == 0);
-        if (firstlight) {
-            CHECK("light: ok, the interrupt taken or latched",
-                  logged("first light: ok: rcs0 wrote 0x1915f157") &&
-                      logged(interrupts ? "user interrupt taken" : "user interrupt latched"));
-            CHECK("light: the value page given back",
-                  i915->gt.engine[I915_RCS0].irq_refs == 0 && pages_live == 10);
-        } else {
-            CHECK("bind: no first light without its option",
-                  !logged("first light") && rcs->executed == 0 &&
-                      i915->gt.engine[I915_RCS0].tail == 0);
-        }
+        check_light(i915, rcs, firstlight, interrupts);
         i915_unplug(last_registered);
         drm_dev_put(last_registered);
         last_registered = 0;

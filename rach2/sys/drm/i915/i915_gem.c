@@ -312,12 +312,14 @@ int32_t i915_gem_object_create(struct drm_i915_private *i915, uint64_t size,
 {
     struct drm_i915_gem_object *obj;
 
-    if (size > SHMEM_MAX_SIZE || size > (uint64_t)(size_t)-1 - (PAGE_SIZE - 1)) {
-        return -E2BIG;
-    }
+    /* A size within a page of 2^64 rounds up to 0, which is EINVAL, as
+     * Linux's __i915_gem_object_create_user_ext rounds before it tests. */
     size = (size + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
     if (size == 0) {
         return -EINVAL;
+    }
+    if (size > SHMEM_MAX_SIZE || size > (uint64_t)(size_t)-1) {
+        return -E2BIG;
     }
     obj = i915_gem_object_alloc(i915, size);
     if (!obj) {
@@ -924,6 +926,117 @@ int32_t i915_gem_create_ioctl(struct drm_device *dev, void *data, struct drm_fil
     return err;
 }
 
+#define I915_USER_PTR(v) ((void __user *)(uintptr_t)(v))
+
+/* The most regions MEMORY_REGIONS may name, Linux's INTEL_REGION_UNKNOWN. */
+#define I915_GEM_MAX_REGIONS 7u
+
+/* What GEM_CREATE_EXT's extensions set: whether MEMORY_REGIONS came. */
+struct gem_create_ext {
+    struct drm_i915_private *i915;
+    uint32_t n_placements;
+};
+
+/**
+ * GEM_CREATE_EXT's MEMORY_REGIONS, as Linux's set_placements: Haswell has
+ * one region a program may name, system memory, class 0 instance 0, since
+ * Linux keeps its stolen memory's region private. EINVAL for a pad not 0,
+ * no regions, more than Linux's seven, a region the device lacks, one
+ * named twice, or a second MEMORY_REGIONS in the chain; EFAULT.
+ */
+static int32_t ext_set_placements(uintptr_t ext, void *data)
+{
+    struct gem_create_ext *ext_data = (struct gem_create_ext *)data;
+    struct drm_i915_gem_create_ext_memory_regions args;
+    struct drm_i915_gem_memory_class_instance region;
+    uint32_t i, mask = 0;
+
+    if (copy_from_user(&args, I915_USER_PTR(ext), sizeof(args)) != 0) {
+        return -EFAULT;
+    }
+    if (args.pad || !args.num_regions || args.num_regions > I915_GEM_MAX_REGIONS) {
+        return -EINVAL;
+    }
+    for (i = 0; i < args.num_regions; i++) {
+        if (copy_from_user(&region, I915_USER_PTR(args.regions + i * sizeof(region)),
+                           sizeof(region)) != 0) {
+            return -EFAULT;
+        }
+        if (region.memory_class != I915_MEMORY_CLASS_SYSTEM || region.memory_instance != 0 ||
+            (mask & 1u)) {
+            return -EINVAL;
+        }
+        mask |= 1u;
+    }
+    if (ext_data->n_placements) {
+        return -EINVAL;
+    }
+    ext_data->n_placements = args.num_regions;
+    return 0;
+}
+
+/** PROTECTED_CONTENT, as Linux's ext_set_protected: EINVAL for flags,
+ * else ENODEV, since Haswell has no PXP. */
+static int32_t ext_set_protected(uintptr_t ext, void *data)
+{
+    uint32_t flags;
+
+    (void)data;
+    if (copy_from_user(&flags, I915_USER_PTR(ext + sizeof(struct i915_user_extension)),
+                       sizeof(flags)) != 0) {
+        return -EFAULT;
+    }
+    return flags ? -EINVAL : -ENODEV;
+}
+
+/** SET_PAT, as Linux's ext_set_pat: ENODEV before graphics 12.70. */
+static int32_t ext_set_pat(uintptr_t ext, void *data)
+{
+    (void)ext;
+    (void)data;
+    return -ENODEV;
+}
+
+static const i915_ext_fn gem_create_extensions[3] = {ext_set_placements, ext_set_protected,
+                                                     ext_set_pat};
+
+/**
+ * GEM_CREATE_EXT, as Linux's i915_gem_create_ext_ioctl: GEM_CREATE's
+ * object, after its extensions. EINVAL for a flag but NEEDS_CPU_ACCESS,
+ * and for that one too, which asks for a second region to spill to, and
+ * Haswell has one; the extensions' errors; then GEM_CREATE's.
+ */
+int32_t i915_gem_create_ext_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_create_ext *args = (struct drm_i915_gem_create_ext *)data;
+    struct gem_create_ext ext_data;
+    struct drm_i915_gem_object *obj;
+    int32_t err;
+
+    if (args->flags & ~I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS) {
+        return -EINVAL;
+    }
+    ext_data.i915 = to_i915(dev);
+    ext_data.n_placements = 0;
+    err = i915_user_extensions(args->extensions, gem_create_extensions, 3u, &ext_data);
+    if (err != 0) {
+        return err;
+    }
+    if (args->flags & I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS) {
+        return -EINVAL;
+    }
+    err = i915_gem_object_create(to_i915(dev), args->size, &obj);
+    if (err != 0) {
+        return err;
+    }
+    err = drm_gem_handle_create(file, &obj->base, &args->handle);
+    if (err == 0) {
+        args->size = obj->base.size;
+    }
+    i915_gem_object_put(obj);
+    return err;
+}
+
 /* The widest stride a linear framebuffer of Haswell's primary plane
  * takes, which a dumb buffer's pitch past it is rounded to pages for, as
  * Linux's intel_plane_fb_max_stride gives it. */
@@ -1359,6 +1472,8 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
     {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW, i915_gem_busy_ioctl, "I915_GEM_BUSY"},
     {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW, i915_gem_throttle_ioctl, "I915_GEM_THROTTLE"},
     {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl, "I915_GEM_CREATE"},
+    {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_create_ext_ioctl,
+     "I915_GEM_CREATE_EXT"},
     {DRM_IOCTL_I915_GEM_PREAD, DRM_RENDER_ALLOW, i915_gem_pread_ioctl, "I915_GEM_PREAD"},
     {DRM_IOCTL_I915_GEM_PWRITE, DRM_RENDER_ALLOW, i915_gem_pwrite_ioctl, "I915_GEM_PWRITE"},
     {DRM_IOCTL_I915_GEM_MMAP, DRM_RENDER_ALLOW, i915_gem_mmap_ioctl, "I915_GEM_MMAP"},

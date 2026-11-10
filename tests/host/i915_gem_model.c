@@ -14,6 +14,7 @@
 #include "dmabuf/fence.c"
 #include "dmabuf/dmabuf.c"
 #include "drm/i915/i915_gem.c"
+#include "drm/i915/i915_user_extensions.c"
 #include "drm/i915/i915_vma.c"
 #include "drm/i915/i915_gem_tiling.c"
 #include "drm/i915/i915_gem_mman.c"
