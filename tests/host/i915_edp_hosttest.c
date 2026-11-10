@@ -547,24 +547,24 @@ static void row_train_fail(void)
     struct intel_dp *dp = &gpu.display.dp;
 
     s->cr_swing = 3; /* more than Haswell's swing at any pre-emphasis */
-    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EIO && !s->trained,
-          "fail: a sink that never recovers its clock fails");
+    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EAGAIN && !s->trained,
+          "fail: a sink that never recovers its clock fails, for a retry");
     CHECK(s->cr_reads == 2u * 6u,
           "fail: each try ends after a read at swing 0 and the same swing asked 5 times");
     CHECK(dp->train_failures == 2 && dp->use_max_params && dp->link_max_rate == 0,
           "fail: two failures in a row, then the sink's most is tried");
     CHECK(logged("edp: link training failed at 270000 kHz on 1 lanes"), "fail: and logged");
     log_clear();
-    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EIO && dp->link_max_rate == 0,
+    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EAGAIN && dp->link_max_rate == 0,
           "fail: then the same link, since the mode needs 2.7 Gb/s");
     CHECK(logged("same parameters"), "fail: and that is logged");
-    CHECK(intel_dp_start_link_train(&gpu, 50000) == -EIO && dp->link_max_rate == 162000 &&
+    CHECK(intel_dp_start_link_train(&gpu, 50000) == -EAGAIN && dp->link_max_rate == 162000 &&
               dp->link_max_lanes == 1,
           "fail: a mode that fits 1.62 Gb/s falls back to it");
 
     s = link_setup();
     s->eq_preemph = 3; /* pre-emphasis 3 leaves no swing for the clock */
-    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EIO && !s->trained,
+    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EAGAIN && !s->trained,
           "fail: a sink that never equalizes fails");
     CHECK(logged("clock recovery lost in channel equalization"),
           "fail: when the clock is lost for the pre-emphasis");

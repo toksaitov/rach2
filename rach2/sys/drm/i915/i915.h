@@ -725,10 +725,11 @@ struct intel_pps {
  * needs, `link_max_rate` and `link_max_lanes` bound the link, 0 for no
  * bound, and `train_failures` counts the failures in a row. `buf_ctl` is the
  * value DDI_BUF_CTL is built in, `saved_port_bits` the bits of the
- * firmware's kept across mode sets. `edid` holds `edid_len` bytes;
- * `fixed` the panel's modes, `nfixed` of them; `vbt` what the VBT says of
- * the panel; `max_bpp` the bits a pixel the VBT allows, 0 for no limit.
- * `present` says the panel answered at init.
+ * firmware's kept across mode sets. `edid` holds `edid_len` bytes, 0
+ * when the panel gave none, and `edid_bpc` is the bits a colour it names,
+ * 0 for none; `fixed` the panel's modes, preferred first, `nfixed` of
+ * them; `vbt` what the VBT says of the panel. `present` says the panel
+ * answered at init, which makes its connector.
  */
 struct intel_dp {
     int port;
@@ -755,7 +756,7 @@ struct intel_dp {
     struct drm_mode_modeinfo fixed[INTEL_PANEL_FIXED_MODES];
     int nfixed;
     struct intel_vbt_panel vbt;
-    uint32_t max_bpp;
+    uint32_t edid_bpc;
     struct intel_pps pps;
 };
 
@@ -880,7 +881,11 @@ struct intel_crtc {
  * yet to take, under the interrupt mask's lock.
  * `bl` is the panel's PWM, `bl_index` its backlight's index or -1, and
  * `bl_want_on` what the backlight class last asked of its switch, which
- * holds only while pipe A is on (`bl_pipe_on`). `vga_off` says the VGA
+ * holds only while the sequencer's backlight enable is on with the
+ * panel's pipe (`bl_pipe_on`). `bl_enabled` says the PWM is on, as the
+ * pipe's enable leaves it, `bl_level` is the level it shows then,
+ * `bl_min` the least the VBT allows, and `bl_alt` says the PCH counts the
+ * PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off` says the VGA
  * plane has been turned off. `lp_wm_off` says the low-power watermarks
  * are off, as they are once a sprite or a cursor is shown. `ready` is set
  * once the device's mode configuration is made, which its release frees.
@@ -901,6 +906,9 @@ struct intel_display {
     int bl_index;
     uint8_t bl_want_on;
     uint8_t bl_pipe_on;
+    uint8_t bl_enabled;
+    uint8_t bl_alt;
+    int bl_level, bl_min;
     uint8_t vga_off;
     uint8_t lp_wm_off;
     uint8_t ready;
@@ -2157,6 +2165,10 @@ void intel_pps_vdd_off_unlocked(struct drm_i915_private *i915, int sync);
  * Linux's edp_panel_vdd_work. */
 void intel_pps_vdd_work(struct drm_i915_private *i915);
 
+/** Choose the delays again once the VBT's panel is known and write them,
+ * with VDD let go if nothing wants it, Linux's intel_pps_init_late. */
+void intel_pps_init_late(struct drm_i915_private *i915);
+
 /** Power the panel on, Linux's intel_pps_on: after the power cycle's wait,
  * then wait for the sequencer to be idle on. */
 void intel_pps_on(struct drm_i915_private *i915);
@@ -2232,14 +2244,124 @@ void intel_ddi_set_idle_link_train(struct drm_i915_private *i915);
  * buffer built by `intel_ddi_init_dp_buf_reg`, and leave the port on its
  * idle pattern, Linux's intel_dp_start_link_train. A failure is tried once
  * more at once; a second chooses the link the next mode set trains, for
- * a mode of `mode_clock` kHz. 0, or -EIO when the link did not train.
- * Process context; sleeps. (intel_dp_link_training.c)
+ * a mode of `mode_clock` kHz. 0; -EAGAIN when the link did not train and a
+ * new mode set should try the link chosen, Linux's case for its modeset
+ * retry; or -EIO when no link is left to try. Process context; sleeps.
+ * (intel_dp_link_training.c)
  */
 int32_t intel_dp_start_link_train(struct drm_i915_private *i915, uint32_t mode_clock);
 
 /** End the training: the sink off its pattern and the port on the normal
  * one, Linux's intel_dp_stop_link_train. */
 void intel_dp_stop_link_train(struct drm_i915_private *i915);
+
+/*
+ * A mode set of the eDP pipe on DDI A, in Linux's order (intel_ddi.c):
+ * the port's link up and trained before the pipe, the transcoder's
+ * function and enable after it, and the reverse to turn it off. From the
+ * CRTC's hooks; they sleep.
+ */
+
+/**
+ * Bring the link up for `cfg`, Linux's hsw_ddi_pre_enable_dp with
+ * intel_ddi_set_dp_msa: the panel's power, the port's clock and buffer,
+ * the sink in D0, the link trained, and the stream's attributes for the
+ * transcoder. 0, or `intel_dp_start_link_train`'s error.
+ */
+int32_t intel_ddi_pre_enable(struct drm_i915_private *i915, const struct intel_crtc_config *cfg);
+
+/** Start the stream on pipe `pipe`, Linux's intel_enable_ddi for eDP:
+ * the transcoder's function and enable, the link's normal pattern, the
+ * backlight on and the infoframes off. */
+void intel_ddi_enable(struct drm_i915_private *i915, int pipe, const struct intel_crtc_config *cfg);
+
+/** The backlight off, Linux's intel_disable_ddi_dp. */
+void intel_ddi_disable(struct drm_i915_private *i915);
+
+/** Stop the stream and the link, Linux's intel_ddi_post_disable for eDP:
+ * vblanks off, the transcoder and its function off, the fitter off, the
+ * sink in D3, the port's buffer, the panel's power and the clock off. */
+void intel_ddi_post_disable(struct drm_i915_private *i915, struct intel_crtc *crtc,
+                            const struct intel_crtc_config *cfg);
+
+/*
+ * The panel (intel_dp.c, intel_panel.c) and the fitter (intel_pfit.c).
+ */
+
+/**
+ * Set the eDP panel up, Linux's intel_edp_init_connector: the VBT's panel,
+ * the sequencer, the DPCD, the EDID and the fixed modes, the link rates
+ * both ends take, and the source's OUI. 0 with `display.dp.present` set,
+ * or -ENODEV when DDI A has no display, the panel does not answer or has
+ * no fixed mode, with its VDD let go. Sleeps.
+ */
+int32_t intel_dp_init(struct drm_i915_private *i915);
+
+/** Make the eDP connector and its encoder, which reach every pipe, with
+ * Linux's "max bpc" and "scaling mode" (Full aspect at first). 0 or the
+ * DRM core's error. */
+int32_t intel_dp_connector_init(struct drm_i915_private *i915);
+
+/**
+ * Configure `cfg` for the eDP panel on `pipe`, Linux's
+ * intel_dp_compute_config: `cfg->mode`, the user's mode on entry, becomes
+ * the fixed mode that drives it, and the link, the bits a pixel, the M/N
+ * values, the fitter and the dither are chosen as `conn`'s "scaling mode"
+ * and "max bpc" ask. `crc_wa` says a CRC of the fitter runs. 0, -EINVAL
+ * for a mode the panel or the link cannot take, or -ERANGE for a fitter's
+ * scale past its limit.
+ */
+int32_t intel_dp_compute_config(struct drm_i915_private *i915, int pipe,
+                                const struct drm_connector_state *conn, int crc_wa,
+                                struct intel_crtc_config *cfg);
+
+/** Set the sink's power state to DP_SET_POWER_D0 or _D3, Linux's
+ * intel_dp_set_power: D0 tried three times a millisecond apart, after the
+ * source's OUI. */
+void intel_dp_set_power(struct drm_i915_private *i915, uint8_t mode);
+
+/** Choose the panel's fixed modes into `display.dp.fixed`, Linux's
+ * intel_panel_add_edid_fixed_modes and intel_panel_add_vbt_lfp_fixed_mode:
+ * the EDID's preferred mode, or its first, and its other modes of that
+ * size and flags; else the VBT's mode. */
+void intel_panel_init_fixed_modes(struct drm_i915_private *i915);
+
+/** The fixed mode nearest `mode` in refresh rate, Linux's
+ * intel_panel_fixed_mode, or NULL for a panel without one. */
+const struct drm_mode_modeinfo *intel_panel_fixed_mode(struct drm_i915_private *i915,
+                                                       const struct drm_mode_modeinfo *mode);
+
+/** 0 when `mode` has a fixed mode's size and rate, Linux's
+ * intel_panel_mode_valid, else -EINVAL. */
+int32_t intel_panel_mode_valid(struct drm_i915_private *i915, const struct drm_mode_modeinfo *mode);
+
+/** Replace the user's `mode` with the fixed mode that drives it, Linux's
+ * intel_panel_compute_config: 0, or -EINVAL for a rate more than a hertz
+ * from the panel's. */
+int32_t intel_panel_compute_config(struct drm_i915_private *i915, struct drm_mode_modeinfo *mode);
+
+/** Add the fixed modes to `connector`'s probed modes, Linux's
+ * intel_panel_get_modes; how many. */
+int intel_panel_get_modes(struct drm_i915_private *i915, struct drm_connector *connector);
+
+/**
+ * Set `cfg`'s fitter for a pipe source of `src_w` by `src_h` shown in its
+ * `mode`, Linux 6.18's pch_panel_fitting: none for a source of the mode's
+ * size, else a window by `scaling_mode`, DRM_MODE_SCALE_*. 0, -EINVAL for
+ * a window or source the fitter of `pipe` cannot take, or -ERANGE for a
+ * scale down past 1.125.
+ */
+int32_t intel_pfit_compute_config(int pipe, uint32_t scaling_mode, struct intel_crtc_config *cfg);
+
+/** The rate in kHz the pipe reads its source at, Linux's
+ * ilk_pipe_pixel_rate: the mode's clock, more when the fitter scales down. */
+uint32_t intel_pfit_pixel_rate(const struct intel_crtc_config *cfg);
+
+/** Turn pipe `pipe`'s fitter on as `cfg` sets it, Linux's ilk_pfit_enable. */
+void ilk_pfit_enable(struct drm_i915_private *i915, int pipe, const struct intel_crtc_config *cfg);
+
+/** Turn it off when `cfg` had it on, Linux's ilk_pfit_disable. */
+void ilk_pfit_disable(struct drm_i915_private *i915, int pipe, const struct intel_crtc_config *cfg);
 
 /** The CRC hooks of the CRTCs (i915_display_debugfs.c). */
 int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name);
@@ -2252,12 +2374,21 @@ const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *c
 void intel_crtc_crc_frame(struct intel_crtc *crtc);
 
 /**
- * Take the eDP panel's backlight over from the boot's driver: attach the
- * PCH's PWM through the device's registers and drive "intel_backlight"
- * through it, registering it when the boot did not. Nothing when the
- * firmware left the PWM off. From the connector's init.
+ * Take the eDP panel's backlight over from the boot's driver, Linux's
+ * lpt_setup_backlight: attach the PCH's PWM through the device's
+ * registers, its period from the VBT's frequency when the firmware left it
+ * none, and drive "intel_backlight" through it, registering it when the
+ * boot did not. From the display's init.
  */
 void intel_backlight_setup(struct drm_i915_private *i915);
+
+/** Turn the PWM on at the level kept, at least the VBT's least, Linux's
+ * intel_backlight_enable with lpt_enable_backlight. */
+void intel_backlight_enable(struct drm_i915_private *i915);
+
+/** Turn the PWM off, its duty cycle 0, Linux's intel_backlight_disable
+ * with lpt_disable_backlight; the level is kept for the next enable. */
+void intel_backlight_disable(struct drm_i915_private *i915);
 
 /** Turn the backlight's enable line with the panel's pipe: off while the
  * pipe is off, and on again at the class's wish when it comes back, or

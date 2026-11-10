@@ -250,6 +250,17 @@ void intel_pps_init(struct drm_i915_private *i915)
     }
 }
 
+void intel_pps_init_late(struct drm_i915_private *i915)
+{
+    struct intel_pps *pps = &i915->display.dp.pps;
+
+    init_delays(i915);
+    init_registers(i915);
+    if (have_vdd(i915) && !pps->want_vdd) {
+        pps->vdd_off_due = pps_now_ms() + VDD_OFF_CYCLES * pps->power_cycle_ms;
+    }
+}
+
 int intel_pps_vdd_on_unlocked(struct drm_i915_private *i915)
 {
     struct intel_pps *pps = &i915->display.dp.pps;

@@ -1,7 +1,8 @@
 /*
  * intel_ddi.c: DDI A, the Haswell port that carries the eDP panel, after
  * Linux's display/intel_ddi.c: its buffer's translations and signal levels,
- * and the DisplayPort transport's training patterns.
+ * the DisplayPort transport's training patterns, and the port's and the
+ * eDP transcoder's part of a mode set.
  */
 
 #include "i915.h"
@@ -9,6 +10,7 @@
 #include "intel_dp.h"
 
 #include "../../klog.h"
+#include "../../lib/kstring.h"
 
 /* How long DDI_BUF_CTL takes to drive the lanes once enabled (Linux waits
  * more than 518 us before Gen 10), and the most it takes to go idle. */
@@ -160,4 +162,171 @@ void intel_ddi_set_idle_link_train(struct drm_i915_private *i915)
                       DP_TP_STATUS_IDLE_DONE, 2000u) != 0) {
         klog(KLOG_ERR, "i915", "ddi: timed out waiting for DP idle patterns");
     }
+}
+
+/* ------------------------------------------------------------------------
+ * The mode set of the eDP pipe
+ */
+
+/* How long the pipe takes to stop once its transcoder is disabled, at
+ * most (Linux's intel_wait_for_pipe_off). */
+#define PIPE_OFF_US 100000u
+
+/** The clock select of a link of `port_clock` kHz, Linux's
+ * hsw_ddi_lcpll_get_dpll: the LCPLL output of half its symbol clock. */
+static uint32_t lcpll_sel(uint32_t port_clock)
+{
+    switch (port_clock / 2u) {
+    case 81000u:
+        return PORT_CLK_SEL_LCPLL_810;
+    case 135000u:
+        return PORT_CLK_SEL_LCPLL_1350;
+    default:
+        return PORT_CLK_SEL_LCPLL_2700;
+    }
+}
+
+/** The field of `bpp` bits a pixel in TRANS_DDI_FUNC_CTL. */
+static uint32_t func_bpc(uint32_t bpp)
+{
+    switch (bpp) {
+    case 24u:
+        return TRANS_DDI_BPC_8;
+    case 30u:
+        return TRANS_DDI_BPC_10;
+    case 36u:
+        return TRANS_DDI_BPC_12;
+    default:
+        return TRANS_DDI_BPC_6;
+    }
+}
+
+/** The eDP transcoder's main stream attributes, Linux's
+ * intel_ddi_set_dp_msa: clocks synchronous and the colour depth. */
+static void set_dp_msa(struct drm_i915_private *i915, const struct intel_crtc_config *cfg)
+{
+    uint32_t bpc = cfg->bpp / 3u;
+
+    i915_write(&i915->hw, TRANS_MSA_MISC(I915_TRANS_EDP),
+               TRANS_MSA_SYNC_CLK | ((bpc - 6u) / 2u) << TRANS_MSA_BPC_SHIFT);
+}
+
+/** Turn the transcoder's infoframes off, Linux's intel_dp_set_infoframes
+ * for a stream that sends none, as eDP without PSR does whether it starts
+ * or stops. */
+static void clear_infoframes(struct drm_i915_private *i915)
+{
+    uint32_t reg = HSW_TVIDEO_DIP_CTL(I915_TRANS_EDP);
+    uint32_t dip = VIDEO_DIP_ENABLE_AVI_HSW | VIDEO_DIP_ENABLE_GCP_HSW | VIDEO_DIP_ENABLE_VS_HSW |
+                   VIDEO_DIP_ENABLE_GMP_HSW | VIDEO_DIP_ENABLE_SPD_HSW | VIDEO_DIP_ENABLE_DRM_GLK |
+                   VIDEO_DIP_ENABLE_VSC_HSW;
+
+    i915_write(&i915->hw, reg, i915_read(&i915->hw, reg) & ~dip);
+    i915_posting_read(&i915->hw, reg);
+}
+
+int32_t intel_ddi_pre_enable(struct drm_i915_private *i915, const struct intel_crtc_config *cfg)
+{
+    struct intel_dp *dp = &i915->display.dp;
+    int32_t err;
+
+    /* Linux's intel_dp_set_link_params. */
+    k_memset(dp->train_set, 0, sizeof(dp->train_set));
+    dp->link_trained = 0;
+    dp->link_rate = cfg->port_clock;
+    dp->lane_count = cfg->lanes;
+    intel_ddi_init_dp_buf_reg(i915, cfg->lanes);
+    intel_pps_on(i915);
+    i915_write(&i915->hw, PORT_CLK_SEL(dp->port), lcpll_sel(cfg->port_clock));
+    intel_ddi_prepare_buf_trans(i915);
+    intel_ddi_set_signal_levels(i915);
+    intel_dp_set_power(i915, DP_SET_POWER_D0);
+    err = intel_dp_start_link_train(i915, cfg->mode.clock);
+    /* Port A stops its training once the pipe runs (intel_ddi_enable). */
+    set_dp_msa(i915, cfg);
+    return err;
+}
+
+void intel_ddi_enable(struct drm_i915_private *i915, int pipe, const struct intel_crtc_config *cfg)
+{
+    struct i915_hw *hw = &i915->hw;
+    uint32_t ctl, conf;
+
+    /* Linux's intel_ddi_transcoder_func_reg_val_get. */
+    ctl = TRANS_DDI_FUNC_ENABLE | TRANS_DDI_SELECT_PORT(i915->display.dp.port) |
+          func_bpc(cfg->bpp) | TRANS_DDI_MODE_SELECT_DP_SST | DDI_PORT_WIDTH(cfg->lanes);
+    if (cfg->mode.flags & DRM_MODE_FLAG_PVSYNC) {
+        ctl |= TRANS_DDI_PVSYNC;
+    }
+    if (cfg->mode.flags & DRM_MODE_FLAG_PHSYNC) {
+        ctl |= TRANS_DDI_PHSYNC;
+    }
+    /* Pipe A may feed eDP from the always-on power well only while the
+     * fitter is unused. */
+    ctl |= pipe == I915_PIPE_B   ? TRANS_DDI_EDP_INPUT_B_ONOFF
+           : pipe == I915_PIPE_C ? TRANS_DDI_EDP_INPUT_C_ONOFF
+           : cfg->force_thru     ? TRANS_DDI_EDP_INPUT_A_ONOFF
+                                 : TRANS_DDI_EDP_INPUT_A_ON;
+    i915_write(hw, TRANS_DDI_FUNC_CTL(I915_TRANS_EDP), ctl);
+    /* Linux's intel_enable_transcoder. */
+    conf = i915_read(hw, TRANSCONF(I915_TRANS_EDP));
+    if (!(conf & TRANSCONF_ENABLE)) {
+        i915_write(hw, TRANSCONF(I915_TRANS_EDP), conf | TRANSCONF_ENABLE);
+        i915_posting_read(hw, TRANSCONF(I915_TRANS_EDP));
+    }
+    /* Linux's intel_enable_ddi_dp: port A before Gen 9 leaves its
+     * training pattern only now. */
+    intel_dp_stop_link_train(i915);
+    intel_backlight_enable(i915);
+    intel_pps_backlight_on(i915);
+    clear_infoframes(i915);
+}
+
+void intel_ddi_disable(struct drm_i915_private *i915)
+{
+    i915->display.dp.link_trained = 0;
+    intel_pps_backlight_off(i915);
+    intel_backlight_disable(i915);
+}
+
+void intel_ddi_post_disable(struct drm_i915_private *i915, struct intel_crtc *crtc,
+                            const struct intel_crtc_config *cfg)
+{
+    struct intel_dp *dp = &i915->display.dp;
+    struct i915_hw *hw = &i915->hw;
+    uint32_t conf, ctl, buf;
+    int wait = 0;
+
+    drm_crtc_vblank_off(&crtc->base);
+    /* Linux's intel_disable_transcoder. */
+    conf = i915_read(hw, TRANSCONF(I915_TRANS_EDP));
+    if (conf & TRANSCONF_ENABLE) {
+        i915_write(hw, TRANSCONF(I915_TRANS_EDP), conf & ~TRANSCONF_ENABLE);
+        if (i915_wait_for(hw, "pipe off", TRANSCONF(I915_TRANS_EDP), TRANSCONF_STATE_ENABLE, 0,
+                          PIPE_OFF_US) != 0) {
+            klog(KLOG_ERR, "i915", "ddi: pipe %c off wait timed out", 'A' + crtc->pipe);
+        }
+    }
+    /* Linux's intel_ddi_disable_transcoder_func. */
+    ctl = i915_read(hw, TRANS_DDI_FUNC_CTL(I915_TRANS_EDP));
+    ctl &= ~(TRANS_DDI_FUNC_ENABLE | TRANS_DDI_PORT_MASK | TRANS_DDI_MODE_SELECT_MASK);
+    i915_write(hw, TRANS_DDI_FUNC_CTL(I915_TRANS_EDP), ctl);
+    ilk_pfit_disable(i915, crtc->pipe, cfg);
+    /* Linux's intel_ddi_post_disable_dp: the sink powered down before the
+     * port, lest it signal the link's loss. */
+    clear_infoframes(i915);
+    intel_dp_set_power(i915, DP_SET_POWER_D3);
+    buf = i915_read(hw, DDI_BUF_CTL(dp->port));
+    if (buf & DDI_BUF_CTL_ENABLE) {
+        i915_write(hw, DDI_BUF_CTL(dp->port), buf & ~DDI_BUF_CTL_ENABLE);
+        wait = 1;
+    }
+    dp->buf_ctl &= ~DDI_BUF_CTL_ENABLE;
+    i915_rmw(hw, DP_TP_CTL(dp->port), DP_TP_CTL_ENABLE, 0);
+    if (wait) {
+        intel_ddi_wait_buf_idle(i915);
+    }
+    (void)intel_pps_vdd_on_unlocked(i915);
+    intel_pps_off(i915);
+    i915_write(hw, PORT_CLK_SEL(dp->port), PORT_CLK_SEL_NONE);
 }

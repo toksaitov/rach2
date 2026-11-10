@@ -431,8 +431,9 @@ int32_t intel_dp_start_link_train(struct drm_i915_private *i915, uint32_t mode_c
          (unsigned)dp->link_rate, (unsigned)dp->lane_count);
     if (fallback(i915, mode_clock) != 0) {
         klog(KLOG_ERR, "i915", "edp: can't reduce link training parameters after failure");
+        return -EIO;
     }
-    return -EIO;
+    return -EAGAIN;
 }
 
 void intel_dp_stop_link_train(struct drm_i915_private *i915)

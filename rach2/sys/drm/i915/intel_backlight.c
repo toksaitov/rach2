@@ -2,8 +2,8 @@
  * intel_backlight.c: the eDP panel's backlight once i915 binds, after
  * Linux's display/intel_backlight.c for a Lynx Point PCH: the PWM that
  * intelbl drove at boot, now through the device's registers, as
- * /sys/class/backlight/intel_backlight, and its enable line off while the
- * panel's pipe is off.
+ * /sys/class/backlight/intel_backlight, turned off and on with the panel's
+ * pipe, and its enable line off while the pipe is off.
  */
 
 #include "i915.h"
@@ -24,16 +24,25 @@ static void bl_wr(void *io, uint32_t reg, uint32_t value)
     i915_write(&((struct drm_i915_private *)io)->hw, reg, value);
 }
 
-/** The backlight class's `get`, of the device at `ctx`. */
+/** The backlight class's `get`, of the device at `ctx`: the PWM's level
+ * while it is on, else the level it comes on at. */
 static int bl_get(void *ctx)
 {
-    return intelbl_get(&((struct drm_i915_private *)ctx)->display.bl);
+    struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
+
+    return d->bl_enabled ? intelbl_get(&d->bl) : d->bl_level;
 }
 
-/** The backlight class's `set`. */
+/** The backlight class's `set`: kept, and shown while the PWM is on, as
+ * Linux's intel_panel_set_backlight. */
 static void bl_set(void *ctx, int level)
 {
-    intelbl_set(&((struct drm_i915_private *)ctx)->display.bl, level);
+    struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
+
+    d->bl_level = level < 0 ? 0 : level > d->bl.max ? d->bl.max : level;
+    if (d->bl_enabled) {
+        intelbl_set(&d->bl, d->bl_level);
+    }
 }
 
 /** The backlight class's `power`: what it asks is kept, and holds while
@@ -66,21 +75,64 @@ static void gone_set(void *ctx, int level)
 
 static const struct backlight_ops gone_ops = {gone_get, gone_set, NULL};
 
+/** The PWM's period in its clock's steps for `hz`, Linux's
+ * lpt_hz_to_pwm: the PCH's clock is 24 MHz on Lynx Point LP, the ULT's,
+ * and 135 MHz on Lynx Point H. */
+static uint32_t lpt_hz_to_pwm(struct drm_i915_private *i915, uint32_t hz)
+{
+    uint32_t mul = i915->display.bl_alt ? 128u : 16u;
+    uint32_t clock = i915->id && i915->id->ult ? 24000000u : 135000000u;
+
+    return (clock + hz * mul / 2u) / (hz * mul);
+}
+
+/** Set the PWM up when the firmware left it off, as Linux's
+ * lpt_setup_backlight does: the period the firmware wrote, else the VBT's
+ * frequency's, else 200 Hz's. 0, or -1 with the reason in `*why`. */
+static int pwm_off_setup(struct drm_i915_private *i915, const char **why)
+{
+    struct intel_display *d = &i915->display;
+    uint32_t ctl1 = bl_rd(i915, BLC_PWM_PCH_CTL1), max = bl_rd(i915, BLC_PWM_PCH_CTL2) >> 16;
+
+    if (max == 0) {
+        max = lpt_hz_to_pwm(i915, d->dp.vbt.bl_pwm_freq_hz ? d->dp.vbt.bl_pwm_freq_hz : 200u);
+    }
+    if (max == 0 || max > BACKLIGHT_DUTY_CYCLE_MASK) {
+        *why = "the PWM has no period";
+        return -1;
+    }
+    d->bl.max = (int)max;
+    d->bl.inverted = (ctl1 & BLM_PCH_POLARITY) != 0;
+    d->bl.switched = 0;
+    return 0;
+}
+
 void intel_backlight_setup(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
     const struct backlight_ops *ops;
     const char *why;
+    uint32_t min;
 
     d->bl.rd = bl_rd;
     d->bl.wr = bl_wr;
     d->bl.io = i915;
-    if (intelbl_attach(&d->bl, &why) != 0) {
+    d->bl_alt = (bl_rd(i915, SOUTH_CHICKEN2) & LPT_PWM_GRANULARITY) != 0;
+    d->bl_enabled = (bl_rd(i915, BLC_PWM_PCH_CTL1) & BLM_PCH_PWM_ENABLE) != 0;
+    if (d->bl_enabled ? intelbl_attach(&d->bl, &why) != 0 : pwm_off_setup(i915, &why) != 0) {
         klog(KLOG_INFO, "i915", "backlight: none: %s", why);
+        d->bl_enabled = 0;
         return;
     }
-    intelbl_attach_switch(&d->bl);
-    d->bl_pipe_on = 1;
+    /* Linux's get_backlight_min_vbt: the VBT's least of 255, at most 64
+     * of it, lest a table of 255 leave no range. */
+    min = d->dp.vbt.bl_min_brightness > 64 ? 64u : d->dp.vbt.bl_min_brightness;
+    d->bl_min = (int)((min * (uint32_t)d->bl.max + 127u) / 255u);
+    d->bl_level = intelbl_get(&d->bl);
+    if (d->bl_enabled) {
+        intelbl_attach_switch(&d->bl);
+    }
+    d->bl_pipe_on = d->pps.panel_on;
     d->bl_want_on = d->pps.backlight_on;
     ops = d->bl.switched ? &bl_ops : &bl_ops_noswitch;
     d->bl_index = backlight_rebind("intel_backlight", d->bl.max, ops, i915);
@@ -90,8 +142,55 @@ void intel_backlight_setup(struct drm_i915_private *i915)
     if (d->bl_index < 0) {
         return;
     }
-    klog(KLOG_INFO, "i915", "backlight: intel_backlight: levels 0 to %d, at %d%s", d->bl.max,
-         intelbl_get(&d->bl), d->bl.switched ? ", off with the pipe" : "");
+    klog(KLOG_INFO, "i915", "backlight: intel_backlight: levels 0 to %d, at %d%s%s", d->bl.max,
+         bl_get(i915), d->bl_enabled ? "" : ", off", d->bl.switched ? ", off with the pipe" : "");
+}
+
+void intel_backlight_enable(struct drm_i915_private *i915)
+{
+    struct intel_display *d = &i915->display;
+    uint32_t ctl1;
+
+    if (d->bl_index < 0) {
+        return;
+    }
+    if (d->bl_level < d->bl_min) {
+        d->bl_level = d->bl_min;
+    }
+    /* Linux's lpt_enable_backlight: a PWM left on is turned off first. */
+    ctl1 = bl_rd(i915, BLC_PWM_PCH_CTL1);
+    if (ctl1 & BLM_PCH_PWM_ENABLE) {
+        bl_wr(i915, BLC_PWM_PCH_CTL1, ctl1 & ~BLM_PCH_PWM_ENABLE);
+    }
+    i915_rmw(&i915->hw, SOUTH_CHICKEN2, LPT_PWM_GRANULARITY, d->bl_alt ? LPT_PWM_GRANULARITY : 0);
+    bl_wr(i915, BLC_PWM_PCH_CTL2, (uint32_t)d->bl.max << 16);
+    /* After Lynx Point the override is the default. */
+    ctl1 = BLM_PCH_OVERRIDE_ENABLE | (d->bl.inverted ? BLM_PCH_POLARITY : 0);
+    bl_wr(i915, BLC_PWM_PCH_CTL1, ctl1);
+    i915_posting_read(&i915->hw, BLC_PWM_PCH_CTL1);
+    bl_wr(i915, BLC_PWM_PCH_CTL1, ctl1 | BLM_PCH_PWM_ENABLE);
+    /* The level sticks only once the PWM is on. */
+    intelbl_set(&d->bl, d->bl_level);
+    d->bl_enabled = 1;
+}
+
+void intel_backlight_disable(struct drm_i915_private *i915)
+{
+    struct intel_display *d = &i915->display;
+    uint32_t cpu;
+
+    if (d->bl_index < 0) {
+        return;
+    }
+    d->bl_enabled = 0;
+    /* Linux's lpt_disable_backlight: duty cycle 0, the processor's PWM off
+     * should the firmware have left it on, then the PCH's. */
+    i915_rmw(&i915->hw, BLC_PWM_PCH_CTL2, BACKLIGHT_DUTY_CYCLE_MASK, 0);
+    cpu = bl_rd(i915, BLC_PWM_CPU_CTL2);
+    if (cpu & BLM_PWM_ENABLE) {
+        bl_wr(i915, BLC_PWM_CPU_CTL2, cpu & ~BLM_PWM_ENABLE);
+    }
+    i915_rmw(&i915->hw, BLC_PWM_PCH_CTL1, BLM_PCH_PWM_ENABLE, 0);
 }
 
 void intel_backlight_pipe(struct drm_i915_private *i915, int on)

@@ -42,4 +42,7 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/intel_pps.c \
     sys/drm/i915/intel_dp_aux.c \
     sys/drm/i915/intel_ddi.c \
-    sys/drm/i915/intel_dp_link_training.c
+    sys/drm/i915/intel_dp_link_training.c \
+    sys/drm/i915/intel_dp.c \
+    sys/drm/i915/intel_panel.c \
+    sys/drm/i915/intel_pfit.c
