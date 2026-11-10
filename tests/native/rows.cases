@@ -40,6 +40,7 @@ case gnu/file -- system/gnu_rows.sh file x86_64 work=work home=home stage=. @net
 case gnu/pkgconf -- system/gnu_rows.sh pkgconf x86_64 work=work home=home stage=. @net machine=native
 case gnu/procps -- system/gnu_rows.sh procps x86_64 work=work home=home stage=. @net machine=native
 case gnu/utillinux -- system/gnu_rows.sh utillinux x86_64 work=work home=home stage=. @net machine=native
+case gnu/bwrapns -- system/gnu_rows.sh bwrapns x86_64 work=work home=home stage=. @net machine=native
 case gnu/zstd -- system/gnu_rows.sh zstd x86_64 work=work home=home stage=. @net machine=native
 case gnu/rsync -- system/gnu_rows.sh rsync x86_64 work=work home=home stage=. @net machine=native
 case gnu/nano -- system/gnu_rows.sh nano x86_64 work=work home=home stage=. @net machine=native
