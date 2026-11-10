@@ -2,10 +2,10 @@
 # watch.sh: on the trial root, as root, keep what a run would otherwise
 # lose: a copy of the kernel's log each time it changes, since the trace of
 # missing calls turns its 16 KiB over, and every ten seconds the processor
-# and big-lock lines of /proc/stat. It also holds the volume at 1: the
-# session's PulseAudio drives the kernel's mixer through its OSS sink, so a
-# volume set on that sink reaches the speakers, and each time the volume
-# reads otherwise it is logged and set back.
+# and big-lock lines of /proc/stat. It logs each change of the volume with
+# its time and does not set it back, since the owner may change it while
+# playing; the step itself runs `mixer vol 1` after each boot and each
+# start of a program that may set it.
 #
 # Usage: watch.sh DIR
 #
@@ -15,6 +15,7 @@ dir=$1
 mkdir -p "$dir"
 n=0
 tick=0
+last=
 : > "$dir/dmesg.last"
 while :; do
     dmesg > "$dir/dmesg.new"
@@ -24,9 +25,9 @@ while :; do
         mv "$dir/dmesg.new" "$dir/dmesg.last"
     fi
     vol=$(mixer vol)
-    if [ "$vol" != 'vol 1:1' ]; then
+    if [ "$vol" != "$last" ]; then
         echo "$(date +%T) $vol" >> "$dir/vol.txt"
-        mixer vol 1 > /dev/null
+        last=$vol
     fi
     if [ $((tick % 10)) -eq 0 ]; then
         {
