@@ -771,6 +771,32 @@ static void row_hdmi_set(void)
     frame();
 }
 
+/** Two connectors routed to one pipe, HDMI B and HDMI C: refused, since a
+ * DDI encoder clones with none, as Linux's "rejecting invalid cloning
+ * configuration"; pipe B keeps HDMI B alone. */
+static void row_hdmi_clone(void)
+{
+    struct drm_connector *hdmi = &disp->ddi[0].hdmi_connector;
+    uint32_t conns[2];
+    struct drm_mode_crtc c;
+    struct drm_mode_modeinfo m;
+
+    CHECK(find_mode(hdmi, 1920, 1080, 60, &m), "clone: the 1080p mode");
+    conns[0] = hdmi->base.id;
+    conns[1] = disp->ddi[1].hdmi_connector.base.id;
+    k_memset(&c, 0, sizeof(c));
+    c.crtc_id = disp->crtc[1].base.base.id;
+    c.fb_id = fb_b;
+    c.mode_valid = 1;
+    c.mode = m;
+    c.set_connectors_ptr = UPTR(conns);
+    c.count_connectors = 2;
+    CHECK(drm_mode_setcrtc(&gpu.drm, &c, &fa) == -EINVAL &&
+              disp->ddi[1].hdmi_connector.state->crtc == 0 &&
+              hdmi->state->crtc == &disp->crtc[1].base,
+          "clone: HDMI B and HDMI C on pipe B refused, pipe B left on HDMI B");
+}
+
 /**
  * Hotplug on B: the monitor unplugged and plugged again, each change an
  * event; a long pulse that changed nothing probed again 1 s later and no
@@ -958,6 +984,7 @@ int main(void)
     row_dpll();
     row_hdmi_plug();
     row_hdmi_set();
+    row_hdmi_clone();
     row_hotplug();
     row_dp();
     row_inject();
