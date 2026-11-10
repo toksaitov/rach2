@@ -71,10 +71,16 @@ When the
 .Xr i915 4
 driver binds the graphics device it takes
 .Pa intel_backlight
-over: the directory, its level and
+over: the directory and
 .Pa bl_power
 stay, and the driver then turns the backlight off while the panel's pipe
 is off and on again with it, as Linux's i915 does.
+As Linux's i915, it maps the levels 1 to the period onto the modulator's
+duty cycles from the least the firmware's video table allows to the
+period, 18 to 937 on the Lenovo, turns the backlight off at level 0, and
+gives an
+.Pa actual_brightness
+of 0 while the pipe is off.
 When the device goes the boot's driver takes the backlight back.
 .Sh FILES
 .Bl -tag -width /sys/class/backlight/NAME

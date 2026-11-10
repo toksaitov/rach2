@@ -24,36 +24,56 @@ static void bl_wr(void *io, uint32_t reg, uint32_t value)
     i915_write(&((struct drm_i915_private *)io)->hw, reg, value);
 }
 
+/** `v` clamped to [`smin`, `smax`] and taken to [`tmin`, `tmax`], rounded
+ * to the closest, as Linux's scale(); a PWM's levels fit 16 bits, so the
+ * product fits 32. */
+static int bl_scale(int v, int smin, int smax, int tmin, int tmax)
+{
+    uint32_t span = (uint32_t)(smax - smin);
+
+    v = v < smin ? smin : v > smax ? smax : v;
+    if (span == 0) {
+        return tmin;
+    }
+    return tmin + (int)(((uint32_t)(v - smin) * (uint32_t)(tmax - tmin) + span / 2u) / span);
+}
+
 /** The backlight class's `get`, of the device at `ctx`: the PWM's level
- * while it is on, else the level it comes on at. */
+ * while it is on, 0 while it is off, taken from the PWM's [`bl_min`, max]
+ * to the class's [0, max], as Linux's intel_backlight_device_get_brightness
+ * through scale_hw_to_user. */
 static int bl_get(void *ctx)
 {
     struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
 
-    return d->bl_enabled ? intelbl_get(&d->bl) : d->bl_level;
+    return bl_scale(d->bl_enabled ? intelbl_get(&d->bl) : 0, d->bl_min, d->bl.max, 0, d->bl.max);
 }
 
-/** The backlight class's `set`: kept, and shown while the PWM is on, as
- * Linux's intel_panel_set_backlight. */
+/** The backlight class's `set`: the class's level taken to the PWM's
+ * [`bl_min`, max], kept, and shown while the PWM is on, as Linux's
+ * intel_panel_set_backlight through scale_user_to_hw. Level 0 is dark: the
+ * switch turns the backlight off, as Linux's update_status does, and with
+ * no switch the PWM's duty is 0. */
 static void bl_set(void *ctx, int level)
 {
     struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
 
-    d->bl_level = level < 0 ? 0 : level > d->bl.max ? d->bl.max : level;
+    d->bl_dark = level <= 0;
+    d->bl_level = bl_scale(level, 0, d->bl.max, d->bl_min, d->bl.max);
     if (d->bl_enabled) {
-        intelbl_set(&d->bl, d->bl_level);
+        intelbl_set(&d->bl, d->bl_dark && !d->bl.switched ? 0 : d->bl_level);
     }
 }
 
 /** The backlight class's `power`: what it asks is kept, and holds while
- * the panel's pipe is on, as Linux's intel_backlight_enable runs from the
- * encoder's enable. */
+ * the panel's pipe is on and its level is not 0, as Linux's
+ * intel_backlight_enable runs from the encoder's enable. */
 static void bl_power(void *ctx, int on)
 {
     struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
 
     d->bl_want_on = on != 0;
-    intelbl_power(&d->bl, on && d->bl_pipe_on);
+    intelbl_power(&d->bl, on && d->bl_pipe_on && !d->bl_dark);
 }
 
 static const struct backlight_ops bl_ops = {bl_get, bl_set, bl_power};
@@ -155,9 +175,10 @@ void intel_backlight_enable(struct drm_i915_private *i915)
         return;
     }
     /* Linux's __intel_backlight_enable: a level at or below the least
-     * comes on at the most. */
+     * comes on at the most, and lit. */
     if (d->bl_level <= d->bl_min) {
         d->bl_level = d->bl.max;
+        d->bl_dark = 0;
     }
     /* Linux's lpt_enable_backlight: a PWM left on is turned off first. */
     ctl1 = bl_rd(i915, BLC_PWM_PCH_CTL1);
@@ -201,7 +222,7 @@ void intel_backlight_pipe(struct drm_i915_private *i915, int on)
 
     d->bl_pipe_on = on != 0;
     if (d->bl_index >= 0 && d->bl.switched) {
-        intelbl_power(&d->bl, on && d->bl_want_on);
+        intelbl_power(&d->bl, on && d->bl_want_on && !d->bl_dark);
     } else {
         /* No class switch to ask: the enable line follows the pipe, as
          * Linux's intel_pps_backlight_on and _off set it. */

@@ -1226,11 +1226,13 @@ struct intel_crtc {
  * `bl_want_on` what the backlight class last asked of its switch, which
  * holds only while the sequencer's backlight enable is on with the
  * panel's pipe (`bl_pipe_on`). `bl_enabled` says the PWM is on, as the
- * pipe's enable leaves it, `bl_level` is the level it shows then,
- * `bl_min` the least the VBT allows, and `bl_alt` says the PCH counts the
- * PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off` says the VGA
- * plane has been turned off. `ready` is set
- * once the device's mode configuration is made, which its release frees.
+ * pipe's enable leaves it, `bl_level` is the PWM's level it shows then,
+ * `bl_min` the least the VBT allows, `bl_dark` says the class asked for
+ * its level 0, which Linux shows by turning the backlight off, and
+ * `bl_alt` says the PCH counts the PWM in its coarse steps
+ * (LPT_PWM_GRANULARITY). `vga_off` says the VGA plane has been turned off.
+ * `ready` is set once the device's mode configuration is made, which its
+ * release frees.
  */
 struct intel_display {
     struct intel_crtc crtc[I915_NUM_PIPES];
@@ -1254,6 +1256,7 @@ struct intel_display {
     uint8_t bl_pipe_on;
     uint8_t bl_enabled;
     uint8_t bl_alt;
+    uint8_t bl_dark;
     int bl_level, bl_min;
     uint8_t vga_off;
     uint8_t ready;

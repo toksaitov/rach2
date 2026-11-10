@@ -952,9 +952,12 @@ static void row_backlight(void)
           "backlight: intel_backlight rebound, not registered again");
     CHECK(gpu.display.bl.max == 937 && gpu.display.bl.switched && bl_show(BACKLIGHT_LEVELS) == 937,
           "backlight: the PWM's period, switched by the sequencer");
+    /* Linux's scale_user_to_hw: 500 of 937 onto the PWM's 18 to 937, 18
+     * being the VBT's least of 5 in 255. */
     CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "500\n") == 0 &&
-              (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 500 && boot_sets == 0,
-          "backlight: a level through i915's registers, not the boot's");
+              (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508 && boot_sets == 0 &&
+              bl_show(BACKLIGHT_ACTUAL) == 500,
+          "backlight: a level through i915's registers, not the boot's, scaled as Linux's");
     CHECK(bl_store(BACKLIGHT_POWER, "4") == 0 && !(reg(PP_CONTROL) & EDP_BLC_ENABLE),
           "backlight: bl_power off clears the enable");
     CHECK(bl_store(BACKLIGHT_POWER, "0") == 0 && (reg(PP_CONTROL) & EDP_BLC_ENABLE),
@@ -970,7 +973,7 @@ static void row_backlight(void)
     CHECK(set_active(1) == 0 && (reg(PP_CONTROL) & EDP_BLC_ENABLE) &&
               reg(DSPSURF(0)) == BO_GGTT(0) && (reg(DSPCNTR(0)) & DISP_ENABLE),
           "backlight: on with the pipe, the console's plane shown again");
-    CHECK((reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 500, "backlight: the level kept");
+    CHECK((reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508, "backlight: the level kept");
     frame();
 }
 
