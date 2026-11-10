@@ -4,11 +4,11 @@ The assignment cases boot the GNU root on q35 with an emulated Intel VT-d unit. 
 
 ## Running
 
-`ARCH=x86_64 tests/run assign` runs the cases in `tests/cases/machine.assign.json`. They run on Linux; `nic-kvm` needs the testing PC's nested SVM profile. `RACH2_CASES=machine.assign.boot` selects just the boot. The remaining cases are `nic-tcg`, `nic-kvm`, `dma`, `index`, `compat`, `kill` and `reassign`.
+`ARCH=x86_64 tests/run assign` runs the seven cases in `tests/cases/machine.assign.json` on Linux. `RACH2_CASES=machine.assign.boot` selects just the boot. The remaining cases are `nic-tcg`, `dma`, `index`, `compat`, `kill` and `reassign`. TCG runs the nested guest; the outer machine uses KVM on WSL. The runner also has a `nic-kvm` mode for a comparison made by hand inside the same outer machine with the `host-svm` processor profile.
 
 The machine has `intel-iommu,intremap=on,caching-mode=on`, a `virtio-net-pci,disable-legacy=on,iommu_platform=on` at `0000:01:00.0` behind the PCIe root port at `0000:00:06.0` on the user network `10.0.3.0/24`, and EDU at `0000:00:07.0` with its DMA mask covering every address. The host's e1000 uses a separate user network, `10.0.2.0/24`. The two gateways end in `.2`. `iommu_platform=on` makes the NIC use the bus's DMA address space through VT-d. QEMU gives virtio its PCIe function-level reset capability only behind a root port, as `virtio_pci_realize` in [QEMU 10.2.1](https://github.com/qemu/qemu/blob/v10.2.1/hw/virtio/virtio-pci.c) defines it.
 
-`run.sh` runs as root in the GNU guest. It binds the two functions to vfio-pci and sets the locked-memory limit to unlimited. During each case it writes random data to the ext2 root, flushes and verifies it, and pings the host's gateway. It compares the live VFIO, KVM and free interrupt-vector counts before and after the operation. No IOMMU fault may precede a case, and only the one deliberate fault of an injection case may follow it. The kill case requires live pinned DMA pages before sending SIGKILL; the reassignment case then boots a second guest with the same function. The first guest's console is printed as it arrives and kept beside QEMU's diagnostics in the case's scratch directory, which remains after a failure or an interrupted run.
+`run.sh` runs as root in the GNU guest. It binds the two functions to vfio-pci and sets the locked-memory limit to unlimited. During each case it writes random data to the ext2 root, flushes and verifies it, and pings the host's gateway. It compares the live VFIO, KVM and free interrupt-vector counts before and after the operation. No IOMMU fault may precede a case, and only the one deliberate fault of an injection case may follow it. The kill case requires live pinned DMA pages and a mapped NIC BAR before sending SIGKILL; the reassignment case then boots a second guest with the same function. The first guest's console is printed as it arrives and kept beside QEMU's diagnostics in the case's scratch directory, which remains after a failure or an interrupted run.
 
 ## Interfaces
 
@@ -42,4 +42,4 @@ Put the absolute `build/cache/qemu/out` directory first on `PATH` for the assign
 
 ## Tests
 
-The boot case requires the unit, both disk controllers and the display interrupt. The NIC cases require the Debian guest's answered pings. The fault cases require their positive DMA or MSI control before their blocked request. The kill and reassignment cases require every live resource count to return to its initial value.
+The boot case requires the unit, both disk controllers and the display interrupt. The NIC case requires the Debian guest's answered pings. The fault cases require their positive DMA or MSI control before their blocked request. The kill and reassignment cases require every live resource count to return to its initial value.

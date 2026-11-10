@@ -2353,15 +2353,15 @@ Each slice is a fixed list of cases, given to `tests/run` by `RACH2_CASES`, that
 * With them, the host suite's `kvm_decode_hosttest`, `kvm_hosttest` and `kvm_irq_hosttest`, and the decoder's corpus.
 * Lenovo trial boot, silent and headless: the same eighteen corpus rows under VMX, both guests to their tokens, and `vmexit_*` timings recorded beside 80-2's (not judged). 81 changed the PCI walk and added VMX, both of which run on the Lenovo's hardware.
 
-#### 82, seven cases of the `assign` family, on the profile 82-3 chose, in the minutes 82-3.6 records
+#### 82, seven cases of the `assign` family, TCG inside Rach2, about 4.1 minutes from the author case timings
 
-* `assign:vtd-boot`: Rach2 boots with the emulated unit and its disks, network and display work under remapping, the NVMe disk and virtio-gpu on MSI-X among them (82-1.4, 82-3.1).
-* `assign:net`: the NIC given to a Debian guest, which binds and pings.
-* `assign:dma-fault`: `edu`'s DMA outside its domain blocked and counted.
-* `assign:irq-fault`: an MSI with a wrong index blocked and counted.
-* `assign:compat-msi`: a compatibility-format MSI blocked and counted, the host's disk and network under traffic throughout and without error.
-* `assign:kill`: the guest killed under traffic, the group back, pins and vectors back to their counts.
-* `assign:reassign`: the same device given to a second guest after the reset (82-3.5).
+* `machine.assign.boot`: Rach2 boots with the emulated unit and its disks, network and display work under remapping, the NVMe disk and virtio-gpu on MSI-X among them (82-1.4, 82-3.1).
+* `machine.assign.nic-tcg`: the NIC given to a Debian guest, which binds and pings.
+* `machine.assign.dma`: `edu`'s DMA outside its domain blocked and counted.
+* `machine.assign.index`: an MSI with a wrong index blocked and counted.
+* `machine.assign.compat`: a compatibility-format MSI blocked and counted, the host's disk and network under traffic throughout and without error.
+* `machine.assign.kill`: the guest killed under traffic, the group back, pins and vectors back to their counts.
+* `machine.assign.reassign`: the same device given to a second guest after the reset (82-3.5).
 * Lenovo trial boot, announced since the guest takes the screen: 82-4b's route once, the GPU to Debian, glmark2's ratio recorded, a clean exit and a kill under load each ending with Rach2's pipe CRC equal to the mode's before. 82 touched the VT-d units and the GPU.
 
 #### 83, seven cases of the `bed-*` families, in the minutes 83-7.2 records
