@@ -573,7 +573,7 @@ static void emit_usb_alias(struct emit *e, const struct usb_sys_row *u)
 
 /** A file of a USB interface's directory, as Linux's USB core writes it:
  * its number, alternate setting, class, subclass and protocol, its
- * modalias and its uevent, with the boot-protocol driver bound to it. */
+ * modalias and its uevent, with usbhid, Linux's HID driver, bound to it. */
 static int32_t show_iface(void *obj, int arg, char *buf, uint32_t cap)
 {
     const struct usb_sys_row *u = &((const struct input_sys *)obj)->usb;
@@ -589,8 +589,7 @@ static int32_t show_iface(void *obj, int arg, char *buf, uint32_t cap)
         emit_str(&e, "\n");
         break;
     case IF_UEVENT:
-        emit_str(&e, u->ifprotocol == 1 ? "DEVTYPE=usb_interface\nDRIVER=usbkbd\nPRODUCT="
-                                        : "DEVTYPE=usb_interface\nDRIVER=usbmouse\nPRODUCT=");
+        emit_str(&e, "DEVTYPE=usb_interface\nDRIVER=usbhid\nPRODUCT=");
         emit_hex(&e, u->vendor, 0, 0);
         emit_str(&e, "/");
         emit_hex(&e, u->product, 0, 0);

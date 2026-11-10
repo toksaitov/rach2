@@ -2220,7 +2220,7 @@ static void input_file_rows(void)
               reg_is(child(child(in_serio, "id"), "type"), "06\n"),
           "the i8042's port gives its driver, type and modalias");
     check(reg_is(child(in_iface, "uevent"),
-                 "DEVTYPE=usb_interface\nDRIVER=usbmouse\nPRODUCT=627/1/0\nTYPE=0/0/0\n"
+                 "DEVTYPE=usb_interface\nDRIVER=usbhid\nPRODUCT=627/1/0\nTYPE=0/0/0\n"
                  "INTERFACE=3/1/2\nMODALIAS=usb:v0627p0001d0000dc00dsc00dp00ic03isc01ip02in00\n") &&
               reg_is(child(in_iface, "bInterfaceProtocol"), "02\n"),
           "the USB interface gives its class, protocol and modalias");
