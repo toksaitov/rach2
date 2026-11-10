@@ -27,6 +27,7 @@
 #define TIOCSWINSZ         0x5414
 #define TIOCGPTN           0x80045430 /* master: get the slave index N (arg int*) */
 #define TIOCSPTLCK         0x40045431 /* master: set/clear the slave lock (arg int*, 0 = unlock) */
+#define TIOCPKT_FLUSHREAD  1
 #define TIOCPKT_FLUSHWRITE 2
 #define TIOCPKT            0x5420     /* master: packet mode on or off (arg int*) */
 #define TIOCGPKT           0x80045438 /* master: whether packet mode is on (arg int*) */
@@ -137,20 +138,35 @@ static void wake_master(struct pty *p, uint32_t *from)
     *from = p->m_tail;
 }
 
-/** Discard the slave `t`'s output and report TIOCPKT_FLUSHWRITE to its
- * master in packet mode, as Linux's pty_flush_buffer. Takes interrupts
- * off and wakes the master's readers and the slave's writers. */
-static void pty_flush_output(struct tty *t)
+/**
+ * The slave `t`'s flush, `what` a set of TTY_FLUSH_* bits (tty.h), as Linux's
+ * pty_flush_buffer and n_tty_packet_mode_flush: TTY_FLUSH_OUT and
+ * TTY_FLUSH_HANGUP discard the output in `m_buf`, and in packet mode
+ * TTY_FLUSH_IN sets TIOCPKT_FLUSHREAD and TTY_FLUSH_OUT TIOCPKT_FLUSHWRITE for
+ * the master's next read, while TTY_FLUSH_HANGUP clears every pending bit.
+ * Takes interrupts off, wakes the master's readers when a status bit is set
+ * and the slave's writers when output was discarded.
+ */
+static void pty_flush(struct tty *t, int what)
 {
     struct pty *p = t->sink_ctx;
     uint32_t flags = kirq_save();
 
-    p->m_head = p->m_tail;
-    if (p->packet) {
-        p->pktstatus |= TIOCPKT_FLUSHWRITE;
+    if (what & (TTY_FLUSH_OUT | TTY_FLUSH_HANGUP)) {
+        p->m_head = p->m_tail;
+        wq_wake(&t->input_wq, WQ_ROOM);
+    }
+    if (what & TTY_FLUSH_HANGUP) {
+        p->pktstatus = 0;
+    } else if (p->packet) {
+        if (what & TTY_FLUSH_IN) {
+            p->pktstatus |= TIOCPKT_FLUSHREAD;
+        }
+        if (what & TTY_FLUSH_OUT) {
+            p->pktstatus |= TIOCPKT_FLUSHWRITE;
+        }
         wq_wake(&p->m_read_wq, WQ_DATA);
     }
-    wq_wake(&t->input_wq, WQ_ROOM);
     kirq_restore(flags);
 }
 
@@ -177,7 +193,7 @@ static struct pty *pty_alloc(void)
     p->atime = p->mtime = pty_now();
     p->mode = 0620; /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p);
-    p->slave.flush_output = pty_flush_output;
+    p->slave.flush = pty_flush;
     wait_queue_init(&p->m_read_wq);
     p->slave.space_wq = &p->m_read_wq;
     p->next = ptys;
@@ -211,9 +227,9 @@ static int ptm_readable(void *arg)
  * The ring is drained into a stack buffer with interrupts off and copied to
  * user memory, which may fault, after they are restored. In packet mode
  * (TIOCPKT) the bytes follow a status byte, TIOCPKT_DATA, 0, as on Linux,
- * or a pending status byte alone: TIOCPKT_FLUSHWRITE when vhangup flushed
- * the slave's output. Each piece taken from the ring wakes a slave writer
- * waiting for room.
+ * or a pending status byte alone, the TIOCPKT_FLUSHREAD and
+ * TIOCPKT_FLUSHWRITE of the slave's flushes (`pty_flush`). Each piece taken
+ * from the ring wakes a slave writer waiting for room.
  */
 static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {

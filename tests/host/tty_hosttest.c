@@ -18,9 +18,11 @@
  * a slave read and an input flush are room for the master, and so is input the
  * master writes that takes bytes out of the slave's discipline, a signal
  * char's flush or an erase; and slave output is data for it. In packet mode
- * a master read begins with the status byte, and TCFLSH on the master drops
- * the slave's output. A read that does not wait ends the console latency
- * span, and slave output takes no more of the master's ring than it needs.
+ * a master read begins with the status byte, TCFLSH on the master drops the
+ * slave's output, a slave's flush gives the master FLUSHREAD and FLUSHWRITE,
+ * and a vhangup leaves it no status. A read that does not wait ends the
+ * console latency span, and slave output takes no more of the master's ring
+ * than it needs.
  *
  * While the console's keyboard is in a raw mode, COM1's bytes are discarded,
  * by the tick's drain and by a reader's, and none reaches the discipline;
@@ -676,19 +678,18 @@ static void packet_mode(void)
     CHECK(ptm_flush(&pair, 3) == -EINVAL, "TCFLSH takes 0, 1 and 2");
 }
 
-/** Hang up the slave after the master has blocked in a packet read. */
-static void vhangup_action(void)
+/** Flush the slave's output after the master has blocked in a packet read,
+ * as the slave's TCFLSH 1 does. */
+static void slave_flush_action(void)
 {
-    tty_vhangup(&pair.slave);
+    pair.slave.flush(&pair.slave, TTY_FLUSH_OUT);
 }
 
-/** A slave hangup discards unread output and wakes a packet reader for
- * FLUSHWRITE even when no output was queued. */
+/** A slave hangup discards unread output and leaves the master no packet
+ * status, as Linux's __tty_hangup clears pktstatus after its flush. */
 static void vhangup_output(void)
 {
-    char out[8];
     wait_queue_t *wq;
-    uint32_t wakes;
 
     setup_pair();
     CHECK(pts_write(&slave, "old", 3) == 3, "queue output before vhangup");
@@ -698,18 +699,47 @@ static void vhangup_output(void)
     setup_pair();
     pair.packet = 1;
     CHECK(pts_write(&slave, "old", 3) == 3, "queue output in packet mode");
-    wakes = wq_wakes(&pair.m_read_wq, WQ_DATA);
     tty_vhangup(&pair.slave);
+    CHECK(pty_m_avail(&pair) == 0 && !pair.pktstatus && !ptm_readable(&pair),
+          "vhangup in packet mode discards output and leaves no status");
+    CHECK(ptm_poll(&master, POLLIN | POLLRDNORM | POLLPRI, &wq) == 0,
+          "nothing is readable after vhangup");
+}
+
+/** A slave flush in packet mode gives the master TIOCPKT_FLUSHREAD for its
+ * input and TIOCPKT_FLUSHWRITE for its output, which it also discards, as
+ * Linux's n_tty_packet_mode_flush and pty_flush_buffer do; the status is
+ * readable and urgent, and wakes a blocked packet reader. */
+static void slave_flush_status(void)
+{
+    char out[8];
+    wait_queue_t *wq;
+    uint32_t wakes;
+
+    setup_pair();
+    CHECK(pts_write(&slave, "old", 3) == 3, "queue output before a slave flush");
+    pair.slave.flush(&pair.slave, TTY_FLUSH_IN | TTY_FLUSH_OUT);
+    CHECK(pty_m_avail(&pair) == 0 && !pair.pktstatus,
+          "a slave flush discards output without status outside packet mode");
+    setup_pair();
+    pair.packet = 1;
+    pair.slave.flush(&pair.slave, TTY_FLUSH_IN);
+    CHECK(ptm_read(&master, out, sizeof(out)) == 1 && out[0] == TIOCPKT_FLUSHREAD,
+          "an input flush gives FLUSHREAD alone");
+    CHECK(pts_write(&slave, "old", 3) == 3, "queue output in packet mode");
+    wakes = wq_wakes(&pair.m_read_wq, WQ_DATA);
+    pair.slave.flush(&pair.slave, TTY_FLUSH_IN | TTY_FLUSH_OUT);
     CHECK(pty_m_avail(&pair) == 0 && wq_wakes(&pair.m_read_wq, WQ_DATA) == wakes + 1,
-          "vhangup flushes output and wakes packet readers");
+          "an output flush discards output and wakes packet readers");
     CHECK(ptm_poll(&master, POLLIN | POLLRDNORM | POLLPRI, &wq) == (POLLIN | POLLRDNORM | POLLPRI),
           "packet status is readable and urgent");
-    CHECK(ptm_read(&master, out, sizeof(out)) == 1 && out[0] == TIOCPKT_FLUSHWRITE,
-          "vhangup returns FLUSHWRITE alone");
-    CHECK(!ptm_readable(&pair), "the flush left no output or status");
-    scheduled_action = vhangup_action;
+    CHECK(ptm_read(&master, out, sizeof(out)) == 1 &&
+              out[0] == (TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE),
+          "both flushes give one status byte");
+    CHECK(!ptm_readable(&pair), "the read left no output or status");
+    scheduled_action = slave_flush_action;
     CHECK(ptm_read(&master, out, sizeof(out)) == 1 && out[0] == TIOCPKT_FLUSHWRITE && switches == 1,
-          "a vhangup with no output wakes a blocked packet reader");
+          "an output flush with no output wakes a blocked packet reader");
 }
 
 /** A read that does not wait ends the latency span its input started, as a
@@ -1025,6 +1055,7 @@ int main(void)
     input_room();
     packet_mode();
     vhangup_output();
+    slave_flush_status();
     nonblocking_latency();
     output_growth();
     copy_refit();

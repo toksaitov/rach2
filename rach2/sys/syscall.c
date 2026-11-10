@@ -2048,6 +2048,28 @@ int fd_tty_hung(fd_entry_t *e)
 }
 
 /**
+ * TCFLSH on the console or a pty slave: `which` 0 (TCIFLUSH) discards the
+ * unread input, 1 (TCOFLUSH) the output, 2 (TCIOFLUSH) both; anything else is
+ * -EINVAL. The console writes its output at once, so it has none to discard;
+ * a slave's `flush` discards the output its master has not read and tells a
+ * master in packet mode of each flush (`TTY_FLUSH_*`), as Linux's
+ * tty_perform_flush does through n_tty_flush_buffer and pty_flush_buffer.
+ */
+static int32_t tty_flush_at(struct tty *t, uintptr_t which)
+{
+    if (which > 2) {
+        return -EINVAL;
+    }
+    if (which != 1) {
+        tty_flush_input(t);
+    }
+    if (t->flush) {
+        t->flush(t, (which != 1 ? TTY_FLUSH_IN : 0) | (which != 0 ? TTY_FLUSH_OUT : 0));
+    }
+    return 0;
+}
+
+/**
  * The terminal ioctls of the tty `t`.
  *
  * The termios requests and the session and job-control requests, which the
@@ -2060,8 +2082,7 @@ int fd_tty_hung(fd_entry_t *e)
  * unread input. FIONREAD gives the bytes a read would return at once, a
  * complete cooked line or the queued count in raw mode, with a pending EOF
  * counted as 0; `tty_inq` drains the input source first, so input that has
- * just arrived is counted. TCFLSH's TCIFLUSH (0) and TCIOFLUSH (2) drop the
- * input; there is no output queue, so TCOFLUSH (1) does nothing.
+ * just arrived is counted. TCFLSH discards the queues (`tty_flush_at`).
  *
  * TIOCSPGRP needs the caller's session to be the one the terminal controls,
  * checked before the argument, as on Linux (-ENOTTY), and a group in that
@@ -2103,13 +2124,7 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         return tty_set_termios_at(t, request, arg);
 
     case TCFLSH:
-        if (arg > 2) {
-            return -EINVAL;
-        }
-        if (arg == 0 || arg == 2) {
-            tty_flush_input(t);
-        }
-        return 0;
+        return tty_flush_at(t, arg);
 
     case TIOCGWINSZ:
         if (!arg) {

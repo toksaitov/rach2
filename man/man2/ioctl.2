@@ -102,7 +102,10 @@ selects the queue:
 .Dv TCIOFLUSH
 (2) discard unread input.
 .Dv TCOFLUSH
-(1) succeeds without action because there is no output queue.
+(1) and
+.Dv TCIOFLUSH
+discard a pseudo-terminal slave's output its master has not read; the
+console writes its output at once, so there they do nothing.
 Other values are invalid.
 .It Dv FIONREAD
 Write an
@@ -215,14 +218,23 @@ nonzero on, or read it back.
 In packet mode each read of the master begins with a status byte,
 .Dv TIOCPKT_DATA ,
 0, before the slave's output, as screen asks for.
+A flush on the slave makes the master readable, with
+.Dv POLLPRI
+as well, for a status byte alone:
+.Dv TIOCPKT_FLUSHREAD
+after its input is discarded by
+.Dv TCFLSH
+or
+.Dv TCSETSF ,
+and
+.Dv TIOCPKT_FLUSHWRITE
+after its output is discarded by
+.Dv TCFLSH ,
+or both.
 A slave's
 .Xr vhangup 2
-flushes that output and makes the master readable, with
-.Dv POLLPRI
-as well, for a status byte of
-.Dv TIOCPKT_FLUSHWRITE
-alone.
-Other flushes and output stops send no status byte.
+leaves no status pending.
+A signal character and output stops send no status byte.
 .It Dv TCFLSH
 With
 .Fa arg

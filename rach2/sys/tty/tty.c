@@ -59,7 +59,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->sink = sink ? sink : null_sink;
     t->sink_ctx = sink_ctx;
     t->pump = NULL;
-    t->flush_output = NULL;
+    t->flush = NULL;
     t->sid = 0;
     t->fg_pgid = 0;
     t->hungup = 0;
@@ -437,6 +437,9 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
         wq_wake(&t->input_wq, 0);
     }
     kirq_restore(flags);
+    if (flush_input && t->flush) {
+        t->flush(t, TTY_FLUSH_IN);
+    }
 }
 
 void tty_flush_input(struct tty *t)
@@ -483,11 +486,11 @@ void tty_vhangup(struct tty *t)
     flags = kirq_save();
     t->vhangups++;
     kirq_restore(flags);
-    if (t->flush_output) {
-        t->flush_output(t);
-    }
     n_tty_default_termios(&kt);
     tty_set_termios(t, &kt, 1);
+    if (t->flush) {
+        t->flush(t, TTY_FLUSH_HANGUP);
+    }
     wq_wake_all(&t->input_wq);
     wq_wake(t->space_wq, WQ_ROOM);
 }

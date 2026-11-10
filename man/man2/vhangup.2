@@ -33,9 +33,8 @@ It takes the terminal from that session: no process has it as its
 controlling terminal any longer, and it has no foreground process group.
 .It
 It discards input not yet read and a pseudo-terminal slave's output not
-yet read by its master.
-In packet mode the master receives
-.Dv TIOCPKT_FLUSHWRITE .
+yet read by its master, and leaves the master no packet status pending,
+as Linux does.
 It gives the terminal the termios a new terminal has, as Linux resets a
 pseudo-terminal's and a virtual console's:
 .Dv ICRNL
