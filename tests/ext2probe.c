@@ -1365,6 +1365,72 @@ static void take_loop(void)
     loop_name[n] = '\0';
 }
 
+#ifdef __x86_64__
+#define XA_SET 188
+#else
+#define XA_SET 226
+#endif
+
+/** Exercise all twelve attribute calls on ext2 and unsupported file systems.
+ * The fixture is private to this case. Each descriptor and scratch name is
+ * removed before success; a failed case keeps its disk as evidence. */
+static void xattr_rows(void)
+{
+    const char *path = "/e2/xa-file";
+    const char *name = "user.DOSATTRIB";
+    char value[64];
+    long fd, target, rc;
+    int form;
+
+    fd = syscall3(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0600);
+    expect_ok(fd, "creating the attribute file");
+    for (form = 0; form < 3; form++) {
+        target = form == 2 ? fd : (long)path;
+        expect_ok(syscall5(XA_SET + form, target, (long)name, (long)"ABCD", 4, 1),
+                  "setting a user attribute");
+        if (syscall4(XA_SET + 3 + form, target, (long)name, 0, 0) != 4 ||
+            syscall4(XA_SET + 3 + form, target, (long)name, (long)value, 3) != -34 ||
+            syscall4(XA_SET + 3 + form, target, (long)name, (long)value, sizeof(value)) != 4 ||
+            value[0] != 'A' || value[3] != 'D')
+            fail("attribute query, short buffer or read");
+        rc = syscall3(XA_SET + 6 + form, target, (long)value, sizeof(value));
+        if (rc != (long)strlen(name) + 1 || !streq(value, name))
+            fail("listing user attributes");
+        if (syscall5(XA_SET + form, target, (long)name, (long)"X", 1, 1) != -EEXIST ||
+            syscall5(XA_SET + form, target, (long)name, (long)"X", 1, 4) != -EINVAL)
+            fail("attribute flags");
+        expect_ok(syscall2(XA_SET + 9 + form, target, (long)name), "removing an attribute");
+        if (syscall4(XA_SET + 3 + form, target, (long)name, (long)value, sizeof(value)) != -61)
+            fail("a removed attribute is ENODATA");
+    }
+    expect_ok(syscall5(XA_SET, (long)path, (long)name, (long)"saved", 5, 0), "saving an attribute");
+    syscall1(SYS_CLOSE, fd);
+    expect_ok(syscall2(SYS_UMOUNT2, (long)"/e2", 0), "unmounting attribute data");
+    expect_ok(syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2", 0, 0),
+              "remounting attribute data");
+    if (syscall4(XA_SET + 3, (long)path, (long)name, (long)value, sizeof(value)) != 5 ||
+        value[0] != 's' || value[4] != 'd')
+        fail("an attribute survives a remount");
+    expect_ok(syscall2(SYS_SYMLINK, (long)"xa-file", (long)"/e2/xa-link"),
+              "making an attribute link");
+    if (syscall4(XA_SET + 3, (long)"/e2/xa-link", (long)name, (long)value, sizeof(value)) != 5 ||
+        syscall4(XA_SET + 4, (long)"/e2/xa-link", (long)name, (long)value, sizeof(value)) != -61 ||
+        syscall5(XA_SET + 1, (long)"/e2/xa-link", (long)name, (long)"X", 1, 0) != -EPERM)
+        fail("following and not following the final link");
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/xa-link"), "removing the attribute link");
+    expect_ok(syscall1(SYS_UNLINK, (long)path), "removing the attribute file");
+    for (form = 0; form < 2; form++) {
+        path = form ? "/dev/shm/xa-unsupported" : "/xa-unsupported";
+        fd = syscall3(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0600);
+        expect_ok(fd, "creating an unsupported attribute file");
+        if (syscall4(XA_SET + 3, (long)path, (long)name, (long)value, sizeof(value)) != -95 ||
+            syscall3(XA_SET + 8, fd, (long)value, sizeof(value)) != 0)
+            fail("KRFFS and tmpfs keep their unsupported answers");
+        syscall1(SYS_CLOSE, fd);
+        expect_ok(syscall1(SYS_UNLINK, (long)path), "removing an unsupported attribute file");
+    }
+}
+
 PROBE_SP_ENTRY;
 
 /** The probe's entry, given the initial stack `sp`: the mode from the first
@@ -1377,7 +1443,8 @@ void probe_main(unsigned long *sp)
 
     probe_args((int)sp[0], (char **)(sp + 1));
     mode = probe_word(1) != 0 ? probe_word(1) : "links";
-    writable = streq(mode, "cost") || streq(mode, "names") || streq(mode, "lookup");
+    writable = streq(mode, "xattr") || streq(mode, "cost") || streq(mode, "names") ||
+               streq(mode, "lookup");
     take_loop();
     syscall2(SYS_MKDIR, (long)"/e2", 0755);
     if (syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2",
@@ -1387,7 +1454,9 @@ void probe_main(unsigned long *sp)
                  0) != 0) {
         fail("mounting the fixture");
     }
-    if (streq(mode, "links")) {
+    if (streq(mode, "xattr")) {
+        xattr_rows();
+    } else if (streq(mode, "links")) {
         links_rows();
     } else if (streq(mode, "cost")) {
         cost_rows();

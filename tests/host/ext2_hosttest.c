@@ -8,6 +8,7 @@
  * host-deps: tools/etude/capture.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-cflags: -I tools/etude/include
+ * host-deps: rach2/sys/fs/ext2xattr.c
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c rach2/sys/fs/lock.c
  * host-deps: rach2/sys/fs/sleeplock.c tests/host/compat/park_host.c
@@ -32,6 +33,7 @@
  * fixed-width types, and the C library calls it makes are declared below.
  */
 #include "../../rach2/sys/fs/ext2.h"
+#include "../../rach2/sys/fs/ext2xattr.h"
 #include "../../rach2/sys/fs/bcache.h"
 #include "../../rach2/sys/fs/sleeplock.h"
 #include "../../rach2/sys/lib/kerrno.h"
@@ -4863,6 +4865,8 @@ static void attr_rows(void)
              "an attribute block without its magic number mounts read-only");
 }
 
+#include "ext2_xattr_rows.h"
+
 /**
  * The interruption matrix. Each sequence but the one of many files, which
  * would need thousands of stops that the others cover, runs once to count
@@ -5128,6 +5132,7 @@ static void hardlink_check_rows(void)
  * batch rows, the node rows and the fsync rows. `--times-only` runs only
  * timestamps; `--hardlinks-only` runs only the hard-link check rows;
  * `--node-only`, `--fsync-only` and `--service-only` run only those rows;
+ * `--xattr-only` runs the user attribute and interruption rows alone.
  * `--capture-only` checks independent tool
  * output capture alone. Returns 0,
  * and calls `fix_passed`, when every row passed.
@@ -5182,6 +5187,11 @@ int main(int argc, char **argv)
         goto finish;
     }
 
+    if (argc == 2 && streq(argv[1], "--xattr-only")) {
+        xattr_rows();
+        goto finish;
+    }
+
     bytes = build_image(fix_path("a.ext2"), 4096, 128, PROFILE, 16, "tree");
     read_rows(fix_path("a.ext2"), bytes, "the 4 KiB volume with 128-byte inodes mounts", 1);
     bytes = build_image(fix_path("b.ext2"), 4096, 256, PROFILE, 16, "tree");
@@ -5200,6 +5210,7 @@ int main(int argc, char **argv)
     dirty_rows();
     hardlink_check_rows();
     attr_rows();
+    xattr_rows();
     matrix_rows();
     batch_rows();
     node_rows();

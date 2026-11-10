@@ -903,6 +903,177 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "disk", "reason": "the case kills the machine under its root, damages the disk between boots and boots the recovery system on it, which the installed machine's disk cannot be"}
+    },
+    {
+      "case_id": "machine.ext2.xattr",
+      "behavior": "All twelve extended attribute calls store user values on ext2, preserve them over remount, distinguish a final link, and keep KRFFS and tmpfs answers",
+      "units": [
+        "ext2",
+        "rach2/sys/fs/ext2xattr.c",
+        "rach2/sys/syscall_fs.c",
+        "tests/ext2probe.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "mode": "xattr"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "ext2_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "fixture-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "probe",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the test image beside a copy of the fixture disk, run ext2probe xattr from the debug shell, wait for the shell and end the machine"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [
+              "fixture-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "exit",
+          "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "said-ok",
+          "checks": "ext2probe says EXT2PROBE OK (xattr), after all twelve calls, query and short-buffer checks, create and replace flags, remount, symbolic links and unsupported KRFFS and tmpfs calls",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 150000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "fixture-disk",
+          "node": "images/ext2-fixture.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ext2_scenario",
+          "node": "tests/cases/machine/ext2_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "count",
+        "reason": "the rows use a private ext2 fixture beside a KRFFS test root"
+      }
     }
   ]
 }

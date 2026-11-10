@@ -181,6 +181,13 @@ static void fs_exercise(const struct vfs_type *type)
                 continue;
             }
             (void)ops->getattr(&mnt, node, &st);
+            if (ops->xattr) {
+                struct vfs_xattr arg = {VFS_XATTR_GET, "user.DOSATTRIB", buf, sizeof(buf), 0};
+                (void)ops->xattr(&mnt, node, &arg);
+                arg.op = VFS_XATTR_LIST;
+                arg.name = 0;
+                (void)ops->xattr(&mnt, node, &arg);
+            }
             if (!ent.is_dir && ops->open(&mnt, node, 0, &h) == 0) {
                 (void)ops->read(&mnt, h, buf, sizeof(buf), 0);
                 ops->release(&mnt, h);

@@ -3,6 +3,7 @@
  * volume. The seed is a 64 KiB volume mke2fs made; the format carries no
  * checksum in this revision, so a mutation reaches the parser as it is.
  *
+ * fuzz-deps: rach2/sys/fs/ext2xattr.c
  * fuzz-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * fuzz-deps: rach2/sys/block/chain.c rach2/sys/fs/sleeplock.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -11,6 +12,7 @@
  */
 #include "../../rach2/sys/fs/ext2.h"
 #include "fs_common.h"
+#include "../../rach2/sys/fs/ext2xattr.h"
 #include "fuzz.h"
 
 /** 0: no input closes the mount, whose wait for its writers alone reads the
@@ -58,6 +60,18 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     __builtin_memcpy(fs_image, data, size);
     __builtin_memset(fs_image + size, 0, FS_IMAGE_MAX - size);
     fs_image_bytes = (size + 511) & ~511ul;
+    {
+        unsigned char parsed[4096], replacement[4096], value[4096] = {0};
+        struct vfs_xattr arg = {VFS_XATTR_SET, "DOSATTRIB", value, 1, 0};
+        unsigned long used = size > sizeof(parsed) ? sizeof(parsed) : size;
+
+        __builtin_memset(parsed, 0, sizeof(parsed));
+        __builtin_memcpy(parsed, data, used);
+        (void)ext2_xattr_check(parsed, sizeof(parsed));
+        (void)ext2_xattr_read(parsed, sizeof(parsed), "DOSATTRIB", value, sizeof(value));
+        (void)ext2_xattr_read(parsed, sizeof(parsed), 0, value, sizeof(value));
+        (void)ext2_xattr_edit(parsed, replacement, sizeof(parsed), &arg);
+    }
     fs_exercise(&vfs_ext2_type);
     return 0;
 }

@@ -40,3 +40,5 @@ A new harness is `NAME_fuzz.c` with its `fuzz-deps:` lines and a seed under `cor
 ## Limits
 
 Only the ELF loader is fuzzed in both configurations; the other harnesses compile the i686 configuration alone. The display stack's decoders have no code of either architecture, and under `RACH2_HOSTTEST` their structures take the host's sizes in both; the i386 translations define the i386 structures by fixed-width members, so on a 64-bit host the harness converts between the two layouts the kernel does. `ia32_ioctl.c`, which translates the i386 ioctls of the rest of the kernel, is not linked. The ioctl harness drives no mmap, eventfd or udmabuf, whose memory and descriptors the model does not have; `tests/drmfuzz.c` drives those on a running kernel ([the tests' Readme](../Readme.md)).
+
+The ext2 corpus includes `xattr`, a raw external attribute block with a binary `user.DOSATTRIB` value and Linux's name, value and block hash. The harness feeds each input to the attribute codec and, as a volume, to the driver; the inode walk reads and lists attributes too.
