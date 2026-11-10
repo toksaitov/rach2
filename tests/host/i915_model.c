@@ -23,6 +23,7 @@ extern void free(void *p);
 
 #include "i915_model_base.c"
 #include "i915_model_ring.c"
+#include "i915_model_ctx.c"
 #include "i915_model_rc6.c"
 
 static const struct i915_model_block *const i915_model_blocks[I915_MODEL_BLOCKS + 1] = {

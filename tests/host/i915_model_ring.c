@@ -195,8 +195,12 @@ static void ring_reset_at(struct i915_model *m, void *priv, uint32_t base)
 {
     struct i915_model_ring *r = (struct i915_model_ring *)priv;
 
+    struct i915_model_ctx none = {0, 0, 0, 0, 0, 0, 0};
+
     r->executed = r->fault = 0;
     r->faulted = r->stuck = r->idle_stuck = r->start_fails = r->flush_stuck = 0;
+    r->ctx = none;
+    i915_model_poke(m, CCID(base), 0);
     i915_model_poke(m, RING_CTL(base), 0);
     i915_model_poke(m, RING_HEAD(base), 0);
     i915_model_poke(m, RING_TAIL(base), 0);
@@ -277,6 +281,12 @@ static void ring_fault(struct i915_model_ring *r, uint32_t dw)
     r->fault = dw;
 }
 
+/* The commands of contexts and flushes, i915_model_ctx.c, which
+ * i915_model.c includes after this file: 1 when the command of `len`
+ * dwords `d` was one of them, run or faulted, 0 when it is not. */
+static int ring_ctx_command(struct i915_model *m, struct i915_model_ring *r, uint32_t base,
+                            const uint32_t *d, uint32_t len);
+
 /**
  * Run the ring whose registers start at `base` from its head to its tail,
  * while it is enabled, not stopped, not stuck and has not faulted: each
@@ -304,11 +314,17 @@ static void ring_run(struct i915_model *m, struct i915_model_ring *r, uint32_t b
             break;
         }
         d[0] = *p;
-        if ((d[0] >> 29) != 0) {
+        /* MI commands, and the render pipe's (type 3), whose length is
+         * in their low byte. */
+        if ((d[0] >> 29) != 0 && (d[0] >> 29) != 3u) {
             ring_fault(r, d[0]);
             break;
         }
-        len = MI_OPCODE(d[0]) < 0x10u ? 1u : MI_LENGTH(d[0]);
+        if ((d[0] >> 29) == 3u) {
+            len = (d[0] & 0xffu) + 2u;
+        } else {
+            len = MI_OPCODE(d[0]) < 0x10u ? 1u : MI_LENGTH(d[0]);
+        }
         if (len > 8u) {
             ring_fault(r, d[0]);
             break;
@@ -317,7 +333,7 @@ static void ring_run(struct i915_model *m, struct i915_model_ring *r, uint32_t b
             p = ring_dword(m, start + ((head + 4u * i) & (size - 1u)));
             d[i] = p ? *p : 0;
         }
-        switch (MI_OPCODE(d[0])) {
+        switch ((d[0] >> 29) == 3u ? 0xffu : MI_OPCODE(d[0])) {
         case 0x00: /* MI_NOOP */
             break;
         case 0x02: /* MI_USER_INTERRUPT */
@@ -344,7 +360,9 @@ static void ring_run(struct i915_model *m, struct i915_model_ring *r, uint32_t b
             *out = d[2];
             break;
         default:
-            ring_fault(r, d[0]);
+            if (!ring_ctx_command(m, r, base, d, len)) {
+                ring_fault(r, d[0]);
+            }
             break;
         }
         if (r->faulted) {
