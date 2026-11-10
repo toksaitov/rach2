@@ -56,8 +56,9 @@ static void account(struct wake_record *w, uint32_t now)
     w->since = now;
 }
 
-/** Start a blocked thread's first timed wake at `due`, with the big lock
- * held and interrupts off; an unfinished wake keeps its first deadline. */
+/** Start a blocked user thread's first timed wake at `due`, with the big
+ * lock held and interrupts off; an unfinished wake keeps its first deadline.
+ * Kernel threads have no user return at which to complete a record. */
 void waketime_expire(process_t *p, uint64_t due)
 {
     struct wake_record *w = &p->wake_time;
@@ -65,7 +66,7 @@ void waketime_expire(process_t *p, uint64_t due)
     uint64_t ticks;
     uint32_t ns, now, late, before_lock, before_irq;
 
-    if (p->state != PROC_BLOCKED || w->phase) {
+    if (!p->mm || p->state != PROC_BLOCKED || w->phase) {
         return;
     }
     rtc_tick_phase(&ticks, &ns);
