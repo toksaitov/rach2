@@ -513,6 +513,13 @@ int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
+int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
+{
+    (void)vm;
+    (void)cap;
+    return -EINVAL;
+}
+
 int32_t kvm_irq_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
     (void)vm;

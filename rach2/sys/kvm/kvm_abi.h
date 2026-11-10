@@ -390,6 +390,28 @@ struct kvm_userspace_memory_region {
 #define KVM_MEM_LOG_DIRTY_PAGES 1u
 #define KVM_MEM_READONLY        2u
 
+/* KVM_GET_DIRTY_LOG's argument: the slot, as KVM_SET_USER_MEMORY_REGION
+ * numbers it, and the caller's address of a bitmap of a bit for each of the
+ * slot's pages, in 64-bit words. */
+struct kvm_dirty_log {
+    uint32_t slot;
+    uint32_t padding1;
+    uint64_t dirty_bitmap;
+};
+
+/* KVM_CLEAR_DIRTY_LOG's argument: `num_pages` bits of the caller's bitmap
+ * from the slot's page `first_page`, a multiple of 64. */
+struct kvm_clear_dirty_log {
+    uint32_t slot;
+    uint32_t num_pages;
+    uint64_t first_page;
+    uint64_t dirty_bitmap;
+};
+
+/* The options of KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2. */
+#define KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE 1u
+#define KVM_DIRTY_LOG_INITIALLY_SET         2u
+
 struct kvm_enable_cap {
     uint32_t cap;
     uint32_t flags;

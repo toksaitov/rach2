@@ -108,8 +108,10 @@ struct kvm_exit {
  * need `user`, since the processor walks them as user accesses. `large`
  * marks a 2 MiB or 1 GiB leaf, `addr` is the mask of the frame's address,
  * `accessed` and `dirty` are the bits the processor sets, and `cache(type,
- * ignore_guest_pat)` gives the bits of the memory type KVM_MT_* in a 4 KiB
- * leaf, with the guest's PAT ignored or in charge.
+ * ignore_guest_pat)` gives the bits of the memory type KVM_MT_* in a leaf of
+ * either size, with the guest's PAT ignored or in charge; they never include
+ * the PAT bit of a 4 KiB leaf, which is a large leaf's `large`. A table
+ * entry has every one of `read`, `write`, `exec` and `user`.
  */
 #define KVM_MT_UC 0
 #define KVM_MT_WC 1
@@ -132,8 +134,13 @@ struct kvm_tdp_format {
  * it is called with interrupts off and without the big lock, takes no
  * lock and does not sleep, and returns with interrupts off, leaving the
  * host's interrupts pending until the loop turns them on, 0, or -errno for
- * an entry it cannot make. `exit` then turns that exit into `v->exit`,
- * under the big lock with interrupts on, and may sleep: 0, or -errno to end
+ * an entry it cannot make. Before the entry it clears KVM_REQ_TLB_FLUSH
+ * (`kvm_vcpu_test_clear`) and, when it was set, drops the processor's
+ * guest-physical translations of the VM, as it does too when it enters on
+ * a processor other than the one it last entered on, whose translations
+ * may predate a flush; it reads the tables at `kvm_tdp_root`. `exit` then
+ * turns that exit into `v->exit`, under the big lock with interrupts on,
+ * and may sleep: 0, or -errno to end
  * KVM_RUN with that error. `complete` gives the backend the answer to the
  * port or MMIO read of `v->exit` before the next entry. `save` writes the
  * parts `parts` of the backend's state into the vCPU's record. `inject`
@@ -188,15 +195,17 @@ struct kvm_vm {
     uint32_t refs;
     struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
     uint32_t nr_vcpus;
-    uint64_t tss_addr;    /* KVM_SET_TSS_ADDR */
-    uint64_t ident_addr;  /* KVM_SET_IDENTITY_MAP_ADDR; 0xFEFFC000 by default */
-    int64_t clock_offset; /* the guest's kvmclock less the host's monotonic ns */
-    int irqchip;          /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
-    uint32_t boot_cpu_id; /* KVM_SET_BOOT_CPU_ID */
-    void *slots;          /* slots.c's */
-    void *irq;            /* irq.c's */
-    void *iobus;          /* iobus.c's */
-    void *backend;        /* the backend's */
+    uint64_t tss_addr;     /* KVM_SET_TSS_ADDR */
+    uint64_t ident_addr;   /* KVM_SET_IDENTITY_MAP_ADDR; 0xFEFFC000 by default */
+    int64_t clock_offset;  /* the guest's kvmclock less the host's monotonic ns */
+    int irqchip;           /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
+    uint32_t boot_cpu_id;  /* KVM_SET_BOOT_CPU_ID */
+    uint32_t dirty_manual; /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
+    void *slots;           /* slots.c's */
+    void *tdp;             /* tdp.c's */
+    void *irq;             /* irq.c's */
+    void *iobus;           /* iobus.c's */
+    void *backend;         /* the backend's */
 };
 
 #define KVM_IRQCHIP_NONE  0
@@ -208,10 +217,11 @@ struct kvm_vm {
 
 /* The requests another thread leaves a vCPU, in `requests`, which the run
  * loop answers before each entry. */
-#define KVM_REQ_EXIT         0x1u /* go back to the caller */
-#define KVM_REQ_EVENT        0x2u /* an event to inject */
-#define KVM_REQ_TRIPLE_FAULT 0x4u /* end in KVM_EXIT_SHUTDOWN */
-#define KVM_REQ_EOI_EXIT     0x8u /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
+#define KVM_REQ_EXIT         0x1u  /* go back to the caller */
+#define KVM_REQ_EVENT        0x2u  /* an event to inject */
+#define KVM_REQ_TRIPLE_FAULT 0x4u  /* end in KVM_EXIT_SHUTDOWN */
+#define KVM_REQ_EOI_EXIT     0x8u  /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
+#define KVM_REQ_TLB_FLUSH    0x10u /* the backend drops the VM's guest-physical translations */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -286,6 +296,10 @@ void kvm_start(void);
 /** Whether the caller runs in the address space that made `vm`; Linux
  * answers EIO to an ioctl of a VM or its vCPUs from any other. */
 int kvm_vm_caller_ok(struct kvm_vm *vm);
+
+/** The address space whose memory `vm`'s slots map, its maker's; NULL for
+ * a VM made by the kernel outside any process. */
+struct mm *kvm_vm_mm(struct kvm_vm *vm);
 
 /** Take a reference to `vm`. */
 void kvm_vm_get(struct kvm_vm *vm);
@@ -372,54 +386,116 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value);
  * not keep or a value it refuses. Marks KVM_PART_MSRS dirty. */
 int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value);
 
-/* slots.c: memory slots, replaced by 81-1b. */
+/* slots.c: the memory slots, each a range of the caller's memory. */
 
 /** The slot table of a new VM into `vm->slots`: 0 or -ENOMEM. */
 int kvm_slots_init(struct kvm_vm *vm);
 
-/** Free the slot table, unpinning what it pinned. */
+/** Free the slot table and each slot, taking their ranges off the change
+ * notice. After `kvm_tdp_free`. */
 void kvm_slots_free(struct kvm_vm *vm);
 
-/** KVM_SET_USER_MEMORY_REGION. */
+/**
+ * KVM_SET_USER_MEMORY_REGION, with Linux's checks and answers: a slot
+ * made, moved, its flags changed or deleted, while vCPUs run. What the
+ * guest-physical tables hold of a slot that moves, changes its flags or
+ * goes is dropped and every vCPU out of the guest before the call returns.
+ * 0; -EINVAL for an unknown flag, an address or size not page-aligned, a
+ * range past user space or the guest-physical width, a slot number past
+ * KVM_MEM_SLOTS, the deletion of a slot that does not exist, or a change of
+ * a slot's address, size or READONLY flag; -EEXIST for a new or moved slot
+ * that overlaps another; -ENOMEM.
+ */
 int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_region *r);
 
 /*
- * The slot that holds the guest-physical frame `gfn` of `vm`, for the
- * guest-physical tables, VFIO's mappings and the transport's buffers: 1
- * with the slot's first frame, its frames, its flags and the caller's
- * address of `gfn` in `*hva`, or 0 for a frame no slot holds. Under the
- * big lock; the answer holds until the lock is let go.
+ * A slot as its users see it: its first frame, its frames, its flags, its
+ * number, the caller's address of the frame asked for, and its dirty log,
+ * a bit for each page from `base_gfn` in 64-bit words, or NULL when it does
+ * not log.
  */
 struct kvm_slot_view {
     uint64_t base_gfn;
     uint64_t npages;
     uint32_t flags; /* KVM_MEM_* */
     uint32_t id;
-    uint64_t hva; /* the caller's address of `gfn` */
+    uint64_t hva;    /* the caller's address of the frame asked for */
+    uint64_t *dirty; /* the dirty log while KVM_MEM_LOG_DIRTY_PAGES is set */
 };
+
+/** The slot that holds the guest-physical frame `gfn` of `vm`, for the
+ * guest-physical tables, VFIO's mappings and the transport's buffers: 1
+ * with it in `*out`, or 0 for a frame no slot holds. Under the big lock;
+ * the answer holds until the lock is let go. */
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out);
 
+/** The slot numbered `id` of `vm`, with `hva` its first page's address: 1,
+ * or 0 when there is none. As `kvm_slot_find`. */
+int kvm_slot_get(struct kvm_vm *vm, uint32_t id, struct kvm_slot_view *out);
+
 /** The capabilities of slots.c: USER_MEMORY, DESTROY_MEMORY_REGION_WORKS,
- * JOIN_MEMORY_REGIONS_WORKS, READONLY_MEM, SYNC_MMU, NR_MEMSLOTS. */
+ * JOIN_MEMORY_REGIONS_WORKS, READONLY_MEM, SYNC_MMU, NR_MEMSLOTS and
+ * MANUAL_DIRTY_LOG_PROTECT2. */
 int32_t kvm_slots_check_extension(long cap);
 
-/* tdp.c: the guest-physical tables, replaced by 81-1b. */
+/* tdp.c: the guest-physical tables. */
 
-/** Make the tables of a new VM: 0 or -ENOMEM. */
+/** Make the tables of a new VM, an empty top table: 0 or -ENOMEM. */
 int kvm_tdp_init(struct kvm_vm *vm);
 
-/** Free them. */
+/** Free them, every table. */
 void kvm_tdp_free(struct kvm_vm *vm);
 
-/** Map the guest-physical frame `gfn` after a fault of the backend's,
- * with `write` for a write: 0, 1 for a frame no slot holds, which is MMIO,
- * or -errno. */
+/** The physical address of the top table of `vm`'s guest-physical tables,
+ * four levels in the backend's format, for EPTP or nCR3. */
+uint64_t kvm_tdp_root(struct kvm_vm *vm);
+
+/** The first guest frame past what the tables reach, by the host's
+ * physical width and their four levels. */
+uint64_t kvm_tdp_frames(void);
+
+/**
+ * Map the guest-physical frame `gfn` of `vm` after a fault of the
+ * backend's, `write` 1 for a write, in the current thread, which is a vCPU's
+ * and so in the VM's address space: the slot's page is brought in as the
+ * caller's own touch would bring it, and mapped writable when the slot,
+ * the caller's page and the dirty log allow, uncached under the guest's
+ * PAT for a device's page and write-back with the guest's PAT ignored for
+ * RAM, and as a 2 MiB page where the slot and the caller's pages allow.
+ * May sleep. 0; 1 for a frame no slot holds or a write to a read-only
+ * slot, which is MMIO; -EFAULT when the caller's page cannot be had;
+ * -ENOMEM.
+ */
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write);
 
-/* dirty.c: dirty logging, replaced by 81-1b. */
+/** Drop what the tables map of the `npages` frames from `gfn`, and get
+ * every vCPU out of the guest with its translations to drop
+ * (`kvm_tdp_flush`) when anything was mapped. Does not sleep. */
+void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
+
+/** Take the write right from the 4 KiB leaves of the frames `gfn` + i for
+ * each bit i of `mask`, for the dirty log, without a flush: whether any
+ * leaf changed. Does not sleep. */
+int kvm_tdp_protect(struct kvm_vm *vm, uint64_t gfn, uint64_t mask);
+
+/** Ask every vCPU of `vm` to drop its guest-physical translations before
+ * its next entry, and wait until none is in the guest, so that no
+ * processor uses a translation the tables no longer hold. Under the big
+ * lock, which no vCPU takes back while it waits; does not sleep. */
+void kvm_tdp_flush(struct kvm_vm *vm);
+
+/* dirty.c: dirty logging. */
 
 /** KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG, `request` naming which. */
 int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
+
+/** KVM_ENABLE_CAP of KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 on `vm`: 0, or
+ * -EINVAL for an option Linux does not take. */
+int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap);
+
+/** Mark the frame `gfn` of `vm` dirty in its slot's log, for a write of the
+ * kernel's own to guest memory; nothing when its slot does not log. */
+void kvm_dirty_mark(struct kvm_vm *vm, uint64_t gfn);
 
 /* irq.c: interrupt routing, irqfd and MSIs. */
 
