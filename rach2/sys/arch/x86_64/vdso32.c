@@ -21,7 +21,7 @@
 #if RACH2_IA32
 
 /* The router of a system call's frame and the return after it (isr.c). */
-void _isr_router(isr_params_t *params);
+void isr_router_locked(isr_params_t *params);
 void isr_leave(isr_params_t *params);
 
 /* The flags only `iretq` restores: TF, and RF, which `sysret` clears. */
@@ -516,11 +516,14 @@ uintptr_t ia32_vdso_sigreturn(int rt)
  */
 int ia32_fast_syscall(isr_params_t *p, int sysenter)
 {
-    struct mm *mm = current_proc ? current_proc->mm : NULL;
-    uintptr_t base = mm && mm->compat ? mm->vdso : 0;
-    uintptr_t landing = vdso32_at(base, vdso32_landing);
+    struct mm *mm;
+    uintptr_t base, landing;
     uint32_t ebp;
 
+    bkl_enter();
+    mm = current_proc ? current_proc->mm : NULL;
+    base = mm && mm->compat ? mm->vdso : 0;
+    landing = vdso32_at(base, vdso32_landing);
     p->rip = landing;
     if (sysenter) {
         p->rsp = (uint32_t)p->rbp;
@@ -528,10 +531,9 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
     if (copy_from_user(&ebp, (const void __user *)(uintptr_t)(uint32_t)p->rsp, sizeof(ebp)) != 0) {
         current_proc->orig_nr = (int32_t)(uint32_t)p->rax;
         p->rax = (uint64_t)(int64_t)-EFAULT;
-        bkl_enter();
     } else {
         p->rbp = ebp;
-        _isr_router(p);
+        isr_router_locked(p);
     }
     isr_leave(p);
     return p->rip == landing && landing <= 0xFFFFFFFFu && p->cs == GDT_USER_CODE32 &&

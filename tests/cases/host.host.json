@@ -676,6 +676,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vdso32",
+          "checks": "tests/host/vdso32_hosttest.c checks that both fast i386 entries hold one big lock before the saved-EBP user copy, on success and EFAULT",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ia32_signal",
           "checks": "tests/host/ia32_signal_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
