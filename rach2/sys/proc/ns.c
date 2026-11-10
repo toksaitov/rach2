@@ -17,10 +17,12 @@
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../io/anon.h"
+#include "../lib/idset.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../mm/paging.h"
 #include "../mm/usercopy.h"
 
 /* The first namespaces have the inode numbers Linux gives its first ones,
@@ -30,8 +32,20 @@
 /* The highest number a PID namespace other than the first gives out. */
 #define NS_PID_MAX 32768u
 
-/* The mount namespaces a mount's bit set has room for. */
-#define NS_MNT_MAX 32u
+/* The highest user.max_mnt_namespaces: INT_MAX, which a user namespace
+ * other than the first starts with. */
+#define NS_LIMIT_MAX 0x7FFFFFFF
+
+/* The stack of a thread on Linux, of whose count for the machine's memory
+ * the first user namespace's max_mnt is half, and the bounds of that count,
+ * as fork.c's set_max_threads takes them. */
+#if defined __x86_64__
+#define NS_THREAD_SIZE 16384u
+#else
+#define NS_THREAD_SIZE 8192u
+#endif
+#define NS_MIN_THREADS 20u
+#define NS_MAX_THREADS 0x3FFFFFFFu
 
 /* The open flag that marks a descriptor close-on-exec. */
 #define NS_O_CLOEXEC 02000000u
@@ -47,11 +61,17 @@
 int ns_overflowuid = NS_OVERFLOW_ID;
 int ns_overflowgid = NS_OVERFLOW_ID;
 
-struct userns init_userns = {
-    {1, 0xEFFFFFFDu, NS_USER, NULL}, NULL, 0, 0, 0, {{0, 0, 0xFFFFFFFFu}}, 1,
-    {{0, 0, 0xFFFFFFFFu}},           1,    0};
+struct userns init_userns = {{1, 0xEFFFFFFDu, NS_USER, NULL},
+                             NULL,
+                             0,
+                             0,
+                             0,
+                             {1, {{0, 0, 0xFFFFFFFFu}}, NULL, NULL},
+                             {1, {{0, 0, 0xFFFFFFFFu}}, NULL, NULL},
+                             0,
+                             NS_LIMIT_UNSET};
 struct pidns init_pidns = {{1, 0xEFFFFFFCu, NS_PID, NULL}, NULL, 0, 0, 1};
-struct mntns init_mntns = {{1, 0xF0000000u, NS_MNT, NULL}, 0};
+struct mntns init_mntns = {{1, 0xF0000000u, NS_MNT, NULL}, 0, 0, NULL, NULL};
 struct netns init_netns = {{1, 0xF0000098u, NS_NET, NULL}, NULL};
 struct utsns init_utsns = {{1, 0xEFFFFFFEu, NS_UTS, NULL}, "rach2", "(none)"};
 struct ipcns init_ipcns = {{1, 0xEFFFFFFFu, NS_IPC, NULL}};
@@ -63,8 +83,10 @@ static struct nsset init_nsset = {1,           &init_mntns, &init_netns,
 /* The inode number the next namespace made is given. */
 static uint32_t next_inum = NS_FIRST_DYNAMIC;
 
-/* The bits of the mount namespaces that exist, the first's bit 0. */
-static uint32_t mnt_bits = 1u;
+/* The ids of the mount namespaces that exist, the first's 0, and the list
+ * of those but the first. */
+static struct idset mnt_ids = {1u, NULL, 0, 1};
+static struct mntns *mnt_list;
 
 static const char *const kind_names[NS_KINDS] = {"user", "pid", "mnt", "net", "uts", "ipc"};
 
@@ -84,6 +106,30 @@ static void ns_get(struct ns_common *c)
     c->refs++;
 }
 
+/** Free the copies from the heap of the map `m`. */
+static void idmap_free(struct ns_idmap *m)
+{
+    kfree(m->forward);
+    kfree(m->reverse);
+    m->forward = m->reverse = NULL;
+}
+
+/** The end of the mount namespace `m`: its mounts go, then its id, which a
+ * namespace made meanwhile cannot take, and its place in the list. */
+static void mntns_gone(struct mntns *m)
+{
+    vfs_mntns_gone(m->id);
+    idset_del(&mnt_ids, m->id);
+    if (m->prev) {
+        m->prev->next = m->next;
+    } else {
+        mnt_list = m->next;
+    }
+    if (m->next) {
+        m->next->prev = m->prev;
+    }
+}
+
 void ns_put(struct ns_common *c)
 {
     if (!c || ns_first(c) || --c->refs != 0) {
@@ -91,14 +137,15 @@ void ns_put(struct ns_common *c)
     }
     switch (c->kind) {
     case NS_USER:
+        idmap_free(&((struct userns *)c)->uid_map);
+        idmap_free(&((struct userns *)c)->gid_map);
         ns_put(&((struct userns *)c)->parent->c);
         break;
     case NS_PID:
         ns_put(&((struct pidns *)c)->parent->c);
         break;
     case NS_MNT:
-        vfs_mntns_gone(((struct mntns *)c)->bit);
-        mnt_bits &= ~(1u << ((struct mntns *)c)->bit);
+        mntns_gone((struct mntns *)c);
         break;
     case NS_NET:
         net_ns_gone((struct netns *)c);
@@ -129,11 +176,6 @@ static void *ns_new(uint32_t size, int kind, struct userns *owner)
     c->owner = owner;
     ns_get(&owner->c);
     return c;
-}
-
-uint32_t mntns_live_bits(void)
-{
-    return mnt_bits;
 }
 
 struct userns *proc_userns(const process_t *p)
@@ -174,83 +216,123 @@ struct ipcns *proc_ipcns(const process_t *p)
 
 /* ---- ids ---- */
 
-int64_t ns_uid_to_kernel(const struct userns *ns, uint32_t id)
+/** Extent `i` of the map `m` in the order /proc/PID/uid_map lists them. */
+static const struct ns_extent *idmap_at(const struct ns_idmap *m, uint32_t i)
 {
-    uint32_t i;
+    return m->extents <= NS_BASE_EXTENTS ? &m->base[i] : &m->forward[i];
+}
+
+/**
+ * The extent of `m` that holds all the `count` ids from `id` in the
+ * namespace, or NULL when no one extent does, as Linux's map_id_range_down
+ * finds it: the extents in the order written, or by halves in the copy
+ * sorted by `first`.
+ */
+static const struct ns_extent *idmap_down(const struct ns_idmap *m, uint32_t id, uint32_t count)
+{
+    uint32_t last = id + count - 1u, lo = 0, hi = m->extents, i;
+    const struct ns_extent *e;
+
+    if (m->extents <= NS_BASE_EXTENTS) {
+        for (i = 0; i < m->extents; i++) {
+            e = &m->base[i];
+            if (id - e->first < e->count && last - e->first < e->count) {
+                return e;
+            }
+        }
+        return NULL;
+    }
+    while (lo < hi) {
+        i = lo + (hi - lo) / 2u;
+        e = &m->forward[i];
+        if (id < e->first) {
+            hi = i;
+        } else if (id - e->first >= e->count) {
+            lo = i + 1u;
+        } else {
+            return last - e->first < e->count ? e : NULL;
+        }
+    }
+    return NULL;
+}
+
+/** The extent of `m` that holds the kernel's id `kid`, or NULL, as Linux's
+ * map_id_up finds it: in the order written, or by halves in the copy
+ * sorted by `lower`. */
+static const struct ns_extent *idmap_up(const struct ns_idmap *m, uint32_t kid)
+{
+    uint32_t lo = 0, hi = m->extents, i;
+    const struct ns_extent *e;
+
+    if (m->extents <= NS_BASE_EXTENTS) {
+        for (i = 0; i < m->extents; i++) {
+            if (kid - m->base[i].lower < m->base[i].count) {
+                return &m->base[i];
+            }
+        }
+        return NULL;
+    }
+    while (lo < hi) {
+        i = lo + (hi - lo) / 2u;
+        e = &m->reverse[i];
+        if (kid < e->lower) {
+            hi = i;
+        } else if (kid - e->lower >= e->count) {
+            lo = i + 1u;
+        } else {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+/** The kernel's id of `id` in `ns` by the map `m`, or -1 for none. */
+static int64_t id_down(const struct userns *ns, const struct ns_idmap *m, uint32_t id)
+{
+    const struct ns_extent *e;
 
     if (ns == &init_userns) {
         return id;
     }
-    for (i = 0; i < ns->uid_extents; i++) {
-        if (id - ns->uid_map[i].first < ns->uid_map[i].count) {
-            return ns->uid_map[i].lower + (id - ns->uid_map[i].first);
-        }
+    e = idmap_down(m, id, 1u);
+    return e ? (int64_t)(e->lower + (id - e->first)) : -1;
+}
+
+/** What `ns` sees of the kernel's id `kid` by the map `m`, or `overflow`. */
+static uint32_t id_up(const struct userns *ns, const struct ns_idmap *m, uint32_t kid, int overflow)
+{
+    const struct ns_extent *e;
+
+    if (ns == &init_userns) {
+        return kid;
     }
-    return -1;
+    e = idmap_up(m, kid);
+    return e ? e->first + (kid - e->lower) : (uint32_t)overflow;
+}
+
+int64_t ns_uid_to_kernel(const struct userns *ns, uint32_t id)
+{
+    return id_down(ns, &ns->uid_map, id);
 }
 
 int64_t ns_gid_to_kernel(const struct userns *ns, uint32_t id)
 {
-    uint32_t i;
-
-    if (ns == &init_userns) {
-        return id;
-    }
-    for (i = 0; i < ns->gid_extents; i++) {
-        if (id - ns->gid_map[i].first < ns->gid_map[i].count) {
-            return ns->gid_map[i].lower + (id - ns->gid_map[i].first);
-        }
-    }
-    return -1;
+    return id_down(ns, &ns->gid_map, id);
 }
 
 uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t kid)
 {
-    uint32_t i;
-
-    if (ns == &init_userns) {
-        return kid;
-    }
-    for (i = 0; i < ns->uid_extents; i++) {
-        if (kid - ns->uid_map[i].lower < ns->uid_map[i].count) {
-            return ns->uid_map[i].first + (kid - ns->uid_map[i].lower);
-        }
-    }
-    return (uint32_t)ns_overflowuid;
+    return id_up(ns, &ns->uid_map, kid, ns_overflowuid);
 }
 
 uint32_t ns_gid_from_kernel(const struct userns *ns, uint32_t kid)
 {
-    uint32_t i;
-
-    if (ns == &init_userns) {
-        return kid;
-    }
-    for (i = 0; i < ns->gid_extents; i++) {
-        if (kid - ns->gid_map[i].lower < ns->gid_map[i].count) {
-            return ns->gid_map[i].first + (kid - ns->gid_map[i].lower);
-        }
-    }
-    return (uint32_t)ns_overflowgid;
-}
-
-/** Whether one of the `n` extents of `map` covers the kernel's id `kid`. */
-static int extent_has(const struct ns_extent *map, uint32_t n, uint32_t kid)
-{
-    uint32_t i;
-
-    for (i = 0; i < n; i++) {
-        if (kid - map[i].lower < map[i].count) {
-            return 1;
-        }
-    }
-    return 0;
+    return id_up(ns, &ns->gid_map, kid, ns_overflowgid);
 }
 
 int ns_ids_mapped(const struct userns *ns, uint32_t uid, uint32_t gid)
 {
-    return ns == &init_userns || (extent_has(ns->uid_map, ns->uid_extents, uid) &&
-                                  extent_has(ns->gid_map, ns->gid_extents, gid));
+    return ns == &init_userns || (idmap_up(&ns->uid_map, uid) && idmap_up(&ns->gid_map, gid));
 }
 
 uint32_t uid_seen(uint32_t kid)
@@ -310,8 +392,7 @@ static void put_col(char *out, int cap, int *at, uint32_t v)
 int ns_map_text(const struct userns *ns, int which, const process_t *reader, char *out, int cap)
 {
     const struct userns *own = proc_userns(reader);
-    const struct ns_extent *map = which == NS_MAP_GID ? ns->gid_map : ns->uid_map;
-    uint32_t extents = which == NS_MAP_GID ? ns->gid_extents : ns->uid_extents;
+    const struct ns_idmap *map = which == NS_MAP_GID ? &ns->gid_map : &ns->uid_map;
     uint32_t i;
     int at = 0;
 
@@ -327,11 +408,12 @@ int ns_map_text(const struct userns *ns, int which, const process_t *reader, cha
         out[at] = '\0';
         return at;
     }
-    for (i = 0; i < extents; i++) {
-        uint32_t lower = which == NS_MAP_GID ? ns_gid_from_kernel(own, map[i].lower)
-                                             : ns_uid_from_kernel(own, map[i].lower);
+    for (i = 0; i < map->extents; i++) {
+        const struct ns_extent *e = idmap_at(map, i);
+        uint32_t lower = which == NS_MAP_GID ? ns_gid_from_kernel(own, e->lower)
+                                             : ns_uid_from_kernel(own, e->lower);
 
-        put_col(out, cap, &at, map[i].first);
+        put_col(out, cap, &at, e->first);
         if (at < cap - 1) {
             out[at++] = ' ';
         }
@@ -339,7 +421,7 @@ int ns_map_text(const struct userns *ns, int which, const process_t *reader, cha
         if (at < cap - 1) {
             out[at++] = ' ';
         }
-        put_col(out, cap, &at, map[i].count);
+        put_col(out, cap, &at, e->count);
         if (at < cap - 1) {
             out[at++] = '\n';
         }
@@ -368,16 +450,15 @@ static int read_number(const char **p, const char *end, uint32_t *v)
     return digits > 0 && (*p >= end || **p < '0' || **p > '9');
 }
 
-/** Whether the extent of `count` ids from `first` in the namespace and
- * from the kernel's `klo` overlaps one of the `n` extents of `map`. */
-static int extent_overlaps(const struct ns_extent *map, int n, uint32_t first, uint32_t klo,
-                           uint32_t count)
+/** Whether the extent `e` overlaps one of the `n` extents of `map`, in
+ * the namespace's ids or in its parent's, as Linux's mappings_overlap. */
+static int extent_overlaps(const struct ns_extent *map, int n, const struct ns_extent *e)
 {
     int i;
 
     for (i = 0; i < n; i++) {
-        if ((first < map[i].first + map[i].count && map[i].first < first + count) ||
-            (klo < map[i].lower + map[i].count && map[i].lower < klo + count)) {
+        if ((e->first < map[i].first + map[i].count && map[i].first < e->first + e->count) ||
+            (e->lower < map[i].lower + map[i].count && map[i].lower < e->lower + e->count)) {
             return 1;
         }
     }
@@ -387,43 +468,29 @@ static int extent_overlaps(const struct ns_extent *map, int n, uint32_t first, u
 /**
  * Parse the lines of a map written to `text`, at most NS_EXTENTS of three
  * numbers each, the ids in the namespace, the ids in its parent and the
- * count, into `map`, with the parent's ids made the kernel's through
- * `parent`'s map. The number of extents, or -EINVAL for text of another
- * form, an empty or wrapping range or two that overlap, or -EPERM for
- * parent ids the parent does not map to one run of kernel ids.
+ * count, into `map`, of NS_EXTENTS entries, with the parent's ids as the
+ * parent names them. The number of extents, or -EINVAL for text of another
+ * form, an empty or wrapping range, two that overlap, or a line past
+ * NS_EXTENTS.
  */
-static int parse_map(const char *text, uint32_t len, const struct userns *parent, int gid,
-                     struct ns_extent *map)
+static int parse_map(const char *text, uint32_t len, struct ns_extent *map)
 {
     const char *p = text, *end = text + len;
     int n = 0;
 
     while (p < end) {
-        uint32_t first, lower, count;
-        int64_t klo, khi;
+        struct ns_extent e;
 
         if (*p == '\n') {
             p++;
             continue;
         }
-        if (n == NS_EXTENTS || !read_number(&p, end, &first) || !read_number(&p, end, &lower) ||
-            !read_number(&p, end, &count) || count == 0 || first + count - 1u < first ||
-            lower + count - 1u < lower) {
+        if (n == NS_EXTENTS || !read_number(&p, end, &e.first) || !read_number(&p, end, &e.lower) ||
+            !read_number(&p, end, &e.count) || e.count == 0 || e.first + e.count - 1u < e.first ||
+            e.lower + e.count - 1u < e.lower || extent_overlaps(map, n, &e)) {
             return -EINVAL;
         }
-        klo = gid ? ns_gid_to_kernel(parent, lower) : ns_uid_to_kernel(parent, lower);
-        khi = gid ? ns_gid_to_kernel(parent, lower + count - 1u)
-                  : ns_uid_to_kernel(parent, lower + count - 1u);
-        if (klo < 0 || khi < 0 || (uint32_t)khi - (uint32_t)klo != count - 1u) {
-            return -EPERM;
-        }
-        if (extent_overlaps(map, n, first, (uint32_t)klo, count)) {
-            return -EINVAL;
-        }
-        map[n].first = first;
-        map[n].lower = (uint32_t)klo;
-        map[n].count = count;
-        n++;
+        map[n++] = e;
         while (p < end && (*p == ' ' || *p == '\t')) {
             p++;
         }
@@ -432,6 +499,69 @@ static int parse_map(const char *text, uint32_t len, const struct userns *parent
         }
     }
     return n == 0 ? -EINVAL : n;
+}
+
+/** Make the parent's ids of the `n` extents of `map` the kernel's, through
+ * `parent`'s map `pmap`: 0, or -EPERM for an extent whose parent ids no one
+ * extent of `pmap` holds, as Linux refuses one. */
+static int map_lower(const struct userns *parent, const struct ns_idmap *pmap,
+                     struct ns_extent *map, int n)
+{
+    const struct ns_extent *e;
+    int i;
+
+    if (parent == &init_userns) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        e = idmap_down(pmap, map[i].lower, map[i].count);
+        if (!e) {
+            return -EPERM;
+        }
+        map[i].lower = e->lower + (map[i].lower - e->first);
+    }
+    return 0;
+}
+
+/** Sort the `n` extents of `map` by `first`, or by `lower` when `by_lower`
+ * is set; no two have a key in common. */
+static void extents_sort(struct ns_extent *map, uint32_t n, int by_lower)
+{
+    uint32_t i, j;
+
+    for (i = 1; i < n; i++) {
+        struct ns_extent e = map[i];
+        uint32_t key = by_lower ? e.lower : e.first;
+
+        for (j = i; j > 0 && (by_lower ? map[j - 1u].lower : map[j - 1u].first) > key; j--) {
+            map[j] = map[j - 1u];
+        }
+        map[j] = e;
+    }
+}
+
+/** Store the `n` extents of `map` in the empty map `dst`: in its record up
+ * to NS_BASE_EXTENTS, and past that in the two sorted copies of Linux's
+ * sort_idmaps. 0, or -ENOMEM, which leaves `dst` empty. */
+static int idmap_store(struct ns_idmap *dst, const struct ns_extent *map, uint32_t n)
+{
+    if (n <= NS_BASE_EXTENTS) {
+        k_memcpy(dst->base, map, sizeof(map[0]) * n);
+        dst->extents = n;
+        return 0;
+    }
+    dst->forward = kmalloc(sizeof(map[0]) * n);
+    dst->reverse = kmalloc(sizeof(map[0]) * n);
+    if (!dst->forward || !dst->reverse) {
+        idmap_free(dst);
+        return -ENOMEM;
+    }
+    k_memcpy(dst->forward, map, sizeof(map[0]) * n);
+    k_memcpy(dst->reverse, map, sizeof(map[0]) * n);
+    extents_sort(dst->forward, n, 0);
+    extents_sort(dst->reverse, n, 1);
+    dst->extents = n;
+    return 0;
 }
 
 /** Whether the `len` bytes of `text` begin with `word`. */
@@ -452,7 +582,7 @@ static int text_begins(const char *text, uint32_t len, const char *word)
  * for another word. */
 static int32_t setgroups_write(struct userns *ns, const char *text, uint32_t len)
 {
-    if (ns->gid_extents != 0) {
+    if (ns->gid_map.extents != 0) {
         return -EPERM;
     }
     if (text_begins(text, len, "deny")) {
@@ -465,12 +595,32 @@ static int32_t setgroups_write(struct userns *ns, const char *text, uint32_t len
     return -EINVAL;
 }
 
+/** Whether `writer`, which is not privileged in the parent of `ns`, may
+ * write the `n` extents of `map` to the map `which` of `ns`: one id, its
+ * own effective one, and a group only after setgroups was denied. */
+static int map_unprivileged_ok(const struct userns *ns, int which, const struct ns_extent *map,
+                               int n, const process_t *writer)
+{
+    int64_t k;
+
+    if (n != 1 || map[0].count != 1) {
+        return 0;
+    }
+    if (which == NS_MAP_GID) {
+        k = ns_gid_to_kernel(ns->parent, map[0].lower);
+        return k == (int64_t)writer->egid && userns_denies_setgroups(ns);
+    }
+    k = ns_uid_to_kernel(ns->parent, map[0].lower);
+    return k == (int64_t)writer->euid;
+}
+
 int32_t ns_map_write(struct userns *ns, int which, const char *text, uint32_t len,
                      const process_t *writer)
 {
-    struct ns_extent map[NS_EXTENTS];
-    int gid = which == NS_MAP_GID;
-    int n;
+    struct ns_idmap *dst = which == NS_MAP_GID ? &ns->gid_map : &ns->uid_map;
+    const struct ns_idmap *pmap = which == NS_MAP_GID ? &ns->parent->gid_map : &ns->parent->uid_map;
+    struct ns_extent *map;
+    int n, rc;
 
     if (ns == &init_userns || !ns_privileged(writer, ns)) {
         return -EPERM;
@@ -478,29 +628,30 @@ int32_t ns_map_write(struct userns *ns, int which, const char *text, uint32_t le
     if (which == NS_MAP_SETGROUPS) {
         return setgroups_write(ns, text, len);
     }
-    if ((gid ? ns->gid_extents : ns->uid_extents) != 0) {
+    if (dst->extents != 0) {
         return -EPERM;
     }
     if (proc_userns(writer) != ns && proc_userns(writer) != ns->parent) {
         return -EPERM;
     }
-    n = parse_map(text, len, ns->parent, gid, map);
-    if (n < 0) {
-        return n;
+    map = kmalloc(sizeof(*map) * NS_EXTENTS);
+    if (!map) {
+        return -ENOMEM;
     }
-    if (!ns_privileged(writer, ns->parent) &&
-        (n != 1 || map[0].count != 1 || map[0].lower != (gid ? writer->egid : writer->euid) ||
-         (gid && !userns_denies_setgroups(ns)))) {
-        return -EPERM;
+    n = parse_map(text, len, map);
+    rc = n < 0 ? n : 0;
+    if (rc == 0 && !ns_privileged(writer, ns->parent) &&
+        !map_unprivileged_ok(ns, which, map, n, writer)) {
+        rc = -EPERM;
     }
-    if (gid) {
-        k_memcpy(ns->gid_map, map, sizeof(map[0]) * (uint32_t)n);
-        ns->gid_extents = (uint32_t)n;
-    } else {
-        k_memcpy(ns->uid_map, map, sizeof(map[0]) * (uint32_t)n);
-        ns->uid_extents = (uint32_t)n;
+    if (rc == 0) {
+        rc = map_lower(ns->parent, pmap, map, n);
     }
-    return (int32_t)len;
+    if (rc == 0) {
+        rc = idmap_store(dst, map, (uint32_t)n);
+    }
+    kfree(map);
+    return rc != 0 ? rc : (int32_t)len;
 }
 
 int ns_setgroups_denied(const process_t *p)
@@ -675,6 +826,7 @@ static struct userns *userns_new(struct userns *parent, const process_t *p, int3
     ns->level = parent->level + 1u;
     ns->owner_uid = p->euid;
     ns->owner_gid = p->egid;
+    ns->max_mnt = NS_LIMIT_MAX;
     return ns;
 }
 
@@ -713,16 +865,81 @@ static void nsset_put(struct nsset *s)
     kfree(s);
 }
 
-/** A mount namespace with the next free bit; NULL with `*err` -ENOSPC when
- * NS_MNT_MAX exist, or -ENOMEM. Its mounts are those `from` has. */
-static struct mntns *mntns_new(const struct mntns *from, struct userns *owner, int32_t *err)
+int32_t ns_max_mnt(struct userns *ns)
+{
+    if (ns->max_mnt == NS_LIMIT_UNSET) {
+        uint64_t threads = (uint64_t)frame_total_count() * 4096u / (8u * NS_THREAD_SIZE);
+
+        threads = threads < NS_MIN_THREADS   ? NS_MIN_THREADS
+                  : threads > NS_MAX_THREADS ? NS_MAX_THREADS
+                                             : threads;
+        ns->max_mnt = (int32_t)(threads / 2u);
+    }
+    return ns->max_mnt;
+}
+
+int ns_set_max_mnt(struct userns *ns, int32_t v)
+{
+    if (v < 0) {
+        return -EINVAL;
+    }
+    ns->max_mnt = v;
+    return 0;
+}
+
+/** The live mount namespaces charged to `uid` in the user namespace `ns`
+ * (`mntns_charge_ok`). */
+static uint32_t mntns_charged(const struct userns *ns, uint32_t uid)
+{
+    const struct mntns *m;
+    uint32_t n = 0;
+
+    for (m = mnt_list; m; m = m->next) {
+        const struct userns *at = m->c.owner;
+        uint32_t u = m->maker_uid;
+
+        while (at != ns && at != &init_userns) {
+            u = at->owner_uid;
+            at = at->parent;
+        }
+        n += at == ns && u == uid;
+    }
+    return n;
+}
+
+/**
+ * Whether one more mount namespace, owned by `owner` and made by the
+ * kernel's uid `uid`, stays within each limit it counts against, as Linux's
+ * ucounts count it: against max_mnt of `owner` among those `uid` made in
+ * it, and then against max_mnt of each ancestor among those charged to the
+ * owner of the user namespace below it.
+ */
+static int mntns_charge_ok(struct userns *owner, uint32_t uid)
+{
+    struct userns *ns = owner;
+
+    for (;;) {
+        if (mntns_charged(ns, uid) >= (uint32_t)ns_max_mnt(ns)) {
+            return 0;
+        }
+        if (ns == &init_userns) {
+            return 1;
+        }
+        uid = ns->owner_uid;
+        ns = ns->parent;
+    }
+}
+
+/** A mount namespace with the lowest free id, owned by `owner` and made by
+ * the kernel's uid `uid`, whose mounts are those `from` has; NULL with
+ * `*err` -ENOSPC past a limit of `mntns_charge_ok`, or -ENOMEM. */
+static struct mntns *mntns_new(const struct mntns *from, struct userns *owner, uint32_t uid,
+                               int32_t *err)
 {
     struct mntns *ns;
-    uint32_t bit;
+    uint32_t id = idset_first_free(&mnt_ids);
 
-    for (bit = 1; bit < NS_MNT_MAX && (mnt_bits & (1u << bit)); bit++) {
-    }
-    if (bit == NS_MNT_MAX) {
+    if (!mntns_charge_ok(owner, uid)) {
         *err = -ENOSPC;
         return NULL;
     }
@@ -731,20 +948,32 @@ static struct mntns *mntns_new(const struct mntns *from, struct userns *owner, i
         *err = -ENOMEM;
         return NULL;
     }
-    ns->bit = bit;
-    mnt_bits |= 1u << bit;
-    vfs_mntns_copy(from->bit, bit);
+    if (idset_add(&mnt_ids, id) != 0 || vfs_mntns_copy(from->id, id) != 0) {
+        idset_del(&mnt_ids, id);
+        ns_put(&owner->c);
+        kfree(ns);
+        *err = -ENOMEM;
+        return NULL;
+    }
+    ns->id = id;
+    ns->maker_uid = uid;
+    ns->next = mnt_list;
+    if (mnt_list) {
+        mnt_list->prev = ns;
+    }
+    mnt_list = ns;
     return ns;
 }
 
 /**
  * A copy of the set `from` with new namespaces for the CLONE_NEW flags of
  * `flags` other than the user's, owned by `owner`; the new PID namespace is
- * made below `active`, the one `from` makes children in. NULL with `*err`
- * set on failure.
+ * made below `active`, the one `from` makes children in, and a new mount
+ * namespace is charged to the kernel's uid `uid`. NULL with `*err` set on
+ * failure.
  */
 static struct nsset *nsset_copy(const struct nsset *from, uint32_t flags, struct userns *owner,
-                                struct pidns *active, int32_t *err)
+                                struct pidns *active, uint32_t uid, int32_t *err)
 {
     struct nsset *s = kzalloc(sizeof(*s));
 
@@ -764,7 +993,7 @@ static struct nsset *nsset_copy(const struct nsset *from, uint32_t flags, struct
     ns_get(&s->ipc->c);
     ns_get(&s->pid_children->c);
     if (flags & CLONE_NEWNS) {
-        struct mntns *m = mntns_new(from->mnt, owner, err);
+        struct mntns *m = mntns_new(from->mnt, owner, uid, err);
 
         if (!m) {
             goto fail;
@@ -883,7 +1112,7 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)
         return -EPERM;
     }
     if (flags & (CLONE_NEW_ANY & ~CLONE_NEWUSER)) {
-        set = nsset_copy(set, flags, uns, set->pid_children, &err);
+        set = nsset_copy(set, flags, uns, set->pid_children, parent->euid, &err);
         if (!set) {
             return err;
         }
@@ -996,7 +1225,7 @@ long sys_unshare(isr_params_t *params)
             err = -EPERM;
         } else {
             set = nsset_copy(proc_nsset(self), flags, uns ? uns : proc_userns(self),
-                             proc_pidns(self), &err);
+                             proc_pidns(self), self->euid, &err);
         }
         if (!set) {
             if (uns) {
@@ -1277,7 +1506,7 @@ static int32_t setns_commit(process_t *self, struct ns_common *const ns[NS_KINDS
     int32_t err = 0;
     int k;
 
-    set = nsset_copy(proc_nsset(self), 0, proc_userns(self), proc_pidns(self), &err);
+    set = nsset_copy(proc_nsset(self), 0, proc_userns(self), proc_pidns(self), self->euid, &err);
     if (!set) {
         return err;
     }

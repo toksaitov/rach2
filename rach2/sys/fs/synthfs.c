@@ -239,10 +239,12 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * those open (fs/fd.h); whether exec randomizes a new image's layout
  * (mm/vm.h); net/ipv6/conf, whose entries follow the table's
  * (`synth_sys_ipv6`); TCP's keepalive defaults, black-hole detection and
- * give-up (tcp.h); and Linux 6.12's highest capability, 40, and FIPS mode,
- * off, which libcap and libgcrypt read. An entry whose text is empty is
- * procfs's, which reads its value when the file is opened. A new entry goes
- * at the end, so that the indices SYNTH_SYS_ names stay the same. */
+ * give-up (tcp.h); Linux 6.12's highest capability, 40, and FIPS mode,
+ * off, which libcap and libgcrypt read; and the mount namespaces a user may
+ * own, the limit of the reader's user namespace (proc/ns.h). An entry whose
+ * text is empty is procfs's, which reads its value when the file is opened.
+ * A new entry goes at the end, so that the indices SYNTH_SYS_ names stay
+ * the same. */
 static const struct {
     int parent;
     const char *name;
@@ -298,7 +300,9 @@ static const struct {
                {21, "tcp_retries2", ""},
                {6, "cap_last_cap", "40\n"},
                {0, "crypto", 0},
-               {50, "fips_enabled", "0\n"}};
+               {50, "fips_enabled", "0\n"},
+               {0, "user", 0},
+               {52, "max_mnt_namespaces", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -343,7 +347,7 @@ int synth_sys_writable(int entry)
            (entry >= SYNTH_SYS_INOTIFY_QUEUED && entry <= SYNTH_SYS_INOTIFY_WATCHES) ||
            (entry >= SYNTH_SYS_MAX_MAP_COUNT && entry <= SYNTH_SYS_OVERFLOWUID) ||
            entry == SYNTH_SYS_NR_OPEN || entry == SYNTH_SYS_FILE_MAX ||
-           entry == SYNTH_SYS_RANDOMIZE_VA_SPACE ||
+           entry == SYNTH_SYS_RANDOMIZE_VA_SPACE || entry == SYNTH_SYS_MAX_MNT_NAMESPACES ||
            (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2);
 }
 

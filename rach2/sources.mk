@@ -48,6 +48,7 @@ C_SRC_SHARED = kernel.c \
     sys/block/lag.c \
     sys/fs/bcache.c \
     sys/fs/vfs.c \
+    sys/fs/vfs_ns.c \
     sys/fs/sleeplock.c \
     sys/fs/nodelock.c \
     sys/fs/name.c \
@@ -227,6 +228,7 @@ C_SRC_SHARED = kernel.c \
     sys/lib/kfmt.c \
     sys/lib/kstd.c \
     sys/lib/kstring.c \
+    sys/lib/idset.c \
     sys/lib/spinlock.c \
     sys/lib/krandom.c \
     sys/lib/ksha256.c \

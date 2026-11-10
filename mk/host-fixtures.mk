@@ -133,7 +133,7 @@ endif
 
 $(HOST_VFS_PREFIX)/vfs_unmount-sources/unmount.inc: rach2/sys/fs/vfs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c streq vfs_mount_gone mount_base mount_permanent vfs_mount_shared unmount_abandoned unmount_target unmount_below_gone unmount_found vfs_do_umount unmount_bind unmount_mount
+	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c streq vfs_mount_gone mount_base mount_permanent unmount_abandoned unmount_target unmount_below_gone unmount_found vfs_do_umount unmount_bind unmount_mount
 
 $(HOST_VFS_PREFIX)/vfs_unmount: tests/system/fixtures/vfs_unmount.c $(HOST_VFS_PREFIX)/vfs_unmount-sources/unmount.inc $(HOST_EXTRACT) rach2/sys/fs/vfs.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_VFS_PREFIX)/vfs_unmount-sources

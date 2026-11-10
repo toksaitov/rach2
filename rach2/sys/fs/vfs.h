@@ -53,6 +53,7 @@
  */
 
 #include "../block/block.h"
+#include "../lib/idset.h"
 #include "../proc/wait_queue.h"
 #include "sleeplock.h"
 
@@ -389,10 +390,11 @@ struct vfs_mount {
     int write_error; /* the error of the first failed write, 0 for none */
     int claim;       /* the devfs claim on the source's sectors, or -1 */
     char source[32]; /* the source string mount(2) was given, for /proc/mounts */
-    /* The mount namespaces that do not see it, a bit each (proc/ns.h): a
+    /* The ids of the live mount namespaces that see it (proc/ns.h): a
      * mount made in one is seen there and in the namespaces made from it
-     * afterwards, and a mount of the boot by all. */
-    uint32_t ns_hidden;
+     * afterwards, and a mount of the boot by the first and those made from
+     * it. Its words are freed with the record (vfs_ns.c). */
+    struct idset ns_seen;
     /* For a bind mount, the mount whose file system it shows, never itself
      * a bind, and the path of its root within that file system; NULL and
      * empty for every other mount. A bind has that mount's type, device,
@@ -519,12 +521,33 @@ int vfs_mount_slots(void);
  * the readers of the whole table, /proc/mounts among them. */
 struct vfs_mount *vfs_mount_at(int idx);
 
+/* The mount namespaces' views of the table (vfs_ns.c). */
+
 /** Whether the caller's mount namespace sees the mount `m`. */
 int vfs_mount_seen(const struct vfs_mount *m);
 
 /** Whether a live mount namespace other than the caller's sees the mount
  * `m`, which a change made only for the caller's must then leave alone. */
 int vfs_mount_shared(const struct vfs_mount *m);
+
+/** Whether no live mount namespace sees the mount `m`. */
+int vfs_mount_unseen(const struct vfs_mount *m);
+
+/** Take the mount `m` from the caller's mount namespace's view. */
+void vfs_mount_hide(struct vfs_mount *m);
+
+/** Give the new record `m`, whose view is empty, the view of a mount made
+ * by the caller: its own mount namespace alone, or the first when no
+ * process runs, as at boot. 0, or -ENOMEM. */
+int vfs_mount_view_new(struct vfs_mount *m);
+
+/** Free the words of the view of `m`, whose record is let go of. */
+void vfs_mount_view_free(struct vfs_mount *m);
+
+/** Unmount the active mount `m` as umount2(2) without flags does, with
+ * nothing left to check, for the end of a mount namespace: 0, or the
+ * error that leaves `m` mounted (vfs.c). */
+int vfs_unmount_record(struct vfs_mount *m);
 
 /** Entry zero, the root of the mount table. */
 struct vfs_mount *vfs_root_mount(void);
