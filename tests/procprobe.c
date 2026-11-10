@@ -2198,7 +2198,8 @@ static void print_rootmount(const char *b, int n)
 }
 
 /** Check /proc/mounts, read into `buf` of `cap` bytes: it ends in a newline
- * and a whole row and has the six permanent mounts. Print the root's line. */
+ * and a whole row and has the seven permanent mounts. Print the root's
+ * line. */
 static void mounts_rows(char *buf, int cap)
 {
     int n = slurp("/proc/mounts", buf, cap);
@@ -2210,9 +2211,11 @@ static void mounts_rows(char *buf, int cap)
               "/proc/mounts names /dev/mqueue");
     } else {
         check("mounts-permanent",
-              lines_in(buf, n) == 6 &&
-                  contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec"),
-              "/proc/mounts names the root, /dev, /proc, /dev/shm, /sys and /dev/mqueue");
+              lines_in(buf, n) == 7 &&
+                  contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec") &&
+                  contains(buf, n, "debugfs /sys/kernel/debug debugfs rw,nosuid,nodev,noexec"),
+              "/proc/mounts names the root, /dev, /proc, /dev/shm, /sys, /dev/mqueue and "
+              "/sys/kernel/debug");
     }
     check("mounts-last-row", ends_with(buf, n, " 0 0\n"),
           "/proc/mounts's last line is a whole fstab row");
