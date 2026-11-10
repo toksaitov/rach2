@@ -23,6 +23,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 |---|---|---|---|---|
 | Linux takes a second panel's type from the VBT without checking its range | Linux 6.12 and 6.18 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linux-takes-a-second-panels-type-from-the-vbt-without-checking-its-range) |
 | Linux's graphics 7 command parser allows the timestamp of the video ring's old base | Linux 6.12 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linuxs-graphics-7-command-parser-allows-the-timestamp-of-the-video-rings-old-base) |
+| Linux refuses a timeline fence with the error of the entry before it | Linux 6.12 and 6.18 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linux-refuses-a-timeline-fence-with-the-error-of-the-entry-before-it) |
 | QEMU replaces TCO status bits on a write that should clear them | QEMU 10.0.0 and 11.1.3 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#qemu-replaces-tco-status-bits-on-a-write-that-should-clear-them) |
 | BusyBox uses a freed set-id configuration | BusyBox 1.36.1 | 19 | unreported | [19-busybox-first/upstream.md](19-busybox-first/upstream.md#busybox-uses-a-freed-set-id-configuration) |
 | termbox2 misspells its Windows unsupported message | termbox2 2.7.0-dev | 27 | unreported | [27-prose/upstream.md](27-prose/upstream.md#termbox2-misspells-its-windows-unsupported-message) |

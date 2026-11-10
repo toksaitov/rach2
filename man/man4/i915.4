@@ -486,6 +486,18 @@ returns a sync file in the upper half of
 and each syncobj marked
 .Dv I915_EXEC_FENCE_SIGNAL
 takes the batch's fence.
+Under
+.Dv I915_EXEC_USE_EXTENSIONS ,
+.Fa cliprects_ptr
+holds a chain of extensions instead of the fence array, of which
+.Dv DRM_I915_GEM_EXECBUFFER_EXT_TIMELINE_FENCES
+gives syncobjs with a point each, 0 for a binary one: the batch is
+ordered after the fence of each point it names, a point already signalled
+and gone is passed over, and a point marked
+.Dv I915_EXEC_FENCE_SIGNAL
+is added to its timeline with the batch's fence.
+As on Linux, the batch is also ordered after the fence of a syncobj
+named with neither flag, and of one to signal.
 .Dv I915_EXEC_GEN7_SOL_RESET
 clears the four streamout write offsets on the render ring.
 .Pp
@@ -495,7 +507,9 @@ for a bad flag, count, offset, alignment, relocation or engine, for
 .Dv I915_EXEC_FENCE_IN
 with
 .Dv I915_EXEC_FENCE_SUBMIT ,
-for any extension, since timeline fences are not served, and for
+for an unknown extension, extensions with the fence array, a syncobj to
+wait for with no fence or at a point its timeline has not reached, a
+timeline point both waited for and signalled, and for
 .Dv I915_EXEC_GEN7_SOL_RESET
 on the blitter;
 .Er ENOENT

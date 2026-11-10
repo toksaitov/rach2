@@ -56,12 +56,19 @@ struct eb_vma {
     uint32_t flags; /* the entry's EXEC_OBJECT_ flags and the EB_ ones */
 };
 
-/* A syncobj of I915_EXEC_FENCE_ARRAY, with a reference: the fence it held,
- * with a reference, to wait for, and whether to signal it. */
+/*
+ * A syncobj of the fence array or the timeline fences, with a reference:
+ * the fence of its point, with a reference, that the request waits for,
+ * or NULL; its I915_EXEC_FENCE_ flags; the point, 0 for a binary syncobj;
+ * and for a point to signal on a timeline, the chain record made for it,
+ * which the syncobj takes when the request is added.
+ */
 struct eb_fence {
     struct drm_syncobj *syncobj;
     struct dma_fence *fence;
     uint32_t flags;
+    uint64_t point;
+    struct dma_fence_chain *chain;
 };
 
 /*
@@ -700,7 +707,8 @@ static int32_t eb_relocate(struct eb *eb)
  * Fences
  */
 
-/** Drop the call's syncobjs and the fences they held. */
+/** Drop the call's syncobjs, the fences they held and the chain records
+ * no syncobj took. */
 static void eb_fences_put(struct eb *eb)
 {
     uint32_t i;
@@ -708,6 +716,7 @@ static void eb_fences_put(struct eb *eb)
     for (i = 0; i < eb->nfences; i++) {
         dma_fence_put(eb->fences[i].fence);
         drm_syncobj_put(eb->fences[i].syncobj);
+        kfree(eb->fences[i].chain);
     }
     kfree(eb->fences);
     eb->fences = 0;
@@ -715,10 +724,44 @@ static void eb_fences_put(struct eb *eb)
 }
 
 /**
- * Take the syncobjs of I915_EXEC_FENCE_ARRAY, as Linux's add_fence_array
- * and add_timeline_fence at point 0: each must exist; one to wait for
- * must hold a fence unless it is also signalled, and its fence is kept;
- * one with neither flag is checked and then left.
+ * Make room for `n` more syncobjs after the call's, as Linux's krealloc of
+ * the array, after checking that `n` entries of `each` bytes at the user
+ * address `user` fit the address space and are the program's.
+ *
+ * @return 0; -EINVAL for too many entries; -EFAULT; -ENOMEM.
+ */
+static int32_t eb_fences_grow(struct eb *eb, uint64_t n, uint64_t user, size_t each)
+{
+    struct eb_fence *f;
+    uint64_t total = (uint64_t)eb->nfences + n;
+
+    if (n > (uint64_t)(uintptr_t)-1 / each ||
+        total > (uint64_t)((size_t)-1 / sizeof(struct eb_fence))) {
+        return -EINVAL;
+    }
+    if (user > (uint64_t)(uintptr_t)-1 || !user_range_ok((uintptr_t)user, (size_t)n * each)) {
+        return -EFAULT;
+    }
+    /* More than `nfences` counts would take 160 GiB, which no heap gives. */
+    if (total > 0xffffffffu) {
+        return -ENOMEM;
+    }
+    f = (struct eb_fence *)kzalloc((size_t)total * sizeof(struct eb_fence));
+    if (!f) {
+        return -ENOMEM;
+    }
+    if (eb->nfences) {
+        k_memcpy(f, eb->fences, (size_t)eb->nfences * sizeof(struct eb_fence));
+    }
+    kfree(eb->fences);
+    eb->fences = f;
+    return 0;
+}
+
+/**
+ * Take the syncobjs of I915_EXEC_FENCE_ARRAY, as Linux's add_fence_array:
+ * each must exist, and one to wait for, whether or not it also signals,
+ * must hold a fence, which is kept.
  *
  * @return 0; -EINVAL for too many entries, an unknown flag or a fence to
  *         wait for that is not there; -EFAULT; -ENOENT for no such
@@ -730,20 +773,14 @@ static int32_t eb_fence_array(struct eb *eb)
     uint64_t user = eb->args->cliprects_ptr;
     uint32_t n = eb->args->num_cliprects, i;
     struct eb_fence *f;
+    int32_t err;
 
     if (!(eb->args->flags & I915_EXEC_FENCE_ARRAY) || n == 0) {
         return 0;
     }
-    if ((uint64_t)n * sizeof(uf) > (uint64_t)(uintptr_t)-1 ||
-        (uint64_t)n * sizeof(struct eb_fence) > (size_t)-1) {
-        return -EINVAL;
-    }
-    if (user > (uint64_t)(uintptr_t)-1 || !user_range_ok((uintptr_t)user, (size_t)n * sizeof(uf))) {
-        return -EFAULT;
-    }
-    eb->fences = (struct eb_fence *)kzalloc((size_t)n * sizeof(struct eb_fence));
-    if (!eb->fences) {
-        return -ENOMEM;
+    err = eb_fences_grow(eb, n, user, sizeof(uf));
+    if (err < 0) {
+        return err;
     }
     for (i = 0; i < n; i++, user += sizeof(uf)) {
         if (copy_from_user(&uf, EB_USER_PTR(user), sizeof(uf)) != 0) {
@@ -758,31 +795,129 @@ static int32_t eb_fence_array(struct eb *eb)
             return -ENOENT;
         }
         f->flags = uf.flags;
-        if ((uf.flags & I915_EXEC_FENCE_WAIT) && f->syncobj->fence) {
-            f->fence = dma_fence_get(f->syncobj->fence);
-        }
         eb->nfences++;
-        if ((uf.flags & I915_EXEC_FENCE_WAIT) && !(uf.flags & I915_EXEC_FENCE_SIGNAL) &&
-            !f->fence) {
-            return -EINVAL;
-        }
-        if (!(uf.flags & (I915_EXEC_FENCE_WAIT | I915_EXEC_FENCE_SIGNAL))) {
-            drm_syncobj_put(f->syncobj);
-            f->syncobj = 0;
-            eb->nfences--;
+        if (uf.flags & I915_EXEC_FENCE_WAIT) {
+            if (!f->syncobj->fence) {
+                return -EINVAL;
+            }
+            f->fence = dma_fence_get(f->syncobj->fence);
         }
     }
     return 0;
 }
 
-/* The call's extensions, of which Linux has one, the timeline fences,
- * which 78-11a brings; until then a chain that names it is refused. */
-static const i915_ext_fn eb_extensions[] = {0};
+/**
+ * Take one syncobj of the timeline fences at `point`, as an entry of
+ * Linux's add_timeline_fence_array. The request waits for the fence of the
+ * point whenever the syncobj holds one, whatever the flags; for a point to
+ * signal that the timeline has not reached, it waits for the newest. A
+ * point to wait for that has signalled and gone is left out. A timeline
+ * point to signal gets its chain record now, since the add that takes it
+ * cannot fail.
+ *
+ * @return 0; -ENOENT for no such syncobj; -EINVAL for a fence to wait for
+ *         that is not there, a point the timeline has not reached, or a
+ *         timeline point both waited for and signalled; -ENOMEM.
+ */
+static int32_t eb_timeline_fence(struct eb *eb, uint32_t handle, uint64_t point, uint32_t flags)
+{
+    struct eb_fence *f = &eb->fences[eb->nfences];
+    struct drm_syncobj *s = drm_syncobj_find(eb->file, handle);
+    struct dma_fence *fence;
+    int32_t err;
+
+    if (!s) {
+        return -ENOENT;
+    }
+    fence = dma_fence_get(s->fence);
+    if (!fence && flags && !(flags & I915_EXEC_FENCE_SIGNAL)) {
+        drm_syncobj_put(s);
+        return -EINVAL;
+    }
+    if (fence && dma_fence_chain_find_seqno(&fence, point) != 0 &&
+        !(flags & I915_EXEC_FENCE_SIGNAL)) {
+        dma_fence_put(fence);
+        drm_syncobj_put(s);
+        return -EINVAL;
+    }
+    if (!fence && !(flags & I915_EXEC_FENCE_SIGNAL)) {
+        drm_syncobj_put(s);
+        return 0;
+    }
+    if (point != 0 && (flags & I915_EXEC_FENCE_SIGNAL)) {
+        f->chain = (flags & I915_EXEC_FENCE_WAIT) ? 0 : dma_fence_chain_alloc();
+        if (!f->chain) {
+            err = (flags & I915_EXEC_FENCE_WAIT) ? -EINVAL : -ENOMEM;
+            dma_fence_put(fence);
+            drm_syncobj_put(s);
+            return err;
+        }
+    }
+    f->syncobj = s;
+    f->fence = fence;
+    f->flags = flags;
+    f->point = point;
+    eb->nfences++;
+    return 0;
+}
+
+/**
+ * DRM_I915_GEM_EXECBUFFER_EXT_TIMELINE_FENCES, Linux's
+ * parse_timeline_fences: `fence_count` syncobjs at `handles_ptr`, each
+ * with its point at `values_ptr`, taken after those of any extension
+ * before it in the chain.
+ *
+ * @return 0; the errors of `eb_fences_grow` and `eb_timeline_fence`;
+ *         -EINVAL for an unknown flag; -EFAULT.
+ */
+static int32_t eb_ext_timeline_fences(uintptr_t ext, void *data)
+{
+    struct eb *eb = (struct eb *)data;
+    struct drm_i915_gem_execbuffer_ext_timeline_fences t;
+    struct drm_i915_gem_exec_fence uf;
+    uint64_t i, point;
+    int32_t err;
+
+    if (copy_from_user(&t, EB_USER_PTR(ext), sizeof(t)) != 0) {
+        return -EFAULT;
+    }
+    if (t.fence_count == 0) {
+        return 0;
+    }
+    err = eb_fences_grow(eb, t.fence_count, t.handles_ptr, sizeof(uf));
+    if (err < 0) {
+        return err;
+    }
+    if (t.values_ptr > (uint64_t)(uintptr_t)-1 ||
+        !user_range_ok((uintptr_t)t.values_ptr, (size_t)t.fence_count * sizeof(point))) {
+        return -EFAULT;
+    }
+    for (i = 0; i < t.fence_count; i++) {
+        if (copy_from_user(&uf, EB_USER_PTR(t.handles_ptr + i * sizeof(uf)), sizeof(uf)) != 0) {
+            return -EFAULT;
+        }
+        if (uf.flags & __I915_EXEC_FENCE_UNKNOWN_FLAGS) {
+            return -EINVAL;
+        }
+        if (copy_from_user(&point, EB_USER_PTR(t.values_ptr + i * sizeof(point)), sizeof(point)) !=
+            0) {
+            return -EFAULT;
+        }
+        err = eb_timeline_fence(eb, uf.handle, point, uf.flags);
+        if (err < 0) {
+            return err;
+        }
+    }
+    return 0;
+}
+
+/* The call's extensions, Linux's execbuf_extensions. */
+static const i915_ext_fn eb_extensions[] = {eb_ext_timeline_fences};
 
 /**
  * Walk I915_EXEC_USE_EXTENSIONS's chain, which `cliprects_ptr` holds, as
  * Linux's parse_execbuf2_extensions: not with a fence array or cliprects.
- * 0, -EINVAL, -E2BIG or -EFAULT.
+ * 0, -EINVAL, -E2BIG, -EFAULT or an extension's error.
  */
 static int32_t eb_parse_extensions(struct eb *eb)
 {
@@ -792,7 +927,8 @@ static int32_t eb_parse_extensions(struct eb *eb)
     if ((eb->args->flags & I915_EXEC_FENCE_ARRAY) || eb->args->num_cliprects != 0) {
         return -EINVAL;
     }
-    return i915_user_extensions(eb->args->cliprects_ptr, eb_extensions, 0, eb);
+    return i915_user_extensions(eb->args->cliprects_ptr, eb_extensions,
+                                sizeof(eb_extensions) / sizeof(eb_extensions[0]), eb);
 }
 
 /**
@@ -823,15 +959,24 @@ static int32_t eb_await_fences(struct eb *eb, struct i915_request *rq, struct dm
     return 0;
 }
 
-/** Give each syncobj of the array to signal the request's fence, as
- * Linux's signal_fence_array. */
+/** Give each syncobj to signal the request's fence, as Linux's
+ * signal_fence_array: a timeline's as a new point, whose chain record it
+ * takes, a binary one's in place of its fence. */
 static void eb_signal_fences(struct eb *eb, struct i915_request *rq)
 {
+    struct eb_fence *f;
     uint32_t i;
 
     for (i = 0; i < eb->nfences; i++) {
-        if (eb->fences[i].flags & I915_EXEC_FENCE_SIGNAL) {
-            drm_syncobj_replace_fence(eb->fences[i].syncobj, &rq->fence.base);
+        f = &eb->fences[i];
+        if (!(f->flags & I915_EXEC_FENCE_SIGNAL)) {
+            continue;
+        }
+        if (f->chain) {
+            drm_syncobj_add_point(f->syncobj, f->chain, &rq->fence.base, f->point);
+            f->chain = 0;
+        } else {
+            drm_syncobj_replace_fence(f->syncobj, &rq->fence.base);
         }
     }
 }

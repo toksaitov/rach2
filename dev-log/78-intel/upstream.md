@@ -34,3 +34,14 @@ Each entry follows [the upstream fault format](../upstream.md).
 * Rach2: nothing; `rach2/sys/drm/i915/i915_cmd_parser.c` keeps Linux's tables, since its parser must judge every batch as Linux's does, in the commit that ports them.
 * Status: unreported.
 * Next: find what 0x4358 is on graphics 7 from Intel's register reference, check current upstream's tables, and propose `GEN6_BSD_RING_BASE` for graphics 7, keeping 0x4358 only if a user of it is found.
+
+## Linux refuses a timeline fence with the error of the entry before it
+
+* Project: Linux 6.12 and 6.18, `drivers/gpu/drm/i915/gem/i915_gem_execbuffer.c` from the corresponding upstream Git tags, the same at these lines in both. No source archive is pinned by this task.
+* Fails: `add_timeline_fence_array` declares `err` once, at line 2807, before its loop over the entries, and sets it only for an entry whose syncobj holds a fence, at line 2875, from `dma_fence_chain_find_seqno`. An entry marked `I915_EXEC_FENCE_SIGNAL` at a point its timeline has not reached, the usual way to signal a new point, leaves `err` at -EINVAL and goes on. A later entry of the same call whose syncobj holds no fence and whose flags are 0 skips line 2866's check and line 2875, and line 2877 then refuses the whole call with the earlier entry's -EINVAL, where the same entry alone is passed over.
+* Found: 2026-11-10 in a worker's clone under WSL, milestone 78, while porting the timeline fences of EXECBUFFER2 for task 78-11a.
+* Reproduction: not run on Linux. EXECBUFFER2 with `I915_EXEC_USE_EXTENSIONS` and one timeline extension of two entries: a timeline syncobj marked SIGNAL at a point above its newest, then a new syncobj with no fence and flags 0. Linux should answer EINVAL; without the first entry it answers 0.
+* Evidence: [Linux 6.12's add_timeline_fence_array](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/gem/i915_gem_execbuffer.c#L2807) and [Linux 6.18's](https://github.com/torvalds/linux/blob/v6.18/drivers/gpu/drm/i915/gem/i915_gem_execbuffer.c#L2807). `tests/host/i915_exec_hosttest.c`, row `timeline: an empty syncobj with neither flag after a new point`, checks that Rach2 passes the entry over.
+* Rach2: `rach2/sys/drm/i915/i915_gem_execbuffer.c`, `eb_timeline_fence`, judges each entry by its own lookup, in the commit that adds the timeline fences. Mesa sets WAIT or SIGNAL on every entry, so no known program sees the difference.
+* Status: unreported.
+* Next: check current upstream's loop, show the refusal with the two-entry call above on a machine with i915, and propose moving `err` into the loop, initialised to 0.
