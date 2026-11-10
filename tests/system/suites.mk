@@ -2000,19 +2000,25 @@ build/tests/cases/gnu/pi-futex.c: tests/musl/pifutexmusl.c
 	cp $< $@
 
 # `tests/run assign`: a NIC assigned to a Debian guest through VT-d and VFIO,
-# DMA and MSI isolation under host traffic, and release after a killed guest.
+# DMA and MSI isolation under host traffic, release after a killed guest, and
+# the Intel driver's function given to a guest and taken back.
 ASSIGN_DIR = build/tests/cases/assign
 $(ASSIGN_DIR)/initrd: tests/assign/mkguest.sh tests/assign/guest-init \
+                      tests/assign/grub.cfg tests/assign/guest.txt \
                       tests/kvm/guests/debian.txt build/tools/wifi/mkcpio $(SHA256TOOL)
 	sh tests/assign/mkguest.sh $(@D)
+# The guest's own disk comes with its initramfs, from the same script.
+$(ASSIGN_DIR)/grub.img: $(ASSIGN_DIR)/initrd
+	@test -f $@ || sh tests/assign/mkguest.sh $(@D)
 $(ASSIGN_DIR)/edu: tests/assign/edu.c rach2/sys/vfio/vfio_abi.h $(LIBC_STAMP)
 	@mkdir -p $(@D) build/tmp
 	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
 	    -static -Wl,-z,noexecstack $< -o $@
-$(ASSIGN_DIR)/assign.tar: tests/assign/run.sh $(ASSIGN_DIR)/initrd $(ASSIGN_DIR)/edu \
+$(ASSIGN_DIR)/assign.tar: tests/assign/run.sh tests/assign/gpu.sh $(ASSIGN_DIR)/initrd \
+                        $(ASSIGN_DIR)/grub.img $(ASSIGN_DIR)/edu \
                         $(KVM_GUEST_DIR)/vmlinuz tests/kvm/kvm-boot.sh
-	tar -cf $@.tmp -C tests assign/run.sh kvm/kvm-boot.sh \
-	    -C $(CURDIR)/$(ASSIGN_DIR)/.. assign/initrd assign/edu \
+	tar -cf $@.tmp -C tests assign/run.sh assign/gpu.sh kvm/kvm-boot.sh \
+	    -C $(CURDIR)/$(ASSIGN_DIR)/.. assign/initrd assign/grub.img assign/edu \
 	    -C $(CURDIR)/build/kvm/guests/debian vmlinuz
 	mv $@.tmp $@
 $(ASSIGN_DIR)/assign.ext2: $(ASSIGN_DIR)/assign.tar

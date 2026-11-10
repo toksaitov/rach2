@@ -115,6 +115,13 @@
 #define FAKE_RP_STATE_CAP 0x00040414u
 #define FAKE_PCODE_DDCC   0x00000a00u
 
+/* MCH_SSKPD's memory latencies as the Lenovo's pcode leaves them (Linux's
+ * i915_pri_wm_latency: 20, 4, 36, 90 and 160). With none the watermarks'
+ * check passes no commit, as on Linux, the one that turns every pipe off
+ * at the driver's release among them. */
+#define FAKE_SSKPD_LO (90u << 20 | 36u << 12 | 4u << 4)
+#define FAKE_SSKPD_HI (20u << 24 | 160u)
+
 /* The GT FIFO's free entries, always. */
 #define FAKE_FIFO_ENTRIES 64u
 
@@ -1346,6 +1353,8 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
     }
     R(f, GEN6_RP_STATE_CAP) = FAKE_RP_STATE_CAP;
     R(f, GEN6_RPSTAT1) = ((FAKE_RP_STATE_CAP >> 16) & 0xffu) << HSW_CAGF_SHIFT;
+    R(f, MCH_SSKPD) = FAKE_SSKPD_LO;
+    R(f, MCH_SSKPD_HI) = FAKE_SSKPD_HI;
     fake_reset(f, GEN6_GRDOM_FULL);
     f->light = 1;
     hw->ops = &fake_ops;
