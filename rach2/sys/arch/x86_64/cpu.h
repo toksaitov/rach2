@@ -123,6 +123,13 @@ typedef struct cpu_regs cpu_regs_t;
  * over. */
 #define SYSCALL_INSN_LEN 2u
 
+/* restart_syscall's number, x86-64's 219, or i386's 0 for a compat call. */
+#if RACH2_IA32
+#define SC_RESTART_NR(p) (SC_COMPAT(p) ? 0u : 219u)
+#else
+#define SC_RESTART_NR(p) 219u
+#endif
+
 #define FRAME_PC(p)   ((p)->rip)
 #define FRAME_SP(p)   ((p)->rsp)
 #define FRAME_USER(p) (((p)->cs & 3u) == 3u)

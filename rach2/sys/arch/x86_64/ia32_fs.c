@@ -689,14 +689,27 @@ int ia32_get_timespec(uintptr_t u, long ts[2])
 /* The kinds of timeout of the select calls. */
 enum { SEL_TIMEVAL, SEL_TIMESPEC, SEL_TIMESPEC64 };
 
+/** Give the time left, which the native call wrote to `ts`, back to the
+ * timeout at `ut`, of the kind `kind`, unless it was `zero`, as
+ * `poll_left_out` does; returns `rc`, the call's result. */
+static long select_left_out(long rc, uintptr_t ut, int kind, int zero, const long ts[2])
+{
+    int form = kind == SEL_TIMEVAL ? POLL_LEFT_USEC : kind == SEL_TIMESPEC64 ? POLL_LEFT_WIDE : 0;
+
+    return poll_left_out((int32_t)rc, ut, form, zero, ts[0],
+                         kind == SEL_TIMEVAL ? ts[1] * 1000L : ts[1]);
+}
+
 /**
  * The body of the select calls: the descriptors below `nfds` set in the
  * i386 fd_sets at `ur`, `uw` and `ue`, each 0 for none, the timeout at `ut`
  * of the kind `kind`, 0 for none, and for pselect6 (`usig` not 0) the
  * address of its sixth argument. The bits are counted as the x86-64 handler
  * counts them: `nfds` is cut to the size of the descriptor table, at least
- * 64 (`select_common` in io/poll.c). Returns as the x86-64 handler does,
- * -EFAULT for a set, timeout or argument that cannot be read or written.
+ * 64 (`select_common` in io/poll.c). The time left goes back to the
+ * timeout in its own form (`poll_left_out`). Returns as the x86-64 handler
+ * does, -EFAULT for a set, timeout or argument that cannot be read or
+ * written.
  */
 static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
                         uintptr_t ut, int kind, uintptr_t usig)
@@ -766,8 +779,11 @@ static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t
         ksig = KPTR(b->sigarg);
     }
     if (rc == 0) {
+        int zero = b->ts[0] == 0 && b->ts[1] == 0;
+
         rc = ia32_native(params, kind == SEL_TIMEVAL ? sys__newselect : sys_pselect6, b, size,
                          (unsigned long)nfds, kset[0], kset[1], kset[2], kts, ksig);
+        rc = select_left_out(rc, ut, kind, zero, b->ts);
     }
     for (i = 0; rc >= 0 && i < 3; i++) {
         const uint8_t *set = (const uint8_t *)b->words + (uint32_t)i * kbytes;
@@ -825,9 +841,9 @@ long compat_sys_pselect6_time64(isr_params_t *params)
  * both, their count, the timeout, the mask and its size. */
 static long ppoll_kind(isr_params_t *params, int kind)
 {
-    long ts[2];
+    long ts[2], ret;
     uintptr_t ut = UPTR(SC_ARG(params, 2));
-    int rc;
+    int rc, zero;
 
     if (!ut) {
         return ia32_native(params, sys_ppoll, NULL, 0, UPTR(SC_ARG(params, 0)), SC_ARG(params, 1),
@@ -837,8 +853,12 @@ static long ppoll_kind(isr_params_t *params, int kind)
     if (rc != 0) {
         return rc;
     }
-    return ia32_native(params, sys_ppoll, ts, sizeof(ts), UPTR(SC_ARG(params, 0)),
-                       SC_ARG(params, 1), KPTR(ts), UPTR(SC_ARG(params, 3)), SC_ARG(params, 4), 0);
+    zero = ts[0] == 0 && ts[1] == 0;
+    ret = ia32_native(params, sys_ppoll, ts, sizeof(ts), UPTR(SC_ARG(params, 0)), SC_ARG(params, 1),
+                      KPTR(ts), UPTR(SC_ARG(params, 3)), SC_ARG(params, 4), 0);
+    /* The time left the native call wrote to the copy goes back. */
+    return poll_left_out((int32_t)ret, ut, kind == SEL_TIMESPEC64 ? POLL_LEFT_WIDE : 0, zero, ts[0],
+                         ts[1]);
 }
 
 /** ppoll (309): its timeout an i386 timespec. */

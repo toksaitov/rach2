@@ -135,6 +135,17 @@ static uint64_t ts_tick(const struct poll_timespec *ts, int *set)
     return d.set ? d.tick : 0;
 }
 
+/** The deadline tick of a `select` of `tv`, or 0, with `*set` whether it has
+ * one. */
+static uint64_t tv_tick(const struct poll_timeval *tv, int *set)
+{
+    struct poll_deadline d;
+
+    tv_deadline(tv, &d);
+    *set = d.set;
+    return d.set ? d.tick : 0;
+}
+
 /* The milliseconds and the nanoseconds of `n` ticks. */
 #define TICKS_MS(n) ((int)((n) * (1000u / TICK_HZ)))
 #define TICKS_NS(n) ((long)((n) * TICK_NS))
@@ -200,7 +211,7 @@ static void pending_tick(void)
           "a zero ppoll timeout begun with a tick pending ends at once");
     tv.tv_sec = 0;
     tv.tv_usec = 0;
-    poll_ms_deadline(tv_to_ms(&tv), &d);
+    tv_deadline(&tv, &d);
     CHECK(d.tick == 1000 && deadline_reached(d.tick) && deadline_passed(&d),
           "a zero select timeout begun with a tick pending ends at once");
     poll_ms_deadline(1, &d);
@@ -248,15 +259,14 @@ int main(void)
     CHECK(ts_tick(&ts, &has) == 1000 && has == 1, "a zero ppoll timeout ends at once");
     tv.tv_sec = 0;
     tv.tv_usec = 1;
-    CHECK(ms_tick(tv_to_ms(&tv), &has) == 1001 && has == 1,
-          "a select of 1 us from tick 1000 ends at 1001");
+    CHECK(tv_tick(&tv, &has) == 1001 && has == 1, "a select of 1 us from tick 1000 ends at 1001");
     tv.tv_sec = 1;
     tv.tv_usec = 1;
-    CHECK(ms_tick(tv_to_ms(&tv), &has) == 1001u + TICK_HZ,
+    CHECK(tv_tick(&tv, &has) == 1001u + TICK_HZ,
           "a select of 1 s and 1 us from tick 1000 ends a second and a tick later");
     tv.tv_sec = 0;
     tv.tv_usec = 0;
-    CHECK(ms_tick(tv_to_ms(&tv), &has) == 1000 && has == 1, "a zero select timeout ends at once");
+    CHECK(tv_tick(&tv, &has) == 1000 && has == 1, "a zero select timeout ends at once");
     CHECK(!deadline_reached(1001), "a deadline one tick ahead is not reached");
     CHECK(deadline_reached(1000) && deadline_reached(999),
           "a deadline at the tick or behind it is");

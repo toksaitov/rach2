@@ -20,7 +20,6 @@ A futex is a 32-bit word of user memory on which a thread sleeps until another w
 * `set_robust_list` takes the address of the list's head and its size, which must be the size of the head's three words: 12 bytes on i686 and 24 on x86-64.
 * `get_robust_list` gives the head of the caller's list or of another thread's, named by its id in the caller's PID namespace: a thread of the caller's process, any thread to a privileged caller, and a thread that is not privileged and whose real or effective user id is the caller's effective one.
 * `proc_thread_gone` (`process.h`) runs at a thread's end and at its `execve` ([processes](Readme.md)).
-* `futex_restartable` (`futex.h`) tells the system call dispatcher whether a `futex` call a signal interrupted may be restarted.
 
 ## Design
 
@@ -42,7 +41,7 @@ A waiter's record, `struct futex_q`, is filed in one of `FUTEX_BUCKETS`, 64, lis
 
 A deadline is a tick of the kernel's clock, which counts `TICK_HZ` (`timer.h`) a second. A relative timeout, `FUTEX_WAIT`'s, becomes whole ticks, a part of a tick counted as one (`futex_ticks`); an absolute one, `FUTEX_WAIT_BITSET`'s, `futex_waitv`'s and `futex_wait`'s, is measured when the call begins against the monotonic clock, or the real-time clock with `FUTEX_CLOCK_REALTIME` or the futex2 calls' `CLOCK_REALTIME` (`futex_ticks_until`). The futex2 calls refuse negative seconds and nanoseconds outside 0 to 999999999 with `EINVAL`, as Linux's `futex2_setup_timeout` does, a 32-bit caller's nanoseconds having their high word ignored (`futex2_deadline`). The deadline is the clock's current tick plus those ticks plus one, so a wait never ends before the time it asked for. It is fixed before the word's page is brought in, so a fault's sleep counts against it, and a deadline that the fault outlasted ends the call with `ETIMEDOUT` once the word is compared. The tick wakes the waiter through the record's `wakeup_tick` ([processes](Readme.md)).
 
-A signal the process acts on ends a wait with `EINTR`. The dispatcher restarts a `futex` wait without a timeout, as it restarts a read, and every `futex_waitv` and `futex_wait`, whose deadline is absolute; it does not restart a timed `futex` wait (`futex_restartable`): a restart would measure the timeout again from the start, and a handler that ran often enough would keep the wait from ever ending.
+A signal the process acts on ends a wait with `EINTR`. The dispatcher restarts a `futex` wait without a timeout, as it restarts a read (`ERESTARTSYS`), and every `futex_waitv` and `futex_wait`, whose deadline is absolute. A timed wait files its word, value, bitset and deadline tick in the thread's restart block (`futex_wait_until`) and ends as Linux's `ERESTART_RESTARTBLOCK`: after a handler it returns `EINTR`, and when no handler runs, as after a stop and a continue, `restart_syscall` resumes it (`futex_wait_restart`) and it ends at its first deadline, never one measured again from the restart ([signals](signal.Readme.md)).
 
 ### Priority inheritance
 
@@ -72,7 +71,6 @@ A word's page is made present and writable before the word is read. The read, th
 * i686 has no `futex_time64`.
 * `FUTEX_CLOCK_REALTIME` is taken with `FUTEX_WAIT_BITSET`, `FUTEX_WAIT_REQUEUE_PI` and `FUTEX_LOCK_PI2`; with `FUTEX_WAIT` or `FUTEX_LOCK_PI` it is `ENOSYS`.
 * A deadline is a whole number of the kernel's ticks.
-* A timed wait that a signal interrupts is not restarted, also when no handler runs; Linux restarts it then with its first deadline.
 * A thread's end walks at most 2048 entries of its robust list.
 
 ## Tests

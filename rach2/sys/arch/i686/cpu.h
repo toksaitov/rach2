@@ -65,6 +65,9 @@ typedef struct cpu_regs cpu_regs_t;
  * bytes, which a restart rewinds the return address over. */
 #define SYSCALL_INSN_LEN 2u
 
+/* restart_syscall's number, i386's 0. */
+#define SC_RESTART_NR(p) 0u
+
 #define FRAME_PC(p)   ((p)->eip)
 #define FRAME_SP(p)   ((p)->user_esp)
 #define FRAME_USER(p) (((p)->cs & 3u) == 3u)

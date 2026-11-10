@@ -76,14 +76,6 @@ long sys_futex_wait(isr_params_t *params);
  */
 long sys_futex_requeue(isr_params_t *params);
 
-/**
- * Whether an EINTR from this futex call may be restarted. Ordinary timed
- * waits cannot restart because the dispatcher keeps no relative deadline.
- * PI acquisition and requeue waits have absolute deadlines and restart;
- * their EINTR also sets restart_always for handlers without SA_RESTART.
- */
-int futex_restartable(const isr_params_t *params);
-
 /* The head of a robust list of 32-bit words, Linux's
  * compat_robust_list_head: an i386 program's on x86-64, and the native
  * head's layout on i686. */

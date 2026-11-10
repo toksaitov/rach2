@@ -348,6 +348,7 @@ renameat2 2 rename
 renice 1 busybox-util-linux
 reset 1 busybox-console-tools
 resize 1 busybox-console-tools
+restart_syscall 2 sigaction
 resume 1 busybox-klibc-utils
 rev 1 busybox-util-linux
 rm 1 busybox-coreutils

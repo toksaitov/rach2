@@ -4854,7 +4854,8 @@ static void sig_wait(void)
 /**
  * Sleep until a signal is delivered (pause(2)). Returns -EINTR once a
  * deliverable signal is pending; the signal then acts on the return to user
- * mode.
+ * mode. The call stands for Linux's ERESTARTNOHAND: a signal that runs no
+ * handler, as a stop and a continue, restarts it.
  */
 long sys_pause(isr_params_t *params)
 {
@@ -4864,6 +4865,7 @@ long sys_pause(isr_params_t *params)
         return -ESRCH;
     }
     sig_wait();
+    current_proc->restart_kind = RESTART_NOHAND;
     return -EINTR;
 }
 
@@ -4874,8 +4876,8 @@ long sys_pause(isr_params_t *params)
  * blocked mask with *mask, waits for a deliverable signal, and returns -EINTR.
  * The handler the signal runs runs under *mask, and the frame it gets has the
  * old mask, which its return restores; without a handler the old mask comes
- * back on the return to user mode. -EINVAL for another sigsetsize, -EFAULT
- * when the mask cannot be read.
+ * back on the return to user mode, and the call restarts (`signal_suspend`).
+ * -EINVAL for another sigsetsize, -EFAULT when the mask cannot be read.
  */
 long sys_rt_sigsuspend(isr_params_t *params)
 {
@@ -4901,6 +4903,7 @@ long signal_suspend(uint64_t mask)
     current_proc->sigmask_saved = 1;
     signal_set_blocked(mask);
     sig_wait();
+    current_proc->restart_kind = RESTART_NOHAND;
     return -EINTR;
 }
 
@@ -5028,6 +5031,8 @@ long sys_rt_sigprocmask(isr_params_t *params)
  * floating-point state and the mask; a frame that cannot be read or that would
  * load a faulting state kills the process with SIGSEGV. Returns the restored
  * result register, so the dispatcher's store of the result leaves it as it was.
+ * A call the handler's signal cut short is not resumed by restart_syscall
+ * after it, as Linux clears the restart block here.
  */
 static long signal_return(isr_params_t *tf, int rt)
 {
@@ -5036,6 +5041,7 @@ static long signal_return(isr_params_t *tf, int rt)
     if (!current_proc) {
         return -ESRCH;
     }
+    current_proc->restart.fn = NULL;
     if (sigframe_restore(tf, rt, &mask) != 0) {
         terminate_current_process(SIGSEGV | WCOREFLAG);
         return 0;
@@ -5232,11 +5238,13 @@ long sys_sigprocmask(isr_params_t *params)
 }
 
 /** Restart the system call the dispatcher recorded, `restart_nr` being one
- * more than its number: the number back in the number's register and the
- * instruction pointer back on the instruction that made the call. */
-static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
+ * more than its number: the number back in the number's register, or
+ * restart_syscall's for a call of the RESTART_BLOCK kind, which resumes the
+ * thread's restart block, as Linux's restart does, and the instruction
+ * pointer back on the instruction that made the call. */
+static void restart_syscall(isr_params_t *tf, uint32_t restart_nr, int kind)
 {
-    SC_NR(tf) = restart_nr - 1u;
+    SC_NR(tf) = kind == RESTART_BLOCK ? SC_RESTART_NR(tf) : restart_nr - 1u;
     FRAME_PC(tf) -= SYSCALL_INSN_LEN;
 }
 
@@ -5383,10 +5391,12 @@ static int group_stop_taken(void)
     return 1;
 }
 
-/** Whether a handler's flags or ERESTARTNOINTR require a call restart. */
-static int signal_restarts(uint32_t flags, int forced)
+/** Whether a handler with the flags `flags` lets a call of the restart
+ * kind `kind` restart, as Linux's handle_signal judges it: ERESTARTSYS
+ * under SA_RESTART, ERESTARTNOINTR always, and the others never. */
+static int signal_restarts(uint32_t flags, int kind)
 {
-    return forced || (flags & SA_RESTART) != 0;
+    return kind == RESTART_NOINTR || (kind == RESTART_SYS && (flags & SA_RESTART) != 0);
 }
 
 /**
@@ -5406,15 +5416,16 @@ static int signal_restarts(uint32_t flags, int forced)
  * running process passes where none of them is in use.
  *
  * A system call the dispatcher found interrupted and restartable is
- * restarted when no handler runs, and when the handler that runs has
- * SA_RESTART; otherwise it keeps its EINTR. A mask rt_sigsuspend, pselect6 or
- * ppoll replaced goes into the handler's frame, or back in place at once when
- * no handler runs.
+ * restarted when no handler runs, as after a stop and a continue, whatever
+ * its kind (`restart_kind`), and when the handler that runs lets its kind
+ * restart (`signal_restarts`); otherwise it keeps its EINTR. A mask
+ * rt_sigsuspend, pselect6 or ppoll replaced goes into the handler's frame,
+ * or back in place at once when no handler runs.
  */
 void deliver_signals(isr_params_t *tf)
 {
     uint32_t restart_nr;
-    int restart_always;
+    int restart_kind;
 
     if (!current_proc) {
         return;
@@ -5429,9 +5440,9 @@ void deliver_signals(isr_params_t *tf)
         ptrace_return_stops();
     }
     restart_nr = current_proc->restart_nr;
-    restart_always = current_proc->restart_always;
+    restart_kind = current_proc->restart_kind;
     current_proc->restart_nr = 0;
-    current_proc->restart_always = 0;
+    current_proc->restart_kind = RESTART_SYS;
 
     for (;;) {
         uint64_t deliverable;
@@ -5479,8 +5490,8 @@ void deliver_signals(isr_params_t *tf)
         }
 
         handler_flags = (uint32_t)sa->flags;
-        if (restart_nr != 0 && signal_restarts(handler_flags, restart_always)) {
-            restart_syscall(tf, restart_nr);
+        if (restart_nr != 0 && signal_restarts(handler_flags, restart_kind)) {
+            restart_syscall(tf, restart_nr, restart_kind);
         }
         oldmask =
             current_proc->sigmask_saved ? current_proc->saved_sigmask : current_proc->sig_blocked;
@@ -5502,7 +5513,7 @@ void deliver_signals(isr_params_t *tf)
     }
 
     if (restart_nr != 0) {
-        restart_syscall(tf, restart_nr);
+        restart_syscall(tf, restart_nr, restart_kind);
     }
     if (current_proc->sigmask_saved) {
         current_proc->sigmask_saved = 0;

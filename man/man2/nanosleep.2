@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt NANOSLEEP 2
 .Os
 .Sh NAME
@@ -42,8 +42,14 @@ Once the deadline tick has come, and the clock has advanced by the
 interval, the call returns 0 even if a signal is pending; a pending signal
 that is not blocked is acted on as the call returns.
 If a signal that is neither blocked nor ignored is pending when the
-process runs before its deadline, the call fails with
-.Er EINTR .
+process runs before its deadline, the sleep ends.
+When the signal runs a handler the call fails with
+.Er EINTR ,
+whatever the handler's flags; when it runs none, as a stop and a
+continue, the sleep goes on through
+.Xr restart_syscall 2
+to the deadline fixed at the first call, as Linux's does, and returns 0
+then, or at once when the deadline passed while the process was stopped.
 Unless
 .Fa rem
 is null, the raw call stores there the time left to the deadline tick,
@@ -71,6 +77,9 @@ With
 .Fa req
 is a time of the clock: the call returns at the first tick at which the
 clock reads that time or later, and at once for a time already past.
+A signal that runs no handler restarts such a sleep with its own
+arguments, as Linux does, and one that runs a handler makes it fail with
+.Er EINTR .
 Real time and time since boot are read to the microsecond, so a time of
 either that has passed within the tick in progress returns at once, though
 its tick has not yet come.
@@ -108,12 +117,6 @@ and the calling thread's CPU clock,
 .Dv CLOCK_THREAD_CPUTIME_ID ,
 cannot be slept on, as on Linux.
 .Ss Differences from Linux
-A stop signal that takes its default action, such as the terminal's
-Ctrl-Z, ends the sleep as any other signal does.
-The remainder is stored when the signal ends the sleep and the call
-returns when the process is continued, so a sleep begun again with it
-ends later than the first deadline by the time the process was stopped.
-Linux resumes the sleep, which still ends at its first deadline.
 Linux's remainder is exact, so a sleep begun again with it does not end
 early; here the remainder counts whole 1 ms ticks, and a sleep begun
 again with it can end up to a tick early.
@@ -215,7 +218,7 @@ or a signal ended the sleep and the remainder cannot be written.
 The musl wrapper reads the public request and writes the public
 remainder in user space.
 .It Bq Er EINTR
-A pending signal interrupted the sleep.
+A signal that ran a handler interrupted the sleep.
 .It Bq Er EINVAL
 Seconds are negative, or nanoseconds are outside the permitted range.
 For

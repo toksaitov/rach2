@@ -331,6 +331,62 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
     return -ETIMEDOUT;
 }
 
+static long futex_wait_restart(isr_params_t *params);
+
+/**
+ * Sleep on `uaddr` while it holds `val` until the tick `target` of `s`,
+ * with `s->timed`, and file a wait a signal cut short for its restart, as
+ * Linux's futex_wait does: without a deadline it stands for ERESTARTSYS,
+ * which SA_RESTART restarts; with one, for ERESTART_RESTARTBLOCK, whose
+ * restart (`futex_wait_restart`) sleeps on to the same tick and which a
+ * handler ends with EINTR. `ticks` is 0 for a deadline that had passed when
+ * the call began. Returns as `futex_wait` does.
+ */
+static int32_t futex_wait_until(uintptr_t uaddr, uint32_t val, uint32_t bitset, int flags_op,
+                                struct futex_sleeper *s, uint64_t ticks)
+{
+    struct futex_vec v;
+    int rc;
+
+    v.addr = uaddr;
+    v.val = val;
+    v.shared = !(flags_op & FUTEX_PRIVATE_FLAG);
+    v.q.bitset = bitset;
+    rc = futex_sleep_on(&v, 1, s, ticks);
+    if (rc == -EINTR && s->timed) {
+        struct restart_block *b = &current_proc->restart;
+
+        b->fn = futex_wait_restart;
+        b->uaddr = uaddr;
+        b->val = val;
+        b->bitset = bitset;
+        b->flags = flags_op;
+        b->tick = s->target;
+        current_proc->restart_kind = RESTART_BLOCK;
+    }
+    return rc > 0 ? 0 : rc;
+}
+
+/**
+ * The resumption of a timed futex wait a signal that ran no handler cut
+ * short (restart_syscall): the same word, value and bitset, to the same
+ * deadline tick, with the block cleared first, as Linux's
+ * futex_wait_restart clears it.
+ */
+static long futex_wait_restart(isr_params_t *params)
+{
+    struct restart_block *b = &current_proc->restart;
+    struct futex_sleeper s;
+    uint64_t now = rtc_ticks_now();
+
+    (void)params;
+    b->fn = NULL;
+    s.timed = 1;
+    s.target = b->tick;
+    return futex_wait_until(b->uaddr, b->val, b->bitset, (int)b->flags, &s,
+                            s.target > now + 1u ? s.target - now - 1u : 0);
+}
+
 /**
  * Sleep on `uaddr` while it holds `val`.
  *
@@ -347,11 +403,9 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
 static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_timespec __user *utime,
                           uint32_t bitset, int absolute, int flags_op)
 {
-    struct futex_vec v;
     struct futex_sleeper s;
     struct kernel_timespec ts;
     uint64_t ticks = 0;
-    int rc;
 
     s.timed = 0;
     if (utime) {
@@ -372,13 +426,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
         s.timed = 1;
     }
     s.target = rtc_ticks_now() + ticks + 1u;
-
-    v.addr = uaddr;
-    v.val = val;
-    v.shared = !(flags_op & FUTEX_PRIVATE_FLAG);
-    v.q.bitset = bitset;
-    rc = futex_sleep_on(&v, 1, &s, ticks);
-    return rc > 0 ? 0 : rc;
+    return futex_wait_until(uaddr, val, bitset, flags_op, &s, ticks);
 }
 
 /**
@@ -1045,7 +1093,7 @@ static int pi_sleep(struct futex_q *q, uintptr_t addr)
         rc = 0;
     }
     if (rc == -EINTR) {
-        current_proc->restart_always = 1;
+        current_proc->restart_kind = RESTART_NOINTR;
     }
     futex_pi_recalculate();
     kirq_restore(flags);
@@ -1326,13 +1374,6 @@ static void pi_exit(process_t *p)
             pi_handoff(pi);
         }
     }
-}
-
-int futex_restartable(const isr_params_t *params)
-{
-    int cmd = (int)SC_ARG(params, 1) & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
-
-    return !((cmd == FUTEX_WAIT || cmd == FUTEX_WAIT_BITSET) && SC_ARG(params, 3) != 0);
 }
 
 /**

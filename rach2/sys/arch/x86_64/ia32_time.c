@@ -159,81 +159,50 @@ long compat_sys_getitimer(isr_params_t *params)
     return put_times32(u, t, 2);
 }
 
-/* The sleep of `fn`, nanosleep or clock_nanosleep, with the request read
- * into `t` and the remainder at `urem`: the handler's arguments are `a0` and
- * `a1` before the request for clock_nanosleep, and none for nanosleep. The
- * remainder is copied out as an i386 timespec, or with `wide` as a 64-bit
- * one, when the handler wrote it. */
-static long sleep_call(isr_params_t *params, syscall_fn_t fn, int clock, long t[4], uintptr_t urem,
-                       int wide)
+/* The kernel's timespec of the i386 one, or the 64-bit one with `wide`, at
+ * `u`, into `ts`; NULL when it cannot be read, which the sleep's core
+ * answers with -EFAULT in Linux's order. */
+static const struct kernel_timespec *sleep_req(uintptr_t u, int wide, struct kernel_timespec *ts)
 {
-    unsigned long kreq = KPTR(t), krem = urem ? KPTR(t + 2) : 0;
-    long rc;
+    long t[2];
 
-    t[2] = 0;
-    t[3] = UNWRITTEN;
-    if (clock) {
-        rc = ia32_native(params, fn, t, 4 * sizeof(long), (unsigned long)(int)SC_ARG(params, 0),
-                         (unsigned long)(int)SC_ARG(params, 1), kreq, krem, 0, 0);
-    } else {
-        rc = ia32_native(params, fn, t, 4 * sizeof(long), kreq, krem, 0, 0, 0, 0);
+    if (!u || (wide ? ia32_get_timespec64(u, t) : ia32_get_timespec(u, t)) != 0) {
+        return NULL;
     }
-    if (urem && t[3] != UNWRITTEN) {
-        int bad;
-
-        if (wide) {
-            struct ia32_timespec64 r;
-
-            IA32_PUT64(&r, tv_sec, t[2]);
-            IA32_PUT64(&r, tv_nsec, t[3]);
-            bad = copy_to_user((void __user *)urem, &r, sizeof(r)) != 0;
-        } else {
-            bad = put_time32(urem, t + 2) != 0;
-        }
-        if (bad) {
-            return -EFAULT;
-        }
-    }
-    return rc;
+    ts->tv_sec = t[0];
+    ts->tv_nsec = t[1];
+    return ts;
 }
 
 /** nanosleep (162): the i386 timespec of the interval and the address for
- * the remainder, or 0. */
+ * the remainder, or 0, which gets an i386 timespec. */
 long compat_sys_nanosleep_time32(isr_params_t *params)
 {
-    long t[4];
-    uintptr_t ureq = UPTR(SC_ARG(params, 0));
+    struct kernel_timespec ts;
 
-    if (!ureq || ia32_get_timespec(ureq, t) != 0) {
-        return -EFAULT;
-    }
-    return sleep_call(params, sys_nanosleep, 0, t, UPTR(SC_ARG(params, 1)), 0);
+    return nanosleep_core(sleep_req(UPTR(SC_ARG(params, 0)), 0, &ts), UPTR(SC_ARG(params, 1)), 0);
 }
 
 /** clock_nanosleep (267): the clock, the flags, the i386 timespec of the
  * request and the address for the remainder, or 0. */
 long compat_sys_clock_nanosleep_time32(isr_params_t *params)
 {
-    long t[4];
-    uintptr_t ureq = UPTR(SC_ARG(params, 2));
+    struct kernel_timespec ts;
 
-    if (!ureq || ia32_get_timespec(ureq, t) != 0) {
-        return -EFAULT;
-    }
-    return sleep_call(params, sys_clock_nanosleep, 1, t, UPTR(SC_ARG(params, 3)), 0);
+    return clock_nanosleep_core((int32_t)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1),
+                                sleep_req(UPTR(SC_ARG(params, 2)), 0, &ts), UPTR(SC_ARG(params, 3)),
+                                0);
 }
 
 /** clock_nanosleep_time64 (407): clock_nanosleep with 64-bit timespecs, the
  * high word of the request's nanoseconds ignored. */
 long compat_sys_clock_nanosleep_time64(isr_params_t *params)
 {
-    long t[4];
-    uintptr_t ureq = UPTR(SC_ARG(params, 2));
+    struct kernel_timespec ts;
 
-    if (!ureq || ia32_get_timespec64(ureq, t) != 0) {
-        return -EFAULT;
-    }
-    return sleep_call(params, sys_clock_nanosleep, 1, t, UPTR(SC_ARG(params, 3)), 1);
+    return clock_nanosleep_core((int32_t)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1),
+                                sleep_req(UPTR(SC_ARG(params, 2)), 1, &ts), UPTR(SC_ARG(params, 3)),
+                                1);
 }
 
 /** clock_settime (264): the clock and an i386 timespec. */
@@ -509,14 +478,10 @@ long compat_sys_utimensat_time32(isr_params_t *params)
 
 int ia32_never_restarts(syscall_fn_t fn, const isr_params_t *params)
 {
-    if (fn == compat_sys_futex_time32) {
-        return !futex_restartable(params);
-    }
-    return fn == compat_sys_nanosleep_time32 || fn == compat_sys_clock_nanosleep_time32 ||
-           fn == compat_sys_clock_nanosleep_time64 || fn == compat_sys_old_select ||
-           fn == compat_sys_select || fn == compat_sys_pselect6_time32 ||
-           fn == compat_sys_pselect6_time64 || fn == compat_sys_ppoll_time32 ||
-           fn == compat_sys_ppoll_time64 || fn == compat_sys_epoll_pwait2;
+    (void)params;
+    return fn == compat_sys_sigreturn || fn == compat_sys_rt_sigreturn ||
+           fn == compat_sys_rt_sigtimedwait_time32 || fn == compat_sys_rt_sigtimedwait_time64 ||
+           fn == compat_sys_epoll_pwait2;
 }
 
 #endif /* RACH2_IA32 */

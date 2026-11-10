@@ -184,10 +184,12 @@ stop and a continue, or when the handler that runs has
 as
 .Xr sigaction 2
 describes.
-A wait with a timeout is not restarted: it fails with
+A wait with a timeout fails with
 .Er EINTR
-whatever the handler's flags, as on Linux, and also when no handler runs,
-where Linux restarts it with its first deadline.
+after a handler, whatever its flags, and when no handler runs it goes on
+through
+.Xr restart_syscall 2
+to the deadline tick fixed at the first call, as Linux's does.
 On i686 i386's time64 form, number 422, is not implemented; x86-64 has no
 such form of its own, and takes 422 from an i386 program, below.
 .Ss Priority inheritance
@@ -470,8 +472,9 @@ the word
 .Dv FUTEX_WAKE_OP
 changes is not writable.
 .It Er EINTR
-A signal ended a wait with a timeout, or one without a timeout that is not
-restarted.
+A handler ended a wait with a timeout, or one without
+.Dv SA_RESTART
+ended a wait without one.
 .It Er EINVAL
 PI and ordinary waiters were mixed, the requeue destination equals its
 source, a requeue waiter named another destination, a PI requeue's

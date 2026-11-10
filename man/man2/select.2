@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt SELECT 2
 .Os
 .Sh NAME
@@ -110,22 +110,38 @@ As in
 the wait also lasts until
 .Dv CLOCK_MONOTONIC
 has advanced by the timeout after a lost tick.
-Timeouts are not written back.
+.Pp
+As on Linux, the raw calls write the time left back to a nonzero
+.Fa timeout
+as they return, whatever the result, by
+.Dv CLOCK_MONOTONIC
+against the end fixed at the call, and 0 once it has passed.
+A process whose
+.Xr personality 2
+has
+.Dv STICKY_TIMEOUTS
+keeps its timeout as it gave it.
+A signal that ends the wait with no handler run, as a stop and a continue,
+restarts the call with the time left, so it still ends at its first
+deadline; a handler, whatever its flags, makes it fail with
+.Er EINTR .
+When the time left cannot be written, the call fails with
+.Er EINTR
+in either case, and a failed write changes no other result, as on Linux.
 .Pp
 The raw
 .Nm select
 and
 .Nm newselect
-calls require nonnegative seconds and microseconds from 0 through 999999.
-They first round up to milliseconds.
-Seconds above 2147482 produce a timeout of 2147483647 milliseconds.
+calls require nonnegative seconds and microseconds from 0 through 999999,
+and take the timeout to the microsecond.
 Musl normalizes excess microseconds before issuing the call.
 .Pp
 The raw
 .Nm pselect6
 call requires nonnegative seconds and nanoseconds from 0 through 999999999.
-Its deadline calculation caps seconds at 2^40, about 34800 years, and a
-timeout of 2^40 seconds or more ends at its tick without the clock's check.
+The tick of a deadline counts at most 2^40 seconds, about 34800 years, so
+a timeout of 2^40 seconds or more reaches its tick only after that span.
 .Pp
 A non-null
 .Fa sigmask
