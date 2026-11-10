@@ -90,6 +90,8 @@ static uint8_t arg_for;
 static uint8_t special;
 static int res_count;
 static uint8_t pad_mode;
+static int modes_set;      /* the mode bytes set since the model's reset */
+static uint8_t first_mode; /* the first of them */
 static int agm_on;
 static uint8_t dev_res;
 static uint8_t dev_rate;
@@ -204,6 +206,9 @@ static void dev_take(uint8_t b)
         model_put(0xFA);
         if (dev_kind == KIND_PAD && res_count >= 4 && b == 0x14) {
             pad_mode = special;
+            if (modes_set++ == 0) {
+                first_mode = special;
+            }
         } else if (dev_kind == KIND_PAD && res_count >= 4 && b == 0xC8) {
             agm_on = 1;
         } else {
@@ -632,6 +637,8 @@ static void model_reset(int kind)
     special = 0;
     res_count = 0;
     pad_mode = 0;
+    modes_set = 0;
+    first_mode = 0;
     agm_on = 0;
     dev_res = 2;
     dev_rate = 100;
@@ -1154,7 +1161,7 @@ static void toshiba_rows(void)
     set_system("TOSHIBA", "Satellite A200", "PSAE0E");
     CHECK("a Satellite's touchpad is brought up", init_mouse() == 0 && touchpad == 1);
     CHECK("its mode is set at 80 packets a second, then at psmouse's 40",
-          n_took > 0 && pad_mode == 0x85 && rate_40 && reporting);
+          modes_set >= 2 && first_mode == 0xC5 && pad_mode == 0x85 && rate_40 && reporting);
     synaptics_reconnect();
     CHECK("and its reconnect keeps 40", pad_mode == 0x85);
 

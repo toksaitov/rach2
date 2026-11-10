@@ -829,7 +829,11 @@ static void count_packet(int bad)
     if (bad) {
         if (++bad_in_a_row == limit) {
             state = STATE_IGNORE;
-            klog(KLOG_WARN, "mouse", "sync: %d bad packets in a row: reconnecting", limit);
+            if (alps > 0) {
+                klog(KLOG_WARN, "mouse", "sync: %d bad bytes in a row: reconnecting", limit);
+            } else {
+                klog(KLOG_WARN, "mouse", "sync: %d bad packets in a row: reconnecting", limit);
+            }
             request_reconnect(RECONNECT_PORT);
         }
     } else if (bad_in_a_row) {
