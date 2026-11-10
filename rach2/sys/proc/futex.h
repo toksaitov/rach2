@@ -42,12 +42,10 @@ long sys_futex(isr_params_t *params);
 long sys_futex_waitv(isr_params_t *params);
 
 /**
- * Whether the futex call `params` describes, which a signal ended with
- * EINTR, may be restarted: a wait with no timeout may, and a timed one may
- * not, since a restart would measure its timeout again from the start and a
- * handler that ran often enough would keep it from ever ending. Linux
- * restarts a timed wait only when no handler runs, and then with its first
- * deadline.
+ * Whether an EINTR from this futex call may be restarted. Ordinary timed
+ * waits cannot restart because the dispatcher keeps no relative deadline.
+ * PI acquisition and requeue waits have absolute deadlines and restart;
+ * their EINTR also sets restart_always for handlers without SA_RESTART.
  */
 int futex_restartable(const isr_params_t *params);
 

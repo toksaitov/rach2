@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 10, 2026
 .Dt SCHED_SETSCHEDULER 2
 .Os
 .Sh NAME
@@ -169,7 +169,9 @@ to a caller with
 or a
 .Dv RLIMIT_RTPRIO
 that allows the priority.
-This kernel refuses them, to root too.
+This kernel permits them to a privileged caller and keeps
+.Dv RLIMIT_RTPRIO
+at 0.
 Linux does not let a
 .Dv SCHED_BATCH
 thread that wakes take the processor from the running one, and gives a
@@ -283,11 +285,8 @@ is shorter than the mask or not a multiple of a long, or a mask for
 .Fn sched_setaffinity
 has no processor that is started.
 .It Bq Er EPERM
-The caller may not change the process, asked for
-.Dv SCHED_FIFO
-or
-.Dv SCHED_RR ,
-or, without privilege, asked to leave
+The caller may not change the process, asked without privilege to enter
+a real-time policy or raise its priority, or asked without privilege to leave
 .Dv SCHED_IDLE
 or to clear
 .Dv SCHED_RESET_ON_FORK .

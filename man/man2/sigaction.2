@@ -161,7 +161,7 @@ which
 .Fn sigwaitinfo
 and
 .Fn sigtimedwait
-make, and a
+make, and an ordinary
 .Xr futex 2
 wait with a timeout,
 nor are the System V calls that wait for a semaphore or a message:
@@ -170,6 +170,13 @@ nor are the System V calls that wait for a semaphore or a message:
 .Fn msgsnd
 and
 .Fn msgrcv .
+.Pp
+PI futex acquisition restarts after a handler even without
+.Dv SA_RESTART ,
+keeping its absolute deadline.
+A PI requeue wait does so before transfer to its mutex; a signal after
+transfer returns
+.Er EAGAIN .
 .Pp
 A user-mode CPU exception raises its signal as Linux raises it:
 .Dv SIGSEGV

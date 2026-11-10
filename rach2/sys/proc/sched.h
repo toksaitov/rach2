@@ -30,9 +30,9 @@ void sched_disable(void);
 int sched_is_enabled(void);
 
 /**
- * Switch this processor to the next process of its run queue that may run,
- * from its ready-list head; at most every second selection, a process a
- * wait queue woke is preferred (`wq_wake`). With nothing on its queue, it
+ * Switch to the highest-priority eligible real-time thread, or the next
+ * ordinary thread from this processor's ready-list head. Ordinary selection
+ * prefers a wait-queue wake at most every second time. With no candidate, it
  * continues the current process if that can run; otherwise it tries other
  * queues by their ready counts, busiest first, and takes an eligible entry
  * or switches to its idle task.
