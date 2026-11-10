@@ -22,7 +22,7 @@
 # with COMMAND's status.
 #
 # `check` builds the relay and triangle.c into build/bed with CC (cc),
-# CFLAGS and LDLIBS (-lEGL -lGLESv2), draws the triangle on the host's
+# CFLAGS and LDLIBS (-ldl), draws the triangle on the host's
 # llvmpipe, then through the relay to the guest with Mesa's virpipe, and
 # passes when both pictures check and their checksums are equal.
 #
@@ -229,7 +229,7 @@ check()
     # shellcheck disable=SC2086 # the flags are words
     ${CC:-cc} ${CFLAGS:--O2} -o "$out/vtestrelay" "$here/../vtestrelay.c"
     # shellcheck disable=SC2086 # the flags are words
-    ${CC:-cc} ${CFLAGS:--O2} -o "$out/triangle" "$here/triangle.c" ${LDLIBS:--lEGL -lGLESv2}
+    ${CC:-cc} ${CFLAGS:--O2} -o "$out/triangle" "$here/triangle.c" ${LDLIBS:--ldl}
     draw llvmpipe llvmpipe || die "result: the llvmpipe triangle failed"
     want=$(checksum llvmpipe)
     boot "$cpus" "$mib"
