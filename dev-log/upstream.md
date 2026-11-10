@@ -28,6 +28,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 | Linux refuses a timeline fence with the error of the entry before it | Linux 6.12 and 6.18 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linux-refuses-a-timeline-fence-with-the-error-of-the-entry-before-it) |
 | Linux's i915_error_state answers a write with 0 when it holds no error | Linux 6.12 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linuxs-i915_error_state-answers-a-write-with-0-when-it-holds-no-error) |
 | QEMU replaces TCO status bits on a write that should clear them | QEMU 10.0.0 and 11.1.3 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#qemu-replaces-tco-status-bits-on-a-write-that-should-clear-them) |
+| Debian's Chromium loads libpci.so.3 without asking for its package | Debian 13 chromium 156.0.8078.79-1~deb13u1 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#debians-chromium-loads-libpciso3-without-asking-for-its-package) |
 | BusyBox uses a freed set-id configuration | BusyBox 1.36.1 | 19 | unreported | [19-busybox-first/upstream.md](19-busybox-first/upstream.md#busybox-uses-a-freed-set-id-configuration) |
 | termbox2 misspells its Windows unsupported message | termbox2 2.7.0-dev | 27 | unreported | [27-prose/upstream.md](27-prose/upstream.md#termbox2-misspells-its-windows-unsupported-message) |
 | BusyBox time reports four times the peak memory | BusyBox 1.36.1 | 54 | unreported | [54-gnu/upstream.md](54-gnu/upstream.md#busybox-time-reports-four-times-the-peak-memory) |
