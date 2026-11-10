@@ -3007,9 +3007,10 @@ long sys_restart_syscall(isr_params_t *params)
 /**
  * Translate the -EINTR of handler `fn` into Linux's restart code, as the
  * kind the handler set says, or as `syscall_restartable` says for a handler
- * that set none. Keep other results, and those of a call the dispatcher
- * did not run (a NULL `fn`). Signal delivery decides whether to restart
- * from the registers after the tracer's stops.
+ * that set none, and mark the thread (`restart_due`) when it makes one.
+ * Keep other results, and those of a call the dispatcher did not run (a
+ * NULL `fn`). Signal delivery decides whether to restart from the registers
+ * after the tracer's stops.
  */
 static long restart_result(const isr_params_t *params, syscall_fn_t fn, long ret)
 {
@@ -3019,6 +3020,7 @@ static long restart_result(const isr_params_t *params, syscall_fn_t fn, long ret
     if (current_proc->restart_kind == RESTART_SYS && !syscall_restartable(fn, params)) {
         current_proc->restart_kind = RESTART_NONE;
     }
+    current_proc->restart_due = current_proc->restart_kind != RESTART_NONE;
     return restart_code(current_proc->restart_kind);
 }
 
@@ -3098,8 +3100,11 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * before the exit stop, or left as -EINTR for a call Linux never restarts.
  * The code stays in the result register through the signal-delivery stop.
  * `deliver_signals` then reads it and orig_nr to decide the restart, so a
- * tracer's changes at either stop apply. Without pending signal work, a
- * code the tracer writes reaches the program unchanged, as on Linux.
+ * tracer's changes at either stop apply. The translation counts as signal
+ * work there even when another thread took the signal meanwhile, as Linux
+ * keeps TIF_SIGPENDING until get_signal runs; a code a tracer writes into
+ * a call that was not interrupted, with no other signal work, reaches the
+ * program unchanged, as on Linux.
  *
  * At the exit the datagrams the call put on the loopback ring are delivered,
  * rather than only at the next tick, so a local transfer is not paced at a
@@ -3142,6 +3147,7 @@ static void _syscall_handler(isr_params_t *params)
     }
     if (current_proc) {
         current_proc->restart_kind = RESTART_SYS;
+        current_proc->restart_due = 0;
     }
     if (skip) {
         ret = (long)SC_RET(params);

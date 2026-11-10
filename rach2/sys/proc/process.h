@@ -343,6 +343,12 @@ struct process {
      * a call that Linux restarts otherwise sets another before it returns
      * EINTR. */
     uint8_t restart_kind;
+    /* Set when the dispatcher turned the call's EINTR into a restart code,
+     * cleared at the next entry and by `deliver_signals`, which counts it as
+     * signal work, as Linux's TIF_SIGPENDING stays set until get_signal
+     * runs: a call whose signal another thread took meanwhile then restarts,
+     * and a code only a tracer wrote reaches the program. */
+    uint8_t restart_due;
     /* What restart_syscall resumes: Linux's restart_block. */
     struct restart_block restart;
     /* The trap number, error code and fault address of the last processor
