@@ -6766,7 +6766,7 @@ long sys_prlimit64(isr_params_t *params)
 
 #define PROT_SEM 0x8 /* accepted by mprotect and given no meaning, as on x86 Linux */
 
-#define PROT_GROWSDOWN 0x01000000 /* mprotect: widen the range down, below */
+#define PROT_GROWSDOWN 0x01000000 /* mprotect: start at the main stack region's start */
 
 #define PROT_GROWSUP 0x02000000 /* mprotect: refused, since no x86 region grows up */
 
