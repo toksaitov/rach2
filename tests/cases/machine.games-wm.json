@@ -60,7 +60,7 @@
           "step_id": "row",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
+          "does": "run wm.py's row as root in the boot session, moving the pointer, clicking and pressing Escape through QMP at its ready lines"
         }
       ],
       "machines": [
@@ -487,7 +487,7 @@
       "assertions": [
         {
           "assertion_id": "row",
-          "checks": "both tones measure 440 Hz in at least ten 50 ms windows, DirectInput creates the system keyboard and mouse, Wine's log names /dev/input event devices, and the runner prints GAMESWM OK wineio",
+          "checks": "the launcher sets PULSE_LATENCY_MSEC to 60, both tones measure 440 Hz in at least twenty of the 50 ms windows they fill and another frequency in at most a fifth as many, DirectInput creates the system keyboard and mouse, Wine's log names /dev/input event devices, and the runner prints GAMESWM OK wineio",
           "source": "scenario"
         }
       ],

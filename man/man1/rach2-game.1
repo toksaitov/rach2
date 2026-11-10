@@ -85,6 +85,11 @@ Proton writes
 .Pa steam-ID.log
 there, replacing the preceding launch's log.
 .Pp
+.Ev PULSE_LATENCY_MSEC
+is kept when set; otherwise it is 60, the milliseconds of sound that
+libpulse asks PulseAudio to hold for each of Wine's streams, in place of
+Wine's own 30.
+.Pp
 .Ev STEAM_COMPAT_CLIENT_INSTALL_PATH
 is kept when set; otherwise it names
 .Pa steam

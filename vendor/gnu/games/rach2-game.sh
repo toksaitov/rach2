@@ -51,10 +51,14 @@ PROTON_USE_WINED3D=1
 WINE_D3D_CONFIG=renderer=gl
 PROTON_NO_FSYNC=0
 PROTON_LOG=1
+# Wine keeps 30 ms queued in PulseAudio, less than a wakeup's delay while the
+# machine is busy; libpulse takes this target instead, and the server raises
+# it over the OSS sink's latency.
+PULSE_LATENCY_MSEC=${PULSE_LATENCY_MSEC:-60}
 SteamGameId=$id
 SteamAppId=$id
 export PROTON_USE_WOW64 PROTON_USE_WINED3D WINE_D3D_CONFIG PROTON_NO_FSYNC
-export PROTON_LOG PROTON_LOG_DIR SteamGameId SteamAppId
+export PROTON_LOG PROTON_LOG_DIR PULSE_LATENCY_MSEC SteamGameId SteamAppId
 export STEAM_COMPAT_DATA_PATH STEAM_COMPAT_CLIENT_INSTALL_PATH
 
 if [ -n "$print" ]; then
@@ -62,6 +66,7 @@ if [ -n "$print" ]; then
         "PROTON_USE_WINED3D=$PROTON_USE_WINED3D" "WINE_D3D_CONFIG=$WINE_D3D_CONFIG" \
         "PROTON_NO_FSYNC=$PROTON_NO_FSYNC" "SteamGameId=$SteamGameId" \
         "SteamAppId=$SteamAppId" "PROTON_LOG=$PROTON_LOG" "PROTON_LOG_DIR=$PROTON_LOG_DIR" \
+        "PULSE_LATENCY_MSEC=$PULSE_LATENCY_MSEC" \
         "STEAM_COMPAT_DATA_PATH=$STEAM_COMPAT_DATA_PATH" \
         "STEAM_COMPAT_CLIENT_INSTALL_PATH=$STEAM_COMPAT_CLIENT_INSTALL_PATH"
     exit 0
