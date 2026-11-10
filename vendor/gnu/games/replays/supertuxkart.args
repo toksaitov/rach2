@@ -1,10 +1,10 @@
-# SuperTuxKart's profile race, its benchmark: four AI karts drive two laps of
-# the lighthouse track at intermediate difficulty from a fixed random seed,
-# and the game ends itself at the race's end with its profile summary, which
-# the verbose log level prints. Blank-separated words, read by games.sh.
---profile-laps=2
---track=lighthouse
+# SuperTuxKart's profile race, its benchmark, with the arguments of Linux's
+# reference runs on the Lenovo (tools/lenovo/debian-ref/games.sh): four AI
+# karts on the hacienda track for 90 s of the race's own time from seed 1,
+# after which the game ends itself and prints its profile summary. Words
+# separated by blanks, read by tests/graphics/runners/games.sh, which adds
+# the fullscreen size.
+--profile-time=90
+--track=hacienda
 --numkarts=4
---difficulty=1
 --seed=1
---log=1
