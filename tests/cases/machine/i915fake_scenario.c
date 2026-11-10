@@ -66,12 +66,12 @@ static int drm_field(const char *out, const char *key, const char *value)
 }
 
 /** Say whether modetest's connectors and planes in `out` are the display
- * the driver makes on a chip whose firmware lit nothing: eDP-1
- * disconnected, and on each of the three pipes a primary plane, a sprite
- * and a cursor with Linux's Haswell formats. */
+ * the driver makes on a chip whose DDI A detects no panel: no eDP-1, as
+ * Linux makes no eDP connector then, and on each of the three pipes a
+ * primary plane, a sprite and a cursor with Linux's Haswell formats. */
 static int kms_listed(const char *out)
 {
-    return net_find(out, "disconnected*eDP-1") != NULL &&
+    return net_find(out, "eDP-1") == NULL &&
            net_count(out, "formats: C8 * RG16 XR24 XB24 XR30 XB30 XB4H") == 3 &&
            net_count(out, "formats: XR24 XB24 XR30 XB30 XR4H XB4H YUYV YVYU UYVY VYUY") == 3 &&
            net_count(out, "formats: AR24") == 3;
@@ -114,7 +114,7 @@ int etude_scenario(struct etude_case *c)
     net_assert(&u, "loader", net_find(r.out, "pci id for fd #: 8086:0a16, driver crocus") != NULL,
                "Mesa's loader did not pick crocus for 8086:0a16");
     net_assert(&u, "kms", kms_listed(r.out),
-               "modetest did not list eDP-1 disconnected and the planes' Haswell formats");
+               "modetest listed eDP-1 or not the planes' Haswell formats");
     net_assert(
         &u, "crocus",
         net_find(r.out, "eglinfo exit 0") != NULL &&
