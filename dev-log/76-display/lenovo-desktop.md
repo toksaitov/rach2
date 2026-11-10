@@ -28,6 +28,7 @@ The step's script is [`lenovo-desktop/desktop.sh`](lenovo-desktop/desktop.sh), r
 * `video`: 76-17a.4's six clips (`tests/graphics/runners/clips.sha256`) in each browser through `video.sh -d`, on the session's display in place of a headless Weston of the runner's own: one warm-up and three counted plays of each clip.
 * `kill`: SIGKILL to Weston; five seconds later the compositor is gone, the session's supervisor still runs and has not started another, and the kernel's log has the console's return.
 * `blit`, after the kill: [`blitcheck.py`](lenovo-desktop/blitcheck.py) becomes the card's master, shows a dumb buffer of random bytes with SETCRTC and reads the screen back through `/dev/mem`, at the address and pitch of fbdrm's line in the log; fills the buffer again, names five rectangles with odd edges to DIRTYFB and reads the screen back, where the new bytes are inside them and the old everywhere else; and times a hundred whole-screen DIRTYFB calls, each a copy of every row. It shows random pixels for about three seconds.
+* `trace`, after that: a Weston started as `rach2-session` starts it, but under `strace -f -T -e trace=ioctl`, while Chromium plays `h264-1080p.mp4` on it through `video.sh -d`; then that Weston is ended. The trace has the length of every commit and the gaps between them, which say where a frame's time goes. It is evidence and is not judged.
 
 Debian's numbers, both on Debian 13.7 on this machine's p5 with IOMMU translation off and the clips at 1920x1080 played 58 s fullscreen:
 
@@ -77,6 +78,8 @@ Run on the testing host on 2026-11-10 from 21:15 to 21:33 UTC+6, after the first
 | Chromium's drops of 300 in nine counted untraced plays | 1 to 10 | 2 to 9 |
 
 On that host the old copy took a fifth of the Lenovo's time, so the drops there were few before the change and are the same after it; the traced plays dropped 8, 7 and 2 on the old kernel and 58, 46 and 4 on the new, one run each, with Weston under `strace`. The Lenovo's numbers are the second trial's to give. `desktop.sh kill` printed "2 console lines" on both kernels, with its check of the log corrected.
+
+A third boot, of the second kernel, at 21:42, ran the second trial's commands in their order, `state`, `video`, `kill`, `blit` and `trace` (`qemu/second-step.txt`): twelve result lines with status 0, Chromium dropping 3 to 18 of 300 and Firefox 0 to 11; the console back with two lines; `BLITCHECK OK` at 0.200 ms a copy; and 2,362 traced commits of 0.422 ms.
 
 ## The trial's files
 

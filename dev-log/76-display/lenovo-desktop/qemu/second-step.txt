@@ -1,0 +1,40 @@
+t2657d: kernel old 957f5d385f5af390 new 851e8698c626b181
+t2657d: root 07a02ae529bdd3ea
+t2657d: new: ssh after 3 tries; rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate nomodeset
+t2657d: new: log: [    2.577000] console: card0: the firmware's framebuffer
+t2657d: new: log: [    2.579000] fbdrm: registered: simpledrm 1280x800, XR24, pitch 5120, at 0xfd000000, card 0
+t2657d: new: log: [    7.548000] console: card0: handed to a master, the keyboard off
+t2657d: new: desktop: result: weston 58 as desktop ; Using Pixman renderer; mode 1280x800@60.0, preferred, current, 61.4 MHz
+t2657d: new: desktop: video: result: chromium h264-720p.mp4 codec h264 size 1280x720 frames 300,300,300 dropped 12,3,9 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657d: new: desktop: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 3,10,3 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657d: new: desktop: video: result: chromium vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 12,5,5 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+t2657d: new: desktop: video: result: chromium vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 14,8,5 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+t2657d: new: desktop: video: result: chromium av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 15,6,18 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+t2657d: new: desktop: video: result: chromium av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 17,5,12 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+t2657d: new: desktop: video: result: firefox h264-720p.mp4 codec h264 size 1280x720 frames 300,300,300 dropped 6,9,3 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote) errors 0 browser done
+t2657d: new: desktop: video: result: firefox h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 4,11,1 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote) errors 0 browser done
+t2657d: new: desktop: video: result: firefox vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 2,4,0 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+t2657d: new: desktop: video: result: firefox vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 1,4,0 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+t2657d: new: desktop: video: result: firefox av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 1,4,0 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+t2657d: new: desktop: video: result: firefox av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 0,5,0 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+t2657d: new: desktop: result: video status 0
+t2657d: new: kill: == killed 58 ; left none
+t2657d: new: kill: == supervisor 15 alive: yes
+t2657d: new: kill: == kernel
+t2657d: new: kill: [  582.019000] console: card0: taken back from a master, the keyboard on
+t2657d: new: kill: [  582.020000] console: card0: the firmware's framebuffer again
+t2657d: new: kill: == drm
+t2657d: new: kill: /sys/class/drm/card0-Unknown-1 enabled disabled
+t2657d: new: kill: == term
+t2657d: new: kill: desktop: result: weston gone; 2 console lines
+t2657d: new: blitcheck: result: screen 1280x800 XR24, pitch 5120, at 0xfd000000; buffer pitch 5120
+t2657d: new: blitcheck: result: whole: 0 of 800 rows differ
+t2657d: new: blitcheck: result: clips: 5 rectangles, 0 of 800 rows differ
+t2657d: new: blitcheck: result: time: 100 whole-screen copies of 4096000 bytes: mean 0.200 ms, median 0.162 ms, least 0.151 ms, most 1.553 ms
+t2657d: new: BLITCHECK OK
+t2657d: new: desktop: result: blit status 0
+t2657d: new: desktop: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 8,8,1 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657d: new: desktop: result: trace: 2362 commits, mean 0.422 ms, most 6.035 ms
+t2657d: new: desktop: result: traced weston gone
+t2657d: new: done
+t2657d: end
