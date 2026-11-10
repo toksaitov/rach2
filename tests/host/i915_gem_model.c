@@ -67,6 +67,7 @@ NOT_HERE(i915_gem_context_getparam_ioctl)
 NOT_HERE(i915_gem_context_setparam_ioctl)
 NOT_HERE(i915_gem_context_reset_stats_ioctl)
 NOT_HERE(i915_gem_execbuffer2_ioctl)
+NOT_HERE(i915_gem_throttle_ioctl)
 
 /* The GPU's idling, which eviction waits for when only busy bindings are
  * left: `idle_signals`, a fence a row names, signals, as its request would
@@ -869,14 +870,14 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
     zaps++;
 }
 
-/** Fault page `page` of the mapping `vma`: its address, or NULL for
- * SIGBUS. */
+/** Fault page `page` of the mapping `vma`, the object's page vma->pgoff +
+ * `page` as the kernel's fault asks: its address, or NULL for SIGBUS. */
 static uint8_t *fault(vma_t *vma, uint32_t page)
 {
     struct region *r = (struct region *)vma->file;
     uintptr_t phys = 0;
 
-    if (r->ops->page(r->obj, page, &phys) != 0) {
+    if (r->ops->page(r->obj, vma->pgoff + page, &phys) != 0) {
         return 0;
     }
     return (uint8_t *)phys;
@@ -1032,6 +1033,27 @@ static int32_t map(struct drm_file *f, uint32_t handle, uint64_t flags, uint32_t
     vma->end = vma->start + (uintptr_t)pages * 4096u;
     vma->pgoff = (uint32_t)(off >> 12);
     return drm_gem_mmap(f, vma);
+}
+
+static vma_t legacy_vma;
+
+/** The kernel's drm_vm_mmap: map `size` bytes of the device's mmap space
+ * from `offset` into legacy_vma through drm_gem_mmap, as the process's
+ * descriptor of the device would; a fake address or the error. */
+long drm_vm_mmap(struct drm_file *file, uint64_t offset, uint64_t size)
+{
+    int32_t err;
+
+    if ((offset & 4095u) != 0 || size == 0) {
+        return -EINVAL;
+    }
+    k_memset(&legacy_vma, 0, sizeof(legacy_vma));
+    legacy_vma.type = VM_SHARED;
+    legacy_vma.start = 0x20000000u;
+    legacy_vma.end = legacy_vma.start + (uintptr_t)((size + 4095u) & ~(uint64_t)4095u);
+    legacy_vma.pgoff = (uint32_t)(offset >> 12);
+    err = drm_gem_mmap(file, &legacy_vma);
+    return err ? err : (long)legacy_vma.start;
 }
 
 /** SET_TILING's answer, with the arguments written back in `*args`. */
