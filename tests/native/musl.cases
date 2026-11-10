@@ -48,6 +48,7 @@ case musl/loginmusl root:ext2-dir ids:1000 stage:idreport -- musl/loginmusl
 case musl/mallocqsort -- musl/mallocqsort
 case musl/mapmusl.ext2 root:ext2-dir -- musl/mapmusl
 case musl/mapmusl.krffs root:krffs -- musl/mapmusl
+case musl/memcallmusl ids:65534 -- musl/memcallmusl
 case musl/memfdmusl root:krffs -- musl/memfdmusl
 case musl/mknodmusl root:krffs ids:1000 -- musl/mknodmusl
 # Left out: the address, route, link and neighbour changes.
