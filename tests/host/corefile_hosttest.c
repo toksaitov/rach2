@@ -31,9 +31,10 @@
  *
  * The append rows call `file_write_pieces` as a type that sets
  * `file_locked` has it, with the file's lock held: the model's first write
- * moves a few bytes and the rest of the buffer is not resident, and while
- * it is brought in with the lock let go another writer moves the file's end
- * to the limit or near it, so the rest must be cut again to RLIMIT_FSIZE.
+ * moves a few bytes and the rest of the buffer is not resident. The call
+ * must end short without releasing the lock. Only a call that moved no
+ * byte may bring the buffer in with the lock let go; another writer then
+ * moves the end, so the resumed append must check RLIMIT_FSIZE again.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -1671,9 +1672,11 @@ static void trailing_zero_limit(void)
  * Append 32 bytes as a type that sets `file_locked` does, with the file's
  * lock held and RLIMIT_FSIZE at APPEND_LIMIT: the first write moves
  * `first` bytes, and while the rest is brought in another writer makes the
- * file `grown` bytes long. Returns what `file_write_pieces` answered.
+ * file `grown` bytes long, but only when no byte moved. Return the write's
+ * result; a completed prefix must not release the lock to fault. With
+ * `previous`, write an eight-byte element first using the same state.
  */
-static int32_t append_across_refault(uint32_t first, uint32_t grown)
+static int32_t append_across_refault(uint32_t first, uint32_t grown, int previous)
 {
     static const char buf[32] = "the bytes of an appending write";
     struct open_file ofd;
@@ -1693,7 +1696,14 @@ static int32_t append_across_refault(uint32_t first, uint32_t grown)
     state.file.mnt = &mount;
     state.file.node = &core_node;
     state.own = 1;
-    state.append = 0;
+    state.append = 1;
+    state.moved = 0;
+    if (previous) {
+        vfs_node_lock(&state.file);
+        n = file_write_pieces(&entry, &state, 0, (const char __user *)buf, 8, &pos);
+        vfs_node_unlock(&state.file);
+        check(n == 8 && state.moved, "the first vector element wrote eight bytes");
+    }
     write_cap = (int32_t)first;
     grown_len = grown;
     self.rlim[RLIM_FSIZE].cur = APPEND_LIMIT;
@@ -1701,32 +1711,37 @@ static int32_t append_across_refault(uint32_t first, uint32_t grown)
     n = file_write_pieces(&entry, &state, 0, (const char __user *)buf, sizeof(buf), &pos);
     vfs_node_unlock(&state.file);
     self.rlim[RLIM_FSIZE].cur = was;
-    check(grown_len == 0, "the append brought its buffer in once");
+    check(grown_len == (first || previous ? grown : 0),
+          "only an append that moved no byte released the lock to fault");
     return n;
 }
 
 /**
- * An append whose buffer is brought in again, while another writer moves the
- * file's end, writes no byte past RLIMIT_FSIZE: the rest is cut to what fits
- * from the new end, the write stops at an end at the limit with the bytes it
- * moved, and one that moved none answers EFBIG.
+ * A buffer fault after bytes moved ends the append without letting another
+ * writer in. A fault before any bytes moved may release the lock, and the
+ * resumed append must check the new end against RLIMIT_FSIZE.
  */
 static void append_refault_limit(void)
 {
     row_begin();
-    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT - 4u) == (int32_t)APPEND_FIRST + 4,
-          "an append retried near the limit writes what fits from the new end");
-    check(file_len == APPEND_LIMIT, "and the file ends at the limit");
+    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT - 4u, 0) == (int32_t)APPEND_FIRST,
+          "an append ends before faulting after bytes moved");
+    check(file_len == APPEND_FIRST, "and no other writer entered the call");
     row_end();
     row_begin();
-    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT) == (int32_t)APPEND_FIRST,
-          "an append retried at the limit answers the bytes it moved");
-    check(file_len == APPEND_LIMIT, "and writes no byte past it");
+    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT, 0) == (int32_t)APPEND_FIRST,
+          "an append keeps its completed prefix");
+    check(file_len == APPEND_FIRST, "and holds the lock until it ends");
     row_end();
     row_begin();
-    check(append_across_refault(0, APPEND_LIMIT) == -EFBIG,
+    check(append_across_refault(0, APPEND_LIMIT, 0) == -EFBIG,
           "an append that moved no byte before the end reached the limit is EFBIG");
     check(file_len == APPEND_LIMIT, "and writes nothing");
+    row_end();
+    row_begin();
+    check(append_across_refault(0, APPEND_LIMIT, 1) == -EFAULT,
+          "a later element cannot release the lock after the first wrote");
+    check(file_len == 8, "and the vector keeps only its first element");
     row_end();
 }
 
