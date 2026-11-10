@@ -364,7 +364,8 @@ static uint32_t put_number(char *buffer, uint32_t at, uint32_t cap, uint64_t val
             buffer[at++] = digit;
         }
         n--;
-        for (ten = 1, i = 1; i < n; i++) {
+        ten = 1;
+        for (i = 1; i < n; i++) {
             ten *= 10u;
         }
     }
