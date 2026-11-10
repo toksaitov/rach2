@@ -108,7 +108,7 @@ struct eb {
     struct i915_gem_context *ctx;
     struct intel_context *ce;
     struct eb_fence *fences;
-    uint32_t nfences;
+    size_t nfences;
     struct drm_i915_gem_object *shadow;
     struct i915_vma *shadow_vma;
     struct eb_hold *hold;
@@ -711,7 +711,7 @@ static int32_t eb_relocate(struct eb *eb)
  * no syncobj took. */
 static void eb_fences_put(struct eb *eb)
 {
-    uint32_t i;
+    size_t i;
 
     for (i = 0; i < eb->nfences; i++) {
         dma_fence_put(eb->fences[i].fence);
@@ -741,10 +741,6 @@ static int32_t eb_fences_grow(struct eb *eb, uint64_t n, uint64_t user, size_t e
     }
     if (user > (uint64_t)(uintptr_t)-1 || !user_range_ok((uintptr_t)user, (size_t)n * each)) {
         return -EFAULT;
-    }
-    /* More than `nfences` counts would take 160 GiB, which no heap gives. */
-    if (total > 0xffffffffu) {
-        return -ENOMEM;
     }
     f = (struct eb_fence *)kzalloc((size_t)total * sizeof(struct eb_fence));
     if (!f) {
@@ -939,7 +935,7 @@ static int32_t eb_parse_extensions(struct eb *eb)
  */
 static int32_t eb_await_fences(struct eb *eb, struct i915_request *rq, struct dma_fence *in)
 {
-    uint32_t i;
+    size_t i;
     int32_t err;
 
     if (in) {
@@ -965,7 +961,7 @@ static int32_t eb_await_fences(struct eb *eb, struct i915_request *rq, struct dm
 static void eb_signal_fences(struct eb *eb, struct i915_request *rq)
 {
     struct eb_fence *f;
-    uint32_t i;
+    size_t i;
 
     for (i = 0; i < eb->nfences; i++) {
         f = &eb->fences[i];
