@@ -12,6 +12,8 @@
 
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
 #include "../kvm/stats.h"
+#include "../vfio/vfio.h"
+#include "../iommu.h"
 #endif
 
 #include "../klog.h"
@@ -2885,6 +2887,33 @@ static void procfs_kvm_counts(struct procfs_text *t)
 #endif
 }
 
+/** Append VT-d faults and live VFIO resources on x86-64, under the big lock. */
+static void procfs_assignment_counts(struct procfs_text *t)
+{
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    static const char *const names[4] = {"vfio_groups ", "vfio_devices ", "vfio_dma_mappings ",
+                                         "vfio_dma_pages "};
+    uint32_t counts[4];
+    int i;
+
+    vfio_resource_counts(counts);
+    for (i = 0; i < 4; i++) {
+        ap_str(t, names[i]);
+        ap_u32(t, counts[i]);
+        ap_ch(t, '\n');
+    }
+    ap_str(t, "iommu_dma_faults ");
+    ap_u64(t, iommu_dma_faults());
+    ap_str(t, "\niommu_irq_faults ");
+    ap_u64(t, iommu_irq_faults());
+    ap_str(t, "\nmsi_vectors_free ");
+    ap_u32(t, (uint32_t)isr_free_vector_count());
+    ap_ch(t, '\n');
+#else
+    (void)t;
+#endif
+}
+
 /** The counts of the kernel's own work for `/proc/stat`, from
  * `process_pid_steps` to the last `bkl_hold_entry`, each on a line of
  * its own. */
@@ -3034,6 +3063,7 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_ch(t, '\n');
     procfs_work_counts(t);
     procfs_kvm_counts(t);
+    procfs_assignment_counts(t);
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));
     ap_str(t, "\nlatency_disk_us ");

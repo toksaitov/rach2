@@ -71,6 +71,9 @@ void isr_free_vector(int vector);
  * outside `ISR_DEVICE_FIRST` to `ISR_DEVICE_LAST`. */
 uint32_t isr_vector_count(int vector);
 
+/** Return the free message vectors under the big lock. */
+int isr_free_vector_count(void);
+
 /** The name registered in `slot` of `vector`'s chain, or null past the last. */
 const char *isr_vector_name(int vector, int slot);
 
