@@ -350,6 +350,9 @@ static int vtd_active(struct drm_i915_private *i915)
 #endif
 }
 
+/* vtd_active's answer as Linux's i915_capabilities words it, by index. */
+static const char *const vtd_state[2] = {"disabled", "enabled"};
+
 /** The engines the driver runs, as Linux's engine mask: RCS0 at bit 0
  * and BCS0 at bit 1. */
 static uint32_t engine_mask(struct drm_i915_private *i915)
@@ -850,7 +853,7 @@ static int32_t capabilities_show(void *data, char *buf, uint32_t cap)
         return -ENODEV;
     }
     device_info(&e, i915);
-    emitf(&e, "iommu: %s\n", vtd_active(i915) ? "enabled" : "disabled");
+    emitf(&e, "iommu: %s\n", vtd_state[vtd_active(i915)]);
     gt_info(&e, i915, 0);
     driver_caps(&e);
     emit_params(&e, &i915->params);
