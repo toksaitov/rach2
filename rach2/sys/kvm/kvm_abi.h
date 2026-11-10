@@ -83,6 +83,7 @@
 #define KVM_GET_MP_STATE    KVM_IOR(0x98u, 4u)
 #define KVM_SET_MP_STATE    KVM_IOW(0x99u, 4u)
 #define KVM_NMI             KVM_IO(0x9Au)
+#define KVM_GET_TSC_KHZ     KVM_IO(0xA3u)
 #define KVM_SET_GUEST_DEBUG KVM_IOW(0x9Bu, 72u)
 #define KVM_X86_SETUP_MCE   KVM_IOW(0x9Cu, 8u)
 #define KVM_X86_SET_MCE     KVM_IOW(0x9Eu, 64u)
