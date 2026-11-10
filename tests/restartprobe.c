@@ -329,6 +329,16 @@ static void miss(const char *name, int scen, const char *what, long v, long want
     failed = 1;
 }
 
+/** Zero the `n` bytes at `p`, a buffer the kernel fills. */
+static void clear(void *p, unsigned long n)
+{
+    char *d = p;
+
+    while (n--) {
+        *d++ = 0;
+    }
+}
+
 /** Sleep `ns` nanoseconds, less than a second. */
 static void nap(long ns)
 {
@@ -399,6 +409,7 @@ static char state_of(int pid)
     if (fd < 0) {
         return 0;
     }
+    clear(line, sizeof(line));
     n = (int)syscall3(SYS_READ, fd, (long)line, sizeof(line) - 1);
     syscall1(SYS_CLOSE, fd);
     for (i = n - 1; i > 0; i--) {
@@ -544,12 +555,13 @@ static long timed_call(int c, struct ts *left, int ep)
     struct ts req = {1, 0}, end;
     struct pollfd p = {0, POLLIN, 0};
     unsigned long set[16];
-    unsigned sigs[2] = {0, 1u << (SIGWAITED - 33)};
+    const unsigned sigs[2] = {0, 1u << (SIGWAITED - 33)};
     struct sembuf down = {0, -1, 0};
     char events[16];
     int word = 0;
 
     p.fd = wake_fd[0];
+    clear(events, sizeof(events));
     *left = req;
     switch (c) {
     case C_NANOSLEEP:
@@ -572,8 +584,10 @@ static long timed_call(int c, struct ts *left, int ep)
     case C_PPOLL:
         return syscall5(SYS_PPOLL, (long)&p, 1, (long)left, 0, 8);
     case C_SELECT: {
-        long tv[2] = {1, 0}, r;
+        long tv[2], r;
 
+        tv[0] = 1;
+        tv[1] = 0;
         fd_set1(set, wake_fd[0]);
         r = syscall5(SYS_SELECT, wake_fd[0] + 1, (long)set, 0, 0, (long)tv);
         left->sec = tv[0];
@@ -604,7 +618,7 @@ static long untimed_call(int c)
     struct pollfd p = {0, POLLIN, 0};
     struct sembuf down = {0, -1, 0};
     struct msgbuf m;
-    unsigned none[2] = {0, 0};
+    const unsigned none[2] = {0, 0};
     char byte;
 
     p.fd = wake_fd[0];
@@ -800,6 +814,8 @@ static int run(int c, int scen, struct record *r)
 {
     int pipefd[2], pid, status = 0, got;
     char byte;
+
+    pipefd[0] = pipefd[1] = -1;
 
     *shared_word = 0;
     sem_id = sem_new();

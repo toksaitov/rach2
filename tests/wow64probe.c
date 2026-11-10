@@ -144,8 +144,9 @@
 /* The x86-64 exit call, whose entry stop the tracer looks for. */
 #define X86_64_EXIT 60
 
-/** End the process with `status`; it does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
+
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
