@@ -1,5 +1,5 @@
 # sys/drm/sources.mk: the display devices' files that every architecture
-# compiles, for rach2/sources.mk: the DRM core, virtio-gpu and vkms. The
+# compiles, for rach2/sources.mk: the DRM core, virtio-gpu, vkms and vgem. The
 # drivers that reach PC-only code are sys/drm/pc.mk's. One file to a line,
 # each task adding its own.
 
@@ -20,4 +20,5 @@ DRM_C_SRC = sys/drm/drm.c \
     sys/drm/virtio_gpu_submit.c \
     sys/drm/virtio_gpu_fence.c \
     sys/drm/virtio_gpu_blob.c \
-    sys/drm/vkms.c
+    sys/drm/vkms.c \
+    sys/drm/vgem.c

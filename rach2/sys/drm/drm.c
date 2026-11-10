@@ -87,6 +87,10 @@ void drm_start(void)
     if (n < 0 && n != -ENODEV) {
         klog(KLOG_WARN, "drm", "vkms: error %d", (int)n);
     }
+    n = vgem_probe();
+    if (n < 0 && n != -ENODEV) {
+        klog(KLOG_WARN, "drm", "vgem: error %d", (int)n);
+    }
 }
 
 /* ------------------------------------------------------------------------
