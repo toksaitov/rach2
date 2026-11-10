@@ -1,0 +1,111 @@
+.Dd November 10, 2026
+.Dt VGPU-SHM 4
+.Os
+.Sh NAME
+.Nm vgpu-shm
+.Nd run virtio-gpu over a region shared with a virtual machine
+.Sh SYNOPSIS
+.Pa /dev/vgpu-shm
+.Sh DESCRIPTION
+The vgpu-shm character device, major 10 and minor 243, gives the kernel a
+memory region and the doorbells of a virtual machine that runs a
+virtio-gpu device in it, and reports what the kernel's driver does there.
+The kernel then binds
+.Xr virtio-gpu 4
+over the region, whose layout and rules
+.Pa rach2/sys/virtio/vgpushm.h
+defines: a control page, the rings of two virtqueues and a heap from which
+the driver takes its commands and every resource's backing.
+The device's DMA addresses are offsets in the region, and the kernel
+checks everything the device writes there before using it.
+The device has mode 0600, and every call needs a privileged caller.
+.Xr ivshmemd 8
+is the program that makes the region and serves it to QEMU's
+.Sy ivshmem-doorbell .
+.Pp
+The ioctls:
+.Bl -tag -width VGS_IOC_ATTACH
+.It Dv VGS_IOC_ATTACH
+Read a
+.Vt struct vgs_attach :
+.Ar memfd
+is a memfd or other tmpfs file sealed with
+.Dv F_SEAL_SHRINK ,
+whose size is a power of two from 32 KiB to 64 MiB;
+.Ar bell_in
+are two eventfds the device signals for the driver, the queues' vector 0
+and the control vector 1, and
+.Ar bell_out
+two the driver signals for the device;
+.Ar peer
+is the driver's ivshmem peer id, below 65536.
+With every eventfd -1 the driver polls the region instead.
+.Ar flags
+and
+.Ar reserved
+are 0.
+The kernel holds the region's pages and the eventfds until the detach, and
+binds virtio-gpu once the device offers a running epoch; a device that
+leaves the epoch, fails or resets is dropped and bound again in a new one.
+One region is attached at a time.
+.It Dv VGS_IOC_DETACH
+Read a
+.Vt uint32_t :
+.Dv VGS_DETACH_ORDERLY
+tells a device that is still there that the driver has gone, and
+.Dv VGS_DETACH_LOST
+says that the device's machine has died.
+Either way the driver unplugs the display, fails every pending fence with
+.Er ENODEV ,
+frees every resource and gives the region back; the call returns once it
+has.
+Only the descriptor that attached may detach.
+Its last close detaches as
+.Dv VGS_DETACH_LOST
+does.
+.It Dv VGS_IOC_INFO
+Fill a
+.Vt struct vgs_info :
+whether a region is attached and virtio-gpu bound over it, the epoch, the
+last states of the driver and the device and the device's error, whether
+both sides use the doorbells, the times virtio-gpu was bound, the
+doorbells rung each way by vector, the passes that found the device's work
+before its doorbell, and the heap's pages, those in use and the
+allocations it refused.
+.El
+.Pp
+With a KVM guest's ivshmem-doorbell, the device's doorbells reach the
+kernel through KVM ioeventfds and the driver's raise the guest's MSI-X
+vectors through irqfds, with no exit to QEMU;
+.Xr proc 5
+counts both in
+.Pa /proc/stat .
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EPERM
+The caller is not privileged.
+.It Bq Er EBUSY
+A region is already attached.
+.It Bq Er EBADF
+The region's descriptor does not name a tmpfs file, or an eventfd's
+descriptor is not an eventfd.
+.It Bq Er EINVAL
+The region's size or seals are wrong, some but not all eventfds are given,
+the peer is too large, a flag or reserved field is nonzero, or the
+detach's argument is unknown.
+.It Bq Er ENXIO
+The descriptor did not attach the region, or none is attached.
+.It Bq Er ENOMEM
+The kernel cannot map the region or allocate its records.
+.It Bq Er EFAULT
+An argument cannot be read or written.
+.It Bq Er ENOTTY
+The request is unknown.
+.El
+.Sh SEE ALSO
+.Xr eventfd 2 ,
+.Xr memfd_create 2 ,
+.Xr drm 4 ,
+.Xr kvm 4 ,
+.Xr virtio-gpu 4 ,
+.Xr ivshmemd 8
