@@ -1,10 +1,11 @@
 #!/bin/sh
 # trialroot.sh IMAGE: stage on the running release, by hand, the menu block
 # that `bootctl rootimage GPTID=...,6:IMAGE` writes, with
-# `rach2.i915 rach2.i915.disable_display` after this boot's words, and arm
-# it once with the branch's bootctl at /dev/shm/bootctl. The release's
-# bootctl has no `rootimage`, and the branch's takes the words of the line
-# it runs under, which has no driver.
+# `rach2.i915 rach2.i915.disable_display rach2.vgem` after this boot's
+# words, and arm it once with the branch's bootctl at /dev/shm/bootctl. The
+# release's bootctl has no `rootimage`, and the branch's takes the words of
+# the line it runs under, which has no driver; vgem is the device IGT's
+# cork opens.
 #
 # The words kept are those utils/bootctl.c's trial_drops keeps: every word
 # but a path, rach2.root=, rach2.rootfstype=, rach2.rootimage=, rach2.slot=,
@@ -29,7 +30,7 @@ for word in $(cat /proc/cmdline); do
         *) tokens="$tokens $word" ;;
     esac
 done
-tokens="$tokens rach2.i915 rach2.i915.disable_display"
+tokens="$tokens rach2.i915 rach2.i915.disable_display rach2.vgem"
 line="rach2.rootimage=$spec rach2.slot=trialroot$tokens"
 [ ${#line} -le 510 ] || { echo "trialroot: the line is ${#line} bytes, past 510" >&2; exit 1; }
 

@@ -1,0 +1,20 @@
+judge: worse: igt@gem_busy@close-race: skip here, pass in the reference
+judge: worse: igt@gem_wait@await: skip here, pass in the reference
+judge: worse: igt@gem_wait@await@all-engines: skip here, pass in the reference
+judge: worse: igt@gem_wait@await@bcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@await@rcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@await@vcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@await@vecs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-busy: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@all-engines: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@bcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@rcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@vcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@vecs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-wait: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@all-engines: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@bcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@rcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@vcs0: skip here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@vecs0: skip here, pass in the reference
+judge: result: fail results 211 in the reference, 211 here, 19 worse than Debian's
