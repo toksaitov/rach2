@@ -9,6 +9,7 @@
 #include "paging.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../proc/sched.h"
 
 /* The most pages a file in memory has, SHMEM_MAX_SIZE of them. */
 #define SHMEM_MAX_PAGES ((uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE))
@@ -253,6 +254,35 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
         return 0;
     }
     return sh->leaves[leaf][pgoff % SHMEM_LEAF];
+}
+
+uint64_t shmem_count(const struct shmem *sh, uint32_t first, uint32_t last)
+{
+    uint32_t leaf = first / SHMEM_LEAF;
+    uint32_t end = last / SHMEM_LEAF;
+    uint64_t count = 0;
+    uint32_t work = 0;
+
+    for (; leaf <= end && leaf < sh->nleaves; leaf++) {
+        const uintptr_t *frames = sh->leaves[leaf];
+        uint32_t from = leaf == first / SHMEM_LEAF ? first % SHMEM_LEAF : 0;
+        uint32_t to = leaf == end ? last % SHMEM_LEAF : SHMEM_LEAF - 1;
+        uint32_t i;
+
+        if (frames) {
+            for (i = from; i <= to; i++) {
+                count += frames[i] != 0;
+            }
+            work += SHMEM_LEAF;
+        } else {
+            work++;
+        }
+        if (work >= SHMEM_LEAF) {
+            sched_service_point();
+            work = 0;
+        }
+    }
+    return count;
 }
 
 uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)

@@ -30,7 +30,7 @@
  * ENOSYS on the i686 one.
  *
  * `cachestat`: a memfd of three pages written in its first and last counts
- * two pages in memory and two dirty, a range of its middle page none, and a
+ * two pages in memory and none dirty, a range of its middle page none, and a
  * range past its end none; EBADF for a descriptor that is not open and an
  * O_PATH one, EFAULT for a range it cannot read and EINVAL for a flag.
  *
@@ -506,9 +506,14 @@ static void cachestat_rows(void)
         miss("a memfd of three pages");
         return;
     }
-    counted("cachestat of the whole file", count(fd, 0, 0, &c), &c, 2, 2);
+    counted("cachestat of the whole file", count(fd, 0, 0, &c), &c, 2, 0);
     counted("cachestat of the middle page", count(fd, PAGE, PAGE, &c), &c, 0, 0);
     counted("cachestat past the end", count(fd, 8 * PAGE, PAGE, &c), &c, 0, 0);
+    if (ftruncate(fd, (off_t)0xFFFFFFFF000ull) != 0) {
+        miss("grow the memfd to its sparse maximum");
+    } else {
+        counted("cachestat of a maximum sparse file", count(fd, 0, 0, &c), &c, 2, 0);
+    }
     expect("cachestat of a closed descriptor", syscall(NR_CACHESTAT, 999, &r, &c, 0ul), 0, EBADF);
     expect("cachestat of an O_PATH descriptor", syscall(NR_CACHESTAT, opath, &r, &c, 0ul), 0,
            EBADF);

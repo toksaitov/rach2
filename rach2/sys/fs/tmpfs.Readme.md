@@ -26,6 +26,8 @@ A directory's names are a list of `struct tmpfs_dirent` in the order they were m
 
 A regular file's bytes are a `struct shmem` (`../mm/shmem.c`, in [../mm/Readme.md](../mm/Readme.md)): a directory of leaves of `SHMEM_LEAF`, 1024, frames, a page made when it is first written or mapped, so a hole costs nothing, up to `SHMEM_MAX_SIZE`, 16 TiB less a page, on both architectures. A shared mapping maps the file's frames, and a truncation takes the pages it frees out of every mapping first. Each mount counts its files' pages against its limit (`struct shmem_quota`), half the machine's frames unless `size=` gives another, and a page past it fails a write with `ENOSPC`.
 
+`cachestat` counts resident entries through `shmem_count`, skipping absent leaves and offering scheduling between leaves during a long walk. Both ordinary and secret pages count as clean: Linux's shmem dirty folio bit does not set the page-cache dirty tag that this call counts.
+
 ### Calls and locking
 
 `vfs_tmpfs_type` sets `ns_serialised`, so the calls that use a description of a tmpfs file, a read, a write and a truncation among them, take the mount's namespace lock before the description's ([Readme.md](Readme.md)); the operations take no lock of their own. A read advances the access time. `tmpfs_open` answers `ENXIO` for a device node, since `open(2)` opens the `/dev` device with the node's number before it calls the type. `fsync`, `sync` and the first half of an unmount do nothing and succeed; the unmount then frees the tree in a loop over the parent links (`free_tree`), not by recursion, since a tree may be as deep as a path is long and the kernel stack is 16 KiB.

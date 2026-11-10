@@ -3208,6 +3208,21 @@ static void order_row(void)
     order_row_under(64, 0, 1035);
 }
 
+/** Count a pending pair without fetching or draining a disk block. */
+static void cache_pending_pair(void *node)
+{
+    struct vfs_cachestat cs;
+    uint64_t waits = current_proc->disk_waits;
+    int writes = writes_made;
+
+    memset(&cs, 0, sizeof(cs));
+    OPS->cachestat(&mnt, node, 1, 2, &cs);
+    check(cs.cache == 2 && cs.dirty == 2,
+          "cachestat counts both pending data pages as cached and dirty");
+    check(current_proc->disk_waits == waits && writes_made == writes,
+          "cachestat performs no disk request and drains no pending write");
+}
+
 /**
  * Keep a description open across calls under a cache of `buffers` buffers,
  * and check that the writes it collects reach the device only when
@@ -3258,6 +3273,7 @@ static void batch_rows_under(uint32_t buffers)
               OPS->write(&mnt, handle, want + 8192, 4096, 8192) == 4096,
           "two direct-block appends are accepted");
     check(writes_made == 0, "cross-call append collection writes no blocks");
+    cache_pending_pair(node);
     check(OPS->read(&mnt, handle, abuf, 12288, 0) == 12288 && memcmp(abuf, want, 12288) == 0,
           "pending appends read their full size and bytes");
     OPS->release(&mnt, handle);
@@ -3298,6 +3314,44 @@ static void batch_rows_under(uint32_t buffers)
     check(unmount_rw() == 0, "the cross-call count volume unmounts");
     bcache_set_limit(0);
     check(e2fsck_clean(wimg), "the cross-call count volume is clean");
+}
+
+/** A one-terabyte sparse file visits only its allocated map branches.
+ * Pending data is counted before sync; a cold map is never fetched. */
+static void cache_sparse_row(void)
+{
+    struct vfs_cachestat cs;
+    void *node, *handle = NULL;
+    uint64_t waits, visits;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the sparse cache volume mounts");
+    node = make_file(mnt.root, "sparse-cache", &rc);
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the sparse cache file opens");
+    if (!node || !handle) {
+        return;
+    }
+    check(OPS->write(&mnt, handle, "x", 1, (1ull << 40) - 1u) == 1,
+          "the sparse file has one page at one terabyte");
+    memset(&cs, 0, sizeof(cs));
+    waits = current_proc->disk_waits;
+    visits = bcache_stat_visits();
+    OPS->cachestat(&mnt, node, 0, 0xFFFFFFFFu, &cs);
+    check(cs.cache == 1 && cs.dirty == 1, "the pending sparse page counts once and dirty");
+    check(current_proc->disk_waits == waits && bcache_stat_visits() - visits < 16384,
+          "the sparse query reads no disk and visits no logical-hole range");
+    check(OPS->fsync(&mnt, handle) == 0, "the sparse file syncs before cache eviction");
+    bcache_invalidate(&dev);
+    memset(&cs, 0, sizeof(cs));
+    waits = current_proc->disk_waits;
+    OPS->cachestat(&mnt, node, 0, 0xFFFFFFFFu, &cs);
+    check(cs.cache == 0 && cs.dirty == 0 && current_proc->disk_waits == waits,
+          "a cold sparse map is not read merely to count pages");
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, node);
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the sparse cache volume stays clean");
 }
 
 /**
@@ -3822,6 +3876,7 @@ static void batch_rows(void)
     batch_loss_row();
     batch_rows_under(16);
     batch_rows_under(512);
+    cache_sparse_row();
     order_row_under(16, 1, 11);
     order_row_under(16, 1, 1035);
     order_row_under(16, 1, 2059);

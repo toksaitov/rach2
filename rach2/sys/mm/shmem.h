@@ -94,6 +94,11 @@ uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff);
  * allocated and no reference is taken. */
 uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff);
 
+/** Count resident pages in the inclusive range [first, last], without
+ * visiting absent leaves. The caller keeps `sh` alive; the walk offers
+ * scheduling between leaves and keeps no pointer across those points. */
+uint64_t shmem_count(const struct shmem *sh, uint32_t first, uint32_t last);
+
 /** Make `phys`, a frame the caller filled, page `pgoff` unless the memory
  * has one by now; the table takes the caller's reference, and the caller's
  * frame is given back when another is there. Returns the page's frame with

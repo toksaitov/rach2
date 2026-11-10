@@ -1337,19 +1337,22 @@ const char *tmpfs_label(void *node)
     return ((struct tmpfs_node *)node)->label;
 }
 
-/** A page of a tmpfs file is in memory for as long as the file has it, and
- * dirty, there being nothing to write it back to, as Linux's shmem keeps
- * the pages a write or a store made dirty; a page of memfd_secret is never
- * dirty, as Linux's are not. */
-static int tmpfs_page_cached(struct vfs_mount *mnt, void *node, uint64_t pgoff)
+/** Count allocated pages, skipping absent shmem leaves. Linux's shmem
+ * folios may be dirty, but have no PAGECACHE_TAG_DIRTY mark, which is what
+ * cachestat counts; secret-memory pages likewise count as clean. */
+static void tmpfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
+                            struct vfs_cachestat *cs)
 {
-    struct tmpfs_node *n = (struct tmpfs_node *)node;
+    struct tmpfs_node *n = node;
 
     (void)mnt;
-    if (pgoff > 0xFFFFFFFFu || shmem_resident(&n->data, (uint32_t)pgoff) == 0) {
-        return 0;
+    if (first > 0xFFFFFFFFu) {
+        return;
     }
-    return n->secret ? VFS_PAGE_CACHED : VFS_PAGE_CACHED | VFS_PAGE_DIRTY;
+    if (last > 0xFFFFFFFFu) {
+        last = 0xFFFFFFFFu;
+    }
+    cs->cache = shmem_count(&n->data, (uint32_t)first, (uint32_t)last);
 }
 
 /**
@@ -1416,7 +1419,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
-    tmpfs_page_cached,
+    tmpfs_cachestat,
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0};
