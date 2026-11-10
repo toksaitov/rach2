@@ -449,14 +449,14 @@ static int seek_refusal_rows(void)
 static int vector_flag_order(int fd)
 {
     const long calls[2] = {SYS_preadv2, SYS_pwritev2};
-    struct iovec invalid = {(void *)1, (size_t)-1};
-    struct iovec unfaulted = {(void *)1, 1};
+    struct iovec invalid = {(void *)0x1, (size_t)-1};
+    struct iovec unfaulted = {(void *)0x1, 1};
     struct iovec empty = {0, 0};
     int i, pos;
 
     for (i = 0; i < 2; i++) {
         for (pos = -1; pos <= 0; pos++) {
-            if (!refused(RWV2(calls[i], fd, (void *)1, 1, pos, 0x40), EFAULT) ||
+            if (!refused(RWV2(calls[i], fd, (void *)0x1, 1, pos, 0x40), EFAULT) ||
                 !refused(RWV2(calls[i], fd, &empty, 1025, pos, 0x40), EINVAL) ||
                 !refused(RWV2(calls[i], fd, &invalid, 1, pos, 0x40), EINVAL) ||
                 !refused(RWV2(calls[i], fd, &unfaulted, 1, pos, 0x40), EOPNOTSUPP)) {
@@ -467,7 +467,7 @@ static int vector_flag_order(int fd)
     report_held();
     for (i = 0; i < 2; i++) {
         for (pos = -1; pos <= 0; pos++) {
-            if (RWV2(calls[i], fd, (void *)1, 0, pos, 0x40) != 0 ||
+            if (RWV2(calls[i], fd, (void *)0x1, 0, pos, 0x40) != 0 ||
                 RWV2(calls[i], fd, &empty, 1, pos, 0x40) != 0) {
                 return fail("zero bytes return before an unknown vector flag");
             }
