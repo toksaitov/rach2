@@ -825,6 +825,11 @@ or an ioctl evdev does not know, as on Linux.
 .It Bq Er ENODEV
 An open of a node with no device, or any call on an open whose device has
 gone, such as a USB keyboard unplugged, or that was revoked.
+.It Bq Er ENOENT
+.Dv EVIOCGPHYS
+or
+.Dv EVIOCGUNIQ
+of a device without that text, as on Linux.
 .It Bq Er ENOSYS
 .Dv EVIOCGREP
 or
