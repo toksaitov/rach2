@@ -2523,6 +2523,13 @@ void intel_wm_commit(struct intel_crtc *crtc, struct drm_atomic_state *state, in
  * vblank work. */
 void intel_wm_vblank(struct intel_crtc *crtc);
 
+/**
+ * Compute each pipe's watermarks for the state the readout and adoption
+ * built, with no intermediate, and program them, Linux's ilk_wm_sanitize;
+ * the firmware's stay when any pipe's do not fit. Once, after adoption.
+ */
+void intel_wm_sanitize(struct drm_i915_private *i915);
+
 /** Let a pending `intel_wm_vblank` go, with its vblank reference. */
 void intel_wm_cancel(struct intel_crtc *crtc);
 

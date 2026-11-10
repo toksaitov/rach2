@@ -11,10 +11,12 @@
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The rows follow the trial's step in its order: the bind's adoption of
- * pipe A, which writes no register of the pipe, its link or the backlight,
- * and the outputs probed with no hotplug event; GET_PIPE_FROM_CRTC_ID,
+ * pipe A, which writes no register of the pipe, its link or the backlight
+ * but writes the watermarks computed for it over the firmware's, and the
+ * outputs probed with no hotplug event; GET_PIPE_FROM_CRTC_ID,
  * by which IGT maps each CRTC to its pipe; the desktop's first commit,
- * Weston's at boot, taken on the adopted pipe; then crcmodes'
+ * Weston's at boot, taken on the adopted pipe though the firmware left a
+ * sprite watermark with no sprite on; then crcmodes'
  * (dev-log/78-intel/78-10d/crcmodes.c) mode sets, the panel's own mode and
  * four smaller ones under each scaling mode, each by SETPROPERTY and
  * SETCRTC with the panel's timings, its fitter's window as Linux's
@@ -336,6 +338,11 @@ static int32_t bring_up(void)
     clock_base_ns = model_now_ns - (int64_t)model.now_us * 1000;
     model.on_delay = follow_clock;
     i915_model_poke(&model, SFUSE_STRAP, SFUSE_STRAP_DDIB_DETECTED | SFUSE_STRAP_DDIC_DETECTED);
+    /* The Lenovo firmware's level 0 of pipes A and B, read on the machine:
+     * primary 120, sprite 56 and cursor 24, a sprite value with no sprite
+     * on that no commit's intermediate can keep. */
+    i915_model_poke(&model, WM0_PIPE_ILK(0), 0x00783818u);
+    i915_model_poke(&model, WM0_PIPE_ILK(1), 0x00783818u);
     fd = open(LENOVO_VBT_FILE, 0);
     while (fd >= 0 && got < LENOVO_VBT_BYTES &&
            (r = read(fd, lenovo_vbt + got, (unsigned long)(LENOVO_VBT_BYTES - got))) > 0) {
@@ -494,10 +501,11 @@ static int crc_line(uint32_t *frame_no, uint32_t *crc)
 
 /**
  * The bind's adoption: no register of the pipes, planes, transcoders, DDI
- * buffers, clocks or backlight written; pipe A on in the atomic state with
- * the firmware's framebuffer; the outputs probed, the panel connected and
- * HDMI-A-1, DP-1 and HDMI-A-2 not, with no hotplug event, and the hotplug
- * pins of B and C armed.
+ * buffers, clocks or backlight written; the watermarks computed and
+ * written for the adopted state, as Linux's ilk_wm_sanitize does; pipe A
+ * on in the atomic state with the firmware's framebuffer; the outputs
+ * probed, the panel connected and HDMI-A-1, DP-1 and HDMI-A-2 not, with no
+ * hotplug event, and the hotplug pins of B and C armed.
  */
 static void row_adopt(void)
 {
@@ -505,12 +513,16 @@ static void row_adopt(void)
 
     CHECK(!wrote_range(0x60000u, 0x6400fu, log_at_init) &&
               !wrote_range(0x64028u, 0x7ffffu, log_at_init) &&
-              !wrote_range(0x45000u, 0x452ffu, log_at_init) &&
               !wrote_range(0x46100u, 0x46114u, log_at_init) &&
               !wrote_range(0xc7200u, 0xc7203u, log_at_init) &&
               !wrote_range(0xc8250u, 0xc8258u, log_at_init) &&
               !wrote_range(0x48250u, 0x48254u, log_at_init),
           "adopt: nothing of the pipe, its link or the backlight written, so no blank");
+    CHECK(
+        ((i915_read(&gpu.hw, WM0_PIPE_ILK(0)) >> WM0_PIPE_SPRITE_SHIFT) & 0xffu) == 0 &&
+            i915_read(&gpu.hw, WM0_PIPE_ILK(0)) >> WM0_PIPE_PRIMARY_SHIFT != 0 &&
+            i915_read(&gpu.hw, WM0_PIPE_ILK(1)) == 0,
+        "adopt: the watermarks computed for the adopted planes, the firmware's sprite value gone");
     CHECK(pa->base.state->active && ps->fb && intel_fb_ggtt(ps->fb) == 0 &&
               logged("display: pipe A adopted: 1366x768 in 1366x768@60"),
           "adopt: pipe A on with the firmware's framebuffer, and the log's line");
