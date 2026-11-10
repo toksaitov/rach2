@@ -12,3 +12,25 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `tools/lenovo/debian-ref/games.sh` sets `SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0` for both games; Rach2's own games layer (80-7) meets the same libraries if it runs SDL games under cage.
 * Status: unreported, cause unproved.
 * Next: run it with `WAYLAND_DEBUG=1` to see the last requests and events and whether cage advertises `zxdg_decoration_manager_v1`; try current SDL 2, libdecor and cage; then report to whichever project the trace names.
+
+## Linux looks up an AMD L1 cache's eight-bit associativity in a table of sixteen
+
+* Project: Linux 6.12, `arch/x86/kernel/cpu/cacheinfo.c` at the tag `v6.12`.
+* Fails: `amd_cpuid4`, which builds leaf 4's registers from AMD's leaf 0x80000005 on a processor without TOPOEXT, indexes `assocs[]` (line 220), a table of sixteen entries for the four-bit codes of leaf 0x80000006, with an L1's associativity (line 270), which leaf 0x80000005 gives as a count of eight bits (`union l1_cache`, line 193). A count of 1, 2 or 4 happens to read itself, but an 8-way L1 is shown as 16 ways, a count the table has no entry for, such as 3, as 1024 ways, and a count past 15, a fully associative 0xFF among them, reads past the table.
+* Found: 2026-11-10, on the Mac, milestone 80, task 80-10b, while writing `/sys/devices/system/cpu/cpuN/cache` from Linux's source; by reading, not on a machine.
+* Reproduction: on a guest whose CPUID is AMD without TOPOEXT, such as QEMU's `-cpu qemu64`, compare `ways_of_associativity` of `/sys/devices/system/cpu/cpu0/cache/index0` with the L1 data associativity in bits 16 to 23 of leaf 0x80000005's ECX. Not yet run.
+* Evidence: Linux's `arch/x86/kernel/cpu/cacheinfo.c` at `v6.12`, lines 189 to 231 and 263 to 274; Rach2's `cache_legacy` in `rach2/sys/arch/x86/cpuinfo.c`.
+* Rach2: reproduces Linux's figures, the table applied to the L1's count, and takes a count past 15 as 0 where Linux reads past its table; added with this task's sysfs files.
+* Status: unreported.
+* Next: check current Linux; run the reproduction under QEMU's `qemu64` and a real pre-Zen AMD processor; report to the x86 maintainers with a patch that decodes leaf 0x80000005's count directly.
+
+## Linux reads a DMI release one byte past a structure that ends before it
+
+* Project: Linux 6.12, `drivers/firmware/dmi_scan.c` at the tag `v6.12`.
+* Fails: `dmi_save_release` returns early only when `dm->length < index` (line 209), then reads the minor number at `index` (line 212); a structure whose length is exactly `index` has its last byte at `index - 1`, so the minor number is read from the first byte of the structure's strings.
+* Found: 2026-11-10, on the Mac, milestone 80, task 80-10b, while writing `/sys/class/dmi/id` from Linux's source; by reading, not on a machine.
+* Reproduction: an SMBIOS table whose BIOS Information structure is 21 bytes long, with its byte 20 not 0xFF, gives a `bios_release` whose minor number is the first character of the vendor string. Not yet run.
+* Evidence: Linux's `drivers/firmware/dmi_scan.c` at `v6.12`, lines 202 to 225 and 491 to 492; Rach2's `dmi_save` in `rach2/sys/arch/x86/smbios.c`.
+* Rach2: saves a release only from a structure that holds both bytes, the only difference from Linux's figures; added with this task's sysfs files.
+* Status: unreported.
+* Next: check current Linux; build the table with QEMU's `-smbios file=` and run the reproduction; send a one-line patch, `dm->length <= index`.
