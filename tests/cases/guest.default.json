@@ -5198,7 +5198,7 @@
         {"assertion_id": "offset-file", "checks": "a file in /dev/shm is made for the offset rows", "source": "program"},
         {"assertion_id": "offset-eoverflow", "checks": "a mapping of the file whose last page is past 32 bits fails with EOVERFLOW", "source": "program"},
         {"assertion_id": "offset-mmap", "checks": "a mapping of the file at a page offset of 2^31 is made", "source": "program"},
-        {"assertion_id": "offset-sigsegv", "checks": "a child's touch of that mapping, past the file's end, dies of SIGSEGV", "source": "program"},
+        {"assertion_id": "offset-sigbus", "checks": "a child's touch of that mapping, past the file's end, dies of SIGBUS", "source": "program"},
         {"assertion_id": "remap-mmap", "checks": "a mapping for mremap is made", "source": "program"},
         {"assertion_id": "remap-blocker", "checks": "a mapping is made right after it, to block growth in place", "source": "program"},
         {"assertion_id": "remap-no-grow", "checks": "mremap without MREMAP_MAYMOVE does not grow into that mapping", "source": "program"},

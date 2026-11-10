@@ -163,7 +163,7 @@ static const char *const assertion_id[] = {"private-file",
                                            "offset-file",
                                            "offset-eoverflow",
                                            "offset-mmap",
-                                           "offset-sigsegv",
+                                           "offset-sigbus",
                                            "remap-mmap",
                                            "remap-blocker",
                                            "remap-no-grow",
@@ -662,7 +662,7 @@ static int readonly_shared(void)
  * and the first touch would not end. A file's offset whose last page would
  * not fit in 32 bits is EOVERFLOW, and the page of a file in memory 2^31
  * pages in, past the end of the empty file, is never backed: a child that
- * touches it dies of SIGSEGV.
+ * touches it dies of SIGBUS, as in Linux.
  */
 static int offsets(void)
 {
@@ -696,8 +696,8 @@ static int offsets(void)
     if (pid == 0) {
         _exit(m[0] == 0 ? 0 : 1);
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
-        return fail("a touch of a file in memory past its end was not SIGSEGV");
+    if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGBUS) {
+        return fail("a touch of a file in memory past its end was not SIGBUS");
     }
     row_held();
     munmap(m, PAGE);
