@@ -39,7 +39,7 @@ Two bindings of a port meet when one is to any address or both are to the
 same one; a socket may take a port at an address that meets another's only
 when all sockets so met have
 .Dv SO_REUSEADDR
-set and the binding owners have the same effective user ID.
+set, regardless of their owners.
 Rebinding first removes the socket's previous UDP registration, even
 when the new registration fails.
 .Pp

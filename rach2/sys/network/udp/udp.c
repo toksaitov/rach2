@@ -8,7 +8,6 @@
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "udp.h"
-#include "../../proc/process.h"
 #include "../net.h"
 #include "../socket/socket.h"
 #include "../ip/ip.h"
@@ -25,7 +24,6 @@ typedef struct udp_binding {
     struct udp_binding *next;
     uint16_t port;
     struct socket *sock;
-    uint32_t owner; /* the file-system uid that bound it */
 } udp_binding_t;
 
 static udp_binding_t *bindings;
@@ -72,7 +70,6 @@ int udp_bind(uint16_t port, struct socket *sock)
 {
     udp_binding_t *b;
     uint32_t flags;
-    uint32_t uid = current_proc ? proc_fsuid(current_proc) : 0;
     int met = 0, shared = sock && sock->reuseaddr;
 
     flags = net_lock();
@@ -80,7 +77,7 @@ int udp_bind(uint16_t port, struct socket *sock)
     for (b = bindings; b; b = b->next) {
         if (b->port == port && (!b->sock || socket_bind_conflict(b->sock, sock))) {
             met = 1;
-            if (!b->sock || !b->sock->reuseaddr || b->owner != uid) {
+            if (!b->sock || !b->sock->reuseaddr) {
                 shared = 0;
             }
         }
@@ -99,7 +96,6 @@ int udp_bind(uint16_t port, struct socket *sock)
     }
     b->port = port;
     b->sock = sock;
-    b->owner = uid;
     b->next = bindings;
     bindings = b;
     net_unlock(flags);

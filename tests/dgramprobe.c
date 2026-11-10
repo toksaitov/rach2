@@ -14,11 +14,12 @@
  * "DGRAMPROBE OUTSIDE"; a connect on a descriptor that is not a socket is
  * ENOTSOCK; AF_UNSPEC disconnects a datagram socket and is EAFNOSUPPORT for a
  * stream; a packet socket cannot be connected; two sockets share a port only
- * when both set SO_REUSEADDR, and the reply goes to the one connected to the
- * sender; a port below 1024 is root's; a connect beside eight bound sockets
- * answers 0 or EAGAIN; a broadcast is EACCES until SO_BROADCAST is set; the
- * options read back; and SO_BINDTODEVICE takes the machine's interface, by
- * name or as the whole `struct ifreq` BusyBox sends, and no other.
+ * when both set SO_REUSEADDR, even with different file-system user ids,
+ * and the reply goes to the one connected to the sender; a port below
+ * 1024 is root's; a connect beside eight bound sockets answers 0 or
+ * EAGAIN; a broadcast is EACCES until SO_BROADCAST is set; the options
+ * read back; and SO_BINDTODEVICE takes the machine's interface, by name or
+ * as the whole `struct ifreq` BusyBox sends, and no other.
  *
  * The peer is the machine itself at its own address, so both ends of the
  * exchanges are in this process. Prints "DGRAMPROBE OK" and exits 0 on
@@ -502,6 +503,69 @@ static int receive_past_outsider(int fd)
     return r;
 }
 
+/** Bind two users' sockets to the renewal port, refusing the second
+ * until both set SO_REUSEADDR; return it and keep the first in `*out`. */
+static int reuse_socket(int *out)
+{
+    unsigned long args[6];
+    int listener, sender, on;
+
+    listener = open_bound(renew_port);
+    if (syscall1(SYS_SETFSUID, user_id) != 0 || syscall1(SYS_SETFSUID, -1) != user_id) {
+        fail("the renewal socket's file-system user id did not change");
+    }
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    sender = socketcall(SC_SOCKET, args);
+    if (sender < 0) {
+        fail("the renewal socket did not open");
+    }
+    set_sockaddr(0, renew_port);
+    args[0] = (uint32_t)sender;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != -EADDRINUSE) {
+        fail("a second socket took a bound port without asking to share it");
+    }
+    on = 1;
+    args[0] = (uint32_t)sender;
+    args[1] = SOL_SOCKET;
+    args[2] = SO_REUSEADDR;
+    args[3] = (unsigned long)&on;
+    args[4] = sizeof(on);
+    if (socketcall(SC_SETSOCKOPT, args) != 0) {
+        fail("SO_REUSEADDR was refused on the renewal socket");
+    }
+    set_sockaddr(0, renew_port);
+    args[0] = (uint32_t)sender;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != -EADDRINUSE) {
+        fail("one socket asking to share was enough");
+    }
+    args[0] = (uint32_t)listener;
+    args[1] = SOL_SOCKET;
+    args[2] = SO_REUSEADDR;
+    args[3] = (unsigned long)&on;
+    args[4] = sizeof(on);
+    if (socketcall(SC_SETSOCKOPT, args) != 0) {
+        fail("SO_REUSEADDR was refused on the listener");
+    }
+    set_sockaddr(0, renew_port);
+    args[0] = (uint32_t)sender;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0) {
+        fail("two users' sockets that both asked to share a port could not");
+    }
+    if (syscall1(SYS_SETFSUID, 0) != user_id || syscall1(SYS_SETFSUID, -1) != 0) {
+        fail("the file-system user id did not return to root");
+    }
+    *out = listener;
+    return sender;
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -735,53 +799,7 @@ void probe_main(unsigned long *sp)
     }
     report_held();
 
-    /* Two sockets on one port, as a DHCP client's renewal binds port 68. */
-    listener = open_bound(renew_port);
-    args[0] = AF_INET;
-    args[1] = SOCK_DGRAM;
-    args[2] = 0;
-    sender = socketcall(SC_SOCKET, args);
-    if (sender < 0) {
-        fail("the renewal socket did not open");
-    }
-    set_sockaddr(0, renew_port);
-    args[0] = (uint32_t)sender;
-    args[1] = (unsigned long)sa;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != -EADDRINUSE) {
-        fail("a second socket took a bound port without asking to share it");
-    }
-    on = 1;
-    args[0] = (uint32_t)sender;
-    args[1] = SOL_SOCKET;
-    args[2] = SO_REUSEADDR;
-    args[3] = (unsigned long)&on;
-    args[4] = sizeof(on);
-    if (socketcall(SC_SETSOCKOPT, args) != 0) {
-        fail("SO_REUSEADDR was refused on the renewal socket");
-    }
-    set_sockaddr(0, renew_port);
-    args[0] = (uint32_t)sender;
-    args[1] = (unsigned long)sa;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != -EADDRINUSE) {
-        fail("one socket asking to share was enough");
-    }
-    args[0] = (uint32_t)listener;
-    args[1] = SOL_SOCKET;
-    args[2] = SO_REUSEADDR;
-    args[3] = (unsigned long)&on;
-    args[4] = sizeof(on);
-    if (socketcall(SC_SETSOCKOPT, args) != 0) {
-        fail("SO_REUSEADDR was refused on the listener");
-    }
-    set_sockaddr(0, renew_port);
-    args[0] = (uint32_t)sender;
-    args[1] = (unsigned long)sa;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != 0) {
-        fail("two sockets that both asked to share a port could not");
-    }
+    sender = reuse_socket(&listener);
     report_held();
 
     /* The sender connects to the peer, so the peer's answer is its own. */

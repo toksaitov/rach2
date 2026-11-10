@@ -45,8 +45,7 @@ The following options use
 .It Dv SO_REUSEADDR
 Set or get a boolean stored on the socket.
 A UDP bind may reuse a port only when every socket already bound to it
-and the new socket have this option set, and the binding processes had
-the same effective user ID at bind time.
+and the new socket have this option set, regardless of their owners.
 TCP listener ports can be reused after the listener closes without
 this option, but two live listeners cannot share a port.
 .It Dv SO_BROADCAST
