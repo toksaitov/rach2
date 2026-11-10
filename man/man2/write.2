@@ -180,7 +180,11 @@ Each nonempty entry is passed to the same operation as
 .Fn write .
 The call stops at the first short write or error.
 .Pp
-The kernel reads and checks each vector as it reaches it.
+For an append to a mounted file, the kernel copies and range-checks the
+whole vector, then brings in its buffers before taking the file lock.
+A bad data page ends the accessible prefix; bytes before it are written
+and returned as a short count.
+Other writes read and check each vector as they reach it.
 An individual length above 2147483647, or a length that would make the
 running byte total exceed that value, stops the call.
 An error found after a positive transfer returns the transferred byte
@@ -192,7 +196,8 @@ returns zero without checking the descriptor; an entry that cannot be
 read gives
 .Er EFAULT .
 .Pp
-The vector is a sequence of separate writes, not one atomic operation.
+An append to a mounted file holds its write lock across the vector.
+Other vectors are a sequence of separate writes.
 On a datagram socket, each nonempty entry sends a separate datagram.
 Musl's buffered output uses
 .Fn writev .
@@ -269,6 +274,9 @@ writes one, each at the place the ones before it reached, from
 .Fa offset ;
 the vector is checked whole before a byte is written, and a short write
 ends the call.
+On an O_APPEND file the whole vector goes to the end under one lock,
+leaving the shared offset alone, and a bad data page returns the bytes
+written before it, as an append through writev does.
 .Pp
 The x86-64 kernel runs, for a program that enters it by
 .Ql int $0x80 ,
