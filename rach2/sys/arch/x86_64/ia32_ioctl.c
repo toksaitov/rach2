@@ -712,6 +712,7 @@ struct family {
 static const struct family families[] = {
     {0x03, hdio},    /* HDIO_GETGEO */
     {0x12, blk},     /* block devices */
+    {0x3B, NULL},    /* ';', VFIO */
     {0x3E, gpu},     /* sync_file */
     {0x41, audio},   /* the console's AUDIO_* */
     {0x45, evdev},   /* 'E', evdev */
