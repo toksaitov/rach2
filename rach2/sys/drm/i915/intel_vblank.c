@@ -150,6 +150,7 @@ void intel_display_irq_work(struct drm_i915_private *i915)
         if (iir & DE_PIPE_VBLANK_IVB(pipe)) {
             (void)drm_crtc_handle_vblank(&c->base);
             intel_crtc_crc_frame(c);
+            intel_wm_vblank(c);
             /* The writes latch at the vblank that ends the frame they were
              * made in, so the event goes once the counter has moved past
              * the frame read after them. */
