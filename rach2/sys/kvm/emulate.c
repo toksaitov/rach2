@@ -462,6 +462,14 @@ static int fetch(struct kvm_vcpu *v, uint8_t *buf)
 
 /* ---- CPUID, XSETBV and MSRs ---- */
 
+/** Whether leaf 0 `basic` names AMD or Hygon, "AuthenticAMD" or
+ * "HygonGenuine" in EBX, EDX and ECX. */
+static int cpuid_vendor_amd(const struct kvm_cpuid_entry2 *basic)
+{
+    return (basic->ebx == 0x68747541u && basic->edx == 0x69746E65u && basic->ecx == 0x444D4163u) ||
+           (basic->ebx == 0x6F677948u && basic->edx == 0x6E65476Eu && basic->ecx == 0x656E6975u);
+}
+
 /**
  * The entry a CPUID of `*function` that `v`'s table lacks reads, as Linux's
  * get_out_of_range_cpuid_entry: past the highest leaf of its range, the
@@ -476,12 +484,7 @@ static const struct kvm_cpuid_entry2 *cpuid_out_of_range(const struct kvm_vcpu *
     const struct kvm_cpuid_entry2 *basic = kvm_cpuid_find(v, 0, 0), *class;
     uint32_t f = *function;
 
-    if (!basic ||
-        (basic->ebx == 0x68747541u && basic->ecx == 0x444D4163u &&
-         basic->edx == 0x69746E65u) /* "AuthenticAMD" */
-        ||
-        (basic->ebx == 0x6F677948u && basic->ecx == 0x656E6975u &&
-         basic->edx == 0x6E65476Eu) /* "HygonGenuine" */) {
+    if (!basic || cpuid_vendor_amd(basic)) {
         return NULL;
     }
     if (f >= 0x40000000u && f <= 0x4FFFFFFFu) {
