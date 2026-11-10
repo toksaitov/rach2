@@ -456,7 +456,7 @@ static void binary_cases(void)
     CHECK(wait(&a, hs, 1, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT, 0, NULL) == -ETIME,
           "polled wait for submission times out");
     CHECK(!wait(&a, hs + 1, 1, 0, 0, &first) && first == 0, "created signalled");
-    CHECK(wait(&a, hs, 0, 0, 0, NULL) == -EINVAL, "wait refuses no handles");
+    CHECK(wait(&a, hs, 0, 0, 0, NULL) == 0, "a wait on no handles: 0, as Linux");
     CHECK(wait(&a, hs, 2, 16, 0, NULL) == -EINVAL, "wait refuses unknown flags");
     CHECK(wait(&a, hs, 2, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE, 0, NULL) == -EINVAL,
           "binary wait refuses WAIT_AVAILABLE");
@@ -618,7 +618,13 @@ static void transfer_cases(uint32_t tl, uint32_t bin2)
     CHECK(transfer(&a, tl, 0, 40, 0, 0) == -ENOENT, "transfer to an unknown handle");
     CHECK(query(&a, 40, 0) == ~0ull, "query of an unknown handle");
     CHECK(query(&a, tl, 2) == ~0ull, "query refuses unknown flags");
-    CHECK(tsignal(&a, tl, 0) == 0 && query(&a, tl, 0) == 0, "point 0 signals as binary");
+    CHECK(transfer(&a, tl, 9, bin2, 0, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL) == -EINVAL,
+          "transfer refuses a flag but WAIT_FOR_SUBMIT, as Linux");
+    CHECK(twait(&a, &bin2, NULL, 0, 0, 0) == 0, "a timeline wait on no handles: 0, as Linux");
+    CHECK(tsignal(&a, tl, 0) == 0 && query(&a, tl, 0) == 9 &&
+              query(&a, tl, DRM_SYNCOBJ_QUERY_FLAGS_LAST_SUBMITTED) == 9 &&
+              held(&a, tl)->seqno == 9,
+          "point 0 is chained, at the newest's number, as Linux");
 }
 
 /** Timeline points out of order, waits, transfers, queries and eventfds. */

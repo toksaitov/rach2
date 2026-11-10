@@ -2154,7 +2154,8 @@ void drm_syncobj_add_point(struct drm_syncobj *syncobj, struct dma_fence_chain *
  * signalled stub for a point gone by. With
  * DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT in `flags` it waits up to five
  * seconds for the point to be submitted, and may sleep. 0, -ENOENT for no
- * such handle, -EINVAL for a point not submitted, -ETIME or -EINTR.
+ * such handle, -EINVAL for any other flag or a point not submitted, -ETIME
+ * or -EINTR.
  */
 int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t handle, uint64_t point,
                                uint32_t flags, struct dma_fence **fence);
