@@ -153,8 +153,10 @@ static void working_set(void)
 
 /**
  * A pinned binding and one whose object the GPU still uses are never
- * evicted: binds that need their room fail with ENOSPC, and succeed once
- * they are unpinned and idle.
+ * evicted: a bind that needs their room and may not wait fails with
+ * ENOSPC; one that may waits for the GPU, as Linux's ggtt_flush, and once
+ * the busy object's request retires its binding goes, the pinned one
+ * staying.
  */
 static void pinned_and_active(void)
 {
@@ -170,13 +172,15 @@ static void pinned_and_active(void)
         i915_vma_unpin(vb);
     }
     f = busy_fence(b);
-    CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE, &v) == -ENOSPC && whole(a) == va &&
-              whole(b) == vb,
-          "pinned: a pinned binding and an active one stay, the bind ENOSPC");
-    dma_fence_signal(f);
+    idle_waits = 0;
+    CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE | I915_PIN_NONBLOCK, &v) == -ENOSPC &&
+              whole(a) == va && whole(b) == vb && idle_waits == 0,
+          "pinned: without a wait, a pinned binding and an active one stay, the bind ENOSPC");
+    idle_signals = f;
+    CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE, &v) == 0 && idle_waits == 1 &&
+              dma_fence_is_signaled(f) && !b->vmas && whole(a) == va,
+          "pinned: the bind waits for the GPU, then the busy one goes; the pinned one stays");
     dma_fence_put(f);
-    CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE, &v) == 0 && !b->vmas && whole(a) == va,
-          "pinned: once idle, the unpinned one goes; the pinned one stays");
     drop_pin(&v);
     drop_pin(&va);
     close_handle(&file_a, h);
