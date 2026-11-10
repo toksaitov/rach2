@@ -880,7 +880,8 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     obj_release(bo);
 }
 
-static const struct drm_gem_object_funcs vgpu_obj_funcs = {vgpu_obj_free, obj_mmap, NULL, NULL, obj_page, NULL, NULL};
+static const struct drm_gem_object_funcs vgpu_obj_funcs = {vgpu_obj_free, obj_mmap, NULL, NULL,
+                                                           obj_page,      NULL,     NULL};
 
 /**
  * Make `bo`, zeroed, an object of `vg` of `size` bytes, a whole number of
