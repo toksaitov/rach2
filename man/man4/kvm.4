@@ -340,10 +340,15 @@ with
 .Dv KVM_EXIT_MMIO ,
 of 8 bytes at most, and the instruction goes on with the answer at the
 next
-.Dv KVM_RUN ;
-each write follows as one more
-.Dv KVM_EXIT_MMIO
-once the instruction has ended, with no guest instruction run between.
+.Dv KVM_RUN .
+Once the instruction has ended, its writes follow in pieces of 8 bytes at
+most, split where a page ends, each piece one more
+.Dv KVM_EXIT_MMIO ,
+with no guest instruction run between; a 16-byte SSE store makes two.
+An answered read finishes its instruction before
+.Dv KVM_RUN
+returns or injects an event, so the registers the caller reads are those
+after the instruction.
 A string instruction with a repeat prefix runs one element at a time.
 The moves, arithmetic, shifts, multiplies and divides, bit tests,
 exchanges, string and stack instructions, far transfers, segment and
@@ -352,7 +357,7 @@ are known.
 .Pp
 An instruction that raised #UD runs when it is SYSCALL, SYSENTER or SYSEXIT
 in a mode where the guest's CPUID vendor has it and the processor does
-not, MOVBE or RDPID, or the hypercall instruction of the other vendor,
+not, MOVBE or RDPID when the guest's CPUID has it, or the hypercall instruction of the other vendor,
 VMCALL on AMD processors and VMMCALL on Intel ones, which is rewritten in
 the guest's memory as the processor's own and run again, or gets its #UD
 once
@@ -369,8 +374,12 @@ and the suberror
 .Dv KVM_INTERNAL_ERROR_EMULATION ,
 whose data are Linux's: the flag
 .Dv KVM_INTERNAL_ERROR_EMULATION_FLAG_INSTRUCTION_BYTES ,
-the instruction's length and its 15 bytes, then the exit's reason and
-qualifications.
+the instruction's length and its 15 bytes, then five values as Linux's
+.Fn get_exit_info
+gives them: on Intel processors the exit reason, the exit qualification,
+the IDT-vectoring information, the exit's interruption information and its
+error code; on AMD processors the exit code, EXITINFO1, EXITINFO2,
+EXITINTINFO and its error code.
 Under
 .Dv KVM_CAP_EXIT_ON_EMULATION_FAILURE
 the run ends so at every privilege level, and the guest gets no #UD.
