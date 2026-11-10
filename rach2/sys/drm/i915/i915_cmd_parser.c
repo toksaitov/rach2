@@ -1,6 +1,6 @@
 /*
- * i915_cmd_parser.c: the check of a program's batch before the render or
- * blitter ring runs it, after Linux 6.12's i915_cmd_parser.c on Haswell:
+ * i915_cmd_parser.c: the check of a program's batch before one of the
+ * GPU's rings runs it, after Linux 6.12's i915_cmd_parser.c on Haswell:
  * the batch copied to a shadow, its commands and registers checked against
  * Linux's tables, and the trampoline that runs a refused batch unprivileged.
  */
@@ -110,6 +110,7 @@ struct cmd_engine {
 #define SMI              (32 - 9)
 #define S3D              (32 - 16)
 #define S2D              (32 - 10)
+#define SMFX             (32 - 16)
 #define MIN_OPCODE_SHIFT 16
 
 /* The columns of the tables, as Linux writes them. */
@@ -147,8 +148,9 @@ struct cmd_engine {
  * set. */
 #define NO_GGTT BITS1(BIT(0u, MI_USE_GGTT, 0u))
 
-/* The checks of MI_FLUSH_DW on the blitter: no interrupt, and no store
- * through the global GTT or into the status page. */
+/* The checks of MI_FLUSH_DW on the blitter, video and video enhancement
+ * rings: no interrupt, and no store through the global GTT or into the
+ * status page. */
 #define FLUSH_DW_BITS                                                  \
     BITS3(BIT(0u, MI_FLUSH_DW_NOTIFY, 0u),                             \
           BITIF(1u, MI_FLUSH_DW_USE_GTT, 0u, 0u, MI_FLUSH_DW_OP_MASK), \
@@ -236,6 +238,28 @@ static const struct cmd_desc gen7_blt_cmds[] = {
 static const struct cmd_desc hsw_blt_cmds[] = {
     CMD(MI_LOAD_SCAN_LINES_INCL, SMI, 0, 0x3fu, R, NOREG, NOBITS),
     CMD(MI_LOAD_SCAN_LINES_EXCL, SMI, 0, 0x3fu, R, NOREG, NOBITS),
+};
+
+/* Linux's gen7_video_cmds. MFX_WAIT's length field has a bias of its own,
+ * so it is taken as the one dword it always is. */
+static const struct cmd_desc gen7_video_cmds[] = {
+    CMD(MI_ARB_ON_OFF, SMI, F, 1u, R, NOREG, NOBITS),
+    CMD(MI_SET_APPID, SMI, F, 1u, S, NOREG, NOBITS),
+    CMD(MI_STORE_DWORD_IMM, SMI, 0, 0xffu, B, NOREG, NO_GGTT),
+    CMD(MI_UPDATE_GTT, SMI, 0, 0x3fu, R, NOREG, NOBITS),
+    CMD(MI_FLUSH_DW, SMI, 0, 0x3fu, B, NOREG, FLUSH_DW_BITS),
+    CMD(MI_CONDITIONAL_BATCH_BUFFER_END, SMI, 0, 0xffu, B, NOREG, NO_GGTT),
+    CMD(MFX_WAIT, SMFX, F, 1u, S, NOREG, NOBITS),
+};
+
+/* Linux's gen7_vecs_cmds: the video ring's MI commands, without MFX_WAIT. */
+static const struct cmd_desc gen7_vecs_cmds[] = {
+    CMD(MI_ARB_ON_OFF, SMI, F, 1u, R, NOREG, NOBITS),
+    CMD(MI_SET_APPID, SMI, F, 1u, S, NOREG, NOBITS),
+    CMD(MI_STORE_DWORD_IMM, SMI, 0, 0xffu, B, NOREG, NO_GGTT),
+    CMD(MI_UPDATE_GTT, SMI, 0, 0x3fu, R, NOREG, NOBITS),
+    CMD(MI_FLUSH_DW, SMI, 0, 0x3fu, B, NOREG, FLUSH_DW_BITS),
+    CMD(MI_CONDITIONAL_BATCH_BUFFER_END, SMI, 0, 0xffu, B, NOREG, NO_GGTT),
 };
 
 /* Linux's noop_desc, where the search for each batch starts. */
@@ -363,6 +387,18 @@ static const struct reg_table hsw_blt_reg_tables[] = {
     {gen7_blt_regs, COUNT(gen7_blt_regs)},
 };
 
+/* Linux's gen7_video_cmd_table and hsw_vebox_cmd_table. Neither ring has
+ * an allowlist, so a batch that names any register is refused. */
+static const struct cmd_table gen7_video_cmd_tables[] = {
+    {gen7_common_cmds, COUNT(gen7_common_cmds)},
+    {gen7_video_cmds, COUNT(gen7_video_cmds)},
+};
+
+static const struct cmd_table hsw_vebox_cmd_tables[] = {
+    {gen7_common_cmds, COUNT(gen7_common_cmds)},
+    {gen7_vecs_cmds, COUNT(gen7_vecs_cmds)},
+};
+
 /** The length field's mask of a render command no table holds, Linux's
  * gen7_render_get_cmd_length_mask: 0 for a client the ring does not run. */
 static uint32_t render_length_mask(uint32_t header)
@@ -394,6 +430,28 @@ static uint32_t blt_length_mask(uint32_t header)
     return 0;
 }
 
+/** The length field's mask of a video or video enhancement command no
+ * table holds, Linux's gen7_bsd_get_cmd_length_mask: the media commands
+ * of opcode 6 have 16 bits of length and the others 12; 0 for a client
+ * the ring does not run. */
+static uint32_t bsd_length_mask(uint32_t header)
+{
+    uint32_t client = header >> INSTR_CLIENT_SHIFT;
+    uint32_t subclient = (header & INSTR_SUBCLIENT_MASK) >> INSTR_SUBCLIENT_SHIFT;
+    uint32_t op = (header & INSTR_26_TO_24_MASK) >> INSTR_26_TO_24_SHIFT;
+
+    if (client == INSTR_MI_CLIENT) {
+        return 0x3fu;
+    }
+    if (client == INSTR_RC_CLIENT) {
+        if (subclient == INSTR_MEDIA_SUBCLIENT) {
+            return op == 6u ? 0xffffu : 0xfffu;
+        }
+        return 0xffu;
+    }
+    return 0;
+}
+
 static const struct cmd_engine hsw_render_engine = {
     hsw_render_cmd_tables, COUNT(hsw_render_cmd_tables), hsw_render_reg_tables,
     COUNT(hsw_render_reg_tables), render_length_mask};
@@ -402,16 +460,29 @@ static const struct cmd_engine hsw_blt_engine = {hsw_blt_cmd_tables, COUNT(hsw_b
                                                  hsw_blt_reg_tables, COUNT(hsw_blt_reg_tables),
                                                  blt_length_mask};
 
-/** The tables of `engine`, or NULL for one that parses nothing. */
+static const struct cmd_engine gen7_video_engine = {
+    gen7_video_cmd_tables, COUNT(gen7_video_cmd_tables), 0, 0, bsd_length_mask};
+
+static const struct cmd_engine hsw_vebox_engine = {
+    hsw_vebox_cmd_tables, COUNT(hsw_vebox_cmd_tables), 0, 0, bsd_length_mask};
+
+/** The tables of `engine`, by its class, as Linux's
+ * intel_engine_init_cmd_parser on Haswell, or NULL for one that parses
+ * nothing. */
 static const struct cmd_engine *cmd_engine_of(const struct i915_engine *engine)
 {
-    if (engine->mmio_base == RENDER_RING_BASE) {
+    switch (engine->mmio_base) {
+    case RENDER_RING_BASE:
         return &hsw_render_engine;
-    }
-    if (engine->mmio_base == BLT_RING_BASE) {
+    case BLT_RING_BASE:
         return &hsw_blt_engine;
+    case GEN6_BSD_RING_BASE:
+        return &gen7_video_engine;
+    case VEBOX_RING_BASE:
+        return &hsw_vebox_engine;
+    default:
+        return 0;
     }
-    return 0;
 }
 
 int i915_engine_using_cmd_parser(const struct i915_engine *engine)
