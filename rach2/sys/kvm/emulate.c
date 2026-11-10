@@ -1387,6 +1387,7 @@ int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index,
 #define EMUL_PIO_READ 4 /* a string OUT waits for the answer of an MMIO read */
 #define EMUL_RUN      5 /* the instruction runs again at the next step */
 #define EMUL_PIO_RUN  6 /* the string OUT runs again at the next step */
+#define EMUL_PIO_OUT  7 /* an OUT's bytes are out, and RIP is still at it */
 
 /* How a pass or one of its steps ends; a negative errno ends KVM_RUN. */
 #define X_OK    0
@@ -4153,7 +4154,14 @@ static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
     }
     if (!p->string) {
         value_bytes(ex->data, v->regs.rax, p->size);
-        kvm_emul_skip(v, p->len);
+        /* Linux steps RIP before the caller sees the exit for port 0x7E
+         * alone, which an old caller counts on. */
+        if (p->port == 0x7Eu && KVM_QUIRK(v->vm, KVM_X86_QUIRK_OUT_7E_INC_RIP)) {
+            kvm_emul_skip(v, p->len);
+            return 0;
+        }
+        em->stage = EMUL_PIO_OUT;
+        em->out_rip = linear(v, KVM_SEG_CS, v->regs.rip);
         return 0;
     }
     return pio_outs(v, p, (uint32_t)count, single);
@@ -4207,6 +4215,15 @@ int kvm_emul_complete(struct kvm_vcpu *v)
 
     if (em->stage == EMUL_PIO && v->exit.kind == KVM_X_IO) {
         pio_complete(v);
+        return 0;
+    }
+    if (em->stage == EMUL_PIO_OUT) {
+        /* As Linux's complete_fast_pio_out: a caller that moved RIP
+         * meanwhile keeps its RIP. */
+        emul_end(v);
+        if (linear(v, KVM_SEG_CS, v->regs.rip) == em->out_rip) {
+            kvm_emul_skip(v, em->pio.len);
+        }
         return 0;
     }
     if ((em->stage != EMUL_READ && em->stage != EMUL_PIO_READ) || v->exit.kind != KVM_X_MMIO ||

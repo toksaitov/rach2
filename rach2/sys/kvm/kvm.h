@@ -431,9 +431,11 @@ struct kvm_emul_chunk {
  * The guest instruction emulate.c has under way across exits to the
  * caller: an instruction that waits for the answer of an MMIO read, after
  * which it runs again from its start with the answers kept in `rd`; one
- * that has ended and has MMIO writes left to deliver; or a port read that
- * waits for its answer. While `resume` is set the backend's next `enter`
- * enters no guest, and its `exit` gives `kvm_emul_resume`'s exit.
+ * that has ended and has MMIO writes left to deliver; a port read that
+ * waits for its answer; or an OUT whose bytes are out and whose RIP is
+ * stepped once the write is done. While `resume` is set the backend's
+ * next `enter` enters no guest, and its `exit` gives `kvm_emul_resume`'s
+ * exit.
  */
 struct kvm_emul {
     uint32_t stage;          /* emulate.c's EMUL_* */
@@ -452,6 +454,7 @@ struct kvm_emul {
     uint64_t info[5];   /* the exit's reason and qualifications, for an internal error */
     int step_trap;      /* an instruction was stepped under KVM_GUESTDBG_SINGLESTEP */
     struct kvm_pio pio; /* the port instruction */
+    uint64_t out_rip;   /* the linear RIP of an OUT whose RIP is not yet stepped */
 };
 
 /*
@@ -1437,17 +1440,21 @@ int kvm_emul_ud(struct kvm_vcpu *v, const uint64_t info[5]);
 uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa);
 
 /** Begin the port I/O instruction `p` of `v`: `v->exit` its KVM_X_IO, an
- * OUT's bytes from RAX or the string in guest memory, RIP stepped for an
- * OUT; KVM_X_AGAIN with an exception queued; or the MMIO read of a string
- * OUT's element that is in device memory, after whose answer the
- * instruction runs again. 0, or -EFAULT. */
+ * OUT's bytes from RAX or the string in guest memory; KVM_X_AGAIN with an
+ * exception queued; or the MMIO read of a string OUT's element that is in
+ * device memory, after whose answer the instruction runs again. RIP is
+ * stepped for a string OUT, and for an OUT to port 0x7E under
+ * KVM_X86_QUIRK_OUT_7E_INC_RIP; any other OUT steps it in
+ * `kvm_emul_complete`, as Linux does, so that the caller sees the exit
+ * with RIP at the instruction. 0, or -EFAULT. */
 int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p);
 
 /** Give the instruction under way the answer of its read, in `v->exit`, from
  * the backend's `complete`: a port read finishes, with `v->emul.resume` set
  * when its string has elements to write to device memory; an MMIO read's
  * answer is kept and `v->emul.resume` set for the instruction to run
- * again. 0. */
+ * again; and an OUT that was written, in the kernel or by the caller,
+ * steps RIP unless the caller moved it. 0. */
 int kvm_emul_complete(struct kvm_vcpu *v);
 
 /** The exit of the step `v->emul.resume` asked for, into `v->exit`, from

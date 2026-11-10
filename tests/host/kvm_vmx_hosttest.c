@@ -44,7 +44,8 @@
  * failing; a failed VMWRITE reported once; VPIDs; a panic inside a run,
  * which turns VMX off; and what Linux's selftests ask of the guest's side:
  * AMD's hypercall instruction patched or left as its quirk says, MWAIT's
- * quirk, MSR_PLATFORM_INFO and CPUID faulting, an emulation failure above
+ * quirk, MSR_PLATFORM_INFO and CPUID faulting, a plain OUT's RIP at its
+ * exit and after it with port 0x7E's quirk, an emulation failure above
  * CPL 0 under KVM_CAP_EXIT_ON_EMULATION_FAILURE, DR7.GD under the
  * caller's breakpoints, and the TSC multiplier on a model whose controls
  * have TSC scaling.
@@ -1829,7 +1830,7 @@ static void io_rows(int fd)
               rp->u.io.port == 0x3F8 && rp->u.io.size == 1 && rp->u.io.count == 1 &&
               v->pio[0] == 'A',
           "OUT DX, AL goes to the caller with its byte");
-    CHECK(regs_of(fd).rip == 0x1001, "and is stepped");
+    CHECK(regs_of(fd).rip == 0x1000, "with RIP at it until the next KVM_RUN, as on Linux");
     script(EXIT_IO, 8u | (0x60ull << 16), 1);
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.direction == KVM_EXIT_IO_IN &&
               rp->u.io.port == 0x60,
@@ -3340,6 +3341,38 @@ static void quirk_rows(int vm, int fd)
           "and with its quirk off MWAIT is #UD for that guest");
 }
 
+/** A plain OUT's RIP on the vCPU `fd`: at the instruction when the caller
+ * sees the exit and stepped at the next KVM_RUN, as Linux's
+ * complete_fast_pio_out steps it, unless the caller moved it meanwhile;
+ * and port 0x7E's, stepped before the exit until its quirk is off. */
+static void out_rows(int vm, int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x3F8ull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && regs_of(fd).rip == 0x1000,
+          "the caller sees an OUT with RIP at it");
+    set_regs(fd, 0x1800, 0, 0, 0);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1801, "a caller that moved RIP keeps its RIP");
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x7Eull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.port == 0x7E &&
+              regs_of(fd).rip == 0x1001,
+          "an OUT to port 0x7E is stepped before the caller sees it");
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1002, "and not again at the next KVM_RUN");
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2, KVM_X86_QUIRK_OUT_7E_INC_RIP) == 0,
+          "KVM_CAP_DISABLE_QUIRKS2 of port 0x7E's quirk");
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x7Eull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && regs_of(fd).rip == 0x1000,
+          "with its quirk off port 0x7E is as any other");
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1002, "stepped at the next KVM_RUN");
+}
+
 /** MSR_PLATFORM_INFO and CPUID faulting on the vCPU `fd`. */
 static void platform_rows(int vm, int fd)
 {
@@ -3454,6 +3487,7 @@ static void selftest_rows(int vm)
     ts_start(fd);
     quirk_rows(vm, fd);
     platform_rows(vm, fd);
+    out_rows(vm, fd);
     failure_rows(vm, fd);
     fdclose(fd);
     tsc_scale_rows(vm);
