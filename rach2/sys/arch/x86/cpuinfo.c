@@ -116,6 +116,34 @@ static const char *const leaf7_ecx[32] = {0,
                                           "sgx_lc",
                                           0};
 
+/* Leaf 0x8000000A's EDX, the features of AMD's SVM. */
+static const char *const svm_edx[32] = {"npt",
+                                        "lbrv",
+                                        "svm_lock",
+                                        "nrip_save",
+                                        "tsc_scale",
+                                        "vmcb_clean",
+                                        "flushbyasid",
+                                        "decodeassists",
+                                        0,
+                                        0,
+                                        "pausefilter",
+                                        0,
+                                        "pfthreshold",
+                                        "avic",
+                                        0,
+                                        "v_vmsave_vmload",
+                                        "vgif",
+                                        0,
+                                        "x2avic",
+                                        0,
+                                        "v_spec_ctrl",
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        "vnmi"};
+
 /* The text being written: `cap` bytes at `out`, the NUL included, of which
  * `len` are written and followed by a NUL. */
 struct text {
@@ -559,7 +587,7 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
 {
     struct text t;
     uint32_t max, ext_max, a, b, c, d, family, model;
-    uint32_t e1c = 0, e1d = 0, l7b = 0, l7c = 0, cache;
+    uint32_t e1c = 0, e1d = 0, l7b = 0, l7c = 0, svm = 0, cache;
     char vendor[13];
     char brand[49];
     struct cpu_place place;
@@ -624,11 +652,15 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
     if (max >= 7) {
         kcpu_id_sub(7, 0, 0, &l7b, &l7c, 0);
     }
+    if (ext_max >= 0x8000000Au) {
+        kcpu_id(0x8000000Au, 0, 0, 0, &svm);
+    }
     put_flags(&t, leaf1_edx, d);
     put_flags(&t, ext1_edx, e1d);
     put_flags(&t, leaf1_ecx, c);
     put_flags(&t, ext1_ecx, e1c);
     put_flags(&t, leaf7_ebx, l7b);
+    put_flags(&t, svm_edx, svm);
     put_flags(&t, leaf7_ecx, l7c);
     put(&t, "\n");
     put_field(&t, "clflush size\t: ", ((b >> 8) & 0xFFu) * 8u);
