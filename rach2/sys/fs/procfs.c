@@ -1641,12 +1641,49 @@ static void ap_signal_sets(struct procfs_text *t, const process_t *p)
 }
 
 /**
+ * Count the resident pages of `mm` by Linux's three kinds, for the RssAnon,
+ * RssFile and RssShmem of status, by the rule of smaps: a private region's
+ * pages are anonymous, but for the unwritten ones of a region read from a
+ * file, which are the file's still; a shared region's are the file's. A
+ * file's pages are counted as shared memory when the file is in memory (a
+ * tmpfs file, a memfd, shared anonymous memory), and as file pages
+ * otherwise, device memory among them. This walks the regions' page
+ * tables, since the dirty bit tells the written pages; the three sum to
+ * the count VmRSS gives.
+ */
+static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long *file,
+                        unsigned long *shmem)
+{
+    const vma_t *r;
+
+    *anon = 0;
+    *file = 0;
+    *shmem = 0;
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        unsigned long present, dirty, own;
+        int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
+
+        paging_user_count(mm->dir, r->start, r->end, &present, &dirty);
+        own = r->type == VM_SHARED ? 0 : of_file ? dirty : present;
+        *anon += own;
+        if (filemap_in_memory(r->file)) {
+            *shmem += present - own;
+        } else {
+            *file += present - own;
+        }
+    }
+}
+
+/**
  * /proc/<pid>/status: the lines of Linux's that programs read, among them
  * the name, the state, the ids, the tracer, the memory in kilobytes, the
  * thread count and the signal sets. The file-system ids are the effective
  * ones. The capability sets are full for a process `proc_privileged` passes
  * and empty otherwise, since the kernel has no capabilities but that test.
- * VmPeak and VmHWM are the present sizes, since the kernel keeps no peak.
+ * VmPeak is the present size, since the kernel keeps no peak of it; VmHWM
+ * is the most pages the address space has had resident. RssAnon, RssFile
+ * and RssShmem divide VmRSS as `rss_by_kind` says; Wine's working set and
+ * pagefile figures are read from them.
  * Cpus_allowed and its list are the thread's affinity among the processors
  * started, which sched_getaffinity(2) reports.
  */
@@ -1705,13 +1742,18 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     if (mm) {
         unsigned long size = vm_total(&mm->vm);
         unsigned long rss = mm_resident(mm) * PAGE_SIZE;
+        unsigned long anon, file, shmem;
 
+        rss_by_kind(mm, &anon, &file, &shmem);
         ap_kb(t, "VmPeak", size);
         ap_kb(t, "VmSize", size);
         ap_kb(t, "VmLck", vm_locked(&mm->vm));
         ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
         ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
         ap_kb(t, "VmRSS", rss);
+        ap_kb(t, "RssAnon", anon * PAGE_SIZE);
+        ap_kb(t, "RssFile", file * PAGE_SIZE);
+        ap_kb(t, "RssShmem", shmem * PAGE_SIZE);
         ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
         ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
         ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));

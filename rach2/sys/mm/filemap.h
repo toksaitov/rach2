@@ -45,6 +45,11 @@ struct shmem *filemap_shmem(const struct vm_file *f);
  * region object that is not a mapped file. */
 const struct open_file *filemap_ofd(const struct vm_file *f);
 
+/** Whether the pages `f` maps are memory's own, with no file on a disk
+ * behind them: a tmpfs file's, a memfd's, shared anonymous memory's. Linux
+ * counts such pages in a process's RssShmem, and a disk file's in RssFile. */
+int filemap_in_memory(const struct vm_file *f);
+
 /**
  * The same for a shared mapping of a file on a disk: the mapping maps the
  * file's pages in memory, which every shared mapping of the file maps, read

@@ -1887,7 +1887,10 @@ VmPeak to VmSwap in kilobytes, of which VmLck is the size of the regions
 locked by
 .Xr mlock 2
 and VmPin the pages drivers pinned for devices and charged to the
-process, Threads, the signal sets SigPnd, ShdPnd,
+process, VmHWM the most the process has had resident, and RssAnon,
+RssFile and RssShmem the parts of VmRSS that are the process's own
+pages, a file's, and those of a file in memory or of shared anonymous
+memory, Threads, the signal sets SigPnd, ShdPnd,
 SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets,
 NoNewPrivs, Seccomp and Seccomp_filters, the thread's seccomp mode and
 the number of its filters
