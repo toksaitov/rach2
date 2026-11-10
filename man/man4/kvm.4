@@ -75,6 +75,7 @@ the XCR0 bits a guest may have.
 .Dv KVM_SET_TSC_KHZ ,
 .Dv KVM_GET_TSC_KHZ ,
 .Dv KVM_GET_STATS_FD ,
+.Dv KVM_SET_PMU_EVENT_FILTER ,
 .Dv KVM_ENABLE_CAP ,
 .Dv KVM_X86_SET_MSR_FILTER ,
 .Dv KVM_CREATE_IRQCHIP ,
@@ -932,6 +933,41 @@ whose
 the next
 .Dv KVM_RUN
 takes.
+.Ss Performance counters
+The guest PMU follows the host: Intel architectural version 2 or earlier,
+with general and fixed counters; AMD legacy counters, the core-extension
+aliases and, where present, PerfMonV2 global control and status.
+CPUID and the MSR index lists describe the registers available.
+RDPMC requires CPL 0 or CR4.PCE.
+Counter overflow sets global status and queues a virtual local APIC
+performance interrupt through LVTPC after the next guest exit.
+Intel's PERF_CAPABILITIES offers full-width counter writes.
+LBR and PEBS are not advertised.
+.Pp
+.Dv KVM_CAP_PMU_EVENT_FILTER
+and
+.Dv KVM_CAP_PMU_EVENT_MASKED_EVENTS
+advertise
+.Dv KVM_SET_PMU_EVENT_FILTER
+on a VM.
+Its Linux structure selects ALLOW or DENY for up to 300 event entries,
+a separate fixed-counter bitmap and optional masked unit matches.
+An exclusion entry overrides an inclusion.
+A replacement takes effect when each running vCPU next leaves the guest.
+.Pp
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_PMU_CAPABILITY
+accepts
+.Dv KVM_PMU_CAP_DISABLE
+in args[0] before any vCPU has been created.
+An unsupported bit, or a request after creating a vCPU, is EINVAL.
+.Pp
+.Pa /sys/module/kvm/parameters/enable_pmu
+reads Y or N according to the host PMU probe.
+.Pa /sys/module/kvm/parameters/force_emulation_prefix
+reads 0.
+Both are read-only.
 .Sh FILES
 .Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm

@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
  * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/exitstat.c
+ * host-deps: rach2/sys/kvm/pmu.c
  * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
@@ -482,6 +483,36 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
     (void)msr;
     *lo = 0x5;
     *hi = 0;
+}
+
+/** Physical counter writes are unused by this model's fake backend. */
+void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
+{
+    (void)msr;
+    (void)lo;
+    (void)hi;
+}
+
+/** The model has no AMD PMU. */
+int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value)
+{
+    (void)msr;
+    (void)value;
+    return -1;
+}
+
+/** The model has no AMD PMU. */
+int kcpu_wrmsr_safe(uint32_t msr, uint64_t value)
+{
+    (void)msr;
+    (void)value;
+    return -1;
+}
+
+/** No virtual APIC is armed for a performance interrupt here. */
+void kvm_lapic_pmi(struct kvm_vcpu *v)
+{
+    (void)v;
 }
 
 /* ---- the later tasks' files, faked ---- */

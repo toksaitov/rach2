@@ -499,6 +499,15 @@ static int local_deliver(struct lapic *l, uint32_t off)
     return accept(l, r & APIC_MODE_MASK, r & APIC_VECTOR_MASK, 1, (r & APIC_LEVEL_TRIG) != 0);
 }
 
+void kvm_lapic_pmi(struct kvm_vcpu *v)
+{
+    struct lapic *l = v->lapic;
+
+    if (l) {
+        (void)local_deliver(l, APIC_LVTPC);
+    }
+}
+
 /** Deliver the timer's expiry when it is due: the TSC deadline passed, or
  * the count ran out, the periodic count starting again from where it
  * ended, missed periods counted as one, as Linux's pending count does. */

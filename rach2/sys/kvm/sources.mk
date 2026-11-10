@@ -9,6 +9,7 @@ KVM_C_SRC = sys/kvm/kvm.c \
     sys/kvm/vfio.c \
     sys/kvm/cpuid.c \
     sys/kvm/msr.c \
+    sys/kvm/pmu.c \
     sys/kvm/svm.c \
     sys/kvm/vmx.c \
     sys/kvm/vlapic.c \
