@@ -94,14 +94,14 @@ struct drm_mode_get_connector {
 #define MAX_MODES 128
 
 /** End the process with `status`; it does not return. */
-static void sys_exit(int status)
+static __attribute__((noreturn)) void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 /** Say `what` failed and exit 1. */
-static void fail(const char *what)
+static __attribute__((noreturn)) void fail(const char *what)
 {
     probe_line("HOTPLUGPROBE FAIL: ", what, 0);
     sys_exit(1);
