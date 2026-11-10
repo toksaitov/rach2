@@ -1237,27 +1237,39 @@ static void row_cursor_unpin(void)
     frame();
 }
 
-/** The pipe's mode check refuses the transcoder's least blanking and an
- * hsync at the end of the active area, as Linux's
- * intel_cpu_transcoder_mode_valid does for every encoder. */
+/** Whether the pipe takes `m` and the eDP connector, whose list it would
+ * be in, refuses it. */
+static int pipe_only(const struct drm_mode_modeinfo *m)
+{
+    struct drm_connector *conn = &gpu.display.connector;
+
+    return intel_crtc_mode_valid(&pa->base, m) == 0 && conn->funcs->mode_valid(conn, m) == -EINVAL;
+}
+
+/** The transcoder's least blanking and an hsync at the end of the active
+ * area keep a mode out of the connector's list, as Linux's
+ * intel_cpu_transcoder_mode_valid in its encoders' mode_valid, while the
+ * pipe's own check takes it, as Linux's intel_mode_valid does at a commit. */
 static void row_mode_limits(void)
 {
+    struct drm_connector *conn = &gpu.display.connector;
     struct drm_mode_modeinfo m = pa->hw.mode;
-    int ok = intel_crtc_mode_valid(&pa->base, &m) == 0;
+    int ok = intel_crtc_mode_valid(&pa->base, &m) == 0 && conn->funcs->mode_valid(conn, &m) == 0;
 
     m.hsync_start = m.hdisplay;
-    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
+    ok &= pipe_only(&m);
     m = pa->hw.mode;
     m.htotal = (uint16_t)(m.hdisplay + 16u);
-    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
+    ok &= pipe_only(&m);
     m = pa->hw.mode;
     m.vtotal = (uint16_t)(m.vdisplay + 4u);
-    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
+    ok &= pipe_only(&m);
     m = pa->hw.mode;
     m.hdisplay = 32;
     m.hsync_start = 40;
-    ok &= intel_crtc_mode_valid(&pa->base, &m) == -EINVAL;
-    CHECK(ok, "mode: the panel's mode taken; no front porch, a short blank or 32 pixels refused");
+    ok &= pipe_only(&m);
+    CHECK(ok, "mode: the panel's mode taken; no front porch, a short blank or 32 pixels left out "
+              "of the connector's modes and taken by the pipe");
 }
 
 /** The framebuffer limit of Linux's display 7, 16384 pixels each way: one
