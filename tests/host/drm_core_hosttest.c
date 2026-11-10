@@ -93,6 +93,11 @@ int32_t vkms_probe(void)
     return -ENODEV;
 }
 
+int32_t vgem_probe(void)
+{
+    return -ENODEV;
+}
+
 void arch_drm_probe(int phase)
 {
     (void)phase;
