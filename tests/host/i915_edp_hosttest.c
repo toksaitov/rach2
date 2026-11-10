@@ -25,9 +25,13 @@
  * training at 2.7 Gb/s on one lane in Linux's register and DPCD order, the
  * buffer driving the levels the sink was told, and trainings that fail in
  * clock recovery or equalization, tried again and then fallen back from as
- * Linux does; the sequencer's delays from the firmware and the VBT, and
- * the panel off and on again with T9, T10, the power cycle, T1+T3 and T8
- * kept.
+ * Linux does, down to no link left; the output's init, which finds the
+ * panel's fixed mode, the rates both ends take and its colour depth; a
+ * mode's configuration, its bits a pixel, link and M/N values as Linux
+ * computes them, and the refresh rate a hertz off it takes; the fitter's
+ * windows for each scaling mode, its limits and its pixel rate; the
+ * sequencer's delays from the firmware and the VBT, and the panel off and
+ * on again with T9, T10, the power cycle, T1+T3 and T8 kept.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
