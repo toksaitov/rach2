@@ -172,6 +172,7 @@
      GEN6_PM_RP_DOWN_THRESHOLD | GEN6_PM_RP_DOWN_TIMEOUT)
 
 #define GEN7_ERR_INT                0x44040
+#define DERRMR                      0x44050 /* the display's events the GT may wait on, masked */
 #define ERR_INT_PIPE_CRC_DONE(pipe) (1u << (2 + (pipe) * 3))
 #define ERR_INT_FIFO_UNDERRUN(pipe) (1u << ((pipe) * 3))
 
@@ -248,6 +249,7 @@
 #define RING_PP_DIR_DCLV(base)      ((base) + 0x220)
 #define PP_DIR_DCLV_2G              0xffffffffu
 #define RING_PP_DIR_BASE(base)      ((base) + 0x228)
+#define RING_PP_DIR_BASE_READ(base) ((base) + 0x518)
 #define RING_MODE_GEN7(base)        ((base) + 0x29c)
 #define GFX_RUN_LIST_ENABLE         (1u << 15)
 #define GFX_INTERRUPT_STEERING      (1u << 14)
@@ -286,6 +288,7 @@
 #define GEN7_L3CNTLREG1                   0xb01c
 #define GEN7_L3SQCREG4                    0xb034
 #define HSW_SCRATCH1                      0xb038
+#define GEN7_SAMPLER_INSTDONE             0xe160
 #define GEN7_ROW_INSTDONE                 0xe164
 #define BCS_SWCTRL                        0x22200
 /* The four stream-out buffers' write offsets, which I915_EXEC_GEN7_SOL_RESET
@@ -538,6 +541,7 @@
  */
 
 #define GEN6_RPNSWREQ                                   0xa008
+#define GEN6_TURBO_DISABLE                              (1u << 31)
 #define HSW_FREQUENCY(x)                                ((uint32_t)(x) << 24)
 #define HSW_FREQUENCY_SHIFT                             24
 #define GEN6_RC_VIDEO_FREQ                              0xa00c
@@ -549,6 +553,7 @@
 #define GEN6_RP_CONTROL                                 0xa024
 #define GEN6_RP_MEDIA_TURBO                             (1u << 11)
 #define GEN6_RP_MEDIA_HW_NORMAL_MODE                    (2u << 9)
+#define GEN6_RP_MEDIA_MODE_MASK                         (3u << 9) /* 0: software mode */
 #define GEN6_RP_MEDIA_IS_GFX                            (1u << 8)
 #define GEN6_RP_ENABLE                                  (1u << 7)
 #define GEN6_RP_UP_BUSY_AVG                             (2u << 3)
@@ -556,6 +561,7 @@
 #define GEN6_RP_UP_THRESHOLD                            0xa02c
 #define GEN6_RP_DOWN_THRESHOLD                          0xa030
 #define GEN6_RP_CUR_UP_EI                               0xa050
+#define GEN6_CURICONT_MASK                              0xffffffu /* of RP_CUR_ and RP_PREV_ */
 #define GEN6_RP_CUR_UP                                  0xa054
 #define GEN6_RP_PREV_UP                                 0xa058
 #define GEN6_RP_CUR_DOWN_EI                             0xa05c
