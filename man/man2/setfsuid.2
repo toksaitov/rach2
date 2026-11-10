@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt SETFSUID 2
 .Os
 .Sh NAME
@@ -67,9 +67,24 @@ The capabilities that Linux checks for file access,
 and
 .Dv CAP_MAC_OVERRIDE ,
 go by the file-system user ID: a thread whose file-system user ID leaves
-0 loses them from its effective set, though its effective user ID stays
-0, and one whose file-system user ID returns to 0 has again those it has
-not given up.
+0 by
+.Fn setfsuid
+loses them from its effective set, though its effective user ID stays
+0, and one that
+.Fn setfsuid
+returns to 0 has again those it has not given up.
+A call of
+.Xr setuid 2
+and its kin that makes the file-system user ID the effective one, 0,
+does not give them back, as Linux's does not: after
+.Fn setfsuid 1000
+and
+.Fn setuid 0
+a thread still lacks them.
+They come back when
+.Fn setfsuid
+moves the ID from another to 0, when the effective user ID comes to 0
+from another, and at an exec.
 A thread without them passes a file's permission bits, acts as a file's
 owner, keeps set-ID bits across a write, makes a device node and changes
 the immutable and append-only flags only as any other user may.

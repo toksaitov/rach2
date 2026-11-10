@@ -322,8 +322,10 @@ uint32_t cap_word(const process_t *p, uint32_t i);
  * CAP_FS_SET by the file-system user id in place of the effective one, as
  * Linux's `cap_task_fix_setuid` moves them for setfsuid: those `p` has not
  * lost while that id is root in its user namespace, and none once
- * setfsuid has taken it from root while the effective id stayed there. A
- * thread neither of whose ids is root keeps what `cap_word` gives.
+ * setfsuid has taken it from root while the effective id stayed there, nor
+ * while PROC_FSCAPS_OFF holds them out after a call that set user ids
+ * brought the file-system id back to root. A thread neither of whose ids
+ * is root keeps what `cap_word` gives.
  */
 uint32_t cap_eff_word(const process_t *p, uint32_t i);
 

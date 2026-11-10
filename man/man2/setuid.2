@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 11, 2026
 .Dt SETUID 2
 .Os
 .Sh NAME
@@ -110,6 +110,10 @@ its effective one, whether or not the effective ID changed, and each of
 the group ID calls its file-system group ID, which undoes what
 .Xr setfsuid 2
 set apart.
+It gives back the file capabilities that
+.Xr setfsuid 2
+took away only when the effective user ID comes to 0 from another; see
+that page.
 The exception is a
 .Fn setresuid
 or
