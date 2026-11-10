@@ -38,8 +38,9 @@ struct tty {
     n_tty_out_fn sink;           /* echo/output byte sink; a NULL at tty_init discards */
     void *sink_ctx;              /* opaque context handed to sink */
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
-    /* Discard queued output on vhangup; NULL for an unbuffered sink. */
-    void (*flush_output)(struct tty *t);
+    /* A pty slave's flush (`TTY_FLUSH_*`); NULL for a terminal with no
+     * master. */
+    void (*flush)(struct tty *t, int what);
     int sid;     /* the session whose controlling terminal this is; 0 = none */
     int fg_pgid; /* foreground process group (ISIG target); 0 = none */
     int hungup;  /* tty_hangup ran: a read with nothing to take returns 0 */
@@ -48,6 +49,16 @@ struct tty {
      * ioctls EIO (`tty_desc_hung`). */
     uint32_t vhangups;
 };
+
+/* What a slave's `flush` does, as Linux's pty_flush_buffer and
+ * n_tty_packet_mode_flush. TTY_FLUSH_IN reports TIOCPKT_FLUSHREAD to a
+ * master in packet mode after the discipline's input was discarded;
+ * TTY_FLUSH_OUT discards the output still queued for the master and reports
+ * TIOCPKT_FLUSHWRITE; TTY_FLUSH_HANGUP discards that output and drops every
+ * pending status bit, as `__tty_hangup` ends with pktstatus 0. */
+#define TTY_FLUSH_IN     1
+#define TTY_FLUSH_OUT    2
+#define TTY_FLUSH_HANGUP 4
 
 /* Whether a description of `t` opened when its count of vhangups was
  * `opened` is hung up. */
@@ -186,7 +197,8 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count);
 
 /**
  * Install `kt` on `t`, as TCSETS and its kin do; with `flush_input`, discard
- * the unread input first, on the console the serial ring too. Wakes
+ * the unread input first, on the console the serial ring too, and report the
+ * flush through `flush` (TTY_FLUSH_IN) as TCSETSF does on Linux. Wakes
  * `space_wq` for room, and the readers when the change makes input readable.
  * Takes interrupts off itself.
  */
@@ -232,7 +244,8 @@ void tty_hangup(struct tty *t);
  * default termios (`n_tty_default_termios`), as Linux resets a pty's and a
  * virtual console's, and count the hangup, which makes every description
  * opened before it a hung-up one (`tty_desc_hung`). Every reader, writer
- * and poller of `t` is woken; a read waiting then returns 0. Thread
+ * and poller of `t` is woken; a read waiting then returns 0. A pty's master
+ * is left no pending packet status (TTY_FLUSH_HANGUP). Thread
  * context; it takes interrupts off itself.
  */
 void tty_vhangup(struct tty *t);
