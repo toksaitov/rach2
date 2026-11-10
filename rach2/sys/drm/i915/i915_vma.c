@@ -314,11 +314,27 @@ static struct i915_vma *vma_lookup(struct drm_i915_gem_object *obj, uint32_t vie
 }
 
 /**
+ * Before a binding that does not serve is undone, wait for the GPU to
+ * finish with its object, as Linux's unbind does in i915_vma_sync: 0 when
+ * the caller may look again, -ENOSPC under I915_PIN_NONBLOCK, or -EINTR
+ * for a signal unless I915_PIN_NOINTR.
+ */
+static int32_t vma_wait_idle(struct drm_i915_gem_object *obj, uint32_t flags)
+{
+    if (flags & I915_PIN_NONBLOCK) {
+        return -ENOSPC;
+    }
+    return i915_gem_object_wait_idle(obj, !(flags & I915_PIN_NOINTR));
+}
+
+/**
  * The binding of the view that `i915_vma_pin` may reuse, in `*out`, or NULL
  * once a binding that does not serve is undone: one on the scratch page
  * since a userptr object's pages changed, one outside the aperture when it
- * is asked for, or one not aligned to `align`. 0; -EAGAIN when the first
- * kind is held, -ENOSPC when another is.
+ * is asked for, or one not aligned to `align`. An unpinned one that the GPU
+ * still uses is waited for first and looked up again, since the wait
+ * sleeps. 0; -EAGAIN when the first kind is held, -ENOSPC when another is;
+ * or the wait's error.
  */
 static int32_t vma_existing(struct drm_i915_gem_object *obj, uint32_t view_offset,
                             uint32_t view_pages, uint32_t flags, uint32_t align,
@@ -330,6 +346,15 @@ static int32_t vma_existing(struct drm_i915_gem_object *obj, uint32_t view_offse
     *out = 0;
     if (!vma) {
         return 0;
+    }
+    if ((obj->userptr.stale || ((flags & I915_PIN_MAPPABLE) && !vma->mappable) ||
+         (vma->start & (align - 1))) &&
+        vma->pin_count == 0 && i915_gem_object_is_active(obj)) {
+        err = vma_wait_idle(obj, flags);
+        if (err != 0) {
+            return err;
+        }
+        return vma_existing(obj, view_offset, view_pages, flags, align, out);
     }
     if (obj->userptr.stale) {
         /* Its entries map the scratch page since the program's pages
@@ -499,6 +524,15 @@ int32_t i915_vma_pin_args(struct drm_i915_gem_object *obj, const struct i915_pin
     p.offset = (a->flags & (I915_PIN_OFFSET_FIXED | I915_PIN_OFFSET_BIAS)) ? a->offset : 0;
     do {
         vma = vma_lookup(obj, 0, 0);
+        if (vma && (obj->userptr.stale || !vma_placed(vma, a, align)) && vma->pin_count == 0 &&
+            i915_gem_object_is_active(obj)) {
+            err = vma_wait_idle(obj, a->flags);
+            if (err != 0) {
+                return err;
+            }
+            err = 1; /* look again, since the wait slept */
+            continue;
+        }
         if (vma && (obj->userptr.stale || !vma_placed(vma, a, align))) {
             /* Misplaced, or on the scratch page since a userptr object's
              * pages changed: undone, unless held. */
@@ -566,6 +600,9 @@ int32_t i915_vma_unbind(struct i915_vma *vma)
 
     if (vma->pin_count) {
         return -EAGAIN;
+    }
+    if (i915_gem_object_is_active(obj)) {
+        return -EBUSY;
     }
     /* As Linux's __i915_vma_evict: programs fault again, the writes through
      * the aperture reach memory, and only then is the fence let go. */

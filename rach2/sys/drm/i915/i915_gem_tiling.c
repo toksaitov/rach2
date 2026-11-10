@@ -193,9 +193,10 @@ void i915_vma_revoke_fence(struct i915_vma *vma)
  * Change the object's layout, as Linux's i915_gem_object_set_tiling: the
  * bindings in the aperture that a fence of the new layout no longer fits
  * are undone, the rest learn the new fence's size and their fences are
- * rewritten at the next use, and the GTT maps fault again. 0, -EBUSY for
- * an object a framebuffer is made of, or -EAGAIN when a binding that must
- * go is held.
+ * rewritten at the next use, and the GTT maps fault again. A binding that
+ * must go while the GPU uses its object is waited for first. 0, -EBUSY for
+ * an object a framebuffer is made of, -EAGAIN when a binding that must go
+ * is held, or -EINTR.
  */
 static int32_t set_tiling(struct drm_i915_gem_object *obj, uint32_t tiling, uint32_t stride)
 {
@@ -218,6 +219,15 @@ static int32_t set_tiling(struct drm_i915_gem_object *obj, uint32_t tiling, uint
             }
             if (vma->node_size >= i915_gem_fence_size(i915, (uint32_t)vma->size, tiling, stride) &&
                 (vma->start & (i915_gem_fence_alignment(i915, tiling) - 1)) == 0) {
+                continue;
+            }
+            if (vma->pin_count == 0 && i915_gem_object_is_active(obj)) {
+                /* As Linux's unbind, wait for the GPU, then look again. */
+                err = i915_gem_object_wait_idle(obj, 1);
+                if (err != 0) {
+                    return err;
+                }
+                next = obj->vmas;
                 continue;
             }
             err = i915_vma_unbind(vma);

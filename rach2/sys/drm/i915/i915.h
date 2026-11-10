@@ -547,17 +547,15 @@ struct i915_fence_reg {
 
 /* What `i915_vma_pin` is asked: the binding inside the aperture, from the
  * top of the space down, no eviction to make room, and, with eviction, no
- * wait for the GPU (Linux's PIN_NONBLOCK) or a wait no signal ends, which
- * a page fault asks, since it cannot be restarted. `i915_vma_pin_args`
- * adds a binding at the offset it names (PIN_OFFSET_FIXED) or above it
- * (PIN_OFFSET_BIAS). */
+ * wait for the GPU (Linux's PIN_NONBLOCK); a wait takes a signal.
+ * `i915_vma_pin_args` adds a binding at the offset it names
+ * (PIN_OFFSET_FIXED) or above it (PIN_OFFSET_BIAS). */
 #define I915_PIN_MAPPABLE     0x1u
 #define I915_PIN_HIGH         0x2u
 #define I915_PIN_NOEVICT      0x4u
 #define I915_PIN_NONBLOCK     0x8u
 #define I915_PIN_OFFSET_FIXED 0x10u
 #define I915_PIN_OFFSET_BIAS  0x20u
-#define I915_PIN_NOINTR       0x40u
 
 /*
  * A binding of an object, or of a part of it, into the global GTT, Linux's
@@ -607,7 +605,8 @@ struct i915_vma {
 
 /*
  * The part of an object of GEM_USERPTR (i915_gem_userptr.c): `ptr` is the
- * first byte of the program's memory it stands for, never 0, and `range`
+ * first byte of the program's memory it stands for, which may be 0, `set`
+ * marks the object as one of GEM_USERPTR, and `range`
  * is registered on that address space from the object's making, so that a
  * change to the pages there revokes the object's bindings and drops the
  * frames it pinned. `stale` is set when that happened while a binding was
@@ -616,6 +615,7 @@ struct i915_vma {
 struct i915_userptr {
     uintptr_t ptr;
     struct mmn_range range;
+    uint8_t set;
     uint8_t stale;
 };
 
@@ -665,7 +665,7 @@ struct drm_i915_gem_object {
 };
 
 /* Whether `obj` was made by GEM_USERPTR. */
-#define i915_gem_object_is_userptr(obj) ((obj)->userptr.ptr != 0)
+#define i915_gem_object_is_userptr(obj) ((obj)->userptr.set != 0)
 
 /*
  * A fence of the driver's own, which work on one of its engines signals:
@@ -1997,7 +1997,7 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 26
+#define I915_NUM_IOCTLS 28
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
@@ -2025,6 +2025,15 @@ int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj);
 /** Whether a fence of the object's reservation has not signalled, so that
  * the GPU may still read or write its pages. */
 int i915_gem_object_is_active(const struct drm_i915_gem_object *obj);
+
+/**
+ * Wait until no fence of the object's reservation is busy, so that the GPU
+ * no longer reads or writes its pages, for ever, as Linux's i915_vma_sync;
+ * with `intr` a signal ends the wait. Allocates nothing.
+ *
+ * @return 0, or -EINTR with `intr`.
+ */
+int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr);
 
 /** The physical address of the object's page `pgoff`, a shmem page given
  * on the first touch; 0 past its end or when none can be had. */
@@ -2124,6 +2133,7 @@ int32_t i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj, int lev
 /* The ioctls, as Linux's of the same names; each one's comment is at its
  * definition. */
 int32_t i915_gem_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_create_ext_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_pread_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_pwrite_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_set_domain_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
@@ -2214,7 +2224,9 @@ void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset);
 /**
  * Bind the object's view of `view_pages` pages from `view_offset`, or the
  * whole object for 0, into the global GTT and pin the binding, as Linux's
- * i915_gem_object_ggtt_pin: a binding that exists is reused unless it is
+ * i915_gem_object_ggtt_pin. A partial view may cover the whole object, a
+ * binding apart from the normal view's, as Linux's I915_GTT_VIEW_PARTIAL.
+ * A binding that exists is reused unless it is
  * outside the aperture with I915_PIN_MAPPABLE or not aligned to `align`,
  * when it is undone first. With I915_PIN_MAPPABLE the binding is sized
  * and aligned for a fence of the object's tiling. In `*out`.
@@ -2270,13 +2282,18 @@ void i915_vma_flush_writes(struct i915_vma *vma);
 /**
  * Undo a binding, as Linux's __i915_vma_unbind: programs' maps revoked,
  * writes flushed, its fence let go, its entries cleared and its record
- * freed.
+ * freed. A binding whose object the GPU may still use is kept, since its
+ * entries and pages must stay until the work is done: a caller that may
+ * sleep waits with `i915_gem_object_wait_idle` first, where Linux's
+ * unbind waits itself. Never sleeps.
  *
- * @return 0, or -EAGAIN while it is pinned.
+ * @return 0, -EAGAIN while it is pinned, or -EBUSY while its object is
+ *         active.
  */
 int32_t i915_vma_unbind(struct i915_vma *vma);
 
-/** Undo every binding of the object: 0, or -EAGAIN when one is pinned. */
+/** Undo every binding of the object: 0, or -EAGAIN when one is pinned or
+ * the object is active. */
 int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj);
 
 /** The object's binding inside the aperture that maps page `pgoff`, or
@@ -2384,7 +2401,8 @@ void i915_gem_shrinker_unregister(struct drm_i915_private *i915);
  *
  * @return 0; -EFAULT for another address space, one that has ended, or a
  *         page outside the program's memory or without write access;
- *         -EAGAIN while stale frames are still pinned; or -ENOMEM.
+ *         -EAGAIN while stale frames are still pinned; -EINTR for a signal
+ *         while the GPU finishes with the stale frames; or -ENOMEM.
  */
 int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj);
 
@@ -3384,6 +3402,7 @@ struct i915_request {
     struct i915_await *exec_waiters;
     struct i915_request *next; /* the engine's, oldest first */
     struct i915_request_hold *hold;
+    int64_t added_ns; /* dma_fence_now() when it was added, for THROTTLE */
 };
 
 /*
@@ -3417,6 +3436,11 @@ typedef int32_t (*i915_ext_fn)(uintptr_t ext, void *data);
  *         or an unknown name; -EFAULT; or a handler's error.
  */
 int32_t i915_user_extensions(uint64_t ext, const i915_ext_fn *tbl, uint32_t count, void *data);
+
+/** 0 when the `size` bytes, at most 8, at the user address `at` are zero;
+ * -EINVAL when not; -EFAULT when they cannot be read. Linux's
+ * check_user_mbz. */
+int32_t i915_check_user_mbz(uintptr_t at, size_t size);
 
 /** The driver's open hook: the file's state and its default context, 0.
  * 0 or -ENOMEM. */
@@ -3470,6 +3494,7 @@ int32_t i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data, stru
 int32_t i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
                                            struct drm_file *file);
+int32_t i915_gem_throttle_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_getparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
@@ -3561,6 +3586,14 @@ int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fenc
  * @return 0, or -EINTR.
  */
 int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr);
+
+/**
+ * The newest request of the state `ce` that has not completed and was
+ * added at or before `before`, a dma_fence_now() time, with a reference,
+ * or NULL: what THROTTLE waits for on that state, as Linux's walk of the
+ * context's timeline. Does not sleep.
+ */
+struct i915_request *i915_request_throttle_target(struct intel_context *ce, int64_t before);
 
 /** Give the chip each request whose last fence signalled outside the big
  * kernel lock, on every device: the submission worker's work, which a host
@@ -3800,11 +3833,13 @@ void i915_debugfs_register(struct drm_i915_private *i915);
  */
 
 /** A device is bound and registered: make the driver's directory of /sys
- * if it is not there, and show the driver on the function, its `driver`
- * link and the directory's link to it. From the bind, under the big lock. */
+ * if it is not there, and show the driver on the function as Linux's
+ * driver core does (`sysfs_pci_bind`): its `driver` link, the directory's
+ * link to it and DRIVER= in its uevent, which libudev, IGT's device scan
+ * and Mesa's loader read. From the bind, under the big lock. */
 void i915_handoff_bound(struct drm_i915_private *i915);
 
-/** A device is unplugged: take its two links away. Nothing for a device
+/** A device is unplugged: take that binding away. Nothing for a device
  * `i915_handoff_bound` was not told of. */
 void i915_handoff_unbound(struct drm_i915_private *i915);
 

@@ -507,10 +507,9 @@ static void i915_request_signal(struct drm_i915_private *i915, struct i915_engin
     spin_unlock_irqrestore(&e->lock, flags);
 }
 
-/** Give up what a request held once the chip is past it: what it waited
- * for, its batch's objects, the state it switched from, its own, and the
- * engine list's reference. */
-static void request_release(struct i915_request *rq)
+/** Let go of what the request holds for its batch, which may free its
+ * objects; in process context. */
+static void request_put_hold(struct i915_request *rq)
 {
     struct i915_request_hold *hold = rq->hold;
 
@@ -518,6 +517,14 @@ static void request_release(struct i915_request *rq)
     if (hold) {
         hold->release(hold);
     }
+}
+
+/** Give up what a request held once the chip is past it: what it waited
+ * for, its batch's objects, the state it switched from, its own, and the
+ * engine list's reference. */
+static void request_release(struct i915_request *rq)
+{
+    request_put_hold(rq);
     awaits_release(rq);
     exec_waiters_release(rq);
     intel_context_put(rq->prev_ce);
@@ -541,7 +548,9 @@ static void gt_park(struct drm_i915_private *i915)
 /**
  * Take from `e`'s list each request that `done` says is finished, oldest
  * first, its fence signalled, and release it; the user interrupt is let go
- * once the list is empty.
+ * once the list is empty.  Each finished request moves the ring's head to
+ * its end, as Linux's i915_request_retire, so that the room it took is free
+ * again; a cancel (`all`) leaves the head to the ring's restart.
  */
 static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, int all)
 {
@@ -555,6 +564,9 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
     while ((rq = e->requests) != 0 && (all || i915_engine_passed(e, rq->seqno))) {
         e->requests = rq->next;
         rq->next = 0;
+        if (!all) {
+            e->head = rq->postfix;
+        }
         *tail = rq;
         tail = &rq->next;
         if (!rq->fence.base.signaled) {
@@ -901,6 +913,7 @@ int32_t i915_request_add(struct i915_request *rq)
     n = breadcrumb_bytes(i915, e) / 4u;
     cs = i915_ring_begin(e, i915, n);
     if (!cs) {
+        request_put_hold(rq);
         awaits_release(rq);
         request_rewind(rq);
         dma_fence_set_error(&rq->fence.base, -EIO);
@@ -938,6 +951,7 @@ int32_t i915_request_add(struct i915_request *rq)
         cs[n - 1] = MI_NOOP;
     }
     rq->tail = e->tail;
+    rq->added_ns = dma_fence_now();
     /* The interrupt is unmasked before the chip can reach the breadcrumb,
      * and stays so while the engine has requests. */
     if (!e->requests) {
@@ -1158,6 +1172,7 @@ static uint32_t ring_space(uint32_t head, uint32_t tail, uint32_t size)
 static int32_t ring_wait_for_space(struct i915_engine *e)
 {
     struct i915_request *rq;
+    uint32_t postfix;
     int32_t err;
 
     if (ring_space(e->head, e->tail, e->ring_size) >= I915_REQUEST_ROOM) {
@@ -1172,12 +1187,32 @@ static int32_t ring_wait_for_space(struct i915_engine *e)
         return 0;
     }
     (void)dma_fence_get(&rq->fence.base);
+    postfix = rq->postfix;
     err = i915_request_wait(rq, 1, -1);
     i915_request_put(rq);
     if (err == 0) {
-        e->head = rq->postfix;
+        e->head = postfix;
     }
     return err;
+}
+
+struct i915_request *i915_request_throttle_target(struct intel_context *ce, int64_t before)
+{
+    struct i915_engine *e = ce->engine;
+    struct i915_request *rq, *target = 0;
+    uint32_t flags;
+
+    flags = spin_lock_irqsave(&e->lock);
+    for (rq = e->requests; rq; rq = rq->next) {
+        if (rq->ce == ce && rq->added_ns <= before && !i915_request_completed(rq)) {
+            target = rq;
+        }
+    }
+    if (target) {
+        (void)dma_fence_get(&target->fence.base);
+    }
+    spin_unlock_irqrestore(&e->lock, flags);
+    return target;
 }
 
 int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
