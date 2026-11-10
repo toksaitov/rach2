@@ -681,17 +681,22 @@ static int32_t run_enter(struct kvm_vcpu *v)
  * leave. With the local APIC in the kernel, `kvm_lapic_prepare` readies
  * each entry, and an exit the kernel took ends the call when the caller
  * asked for an interrupt window and may inject now. Before each entry the
- * loop takes a switch the scheduler asked for (`sched_service_point`), as
- * Linux's xfer_to_guest_mode_handle_work does, since an exit the kernel
- * answers never reaches the system call's exit, where the tick's switch is
- * otherwise taken: without it a guest that keeps the kernel busy keeps
- * every other thread off its processor. Returns 0 with `exit_reason` set,
- * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
+ * loop takes a switch the tick asked for at a slice's end
+ * (`sched_take_preempt`), as Linux's xfer_to_guest_mode_handle_work takes
+ * TIF_NEED_RESCHED, since an exit the kernel answers never reaches the
+ * system call's exit, where that switch is otherwise taken: without it a
+ * guest that keeps the kernel busy keeps every other thread off its
+ * processor. It takes no other, as `sched_service_point` would whenever a
+ * thread is queued: a guest exits thousands of times a second, and giving
+ * the processor away at each exit cost the vCPU up to a slice each time.
+ * Returns 0 with `exit_reason` set, -EINTR with it KVM_EXIT_INTR for a
+ * signal or a kick, or -errno.
  */
 static int32_t run_loop(struct kvm_vcpu *v)
 {
     struct kvm_run *run = v->run;
     int in_kernel = v->vm->irqchip != KVM_IRQCHIP_NONE;
+    uint32_t flags;
     int32_t r;
 
     if (v->vm->irqchip == KVM_IRQCHIP_NONE && run->cr8 != v->sregs.cr8) {
@@ -709,7 +714,9 @@ static int32_t run_loop(struct kvm_vcpu *v)
         return -EINTR;
     }
     for (;;) {
-        sched_service_point();
+        flags = kirq_save();
+        sched_take_preempt();
+        kirq_restore(flags);
         if (kvm_vcpu_test_clear(v, KVM_REQ_TRIPLE_FAULT)) {
             run->exit_reason = KVM_EXIT_SHUTDOWN;
             return 0;
