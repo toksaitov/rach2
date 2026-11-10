@@ -156,7 +156,7 @@
     },
     {
       "case_id": "machine.input.usb",
-      "behavior": "a USB keyboard's keys reach its event device, USB keyboard N, as Linux's key codes with the usage as MSC_SCAN",
+      "behavior": "a USB keyboard's keys reach its event device, QEMU QEMU USB Keyboard, read by its report descriptor, as Linux's key codes with the usage as MSC_SCAN",
       "units": [
         "evdev",
         "evprobe"
@@ -473,7 +473,7 @@
     },
     {
       "case_id": "machine.input.usb-mouse",
-      "behavior": "a USB boot-protocol mouse's motion, buttons and wheel reach its event device, USB HIDBP Mouse, with REL_WHEEL_HI_RES, stamped by each open's clock",
+      "behavior": "a USB mouse's motion, buttons and wheel reach its event device, QEMU QEMU USB Mouse, read by its report descriptor, with MSC_SCAN and REL_WHEEL_HI_RES, stamped by each open's clock",
       "units": [
         "evdev",
         "hid",
@@ -563,7 +563,7 @@
         },
         {
           "assertion_id": "mouse",
-          "checks": "evprobe finds the USB mouse's event device by its name, with bus 0x03, a usb- place, EV_REL with REL_X, REL_Y, REL_WHEEL and REL_WHEEL_HI_RES, BTN_LEFT to BTN_EXTRA, no property and EINVAL for EVIOCGABS; a revoked open reads ENODEV; a monotonic open and a real-time one each read the motion of 10 and 5, the left button pressed and released, REL_WHEEL of 1 and -1 and REL_WHEEL_HI_RES of 120 and -120, every record stamped between the clock_gettime calls around it, and evprobe prints `EVPROBE OK` and exits 0",
+          "checks": "evprobe finds the USB mouse's event device by its name, with bus 0x03, a usb- place, EV_REL with REL_X, REL_Y, REL_WHEEL and REL_WHEEL_HI_RES, EV_MSC with MSC_SCAN, BTN_LEFT to BTN_EXTRA, no property and EINVAL for EVIOCGABS; a revoked open reads ENODEV; a monotonic open and a real-time one each read the motion of 10 and 5, the left button pressed and released, each after MSC_SCAN 0x90001, REL_WHEEL of 1 and -1 and REL_WHEEL_HI_RES of 120 and -120, every record stamped between the clock_gettime calls around it, and evprobe prints `EVPROBE OK` and exits 0",
           "source": "scenario"
         }
       ],

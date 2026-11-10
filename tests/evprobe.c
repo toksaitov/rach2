@@ -28,7 +28,8 @@
  * KEY_BRIGHTNESSUP from the Notify of its \RTST.
  *
  * `evprobe mouse` and `evprobe usbmouse` find the PS/2 mouse's event device,
- * "ImExPS/2 Generic Explorer Mouse", or the USB one's, "USB HIDBP Mouse",
+ * "ImExPS/2 Generic Explorer Mouse", or QEMU's USB one's, "QEMU QEMU USB
+ * Mouse", whose buttons also give MSC_SCAN,
  * check its numbers, buttons, axes and properties as Linux gives them,
  * write a packet from one open and read it back from another, revoke one
  * open, which then reads ENODEV, set another's clock to
@@ -514,7 +515,7 @@ static void check_refusals(int a, int b, int idle)
 /** The run of `evprobe ps2` or `evprobe usb`. */
 static void keyboard(int usb)
 {
-    const char *path = find_device(usb ? "USB keyboard" : "AT Translated Set 2 keyboard");
+    const char *path = find_device(usb ? "QEMU QEMU USB Keyboard" : "AT Translated Set 2 keyboard");
     struct key_packet first[16], second[16], flood[2 * FLOOD_KEYS + 4];
     struct input_event ev;
     struct pollfd pfd;
@@ -568,38 +569,24 @@ static long long now_usec(int clock)
     return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
-/** Check the identity and capabilities of the mouse open on `fd`: its bus,
- * vendor and product, place, types, buttons, axes and properties, with
- * REL_HWHEEL and INPUT_PROP_POINTER on PS/2 and REL_WHEEL_HI_RES on USB. */
-static void check_mouse(int fd, int usb)
+/** Check the types, buttons, axes and properties of the mouse open on
+ * `fd`, a USB one when `usb`, as Linux gives them. */
+static void check_mouse_bits(int fd, int usb)
 {
     unsigned char bits[96];
-    unsigned short id[4];
     unsigned char abs[24];
-    char phys[64];
     long len;
     int i;
 
-    clear(id, sizeof(id));
-    if (ioctl(fd, EVIOCGID, (long)id) != 0 || id[0] != (usb ? BUS_USB : BUS_I8042)) {
-        fail_with("the mouse's EVIOCGID gives another bus", 1, id[0]);
-    }
-    if (!usb && (id[1] != 2 || id[2] != 6)) {
-        fail_with("the PS/2 mouse is not vendor 2, product PSMOUSE_IMEX", 1,
-                  (long)id[1] << 16 | id[2]);
-    }
-    len = ioctl(fd, EVIOCGPHYS(sizeof(phys) - 1), (long)phys);
-    if (len <= 0) {
-        fail_with("the mouse's EVIOCGPHYS gives nothing", 1, -len);
-    }
-    phys[len] = 0;
-    if (!begins(phys, usb ? "usb-" : "isa0060/serio1/input0")) {
-        fail("the mouse's EVIOCGPHYS gives another place");
-    }
     clear(bits, sizeof(bits));
     if (ioctl(fd, EVIOCGBIT(0, 4), (long)bits) <= 0 ||
-        bits[0] != (1 << EV_SYN | 1 << EV_KEY | 1 << EV_REL)) {
-        fail_with("the mouse's EVIOCGBIT(0) is not EV_SYN, EV_KEY and EV_REL", 1, bits[0]);
+        bits[0] != (1 << EV_SYN | 1 << EV_KEY | 1 << EV_REL | (usb ? 1 << EV_MSC : 0))) {
+        fail_with("the mouse's EVIOCGBIT(0) is not EV_SYN, EV_KEY, EV_REL and on USB EV_MSC", 1,
+                  bits[0]);
+    }
+    clear(bits, sizeof(bits));
+    if (usb && (ioctl(fd, EVIOCGBIT(EV_MSC, 1), (long)bits) != 1 || bits[0] != 1 << MSC_SCAN)) {
+        fail_with("the USB mouse's EVIOCGBIT(EV_MSC) is not MSC_SCAN", 1, bits[0]);
     }
     clear(bits, sizeof(bits));
     ioctl(fd, EVIOCGBIT(EV_REL, 2), (long)bits);
@@ -623,6 +610,35 @@ static void check_mouse(int fd, int usb)
     }
 }
 
+/** Check the identity and capabilities of the mouse open on `fd`: its bus,
+ * vendor and product, place, types, buttons, axes and properties, with
+ * REL_HWHEEL and INPUT_PROP_POINTER on PS/2 and REL_WHEEL_HI_RES and
+ * MSC_SCAN on USB. */
+static void check_mouse(int fd, int usb)
+{
+    unsigned short id[4];
+    char phys[64];
+    long len;
+
+    clear(id, sizeof(id));
+    if (ioctl(fd, EVIOCGID, (long)id) != 0 || id[0] != (usb ? BUS_USB : BUS_I8042)) {
+        fail_with("the mouse's EVIOCGID gives another bus", 1, id[0]);
+    }
+    if (!usb && (id[1] != 2 || id[2] != 6)) {
+        fail_with("the PS/2 mouse is not vendor 2, product PSMOUSE_IMEX", 1,
+                  (long)id[1] << 16 | id[2]);
+    }
+    len = ioctl(fd, EVIOCGPHYS(sizeof(phys) - 1), (long)phys);
+    if (len <= 0) {
+        fail_with("the mouse's EVIOCGPHYS gives nothing", 1, -len);
+    }
+    phys[len] = 0;
+    if (!begins(phys, usb ? "usb-" : "isa0060/serio1/input0")) {
+        fail("the mouse's EVIOCGPHYS gives another place");
+    }
+    check_mouse_bits(fd, usb);
+}
+
 /** What a reader of the mouse has seen, a bit each. */
 #define SEEN_X     0x01
 #define SEEN_Y     0x02
@@ -636,6 +652,7 @@ static void check_mouse(int fd, int usb)
 struct mouse_read {
     int seen;  /* SEEN_* */
     int hires; /* REL_WHEEL_HI_RES records of a detent */
+    int scans; /* MSC_SCAN records of the left button, 0x90001 */
     int dx;    /* the motion summed */
     int dy;
 };
@@ -656,6 +673,8 @@ static void take_record(const struct input_event *ev, struct mouse_read *r, cons
         r->seen |= ev->value == 1 ? SEEN_WHEEL : ev->value == -1 ? SEEN_BACK : 0;
     } else if (ev->type == EV_REL && ev->code == REL_WHEEL_HI_RES) {
         r->hires += ev->value == 120 || ev->value == -120;
+    } else if (ev->type == EV_MSC && ev->code == MSC_SCAN) {
+        r->scans += ev->value == 0x90001;
     } else if (ev->type != EV_SYN || ev->code != SYN_REPORT) {
         puts(who);
         fail_with(" read a record of another kind", 1, ev->type << 16 | ev->code);
@@ -665,7 +684,8 @@ static void take_record(const struct input_event *ev, struct mouse_read *r, cons
 /**
  * Read the mouse on `fd` until the motion of 10 and 5, the left button
  * pressed and released and the wheel turned up and down have all come, with
- * REL_WHEEL_HI_RES of 120 beside each turn when `usb`; each record must be
+ * REL_WHEEL_HI_RES of 120 beside each turn and MSC_SCAN 0x90001 before each
+ * press and release of the button when `usb`; each record must be
  * stamped between `from` and the time of `clock` after the read. `who`
  * names the reader.
  */
@@ -703,6 +723,11 @@ static void read_mouse(int fd, int usb, int clock, long long from, const char *w
     if (usb && r.hires != 2) {
         puts(who);
         fail_with(" did not read REL_WHEEL_HI_RES with each turn", 1, r.hires);
+    }
+    if (r.scans != (usb ? 2 : 0)) {
+        puts(who);
+        fail_with(" did not read MSC_SCAN 0x90001 with each press and release on USB alone", 1,
+                  r.scans);
     }
 }
 
@@ -748,7 +773,7 @@ static void write_back(const char *path)
 /** The run of `evprobe mouse` or `evprobe usbmouse`. */
 static void mouse(int usb)
 {
-    const char *path = find_device(usb ? "USB HIDBP Mouse" : "ImExPS/2 Generic Explorer Mouse");
+    const char *path = find_device(usb ? "QEMU QEMU USB Mouse" : "ImExPS/2 Generic Explorer Mouse");
     long long mono, real;
     struct input_event ev;
     int a, b, gone, clock;
