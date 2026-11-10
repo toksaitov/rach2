@@ -17,8 +17,8 @@
 # llvmpipe. It then boots a new overlay of the prepared image, in a scratch
 # directory under TMPDIR, with CPUS processors (2) and MIB of memory (2048),
 # under ACCEL: `tcg`, the default, QEMU's emulator, or `kvm`, Rach2's KVM
-# with QEMU's split interrupt controller, the one Rach2's KVM has. QEMU's
-# user network forwards PORT (5555) on Rach2's loopback address to the
+# with the PIC, the I/O APIC and the PIT in Rach2's kernel, QEMU's default.
+# QEMU's user network forwards PORT (5555) on Rach2's loopback address to the
 # guest's vtest port, and QEMU's monitor, QMP, listens on PORT + 1 there.
 # Once the guest reports its server ready on the serial console, the runner
 # asks QMP for the guest's status over TCP with socat, which must answer
@@ -29,7 +29,11 @@
 # The guest's console is read once a second, and each 60 s its size and last
 # line are printed; QEMU's end before the server is ready, or SECONDS without
 # a byte on it (600), fails the run. That bound is on silence, not on the
-# boot's length. Progress goes to standard output as
+# boot's length. At each 120 s of silence, and before that failure, the
+# runner prints what tells where the guest waits: the KVM lines of
+# /proc/stat, the interrupt counts in the fdinfo of QEMU's VM descriptor,
+# and over QMP QEMU's interrupt controllers, each vCPU's local APIC and the
+# vCPUs' registers. Progress goes to standard output as
 # `vtest-rach2: ACTION` lines, with the triangle's and the relay's lines and
 # the guest's record, and the last line is `vtest-rach2: result: pass: the
 # triangle through the relay equals llvmpipe's, CHECKSUM` or
@@ -65,7 +69,7 @@ for n in "$cpus" "$mib" "$port" "$silence"; do
     esac
 done
 case $accel in
-    kvm) accel_option=kvm,kernel-irqchip=split cpu=host ;;
+    kvm) accel_option=kvm cpu=host ;;
     tcg) accel_option=tcg cpu=max ;;
     *) usage ;;
 esac
@@ -94,6 +98,32 @@ fail()
     fi
     echo "vtest-rach2: result: fail: $*"
     exit 1
+}
+
+# dump: print the KVM lines of /proc/stat, the interrupt counts of QEMU's
+# VM in Rach2's KVM, and QEMU's view of the interrupt controllers, the local
+# APICs and the vCPUs over QMP, each line led by its source.
+dump()
+{
+    [ -n "$qemu" ] || return 0
+    grep -a '^kvm_' /proc/stat | sed 's/^/vtest-rach2: stat: /'
+    for f in /proc/"$qemu"/fd/*; do
+        [ "$(readlink "$f" 2>/dev/null)" = anon_inode:kvm-vm ] || continue
+        grep -a '^kvm_' /proc/"$qemu"/fdinfo/"${f##*/}" | sed 's/^/vtest-rach2: fdinfo: /'
+    done
+    {
+        echo '{"execute":"qmp_capabilities"}'
+        i=0
+        set -- 'info pic' 'info irq' 'info registers -a'
+        while [ "$i" -lt "$cpus" ]; do
+            set -- "$@" "info lapic $i"
+            i=$((i + 1))
+        done
+        for c in "$@"; do
+            printf '{"execute":"human-monitor-command","arguments":{"command-line":"%s"}}\n' "$c"
+        done
+    } | socat -t 5 - "TCP:127.0.0.1:$((port + 1))" 2>&1 | tr -d '\r' |
+        sed 's/\\r\\n/\n/g; s/\\n/\n/g' | sed 's/^/vtest-rach2: qmp: /'
 }
 
 # draw NAME DRIVER: draw the triangle with Mesa's DRIVER, its picture into
@@ -163,7 +193,14 @@ while :; do
     else
         quiet=$((quiet + 1))
     fi
-    [ "$quiet" -lt "$silence" ] || fail "the console was silent for $silence s"
+    if [ "$quiet" -ge "$silence" ]; then
+        dump
+        fail "the console was silent for $silence s"
+    fi
+    [ "$quiet" -eq 0 ] || [ $((quiet % 120)) -ne 0 ] || {
+        echo "vtest-rach2: the console has been silent for $quiet s"
+        dump
+    }
     sleep 1
     waited=$((waited + 1))
     if [ $((waited % 60)) -eq 0 ]; then
