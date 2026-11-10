@@ -969,7 +969,7 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # The network scenarios share netcase.c, and so do the scenarios of the GRUB
 # disks and the development tools' scenario, which log in and type at the
 # console as they do.
-NET_SCENARIOS = build/tests/cases/machine/d3d_scenario \
+NET_SCENARIOS = build/tests/cases/machine/d3d_scenario build/tests/cases/machine/games_scenario \
                 build/tests/cases/machine/desktop_scenario \
                 build/tests/cases/machine/i915fake_scenario \
                 build/tests/cases/machine/diskdiag_scenario \
