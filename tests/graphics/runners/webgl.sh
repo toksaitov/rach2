@@ -17,7 +17,10 @@
 # 2.0.1 run of the discovery run and failed 163 pages after it, is replaced
 # by a new one for the pages left, and the page it was running is `crash`.
 # Each page that does not pass is then run once more in a new browser, and
-# its second result is its verdict; the first is kept beside it.
+# its second result is its verdict; the first is kept beside it. A browser
+# whose list differs from the first browser's, as the suite's harness gives
+# one when the fetch of a list file fails, has run nothing, and a new one
+# runs its pages.
 #
 # OMIT names pages that BROWSER does not run, a line each, `BROWSER PATH`,
 # PATH as the list gives it, `#` beginning a comment; such a page's status
@@ -85,7 +88,7 @@ runner_weston
 runner_server "$suite" "webgl-runner.html=$RUNNER_DIR/webgl.html"
 events=$RUNNER_WORK/events
 lines=0
-count=
+count='' listsum=''
 
 # run_pages INDEX...: run the pages in new browsers until each has a result,
 # and leave their lines in $RUNNER_WORK/attempt.
@@ -101,21 +104,24 @@ run_pages()
             "$RUNNER_OUT/browser.log"
         # shellcheck disable=SC2046 # two words
         set -- $(python3 -I "$RUNNER_DIR/events.py" wait "$events" "$lines" "$RUNNER_BROWSER" "$silence")
-        state=$1
+        state=$1 upto=$2
         runner_stop
         before=$(wc -l < "$RUNNER_WORK/attempt")
-        python3 -I "$RUNNER_DIR/events.py" pages "$events" "$lines" "$2" "$state" >> "$RUNNER_WORK/attempt"
-        lines=$2
-        echo "webgl: browser: $state after $(($(wc -l < "$RUNNER_WORK/attempt") - before)) pages" >&2
-        if [ -z "$count" ]; then
-            # shellcheck disable=SC2046 # two words
-            set -- $(python3 -I "$RUNNER_DIR/events.py" list "$events")
-            if [ "$1" -gt 0 ]; then
-                count=$1
-                runner_record "list $version $1 pages sha256 $2"
-                python3 -I "$RUNNER_DIR/events.py" renderer "$events" >> "$RUNNER_OUT/record"
-            fi
+        # shellcheck disable=SC2046 # two words
+        set -- $(python3 -I "$RUNNER_DIR/events.py" list "$events" "$lines" "$upto")
+        if [ -z "$count" ] && [ "$1" -gt 0 ]; then
+            count=$1 listsum=$2
+            runner_record "list $version $1 pages sha256 $2"
+            python3 -I "$RUNNER_DIR/events.py" renderer "$events" >> "$RUNNER_OUT/record"
         fi
+        if [ "$1" -gt 0 ] && [ "$1 $2" != "$count $listsum" ]; then
+            # The harness reads a failed fetch (status 0) as an empty list.
+            echo "webgl: browser: its list has $1 pages, not $count; its results are dropped" >&2
+        else
+            python3 -I "$RUNNER_DIR/events.py" pages "$events" "$lines" "$upto" "$state" >> "$RUNNER_WORK/attempt"
+        fi
+        lines=$upto
+        echo "webgl: browser: $state after $(($(wc -l < "$RUNNER_WORK/attempt") - before)) pages" >&2
         left=
         for i in $todo; do
             [ -z "$count" ] || [ "$i" -lt "$count" ] || continue
