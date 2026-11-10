@@ -68,6 +68,8 @@ to a smaller size.
 Refuse a truncation to a larger size, and cut a write that would pass
 the end to the whole pages before it, as Linux writes a page at a time; a
 .Xr writev 2
+or
+.Xr pwritev 2
 is cut the same way, its elements taken as one run of bytes.
 A write with no whole page before the end fails with nothing written.
 .It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
