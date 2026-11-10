@@ -6135,6 +6135,42 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}]}
     },
     {
+      "case_id": "guest.default.memcallmusl",
+      "behavior": "The memory calls of Linux 6.10 to 6.12, mseal, process_madvise, process_mrelease, cachestat and memfd_secret, and the answers for memory keys and shadow stacks give what Linux 6.12 gives on a processor with neither, on both kernels and for an i386 program on the x86-64 kernel.",
+      "units": ["default", "musl/memcallmusl"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "memcallmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "mseal", "checks": "On the x86-64 kernel, for x86-64 and i386 programs, mseal refuses a flag and an unaligned start with EINVAL and a range with a hole with ENOMEM, takes an empty range, and a sealed page refuses munmap, which unmaps nothing, mremap, MAP_FIXED and mprotect, which changes the page below first, with EPERM, refuses MADV_DONTNEED when read-only, shows sl in smaps, may be sealed again and stays sealed in a child; on the i686 kernel mseal is EPERM, as Linux's 32-bit kernel answers.", "source": "program"},
+        {"assertion_id": "pkey", "checks": "On the x86-64 kernel pkey_alloc is EINVAL for a flag or an unknown right and ENOSPC otherwise, pkey_free is EINVAL, and pkey_mprotect is mprotect with key -1 and EINVAL with another key but 0 for an empty range, as Linux 6.12 answers on a processor without memory keys; on the i686 kernel the three are ENOSYS.", "source": "program"},
+        {"assertion_id": "shadow-stack", "checks": "map_shadow_stack is EOPNOTSUPP on the x86-64 kernel and ENOSYS on the i686 one.", "source": "program"},
+        {"assertion_id": "cachestat", "checks": "cachestat counts two pages in memory and two dirty for a memfd written in the first and last of three pages, none for its middle page or past its end, and is EBADF for a closed or O_PATH descriptor, EFAULT for an unreadable range and EINVAL for a flag.", "source": "program"},
+        {"assertion_id": "cachestat-perm", "checks": "cachestat is EPERM for a process that neither owns nor may write a file it opened for reading.", "source": "program"},
+        {"assertion_id": "secret-file", "checks": "memfd_secret is EINVAL for a flag but O_CLOEXEC, and gives a close-on-exec, read-write descriptor of a regular file of mode 0600, the caller's, with one link and size 0, linked as /secretmem (deleted); read, write and F_GET_SEALS are EINVAL, fallocate EOPNOTSUPP, and ftruncate sets the size once and is EINVAL after.", "source": "program"},
+        {"assertion_id": "secret-map", "checks": "A private mapping of memfd_secret is EINVAL and one with PROT_EXEC EPERM; a shared one reads what was stored, is named /secretmem (deleted) in maps, shows dd in smaps, refuses mprotect to PROT_EXEC with EACCES and raises SIGBUS past the size, and cachestat counts its touched page in memory and not dirty.", "source": "program"},
+        {"assertion_id": "secret-refused", "checks": "/proc/self/mem cannot read a mapping of memfd_secret (EIO), process_vm_readv cannot (EFAULT), and mlock of it is ENOMEM.", "source": "program"},
+        {"assertion_id": "secret-memlock", "checks": "Under an RLIMIT_MEMLOCK of one page a child touches one page of memfd_secret and is killed by SIGBUS at the second, root or not.", "source": "program"},
+        {"assertion_id": "process-madvise", "checks": "process_madvise is EINVAL for a flag and for MADV_DONTNEED and EBADF for a descriptor that is no pidfd; MADV_COLD and MADV_PAGEOUT over the caller's page give 4096 and over no mapping ENOMEM; over a child's page MADV_COLD gives 4096 for root and EPERM for others.", "source": "program"},
+        {"assertion_id": "process-mrelease", "checks": "process_mrelease is EINVAL for a flag, EBADF for a descriptor that is no pidfd, EINVAL for the caller and for a child alive, 0 or ESRCH for a child killed by SIGKILL, and ESRCH once it is reaped.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "memcallmusl", "node": "tests/musl/memcallmusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}]}
+    },
+    {
       "case_id": "guest.default.chrootmusl",
       "behavior": "chroot refuses what Linux refuses, and a process's root holds its paths, working directory, links and children inside it and keeps its directory busy.",
       "units": ["default", "musl/chrootmusl"],

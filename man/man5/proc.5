@@ -1881,7 +1881,15 @@ for a range
 marked, and
 .Ql lf
 for a region locked on fault
-.Pq see Xr mlock 2 .
+.Pq see Xr mlock 2 ,
+.Ql dd
+for a mapping of
+.Xr memfd_secret 2 ,
+which a core file leaves out, and
+.Ql sl
+for a region
+.Xr mseal 2
+sealed.
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
 Anonymous counts every page of a private region of no file, and the

@@ -183,6 +183,7 @@ musl/tmpfsmusl
 musl/mknodmusl
 # memfd_create, its descriptor and name, and each seal.
 musl/memfdmusl
+musl/memcallmusl
 # chroot on KRFFS and tmpfs: paths, links and ".." inside the root, fork and
 # exec keeping it, and the rmdir and unmount it refuses.
 musl/chrootmusl
