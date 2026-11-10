@@ -754,6 +754,45 @@ void sysfs_remove(int handle)
     }
 }
 
+/* The one binding `sysfs_pci_bind` shows here, as fs/sysfs.c makes it: the
+ * function's key, or -1, its `driver` link and the directory's link back. */
+static int bound_key = -1, bound_link, bound_back;
+
+int sysfs_pci_bind(int key, const char *driver)
+{
+    static const char hex[] = "0123456789abcdef";
+    char name[SYSFS_NAME_MAX];
+    int dev = sysfs_anchor(SYSFS_PCI_DEVICE, key);
+    int dir = sysfs_anchor(SYSFS_BUS_PCI, 0), h;
+
+    if (bound_key >= 0) {
+        return bound_key == key ? 0 : -ENOSPC;
+    }
+    h = sysfs_node_child(dir, "drivers", 7);
+    dir = h > 0 ? h : sysfs_add_dir(dir, "drivers");
+    h = sysfs_node_child(dir, driver, (int)strlen(driver));
+    dir = h > 0 ? h : sysfs_add_dir(dir, driver);
+    k_memcpy(name, "0000:00:00.0", 13);
+    name[5] = hex[(key >> 12) & 15];
+    name[6] = hex[(key >> 8) & 15];
+    name[8] = hex[(key >> 7) & 1];
+    name[9] = hex[(key >> 3) & 15];
+    name[11] = hex[key & 7];
+    bound_link = sysfs_add_link(dev, "driver", dir);
+    bound_back = sysfs_add_link(dir, name, dev);
+    bound_key = key;
+    return bound_link > 0 && bound_back > 0 ? 0 : -ENOENT;
+}
+
+void sysfs_pci_unbind(int key)
+{
+    if (key == bound_key) {
+        sysfs_remove(bound_link);
+        sysfs_remove(bound_back);
+        bound_key = -1;
+    }
+}
+
 int32_t sysfs_node_show(int handle, char *buf, uint32_t cap)
 {
     struct sys_node *n = handle > 0 && handle <= SYS_NODES ? &sys[handle - 1] : 0;

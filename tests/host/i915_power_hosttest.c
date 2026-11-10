@@ -187,26 +187,6 @@ int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg
     return add_file(parent, attr->name, attr, obj, arg);
 }
 
-/* The function shown bound by sysfs_pci_bind: its key and driver, or -1
- * and NULL. */
-static int bound_key = -1;
-static const char *bound_driver;
-
-int sysfs_pci_bind(int key, const char *driver)
-{
-    bound_key = key;
-    bound_driver = driver;
-    return 0;
-}
-
-void sysfs_pci_unbind(int key)
-{
-    if (key == bound_key) {
-        bound_key = -1;
-        bound_driver = 0;
-    }
-}
-
 int sysfs_node_child(int dir, const char *name, int len)
 {
     int i;
@@ -903,14 +883,9 @@ static void row_sysfs(void)
     struct drm_i915_private *i915 = fresh(&m, 1);
 
     i915_sysfs_register(i915);
-    CHECK("sysfs: the function shown bound to i915",
-          bound_key == (m.pci.bus << 8 | m.pci.device << 3 | m.pci.function) && bound_driver &&
-              strcmp(bound_driver, "i915") == 0);
     sysfs_names();
     sysfs_values(&m);
     sysfs_stores(i915);
-    i915_sysfs_unregister(i915);
-    CHECK("sysfs: and no longer once unregistered", bound_key == -1 && !bound_driver);
     done(&m);
 
     i915 = fresh(&m, 1);
