@@ -221,24 +221,26 @@ static int find_props(struct kms *k)
 }
 
 /**
- * Open the KMS device at path as its master and find its display. direct
- * lets a resource's dma-buf be scanned out without a copy; writeback
- * checks each frame through the device's writeback connector, which vkms
- * has with enable_writeback=1. Returns the display, or 0 with a message.
+ * Take the KMS device fd, opened from path, as its master and find its
+ * display; fd is the display's from then on. direct lets a resource's
+ * dma-buf be scanned out without a copy; writeback checks each frame
+ * through the device's writeback connector, which vkms has with
+ * enable_writeback=1. Returns the display, or 0 with a message, fd closed.
  */
-struct kms *kms_open(const char *path, struct vr *r, int direct, int writeback)
+struct kms *kms_open(int fd, const char *path, struct vr *r, int direct, int writeback)
 {
     struct kms *k = calloc(1, sizeof(*k));
 
     if (k == 0) {
+        close(fd);
         return 0;
     }
+    k->fd = fd;
     k->vr = r;
     k->direct = direct;
     k->writeback = writeback;
     k->mode = -1;
-    k->fd = open(path, O_RDWR | O_CLOEXEC);
-    if (k->fd < 0 || drmSetMaster(k->fd) != 0) {
+    if (drmSetMaster(k->fd) != 0 && drmIsMaster(k->fd) == 0) {
         fprintf(stderr, "backend: cannot be the master of %s: %s\n", path, strerror(errno));
         goto fail;
     }
@@ -259,9 +261,7 @@ struct kms *kms_open(const char *path, struct vr *r, int direct, int writeback)
     return k;
 
 fail:
-    if (k->fd >= 0) {
-        close(k->fd);
-    }
+    close(k->fd);
     free(k);
     return 0;
 }

@@ -436,7 +436,7 @@ int main(int argc, char **argv)
     struct opts o;
     struct kms *k = 0;
     struct vr *r;
-    int gbm = -1;
+    int gbm, card = -1;
 
     options(argc, argv, &o);
     signal(SIGINT, on_signal);
@@ -448,16 +448,19 @@ int main(int argc, char **argv)
     } else {
         open_module(&s, o.module);
     }
-    if (o.gbm || o.card) {
-        gbm = open(o.gbm ? o.gbm : o.card, O_RDWR | O_CLOEXEC);
-        if (gbm < 0) {
-            die("cannot open the GBM device", o.gbm ? o.gbm : o.card);
-        }
+    /* One open of the card: its first descriptor is DRM's master, and the
+       GBM device virglrenderer gets is a duplicate of it. */
+    if (o.card && (card = open(o.card, O_RDWR | O_CLOEXEC)) < 0) {
+        die("cannot open the display", o.card);
+    }
+    gbm = o.gbm ? open(o.gbm, O_RDWR | O_CLOEXEC) : card;
+    if (o.gbm && gbm < 0) {
+        die("cannot open the GBM device", o.gbm);
     }
     if ((r = vr_init(&dev, gbm, o.venus, o.verbose)) == 0) {
         return 1;
     }
-    if (o.card && (k = kms_open(o.card, r, o.direct, o.writeback)) == 0) {
+    if (o.card && (k = kms_open(card, o.card, r, o.direct, o.writeback)) == 0) {
         return 1;
     }
     vr_set_kms(r, k);

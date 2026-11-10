@@ -37,7 +37,7 @@ struct kms_counts {
     uint64_t flushes, copies, direct, modesets, flips, skipped, writebacks;
 };
 
-struct kms *kms_open(const char *path, struct vr *r, int direct, int writeback);
+struct kms *kms_open(int fd, const char *path, struct vr *r, int direct, int writeback);
 int kms_edid(struct kms *k, uint8_t *out, uint32_t *size);
 int kms_display(struct kms *k, struct vd_mode *m);
 int kms_scanout(struct kms *k, uint32_t id, const struct vd_rect *r);

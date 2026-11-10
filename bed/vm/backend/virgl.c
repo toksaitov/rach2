@@ -63,9 +63,11 @@ static int get_drm_fd(void *cookie)
 /** Write virglrenderer's log lines to stderr as the backend's. */
 static void log_line(enum virgl_log_level_flags level, const char *message, void *data)
 {
+    size_t n = strlen(message);
+
     (void)data;
-    fprintf(stderr, "backend: virgl: %s%s", level >= VIRGL_LOG_LEVEL_ERROR ? "error: " : "",
-            message);
+    fprintf(stderr, "backend: virgl: %s%s%s", level >= VIRGL_LOG_LEVEL_ERROR ? "error: " : "",
+            message, n && message[n - 1] == '\n' ? "" : "\n");
 }
 
 /**
@@ -105,7 +107,8 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose)
     }
     for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
         virgl_renderer_get_cap_set(ids[i], &ver, &size);
-        if (ver > 0 && size > 0) {
+        /* Venus reports version 0; QEMU too takes a capset by its size. */
+        if (size > 0) {
             r->capset[r->ncapsets++] = ids[i];
         }
     }
