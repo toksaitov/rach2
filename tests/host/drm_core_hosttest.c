@@ -1044,6 +1044,7 @@ static void test_dumb_map(void)
     struct drm_mode_map_dumb md;
     struct drm_gem_object *obj;
     uintptr_t phys0, phys1;
+    vma_t inner;
 
     md.handle = 1;
     md.pad = 0;
@@ -1061,7 +1062,7 @@ static void test_dumb_map(void)
     CHECK("mmap past the object", da.ops->mmap(&da, &dvma) == -EINVAL);
     dvma.end = 2 * PAGE_SIZE;
     dvma.pgoff = (uint32_t)(doff >> PAGE_SHIFT) + 1;
-    CHECK("mmap from inside the object", da.ops->mmap(&da, &dvma) == -EINVAL);
+    CHECK("mmap from inside the object past its end", da.ops->mmap(&da, &dvma) == -EINVAL);
     dvma.pgoff = (uint32_t)(doff >> PAGE_SHIFT);
     CHECK("mmap by a file without a handle", db.ops->mmap(&db, &dvma) == -EACCES);
     dvma.type = VM_FILE;
@@ -1085,6 +1086,20 @@ static void test_dumb_map(void)
     CHECK("the driver reads what the mapping wrote",
           memcmp((void *)(drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, 0) + 256),
                  "pixels", 6) == 0);
+
+    /* Linux's drm_vma_offset_lookup_locked: a page inside the object. */
+    k_memset(&inner, 0, sizeof(inner));
+    inner.end = PAGE_SIZE;
+    inner.type = VM_SHARED;
+    inner.prot = VM_PROT_READ;
+    inner.pgoff = (uint32_t)(doff >> PAGE_SHIFT) + 1;
+    phys0 = 0;
+    CHECK("mmap from inside the object",
+          da.ops->mmap(&da, &inner) == 0 && inner.pgoff == 1 &&
+              ((struct region *)inner.file)
+                      ->ops->page(((struct region *)inner.file)->obj, inner.pgoff, &phys0) == 0 &&
+              phys0 == drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, 1));
+    region_unmap(&inner);
     drm_gem_object_put(obj);
 }
 

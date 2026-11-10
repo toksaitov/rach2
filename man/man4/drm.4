@@ -197,8 +197,9 @@ does.
 .Pp
 A buffer's offset is a whole number of pages, the same for every file of
 the device, from 4 GiB on x86-64 and from 16 MiB on i386.
-A mapping must be shared, start at the offset and be no longer than the
-buffer, and its file must hold a handle to the buffer; a mapping holds the
+A mapping must be shared and lie within the buffer, from its offset or
+any page past it, and its file must hold a handle to the buffer; a mapping
+holds the
 buffer until it is unmapped, so destroying the handle leaves the mapping's
 bytes in place.
 The driver chooses the mapping's cache type: the dumb buffers of a display
@@ -321,7 +322,7 @@ magic unknown or spent,
 .Dv DRM_IOCTL_GEM_CLOSE
 of a handle the file does not hold, or
 .Xr mmap 2
-at an offset no buffer has, longer than its buffer, or private.
+at an offset in no buffer, past its buffer's end, or private.
 .It Er ENODEV
 The device was unplugged.
 .It Er ENOENT

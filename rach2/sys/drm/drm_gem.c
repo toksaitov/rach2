@@ -295,32 +295,43 @@ static int file_has_handle(const struct drm_file *file, const struct drm_gem_obj
     return 0;
 }
 
+/** Whether the object at mmap offset `offset` holds page `pgoff` of the
+ * device's mmap space. */
+static int mmap_covers(uint64_t offset, const struct drm_gem_object *obj, uint32_t pgoff)
+{
+    uint64_t first = offset >> PAGE_SHIFT;
+
+    return offset != 0 && pgoff >= first && pgoff - first < obj->size >> PAGE_SHIFT;
+}
+
 int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma)
 {
     struct drm_device *dev = file->dev;
     struct drm_gem_object *obj;
     struct drm_mmap_node *node = NULL;
     uint32_t pages = (uint32_t)((vma->end - vma->start) >> PAGE_SHIFT);
-    uint32_t start;
+    uint32_t start = 0;
     int32_t rc;
 
     if (dev->unplugged) {
         return -ENODEV;
     }
     for (obj = dev->mmap_objects; obj; obj = obj->mmap_next) {
-        if ((obj->mmap_offset >> PAGE_SHIFT) == vma->pgoff) {
+        if (mmap_covers(obj->mmap_offset, obj, vma->pgoff)) {
+            start = (uint32_t)(obj->mmap_offset >> PAGE_SHIFT);
             break;
         }
     }
     if (!obj) {
         for (node = dev->mmap_nodes; node; node = node->next) {
-            if ((node->offset >> PAGE_SHIFT) == vma->pgoff) {
+            if (mmap_covers(node->offset, node->obj, vma->pgoff)) {
                 obj = node->obj;
+                start = (uint32_t)(node->offset >> PAGE_SHIFT);
                 break;
             }
         }
     }
-    if (!obj || pages > obj->size >> PAGE_SHIFT) {
+    if (!obj || pages > (obj->size >> PAGE_SHIFT) - (vma->pgoff - start)) {
         return -EINVAL;
     }
     if (!file_has_handle(file, obj)) {
@@ -329,7 +340,6 @@ int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma)
     if (!node && (!obj->funcs || !obj->funcs->mmap)) {
         return -ENODEV;
     }
-    start = (uint32_t)(vma->pgoff);
     drm_gem_object_get(obj);
     vma->pgoff -= start;
     rc = node ? node->mmap(node, vma) : obj->funcs->mmap(obj, vma);

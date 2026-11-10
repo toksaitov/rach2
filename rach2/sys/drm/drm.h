@@ -432,13 +432,14 @@ void drm_gem_release(struct drm_file *file);
  * when the space has no room for it. */
 int32_t drm_gem_create_mmap_offset(struct drm_gem_object *obj);
 /**
- * mmap of a card or render node: the object whose offset is the region's
- * page offset, which the file has a handle to, mapped by its `mmap` from
- * its own page 0, with a reference the region holds; or the object of a
- * driver's node there, mapped by the node's `mmap`. -ENODEV for a device
- * unplugged or an object without `mmap`, -EINVAL for no object at that
- * offset or a range past its end, -EACCES for an object the file has no
- * handle to, or the hook's error.
+ * mmap of a card or render node, as Linux's drm_gem_mmap: the object whose
+ * pages in the mmap space hold the region's page offset, which the file has
+ * a handle to, mapped by its `mmap` with `pgoff` the page within it, with a
+ * reference the region holds; or the object of a driver's node there,
+ * mapped by the node's `mmap`. -ENODEV for a device unplugged or an object
+ * without `mmap`, -EINVAL for no object at that offset or a range past its
+ * end, -EACCES for an object the file has no handle to, or the hook's
+ * error.
  */
 int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma);
 
