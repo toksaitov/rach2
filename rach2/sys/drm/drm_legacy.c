@@ -468,7 +468,9 @@ int32_t drm_mode_page_flip_ioctl(struct drm_device *dev, void *data, struct drm_
     if (rc == 0) {
         drm_atomic_set_fb_for_plane(ps, fb);
         state->allow_modeset = 0;
-        rc = drm_atomic_nonblocking_commit(state);
+        /* Linux's page_flip_common refuses a legacy flip of a CRTC that is
+         * off, as DPMS leaves it. */
+        rc = cs->active ? drm_atomic_nonblocking_commit(state) : -EINVAL;
     }
     drm_atomic_state_free(state);
 out:

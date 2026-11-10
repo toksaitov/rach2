@@ -907,11 +907,12 @@ static void row_dirtyfb(void)
     mc->fb_dirty = 0;
 }
 
-/** DPMS through OBJ_SETPROPERTY and SETPROPERTY. */
+/** DPMS through OBJ_SETPROPERTY and SETPROPERTY, and no flip while off. */
 static void row_dpms(void)
 {
     struct drm_mode_obj_set_property o;
     struct drm_mode_connector_set_property s;
+    struct drm_mode_crtc_page_flip f;
     int before = disables;
 
     k_memset(&o, 0, sizeof(o));
@@ -928,6 +929,12 @@ static void row_dpms(void)
     s.value = DRM_MODE_DPMS_STANDBY;
     CHECK(drm_connector_property_set_ioctl(&dev, &s, &fa) == 0 && !crtc0.state->active,
           "SETPROPERTY of standby is off");
+    k_memset(&f, 0, sizeof(f));
+    f.crtc_id = crtc0.base.id;
+    f.fb_id = fb_other;
+    CHECK(drm_mode_page_flip_ioctl(&dev, &f, &fa) == -EINVAL &&
+              primary0.state->fb->base.id == fb_main,
+          "PAGE_FLIP of a CRTC DPMS left off: EINVAL, as Linux's page_flip_common");
     s.value = DRM_MODE_DPMS_ON;
     CHECK(drm_connector_property_set_ioctl(&dev, &s, &fa) == 0 && crtc0.state->active &&
               hdmi.dpms == DRM_MODE_DPMS_ON,
