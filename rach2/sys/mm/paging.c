@@ -1120,6 +1120,42 @@ static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, 
  * would be pushed into the same guard, and the processor raises a double
  * fault instead (`isr_double_fault`).
  */
+#ifdef FRAME_FP
+/* How many callers a kernel fault's record names. */
+#define FAULT_CALLERS 16
+
+/**
+ * Log the return addresses of the kernel frames that led to a fault in
+ * kernel mode, by the frame-pointer chain from `fp`, so that a fault in a
+ * shared helper such as k_strlen names its callers. Only links that climb
+ * the running thread's kernel stack are followed, so a broken chain ends
+ * the record and never faults again.
+ */
+static void fault_callers(uintptr_t fp)
+{
+    uintptr_t top, bottom;
+    int depth;
+
+    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE) {
+        return;
+    }
+    top = current_proc->kernel_stack;
+    bottom = top - KERNEL_STACK_SIZE;
+    for (depth = 0; depth < FAULT_CALLERS; depth++) {
+        const uintptr_t *frame = (const uintptr_t *)fp;
+
+        if (fp < bottom || fp > top - 2 * sizeof(uintptr_t) || fp % sizeof(uintptr_t) != 0) {
+            return;
+        }
+        klog(KLOG_CRIT, "vm", "fault: called from 0x%lX", (unsigned long)frame[1]);
+        if (frame[0] <= fp) {
+            return;
+        }
+        fp = frame[0];
+    }
+}
+#endif
+
 static void _page_fault_handler(isr_params_t *params)
 {
     uintptr_t fault_address;
@@ -1184,6 +1220,9 @@ static void _page_fault_handler(isr_params_t *params)
     klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%lX (err 0x%X), pc 0x%lX",
          (unsigned long)fault_address, (uint32_t)params->error_code,
          (unsigned long)FRAME_PC(params));
+#ifdef FRAME_FP
+    fault_callers((uintptr_t)FRAME_FP(params));
+#endif
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }

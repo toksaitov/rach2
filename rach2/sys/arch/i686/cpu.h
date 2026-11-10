@@ -68,6 +68,8 @@ typedef struct cpu_regs cpu_regs_t;
 #define FRAME_PC(p)   ((p)->eip)
 #define FRAME_SP(p)   ((p)->user_esp)
 #define FRAME_USER(p) (((p)->cs & 3u) == 3u)
+/* The frame pointer at the trap; the kernel is built with frame pointers. */
+#define FRAME_FP(p)   ((p)->ebp)
 
 /* Resume the frame with interrupts off: clear IF in its saved flags. */
 #define FRAME_IRQ_OFF(p) ((p)->eflags &= ~0x200u)
