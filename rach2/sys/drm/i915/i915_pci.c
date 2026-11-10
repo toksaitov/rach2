@@ -316,11 +316,24 @@ static int32_t i915_base_init(struct drm_i915_private *i915)
  * display could not be made keeps its GEM and loses mode setting, as Linux's
  * i915 on a device without display. The fake chip has no aperture behind
  * it, so its firmware device stays.
+ *
+ * Under `rach2.i915.disable_display`, Linux's i915.disable_display, the
+ * device is one without display from the start, and the display, the
+ * backlight and the firmware's framebuffer device are left as the firmware
+ * left them, unlike Linux, which removes that device whatever the option
+ * says: the console keeps drawing on it, so that a trial of the GPU leaves
+ * the screen as it was.
  */
 static void i915_display_bringup(struct drm_i915_private *i915)
 {
     int32_t err;
 
+    if (kcmdline_has("rach2.i915.disable_display")) {
+        klog(KLOG_INFO, "i915",
+             "display: disabled by rach2.i915.disable_display; the firmware's framebuffer stays");
+        i915->drm.features &= ~(DRIVER_MODESET | DRIVER_ATOMIC);
+        return;
+    }
     if (i915->gmadr_phys != 0 && i915->ggtt.mappable_end != 0) {
         (void)drm_aperture_remove_conflicting(i915->gmadr_phys, i915->ggtt.mappable_end, "i915");
     }

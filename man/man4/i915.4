@@ -6,6 +6,7 @@
 .Nd Intel Haswell graphics driver
 .Sh SYNOPSIS
 .Cd rach2.i915
+.Cd rach2.i915.disable_display
 .Cd rach2.i915.firstlight
 .Cd rach2.i915fake
 .Pp
@@ -31,6 +32,17 @@ The driver binds a device only when the kernel command line has
 .Cm rach2.i915 .
 Without it the kernel logs the device and leaves the screen to the
 firmware's framebuffer.
+.Pp
+With
+.Cm rach2.i915.disable_display
+as well, as Linux's
+.Ql i915.disable_display ,
+the driver binds the device without its display: the device offers no
+mode setting, and the display, the backlight and the firmware's
+framebuffer, on which the console keeps drawing, stay as the firmware left
+them.
+Unlike Linux, which removes the firmware's framebuffer device in any case,
+the driver leaves it, so that a trial of the GPU leaves the screen alone.
 .Pp
 With
 .Cm rach2.i915fake
