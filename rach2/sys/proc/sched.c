@@ -69,6 +69,7 @@ static void sched_append(process_t *p)
     if (p->ready_linked || p == cpu_table[p->cpu].idle) {
         return;
     }
+    waketime_state(p, 1, p->cpu);
     p->ready_prev = q->tail;
     p->ready_next = NULL;
     if (q->tail) {
@@ -302,6 +303,8 @@ void sched_make_ready(process_t *p)
     p->cpu = target;
     if (cpu_table[target].current != p) {
         sched_append(p);
+    } else {
+        waketime_state(p, 2, target);
     }
     kick = sched_cpu_idle(target) || cpu_table[target].current == p ||
            sched_priority(p) > sched_priority(cpu_table[target].current);
@@ -466,6 +469,7 @@ void schedule(void)
 
     if (!next) {
         if (old == cpu->idle || old->state == PROC_RUNNING || !cpu->idle) {
+            waketime_state(old, old->state == PROC_RUNNING ? 2 : 3, me);
             spin_unlock_irqrestore(&sched_lock, saved_flags);
             return;
         }
@@ -476,6 +480,7 @@ void schedule(void)
     }
 
     sched_remove(next);
+    waketime_state(next, 2, me);
     usb_stamp_dispatch(next->pid);
     next->woken = 0;
     if (next == old) {
@@ -497,6 +502,8 @@ void schedule(void)
 
     if (old->state == PROC_READY && old != cpu->idle) {
         sched_append(old);
+    } else {
+        waketime_state(old, 3, me);
     }
     rseq_preempt(old);
     next->state = PROC_RUNNING;

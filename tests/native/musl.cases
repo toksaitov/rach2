@@ -109,3 +109,4 @@ case musl/vmamusl -- musl/vmamusl
 case musl/waitidmusl -- musl/waitidmusl
 case musl/pidfdmusl -- musl/pidfdmusl
 case musl/privatefilemusl -- musl/privatefilemusl
+case musl/wakelatmusl alone -- musl/wakelatmusl 64 3

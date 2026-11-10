@@ -2151,3 +2151,6 @@ $(ASSIGN_DISK): $(ASSIGN_ROOT) $(MKMBR)
 	dd if=$< of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null; \
 	$(MKMBR) --lba --id 82274701 $@.tmp 2048:$$((mib * 2048)):83; \
 	mv $@.tmp $@
+
+# `tests/run wakelat`: measure six timed waits under idle, user, system-call
+# and mixed load on four CPUs, with the timer, queue and lock counts.

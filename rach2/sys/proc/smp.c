@@ -97,7 +97,10 @@ static void bkl_acquire(struct percpu *cpu)
     unsigned int me = (unsigned int)arch_cpu_id() + 1u;
     uint32_t spins = 0, passed = 0;
     uint64_t start = arch_cycles(), waited;
+    uint32_t wake_start = waketime_clock(), wake_wait;
 
+    cpu->wake_bkl_start = wake_start;
+    cpu->wake_bkl_waiting = 1;
     for (;;) {
         unsigned int claim = bkl_claim;
 
@@ -117,6 +120,10 @@ static void bkl_acquire(struct percpu *cpu)
         (void)arch_atomic_cmpxchg(&bkl_claim, me, 0u);
     }
     cpu->bkl_since = arch_cycles();
+    wake_wait = waketime_clock() - wake_start;
+    cpu->wake_bkl_total += wake_wait;
+    cpu->wake_bkl_waiting = 0;
+    waketime_lock(wake_wait);
     k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
     waited = cpu->bkl_since - start;
     bkl_wait_cycles += waited;

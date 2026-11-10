@@ -29,6 +29,7 @@
  */
 
 #include "proc/smp.c"
+#include "compat/waketime_none.h"
 
 #include <setjmp.h>
 

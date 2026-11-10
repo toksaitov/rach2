@@ -11,6 +11,7 @@
  */
 
 #include "proc/sched.c"
+#include "compat/waketime_none.h"
 #include "proc/wait_queue.c"
 
 extern int dprintf(int fd, const char *format, ...);

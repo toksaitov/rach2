@@ -64,6 +64,11 @@ struct percpu {
     uint64_t bkl_since;                         /* cycle count when it last took the big lock */
     uint32_t bkl_vector;                        /* the vector of the entry that holds it, or 0 */
     int32_t bkl_nr;                             /* that entry's system call number, or -1 */
+    volatile uint32_t wake_bkl_start;           /* current lock wait's clock, microseconds */
+    volatile uint32_t wake_bkl_waiting;         /* published after start, cleared under the lock */
+    uint32_t wake_bkl_total;                    /* completed lock waits, microseconds modulo 2^32 */
+    uint32_t wake_irq_start;  /* latest serviced timer interrupt before its lock */
+    uint32_t wake_irq_locked; /* the same interrupt after taking its lock */
 };
 
 extern struct percpu cpu_table[NR_CPUS];

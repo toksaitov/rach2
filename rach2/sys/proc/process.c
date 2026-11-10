@@ -517,6 +517,7 @@ void proc_wake_sleepers(uint64_t now)
         timer_cursor = p->timer_next;
         work_count[2]++;
         if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
+            waketime_expire(p, p->wakeup_tick);
             p->wakeup_tick = 0;
             sched_make_ready(p);
         }

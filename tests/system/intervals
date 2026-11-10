@@ -87,5 +87,6 @@ tests/musl/threadscaling.c: the held threads sleep through 20 ms of ticks
 tests/limitprobe.c: the clone is given 100 ms to fall asleep in its read
 tests/drmprobe.c: the master holds the screen for the seconds asked
 tests/ldtprobe.c: a nap of 10 ms switches the probe out and back in
+tests/musl/wakelatmusl.c: the measured 5 ms deadline is the workload
 tests/wow64probe.c: a long sleep that the timer's signal ends
 tests/wow64probe.c: a sleep of a millisecond that completes
