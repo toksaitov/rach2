@@ -587,7 +587,13 @@ The range is rounded out to whole pages and must be covered by mappings,
 with
 .Er ENOMEM
 for a gap.
-A region of device memory is passed over.
+A region of device memory is passed over, and so is one of
+.Xr memfd_secret 2 ,
+on which
+.Fn mlock
+and
+.Fn mlock2
+then fail as that page says.
 .Fn mlockall ,
 call 152, locks every region with
 .Dv MCL_CURRENT ,

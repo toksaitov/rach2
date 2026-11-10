@@ -9254,17 +9254,22 @@ static int32_t lock_range(uintptr_t addr, uintptr_t len, uintptr_t *start, uintp
 /**
  * Bring in the pages of the regions of [start, end) that are locked and not
  * on fault, region by region, so that a lock over a large reservation walks
- * only what is mapped. 0, -1 when a page could not be had, or -2 at a
- * region of memfd_secret, whose pages Linux's populate cannot take, the
- * regions before it brought in.
+ * only what is mapped, as Linux's __mm_populate after a lock. A region of
+ * memfd_secret not locked on fault fails, since Linux's get_user_pages
+ * refuses one with EFAULT. With `go_on` 0, the first failure ends the walk,
+ * the regions before it brought in; otherwise the walk goes on past each,
+ * as mm_populate does for mlockall. 0, -1 when a page could not be had, or
+ * -2 at a region of memfd_secret.
  */
-static int lock_populate(uintptr_t start, uintptr_t end)
+static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
 {
     uintptr_t at = start;
+    int rc = 0;
 
     while (at < end) {
         const vma_t *r = vm_lower(&current_proc->mm->vm, at);
         uintptr_t stop;
+        int got = 0;
 
         if (!r || r->start >= end) {
             break;
@@ -9273,15 +9278,20 @@ static int lock_populate(uintptr_t start, uintptr_t end)
             at = r->start;
         }
         stop = r->end < end ? r->end : end;
-        if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && (r->prot & VM_PROT_SECRET)) {
-            return -2;
+        if ((r->prot & VM_PROT_SECRET) && !(r->prot & VM_PROT_LOCKONFAULT)) {
+            got = -2;
+        } else if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
+            got = -1;
         }
-        if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
-            return -1;
+        if (got != 0 && rc == 0) {
+            rc = got;
+        }
+        if (got != 0 && !go_on) {
+            break;
         }
         at = stop;
     }
-    return 0;
+    return rc;
 }
 
 /**
@@ -9293,8 +9303,9 @@ static int lock_populate(uintptr_t start, uintptr_t end)
  * would add to those already locked pass it; the pages are then brought in
  * unless locked on fault, and EAGAIN tells that memory ran out first, with
  * the range locked. -ENOMEM for a gap, when a split has no room, or, with
- * the range locked, for a region of memfd_secret, as Linux's mlock fails
- * on one.
+ * the rest of the range locked, for a region of memfd_secret, which is left
+ * unlocked and uncounted: Linux's mlock_fixup passes such a region over and
+ * its populate then fails on it. An unlock leaves such a region as it is.
  */
 static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
 {
@@ -9326,8 +9337,8 @@ static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
     if (rc != 0) {
         return -ENOMEM;
     }
-    if ((bits & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
-        rc = lock_populate(start, end);
+    if (bits) {
+        rc = lock_populate(start, end, 0);
         if (rc != 0) {
             return rc == -2 ? -ENOMEM : -EAGAIN;
         }
@@ -9400,7 +9411,7 @@ long sys_mlockall(isr_params_t *params)
     if (flags & 1u) {
         vm_lock_all(vm, bits);
         if (!(flags & 4u)) {
-            (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX);
+            (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX, 1);
         }
     }
     return 0;
