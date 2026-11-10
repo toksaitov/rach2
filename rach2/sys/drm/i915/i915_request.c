@@ -446,10 +446,16 @@ static void i915_request_signal(struct drm_i915_private *i915, struct i915_engin
 }
 
 /** Give up what a request held once the chip is past it: what it waited
- * for, the state it switched from, its own, and the engine list's
- * reference. */
+ * for, its batch's objects, the state it switched from, its own, and the
+ * engine list's reference. */
 static void request_release(struct i915_request *rq)
 {
+    struct i915_request_hold *hold = rq->hold;
+
+    rq->hold = 0;
+    if (hold) {
+        hold->release(hold);
+    }
     awaits_release(rq);
     exec_waiters_release(rq);
     intel_context_put(rq->prev_ce);

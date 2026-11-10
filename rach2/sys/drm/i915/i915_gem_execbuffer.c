@@ -65,11 +65,24 @@ struct eb_fence {
 };
 
 /*
+ * What a request holds for the call until it retires: a reference to each
+ * of `count` objects, the call's and the parser's shadow.
+ */
+struct eb_hold {
+    struct i915_request_hold base;
+    uint32_t count;
+    struct drm_i915_gem_object **obj; /* in the same allocation */
+};
+
+/*
  * The state of one call, Linux's i915_execbuffer. `lut` finds an object's
  * index by its handle, open addressed with `lut_mask + 1` slots that hold
  * index + 1, NULL with I915_EXEC_HANDLE_LUT, where relocations name the
  * index itself. `has_reloc` is set while relocations must be applied and,
  * once the objects are placed, while their offsets go back to the program.
+ * `shadow` is the parser's copy of the batch, with a reference, and
+ * `shadow_vma` its pinned binding, which run in the batch's place. `hold`
+ * goes to the request.
  */
 struct eb {
     struct drm_i915_private *i915;
@@ -89,6 +102,9 @@ struct eb {
     struct intel_context *ce;
     struct eb_fence *fences;
     uint32_t nfences;
+    struct drm_i915_gem_object *shadow;
+    struct i915_vma *shadow_vma;
+    struct eb_hold *hold;
 };
 
 /* ------------------------------------------------------------------------
@@ -868,6 +884,13 @@ static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
         }
         obj->read_domains |= I915_GEM_GPU_DOMAINS;
     }
+    if (eb->shadow) {
+        i915_gem_object_flush_for_gpu(eb->shadow);
+        err = dma_resv_add_fence(eb->shadow->base.resv, &rq->fence.base, 0);
+        if (err < 0) {
+            return err;
+        }
+    }
     for (i = 0; i < eb->count; i++) {
         if (eb->ev[i].obj->userptr.stale) {
             return -EAGAIN;
@@ -877,11 +900,37 @@ static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
 }
 
 /**
+ * Emit MI_BATCH_BUFFER_START of the batch at `addr`, as hsw_emit_bb_start
+ * on the render ring and gen6_emit_bb_start on the blitter: unprivileged
+ * through the PPGTT unless `secure`. 0, or -EIO when the ring refuses it.
+ */
+static int32_t eb_emit_start(struct i915_request *rq, uint32_t addr, int secure)
+{
+    struct i915_engine *rcs = &rq->i915->gt.engine[I915_RCS0];
+    uint32_t *cs = i915_request_begin(rq, 2);
+
+    if (!cs) {
+        return -EIO;
+    }
+    if (secure) {
+        cs[0] = MI_BATCH_BUFFER_START;
+    } else if (rq->engine == rcs) {
+        cs[0] = MI_BATCH_BUFFER_START | MI_BATCH_PPGTT_HSW | MI_BATCH_NON_SECURE_HSW;
+    } else {
+        cs[0] = MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_I965;
+    }
+    cs[1] = addr;
+    return 0;
+}
+
+/**
  * Emit the batch's start, as Linux's eb_request_submit: with
  * I915_EXEC_GEN7_SOL_RESET first the four stream output write offsets
  * zeroed, which only the render ring has (i915_reset_gen7_sol_offsets);
- * then MI_BATCH_BUFFER_START, as hsw_emit_bb_start on the render ring and
- * gen6_emit_bb_start on the blitter, unprivileged unless secure.
+ * then the batch, unprivileged unless secure, or the parser's shadow,
+ * privileged, and its trampoline past the batch's length, unprivileged.
+ * The aliasing PPGTT maps the shadow where the global GTT does, so its
+ * one binding serves both starts.
  *
  * @return 0; -EINVAL for the reset on the blitter; -EIO when the ring
  *         refuses the commands.
@@ -890,6 +939,7 @@ static int32_t eb_emit(struct eb *eb, struct i915_request *rq)
 {
     struct i915_engine *rcs = &eb->i915->gt.engine[I915_RCS0];
     uint32_t addr = (uint32_t)eb->ev[eb->batch].vma->start + eb->batch_start, *cs, i;
+    int32_t err;
 
     if (eb->args->flags & I915_EXEC_GEN7_SOL_RESET) {
         if (rq->engine != rcs) {
@@ -906,19 +956,15 @@ static int32_t eb_emit(struct eb *eb, struct i915_request *rq)
         }
         cs[9] = MI_NOOP;
     }
-    cs = i915_request_begin(rq, 2);
-    if (!cs) {
-        return -EIO;
+    if (!eb->shadow_vma) {
+        return eb_emit_start(rq, addr, (eb->dispatch & EB_DISPATCH_SECURE) != 0);
     }
-    if (eb->dispatch & EB_DISPATCH_SECURE) {
-        cs[0] = MI_BATCH_BUFFER_START;
-    } else if (rq->engine == rcs) {
-        cs[0] = MI_BATCH_BUFFER_START | MI_BATCH_PPGTT_HSW | MI_BATCH_NON_SECURE_HSW;
-    } else {
-        cs[0] = MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_I965;
+    addr = (uint32_t)eb->shadow_vma->start;
+    err = eb_emit_start(rq, addr, 1);
+    if (err == 0) {
+        err = eb_emit_start(rq, addr + eb->batch_len, 0);
     }
-    cs[1] = addr;
-    return 0;
+    return err;
 }
 
 /**
@@ -948,23 +994,93 @@ static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
 }
 
 /**
- * Check the batch before it runs, as Linux's eb_parse on graphics 7, which
- * parses only a batch whose length the call gives: a parsed batch then
- * runs privileged, the way Linux runs its checked copy.
+ * Check the batch before it runs, as Linux's eb_parse on graphics 7: a
+ * batch whose length the call gives, on an engine that parses, whoever the
+ * caller is, is copied to a shadow of its length and the trampoline's,
+ * bound in the global GTT, which runs in its place (i915_cmd_parser); any
+ * other batch runs as it is.
+ *
+ * @return 0; the parser's -EINVAL; -ENOMEM; -ENODEV for a batch that is an
+ *         import; -ENOSPC without room in the GTT; or the errors of the
+ *         wait for the batch's writers.
  */
 static int32_t eb_parse(struct eb *eb)
 {
+    struct eb_vma *ev = &eb->ev[eb->batch];
+    struct i915_cmd_parse p;
+    uint32_t clflush;
     int32_t err;
 
-    if (eb->args->batch_len == 0) {
+    if (eb->args->batch_len == 0 || !i915_engine_using_cmd_parser(eb->ce->engine)) {
         return 0;
     }
-    err = i915_cmd_parser_check(eb->ce->engine, eb->ev[eb->batch].obj, eb->batch_start,
-                                eb->batch_len, i915_capable());
+    err = i915_gem_object_create(
+        eb->i915, (uint64_t)eb->batch_len + I915_CMD_PARSER_TRAMPOLINE_SIZE, &eb->shadow);
+    if (err != 0) {
+        return err;
+    }
+    err = i915_gem_object_pin_pages(eb->shadow);
+    if (err != 0) {
+        return err;
+    }
+    err = i915_gem_object_prepare_read(ev->obj, &clflush);
+    if (err == 0) {
+        p.batch = ev->obj->frames;
+        p.offset = eb->batch_start;
+        p.len = eb->batch_len;
+        p.addr = (uint32_t)ev->vma->start + eb->batch_start;
+        p.clflush = clflush;
+        p.shadow = eb->shadow->frames;
+        p.shadow_size = (uint32_t)eb->shadow->base.size;
+        err = i915_cmd_parser(eb->ce->engine, &p);
+        i915_gem_object_unpin_pages(ev->obj);
+    }
+    if (err == 0) {
+        err = i915_vma_pin(eb->shadow, 0, 0, 0, 0, &eb->shadow_vma);
+    }
+    i915_gem_object_unpin_pages(eb->shadow);
     if (err == 0) {
         eb->dispatch |= EB_DISPATCH_SECURE;
     }
     return err;
+}
+
+/** Free a hold and let go of what it holds. */
+static void eb_hold_release(struct i915_request_hold *base)
+{
+    struct eb_hold *hold = (struct eb_hold *)base;
+    uint32_t i;
+
+    for (i = 0; i < hold->count; i++) {
+        i915_gem_object_put(hold->obj[i]);
+    }
+    kfree(hold);
+}
+
+/** Make the call's hold, with a reference to each object and the shadow.
+ * 0, or -ENOMEM. */
+static int32_t eb_hold_make(struct eb *eb)
+{
+    uint32_t n = eb->count + (eb->shadow ? 1u : 0u), i;
+    struct eb_hold *hold;
+
+    hold = (struct eb_hold *)kmalloc(sizeof(*hold) + (size_t)n * sizeof(hold->obj[0]));
+    if (!hold) {
+        return -ENOMEM;
+    }
+    hold->base.release = eb_hold_release;
+    hold->obj = (struct drm_i915_gem_object **)(void *)(hold + 1);
+    hold->count = n;
+    for (i = 0; i < eb->count; i++) {
+        hold->obj[i] = eb->ev[i].obj;
+        drm_gem_object_get(&hold->obj[i]->base);
+    }
+    if (eb->shadow) {
+        hold->obj[i] = eb->shadow;
+        drm_gem_object_get(&eb->shadow->base);
+    }
+    eb->hold = hold;
+    return 0;
 }
 
 /**
@@ -975,6 +1091,8 @@ static int32_t eb_parse(struct eb *eb)
  * the program only when all went well. Nothing between the request's
  * creation and its add sleeps.
  *
+ * The request takes the call's hold, made first.
+ *
  * @return 0; the errors of `i915_request_create`; -ENOMEM; -EAGAIN; -EINVAL
  *         for I915_EXEC_GEN7_SOL_RESET on the blitter; -ENOENT for a
  *         context destroyed meanwhile; -EIO.
@@ -984,10 +1102,15 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     struct i915_request *rq;
     int32_t err, err2;
 
-    err = i915_request_create(eb->ce, &rq);
+    err = eb_hold_make(eb);
+    if (err == 0) {
+        err = i915_request_create(eb->ce, &rq);
+    }
     if (err < 0) {
         return err;
     }
+    rq->hold = &eb->hold->base;
+    eb->hold = 0;
     err = eb_await_fences(eb, rq, in);
     if (err == 0) {
         err = eb_move_to_gpu(eb, rq);
@@ -1016,12 +1139,20 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     return err;
 }
 
-/** Give back what the call took: the pins, the objects, the context and
- * its state, the syncobjs and the table. */
+/** Give back what the call took: the pins, the objects, the shadow, the
+ * hold the request did not take, the context and its state, the syncobjs
+ * and the table. */
 static void eb_release(struct eb *eb)
 {
     uint32_t i;
 
+    if (eb->shadow_vma) {
+        i915_vma_unpin(eb->shadow_vma);
+    }
+    i915_gem_object_put(eb->shadow);
+    if (eb->hold) {
+        eb_hold_release(&eb->hold->base);
+    }
     for (i = 0; eb->ev && i < eb->count; i++) {
         eb_unpin(&eb->ev[i]);
         i915_gem_object_put(eb->ev[i].obj);

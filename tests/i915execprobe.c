@@ -2,7 +2,7 @@
  * batches on both rings that complete, a relocation written and given back,
  * and the faults the chip's debugfs file injects, which reach the caller as
  * Linux's errors. Runs under rach2.i915fake as root, which the fake's file
- * and a batch with a length need. */
+ * needs. */
 #include "probe.h"
 #include "probe_report.h"
 #include "../rach2/sys/drm/i915/i915_drm.h"
@@ -285,8 +285,9 @@ static long wait_for(uint32_t handle, int64_t ns)
 }
 
 /** A batch with a length on the render ring and one without on the
- * blitter complete: each out-fence signals, each ring counts the batch,
- * and the objects are idle. */
+ * blitter complete: each out-fence signals, the render ring counts the
+ * parser's shadow and its trampoline and the blitter the batch, and the
+ * objects are idle. */
 static void submit_row(uint32_t batch, uint32_t data)
 {
     uint32_t rcs = fake_count("ring rcs0", "batches");
@@ -296,9 +297,9 @@ static void submit_row(uint32_t batch, uint32_t data)
     require(submit(I915_EXEC_RENDER, 8, data, batch, 0, &f1) == 0, "submit: render");
     require(submit(I915_EXEC_BLT, 0, data, batch, 0, &f2) == 0, "submit: blitter");
     require(fence_wait(f1) && fence_wait(f2), "submit: the out-fences signal");
-    require(fake_count("ring rcs0", "batches") == rcs + 1 &&
+    require(fake_count("ring rcs0", "batches") == rcs + 2 &&
                 fake_count("ring bcs0", "batches") == bcs + 1,
-            "submit: each ring ran one batch");
+            "submit: the render ring ran the shadow and its trampoline, the blitter the batch");
     require(busy(data) == 0 && busy(batch) == 0 && wait_for(data, -1) == 0,
             "submit: the objects idle");
     report_held();
