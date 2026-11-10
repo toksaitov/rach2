@@ -1526,16 +1526,20 @@ struct kvm_gpa_run {
  * Hold the frames behind `n` runs of `vm`'s guest-physical pages, in the
  * order the runs give, at most 2^31 - 1 pages in all: each page found
  * through the slot that holds it in the caller's memory, the VM's maker's,
- * as a RAM page that memory maps writable (`paging_user_ram_frame`), and
- * held by a reference. The map is taken back, its frames let go of after
- * `revoke(owner)` has stopped every use of them, when the caller's memory
- * behind any of them changes or ends, when a slot over them moves or goes,
- * and when the VM ends; `kvm_gpamap_frame` then answers 0. Under the big
- * lock; does not sleep, so that no change can come between the slots'
- * answer and the frames. 0 with the map in `*out`; -EINVAL for a run that
- * is empty, not page-aligned or past the guest-physical width, or for too
- * many pages; -EFAULT for a page in no slot, in a read-only one, not
- * present or not ordinary RAM, which cannot be shared; -ENOMEM.
+ * as a RAM page that memory maps writable outside an I/O, guard or
+ * memfd_secret region (`paging_user_ram_frame`), and held by a reference.
+ * The map is taken back, its frames let go of after `revoke(owner)` has
+ * stopped every use of them, when the caller's memory behind any of them
+ * changes or ends, when a slot over them moves or goes, and when the VM
+ * ends; `kvm_gpamap_frame` then answers 0. Under the big lock; does not
+ * sleep, so that no change can come between the slots' answer and the
+ * frames. 0 with the map in `*out`; -EINVAL for a run that is empty, not
+ * page-aligned or past the guest-physical width, or for too many pages;
+ * -EFAULT for a page in no slot, in a read-only one, not present, not
+ * ordinary RAM or in a memfd_secret region, which cannot be shared, and
+ * for every page once the maker's address space has ended, which leaves no
+ * range on its notice; -ENOMEM, also when the slots cut the runs into
+ * 2^32 - 1 parts or more.
  */
 int kvm_gpamap_new(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n,
                    void (*revoke)(void *owner), void *owner, struct kvm_gpamap **out);

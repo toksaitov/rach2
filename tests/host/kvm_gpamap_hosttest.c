@@ -13,11 +13,12 @@
  * The rows: a map of two runs, one cut by a slot's end, holding a reference
  * to each frame in the runs' order and counting its maps and pages; the
  * refusals, an empty, unaligned, too wide or too large run, a page in no
- * slot, in a read-only slot or not shareable, each with nothing held; a
- * change of the maker's memory beside the runs leaving the map, and one
- * that meets a run taking it back through the owner's revoke once, with
- * every reference let go and its frames answering 0; the end of the
- * maker's memory, a slot's change over a run and the VM's end each taking
+ * slot, in a read-only slot or not shareable, and every page of a maker
+ * whose address space has ended, each with nothing held and no range on
+ * the notice; a change of the maker's memory beside the runs leaving the
+ * map, and one that meets a run taking it back through the owner's revoke
+ * once, with every reference let go and its frames answering 0; the end of
+ * the maker's memory, a slot's change over a run and the VM's end each taking
  * maps back; and a free without a revoke, after which nothing is held.
  */
 #include "kvm/gpamap.c"
@@ -72,6 +73,7 @@ void kfree(void *p)
 static uintptr_t mem_frame[MEM_PAGES];
 static int refs[MEM_PAGES];
 static struct mm maker;
+static char maker_dir; /* stands for the maker's page directory */
 
 /** The page of the model's memory that frame `phys` is, or -1. */
 static int frame_page(uintptr_t phys)
@@ -213,6 +215,7 @@ static void reset(struct kvm_vm *vm)
     revokes = 0;
     seen = NULL;
     vm->gpamap = NULL;
+    maker.dir = (struct page_dir *)(void *)&maker_dir;
 }
 
 /** Make a map of `n` runs for the owner `who`, or say why not. */
@@ -269,6 +272,7 @@ static void refusal_rows(struct kvm_vm *vm)
         {{0x200000, 1}, -EFAULT, "a page in a read-only slot"},
         {{0x103000, 1}, -EFAULT, "a page that cannot be shared"},
     };
+    static const struct kvm_gpa_run live_run = {0x101000, 2};
     struct kvm_gpamap *m;
     uint32_t i;
     int r;
@@ -283,6 +287,15 @@ static void refusal_rows(struct kvm_vm *vm)
     }
     reset(vm);
     CHECK(make(vm, &rows[1].run, 0, "a", &m) == -EINVAL, "no runs");
+    reset(vm);
+    CHECK(make(vm, &live_run, 1, "a", &m) == 0, "a map of the run the next row refuses");
+    kvm_gpamap_free(m);
+    maker.dir = NULL; /* mm_put's mark of an address space that has ended */
+    r = make(vm, &live_run, 1, "a", &m);
+    CHECK(r == -EFAULT && m == NULL, "a page of a maker whose address space has ended");
+    CHECK(held() == 0 && maker.notify == NULL && live == 0 && vm->gpamap == NULL,
+          "nothing held and no range on the notice after it");
+    reset(vm);
 }
 
 /** Changes of the maker's memory: beside the runs, then over one. */
