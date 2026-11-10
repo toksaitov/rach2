@@ -1,7 +1,7 @@
 /**
  * fd_hosttest.c: the descriptor tables and open file descriptions of
  * rach2/sys/fs/fd.c, and the process allocation of rach2/sys/proc/process.c
- * that makes a table.
+ * that makes a table, with the boot's numbering that leaves pid 1 to init.
  *
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
@@ -341,6 +341,45 @@ static void close_process(process_t *p)
     free_process(p);
 }
 
+/**
+ * The boot's numbering: a kernel thread made before init, pid 1 as the DRM
+ * commit worker takes it when a display driver binds, moves to the next
+ * free pid when the numbering starts again, so that init is pid 1, which
+ * BusyBox's reboot signals; a record with an address space at pid 1 keeps
+ * it.
+ */
+static void boot_pids(void)
+{
+    process_t *idle = alloc_process();
+    process_t *worker = alloc_process();
+    process_t *init;
+    uint32_t moved;
+
+    check(idle && worker && idle->pid == 0 && worker->pid == 1,
+          "the boot's first records take pids 0 and 1");
+    if (!idle || !worker) {
+        return;
+    }
+    proc_reclaim_boot_pids();
+    moved = worker->pid;
+    init = alloc_process();
+    check(init && init->pid == 1 && get_process(1) == init,
+          "init is pid 1 after the numbering starts again");
+    check(moved > 1 && worker->tgid == moved && worker->pgid == moved && worker->sid == moved &&
+              get_process(moved) == worker,
+          "the kernel thread that held pid 1 has the next free one");
+    if (init) {
+        init->space_root = 1;
+        proc_reclaim_boot_pids();
+        check(init->pid == 1 && get_process(1) == init,
+              "a record with an address space keeps pid 1");
+        init->space_root = 0;
+        close_process(init);
+    }
+    close_process(worker);
+    close_process(idle);
+}
+
 /** Fail each process allocation before the record can enter the live list. */
 static void process_allocations(void)
 {
@@ -632,6 +671,7 @@ int main(void)
     int fd;
 
     stdio_allocations();
+    boot_pids();
     process_allocations();
     child_allocations();
     shared_limits();
