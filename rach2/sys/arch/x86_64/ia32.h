@@ -23,6 +23,12 @@
 
 #include "../../lib/kerrno.h"
 
+/* A host test may compile the compat layer against i686's cpu.h, which has
+ * no RACH2_IA32; the layer is then built, as by default. */
+#ifndef RACH2_IA32
+#define RACH2_IA32 1
+#endif
+
 /* A compat handler not yet written, which answers ENOSYS: one line
  * `IA32_STUB(name)` in its owner's file, with no semicolon. */
 #define IA32_STUB(name)             \
