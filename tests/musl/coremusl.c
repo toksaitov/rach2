@@ -815,7 +815,8 @@ static int segv_row(void)
             _exit(2);
         }
         syscall(SYS_getpid);
-        *(volatile int *)0 = 1;
+        /* Fault at address 0 without undefined C pointer dereferencing. */
+        __asm__ __volatile__("movl $1, (%0)" : : "r"(0UL) : "memory");
         _exit(3);
     }
     if (child < 0 || waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||

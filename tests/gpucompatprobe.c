@@ -132,7 +132,7 @@ static void open_gpu(const char *driver)
 static void intel_params(void)
 {
     struct drm_i915_getparam *p;
-    int *value;
+    volatile int *value;
     static int answer;
     long at;
 
@@ -142,11 +142,11 @@ static void intel_params(void)
     high = (void *)at;
     require(syscall3(SYS_MPROTECT, at + PAGE, PAGE, 0) == 0, "request's guard page");
     p = (struct drm_i915_getparam *)(at + PAGE - sizeof(*p));
-    value = (int *)(at + 32);
+    value = (volatile int *)(at + 32);
     value[-1] = value[1] = 0x12345678;
     *value = -1;
     p->param = I915_PARAM_CHIPSET_ID;
-    p->value = value;
+    p->value = (int *)value;
     require(call(gpu, DRM_IOCTL_I915_GETPARAM, p) == 0 && *value == 0x0a16 &&
                 value[-1] == 0x12345678 && value[1] == 0x12345678,
             "GETPARAM's high pointer and guarded int");
@@ -163,7 +163,7 @@ static void intel_params(void)
     p->value = (int *)(at + PAGE);
     require(call(gpu, DRM_IOCTL_I915_GETPARAM, p) == -14, "GETPARAM's bad value pointer");
     p->param = -1;
-    p->value = value;
+    p->value = (int *)value;
     *value = -1;
     require(call(gpu, DRM_IOCTL_I915_GETPARAM, p) == -22 && *value == -1,
             "GETPARAM's unknown signed parameter");

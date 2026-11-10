@@ -438,3 +438,19 @@ unusedStructMember:*tools/etude/native_prepare.h
 unusedStructMember:*tools/etude/preparation_import.h
 unusedStructMember:*tools/etude/retention.h
 unusedStructMember:*tools/etude/routine_entry.h
+
+# The hotplug probe's netlink address and display mode, the watchdog support
+# record and the KVM run-page probe's record are Linux ABI layouts copied whole;
+# members the program does not inspect still occupy their specified offsets.
+unusedStructMember:*tests/hotplugprobe.c
+unusedStructMember:*tests/watchdogprobe.c
+unusedStructMember:*tests/musl/kvmmusl.c
+
+# uname writes uts through a system call whose pointer is passed as an
+# integer; this output buffer cannot be const.
+constVariable:*tests/auxvprobe.c
+
+# private_page and shared_page are volatile mmap views. Their aliasing and
+# copy-on-write isolation are the subject of the check, not a constant
+# established by the preceding store that cppcheck propagates here.
+knownConditionTrueFalse:*tests/musl/privatefilemusl.c

@@ -166,6 +166,7 @@ static void sync_rows(int fd)
               info.num_fences == 1,
           "empty reservation completed");
     info.num_fences = 1;
+    row.status = 0;
     info.sync_fence_info = (uintptr_t)&row;
     check(syscall3(SYS_IOCTL, syncfd, SYNC_IOC_FILE_INFO, (long)&info) == 0 && row.status == 1,
           "leaf completion info");

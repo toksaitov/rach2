@@ -17,10 +17,8 @@
  * maps a new page over it, and after each the guest must read what the
  * caller's page holds then: the parent's copy, not the child's. A second
  * guest stores 0x44 at 0x2000 through a slot that logs, and the log names
- * page 2. VmPin stays 0 throughout, since KVM pins no page. A KVM_RUN that
- * fails with EOPNOTSUPP, as a backend's stub entry does, is a failure:
- * /dev/kvm exists only where a backend probed, so the backend should run
- * the guest.
+ * page 2. VmPin stays 0 throughout, since KVM pins no page. KVM_RUN must
+ * run the guest; EOPNOTSUPP is a failure, as is any other refusal.
  *
  * It needs VMX or SVM on and allowed by the firmware. It prints
  * "KVMSLOTMUSL OK" and exits 0, or "KVMSLOTMUSL FAIL (detail)" and exits 1
@@ -190,7 +188,7 @@ static const unsigned char reader[] = {0xA0, 0x00, 0x20, 0xE6, 0x10, 0xF4};
 static const unsigned char writer[] = {0xC6, 0x06, 0x00, 0x20, 0x44, 0xB0, 0x44, 0xE6, 0x10, 0xF4};
 
 /** Run the guest of `vcpu` from 0x1000 to its OUT: the byte it wrote to
- * port 0x10, -2 when no backend runs guests, or -1 after a failure. */
+ * port 0x10, or -1 after a failure. */
 static int run_guest(int vcpu, volatile struct run_head *run)
 {
     unsigned long long regs[18];
@@ -202,9 +200,6 @@ static int run_guest(int vcpu, volatile struct run_head *run)
         return fail("KVM_SET_REGS"), -1;
     }
     if (ioctl(vcpu, KVM_RUN, 0) != 0) {
-        if (errno == EOPNOTSUPP) {
-            return -2;
-        }
         return fail("KVM_RUN"), -1;
     }
     if (run->exit_reason != KVM_EXIT_IO || run->io_port != 0x10 || run->io_direction != 1) {
@@ -215,14 +210,11 @@ static int run_guest(int vcpu, volatile struct run_head *run)
     return ((volatile unsigned char *)run)[run->io_data_offset];
 }
 
-/** Check that the guest reads `want`: 0, 2 to skip, or 1 after a failure. */
+/** Check that the guest reads `want`: 0, or 1 after a failure. */
 static int sees(int vcpu, volatile struct run_head *run, int want, const char *after)
 {
     int got = run_guest(vcpu, run);
 
-    if (got == -2) {
-        return 2;
-    }
     if (got != want) {
         if (got >= 0) {
             printf("KVMSLOTMUSL FAIL (after %s the guest read 0x%x, not 0x%x)\n", after, got, want);
@@ -253,8 +245,8 @@ static int fork_row(volatile char *data)
     return 0;
 }
 
-/** The guest rows over the 16 pages at `mem`, with the vCPU `vcpu`: 0, 2
- * when no backend runs guests, or 1 after a failure. */
+/** The guest rows over the 16 pages at `mem`, with the vCPU `vcpu`: 0,
+ * or 1 after a failure. */
 static int guest_rows(char *mem, int vcpu, volatile struct run_head *run)
 {
     unsigned char sregs[312];
@@ -341,10 +333,7 @@ int main(void)
         return fail("mmap of the vCPU");
     }
     r = guest_rows(mem, vcpu, run);
-    if (r == 2) {
-        return fail("KVM_RUN: the backend runs no guest");
-    }
-    if (r == 1) {
+    if (r != 0) {
         return 1;
     }
     if (vm_pin() != 0) {

@@ -581,7 +581,7 @@ static long long now_usec(int clock)
 static void check_mouse_bits(int fd, int usb)
 {
     unsigned char bits[96];
-    unsigned char abs[24];
+    const unsigned char abs[24] = {0};
     long len;
     int i;
 
@@ -1339,8 +1339,11 @@ static void tablet(void)
     puts("EVPROBE: move the tablet\n");
     while (at < n) {
         struct input_event ev[16];
-        long got = syscall3(SYS_READ, fd, (long)ev, (long)sizeof(ev));
+        long got;
         int i;
+
+        clear(ev, sizeof(ev));
+        got = syscall3(SYS_READ, fd, (long)ev, (long)sizeof(ev));
 
         if (got <= 0 || got % (long)sizeof(ev[0]) != 0) {
             fail_with("the tablet did not read whole records", 1, got);

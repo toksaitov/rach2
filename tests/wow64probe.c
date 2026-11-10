@@ -729,7 +729,8 @@ static void run_orig(void)
         __asm__ __volatile__("int3");
         run32(int3_32, 0);
         syscall0(SYS_GETPID);
-        *(volatile int *)0 = 1;
+        /* Fault at address 0 without undefined C pointer dereferencing. */
+        __asm__ __volatile__("movl $1, (%0)" : : "r"(0UL) : "memory");
         sys_exit(0);
     }
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F) {
@@ -873,7 +874,8 @@ static void run_futexv(void)
  * a datagram to itself on the loopback, before and after its receive. */
 static void run_sockstamp(void)
 {
-    static unsigned int tv[4], ts[4], wide[4];
+    static unsigned int tv[4], ts[4];
+    static volatile unsigned int wide[4];
     static unsigned long sa[2];
     static unsigned int salen = 16;
     unsigned long args[6];
