@@ -1,11 +1,15 @@
-Description: Centre a fullscreen surface on each commit
+Description: Centre a fullscreen surface on each commit and report its place
  kiosk-shell centred a fullscreen surface only when it was mapped or
- resized. Weston's Xwayland window manager can report a window fullscreen
- after the window's first commit, at its framed size, placed the view so that
- the frame's margin sat off the output, and after the commit of its
- fullscreen size, so that no later commit centred it: an undecorated X
- window of the output's size stayed 32 pixels up and to the left of the
- output. The shell now centres a fullscreen surface on each commit.
+ resized, and told Xwayland's window manager a view's place only from its
+ transform signal once the view was mapped. The window manager frames an X
+ window that sets no fullscreen state with the theme's margin until
+ kiosk-shell makes it fullscreen, so the window's first commit is at its
+ framed size, 1430x832 for a 1366x768 window; it can report the window
+ fullscreen after the commit of its fullscreen size, so that no commit
+ centred that size; and a view centred while unmapped, or again where it
+ was, sends the window manager no place, so the X frame kept the place it
+ had with its margin, -32,-32. The shell now centres a fullscreen surface on
+ each commit and reports an X window's place after each commit.
 Author: Rach2
 Forwarded: no
 ---
@@ -37,3 +41,16 @@ Forwarded: no
  		if (is_fullscreen || !shsurf->xwayland.is_set) {
  			weston_shell_utils_center_on_output(shsurf->view,
  							    shsurf->output);
+@@ -1085,6 +1086,12 @@
+ 
+ 	shsurf->last_width = surface->width;
+ 	shsurf->last_height = surface->height;
++
++	/* The transform handler tells Xwayland's window manager where a view
++	 * is only once it is mapped, and centring a view again where it was
++	 * sends no transform signal; an X window first placed while unmapped
++	 * kept the frame's place from before it was fullscreen. */
++	transform_handler(NULL, surface);
+ }
+ 
+ static void
