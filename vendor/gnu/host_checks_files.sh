@@ -22,6 +22,7 @@ PATHS='AGENTS.md CLAUDE.md Readme.md mk/host-check.mk mk/host-fixtures.mk
     tools/etude tools/inspect tools/verify tools/image tools/ci tools/font
     tools/flow/test_status.py tools/setup/e2fsprogs_path.sh tools/host_files.h
     rach2/sys rach2/kernel.h rach2/vendor rach2/include krffs utils ish term ports/doom
+    bed/vm/backend bed/shm
     vendor/gnu/fstools/positional_io.c vendor/gnu/ports/wpa_supplicant.sh'
 
 # list: print the files, or nothing and fail when there is no list to read.
