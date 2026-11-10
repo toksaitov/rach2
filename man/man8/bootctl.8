@@ -120,11 +120,17 @@ or
 .Ql not from a slot (no rach2.slot= on /proc/cmdline) .
 .It Cm kernel Ar FILE
 Validate the file and the fallback kernel's header prefix.
-The file must be a kernel of the architecture
+The file must be a kernel that runs the programs of the architecture
 .Nm
 was built for: an ELF32 i386 kernel on i686, whose program headers the
 Multiboot loader follows, or an ELF64 x86-64 kernel on x86-64, whose
 Multiboot header gives the load's addresses through the a.out kludge.
+On i686 an x86-64 kernel is taken too when
+.Pa /proc/cpuinfo
+lists the flag
+.Ql lm ,
+since that kernel runs i386 programs
+.Pq Xr ia32 7 .
 It must also have a multiboot2 header, which GRUB's menu on a GUID table
 loads by: its tags must end with an end tag inside the header, a tag GRUB
 must honour must be an address, entry, console or framebuffer tag, and an
@@ -322,8 +328,8 @@ or
 .Ql bootctl: reading 'FILE' failed .
 A file too large for any slot is reported as
 .Ql bootctl: 'FILE' is larger than any slot ,
-and a kernel of the other architecture as
-.Ql bootctl: 'FILE' is not an i686 kernel, which this system's programs need ,
+and a kernel that cannot run this system's programs as
+.Ql bootctl: 'FILE' is not a kernel that runs this system's i686 programs ,
 or the same with x86-64.
 Without a recognized boot slot, installation reports:
 .Dl bootctl: this boot did not come from a kernel slot (no rach2.slot= on /proc/cmdline)
