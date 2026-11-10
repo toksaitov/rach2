@@ -4,37 +4,9 @@ The process subsystem, `rach2/sys/proc/` with the handlers in `rach2/sys/syscall
 
 ## Results
 
-The timed-wake load reproduces long returns while the destination CPU waits for the big kernel lock. On 2026-11-10, the x86-64 test ran beside its Debian 13 reference on the testing PC's WSL, with QEMU 10.2.1, KVM, q35, std-vga, four CPUs (`host,invtsc=on`) and 512 MiB. Both ran the same static `wakelatmusl` binary, SHA-256 `9ffc56e207d32fe24452d42761fd16d0476d5e6448aedb5192e935d8f97c0e87`, with 64 waits per interface and the sleeper pinned to CPU 0. Debian's kernel was `6.12.115+deb13.1-amd64`. Rach2 booted its RAM test image directly; Debian booted its prepared disk through SeaBIOS. The runs were sequential on the shared host, without Wine or a compositor. Rach2 returned the probe output over the test runner's serial link; Debian returned it over SSH.
+A thread woken from a timed wait under load returns tens of milliseconds late, where Linux returns within a few, because the woken CPU waits for the big kernel lock. In the latest measurement, on 2026-11-10 on the testing PC's WSL under KVM with four CPUs and 512 MiB, `wakelatmusl` under the mixed load (one arithmetic and one system-call thread on each CPU) had 158 of its 384 timed waits return more than 10 ms late, with a maximum of 80.920 ms; Debian 13's kernel 6.12.115 under the same load had none over 10 ms and a maximum of 4.637 ms. The console's writes offer the lock between their 256-byte chunks ([the terminal layer](../tty/Readme.md#the-console-terminal)). No wake-latency bound is established; the owner left the change to the big lock for the next locking milestone. The measurements, the accounting of the late waits and the lock holders behind them are in the timed-wake task's record under `dev-log/`.
 
-Each row below covers 384 waits, six interfaces with 64 samples each. Lateness is the monotonic timestamp after the call minus the requested deadline, in milliseconds. These are measurements before a fix, not limits the test enforces.
-
-| Load on each CPU | Rach2 maximum, ms | Debian maximum, ms | Rach2 returns over 10 ms late | Debian returns over 10 ms late |
-| --- | ---: | ---: | ---: | ---: |
-| None | 43.996 | 2.379 | 9 | 0 |
-| One arithmetic thread | 199.802 | 3.817 | 16 | 0 |
-| One system-call thread | 73.508 | 1.023 | 40 | 0 |
-| One of each | 59.837 | 4.637 | 53 | 0 |
-
-The mixed load's percentiles and maxima, by interface:
-
-| Wait | Rach2 p95, ms | Debian p95, ms | Rach2 maximum, ms | Debian maximum, ms |
-| --- | ---: | ---: | ---: | ---: |
-| nanosleep | 2.749 | 0.086 | 9.953 | 0.130 |
-| absolute clock_nanosleep | 12.895 | 0.094 | 38.902 | 0.218 |
-| poll | 14.950 | 0.137 | 48.971 | 3.964 |
-| epoll_wait | 20.411 | 0.139 | 59.837 | 3.643 |
-| timerfd | 15.045 | 0.197 | 27.070 | 3.958 |
-| futex | 12.781 | 0.107 | 44.919 | 4.637 |
-
-The mixed load's 59.837 ms epoll sample accounts 0.338 ms before the servicing interrupt, 0 ms in that interrupt's big-lock acquisition, 0.130 ms in the timer work, 48.999 ms queued, 4.814 ms running toward user mode and 0 ms blocked again. Of the queue interval, 42.487 ms is the destination CPU's big-lock acquisition; the return interval includes another 0.088 ms acquiring it. A poll sample 48.971 ms late has 46.070 ms queued, including 36.178 ms acquiring the big lock. Thus even the lock-wait subset exceeds Debian's largest whole lateness under the same load. These intervals include time the hypervisor deschedules a virtual CPU; they do not identify which holder or host event delayed an acquisition. The user measurement also includes time before the wait is armed and after the kernel's return record, so it need not equal that record's total. All four modes completed their call and accounting checks on both systems; this establishes the reproduction, not that lateness is fixed.
-
-To repeat the Rach2 measurement on the testing host, use `ARCH=x86_64 RACH2_QEMU_ACCEL=kvm RACH2_WORKERS=1 tests/run wakelat`. The Debian reference runs the same executable with `tests/graphics/debian-ref/debian-ref.sh run -p std-vga -c 4 -m 512 -i build/x86_64/tests/musl/wakelatmusl`, `ACCEL=kvm`, and the guest command `/tmp/wakelatmusl 64 N` for load bits N from 0 to 3. The original complete output is kept under `build/runs/3405-profile.out`, `3405-debian.out` and `3405-debian.record` in the worker's Mac and testing-host copies.
-
-The holder follow-up used the same mixed load with `/proc/stat` snapshots at its boundaries. Before the load, the longest completed hold was already 412.350 ms and the oldest interrupt sample was already 13,599.494 ms; both stayed unchanged, so neither describes a hold caused by this load. By the snapshot after joining the workers, a new longest acquisition of 65.118 ms had completed three holds: system call 1 (`write`), 52.890 ms; vector 0 (an unlabelled take), 0.004 ms; and vector 36 (COM1 receive), 12.248 ms. The three durations are full holds, and can include time before the wait. This record does not show a long succession of short holds passing over the waiter. The diagnostic output and its serial transport are part of this run, and the times include hypervisor descheduling.
-
-Across that load, the `write` entry grew from 1,186 holds and 2,130,237 us to 1,478 and 5,230,462 us. COM1 receive grew from 1,283 and 15,648,963 us to 1,446 and 15,952,618 us; the timer entry from 396 and 72,522 us to 4,812 and 989,340 us; `munmap` from 109 and 2,882 us to 6,648 and 720,539 us. The complete snapshots are in `build/runs/3405-holders2.log` in the worker's Mac and testing-host copies, beside the measured kernel and its debug symbols. The console write path now reaches a scheduler service point after every existing 256-byte chunk, giving a waiting claimant or runnable thread a chance between chunks ([the terminal layer](../tty/Readme.md#the-console-terminal)).
-
-The retake with that service point passed all eight call and accounting assertions, but 158 of 384 returns were more than 10 ms late and the maximum was 80.920 ms. The longest acquisition, 75.358 ms, already existed before the load and stayed unchanged, as did its one completed hold of 478.394 ms and the oldest interrupt sample of 16,382.429 ms. Those maxima therefore do not measure a hold during this load or show how much the service point shortened one. The full retake output, kernel, debug symbols and probe are kept as `build/runs/3405-holders3.*` in both worker copies. No wake-latency bound is established.
+To repeat the Rach2 measurement on the testing host, use `ARCH=x86_64 RACH2_QEMU_ACCEL=kvm RACH2_WORKERS=1 tests/run wakelat`. The Debian reference runs the same executable with `tests/graphics/debian-ref/debian-ref.sh run -p std-vga -c 4 -m 512 -i build/x86_64/tests/musl/wakelatmusl`, `ACCEL=kvm`, and the guest command `/tmp/wakelatmusl 64 N` for load bits N from 0 to 3.
 
 ## Interfaces
 
