@@ -6,7 +6,7 @@
  * change of a file is admitted only once it has the file's lock.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: rach2/sys/fs/sleeplock.c
+ * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/fs/ext2xattr.c
  *
  * The test includes ext2.c whole. The mount, a group of 64 blocks and an
  * inode are built in memory, over a cache model with one buffer for each
