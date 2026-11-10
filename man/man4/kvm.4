@@ -48,7 +48,8 @@ of machine type 0,
 of the feature MSRs,
 .Dv KVM_GET_SUPPORTED_CPUID ,
 .Dv KVM_GET_EMULATED_CPUID ,
-which offers no leaf,
+which lists MOVBE and, where the processor has RDTSCP, RDPID, the
+features the kernel carries out for a guest on a processor without them,
 and
 .Dv KVM_X86_GET_MCE_CAP_SUPPORTED .
 .It a VM
@@ -241,6 +242,44 @@ pages from
 a multiple of 64, and write-protects those pages; with
 .Dv KVM_DIRTY_LOG_INITIALLY_SET
 as well, a slot's log starts with every page set.
+.Ss Emulated instructions
+The kernel carries out a guest's instruction in two cases, with the
+results of Linux's emulator.
+An instruction whose operand is MMIO runs whole: each read of the device
+ends
+.Dv KVM_RUN
+with
+.Dv KVM_EXIT_MMIO ,
+of 8 bytes at most, and the instruction goes on with the answer at the
+next
+.Dv KVM_RUN ;
+each write follows as one more
+.Dv KVM_EXIT_MMIO
+once the instruction has ended, with no guest instruction run between.
+A string instruction with a repeat prefix runs one element at a time.
+The moves, arithmetic, shifts, multiplies and divides, bit tests,
+exchanges, string and stack instructions, far transfers, segment and
+descriptor-table instructions and SSE and MMX moves of Linux's emulator
+are known.
+.Pp
+An instruction that raised #UD runs when it is SYSCALL, SYSENTER or SYSEXIT
+in a mode where the guest's CPUID vendor has it and the processor does
+not, MOVBE or RDPID, or the hypercall instruction of the other vendor,
+VMCALL on AMD processors and VMMCALL on Intel ones, which is rewritten in
+the guest's memory as the processor's own and run again.
+Any other gets its #UD.
+.Pp
+For an instruction the kernel does not know or cannot finish, the guest
+gets #UD, and when it ran at CPL 0
+.Dv KVM_RUN
+also ends with
+.Dv KVM_EXIT_INTERNAL_ERROR
+and the suberror
+.Dv KVM_INTERNAL_ERROR_EMULATION ,
+whose data are Linux's: the flag
+.Dv KVM_INTERNAL_ERROR_EMULATION_FLAG_INSTRUCTION_BYTES ,
+the instruction's length and its 15 bytes, then the exit's reason and
+qualifications.
 .Ss Interrupts
 The full and split interrupt controllers follow Linux's interfaces.
 .Dv KVM_CREATE_IRQCHIP
@@ -739,6 +778,10 @@ No
 .Dv KVM_CAP_X2APIC_API ,
 no coalesced MMIO, no dirty ring, no SMM and no nested virtualization, so
 no enlightened VMCS and no direct TLB flush of Hyper-V's.
+No
+.Dv KVM_CAP_DISABLE_QUIRKS2 ,
+so the rewrite of the other vendor's hypercall instruction cannot be
+turned off.
 Of KVM's paravirtual features there are no asynchronous page faults, steal
 time, paravirtual EOI or TLB flush, and without a measured TSC rate no
 kvmclock.

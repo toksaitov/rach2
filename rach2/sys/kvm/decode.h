@@ -235,15 +235,16 @@ struct kvm_insn {
  * string instructions with REP, the stack instructions, the near and far
  * jumps, calls and returns, the conditional moves, sets and jumps, the
  * segment and descriptor table loads and stores, SMSW and LMSW, the SSE
- * and MMX moves, FNSTCW, FNSTSW, FNINIT, FXSAVE and FXRSTOR, and SYSCALL,
- * SYSENTER and SYSEXIT, with the operand-size, address-size, segment, LOCK
- * and REP prefixes and REX. Port I/O, the control and debug registers, the
- * MSRs and the instructions that always exit are the backends'. Bytes past
- * the 15th are not read.
+ * and MMX moves, FNSTCW, FNSTSW, FNINIT, FXSAVE and FXRSTOR, and those it
+ * carries out after a #UD: SYSCALL, SYSENTER, SYSEXIT, RDPID, VMCALL and
+ * VMMCALL, with the operand-size, address-size, segment, LOCK and REP
+ * prefixes and REX. Port I/O, the control and debug registers, the MSRs
+ * and the instructions that always exit are the backends'. Bytes past the
+ * 15th are not read.
  *
  * Returns 0 with `out` filled, or -1 for an instruction outside that set or
- * one longer than `n` or 15 bytes. The caller then injects #UD above CPL 0
- * and at CPL 0 reports kvm_decode_fail's error, as Linux's
+ * one longer than `n` or 15 bytes. The caller then queues #UD and at CPL 0
+ * also reports kvm_decode_fail's error, as Linux's
  * handle_emulation_failure does. An encoding of the set that the processor
  * refuses, such as a LOCK it does not take or an instruction 64-bit mode
  * lacks, decodes with KVM_INSN_UD and may have no operands.
