@@ -111,3 +111,25 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `rach2/sys/usb/hid_input.c`'s `map_system` does as Linux does and maps the D-pad to nothing.
 * Status: unreported.
 * Next: check master's `hid-input.c`, which was not read, then ask on the linux-input list whether the SystemControl block should leave 0x90 to 0x93 to the D-pad block below it.
+
+## Linux divides by zero for a GTF curve whose blanking duty cycle is 100%
+
+* Project: Linux 6.12, `drivers/gpu/drm/drm_modes.c` at the tag `v6.12` (SHA-256 bbd8079eebc846aefb3c9f54f47d1162f96f85d1f2413ab4aca596b4fb8b9d97).
+* Fails: `drm_gtf_mode_complex` divides by `100000 - ideal_duty_cycle` (`drm_modes.c:971-972`), and `ideal_duty_cycle` is `GTF_C_PRIME * 1000 - GTF_M_PRIME * 1000000 / hfreq_est`, both from the EDID's secondary GTF curve. A range descriptor with byte 10 = 2 (secondary curve), K (byte 16) = 0 and 2J (byte 17) = 200 gives M' 0 and C' 100, so the divisor is 0. `drm_gtf2_mode` reaches it for every mode above the curve's break, which byte 12 = 0 puts at 0 kHz, so a crafted or broken monitor, or a write to debugfs `edid_override`, divides by zero in the kernel.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by task 3394, which answered a review finding against Rach2's copy of the function in `rach2/sys/drm/drm_edid.c`.
+* Reproduction: not run on Linux. Give a connector an EDID 1.3 whose range descriptor is as above, through debugfs `edid_override`, and probe it.
+* Evidence: the row "GTF at a 100% duty cycle: no mode" of `tests/host/drm_edid_hosttest.c`, which divides by zero under UBSan without Rach2's check.
+* Rach2: `rach2/sys/drm/drm_edid.c`'s `gtf_mode_complex` makes no mode when the duty cycle reaches 100%, in task 3394's commit.
+* Status: unreported.
+* Next: check master's `drm_modes.c`, which could not be fetched, then send a patch that has `drm_gtf_mode_complex` return NULL for a duty cycle of 100% or more.
+
+## Linux reads an EDID's CVT 3-byte codes one byte early
+
+* Project: Linux 6.12, `include/drm/drm_edid.h` at the tag `v6.12` (SHA-256 be7f3d00c6e89583213f866c010ee41ef777f0cc6af32ca45758d81cefe88fb3) and `drivers/gpu/drm/drm_edid.c` (SHA-256 1d042133c26d43abff917cd2dd3d0bf7694baa2188e84326e03161381dc1d9f8); master's `drm_edid.h` of 2026-11-10 (SHA-256 c2f4cd96a5683a31f9cfb182b4215955409615cabb719a8ba7d4ab1882f6eb4a) and `drm_edid.c` (SHA-256 85dbe1d5f088949a97c4e07fb484df17527ef971ab2431053595ebb42dbd4552) have the same code.
+* Fails: `struct detailed_non_pixel` (`drm_edid.h:158-171`) puts `data.cvt[0]` at byte 5 of the descriptor, after `pad1`, `type` and `pad2`, and `drm_cvt_modes` (`drm_edid.c:4004-4007`) reads the four codes from there. E-EDID 1.4's CVT 3-byte descriptor (tag 0xF8) has its version, 01h, at byte 5 and the codes at bytes 6 to 17, so each code Linux reads takes the byte before it: the first code's lines come from the version byte.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by task 3394, which answered a review finding that Rach2 reads the codes from byte 6.
+* Reproduction: not run on Linux. Give a connector an EDID with a CVT 3-byte descriptor holding one code for 1920x1080 at 60 Hz and read its modes: Linux's list lacks that mode and may hold another.
+* Evidence: the byte layout above is the E-EDID 1.4 standard's as Rach2's `do_cvt` reads it; the standard's text is not kept in the repository.
+* Rach2: `rach2/sys/drm/drm_edid.c`'s `do_cvt` reads from byte 6, and its comment says why, in task 3394's commit.
+* Status: unreported, draft.
+* Next: confirm the layout against the VESA E-EDID 1.4 text and with a real monitor's descriptor, then send a patch that adds the version byte before `cvt[4]`.
