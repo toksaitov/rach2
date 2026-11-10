@@ -11,7 +11,6 @@
 #include "../arch/arch.h"
 #include "../fs/devfs.h"
 #include "../fs/file.h"
-#include "../fs/krffs.h"
 #include "../io/poll.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -21,7 +20,6 @@
 #include "../mm/usercopy.h"
 #include "../proc/percpu.h"
 #include "../proc/process.h"
-#include "../syscall_internal.h"
 
 /* Linux's O_EXCL, which an open of a node refuses with EBUSY. */
 #define DRM_O_EXCL 0200
@@ -596,29 +594,6 @@ static int32_t drm_node_mmap(fd_entry_t *e, struct vma *vma)
 
 static const struct file_ops drm_fops = {drm_read,       NULL,          drm_poll, drm_node_ioctl,
                                          drm_node_close, drm_node_mmap, NULL};
-
-/* mmap's protection and flag, Linux's values. */
-#define DRM_PROT_RW    0x3u /* PROT_READ | PROT_WRITE */
-#define DRM_MAP_SHARED 0x01u
-
-long drm_vm_mmap(struct drm_file *file, uint64_t offset, uint64_t size)
-{
-    fd_table_t *t = current_proc ? current_proc->fds : NULL;
-    int fd;
-
-    if ((offset & (PAGE_SIZE - 1)) != 0 || size != (uint64_t)(uintptr_t)size) {
-        return -EINVAL;
-    }
-    for (fd = 0; t && fd < t->cap; fd++) {
-        const fd_entry_t *e = &t->entries[fd];
-
-        if (e->type != FD_TYPE_NONE && e->ops == &drm_fops && e->priv == file) {
-            return ksys_mmap_pgoff(0, (uintptr_t)size, DRM_PROT_RW, DRM_MAP_SHARED, fd,
-                                   (unsigned long)(offset >> PAGE_SHIFT));
-        }
-    }
-    return -EBADF;
-}
 
 /* ------------------------------------------------------------------------
  * The dispatcher
