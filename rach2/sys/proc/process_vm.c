@@ -298,8 +298,8 @@ long sys_process_vm_writev(isr_params_t *params)
 /**
  * Whether the caller may read the memory of `t`, as Linux's mm_access with
  * PTRACE_MODE_READ_FSCREDS allows it: its own address space or thread
- * group, a privileged caller, or a caller whose effective user and group
- * IDs, which are its file system IDs here, are each of `t`'s three, with
+ * group, a privileged caller, or a caller whose file system user and group
+ * IDs are each of `t`'s three, with
  * `t` dumpable and not privileged. Yama's rule binds an attach alone, not
  * this.
  */
@@ -308,10 +308,10 @@ static int pvm_may_read(const process_t *t)
     if (t->mm == current_proc->mm || t->tg == current_proc->tg || proc_privileged(current_proc)) {
         return 1;
     }
-    return current_proc->euid == t->ruid && current_proc->euid == t->euid &&
-           current_proc->euid == t->suid && current_proc->egid == t->rgid &&
-           current_proc->egid == t->egid && current_proc->egid == t->sgid && t->mm->dumpable &&
-           !proc_privileged(t);
+    return proc_fsuid(current_proc) == t->ruid && proc_fsuid(current_proc) == t->euid &&
+           proc_fsuid(current_proc) == t->suid && proc_fsgid(current_proc) == t->rgid &&
+           proc_fsgid(current_proc) == t->egid && proc_fsgid(current_proc) == t->sgid &&
+           t->mm->dumpable && !proc_privileged(t);
 }
 
 /**

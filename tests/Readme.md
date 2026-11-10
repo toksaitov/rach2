@@ -118,7 +118,7 @@ A probe that etude judges writes etude's report records (`tools/etude/Readme.md`
 
 `threadmusl` has a thread set K_RAW and raw termios with VMIN and VTIME zero before reading the empty console; closing `/fb` restores the console's settings.
 
-`procprobe` checks that a private page written before fork stays in the child's RssAnon, before and after a child write, with both a regular file and a memfd. `procprobe mount` reports the exact root line its profile gives. `creddisk` reports each publication and lock check across cold boots, and `procfilesmusl` the status and content checks of each installed applet.
+`procprobe` checks that a private page written before fork stays in the child's RssAnon and keeps its dirty count in numa_maps, before and after a child write, with both a regular file and a memfd. `procprobe mount` reports the exact root line its profile gives. `creddisk` reports each publication and lock check across cold boots, and `procfilesmusl` the status and content checks of each installed applet.
 
 `musl/build.sh`, run by `make musl-programs`, builds each `musl/*.c` file for `ARCH` with the cross compiler and the ported musl, under `build/tests/musl/` or `build/x86_64/tests/musl/`. A program that links another source of the tree lists it in a `link-deps:` line of its header comment; a named source that is missing stops the build. The build recompiles a program only when its source, a dependency, a header it included, the installed libc, `mk/arch.sh` or the script is newer than the binary.
 
@@ -149,3 +149,5 @@ Then give the program its place. Add it to `default-probes`, and give it a case 
 Run the new test's suite, `tests/run style` and `tests/run host` before committing.
 
 The default family's `pifutexmusl` probe exercises raw PI futex locks, deadlines and requeue, pthread PI mutexes, robust PI owner death, a condition variable over a PI mutex and process-shared recovery. Its i686 build also runs through the ia32 profile. The GNU family's `pi_futex` row compiles the same source against its guest's glibc.
+
+`memcallmusl` checks the resident protection of a prefix before mprotect refuses a sealed secret suffix, rejects secret-memory node queries without populating a page, and checks process_madvise with filesystem IDs different from the effective IDs.

@@ -52,7 +52,8 @@
  * cachestat counts its touched page as in memory and not dirty.
  *
  * `secret-refused`: /proc/self/mem cannot read the mapping (EIO),
- * process_vm_readv cannot (EFAULT), and mlock fails with ENOMEM.
+ * process_vm_readv and get_mempolicy cannot (EFAULT), and mlock fails
+ * with ENOMEM.
  *
  * `secret-memlock`: under an RLIMIT_MEMLOCK of one page, a child may touch
  * one page of memfd_secret and is killed by SIGBUS at the second, whether or
@@ -90,6 +91,8 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/fsuid.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -108,6 +111,11 @@
 #define NR_CACHESTAT        451
 #define NR_MAP_SHADOW_STACK 453
 #define NR_MSEAL            462
+#if defined __x86_64__
+#define NR_GET_MEMPOLICY 239
+#else
+#define NR_GET_MEMPOLICY 275
+#endif
 #if defined __x86_64__
 #define NR_PKEY_MPROTECT 329
 #define NR_PKEY_ALLOC    330
@@ -251,6 +259,29 @@ static void no_core(void)
     (void)setrlimit(RLIMIT_CORE, &none);
 }
 
+/** Protect a populated prefix before a sealed secret suffix returns EACCES.
+ * Run in a child: its final write must raise SIGSEGV, and its exit frees
+ * the sealed mapping. Return only after a setup failure. */
+static void protect_prefix(void)
+{
+    int fd = (int)syscall(NR_MEMFD_SECRET, 0ul);
+    char *m = anon(2, PROT_READ | PROT_WRITE);
+
+    no_core();
+    if (fd < 0 || m == NULL || ftruncate(fd, PAGE) != 0 ||
+        mmap(m + PAGE, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) != m + PAGE) {
+        _exit(2);
+    }
+    close(fd);
+    *(volatile char *)m = 1;
+    if (syscall(NR_MSEAL, m + PAGE, PAGE, 0ul) != 0 ||
+        mprotect(m, 2 * PAGE, PROT_READ | PROT_EXEC) != -1 || errno != EACCES) {
+        _exit(3);
+    }
+    *(volatile char *)m = 2;
+    _exit(4);
+}
+
 /** The x86-64 kernel's mseal, on a mapping of three pages whose middle one
  * is sealed. */
 static void seal_rows(void)
@@ -306,6 +337,13 @@ static void seal_rows(void)
         miss("a child of fork could unmap the sealed page");
     }
     munmap(hole, 3 * PAGE);
+    pid = fork();
+    if (pid == 0) {
+        protect_prefix();
+    }
+    if (pid < 0 || !killed_by(pid, SIGSEGV)) {
+        miss("mprotect left a populated prefix writable before a sealed secret suffix");
+    }
 }
 
 /** In a child of fork: 0 when the page `w` reads zero and the page after
@@ -588,6 +626,15 @@ static void secret_map_rows(void)
     remote.iov_base = m;
     remote.iov_len = 1;
     expect("process_vm_readv", process_vm_readv(getpid(), &local, 1, &remote, 1, 0), 0, EFAULT);
+    {
+        int node = -1;
+
+        expect("get_mempolicy of a populated secret page",
+               syscall(NR_GET_MEMPOLICY, &node, NULL, 0ul, m, 3ul), 0, EFAULT);
+        expect("get_mempolicy of an untouched secret page",
+               syscall(NR_GET_MEMPOLICY, &node, NULL, 0ul, m + PAGE, 3ul), 0, EFAULT);
+        counted("secret page query did not populate the file", count(fd, 0, 0, &c), &c, 1, 0);
+    }
     expect("mlock", mlock(m, PAGE), 0, ENOMEM);
     munlock(m, PAGE);
     munmap(m, 3 * PAGE);
@@ -658,6 +705,62 @@ static pid_t sleeper(int *fd)
     return *fd >= 0 ? pid : -1;
 }
 
+/** In an isolated caller, reach READ_FSCREDS with IDs unlike the effective
+ * ones, then require EPERM at CAP_SYS_NICE. Reap the target on every path;
+ * 0 on success, or 1 on a setup or result failure. */
+static int madvise_fsids(void)
+{
+    uid_t uid = (uid_t)probe_id(1000), other = (uid_t)probe_id(1001);
+    int ready[2], fd = -1, ok = 0;
+    char byte;
+    pid_t pid;
+    long rc;
+
+    if (pipe(ready) != 0) {
+        return 1;
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(ready[0]);
+        if (setgid((gid_t)uid) != 0 || setuid(uid) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
+            write(ready[1], "r", 1) != 1) {
+            _exit(2);
+        }
+        close(ready[1]);
+        for (;;) {
+            pause();
+        }
+    }
+    close(ready[1]);
+    if (pid <= 0 || read(ready[0], &byte, 1) != 1) {
+        goto out;
+    }
+    fd = (int)syscall(NR_PIDFD_OPEN, pid, 0ul);
+    if (fd < 0 || setresgid((gid_t)uid, (gid_t)other, (gid_t)uid) != 0 ||
+        setresuid(uid, other, uid) != 0) {
+        goto out;
+    }
+    setfsgid((gid_t)uid);
+    setfsuid(uid);
+    if ((uid_t)setfsuid((uid_t)-1) != uid || (gid_t)setfsgid((gid_t)-1) != (gid_t)uid) {
+        goto out;
+    }
+    rc = syscall(NR_PROCESS_MADVISE, fd, NULL, 0ul, (long)ADV_COLD, 0ul);
+    ok = rc == -1 && errno == EPERM;
+out:
+    close(ready[0]);
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+        if (reap(pid) < 0) {
+            ok = 0;
+        }
+    }
+    return ok ? 0 : 1;
+}
+
 /** process_madvise over the caller's pages and a child's. */
 static void madvise_rows(void)
 {
@@ -701,6 +804,15 @@ static void madvise_rows(void)
     }
     close(self);
     munmap(m, PAGE);
+    if (geteuid() == 0) {
+        pid = fork();
+        if (pid == 0) {
+            _exit(madvise_fsids());
+        }
+        if (pid < 0 || reap(pid) != 0) {
+            miss("process_madvise did not use filesystem IDs before CAP_SYS_NICE");
+        }
+    }
 }
 
 /** process_mrelease of the caller, a child alive and one killed. */

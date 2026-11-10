@@ -496,13 +496,13 @@ long sys_set_mempolicy_home_node(isr_params_t *params)
  * The node of the page at `addr` of the current process, brought in for a
  * read as Linux's get_user_pages does, which is node 0, or -EFAULT for a
  * page that cannot be read: one of a PROT_NONE region, a guard or device
- * memory.
+ * memory, or secret memory.
  */
 static int32_t mempolicy_page_node(uintptr_t addr)
 {
     const vma_t *vma = vm_find(&current_proc->mm->vm, addr);
 
-    if (!vma || (vma->prot & VM_PROT_IO) ||
+    if (!vma || (vma->prot & (VM_PROT_IO | VM_PROT_SECRET)) ||
         !vm_prefault_range(addr & ~(uintptr_t)(PAGE_SIZE - 1u), 1, 0)) {
         return -EFAULT;
     }

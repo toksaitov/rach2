@@ -1557,6 +1557,26 @@ static int child_rss(int pid, int rss[3])
     return rss[0] >= 0 && rss[1] >= 0 && rss[2] >= 0 ? 0 : -1;
 }
 
+/** Whether numa_maps keeps the dirty count of the private page at `at`.
+ * The page has its own file mapping, so its line must have one dirty page. */
+static int private_page_dirty(long at)
+{
+    char name[24];
+    int n = slurp("/proc/self/numa_maps", buf, (int)sizeof(buf));
+    int k = hex_of(name, (unsigned long)at, 8), i, end;
+
+    name[k++] = ' ';
+    name[k] = '\0';
+    for (i = 0; i + k < n; i = end + 1) {
+        for (end = i; end < n && buf[end] != '\n'; end++) {
+        }
+        if (contains(buf + i, k, name)) {
+            return contains(buf + i, end - i, " dirty=1 ");
+        }
+    }
+    return 0;
+}
+
 /** A private file page dirtied before fork stays anonymous in the child,
  * before and after its own COW write. Removing it must remove exactly 4 KiB
  * of RssAnon. `memory` selects a memfd instead of the executable's file;
@@ -1588,6 +1608,9 @@ static int rss_fork_file(int memory, int write_child)
         handshake_child(&h);
         if (write_child) {
             ((volatile char *)at)[0] ^= 1;
+        }
+        if (!private_page_dirty(at)) {
+            sys_exit(2);
         }
         handshake_hold(&h);
         if (syscall2(SYS_MUNMAP, at, 4096) != 0) {

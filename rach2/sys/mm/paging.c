@@ -2470,7 +2470,8 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
  * copy. A page is given only when it is present, user or PROT_NONE, and
  * names a frame other than 0. A writable private page is made read-only and
  * copy-on-write in the parent too, so that the first write on either side
- * faults into `cow_fault`. A private page pinned for a device (`frame_pin`)
+ * faults into `cow_fault`; its dirty bit is kept in the child. A private
+ * page pinned for a device (`frame_pin`)
  * stays the parent's as it is, and the child gets a copy with the same
  * rights, as Linux copies a page that may be pinned at fork: a write by the
  * parent would otherwise move the parent to a copy and leave the device
@@ -2511,7 +2512,7 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
     }
     if (pte & PTE_W) {
         if (map_user_frame(child_dir, va, parent_phys,
-                           PTE_P | PTE_U | PTE_COW | (pte & (PTE_NOEXEC | PTE_PKEY)) |
+                           PTE_P | PTE_U | PTE_COW | (pte & (PTE_NOEXEC | PTE_PKEY | PTE_DIRTY)) |
                                (PTE_IS_ZERO(pte) ? PTE_ZEROFILL : 0)) != 0) {
             return -1;
         }
