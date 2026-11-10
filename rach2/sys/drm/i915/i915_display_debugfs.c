@@ -96,7 +96,9 @@ int32_t intel_crtc_verify_crc_source(struct drm_crtc *crtc, const char *name, ui
     if (crc_ctl_of(name, &ctl) != 0) {
         return -EINVAL;
     }
-    *values_cnt = 1;
+    /* Linux gives five values a frame on every i915 (i915_crc_source_valid
+     * and intel_crtc_verify_crc_source); Haswell fills the first. */
+    *values_cnt = 5;
     return 0;
 }
 
@@ -153,7 +155,7 @@ int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name)
 
 void intel_crtc_crc_frame(struct intel_crtc *c)
 {
-    uint32_t crc;
+    uint32_t crc[5] = {0, 0, 0, 0, 0};
 
     if (c->crc_ctl == 0) {
         return;
@@ -162,6 +164,6 @@ void intel_crtc_crc_frame(struct intel_crtc *c)
         c->crc_skip--;
         return;
     }
-    crc = i915_read(&c->i915->hw, PIPE_CRC_RES_HSW(c->pipe));
-    (void)drm_crtc_add_crc_entry(&c->base, 1, (uint32_t)c->base.vblank.count, &crc);
+    crc[0] = i915_read(&c->i915->hw, PIPE_CRC_RES_HSW(c->pipe));
+    (void)drm_crtc_add_crc_entry(&c->base, 1, (uint32_t)c->base.vblank.count, crc);
 }
