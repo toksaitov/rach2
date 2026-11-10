@@ -31,7 +31,7 @@ These variables change a run:
 | `RACH2_CPUS` | 2 | processors of every machine, 1 to 64; a suite that names its own count keeps it |
 | `RACH2_STOP_ON_FAIL` | unset | when set, the first failure stops the set |
 | `RACH2_CASES` | unset | case identities separated by blanks, such as `guest.default.vforkmusl machine.ext2.cost`: each suite of the run runs only the cases listed of its own, in its manifest's order, and the start line says the run is a selection; an identity that is no case of a suite of the run, or of the architecture, one given twice and a suite left with no case are refused before anything is built; in a run of both architectures a case must run on each |
-| `RACH2_KERNEL` | unset | `ubsan` or `o2`: a suite that boots the kernel directly boots that build instead; a disk keeps `rach2/kernel` |
+| `RACH2_KERNEL` | unset | `ubsan` or `o2`: a suite that boots the kernel directly boots that build instead; a disk keeps `rach2/kernel`. `ia32`: the ia32 profile below, with `ARCH` i686 alone |
 | `RACH2_QEMU_ACCEL` | `kvm` where `/dev/kvm` opens, `hvf` on an x86 Mac that supports it, `tcg` where neither exists; a `/dev/kvm` the user cannot open is refused | the accelerator every machine uses: `kvm`, `hvf` or `tcg` |
 | `RACH2_MIN_FREE_GIB` | 40 | free space a run whose cases boot machines needs before it runs them; 0 skips the check; when set, `make` too refuses to build with less |
 | `RACH2_RESULTS` | `build/tests/results` | the directory that keeps the run's history, `history/` and `store/`, and each command's output, `output/`; the successful runs of its history set the bounds of later runs' cases |
@@ -40,6 +40,21 @@ These variables change a run:
 On an enrolled host, the build is a claim of the [installed launcher](../tools/etude/Readme.md#installed-launch-admission), which the root `make` enters, and each case is a claim of the site's ledger, so runs in different accounts overlap within the site's capacity. A run with a large-memory or explicitly serial suite takes the host lock alone.
 
 A run that boots machines claims a block of host ports, so several clones on one host can run the same network suite at once; [the system tests' Readme](system/Readme.md) describes the claim and the other rules the runner keeps.
+
+### The ia32 profile
+
+`RACH2_KERNEL=ia32 tests/run NAME` runs the i686 cases on the x86-64 kernel, as a 64-bit Linux runs i386 programs: each i686 case that boots the node `rach2/kernel` by direct firmware, a guest case by its QEMU profile or a machine case by one of its machines that names no architecture of its own, boots `build/x86_64/rach2/kernel` on `qemu-system-x86_64` with its i686 images, disks and programs, and keeps `ARCH=i686`. The preparation builds the x86-64 components beside the i686 ones for that kernel. `ARCH` must be i686, and the profile is refused with any other.
+
+The profile leaves out every other case: a host check, a case that boots another kernel (`rach2-recovery`, `rach2-metal`, `rach2-harness`, or the x86-64 kernel by its own machine's `architecture`), a case whose disk carries `rach2/kernel` for GRUB under SeaBIOS or OVMF, and a case whose manifest says `"ia32": {"runs": false, "why": ...}` with its reason. `all` and `core` print `run: ia32: left out: SUITE: no case of it runs under the profile` for each suite with no case left, and drop it; a suite named, or a case of `RACH2_CASES`, that the profile leaves out is refused. At this tree the profile leaves out these suites whole:
+
+* GRUB's disk, under SeaBIOS or OVMF: `installer-rehearse`, `install`, `datapart`, `menu`, `seabios`, `termconsole`, `grub` and `bootorder`.
+* GRUB's disk and the recovery and x86-64 kernels: `grow`.
+* The x86-64 kernel by the machine's own architecture, and host checks: `host` and `imagerace`.
+* Host checks alone: `style`, `esctest2` and `krffscheck`.
+
+And these cases of suites that otherwise run: the cases of `installer`, `installer-repair`, `usbdisk` and `metal` that boot GRUB's disk; those of `drill`, `memory`, `parts`, `authority` and `man` that boot the recovery kernel, `metal`'s of the x86-64 kernel and `exitline`'s of the harness kernel; the host checks of `usb` and `usbdisk`; and by their own `ia32` member `bootline`'s `cpu-486` and `cpu-pentium`, on processors without long mode, and `fpu`'s `fpuprobe-x87`, under the i686 kernel's `rach2.nofxsr`.
+
+A guest case's program finds the kernel's architecture, `i686` or `x86_64`, in `ETUDE_KERNEL` in its environment, beside `ARCH`, its own. Where the kernels give an i386 program different things, the case says so in its `ia32` member, with `"runs": true` and the reason, and its program checks what the kernel it runs on gives: `auxvprobe`'s `sysinfo` and `machine` (the x86-64 kernel gives AT_SYSINFO and AT_SYSINFO_EHDR and is `x86_64` to `uname`), and `vdsomusl`'s group `kernel` (the x86-64 kernel's 32-bit vDSO, which the i686 kernel lacks).
 
 ### By hand
 
