@@ -60,11 +60,14 @@
 #define USB_PROTOCOL_HUB_MULTI  2
 #define USB_PROTOCOL_HUB_SUPER  3
 
-/* The HID interfaces of one configuration this kernel drives at most. Linux
- * binds usbhid to each HID interface of a device; a keyboard with media keys
- * has two, a receiver for a wireless keyboard and mouse three, and a gaming
- * keyboard or mouse four or five. An interface past these is not driven. */
-#define USB_HID_INTERFACES 8
+/* The HID interfaces of one configuration this kernel drives at most, which
+ * is every one a configuration can have. Linux binds usbhid to each HID
+ * interface of a device, and each needs an interrupt IN endpoint of its own:
+ * a configuration has 15 IN endpoint numbers, and Linux drops an endpoint
+ * that repeats another interface's, which leaves its interface without one
+ * and usbhid refuses it. A keyboard with media keys has two, a receiver for
+ * a wireless keyboard and mouse three, and a gaming keyboard four or five. */
+#define USB_HID_INTERFACES 15
 
 /** What a configuration descriptor says about an interface this kernel can
  *  drive, and about that interface's endpoints. */
