@@ -26,7 +26,7 @@ When the stamp already names the same three and the archive is there, the script
 
 `rach2/sys/acpi/sources.mk` lists the files under `$(ACPICA)`, which the host `Makefile` sets to the extracted core and `guest.mk` to `vendor/acpica`. The host build compiles them into `build/rach2/acpica/` with flags of their own: the architecture's, `-ansi -Wall -Werror`, `-D__RACH2__` and the include directories of the core and of `sys/acpi`.
 
-The images that stage the kernel's sources (`os-real`, `os-real-gnu`, `grub-test` and `rach2-metal-disk`) stage the archive as `/src/rach2/vendor/acpica.tar.bz2`, not the tree. The tree takes 4 MiB and the archive 0.45 MiB, and os-real's RAM root, a module that ends below 32 MiB where the DMA pool and i686's frame table are carved, has room for the archive alone. `guest.mk` unpacks it into `vendor/acpica` before it compiles anything, with `tar -xmoj`, so the files take the time of unpacking and the user's ownership.
+The images that stage the kernel's sources (`os-real`, `os-real-gnu`, `grub-test` and `rach2-metal-disk`) stage the archive as `/src/rach2/vendor/acpica.tar.bz2`, not the tree. The tree takes 4 MiB and the archive 0.45 MiB, and os-real's RAM root, a module that must end well below 64 MiB, where the DMA pool and i686's frame table are carved (the root Makefile gives its sizes), has room for the archive alone. `guest.mk` unpacks it into `vendor/acpica` before it compiles anything, with `tar -xmoj`, so the files take the time of unpacking and the user's ownership.
 
 ## Updating
 
