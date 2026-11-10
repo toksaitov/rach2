@@ -19,7 +19,7 @@
 static const char *const ev_keys[] = {"a", "volumeup", "volumedown", "audiomute"};
 static const char *const ev_flood[] = {"b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"};
 
-/* What a browser's page must record: these keys, then a left click. */
+/* What a browser's page must record: a left click, then these keys. */
 static const char *const page_keys[] = {"r", "a", "c", "h", "2"};
 
 /* The word the console's shell receives from the keyboard after Weston's
@@ -145,16 +145,30 @@ static void driven(struct net_case *u, struct net_boot *b, const struct driven *
     net_run_free(&r);
 }
 
-/** Type the page's keys, move the pointer onto the page, which gives Weston
- * the pointer's focus, and click the left button. */
+/** Move the pointer onto the page, which gives Weston the pointer's focus,
+ * click the left button, and type the page's keys. Each input waits until
+ * the page has reported the one before it: keys sent back to back, with the
+ * pointer's move among them, reached the keyboard's event device whole and
+ * in order, but the page missed some of them, and its reports, each a fetch
+ * of its own, came in any order. */
 static void page_input(struct net_case *u, struct net_boot *b)
 {
-    keys(u, b, page_keys, sizeof(page_keys) / sizeof(page_keys[0]));
+    char seen[64];
+    unsigned i;
+
     events(u, b,
            "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 20}}, "
            "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 20}}]");
     events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
     events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
+    if (net_ok(u) && etude_guest_output_wait(b->m, "desktop: click: button 0") != ETUDE_OK)
+        net_fail(u, "the page reported no click");
+    for (i = 0; i < sizeof(page_keys) / sizeof(page_keys[0]); i++) {
+        keys(u, b, &page_keys[i], 1);
+        snprintf(seen, sizeof(seen), "desktop: key: %s", page_keys[i]);
+        if (net_ok(u) && etude_guest_output_wait(b->m, seen) != ETUDE_OK)
+            net_fail(u, "the page reported no key %s", page_keys[i]);
+    }
 }
 
 /** Show the probe's input page in browser `name`, inject the page's input
