@@ -288,7 +288,7 @@ static void run(struct graphics_case *s)
     if (root)
         snprintf(command, sizeof(command), "%s", env);
     else
-        snprintf(command, sizeof(command), "su test -s /bin/sh -c '%s'", env);
+        snprintf(command, sizeof(command), "su -s /bin/sh test -c '%s'", env);
     if (net_step(&s->u, "run") == ETUDE_OK)
         as_root(s, command, "runner", &r);
     if (!net_ok(&s->u)) {
