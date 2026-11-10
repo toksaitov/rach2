@@ -565,6 +565,22 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
     return 1;
 }
 
+/** A user range of the model ends in user space. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    (void)addr;
+    (void)len;
+    return 1;
+}
+
+/** No PCI function of /sys exists, so none has a BAR. */
+uint64_t sysfs_pci_bar_size(int key, int bar)
+{
+    (void)key;
+    (void)bar;
+    return 0;
+}
+
 /** Every page of a model buffer is present, but for an append row's until
  * it is brought in. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
