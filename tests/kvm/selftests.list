@@ -7,11 +7,11 @@
 # the reasons the stack's approved plan allows. A test whose result is the
 # processor's has FLAG?A:B there: A on a processor whose `flags` in
 # /proc/cpuinfo have FLAG, or whose KVM answers KVM_CAP_VM_TSC_CONTROL where
-# FLAG is `kvm_cap_vm_tsc_control`, and B on one without it. LINUX is the result of the
-# same 6.12.115 programs under Linux 6.18.58, WSL's, as ref/linux-
-# selftests.status has it; a row Linux failed there, where the programs are
-# older than the kernel, expects a pass unless its EXPECT is `fail`, and names
-# Linux's failure after `Linux:`.
+# FLAG is `kvm_cap_vm_tsc_control`, and B on one without it. LINUX is the
+# result of the same 6.12.115 programs under Linux 6.18.58, WSL's, as
+# ref/linux-selftests.status has it; a row Linux failed there, where the
+# programs are older than the kernel, expects a pass unless its EXPECT is
+# `fail`, and names Linux's failure after `Linux:`.
 #
 # NAME EXPECT LINUX REASON
 access_tracking_perf_test skip skip CONFIG_IDLE_PAGE_TRACKING is not enabled
