@@ -54,6 +54,11 @@ int kvm_vm_caller_ok(struct kvm_vm *vm)
     return current_proc && current_proc->mm == vm_rec(vm)->mm;
 }
 
+struct mm *kvm_vm_mm(struct kvm_vm *vm)
+{
+    return vm_rec(vm)->mm;
+}
+
 uint64_t kvm_host_ns(void)
 {
     int64_t s, ns;
@@ -383,8 +388,9 @@ static int32_t set_clock(struct kvm_vm *vm, uintptr_t arg)
     return 0;
 }
 
-/** KVM_ENABLE_CAP of a VM: KVM_CAP_SPLIT_IRQCHIP, irq.c's; -EINVAL for a
- * flag or any other capability, as Linux answers one it does not enable. */
+/** KVM_ENABLE_CAP of a VM: KVM_CAP_SPLIT_IRQCHIP, irq.c's, and
+ * KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, dirty.c's; -EINVAL for a flag or any
+ * other capability, as Linux answers one it does not enable. */
 static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_enable_cap cap;
@@ -397,6 +403,9 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     }
     if (cap.cap == KVM_CAP_SPLIT_IRQCHIP) {
         return kvm_irq_enable_split(vm, &cap);
+    }
+    if (cap.cap == KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) {
+        return kvm_dirty_enable_manual(vm, &cap);
     }
     return -EINVAL;
 }
