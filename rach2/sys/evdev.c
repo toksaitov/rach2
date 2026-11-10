@@ -965,6 +965,20 @@ int evdev_grabbed(struct evdev *dev)
     return grabbed;
 }
 
+int evdev_key_down(struct evdev *dev, uint16_t code)
+{
+    uint32_t flags;
+    int down;
+
+    if (!dev || code > KEY_MAX) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    down = bit_on(dev->down, code);
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return down;
+}
+
 void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down)
 {
     evdev_report(dev, EV_MSC, MSC_SCAN, (int32_t)scan);

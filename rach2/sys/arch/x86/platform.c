@@ -13,6 +13,7 @@
  */
 
 #include "acpi.h"
+#include "alps.h"
 #include "apicdiag.h"
 #include "apictimer.h"
 #include "board.h"
@@ -494,6 +495,7 @@ void platform_tick(void)
 {
     ata_tick();
     ps2kbd_tick();
+    alps_tick();
 }
 
 void platform_disks_probe(void)
