@@ -26,4 +26,7 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/i915_gem_userptr.c \
     sys/drm/i915/i915_gem_tiling.c \
     sys/drm/i915/i915_gem_mman.c \
-    sys/drm/i915/i915_gem_prime.c
+    sys/drm/i915/i915_gem_prime.c \
+    sys/drm/i915/i915_gem_context.c \
+    sys/drm/i915/i915_request.c \
+    sys/drm/i915/i915_getparam.c

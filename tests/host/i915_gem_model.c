@@ -47,6 +47,24 @@ static int failures;
         }                                            \
     } while (0)
 
+/* The calls of contexts, requests and parameters, i915_gem_context.c and
+ * i915_getparam.c, which the table names and no row here makes. */
+#define NOT_HERE(name)                                                      \
+    int32_t name(struct drm_device *dev, void *data, struct drm_file *file) \
+    {                                                                       \
+        (void)dev;                                                          \
+        (void)data;                                                         \
+        (void)file;                                                         \
+        return -ENODEV;                                                     \
+    }
+NOT_HERE(i915_getparam_ioctl)
+NOT_HERE(i915_query_ioctl)
+NOT_HERE(i915_gem_context_create_ioctl)
+NOT_HERE(i915_gem_context_destroy_ioctl)
+NOT_HERE(i915_gem_context_getparam_ioctl)
+NOT_HERE(i915_gem_context_setparam_ioctl)
+NOT_HERE(i915_gem_context_reset_stats_ioctl)
+
 /* ---- the chip ---- */
 
 /* The test's chip: a GTT of 64 MiB whose first 16 MiB are the aperture,

@@ -236,7 +236,20 @@ struct i915_irq {
  * interrupt, which is unmasked while `irq_refs` is above 0. `irq_seen`
  * counts the user interrupts taken. `running` is set once the ring has
  * started.
+ *
+ * Requests (i915_request.c). `requests` lists those emitted and not yet
+ * retired, oldest first, to `requests_tail`; each holds a reference to
+ * its fence there. `lock` guards the list against the user interrupt,
+ * which signals their fences through `irq_notify`; it is the innermost of
+ * the hardware locks, taken with interrupts off. `fence_context` is the
+ * engine's timeline. `last_ce` is the context whose state the chip holds,
+ * with a reference, and `kernel_ce` the GT's own, made with the first
+ * request. `reserved` is the bytes `i915_ring_begin` leaves free for the
+ * breadcrumb of the request being built.
  */
+struct i915_request;
+struct intel_context;
+
 struct i915_engine {
     const char *name;
     uint32_t mmio_base;
@@ -254,6 +267,14 @@ struct i915_engine {
     uint32_t irq_seen;
     wait_queue_t wq;
     uint8_t running;
+    struct spinlock lock;
+    struct i915_request *requests;
+    struct i915_request *requests_tail;
+    uint64_t fence_context;
+    struct intel_context *last_ce;
+    struct intel_context *kernel_ce;
+    uint32_t reserved;
+    void (*irq_notify)(struct drm_i915_private *i915, struct i915_engine *engine);
 };
 
 /*
@@ -262,11 +283,47 @@ struct i915_engine {
  * `ggtt_top` to `ggtt_bottom`, the lowest offset they use. An allocator
  * of the GTT leaves [ggtt_bottom, total) alone. Space comes back only when
  * the last taken is given back, and all of it when the rings stop.
+ *
+ * What the requests need, made with the first (i915_request.c): `scratch`,
+ * the GT's scratch page at `scratch_ggtt`, which flushes and the context
+ * switch write; and `default_state`, the render ring's context image as a
+ * fresh context left it with Linux's context workarounds, which every new
+ * context starts from (Linux's engine->default_state). `ctx_ready` is set
+ * once they are made. `awake` is set while any engine has requests, the
+ * GT unparked. `wedged` is set when the GPU cannot run work, and new
+ * requests and contexts fail with -EIO, as Linux's terminally wedged GT.
+ * `reset_count` counts the GPU's resets, for GET_RESET_STATS.
  */
 struct i915_gt {
     uint64_t ggtt_top;
     uint64_t ggtt_bottom;
     struct i915_engine engine[I915_NUM_ENGINES];
+    uint32_t *scratch;
+    uint32_t scratch_ggtt;
+    uint32_t *default_state;
+    uint8_t ctx_ready;
+    uint8_t awake;
+    uint8_t wedged;
+    uint32_t reset_count;
+};
+
+/*
+ * The slices, subslices and execution units of the GT, as Linux's
+ * hsw_sseu_info_init finds them on GT2: one slice of two subslices, and
+ * 10, 8 or 6 EUs in each by HSW_PAVP_FUSE1. `subslice_mask` is slice 0's.
+ * `edram` is whether the package has eDRAM (HSW_EDRAM_CAP), which Linux's
+ * HAS_WT reports. Read once, at the first query (`i915_sseu_init`).
+ */
+struct i915_sseu {
+    uint8_t ready;
+    uint8_t slice_mask;
+    uint8_t subslice_mask;
+    uint8_t max_slices;
+    uint8_t max_subslices;
+    uint8_t max_eus_per_subslice;
+    uint8_t eu_per_subslice;
+    uint8_t edram;
+    uint16_t eu_total;
 };
 
 /*
@@ -583,6 +640,7 @@ struct drm_i915_private {
     struct intel_opregion opregion;
     struct intel_vbt vbt;
     struct i915_gem gem;
+    struct i915_sseu sseu;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -882,6 +940,7 @@ void i915_gt_pages_unmap(struct drm_i915_private *i915, void *vaddr, uint32_t np
  * return where they go: past the end of the ring the rest is filled with
  * MI_NOOP and the commands start again at 0, as Linux's intel_ring_begin;
  * a ring without room waits, 10 ms at most, for the chip's head to move.
+ * The engine's `reserved` bytes stay free beyond them.
  *
  * @return the address, or NULL when the ring is not running, `ndw` is odd
  *         or too large, the wait reached its bound ("ring space"), or the
@@ -1138,7 +1197,7 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 15
+#define I915_NUM_IOCTLS 22
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
@@ -1450,5 +1509,247 @@ void i915_gem_init_hw(struct drm_i915_private *i915);
 /** Where byte `v` of a linear surface lies once tiled and swizzled, the
  * arithmetic a fence does (i915_fence.c). */
 uint32_t i915_tiled_offset(uint32_t tiling, uint32_t stride, uint32_t swizzle, uint32_t v);
+
+/*
+ * Contexts, requests and parameters (i915_gem_context.c, i915_request.c,
+ * i915_getparam.c), after Linux 6.18's gem/i915_gem_context.c,
+ * gt/intel_context.c, i915_request.c, gt/intel_ring_submission.c,
+ * i915_getparam.c and i915_query.c. Every call is made under the big
+ * kernel lock; those that wait may sleep, and the lock is let go while
+ * they do.
+ */
+
+struct i915_gem_context;
+
+/* The pages of the render ring's context image on Haswell, Linux's
+ * HSW_CXT_TOTAL_SIZE. Linux reads no CXT_SIZE register on Haswell, whose
+ * value it calls not valid there. */
+#define I915_HSW_CXT_PAGES 17
+
+/*
+ * A context's state on one engine, Linux's intel_context. `ctx` is the
+ * user's context it belongs to, with a reference, or NULL for the GT's
+ * own. `refs` counts its references: its context's, the requests made on
+ * it, and the engine's `last_ce` while the chip holds its state. On the
+ * render ring it has an image of I915_HSW_CXT_PAGES pages at `image`,
+ * mapped at `image_ggtt`, made at its first request; `image_valid` is set
+ * once the image holds state to restore (Linux's CONTEXT_VALID_BIT): the
+ * default state, or what the chip will have saved before it next loads
+ * it. `sseu` is the slices and EUs it asks for, the GT's on the render
+ * ring and none elsewhere.
+ */
+struct intel_context {
+    struct drm_i915_private *i915;
+    struct i915_gem_context *ctx;
+    struct i915_engine *engine;
+    uint32_t refs;
+    uint32_t *image;
+    uint32_t image_ggtt;
+    uint8_t image_valid;
+    uint8_t slice_mask;
+    uint8_t subslice_mask;
+    uint8_t min_eus;
+    uint8_t max_eus;
+};
+
+/* A context's flags, Linux's UCONTEXT_ bits. */
+#define I915_CTX_NO_ERROR_CAPTURE 0x1u
+#define I915_CTX_BANNABLE         0x2u
+#define I915_CTX_RECOVERABLE      0x4u
+#define I915_CTX_PERSISTENCE      0x8u
+
+/*
+ * A user's context, Linux's i915_gem_context and, while `proto` is set,
+ * its i915_gem_proto_context. `id` names it in its file, whose list holds
+ * one of its `refs`; lookups and each of its engines' states hold the
+ * rest. A proto context takes its parameters until its first use as a
+ * context, its finalizing, which makes its states: one for each engine,
+ * by the engine's index, or, when the user gave an engine map, one for
+ * each slot of `map`, each an engine's index or -1 for an empty slot.
+ * `nmap` is -1 without a map. `ce` holds the `nce` states, NULL for an
+ * empty slot. `guilty_count` and `active_count` are what GET_RESET_STATS
+ * reports: the batches of this context that hung the GPU, and those lost
+ * in a reset it did not cause, which the reset (78-6a) counts. `closed`
+ * is set once DESTROY or the file's close took it from the file.
+ */
+struct i915_gem_context {
+    struct drm_i915_private *i915;
+    uint32_t id;
+    uint32_t refs;
+    uint32_t flags;
+    uint8_t proto;
+    uint8_t closed;
+    int nmap;
+    int8_t *map;
+    uint32_t nce;
+    struct intel_context **ce;
+    uint32_t guilty_count;
+    uint32_t active_count;
+    struct i915_gem_context *next; /* the file's, by id */
+};
+
+/*
+ * A file's state, Linux's drm_i915_file_private: its contexts by id, the
+ * default context 0 first, and `ban_score`, the score of its contexts'
+ * hangs and bans that 78-6a keeps, at which it may make no more
+ * (I915_CLIENT_SCORE_BANNED).
+ */
+struct i915_file {
+    struct drm_i915_private *i915;
+    struct i915_gem_context *contexts;
+    uint32_t ban_score;
+};
+
+#define I915_CLIENT_SCORE_BANNED 9
+
+/*
+ * A request: commands on one engine for one context, which a breadcrumb
+ * closes, Linux's i915_request. Its fence is its first member, so that the
+ * fence's last reference frees it (i915_fence_ops). The fence's seqno is
+ * `seqno`, which the breadcrumb writes. `ce` is its context's state, with
+ * a reference. When it switches the chip's state from another context's,
+ * `prev_ce` is that one, whose reference it holds until it retires, since
+ * the chip saves into its image until then; `switched` says so, since
+ * `prev_ce` is NULL at the first switch. `set_context` is set when it
+ * loads `ce`'s image, and `was_valid` is whether the image was valid
+ * before. `head`, `postfix` and `tail` are its ring offsets: its first
+ * command, its breadcrumb and past its end.
+ */
+struct i915_request {
+    struct i915_fence fence;
+    struct drm_i915_private *i915;
+    struct i915_engine *engine;
+    struct intel_context *ce;
+    struct intel_context *prev_ce;
+    uint32_t seqno;
+    uint32_t head;
+    uint32_t postfix;
+    uint32_t tail;
+    uint8_t switched;
+    uint8_t set_context;
+    uint8_t was_valid;
+    struct i915_request *next; /* the engine's, oldest first */
+};
+
+/** The driver's open hook: the file's state and its default context, 0.
+ * 0 or -ENOMEM. */
+int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file);
+
+/** The driver's postclose hook: every context of the file closed and its
+ * requests retired as they complete. */
+void i915_driver_postclose(struct drm_device *dev, struct drm_file *file);
+
+/**
+ * The context `id` of `file` with a reference, finalized if it was a
+ * proto context, as Linux's i915_gem_context_lookup, in `*out`.
+ *
+ * @return 0, -ENOENT for no such context, or -ENOMEM.
+ */
+int32_t i915_gem_context_lookup(struct drm_file *file, uint32_t id, struct i915_gem_context **out);
+
+/** Drop a reference to a context; the last frees it. */
+void i915_gem_context_put(struct i915_gem_context *ctx);
+
+/** The state of slot `idx` of a finalized context's engines with a
+ * reference: by engine index, or by the slot of its map. NULL for a slot
+ * past the end or empty. */
+struct intel_context *i915_gem_context_engine(struct i915_gem_context *ctx, uint32_t idx);
+
+/** A new state of `engine` for the context `ctx`, or for the GT with NULL,
+ * with one reference; NULL without memory. */
+struct intel_context *intel_context_create(struct drm_i915_private *i915,
+                                           struct i915_engine *engine,
+                                           struct i915_gem_context *ctx);
+
+/** Take a reference to a context's state. */
+struct intel_context *intel_context_get(struct intel_context *ce);
+
+/** Drop a reference to a context's state; the last frees its image. */
+void intel_context_put(struct intel_context *ce);
+
+/**
+ * Give a render ring's state its image if it has none: the pages mapped at
+ * the LLC's level, from the default state when the GT has recorded it, and
+ * then valid. Nothing on another engine.
+ *
+ * @return 0, -ENOMEM, or -ENOSPC without room in the global GTT.
+ */
+int32_t intel_context_pin_image(struct intel_context *ce);
+
+/* The ioctls, as Linux's of the same names. */
+int32_t i915_gem_context_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
+                                           struct drm_file *file);
+int32_t i915_getparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+
+/** Read the GT's slices, subslices, EUs and eDRAM once, as Linux's
+ * hsw_sseu_info_init and its eDRAM probe. */
+void i915_sseu_init(struct drm_i915_private *i915);
+
+/** The engine of the class and instance programs name (I915_ENGINE_CLASS_),
+ * or NULL, as Linux's intel_engine_lookup_user over the engines that run:
+ * rcs0 and bcs0. */
+struct i915_engine *i915_engine_lookup_user(struct drm_i915_private *i915, uint16_t cls,
+                                            uint16_t instance);
+
+/** The class programs give `engine`, I915_ENGINE_CLASS_RENDER or _COPY. */
+uint16_t i915_engine_uabi_class(const struct i915_engine *engine);
+
+/**
+ * Begin a request on the state `ce`, as Linux's i915_request_create on a
+ * legacy ring: requests that completed retired, the GT unparked, the
+ * GT's own objects and the default state made with the first, then the
+ * caches and TLBs invalidated and the chip switched to `ce`'s state. Room
+ * for the breadcrumb is kept until `i915_request_add`, which must follow
+ * before the caller sleeps. In `*out`, with one reference, the caller's.
+ *
+ * @return 0; -EIO when the GPU is wedged or the ring refuses the commands;
+ *         -ENOMEM; -ENOSPC without room in the GTT for an image.
+ */
+int32_t i915_request_create(struct intel_context *ce, struct i915_request **out);
+
+/** Room for `ndw` dwords of the request's commands in its ring, as
+ * Linux's intel_ring_begin, or NULL when the ring cannot give it. */
+uint32_t *i915_request_begin(struct i915_request *rq, uint32_t ndw);
+
+/**
+ * Close the request with its breadcrumb and hand it to the chip, as
+ * Linux's i915_request_add: the engine's list takes a reference.
+ *
+ * @return 0, or -EIO when the ring refused the breadcrumb, when the
+ *         request's commands are taken back and its fence signals with
+ *         -EIO.
+ */
+int32_t i915_request_add(struct i915_request *rq);
+
+/** Whether the chip has written the request's breadcrumb. */
+int i915_request_completed(const struct i915_request *rq);
+
+/**
+ * Wait for the request for `timeout_ns`, for ever when it is negative, as
+ * Linux's i915_request_wait; the breadcrumb is read again at each second
+ * and at the timeout, in case an interrupt was lost.
+ *
+ * @return 0 once it completed, -ETIME at the timeout (at once for 0), or
+ *         -EINTR for a signal when `intr` is set.
+ */
+int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns);
+
+/** Drop a reference to a request. */
+void i915_request_put(struct i915_request *rq);
+
+/** Retire every request whose breadcrumb the chip has written, oldest
+ * first on each engine, and park the GT once every engine is idle, as
+ * Linux's intel_gt_retire_requests. */
+void i915_retire_requests(struct drm_i915_private *i915);
+
+/** The device is unplugged: every request not completed fails with -EIO,
+ * all retire, and the GT's own states, scratch page and default state go.
+ * Before the rings stop. */
+void i915_requests_unplug(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */

@@ -222,15 +222,18 @@ static int32_t i915_ring_start(struct drm_i915_private *i915, struct i915_engine
     return 0;
 }
 
-/** The user interrupt of the engine `data`: counted, and its waiters
- * woken, each of which reads the status page itself. */
+/** The user interrupt of the engine `data`: counted, its requests'
+ * fences signalled through `irq_notify`, and its waiters woken, each of
+ * which reads the status page itself. */
 static void i915_ring_irq(struct drm_i915_private *i915, uint32_t iir, void *data)
 {
     struct i915_engine *e = (struct i915_engine *)data;
 
-    (void)i915;
     (void)iir;
     e->irq_seen++;
+    if (e->irq_notify) {
+        e->irq_notify(i915, e);
+    }
     wq_wake_all(&e->wq);
 }
 
@@ -365,8 +368,14 @@ uint32_t *i915_ring_begin(struct i915_engine *e, struct drm_i915_private *i915, 
         i915_hw_fault(&i915->hw, I915_FAULT_SUBMIT) < 0) {
         return 0;
     }
+    /* The room asked for and the bytes kept for the open request's
+     * breadcrumb, which, when they do not fit before the end, need the
+     * wrap as well, as Linux's intel_ring_begin. */
     remain = e->ring_size - e->tail;
-    need = bytes > remain ? bytes + remain : bytes;
+    need = bytes + e->reserved;
+    if (need > remain) {
+        need = bytes > remain ? need + remain : e->reserved + remain;
+    }
     if (i915_ring_space(e->head, e->tail, e->ring_size) < need) {
         room.i915 = i915;
         room.e = e;
