@@ -55,9 +55,10 @@
 static int fails;
 
 /* A host test build of store.c's settling time, after which a file's digest
- * may be kept, and its counts of the reads that hashed a file and of the
- * copies it made. */
-extern long long etude_store_settle_ns;
+ * may be kept, the length from which a file is published as a link of
+ * itself, and its counts of the reads that hashed a file and of the copies
+ * it made. */
+extern long long etude_store_settle_ns, etude_store_link_min;
 extern unsigned long etude_store_hashed, etude_store_copied;
 
 /* Nonzero makes store.c hash on the portable code of utils/sha256.c alone,
@@ -1059,6 +1060,85 @@ static void sparse_hex(const unsigned char *data, char hex[ETUDE_DIGEST_HEX + 1]
 }
 
 /**
+ * A file at least etude_store_link_min long is published as a hard link of
+ * itself made read-only: it takes the place of an object of its content that
+ * is a copy, and is neither hashed nor copied again once its digest is kept.
+ */
+static void test_link(void)
+{
+    const char *cache = fix_path("link-digests"), *src = fix_path("link-src");
+    char d[ETUDE_DIGEST_HEX + 1], want[ETUDE_DIGEST_HEX + 1], path[PATH_MAX];
+    struct etude_store *s = etude_store_open(fix_path("link-store"));
+    long long link_min = etude_store_link_min;
+    unsigned long hashed, copied;
+    struct stat a, b;
+    uint64_t size = 0;
+
+    CHECK(s != NULL && etude_store_digests(s, cache) == 0 && write_text(src, "linked\n") == 0,
+          "link: store");
+    if (s == NULL)
+        return;
+    etude_store_settle_ns = 0;
+    sha_hex("linked\n", 7, want);
+    CHECK(etude_store_put(s, src, NULL, d, NULL) == 0 && strcmp(d, want) == 0 &&
+              etude_store_path(s, want, path, sizeof(path)) == 0 && stat(path, &a) == 0 &&
+              stat(src, &b) == 0 && a.st_ino != b.st_ino,
+          "link: a short file is copied");
+    etude_store_link_min = 1;
+    hashed = etude_store_hashed;
+    copied = etude_store_copied;
+    CHECK(etude_store_put(s, src, want, d, &size) == 0 && size == 7 &&
+              etude_store_hashed == hashed && etude_store_copied == copied && stat(path, &a) == 0 &&
+              stat(src, &b) == 0 && a.st_ino == b.st_ino && (b.st_mode & 07777) == 0444,
+          "link: the file takes the place of its copy, read-only");
+    CHECK(etude_store_put(s, src, NULL, d, NULL) == 0 && strcmp(d, want) == 0 &&
+              etude_store_check(s, want, NULL) == 0 && etude_store_hashed == hashed &&
+              etude_store_copied == copied,
+          "link: a kept file is neither hashed nor copied");
+    etude_store_link_min = link_min;
+    etude_store_close(s);
+}
+
+/**
+ * The file test_link published as a link of itself is not written through,
+ * and a rebuild that renames a new file over it leaves its object as it was
+ * and publishes the new file as a link of its own.
+ */
+static void test_link_rebuild(void)
+{
+    const char *dir = fix_path("link-store"), *src = fix_path("link-src");
+    const char *next = fix_path("link-next");
+    char d[ETUDE_DIGEST_HEX + 1], want[ETUDE_DIGEST_HEX + 1], other[ETUDE_DIGEST_HEX + 1];
+    char buf[64];
+    struct etude_store *s = etude_store_open(dir);
+    long long link_min = etude_store_link_min;
+    int fd;
+
+    CHECK(s != NULL && etude_store_digests(s, fix_path("link-digests")) == 0, "link: rebuild");
+    if (s == NULL)
+        return;
+    etude_store_link_min = 1;
+    sha_hex("linked\n", 7, want);
+    sha_hex("again\n", 6, other);
+    if (geteuid() != 0) {
+        fd = open(src, O_WRONLY);
+        CHECK(fd < 0 && errno == EACCES, "link: the file is not written through");
+        if (fd >= 0)
+            close(fd);
+    }
+    CHECK(write_text(next, "again\n") == 0 && rename(next, src) == 0 &&
+              etude_store_put(s, src, NULL, d, NULL) == 0 && strcmp(d, other) == 0,
+          "link: a rebuild is published");
+    CHECK(read_object(s, want, buf, sizeof(buf)) == 7 && strcmp(buf, "linked\n") == 0 &&
+              etude_store_check(s, want, NULL) == 0 && etude_store_check(s, other, NULL) == 0,
+          "link: a rebuild leaves the object as it was");
+    CHECK(in_store(dir, "objects") == 2 && in_store(dir, "tmp") == 0,
+          "link: no partial file is left");
+    etude_store_link_min = link_min;
+    etude_store_close(s);
+}
+
+/**
  * Publish and copy a sparse file whose data begin inside a chunk and which
  * ends in a hole: the object and the copy keep its holes, its size and its
  * digest.
@@ -2006,6 +2086,15 @@ int main(int argc, char **argv)
         return 1;
     }
     signal(SIGPIPE, SIG_IGN);
+    if (argc == 2 && strcmp(argv[1], "--link-only") == 0) {
+        test_link();
+        test_link_rebuild();
+        if (fails != 0)
+            return 1;
+        fix_passed();
+        printf("etude_artifact_hosttest: pass\n");
+        return 0;
+    }
     test_put();
     test_digests();
     test_digests_settle();
@@ -2018,6 +2107,8 @@ int main(int argc, char **argv)
     test_digests_write();
     test_digests_two_writers();
     test_sparse();
+    test_link();
+    test_link_rebuild();
     test_range();
     test_overlay();
     test_interrupt();

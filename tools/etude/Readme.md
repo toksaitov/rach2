@@ -791,7 +791,9 @@ Versions of one admission format share a ledger. A version refuses a ledger file
 
 ### Artifacts
 
-An artifact is a regular file that preparation makes and a case reads: a kernel, an image, a probe or a scenario. The store keeps each as an object named by the SHA-256 of its content, and preparation is a graph of nodes, each of which makes one artifact. The store copies a file in chunks of 1 MiB and leaves a chunk of zeros a hole, so that a sparse disk image keeps its holes as an object and in a private copy. A store is a directory:
+An artifact is a regular file that preparation makes and a case reads: a kernel, an image, a probe or a scenario. The store keeps each as an object named by the SHA-256 of its content, and preparation is a graph of nodes, each of which makes one artifact. The store copies a file in chunks of 1 MiB and leaves a chunk of zeros a hole, so that a sparse disk image keeps its holes as an object and in a private copy.
+
+On Linux and macOS a file of 256 MiB or more, such as `gnu-test.disk`, is not copied: its object is a hard link of the file itself, which the store makes read-only, so that a tree keeps one copy of a disk of gigabytes. The store waits until the file has gone two seconds unchanged, hashes it in place unless its digest is kept, links it under a partial name in `tmp/`, checks that the link is the file it read and that the file is still as it was read, and renames the link to the object's name, over an object of the same content that is a copy. A rebuild that writes a new file and renames it over the old one, as every rule of the Makefiles does, leaves the object as it was; a write through the file is refused for its mode. Where the store is on another file system, the file belongs to another account or it changed, the file is copied. On Windows every file is copied. A store is a directory:
 
 | Path | Contents |
 | --- | --- |
