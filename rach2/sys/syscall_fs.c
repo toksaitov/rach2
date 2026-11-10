@@ -7811,6 +7811,10 @@ static int32_t open_path(const char *name, int flags)
     return rc;
 }
 
+static int synth_readlink(const struct vpath *vp, char *link);
+static int32_t readlink_put(int n, char *link, char __user *ubuf, uint32_t bufsiz);
+static int user_path_empty(const char __user *upath);
+
 /**
  * The core of readlink(2) and readlinkat(2): copy the target of the link at
  * `name`, leading '/' stripped, into the user's `ubuf` of `bufsiz` bytes,
@@ -7839,7 +7843,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
     struct vfs_ref ref;
     const struct vpath *svp;
     char *link;
-    int n, pid, kind;
+    int n, kind;
 
     if (!ubuf || bufsiz == 0) {
         return -EINVAL;
@@ -7863,17 +7867,29 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
                 ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, VFS_PATH_MAX)
                 : -EINVAL;
         vfs_ref_release(&ref);
-        goto out;
+    } else {
+        vp = *svp;
+        vfs_ref_release(&ref);
+        n = synth_readlink(&vp, link);
     }
-    vp = *svp;
-    vfs_ref_release(&ref);
-    kind = vp.kind;
+    return readlink_put(n, link, ubuf, bufsiz);
+}
 
-    if (kind == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF && vp.tid == 0) {
+/**
+ * The target of the synthetic link `vp` into `link`, a path page, with no
+ * NUL: its length, -EINVAL for a node that is no link, or the error
+ * `do_readlink` describes.
+ */
+static int synth_readlink(const struct vpath *vp, char *link)
+{
+    int n, pid;
+    int kind = vp->kind;
+
+    if (kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0) {
         uint32_t uv;
         char t[12];
         int tn = 0;
-        pid = procfs_resolve_pid(vp.pid);
+        pid = procfs_resolve_pid(vp->pid);
         n = 0;
         uv = pid < 0 ? 0u : pid_seen((uint32_t)pid);
         if (pid < 0) {
@@ -7890,30 +7906,38 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
             }
         }
     } else if (kind == VNODE_PROC_FD_LINK) {
-        pid = procfs_resolve_id(&vp);
+        pid = procfs_resolve_id(vp);
         n = pid < 0                 ? -ENOENT
             : !procfs_may_read(pid) ? -EACCES
-                                    : procfs_readlink_fd(pid, vp.procfd, link, VFS_PATH_MAX);
+                                    : procfs_readlink_fd(pid, vp->procfd, link, VFS_PATH_MAX);
     } else if (kind == VNODE_PROC_NS_LINK) {
-        pid = procfs_resolve_id(&vp);
-        n = pid < 0 ? -ENOENT : procfs_readlink_ns(pid, vp.procfd, link, VFS_PATH_MAX);
+        pid = procfs_resolve_id(vp);
+        n = pid < 0 ? -ENOENT : procfs_readlink_ns(pid, vp->procfd, link, VFS_PATH_MAX);
     } else if (kind == VNODE_PROC_EXE) {
-        pid = procfs_resolve_id(&vp);
+        pid = procfs_resolve_id(vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, link, VFS_PATH_MAX);
     } else if (kind == VNODE_PROC_CWD || kind == VNODE_PROC_ROOT) {
-        pid = procfs_resolve_id(&vp);
+        pid = procfs_resolve_id(vp);
         n = pid < 0 ? -ENOENT
                     : procfs_readlink_dir(pid, kind == VNODE_PROC_ROOT, link, VFS_PATH_MAX);
     } else if (kind == VNODE_SYS_LINK) {
-        n = synth_sys_readlink(&vp, link, VFS_PATH_MAX);
+        n = synth_sys_readlink(vp, link, VFS_PATH_MAX);
     } else if (kind == VNODE_DEV_LINK) {
         n = (int)k_strlen(SYNTH_DEV_LOG_TARGET);
         k_memcpy(link, SYNTH_DEV_LOG_TARGET, (uint32_t)n);
     } else {
         n = -EINVAL;
     }
+    return n;
+}
 
-out:
+/**
+ * Finish a readlink: copy the `n` bytes of `link` that fit the user's
+ * `ubuf` of `bufsiz` bytes and give the page back; the count, or `n` itself
+ * when it is an errno, or -EFAULT.
+ */
+static int32_t readlink_put(int n, char *link, char __user *ubuf, uint32_t bufsiz)
+{
     if (n >= 0 && (uint32_t)n > bufsiz) {
         n = (int)bufsiz;
     }
@@ -7922,6 +7946,60 @@ out:
     }
     path_buf_put(link);
     return n;
+}
+
+/**
+ * readlinkat(2) with an empty path: the target of the link the descriptor
+ * `dirfd` is open on, an O_PATH descriptor opened with O_NOFOLLOW, into the
+ * user's `ubuf` of `bufsiz` bytes, as `do_readlink` copies it.
+ * steam-runtime-tools resolves each component of a path this way. A
+ * descriptor on anything but a link, AT_FDCWD among them, is -ENOENT, as
+ * on Linux; one not open is -EBADF.
+ */
+static int32_t fd_readlink(int dirfd, char __user *ubuf, uint32_t bufsiz)
+{
+    fd_entry_t *entry;
+    struct vfs_mount *mnt;
+    struct vfs_stat vst;
+    char *link;
+    int n;
+
+    if (!ubuf || bufsiz == 0) {
+        return -EINVAL;
+    }
+    if (dirfd == AT_FDCWD) {
+        return -ENOENT;
+    }
+    entry = fd_get(current_proc->fds, dirfd);
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_SYNTH_PATH && entry->priv) {
+        link = path_buf_get();
+        if (!link) {
+            return -ENOMEM;
+        }
+        n = synth_readlink((const struct vpath *)entry->priv, link);
+        return readlink_put(n == -EINVAL ? -ENOENT : n, link, ubuf, bufsiz);
+    }
+    if (entry->type != FD_TYPE_FILE || !entry->ofd || !entry->ofd->vmnt ||
+        mnt_is_root(entry->ofd->vmnt)) {
+        return -ENOENT;
+    }
+    mnt = entry->ofd->vmnt;
+    n = vfs_getattr(mnt, entry->ofd->vnode, &vst);
+    if (n != 0) {
+        return n;
+    }
+    if ((vst.mode & S_IFMT) != 0120000u || !mnt->type->ops->readlink) { /* S_IFLNK */
+        return -ENOENT;
+    }
+    link = path_buf_get();
+    if (!link) {
+        return -ENOMEM;
+    }
+    n = mnt->type->ops->readlink(mnt, entry->ofd->vnode, link, VFS_PATH_MAX);
+    return readlink_put(n, link, ubuf, bufsiz);
 }
 
 /**
@@ -7953,7 +8031,9 @@ long sys_readlink(isr_params_t *params)
 /**
  * readlinkat(2): readlink(2) of a path relative to the directory descriptor
  * in argument 0, or to the working directory for AT_FDCWD; the path, the
- * buffer and its size are arguments 1 to 3.
+ * buffer and its size are arguments 1 to 3. An empty path reads the link
+ * the descriptor itself is open on (`fd_readlink`), as Linux does without
+ * a flag.
  */
 long sys_readlinkat(isr_params_t *params)
 {
@@ -7967,6 +8047,10 @@ long sys_readlinkat(isr_params_t *params)
 
     if (!current_proc || !upath) {
         return -EFAULT;
+    }
+    rc = user_path_empty(upath);
+    if (rc != 0) {
+        return rc < 0 ? rc : fd_readlink(dirfd, ubuf, bufsiz);
     }
     rc = path_from_user_dir(dirfd, upath, &path, &dir);
     if (rc != 0) {

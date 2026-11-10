@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd November 10, 2026
 .Dt SYMLINK 2
 .Os
 .Sh NAME
@@ -117,6 +117,20 @@ from
 .Fn readlinkat
 does the same for
 .Fa path .
+An empty
+.Fa path
+makes
+.Fn readlinkat
+read the symbolic link that
+.Fa dirfd
+itself is open on, a descriptor opened with
+.Dv O_PATH
+and
+.Dv O_NOFOLLOW ,
+as on Linux; a descriptor on anything else, or
+.Dv AT_FDCWD ,
+returns
+.Er ENOENT .
 .Dv AT_FDCWD
 (-100) selects the current working directory.
 An absolute path ignores
