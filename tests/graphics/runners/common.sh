@@ -1,7 +1,8 @@
 #!/bin/sh
 # common.sh: what the runners share, sourced by webgl.sh, video.sh and
 # deqp.sh inside the guest, Rach2's or Debian's, and run on the host as
-# `sh common.sh host` for the host's half of a run's record.
+# `sh common.sh host`, or as the cases' artifact `common host`, for the
+# host's half of a run's record.
 # shellcheck shell=sh
 #
 # A run writes its record to $RUNNER_OUT/record, one `NAME VALUE` a line, as
@@ -302,6 +303,7 @@ runner_host()
     fi
 }
 
-if [ "${0##*/}" = common.sh ] && [ "${1:-}" = host ]; then
-    runner_host
-fi
+# Run as the cases' artifact, the script is named `common`.
+case "${0##*/}:${1:-}" in
+common.sh:host | common:host) runner_host ;;
+esac
