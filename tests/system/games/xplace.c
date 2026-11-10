@@ -392,12 +392,16 @@ static int grab(Display *dpy, Window win)
 /**
  * Map WIN and wait until it is mapped and, unless NOWAIT, focused, answering
  * WM_TAKE_FOCUS; with NOWAIT, until the display has been quiet for a while.
- * Then take what the manager sent with its configuration and draw.
+ * Then take what the manager sent with its configuration and draw. Unless
+ * NOWAIT, grab the pointer at the first Expose, before the first drawing: the
+ * compositor has then made the window fullscreen but painted nothing of it,
+ * so its pointer focus is still on what lies under the window, which is where
+ * a game that captures the mouse as it starts finds it.
  */
 static void map_window(Display *dpy, Window win, GC gc, int width, int height, int nowait)
 {
     Atom take_focus = XInternAtom(dpy, "WM_TAKE_FOCUS", False);
-    int mapped = 0, focused = 0;
+    int mapped = 0, focused = 0, grabbed = 0;
     XEvent ev;
 
     XMapWindow(dpy, win);
@@ -407,9 +411,13 @@ static void map_window(Display *dpy, Window win, GC gc, int width, int height, i
             mapped = 1;
         else if (ev.type == FocusIn && ev.xfocus.window == win)
             focused = 1;
-        else if (ev.type == Expose && ev.xexpose.count == 0)
+        else if (ev.type == Expose && ev.xexpose.count == 0) {
+            if (!nowait && !grabbed) {
+                printf("xplace: grab %d\n", grab(dpy, win));
+                grabbed = 1;
+            }
             draw(dpy, win, gc, width, height);
-        else if (ev.type == ClientMessage && (Atom)ev.xclient.data.l[0] == take_focus)
+        } else if (ev.type == ClientMessage && (Atom)ev.xclient.data.l[0] == take_focus)
             XSetInputFocus(dpy, win, RevertToParent, (Time)ev.xclient.data.l[1]);
     }
     /* The manager configures the window before it gives focus; take what
@@ -424,8 +432,11 @@ static void map_window(Display *dpy, Window win, GC gc, int width, int height, i
 }
 
 /**
- * Sum the raw motion of every master device's sources until a key is pressed
- * in WIN, then print the sums and where the pointer is. OPCODE is XInput's.
+ * Sum the raw motion of every master device's sources until a key or a mouse
+ * button is pressed in WIN, then print the sums and where the pointer is. A
+ * button comes from the mouse after its motion, in order; a key comes from
+ * another device, and the compositor may read it before motion the mouse
+ * sent first. OPCODE is XInput's.
  */
 static void count_motion(Display *dpy, Window win, GC gc, int width, int height, int opcode)
 {
@@ -462,6 +473,9 @@ static void count_motion(Display *dpy, Window win, GC gc, int width, int height,
             mx = ev.xmotion.x_root, my = ev.xmotion.y_root;
         } else if (ev.type == KeyPress) {
             printf("xplace: key %u\n", ev.xkey.keycode);
+            break;
+        } else if (ev.type == ButtonPress) {
+            printf("xplace: button %u\n", ev.xbutton.button);
             break;
         }
     }
@@ -544,13 +558,15 @@ static int query(const char *name)
  * Wine program's, and exits. -p waits until the server has the seat's pointer
  * device, names it and exits. Map a WIDTH by HEIGHT window at 0,0 with
  * the hints Wine sets on a fullscreen window and no _NET_WM_STATE, after an
- * emulated mode of that size when the screen's is another, and wait for
- * focus. Report its place, its frame, its focus and a confined pointer grab,
- * print "xplace: ready", and sum the raw motion each device sends until a
- * key is pressed. With -n it waits for the map and two seconds without events
- * instead of focus, and exits after the grab at the end of its standard
- * input. Exits 0, or 1 on a failure to
- * open the display, set the mode or select raw events.
+ * emulated mode of that size when the screen's is another, take a confined
+ * pointer grab at the window's first Expose and wait for focus. Report the
+ * grab, the window's place, its frame and its focus, print "xplace: ready",
+ * and sum the raw motion each device sends until a key or a mouse button is
+ * pressed. With -n
+ * it waits for the map and two seconds without events instead of focus,
+ * grabs after its report, and exits at the end of its standard input. Exits
+ * 0, or 1 on a failure to open the display, set the mode or select raw
+ * events.
  */
 int main(int argc, char **argv)
 {
@@ -586,15 +602,16 @@ int main(int argc, char **argv)
         printf("xplace: mode %dx%d\n", width, height);
     }
     attr.background_pixel = BlackPixel(dpy, DefaultScreen(dpy));
-    attr.event_mask = ExposureMask | StructureNotifyMask | FocusChangeMask | KeyPressMask;
+    attr.event_mask =
+        ExposureMask | StructureNotifyMask | FocusChangeMask | KeyPressMask | ButtonPressMask;
     win = XCreateWindow(dpy, root, 0, 0, (unsigned)width, (unsigned)height, 0, CopyFromParent,
                         InputOutput, CopyFromParent, CWBackPixel | CWEventMask, &attr);
     set_hints(dpy, win);
     gc = XCreateGC(dpy, win, 0, NULL);
     map_window(dpy, win, gc, width, height, nowait);
     report_place(dpy, root, win);
-    printf("xplace: grab %d\n", grab(dpy, win));
     if (nowait) {
+        printf("xplace: grab %d\n", grab(dpy, win));
         /* The window stays while a caller reads the compositor's state. */
         while (getchar() != EOF)
             continue;
@@ -602,7 +619,7 @@ int main(int argc, char **argv)
     }
     count_motion(dpy, win, gc, width, height, opcode);
     /* The manager may still move the frame after the focus arrives; the
-     * place it holds by the key is the one that counts. */
+     * place it holds by the key or the click is the one that counts. */
     report_place(dpy, root, win);
     XCloseDisplay(dpy);
     return 0;

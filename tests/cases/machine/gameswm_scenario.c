@@ -59,6 +59,15 @@ static void move(struct net_case *u, struct net_boot *b, int dx, int dy)
     qmp(u, b, "input-send-event", arguments);
 }
 
+/** Press and release the mouse's left button. */
+static void click(struct net_case *u, struct net_boot *b)
+{
+    qmp(u, b, "input-send-event",
+        "{\"events\": [{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]}");
+    qmp(u, b, "input-send-event",
+        "{\"events\": [{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]}");
+}
+
 /**
  * Move the pointer by DX, DY and wait until wm.py's count of the kernel's
  * motion reaches X, Y, the sums of the moves so far. QEMU's PS/2 mouse keeps
@@ -78,7 +87,8 @@ static void move_to(struct net_case *u, struct net_boot *b, int dx, int dy, int 
 /**
  * Run wm.py's ROW through the guest channel and act on each of its ready
  * lines in turn: move the pointer once so that Weston's seat has one, move
- * it while xplace counts raw motion, and press Escape to end the window.
+ * it while xplace counts raw motion and click to end the count, and press
+ * Escape to end each other window.
  * wm.py checks the screen itself, since QEMU's screendump has no surface
  * while virgl scans out a GL resource.
  */
@@ -116,13 +126,16 @@ static void row(struct net_case *u, struct net_boot *b, const char *row)
         }
         if (strcmp(*readies, "xplace-1366") == 0) {
             /* wm.py's MOTION: -2000 on x, which pushes the pointer to the
-             * window's left edge, and +200 on y. The i8042 passes the key's
-             * bytes before the mouse's that wait, so the key follows the
-             * kernel's count of the last move. */
+             * window's left edge, and +200 on y. A click ends xplace's
+             * count: it follows the moves through the mouse, where a key,
+             * from another device, can reach the X client before the last
+             * of them. */
             for (i = 1; i <= 10; i++)
                 move_to(u, b, -200, 0, -200 * i, 0);
             for (i = 1; i <= 5; i++)
                 move_to(u, b, 0, 40, -2000, 40 * i);
+            click(u, b);
+            continue;
         }
         escape(u, b);
     }
