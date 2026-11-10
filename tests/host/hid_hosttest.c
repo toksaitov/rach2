@@ -308,9 +308,12 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
     copy_string(model_report_phys, hid->phys, sizeof(model_report_phys));
 }
 
-/** The LED report: one byte of the LED_* bits, wValue 0x0200, or -1
- * without `model_leds`. */
-int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value)
+/* The LEDs beyond the first three that programs lit, a bit each. */
+static unsigned int model_lit;
+
+/** The LED report: one byte of the console's LED_* bits and `model_lit`,
+ * wValue 0x0200, or -1 without `model_leds`. */
+int hidinput_led_report(struct hid_dev *hid, unsigned int locks, uint8_t *out, int size, int *value)
 {
     int i;
 
@@ -319,20 +322,10 @@ int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, in
         return -1;
     }
     for (i = 0; i < model_led_len; i++) {
-        out[i] = (uint8_t)leds;
+        out[i] = (uint8_t)(locks | model_lit);
     }
     *value = 0x0200;
     return model_led_len;
-}
-
-/* The LEDs beyond the first three that programs lit, a bit each. */
-static unsigned int model_lit;
-
-/** Answer `model_lit`. */
-unsigned int hidinput_leds_lit(struct hid_dev *hid)
-{
-    (void)hid;
-    return model_lit;
 }
 
 /** The multiplier report, Feature report 2 at 1, or -1 without

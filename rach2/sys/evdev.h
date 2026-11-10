@@ -46,6 +46,7 @@ struct evdev;
 #define EV_SND        0x12
 #define EV_REP        0x14
 #define EV_FF         0x15
+#define EV_PWR        0x16
 #define EV_CNT        0x20
 #define SYN_REPORT    0
 #define SYN_CONFIG    1

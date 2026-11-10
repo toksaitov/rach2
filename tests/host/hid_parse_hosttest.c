@@ -352,6 +352,12 @@ static const uint8_t media_keyboard[] = {
     0x02, 0x95, 0x06, 0x81, 0x01, 0xc0};
 
 /* A keyboard and a mouse in one device, two input devices. */
+/* A Consumer Control with Num, Caps and Scroll Lock LEDs and no keys:
+ * an event device that is not a keyboard. */
+static const uint8_t lamp[] = {0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x05, 0x08, 0x19,
+                               0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
+                               0x95, 0x03, 0x91, 0x02, 0x95, 0x05, 0x91, 0x01, 0xc0};
+
 static const uint8_t combo[] = {
     0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, 0x01, 0x05, 0x07, 0x19, 0x04, 0x29, 0x05, 0x15, 0x00,
     0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02, 0x95, 0x06, 0x81, 0x01, 0xc0, 0x05, 0x01, 0x09,
@@ -916,12 +922,13 @@ static void rows_keyboard_leds(struct hid_dev *hid)
           hidinput_led_report(hid, (1u << LED_NUML) | (1u << LED_CAPSL), out, sizeof(out),
                               &value) == 1 &&
               out[0] == 0x03 && value == 0x0200);
-    CHECK("keyboard: Kana is bit 4",
+    CHECK("keyboard: the console's Kana bit is not sent",
           hidinput_led_report(hid, 1u << LED_KANA, out, sizeof(out), &value) == 1 &&
-              out[0] == 0x10);
+              out[0] == 0x00);
     hid->inputs[0].dev->lit = 1u << LED_CAPSL | 1u << LED_KANA;
-    CHECK("keyboard: a program's Kana LED is the device's, Caps Lock the console's",
-          hidinput_leds_lit(hid) == 1u << LED_KANA);
+    CHECK("keyboard: a program's Kana LED is bit 4, Caps Lock the console's",
+          hidinput_led_report(hid, 1u << LED_NUML, out, sizeof(out), &value) == 1 &&
+              out[0] == 0x11);
     hid->inputs[0].dev->lit = 0;
     CHECK("keyboard: no multiplier report",
           hidinput_multiplier_report(hid, out, sizeof(out), &value) == -1);
@@ -974,11 +981,12 @@ static void rows_map_media(void)
     drop(hid);
 }
 
-/** Applications that make two event devices, and none. */
+/** Applications that make two event devices, one and none. */
 static void rows_map_apps(void)
 {
     struct hid_dev *hid;
-    int inputs;
+    uint8_t out[8];
+    int inputs, value = 0;
 
     ndevs = 0;
     hid = connect(combo, sizeof(combo), "ACME Combo", &inputs);
@@ -1001,6 +1009,18 @@ static void rows_map_apps(void)
     ndevs = 0;
     hid = connect(vendor_only, sizeof(vendor_only), "ACME Gadget", &inputs);
     CHECK("vendor: a vendor application makes no event device", inputs == -1 && ndevs == 0);
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(lamp, sizeof(lamp), "ACME Lamp", &inputs);
+    CHECK("lamp: three lock LEDs and no keys make an event device that is not a keyboard",
+          inputs == 1 && ndevs == 1 && !devs[0].keyboard);
+    hid->inputs[0].dev->lit = 1u << LED_CAPSL;
+    CHECK("lamp: its LEDs are those a program lit, not the console's locks",
+          hidinput_led_report(hid, (1u << LED_NUML) | (1u << LED_SCROLLL), out, sizeof(out),
+                              &value) == 1 &&
+              out[0] == 0x02 && value == 0x0200);
+    hid->inputs[0].dev->lit = 0;
     drop(hid);
 }
 
