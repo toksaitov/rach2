@@ -185,6 +185,11 @@ int timer_clock_check(void);
  */
 uint32_t timer_calibrate(void);
 
+/** Convert processor cycles to microseconds at the calibrated TSC rate.
+ * Returns 0 before calibration or when no invariant counter was measured.
+ * This conversion reads no hardware and is safe with interrupts off. */
+uint64_t timer_cycles_us(uint64_t cycles);
+
 /** The reference that keeps the clock, "hpet", "pm timer" or "tsc", or NULL
  * when the counter under the tick keeps it. */
 const char *timer_reference(void);

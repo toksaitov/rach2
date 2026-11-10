@@ -62,6 +62,11 @@ void bkl_take(int depth);
 /** The processors started and taking work, the boot processor counted. */
 int smp_cpu_count(void);
 
+/** Read the sum and longest big-lock acquisition in microseconds, and the
+ * number of user TLB shootdown calls since boot. The caller holds the big
+ * lock. Wait times are zero without a calibrated invariant TSC. */
+void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint64_t *shootdowns);
+
 /** Answer the requests other processors left this one: stop for good, drop
  * a translation or every one, or give up a page directory for the
  * kernel's. Called with interrupts off. */

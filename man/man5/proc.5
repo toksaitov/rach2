@@ -1213,6 +1213,11 @@ A sleep that ran its whole length is not counted.
 .It Li latency_timer_us
 Longest gap between two timer passes, which advance the tick count and fire
 the timeouts due, in microseconds.
+.It Li bkl_wait_us , bkl_wait_max_us
+Sum and longest acquisition of the big kernel lock, in microseconds since
+boot, measured by the processor's time-stamp counter.
+These include time when a hypervisor stopped a waiting processor.
+They are zero when no invariant counter was calibrated.
 .It Li latency_disk_us
 Longest block request from acceptance to completion, in microseconds.
 .It Li latency_diskwait_us

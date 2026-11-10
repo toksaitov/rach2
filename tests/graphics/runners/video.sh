@@ -2,7 +2,7 @@
 # video.sh: play video clips in a browser inside a graphics guest, Rach2's or
 # Debian's, and count the frames it showed and dropped.
 #
-#   video.sh [-b BROWSER] [-c CLIPS] [-w WARMUP] [-r REPS] [-o OUT] CLIP...
+#   video.sh [-b BROWSER] [-c CLIPS] [-w WARMUP] [-r REPS] [-o OUT] [-t] CLIP...
 #   video.sh make DIR
 #
 # Plays each CLIP, a name of the table below found in CLIPS
@@ -12,6 +12,8 @@
 # new video element, through video.html; each clip has a new browser. The
 # warm-up is played and kept but not counted: browser numbers in QEMU vary
 # between runs, and the repetitions show by how much.
+# With -t, CLIP is one name, and every clip up to it in the reference's
+# H.264, VP9, AV1 order plays first in the same boot and compositor.
 #
 # The decoder is named by the browser: Chromium's by the kVideoDecoderName
 # that its DevTools protocol's Media domain reports (cdp.py), Firefox's by
@@ -77,19 +79,30 @@ fi
 # shellcheck source=common.sh
 . "$RUNNER_DIR/common.sh"
 
-browser=chromium clips=/usr/share/graphics-clips warmup=1 reps=3 out=.
+browser=chromium clips=/usr/share/graphics-clips warmup=1 reps=3 out=. through=0
 silence=120
-while getopts b:c:w:r:o: o; do
+while getopts b:c:w:r:o:t o; do
     case $o in
         b) browser=$OPTARG ;;
         c) clips=$OPTARG ;;
         w) warmup=$OPTARG ;;
         r) reps=$OPTARG ;;
         o) out=$OPTARG ;;
+        t) through=1 ;;
         *) exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
+if [ "$through" -eq 1 ]; then
+    [ $# -eq 1 ] || { echo 'video: -t needs one clip' >&2; exit 2; }
+    target=$1
+    clip "$target" || { echo "video: no clip $target" >&2; exit 2; }
+    set --
+    for name in $CLIPS; do
+        set -- "$@" "$name"
+        [ "$name" != "$target" ] || break
+    done
+fi
 [ $# -ge 1 ] || { echo "usage: video.sh [-b BROWSER] [-c CLIPS] [-w WARMUP] [-r REPS] [-o OUT] CLIP..." >&2; exit 2; }
 case $browser in chromium|firefox) ;; *) echo "video: no browser $browser" >&2; exit 2 ;; esac
 for name; do

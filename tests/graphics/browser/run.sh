@@ -10,7 +10,7 @@ case $mode in
     video-*)
         clip=${mode#video-}
         case $clip in h264-*) clip=$clip.mp4 ;; *) clip=$clip.webm ;; esac
-        exec sh "$here/../runners/video.sh" -b "$browser" -c "$here/../clips" -o "$out" "$clip"
+        exec sh "$here/../runners/video.sh" -b "$browser" -c "$here/../clips" -o "$out" -t "$clip"
         ;;
 esac
 RUNNER_DIR=$(cd "$here/../runners" && pwd)

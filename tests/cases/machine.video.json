@@ -15,7 +15,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium h264-720p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b chromium h264-720p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -58,7 +58,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium h264-1080p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b chromium h264-1080p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -101,7 +101,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium vp9-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b chromium vp9-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -144,7 +144,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium vp9-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b chromium vp9-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -187,7 +187,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium av1-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b chromium av1-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -230,7 +230,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium av1-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b chromium av1-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -273,7 +273,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox h264-720p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b firefox h264-720p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -316,7 +316,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox h264-1080p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b firefox h264-1080p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -359,7 +359,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox vp9-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b firefox vp9-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -402,7 +402,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox vp9-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b firefox vp9-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -445,7 +445,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox av1-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b firefox av1-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
@@ -488,7 +488,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account, and mount the clips' data disk read-only at /tmp/graphics/clips"},
-        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox av1-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -t -b firefox av1-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],

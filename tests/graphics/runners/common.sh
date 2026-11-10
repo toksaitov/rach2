@@ -80,6 +80,9 @@ runner_start()
     if [ -f /tmp/graphics.env ]; then
         cat /tmp/graphics.env >> "$RUNNER_OUT/record"
     fi
+    if [ -f /tmp/graphics.host ]; then
+        cat /tmp/graphics.host >> "$RUNNER_OUT/record"
+    fi
 }
 
 # runner_iommu: the IOMMU's state as the guest's kernel gives it: the units
@@ -124,7 +127,7 @@ runner_weston()
     export XDG_RUNTIME_DIR WAYLAND_DISPLAY
     mkdir -p "$XDG_RUNTIME_DIR"
     chmod 700 "$XDG_RUNTIME_DIR"
-    setsid weston ${RUNNER_SEAT_MODULE:+--modules="$RUNNER_SEAT_MODULE"} --backend=headless --renderer=pixman --width="$RUNNER_WIDTH" --height="$RUNNER_HEIGHT" \
+    setsid weston --no-config ${RUNNER_SEAT_MODULE:+--modules="$RUNNER_SEAT_MODULE"} --backend=headless --renderer=pixman --width="$RUNNER_WIDTH" --height="$RUNNER_HEIGHT" \
         --shell=kiosk --idle-time=0 --socket="$WAYLAND_DISPLAY" \
         --log="$RUNNER_OUT/weston.log" < /dev/null > /dev/null 2>&1 &
     RUNNER_WESTON=$!
@@ -135,7 +138,7 @@ runner_weston()
         [ "$tries" -lt 600 ] || runner_die "weston made no socket in 600 tries"
         sleep 0.1
     done
-    runner_record "compositor $(weston --version 2>/dev/null) headless pixman kiosk"
+    runner_record "compositor $(weston --version 2>/dev/null) headless pixman kiosk no-config"
 }
 
 # runner_server ROOT...: serve ROOT on a free port of the loopback address

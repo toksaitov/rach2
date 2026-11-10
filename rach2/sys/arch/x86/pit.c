@@ -429,6 +429,25 @@ uint32_t tsc_counts_per_tick(void)
     return tsc_per_tick;
 }
 
+/** Scale cycles by the measured rate, without i686's absent libgcc divide. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    uint64_t ticks = 0, rem = 0;
+    int bit;
+
+    if (!tsc_per_tick) {
+        return 0;
+    }
+    for (bit = 63; bit >= 0; --bit) {
+        rem = (rem << 1) | ((cycles >> bit) & 1u);
+        if (rem >= tsc_per_tick) {
+            rem -= tsc_per_tick;
+            ticks |= (uint64_t)1 << bit;
+        }
+    }
+    return ticks * TICK_US + refclock_scale((uint32_t)rem, TICK_US, tsc_per_tick);
+}
+
 int timer_tick_shared(void)
 {
     return ref_kind != REF_NONE;

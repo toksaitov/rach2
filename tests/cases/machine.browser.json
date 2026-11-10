@@ -55,7 +55,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -203,6 +203,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -265,7 +270,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -413,6 +418,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -475,7 +485,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -623,6 +633,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -685,7 +700,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -830,6 +845,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -892,13 +912,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -1048,6 +1068,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -1110,13 +1135,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -1266,6 +1291,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -1328,13 +1358,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -1484,6 +1514,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -1546,13 +1581,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -1702,6 +1737,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -1764,13 +1804,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -1920,6 +1960,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -1982,13 +2027,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -2138,6 +2183,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -2200,7 +2250,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -2348,6 +2398,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -2410,7 +2465,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -2558,6 +2613,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -2620,7 +2680,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -2768,6 +2828,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -2830,7 +2895,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -2978,6 +3043,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -3040,7 +3110,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -3189,6 +3259,11 @@
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
           "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -3250,7 +3325,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
@@ -3395,6 +3470,11 @@
         {
           "name": "browser_scenario",
           "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -3457,13 +3537,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -3613,6 +3693,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -3675,13 +3760,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -3831,6 +3916,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -3893,13 +3983,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -4049,6 +4139,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -4111,13 +4206,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -4267,6 +4362,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -4329,13 +4429,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -4485,6 +4585,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],
@@ -4547,13 +4652,13 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "mount the pinned browser files and any clips read-only from their data disks"
+          "does": "mount the pinned browser files and any clips read-only from their data disks; retain the host load and live admission ledger in the runner record"
         },
         {
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run the ordinary browser acceptance case"
+          "does": "run the ordinary browser acceptance case, with preceding clips in the reference order in the same boot"
         },
         {
           "step_id": "judge",
@@ -4703,6 +4808,11 @@
         {
           "name": "clips-data",
           "node": "tests/cases/browser/clips.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
           "per_architecture": false
         }
       ],

@@ -26,6 +26,12 @@ static volatile unsigned int bkl_word;
  * one, 0 for none (`bkl_acquire`). */
 static volatile unsigned int bkl_claim;
 
+/* Updated with the big lock held; the waits are accumulated as TSC cycles
+ * so that rounding at each acquisition loses no short waits. */
+static uint64_t bkl_wait_cycles;
+static uint64_t bkl_wait_max_cycles;
+static uint64_t tlb_shootdowns;
+
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
  * second covers a claimant that does not run, since under a hypervisor a
@@ -70,6 +76,7 @@ static void bkl_acquire(struct percpu *cpu)
 {
     unsigned int me = (unsigned int)arch_cpu_id() + 1u;
     uint32_t spins = 0, passed = 0;
+    uint64_t start = arch_cycles(), waited;
 
     for (;;) {
         unsigned int claim = bkl_claim;
@@ -89,7 +96,20 @@ static void bkl_acquire(struct percpu *cpu)
     if (bkl_claim == me) {
         (void)arch_atomic_cmpxchg(&bkl_claim, me, 0u);
     }
+    waited = arch_cycles() - start;
+    bkl_wait_cycles += waited;
+    if (waited > bkl_wait_max_cycles) {
+        bkl_wait_max_cycles = waited;
+    }
     bkl_flush(cpu);
+}
+
+/** Read the acquisition and shootdown counters with the big lock held. */
+void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint64_t *shootdowns)
+{
+    *total_us = timer_cycles_us(bkl_wait_cycles);
+    *max_us = timer_cycles_us(bkl_wait_max_cycles);
+    *shootdowns = tlb_shootdowns;
 }
 
 void bkl_enter(void)
@@ -237,6 +257,7 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
     int me = (int)arch_cpu_id();
     int c, sent = 0;
 
+    tlb_shootdowns++;
     if (cpus_online < 2) {
         return;
     }
