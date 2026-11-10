@@ -892,6 +892,88 @@ int32_t i915_gem_create_ioctl(struct drm_device *dev, void *data, struct drm_fil
     return err;
 }
 
+/* The widest stride a linear framebuffer of Haswell's primary plane
+ * takes, which a dumb buffer's pitch past it is rounded to pages for, as
+ * Linux's intel_plane_fb_max_stride gives it. */
+#define I915_DUMB_MAX_STRIDE (32u * 1024u)
+
+int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
+                             struct drm_mode_create_dumb *args)
+{
+    struct drm_i915_gem_object *obj;
+    uint32_t cpp = (args->bpp + 7u) / 8u;
+    uint64_t pitch;
+    int32_t err;
+
+    if (cpp != 1 && cpp != 2 && cpp != 4) {
+        return -EINVAL;
+    }
+    pitch = ((uint64_t)args->width * cpp + 63u) & ~(uint64_t)63u;
+    if (pitch > I915_DUMB_MAX_STRIDE) {
+        pitch = (pitch + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    }
+    if (pitch > 0xffffffffu || pitch < args->width) {
+        return -EINVAL;
+    }
+    err = i915_gem_object_create(to_i915(dev), pitch * args->height, &obj);
+    if (err != 0) {
+        return err;
+    }
+    obj->dumb = 1;
+    err = drm_gem_handle_create(file, &obj->base, &args->handle);
+    if (err == 0) {
+        args->pitch = (uint32_t)pitch;
+        args->size = obj->base.size;
+    }
+    i915_gem_object_put(obj);
+    return err;
+}
+
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+                                       struct i915_vma **vma)
+{
+    int32_t err;
+
+    /* The display engine does not snoop the LLC, so it reads memory. */
+    err = i915_gem_object_set_cache_level(obj, I915_CACHE_NONE);
+    if (err != 0) {
+        return err;
+    }
+    err = i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE, align, vma);
+    if (err != 0) {
+        return err;
+    }
+    if (obj->cache_dirty) {
+        i915_gem_clflush_object(obj, 1);
+    }
+    obj->read_domains |= I915_GEM_DOMAIN_GTT;
+    return 0;
+}
+
+void i915_gem_object_flush_range(struct drm_i915_gem_object *obj, uint64_t start, uint64_t end)
+{
+    uint64_t at = start & ~(uint64_t)(PAGE_SIZE - 1);
+
+    /* Forced, whatever the caching, as Linux's flush for display: the
+     * display engine does not snoop. */
+    if (!obj->frames) {
+        return;
+    }
+    if (end > obj->base.size) {
+        end = obj->base.size;
+    }
+    for (; at < end; at += PAGE_SIZE) {
+        uint64_t from = at < start ? start : at;
+        uint64_t to = at + PAGE_SIZE < end ? at + PAGE_SIZE : end;
+        uint8_t *va = (uint8_t *)kmap_temp(obj->frames[at >> PAGE_SHIFT]);
+
+        if (va) {
+            arch_dma_flush(va + (from - at), (uint32_t)(to - from));
+            kunmap_temp(va);
+        }
+    }
+}
+
 /**
  * GEM_SET_DOMAIN, as Linux's i915_gem_set_domain_ioctl: EINVAL for a GPU
  * domain or a write domain other than the read domains, nothing for no

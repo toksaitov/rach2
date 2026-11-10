@@ -12,6 +12,7 @@
 #include "../../fs/sysfs.h"
 #include "../../lib/spinlock.h"
 #include "../../proc/wait_queue.h"
+#include "../../display/intelbl.h"
 #include "i915_hw.h"
 #include "intel_bios.h"
 
@@ -193,7 +194,9 @@ typedef void (*i915_irq_fn)(struct drm_i915_private *i915, uint32_t iir, void *d
  * disabled again when it is seen. `installed` is set once the master
  * enable is on. `deferred`, when set, runs at the end of each message once
  * the handler has let go of the lock, for the work a source's handler
- * leaves to it, as RPS's does (i915_rps.c).
+ * leaves to it, as RPS's does (i915_rps.c), and `deferred_display` after
+ * it, for the display's vblanks, events and CRCs (intel_vblank.c), which
+ * call into the DRM core and back into the mask.
  */
 struct i915_irq {
     struct spinlock lock;
@@ -206,6 +209,7 @@ struct i915_irq {
     uint32_t unclaimed;
     uint8_t installed;
     void (*deferred)(struct drm_i915_private *i915);
+    void (*deferred_display)(struct drm_i915_private *i915);
 };
 
 /* The engines this part of the driver starts, the render and blitter
@@ -525,7 +529,8 @@ struct i915_userptr {
  * `userfault_count` how many of its bindings programs map through the
  * aperture. `madv` is the I915_MADV_ state of its pages: WILLNEED, or
  * DONTNEED when reclaim may purge them, or __I915_MADV_PURGED once it did.
- * The device's list of objects holds it (`base.dev_next`).
+ * `dumb` says it was made as a dumb buffer, whose processor maps are
+ * write-combined. The device's list of objects holds it (`base.dev_next`).
  */
 struct drm_i915_gem_object {
     struct drm_gem_object base;
@@ -544,6 +549,7 @@ struct drm_i915_gem_object {
     struct i915_mmap_offset mmo[I915_MMAP_TYPES];
     uint32_t userfault_count;
     uint8_t madv;
+    uint8_t dumb;
     struct i915_userptr userptr;
 };
 
@@ -597,6 +603,138 @@ struct i915_gem {
 };
 
 /*
+ * The display (intel_display.c, intel_plane.c, intel_cursor.c,
+ * intel_vblank.c, intel_backlight.c and i915_display_debugfs.c), Linux's
+ * display/ for Haswell as far as the Readme's display section says: the
+ * firmware's picture read out and adopted, three pipes each with a
+ * primary, a sprite and a cursor plane, the eDP panel's connector and its
+ * backlight, vblanks, page flips and the pipe CRC.
+ */
+
+#define I915_NUM_PIPES 3
+
+/* A pipe's planes, by index into `intel_crtc`'s scanouts. */
+#define INTEL_PLANE_PRIMARY 0
+#define INTEL_PLANE_SPRITE  1
+#define INTEL_PLANE_CURSOR  2
+#define INTEL_NUM_PLANES    3
+
+/*
+ * What the readout found of a pipe and what feeds it, as Linux's
+ * hsw_get_pipe_config reads it into a crtc state. `active` is set when a
+ * transcoder routed to the pipe is enabled; `trans` is that transcoder,
+ * I915_TRANS_EDP or the pipe's own, and `port` the DDI port its function
+ * control selects. `mode` is the timings of the transcoder with the pixel
+ * clock in kHz the link's M/N give of `port_clock`, the link's symbol
+ * clock in kHz as Linux reports it; `bpp` is the pipe's bits a pixel,
+ * three times its bits a colour; `lanes` the link's lanes. `src_w` and
+ * `src_h` are PIPESRC's size. The panel fitter's three registers are kept
+ * as read, `pf_ctl` 0 when it is off. The primary plane: `plane_on`,
+ * `format` (DRM_FORMAT_, 0 for one Linux does not read), `modifier`,
+ * `surf` its GGTT address, `stride` in bytes, and `x`, `y` its offset.
+ */
+struct intel_pipe_readout {
+    uint8_t active;
+    uint8_t dither;
+    int trans;
+    int port;
+    struct drm_mode_modeinfo mode;
+    uint32_t port_clock;
+    uint32_t bpp;
+    uint32_t lanes;
+    uint32_t link_m, link_n, data_m, data_n, tu;
+    uint32_t src_w, src_h;
+    uint32_t pf_ctl, pf_win_pos, pf_win_sz;
+    uint8_t plane_on;
+    uint32_t format;
+    uint64_t modifier;
+    uint32_t surf, stride, x, y;
+};
+
+/* The panel power sequencer as read at the bind: its four registers, and
+ * whether the panel's power and its backlight enable were on. */
+struct intel_pps_readout {
+    uint32_t status, control, on_delays, off_delays, divisor;
+    uint8_t panel_on, backlight_on;
+};
+
+/*
+ * A plane's framebuffer as the hardware scans it out: held, with the
+ * binding `vma` pinned for scanout, NULL for the firmware's, which lies
+ * where the firmware put it. A plane keeps two, what it shows and what it
+ * showed before, which the hardware may read until the flip that replaced
+ * it latches; that one is let go at the plane's next update, which comes
+ * only after the flip (drm_atomic_helper_commit's stall).
+ */
+struct intel_scanout {
+    struct drm_framebuffer *fb;
+    struct i915_vma *vma;
+};
+
+/*
+ * A pipe as a CRTC, with its three planes. `hw` is the readout of the
+ * bind. `event` is the commit's event the pipe holds until the frame
+ * counter passes `event_frame`, the count read after the commit's writes,
+ * or until the flip done of an async flip (`event_async`); NULL for none.
+ * `vbl_on` says its vblank interrupt is unmasked. The CRC: `crc_ctl` is
+ * PIPE_CRC_CTL's value while a source runs, 0 when none does, and
+ * `crc_skip` the frames still to drop after it starts. `shown` and
+ * `parked` are each plane's scanouts (`struct intel_scanout`). `wm` is the
+ * level 0 watermark word last written. `planes_on` has bit
+ * INTEL_PLANE_ for each plane the hardware shows.
+ */
+struct intel_crtc {
+    struct drm_crtc base;
+    struct drm_plane primary, sprite, cursor;
+    struct drm_i915_private *i915;
+    int pipe;
+    struct intel_pipe_readout hw;
+    struct drm_pending_event *event;
+    uint32_t event_frame;
+    uint8_t event_async;
+    uint8_t vbl_on;
+    uint32_t crc_ctl;
+    uint32_t crc_skip;
+    uint32_t planes_on;
+    uint32_t wm;
+    struct intel_scanout shown[INTEL_NUM_PLANES];
+    struct intel_scanout parked[INTEL_NUM_PLANES];
+};
+
+/*
+ * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
+ * `connector` its eDP panel. `pps` is the sequencer's readout.
+ * `fw_taken` says the firmware's framebuffer was made a framebuffer of the
+ * device, whose object lies at `fw_ggtt` in the GGTT. `de_iir` holds the
+ * display engine's events the interrupt latched and the deferred work has
+ * yet to take, under the interrupt mask's lock.
+ * `bl` is the panel's PWM, `bl_index` its backlight's index or -1, and
+ * `bl_want_on` what the backlight class last asked of its switch, which
+ * holds only while pipe A is on (`bl_pipe_on`). `vga_off` says the VGA
+ * plane has been turned off. `lp_wm_off` says the low-power watermarks
+ * are off, as they are once a sprite or a cursor is shown. `ready` is set
+ * once the device's mode configuration is made, which its release frees.
+ */
+struct intel_display {
+    struct intel_crtc crtc[I915_NUM_PIPES];
+    struct drm_encoder encoder;
+    struct drm_connector connector;
+    struct intel_pps_readout pps;
+    uint32_t fw_ggtt;
+    uint8_t fw_taken;
+    uint32_t de_iir;
+    struct intelbl bl;
+    int bl_index;
+    uint8_t bl_want_on;
+    uint8_t bl_pipe_on;
+    uint8_t vga_off;
+    uint8_t lp_wm_off;
+    uint8_t ready;
+};
+
+#define to_intel_crtc(c) ((struct intel_crtc *)(c))
+
+/*
  * A bound device. `drm` is first, and its `driver_priv` points back here.
  * `pci` is the function as the probe found it. `hw` reaches its registers.
  * `mmio_phys` is BAR 0's physical address and `gmadr_phys` BAR 2's, the
@@ -609,7 +747,8 @@ struct i915_gem {
  * the function. `msi_vector` is the vector of the device's message, or -1
  * while it has none; `irqs` counts the interrupts taken on it. `opregion`
  * is the firmware's OpRegion and `vbt` the video BIOS table decoded
- * (intel_bios.h), Linux's defaults when the firmware gave none. `attached`
+ * (intel_bios.h), Linux's defaults when the firmware gave none. `display`
+ * is the display's state (intel_display.c). `attached`
  * is set once the device is registered and owns its backend, whose
  * `attach`, `detach` and `release` it then calls.
  */
@@ -641,6 +780,7 @@ struct drm_i915_private {
     struct intel_vbt vbt;
     struct i915_gem gem;
     struct i915_sseu sseu;
+    struct intel_display display;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -1501,6 +1641,167 @@ int32_t i915_gem_object_cpu_access(struct drm_gem_object *base, uint64_t flags);
 /** Write fence register `id` (i915_fence.c), whose comment says more. */
 void i915_fence_write(struct drm_i915_private *i915, int id, uint64_t start, uint64_t size,
                       uint32_t stride, uint32_t tiling);
+
+/*
+ * The display. Each runs under the big kernel lock in process context
+ * unless it says otherwise; the commit's hooks run under the DRM device's
+ * commit lock.
+ */
+
+/**
+ * Read out each pipe's state into `display.crtc[N].hw`, and the panel
+ * power sequencer's into `display.pps`, as Linux's
+ * intel_modeset_readout_hw_state does at load: nothing is written.
+ */
+void intel_display_readout(struct drm_i915_private *i915);
+
+/**
+ * Read out pipe `pipe` into `*out`, as Linux's hsw_get_pipe_config and
+ * i9xx_get_initial_plane_config: zeroed when no enabled transcoder feeds
+ * it. Nothing is written.
+ */
+void intel_pipe_readout(struct drm_i915_private *i915, int pipe, struct intel_pipe_readout *out);
+
+/**
+ * Make the display and adopt the firmware's picture: read it out, make
+ * the planes, CRTCs, the encoder and the eDP connector, take the
+ * firmware's framebuffer as a framebuffer of the device on the pipe that
+ * scans it out with the mode the readout found, take the panel's
+ * backlight over, and hook the display's interrupts. The device then has
+ * DRIVER_MODESET and DRIVER_ATOMIC. Before the DRM device registers.
+ *
+ * @return 0, or -ENOMEM or the DRM core's error, with nothing made that
+ *         `intel_display_fini` would not undo.
+ */
+int32_t intel_display_init(struct drm_i915_private *i915);
+
+/**
+ * Undo what `intel_display_init` hooked into the hardware's paths: the
+ * interrupts, the backlight, given back to the boot's driver, and every
+ * scanout's pin. The DRM core frees the objects with the device's mode
+ * configuration. From the unplug.
+ */
+void intel_display_fini(struct drm_i915_private *i915);
+
+/**
+ * The commit, with Linux's prepare_fb and cleanup_fb around the core's:
+ * each framebuffer of a plane state the commit carries is pinned for
+ * scanout, and what each plane showed before the last update is let go
+ * once the commit is made, for `mode_config.atomic_commit`. 0, or the
+ * pin's or the core's error with nothing changed.
+ */
+int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock);
+
+/** The GGTT address of the framebuffer `fb`'s object, which its plane's
+ * pin bound: the scanout's base, without the framebuffer's offset. */
+uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb);
+
+/** The modifier `fb` is scanned out with: its own, or X tiling for a
+ * framebuffer made without modifiers of an X-tiled object, as Linux's
+ * intel_framebuffer_init takes it. */
+uint64_t intel_fb_modifier(const struct drm_framebuffer *fb);
+
+/**
+ * Make the three planes of `crtc`: the primary, the sprite and the cursor,
+ * with Haswell's formats and modifiers, rotation by 0 and 180 degrees and
+ * the zpos Linux gives them. 0 or the DRM core's error.
+ */
+int32_t intel_planes_init(struct intel_crtc *crtc);
+
+/** Make the cursor plane of `crtc`, as `intel_planes_init` does. */
+int32_t intel_cursor_init(struct intel_crtc *crtc);
+
+/**
+ * Write pipe `crtc`'s level 0 watermarks for the planes it shows, Linux's
+ * ilk_compute_wm level 0 from the latencies Haswell's pcode gives, and
+ * turn the low-power watermarks off the first time a sprite or a cursor
+ * shows. Inside a commit's planes.
+ */
+void intel_update_wm(struct intel_crtc *crtc);
+
+/**
+ * Hand the event of `crtc`'s new state in `state` to the vblank path: the
+ * commit's flip armed and its event held until the frame counter passes
+ * the count read now, or sent now on a pipe that is off or without its
+ * vblanks. From the CRTC's `atomic_flush`, after the planes are written.
+ */
+void intel_crtc_arm_event(struct intel_crtc *crtc, struct drm_atomic_state *state);
+
+/** The CRTC's `enable_vblank`: unmask the pipe's vblank. 0. Any context. */
+int32_t intel_enable_vblank(struct drm_crtc *crtc);
+/** The CRTC's `disable_vblank`: mask it. Any context. */
+void intel_disable_vblank(struct drm_crtc *crtc);
+/** The CRTC's `get_vblank_counter`: PIPE_FRMCOUNT. Any context. */
+uint32_t intel_get_vblank_counter(struct drm_crtc *crtc);
+
+/**
+ * Hook the display's interrupts: each pipe's vblank and primary flip done,
+ * masked until a holder wants them, and the deferred work that takes them.
+ * 0 or i915_irq_register's error.
+ */
+int32_t intel_vblank_init(struct drm_i915_private *i915);
+
+/** Unhook them, with every held event sent. */
+void intel_vblank_fini(struct drm_i915_private *i915);
+
+/** Send `crtc`'s held event now, as a pipe that goes off does, with
+ * interrupts off. */
+void intel_crtc_send_event(struct intel_crtc *crtc);
+
+/**
+ * The display's deferred interrupt work, `irq.deferred_display`: each
+ * pipe's vblank counted by the DRM core, the events whose frame has come
+ * sent, and the CRC of each frame entered. In the interrupt, after the
+ * mask's lock is let go.
+ */
+void intel_display_irq_work(struct drm_i915_private *i915);
+
+/** The CRC hooks of the CRTCs (i915_display_debugfs.c). */
+int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name);
+int32_t intel_crtc_verify_crc_source(struct drm_crtc *crtc, const char *name, uint32_t *values_cnt);
+const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *count);
+
+/** Enter the CRC of the frame that just ended on `crtc` while a source
+ * runs, past the first, as Linux's display_pipe_crc_irq_handler; from the
+ * deferred interrupt work. */
+void intel_crtc_crc_frame(struct intel_crtc *crtc);
+
+/**
+ * Take the eDP panel's backlight over from the boot's driver: attach the
+ * PCH's PWM through the device's registers and drive "intel_backlight"
+ * through it, registering it when the boot did not. Nothing when the
+ * firmware left the PWM off. From the connector's init.
+ */
+void intel_backlight_setup(struct drm_i915_private *i915);
+
+/** Turn the backlight's enable line with pipe A: off while the pipe is
+ * off, and on again at the class's wish when it comes back. */
+void intel_backlight_pipe(struct drm_i915_private *i915, int on);
+
+/** Give the backlight back to the boot's driver, from the unplug. */
+void intel_backlight_fini(struct drm_i915_private *i915);
+
+/**
+ * Make a dumb buffer, Linux's i915_gem_dumb_create: a linear object with
+ * its pitch aligned to 64 bytes, whose processor maps are write-combined,
+ * as Linux's MAP_DUMB maps one. The driver's `dumb_create`.
+ */
+int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
+                             struct drm_mode_create_dumb *args);
+
+/**
+ * Get the object ready to scan out, as Linux's
+ * i915_gem_object_pin_to_display_plane: its caching off, bound inside the
+ * aperture at a multiple of `align`, and its processor cache flushed. The
+ * binding in `*vma`, pinned, which `i915_vma_unpin` lets go. 0 or the
+ * binding's error.
+ */
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+                                       struct i915_vma **vma);
+
+/** Flush the processor's cache of bytes [start, end) of the object, for
+ * rows drawn by the processor that the display reads. */
+void i915_gem_object_flush_range(struct drm_i915_gem_object *obj, uint64_t start, uint64_t end);
 
 /** Read the swizzle, clear every fence and set the GPU's swizzling, once
  * at the bind. */

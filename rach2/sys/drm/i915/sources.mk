@@ -29,4 +29,10 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/i915_gem_prime.c \
     sys/drm/i915/i915_gem_context.c \
     sys/drm/i915/i915_request.c \
-    sys/drm/i915/i915_getparam.c
+    sys/drm/i915/i915_getparam.c \
+    sys/drm/i915/intel_display.c \
+    sys/drm/i915/intel_plane.c \
+    sys/drm/i915/intel_cursor.c \
+    sys/drm/i915/intel_vblank.c \
+    sys/drm/i915/intel_backlight.c \
+    sys/drm/i915/i915_display_debugfs.c

@@ -84,6 +84,7 @@ void i915_irq_reset(struct drm_i915_private *i915)
     i915_write(hw, SERR_INT, 0xffffffffu);
     irq->installed = 0;
     irq->deferred = 0;
+    irq->deferred_display = 0;
     spin_unlock_irqrestore(&irq->lock, flags);
 }
 
@@ -345,5 +346,8 @@ void i915_irq_handle(struct drm_i915_private *i915)
     spin_unlock_irqrestore(&irq->lock, flags);
     if (irq->deferred) {
         irq->deferred(i915);
+    }
+    if (irq->deferred_display) {
+        irq->deferred_display(i915);
     }
 }
