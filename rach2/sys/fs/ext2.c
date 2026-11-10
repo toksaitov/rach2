@@ -8560,6 +8560,10 @@ static void cache_branch(struct ext2_cache_walk *walk, uint32_t block, uint32_t 
         uint32_t child;
 
         if (!cache_pointer(walk->em, block, i, &child)) {
+            /* The rest of the page under way, if any, is under this entry. */
+            if ((base + i * sub) / walk->perpage == walk->page) {
+                walk->missing = 1;
+            }
             return;
         }
         cache_branch(walk, child, base + i * sub, sub, level - 1);

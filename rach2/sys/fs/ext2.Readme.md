@@ -122,7 +122,7 @@ A block is allocated first fit from the block after the last one given out, thro
 
 A new inode belongs to the caller's effective user and group, or to the directory's group when the directory is set-group-ID, and a new directory there is set-group-ID too, as Linux's `inode_init_owner` does. Its generation comes from a count that starts at each mount at the time in seconds shifted 8 bits left.
 
-`cachestat` walks allocated branches of the inode's block map under its node lock, reading pointer blocks only from the write batch or idle resident buffers (`bcache_copy_cached`). A missing map branch is skipped without disk I/O. A file page counts once when every allocated block of it is resident, with any pending or cached dirty block making the page dirty. Holes alone count nothing. The walk offers scheduling every 16 steps and keeps no buffer pointer across a scheduling point.
+`cachestat` walks allocated branches of the inode's block map under its node lock, reading pointer blocks only from the write batch or idle resident buffers (`bcache_copy_cached`). A map branch that is not resident, or is busy, is skipped without disk I/O, and a page part of whose blocks lie under it does not count. A file page counts once when every allocated block of it is resident, with any pending or cached dirty block making the page dirty. Holes alone count nothing. The walk offers scheduling every 16 steps and keeps no buffer pointer across a scheduling point.
 
 ## Limits
 
