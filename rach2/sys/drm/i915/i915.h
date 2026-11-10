@@ -1186,6 +1186,9 @@ struct intel_scanout {
  * `crc_skip` the frames still to drop after it starts. `shown` and
  * `parked` are each plane's scanouts (`struct intel_scanout`).
  * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
+ * `underrun_off` says its FIFO underruns are not reported, Linux's
+ * cpu_fifo_underrun_disabled, and `inherited` that it shows what the
+ * firmware lit, with no commit of its own yet.
  */
 struct intel_crtc {
     struct drm_crtc base;
@@ -1205,6 +1208,8 @@ struct intel_crtc {
     uint32_t crc_ctl;
     uint32_t crc_skip;
     uint32_t planes_on;
+    uint8_t underrun_off;
+    uint8_t inherited;
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
 };
@@ -1221,7 +1226,8 @@ struct intel_crtc {
  * `fw_taken` says the firmware's framebuffer was made a framebuffer of the
  * device, whose object lies at `fw_ggtt` in the GGTT. `de_iir` holds the
  * display engine's events the interrupt latched and the deferred work has
- * yet to take, under the interrupt mask's lock.
+ * yet to take, and `underruns` a bit for each pipe whose FIFO underrun it
+ * has yet to log, both under the interrupt mask's lock.
  * `bl` is the panel's PWM, `bl_index` its backlight's index or -1, and
  * `bl_want_on` what the backlight class last asked of its switch, which
  * holds only while the sequencer's backlight enable is on with the
@@ -1250,6 +1256,7 @@ struct intel_display {
     uint32_t fw_ggtt;
     uint8_t fw_taken;
     uint32_t de_iir;
+    uint32_t underruns;
     struct intelbl bl;
     int bl_index;
     uint8_t bl_want_on;
@@ -2560,6 +2567,16 @@ void intel_crtc_send_event(struct intel_crtc *crtc);
  * mask's lock is let go.
  */
 void intel_display_irq_work(struct drm_i915_private *i915);
+
+/**
+ * Report pipe `c`'s FIFO underruns or not, Linux's
+ * intel_set_cpu_fifo_underrun_reporting on Haswell: on clears the pipe's
+ * underrun in GEN7_ERR_INT and unmasks the error interrupt once every pipe
+ * reports; off masks it and logs an underrun latched while it reported.
+ * The first underrun turns its pipe's reporting off. Takes the interrupt
+ * mask's lock; not from a handler.
+ */
+void intel_fifo_underrun_reporting(struct intel_crtc *c, int on);
 
 /*
  * The eDP panel's AUX channel (intel_dp_aux.c), under the big lock in

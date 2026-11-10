@@ -525,6 +525,8 @@ static void row_adopt(void)
                   (PORT_HOTPLUG_ENABLE(HPD_PORT_B) | PORT_HOTPLUG_ENABLE(HPD_PORT_C)) &&
               !(reg(SDEIMR) & (SDE_PORTB_HOTPLUG_CPT | SDE_PORTC_HOTPLUG_CPT)),
           "adopt: the hotplug pins of B and C armed and unmasked");
+    CHECK(pa->underrun_off && (reg(DEIMR) & DE_ERR_INT_IVB),
+          "adopt: pipe A's underruns unreported until its first commit, as Linux's");
     CHECK(!timed_out(), "adopt: no wait at its bound");
 }
 
@@ -685,6 +687,55 @@ static void row_modes(void)
     CHECK((reg(PIPE_CSC_MODE(0)) & CSC_POSITION_BEFORE_GAMMA) && reg(GAMMA_MODE(0)) == 0,
           "modes: full range, the matrix before the 8-bit gamma, as Linux's ivb_csc_mode");
     CHECK(!timed_out(), "modes: no wait at its bound");
+    frame();
+}
+
+/* ---- FIFO underruns ---- */
+
+/** How many times the log holds `text`. */
+static int times_logged(const char *text)
+{
+    const char *p = log_text;
+    int n = 0;
+
+    while ((p = strstr(p, text)) != 0) {
+        n++;
+        p++;
+    }
+    return n;
+}
+
+/** An underrun of pipe A's FIFO, as the chip latches and signals it. */
+static void underrun_a(void)
+{
+    i915_model_poke(&model, GEN7_ERR_INT,
+                    i915_model_peek(&model, GEN7_ERR_INT) | ERR_INT_FIFO_UNDERRUN(0));
+    i915_model_irq_event(&model, I915_IRQ_DE, DE_ERR_INT_IVB);
+    take_messages();
+    frame();
+}
+
+/** Underrun reporting through the error interrupt, as Linux's
+ * intel_fifo_underrun.c does it on Haswell. */
+static void row_underrun(void)
+{
+    const char *line = "display: CPU pipe A FIFO underrun";
+    uint32_t fb = fb_new(7, 1366, 768);
+
+    CHECK(!pa->underrun_off && !(reg(DEIMR) & DE_ERR_INT_IVB) && times_logged(line) == 0,
+          "underrun: reported after the modes' commits, the error interrupt unmasked");
+    underrun_a();
+    CHECK(times_logged(line) == 1 && pa->underrun_off && (reg(DEIMR) & DE_ERR_INT_IVB) &&
+              !(reg(GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(0)),
+          "underrun: logged once, then unreported and masked, GEN7_ERR_INT cleared");
+    i915_model_poke(&model, GEN7_ERR_INT, ERR_INT_FIFO_UNDERRUN(0));
+    frame();
+    CHECK(times_logged(line) == 1, "underrun: a second one not logged");
+    CHECK(setcrtc(0, NULL, NULL, 0) == 0 && setcrtc(0, &disp->connector, &pa->hw.mode, fb) == 0 &&
+              !pa->underrun_off && !(reg(DEIMR) & DE_ERR_INT_IVB) &&
+              !(reg(GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(0)),
+          "underrun: the pipe off and on again clears the latch and reports again");
+    CHECK(!timed_out(), "underrun: no wait at its bound");
     frame();
 }
 
@@ -929,6 +980,7 @@ int main(void)
     CHECK(bring_up() == 0, "the display is made");
     row_adopt();
     row_modes();
+    row_underrun();
     row_backlight();
     row_inject();
     row_quiet();

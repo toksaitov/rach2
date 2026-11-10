@@ -796,6 +796,9 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
         cfg->well = i915_power_get(i915) == 0;
     }
     intel_dpll_enable(i915, c->pipe, cfg);
+    /* Linux's intel_ddi_pre_enable reports the pipe's underruns first. */
+    c->inherited = 0;
+    intel_fifo_underrun_reporting(c, 1);
     err = intel_ddi_pre_enable(i915, cfg);
     i915_write(hw, PIPESRC(c->pipe), (cfg->src_w - 1u) << 16 | (cfg->src_h - 1u));
     configure_transcoder(c, cfg);
@@ -906,12 +909,19 @@ static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *sta
  * pipe's vblanks are on. */
 static void intel_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
+    struct intel_crtc *c = to_intel_crtc(crtc);
     struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
 
     if (cs && drm_atomic_crtc_needs_modeset(cs)) {
         return;
     }
-    intel_crtc_arm_event(to_intel_crtc(crtc), state);
+    /* Linux's intel_update_crtc: a pipe the firmware lit reports its
+     * underruns from its first fastset. */
+    if (cs && cs->active && c->inherited) {
+        c->inherited = 0;
+        intel_fifo_underrun_reporting(c, 1);
+    }
+    intel_crtc_arm_event(c, state);
 }
 
 static const struct drm_crtc_funcs intel_crtc_funcs = {
@@ -1190,6 +1200,10 @@ static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
         return;
     }
     cs->active = 1;
+    /* Linux's intel_sanitize_fifo_underrun_reporting: an active pipe
+     * starts with its underruns unreported, until its first commit. */
+    c->underrun_off = 1;
+    c->inherited = 1;
     cs->connector_mask |= drm_connector_mask(&d->connector);
     conn->crtc = &c->base;
     conn->best_encoder = &d->encoder;
