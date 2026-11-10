@@ -344,19 +344,29 @@ static uint32_t put_text(char *buffer, uint32_t at, uint32_t cap, const char *te
     return at;
 }
 
-/** Append a 32-bit number the same way, since the kernel has no 64-bit
- * division. */
-static uint32_t put_number(char *buffer, uint32_t at, uint32_t cap, uint32_t value)
+/** Append a number in decimal the same way, by subtracting powers of ten,
+ * since the i686 kernel has no 64-bit division. */
+static uint32_t put_number(char *buffer, uint32_t at, uint32_t cap, uint64_t value)
 {
-    char digits[24];
-    int i = 0;
+    uint64_t ten = 1;
+    uint32_t n = 1, i;
+    char digit;
 
-    do {
-        digits[i++] = (char)('0' + (int)(value % 10));
-        value /= 10;
-    } while (value > 0 && i < (int)sizeof(digits));
-    while (i > 0 && at + 1 < cap) {
-        buffer[at++] = digits[--i];
+    while (n < 20u && ten * 10u <= value) {
+        ten *= 10u;
+        n++;
+    }
+    while (n > 0) {
+        for (digit = '0'; value >= ten; digit++) {
+            value -= ten;
+        }
+        if (at + 1 < cap) {
+            buffer[at++] = digit;
+        }
+        n--;
+        for (ten = 1, i = 1; i < n; i++) {
+            ten *= 10u;
+        }
     }
     return at;
 }
@@ -374,7 +384,7 @@ int loop_line(int index, char *buffer, uint32_t cap)
     at = put_text(buffer, at, cap, "loop");
     at = put_number(buffer, at, cap, (uint32_t)index);
     at = put_text(buffer, at, cap, " ");
-    at = put_number(buffer, at, cap, (uint32_t)(loop->dev.sector_count * BLOCK_SECTOR_SIZE));
+    at = put_number(buffer, at, cap, loop->dev.sector_count * BLOCK_SECTOR_SIZE);
     at = put_text(buffer, at, cap, loop->writable ? " rw " : " ro ");
     at = put_text(buffer, at, cap, "writes ");
     at = put_number(buffer, at, cap, loop->writes);
