@@ -55,8 +55,8 @@ static void i915_release(struct drm_device *dev);
 
 /* What the driver says of itself: Linux's i915, with its buffer ioctls. */
 static const struct drm_driver i915_drm_driver = {
-    DRM_IDENT_I915, i915_driver_open, i915_driver_postclose, 0,           i915_gem_prime_import,
-    i915_unplug,    i915_ioctls,      I915_NUM_IOCTLS,       i915_release};
+    DRM_IDENT_I915, i915_driver_open, i915_driver_postclose, i915_gem_dumb_create,
+    i915_gem_prime_import, i915_unplug, i915_ioctls, I915_NUM_IOCTLS, i915_release};
 
 const struct i915_id *i915_id_lookup(uint16_t device_id)
 {
@@ -160,6 +160,7 @@ static void i915_unplug(struct drm_device *dev)
 
     i915_requests_unplug(i915);
     i915_gt_pm_disable(i915);
+    intel_display_fini(i915);
     if (i915->attached && i915->hw.ops->detach) {
         i915->hw.ops->detach(&i915->hw);
     }
@@ -170,13 +171,17 @@ static void i915_unplug(struct drm_device *dev)
     i915_gem_unplug(i915);
 }
 
-/** The DRM core's release hook: take the shrinker off, unmap the
- * aperture's windows, give the scratch page back and free the record. */
+/** The DRM core's release hook: take the shrinker off, free the display's
+ * objects, unmap the aperture's windows, give the scratch page back and
+ * free the record. */
 static void i915_release(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
     i915_gem_shrinker_unregister(i915);
+    if (i915->display.ready) {
+        drm_mode_config_cleanup(dev);
+    }
     i915_aperture_fini(&i915->gem.aperture);
     i915_ggtt_fini(i915);
     intel_bios_fini(&i915->vbt);
@@ -277,6 +282,29 @@ static int32_t i915_base_init(struct drm_i915_private *i915)
     return i915_ggtt_init(i915);
 }
 
+/**
+ * Take over the display of a bound device: remove the firmware's
+ * framebuffer device over the aperture, as Linux's i915_driver_probe does
+ * before it touches the display, then adopt the pipes. A device whose
+ * display could not be made keeps its GEM and loses mode setting, as Linux's
+ * i915 on a device without display. The fake chip has no aperture behind
+ * it, so its firmware device stays.
+ */
+static void i915_display_bringup(struct drm_i915_private *i915)
+{
+    int32_t err;
+
+    if (i915->gmadr_phys != 0 && i915->ggtt.mappable_end != 0) {
+        (void)drm_aperture_remove_conflicting(i915->gmadr_phys, i915->ggtt.mappable_end, "i915");
+    }
+    err = intel_display_init(i915);
+    if (err != 0) {
+        klog(KLOG_ERR, "i915", "display: not made: error %d", (int)err);
+        intel_display_fini(i915);
+        i915->drm.features &= ~(DRIVER_MODESET | DRIVER_ATOMIC);
+    }
+}
+
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
 {
     const struct i915_id *id;
@@ -352,15 +380,14 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
          (unsigned)id->device_id, (unsigned)id->platform->gt, (unsigned)i915->revision);
 
     drm_dev_init(&i915->drm, &i915_drm_driver);
-    /* No mode setting until the display is driven, as Linux's i915 drops
-     * both on a device without display. */
-    i915->drm.features &= ~(DRIVER_MODESET | DRIVER_ATOMIC);
     i915->drm.pci = &i915->pci;
     i915->drm.driver_priv = i915;
     i915_ident(i915);
+    i915_display_bringup(i915);
     err = drm_dev_register(&i915->drm);
     if (err < 0) {
         klog(KLOG_ERR, "i915", "register: error %d", (int)err);
+        intel_display_fini(i915);
         i915_gt_pm_disable(i915);
         i915_irq_reset(i915);
         i915_msi_stop(i915);

@@ -57,11 +57,15 @@ int32_t i915_gem_object_mmap_cpu(struct drm_gem_object *base, vma_t *vma)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
 
-    /* As Linux's i915_gem_dmabuf_mmap, the object's pages write-back. An
-     * import's are another device's, and a userptr object's the
-     * program's own. */
+    /* As Linux's i915_gem_dmabuf_mmap, the object's pages write-back, but a
+     * dumb buffer's write-combined, as Linux's MAP_DUMB maps it, since the
+     * display reads it uncached. An import's are another device's, and a
+     * userptr object's the program's own. */
     if (obj->base.import || i915_gem_object_is_userptr(obj)) {
         return -ENODEV;
+    }
+    if (obj->dumb) {
+        return vm_device_map(vma, &cpu_vm_ops, &obj->mmo[I915_MMAP_OFFSET_WC], VM_PROT_WC);
     }
     return vm_device_map(vma, &cpu_vm_ops, &obj->mmo[I915_MMAP_OFFSET_WB], 0u);
 }

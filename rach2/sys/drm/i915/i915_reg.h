@@ -168,7 +168,9 @@
     (GEN6_PM_RP_UP_EI_EXPIRED | GEN6_PM_RP_UP_THRESHOLD | GEN6_PM_RP_DOWN_EI_EXPIRED | \
      GEN6_PM_RP_DOWN_THRESHOLD | GEN6_PM_RP_DOWN_TIMEOUT)
 
-#define GEN7_ERR_INT 0x44040
+#define GEN7_ERR_INT                0x44040
+#define ERR_INT_PIPE_CRC_DONE(pipe) (1u << (2 + (pipe) * 3))
+#define ERR_INT_FIFO_UNDERRUN(pipe) (1u << ((pipe) * 3))
 
 /* The eDP panel's self refresh (display/intel_psr_regs.h). */
 #define EDP_PSR_IMR 0x64834
@@ -523,6 +525,21 @@
 #define PIPE_FRMCOUNT_G4X(p)     (0x70040 + (p) * 0x1000)
 #define PIPE_FLIPCOUNT_G4X(p)    (0x70044 + (p) * 0x1000)
 
+/* A transcoder's DisplayPort M/N values: the data's, with the transfer
+ * unit's size in DATA_M1's bits 30:25, and the link's, which give the
+ * pixel clock as M/N of the link's symbol clock. */
+#define PIPE_DATA_M1(t)    I915_TRANS_REG(t, 0x60030)
+#define TU_SIZE_SHIFT      25
+#define PIPE_DATA_N1(t)    I915_TRANS_REG(t, 0x60034)
+#define PIPE_LINK_M1(t)    I915_TRANS_REG(t, 0x60040)
+#define PIPE_LINK_N1(t)    I915_TRANS_REG(t, 0x60044)
+#define DATA_LINK_M_N_MASK 0xffffffu
+
+/* The legacy VGA plane, which scans out the VGA's text and modes in place
+ * of the primary plane while bit 31 is clear. */
+#define CPU_VGACNTRL     0x41000
+#define VGA_DISP_DISABLE (1u << 31)
+
 #define DSPCNTR(p)                (0x70180 + (p) * 0x1000)
 #define DISP_ENABLE               (1u << 31)
 #define DISP_PIPE_GAMMA_ENABLE    (1u << 30)
@@ -533,17 +550,63 @@
 #define DISP_FORMAT_RGBX101010    (8u << 26)
 #define DISP_FORMAT_BGRX101010    (10u << 26)
 #define DISP_FORMAT_RGBX888       (14u << 26)
+#define DISP_FORMAT_RGBX161616    (12u << 26)
+#define DISP_PIPE_CSC_ENABLE      (1u << 24)
+#define DISP_ROTATE_180           (1u << 15)
 #define DISP_TRICKLE_FEED_DISABLE (1u << 14)
 #define DISP_TILED                (1u << 10)
+#define DISP_ASYNC_FLIP           (1u << 9)
 #define DSPSTRIDE(p)              (0x70188 + (p) * 0x1000)
 #define DSPSURF(p)                (0x7019c + (p) * 0x1000)
 #define DISP_ADDR_MASK            0xfffff000u
 #define DSPOFFSET(p)              (0x701a4 + (p) * 0x1000) /* y << 16 | x */
 #define DSPSURFLIVE(p)            (0x701ac + (p) * 0x1000)
 
-#define CURCNTR(p) (0x70080 + (p) * 0x1000)
-#define CURBASE(p) (0x70084 + (p) * 0x1000)
-#define CURPOS(p)  (0x70088 + (p) * 0x1000)
+#define CURCNTR(p)                (0x70080 + (p) * 0x1000)
+#define MCURSOR_MODE_MASK         0x3fu
+#define MCURSOR_MODE_DISABLE      0x00u
+#define MCURSOR_MODE_128_ARGB_AX  0x22u
+#define MCURSOR_MODE_256_ARGB_AX  0x23u
+#define MCURSOR_MODE_64_ARGB_AX   0x27u
+#define MCURSOR_PIPE_GAMMA_ENABLE (1u << 26)
+#define MCURSOR_PIPE_CSC_ENABLE   (1u << 24)
+#define MCURSOR_ROTATE_180        (1u << 15)
+#define CURBASE(p)                (0x70084 + (p) * 0x1000)
+#define CURPOS(p)                 (0x70088 + (p) * 0x1000)
+#define CURSOR_POS_Y_SIGN         (1u << 31)
+#define CURSOR_POS_X_SIGN         (1u << 15)
+#define CURSOR_POS_MASK           0x7fffu
+#define CURSURFLIVE(p)            (0x700ac + (p) * 0x1000)
+
+/* The sprite planes of Ivy Bridge and Haswell
+ * (display/intel_sprite_regs.h), one a pipe. */
+#define SPRCTL(p)                          (0x70280 + (p) * 0x1000)
+#define SPRITE_ENABLE                      (1u << 31)
+#define SPRITE_PIPE_GAMMA_ENABLE           (1u << 30)
+#define SPRITE_FORMAT_YUV422               (0u << 25)
+#define SPRITE_FORMAT_RGBX101010           (1u << 25)
+#define SPRITE_FORMAT_RGBX888              (2u << 25)
+#define SPRITE_FORMAT_RGBX161616           (3u << 25)
+#define SPRITE_PIPE_CSC_ENABLE             (1u << 24)
+#define SPRITE_RGB_ORDER_RGBX              (1u << 20)
+#define SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709 (1u << 18)
+#define SPRITE_YUV_ORDER_YUYV              (0u << 16)
+#define SPRITE_YUV_ORDER_YVYU              (1u << 16)
+#define SPRITE_YUV_ORDER_UYVY              (2u << 16)
+#define SPRITE_YUV_ORDER_VYUY              (3u << 16)
+#define SPRITE_ROTATE_180                  (1u << 15)
+#define SPRITE_PLANE_GAMMA_DISABLE         (1u << 13)
+#define SPRITE_TILED                       (1u << 10)
+#define SPRSTRIDE(p)                       (0x70288 + (p) * 0x1000)
+#define SPRPOS(p)                          (0x7028c + (p) * 0x1000)
+#define SPRSIZE(p)                         (0x70290 + (p) * 0x1000)
+#define SPRKEYVAL(p)                       (0x70294 + (p) * 0x1000)
+#define SPRKEYMSK(p)                       (0x70298 + (p) * 0x1000)
+#define SPRSURF(p)                         (0x7029c + (p) * 0x1000)
+#define SPRKEYMAX(p)                       (0x702a0 + (p) * 0x1000)
+#define SPROFFSET(p)                       (0x702a4 + (p) * 0x1000) /* y << 16 | x */
+#define SPRSURFLIVE(p)                     (0x702ac + (p) * 0x1000)
+#define SPRSCALE(p)                        (0x70304 + (p) * 0x1000)
 
 /* The pipe CRC (display/intel_pipe_crc_regs.h): one result on Haswell. */
 #define PIPE_CRC_CTL(p)             (0x60050 + (p) * 0x1000)
@@ -597,11 +660,18 @@
 #define TRANS_DDI_MODE_SELECT_DVI    (1u << 24)
 #define TRANS_DDI_MODE_SELECT_DP_SST (2u << 24)
 #define TRANS_DDI_BPC_MASK           (7u << 20)
+#define TRANS_DDI_BPC_8              (0u << 20)
+#define TRANS_DDI_BPC_10             (1u << 20)
+#define TRANS_DDI_BPC_6              (2u << 20)
+#define TRANS_DDI_BPC_12             (3u << 20)
+#define TRANS_DDI_PVSYNC             (1u << 17)
+#define TRANS_DDI_PHSYNC             (1u << 16)
 #define TRANS_DDI_EDP_INPUT_MASK     (7u << 12)
 #define TRANS_DDI_EDP_INPUT_A_ON     (0u << 12)
 #define TRANS_DDI_EDP_INPUT_A_ONOFF  (4u << 12)
 #define TRANS_DDI_EDP_INPUT_B_ONOFF  (5u << 12)
 #define TRANS_DDI_EDP_INPUT_C_ONOFF  (6u << 12)
+#define TRANS_DDI_PORT_WIDTH_MASK    (7u << 1)
 
 #define SPLL_CTL                0x46020
 #define SPLL_PLL_ENABLE         (1u << 31)
