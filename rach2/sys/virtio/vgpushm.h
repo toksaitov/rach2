@@ -492,8 +492,9 @@ int vgs_check_limits(const struct vgs_limits *lim)
 
 /**
  * The driver's check of the device's offer for its epoch: the state READY,
- * or RUNNING once the setup is accepted, the epoch the driver's, a peer id other than the driver's,
- * VERSION_1 offered, sane limits and 1 to 16 scanouts.
+ * or RUNNING once the setup is accepted, the epoch the driver's, a peer id
+ * other than the driver's, VERSION_1 offered, sane limits and 1 to 16
+ * scanouts.
  */
 int vgs_check_offer(const struct vgs_device *dev, uint32_t epoch, uint32_t driver_peer)
 {

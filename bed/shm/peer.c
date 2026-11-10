@@ -31,7 +31,7 @@
 #endif
 
 #define VGS_IMPLEMENTATION
-#include "vgpushm.h"
+#include "../../rach2/sys/virtio/vgpushm.h"
 
 /* virtio-gpu's wire format, from the virtio 1.2 specification, 5.7.6. */
 #define GPU_F_VIRGL        0
