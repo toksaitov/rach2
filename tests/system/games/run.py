@@ -3,19 +3,19 @@
 import array
 import fcntl
 import json
-import math
 import os
 from pathlib import Path
 import re
 import shlex
 import shutil
 import signal
-import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+
+from wm import tone_windows
 
 HERE = Path(__file__).resolve().parent
 ROWS = ("prefix", "draw-64", "draw-32", "maps", "umu")
@@ -144,23 +144,6 @@ def record(stop, samples, ready):
         os.close(fd)
 
 
-def tone_windows(data):
-    """Count the 50 ms windows of loopback DATA that measure 440 Hz by their
-    zero crossings, and the other windows that are not silent."""
-    values = struct.unpack("<%dh" % (len(data) // 2), data)
-    good = off = 0
-    for at in range(0, len(values) - 2400, 2400):
-        block = values[at:at + 2400]
-        if math.sqrt(sum(x * x for x in block) / len(block)) < 200:
-            continue
-        hz = sum(a <= 0 < b for a, b in zip(block, block[1:])) * 20
-        if abs(hz - 440) <= 40:
-            good += 1
-        else:
-            off += 1
-    return good, off
-
-
 def wait_path(path, proc):
     """Return once PATH exists; raise if PROC ends first."""
     while not path.exists():
@@ -275,7 +258,8 @@ class Runner:
 
     def tone(self, name):
         """Run the tone probe as NAME while the loopback records; return its
-        status, its output and the 440 Hz and other windows recorded."""
+        status, its output and the windows recorded, as wm.py sorts them: at
+        440 Hz, whole at another frequency, and filled in part."""
         stop, ready = threading.Event(), threading.Event()
         samples = bytearray()
         failed = []
@@ -297,8 +281,8 @@ class Runner:
         finally:
             stop.set()
             thread.join()
-        good, off = tone_windows(bytes(samples))
-        return status, text, good, off
+        good, off, edges, kinds = tone_windows(bytes(samples))
+        return status, text, good, len(off), edges, kinds
 
     def launch(self, name, program, extra=None, wait=True):
         """Run PROGRAM, a list, through the launcher as NAME, logging to NAME.log."""
@@ -500,6 +484,7 @@ class Runner:
                               renderer=renderer.group(1) if renderer else None,
                               tone_exit=tone[0], tone_ok="TONE OK" in tone[1],
                               tone_windows=tone[2], tone_off=tone[3],
+                              tone_edges=tone[4], tone_kinds=tone[5],
                               pulse=inside.get("PULSE_SERVER"),
                               bus=inside.get("DBUS_SESSION_BUS_ADDRESS"),
                               unpacked=unpacked.group(1) if unpacked else None,
@@ -523,7 +508,7 @@ class Runner:
         tone = self.tone("tone64")
         results["direct"] = dict(self.options("d3d964"), exit=status, tone_exit=tone[0],
                                  tone_ok="TONE OK" in tone[1], tone_windows=tone[2],
-                                 tone_off=tone[3])
+                                 tone_off=tone[3], tone_edges=tone[4], tone_kinds=tone[5])
         u, d = results["umu"], results["direct"]
         want = ref["draw"].get("d3d964") if ref is not None else None
         say("umu: runtime %s exit %d crc32 %s linux %s adapter %s options %s fsync %s opengl %s" % (
@@ -532,9 +517,10 @@ class Runner:
         gl_want = ref["draw"].get("gl64") if ref is not None else None
         say("umu: gl64 exit %d crc32 %s linux %s renderer %s" % (
             u["gl_exit"], u["gl_crc32"], gl_want, u["renderer"]))
-        say("umu: tone exit %d ok %s windows %d off %d; direct exit %d ok %s windows %d off %d" % (
-            u["tone_exit"], u["tone_ok"], u["tone_windows"], u["tone_off"], d["tone_exit"],
-            d["tone_ok"], d["tone_windows"], d["tone_off"]))
+        for route, r in (("umu", u), ("direct", d)):
+            say("umu: tone %s exit %d ok %s windows %d off %d partial %d %s" % (
+                route, r["tone_exit"], r["tone_ok"], r["tone_windows"], r["tone_off"],
+                r["tone_edges"], r["tone_kinds"]))
         say("umu: container PULSE_SERVER %s DBUS_SESSION_BUS_ADDRESS %s" % (u["pulse"], u["bus"]))
         say("umu: direct exit %d options %s fsync %s opengl %s; second start fetched %s cache %s" % (
             d["exit"], d["options"], d["fsync"], d["opengl"], u["again"], u["cache"]))
@@ -546,7 +532,7 @@ class Runner:
                 d["opengl"] and u["gl_exit"] == 0 and u["gl_crc32"] is not None and
                 (gl_want is None or u["gl_crc32"] == gl_want) and
                 "virgl" in (u["renderer"] or "") and all(
-                    r["tone_exit"] == 0 and r["tone_ok"] and r["tone_windows"] >= 10 and
+                    r["tone_exit"] == 0 and r["tone_ok"] and r["tone_windows"] >= 20 and
                     r["tone_off"] * 5 <= r["tone_windows"] for r in (u, d)) and
                 u["pulse"] is not None and u["bus"] is not None and not refused)
 
