@@ -513,6 +513,39 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
     return map(vm, t, gfn, 1, leaf_entry(vm, phys, writable, 0, paging_frame_is_device(phys)));
 }
 
+int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
+{
+    uint64_t size = range->size, step;
+    int32_t r = 0;
+    int level;
+
+    if (range->flags || ((range->gpa | range->size) & 4095u) != 0 ||
+        range->gpa + range->size <= range->gpa) {
+        return -EINVAL;
+    }
+    while (range->size) {
+        if (signal_pending()) {
+            r = -EINTR;
+            break;
+        }
+        r = kvm_tdp_fault(vm, range->gpa >> 12, 0);
+        if (r != 0) {
+            r = r > 0 ? -ENOENT : r;
+            break;
+        }
+        step = 4096u;
+        if (find_leaf((struct tdp *)vm->tdp, range->gpa >> 12, &level) && level == 2) {
+            step = TDP_LARGE - (range->gpa & (TDP_LARGE - 1u));
+        }
+        if (step > range->size) {
+            step = range->size;
+        }
+        range->gpa += step;
+        range->size -= step;
+    }
+    return size == range->size ? r : 0;
+}
+
 void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned)
 {
     uint32_t before = vm->noncoherent;

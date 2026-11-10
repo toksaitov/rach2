@@ -1699,6 +1699,24 @@ static int32_t vcpu_enable_cap(struct kvm_vcpu *v, uintptr_t arg)
     return kvm_hv_enable_cap(v, &cap);
 }
 
+/** KVM_PRE_FAULT_MEMORY: the range at `arg` is mapped and written back
+ * with what is left of it, as Linux writes it back whatever the result.
+ * `kvm_tdp_pre_fault`'s result, or -EFAULT. */
+static int32_t pre_fault(struct kvm_vcpu *v, uintptr_t arg)
+{
+    struct kvm_pre_fault_memory range;
+    int32_t r;
+
+    if (copy_from_user(&range, (const void __user *)arg, sizeof(range)) != 0) {
+        return -EFAULT;
+    }
+    r = kvm_tdp_pre_fault(v->vm, &range);
+    if (copy_to_user((void __user *)arg, &range, sizeof(range)) != 0) {
+        return -EFAULT;
+    }
+    return r;
+}
+
 /** The ioctls of `v` but KVM_RUN, under its lock. */
 static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
 {
@@ -1796,6 +1814,8 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return kvm_clock_ctrl(v);
     case KVM_GET_STATS_FD:
         return kvm_stats_fd(v->vm, v);
+    case KVM_PRE_FAULT_MEMORY:
+        return pre_fault(v, arg);
     default:
         return -EINVAL;
     }
