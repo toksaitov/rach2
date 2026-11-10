@@ -1900,6 +1900,36 @@ static void refused_rows(int fd)
     v->events.exception.pending = 0;
 }
 
+/** An MMIO read, MOV AX, [BX], at an exit address unlike its operand's,
+ * answered once under immediate_exit. */
+static void read_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct row *w;
+    int launches;
+
+    code(fd, 0x1100, "\x8b\x07", 2, 0);
+    set_ds_bx(fd, 0xD0000000ull, 0);
+    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+    w->gpa = 0xD0000FF8ull;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO &&
+              rp->u.mmio.phys_addr == 0xD0000000ull && rp->u.mmio.len == 2 && !rp->u.mmio.is_write,
+          "MOV AX, [BX] on MMIO is a read of two bytes for the caller, at the operand's address "
+          "and not the exit's");
+    rp->u.mmio.data[0] = 0xEF;
+    rp->u.mmio.data[1] = 0xBE;
+    rp->immediate_exit = 1;
+    launches = m.launches + m.resumes;
+    CHECK(run(fd) == -EINTR && (regs_of(fd).rax & 0xFFFF) == 0xBEEF && regs_of(fd).rip == 0x1102 &&
+              m.launches + m.resumes == launches,
+          "its answer reaches AX and the instruction is stepped before KVM_RUN returns under "
+          "immediate_exit, with no guest entered");
+    rp->immediate_exit = 0;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && (regs_of(fd).rax & 0xFFFF) == 0xBEEF && regs_of(fd).rip == 0x1103,
+          "and the guest runs on after it");
+}
+
 /** EPT faults: a RAM frame mapped in the kernel; MMIO reads, writes and a
  * read-modify-write carried out with the caller, at the address the
  * instruction's operand names, DS:BX with DS's base on the device's
@@ -1916,19 +1946,7 @@ static void ept_rows(int fd)
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT && tdp_fault_gfn == 3 && tdp_fault_write,
           "a write to a RAM frame is mapped in the kernel and the guest runs on");
 
-    code(fd, 0x1100, "\x8b\x07", 2, 0);
-    set_ds_bx(fd, 0xD0000000ull, 0);
-    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
-    w->gpa = 0xD0000FF8ull;
-    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO &&
-              rp->u.mmio.phys_addr == 0xD0000000ull && rp->u.mmio.len == 2 && !rp->u.mmio.is_write,
-          "MOV AX, [BX] on MMIO is a read of two bytes for the caller, at the operand's address "
-          "and not the exit's");
-    rp->u.mmio.data[0] = 0xEF;
-    rp->u.mmio.data[1] = 0xBE;
-    script(EXIT_HLT, 0, 1);
-    CHECK(run(fd) == 0 && (regs_of(fd).rax & 0xFFFF) == 0xBEEF && regs_of(fd).rip == 0x1103,
-          "its answer reaches AX and the instruction is stepped");
+    read_rows(fd);
 
     code(fd, 0x1200, "\x88\x07", 2, 0x77);
     set_ds_bx(fd, 0xD0000000ull, 0x10);
