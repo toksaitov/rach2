@@ -143,6 +143,10 @@
 #define SYS_WRITEV                 146
 #define SYS_PREAD64                180
 #define SYS_PWRITE64               181
+#define SYS_PREADV                 333
+#define SYS_PWRITEV                334
+#define SYS_PREADV2                378
+#define SYS_PWRITEV2               379
 #define SYS_GETCWD                 183
 #define SYS_LLSEEK                 140
 #define SYS_FSTAT64                197
@@ -241,13 +245,14 @@
 #define SYS_DUP3          330
 #define SYS_PRLIMIT64     340
 
-/* Write-back and space: fsync and fdatasync write back one open file, sync
- * and syncfs every mounted file system (syscall_fs.c). */
-#define SYS_SYNC      36
-#define SYS_FSYNC     118
-#define SYS_FDATASYNC 148
-#define SYS_SYNCFS    344
-#define SYS_FALLOCATE 324
+/* Write-back and space: fsync, fdatasync and sync_file_range write back one
+ * open file, sync and syncfs every mounted file system (syscall_fs.c). */
+#define SYS_SYNC            36
+#define SYS_FSYNC           118
+#define SYS_FDATASYNC       148
+#define SYS_SYNC_FILE_RANGE 314
+#define SYS_SYNCFS          344
+#define SYS_FALLOCATE       324
 
 /* Advice about coming reads, which the page cache accepts and ignores. */
 #define SYS_READAHEAD    225

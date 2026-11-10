@@ -3773,7 +3773,7 @@
     },
     {
       "case_id": "guest.default.preadmusl",
-      "behavior": "pread and pwrite read and write at an offset without moving the descriptor's own, O_APPEND writes at the end, /proc files and /proc/self/mem seek as Linux's do, and each wrong argument is refused with Linux's errno in Linux's order; on x86-64 preadv and pwritev do the same with vectors.",
+      "behavior": "pread and pwrite read and write at an offset without moving the descriptor's own, O_APPEND writes at the end, /proc files and /proc/self/mem seek as Linux's do, and each wrong argument is refused with Linux's errno in Linux's order; preadv and pwritev do the same with vectors, pwritev2 appends with RWF_APPEND and preadv2 reads back, and sync_file_range flushes a range, on both architectures.",
       "units": ["default", "musl/preadmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -3811,13 +3811,17 @@
         {"assertion_id": "pwritev-vector", "checks": "pwritev at offset 12 writes its buffers in turn, skips the empty one, and leaves the offset at 3", "source": "program"},
         {"assertion_id": "preadv-vector", "checks": "preadv at offset 13 reads into its buffers in turn and leaves the offset at 3", "source": "program"},
         {"assertion_id": "preadv-short", "checks": "a preadv that reaches the end of the file returns what was there, and one at the end or with no buffers returns 0", "source": "program"},
-        {"assertion_id": "preadv-high-half", "checks": "preadv by number ignores the offset's high half in its fifth argument", "source": "program"},
+        {"assertion_id": "preadv-high-half", "checks": "on x86-64 preadv by number ignores the offset's high half in its fifth argument", "source": "program"},
+        {"assertion_id": "preadv-high-word", "checks": "on i686 preadv by number reads its fifth argument as the offset's high half: 4 GiB past offset 4 reads nothing, offset 4 reads the bytes there", "source": "program"},
         {"assertion_id": "pwritev-efault", "checks": "pwritev with a buffer the program cannot reach fails with EFAULT before writing a byte", "source": "program"},
         {"assertion_id": "vector-refusals", "checks": "preadv and pwritev refuse a negative offset, a negative count and one past 1024 with EINVAL, a descriptor not open with EBADF, a descriptor open for the other direction with EBADF, and a pipe with ESPIPE", "source": "program"},
-        {"assertion_id": "no-vectors", "checks": "on i686 preadv and pwritev fail with ENOSYS", "source": "program"}
+        {"assertion_id": "pwritev2-append", "checks": "pwritev2 with RWF_APPEND on a description without O_APPEND writes at the end, moving the offset at offset -1 and leaving it at offset 0, and leaves O_APPEND clear", "source": "program"},
+        {"assertion_id": "preadv2-readback", "checks": "preadv2 at offset 0 reads the five bytes the writes left and leaves the offset", "source": "program"},
+        {"assertion_id": "rwv2-refusals", "checks": "preadv2 and pwritev2 of a descriptor not open fail with EBADF though a flag is unknown, and of an open one with the unknown flag with EOPNOTSUPP", "source": "program"},
+        {"assertion_id": "range-sync", "checks": "sync_file_range with SYNC_FILE_RANGE_WRITE on the file returns 0, of a descriptor not open fails with EBADF though its flags and offset are bad, with an unknown flag fails with EINVAL, and of /dev/null with ESPIPE", "source": "program"}
       ],
       "branches": [
-        {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "x86-64", "when": null, "assertions": ["vector-file", "pwritev-vector", "preadv-vector", "preadv-short", "preadv-high-half", "pwritev-efault", "vector-refusals"]}, {"alternative_id": "i686", "when": null, "assertions": ["mem-write-eio", "no-vectors"]}]}
+        {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "x86-64", "when": null, "assertions": ["preadv-high-half"]}, {"alternative_id": "i686", "when": null, "assertions": ["mem-write-eio", "preadv-high-word"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],

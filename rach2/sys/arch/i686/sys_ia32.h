@@ -12,6 +12,7 @@ long sys_ia32_truncate64(isr_params_t *params);
 long sys_ia32_ftruncate64(isr_params_t *params);
 long sys_ia32_pread64(isr_params_t *params);
 long sys_ia32_pwrite64(isr_params_t *params);
+long sys_ia32_sync_file_range(isr_params_t *params);
 long sys_ia32_fallocate(isr_params_t *params);
 long sys_ia32_fadvise64(isr_params_t *params);
 long sys_ia32_fadvise64_64(isr_params_t *params);

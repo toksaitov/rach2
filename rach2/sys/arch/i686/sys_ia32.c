@@ -55,6 +55,17 @@ long sys_ia32_pwrite64(isr_params_t *params)
                          (long long)ia32_join(SC_ARG(params, 3), SC_ARG(params, 4)));
 }
 
+/** sync_file_range(2): the descriptor, the offset and the length in two
+ * arguments each, low word first, then the flags. preadv, pwritev, preadv2
+ * and pwritev2 split their position the same way, which the shared handlers
+ * put together themselves (`pos_from_hilo`). */
+long sys_ia32_sync_file_range(isr_params_t *params)
+{
+    return ksys_sync_file_range(
+        (int)SC_ARG(params, 0), (int64_t)ia32_join(SC_ARG(params, 1), SC_ARG(params, 2)),
+        (int64_t)ia32_join(SC_ARG(params, 3), SC_ARG(params, 4)), (uint32_t)SC_ARG(params, 5));
+}
+
 /** fallocate(2): the descriptor, the mode, then the offset and the length
  * in two arguments each, low word first. */
 long sys_ia32_fallocate(isr_params_t *params)

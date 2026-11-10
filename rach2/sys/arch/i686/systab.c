@@ -92,6 +92,10 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_WRITE] = sys_write;
     table[SYS_PREAD64] = sys_ia32_pread64;
     table[SYS_PWRITE64] = sys_ia32_pwrite64;
+    table[SYS_PREADV] = sys_preadv;
+    table[SYS_PWRITEV] = sys_pwritev;
+    table[SYS_PREADV2] = sys_preadv2;
+    table[SYS_PWRITEV2] = sys_pwritev2;
     table[SYS_OPEN] = sys_open;
     table[SYS_CLOSE] = sys_close;
     table[SYS_WAITPID] = sys_waitpid;
@@ -307,6 +311,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_UMOUNT2] = sys_umount2;
     table[SYS_PIVOT_ROOT] = sys_pivot_root;
     table[SYS_FDATASYNC] = sys_fdatasync;
+    table[SYS_SYNC_FILE_RANGE] = sys_ia32_sync_file_range;
     table[SYS_LINK] = sys_link;
     table[SYS_LINKAT] = sys_linkat;
     table[SYS_SYMLINK] = sys_symlink;
