@@ -108,6 +108,16 @@ unusedStructMember:*sys/syscall_proc.c
 unusedStructMember:*sys/network/netif.c
 unusedStructMember:*sys/proc/coredump.c
 
+# These Linux ABI records are copied whole. The watchdog support record's
+# options, firmware and identity go to WDIOC_GETSUPPORT; hd_geometry's first
+# four bytes and the loop status records' padding and unused encryption
+# fields retain their offsets; uc_link belongs to the i386 signal frame;
+# ptrace_syscall_info's padding keeps its union and tail aligned.
+unusedStructMember:*sys/arch/x86/itco.c
+unusedStructMember:*sys/arch/x86_64/ia32_ioctl.c
+unusedStructMember:*sys/arch/x86_64/sigframe32.c
+unusedStructMember:*sys/proc/ptrace.c
+
 # `struct mixer_info` is OSS's, which SOUND_MIXER_INFO copies to the user
 # whole; its `fillers` are the layout's reserved words, zero on the way out.
 unusedStructMember:*sys/audio/mixer.c

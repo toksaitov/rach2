@@ -2972,15 +2972,13 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
  * runs the same code as a native one.
  */
 
+#if defined(IA32_SYSCALL_TABLE_SIZE)
 /** Whether this call's structures are i386's. */
 static int sock_compat(void)
 {
-#if defined(IA32_SYSCALL_TABLE_SIZE)
     return in_compat_syscall();
-#else
-    return 0;
-#endif
 }
+#endif
 
 /** The size of the caller's msghdr (syscall_internal.h). */
 uint32_t msghdr_size(void)
@@ -3107,6 +3105,7 @@ int32_t sock_timeo_get(int name, uintptr_t val, uint32_t len, int64_t tv[2])
         tv[1] = (int64_t)((uint64_t)w[2] | (uint64_t)w[3] << 32);
         return 0;
     }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
     if (sock_compat()) {
         int32_t t[2];
 
@@ -3118,7 +3117,9 @@ int32_t sock_timeo_get(int name, uintptr_t val, uint32_t len, int64_t tv[2])
         }
         tv[0] = t[0];
         tv[1] = t[1];
-    } else {
+    } else
+#endif
+    {
         long t[2];
 
         if (len < sizeof(t)) {
@@ -3147,6 +3148,7 @@ uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16])
         k_memcpy(out, w, sizeof(w));
         return (uint32_t)sizeof(w);
     }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
     if (sock_compat()) {
         int32_t t[2];
 
@@ -3154,7 +3156,9 @@ uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16])
         t[1] = (int32_t)tv[1];
         k_memcpy(out, t, sizeof(t));
         return (uint32_t)sizeof(t);
-    } else {
+    } else
+#endif
+    {
         long t[2];
 
         t[0] = (long)tv[0];
@@ -3876,6 +3880,7 @@ static int mmsg_ts_get(uintptr_t u, int wide, int64_t ts[2])
         ts[1] = (int64_t)w[2];
         return 0;
     }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
     if (sock_compat()) {
         int32_t t[2];
 
@@ -3884,7 +3889,9 @@ static int mmsg_ts_get(uintptr_t u, int wide, int64_t ts[2])
         }
         ts[0] = t[0];
         ts[1] = t[1];
-    } else {
+    } else
+#endif
+    {
         long t[2];
 
         if (copy_from_user(t, (const void __user *)u, sizeof(t)) != 0) {
@@ -3909,13 +3916,16 @@ static int mmsg_ts_put(uintptr_t u, int wide, const int64_t ts[2])
         w[3] = 0;
         return copy_to_user((void __user *)u, w, sizeof(w)) != 0 ? -EFAULT : 0;
     }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
     if (sock_compat()) {
         int32_t t[2];
 
         t[0] = (int32_t)ts[0];
         t[1] = (int32_t)ts[1];
         return copy_to_user((void __user *)u, t, sizeof(t)) != 0 ? -EFAULT : 0;
-    } else {
+    } else
+#endif
+    {
         long t[2];
 
         t[0] = (long)ts[0];
@@ -4019,7 +4029,12 @@ static int cmsg_compat_refused(int call, const unsigned long *args)
     } else {
         return 0;
     }
-    return (flags & MSG_CMSG_COMPAT) && !sock_compat();
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return 0;
+    }
+#endif
+    return (flags & MSG_CMSG_COMPAT) != 0;
 }
 
 /**
