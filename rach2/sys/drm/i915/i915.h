@@ -718,7 +718,12 @@ struct intel_pps {
  * last, and `use_rate_select` says they came from eDP 1.4's table, set
  * by index through DP_LINK_RATE_SET. `max_lanes` the lanes it has. The
  * link now: `link_rate` (kHz), `lane_count`, `train_set` per lane as
- * DP_TRAINING_LANE0_SET has it, and `link_trained`. `buf_ctl` is the
+ * DP_TRAINING_LANE0_SET has it, and `link_trained`. `rates` are the
+ * `nrates` rates both the port and the sink take, lowest first. After
+ * failed trainings (intel_dp_link_training.c), `use_max_params` says the
+ * next mode set takes the sink's most instead of the least the mode
+ * needs, `link_max_rate` and `link_max_lanes` bound the link, 0 for no
+ * bound, and `train_failures` counts the failures in a row. `buf_ctl` is the
  * value DDI_BUF_CTL is built in, `saved_port_bits` the bits of the
  * firmware's kept across mode sets. `edid` holds `edid_len` bytes;
  * `fixed` the panel's modes, `nfixed` of them; `vbt` what the VBT says of
@@ -738,6 +743,11 @@ struct intel_dp {
     uint32_t lane_count;
     uint8_t train_set[4];
     uint8_t link_trained;
+    uint32_t rates[8];
+    int nrates;
+    uint8_t use_max_params;
+    uint32_t link_max_rate, link_max_lanes;
+    uint32_t train_failures;
     uint32_t buf_ctl;
     uint32_t saved_port_bits;
     uint8_t edid[128 * INTEL_EDID_BLOCKS];
@@ -2182,6 +2192,54 @@ uint32_t intel_max_dotclock(struct drm_i915_private *i915);
 /** 0 when a pipe's pixel rate of `pixel_rate` kHz fits the CD clock, Linux's
  * fixed_modeset_calc_cdclk, -EINVAL otherwise. */
 int32_t intel_cdclk_check(struct drm_i915_private *i915, uint32_t pixel_rate);
+
+/* The translations of DDI_BUF_TRANS a DisplayPort link uses on Haswell. */
+#define INTEL_DDI_DP_LEVELS 9
+
+/** Write DDI A's buffer translations for DisplayPort, Linux's
+ * hsw_prepare_dp_ddi_buffers. (intel_ddi.c) */
+void intel_ddi_prepare_buf_trans(struct drm_i915_private *i915);
+
+/** The most swing the port drives, as DP_TRAINING_LANEx_SET codes it. */
+uint8_t intel_ddi_dp_voltage_max(void);
+
+/** Build the panel's DDI_BUF_CTL for `lanes` at the lowest levels, not yet
+ * enabled, in `display.dp.buf_ctl`, Linux's intel_ddi_init_dp_buf_reg. */
+void intel_ddi_init_dp_buf_reg(struct drm_i915_private *i915, uint32_t lanes);
+
+/** Drive the levels of lane 0's `train_set` on DDI A, Linux's
+ * hsw_set_signal_levels. */
+void intel_ddi_set_signal_levels(struct drm_i915_private *i915);
+
+/** Wait, 8 us at most, for DDI A's buffer to go idle; a timeout is
+ * logged. */
+void intel_ddi_wait_buf_idle(struct drm_i915_private *i915);
+
+/** Turn the transport off and on again on pattern 1, `enhanced` framing
+ * or not, and enable the buffer, Linux's intel_ddi_prepare_link_retrain. */
+void intel_ddi_prepare_link_retrain(struct drm_i915_private *i915, int enhanced);
+
+/** Drive the training pattern of DPCD code `dp_train_pat` on the
+ * transport, the normal pattern for DP_TRAINING_PATTERN_DISABLE. */
+void intel_ddi_set_link_train(struct drm_i915_private *i915, uint8_t dp_train_pat);
+
+/** Put the transport on its idle pattern, Linux's
+ * intel_ddi_set_idle_link_train. */
+void intel_ddi_set_idle_link_train(struct drm_i915_private *i915);
+
+/**
+ * Train the eDP link at `display.dp`'s `link_rate` and `lane_count`, the
+ * buffer built by `intel_ddi_init_dp_buf_reg`, and leave the port on its
+ * idle pattern, Linux's intel_dp_start_link_train. A failure is tried once
+ * more at once; a second chooses the link the next mode set trains, for
+ * a mode of `mode_clock` kHz. 0, or -EIO when the link did not train.
+ * Process context; sleeps. (intel_dp_link_training.c)
+ */
+int32_t intel_dp_start_link_train(struct drm_i915_private *i915, uint32_t mode_clock);
+
+/** End the training: the sink off its pattern and the port on the normal
+ * one, Linux's intel_dp_stop_link_train. */
+void intel_dp_stop_link_train(struct drm_i915_private *i915);
 
 /** The CRC hooks of the CRTCs (i915_display_debugfs.c). */
 int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name);
