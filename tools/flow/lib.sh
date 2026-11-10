@@ -163,7 +163,8 @@ landed()
 # helper's worktree while the helper runs, and only when `disposable` finds
 # nothing ignored in it but build output, which goes with it. A branch goes when
 # it has landed, unless it is master or a branch checked out here or in a
-# worktree, which git refuses to delete. Each removal is logged.
+# worktree, which git refuses to delete. Each removal is logged, and so is a
+# finished worktree that stays, with the condition that keeps it.
 tidy()
 {
     top=$(git rev-parse --show-toplevel) || return 1
@@ -176,8 +177,15 @@ tidy()
         else
             landed "$head" || continue
         fi
-        disposable "$w" && ! inside "$w" "$busy" &&
-            git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
+        if ! disposable "$w"; then
+            log "tidy: kept: $w: $why"
+        elif inside "$w" "$busy"; then
+            log "tidy: kept: $w: a process has its working directory in it"
+        elif err=$(git worktree remove "$w" 2>&1); then
+            log "tidy: removed the worktree $w"
+        else
+            log "tidy: kept: $w: $(printf '%s\n' "$err" | head -1)"
+        fi
     done
     git worktree prune
     git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do
@@ -214,9 +222,11 @@ closed_task()
 # krffs files that make writes from the committed key pairs, Python's caches
 # Finder's .DS_Store files, and a Doom WAD or GNU downloads equal to the main
 # working tree's. Another key, a password, any other WAD, a person's notes or
-# any file under build/runs or build/flow keeps the worktree.
+# any file under build/runs or build/flow keeps the worktree. On failure, `why`
+# names what keeps it.
 disposable()
 {
+    why="git cannot list its ignored files"
     ignored=$(git -C "$1" ls-files --others --ignored --exclude-standard --directory) || return 1
     main=$(primary "$1")
     wad=ports/doom/doom1.wad
@@ -226,11 +236,14 @@ disposable()
     if downloaded "$1" "$main"; then
         ignored=$(printf '%s\n' "$ignored" | grep -v '^vendor/gnu/downloads')
     fi
+    why="ignored files that are not build output"
     ! printf '%s\n' "$ignored" |
         grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)(__pycache__/|\.DS_Store$)|^\.claude/scheduled_tasks\.lock$|^krffs/(authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|rach2_(demo|test)_password)$' |
-        grep -q . &&
-        ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' &&
-        ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
+        grep -q . || return 1
+    why="GNU downloads that the main working tree lacks"
+    ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' || return 1
+    why="files under build/runs or build/flow"
+    ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
 }
 
 # downloaded W MAIN: succeed when MAIN has each file of the GNU downloads of W.
