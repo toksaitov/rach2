@@ -76,6 +76,7 @@ runner_start()
     runner_record "load start $(cut -d' ' -f1-3 /proc/loadavg)"
     runner_record "processes start $(ps -e -o pid= 2>/dev/null | wc -l)"
     RUNNER_BUSY0=$(runner_busy)
+    sed 's/^/kernel_before /' /proc/stat >> "$RUNNER_OUT/record"
     if [ -f /tmp/graphics.env ]; then
         cat /tmp/graphics.env >> "$RUNNER_OUT/record"
     fi
@@ -105,6 +106,7 @@ runner_finish()
     set -- $RUNNER_BUSY0 $(runner_busy)
     runner_record "load end $(cut -d' ' -f1-3 /proc/loadavg)"
     runner_record "busy $(awk -v b="$(($3 - $1))" -v t="$(($4 - $2))" 'BEGIN { printf "%.1f%%", t ? 100 * b / t : 0 }')"
+    sed 's/^/kernel_after /' /proc/stat >> "$RUNNER_OUT/record"
 }
 
 # runner_weston: start a headless Weston at the fixed size under kiosk-shell,
