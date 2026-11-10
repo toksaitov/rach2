@@ -837,6 +837,15 @@ static void row_cursor(void)
     CHECK(drm_mode_cursor_ioctl(&dev, &c, &fa) == 0 && cursor0.state->crtc_x == 30 &&
               cursor0.state->crtc_y == 40 && crtc0.cursor_x == 30,
           "CURSOR moves it");
+    c.x = -2147483647 - 1;
+    CHECK(drm_mode_cursor_ioctl(&dev, &c, &fa) == 0 && cursor0.state->crtc_x == c.x &&
+              !cursor0.state->visible,
+          "CURSOR at INT_MIN: hidden, its distance to the CRTC wrapped as Linux's");
+    c.x = -32768;
+    CHECK(drm_mode_cursor_ioctl(&dev, &c, &fa) == 0 && !cursor0.state->visible,
+          "CURSOR at SHRT_MIN: hidden");
+    c.x = 2147483647 - 64 + 1;
+    CHECK(drm_mode_cursor_ioctl(&dev, &c, &fa) == -ERANGE, "CURSOR past INT_MAX: ERANGE");
     c.flags = 4;
     CHECK(drm_mode_cursor_ioctl(&dev, &c, &fa) == -EINVAL, "an unknown cursor flag: EINVAL");
     c.flags = DRM_MODE_CURSOR_BO;

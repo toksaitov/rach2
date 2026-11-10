@@ -1085,33 +1085,48 @@ static uint32_t clip_scaled(int32_t src, int32_t dst, int32_t *clip)
     return (uint32_t)drm_div64(t, (uint32_t)dst);
 }
 
-/** Clip `dst` to `clip` and `src` with it, Linux's drm_rect_clip_scaled;
- * whether anything is left. */
+/** `a` - `b` wrapped to 32 bits, as Linux's kernel, built with
+ * -fno-strict-overflow, computes a rectangle's sides. */
+static int32_t wrap_sub(int32_t a, int32_t b)
+{
+    return (int32_t)((uint32_t)a - (uint32_t)b);
+}
+
+/**
+ * Clip `dst` to `clip` and `src` with it, Linux's drm_rect_clip_scaled;
+ * whether anything is left, its drm_rect_visible. The differences wrap as
+ * Linux's do, so that a rectangle at INT_MIN, whose distance to the clip
+ * overflows, is left as wide as the overflow says and is not visible.
+ */
 static int rect_clip_scaled(struct drm_rect *src, struct drm_rect *dst, const struct drm_rect *clip)
 {
     int32_t diff;
 
-    diff = clip->x1 - dst->x1;
+    diff = wrap_sub(clip->x1, dst->x1);
     if (diff > 0) {
-        src->x1 = src->x2 - (int32_t)clip_scaled(src->x2 - src->x1, dst->x2 - dst->x1, &diff);
+        src->x1 = src->x2 - (int32_t)clip_scaled(wrap_sub(src->x2, src->x1),
+                                                 wrap_sub(dst->x2, dst->x1), &diff);
         dst->x1 = clip->x1;
     }
-    diff = clip->y1 - dst->y1;
+    diff = wrap_sub(clip->y1, dst->y1);
     if (diff > 0) {
-        src->y1 = src->y2 - (int32_t)clip_scaled(src->y2 - src->y1, dst->y2 - dst->y1, &diff);
+        src->y1 = src->y2 - (int32_t)clip_scaled(wrap_sub(src->y2, src->y1),
+                                                 wrap_sub(dst->y2, dst->y1), &diff);
         dst->y1 = clip->y1;
     }
-    diff = dst->x2 - clip->x2;
+    diff = wrap_sub(dst->x2, clip->x2);
     if (diff > 0) {
-        src->x2 = src->x1 + (int32_t)clip_scaled(src->x2 - src->x1, dst->x2 - dst->x1, &diff);
+        src->x2 = src->x1 + (int32_t)clip_scaled(wrap_sub(src->x2, src->x1),
+                                                 wrap_sub(dst->x2, dst->x1), &diff);
         dst->x2 = clip->x2;
     }
-    diff = dst->y2 - clip->y2;
+    diff = wrap_sub(dst->y2, clip->y2);
     if (diff > 0) {
-        src->y2 = src->y1 + (int32_t)clip_scaled(src->y2 - src->y1, dst->y2 - dst->y1, &diff);
+        src->y2 = src->y1 + (int32_t)clip_scaled(wrap_sub(src->y2, src->y1),
+                                                 wrap_sub(dst->y2, dst->y1), &diff);
         dst->y2 = clip->y2;
     }
-    return dst->x2 > dst->x1 && dst->y2 > dst->y1;
+    return wrap_sub(dst->x2, dst->x1) > 0 && wrap_sub(dst->y2, dst->y1) > 0;
 }
 
 int32_t drm_atomic_helper_check_plane_state(struct drm_plane_state *ps,
