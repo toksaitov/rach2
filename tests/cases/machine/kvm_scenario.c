@@ -146,10 +146,10 @@ static void run(struct kvm_case *s)
     else if (s->runner == BOOT)
         snprintf(command, sizeof(command),
                  "cd " KVM_DIR " && sh kvm-boot.sh -a %s -o " KVM_DIR "/boot.log"
-                 " -k %s -i %s -t '%s'",
+                 " -k %s -i %s%s -t '%s'",
                  s->accel, s->rach2 ? "guests/rach2/kernel" : "guests/debian/vmlinuz",
                  s->rach2 ? "guests/rach2/ram.krffs" : "guests/debian/initrd",
-                 s->rach2 ? "KVMRACH2 OK" : "KVMGUEST OK");
+                 s->rach2 ? " -l rach2.tscreliable" : "", s->rach2 ? "KVMRACH2 OK" : "KVMGUEST OK");
     else
         snprintf(command, sizeof(command), "cd " KVM_DIR " && sh corpus.sh %s %s",
                  s->runner == UNIT ? "unit" : "selftests",
