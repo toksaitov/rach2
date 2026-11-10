@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.gpucompat",
+  "summary": "i386 GPU driver requests and shared-buffer interfaces on the native or ia32 kernel profile",
+  "cases": [
+    {
+      "case_id": "guest.gpucompat.i915",
+      "behavior": "An i386 program makes Intel GETPARAM and GEM calls on the i915 fault backend and shares buffers and fences through the fixed-width GPU interfaces; under RACH2_KERNEL=ia32 it runs on the x86-64 kernel",
+      "units": [
+        "rach2/sys/arch/x86_64/ia32_ioctl_gpu.c",
+        "gpucompatprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686"
+      ],
+      "workload": {
+        "arguments": [
+          "i915"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "devices": [
+            "edu"
+          ],
+          "boot_options": [
+            "rach2.i915fake"
+          ]
+        }
+      },
+      "execution": {
+        "program": "gpucompatprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "the probe unmaps memory and closes every object and descriptor on success or failure"
+      },
+      "assertions": [
+        {
+          "assertion_id": "open",
+          "checks": "The requested driver is found by VERSION on a render node",
+          "source": "program"
+        },
+        {
+          "assertion_id": "params",
+          "checks": "The i386 parameter request writes its int through the caller pointer; Intel also checks a high address, page boundary, read-only request, altered encoding and EFAULT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "buffer",
+          "checks": "An Intel GEM buffer or virgl texture reads back every byte written by the i386 program",
+          "source": "program"
+        },
+        {
+          "assertion_id": "syncobj",
+          "checks": "Timeline signal and query follow 64-bit fields holding i386 pointers",
+          "source": "program"
+        },
+        {
+          "assertion_id": "udmabuf",
+          "checks": "A sealed memfd is exported through UDMABUF_CREATE",
+          "source": "program"
+        },
+        {
+          "assertion_id": "dmabuf",
+          "checks": "Both SET_NAME encodings, CPU sync and sync-file export pass",
+          "source": "program"
+        },
+        {
+          "assertion_id": "sync-file",
+          "checks": "The exported empty sync file reports signalled status and no fences",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "gpucompatprobe",
+          "node": "tests/gpucompatprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "An i386 GPU probe on the x86-64 kernel needs QEMU virgl or the edu i915 fault backend"
+      }
+    },
+    {
+      "case_id": "guest.gpucompat.virgl",
+      "behavior": "An i386 program makes virtio-gpu calls under virgl and shares buffers and fences through the fixed-width GPU interfaces; under RACH2_KERNEL=ia32 it runs on the x86-64 kernel",
+      "units": [
+        "rach2/sys/arch/x86_64/ia32_ioctl_gpu.c",
+        "gpucompatprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686"
+      ],
+      "workload": {
+        "arguments": [
+          "virtio_gpu"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 268435456,
+          "firmware": "direct",
+          "devices": [],
+          "boot_options": [],
+          "display": "virgl"
+        },
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "gpucompatprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "the probe unmaps memory and closes every object and descriptor on success or failure"
+      },
+      "assertions": [
+        {
+          "assertion_id": "open",
+          "checks": "The requested driver is found by VERSION on a render node",
+          "source": "program"
+        },
+        {
+          "assertion_id": "params",
+          "checks": "The i386 parameter request writes its int through the caller pointer; Intel also checks a high address, page boundary, read-only request, altered encoding and EFAULT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "buffer",
+          "checks": "An Intel GEM buffer or virgl texture reads back every byte written by the i386 program",
+          "source": "program"
+        },
+        {
+          "assertion_id": "syncobj",
+          "checks": "Timeline signal and query follow 64-bit fields holding i386 pointers",
+          "source": "program"
+        },
+        {
+          "assertion_id": "udmabuf",
+          "checks": "A sealed memfd is exported through UDMABUF_CREATE",
+          "source": "program"
+        },
+        {
+          "assertion_id": "dmabuf",
+          "checks": "Both SET_NAME encodings, CPU sync and sync-file export pass",
+          "source": "program"
+        },
+        {
+          "assertion_id": "sync-file",
+          "checks": "The exported empty sync file reports signalled status and no fences",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 402653184,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "gpucompatprobe",
+          "node": "tests/gpucompatprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "An i386 GPU probe on the x86-64 kernel needs QEMU virgl or the edu i915 fault backend"
+      }
+    }
+  ]
+}
