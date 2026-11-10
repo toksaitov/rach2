@@ -377,10 +377,11 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/** Report the master's readiness, all on m_read_wq: POLLIN when the ring has
- * output or every slave has closed, POLLHUP once every slave has closed,
- * POLLIN, POLLRDNORM and POLLPRI for pending packet status, and POLLOUT
- * while the slave's discipline has room for a line. */
+/** Report the master's readiness, all on m_read_wq, as Linux's n_tty_poll:
+ * POLLIN and POLLRDNORM when the ring has output or every slave has closed,
+ * POLLHUP once every slave has closed, POLLIN, POLLRDNORM and POLLPRI for
+ * pending packet status, and POLLOUT and POLLWRNORM while the slave's
+ * discipline has room for a line. */
 static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -390,7 +391,7 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         *wq = &p->m_read_wq;
     }
     if (pty_m_avail(p) != 0 || p->slave_opens == 0) {
-        revents |= (short)(events & POLLIN);
+        revents |= (short)(events & (POLLIN | POLLRDNORM));
     }
     if (p->packet && p->pktstatus) {
         revents |= (short)(events & (POLLIN | POLLRDNORM | POLLPRI));
@@ -399,7 +400,7 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         revents |= POLLHUP;
     }
     if (n_tty_has_room(&p->slave.ldisc)) {
-        revents |= (short)(events & POLLOUT);
+        revents |= (short)(events & (POLLOUT | POLLWRNORM));
     }
     return revents;
 }
