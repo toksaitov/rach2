@@ -158,3 +158,4 @@ d3d-wine|qemu,mke2fs|full||17408|x86_64
 d3d-vkd3d|qemu,mke2fs|full||17408|x86_64
 desktop|qemu,python3|full|desktop-test*|4096|x86_64
 vgpu|qemu|full||256
+gpucompat|qemu|full||640|i686
