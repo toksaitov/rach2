@@ -600,6 +600,9 @@ static void host_release(uint32_t ha)
     CHECK(at < MAX_LOG && log_find(VIRTIO_GPU_CMD_RESOURCE_UNREF, before) > at &&
               log_find(VIRTIO_GPU_CMD_RESOURCE_UNREF, before) < MAX_LOG,
           "a placed blob is unmapped before its UNREF");
+    CHECK(at < MAX_LOG && gpu.fence[at] == 0 &&
+              gpu.fence[log_find(VIRTIO_GPU_CMD_RESOURCE_UNREF, before)] != 0,
+          "the UNMAP_BLOB carries no fence, as Linux sends it, and the UNREF one");
     CHECK(gpu.windows == 1, "its window goes with it");
     CHECK(blob(VIRTGPU_BLOB_MEM_HOST3D, VIRTGPU_BLOB_FLAG_USE_MAPPABLE, PAGE_SIZE, 10, &hd) == 0 &&
               vgpu_bo(obj_of(hd))->hv_offset == 0,
