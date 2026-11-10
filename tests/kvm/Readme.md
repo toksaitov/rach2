@@ -9,7 +9,7 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 * `entry`: the small real-mode guest in `svm-entry.c` reads its memory slot, executes CPUID, reads CR0 and EFER, exits through port I/O and HLT, and reads a replacement frame after MAP_FIXED. It starts with XCR0 at its reset value, which also checks that the backend restores the full XSAVE image before applying the guest's XCR0.
 * `slots`: `svm-entry slots` repeats the read after fork, mprotect, discard and munmap with a replacement page. A guest then counts in another page while the caller forks, protects and replaces the data page; its first counter increment proves it was running before the changes, and it exits only after reading the replacement value. The same case reads VGA memory through a `/dev/mem` slot and the end of a 4 MiB GEM object through another slot, on std-vga.
 * `leak`: `leak.sh` kills QEMU after the Debian guest prints its kernel version. The five live KVM counts and `fs.file-nr` must return to their initial values, QEMU must have no pinned pages before the kill, and its address space must disappear after it is reaped.
-* `boot-debian-kvm` and `boot-rach2-kvm`: Debian and the small i686 Rach2 guest boot under Rach2's SVM on `max-svm`, on Linux and macOS. The `-nested` variants run on `host-svm`, on Linux alone.
+* `boot-debian-kvm` and `boot-rach2-kvm`: Debian and the small i686 Rach2 guest boot under Rach2's SVM on `max-svm`, on Linux and macOS. These boots use the full in-kernel interrupt controller. The `-nested` variants run on `host-svm`, on Linux alone.
 * `boot-debian-tcg`: `kvm-boot.sh -a tcg` boots the Debian guest in Rach2's QEMU under TCG to its token.
 * `unit-tests` and `selftests`: `corpus.sh` runs the corpus under Rach2's KVM, on the `max-svm` profile, on Linux and on macOS.
 * `unit-tests-nested` and `selftests-nested`: the same on the `host-svm` profile, on Linux alone.
@@ -19,11 +19,12 @@ The accelerator outside is the run's, as for every case: on the testing PC KVM, 
 On a Rach2 with the GNU root, the runners run alone, as root:
 
     sh kvm-boot.sh -k guests/debian/vmlinuz -i guests/debian/initrd
+    sh kvm-boot.sh -I split -k guests/debian/vmlinuz -i guests/debian/initrd
     sh kvm-boot.sh -a tcg -d /tmp/i686.img -t 'RACH2 OK'
     sh corpus.sh unit unit-tests.list
     sh corpus.sh selftests selftests.list
 
-[`kvm-boot.sh`](kvm-boot.sh) boots a kernel and initramfs, or a raw disk under SeaBIOS, with `-accel kvm,kernel-irqchip=split`, since Rach2's KVM has the split interrupt controller alone, or `-accel tcg`, and the console on a serial port it reads once a second. It passes on the token, `KVMGUEST OK` by default, and fails when QEMU ends without it or the console stays silent for 600 s, a bound on silence that `-w` changes, not on the boot's length. Its header lists the options. [`corpus.sh`](corpus.sh) runs each test that a list runs, kvm-unit-tests' through their own `run_tests.sh` with no timeout, and judges each result against the list; its last line is `kvm-corpus: result: pass` or `fail` with the names of the tests that gave another result.
+[`kvm-boot.sh`](kvm-boot.sh) boots a kernel and initramfs, or a raw disk under SeaBIOS, with `-accel kvm,kernel-irqchip=on`, or `-accel tcg`, and the console on a serial port it reads once a second. It passes on the token, `KVMGUEST OK` by default, and fails when QEMU ends without it or the console stays silent for 600 s, a bound on silence that `-w` changes, not on the boot's length. `-I split` keeps the PIC, IOAPIC and PIT in QEMU; `-I off` also keeps the local APIC there. Its header lists the options. [`corpus.sh`](corpus.sh) runs each test that a list runs, kvm-unit-tests' through their own `run_tests.sh` with no timeout, and judges each result against the list; its last line is `kvm-corpus: result: pass` or `fail` with the names of the tests that gave another result.
 
 ## Results
 

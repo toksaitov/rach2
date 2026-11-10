@@ -1439,7 +1439,7 @@ int32_t kvm_hv_get_cpuid(struct kvm_vcpu *v, uintptr_t arg)
         HV_CPUID_SYNDBG_PLATFORM, HV_CPUID_NESTED};
     struct kvm_cpuid_entry2 ent[10];
     struct kvm_cpuid2 head;
-    int apic = !v || v->vm->irqchip == KVM_IRQCHIP_SPLIT;
+    int apic = !v || v->vm->irqchip != KVM_IRQCHIP_NONE;
     uint32_t i;
 
     if (copy_from_user(&head, (const void __user *)arg, sizeof(head)) != 0) {
@@ -1529,7 +1529,7 @@ int32_t kvm_hv_enable_cap(struct kvm_vcpu *v, const struct kvm_enable_cap *cap)
         }
         /* fall through */
     case KVM_CAP_HYPERV_SYNIC:
-        if (v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+        if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
             return -EINVAL;
         }
         if (hv_init(v) != 0) {
@@ -1847,7 +1847,7 @@ static uint64_t hc_send_ipi(struct kvm_vcpu *v, struct hcall *hc)
     uint32_t vector, i;
     int all;
 
-    if (hc_form_bad(hc) || v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+    if (hc_form_bad(hc) || v->vm->irqchip == KVM_IRQCHIP_NONE) {
         return HV_STATUS_INVALID_INPUT;
     }
     k_memset(banks, 0, sizeof(banks));

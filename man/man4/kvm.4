@@ -67,7 +67,15 @@ and
 .Dv KVM_SET_BOOT_CPU_ID ,
 .Dv KVM_ENABLE_CAP ,
 .Dv KVM_CREATE_IRQCHIP ,
-which it refuses,
+.Dv KVM_GET_IRQCHIP ,
+.Dv KVM_SET_IRQCHIP ,
+.Dv KVM_CREATE_PIT ,
+.Dv KVM_CREATE_PIT2 ,
+.Dv KVM_GET_PIT ,
+.Dv KVM_SET_PIT ,
+.Dv KVM_GET_PIT2 ,
+.Dv KVM_SET_PIT2 ,
+.Dv KVM_REINJECT_CONTROL ,
 .Dv KVM_SET_GSI_ROUTING ,
 .Dv KVM_IRQ_LINE ,
 .Dv KVM_IRQ_LINE_STATUS ,
@@ -108,7 +116,7 @@ The backends offer
 .Dv KVM_CAP_X86_ROBUST_SINGLESTEP
 for their single stepping and event injection.
 .Dv KVM_SET_VAPIC_ADDR
-accepts address zero with the split controller, to disable the optional
+accepts address zero with a local APIC in the kernel, to disable the optional
 shared VAPIC page; the kernel does not offer
 .Dv KVM_CAP_VAPIC .
 .Pp
@@ -233,23 +241,57 @@ a multiple of 64, and write-protects those pages; with
 .Dv KVM_DIRTY_LOG_INITIALLY_SET
 as well, a slot's log starts with every page set.
 .Ss Interrupts
-The interrupt controller in the kernel is Linux's split one.
+The full and split interrupt controllers follow Linux's interfaces.
+.Dv KVM_CREATE_IRQCHIP
+on a VM, before its first vCPU, puts the PIC pair, the 24-pin I/O APIC
+and each vCPU's local APIC in the kernel.
+.Dv KVM_GET_IRQCHIP
+and
+.Dv KVM_SET_IRQCHIP
+save and restore a controller selected by
+.Va chip_id :
+0 for the master PIC, 1 for the slave, and 2 for the I/O APIC.
+The default GSI routes send inputs 0 through 15 to the PICs and I/O APIC,
+and 16 through 23 to the I/O APIC alone.
+.Pp
 .Dv KVM_ENABLE_CAP
 of
 .Dv KVM_CAP_SPLIT_IRQCHIP
-on a VM, before its first vCPU, with the number of the caller's I/O APIC
-pins in
-.Va args[0] ,
-at most 4096, puts each vCPU's local APIC in the kernel; the PIC and the
-I/O APIC stay in the caller.
-.Dv KVM_CREATE_IRQCHIP ,
-which would put them in the kernel too, fails.
-QEMU's pc and q35 machines ask for it by default and stop when it fails,
-so they run with
-.Fl machine Cm kernel-irqchip=split ,
-or with
-.Cm kernel-irqchip=off ,
-which keeps the local APIC in QEMU as well.
+instead keeps the PIC, I/O APIC and PIT in the caller.
+It must precede the first vCPU, with the caller's I/O APIC pin count,
+at most 4096, in
+.Va args[0] .
+QEMU's default
+.Cm kernel-irqchip=on
+uses the full controller;
+.Cm kernel-irqchip=split
+uses the split one, and
+.Cm kernel-irqchip=off
+keeps the local APIC in QEMU too.
+.Pp
+.Dv KVM_CREATE_PIT
+or
+.Dv KVM_CREATE_PIT2
+after the full controller creates the PIT's three counters.
+The latter takes
+.Dv KVM_PIT_SPEAKER_DUMMY
+to add the silent speaker port; the older call always adds it.
+.Dv KVM_GET_PIT2
+and
+.Dv KVM_SET_PIT2
+save and restore the counters and flags;
+.Dv KVM_PIT_FLAGS_HPET_LEGACY
+stops IRQ0.
+The older
+.Dv KVM_GET_PIT
+and
+.Dv KVM_SET_PIT
+take the counters alone.
+By default elapsed ticks wait for acknowledgement before reinjection.
+.Dv KVM_REINJECT_CONTROL
+with
+.Va pit_reinject
+zero instead coalesces missed ticks.
 .Pp
 The local APIC is Linux's: its registers at the guest's APIC base and, in
 x2APIC mode, in MSRs 0x800 to 0x8ff; its timer, one-shot, periodic or at
@@ -262,7 +304,10 @@ The guest's CPUID offers x2APIC, and the TSC-deadline mode when
 is 1.
 The boot vCPU's LINT0 takes ExtINT at reset, so a vector given by
 .Dv KVM_INTERRUPT ,
-the caller's PIC's, reaches the guest.
+the caller's PIC's, reaches the guest with the split controller.
+With the full controller the PIC supplies the vector and
+.Dv KVM_INTERRUPT
+is refused.
 .Dv KVM_GET_LAPIC
 and
 .Dv KVM_SET_LAPIC
@@ -270,35 +315,43 @@ take the APIC's 1 KiB page in Linux's layout, with the x2APIC id in bits
 31:24.
 .Pp
 .Dv KVM_SET_GSI_ROUTING
-takes MSI routes and Hyper-V's
+replaces the whole routing table: one MSI or Hyper-V
 .Dv KVM_IRQ_ROUTING_HV_SINT
-routes alone, one for each GSI.
+route per GSI, or, with the full controller,
+.Dv KVM_IRQ_ROUTING_IRQCHIP
+routes to at most one pin of each controller per GSI.
 .Dv KVM_IRQ_LINE
-raises a GSI's MSI, and
+sets a GSI's source level on each of its routes, and
 .Dv KVM_IRQ_LINE_STATUS
 also gives in
 .Va irq
-the count of APICs that took it, or \-1;
+the count of destinations that accepted it, zero when coalesced, or \-1;
 .Dv KVM_SIGNAL_MSI
 sends an MSI and returns that count.
-When a vector raised level-triggered through the route of a GSI below the
-I/O APIC's pin count ends with an EOI,
+With the split controller, when a vector raised level-triggered through
+the route of a GSI below the I/O APIC's pin count ends with an EOI,
 .Dv KVM_RUN
 returns with
 .Dv KVM_EXIT_IOAPIC_EOI
 and the vector in
 .Va eoi.vector .
+With the full controller the EOI reaches the I/O APIC inside the kernel;
+an asserted level is delivered again after remote IRR is cleared.
 .Pp
 .Dv KVM_IRQFD
 ties an eventfd, see
 .Xr eventfd 2 ,
-to a GSI: each write that raises its counter raises the GSI's MSI and
+to a GSI: each write that raises its counter raises the GSI and
 takes the counter.
 The tie ends with
 .Dv KVM_IRQFD_FLAG_DEASSIGN ,
 the VM's end or the eventfd's last close.
 .Dv KVM_IRQFD_FLAG_RESAMPLE
-is refused, as Linux refuses it with the split controller, and QEMU then
+with the full controller holds the line until acknowledgement, then
+lowers its source and signals the eventfd in
+.Va resamplefd .
+Other sources holding the same line remain asserted.
+The split controller refuses resampling, as Linux does, and QEMU
 resamples in its own I/O APIC.
 .Pp
 .Dv KVM_IOEVENTFD
@@ -345,8 +398,8 @@ in leaf 0x40000001 gets Linux's Hyper-V enlightenments.
 on
 .Pa /dev/kvm
 or on a vCPU, gives the ten leaves Linux gives, from 0x40000000 to
-0x4000000a, with no enlightened VMCS; on a vCPU of a VM without the split
-controller they offer no direct timers and no cluster IPI.
+0x4000000a, with no enlightened VMCS; on a vCPU of a VM without a local APIC in the
+kernel they offer no direct timers and no cluster IPI.
 The guest's MSRs from 0x40000000 are Hyper-V's: its id, the hypercall page,
 the VP index, the runtime, the reference counter and the reference TSC
 page, the TSC and APIC frequencies, the APIC's EOI, ICR and TPR, the VP
@@ -373,7 +426,7 @@ of
 or
 .Dv KVM_CAP_HYPERV_SYNIC2 ,
 the second leaving the pages the guest enables as they are, turns SynIC on
-for the vCPU, with the split controller.
+for the vCPU, with a local APIC in the kernel.
 A guest's write of SCONTROL, SIEFP or SIMP ends the run in
 .Dv KVM_EXIT_HYPERV
 of type
@@ -491,7 +544,7 @@ flag;
 .Dv KVM_CLEAR_DIRTY_LOG
 of a range outside the slot or not on 64-page bounds;
 .Dv KVM_CAP_HYPERV_SYNIC
-without the split controller;
+without a local APIC in the kernel;
 .Dv KVM_HYPERV_EVENTFD
 of a connection past 0xffffff.
 .It Bq Er E2BIG
@@ -509,7 +562,11 @@ of an id the VM has;
 .Dv KVM_CAP_SPLIT_IRQCHIP
 a second time or once the VM has a vCPU;
 .Dv KVM_CREATE_IRQCHIP
-after it;
+once a controller exists;
+.Dv KVM_CREATE_PIT
+or
+.Dv KVM_CREATE_PIT2
+once the PIT exists;
 .Dv KVM_INTERRUPT
 with the split controller while a vector waits;
 a memory slot at guest addresses another has;
@@ -527,10 +584,14 @@ while an exception waits;
 of an eventfd the VM has an irqfd on.
 .It Bq Er ENXIO
 .Dv KVM_INTERRUPT
-without the split controller while an interrupt waits;
-.Dv KVM_CREATE_IRQCHIP ;
+with the full controller, or without a controller while an interrupt waits;
+.Dv KVM_GET_IRQCHIP
+or
+.Dv KVM_SET_IRQCHIP
+without the full controller;
+the PIT state or reinjection ioctls without a PIT;
 .Dv KVM_IRQ_LINE
-without the split controller.
+without a controller in the kernel.
 .It Bq Er EBADF
 .Dv KVM_IRQFD ,
 .Dv KVM_IOEVENTFD
@@ -538,6 +599,10 @@ or
 .Dv KVM_HYPERV_EVENTFD
 of a descriptor that is not open.
 .It Bq Er ENOENT
+.Dv KVM_CREATE_PIT
+or
+.Dv KVM_CREATE_PIT2
+without the full controller;
 .Dv KVM_IOEVENTFD_FLAG_DEASSIGN
 of no ioeventfd;
 .Dv KVM_HYPERV_EVENTFD_DEASSIGN
@@ -579,10 +644,9 @@ Linux's KVM API, version 12, for x86, as its
 gives it.
 .Sh BUGS
 At most 64 vCPUs in a VM, with ids below 256, and 256 memory slots.
-No in-kernel PIC, I/O APIC or PIT, no routes but MSI and SINT routes, no
-irqfd resample, no
+No
 .Dv KVM_CAP_X2APIC_API ,
 no coalesced MMIO, no dirty ring, no SMM and no nested virtualization, so
 no enlightened VMCS and no direct TLB flush of Hyper-V's.
-The APIC timer is checked at each entry, and the host's tick of 1 ms
+The APIC and PIT timers are checked at each entry, and the host's tick of 1 ms
 makes the guest exit, so an expiry reaches the guest within a tick.

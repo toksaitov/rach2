@@ -286,6 +286,16 @@ static void lapic_kick(struct lapic *l, uint32_t request)
     wq_wake(&l->wq, 0);
 }
 
+/** Wake a local APIC for a deferred controller interrupt. */
+void kvm_lapic_wake(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+
+    if (l) {
+        lapic_kick(l, KVM_REQ_EVENT);
+    }
+}
+
 /** Bring PPR up to date from TPR and the highest vector in service:
  * whether it fell, which may let a waiting interrupt through. */
 static int update_ppr(struct lapic *l)
@@ -584,6 +594,14 @@ static int match_logical(const struct lapic *l, uint32_t mda)
     }
 }
 
+/** Match a physical or logical destination for restored IOAPIC state. */
+int kvm_lapic_match_dest(struct kvm_vcpu *v, uint32_t id, int logical)
+{
+    struct lapic *l = apic_of(v);
+
+    return l && hw_enabled(l) && (logical ? match_logical(l, id) : match_physical(l, id));
+}
+
 /** Whether `target` is a destination of `irq` sent by `src`, as Linux's
  * kvm_apic_match_dest; a device's broadcast to an x2APIC is x2APIC's. */
 static int match_dest(const struct lapic *target, const struct lapic *src,
@@ -608,14 +626,19 @@ static int match_dest(const struct lapic *target, const struct lapic *src,
     }
 }
 
-int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *in)
+int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
+                              const struct kvm_lapic_irq *in, uint64_t *destinations)
 {
     struct kvm_lapic_irq irq = *in;
     struct lapic *s = src ? apic_of(src) : NULL;
     struct lapic *l;
     uint32_t i, n, dests = 0;
     uint8_t chosen[KVM_MAX_VCPUS];
-    int lowest, r = -1;
+    int lowest, naccepted, r = -1;
+
+    if (destinations) {
+        *destinations = 0;
+    }
 
     lowest = irq.delivery_mode == KVM_APIC_DM_LOWEST || irq.redir_hint;
     if (!irq.dest_mode && irq.dest_id == APIC_BROADCAST && lowest) {
@@ -634,7 +657,11 @@ int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_
             if (r < 0) {
                 r = 0;
             }
-            r += accept(l, irq.delivery_mode, irq.vector, irq.level, irq.trig_mode);
+            naccepted = accept(l, irq.delivery_mode, irq.vector, irq.level, irq.trig_mode);
+            r += naccepted;
+            if (naccepted && destinations) {
+                *destinations |= 1ull << i;
+            }
         } else if (sw_enabled(l)) {
             chosen[i] = 1;
             dests++;
@@ -648,11 +675,48 @@ int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_
             if (chosen[i] && k-- == 0) {
                 r = accept(apic_of(vm->vcpus[i]), irq.delivery_mode, irq.vector, irq.level,
                            irq.trig_mode);
+                if (r && destinations) {
+                    *destinations |= 1ull << i;
+                }
                 break;
             }
         }
     }
     return r;
+}
+
+/** Deliver without retaining the destination set. */
+int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *irq)
+{
+    return kvm_lapic_deliver_tracked(vm, src, irq, NULL);
+}
+
+/** Whether the vector is pending or in service, for RTC EOI tracking. */
+int kvm_lapic_pending_eoi(struct kvm_vcpu *v, uint32_t vector)
+{
+    struct lapic *l = apic_of(v);
+    uint32_t word = (vector >> 5) * 4u, bit = 1u << (vector & 31u);
+
+    return l && vector < KVM_NR_INTERRUPTS &&
+           ((l->regs[(APIC_IRR >> 2) + word] | l->regs[(APIC_ISR >> 2) + word]) & bit) != 0;
+}
+
+/** The PIT's virtual-wire NMI, as Linux's kvm_apic_nmi_wd_deliver. */
+void kvm_lapic_pit_nmi(struct kvm_vm *vm)
+{
+    struct lapic *l;
+    uint32_t i, lvt;
+
+    for (i = 0; i < vm->nr_vcpus; i++) {
+        l = apic_of(vm->vcpus[i]);
+        if (!l) {
+            continue;
+        }
+        lvt = reg_get(l, APIC_LVT0);
+        if (!(lvt & APIC_LVT_MASKED) && (lvt & APIC_MODE_MASK) == KVM_APIC_DM_NMI) {
+            accept(l, KVM_APIC_DM_NMI, 0, 1, 0);
+        }
+    }
 }
 
 /** Deliver `irq` to each vCPU whose physical APIC id is `min` plus a bit
@@ -754,6 +818,10 @@ static void set_eoi(struct lapic *l)
     l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] &= ~(1u << ((uint32_t)vector & 31u));
     update_ppr(l);
     kvm_hv_synic_eoi(l->v, (uint32_t)vector);
+    kvm_ioapic_eoi(l->v, (uint32_t)vector,
+                   (l->regs[(APIC_TMR >> 2) + ((uint32_t)vector >> 5) * 4u] &
+                    (1u << ((uint32_t)vector & 31u))) != 0,
+                   (reg_get(l, APIC_SPIV) & APIC_SPIV_DIRECTED) != 0);
     if (kvm_irq_eoi_exits(l->v->vm, (uint32_t)vector)) {
         l->eoi_vector = (uint32_t)vector;
         kvm_vcpu_kick(l->v, KVM_REQ_EOI_EXIT);
@@ -1189,6 +1257,21 @@ static int accept_pic_intr(const struct lapic *l)
     return !(lvt0 & APIC_LVT_MASKED) && (lvt0 & APIC_MODE_MASK) == KVM_APIC_DM_EXTINT;
 }
 
+/** Wake the first local APIC whose LINT0 accepts the PIC's INT. */
+void kvm_lapic_pic_wake(struct kvm_vm *vm)
+{
+    struct lapic *l;
+    uint32_t i;
+
+    for (i = 0; i < vm->nr_vcpus; i++) {
+        l = apic_of(vm->vcpus[i]);
+        if (l && accept_pic_intr(l)) {
+            lapic_kick(l, KVM_REQ_EVENT);
+            return;
+        }
+    }
+}
+
 int kvm_lapic_pending(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
@@ -1197,8 +1280,15 @@ int kvm_lapic_pending(struct kvm_vcpu *v)
     if (!l) {
         return -1;
     }
-    if (l->ext_vector >= 0 && accept_pic_intr(l)) {
-        return l->ext_vector;
+    if (accept_pic_intr(l)) {
+        if (v->vm->irqchip == KVM_IRQCHIP_KERNEL) {
+            irr = kvm_pic_pending(v->vm);
+            if (irr >= 0) {
+                return irr;
+            }
+        } else if (l->ext_vector >= 0) {
+            return l->ext_vector;
+        }
     }
     if (!hw_enabled(l)) {
         return -1;
@@ -1219,9 +1309,14 @@ int kvm_lapic_ack(struct kvm_vcpu *v)
     if (vector < 0) {
         return -1;
     }
-    if (l->ext_vector >= 0 && accept_pic_intr(l)) {
-        l->ext_vector = -1;
-        return vector;
+    if (accept_pic_intr(l)) {
+        if (v->vm->irqchip == KVM_IRQCHIP_KERNEL && kvm_pic_pending(v->vm) >= 0) {
+            return kvm_pic_ack(v->vm);
+        }
+        if (l->ext_vector >= 0 && v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            l->ext_vector = -1;
+            return vector;
+        }
     }
     vec_clear(l, APIC_IRR, (uint32_t)vector);
     if (!kvm_hv_synic_auto_eoi(v, (uint32_t)vector)) {
@@ -1235,6 +1330,9 @@ int kvm_lapic_ready(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
 
+    if (v->vm->irqchip == KVM_IRQCHIP_KERNEL) {
+        return 1;
+    }
     return l && v->irq_allowed && l->ext_vector < 0 && accept_pic_intr(l) &&
            !v->events.interrupt.injected && !v->events.exception.injected &&
            !v->events.nmi.injected;
@@ -1315,8 +1413,10 @@ static int guest_if(const struct kvm_vcpu *v)
 static uint64_t next_ns(const struct lapic *l)
 {
     uint64_t a = timer_next_ns(l), b = kvm_hv_stimer_next(l->v);
+    uint64_t pit = kvm_pit_next(l->v->vm);
 
-    return !a || (b && b < a) ? b : a;
+    a = !a || (b && b < a) ? b : a;
+    return !a || (pit && pit < a) ? pit : a;
 }
 
 /** Whether the halted or waiting vCPU `arg` has an event to wake it, as
@@ -1327,7 +1427,7 @@ static int wake_cond(void *arg)
     struct lapic *l = apic_of(v);
     uint64_t next;
 
-    if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) {
+    if ((v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) || kvm_irq_pending(v->vm)) {
         return 1;
     }
     if (l->events & EV_INIT) {
@@ -1376,6 +1476,8 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
     int32_t r;
 
     for (;;) {
+        kvm_irq_process(v->vm);
+        kvm_pit_check(v->vm);
         take_nmis(l);
         timer_check(l);
         kvm_hv_stimers(v);
@@ -1464,6 +1566,7 @@ static int32_t set_lapic(struct lapic *l, uintptr_t arg)
         timer_start(l, APIC_TMCCT);
     }
     reg_set(l, APIC_TMCCT, 0);
+    kvm_ioapic_restore(l->v);
     kvm_vcpu_kick(l->v, KVM_REQ_EVENT);
     return 0;
 }
@@ -1519,6 +1622,9 @@ int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
          * kvm_vcpu_ioctl_interrupt. */
         if (copy_from_user(&irq, (const void __user *)arg, sizeof(irq)) != 0) {
             return -EFAULT;
+        }
+        if (v->vm->irqchip == KVM_IRQCHIP_KERNEL) {
+            return -ENXIO;
         }
         if (irq.irq >= KVM_NR_INTERRUPTS) {
             return -EINVAL;

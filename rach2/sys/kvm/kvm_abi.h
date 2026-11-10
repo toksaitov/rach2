@@ -44,13 +44,22 @@
 #define KVM_SET_USER_MEMORY_REGION2 KVM_IOW(0x49u, 160u)
 #define KVM_CREATE_IRQCHIP          KVM_IO(0x60u)
 #define KVM_IRQ_LINE                KVM_IOW(0x61u, 8u)
+#define KVM_GET_IRQCHIP             KVM_IOWR(0x62u, 520u)
+#define KVM_SET_IRQCHIP             KVM_IOR(0x63u, 520u)
+#define KVM_CREATE_PIT              KVM_IO(0x64u)
+#define KVM_GET_PIT                 KVM_IOWR(0x65u, 72u)
+#define KVM_SET_PIT                 KVM_IOR(0x66u, 72u)
 #define KVM_IRQ_LINE_STATUS         KVM_IOWR(0x67u, 8u)
 #define KVM_SET_GSI_ROUTING         KVM_IOW(0x6Au, 8u)
+#define KVM_REINJECT_CONTROL        KVM_IO(0x71u)
 #define KVM_IRQFD                   KVM_IOW(0x76u, 32u)
+#define KVM_CREATE_PIT2             KVM_IOW(0x77u, 64u)
 #define KVM_SET_BOOT_CPU_ID         KVM_IO(0x78u)
 #define KVM_IOEVENTFD               KVM_IOW(0x79u, 64u)
 #define KVM_SET_CLOCK               KVM_IOW(0x7Bu, 48u)
 #define KVM_GET_CLOCK               KVM_IOR(0x7Cu, 48u)
+#define KVM_GET_PIT2                KVM_IOR(0x9Fu, 112u)
+#define KVM_SET_PIT2                KVM_IOW(0xA0u, 112u)
 #define KVM_ENABLE_CAP              KVM_IOW(0xA3u, 104u)
 #define KVM_SIGNAL_MSI              KVM_IOW(0xA5u, 32u)
 #define KVM_HYPERV_EVENTFD          KVM_IOW(0xBDu, 24u)
@@ -525,6 +534,71 @@ struct kvm_guest_debug {
 
 struct kvm_lapic_state {
     uint8_t regs[KVM_APIC_REG_SIZE];
+};
+
+/* The two PICs and the IOAPIC, in Linux's save/restore layout. */
+#define KVM_IRQCHIP_PIC_MASTER 0u
+#define KVM_IRQCHIP_PIC_SLAVE  1u
+#define KVM_IRQCHIP_IOAPIC     2u
+#define KVM_IOAPIC_NUM_PINS    24u
+
+struct kvm_pic_state {
+    uint8_t last_irr; /* the last line levels, for edge detection */
+    uint8_t irr, imr, isr;
+    uint8_t priority_add; /* the highest priority pin, modulo eight */
+    uint8_t irq_base;
+    uint8_t read_reg_select, poll, special_mask, init_state;
+    uint8_t auto_eoi, rotate_on_auto_eoi, special_fully_nested_mode, init4;
+    uint8_t elcr, elcr_mask; /* level-triggered pins and the writable mask */
+};
+
+struct kvm_ioapic_state {
+    uint64_t base_address;
+    uint32_t ioregsel, id, irr, pad;
+    uint64_t redirtbl[KVM_IOAPIC_NUM_PINS];
+};
+
+struct kvm_irqchip {
+    uint32_t chip_id, pad;
+    union {
+        uint8_t dummy[512];
+        struct kvm_pic_state pic;
+        struct kvm_ioapic_state ioapic;
+    } chip;
+};
+
+/* The 8254's save/restore records. A zero hardware count means 65536. */
+struct kvm_pit_channel_state {
+    uint32_t count; /* the reload value, 1 to 65536 */
+    uint16_t latched_count;
+    uint8_t count_latched, status_latched, status;
+    uint8_t read_state, write_state, write_latch, rw_mode;
+    uint8_t mode, bcd, gate;
+    int64_t count_load_time; /* host monotonic nanoseconds */
+};
+
+struct kvm_pit_state {
+    struct kvm_pit_channel_state channels[3];
+};
+
+#define KVM_PIT_FLAGS_HPET_LEGACY     1u
+#define KVM_PIT_FLAGS_SPEAKER_DATA_ON 2u
+#define KVM_PIT_SPEAKER_DUMMY         1u
+
+struct kvm_pit_state2 {
+    struct kvm_pit_channel_state channels[3];
+    uint32_t flags;
+    uint32_t reserved[9];
+};
+
+struct kvm_pit_config {
+    uint32_t flags;
+    uint32_t pad[15];
+};
+
+struct kvm_reinject_control {
+    uint8_t pit_reinject;
+    uint8_t reserved[31];
 };
 
 /* struct kvm_irq_level: KVM_IRQ_LINE's line and level, and the status

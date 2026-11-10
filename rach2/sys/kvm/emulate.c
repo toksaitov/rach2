@@ -184,7 +184,7 @@ uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
     case KVM_HC_SCHED_YIELD:
         return 0;
     case KVM_HC_KICK_CPU:
-        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
             irq.vector = 0;
             irq.delivery_mode = KVM_APIC_DM_REMRD;
             irq.dest_mode = 0;
@@ -199,7 +199,7 @@ uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
     case KVM_HC_CLOCK_PAIRING:
         return (uint64_t)-(int64_t)KVM_EOPNOTSUPP;
     case KVM_HC_SEND_IPI:
-        if (v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+        if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
             break;
         }
         return (uint64_t)kvm_lapic_pv_ipi(v->vm, a0, a1, (uint32_t)a2, a3,

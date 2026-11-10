@@ -11,8 +11,8 @@
 # EXPECT is not `excluded` runs, in the order of the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, from a copy of /opt/kvm-unit-tests,
-#   with ACCEL `kvm,kernel-irqchip=split`, since Rach2's KVM has only the
-#   split interrupt controller, and TIMEOUT 0, so that no test is judged by
+#   with ACCEL `kvm,kernel-irqchip=split`, as in the Linux reference,
+#   and TIMEOUT 0, so that no test is judged by
 #   the clock. A test passes on its PASS line and skips on its SKIP line.
 # * `selftests`: each program of /opt/kvm-selftests, run in a directory of
 #   its own; exit 0 is a pass and 4, kselftest's code, a skip.

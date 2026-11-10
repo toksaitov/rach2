@@ -61,6 +61,8 @@ The `icmp_hosttest.c` model sends pings with timer interrupts still pending at e
 
 The `genetlink_hosttest.c` model registers a family against the real generic dispatcher and netlink queue, resolves it through `nlctrl`, checks its operation and group nests, reads a dump in three datagrams, joins and leaves groups including group 40, and fills one reader's queue while another keeps receiving. It also checks privilege refusal, capped and extended errors, malformed and unaligned attributes, the dormant/up link policy and route notifications, and a link's counts past 2^32, whole in `IFLA_STATS64` and cut to 32 bits in `IFLA_STATS`. The model supplies one Ethernet card and empty address, route and socket tables.
 
+`kvm_irq_hosttest.c` checks the full interrupt controller through port and MMIO exits, GSI and state ioctls, and the real eventfd callbacks. Its full-controller rows cover allocation rollback, PIC priority and cascade, level EOI, RTC acknowledgement after state restore, irqfd resampling with independent line sources, PIT latches and reinjection, HPET handoff, halted wakeups and routing replacement. `--irqchip-only` runs these rows alone.
+
 ## Results
 
 `drm_prime_hosttest.c` and `drm_prime64_hosttest.c` check PRIME on both kernel ABIs over the real GEM, dma-buf, fence and udmabuf code. They model frames, sealed memfds, descriptor tables and mappings. The cases cover descriptor modes, self-import and repeated import identity, cross-device and udmabuf pages, shared reservations, reexport after handle close, exporter exit, mappings retained after every descriptor closes, allocation failures and all reference counts returned to their baseline.
