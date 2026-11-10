@@ -32,6 +32,8 @@ def interrupted(signum, _frame):
     raise SystemExit(128 + signum)
 
 
+# Wine's word that a process has no desktop, which run_proton() runs again.
+LOST = b'"The explorer process failed to start."'
 STALL = "dxgi.c:8040: Test marked todo: d3d10: test 2: Got unexpected present count 1, expected 2."
 # Each Vulkan device's ICD and the Linux reference taken on it.
 ADAPTERS = {"lavapipe": ("lvp_icd*.json", "linux.json"), "venus": ("venus_icd*.json", "venus.json")}
@@ -51,44 +53,105 @@ def stall_of(expected):
     return (STALL, 1) if progress else None
 
 
-def run_command(argv, env, log, stop=None):
+def run_command(argv, env, log, stop=None, lost=()):
     """Wait for the command itself, retaining output even if a descendant keeps it open.
 
     stop is a line and a count: the command is stopped when its output has
-    had the line that many times, where Linux's run of it stalled.
+    had the line that many times, where Linux's run of it stalled. lost
+    names the files besides the log in which LOST, Wine's word that it has
+    no desktop, stops the command too. Returns the exit, whether stop
+    stopped it and whether LOST did.
     """
-    stopped = False
+    stopped = gone = False
     with log.open("wb") as dest:
         proc = subprocess.Popen(argv, env=env, stdout=dest,
                                 stderr=subprocess.STDOUT, start_new_session=True)
         CHILDREN.add(proc)
         try:
-            if stop:
-                marker = stop[0].encode()
+            if stop or lost:
+                marker = stop[0].encode() if stop else None
                 pending = b""
                 seen = 0
+                watched = {path: 0 for path in (log,) + tuple(lost)}
                 with log.open("rb") as source:
                     while proc.poll() is None:
-                        pending = pending + source.read()
-                        seen += pending.count(marker)
-                        if seen >= stop[1]:
-                            stopped = True
+                        if marker:
+                            pending = pending + source.read()
+                            seen += pending.count(marker)
+                            if seen >= stop[1]:
+                                stopped = True
+                                os.killpg(proc.pid, signal.SIGKILL)
+                                break
+                            # Too short to hold a line already counted.
+                            pending = pending[-(len(marker) - 1):]
+                        if lost and any(LOST in tail for tail in tails(watched)):
+                            gone = True
                             os.killpg(proc.pid, signal.SIGKILL)
                             break
-                        # The tail is too short to hold a line already counted.
-                        pending = pending[-(len(marker) - 1):]
                         # Poll output; elapsed time decides no verdict.
                         time.sleep(0.02)
             proc.wait()
             (log.with_suffix(log.suffix + ".exit.json")).write_text(
                 json.dumps({"pid": proc.pid, "exit": proc.returncode,
-                            "progress": stopped}) + "\n")
-            return proc.returncode, stopped
+                            "progress": stopped, "lost": gone}) + "\n")
+            return proc.returncode, stopped, gone
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
             CHILDREN.discard(proc)
+
+
+def tails(watched):
+    """Yield what each watched file has gained since its last read, with a line's overlap.
+
+    watched maps a path to the offset read to.
+    """
+    for path in watched:
+        start = max(0, watched[path] - len(LOST))
+        try:
+            with path.open("rb") as source:
+                source.seek(start)
+                data = source.read()
+        except FileNotFoundError:
+            continue
+        watched[path] = start + len(data)
+        yield data
+
+
+def run_proton(argv, env, log, out, work, stop=None):
+    """Run a Proton command, starting it again when Wine loses its desktop.
+
+    Wine starts explorer.exe for its desktop and waits 10 s for its window;
+    explorer later than that leaves the command's process with no display
+    driver, logging LOST, and Proton's steam.exe waiting for ever. A command
+    so lost, its stderr in the log or in Proton's log in out, is stopped,
+    its Wine server ended and its prefix, when it was making one, removed,
+    and it runs again, three times at most. Returns run_command's exit and
+    stop.
+    """
+    making = "WINEPREFIX" not in env
+    steam = out / ("steam-%s.log" % env["SteamGameId"])
+    for attempt in range(1, 4):
+        # Proton removes its log at each launch; removed here first, what
+        # the file then holds is this launch's.
+        if steam.exists():
+            steam.unlink()
+        rc, stopped, gone = run_command(argv, env, log, stop, (steam,))
+        if not gone:
+            return rc, stopped
+        print("d3d: desktop: lost on try %d; explorer.exe was late" % attempt, flush=True)
+        for kept in (log, steam):
+            if kept.exists():
+                shutil.copy(kept, kept.with_suffix(kept.suffix + ".lost%d" % attempt))
+        clean = env.copy()
+        clean["WINEPREFIX"] = str(work / "compat/pfx")
+        subprocess.run([str(Path(env.get("D3D_PROTON", "/opt/proton")) / "files/bin/wineserver"), "-k"],
+                       env=clean, check=False)
+        if making:
+            shutil.rmtree(work / "compat")
+            (work / "compat").mkdir()
+    raise RuntimeError("Wine lost its desktop three times")
 
 
 def summaries(text, expression):
@@ -131,8 +194,8 @@ def main():
     out = Path(output).resolve()
     out.mkdir(parents=True, exist_ok=False)
     if family == "private" and row == "files":
-        status, _ = run_command([str(HERE / "privatefilemusl"), "/tmp"],
-                                os.environ.copy(), out / "private.log")
+        status, _, _ = run_command([str(HERE / "privatefilemusl"), "/tmp"],
+                                   os.environ.copy(), out / "private.log")
         for line in (out / "private.log").read_text(errors="replace").splitlines():
             if not line.startswith("@etude "):
                 print(line, flush=True)
@@ -211,8 +274,8 @@ def main():
         if family in ("probe", "wine"):
             server = proton / "files/bin/wineserver"
             print("d3d: prefix: creating", flush=True)
-            status, _ = run_command(launch + ["run", "c:\\windows\\system32\\cmd.exe", "/c", "exit", "0"],
-                                    env, out / "prefix.log")
+            status, _ = run_proton(launch + ["run", "c:\\windows\\system32\\cmd.exe", "/c", "exit", "0"],
+                                   env, out / "prefix.log", out, work)
             if status:
                 raise RuntimeError("Proton prefix creation failed: %s" % status)
             print("d3d: prefix: ready", flush=True)
@@ -231,8 +294,8 @@ def main():
                     raise RuntimeError("unknown probe")
                 pixel = out / "pixels.txt"
                 env["PROBE_OUT"] = "Z:" + str(pixel)
-                rc, _ = run_command(launch + ["runinprefix", str(HERE / "probes" / ("d3d" + tail + ".exe"))],
-                                    env, out / "probe.log")
+                rc, _ = run_proton(launch + ["runinprefix", str(HERE / "probes" / ("d3d" + tail + ".exe"))],
+                                   env, out / "probe.log", out, work)
                 text = pixel.read_text() if pixel.exists() else ""
                 named = adapter_name(text)
                 # A reference that names the adapter requires the same one here.
@@ -248,8 +311,8 @@ def main():
                 stop = stall_of(expected)
                 if record and path != "proton" and unit == "dxgi:dxgi":
                     stop = (STALL, 1)
-                rc, stopped = run_command(launch + ["runinprefix", str(HERE / "wine" / (exe + "_test.exe")), name],
-                                          env, out / "unit.log", stop)
+                rc, stopped = run_proton(launch + ["runinprefix", str(HERE / "wine" / (exe + "_test.exe")), name],
+                                         env, out / "unit.log", out, work, stop)
                 text = (out / "unit.log").read_text(errors="replace")
                 counts = summaries(text, WINE_SUMMARY % re.escape(name))
                 lines = len(re.findall(TEST_LINE, text, re.M))
@@ -280,7 +343,7 @@ def main():
                 unit_env["VKD3D_TEST_DEBUG"] = "1"
                 expected = {} if record else ref["vkd3d"][name]
                 stop = stall_of(expected)
-                rc, stopped = run_command([str(HERE / "vkd3d/d3d12")], unit_env, out / (name + ".log"), stop)
+                rc, stopped, _ = run_command([str(HERE / "vkd3d/d3d12")], unit_env, out / (name + ".log"), stop)
                 text = (out / (name + ".log")).read_text(errors="replace")
                 counts = summaries(text, VK_SUMMARY)
                 if record:
