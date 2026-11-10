@@ -39,6 +39,7 @@
 
 #include "../../rach2/sys/lib/kstring.h"
 #include "../../rach2/sys/usb/core.h"
+#include "../../rach2/sys/usb/hid.h"
 #include "../../rach2/sys/usb/hcd.h"
 #include "../../rach2/sys/usb/hid.h"
 #include "../../rach2/sys/usb/hub.h"
@@ -91,36 +92,53 @@ void *k_memset(void *ptr, int c, size_t n)
 static int hid_gone_slot[16];
 static int hid_gone_count;
 
-/** Do nothing: no row checks a device that starts in the boot protocol. */
-void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
+/** Take any device: no row checks a report descriptor. */
+int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int length)
+{
+    (void)device;
+    (void)ids;
+    (void)rdesc;
+    (void)length;
+    return 0;
+}
+
+/** Do nothing: no row checks a device in the boot protocol. */
+void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
 {
     (void)device;
     (void)kind;
-    (void)vendor;
-    (void)product;
+    (void)ids;
+}
+
+/** Return 0, for the core to ask for the endpoint's packet. */
+int hid_report_size(int device)
+{
+    (void)device;
+    return 0;
 }
 
 /** Do nothing: no row checks a report. */
-void hid_report(int slot, int kind, const uint8_t *report, int length)
+void hid_report(int device, const uint8_t *report, int length)
 {
-    (void)slot;
-    (void)kind;
+    (void)device;
     (void)report;
     (void)length;
 }
 
-/** Return -1: no row changes a keyboard's LEDs. */
-int hid_led_report(int device)
+/** Return -1: no row sends an output report. */
+int hid_output_report(int device, uint8_t *out, int size, int *value)
 {
     (void)device;
+    (void)out;
+    (void)size;
+    (void)value;
     return -1;
 }
 
-/** Do nothing: no LED report is pending. */
-void hid_led_sent(int device, int report, int ok)
+/** Do nothing: no output report is pending. */
+void hid_output_sent(int device, int ok)
 {
     (void)device;
-    (void)report;
     (void)ok;
 }
 
@@ -954,8 +972,12 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
         return 0;
     }
-    if (setup[0] == 0x21 && setup[1] == 0x0B) { /* SET_PROTOCOL */
+    if (setup[0] == 0x21 && (setup[1] == 0x0B || setup[1] == 0x0A)) { /* SET_PROTOCOL, IDLE */
         answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
+        return 0;
+    }
+    if (setup[0] == 0x81 && setup[1] == 6) { /* the report descriptor, zeros */
+        answer(device, 1, USB_XFER_OK, transfer->length, 0, transfer->generation);
         return 0;
     }
     if (setup[0] == 0x01 && setup[1] == 11) { /* SET_INTERFACE */

@@ -2,6 +2,8 @@
  * hid_hosttest.c: the USB HID class driver, usb/hid.c, fed keyboard and mouse
  * reports directly, with no controller and no keyboard.
  *
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ *
  * A report is a state and a scancode is an event. This class driver turns one
  * into the other and does nothing else. The interesting cases are the ones
  * a person produces without noticing: a key held down across reports, two keys
@@ -15,6 +17,12 @@
  * scancode plus 0x100, so that the input layer's model can record each key
  * event as the set-1 bytes of its key, as the raw view gives them, and keep
  * each keyboard's held keys as the real one does.
+ *
+ * A device in the report protocol is driven through a model of the parser
+ * and the usage mapping, which hid_parse_hosttest.c tests; the rows here
+ * check what the driver itself decides: its names, which protocol a device
+ * runs in, where its reports go and the order and retries of its output
+ * reports.
  */
 
 extern int printf(const char *fmt, ...);
@@ -178,16 +186,20 @@ int input_mouse_present(void)
 void input_mouse_found(void)
 {}
 
-/** Register no event device: the rows check the key events alone. */
+/* The name of the last keyboard attached. */
+static char keyboard_name[48];
+
+/** Register no event device, keeping the name: the rows check the key
+ * events alone. */
 void input_keyboard_attach(struct input_keyboard *kb, const char *name, const char *phys,
                            uint16_t bustype, uint16_t vendor, uint16_t product)
 {
     (void)kb;
-    (void)name;
     (void)phys;
     (void)bustype;
     (void)vendor;
     (void)product;
+    copy_string(keyboard_name, name, sizeof(keyboard_name));
 }
 
 /** The model's key code of `scan`: the scancode plus KEY_BASE. */
@@ -197,6 +209,128 @@ int set1_keycode(unsigned scan)
 }
 
 #include "../../rach2/sys/klog.h"
+#include "../../rach2/sys/lib/kerrno.h"
+#include "../../rach2/sys/usb/hid_input.h"
+
+extern void *calloc(unsigned long n, unsigned long size);
+extern void *malloc(unsigned long size);
+extern void free(void *p);
+
+/** Allocate from the host's heap. */
+void *kmalloc(size_t size)
+{
+    return malloc(size);
+}
+
+/** Allocate zeroed memory from the host's heap. */
+void *kzalloc(size_t size)
+{
+    return calloc(1, size);
+}
+
+/** Free what `kmalloc` or `kzalloc` gave. */
+void kfree(void *p)
+{
+    free(p);
+}
+
+/* The model of the parser and the mapping: whether a descriptor of no
+ * bytes is refused, what `hidinput_connect` answers, whether the device
+ * has LEDs and a multiplier, and what the driver gave them. */
+static int model_inputs = 1;
+static int model_leds = 1;
+static int model_multiplier;
+static int model_reports;
+static uint32_t model_report_size;
+static int model_disconnects;
+static int model_multiplier_set = -1;
+static char model_name[HID_NAME_MAX];
+static char model_phys[24];
+static uint16_t model_version;
+
+/** Refuse a descriptor of no bytes; take any other as one input report of
+ * 8 bytes. */
+int hid_parse(struct hid_desc *desc, const uint8_t *rdesc, int length)
+{
+    (void)rdesc;
+    if (length <= 0) {
+        return -EINVAL;
+    }
+    desc->max_fields = 1;
+    desc->max_usages = 1;
+    desc->max_collections = 1;
+    desc->nreports = 1;
+    desc->reports[0].type = HID_INPUT_REPORT;
+    desc->reports[0].id = 0;
+    desc->reports[0].size = 64;
+    return 0;
+}
+
+/** The bytes of `r`, with its ID. */
+uint32_t hid_report_len(const struct hid_report *r)
+{
+    return (r->size + 7) / 8 + (r->id ? 1u : 0u);
+}
+
+/** Answer `model_inputs`, keeping the name and phys the driver gave. */
+int hidinput_connect(struct hid_dev *hid)
+{
+    copy_string(model_name, hid->name, sizeof(model_name));
+    copy_string(model_phys, hid->phys, sizeof(model_phys));
+    model_version = hid->version;
+    hid->ninputs = model_inputs > 0 ? (uint32_t)model_inputs : 0;
+    return model_inputs;
+}
+
+/** Count a disconnect. */
+void hidinput_disconnect(struct hid_dev *hid)
+{
+    (void)hid;
+    model_disconnects++;
+}
+
+/** Count a report and keep its length. */
+void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
+{
+    (void)hid;
+    (void)data;
+    model_reports++;
+    model_report_size = size;
+}
+
+/** The LED report: one byte of the LED_* bits, wValue 0x0200, or -1
+ * without `model_leds`. */
+int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value)
+{
+    (void)hid;
+    if (!model_leds || size < 1) {
+        return -1;
+    }
+    out[0] = (uint8_t)leds;
+    *value = 0x0200;
+    return 1;
+}
+
+/** The multiplier report, Feature report 2 at 1, or -1 without
+ * `model_multiplier`. */
+int hidinput_multiplier_report(struct hid_dev *hid, uint8_t *out, int size, int *value)
+{
+    (void)hid;
+    if (!model_multiplier || size < 2) {
+        return -1;
+    }
+    out[0] = 2;
+    out[1] = 1;
+    *value = 0x0302;
+    return 2;
+}
+
+/** Keep whether the multiplier was taken. */
+void hidinput_multiplier_set(struct hid_dev *hid, int ok)
+{
+    (void)hid;
+    model_multiplier_set = ok;
+}
 
 /* The LEDs the input layer wants, LED_* of kd.h, and the warnings logged. */
 static unsigned int wanted_leds;
@@ -250,7 +384,7 @@ static void keys(int slot, unsigned mods, int a, int b, int c)
     report[6] = 0;
     report[7] = 0;
     n_codes = 0;
-    hid_report(slot, HID_KEYBOARD, report, 8);
+    hid_report(slot, report, 8);
 }
 
 /** Return 1 when the driver sent exactly the first `n` of `c0` to `c3`. */
@@ -274,48 +408,139 @@ static int sent(int n, int c0, int c1, int c2, int c3)
     return 1;
 }
 
+/* QEMU's identity, with and without its strings. */
+static const struct hid_ids no_strings = {0x0627, 0x0001, 0x0001, "", ""};
+static const struct hid_ids qemu_mouse = {0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Mouse"};
+static const struct hid_ids qemu_tablet = {0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Tablet"};
+
+/** The byte of the LED report `hid_output_report` offers `device`, with
+ * its wValue in `value`; -1 for none. */
+static int led_offer(int device, int *value)
+{
+    uint8_t out[8];
+    int n = hid_output_report(device, out, sizeof(out), value);
+
+    return n == 1 ? out[0] : -1;
+}
+
 /**
  * Check the LED report: each lock at its bit of the boot keyboard's output
- * report, asked for once for a keyboard just attached and again only when
+ * report, offered once for a keyboard just attached and again only when
  * the LEDs wanted change, never after a failure until the keyboard is
  * attached again, and never for a mouse or a device not attached.
  */
 static void leds_rows(void)
 {
-    hid_attach(5, HID_KEYBOARD, 0x0627, 0x0001);
+    uint8_t out[8];
+    int value = 0;
+
+    hid_attach_boot(5, HID_KEYBOARD, &no_strings);
     wanted_leds = 0;
-    CHECK("leds: a keyboard just attached is sent its LEDs", hid_led_report(5) == 0x00);
-    hid_led_sent(5, 0x00, 1);
-    CHECK("leds: and not again while they stay", hid_led_report(5) == -1);
+    CHECK("leds: a keyboard just attached is offered its LEDs",
+          led_offer(5, &value) == 0x00 && value == 0x0200);
+    hid_output_sent(5, 1);
+    CHECK("leds: and not again while they stay", led_offer(5, &value) == -1);
     wanted_leds = LED_NUM;
-    CHECK("leds: Num Lock is bit 0", hid_led_report(5) == 0x01);
+    CHECK("leds: Num Lock is bit 0", led_offer(5, &value) == 0x01);
     wanted_leds = LED_CAP;
-    CHECK("leds: Caps Lock is bit 1", hid_led_report(5) == 0x02);
+    CHECK("leds: Caps Lock is bit 1", led_offer(5, &value) == 0x02);
     wanted_leds = LED_SCR;
-    CHECK("leds: Scroll Lock is bit 2", hid_led_report(5) == 0x04);
+    CHECK("leds: Scroll Lock is bit 2", led_offer(5, &value) == 0x04);
     wanted_leds = LED_SCR | LED_NUM | LED_CAP;
-    CHECK("leds: all three", hid_led_report(5) == 0x07);
-    hid_led_sent(5, 0x07, 1);
-    CHECK("leds: taken", hid_led_report(5) == -1);
+    CHECK("leds: all three", led_offer(5, &value) == 0x07);
+    hid_output_sent(5, 1);
+    CHECK("leds: taken", led_offer(5, &value) == -1);
 
     wanted_leds = LED_CAP;
     warnings = 0;
-    hid_led_sent(5, 0x02, 0);
+    CHECK("leds: Caps Lock offered", led_offer(5, &value) == 0x02);
+    hid_output_sent(5, 0);
     CHECK("leds: a failure is logged", warnings == 1);
-    CHECK("leds: nothing is sent after a failure", hid_led_report(5) == -1);
-    hid_led_sent(5, 0x02, 0);
+    CHECK("leds: nothing is offered after a failure", led_offer(5, &value) == -1);
+    hid_output_sent(5, 0);
     CHECK("leds: and logged once", warnings == 1);
     hid_gone(5);
-    CHECK("leds: nothing to a keyboard gone", hid_led_report(5) == -1);
-    hid_attach(5, HID_KEYBOARD, 0x0627, 0x0001);
-    CHECK("leds: a keyboard attached again is sent them", hid_led_report(5) == 0x02);
+    CHECK("leds: nothing to a keyboard gone", led_offer(5, &value) == -1);
+    hid_attach_boot(5, HID_KEYBOARD, &no_strings);
+    CHECK("leds: a keyboard attached again is offered them", led_offer(5, &value) == 0x02);
+    CHECK("leds: not in a buffer too small", hid_output_report(5, out, 0, &value) == -1);
     hid_gone(5);
 
-    hid_attach(6, HID_MOUSE, 0x0627, 0x0001);
-    CHECK("leds: nothing to a mouse", hid_led_report(6) == -1);
-    CHECK("leds: nothing to a device never attached", hid_led_report(7) == -1);
+    hid_attach_boot(6, HID_MOUSE, &no_strings);
+    CHECK("leds: nothing to a mouse", led_offer(6, &value) == -1);
+    hid_gone(6);
+    CHECK("leds: nothing to a device never attached", led_offer(7, &value) == -1);
     CHECK("leds: nothing to a device out of range",
-          hid_led_report(0) == -1 && hid_led_report(USB_MAX_DEVICES + 1) == -1);
+          led_offer(0, &value) == -1 && led_offer(USB_MAX_DEVICES + 1, &value) == -1);
+}
+
+/**
+ * A device in the report protocol: its name and phys as usbhid gives them,
+ * its reports passed whole to the input mapping, its multiplier report
+ * before its LEDs and each tried once, and a descriptor refused or with no
+ * input device leaving the device free for the boot protocol.
+ */
+static void report_rows(void)
+{
+    static const uint8_t rdesc[4] = {1, 2, 3, 4};
+    uint8_t out[8], report[8] = {0};
+    int value = 0;
+
+    model_multiplier = 0;
+    CHECK("report: a tablet is taken", hid_attach(8, &qemu_tablet, rdesc, 4) == 0);
+    CHECK("report: named by its strings, usb-8/input0, version bcdHID",
+          same(model_name, "QEMU QEMU USB Tablet") && same(model_phys, "usb-8/input0") &&
+              model_version == 1);
+    CHECK("report: taken once",
+          hid_attach(8, &qemu_tablet, rdesc, 4) == 0 && hid_report_size(8) == 8);
+    model_reports = 0;
+    hid_report(8, report, 3);
+    CHECK("report: a report goes to the mapping as it came",
+          model_reports == 1 && model_report_size == 3);
+    model_leds = 0;
+    CHECK("report: no LED report from a device without LEDs",
+          hid_output_report(8, out, sizeof(out), &value) == -1);
+    model_disconnects = 0;
+    hid_gone(8);
+    CHECK("report: a device gone is disconnected", model_disconnects == 1);
+    CHECK("report: and asks for its endpoint's packet", hid_report_size(8) == 0);
+
+    CHECK("report: a device without strings is HID vvvv:pppp",
+          hid_attach(8, &no_strings, rdesc, 4) == 0 && same(model_name, "HID 0627:0001"));
+    hid_gone(8);
+
+    model_leds = 1;
+    model_multiplier = 1;
+    model_multiplier_set = -1;
+    wanted_leds = LED_NUM;
+    hid_attach(9, &qemu_mouse, rdesc, 4);
+    CHECK("report: the multiplier report goes first",
+          hid_output_report(9, out, sizeof(out), &value) == 2 && out[0] == 2 && value == 0x0302);
+    hid_output_sent(9, 0);
+    CHECK("report: its failure is passed on", model_multiplier_set == 0);
+    CHECK("report: then the LEDs, not the multiplier again",
+          hid_output_report(9, out, sizeof(out), &value) == 1 && out[0] == (1u << LED_NUML) &&
+              value == 0x0200);
+    hid_output_sent(9, 1);
+    CHECK("report: and nothing while they stay",
+          hid_output_report(9, out, sizeof(out), &value) == -1);
+    hid_gone(9);
+    model_multiplier = 0;
+
+    CHECK("report: a refused descriptor is passed back",
+          hid_attach(10, &qemu_mouse, rdesc, 0) == -EINVAL);
+    model_inputs = -1;
+    CHECK("report: a descriptor with no input device is -ENODEV",
+          hid_attach(10, &qemu_mouse, rdesc, 4) == -ENODEV);
+    model_inputs = 1;
+    mouse_registrations = 0;
+    hid_attach_boot(10, HID_MOUSE, &qemu_mouse);
+    CHECK("report: and the device runs in the boot protocol, named by its strings",
+          mouse_registrations == 1 && same(mouse_name, "QEMU QEMU USB Mouse") &&
+              hid_report_size(10) == 0);
+    hid_gone(10);
+    CHECK("report: a device out of range is not taken",
+          hid_attach(0, &qemu_mouse, rdesc, 4) == -ENODEV);
 }
 
 /** A mouse: its event device, and its reports with and without a wheel. */
@@ -324,7 +549,7 @@ static void mouse_rows(void)
     unsigned char mouse[4];
 
     /* A mouse is registered as Linux's boot-protocol driver names it. */
-    hid_attach(3, HID_MOUSE, 0x0627, 0x0001);
+    hid_attach_boot(3, HID_MOUSE, &no_strings);
     CHECK("a mouse is registered once", mouse_registrations == 1);
     CHECK("as USB HIDBP Mouse 0627:0001 on usb-3/input0",
           same(mouse_name, "USB HIDBP Mouse 0627:0001") && same(mouse_phys, "usb-3/input0"));
@@ -332,7 +557,7 @@ static void mouse_rows(void)
           mouse_bus == EVDEV_BUS_USB && mouse_vendor == 0x0627 && mouse_product == 0x0001);
     CHECK("with a wheel in 120ths and the side buttons",
           mouse_caps == (MOUSE_WHEEL | MOUSE_HI_RES | MOUSE_SIDE));
-    hid_attach(3, HID_MOUSE, 0x0627, 0x0001);
+    hid_attach_boot(3, HID_MOUSE, &no_strings);
     CHECK("a mouse attached again is not registered again", mouse_registrations == 1);
 
     /* A USB report's Y is positive toward the user, as REL_Y is. */
@@ -341,7 +566,7 @@ static void mouse_rows(void)
     mouse[2] = (unsigned char)3;
     mouse[3] = 0;
     mouse_reports = 0;
-    hid_report(3, HID_MOUSE, mouse, 4);
+    hid_report(3, mouse, 4);
     CHECK("a mouse report is passed on", mouse_reports == 1);
     CHECK("to the mouse's device", mouse_dev == (struct evdev *)&mouse_registrations);
     CHECK("with its movement", mouse_dx == 5);
@@ -352,16 +577,16 @@ static void mouse_rows(void)
     mouse[1] = 0xFB; /* -5 */
     mouse[2] = 0xFD; /* -3 */
     mouse[3] = 0xFF; /* the wheel turned down a detent */
-    hid_report(3, HID_MOUSE, mouse, 4);
+    hid_report(3, mouse, 4);
     CHECK("a negative movement stays negative", mouse_dx == -5 && mouse_dy == -3);
     CHECK("the wheel's byte is its turn", mouse_wheel == -1 && mouse_hwheel == 0);
     CHECK("the five buttons pass",
           mouse_buttons == (MOUSE_RIGHT | MOUSE_BUTTON_SIDE | MOUSE_BUTTON_EXTRA));
-    hid_report(3, HID_MOUSE, mouse, 3);
+    hid_report(3, mouse, 3);
     CHECK("a report of three bytes turns no wheel", mouse_wheel == 0);
 
     mouse_reports = 0;
-    hid_report(3, HID_MOUSE, mouse, 2);
+    hid_report(3, mouse, 2);
     CHECK("a short mouse report is dropped", mouse_reports == 0);
 
     hid_gone(3);
@@ -382,6 +607,10 @@ static void mouse_rows(void)
  */
 int main(void)
 {
+    hid_attach_boot(1, HID_KEYBOARD, &no_strings);
+    CHECK("a keyboard without strings is USB HIDBP Keyboard 0627:0001",
+          same(keyboard_name, "USB HIDBP Keyboard 0627:0001"));
+
     /* A key pressed, held across two reports, and released. */
     keys(1, 0, 0x04, 0, 0); /* 'a' down */
     CHECK("a key pressed sends its make code", sent(1, 0x1E, 0, 0, 0));
@@ -437,17 +666,17 @@ int main(void)
         rollover[1] = 0;
         keys(1, 0, 0x04, 0, 0); /* 'a' down */
         n_codes = 0;
-        hid_report(1, HID_KEYBOARD, rollover, 8);
+        hid_report(1, rollover, 8);
         CHECK("a rollover report's keys are dropped", n_codes == 0);
 
         /* The modifier byte of a rollover report is still valid. */
         rollover[0] = 0x02;
         n_codes = 0;
-        hid_report(1, HID_KEYBOARD, rollover, 8);
+        hid_report(1, rollover, 8);
         CHECK("but its modifiers are read", sent(1, 0x2A, 0, 0, 0));
         rollover[0] = 0;
         n_codes = 0;
-        hid_report(1, HID_KEYBOARD, rollover, 8);
+        hid_report(1, rollover, 8);
         CHECK("and released", sent(1, 0xAA, 0, 0, 0));
 
         /* POSTFail, another error usage, means the same. */
@@ -455,7 +684,7 @@ int main(void)
             rollover[i] = 2;
         }
         n_codes = 0;
-        hid_report(1, HID_KEYBOARD, rollover, 8);
+        hid_report(1, rollover, 8);
         CHECK("a post-fail report is dropped as well", n_codes == 0);
         /* The keys held before the rollover are still held after it. */
         keys(1, 0, 0x04, 0, 0);
@@ -466,7 +695,7 @@ int main(void)
     /* A report shorter than its layout is not read past. */
     keys(1, 0, 0x04, 0, 0);
     n_codes = 0;
-    hid_report(1, HID_KEYBOARD, (const unsigned char *)"\0\0\0", 3);
+    hid_report(1, (const unsigned char *)"\0\0\0", 3);
     CHECK("a short keyboard report is dropped", n_codes == 0);
     keys(1, 0, 0, 0, 0);
 
@@ -480,6 +709,8 @@ int main(void)
     CHECK("and a device that has already gone releases nothing", n_codes == 0);
 
     /* Two keyboards, each with its own state. */
+    hid_attach_boot(1, HID_KEYBOARD, &no_strings);
+    hid_attach_boot(2, HID_KEYBOARD, &no_strings);
     keys(1, 0, 0x04, 0, 0);
     keys(2, 0, 0x04, 0, 0);
     CHECK("a second keyboard's first report is a press, not a hold", sent(1, 0x1E, 0, 0, 0));
@@ -487,6 +718,8 @@ int main(void)
     mouse_rows();
 
     leds_rows();
+
+    report_rows();
 
     if (fails == 0) {
         printf("hid_hosttest: OK\n");
