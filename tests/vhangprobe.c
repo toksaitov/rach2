@@ -301,7 +301,7 @@ static int writer_done(long pid)
  */
 static int child_rows(int ptn, long uid, long master)
 {
-    unsigned char tio[TIO_SIZE];
+    const unsigned char tio[TIO_SIZE] = {0};
     struct pollfd pfd;
     char path[24], byte;
     long slave = child_setup(ptn, master), fd, writer;
