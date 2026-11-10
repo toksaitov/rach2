@@ -1066,8 +1066,9 @@ int32_t kvm_iobus_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
  * when it goes to the caller. */
 int kvm_iobus_write(struct kvm_vcpu *v);
 
-/** The capabilities of iobus.c: IOEVENTFD, IOEVENTFD_ANY_LENGTH,
- * IOEVENTFD_NO_LENGTH. */
+/** The capabilities of iobus.c: IOEVENTFD, IOEVENTFD_ANY_LENGTH and
+ * IOEVENTFD_NO_LENGTH, 1; COALESCED_PIO, 1; and COALESCED_MMIO, the ring's
+ * page offset in a vCPU's mapping, KVM_COALESCED_MMIO_PAGE_OFFSET. */
 int32_t kvm_iobus_check_extension(long cap);
 
 /** Free iobus.c's share of `vm`. */
