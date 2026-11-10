@@ -1,14 +1,24 @@
 # The desktop and video on the Lenovo
 
-Task 76-17b: the GNU root from the milestone branch, booted once on the Lenovo as a trial root from the data partition on the branch's kernel, starts its Weston session at boot on fbdrm, the firmware's framebuffer at 1366x768; both browsers play video on the panel there, judged against Debian's numbers on the same machine; and killing Weston gives the console back. The step takes the screen for some 25 minutes and plays no sound: every clip is muted, and the 76-17a clips have no audio track.
+Task 76-17b: the GNU root from the milestone branch, booted once on the Lenovo as a trial root from the data partition on the branch's kernel, starts its Weston session at boot on fbdrm, the firmware's framebuffer at 1366x768; both browsers play video on the panel there, judged against Debian's numbers on the same machine; and killing Weston gives the console back. From the trial root's boot to Weston's death the step takes the screen for about half an hour, and it plays no sound: every clip is muted, and the 76-17a clips have no audio track.
 
 ## What runs on the hardware for the first time
 
-Nothing in the kernel. The trial kernel is the branch head's, whose hardware paths on the Lenovo have each had a trial of their own: fbdrm and the console's handover (76-11b, `lenovo-console.md`), the touchpad's bring-up (76-10c, `lenovo-touchpad.md`), the TCO watchdog, halted at boot (78-1b), VT-d read only under `intel_iommu=off intremap=off` (81-6d) and the trial root through the loop driver (76-15c, `lenovo-storage.md`). Without `rach2.i915` the Intel driver leaves the GPU to the firmware's framebuffer, so fbdrm is card 0. What is new on the machine is userland: the GNU root's desktop session (seatd, udev, PulseAudio over OSS and Weston, `vendor/gnu/desktop/Readme.md`) as a master of fbdrm, which 76-11b's `drmprobe` stood in for, and the browsers drawing through it.
+No driver. The trial kernel is the branch head's, 437805141, and the hardware paths a boot of it takes on the Lenovo have each had a trial of their own: fbdrm and the console's handover (76-11b, `lenovo-console.md`), the touchpad's bring-up (76-10c, `lenovo-touchpad.md`), the TCO watchdog, halted at boot (78-1b), VT-d read only under `intel_iommu=off intremap=off` (81-6d) and the trial root through the loop driver (76-15c, `lenovo-storage.md`). Without `rach2.i915` the Intel driver leaves the GPU to the firmware's framebuffer, so fbdrm is card 0.
+
+The head as a whole has not booted there. The newest kernels of the branch that have are 78-10d's and 78-5c's trial kernels: 78-10d merged at f9ad27392, and 78-5c's fourth trial, which has its go, carries the branch through that commit. The thirteen kernel commits after it touch no device the Lenovo has:
+
+* The big lock's accounting, eight commits of 76-17a from 6c548b219 to c58ea2c11, runs at every entry to the kernel. A take and a give-back read the cycle counter and add to counters under the lock (`bkl_acquire`, `bkl_hold_end` in `rach2/sys/proc/smp.c`); an entry names its vector and system call in two per-processor words (`bkl_note_entry`); and an interrupt that finds its processor holding the lock compares the hold's age with five marks and may keep the interrupted instruction and up to seven return addresses (`bkl_hold_sample`, `sample_chain`). The walk reads two words at each frame pointer, which must be a kernel address, aligned, not below the first frame and within 64 KiB above it; the kernel is built without optimization, so the frame pointer of the code an interrupt stops under the lock is a stack frame's. `timer_cycles_us` (`pit.c`) is a 64-step division that reads no hardware and answers 0 before the counter is calibrated. Nothing here waits, loops without a fixed bound or touches a register, and `/proc/stat`'s new lines read the counters under the lock.
+* 0e68526ec bounds a virtqueue's reap; the Lenovo has no virtio device.
+* 61a039964 answers ENOTCONN to a receive on a TCP listener; e40eec58c moves seccomp's privilege check after its descriptor check; 620ec0ccc and 2bdaafdc3 make `chroot` ask for CAP_SYS_CHROOT. Each changes an error a system call returns.
+
+This kernel, the file of the table below, ran the whole step under QEMU with KVM on four processors in the rehearsal, and the accounting ran through 76-17a's measurements before it.
+
+In userland, the desktop session's services and Weston have started on the Lenovo before, on i915 in 78-10d's trial root. New there are Weston on fbdrm, composited by Pixman, which 76-11b's `drmprobe` stood in for as a master, and the browsers drawing through it. The trial root's line carries the release's `rach2.console=term`, so `term` runs on `/fb` beside the session, as it did beside `drmprobe` in 76-11b; the rehearsal could not show the two together, since a kernel that QEMU loads itself has no `/fb` and `term` gives way to the console's login there.
 
 ## The step
 
-The step's script is [`lenovo-desktop/desktop.sh`](lenovo-desktop/desktop.sh), run as root on the trial root from a bundle on the data partition with `debugfs`, e2fsprogs' static build, beside it. Each browser runs as the session's user, `desktop`, on its Weston, `wayland-0`, as a program a person starts there would; the session's kiosk-shell makes each window fullscreen.
+The step's script is [`lenovo-desktop/desktop.sh`](lenovo-desktop/desktop.sh), run as root on the trial root from a bundle on the data partition with `debugfs`, e2fsprogs' static build, beside it. The Mac's commands around it, from the files' fetch to the release's return, are on the task's issue with the manager's go. Each browser runs as the session's user, `desktop`, on its Weston, `wayland-0`, as a program a person starts there would; the session's kiosk-shell makes each window fullscreen.
 
 * `state`: the boot line, `bootctl status`, the DRM connectors and their modes, fbdrm's and the console's kernel lines, the session's processes and Weston's lines in `/var/log/services`.
 * `clips`: 80-2's two clips, read from Debian's root on p5 by `debugfs`, which opens the partition read-only and writes nothing there, since Rach2 mounts no ext4: `h264-1080p30.mp4`, H.264 High, 60,398,253 bytes, and `vp9-1080p30.webm`, VP9 profile 0, 47,095,373 bytes, both 1920x1080 at 30 frames a second for 60 s (`dev-log/76-graphics/research/run2/step9.md`).
@@ -38,7 +48,7 @@ Debian composited on the GPU; Rach2's Weston on fbdrm has no render node and com
 
 ## The rehearsal in QEMU
 
-Run on the testing host on 2026-11-10 from 16:52 to 17:17 UTC+6, under QEMU with KVM, 4 processors and 8 GiB, by the step's own commands over SSH, with the trial's kernel and root image below. The root was partition 1 of an AHCI disk (`rach2.root=/dev/disk0p1`), not an image on a data partition, which 76-15c proved; the display was QEMU's standard VGA with an EDID at 1280x800, so the session ran on bochs-drm, not fbdrm, which 76-11b proved on the Lenovo; and p5 was a second disk with an ext4 partition made by `mke2fs -t ext4 -d` holding 76-17a's H.264 and VP9 clips at 1080p under 80-2's names, 10 s long, in place of Debian's 60 s ones.
+Run on the testing host on 2026-11-10 from 17:52 to 18:17 UTC+6, under QEMU with KVM, 4 processors and 8 GiB, by the step's own commands over SSH, with the trial's kernel and root image below. The root was partition 1 of an AHCI disk (`rach2.root=/dev/disk0p1`), not an image on a data partition, which 76-15c proved; the display was QEMU's standard VGA with an EDID at 1280x800, so the session ran on bochs-drm, not fbdrm, which 76-11b proved on the Lenovo; and p5 was a second disk with an ext4 partition made by `mke2fs -t ext4 -d` holding 76-17a's H.264 and VP9 clips at 1080p under 80-2's names, 10 s long, in place of Debian's 60 s ones.
 
 * `state`: Weston as `desktop` from boot, "Using Pixman renderer", the output `Virtual-1` at "1280x800@75.0, preferred, current", and `console: card0: handed to a master, the keyboard off` in the log.
 * `clips` with `P5=/dev/disk1p1`: both files read by `debugfs` with the SHA-256 of their sources, `8e566274...` and `d8894694...`.
@@ -46,18 +56,18 @@ Run on the testing host on 2026-11-10 from 16:52 to 17:17 UTC+6, under QEMU with
 * `video`: twelve result lines, three counted plays each, no media error, status 0; Chromium's decoders FFmpegVideoDecoder, VpxVideoDecoder and Dav1dVideoDecoder, Firefox's ffmpeg for H.264 and ffvpx for VP9 and AV1.
 * `kill`: Weston gone, the supervisor alive and not restarting it, and `console: card0: taken back from a master, the keyboard on` in the log; on bochs the console's next line names its mode, where on fbdrm it is `the firmware's framebuffer again`.
 
-Drops under QEMU are not this task's measure and are not recorded here.
+Drops under QEMU are not this task's measure and are not recorded here. A second boot at 18:26, with `rach2.console=term` on the line, started the same session: Weston as `desktop` on Pixman at 1280x800, and the console handed to it 15 s into the boot.
 
 ## The trial's files
 
-Built on the testing host from the tree of 437805141, the milestone head, with `make ARCH=x86_64 rach2 os-real-gnu-ext2`; the task's commits change no file either is built from. They stay in `build/cache/lenovo-2657/` of the `toksaitov-m` clone there until the task closes.
+Built on the testing host from the tree of 437805141, the milestone head, which the task's commits change no file of: the kernel, `bootctl`, `debugfs` and the root image by `make ARCH=x86_64 rach2 os-real-gnu-ext2`, and the clips by `sh tests/graphics/runners/debian.sh clips -t clips.tar`, each clip with its digest in `tests/graphics/runners/clips.sha256`. They are the files the rehearsal ran. They stay in `/home/toksaitov-m/rach2/build/cache/lenovo-2657/` on the testing host, with their `SHA256SUMS`, until the task closes; the directory is readable by its account and by root, so the Mac fetches it through root in WSL, as the issue's step says.
 
 | File | SHA-256 | Bytes |
 |---|---|---|
 | `kernel` | `957f5d385f5af390f98e09eabd813a4b61b83a2938bd11264c92e8cc08e3b0af` | 4,179,608 |
 | `bootctl` | `a7bac9d2e0bbd8d62877b914166eaf980ea239a4fc4ef513a57b16497a79868f` | 87,504 |
-| `os-real-gnu.ext2`, the trial root | `07a02ae529bdd3eac7c4f438668427b2623bbb65dcf37a43ba8970a1f443b24b` | 17,179,869,184 |
-| `root.img.gz`, the same gzipped | `932835b39fd74a78bac06521a6bf63ad9875b22ecb201b62586d05dd31433056` | 4,989,042,491 |
+| `root.img.gz`, the trial root gzipped | `932835b39fd74a78bac06521a6bf63ad9875b22ecb201b62586d05dd31433056` | 4,989,042,491 |
+| the trial root, `os-real-gnu.ext2`, unpacked | `07a02ae529bdd3eac7c4f438668427b2623bbb65dcf37a43ba8970a1f443b24b` | 17,179,869,184 |
 | `debugfs`, e2fsprogs' static build | `aa3b0ca5e01af7c563e62a253634f9ab6138931562cb55f77082956f99774658` | 561,000 |
 | `clips.tar`, 76-17a's six clips | `6806f20e17fb555f2e5547ebafb0dc99b144d03350168391a7c1158474ae33d6` | 35,276,800 |
 
