@@ -22,7 +22,7 @@
 #define KVM_DATA "/tmp/kvm-data"
 
 /* The runners, by the last part of the case's identity. */
-enum runner { BOOT, UNIT, SELFTESTS, ENTRY, SLOTS };
+enum runner { BOOT, UNIT, SELFTESTS, ENTRY, SLOTS, LEAK };
 
 /* What one attempt shares among its steps. */
 struct kvm_case {
@@ -46,6 +46,10 @@ static int parse(struct kvm_case *s, const char *id)
     if (name == NULL)
         return 0;
     name++;
+    if (strcmp(name, "leak") == 0) {
+        s->runner = LEAK;
+        return 1;
+    }
     if (strcmp(name, "entry") == 0 || strcmp(name, "slots") == 0) {
         s->runner = strcmp(name, "slots") == 0 ? SLOTS : ENTRY;
         return 1;
@@ -116,15 +120,23 @@ static void stage(struct kvm_case *s)
  */
 static void run(struct kvm_case *s)
 {
-    static const char *const assertion[] = {"token", "as-listed", "as-listed", "entry", "slots"};
-    static const char *const pattern[] = {"kvm-boot: result: pass", "kvm-corpus: result: pass",
-                                          "kvm-corpus: result: pass", "SVMENTRY OK",
-                                          "KVMACTIVE OK"};
+    static const char *const assertion[] = {"token", "as-listed", "as-listed",
+                                            "entry", "slots",     "leak"};
+    static const char *const pattern[] = {"kvm-boot: result: pass",
+                                          "kvm-corpus: result: pass",
+                                          "kvm-corpus: result: pass",
+                                          "SVMENTRY OK",
+                                          "KVMOBJECT OK",
+                                          "kvm-leak: result: pass"};
     char command[512], line[200];
     const char *result;
     struct net_run r;
 
-    if (s->runner == ENTRY || s->runner == SLOTS)
+    if (s->runner == LEAK)
+        snprintf(command, sizeof(command),
+                 "cd " KVM_DIR " && sh leak.sh"
+                 " -k guests/debian/vmlinuz -i guests/debian/initrd");
+    else if (s->runner == ENTRY || s->runner == SLOTS)
         snprintf(command, sizeof(command), KVM_DIR "/svm-entry%s",
                  s->runner == SLOTS ? " slots" : "");
     else if (s->runner == BOOT)

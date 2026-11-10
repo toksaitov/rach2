@@ -196,12 +196,13 @@
     },
     {
       "case_id": "machine.kvm.slots",
-      "behavior": "A running SVM guest observes its memory slots after fork, mprotect, discard, munmap and replacement; a counted loop proves the guest was active before the changes",
+      "behavior": "A running SVM guest observes its memory slots after fork, mprotect, discard, munmap and replacement; a counted loop proves the guest was active before the changes; the guest also reads a /dev/mem VGA mapping and the end of a 4 MiB GEM object",
       "units": [
         "tests/kvm/svm-entry.c",
         "rach2/sys/kvm/svm.c",
         "rach2/sys/kvm/svm_run.s",
-        "tests/cases/machine/kvm_scenario.c"
+        "tests/cases/machine/kvm_scenario.c",
+        "rach2/sys/kvm/stats.h"
       ],
       "domain": "machine",
       "architectures": [
@@ -287,7 +288,7 @@
             "boot_options": [
               "rach2.root=ext2"
             ],
-            "display": "none"
+            "display": "std-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -298,7 +299,197 @@
       "assertions": [
         {
           "assertion_id": "slots",
-          "checks": "svm-entry slots exits 0 and prints KVMACTIVE OK after the active guest reads the replacement page",
+          "checks": "svm-entry slots exits 0 and prints KVMOBJECT OK after the active slot changes, device mapping and 4 MiB object read",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 5368709120,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "kvm-data",
+          "node": "tests/cases/kvm/kvm.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "kvm_scenario",
+          "node": "tests/cases/machine/kvm_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case needs the emulated SVM processor profile; the Lenovo has VMX"
+      }
+    },
+    {
+      "case_id": "machine.kvm.leak",
+      "behavior": "Kill QEMU after its Debian guest starts, require no pinned pages, and count its VMs, vCPUs, slots, table pages, run mappings and file descriptions back to their initial values",
+      "units": [
+        "tests/kvm/leak.sh",
+        "rach2/sys/kvm/stats.h",
+        "tests/cases/machine/kvm_scenario.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "svm-entry"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux",
+          "macos"
+        ]
+      },
+      "execution": {
+        "program": "kvm_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root in the guest, which opens /dev/kvm and mounts the data disk",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/kvm and copy there from the read-only KVM data disk the runners, the lists and the Debian guest"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run leak.sh on the Debian mini-guest, kill QEMU once Linux starts, and compare every live resource count with its initial value"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "kvm-payload",
+                "base": "kvm-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 2,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "leak",
+          "checks": "leak.sh exits 0 and prints kvm-leak: result: pass after every live count returns",
           "source": "scenario"
         }
       ],

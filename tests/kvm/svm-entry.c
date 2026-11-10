@@ -73,11 +73,16 @@ static int open_guest(struct guest *g)
     if (g->run == MAP_FAILED || g->mem == MAP_FAILED)
         return fail("mmap");
     memset(&slot, 0, sizeof(slot));
-    slot.memory_size = 4u * PAGE;
+    slot.memory_size = 2u * PAGE;
     slot.userspace_addr = (uint64_t)(uintptr_t)g->mem;
     if (ioctl(g->vm, KVM_SET_USER_MEMORY_REGION, &slot) != 0 ||
         ioctl(g->cpu, KVM_GET_SREGS, &s) != 0)
         return fail("slot or special registers");
+    slot.slot = 1;
+    slot.guest_phys_addr = 2u * PAGE;
+    slot.userspace_addr += 2u * PAGE;
+    if (ioctl(g->vm, KVM_SET_USER_MEMORY_REGION, &slot) != 0)
+        return fail("data slot");
     s.cs.base = s.cs.selector = 0;
     s.ds.base = s.ds.selector = 0;
     s.ss.base = s.ss.selector = 0;
@@ -270,12 +275,261 @@ static int active_slot(struct guest *g)
     return result;
 }
 
+/** Replace the data slot at 0x2000 with size bytes of a caller's mapping. */
+static int data_slot(struct guest *g, void *mapping, size_t size)
+{
+    struct kvm_userspace_memory_region slot;
+
+    memset(&slot, 0, sizeof(slot));
+    slot.slot = 1;
+    if (ioctl(g->vm, KVM_SET_USER_MEMORY_REGION, &slot) != 0)
+        return fail("delete data slot");
+    slot.guest_phys_addr = 2u * PAGE;
+    slot.memory_size = size;
+    slot.userspace_addr = (uint64_t)(uintptr_t)mapping;
+    return ioctl(g->vm, KVM_SET_USER_MEMORY_REGION, &slot) == 0 ? 0 : fail("replace data slot");
+}
+
+/** Read a page of VGA memory through a /dev/mem slot, without changing it. */
+static int device_slot(struct guest *g)
+{
+    static const unsigned char read[] = {0xA0, 0x00, 0x20, 0xE6, 0x10, 0xF4};
+    unsigned char *mapping;
+    int fd = open("/dev/mem", O_RDWR | O_CLOEXEC), result;
+
+    if (fd < 0)
+        return fail("open /dev/mem");
+    mapping = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0xA0000);
+    if (mapping == MAP_FAILED) {
+        close(fd);
+        return fail("map VGA memory");
+    }
+    result = data_slot(g, mapping, PAGE);
+    if (result == 0)
+        result = run_code(g, read, sizeof(read), mapping[0]);
+    if (data_slot(g, g->mem + 2u * PAGE, 2u * PAGE) != 0)
+        result = -1;
+    munmap(mapping, PAGE);
+    close(fd);
+    if (result == 0)
+        puts("KVMDEVICE OK");
+    return result;
+}
+
+/* Linux's MODE_CREATE_DUMB, MODE_MAP_DUMB and MODE_DESTROY_DUMB records. */
+struct dumb_create {
+    uint32_t height, width, bpp, flags, handle, pitch;
+    uint64_t size;
+};
+struct dumb_map {
+    uint32_t handle, pad;
+    uint64_t offset;
+};
+
+/** Use flat 32-bit protected mode, so an operand can reach the object's end. */
+static int flat_mode(struct guest *g)
+{
+    struct kvm_sregs s;
+
+    if (ioctl(g->cpu, KVM_GET_SREGS, &s) != 0)
+        return fail("read segments");
+    s.cs.base = 0;
+    s.cs.selector = 8;
+    s.cs.limit = 0xFFFFFFFFu;
+    s.cs.db = s.cs.g = 1;
+    s.ds = s.es = s.ss = s.cs;
+    s.ds.type = s.es.type = s.ss.type = 3;
+    s.ds.selector = s.es.selector = s.ss.selector = 16;
+    s.cr0 = 0x11;
+    return ioctl(g->cpu, KVM_SET_SREGS, &s) == 0 ? 0 : fail("flat segments");
+}
+
+/** Read the end of a 4 MiB GEM object as a slot, including its first fault. */
+static int object_slot(struct guest *g)
+{
+    struct dumb_create create;
+    struct dumb_map map;
+    unsigned char read[] = {0xA0, 0, 0, 0, 0, 0xE6, 0x10, 0xF4};
+    unsigned char *mapping = MAP_FAILED;
+    uint32_t address;
+    int fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC), result = -1;
+
+    if (fd < 0)
+        return fail("open DRM card");
+    memset(&create, 0, sizeof(create));
+    create.width = create.height = 1024;
+    create.bpp = 32;
+    if (ioctl(fd, 0xC02064B2ul, &create) != 0) {
+        close(fd);
+        return fail("create 4 MiB object");
+    }
+    memset(&map, 0, sizeof(map));
+    map.handle = create.handle;
+    if (ioctl(fd, 0xC01064B3ul, &map) != 0)
+        fail("object offset");
+    else
+        mapping = mmap(NULL, (size_t)create.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                       (off_t)map.offset);
+    if (mapping != MAP_FAILED && create.size >= 4u * 1024u * 1024u) {
+        address = 2u * PAGE + (uint32_t)create.size - PAGE;
+        read[1] = (unsigned char)address;
+        read[2] = (unsigned char)(address >> 8);
+        read[3] = (unsigned char)(address >> 16);
+        read[4] = (unsigned char)(address >> 24);
+        mapping[create.size - PAGE] = 0x96;
+        if (flat_mode(g) == 0 && data_slot(g, mapping, (size_t)create.size) == 0)
+            result = run_code(g, read, sizeof(read), 0x96);
+    } else {
+        fail("map 4 MiB object");
+    }
+    if (data_slot(g, g->mem + 2u * PAGE, 2u * PAGE) != 0)
+        result = -1;
+    if (mapping != MAP_FAILED)
+        munmap(mapping, (size_t)create.size);
+    if (ioctl(fd, 0xC00464B4ul, &create.handle) != 0)
+        result = fail("destroy object");
+    close(fd);
+    if (result == 0)
+        puts("KVMOBJECT OK");
+    return result;
+}
+
+#define RESOURCE_COUNTS 6u
+
+struct resources {
+    unsigned long value[RESOURCE_COUNTS];
+};
+
+/** Read the live KVM object counts and the system's open file descriptions. */
+static int resources_read(struct resources *r)
+{
+    static const char *const names[] = {"kvm_vms", "kvm_vcpus", "kvm_slots", "kvm_tdp_pages",
+                                        "kvm_run_mappings"};
+    FILE *f;
+    char line[256], name[64];
+    unsigned long value;
+    unsigned int i, seen = 0;
+
+    memset(r, 0, sizeof(*r));
+    f = fopen("/proc/stat", "r");
+    if (f == NULL)
+        return fail("resource counts");
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (sscanf(line, "%63s %lu", name, &value) != 2)
+            continue;
+        for (i = 0; i < 5u; i++) {
+            if (strcmp(name, names[i]) == 0) {
+                r->value[i] = value;
+                seen |= 1u << i;
+            }
+        }
+    }
+    fclose(f);
+    f = fopen("/proc/sys/fs/file-nr", "r");
+    if (f == NULL)
+        return fail("file descriptions");
+    i = fscanf(f, "%lu", &r->value[5]) == 1;
+    fclose(f);
+    return seen == 31u && i ? 0 : fail("incomplete resource counts");
+}
+
+/** Require every live count to have returned to its value before the VM. */
+static int resources_equal(const struct resources *before, const struct resources *after)
+{
+    unsigned int i;
+
+    for (i = 0; i < RESOURCE_COUNTS; i++) {
+        if (before->value[i] != after->value[i]) {
+            fprintf(stderr, "svm-entry: fail: resource %u: %lu before, %lu after\n", i,
+                    before->value[i], after->value[i]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/** Run until killed, writing a shared counter once per guest iteration. */
+static void leak_child(volatile uint32_t *shared)
+{
+    struct guest g;
+    struct kvm_regs regs;
+    static const unsigned char spin[] = {0x66, 0xFF, 0x06, 0x00, 0x20, 0xEB, 0xF9};
+    int result = open_guest(&g);
+
+    if (result == 0)
+        result = data_slot(&g, (void *)shared, PAGE);
+    if (result == 0) {
+        memcpy(g.mem + PAGE, spin, sizeof(spin));
+        memset(&regs, 0, sizeof(regs));
+        regs.rip = PAGE;
+        regs.rflags = 2;
+        if (ioctl(g.cpu, KVM_SET_REGS, &regs) == 0)
+            ioctl(g.cpu, KVM_RUN, 0);
+    }
+    shared[1] = 1;
+    close_guest(&g);
+    _exit(1);
+}
+
+/** Kill one process while its guest is running, and reap it on every path. */
+static int kill_guest(volatile uint32_t *shared)
+{
+    struct resources before, during, after;
+    pid_t child;
+    int status, result = 0;
+
+    if (resources_read(&before) != 0)
+        return -1;
+    shared[0] = shared[1] = 0;
+    child = fork();
+    if (child < 0)
+        return fail("leak fork");
+    if (child == 0)
+        leak_child(shared);
+    while (shared[0] == 0 && shared[1] == 0)
+        sched_yield();
+    if (shared[1] != 0 || resources_read(&during) != 0) {
+        result = fail("start guest to kill");
+    } else if (during.value[0] != before.value[0] + 1u || during.value[1] != before.value[1] + 1u ||
+               during.value[2] != before.value[2] + 2u || during.value[3] <= before.value[3] ||
+               during.value[4] != before.value[4] + 1u) {
+        result = fail("live guest counts");
+    }
+    if (kill(child, SIGKILL) != 0 || waitpid(child, &status, 0) != child)
+        return fail("kill and reap guest");
+    if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL)
+        result = fail("guest kill status");
+    if (resources_read(&after) != 0 || resources_equal(&before, &after) != 0)
+        return -1;
+    return result;
+}
+
+/** Count the resources of three killed guests back to their initial values. */
+static int leak_rows(void)
+{
+    volatile uint32_t *shared;
+    int i, result = 0;
+
+    shared = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (shared == MAP_FAILED)
+        return fail("shared loop counter");
+    for (i = 0; i < 3 && result == 0; i++)
+        result = kill_guest(shared);
+    munmap((void *)shared, PAGE);
+    if (result == 0)
+        puts("KVMLEAK OK");
+    return result;
+}
+
 /** Run the small guest; as PID 1, power off after reporting its result. */
 int main(int argc, char **argv)
 {
     struct guest g;
+    struct resources before, after;
     int result;
 
+    if (resources_read(&before) != 0)
+        return 1;
     result = open_guest(&g);
     if (result == 0)
         result = rows(&g);
@@ -283,8 +537,16 @@ int main(int argc, char **argv)
         result = slot_rows(&g);
         if (result == 0)
             result = active_slot(&g);
+        if (result == 0)
+            result = device_slot(&g);
+        if (result == 0)
+            result = object_slot(&g);
     }
     close_guest(&g);
+    if (resources_read(&after) != 0 || resources_equal(&before, &after) != 0)
+        result = -1;
+    if (result == 0 && (getpid() == 1 || (argc == 2 && strcmp(argv[1], "leak") == 0)))
+        result = leak_rows();
     fflush(NULL);
     if (getpid() == 1) {
         reboot(RB_POWER_OFF);

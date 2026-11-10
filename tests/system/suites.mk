@@ -1056,7 +1056,7 @@ $(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.tx
                          build/tools/wifi/mkcpio $(SHA256TOOL)
 	MKCPIO=$(WIFI_MKCPIO) sh tests/kvm/guests/mkdebian.sh $(KVM_GUEST_DIR)
 $(KVM_GUEST_DIR)/vmlinuz: $(KVM_GUEST_DIR)/initrd
-KVM_FILES = tests/kvm/kvm-boot.sh tests/kvm/corpus.sh tests/kvm/unit-tests.list \
+KVM_FILES = tests/kvm/leak.sh tests/kvm/kvm-boot.sh tests/kvm/corpus.sh tests/kvm/unit-tests.list \
             tests/kvm/selftests.list
 build/tests/cases/kvm/kvm.tar: $(KVM_FILES) $(KVM_GUEST_DIR)/initrd $(KVM_GUEST_DIR)/vmlinuz $(KVM_ENTRY)
 	@mkdir -p $(@D)
