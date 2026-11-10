@@ -48,6 +48,7 @@ CHILDREN = set()
 
 def interrupted(signum, _frame):
     """Stop owned process groups before unwinding the workspace cleanup."""
+    show_processes()
     for proc in list(CHILDREN):
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -59,6 +60,25 @@ def interrupted(signum, _frame):
 def say(text):
     """Print one progress or result line of the runner."""
     print("games: " + text, flush=True)
+
+
+def show_processes():
+    """
+    Print the state and switch counts of each process of this account, so
+    that a row stopped from outside shows whether its programs slept or ran.
+    """
+    uid = os.getuid()
+    for entry in sorted(Path("/proc").glob("[0-9]*"), key=lambda p: int(p.name)):
+        try:
+            if entry.stat().st_uid != uid:
+                continue
+            text = (entry / "status").read_text(errors="replace")
+        except OSError:
+            continue
+        field = dict(line.split(":\t", 1) for line in text.splitlines() if ":\t" in line)
+        say("stopped: pid %s ppid %s %s state %s switches %s %s" % (
+            entry.name, field.get("PPid"), field.get("Name"), field.get("State"),
+            field.get("voluntary_ctxt_switches"), field.get("nonvoluntary_ctxt_switches")))
 
 
 def start(argv, env, log):
