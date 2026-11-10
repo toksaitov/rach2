@@ -591,8 +591,13 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_exec",
+          "checks": "tests/host/i915_exec_hosttest.c runs the Intel graphics driver's EXECBUFFER2 on the chip of i915_gem_model.c, whose rings run the requests and the batches' stores: each of Linux's refusals of the call, relocations with presumed offsets, NO_RELOC, HANDLE_LUT, signed deltas and BATCH_FIRST, objects pinned, padded and aligned, the batch started on the render and blitter rings, the stream output reset, the in-fence, submit fence, out-fence and fence array, an in-fence's error skipping the batch, the command parser's stub and a ring that refuses the commands, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_evict",
-          "checks": "tests/host/i915_evict_hosttest.c evicts, accounts, purges and pins the Intel graphics driver's buffers on the chip of i915_gem_model.c: a working set of 48 MiB written through GTT maps of a 16 MiB aperture reads back whole after its bindings were evicted least recently used first, pinned and busy bindings stay, GET_APERTURE counts the pinned, a DONTNEED object is purged by reclaim before an allocation fails and an allocation past memory gives ENOMEM, and a userptr object's pages are pinned on use and let go, its bindings revoked first, on an unmap, mprotect, fork, copy-on-write break and exit, under ASan and UBSan and exits 0",
+          "checks": "tests/host/i915_evict_hosttest.c evicts, accounts, purges and pins the Intel graphics driver's buffers on the chip of i915_gem_model.c: a working set of 48 MiB written through GTT maps of a 16 MiB aperture reads back whole after its bindings were evicted least recently used first, pinned and busy bindings stay unless the bind may wait for the GPU, when the busy one goes once its request retires, GET_APERTURE counts the pinned, a DONTNEED object is purged by reclaim before an allocation fails and an allocation past memory gives ENOMEM, and a userptr object's pages are pinned on use and let go, its bindings revoked first, on an unmap, mprotect, fork, copy-on-write break and exit, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
