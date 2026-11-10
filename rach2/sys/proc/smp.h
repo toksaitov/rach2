@@ -67,6 +67,17 @@ int smp_cpu_count(void);
  * without a calibrated invariant TSC. */
 void smp_wait_stats(uint64_t *total_us, uint64_t *max_us);
 
+/** Name the kernel entry that holds the big lock on this processor, by its
+ * vector and, for a system call, its number (-1 otherwise), for the longest
+ * hold's record. Only the outermost entry counts. */
+void bkl_note_entry(uint32_t vector, int32_t nr);
+
+/** Read the longest hold of the big lock since boot, from its take to its
+ * give-back or drop, in microseconds, with its entry's vector (0 for none,
+ * a kernel thread's) and system call number (-1 for none). The caller holds
+ * the big lock. The time is zero without a calibrated invariant TSC. */
+void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
+
 /** Answer the requests other processors left this one: stop for good, drop
  * a translation or every one, or give up a page directory for the
  * kernel's. Called with interrupts off. */

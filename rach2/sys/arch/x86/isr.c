@@ -635,6 +635,8 @@ void _isr_router(isr_params_t *params)
 {
     user_entry(params);
     bkl_enter();
+    bkl_note_entry((uint32_t)params->vector,
+                   params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1);
 #ifdef DEBUG
     klog(KLOG_DEBUG, "isr", "interrupt: vector 0x%X", params->vector);
 #endif
@@ -780,6 +782,7 @@ void _irq_router(isr_params_t *params)
         }
         bkl_enter();
     }
+    bkl_note_entry((uint32_t)params->vector, -1);
     irq_count++;
     if (params->vector >= 32 && params->vector <= ISR_MSI_LAST) {
         vector_count[params->vector - 32]++;

@@ -2840,12 +2840,15 @@ static void procfs_kvm_counts(struct procfs_text *t)
 }
 
 /** The counts of the kernel's own work for `/proc/stat`, from
- * `process_pid_steps` to `bkl_wait_max_us`, each on a line of its own. */
+ * `process_pid_steps` to `bkl_hold_max_entry`, each on a line of its own. */
 static void procfs_work_counts(struct procfs_text *t)
 {
-    uint64_t total, longest;
+    uint64_t total, longest, held;
+    uint32_t vector;
+    int32_t nr;
 
     smp_wait_stats(&total, &longest);
+    smp_hold_stats(&held, &vector, &nr);
     ap_str(t, "process_pid_steps ");
     ap_u32(t, proc_work_count(0));
     ap_str(t, "\nprocess_uid_steps ");
@@ -2874,6 +2877,16 @@ static void procfs_work_counts(struct procfs_text *t)
     ap_u64(t, total);
     ap_str(t, "\nbkl_wait_max_us ");
     ap_u64(t, longest);
+    ap_str(t, "\nbkl_hold_max_us ");
+    ap_u64(t, held);
+    ap_str(t, "\nbkl_hold_max_entry ");
+    ap_u32(t, vector);
+    ap_ch(t, ' ');
+    if (nr < 0) {
+        ap_str(t, "-1");
+    } else {
+        ap_u32(t, (uint32_t)nr);
+    }
     ap_ch(t, '\n');
 }
 
