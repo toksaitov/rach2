@@ -69,7 +69,8 @@ void smp_wait_stats(uint64_t *total_us, uint64_t *max_us);
 
 /** Name the kernel entry that holds the big lock on this processor, by its
  * vector and, for a system call, its number (-1 otherwise), for the longest
- * hold's record. Only the outermost entry counts. */
+ * hold's record. Only the outermost entry counts; a take again after an idle
+ * halt names none. */
 void bkl_note_entry(uint32_t vector, int32_t nr);
 
 /** Read the longest hold of the big lock since boot, from its take to its
@@ -77,6 +78,16 @@ void bkl_note_entry(uint32_t vector, int32_t nr);
  * a kernel thread's) and system call number (-1 for none). The caller holds
  * the big lock. The time is zero without a calibrated invariant TSC. */
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
+
+/** Sample a hold of the big lock from an interrupt that found this processor
+ * holding it: when the hold is the oldest any interrupt has found, keep `pc`,
+ * the instruction the interrupt stopped. A hold that keeps interrupts off is
+ * never sampled. */
+void bkl_hold_sample(uintptr_t pc);
+
+/** Read the oldest hold an interrupt has found, in microseconds since its
+ * take, and the instruction it stopped. The caller holds the big lock. */
+void smp_hold_sample(uint64_t *age_us, uintptr_t *pc);
 
 /** Answer the requests other processors left this one: stop for good, drop
  * a translation or every one, or give up a page directory for the

@@ -1223,7 +1223,13 @@ Longest hold of the big kernel lock, from its take to its release, in
 microseconds since boot, measured by the same counter.
 .It Li bkl_hold_max_entry
 The kernel entry that made that hold: its interrupt vector, 0 for a kernel
-thread, and its system call number, or \-1 when the entry was no system call.
+thread or a take again after an idle halt, and its system call number, or
+\-1 when the entry was no system call.
+.It Li bkl_hold_sample_us , bkl_hold_sample_pc
+The oldest hold of the big kernel lock that an interrupt on the holding
+processor has found, in microseconds since its take, and in hexadecimal the
+kernel instruction that interrupt stopped.
+A hold that keeps interrupts off is never sampled.
 .It Li latency_disk_us
 Longest block request from acceptance to completion, in microseconds.
 .It Li latency_diskwait_us
