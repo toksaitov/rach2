@@ -2280,7 +2280,7 @@
         {"assertion_id": "tcooff", "checks": "TCXONC TCOOFF stops output with TIOCPKT_STOP, which ^Q does not end, TCOON restarts it with TIOCPKT_START, and an action past TCION is EINVAL.", "source": "program"},
         {"assertion_id": "tcioff", "checks": "TCXONC TCIOFF and TCION send ^S and ^Q to the master.", "source": "program"},
         {"assertion_id": "dostop", "checks": "Turning IXON off gives the master TIOCPKT_NOSTOP, and on again TIOCPKT_DOSTOP.", "source": "program"},
-        {"assertion_id": "signal-flush", "checks": "^C under ISIG discards the unread output and the partial line, and the master reads TIOCPKT_FLUSHREAD and TIOCPKT_FLUSHWRITE.", "source": "program"},
+        {"assertion_id": "signal-flush", "checks": "^C under ISIG discards the partial line and the unread output, all of it or what Linux's master read buffer had not taken, and the master reads TIOCPKT_FLUSHREAD and TIOCPKT_FLUSHWRITE.", "source": "program"},
         {"assertion_id": "noflsh", "checks": "Under NOFLSH ^C keeps the output and the partial line, and the master reads no status.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The descriptors close.", "source": "program"}
       ],

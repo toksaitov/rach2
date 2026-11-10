@@ -23,8 +23,9 @@
  * * tcioff: TCXONC TCIOFF and TCION send ^S and ^Q to the master.
  * * dostop: turning IXON off gives the master TIOCPKT_NOSTOP, and on again
  *   TIOCPKT_DOSTOP.
- * * signal-flush: ^C under ISIG discards the unread output and the partial
- *   line, and the master reads TIOCPKT_FLUSHREAD and TIOCPKT_FLUSHWRITE.
+ * * signal-flush: ^C under ISIG discards the partial line and the unread
+ *   output, all of it or what Linux's master read buffer had not taken, and
+ *   the master reads TIOCPKT_FLUSHREAD and TIOCPKT_FLUSHWRITE.
  * * noflsh: under NOFLSH ^C keeps both, and the master reads no status.
  * * cleanup: the descriptors close.
  *
@@ -83,6 +84,7 @@
 #define CTRL_Q 021
 #define CTRL_S 023
 
+#define POLLIN  0x001
 #define POLLOUT 0x004
 
 #define WIFEXITED(s)   (((s) & 0x7f) == 0)
@@ -238,13 +240,27 @@ static int status_of(void)
     return buf[0];
 }
 
+/** Wait with no time limit until the master is readable; whether poll said so.
+ * Linux moves a slave's output to the master from a work queue, so it may
+ * reach the master after the write that made it has returned. */
+static int master_ready(void)
+{
+    struct pollfd pfd;
+
+    pfd.fd = (int)master;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    return syscall3(SYS_POLL, (long)&pfd, 1, -1) == 1 && (pfd.revents & POLLIN);
+}
+
 /** Whether the master's next read is a data packet of the `n` bytes `s`. */
 static int data_is(const char *s, long n)
 {
     unsigned char buf[64];
     long i;
 
-    if (syscall3(SYS_READ, master, (long)buf, sizeof(buf)) != n + 1 || buf[0] != 0) {
+    if (!master_ready() || syscall3(SYS_READ, master, (long)buf, sizeof(buf)) != n + 1 ||
+        buf[0] != 0) {
         return 0;
     }
     for (i = 0; i < n; i++) {
@@ -261,6 +277,33 @@ static int master_empty(void)
     unsigned char b;
 
     return syscall3(SYS_READ, master, (long)&b, 1) == -EAGAIN;
+}
+
+/**
+ * Whether what the master holds after the slave's output flush is an answer
+ * Linux gives: nothing, a read that is EAGAIN, or a data packet of a prefix
+ * of "out". Linux's pty_flush_buffer frees only the master's flip buffers,
+ * not its n_tty read buffer, so bytes already moved there survive.
+ */
+static int flushed_out(void)
+{
+    static const char out[] = "out";
+    unsigned char buf[8];
+    long n, i;
+
+    n = syscall3(SYS_READ, master, (long)buf, sizeof(buf));
+    if (n == -EAGAIN) {
+        return 1;
+    }
+    if (n < 1 || n > 4 || buf[0] != 0) {
+        return 0;
+    }
+    for (i = 1; i < n; i++) {
+        if (buf[i] != (unsigned char)out[i - 1]) {
+            return 0;
+        }
+    }
+    return master_empty();
 }
 
 /** Whether the slave's next read gives the `n` bytes `s`. */
@@ -474,7 +517,7 @@ static int dostop(void)
 static int signal_flush(void)
 {
     return syscall3(SYS_WRITE, slave, (long)"out", 3) == 3 && type("in", 2) && type("\003", 1) &&
-           status_of() == (TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE) && master_empty() &&
+           status_of() == (TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE) && flushed_out() &&
            type("\n", 1) && slave_reads("\n", 1);
 }
 
