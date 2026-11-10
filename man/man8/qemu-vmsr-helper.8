@@ -1,0 +1,75 @@
+.Dd November 10, 2026
+.Dt QEMU-VMSR-HELPER 8
+.Os
+.Sh NAME
+.Nm qemu-vmsr-helper
+.Nd read RAPL energy counters for QEMU's virtual RAPL MSRs
+.Sh SYNOPSIS
+.Nm
+.Op Fl d
+.Op Fl f Ar pidfile
+.Op Fl k Ar socket
+.Op Fl T Ar trace
+.Op Fl u Ar user
+.Op Fl g Ar group
+.Nm
+.Fl h | V
+.Sh DESCRIPTION
+.Nm
+is Debian's QEMU helper that reads a processor package's RAPL energy
+counters from
+.Pa /dev/cpu/N/msr
+on behalf of a QEMU that runs with
+.Ql -accel kvm,rapl=true,rapl-helper-socket= Ns Ar socket ,
+which may not read them itself.
+It answers QEMU on the Unix socket
+.Ar socket ,
+which must be the one QEMU names.
+.Pp
+The options are:
+.Bl -tag -width Ds
+.It Fl d , Fl -daemon
+Run in the background.
+.It Fl f , Fl -pidfile Ns = Ns Ar pidfile
+Write the process ID to
+.Ar pidfile
+when running in the background; the default is
+.Pa /var/run/qemu-vmsr-helper.pid .
+.It Fl k , Fl -socket Ns = Ns Ar socket
+Listen on
+.Ar socket ;
+the default is
+.Pa /var/run/qemu-vmsr-helper.sock .
+.It Fl T , Fl -trace Ar trace
+Turn on QEMU's trace events, as
+.Xr qemu-system 1
+describes.
+.It Fl u , Fl -user Ns = Ns Ar user
+.It Fl g , Fl -group Ns = Ns Ar group
+Drop privileges to
+.Ar user
+and
+.Ar group
+once the socket is open.
+.It Fl h , Fl -help
+Print the options and exit.
+.It Fl V , Fl -version
+Print the version and exit.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr qemu-system 1 ,
+.Xr qemu-pr-helper 8
+.Sh RACH2
+Debian ships no page for this program; this one is written from QEMU's
+source and its RAPL document.
+The helper checks for an Intel processor and for
+.Pa /sys/class/powercap/intel-rapl/enabled
+before it reads its options, and exits with
+.Dq CPU is not INTEL cpu
+or
+.Dq RAPL driver not enable
+where either is missing, as on Rach2, which has no RAPL driver.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/qemu-system-common/copyright .

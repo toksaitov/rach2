@@ -452,6 +452,19 @@ BEGIN {
     }
     close("vendor/gnu/games/commands")
     print ""
+    print "### QEMU and the KVM tests"
+    print ""
+    print "The pinned [KVM layer](../vendor/gnu/kvm/Readme.md) stages these commands on x86-64, from its own Debian closure: Debian'"'"'s QEMU with its OpenGL modules, SeaBIOS, OVMF and iPXE'"'"'s network boot ROMs. Beside them, kvm-unit-tests is under `/opt/kvm-unit-tests` and Linux'"'"'s KVM selftests under `/opt/kvm-selftests`, built from the sources pinned in [kvm/sources.txt](../vendor/gnu/kvm/sources.txt)."
+    print ""
+    print "| Program | Package | Path | Page |"
+    print "| --- | --- | --- | --- |"
+    while ((getline line < "vendor/gnu/kvm/commands") > 0) {
+        if (line ~ /^#/) continue
+        split(line, f, " ")
+        printf "| `%s` | `%s` | `%s` | %s |\n", f[1], f[2], f[3], page(f[1])
+    }
+    close("vendor/gnu/kvm/commands")
+    print ""
     print "GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos'"'"'s WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt). IGT'"'"'s tests, built from Debian'"'"'s intel-gpu-tools source in the Debian builder guest, are under `/usr/libexec/igt-gpu-tools` on x86-64, with its runner `igt_runner` ([igt_runner(1)](man1/igt_runner.1)), `igt_resume` and `igt_results` ([igt_resume(1)](man1/igt_resume.1)) and `igt_comms_decoder` in `/usr/bin`; the source is pinned in [igt/sources.txt](../vendor/gnu/igt/sources.txt). VK-GL-CTS 1.4.1.1 and 1.4.7.1, built in the same guest, are under `/opt/vk-gl-cts-VERSION` on x86-64, with `deqp-vk` and `glcts` ([deqp-vk(1)](man1/deqp-vk.1)); their sources are pinned in [vk-gl-cts/sources.txt](../vendor/gnu/vk-gl-cts/sources.txt)."
     print ""
     print "### Compilers, debugger and browser"
