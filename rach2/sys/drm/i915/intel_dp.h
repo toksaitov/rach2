@@ -10,6 +10,7 @@
 
 #define DP_DPCD_REV                            0x000
 #define DP_DPCD_REV_11                         0x11
+#define DP_DPCD_REV_12                         0x12
 #define DP_DPCD_REV_14                         0x14
 #define DP_MAX_LINK_RATE                       0x001
 #define DP_MAX_LANE_COUNT                      0x002
@@ -55,8 +56,13 @@
 #define DP_TRAIN_PRE_EMPHASIS_SHIFT       3
 #define DP_TRAIN_PRE_EMPHASIS_MASK        (3 << 3)
 #define DP_TRAIN_MAX_PRE_EMPHASIS_REACHED (1 << 5)
+#define DP_TRAIN_VOLTAGE_SWING_LEVEL_0    0
+#define DP_TRAIN_VOLTAGE_SWING_LEVEL_1    1
 #define DP_TRAIN_VOLTAGE_SWING_LEVEL_2    2
 #define DP_TRAIN_VOLTAGE_SWING_LEVEL_3    3
+#define DP_TRAIN_PRE_EMPH_LEVEL_0         (0 << 3)
+#define DP_TRAIN_PRE_EMPH_LEVEL_1         (1 << 3)
+#define DP_TRAIN_PRE_EMPH_LEVEL_2         (2 << 3)
 #define DP_TRAIN_PRE_EMPH_LEVEL_3         (3 << 3)
 #define DP_DOWNSPREAD_CTRL                0x107
 #define DP_MAIN_LINK_CHANNEL_CODING_SET   0x108
