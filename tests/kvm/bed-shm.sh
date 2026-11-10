@@ -132,6 +132,17 @@ ivshmemd -i > "$out/info-bound.txt" 2>&1
 # nc ARGS: nocopy on Venus.
 nc() { VK_DRIVER_FILES=$icd "$out/nocopy" "$@"; }
 
+# figure COMMAND...: one measurement, its lines added to DIR/measure.txt
+# and printed, each as `bed-shm: figure: LINE`, after `bed-shm: measuring:
+# COMMAND`; ok=0 when it fails.
+figure()
+{
+    echo "bed-shm: measuring: $*"
+    "$@" > "$out/figure.out" 2>&1 || ok=0
+    cat "$out/figure.out" >> "$out/measure.txt"
+    sed 's/^/bed-shm: figure: /' "$out/figure.out"
+}
+
 # nocopy_rows: the buffers mapped from the VM's pages, then the VM killed
 # with one mapping live.
 nocopy_rows()
@@ -177,12 +188,12 @@ nocopy_rows()
     { qemu-system-x86_64 --version | head -n 1; uname -sr; } > "$out/measure.txt" 2>&1
     ok=1
     for b in 4096 65536 1048576 16777216 67108864; do
-        nc serial 8 "$b" >> "$out/measure.txt" 2>&1 || ok=0
+        figure nc serial 8 "$b"
     done
-    nc held 32 65536 >> "$out/measure.txt" 2>&1 || ok=0
-    nc bandwidth 67108864 >> "$out/measure.txt" 2>&1 || ok=0
+    figure nc held 32 65536
+    figure nc bandwidth 67108864
     for b in 4096 1048576 16777216; do
-        "$probe" measure "$b" >> "$out/measure.txt" 2>&1 || ok=0
+        figure "$probe" measure "$b"
     done
     if [ "$ok" = 1 ]; then
         pass measure "$(grep -c '^NOCOPY [A-Z]*:\|^VGSHMPROBE MEASURE' "$out/measure.txt") figures"
