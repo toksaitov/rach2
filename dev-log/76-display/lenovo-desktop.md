@@ -45,7 +45,7 @@ Debian composited on the GPU; Rach2's Weston on fbdrm has no render node and com
 
 * The trial root's line begins `rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/root-IS.img rach2.slot=trialroot` and ends in `intel_iommu=off intremap=off`, and `bootctl status` says `booted: trialroot`.
 * The kernel's log has `fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 0` and `console: card0: handed to a master, the keyboard off`; Weston runs as `desktop`, and its log in `/var/log/services` names the DRM backend and the output's current mode 1366x768.
-* Each 58 s play shows at least 1,700 frames with no error, and drops no more frames than Debian's in the table above. Firefox's clips are named in `tests/graphics/runners/video.limits` as the owner decided on 2026-11-10 (`76-17a.md`, The owner's decision): drops over Debian's are recorded as that limit, not failed.
+* Each 58 s play shows at least 1,700 frames with no error, and drops no more frames than Debian's in the table above. Firefox's clips are named in `tests/graphics/runners/video.limits` as the owner decided on 2026-11-10 (`76-17a.md`, The owner's decision): drops over Debian's are recorded as that limit, not failed. Chromium's drops over Debian's on this machine are recorded as the same limit since the second trial (Results, The limit).
 * Each of the twelve `video:` lines of `video` has three counted plays with no media error; drops are recorded, since Debian has no numbers for these clips on this machine.
 * After `kill`: no `weston` process, the supervisor alive, and the log has `console: card0: taken back from a master, the keyboard on` and `console: card0: the firmware's framebuffer again`.
 * `blit` prints `BLITCHECK OK`: no row of the screen differs after the whole copy or after the rectangles. The time of a whole-screen copy is recorded.
@@ -83,7 +83,7 @@ A third boot, of the second kernel, at 21:42, ran the second trial's commands in
 
 ## The trial's files
 
-Built on the testing host from the tree of 437805141, the milestone head, which the task's commits change no file of: the kernel, `bootctl`, `debugfs` and the root image by `make ARCH=x86_64 rach2 os-real-gnu-ext2`, and the clips by `sh tests/graphics/runners/debian.sh clips -t clips.tar`, each clip with its digest in `tests/graphics/runners/clips.sha256`. They are the files the rehearsal ran. They stay in `/home/toksaitov-m/rach2/build/cache/lenovo-2657/` on the testing host, with their `SHA256SUMS`, until the task closes; the directory is readable by its account and by root, so the Mac fetches it through root in WSL, as the issue's step says.
+Built on the testing host from the tree of 437805141, the milestone head, which the task's commits change no file of: the kernel, `bootctl`, `debugfs` and the root image by `make ARCH=x86_64 rach2 os-real-gnu-ext2`, and the clips by `sh tests/graphics/runners/debian.sh clips -t clips.tar`, each clip with its digest in `tests/graphics/runners/clips.sha256`. They are the files the rehearsal ran. They were kept in `/home/toksaitov-m/rach2/build/cache/lenovo-2657/` on the testing host, with their `SHA256SUMS`, until the task closed; the directory was readable by its account and by root, so the Mac fetched it through root in WSL, as the issue's step says.
 
 | File | SHA-256 | Bytes |
 |---|---|---|
@@ -95,7 +95,9 @@ Built on the testing host from the tree of 437805141, the milestone head, which 
 | `clips.tar`, 76-17a's six clips | `6806f20e17fb555f2e5547ebafb0dc99b144d03350168391a7c1158474ae33d6` | 35,276,800 |
 | `kernel-2`, the second trial's kernel | `851e8698c626b18143a65c83589fd31cd76e0710571baf2fe2eeb8d83c49c4da` | 4,179,608 |
 
-`kernel-2` was built by `make ARCH=x86_64 rach2` in the owner's copy `build/worktrees/m2` on the testing host from the tree of e6159c7a3, 437805141's with the one change to `fbdrm.c`, and is the file the QEMU runs above booted; it is kept in `/home/testing/rach2/build/cache/lenovo-2657/` with `SHA256SUMS-2`. The second trial uses the first's bundle directory, clips and `debugfs`, which stay on the Lenovo's data partition under `/data/trial` until the task closes, and the first's `bootctl`. The root image is written again from `root.img.gz` before each trial: a trial root is mounted read-write, so the image the first trial booted read `6635b741...` afterwards, and only a new copy reads `07a02ae5...` and starts a trial from the root the other started from.
+`kernel-2` was built by `make ARCH=x86_64 rach2` in the owner's copy `build/worktrees/m2` on the testing host from the tree of e6159c7a3, 437805141's with the one change to `fbdrm.c`, and is the file the QEMU runs above booted; it was kept in `/home/testing/rach2/build/cache/lenovo-2657/` with `SHA256SUMS-2`. The second trial used the first's bundle directory, clips and `debugfs`, left on the Lenovo's data partition under `/data/trial`, and the first's `bootctl`. The root image is written again from `root.img.gz` before each trial: a trial root is mounted read-write, so the image the first trial booted read `6635b741...` afterwards, and only a new copy reads `07a02ae5...` and starts a trial from the root the other started from.
+
+The task closed while another task's step held the Lenovo's lock, so its files are still on the data partition: `t2657`, `web`, `root-07a02ae529bdd3ea.img`, `kernel-957f5d385f5af390` and `kernel-851e8698c626b181` under `/data/trial`, the image's 16 GiB most of it. The issue of 76-17b.4 has the command that removes them, for the next loop that holds the lock. The copies on the testing host and the Mac went with the task.
 
 ## Results
 
@@ -180,7 +182,7 @@ Run on the Lenovo on 2026-11-10 from 22:00 to 23:01 UTC+6, by the second step on
 * `trace`: Chromium on the traced Weston dropped 3, 2 and 3 of 300, where the first trial's traced plays dropped 172 and 173. The 2,407 `DRM_IOCTL_MODE_ATOMIC` calls took 1.163 ms each and 7.5 ms at most. Weston still commits twice a frame, since `DRM_IOCTL_WAIT_VBLANK` still fails as on simpledrm, and the cycle is the clip's: of 1,217 gaps between one frame's commit and the next, 1,087 are two 16.7 ms periods long, thirty frames a second where the first trial had twelve.
 * 23:01, the release bb151e3ba in both slots again, `0effe5ac...` by `machine_identity.sh`, and no trial armed. The trial root on the data partition has been booted and is written again before another trial.
 
-The `rach2.trace=enosys` reading that the issue asks for was not taken: on the GNU root the trace's lines would turn the kernel's 16 KiB log over before the step reads fbdrm's and the console's lines from it, and they are written under the big lock during the judged plays. It needs a boot of its own.
+The `rach2.trace=enosys` reading that the issue asks for was not taken: on the GNU root the trace's lines would turn the kernel's 16 KiB log over before the step reads fbdrm's and the console's lines from it, and they are written under the big lock during the judged plays. No trial is made for it alone: the next trial on the Lenovo that boots the GNU root, of whichever task, carries the word on its line and reports the missing calls the browsers and the session make.
 
 ### What Chromium still drops
 
@@ -191,4 +193,12 @@ Chromium's drops come while the browser starts, and the big lock is the cause th
 * From 10 s on the processors were idle 59% of the time, 13% in the kernel, and waited 0.44 s a second, with the timer tick holding the lock some 120 ms a second and `ioctl` 68 ms.
 * Firefox's plays never leave that state: 15 to 20% idle from 10 s on and 1.0 s of waits a second, with futex calls and page faults holding the lock, as 76-17a measured under QEMU.
 
-Debian played the same clips on this machine with no drop, compositing on the GPU, with a kernel that serves a starting browser's faults and mappings on four processors at once. Rach2 serves them one at a time. That is the limit 76-17a recorded and the owner put to the next milestone for Firefox's video (`76-17a.md`, The owner's decision); that decision names Firefox's clips and leaves Chromium's drops judged, so whether this task's Done may stand with Chromium at 14 to 27 drops of 1,722 on the Lenovo is the owner's to say. This trial did not measure how many of the drops a GPU's compositing would remove: Debian has no numbers on the firmware's framebuffer with Pixman.
+Debian played the same clips on this machine with no drop, compositing on the GPU, with a kernel that serves a starting browser's faults and mappings on four processors at once. Rach2 serves them one at a time. This trial did not measure how many of the drops a GPU's compositing would remove: Debian has no numbers on the firmware's framebuffer with Pixman.
+
+### The limit
+
+The task closes with Chromium's drops on the Lenovo recorded as the big lock's limit: 14 to 27 frames of 1,722 in 58 s at 1080p, against Debian's 0 on i915. The Done's "no more frames than Debian's browsers" holds for neither browser there.
+
+The owner decided on 2026-11-10 at 16:27 UTC+6 that the display stack does not wait for the lock's work, which goes to the next milestone (`76-17a.md`, The owner's decision). That decision named Firefox's clips. The manager's answer on the task's issue, at 23:10 UTC+6 the same day, applies it to Chromium on the Lenovo, since the counters show its drops to be waits for the same lock while the browser starts. The limit's home is [the graphics Readme's Limits](../../tests/graphics/Readme.md#limits).
+
+The milestone that takes the lock's work measures again when that work ends: this step's four 58 s plays on the Lenovo's trial root, and Debian's Chromium on the same machine booted with `nomodeset`, where Debian too composites in software on the firmware's framebuffer, so that both numbers come from the same path. Until then nothing judges the drops on the Lenovo; in QEMU the `video` suite still judges Chromium's against the Debian guest's.
