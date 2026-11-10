@@ -167,15 +167,11 @@ class Browser:
                     "user_pref(%s, %s);\n" % (json.dumps(k), json.dumps(v))
                     for k, v in prefs.items()))
             env = dict(os.environ, MOZ_ENABLE_WAYLAND="1")
-            if self.mode == "gpu":
-                # Mesa's loader then logs the driver it picks for each
-                # process's device, Chromium's GPU process among them.
-                env["EGL_LOG_LEVEL"] = "debug"
             save(self.out / "switches.json", {"argv": args, "prefs": prefs,
                  "version": subprocess.check_output([args[0], "--version"], text=True).strip(),
                  "certificate": "ephemeral local HTTPS certificate accepted by automation",
                  "environment": {k: v for k, v in env.items() if k.startswith(
-                     ("MOZ_", "LP_", "MESA_", "EGL_", "GRAPHICS_", "WAYLAND_", "XDG_", "PULSE_", "VK_"))}})
+                     ("MOZ_", "LP_", "MESA_", "GRAPHICS_", "WAYLAND_", "XDG_", "PULSE_", "VK_"))}})
             self.log = (self.out / "browser.log").open("w")
             self.child = subprocess.Popen(args, env=env, stdout=self.log, stderr=self.log,
                                           start_new_session=True)
@@ -354,8 +350,8 @@ def gpu(b, url):
     """Read the renderer each GPU path names, its diagnostics and each process's sandbox.
 
     The renderer is named from WebGL's unmasked renderer, from Chromium's
-    chrome://gpu and the lines Mesa's loader logs in the GPU process, and
-    from Firefox's about:support. Pixels are read and kept, not judged here,
+    chrome://gpu, whose GPU0 line gives the PCI identity ANGLE read for the
+    GPU process's device, and from Firefox's about:support. Pixels are read and kept, not judged here,
     since the fault backend draws none; browsers-gpu.sh judges them on the
     machine.
     """
@@ -363,28 +359,32 @@ def gpu(b, url):
     result = {"webgl": b.script("draw()")}
     result.update(diagnostics(b, url))
     if b.name == "firefox":
-        text = b.until(lambda: (lambda s: s if s and "Compositing" in s and "Driver Vendor" in s
-                                else None)(b.script("document.body.innerText")))
+        # The Graphics section is filled in after the page loads.
+        text = b.until(lambda: (lambda s: s if s and "Compositing\t" in s else None)(
+            b.script("document.body.innerText")))
         result["graphics"] = rows(text, ("Compositing", "Description", "Vendor ID", "Device ID",
                                          "Driver Vendor", "Driver Version", "WebGL 1 Driver Renderer",
                                          "WebGL 2 Driver Renderer", "Window Protocol"))
+        save(b.out / "partial.json", result)
         graphics = result["graphics"]
         assert graphics.get("Compositing") == "WebRender", graphics
         assert "crocus" in graphics.get("Driver Vendor", ""), graphics
         assert graphics.get("Device ID") == "0x0a16", graphics
         assert "llvmpipe" not in json.dumps(result["webgl"]).lower(), result["webgl"]
         return result
+    # The page's text runs its table's rows and list items together.
     text = result["chrome://gpu"]
-    found = re.search(r"GL_RENDERER\s*(.*)", text)
-    result["gl_renderer"] = found[1].strip() if found else None
-    result["webgl_status"] = next((line.strip() for line in text.splitlines()
-                                   if line.strip().startswith("WebGL:")), None)
-    result["loader"] = [line for line in (b.out / "browser.log").read_text(errors="replace").splitlines()
-                        if any(word in line for word in ("MESA-LOADER", "pci id for fd", "using driver"))]
+    found = re.search(r"GL_RENDERER\s*:\s*(.*?\))(?:GL_VERSION|\n)", text)
+    result["gl_renderer"] = found[1] if found else None
+    found = re.search(r"\bWebGL: ([^*\n]*)", text)
+    result["webgl_status"] = found[1].strip() if found else None
+    found = re.search(r"GPU0\s*:\s*VENDOR=\s*(0x[0-9a-f]+).*?DEVICE=\s*(0x[0-9a-f]+)", text)
+    result["gpu0"] = list(found.groups()) if found else None
+    save(b.out / "partial.json", result)
     assert result["gl_renderer"] and CROCUS in result["gl_renderer"], result["gl_renderer"]
     assert CROCUS in result["webgl"]["renderer"], result["webgl"]
-    assert result["webgl_status"] == "WebGL: Hardware accelerated", result["webgl_status"]
-    assert any("crocus" in line for line in result["loader"]), result["loader"]
+    assert result["webgl_status"] == "Hardware accelerated", result["webgl_status"]
+    assert result["gpu0"] == ["0x8086", "0x0a16"], result["gpu0"]
     return result
 
 
