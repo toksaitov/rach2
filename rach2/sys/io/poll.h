@@ -19,12 +19,13 @@
 
 /* poll(2) event bits (Linux values). POLLHUP/POLLERR/POLLNVAL are reported in
  * revents regardless of the requested events. */
-#define POLLIN   0x001
-#define POLLPRI  0x002
-#define POLLOUT  0x004
-#define POLLERR  0x008
-#define POLLHUP  0x010
-#define POLLNVAL 0x020
+#define POLLIN     0x001
+#define POLLPRI    0x002
+#define POLLOUT    0x004
+#define POLLERR    0x008
+#define POLLHUP    0x010
+#define POLLNVAL   0x020
+#define POLLRDNORM 0x040
 
 /* The struct pollfd of poll(2), as musl lays it out. */
 struct kernel_pollfd {

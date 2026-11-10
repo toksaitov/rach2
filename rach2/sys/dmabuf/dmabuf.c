@@ -168,14 +168,15 @@ static int64_t buf_seek(fd_entry_t *e, int64_t offset, int whence)
     return whence == 2 ? (int64_t)b->size : 0;
 }
 
-/** Map through the exporter after checking the exported extent. */
+/** Map through the exporter after checking the exported extent; EINVAL
+ * for an exporter without mmap or a range past the buffer, as Linux. */
 static int32_t buf_mmap(fd_entry_t *e, vma_t *vma)
 {
     struct dma_buf *b = e->priv;
     uint64_t off = (uint64_t)vma->pgoff << 12;
-    if (off > b->size || vma->end - vma->start > b->size - off)
+    if (!b->ops->mmap || off > b->size || vma->end - vma->start > b->size - off)
         return -EINVAL;
-    return b->ops->mmap ? b->ops->mmap(b, vma) : -ENODEV;
+    return b->ops->mmap(b, vma);
 }
 
 /** Wait on a reservation snapshot, then give the exporter CPU access. */
@@ -225,7 +226,7 @@ static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
                 return 0;
             }
         }
-        return -ENAMETOOLONG;
+        return -EINVAL; /* Linux's strndup_user */
     }
     if (request == DMA_BUF_IOCTL_SYNC) {
         if (copy_from_user(&sync, (void __user *)arg, sizeof(sync)))
