@@ -363,6 +363,7 @@ static int32_t create_vm(uintptr_t type)
     kvm_count(KVM_COUNT_VM, 1);
     vm = &rec->vm;
     vm->anon.name = "kvm-vm";
+    kvm_stats_id(vm->stats_id, NULL);
     vm->refs = 1;
     vm->ident_addr = KVM_IDENT_ADDR_DEFAULT;
     vm->apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
@@ -554,6 +555,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     switch (request) {
     case KVM_CREATE_DEVICE:
         return kvm_vfio_create(vm, arg);
+    case KVM_GET_STATS_FD:
+        return kvm_stats_fd(vm, NULL);
     case KVM_CREATE_VCPU:
         return kvm_vcpu_create(vm, (uint32_t)arg == arg ? (uint32_t)arg : KVM_MAX_VCPU_IDS);
     case KVM_CHECK_EXTENSION:
