@@ -1,0 +1,22 @@
+eglinfo: OpenGL core profile renderer: virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))
+eglinfo: OpenGL core profile version: 4.2 (Core Profile)
+eglinfo: OpenGL core profile shading language version: 4.20
+eglinfo: OpenGL compatibility profile renderer: virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))
+eglinfo: OpenGL compatibility profile version: 4.2 (Compatibility Profile)
+eglinfo: OpenGL compatibility profile shading language version: 4.20
+eglinfo: OpenGL ES profile renderer: virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))
+eglinfo: OpenGL ES profile version: OpenGL ES 3.1
+eglinfo: OpenGL ES profile shading language version: OpenGL ES GLSL ES 3.10
+glxinfo: direct rendering: Yes
+glxinfo: Accelerated: yes
+glxinfo: Max core profile version: 4.2
+glxinfo: Max compat profile version: 4.2
+glxinfo: Max GLES1 profile version: 1.1
+glxinfo: Max GLES[23] profile version: 3.1
+glxinfo: OpenGL renderer string: virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))
+glxinfo: OpenGL core profile version string: 4.2 (Core Profile)
+glxinfo: OpenGL core profile shading language version string: 4.20
+glxinfo: OpenGL version string: 4.2 (Compatibility Profile)
+glxinfo: OpenGL shading language version string: 4.20
+glxinfo: OpenGL ES profile version string: OpenGL ES 3.1
+glxinfo: OpenGL ES profile shading language version string: OpenGL ES GLSL ES 3.10

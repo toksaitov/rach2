@@ -1,0 +1,11 @@
+glreset: context: lose context on reset refused with EGL_BAD_MATCH; robust access, no reset notification refused with EGL_BAD_ATTRIBUTE; plain
+glreset: before: pixels right, status GL_NO_ERROR, errors none
+glreset: after: frames 200, pixels wrong, status GL_NO_ERROR, errors none
+glreset: new context: lose context on reset on llvmpipe
+glreset: exit 0
+weston: running
+weston: log: atomic: couldn't commit new state: No such device
+client: running
+nodes: none
+weston headless: GL renderer: llvmpipe
+weston drm: exit 1, fatal: failed to create compositor backend
