@@ -343,7 +343,9 @@ class Runner:
         Run the 64-bit Direct3D 9 probe through umu in the Steam Linux Runtime
         and directly, and compare Proton's settings and the pixels. The first
         launch unpacks the runtime; the second must download and unpack nothing.
-        The container's log must hold no refused call that Linux's lacks.
+        The 64-bit GL probe must draw on virgl inside the container, through
+        the /dev/dri that pressure-vessel passes in. The container's log must
+        hold no refused call that Linux's lacks.
         """
         self.umu = True
         self.make_prefix()
@@ -355,11 +357,16 @@ class Runner:
         self.steps("d3d964", second)
         crc = re.search(r"pixels crc32 ([0-9a-f]{8})", text)
         adapter = re.search(r"^adapter: (.*)", text, re.M)
+        gl_status, gl_text = self.probe("gl64", {"WINEDEBUG": "-all,err+all"})
+        gl_crc = re.search(r"pixels crc32 ([0-9a-f]{8})", gl_text)
+        renderer = re.search(r"^renderer: (.*?) vendor ", gl_text, re.M)
         cache = Path(self.env["XDG_CACHE_HOME"]) / "umu"
         downloads = sorted(p.name for p in cache.glob("*")) if cache.is_dir() else []
         results["umu"] = dict(self.options("d3d964"), exit=status,
                               crc32=crc.group(1) if crc else None,
                               adapter=adapter.group(1) if adapter else None,
+                              gl_exit=gl_status, gl_crc32=gl_crc.group(1) if gl_crc else None,
+                              renderer=renderer.group(1) if renderer else None,
                               unpacked=unpacked.group(1) if unpacked else None,
                               again="unpacked" in second or "Downloading" in second or
                               "Downloading" in first, cache=downloads)
@@ -384,6 +391,9 @@ class Runner:
         say("umu: runtime %s exit %d crc32 %s linux %s adapter %s options %s fsync %s opengl %s" % (
             u["unpacked"], u["exit"], u["crc32"], want, u["adapter"], u["options"], u["fsync"],
             u["opengl"]))
+        gl_want = ref["draw"].get("gl64") if ref is not None else None
+        say("umu: gl64 exit %d crc32 %s linux %s renderer %s" % (
+            u["gl_exit"], u["gl_crc32"], gl_want, u["renderer"]))
         say("umu: direct exit %d options %s fsync %s opengl %s; second start fetched %s cache %s" % (
             d["exit"], d["options"], d["fsync"], d["opengl"], u["again"], u["cache"]))
         return (u["unpacked"] is not None and not u["again"] and not u["cache"] and
@@ -391,7 +401,9 @@ class Runner:
                 (want is None or u["crc32"] == want) and u["options"] is not None and
                 u["options"] == d["options"] and "wow64" in u["options"] and
                 "wined3d" in u["options"] and u["fsync"] and d["fsync"] and u["opengl"] and
-                d["opengl"] and not refused)
+                d["opengl"] and u["gl_exit"] == 0 and u["gl_crc32"] is not None and
+                (gl_want is None or u["gl_crc32"] == gl_want) and
+                "virgl" in (u["renderer"] or "") and not refused)
 
     def stop(self):
         """End the Wine server and Weston and reap them."""
