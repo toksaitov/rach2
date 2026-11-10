@@ -1,0 +1,233 @@
+virtio_gpu_cmd_ctx_create ctx 0x1, name (udev-worker)
+virtio_gpu_cmd_ctx_res_attach ctx 0x1, res 0x2
+virtio_gpu_cmd_ctx_res_detach ctx 0x1, res 0x2
+virtio_gpu_cmd_ctx_create ctx 0x2, name vulkaninfo
+virtio_gpu_cmd_res_create_blob res 0x3, size 135168
+virtio_gpu_cmd_res_map_blob res 0x3, vmr 0x5ed16da3dd50, mr 0x5ed16da3dd80
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x3
+virtio_gpu_cmd_res_create_blob res 0x4, size 1048576
+virtio_gpu_cmd_res_map_blob res 0x4, vmr 0x5ed16d6507b0, mr 0x5ed16d6507e0
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x4
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x3
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x4
+virtio_gpu_cmd_res_unmap_blob res 0x3, mr 0x5ed16da3dd80, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x3, mr 0x5ed16da3dd80, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x3
+virtio_gpu_cmd_ctx_destroy ctx 0x2
+virtio_gpu_cmd_res_unmap_blob res 0x4, mr 0x5ed16d6507e0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x4, mr 0x5ed16d6507e0, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x4
+virtio_gpu_cmd_ctx_create ctx 0x2, name weston
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x5
+virtio_gpu_cmd_res_create_blob res 0x6, size 1048576
+virtio_gpu_cmd_res_map_blob res 0x6, vmr 0x5ed16d6507b0, mr 0x5ed16d6507e0
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x6
+virtio_gpu_cmd_ctx_create ctx 0x3, name vkcube
+virtio_gpu_cmd_res_create_blob res 0x7, size 135168
+virtio_gpu_cmd_res_map_blob res 0x7, vmr 0x5ed16da3dd50, mr 0x5ed16da3dd80
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x7
+virtio_gpu_cmd_res_create_blob res 0x8, size 1048576
+virtio_gpu_cmd_res_map_blob res 0x8, vmr 0x5ed16ea5c540, mr 0x5ed16ea5c570
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x8
+virtio_gpu_cmd_res_create_blob res 0x9, size 4096
+virtio_gpu_cmd_res_map_blob res 0x9, vmr 0x5ed16db26820, mr 0x5ed16db26850
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x9
+virtio_gpu_cmd_res_create_blob res 0xa, size 8388608
+virtio_gpu_cmd_res_map_blob res 0xa, vmr 0x5ed16d6e0040, mr 0x5ed16d6e0070
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0xa
+virtio_gpu_cmd_res_create_blob res 0xb, size 4096
+virtio_gpu_cmd_res_map_blob res 0xb, vmr 0x5ed16d4f6cf0, mr 0x5ed16d4f6d20
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0xb
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0xb
+virtio_gpu_cmd_res_unmap_blob res 0xb, mr 0x5ed16d4f6d20, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0xb, mr 0x5ed16d4f6d20, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0xb
+virtio_gpu_cmd_res_create_blob res 0xc, size 2048000
+virtio_gpu_cmd_res_map_blob res 0xc, vmr 0x5ed16d4f6cf0, mr 0x5ed16d4f6d20
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0xc
+virtio_gpu_cmd_res_create_blob res 0xd, size 2048000
+virtio_gpu_cmd_res_map_blob res 0xd, vmr 0x5ed16da3deb0, mr 0x5ed16da3dee0
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0xd
+virtio_gpu_cmd_res_create_blob res 0xe, size 2048000
+virtio_gpu_cmd_res_map_blob res 0xe, vmr 0x5ed16da2dcc0, mr 0x5ed16da2dcf0
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0xe
+virtio_gpu_cmd_res_create_blob res 0xf, size 2048000
+virtio_gpu_cmd_res_map_blob res 0xf, vmr 0x5ed16da2de20, mr 0x5ed16da2de50
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0xf
+virtio_gpu_cmd_res_create_blob res 0x10, size 262144
+virtio_gpu_cmd_res_map_blob res 0x10, vmr 0x5ed16da2db60, mr 0x5ed16da2db90
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x10
+virtio_gpu_cmd_res_create_blob res 0x11, size 4096
+virtio_gpu_cmd_res_map_blob res 0x11, vmr 0x5ed16da100d0, mr 0x5ed16da10100
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x11
+virtio_gpu_cmd_res_create_blob res 0x12, size 4096
+virtio_gpu_cmd_res_map_blob res 0x12, vmr 0x5ed176d746e0, mr 0x5ed176d74710
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x12
+virtio_gpu_cmd_res_create_blob res 0x13, size 4096
+virtio_gpu_cmd_res_map_blob res 0x13, vmr 0x5ed176e3c530, mr 0x5ed176e3c560
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x13
+virtio_gpu_cmd_res_create_blob res 0x14, size 4096
+virtio_gpu_cmd_res_map_blob res 0x14, vmr 0x5ed176f05370, mr 0x5ed176f053a0
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x14
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0xc
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0xd
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0xe
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0xf
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x15
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x10
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x11
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x12
+virtio_gpu_cmd_res_unmap_blob res 0x10, mr 0x5ed16da2db90, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x10, mr 0x5ed16da2db90, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x10
+virtio_gpu_cmd_res_unmap_blob res 0x11, mr 0x5ed16da10100, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x11, mr 0x5ed16da10100, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x11
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x13
+virtio_gpu_cmd_res_unmap_blob res 0x12, mr 0x5ed176d74710, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x12, mr 0x5ed176d74710, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x12
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x14
+virtio_gpu_cmd_res_unmap_blob res 0x13, mr 0x5ed176e3c560, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x13, mr 0x5ed176e3c560, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x13
+virtio_gpu_cmd_res_unmap_blob res 0x14, mr 0x5ed176f053a0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x14, mr 0x5ed176f053a0, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x14
+virtio_gpu_cmd_res_create_blob res 0x16, size 8192000
+virtio_gpu_cmd_res_map_blob res 0x16, vmr 0x5ed176f05370, mr 0x5ed176f053a0
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x16
+virtio_gpu_cmd_res_create_blob res 0x17, size 8192000
+virtio_gpu_cmd_res_map_blob res 0x17, vmr 0x5ed176e3c530, mr 0x5ed176e3c560
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x17
+virtio_gpu_cmd_res_create_blob res 0x18, size 8192000
+virtio_gpu_cmd_res_map_blob res 0x18, vmr 0x5ed176d746e0, mr 0x5ed176d74710
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x18
+virtio_gpu_cmd_res_create_blob res 0x19, size 8192000
+virtio_gpu_cmd_res_map_blob res 0x19, vmr 0x5ed16da100d0, mr 0x5ed16da10100
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x19
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0xc
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0xd
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0xe
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0xf
+virtio_gpu_cmd_res_create_blob res 0x1a, size 262144
+virtio_gpu_cmd_res_map_blob res 0x1a, vmr 0x5ed16da2db60, mr 0x5ed16da2db90
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x1a
+virtio_gpu_cmd_res_create_blob res 0x1b, size 4096
+virtio_gpu_cmd_res_map_blob res 0x1b, vmr 0x5ed176a65d90, mr 0x5ed176a65dc0
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x1b
+virtio_gpu_cmd_res_create_blob res 0x1c, size 4096
+virtio_gpu_cmd_res_map_blob res 0x1c, vmr 0x5ed1767dfd80, mr 0x5ed1767dfdb0
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x1c
+virtio_gpu_cmd_res_create_blob res 0x1d, size 4096
+virtio_gpu_cmd_res_map_blob res 0x1d, vmr 0x5ed176b2be50, mr 0x5ed176b2be80
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x1d
+virtio_gpu_cmd_res_create_blob res 0x1e, size 4096
+virtio_gpu_cmd_res_map_blob res 0x1e, vmr 0x5ed176b49ce0, mr 0x5ed176b49d10
+virtio_gpu_cmd_ctx_res_attach ctx 0x3, res 0x1e
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x16
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x17
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x18
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x19
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0xc
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0xd
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0xf
+virtio_gpu_cmd_res_unmap_blob res 0xc, mr 0x5ed16d4f6d20, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0xc, mr 0x5ed16d4f6d20, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0xc
+virtio_gpu_cmd_res_unmap_blob res 0xd, mr 0x5ed16da3dee0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0xd, mr 0x5ed16da3dee0, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0xd
+virtio_gpu_cmd_res_unmap_blob res 0xf, mr 0x5ed16da2de50, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0xf, mr 0x5ed16da2de50, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0xf
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0xe
+virtio_gpu_cmd_res_unmap_blob res 0xe, mr 0x5ed16da2dcf0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0xe, mr 0x5ed16da2dcf0, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0xe
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x1f
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x1f
+virtio_gpu_cmd_res_unref res 0x1f
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x20
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x20
+virtio_gpu_cmd_res_unref res 0x20
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x21
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x21
+virtio_gpu_cmd_res_unref res 0x21
+virtio_gpu_cmd_ctx_res_attach ctx 0x2, res 0x22
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x22
+virtio_gpu_cmd_res_unref res 0x22
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x1a
+virtio_gpu_cmd_res_unmap_blob res 0x1a, mr 0x5ed16da2db90, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x1a, mr 0x5ed16da2db90, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x1a
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x16
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x17
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x18
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x19
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x17
+virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x5ed176e3c560, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x5ed176e3c560, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0x17
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x18
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x19
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x1b
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x1c
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x1d
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x1e
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x9
+virtio_gpu_cmd_res_unmap_blob res 0x18, mr 0x5ed176d74710, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x18, mr 0x5ed176d74710, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0x18
+virtio_gpu_cmd_res_unmap_blob res 0x19, mr 0x5ed16da10100, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x19, mr 0x5ed16da10100, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0x19
+virtio_gpu_cmd_res_unmap_blob res 0x1b, mr 0x5ed176a65dc0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x1b, mr 0x5ed176a65dc0, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x1b
+virtio_gpu_cmd_res_unmap_blob res 0x1c, mr 0x5ed1767dfdb0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x1c, mr 0x5ed1767dfdb0, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x1c
+virtio_gpu_cmd_res_unmap_blob res 0x1d, mr 0x5ed176b2be80, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x1d, mr 0x5ed176b2be80, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x1d
+virtio_gpu_cmd_res_unmap_blob res 0x1e, mr 0x5ed176b49d10, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x1e, mr 0x5ed176b49d10, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x1e
+virtio_gpu_cmd_res_unmap_blob res 0x9, mr 0x5ed16db26850, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x9, mr 0x5ed16db26850, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x9
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x7
+virtio_gpu_cmd_res_unmap_blob res 0x7, mr 0x5ed16da3dd80, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x7, mr 0x5ed16da3dd80, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x7
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0x8
+virtio_gpu_cmd_ctx_res_detach ctx 0x3, res 0xa
+virtio_gpu_cmd_ctx_destroy ctx 0x3
+virtio_gpu_cmd_res_unmap_blob res 0x8, mr 0x5ed16ea5c570, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x8, mr 0x5ed16ea5c570, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x8
+virtio_gpu_cmd_res_unmap_blob res 0xa, mr 0x5ed16d6e0070, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0xa, mr 0x5ed16d6e0070, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0xa
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x5
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x15
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x16
+virtio_gpu_cmd_res_unmap_blob res 0x16, mr 0x5ed176f053a0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x16, mr 0x5ed176f053a0, finish_unmapping 1
+virtio_gpu_virgl_unmap_resource_blob: failed to unmap virgl resource: Invalid argument
+virtio_gpu_cmd_res_unref res 0x16
+virtio_gpu_cmd_res_unref res 0x5
+virtio_gpu_cmd_res_unref res 0x15
+virtio_gpu_cmd_ctx_res_detach ctx 0x2, res 0x6
+virtio_gpu_cmd_ctx_destroy ctx 0x2
+virtio_gpu_cmd_res_unmap_blob res 0x6, mr 0x5ed16d6507e0, finish_unmapping 0
+virtio_gpu_cmd_res_unmap_blob res 0x6, mr 0x5ed16d6507e0, finish_unmapping 1
+virtio_gpu_cmd_res_unref res 0x6

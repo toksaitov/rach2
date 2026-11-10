@@ -1,0 +1,18 @@
+cd /tmp/bed && rm -rf out run.out && (RENDER_SERVER_EXEC_PATH=/tmp/bed/virgl_render_server sh forward.sh -a tcg -d /dev/disk2 -k id_ed25519 -g guest.tar -o /tmp/bed/out venus > run.out 2>&1; echo "exit $?" >> run.out) > /dev/null 2>&1 & sleep 20; cat /tmp/bed/run.out; cat /tmp/bed/out/qemu.log; ps ax | grep -E "[q]emu-system|[v]irgl_render" | cut -c1-100; wc -c /tmp/bed/out/console.log; echo "@@DONE$?@@"
+bed-forward: start: qemu-system-x86_64 -accel tcg -cpu max -smp 4 -m 4096 -device virtio-vga-gl,edid=on,xres=1280,yres=800,venus=on,blob=on,hostmem=4G -display egl-headless,rendernode=/dev/dri/renderD128
+<6>[56.505000] block: request pool: waiting for a slot: the device holds its share
+bed-forward: guest: SSH answered after 45 s
+<4>[73.890000] vm: fault: killing pid 199: bad read at 0x7eb375a563c0 (err 0x14)
+<4>[130.982000] vm: fault: killing pid 279: bad read at 0x7eb375a563c0 (err 0x14)
+<4>[138.985000] virtio_gpu: command 0x209: error 0x1200
+<4>[138.989000] virtio_gpu: command 0x209: error 0x1200
+<4>[139.010000] virtio_gpu: command 0x209: error 0x1200
+<4>[139.014000] virtio_gpu: command 0x209: error 0x1200
+<4>[139.026000] virtio_gpu: command 0x209: error 0x1200
+<4>[139.036000] virtio_gpu: command 0x209: error 0x1200
+<4>[139.047000] virtio_gpu: command 0x209: error 0x1200
+<4>[139.058000] virtio_gpu: command 0x209: error 0x1200
+bed-forward: vulkan: Virtio-GPU Venus (Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits)))
+bed-forward: weston: virgl (virgl (LLVMPIPE (LLVM 21.1.8, 256 bits)))
+bed-forward: vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 9.843 s, 30.48 a second
+bed-forward: result: pass: venus: Virtio-GPU Venus (Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))); frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 9.843 s, 30.48 a second

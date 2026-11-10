@@ -1,0 +1,238 @@
+QEMU 10.0.13 on Rach2 under -accel kvm,kernel-irqchip=split -cpu host -smp 4, the testing PC, 2026-11-10:
+the guest's console empty 100 s after the start. The monitor's answers then, the x87 and SSE rows
+left out, and below them what it answered some minutes later. The address latch was read before
+any 32-bit write to it; one byte had been written to port 0xcf8 before, which the latch ignores.
+
+(qemu) info cpus
+* CPU #0: thread_id=1497
+  CPU #1: thread_id=1498
+  CPU #2: thread_id=1499
+  CPU #3: thread_id=1500
+(qemu) info registers -a
+
+CPU#0
+EAX=000f18b4 EBX=000000ff ECX=00000000 EDX=00000000
+ESI=00000000 EDI=00000080 EBP=40000001 ESP=00006f38
+EIP=000d9f93 EFL=00000003 [------C] CPL=0 II=0 A20=0 SMM=0 HLT=0
+ES =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+CS =0008 00000000 ffffffff 00409b00 DPL=0 CS32 [-RA]
+SS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+DS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+FS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+GS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+LDT=0000 00000000 0000ffff 00008200 DPL=0 LDT
+TR =0000 00000000 0000ffff 00008b00 DPL=0 TSS32-busy
+GDT=     000f61e0 00000037
+IDT=     000f621e 00000000
+CR0=00000011 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+
+CPU#1
+EAX=00000000 EBX=00000000 ECX=00000000 EDX=00a60f12
+ESI=00000000 EDI=00000000 EBP=00000000 ESP=00000000
+EIP=0000fff0 EFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ES =0000 00000000 0000ffff 00009300
+CS =f000 ffff0000 0000ffff 00009b00
+SS =0000 00000000 0000ffff 00009300
+DS =0000 00000000 0000ffff 00009300
+FS =0000 00000000 0000ffff 00009300
+GS =0000 00000000 0000ffff 00009300
+LDT=0000 00000000 0000ffff 00008200
+TR =0000 00000000 0000ffff 00008b00
+GDT=     00000000 0000ffff
+IDT=     00000000 0000ffff
+CR0=60000010 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+
+CPU#2
+EAX=00000000 EBX=00000000 ECX=00000000 EDX=00a60f12
+ESI=00000000 EDI=00000000 EBP=00000000 ESP=00000000
+EIP=0000fff0 EFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ES =0000 00000000 0000ffff 00009300
+CS =f000 ffff0000 0000ffff 00009b00
+SS =0000 00000000 0000ffff 00009300
+DS =0000 00000000 0000ffff 00009300
+FS =0000 00000000 0000ffff 00009300
+GS =0000 00000000 0000ffff 00009300
+LDT=0000 00000000 0000ffff 00008200
+TR =0000 00000000 0000ffff 00008b00
+GDT=     00000000 0000ffff
+IDT=     00000000 0000ffff
+CR0=60000010 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+
+CPU#3
+EAX=00000000 EBX=00000000 ECX=00000000 EDX=00a60f12
+ESI=00000000 EDI=00000000 EBP=00000000 ESP=00000000
+EIP=0000fff0 EFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ES =0000 00000000 0000ffff 00009300
+CS =f000 ffff0000 0000ffff 00009b00
+SS =0000 00000000 0000ffff 00009300
+DS =0000 00000000 0000ffff 00009300
+FS =0000 00000000 0000ffff 00009300
+GS =0000 00000000 0000ffff 00009300
+LDT=0000 00000000 0000ffff 00008200
+TR =0000 00000000 0000ffff 00008b00
+GDT=     00000000 0000ffff
+IDT=     00000000 0000ffff
+CR0=60000010 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+(qemu) info registers -a
+
+CPU#0
+EAX=000f18b4 EBX=000000ff ECX=00000000 EDX=00000000
+ESI=00000000 EDI=00000080 EBP=40000001 ESP=00006f38
+EIP=000dc79d EFL=00000003 [------C] CPL=0 II=0 A20=0 SMM=0 HLT=0
+ES =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+CS =0008 00000000 ffffffff 00409b00 DPL=0 CS32 [-RA]
+SS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+DS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+FS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+GS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+LDT=0000 00000000 0000ffff 00008200 DPL=0 LDT
+TR =0000 00000000 0000ffff 00008b00 DPL=0 TSS32-busy
+GDT=     000f61e0 00000037
+IDT=     000f621e 00000000
+CR0=00000011 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+
+CPU#1
+EAX=00000000 EBX=00000000 ECX=00000000 EDX=00a60f12
+ESI=00000000 EDI=00000000 EBP=00000000 ESP=00000000
+EIP=0000fff0 EFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ES =0000 00000000 0000ffff 00009300
+CS =f000 ffff0000 0000ffff 00009b00
+SS =0000 00000000 0000ffff 00009300
+DS =0000 00000000 0000ffff 00009300
+FS =0000 00000000 0000ffff 00009300
+GS =0000 00000000 0000ffff 00009300
+LDT=0000 00000000 0000ffff 00008200
+TR =0000 00000000 0000ffff 00008b00
+GDT=     00000000 0000ffff
+IDT=     00000000 0000ffff
+CR0=60000010 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+
+CPU#2
+EAX=00000000 EBX=00000000 ECX=00000000 EDX=00a60f12
+ESI=00000000 EDI=00000000 EBP=00000000 ESP=00000000
+EIP=0000fff0 EFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ES =0000 00000000 0000ffff 00009300
+CS =f000 ffff0000 0000ffff 00009b00
+SS =0000 00000000 0000ffff 00009300
+DS =0000 00000000 0000ffff 00009300
+FS =0000 00000000 0000ffff 00009300
+GS =0000 00000000 0000ffff 00009300
+LDT=0000 00000000 0000ffff 00008200
+TR =0000 00000000 0000ffff 00008b00
+GDT=     00000000 0000ffff
+IDT=     00000000 0000ffff
+CR0=60000010 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+
+CPU#3
+EAX=00000000 EBX=00000000 ECX=00000000 EDX=00a60f12
+ESI=00000000 EDI=00000000 EBP=00000000 ESP=00000000
+EIP=0000fff0 EFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ES =0000 00000000 0000ffff 00009300
+CS =f000 ffff0000 0000ffff 00009b00
+SS =0000 00000000 0000ffff 00009300
+DS =0000 00000000 0000ffff 00009300
+FS =0000 00000000 0000ffff 00009300
+GS =0000 00000000 0000ffff 00009300
+LDT=0000 00000000 0000ffff 00008200
+TR =0000 00000000 0000ffff 00008b00
+GDT=     00000000 0000ffff
+IDT=     00000000 0000ffff
+CR0=60000010 CR2=00000000 CR3=00000000 CR4=00000000
+EFER=0000000000000000
+(qemu) cpu 3
+(qemu) x /12i $pc
+0xfffffff0:  ea 5b e0 00 f0           ljmpw    $0xf000:$0xe05b
+0xfffffff5:  30 36 2f 32              xorb     %dh, 0x322f
+0xfffffff9:  33 2f                    xorw     (%bx), %bp
+0xfffffffb:  39 39                    cmpw     %di, (%bx, %di)
+0xfffffffd:  00 fc                    addb     %bh, %ah
+0xffffffff:  00 00                    addb     %al, (%bx, %si)
+0x100000001:  00 00                    addb     %al, (%bx, %si)
+0x100000003:  00 00                    addb     %al, (%bx, %si)
+0x100000005:  00 00                    addb     %al, (%bx, %si)
+0x100000007:  00 00                    addb     %al, (%bx, %si)
+0x100000009:  00 00                    addb     %al, (%bx, %si)
+0x10000000b:  00 00                    addb     %al, (%bx, %si)
+(qemu) info lapic
+dumping local APIC state for CPU 3
+
+LVT0	 0x00010000 active-hi edge  masked                      Fixed  (vec 0)
+LVT1	 0x00010000 active-hi edge  masked                      Fixed  (vec 0)
+LVTPC	 0x00010000 active-hi edge  masked                      Fixed  (vec 0)
+LVTERR	 0x00010000 active-hi edge  masked                      Fixed  (vec 0)
+LVTTHMR	 0x00010000 active-hi edge  masked                      Fixed  (vec 0)
+LVTT	 0x00010000 active-hi edge  masked         one-shot     Fixed  (vec 0)
+Timer	 DCR=0x0 (divide by 2) initial_count = 0 current_count = 0
+SPIV	 0x000000ff APIC disabled, focus=off, spurious vec 255
+ICR	 0x00000000 physical edge de-assert no-shorthand
+ICR2	 0x00000000 cpu 0 (X2APIC ID)
+ESR	 0x00000000
+ISR	 (none)
+IRR	 (none)
+
+APR 0x00 TPR 0x00 DFR 0x0f LDR 0x00 PPR 0x00
+(qemu) cpu 0
+(qemu) x /12i $pc
+0x000d8f29:  00 00                    addb     %al, (%eax)
+0x000d8f2b:  00 00                    addb     %al, (%eax)
+0x000d8f2d:  00 00                    addb     %al, (%eax)
+0x000d8f2f:  00 00                    addb     %al, (%eax)
+0x000d8f31:  00 00                    addb     %al, (%eax)
+0x000d8f33:  00 00                    addb     %al, (%eax)
+0x000d8f35:  00 00                    addb     %al, (%eax)
+0x000d8f37:  00 00                    addb     %al, (%eax)
+0x000d8f39:  00 00                    addb     %al, (%eax)
+0x000d8f3b:  00 00                    addb     %al, (%eax)
+0x000d8f3d:  00 00                    addb     %al, (%eax)
+0x000d8f3f:  00 00                    addb     %al, (%eax)
+
+(qemu) i /wx 0xcf8
+portl[0x0cf8] = 0xffffffff
+(qemu) o /w 0xcf8 0x80000000
+(qemu) i /wx 0xcfc
+portl[0x0cfc] = 0x29c08086
+(qemu) o /w 0xcf8 0x80000090
+(qemu) i /wx 0xcfc
+portl[0x0cfc] = 0x00000000
+(qemu) o /w 0xcf8 0x80000094
+(qemu) i /wx 0xcfc
+portl[0x0cfc] = 0x00000000
+(qemu) xp /24xb 0xd8f20
+00000000000d8f20: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+00000000000d8f28: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+00000000000d8f30: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+(qemu) xp /16xb 0xfffd9f80
+00000000fffd9f80: 0x43 0x2c 0x8b 0x43 0x28 0x0f 0xb6 0x00
+00000000fffd9f88: 0x8d 0x84 0x07 0x00 0x04 0x00 0x00 0x89
+(qemu) xp /16xb 0xf18b0
+00000000000f18b0: 0x74 0x65 0x73 0x00 0x65 0x74 0x63 0x2f
+00000000000f18b8: 0x70 0x76 0x70 0x61 0x6e 0x69 0x63 0x2d
+(qemu) xp /24xw 0x6f38
+0000000000006f38: 0x000e0090 0x000e0090 0x000e0090 0x000e0090
+0000000000006f48: 0x000e0090 0x000e0090 0x000e0090 0x000e7737
+0000000000006f58: 0x00000000 0x00000000 0x00000000 0x00000000
+0000000000006f68: 0x00000000 0x00000000 0x00000000 0x00000000
+0000000000006f78: 0x00000000 0x00000000 0x00000000 0x00000000
+0000000000006f88: 0x4b4d564b 0x564b4d56 0x0000004d 0x00000000
+(qemu) xp /12i 0xe0070
+0x000e0070:  89 b5 91 00 00 00        movl     %esi, 0x91(%ebp)
+0x000e0076:  89 bd 95 00 00 00        movl     %edi, 0x95(%ebp)
+0x000e007c:  eb 04                    jmp      0xe0082
+0x000e007e:  c6 45 65 00              movb     $0, 0x65(%ebp)
+0x000e0082:  31 d2                    xorl     %edx, %edx
+0x000e0084:  31 c9                    xorl     %ecx, %ecx
+0x000e0086:  b8 b4 18 0f 00           movl     $0xf18b4, %eax
+0x000e008b:  e8 6f 61 ff ff           calll    0xd61ff
+0x000e0090:  66 89 85 f2 00 00 00     movw     %ax, 0xf2(%ebp)
+(qemu) info mtree -f
+  00000000000a0000-00000000000bffff (prio 1, i/o): vga-lowmem
+  00000000000c0000-00000000000dffff (prio 1, rom): pc.rom KVM
+  00000000000e0000-00000000000fffff (prio 0, rom): pc.bios @0000000000020000 KVM
+  00000000fffc0000-00000000ffffffff (prio 0, rom): pc.bios KVM
