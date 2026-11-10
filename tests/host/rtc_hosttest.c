@@ -252,6 +252,10 @@ uint32_t pit_wait_counts(uint32_t counts)
     return 0;
 }
 
+/* The wait pit.c gives `k_udelay` once the TSC keeps the clock, which no row
+ * reaches. */
+void (*udelay_wait)(uint32_t usec);
+
 void host_tsc_read(uint32_t *lo, uint32_t *hi)
 {
     *lo = *hi = 0;
