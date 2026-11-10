@@ -122,5 +122,4 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `d3d-vkd3d` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): vkd3d-proton's units on lavapipe against Debian.
 * `desktop` (full tier; needs qemu, python3; 4096 MiB; x86_64 only): an ordinary headless Weston session at boot, input discovery, and browser and ALSA tones measured through OSS loopback.
 * `vgpu` (full tier; needs qemu; 256 MiB): QEMU's virtio-vga-gl with a virgl renderer under Rach2's virtio-gpu driver: the capability sets, a context for each open, a 3D texture uploaded and read back, a submission's sync-file out-fence passed on as an in-fence, blocking and non-blocking waits, and a reset that fails the pending fences.
-
-* `gpucompat` (full tier; needs qemu; 640 MiB; i686 only): i386 GPU queries and buffer readback on i915's fault backend and virgl, and syncobj, udmabuf, dma-buf and sync-file requests. `RACH2_KERNEL=ia32` runs the probe on the x86-64 kernel; virgl needs a Linux host.
+* `gpucompat` (full tier; needs qemu; 640 MiB; i686 only): i386 GPU driver calls on i915's fault backend and virgl, with syncobj, udmabuf, dma-buf and sync-file requests, run on the x86-64 kernel by RACH2_KERNEL=ia32; tests/cases/guest.gpucompat.json.

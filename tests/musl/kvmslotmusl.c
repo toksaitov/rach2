@@ -17,9 +17,10 @@
  * maps a new page over it, and after each the guest must read what the
  * caller's page holds then: the parent's copy, not the child's. A second
  * guest stores 0x44 at 0x2000 through a slot that logs, and the log names
- * page 2. VmPin stays 0 throughout, since KVM pins no page. Where no backend
- * runs guests, KVM_RUN fails with EOPNOTSUPP and the guest rows are
- * skipped, with a line that says so.
+ * page 2. VmPin stays 0 throughout, since KVM pins no page. A KVM_RUN that
+ * fails with EOPNOTSUPP, as a backend's stub entry does, is a failure:
+ * /dev/kvm exists only where a backend probed, so the backend should run
+ * the guest.
  *
  * It needs VMX or SVM on and allowed by the firmware. It prints
  * "KVMSLOTMUSL OK" and exits 0, or "KVMSLOTMUSL FAIL (detail)" and exits 1
@@ -340,11 +341,11 @@ int main(void)
         return fail("mmap of the vCPU");
     }
     r = guest_rows(mem, vcpu, run);
+    if (r == 2) {
+        return fail("KVM_RUN: the backend runs no guest");
+    }
     if (r == 1) {
         return 1;
-    }
-    if (r == 2) {
-        printf("kvmslotmusl: skipped: the guest rows, since no backend runs guests\n");
     }
     if (vm_pin() != 0) {
         printf("KVMSLOTMUSL FAIL (VmPin is %ld kB)\n", vm_pin());
