@@ -146,9 +146,13 @@ static const unsigned char code42[] = {0xb8, 0x2a, 0x00, 0x00, 0x00, 0xc3};
 /** cpuid of `leaf` and `sub` into r[0..3], EAX to EDX. */
 static void cpuid(unsigned leaf, unsigned sub, unsigned r[4])
 {
-    __asm__ __volatile__("cpuid"
-                         : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3])
-                         : "a"(leaf), "c"(sub));
+    unsigned a, b, c, d;
+
+    __asm__ __volatile__("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(leaf), "c"(sub));
+    r[0] = a;
+    r[1] = b;
+    r[2] = c;
+    r[3] = d;
 }
 
 /** The low half of XCR0: `xgetbv` with ECX 0. */
@@ -622,12 +626,12 @@ static void signal_rows(void)
     wrpkru(v);
     fix_mask = 0;
     faults = 0;
-    raise(SIGUSR1);
+    kill(getpid(), SIGUSR1);
     check(faults == 1 && handler_pkru == PKRU_INIT, "the handler's PKRU");
     check(frame_pkru == v && frame_bv, "the frame's PKRU, marked in use");
     check(rdpkru() == v, "sigreturn gives the PKRU back");
     fix_mask = PKRU_WD(k);
-    raise(SIGUSR1);
+    kill(getpid(), SIGUSR1);
     check(rdpkru() == (v & ~PKRU_WD(k)), "sigreturn takes the PKRU the handler wrote");
 }
 
@@ -641,7 +645,7 @@ static void peek_child_rows(char *b)
 
     if (pid == 0) {
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
-        raise(SIGSTOP);
+        kill(getpid(), SIGSTOP);
         _exit(0);
     }
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status)) {
@@ -809,7 +813,7 @@ static void ptrace_child(uint32_t v, uint32_t want)
 {
     ptrace(PTRACE_TRACEME, 0, NULL, NULL);
     wrpkru(v);
-    raise(SIGSTOP);
+    kill(getpid(), SIGSTOP);
     _exit(rdpkru() == want ? 0 : 1);
 }
 
