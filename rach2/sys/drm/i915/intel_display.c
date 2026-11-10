@@ -1429,11 +1429,13 @@ int32_t intel_display_init(struct drm_i915_private *i915)
         return err;
     }
     d->ready = 1;
-    /* Linux's intel_mode_config_init for display 7. */
+    /* Linux's intel_mode_config_init for display 7 and up, the render
+     * engine's largest surface; the planes' checks bound what they scan
+     * out of it. */
     mc->min_width = 0;
     mc->min_height = 0;
-    mc->max_width = 8192;
-    mc->max_height = 8192;
+    mc->max_width = 16384;
+    mc->max_height = 16384;
     mc->cursor_width = 256;
     mc->cursor_height = 256;
     mc->preferred_depth = 24;
