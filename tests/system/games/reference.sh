@@ -1,6 +1,7 @@
 #!/bin/sh
 # Run the rows of the Wine probes in the Debian guest on the virgl profile,
-# with the pinned GE-Proton at /opt/proton, and write Linux's results to OUT.
+# with the pinned GE-Proton at /opt/proton and umu-launcher and the Steam
+# Linux Runtime's archive at /opt/umu, and write Linux's results to OUT.
 # Usage: reference.sh OUT [ROW...]; every row when none is named.
 set -eu
 
@@ -11,12 +12,14 @@ if [ "${1:-}" = guest ]; then
     trap 'exit 143' TERM
     sudo mkdir -p /opt/proton
     sudo tar -xzf /tmp/proton.tar.gz -C /opt/proton --strip-components=1
+    sudo tar -xf /tmp/umu.tar -C /
+    sudo ln -sf /opt/umu/umu-run /usr/local/bin/umu-run
     rm -rf /tmp/games "$out"
     mkdir -p /tmp/games "$out"
     tar -xf /tmp/bundle.tar -C /tmp/games
     mkdir -p /tmp/.X11-unix
     shift
-    [ "$#" -gt 0 ] || set -- prefix draw-64 draw-32 maps
+    [ "$#" -gt 0 ] || set -- prefix draw-64 draw-32 maps umu
     status=0
     for row in "$@"; do
         GAMES_REFERENCE=$out/$row.json GAMES_LAUNCHER='sh /tmp/games/rach2-game.sh' \
@@ -37,6 +40,8 @@ for row, results in rows.items():
             ref["draw"][name] = value["crc32"]
         elif row == "maps":
             ref["maps"][name] = value["coverage"]
+        elif row == "umu" and name == "refused":
+            ref["umu_refused"] = value
 (out / "linux.json").write_text(json.dumps(ref, indent=2, sort_keys=True) + "\n")
 PY
     # The status travels in the archive, which debian-ref.sh copies out only
@@ -63,11 +68,16 @@ work=$(mktemp -d "$REPO/build/tmp/rach2-games-reference.XXXXXX")
 make -s -C "$REPO" ARCH=x86_64 build/tests/system/games/bundle.tar
 cp "$REPO/build/tests/system/games/bundle.tar" "$work/bundle.tar"
 cp "$(asset ge-proton)" "$work/proton.tar.gz"
+# /opt/umu as fetch_umu.sh stages it, from the pins it checks.
+RACH2_ARCH=x86_64 RACH2_GNU_OUT="$work/gnu" sh "$GNU/games/fetch_umu.sh"
+tar -cf "$work/umu.tar" -C "$work/gnu/umu" opt
+rm -rf "$work/gnu"
 ref=$REPO/tests/graphics/debian-ref/debian-ref.sh
 sh "$ref" prepare -n
 status=0
 sh "$ref" run -p virgl -c 4 -m 8192 -d -r "$out/record" -i "$work/bundle.tar" \
-    -i "$work/proton.tar.gz" -i "$here/reference.sh" -o "$work/games-reference.tar.gz" \
+    -i "$work/proton.tar.gz" -i "$work/umu.tar" -i "$here/reference.sh" \
+    -o "$work/games-reference.tar.gz" \
     "sh /tmp/reference.sh guest $*" || status=$?
 [ "$status" -eq 0 ] || exit "$status"
 tar -xzf "$work/games-reference.tar.gz" -C "$out"
