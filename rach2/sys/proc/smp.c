@@ -30,6 +30,16 @@ static volatile unsigned int bkl_claim;
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
 static uint64_t bkl_wait_max_cycles;
+static volatile uint32_t bkl_releases; /* completed outer holds, modulo 2^32 */
+static uint32_t bkl_wait_max_holds;    /* holds completed during the longest wait */
+/* Keep the most recent releases and copy those of a new longest wait. */
+struct bkl_hold_record {
+    uint64_t cycles; /* full hold duration in TSC cycles */
+    uint32_t vector; /* entry vector, 0 for a take after a drop */
+    int32_t nr;      /* entry system call number, -1 for none */
+};
+static struct bkl_hold_record bkl_recent[BKL_WAIT_HOLDS];
+static struct bkl_hold_record bkl_wait_hold[BKL_WAIT_HOLDS];
 static uint64_t bkl_hold_max_cycles;          /* the longest hold, from take to give back */
 static uint32_t bkl_hold_vector;              /* its entry's vector, 0 for none */
 static int32_t bkl_hold_nr = -1;              /* its entry's system call number, or -1 */
@@ -96,8 +106,10 @@ static void bkl_acquire(struct percpu *cpu)
 {
     unsigned int me = (unsigned int)arch_cpu_id() + 1u;
     uint32_t spins = 0, passed = 0;
+    uint32_t releases = bkl_releases;
     uint64_t start = arch_cycles(), waited;
     uint32_t wake_start = waketime_clock(), wake_wait;
+    unsigned int i, n;
 
     cpu->wake_bkl_start = wake_start;
     cpu->wake_bkl_waiting = 1;
@@ -129,6 +141,11 @@ static void bkl_acquire(struct percpu *cpu)
     bkl_wait_cycles += waited;
     if (waited > bkl_wait_max_cycles) {
         bkl_wait_max_cycles = waited;
+        bkl_wait_max_holds = bkl_releases - releases;
+        n = bkl_wait_max_holds < BKL_WAIT_HOLDS ? bkl_wait_max_holds : BKL_WAIT_HOLDS;
+        for (i = 0; i < n; i++) {
+            bkl_wait_hold[i] = bkl_recent[(bkl_releases - n + i) % BKL_WAIT_HOLDS];
+        }
     }
     bkl_flush(cpu);
 }
@@ -142,6 +159,10 @@ static void bkl_hold_end(struct percpu *cpu)
     int c = arch_cpu_id();
     int key;
 
+    bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
+    bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
+    bkl_recent[bkl_releases % BKL_WAIT_HOLDS].nr = cpu->bkl_nr;
+    bkl_releases++;
     if (!bkl_booted) {
         bkl_booted = 1;
         return;
@@ -223,10 +244,19 @@ void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
 }
 
 /** Read the acquisition and shootdown counters with the big lock held. */
-void smp_wait_stats(uint64_t *total_us, uint64_t *max_us)
+void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint32_t *holds)
 {
     *total_us = timer_cycles_us(bkl_wait_cycles);
     *max_us = timer_cycles_us(bkl_wait_max_cycles);
+    *holds = bkl_wait_max_holds;
+}
+
+/** Read a retained hold from the longest wait, with the big lock held. */
+void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int32_t *nr)
+{
+    *held_us = timer_cycles_us(bkl_wait_hold[index].cycles);
+    *vector = bkl_wait_hold[index].vector;
+    *nr = bkl_wait_hold[index].nr;
 }
 
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr)

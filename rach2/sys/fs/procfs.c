@@ -2998,18 +2998,40 @@ static void procfs_assignment_counts(struct procfs_text *t)
 #endif
 }
 
+/** Append the retained holds completed during the longest big-lock wait. */
+static void procfs_wait_holds(struct procfs_text *t, uint32_t holds)
+{
+    uint32_t i, vector;
+    uint64_t us;
+    int32_t nr;
+
+    for (i = 0; i < holds && i < BKL_WAIT_HOLDS; i++) {
+        smp_wait_hold(i, &us, &vector, &nr);
+        ap_str(t, "\nbkl_wait_max_hold ");
+        ap_u32(t, vector);
+        ap_ch(t, ' ');
+        if (nr < 0) {
+            ap_str(t, "-1");
+        } else {
+            ap_u32(t, (uint32_t)nr);
+        }
+        ap_ch(t, ' ');
+        ap_u64(t, us);
+    }
+}
+
 /** The counts of the kernel's own work for `/proc/stat`, from
  * `process_pid_steps` to the last `bkl_hold_entry`, each on a line of
  * its own. */
 static void procfs_work_counts(struct procfs_text *t)
 {
     uint64_t total, longest, held, age;
-    uint32_t vector;
+    uint32_t vector, holds;
     int32_t nr;
     uintptr_t pc[BKL_SAMPLE_PCS];
     int i, m;
 
-    smp_wait_stats(&total, &longest);
+    smp_wait_stats(&total, &longest, &holds);
     smp_hold_stats(&held, &vector, &nr);
     smp_hold_sample(&age, pc);
     ap_str(t, "process_pid_steps ");
@@ -3040,6 +3062,9 @@ static void procfs_work_counts(struct procfs_text *t)
     ap_u64(t, total);
     ap_str(t, "\nbkl_wait_max_us ");
     ap_u64(t, longest);
+    ap_str(t, "\nbkl_wait_max_holds ");
+    ap_u32(t, holds);
+    procfs_wait_holds(t, holds);
     ap_str(t, "\nbkl_hold_max_us ");
     ap_u64(t, held);
     ap_str(t, "\nbkl_hold_max_entry ");

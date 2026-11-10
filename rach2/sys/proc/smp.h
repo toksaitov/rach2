@@ -63,9 +63,19 @@ void bkl_take(int depth);
 int smp_cpu_count(void);
 
 /** Read the sum and longest big-lock acquisition in microseconds
- * elapsed since boot. The caller holds the big lock. Wait times are zero
+ * elapsed since boot, and the outer holds completed during that longest
+ * wait, modulo 2^32. The caller holds the big lock. Wait times are zero
  * without a calibrated invariant TSC. */
-void smp_wait_stats(uint64_t *total_us, uint64_t *max_us);
+void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint32_t *holds);
+
+/* The last outer holds completed during the longest big-lock acquisition. */
+#define BKL_WAIT_HOLDS 32u
+
+/** Read retained hold `index`, below the smaller of BKL_WAIT_HOLDS and
+ * smp_wait_stats's holds, oldest first. Return its full time in microseconds
+ * and entry, as smp_hold_stats does. A hold may begin before the wait.
+ * The caller holds the big lock. */
+void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int32_t *nr);
 
 /** Name the kernel entry that holds the big lock on this processor, by its
  * vector and, for a system call, its number (-1 otherwise), for the longest

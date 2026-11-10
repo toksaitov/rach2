@@ -1239,6 +1239,21 @@ Sum and longest acquisition of the big kernel lock, in microseconds since
 boot, measured by the processor's time-stamp counter.
 These include time when a hypervisor stopped a waiting processor.
 They are zero when no invariant counter was calibrated.
+.It Li bkl_wait_max_holds
+Outer holds completed between the start of the longest acquisition and its
+success, modulo 2^32, including a hold already in progress at its start.
+The count belongs to the same acquisition as
+.Li bkl_wait_max_us .
+It counts releases, including an idle drop, rather than distinct processors.
+.It Li bkl_wait_max_hold
+The last 32 of those completed holds, or all when fewer, oldest first:
+entry vector, system call number (\-1 for none), and full hold time in
+microseconds, as for
+.Li bkl_hold_max_entry
+and
+.Li bkl_hold_max_us .
+A hold already in progress when the acquisition began includes time before
+the wait, so these times need not sum to the acquisition time.
 .It Li bkl_hold_max_us
 Longest hold of the big kernel lock, from its take to its release, in
 microseconds since boot, measured by the same counter.
