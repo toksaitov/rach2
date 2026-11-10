@@ -277,6 +277,13 @@ int sigframe_ss_valid(unsigned int sel)
     return sel == GDT_USER_DATA;
 }
 
+/* The test writes no LDT, so no selector names a code segment of one. */
+int ldt_code_valid(unsigned int sel)
+{
+    (void)sel;
+    return 0;
+}
+
 int in_compat_syscall(void)
 {
     return compat;
