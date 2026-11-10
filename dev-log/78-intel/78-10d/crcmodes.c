@@ -450,6 +450,7 @@ static int read_crcs(struct panel *p, const char *dir, uint32_t *crcs, int count
         struct pollfd w;
         char *nl;
         ssize_t n;
+        size_t from, to = have;
 
         w.fd = fd;
         w.events = POLLIN;
@@ -468,7 +469,11 @@ static int read_crcs(struct panel *p, const char *dir, uint32_t *crcs, int count
             failed("crc/data");
             goto out;
         }
-        have += (size_t)n;
+        /* Each read gives one line with its NUL, LINE_LEN bytes. */
+        for (from = have; from < have + (size_t)n; from++)
+            if (line[from] != 0)
+                line[to++] = line[from];
+        have = to;
         line[have] = 0;
         while ((nl = strchr(line, '\n')) != NULL) {
             unsigned long frame, crc;
