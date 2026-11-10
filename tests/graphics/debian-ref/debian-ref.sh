@@ -152,7 +152,8 @@ prepare()
     work=$cache/prepare
     rm -rf "$work"
     mkdir -p "$work/seed"
-    trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
+    qemu=
+    trap 'if [ -n "$qemu" ]; then kill "$qemu" 2>/dev/null || true; wait "$qemu" 2>/dev/null || true; fi; rm -rf "$work"' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -177,6 +178,7 @@ prepare()
     qemu=$!
     watch "$qemu" "$work/console.log" 'debian-ref: \(prepared\|failed\)' 1200 || true
     wait "$qemu" || true
+    qemu=
     grep -a 'debian-ref: ' "$work/console.log" | tr -d '\r' | sed 's/^.*debian-ref:/debian-ref:/'
     grep -aq 'debian-ref: prepared' "$work/console.log" || die "result: preparation failed"
     mv "$work/prepared.qcow2" "$prepared"
@@ -245,7 +247,7 @@ run()
     mkdir -p "${TMPDIR:-$tree/build/tmp}"
     work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/debian-ref.XXXXXX")
     qemu=
-    trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
+    trap 'if [ -n "$qemu" ]; then kill "$qemu" 2>/dev/null || true; wait "$qemu" 2>/dev/null || true; fi; rm -rf "$work"' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -297,6 +299,7 @@ run()
         </dev/null >> "$work/record" 2>/dev/null || true
     watch "$qemu" "$work/console.log" 'reboot: Power down' 120 || kill "$qemu" 2>/dev/null || true
     wait "$qemu" 2>/dev/null || true
+    qemu=
     if [ -n "$record" ]; then
         cp "$work/record" "$record"
     else
