@@ -196,6 +196,7 @@ musl/coremusl
 # umask they share, /proc/self/task, and exec and exit from one.
 musl/threadmusl
 musl/threadscaling
+musl/smptlbmusl
 # The shell's one-line form, which `su -c` depends on. It runs
 # /musl/statushelper, a fixture and not a probe, which is why that one is
 # staged but not listed here.

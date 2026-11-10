@@ -111,6 +111,8 @@ A probe that etude judges writes etude's report records (`tools/etude/Readme.md`
 
 `threadscaling` creates, holds, releases and joins batches of 16, 64 and 256 threads through a condition variable. It checks every creation result and bounds the pid, real-user and VMA gap work per creation by `/proc/stat` counters. During a nanosleep by the parent, timer entries examined stay within sixteen per timer pass, with one pass of slack. This permits the installed system's background timers while detecting scans over the held threads.
 
+`smptlbmusl` runs on processor 0 beside a thread spinning on processor 1 and reads `/proc/stat` through a buffer made first. It checks that 64 pages faulted in cost no TLB shootdown, that an unmap of 64 pages, an mprotect of 8 and their unmap cost one each, with one interrupt to the spinner's processor, and that on one processor none costs any. With three processors or more, it waits 200 times on a futex and 200 times on a timerfd, each for 2 ms, on processor 2 while processor 1 forks a process of 64 MiB of pages over and over; each wait must end by its timeout, and the late timer passes and the longest overrun are printed.
+
 `threadmusl` has a thread set K_RAW and raw termios with VMIN and VTIME zero before reading the empty console; closing `/fb` restores the console's settings.
 
 `procprobe mount` reports the exact root line its profile gives. `creddisk` reports each publication and lock check across cold boots, and `procfilesmusl` the status and content checks of each installed applet.

@@ -6693,6 +6693,149 @@
       }
     },
     {
+      "case_id": "guest.default.smptlbmusl",
+      "behavior": "With a second thread running on another processor, pages faulted in cost no TLB shootdown and an unmap or an mprotect costs one, as Linux 6.12 gives; and while one processor holds the big lock in fork copies, futex and timerfd timeouts on another end by their deadlines, with timer passes made off the boot processor.",
+      "units": [
+        "default",
+        "musl/smptlbmusl"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 4,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "smptlbmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the program joins its threads and reaps every child"
+      },
+      "assertions": [
+        {
+          "assertion_id": "counters",
+          "checks": "/proc/stat gives tlb_shootdowns, tlb_shootdown_ipis, timer_passes_late and process_timer_passes",
+          "source": "program"
+        },
+        {
+          "assertion_id": "fault",
+          "checks": "64 pages faulted in while a thread runs on processor 1 cost no shootdown",
+          "source": "program"
+        },
+        {
+          "assertion_id": "unmap",
+          "checks": "an unmap of the 64 pages costs one shootdown and one interrupt",
+          "source": "program"
+        },
+        {
+          "assertion_id": "mprotect",
+          "checks": "an mprotect of 8 present pages to read-only costs one shootdown and one interrupt",
+          "source": "program"
+        },
+        {
+          "assertion_id": "unmap-span",
+          "checks": "an unmap of those 8 pages costs one shootdown and one interrupt",
+          "source": "program"
+        },
+        {
+          "assertion_id": "timeouts",
+          "checks": "200 futex waits and 200 timerfd reads of 2 ms on processor 2 each end by the timeout while processor 1 forks a process of 64 MiB of pages over and over",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 1073741824,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "smptlbmusl",
+          "node": "tests/musl/smptlbmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
       "case_id": "guest.default.privatefilemusl",
       "behavior": "Clean private tmpfs pages see shared stores and descriptor writes; private writes and fork copies stay isolated, truncation removes copies past EOF with SIGBUS, and mappings survive close and unlink.",
       "units": ["default", "musl/privatefilemusl"],
