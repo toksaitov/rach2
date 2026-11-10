@@ -189,6 +189,12 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_SYNCFS            306
 #define SYS_GETRANDOM         318
 #define SYS_PWRITEV2          328
+#define SYS_SETFSUID          122
+#define SYS_SETFSGID          123
+#define SYS_USTAT             136
+#define SYS_SYSFS             139
+#define SYS_VHANGUP           153
+#define SYS_OPENAT2           437
 
 /* Offsets in x86-64's struct stat, 144 bytes. */
 #define KSTAT_SIZE       144
@@ -424,6 +430,12 @@ static __inline__ long syscall0(long n)
 #define SYS_PRLIMIT64         340
 #define SYS_SYNCFS            344
 #define SYS_GETRANDOM         355
+#define SYS_SETFSUID          215
+#define SYS_SETFSGID          216
+#define SYS_USTAT             62
+#define SYS_SYSFS             135
+#define SYS_VHANGUP           111
+#define SYS_OPENAT2           437
 #define SYS_SOCKET            359
 #define SYS_SOCKETPAIR        360
 #define SYS_BIND              361
@@ -454,6 +466,8 @@ static __inline__ long syscall0(long n)
 #define SYS_SET_THREAD_AREA   243
 #define SYS_STATFS64          268
 #define SYS_FSTATFS64         269
+#define SYS_SETFSUID16        138
+#define SYS_SETFSGID16        139
 
 /* Offsets in i386's struct stat64, 96 bytes. */
 #define KSTAT_SIZE            96

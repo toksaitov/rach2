@@ -1391,6 +1391,108 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}, {"fixture": "ids", "count": 1}]}
     },
     {
+      "case_id": "guest.default.fsidprobe",
+      "behavior": "setfsuid and setfsgid set the file-system ids that a new file's owner, an open's permission check and the status file's fourth columns go by, take the file-system capabilities from the effective set while the user id is not 0, and are reset by setuid and setgid.",
+      "units": ["default", "fsidprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "fsidprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "query", "checks": "An id of -1 returns the present file-system id and changes nothing, and a new id returns the one before; on i386 setfsuid16 and setfsgid16 take 0xFFFF for -1.", "source": "program"},
+        {"assertion_id": "create-owner", "checks": "With both file-system ids at 1000, a new file is owned by 1000 and group 1000.", "source": "program"},
+        {"assertion_id": "open-denied", "checks": "Root's file of mode 0600 does not open for reading: EACCES.", "source": "program"},
+        {"assertion_id": "access-real", "checks": "access(R_OK), which judges by the real ids, allows it.", "source": "program"},
+        {"assertion_id": "status-ids", "checks": "/proc/self/status gives 1000 as the fourth column of its Uid and Gid lines.", "source": "program"},
+        {"assertion_id": "capeff", "checks": "CapEff is the set it was less Linux's CAP_FS_SET.", "source": "program"},
+        {"assertion_id": "restore", "checks": "setfsuid(0) and setfsgid(0) return 1000, CapEff comes back, the file opens and the status lines end in 0.", "source": "program"},
+        {"assertion_id": "setuid-resets", "checks": "setuid(0) and setgid(0) make the file-system ids 0 again.", "source": "program"},
+        {"assertion_id": "cleanup", "checks": "The probe's files and directory are removed.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "fsidprobe", "node": "tests/fsidprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}, {"fixture": "ids", "count": 1}]}
+    },
+    {
+      "case_id": "guest.default.oldfsprobe",
+      "behavior": "sysfs numbers the file system types in /proc/filesystems' order and answers its three options, and ustat gives a tmpfs's free blocks and inodes as statfs does, with Linux's errors.",
+      "units": ["default", "oldfsprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "oldfsprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "count", "checks": "sysfs option 3 gives the number of lines of /proc/filesystems.", "source": "program"},
+        {"assertion_id": "names", "checks": "Option 2 gives each line's name with its NUL for its index.", "source": "program"},
+        {"assertion_id": "indexes", "checks": "Option 1 gives each name's index.", "source": "program"},
+        {"assertion_id": "sysfs-errors", "checks": "An unknown name and an index past the last are EINVAL, an empty name ENOENT, a NULL name or buffer EFAULT, and options 0 and 4 EINVAL.", "source": "program"},
+        {"assertion_id": "ustat-counts", "checks": "ustat of a tmpfs's st_dev gives statfs's f_bfree and f_ffree, cut to its members' widths.", "source": "program"},
+        {"assertion_id": "ustat-names", "checks": "f_fname and f_fpack are zero.", "source": "program"},
+        {"assertion_id": "ustat-errors", "checks": "A device number no mount has is EINVAL, and a bad buffer EFAULT.", "source": "program"},
+        {"assertion_id": "cleanup", "checks": "The probe's own tmpfs is unmounted and its directory removed.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "oldfsprobe", "node": "tests/oldfsprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "tmpfs", "size_bytes": 1048576}]}
+    },
+    {
+      "case_id": "guest.default.openat2probe",
+      "behavior": "openat2 checks its struct's size and its flags as Linux does, and its RESOLVE_ flags limit the walk of a path in a tmpfs: no links, no links of /proc to an object, no other mount, nothing outside the directory, the directory as the root, and the name cache alone.",
+      "units": ["default", "openat2probe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "openat2probe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "size", "checks": "A struct of 23 bytes is EINVAL and one past a page E2BIG; 40 bytes open with zeros past the 24 and are E2BIG with a byte that is not.", "source": "program"},
+        {"assertion_id": "flags", "checks": "An unknown flag, a mode without O_CREAT, a mode bit above 07777, an unknown RESOLVE_ flag, BENEATH with IN_ROOT, O_PATH with O_RDWR and O_CREAT with O_DIRECTORY are EINVAL, and CACHED with O_CREAT EAGAIN.", "source": "program"},
+        {"assertion_id": "nosymlinks", "checks": "NO_SYMLINKS is ELOOP for a link at the end and on the way, and O_PATH with O_NOFOLLOW opens the link itself.", "source": "program"},
+        {"assertion_id": "nomagic", "checks": "NO_MAGICLINKS is ELOOP for /proc/self/fd/N at the end and on the way, and follows an ordinary link.", "source": "program"},
+        {"assertion_id": "noxdev", "checks": "NO_XDEV is EXDEV for .. out of the tmpfs and for /proc from the root, and opens a file on the same mount.", "source": "program"},
+        {"assertion_id": "beneath", "checks": "BENEATH opens f and b/../f, and is EXDEV for ../a/f, an absolute path, .. at the directory through a link and an absolute link.", "source": "program"},
+        {"assertion_id": "inroot", "checks": "IN_ROOT reaches D/a/f by /a/f, ../../a/f, an absolute link and a link that climbs past D, and finds no /proc in D.", "source": "program"},
+        {"assertion_id": "cached", "checks": "CACHED opens ., a file just looked up and a directory.", "source": "program"},
+        {"assertion_id": "create", "checks": "O_CREAT under BENEATH makes b/new, ../new is EXDEV and makes nothing, and O_CREAT with O_EXCL under IN_ROOT makes /a/b/new2 in D.", "source": "program"},
+        {"assertion_id": "cleanup", "checks": "The tree is removed, and the probe's own tmpfs unmounted.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "openat2probe", "node": "tests/openat2probe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "tmpfs", "size_bytes": 1048576}]}
+    },
+    {
       "case_id": "guest.default.sockettest",
       "behavior": "A UDP socket is counted while any descriptor refers to it and freed once when the last one closes or its process exits, recvmmsg's timeout is given back with the time left, and a datagram comes with the timestamp its socket asked for.",
       "units": ["default", "sockettest"],
@@ -1975,6 +2077,41 @@
       ],
       "timing": [],
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.default.vhangprobe",
+      "behavior": "vhangup hangs up the caller's controlling terminal: the descriptors opened before read end of input and fail writes and ioctls, the session loses the terminal, its termios return to the defaults, and a caller without CAP_SYS_TTY_CONFIG gets EPERM.",
+      "units": ["default", "vhangprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "vhangprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "setup", "checks": "A pair opens, and a child's new session takes the slave and turns its echo off.", "source": "program"},
+        {"assertion_id": "vhangup", "checks": "vhangup returns 0 with SIGHUP ignored.", "source": "program"},
+        {"assertion_id": "old-read", "checks": "A read of the slave descriptor opened before is end of input.", "source": "program"},
+        {"assertion_id": "old-write", "checks": "A write of it is EIO.", "source": "program"},
+        {"assertion_id": "old-ioctl", "checks": "TCGETS on it is EIO, and TIOCSPGRP ENOTTY.", "source": "program"},
+        {"assertion_id": "old-poll", "checks": "poll gives it POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDNORM and POLLWRNORM.", "source": "program"},
+        {"assertion_id": "no-ctty", "checks": "/dev/tty is ENXIO: the session has no controlling terminal.", "source": "program"},
+        {"assertion_id": "reopen-defaults", "checks": "A new open of the slave has the default termios, ECHO among them.", "source": "program"},
+        {"assertion_id": "eperm", "checks": "A process of uid 1000 gets EPERM.", "source": "program"},
+        {"assertion_id": "cleanup", "checks": "The child exits 0 and the master closes.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "vhangprobe", "node": "tests/vhangprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "ids", "count": 1}]}
     },
     {
       "case_id": "guest.default.rngprobe",
