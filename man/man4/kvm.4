@@ -678,8 +678,8 @@ which
 names, at any time; a vCPU made afterwards runs HLT in the guest.
 .Ss The TSC's rate
 .Dv KVM_SET_TSC_KHZ
-on a vCPU sets the rate of its TSC in kHz, 0 for the host's, and on a VM
-the rate its later vCPUs start at;
+on a vCPU sets the rate of its TSC in kHz, 0 for the host's, and on a VM,
+before its first vCPU, the rate its vCPUs start at;
 .Dv KVM_GET_TSC_KHZ
 reads either back, the host's rate until one is set.
 A rate within 250 parts in a million of the host's runs at the host's.
@@ -854,7 +854,7 @@ flag;
 .Dv KVM_CLEAR_DIRTY_LOG
 of a range outside the slot or not on 64-page bounds;
 .Dv KVM_SET_TSC_KHZ
-of a rate the processor cannot give the guest;
+of a rate the processor cannot give the guest, or on a VM that has a vCPU;
 .Dv KVM_PRE_FAULT_MEMORY
 with flags or a range that is empty, wraps or is not page-aligned;
 .Dv KVM_REGISTER_COALESCED_MMIO
@@ -866,7 +866,8 @@ of a quirk it does not name;
 .Dv KVM_CAP_MAX_VCPU_ID
 a second time with another bound, above 4096 or below the boot vCPU's id;
 .Dv KVM_CAP_X86_APIC_BUS_CYCLES_NS
-once the VM has a vCPU;
+of 0, of a length at which the longest timer count, 2^32 - 1 at the divisor
+128, overflows 64 bits of ns, or once the VM has a vCPU;
 synchronized registers
 .Dv KVM_CAP_SYNC_REGS
 does not name;
