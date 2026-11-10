@@ -58,6 +58,7 @@ struct evdev {
     int gone;
     char uniq[64];
     unsigned int lit; /* the LEDs a program lit, for evdev_leds_lit */
+    struct evdev_keymap km;
 };
 
 #define MAX_DEVS 16
@@ -116,6 +117,12 @@ void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
 {
     dev->phys = phys;
     dev->flags = flags;
+}
+
+/** Keep the keymap of `dev`. */
+void evdev_set_keymap(struct evdev *dev, const struct evdev_keymap *km)
+{
+    dev->km = *km;
 }
 
 /** Keep the serial of `dev`. */
@@ -821,6 +828,7 @@ static void rows_map_mouse(void)
 }
 
 static void rows_keyboard_leds(struct hid_dev *hid);
+static void rows_keyboard_keymap(struct hid_dev *hid, struct evdev *d);
 
 /** QEMU's keyboard as an event device, and its keys. */
 static void rows_map_keyboard(void)
@@ -862,8 +870,38 @@ static void rows_map_keyboard(void)
     feed(hid, none, sizeof(none));
     CHECK("keyboard: then all up: B and A",
           nseen == 6 && is(1, EV_KEY, KEY_B, 0) && is(4, EV_KEY, KEY_A, 0));
+    rows_keyboard_keymap(hid, d);
     rows_keyboard_leds(hid);
     drop(hid);
+}
+
+/** The keymap of QEMU's keyboard `hid`, whose event device is `d`: its
+ * usages are its scan codes, as hid-input numbers them. */
+static void rows_keyboard_keymap(struct hid_dev *hid, struct evdev *d)
+{
+    struct evdev_keymap_entry ke;
+    uint16_t old = 0;
+
+    memset(&ke, 0, sizeof(ke));
+    ke.scancode = 0x70004;
+    CHECK("keymap: usage 0x70004 is KEY_A", d->km.get(d->km.ctx, &ke) == 0 && ke.keycode == KEY_A);
+    ke.by_index = 1;
+    ke.index = 0;
+    CHECK("keymap: the first entry is the first modifier, Left Control",
+          d->km.get(d->km.ctx, &ke) == 0 && ke.scancode == 0x700e0 && ke.keycode == KEY_LEFTCTRL);
+    ke.by_index = 0;
+    ke.scancode = 0x70004;
+    ke.keycode = KEY_B;
+    CHECK("keymap: usage 0x70004 is set to KEY_B, and no usage is KEY_A",
+          d->km.set(d->km.ctx, &ke, &old) == 0 && old == KEY_A && !d->km.maps(d->km.ctx, KEY_A) &&
+              d->km.maps(d->km.ctx, KEY_B));
+    feed(hid, shift_a, sizeof(shift_a));
+    CHECK("keymap: and the A key reports KEY_B", is(4, EV_KEY, KEY_B, 1));
+    feed(hid, none, sizeof(none));
+    ke.keycode = KEY_A;
+    d->km.set(d->km.ctx, &ke, &old);
+    ke.scancode = 0x12345;
+    CHECK("keymap: a usage the device has not is -EINVAL", d->km.get(d->km.ctx, &ke) == -EINVAL);
 }
 
 /** The output reports of QEMU's keyboard, `hid`. */

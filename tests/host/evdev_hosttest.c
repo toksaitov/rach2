@@ -219,6 +219,11 @@ int in_compat_syscall(void)
 #define EVIOCGPROP(n)      IOC(IOC_READ, NR_GPROP, n)
 #define EVIOCGKEY(n)       IOC(IOC_READ, NR_GKEY, n)
 #define EVIOCGLED(n)       IOC(IOC_READ, NR_GLED, n)
+#define EVIOCGKEYCODE      IOC(IOC_READ, NR_KEYCODE, 8)
+#define EVIOCSKEYCODE      IOC(IOC_WRITE, NR_KEYCODE, 8)
+#define EVIOCGKEYCODE_V2   IOC(IOC_READ, NR_KEYCODE, 40)
+#define EVIOCSKEYCODE_V2   IOC(IOC_WRITE, NR_KEYCODE, 40)
+#define EVIOCSFF(n)        IOC(IOC_WRITE, NR_SFF, n)
 #define EVIOCGBIT(t, n)    IOC(IOC_READ, NR_GBIT + (t), n)
 #define EVIOCGABS(a)       IOC(IOC_READ, NR_GABS + (a), sizeof(struct input_absinfo))
 #define EVIOCSABS(a, n)    IOC(IOC_WRITE, NR_SABS + (a), n)
@@ -870,6 +875,128 @@ static void led_rows(void)
     evdev_unregister(kbd);
 }
 
+/* A model keymap of four scan codes, 0x10 to 0x13. */
+static uint16_t model_map[4] = {KEY_A, KEY_KP1, KEY_A, 0};
+
+/** The model's entry `ke` names. */
+static int model_get(void *ctx, struct evdev_keymap_entry *ke)
+{
+    uint32_t at = ke->by_index ? ke->index : ke->scancode - 0x10;
+
+    (void)ctx;
+    if (at >= 4) {
+        return -EINVAL;
+    }
+    ke->index = at;
+    ke->scancode = 0x10 + at;
+    ke->keycode = model_map[at];
+    return 0;
+}
+
+/** Set the model's entry `ke` names. */
+static int model_set(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old)
+{
+    uint32_t at = ke->by_index ? ke->index : ke->scancode - 0x10;
+
+    (void)ctx;
+    if (at >= 4) {
+        return -EINVAL;
+    }
+    *old = model_map[at];
+    model_map[at] = ke->keycode;
+    return 0;
+}
+
+/** Whether the model maps a scan code to `code`. */
+static int model_maps(void *ctx, uint16_t code)
+{
+    int i;
+
+    (void)ctx;
+    for (i = 0; i < 4; i++) {
+        if (model_map[i] == code) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** EVIOCGKEYCODE and EVIOCSKEYCODE over a driver's keymap, in both forms,
+ * and the force feedback calls of a device without it, as Linux answers. */
+static void keycode_rows(void)
+{
+    static const struct evdev_keymap km = {model_get, model_set, model_maps, NULL};
+    struct {
+        uint8_t flags, len;
+        uint16_t index;
+        uint32_t keycode;
+        uint8_t scancode[32];
+    } v2;
+    uint8_t keys[EVDEV_KEY_BYTES], effect[48];
+    unsigned int legacy[2];
+    struct opened a, b;
+    struct evdev *dev;
+    int n = -1;
+
+    k_memset(keys, 0, sizeof(keys));
+    keys[KEY_A >> 3] |= (uint8_t)(1u << (KEY_A & 7));
+    keys[KEY_KP1 >> 3] |= (uint8_t)(1u << (KEY_KP1 & 7));
+    dev = evdev_register("Keypad", EVDEV_BUS_USB, 1, 6, keys);
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    legacy[0] = 0x11;
+    CHECK("a device with no keymap answers EVIOCGKEYCODE -EINVAL",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE, (uintptr_t)legacy) == -EINVAL);
+    evdev_set_keymap(dev, &km);
+    CHECK("EVIOCGKEYCODE gives the scan code's key after it",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE, (uintptr_t)legacy) == 0 && legacy[1] == KEY_KP1);
+    legacy[0] = 0x20;
+    CHECK("and -EINVAL for a scan code the map has not",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE, (uintptr_t)legacy) == -EINVAL);
+    k_memset(&v2, 0, sizeof(v2));
+    v2.flags = 1;
+    v2.index = 2;
+    CHECK("EVIOCGKEYCODE_V2 by place gives the entry with a 4-byte scan code",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE_V2, (uintptr_t)&v2) == 0 && v2.keycode == KEY_A &&
+              v2.len == 4 && v2.scancode[0] == 0x12 && v2.index == 2);
+    k_memset(&v2, 0, sizeof(v2));
+    v2.len = 3;
+    CHECK("a scan code of 3 bytes is -EINVAL",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE_V2, (uintptr_t)&v2) == -EINVAL);
+    packet(dev, EV_KEY, KEY_KP1, 1);
+    take(&b);
+    legacy[0] = 0x11;
+    legacy[1] = 0x2FF + 1;
+    CHECK("EVIOCSKEYCODE of a code past KEY_MAX is -EINVAL",
+          evdev_ioctl(&a.e, EVIOCSKEYCODE, (uintptr_t)legacy) == -EINVAL);
+    legacy[1] = KEY_A;
+    CHECK("EVIOCSKEYCODE sets the entry",
+          evdev_ioctl(&a.e, EVIOCSKEYCODE, (uintptr_t)legacy) == 0 && model_map[1] == KEY_A);
+    CHECK("the key held whose code no entry has is released",
+          take(&b) > 0 && n_got == 2 && is(0, EV_KEY, KEY_KP1, 0));
+    evdev_ioctl(&a.e, EVIOCGBIT(EV_KEY, EVDEV_KEY_BYTES), (uintptr_t)keys);
+    CHECK("and is no longer a key the device has", !(keys[KEY_KP1 >> 3] & (1u << (KEY_KP1 & 7))) &&
+                                                       (keys[KEY_A >> 3] & (1u << (KEY_A & 7))));
+    k_memset(&v2, 0, sizeof(v2));
+    v2.len = 1;
+    v2.scancode[0] = 0x13;
+    v2.keycode = KEY_KP1;
+    evdev_ioctl(&a.e, EVIOCSKEYCODE_V2, (uintptr_t)&v2);
+    evdev_ioctl(&a.e, EVIOCGBIT(EV_KEY, EVDEV_KEY_BYTES), (uintptr_t)keys);
+    CHECK("EVIOCSKEYCODE_V2 by scan code makes its key one the device has",
+          model_map[3] == KEY_KP1 && (keys[KEY_KP1 >> 3] & (1u << (KEY_KP1 & 7))));
+    CHECK("EVIOCGEFFECTS gives 0", evdev_ioctl(&a.e, 0x80044584u, (uintptr_t)&n) == 0 && n == 0);
+    CHECK("EVIOCRMFF is -ENOSYS", evdev_ioctl(&a.e, 0x40044581u, 0) == -ENOSYS);
+    k_memset(effect, 0, sizeof(effect));
+    CHECK("EVIOCSFF of a struct ff_effect is -ENOSYS",
+          evdev_ioctl(&a.e, EVIOCSFF(48), (uintptr_t)effect) == -ENOSYS);
+    CHECK("and of another size -EFAULT",
+          evdev_ioctl(&a.e, EVIOCSFF(40), (uintptr_t)effect) == -EFAULT);
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(dev);
+}
+
 /** A mouse's written motion goes on to mouse.c with no grab held, as
  * Linux's mousedev takes it, and a grab keeps it from mouse.c. */
 static void write_pointer_rows(void)
@@ -1030,6 +1157,7 @@ int main(void)
     write_rows();
     write_keyboard_rows();
     led_rows();
+    keycode_rows();
     write_pointer_rows();
     console_key_rows();
     write_compat_rows();

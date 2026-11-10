@@ -77,6 +77,10 @@ struct input_event32 {
 #define EVIOCGMASK    0x80104592u /* _IOR('E', 0x92, struct input_mask) */
 #define EVIOCSMASK    0x40104593u /* _IOW('E', 0x93, struct input_mask) */
 #define EVIOCSCLOCKID 0x400445A0u
+#define EVIOCRMFF     0x40044581u /* _IOW('E', 0x81, int) */
+#define EVIOCGEFFECTS 0x80044584u /* _IOR('E', 0x84, int) */
+#define NR_KEYCODE    0x04u       /* EVIOCGKEYCODE, EVIOCSKEYCODE and their _V2 */
+#define NR_SFF        0x80u       /* EVIOCSFF: _IOW('E', 0x80, struct ff_effect) */
 #define NR_GNAME      0x06u
 #define NR_GPHYS      0x07u
 #define NR_GUNIQ      0x08u
@@ -182,7 +186,8 @@ struct evdev {
     unsigned int trkid;    /* the next tracking number, before the cut to TRKID_MAX */
     struct evdev_slot slots[EVDEV_MT_SLOTS];
     evdev_handler_t handler;
-    int64_t stamp_sec[CLKS]; /* the packet's time on each clock */
+    struct evdev_keymap keymap; /* EVIOCGKEYCODE's; `get` NULL for none */
+    int64_t stamp_sec[CLKS];    /* the packet's time on each clock */
     int32_t stamp_nsec[CLKS];
     struct evdev_client *clients;
     struct evdev_client *grab; /* the open that holds EVIOCGRAB, or NULL */
@@ -326,6 +331,17 @@ void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code)
         set_bit(dev->rel, code);
     } else if (type == EV_LED && code < LED_CNT) {
         dev->ledbits |= 1u << code;
+    }
+}
+
+void evdev_set_keymap(struct evdev *dev, const struct evdev_keymap *km)
+{
+    uint32_t flags;
+
+    if (dev) {
+        flags = spin_lock_irqsave(&evdev_lock);
+        dev->keymap = *km;
+        spin_unlock_irqrestore(&evdev_lock, flags);
     }
 }
 
@@ -2026,11 +2042,181 @@ static int32_t repeat_ioctl(const struct evdev *dev, uint32_t request, uintptr_t
     return 0;
 }
 
+/* Linux's struct input_keymap_entry, EVIOCGKEYCODE_V2's argument. */
+struct keymap_v2 {
+    uint8_t flags; /* INPUT_KEYMAP_BY_INDEX, 1: by `index` */
+    uint8_t len;   /* the bytes of `scancode` given */
+    uint16_t index;
+    uint32_t keycode;
+    uint8_t scancode[32];
+};
+
+/**
+ * Read the entry the user's EVIOCGKEYCODE or EVIOCSKEYCODE at `arg` names
+ * into `ke`: the legacy two unsigned ints, a scan code and a key code, or a
+ * `struct keymap_v2` when `v2`, whose scan code of 1, 2 or 4 bytes is read
+ * as Linux's input_scancode_to_scalar reads it. Returns 0, -EFAULT, or
+ * -EINVAL for a scan code of another length.
+ */
+static int32_t keymap_in(uintptr_t arg, int v2, struct keymap_v2 *u, struct evdev_keymap_entry *ke)
+{
+    unsigned int legacy[2];
+
+    k_memset(ke, 0, sizeof(*ke));
+    if (!v2) {
+        if (copy_from_user(legacy, (const void __user *)arg, sizeof(legacy)) != 0) {
+            return -EFAULT;
+        }
+        ke->scancode = legacy[0];
+        ke->keycode = legacy[1] > 0xFFFFu ? 0xFFFFu : (uint16_t)legacy[1];
+        return 0;
+    }
+    if (copy_from_user(u, (const void __user *)arg, sizeof(*u)) != 0) {
+        return -EFAULT;
+    }
+    if (u->len > sizeof(u->scancode)) {
+        return -EINVAL;
+    }
+    ke->by_index = u->flags & 1u;
+    ke->index = u->index;
+    ke->keycode = u->keycode > 0xFFFFu ? 0xFFFFu : (uint16_t)u->keycode;
+    if (ke->by_index) {
+        return 0;
+    }
+    if (u->len == 1) {
+        ke->scancode = u->scancode[0];
+    } else if (u->len == 2) {
+        ke->scancode = (uint32_t)u->scancode[0] | (uint32_t)u->scancode[1] << 8;
+    } else if (u->len == 4) {
+        ke->scancode = (uint32_t)u->scancode[0] | (uint32_t)u->scancode[1] << 8 |
+                       (uint32_t)u->scancode[2] << 16 | (uint32_t)u->scancode[3] << 24;
+    } else {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/**
+ * Give the entry `ke` its key code in the keymap of `dev`, as Linux's
+ * input_set_keycode: the new code becomes a key the device has, KEY_RESERVED
+ * never, and the old one stops being one unless another entry has it, a
+ * press of it held released first. The evdev lock is not held.
+ */
+static int32_t keymap_set(struct evdev *dev, const struct evdev_keymap_entry *ke)
+{
+    uint16_t old = 0;
+    uint32_t flags;
+    int32_t rc;
+    int release = 0;
+
+    if (ke->keycode > KEY_MAX) {
+        return -EINVAL;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    rc = dev->gone          ? -ENODEV
+         : !dev->keymap.set ? -EINVAL
+                            : dev->keymap.set(dev->keymap.ctx, ke, &old);
+    if (rc == 0) {
+        set_bit(dev->keys, ke->keycode);
+        release =
+            old != ke->keycode && !dev->keymap.maps(dev->keymap.ctx, old) && bit_on(dev->down, old);
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (release) {
+        evdev_report(dev, EV_KEY, old, 0);
+        evdev_report(dev, EV_SYN, SYN_REPORT, 0);
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    if (rc == 0 && old != ke->keycode && !dev->gone && !dev->keymap.maps(dev->keymap.ctx, old)) {
+        dev->keys[old >> 3] &= (uint8_t)~(1u << (old & 7));
+    }
+    dev->keys[0] &= (uint8_t)~1u; /* KEY_RESERVED */
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return rc;
+}
+
+/**
+ * EVIOCGKEYCODE and EVIOCSKEYCODE, and their _V2 forms, over the keymap of
+ * `dev`, as Linux's evdev answers them: the legacy get writes the key code
+ * after the scan code, and the _V2 get the whole entry, with a scan code of
+ * 4 bytes. -EINVAL for a device without a keymap or an entry it has not.
+ */
+static int32_t keycode_ioctl(struct evdev *dev, uint32_t request, uintptr_t arg)
+{
+    struct evdev_keymap_entry ke;
+    struct keymap_v2 u;
+    int v2 = IOC_SIZE(request) == sizeof(u);
+    uint32_t flags;
+    int32_t rc;
+
+    if (!v2 && IOC_SIZE(request) != 2 * sizeof(unsigned int)) {
+        return -EINVAL;
+    }
+    rc = keymap_in(arg, v2, &u, &ke);
+    if (rc != 0) {
+        return rc;
+    }
+    if (IOC_DIR(request) == IOC_WRITE) {
+        return keymap_set(dev, &ke);
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    rc = dev->gone ? -ENODEV : !dev->keymap.get ? -EINVAL : dev->keymap.get(dev->keymap.ctx, &ke);
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!v2) {
+        unsigned int code = ke.keycode;
+
+        return copy_to_user((void __user *)(arg + sizeof(unsigned int)), &code, sizeof(code)) != 0
+                   ? -EFAULT
+                   : 0;
+    }
+    u.keycode = ke.keycode;
+    u.index = (uint16_t)ke.index;
+    u.len = 4;
+    u.scancode[0] = (uint8_t)ke.scancode;
+    u.scancode[1] = (uint8_t)(ke.scancode >> 8);
+    u.scancode[2] = (uint8_t)(ke.scancode >> 16);
+    u.scancode[3] = (uint8_t)(ke.scancode >> 24);
+    return copy_to_user((void __user *)arg, &u, sizeof(u)) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * The force feedback calls of a device without force feedback, which none
+ * here has, as Linux answers them: EVIOCGEFFECTS gives 0 effects, EVIOCRMFF
+ * is -ENOSYS, and EVIOCSFF -ENOSYS once its struct ff_effect, of 48 bytes
+ * on x86-64 and 44 on i686 and to an i386 program, has been read, -EFAULT
+ * when it could not be. Returns 1 for another request.
+ */
+static int32_t ff_ioctl(uint32_t request, uintptr_t arg)
+{
+    uint8_t effect[48];
+    uint32_t size = in_compat_syscall() || sizeof(void *) == 4 ? 44u : 48u;
+    int zero = 0;
+
+    if (request == EVIOCGEFFECTS) {
+        return copy_to_user((void __user *)arg, &zero, sizeof(zero)) != 0 ? -EFAULT : 0;
+    }
+    if (request == EVIOCRMFF) {
+        return -ENOSYS;
+    }
+    if (IOC_DIR(request) == IOC_WRITE && IOC_TYPE(request) == 'E' && IOC_NR(request) == NR_SFF) {
+        if (IOC_SIZE(request) != size ||
+            copy_from_user(effect, (const void __user *)arg, size) != 0) {
+            return -EFAULT;
+        }
+        return -ENOSYS;
+    }
+    return 1;
+}
+
 int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct evdev_client *c = (struct evdev_client *)e->priv;
     struct evdev *dev = c->dev;
     int version = EV_VERSION;
+    int32_t rc;
 
     if (dead(c)) {
         return -ENODEV;
@@ -2058,6 +2244,13 @@ int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     }
     if (IOC_TYPE(request) != 'E') {
         return -EINVAL;
+    }
+    if (IOC_NR(request) == NR_KEYCODE && IOC_DIR(request) != 0) {
+        return keycode_ioctl(dev, request, arg);
+    }
+    rc = ff_ioctl(request, arg);
+    if (rc != 1) {
+        return rc;
     }
     if (IOC_DIR(request) == IOC_READ) {
         return read_ioctl(c, IOC_NR(request), arg, IOC_SIZE(request));

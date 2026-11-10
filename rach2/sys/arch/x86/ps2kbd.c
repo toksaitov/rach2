@@ -173,8 +173,11 @@ static void kbd_irq(isr_params_t *params)
 
 void kbd_init(void)
 {
+    static uint16_t keymap[INPUT_SET1_KEYMAP];
+
     input_keyboard_attach(&ps2_keyboard, "AT Translated Set 2 keyboard", "isa0060/serio0/input0",
                           EVDEV_BUS_I8042, 0x0001, 0x0001);
+    input_keyboard_set1_keymap(&ps2_keyboard, keymap);
     set_isr_handler(33, &kbd_irq, "kbd");
     pic_unmask_irq(1);
     leds.shown = -1;

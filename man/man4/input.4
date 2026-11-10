@@ -754,6 +754,29 @@ A time above
 is left as it is, and a period of 0 turns repeat off.
 A device that is no keyboard answers
 .Er ENOSYS .
+.It Dv EVIOCGKEYCODE , EVIOCSKEYCODE , EVIOCGKEYCODE_V2 , EVIOCSKEYCODE_V2
+Read or change the key code a scan code reports, as udev's hwdb sets
+them: the legacy forms take two unsigned ints, the scan code and the key
+code, and the
+.Dv _V2
+forms a
+.Vt struct input_keymap_entry ,
+by its scan code of 1, 2 or 4 bytes or, with
+.Dv INPUT_KEYMAP_BY_INDEX ,
+by its place in the map.
+The PS/2 keyboard's map has 512 entries, indexed by the set-1 code with
+0x80 set after E0, as Linux's atkbd keeps it; a USB keyboard's or other
+HID device's entries are its usages, page and usage in one 32-bit code,
+those of its input and output reports that are keys or nothing, as
+Linux's hid-input numbers them.
+A changed key becomes one the device has, and the old one stops being one
+unless another scan code reports it, a press of it held released first.
+.It Dv EVIOCGEFFECTS , EVIOCSFF , EVIOCRMFF
+No device here has force feedback, so
+.Dv EVIOCGEFFECTS
+gives 0 effects and the other two answer
+.Er ENOSYS ,
+as on Linux.
 .El
 .Pp
 The nodes are root's, mode 0600, as Linux's are.
@@ -769,7 +792,11 @@ A nonblocking read with no packet queued.
 .Dv EVIOCGRAB
 of a device another open holds.
 .It Bq Er EFAULT
-A read or write whose buffer is not the caller's.
+A read or write whose buffer is not the caller's, or
+.Dv EVIOCSFF
+of a size other than its
+.Vt struct ff_effect ,
+as on Linux.
 .It Bq Er EINVAL
 A read, or a write of more than 0 bytes, smaller than one record;
 .Dv EVIOCGRAB
@@ -785,7 +812,14 @@ on a device with no slots or of a code that is no multitouch axis;
 .Dv EVIOCREVOKE
 with an argument other than 0;
 .Dv EVIOCSCLOCKID
-of another clock; or an ioctl evdev does not know, as on Linux.
+of another clock;
+.Dv EVIOCGKEYCODE
+or
+.Dv EVIOCSKEYCODE
+on a device with no keymap, of a scan code it does not map, or setting a
+key code past
+.Dv KEY_MAX ;
+or an ioctl evdev does not know, as on Linux.
 .It Bq Er ENODEV
 An open of a node with no device, or any call on an open whose device has
 gone, such as a USB keyboard unplugged, or that was revoked.
@@ -793,7 +827,10 @@ gone, such as a USB keyboard unplugged, or that was revoked.
 .Dv EVIOCGREP
 or
 .Dv EVIOCSREP
-on a device that is no keyboard.
+on a device that is no keyboard;
+.Dv EVIOCSFF
+or
+.Dv EVIOCRMFF .
 .El
 .Sh SEE ALSO
 .Xr busybox-util-linux 1 ,

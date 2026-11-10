@@ -297,8 +297,8 @@ static uint32_t ev_compat_bytes(uint32_t nr)
 /** The bit set reads of type 'E', cut to their compat length: the native
  * request reads the set into a buffer here, and the caller gets as much of
  * it as Linux gives a compat caller, which is also the result. Every other
- * request of type 'E' passes, EVIOCSFF among them, which evdev does not
- * answer. */
+ * request of type 'E' passes, EVIOCSFF among them, whose compat struct
+ * ff_effect of 44 bytes evdev takes itself. */
 static long evdev(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned long arg)
 {
     uint8_t bits[EV_BITS_MAX];

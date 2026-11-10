@@ -126,6 +126,16 @@ void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down)
     evdev_report(dev, EV_SYN, SYN_REPORT, 0);
 }
 
+/* The keymap the last keyboard gave its event device. */
+static struct evdev_keymap given_keymap;
+
+/** Keep the keymap `dev` was given. */
+void evdev_set_keymap(struct evdev *dev, const struct evdev_keymap *km)
+{
+    (void)dev;
+    given_keymap = *km;
+}
+
 /** Keep the repeat's times `dev` was told. */
 void evdev_report_repeat(struct evdev *dev, int delay_ms, int period_ms)
 {
@@ -313,6 +323,46 @@ static void test_state(struct input_keyboard *kb1, struct input_keyboard *kb2)
     CHECK("a press of a held key and a release of a free one are dropped",
           n_kd == 2 && kd_count(KD_KEY_PRESS) == 1 && kd_count(KD_KEY_RELEASE) == 1);
     CHECK("the console's keyboard is told which keyboard", kd_events[0].device == kb1);
+}
+
+/** A set-1 keyboard's keymap, as Linux's atkbd keeps one: read and changed
+ * by scan code or place, and what the keyboard reports from then on. */
+static void test_keymap(struct input_keyboard *kb)
+{
+    static uint16_t map[INPUT_SET1_KEYMAP];
+    struct evdev_keymap_entry ke;
+    uint16_t old = 0;
+
+    input_keyboard_set1_keymap(kb, map);
+    k_memset(&ke, 0, sizeof(ke));
+    ke.scancode = 0x1E;
+    CHECK("keymap: scan code 0x1E is KEY_A",
+          given_keymap.get(given_keymap.ctx, &ke) == 0 && ke.keycode == KEY_A && ke.index == 0x1E);
+    ke.scancode = 0xC8;
+    CHECK("keymap: E0 48 is 0xC8, KEY_UP",
+          given_keymap.get(given_keymap.ctx, &ke) == 0 && ke.keycode == KEY_UP);
+    ke.scancode = 0x1FF;
+    CHECK("keymap: the map has 512 entries, the last unmapped",
+          given_keymap.get(given_keymap.ctx, &ke) == 0 && ke.keycode == 0);
+    ke.scancode = 0x200;
+    CHECK("keymap: past them is -EINVAL", given_keymap.get(given_keymap.ctx, &ke) == -EINVAL);
+    ke.by_index = 1;
+    ke.index = 0x1E;
+    CHECK("keymap: by place, the same entry", given_keymap.get(given_keymap.ctx, &ke) == 0 &&
+                                                  ke.scancode == 0x1E && ke.keycode == KEY_A);
+    ke.by_index = 0;
+    ke.scancode = 0x1E;
+    ke.keycode = KEY_C;
+    CHECK("keymap: 0x1E is set to KEY_C", given_keymap.set(given_keymap.ctx, &ke, &old) == 0 &&
+                                              old == KEY_A &&
+                                              !given_keymap.maps(given_keymap.ctx, KEY_A) &&
+                                              given_keymap.maps(given_keymap.ctx, KEY_C));
+    clear();
+    input_set1_event(kb, 0x1E);
+    input_set1_event(kb, 0x9E);
+    CHECK("keymap: and reports it", n_kd == 2 && kd_events[0].keycode == KEY_C);
+    ke.keycode = KEY_A;
+    given_keymap.set(given_keymap.ctx, &ke, &old);
 }
 
 /** The set-1 decoder of each keyboard, with its own prefix. */
@@ -563,6 +613,7 @@ int main(void)
 
     test_state(&kb1, &kb2);
     test_set1(&kb1, &kb2);
+    test_keymap(&kb1);
     test_raw();
     test_repeat(&kb1, &kb2);
     test_written(&kb1);

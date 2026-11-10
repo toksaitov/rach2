@@ -21,6 +21,7 @@
 
 #include "../evdev.h"
 #include "../input.h"
+#include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mouse.h"
 
@@ -1133,10 +1134,98 @@ static void setup_multipliers(struct hid_dev *hid, int use_max)
     }
 }
 
+/**
+ * The usage of `hid` that keymap entry `ke` names, as Linux's
+ * hidinput_find_key finds it: over the fields of the input reports, then
+ * of the output reports, the usages mapped to a key or to nothing are
+ * counted, and the one at place `ke->index`, or with usage `ke->scancode`,
+ * is the entry, its place stored in `*index`. NULL for none.
+ */
+static struct hid_usage *find_key(struct hid_dev *hid, const struct evdev_keymap_entry *ke,
+                                  uint32_t *index)
+{
+    uint32_t type, i, j, at = 0;
+
+    for (type = HID_INPUT_REPORT; type <= HID_OUTPUT_REPORT; type++) {
+        for (i = 0; i < hid->desc.nfields; i++) {
+            struct hid_field *f = field_at(hid, i);
+
+            if (hid->desc.reports[f->report].type != type) {
+                continue;
+            }
+            for (j = 0; j < f->maxusage; j++) {
+                struct hid_usage *u = &usages_of(hid, f)[j];
+
+                if (u->type != EV_KEY && u->type != 0) {
+                    continue;
+                }
+                if (ke->by_index ? at == ke->index : u->hid == ke->scancode) {
+                    *index = at;
+                    return u;
+                }
+                at++;
+            }
+        }
+    }
+    return NULL;
+}
+
+/** EVIOCGKEYCODE of a HID device, Linux's hidinput_getkeycode: the entry's
+ * usage is its scan code, and an unmapped one has KEY_RESERVED. */
+static int keymap_get(void *ctx, struct evdev_keymap_entry *ke)
+{
+    struct hid_usage *u = find_key((struct hid_dev *)ctx, ke, &ke->index);
+
+    if (!u) {
+        return -EINVAL;
+    }
+    ke->scancode = u->hid;
+    ke->keycode = u->type == EV_KEY ? u->code : 0;
+    return 0;
+}
+
+/** EVIOCSKEYCODE of a HID device, Linux's hidinput_setkeycode: the usage
+ * becomes that key. */
+static int keymap_set(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old)
+{
+    uint32_t index;
+    struct hid_usage *u = find_key((struct hid_dev *)ctx, ke, &index);
+
+    if (!u) {
+        return -EINVAL;
+    }
+    *old = u->type == EV_KEY ? u->code : 0;
+    u->code = ke->keycode;
+    u->type = EV_KEY;
+    return 0;
+}
+
+/** Whether a usage of the HID device at `ctx` is mapped to key `code`. */
+static int keymap_maps(void *ctx, uint16_t code)
+{
+    struct hid_dev *hid = (struct hid_dev *)ctx;
+    uint32_t i, j;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        struct hid_field *f = field_at(hid, i);
+
+        for (j = 0; j < f->maxusage; j++) {
+            const struct hid_usage *u = &usages_of(hid, f)[j];
+
+            if (u->type == EV_KEY && u->code == code &&
+                hid->desc.reports[f->report].type != HID_FEATURE_REPORT) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /** Register input device `in` of `hid` with its capabilities, as Linux's
  * `input_register_device` takes what hid-input set. */
 static void register_input(struct hid_dev *hid, struct hid_input *in)
 {
+    struct evdev_keymap km;
     struct evdev *dev;
     uint32_t i, j;
     unsigned code;
@@ -1150,6 +1239,11 @@ static void register_input(struct hid_dev *hid, struct hid_input *in)
         evdev_describe(dev, hid->phys, test_bit(in->msc, MSC_SCAN) ? EVDEV_SCAN : 0);
     }
     in->dev = dev;
+    km.get = keymap_get;
+    km.set = keymap_set;
+    km.maps = keymap_maps;
+    km.ctx = hid;
+    evdev_set_keymap(dev, &km);
     evdev_set_uniq(dev, hid->uniq);
     evdev_set_version(dev, hid->version);
     for (code = 0; code <= REL_MAX; code++) {
