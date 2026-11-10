@@ -7391,6 +7391,7 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
     vm_space_t *vm = &current_proc->mm->vm;
     vma_t *r = vm_find(vm, addr);
     uintptr_t end = addr;
+    int32_t rc = -EPERM;
 
     if (!r || r->start != addr || r->pgoff != 0 || filemap_shmem(r->file) != sh) {
         return -EINVAL;
@@ -7399,17 +7400,25 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
         end = r->end;
         r = vm_find(vm, end);
     }
-    if (vm_sealed_at(vm, addr, end) < end) {
-        return -EPERM;
+    while (addr < end) {
+        uintptr_t next = vm_find(vm, addr)->end;
+
+        if (vm_find(vm, addr)->prot & VM_PROT_SEALED) {
+            addr = next; /* kept, as Linux's shmdt ignores the unmap's EPERM */
+            continue;
+        }
+        if (vm_remove(vm, addr, next) != 0) {
+            vma_exhausted("shmdt");
+            rc = rc == 0 ? 0 : -ENOMEM; /* 0 once a region went */
+            break;
+        }
+        mmn_notify(current_proc->mm, MMN_UNMAP, addr, next);
+        unmap_user_range(_curr_dir, addr, next);
+        rc = 0;
+        addr = next;
     }
-    if (vm_remove(vm, addr, end) != 0) {
-        vma_exhausted("shmdt");
-        return -ENOMEM;
-    }
-    mmn_notify(current_proc->mm, MMN_UNMAP, addr, end);
-    unmap_user_range(_curr_dir, addr, end);
     vm_file_reap();
-    return 0;
+    return rc;
 }
 
 /** An address space is counted at the first process of `proc_list` that has
