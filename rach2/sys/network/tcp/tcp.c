@@ -2060,6 +2060,32 @@ void tcp_shutdown_send(struct socket *sock)
 }
 
 /**
+ * Give back the receive ring of a block in TIME_WAIT once no program can
+ * read from it: no socket holds the block, or the ring has nothing unread.
+ * TIME_WAIT takes no more data, so the ring is never filled again, and a
+ * block there keeps only itself, as Linux's TIME_WAIT keeps no buffers; a
+ * burst of short connections would otherwise hold a ring each for
+ * TCP_2MSL_TICKS and run the heap out. `recv_size` stays, for the window
+ * the block's acknowledgements give.
+ */
+static void tcp_time_wait_trim(struct tcb *tcb)
+{
+    if (tcb->state == TCP_TIME_WAIT && tcb->recv_buf &&
+        (!tcb->sock || tcb->recv_tail == tcb->recv_head)) {
+        kfree(tcb->recv_buf);
+        tcb->recv_buf = NULL;
+    }
+}
+
+/** Move `tcb` to TIME_WAIT for TCP_2MSL_TICKS, trimmed. */
+static void tcp_enter_time_wait(struct tcb *tcb)
+{
+    tcb->state = TCP_TIME_WAIT;
+    tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
+    tcp_time_wait_trim(tcb);
+}
+
+/**
  * FIN_WAIT_1, CLOSING, LAST_ACK and TIME_WAIT follow a shutdown: the FIN
  * went, and the block finishes the close without its socket, as it does
  * after a close. A detached block that still sends starts its limit,
@@ -2100,6 +2126,7 @@ void tcp_close(struct socket *sock)
         tcb->timewait_until = TCP_NOW() + TCP_ORPHAN_TICKS;
         break;
     case TCP_TIME_WAIT:
+        tcp_time_wait_trim(tcb);
         break;
     case TCP_CLOSED:
     case TCP_LISTEN:
@@ -2957,9 +2984,10 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             if (seq + payload_len == tcb->rcv_nxt) {
                 tcb->rcv_nxt++;
                 tcp_take_fin(tcb);
-                tcb->state = (tcb->state == TCP_FIN_WAIT_2) ? TCP_TIME_WAIT : TCP_CLOSING;
-                if (tcb->state == TCP_TIME_WAIT) {
-                    tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
+                if (tcb->state == TCP_FIN_WAIT_2) {
+                    tcp_enter_time_wait(tcb);
+                } else {
+                    tcb->state = TCP_CLOSING;
                 }
             }
             needs_ack = 1;
@@ -2985,8 +3013,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             if (seq + payload_len == tcb->rcv_nxt) {
                 tcb->rcv_nxt++;
                 tcp_take_fin(tcb);
-                tcb->state = TCP_TIME_WAIT;
-                tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
+                tcp_enter_time_wait(tcb);
             }
             needs_ack = 1;
         }
@@ -3001,8 +3028,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
             tcb->retx_flags = 0;
             tcb->rto_timer = 0;
-            tcb->state = TCP_TIME_WAIT;
-            tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
+            tcp_enter_time_wait(tcb);
         } else {
             if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
