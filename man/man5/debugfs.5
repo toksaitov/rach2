@@ -233,6 +233,87 @@ drops it;
 .Er EINVAL
 for bytes that are not a valid EDID.
 A read gives the override's bytes, or nothing.
+.It Pa dri/DEVICE/i915_capabilities
+Mode 0444, for a device bound by
+.Xr i915 4 ,
+as are the files below that begin with
+.Pa i915_ .
+The platform's name, its graphics, media and display versions, the
+device's flags, the GT's information and the driver's capabilities, one
+.Ql name: value
+a line, in Linux's order.
+.It Pa dri/DEVICE/i915_engine_info
+Mode 0444.
+The GT's awake count and the CS timestamp's frequency, then for each
+running engine its state, registers, requests on the chip with the
+commands of each, status page and interrupts, as Linux's
+.Fn intel_engine_dump
+prints them.
+.It Pa dri/DEVICE/i915_gem_objects
+Mode 0444.
+.Bd -literal -offset indent
+N shrinkable [0 free] objects, BYTES bytes
+system: total:0x%016x bytes
+.Ed
+.Pp
+and a line for stolen memory when the device has it.
+.It Pa dri/DEVICE/i915_frequency_info
+Mode 0444.
+The GT's frequency registers and limits, as Linux's
+.Fn rps_frequency_dump .
+.It Pa dri/DEVICE/i915_cdclk_info
+Mode 0444.
+The current and the highest CD clock and the highest dot clock, in kHz.
+.It Pa dri/DEVICE/i915_wedged
+Mode 0644.
+Reads 1 while the GPU is wedged, else 0.
+A write of a number, in any base
+.Fn kstrtoull
+takes, resets the engines its bits name by Linux's engine ids, as a hang
+does: the error state is captured, then each engine reset alone, or the
+whole GPU when that fails; a reset that succeeds ends a wedge.
+.Er EINVAL
+for anything that is not such a number.
+.It Pa dri/DEVICE/i915_gem_drop_caches
+Mode 0644.
+Reads
+.Ql 0x000003ff ,
+the bits a write takes, which are Linux's:
+.Dv DROP_UNBOUND
+(0x1) and
+.Dv DROP_BOUND
+(0x2) purge the objects marked
+.Dv I915_MADV_DONTNEED
+without and with bindings,
+.Dv DROP_RETIRE
+(0x4) retires the requests that have completed,
+.Dv DROP_ACTIVE
+(0x8) and
+.Dv DROP_IDLE
+(0x40) wait until the GPU is idle,
+.Dv DROP_SHRINK_ALL
+(0x20) purges both kinds, and
+.Dv DROP_RESET_ACTIVE
+(0x80) wedges a GPU that is not idle within 200 ms and resets it after.
+.Dv DROP_FREED ,
+.Dv DROP_RESET_SEQNO
+and
+.Dv DROP_RCU
+do nothing.
+The wait for idle ends with
+.Er EINTR
+at a signal.
+.It Pa dri/DEVICE/i915_error_state
+Mode 0644.
+The text of the first error state captured at a hang since boot or the
+last clear, in Linux's format, with the ring and status page of each engine
+that hung in Linux's ascii85; empty when there is none.
+The text is made at the open.
+Any write clears the state.
+.It Pa dri/DEVICE/i915_gpu_info
+Mode 0644.
+The same text for a state captured of every engine at the open, without
+a hang.
 .It Pa dri/DEVICE/i915_fake
 Mode 0600.
 Present for a device bound to the fake chip of

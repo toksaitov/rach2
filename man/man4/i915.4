@@ -695,6 +695,10 @@ describes.
 The card node of a bound device.
 .It Pa /dev/dri/renderD Ns Ar M
 Its render node.
+.It Pa /sys/kernel/debug/dri/DEVICE/i915_*
+Linux's debugfs files that IGT opens, as
+.Xr debugfs 5
+lists them.
 .It Pa /sys/kernel/debug/dri/DEVICE/i915_fake
 The fault file of a device bound to the fake chip.
 .El
@@ -735,6 +739,14 @@ allowed, or when it would put max below min or min above max, and with
 .Er ERANGE
 when it does not fit in 32 bits.
 A new max or min moves the frequency into the new limits at once.
+.Pp
+The card's file
+.Pa error ,
+mode 0600, gives the first error state captured at a hang, in the text of
+.Pa i915_error_state ,
+or
+.Ql No error state collected ;
+any write clears it, as IGT does before a test of hangs.
 .Pp
 Below it,
 .Pa power

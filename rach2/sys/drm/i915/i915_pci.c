@@ -402,6 +402,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
          i915->drm.index);
     i915_sysfs_register(i915);
     i915_gem_shrinker_register(i915);
+    i915_debugfs_register(i915);
     i915->attached = 1;
     if (i915->hw.ops->attach) {
         i915->hw.ops->attach(&i915->hw, i915);
