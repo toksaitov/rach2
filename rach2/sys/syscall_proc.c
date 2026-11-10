@@ -806,6 +806,10 @@ struct exec_state {
     struct fs_struct *fs_held; /* holds off CLONE_FS (`exec_ids`) */
     int path_end;              /* how `path` named a directory by its end */
     char path[VFS_PATH_MAX];
+    /* The base name of a `#!` script, which names the new image's comm in
+     * place of its interpreter's, as Linux names it by bprm->filename; empty
+     * for a program run directly. */
+    char script[16];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
 };
 
@@ -838,6 +842,21 @@ static void exec_release(void)
     current_proc->exec_ws = NULL;
 }
 
+/** Keep the base name of the script at `s->path` in `s->script`, which
+ * names the new image's comm in place of its interpreter's. */
+static void exec_keep_script(struct exec_state *s)
+{
+    const char *base = s->path;
+    const char *p;
+
+    for (p = s->path; *p; p++) {
+        if (*p == '/') {
+            base = p + 1;
+        }
+    }
+    k_strncpy(s->script, base, sizeof(s->script) - 1);
+}
+
 /**
  * Rewrite an exec of a script into an exec of its interpreter.
  *
@@ -854,7 +873,8 @@ static void exec_release(void)
  * The arguments on the new stack are rewritten as Linux's `load_script`
  * rewrites them: argv[0] is taken away, and the script's path, the argument
  * and the interpreter are put below the rest, under the limits the caller's
- * strings met. The caller's `path` becomes the interpreter's. The script is
+ * strings met. The caller's `path` becomes the interpreter's, and its base
+ * name is kept in `script` for the new image's comm. The script is
  * read through `read` over `ctx`, which `exec_script` makes `exec_file_read`
  * over the program it opened.
  *
@@ -941,6 +961,7 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
     }
     (*argc)++;
 
+    exec_keep_script(s);
     k_strncpy(s->path, interp, sizeof(s->path) - 1);
     s->path[sizeof(s->path) - 1] = '\0';
     rc = canonicalize_named(s->path, &s->path_end);
@@ -2134,7 +2155,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     ns_exec(current_proc);
     exec_ambient(current_proc, s->secure);
     exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
-    proc_set_comm(current_proc, s->path);
+    proc_set_comm(current_proc, s->script[0] ? s->script : s->path);
     for (sig = 1; sig <= KSIG_MAX; sig++) {
         if (current_proc->sigacts[sig].handler != KSIG_DFL &&
             current_proc->sigacts[sig].handler != KSIG_IGN) {
