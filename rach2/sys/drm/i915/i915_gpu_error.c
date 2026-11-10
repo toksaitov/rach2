@@ -8,6 +8,7 @@
 #include "i915_reg.h"
 
 #include "../../klog.h"
+#include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../rtc.h"
 
@@ -18,15 +19,29 @@ static uint32_t fault_reg(int i)
     return i == I915_RCS0 ? RING_FAULT_REG_RCS : RING_FAULT_REG_BCS;
 }
 
+/** Copy the string `src` into the `cap` bytes at `dst`, cut and ended. */
+static void copy_str(char *dst, uint32_t cap, const char *src)
+{
+    uint32_t i;
+
+    for (i = 0; src[i] && i + 1u < cap; i++) {
+        dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
+
 /**
  * Read `e`'s registers, as Linux's engine_record_registers on graphics 7,
- * its breadcrumb, the ring's dwords from its head, and its requests on the
- * chip not yet completed, as the error state keeps them.
+ * the render engine's slice, sampler and row INSTDONE as
+ * intel_engine_get_instdone reads them, its breadcrumb, its resets, copies
+ * of its status page and ring, and its requests on the chip not yet
+ * completed, the first of them the active one, as record_context and
+ * engine_record_execlists' ring counterpart keep it.
  */
 static void capture_engine(struct drm_i915_private *i915, int i, struct i915_error_engine *ee)
 {
     struct i915_engine *e = &i915->gt.engine[i];
-    uint32_t base = e->mmio_base, at, n;
+    uint32_t base = e->mmio_base, n;
     struct i915_request *rq;
 
     ee->rc_psmi = i915_uncore_read(i915, RING_PSMI_CTL(base));
@@ -40,6 +55,14 @@ static void capture_engine(struct drm_i915_private *i915, int i, struct i915_err
     ee->ccid = i915_uncore_read(i915, CCID(base));
     ee->bbstate = i915_uncore_read(i915, RING_BBSTATE(base));
     ee->instdone = i915_uncore_read(i915, RING_INSTDONE(base));
+    if (i == I915_RCS0) {
+        /* Graphics 7 has no steering: each subslice reads the same. */
+        ee->sc_instdone = i915_uncore_read(i915, GEN7_SC_INSTDONE);
+        for (n = 0; n < I915_ERROR_SUBSLICES; n++) {
+            ee->sampler_instdone[n] = i915_uncore_read(i915, GEN7_SAMPLER_INSTDONE);
+            ee->row_instdone[n] = i915_uncore_read(i915, GEN7_ROW_INSTDONE);
+        }
+    }
     ee->instpm = i915_uncore_read(i915, RING_INSTPM(base));
     ee->acthd = i915_uncore_read(i915, RING_ACTHD(base));
     ee->start = i915_uncore_read(i915, RING_START(base));
@@ -48,26 +71,42 @@ static void capture_engine(struct drm_i915_private *i915, int i, struct i915_err
     ee->ctl = i915_uncore_read(i915, RING_CTL(base));
     ee->mode = i915_uncore_read(i915, RING_MI_MODE(base));
     ee->hws_pga = i915_uncore_read(i915, e->hws_pga);
+    ee->gfx_mode = i915_uncore_read(i915, RING_MODE_GEN7(base));
+    ee->pp_dir_base = i915_uncore_read(i915, RING_PP_DIR_BASE(base));
     ee->hws_seqno = e->hws ? ((volatile uint32_t *)e->hws)[I915_GEM_HWS_SEQNO] : 0;
     ee->seqno = e->seqno;
-    if (e->ring) {
-        at = ee->head & HEAD_ADDR & (e->ring_size - 1u);
-        for (n = 0; n < I915_ERROR_RING_DW; n++) {
-            ee->ring[n] = e->ring[at / 4u];
-            at = (at + 4u) & (e->ring_size - 1u);
-        }
+    ee->reset_count = i915->gt.reset_engine_count[i915_engine_uabi_class(e)];
+    ee->hws_ggtt = e->hws_ggtt;
+    ee->ring_ggtt = e->ring_ggtt;
+    if (e->hws) {
+        k_memcpy(ee->hws, (const void *)e->hws, sizeof(ee->hws));
+    }
+    if (e->ring && e->ring_size == sizeof(ee->ring)) {
+        k_memcpy(ee->ring, e->ring, sizeof(ee->ring));
     }
     for (rq = e->requests; rq && rq->submitted && ee->nrequests < I915_ERROR_REQUESTS;
          rq = rq->next) {
         struct i915_error_request *er;
+        struct i915_gem_context *ctx = rq->ce ? rq->ce->ctx : 0;
 
         if (i915_engine_passed(e, rq->seqno)) {
             continue;
         }
+        if (ee->nrequests == 0) {
+            ee->rq_head = rq->head;
+            ee->rq_post = rq->postfix;
+            ee->rq_tail = rq->tail;
+            if (ctx) {
+                copy_str(ee->comm, sizeof(ee->comm), ctx->comm);
+                ee->pid = ctx->pid;
+                ee->guilty = ctx->guilty_count;
+                ee->active = ctx->active_count;
+            }
+        }
         er = &ee->rq[ee->nrequests++];
         er->seqno = rq->seqno;
-        er->ctx_id = rq->ce && rq->ce->ctx ? rq->ce->ctx->id : 0;
-        er->pid = rq->ce && rq->ce->ctx ? rq->ce->ctx->pid : 0;
+        er->ctx_id = ctx ? ctx->id : 0;
+        er->pid = ctx ? ctx->pid : 0;
         er->head = rq->head;
         er->tail = rq->tail;
         er->batch = rq->batch;
@@ -150,27 +189,48 @@ static void make_msg(struct drm_i915_private *i915, struct i915_gpu_error *err)
     }
 }
 
-void i915_gpu_error_capture(struct drm_i915_private *i915, uint32_t engine_mask, const char *reason)
+struct i915_gpu_error *i915_gpu_coredump(struct drm_i915_private *i915, uint32_t engine_mask,
+                                         const char *reason)
 {
     struct i915_gpu_error *err = (struct i915_gpu_error *)kzalloc(sizeof(*err));
     int i;
 
     if (!err) {
-        klog(KLOG_ERR, "i915", "hang: no memory for the error state");
-        return;
+        return 0;
     }
     err->ticks = rtc_ticks_now();
     err->engine_mask = engine_mask;
-    (void)put(err->reason, sizeof(err->reason), 0, reason);
+    copy_str(err->reason, sizeof(err->reason), reason ? reason : "");
+    err->reset_count = i915->gt.reset_count;
+    err->awake = i915->gt.awake;
     err->eir = i915_uncore_read(i915, EIR);
     err->pgtbl_er = i915_uncore_read(i915, PGTBL_ER);
+    err->gtier = i915_uncore_read(i915, GTIER);
+    for (i = 0; i < I915_NUM_FENCES; i++) {
+        err->fence[i] = (uint64_t)i915_uncore_read(i915, FENCE_REG_GEN6_HI(i)) << 32 |
+                        i915_uncore_read(i915, FENCE_REG_GEN6_LO(i));
+    }
+    err->forcewake = i915_uncore_read(i915, FORCEWAKE_MT);
     err->error_gen6 = i915_uncore_read(i915, ERROR_GEN6);
     err->done_reg = i915_uncore_read(i915, DONE_REG);
+    err->err_int = i915_uncore_read(i915, GEN7_ERR_INT);
+    err->derrmr = i915_uncore_read(i915, DERRMR);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if (i915->gt.engine[i].running) {
             err->engine[i].hung = (engine_mask >> i) & 1u;
             capture_engine(i915, i, &err->engine[i]);
         }
+    }
+    return err;
+}
+
+void i915_gpu_error_capture(struct drm_i915_private *i915, uint32_t engine_mask, const char *reason)
+{
+    struct i915_gpu_error *err = i915_gpu_coredump(i915, engine_mask, reason);
+
+    if (!err) {
+        klog(KLOG_ERR, "i915", "hang: no memory for the error state");
+        return;
     }
     make_msg(i915, err);
     klog(KLOG_INFO, "i915", "hang: %s", err->msg);

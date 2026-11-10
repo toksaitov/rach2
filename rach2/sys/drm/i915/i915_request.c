@@ -525,6 +525,17 @@ static void request_release(struct i915_request *rq)
     dma_fence_put(&rq->fence.base);
 }
 
+/** Park the GT, which is awake, and count the ticks it was awake, as
+ * Linux's __gt_park adds to its awake time. */
+static void gt_park(struct drm_i915_private *i915)
+{
+    struct i915_gt *gt = &i915->gt;
+
+    gt->awake = 0;
+    gt->awake_ticks += rtc_ticks_now() - gt->unpark_ticks;
+    i915_gt_park(i915);
+}
+
 /**
  * Take from `e`'s list each request that `done` says is finished, oldest
  * first, its fence signalled, and release it; the user interrupt is let go
@@ -575,8 +586,7 @@ void i915_retire_requests(struct drm_i915_private *i915)
         busy |= gt->engine[i].requests != 0;
     }
     if (gt->awake && !busy) {
-        gt->awake = 0;
-        i915_gt_park(i915);
+        gt_park(i915);
     }
 }
 
@@ -824,6 +834,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     }
     if (!i915->gt.awake) {
         i915->gt.awake = 1;
+        i915->gt.unpark_ticks = rtc_ticks_now();
         i915_gt_unpark(i915);
         /* The worker beats while the GT is awake. */
         i915_hangcheck_unpark(i915);
@@ -870,6 +881,7 @@ int32_t i915_request_add(struct i915_request *rq)
 
     e->reserved = 0;
     rq->postfix = e->tail;
+    rq->emitted = rtc_ticks_now();
     n = breadcrumb_bytes(i915, e) / 4u;
     cs = i915_ring_begin(e, i915, n);
     if (!cs) {
@@ -1226,8 +1238,7 @@ void i915_requests_unplug(struct drm_i915_private *i915)
         e->kernel_ce = 0;
     }
     if (gt->awake) {
-        gt->awake = 0;
-        i915_gt_park(i915);
+        gt_park(i915);
     }
     i915_gt_pages_unmap(i915, gt->scratch, 1, gt->scratch_ggtt);
     gt->scratch = 0;
@@ -1247,7 +1258,6 @@ void i915_requests_cancel(struct drm_i915_private *i915)
         engine_retire(i915, &gt->engine[i], 1);
     }
     if (gt->awake) {
-        gt->awake = 0;
-        i915_gt_park(i915);
+        gt_park(i915);
     }
 }

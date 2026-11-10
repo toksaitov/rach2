@@ -54,7 +54,7 @@ static int purgeable(const struct drm_i915_gem_object *obj)
     return obj->pages_pin_count == bound;
 }
 
-uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
+uint32_t i915_gem_shrink_flags(struct drm_i915_private *i915, uint32_t want, uint32_t flags)
 {
     struct drm_gem_object *base;
     uint32_t got = 0;
@@ -65,6 +65,9 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
         if (base->funcs != &i915_gem_object_funcs || !purgeable(obj)) {
             continue;
         }
+        if (!(flags & (obj->vmas ? I915_SHRINK_BOUND : I915_SHRINK_UNBOUND))) {
+            continue;
+        }
         if (i915_gem_object_unbind(obj) != 0 || obj->pages_pin_count) {
             continue;
         }
@@ -72,6 +75,11 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
         i915->gem.purged++;
     }
     return got;
+}
+
+uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
+{
+    return i915_gem_shrink_flags(i915, want, I915_SHRINK_BOUND | I915_SHRINK_UNBOUND);
 }
 
 /** The shrinker's `shrink`, which reclaim calls under the big kernel lock:

@@ -371,6 +371,10 @@ struct i915_ppgtt {
  * `submit_next` links the devices whose requests may wait for fences, for
  * the submission worker, and `submit_listed` says the device is on that
  * list. `ppgtt` is the aliasing PPGTT, made with the rings.
+ * `init_ticks` is the tick at which the GT was made, from which the
+ * error state counts its uptime; `awake_ticks` counts the ticks the GT
+ * was awake before its last park, and `unpark_ticks` is the tick of its
+ * last unpark, as Linux's intel_gt_get_awake_time adds them.
  */
 struct i915_gt {
     uint64_t ggtt_top;
@@ -390,6 +394,9 @@ struct i915_gt {
     uint8_t submit_listed;
     struct drm_i915_private *submit_next;
     struct i915_ppgtt ppgtt;
+    uint64_t init_ticks;
+    uint64_t awake_ticks;
+    uint64_t unpark_ticks;
 };
 
 /*
@@ -2002,6 +2009,18 @@ uint32_t i915_gem_object_truncate(struct drm_i915_gem_object *obj);
  */
 uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want);
 
+/* Which objects `i915_gem_shrink_flags` purges, Linux's I915_SHRINK_
+ * bits: those with no binding, and those with bindings, undone first. */
+#define I915_SHRINK_UNBOUND 0x1u
+#define I915_SHRINK_BOUND   0x2u
+
+/**
+ * Purge as `i915_gem_shrink` does, the objects `flags` names alone, as
+ * Linux's i915_gem_shrink does with no swap, where only purgeable objects
+ * give their pages back. Does not sleep. Returns the frames freed.
+ */
+uint32_t i915_gem_shrink_flags(struct drm_i915_private *i915, uint32_t want, uint32_t flags);
+
 /** Register the device's shrinker with reclaim, once it is bound. */
 void i915_gem_shrinker_register(struct drm_i915_private *i915);
 
@@ -2719,7 +2738,8 @@ struct i915_file {
  * before. `head`, `infix`, `postfix` and `tail` are its ring offsets: its
  * first command, its payload after the invalidation and the switch, its
  * breadcrumb, and past its end. `batch` is the GTT address of the batch
- * its payload starts, 0 for none, for the error state.
+ * its payload starts, 0 for none, for the error state. `emitted` is the
+ * tick at which it was added, by which debugfs gives its age.
  *
  * Submission. `awaits` counts what must happen before the chip may run it:
  * the fences it waits for that have not signalled, the requests on other
@@ -2757,6 +2777,7 @@ struct i915_request {
     uint32_t postfix;
     uint32_t tail;
     uint32_t batch;
+    uint64_t emitted;
     uint8_t switched;
     uint8_t set_context;
     uint8_t was_valid;
@@ -3033,15 +3054,24 @@ void i915_gt_set_wedged(struct drm_i915_private *i915);
 /* The requests of an engine the error state keeps, and the ring's dwords
  * at its head. */
 #define I915_ERROR_REQUESTS 8
-#define I915_ERROR_RING_DW  16
+
+/* The subslices of Haswell GT2's one slice, whose sampler and row
+ * INSTDONE the error state keeps. */
+#define I915_ERROR_SUBSLICES 2
 
 /*
  * One engine in the error state, Linux's intel_engine_coredump: whether
  * it hung, its registers as engine_record_registers reads them on graphics
- * 7, the breadcrumb and the last sequence number emitted, the ring's
- * I915_ERROR_RING_DW dwords from its head, and its requests on the chip
- * not yet completed, oldest first, each with its context's id and
- * process, its ring offsets and the batch it starts, the batch's head.
+ * 7, with the render engine's slice, sampler and row INSTDONE, the
+ * breadcrumb and the last sequence number emitted, its resets so far, and
+ * its requests on the chip not yet completed, oldest first, each with its
+ * context's id and process, its ring offsets and the batch it starts, the
+ * batch's head. The first of those requests is the active one, whose
+ * head, breadcrumb and tail are `rq_head`, `rq_post` and `rq_tail`, and
+ * whose context is named by `comm` and `pid`, with its `guilty` and
+ * `active` counts. `hws` and `ring` are copies of the status page and of
+ * the whole ring, at `hws_ggtt` and `ring_ggtt`, as Linux's coredump keeps
+ * their "HW Status" and "ring" objects.
  */
 struct i915_error_request {
     uint32_t seqno;
@@ -3056,28 +3086,55 @@ struct i915_error_engine {
     uint8_t hung;
     uint32_t start, head, tail, ctl, mode;
     uint32_t acthd, ipehr, ipeir, instdone, instps, instpm;
+    uint32_t sc_instdone;
+    uint32_t sampler_instdone[I915_ERROR_SUBSLICES];
+    uint32_t row_instdone[I915_ERROR_SUBSLICES];
     uint32_t esr, faddr, bbaddr, bbstate, ccid, rc_psmi, fault_reg, hws_pga;
+    uint32_t gfx_mode, pp_dir_base;
     uint32_t hws_seqno;
     uint32_t seqno;
-    uint32_t ring[I915_ERROR_RING_DW];
+    uint32_t reset_count;
+    uint32_t rq_head, rq_post, rq_tail;
+    char comm[16];
+    uint32_t pid;
+    uint32_t guilty, active;
+    uint32_t hws_ggtt, ring_ggtt;
+    uint32_t hws[I915_GTT_PAGE_SIZE / 4u];
+    uint32_t ring[I915_RING_SIZE / 4u];
     uint32_t nrequests;
     struct i915_error_request rq[I915_ERROR_REQUESTS];
 };
 
 /*
- * The GPU's state at a hang, Linux's i915_gpu_coredump: when, which
- * engines hung, why, the message Linux logs ("GPU HANG: ecode 7:M:E", with
- * the first hung request's process), the GT's error registers, and each
- * engine's state.
+ * The GPU's state at a hang, Linux's i915_gpu_coredump: when, in ticks,
+ * which engines hung, why, the message Linux logs ("GPU HANG: ecode
+ * 7:M:E", with the first hung request's process), empty for a state not
+ * kept, the whole GPU's resets so far, whether the GT was awake, the GT's
+ * error and interrupt registers, the fences, and each engine's state.
  */
 struct i915_gpu_error {
     uint64_t ticks;
     uint32_t engine_mask;
     char reason[80];
     char msg[96];
+    uint32_t reset_count;
+    uint8_t awake;
     uint32_t eir, pgtbl_er, error_gen6, done_reg;
+    uint32_t gtier, forcewake, err_int, derrmr;
+    uint64_t fence[I915_NUM_FENCES];
     struct i915_error_engine engine[I915_NUM_ENGINES];
 };
+
+/**
+ * Capture the GPU's state now, as Linux's i915_gpu_coredump, with the
+ * engines of `engine_mask` marked hung and `reason` kept, but no message
+ * made and nothing kept by the device. The caller owns the state and
+ * frees it with `kfree`.
+ *
+ * @return the state, or NULL when memory is short.
+ */
+struct i915_gpu_error *i915_gpu_coredump(struct drm_i915_private *i915, uint32_t engine_mask,
+                                         const char *reason);
 
 /**
  * Capture the GPU's state for a hang of the engines `engine_mask`, as
@@ -3105,5 +3162,15 @@ int i915_gem_context_mark_guilty(struct intel_context *ce, uint64_t now);
 /** Count a request of `ce` lost in a reset it did not cause, as Linux's
  * mark_innocent. */
 void i915_gem_context_mark_innocent(struct intel_context *ce);
+
+/**
+ * Make the driver's files in the device's debugfs directory, Linux's
+ * i915_debugfs_register with i915_gpu_error_debugfs_register and
+ * intel_cdclk_debugfs_register as far as IGT's tests use them (the
+ * Readme's debugfs section), and the error state's `error` in its card's
+ * directory in /sys, as Linux's i915_setup_error_capture. After the
+ * device is registered; the files go with its directories at the unplug.
+ */
+void i915_debugfs_register(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */
