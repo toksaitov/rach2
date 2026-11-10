@@ -30,4 +30,12 @@ void k_panic_begin(void);
 /** Whether this processor has begun a panic. */
 int k_panicking(void);
 
+/**
+ * Called by `k_panic_begin` on the processor that panics, with interrupts
+ * off, before anything else, to leave the processor as a reset needs it:
+ * vmx.c's turns VMX off, which blocks INIT while on. NULL when none is
+ * set. It must not fault.
+ */
+extern void (*k_panic_hook)(void);
+
 #endif

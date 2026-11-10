@@ -108,6 +108,8 @@ extern void k_stop(void) K_NORETURN;
 static volatile unsigned int panic_owner;
 static volatile int others_stopped;
 
+void (*k_panic_hook)(void);
+
 /**
  * Only the first processor to panic reports. A second, which an NMI sent to
  * every processor at once can make, or a panic the stop request did not
@@ -129,6 +131,9 @@ void k_panic_begin(void)
     unsigned int owner;
 
     arch_irq_disable();
+    if (k_panic_hook) {
+        k_panic_hook();
+    }
     owner = arch_atomic_cmpxchg(&panic_owner, 0u, me);
     if (owner != 0u && owner != me) {
         k_stop();
