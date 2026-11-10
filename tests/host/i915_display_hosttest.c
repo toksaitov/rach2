@@ -980,30 +980,38 @@ static int crc_line(uint32_t *frame_no, uint32_t *crc)
     return sscanf(buf, "0x%x 0x%x", frame_no, crc) == 2;
 }
 
-/** The CRC of pipe A: "pipe" refused on the eDP pipe with its fitter off,
- * "auto" the primary plane's, its first frame dropped, a line a frame with
- * the vblank's count and the chip's result. */
+/** The CRC of pipe A: a source forces the eDP pipe's fitter through by a
+ * mode set and the release undoes it; "auto" is the fitter's output, its
+ * first frame dropped, a line a frame with the vblank's count and the
+ * chip's result. */
 static void row_crc(void)
 {
     uint32_t fr = 0, crc = 0;
 
-    CHECK(drm_crtc_crc_set_source(&pa->base, "pipe\n", 5) == -EINVAL,
-          "crc: pipe refused on the eDP pipe");
+    CHECK(drm_crtc_crc_set_source(&pa->base, "pipe\n", 5) == 5, "crc: pipe taken on the eDP pipe");
     CHECK(drm_crtc_crc_set_source(&pa->base, "auto", 4) == 4, "crc: auto");
     CHECK(drm_crtc_crc_open(&pa->base) == 0, "crc: crc/data opened");
-    CHECK(reg(PIPE_CRC_CTL(0)) == (PIPE_CRC_ENABLE | PIPE_CRC_SOURCE_PRIMARY_IVB),
-          "crc: auto is the primary plane");
+    CHECK(reg(PIPE_CRC_CTL(0)) == (PIPE_CRC_ENABLE | PIPE_CRC_SOURCE_PF_IVB),
+          "crc: auto is the fitter's output");
+    CHECK(pa->cfg.force_thru && !pa->cfg.pfit &&
+              (reg(TRANS_DDI_FUNC_CTL(I915_TRANS_EDP)) & TRANS_DDI_EDP_INPUT_MASK) ==
+                  TRANS_DDI_EDP_INPUT_A_ONOFF &&
+              (reg(TRANSCONF(I915_TRANS_EDP)) & TRANSCONF_ENABLE),
+          "crc: the eDP input set through the fitter's well by a mode set");
     frame();
     CHECK(!drm_crtc_crc_ready(&pa->base), "crc: the first frame dropped");
     frame();
     CHECK(crc_line(&fr, &crc) && fr == (uint32_t)pa->base.vblank.count &&
               crc == reg(PIPE_CRC_RES_HSW(0)) &&
-              crc == i915_model_pipe_crc(&model, 0, PIPE_CRC_ENABLE | PIPE_CRC_SOURCE_PRIMARY_IVB),
+              crc == i915_model_pipe_crc(&model, 0, PIPE_CRC_ENABLE | PIPE_CRC_SOURCE_PF_IVB),
           "crc: the frame's count and the chip's CRC");
     frame();
     CHECK(crc_line(&fr, &crc) && fr == (uint32_t)pa->base.vblank.count, "crc: a line a frame");
     drm_crtc_crc_release(&pa->base);
-    CHECK(reg(PIPE_CRC_CTL(0)) == 0 && pa->crc_ctl == 0, "crc: stopped at the release");
+    CHECK(reg(PIPE_CRC_CTL(0)) == 0 && pa->crc_ctl == 0 && !pa->cfg.force_thru &&
+              (reg(TRANS_DDI_FUNC_CTL(I915_TRANS_EDP)) & TRANS_DDI_EDP_INPUT_MASK) ==
+                  TRANS_DDI_EDP_INPUT_A_ON,
+          "crc: stopped at the release, the eDP input past the fitter again");
     CHECK(drm_crtc_crc_set_source(&pa->base, "plane2", 6) == 6 &&
               drm_crtc_crc_open(&pa->base) == 0 &&
               reg(PIPE_CRC_CTL(0)) == (PIPE_CRC_ENABLE | PIPE_CRC_SOURCE_SPRITE_IVB),
