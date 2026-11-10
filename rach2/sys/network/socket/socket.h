@@ -563,6 +563,9 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek);
 /** `socket_tcp_recv` without the wait (MSG_DONTWAIT): SOCK_EAGAIN where it
  * would wait. */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek);
+/** Copy queued stream bytes from `off` past the next unread one, leaving
+ * them queued; 0 when there are none. */
+int socket_tcp_peek_at(struct socket *sock, uint32_t off, uint8_t *buf, int len);
 /** Wake every waiter of `sock` on the peer's FIN or the connection's end. */
 void socket_tcp_fin(struct socket *sock);
 

@@ -281,7 +281,6 @@ rach2/sys/syscall_net.c:do_sendto_opt params 7 one system call's contract, its c
 rach2/sys/syscall_net.c:do_sendto_opt complexity 36 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_setsockopt lines 133 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:put_cmsg params 8 the parameters are the fields of one message; a struct for them would be filled and unpacked once
-rach2/sys/syscall_net.c:do_recvmsg lines 105 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendmsg lines 105 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
