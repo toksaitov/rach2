@@ -17,9 +17,11 @@
  * comparison holds. The arguments Linux 6.12 refuses must be refused with
  * its errors: EINVAL for the sizes, FUTEX2_NUMA, an unknown flag, a mask of
  * 0, a value or mask past 32 bits, an unaligned word, a bad deadline or
- * clock, futex_requeue's flags, NULL array or negative count; EAGAIN for a
- * requeue whose word differs; ENOSYS for an unknown operation; EFAULT for a
- * word the process cannot reach; and 0 for a futex_wake of 0.
+ * clock, futex_requeue's flags, its two entries with unequal flags, a NULL
+ * array or negative count; EAGAIN for a requeue whose word differs; ENOSYS
+ * for an unknown operation; and EFAULT for a word the process cannot reach.
+ * A futex_wake of 0 must return 0 and leave a waiter, which a requeue
+ * proves asleep, for a later wake of 1.
  *
  * The probe writes etude's report records (probe_report.h) for the case
  * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
