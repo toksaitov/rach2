@@ -436,8 +436,76 @@ gives a context's batches that were active at a hang and pending behind
 one, and to a privileged process the resets of the device.
 .Ss Submission
 .Dv DRM_IOCTL_I915_GEM_EXECBUFFER2
-and its variants are not yet served and fail with
-.Er EINVAL .
+and
+.Dv DRM_IOCTL_I915_GEM_EXECBUFFER2_WR
+run a batch on the render or blitter ring as Linux 6.18 does on Haswell.
+The objects are bound in the global GTT, at the offset each entry
+presumed when it is free, at a pinned offset under
+.Dv EXEC_OBJECT_PINNED ,
+or elsewhere, evicting what the GPU no longer uses and at last waiting
+for it to idle; an object that moved has its offset written back with
+bit 0 set.
+Relocations by handle, or by index under
+.Dv I915_EXEC_HANDLE_LUT ,
+are written unless the presumed offset was right, and their presumed
+offsets written back.
+.Dv I915_EXEC_NO_RELOC ,
+.Dv I915_EXEC_BATCH_FIRST ,
+.Dv EXEC_OBJECT_WRITE ,
+.Dv EXEC_OBJECT_ASYNC ,
+.Dv EXEC_OBJECT_NEEDS_GTT ,
+.Dv EXEC_OBJECT_SUPPORTS_48B_ADDRESS
+and
+.Dv EXEC_OBJECT_PAD_TO_SIZE
+mean what they mean on Linux.
+A batch is ordered after the last writer of each object it uses, unless
+the object is
+.Dv EXEC_OBJECT_ASYNC ,
+after the sync file of
+.Dv I915_EXEC_FENCE_IN ,
+after the submission of the request of
+.Dv I915_EXEC_FENCE_SUBMIT ,
+and after each syncobj of
+.Dv I915_EXEC_FENCE_ARRAY
+marked
+.Dv I915_EXEC_FENCE_WAIT ;
+.Dv I915_EXEC_FENCE_OUT
+returns a sync file in the upper half of
+.Fa rsvd2 ,
+and each syncobj marked
+.Dv I915_EXEC_FENCE_SIGNAL
+takes the batch's fence.
+.Dv I915_EXEC_GEN7_SOL_RESET
+clears the four streamout write offsets on the render ring.
+.Pp
+The call fails with
+.Er EINVAL
+for a bad flag, count, offset, alignment, relocation or engine, for
+.Dv I915_EXEC_FENCE_IN
+with
+.Dv I915_EXEC_FENCE_SUBMIT ,
+for any extension, since timeline fences are not served, and for
+.Dv I915_EXEC_GEN7_SOL_RESET
+on the blitter;
+.Er ENOENT
+for no such object, context or syncobj, or a closed context;
+.Er EPERM
+for
+.Dv I915_EXEC_SECURE
+from other than a privileged master;
+.Er EACCES
+for a batch with a length from an unprivileged caller, since the command
+parser is not yet here;
+.Er ENOSPC
+when the objects do not fit in the GTT;
+.Er EAGAIN
+when a userptr object's pages changed;
+.Er EFAULT
+for memory that cannot be read; and
+.Er EIO
+once the GPU is wedged.
+A privileged caller's batch with a length runs privileged, as Linux runs
+a parsed batch.
 .Ss Display
 The device has three CRTCs, pipes A to C, each with a primary plane, a
 sprite and a cursor, Linux's planes for Haswell; a TMDS encoder on DDI A;
