@@ -116,14 +116,6 @@ static void model_reset(int edid)
 
 /* ---- the kernel around the driver ---- */
 
-/** No log. */
-void klog(int level, const char *subsystem, const char *format, ...)
-{
-    (void)level;
-    (void)subsystem;
-    (void)format;
-}
-
 static int nomodeset;
 
 /** The boot line: `nomodeset` while the row sets it. */
@@ -704,11 +696,11 @@ static void setcrtc_on(void)
     id_bgr = addfb(ha, 1280, 800, DRM_FORMAT_BGRX8888);
     CHECK(id_a && id_c && id_e && id_bgr, "ADDFB2 in XRGB8888 and BGRX8888");
     CHECK(setcrtc(id_a, mode_of(1280, 800), 0, 0) == 0, "SETCRTC");
-    CHECK(dispi(VBE_DISPI_INDEX_ENABLE) == 0x41 && dispi(VBE_DISPI_INDEX_BPP) == 32 &&
+    CHECK(dispi(VBE_DISPI_INDEX_ENABLE) == 0xc1 && dispi(VBE_DISPI_INDEX_BPP) == 32 &&
               dispi(VBE_DISPI_INDEX_XRES) == 1280 && dispi(VBE_DISPI_INDEX_YRES) == 800 &&
               dispi(VBE_DISPI_INDEX_BANK) == 0 &&
               dispi(VBE_DISPI_INDEX_VIRT_HEIGHT) == VRAM_SIZE / 5120u,
-          "SETCRTC programs 1280x800 at 32 bits, the virtual height all of video memory");
+          "SETCRTC programs 1280x800 at 32 bits, the virtual height all of video memory, kept");
     CHECK(shows(bo_a->offset, 5120), "the offsets show the buffer");
     CHECK(mmio[BOCHS_MMIO_VGA] == 0x20 && qext_order() == BOCHS_ORDER_LITTLE,
           "the screen is shown, little-endian");
@@ -724,7 +716,7 @@ static void setcrtc_on(void)
 static void setcrtc_flip(void)
 {
     CHECK(setcrtc(id_a, mode_of(1280, 800), 0, 0) == 0 && flip(id_c) == 0, "PAGE_FLIP");
-    CHECK(shows(bo_c->offset, 5120) && dispi(VBE_DISPI_INDEX_ENABLE) == 0x41 &&
+    CHECK(shows(bo_c->offset, 5120) && dispi(VBE_DISPI_INDEX_ENABLE) == 0xc1 &&
               dispi(VBE_DISPI_INDEX_XRES) == 1280,
           "the flip shows the other buffer");
     dispi_set(VBE_DISPI_INDEX_XRES, 0x1234);
