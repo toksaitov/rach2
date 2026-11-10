@@ -633,6 +633,15 @@ void kvm_irq_free(struct kvm_vm *vm)
     (void)vm;
 }
 
+/** No I/O APIC in this model, so no pin has counts. */
+int kvm_ioapic_counts(struct kvm_vm *vm, uint32_t pin, uint32_t *counts)
+{
+    (void)vm;
+    (void)pin;
+    (void)counts;
+    return -1;
+}
+
 /** Legacy I/O is not part of this model. */
 int kvm_irq_io(struct kvm_vcpu *v)
 {
