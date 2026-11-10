@@ -88,6 +88,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 | Linux looks up an AMD L1 cache's eight-bit associativity in a table of sixteen | Linux 6.12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linux-looks-up-an-amd-l1-caches-eight-bit-associativity-in-a-table-of-sixteen) |
 | Linux reads a DMI release one byte past a structure that ends before it | Linux 6.12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linux-reads-a-dmi-release-one-byte-past-a-structure-that-ends-before-it) |
 | Weston's kiosk-shell moves a view that is NULL when Wine maps a window | Weston 14.0.2 | 80 | unreported, cause partly traced | [80-games/upstream.md](80-games/upstream.md#westons-kiosk-shell-moves-a-view-that-is-null-when-wine-maps-a-window) |
+| SuperTuxKart's profile summary counts simulation steps as frames | SuperTuxKart 1.4 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#supertuxkarts-profile-summary-counts-simulation-steps-as-frames) |
 | Linux's KVM drops the faults of an emulated task switch | Linux 6.12 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#linuxs-kvm-drops-the-faults-of-an-emulated-task-switch) |
 | QEMU's TCG gives no exit for an intercepted CR3 read | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-exit-for-an-intercepted-cr3-read) |
 | QEMU's TCG gives no selective CR0 write exit for LMSW | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-selective-cr0-write-exit-for-lmsw) |

@@ -45,3 +45,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the games-wine runner starts its Weston with `--shell=desktop`, where Wine's windows run under Linux and Rach2 alike. The desktop session's own Weston uses kiosk-shell, so a Windows program in the session meets the fault; task 80-4, which places Wine's window on the kiosk shell, must fix it in Weston or avoid it.
 * Status: unreported, cause partly traced: to the NULL view, not to where the view was lost.
 * Next: find which surface of the previous tree has no view; `desktop_surface_removed` resets the output's active tree only when the removed surface has focus (lines 940 to 970), so check with a watchpoint or an AddressSanitizer build whether `active_surface_tree` points into a destroyed `kiosk_shell_surface`; try Weston 14.0.x's newest release and 15; then report with the reproduction.
+
+## SuperTuxKart's profile summary counts simulation steps as frames
+
+* Project: SuperTuxKart 1.4, `src/modes/profile_world.cpp` and `src/main_loop.cpp` at the tag `1.4`; Debian's `supertuxkart` 1.4+dfsg-5+b1.
+* Fails: the profile mode's summary, "Number of frames: N time T, Average FPS: F" (`profile_world.cpp`, line 205), gives the count of simulation steps, not of frames drawn. `ProfileWorld::update` adds one to `m_frame_count` at each call (line 158), and the main loop calls the world once for each step of 1/120 s that the frame's time covers (`main_loop.cpp`, lines 487 to 490 and 663), so the "frames" are 120 a second of the race and the "FPS" is the race's steps over the wall clock. The triangles, draw calls and culled objects per frame that follow (lines 208 to 220) divide by the same count.
+* Found: 2026-11-10, on the testing host, milestone 80, task 80-7c, while choosing the frame times of the games-native cases; by reading, not on a machine.
+* Reproduction: run `supertuxkart --profile-time=90 --track=hacienda --numkarts=4 --seed=1` beside Mesa's `GALLIUM_HUD=frametime` with `GALLIUM_HUD_DUMP_DIR` set, and compare the summary's count with the lines of the HUD's `frametime_(ms)`: the summary's is about 10,800 whatever the machine draws. Not yet run.
+* Evidence: SuperTuxKart's `src/modes/profile_world.cpp` at `1.4`, lines 150 to 220, and `src/main_loop.cpp`, lines 487 to 490 and 640 to 670.
+* Rach2: `tests/graphics/runners/games.sh` records the summary's line but takes the frame times from Mesa's HUD, as Linux's runs in task 80-2 did.
+* Status: unreported.
+* Next: check current SuperTuxKart; run the reproduction; report with a patch that counts in the main loop's drawing.
