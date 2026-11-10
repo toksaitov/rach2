@@ -196,10 +196,11 @@ void vfs_tree_changed(void)
     tree_seq++;
 }
 
-void vfs_replay(int magic, uint32_t seq)
+void vfs_replay(int magic, uint32_t seq, struct vfs_mount *xdev)
 {
     current_proc->walk_replay = VFS_REPLAY_ON | (magic ? VFS_REPLAY_MAGIC : 0u);
     current_proc->walk_replay_seq = seq;
+    current_proc->walk_replay_mnt = xdev;
 }
 
 int vfs_replay_end(void)
@@ -207,6 +208,7 @@ int vfs_replay_end(void)
     int tripped = (current_proc->walk_replay & VFS_REPLAY_TRIPPED) != 0;
 
     current_proc->walk_replay = 0;
+    current_proc->walk_replay_mnt = NULL;
     return tripped;
 }
 
@@ -1200,6 +1202,9 @@ static const struct vfs_ref *walk_rules_init(struct walk_rules *rules,
     rules->scoped = (rules->resolve & (VFS_RESOLVE_BENEATH | VFS_RESOLVE_IN_ROOT)) != 0;
     rules->synth = (flags & WALK_SYNTH) != 0;
     rules->replay = !rules->scope && current_proc ? current_proc->walk_replay : 0;
+    if (rules->replay && current_proc->walk_replay_mnt) {
+        rules->resolve |= VFS_RESOLVE_NO_XDEV;
+    }
     rules->xdev = NULL;
     rules->xdev_armed = 0;
     return rules->scope && !rules->synth ? &rules->scope->anchor : start;
@@ -1275,8 +1280,13 @@ static void walk_scope_begin(const struct walk_rules *rules, struct vfs_ref *roo
  * from when the walk reaches it. */
 static void walk_xdev_begin(struct walk_rules *rules, struct vfs_mount *mnt)
 {
-    rules->xdev = rules->synth ? rules->scope->anchor.mnt : mnt;
-    rules->xdev_armed = !rules->synth;
+    if (rules->replay && current_proc->walk_replay_mnt) {
+        rules->xdev = current_proc->walk_replay_mnt;
+        rules->xdev_armed = 0;
+    } else {
+        rules->xdev = rules->synth ? rules->scope->anchor.mnt : mnt;
+        rules->xdev_armed = !rules->synth;
+    }
 }
 
 /** Note that the walk under `rules` is on `mnt`: -EXDEV under NO_XDEV once
@@ -1612,7 +1622,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     const char *last_comp;
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
     int links;
-    int jumped;
+    int nocwd;
     int kind;
     int locked = (flags & VFS_WALK_LOCK) != 0;
     int missing = 0;
@@ -1640,7 +1650,7 @@ begin:
     p = path;
     last_comp = leaf_comp;
     links = 0;
-    jumped = 0;
+    nocwd = rules.scope != NULL;
     walk_name_root(&name, record ? record->real : NULL);
     walk_root(&root);
     walk_scope_begin(&rules, &root, &name, p);
@@ -1714,7 +1724,7 @@ begin:
                 goto out_err;
             }
             if (kind == WALK_REST_OBJECT) {
-                jumped = 1;
+                nocwd = 1;
                 walk_name_text(&name, from, p);
                 rc = walk_object(&cur, found, p, &linkpath, &target, locked);
             } else if (kind == WALK_REST_THROUGH) {
@@ -1761,7 +1771,7 @@ begin:
             continue;
         }
 
-        rc = !jumped && toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
+        rc = !nocwd && toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
         if (rc != 0) {
             goto out_err;
         }
@@ -3327,6 +3337,12 @@ static int synth_object_link(const struct vpath *vp)
            vp->kind == VNODE_PROC_ROOT;
 }
 
+/** Whether the synthetic node is /proc/self, a text link to the caller. */
+static int synth_self_link(const struct vpath *vp)
+{
+    return vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0;
+}
+
 /** The length of the first `out` bytes of `path` without their last name
  * and the slash before it: what `..` leaves of a path resolved as text. */
 static uint32_t text_parent(const char *path, uint32_t out)
@@ -3367,7 +3383,8 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
     full[out] = '\0';
     synth_classify(full, &vp);
     synth_made(full, &vp);
-    if (!synth_object_link(&vp) && !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0)) {
+    if (!synth_object_link(&vp) && !synth_self_link(&vp) &&
+        !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0)) {
         return 0;
     }
     return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
@@ -3558,25 +3575,29 @@ static int synth_lookup_rest(struct vfs_mount *mnt, const char *rest, uint32_t l
     return rc != 0 ? rc : synth_rest(mnt, prefix, rest, len, node, left);
 }
 
+/** Whether the synthetic kind denotes a directory for the resolver. */
+static int synth_dir_kind(int kind)
+{
+    return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
+           kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
+           kind == VNODE_PROC_TASK_DIR || kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK ||
+           kind == VNODE_PROC_SYSVIPC_DIR || kind == VNODE_PROC_NET_STAT_DIR ||
+           kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
+           kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR || kind == VNODE_PROC_SYS_DIR;
+}
+
 /** The `getattr` of the synthetic types, what the resolver needs of a node:
  * whether it is a directory or a link it follows, /proc/<pid>/exe, cwd and
  * root, /dev/log and a link made under /dev, and the mode the search rule
  * reads (0755 under /dev, 0555 under /proc and /sys, all root's, and an
  * entry's own mode and owner made under /dev, which is -ENOENT once it is
- * removed). A device's link under /sys is classified rather than resolved,
- * as /proc/self is, so to the resolver it is the directory it leads to. The
+ * removed). /proc/self is a text link to the caller's process directory.
+ * A device's link under /sys is classified as the directory it leads to. The
  * system call layer reports the full attributes itself. */
 static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct synth_node *sn = node;
     int kind = sn->vp.kind;
-    int is_dir =
-        kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
-        kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
-        kind == VNODE_PROC_TASK_DIR || kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK ||
-        kind == VNODE_PROC_SYSVIPC_DIR || kind == VNODE_PROC_NET_STAT_DIR ||
-        kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
-        kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR || kind == VNODE_PROC_SYS_DIR;
 
     k_memset(st, 0, sizeof(*st));
     if (kind == VNODE_DEV_MADE) {
@@ -3591,7 +3612,9 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         st->gid = a.gid;
         return 0;
     }
-    if (is_dir) {
+    if (synth_self_link(&sn->vp)) {
+        st->mode = 0120000u | 0777u;
+    } else if (synth_dir_kind(kind)) {
         st->mode = VFS_S_IFDIR | (mnt == mounts[1] ? 0755u : 0555u);
     } else if (kind == VNODE_PROC_EXE || kind == VNODE_PROC_CWD || kind == VNODE_PROC_ROOT ||
                kind == VNODE_DEV_LINK) {
@@ -3604,7 +3627,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 }
 
 /** The `readlink` of the synthetic types, the target of a link as text:
- * /dev/log's, fixed; a link's made under /dev, as it was written;
+ * /proc/self's, the caller's visible pid; /dev/log's, fixed; a link's made
+ * under /dev, as it was written;
  * /proc/<pid>/exe's, the path of the program the process
  * runs (`procfs_readlink_exe`); and /proc/<pid>/cwd's and root's, the paths
  * of its directories (`procfs_readlink_dir`). -ENOENT for a process that is
@@ -3631,6 +3655,23 @@ static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
         return (int)n;
     }
     pid = procfs_resolve_id(&sn->vp);
+    if (synth_self_link(&sn->vp)) {
+        char digits[12];
+        uint32_t value = pid < 0 ? 0 : pid_seen((uint32_t)pid);
+        uint32_t n = 0, len = 0;
+
+        if (pid < 0) {
+            return -ENOENT;
+        }
+        do {
+            digits[n++] = (char)('0' + value % 10u);
+            value /= 10u;
+        } while (value);
+        while (n && len < cap) {
+            buf[len++] = digits[--n];
+        }
+        return (int)len;
+    }
     if (pid < 0 && (sn->vp.kind == VNODE_PROC_EXE || sn->vp.kind == VNODE_PROC_CWD ||
                     sn->vp.kind == VNODE_PROC_ROOT)) {
         return -ENOENT;

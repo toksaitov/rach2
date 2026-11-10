@@ -53,6 +53,7 @@ Every name of the path is on the mount the walk starts on: the walk never
 crosses onto another mount, downward, by
 .Ql ..
 or by a link.
+A final descriptor link checks the mount of its target as well.
 .It Dv RESOLVE_NO_MAGICLINKS
 The walk follows no link of
 .Pa /proc
@@ -67,7 +68,9 @@ and a namespace's link.
 .It Dv RESOLVE_NO_SYMLINKS
 The walk follows no link at all, those of
 .Pa /proc
-among them.
+and the
+.Pa /proc/self
+component among them.
 .It Dv RESOLVE_BENEATH
 The walk stays under
 .Fa dirfd :
@@ -79,6 +82,7 @@ and a link of
 .Pa /proc
 to an object are refused.
 .It Dv RESOLVE_IN_ROOT
+Search permission is checked at the anchor and each directory below it.
 The walk treats
 .Fa dirfd
 as its root, as

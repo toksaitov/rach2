@@ -15,15 +15,17 @@
  *   O_RDWR and O_CREAT with O_DIRECTORY are EINVAL, and CACHED with O_CREAT
  *   EAGAIN.
  * * nosymlinks: NO_SYMLINKS is ELOOP for a link at the end and on the way,
- *   and gives the link itself to O_PATH with O_NOFOLLOW.
+ *   /proc/self among them, and gives O_PATH with O_NOFOLLOW the link.
  * * nomagic: NO_MAGICLINKS is ELOOP for /proc/self/fd/N at the end and on
  *   the way, and lets an ordinary link through.
  * * noxdev: NO_XDEV is EXDEV for `..` out of the tmpfs and for /proc from
- *   the root, and opens a file on the same mount.
+ *   the root, and for a final descriptor link to another mount. It opens
+ *   a file or descriptor target on the same mount and the link itself.
  * * beneath: BENEATH from D/a opens f and b/../f, and is EXDEV for ../a/f,
  *   an absolute path, `..` at D/a through a link, and an absolute link.
  * * inroot: IN_ROOT from D reaches D/a/f by /a/f, ../../a/f, the absolute
- *   link and the link that climbs past D, and finds no /proc in D.
+ *   link and the link that climbs past D, and finds no /proc in D. Names
+ *   matching the working directory do not bypass the anchor's search mode.
  * * cached: CACHED opens ".", a file just looked up and a directory.
  * * create: O_CREAT under BENEATH makes b/new, ../new is EXDEV and makes
  *   nothing, and O_CREAT with O_EXCL under IN_ROOT makes /a/b/new2 in D.
@@ -61,6 +63,7 @@
 #define ENOENT 2
 #define E2BIG  7
 #define EAGAIN 11
+#define EACCES 13
 #define EXDEV  18
 #define EINVAL 22
 #define ELOOP  40
@@ -172,6 +175,7 @@ static int cleanup(void)
         for (i = 0; i < (int)(sizeof(files) / sizeof(files[0])); i++) {
             syscall1(SYS_UNLINK, (long)in_dir(files[i]));
         }
+        syscall1(SYS_RMDIR, (long)in_dir("tmp"));
         bad |= syscall1(SYS_RMDIR, (long)in_dir("a/b")) != 0;
         bad |= syscall1(SYS_RMDIR, (long)in_dir("a")) != 0;
         made_tree = 0;
@@ -378,6 +382,12 @@ static void link_rows(int afd)
               "nosymlinks: O_PATH with O_NOFOLLOW did not open the link");
     want_open(o2(afd, "f", O_RDONLY, 0, RESOLVE_NO_SYMLINKS), 1,
               "nosymlinks: a path with no link did not open");
+    want_err(o2(AT_FDCWD, "/proc/self/status", O_RDONLY, 0, RESOLVE_NO_SYMLINKS), ELOOP,
+             "nosymlinks: /proc/self on the way was not ELOOP");
+    want_err(o2(AT_FDCWD, "/proc/self", O_RDONLY, 0, RESOLVE_NO_SYMLINKS), ELOOP,
+             "nosymlinks: /proc/self at the end was not ELOOP");
+    want_open(o2(AT_FDCWD, "/proc/self", O_PATH | O_NOFOLLOW, 0, RESOLVE_NO_SYMLINKS), 0,
+              "nosymlinks: O_PATH did not keep the self link");
     report_held();
 
     fd_path(path, afd, "");
@@ -390,6 +400,60 @@ static void link_rows(int afd)
               "nomagic: an ordinary link was not followed");
 }
 
+/** A scoped absolute walk checks its anchor even when its names match
+ * the caller's working directory. Keep all changes in a child; 0 on pass. */
+static int inroot_search(int dfd)
+{
+    long pid;
+    int status = 0;
+
+    if (syscall2(SYS_MKDIR, (long)in_dir("tmp"), 0755) != 0 ||
+        syscall2(SYS_FCHMOD, dfd, 0700) != 0) {
+        return -1;
+    }
+    pid = syscall0(SYS_FORK);
+    if (pid == 0) {
+        long rc;
+
+        if (syscall1(SYS_CHDIR, (long)"/tmp") != 0 || syscall1(SYS_SETUID, 65534) != 0) {
+            syscall1(SYS_EXIT, 2);
+        }
+        rc = o2(dfd, "/tmp", O_RDONLY | O_DIRECTORY, 0, RESOLVE_IN_ROOT);
+        if (rc >= 0) {
+            syscall1(SYS_CLOSE, rc);
+        }
+        syscall1(SYS_EXIT, rc == -EACCES ? 0 : 3);
+    }
+    if (pid < 0 || syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
+        status = 1;
+    }
+    syscall2(SYS_FCHMOD, dfd, 0755);
+    return status == 0 ? 0 : -1;
+}
+
+/** A final descriptor link must stay on the mount of its /proc directory.
+ * Check both a target on tmpfs and a target on this same proc mount. */
+static void fd_mount_rows(int afd)
+{
+    char number[24];
+    long proc = syscall3(SYS_OPEN, (long)"/proc/self/fd", O_RDONLY | O_DIRECTORY, 0);
+    long status = syscall3(SYS_OPEN, (long)"/proc/self/status", O_RDONLY, 0);
+
+    if (proc < 0 || status < 0) {
+        fail("noxdev: open proc directory and status");
+    }
+    decimal(number, (unsigned long)afd);
+    want_err(o2((int)proc, number, O_RDONLY | O_DIRECTORY, 0, RESOLVE_NO_XDEV), EXDEV,
+             "noxdev: the final descriptor link crossed to tmpfs");
+    want_open(o2((int)proc, number, O_PATH | O_NOFOLLOW, 0, RESOLVE_NO_XDEV), 0,
+              "noxdev: the descriptor link itself did not open");
+    decimal(number, (unsigned long)status);
+    want_open(o2((int)proc, number, O_RDONLY, 0, RESOLVE_NO_XDEV), 0,
+              "noxdev: a target on the same proc mount did not open");
+    syscall1(SYS_CLOSE, status);
+    syscall1(SYS_CLOSE, proc);
+}
+
 /** The rows of NO_XDEV, BENEATH and IN_ROOT. */
 static void scope_rows(int dfd, int afd)
 {
@@ -399,6 +463,7 @@ static void scope_rows(int dfd, int afd)
              "noxdev: /proc from the root was not EXDEV");
     want_open(o2(dfd, "a/f", O_RDONLY, 0, RESOLVE_NO_XDEV), 1,
               "noxdev: a file on the same mount did not open");
+    fd_mount_rows(afd);
     report_held();
 
     want_open(o2(afd, "f", O_RDONLY, 0, RESOLVE_BENEATH), 1, "beneath: f did not open");
@@ -422,6 +487,9 @@ static void scope_rows(int dfd, int afd)
               "inroot: a link that climbs past D did not stay at D");
     want_err(o2(dfd, "/proc/self/status", O_RDONLY, 0, RESOLVE_IN_ROOT), ENOENT,
              "inroot: /proc was found in D");
+    if (inroot_search(dfd) != 0) {
+        fail("inroot: a working-directory name bypassed the anchor's search check");
+    }
 }
 
 /** The rows of CACHED and of O_CREAT under BENEATH and IN_ROOT. */

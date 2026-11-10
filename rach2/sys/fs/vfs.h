@@ -601,9 +601,11 @@ void vfs_tree_changed(void);
  * that walk took, with no `..` and no link but those of /proc to an object,
  * which `magic` allows, so a replay that meets another link, or finds the
  * tree's sequence moved from `seq`, answers -EAGAIN instead of going where
- * the checked walk did not.
+ * the checked walk did not. A non-NULL `xdev`, which the caller keeps held,
+ * is the mount NO_XDEV preserves, including when a descriptor link changes
+ * its target before the replay follows it.
  */
-void vfs_replay(int magic, uint32_t seq);
+void vfs_replay(int magic, uint32_t seq, struct vfs_mount *xdev);
 
 /**
  * End the calling thread's replay (`vfs_replay`). Returns 1 when a walk of

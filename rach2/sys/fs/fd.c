@@ -225,6 +225,14 @@ void fd_ofd_unref(struct open_file *ofd)
                 }
                 vfs_desc_close(mnt, node, handle);
             }
+            if (ofd->synth_mnt) {
+                struct vfs_ref ref;
+
+                ref.mnt = ofd->synth_mnt;
+                ref.node = ref.mnt->root;
+                ofd->synth_mnt = NULL;
+                vfs_desc_close(ref.mnt, ref.node, NULL);
+            }
             while (*link && *link != rec) {
                 link = &(*link)->next;
             }
