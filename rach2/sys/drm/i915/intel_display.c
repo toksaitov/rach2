@@ -584,7 +584,7 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
     struct i915_hw *hw = &c->i915->hw;
     const struct drm_mode_modeinfo *m = &cfg->mode;
     int t = cfg->trans;
-    uint32_t vtotal = m->vtotal, vblank_end = m->vtotal, vblank_start, vsyncshift = 0, conf;
+    uint32_t vtotal = m->vtotal, vblank_start, vsyncshift = 0, conf;
     int32_t shift;
 
     if (cfg->output != INTEL_OUTPUT_HDMI) {
@@ -603,7 +603,6 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
      * none here; the chip adds an interlaced frame's two half lines. */
     if (m->flags & DRM_MODE_FLAG_INTERLACE) {
         vtotal -= 1u;
-        vblank_end -= 1u;
         shift = (int32_t)m->hsync_start - (int32_t)(m->htotal / 2u);
         if (shift < 0) {
             shift += m->htotal;
@@ -617,7 +616,7 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
     i915_write(hw, TRANS_HSYNC(t),
                (uint32_t)(m->hsync_start - 1) | (uint32_t)(m->hsync_end - 1) << 16);
     i915_write(hw, TRANS_VTOTAL(t), (uint32_t)(m->vdisplay - 1) | (vtotal - 1u) << 16);
-    i915_write(hw, TRANS_VBLANK(t), (vblank_start - 1u) | (vblank_end - 1u) << 16);
+    i915_write(hw, TRANS_VBLANK(t), (vblank_start - 1u) | (vtotal - 1u) << 16);
     i915_write(hw, TRANS_VSYNC(t),
                (uint32_t)(m->vsync_start - 1) | (uint32_t)(m->vsync_end - 1) << 16);
     /* Pipe B or C feeding eDP takes the eDP transcoder's VTOTAL in its own
