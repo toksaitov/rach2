@@ -37,6 +37,8 @@ ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 DISPLAY=
        "PULSE_SERVER=unix:/run/user/1001/pulse/native XDG_DATA_HOME=%s/data "
        "STEAM_COMPAT_CLIENT_INSTALL_PATH=%s/steam PROTON_LOG_DIR=%s/logs "
        "WINEDEBUG=-all,err+all; " % (WORK, WORK, WORK))
+# What the rebuilt Weston of vendor/gnu/games/weston prints for --version.
+REBUILT = "(Rach2 14.0.2-1+rach2.1: kiosk-active-tree, xwm-emulated-mode)"
 EV_KEY = 1
 KEY_ESC = 1
 CHILDREN = []
@@ -314,6 +316,9 @@ def main():
     if len(sys.argv) != 2 or sys.argv[1] not in ROWS:
         raise SystemExit("usage: wm.py place|scaled|wineio")
     row = sys.argv[1]
+    version = subprocess.run(["weston", "--version"], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, check=False).stdout.strip()
+    check("weston", REBUILT in version, version)
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(mode=0o755)
     os.chown(WORK, UID, UID)

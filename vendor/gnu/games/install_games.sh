@@ -86,7 +86,9 @@ if [ "${GNU_WESTON:-}" = 1 ]; then
         done < "$list"
     done
     install_part weston
-    needs "the rebuilt weston" "$TREE/usr/bin/weston" lib usr/lib "usr/lib/$GNU_MULTIARCH"
+    # weston's own library is in its RUNPATH, usr/lib/MULTIARCH/weston.
+    needs "the rebuilt weston" "$TREE/usr/bin/weston" lib usr/lib "usr/lib/$GNU_MULTIARCH" \
+        "usr/lib/$GNU_MULTIARCH/weston"
     needs "the rebuilt libweston" "$TREE/usr/lib/$GNU_MULTIARCH/libweston-14.so.0.0.2" \
         lib usr/lib "usr/lib/$GNU_MULTIARCH"
 fi
