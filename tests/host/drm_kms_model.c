@@ -236,6 +236,7 @@ static uint32_t gem_new(struct drm_file *file, int i, uint64_t size)
 
     gem[i].size = size;
     gem[i].refs = 1;
+    gem[i].resv = &gem[i].resv_own;
     CHECK(drm_gem_handle_create(file, &gem[i], &h) == 0, "a model handle is made");
     gem[i].refs--;
     return h;
@@ -323,6 +324,7 @@ int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 
 static struct dma_fence in_fence;
 static int fence_refs, fence_waits, fence_wait_rc;
+static struct dma_fence *fence_waited; /* the last fence waited for */
 
 /** The fence of sync file `fd`, held, or NULL. */
 struct dma_fence *sync_file_get_fence(int32_t fd)
@@ -349,6 +351,7 @@ int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline
     (void)deadline_ns;
     CHECK(intr, "a commit waits for its fences interruptibly");
     fence_waits++;
+    fence_waited = fence;
     return fence_wait_rc;
 }
 
@@ -359,6 +362,16 @@ struct dma_fence *dma_fence_get(struct dma_fence *fence)
         fence_refs++;
     }
     return fence;
+}
+
+/** No merge: no row shows a framebuffer of two objects with pending
+ * writes, which alone would need one. */
+struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
+{
+    (void)fences;
+    (void)count;
+    CHECK(0, "no fences are merged in the model");
+    return NULL;
 }
 
 /** Whether the fence has signalled: the model's has. */

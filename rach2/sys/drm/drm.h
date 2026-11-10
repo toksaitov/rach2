@@ -753,8 +753,9 @@ struct drm_framebuffer {
 /*
  * A plane's state: the framebuffer it shows (held), where on its CRTC in
  * pixels, and which part of the framebuffer in 16.16 fixed point; the
- * fence to wait for before scanning out (IN_FENCE_FD, held), and the damage
- * since the last commit (FB_DAMAGE_CLIPS, held). `src`, `dst` and `visible`
+ * fence to wait for before scanning out (IN_FENCE_FD, or else the commit
+ * takes the framebuffer's pending writes; held), and the damage since the
+ * last commit (FB_DAMAGE_CLIPS, held). `src`, `dst` and `visible`
  * are set by `drm_atomic_helper_check_plane_state` for the driver: the
  * source and the destination clipped to the CRTC's mode.
  */

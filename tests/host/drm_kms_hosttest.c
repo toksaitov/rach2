@@ -21,10 +21,11 @@
  * GETFB and GETFB2 by privilege, RMFB, CLOSEFB and the lowest free ID
  * (76-5a.4); atomic commits refused without ALLOW_MODESET, tested,
  * committed with an event, refused for bad flags, objects, properties and
- * coordinates, waited on an in-fence, and NONBLOCK (76-5a.2); SETCRTC,
- * SETPLANE, the cursor, PAGE_FLIP, DIRTYFB, DPMS through OBJ_SETPROPERTY
- * and SETPROPERTY, and SETGAMMA, each as a commit (76-5a.3); and a file's
- * release, which takes its framebuffer off the screen and frees its blobs.
+ * coordinates, waited on an in-fence or the framebuffer's pending write,
+ * and NONBLOCK (76-5a.2); SETCRTC, SETPLANE, the cursor, PAGE_FLIP,
+ * DIRTYFB, DPMS through OBJ_SETPROPERTY and SETPROPERTY, and SETGAMMA, each
+ * as a commit (76-5a.3); and a file's release, which takes its framebuffer
+ * off the screen and frees its blobs.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -718,24 +719,34 @@ static void row_atomic_refusals(uint32_t mode_id)
     CHECK(reserved == 0 && fence_refs == 0, "no refusal kept an event or a fence");
 }
 
-/** Flips on the lit panel: one waited on an in-fence, a NONBLOCK one with
- * its event, then ACTIVE off refused without ALLOW_MODESET, and off. */
+/** Flips on the lit panel: one waited on an in-fence, which overrules the
+ * framebuffer's pending write, a NONBLOCK one with its event, waited on
+ * its framebuffer's pending write as Linux's prepare_fb has it, then ACTIVE
+ * off refused without ALLOW_MODESET, and off. */
 static void row_atomic_flips(void)
 {
+    static struct dma_fence render; /* a render job's write, held by the objects */
     struct req r;
 
+    gem[1].resv->write = &render;
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &primary0.base, mc->prop_fb_id, fb_other);
     req_add(&r, &primary0.base, mc->prop_in_fence_fd, 5);
     CHECK(req_commit(&fa, &r, 0, 0) == 0, "a flip with an in-fence");
-    CHECK(fence_waits == 1 && fence_refs == 0, "the fence waited and dropped");
+    CHECK(fence_waits == 1 && fence_waited == &in_fence && fence_refs == 0,
+          "the in-fence alone waited and dropped");
     CHECK(primary0.state->fb->base.id == fb_other && enables == 1 && updates == 2,
           "the flip shows the other framebuffer without a modeset");
+    gem[1].resv->write = NULL;
+    gem[0].resv->write = &render;
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &primary0.base, mc->prop_fb_id, fb_main);
     CHECK(req_commit(&fa, &r, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, 78) == 0 &&
               nsent == 2 && sent[1].user_data == 78 && primary0.state->fb->base.id == fb_main,
           "a NONBLOCK flip completes with its event");
+    CHECK(fence_waits == 2 && fence_waited == &render && fence_refs == 0,
+          "the flip without an in-fence waited for the framebuffer's pending write");
+    gem[0].resv->write = NULL;
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &crtc0.base, mc->prop_active, 0);
     CHECK(req_commit(&fa, &r, 0, 0) == -EINVAL, "ACTIVE off without ALLOW_MODESET: EINVAL");

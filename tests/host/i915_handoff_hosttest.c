@@ -1158,6 +1158,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
                          const struct drm_gem_object_funcs *funcs)
 {
     obj->dev = dev;
+    obj->resv = &obj->resv_own;
     obj->size = size;
     obj->funcs = funcs;
     obj->refs = 1;
