@@ -542,7 +542,8 @@ static uint8_t *edid_clean(const uint8_t *edid, uint32_t len, uint32_t *blocks)
  * A parse of one cleaned EDID: its blocks, and the modes found so far,
  * which play the part of Linux's connector->probed_modes, since some steps
  * look at what earlier ones added. `vics` are the VICs of the CTA video
- * data blocks, 0 for one the tables lack.
+ * data blocks, 0 for one the tables lack; `hdmi` is what a walk for
+ * drm_edid_hdmi_info fills.
  */
 struct edid_parse {
     const uint8_t *edid;
@@ -552,6 +553,7 @@ struct edid_parse {
     int nomem;
     uint8_t vics[256];
     uint32_t nvics;
+    struct drm_edid_hdmi_info *hdmi;
 };
 
 /** The base block's revision, EDID 1.x's x. */
@@ -1690,6 +1692,270 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
     }
     kfree(clean);
     return n;
+}
+
+uint32_t drm_match_cea_mode(const struct drm_mode_modeinfo *mode)
+{
+    return match_cea(mode, -1);
+}
+
+uint32_t drm_match_hdmi_mode(const struct drm_mode_modeinfo *mode)
+{
+    return match_hdmi(mode, -1);
+}
+
+/** HDMI's vendor block `db` of `len` bytes, Linux's drm_parse_hdmi_vsdb_video
+ * and drm_parse_hdmi_deep_color_info: the deep colour bits set the bits a
+ * colour to the most they name, and leave it when none is set. */
+static void do_hdmi_vsdb(struct drm_edid_hdmi_info *info, const uint8_t *db, uint32_t len)
+{
+    info->is_hdmi = 1;
+    if (len >= 6 && (db[6] & (1 << 4))) {
+        info->dc_30 = 1;
+        info->bpc = 10;
+    }
+    if (len >= 6 && (db[6] & (1 << 5))) {
+        info->dc_36 = 1;
+        info->bpc = 12;
+    }
+    if (len >= 6 && (db[6] & (1 << 6))) {
+        info->bpc = 16;
+    }
+    if (len >= 7) {
+        info->max_tmds_clock = db[7] * 5000u;
+    }
+    if (len >= 8 && (db[8] & (1 << 5))) {
+        info->has_hdmi_infoframe = 1;
+    }
+}
+
+/** Linux's drm_detect_hdmi_monitor, drm_detect_monitor_audio and its
+ * parse of the HDMI blocks, the video capability block and the 4:2:0
+ * blocks, from one CTA data block of `len` payload bytes into `p->hdmi`. */
+static void do_hdmi_info(struct edid_parse *p, const uint8_t *db, uint32_t len)
+{
+    struct drm_edid_hdmi_info *info = p->hdmi;
+    uint32_t i, vic;
+    int tag = db[0] >> 5;
+
+    if (tag == 3 && len >= 5 && db[1] == 0x03 && db[2] == 0x0c && db[3] == 0x00) {
+        do_hdmi_vsdb(info, db, len);
+    } else if (tag == 3 && len >= 7 && db[1] == 0xd8 && db[2] == 0x5d && db[3] == 0xc4) {
+        /* HDMI Forum's block: SCDC_Present in its sixth byte. */
+        info->has_hdmi_infoframe = 1;
+        if (db[6] & 0x80) {
+            info->hdmi2 = 1;
+        }
+    } else if (tag == 1 && len > 0) {
+        info->has_audio = 1;
+    } else if (tag == 2) {
+        for (i = 0; i < len; i++) {
+            vic = svd_to_vic(db[1 + i]);
+            info->vics[vic >> 3] |= (uint8_t)(1u << (vic & 7u));
+        }
+    } else if (tag == 7 && len == 2 && db[1] == 0) {
+        if (db[2] & (1 << 6)) {
+            info->rgb_quant_selectable = 1;
+        }
+    } else if (tag == 7 && len >= 1 && (db[1] == 14 || db[1] == 15)) {
+        /* A 4:2:0 video or capability map block. */
+        info->hdmi2 = 1;
+    }
+}
+
+/* The bits a colour of EDID 1.4's digital depth field; 0 undefined. */
+static const uint8_t edid_depth[8] = {0, 6, 8, 10, 12, 14, 16, 0};
+
+void drm_edid_hdmi_info(const struct drm_connector *connector, const uint8_t *edid, uint32_t len,
+                        struct drm_edid_hdmi_info *info)
+{
+    struct edid_parse p;
+    uint8_t *clean;
+    uint32_t b;
+
+    k_memset(info, 0, sizeof(*info));
+    if (connector && connector->edid_override) {
+        edid = connector->edid_override;
+        len = connector->edid_override_len;
+    }
+    k_memset(&p, 0, sizeof(p));
+    clean = edid ? edid_clean(edid, len, &p.blocks) : NULL;
+    if (!clean) {
+        return;
+    }
+    p.edid = clean;
+    info->digital = (clean[0x14] & 0x80) != 0;
+    /* Linux's update_display_info reads the extensions of a digital
+     * EDID 1.3 or later alone. */
+    if (clean[0x13] < 3 || !info->digital) {
+        kfree(clean);
+        return;
+    }
+    for (b = 1; b < p.blocks; b++) {
+        if (clean[b * EDID_LENGTH] == CEA_EXT && clean[b * EDID_LENGTH + 1] >= 2 &&
+            (clean[b * EDID_LENGTH + 3] & (1 << 6))) {
+            info->has_audio = 1;
+        }
+    }
+    p.hdmi = info;
+    for_each_cta_db(&p, do_hdmi_info);
+    /* A DFP 1.x sink of EDID 1.3 takes 8 bits; EDID 1.4 names its depth,
+     * which stands over the HDMI block's. */
+    if (info->bpc == 0 && clean[0x13] == 3 && (clean[0x14] & 1)) {
+        info->bpc = 8;
+    }
+    if (clean[0x13] >= 4) {
+        info->bpc = edid_depth[(clean[0x14] >> 4) & 7u];
+    }
+    kfree(clean);
+}
+
+int drm_default_rgb_quant_limited(const struct drm_mode_modeinfo *mode)
+{
+    return match_cea(mode, -1) > 1;
+}
+
+/* The picture aspects of an AVI infoframe, Linux's enum hdmi_picture_aspect,
+ * which are DRM's. */
+#define AVI_ASPECT_NONE 0
+#define AVI_ASPECT_16_9 2
+
+/** The aspect of the mode's flags, 0 for none. */
+static uint32_t mode_aspect(uint32_t flags)
+{
+    return (flags & DRM_MODE_FLAG_PIC_AR_MASK) >> 19;
+}
+
+/** Whether VIC `vic` is in one of the sink's video data blocks. */
+static int info_has_vic(const struct drm_edid_hdmi_info *info, uint32_t vic)
+{
+    return vic < 256 && (info->vics[vic >> 3] & (1u << (vic & 7u))) != 0;
+}
+
+/** Set the checksum of the infoframe of `len` bytes at `buf`, its fourth
+ * byte, so that the bytes sum to 0. */
+static void infoframe_checksum(uint8_t *buf, uint32_t len)
+{
+    uint8_t sum = 0;
+    uint32_t i;
+
+    buf[3] = 0;
+    for (i = 0; i < len; i++) {
+        sum = (uint8_t)(sum + buf[i]);
+    }
+    buf[3] = (uint8_t)(256u - sum);
+}
+
+/** Linux's drm_mode_hdmi_vic: the HDMI VIC of `mode` for a sink that takes
+ * HDMI's vendor infoframe, 0 otherwise. */
+static uint32_t mode_hdmi_vic(const struct drm_edid_hdmi_info *info,
+                              const struct drm_mode_modeinfo *mode)
+{
+    if (!info->has_hdmi_infoframe || (mode->flags & DRM_MODE_FLAG_3D_MASK)) {
+        return 0;
+    }
+    return match_hdmi(mode, -1);
+}
+
+uint32_t drm_hdmi_avi_infoframe(const struct drm_edid_hdmi_info *info,
+                                const struct drm_mode_modeinfo *mode, int limited, uint8_t *buf)
+{
+    uint32_t vic, hdmi_vic, aspect, quant, ycc;
+
+    hdmi_vic = mode_hdmi_vic(info, mode);
+    vic = hdmi_vic ? 0 : match_cea(mode, -1);
+    aspect = mode_aspect(mode->flags);
+    if (aspect == AVI_ASPECT_NONE) {
+        if (vic) {
+            aspect = mode_aspect(cea_mode_for_vic(vic)->flags);
+        } else if (hdmi_vic) {
+            aspect = mode_aspect(hdmi_modes[hdmi_vic].flags);
+        }
+    }
+    /* The frame names no aspect past 16:9; such a mode says it by VIC. */
+    if (aspect > AVI_ASPECT_16_9) {
+        if (vic) {
+            if (aspect != mode_aspect(cea_mode_for_vic(vic)->flags)) {
+                return 0;
+            }
+        } else if (hdmi_vic) {
+            if (aspect != mode_aspect(hdmi_modes[hdmi_vic].flags)) {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+        aspect = AVI_ASPECT_NONE;
+    }
+    /* Linux's vic_for_avi_infoframe: a VIC past 64 only for an HDMI 2.0
+     * sink or one that lists it. */
+    if (!info->hdmi2 && vic > 64 && !info_has_vic(info, vic)) {
+        vic = 0;
+    }
+    /* Linux's drm_hdmi_avi_infoframe_quant_range: Q only when the sink
+     * takes it or it is the mode's default; YQ full only for HDMI 2.0. */
+    quant = (info->rgb_quant_selectable || limited == drm_default_rgb_quant_limited(mode))
+                ? (limited ? 1u : 2u)
+                : 0u;
+    ycc = (!info->hdmi2 || limited) ? 0u : 1u;
+    k_memset(buf, 0, 4 + 13);
+    buf[0] = 0x82; /* AVI */
+    buf[1] = 2;
+    buf[2] = 13;
+    /* RGB, active format present, underscan. */
+    buf[4] = (uint8_t)(1u << 4 | 2u);
+    /* No colorimetry, the picture aspect, active aspect as the picture. */
+    buf[5] = (uint8_t)((aspect & 3u) << 4 | 8u);
+    buf[6] = (uint8_t)(quant << 2);
+    buf[7] = (uint8_t)vic;
+    /* Graphics, pixels sent once or twice. */
+    buf[8] = (uint8_t)(ycc << 6 | ((mode->flags & DRM_MODE_FLAG_DBLCLK) ? 1u : 0u));
+    infoframe_checksum(buf, 4 + 13);
+    return 4 + 13;
+}
+
+uint32_t drm_hdmi_vendor_infoframe(const struct drm_edid_hdmi_info *info,
+                                   const struct drm_mode_modeinfo *mode, uint8_t *buf)
+{
+    uint32_t vic, len;
+
+    if (!info->has_hdmi_infoframe) {
+        return 0;
+    }
+    vic = mode_hdmi_vic(info, mode);
+    len = vic ? 5u : 4u;
+    k_memset(buf, 0, 4 + len);
+    buf[0] = 0x81; /* vendor */
+    buf[1] = 1;
+    buf[2] = (uint8_t)len;
+    buf[4] = 0x03;
+    buf[5] = 0x0c;
+    buf[6] = 0x00;
+    if (vic) {
+        buf[7] = 1u << 5; /* an extended resolution */
+        buf[8] = (uint8_t)vic;
+    }
+    infoframe_checksum(buf, 4 + len);
+    return 4 + len;
+}
+
+uint32_t drm_hdmi_spd_infoframe(const char *vendor, const char *product, uint8_t sdi, uint8_t *buf)
+{
+    uint32_t i;
+
+    k_memset(buf, 0, 4 + 25);
+    buf[0] = 0x83; /* source product description */
+    buf[1] = 1;
+    buf[2] = 25;
+    for (i = 0; i < 8 && vendor[i]; i++) {
+        buf[4 + i] = (uint8_t)vendor[i];
+    }
+    for (i = 0; i < 16 && product[i]; i++) {
+        buf[12 + i] = (uint8_t)product[i];
+    }
+    buf[28] = sdi;
+    infoframe_checksum(buf, 4 + 25);
+    return 4 + 25;
 }
 
 int32_t drm_edid_override_set(struct drm_connector *connector, const void *edid, uint32_t len)
