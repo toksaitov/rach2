@@ -160,6 +160,7 @@ build_layer()
         [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-host-checks
     fi
     [ "${GNU_I386:-}" != 1 ] || set -- "$@" gnu-i386
+    [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-kvm
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n
     exec make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" GNU_AGENTS="$GNU_AGENTS" \
         DRY_RUN="$DRY_RUN" GNU_LINK="$GNU_LINK" \

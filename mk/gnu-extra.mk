@@ -148,6 +148,27 @@ $(GNU_GAMES_STAMP): $(GNU_GAMES_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" \
 	        GNU_DEBIAN_LISTS="$(GNU_GAMES_LISTS)" ./vendor/gnu/debian/fetch_debs.sh games'
 
+# The KVM layer (vendor/gnu/kvm/Readme.md), for x86-64 alone: Debian's QEMU,
+# a closure of its own from the desktop's snapshot, and kvm-unit-tests and
+# Linux's KVM selftests, built with the cross toolchain, in one step.
+GNU_KVM_STAMP = $(GNU_OUT)/kvm.stamp
+GNU_STEP_STAMPS += $(GNU_KVM_STAMP)
+GNU_KVM_SOURCES = vendor/gnu/kvm/build_kvm.sh vendor/gnu/kvm/qemu.list vendor/gnu/kvm/sources.txt \
+                  vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
+                  vendor/gnu/debian/resolve_debs.py vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+
+.PHONY: gnu-kvm
+gnu-kvm: $(GNU_KVM_STAMP)
+
+$(GNU_KVM_STAMP): $(GNU_KVM_SOURCES) $(GNU_TOOLCHAIN_STAMP) | $(SHA256TOOL) $(ETUDE)
+	@test "$(ARCH)" = x86_64 || { echo "gnu: kvm: the KVM layer is the x86-64 root's; run make ARCH=x86_64 gnu-kvm" >&2; exit 1; }
+	@rm -f $@
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
+	    $(GNU_STEP) -n gnu-kvm -t $@ $(STEP_INPUTS) -u cross -u sysroot \
+	        -o debian/kvm -o work/debian/kvm/files -o work/debian/kvm/closure.txt -o kvm \
+	        -- $(call GNU_STEP_RUN,vendor/gnu/kvm/build_kvm.sh); fi
+	@test -x $(GNU_OUT)/kvm/opt/kvm-unit-tests/run_tests.sh || { echo "gnu: kvm: the layer has no opt/kvm-unit-tests/run_tests.sh" >&2; exit 1; }
+
 # IGT's tests, built from Debian's intel-gpu-tools source in the Debian
 # builder guest (vendor/gnu/igt/build_igt.sh), for x86-64 alone. The guest is
 # an x86-64 QEMU machine, so the step runs where the layer builds on an
