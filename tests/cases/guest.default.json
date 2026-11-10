@@ -2261,6 +2261,44 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "ids", "count": 1}]}
     },
     {
+      "case_id": "guest.default.ttyflowprobe",
+      "behavior": "A pseudo-terminal's software flow control and signal-character flush follow Linux: ^S and ^Q stop and restart the slave's output and reach no reader, IXANY restarts on any character, TCXONC stops, restarts and sends the flow characters, a packet master reads the STOP, START, NOSTOP, DOSTOP and flush statuses, and the signal character flushes both queues unless NOFLSH is set.",
+      "units": ["default", "ttyflowprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "ttyflowprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "setup", "checks": "A pair opens, the slave's echo goes off and the master's packet mode on.", "source": "program"},
+        {"assertion_id": "defaults", "checks": "A new slave has IXON without IXANY or IXOFF, VSTART ^Q and VSTOP ^S.", "source": "program"},
+        {"assertion_id": "stop", "checks": "^S from the master stops the slave's output: the master reads TIOCPKT_STOP, a nonblocking slave write is EAGAIN and poll gives no POLLOUT.", "source": "program"},
+        {"assertion_id": "blocked-write", "checks": "A blocking writer of the slave sleeps while output is stopped, and the master reads nothing.", "source": "program"},
+        {"assertion_id": "start", "checks": "^Q restarts output: the master reads TIOCPKT_START, the writer ends with the bytes it wrote, and the master reads them.", "source": "program"},
+        {"assertion_id": "not-read", "checks": "^S and ^Q in a line reach no reader.", "source": "program"},
+        {"assertion_id": "ixany", "checks": "Under IXANY any character restarts output and is read as well.", "source": "program"},
+        {"assertion_id": "tcooff", "checks": "TCXONC TCOOFF stops output with TIOCPKT_STOP, which ^Q does not end, TCOON restarts it with TIOCPKT_START, and an action past TCION is EINVAL.", "source": "program"},
+        {"assertion_id": "tcioff", "checks": "TCXONC TCIOFF and TCION send ^S and ^Q to the master.", "source": "program"},
+        {"assertion_id": "dostop", "checks": "Turning IXON off gives the master TIOCPKT_NOSTOP, and on again TIOCPKT_DOSTOP.", "source": "program"},
+        {"assertion_id": "signal-flush", "checks": "^C under ISIG discards the unread output and the partial line, and the master reads TIOCPKT_FLUSHREAD and TIOCPKT_FLUSHWRITE.", "source": "program"},
+        {"assertion_id": "noflsh", "checks": "Under NOFLSH ^C keeps the output and the partial line, and the master reads no status.", "source": "program"},
+        {"assertion_id": "cleanup", "checks": "The descriptors close.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "ttyflowprobe", "node": "tests/ttyflowprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "ids", "count": 1}]}
+    },
+    {
       "case_id": "guest.default.rngprobe",
       "behavior": "The random devices give varied bytes from a trusted source and refuse to read without one",
       "units": ["default", "rngprobe"],

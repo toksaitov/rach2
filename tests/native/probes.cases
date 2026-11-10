@@ -177,6 +177,7 @@ case sysdrmprobe -- sysdrmprobe
 case tcptest peer:echo -- tcptest closed=9
 case timeprobe -- timeprobe
 case trapprobe -- trapprobe
+case ttyflowprobe -- ttyflowprobe
 case udmabufprobe -- udmabufprobe
 case udptest peer:echo ports:12345 -- udptest
 case unlinkdirprobe.ext2 -- unlinkdirprobe dir=unlinkdir
