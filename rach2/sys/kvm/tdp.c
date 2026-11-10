@@ -324,6 +324,7 @@ int kvm_tdp_protect(struct kvm_vm *vm, uint64_t gfn, uint64_t mask)
         }
         if (level > 1) {
             *e = 0;
+            t->pages[level - 1]--;
             changed = 1;
         } else if (*e & fmt()->write) {
             *e &= ~fmt()->write;
