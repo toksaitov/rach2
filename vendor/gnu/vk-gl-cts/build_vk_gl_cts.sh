@@ -30,6 +30,11 @@
 #                      length of each list, and a case of each program run
 #                      once in the guest on llvmpipe and lavapipe
 #
+# The surfaceless platform opens libEGL.so, libGLESv2.so and libGL.so by
+# name, which only their development packages provide; the build changes
+# them to the sonames libEGL.so.1, libGLESv2.so.2 and libGL.so.1, which the
+# root has.
+#
 # 1.4.1.1, Mesa 25.0.7's CI pin, builds with its Vulkan video tests, as Mesa
 # builds it; its CMake stops when the validation layers' source is absent,
 # so that stop is made a message. 1.4.7.1, the Lenovo's references, builds
@@ -109,6 +114,14 @@ if [ "${1:-}" = guest ]; then
                 tar -x -z -f "/tmp/${url##*/}" -C "$d" --strip-components=1
                 say "external: ${name%-"$v"} $commit"
             done
+        # The surfaceless platform opens EGL, GLES and GL by the names only
+        # their development packages install; the root has the sonames.
+        sed -i -e 's/m_egl("libEGL\.so")/m_egl("libEGL.so.1")/' \
+            -e 's/"libGLESv2\.so"/"libGLESv2.so.2"/' -e 's/"libGL\.so"/"libGL.so.1"/' \
+            "$src/framework/platform/surfaceless/tcuSurfacelessPlatform.cpp"
+        [ "$(grep -c -e '"libEGL\.so\.1"' -e '"libGLESv2\.so\.2"' -e '"libGL\.so\.1"' \
+            "$src/framework/platform/surfaceless/tcuSurfacelessPlatform.cpp")" -eq 3 ] ||
+            die "$v: the surfaceless platform's library names were not found"
         case $v in
             1.4.1.1)
                 sed -i 's/message(FATAL_ERROR "vulkan-validationlayers not found")/message(STATUS "vulkan-validationlayers left out")/' \
@@ -138,7 +151,7 @@ if [ "${1:-}" = guest ]; then
         cp "$src/LICENSE" "$o/licenses/vk-gl-cts"
         for d in "$src"/external/*/src; do
             n=$(basename "$(dirname "$d")")
-            for f in "$d"/LICENSE* "$d"/COPYING* "$d"/license*; do
+            for f in "$d"/LICENSE* "$d"/COPYING*; do
                 [ ! -f "$f" ] || cp "$f" "$o/licenses/$n-$(basename "$f")"
             done
         done
