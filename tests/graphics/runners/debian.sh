@@ -34,7 +34,7 @@
 # gnu-vk-gl-cts` when it is missing, unpacked under /opt as the root has it.
 # igt, modetest and vkcube run their runner as root, with vkms loaded in the
 # profile `none`, and the others as the guest's user; vkcube builds its layer
-# with the guest's compiler. All of them run in /tmp, where the lists are.
+# with the guest's GCC. All of them run in /tmp, where the lists are.
 # `clips` makes the clips that video.sh names in DIR, unless DIR holds them
 # already, in the guest with Debian's ffmpeg, which it installs from the
 # snapshot for that boot alone, so that the reference guest's browsers find

@@ -7,19 +7,21 @@
 #
 # Ends any Weston that runs, such as Rach2's boot session, whose supervisor
 # then waits, and starts a Weston of its own on the DRM card with its GL
-# renderer, kiosk-shell and --debug, which offers the screenshot protocol,
-# through libseat's noop backend, which opens the card as root. vkcube then
-# presents 346 frames to it in FIFO, through the Vulkan ICD file ICD alone
-# when -i names one, with the layer of vkhold.c, which the runner builds with
-# the guest's compiler: the layer times the first 300 presents and holds
-# vkcube after the 300th and the 345th. During each hold, Weston shows that
-# frame and nothing changes it: weston-screenshooter reads it back from
-# Weston's renderer, and frame.py checksums its pixels, until two shots in a
-# row give the same sum. vkcube's picture depends on the number of frames
-# drawn alone, never on the clock, so a frame's sum is the same in every
-# guest whose driver draws it the same; the reference is the Debian guest's,
-# whose Venus draws on the same host as Rach2's. Run it with guest-env.sh's
-# performance class, LP_NUM_THREADS at the guest's CPU count.
+# renderer, kiosk-shell, --debug, which offers the screenshot protocol, and
+# --no-config, so that no guest's weston.ini adds to it, through libseat's
+# noop backend, which opens the card as root. vkcube then presents 346 frames
+# to it in FIFO, through the Vulkan ICD file ICD alone when -i names one,
+# with the layer of vkhold.c, which the runner builds with the guest's GCC,
+# since Rach2's cc is TinyCC, which makes no shared object. The layer times
+# the first 300 presents and holds vkcube after the 300th and the 345th.
+# During each hold, Weston shows that frame and nothing changes it:
+# weston-screenshooter reads it back from Weston's renderer, and frame.py
+# checksums its pixels, until two shots in a row give the same sum. vkcube's
+# picture depends on the number of frames drawn alone, never on the clock,
+# so a frame's sum is the same in every guest whose driver draws it the
+# same; the reference is the Debian guest's, whose Venus draws on the same
+# host as Rach2's. Run it with guest-env.sh's performance class,
+# LP_NUM_THREADS at the guest's CPU count.
 #
 # OUT (.) gets the record, `frames`, one line a held frame, `frame N WxH
 # crc32 0xCRC`, `timing`, the layer's line for the 300 presents, the GPU line
@@ -51,7 +53,7 @@ while getopts i:o: o; do
 done
 shift $((OPTIND - 1))
 [ $# -eq 0 ] || { echo "usage: vkcube.sh [-i ICD] [-o OUT]" >&2; exit 2; }
-for program in vkcube weston weston-screenshooter cc python3; do
+for program in vkcube weston weston-screenshooter gcc python3; do
     command -v "$program" > /dev/null || { echo "vkcube: no $program" >&2; exit 1; }
 done
 
@@ -118,7 +120,7 @@ runner_record "case vkcube $FRAMES frames in FIFO, held after $HOLDS, the first 
 runner_record "icd ${icd:-none named, every driver the loader finds}"
 runner_record "vkcube $(vkcube_version)"
 
-cc -std=c99 -O2 -shared -fPIC -o "$RUNNER_WORK/libvkhold.so" "$RUNNER_DIR/vkhold.c" ||
+gcc -std=c99 -O2 -shared -fPIC -o "$RUNNER_WORK/libvkhold.so" "$RUNNER_DIR/vkhold.c" ||
     runner_die "the layer did not build"
 mkdir "$RUNNER_WORK/layers"
 cat > "$RUNNER_WORK/layers/vkhold.json" << EOF
@@ -154,7 +156,7 @@ WAYLAND_DISPLAY=wayland-vkcube
 export XDG_RUNTIME_DIR WAYLAND_DISPLAY
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 LIBSEAT_BACKEND=noop setsid weston --backend=drm --renderer=gl --shell=kiosk --idle-time=0 \
-    --debug --socket="$WAYLAND_DISPLAY" --log="$out/weston.log" < /dev/null > /dev/null 2>&1 &
+    --no-config --debug --socket="$WAYLAND_DISPLAY" --log="$out/weston.log" < /dev/null > /dev/null 2>&1 &
 RUNNER_WESTON=$!
 tries=0
 until [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do
