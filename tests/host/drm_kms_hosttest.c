@@ -406,7 +406,7 @@ static void row_blobs(void)
     CHECK(drm_mode_getblob_ioctl(&dev, &g, &fc) == 0 && !strcmp(out, bytes),
           "GETPROPBLOB's bytes, to any file");
     CHECK(blob_destroy(&fc, id) == -EPERM, "DESTROYPROPBLOB by another file: EPERM");
-    CHECK(blob_destroy(&fb_, id + 100) == -EINVAL, "DESTROYPROPBLOB of no blob: EINVAL");
+    CHECK(blob_destroy(&fb_, id + 100) == -ENOENT, "DESTROYPROPBLOB of no blob: ENOENT");
     CHECK(blob_destroy(&fb_, id) == 0, "DESTROYPROPBLOB by its owner");
     CHECK(drm_mode_getblob_ioctl(&dev, &g, &fc) == -ENOENT, "a destroyed blob: ENOENT");
 }

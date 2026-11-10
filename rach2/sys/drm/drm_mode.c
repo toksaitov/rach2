@@ -618,7 +618,7 @@ int32_t drm_mode_createblob_ioctl(struct drm_device *dev, void *data, struct drm
     return 0;
 }
 
-/** DESTROYPROPBLOB: let go of a blob the caller made. -EINVAL for no blob,
+/** DESTROYPROPBLOB: let go of a blob the caller made. -ENOENT for no blob,
  * -EPERM for one the caller did not make, as Linux. */
 int32_t drm_mode_destroyblob_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
@@ -630,7 +630,7 @@ int32_t drm_mode_destroyblob_ioctl(struct drm_device *dev, void *data, struct dr
     }
     blob = drm_property_lookup_blob(dev, req->blob_id);
     if (!blob) {
-        return -EINVAL;
+        return -ENOENT;
     }
     if (blob->owner != file) {
         drm_property_blob_put(blob);

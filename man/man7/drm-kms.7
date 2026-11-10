@@ -314,8 +314,8 @@ An unknown flag; a value a property does not allow; a modeset without
 an event without a CRTC;
 a format, modifier, pitch or size the device does not take; a framebuffer
 a plane cannot show; a route an encoder cannot take; a page flip that
-changes the format or names a target vblank; a blob of length 0 or of no
-ID; a vblank call on a CRTC that is off, of an index the device does not
+changes the format or names a target vblank; a blob of length 0, or a
+blob property that names no blob; a vblank call on a CRTC that is off, of an index the device does not
 have, with
 .Dv _DRM_VBLANK_SIGNAL
 or with an unknown flag; or
@@ -327,7 +327,9 @@ in-fences, or during
 .Dv DRM_IOCTL_WAIT_VBLANK .
 .It Er ENOENT
 An ID of no object of the kind asked, a property an atomic commit names
-that the object does not have, or a framebuffer of another file.
+that the object does not have, a framebuffer of another file, or a blob
+.Dv DRM_IOCTL_MODE_DESTROYPROPBLOB
+names that does not exist.
 .It Er ENOMEM
 No room for another event in the file's 4096 bytes.
 .It Er ENOSPC
