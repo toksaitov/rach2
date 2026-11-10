@@ -1050,17 +1050,18 @@ static uint8_t input_index(struct hid_dev *hid, const struct hid_input *in)
 }
 
 /** The multiplier the Resolution Multiplier field `f` gives with its value
- * `v`, Linux's `hid_calculate_multiplier`; a logical range that wraps to
- * -1 gives 1, where Linux's quotient could trap. */
+ * `v`, Linux's `hid_calculate_multiplier`; the one quotient that traps on
+ * Linux, INT32_MIN over -1, gives 1. */
 static int calculate_multiplier(const struct hid_field *f, int32_t v)
 {
     int32_t range = wrap_sub(f->logical_maximum, f->logical_minimum);
+    int32_t dist = wrap_sub(v, f->logical_minimum);
     int32_t m;
 
-    if (range == 0 || range == -1) {
+    if (range == 0 || (range == -1 && dist == -0x7fffffffL - 1)) {
         return 1;
     }
-    m = (int32_t)((uint32_t)(wrap_sub(v, f->logical_minimum) / range) *
+    m = (int32_t)((uint32_t)(dist / range) *
                       (uint32_t)wrap_sub(f->physical_maximum, f->physical_minimum) +
                   (uint32_t)f->physical_minimum);
     if (m == 0 || m > 255 || m < -255) {
@@ -1480,27 +1481,20 @@ static void handle_scroll(struct hid_input *in, struct hid_usage *u, int32_t val
     input_event(in, EV_REL, u->code, hi_res, 0);
 }
 
-/* The bound below which a hat's numbers take Linux's arithmetic whole. */
-/* The largest value whose distance from a 16-bit minimum, times 8, fits
- * an int32_t. */
-#define HAT_SMALL 0x0FFFFFFF
-
 /**
  * The direction, 1 to 8 or 0 for centred, of hat switch field `f` at
  * `value`, Linux's `(value - hat_min) * 8 / (hat_max - hat_min + 1) + 1`,
  * with its minimum and maximum cut to 16 bits as Linux keeps them, so that
- * the divisor is from 2 to 65536. A value too far out for Linux's int to
- * hold the product is centred, as every value that far gives Linux a
- * direction past 8 or below 0.
+ * the divisor is from 2 to 65536, and the product wrapped to 32 bits as
+ * Linux, built with -fno-strict-overflow, wraps it. The caller centres a
+ * result past 8 or below 0.
  */
 static int hat_direction(const struct hid_field *f, int32_t value)
 {
     int32_t min = (int16_t)f->logical_minimum, max = (int16_t)f->logical_maximum;
+    int32_t product = (int32_t)(((uint32_t)value - (uint32_t)min) * 8u);
 
-    if (value > HAT_SMALL || value < -HAT_SMALL) {
-        return 0;
-    }
-    return (value - min) * 8 / (max - min + 1) + 1;
+    return (int)(product / (max - min + 1) + 1);
 }
 
 /** The event of hat switch or D-pad usage `u` of field `f` at `value`: a
