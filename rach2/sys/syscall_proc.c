@@ -31,6 +31,7 @@
 #include "proc/sigframe.h"
 #include "proc/pidfd.h"
 #include "proc/rseq.h"
+#include "proc/smp.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -2675,10 +2676,15 @@ static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
  * one that has ended until it is reaped. Counted by the real uid at the
  * time, so a thread that took a new identity with setuid counts for that
  * user. The check follows reclaim, which may sleep, and the new record
- * reserves its count before another building step can sleep. 0, or -EAGAIN.
+ * reserves its count before another building step can sleep. A
+ * SCHED_DEADLINE parent without SCHED_RESET_ON_FORK may not fork at all, as
+ * Linux's sched_fork refuses it. 0, or -EAGAIN.
  */
 static int32_t fork_nproc(const process_t *parent)
 {
+    if (parent->sched_policy == SCHED_DEADLINE && !parent->sched_reset) {
+        return -EAGAIN; /* Linux's sched_fork refuses a deadline thread's child */
+    }
     if (parent->ruid == 0 || parent->rlim[RLIM_NPROC].cur == RLIM_INFINITY) {
         return 0;
     }
@@ -2688,8 +2694,8 @@ static int32_t fork_nproc(const process_t *parent)
 /**
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
- * setsid or setpgid, the nice value, the scheduling policy without its
- * SCHED_RESET_ON_FORK and the I/O priority, the OOM score adjustment and
+ * setsid or setpgid, the nice value, the scheduling policy with its
+ * parameters, the I/O priority, the OOM score adjustment and
  * its floor, the persona, the no_new_privs flag, whether it
  * gave up its capabilities, the seccomp mode and filters, the limits, the
  * credentials, the memory policy, with a reference that `mm_drop` gives
@@ -2706,8 +2712,26 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->pgid = parent->pgid;
     child->nice = parent->nice;
     child->ioprio = parent->ioprio;
-    child->sched_policy = parent->sched_reset && parent->rt_priority ? 0 : parent->sched_policy;
-    child->rt_priority = parent->sched_reset ? 0 : parent->rt_priority;
+    child->sched_policy = parent->sched_policy;
+    child->rt_priority = parent->rt_priority;
+    child->sched_slice = parent->sched_slice;
+    child->dl_runtime = parent->dl_runtime;
+    child->dl_deadline = parent->dl_deadline;
+    child->dl_period = parent->dl_period;
+    child->dl_flags = parent->dl_flags;
+    if (parent->sched_reset) {
+        /* SCHED_RESET_ON_FORK, as Linux's sched_fork: a real-time or
+         * deadline policy becomes SCHED_OTHER at nice 0, a negative nice
+         * becomes 0, the slice the default, and the flag is not passed on. */
+        if (parent->rt_priority || parent->sched_policy == SCHED_DEADLINE) {
+            child->sched_policy = SCHED_OTHER;
+            child->nice = 0;
+        } else if (child->nice < 0) {
+            child->nice = 0;
+        }
+        child->rt_priority = 0;
+        child->sched_slice = 0;
+    }
     if (child->tg != parent->tg) {
         child->tg->oom_score_adj = parent->tg->oom_score_adj;
         child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
@@ -8097,24 +8121,6 @@ long sys_ioprio_get(isr_params_t *params)
     return best;
 }
 
-/* The scheduling policies Linux numbers. SCHED_OTHER, SCHED_BATCH and
- * SCHED_IDLE are kept as a thread's policy, and every ready thread takes its
- * turn whichever it has; the others are defined so that a call about each
- * returns the error or the value Linux returns for it. */
-#define SCHED_OTHER 0
-
-#define SCHED_FIFO 1
-
-#define SCHED_RR 2
-
-#define SCHED_BATCH 3
-
-#define SCHED_IDLE 5
-
-#define SCHED_DEADLINE 6
-
-#define SCHED_EXT 7
-
 /* The flag of a policy that clears itself in a fork's child, which keeps
  * the policy, as Linux keeps SCHED_BATCH and SCHED_IDLE. */
 #define SCHED_RESET_ON_FORK 0x40000000
@@ -8205,30 +8211,303 @@ long sys_sched_yield(isr_params_t *params)
     return 0;
 }
 
+/* struct sched_attr of sched_setattr(2) and sched_getattr(2), Linux's
+ * layout, the same for an i386 caller: SCHED_ATTR_SIZE_VER0 bytes up to
+ * the period, SCHED_ATTR_SIZE_VER1 with the utilization clamps. */
+struct sched_attr {
+    uint32_t size;           /* the bytes the caller's structure has */
+    uint32_t sched_policy;   /* SCHED_ */
+    uint64_t sched_flags;    /* SCHED_FLAG_ */
+    int32_t sched_nice;      /* the ordinary policies' nice value */
+    uint32_t sched_priority; /* FIFO's and RR's priority, else 0 */
+    uint64_t sched_runtime;  /* nanoseconds: DEADLINE's, or the slice asked */
+    uint64_t sched_deadline; /* nanoseconds, DEADLINE's relative deadline */
+    uint64_t sched_period;   /* nanoseconds, DEADLINE's, 0 for the deadline */
+    uint32_t sched_util_min; /* the clamps, which this kernel does not have */
+    uint32_t sched_util_max;
+};
+
+#define SCHED_ATTR_SIZE_VER0 48u
+#define SCHED_ATTR_SIZE_VER1 56u
+
+/* The flags of struct sched_attr, Linux's values. SCHED_FLAG_SUGOV is the
+ * kernel's own, which the flags' check lets by and a later one refuses, as
+ * Linux's __sched_setscheduler does. */
+#define SCHED_FLAG_RESET_ON_FORK 0x01u
+#define SCHED_FLAG_RECLAIM       0x02u
+#define SCHED_FLAG_DL_OVERRUN    0x04u
+#define SCHED_FLAG_KEEP_POLICY   0x08u
+#define SCHED_FLAG_KEEP_PARAMS   0x10u
+#define SCHED_FLAG_UTIL_CLAMP    0x60u
+#define SCHED_FLAG_ALL           0x7Fu
+#define SCHED_FLAG_SUGOV         0x10000000u
+#define SCHED_DL_FLAGS           (SCHED_FLAG_RECLAIM | SCHED_FLAG_DL_OVERRUN)
+
+/* SCHED_DEADLINE's bounds, Linux's defaults: a period of 100 us to 2^22 us
+ * (sched_deadline_period_min_us and _max_us), a runtime of 1024 ns at
+ * least, and the bandwidth of the admitted threads, runtime over period in
+ * fixed point of SCHED_BW_SHIFT bits, at most 95% of each processor
+ * (sched_rt_runtime_us over sched_rt_period_us). */
+#define SCHED_DL_PERIOD_MIN  ((uint64_t)100000u)
+#define SCHED_DL_PERIOD_MAX  (((uint64_t)1 << 22) * 1000u)
+#define SCHED_DL_RUNTIME_MIN 1024u
+#define SCHED_BW_SHIFT       20
+#define SCHED_DL_BW_CPU      996147u
+
+/* The slice an ordinary thread may ask for, Linux's clamp of 0.1 to 100 ms,
+ * and the default one before its scaling by the processors. */
+#define SCHED_SLICE_MIN  100000u
+#define SCHED_SLICE_MAX  100000000u
+#define SCHED_SLICE_BASE 750000u
+
+/* What a call asks of a thread's scheduling, as Linux's struct sched_attr
+ * reaches __sched_setscheduler. */
+struct sched_req {
+    int policy;        /* -1 keeps the thread's, with its reset flag */
+    uint32_t flags;    /* SCHED_FLAG_, the high word refused before */
+    int32_t nice;      /* -20 to 19 */
+    uint32_t priority; /* as the caller gave it */
+    uint64_t runtime;
+    uint64_t deadline;
+    uint64_t period;
+};
+
+/** Whether `policy` is one Linux's valid_policy takes; SCHED_EXT is not, as
+ * for a kernel without sched_ext. */
+static int sched_policy_valid(int policy)
+{
+    return policy == SCHED_OTHER || policy == SCHED_BATCH || policy == SCHED_IDLE ||
+           policy == SCHED_FIFO || policy == SCHED_RR || policy == SCHED_DEADLINE;
+}
+
+/** Whether `policy` is one of the ordinary ones, Linux's fair_policy. */
+static int sched_policy_fair(int policy)
+{
+    return policy == SCHED_OTHER || policy == SCHED_BATCH || policy == SCHED_IDLE;
+}
+
+/** Whether `policy` is SCHED_FIFO or SCHED_RR. */
+static int sched_policy_rt(int policy)
+{
+    return policy == SCHED_FIFO || policy == SCHED_RR;
+}
+
+/**
+ * `runtime` over `period` as a fraction of SCHED_BW_SHIFT bits, Linux's
+ * to_ratio; 0 for a period of 0. Long division, since the freestanding
+ * kernel has no 64-bit divide; runtime is under 2^43 ns where it is
+ * called, so the shift does not overflow.
+ */
+static uint64_t sched_bw(uint64_t period, uint64_t runtime)
+{
+    uint64_t n = runtime << SCHED_BW_SHIFT, q = 0, r = 0;
+    int i;
+
+    if (period == 0) {
+        return 0;
+    }
+    for (i = 63; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1u);
+        if (r >= period) {
+            r -= period;
+            q |= (uint64_t)1 << i;
+        }
+    }
+    return q;
+}
+
+/** Whether `a` has deadline parameters Linux's __checkparam_dl takes. */
+static int sched_dl_valid(const struct sched_req *a)
+{
+    uint64_t period = a->period ? a->period : a->deadline;
+
+    if (a->flags & SCHED_FLAG_SUGOV) {
+        return 1;
+    }
+    if (a->deadline == 0 || a->runtime < SCHED_DL_RUNTIME_MIN || (a->deadline >> 63) != 0 ||
+        (a->period >> 63) != 0) {
+        return 0;
+    }
+    return period >= a->deadline && a->deadline >= a->runtime && period >= SCHED_DL_PERIOD_MIN &&
+           period <= SCHED_DL_PERIOD_MAX;
+}
+
+/**
+ * Whether admitting `p` with `policy` and the parameters of `a` would pass
+ * the deadline bandwidth, as Linux's sched_dl_overflow: the bandwidth of
+ * every other live SCHED_DEADLINE thread and the new one together over 95%
+ * of each processor started. A thread leaving the policy, or keeping its
+ * bandwidth, always passes.
+ */
+static int sched_dl_overflow(const process_t *p, int policy, const struct sched_req *a)
+{
+    uint64_t total, cap, bw;
+    const process_t *q;
+
+    if (policy != SCHED_DEADLINE || (a->flags & SCHED_FLAG_SUGOV)) {
+        return 0;
+    }
+    bw = sched_bw(a->period ? a->period : a->deadline, a->runtime);
+    if (p->sched_policy == SCHED_DEADLINE && bw == sched_bw(p->dl_period, p->dl_runtime)) {
+        return 0;
+    }
+    total = bw;
+    for (q = proc_list; q; q = q->next) {
+        if (q != p && q->sched_policy == SCHED_DEADLINE && q->state != PROC_ZOMBIE &&
+            q->state != PROC_UNUSED) {
+            total += sched_bw(q->dl_period, q->dl_runtime);
+        }
+    }
+    cap = (uint64_t)SCHED_DL_BW_CPU * (uint64_t)smp_cpu_count();
+    return total > cap;
+}
+
+/**
+ * Linux's checks of a caller without CAP_SYS_NICE, which RLIMIT_NICE and
+ * RLIMIT_RTPRIO of 0 leave: no lower nice value, no entry to a real-time
+ * policy or higher priority in one, no SCHED_DEADLINE, no leaving
+ * SCHED_IDLE, which counts as nice 20, no target of another user, and no
+ * clearing of SCHED_RESET_ON_FORK. 0, or -EPERM.
+ */
+static int32_t sched_user_check(const process_t *p, const struct sched_req *a, int policy,
+                                int reset)
+{
+    if (sched_policy_fair(policy) && a->nice < p->nice) {
+        return -EPERM;
+    }
+    if (sched_policy_rt(policy) && (policy != p->sched_policy || a->priority > p->rt_priority)) {
+        return -EPERM;
+    }
+    if (policy == SCHED_DEADLINE || (p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE) ||
+        !sched_may_change(p) || (p->sched_reset && !reset)) {
+        return -EPERM;
+    }
+    return 0;
+}
+
+/**
+ * The checks of `a` that come before any look at the processors, in Linux's
+ * order (__sched_setscheduler), for `policy`, the one `p` is to have: a
+ * flag Linux does not know, a priority past 99 or one that does not suit
+ * the policy, or deadline parameters out of their bounds, -EINVAL; what the
+ * caller may not do without privilege (`sched_user_check`), -EPERM; the
+ * kernel's SCHED_FLAG_SUGOV, -EINVAL; the utilization clamps, -EOPNOTSUPP,
+ * as from a kernel without them. 0 when they pass.
+ */
+static int32_t sched_check(const process_t *p, const struct sched_req *a, int policy, int reset)
+{
+    int32_t rc;
+
+    if ((a->flags & ~(SCHED_FLAG_ALL | SCHED_FLAG_SUGOV)) != 0 || a->priority > SCHED_RT_PRIO_MAX ||
+        (policy == SCHED_DEADLINE && !sched_dl_valid(a)) ||
+        sched_policy_rt(policy) != (a->priority != 0)) {
+        return -EINVAL;
+    }
+    if (!cred_privileged()) {
+        rc = sched_user_check(p, a, policy, reset);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (a->flags & SCHED_FLAG_SUGOV) {
+        return -EINVAL;
+    }
+    return (a->flags & SCHED_FLAG_UTIL_CLAMP) ? -EOPNOTSUPP : 0;
+}
+
+/** Store in `p` the parameters `a` gives `policy`: a deadline thread's
+ * runtime, deadline, period and flags, or an ordinary thread's nice value
+ * and slice, clamped to 0.1 to 100 ms; and the policy and priority. */
+static void sched_store(process_t *p, const struct sched_req *a, int policy)
+{
+    if (policy == SCHED_DEADLINE) {
+        p->dl_runtime = a->runtime;
+        p->dl_deadline = a->deadline;
+        p->dl_period = a->period ? a->period : a->deadline;
+        p->dl_flags = a->flags & SCHED_DL_FLAGS;
+    } else if (sched_policy_fair(policy)) {
+        p->nice = a->nice;
+        p->sched_slice = a->runtime == 0                ? 0
+                         : a->runtime < SCHED_SLICE_MIN ? SCHED_SLICE_MIN
+                         : a->runtime > SCHED_SLICE_MAX ? SCHED_SLICE_MAX
+                                                        : (uint32_t)a->runtime;
+    }
+    p->sched_policy = (uint8_t)policy;
+    p->rt_priority = (uint8_t)a->priority;
+}
+
+/**
+ * Give `p` the scheduling `a` asks for, in Linux's order and with its
+ * errors (__sched_setscheduler): a policy Linux does not take, -EINVAL;
+ * `sched_check`'s errors; SCHED_DEADLINE for a thread whose affinity leaves
+ * out a processor started, -EPERM; and bandwidth the deadline threads do
+ * not have (`sched_dl_overflow`), -EBUSY. A request that leaves a deadline
+ * thread's parameters as they are keeps only its reset flag, and so does
+ * one with SCHED_FLAG_KEEP_PARAMS.
+ *
+ * A SCHED_DEADLINE thread takes its turn among the ordinary threads: the
+ * scheduler has no deadline class, and a real-time priority without
+ * Linux's throttling at the runtime would let one that overran its
+ * runtime starve the rest.
+ */
+static int32_t sched_apply(process_t *p, const struct sched_req *a)
+{
+    int policy = a->policy;
+    uint64_t online = cpu_online_mask();
+    int32_t rc;
+    int reset;
+
+    if (policy < 0) {
+        reset = p->sched_reset;
+        policy = p->sched_policy;
+    } else {
+        reset = (a->flags & SCHED_FLAG_RESET_ON_FORK) != 0;
+        if (!sched_policy_valid(policy)) {
+            return -EINVAL;
+        }
+    }
+    rc = sched_check(p, a, policy, reset);
+    if (rc != 0) {
+        return rc;
+    }
+    if (policy == p->sched_policy && policy == SCHED_DEADLINE && a->runtime == p->dl_runtime &&
+        a->deadline == p->dl_deadline && a->period == p->dl_period &&
+        (a->flags & SCHED_DL_FLAGS) == p->dl_flags) {
+        p->sched_reset = (uint8_t)reset;
+        return 0;
+    }
+    if (policy == SCHED_DEADLINE && (p->affinity & online) != online) {
+        return -EPERM;
+    }
+    if (sched_dl_overflow(p, policy, a)) {
+        return -EBUSY;
+    }
+    p->sched_reset = (uint8_t)reset;
+    if (!(a->flags & SCHED_FLAG_KEEP_PARAMS)) {
+        sched_store(p, a, policy);
+        futex_pi_recalculate();
+        sched_priority_changed(p);
+    }
+    return 0;
+}
+
 /**
  * Change a thread's policy and priority (sched_setscheduler(2)), or its
  * priority alone (sched_setparam, which passes `policy` -1 and keeps the
  * policy and its SCHED_RESET_ON_FORK).
  *
- * `uparam` points at a struct sched_param, one int. SCHED_OTHER, SCHED_BATCH
- * and SCHED_IDLE take priority 0, and are set, with or without
- * SCHED_RESET_ON_FORK, for a caller that may change the target. The rest
- * fails in Linux's order and with its errors: no parameter or a negative
- * pid, -EINVAL; an unreadable parameter, -EFAULT; no such process, -ESRCH; a
- * policy Linux does not define, a priority outside 0 to 99, or one that does
- * not suit the policy, -EINVAL, as for SCHED_DEADLINE, which takes its
- * parameters from sched_setattr alone. FIFO and RR take priority 1 to 99;
- * entry or a raised priority needs privilege with RLIMIT_RTPRIO 0.
- * Without privilege, -EPERM as well for a caller that may not change the
- * target, for leaving SCHED_IDLE, which Linux counts as nice 20 and allows
- * only as far as RLIMIT_NICE, 0 here, would, and for clearing
- * SCHED_RESET_ON_FORK.
+ * `uparam` points at a struct sched_param, one int. No parameter or a
+ * negative pid, -EINVAL; an unreadable parameter, -EFAULT; no such thread,
+ * -ESRCH; then `sched_apply`, with the thread's nice value and slice kept
+ * as Linux's _sched_setscheduler keeps them, and SCHED_RESET_ON_FORK in
+ * `policy` taken as the flag. SCHED_DEADLINE takes its parameters from
+ * sched_setattr alone, and is -EINVAL here.
  */
 static int32_t sched_set(int pid, int policy, const void __user *uparam)
 {
+    struct sched_req a;
     int32_t priority;
     process_t *p;
-    int reset;
 
     if (!uparam || pid < 0) {
         return -EINVAL;
@@ -8240,47 +8519,16 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
     if (!p) {
         return -ESRCH;
     }
-    if (policy >= 0) {
-        reset = (policy & SCHED_RESET_ON_FORK) != 0;
-        policy &= ~SCHED_RESET_ON_FORK;
-    } else {
-        reset = p->sched_reset;
-        policy = p->sched_policy;
+    k_memset(&a, 0, sizeof(a));
+    a.policy = policy;
+    if (policy >= 0 && (policy & SCHED_RESET_ON_FORK)) {
+        a.flags = SCHED_FLAG_RESET_ON_FORK;
+        a.policy = policy & ~SCHED_RESET_ON_FORK;
     }
-    if (priority < 0 || priority > SCHED_RT_PRIO_MAX) {
-        return -EINVAL;
-    }
-    switch (policy) {
-    case SCHED_OTHER:
-    case SCHED_BATCH:
-    case SCHED_IDLE:
-        if (priority != 0) {
-            return -EINVAL;
-        }
-        break;
-    case SCHED_FIFO:
-    case SCHED_RR:
-        if (priority == 0) {
-            return -EINVAL;
-        }
-        if (!cred_privileged() && (policy != p->sched_policy || priority > p->rt_priority)) {
-            return -EPERM;
-        }
-        break;
-    default:
-        return -EINVAL;
-    }
-    if (!sched_may_change(p) ||
-        (!cred_privileged() &&
-         ((p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE) || (p->sched_reset && !reset)))) {
-        return -EPERM;
-    }
-    p->sched_policy = (uint8_t)policy;
-    p->sched_reset = (uint8_t)reset;
-    p->rt_priority = (uint8_t)priority;
-    futex_pi_recalculate();
-    sched_priority_changed(p);
-    return 0;
+    a.priority = (uint32_t)priority;
+    a.nice = p->nice;
+    a.runtime = p->sched_slice;
+    return sched_apply(p, &a);
 }
 
 /** sched_setscheduler takes pid, policy and the struct sched_param; see
@@ -8298,6 +8546,181 @@ long sys_sched_setscheduler(isr_params_t *params)
 long sys_sched_setparam(isr_params_t *params)
 {
     return sched_set((int)SC_ARG(params, 0), -1, (const void __user *)SC_ARG(params, 1));
+}
+
+/** The slice an ordinary thread has, in nanoseconds: the one it asked for,
+ * or Linux's default, 0.75 ms times one more than the log of the
+ * processors started, eight at most (sysctl_sched_base_slice). */
+static uint32_t sched_slice_of(const process_t *p)
+{
+    int cpus = smp_cpu_count();
+    uint32_t factor = 1;
+
+    if (p->sched_slice != 0) {
+        return p->sched_slice;
+    }
+    while (cpus > 1 && factor < 4) {
+        cpus >>= 1;
+        factor++;
+    }
+    return SCHED_SLICE_BASE * factor;
+}
+
+/** Fill in `k` the parameters of `p`'s present policy, as Linux's
+ * get_params: a deadline thread's parameters and flags, a real-time
+ * thread's priority, or an ordinary thread's nice value and slice. */
+static void sched_get_params(const process_t *p, struct sched_attr *k)
+{
+    if (p->sched_policy == SCHED_DEADLINE) {
+        k->sched_priority = p->rt_priority;
+        k->sched_runtime = p->dl_runtime;
+        k->sched_deadline = p->dl_deadline;
+        k->sched_period = p->dl_period;
+        k->sched_flags = (k->sched_flags & ~(uint64_t)SCHED_DL_FLAGS) | p->dl_flags;
+    } else if (sched_policy_rt(p->sched_policy)) {
+        k->sched_priority = p->rt_priority;
+    } else {
+        k->sched_nice = p->nice;
+        k->sched_runtime = sched_slice_of(p);
+    }
+}
+
+/**
+ * Copy the caller's struct sched_attr into `k`, as Linux's sched_copy_attr:
+ * a size of 0 is SCHED_ATTR_SIZE_VER0's, one below that or past a page is
+ * -E2BIG, and so is a larger structure than this kernel's whose further
+ * bytes are not all 0, either with this kernel's size written back into
+ * the caller's; the utilization clamps in a structure without them are
+ * -EINVAL; and the nice value is clamped to -20 to 19. -EFAULT for bytes
+ * that cannot be read.
+ */
+static int32_t sched_copy_attr(struct sched_attr __user *uattr, struct sched_attr *k)
+{
+    uint32_t size, at, n, ksize = SCHED_ATTR_SIZE_VER1;
+    unsigned char buf[64];
+
+    k_memset(k, 0, sizeof(*k));
+    if (copy_from_user(&size, uattr, sizeof(size)) != 0) {
+        return -EFAULT;
+    }
+    if (size == 0) {
+        size = SCHED_ATTR_SIZE_VER0;
+    }
+    if (size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) {
+        goto too_big;
+    }
+    for (at = ksize; at < size; at += n) {
+        uint32_t i;
+
+        n = size - at < sizeof(buf) ? size - at : (uint32_t)sizeof(buf);
+        if (copy_from_user(buf, (const char __user *)uattr + at, n) != 0) {
+            return -EFAULT;
+        }
+        for (i = 0; i < n; i++) {
+            if (buf[i] != 0) {
+                goto too_big;
+            }
+        }
+    }
+    if (copy_from_user(k, uattr, size < ksize ? size : ksize) != 0) {
+        return -EFAULT;
+    }
+    if ((k->sched_flags & SCHED_FLAG_UTIL_CLAMP) && size < SCHED_ATTR_SIZE_VER1) {
+        return -EINVAL;
+    }
+    k->sched_nice = k->sched_nice < -20 ? -20 : (k->sched_nice > 19 ? 19 : k->sched_nice);
+    return 0;
+
+too_big:
+    (void)copy_to_user(uattr, &ksize, sizeof(ksize));
+    return -E2BIG;
+}
+
+/**
+ * sched_setattr(pid, attr, flags): set a thread's policy and its
+ * parameters from a struct sched_attr, as Linux's. No structure, a negative
+ * pid or flags, -EINVAL; then `sched_copy_attr`'s errors; a policy with its
+ * top bit set, -EINVAL; no such thread, -ESRCH; then `sched_apply`'s.
+ * SCHED_FLAG_KEEP_POLICY keeps the thread's policy and its reset flag, and
+ * SCHED_FLAG_KEEP_PARAMS checks the thread's present parameters in place of
+ * the structure's and changes nothing but the reset flag.
+ */
+long sys_sched_setattr(isr_params_t *params)
+{
+    int pid = (int)SC_ARG(params, 0);
+    struct sched_attr __user *uattr = (struct sched_attr __user *)SC_ARG(params, 1);
+    struct sched_attr k;
+    struct sched_req a;
+    process_t *p;
+    int32_t rc;
+
+    if (!uattr || pid < 0 || (uint32_t)SC_ARG(params, 2) != 0) {
+        return -EINVAL;
+    }
+    rc = sched_copy_attr(uattr, &k);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((int32_t)k.sched_policy < 0) {
+        return -EINVAL;
+    }
+    p = sched_target(pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    if (k.sched_flags & SCHED_FLAG_KEEP_PARAMS) {
+        sched_get_params(p, &k);
+    }
+    if ((k.sched_flags >> 32) != 0) {
+        return -EINVAL; /* no flag Linux knows is there */
+    }
+    a.policy = (k.sched_flags & SCHED_FLAG_KEEP_POLICY) ? -1 : (int)k.sched_policy;
+    a.flags = (uint32_t)k.sched_flags;
+    a.nice = k.sched_nice;
+    a.priority = k.sched_priority;
+    a.runtime = k.sched_runtime;
+    a.deadline = k.sched_deadline;
+    a.period = k.sched_period;
+    return sched_apply(p, &a);
+}
+
+/**
+ * sched_getattr(pid, attr, size, flags): a thread's policy and parameters
+ * as a struct sched_attr, as Linux's: its policy, SCHED_FLAG_RESET_ON_FORK
+ * when it has it, the parameters of its policy (`sched_get_params`), and
+ * no utilization clamps. As much of the structure as `size` holds is
+ * written, and its size field gives that, at most this kernel's. No
+ * structure, a negative pid, a size below SCHED_ATTR_SIZE_VER0 or past a
+ * page, or flags, -EINVAL; no such thread, -ESRCH; -EFAULT.
+ */
+long sys_sched_getattr(isr_params_t *params)
+{
+    int pid = (int)SC_ARG(params, 0);
+    uintptr_t uattr = SC_ARG(params, 1);
+    uint32_t usize = (uint32_t)SC_ARG(params, 2);
+    struct sched_attr k;
+    process_t *p;
+
+    if (!uattr || pid < 0 || usize > PAGE_SIZE || usize < SCHED_ATTR_SIZE_VER0 ||
+        (uint32_t)SC_ARG(params, 3) != 0) {
+        return -EINVAL;
+    }
+    p = sched_target(pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    k_memset(&k, 0, sizeof(k));
+    k.sched_policy = p->sched_policy;
+    if (p->sched_reset) {
+        k.sched_flags |= SCHED_FLAG_RESET_ON_FORK;
+    }
+    sched_get_params(p, &k);
+    k.sched_flags &= SCHED_FLAG_ALL;
+    k.size = usize < SCHED_ATTR_SIZE_VER1 ? usize : SCHED_ATTR_SIZE_VER1;
+    if (!user_span_ok(uattr, usize) || copy_to_user((void __user *)uattr, &k, k.size) != 0) {
+        return -EFAULT;
+    }
+    return 0;
 }
 
 /**
@@ -8383,21 +8806,25 @@ long sys_sched_get_priority_min(isr_params_t *params)
 /**
  * A process's round-robin time slice (sched_rr_get_interval, a timespec of
  * two longs): one tick, since the timer takes the processor from every
- * process at each tick. -EINVAL for a negative pid, -ESRCH, -EFAULT.
+ * process at each tick, and 0 for SCHED_FIFO and SCHED_DEADLINE, which
+ * Linux gives no slice. -EINVAL for a negative pid, -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
 {
     int pid = (int)SC_ARG(params, 0);
     struct kernel_timespec slice;
+    process_t *p;
 
     if (pid < 0) {
         return -EINVAL;
     }
-    if (!sched_target(pid)) {
+    p = sched_target(pid);
+    if (!p) {
         return -ESRCH;
     }
     slice.tv_sec = 0;
-    slice.tv_nsec = (long)TICK_NS;
+    slice.tv_nsec =
+        p->sched_policy == SCHED_FIFO || p->sched_policy == SCHED_DEADLINE ? 0 : (long)TICK_NS;
     if (copy_to_user((void __user *)SC_ARG(params, 1), &slice, sizeof(slice)) != 0) {
         return -EFAULT;
     }
@@ -8701,8 +9128,9 @@ long sys_personality(isr_params_t *params)
  * size, and a shorter mask is zero past its end. The process is bound to the
  * started processors the mask has (`sched_set_affinity`), and moves off one
  * it no longer has; a mask with none fails with -EINVAL. -EFAULT, then
- * -ESRCH, then -EPERM for a caller that may not change the target, in
- * Linux's order.
+ * -ESRCH, then -EPERM for a caller that may not change the target, then
+ * -EBUSY for a SCHED_DEADLINE target and a mask without every processor
+ * started, whose bandwidth was admitted against them all, in Linux's order.
  */
 long sys_sched_setaffinity(isr_params_t *params)
 {
@@ -8724,6 +9152,9 @@ long sys_sched_setaffinity(isr_params_t *params)
         return -EPERM;
     }
     mask &= cpu_online_mask();
+    if (p->sched_policy == SCHED_DEADLINE && mask != cpu_online_mask()) {
+        return -EBUSY; /* Linux's dl_task_check_affinity */
+    }
     if (mask == 0) {
         return -EINVAL;
     }
