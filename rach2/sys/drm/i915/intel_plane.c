@@ -103,7 +103,8 @@ static void plane_view(const struct drm_plane_state *ps, int primary, struct pla
     uint32_t sx = (uint32_t)ps->src.x1 >> 16, sy = (uint32_t)ps->src.y1 >> 16;
     uint32_t w = (uint32_t)(ps->src.x2 - ps->src.x1) >> 16;
     uint32_t h = (uint32_t)(ps->src.y2 - ps->src.y1) >> 16;
-    uint32_t tile_bytes, tile_w, tile_h, at;
+    uint32_t tile_bytes, tile_w, tile_h;
+    uint64_t at;
     int tiled = intel_fb_modifier(fb) == I915_FORMAT_MOD_X_TILED;
 
     k_memset(v, 0, sizeof(*v));
@@ -123,9 +124,9 @@ static void plane_view(const struct drm_plane_state *ps, int primary, struct pla
         v->y = sy % tile_h;
     } else {
         /* A stride of whole pages puts the corner in the first row. */
-        at = fb->offsets[0] + sy * pitch + sx * cpp;
-        v->remap.offset = at / X_TILE_SIZE;
-        v->x = (at % X_TILE_SIZE) / cpp;
+        at = (uint64_t)fb->offsets[0] + (uint64_t)sy * pitch + (uint64_t)sx * cpp;
+        v->remap.offset = (uint32_t)(at >> PAGE_SHIFT);
+        v->x = (uint32_t)(at & (X_TILE_SIZE - 1u)) / cpp;
         v->y = 0;
     }
     v->remap.width = (v->x + w + tile_w - 1u) / tile_w;
