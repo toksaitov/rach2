@@ -39,6 +39,7 @@ case musl/inotifymusl tmpfs:1M -- musl/inotifymusl dir=tmpfs/inotifymusl
 case musl/ipcmusl ipcns mountns -- musl/ipcmusl machine=native
 case musl/ishmusl root:ext2-dir env:HOME -- musl/ishmusl
 case musl/kvmmusl -- musl/kvmmusl
+case musl/kvmslotmusl -- musl/kvmslotmusl
 case musl/lchownmusl.ext2 -- musl/lchownmusl .
 case musl/lchownmusl.krffs root:krffs -- musl/lchownmusl
 case musl/lockmusl root:krffs -- musl/lockmusl
