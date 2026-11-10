@@ -118,7 +118,9 @@ static void pi_error_rows(void)
     CHECK(futex_lock_pi(32, (const struct kernel_timespec *)64, FUTEX_PRIVATE_FLAG, 0) == -EINVAL,
           "negative PI timeout");
     pi_wait_errno = -EINTR;
-    CHECK(futex_lock_pi(32, NULL, FUTEX_PRIVATE_FLAG, 0) == -EINTR && self.restart_always,
+    self.restart_kind = RESTART_SYS;
+    CHECK(futex_lock_pi(32, NULL, FUTEX_PRIVATE_FLAG, 0) == -EINTR &&
+              self.restart_kind == RESTART_NOINTR,
           "PI signal requests unconditional restart");
     CHECK(!self.pi_blocked && !pi_states && !owner.pi_priority,
           "interruption removes waiter and donation");

@@ -87,6 +87,7 @@
 
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params))
 {
+    table[SYS_RESTART_SYSCALL] = sys_restart_syscall;
     table[SYS_EXIT] = sys_exit;
     table[SYS_FORK] = sys_fork;
     table[SYS_READ] = sys_read;

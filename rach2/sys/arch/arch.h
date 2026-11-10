@@ -40,6 +40,9 @@
  *   FRAME_USER(p)          whether the entry came from user mode
  *   SYSCALL_INSN_LEN       the bytes of the instruction a system call is
  *                          made by, which a restart rewinds over
+ *   SC_RESTART_NR(p)       the number of restart_syscall in the table of the
+ *                          call in `p`, which a restart through the
+ *                          thread's restart block makes
  *   PAGE_SIZE, PAGE_SHIFT  the page the kernel maps
  *   USER_ADDR_MIN, USER_ADDR_MAX  the range a program may map
  *   ELF_CLASS, ELF_MACHINE the programs the kernel loads
@@ -259,10 +262,11 @@ uint32_t ia32_core_fp_size(void);
  * program at `*p`, with `core_note_put`, and step past them. */
 void ia32_core_fp_notes(uint8_t **p, const struct process *t);
 
-/** Whether `fn`, a compat handler, waits for a signal or a deadline as the
- * x86-64 calls the dispatcher never restarts do, so that the i386 call it
- * answers with the arguments in `params` is not restarted either
- * (x86_64/ia32_time.c). */
+/** Whether `fn`, a compat handler of its own, answers a call Linux gives
+ * EINTR in every case, as the x86-64 calls the dispatcher never restarts
+ * (`syscall_restartable`), so that the i386 call it answers with the
+ * arguments in `params` is not restarted either: rt_sigtimedwait,
+ * epoll_pwait2 and the two returns from a handler (x86_64/ia32_time.c). */
 int ia32_never_restarts(syscall_fn_t fn, const isr_params_t *params);
 
 /*

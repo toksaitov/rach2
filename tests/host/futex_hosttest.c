@@ -558,21 +558,43 @@ static void deadline_fixed(void)
     tick_pending = 0;
 }
 
-/** Which futex calls a signal interrupted are restarted: a wait with no
- * timeout, and not a timed one, whatever its clock and its flags. */
+/**
+ * How a futex wait a signal interrupted is filed for its restart: one with
+ * no timeout keeps the dispatcher's ERESTARTSYS, and a timed one stands for
+ * ERESTART_RESTARTBLOCK with its word, value and deadline tick in the
+ * restart block, whose resumption sleeps on to that same tick.
+ */
 static void restarts(void)
 {
     isr_params_t p;
 
+    pi_wait_errno = -EINTR;
+    self.restart_kind = RESTART_SYS;
+    self.restart.fn = NULL;
+    word_set(600, 7u);
     k_memset(&p, 0, sizeof(p));
+    p.ebx = 600;
     p.ecx = FUTEX_WAIT | FUTEX_PRIVATE_FLAG;
-    CHECK(futex_restartable(&p), "a wait with no timeout is restarted");
-    p.esi = 608;
-    CHECK(!futex_restartable(&p), "a timed wait is not");
-    p.ecx = FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME;
-    CHECK(!futex_restartable(&p), "nor a timed bitset wait on the real-time clock");
-    p.esi = 0;
-    CHECK(futex_restartable(&p), "a bitset wait with no timeout is restarted");
+    p.edx = 7;
+    CHECK(sys_futex(&p) == -EINTR && self.restart_kind == RESTART_SYS && !self.restart.fn,
+          "a wait with no timeout keeps ERESTARTSYS");
+    slow_ticks = 0;
+    CHECK(timed_wait(3000, 1, 0, 0) == -EINTR && self.restart_kind == RESTART_BLOCK &&
+              self.restart.fn == futex_wait_restart && self.restart.uaddr == 600 &&
+              self.restart.val == 7 && self.restart.tick == 3001u + TICK_HZ,
+          "a timed wait files its word, value and deadline for restart_syscall");
+    pi_wait_errno = 0;
+    kernel_ticks = 3500;
+    waits = 0;
+    armed = 0;
+    CHECK(futex_wait_restart(&p) == -ETIMEDOUT && waits == 1 && armed == 3001u + TICK_HZ &&
+              !self.restart.fn,
+          "the resumed wait sleeps to the first deadline and clears the block");
+    kernel_ticks = 3001u + TICK_HZ;
+    self.restart.fn = futex_wait_restart;
+    waits = 0;
+    CHECK(futex_wait_restart(&p) == -ETIMEDOUT && waits == 0,
+          "a wait resumed at its deadline ends without a sleep");
 }
 
 /**

@@ -131,6 +131,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
 {
     table[SYS_READ] = sys_read;
     table[SYS_WRITE] = sys_write;
+    table[SYS_RESTART_SYSCALL] = sys_restart_syscall;
     table[SYS_OPEN] = sys_open;
     table[SYS_CLOSE] = sys_close;
     table[SYS_STAT] = sys_stat64;

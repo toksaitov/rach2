@@ -203,6 +203,7 @@
 #define SYS_EPOLL_CREATE            213
 #define SYS_GETDENTS64              217
 #define SYS_SET_TID_ADDRESS         218
+#define SYS_RESTART_SYSCALL         219
 #define SYS_SEMTIMEDOP              220
 #define SYS_FADVISE64               221
 #define SYS_TIMER_CREATE            222

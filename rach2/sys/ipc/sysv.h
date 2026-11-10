@@ -55,8 +55,9 @@ long sys_semtimedop_time64(struct isr_params *params);
 
 /**
  * Whether the ipc(2) call `params` describes, which a signal ended with
- * EINTR, may be restarted: one of its waits, SEMOP, SEMTIMEDOP, MSGSND or
- * MSGRCV, may not, since Linux never restarts these after a handler.
+ * EINTR and which set no restart kind of its own, may be restarted: SEMOP
+ * and SEMTIMEDOP may not, since Linux gives their EINTR in every case. A
+ * message queue's wait sets its own kind, Linux's ERESTARTNOHAND.
  */
 int sysv_ipc_restartable(const struct isr_params *params);
 

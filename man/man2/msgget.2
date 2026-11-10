@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 11, 2026
 .Dt MSGGET 2
 .Os
 .Sh NAME
@@ -126,9 +126,11 @@ A full queue with
 .It Bq Er EIDRM
 The queue was removed while the caller waited.
 .It Bq Er EINTR
-A signal ended the wait.
-The call is not restarted, even after a handler with
-.Dv SA_RESTART .
+A handler ended the wait, with or without
+.Dv SA_RESTART ,
+as on Linux.
+A signal that runs no handler, as a stop and a continue, restarts the
+call.
 .It Bq Er EINVAL
 A size past 8192, a type below 1, a negative
 .Fa msgsz ,

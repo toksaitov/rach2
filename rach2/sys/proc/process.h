@@ -126,6 +126,44 @@ struct wq_waiter {
 
 struct bbuf; /* the buffer cache's buffer, bcache.h */
 
+struct isr_params;
+
+/*
+ * What a call that a signal interrupted with EINTR stands for, Linux's four
+ * restart codes and plain EINTR, which `deliver_signals` acts on: with no
+ * handler run, every kind but RESTART_NONE restarts the call; with a
+ * handler, RESTART_SYS restarts it under SA_RESTART, RESTART_NOINTR always,
+ * and the rest give the caller EINTR. RESTART_BLOCK restarts through
+ * restart_syscall, which resumes the thread's restart block.
+ */
+#define RESTART_SYS    0 /* -ERESTARTSYS */
+#define RESTART_NOINTR 1 /* -ERESTARTNOINTR */
+#define RESTART_NOHAND 2 /* -ERESTARTNOHAND */
+#define RESTART_BLOCK  3 /* -ERESTART_RESTARTBLOCK */
+#define RESTART_NONE   4 /* -EINTR in every case */
+
+/*
+ * A call's state for restart_syscall to resume, Linux's restart_block: the
+ * resuming handler and what it needs, the deadline the first call fixed
+ * among it, so that the resumed call ends where the first would have. Each
+ * kind of call uses the fields its handler names.
+ */
+struct restart_block {
+    /* The handler restart_syscall runs, NULL when there is nothing to
+     * resume, which Linux's do_no_restart_syscall answers with EINTR. */
+    long (*fn)(struct isr_params *params);
+    uint64_t tick;   /* the deadline's tick, or a CPU clock's due ticks */
+    int64_t sec;     /* the deadline by time since boot; 0 with `nsec` 0 */
+    int64_t nsec;    /*   for one ended by its tick alone */
+    uintptr_t uaddr; /* poll's array, or the futex word */
+    uintptr_t urem;  /* where a sleep's remainder goes, or 0 */
+    uint32_t val;    /* poll's count, or the value the futex word holds */
+    uint32_t bitset; /* the futex wait's bitset */
+    int32_t flags;   /* the futex operation's flags, or the CPU clock */
+    uint8_t timed;   /* poll and the futex wait have a deadline */
+    uint8_t wide;    /* the remainder is two 64-bit words, not two 32-bit */
+};
+
 /*
  * The record of one thread, from the heap (`alloc_process`), on `proc_list`
  * while it lives. The threads of a process share their thread group
@@ -297,11 +335,17 @@ struct process {
     uint64_t saved_sigmask;
     uint32_t sigmask_saved;
     /* One more than the number of a system call that returned EINTR and
-     * that a signal without a handler, or one whose handler has SA_RESTART,
-     * restarts; 0 for none. Set by the dispatcher, consumed by
-     * deliver_signals on the same return. */
+     * that `deliver_signals` restarts as `restart_kind` says, 0 for none.
+     * Set by the dispatcher, consumed by deliver_signals on the same
+     * return. */
     uint32_t restart_nr;
-    uint8_t restart_always; /* Linux ERESTARTNOINTR, even without SA_RESTART */
+    /* Which of Linux's restart codes the interrupted call stands for, a
+     * RESTART_ value: the dispatcher sets RESTART_SYS before each call, and
+     * a call that Linux restarts otherwise sets another before it returns
+     * EINTR. */
+    uint8_t restart_kind;
+    /* What restart_syscall resumes: Linux's restart_block. */
+    struct restart_block restart;
     /* The trap number, error code and fault address of the last processor
      * exception, for the signal frame's sigcontext. */
     uint32_t trap_nr;

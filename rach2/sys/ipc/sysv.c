@@ -1116,6 +1116,20 @@ static int32_t sysv_sleep(wait_queue_t *wq, struct sysv_wait *w)
     return rc != 0 ? -EINTR : -EAGAIN;
 }
 
+/** `sysv_sleep` for a message queue's wait, which a signal ends as Linux's
+ * ERESTARTNOHAND: a signal that runs no handler restarts the call, and a
+ * handler gives EINTR. A semaphore's wait gives EINTR in every case
+ * (`sysv_ipc_restartable`). */
+static int32_t msg_sleep(wait_queue_t *wq, struct sysv_wait *w)
+{
+    int32_t rc = sysv_sleep(wq, w);
+
+    if (rc == -EINTR) {
+        current_proc->restart_kind = RESTART_NOHAND;
+    }
+    return rc;
+}
+
 /** Apply `ops` to `set`, sleeping while one must wait as `sem_op` says,
  * with the waiting semaphore's count of waiters raised meanwhile. */
 static int32_t sem_wait_apply(struct sem_set *set, const struct sembuf *ops, uint32_t n,
@@ -1642,7 +1656,7 @@ static int32_t msg_snd(int32_t id, const void __user *umsg, uint32_t size, uint3
     w.timed = 0;
     while (rc == 0 && (q->cbytes + size > q->qbytes || q->qnum + 1 > q->qbytes)) {
         w.from = q->gen;
-        rc = (flag & IPC_NOWAIT) ? -EAGAIN : sysv_sleep(&q->wq, &w);
+        rc = (flag & IPC_NOWAIT) ? -EAGAIN : msg_sleep(&q->wq, &w);
     }
     if (rc == 0) {
         for (tail = &q->head; *tail; tail = &(*tail)->next) {
@@ -1730,7 +1744,7 @@ static int32_t msg_rcv(int32_t id, void __user *umsg, int32_t size, long type, u
     w.timed = 0;
     while (rc == 0 && !(link = msg_pick(q, type, flag))) {
         w.from = q->gen;
-        rc = (flag & IPC_NOWAIT) ? -ENOMSG : sysv_sleep(&q->wq, &w);
+        rc = (flag & IPC_NOWAIT) ? -ENOMSG : msg_sleep(&q->wq, &w);
     }
     if (rc == 0 && (*link)->size > (uint32_t)size && !(flag & MSG_NOERROR)) {
         rc = -E2BIG;
@@ -2055,7 +2069,7 @@ int sysv_ipc_restartable(const struct isr_params *params)
 {
     uint32_t call = SC_ARG(params, 0) & 0xFFFFu;
 
-    return call != SEMOP && call != SEMTIMEDOP && call != MSGSND && call != MSGRCV;
+    return call != SEMOP && call != SEMTIMEDOP;
 }
 
 /** semop(2), which x86-64 alone has, takes the set, the operations and their

@@ -100,7 +100,7 @@
  * the table first, so a NULL row only says so. */
 void ia32_syscall_init(syscall_fn_t *table)
 {
-    table[SYS_RESTART_SYSCALL] = NULL;
+    table[SYS_RESTART_SYSCALL] = sys_restart_syscall;
     table[SYS_EXIT] = sys_exit;
     table[SYS_FORK] = sys_fork;
     table[SYS_READ] = sys_read;

@@ -41,6 +41,9 @@ typedef uint64_t phys_addr_t;
  * bytes, which a restart rewinds the return address over. */
 #define SYSCALL_INSN_LEN 4u
 
+/* restart_syscall's number, arm64's 128. */
+#define SC_RESTART_NR(p) 128u
+
 #define FRAME_PC(p)   ((p)->pc)
 #define FRAME_SP(p)   ((p)->sp)
 #define FRAME_USER(p) (((p)->pstate & 0xFu) == 0u)

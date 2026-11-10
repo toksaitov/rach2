@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 11, 2026
 .Dt SEMGET 2
 .Os
 .Sh NAME
@@ -150,7 +150,8 @@ The set was removed while the caller waited.
 .It Bq Er EINTR
 A signal ended the wait.
 The call is not restarted, even after a handler with
-.Dv SA_RESTART .
+.Dv SA_RESTART
+or a stop and a continue, as on Linux.
 .It Bq Er EINVAL
 No operations, an id with no set, a count outside what
 .Fn semget

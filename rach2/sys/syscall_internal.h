@@ -759,6 +759,27 @@ struct kernel_timespec {
     long tv_nsec;
 };
 
+/**
+ * The body of nanosleep, which the native handler and the i386 one share:
+ * sleep for `req`, which the handler read, or NULL when it could not be
+ * read, and with a signal's remainder written to `urem`, 0 for none, as two
+ * 64-bit words with `wide`, else two 32-bit words. A signal that runs no
+ * handler resumes the sleep to its first deadline through restart_syscall,
+ * as Linux does. Returns 0, -EINTR, -EINVAL, or -EFAULT.
+ */
+long nanosleep_core(const struct kernel_timespec *req, uintptr_t urem, int wide);
+
+/**
+ * The body of clock_nanosleep, as `nanosleep_core` is nanosleep's: the
+ * clock `clk`, the `flags`, of which TIMER_ABSTIME counts, the request
+ * read, or NULL, and the remainder's address and width. The clock is
+ * judged before the request, as Linux judges it. A relative sleep resumes
+ * to its first deadline after a signal that runs no handler, and an
+ * absolute one restarts.
+ */
+long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_timespec *req,
+                          uintptr_t urem, int wide);
+
 /*
  * The cores of the signal calls, which the native handlers in
  * syscall_proc.c and the i386 ones in arch/x86_64/ia32_signal.c share; each
@@ -1135,6 +1156,7 @@ long sys_gettimeofday(isr_params_t *params);
 long sys_time(isr_params_t *params);
 long sys_ioctl(isr_params_t *params);
 long sys_nanosleep(isr_params_t *params);
+long sys_restart_syscall(isr_params_t *params);
 long sys_reboot(isr_params_t *params);
 long sys_set_tid_address(isr_params_t *params);
 long sys_setdomainname(isr_params_t *params);

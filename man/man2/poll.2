@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -159,10 +159,21 @@ When a signal ends the wait, its handler runs under
 and the previous mask comes back when the handler returns; otherwise the
 previous mask comes back as the call returns.
 If no entry is ready, a pending signal that is neither blocked nor
-ignored gives
-.Er EINTR ;
-.Dv SA_RESTART
-does not restart the call, as on Linux.
+ignored ends the wait.
+A handler makes the call fail with
+.Er EINTR
+whatever its flags, as on Linux.
+A signal that runs no handler, as a stop and a continue, restarts it, as
+Linux does:
+.Nm poll
+through
+.Xr restart_syscall 2 ,
+with the array and the deadline fixed at the first call, and
+.Nm ppoll
+with the time left, which, as on Linux, it writes back to a nonzero
+timeout as it returns, as
+.Xr select 2
+describes.
 .Pp
 The i386 system call numbers are 168 for
 .Nm poll
