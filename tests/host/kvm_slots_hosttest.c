@@ -185,6 +185,13 @@ static const struct kvm_backend fake = {"fake", NULL, NULL, NULL, NULL, NULL, NU
                                         NULL,   NULL, NULL, NULL, NULL, &ept};
 const struct kvm_backend *kvm_backend = &fake;
 
+/** Resource accounting is reported by kvm.c, outside this memory model. */
+void kvm_count(enum kvm_resource resource, int change)
+{
+    (void)resource;
+    (void)change;
+}
+
 /* ---- the VM: two vCPUs, outside the guest ---- */
 
 static struct mm the_mm;

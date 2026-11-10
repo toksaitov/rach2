@@ -6,6 +6,8 @@ A dma-buf descriptor's `/proc/PID/fdinfo/N` includes its `name:` once `DMA_BUF_S
 
 ## Interfaces
 
+On x86-64, `/proc/stat` also reports KVM's live VM, vCPU, slot, guest-physical table-page and run-page mapping-object counts, which [the KVM Readme](../kvm/Readme.md) gives.
+
 `install_permanent` in [vfs.c](vfs.c) mounts the three at boot as permanent entries of the mount table; the table in [vfs.Readme.md](vfs.Readme.md) gives their slots and flags. Each has a device number of its own:
 
 | Path | Type | `st_dev` |

@@ -1193,6 +1193,12 @@ System calls of the clock since boot, modulo 2^32:
 and
 .Fn time .
 A call the vDSO answers is not counted.
+.It Li kvm_vms , kvm_vcpus , kvm_slots , kvm_tdp_pages , kvm_run_mappings
+Live KVM virtual machines, virtual processors, memory slots, guest-physical
+table pages and run-page mapping objects, on x86-64.
+A fork shares a mapping object; the last reference releases it.
+These counts include objects retained by mappings after their descriptors close
+.Pq Xr kvm 4 .
 .It Li vdso_tsc
 1 when the vDSO reads the clock from the TSC, so that its clock calls make
 no system call, and 0 when they make one

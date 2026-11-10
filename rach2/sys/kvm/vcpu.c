@@ -215,6 +215,7 @@ static int run_page(void *obj, uint32_t pgoff, uintptr_t *phys)
  * it held to the VM goes. */
 static void run_put(void *obj)
 {
+    kvm_count(KVM_COUNT_RUN_MAPPING, -1);
     kvm_vm_put(((struct kvm_vcpu *)obj)->vm);
 }
 
@@ -253,6 +254,7 @@ static void run_copy_release(struct vm_file *f)
 {
     struct run_copy *c = (struct run_copy *)f;
 
+    kvm_count(KVM_COUNT_RUN_MAPPING, -1);
     kvm_vm_put(c->vcpu->vm);
     kfree(c->vf.path);
     kfree(c);
@@ -282,6 +284,7 @@ static int32_t vcpu_mmap(fd_entry_t *e, struct vma *vma)
         c->vf.release = run_copy_release;
         c->vcpu = v;
         kvm_vm_get(v->vm);
+        kvm_count(KVM_COUNT_RUN_MAPPING, 1);
         vma->file = &c->vf;
         return 0;
     }
@@ -289,6 +292,8 @@ static int32_t vcpu_mmap(fd_entry_t *e, struct vma *vma)
     r = vm_device_map(vma, &run_vm_ops, v, 0);
     if (r != 0) {
         kvm_vm_put(v->vm);
+    } else {
+        kvm_count(KVM_COUNT_RUN_MAPPING, 1);
     }
     return r;
 }
@@ -335,6 +340,7 @@ void kvm_vcpu_free(struct kvm_vcpu *v)
     }
     kfree(v->xsave_mem);
     kfree(v->cpuid);
+    kvm_count(KVM_COUNT_VCPU, -1);
     kfree(v);
 }
 
@@ -358,6 +364,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     if (!v) {
         return -ENOMEM;
     }
+    kvm_count(KVM_COUNT_VCPU, 1);
     v->vm = vm;
     v->id = id;
     v->index = vm->nr_vcpus;

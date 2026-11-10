@@ -7,6 +7,7 @@
 #ifndef _KVM_H_
 #define _KVM_H_
 
+#include "stats.h"
 #include "../lib/kint.h"
 #include "kvm_abi.h"
 #include "decode.h"

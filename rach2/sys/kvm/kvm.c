@@ -43,6 +43,20 @@ struct kvm_vm_rec {
     uint32_t nr_mmu_pages;
 };
 
+static uint32_t live_resources[KVM_COUNT_TOTAL];
+
+/** Count a resource at allocation or final release, under the big lock. */
+void kvm_count(enum kvm_resource resource, int change)
+{
+    live_resources[resource] += (uint32_t)change;
+}
+
+/** Read a live resource count under the big lock. */
+uint32_t kvm_resource_count(enum kvm_resource resource)
+{
+    return live_resources[resource];
+}
+
 /** The record of `vm`. */
 static struct kvm_vm_rec *vm_rec(struct kvm_vm *vm)
 {
@@ -94,6 +108,7 @@ void kvm_vm_put(struct kvm_vm *vm)
     if (vm_rec(vm)->mm) {
         mm_unhold(vm_rec(vm)->mm);
     }
+    kvm_count(KVM_COUNT_VM, -1);
     kfree(vm_rec(vm));
 }
 
@@ -281,6 +296,7 @@ static int32_t create_vm(uintptr_t type)
     if (!rec) {
         return -ENOMEM;
     }
+    kvm_count(KVM_COUNT_VM, 1);
     vm = &rec->vm;
     vm->anon.name = "kvm-vm";
     vm->refs = 1;
