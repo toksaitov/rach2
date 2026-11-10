@@ -44,6 +44,16 @@ struct pci_virtual {
 
 static struct pci_virtual pci_virtuals[SYSFS_PCI_VIRTUAL_MAX];
 
+/* A function shown bound: its key, its driver, and the handles of its
+ * `driver` link and of the driver's link back to it. */
+struct pci_bound {
+    const char *driver; /* NULL for a free slot */
+    int key;
+    int link, back;
+};
+
+static struct pci_bound pci_bounds[SYSFS_PCI_BOUND_MAX];
+
 /* Linux's UEVENT_BUFFER_SIZE: the most bytes of one uevent's variables,
  * from ACTION to SEQNUM; its header, ACTION@DEVPATH, is apart. */
 #define UEVENT_MAX 2048u
@@ -515,6 +525,97 @@ int sysfs_pci_virtual_nth(int n)
         }
     }
     return -1;
+}
+
+/** The slot of `key` among the functions shown bound, or -1. */
+static int pci_bound_find(int key)
+{
+    int i;
+
+    for (i = 0; i < SYSFS_PCI_BOUND_MAX; i++) {
+        if (pci_bounds[i].driver && pci_bounds[i].key == key) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Whether the NUL-ended names `a` and `b` are the same text. */
+static int name_same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The directory `name` below `parent`, made when it is not there: its
+ * handle, or -errno as `sysfs_add_dir`. */
+static int dir_made(int parent, const char *name)
+{
+    int h = sysfs_node_child(parent, name, (int)k_strlen(name));
+
+    return h > 0 ? h : sysfs_add_dir(parent, name);
+}
+
+int sysfs_pci_bind(int key, const char *driver)
+{
+    char name[SYSFS_NAME_MAX];
+    int i = pci_bound_find(key), dev, dir, link, back;
+
+    if (i >= 0) {
+        return name_same(pci_bounds[i].driver, driver) ? 0 : -EBUSY;
+    }
+    for (i = 0; i < SYSFS_PCI_BOUND_MAX && pci_bounds[i].driver; i++) {
+    }
+    if (i == SYSFS_PCI_BOUND_MAX) {
+        return -ENOSPC;
+    }
+    dev = sysfs_anchor(SYSFS_PCI_DEVICE, key);
+    if (dev < 0) {
+        return dev;
+    }
+    dir = dir_made(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers");
+    if (dir > 0) {
+        dir = dir_made(dir, driver);
+    }
+    if (dir < 0) {
+        return dir;
+    }
+    synth_sys_device_name(SYSFS_PCI_DEVICE, key, name, sizeof(name));
+    link = sysfs_add_link(dev, "driver", dir);
+    if (link < 0) {
+        return link;
+    }
+    back = sysfs_add_link(dir, name, dev);
+    if (back < 0) {
+        sysfs_remove(link);
+        return back;
+    }
+    pci_bounds[i].driver = driver;
+    pci_bounds[i].key = key;
+    pci_bounds[i].link = link;
+    pci_bounds[i].back = back;
+    return 0;
+}
+
+void sysfs_pci_unbind(int key)
+{
+    int i = pci_bound_find(key);
+
+    if (i >= 0) {
+        sysfs_remove(pci_bounds[i].link);
+        sysfs_remove(pci_bounds[i].back);
+        pci_bounds[i].driver = NULL;
+    }
+}
+
+const char *sysfs_pci_driver(int key)
+{
+    int i = pci_bound_find(key);
+
+    return i >= 0 ? pci_bounds[i].driver : NULL;
 }
 
 /* A uevent being built: its bytes and their count, the most it may hold,

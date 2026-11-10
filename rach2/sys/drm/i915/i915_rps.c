@@ -762,11 +762,21 @@ static const struct sysfs_attr freq_attrs[] = {{"gt_act_freq_mhz", 0444u, show_f
 static const struct sysfs_attr rc6_attrs[] = {{"rc6_enable", 0444u, show_rc6, 0},
                                               {"rc6_residency_ms", 0444u, show_rc6, 0}};
 
+/** The function's key in /sys, bus << 8 | device << 3 | function. */
+static int pci_key(const struct drm_i915_private *i915)
+{
+    return i915->pci.bus << 8 | i915->pci.device << 3 | i915->pci.function;
+}
+
 void i915_sysfs_register(struct drm_i915_private *i915)
 {
     int card = drm_sysfs_card_dir(&i915->drm), power, h;
     unsigned i;
 
+    h = sysfs_pci_bind(pci_key(i915), "i915");
+    if (h < 0) {
+        klog(KLOG_WARN, "i915", "sysfs: driver link not added: error %d", h);
+    }
     if (card <= 0) {
         return;
     }
@@ -793,4 +803,9 @@ void i915_sysfs_register(struct drm_i915_private *i915)
             klog(KLOG_WARN, "i915", "sysfs: power/%s not added: error %d", rc6_attrs[i].name, h);
         }
     }
+}
+
+void i915_sysfs_unregister(struct drm_i915_private *i915)
+{
+    sysfs_pci_unbind(pci_key(i915));
 }

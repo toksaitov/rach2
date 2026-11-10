@@ -5706,18 +5706,20 @@ static void ap_u32_3(struct procfs_text *t, uint32_t v)
  * Render the uevent of the device `key` of `node`, the variables Linux
  * gives a device of that bus that the readers here use.
  *
- * A PCI function has its class, IDs and subsystem IDs, its slot and its
- * module alias. A USB device has its product, the numbers of its bus and
- * of itself, and its type last: `lsusb` takes a uevent whose first line is
- * the type for an interface's, and Linux's first lines, the device node's
- * numbers and name, are left out, since no node of the device exists here.
- * -ENOENT for a device that is not there.
+ * A PCI function has its driver when one has it, its class, IDs and
+ * subsystem IDs, its slot and its module alias. A USB device has its
+ * product, the numbers of its bus and of itself, and its type last: `lsusb`
+ * takes a uevent whose first line is the type for an interface's, and
+ * Linux's first lines, the device node's numbers and name, are left out,
+ * since no node of the device exists here. -ENOENT for a device that is not
+ * there.
  */
 static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
 {
     struct usb_sys_row r;
     struct sysfs_pci_ident id;
     char name[16];
+    const char *drv, *owner;
     uint32_t cls, ids, sub;
 
     if (node == SYSFS_USB_DEVICE) {
@@ -5744,6 +5746,16 @@ static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
     ids = (uint32_t)id.vendor | (uint32_t)id.device << 16;
     sub = (uint32_t)id.subsystem_vendor | (uint32_t)id.subsystem_device << 16;
     synth_sys_device_name(SYSFS_PCI_DEVICE, key, name, sizeof(name));
+    drv = sysfs_pci_driver(key);
+    owner = pci_owner((uint8_t)(key >> 8), (uint8_t)key);
+    if (!drv && owner && !same_word(owner, PCI_OWNER_KERNEL)) {
+        drv = owner; /* vfio-pci, which shows itself bound */
+    }
+    if (drv) {
+        ap_str(t, "DRIVER=");
+        ap_str(t, drv);
+        ap_ch(t, '\n');
+    }
     ap_str(t, "PCI_CLASS=");
     ap_hex(t, cls, cls > 0xFFFFFu ? 6 : cls > 0xFFFFu ? 5 : 4);
     ap_str(t, "\nPCI_ID=");
