@@ -210,7 +210,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_FSTAT] = compat_sys_newfstat;
     table[SYS_OLDUNAME] = compat_sys_uname;
     table[SYS_IOPL] = NULL;
-    table[SYS_VHANGUP] = NULL;
+    table[SYS_VHANGUP] = sys_vhangup;
     table[SYS_IDLE] = NULL;
     table[SYS_VM86OLD] = NULL;
     table[SYS_WAIT4] = sys_wait4;

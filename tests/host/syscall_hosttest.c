@@ -18,6 +18,8 @@
 #include "fs/fd.h"
 struct tty;
 static struct tty *fd_tty(fd_entry_t *entry);
+static int fd_tty_hung(fd_entry_t *e);
+static long sys_vhangup(isr_params_t *params);
 static void init_syscall(void);
 static int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence,
                                 uint64_t *out);

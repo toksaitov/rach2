@@ -62,6 +62,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->sid = 0;
     t->fg_pgid = 0;
     t->hungup = 0;
+    t->vhangups = 0;
 }
 
 /** A live user process is one that is not a zombie and still has an address
@@ -157,6 +158,7 @@ struct tty_wait {
     unsigned int pending; /* the bytes queued when the timer was last armed */
     uint64_t deadline;    /* the tick at which the timer runs out, while armed */
     int armed;            /* the timer runs */
+    uint32_t vhangups;    /* the terminal's vhangups when the read began */
 };
 
 /** Whether the read's VTIME timer has run out. */
@@ -188,7 +190,7 @@ static int tty_wait_cond(void *arg)
     if (t->pump) {
         t->pump(t);
     }
-    return tty_wait_ready(w) || t->hungup ||
+    return tty_wait_ready(w) || t->hungup || t->vhangups != w->vhangups ||
            (n_tty_read_timer(&t->ldisc) == N_TTY_TIMER_BYTE &&
             (unsigned int)n_tty_inq(&t->ldisc) != w->pending);
 }
@@ -262,6 +264,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
     w.pending = 0;
     w.deadline = 0;
     w.armed = 0;
+    w.vhangups = t->vhangups;
     if (nonblock) {
         flags = kirq_save();
         if (t->pump) {
@@ -305,7 +308,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
             usb_stamp_read();
             return n;
         }
-        hungup = t->hungup;
+        hungup = t->hungup || t->vhangups != w.vhangups;
         kirq_restore(flags);
         if (hungup) {
             usb_stamp_read();
@@ -458,6 +461,36 @@ void tty_hangup(struct tty *t)
     t->hungup = 1;
     kirq_restore(flags);
     wq_wake_all(&t->input_wq);
+}
+
+void tty_vhangup(struct tty *t)
+{
+    struct ktermios kt;
+    process_t *p;
+    uint32_t flags;
+
+    if (t->sid != 0) {
+        for (p = proc_list; p; p = p->next) {
+            if (p->state != PROC_ZOMBIE && p->space_root != 0 && (int)p->tgid == t->sid) {
+                signal_post(p, SIGHUP);
+                signal_post(p, SIGCONT);
+                break;
+            }
+        }
+    }
+    tty_set_session(t, 0, 0);
+    flags = kirq_save();
+    t->vhangups++;
+    kirq_restore(flags);
+    n_tty_default_termios(&kt);
+    tty_set_termios(t, &kt, 1);
+    wq_wake_all(&t->input_wq);
+    wq_wake(t->space_wq, WQ_ROOM);
+}
+
+uint32_t tty_console_vhangups(void)
+{
+    return console_tty.vhangups;
 }
 
 /* the system console: the screen and COM1 */

@@ -14,6 +14,7 @@
 #include "seccomp.h"
 #include "../timer.h"
 #include "ns.h"
+#include "../tty/tty.h"
 
 process_t *proc_list;
 process_t *proc_idle;
@@ -402,7 +403,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     }
     if (!parent) {
         p->fds = fd_table_new();
-        if (!p->fds || fd_init_stdio(p->fds) != 0) {
+        if (!p->fds || fd_init_stdio(p->fds, tty_console_vhangups()) != 0) {
             goto fail_parts;
         }
     }

@@ -29,6 +29,7 @@ struct vfs_name;
 struct vfs_mount;
 static struct vfs_name *procfs_exe_entry(int pid);
 static int procfs_resolve_pid(int pid);
+static int procfs_filesystem_at(int idx, const char **name);
 static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
 static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);

@@ -864,6 +864,14 @@ int pgrp_in_session(int pgid, int sid);
 
 struct tty *fd_tty(fd_entry_t *e);
 
+/** Whether `e` is a description of a terminal that a vhangup(2) since its
+ * open has hung up (`tty_vhangup`): its reads give 0, its writes EIO, its
+ * ioctls but FIONBIO EIO, or ENOTTY for TIOCSPGRP, and poll every event,
+ * as Linux's `hung_up_tty_fops` answer. */
+int fd_tty_hung(fd_entry_t *e);
+
+long sys_vhangup(isr_params_t *params);
+
 int user_access_ok(uintptr_t addr, size_t len);
 
 int user_buffer_ok(uintptr_t addr, size_t len, int write);

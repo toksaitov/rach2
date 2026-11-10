@@ -903,6 +903,9 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         if (!(entry->flags & FD_FLAG_WRITE)) {
             return -EBADF;
         }
+        if (fd_tty_hung(entry)) {
+            return -EIO;
+        }
 
         if ((console_tty.ldisc.tio.c_lflag & TOSTOP) &&
             tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
@@ -5480,6 +5483,9 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 
     if (!(entry->flags & FD_FLAG_READ)) {
         return -EBADF;
+    }
+    if (fd_tty_hung(entry)) {
+        return 0;
     }
 
     want = count;

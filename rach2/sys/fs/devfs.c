@@ -2384,6 +2384,7 @@ int devfs_open(const char *name, int flags)
         e->type = FD_TYPE_CONSOLE;
         e->ops = NULL;
         e->priv = NULL;
+        e->ofd->tty_hangups = console_tty.vhangups;
     }
 
     if ((flags & 3) == 1) {

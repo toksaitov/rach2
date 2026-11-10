@@ -256,27 +256,33 @@ static void commit_line(struct n_tty *t)
     t->line_len = 0;
 }
 
+void n_tty_default_termios(struct ktermios *tio)
+{
+    int i;
+
+    tio->c_iflag = ICRNL | IUTF8;
+    tio->c_oflag = OPOST | ONLCR;
+    tio->c_cflag = B38400 | CS8 | CREAD | HUPCL;
+    tio->c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL;
+    tio->c_line = 0;
+    for (i = 0; i < KNCCS; i++) {
+        tio->c_cc[i] = 0;
+    }
+    tio->c_cc[VINTR] = 3;     /* ^C */
+    tio->c_cc[VQUIT] = 28;    /* ^\ */
+    tio->c_cc[VERASE] = 0177; /* DEL */
+    tio->c_cc[VKILL] = 21;    /* ^U */
+    tio->c_cc[VEOF] = 4;      /* ^D */
+    tio->c_cc[VSUSP] = 26;    /* ^Z */
+    tio->c_cc[VWERASE] = 23;  /* ^W */
+    tio->c_cc[VMIN] = 1;
+}
+
 void n_tty_init(struct n_tty *t)
 {
     int i;
 
-    t->tio.c_iflag = ICRNL | IUTF8;
-    t->tio.c_oflag = OPOST | ONLCR;
-    t->tio.c_cflag = B38400 | CS8 | CREAD | HUPCL;
-    t->tio.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL;
-    t->tio.c_line = 0;
-    for (i = 0; i < KNCCS; i++) {
-        t->tio.c_cc[i] = 0;
-    }
-    t->tio.c_cc[VINTR] = 3;     /* ^C */
-    t->tio.c_cc[VQUIT] = 28;    /* ^\ */
-    t->tio.c_cc[VERASE] = 0177; /* DEL */
-    t->tio.c_cc[VKILL] = 21;    /* ^U */
-    t->tio.c_cc[VEOF] = 4;      /* ^D */
-    t->tio.c_cc[VSUSP] = 26;    /* ^Z */
-    t->tio.c_cc[VWERASE] = 23;  /* ^W */
-    t->tio.c_cc[VMIN] = 1;
-
+    n_tty_default_termios(&t->tio);
     t->line_len = 0;
     t->rq_head = 0;
     t->rq_tail = 0;

@@ -41,7 +41,19 @@ struct tty {
     int sid;                     /* the session whose controlling terminal this is; 0 = none */
     int fg_pgid;                 /* foreground process group (ISIG target); 0 = none */
     int hungup;                  /* tty_hangup ran: a read with nothing to take returns 0 */
+    /* The vhangup(2)s of the terminal (`tty_vhangup`). A description opened
+     * when the count was lower is hung up: its reads give 0, its writes and
+     * ioctls EIO (`tty_desc_hung`). */
+    uint32_t vhangups;
 };
+
+/* Whether a description of `t` opened when its count of vhangups was
+ * `opened` is hung up. */
+#define tty_desc_hung(t, opened) ((t)->vhangups != (opened))
+
+/* What poll gives a hung-up description, as Linux's `hung_up_tty_poll`:
+ * POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDNORM and POLLWRNORM. */
+#define TTY_HUNG_POLL 0x15D
 
 /* The system console: the screen and COM1, the tty behind every console
  * descriptor (FD_TYPE_CONSOLE), as a new process's descriptors 0, 1 and 2
@@ -208,5 +220,22 @@ void tty_flush_input(struct tty *t);
  * reads and the other waiting readers return 0 once the queue is empty.
  */
 void tty_hangup(struct tty *t);
+
+/**
+ * Hang `t` up as vhangup(2) does, Linux's `__tty_hangup` for a terminal that
+ * a session leader's exit does not hang up: post SIGHUP and then SIGCONT to
+ * the leader of the session `t` controls, take the terminal from that
+ * session and its foreground group, discard the unread input, give `t` the
+ * default termios (`n_tty_default_termios`), as Linux resets a pty's and a
+ * virtual console's, and count the hangup, which makes every description
+ * opened before it a hung-up one (`tty_desc_hung`). Every reader, writer
+ * and poller of `t` is woken; a read waiting then returns 0. Thread
+ * context; it takes interrupts off itself.
+ */
+void tty_vhangup(struct tty *t);
+
+/** The console's count of vhangups, which a description of it opened now
+ * records. */
+uint32_t tty_console_vhangups(void);
 
 #endif /* _TTY_H_ */

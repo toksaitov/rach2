@@ -109,6 +109,9 @@ static long sys_statfs(isr_params_t *params);
 static long sys_fstatfs(isr_params_t *params);
 static long sys_statfs64(isr_params_t *params);
 static long sys_fstatfs64(isr_params_t *params);
+static int ksys_ustat_counts(uint32_t dev, uint64_t *bfree, uint64_t *ffree);
+static long sys_ustat(isr_params_t *params);
+static long sys_sysfs(isr_params_t *params);
 static long sys_fstat64(isr_params_t *params);
 static long sys_fstatat64(isr_params_t *params);
 static long sys_access(isr_params_t *params);
@@ -696,6 +699,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /* The state of the display and the console, which no row reaches. */
 volatile uint32_t fb_owner_pid;
 struct tty console_tty;
+
+/** No description of the model's console is hung up. */
+int fd_tty_hung(fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
 
 /** No row opens the framebuffer: -EBUSY. */
 int32_t fb_take(struct fd_entry *e)

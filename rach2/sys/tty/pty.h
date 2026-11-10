@@ -143,6 +143,10 @@ struct pty *pty_get(int index);
  */
 int tty_controlling(int sid, uint32_t *dev, int *fg_pgid);
 
+/** The controlling terminal of the session `sid`, the console or a pty's
+ * slave, or NULL when the session has none (always for `sid` 0). */
+struct tty *tty_session_tty(int sid);
+
 /**
  * Release every pty slave whose session is `sid` when `sid` is `pid`, a
  * session leader that is ending, so a later session can claim the same

@@ -1899,6 +1899,13 @@ struct tty *fd_tty(fd_entry_t *e)
     return NULL;
 }
 
+int fd_tty_hung(fd_entry_t *e)
+{
+    struct tty *t = fd_tty(e);
+
+    return t && e->ofd && tty_desc_hung(t, e->ofd->tty_hangups);
+}
+
 /**
  * The terminal ioctls of the tty `t`.
  *
@@ -2197,6 +2204,31 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
  * reopened onto a regular file never reaches the speaker. `ioctl_fd` is the
  * call with its arguments taken out of the frame.
  */
+/**
+ * vhangup(2): hang up the caller's controlling terminal as Linux's
+ * `tty_vhangup_self` does (`tty_vhangup`), which needs CAP_SYS_TTY_CONFIG
+ * in the first user namespace. 0, also for a caller with no controlling
+ * terminal, or -EPERM. The caller's own descriptors of the terminal are hung
+ * up with the rest, so a getty or a login opens it again.
+ */
+long sys_vhangup(isr_params_t *params)
+{
+    struct tty *t;
+
+    (void)params;
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (current_proc->userns || !cap_holds(current_proc, CAP_SYS_TTY_CONFIG)) {
+        return -EPERM;
+    }
+    t = tty_session_tty((int)current_proc->sid);
+    if (t) {
+        tty_vhangup(t);
+    }
+    return 0;
+}
+
 long sys_ioctl(isr_params_t *params)
 {
     return ioctl_fd((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), SC_ARG(params, 2));
@@ -2216,6 +2248,9 @@ long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
     }
     if (request == FIONBIO) {
         return fd_ioctl_nbio(entry, arg);
+    }
+    if (fd_tty_hung(entry)) {
+        return request == TIOCSPGRP ? -ENOTTY : -EIO;
     }
     {
         int handled;
