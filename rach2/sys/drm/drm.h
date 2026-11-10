@@ -69,7 +69,10 @@ struct sysfs_pci_ident;
  * POLLERR | POLLHUP, every mapping of its buffers is revoked so that a
  * later access raises SIGBUS (76-2a), and the driver signals every fence
  * it still owes with the error -ENODEV. The records stay until their
- * last holder lets go.
+ * last holder lets go. virtio-gpu's objects of guest memory are the
+ * exception to the SIGBUS: a revoked mapping of one takes its pages again
+ * at the next touch, as it does on Linux, where a program outlives the
+ * reset of its GPU (77-5).
  *
  * Discovery. A program finds a device by its identity: the driver's name
  * and the bus that DRM_IOCTL_VERSION, /sys/class/drm and the PCI ids give,

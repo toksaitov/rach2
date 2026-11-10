@@ -941,15 +941,16 @@ void vgpu_res_id_put(struct virtio_gpu_device *vg, uint32_t id)
  */
 
 /** A mapping's page of an object: its frame, given on the first touch;
- * none past its end or once its device is unplugged. */
+ * none past its end. An unplugged device's objects keep their frames until
+ * each is freed, and a mapping that the unplug revoked takes its page again
+ * here at the next touch, as Linux's shmem helper serves a fault without
+ * asking for the device: a program that drew through a GPU that was reset
+ * goes on, its ioctls failing with ENODEV, where SIGBUS would end it. */
 static int obj_vm_page(void *obj, uint32_t pgoff, uintptr_t *phys)
 {
     struct virtio_gpu_object *bo = (struct virtio_gpu_object *)obj;
     uintptr_t p;
 
-    if (bo->shmem.base.dev->unplugged) {
-        return -1;
-    }
     p = drm_gem_shmem_page(&bo->shmem, pgoff);
     if (!p) {
         return -1;
@@ -1949,7 +1950,11 @@ static void devices_remove(struct virtio_gpu_device *vg)
  * Stop the device for good: reset it and free its queues, then answer every
  * command started and not yet answered with none, its fence failing with
  * -ENODEV, as the device-loss rule asks, and free what nobody waits on; a
- * waiter frees its own. Process context.
+ * waiter frees its own. The reset detaches every resource's backing from
+ * the host and drops the pages of host-visible blobs. Frames of guest
+ * memory stay the objects', for the mappings that still show them
+ * (`obj_vm_page`); frames a transport gave from its own heap go back to it,
+ * and such a mapping takes new pages at its next touch. Process context.
  */
 void vgpu_kill(struct virtio_gpu_device *vg)
 {
@@ -1999,7 +2004,10 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     for (bo = vg->resources; bo; bo = bo->next) {
         bo->res_id = 0;
         vgpu_blob_pages_drop(vg, bo);
-        vgpu_obj_pages_free(vg, bo);
+        /* A transport's own backing is its heap's, which the reset frees. */
+        if (vg->vdev->ops->backing_release) {
+            vgpu_obj_pages_free(vg, bo);
+        }
     }
     k_memset(vg->res_ids, 0, VIRTIO_GPU_MAX_RESOURCES / 8);
 }
