@@ -579,15 +579,14 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     }
 }
 
-/** KVM_SET_TSC_KHZ of a VM, as Linux's: the rate its vCPUs start at,
- * which is not tried on a vCPU here. 0, or -EINVAL for a rate
- * `kvm_tsc_khz_arg` refuses or once the VM has a vCPU, as Linux refuses
- * it once `created_vcpus` is not 0. */
+/** KVM_SET_TSC_KHZ of a VM, as Linux's: the rate its later vCPUs start
+ * at, which is not tried on a vCPU here, and which a VM with vCPUs takes
+ * too. 0, or -EINVAL for a rate `kvm_tsc_khz_arg` refuses. */
 static int32_t vm_set_tsc_khz(struct kvm_vm *vm, uintptr_t arg)
 {
     uint32_t khz = kvm_tsc_khz_arg(arg);
 
-    if (khz == 0 || vm->nr_vcpus != 0) {
+    if (khz == 0) {
         return -EINVAL;
     }
     vm->default_tsc_khz = khz;
