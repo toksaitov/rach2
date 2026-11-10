@@ -161,7 +161,7 @@ static void pi_priority_rows(void)
     pi_unfile(&chain_q);
     CHECK(self.pi_priority == 0, "removing a chain removes its donation");
     cpu_table[0].current = &owner;
-    CHECK(futex_wake(32, 1, FUTEX_MATCH_ANY, FUTEX_PRIVATE_FLAG) == -EINVAL,
+    CHECK(futex_wake(32, 1, FUTEX_MATCH_ANY, FUTEX_PRIVATE_FLAG, 0) == -EINVAL,
           "ordinary wake refuses a PI waiter");
     CHECK(futex_unlock_pi(32, FUTEX_PRIVATE_FLAG) == 0, "contended owner unlocks");
     CHECK(high_q.woken && !low_q.woken && pi->owner == &high,
