@@ -279,11 +279,14 @@ static unsigned long stack_end(void)
 static void stack_gap(void)
 {
     static unsigned long held[400][2];
-    unsigned long rl[2], top = stack_end(), gap, high = 0, p;
+    struct {
+        unsigned long long cur, max;
+    } rl;
+    unsigned long top = stack_end(), gap, high = 0, p;
     unsigned long len = 1ul << (sizeof(long) == 8 ? 46 : 30);
     unsigned n = 0, i;
 
-    if (syscall2(SYS_GETRLIMIT, 3, (long)rl) != 0 || rl[0] != STACK_WINDOW ||
+    if (syscall4(SYS_PRLIMIT64, 0, 3, 0, (long)&rl) != 0 || rl.cur != STACK_WINDOW ||
         top < STACK_WINDOW + GUARD_GAP) {
         report_notrun("stack-gap-hint", "RLIMIT_STACK or the stack's top is not known");
         report_notrun("stack-gap-fill", "RLIMIT_STACK or the stack's top is not known");
