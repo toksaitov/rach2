@@ -115,9 +115,12 @@
 #define APIC_BASE_ENABLE 0x800ull
 #define APIC_BASE_ADDR   0xFFFFFFFFFF000ull
 
-/* The events another processor leaves, in `events`. */
-#define EV_INIT 1u
-#define EV_SIPI 2u
+/* The events another processor leaves, in `events`, and the SIPI that
+ * KVM_SET_MP_STATE leaves, whose vector is the one KVM_SET_VCPU_EVENTS
+ * gave the vCPU. */
+#define EV_INIT     1u
+#define EV_SIPI     2u
+#define EV_SIPI_SET 4u
 
 #define RFLAGS_IF 0x200ull
 
@@ -141,11 +144,15 @@ struct lapic {
     uint64_t expire_ns;       /* the host's ns of the next expiry, 0 for none */
     uint64_t tscdeadline;     /* the guest's TSC of the deadline, 0 for none */
     volatile uint32_t events; /* EV_*, from another processor */
-    volatile uint32_t nmis;   /* NMIs delivered, not yet queued on the vCPU */
-    int ext_vector;           /* KVM_INTERRUPT's vector, -1 for none */
-    uint32_t eoi_vector;      /* the vector of KVM_EXIT_IOAPIC_EOI */
-    uint64_t wake_tick;       /* the tick a halted wait ends at for the timer, 0 for none */
-    wait_queue_t wq;          /* the vCPU's halted wait */
+    /* The vector of EV_SIPI, from another processor. It is kept here,
+     * where an INIT's reset of the vCPU does not reach it: the SIPI may
+     * come while its INIT waits or is being taken. */
+    volatile uint32_t sipi_vector;
+    volatile uint32_t nmis; /* NMIs delivered, not yet queued on the vCPU */
+    int ext_vector;         /* KVM_INTERRUPT's vector, -1 for none */
+    uint32_t eoi_vector;    /* the vector of KVM_EXIT_IOAPIC_EOI */
+    uint64_t wake_tick;     /* the tick a halted wait ends at for the timer, 0 for none */
+    wait_queue_t wq;        /* the vCPU's halted wait */
 };
 
 /** The APIC of `v`, or NULL with no local APIC in the kernel. */
@@ -447,7 +454,7 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_STARTUP:
-        l->v->events.sipi_vector = vector;
+        l->sipi_vector = vector;
         atomic_or(&l->events, EV_SIPI);
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
@@ -1286,8 +1293,8 @@ static void accept_events(struct lapic *l)
                                                            : KVM_MP_STATE_INIT_RECEIVED;
         v->dirty |= KVM_PART_MP;
     }
-    if ((ev & EV_SIPI) && v->mp_state == KVM_MP_STATE_INIT_RECEIVED) {
-        vector = v->events.sipi_vector & 0xFFu;
+    if ((ev & (EV_SIPI | EV_SIPI_SET)) && v->mp_state == KVM_MP_STATE_INIT_RECEIVED) {
+        vector = ((ev & EV_SIPI) ? l->sipi_vector : v->events.sipi_vector) & 0xFFu;
         v->sregs.cs.selector = (uint16_t)(vector << 8);
         v->sregs.cs.base = (uint64_t)vector << 12;
         v->regs.rip = 0;
@@ -1327,7 +1334,7 @@ static int wake_cond(void *arg)
         return 1;
     }
     if (v->mp_state == KVM_MP_STATE_INIT_RECEIVED || v->mp_state == KVM_MP_STATE_UNINITIALIZED) {
-        return (l->events & EV_SIPI) != 0;
+        return (l->events & (EV_SIPI | EV_SIPI_SET)) != 0;
     }
     if (l->nmis || v->nmi_queued) {
         return 1;
@@ -1463,7 +1470,7 @@ static int32_t set_lapic(struct lapic *l, uintptr_t arg)
 
 /** KVM_SET_MP_STATE with the APIC in the kernel, as Linux's
  * kvm_arch_vcpu_ioctl_set_mpstate: SIPI_RECEIVED waits for SIPI with one
- * pending, at the vector KVM_SET_VCPU_EVENTS gave. */
+ * pending, at the vector KVM_SET_VCPU_EVENTS gave, before or after. */
 static int32_t set_mp_state(struct lapic *l, uintptr_t arg)
 {
     struct kvm_mp_state mp;
@@ -1482,7 +1489,7 @@ static int32_t set_mp_state(struct lapic *l, uintptr_t arg)
         break;
     case KVM_MP_STATE_SIPI_RECEIVED:
         v->mp_state = KVM_MP_STATE_INIT_RECEIVED;
-        atomic_or(&l->events, EV_SIPI);
+        atomic_or(&l->events, EV_SIPI_SET);
         break;
     default:
         return -EINVAL;
