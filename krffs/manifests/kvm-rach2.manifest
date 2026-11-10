@@ -1,0 +1,5 @@
+# The small i686 KVM guest: the shipped init and a shell that powers off.
+dir 0755 /sbin
+dir 0755 /bin
+file 0755 /sbin/init build/utils/sbin/init-shell
+file 0755 /bin/sh build/tests/kvm/rach2-init

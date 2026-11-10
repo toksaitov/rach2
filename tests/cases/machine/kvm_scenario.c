@@ -29,6 +29,7 @@ struct kvm_case {
     struct net_case u;
     struct net_boot b;
     enum runner runner;
+    int rach2;          /* boot the i686 Rach2 guest instead of Debian */
     char accel[8];      /* a boot case's accelerator inside Rach2 */
     char password[128]; /* root's, at the console */
 };
@@ -54,9 +55,12 @@ static int parse(struct kvm_case *s, const char *id)
         s->runner = strcmp(name, "slots") == 0 ? SLOTS : ENTRY;
         return 1;
     }
-    if (strcmp(name, "boot-debian-kvm") == 0 || strcmp(name, "boot-debian-tcg") == 0) {
+    if (strcmp(name, "boot-debian-kvm") == 0 || strcmp(name, "boot-debian-tcg") == 0 ||
+        strcmp(name, "boot-debian-nested") == 0 || strcmp(name, "boot-rach2-kvm") == 0 ||
+        strcmp(name, "boot-rach2-nested") == 0) {
         s->runner = BOOT;
-        strcpy(s->accel, name + strlen("boot-debian-"));
+        s->rach2 = strncmp(name, "boot-rach2-", strlen("boot-rach2-")) == 0;
+        strcpy(s->accel, strcmp(name, "boot-debian-tcg") == 0 ? "tcg" : "kvm");
         return 1;
     }
     if (strcmp(name, "unit-tests") == 0 || strcmp(name, "unit-tests-nested") == 0) {
@@ -142,8 +146,10 @@ static void run(struct kvm_case *s)
     else if (s->runner == BOOT)
         snprintf(command, sizeof(command),
                  "cd " KVM_DIR " && sh kvm-boot.sh -a %s -o " KVM_DIR "/boot.log"
-                 " -k guests/debian/vmlinuz -i guests/debian/initrd",
-                 s->accel);
+                 " -k %s -i %s -t '%s'",
+                 s->accel, s->rach2 ? "guests/rach2/kernel" : "guests/debian/vmlinuz",
+                 s->rach2 ? "guests/rach2/ram.krffs" : "guests/debian/initrd",
+                 s->rach2 ? "KVMRACH2 OK" : "KVMGUEST OK");
     else
         snprintf(command, sizeof(command), "cd " KVM_DIR " && sh corpus.sh %s %s",
                  s->runner == UNIT ? "unit" : "selftests",

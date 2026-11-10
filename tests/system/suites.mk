@@ -1050,6 +1050,24 @@ $(KVM_ENTRY): tests/kvm/svm-entry.c rach2/sys/kvm/kvm_abi.h $(LIBC_STAMP)
 	@mkdir -p $(@D) build/tmp
 	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
 	    -static -Wl,-z,noexecstack $< -o $@
+KVM_RACH2_DIR = build/kvm/guests/rach2
+ifeq ($(ARCH),x86_64)
+build/rach2/kernel: ask-the-sub-make
+	$(MAKE) --no-print-directory -C rach2 ARCH=i686
+build/utils/sbin/init-shell: ask-the-sub-make
+	$(MAKE) --no-print-directory ARCH=i686 musl
+	$(MAKE) --no-print-directory -C utils ARCH=i686 ../build/utils/sbin/init-shell
+endif
+build/tests/kvm/rach2-init: tests/kvm/guests/rach2-init.c tests/probe.h
+	@mkdir -p $(@D)
+	i686-elf-gcc -m32 -Wall -Wextra -Werror -static -nostdlib -ffreestanding \
+	    -Wl,-Ttext=0x08048000 -Wl,--build-id=none $< -o $@
+$(KVM_RACH2_DIR)/kernel: build/rach2/kernel
+	@mkdir -p $(@D)
+	cp $< $@
+$(KVM_RACH2_DIR)/ram.krffs: krffs/manifests/kvm-rach2.manifest \
+                            build/tests/kvm/rach2-init build/utils/sbin/init-shell $(IMAGE_TOOLS)
+	RACH2_ARCH=i686 RACH2_PATH_MAP= sh krffs/mkimage.sh $< $@ 1
 KVM_GUEST_DIR = build/kvm/guests/debian
 $(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.txt \
                          tests/kvm/guests/debian-init vendor/gnu/debian/fetch_asset.sh \
@@ -1058,10 +1076,12 @@ $(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.tx
 $(KVM_GUEST_DIR)/vmlinuz: $(KVM_GUEST_DIR)/initrd
 KVM_FILES = tests/kvm/leak.sh tests/kvm/kvm-boot.sh tests/kvm/corpus.sh tests/kvm/unit-tests.list \
             tests/kvm/selftests.list
-build/tests/cases/kvm/kvm.tar: $(KVM_FILES) $(KVM_GUEST_DIR)/initrd $(KVM_GUEST_DIR)/vmlinuz $(KVM_ENTRY)
+build/tests/cases/kvm/kvm.tar: $(KVM_FILES) $(KVM_GUEST_DIR)/initrd $(KVM_GUEST_DIR)/vmlinuz $(KVM_ENTRY) \
+                             $(KVM_RACH2_DIR)/kernel $(KVM_RACH2_DIR)/ram.krffs
 	@mkdir -p $(@D)
 	tar -cf $@.tmp -C tests/kvm $(notdir $(KVM_FILES)) \
 	    -C $(CURDIR)/build/kvm guests/debian/vmlinuz guests/debian/initrd \
+	    guests/rach2/kernel guests/rach2/ram.krffs \
 	    -C $(CURDIR)/build/x86_64/tests/kvm svm-entry
 	mv $@.tmp $@
 build/tests/cases/kvm/kvm.ext2: build/tests/cases/kvm/kvm.tar
