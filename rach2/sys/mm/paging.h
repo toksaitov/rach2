@@ -125,8 +125,9 @@ struct mm;
  * read-only page is shared as it is, and a write to it still faults; a page
  * of a shared region keeps its rights in both, so that a store is seen by
  * both. A region marked VM_PROT_DONTFORK is passed over, since the child
- * does not get it (`vm_copy`). Returns 0, or -1 when a page table of the
- * child cannot be had.
+ * does not get it (`vm_copy`). VM_PROT_WIPEONFORK regions are passed over
+ * too, so the child faults in zero pages of its own. Returns 0, or -1 when
+ * a page table of the child cannot be had.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child);
 

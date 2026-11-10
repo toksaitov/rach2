@@ -100,7 +100,7 @@ ACPICA, in [`sys/acpi/`](../../acpi/Readme.md), interprets the DSDT and the SSDT
 
 ### The interrupt controllers and the tick
 
-`platform_timer_start` (`platform.c`) brings the controllers up and starts the tick at `TICK_HZ` (`timer.h`), 100 a second, with interrupts off until the last step:
+`platform_timer_start` (`platform.c`) brings the controllers up and starts the tick at `TICK_HZ` (`timer.h`), 1000 a second, with interrupts off until the last step:
 
 1. `lapic_init` (`lapic.c`) enables the local APIC unless `rach2.nomsi` is given, the processor has no APIC or no model-specific registers, the APIC is in x2APIC mode, or its base is above 4 GiB. It makes `LINT0` an unmasked external interrupt, so that the 8259's interrupts still reach the processor through it.
 2. `init_pit` programs the 8254's channel 0 in mode 3 with the reload 1193. On a machine whose channel 0 does not count, `k_udelay` uses the reference counter, where there is one. Under `rach2.tscreliable` the TSC is measured next (`timer_calibrate`), so that the first tick makes it the reference.
