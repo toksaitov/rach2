@@ -31,6 +31,8 @@
  * device (dev-log/76-display/upstream.md). A row can make
  * the pad refuse a register write, leave register reads unanswered, refuse
  * version 1's absolute bit, or be a Logitech mouse that answers the knock.
+ * The probe for an ALPS touchpad, which alps_hosttest.c tests, finds none
+ * here.
  *
  * The capabilities and the events each row expects are what Linux 6.12's
  * elantech.c, with its input core, gives the same pad and the same
@@ -1541,6 +1543,25 @@ void klog(int level, const char *subsystem, const char *format, ...)
 /** The console's blanking is not modelled. */
 void console_poke(void)
 {}
+
+/** No ALPS touchpad answers, so the probe goes on to Elantech's; the ALPS
+ * probe is alps_hosttest.c's. */
+int alps_init(void)
+{
+    return 0;
+}
+
+/** No ALPS pad's bytes come, since `alps_init` found none. */
+void alps_byte(uint8_t data)
+{
+    (void)data;
+}
+
+/** No ALPS pad's set-up fails, so no mouse takes its name. */
+const char *alps_mouse_name(const char *proto)
+{
+    return proto;
+}
 
 /* What evdev.c needs: one processor, fixed clocks, nothing to repeat,
  * reads that never sleep, since every open is nonblocking, and calls of
