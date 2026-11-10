@@ -64,12 +64,15 @@ void dma_fence_set_error(struct dma_fence *f, int32_t error)
 }
 
 /** Stamp completion, run each callback and wake all.
- * The mark is made with interrupts masked, since an interrupt may signal
- * the fence while a thread adds or removes a callback; once it is made,
- * dma_fence_add_callback refuses. Each callback stays on the list, where
- * dma_fence_remove_callback can find it, until it is taken off to be
- * called, so that a callback may free the owner of another one still
- * pending. The callbacks run in the signaller's context. */
+ * The mark is made and every callback runs with interrupts masked, as
+ * Linux's dma_fence_signal runs them under the fence's lock with
+ * interrupts off: a callback may free the owner of another callback that
+ * has been taken off the list but not yet called, and an interrupt that
+ * signalled another fence in that window could do so. Once the mark is
+ * made, dma_fence_add_callback refuses. Each callback stays on the list,
+ * where dma_fence_remove_callback can find it, until it is taken off to
+ * be called. The callbacks run in the signaller's context and must not
+ * sleep. */
 int32_t dma_fence_signal(struct dma_fence *f)
 {
     struct dma_fence_cb *cb;
@@ -84,19 +87,12 @@ int32_t dma_fence_signal(struct dma_fence *f)
     dma_fence_get(f);
     f->signaled = 1;
     f->timestamp_ns = dma_fence_now();
-    kirq_restore(flags);
-    for (;;) {
-        flags = kirq_save();
-        cb = f->cbs;
-        if (cb) {
-            f->cbs = cb->next;
-            cb->next = NULL;
-        }
-        kirq_restore(flags);
-        if (!cb)
-            break;
+    while ((cb = f->cbs) != NULL) {
+        f->cbs = cb->next;
+        cb->next = NULL;
         cb->func(f, cb);
     }
+    kirq_restore(flags);
     wq_wake_all(&f->wq);
     dma_fence_put(f);
     return 0;
