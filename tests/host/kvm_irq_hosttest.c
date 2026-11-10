@@ -35,8 +35,10 @@
  * deassigned, raised at once by a counter already up, freed by the eventfd's
  * last close, by the VM's end and after a close that left the hangup to run;
  * ioeventfds on ports and MMIO, with and without a data match, any length,
- * string OUTs, their refusals and collisions, a full bus, and deassign; and
- * every allocation given back.
+ * string OUTs, their refusals and collisions, a full bus, and deassign;
+ * coalesced zones of MMIO and of ports, queued on the VM's ring until one
+ * slot is left, from any start, and removed by a range they hold; and every
+ * allocation given back.
  */
 #include "io/eventfd.c"
 #include "kvm/iobus.c"
@@ -1281,6 +1283,122 @@ static void ioeventfd_rows(void)
     eventfd_close(&efd2_entry);
 }
 
+/* The ring coalesced_rows gives the VM, and the zone it asks for. */
+static struct kvm_coalesced_mmio_ring ring;
+static struct kvm_coalesced_mmio_zone zone;
+
+/** KVM_REGISTER_COALESCED_MMIO or its undoing of `size` bytes at `addr`. */
+static int32_t coalesced(uint32_t request, uint64_t addr, uint32_t size, uint32_t pio)
+{
+    zone.addr = addr;
+    zone.size = size;
+    zone.pio = pio;
+    return kvm_iobus_ioctl(&vm, request, (uintptr_t)&zone);
+}
+
+/** Fill the ring from slot `start` as coalesced_io_test does, an 8-byte
+ * MMIO write and a 4-byte OUT by turns: whether every write but the one
+ * that would take the last free slot was queued whole, and that one went
+ * to the caller. */
+static int ring_fills(uint32_t start)
+{
+    const uint64_t gpa = 0x100000000ull;
+    uint32_t i, at;
+    int ok = 1;
+
+    ring.first = ring.last = start;
+    for (i = 0; i < KVM_COALESCED_MMIO_MAX - 1u; i++) {
+        ok = ok && ((i & 1u) ? out(0x80, 4, 1, 0x80 + i) : mwrite(gpa, 8, i)) == 1;
+    }
+    ok = ok && (ring.last + 1u) % KVM_COALESCED_MMIO_MAX == ring.first && ring.first == start;
+    ok = ok && mwrite(gpa, 8, i) == 0 && out(0x80, 4, 1, 0x80 + i) == 0;
+    for (i = 0; i < KVM_COALESCED_MMIO_MAX - 1u; i++) {
+        const struct kvm_coalesced_mmio *e;
+        uint32_t value;
+
+        at = (start + i) % KVM_COALESCED_MMIO_MAX;
+        e = &ring.coalesced_mmio[at];
+        k_memcpy(&value, e->data, 4);
+        if (i & 1u) {
+            ok = ok && e->phys_addr == 0x80 && e->len == 4 && e->pio == 1 && value == 0x80 + i;
+        } else {
+            ok = ok && e->phys_addr == gpa && e->len == 8 && e->pio == 0 && value == i;
+        }
+    }
+    return ok;
+}
+
+/** What a zone takes and what removes it, with the zones of
+ * coalesced_rows in place. */
+static void range_rows(void)
+{
+    const uint64_t gpa = 0x100000000ull;
+
+    ring.first = 0;
+    ring.last = KVM_COALESCED_MMIO_MAX;
+    CHECK(mwrite(gpa, 8, 1) == 0 && ring.last == KVM_COALESCED_MMIO_MAX,
+          "a last the caller put outside the ring queues nothing");
+    ring.first = ring.last = 0;
+    CHECK(mwrite(gpa + 4, 4, 1) == 1 && mwrite(gpa + 4, 8, 1) == 0 && mwrite(gpa - 1, 2, 1) == 0 &&
+              ring.last == 1,
+          "a write must lie wholly in its zone");
+    CHECK(out(0x84, 4, 1, 1) == 1 && out(0x86, 4, 1, 1) == 0 && out(0x88, 1, 1, 1) == 0 &&
+              ring.last == 2 && ring.coalesced_mmio[1].phys_addr == 0x84,
+          "a port write too");
+    CHECK(mwrite(0x80, 4, 1) == 0 && out(0x80, 2, 3, 7) == 1 && ring.last == 5 &&
+              ring.coalesced_mmio[4].len == 2 && ring.coalesced_mmio[4].pio == 1,
+          "the buses are apart, and a string OUT queues each element");
+    CHECK(coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa, 16, 0) == 0 && mwrite(gpa, 8, 1) == 1,
+          "a range the zone does not hold removes nothing");
+    CHECK(coalesced(KVM_REGISTER_COALESCED_MMIO, gpa, 16, 0) == 0 &&
+              coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa + 4, 4, 0) == 0 &&
+              mwrite(gpa, 8, 1) == 0,
+          "a range removes every zone that holds it");
+    CHECK(out(0x80, 4, 1, 1) == 1 && coalesced(KVM_UNREGISTER_COALESCED_MMIO, 0x80, 8, 1) == 0 &&
+              out(0x80, 4, 1, 1) == 0,
+          "the port zone goes by its own bus");
+}
+
+/** Coalesced zones on both buses. */
+static void coalesced_rows(void)
+{
+    const uint64_t gpa = 0x100000000ull;
+    long before = live;
+    uint32_t i;
+
+    vm.ring = &ring;
+    CHECK(sizeof(struct kvm_coalesced_mmio_zone) == 16 && sizeof(struct kvm_coalesced_mmio) == 24 &&
+              sizeof(ring) <= 4096 && KVM_COALESCED_MMIO_MAX == 170,
+          "the zone, the entry and the ring of 170 are Linux's");
+    CHECK(kvm_iobus_check_extension(KVM_CAP_COALESCED_MMIO) == KVM_COALESCED_MMIO_PAGE_OFFSET &&
+              kvm_iobus_check_extension(KVM_CAP_COALESCED_PIO) == 1,
+          "KVM_CAP_COALESCED_MMIO is the ring's page and KVM_CAP_COALESCED_PIO 1");
+    CHECK(coalesced(KVM_REGISTER_COALESCED_MMIO, gpa, 8, 2) == -EINVAL &&
+              coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa, 8, 2) == -EINVAL,
+          "a pio that is not 0 or 1 is -EINVAL");
+    CHECK(kvm_iobus_ioctl(&vm, KVM_REGISTER_COALESCED_MMIO, 0) == -EFAULT, "a bad zone is -EFAULT");
+    CHECK(coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa, 8, 0) == 0, "removing no zone is no error");
+    CHECK(mwrite(gpa, 8, 1) == 0 && out(0x80, 4, 1, 1) == 0,
+          "a write in no zone goes to the caller");
+    CHECK(coalesced(KVM_REGISTER_COALESCED_MMIO, gpa, 8, 0) == 0 &&
+              coalesced(KVM_REGISTER_COALESCED_MMIO, 0x80, 8, 1) == 0,
+          "a zone of MMIO and a zone of ports");
+    CHECK(ring_fills(0), "the zones queue all but the last slot's write");
+    CHECK(ring_fills(1) && ring_fills(85) && ring_fills(KVM_COALESCED_MMIO_MAX - 1u),
+          "from any start, around the ring's end");
+    range_rows();
+    for (i = 0; i < MAX_BUS_DEVS; i++) {
+        if (coalesced(KVM_REGISTER_COALESCED_MMIO, 0x1000 + i, 1, 1) != 0) {
+            break;
+        }
+    }
+    CHECK(i == MAX_BUS_DEVS && coalesced(KVM_REGISTER_COALESCED_MMIO, 0x9000, 1, 1) == -ENOSPC,
+          "the port bus holds 1000 zones and no more");
+    kvm_iobus_free(&vm);
+    CHECK(live == before, "the VM's end frees every zone");
+    vm.ring = NULL;
+}
+
 /** A byte access through the vCPU's legacy port exit. */
 static uint32_t legacy_port(uint32_t port, int write, uint32_t value)
 {
@@ -1710,6 +1828,7 @@ int main(int argc, char **argv)
         routing_rows();
         irqfd_rows();
         ioeventfd_rows();
+        coalesced_rows();
         quirk_rows();
         vm_end();
     }

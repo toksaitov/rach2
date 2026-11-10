@@ -895,13 +895,15 @@ void kvm_pit_ack(struct kvm_vm *vm);
 void kvm_pit_unmask(struct kvm_vm *vm);
 void kvm_pit_free(struct kvm_vm *vm);
 
-/* iobus.c: the in-kernel bus and ioeventfd. */
+/* iobus.c: the in-kernel bus, ioeventfd and the coalesced zones. */
 
-/** KVM_IOEVENTFD. */
+/** KVM_IOEVENTFD, KVM_REGISTER_COALESCED_MMIO and
+ * KVM_UNREGISTER_COALESCED_MMIO. */
 int32_t kvm_iobus_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
 
 /** Offer the port or MMIO write of `v->exit` to the in-kernel bus: 1 when
- * an ioeventfd took it, 0 when it goes to the caller. */
+ * an ioeventfd took it or a coalesced zone queued it on the VM's ring, 0
+ * when it goes to the caller. */
 int kvm_iobus_write(struct kvm_vcpu *v);
 
 /** The capabilities of iobus.c: IOEVENTFD, IOEVENTFD_ANY_LENGTH,

@@ -634,6 +634,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case KVM_SIGNAL_MSI:
         return kvm_irq_ioctl(vm, request, arg);
     case KVM_IOEVENTFD:
+    case KVM_REGISTER_COALESCED_MMIO:
+    case KVM_UNREGISTER_COALESCED_MMIO:
         return kvm_iobus_ioctl(vm, request, arg);
     case KVM_HYPERV_EVENTFD:
         return kvm_hv_eventfd(vm, arg);
