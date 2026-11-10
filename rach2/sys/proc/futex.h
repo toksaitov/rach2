@@ -69,7 +69,8 @@ long sys_futex_wait(isr_params_t *params);
  * futex_requeue takes an array of two struct futex_waitv, flags, nr_wake
  * and nr_requeue, and, while the first word holds the first entry's value,
  * wakes nr_wake waiters of it and moves up to nr_requeue more to the second,
- * as FUTEX_CMP_REQUEUE does; each entry has its own futex2 flags. The count
+ * as FUTEX_CMP_REQUEUE does; both entries must have equal futex2 flags.
+ * The count
  * woken and moved; -EINVAL for flags other than 0, a NULL array, an entry
  * futex_waitv refuses, a negative count, an address not aligned to four or
  * a PI waiter; -EAGAIN; -EFAULT.

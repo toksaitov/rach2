@@ -339,7 +339,7 @@ of 0, or a value or mask past 32 bits, fails with
 .Er EINVAL .
 .Nm futex_requeue
 takes two entries, the futex to wake and its value and the futex to move
-waiters to, each with its own flags, and, while the first word holds the
+waiters to, with equal flags in both entries, and, while the first word holds the
 first entry's value, wakes up to
 .Fa nr_wake
 waiters of it and moves up to

@@ -1829,6 +1829,9 @@ long sys_futex_requeue(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
+    if (v[0].shared != v[1].shared) {
+        return -EINVAL;
+    }
     return futex_requeue(v[0].addr, v[1].addr,
                          (v[0].shared ? FUTEX_SHARED1 : 0) | (v[1].shared ? FUTEX_SHARED2 : 0),
                          (int)SC_ARG(params, 2), (int)SC_ARG(params, 3), &v[0].val);
