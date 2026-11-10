@@ -63,6 +63,12 @@ struct tgroup {
     unsigned long maj_flt;
     unsigned long cmin_flt;
     unsigned long cmaj_flt;
+    /* Context switches of ended threads, and of reaped children with their
+     * children, as the page-fault totals above. Native unsigned longs. */
+    unsigned long nvcsw;
+    unsigned long nivcsw;
+    unsigned long cnvcsw;
+    unsigned long cnivcsw;
     /* The most memory, in kilobytes, an address space of the process had in
      * use when it ended, at an exec or at the end of the process, and the
      * most any reaped child reports, which getrusage and wait4 give as

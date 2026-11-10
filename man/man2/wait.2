@@ -114,10 +114,12 @@ counts them;
 is the most memory in kilobytes the child or a child it reaped had in use,
 as
 .Xr getrusage 2
-describes; and the thirteen counters after it, which the kernel does not
-keep, are zero.
-Reaping a child adds the same two times to the children's totals of the
-caller's process.
+describes.
+The page faults and context switches are the same totals
+.Fn getrusage
+reports; the other counters are zero.
+Reaping a child adds its CPU time, page faults and context switches to the
+children's totals of the caller's process.
 Nonnull status and resource usage pointers are checked for write
 access before the wait.
 The event found is held while its report is copied out, so that no other

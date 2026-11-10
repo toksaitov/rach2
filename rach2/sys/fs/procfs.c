@@ -1735,9 +1735,9 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_cpu_set(t, p->affinity & cpu_online_bits());
     ap_ch(t, '\n');
     ap_str(t, "voluntary_ctxt_switches:\t");
-    ap_u32(t, p->nvcsw);
+    ap_ulong(t, p->nvcsw);
     ap_str(t, "\nnonvoluntary_ctxt_switches:\t");
-    ap_u32(t, p->nivcsw);
+    ap_ulong(t, p->nivcsw);
     ap_ch(t, '\n');
     return t->len;
 }

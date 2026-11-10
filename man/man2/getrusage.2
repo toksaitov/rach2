@@ -64,7 +64,13 @@ for the disk.
 reports a child's, with those of the children it reaped, and
 .Pa /usr/bin/time
 prints them.
-The kernel keeps no other resource count, so the other eleven counters are
+.Pp
+.Va ru_nvcsw
+counts switches away while a thread was blocked or stopped, and
+.Va ru_nivcsw
+switches while it could still run.
+The same process, thread or reaped children supply these counts.
+The kernel keeps no other resource count, so the other nine counters are
 zero.
 .Ss System call interface
 The i386 system call number is 77.
