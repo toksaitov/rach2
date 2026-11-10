@@ -66,6 +66,9 @@
 
 #define GAM_ECOCHK                      0x4090
 #define HSW_IDICR                       0x9008
+#define HSW_PAVP_FUSE1                  0x911c
+#define HSW_F1_EU_DIS_SHIFT             16 /* EUs disabled per subslice */
+#define HSW_F1_EU_DIS_MASK              (3u << 16)
 #define IDIHASHMSK(x)                   (((x) & 0x3fu) << 16)
 #define ECOBUS                          0xa180
 #define FORCEWAKE_MT_ENABLE             (1u << 5)
@@ -82,6 +85,7 @@
 #define GT_FIFO_FREE_ENTRIES_MASK       0x7fu
 #define GT_FIFO_NUM_RESERVED_ENTRIES    20
 #define HSW_EDRAM_CAP                   0x120010
+#define EDRAM_ENABLED                   (1u << 0)
 #define FORCEWAKE_ACK_HSW               0x130044
 #define FORCEWAKE_KERNEL                (1u << 0)
 #define FORCEWAKE_USER                  (1u << 1)
@@ -253,29 +257,32 @@
 #define BLT_HWS_PGA_GEN7    0x4280
 #define VEBOX_HWS_PGA_GEN7  0x4380
 
-#define HWSTAM                0x2098
-#define EIR                   0x20b0
-#define EMR                   0x20b4
-#define ESR                   0x20b8
-#define INSTPM                0x20c0
-#define INSTPM_TLB_INVALIDATE (1u << 9) /* of RING_INSTPM, masked */
-#define INSTPM_SYNC_FLUSH     (1u << 5)
-#define GEN7_FF_THREAD_MODE   0x20a0
-#define GFX_MODE              0x2520
-#define ERROR_GEN6            0x40a0
-#define DONE_REG              0x40b0
-#define ARB_MODE              0x4030
-#define ARB_MODE_SWIZZLE_IVB  (1u << 5)
-#define HSW_GTT_CACHE_EN      0x4024
-#define CACHE_MODE_0_GEN7     0x7000
-#define CACHE_MODE_1          0x7004
-#define GEN7_GT_MODE          0x7008
-#define GEN7_SC_INSTDONE      0x7100
-#define GEN7_L3CNTLREG1       0xb01c
-#define GEN7_L3SQCREG4        0xb034
-#define HSW_SCRATCH1          0xb038
-#define GEN7_ROW_INSTDONE     0xe164
-#define BCS_SWCTRL            0x22200
+#define HWSTAM                            0x2098
+#define EIR                               0x20b0
+#define EMR                               0x20b4
+#define ESR                               0x20b8
+#define INSTPM                            0x20c0
+#define INSTPM_TLB_INVALIDATE             (1u << 9) /* of RING_INSTPM, masked */
+#define INSTPM_FORCE_ORDERING             (1u << 7)
+#define INSTPM_SYNC_FLUSH                 (1u << 5)
+#define GEN7_FF_THREAD_MODE               0x20a0
+#define GFX_MODE                          0x2520
+#define ERROR_GEN6                        0x40a0
+#define DONE_REG                          0x40b0
+#define ARB_MODE                          0x4030
+#define ARB_MODE_SWIZZLE_IVB              (1u << 5)
+#define HSW_GTT_CACHE_EN                  0x4024
+#define CACHE_MODE_0_GEN7                 0x7000
+#define RC_OP_FLUSH_ENABLE                (1u << 0) /* of CACHE_MODE_0_GEN7, masked */
+#define CACHE_MODE_1                      0x7004
+#define PIXEL_SUBSPAN_COLLECT_OPT_DISABLE (1u << 6) /* of CACHE_MODE_1, masked */
+#define GEN7_GT_MODE                      0x7008
+#define GEN7_SC_INSTDONE                  0x7100
+#define GEN7_L3CNTLREG1                   0xb01c
+#define GEN7_L3SQCREG4                    0xb034
+#define HSW_SCRATCH1                      0xb038
+#define GEN7_ROW_INSTDONE                 0xe164
+#define BCS_SWCTRL                        0x22200
 
 /* ------------------------------------------------------------------------
  * Commands (gt/intel_gpu_commands.h): a command's first dword holds its
@@ -293,9 +300,47 @@
 #define MI_STORE_DWORD_INDEX_SHIFT 2
 #define MI_OPCODE(dw)              (((dw) >> 23) & 0x3fu)
 #define MI_LENGTH(dw)              (((dw) & 0x3fu) + 2u)
+#define MI_ARB_ON_OFF              MI_INSTR(0x08, 0)
+#define MI_ARB_ENABLE              (1u << 0)
+#define MI_ARB_DISABLE             (0u << 0)
+#define MI_SET_CONTEXT             MI_INSTR(0x18, 0)
+#define MI_MM_SPACE_GTT            (1u << 8)
+#define MI_SAVE_EXT_STATE_EN       (1u << 3)
+#define MI_RESTORE_EXT_STATE_EN    (1u << 2)
+#define MI_FORCE_RESTORE           (1u << 1)
+#define MI_RESTORE_INHIBIT         (1u << 0)
+#define MI_LOAD_REGISTER_IMM(n)    MI_INSTR(0x22, 2u * (n) - 1u)
+#define MI_STORE_REGISTER_MEM      MI_INSTR(0x24, 1)
+#define MI_SRM_LRM_GLOBAL_GTT      (1u << 22)
+#define MI_FLUSH_DW                MI_INSTR(0x26, 1)
+#define MI_FLUSH_DW_STORE_INDEX    (1u << 21)
+#define MI_INVALIDATE_TLB          (1u << 18)
+#define MI_FLUSH_DW_OP_STOREDW     (1u << 14)
+#define MI_FLUSH_DW_USE_GTT        (1u << 2)
+
+/* The render pipe's flush and post-sync write: four dwords, the flags,
+ * the GTT address and the value. */
+#define GFX_OP_PIPE_CONTROL(len)                  ((3u << 29) | (3u << 27) | (2u << 24) | ((len) - 2u))
+#define PIPE_CONTROL_GLOBAL_GTT_IVB               (1u << 24)
+#define PIPE_CONTROL_CS_STALL                     (1u << 20)
+#define PIPE_CONTROL_TLB_INVALIDATE               (1u << 18)
+#define PIPE_CONTROL_MEDIA_STATE_CLEAR            (1u << 16)
+#define PIPE_CONTROL_QW_WRITE                     (1u << 14)
+#define PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH    (1u << 12)
+#define PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE (1u << 11)
+#define PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE     (1u << 10)
+#define PIPE_CONTROL_FLUSH_ENABLE                 (1u << 7)
+#define PIPE_CONTROL_DC_FLUSH_ENABLE              (1u << 5)
+#define PIPE_CONTROL_VF_CACHE_INVALIDATE          (1u << 4)
+#define PIPE_CONTROL_CONST_CACHE_INVALIDATE       (1u << 3)
+#define PIPE_CONTROL_STATE_CACHE_INVALIDATE       (1u << 2)
+#define PIPE_CONTROL_STALL_AT_SCOREBOARD          (1u << 1)
+#define PIPE_CONTROL_DEPTH_CACHE_FLUSH            (1u << 0)
 
 #define I915_GEM_HWS_SEQNO      0x40 /* the dword the breadcrumb writes */
 #define I915_GEM_HWS_SEQNO_ADDR (I915_GEM_HWS_SEQNO << MI_STORE_DWORD_INDEX_SHIFT)
+#define I915_GEM_HWS_SCRATCH    0x80 /* the dword a flush's post-sync write takes */
+#define HWS_SCRATCH_ADDR        (I915_GEM_HWS_SCRATCH << MI_STORE_DWORD_INDEX_SHIFT)
 
 /* ------------------------------------------------------------------------
  * Reset (gt/intel_gt_regs.h): a domain's bit is set to reset it and reads
