@@ -2843,9 +2843,9 @@ static void procfs_kvm_counts(struct procfs_text *t)
  * `process_pid_steps` to `bkl_wait_max_us`, each on a line of its own. */
 static void procfs_work_counts(struct procfs_text *t)
 {
-    uint64_t total, longest, shootdowns;
+    uint64_t total, longest;
 
-    smp_wait_stats(&total, &longest, &shootdowns);
+    smp_wait_stats(&total, &longest);
     ap_str(t, "process_pid_steps ");
     ap_u32(t, proc_work_count(0));
     ap_str(t, "\nprocess_uid_steps ");
