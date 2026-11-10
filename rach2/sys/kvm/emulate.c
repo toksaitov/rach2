@@ -70,6 +70,7 @@
 #define MSR_IA32_FEATURE_CONTROL 0x03Au
 #define MSR_IA32_TSC_ADJUST      0x03Bu
 #define MSR_IA32_UCODE_REV       0x08Bu
+#define MSR_PLATFORM_INFO        0x0CEu
 #define MSR_P6_PERFCTR0          0x0C1u
 #define MSR_P6_EVNTSEL0          0x186u
 #define MSR_K7_EVNTSEL0          0xC0010000u
@@ -627,12 +628,16 @@ static const struct kvm_cpuid_entry2 *cpuid_out_of_range(const struct kvm_vcpu *
     return kvm_cpuid_find(v, basic->eax, index);
 }
 
-void kvm_emul_cpuid(struct kvm_vcpu *v)
+int kvm_emul_cpuid(struct kvm_vcpu *v)
 {
     uint32_t function = (uint32_t)v->regs.rax, index = (uint32_t)v->regs.rcx;
     const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, function, index);
     uint32_t a = 0, b = 0, c = 0, d = 0;
 
+    if ((v->misc_features & 1u) && kvm_emul_cpl(v) != 0) {
+        kvm_queue_exception(v, GP_VECTOR, 1, 0);
+        return -1;
+    }
     if (!e) {
         e = cpuid_out_of_range(v, &function, index);
     }
@@ -658,6 +663,9 @@ void kvm_emul_cpuid(struct kvm_vcpu *v)
             if (!(v->sregs.apic_base & 0x800u)) {
                 d &= ~(1u << 9);
             }
+            if (!KVM_QUIRK(v->vm, KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT)) {
+                c = kvm_msr_guest_mwait(v) ? (c | (1u << 3)) : (c & ~(1u << 3));
+            }
         } else if (function == 7 && index == 0) {
             c = (v->sregs.cr4 & CR4_PKE) ? (c | (1u << 4)) : (c & ~(1u << 4));
         } else if (function == 0x80000007u && kvm_hv_invtsc_suppressed(v)) {
@@ -668,6 +676,7 @@ void kvm_emul_cpuid(struct kvm_vcpu *v)
     v->regs.rbx = b;
     v->regs.rcx = c;
     v->regs.rdx = d;
+    return 0;
 }
 
 int kvm_emul_xsetbv(struct kvm_vcpu *v)
@@ -839,6 +848,9 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
     }
     if (write && (index == MSR_IA32_TSC || index == MSR_IA32_TSC_ADJUST)) {
         return tsc_write(v, index, *value);
+    }
+    if (index == MSR_PLATFORM_INFO && (write || v->vm->platform_info_hidden)) {
+        return -1;
     }
     /* A guest writes only 0 to a bank's STATUS, as Linux's set_msr_mce
      * without AMD's McStatusWrEn, which no guest is given. */
@@ -3731,7 +3743,8 @@ static int h_sysexit(struct xc *x)
  * em_hypercall and emulator_fix_hypercall: the host's own of the two is
  * written over the instruction, which then runs again, RIP left on it.
  * VMCALL is #GP(0) above CPL 0, and VMMCALL #UD in real and virtual-8086
- * mode, as Linux's table marks them.
+ * mode, as Linux's table marks them. With KVM_X86_QUIRK_FIX_HYPERCALL_INSN
+ * disabled nothing is written and the guest takes #UD.
  */
 static int h_hypercall(struct xc *x)
 {
@@ -3743,6 +3756,9 @@ static int h_hypercall(struct xc *x)
     }
     if (x->in->sub == 0 && x->cpl > 0) {
         return x_fault(x, GP_VECTOR, 1, 0);
+    }
+    if (!KVM_QUIRK(v->vm, KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
+        return x_fault(x, UD_VECTOR, 0, 0);
     }
     x->next = v->regs.rip;
     return wq_add(v, v->sregs.cs.base + v->regs.rip, kvm_backend == &kvm_svm ? vmmcall : vmcall, 3,
@@ -3881,15 +3897,24 @@ static void emul_end(struct kvm_vcpu *v)
  * Refuse the instruction `bytes` of `n` bytes, as Linux's
  * x86_emulate_instruction and handle_emulation_failure: the guest takes
  * #UD, and at CPL 0 the caller gets the internal error besides, with the
- * instruction's bytes and the exit's numbers. One a #UD exit brought that
- * was not decoded, `decoded` 0, or is none of those run after a #UD, is
- * the guest's #UD alone, as the processor raised it.
+ * instruction's bytes and the exit's numbers; under
+ * KVM_CAP_EXIT_ON_EMULATION_FAILURE the caller gets the error at every
+ * level and the guest no #UD. One a #UD exit brought that was not decoded,
+ * `decoded` 0, or is none of those run after a #UD, is the guest's #UD
+ * alone, as the processor raised it.
  */
 static void emul_fail(struct kvm_vcpu *v, const uint8_t *bytes, uint32_t n, int decoded)
 {
+    int failure = decoded || !v->emul.ud, report = v->vm->exit_on_emulation_error;
+
     v->exit.kind = KVM_X_AGAIN;
-    kvm_queue_exception(v, UD_VECTOR, 0, 0);
-    if (kvm_emul_cpl(v) == 0 && (decoded || !v->emul.ud)) {
+    if (!failure || !report) {
+        kvm_queue_exception(v, UD_VECTOR, 0, 0);
+    }
+    if (failure) {
+        v->stat[KVM_VCPU_STAT_INSN_EMULATION_FAIL]++;
+    }
+    if (failure && (report || kvm_emul_cpl(v) == 0)) {
         v->exit.kind = KVM_X_INTERNAL;
         kvm_decode_fail(&v->exit.internal, bytes, n, v->emul.info);
     }
@@ -3987,6 +4012,7 @@ static int emul_begin(struct kvm_vcpu *v, int ud)
     if (n < 0) {
         return 0;
     }
+    v->stat[KVM_VCPU_STAT_INSN_EMULATION]++;
     known = kvm_decode(bytes, (uint32_t)n, kvm_emul_mode(v), in) == 0;
     if (known && ud) {
         known = runs_on_ud(in);

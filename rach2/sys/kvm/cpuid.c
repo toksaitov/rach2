@@ -349,6 +349,23 @@ int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
     return (int32_t)count;
 }
 
+int kvm_cpuid_host_has(uint32_t function, int reg, int bit)
+{
+    uint32_t top = 0, b = 0, c = 0, d = 0, r;
+    struct kvm_cpuid_entry2 e;
+
+    kcpu_id(function & 0x80000000u, &top, &b, &c, &d);
+    if (function > top) {
+        return 0;
+    }
+    host_leaf(&e, function, 0, 0);
+    if (!filter(&e, kvm_xcr0_supported())) {
+        return 0;
+    }
+    r = reg == 0 ? e.eax : reg == 1 ? e.ebx : reg == 2 ? e.ecx : e.edx;
+    return (r >> bit) & 1u;
+}
+
 const struct kvm_cpuid_entry2 *kvm_cpuid_find(const struct kvm_vcpu *v, uint32_t function,
                                               uint32_t index)
 {

@@ -1861,7 +1861,21 @@ static int exit_dr(struct kvm_vcpu *v)
         }
         dr += 2;
     }
-    if (v->debugregs.dr7 & DR7_GD) {
+    if (dr7_of(v) & DR7_GD) {
+        /* The exit comes before DR7.GD's trap, which is made here: the
+         * caller's, while it sets the breakpoints, as a debug exit, and
+         * the guest's own as its #DB, as Linux's handle_dr. */
+        if (debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
+            struct kvm_run_debug *dbg = &v->exit.debug;
+
+            v->exit.kind = KVM_X_DEBUG;
+            k_memset(dbg, 0, sizeof(*dbg));
+            dbg->exception = DB_VECTOR;
+            dbg->pc = v->sregs.cs.base + v->regs.rip;
+            dbg->dr6 = DR6_BD | DR6_FIXED;
+            dbg->dr7 = dr7_of(v);
+            return 0;
+        }
         v->debugregs.dr6 = (v->debugregs.dr6 & ~0xFull) | DR6_BD | DR6_FIXED;
         v->debugregs.dr7 &= ~DR7_GD;
         v->dirty |= KVM_PART_DEBUG;
@@ -2200,19 +2214,27 @@ static int exit_insn(struct kvm_vcpu *v, uint32_t reason)
 
     switch (reason) {
     case EXIT_CPUID:
-        kvm_emul_cpuid(v);
-        kvm_emul_skip(v, len);
+        if (kvm_emul_cpuid(v) == 0) {
+            kvm_emul_skip(v, len);
+        }
         return 1;
     case EXIT_HLT:
         kvm_emul_skip(v, len);
         v->exit.kind = KVM_X_HLT;
         return 1;
-    case EXIT_INVD:
     case EXIT_MWAIT:
     case EXIT_MONITOR:
-        /* INVD as a no-op, as Linux's kvm_emulate_invd; MONITOR and MWAIT
-         * as no-ops, as Linux's KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS does by
-         * default. */
+        /* MONITOR and MWAIT as no-ops, as Linux's kvm_emulate_monitor_mwait:
+         * #UD only with KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS turned off, for a
+         * guest whose CPUID lacks MWAIT. */
+        if (!KVM_QUIRK(v->vm, KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS) && !kvm_msr_guest_mwait(v)) {
+            kvm_queue_exception(v, UD_VECTOR, 0, 0);
+            return 1;
+        }
+        kvm_emul_skip(v, len);
+        return 1;
+    case EXIT_INVD:
+        /* A no-op, as Linux's kvm_emulate_invd. */
         kvm_emul_skip(v, len);
         return 1;
     case EXIT_WBINVD:

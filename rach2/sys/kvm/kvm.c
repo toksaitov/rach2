@@ -5,6 +5,7 @@
 
 #include "kvm.h"
 
+#include "../arch/x86/kcpu.h"
 #include "../fs/devfs.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
@@ -101,6 +102,9 @@ void kvm_vm_put(struct kvm_vm *vm)
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_free(vm->vcpus[i]);
     }
+    if (vm->ring) {
+        kfree_pages(vm->ring, 1);
+    }
     kvm_hv_vm_free(vm);
     kvm_tdp_free(vm);
     kvm_slots_free(vm);
@@ -114,6 +118,41 @@ void kvm_vm_put(struct kvm_vm *vm)
     kfree(vm_rec(vm));
 }
 
+/** Whether the host's processor snoops its own caches, CPUID's SS, which
+ * lets a guest's memory type stand without a flush, as Linux requires
+ * before it offers KVM_X86_QUIRK_IGNORE_GUEST_PAT. */
+static int host_self_snoop(void)
+{
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+
+    kcpu_id(1, &a, &b, &c, &d);
+    return (d >> 27) & 1u;
+}
+
+/** The quirks KVM_CAP_DISABLE_QUIRKS2 may turn off, Linux's
+ * kvm_caps.supported_quirks: all of them, but on VMX the ignored guest PAT
+ * needs a processor that snoops itself. */
+static uint32_t quirks_supported(void)
+{
+    uint32_t q = KVM_X86_VALID_QUIRKS;
+
+    if (kvm_backend == &kvm_vmx && !host_self_snoop()) {
+        q &= ~KVM_X86_QUIRK_IGNORE_GUEST_PAT;
+    }
+    return q;
+}
+
+/** The quirks a new VM has turned off, Linux's inapplicable quirks: of the
+ * two that hold on one backend alone, the one that is the other's, the
+ * cleared CD and NW being SVM's and the ignored guest PAT VMX's. */
+static uint32_t quirks_inapplicable(void)
+{
+    uint32_t mine =
+        kvm_backend == &kvm_vmx ? KVM_X86_QUIRK_IGNORE_GUEST_PAT : KVM_X86_QUIRK_CD_NW_CLEARED;
+
+    return KVM_X86_CONDITIONAL_QUIRKS & ~mine & quirks_supported();
+}
+
 int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
 {
     int32_t r;
@@ -121,6 +160,13 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
 
     (void)vm;
     switch (cap) {
+    case KVM_CAP_SET_GUEST_DEBUG:
+    case KVM_CAP_EXIT_ON_EMULATION_FAILURE:
+    case KVM_CAP_MSR_PLATFORM_INFO:
+    case KVM_CAP_SYS_ATTRIBUTES:
+    case KVM_CAP_DISABLE_QUIRKS:
+    case KVM_CAP_BINARY_STATS_FD:
+    case KVM_CAP_PRE_FAULT_MEMORY:
     case KVM_CAP_EXT_CPUID:
     case KVM_CAP_SET_TSS_ADDR:
     case KVM_CAP_SET_IDENTITY_MAP_ADDR:
@@ -159,6 +205,14 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
         return KVM_MAX_VCPUS;
     case KVM_CAP_MAX_VCPU_ID:
         return KVM_MAX_VCPU_IDS;
+    case KVM_CAP_SET_GUEST_DEBUG2:
+        return (int32_t)KVM_GUESTDBG_VALID_MASK;
+    case KVM_CAP_DISABLE_QUIRKS2:
+        return (int32_t)quirks_supported();
+    case KVM_CAP_SYNC_REGS:
+        return (int32_t)KVM_SYNC_X86_VALID_FIELDS;
+    case KVM_CAP_X86_APIC_BUS_CYCLES_NS:
+        return KVM_APIC_BUS_NS_DEFAULT;
     default:
         break;
     }
@@ -311,9 +365,16 @@ static int32_t create_vm(uintptr_t type)
     vm->anon.name = "kvm-vm";
     vm->refs = 1;
     vm->ident_addr = KVM_IDENT_ADDR_DEFAULT;
+    vm->apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
+    vm->disabled_quirks = quirks_inapplicable();
+    vm->default_tsc_khz = (uint32_t)kvm_tsc_khz();
     kvm_clock_vm_init(vm);
     rec->nr_mmu_pages = KVM_MIN_MMU_PAGES;
-    r = kvm_slots_init(vm);
+    vm->ring = kalloc_pages(1, NULL);
+    if (vm->ring) {
+        k_memset(vm->ring, 0, 4096u);
+    }
+    r = vm->ring ? kvm_slots_init(vm) : -ENOMEM;
     if (r == 0) {
         r = kvm_tdp_init(vm);
     }
@@ -340,6 +401,27 @@ static int32_t create_vm(uintptr_t type)
     return fd;
 }
 
+/** KVM_GET_DEVICE_ATTR and KVM_HAS_DEVICE_ATTR of /dev/kvm, `get` naming
+ * the first, as Linux's kvm_x86_dev_get_attr: group 0 has
+ * KVM_X86_XCOMP_GUEST_SUPP, the XCR0 bits a guest may have. 0, -ENXIO for
+ * another group or attribute, or -EFAULT. */
+static int32_t dev_attr(uintptr_t arg, int get)
+{
+    struct kvm_device_attr attr;
+    uint64_t value = kvm_xcr0_supported();
+
+    if (copy_from_user(&attr, (const void __user *)arg, sizeof(attr)) != 0) {
+        return -EFAULT;
+    }
+    if (attr.group != 0 || attr.attr != KVM_X86_XCOMP_GUEST_SUPP) {
+        return -ENXIO;
+    }
+    if (get && copy_to_user((void __user *)(uintptr_t)attr.addr, &value, sizeof(value)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 /** The ioctls of /dev/kvm. */
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -354,7 +436,7 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case KVM_CHECK_EXTENSION:
         return kvm_check_extension(NULL, (long)arg);
     case KVM_GET_VCPU_MMAP_SIZE:
-        return arg ? -EINVAL : (int32_t)(KVM_RUN_PAGES * 4096u);
+        return arg ? -EINVAL : (int32_t)(KVM_MMAP_PAGES * 4096u);
     case KVM_GET_MSR_INDEX_LIST:
         return get_msr_list(arg, 0);
     case KVM_GET_MSR_FEATURE_INDEX_LIST:
@@ -369,6 +451,10 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return copy_to_user((void __user *)arg, &mce, sizeof(mce)) ? -EFAULT : 0;
     case KVM_GET_SUPPORTED_HV_CPUID:
         return kvm_hv_get_cpuid(NULL, arg);
+    case KVM_GET_DEVICE_ATTR:
+        return dev_attr(arg, 1);
+    case KVM_HAS_DEVICE_ATTR:
+        return dev_attr(arg, 0);
     default:
         return -ENOTTY;
     }
@@ -403,7 +489,55 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
         vm->disable_exits |= (uint32_t)cap.args[0];
         return 0;
     }
-    return -EINVAL;
+    switch (cap.cap) {
+    case KVM_CAP_DISABLE_QUIRKS2:
+        if (cap.args[0] & ~(uint64_t)quirks_supported()) {
+            return -EINVAL;
+        }
+        /* fall through */
+    case KVM_CAP_DISABLE_QUIRKS:
+        vm->disabled_quirks |= (uint32_t)cap.args[0] & quirks_supported();
+        return 0;
+    case KVM_CAP_MAX_VCPU_ID:
+        /* Once, before the first vCPU, and never below the boot vCPU's
+         * id; the same bound again is taken. */
+        if (cap.args[0] > KVM_MAX_VCPU_IDS || vm->boot_cpu_id > cap.args[0]) {
+            return -EINVAL;
+        }
+        if (vm->max_vcpu_ids == cap.args[0]) {
+            return 0;
+        }
+        if (vm->max_vcpu_ids) {
+            return -EINVAL;
+        }
+        vm->max_vcpu_ids = (uint32_t)cap.args[0];
+        return 0;
+    case KVM_CAP_EXIT_ON_EMULATION_FAILURE:
+        if (cap.args[0] & ~1ull) {
+            return -EINVAL;
+        }
+        vm->exit_on_emulation_error = (int)cap.args[0];
+        return 0;
+    case KVM_CAP_MSR_PLATFORM_INFO:
+        vm->platform_info_hidden = cap.args[0] == 0;
+        return 0;
+    case KVM_CAP_X86_APIC_BUS_CYCLES_NS:
+        /* A count of 2^32 - 1 at TDCR's divisor 128 must fit 64 bits of
+         * ns, as Linux guards its tmict_to_ns. */
+        if (cap.args[0] == 0 || cap.args[0] > ~0ull / (0xFFFFFFFFull * 128u)) {
+            return -EINVAL;
+        }
+        if (vm->irqchip == KVM_IRQCHIP_NONE) {
+            return -ENXIO;
+        }
+        if (vm->nr_vcpus) {
+            return -EINVAL;
+        }
+        vm->apic_bus_ns = cap.args[0];
+        return 0;
+    default:
+        return -EINVAL;
+    }
 }
 
 /** The ioctls of a VM; -EIO from an address space other than its maker's. */
@@ -476,7 +610,7 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         if (vm->nr_vcpus) {
             return -EBUSY;
         }
-        if (arg > KVM_MAX_VCPU_IDS) {
+        if (arg > KVM_MAX_VCPU_IDS || (vm->max_vcpu_ids && arg > vm->max_vcpu_ids)) {
             return -EINVAL;
         }
         vm->boot_cpu_id = (uint32_t)arg;

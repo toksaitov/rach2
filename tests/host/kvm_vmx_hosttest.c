@@ -40,8 +40,12 @@
  * the two kinds of failed entry; hardware task switches by CALL, IRET, JMP and
  * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults; a
  * move to another processor; a state read between runs; VMXON and VMPTRLD
- * failing; a failed VMWRITE reported once; VPIDs; and a panic inside a run,
- * which turns VMX off.
+ * failing; a failed VMWRITE reported once; VPIDs; a panic inside a run,
+ * which turns VMX off; and what Linux's selftests ask of the guest's side:
+ * AMD's hypercall instruction patched or left as its quirk says, MWAIT's
+ * quirk, MSR_PLATFORM_INFO and CPUID faulting, an emulation failure above
+ * CPL 0 under KVM_CAP_EXIT_ON_EMULATION_FAILURE, and DR7.GD under the
+ * caller's breakpoints.
  */
 #include "kvm/vmx.c"
 
@@ -846,7 +850,7 @@ static struct {
     uint64_t cr4;
     uint64_t vmxon_pa;
     struct mvmcs *cur;
-    struct mvmcs vmcs[4];
+    struct mvmcs vmcs[5];
     int nvmcs;
     uint64_t dr[8];
     int dr6_writes;
@@ -877,7 +881,7 @@ static struct mvmcs *mvmcs_of(uint64_t pa)
             return &m.vmcs[i];
         }
     }
-    if (m.nvmcs == 4) {
+    if (m.nvmcs == 5) {
         return NULL;
     }
     k_memset(&m.vmcs[m.nvmcs], 0, sizeof(m.vmcs[0]));
@@ -3272,6 +3276,144 @@ static void hv_rows(int vm)
     fdclose(fd);
 }
 
+/** KVM_ENABLE_CAP of `cap` with `arg` on the VM `vm`. */
+static int32_t vm_cap(int vm, uint32_t cap, uint64_t arg)
+{
+    struct kvm_enable_cap c;
+
+    k_memset(&c, 0, sizeof(c));
+    c.cap = cap;
+    c.args[0] = arg;
+    return fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&c);
+}
+
+/** The hypercall instruction of the other vendor and MWAIT, with their
+ * quirks on and then off, on the vCPU `fd` in protected mode. */
+static void quirk_rows(int vm, int fd)
+{
+    uint32_t ud = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    struct row *w;
+
+    code(fd, 0x1000, "\x0f\x01\xd9", 3, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ud;
+    script(EXIT_VMCALL, 0, 3);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && ram[0x1002] == 0xC1 && regs_of(fd).rip == 0x1004 &&
+              (uint32_t)regs_of(fd).rax == (uint32_t)-1000,
+          "AMD's VMMCALL is #UD on Intel: KVM writes VMCALL in its place and the guest runs it");
+    CHECK(fields(fd)[EXCEPTION_BITMAP] & (1u << UD_VECTOR), "#UD always exits");
+    code(fd, 0x1000, "\x0f\x0b", 2, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ud;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == ud && ram[0x1000] == 0x0F && ram[0x1001] == 0x0B,
+          "the #UD of another instruction goes back to the guest");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_MWAIT, 0, 3) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1004,
+          "MWAIT is a no-op for a guest whose CPUID lacks it");
+
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2,
+                 KVM_X86_QUIRK_FIX_HYPERCALL_INSN | KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS) == 0,
+          "KVM_CAP_DISABLE_QUIRKS2 of the hypercall's and MWAIT's quirks");
+    code(fd, 0x1000, "\x0f\x01\xd9", 3, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ud;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == ud && ram[0x1002] == 0xD9 && regs_of(fd).rip == 0x1001,
+          "with its quirk off VMMCALL stays, and is the guest's #UD");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_MWAIT, 0, 3) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
+          "and with its quirk off MWAIT is #UD for that guest");
+}
+
+/** MSR_PLATFORM_INFO and CPUID faulting on the vCPU `fd`. */
+static void platform_rows(int vm, int fd)
+{
+    uint32_t gpe = GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[1];
+    } msrs;
+
+    k_memset(&msrs, 0, sizeof(msrs));
+    msrs.h.nmsrs = 1;
+    msrs.e[0].index = 0xCE;
+    msrs.e[0].data = 0x80001100u;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 1, "the caller writes MSR_PLATFORM_INFO");
+    set_regs(fd, 0x1000, 0, 0xCE, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0x80001100u,
+          "the guest reads MSR_PLATFORM_INFO as the caller wrote it");
+    set_regs(fd, 0x1000, 0, 0xCE, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe, "its write is #GP");
+    CHECK(vm_cap(vm, KVM_CAP_MSR_PLATFORM_INFO, 0) == 0, "KVM_CAP_MSR_PLATFORM_INFO with 0");
+    set_regs(fd, 0x1000, 0, 0xCE, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == gpe, "and then its read is #GP");
+
+    set_regs(fd, 0x1000, 1, 0x140, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && v->misc_features == 1,
+          "the guest turns CPUID faulting on in MSR_MISC_FEATURES_ENABLES");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "CPUID at CPL 0 is still answered");
+    (void)sregs_of(fd);
+    v->sregs.ss.dpl = 3;
+    CHECK(kvm_emul_cpuid(v) == -1 && v->events.exception.pending &&
+              v->events.exception.nr == GP_VECTOR,
+          "and above CPL 0 it is #GP");
+    v->events.exception.pending = 0;
+    v->sregs.ss.dpl = 0;
+}
+
+/** An instruction the decoder refuses above CPL 0, without and with
+ * KVM_CAP_EXIT_ON_EMULATION_FAILURE, and DR7.GD under the caller's
+ * hardware breakpoints, on the vCPU `fd`. */
+static void failure_rows(int vm, int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    uint64_t info[5] = {0, 0, 0, 0, 0};
+
+    code(fd, 0x1400, "\x0f\x0b", 2, 0);
+    (void)sregs_of(fd);
+    v->sregs.ss.dpl = 3;
+    CHECK(kvm_emul_mmio(v, info) == 0 && v->exit.kind == KVM_X_AGAIN &&
+              v->events.exception.pending && v->events.exception.nr == UD_VECTOR,
+          "an instruction the decoder refuses above CPL 0 is the guest's #UD");
+    v->events.exception.pending = 0;
+    CHECK(vm_cap(vm, KVM_CAP_EXIT_ON_EMULATION_FAILURE, 1) == 0,
+          "KVM_CAP_EXIT_ON_EMULATION_FAILURE");
+    CHECK(kvm_emul_mmio(v, info) == 0 && v->exit.kind == KVM_X_INTERNAL &&
+              v->exit.internal.suberror == KVM_INTERNAL_ERROR_EMULATION &&
+              !v->events.exception.pending,
+          "and under the capability the caller's emulation failure, with no #UD");
+    v->sregs.ss.dpl = 0;
+
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP, 0, 0x2400);
+    set_regs(fd, 0x1000, 0, 0, 0);
+    script(EXIT_DR_ACCESS, 0x10u, 3);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.exception == DB_VECTOR &&
+              rp->u.debug.dr6 == 0xFFFF2FF0u && rp->u.debug.dr7 == 0x2400 &&
+              rp->u.debug.pc == 0x1000 && regs_of(fd).rip == 0x1000,
+          "a debug register's access under the caller's DR7.GD is KVM_EXIT_DEBUG with DR6.BD");
+    guest_debug(fd, 0, 0, 0);
+}
+
+/** What Linux's selftests ask of the guest's side, on a vCPU of its own
+ * on `vm` in protected mode. The rows change the VM's capabilities, so
+ * they come last. */
+static void selftest_rows(int vm)
+{
+    int fd = make_vcpu(vm, 4);
+
+    ts_start(fd);
+    quirk_rows(vm, fd);
+    platform_rows(vm, fd);
+    failure_rows(vm, fd);
+    fdclose(fd);
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -3300,6 +3442,7 @@ int main(void)
     vpid_panic_rows(vm);
     ts_rows(vm);
     hv_rows(vm);
+    selftest_rows(vm);
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
     fdclose(fd);

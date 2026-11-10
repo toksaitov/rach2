@@ -101,8 +101,9 @@ static uint64_t table_entry(uint64_t phys)
  * vmx_get_mt_mask: a device's frame is uncached with the guest's PAT in
  * charge, so that the guest may make it write-combining; RAM is write-back
  * with the guest's PAT ignored, or, while a device that does not snoop is
- * assigned to the VM, write-back with the guest's PAT in charge, so that
- * the guest's uncached buffers stay uncached for that device.
+ * assigned to the VM or once the caller turned
+ * KVM_X86_QUIRK_IGNORE_GUEST_PAT off, write-back with the guest's PAT in
+ * charge, so that the guest's uncached buffers stay uncached.
  */
 static uint64_t leaf_entry(const struct kvm_vm *vm, uint64_t phys, int writable, int large,
                            int device)
@@ -110,7 +111,9 @@ static uint64_t leaf_entry(const struct kvm_vm *vm, uint64_t phys, int writable,
     const struct kvm_tdp_format *f = fmt();
     uint64_t e = phys | f->read | f->exec | f->user | f->accessed;
 
-    e |= device ? f->cache(KVM_MT_UC, 0) : f->cache(KVM_MT_WB, vm->noncoherent == 0);
+    e |= device ? f->cache(KVM_MT_UC, 0)
+                : f->cache(KVM_MT_WB,
+                           vm->noncoherent == 0 && KVM_QUIRK(vm, KVM_X86_QUIRK_IGNORE_GUEST_PAT));
     if (writable) {
         e |= f->write | f->dirty;
     }
