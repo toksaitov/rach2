@@ -378,9 +378,9 @@ static long gl_blob(uint32_t id, uint32_t bytes, int mappable, uint32_t *bo)
     long r;
 
     s[n++] = VIRGL_CMD0(VIRGL_CCMD_PIPE_RESOURCE_CREATE, 0, 11);
+    s[n++] = PIPE_BUFFER;
     s[n++] = VIRGL_FORMAT_R8_UNORM;
     s[n++] = VIRGL_BIND_VERTEX_BUFFER;
-    s[n++] = PIPE_BUFFER;
     s[n++] = bytes;
     s[n++] = 1;
     s[n++] = 1;
