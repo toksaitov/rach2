@@ -24,4 +24,4 @@ Mesa 25.0.7 supplies llvmpipe, lavapipe, Crocus and hasvk; the root's Venus driv
 
 ## Updating
 
-Record a new snapshot only after verifying its archive signatures, then update the InRelease pins and compare the closure and the installer's SKIP list. Mesa's required versions are in `mesa.list`. Later layers add list files and name them in their build rule; their install call belongs in `install_root.sh`. Distinct layers must not overwrite files from an earlier layer.
+Record a new snapshot only after verifying its archive signatures, then update the InRelease pins and compare the closure and the installer's SKIP list. Mesa's required versions are in `mesa.list`. A later layer, such as the [games layer](../games/Readme.md), has lists and a stage of its own, which `fetch_debs.sh LAYER` builds with `GNU_DEBIAN_LISTS` naming its lists, and is installed by `install_root.sh`'s `install_debian LAYER` after the desktop. A package an earlier layer installed is left out of a later one when the versions match and refused when they do not, and a file an earlier layer installed is never replaced.
