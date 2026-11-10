@@ -8,23 +8,31 @@
 /*
  * The guest's script: drmdevice's report, the lines of Mesa's loader that
  * eglinfo logs on the surfaceless platform, then first light run from the
- * fake's file, plain and under each fault, one `step` line each. eglinfo's
- * exit is not judged: crocus fails in driCreateContextAttribs while the
- * driver's own ioctls answer EINVAL. The hang goes last, since nothing in
- * the file takes a hung ring back.
+ * fake's file, plain and under each fault, one `step` line each. Under
+ * `--- eglinfo` come its exit status and the last of its lines that are not
+ * the loader's debug log or an indented list, which show how far crocus
+ * got. Its exit is not
+ * judged while the driver serves no EXECBUFFER2. The hang goes last, since
+ * nothing in the file takes a hung ring back.
  */
-static const char script[] = "drmdevice 2>&1\n"
-                             "echo '--- loader'\n"
-                             "EGL_LOG_LEVEL=debug stdbuf -oL eglinfo -p surfaceless 2>&1 |"
-                             " grep -E 'pci id for fd|using driver|EGL driver name'\n"
-                             "echo '--- fake'\n"
-                             "f=$(ls -d /sys/kernel/debug/dri/*/i915_fake | head -n 1)\n"
-                             "echo \"file $f\"\n"
-                             "step() { for w in \"$@\"; do echo \"$w\" > \"$f\"; done;"
-                             " echo \"step $*: $(grep '^light ' \"$f\")\"; }\n"
-                             "step light; step submit light; step bind light; step irq light\n"
-                             "step light; step hang light\n"
-                             "cat \"$f\"\n";
+static const char script[] =
+    "drmdevice 2>&1\n"
+    "echo '--- loader'\n"
+    "EGL_LOG_LEVEL=debug eglinfo -p surfaceless >/tmp/eglinfo.out 2>&1\n"
+    "e=$?\n"
+    "grep -E 'pci id for fd|using driver|EGL driver name' /tmp/eglinfo.out\n"
+    "echo '--- eglinfo'\n"
+    "echo \"eglinfo exit $e\"\n"
+    "grep -v -e 'libEGL debug' -e '^    ' /tmp/eglinfo.out | tail -n 30\n"
+    "rm -f /tmp/eglinfo.out\n"
+    "echo '--- fake'\n"
+    "f=$(ls -d /sys/kernel/debug/dri/*/i915_fake | head -n 1)\n"
+    "echo \"file $f\"\n"
+    "step() { for w in \"$@\"; do echo \"$w\" > \"$f\"; done;"
+    " echo \"step $*: $(grep '^light ' \"$f\")\"; }\n"
+    "step light; step submit light; step bind light; step irq light\n"
+    "step light; step hang light\n"
+    "cat \"$f\"\n";
 
 /** Say whether `out` has drmdevice's PCI line `key` with value `value`. */
 static int drm_field(const char *out, const char *key, const char *value)
