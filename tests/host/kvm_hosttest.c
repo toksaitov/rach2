@@ -2215,7 +2215,8 @@ static void attr_rows(void)
     attr.addr = (uint64_t)(uintptr_t)&value;
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SYS_ATTRIBUTES) == 1 &&
               dev(KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
-              dev(KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == 0 && value == kvm_xcr0_supported(),
+              dev(KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == 0 && value == kvm_xcr0_supported() &&
+              !(value & (3ull << 17)),
           "KVM_X86_XCOMP_GUEST_SUPP is the XCR0 a guest may have, with no AMX in it");
     attr.attr = 1;
     CHECK(dev(KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO &&
@@ -2587,9 +2588,12 @@ static void stats_rows(void)
     caller.pid = 321;
     vm = dev(KVM_CREATE_VM, 0);
     vcpu = fdio(vm, KVM_CREATE_VCPU, 7);
-    CHECK(sizeof(struct kvm_stats_header) == 24 && sizeof(struct kvm_stats_desc) == 64 &&
+    CHECK(sizeof(struct kvm_stats_header) == 24 &&
+              __builtin_offsetof(struct kvm_stats_desc, name) == 16 &&
+              sizeof(struct kvm_stats_desc) == 16 + KVM_STATS_NAME_SIZE &&
               KVM_GET_STATS_FD == 0xAECE,
-          "the header, the descriptor and KVM_GET_STATS_FD are Linux's");
+          "the header and KVM_GET_STATS_FD are Linux's, and a descriptor is Linux's 16 bytes "
+          "and a name of 48, 64 bytes of the file");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_BINARY_STATS_FD) == 1 &&
               fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_BINARY_STATS_FD) == 1,
           "KVM_CAP_BINARY_STATS_FD");
