@@ -359,6 +359,55 @@ static void limit_rows(void)
  * free range found is the highest that fits below hi and at or above lo; a
  * hole a removal left is used again, and 0 is returned when nothing fits.
  */
+/** Check the mapping fallback and the guard below a growing stack. */
+static void run_mapping_edges(void)
+{
+    /* The free range. */
+    {
+        vm_space_t f = {0};
+
+        vm_init(&f);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1E000);
+        CHECK(vm_insert(&f, 0x1C000, 0x20000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&f, 0x14000, 0x18000, VM_PROT_READ, VM_HEAP) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1A000);
+        CHECK(vm_find_free(&f, 5 * PG, 0x10000, 0x20000) == 0);
+        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x18000);
+        CHECK(vm_insert(&f, 0x18000, 0x19000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x10000);
+        CHECK(vm_remove(&f, 0x18000, 0x19000) == 0);
+        CHECK(vm_remove(&f, 0x1D000, 0x1F000) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x19000, 0x20000) == 0x1D000);
+        CHECK(vm_covered(&f, 0x13000, 0x1E000) == 4 * PG + PG);
+        vm_free(&f);
+    }
+
+    /* The fallback must find a gap crossing the top-down search's base. */
+    {
+        vm_space_t f = {0};
+
+        vm_init(&f);
+        CHECK(vm_insert(&f, 0x10000, 0x18000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&f, 0x20000, 0x28000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_find_mmap(&f, 8 * PG, 0x10000, 0x1C000, 0x28000) == 0x18000);
+        CHECK(vm_find_mmap(&f, 9 * PG, 0x10000, 0x1C000, 0x28000) == 0);
+        vm_free(&f);
+    }
+
+    /* Stack growth leaves Linux's 256-page gap above another mapping. */
+    {
+        vm_space_t s = {0};
+
+        vm_init(&s);
+        s.stack_limit = 0x10000;
+        CHECK(vm_insert(&s, 0x10000, 0x20000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&s, 0x200000, 0x201000, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
+        CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP - PG, 0xFFFFFFFFu) == 0);
+        CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP, 0xFFFFFFFFu) == 1);
+        vm_free(&s);
+    }
+}
+
 int main(void)
 {
     vm_space_t vm = {0};
@@ -553,25 +602,7 @@ int main(void)
         vm_free(&p);
     }
 
-    /* The free range. */
-    {
-        vm_space_t f = {0};
-
-        vm_init(&f);
-        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1E000);
-        CHECK(vm_insert(&f, 0x1C000, 0x20000, VM_PROT_READ, VM_ANON) == 0);
-        CHECK(vm_insert(&f, 0x14000, 0x18000, VM_PROT_READ, VM_HEAP) == 0);
-        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1A000);
-        CHECK(vm_find_free(&f, 5 * PG, 0x10000, 0x20000) == 0);
-        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x18000);
-        CHECK(vm_insert(&f, 0x18000, 0x19000, VM_PROT_READ, VM_ANON) == 0);
-        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x10000);
-        CHECK(vm_remove(&f, 0x18000, 0x19000) == 0);
-        CHECK(vm_remove(&f, 0x1D000, 0x1F000) == 0);
-        CHECK(vm_find_free(&f, 2 * PG, 0x19000, 0x20000) == 0x1D000);
-        CHECK(vm_covered(&f, 0x13000, 0x1E000) == 4 * PG + PG);
-        vm_free(&f);
-    }
+    run_mapping_edges();
 
     {
         vm_space_t f = {0};

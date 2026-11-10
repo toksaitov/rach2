@@ -65,6 +65,8 @@ The `genetlink_hosttest.c` model registers a family against the real generic dis
 
 ## Results
 
+`vdso32_hosttest.c` checks the fast i386 entry with a modeled user copy that requires the big lock. Both sysenter and syscall32 must hold it once through the copy and dispatch, and release it once on success or EFAULT. `vm_hosttest.c` checks a fallback mapping across the mmap base and the 256-page gap below a growing stack.
+
 `drm_prime_hosttest.c` and `drm_prime64_hosttest.c` check PRIME on both kernel ABIs over the real GEM, dma-buf, fence and udmabuf code. They model frames, sealed memfds, descriptor tables and mappings. The cases cover descriptor modes, self-import and repeated import identity, cross-device and udmabuf pages, shared reservations, reexport after handle close, exporter exit, mappings retained after every descriptor closes, allocation failures and all reference counts returned to their baseline. They also include vgem: its fences on a buffer another device imports, held until signalled, Linux's refusals, the timeout, which a model of the commit worker's queue runs, and the close of a file with fences pending.
 
 `rc_hosttest.c` checks the wireless rate controller with recorded retry completions and modeled clean, lossy and recovered links. It also checks per-series ACK attribution, capability intersections and reset on a peer change, without files or child processes.

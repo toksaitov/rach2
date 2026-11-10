@@ -6903,15 +6903,17 @@ static uintptr_t task_size(void)
  * without a usable hint, or 0: below the mmap base, down to the bottom of
  * user space whatever the heap's place, as Linux's top-down search goes, and
  * when that has no room, as Linux then falls back to its bottom-up search,
- * between the mmap base and the stack's growth window. In an i386 call the
- * mmap base is at most IA32_MMAP_BASE, Linux's mmap_compat_base, and the
+ * over the whole range below the stack's growth window and its guard gap.
+ * In an i386 call the mmap base is at most IA32_MMAP_BASE, Linux's
+ * mmap_compat_base, and the
  * range ends by IA32_TASK_SIZE, so that the call's 32-bit result holds the
  * address. The search goes below the heap's top: an i386 Wine reserves
  * nearly all that lies above its loader's heap until its program starts.
  */
 static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
 {
-    uintptr_t hi = vm->mmap_base, end = vm->stack_limit, base;
+    uintptr_t hi = vm->mmap_base;
+    uintptr_t end = vm->stack_limit > VM_STACK_GUARD_GAP ? vm->stack_limit - VM_STACK_GUARD_GAP : 0;
 
 #if ELF_IA32
     if (in_compat_syscall()) {
@@ -6919,11 +6921,7 @@ static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
         end = end < IA32_TASK_SIZE ? end : IA32_TASK_SIZE;
     }
 #endif
-    base = vm_find_free(vm, len, USER_ADDR_MIN, hi);
-    if (base == 0 && end > hi) {
-        base = vm_find_free(vm, len, hi, end);
-    }
-    return base;
+    return vm_find_mmap(vm, len, USER_ADDR_MIN, hi, end);
 }
 
 /**
@@ -6931,8 +6929,8 @@ static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
  * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
  * use and with ENOMEM for one past the address space's end (`task_size`);
  * otherwise the hint rounded down to its page when that range is free
- * below the stack's growth window, and without one `mmap_free`'s, the
- * highest free range, so the ranges munmap frees are used again. MAP_32BIT in
+ * below the stack's growth window and guard gap, and without one the range
+ * `mmap_free` finds, so the ranges munmap frees are used again. MAP_32BIT in
  * a 64-bit call, as on Linux, rounds the hint up, takes it only when its
  * range ends by 2 GiB, and otherwise takes the highest free range from
  * 1 GiB to 2 GiB; a 32-bit call ignores it, its every address being below
@@ -6944,7 +6942,7 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
                           uintptr_t *base)
 {
     unsigned long limit = current_proc->rlim[RLIM_AS].cur;
-    uintptr_t top = vm->stack_limit;
+    uintptr_t top = vm->stack_limit > VM_STACK_GUARD_GAP ? vm->stack_limit - VM_STACK_GUARD_GAP : 0;
     int low = 0;
 
     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {

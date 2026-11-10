@@ -76,6 +76,8 @@ The file system provides what `mm.c` and `filemap.c` call back: `fs_exe_open`, `
 
 ## Design
 
+A mapping without a usable hint first searches down from the mmap base, then searches the whole permitted range upwards, including a gap that crosses that base. Mappings leave 256 pages below the stack's growth limit. Stack growth also refuses a page within 256 pages of the preceding accessible non-stack region, so an explicit fixed mapping cannot remove that protection.
+
 The top-down gap search remembers an upper bound above which no gap fitted its last requested length and bounds. A later search with the same bounds and at least that length starts there. Adding or splitting coverage cannot enlarge a gap; removing coverage clears the bound. Smaller requests and changed bounds start from the top again. `vm_gap_steps` in `/proc/stat` counts candidate gaps examined since boot, modulo 2^32.
 
 A file named alone is in `sys/mm/`; other paths start at `rach2/`.

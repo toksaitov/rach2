@@ -300,14 +300,14 @@ a range already in use is refused.
 Otherwise
 .Fa addr ,
 rounded down to its page, is used when its range is free and ends below
-the stack's growth limit, and without such a hint the kernel takes the
+the stack's growth limit by at least 256 pages, and without such a hint the kernel takes the
 highest free range below
 .Ql 0xB0000000
 on i686 or
 .Ql 0x00007F0000000000
 on x86-64, down to the bottom of user space, below the heap's top as well,
-and when none is free there, the highest free range between that base and
-the stack's growth limit, so the ranges
+and when none is free there, the lowest free range over the whole space
+below the same stack gap, including a range crossing that base, so the ranges
 .Fn munmap
 frees are used again.
 .Pp

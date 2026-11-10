@@ -681,6 +681,28 @@ uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi
     }
 }
 
+/** Find a top-down mapping, falling back to the whole range bottom-up. */
+uintptr_t vm_find_mmap(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t base, uintptr_t hi)
+{
+    uintptr_t at = vm_find_free(vm, len, lo, base < hi ? base : hi);
+    const vma_t *r;
+
+    if (at || !len || lo >= hi || len > hi - lo) {
+        return at;
+    }
+    at = lo;
+    for (r = vm_lower(vm, lo); r && r->start < hi; r = vm_next(r)) {
+        gap_steps++;
+        if (r->start > at && len <= r->start - at) {
+            return at;
+        }
+        if (r->end > at) {
+            at = r->end;
+        }
+    }
+    return at <= hi - len ? at : 0;
+}
+
 uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     uintptr_t total = 0;
@@ -709,6 +731,11 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     uintptr_t growth;
 
     if (!r || r->type != VM_STACK || page >= r->start || page < vm->stack_limit) {
+        return 0;
+    }
+    if (r->prev && r->prev->type != VM_STACK &&
+        (r->prev->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) &&
+        (page < r->prev->end || page - r->prev->end < VM_STACK_GUARD_GAP)) {
         return 0;
     }
     growth = r->start - page;

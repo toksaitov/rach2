@@ -87,6 +87,7 @@ static uint16_t lines_pci;
  * x86_64/isr_handler.s call; x86-64's exceptions and interrupts reach the
  * first two through `x86_64_route` (x86_64/idt.c). */
 void _isr_router(isr_params_t *params);
+void isr_router_locked(isr_params_t *params);
 
 void _irq_router(isr_params_t *params);
 
@@ -641,6 +642,12 @@ void _isr_router(isr_params_t *params)
 {
     user_entry(params);
     bkl_enter();
+    isr_router_locked(params);
+}
+
+/** Dispatch a saved frame with the big lock held; isr_leave releases it. */
+void isr_router_locked(isr_params_t *params)
+{
     bkl_note_entry((uint32_t)params->vector,
                    params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1);
 #ifdef DEBUG

@@ -13,6 +13,9 @@
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u
 
+/* Linux's default gap below a growing stack: 256 pages of 4096 bytes. */
+#define VM_STACK_GUARD_GAP 0x100000u
+
 /* Region protection bits; the first three are the values of PROT_READ,
  * PROT_WRITE and PROT_EXEC. */
 #define VM_PROT_READ        0x1u
@@ -349,6 +352,11 @@ int vm_reserve(vm_space_t *vm, uint32_t n);
 /** The start of the highest free range of `len` bytes inside [lo, hi), or 0
  * when there is none. */
 uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi);
+
+/** Find a mapping below `base` in [lo, hi), then search the whole range
+ * from low addresses when the top-down search has no room. Returns 0 when
+ * no gap holds `len` bytes. The caller holds the address space stable. */
+uintptr_t vm_find_mmap(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t base, uintptr_t hi);
 
 /** Bytes of [start, end) that regions cover. */
 uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end);
