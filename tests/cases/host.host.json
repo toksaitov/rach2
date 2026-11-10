@@ -886,6 +886,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ns_limits",
+          "checks": "tests/host/ns_limits_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "nvme",
           "checks": "tests/host/nvme_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
