@@ -10,6 +10,7 @@
 #include "../rfkill.h"
 #include "sysfs.h"
 #include "devtree.h"
+#include "../dmi.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -846,6 +847,44 @@ void synth_sys_device_name(int node, int key, char *out, int cap)
     out[pos] = '\0';
 }
 
+/** The attribute files of a processor's cache, of the NUMA node
+ * directories, of the clock source and of the DMI fields, as `sysfs_attr`
+ * lists them, or NULL for another node. */
+static const char *const *sysfs_system_attrs(int node)
+{
+    /* In the order of procfs.c's procfs_gen_cache. */
+    static const char *const cache[] = {"coherency_line_size",
+                                        "id",
+                                        "level",
+                                        "number_of_sets",
+                                        "physical_line_partition",
+                                        "shared_cpu_list",
+                                        "shared_cpu_map",
+                                        "size",
+                                        "type",
+                                        "ways_of_associativity",
+                                        0};
+    static const char *const node_states[] = {"has_cpu", "has_memory", "has_normal_memory",
+                                              "online",  "possible",   0};
+    static const char *const node0[] = {"cpulist", "cpumap", "distance", 0};
+    static const char *const clocksource[] = {"available_clocksource", "current_clocksource", 0};
+    /* In the order of dmi.h's DMI_ fields, then modalias. */
+    static const char *const dmi[] = {
+        "bios_vendor",         "bios_version",      "bios_date",     "bios_release",
+        "ec_firmware_release", "sys_vendor",        "product_name",  "product_version",
+        "product_serial",      "product_uuid",      "product_sku",   "product_family",
+        "board_vendor",        "board_name",        "board_version", "board_serial",
+        "board_asset_tag",     "chassis_vendor",    "chassis_type",  "chassis_version",
+        "chassis_serial",      "chassis_asset_tag", "modalias",      0};
+
+    return node == SYSFS_CPU_CACHE_INDEX ? cache
+           : node == SYSFS_NODE          ? node_states
+           : node == SYSFS_NODE0         ? node0
+           : node == SYSFS_CLOCKSOURCE0  ? clocksource
+           : node == SYSFS_DMI_ID        ? dmi
+                                         : 0;
+}
+
 const char *sysfs_attr(int node, int n)
 {
     static const char *const attrs[] = {"address",      "addr_len", "broadcast", "carrier",
@@ -933,12 +972,18 @@ const char *sysfs_attr(int node, int n)
                               : node == SYSFS_BACKLIGHT    ? backlight
                               : node == SYSFS_KERNEL       ? kernel
                               : node == SYSFS_CLASS_DRM    ? drm
-                                                           : 0;
+                                                           : sysfs_system_attrs(node);
     int i;
 
     for (i = 0; list && list[i] && i < n; i++) {
     }
     return list && n >= 0 ? list[i] : 0;
+}
+
+int sysfs_attr_private(int node, int attr)
+{
+    return node == SYSFS_DMI_ID && (attr == DMI_PRODUCT_SERIAL || attr == DMI_PRODUCT_UUID ||
+                                    attr == DMI_BOARD_SERIAL || attr == DMI_CHASSIS_SERIAL);
 }
 
 int sysfs_attr_uevent(int node, int attr)
@@ -1039,14 +1084,21 @@ static void synth_sys_radio_path(int node, int key, char *out, int cap, int *pos
     }
 }
 
-/** The path of a registered entry, or of a fixed directory numbered from
- * SYSFS_KERNEL, into `out` of `cap` bytes: 1, with nothing written when
- * `cap` is not positive, or 0 for any other node. */
+/** The path of a registered entry, of a fixed directory numbered from
+ * SYSFS_KERNEL, or of a processor's caches, into `out` of `cap` bytes: 1,
+ * with nothing written when `cap` is not positive, or 0 for any other
+ * node. */
 static int synth_sys_later_path(int node, int key, char *out, int cap)
 {
     static const char *const later[] = {
         "/sys/kernel",           "/sys/kernel/debug", "/sys/class/drm",           "/sys/dev/char",
         "/sys/devices/platform", "/sys/bus/platform", "/sys/bus/platform/devices"};
+    static const char *const system[] = {"/sys/devices/system/node",
+                                         "/sys/devices/system/node/node0",
+                                         "/sys/devices/system/clocksource",
+                                         "/sys/devices/system/clocksource/clocksource0",
+                                         "/sys/class/dmi",
+                                         "/sys/class/dmi/id"};
     int pos = 0;
 
     if (cap <= 0) {
@@ -1056,10 +1108,22 @@ static int synth_sys_later_path(int node, int key, char *out, int cap)
         sysfs_node_path(key, out, cap);
         return 1;
     }
-    if (node < SYSFS_KERNEL || node > SYSFS_PLATFORM_LINKS) {
+    if (node == SYSFS_CPU_CACHE || node == SYSFS_CPU_CACHE_INDEX) {
+        synth_put(out, cap, &pos, "/sys/devices/system/cpu/cpu");
+        synth_put_uint(out, cap, &pos,
+                       (unsigned int)(node == SYSFS_CPU_CACHE_INDEX ? key >> 4 : key));
+        synth_put(out, cap, &pos, "/cache");
+        if (node == SYSFS_CPU_CACHE_INDEX) {
+            synth_put(out, cap, &pos, "/index");
+            synth_put_uint(out, cap, &pos, (unsigned int)(key & 15));
+        }
+    } else if (node >= SYSFS_NODE && node <= SYSFS_DMI_ID) {
+        synth_put(out, cap, &pos, system[node - SYSFS_NODE]);
+    } else if (node >= SYSFS_KERNEL && node <= SYSFS_PLATFORM_LINKS) {
+        synth_put(out, cap, &pos, later[node - SYSFS_KERNEL]);
+    } else {
         return 0;
     }
-    synth_put(out, cap, &pos, later[node - SYSFS_KERNEL]);
     out[pos] = '\0';
     return 1;
 }
@@ -1332,12 +1396,30 @@ static int sys_cpu_of(struct comp c)
     return comp_uint(digits);
 }
 
+/** The M of a cache's directory `indexM`, 0 to 15 with no leading zero,
+ * or -1; whether the processor has that cache is for the caller to ask. */
+static int sys_index_of(struct comp c)
+{
+    struct comp digits;
+    int m;
+
+    if (c.len < 6 || c.len > 7 ||
+        !(c.s[0] == 'i' && c.s[1] == 'n' && c.s[2] == 'd' && c.s[3] == 'e' && c.s[4] == 'x') ||
+        (c.s[5] == '0' && c.len > 6)) {
+        return -1;
+    }
+    digits.s = c.s + 5;
+    digits.len = c.len - 5;
+    m = comp_uint(digits);
+    return m > 15 ? -1 : m;
+}
+
 /**
  * The node at `c` of `n` components below the fixed directory `node`, the
- * clock's class, the sleep states' directory or /sys/devices/system: the
- * directories under it by their names, as `chain` gives them, a processor's
- * by its number and its `topology`, and at the end an attribute file of the
- * last.
+ * clock's class, the DMI class, the sleep states' directory or
+ * /sys/devices/system: the directories under it by their names, as `chain`
+ * gives them, a processor's by its number and its caches' by theirs, and
+ * at the end an attribute file of the last.
  */
 static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struct vpath *vp)
 {
@@ -1345,10 +1427,19 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
         int parent;
         const char *name;
         int child;
-    } chain[] = {
-        {SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},        {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
-        {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER}, {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
-        {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},       {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0}};
+    } chain[] = {{SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
+                 {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
+                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER},
+                 {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
+                 {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},
+                 {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0},
+                 {SYSFS_CPUN, "topology", SYSFS_CPU_TOPOLOGY},
+                 {SYSFS_CPUN, "cache", SYSFS_CPU_CACHE},
+                 {SYSFS_SYSTEM, "node", SYSFS_NODE},
+                 {SYSFS_NODE, "node0", SYSFS_NODE0},
+                 {SYSFS_SYSTEM, "clocksource", SYSFS_CLOCKSOURCE},
+                 {SYSFS_CLOCKSOURCE, "clocksource0", SYSFS_CLOCKSOURCE0},
+                 {SYSFS_CLASS_DMI, "id", SYSFS_DMI_ID}};
     int i, at = 0, cpu;
 
     while (at < n) {
@@ -1358,8 +1449,9 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
             at++;
             continue;
         }
-        if (node == SYSFS_CPUN && comp_eq(c[at], "topology")) {
-            node = SYSFS_CPU_TOPOLOGY;
+        if (node == SYSFS_CPU_CACHE && (cpu = sys_index_of(c[at])) >= 0) {
+            node = SYSFS_CPU_CACHE_INDEX;
+            vp->syskey = vp->syskey << 4 | cpu;
             at++;
             continue;
         }
@@ -1526,6 +1618,8 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
         return synth_classify_rfkill(c + 2, n - 2, rfkill_lookup(c[1].s, c[1].len), vp);
     } else if (comp_eq(c[0], "rtc")) {
         return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_CLASS_RTC, vp);
+    } else if (comp_eq(c[0], "dmi")) {
+        return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_CLASS_DMI, vp);
     } else if (comp_eq(c[0], "drm")) {
         return synth_classify_sys_attr(c + 1, n - 1, SYSFS_CLASS_DRM, 0, vp);
     } else if (comp_eq(c[0], "backlight") && n == 1) {

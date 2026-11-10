@@ -400,6 +400,154 @@ static uint32_t package_cores(int cpu)
     return n;
 }
 
+/* Where the descriptions of the caches come from, as Linux's cacheinfo.c
+ * chooses: leaf 4, AMD's leaf 0x8000001D, which has leaf 4's layout, AMD's
+ * leaves 0x80000005 and 0x80000006 put into that layout, or nowhere. */
+#define CACHE_LEAF4   0
+#define CACHE_TOPOEXT 1
+#define CACHE_LEGACY  2
+#define CACHE_NONE    3
+
+/* Leaf 4's ways for AMD's four-bit associativity codes, Linux's assocs[];
+ * 0xFFFF is a fully associative cache. */
+static const uint16_t amd_assocs[16] = {0,  1, 2,  0,  4,  0,  8,   0,
+                                        16, 0, 32, 48, 64, 96, 128, 0xFFFFu};
+
+/** Where this processor describes its caches, one of the CACHE_ sources:
+ * leaf 4 on Intel, and on another vendor but AMD and Hygon; on those two
+ * leaf 0x8000001D when TOPOEXT says it is there, and else the older
+ * leaves on AMD. */
+static int cache_source(void)
+{
+    uint32_t max, ext_max, b, c, d, topoext = 0;
+    char vendor[13];
+    int amd;
+
+    kcpu_id(0, &max, &b, &c, &d);
+    k_memcpy(vendor, &b, 4);
+    k_memcpy(vendor + 4, &d, 4);
+    k_memcpy(vendor + 8, &c, 4);
+    vendor[12] = '\0';
+    kcpu_id(0x80000000u, &ext_max, 0, 0, 0);
+    if (ext_max < 0x80000000u || ext_max > 0x8000FFFFu) {
+        ext_max = 0;
+    }
+    amd = same(vendor, "AuthenticAMD");
+    if (!amd && !same(vendor, "HygonGenuine")) {
+        return max >= 4 ? CACHE_LEAF4 : CACHE_NONE;
+    }
+    if (ext_max >= 0x80000001u) {
+        kcpu_id(0x80000001u, 0, 0, &topoext, 0);
+    }
+    if ((topoext & (1u << 22)) && ext_max >= 0x8000001Du) {
+        return CACHE_TOPOEXT;
+    }
+    return amd && ext_max >= 0x80000006u ? CACHE_LEGACY : CACHE_NONE;
+}
+
+/**
+ * Leaf 4's EAX, EBX and ECX for the cache `index` that AMD's older leaves
+ * describe, into `r`, as Linux's amd_cpuid4 makes them: L1 data, L1
+ * instruction, L2 and L3, with no threads sharing and all zero for one
+ * that is not there. The L1 associativity is looked up in the four-bit
+ * table though its field is a count of eight bits, as Linux does; a value
+ * past the table is taken as 0.
+ */
+static void cache_legacy(uint32_t index, uint32_t r[3])
+{
+    static const unsigned char levels[] = {1, 1, 2, 3};
+    static const unsigned char types[] = {1, 2, 3, 3};
+    uint32_t l1d, l1i, l2, l3, v, line, tag, code, kb, assoc;
+
+    r[0] = r[1] = r[2] = 0;
+    if (index > 3) {
+        return;
+    }
+    kcpu_id(0x80000005u, 0, 0, &l1d, &l1i);
+    kcpu_id(0x80000006u, 0, 0, &l2, &l3);
+    v = index == 0 ? l1d : index == 1 ? l1i : index == 2 ? l2 : l3;
+    line = v & 0xFFu;
+    if (v == 0 || line == 0) {
+        return;
+    }
+    if (index < 2) {
+        tag = (v >> 8) & 0xFFu;
+        code = (v >> 16) & 0xFFu;
+        kb = v >> 24;
+    } else {
+        tag = (v >> 8) & 0xFu;
+        code = (v >> 12) & 0xFu;
+        kb = index == 2 ? v >> 16 : ((v >> 18) & 0x3FFFu) * 512u;
+    }
+    assoc = code < 16 ? amd_assocs[code] : 0;
+    r[0] =
+        types[index] | (uint32_t)levels[index] << 5 | 1u << 8 | (assoc == 0xFFFFu ? 1u << 9 : 0u);
+    r[1] = ((line - 1u) & 0xFFFu) | ((tag - 1u) & 0x3FFu) << 12 | ((assoc - 1u) & 0x3FFu) << 22;
+    r[2] = kb * 1024u / line / (((assoc - 1u) & 0x3FFu) + 1u) - 1u;
+}
+
+/**
+ * The processors started that share the cache `index` of `cpu`, whose leaf
+ * says `sharing` logical processors share it, as Linux's
+ * cache_shared_cpu_map_setup: on AMD's older leaves the L3 is the
+ * package's and the rest the processor's own; on leaf 0x8000001D an L1 or
+ * L2 is the run of `sharing` APIC IDs that holds `cpu`'s; and otherwise
+ * the processors whose APIC IDs agree above the bits that number `sharing`.
+ */
+static uint64_t cache_shared(int cpu, uint32_t index, uint32_t sharing, int source)
+{
+    uint32_t me = smpboot_apic_id(cpu), them, shift = count_order(sharing);
+    uint64_t mask = (uint64_t)1 << cpu;
+    int c;
+
+    if (source == CACHE_LEGACY) {
+        return index == 3 ? cpuinfo_siblings(cpu, CPUINFO_PACKAGE) | mask : mask;
+    }
+    if (sharing == 1) {
+        return mask;
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        if (!cpu_table[c].online) {
+            continue;
+        }
+        them = smpboot_apic_id(c);
+        if (source == CACHE_TOPOEXT && index < 3 ? them / sharing == me / sharing
+                                                 : them >> shift == me >> shift) {
+            mask |= (uint64_t)1 << c;
+        }
+    }
+    return mask;
+}
+
+int cpuinfo_cache(int cpu, int index, struct cpu_cache *cache)
+{
+    int source = cache_source();
+    uint32_t r[4];
+
+    if (cpu < 0 || cpu >= NR_CPUS || index < 0 || index > 15 || source == CACHE_NONE) {
+        return 0;
+    }
+    if (source == CACHE_LEGACY) {
+        cache_legacy((uint32_t)index, r);
+    } else {
+        kcpu_id_sub(source == CACHE_LEAF4 ? 4u : 0x8000001Du, (uint32_t)index, &r[0], &r[1], &r[2],
+                    &r[3]);
+    }
+    if ((r[0] & 0x1Fu) == 0 || (r[0] & 0x1Fu) > 3) {
+        return 0;
+    }
+    cache->type = r[0] & 0x1Fu;
+    cache->level = (r[0] >> 5) & 7u;
+    cache->line = (r[1] & 0xFFFu) + 1;
+    cache->partitions = ((r[1] >> 12) & 0x3FFu) + 1;
+    cache->ways = ((r[1] >> 22) & 0x3FFu) + 1;
+    cache->sets = r[2] + 1;
+    cache->sharing = ((r[0] >> 14) & 0xFFFu) + 1;
+    cache->id = smpboot_apic_id(cpu) >> count_order(cache->sharing);
+    cache->shared = cache_shared(cpu, (uint32_t)index, cache->sharing, source);
+    return 1;
+}
+
 /**
  * The family and model are the displayed ones of the processor manuals: the
  * extended family is added to a family of 15, and the extended model is put

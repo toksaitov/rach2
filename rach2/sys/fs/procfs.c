@@ -59,6 +59,7 @@
 #include "sleeplock.h"
 #include "tmpfs.h"
 #include "cpuinfo.h"
+#include "../dmi.h"
 #include "../ipc/sysv.h"
 #include "../ipc/mqueue.h"
 #include "pathbuf.h"
@@ -150,6 +151,7 @@
 #define SYSFS_INO_BACKLIGHT 0x06000000u
 #define SYSFS_INO_RFKILL    0x08000000u
 #define SYSFS_INO_REG       0x09000000u
+#define SYSFS_INO_CACHE     0x0A000000u
 #define SYSFS_INO_USB       0x80000000u
 #define SYSFS_INO_FILE      0x40000000u
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
@@ -4727,6 +4729,10 @@ uint32_t sysfs_ino(int node, int key, int file)
     if (node == SYSFS_CPU_TOPOLOGY) {
         return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | 0x80u | ((uint32_t)file & 0x7Fu);
     }
+    if (node == SYSFS_CPU_CACHE || node == SYSFS_CPU_CACHE_INDEX) {
+        return SYSFS_INO_CACHE | (node == SYSFS_CPU_CACHE_INDEX ? 0x800000u : 0u) |
+               ((uint32_t)key & 0x7FFFu) << 8 | ((uint32_t)file & 0xFFu);
+    }
     if (node == SYSFS_BACKLIGHT) {
         return SYSFS_INO_BACKLIGHT | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
     }
@@ -5160,6 +5166,13 @@ int sysfs_device_exists(int node, int key)
     if (node == SYSFS_CPUN || node == SYSFS_CPU_TOPOLOGY) {
         return key >= 0 && key < NR_CPUS && cpu_table[key].online;
     }
+    if (node == SYSFS_CPU_CACHE || node == SYSFS_CPU_CACHE_INDEX) {
+        struct cpu_cache cache;
+        int cpu = node == SYSFS_CPU_CACHE ? key : key >> 4;
+
+        return cpu >= 0 && cpu < NR_CPUS && cpu_table[cpu].online &&
+               cpuinfo_cache(cpu, node == SYSFS_CPU_CACHE ? 0 : key & 15, &cache);
+    }
     if (node == SYSFS_BACKLIGHT) {
         return key >= 0 && key < backlight_count();
     }
@@ -5170,6 +5183,129 @@ int sysfs_device_exists(int node, int key)
         return sysfs_node_kind(key) != 0;
     }
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
+}
+
+int sysfs_attr_present(int node, int attr)
+{
+    return node != SYSFS_DMI_ID || attr == SYSFS_DMI_MODALIAS || dmi_field(attr) != 0;
+}
+
+/**
+ * Render the attribute `attr` of the cache directory `key`, processor
+ * `key >> 4`'s cache `key & 15`, in the order `sysfs_attr` lists them, as
+ * Linux's cacheinfo shows them: numbers, the sharing processors as a list
+ * and a mask, the size in KB with a K, and the type by name. -ENOENT for a
+ * cache or processor that is not there.
+ */
+static int procfs_gen_cache(struct procfs_text *t, int key, int attr)
+{
+    static const char *const types[] = {"", "Data", "Instruction", "Unified"};
+    struct cpu_cache c;
+    int cpu = key >> 4;
+
+    if (cpu < 0 || cpu >= NR_CPUS || !cpu_table[cpu].online || !cpuinfo_cache(cpu, key & 15, &c) ||
+        !sysfs_attr(SYSFS_CPU_CACHE_INDEX, attr)) {
+        return -ENOENT;
+    }
+    if (attr == 5) {
+        ap_cpu_set(t, c.shared);
+    } else if (attr == 6) {
+        ap_cpu_mask(t, c.shared);
+    } else if (attr == 7) {
+        ap_u64(t, (uint64_t)c.sets * c.line * c.partitions * c.ways >> 10);
+        ap_ch(t, 'K');
+    } else if (attr == 8) {
+        ap_str(t, types[c.type & 3u]);
+    } else {
+        ap_u32(t, attr == 0   ? c.line
+                  : attr == 1 ? c.id
+                  : attr == 2 ? c.level
+                  : attr == 3 ? c.sets
+                  : attr == 4 ? c.partitions
+                              : c.ways);
+    }
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/**
+ * Render /sys/class/dmi/id/modalias as Linux's dmi-id.c makes it: "dmi",
+ * then for each field the table holds its prefix and its text with the
+ * spaces, the colons and the bytes past ASCII taken out, each after a
+ * colon, and a colon at the end.
+ */
+static void procfs_gen_modalias(struct procfs_text *t)
+{
+    static const struct {
+        const char *prefix;
+        int field;
+    } fields[] = {
+        {"bvn", DMI_BIOS_VENDOR}, {"bvr", DMI_BIOS_VERSION},        {"bd", DMI_BIOS_DATE},
+        {"br", DMI_BIOS_RELEASE}, {"efr", DMI_EC_FIRMWARE_RELEASE}, {"svn", DMI_SYS_VENDOR},
+        {"pn", DMI_PRODUCT_NAME}, {"pvr", DMI_PRODUCT_VERSION},     {"rvn", DMI_BOARD_VENDOR},
+        {"rn", DMI_BOARD_NAME},   {"rvr", DMI_BOARD_VERSION},       {"cvn", DMI_CHASSIS_VENDOR},
+        {"ct", DMI_CHASSIS_TYPE}, {"cvr", DMI_CHASSIS_VERSION},     {"sku", DMI_PRODUCT_SKU}};
+    const char *v;
+    int i, j;
+
+    ap_str(t, "dmi");
+    for (i = 0; i < (int)(sizeof(fields) / sizeof(fields[0])); i++) {
+        if ((v = dmi_field(fields[i].field)) == 0) {
+            continue;
+        }
+        ap_ch(t, ':');
+        ap_str(t, fields[i].prefix);
+        for (j = 0; v[j] != '\0'; j++) {
+            if (v[j] > ' ' && v[j] < 127 && v[j] != ':') {
+                ap_ch(t, v[j]);
+            }
+        }
+    }
+    ap_str(t, ":\n");
+}
+
+/**
+ * Render the attribute `attr` of the NUMA node directories, the clock
+ * source's or the DMI fields', `node` among SYSFS_NODE to SYSFS_DMI_ID: one
+ * node, 0, which has every processor started and all the memory, at
+ * distance 10 from itself; the clock sources Linux would name with a space
+ * after each, and the one in use; and a DMI field's text. -ENOENT for a
+ * field the firmware's table does not hold.
+ */
+static int procfs_gen_system(struct procfs_text *t, int node, int attr)
+{
+    const char *v;
+    int i;
+
+    if (node == SYSFS_NODE) {
+        ap_str(t, "0\n");
+    } else if (node == SYSFS_NODE0) {
+        if (attr == 0) {
+            ap_cpu_set(t, cpu_online_bits());
+        } else if (attr == 1) {
+            ap_cpu_mask(t, cpu_online_bits());
+        } else {
+            ap_str(t, "10");
+        }
+        ap_ch(t, '\n');
+    } else if (node == SYSFS_CLOCKSOURCE0 && attr == 0) {
+        for (i = 0; (v = timer_clocksource(i)) != 0; i++) {
+            ap_str(t, v);
+            ap_ch(t, ' ');
+        }
+        ap_ch(t, '\n');
+    } else if (node == SYSFS_CLOCKSOURCE0) {
+        ap_str(t, timer_clocksource(-1));
+        ap_ch(t, '\n');
+    } else if (attr == SYSFS_DMI_MODALIAS) {
+        procfs_gen_modalias(t);
+    } else if ((v = dmi_field(attr)) != 0) {
+        ap_str(t, v);
+        ap_ch(t, '\n');
+    } else {
+        return -ENOENT;
+    }
+    return t->len;
 }
 
 /** Append `v`, 0 to 99, as two decimal digits. */
@@ -5215,6 +5351,9 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
 
     if (!sysfs_attr(node, attr)) {
         return -ENOENT;
+    }
+    if (node >= SYSFS_NODE && node <= SYSFS_DMI_ID) {
+        return procfs_gen_system(t, node, attr);
     }
     if (node == SYSFS_KERNEL) {
         ap_u32(t, sysfs_uevent_seqnum());
@@ -5737,10 +5876,10 @@ static int procfs_gen_regattr(struct procfs_text *t, int handle)
 
 /**
  * Render the /sys file at the path `vp`: an attribute of a backlight, of a
- * disk node, of an interface, of a processor's topology or of a fixed
- * directory, a device's uevent, or a PCI function's config. `*key` gets the
- * backlight, the disk node, the interface, the processor or the device the
- * file is for, which its descriptor keeps.
+ * disk node, of an interface, of a processor's topology or cache, or of a
+ * fixed directory, a device's uevent, or a PCI function's config. `*key`
+ * gets the backlight, the disk node, the interface, the processor or cache
+ * or the device the file is for, which its descriptor keeps.
  */
 static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
 {
@@ -5767,6 +5906,10 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
     if (vp->sysent == SYSFS_CPU_TOPOLOGY) {
         *key = vp->syskey;
         return procfs_gen_topology(t, vp->syskey, vp->procfile);
+    }
+    if (vp->sysent == SYSFS_CPU_CACHE_INDEX) {
+        *key = vp->syskey;
+        return procfs_gen_cache(t, vp->syskey, vp->procfile);
     }
     if (sysfs_attr(vp->sysent, vp->procfile)) {
         return procfs_gen_sysattr(t, vp->sysent, vp->procfile);
@@ -7581,6 +7724,10 @@ int procfs_open(const struct vpath *vp, int flags)
         return procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
     }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
+        return -EACCES;
+    }
+    if (vp->kind == VNODE_SYS_FILE && sysfs_attr_private(vp->sysent, vp->procfile) &&
+        !proc_privileged(current_proc)) {
         return -EACCES;
     }
 

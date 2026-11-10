@@ -45,4 +45,27 @@ void cpuinfo_place(int cpu, struct cpu_place *p);
  * says, a bit for each, `cpu`'s own among them when it is started. */
 uint64_t cpuinfo_siblings(int cpu, int level);
 
+/* A cache of a processor, as leaf 4 describes one and Linux's
+ * /sys/devices/system/cpu/cpuN/cache/indexM shows it. */
+struct cpu_cache {
+    uint32_t level;
+    uint32_t type;       /* 1 data, 2 instruction, 3 unified */
+    uint32_t line;       /* the coherency line, in bytes */
+    uint32_t partitions; /* lines to a tag */
+    uint32_t ways;
+    uint32_t sets;
+    uint32_t sharing; /* the logical processors the leaf says share it */
+    uint32_t id;      /* the APIC ID above the bits that number those */
+    uint64_t shared;  /* the processors started that share it, a bit each */
+};
+
+/**
+ * Describe processor `cpu`'s cache `index`, from 0, into `*cache`: 1, or 0
+ * past the last and on a processor that describes none. The leaves are
+ * those Linux reads: leaf 4, or on AMD and Hygon leaf 0x8000001D or the
+ * older leaves 0x80000005 and 0x80000006, which give an L1 data, an L1
+ * instruction, an L2 and, when there is one, an L3.
+ */
+int cpuinfo_cache(int cpu, int index, struct cpu_cache *cache);
+
 #endif /* _CPUINFO_H_ */
