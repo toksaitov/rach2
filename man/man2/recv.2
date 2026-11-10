@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -254,7 +254,11 @@ and
 .Fa msg Ns ->msg_iovlen
 describe up to 1024 buffers, filled in order from exactly one datagram.
 Any remainder beyond their capacity is discarded.
-Each nonempty buffer must have at most 2147483647 bytes.
+A buffer's length that is negative as a signed size, which for a 32-bit
+program is one past 2147483647, gives
+.Er EINVAL ,
+and the buffers' total is cut at 0x7ffff000, as Linux's import_iovec
+cuts it, for a stream socket as for a datagram one.
 A list with no capacity still consumes a datagram, unless
 .Dv MSG_PEEK
 is set, which leaves it queued as for
@@ -439,13 +443,11 @@ The socketcall arguments, data buffers, message header, vector list,
 or address buffers cannot be accessed as required, or
 .Fn recvfrom
 was given an address and a null length pointer.
-For recv and recvfrom, a length exceeding 2147483647 also gives this error;
-recvmsg gives it for an individual buffer exceeding that size.
 .It Er EINTR
 A signal interrupted the wait.
 .It Er EINVAL
 .Fa msg Ns ->msg_iovlen
-exceeds 1024.
+exceeds 1024, or a buffer's length is negative as a signed size.
 .It Er ENETUNREACH
 A stream connection timed out while its local address was gone.
 .It Er ENOTSOCK
