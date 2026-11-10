@@ -30,7 +30,8 @@
  * plane on the eDP pipe and "pipe" refused there (78-9.6); and a mode
  * smaller than the panel's, set in Linux's register order through the
  * fitter with its aspect kept, then stretched by "scaling mode", and the
- * panel's own mode again (78-10b).
+ * panel's own mode again, and a link that fails to train, its status set
+ * bad for a hotplug event and good again with the next mode set (78-10b).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1102,6 +1103,36 @@ static void row_modeset(void)
     frame();
 }
 
+/**
+ * A link that fails to train in a mode set: the commit done with the
+ * connector's link status bad and a hotplug event sent from the commit
+ * worker, Linux's modeset retry; the next mode set trains it and makes the
+ * status good again.
+ */
+static void row_link_retry(void)
+{
+    struct i915_model_sink *s = i915_model_sink(&model);
+    struct drm_mode_modeinfo small = pa->hw.mode;
+    uint32_t swing = s->cr_swing;
+
+    small.hdisplay = 1024;
+    drm_mode_set_name(&small);
+    s->cr_swing = 3; /* more than Haswell's swing at any pre-emphasis */
+    model_hotplugs = 0;
+    CHECK(setcrtc(&small, fb_con) == 0 &&
+              gpu.display.connector.state->link_status == DRM_MODE_LINK_STATUS_BAD,
+          "retry: the commit done, the link's status bad");
+    CHECK(model_hotplugs == 0 && drm_atomic_commit_work() >= 1 && model_hotplugs == 1,
+          "retry: the hotplug event sent from the worker");
+    s->cr_swing = swing;
+    frame();
+    CHECK(setcrtc(&pa->hw.mode, fb_con) == 0 &&
+              gpu.display.connector.state->link_status == DRM_MODE_LINK_STATUS_GOOD &&
+              gpu.display.dp.link_trained && s->trained,
+          "retry: the next mode set trains the link, its status good");
+    frame();
+}
+
 /** The display let go: the backlight left to a stand-in, every pin and
  * framebuffer released. */
 static void row_fini(void)
@@ -1134,6 +1165,7 @@ int main(void)
     row_backlight();
     row_crc();
     row_modeset();
+    row_link_retry();
     row_fini();
     if (fw_obj && fw_obj->refs == 0) {
         fw_obj->funcs->free(fw_obj);
