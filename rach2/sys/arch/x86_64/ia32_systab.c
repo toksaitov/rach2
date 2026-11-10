@@ -529,7 +529,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_OPENAT2] = sys_openat2;
     table[SYS_PIDFD_GETFD] = sys_pidfd_getfd;
     table[SYS_FACCESSAT2] = sys_faccessat2;
-    table[SYS_PROCESS_MADVISE] = NULL;
+    table[SYS_PROCESS_MADVISE] = sys_process_madvise;
     table[SYS_EPOLL_PWAIT2] = compat_sys_epoll_pwait2;
     table[SYS_MOUNT_SETATTR] = NULL;
     table[SYS_QUOTACTL_FD] = NULL;
@@ -537,7 +537,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_LANDLOCK_ADD_RULE] = NULL;
     table[SYS_LANDLOCK_RESTRICT_SELF] = NULL;
     table[SYS_MEMFD_SECRET] = NULL;
-    table[SYS_PROCESS_MRELEASE] = NULL;
+    table[SYS_PROCESS_MRELEASE] = sys_process_mrelease;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
     table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;
     table[SYS_CACHESTAT] = NULL;

@@ -1,0 +1,62 @@
+.Dd November 11, 2026
+.Dt PROCESS_MRELEASE 2
+.Os
+.Sh NAME
+.Nm process_mrelease
+.Nd free the memory of a dying process
+.Sh SYNOPSIS
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fn syscall SYS_process_mrelease "int pidfd" "unsigned int flags"
+.Sh DESCRIPTION
+.Fn process_mrelease
+frees at once the memory of the process
+.Fa pidfd
+names, a descriptor of
+.Xr pidfd_open 2 ,
+when the process is dying, rather than when its last thread has ended,
+as Linux's call does.
+A program that ends others to free memory, such as a daemon that stops
+processes when memory is short, sends
+.Dv SIGKILL
+and then calls it.
+.Pp
+The process is dying once a
+.Dv SIGKILL
+has been sent to it or to one of its threads, or once its threads are
+ending by
+.Xr exit 2
+of the group or by a fatal signal; not while its core file is written.
+Every other process that shares its address space, by
+.Dv CLONE_VM ,
+must be dying too.
+The pages of every mapping but shared memory and a device object's are
+freed, and a thread that touches one before it ends finds it as after
+.Dv MADV_DONTNEED .
+A second call has nothing left to free and returns 0.
+.Pp
+.Fa flags
+must be 0.
+.Sh RETURN VALUES
+0 on success.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EBADF
+.Fa pidfd
+is no pidfd.
+.It Bq Er EINVAL
+.Fa flags
+is not 0, or the process is not dying, or shares its address space with
+a process that is not.
+.It Bq Er ESRCH
+The process has been reaped, or no thread of it has an address space
+left.
+.El
+.Sh SEE ALSO
+.Xr kill 2 ,
+.Xr pidfd_open 2 ,
+.Xr process_madvise 2

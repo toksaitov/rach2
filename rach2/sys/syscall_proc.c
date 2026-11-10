@@ -7756,7 +7756,7 @@ static int madvise_guard_allowed(const vma_t *r, int install)
            !(r->prot & VM_PROT_IO) && !(install && (r->prot & VM_PROT_LOCKED));
 }
 
-int madvise_refused(struct vm_space *vm, uintptr_t start, uintptr_t end, uint32_t advice)
+int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
 {
     int drop = advice == MADV_DONTNEED || advice == MADV_FREE || advice == MADV_COLD ||
                advice == MADV_PAGEOUT;
