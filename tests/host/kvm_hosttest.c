@@ -103,8 +103,16 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     void *p = aligned_alloc(4096, 4096ul * count);
 
     live++;
-    *phys = (uintptr_t)p;
+    if (phys) {
+        *phys = (uintptr_t)p;
+    }
     return p;
+}
+
+/** A kernel address is its own physical address here. */
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    return va;
 }
 
 /** Give pages back. */

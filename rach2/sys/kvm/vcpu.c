@@ -206,8 +206,45 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
     v->dirty |= KVM_PART_REGS | KVM_PART_SREGS | KVM_PART_EVENTS | KVM_PART_DEBUG | KVM_PART_CR8;
 }
 
+/* The most runs of pages `kvm_map_pages` takes before it gives up. */
+#define MAP_TRIES 16u
+
+uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa)
+{
+    uint8_t *held[MAP_TRIES];
+    uint8_t *p = NULL;
+    uint32_t n = 0, i;
+
+    while (n < MAP_TRIES) {
+        p = kalloc_pages(count, pa);
+        if (!p) {
+            break;
+        }
+        for (i = 1; i < count; i++) {
+            if (paging_virt_to_phys((uintptr_t)p + (uintptr_t)i * 4096u) !=
+                *pa + (uintptr_t)i * 4096u) {
+                break;
+            }
+        }
+        if (i == count) {
+            break;
+        }
+        held[n++] = p;
+        p = NULL;
+    }
+    while (n-- > 0) {
+        kfree_pages(held[n], count);
+    }
+    if (p) {
+        k_memset(p, 0xFF, (size_t)count * 4096u);
+    }
+    return p;
+}
+
 /** The page `pgoff` of the run pages of the vCPU `obj`, for a fault of a
- * mapping of them: 0, or -1 past them, which raises SIGBUS. */
+ * mapping of them: 0, or -1 past them, which raises SIGBUS. Each page's
+ * frame is read from the kernel's tables, since the heap's pages are
+ * contiguous only in virtual memory. */
 static int run_page(void *obj, uint32_t pgoff, uintptr_t *phys)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)obj;
@@ -215,8 +252,8 @@ static int run_page(void *obj, uint32_t pgoff, uintptr_t *phys)
     if (pgoff >= KVM_RUN_PAGES) {
         return -1;
     }
-    *phys = v->run_phys + (uintptr_t)pgoff * 4096u;
-    return 0;
+    *phys = paging_virt_to_phys((uintptr_t)v->run + (uintptr_t)pgoff * 4096u);
+    return *phys ? 0 : -1;
 }
 
 /** The last mapping of the vCPU `obj`'s run pages is gone: the reference
@@ -382,7 +419,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->anon.name = v->name;
     wait_queue_init(&v->wq);
     r = -ENOMEM;
-    v->run = kalloc_pages(KVM_RUN_PAGES, &v->run_phys);
+    v->run = kalloc_pages(KVM_RUN_PAGES, NULL);
     v->xsave_mem = kmalloc(KVM_XSAVE_SIZE + 64u);
     if (!v->run || !v->xsave_mem) {
         goto fail;
