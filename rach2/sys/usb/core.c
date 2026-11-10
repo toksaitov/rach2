@@ -685,9 +685,11 @@ static const char *path_of(const struct usb_device_state *d)
 /**
  * Take the device at entry `i` down, and everything below it first: a
  * running device's class driver is told, as is a keyboard's or mouse's whose
- * report endpoint halted (ST_HALTED), and the entry closes if the
- * controller gave it a slot and is freed otherwise. Nothing for an entry that
- * is free, closing or a tombstone.
+ * report endpoint halted (ST_HALTED); the HID driver is told in every state,
+ * since a device of several HID interfaces has those set up before a later
+ * one's setup ended; and the entry closes if the controller gave it a slot
+ * and is freed otherwise. Nothing for an entry that is free, closing or a
+ * tombstone.
  *
  * A device taken down during its port reset gives up its turn at once: the
  * reset is the hub's or the controller's port and not a command, so no
@@ -710,10 +712,10 @@ static void device_gone(int i)
             msc_detach(d->hc, d->slot);
         } else if (d->interface.kind == USB_KIND_HUB) {
             hub_detach(i);
-        } else {
-            hid_gone(d->index + 1);
         }
     }
+    /* The HID driver may hold interfaces taken before a later one's setup. */
+    hid_gone(d->index + 1);
     d->have_control = 0;
     d->closing_asked = 0;
     if (enumerating[bus_of(d)] == i && d->state == ST_RESETTING) {
