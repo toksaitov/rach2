@@ -7,8 +7,9 @@
 
 /*
  * The guest's script: drmdevice's report, the lines of Mesa's loader that
- * eglinfo logs on the surfaceless platform, then first light run from the
- * fake's file, plain and under each fault, one `step` line each. Under
+ * eglinfo logs on the surfaceless platform, modetest's connectors and
+ * planes of the card, then first light run from the fake's file, plain and
+ * under each fault, one `step` line each. Under
  * `--- eglinfo` come its exit status and the last of its lines that are not
  * the loader's debug log or an indented list, which show how far crocus
  * got. Its exit is not
@@ -25,6 +26,9 @@ static const char script[] =
     "echo \"eglinfo exit $e\"\n"
     "grep -v -e 'libEGL debug' -e '^    ' /tmp/eglinfo.out | tail -n 30\n"
     "rm -f /tmp/eglinfo.out\n"
+    "echo '--- kms'\n"
+    "modetest -M i915 -c 2>&1 | grep -E 'connected'\n"
+    "modetest -M i915 -p 2>&1 | grep -E 'formats:'\n"
     "echo '--- fake'\n"
     "f=$(ls -d /sys/kernel/debug/dri/*/i915_fake | head -n 1)\n"
     "echo \"file $f\"\n"
@@ -50,7 +54,20 @@ static int drm_field(const char *out, const char *key, const char *value)
     return 0;
 }
 
-/** Boot with rach2.i915fake and judge the identity, the loader and faults. */
+/** Say whether modetest's connectors and planes in `out` are the display
+ * the driver makes on a chip whose firmware lit nothing: eDP-1
+ * disconnected, and on each of the three pipes a primary plane, a sprite
+ * and a cursor with Linux's Haswell formats. */
+static int kms_listed(const char *out)
+{
+    return net_find(out, "disconnected*eDP-1") != NULL &&
+           net_count(out, "formats: C8 * RG16 XR24 XB24 XR30 XB30 XB4H") == 3 &&
+           net_count(out, "formats: XR24 XB24 XR30 XB30 XR4H XB4H YUYV YVYU UYVY VYUY") == 3 &&
+           net_count(out, "formats: AR24") == 3;
+}
+
+/** Boot with rach2.i915fake and judge the identity, the loader, the
+ * display and faults. */
 int etude_scenario(struct etude_case *c)
 {
     struct net_case u;
@@ -87,6 +104,8 @@ int etude_scenario(struct etude_case *c)
                net_find(r.out, "pci id for fd #: 8086:0a16, driver crocus") != NULL &&
                    net_find(r.out, "EGL driver name: crocus") != NULL,
                "Mesa's loader did not pick crocus for 8086:0a16");
+    net_assert(&u, "kms", kms_listed(r.out),
+               "modetest did not list eDP-1 disconnected and the planes' Haswell formats");
     light = net_find(r.out, "step light: light ok");
     net_assert(&u, "faults",
                net_exited0(&r) && light != NULL &&

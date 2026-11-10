@@ -1,15 +1,16 @@
 {
   "schema_version": 1,
   "family_id": "machine.i915fake",
-  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back",
+  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks, the connector and planes modetest lists, and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back",
   "cases": [
     {
       "case_id": "machine.i915fake.crocus",
-      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo's surfaceless platform picks crocus for it, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo's surfaceless platform picks crocus for it, modetest lists eDP-1 disconnected and three planes a pipe with Haswell's formats, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
       "units": [
         "rach2/sys/drm/i915/i915_fake.c",
         "drmdevice",
-        "eglinfo"
+        "eglinfo",
+        "modetest"
       ],
       "domain": "machine",
       "architectures": [
@@ -50,7 +51,7 @@
           "step_id": "probe",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run drmdevice, eglinfo -p surfaceless with EGL's debug log on, printing its exit status and its last lines but the loader's log and the indented lists, an exit not judged while the driver serves no EXECBUFFER2, and first light from /sys/kernel/debug/dri/DEVICE/i915_fake plain and under the submit, bind, irq and hang faults"
+          "does": "run drmdevice, eglinfo -p surfaceless with EGL's debug log on, printing its exit status and its last lines but the loader's log and the indented lists, an exit not judged while the driver serves no EXECBUFFER2, modetest -c and -p on the card, and first light from /sys/kernel/debug/dri/DEVICE/i915_fake plain and under the submit, bind, irq and hang faults"
         }
       ],
       "machines": [
@@ -94,6 +95,11 @@
         {
           "assertion_id": "loader",
           "checks": "Mesa's loader logs the pci id 8086:0a16 with driver crocus, and eglinfo names crocus as the EGL driver",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kms",
+          "checks": "modetest lists eDP-1 disconnected, and three primary planes of C8, RG16, XR24, XB24, XR30, XB30 and XB4H, three sprites of XR24, XB24, XR30, XB30, XR4H, XB4H, YUYV, YVYU, UYVY and VYUY, and three cursors of AR24",
           "source": "scenario"
         },
         {
