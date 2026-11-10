@@ -164,6 +164,13 @@ struct kernel_iovec {
  * words. 0, or -EFAULT. */
 int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i);
 
+/** Check the `count` elements of the caller's vector at `uvec` as Linux's
+ * __import_iovec does: their total, cut at MAX_RW_COUNT, or -EINVAL for a
+ * negative length and -EFAULT for a range outside user space; with
+ * `prefault` 0 or 1 each buffer is also faulted in for reading or writing.
+ * With `iov` not NULL, it gets the elements, cut. It may sleep. */
+long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefault);
+
 /* Linux's `struct user_msghdr`, which sendmsg(2) and recvmsg(2) take. */
 struct kernel_msghdr {
     uintptr_t msg_name;

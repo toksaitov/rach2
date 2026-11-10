@@ -1082,7 +1082,7 @@ int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
  * With `iov` not NULL, it holds `count` elements and gets them, cut. An
  * unreadable vector is -EFAULT. It may sleep.
  */
-static long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefault)
+long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefault)
 {
     struct kernel_iovec one;
     uint32_t total = 0;
@@ -12397,8 +12397,8 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
         if (iov.iov_len == 0) {
             continue;
         }
-        len = (uint32_t)iov.iov_len < wanted - (uint32_t)total ? (uint32_t)iov.iov_len
-                                                               : wanted - (uint32_t)total;
+        len = iov.iov_len < wanted - (uint32_t)total ? (uint32_t)iov.iov_len
+                                                     : wanted - (uint32_t)total;
         r = write ? ksys_pwrite64(fd, (const char __user *)iov.iov_base, len, pos)
                   : ksys_pread64(fd, (char __user *)iov.iov_base, len, pos);
         if (r < 0) {
