@@ -32,7 +32,12 @@
  * smaller than the panel's, set in Linux's register order through the fitter
  * with its aspect kept, then stretched by "scaling mode", and the panel's own
  * mode again, and a link that fails to train, its status set bad for a hotplug
- * event and good again with the next mode set (78-10b).
+ * event and good again with the next mode set (78-10b); and a framebuffer
+ * 16384 pixels wide, past the planes' strides, shown from x 9000 on the
+ * primary plane and on the sprite through a remapped view of its source
+ * rectangle, each pixel the plane reads checked against the source's, and
+ * each view unpinned once the flip after the one that replaced it latched
+ * (78-16).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -160,29 +165,64 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
 /* ---- the driver's buffer objects: a few, bound in the aperture by the
  * pin, which counts what it is asked ---- */
 
-#define NBO 16
+#define NBO    20
+#define NREMAP 4
 
 const struct drm_gem_object_funcs i915_gem_object_funcs;
 static struct drm_i915_gem_object bo[NBO];
 static struct i915_vma bo_vma[NBO];
+static struct i915_vma remap_vma[NBO][NREMAP]; /* each object's remapped views */
 static int pins, unpins, flushes;
 static uint32_t pin_align;
 static uint64_t flush_start, flush_end;
 
-/** The GGTT address the pin binds object `i` at. */
-#define BO_GGTT(i) (0x01000000u + (uint32_t)(i) * 0x00800000u)
+/** The GGTT address the pin binds object `i` at, and its remapped view in
+ * slot `j`. */
+#define BO_GGTT(i)       (0x01000000u + (uint32_t)(i) * 0x00800000u)
+#define REMAP_GGTT(i, j) (0x10000000u + ((uint32_t)(i) * NREMAP + (uint32_t)(j)) * 0x00400000u)
 
+/** Whether the remapped views `a` and `b` are one. */
+static int remap_same(const struct i915_remap_info *a, const struct i915_remap_info *b)
+{
+    return a->offset == b->offset && a->width == b->width && a->height == b->height &&
+           a->src_stride == b->src_stride;
+}
+
+/** The pin, as i915_vma.c's: a binding of the same view reused, a
+ * remapped view in a slot of its own, the first unpinned one, while a
+ * binding stays on its object's list once made. */
 int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
                                        const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
-    struct i915_vma *v = &bo_vma[obj - bo];
+    int i = (int)(obj - bo), j, slot = -1;
+    struct i915_vma *v = &bo_vma[i];
 
-    (void)remap;
-    if (!obj->vmas) {
+    if (remap) {
+        for (j = 0; j < NREMAP; j++) {
+            if (remap_vma[i][j].obj && remap_same(&remap_vma[i][j].remap, remap)) {
+                slot = j;
+                break;
+            }
+            if (slot < 0 && remap_vma[i][j].pin_count == 0) {
+                slot = j;
+            }
+        }
+        CHECK(slot >= 0, "the pin finds a slot for a remapped view");
+        if (slot < 0) {
+            return -ENOSPC;
+        }
+        v = &remap_vma[i][slot];
+        v->start = REMAP_GGTT(i, slot);
+        v->remap = *remap;
+        v->view_pages = remap->width * remap->height;
+    } else {
+        v->start = BO_GGTT(i);
+    }
+    if (!v->obj) {
         v->obj = obj;
-        v->start = BO_GGTT(obj - bo);
         v->mappable = 1;
+        v->obj_next = obj->vmas;
         obj->vmas = v;
     }
     v->pin_count++;
@@ -375,6 +415,7 @@ static uint32_t bo_new(int i, uint64_t size, uint32_t tiling, uint32_t stride)
 
     k_memset(&bo[i], 0, sizeof(bo[i]));
     k_memset(&bo_vma[i], 0, sizeof(bo_vma[i]));
+    k_memset(remap_vma[i], 0, sizeof(remap_vma[i]));
     bo[i].base.dev = &gpu.drm;
     bo[i].base.size = size;
     bo[i].base.funcs = &i915_gem_object_funcs;
@@ -957,6 +998,139 @@ static void row_sprite(void)
     frame();
 }
 
+/* ---- 78-16: framebuffers wider than a plane's stride ---- */
+
+/** The byte of pixel (`px`, `py`) of a surface of `cpp` bytes a pixel at
+ * `pitch`, X-tiled, 512 bytes by 8 rows a tile, or linear. */
+static uint64_t pixel_byte(int tiled, uint32_t pitch, uint32_t cpp, uint32_t px, uint32_t py)
+{
+    uint32_t tw = 512u / cpp;
+
+    if (!tiled) {
+        return (uint64_t)py * pitch + (uint64_t)px * cpp;
+    }
+    return ((uint64_t)(py / 8u) * (pitch / 512u) + px / tw) * 4096u + (py % 8u) * 512u +
+           (px % tw) * cpp;
+}
+
+/* A plane's source: the framebuffer's layout, X-tiled or linear, its
+ * bytes a pixel and stride, its object's first byte its start, and the
+ * rectangle's corner and size. */
+struct source {
+    int tiled;
+    uint32_t cpp, pitch;
+    uint32_t sx, sy, w, h;
+};
+
+/** Whether the plane whose surface, stride and offset registers are
+ * `surf`, `stride` and `offset`, reading `src` through the remapped binding
+ * `v`, reads at each pixel the byte of the source's pixel: the view's page
+ * list checked against the source rectangle, pixel by pixel. */
+static int view_reads_source(const struct i915_vma *v, uint32_t surf, uint32_t stride,
+                             uint32_t offset, const struct source *src)
+{
+    uint32_t i, j, x = offset & 0xffffu, y = offset >> 16;
+
+    if (surf < v->start) {
+        return 0;
+    }
+    for (j = 0; j < src->h; j++) {
+        for (i = 0; i < src->w; i++) {
+            uint64_t at =
+                (surf - v->start) + pixel_byte(src->tiled, stride, src->cpp, x + i, y + j);
+            uint64_t page = at >> 12;
+
+            if (page >= v->view_pages ||
+                (uint64_t)I915_REMAP_PAGE(&v->remap, (uint32_t)page) * 4096u + (at & 0xfffu) !=
+                    pixel_byte(src->tiled, src->pitch, src->cpp, src->sx + i, src->sy + j)) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/**
+ * An X-tiled framebuffer 16384 pixels wide, whose 64 KiB stride passes the
+ * primary plane's 32 KiB, shown from (9000, 100) through a remapped view
+ * of the source's tiles alone, as Linux's intel_plane_remap_gtt makes it; a
+ * pan binds the next view, and each is unpinned once the flip after the
+ * one that replaced it has latched, as the other scanouts are.
+ */
+static void row_remap_primary(void)
+{
+    static const struct place at = {9000, 100, 1366, 768, 0, 0, 1366, 768};
+    static const struct place pan = {9100, 100, 1366, 768, 0, 0, 1366, 768};
+    static const struct source src = {1, 4, 65536, 9000, 100, 1366, 768};
+    static const struct source panned = {1, 4, 65536, 9100, 100, 1366, 768};
+    uint32_t h = bo_new(16, 65536u * 1024u, I915_TILING_X, 65536);
+    uint32_t fb = addfb(h, 16384, 1024, DRM_FORMAT_XRGB8888, 65536, I915_FORMAT_MOD_X_TILED);
+    const struct i915_vma *v = &remap_vma[16][0], *next = &remap_vma[16][1];
+
+    CHECK(fb && plane_commit(&pa->primary, fb, &at, 0) == 0,
+          "remap: a 16384-wide X-tiled framebuffer on the primary plane from x 9000");
+    CHECK(v->pin_count == 1 && bo_vma[16].pin_count == 0 && v->remap.offset == 12u * 128u + 70u &&
+              v->remap.width == 11 && v->remap.height == 97 && v->remap.src_stride == 128,
+          "remap: a view of the source's 11 by 97 tiles pinned, not the whole object");
+    CHECK(reg(DSPSURF(0)) == REMAP_GGTT(16, 0) && reg(DSPSTRIDE(0)) == 11u * 512u &&
+              reg(DSPOFFSET(0)) == (4u << 16 | 40u) && (reg(DSPCNTR(0)) & DISP_TILED),
+          "remap: the plane reads the view at a stride of 11 tiles, the corner in the offset");
+    CHECK(view_reads_source(v, reg(DSPSURF(0)), reg(DSPSTRIDE(0)), reg(DSPOFFSET(0)), &src),
+          "remap: each pixel the primary plane reads is the source's");
+    frame();
+    CHECK(i915_model_pipes(&model)->pipe[0].primary.surf == REMAP_GGTT(16, 0),
+          "remap: the view scanned after the vblank");
+    CHECK(plane_commit(&pa->primary, fb, &pan, 0) == 0 && next->pin_count == 1 &&
+              next->remap.offset == 12u * 128u + 71u && v->pin_count == 1 &&
+              reg(DSPSURF(0)) == REMAP_GGTT(16, 1) && reg(DSPOFFSET(0)) == (4u << 16 | 12u),
+          "remap: a pan to x 9100 binds the next view, the shown one kept");
+    CHECK(view_reads_source(next, reg(DSPSURF(0)), reg(DSPSTRIDE(0)), reg(DSPOFFSET(0)), &panned),
+          "remap: each pixel read after the pan is the source's");
+    frame();
+    CHECK(plane_commit(&pa->primary, fb_con, &full, 0) == 0 && v->pin_count == 0 &&
+              next->pin_count == 1,
+          "remap: back to the console, the first view unpinned, the latched one kept");
+    frame();
+    CHECK(plane_commit(&pa->primary, fb_con, &full, 0) == 0 && next->pin_count == 0 &&
+              reg(DSPSTRIDE(0)) == 5504 && reg(DSPSURF(0)) == BO_GGTT(0),
+          "remap: the second view unpinned after the next flip, the console as before");
+    frame();
+}
+
+/**
+ * A linear framebuffer 16384 pixels wide, its 64 KiB stride whole pages
+ * past the sprite's 16 KiB, shown from (9000, 300) through a remapped view
+ * of a page of each source row; unpinned once the sprite is off and a flip
+ * has passed.
+ */
+static void row_remap_sprite(void)
+{
+    static const struct place at = {9000, 300, 64, 64, 10, 20, 64, 64};
+    static const struct source src = {0, 4, 65536, 9000, 300, 64, 64};
+    uint32_t h = bo_new(17, 65536u * 1024u, I915_TILING_NONE, 0);
+    uint32_t fb = addfb(h, 16384, 1024, DRM_FORMAT_XRGB8888, 65536, NO_MODIFIER);
+    const struct i915_vma *v = &remap_vma[17][0];
+
+    CHECK(fb && plane_commit(&pa->sprite, fb, &at, 0) == 0,
+          "remap: a 16384-wide linear framebuffer on the sprite from x 9000");
+    CHECK(v->pin_count == 1 && bo_vma[17].pin_count == 0 &&
+              v->remap.offset == (300u * 65536u + 9000u * 4u) / 4096u && v->remap.width == 1 &&
+              v->remap.height == 64 && v->remap.src_stride == 16,
+          "remap: the sprite's view, a page of each of its 64 rows");
+    CHECK(reg(SPRSURF(0)) == REMAP_GGTT(17, 0) && reg(SPRSTRIDE(0)) == 4096 &&
+              reg(SPROFFSET(0)) == 808u,
+          "remap: the sprite reads the view at a stride of a page, the corner in the offset");
+    CHECK(view_reads_source(v, reg(SPRSURF(0)), reg(SPRSTRIDE(0)), reg(SPROFFSET(0)), &src),
+          "remap: each pixel the sprite reads is the source's");
+    frame();
+    CHECK(plane_commit(&pa->sprite, 0, &full, 0) == 0 && v->pin_count == 1,
+          "remap: the sprite off, its view kept until the flip latches");
+    frame();
+    CHECK(plane_commit(&pa->sprite, 0, &full, 0) == 0 && v->pin_count == 0,
+          "remap: the sprite's view unpinned after the next flip");
+    frame();
+}
+
 /* ---- 78-9.5: the cursor and the backlight ---- */
 
 /** A cursor lower than it is wide, as Linux's i9xx_cursor_size_ok takes
@@ -1369,6 +1543,8 @@ int main(void)
     row_primary();
     row_addfb_tiling();
     row_sprite();
+    row_remap_primary();
+    row_remap_sprite();
     row_cursor();
     row_cursor_unpin();
     row_mode_limits();

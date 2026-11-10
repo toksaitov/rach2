@@ -403,6 +403,65 @@ static void views(void)
     close_handle(&file_a, big);
 }
 
+/**
+ * A remapped view of an object, as a plane scans out the source of a
+ * framebuffer wider than its stride (78-16): page k of the binding maps
+ * row k / 3, column k % 3 of the view, its rows 8 pages apart in the
+ * object, as Linux's intel_remap_pages lists them; a pin of the same view
+ * reuses its binding, the whole object's is another, a GTT map's fault
+ * never takes the view, a view past the object is refused, and the
+ * entries go with the object.
+ */
+static void remapped(void)
+{
+    uint32_t h = create(&file_a, 64 * 4096);
+    struct drm_i915_gem_object *obj = object(&file_a, h);
+    struct i915_remap_info r, past;
+    struct i915_vma *v = 0, *again = 0, *whole = 0;
+    uint32_t row, col, page;
+    uint64_t start;
+    int ok = 1;
+
+    r.offset = 5;
+    r.width = 3;
+    r.height = 4;
+    r.src_stride = 8;
+    past = r;
+    past.offset = 38; /* its last row ends at page 38 + 3 * 8 + 3 = 65 */
+    CHECK(i915_gem_object_pin_to_display(obj, &r, 256u * 1024u, &v) == 0 && v &&
+              v->view_pages == 12 && v->remap.width == 3 && (v->start & (256u * 1024u - 1u)) == 0,
+          "remap: a view of 4 rows of 3 pages bound for scanout");
+    for (row = 0; v && row < 4; row++) {
+        for (col = 0; col < 3; col++) {
+            page = 5u + row * 8u + col;
+            ok &= chip_a.gtt[(v->start >> 12) + row * 3u + col] == obj->frames[page];
+        }
+    }
+    CHECK(v && ok, "remap: each row of the view the object's pages 8 apart");
+    CHECK(i915_vma_for_page(obj, 5) == 0, "remap: a GTT map's fault never takes the view");
+    CHECK(i915_gem_object_pin_to_display(obj, &r, 256u * 1024u, &again) == 0 && again == v &&
+              v->pin_count == 2,
+          "remap: a pin of the same view reuses its binding");
+    CHECK(i915_gem_object_pin_to_display(obj, 0, 256u * 1024u, &whole) == 0 && whole != v &&
+              whole->view_pages == 0 && !whole->remap.width,
+          "remap: the whole object's binding is another");
+    CHECK(i915_vma_pin_remapped(obj, &past, 0, 0, &again) == -EINVAL,
+          "remap: a view past the object refused");
+    start = v ? v->start : 0;
+    if (v) {
+        i915_vma_unpin(v);
+        i915_vma_unpin(v);
+    }
+    if (whole) {
+        i915_vma_unpin(whole);
+    }
+    close_handle(&file_a, h);
+    for (page = 0; page < 12; page++) {
+        ok &= chip_a.gtt[(start >> 12) + page] == 0;
+    }
+    CHECK(ok, "remap: the view's entries cleared with the object");
+}
+
 /** More objects through the aperture than the windows hold at once: the
  * other device's imports, which have no pages of the processor's, so that
  * PWRITE reaches them through the aperture alone. */
@@ -936,6 +995,7 @@ int main(void)
     maps();
     legacy_maps();
     views();
+    remapped();
     windows();
     arithmetic();
     tiling();
