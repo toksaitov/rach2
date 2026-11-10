@@ -623,6 +623,7 @@ struct file_write_state {
     struct vfs_ref file;
     int own;    /* nonzero when the type's file lock is held */
     int append; /* end-of-file placement without changing O_APPEND */
+    int moved;  /* bytes moved in this call, including earlier vector elements */
 };
 
 /**
@@ -636,16 +637,17 @@ struct file_write_state {
  * copies from `buf`
  * only while its pages are present (`vm_resident`), answering a short count
  * at the first that is not, since a fault under the lock could wait for
- * another file's lock. The lock then goes while the rest of the buffer is
- * brought in, and the write goes on from the byte it reached, at the file's
- * end again under O_APPEND, where another writer may have moved it
- * meanwhile: the rest is cut again to what RLIMIT_FSIZE lets through
+ * another file's lock. Once this call has moved a byte, in this piece or an
+ * earlier vector element, it returns that prefix without releasing the lock.
+ * Otherwise the lock goes while the buffer is brought in, and an append
+ * reads the end again, where another writer may have moved it meanwhile:
+ * the count is cut again to what RLIMIT_FSIZE lets through
  * (`fsize_fit`), and a write that finds the end at the limit stops there,
  * -EFBIG when it has moved no byte. An end that cannot be read again ends
  * the write with the bytes moved.
  */
-static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_state *state,
-                                 int mapped, const char __user *buf, uint32_t count, uint64_t *pos)
+static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *state, int mapped,
+                                 const char __user *buf, uint32_t count, uint64_t *pos)
 {
     struct open_file *ofd = entry->ofd;
     uintptr_t from = (__force uintptr_t)buf;
@@ -660,10 +662,15 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_stat
                 filemap_file_written(entry, *pos, (uint32_t)n);
             }
             done += (uint32_t)n;
+            state->moved = 1;
             *pos += (uint64_t)n;
             refaults = 0;
         }
         if (!state->own || n < 0 || done == count || vm_resident(from + done, count - done, 0)) {
+            break;
+        }
+        if (state->moved) {
+            n = -EFAULT;
             break;
         }
         vfs_node_unlock(&state->file);
@@ -696,8 +703,9 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_stat
  * Write with the description and the locks in `state` already held. Its
  * `own` says the type uses a file lock; `append` is the operation's final
  * end-placement choice, independent of the shared O_APPEND flag. The caller
- * has faulted in the buffer; a later fault may release and reacquire the
- * file lock through file_write_pieces. Return bytes or a negative errno,
+ * has faulted in the buffer; a later fault ends a call that moved bytes,
+ * or releases and reacquires the file lock through file_write_pieces.
+ * Return bytes or a negative errno,
  * the getattr's error among them when the end of an append cannot be read.
  *
  * On a type that does not set `file_locked` the description's lock orders
@@ -708,7 +716,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_stat
  * type's own write takes the same lock again, which its holder may.
  */
 static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint32_t count,
-                                 const uint64_t *at, const struct file_write_state *state)
+                                 const uint64_t *at, struct file_write_state *state)
 {
     struct open_file *ofd = entry->ofd;
     int append = state->append;
@@ -774,13 +782,14 @@ out:
  * the offset says and whatever `at` asks for, as Linux's pwrite does. The
  * file system reads the user buffer directly, so its pages are range-checked
  * and faulted in first, and on a type that sets `file_locked` brought in
- * again with the file's lock let go when one goes while the write sleeps
- * (`file_write_pieces`). A file that backs a loop device is reached through
- * that device and nowhere else, since the file system mounted on it may not
- * have its image change underneath, and is -EBUSY: that is asked before the
- * description is locked and again under the lock, since an attachment can
- * publish itself while this call waits for the lock. Only a write that moved
- * bytes disarms the set-id bits, through the node as the write left it (a
+ * again with the file's lock let go when one goes before any bytes move;
+ * a later fault returns the completed prefix (`file_write_pieces`). A file
+ * that backs a loop device is reached through that device and nowhere else,
+ * since the file system mounted on it may not have its image change
+ * underneath, and is -EBUSY: that is asked before the description is locked
+ * and again under the lock, since an attachment can publish itself while
+ * this call waits for the lock. Only a write that moved bytes disarms the
+ * set-id bits, through the node as the write left it (a
  * grow relocates a KRFFS file and repoints every holder), and a privileged
  * writer is exempt: that is the CAP_FSETID analogue, without which any root
  * process disarms /bin/su by rewriting it. A file whose pages shared
@@ -812,6 +821,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     fd_ofd_lock(ofd);
     state.own = file_lock(ofd, &state.file);
     state.append = (ofd->status_flags & OFD_APPEND) != 0;
+    state.moved = 0;
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
         file_unlock(&state.file, state.own);
         fd_ofd_unlock(ofd);
@@ -12403,7 +12413,7 @@ static void iov_trim(struct kernel_iovec *iov, int count, uint32_t room)
  * advances the shared offset. Return the bytes written before a short
  * write or error, or the first error when no byte was written. */
 static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov, int count,
-                              long long pos, const struct file_write_state *state)
+                              long long pos, struct file_write_state *state)
 {
     uint64_t at = (uint64_t)pos;
     long total = 0, rc = 0;
@@ -12486,6 +12496,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
         vfs_node_lock(&state.file);
     }
     state.append = append;
+    state.moved = 0;
     rc = loop_backs(ofd->vmnt, ofd->vnode) ? -EBUSY : 0;
     if (rc == 0) {
         rc = iov_seal_grow(ofd, pos == -1 ? ofd->offset : (uint64_t)pos, wanted, append, &room);
