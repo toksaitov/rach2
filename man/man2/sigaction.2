@@ -142,8 +142,17 @@ A system call a signal interrupted before it transferred anything goes
 on as Linux's restart code for it says.
 When no handler runs, as after a stop and a continue, or when the signal
 that woke the call is ignored by the time it is taken, the call is
-restarted, and a timed one still ends at its first deadline; when a
-handler runs, most calls are restarted only under
+restarted.
+A call resumed through
+.Nm restart_syscall
+keeps its first deadline.
+.Fn select ,
+.Fn pselect
+and
+.Fn ppoll
+restart with the remainder written before the stop, so the time stopped
+is added to their first deadline.
+When a handler runs, most calls are restarted only under
 .Dv SA_RESTART
 and otherwise fail with
 .Er EINTR .

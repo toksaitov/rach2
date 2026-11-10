@@ -250,8 +250,8 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     } else if (self->ptrace_opts & PTRACE_O_TRACESYSGOOD) {
         signo |= 0x80u;
     }
-    self->orig_nr = (int32_t)nr;
     if (!leaving) {
+        self->orig_nr = (int32_t)nr;
         SC_RET(tf) = (unsigned long)-ENOSYS;
     }
     if (!stepping) {
