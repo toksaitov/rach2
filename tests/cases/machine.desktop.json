@@ -299,12 +299,12 @@
         },
         {
           "assertion_id": "chromium",
-          "checks": "Chromium's page records the keys r, a, c, h, 2 and a left click",
+          "checks": "Chromium's page records a left click and then the keys r, a, c, h, 2",
           "source": "scenario"
         },
         {
           "assertion_id": "firefox",
-          "checks": "Firefox's page records the keys r, a, c, h, 2 and a left click",
+          "checks": "Firefox's page records a left click and then the keys r, a, c, h, 2",
           "source": "scenario"
         },
         {
