@@ -1122,6 +1122,31 @@ build/tests/cases/kvm/kvm.ext2: build/tests/cases/kvm/kvm.tar
 	    -d "$$work" $@.tmp $${kib}k; \
 	mv $@.tmp $@
 
+# `tests/run bed-vtest`: the testbed's first rung (bed/Readme.md), Mesa's
+# virpipe on the x86-64 GNU root drawing a triangle through vtestrelay to the
+# vtest server of a Debian guest that the root's QEMU boots, under QEMU's TCG
+# and under Rach2's KVM, as the cases of tests/cases/machine.bed-vtest.json,
+# which bed_vtest_scenario runs. Each machine has bed-vtest.ext2 as a
+# read-only data disk: the guest's cloud image and prepared image, the
+# triangle's source and the runner, which bed/fixture/vtest-guest.sh stages,
+# preparing the guest first when its inputs changed. The cloud image, 419 MiB,
+# and the snapshot's packages are downloaded once into the main clone's
+# build/cache.
+BED_VTEST_FILES = bed/fixture/vtest-guest.sh bed/fixture/vtest-rach2.sh bed/fixture/triangle.c \
+                  bed/fixture/setup.sh.in bed/fixture/packages bed/fixture/user-data.in \
+                  bed/fixture/meta-data bed/fixture/network-config tests/graphics/debian-ref/image
+build/tests/cases/bed-vtest/bed-vtest.ext2: $(BED_VTEST_FILES)
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p $(@D) build/tmp; work=$$(mktemp -d build/tmp/bed-vtest-disk.XXXXXX); \
+	sh bed/fixture/vtest-guest.sh stage "$$work/disk"; \
+	kib=$$(($$(ls -ln "$$work/disk" | awk '{ n += $$5 } END { print n }') / 1024 * 5 / 4 + 8192)); \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work/disk" $@.tmp $${kib}k; \
+	mv $@.tmp $@
+
 # `tests/run bed-forward`: the testbed's forward direction, a Debian guest of
 # QEMU on the x86-64 GNU root drawing on Rach2's GPU through QEMU's own
 # virtio-gpu, virgl and then Venus with blobs, as the cases of
