@@ -22,4 +22,5 @@ KVM_C_SRC = sys/kvm/kvm.c \
     sys/kvm/dirty.c \
     sys/kvm/decode.c \
     sys/kvm/emulate.c \
-    sys/kvm/hyperv.c
+    sys/kvm/hyperv.c \
+    sys/kvm/pvclock.c

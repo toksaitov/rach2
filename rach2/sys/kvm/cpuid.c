@@ -1,6 +1,7 @@
 /*
  * cpuid.c: the CPUID KVM offers a guest, from the host's with what KVM
- * cannot give a guest taken out, and the lookups of a vCPU's CPUID.
+ * cannot give a guest taken out and KVM's own leaves added, and the lookups
+ * of a vCPU's CPUID.
  */
 
 #include "kvm.h"
@@ -60,6 +61,17 @@
 #define LX1_ECX     0x002109F3u
 #define LX1_EDX     0xEFD3FBFFu
 #define LX1_ECX_AVX 0x00010800u /* XOP, FMA4 */
+
+/* KVM's signature in the EBX, ECX and EDX of KVM_CPUID_SIGNATURE,
+ * "KVMKVMKVM\0\0\0". */
+#define KVM_SIG_EBX 0x4B4D564Bu
+#define KVM_SIG_ECX 0x564B4D56u
+#define KVM_SIG_EDX 0x0000004Du
+
+/* The hypervisor leaves' bases Linux searches for a signature: 0x40000000
+ * and each 0x100 above it to 0x4000FF00. */
+#define HV_BASE_FIRST 0x40000000u
+#define HV_BASE_LAST  0x4000FF00u
 
 /** The host's CPUID of `leaf` and `sub` into `e`, with its identity. */
 static void host_leaf(struct kvm_cpuid_entry2 *e, uint32_t leaf, uint32_t sub, uint32_t flags)
@@ -229,6 +241,44 @@ static int indexed(uint32_t leaf, uint32_t *n)
     }
 }
 
+uint32_t kvm_pv_supported(void)
+{
+    uint32_t f = (1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_PV_UNHALT) |
+                 (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
+                 (1u << KVM_FEATURE_PV_SCHED_YIELD);
+
+    /* Without the TSC's rate no kvmclock can be written, and a guest that
+     * enabled one would read a clock that never moves. */
+    if (kvm_tsc_khz() != 0) {
+        f |= (1u << KVM_FEATURE_CLOCKSOURCE) | (1u << KVM_FEATURE_CLOCKSOURCE2) |
+             (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
+    }
+    return f;
+}
+
+/** Append KVM's two leaves to `out`, which holds `*count` of `max`, as
+ * Linux's KVM_GET_SUPPORTED_CPUID gives them: 0, or -E2BIG. */
+static int32_t kvm_leaves(struct kvm_cpuid_entry2 *out, uint32_t *count, uint32_t max)
+{
+    struct kvm_cpuid_entry2 e;
+
+    if (*count + 2u > max) {
+        return -E2BIG;
+    }
+    k_memset(&e, 0, sizeof(e));
+    e.function = KVM_CPUID_SIGNATURE;
+    e.eax = KVM_CPUID_FEATURES;
+    e.ebx = KVM_SIG_EBX;
+    e.ecx = KVM_SIG_ECX;
+    e.edx = KVM_SIG_EDX;
+    out[(*count)++] = e;
+    k_memset(&e, 0, sizeof(e));
+    e.function = KVM_CPUID_FEATURES;
+    e.eax = kvm_pv_supported();
+    out[(*count)++] = e;
+    return 0;
+}
+
 int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
 {
     uint64_t xcr0 = kvm_xcr0_supported();
@@ -270,6 +320,9 @@ int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
             }
         }
     }
+    if (kvm_leaves(out, &count, max) != 0) {
+        return -E2BIG;
+    }
     return (int32_t)count;
 }
 
@@ -299,4 +352,47 @@ uint64_t kvm_xcr0_guest(const struct kvm_vcpu *v)
     }
     xcr0 = (uint64_t)e->eax | ((uint64_t)e->edx << 32);
     return (xcr0 & kvm_xcr0_supported()) | 0x1u;
+}
+
+/** The entry of `v`'s CPUID for `function` that a caller may change,
+ * subleaf 0 or the only one, or NULL. */
+static struct kvm_cpuid_entry2 *entry_of(struct kvm_vcpu *v, uint32_t function)
+{
+    uint32_t i;
+
+    for (i = 0; i < v->cpuid_nent; i++) {
+        if (v->cpuid[i].function == function) {
+            return &v->cpuid[i];
+        }
+    }
+    return NULL;
+}
+
+void kvm_pv_cpuid_update(struct kvm_vcpu *v, int set)
+{
+    struct kvm_cpuid_entry2 *sig, *feat;
+    uint32_t base;
+
+    for (base = HV_BASE_FIRST; base <= HV_BASE_LAST; base += 0x100u) {
+        sig = entry_of(v, base);
+        if (sig && sig->ebx == KVM_SIG_EBX && sig->ecx == KVM_SIG_ECX && sig->edx == KVM_SIG_EDX) {
+            break;
+        }
+    }
+    if (base > HV_BASE_LAST) {
+        return;
+    }
+    feat = entry_of(v, base | KVM_CPUID_FEATURES);
+    if (!feat) {
+        return;
+    }
+    if (set && (v->vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT)) {
+        feat->eax &= ~(1u << KVM_FEATURE_PV_UNHALT);
+    }
+    v->pv_features = feat->eax;
+}
+
+int kvm_pv_has(const struct kvm_vcpu *v, int bit)
+{
+    return !v->pv_enforce || ((v->pv_features >> bit) & 1u) != 0;
 }

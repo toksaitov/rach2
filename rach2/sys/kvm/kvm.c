@@ -138,14 +138,20 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_GET_MSR_FEATURES:
     case KVM_CAP_SET_BOOT_CPU_ID:
     case KVM_CAP_GET_TSC_KHZ:
+    case KVM_CAP_KVMCLOCK_CTRL:
+    case KVM_CAP_ENFORCE_PV_FEATURE_CPUID:
         return 1;
+    case KVM_CAP_X86_DISABLE_EXITS:
+        /* PAUSE never exits here, and HLT need not; MWAIT is not offered,
+         * and the C-state residency MSRs are not passed through. */
+        return (int32_t)(KVM_X86_DISABLE_EXITS_PAUSE | KVM_X86_DISABLE_EXITS_HLT);
     case KVM_CAP_XSAVE:
     case KVM_CAP_XCRS:
         return kvm_xcr0_supported() != 0;
     case KVM_CAP_MCE:
         return KVM_MAX_MCE_BANKS;
     case KVM_CAP_ADJUST_CLOCK:
-        return (int32_t)(KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC);
+        return (int32_t)KVM_CLOCK_VALID_FLAGS;
     case KVM_CAP_NR_VCPUS:
         cpus = smp_cpu_count();
         return cpus < KVM_MAX_VCPUS ? cpus : KVM_MAX_VCPUS;
@@ -305,7 +311,7 @@ static int32_t create_vm(uintptr_t type)
     vm->anon.name = "kvm-vm";
     vm->refs = 1;
     vm->ident_addr = KVM_IDENT_ADDR_DEFAULT;
-    vm->clock_offset = -(int64_t)kvm_host_ns();
+    kvm_clock_vm_init(vm);
     rec->nr_mmu_pages = KVM_MIN_MMU_PAGES;
     r = kvm_slots_init(vm);
     if (r == 0) {
@@ -368,56 +374,12 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     }
 }
 
-/** KVM_GET_CLOCK: the guest's kvmclock, the host's monotonic clock and
- * the VM's offset, with the realtime and the host's TSC read beside it. */
-static int32_t get_clock(struct kvm_vm *vm, uintptr_t arg)
-{
-    struct kvm_clock_data d;
-    int64_t s, ns;
-
-    k_memset(&d, 0, sizeof(d));
-    d.clock = kvm_host_ns() + (uint64_t)vm->clock_offset;
-    rtc_realtime(&s, &ns);
-    d.realtime = (uint64_t)s * 1000000000ull + (uint64_t)ns;
-    d.host_tsc = arch_cycles();
-    d.flags = KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC;
-    return copy_to_user((void __user *)arg, &d, sizeof(d)) ? -EFAULT : 0;
-}
-
-/**
- * KVM_SET_CLOCK: make the guest's kvmclock read `clock` now, or with
- * KVM_CLOCK_REALTIME, `clock` advanced by the realtime passed since the
- * caller's `realtime`, as Linux advances it when that is not in the
- * future. 0, -EINVAL for a flag Linux does not take, or -EFAULT.
- */
-static int32_t set_clock(struct kvm_vm *vm, uintptr_t arg)
-{
-    struct kvm_clock_data d;
-    uint64_t now, clock;
-    int64_t s, ns;
-
-    if (copy_from_user(&d, (const void __user *)arg, sizeof(d)) != 0) {
-        return -EFAULT;
-    }
-    if (d.flags & ~KVM_CLOCK_VALID_FLAGS) {
-        return -EINVAL;
-    }
-    clock = d.clock;
-    now = kvm_host_ns();
-    if (d.flags & KVM_CLOCK_REALTIME) {
-        rtc_realtime(&s, &ns);
-        if ((uint64_t)s * 1000000000ull + (uint64_t)ns > d.realtime) {
-            clock += (uint64_t)s * 1000000000ull + (uint64_t)ns - d.realtime;
-        }
-    }
-    vm->clock_offset = (int64_t)(clock - now);
-    kvm_hv_clock_changed(vm);
-    return 0;
-}
-
-/** KVM_ENABLE_CAP of a VM: KVM_CAP_SPLIT_IRQCHIP, irq.c's, and
- * KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, dirty.c's; -EINVAL for a flag or any
- * other capability, as Linux answers one it does not enable. */
+/** KVM_ENABLE_CAP of a VM: KVM_CAP_SPLIT_IRQCHIP, irq.c's,
+ * KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, dirty.c's, and
+ * KVM_CAP_X86_DISABLE_EXITS, which as in Linux 6.12 may come after vCPUs
+ * are made and stops HLT's exits for those made after it; -EINVAL for a
+ * flag, an exit Linux does not name, or any other capability, as Linux
+ * answers one it does not enable. */
 static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_enable_cap cap;
@@ -433,6 +395,13 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     }
     if (cap.cap == KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) {
         return kvm_dirty_enable_manual(vm, &cap);
+    }
+    if (cap.cap == KVM_CAP_X86_DISABLE_EXITS) {
+        if (cap.args[0] & ~(uint64_t)KVM_X86_DISABLE_VALID_EXITS) {
+            return -EINVAL;
+        }
+        vm->disable_exits |= (uint32_t)cap.args[0];
+        return 0;
     }
     return -EINVAL;
 }
@@ -500,9 +469,9 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case KVM_GET_NR_MMU_PAGES:
         return (int32_t)vm_rec(vm)->nr_mmu_pages;
     case KVM_GET_CLOCK:
-        return get_clock(vm, arg);
+        return kvm_clock_get(vm, arg);
     case KVM_SET_CLOCK:
-        return set_clock(vm, arg);
+        return kvm_clock_set(vm, arg);
     case KVM_SET_BOOT_CPU_ID:
         if (vm->nr_vcpus) {
             return -EBUSY;

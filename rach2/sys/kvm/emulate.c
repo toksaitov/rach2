@@ -8,6 +8,7 @@
 
 #include "kvm.h"
 
+#include "../arch/arch.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
@@ -37,16 +38,6 @@
 #define RFLAGS_ARITH (RFLAGS_CF | RFLAGS_PF | RFLAGS_AF | RFLAGS_ZF | RFLAGS_SF | RFLAGS_OF)
 
 #define DR6_BS 0x4000ull
-
-/* Linux's KVM hypercalls and the errors they return. */
-#define KVM_HC_VAPIC_POLL_IRQ 1u
-#define KVM_HC_KICK_CPU       5u
-#define KVM_HC_CLOCK_PAIRING  9u
-#define KVM_HC_SEND_IPI       10u
-#define KVM_HC_SCHED_YIELD    11u
-#define KVM_EPERM             1
-#define KVM_EOPNOTSUPP        95
-#define KVM_ENOSYS            1000
 
 /* The page-table entry bits the walk reads. */
 #define GPTE_P    0x001ull
@@ -181,9 +172,16 @@ uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
     }
     switch (nr) {
     case KVM_HC_VAPIC_POLL_IRQ:
+        return 0;
     case KVM_HC_SCHED_YIELD:
+        if (!kvm_pv_has(v, KVM_FEATURE_PV_SCHED_YIELD)) {
+            break;
+        }
         return 0;
     case KVM_HC_KICK_CPU:
+        if (!kvm_pv_has(v, KVM_FEATURE_PV_UNHALT)) {
+            break;
+        }
         if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
             irq.vector = 0;
             irq.delivery_mode = KVM_APIC_DM_REMRD;
@@ -197,9 +195,9 @@ uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
         }
         return 0;
     case KVM_HC_CLOCK_PAIRING:
-        return (uint64_t)-(int64_t)KVM_EOPNOTSUPP;
+        return kvm_clock_pairing(v, a0, a1);
     case KVM_HC_SEND_IPI:
-        if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
+        if (!kvm_pv_has(v, KVM_FEATURE_PV_SEND_IPI) || v->vm->irqchip == KVM_IRQCHIP_NONE) {
             break;
         }
         return (uint64_t)kvm_lapic_pv_ipi(v->vm, a0, a1, (uint32_t)a2, a3,
@@ -751,7 +749,9 @@ static int msr_write_dropped(uint32_t index, uint64_t value)
  * A guest's write of `value` to IA32_TSC or IA32_TSC_ADJUST, as Linux's
  * kvm_set_msr_common: a write of the adjustment moves the TSC by what it
  * changes, and is ignored when the guest's CPUID lacks TSC_ADJUST; a write
- * of the TSC moves the adjustment by what the TSC moved. 0, or -1 for #GP.
+ * of the TSC moves the adjustment by what the TSC moved, and matches no
+ * other vCPU's, as the caller's write may. Either writes the kvmclock
+ * again. 0, or -1 for #GP.
  */
 static int tsc_write(struct kvm_vcpu *v, uint32_t index, uint64_t value)
 {
@@ -769,12 +769,12 @@ static int tsc_write(struct kvm_vcpu *v, uint32_t index, uint64_t value)
         }
         v->tsc_offset = (int64_t)(before + (value - adjust));
         v->dirty |= KVM_PART_TSC;
-        kvm_hv_clock_changed(v->vm);
+        kvm_tsc_moved(v);
         return 0;
     }
-    if (kvm_msr_set(v, index, value) != 0) {
-        return -1;
-    }
+    v->tsc_offset = (int64_t)(value - arch_cycles());
+    v->dirty |= KVM_PART_TSC;
+    kvm_tsc_moved(v);
     return kvm_msr_set(v, MSR_IA32_TSC_ADJUST, adjust + ((uint64_t)v->tsc_offset - before));
 }
 
@@ -785,6 +785,9 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
     r = kvm_lapic_msr(v, index, write, value, 0);
     if (r == 1) {
         r = kvm_hv_msr(v, index, write, value, 0);
+    }
+    if (r == 1) {
+        r = kvm_pv_msr(v, index, write, value, 0);
     }
     if (r != 1) {
         return r;

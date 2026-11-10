@@ -104,6 +104,7 @@
 #define KVM_SET_XSAVE       KVM_IOW(0xA5u, 4096u)
 #define KVM_GET_XCRS        KVM_IOR(0xA6u, 392u)
 #define KVM_SET_XCRS        KVM_IOW(0xA7u, 392u)
+#define KVM_KVMCLOCK_CTRL   KVM_IO(0xADu)
 /* KVM_GET_SUPPORTED_HV_CPUID is also an ioctl of a vCPU. */
 
 /* The capabilities KVM_CHECK_EXTENSION names, by Linux's numbers. */
@@ -162,6 +163,7 @@
 #define KVM_CAP_GET_TSC_KHZ                 61
 #define KVM_CAP_TSC_DEADLINE_TIMER          72
 #define KVM_CAP_MAX_VCPUS                   66
+#define KVM_CAP_KVMCLOCK_CTRL               76
 #define KVM_CAP_SIGNAL_MSI                  77
 #define KVM_CAP_READONLY_MEM                81
 #define KVM_CAP_IRQFD_RESAMPLE              82
@@ -174,9 +176,11 @@
 #define KVM_CAP_SPLIT_IRQCHIP               121
 #define KVM_CAP_IOEVENTFD_ANY_LENGTH        122
 #define KVM_CAP_X2APIC_API                  129
+#define KVM_CAP_X86_DISABLE_EXITS           143
 #define KVM_CAP_MAX_VCPU_ID                 128
 #define KVM_CAP_GET_MSR_FEATURES            153
 #define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2   168
+#define KVM_CAP_ENFORCE_PV_FEATURE_CPUID    190
 #define KVM_CAP_HYPERV_TIME                 96
 #define KVM_CAP_HYPERV_SYNIC                123
 #define KVM_CAP_HYPERV_SYNIC2               148
@@ -418,6 +422,89 @@ struct kvm_clock_data {
     uint64_t realtime;
     uint64_t host_tsc;
     uint32_t pad[4];
+};
+
+/* The exits KVM_CAP_X86_DISABLE_EXITS stops: MWAIT, HLT, PAUSE and the
+ * C-state residency MSRs' reads. */
+#define KVM_X86_DISABLE_EXITS_MWAIT  (1u << 0)
+#define KVM_X86_DISABLE_EXITS_HLT    (1u << 1)
+#define KVM_X86_DISABLE_EXITS_PAUSE  (1u << 2)
+#define KVM_X86_DISABLE_EXITS_CSTATE (1u << 3)
+#define KVM_X86_DISABLE_VALID_EXITS  0xFu
+
+/* KVM's own CPUID leaves, at 0x40000000 or 0x100 above it for each
+ * hypervisor's leaves before them, and the feature bits of the second,
+ * Linux's asm/kvm_para.h. */
+#define KVM_CPUID_SIGNATURE                0x40000000u
+#define KVM_CPUID_FEATURES                 0x40000001u
+#define KVM_FEATURE_CLOCKSOURCE            0
+#define KVM_FEATURE_NOP_IO_DELAY           1
+#define KVM_FEATURE_CLOCKSOURCE2           3
+#define KVM_FEATURE_PV_UNHALT              7
+#define KVM_FEATURE_PV_SEND_IPI            11
+#define KVM_FEATURE_POLL_CONTROL           12
+#define KVM_FEATURE_PV_SCHED_YIELD         13
+#define KVM_FEATURE_CLOCKSOURCE_STABLE_BIT 24
+
+/* Linux's KVM hypercalls, the number in RAX, and the errors they return
+ * there, negated. */
+#define KVM_HC_VAPIC_POLL_IRQ 1u
+#define KVM_HC_KICK_CPU       5u
+#define KVM_HC_CLOCK_PAIRING  9u
+#define KVM_HC_SEND_IPI       10u
+#define KVM_HC_SCHED_YIELD    11u
+#define KVM_EPERM             1
+#define KVM_EFAULT            14
+#define KVM_EINVAL            22
+#define KVM_EOPNOTSUPP        95
+#define KVM_ENOSYS            1000
+
+/* The kvmclock's MSRs: the old pair, which the guest finds by
+ * KVM_FEATURE_CLOCKSOURCE, and the new, by KVM_FEATURE_CLOCKSOURCE2; and
+ * the halt polling control. Bit 0 of a SYSTEM_TIME MSR enables the clock
+ * at the guest-physical address in the rest. */
+#define MSR_KVM_WALL_CLOCK      0x11u
+#define MSR_KVM_SYSTEM_TIME     0x12u
+#define MSR_KVM_WALL_CLOCK_NEW  0x4B564D00u
+#define MSR_KVM_SYSTEM_TIME_NEW 0x4B564D01u
+#define MSR_KVM_POLL_CONTROL    0x4B564D05u
+#define KVM_MSR_ENABLED         1u
+
+/* A vCPU's kvmclock in guest memory, Linux's pvclock_vcpu_time_info: the
+ * guest's clock at its TSC `tsc` is `system_time` plus (tsc -
+ * tsc_timestamp) shifted by `tsc_shift`, times `tsc_to_system_mul` / 2^32,
+ * in ns. `version` is odd while the host writes the rest. 32 bytes. */
+struct pvclock_vcpu_time_info {
+    uint32_t version;
+    uint32_t pad0;
+    uint64_t tsc_timestamp;
+    uint64_t system_time;
+    uint32_t tsc_to_system_mul;
+    int8_t tsc_shift;
+    uint8_t flags; /* PVCLOCK_* */
+    uint8_t pad[2];
+};
+
+#define PVCLOCK_TSC_STABLE_BIT 0x01u /* every vCPU reads one clock */
+#define PVCLOCK_GUEST_STOPPED  0x02u /* KVM_KVMCLOCK_CTRL: the guest was paused */
+
+/* The wall clock in guest memory: the real time at which the kvmclock read
+ * 0, its seconds modulo 2^32. 12 bytes. */
+struct pvclock_wall_clock {
+    uint32_t version;
+    uint32_t sec;
+    uint32_t nsec;
+};
+
+/* KVM_HC_CLOCK_PAIRING's answer in guest memory, the real time at the
+ * guest's TSC `tsc`. 64 bytes. */
+#define KVM_CLOCK_PAIRING_WALLCLOCK 0
+struct kvm_clock_pairing {
+    int64_t sec;
+    int64_t nsec;
+    uint64_t tsc;
+    uint32_t flags;
+    uint32_t pad[9];
 };
 
 struct kvm_userspace_memory_region {

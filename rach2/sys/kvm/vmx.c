@@ -1079,7 +1079,7 @@ static void vmcs_build(struct kvm_vcpu *v)
         vmcs_write(VIRTUAL_PROCESSOR_ID, x->vpid);
     }
     vmcs_write(PIN_BASED_VM_EXEC_CONTROL, caps.pin);
-    x->proc = caps.proc;
+    x->proc = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
     vmcs_write(CPU_BASED_VM_EXEC_CONTROL, x->proc);
     x->proc2 = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID);
     vmcs_write(SECONDARY_VM_EXEC_CONTROL, x->proc2);
@@ -1460,6 +1460,11 @@ static void entry_fields(struct kvm_vcpu *v)
         vmcs_write(CPU_BASED_VM_EXEC_CONTROL, x->proc);
     }
     vmcs_write(VM_ENTRY_INTR_INFO_FIELD, x->inj_info);
+    /* A guest halted in HLT of its own wakes to the event, as Linux's
+     * vmx_clear_hlt makes it: the HLT has completed, and RIP is past it. */
+    if (x->inj_info && v->hlt_in_guest) {
+        vmcs_write(GUEST_ACTIVITY_STATE, 0);
+    }
     if (x->inj_info) {
         vmcs_write(VM_ENTRY_EXCEPTION_ERROR_CODE, x->inj_error);
         vmcs_write(VM_ENTRY_INSTRUCTION_LEN, x->inj_len);
@@ -2534,7 +2539,7 @@ static int vmx_vcpu_init(struct kvm_vcpu *v)
     x->vpid = vpid_alloc();
     x->last_cpu = -1;
     x->kgs_table = 1;
-    x->proc_want = caps.proc;
+    x->proc_want = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
     return 0;
 }
 
