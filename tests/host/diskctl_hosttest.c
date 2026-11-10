@@ -1,6 +1,6 @@
 /*
- * diskctl_hosttest.c: the `esp` and `shrink` commands of utils/diskctl.c
- * over image files, with the kernel's table reread answered by the test.
+ * diskctl_hosttest.c: diskctl's `esp`, `shrink` and `data` over image files,
+ * with the kernel's table reread answered by the test.
  *
  * host-deps: utils/gptdisk.c
  *
@@ -30,7 +30,7 @@
 #include <unistd.h>
 
 static int busy, rereads;
-static char image_path[] = "/tmp/diskctl-hosttest-gpt.XXXXXX";
+static char image_path[4096], esp_path[4096];
 
 #define DISK 4096u /* the sectors of disk 0, the GUID table's image */
 
@@ -182,6 +182,61 @@ static int unchanged(int fd, const unsigned char *before)
            memcmp(now, before, sizeof(now)) == 0;
 }
 
+/** Remove the images on every exit, including a failed setup. */
+static void cleanup(void)
+{
+    if (image_path[0]) {
+        unlink(image_path);
+    }
+    if (esp_path[0]) {
+        unlink(esp_path);
+    }
+}
+
+/** Refuse a data start over the GPT or one that wraps, without any write. */
+static void check_data_bounds(int fd)
+{
+    static unsigned char before[DISK * 512];
+    static struct gptdisk g;
+    const char *why = "";
+    char *argv[] = {"diskctl", "data", "/dev/disk0", "0", NULL};
+    int i, had = rereads;
+
+    if (make_gpt(fd) != 0 || gptdisk_read(fd, DISK, &g) != 1) {
+        CHECK("the data table is made", 0);
+        return;
+    }
+    for (i = 1; i <= (int)g.entries; i++) {
+        memset(gptdisk_entry(&g, i), 0, g.entry_size);
+    }
+    if (gptdisk_write(fd, &g, &why) != 0 ||
+        pread(fd, before, sizeof(before), 0) != (ssize_t)sizeof(before)) {
+        CHECK("the empty data table is written", 0);
+        return;
+    }
+    CHECK("data at sector zero is refused without a write or reread",
+          diskctl_main(4, argv) == 1 && rereads == had && unchanged(fd, before));
+    CHECK("the free run refuses a start below the first usable sector",
+          free_run_end(0) == 0 && free_run_end(33) == 0 && free_run_end(34) == 4062);
+    argv[3] = "18446744073709551615";
+    CHECK("data whose rounding wraps is refused without a write or reread",
+          diskctl_main(4, argv) == 1 && rereads == had && unchanged(fd, before));
+    argv[3] = "18446744073709549569";
+    CHECK("the first start whose rounding wraps is refused unchanged",
+          diskctl_main(4, argv) == 1 && rereads == had && unchanged(fd, before));
+    gptdisk_put64(g.header + 40, 2049);
+    if (gptdisk_write(fd, &g, &why) != 0 ||
+        pread(fd, before, sizeof(before), 0) != (ssize_t)sizeof(before)) {
+        CHECK("the table with a higher first usable sector is written", 0);
+        return;
+    }
+    argv[3] = "1";
+    CHECK("data below a higher first usable sector is refused unchanged",
+          diskctl_main(4, argv) == 1 && rereads == had && unchanged(fd, before));
+    CHECK("the free run keeps the table's lower bound",
+          free_run_end(2048) == 0 && free_run_end(2049) == 4062);
+}
+
 /** Run `diskctl shrink /dev/disk0 ENTRY SECTORS` on a fresh table, which must
  *  be refused with the image unchanged and no reread. */
 static void refused(int fd, const char *what, char *entry, char *sectors)
@@ -210,6 +265,9 @@ static void check_shrink(void)
 
     if (fd < 0 || make_gpt(fd) != 0) {
         CHECK("the GUID table's image is made", 0);
+        if (fd >= 0) {
+            close(fd);
+        }
         return;
     }
     had = rereads;
@@ -246,6 +304,7 @@ static void check_shrink(void)
         CHECK("an MBR disk is refused, unread and unchanged",
               diskctl_main(5, argv) == 1 && rereads == had && unchanged(fd, before));
     }
+    check_data_bounds(fd);
     close(fd);
     unlink(image_path);
 }
@@ -259,21 +318,37 @@ static void check_shrink(void)
  */
 int main(void)
 {
-    char path[] = "/tmp/diskctl-hosttest.XXXXXX";
-    char *argv[] = {"diskctl", "esp", path, NULL};
+    char *argv[] = {"diskctl", "esp", esp_path, NULL};
+    const char *tmp = getenv("TMPDIR");
     unsigned char sector[512];
     int fd;
 
+    if (atexit(cleanup) != 0) {
+        return 2;
+    }
+    if (!tmp || !*tmp) {
+        tmp = "build/tmp";
+    }
+    if (snprintf(image_path, sizeof(image_path), "%s/diskctl-gpt.XXXXXX", tmp) >=
+            (int)sizeof(image_path) ||
+        snprintf(esp_path, sizeof(esp_path), "%s/diskctl-esp.XXXXXX", tmp) >=
+            (int)sizeof(esp_path)) {
+        image_path[0] = esp_path[0] = '\0';
+        return 2;
+    }
     memset(sector, 0, sizeof(sector));
     sector[446 + 4] = 0x0C;
     sector[446 + 8] = 1;
     sector[446 + 12] = 0x7F;
     sector[510] = 0x55;
     sector[511] = 0xAA;
-    fd = mkstemp(path);
+    fd = mkstemp(esp_path);
     if (fd < 0 || pwrite(fd, sector, sizeof(sector), 0) != (ssize_t)sizeof(sector) ||
         ftruncate(fd, 128 * 512) != 0) {
         printf("diskctl_hosttest: the image file could not be made\n");
+        if (fd >= 0) {
+            close(fd);
+        }
         return 2;
     }
 
@@ -292,7 +367,7 @@ int main(void)
     CHECK("and refused, unread and unchanged",
           diskctl_main(3, argv) == 1 && rereads == 2 && entry_type(fd) == 0x83);
     close(fd);
-    unlink(path);
+    unlink(esp_path);
     check_shrink();
 
     if (fails == 0) {
