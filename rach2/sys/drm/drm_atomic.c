@@ -790,6 +790,28 @@ static int32_t connector_routing(struct drm_atomic_state *state,
     return 0;
 }
 
+/** Linux's handle_conflicting_encoders: whether two connectors of `state`
+ * would take the one encoder each can use. */
+static int conflicting_encoders(const struct drm_atomic_state *state)
+{
+    const struct drm_connector_state *conn;
+    uint32_t used = 0, bit;
+    int i;
+
+    for (i = 0; i < DRM_MAX_CONNECTORS; i++) {
+        conn = state->connectors_new[i];
+        if (!conn || !conn->crtc || !single_encoder(conn->connector)) {
+            continue;
+        }
+        bit = 1u << single_encoder(conn->connector)->index;
+        if (used & bit) {
+            return 1;
+        }
+        used |= bit;
+    }
+    return 0;
+}
+
 /** Linux's drm_atomic_helper_check_modeset: the modeset marks, the
  * routing, the connectors and planes a modeset takes with it, and the
  * CRTCs' `mode_valid` on a changed mode. */
@@ -797,7 +819,6 @@ static int32_t check_modeset(struct drm_device *dev, struct drm_atomic_state *st
 {
     struct drm_crtc_state *old, *cs;
     struct drm_connector_state *conn;
-    uint32_t used = 0, bit;
     struct drm_crtc *crtc;
     int32_t rc;
     int i;
@@ -822,20 +843,8 @@ static int32_t check_modeset(struct drm_device *dev, struct drm_atomic_state *st
             return -EINVAL;
         }
     }
-    /* Linux's handle_conflicting_encoders: one encoder drives one
-     * connector. */
-    for (i = 0; i < DRM_MAX_CONNECTORS; i++) {
-        conn = state->connectors_new[i];
-        if (!conn || !conn->crtc) {
-            continue;
-        }
-        if (single_encoder(conn->connector)) {
-            bit = 1u << single_encoder(conn->connector)->index;
-            if (used & bit) {
-                return -EINVAL;
-            }
-            used |= bit;
-        }
+    if (conflicting_encoders(state)) {
+        return -EINVAL;
     }
     for (i = 0; i < DRM_MAX_CONNECTORS; i++) {
         conn = state->connectors_new[i];
@@ -847,7 +856,8 @@ static int32_t check_modeset(struct drm_device *dev, struct drm_atomic_state *st
             return rc;
         }
         crtc = state->connectors_old[i]->crtc;
-        if (crtc && state->connectors_old[i]->link_status != conn->link_status) {
+        if (crtc && (state->connectors_old[i]->link_status != conn->link_status ||
+                     state->connectors_old[i]->max_requested_bpc != conn->max_requested_bpc)) {
             state->crtcs_new[crtc->index]->connectors_changed = 1;
         }
     }
