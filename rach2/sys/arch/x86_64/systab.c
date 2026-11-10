@@ -379,6 +379,9 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_INOTIFY_INIT1] = sys_inotify_init1;
     table[SYS_PREADV] = sys_preadv;
     table[SYS_PWRITEV] = sys_pwritev;
+    table[SYS_PREADV2] = sys_preadv2;
+    table[SYS_PWRITEV2] = sys_pwritev2;
+    table[SYS_SYNC_FILE_RANGE] = sys_sync_file_range;
     table[SYS_RT_TGSIGQUEUEINFO] = sys_rt_tgsigqueueinfo;
     table[SYS_RECVMMSG] = sys_recvmmsg;
     table[SYS_PRLIMIT64] = sys_prlimit64;

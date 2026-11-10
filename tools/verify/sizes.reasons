@@ -51,7 +51,7 @@ rach2/sys/arch/x86_64/ia32_systab.c:ia32_syscall_init lines 452 a table, one ent
 
 rach2/sys/arch/x86_64/mmu.c:free_user_pages nesting 5 a walk over the four levels of the page tables, each page's case inside it
 
-rach2/sys/arch/x86_64/systab.c:arch_syscall_init lines 281 a table, one entry per system call number
+rach2/sys/arch/x86_64/systab.c:arch_syscall_init lines 284 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/vdso.c:section params 11 the parameters are the fields of one ELF section header, in the header's order
 rach2/sys/arch/x86_64/vdso32.c:section params 11 the parameters are the fields of one ELF section header, in the header's order
@@ -909,3 +909,4 @@ tests/cases/machine/wifi_scenario.c:case_enterprise complexity 29 a scenario, on
 utils/wifi.c:select_wait complexity 27 an event loop, one arm per event wpa_supplicant sends, read as a table
 
 utils/wsimmedium.c:medium_check complexity 26 a parser over an external format, one check per field in the format's order
+tests/wow64probe.c:int80_6 params 7 the i386 syscall number and its six register arguments
