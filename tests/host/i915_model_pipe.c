@@ -164,7 +164,8 @@ static uint32_t pipe_read(struct i915_model *m, void *priv, uint32_t reg)
  * A write: stored, and a plane's surface, or the cursor's base, arms the
  * plane's registers for the next vblank; the primary's surface with the
  * async bit in its control is taken at once and raises its flip done. The
- * live and frame counter registers take nothing.
+ * live and frame counter registers take nothing, and a transcoder's state
+ * follows its enable at once.
  */
 static void pipe_write(struct i915_model *m, void *priv, uint32_t reg, uint32_t value)
 {
@@ -173,6 +174,11 @@ static void pipe_write(struct i915_model *m, void *priv, uint32_t reg, uint32_t 
     uint32_t a;
     int pipe;
 
+    if (reg == TRANSCONF(0) || reg == TRANSCONF(1) || reg == TRANSCONF(2) ||
+        reg == TRANSCONF(I915_TRANS_EDP)) {
+        value = (value & ~TRANSCONF_STATE_ENABLE) |
+                ((value & TRANSCONF_ENABLE) ? TRANSCONF_STATE_ENABLE : 0);
+    }
     if (reg < 0x70000u || reg >= 0x73000u) {
         i915_model_poke(m, reg, value);
         return;
