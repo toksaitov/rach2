@@ -487,8 +487,14 @@ static int32_t engines_parallel(uintptr_t ext, void *data)
 
 static const i915_ext_fn engines_extensions[] = {engines_balance, engines_bond, engines_parallel};
 
-/** ENGINES on a proto context, as Linux's set_proto_ctx_engines: the
- * slots, each an engine or a hole, then their extensions. */
+/**
+ * ENGINES on a proto context, as Linux's set_proto_ctx_engines: the slots,
+ * each an engine or a hole, then their extensions. The caller holds a
+ * reference on `ctx`. The copies from the program may sleep, so the
+ * context is looked at again before the map is stored: -ENOENT once it
+ * is destroyed, -EINVAL once it is finalized or has a map, where Linux's
+ * proto_context_lock orders the calls instead.
+ */
 static int32_t set_engines(struct i915_gem_context *ctx,
                            const struct drm_i915_gem_context_param *args)
 {
@@ -539,6 +545,11 @@ static int32_t set_engines(struct i915_gem_context *ctx,
         err =
             i915_user_extensions(extensions, engines_extensions,
                                  sizeof(engines_extensions) / sizeof(engines_extensions[0]), &set);
+    }
+    if (err == 0 && (ctx->closed || !ctx->proto || ctx->nmap >= 0)) {
+        /* The copies slept: the context was destroyed, finalized or given
+         * a map meanwhile. */
+        err = ctx->closed ? -ENOENT : -EINVAL;
     }
     if (err < 0) {
         kfree(set.map);
@@ -872,9 +883,18 @@ int32_t i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data, stru
 {
     struct drm_i915_gem_context_param *args = (struct drm_i915_gem_context_param *)data;
     struct i915_gem_context *ctx = context_find(file_priv(file), args->ctx_id);
+    int32_t err;
 
     (void)dev;
-    return ctx ? context_setparam(ctx, args) : -ENOENT;
+    if (!ctx) {
+        return -ENOENT;
+    }
+    /* Held across the parameter's copies, which may sleep while another
+     * thread destroys the context. */
+    ctx->refs++;
+    err = context_setparam(ctx, args);
+    i915_gem_context_put(ctx);
+    return err;
 }
 
 /* How old a request THROTTLE waits for is, Linux's

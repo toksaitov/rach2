@@ -275,8 +275,18 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
 /* User memory: the host's, but for the first page, which faults. */
 #define BAD_USER 16u
 
+/* Run once at the next copy from user memory, as another thread would run
+ * while the copy sleeps on a page not yet in memory. */
+static void (*copy_sleep)(void);
+
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
+    void (*hook)(void) = copy_sleep;
+
+    copy_sleep = 0;
+    if (hook) {
+        hook();
+    }
     if ((uintptr_t)src < 4096u) {
         return -1;
     }
@@ -1090,6 +1100,68 @@ static int32_t set_map(uint32_t id, uint32_t n)
                    (uint64_t)(uintptr_t)&map);
 }
 
+/* The context another thread works on while a SETPARAM's copy sleeps. */
+static uint32_t raced_id;
+
+/** Another thread's CONTEXT_DESTROY of `raced_id`. */
+static void destroy_raced(void)
+{
+    struct drm_i915_gem_context_destroy d = {0, 0};
+
+    d.ctx_id = raced_id;
+    (void)i915_gem_context_destroy_ioctl(&dev.drm, &d, &file_a);
+}
+
+/** Another thread's first use of `raced_id`, which finalizes it. */
+static void use_raced(void)
+{
+    intel_context_put(engine_of(&file_a, raced_id, 0));
+}
+
+/** Another thread's ENGINES of one slot on `raced_id`. */
+static void map_raced(void)
+{
+    (void)set_map(raced_id, 1);
+}
+
+/**
+ * ENGINES whose copy sleeps while another thread destroys the context,
+ * uses it or gives it a map: the context held across the copy, and no map
+ * stored on a context that went, was finalized without one or has one.
+ */
+static void row_engines_raced(void)
+{
+    struct i915_model m;
+    struct i915_gem_context *ctx = 0;
+
+    (void)fresh(&m);
+    memset(&map, 0, sizeof(map));
+    map.engines[0].engine_class = I915_ENGINE_CLASS_RENDER;
+    map.engines[1].engine_class = I915_ENGINE_CLASS_COPY;
+
+    raced_id = make_context(&file_a);
+    copy_sleep = destroy_raced;
+    CHECK("engines: destroyed while the copy sleeps: ENOENT, the context freed after",
+          set_map(raced_id, 2) == -ENOENT &&
+              i915_gem_context_lookup(&file_a, raced_id, &ctx) == -ENOENT);
+    raced_id = make_context(&file_a);
+    copy_sleep = use_raced;
+    CHECK("engines: finalized while the copy sleeps: EINVAL, the default engines kept",
+          set_map(raced_id, 2) == -EINVAL &&
+              i915_gem_context_lookup(&file_a, raced_id, &ctx) == 0 && ctx->nmap == -1 &&
+              ctx->nce == I915_NUM_ENGINES);
+    i915_gem_context_put(ctx);
+    ctx = 0;
+    raced_id = make_context(&file_a);
+    copy_sleep = map_raced;
+    CHECK("engines: given a map while the copy sleeps: EINVAL, the first map kept",
+          set_map(raced_id, 2) == -EINVAL &&
+              i915_gem_context_lookup(&file_a, raced_id, &ctx) == 0 && ctx->nmap == 1 &&
+              ctx->nce == 1);
+    i915_gem_context_put(ctx);
+    done(&m);
+}
+
 /** 78-5a.2: engine maps and their extensions. */
 static void row_engine_maps(void)
 {
@@ -1795,6 +1867,7 @@ int main(void)
     row_create_destroy();
     row_params();
     row_engine_maps();
+    row_engines_raced();
     row_requests();
     row_ring_room();
     row_getparam();
