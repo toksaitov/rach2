@@ -792,6 +792,19 @@ static uint32_t plane_formats(struct drm_plane *plane, uint32_t *fmts, uint32_t 
     return p.count_format_types;
 }
 
+/** Whether object `o` has property `prop`. */
+static int has_prop(const struct drm_mode_object *o, const struct drm_property *prop)
+{
+    uint32_t i;
+
+    for (i = 0; i < o->count_props; i++) {
+        if (o->props[i] == prop) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** The formats: Linux's Haswell lists, no alpha on the primary plane. */
 static void row_formats(void)
 {
@@ -816,6 +829,10 @@ static void row_formats(void)
               pa->cursor.type == DRM_PLANE_TYPE_CURSOR && pa->sprite.possible_crtcs == 1u &&
               gpu.display.crtc[2].sprite.possible_crtcs == 4u,
           "formats: three planes a pipe, each on its own");
+    CHECK(!has_prop(&pa->primary.base, mc->prop_fb_damage_clips) &&
+              !has_prop(&pa->sprite.base, mc->prop_fb_damage_clips) &&
+              !has_prop(&pa->cursor.base, mc->prop_fb_damage_clips),
+          "formats: no FB_DAMAGE_CLIPS, as Linux's planes before display version 12");
 }
 
 /** The primary plane's checks, and an X-tiled source corner split between

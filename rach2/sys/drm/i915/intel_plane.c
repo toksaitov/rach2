@@ -463,7 +463,6 @@ int32_t intel_planes_init(struct intel_crtc *crtc)
         (err = drm_plane_create_zpos_property(&crtc->primary, 0, 0, 0)) != 0) {
         return err;
     }
-    drm_plane_enable_fb_damage_clips(&crtc->primary);
     if ((err =
              drm_universal_plane_init(dev, &crtc->sprite, pipe_mask, &sprite_funcs, sprite_formats,
                                       sizeof(sprite_formats) / sizeof(sprite_formats[0]),
@@ -473,6 +472,5 @@ int32_t intel_planes_init(struct intel_crtc *crtc)
         (err = drm_plane_create_zpos_property(&crtc->sprite, 1, 1, 1)) != 0) {
         return err;
     }
-    drm_plane_enable_fb_damage_clips(&crtc->sprite);
     return intel_cursor_init(crtc);
 }
