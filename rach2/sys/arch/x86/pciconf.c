@@ -173,6 +173,30 @@ void pci_write_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint1
     }
 }
 
+void pci_write_config16_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                            uint16_t value)
+{
+    uintptr_t e = ecam_at(bus, device, function, offset & 0xFFEu);
+
+    if (e) {
+        *(volatile uint16_t *)e = value;
+    } else if (offset < 256) {
+        pci_write_config16(bus, device, function, (uint8_t)offset, value);
+    }
+}
+
+void pci_write_config8_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                           uint8_t value)
+{
+    uintptr_t e = ecam_at(bus, device, function, offset);
+
+    if (e) {
+        *(volatile uint8_t *)e = value;
+    } else if (offset < 256) {
+        pci_write_config8(bus, device, function, (uint8_t)offset, value);
+    }
+}
+
 uint8_t pci_io_read8(uint16_t port)
 {
     return inb(port);

@@ -1004,6 +1004,7 @@ int sysfs_attr_writable(int node, int attr)
 {
     return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1) ||
            sysfs_attr_uevent(node, attr) ||
+           (node == SYSFS_PCI_DEVICE && attr == SYSFS_PCI_CONFIG) ||
            (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
            (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE));
 }

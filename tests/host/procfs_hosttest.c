@@ -530,6 +530,9 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
 /** Copy from the caller's buffer, which is host memory. Returns 0. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
+    if (!src) {
+        return -EFAULT;
+    }
     k_memcpy(dst, (const void __force *)src, n);
     return 0;
 }
@@ -868,12 +871,56 @@ void netlink_uevent(const uint8_t *msg, uint32_t len)
     uevents_sent++;
 }
 
+static uint8_t pci_bytes[4096];
+static int pci_extended, pci_writes;
+static uint16_t pci_write_at[16];
+static uint8_t pci_write_width[16];
+
+/** Record one access of its exact width in the modeled config space. */
+static void pci_store(uint8_t bus, uint8_t device, uint8_t function, uint16_t at, uint32_t value,
+                      unsigned width)
+{
+    unsigned i;
+
+    check(bus == 0 && device == 4 && function == 0, "config write selects its function");
+    check(pci_writes < 16, "config write trace fits");
+    if (pci_writes < 16) {
+        pci_write_at[pci_writes] = at;
+        pci_write_width[pci_writes++] = (uint8_t)width;
+    }
+    for (i = 0; i < width; i++) {
+        pci_bytes[at + i] = (uint8_t)(value >> (8 * i));
+    }
+}
+
+/** Model a dword write of extended configuration space. */
+void pci_write_config32_ext(uint8_t b, uint8_t d, uint8_t f, uint16_t at, uint32_t value)
+{
+    pci_store(b, d, f, at, value, 4);
+}
+
+/** Model a word write, without touching either adjacent byte. */
+void pci_write_config16_ext(uint8_t b, uint8_t d, uint8_t f, uint16_t at, uint16_t value)
+{
+    pci_store(b, d, f, at, value, 2);
+}
+
+/** Model a byte write. */
+void pci_write_config8_ext(uint8_t b, uint8_t d, uint8_t f, uint16_t at, uint8_t value)
+{
+    pci_store(b, d, f, at, value, 1);
+}
+
 /** One PCI function answers on this machine, a virtio display at 00:04.0,
  * 1af4:1050 with subsystem 1af4:1100; every other read is all ones. */
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
 {
     if (bus != 0 || device != 4 || function != 0) {
         return 0xFFFFFFFFu;
+    }
+    if (offset >= 0x40) {
+        return (uint32_t)pci_bytes[offset] | (uint32_t)pci_bytes[offset + 1] << 8 |
+               (uint32_t)pci_bytes[offset + 2] << 16 | (uint32_t)pci_bytes[offset + 3] << 24;
     }
     return offset == 0x00   ? 0x10501af4u
            : offset == 0x04 ? 0x00100007u
@@ -882,13 +929,16 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_
                             : 0u;
 }
 
-/** No function has extended configuration space. */
+/** Extended space is present only while the config-file row enables it. */
 uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset)
 {
-    (void)bus;
-    (void)device;
-    (void)function;
-    (void)offset;
+    if (offset < 256) {
+        return pci_read_config32(bus, device, function, (uint8_t)offset);
+    }
+    if (pci_extended && bus == 0 && device == 4 && function == 0) {
+        return (uint32_t)pci_bytes[offset] | (uint32_t)pci_bytes[offset + 1] << 8 |
+               (uint32_t)pci_bytes[offset + 2] << 16 | (uint32_t)pci_bytes[offset + 3] << 24;
+    }
     return 0xFFFFFFFFu;
 }
 
@@ -2012,6 +2062,77 @@ static void drm_ident_rows(void)
     kfree(t.buf);
 }
 
+/** The binary config file writes exact widths and reads current registers. */
+static void pci_config_rows(void)
+{
+    struct vpath vp;
+    char data[8] = {1, 2, 3, 4, 5, 6, 7, 8}, got[8];
+    fd_entry_t *e = &entries[0];
+
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = SYSFS_PCI_DEVICE;
+    vp.procfile = SYSFS_PCI_CONFIG;
+    vp.syskey = 0x20;
+    process.fds = &table;
+    table.entries = entries;
+    table.cap = 1;
+    k_memset(e, 0, sizeof(*e));
+    k_memset(&mem_ofd, 0, sizeof(mem_ofd));
+    e->ofd = &mem_ofd;
+    process.euid = 1000;
+    check(procfs_open_pciconfig(&vp, 2) == -EACCES, "unprivileged config write open is refused");
+    process.euid = 0;
+    check(procfs_open_pciconfig(&vp, 2 | PROCFS_O_CLOEXEC) == 0 &&
+              e->flags == (FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC),
+          "privileged binary config open keeps its access and close-on-exec flags");
+    pci_writes = 0;
+    pci_bytes[0x40] = pci_bytes[0x48] = 0xa5;
+    e->ofd->offset = 0x41;
+    check(procfs_pciconfig_write(e, data, 7) == 7 && e->ofd->offset == 0x48 && pci_writes == 3 &&
+              pci_write_at[0] == 0x41 && pci_write_width[0] == 1 && pci_write_at[1] == 0x42 &&
+              pci_write_width[1] == 2 && pci_write_at[2] == 0x44 && pci_write_width[2] == 4 &&
+              pci_bytes[0x40] == 0xa5 && pci_bytes[0x48] == 0xa5,
+          "unaligned writes use byte, word and dword without touching neighbors");
+    e->ofd->offset = 0x41;
+    check(procfs_pciconfig_read(e, got, 7) == 7 && __builtin_memcmp(data, got, 7) == 0,
+          "config reads the bytes just written at a nonzero offset");
+    pci_bytes[0x41] = 0x5a;
+    e->ofd->offset = 0x41;
+    check(procfs_pciconfig_read(e, got, 1) == 1 && got[0] == 0x5a,
+          "another pread sees a hardware change without reopening");
+    e->ofd->offset = 255;
+    check(procfs_pciconfig_write(e, data, 8) == 1 && e->ofd->offset == 256,
+          "a write is cut at the end of conventional config space");
+    check(procfs_pciconfig_write(e, data, 8) == 0 && procfs_pciconfig_read(e, got, 8) == 0,
+          "reads and writes at the end return zero");
+    e->ofd->offset = 0x40;
+    pci_writes = 0;
+    check(procfs_pciconfig_write(e, NULL, 4) == -EFAULT && !pci_writes,
+          "a bad user buffer writes no register");
+    refuse = 1;
+    check(procfs_pciconfig_write(e, data, 4) == -ENOMEM && !pci_writes,
+          "an allocation failure writes no register");
+    refuse = 0;
+    pci_extended = 1;
+    e->ofd->offset = 0x101;
+    check(procfs_pciconfig_write(e, data, 7) == 7 && pci_writes == 3 && pci_write_at[0] == 0x101 &&
+              pci_write_at[1] == 0x102 && pci_write_at[2] == 0x104,
+          "narrow and dword writes reach extended space");
+    e->ofd->offset = 0x101;
+    check(procfs_pciconfig_read(e, got, 7) == 7 && __builtin_memcmp(data, got, 7) == 0,
+          "extended bytes read back");
+    e->ofd->offset = ~(uint64_t)0;
+    check(procfs_pciconfig_read(e, got, 1) == 0 && procfs_pciconfig_write(e, data, 1) == 0,
+          "a wide offset never wraps into the header");
+    pci_extended = 0;
+    process.euid = 1000;
+    e->ofd->offset = 64;
+    check(procfs_pciconfig_read(e, got, 1) == 0, "unprivileged reads stop at the header");
+    process.euid = 0;
+    procfs_close(e);
+}
+
 /**
  * A write of a PCI function's uevent sends that action with the function's
  * variables, as udev's coldplug writes it: a bare action carries
@@ -2413,7 +2534,7 @@ static void input_change_rows(void)
           "every device gone, /sys/class/input is empty and the port keeps no input");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct procfs_text text;
     int len;
@@ -2423,6 +2544,11 @@ int main(void)
     group.leader = &process;
     group.live = 1;
     k_memcpy(process.comm, "test", 5);
+    if (argc == 2 && __builtin_strcmp(argv[1], "--pci-config-only") == 0) {
+        pci_config_rows();
+        printf("procfs-hosttest: pci config: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     procfs_text_init(&text);
     refuse = 1;
     len = procfs_gen_stat(&text, 7, 1);
@@ -2464,6 +2590,7 @@ int main(void)
     drm_file_rows();
     drm_event_rows();
     drm_ident_rows();
+    pci_config_rows();
     pci_uevent_rows();
     sysfs_reg_rows();
     input_publish_rows();
