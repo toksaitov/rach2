@@ -947,6 +947,10 @@ int32_t intel_display_init(struct drm_i915_private *i915)
         adopt(i915, edp);
     } else if (d->dp.present) {
         klog(KLOG_INFO, "i915", "display: no pipe lit by the firmware; the eDP panel is dark");
+        /* The VDD the init's AUX messages forced, let go now as Linux's
+         * timer would: nothing reaches the dark panel's AUX before a
+         * mode set powers it. */
+        intel_pps_vdd_off_unlocked(i915, 1);
     }
     if (d->dp.present) {
         intel_backlight_setup(i915);
