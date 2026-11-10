@@ -879,9 +879,12 @@
 #define MCH_SSKPD    0x145d10
 #define MCH_SSKPD_HI 0x145d14
 
-/* The fuses: the CD clock held to 450 MHz. */
-#define FUSE_STRAP      0x42014
-#define HSW_CDCLK_LIMIT (1u << 24)
+/* The fuses: the CD clock held to 450 MHz, and the non-SSC reference of a
+ * non-ULT part at 24 MHz instead of 135. */
+#define FUSE_STRAP         0x42014
+#define HSW_CDCLK_LIMIT    (1u << 24)
+#define FUSE_STRAP3        0x42020
+#define HSW_REF_CLK_SELECT (1u << 1)
 
 /* ------------------------------------------------------------------------
  * DDI, its clocks and PLLs (i915_reg.h): ports A to E are 0 to 4.

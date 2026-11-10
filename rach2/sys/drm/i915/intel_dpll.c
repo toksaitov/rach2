@@ -187,12 +187,18 @@ void intel_dpll_calc_wrpll(uint32_t clock, uint32_t *r2_out, uint32_t *n2_out, u
     *r2_out = best.r2;
 }
 
-uint32_t intel_dpll_wrpll_freq(uint32_t wrpll)
+uint32_t intel_dpll_wrpll_freq(const struct drm_i915_private *i915, uint32_t wrpll)
 {
     uint32_t refclk, n, p, r;
 
     switch (wrpll & WRPLL_REF_MASK) {
     case WRPLL_REF_SPECIAL_HSW:
+        if (!i915->id || !i915->id->ult) {
+            refclk = i915->display.dpll_nssc;
+            break;
+        }
+        /* A ULT part muxes the SSC. */
+        /* fall through */
     case WRPLL_REF_PCH_SSC:
         refclk = REFCLK_SSC;
         break;
@@ -224,14 +230,6 @@ uint32_t intel_dpll_spll_freq(uint32_t spll)
     default:
         return 0;
     }
-}
-
-uint32_t intel_dpll_spll_compute(uint32_t port_clock)
-{
-    if (port_clock / 2u != 135000u) {
-        return 0;
-    }
-    return SPLL_PLL_ENABLE | SPLL_FREQ_1350MHz | SPLL_REF_MUXED_SSC;
 }
 
 /* ------------------------------------------------------------------------
@@ -293,6 +291,9 @@ void intel_dpll_init(struct drm_i915_private *i915)
     uint32_t v;
     int id;
 
+    /* Linux's hsw_update_dpll_ref_clks */
+    v = i915_read(&i915->hw, FUSE_STRAP3);
+    i915->display.dpll_nssc = (v & HSW_REF_CLK_SELECT) ? 24000u : 135000u;
     for (id = 0; id < INTEL_NUM_DPLLS; id++) {
         pll = &i915->display.dpll[id];
         k_memset(pll, 0, sizeof(*pll));
@@ -356,7 +357,7 @@ int32_t intel_dpll_compute(struct drm_i915_private *i915, struct intel_dpll_plan
                  (unsigned)cfg->port_clock);
             return -EBUSY;
         }
-        cfg->port_clock = intel_dpll_wrpll_freq(hw);
+        cfg->port_clock = intel_dpll_wrpll_freq(i915, hw);
     } else {
         id = lcpll_id(cfg->port_clock);
         if (id == DPLL_ID_NONE) {
@@ -466,7 +467,7 @@ int32_t intel_dpll_readout(struct drm_i915_private *i915, int pipe, uint32_t sel
     cfg->pll_hw = dpll_has_ctl(id) ? pll->hw : 0;
     cfg->port_clock = id == DPLL_ID_SPLL ? intel_dpll_spll_freq(pll->hw)
                       : id == DPLL_ID_WRPLL1 || id == DPLL_ID_WRPLL2
-                          ? intel_dpll_wrpll_freq(pll->hw)
+                          ? intel_dpll_wrpll_freq(i915, pll->hw)
                       : id == DPLL_ID_LCPLL_810  ? 81000u * 2u
                       : id == DPLL_ID_LCPLL_1350 ? 135000u * 2u
                                                  : 270000u * 2u;

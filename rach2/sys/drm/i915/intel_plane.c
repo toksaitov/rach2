@@ -304,6 +304,11 @@ static int32_t primary_check(struct drm_plane *plane, struct drm_atomic_state *s
     return intel_plane_check(plane, state, 1);
 }
 
+uint32_t intel_plane_ctl_crtc(const struct intel_crtc *crtc)
+{
+    return crtc->cfg.limited_range ? DISP_PIPE_CSC_ENABLE : 0;
+}
+
 /**
  * Show the primary plane's state, Linux's i9xx_plane_update_arm: the
  * stride, the offset and the control, then the surface, whose write arms
@@ -321,7 +326,7 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
     uint32_t cntr, surf, x, y;
 
     if (!ps->visible || !ps->fb || !cs->active) {
-        i915_write(hw, DSPCNTR(c->pipe), 0);
+        i915_write(hw, DSPCNTR(c->pipe), intel_plane_ctl_crtc(c));
         i915_write(hw, DSPSURF(c->pipe), 0);
         c->planes_on &= ~(1u << INTEL_PLANE_PRIMARY);
         return;
@@ -342,11 +347,7 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
     if (ps->rotation & DRM_MODE_ROTATE_180) {
         cntr |= DISP_ROTATE_180;
     }
-    /* Linux's i9xx_plane_ctl_crtc: through the pipe's matrix when it
-     * makes limited range RGB. */
-    if (c->cfg.limited_range) {
-        cntr |= DISP_PIPE_CSC_ENABLE;
-    }
+    cntr |= intel_plane_ctl_crtc(c);
     if (state->crtcs_new[c->base.index] && state->crtcs_new[c->base.index]->async_flip) {
         i915_write(hw, DSPCNTR(c->pipe), cntr | DISP_ASYNC_FLIP);
         i915_write(hw, DSPSURF(c->pipe), surf);
