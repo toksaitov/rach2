@@ -613,8 +613,8 @@ int main(int argc, char **argv)
     if (nowait) {
         printf("xplace: grab %d\n", grab(dpy, win));
         /* The window stays while a caller reads the compositor's state. */
-        while (getchar() != EOF)
-            continue;
+        while (getchar() != EOF) {
+        }
         return 0;
     }
     count_motion(dpy, win, gc, width, height, opcode);
