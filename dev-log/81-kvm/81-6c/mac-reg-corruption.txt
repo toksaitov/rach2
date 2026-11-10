@@ -1,0 +1,35 @@
+kvm-unit-tests' svm.flat, test reg_corruption, max-svm under TCG, alone
+(qemu-system-x86_64 --no-reboot -nodefaults -device pc-testdev
+-device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial file:...
+-device pci-testdev -accel tcg -kernel svm.flat -smp 2
+-cpu max,rdrand=on,rdseed=on,xsave=on,avx=on,svm=on,npt=on,enforce=on
+-m 4g -append reg_corruption), 2026-11-10, UTC+6.
+
+Mac mini M4, macOS, Homebrew's QEMU 11.1.3:
+* qualify.sh's run from 12:12:18: the test did not end in 24 minutes and
+  was stopped at 12:37:19.
+* 50 runs alone, each stopped after 30 s without an exit, 12:31 to 12:37:
+  39 passed (isa-debug-exit 1) within about 1 s, 11 did not end.
+* 3 runs alone at 12:30: each passed in 1 s.
+* 1 run alone with -d int at 12:29: passed, 10,001 interrupts of vector
+  0xde (222) logged; 20 runs with -d int at 13:05: none stuck.
+* Monitor of a stuck run at 13:06, read twice 5 s apart:
+    CPU#0 RIP=000000000040189f RFL=00000002 HLT=0
+    CPU#1 RIP=000000000040e596 RFL=00000202 HLT=1
+    LVTT 0x000200de periodic, vector 222
+    Timer DCR=0xb (divide by 1) initial_count = 1000 current_count = 687
+    ISR (none)  IRR 222  TPR 0x00 PPR 0x00
+  and then
+    CPU#0 RIP=00000000004018a0 RFL=00000002 HLT=0
+    Timer ... current_count = 907
+    ISR (none)  IRR 222
+  Processor 0 runs the nested guest's loop of insb with its IF clear while
+  vector 222 waits in the IRR; the test sets V_INTR_MASKING and intercepts
+  INTR, so the pending interrupt should end the guest with SVM_EXIT_INTR.
+
+Testing PC, WSL, Ubuntu's QEMU 10.2.1 (1:10.2.1+ds-1ubuntu3.3):
+* 50 runs alone, 12:37 to 13:02, each stopped after 30 s: none ended.
+* 1 run with -d int at 13:03: 199 interrupts of vector 222 after 10 s, 327
+  after 20 s, 541 after 30 s, still running: the intercepted interrupts
+  arrive at about 18 a second where the test asks for 10,000, so it takes
+  some 9 minutes. 81-6c's first qualification recorded a pass there.
