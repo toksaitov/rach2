@@ -86,9 +86,11 @@ gnu-image: os-real-gnu-ext2
 # the sources of the kernel, the utilities, ish and term, from which an
 # installed machine builds its own, and which no case that boots the image
 # reads. With them, every change to the kernel's sources would make the image
-# again. The filtered manifest is rewritten only when it changes.
+# again. The filtered manifest is rewritten only when it changes. It keeps
+# the root's name, by which the set-id guard finds its declarations
+# (tools/inspect/setid.allow), where the files of /src are optional.
 GNU_ROOT_MANIFEST = krffs/manifests/os-real-gnu.manifest
-GNU_TEST_MANIFEST = $(IMAGES_DIR)/gnu-test.manifest
+GNU_TEST_MANIFEST = $(IMAGES_DIR)/gnu-test/os-real-gnu.manifest
 GNU_TEST_MANIFEST_FILTER = awk '$$1 !~ /^\#/ && ($$3 == "/src" || index($$3, "/src/") == 1) { next } { print }'
 MANIFEST_DEPS_gnu_test := $(shell $(GNU_TEST_MANIFEST_FILTER) $(GNU_ROOT_MANIFEST) | $(MANIFEST_DEPS) -)
 GNU_ROOT_MANIFEST_DEPS = $(GNU_ROOT_MANIFEST) $(MANIFEST_DEPS_os_real_gnu)
