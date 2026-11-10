@@ -49,8 +49,9 @@
 #define UCODE_REV_VAL 0x100000000ull
 
 /* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores, the TSC
- * deadline among them, which the local APIC keeps (vlapic.c). TSC_AUX is
- * last, and listed only where the host has RDTSCP. */
+ * deadline among them, which the local APIC keeps (vlapic.c), and Linux's
+ * list of Hyper-V's, which hyperv.c keeps. TSC_AUX is last, and listed only
+ * where the host has RDTSCP. */
 static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_SYSENTER_ESP,
                                       MSR_IA32_SYSENTER_EIP,
@@ -66,6 +67,34 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_MCG_STATUS,
                                       MSR_IA32_MCG_CTL,
                                       MSR_IA32_TSC_DEADLINE,
+                                      0x40000000u, /* HV_X64_MSR_GUEST_OS_ID */
+                                      0x40000001u, /* HYPERCALL */
+                                      0x40000020u, /* TIME_REF_COUNT */
+                                      0x40000021u, /* REFERENCE_TSC */
+                                      0x40000022u, /* TSC_FREQUENCY */
+                                      0x40000023u, /* APIC_FREQUENCY */
+                                      0x40000100u, /* CRASH_P0 to P4 */
+                                      0x40000101u,
+                                      0x40000102u,
+                                      0x40000103u,
+                                      0x40000104u,
+                                      0x40000105u, /* CRASH_CTL */
+                                      0x40000003u, /* RESET */
+                                      0x40000002u, /* VP_INDEX */
+                                      0x40000010u, /* VP_RUNTIME */
+                                      0x40000080u, /* SCONTROL */
+                                      0x400000B0u, /* STIMER0_CONFIG */
+                                      0x40000073u, /* VP_ASSIST_PAGE */
+                                      0x40000106u, /* REENLIGHTENMENT_CONTROL */
+                                      0x40000107u, /* TSC_EMULATION_CONTROL */
+                                      0x40000108u, /* TSC_EMULATION_STATUS */
+                                      0x40000118u, /* TSC_INVARIANT_CONTROL */
+                                      0x400000FFu, /* SYNDBG_OPTIONS */
+                                      0x400000F1u, /* SYNDBG_CONTROL */
+                                      0x400000F2u, /* SYNDBG_STATUS */
+                                      0x400000F3u, /* SYNDBG_SEND_BUFFER */
+                                      0x400000F4u, /* SYNDBG_RECV_BUFFER */
+                                      0x400000F5u, /* SYNDBG_PENDING_BUFFER */
                                       MSR_TSC_AUX};
 
 static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV};
@@ -137,12 +166,13 @@ static int mtrr_fixed(uint32_t index)
 }
 
 /** Whether `index` is an MSR the vCPU's table keeps: one of the index
- * list but TSC, MCG_STATUS and MCG_CTL, or an MTRR. */
+ * list but TSC, MCG_STATUS, MCG_CTL and Hyper-V's, or an MTRR. */
 static int table_msr(uint32_t index)
 {
     uint32_t i;
 
-    if (index == MSR_IA32_TSC || index == MSR_IA32_MCG_STATUS || index == MSR_IA32_MCG_CTL) {
+    if (index == MSR_IA32_TSC || index == MSR_IA32_MCG_STATUS || index == MSR_IA32_MCG_CTL ||
+        (index >> 12) == 0x40000u) {
         return 0;
     }
     for (i = 0; i < N_INDEX; i++) {
@@ -207,6 +237,9 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
     int r;
 
     r = kvm_lapic_msr(v, index, 0, value, 1);
+    if (r == 1) {
+        r = kvm_hv_msr(v, index, 0, value, 1);
+    }
     if (r != 1) {
         return r;
     }
@@ -292,6 +325,9 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     int slot;
 
     slot = kvm_lapic_msr(v, index, 1, &value, 1);
+    if (slot == 1) {
+        slot = kvm_hv_msr(v, index, 1, &value, 1);
+    }
     if (slot != 1) {
         return slot;
     }
@@ -299,6 +335,7 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     case MSR_IA32_TSC:
         v->tsc_offset = (int64_t)(value - arch_cycles());
         v->dirty |= KVM_PART_TSC;
+        kvm_hv_clock_changed(v->vm);
         return 0;
     case MSR_IA32_MCG_CAP:
         if (value & ~(MCG_CTL_P | MCG_SER_P | 0xFFull | 0xFF0000ull) ||

@@ -666,8 +666,9 @@ static void send_ipi(struct lapic *l, uint32_t low, uint32_t high)
 }
 
 /** An EOI, as Linux's apic_set_eoi: the highest vector in service ends,
- * and when the caller's I/O APIC routes it level-triggered, the vCPU goes
- * to the caller with KVM_EXIT_IOAPIC_EOI. */
+ * a SynIC's SINT of it is acknowledged, and when the caller's I/O APIC
+ * routes it level-triggered, the vCPU goes to the caller with
+ * KVM_EXIT_IOAPIC_EOI. */
 static void set_eoi(struct lapic *l)
 {
     int vector = vec_highest(l, APIC_ISR);
@@ -677,6 +678,7 @@ static void set_eoi(struct lapic *l)
     }
     l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] &= ~(1u << ((uint32_t)vector & 31u));
     update_ppr(l);
+    kvm_hv_synic_eoi(l->v, (uint32_t)vector);
     if (kvm_irq_eoi_exits(l->v->vm, (uint32_t)vector)) {
         l->eoi_vector = (uint32_t)vector;
         kvm_vcpu_kick(l->v, KVM_REQ_EOI_EXIT);
@@ -963,33 +965,14 @@ int kvm_lapic_set_base(struct kvm_vcpu *v, uint64_t value, int host)
     return 0;
 }
 
-int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+/** Read or write, by `write`, the register at `off` of `l` as its x2APIC
+ * MSR, as Linux's kvm_lapic_msr_read and kvm_lapic_msr_write: the ICR
+ * whole, with its reserved bits refused, and any other register in its low
+ * 32 bits. 0, or -1 for a value or register refused. */
+static int msr_reg(struct lapic *l, uint32_t off, int write, uint64_t *value)
 {
-    struct lapic *l = apic_of(v);
-    uint32_t off, low;
+    uint32_t low;
 
-    if (index == MSR_IA32_APICBASE) {
-        if (!write) {
-            *value = v->sregs.apic_base;
-            return 0;
-        }
-        return kvm_lapic_set_base(v, *value, host);
-    }
-    if (index == MSR_IA32_TSC_DEADLINE) {
-        if (!write) {
-            *value = l && hw_enabled(l) && l->timer_mode == TIMER_DEADLINE ? l->tscdeadline : 0;
-        } else if (l) {
-            set_tscdeadline(l, *value);
-        }
-        return 0;
-    }
-    if (index < MSR_X2APIC_FIRST || index > MSR_X2APIC_LAST) {
-        return 1;
-    }
-    if (!l || !x2apic(l)) {
-        return -1;
-    }
-    off = (index - MSR_X2APIC_FIRST) << 4;
     if (!write) {
         if (off == APIC_ICR) {
             *value = reg_get(l, APIC_ICR) | (uint64_t)reg_get(l, APIC_ICR2) << 32;
@@ -1015,6 +998,48 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
         return -1;
     }
     return reg_write(l, off, (uint32_t)*value) ? -1 : 0;
+}
+
+int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+{
+    struct lapic *l = apic_of(v);
+
+    if (index == MSR_IA32_APICBASE) {
+        if (!write) {
+            *value = v->sregs.apic_base;
+            return 0;
+        }
+        return kvm_lapic_set_base(v, *value, host);
+    }
+    if (index == MSR_IA32_TSC_DEADLINE) {
+        if (!write) {
+            *value = l && hw_enabled(l) && l->timer_mode == TIMER_DEADLINE ? l->tscdeadline : 0;
+        } else if (l) {
+            set_tscdeadline(l, *value);
+        }
+        return 0;
+    }
+    if (index < MSR_X2APIC_FIRST || index > MSR_X2APIC_LAST) {
+        return 1;
+    }
+    if (!l || !x2apic(l)) {
+        return -1;
+    }
+    return msr_reg(l, (index - MSR_X2APIC_FIRST) << 4, write, value);
+}
+
+int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *value)
+{
+    struct lapic *l = apic_of(v);
+
+    return !l || msr_reg(l, reg, write, value) != 0;
+}
+
+int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector)
+{
+    struct lapic *l = apic_of(v);
+
+    return l ? accept(l, KVM_APIC_DM_FIXED, vector, 1, 0) : -1;
 }
 
 int kvm_lapic_mmio(struct kvm_vcpu *v)
@@ -1124,7 +1149,9 @@ int kvm_lapic_ack(struct kvm_vcpu *v)
         return vector;
     }
     vec_clear(l, APIC_IRR, (uint32_t)vector);
-    l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] |= 1u << ((uint32_t)vector & 31u);
+    if (!kvm_hv_synic_auto_eoi(v, (uint32_t)vector)) {
+        l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] |= 1u << ((uint32_t)vector & 31u);
+    }
     update_ppr(l);
     return vector;
 }
@@ -1201,6 +1228,15 @@ static int guest_if(const struct kvm_vcpu *v)
     return (v->dirty & KVM_PART_REGS) ? (v->regs.rflags & RFLAGS_IF) != 0 : v->if_flag != 0;
 }
 
+/** The host's ns at which `l`'s vCPU next has a timer due, the APIC's or a
+ * Hyper-V synthetic timer, 0 for none. */
+static uint64_t next_ns(const struct lapic *l)
+{
+    uint64_t a = timer_next_ns(l), b = kvm_hv_stimer_next(l->v);
+
+    return !a || (b && b < a) ? b : a;
+}
+
 /** Whether the halted or waiting vCPU `arg` has an event to wake it, as
  * Linux's kvm_vcpu_has_events, or a request, or its wait's tick came. */
 static int wake_cond(void *arg)
@@ -1224,7 +1260,7 @@ static int wake_cond(void *arg)
     if (guest_if(v) && kvm_lapic_pending(v) >= 0) {
         return 1;
     }
-    next = timer_next_ns(l);
+    next = next_ns(l);
     if (next && kvm_host_ns() >= next) {
         return 1;
     }
@@ -1239,7 +1275,7 @@ static int32_t block(struct kvm_vcpu *v)
     uint64_t next, now;
     int32_t r;
 
-    next = timer_next_ns(l);
+    next = next_ns(l);
     l->wake_tick = 0;
     if (next) {
         now = kvm_host_ns();
@@ -1260,6 +1296,7 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
     for (;;) {
         take_nmis(l);
         timer_check(l);
+        kvm_hv_stimers(v);
         accept_events(l);
         if (kvm_vcpu_test_clear(v, KVM_REQ_EOI_EXIT)) {
             v->run->exit_reason = KVM_EXIT_IOAPIC_EOI;

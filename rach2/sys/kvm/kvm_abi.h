@@ -30,6 +30,7 @@
 #define KVM_GET_EMULATED_CPUID         KVM_IOWR(0x09u, 8u)
 #define KVM_GET_MSR_FEATURE_INDEX_LIST KVM_IOWR(0x0Au, 4u)
 #define KVM_X86_GET_MCE_CAP_SUPPORTED  KVM_IOR(0x9Du, 8u)
+#define KVM_GET_SUPPORTED_HV_CPUID     KVM_IOWR(0xC1u, 8u)
 /* KVM_GET_MSRS is also an ioctl of /dev/kvm, for the feature MSRs. */
 
 /* The ioctls of a VM. */
@@ -51,6 +52,7 @@
 #define KVM_GET_CLOCK              KVM_IOR(0x7Cu, 48u)
 #define KVM_ENABLE_CAP             KVM_IOW(0xA3u, 104u)
 #define KVM_SIGNAL_MSI             KVM_IOW(0xA5u, 32u)
+#define KVM_HYPERV_EVENTFD         KVM_IOW(0xBDu, 24u)
 #define KVM_CLEAR_DIRTY_LOG        KVM_IOWR(0xC0u, 24u)
 
 /* The ioctls of a vCPU. */
@@ -84,6 +86,7 @@
 #define KVM_SET_XSAVE       KVM_IOW(0xA5u, 4096u)
 #define KVM_GET_XCRS        KVM_IOR(0xA6u, 392u)
 #define KVM_SET_XCRS        KVM_IOW(0xA7u, 392u)
+/* KVM_GET_SUPPORTED_HV_CPUID is also an ioctl of a vCPU. */
 
 /* The capabilities KVM_CHECK_EXTENSION names, by Linux's numbers. */
 #define KVM_CAP_IRQCHIP                     0
@@ -155,6 +158,18 @@
 #define KVM_CAP_MAX_VCPU_ID                 128
 #define KVM_CAP_GET_MSR_FEATURES            153
 #define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2   168
+#define KVM_CAP_HYPERV_TIME                 96
+#define KVM_CAP_HYPERV_SYNIC                123
+#define KVM_CAP_HYPERV_SYNIC2               148
+#define KVM_CAP_HYPERV_VP_INDEX             149
+#define KVM_CAP_HYPERV_EVENTFD              154
+#define KVM_CAP_HYPERV_TLBFLUSH             155
+#define KVM_CAP_HYPERV_SEND_IPI             161
+#define KVM_CAP_HYPERV_ENLIGHTENED_VMCS     163
+#define KVM_CAP_HYPERV_CPUID                167
+#define KVM_CAP_HYPERV_DIRECT_TLBFLUSH      175
+#define KVM_CAP_SYS_HYPERV_CPUID            191
+#define KVM_CAP_HYPERV_ENFORCE_CPUID        199
 
 /* The exit reasons of kvm_run.exit_reason. */
 #define KVM_EXIT_UNKNOWN         0
@@ -172,6 +187,12 @@
 #define KVM_EXIT_INTERNAL_ERROR  17
 #define KVM_EXIT_SYSTEM_EVENT    24
 #define KVM_EXIT_IOAPIC_EOI      26
+#define KVM_EXIT_HYPERV          27
+
+/* The types of KVM_EXIT_SYSTEM_EVENT. */
+#define KVM_SYSTEM_EVENT_SHUTDOWN 1
+#define KVM_SYSTEM_EVENT_RESET    2
+#define KVM_SYSTEM_EVENT_CRASH    5
 
 #define KVM_EXIT_IO_IN  0
 #define KVM_EXIT_IO_OUT 1
@@ -471,8 +492,9 @@ struct kvm_irq_level {
     uint32_t level;
 };
 
-/* The routes of KVM_SET_GSI_ROUTING: one entry a GSI for an MSI, as
- * Linux's struct kvm_irq_routing_entry of 48 bytes. */
+/* The routes of KVM_SET_GSI_ROUTING: one entry a GSI for an MSI or a
+ * Hyper-V synthetic interrupt, as Linux's struct kvm_irq_routing_entry of
+ * 48 bytes. */
 #define KVM_IRQ_ROUTING_IRQCHIP    1u
 #define KVM_IRQ_ROUTING_MSI        2u
 #define KVM_IRQ_ROUTING_S390       3u
@@ -497,6 +519,13 @@ struct kvm_irq_routing_msi {
     uint32_t devid;
 };
 
+/* A route to the synthetic interrupt source `sint` of the vCPU whose
+ * Hyper-V VP index is `vcpu`. */
+struct kvm_irq_routing_hv_sint {
+    uint32_t vcpu;
+    uint32_t sint;
+};
+
 struct kvm_irq_routing_entry {
     uint32_t gsi;
     uint32_t type;
@@ -505,6 +534,7 @@ struct kvm_irq_routing_entry {
     union {
         struct kvm_irq_routing_irqchip irqchip;
         struct kvm_irq_routing_msi msi;
+        struct kvm_irq_routing_hv_sint hv_sint;
         uint32_t pad[8];
     } u;
 };
@@ -554,6 +584,18 @@ struct kvm_ioeventfd {
     uint8_t pad[36];
 };
 
+/* struct kvm_hyperv_eventfd: an eventfd that the guest's HvSignalEvent
+ * of the connection `conn_id` signals, KVM_HYPERV_EVENTFD. */
+#define KVM_HYPERV_CONN_ID_MASK     0x00ffffffu
+#define KVM_HYPERV_EVENTFD_DEASSIGN 1u
+
+struct kvm_hyperv_eventfd {
+    uint32_t conn_id;
+    int32_t fd;
+    uint32_t flags;
+    uint32_t padding[3];
+};
+
 /* The exit-specific part of struct kvm_run, a union of 256 bytes. */
 struct kvm_run_io {
     uint8_t direction; /* KVM_EXIT_IO_IN or KVM_EXIT_IO_OUT */
@@ -601,6 +643,41 @@ struct kvm_run_system_event {
     uint64_t data[16];
 };
 
+/* KVM_EXIT_HYPERV: a write of the guest's to a SynIC MSR (`synic`), a
+ * hypercall the kernel leaves to the caller, which writes its `result`
+ * (`hcall`), or a write to a synthetic debugger MSR (`syndbg`). */
+#define KVM_EXIT_HYPERV_SYNIC  1
+#define KVM_EXIT_HYPERV_HCALL  2
+#define KVM_EXIT_HYPERV_SYNDBG 3
+
+struct kvm_hyperv_exit {
+    uint32_t type;
+    uint32_t pad1;
+    union {
+        struct {
+            uint32_t msr;
+            uint32_t pad2;
+            uint64_t control;
+            uint64_t evt_page;
+            uint64_t msg_page;
+        } synic;
+        struct {
+            uint64_t input;
+            uint64_t result;
+            uint64_t params[2];
+        } hcall;
+        struct {
+            uint32_t msr;
+            uint32_t pad2;
+            uint64_t control;
+            uint64_t status;
+            uint64_t send_page;
+            uint64_t recv_page;
+            uint64_t pending_page;
+        } syndbg;
+    } u;
+};
+
 #define KVM_RUN_EXIT_BYTES 256u
 
 /* struct kvm_run, the first page of a vCPU's mapping. */
@@ -623,6 +700,7 @@ struct kvm_run {
         struct kvm_run_debug debug;
         struct kvm_run_system_event system_event;
         struct kvm_run_eoi eoi;
+        struct kvm_hyperv_exit hyperv;
         char padding[KVM_RUN_EXIT_BYTES];
     } u;
     uint64_t kvm_valid_regs;

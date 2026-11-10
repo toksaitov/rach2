@@ -491,6 +491,8 @@ void kvm_emul_cpuid(struct kvm_vcpu *v)
             }
         } else if (function == 7 && index == 0) {
             c = (v->sregs.cr4 & CR4_PKE) ? (c | (1u << 4)) : (c & ~(1u << 4));
+        } else if (function == 0x80000007u && kvm_hv_invtsc_suppressed(v)) {
+            d &= ~(1u << 8);
         }
     }
     v->regs.rax = a;
@@ -524,6 +526,9 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
     int r;
 
     r = kvm_lapic_msr(v, index, write, value, 0);
+    if (r == 1) {
+        r = kvm_hv_msr(v, index, write, value, 0);
+    }
     if (r != 1) {
         return r;
     }

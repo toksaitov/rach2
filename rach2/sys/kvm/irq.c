@@ -1,7 +1,8 @@
 /*
  * irq.c: the split interrupt controller's side in the kernel, as Linux's
  * irqchip.c, irq_comm.c and the irqfd half of eventfd.c keep it on x86:
- * KVM_CAP_SPLIT_IRQCHIP, the GSI routes of MSIs, KVM_IRQ_LINE,
+ * KVM_CAP_SPLIT_IRQCHIP, the GSI routes of MSIs and of Hyper-V's synthetic
+ * interrupts, KVM_IRQ_LINE,
  * KVM_SIGNAL_MSI, and irqfds that raise a GSI when an eventfd is
  * signalled. The PIC and the I/O APIC are the caller's.
  */
@@ -30,12 +31,15 @@
 /* The host's TSC-deadline timer, leaf 1 ECX bit 24. */
 #define CPUID_DEADLINE (1u << 24)
 
-/* One route of a GSI: an MSI, while `valid`. */
+/* One route of a GSI, while `valid`: an MSI, or for `sint` a synthetic
+ * interrupt of a SynIC. */
 struct route {
     uint32_t valid;
+    uint32_t sint; /* KVM_IRQ_ROUTING_HV_SINT */
     uint32_t address_lo;
     uint32_t address_hi;
     uint32_t data;
+    uint32_t hv_vcpu, hv_sint; /* the SINT's VP index and number */
 };
 
 /*
@@ -85,14 +89,18 @@ static void msi_irq(const struct route *r, struct kvm_lapic_irq *irq)
     irq->shorthand = 0;
 }
 
-/** Raise the MSI `r` at `level`, as Linux's kvm_set_msi: -1 for a level of
- * 0 or no destination, else the APICs that took it. */
+/** Raise the route `r` at `level`, as Linux's kvm_set_msi and
+ * kvm_hv_set_sint: -1 for a level of 0 or no destination, else the APICs
+ * that took it. Safe from an irqfd's hook. */
 static int set_msi(struct kvm_vm *vm, const struct route *r, uint32_t level)
 {
     struct kvm_lapic_irq irq;
 
     if (!level) {
         return -1;
+    }
+    if (r->sint) {
+        return kvm_hv_synic_set_irq(vm, r->hv_vcpu, r->hv_sint);
     }
     msi_irq(r, &irq);
     return kvm_lapic_deliver(vm, NULL, &irq);
@@ -113,7 +121,7 @@ static void irqfd_update(struct irq_vm *iv, struct irqfd *f)
     spin_unlock_irqrestore(&iv->lock, flags);
 }
 
-/** The eventfd of the irqfd `h` rose: raise its GSI's MSI and take the
+/** The eventfd of the irqfd `h` rose: raise its GSI's route and take the
  * counter, as Linux's irqfd_wakeup. Runs with the eventfd's lock held and
  * interrupts off, perhaps without the big lock. */
 static int irqfd_signal(struct eventfd_hook *h)
@@ -268,11 +276,11 @@ int32_t kvm_irq_enable_split(struct kvm_vm *vm, const struct kvm_enable_cap *cap
 
 /**
  * KVM_SET_GSI_ROUTING, as Linux's kvm_set_irq_routing with the split
- * controller: the table replaced whole by `nr` MSI routes, one a GSI, and
- * each irqfd given its GSI's new route. 0; -EINVAL with no split
- * controller, for more than KVM_MAX_IRQ_ROUTES routes, a flag, a GSI past
- * them, an irqchip route (the PIC and I/O APIC are the caller's), a type
- * not offered, or a second route of a GSI; -ENOMEM; -EFAULT.
+ * controller: the table replaced whole by `nr` routes of MSIs and SINTs,
+ * one a GSI, and each irqfd given its GSI's new route. 0; -EINVAL with no
+ * split controller, for more than KVM_MAX_IRQ_ROUTES routes, a flag, a GSI
+ * past them, an irqchip route (the PIC and I/O APIC are the caller's), a
+ * type not offered, or a second route of a GSI; -ENOMEM; -EFAULT.
  */
 static int32_t set_routing(struct kvm_vm *vm, uintptr_t arg)
 {
@@ -322,14 +330,23 @@ static int32_t set_routing(struct kvm_vm *vm, uintptr_t arg)
     }
     r = -EINVAL;
     for (i = 0; i < head.nr; i++) {
-        if (ue[i].type != KVM_IRQ_ROUTING_MSI || (ue[i].flags & ~KVM_MSI_VALID_DEVID) ||
-            table[ue[i].gsi].valid) {
+        struct route *t = &table[ue[i].gsi];
+
+        if (t->valid) {
             goto out;
         }
-        table[ue[i].gsi].valid = 1;
-        table[ue[i].gsi].address_lo = ue[i].u.msi.address_lo;
-        table[ue[i].gsi].address_hi = ue[i].u.msi.address_hi;
-        table[ue[i].gsi].data = ue[i].u.msi.data;
+        if (ue[i].type == KVM_IRQ_ROUTING_MSI && !(ue[i].flags & ~KVM_MSI_VALID_DEVID)) {
+            t->address_lo = ue[i].u.msi.address_lo;
+            t->address_hi = ue[i].u.msi.address_hi;
+            t->data = ue[i].u.msi.data;
+        } else if (ue[i].type == KVM_IRQ_ROUTING_HV_SINT && !ue[i].flags) {
+            t->sint = 1;
+            t->hv_vcpu = ue[i].u.hv_sint.vcpu;
+            t->hv_sint = ue[i].u.hv_sint.sint;
+        } else {
+            goto out;
+        }
+        t->valid = 1;
     }
     kfree(iv->routes);
     iv->routes = table;
@@ -346,7 +363,7 @@ out:
 }
 
 /** Raise `gsi` at `level`, as Linux's kvm_set_irq: -1 for a GSI with no
- * route or an MSI that reached no APIC, else the APICs that took it. */
+ * route or one that reached no APIC, else the APICs that took it. */
 static int set_irq(struct kvm_vm *vm, uint32_t gsi, uint32_t level)
 {
     struct irq_vm *iv = irq_of(vm);
@@ -392,6 +409,7 @@ static int32_t signal_msi(struct kvm_vm *vm, uintptr_t arg)
     if (!irq_of(vm) || (m.flags & ~KVM_MSI_VALID_DEVID)) {
         return -EINVAL;
     }
+    k_memset(&r, 0, sizeof(r));
     r.valid = 1;
     r.address_lo = m.address_lo;
     r.address_hi = m.address_hi;
@@ -433,7 +451,7 @@ int kvm_irq_eoi_exits(struct kvm_vm *vm, uint32_t vector)
     }
     n = iv->ioapic_pins < iv->nr_routes ? iv->ioapic_pins : iv->nr_routes;
     for (i = 0; i < n; i++) {
-        if (iv->routes[i].valid && (iv->routes[i].data & MSI_DATA_LEVEL) &&
+        if (iv->routes[i].valid && !iv->routes[i].sint && (iv->routes[i].data & MSI_DATA_LEVEL) &&
             (iv->routes[i].data & 0xFFu) == vector) {
             return 1;
         }
