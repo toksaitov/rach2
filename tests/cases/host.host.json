@@ -602,7 +602,12 @@
         },
         {
           "assertion_id": "i915_exec",
-          "checks": "tests/host/i915_exec_hosttest.c runs the Intel graphics driver's EXECBUFFER2 on the chip of i915_gem_model.c, whose rings run the requests and the batches' stores: each of Linux's refusals of the call, relocations with presumed offsets, NO_RELOC, HANDLE_LUT, signed deltas and BATCH_FIRST, objects pinned, padded and aligned, the batch started on the render and blitter rings, the stream output reset, the in-fence, submit fence, out-fence and fence array, an in-fence's error skipping the batch, the command parser's stub and a ring that refuses the commands, under ASan and UBSan and exits 0",
+          "checks": "tests/host/i915_exec_hosttest.c runs the Intel graphics driver's EXECBUFFER2 on the chip of i915_gem_model.c, whose rings run the requests and the batches' stores: each of Linux's refusals of the call, relocations with presumed offsets, NO_RELOC, HANDLE_LUT, signed deltas and BATCH_FIRST, objects pinned, padded and aligned, the batch started on the render and blitter rings, the stream output reset, the in-fence, submit fence, out-fence and fence array, an in-fence's error skipping the batch, the command parser's shadow and trampoline, the objects held until the request retires and a ring that refuses the commands, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "i915_parser",
+          "checks": "tests/host/i915_parser_hosttest.c runs the Intel graphics driver's command parser on batches across separately allocated pages: Linux 6.12's Haswell tables sorted, every table entry and allowlisted register on the render and blitter rings, the masked registers and checks, the lengths of commands no table holds, the refusals with EINVAL, the copy to the shadow and its trampoline, and every gen7_exec_parse case Linux's parser at version 10 runs, each with Linux's verdict, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
