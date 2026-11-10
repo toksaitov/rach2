@@ -672,6 +672,7 @@
  * in bits 28:27, the delay less one. */
 #define CHICKEN_TRANS(t)           ((t) == I915_TRANS_EDP ? 0x420cc : 0x420c0 + (t) * 4)
 #define HSW_FRAME_START_DELAY_MASK (3u << 27)
+#define HSW_FRAME_START_DELAY(x)   ((uint32_t)(x) << 27)
 #define DATA_LINK_M_N_MASK         0xffffffu
 
 /* The legacy VGA plane, which scans out the VGA's text and modes in place
@@ -790,6 +791,13 @@
 
 /* A pipe's line time in eighths of a microsecond, at the pixel clock in
  * bits 8:0 and at the CD clock, for IPS, in bits 24:16. */
+/* A pipe's gamma mode, 8 bits through the legacy table when 0, and its
+ * colour matrix's mode, which sits before the gamma with CSC_POSITION. */
+#define GAMMA_MODE(p)             (0x4a480 + (p) * 0x800)
+#define GAMMA_MODE_MODE_8BIT      0u
+#define PIPE_CSC_MODE(p)          (0x49028 + (p) * 0x100)
+#define CSC_POSITION_BEFORE_GAMMA (1u << 1)
+
 #define WM_LINETIME(p)         (0x45270 + (p) * 4)
 #define HSW_LINETIME_MASK      0x1ffu
 #define HSW_IPS_LINETIME_SHIFT 16
@@ -902,6 +910,7 @@
 #define VIDEO_DIP_ENABLE_VS_HSW    (1u << 8)
 #define VIDEO_DIP_ENABLE_GMP_HSW   (1u << 4)
 #define VIDEO_DIP_ENABLE_SPD_HSW   (1u << 0)
+#define VIDEO_DIP_ENABLE_DRM_GLK   (1u << 28)
 
 /* ------------------------------------------------------------------------
  * The panel power sequencer and backlight (display/intel_pps_regs.h,
@@ -950,6 +959,10 @@
 #define BLM_PCH_POLARITY          (1u << 29)
 #define BLC_PWM_PCH_CTL2          0xc8254
 #define BACKLIGHT_DUTY_CYCLE_MASK 0xffffu
+/* The PCH's PWM counts in steps of 128 of its clock with this bit, else
+ * of 16. */
+#define SOUTH_CHICKEN2            0xc2004
+#define LPT_PWM_GRANULARITY       (1u << 5)
 
 /* ------------------------------------------------------------------------
  * DisplayPort AUX (display/intel_dp_aux_regs.h): port A's channel is the

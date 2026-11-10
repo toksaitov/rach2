@@ -397,11 +397,11 @@ static uint32_t wm_min(uint32_t a, uint32_t b)
 void intel_update_wm(struct intel_crtc *crtc)
 {
     struct drm_i915_private *i915 = crtc->i915;
-    const struct drm_mode_modeinfo *m = &crtc->base.state->mode;
-    uint32_t rate = m->clock, pri = 0, spr = 0, cur = 0, wm;
+    const struct drm_mode_modeinfo *m = &crtc->cfg.mode;
+    uint32_t rate = crtc->cfg.pixel_rate, pri = 0, spr = 0, cur = 0, wm;
     struct drm_plane_state *ps;
 
-    if (crtc->base.state->active && rate != 0) {
+    if (crtc->cfg.active && rate != 0) {
         ps = crtc->primary.state;
         if (ps->visible && ps->fb) {
             pri = wm_min(wm_method1(rate, ps->fb->info->cpp[0], WM0_LATENCY), WM0_PRI_MAX);
@@ -442,54 +442,112 @@ void intel_update_wm(struct intel_crtc *crtc)
  * CRTCs
  */
 
-/** Whether pipe `crtc` can be lit without a mode set: the firmware left it
- * on with a mode the readout knows. */
-static int crtc_adoptable(const struct intel_crtc *crtc)
+/** The eDP connector's state in `state`, or its state now. */
+static const struct drm_connector_state *edp_conn_state(struct drm_i915_private *i915,
+                                                        struct drm_atomic_state *state)
 {
-    return crtc->hw.active && crtc->hw.mode.clock != 0;
+    struct drm_connector *connector = &i915->display.connector;
+    const struct drm_connector_state *conn = state->connectors_new[connector->index];
+
+    return conn ? conn : connector->state;
+}
+
+/** Linux's DIV_ROUND_CLOSEST for line times, at most HSW_LINETIME_MASK. */
+static uint32_t linetime(uint32_t htotal, uint32_t clock)
+{
+    uint32_t t = clock ? (htotal * 8000u + clock / 2u) / clock : 0;
+
+    return t > HSW_LINETIME_MASK ? HSW_LINETIME_MASK : t;
 }
 
 /**
- * The CRTC's check: a pipe lights only with the mode the firmware left on
- * it, since the mode set comes with 78-10; turning it off, and on again
- * with that mode, is a fastset of the planes and the backlight. -EINVAL
- * for anything else.
+ * Compute what the new state `cs` of `c` sets the pipe to into `cfg`,
+ * Linux's intel_modeset_pipe_config and intel_crtc_compute_config for the
+ * eDP panel, the one output: the source the user's mode's size, the
+ * panel's configuration (intel_dp_compute_config), the dot clock and the
+ * pixel rate within the CD clock, and the line times. A disabled CRTC
+ * gives a zeroed `cfg`. 0, or -EINVAL or -ERANGE for a state the pipe
+ * cannot take.
  */
+static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state *cs,
+                              const struct drm_connector_state *conn, struct intel_crtc_config *cfg)
+{
+    struct drm_i915_private *i915 = c->i915;
+    int32_t err;
+
+    k_memset(cfg, 0, sizeof(*cfg));
+    if (!cs->enable) {
+        return 0;
+    }
+    if (!i915->display.dp.present || !conn || conn->crtc != &c->base) {
+        return -EINVAL;
+    }
+    cfg->active = cs->active != 0;
+    cfg->mode = cs->mode;
+    cfg->src_w = cs->mode.hdisplay;
+    cfg->src_h = cs->mode.vdisplay;
+    err = intel_dp_compute_config(i915, c->pipe, conn, c->crc_wa, cfg);
+    if (err != 0) {
+        return err;
+    }
+    if (cfg->mode.clock > intel_max_dotclock(i915)) {
+        return -EINVAL;
+    }
+    cfg->pixel_rate = intel_pfit_pixel_rate(cfg);
+    err = intel_cdclk_check(i915, cfg->pixel_rate);
+    if (err != 0) {
+        return err;
+    }
+    /* Linux's hsw_linetime_wm and hsw_ips_linetime_wm. */
+    cfg->linetime = linetime(cfg->mode.htotal, cfg->mode.clock);
+    cfg->ips_linetime = linetime(cfg->mode.htotal, i915->display.cdclk);
+    return 0;
+}
+
+/** The CRTC's check: a mode set must configure, and an async flip comes
+ * without one. 0, -EINVAL or -ERANGE. */
 static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
     struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
+    struct intel_crtc_config cfg;
 
-    if (!cs || !cs->enable) {
+    if (!cs || !drm_atomic_crtc_needs_modeset(cs)) {
         return 0;
     }
-    if (!crtc_adoptable(c) || !drm_mode_equal(&cs->mode, &c->hw.mode)) {
+    if (cs->async_flip) {
         return -EINVAL;
     }
-    if (cs->async_flip && drm_atomic_crtc_needs_modeset(cs)) {
+    return compute_config(c, cs, edp_conn_state(c->i915, state), &cfg);
+}
+
+/** The modes a pipe drives, Linux's intel_mode_valid for Haswell: no
+ * vertical scan, skew, composite sync or the like, a clock the CD clock
+ * takes, and the transcoder's sizes. */
+static int32_t intel_crtc_mode_valid(struct drm_crtc *crtc, const struct drm_mode_modeinfo *m)
+{
+    struct drm_i915_private *i915 = to_intel_crtc(crtc)->i915;
+
+    if (m->vscan > 1 ||
+        (m->flags &
+         (DRM_MODE_FLAG_HSKEW | DRM_MODE_FLAG_CSYNC | DRM_MODE_FLAG_NCSYNC | DRM_MODE_FLAG_PCSYNC |
+          DRM_MODE_FLAG_BCAST | DRM_MODE_FLAG_PIXMUX | DRM_MODE_FLAG_CLKDIV2)) ||
+        m->clock > intel_max_dotclock(i915)) {
+        return -EINVAL;
+    }
+    if (m->hdisplay > 8192 || m->hsync_start > 8192 || m->hsync_end > 8192 || m->htotal > 8192 ||
+        m->vdisplay > 4096 || m->vsync_start > 8192 || m->vsync_end > 8192 || m->vtotal > 8192) {
         return -EINVAL;
     }
     return 0;
 }
 
-/** The modes a pipe drives: the firmware's. */
-static int32_t intel_crtc_mode_valid(struct drm_crtc *crtc, const struct drm_mode_modeinfo *mode)
-{
-    struct intel_crtc *c = to_intel_crtc(crtc);
-
-    return crtc_adoptable(c) && drm_mode_equal(mode, &c->hw.mode) ? 0 : -EINVAL;
-}
-
-/** The pipe comes on again: the planes are written by the commit's plane
- * updates, so only the backlight follows. */
+/** Nothing more: `intel_crtc_begin` turned the pipe on before the planes,
+ * as Linux's commit tail does, and the core turns its vblanks on. */
 static void intel_crtc_enable(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
-    struct intel_crtc *c = to_intel_crtc(crtc);
-
+    (void)crtc;
     (void)state;
-    if (c->hw.trans == I915_TRANS_EDP) {
-        intel_backlight_pipe(c->i915, 1);
-    }
 }
 
 /** Turn a plane's registers off and arm the change for the next vblank. */
@@ -515,14 +573,115 @@ static void plane_off(struct intel_crtc *c, int slot)
     c->planes_on &= ~(1u << slot);
 }
 
+/** Write the transcoder's M/N values and timings, Linux's
+ * hsw_configure_cpu_transcoder for the eDP transcoder, which stays off. */
+static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_config *cfg)
+{
+    struct i915_hw *hw = &c->i915->hw;
+    const struct drm_mode_modeinfo *m = &cfg->mode;
+    const int t = I915_TRANS_EDP;
+    uint32_t vtotal = (uint32_t)(m->vdisplay - 1) | (uint32_t)(m->vtotal - 1) << 16;
+
+    i915_write(hw, PIPE_DATA_M1(t), TU_SIZE(cfg->tu) | cfg->data_m);
+    i915_write(hw, PIPE_DATA_N1(t), cfg->data_n);
+    i915_write(hw, PIPE_LINK_M1(t), cfg->link_m);
+    i915_write(hw, PIPE_LINK_N1(t), cfg->link_n);
+    /* The second set, for a refresh rate switch Rach2 does not make:
+     * zeroes, with the transfer unit's field of 0 less one. */
+    i915_write(hw, PIPE_DATA_M2(t), 0x3fu << TU_SIZE_SHIFT);
+    i915_write(hw, PIPE_DATA_N2(t), 0);
+    i915_write(hw, PIPE_LINK_M2(t), 0);
+    i915_write(hw, PIPE_LINK_N2(t), 0);
+    /* Linux's intel_set_transcoder_timings: blanking spans the borders,
+     * none here, and no interlace. */
+    i915_write(hw, TRANS_VSYNCSHIFT(t), 0);
+    i915_write(hw, TRANS_HTOTAL(t), (uint32_t)(m->hdisplay - 1) | (uint32_t)(m->htotal - 1) << 16);
+    i915_write(hw, TRANS_HBLANK(t), (uint32_t)(m->hdisplay - 1) | (uint32_t)(m->htotal - 1) << 16);
+    i915_write(hw, TRANS_HSYNC(t),
+               (uint32_t)(m->hsync_start - 1) | (uint32_t)(m->hsync_end - 1) << 16);
+    i915_write(hw, TRANS_VTOTAL(t), vtotal);
+    i915_write(hw, TRANS_VBLANK(t), vtotal);
+    i915_write(hw, TRANS_VSYNC(t),
+               (uint32_t)(m->vsync_start - 1) | (uint32_t)(m->vsync_end - 1) << 16);
+    /* Pipe B or C feeding eDP takes the eDP transcoder's VTOTAL in its own
+     * (TRANS_DDI_FUNC_CTL's eDP input select). */
+    if (c->pipe != I915_PIPE_A) {
+        i915_write(hw, TRANS_VTOTAL(c->pipe), vtotal);
+    }
+    /* Linux's hsw_set_frame_start_delay, a delay of one. */
+    i915_rmw(hw, CHICKEN_TRANS(t), HSW_FRAME_START_DELAY_MASK, HSW_FRAME_START_DELAY(0));
+    /* Linux's hsw_set_transconf for a mode set: the pipe still off. */
+    i915_write(hw, TRANSCONF(t),
+               TRANSCONF_INTERLACE_PF_PD_ILK |
+                   (cfg->dither ? TRANSCONF_DITHER_EN | TRANSCONF_DITHER_TYPE_SP : 0));
+    i915_posting_read(hw, TRANSCONF(t));
+}
+
+/** The link failed to train and a new mode set should try the link the
+ * fallback chose: the connector's link status bad and a hotplug event for
+ * the console and the compositor, Linux's intel_dp_queue_modeset_retry_work. */
+static void link_retry(struct drm_i915_private *i915)
+{
+    struct drm_connector *connector = &i915->display.connector;
+
+    connector->state->link_status = DRM_MODE_LINK_STATUS_BAD;
+    drm_connector_hotplug_later(connector);
+}
+
 /**
- * The pipe goes off, as far as 78-9 drives it: its planes turned off, the
- * backlight of its panel off and its held event sent; the pipe and its
- * transcoder keep running the firmware's mode until 78-10's mode set.
+ * Turn pipe `c` on for its new state, Linux's hsw_crtc_enable with the
+ * eDP encoder's hooks: the link up and trained, the pipe's source, the
+ * transcoder's M/N and timings, the fitter, the colour, the primary plane
+ * off, the line times and the watermarks, then the transcoder on, the
+ * link on its normal pattern and the backlight on.
+ */
+static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    struct drm_i915_private *i915 = c->i915;
+    struct intel_crtc_config *cfg = &c->cfg;
+    struct i915_hw *hw = &i915->hw;
+    int32_t err;
+
+    err = compute_config(c, state->crtcs_new[c->base.index], edp_conn_state(i915, state), cfg);
+    if (err != 0 || !cfg->active) {
+        klog(KLOG_ERR, "i915", "display: pipe %c not set: error %d", 'A' + c->pipe, (int)err);
+        cfg->active = 0;
+        return;
+    }
+    err = intel_ddi_pre_enable(i915, cfg);
+    i915_write(hw, PIPESRC(c->pipe), (cfg->src_w - 1u) << 16 | (cfg->src_h - 1u));
+    configure_transcoder(c, cfg);
+    ilk_pfit_enable(i915, c->pipe, cfg);
+    /* Linux's color commit for a pipe without tables or matrix: the legacy
+     * 8-bit gamma, the matrix before it, and DSPCNTR's bits for the pipe's
+     * bottom colour written with the primary plane off. */
+    i915_write(hw, GAMMA_MODE(c->pipe), GAMMA_MODE_MODE_8BIT);
+    i915_write(hw, PIPE_CSC_MODE(c->pipe), CSC_POSITION_BEFORE_GAMMA);
+    plane_off(c, INTEL_PLANE_PRIMARY);
+    i915_write(hw, WM_LINETIME(c->pipe),
+               cfg->linetime | cfg->ips_linetime << HSW_IPS_LINETIME_SHIFT);
+    intel_update_wm(c);
+    intel_ddi_enable(i915, c->pipe, cfg);
+    if (err == -EAGAIN) {
+        link_retry(i915);
+    }
+    klog(KLOG_INFO, "i915",
+         "display: pipe %c set: %ux%u in %ux%u@%u, %u kHz, %u bpp, %u lane%s at %u kHz%s",
+         'A' + c->pipe, (unsigned)cfg->src_w, (unsigned)cfg->src_h, (unsigned)cfg->mode.hdisplay,
+         (unsigned)cfg->mode.vdisplay, (unsigned)drm_mode_vrefresh(&cfg->mode),
+         (unsigned)cfg->mode.clock, (unsigned)cfg->bpp, (unsigned)cfg->lanes,
+         cfg->lanes == 1 ? "" : "s", (unsigned)cfg->port_clock, cfg->pfit ? ", fitted" : "");
+}
+
+/**
+ * The pipe goes off, Linux's hsw_crtc_disable after its planes: its
+ * planes turned off, the backlight, the transcoder, the fitter, the link
+ * and the panel's power off, and its held event sent.
  */
 static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
+    struct drm_i915_private *i915 = c->i915;
     uint32_t flags;
     int slot;
 
@@ -530,28 +689,45 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
         plane_off(c, slot);
     }
-    i915_posting_read(&c->i915->hw, DSPSURF(c->pipe));
-    if (c->hw.trans == I915_TRANS_EDP) {
-        intel_backlight_pipe(c->i915, 0);
+    i915_posting_read(&i915->hw, DSPSURF(c->pipe));
+    if (c->cfg.active) {
+        intel_ddi_disable(i915);
+        intel_ddi_post_disable(i915, c, &c->cfg);
     }
+    k_memset(&c->cfg, 0, sizeof(c->cfg));
     flags = kirq_save();
     intel_crtc_send_event(c);
     kirq_restore(flags);
 }
 
-/** Before the planes: the watermarks raised to cover the planes the
- * commit shows, and an async flip's flip done unmasked, since the chip
- * latches only an unmasked event and the flip may be done as soon as the
- * surface is written. */
+/** Before the planes: a pipe that comes on turned on, as Linux's commit
+ * tail turns it on before it writes the planes, else the watermarks
+ * raised to cover the planes the commit shows; and an async flip's flip
+ * done unmasked, since the chip latches only an unmasked event and the
+ * flip may be done as soon as the surface is written. */
 static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
-    intel_update_wm(to_intel_crtc(crtc));
-    intel_crtc_arm_flip_done(to_intel_crtc(crtc), state);
+    struct intel_crtc *c = to_intel_crtc(crtc);
+    struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
+
+    if (cs && drm_atomic_crtc_needs_modeset(cs) && cs->active) {
+        crtc_enable(c, state);
+    } else {
+        intel_update_wm(c);
+    }
+    intel_crtc_arm_flip_done(c, state);
 }
 
-/** After the planes: the commit's event handed to the vblank path. */
+/** After the planes: the commit's event handed to the vblank path, or,
+ * on a pipe that came on, left to the core, which arms it once the
+ * pipe's vblanks are on. */
 static void intel_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
+    struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
+
+    if (cs && drm_atomic_crtc_needs_modeset(cs)) {
+        return;
+    }
     intel_crtc_arm_event(to_intel_crtc(crtc), state);
 }
 
@@ -563,9 +739,30 @@ static const struct drm_crtc_funcs intel_crtc_funcs = {
     intel_crtc_set_crc_source,  intel_crtc_verify_crc_source,
     intel_crtc_get_crc_sources, intel_get_vblank_counter};
 
-/* ------------------------------------------------------------------------
- * The eDP connector
+/**
+ * The device's check, Linux's intel_atomic_check as far as the eDP
+ * connector goes: a new "scaling mode" sets its CRTC's mode again
+ * (intel_digital_connector_atomic_check); then the core's checks.
  */
+static int32_t intel_atomic_check(struct drm_device *dev, struct drm_atomic_state *state)
+{
+    uint32_t i;
+
+    for (i = 0; i < dev->mode_config.num_connector; i++) {
+        const struct drm_connector_state *conn = state->connectors_new[i];
+        struct drm_crtc_state *cs;
+
+        if (!conn || !conn->crtc || conn->scaling_mode == state->connectors_old[i]->scaling_mode) {
+            continue;
+        }
+        cs = drm_atomic_get_crtc_state(state, conn->crtc);
+        if (!cs) {
+            return -ENOMEM;
+        }
+        cs->mode_changed = 1;
+    }
+    return drm_atomic_helper_check(dev, state);
+}
 
 /** The pipe the eDP transcoder drives, which the readout found, or NULL. */
 static struct intel_crtc *edp_crtc(struct drm_i915_private *i915)
@@ -575,35 +772,12 @@ static struct intel_crtc *edp_crtc(struct drm_i915_private *i915)
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &i915->display.crtc[pipe];
 
-        if (crtc_adoptable(c) && c->hw.trans == I915_TRANS_EDP) {
+        if (c->hw.active && c->hw.mode.clock != 0 && c->hw.trans == I915_TRANS_EDP) {
             return c;
         }
     }
     return NULL;
 }
-
-/** The panel is there when the firmware lit it; until 78-10 reads its
- * EDID over AUX, a panel the firmware left dark is not known. */
-static int intel_edp_detect(struct drm_connector *connector, int force_probe)
-{
-    (void)force_probe;
-    return edp_crtc(to_i915(connector->dev)) ? DRM_CONNECTOR_CONNECTED : DRM_CONNECTOR_DISCONNECTED;
-}
-
-/** The panel's fixed mode, the firmware's, as Linux's
- * intel_panel_get_modes gives it. */
-static int intel_edp_get_modes(struct drm_connector *connector)
-{
-    struct intel_crtc *c = edp_crtc(to_i915(connector->dev));
-
-    if (!c || drm_mode_probed_add(connector, &c->hw.mode) != 0) {
-        return 0;
-    }
-    return 1;
-}
-
-static const struct drm_connector_funcs intel_edp_funcs = {intel_edp_detect, intel_edp_get_modes,
-                                                           NULL, NULL};
 
 /* ------------------------------------------------------------------------
  * Adoption
@@ -672,11 +846,51 @@ static struct drm_framebuffer *fw_fb_make(struct drm_i915_private *i915, struct 
 }
 
 /**
+ * Take what the firmware set pipe `c` to as its configuration, Linux's
+ * readout of the CRTC state: the timings, the link, the M/N values, the
+ * fitter and the line times, and the eDP link as trained.
+ */
+static void adopt_config(struct drm_i915_private *i915, struct intel_crtc *c)
+{
+    struct intel_crtc_config *cfg = &c->cfg;
+    const struct intel_pipe_readout *hw = &c->hw;
+    struct intel_dp *dp = &i915->display.dp;
+    uint32_t ddi = rd(i915, TRANS_DDI_FUNC_CTL(I915_TRANS_EDP)), lt;
+
+    k_memset(cfg, 0, sizeof(*cfg));
+    cfg->active = 1;
+    cfg->dither = hw->dither;
+    cfg->mode = hw->mode;
+    cfg->src_w = hw->src_w;
+    cfg->src_h = hw->src_h;
+    cfg->bpp = hw->bpp;
+    cfg->port_clock = hw->port_clock;
+    cfg->lanes = hw->lanes;
+    cfg->data_m = hw->data_m;
+    cfg->data_n = hw->data_n;
+    cfg->link_m = hw->link_m;
+    cfg->link_n = hw->link_n;
+    cfg->tu = hw->tu;
+    cfg->pfit = hw->pf_ctl != 0;
+    cfg->pf_pos = hw->pf_win_pos;
+    cfg->pf_size = hw->pf_win_sz;
+    cfg->force_thru = (ddi & TRANS_DDI_EDP_INPUT_MASK) == TRANS_DDI_EDP_INPUT_A_ONOFF;
+    cfg->pixel_rate = intel_pfit_pixel_rate(cfg);
+    lt = rd(i915, WM_LINETIME(c->pipe));
+    cfg->linetime = lt & HSW_LINETIME_MASK;
+    cfg->ips_linetime = (lt >> HSW_IPS_LINETIME_SHIFT) & HSW_LINETIME_MASK;
+    dp->link_rate = hw->port_clock;
+    dp->lane_count = hw->lanes;
+    dp->link_trained = 1;
+}
+
+/**
  * Adopt the picture the firmware left on `c` into the atomic state, as
  * Linux's intel_modeset_readout_hw_state and intel_find_initial_plane_obj
- * do: the CRTC on with the readout's mode, the primary plane showing the
- * firmware's framebuffer, and the eDP connector routed to it, so that a
- * commit that keeps the mode programs the planes alone.
+ * do: the CRTC on with the readout's mode, the source's size when the
+ * fitter scales it, the primary plane showing the firmware's framebuffer,
+ * and the eDP connector routed to it, so that a commit that keeps the
+ * mode programs the planes alone.
  */
 static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
 {
@@ -684,9 +898,16 @@ static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
     struct drm_crtc_state *cs = c->base.state;
     struct drm_plane_state *ps = c->primary.state;
     struct drm_connector_state *conn = d->connector.state;
+    struct drm_mode_modeinfo mode = c->hw.mode;
     struct drm_framebuffer *fb;
 
-    if (drm_atomic_set_mode_for_crtc(cs, &c->hw.mode) != 0) {
+    adopt_config(i915, c);
+    /* Linux's intel_crtc_readout_derived_state: the mode a user set is
+     * the panel's timings at the pipe's source size. */
+    mode.hdisplay = (uint16_t)c->cfg.src_w;
+    mode.vdisplay = (uint16_t)c->cfg.src_h;
+    drm_mode_set_name(&mode);
+    if (drm_atomic_set_mode_for_crtc(cs, &mode) != 0) {
         return;
     }
     cs->active = 1;
@@ -705,12 +926,12 @@ static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
     ps->fb = fb; /* the framebuffer's one reference becomes the state's */
     ps->crtc_x = 0;
     ps->crtc_y = 0;
-    ps->crtc_w = c->hw.mode.hdisplay;
-    ps->crtc_h = c->hw.mode.vdisplay;
+    ps->crtc_w = c->cfg.src_w;
+    ps->crtc_h = c->cfg.src_h;
     ps->src_x = c->hw.x << 16;
     ps->src_y = c->hw.y << 16;
-    ps->src_w = c->hw.src_w << 16;
-    ps->src_h = c->hw.src_h << 16;
+    ps->src_w = c->cfg.src_w << 16;
+    ps->src_h = c->cfg.src_h << 16;
     ps->src.x1 = (int32_t)ps->src_x;
     ps->src.y1 = (int32_t)ps->src_y;
     ps->src.x2 = (int32_t)(ps->src_x + ps->src_w);
@@ -723,9 +944,10 @@ static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
     c->planes_on |= 1u << INTEL_PLANE_PRIMARY;
     c->wm = rd(i915, WM0_PIPE_ILK(c->pipe));
     klog(KLOG_INFO, "i915",
-         "display: pipe %c adopted: %ux%u@%u, %u kHz, %u bpp, %u lane%s at %u kHz, "
+         "display: pipe %c adopted: %ux%u in %ux%u@%u, %u kHz, %u bpp, %u lane%s at %u kHz, "
          "the firmware's framebuffer at GTT 0x%x, stride %u",
-         'A' + c->pipe, (unsigned)c->hw.mode.hdisplay, (unsigned)c->hw.mode.vdisplay,
+         'A' + c->pipe, (unsigned)c->cfg.src_w, (unsigned)c->cfg.src_h,
+         (unsigned)c->hw.mode.hdisplay, (unsigned)c->hw.mode.vdisplay,
          (unsigned)c->hw.mode.vrefresh, (unsigned)c->hw.mode.clock, (unsigned)c->hw.bpp,
          (unsigned)c->hw.lanes, c->hw.lanes == 1 ? "" : "s", (unsigned)c->hw.port_clock,
          (unsigned)c->hw.surf, (unsigned)c->hw.stride);
@@ -758,7 +980,9 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->prefer_shadow = 1;
     mc->async_page_flip = 1;
     mc->fb_dirty = 1;
+    mc->atomic_check = intel_atomic_check;
     mc->atomic_commit = intel_atomic_commit;
+    intel_cdclk_init(i915);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &d->crtc[pipe];
 
@@ -770,28 +994,23 @@ int32_t intel_display_init(struct drm_i915_private *i915)
             return err;
         }
     }
-    edp = edp_crtc(i915);
-    if ((err = drm_encoder_init(dev, &d->encoder, DRM_MODE_ENCODER_TMDS)) != 0 ||
-        (err = drm_connector_init(dev, &d->connector, &intel_edp_funcs, DRM_MODE_CONNECTOR_eDP)) !=
-            0) {
-        return err;
-    }
-    /* Until 78-10 sets modes, the panel stays on the pipe that feeds it. */
-    d->encoder.possible_crtcs = edp ? drm_crtc_mask(&edp->base) : 0x7u;
-    d->connector.status = edp ? DRM_CONNECTOR_CONNECTED : DRM_CONNECTOR_DISCONNECTED;
-    err = drm_connector_attach_encoder(&d->connector, &d->encoder);
-    if (err != 0) {
+    /* A board without the panel, or a panel that does not answer, has no
+     * connector, as Linux's intel_edp_init_connector fails. */
+    if (intel_dp_init(i915) == 0 && (err = intel_dp_connector_init(i915)) != 0) {
         return err;
     }
     err = intel_vblank_init(i915);
     if (err != 0) {
         return err;
     }
+    edp = d->dp.present ? edp_crtc(i915) : NULL;
     if (edp) {
         adopt(i915, edp);
-        intel_backlight_setup(i915);
-    } else {
+    } else if (d->dp.present) {
         klog(KLOG_INFO, "i915", "display: no pipe lit by the firmware; the eDP panel is dark");
+    }
+    if (d->dp.present) {
+        intel_backlight_setup(i915);
     }
     return 0;
 }
@@ -806,6 +1025,9 @@ void intel_display_fini(struct drm_i915_private *i915)
     }
     intel_vblank_fini(i915);
     intel_backlight_fini(i915);
+    /* Linux's intel_dp_encoder_flush_work: VDD that no mode set wants
+     * goes off now. */
+    intel_pps_vdd_off_unlocked(i915, 1);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
             scanout_put(&d->crtc[pipe].parked[slot]);
