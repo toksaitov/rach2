@@ -43,7 +43,8 @@ entries report 8086:0a16, revision 0b, board 17aa:380c and class
 0x030000, and libdrm and Mesa find a Haswell GT2; its rings complete each
 command as it is handed over, without reading batches; its message is a
 real MSI of the edu function; it has no stolen memory and no picture the
-firmware lit, so its eDP connector is disconnected; and its aperture is
+firmware lit, and its DDI A detects no panel, so it has no eDP
+connector; and its aperture is
 memory the fake fills from each page the GTT maps there and writes back
 when it syncs, detiled through the fence registers as the chip would.
 Its file
