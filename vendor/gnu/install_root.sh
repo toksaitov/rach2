@@ -32,6 +32,9 @@
 #             when GNU_VK_GL_CTS is 1, on x86-64
 #   games     the games layer's Debian closure, which games/install_games.sh
 #             installs (games/Readme.md)
+#   kvm       Debian's QEMU and the tests under /opt/kvm-unit-tests and
+#             /opt/kvm-selftests, which kvm/install_kvm.sh installs on x86-64
+#             (kvm/Readme.md)
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
@@ -473,6 +476,7 @@ if [ "${GNU_I386:-}" = 1 ]; then
 fi
 
 . "$DIR/games/install_games.sh"
+. "$DIR/kvm/install_kvm.sh"
 
 for name in ${GNU_AGENTS:-}; do
     install_part "agents/$name"

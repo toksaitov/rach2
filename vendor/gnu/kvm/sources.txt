@@ -1,0 +1,21 @@
+# The pinned sources of the KVM layer's tests, at the revisions task 80-2
+# measured Linux's KVM with on the Lenovo (dev-log/80-games/80-2.md, whose
+# tools/lenovo/debian-ref/SHA256SUMS has the same two digests). Each line
+# gives a name, version, URL and SHA-256, in the format of ../sources.txt;
+# build_kvm.sh fetches and checks each with ../debian/fetch_asset.sh.
+#
+# kvm-unit-tests is GitLab's archive of commit
+# 5a221342a025948fa7d84f0c404748f6ba57f3ad, which nobody signs. Its files
+# were compared with a clone of
+# https://gitlab.com/kvm-unit-tests/kvm-unit-tests.git checked out at that
+# commit, and are the same. GitLab may pack the same commit differently
+# later; the commit is the pin, and a new archive of it needs a new digest.
+#
+# Linux 6.12.115 is the release whose selftests 80-2 built: the tarball's
+# signature, linux-6.12.115.tar.sign over the uncompressed tar, verified
+# with Greg Kroah-Hartman's key, 647F28654894E3BD457199BE38DBBDC86092693E,
+# and kernel.org's sha256sums.asc, whose signature verified with its checksum
+# autosigner's key, B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1, lists the same
+# digest.
+kvm-unit-tests 5a221342a025948fa7d84f0c404748f6ba57f3ad https://gitlab.com/kvm-unit-tests/kvm-unit-tests/-/archive/5a221342a025948fa7d84f0c404748f6ba57f3ad/kvm-unit-tests-5a221342a025948fa7d84f0c404748f6ba57f3ad.tar.gz 4ef95ca0cb64af62d95f4a56015184f0d122449e6a2cf4c553eb2360cf76494e
+linux-kvm-selftests 6.12.115 https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.115.tar.xz 0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb

@@ -1,0 +1,8 @@
+# Debian's QEMU for x86 with its OpenGL modules, which virtio-gpu-gl and the
+# GL displays need, its tools and its firmware. qemu-system-x86 depends on
+# SeaBIOS and iPXE's ROMs; OVMF, its UEFI firmware, it only recommends.
+qemu-system-x86
+qemu-system-modules-opengl
+qemu-utils
+seabios
+ovmf
