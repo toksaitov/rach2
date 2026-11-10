@@ -1,4 +1,4 @@
-# Sample every processor's RIP through QMP.  Usage: 2653-sample.py TAG COUNT SECONDS
+# Sample every processor's RIP through QMP.  Usage: rip-sample.py TAG COUNT SECONDS
 import collections, json, pathlib, re, socket, sys, time
 
 w = pathlib.Path(__file__).resolve().parent

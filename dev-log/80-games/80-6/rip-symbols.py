@@ -1,4 +1,4 @@
-# Resolve the sampler's kernel RIPs to functions.  Usage: sym.py NM-FILE < samples
+# Resolve the sampler's kernel RIPs to functions.  Usage: rip-symbols.py NM-FILE < samples
 import bisect, collections, sys
 syms = []
 for line in open(sys.argv[1]):
