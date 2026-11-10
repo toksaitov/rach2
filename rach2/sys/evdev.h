@@ -320,6 +320,11 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
  * them: 1 or 0. Any context. A NULL `dev` is not grabbed. */
 int evdev_grabbed(struct evdev *dev);
 
+/** Whether the key `code` of `dev` is down, as the last event of it that
+ * passed the input core's filters left it, Linux's test_bit on the
+ * device's `key`: 1 or 0. Any context. A NULL `dev` has no key down. */
+int evdev_key_down(struct evdev *dev, uint16_t code);
+
 /**
  * Report a keyboard's key as one packet: MSC_SCAN with `scan`, the code the
  * keyboard sent, then the key `code` down (`down` nonzero) or up, then

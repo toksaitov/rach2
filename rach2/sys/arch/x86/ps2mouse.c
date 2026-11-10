@@ -18,14 +18,16 @@
  * psmouse does: one that answers speaks its own absolute protocol from then
  * on, and synaptics.c takes its bytes; one whose setup fails is set back to
  * relative mode and goes on as a mouse named a Synaptics TouchPad. When no
- * Synaptics pad answers, the protocol's probe asks for an Elantech pad, as
- * psmouse does after its other touchpads, and elantech.c takes the bytes of
- * one that comes up, or it goes on as a mouse named an Elantech Touchpad.
+ * Synaptics pad answers, the protocol's probe asks for an ALPS touchpad and
+ * then an Elantech one, in psmouse's order: alps.c or elantech.c takes the
+ * bytes of one that comes up, and one whose setup fails goes on as a mouse
+ * named for its vendor.
  */
 #include "i8042.h"
 #include "portio.h"
 #include "elantech.h"
 #include "ps2mouse.h"
+#include "alps.h"
 #include "synaptics.h"
 #include "../arch.h"
 #include "../../platform.h"
@@ -86,6 +88,9 @@ static struct evdev *mouse_dev;
  * touchpad, -1 a Synaptics and -2 an Elantech touchpad set up as a mouse. */
 #define TOUCHPAD_ELANTECH 2
 static int touchpad;
+
+/* What `alps_init` found, as `touchpad` says for a Synaptics pad. */
+static int alps;
 
 /* The side and extra buttons held, MOUSE_BUTTON_*: an Explorer's packet
  * of a wheel's turn of more than 7 does not carry them. */
@@ -234,13 +239,14 @@ static void mouse_set(uint8_t cmd, uint8_t arg)
 
 /**
  * Find the protocol the mouse speaks, as Linux's psmouse does, and set it as
- * Linux sets it: when no Synaptics pad answered, an Elantech touchpad
- * (`elantech_init`), which speaks its own protocol once it is set up; then
- * the IntelliMouse's knock, rates 200, 100 and 80, then the
- * Explorer's, 200, 200 and 80, with the rates 200, 80 and 40 that turn on an
- * Explorer 4.0's horizontal wheel; then 100 samples a second, 8 counts a
- * millimetre and 1:1 scaling. A mouse that answers neither knock is a plain
- * PS/2 mouse of three buttons.
+ * Linux sets it: when no Synaptics pad answered, an ALPS touchpad
+ * (`alps_init`), which alps.c sets up whole, and when no ALPS pad answered
+ * either, an Elantech touchpad (`elantech_init`); each speaks its own
+ * protocol once it is set up. Then the IntelliMouse's knock, rates 200, 100
+ * and 80, then the Explorer's, 200, 200 and 80, with the rates 200, 80 and
+ * 40 that turn on an Explorer 4.0's horizontal wheel; then 100 samples a
+ * second, 8 counts a millimetre and 1:1 scaling. A mouse that answers
+ * neither knock is a plain PS/2 mouse of three buttons.
  */
 static void detect_protocol(void)
 {
@@ -251,7 +257,12 @@ static void detect_protocol(void)
 
     protocol = PROTO_PS2;
     packet_size = 3;
-    if (touchpad == 0) {
+    alps = touchpad == 0 ? alps_init() : 0;
+    if (alps > 0) {
+        return;
+    }
+    /* A pad that answered ALPS's reports is not asked for Elantech's. */
+    if (touchpad == 0 && alps == 0) {
         i = elantech_init();
         if (i > 0) {
             touchpad = TOUCHPAD_ELANTECH;
@@ -279,16 +290,23 @@ static void detect_protocol(void)
 /** Register the event device of the mouse, with Linux's name, numbers and
  * capabilities for its protocol: the protocol's name, then the vendor and
  * the device, "Synaptics TouchPad" or "Elantech Touchpad" for a touchpad
- * that answered its vendor's knock and was not set up. */
+ * that answered its vendor's knock and was not set up, and the ALPS pad's
+ * name for one whose set-up failed. A pad in ALPS's absolute protocol has
+ * alps.c's devices instead. */
 static void register_mouse(void)
 {
     static const char *const names[3][3] = {
         {"PS/2 Generic Mouse", "ImPS/2 Generic Wheel Mouse", "ImExPS/2 Generic Explorer Mouse"},
         {"PS/2 Synaptics TouchPad", "ImPS/2 Synaptics TouchPad", "ImExPS/2 Synaptics TouchPad"},
         {"PS/2 Elantech Touchpad", "ImPS/2 Elantech Touchpad", "ImExPS/2 Elantech Touchpad"}};
+    static const char *const protocols[3] = {"PS/2", "ImPS/2", "ImExPS/2"};
     const char *const *name = names[-touchpad];
     unsigned int caps = MOUSE_POINTER;
     int kind = 0;
+
+    if (alps > 0) {
+        return;
+    }
 
     if (protocol == PROTO_IMPS) {
         kind = 1;
@@ -297,8 +315,9 @@ static void register_mouse(void)
         kind = 2;
         caps |= MOUSE_WHEEL | MOUSE_HWHEEL | MOUSE_SIDE;
     }
-    mouse_dev = mouse_register(name[kind], "isa0060/serio1/input0", EVDEV_BUS_I8042, 0x0002,
-                               (uint16_t)protocol, caps);
+    mouse_dev =
+        mouse_register(alps < 0 ? alps_mouse_name(protocols[kind]) : name[kind],
+                       "isa0060/serio1/input0", EVDEV_BUS_I8042, 0x0002, (uint16_t)protocol, caps);
 }
 
 /** The low `bits` + 1 bits of `v` as a signed number, bit `bits` its sign,
@@ -385,6 +404,10 @@ static void mouse_irq_handler(isr_params_t *params)
     }
     if (touchpad > 0) {
         synaptics_byte(data);
+        return;
+    }
+    if (alps > 0) {
+        alps_byte(data);
         return;
     }
 
