@@ -91,4 +91,13 @@ int synaptics_reconnect(void);
 /** Remove the pad's event device, before the port is probed anew. */
 void synaptics_disconnect(void);
 
+/**
+ * Linux's `synaptics_set_rate`, the pad's own for psmouse: the mode's bit
+ * of 80 packets a second set for a `rate` of 80 or more and cleared below,
+ * and the mode sent. Returns the rate the pad reports at, 80 or 40, which
+ * the caller keeps as the port's. Inside a run of commands, or during the
+ * bring-up.
+ */
+unsigned int synaptics_set_rate(unsigned int rate);
+
 #endif /* _SYNAPTICS_H_ */
