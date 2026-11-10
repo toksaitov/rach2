@@ -282,7 +282,8 @@ struct usb_sys_row {
 };
 
 /** Fill `row` for the device of table entry `index`, with the first
- * interface it drives; 0, or -1 when that entry is not a running device.
+ * interface it drives, a HID device's first that was not given up; 0, or -1
+ * when that entry is not a running device.
  * The entry is read with interrupts off, so a device the interrupt side
  * takes away is read whole or not at all. */
 int usb_core_row(int index, struct usb_sys_row *row);
