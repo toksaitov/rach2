@@ -601,6 +601,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_kms_trial",
+          "checks": "tests/host/i915_kms_trial_hosttest.c runs the display trial's path on the HD 4400's host model as the Lenovo's firmware leaves it: the adoption of pipe A without a write to the pipe, its link or the backlight, the outputs probed with no hotplug event, the panel's mode and four smaller ones under each scaling mode set by SETPROPERTY and SETCRTC with the fitter's window as Linux's pch_panel_fitting and the pipe CRC read through crc/data, the backlight's levels at Linux's duty cycles with level 0 dark, kms_hdmi_inject's 4K mode on pipe A through DDI B with limited range and no second M/N, and ten seconds with no hotplug event, with no wait at its bound, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_power",
           "checks": "tests/host/i915_power_hosttest.c enables the Intel graphics driver's RC6 and frequency control on the HD 4400's host model, RC6 entered at idle with its residency read in milliseconds across the counter's wrap, the pcode mailbox bounded, every frequency request within the limits under the up and down interrupts, and the card's /sys files under Linux's names, under ASan and UBSan and exits 0",
           "source": "scenario"
