@@ -321,9 +321,12 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
 void virtqueue_kick(struct virtqueue *vq);
 
 /**
- * Take every buffer the device has returned, free its descriptors and call
- * `done` for each. An interrupt handler calls it, and so may a driver that
- * polls. Returns the count taken.
+ * Take every buffer the device had returned when the call began, free its
+ * descriptors and call `done` for each. An interrupt handler calls it, and
+ * so may a driver that polls. A buffer returned meanwhile, perhaps one that
+ * a `done` added, raises an interrupt of its own and is left to the next
+ * call, so that a device that keeps answering cannot hold the caller, and
+ * the big lock, until a whole backlog is drained. Returns the count taken.
  */
 int virtqueue_reap(struct virtqueue *vq);
 
