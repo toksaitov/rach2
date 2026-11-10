@@ -23,6 +23,25 @@ static const char *accel_option(enum etude_accel accel)
     return accel == ETUDE_ACCEL_WHPX ? "whpx,kernel-irqchip=off" : etude_accel_name(accel);
 }
 
+/**
+ * The processors QEMU gives profile `p` under `accel`: the profile's, but one
+ * under TCG for a profile with AMD's virtualization. On a thread for each
+ * processor, TCG lets an x87 status load on any processor rewrite processor
+ * 0's hflags2 by a plain read and write, which can undo the nested-paging
+ * flag of processor 0's VMRUN; on one thread for all of them it delivers
+ * interrupts into a nested guest that has them masked
+ * (dev-log/upstream.md). One processor has neither.
+ */
+static unsigned machine_processors(const struct etude_qemu_profile *p, enum etude_accel accel)
+{
+    const struct etude_processor *cpu = etude_processor_find(p->cpu);
+
+    if (accel == ETUDE_ACCEL_TCG && cpu != NULL &&
+        etude_processor_feature(cpu, "svm") == ETUDE_FEATURE_PRESENT)
+        return 1;
+    return p->processors;
+}
+
 /* The network cards a profile may name, each on a user network of its own. */
 static const char *const nic_models[] = {"rtl8139", "e1000", "virtio-net-pci", NULL};
 
@@ -1449,7 +1468,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add(&l, 0, "-S");
     add(&l, 0, "-cpu");
     add(&l, 0, "%s", cpu);
-    snprintf(number, sizeof(number), "%u", p->processors);
+    snprintf(number, sizeof(number), "%u", machine_processors(p, s->accel));
     add(&l, 0, "-smp");
     add(&l, 0, "%s", number);
     snprintf(number, sizeof(number), "%lluB", (unsigned long long)p->memory_bytes);
