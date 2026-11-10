@@ -24,9 +24,10 @@
  * The driver's directory is Linux's. `unbind` takes the name of a function
  * the driver has, 0000:BB:DD.F, and releases it; `bind` takes the name of
  * one no driver has and brings it up. While a function is bound it has a
- * `driver` link to the directory, and the directory a link to it. The
- * directory comes with the first device the driver binds, so a kernel
- * booted without `rach2.i915` has none.
+ * `driver` link to the directory, the directory a link to it, and its
+ * uevent DRIVER=i915, as Linux's driver core shows a binding
+ * (`sysfs_pci_bind`). The directory comes with the first device the driver
+ * binds, so a kernel booted without `rach2.i915` has none.
  *
  * The release leaves nothing of the driver on the device, in the order of
  * Linux's i915_driver_remove: the display off by one commit
@@ -70,11 +71,9 @@
  * bound device has given its own. */
 #define HANDOFF_POWER_CYCLE_MS 510u
 
-/* A bound device and its two links of /sys, 0 for a link not made. */
+/* A bound device, which /sys shows bound to the driver. */
 static struct handoff_slot {
     struct drm_i915_private *i915; /* NULL for a free slot */
-    int link_driver;               /* 0000:BB:DD.F/driver */
-    int link_device;               /* drivers/i915/0000:BB:DD.F */
 } slots[HANDOFF_DEVICES];
 
 static int sys_dir;        /* /sys/bus/pci/drivers/i915, or 0 */
@@ -527,8 +526,7 @@ static void sys_start(void)
 void i915_handoff_bound(struct drm_i915_private *i915)
 {
     struct handoff_slot *slot = 0;
-    char name[HANDOFF_NAME];
-    int i, pci, link;
+    int i, err;
 
     for (i = 0; i < HANDOFF_DEVICES && !slot; i++) {
         if (!slots[i].i915) {
@@ -541,17 +539,10 @@ void i915_handoff_bound(struct drm_i915_private *i915)
     }
     sys_start();
     slot->i915 = i915;
-    slot->link_driver = 0;
-    slot->link_device = 0;
-    pci = sysfs_anchor(SYSFS_PCI_DEVICE, (int)i915->pci.bus << 8 | devfn_of(&i915->pci));
-    if (pci <= 0 || sys_dir <= 0) {
-        return;
+    err = sysfs_pci_bind((int)i915->pci.bus << 8 | devfn_of(&i915->pci), "i915");
+    if (err != 0) {
+        klog(KLOG_WARN, "i915", "handoff: driver link not added: error %d", err);
     }
-    bdf_name(i915->pci.bus, devfn_of(&i915->pci), name);
-    link = sysfs_add_link(pci, "driver", sys_dir);
-    slot->link_driver = link > 0 ? link : 0;
-    link = sysfs_add_link(sys_dir, name, pci);
-    slot->link_device = link > 0 ? link : 0;
 }
 
 void i915_handoff_unbound(struct drm_i915_private *i915)
@@ -559,17 +550,9 @@ void i915_handoff_unbound(struct drm_i915_private *i915)
     int i;
 
     for (i = 0; i < HANDOFF_DEVICES; i++) {
-        if (slots[i].i915 != i915) {
-            continue;
+        if (slots[i].i915 == i915) {
+            sysfs_pci_unbind((int)i915->pci.bus << 8 | devfn_of(&i915->pci));
+            slots[i].i915 = 0;
         }
-        if (slots[i].link_driver > 0) {
-            sysfs_remove(slots[i].link_driver);
-        }
-        if (slots[i].link_device > 0) {
-            sysfs_remove(slots[i].link_device);
-        }
-        slots[i].i915 = 0;
-        slots[i].link_driver = 0;
-        slots[i].link_device = 0;
     }
 }
