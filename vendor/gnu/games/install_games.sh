@@ -10,10 +10,10 @@
 # account for, refusing a file the root already has; then it refuses the root
 # when a library that a program or library of the layer needs is in none of
 # the root's library directories, since nothing resolved the layer's
-# libraries against the root. On x86-64 it adds the Proton launcher and the
-# native games' replays, and on a root with /usr/games puts it on the path.
-# With GNU_WESTON 1 it puts the rebuilt Weston in place of the desktop
-# closure's.
+# libraries against the root. On x86-64 it adds the Proton launcher, the
+# native games' replays and umu-launcher with the Steam Linux Runtime's
+# archive, and on a root with /usr/games puts it on the path. With
+# GNU_WESTON 1 it puts the rebuilt Weston in place of the desktop closure's.
 #
 
 install_debian games
@@ -63,6 +63,14 @@ if [ "$RACH2_ARCH" = x86_64 ]; then
     mkdir -p "$TREE/usr/share/rach2/crysis"
     install -m 0644 "$DIR/games/game.sha256" "$DIR/games/crysis-installers.sha256" \
         "$TREE/usr/share/rach2/crysis/"
+    # umu-launcher under /opt/umu, with the runtime's archive that
+    # rach2-game --umu unpacks for each user, and its command in the path.
+    install_part umu
+    if [ -e "$TREE/usr/bin/umu-run" ] || [ -L "$TREE/usr/bin/umu-run" ]; then
+        echo 'gnu: games: /usr/bin/umu-run already exists' >&2
+        exit 1
+    fi
+    ln -s ../../opt/umu/umu-run "$TREE/usr/bin/umu-run"
     # The native games' fixed replays, which the games-native suite and the
     # Lenovo's runs play.
     if [ -e "$TREE/usr/share/games/rach2" ] || [ -L "$TREE/usr/share/games/rach2" ]; then

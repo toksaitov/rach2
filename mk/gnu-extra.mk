@@ -132,13 +132,15 @@ $(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	    -- $(call GNU_STEP_RUN,vendor/gnu/debian/fetch_webgl.sh)
 
 # The games layer (vendor/gnu/games/Readme.md): a Debian closure of its own,
-# from the same snapshot, which install_root.sh installs after the desktop's.
+# from the same snapshot, which install_root.sh installs after the desktop's,
+# and on x86-64 umu-launcher with the Steam Linux Runtime's archive in umu/.
 GNU_GAMES_STAMP = $(GNU_OUT)/games.stamp
 GNU_STEP_STAMPS += $(GNU_GAMES_STAMP)
 GNU_GAMES_LISTS = games/layer.list games/native.list
 GNU_GAMES_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
                     vendor/gnu/debian/resolve_debs.py \
-                    $(addprefix vendor/gnu/,$(GNU_GAMES_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+                    $(addprefix vendor/gnu/,$(GNU_GAMES_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt \
+                    vendor/gnu/games/fetch_umu.sh vendor/gnu/games/umu.list
 
 .PHONY: gnu-games
 gnu-games: $(GNU_GAMES_STAMP)
@@ -146,9 +148,10 @@ gnu-games: $(GNU_GAMES_STAMP)
 $(GNU_GAMES_STAMP): $(GNU_GAMES_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
 	@$(GNU_ASSET_STEP) -n gnu-games -t $@ $(STEP_INPUTS) \
-	    -o debian/games -o work/debian/games/files -o work/debian/games/closure.txt \
+	    -o debian/games -o work/debian/games/files -o work/debian/games/closure.txt -o umu \
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" \
-	        GNU_DEBIAN_LISTS="$(GNU_GAMES_LISTS)" ./vendor/gnu/debian/fetch_debs.sh games'
+	        GNU_DEBIAN_LISTS="$(GNU_GAMES_LISTS)" ./vendor/gnu/debian/fetch_debs.sh games && \
+	        RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/games/fetch_umu.sh'
 
 # The video layer (vendor/gnu/debian/Readme.md): libva, Intel's i965 VA
 # driver and vainfo, a Debian closure of its own from the desktop's
