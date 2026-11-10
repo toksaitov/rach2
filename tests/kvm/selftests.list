@@ -4,7 +4,9 @@
 # `pass`, an exit of 0; `skip`, the kselftest skip, exit 4, for what the
 # processor lacks, as Linux skips it there; `fail`, another exit, where Linux
 # fails and Rach2 is to fail as it does; or `excluded`, not run, for one of
-# the reasons the stack's approved plan allows. LINUX is the result of the
+# the reasons the stack's approved plan allows. A test whose result is the
+# processor's has FLAG?A:B there: A on a processor whose `flags` in
+# /proc/cpuinfo have FLAG and B on one without it. LINUX is the result of the
 # same 6.12.115 programs under Linux 6.18.58, WSL's, as ref/linux-
 # selftests.status has it; a row Linux failed there, where the programs are
 # older than the kernel, expects a pass unless its EXPECT is `fail`, and names
@@ -51,7 +53,7 @@ x86_64/hyperv_tlb_flush pass pass
 x86_64/kvm_clock_test pass pass
 x86_64/kvm_pv_test pass fail Linux: KVM_ENABLE_CAP failed, rc: -1 errno: 22 (Invalid argument)
 x86_64/max_vcpuid_cap_test pass pass
-x86_64/monitor_mwait_test skip skip Requirement not met: this_cpu_has(X86_FEATURE_MWAIT)
+x86_64/monitor_mwait_test monitor?fail:skip skip Requirement not met: this_cpu_has(X86_FEATURE_MWAIT), as on the testing PC under Hyper-V; with MONITOR and MWAIT the program asks KVM_CAP_DISABLE_QUIRKS2 to turn a quirk back on, which Linux 6.12.115 does not do, and by their sources fails there at its third case
 x86_64/nested_exceptions_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/nx_huge_pages_test skip skip Running via nx_huge_pages_test.sh, which also handles environment setup, is strongly recommended.
 x86_64/platform_info_test pass fail Linux: KVM_SET_MSRS failed on MSR_PLATFORM_INFO, value = 0x80000000
@@ -73,9 +75,9 @@ x86_64/svm_nested_shutdown_test excluded pass nested virtualization, excluded by
 x86_64/svm_nested_soft_inject_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/svm_vmcall_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/sync_regs_test pass pass
-x86_64/triple_fault_event_test pass pass
+x86_64/triple_fault_event_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/tsc_msrs_test pass pass
-x86_64/tsc_scaling_sync pass pass
+x86_64/tsc_scaling_sync tsc_scale?pass:skip pass Requirement not met: kvm_has_cap(KVM_CAP_VM_TSC_CONTROL), on a processor that scales no TSC, as TCG's and the Lenovo's
 x86_64/ucna_injection_test skip skip MCG_CMCI_P is not supported, skipping test
 x86_64/userspace_io_test pass pass
 x86_64/userspace_msr_exit_test pass fail Linux: not ok 3 user_msr.msr_permission_bitmap

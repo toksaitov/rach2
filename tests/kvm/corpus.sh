@@ -7,8 +7,10 @@
 #        corpus.sh selftests LIST
 #
 # LIST is unit-tests.list or selftests.list of this directory: a test a line,
-# its name and EXPECT, `pass`, `skip`, `fail` or `excluded`. Each test whose
-# EXPECT is not `excluded` runs, in the order of the list:
+# its name and EXPECT, `pass`, `skip`, `fail` or `excluded`, or FLAG?A:B for a
+# test whose result is the processor's: A where the `flags` of /proc/cpuinfo
+# have FLAG and B where they do not. Each test whose EXPECT is not `excluded`
+# runs, in the order of the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, from a copy of /opt/kvm-unit-tests,
 #   with ACCEL `kvm,kernel-irqchip=split`, as in the Linux reference,
@@ -50,11 +52,25 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/kvm-corpus.XXXXXX") || exit 1
 
+# The list with each EXPECT that names a flag settled by this processor's.
+flags=$(awk -F: '$1 ~ /^flags[ \t]*$/ { print $2; exit }' /proc/cpuinfo 2> /dev/null)
+awk -v flags=" $flags " '
+    !/^#/ && NF >= 2 {
+        q = index($2, "?")
+        if (q) {
+            rest = substr($2, q + 1)
+            c = index(rest, ":")
+            has = index(flags, " " substr($2, 1, q - 1) " ")
+            $2 = has ? substr(rest, 1, c - 1) : substr(rest, c + 1)
+        }
+        print
+    }' "$list" > "$work/list"
+
 # The tests that run, in the list's order, with what each must give.
-awk '!/^#/ && NF >= 2 && $2 != "excluded" { print $1, $2 }' "$list" > "$work/run"
-awk '!/^#/ && NF >= 2 && $2 == "excluded" {
-    r = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", r); print "kvm-corpus: " $1 ": excluded: " r }' "$list"
-excluded=$(awk '!/^#/ && NF >= 2 && $2 == "excluded"' "$list" | wc -l | tr -d ' ')
+awk '$2 != "excluded" { print $1, $2 }' "$work/list" > "$work/run"
+awk '$2 == "excluded" {
+    r = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", r); print "kvm-corpus: " $1 ": excluded: " r }' "$work/list"
+excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
 
 # results: write NAME RESULT a line to $work/got, RESULT pass, skip or fail.
 : > "$work/got"
