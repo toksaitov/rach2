@@ -287,7 +287,7 @@ static void stack_gap(void)
     unsigned n = 0, i;
 
     if (syscall4(SYS_PRLIMIT64, 0, 3, 0, (long)&rl) != 0 || rl.cur != STACK_WINDOW ||
-        top < STACK_WINDOW + GUARD_GAP) {
+        rl.max < rl.cur || top < STACK_WINDOW + GUARD_GAP) {
         report_notrun("stack-gap-hint", "RLIMIT_STACK or the stack's top is not known");
         report_notrun("stack-gap-fill", "RLIMIT_STACK or the stack's top is not known");
         return;
