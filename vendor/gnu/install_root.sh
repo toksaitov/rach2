@@ -30,6 +30,8 @@
 #             when GNU_IGT is 1, on x86-64
 #   vk-gl-cts VK-GL-CTS 1.4.1.1 and 1.4.7.1 under /opt/vk-gl-cts-VERSION,
 #             when GNU_VK_GL_CTS is 1, on x86-64
+#   games     the games layer's Debian closure, which games/install_games.sh
+#             installs (games/Readme.md)
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
@@ -296,11 +298,18 @@ fi
 # files under /usr/share the amd64 packages of the same version may have too
 # (shared above), less the Venus driver of Mesa 25.0.7 and its ICD, which
 # venus-i386 replaces, as venus replaces amd64's; of any other layer, those
-# SKIP does not name.
+# SKIP does not name and no earlier such layer installed. A package an earlier
+# layer of the build's architecture installed is left out of a later one when
+# its version is the same and refused when it is not; WORK/debian.packages
+# lists each package and version those layers installed.
 install_debian()
 {
     meta="$OUT/work/debian/$1"
     stage="$OUT/debian/$1"
+    if [ ! -f "$meta/closure.txt" ] || [ ! -d "$stage" ]; then
+        echo "gnu: install: no $1 closure in $OUT; run its make target" >&2
+        exit 1
+    fi
     : > "$WORK/shared"
     # Each package's list is the listing of its unpack, where /bin, /lib
     # and /sbin were links into /usr, as trixie has them; here
@@ -311,11 +320,19 @@ install_debian()
     # below every other byte, since tar gives a directory its mode once it has
     # left it, and a mode from the store has no write permission.
     : > "$WORK/debian"
-    while read -r name _; do
+    touch "$WORK/debian.packages"
+    while read -r name version _; do
         if [ "$1" = i386 ]; then
             [ "$(awk -v n="$name" '$1 == n { print $2 }' "$meta/multiarch.txt")" = same ] || continue
         else
             skipped "$name" && continue
+            had=$(awk -v n="$name" '$1 == n { print $2 }' "$WORK/debian.packages")
+            if [ -n "$had" ]; then
+                [ "$had" = "$version" ] && continue
+                echo "gnu: install: refused: the $1 closure has $name $version, where an earlier layer installed $had" >&2
+                exit 1
+            fi
+            echo "$name $version" >> "$WORK/debian.packages"
         fi
         sed -e 's|^\./bin/|./usr/bin/|' -e 's|^\./lib/|./usr/lib/|' \
             -e 's|^\./sbin/|./usr/sbin/|' -e 's|/$||' "$meta/files/$name" >> "$WORK/debian"
@@ -454,6 +471,8 @@ if [ "${GNU_I386:-}" = 1 ]; then
     fi
     echo "gnu: install: i386: the libraries of $i386s of GE-Proton's i386 files are in the root"
 fi
+
+. "$DIR/games/install_games.sh"
 
 for name in ${GNU_AGENTS:-}; do
     install_part "agents/$name"

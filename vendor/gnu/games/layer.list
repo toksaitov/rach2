@@ -1,0 +1,2 @@
+# innoextract unpacks Inno Setup installers, such as GOG's.
+innoextract=1.9-0.1+b1
