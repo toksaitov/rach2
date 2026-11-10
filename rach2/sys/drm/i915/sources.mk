@@ -55,4 +55,5 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/i915_hangcheck.c \
     sys/drm/i915/i915_reset.c \
     sys/drm/i915/i915_gpu_error.c \
-    sys/drm/i915/i915_debugfs.c
+    sys/drm/i915/i915_debugfs.c \
+    sys/drm/i915/i915_handoff.c

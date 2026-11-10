@@ -43,6 +43,12 @@
  * did at boot, or else the connector's preferred mode. A CRTC with no
  * connector of the console's is turned off.
  *
+ * The loader's framebuffer may go while the console is still on it: the
+ * native driver that shows it through its aperture gives its device to
+ * another owner (`drm_client_boot_screen_gone`). The console then draws
+ * nothing, as after the loss of its own buffer, and the next device that
+ * registers gets the console's mode at once.
+ *
  * A driver whose buffers the kernel cannot address as one range, such as
  * virtio-gpu's of scattered pages, gives no `vmap`; there fbcon draws on a
  * shadow in the kernel's heap, and a worker, `kdrmcon`, copies the rows
@@ -773,6 +779,20 @@ void drm_client_dev_register(struct drm_device *dev)
     }
 }
 
+void drm_client_boot_screen_gone(void)
+{
+    uint32_t flags;
+
+    if (con.on_buffer || con.lost) {
+        return;
+    }
+    flags = console_lock();
+    fbcon_detach(1);
+    con.lost = 1;
+    console_unlock(flags);
+    klog(KLOG_INFO, "console", "the loader's framebuffer has gone with its device");
+}
+
 void drm_client_dev_unregister(struct drm_device *dev)
 {
     int was_handed = con.handed;
@@ -787,7 +807,7 @@ void drm_client_dev_unregister(struct drm_device *dev)
     if (con.on_buffer) {
         fbcon_detach(1);
         con.lost = 1;
-    } else if (was_handed && fbcon_active) {
+    } else if (was_handed && fbcon_active && !con.lost) {
         fbcon_attach(fbcon_boot_screen(), NULL);
     }
     if (was_handed) {

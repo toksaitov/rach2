@@ -1376,6 +1376,25 @@ const struct i915_id *i915_id_lookup(uint16_t device_id);
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw);
 
 /**
+ * Bind one function the id table names, through the MMIO backend: function
+ * 0 only, as Linux, since early chips had a second function with the same
+ * id; BAR 0 must be set. Its registers are mapped here, and given back on
+ * an error.
+ *
+ * @return 0, -ENODEV for another function, -ENXIO without BAR 0, -ENOMEM
+ *         when the registers cannot be mapped, or the bind's error.
+ */
+int32_t i915_pci_probe(const pci_device_t *pdev);
+
+/**
+ * Give back what the MMIO backend mapped for `hw`, the registers and the
+ * GTT's entries, and cut `hw` off from the device (`i915_hw_gone`): for a
+ * bind that failed, a device released to another owner, and a record's
+ * end. Another backend is only cut off. Calling it again does nothing.
+ */
+void i915_pci_unmap(struct i915_hw *hw);
+
+/**
  * Find the OpRegion through ASLS and decode the VBT it holds, or the option
  * ROM's when it holds none, as Linux's intel_opregion_setup and
  * intel_bios_init do; Linux's defaults stand in when neither has one.
@@ -1395,6 +1414,15 @@ void i915_bios_setup(struct drm_i915_private *i915, uint16_t command);
  * @return how many were bound, or -ENODEV for none.
  */
 int32_t i915_fake_probe(void);
+
+/**
+ * Bind the fake chip to `pdev`, an `edu` function, as the probe does for
+ * each: for the bring-up of one the driver released (i915_handoff.c).
+ *
+ * @return 0, -ENODEV for a function that is no `edu` device, -ENOMEM, or
+ *         the bind's error.
+ */
+int32_t i915_fake_bind(const pci_device_t *pdev);
 
 /* ---- i915_uncore.c ---- */
 
@@ -3625,6 +3653,19 @@ void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const c
  * with -EIO until a reset succeeds. */
 void i915_gt_set_wedged(struct drm_i915_private *i915);
 
+/**
+ * Stop every ring by force and reset the whole GPU, leaving the rings
+ * stopped, as Linux's intel_engines_release does before a driver gives the
+ * rings' pages back, so that the chip no longer reads them: the forced
+ * stop of each running ring, then the full domain of GEN6_GDRST, tried
+ * four times. The requests the chip had not completed are lost; the caller
+ * fails them (`i915_requests_unplug`). Does not sleep.
+ *
+ * @return 0; -EIO without forcewake; -ETIMEDOUT when the GPU did not
+ *         reset, which wedges it, as a failed reset does.
+ */
+int32_t i915_gt_quiesce(struct drm_i915_private *i915);
+
 /* The requests of an engine the error state keeps, and the ring's dwords
  * at its head. */
 #define I915_ERROR_REQUESTS 8
@@ -3748,5 +3789,23 @@ void i915_gem_context_mark_innocent(struct intel_context *ce);
  * device is registered; the files go with its directories at the unplug.
  */
 void i915_debugfs_register(struct drm_i915_private *i915);
+
+/* ---- i915_handoff.c ---- */
+
+/*
+ * The release of a bound device to another driver and its bring-up again
+ * from a reset, through /sys/bus/pci/drivers/i915/unbind and bind, which
+ * i915_handoff.c tells whole. The bind and the unplug tell it of each
+ * device that comes and goes.
+ */
+
+/** A device is bound and registered: make the driver's directory of /sys
+ * if it is not there, and show the driver on the function, its `driver`
+ * link and the directory's link to it. From the bind, under the big lock. */
+void i915_handoff_bound(struct drm_i915_private *i915);
+
+/** A device is unplugged: take its two links away. Nothing for a device
+ * `i915_handoff_bound` was not told of. */
+void i915_handoff_unbound(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */

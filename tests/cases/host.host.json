@@ -636,6 +636,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_handoff",
+          "checks": "tests/host/i915_handoff_hosttest.c releases the Intel graphics driver's HD 4400 through /sys/bus/pci/drivers/i915/unbind and brings it up again through bind on the host model, start to finish: the display down in Linux's order and the GPU reset before the rings' pages go back, every interrupt masked, the message and bus mastering off, the function without an owner, the console told its screen has gone, the backlight on a stand-in that writes no register and a record a program still holds cut off from the chip; the release refused while a program holds an aperture window or the GPU will not reset, and the bring-up while vfio-pci has the function, its driver_override names another driver or the function's reset fails; then the function, left as a guest's driver would leave it, reset once before any access, the panel's power cycle waited out, the driver bound with nothing adopted and no entry of the guest's in the GTT, and a full mode set of the panel by SETCRTC with the link trained and frames counted, twice over, with no wait at its bound and every allocation given back, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_gem",
           "checks": "tests/host/i915_gem_hosttest.c makes, reads, writes, maps, tiles, fences, waits on and shares the Intel graphics driver's buffers over the real GEM, PRIME and fence code on a chip whose aperture holds what was written through it until the driver syncs it: a tiled object written through a GTT map reads back where Linux's selftest tiled_offset puts each byte, windows are moved over an aperture twice their reach, the 33rd tiled map takes the least recently used fence, under ASan and UBSan and exits 0",
           "source": "scenario"

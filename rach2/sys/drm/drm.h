@@ -1976,6 +1976,12 @@ void drm_client_dev_unregister(struct drm_device *dev);
  * console sets its mode again on the outputs connected now. Process
  * context; may sleep. */
 void drm_client_dev_hotplug(struct drm_device *dev);
+/** The loader's framebuffer has gone, with the device whose aperture
+ * showed it, which its driver gives to another owner: a console still on
+ * it draws nothing from now on, and /fb's native mode has no screen, until
+ * a device registers, on which the console then sets its own mode. Nothing
+ * for a console on a buffer of its own. Does not sleep. */
+void drm_client_boot_screen_gone(void);
 
 /* ------------------------------------------------------------------------
  * The drivers' probes. Each finds its devices, binds and registers them,
