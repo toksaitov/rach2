@@ -136,8 +136,8 @@ class Runner:
     def start_weston(self):
         """
         Start a headless Weston on GL with Xwayland and export its display.
-        Its shell is desktop-shell: Weston 14.0.2's kiosk-shell dies of a
-        segmentation fault as Wine's windows come and go, under Linux too.
+        Its shell is desktop-shell, so that the Debian guest's stock Weston,
+        whose kiosk-shell dies as Wine's windows come and go, runs it too.
         """
         log = self.out / "weston.log"
         self.weston = start(["weston", "--backend=headless", "--renderer=gl", "--width=1280",
@@ -178,14 +178,21 @@ class Runner:
         subprocess.run([str(self.proton / "files/bin/wineserver"), "-w"], env=env, check=False)
 
     def make_prefix(self):
-        """Make the prefix with the launcher; return the size it set, in MiB."""
+        """Make the prefix with the launcher."""
         status = self.launch("prefix", ["c:\\windows\\system32\\cmd.exe", "/c", "exit", "0"])
         text = (self.out / "prefix.log").read_text(errors="replace")
-        made = re.search(r"rach2-game: prefix: made .* with VideoMemorySize (\d+) MiB", text)
+        made = re.search(r"rach2-game: prefix: made \S+", text)
         say("prefix: status %d %s" % (status, made.group(0) if made else "not made"))
         if status != 0 or not made:
             raise RuntimeError("the launcher did not make the prefix")
-        return int(made.group(1))
+
+    def glx_mib(self):
+        """Return the video memory GLX_MESA_query_renderer reports, in MiB, or None."""
+        run = subprocess.run(["glxinfo", "-B"], env=self.env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, check=False)
+        (self.out / "glxinfo.txt").write_text(run.stdout)
+        found = re.search(r"^\s*Video memory: (\d+)MB$", run.stdout, re.M)
+        return int(found.group(1)) if found else None
 
     def probe(self, name, extra=None):
         """Run the probe NAME.exe; return its status and its output."""
@@ -200,32 +207,30 @@ class Runner:
         return status, text
 
     def row_prefix(self, results):
-        """Check the new prefix, its key and the size WineD3D reports."""
-        mib = self.make_prefix()
+        """Check the new prefix and that WineD3D takes the driver's video memory."""
+        self.make_prefix()
         pfx = self.prefix / "pfx"
         reg = (pfx / "user.reg").read_text(errors="replace")
-        section = re.search(r"^\[Software\\\\Wine\\\\Direct3D\][^\n]*\n(.*?)(?:\n\n|\Z)", reg,
-                            re.M | re.S)
-        key = re.search(r'^"VideoMemorySize"="(\d+)"', section.group(1), re.M) if section else None
         results["syswow64"] = (pfx / "drive_c/windows/syswow64").is_dir()
-        results["key_mib"] = int(key.group(1)) if key else None
-        results["launcher_mib"] = mib
-        results["meminfo_mib"] = mem_mib()
+        results["key"] = '"VideoMemorySize"' in reg
+        results["glx_mib"] = mib = self.glx_mib()
         status, text = self.probe("d3d964", {"WINEDEBUG": "-all,err+all,trace+d3d"})
         log = (self.out / "d3d964.proton.log").read_text(errors="replace")
-        use = "Use %dMiB = 0x%x bytes for emulated_textureram" % (mib, mib << 20)
-        emulating = "Emulating 0x%x bytes." % (mib << 20)
-        results["wined3d_use"] = use in log
-        results["wined3d_emulating"] = emulating in log
+        card = re.search(r"Card reports vendor PCI ID 0x[0-9a-f]+, device PCI ID 0x[0-9a-f]+, "
+                         r"0x([0-9a-f]+) bytes of video memory", log)
+        emulating = re.search(r"Emulating 0x([0-9a-f]+) bytes of video ram", log)
+        results["wined3d_card"] = int(card.group(1), 16) if card else None
+        results["wined3d_emulating"] = int(emulating.group(1), 16) if emulating else None
         results["probe"] = status
-        say("prefix: syswow64 %s key %s launcher %d meminfo %d probe %d wined3d %s %s" % (
-            results["syswow64"], results["key_mib"], mib, results["meminfo_mib"], status,
-            results["wined3d_use"], results["wined3d_emulating"]))
+        say("prefix: syswow64 %s key %s glx %s MiB probe %d wined3d card %s emulating %s" % (
+            results["syswow64"], results["key"], mib, status, results["wined3d_card"],
+            results["wined3d_emulating"]))
         (self.out / "d3d964.proton.log").write_text(
-            "\n".join(l for l in log.splitlines() if "emulated_textureram" in l or
+            "\n".join(l for l in log.splitlines() if "bytes of video" in l or
                       "Emulating" in l or ":err:" in l) + "\n")
-        return (results["syswow64"] and results["key_mib"] == mib == results["meminfo_mib"] and
-                results["wined3d_use"] and results["wined3d_emulating"] and status == 0)
+        return (results["syswow64"] and not results["key"] and mib is not None and
+                results["wined3d_card"] == results["wined3d_emulating"] == mib << 20 and
+                status == 0)
 
     def row_draw(self, bits, results, ref):
         """Run the GL and Direct3D 9 probes of BITS bits and compare their sums."""
