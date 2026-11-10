@@ -8334,17 +8334,60 @@ static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
     return rc;
 }
 
+/** Enable external attributes, promoting a revision-zero superblock first.
+ * The allocator lock serialises the feature write; a stop after promotion
+ * still has a valid dynamic revision with no attribute inode yet. */
+static int attr_feature(struct ext2_mount *em)
+{
+    uint8_t raw[16], feature[4];
+    int rc;
+
+    meta_lock(em);
+    rc = read_bytes(em, 1024 + 76, raw, sizeof(raw));
+    if (!rc && le32(raw) == 0) {
+        LE32_PUT(raw, 1);
+        LE32_PUT(raw + 8, em->first_ino);
+        LE16_PUT(raw + 12, em->inode_size);
+        rc = write_bytes(em, 1024 + 76, raw, sizeof(raw), WRITE_DURABLE);
+    }
+    if (!rc && !(em->compat & 8u)) {
+        em->compat |= 8u; /* EXT2_FEATURE_COMPAT_EXT_ATTR precedes i_file_acl. */
+        LE32_PUT(feature, em->compat);
+        rc = write_bytes(em, 1024 + 92, feature, 4, WRITE_DURABLE);
+    }
+    meta_unlock(em);
+    return rc;
+}
+
+/** Store a private block in place, which needs no free block even on a
+ * full disk. The node lock excludes its only inode's other callers. */
+static int attr_inplace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_t *raw)
+{
+    struct ext2_mount *em = em_of(mnt);
+    int rc = em_write_out(mnt);
+
+    if (!rc)
+        rc = attr_feature(em);
+    if (!rc)
+        rc = write_owned(em, n->ino, (uint64_t)n->file_acl * em->block_size, raw, em->block_size,
+                         WRITE_DURABLE);
+    if (!rc) {
+        stamp(n, T_CTIME);
+        rc = inode_write(em, n, 0, WRITE_DURABLE);
+    }
+    return rc;
+}
+
 /** Replace an inode's attribute block without changing a shared block.
  * The node is locked. Allocation and contents reach disk before the inode;
  * the old block's reference goes only after the inode is durable, on every
  * mount. A failed write leaves allocated blocks for e2fsck, never reuses a
  * block an uncertain inode write may name. Returns 0 or -errno. */
 static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_t *raw,
-                        int nonempty)
+                        int nonempty, int exclusive)
 {
     struct ext2_mount *em = em_of(mnt);
     uint32_t old = n->file_acl, fresh = 0;
-    uint8_t feature[4];
     int rc;
 
     if (!old && nonempty && n->blocks > 0xFFFFFFFFu - em->block_size / 512)
@@ -8352,6 +8395,8 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
     rc = assert_writable(mnt, em);
     if (!rc)
         rc = writeback_drain(em);
+    if (!rc && nonempty && exclusive)
+        return attr_inplace(mnt, n, raw);
     if (!rc && nonempty)
         rc = alloc_block(em, old, &fresh);
     if (!rc)
@@ -8359,13 +8404,8 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
     if (!rc && nonempty)
         rc = write_owned(em, n->ino, (uint64_t)fresh * em->block_size, raw, em->block_size,
                          WRITE_DURABLE);
-    if (!rc && nonempty) {
-        meta_lock(em);
-        em->compat |= 8u; /* EXT2_FEATURE_COMPAT_EXT_ATTR precedes i_file_acl. */
-        LE32_PUT(feature, em->compat);
-        rc = write_bytes(em, 1024 + 92, feature, 4, WRITE_DURABLE);
-        meta_unlock(em);
-    }
+    if (!rc && nonempty)
+        rc = attr_feature(em);
     if (rc)
         return rc;
     n->file_acl = fresh;
@@ -8423,7 +8463,7 @@ static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
         } else
             rc = -ENOMEM;
         if (rc >= 0)
-            rc = attr_replace(mnt, n, out, rc);
+            rc = attr_replace(mnt, n, out, rc, raw && le32(raw + 4) == 1);
     }
     kfree(raw);
     kfree(out);
