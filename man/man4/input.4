@@ -85,7 +85,14 @@ names it: a mouse that answers Microsoft's IntelliMouse Explorer knock is
 product 6, with a wheel, a horizontal wheel and five buttons; one that
 answers the IntelliMouse's alone is
 .Dq ImPS/2 Generic Wheel Mouse ,
-product 5, with a wheel and three buttons; any other is
+product 5, with a wheel and three buttons; a Kensington ThinkingMouse,
+which answers psmouse's nine rates with the ID 2 and is asked first, is
+.Dq ThinkPS/2 Kensington ThinkingMouse ,
+product 3, with four buttons; a Genius NetMouse, which answers three 1:1
+scalings and a status request with 0x00 0x33 0x55 where no touchpad
+answered, is
+.Dq GenPS/2 Genius Mouse ,
+product 4, with a wheel and five buttons; any other is
 .Dq PS/2 Generic Mouse ,
 product 1, with three buttons.
 Each is vendor 2 on the PS/2 controller's bus, at
@@ -376,6 +383,103 @@ pad whose absolute mode Linux does not use, is reset and named for the
 mouse protocol it answers,
 .Dq PS/2 Elantech Touchpad
 and the like.
+.Pp
+Its port, serio1, also has the pad's registers and settings as files, as
+Linux's elantech driver makes them:
+.Pa reg_07 ,
+.Pa reg_10 ,
+.Pa reg_11
+and
+.Pa reg_20
+to
+.Pa reg_26
+read the register from the pad, as
+.Ql 0x
+and two hexadecimal digits, or
+.Ql 0xffffffff
+when the pad does not answer, and a byte in hexadecimal that root writes
+to one is written to the pad and kept, a version 1 pad keeping absolute
+mode in register 0x10 and four-byte packets in register 0x11 whatever is
+written;
+.Pa debug ,
+1 on a pad past version 1 and 0 on version 1, logs the driver's retries,
+and from 2 every packet;
+.Pa paritycheck ,
+1, checks the parity of version 1's packets and the constant bits of
+version 2's;
+and
+.Pa crc_enabled
+says that a version 3 or 4 pad's packets are of the CRC form, as its
+firmware or Linux's table of machines says.
+These three are read and written as the registers are, and change no
+register.
+The pad is disabled while one of its files reads or writes it, and its
+packets go on after.
+.Pp
+The PS/2 port's settings are files of its serio port, serio1, and of a
+pad's pass-through port, serio2, as Linux's psmouse has them; each reads as
+its value and a newline, a number that root writes is read as Linux's
+.Fn kstrtouint
+reads it, and a write disables the device, and for the device behind a
+pad's port the pad too, until it is done, failing with
+.Er ENODEV
+while the port waits for its reconnect.
+.Pa protocol
+reads the name of the protocol the device speaks.
+A name or alias of psmouse's table written to it, matched whole as
+written, with no newline, switches the port as psmouse switches it: the
+protocol's own detect and set-up, a device that does not speak it reset
+and set to PS/2, a node registered for it before the old one is removed,
+and the protocol's files; the node's name keeps the vendor and model a
+detect gave before, as psmouse keeps them.
+Both ports take
+.Ql PS/2
+.Pq Ql bare ,
+.Ql ThinkPS/2
+.Pq Ql thinkps ,
+.Ql GenPS/2
+.Pq Ql genius ,
+.Ql ImPS/2
+.Pq Ql imps ,
+.Ql ImExPS/2
+.Pq Ql exps ,
+.Ql TPPS/2
+.Pq Ql trackpoint ,
+.Ql CortronPS/2
+.Pq Ql cortps
+and
+.Ql auto
+.Pq Ql any ,
+which probes the port whole; serio1 also takes
+.Ql SynPS/2
+.Pq Ql synaptics ,
+.Ql AlpsPS/2
+.Pq Ql alps
+and
+.Ql ETPS/2
+.Pq Ql elantech .
+.Pa rate
+is the samples a second, 100 at first, set as the first of 200, 100, 80,
+60, 40, 20, 10 and 0 not above the number written, through the protocol's
+own way: a Synaptics pad takes 80 for 80 or more and 40 below, as its
+mode's high-rate bit, and an Elantech pad of firmware 0x381f17 has register
+0x07 written again after it.
+.Pa resolution
+is the counts an inch, 200 at first, set as 25, 50, 100 or 200 by
+psmouse's codes, 200 for 0 or past 200.
+.Pa resetafter
+is the bad packets in a row, an ALPS pad's bad bytes, after which the
+device is reconnected, 5 or twice an ALPS pad's packet at first, 0 for
+never.
+.Pa resync_time
+is the seconds a device may be idle before the first byte of its next
+packet begins a resync, 0, the first value, for none; a switch of protocol
+sets it to 0 for a packet of three bytes or a device that does not answer
+a poll, and a Synaptics or ALPS pad's set-up sets it to 0.
+A resync, which a pause of half a second inside a mouse's packet also
+begins, disables the device, polls it with 0xEB for a packet, which must
+have its protocol's form, and enables it again; a device whose poll fails
+is reconnected.
 .Pp
 After five packets in a row that break their form, a pad's that it
 refuses or a mouse's first byte without its framing bit, or the bytes
@@ -860,18 +964,16 @@ over PS/2.
 Of Linux's machine quirks for Synaptics pads only the Toshiba rate of 40
 is taken: the Cr-48's profile sensor is read as any pad with the advanced
 gesture mode.
-The serio port has none of Linux's psmouse files,
-.Pa protocol ,
-.Pa rate ,
-.Pa resolution ,
-.Pa resetafter
-and
-.Pa resync_time ,
-and an Elantech pad none of its register files,
-.Pa reg_07
-to
-.Pa reg_26 ,
-.Pa debug ,
-.Pa paritycheck
-and
-.Pa crc_enabled .
+A serio port's
+.Pa protocol
+refuses with
+.Er EINVAL
+a name of psmouse's table whose detect Rach2 does not have, such as
+.Ql PS2++
+or
+.Ql LBPS/2 ,
+which Linux would try and fall back from to PS/2.
+A pause of half a second inside a Synaptics, ALPS or Elantech pad's packet
+drops the packet in the pad's driver, where Linux resyncs the pad.
+An Elantech pad's register file reads the pad with the pad disabled, where
+Linux reads it while the pad reports.
