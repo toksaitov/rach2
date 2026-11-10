@@ -167,6 +167,17 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: unreported.
 * Next: report to Open-Wine-Components/umu-launcher with a patch that exits 1 after logging the exception.
 
+## Linux's protection keys selftest exits 0 before most of its tests have run
+
+* Project: Linux 6.12.115, `tools/testing/selftests/mm/protection_keys.c`; the source is `linux-6.12.115.tar.xz`, SHA-256 `0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb`, which `vendor/gnu/kvm/sources.txt` pins.
+* Fails: the program's exit status says nothing about all but the first 18 tests. `test_pkey_alloc_exhaust` (line 1199) calls `become_child` (line 1234) to check that allocations survive a fork, and `become_child` (line 1183) forks and has the parent `exit(0)` (line 1195) while the child goes on. The test is the 19th of `pkey_tests` (line 1778), so in the first of the 22 iterations the process the caller waits for exits 0 there, and each later test, and each later iteration's `become_child`, runs in a descendant that no one waits for. A `pkey_assert` that fails after that point ends a descendant and leaves the status 0; only the output, which ends with `done (all tests OK)` when every test passed, shows it.
+* Found: 2026-11-11, on the testing host, milestone 80, task 80-10h, when the selftest, run on Debian's 6.12.115 under QEMU's `max` processor with its output to a file that the shell read as soon as the program exited, exited 0 with the file ending at `test 17 PASSED (iteration 1)` in one run and at `test 19 PASSED (iteration 2)` in another, the tests being numbered from 0.
+* Reproduction: run `protection_keys_64` with its output to a file and read the file as soon as the program exits: the file ends long before `done (all tests OK)`, which a pipe into `cat`, read to its end, shows a few seconds later.
+* Evidence: Linux's `protection_keys.c` at 6.12.115, the lines named above; the task's comment on its issue, with the two runs' counts.
+* Rach2: nothing to work around. Rach2's checks of the selftest read its output through a pipe to the end and look for `done (all tests OK)`.
+* Status: unreported.
+* Next: check the current mainline's `protection_keys.c`, whether it still forks this way and whether `run_vmtests.sh` reads more than the status, which the records do not hold; then report to linux-mm with a patch that has the parent wait for the child and exit with its status.
+
 ## Linux's move_pages reads a 32-bit program's addresses past the first 16 from the wrong place
 
 * Project: Linux 6.12.115, `mm/migrate.c`; the source is `linux-6.12.115.tar.xz`, SHA-256 `0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb`, which `vendor/gnu/kvm/sources.txt` pins.

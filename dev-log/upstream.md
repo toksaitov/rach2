@@ -21,6 +21,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 
 | Fault | Project | Milestone | Status | Entry |
 |---|---|---|---|---|
+| Linux's protection keys selftest exits 0 before most of its tests have run | Linux 6.12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linuxs-protection-keys-selftest-exits-0-before-most-of-its-tests-have-run) |
 | PulseAudio's OSS sink writes 1% as 0 to the mixer | PulseAudio 17.0 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#pulseaudios-oss-sink-writes-1-as-0-to-the-mixer) |
 | Wine DirectInput waits for a terminated worker during process detach | Wine 11.0, GE-Proton11-12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#wine-directinput-waits-for-a-terminated-worker-during-process-detach) |
 | GE-Proton loses mutex robustness when priority inheritance is unavailable | GE-Proton11-12 | 80 | unreported, draft | [80-games/upstream.md](80-games/upstream.md#ge-proton-loses-mutex-robustness-when-priority-inheritance-is-unavailable) |
