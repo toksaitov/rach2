@@ -162,7 +162,11 @@ flag, and
 writes the user ID of a user namespace's maker.
 .Pp
 A user namespace may be nested 7 deep below the first, and so may a PID
-namespace; there are at most 32 mount namespaces at once.
+namespace, and the maps of a user namespace have at most 340 extents.
+Mount namespaces are bounded by memory and by each user's
+.Pa /proc/sys/user/max_mnt_namespaces ,
+counted in the user namespace that owns the new one and in each above it,
+as Linux counts them.
 .Pp
 The i386 system call numbers are 310 for
 .Fn unshare
@@ -180,6 +184,8 @@ a network namespace in one
 .Xr clone 2
 as an ordinary user, as a browser's sandbox does, and writes the maps of a
 new user namespace.
+It holds forty mount namespaces at once, each with a mount of its own, and
+writes a map of 340 extents to a child's user namespace from outside it.
 .Sh ERRORS
 .Bl -tag -width "[EUSERS]"
 .It Bq Er EBADF
@@ -207,7 +213,9 @@ the target user namespace already.
 .It Bq Er ENOMEM
 A namespace or a copy could not be allocated.
 .It Bq Er ENOSPC
-32 mount namespaces exist.
+A new mount namespace would pass a user's
+.Pa /proc/sys/user/max_mnt_namespaces
+in the user namespace that would own it or in one above.
 .It Bq Er EPERM
 The caller is not privileged where it must be.
 .It Bq Er ESRCH

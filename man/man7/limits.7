@@ -144,6 +144,17 @@ only at the descriptor limit.
 These allocations are outside the resource-limit table.
 Other fixed capacities are the loopback ring, 64 frames;
 the USB device table, sixteen records; and the disk registry, eight records.
+A user namespace may be nested 7 deep below the first, and so may a PID
+namespace; its ID maps have at most 340 extents each, as on Linux.
+Mount namespaces are bounded by memory and by
+.Pa /proc/sys/user/max_mnt_namespaces ,
+the namespaces each user may own at once, as
+.Xr proc 5
+describes it: half the threads Linux would allow the memory, 8192 on an
+i686 machine of 1 GiB and 4096 on an x86-64 one, past which
+.Xr unshare 2
+fails with
+.Er ENOSPC .
 A KVM virtual machine,
 .Xr kvm 4 ,
 has at most 64 vCPUs, with ids below 256, and 256 memory slots;
@@ -176,4 +187,5 @@ by name.
 .Xr kvm 4 ,
 .Xr vfio 4 ,
 .Xr core 5 ,
+.Xr proc 5 ,
 .Xr memory 7

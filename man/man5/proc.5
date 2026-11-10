@@ -1024,6 +1024,16 @@ moves nothing; a write from 0 to 2 sets it for the next exec;
 which libcap reads to bound its sets;
 .Pa crypto/fips_enabled ,
 0, since the kernel is not in FIPS mode, which libgcrypt and OpenSSL read;
+.Pa user/max_mnt_namespaces ,
+the mount namespaces each user may own at once in the reader's user
+namespace and those below it, as Linux counts them: in the first, half the
+threads Linux would allow the machine's memory, and in another 2147483647
+until its root writes a value from 0 to 2147483647; past it
+.Xr unshare 2
+and
+.Xr clone 2
+fail with
+.Er ENOSPC ;
 .Pa kernel/random/boot_id ,
 a random UUID drawn at its first read that stays for the boot, and
 .Pa kernel/random/uuid ,
@@ -1873,10 +1883,15 @@ namespace sees it, or as the namespace's parent sees it for a reader in
 the namespace, and the count, each right-aligned in ten columns.
 The first namespace reads
 .Ql "0 0 4294967295" .
-A map is written once, in one write of at most five lines, by a process
-of the namespace or its parent; a writer privileged in the parent maps
-IDs the parent maps, and another writer maps one ID, its own effective
-ID, and for the groups only after
+A map is written once, in one write of fewer than 4096 bytes and at most
+340 lines, as on Linux since 4.15, by a process of the namespace or its
+parent; a 341st line or a write of a page or more fails with
+.Er EINVAL .
+A map of more than five extents reads back sorted by the first ID, as
+Linux lists one.
+A writer privileged in the parent maps IDs the parent maps, each extent's
+within one extent of the parent's map, and another writer maps one ID,
+its own effective ID, and for the groups only after
 .Pa setgroups
 was set to
 .Ql deny .
