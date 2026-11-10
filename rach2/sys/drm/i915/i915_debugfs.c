@@ -750,6 +750,47 @@ static void state_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
+/**
+ * The open of i915_forcewake_user, Linux's i915_forcewake_open: the GT's
+ * forcewake is held, and with it the GT kept out of RC6, until the close,
+ * so that a program may reach the registers through the BAR's mapping, as
+ * IGT's register access does. The device is held until the close. 0,
+ * -ENODEV for a device unplugged, or -EIO when the forcewake is not
+ * acknowledged.
+ */
+static int32_t forcewake_user_open(fd_entry_t *e, int flags)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)e->priv;
+
+    (void)flags;
+    if (gone(i915)) {
+        return -ENODEV;
+    }
+    if (i915_forcewake_get(i915) < 0) {
+        return -EIO;
+    }
+    drm_dev_get(&i915->drm);
+    return 0;
+}
+
+/** Let the forcewake and the device go at the last close of
+ * i915_forcewake_user; an unplugged device's registers are gone. */
+static void forcewake_user_close(fd_entry_t *e)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)e->priv;
+
+    if (i915) {
+        if (!gone(i915)) {
+            i915_forcewake_put(i915);
+        }
+        drm_dev_put(&i915->drm);
+    }
+    e->priv = NULL;
+}
+
+static const struct file_ops forcewake_user_ops = {NULL, NULL, NULL, NULL, forcewake_user_close,
+                                                   NULL, NULL};
+
 static const struct file_ops error_state_ops = {
     state_read, error_state_write, NULL, NULL, state_close, NULL, state_llseek};
 
@@ -1601,6 +1642,10 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     if (rc == 0) {
         drm_debugfs_path(&i915->drm, "i915_gpu_info", path, sizeof(path));
         rc = debugfs_create_file(path, 0644u, &gpu_info_ops, gpu_info_open, i915);
+    }
+    if (rc == 0) {
+        drm_debugfs_path(&i915->drm, "i915_forcewake_user", path, sizeof(path));
+        rc = debugfs_create_file(path, 0400u, &forcewake_user_ops, forcewake_user_open, i915);
     }
     if (rc != 0) {
         klog(KLOG_WARN, "i915", "debugfs: %s: error %d", path, (int)rc);

@@ -350,6 +350,16 @@ Any write clears the state.
 Mode 0644.
 The same text for a state captured of every engine at the open, without
 a hang.
+.It Pa dri/DEVICE/i915_forcewake_user
+Mode 0400.
+An open holds the GT's forcewake, and so keeps the GT out of RC6, until
+the last close, as Linux's does, so that a program may read and write the
+registers through the mapping of BAR 0's
+.Pa resource0
+file of
+.Xr sysfs 5 ,
+as IGT's register access does.
+It has no text.
 .It Pa dri/DEVICE/i915_fake
 Mode 0600.
 Present for a device bound to the fake chip of
