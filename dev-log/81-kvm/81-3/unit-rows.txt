@@ -1,0 +1,68 @@
+==== syscall
+timeout -k 1s --foreground 60 /usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -dev
+enabling apic
+smp: waiting for 0 APs
+PASS: MSR_*STAR eager loading
+Unhandled exception 6 #UD(0) at ip 00000000004001f3
+error_code=0000      rflags=00010146      cs=0000003b
+rax=0000000000000146 rcx=00000000004001ea rdx=0000000000403c3c rbx=0000000000009500
+rbp=0000000001017ff0 rsi=00000000004001f7 rdi=0000000000000001
+ r8=0000000000413b83  r9=00000000000003f8 r10=000000000000000d r11=0000000000000046
+r12=0000000000000000 r13=0000000000000000 r14=0000000000000000 r15=0000000000000000
+cr0=0000000080000011 cr2=0000000000000000 cr3=000000000040d000 cr4=0000000000000020
+cr8=0000000000000000
+	STACK: @4001f3 4001bd
+==== debug
+timeout -k 1s --foreground 60 /usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -dev
+enabling apic
+smp: waiting for 0 APs
+PASS: CPL0 Split Lock #AC = 0 (#DB = 0), val = deadbeefdeadbeef (wanted deadbeefdeadbeef)
+PASS: CPL3 Bus Lock #DB = 0, val = deadbeefdeadbeef (wanted deadbeefdeadbeef)
+PASS: DR4==DR6 with CR4.DE == 0
+PASS: DR4 read got #UD with CR4.DE == 1
+PASS: #BP
+PASS: Wanted #DB on 0x400c7a w/ DR6 = 0xffff0ff4, got 1 #DBs, addr[0] = 0x400c7a, DR6 = 0xffff0ff4
+PASS: Wanted #DB on 0x400cda w/ DR6 = 0xffff4ff4, got 1 #DBs, addr[0] = 0x400cda, DR6 = 0xffff4ff4
+PASS: Single-step #DB basic test
+PASS: Usermode Single-step #DB basic test
+PASS: Single-step #DB on emulated instructions
+PASS: Usermode Single-step #DB on emulated instructions
+PASS: Single-step #DB w/ STI blocking
+PASS: Usermode Single-step #DB w/ STI blocking
+PASS: Single-step #DB w/ MOVSS blocking
+PASS: Usermode Single-step #DB w/ MOVSS blocking
+PASS: Single-Step + ICEBP #DB w/ MOVSS blocking
+PASS: Usermode Single-Step + ICEBP #DB w/ MOVSS blocking
+PASS: Single-step #DB w/ MOVSS blocking and DR7.GD=1
+FAIL: Single-step #DB w/ STI;HLT
+PASS: hw watchpoint (test that dr6.BS is not cleared)
+PASS: hw watchpoint (test that dr6.BS is not set)
+PASS: icebp
+PASS: MOV SS + watchpoint + ICEBP
+PASS: MOV SS + watchpoint + int $1
+PASS: MOV SS + watchpoint + INT3
+SUMMARY: 25 tests, 1 unexpected failures
+==== smap
+timeout -k 1s --foreground 60 /usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -dev
+enabling apic
+smp: waiting for 0 APs
+SMAP not enabled
+SUMMARY: 0 tests
+==== asyncpf
+timeout -k 1s --foreground 60 /usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -dev
+enabling apic
+smp: waiting for 0 APs
+SKIP: KVM_FEATURE_ASYNC_PF is not supported
+
+SUMMARY: 1 tests, 1 skipped
+==== kvmclock_test
+timeout -k 1s --foreground 60 /usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -dev
+enabling apic
+smp: waiting for 1 APs
+enabling apic
+setup: CPU 1 online
+SKIP: CPU not running on KVM with CLOCKSOURCE2
+SUMMARY: 1 tests, 1 skipped
+0
+clocksource0
+hpet
