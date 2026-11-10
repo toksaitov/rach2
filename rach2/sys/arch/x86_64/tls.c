@@ -176,31 +176,36 @@ static void desc_to_ud(uint64_t d, uint32_t entry, struct user_desc *u)
 }
 
 /**
- * Load `sel` again into each of DS, ES, FS and GS that holds it, after its
- * descriptor changed to `d`, as Linux does; with the null selector where
- * `d` is no segment, whose load would fault. A load into FS or GS sets its
- * base, which the record then takes, as the switch away would.
+ * Load each of DS, ES, FS and GS that holds a selector of TLS entry `entry`,
+ * at any RPL (`TLS_SEL_NAMES`), again with the selector it holds, after the
+ * entry's descriptor changed to `d`, as Linux does; with the null selector
+ * where `d` is no segment, whose load would fault. A load into FS or GS
+ * sets its base, which the record then takes, as the switch away would.
  */
-static void tls_reload(unsigned int sel, uint64_t d)
+static void tls_reload(uint32_t entry, uint64_t d)
 {
-    unsigned int to = d != 0 ? sel : 0u;
+    unsigned int sel;
 
-    if (x86_64_ds_read() == sel) {
-        x86_64_ds_load(to);
+    sel = x86_64_ds_read();
+    if (TLS_SEL_NAMES(sel, entry)) {
+        x86_64_ds_load(d != 0 ? sel : 0u);
     }
-    if (x86_64_es_read() == sel) {
-        x86_64_es_load(to);
+    sel = x86_64_es_read();
+    if (TLS_SEL_NAMES(sel, entry)) {
+        x86_64_es_load(d != 0 ? sel : 0u);
     }
-    if (x86_64_fs_read() == sel) {
-        x86_64_fs_load(to);
-        if (to == 0) {
+    sel = x86_64_fs_read();
+    if (TLS_SEL_NAMES(sel, entry)) {
+        x86_64_fs_load(d != 0 ? sel : 0u);
+        if (d == 0) {
             msr_write(MSR_FS_BASE, 0);
         }
         current_proc->tls_base = msr_read(MSR_FS_BASE);
     }
-    if (x86_64_gs_read() == sel) {
-        x86_64_gs_load(to);
-        if (to == 0) {
+    sel = x86_64_gs_read();
+    if (TLS_SEL_NAMES(sel, entry)) {
+        x86_64_gs_load(d != 0 ? sel : 0u);
+        if (d == 0) {
             msr_write(MSR_KERNEL_GS_BASE, 0);
         }
         current_proc->regs.gs_base = msr_read(MSR_KERNEL_GS_BASE);
@@ -278,7 +283,7 @@ long sys_set_thread_area(isr_params_t *params)
     }
     current_proc->regs.tls[entry - GDT_TLS_MIN] = d;
     cpu_self()->gdt[entry] = d;
-    tls_reload((entry << 3) | 3u, d);
+    tls_reload(entry, d);
     return 0;
 }
 
@@ -297,17 +302,16 @@ long ia32_clone_tls(unsigned long uptr, uint32_t *entry, uint64_t *desc)
 
 /** Give `child`, not yet run, the TLS descriptor `desc` in entry `entry`,
  * which `ia32_clone_tls` made. Update the saved base of each selector that
- * names it, so the first switch keeps the new descriptor's base. */
+ * names it, at any RPL (`TLS_SEL_NAMES`), so the first switch keeps the new
+ * descriptor's base. */
 void ia32_clone_tls_set(process_t *child, uint32_t entry, uint64_t desc)
 {
-    unsigned int sel = (entry << 3) | 3u;
-
     child->regs.tls[entry - GDT_TLS_MIN] = desc;
-    if (child->regs.fs_sel == sel) {
-        child->tls_base = tls_selector_base(child, sel);
+    if (TLS_SEL_NAMES(child->regs.fs_sel, entry)) {
+        child->tls_base = tls_selector_base(child, child->regs.fs_sel);
     }
-    if (child->regs.gs_sel == sel) {
-        child->regs.gs_base = tls_selector_base(child, sel);
+    if (TLS_SEL_NAMES(child->regs.gs_sel, entry)) {
+        child->regs.gs_base = tls_selector_base(child, child->regs.gs_sel);
     }
 }
 

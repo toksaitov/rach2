@@ -369,10 +369,19 @@ uint32_t ia32_tls_get(const process_t *t, struct user_desc *u)
     return 0;
 }
 
+/* The model's LDT: entry N of LDT_MODEL_ENTRIES has the base
+ * LDT_MODEL_BASE + N, and a selector past them none. */
+#define LDT_MODEL_ENTRIES 16u
+#define LDT_MODEL_BASE    0x1D70000u
+
+/** A TLS entry's base as `tls_entry_set` stored it, or the model LDT's. */
 uintptr_t tls_selector_base(const struct process *t, unsigned int sel)
 {
     unsigned int entry = sel >> 3;
 
+    if ((sel & 4u) != 0) {
+        return entry < LDT_MODEL_ENTRIES ? LDT_MODEL_BASE + entry : 0;
+    }
     return entry >= GDT_TLS_MIN && entry <= GDT_TLS_MAX
                ? (uintptr_t)t->regs.tls[entry - GDT_TLS_MIN]
                : 0;
@@ -767,12 +776,14 @@ static void run_ptrace(void)
           "a 64-bit tracee's NT_PRSTATUS is user_regs_struct");
 }
 
-/** Ptrace writes SS and refreshes both bases when its TLS set changes. */
+/** Ptrace writes SS, refreshes both bases when its TLS set or a TLS entry
+ * changes, at each RPL of the selector, and takes a selector's low 16 bits. */
 static void run_ptrace_writes(void)
 {
     struct user_desc u;
     uint8_t notes[FPU_ENV_SIZE + FX_SIZE], *next = notes;
     uint32_t word;
+    unsigned int rpl;
 
     check(regs32_set(&tracee, R32_SS, 15) == 0 && tracee_frame.ss == 15 &&
               regs32_set(&tracee, R32_SS, 0) == -EIO && tracee_frame.ss == 15,
@@ -781,12 +792,28 @@ static void run_ptrace_writes(void)
               regset32_set(&tracee, NT_PRSTATUS, notes, R32_COUNT * 4u + 4u) == -EINVAL,
           "an oversized register set cannot index past the i386 register map");
     k_memset(&u, 0, sizeof(u));
-    u.base_addr = 0x321000u;
-    tracee.regs.fs_sel = tracee.regs.gs_sel = (GDT_TLS_MIN << 3) | 3u;
+    for (rpl = 0; rpl < 4; rpl++) {
+        u.base_addr = 0x321000u + rpl;
+        tracee.regs.fs_sel = tracee.regs.gs_sel = (uint16_t)((GDT_TLS_MIN << 3) | rpl);
+        tracee.tls_base = tracee.regs.gs_base = 0xBADu;
+        check(regset32_set(&tracee, NT_386_TLS, (const uint8_t *)&u, sizeof(u)) == 0 &&
+                  tracee.tls_base == u.base_addr && tracee.regs.gs_base == u.base_addr,
+              "NT_386_TLS updates the saved FS and GS bases of a TLS selector at each RPL");
+        u.base_addr = 0x654000u + rpl;
+        k_memcpy(at(USER_BASE + 0x200u, sizeof(u)), &u, sizeof(u));
+        tracee.tls_base = tracee.regs.gs_base = 0xBADu;
+        check(arch_ptrace(&tracee, 2, PTRACE_SET_THREAD_AREA, GDT_TLS_MIN, USER_BASE + 0x200u) ==
+                      0 &&
+                  tracee.tls_base == u.base_addr && tracee.regs.gs_base == u.base_addr,
+              "PTRACE_SET_THREAD_AREA updates the saved FS and GS bases at each RPL");
+    }
     tracee.tls_base = tracee.regs.gs_base = 0xBADu;
-    check(regset32_set(&tracee, NT_386_TLS, (const uint8_t *)&u, sizeof(u)) == 0 &&
-              tracee.tls_base == u.base_addr && tracee.regs.gs_base == u.base_addr,
-          "NT_386_TLS updates the saved FS and GS bases");
+    check(regs32_set(&tracee, R32_FS, 0x0001000Fu) == 0 && tracee.regs.fs_sel == 0x000Fu &&
+              tracee.tls_base == LDT_MODEL_BASE + 1u,
+          "a FS write with upper bits stores 16 bits and takes LDT entry 1's base");
+    check(regs32_set(&tracee, R32_GS, 0x00010063u) == 0 && tracee.regs.gs_sel == 0x0063u &&
+              tracee.regs.gs_base == tracee.regs.tls[0],
+          "a GS write with upper bits stores 16 bits and takes TLS entry 12's base");
     tracee_frame.cs = 15;
     tracee.regs.ds_sel = 23;
     ia32_core_fp_notes(&next, &tracee);
