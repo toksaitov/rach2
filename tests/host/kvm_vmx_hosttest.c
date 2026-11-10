@@ -4,6 +4,7 @@
  * host-deps: rach2/sys/kvm/kvm.c rach2/sys/kvm/vcpu.c rach2/sys/kvm/cpuid.c
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
+ * host-deps: rach2/sys/kvm/binstats.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations

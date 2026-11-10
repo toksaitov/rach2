@@ -3,7 +3,7 @@
  * against a fake backend.
  *
  * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c rach2/sys/kvm/hyperv.c
- * host-deps: rach2/sys/kvm/pvclock.c
+ * host-deps: rach2/sys/kvm/pvclock.c rach2/sys/kvm/binstats.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * kvm.c and vcpu.c are the kernel's, included whole; cpuid.c, msr.c and
@@ -45,6 +45,7 @@ extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
 extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
+extern int strcmp(const char *a, const char *b);
 
 static int failures;
 
@@ -2255,10 +2256,185 @@ static void sync_rows(void)
     CHECK(live == 0, "the VM frees every allocation");
 }
 
+/* The description a statistics descriptor is read through. */
+static struct open_file stats_ofd;
+
+/** Read `count` bytes of the statistics descriptor `fd` at `pos`, as
+ * pread64 does. */
+static int32_t stats_at(int fd, void *buf, uint32_t count, uint64_t pos)
+{
+    stats_ofd.offset = pos;
+    entries[fd].ofd = &stats_ofd;
+    return entries[fd].ops->read(&entries[fd], (char *)buf, count);
+}
+
+/** The first value of the statistic `name` in the file on `fd`, or all
+ * ones when the file has no such descriptor. */
+static uint64_t stat_of(int fd, const char *name)
+{
+    struct kvm_stats_header h;
+    struct kvm_stats_desc d;
+    uint64_t value = ~0ull;
+    uint32_t i;
+
+    stats_at(fd, &h, sizeof(h), 0);
+    for (i = 0; i < h.num_desc; i++) {
+        stats_at(fd, &d, sizeof(d), h.desc_offset + i * sizeof(d));
+        if (strcmp(d.name, name) == 0) {
+            stats_at(fd, &value, 8, h.data_offset + d.offset);
+        }
+    }
+    return value;
+}
+
+/** Whether the `ndesc` descriptors at `descs` are ones
+ * kvm_binary_stats_test takes: names that end, a known type and unit to
+ * base 10, the exponent their unit has, no bucket size, and `nvalues`
+ * values in all that lie in the data. */
+static int stats_descs_ok(const uint8_t *descs, uint32_t ndesc, uint32_t nvalues)
+{
+    struct kvm_stats_desc d;
+    uint32_t i, next = 0;
+    int ok = 1;
+
+    for (i = 0; ok && i < ndesc; i++) {
+        uint32_t unit;
+
+        k_memcpy(&d, descs + i * 64u, sizeof(d));
+        unit = d.flags & 0xF0u;
+        ok = d.name[0] != '\0' && d.name[47] == '\0' && (d.flags & 0xFu) <= 4u && unit <= 0x40u &&
+             (d.flags >> 8) == 0 && d.exponent == (unit == KVM_STATS_UNIT_SECONDS ? -9 : 0) &&
+             d.size != 0 && d.bucket_size == 0 && d.offset % 8u == 0 &&
+             d.offset / 8u + d.size <= nvalues;
+        next += d.size;
+    }
+    return ok && next == nvalues;
+}
+
+/** Whether the file on `fd` is what kvm_binary_stats_test requires: Linux's
+ * header for `ndesc` descriptors, the id `id`, descriptors whose names end,
+ * whose exponents fit their units and whose `nvalues` values lie in the
+ * data, and the same bytes whether read whole, one at a time or
+ * across its parts, with nothing at its end. */
+static int stats_file_ok(int fd, const char *id, uint32_t ndesc, uint32_t nvalues)
+{
+    static uint8_t whole[8192];
+    struct kvm_stats_header h;
+    uint8_t piece[200];
+    uint32_t size = 72u + ndesc * 64u + nvalues * 8u, pos;
+    int ok;
+
+    ok = stats_at(fd, &h, sizeof(h), 0) == (int32_t)sizeof(h) && h.flags == 0 &&
+         h.name_size == 48 && h.num_desc == ndesc && h.id_offset == 24 && h.desc_offset == 72 &&
+         h.data_offset == 72u + ndesc * 64u;
+    ok = ok && stats_at(fd, whole, sizeof(whole), 0) == (int32_t)size &&
+         strcmp((const char *)whole + 24, id) == 0;
+    for (pos = 0; ok && pos < size; pos++) {
+        ok = stats_at(fd, piece, 1, pos) == 1 && piece[0] == whole[pos];
+    }
+    for (pos = 0; ok && pos + sizeof(piece) <= size; pos += 97u) {
+        ok = stats_at(fd, piece, sizeof(piece), pos) == (int32_t)sizeof(piece) &&
+             bytes_equal(piece, whole + pos, sizeof(piece));
+    }
+    ok = ok && stats_at(fd, piece, 16, size - 4u) == 4 && stats_at(fd, piece, 1, size) == 0 &&
+         stats_at(fd, piece, 1, 1ull << 40) == 0;
+    return ok && stats_descs_ok(whole + 72, ndesc, nvalues);
+}
+
+/** What the vCPU on `vcpu` counts as it runs, read from its statistics
+ * file on `vcpu_stats`. */
+static void stats_count_rows(int vcpu, int vcpu_stats)
+{
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[vcpu].priv;
+
+    refusing = 0;
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted_io(KVM_EXIT_IO_OUT, 4, BUS_PORT, 1);
+    scripted_io(KVM_EXIT_IO_OUT, 1, 0x3F8, 1);
+    scripted(KVM_X_MMIO)->mmio.len = 4;
+    scripted(KVM_X_HLT);
+    CHECK(fdio(vcpu, KVM_RUN, 0) == 0 && stat_of(vcpu_stats, "exits") == 3 &&
+              stat_of(vcpu_stats, "io_exits") == 2 && stat_of(vcpu_stats, "mmio_exits") == 0,
+          "exits counts every exit, io_exits the bus's too");
+    CHECK(fdio(vcpu, KVM_RUN, 0) == 0 && run_of(vcpu)->exit_reason == KVM_EXIT_MMIO &&
+              stat_of(vcpu_stats, "mmio_exits") == 1,
+          "mmio_exits counts the MMIO the caller answers");
+    CHECK(fdio(vcpu, KVM_RUN, 0) == 0 && run_of(vcpu)->exit_reason == KVM_EXIT_HLT &&
+              stat_of(vcpu_stats, "halt_exits") == 1 && stat_of(vcpu_stats, "exits") == 5,
+          "halt_exits counts the HLT");
+    sig_pending = 1;
+    CHECK(fdio(vcpu, KVM_RUN, 0) == -EINTR && stat_of(vcpu_stats, "signal_exits") == 1,
+          "signal_exits counts a run a signal ended");
+    sig_pending = 0;
+    v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST + 31] = 9;
+    CHECK(stat_of(vcpu_stats, "blocking") == 0 && v->stat[KVM_VCPU_STAT_BLOCKING] == 0,
+          "a histogram's 32 values end before the next statistic");
+    v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST + 31] = 0;
+}
+
+/** KVM_GET_STATS_FD of a VM and of a vCPU, as kvm_binary_stats_test reads
+ * them: several files at once, read after the VM's own descriptors closed. */
+static void stats_rows(void)
+{
+    int before = live, vm, vcpu, vm_stats, vm_again, vcpu_stats;
+    uint8_t byte[10];
+
+    caller.pid = 321;
+    vm = dev(KVM_CREATE_VM, 0);
+    vcpu = fdio(vm, KVM_CREATE_VCPU, 7);
+    CHECK(sizeof(struct kvm_stats_header) == 24 && sizeof(struct kvm_stats_desc) == 64 &&
+              KVM_GET_STATS_FD == 0xAECE,
+          "the header, the descriptor and KVM_GET_STATS_FD are Linux's");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_BINARY_STATS_FD) == 1 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_BINARY_STATS_FD) == 1,
+          "KVM_CAP_BINARY_STATS_FD");
+    vm_stats = fdio(vm, KVM_GET_STATS_FD, 0);
+    vm_again = fdio(vm, KVM_GET_STATS_FD, 0);
+    vcpu_stats = fdio(vcpu, KVM_GET_STATS_FD, 0);
+    CHECK(vm_stats > vcpu && vm_again > vm_stats && vcpu_stats > vm_again &&
+              entries[vm_stats].type == FD_TYPE_ANON &&
+              entries[vm_stats].flags == (FD_FLAG_READ | FD_FLAG_CLOEXEC),
+          "a descriptor each, read-only and close-on-exec");
+    CHECK(strcmp(((struct anon_obj *)entries[vm_stats].priv)->name, "kvm-vm-stats") == 0 &&
+              strcmp(((struct anon_obj *)entries[vcpu_stats].priv)->name, "kvm-vcpu-stats:7") == 0,
+          "anon_inode:kvm-vm-stats and anon_inode:kvm-vcpu-stats:ID");
+    CHECK(stats_file_ok(vm_stats, "kvm-321", 15, KVM_VM_STATS) && KVM_VM_STATS == 15,
+          "the VM's file: Linux's 15 statistics, read at any offset");
+    CHECK(stats_file_ok(vcpu_stats, "kvm-321/vcpu-7", 45, KVM_VCPU_STATS) && KVM_VCPU_STATS == 138,
+          "the vCPU's file: Linux's 45 statistics in 138 values");
+    CHECK(stat_of(vm_stats, "pages_4k") == 0 && stat_of(vcpu_stats, "exits") == 0 &&
+              stat_of(vcpu_stats, "no_such") == ~0ull,
+          "a statistic is found by its name");
+    stats_ofd.offset = 0;
+    entries[vm_stats].ofd = &stats_ofd;
+    CHECK(entries[vm_stats].ops->read(&entries[vm_stats], (char *)byte, 10) == 10 &&
+              stats_ofd.offset == 10 &&
+              entries[vm_stats].ops->llseek(&entries[vm_stats], 0, 0) == 10,
+          "a read moves the offset and a seek leaves it, as Linux's noop_llseek");
+    CHECK(stats_at(vm_stats, NULL, 8, 0) == -EFAULT, "a bad buffer is -EFAULT");
+
+    stats_count_rows(vcpu, vcpu_stats);
+
+    fdclose(vcpu);
+    fdclose(vm);
+    CHECK(live > before && stats_file_ok(vm_stats, "kvm-321", 15, KVM_VM_STATS) &&
+              stats_file_ok(vcpu_stats, "kvm-321/vcpu-7", 45, KVM_VCPU_STATS) &&
+              stat_of(vcpu_stats, "exits") == 5,
+          "the files hold the VM after its own descriptors close");
+    fdclose(vm_stats);
+    fdclose(vcpu_stats);
+    CHECK(live > before, "each file holds a reference");
+    fdclose(vm_again);
+    CHECK(live == before, "the last file's close frees the VM");
+}
+
 /** The capabilities and bounds Linux's selftests ask for, each in VMs of
  * its own. */
 static void selftest_rows(void)
 {
+    stats_rows();
     bound_rows();
     cr4_rows();
     vm_cap_rows();

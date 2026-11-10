@@ -366,22 +366,6 @@ static void vcpu_close(fd_entry_t *e)
 static const struct file_ops vcpu_ops = {NULL,       NULL,      NULL, kvm_vcpu_ioctl,
                                          vcpu_close, vcpu_mmap, NULL};
 
-/** Write the decimal `n` at `p`, with its terminating NUL. */
-static void put_decimal(char *p, uint32_t n)
-{
-    char digits[10];
-    int i = 0;
-
-    do {
-        digits[i++] = (char)('0' + n % 10u);
-        n /= 10u;
-    } while (n != 0);
-    while (i > 0) {
-        *p++ = digits[--i];
-    }
-    *p = '\0';
-}
-
 void kvm_vcpu_free(struct kvm_vcpu *v)
 {
     if (!v) {
@@ -437,7 +421,8 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->clock_cpu = -1;
     v->hlt_in_guest = (vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT) != 0;
     k_memcpy(v->name, "kvm-vcpu:", 9);
-    put_decimal(v->name + 9, id);
+    kvm_decimal(v->name + 9, id);
+    kvm_stats_id(v->stats_id, v);
     v->anon.name = v->name;
     wait_queue_init(&v->wq);
     r = -ENOMEM;
@@ -581,6 +566,7 @@ static int32_t run_exit(struct kvm_vcpu *v)
     case KVM_X_AGAIN:
         return 0;
     case KVM_X_IO:
+        v->stat[KVM_VCPU_STAT_IO_EXITS]++;
         if (kvm_irq_io(v) || (ex->io.direction == KVM_EXIT_IO_OUT && kvm_iobus_write(v))) {
             return 0;
         }
@@ -601,11 +587,13 @@ static int32_t run_exit(struct kvm_vcpu *v)
         if (kvm_lapic_mmio(v) || kvm_irq_io(v) || (ex->mmio.is_write && kvm_iobus_write(v))) {
             return 0;
         }
+        v->stat[KVM_VCPU_STAT_MMIO_EXITS]++;
         run->exit_reason = KVM_EXIT_MMIO;
         run->u.mmio = ex->mmio;
         v->pending = !ex->mmio.is_write;
         return 1;
     case KVM_X_HLT:
+        v->stat[KVM_VCPU_STAT_HALT_EXITS]++;
         r = kvm_lapic_halt(v);
         if (r < 0) {
             run->exit_reason = KVM_EXIT_INTR;
@@ -620,6 +608,7 @@ static int32_t run_exit(struct kvm_vcpu *v)
         run->exit_reason = KVM_EXIT_SHUTDOWN;
         return 1;
     case KVM_X_IRQ_WINDOW:
+        v->stat[KVM_VCPU_STAT_IRQ_WINDOW_EXITS]++;
         if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
             /* The window the APIC's interrupt waited for; the loop gives
              * it to the caller too when the caller asked. */
@@ -740,7 +729,12 @@ static int32_t run_loop(struct kvm_vcpu *v)
             run->exit_reason = KVM_EXIT_SHUTDOWN;
             return 0;
         }
-        if (kvm_vcpu_test_clear(v, KVM_REQ_EXIT) || signal_pending()) {
+        r = kvm_vcpu_test_clear(v, KVM_REQ_EXIT);
+        if (signal_pending()) {
+            v->stat[KVM_VCPU_STAT_SIGNAL_EXITS]++;
+            r = 1;
+        }
+        if (r) {
             run->exit_reason = KVM_EXIT_INTR;
             return -EINTR;
         }
@@ -768,6 +762,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
             return r;
         }
         guest_exits++;
+        v->stat[KVM_VCPU_STAT_EXITS]++;
         r = kvm_backend->exit ? kvm_backend->exit(v) : -EOPNOTSUPP;
         if (r != 0) {
             return r;
@@ -1799,6 +1794,8 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return (int32_t)kvm_tsc_khz();
     case KVM_KVMCLOCK_CTRL:
         return kvm_clock_ctrl(v);
+    case KVM_GET_STATS_FD:
+        return kvm_stats_fd(v->vm, v);
     default:
         return -EINVAL;
     }

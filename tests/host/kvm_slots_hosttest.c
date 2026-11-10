@@ -401,6 +401,8 @@ static void small_rows(void)
     CHECK((e & 7) == 7 && (e & 0x78) == 0x70 && (e & 0x80) == 0,
           "readable, writable, executable, write-back with the guest's PAT ignored");
     CHECK(kvm_tdp_fault(&vm, 0x50, 0) == 1, "a frame with no slot is MMIO");
+    CHECK(vm.stat[KVM_VM_STAT_PAGES_4K] == 1 && vm.stat[KVM_VM_STAT_PAGES_2M] == 0,
+          "pages_4k counts the leaf");
 
     /* A device that does not snoop: RAM honours the guest's PAT while one
      * is assigned, and the first and the last drop every leaf. */
@@ -458,6 +460,7 @@ static void small_rows(void)
     mmn_notify(&the_mm, MMN_UNMAP, a + 7 * 4096u, a + 8 * 4096u);
     CHECK(!flushed(), "no flush when nothing was mapped");
     CHECK(set(0, 0, 0, 0, 0) == 0, "deleted");
+    CHECK(vm.stat[KVM_VM_STAT_PAGES_4K] == 0, "pages_4k is 0 with every leaf dropped");
 }
 
 /** A read-only slot. */
@@ -489,11 +492,14 @@ static void large_rows(void)
     e = leaf_of(block + 300, &level);
     CHECK(level == 2 && (e & 0x80) && (e & ept.addr) == phys_of(ram) && (e & 2),
           "a writable 2 MiB leaf on the run");
+    CHECK(vm.stat[KVM_VM_STAT_PAGES_2M] == 1 && vm.stat[KVM_VM_STAT_PAGES_4K] == 0,
+          "pages_2m counts it");
 
     /* One page of the run goes: the leaf goes whole. */
     flushed();
     mmn_notify(&the_mm, MMN_UNMAP, a + 9 * 4096u, a + 10 * 4096u);
     CHECK(leaf_of(block + 300, &level) == 0 && flushed(), "a change to one page drops it");
+    CHECK(vm.stat[KVM_VM_STAT_PAGES_2M] == 0, "and pages_2m with it");
     *host_entry(a + 9 * 4096u) = fresh() | PTE_P | PTE_U | PTE_W;
     CHECK(kvm_tdp_fault(&vm, block + 17, 0) == 0 && leaf_of(block + 17, &level) != 0 &&
               level == 1 && leaf_of(block + 300, &level) == 0,
@@ -532,7 +538,12 @@ static void large_rows(void)
     CHECK(kvm_tdp_fault(&vm, block + 1, 1) == 0, "a write fault in it");
     e = leaf_of(block + 1, &level);
     CHECK(level == 1 && (e & 2) && flushed(), "split into a writable 4 KiB leaf, flushed");
+    CHECK(vm.stat[KVM_VM_STAT_PAGES_2M] == 0 && vm.stat[KVM_VM_STAT_PAGES_4K] == 1,
+          "the split moves the count from pages_2m to pages_4k");
+    CHECK(vm.stat[KVM_VM_STAT_REMOTE_TLB_FLUSH_REQUESTS] != 0, "the flushes are counted");
     CHECK(set(3, 0, 0, 0, 0) == 0, "deleted");
+    CHECK(vm.stat[KVM_VM_STAT_PAGES_2M] == 0 && vm.stat[KVM_VM_STAT_PAGES_4K] == 0,
+          "and no leaf is counted with the slots gone");
 }
 
 /** A slot over a device's frames. */

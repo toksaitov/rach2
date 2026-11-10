@@ -33,6 +33,7 @@ struct tdp {
     uint64_t root; /* the top table's physical address */
     uint64_t dead; /* the first table to free after the flush, or 0 */
     uint32_t tables;
+    uint64_t *pages; /* the VM's pages_4k, pages_2m and pages_1g: its leaves by level */
 };
 
 /** The backend's entry format. */
@@ -135,6 +136,7 @@ int kvm_tdp_init(struct kvm_vm *vm)
         kfree(t);
         return -ENOMEM;
     }
+    t->pages = &vm->stat[KVM_VM_STAT_PAGES_4K];
     vm->tdp = t;
     return 0;
 }
@@ -201,6 +203,10 @@ void kvm_tdp_flush(struct kvm_vm *vm)
 {
     uint32_t i;
 
+    vm->stat[KVM_VM_STAT_REMOTE_TLB_FLUSH_REQUESTS]++;
+    if (vm->nr_vcpus) {
+        vm->stat[KVM_VM_STAT_REMOTE_TLB_FLUSH]++;
+    }
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_TLB_FLUSH);
     }
@@ -247,6 +253,7 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, u
         }
         if (leaf(e, level)) {
             table[i] = 0;
+            t->pages[level - 1]--;
             cleared = 1;
             continue;
         }
@@ -330,18 +337,20 @@ int kvm_tdp_protect(struct kvm_vm *vm, uint64_t gfn, uint64_t mask)
  * Set the entry of `gfn` at level `level`, 1 or 2, to `entry`, making the
  * tables above it. A 2 MiB leaf on the way, where a finer leaf is wanted,
  * goes first, with a flush, since the frames it mapped are no longer
- * mapped until their next fault. 0 or -ENOMEM.
+ * mapped until their next fault. What the entry held is a leaf of this
+ * level, set anew, or nothing, which the VM's page counts follow. 0 or
+ * -ENOMEM.
  */
 static int map(struct kvm_vm *vm, struct tdp *t, uint64_t gfn, int level, uint64_t entry)
 {
-    uint64_t *table = table_at(t->root);
+    uint64_t *table = table_at(t->root), *e;
     int l;
 
     for (l = TDP_LEVELS; l > level; l--) {
-        uint64_t *e = &table[index_of(gfn, l)];
-
+        e = &table[index_of(gfn, l)];
         if (present(*e) && l <= 3 && leaf(*e, l)) {
             *e = 0;
+            t->pages[l - 1]--;
             kvm_tdp_flush(vm);
         }
         if (!present(*e)) {
@@ -354,7 +363,11 @@ static int map(struct kvm_vm *vm, struct tdp *t, uint64_t gfn, int level, uint64
         }
         table = table_at(*e & fmt()->addr);
     }
-    table[index_of(gfn, level)] = entry;
+    e = &table[index_of(gfn, level)];
+    if (!present(*e)) {
+        t->pages[level - 1]++;
+    }
+    *e = entry;
     return 0;
 }
 

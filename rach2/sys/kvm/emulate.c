@@ -186,6 +186,7 @@ uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
     uint64_t a2 = v->regs.rdx & mask, a3 = v->regs.rsi & mask;
     struct kvm_lapic_irq irq;
 
+    v->stat[KVM_VCPU_STAT_HYPERCALLS]++;
     if (kvm_emul_cpl(v) > 0) {
         return (uint64_t)-(int64_t)KVM_EPERM;
     }

@@ -57,6 +57,82 @@ struct kvm_vcpu;
 #define KVM_MMAP_PAGES 3u
 
 /*
+ * The statistics of a VM and of a vCPU that KVM_GET_STATS_FD's file gives,
+ * a 64-bit value each, in the order of Linux's struct kvm_vm_stat and
+ * struct kvm_vcpu_stat; a histogram of halt times has KVM_HALT_POLL_HIST
+ * values. Rach2 counts the ones the Readme names, and the rest read 0.
+ */
+#define KVM_HALT_POLL_HIST 32
+
+enum kvm_vm_stat {
+    KVM_VM_STAT_REMOTE_TLB_FLUSH,
+    KVM_VM_STAT_REMOTE_TLB_FLUSH_REQUESTS,
+    KVM_VM_STAT_MMU_SHADOW_ZAPPED,
+    KVM_VM_STAT_MMU_PTE_WRITE,
+    KVM_VM_STAT_MMU_PDE_ZAPPED,
+    KVM_VM_STAT_MMU_FLOODED,
+    KVM_VM_STAT_MMU_RECYCLED,
+    KVM_VM_STAT_MMU_CACHE_MISS,
+    KVM_VM_STAT_MMU_UNSYNC,
+    KVM_VM_STAT_PAGES_4K,
+    KVM_VM_STAT_PAGES_2M,
+    KVM_VM_STAT_PAGES_1G,
+    KVM_VM_STAT_NX_LPAGE_SPLITS,
+    KVM_VM_STAT_MAX_MMU_PAGE_HASH_COLLISIONS,
+    KVM_VM_STAT_MAX_MMU_RMAP_SIZE,
+    KVM_VM_STATS
+};
+
+enum kvm_vcpu_stat {
+    KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL,
+    KVM_VCPU_STAT_HALT_ATTEMPTED_POLL,
+    KVM_VCPU_STAT_HALT_POLL_INVALID,
+    KVM_VCPU_STAT_HALT_WAKEUP,
+    KVM_VCPU_STAT_HALT_POLL_SUCCESS_NS,
+    KVM_VCPU_STAT_HALT_POLL_FAIL_NS,
+    KVM_VCPU_STAT_HALT_WAIT_NS,
+    KVM_VCPU_STAT_HALT_POLL_SUCCESS_HIST,
+    KVM_VCPU_STAT_HALT_POLL_FAIL_HIST = KVM_VCPU_STAT_HALT_POLL_SUCCESS_HIST + KVM_HALT_POLL_HIST,
+    KVM_VCPU_STAT_HALT_WAIT_HIST = KVM_VCPU_STAT_HALT_POLL_FAIL_HIST + KVM_HALT_POLL_HIST,
+    KVM_VCPU_STAT_BLOCKING = KVM_VCPU_STAT_HALT_WAIT_HIST + KVM_HALT_POLL_HIST,
+    KVM_VCPU_STAT_PF_TAKEN,
+    KVM_VCPU_STAT_PF_FIXED,
+    KVM_VCPU_STAT_PF_EMULATE,
+    KVM_VCPU_STAT_PF_SPURIOUS,
+    KVM_VCPU_STAT_PF_FAST,
+    KVM_VCPU_STAT_PF_MMIO_SPTE_CREATED,
+    KVM_VCPU_STAT_PF_GUEST,
+    KVM_VCPU_STAT_TLB_FLUSH,
+    KVM_VCPU_STAT_INVLPG,
+    KVM_VCPU_STAT_EXITS,
+    KVM_VCPU_STAT_IO_EXITS,
+    KVM_VCPU_STAT_MMIO_EXITS,
+    KVM_VCPU_STAT_SIGNAL_EXITS,
+    KVM_VCPU_STAT_IRQ_WINDOW_EXITS,
+    KVM_VCPU_STAT_NMI_WINDOW_EXITS,
+    KVM_VCPU_STAT_L1D_FLUSH,
+    KVM_VCPU_STAT_HALT_EXITS,
+    KVM_VCPU_STAT_REQUEST_IRQ_EXITS,
+    KVM_VCPU_STAT_IRQ_EXITS,
+    KVM_VCPU_STAT_HOST_STATE_RELOAD,
+    KVM_VCPU_STAT_FPU_RELOAD,
+    KVM_VCPU_STAT_INSN_EMULATION,
+    KVM_VCPU_STAT_INSN_EMULATION_FAIL,
+    KVM_VCPU_STAT_HYPERCALLS,
+    KVM_VCPU_STAT_IRQ_INJECTIONS,
+    KVM_VCPU_STAT_NMI_INJECTIONS,
+    KVM_VCPU_STAT_REQ_EVENT,
+    KVM_VCPU_STAT_NESTED_RUN,
+    KVM_VCPU_STAT_DIRECTED_YIELD_ATTEMPTED,
+    KVM_VCPU_STAT_DIRECTED_YIELD_SUCCESSFUL,
+    KVM_VCPU_STAT_PREEMPTION_REPORTED,
+    KVM_VCPU_STAT_PREEMPTION_OTHER,
+    KVM_VCPU_STAT_GUEST_MODE,
+    KVM_VCPU_STAT_NOTIFY_WINDOW_EXITS,
+    KVM_VCPU_STATS
+};
+
+/*
  * The parts of a vCPU's state, as bits. The vCPU record keeps each part in
  * the form the ioctls give it (`struct kvm_vcpu`); the backend keeps the
  * same state in its control block while the guest runs. A set ioctl writes
@@ -268,6 +344,8 @@ struct kvm_vm {
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
     void *backend;                        /* the backend's */
+    uint64_t stat[KVM_VM_STATS];          /* by enum kvm_vm_stat */
+    char stats_id[KVM_STATS_NAME_SIZE];   /* "kvm-PID", its maker's */
 };
 
 #define KVM_IRQCHIP_NONE   0
@@ -422,8 +500,10 @@ struct kvm_vcpu {
     int32_t clock_cpu;     /* the processor the kvmclock was last written on, -1 for none */
     uint64_t clock_ns;     /* the host's ns at that write */
     uint64_t mcg_cap, mcg_status, mcg_ctl;
-    uint64_t platform_info; /* MSR_PLATFORM_INFO, which only the caller writes */
-    uint64_t misc_features; /* MSR_MISC_FEATURES_ENABLES: bit 0, CPUID faults above CPL 0 */
+    uint64_t platform_info;        /* MSR_PLATFORM_INFO, which only the caller writes */
+    uint64_t misc_features;        /* MSR_MISC_FEATURES_ENABLES: bit 0, CPUID faults above CPL 0 */
+    uint64_t stat[KVM_VCPU_STATS]; /* by enum kvm_vcpu_stat */
+    char stats_id[KVM_STATS_NAME_SIZE];        /* "kvm-PID/vcpu-ID", its maker's */
     uint64_t mce_banks[KVM_MAX_MCE_BANKS * 4]; /* CTL, STATUS, ADDR, MISC of each */
 
     /* Set by the backend after each exit, for the run page. */
@@ -478,6 +558,23 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap);
  * `arg`: 0 or a negative errno. Called under the big lock after checking
  * the caller's address space. The descriptor holds a VM reference. */
 int32_t kvm_vfio_create(struct kvm_vm *vm, uintptr_t arg);
+
+/* binstats.c */
+
+/** KVM_GET_STATS_FD: a descriptor of the caller's, read-only and
+ * close-on-exec, on the statistics of `v`, or of `vm` when `v` is NULL:
+ * "anon_inode:kvm-vcpu-stats:ID" or "anon_inode:kvm-vm-stats". It holds a
+ * reference to the VM. The descriptor, -ENOMEM or `fd_alloc`'s error. */
+int32_t kvm_stats_fd(struct kvm_vm *vm, struct kvm_vcpu *v);
+
+/** Write at `id`, of KVM_STATS_NAME_SIZE bytes, the name the statistics
+ * file gives the object the caller is making: "kvm-PID" with the caller's
+ * id, and "/vcpu-ID" after it for the vCPU `v`. */
+void kvm_stats_id(char *id, const struct kvm_vcpu *v);
+
+/** Write the decimal `n` at `p`, with its terminating NUL, whose address
+ * is returned. */
+char *kvm_decimal(char *p, uint32_t n);
 
 /** The host's kvmclock in nanoseconds, the monotonic clock. */
 uint64_t kvm_host_ns(void);
