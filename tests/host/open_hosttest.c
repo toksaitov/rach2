@@ -174,6 +174,9 @@ static long sys_close_range(isr_params_t *params);
 static int32_t fs_core_file(int signo, unsigned long limit);
 static long sys_mknod(isr_params_t *params);
 static long sys_mknodat(isr_params_t *params);
+static long sys_name_to_handle_at(isr_params_t *params);
+static long sys_open_by_handle_at(isr_params_t *params);
+static int32_t fd_stat_ids(int pid, int fd, uint32_t *mnt_id, uint64_t *ino);
 static int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino);
 static void fs_socket_unbind(struct vfs_ref *ref);
 static int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino);
@@ -1291,6 +1294,36 @@ int sysfs_device_exists(int node, int key)
 {
     (void)node;
     (void)key;
+    return 0;
+}
+/** Every mount's id is 1, as the first slot's. */
+uint32_t procfs_mount_id(const struct vfs_mount *m)
+{
+    (void)m;
+    return 1;
+}
+
+/** No synthetic file system is mounted: 0. */
+uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
+{
+    (void)dev;
+    (void)hint;
+    return 0;
+}
+
+/** Every attribute of a fixed /sys directory is there. */
+int sysfs_attr_present(int node, int attr)
+{
+    (void)node;
+    (void)attr;
+    return 1;
+}
+
+/** No attribute of /sys is private. */
+int sysfs_attr_private(int node, int attr)
+{
+    (void)node;
+    (void)attr;
     return 0;
 }
 /** No device of /sys has a key: -1. */
