@@ -1,0 +1,13 @@
+# deqp-vk-venus-smoke.txt: the dEQP-VK cases that show a Vulkan driver
+# working at all: api.smoke whole, which makes objects and draws a triangle
+# read back, a render pass drawn into a color attachment and read back, and
+# an image copied to an image and to a buffer and read back.
+dEQP-VK.api.smoke.asm_triangle
+dEQP-VK.api.smoke.asm_triangle_no_opname
+dEQP-VK.api.smoke.create_sampler
+dEQP-VK.api.smoke.create_shader
+dEQP-VK.api.smoke.triangle
+dEQP-VK.api.smoke.unused_resolve_attachment
+dEQP-VK.renderpass.suballocation.simple.color
+dEQP-VK.api.copy_and_blit.core.image_to_image.simple_tests.whole_image
+dEQP-VK.api.copy_and_blit.core.image_to_buffer.2d_images.whole

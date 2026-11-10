@@ -1,0 +1,5 @@
+# deqp-vk-lavapipe.flakes: the cases of deqp-vk-lavapipe.txt.gz counted as
+# flakes when they fail twice, one extended regular expression a line: the
+# timeline semaphore groups, whose cases hang now and then on lavapipe and
+# which Mesa lists as lavapipe flakes (dev-log/76-graphics/upstream.md).
+\.timeline_semaphore\.
