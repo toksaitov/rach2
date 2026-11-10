@@ -648,6 +648,51 @@ trains the new link and sets the status
 Turning a pipe off turns its planes, backlight, transcoder, link and the
 panel's power off.
 .Pp
+DDI B, C and D, each as the VBT names it and the chip's straps report it,
+have a TMDS encoder that reaches every pipe and a
+.Ql DP- Ns Ar n
+connector, an
+.Ql HDMI-A- Ns Ar n
+connector, or both on a DP++ port; on the Lenovo DDI B is
+.Ql HDMI-A-1
+and DDI C
+.Ql DP-1
+and
+.Ql HDMI-A-2 .
+An HDMI connector is connected when its monitor's EDID, read over GMBUS
+or by bit-banging when GMBUS fails, says a digital sink; a DisplayPort
+connector when the port's hotplug pin is high and the sink's DPCD reads.
+Each has
+.Ql max bpc ,
+8 to 12 for HDMI and 6 to 12 for DisplayPort.
+An HDMI mode is set at 12 or 8 bits a colour, the deepest whose TMDS
+clock the port, at most 300 MHz, the adaptor and the sink carry, from a
+WRPLL with Linux's dividers, with the AVI, SPD and GCP infoframes for an
+HDMI sink and limited range for a CEA mode, and logs
+.Dq i915: display: pipe B set
+with the mode, the clock, the TMDS clock and the PLL.
+A DisplayPort mode is set on the slowest link that carries it, clocked by
+the LCPLL.
+A commit fails with
+.Er EBUSY
+when it needs a third WRPLL.
+Plugging or unplugging a monitor raises the PCH's hotplug interrupt; the
+driver probes the port's connectors and sends a hotplug event for each
+whose status or EDID changed, and probes once more a second later a
+connector that did not change.
+More than five long pulses on a pin within a second mask it, logging
+.Dq i915: hotplug: storm on port B; polling it ;
+its connectors are then polled every 10 seconds until the pin is unmasked
+2 minutes later.
+A connector forced on through its
+.Pa status
+file takes the EDID written to its
+.Pa edid_override
+file in place of the monitor's, as IGT's
+.Sy kms_hdmi_inject
+does.
+A pipe the firmware lit on DDI B to D is turned off at bind.
+.Pp
 The primary plane takes C8, RGB565, XRGB8888, XBGR8888, XRGB2101010,
 XBGR2101010 and XBGR16161616F, the sprite XRGB8888, XBGR8888, the two
 2101010 formats, XRGB16161616F, XBGR16161616F, YUYV, YVYU, UYVY and VYUY,

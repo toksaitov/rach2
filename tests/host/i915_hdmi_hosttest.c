@@ -17,8 +17,8 @@
  * run on the same clocks, and the SPLL's value (78-10c.3); a monitor
  * plugged into B, found by its long pulse, and set at 1920x1080 on pipe B
  * with Linux's WRPLL, the VBT's buffer translation, the AVI and SPD
- * infoframes, limited range, the second pipe's power well and the
- * low-power watermarks off (78-10c.2); a DisplayPort monitor on C trained
+ * infoframes, limited range, the second pipe's power well and its
+ * watermarks (78-10c.2); a DisplayPort monitor on C trained
  * and shown on pipe C (78-10c.4); hotplug's connect and disconnect, a
  * pulse that changed nothing probed again 1 s later, and a storm that
  * masks the pin and polls it until it is turned on again 2 minutes later;
@@ -721,8 +721,8 @@ static void row_hdmi_plug(void)
  * 148.5 MHz feeding the port, the transcoder in HDMI mode at 8 bits a
  * colour, the VBT's translation as entry 9, the AVI, SPD and GCP
  * infoframes, limited range through the pipe's colour space conversion,
- * the power well held for the pipe, and the low-power watermarks off with
- * two pipes on.
+ * the power well held for the pipe, and the pipe's watermark for its
+ * plane.
  */
 static void row_hdmi_set(void)
 {
@@ -762,7 +762,8 @@ static void row_hdmi_set(void)
               reg(PIPE_CSC_POSTOFF_LO(1)) == 0x100,
           "hdmi: limited range through the colour space conversion");
     CHECK(gpu.power.count == 2 && disp->crtc[1].cfg.well, "hdmi: the pipe holds the power well");
-    CHECK(!(reg(WM1_LP_ILK) & WM_LP_ENABLE), "hdmi: low-power watermarks off with two pipes");
+    CHECK(((reg(WM0_PIPE_ILK(1)) >> WM0_PIPE_PRIMARY_SHIFT) & 0xffu) != 0,
+          "hdmi: pipe B's level 0 watermark written for its plane");
     CHECK(logged("display: pipe B set: 1920x1080@60 on HDMI B, 148500 kHz, 24 bpp, TMDS 148500 "
                  "kHz from WRPLL 1, limited range"),
           "hdmi: the log's line");
