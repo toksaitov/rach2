@@ -439,12 +439,15 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
  * identity-mapped window, where user space starts, clearing its entry; a
  * frame goes back to the pool with its last reference. An entry naming frame
  * 0 or the page table itself is corrupt and is cleared without touching a
- * frame. The page tables stay, for `free_page_directory`.
+ * frame. The page tables stay, for `free_page_directory`. No other
+ * processor translates through `dir` (`smp_space_release`), so the pages
+ * are flushed once, at the end.
  */
 void free_user_pages(page_dir_t *dir)
 {
     uint32_t dir_idx, page_idx;
     page_table_t *table;
+    int changed = 0;
 
     if (!dir) {
         return;
@@ -477,6 +480,7 @@ void free_user_pages(page_dir_t *dir)
                 continue;
             }
 
+            changed = 1;
             if (phys_addr == 0 || phys_addr == table_phys(table)) {
                 table->pages[page_idx] = 0;
                 continue;
@@ -484,9 +488,10 @@ void free_user_pages(page_dir_t *dir)
 
             frame_unref(phys_addr);
             table->pages[page_idx] = 0;
-
-            paging_flush_dir(dir, virt_addr);
         }
+    }
+    if (changed) {
+        paging_flush_range(dir, USER_ADDR_MIN, USER_ADDR_MAX);
     }
 }
 

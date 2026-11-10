@@ -532,14 +532,16 @@ static pte_t *entry_table(pte_t e)
 
 /**
  * Only the lower half is walked. Each present user page loses its frame
- * reference and its entry, which is flushed wherever `dir` is in use; a
- * PROT_NONE page counts, though it has no user bit. An entry naming frame 0
- * is corrupt and is cleared without touching a frame. The tables stay, for
+ * reference and its entry; a PROT_NONE page counts, though it has no user
+ * bit. An entry naming frame 0 is corrupt and is cleared without touching a
+ * frame. No other processor translates through `dir` (`smp_space_release`),
+ * so the pages are flushed once, at the end. The tables stay, for
  * `free_page_directory`.
  */
 void free_user_pages(page_dir_t *dir)
 {
     uint32_t i4, i3, i2, i1;
+    int changed = 0;
 
     if (!dir) {
         return;
@@ -567,8 +569,6 @@ void free_user_pages(page_dir_t *dir)
                 pt = entry_table(pd[i2]);
                 for (i1 = 0; i1 < MMU_TABLE_ENTRIES; i1++) {
                     pte_t pte = pt[i1];
-                    uintptr_t va = ((uintptr_t)i4 << 39) | ((uintptr_t)i3 << 30) |
-                                   ((uintptr_t)i2 << 21) | ((uintptr_t)i1 << 12);
 
                     if (!(pte & PTE_P) || !(pte & (PTE_U | PTE_NONE))) {
                         continue;
@@ -577,10 +577,13 @@ void free_user_pages(page_dir_t *dir)
                         frame_unref(PTE_ADDR(pte));
                     }
                     pt[i1] = 0;
-                    paging_flush_dir(dir, va);
+                    changed = 1;
                 }
             }
         }
+    }
+    if (changed) {
+        paging_flush_range(dir, USER_ADDR_MIN, USER_ADDR_MAX);
     }
 }
 

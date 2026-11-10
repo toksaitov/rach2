@@ -231,16 +231,21 @@ void *mmu_frame_table(struct frame_map *map, size_t bytes)
     return NULL;
 }
 
-/* The shootdowns and kernel flushes asked for, which a row may count. */
+/* The shootdowns and kernel flushes asked for, which a row may count; the
+ * last shootdown's range; and a row's check, run at each shootdown. */
 static uint32_t shootdowns, kernel_flushes;
+static uintptr_t shot_start, shot_end;
+static void (*shot_check)(const struct page_dir *dir, uintptr_t start, uintptr_t end);
 
-/** Count: one processor, no TLB. */
+/** Count, keep the range and run the row's check: one processor, no TLB. */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
-    (void)dir;
-    (void)start;
-    (void)end;
     shootdowns++;
+    shot_start = start;
+    shot_end = end;
+    if (shot_check) {
+        shot_check(dir, start, end);
+    }
 }
 
 /** Count. */

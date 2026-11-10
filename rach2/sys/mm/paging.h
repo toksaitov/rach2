@@ -189,6 +189,19 @@ void paging_flush_tlb(uintptr_t addr);
 void paging_flush_dir(const page_dir_t *dir, uintptr_t addr);
 
 /**
+ * Drop the translations of the user pages [`start`, `end`) of `dir`,
+ * page-aligned, wherever a processor has them: this processor's when it
+ * translates through `dir`, and every other's with one shootdown, before
+ * this returns. Past `PAGING_FLUSH_CEILING` pages every user translation
+ * is dropped instead, as Linux's `tlb_single_page_flush_ceiling` has it.
+ * An empty range does nothing.
+ */
+void paging_flush_range(const page_dir_t *dir, uintptr_t start, uintptr_t end);
+
+/* The most pages `paging_flush_range` drops one at a time: Linux's 33. */
+#define PAGING_FLUSH_CEILING 33u
+
+/**
  * A new directory for an address space, or NULL when no memory can be had.
  * The kernel's entries are copied from the kernel's directory, so that the
  * kernel's tables are shared and a mapping made in them later is seen
@@ -300,16 +313,20 @@ int mem_lock_room(unsigned long have, unsigned long pages);
  * Drop the reference of every present user page in `dir`'s own tables and
  * clear its entry; a frame goes back to the pool with its last reference.
  * The tables stay, for `free_page_directory`. The last user of an address
- * space calls it (`mm_put`). Each architecture's mmu.c defines it.
+ * space calls it (`mm_put`), once no other processor translates through
+ * `dir` (`smp_space_release`), so that one flush at the end, on this
+ * processor alone, is enough. Each architecture's mmu.c defines it.
  */
 void free_user_pages(page_dir_t *dir);
 
 /**
  * Unmap the present user pages of [start, end) in `dir`, page-aligned: each
- * drops its frame's reference, which frees the frame with its last, has its
- * entry cleared, and has its translation dropped wherever a processor has
- * it. A page never backed is passed. A NULL `dir` changes nothing. munmap
- * and a brk that shrinks the heap call it.
+ * has its entry cleared and its translation dropped wherever a processor
+ * has it, with one flush of the span of pages unmapped
+ * (`paging_flush_range`), and then drops its frame's reference, which frees
+ * the frame with its last. A page never backed is passed, and a range with
+ * no page present costs no flush. A NULL `dir` changes nothing. munmap and
+ * a brk that shrinks the heap call it.
  */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end);
 
