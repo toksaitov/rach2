@@ -458,8 +458,8 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
     case VKPRESENT:
         /* The rates are printed beside the verdict and not judged. */
         snprintf(command, size,
-                 "vkcube " VKCUBE_REF "/frames " GRAPHICS_DIR "/out/frames " VKCUBE_REF
-                 "/timing " GRAPHICS_DIR "/out/timing");
+                 "vkcube " VKCUBE_REF "/frames.out " GRAPHICS_DIR "/out/frames " VKCUBE_REF
+                 "/timing.out " GRAPHICS_DIR "/out/timing");
         break;
     case VENUS:
         if (strcmp(s->test, "device-lost") == 0) {
