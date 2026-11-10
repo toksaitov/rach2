@@ -1,10 +1,12 @@
 # sys/arch/x86_64/sources.mk: the x86-64's files, for rach2/sources.mk. The
 # entry with the multiboot header comes first; the PC platform's files are
-# sys/arch/x86/sources.mk's, and KVM's, which only x86-64 has, sys/kvm/'s.
+# sys/arch/x86/sources.mk's, and KVM's and VFIO's, which only x86-64 has,
+# sys/kvm/'s and sys/vfio/'s.
 
 include sys/arch/x86/sources.mk
 include sys/arch/x86/iommu/sources.mk
 include sys/kvm/sources.mk
+include sys/vfio/sources.mk
 
 # What TinyCC on Rach2 compiles and links the kernel with: no SSE register,
 # as GCC's -mno-sse has it, since a variadic function's prologue would save
@@ -48,4 +50,5 @@ ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/ia32_misc.c \
     $(IOMMU_C_SRC) \
     $(KVM_C_SRC) \
+    $(VFIO_C_SRC) \
     $(PC_C_SRC)
