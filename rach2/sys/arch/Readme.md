@@ -192,7 +192,7 @@ The shared code is written to pass them: an address is a `uintptr_t`, a length a
 * Every function `arch.h` declares and the code behind it: the entry from the loader, the exception vectors and the entry by `svc`, the page tables of `mm/paging.h`, the context switch, the signal frames, the thread pointer (`TPIDRURO` on 32-bit ARM, `TPIDR_EL0` on 64-bit ARM, as Linux uses them), the floating-point state of `fpu.h`, the ptrace registers, and a `systab.c` from Linux's numbers, the generic ones on 64-bit ARM.
 * The boot record of `sys/boot.h`, filled from what its loader passes.
 * The platform behind `platform.h`, `irq.h`, `timer.h` and the rest; `cpu.h` numbers the interrupts as a GIC does, from 32 to 1019.
-* Its `sources.mk` and `link.ld`, a branch in `mk/arch.mk`, which refuses every `ARCH` but `i686` and `x86_64`, and its flags in `rach2/Makefile`. `guest.mk` takes `ARCH` from `uname -m`, and the ARM headers' `ARCH_NAME` is `armv7l` or `aarch64`, not the directory's name, so a port that builds itself on Rach2 makes the two agree.
+* Its `sources.mk` and `link.ld`, a branch in `mk/arch.mk`, which refuses every `ARCH` but `i686` and `x86_64`, and its flags in `rach2/Makefile`. `guest.mk` takes `ARCH` from the class of `/bin/cc`'s ELF header, `i686` or `x86_64`, so a port that builds itself on Rach2 adds its compiler's machine there.
 
 ## Building
 

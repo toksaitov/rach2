@@ -44,9 +44,11 @@ KCFLAGS = -Wall -Wunsupported -nostdlib $(ACPI_TCC_CFLAGS) $(ARCH_TCC_CFLAGS) $(
 ACPICA = vendor/acpica
 ACPI_TCC_CFLAGS = -D__RACH2__ -Isys/acpi -I$(ACPICA)/include
 
-# The machine's own architecture, whose directory under sys/arch/ sources.mk
-# takes the processor's files from.
-ARCH != uname -m
+# The architecture of the staged TinyCC, the class of /bin/cc's ELF header,
+# whose directory under sys/arch/ sources.mk takes the processor's files
+# from. It is the system's and not the kernel's that `uname -m` names, which
+# for an i686 system on the x86-64 kernel is x86_64, as on Linux.
+ARCH != od -An -tx1 -j4 -N1 /bin/cc | sed -e 's/^ *01$$/i686/' -e 's/^ *02$$/x86_64/'
 
 include sources.mk
 
