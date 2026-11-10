@@ -344,7 +344,9 @@ wording() {
             where = $1 ":" $2 ": "
             if (low ~ /(^|[^a-z])(honest|honestly|fiction|fictional)([^a-z]|$)/)
                 print where "a word the register rule forbids: honest or fiction"
-            if (low ~ /(^|[^a-z])(not|[a-z]+n.t) [^.,;:()]*, *(it.s|it is|that.s|that is)( |$)/)
+            # A condition, as "if you do not know, it is safe", is no reversal.
+            if (low ~ /(^|[^a-z])(not|[a-z]+n.t) [^.,;:()]*, *(it.s|it is|that.s|that is)( |$)/ &&
+                low !~ /(^|[^a-z])(if|unless|when|whether) [^.,;:()]*(not|[a-z]+n.t) [^.,;:()]*, *(it.s|it is|that.s|that is)( |$)/)
                 print where "a \"not X, it is Y\" reversal, which the register rule forbids"
             msg = ""
             if ($1 ~ /\.sh$/ && text ~ />&2/ && match(text, /(echo|printf) +["\047]/))
