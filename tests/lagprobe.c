@@ -40,7 +40,9 @@
  *
  * `lagprobe writers [TYPE]`: two children write files on the lagged volume,
  * FAT32 or the type TYPE names, while the parent syncs it; each file reads
- * back as its own bytes.
+ * back as its own bytes. Two more append to one file through opens of
+ * their own, one with O_APPEND and one with pwritev2's RWF_APPEND, and the
+ * file holds every record of both.
  *
  * `lagprobe pool`, under `rach2.blockpool=2` with the lag: three readers
  * and a writer on two slots, of which the disk may hold one, so whoever
@@ -86,6 +88,9 @@
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR   2
+#define O_APPEND 02000
+
+#define RWF_APPEND 0x10
 
 /* The type `writers` and `latefail` mount, set by the second argument. */
 static const char *volume_type = "vfat";
@@ -644,19 +649,93 @@ static void check_written(const char *path, unsigned char fill)
     syscall1(SYS_CLOSE, fd);
 }
 
+#define APPEND_RECORD 512
+#define APPEND_ROUNDS 16
+#define APPEND_PATH   "/lw/append.bin"
+
+/** An appender of `lagprobe writers`: open APPEND_PATH, which the parent
+ * made, and add APPEND_ROUNDS records of `fill`, with O_APPEND or, when
+ * `flag`, with pwritev2's RWF_APPEND on a description without it; exit 0,
+ * 2 when the open fails and 3 when a write is short. */
+static void appender(unsigned char fill, int flag)
+{
+    static unsigned char record[APPEND_RECORD];
+    unsigned long iov[2];
+    int fd, i;
+    long n;
+
+    for (i = 0; i < APPEND_RECORD; i++) {
+        record[i] = fill;
+    }
+    iov[0] = (unsigned long)record;
+    iov[1] = APPEND_RECORD;
+    fd = syscall3(SYS_OPEN, (long)APPEND_PATH, flag ? O_WRONLY : O_WRONLY | O_APPEND, 0);
+    if (fd < 0) {
+        sys_exit(2);
+    }
+    for (i = 0; i < APPEND_ROUNDS; i++) {
+        n = flag ? syscall6(SYS_PWRITEV2, fd, (long)iov, 1, -1, -1, RWF_APPEND)
+                 : syscall3(SYS_WRITE, fd, (long)record, APPEND_RECORD);
+        if (n != APPEND_RECORD) {
+            sys_exit(3);
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    sys_exit(0);
+}
+
+/** Fail unless APPEND_PATH holds APPEND_ROUNDS whole records of each of
+ * `one` and `other` and nothing else. */
+static void check_appended(unsigned char one, unsigned char other)
+{
+    static unsigned char storage[APPEND_RECORD];
+    unsigned char *buf = storage; /* read into through the pointer */
+    int fd = syscall3(SYS_OPEN, (long)APPEND_PATH, O_RDONLY, 0);
+    int seen_one = 0, seen_other = 0, r, i;
+
+    if (fd < 0) {
+        fail("the appenders' file is missing");
+    }
+    for (r = 0; r < 2 * APPEND_ROUNDS; r++) {
+        if (syscall3(SYS_READ, fd, (long)buf, APPEND_RECORD) != APPEND_RECORD) {
+            fail("an append was lost: the appenders' file is short");
+        }
+        for (i = 1; i < APPEND_RECORD; i++) {
+            if (buf[i] != buf[0]) {
+                fail("an append overwrote part of another's record");
+            }
+        }
+        if (buf[0] == one) {
+            seen_one++;
+        } else if (buf[0] == other) {
+            seen_other++;
+        } else {
+            fail("the appenders' file holds bytes neither wrote");
+        }
+    }
+    if (seen_one != APPEND_ROUNDS || seen_other != APPEND_ROUNDS ||
+        syscall3(SYS_READ, fd, (long)buf, 16) != 0) {
+        fail("an append was lost or written twice");
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
 /**
  * `lagprobe writers`, under the lag with the second partition mounted for
- * writing: two children each create a file and extend it eight times, and
- * the parent syncs the volume twenty times while they do; every write
- * sleeps in the lag, so the requests interleave. Each file must read back
- * as its own bytes, whole, every sync must return 0, and the volume must
- * unmount clean. The sync's turn under the lock cannot be seen from here:
- * the driver's assertion at every mutation is what catches a write outside
- * it.
+ * writing: two children each create a file and extend it eight times, two
+ * more append records to one file through descriptions of their own, one
+ * with O_APPEND and one with RWF_APPEND, and the parent syncs the volume
+ * twenty times while they do; every write sleeps in the lag, so the
+ * requests interleave, and an append that read the end before another's
+ * write and wrote after it would overwrite that record. Each file must read
+ * back as its own bytes, whole, the appended one with every record of both,
+ * every sync must return 0, and the volume must unmount clean. The sync's
+ * turn under the lock cannot be seen from here: the driver's assertion at
+ * every mutation is what catches a write outside it.
  */
 static void run_writers(void)
 {
-    int a, b, s;
+    int a, b, c, d, s, fd;
 
     if (syscall2(SYS_MKDIR, (long)"/lw", 0755) != 0) {
         fail("mkdir /lw");
@@ -664,6 +743,11 @@ static void run_writers(void)
     if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lw", (long)volume_type, 0, 0) != 0) {
         fail("the writable mount through the lag");
     }
+    fd = syscall3(SYS_OPEN, (long)APPEND_PATH, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+        fail("create the appenders' file");
+    }
+    syscall1(SYS_CLOSE, fd);
     a = syscall1(SYS_FORK, 0);
     if (a == 0) {
         writer("/lw/writer-a.bin", 0x11);
@@ -671,6 +755,14 @@ static void run_writers(void)
     b = syscall1(SYS_FORK, 0);
     if (b == 0) {
         writer("/lw/writer-b.bin", 0x77);
+    }
+    c = syscall1(SYS_FORK, 0);
+    if (c == 0) {
+        appender(0x33, 0);
+    }
+    d = syscall1(SYS_FORK, 0);
+    if (d == 0) {
+        appender(0x55, 1);
     }
     for (s = 0; s < 20; s++) {
         if (syscall1(SYS_SYNC, 0) != 0) {
@@ -681,8 +773,12 @@ static void run_writers(void)
     if (wait_status(a) != 0 || wait_status(b) != 0) {
         fail("a writer failed");
     }
+    if (wait_status(c) != 0 || wait_status(d) != 0) {
+        fail("an appender failed");
+    }
     check_written("/lw/writer-a.bin", 0x11);
     check_written("/lw/writer-b.bin", 0x77);
+    check_appended(0x33, 0x55);
     if (syscall2(SYS_UMOUNT2, (long)"/lw", 0) != 0) {
         fail("umount2 of the written volume");
     }

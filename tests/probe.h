@@ -61,6 +61,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_PREAD64           17
 #define SYS_READV             19
 #define SYS_WRITEV            20
+#define SYS_PWRITEV2          328
 #define SYS_ACCESS            21
 #define SYS_PIPE              22
 #define SYS_SELECT            23
@@ -360,6 +361,7 @@ static __inline__ long syscall0(long n)
 #define SYS_SELECT            142
 #define SYS_READV             145
 #define SYS_WRITEV            146
+#define SYS_PWRITEV2          379
 #define SYS_GETSID            147
 #define SYS_SCHED_YIELD       158
 #define SYS_NANOSLEEP         162
