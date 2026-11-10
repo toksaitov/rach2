@@ -415,11 +415,12 @@ static void reset_pending(uint32_t h)
     CHECK(dma_fence_status(completed) == 1, "reset preserves a completed fence's success");
     dma_fence_put(completed);
     CHECK(dma_fence_status(pending) == -ENODEV, "pending sync-file fence reports device loss");
-    CHECK(vgpu_bo(obj)->res_id == 0 && pages_held == 0 && !vg->live,
-          "reset frees every backing page and outstanding command");
+    CHECK(vgpu_bo(obj)->res_id == 0 && pages_held != 0 && !vg->live,
+          "reset frees every outstanding command and keeps the objects' pages");
     CHECK(!vg->contexts->id && !vg->contexts->created && !vg->contexts->attached,
           "reset destroys the context and its attachments");
-    CHECK(obj_vm_page(obj, 0, &phys) == -1, "old mapping faults after reset");
+    CHECK(obj_vm_page(obj, 0, &phys) == 0 && phys != 0,
+          "old mapping takes its page again after reset");
     w.handle = h;
     w.flags = 0;
     CHECK(vgpu_wait_ioctl(dev, &w, &file) == -ENODEV &&
