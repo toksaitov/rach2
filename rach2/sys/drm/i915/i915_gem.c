@@ -1088,7 +1088,8 @@ int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
     return err;
 }
 
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
     int32_t err;
@@ -1098,7 +1099,8 @@ int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t
     if (err != 0) {
         return err;
     }
-    err = i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE, align, vma);
+    err = remap ? i915_vma_pin_remapped(obj, remap, I915_PIN_MAPPABLE, align, vma)
+                : i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE, align, vma);
     if (err != 0) {
         return err;
     }

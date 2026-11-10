@@ -172,11 +172,13 @@ static uint64_t flush_start, flush_end;
 /** The GGTT address the pin binds object `i` at. */
 #define BO_GGTT(i) (0x01000000u + (uint32_t)(i) * 0x00800000u)
 
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
     struct i915_vma *v = &bo_vma[obj - bo];
 
+    (void)remap;
     if (!obj->vmas) {
         v->obj = obj;
         v->start = BO_GGTT(obj - bo);

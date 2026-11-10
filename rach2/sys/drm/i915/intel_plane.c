@@ -11,6 +11,7 @@
 
 #include "../../lib/kdef.h"
 #include "../../lib/kerrno.h"
+#include "../../lib/kstring.h"
 
 /* The primary plane's formats on Haswell, Linux's ivb_primary_formats;
  * ARGB is not among them, since the primary plane has no alpha. */
@@ -35,10 +36,22 @@ static const uint64_t plane_modifiers[] = {I915_FORMAT_MOD_X_TILED, DRM_FORMAT_M
 #define X_TILE_HEIGHT 8u
 #define X_TILE_SIZE   4096u
 
-/* The widest stride of the primary plane on Haswell, and the largest
- * offset either plane's offset register takes. */
-#define PRIMARY_MAX_STRIDE (32u * 1024u)
-#define PLANE_MAX_XY       4095u
+/* The largest offset either plane's offset register takes. */
+#define PLANE_MAX_XY 4095u
+
+/*
+ * How a plane reads its framebuffer, Linux's intel_fb_view of the first
+ * colour plane: through the object's normal view when `remap.width` is 0,
+ * or through the remapped view `remap`. `stride` is the bytes from one row
+ * to the next as the plane reads them, Linux's mapping_stride; with a
+ * remapped view, `x` and `y` are the source's corner from the view's first
+ * page.
+ */
+struct plane_view {
+    struct i915_remap_info remap;
+    uint32_t stride;
+    uint32_t x, y;
+};
 
 #define primary_crtc(p) \
     ((struct intel_crtc *)((uintptr_t)(p) - offsetof(struct intel_crtc, primary)))
@@ -59,16 +72,90 @@ static int is_yuv422(uint32_t format)
 }
 
 /**
- * Check `ps`'s framebuffer against what a plane with the widest stride
- * `max_stride` scans out, as Linux's intel_fb checks and
+ * The widest stride the primary plane, or the sprite, reads of a format of
+ * `cpp` bytes a pixel, Linux's hsw_primary_max_stride and
+ * hsw_sprite_max_stride: 8192 pixels, which keeps the offset register's x
+ * in range, and at most 32 KiB for the primary plane and 16 KiB for the
+ * sprite.
+ */
+static uint32_t plane_max_stride(int primary, uint32_t cpp)
+{
+    uint32_t cap = primary ? 32u * 1024u : 16u * 1024u;
+
+    return 8192u * cpp < cap ? 8192u * cpp : cap;
+}
+
+/**
+ * The view through which the primary plane, or the sprite, reads the
+ * framebuffer of `ps`, into `*v`, as Linux's intel_plane_compute_gtt
+ * makes it. A visible plane whose stride passes its limit reads the
+ * remapped view of its source rectangle (intel_plane_remap_gtt), which
+ * the plane's check has clipped: X tiles of 512 bytes by 8 rows, or of a
+ * linear surface whose stride is whole pages, rows of a page; the tile
+ * holding the source's corner is the view's first, and the view is as
+ * many tiles wide and high as reach the rectangle's far corner. Any other
+ * plane reads the normal view at the framebuffer's stride.
+ */
+static void plane_view(const struct drm_plane_state *ps, int primary, struct plane_view *v)
+{
+    const struct drm_framebuffer *fb = ps->fb;
+    uint32_t pitch = fb->pitches[0], cpp = fb->info->cpp[0];
+    uint32_t sx = (uint32_t)ps->src.x1 >> 16, sy = (uint32_t)ps->src.y1 >> 16;
+    uint32_t w = (uint32_t)(ps->src.x2 - ps->src.x1) >> 16;
+    uint32_t h = (uint32_t)(ps->src.y2 - ps->src.y1) >> 16;
+    uint32_t tile_bytes, tile_w, tile_h, at;
+    int tiled = intel_fb_modifier(fb) == I915_FORMAT_MOD_X_TILED;
+
+    k_memset(v, 0, sizeof(*v));
+    v->stride = pitch;
+    if (!ps->visible || !fb->obj[0] || fb->obj[0]->funcs != &i915_gem_object_funcs ||
+        pitch <= plane_max_stride(primary, cpp) || (!tiled && pitch % X_TILE_SIZE != 0)) {
+        return;
+    }
+    tile_bytes = tiled ? X_TILE_WIDTH : X_TILE_SIZE;
+    tile_w = tile_bytes / cpp;
+    tile_h = tiled ? X_TILE_HEIGHT : 1u;
+    if (tiled) {
+        /* The framebuffer's offset is whole tiles (check_surface). */
+        v->remap.offset =
+            fb->offsets[0] / X_TILE_SIZE + (sy / tile_h) * (pitch / tile_bytes) + sx / tile_w;
+        v->x = sx % tile_w;
+        v->y = sy % tile_h;
+    } else {
+        /* A stride of whole pages puts the corner in the first row. */
+        at = fb->offsets[0] + sy * pitch + sx * cpp;
+        v->remap.offset = at / X_TILE_SIZE;
+        v->x = (at % X_TILE_SIZE) / cpp;
+        v->y = 0;
+    }
+    v->remap.width = (v->x + w + tile_w - 1u) / tile_w;
+    v->remap.height = (v->y + h + tile_h - 1u) / tile_h;
+    v->remap.src_stride = pitch / tile_bytes;
+    v->stride = v->remap.width * tile_bytes;
+}
+
+int intel_plane_remap(const struct drm_plane_state *ps, struct i915_remap_info *remap)
+{
+    struct plane_view v;
+
+    remap->width = 0;
+    if (!ps->fb || ps->plane->type == DRM_PLANE_TYPE_CURSOR) {
+        return 0;
+    }
+    plane_view(ps, ps->plane->type == DRM_PLANE_TYPE_PRIMARY, &v);
+    *remap = v.remap;
+    return v.remap.width != 0;
+}
+
+/**
+ * Check `ps`'s framebuffer as Linux's intel_fb checks and
  * i9xx_check_plane_surface do: its modifier and its object's tiling agree,
  * its stride is aligned to its modifier's unit, 64 bytes or a tile's
- * width, and within the plane's, its first plane's offset lies on a
- * pixel or, X-tiled, on a tile, and the source's corner fits the offset
- * register once the aligned part goes into the surface address. 0 or
- * -EINVAL.
+ * width, and its first plane's offset lies on a pixel or, X-tiled, on a
+ * tile. The plane's stride and the offset register are the caller's to
+ * check. 0 or -EINVAL.
  */
-static int32_t check_surface(const struct drm_plane_state *ps, uint32_t max_stride)
+static int32_t check_surface(const struct drm_plane_state *ps)
 {
     const struct drm_framebuffer *fb = ps->fb;
     uint64_t modifier = intel_fb_modifier(fb);
@@ -89,9 +176,6 @@ static int32_t check_surface(const struct drm_plane_state *ps, uint32_t max_stri
             return -EINVAL;
         }
     } else if (modifier != DRM_FORMAT_MOD_LINEAR || pitch % 64u != 0 || fb->offsets[0] % cpp != 0) {
-        return -EINVAL;
-    }
-    if (pitch > max_stride) {
         return -EINVAL;
     }
     return 0;
@@ -174,6 +258,28 @@ static uint32_t surface_offset(const struct drm_plane_state *ps, uint32_t *x, ui
 }
 
 /**
+ * The GGTT address of the surface the primary plane, or the sprite, reads
+ * for `ps`, with the stride in `*stride` and the source's corner from the
+ * surface in `*x` and `*y`: from the remapped view the commit pinned when
+ * the plane needs one (`plane_view`), whose first tile holds the corner,
+ * or from the object's normal view (`surface_offset`).
+ */
+static uint32_t plane_surface(const struct drm_plane_state *ps, int primary, uint32_t *stride,
+                              uint32_t *x, uint32_t *y)
+{
+    struct plane_view v;
+
+    plane_view(ps, primary, &v);
+    *stride = v.stride;
+    if (v.remap.width) {
+        *x = v.x;
+        *y = v.y;
+        return intel_fb_ggtt_remapped(ps->fb, &v.remap);
+    }
+    return intel_fb_ggtt(ps->fb) + surface_offset(ps, x, y);
+}
+
+/**
  * The checks every plane of a pipe makes of an async flip, Linux's
  * intel_async_flip_check_hw: only the primary plane takes one, of an
  * X-tiled framebuffer that keeps the old one's format, stride, modifier,
@@ -201,17 +307,20 @@ static int32_t check_async(struct drm_atomic_state *state, struct drm_plane *pla
 /**
  * A primary or sprite plane's check: clipped to the CRTC without scaling,
  * the primary covering it whole as Haswell's primary plane must, then the
- * surface's checks with the plane's widest stride; C8 is refused, since
- * Linux shows it only through a GAMMA_LUT, which these CRTCs do not have,
- * and a YUV source must start and end on a pair of pixels. A plane is
- * visible only on a CRTC that is on. 0, -EINVAL or -ERANGE.
+ * surface's checks, and the stride of the view the plane reads within the
+ * plane's widest (`plane_view`, Linux's intel_plane_check_stride); C8 is
+ * refused, since Linux shows it only through a GAMMA_LUT, which these
+ * CRTCs do not have, and a YUV source must start and end on a pair of
+ * pixels. A plane is visible only on a CRTC that is on. 0, -EINVAL or
+ * -ERANGE.
  */
 static int32_t intel_plane_check(struct drm_plane *plane, struct drm_atomic_state *state,
                                  int primary)
 {
     struct drm_plane_state *ps = state->planes_new[plane->index];
     const struct drm_crtc_state *cs;
-    uint32_t cpp, max_stride, x, y;
+    struct plane_view v;
+    uint32_t x, y;
     int32_t err;
 
     if (!ps) {
@@ -235,17 +344,24 @@ static int32_t intel_plane_check(struct drm_plane *plane, struct drm_atomic_stat
     if (ps->fb->format == DRM_FORMAT_C8) {
         return -EINVAL;
     }
-    cpp = ps->fb->info->cpp[0];
-    max_stride = primary ? PRIMARY_MAX_STRIDE : (8192u * cpp < 16384u ? 8192u * cpp : 16384u);
-    err = check_surface(ps, max_stride);
+    err = check_surface(ps);
     if (err != 0) {
         return err;
+    }
+    plane_view(ps, primary, &v);
+    if (v.stride > plane_max_stride(primary, ps->fb->info->cpp[0])) {
+        return -EINVAL;
     }
     if (is_yuv422(ps->fb->format) &&
         (((ps->src.x1 >> 16) & 1) != 0 || (((ps->src.x2 - ps->src.x1) >> 16) & 1) != 0)) {
         return -EINVAL;
     }
-    (void)surface_offset(ps, &x, &y);
+    if (v.remap.width) {
+        x = v.x;
+        y = v.y;
+    } else {
+        (void)surface_offset(ps, &x, &y);
+    }
     return x > PLANE_MAX_XY || y > PLANE_MAX_XY ? -EINVAL : 0;
 }
 
@@ -323,7 +439,7 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
     struct i915_hw *hw = &i915->hw;
     const struct drm_plane_state *ps = plane->state;
     const struct drm_crtc_state *cs = c->base.state;
-    uint32_t cntr, surf, x, y;
+    uint32_t cntr, surf, stride, x, y;
 
     if (!ps->visible || !ps->fb || !cs->active) {
         i915_write(hw, DSPCNTR(c->pipe), intel_plane_ctl_crtc(c));
@@ -339,7 +455,7 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
         i915->display.vga_off = 1;
     }
     flush_damage(ps);
-    surf = intel_fb_ggtt(ps->fb) + surface_offset(ps, &x, &y);
+    surf = plane_surface(ps, 1, &stride, &x, &y);
     cntr = DISP_ENABLE | primary_format(ps->fb->format);
     if (intel_fb_modifier(ps->fb) == I915_FORMAT_MOD_X_TILED) {
         cntr |= DISP_TILED;
@@ -352,7 +468,7 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
         i915_write(hw, DSPCNTR(c->pipe), cntr | DISP_ASYNC_FLIP);
         i915_write(hw, DSPSURF(c->pipe), surf);
     } else {
-        i915_write(hw, DSPSTRIDE(c->pipe), ps->fb->pitches[0]);
+        i915_write(hw, DSPSTRIDE(c->pipe), stride);
         i915_write(hw, DSPOFFSET(c->pipe), y << 16 | x);
         i915_write(hw, DSPCNTR(c->pipe), cntr);
         i915_write(hw, DSPSURF(c->pipe), surf);
@@ -410,7 +526,7 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     struct i915_hw *hw = &c->i915->hw;
     const struct drm_plane_state *ps = plane->state;
     const struct drm_crtc_state *cs = c->base.state;
-    uint32_t ctl, surf, x, y, w, h;
+    uint32_t ctl, surf, stride, x, y, w, h;
 
     (void)state;
     if (!ps->visible || !ps->fb || !cs->active) {
@@ -421,7 +537,7 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
         return;
     }
     flush_damage(ps);
-    surf = intel_fb_ggtt(ps->fb) + surface_offset(ps, &x, &y);
+    surf = plane_surface(ps, 0, &stride, &x, &y);
     w = (uint32_t)(ps->dst.x2 - ps->dst.x1);
     h = (uint32_t)(ps->dst.y2 - ps->dst.y1);
     ctl = SPRITE_ENABLE | SPRITE_PLANE_GAMMA_DISABLE | sprite_format(ps->fb->format);
@@ -434,7 +550,7 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     if (c->cfg.limited_range) {
         ctl |= SPRITE_PIPE_CSC_ENABLE;
     }
-    i915_write(hw, SPRSTRIDE(c->pipe), ps->fb->pitches[0]);
+    i915_write(hw, SPRSTRIDE(c->pipe), stride);
     i915_write(hw, SPRPOS(c->pipe), (uint32_t)ps->dst.y1 << 16 | (uint32_t)ps->dst.x1);
     i915_write(hw, SPRSIZE(c->pipe), (h - 1u) << 16 | (w - 1u));
     i915_write(hw, SPRSCALE(c->pipe), 0);

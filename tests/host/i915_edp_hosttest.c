@@ -173,11 +173,13 @@ const struct drm_gem_object_funcs i915_gem_object_funcs;
 static struct drm_i915_gem_object bo[NBO];
 static struct i915_vma bo_vma[NBO];
 
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
     struct i915_vma *v = &bo_vma[obj - bo];
 
+    (void)remap;
     (void)align;
     if (!obj->vmas) {
         v->obj = obj;
