@@ -5453,10 +5453,13 @@ static int group_stop_taken(void)
  * running process passes where none of them is in use.
  *
  * After signal work, `signal_restart` reads the live result and orig_nr to
- * restart a call or give it EINTR, after the tracer has made its changes.
- * With no signal or stop to take, a result the tracer wrote stays as it is.
- * A mask rt_sigsuspend, pselect6 or ppoll replaced goes into the handler's
- * frame,
+ * restart a call or give it EINTR, after the tracer has made its changes. A
+ * call the dispatcher translated into a restart code is signal work in
+ * itself (`restart_due`), as Linux's TIF_SIGPENDING stays set until
+ * get_signal runs, so a call whose signal another thread took first, or
+ * that slept after its signal check, restarts. With no signal, stop or
+ * translated call to take, a result the tracer wrote stays as it is. A mask
+ * rt_sigsuspend, pselect6 or ppoll replaced goes into the handler's frame,
  * or back in place at once when no handler runs.
  */
 void deliver_signals(isr_params_t *tf)
@@ -5472,7 +5475,8 @@ void deliver_signals(isr_params_t *tf)
     if (proc_dead_threads != 0) {
         reap_threads();
     }
-    signal_work = (current_proc->ptrace & (PT_START | PT_INTERRUPT)) != 0;
+    signal_work = current_proc->restart_due || (current_proc->ptrace & (PT_START | PT_INTERRUPT));
+    current_proc->restart_due = 0;
     if (current_proc->ptrace) {
         ptrace_return_stops();
     }
