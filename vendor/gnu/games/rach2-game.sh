@@ -70,4 +70,18 @@ fi
 [ "$(uname -m)" = x86_64 ] || die 'proton needs the x86-64 GNU root'
 [ -x /opt/proton/proton ] || die 'missing /opt/proton/proton'
 mkdir -p "$STEAM_COMPAT_DATA_PATH" "$STEAM_COMPAT_CLIENT_INSTALL_PATH" "$PROTON_LOG_DIR"
+# Boot a new prefix and give WineD3D the device's memory, which games size
+# their textures by. The GPUs Rach2 drives draw from system memory, and virgl
+# reports a size that matches no memory of guest or host (16,430,080 MiB).
+if [ ! -f "$STEAM_COMPAT_DATA_PATH/pfx/user.reg" ]; then
+    mib=$(awk '$1 == "MemTotal:" { print int($2 / 1024) }' /proc/meminfo)
+    case "$mib" in ''|*[!0-9]*|0) die 'cannot read MemTotal from /proc/meminfo' ;; esac
+    status=0
+    /opt/proton/proton run 'c:\windows\system32\wineboot.exe' -u || status=$?
+    [ "$status" -eq 0 ] || { echo "rach2-game: prefix: wineboot failed: status $status" >&2; exit 1; }
+    /opt/proton/proton run 'c:\windows\system32\reg.exe' add 'HKCU\Software\Wine\Direct3D' \
+        /v VideoMemorySize /t REG_SZ /d "$mib" /f > /dev/null || status=$?
+    [ "$status" -eq 0 ] || { echo "rach2-game: prefix: reg failed: status $status" >&2; exit 1; }
+    echo "rach2-game: prefix: made $STEAM_COMPAT_DATA_PATH/pfx with VideoMemorySize $mib MiB" >&2
+fi
 exec /opt/proton/proton run "$@"
