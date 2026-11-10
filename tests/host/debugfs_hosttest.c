@@ -9,6 +9,18 @@
 #include "dmabuf/sync_file.c"
 #include "dmabuf/sw_sync.c"
 
+/** No interrupts on the host: the fences' masking is a no-op. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** The pair of kirq_save. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 int printf(const char *format, ...);
 
 struct percpu cpu_table[NR_CPUS];

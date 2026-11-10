@@ -11,6 +11,18 @@
 #include "dmabuf/udmabuf.c"
 #include "drm/vgem.c"
 
+/** No interrupts on the host: the fences' masking is a no-op. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** The pair of kirq_save. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long n, unsigned long size);
 extern void free(void *p);

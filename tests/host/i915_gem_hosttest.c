@@ -8,6 +8,18 @@
 
 #include "i915_gem_model.c"
 
+/** No interrupts on the host: the fences' masking is a no-op. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** The pair of kirq_save. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 /* ---- 78-3a.1: objects, handles, PREAD and PWRITE ---- */
 
 /** GEM_CREATE, handles, PREAD and PWRITE, cached and uncached. */

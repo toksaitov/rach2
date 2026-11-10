@@ -2,6 +2,7 @@
 #include "dmabuf.h"
 #include "../mm/kheap.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -62,17 +63,29 @@ void dma_fence_set_error(struct dma_fence *f, int32_t error)
         f->error = error;
 }
 
-/** Stamp completion, detach each callback before calling it, and wake all. */
+/** Stamp completion, detach each callback before calling it, and wake all.
+ * The mark and the detach are one step with interrupts masked, since an
+ * interrupt may signal the fence while a thread adds or removes a
+ * callback; the callbacks run after it, in any context. */
 int32_t dma_fence_signal(struct dma_fence *f)
 {
-    struct dma_fence_cb *cb;
-    if (!f || f->signaled)
+    struct dma_fence_cb *cb, *list;
+    uint32_t flags;
+    if (!f)
         return -EINVAL;
+    flags = kirq_save();
+    if (f->signaled) {
+        kirq_restore(flags);
+        return -EINVAL;
+    }
     dma_fence_get(f);
     f->signaled = 1;
     f->timestamp_ns = dma_fence_now();
-    while ((cb = f->cbs) != NULL) {
-        f->cbs = cb->next;
+    list = f->cbs;
+    f->cbs = NULL;
+    kirq_restore(flags);
+    while ((cb = list) != NULL) {
+        list = cb->next;
         cb->next = NULL;
         cb->func(f, cb);
     }
@@ -100,15 +113,25 @@ int32_t dma_fence_status(struct dma_fence *f)
     return dma_fence_is_signaled(f) ? (f && f->error ? f->error : 1) : 0;
 }
 
-/** Add a callback unless completion has already happened. */
+/** Add a callback unless completion has already happened: 0, or -ENOENT
+ * when it has. The test and the link are one step with interrupts masked,
+ * so that a signal from an interrupt either finds the callback or comes
+ * first. */
 int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
                                void (*func)(struct dma_fence *, struct dma_fence_cb *))
 {
+    uint32_t flags;
     if (dma_fence_is_signaled(f))
         return -ENOENT;
+    flags = kirq_save();
+    if (f->signaled) {
+        kirq_restore(flags);
+        return -ENOENT;
+    }
     cb->func = func;
     cb->next = f->cbs;
     f->cbs = cb;
+    kirq_restore(flags);
     return 0;
 }
 
@@ -116,15 +139,19 @@ int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
 int dma_fence_remove_callback(struct dma_fence *f, struct dma_fence_cb *cb)
 {
     struct dma_fence_cb **p;
+    uint32_t flags;
     if (!f)
         return 0;
+    flags = kirq_save();
     for (p = &f->cbs; *p; p = &(*p)->next) {
         if (*p == cb) {
             *p = cb->next;
             cb->next = NULL;
+            kirq_restore(flags);
             return 1;
         }
     }
+    kirq_restore(flags);
     return 0;
 }
 
