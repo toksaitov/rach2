@@ -42,8 +42,9 @@
 #   directory under /var/spool/cron, and shadow's chsh, chfn and gpasswd.
 # * glibc's own files: /etc/nsswitch.conf, and /etc/ld.so.conf, from which
 #   install_root.sh writes /etc/ld.so.cache. It names the directory of
-#   Debian's libraries of either architecture, of which the image has the
-#   one of its own, and ldconfig passes over the other.
+#   Debian's libraries of either architecture: the image has its own's, the
+#   x86-64 one i386's too when it has the i386 layer, and ldconfig passes
+#   over a directory the image lacks.
 # * /etc/ifplugd/ifplugd.action, /sbin/ndwatch and /etc/sysctl.conf, as
 #   the metal disk has them.
 # * /etc/ntp.conf names the servers of the NTP pool, by which BusyBox's

@@ -31,7 +31,7 @@
 # out. GNU_I386_OPTION holds the choice, rewritten only when it changes, so
 # that an image made the other way is made again.
 GNU_I386 ?= 1
-GNU_I386_ON = $(if $(filter x86_64,$(ARCH)),$(filter-out 0,$(GNU_I386)))
+GNU_I386_ON = $(if $(filter x86_64,$(ARCH)),$(filter 1,$(GNU_I386)))
 GNU_I386_OPTION = $(IMAGES_DIR)/gnu-i386.option
 .PHONY: gnu-i386-check
 $(GNU_I386_OPTION): gnu-i386-check

@@ -149,6 +149,34 @@ fresh()
     fi
 }
 
+# versioned_python ROOT LIST: name Debian's own Python, /usr/bin/python3.13,
+# in the first line of each executable Python script of the list LIST under
+# ROOT, so that the script uses Debian's matching dist-packages; the GNU port
+# keeps python3.
+versioned_python()
+{
+    python3 - "$1" "$2" <<'PYTHON'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for relative in pathlib.Path(sys.argv[2]).read_text().splitlines():
+    path = root / relative.removeprefix('./')
+    if path.is_symlink() or not path.is_file() or not path.stat().st_mode & 0o111:
+        continue
+    with path.open('rb') as stream:
+        if stream.read(2) != b'#!':
+            continue
+        first = b'#!' + stream.readline()
+    versioned = re.sub(rb'^#![ \t]*/usr/bin/(?:env[ \t]+)?python3(?=[ \t\r\n]|$)',
+                       b'#!/usr/bin/python3.13', first)
+    if first != versioned:
+        data = path.read_bytes()
+        path.write_bytes(versioned + data[len(first):])
+PYTHON
+}
+
 # shared LIST: take out of the sorted LIST each path the tree already has
 # with the same contents, or as a link to the same target, as dpkg lets two
 # architectures' packages share a file, and fail when the tree has one with
@@ -164,6 +192,15 @@ shared()
                 [ "$(readlink "$TREE/$p")" = "$(readlink "$SHARED_FROM/$p")" ] && continue
         elif cmp -s "$TREE/$p" "$SHARED_FROM/$p"; then
             continue
+        else
+            # A script shared with the desktop has had its Python named.
+            rm -rf "$WORK/script"
+            mkdir "$WORK/script"
+            cp -p "$SHARED_FROM/$p" "$WORK/script/file"
+            chmod u+w "$WORK/script/file"
+            echo ./file > "$WORK/script.list"
+            versioned_python "$WORK/script" "$WORK/script.list"
+            if cmp -s "$TREE/$p" "$WORK/script/file"; then continue; fi
         fi
         printf '%s\n' "$p" >> "$WORK/differ"
     done < "$WORK/both"
@@ -307,27 +344,7 @@ install_debian()
     tar -cf "$WORK/debian.tar" -C "$stage" --no-recursion -T "$WORK/debian.order"
     tar -xpf "$WORK/debian.tar" -C "$TREE"
     writable
-    # Debian's executable Python scripts use its matching dist-packages.
-    python3 - "$TREE" "$WORK/debian.list" <<'PYTHON'
-import pathlib
-import re
-import sys
-
-root = pathlib.Path(sys.argv[1])
-for relative in pathlib.Path(sys.argv[2]).read_text().splitlines():
-    path = root / relative.removeprefix('./')
-    if path.is_symlink() or not path.is_file() or not path.stat().st_mode & 0o111:
-        continue
-    with path.open('rb') as stream:
-        if stream.read(2) != b'#!':
-            continue
-        first = b'#!' + stream.readline()
-    versioned = re.sub(rb'^#![ \t]*/usr/bin/(?:env[ \t]+)?python3(?=[ \t\r\n]|$)',
-                       b'#!/usr/bin/python3.13', first)
-    if first != versioned:
-        data = path.read_bytes()
-        path.write_bytes(versioned + data[len(first):])
-PYTHON
+    versioned_python "$TREE" "$WORK/debian.list"
     echo "gnu: install: $1: $(wc -l < "$WORK/new" | tr -d ' ') files"
 
 }

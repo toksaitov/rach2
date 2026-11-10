@@ -6,6 +6,8 @@ This layer stages Debian 13's desktop and graphics tools for the GNU root. `make
 
 `fetch_debs.sh LAYER [STEP...]` runs `index`, `resolve`, `fetch`, `unpack` and `check`, or only the named steps. `GNU_DEBIAN_LISTS` names every list the layer reads, relative to `vendor/gnu`; the default is the desktop's five lists. A row names a package, optionally `=VERSION`, and optionally the architecture `amd64` or `i386`. Blank lines and comments are ignored. A missing list, package or required version fails the build.
 
+`i386.list` is the list of the x86-64 root's i386 layer, which `make ARCH=x86_64 gnu-i386` resolves against the i386 indices of the same snapshot; `multiarch.sh LAYER` then lists each package of the layer's closure with its Multi-Arch field in `work/debian/LAYER/multiarch.txt`, from which `install_root.sh` takes the `same` packages ([The i386 layer](../Readme.md#the-i386-layer)).
+
 `commands` lists the canonical commands of the desktop closure for the program catalog; update it from the unpacked file lists when the package set changes. The stage is `debian/LAYER` in the GNU build tree; `work/debian/LAYER/closure.txt` records each package, version, archive, path, byte size and SHA-256, and `files/` holds its unpacked paths. Logs are `log/debian-LAYER-STEP.log`. The clone's `build/cache/debian/ARCH` keeps downloads. A cached file with a different digest is removed and refused.
 
 ## Sources and license

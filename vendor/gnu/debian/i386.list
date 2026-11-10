@@ -5,7 +5,8 @@
 # GE-Proton's 32-bit Wine links or loads: those its i386-unix modules and
 # its bundled i386 libraries name, and those desktop.list gives the 64-bit
 # Wine. fetch_debs.sh resolves it against the i386 indices of the snapshot
-# the desktop's lists use; the i386 Venus driver is venus.list's.
+# the desktop's lists use; the i386 Venus driver is venus.list's, and the
+# library it needs beyond Mesa 25.0.7's is at the end.
 libc6
 libgcc-s1
 libstdc++6
@@ -63,3 +64,4 @@ libblas3
 liblapack3
 zlib1g
 libzstd1
+libdisplay-info2
