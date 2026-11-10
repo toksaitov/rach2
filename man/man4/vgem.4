@@ -1,0 +1,131 @@
+.Dd November 10, 2026
+.Dt VGEM 4
+.Os
+.Sh NAME
+.Nm vgem
+.Nd virtual GEM provider, buffers and fences with no hardware
+.Sh SYNOPSIS
+.Cm rach2.vgem
+.Pp
+.In drm/drm.h
+.In drm/vgem_drm.h
+.Pp
+.Pa /dev/dri/cardN
+.Pa /dev/dri/renderDN
+.Sh DESCRIPTION
+The
+.Nm
+driver is a device of buffers in memory with no hardware behind it, as
+Linux 6.12's vgem is.
+A program makes its buffers, exports them through PRIME to another
+driver, and holds them busy with fences it signals itself, which the
+importer waits for as it would for a device's work.
+IGT's tests use it so to hold back the work they give a GPU, and to fill a
+GPU's ring with work that cannot run.
+It starts only when
+.Cm rach2.vgem
+is on the kernel command line, after the other display drivers, and binds
+one device; Linux loads its module on demand, as IGT does with
+.Ql modprobe vgem .
+.Pp
+The device is a DRM device, as
+.Xr drm 4
+describes, registered as
+.Ql vgem
+with Linux's identity: description
+.Ql Virtual GEM provider ,
+version 1.0.0 and date 20120112, on the platform bus as
+.Pa /sys/devices/platform/vgem ,
+whose GET_UNIQUE name is
+.Ql vgem .
+It has a card node and a render node, and the features
+.Dv DRIVER_GEM
+and
+.Dv DRIVER_RENDER .
+Its buffers are dumb buffers in memory, mapped write-combined, since it
+has no call that would bracket a processor's access for an importer.
+The kernel logs
+.Dq vgem: registered
+with the card.
+.Ss Fences
+A fence of
+.Nm
+signals when its program signals it, when the program's file closes, or
+10 seconds after it was made, whichever comes first, as Linux's.
+Each is on a timeline of its own, which
+.Dv SYNC_IOC_FILE_INFO
+names
+.Ql unbound ,
+and an open file numbers its fences from 1, never giving a number twice.
+.Sh IOCTLS
+Besides those of
+.Xr drm 4 ,
+on either node:
+.Bl -tag -width Ds
+.It Dv DRM_IOCTL_VGEM_FENCE_ATTACH Fa "struct drm_vgem_fence_attach *"
+.Bd -literal
+struct drm_vgem_fence_attach {
+	__u32 handle;
+	__u32 flags;
+	__u32 out_fence;
+	__u32 pad;
+};
+.Ed
+.Pp
+Makes a fence on the buffer
+.Fa handle
+and returns its number in
+.Fa out_fence .
+With
+.Dv VGEM_FENCE_WRITE
+in
+.Fa flags
+the fence is the buffer's writer, which every importer's access waits
+for; without it, a reader, which an importer's write waits for.
+.It Dv DRM_IOCTL_VGEM_FENCE_SIGNAL Fa "struct drm_vgem_fence_signal *"
+.Bd -literal
+struct drm_vgem_fence_signal {
+	__u32 fence;
+	__u32 flags;
+};
+.Ed
+.Pp
+Signals the fence numbered
+.Fa fence
+and gives its number up;
+.Fa flags
+is 0.
+.El
+.Sh FILES
+.Bl -tag -width /dev/dri/renderDN
+.It Pa /dev/dri/cardN
+The card node of the device.
+.It Pa /dev/dri/renderDN
+Its render node.
+.El
+.Sh ERRORS
+Besides those of
+.Xr drm 4 :
+.Bl -tag -width Er
+.It Er EBUSY
+FENCE_ATTACH of a writer to a buffer with a fence pending, or of a reader
+to one with a writer pending.
+.It Er EINVAL
+FENCE_ATTACH with flags other than
+.Dv VGEM_FENCE_WRITE
+or a pad that is not 0; FENCE_SIGNAL with flags.
+.It Er ENOENT
+FENCE_ATTACH of a handle the file does not have; FENCE_SIGNAL of a number
+the file was never given or has given up.
+.It Er ETIMEDOUT
+FENCE_SIGNAL of a fence that had signalled after its 10 seconds; the
+number is given up.
+.El
+.Sh SEE ALSO
+.Xr drm 4 ,
+.Xr i915 4 ,
+.Xr vkms 4 ,
+.Xr dma-buf 7
+.Sh HISTORY
+The driver follows Linux 6.12's vgem: its identity, its shmem buffers and
+its two fence calls with their errors and timeout.
