@@ -68,7 +68,7 @@ The files of `sys/drm/` that every architecture compiles are listed in [`sources
 
 ## Limits
 
-* On real hardware no driver sets a mode of its own: fbdrm keeps the loader's, and i915 under `rach2.i915` shows only the mode the firmware left on the Lenovo's panel ([`i915/Readme.md`](i915/Readme.md)).
+* On real hardware fbdrm keeps the loader's mode and sets none of its own. i915, which binds only under `rach2.i915`, sets modes on Haswell: on the eDP panel, the panel's fixed mode or a smaller one through the pipe's fitter, and on DDI B to D, HDMI, DVI and single-stream DisplayPort, with no DisplayPort MST, no audio, no colour management and no VGA output ([`i915/Readme.md`](i915/Readme.md)).
 * virtio-gpu has virgl 3D, blobs and context initialization when offered. On i686 a host-visible region past 4 GiB, where QEMU puts it, is refused with a record, since a page table entry there holds no address past 4 GiB; blobs of guest memory still work, and a mappable blob of host memory alone returns EINVAL. A display change sends its hotplug uevent from the `virtio_gpu` thread, which the first open of the device's nodes makes, since a kernel thread made before init would take pid 1; a change before that open is served by the open.
 * The lease calls answer `EOPNOTSUPP`.
 * A sync object's wait ends with `EINTR` on a signal, where Linux restarts it with `ERESTARTSYS`; libdrm's `drmIoctl` repeats the call either way.
