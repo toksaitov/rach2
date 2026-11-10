@@ -20,7 +20,7 @@ Faults this milestone found in another project's code, one section each, in the 
 * Found: 2026-11-10, task 80-6, Rach2 in QEMU on the testing host, running 64-bit Crysis on llvmpipe with a PulseAudio null sink.
 * Reproduction: run `crysis.sh run +quit` where PI initialization returns `ENOTSUP`; the observed detach waits on a default mutex whose owner has ended. A controlled Linux reproduction with PI unavailable is still needed.
 * Evidence: `dev-log/80-games/80-6.md`; `80-6/evidence/game4-backtrace.txt`, `mutex-attributes.txt` and the compressed launch-4 logs beside them. The deployed libc's PI probe returned `ENOSYS`, attributed initialization returned 95 and default initialization had kind 0. The observed mutex had kind 0 and owner 239, absent from the remaining threads.
-* Rach2: no workaround; its absent PI futex operations are the kernel capability gap. The task is returned for the scope decision recorded on its issue.
+* Rach2: no workaround; its absent PI futex operations are the kernel capability gap. The task waits for the priority-inheritance futex implementation (80-10c) in this stack; the manager set a Wine fallback aside.
 * Status: unreported, draft; the exact termination point of owner 239 was not captured.
 * Next: force PI refusal on Linux, check the current GE patch and preserve robust attributes in a fallback; separately provide Linux's PI futex contract in Rach2.
 ## Linux looks up an AMD L1 cache's eight-bit associativity in a table of sixteen
