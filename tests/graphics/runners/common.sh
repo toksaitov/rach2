@@ -114,12 +114,17 @@ runner_finish()
 
 # runner_weston: start a headless Weston at the fixed size under kiosk-shell,
 # with its own runtime directory, and export WAYLAND_DISPLAY for the browser.
-# Weston's renderer is Pixman, which offers clients shared memory alone: with
-# its GL renderer Weston offers linux-dmabuf on the display's card0, where
-# Chromium's GPU process, as an ordinary user that is not the DRM master,
-# cannot make a dumb buffer ("DRM_IOCTL_MODE_CREATE_DUMB failed: Permission
-# denied") and loses every context. The browser's own GL, WebGL's, runs on
-# the guest's Mesa either way.
+# Weston's renderer is RUNNER_RENDERER, Pixman when it is unset. Pixman
+# offers clients shared memory alone, so that Mesa's Wayland platform renders
+# a client's GL with llvmpipe: with its GL renderer on virtio-gpu Weston
+# offers linux-dmabuf on the display's card0, where Chromium's GPU process, as
+# an ordinary user that is not the DRM master, cannot make a dumb buffer
+# ("DRM_IOCTL_MODE_CREATE_DUMB failed: Permission denied") and loses every
+# context. The GPU profile, RUNNER_RENDERER=gl on a machine whose only render
+# node is the GPU's, has Weston render on that GPU and offer its buffers
+# through linux-dmabuf, so that each client's GL runs there too.
+# RUNNER_XWAYLAND=1 loads Weston's Xwayland module and exports DISPLAY, the
+# display it listens on, once Weston's log names it.
 runner_weston()
 {
     XDG_RUNTIME_DIR=$RUNNER_WORK/run
@@ -127,7 +132,10 @@ runner_weston()
     export XDG_RUNTIME_DIR WAYLAND_DISPLAY
     mkdir -p "$XDG_RUNTIME_DIR"
     chmod 700 "$XDG_RUNTIME_DIR"
-    setsid weston --no-config ${RUNNER_SEAT_MODULE:+--modules="$RUNNER_SEAT_MODULE"} --backend=headless --renderer=pixman --width="$RUNNER_WIDTH" --height="$RUNNER_HEIGHT" \
+    renderer=${RUNNER_RENDERER:-pixman}
+    setsid weston --no-config ${RUNNER_SEAT_MODULE:+--modules="$RUNNER_SEAT_MODULE"} \
+        ${RUNNER_XWAYLAND:+--xwayland} --backend=headless --renderer="$renderer" \
+        --width="$RUNNER_WIDTH" --height="$RUNNER_HEIGHT" \
         --shell=kiosk --idle-time=0 --socket="$WAYLAND_DISPLAY" \
         --log="$RUNNER_OUT/weston.log" < /dev/null > /dev/null 2>&1 &
     RUNNER_WESTON=$!
@@ -138,7 +146,18 @@ runner_weston()
         [ "$tries" -lt 600 ] || runner_die "weston made no socket in 600 tries"
         sleep 0.1
     done
-    runner_record "compositor $(weston --version 2>/dev/null) headless pixman kiosk no-config"
+    if [ -n "${RUNNER_XWAYLAND:-}" ]; then
+        tries=0
+        until DISPLAY=$(sed -n 's/.*xserver listening on display \(:[0-9]*\).*/\1/p' \
+            "$RUNNER_OUT/weston.log" | head -n 1) && [ -n "$DISPLAY" ]; do
+            kill -0 "$RUNNER_WESTON" 2>/dev/null || runner_die "weston ended: $(tail -n 3 "$RUNNER_OUT/weston.log")"
+            tries=$((tries + 1))
+            [ "$tries" -lt 600 ] || runner_die "weston named no X display in 600 tries"
+            sleep 0.1
+        done
+        export DISPLAY
+    fi
+    runner_record "compositor $(weston --version 2>/dev/null) headless $renderer kiosk no-config${RUNNER_XWAYLAND:+ xwayland $DISPLAY}"
 }
 
 # runner_server ROOT...: serve ROOT on a free port of the loopback address

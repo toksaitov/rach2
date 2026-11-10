@@ -39,6 +39,10 @@ if [ "$mode" = pages ]; then
     # shellcheck disable=SC2034 # common.sh loads the private module
     RUNNER_SEAT_MODULE=$here/seat.so
 fi
+if [ "$mode" = gpu ]; then
+    # shellcheck disable=SC2034 # common.sh starts Weston with it
+    RUNNER_RENDERER=gl
+fi
 runner_weston
 python3 "$here/run.py" "$browser" "$mode" "$out" "$RUNNER_WORK"
 runner_finish
