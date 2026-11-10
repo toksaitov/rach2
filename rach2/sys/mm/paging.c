@@ -1995,6 +1995,7 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 
     old = table[MMU_INDEX(virt)];
     table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
+    mm_resident_add(dir, ((flags & PTE_P) != 0) - ((old & PTE_P) != 0));
     /* x86 caches no translation of an entry that is not present. */
     if (old & PTE_P) {
         paging_flush_dir(dir, virt);
@@ -2078,6 +2079,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 
     old = table[MMU_INDEX(virt_addr)];
     table[MMU_INDEX(virt_addr)] = (pte_t)phys_addr | PTE_P | PTE_W | PTE_U;
+    mm_resident_add(dir, 1 - ((old & PTE_P) != 0));
     if (old & PTE_P) {
         paging_flush_dir(dir, virt_addr);
     }
@@ -2098,6 +2100,7 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
     struct flush_batch b;
     uintptr_t addr, next, lo, hi;
+    long gone = 0;
 
     if (!dir) {
         return;
@@ -2112,9 +2115,11 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             if (*e & PTE_P) {
                 *e = PTE_ADDR(*e) | PTE_NONE;
                 batch_add(&b, addr);
+                gone++;
             }
         }
     }
+    mm_resident_add(dir, -gone);
     lo = b.lo;
     hi = b.hi;
     batch_flush(&b);
@@ -2176,6 +2181,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     uintptr_t addr, next, end = from + len;
     struct flush_batch moved, replaced;
     pte_t *table;
+    long gone = 0;
 
     for (addr = from; addr < end; addr = next) {
         for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
@@ -2195,6 +2201,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
 
                 if (*dst & PTE_P) {
                     batch_add(&replaced, to + (addr - from));
+                    gone++;
                 }
                 *dst = *e;
                 if (*e & PTE_P) {
@@ -2206,6 +2213,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     }
     batch_flush(&moved);
     batch_flush(&replaced);
+    mm_resident_add(dir, -gone);
     return 0;
 }
 

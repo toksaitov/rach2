@@ -3947,14 +3947,15 @@ long sys_waitid(isr_params_t *params)
  * process, every thread's, for RUSAGE_SELF, the calling thread's for
  * RUSAGE_THREAD, and the totals of the children the process has reaped,
  * each with the children those reaped, for RUSAGE_CHILDREN: the ticks
- * `times` reports, as timevals. `ru_maxrss` is the larger of the present
- * address space's resident size and the most any earlier one had when it
- * ended, in kilobytes, or for RUSAGE_CHILDREN the most a reaped child
- * reported. `ru_minflt` and `ru_majflt` are the page faults of the same
- * threads or children (`proc_faults`). `ru_nvcsw` and `ru_nivcsw` count
- * voluntary and involuntary context switches of the same threads or
- * children. The other counters are zero. -EINVAL for any other `who`, Linux's
- * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
+ * `times` reports, as timevals. `ru_maxrss` is the most the present
+ * address space or any earlier one has had resident (`mm_resident_peak`),
+ * in kilobytes, or for RUSAGE_CHILDREN the most a reaped child reported;
+ * no call walks the page tables for it. `ru_minflt` and `ru_majflt` are
+ * the page faults of the same threads or children (`proc_faults`).
+ * `ru_nvcsw` and `ru_nivcsw` count voluntary and involuntary context
+ * switches of the same threads or children. The other counters are zero.
+ * -EINVAL for any other `who`, Linux's RUSAGE_BOTH among them, -EFAULT for
+ * a structure that cannot be written.
  */
 long sys_getrusage(isr_params_t *params)
 {
@@ -4000,7 +4001,7 @@ long sys_getrusage(isr_params_t *params)
         ru.maxrss = (long)current_proc->tg->cmaxrss_kb;
     } else {
         unsigned long now =
-            current_proc->mm ? mm_resident(current_proc->mm) * (PAGE_SIZE / 1024u) : 0;
+            current_proc->mm ? mm_resident_peak(current_proc->mm) * (PAGE_SIZE / 1024u) : 0;
 
         ru.maxrss = (long)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
     }

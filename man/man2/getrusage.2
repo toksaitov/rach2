@@ -34,19 +34,18 @@ ticks
 reports, as seconds and microseconds.
 .Pp
 .Va ru_maxrss
-is the most memory the process had in use, in kilobytes: the larger of
-the resident size of its address space and of each earlier one, as it
-ended at an
-.Xr execve 2 ,
-or for
+is the most memory the process had in use, in kilobytes: the peak
+resident size of its address space and of each earlier one, which an
+.Xr execve 2
+replaced, or for
 .Dv RUSAGE_CHILDREN
 the most any reaped child reported.
 For
 .Dv RUSAGE_THREAD
 it is the process's.
-Linux records the peak at each page fault; this kernel measures an
-address space when it is asked and when it ends, so a process that freed
-memory before either reports less than Linux would.
+The kernel counts the resident pages as they come and go and keeps the
+peak, as Linux does, so memory a process has freed still counts, and the
+call costs the same whatever the size of the process.
 .Pp
 .Va ru_minflt
 and

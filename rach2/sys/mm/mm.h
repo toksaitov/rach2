@@ -106,6 +106,13 @@ struct mm {
      * (`arch_mm_release`). */
     void *ldt;
     uint32_t ldt_entries; /* the entries up to the highest written */
+    /* The present user pages of the page tables, VmRSS, which every change
+     * of an entry's present bit keeps (`mm_resident_add`), and the most
+     * there were before any went, as Linux's hiwater_rss; a fork's copy
+     * counts its own from none. */
+    unsigned long resident;
+    unsigned long resident_peak;
+    struct mm *dir_next; /* the next in its chain of the table by directory */
 };
 
 /** A new, empty, dumpable address space with one user and one hold; NULL
@@ -183,13 +190,26 @@ struct process;
 /** Take `p`'s address space from it and drop its user's count, loading the
  * kernel's directory first when this is the last user and its directory is
  * the one in use. `p` is left with none, as a kernel thread has none. The
- * last user records the space's resident size in the thread group's
+ * last user records the space's peak resident size in the thread group's
  * `maxrss_kb` when it is the largest yet, for `ru_maxrss`. */
 void mm_drop(struct process *p);
 
 /** The pages of `mm` in memory: the present user pages of its page tables,
- * counted past the tables its regions lack (`paging_user_count`). */
+ * as `mm_resident_add` has counted them, at no cost of a walk. */
 unsigned long mm_resident(const struct mm *mm);
+
+/** The most pages `mm` has had in memory at once, VmHWM and what
+ * `ru_maxrss` reports of it. */
+unsigned long mm_resident_peak(const struct mm *mm);
+
+/**
+ * Count `pages` more present user pages, or fewer for a negative count, in
+ * the address space whose directory is `dir`. Each writer of a user entry
+ * calls it for the present bits it set or cleared, under the big lock, so
+ * that `getrusage` and /proc read the size without walking the tables.
+ * Nothing for a directory no address space has.
+ */
+void mm_resident_add(const struct page_dir *dir, long pages);
 
 /**
  * A description of the file at `ref` for an address space to keep its

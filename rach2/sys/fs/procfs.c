@@ -1710,7 +1710,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
         ap_kb(t, "VmSize", size);
         ap_kb(t, "VmLck", vm_locked(&mm->vm));
         ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
-        ap_kb(t, "VmHWM", rss);
+        ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
         ap_kb(t, "VmRSS", rss);
         ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
         ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
