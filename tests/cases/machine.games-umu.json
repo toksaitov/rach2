@@ -6,7 +6,7 @@
     {
       "case_id": "machine.games-umu.umu",
       "behavior": "rach2-game --umu unpacks the root's Steam Linux Runtime once and runs the 64-bit Direct3D 9 probe through umu-launcher in pressure-vessel's container: the probe reads back Linux's pixels, Proton's log in the container has the direct route's options, fsync and OpenGL renderer, the second start fetches and unpacks nothing, and pressure-vessel's log holds no refused call",
-      "units": ["tests/system/games/run.py", "vendor/gnu/games/rach2-game.sh", "umu-launcher 1.4.4", "Steam Linux Runtime 3.0 (sniper)", "pressure-vessel", "GE-Proton11-12", "Weston", "Xwayland", "Mesa's virgl"],
+      "units": ["tests/system/games/run.py", "vendor/gnu/games/rach2-game.sh", "umu-launcher 1.4.4", "Steam Linux Runtime 4.0", "pressure-vessel", "GE-Proton11-12", "Weston", "Xwayland", "Mesa's virgl"],
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "umu", "reference": "tests/system/games/ref/linux.json"}, "repetitions": 1, "seed": null},

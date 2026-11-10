@@ -155,3 +155,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `tests/cases/machine/gameswm_scenario.c` sends each move only once `wm.py` has printed the kernel's count of the last (`move_to`).
 * Status: unreported.
 * Next: run the reproduction; check QEMU's main branch; report, with a patch that sends the pending deltas as the guest reads the queue.
+
+## umu-launcher exits 0 when it fails to start the game
+
+* Project: umu-launcher 1.4.4, its release's zipapp, `umu/__main__.py` at the tag `1.4.4`.
+* Fails: the module's entry catches `BaseException` from `main()` (lines 94 to 102), logs it with `log.exception` and falls off the end, so the interpreter exits with status 0. A launch that never ran the game, such as one whose runtime is not set up and that raises `RuntimeError("umu has not been setup for the user")` in `umu_run.py`, therefore reports success to its caller.
+* Found: 2026-11-10, in QEMU on the testing host, task 80-8b, when `rach2-game --umu` printed that it had made a prefix after `umu-run wineboot.exe -u` had exited 0 with that error, and no prefix existed.
+* Reproduction: with no network and an empty `$XDG_DATA_HOME/umu`, `PROTONPATH=/opt/proton umu-run /bin/true; echo $?` prints the error and 0.
+* Evidence: the `umu` row's output in the evidence of `tests/run games-umu`, `build/tests/failed/tests.x86_64.20261110T092032Z.1076283.machine.games-umu.umu.r0/evidence/games` in the testing host's copy `build/worktrees/m3`, from the run that began at 15:20 UTC+6.
+* Rach2: `rach2-game` checks that a new prefix has `pfx/user.reg` after `wineboot`, on both routes, and exits 1 when it has none.
+* Status: unreported.
+* Next: report to Open-Wine-Components/umu-launcher with a patch that exits 1 after logging the exception.
