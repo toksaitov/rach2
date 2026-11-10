@@ -48,7 +48,7 @@ ARCH_CASE_DIR = $(ARCH_BUILD)/tests/cases/machine
 # rule reads the files of another, they are explicit prerequisites of its own.
 together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 
-.PHONY: components harness-kernel
+.PHONY: components harness-kernel pure64-kernel
 
 # The host ports of the machine cases. tests/run claims a block of ports for a
 # run that boots a machine before it starts anything: block N is the lock file
@@ -1532,6 +1532,15 @@ o2-kernel:
 $(HARNESS_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-harness HARNESS=1
 harness-kernel: $(HARNESS_KERNEL)
+
+# The pure 64-bit kernel, the x86-64 kernel built without the i386 ABI
+# (IA32=0, rach2/Makefile), which the cases of tests/cases/guest.pure64.json
+# boot: a file rule, as the harness kernel's is, for the same reason, and
+# not a component, since no image stages it.
+PURE64_KERNEL = $(ARCH_BUILD)/rach2-pure64/kernel
+$(PURE64_KERNEL): ask-the-sub-make
+	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-pure64 IA32=0
+pure64-kernel: $(PURE64_KERNEL)
 # `tests/run stress`: an on-disk KRFFS larger than the page cache. It is the
 # case of tests/cases/guest.stress.json, which etude runs, and has no target
 # here: stressprobe writes and reads back 33 MiB through a page cache of at

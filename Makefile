@@ -1055,6 +1055,15 @@ build/tests/cases/host/krffscheck: tests/cases/host/krffscheck.c \
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
+# host.host.pure64's program, which reads the kernel built with IA32=0
+# beside the default one.
+build/tests/cases/host/pure64check: tests/cases/host/pure64check.c \
+    tests/cases/host/native.c tests/cases/host/native.h \
+    $(filter-out tests/cases/host/host.c tests/cases/host/sanitizer_tool.c tools/etude/json.c utils/sha256.c,$(ETUDE_HOSTCASE_SRC))
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
+
 # The host's side of the network cases' connections that are not logins: a
 # wait for the guest's SSH server, and the ssh cases' flood.
 build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
@@ -1931,7 +1940,8 @@ print-host-tools:
 COLLECTION_TOOLS = build/tests/cases/host/host_checks_scenario \
     build/tests/cases/host/host_scripts_scenario build/tests/cases/host/family_scenario \
     build/tests/cases/host/style build/tests/cases/host/usbchecks \
-    build/tests/cases/host/krffscheck build/tests/cases/host/esctest2 build/tests/cases/machine/agent_server \
+    build/tests/cases/host/krffscheck build/tests/cases/host/pure64check \
+    build/tests/cases/host/esctest2 build/tests/cases/machine/agent_server \
     build/tests/cases/gnu/sntpserver build/tests/system/fakeapi_test \
     build/tools/dev/native-deploy $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
     $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture \

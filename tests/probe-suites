@@ -24,6 +24,7 @@ bootprobe bootpart
 persistprobe persist
 stressprobe stress
 winprobe fault
+pure64probe pure64
 dirtyprobe crash
 lagprobe mount
 fpuprobe fpu
