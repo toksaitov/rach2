@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -39,9 +40,10 @@ STALL = "dxgi.c:8040: Test marked todo: d3d10: test 2: Got unexpected present co
 # x86-64 programs and of the i386 ones.
 ADAPTERS = {"lavapipe": ("lvp_icd*.json", "linux.json", "linux32.json"),
             "venus": ("venus_icd*.json", "venus.json", "venus32.json")}
-# Each mode of an i386 probe: Proton's WoW64, its i386 program on the x86-64
-# Wine, or its default, on the i386 Wine; and the Unix half of Wine the
-# probe must find itself on.
+# Each mode of an i386 probe, Proton's WoW64 or its default, and the Unix
+# half of Wine that its process must have: WoW64 runs an i386 program in an
+# x86-64 process of the x86-64 Wine, the default in an i386 one of the i386
+# Wine.
 MODES = {"wow64": "x86_64", "i386": "i386"}
 # Each Wine path's DLL overrides, native or builtin, and WineD3D's renderer.
 PATHS = {"proton": ("n", "gl"), "wined3d": ("b", "gl"), "wined3dvk": ("b", "vulkan")}
@@ -160,6 +162,43 @@ def run_proton(argv, env, log, out, work, stop=None):
     raise RuntimeError("Wine lost its desktop three times")
 
 
+def watch_hold(pixel, go, exe, stop, seen):
+    """Read a held probe's process, then let the probe go on.
+
+    The probe prints hold to pixel and waits for the file go, which its
+    PROBE_HOLD names; Wine's server opens a file for its clients, so the
+    probe cannot read its own map. The process is the one named exe whose
+    environment has that PROBE_HOLD. seen gets "unix", i386 or x86_64 by the
+    Unix ntdll.so its map has, and "elf", 32 or 64, its executable's ELF
+    class; each is None when no such process was found. Returns at once when
+    stop is set before the probe holds.
+    """
+    marker = b"PROBE_HOLD=Z:" + str(go).encode()
+    seen.update(unix=None, elf=None)
+    while not stop.is_set():
+        if pixel.exists() and "hold" in pixel.read_text(errors="replace").splitlines():
+            break
+        # Poll output; elapsed time decides no verdict.
+        time.sleep(0.02)
+    else:
+        return
+    for proc in Path("/proc").iterdir():
+        try:
+            if not proc.name.isdigit() or (proc / "comm").read_text().strip() != exe[:15]:
+                continue
+            if marker not in (proc / "environ").read_bytes().split(b"\0"):
+                continue
+            maps = (proc / "maps").read_text()
+            with (proc / "exe").open("rb") as image:
+                head = image.read(5)
+        except OSError:
+            continue
+        seen["elf"] = {b"\x7fELF\x01": 32, b"\x7fELF\x02": 64}.get(head)
+        seen["unix"] = next((side for side in MODES.values() if "/%s-unix/ntdll.so" % side in maps), None)
+        break
+    go.touch()
+
+
 def summaries(text, expression):
     """Sum a unit's own and child summaries, returning None when no summary was written."""
     found = re.findall(expression, text)
@@ -220,7 +259,7 @@ def main():
     tests = list(json.loads((HERE / "ref" / "linux.json").read_text())["vkd3d"])
     ref = {} if record else json.loads((HERE / "ref" / reference).read_text())
     env = os.environ.copy()
-    for key in ("PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
+    for key in ("PROBE_HOLD", "PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
         env.pop(key, None)
     env.update(GALLIUM_DRIVER="llvmpipe", LIBGL_ALWAYS_SOFTWARE="1",
                WINEDEBUG="-all,err+all,warn+winstation", DXVK_LOG_LEVEL="info", VKD3D_DEBUG="info",
@@ -236,10 +275,11 @@ def main():
     if len(files) != 1:
         raise SystemExit("d3d: expected one x86-64 %s ICD" % adapter)
     if mode == "i386":
-        # The i386 loader passes over the x86-64 ICD and loads this one.
+        # The i386 loader passes over the x86-64 ICD and loads the i686 one;
+        # lavapipe has none, its ICD naming its library for both.
         files += [p for p in icds if "i686" in p.name]
-        if len(files) != 2:
-            raise SystemExit("d3d: expected one i686 %s ICD" % adapter)
+        if len(files) > 2:
+            raise SystemExit("d3d: expected one i686 %s ICD at most" % adapter)
     env["VK_DRIVER_FILES"] = ":".join(str(p) for p in files)
     env["VK_ICD_FILENAMES"] = env["VK_DRIVER_FILES"]
     env.pop("MESA_VK_WSI_DEBUG", None)
@@ -321,17 +361,29 @@ def main():
                 pixel = out / "pixels.txt"
                 env["PROBE_OUT"] = "Z:" + str(pixel)
                 exe = "d3d" + n + ("-32" if mode else "") + ".exe"
-                rc, _ = run_proton(launch + ["runinprefix", str(HERE / "probes" / exe)],
-                                   env, out / "probe.log", out, work)
+                seen, stop, watcher = {}, threading.Event(), None
+                if mode:
+                    # An i386 probe holds while its process is read.
+                    env["PROBE_HOLD"] = "Z:" + str(out / "go")
+                    watcher = threading.Thread(target=watch_hold, args=(pixel, out / "go", exe, stop, seen))
+                    watcher.start()
+                try:
+                    rc, _ = run_proton(launch + ["runinprefix", str(HERE / "probes" / exe)],
+                                       env, out / "probe.log", out, work)
+                finally:
+                    stop.set()
+                    if watcher:
+                        watcher.join()
                 text = pixel.read_text() if pixel.exists() else ""
                 named = adapter_name(text)
-                lines = text.splitlines()
-                # An i386 probe must run on the Unix half its mode gives.
-                side = not mode or ("wine-unix: " + MODES[mode]) in lines
+                # An i386 probe runs on the Unix half its mode gives.
+                side = not mode or (seen["unix"] == MODES[mode] and seen["elf"] == (32 if mode == "i386" else 64))
                 # A reference that names the adapter requires the same one here.
                 results[row] = {"exit": rc, "pixels": text, "adapter": named,
-                                "matched": record or (rc == 0 and ("D3D" + n + " OK") in lines and side and
-                                                      expected.get("adapter", named) == named)}
+                                "matched": record or (rc == 0 and ("D3D" + n + " OK") in text.splitlines() and
+                                                      side and expected.get("adapter", named) == named)}
+                if mode:
+                    results[row].update(unix=seen["unix"], elf=seen["elf"])
             else:
                 unit = tail
                 expected = {} if record else ref["wine"][path][unit]
