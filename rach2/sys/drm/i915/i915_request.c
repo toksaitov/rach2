@@ -113,6 +113,75 @@ static void await_done(struct i915_request *rq, int32_t err)
     }
 }
 
+/* How long a request waits for another driver's fence before it runs
+ * without it, its fence's error -ETIMEDOUT, as Linux's
+ * CONFIG_DRM_I915_FENCE_TIMEOUT. */
+#define I915_FENCE_TIMEOUT_MS 10000u
+
+/* The earliest tick at which a request's wait for another driver's fence
+ * ends, or 0 for none; the worker wakes for it. */
+static uint64_t await_next;
+
+/** Fold the deadlines of `rq`'s waits for other drivers' fences into
+ * `await_next`. */
+static void await_deadlines(const struct i915_request *rq)
+{
+    const struct i915_await *w;
+
+    for (w = rq->await_list; w; w = w->next) {
+        if (w->deadline && (await_next == 0 || w->deadline < await_next)) {
+            await_next = w->deadline;
+        }
+    }
+}
+
+/**
+ * End each of `rq`'s waits for another driver's fence whose deadline `now`
+ * has passed, as Linux's timer_i915_sw_fence_wake: the callback taken off,
+ * the request's error -ETIMEDOUT, which still lets it run, and the wait
+ * counted done.
+ */
+static void request_expire(struct i915_request *rq, uint64_t now)
+{
+    struct i915_await *w;
+    uint32_t flags;
+    int removed;
+
+    for (w = rq->await_list; w; w = w->next) {
+        if (!w->deadline || w->deadline > now) {
+            continue;
+        }
+        w->deadline = 0;
+        flags = kirq_save();
+        removed = dma_fence_remove_callback(w->fence, &w->cb);
+        kirq_restore(flags);
+        if (removed) {
+            i915_request_set_error_once(rq, -ETIMEDOUT);
+            await_done(rq, -ETIMEDOUT);
+        }
+    }
+}
+
+/** End the waits for other drivers' fences of every queued request whose
+ * deadline `now` has passed, then set `await_next` from the waits left.
+ * Under the big kernel lock. */
+static void awaits_expire(uint64_t now)
+{
+    struct drm_i915_private *i915;
+    struct i915_request *rq;
+    int i;
+
+    await_next = 0;
+    for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
+        for (i = 0; i < I915_NUM_ENGINES; i++) {
+            for (rq = i915->gt.engine[i].queued; rq; rq = rq->next) {
+                request_expire(rq, now);
+                await_deadlines(rq);
+            }
+        }
+    }
+}
+
 /** A fence a request waited for signalled. In the signaller's context. */
 static void await_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
 {
@@ -197,6 +266,9 @@ int i915_submit_work(void)
     int i, kicked, n = 0;
 
     submit_kicked = 0;
+    if (await_next != 0 && rtc_ticks_now() >= await_next) {
+        awaits_expire(rtc_ticks_now());
+    }
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
         for (i = 0; i < I915_NUM_ENGINES; i++) {
             struct i915_engine *e = &i915->gt.engine[i];
@@ -214,8 +286,9 @@ int i915_submit_work(void)
     return n;
 }
 
-/* Whether a GT unparked since the worker last looked, so that it sleeps
- * no longer than its first heartbeat. */
+/* Whether a GT unparked, or a wait for another driver's fence began, since
+ * the worker last looked, so that it sleeps no longer than its first
+ * heartbeat or the wait's deadline. */
 static volatile int hangcheck_kicked;
 
 #ifndef RACH2_HOSTTEST
@@ -230,6 +303,9 @@ static uint64_t hangcheck_deadline(void)
         if (i915->gt.awake && !i915->gt.wedged && (at == 0 || i915->gt.hc_next < at)) {
             at = i915->gt.hc_next;
         }
+    }
+    if (await_next != 0 && (at == 0 || await_next < at)) {
+        at = await_next;
     }
     return at;
 }
@@ -434,6 +510,14 @@ int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fenc
             flags = spin_lock_irqsave(&submit_lock);
             rq->awaits--;
             spin_unlock_irqrestore(&submit_lock, flags);
+        } else if (leaf->ops != &i915_fence_ops) {
+            /* Another driver's fence is waited for 10 s at most, as
+             * Linux's i915_request_await_external; the worker wakes for
+             * it. */
+            w->deadline = rtc_ticks_now() + MS_TO_TICKS(I915_FENCE_TIMEOUT_MS);
+            await_deadlines(rq);
+            hangcheck_kicked = 1;
+            wq_wake_all(&submit_wait);
         }
     }
     return 0;
@@ -975,6 +1059,7 @@ int32_t i915_request_add(struct i915_request *rq)
     rq->added = 1;
     rq->awaits--;
     spin_unlock_irqrestore(&submit_lock, flags);
+    await_deadlines(rq);
     engine_submit(i915, e);
     return 0;
 }
@@ -1057,8 +1142,9 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
  * CACHE_MODE_0_GEN7's RC op flush off, CACHE_MODE_1's pixel subspan
  * collect optimization off), the switch to the GT's own context saves its
  * image, and the image is kept as the state every new context starts from.
- * Linux also runs the null render state batch, which needs the batches of
- * 78-5b. 0, -ENOMEM, or -EIO when the chip did not finish in time.
+ * Linux also runs the null render state batch before the switch, which
+ * this driver does not make. 0, -ENOMEM, or -EIO when the chip did not
+ * finish in time.
  */
 static int32_t record_defaults(struct drm_i915_private *i915)
 {
@@ -1175,25 +1261,31 @@ static int32_t ring_wait_for_space(struct i915_engine *e)
     uint32_t postfix;
     int32_t err;
 
-    if (ring_space(e->head, e->tail, e->ring_size) >= I915_REQUEST_ROOM) {
-        return 0;
-    }
-    for (rq = e->requests; rq; rq = rq->next) {
-        if (ring_space(rq->postfix, e->tail, e->ring_size) >= I915_REQUEST_ROOM) {
-            break;
+    /* The wait sleeps, and other callers may take the room meanwhile, so
+     * the room is looked at again after each, as Linux's wait_for_space
+     * loops. */
+    while (ring_space(e->head, e->tail, e->ring_size) < I915_REQUEST_ROOM) {
+        for (rq = e->requests; rq; rq = rq->next) {
+            if (ring_space(rq->postfix, e->tail, e->ring_size) >= I915_REQUEST_ROOM) {
+                break;
+            }
+        }
+        if (!rq) {
+            return 0;
+        }
+        (void)dma_fence_get(&rq->fence.base);
+        postfix = rq->postfix;
+        err = i915_request_wait(rq, 1, -1);
+        i915_request_put(rq);
+        if (err != 0) {
+            return err;
+        }
+        if (ring_space(postfix, e->tail, e->ring_size) >
+            ring_space(e->head, e->tail, e->ring_size)) {
+            e->head = postfix;
         }
     }
-    if (!rq) {
-        return 0;
-    }
-    (void)dma_fence_get(&rq->fence.base);
-    postfix = rq->postfix;
-    err = i915_request_wait(rq, 1, -1);
-    i915_request_put(rq);
-    if (err == 0) {
-        e->head = postfix;
-    }
-    return err;
+    return 0;
 }
 
 struct i915_request *i915_request_throttle_target(struct intel_context *ce, int64_t before)
@@ -1299,6 +1391,33 @@ void i915_requests_unplug(struct drm_i915_private *i915)
     i915_gpu_error_clear(i915);
 }
 
+/**
+ * Take back the commands and switches of `e`'s requests that the chip was
+ * never given, newest first, so that each puts back what the one before it
+ * left, and the ring's tail to the end of what the chip was given: the
+ * reset that ends a wedge starts the ring with nothing stale after it, and
+ * `last_ce` is again the state the chip holds. Under the big kernel lock,
+ * with the GPU wedged, so that nothing is submitted meanwhile.
+ */
+static void engine_cancel_queued(struct i915_engine *e)
+{
+    struct i915_request *rq, *last;
+
+    do {
+        last = 0;
+        for (rq = e->queued; rq; rq = rq->next) {
+            if (rq->switched || rq->set_context) {
+                last = rq;
+            }
+        }
+        if (last) {
+            request_rewind(last);
+        }
+    } while (last);
+    e->tail = e->hw_tail;
+    e->reserved = 0;
+}
+
 void i915_requests_cancel(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
@@ -1306,6 +1425,7 @@ void i915_requests_cancel(struct drm_i915_private *i915)
 
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         gt->engine[i].hc_armed = 0;
+        engine_cancel_queued(&gt->engine[i]);
         engine_retire(i915, &gt->engine[i], 1);
     }
     if (gt->awake) {

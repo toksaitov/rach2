@@ -48,13 +48,16 @@ static int32_t gdrst(struct drm_i915_private *i915, uint32_t mask)
  * Clear the error registers after a hang's state is captured, as Linux's
  * intel_gt_clear_error_registers on graphics 7: the GTT's errors, the
  * render parser's and EIR, a stuck EIR bit masked in EMR, and the fault
- * register of each engine of `engine_mask`.
+ * register of each engine of `engine_mask`, under forcewake.
  */
 static void clear_error_registers(struct drm_i915_private *i915, uint32_t engine_mask)
 {
     uint32_t eir;
-    int i;
+    int fw, i;
 
+    /* EMR and the fault registers are the GT's, which read stale while it
+     * sleeps. */
+    fw = i915_forcewake_get(i915) == 0;
     i915_uncore_write(i915, PGTBL_ER, 0);
     i915_uncore_write(i915, IPEIR_I965, 0);
     i915_uncore_write(i915, EIR, 0);
@@ -69,6 +72,9 @@ static void clear_error_registers(struct drm_i915_private *i915, uint32_t engine
             (void)i915_rmw(&i915->hw, i915->gt.engine[i].fault_reg, RING_FAULT_VALID, 0);
             i915_posting_read(&i915->hw, i915->gt.engine[i].fault_reg);
         }
+    }
+    if (fw) {
+        i915_forcewake_put(i915);
     }
 }
 
