@@ -102,21 +102,21 @@ The descriptor is passed in EBX.
 On x86-64 the numbers are 162, 306, 74 and 75, and the descriptor is
 passed in RDI.
 .Pp
-The x86-64 kernel also runs, for a program that enters it by
+.Nm sync_file_range
+is i386's 314, which takes the descriptor, the offset and the length in
+two words each, low word first, and the flags; the x86-64 kernel runs the
+same call for a program that enters it by
 .Ql int $0x80 ,
 which
 .Xr ia32 7
-describes, i386's
-.Nm sync_file_range
-(314), which takes the descriptor, the offset and the length in two
-words each, low word first, and the flags.
+describes.
 Its native x86-64 call is 277: the descriptor in RDI, the offset in RSI,
 the length in RDX and the flags in R10.
-As on Linux, an unknown flag, a negative offset or length or a range past
-the largest offset is
-.Er EINVAL ,
-a descriptor not open is
+As on Linux, a descriptor not open is
 .Er EBADF
+whatever the other arguments, then an unknown flag, a negative offset or
+length or a range past the largest offset is
+.Er EINVAL ,
 and an object other than a regular file, directory, block device or
 symbolic link
 .Er ESPIPE .
