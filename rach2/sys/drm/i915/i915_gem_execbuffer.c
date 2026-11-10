@@ -1103,9 +1103,10 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     int32_t err, err2;
 
     err = eb_hold_make(eb);
-    if (err == 0) {
-        err = i915_request_create(eb->ce, &rq);
+    if (err < 0) {
+        return err;
     }
+    err = i915_request_create(eb->ce, &rq);
     if (err < 0) {
         return err;
     }
