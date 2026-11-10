@@ -75,8 +75,8 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
     return 0;
 }
 
-/** Copy a completed capset payload to user space; return 0, EIO or EFAULT. */
-int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes)
+/** Copy a completed capset payload into `to`; return 0 or EIO. */
+int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, unsigned char *to, uint32_t bytes)
 {
     uint32_t off = sizeof(struct virtio_gpu_ctrl_hdr), here, page;
 
@@ -89,14 +89,96 @@ int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes
         if (here > bytes) {
             here = bytes;
         }
-        if (copy_to_user((void __user *)(uintptr_t)user,
-                         (char *)cmd->payload[page].page + off % PAGE_SIZE, here)) {
-            return -EFAULT;
-        }
-        user += here;
+        k_memcpy(to, (char *)cmd->payload[page].page + off % PAGE_SIZE, here);
+        to += here;
         off += here;
         bytes -= here;
     }
+    return 0;
+}
+
+void vgpu_caps_cache_free(struct virtio_gpu_device *vg)
+{
+    struct vgpu_caps_cache *c;
+
+    while ((c = vg->caps_cache) != NULL) {
+        vg->caps_cache = c->next;
+        kfree(c);
+    }
+}
+
+/** The cached set `id` of `version`, or NULL. */
+static struct vgpu_caps_cache *vgpu_caps_cached(struct virtio_gpu_device *vg, uint32_t id,
+                                                uint32_t version)
+{
+    struct vgpu_caps_cache *c;
+
+    for (c = vg->caps_cache; c; c = c->next) {
+        if (c->id == id && c->version == version) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Read set `id` of `version`, `size` bytes, from the host into a new cache
+ * entry, or find the entry another process added while this one waited.
+ * Returns 0 with *out set, or -errno.
+ */
+static int32_t vgpu_caps_fetch(struct virtio_gpu_device *vg, uint32_t id, uint32_t version,
+                               uint32_t size, struct vgpu_caps_cache **out)
+{
+    struct virtio_gpu_get_capset *req;
+    struct virtio_gpu_cmd *cmd;
+    struct vgpu_caps_cache *c, *other;
+    int32_t rc;
+
+    c = kzalloc(sizeof(*c) + size);
+    if (!c) {
+        return -ENOMEM;
+    }
+    c->id = id;
+    c->version = version;
+    c->size = size;
+    c->data = (unsigned char *)(c + 1);
+    cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_GET_CAPSET, sizeof(*req));
+    if (!cmd) {
+        kfree(c);
+        return -ENOMEM;
+    }
+    req = (struct virtio_gpu_get_capset *)(void *)cmd->page;
+    req->id = id;
+    req->version = version;
+    rc = vgpu_cmd_payload(cmd, 0, size + sizeof(req->hdr), 1);
+    if (rc) {
+        vgpu_cmd_free(cmd);
+        kfree(c);
+        return rc;
+    }
+    rc = vgpu_cmd_send_wait(cmd, NULL, 0);
+    if (rc == -ETIMEDOUT) {
+        kfree(c);
+        return -EBUSY;
+    }
+    if (!rc) {
+        rc =
+            cmd->resp_type == VIRTIO_GPU_RESP_OK_CAPSET ? vgpu_caps_copy(cmd, c->data, size) : -EIO;
+    }
+    vgpu_cmd_free(cmd);
+    if (rc) {
+        kfree(c);
+        return rc;
+    }
+    other = vgpu_caps_cached(vg, id, version);
+    if (other) {
+        kfree(c);
+        c = other;
+    } else {
+        c->next = vg->caps_cache;
+        vg->caps_cache = c;
+    }
+    *out = c;
     return 0;
 }
 
@@ -150,14 +232,14 @@ int32_t vgpu_capsets_read(struct virtio_gpu_device *vg)
 
 /**
  * Read a supported capset version, copying the smaller of user and host
- * sizes.
+ * sizes. The host is asked once for each set and version; later calls get
+ * the same bytes, as under Linux.
  */
 int32_t vgpu_get_caps_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct virtio_gpu_device *vg = vgpu_device(dev);
     struct drm_virtgpu_get_caps *args = data;
-    struct virtio_gpu_cmd *cmd;
-    struct virtio_gpu_get_capset *req;
+    struct vgpu_caps_cache *c;
     uint32_t i, size, copy;
     int32_t rc;
 
@@ -181,28 +263,17 @@ int32_t vgpu_get_caps_ioctl(struct drm_device *dev, void *data, struct drm_file 
     }
     size = vg->capsets[i].size;
     copy = args->size < size ? args->size : size;
-    cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_GET_CAPSET, sizeof(*req));
-    if (!cmd) {
-        return -ENOMEM;
+    c = vgpu_caps_cached(vg, args->cap_set_id, args->cap_set_ver);
+    if (!c) {
+        rc = vgpu_caps_fetch(vg, args->cap_set_id, args->cap_set_ver, size, &c);
+        if (rc) {
+            return rc;
+        }
     }
-    req = (struct virtio_gpu_get_capset *)(void *)cmd->page;
-    req->id = args->cap_set_id;
-    req->version = args->cap_set_ver;
-    rc = vgpu_cmd_payload(cmd, 0, size + sizeof(req->hdr), 1);
-    if (rc) {
-        vgpu_cmd_free(cmd);
-        return rc;
+    if (copy_to_user((void __user *)(uintptr_t)args->addr, c->data, copy)) {
+        return -EFAULT;
     }
-    rc = vgpu_cmd_send_wait(cmd, NULL, 0);
-    if (rc == -ETIMEDOUT) {
-        return -EBUSY;
-    }
-    if (!rc) {
-        rc = cmd->resp_type == VIRTIO_GPU_RESP_OK_CAPSET ? vgpu_caps_copy(cmd, args->addr, copy)
-                                                         : -EIO;
-    }
-    vgpu_cmd_free(cmd);
-    return rc;
+    return 0;
 }
 
 /** Allocate a lazy context record for an open file; return 0 or -errno. */

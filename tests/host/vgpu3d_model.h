@@ -17,6 +17,7 @@ static struct {
     uint32_t submit_flags, submit_ring; /* the last SUBMIT_3D's header */
     uint32_t creates, destroys, attaches, detaches, submits;
     uint32_t cap_queries;
+    uint32_t cap_reads; /* GET_CAPSET commands */
     struct virtio_gpu_resource_create_3d resource;
     struct virtio_gpu_transfer_3d transfer;
     uint8_t submitted[8192];
@@ -116,6 +117,7 @@ static uint32_t execute_3d(const uint8_t *req, uint32_t n, uint8_t *resp, uint32
             resp[24 + i] = (uint8_t)(i * 7 + caps->id);
         }
         *ok = VIRTIO_GPU_RESP_OK_CAPSET;
+        three.cap_reads++;
         return 24 + (caps->id == 1 ? 512 : 5000);
     case VIRTIO_GPU_CMD_CTX_CREATE:
         CHECK(n == 96 && hdr->ctx_id && !context_present(hdr->ctx_id),
