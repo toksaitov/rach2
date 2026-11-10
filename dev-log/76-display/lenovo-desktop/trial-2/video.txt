@@ -1,0 +1,14 @@
+desktop: video: result: chromium h264-720p.mp4 codec h264 size 1280x720 frames 300,300,300 dropped 1,1,0 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+desktop: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 2,2,2 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+desktop: video: result: chromium vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 1,6,14 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+desktop: video: result: chromium vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 2,2,1 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+desktop: video: result: chromium av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 0,0,10 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+desktop: video: result: chromium av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 0,1,6 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+desktop: video: result: firefox h264-720p.mp4 codec h264 size 1280x720 frames 300,304,300 dropped 0,27,12 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 1,22,28 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 1,21,16 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 0,23,32 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 0,25,11 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 1,29,22 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: result: video status 0
+0

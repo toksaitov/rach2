@@ -95,7 +95,7 @@ Built on the testing host from the tree of 437805141, the milestone head, which 
 | `clips.tar`, 76-17a's six clips | `6806f20e17fb555f2e5547ebafb0dc99b144d03350168391a7c1158474ae33d6` | 35,276,800 |
 | `kernel-2`, the second trial's kernel | `851e8698c626b18143a65c83589fd31cd76e0710571baf2fe2eeb8d83c49c4da` | 4,179,608 |
 
-`kernel-2` was built by `make ARCH=x86_64 rach2` in the owner's copy `build/worktrees/m2` on the testing host from the tree of e6159c7a3, 437805141's with the one change to `fbdrm.c`, and is the file the QEMU runs above booted; it is kept in `/home/testing/rach2/build/cache/lenovo-2657/` with `SHA256SUMS-2`. The second trial uses the first's root image, bundle directory, clips and `debugfs`, which stay on the Lenovo's data partition under `/data/trial` until the task closes, and the first's `bootctl`.
+`kernel-2` was built by `make ARCH=x86_64 rach2` in the owner's copy `build/worktrees/m2` on the testing host from the tree of e6159c7a3, 437805141's with the one change to `fbdrm.c`, and is the file the QEMU runs above booted; it is kept in `/home/testing/rach2/build/cache/lenovo-2657/` with `SHA256SUMS-2`. The second trial uses the first's bundle directory, clips and `debugfs`, which stay on the Lenovo's data partition under `/data/trial` until the task closes, and the first's `bootctl`. The root image is written again from `root.img.gz` before each trial: a trial root is mounted read-write, so the image the first trial booted read `6635b741...` afterwards, and only a new copy reads `07a02ae5...` and starts a trial from the root the other started from.
 
 ## Results
 
@@ -144,3 +144,51 @@ fbdrm's copy to the screen took 23.6 ms under the big lock, and Weston makes two
 * `fbdrm_blit` copied each row out of the buffer object's pages into a row buffer, from there into a line buffer, and from there to the screen a byte at a time through a volatile pointer, in a kernel built without optimization: 4,196,352 bytes a commit. Linux's simpledrm copies the same damage with one `memcpy` to its write-combining mapping.
 
 e6159c7a3 copies each row from the pages to the screen with `k_memcpy`. Under QEMU it takes a twenty-sixth of the time (The copy under QEMU). Whether that brings Chromium to Debian's count on the Lenovo, where Pixman still composites every frame on the processor, is the second trial's result.
+
+### The second trial
+
+Run on the Lenovo on 2026-11-10 from 22:00 to 23:01 UTC+6, by the second step on the issue, with the kernel 851e8698, the first trial's with e6159c7a3. The copy is fixed and every check passes but one: Chromium still drops more frames than Debian, 14 and 24 of 1,722 where the first trial dropped 1,023 and 1,012 and Debian none. Its evidence is in [`lenovo-desktop/trial-2/`](lenovo-desktop/trial-2/).
+
+* 22:12 to 22:16, the root image written again and read back as `07a02ae5...` (The trial's files).
+* 22:21, the trial kernel on the installed root. The line ends in `intel_iommu=off intremap=off`; `booted: candidate`, `saved_entry: fallback`, the trial consumed; fbdrm registered as card 0 with the first trial's line; `vtd: off by intel_iommu=off intremap=off: 2 units read`; `bkl_wait_us 1226846` and `bkl_hold_max_us 441252` in the boot's first minute. The log differs from the first trial kernel's on this root in the clock, two IPv6 addresses, one count of the vDSO's clock and the order of one USB line.
+* 22:32:53, the trial root. The line and the mounts are the first trial's. Weston 14.0.2 started at 22:32:53 as `desktop`: "Using Pixman renderer", `Unknown-1` at "1366x768@60.0, preferred, current, 62.9 MHz", and `console: card0: handed to a master, the keyboard off` 12.1 s into the boot. Weston's first commits were the new copy's first run on the machine.
+* The four plays of 58 s, 22:33 to 22:38, and the same four again from 22:50 to 22:54 on a Weston the supervisor started on SIGHUP, with `/proc/stat` read each second (`trial-2/again/`). Each posted its result with no error at 1920x1080 and Debian's decoder, and each shows 1,693 frames or more:
+
+| Play | Frames, dropped | Again | The first trial | Debian's | Waits for the big lock, both runs |
+|---|---|---|---|---|---|
+| Firefox, H.264 | 1,707, 139 | 1,698, 237 | 1,630, 1,548 | 1,724, 58 | 66 s, 70 s |
+| Firefox, VP9 | 1,703, 162 | 1,693, 193 | 1,647, 1,453 | 1,728, 50 | 63 s, 70 s |
+| Chromium, H.264 | 1,722, 14 | 1,723, 23 | 1,716, 1,023 | 1,738, 0 | 36 s, 35 s |
+| Chromium, VP9 | 1,722, 24 | 1,722, 27 | 1,693, 1,012 | 1,740, 0 | 33 s, 36 s |
+
+  Chromium's drops over Debian's none fail the Done. The two repeated Firefox plays show fewer than 1,700 frames, by 2 and 7. Firefox's drops over Debian's are the limit the owner decided for it.
+* 76-17a's six clips, 22:38 to 22:48: twelve lines, three counted plays of 300 frames each, `errors 0`, status 0, each decoder the first trial's. Dropped frames of 300, by play, with the first trial's range:
+
+| Clip | Chromium | In the first trial | Firefox | In the first trial |
+|---|---|---|---|---|
+| `h264-720p.mp4` | 1, 1, 0 | 172 | 0, 27, 12 | 130 to 206 |
+| `h264-1080p.mp4` | 2, 2, 2 | 176 | 1, 22, 28 | 256 to 280 |
+| `vp9-720p.webm` | 1, 6, 14 | 174 to 175 | 1, 21, 16 | 116 to 165 |
+| `vp9-1080p.webm` | 2, 2, 1 | 178 to 181 | 0, 23, 32 | 245 to 267 |
+| `av1-720p.webm` | 0, 0, 10 | 172 to 174 | 0, 25, 11 | 121 to 152 |
+| `av1-1080p.webm` | 0, 1, 6 | 175 to 179 | 1, 29, 22 | 261 to 274 |
+
+  The waits for the big lock came to 158 s over Chromium's five minutes and 275 s over Firefox's (`trial-2/video/*.stat0` and `.stat1`).
+* No sound: `vol 1:1` after the plays, and `/proc/audio`'s queue had `written 0 dropped 0`.
+* 22:48:15, the kill. No Weston was left, the supervisor lived, the connector read `disabled`, and the script found both lines after the log's last line before the kill, `console: card0: taken back from a master, the keyboard on` and `console: card0: the firmware's framebuffer again`: "weston gone; 2 console lines". `term` ran throughout. The second kill, at 23:00:21, read the same.
+* `blit`: `BLITCHECK OK`. After the whole copy 0 of 768 rows differ, and 0 after the five rectangles, on the Lenovo's pitch of 5,504 with a buffer pitch of 5,464. A hundred whole-screen copies of 4,196,352 bytes took 0.923 ms each, 0.868 ms at least and 1.004 ms at most, against 23.6 ms for a commit before the change.
+* `trace`: Chromium on the traced Weston dropped 3, 2 and 3 of 300, where the first trial's traced plays dropped 172 and 173. The 2,407 `DRM_IOCTL_MODE_ATOMIC` calls took 1.163 ms each and 7.5 ms at most. Weston still commits twice a frame, since `DRM_IOCTL_WAIT_VBLANK` still fails as on simpledrm, and the cycle is the clip's: of 1,217 gaps between one frame's commit and the next, 1,087 are two 16.7 ms periods long, thirty frames a second where the first trial had twelve.
+* 23:01, the release bb151e3ba in both slots again, `0effe5ac...` by `machine_identity.sh`, and no trial armed. The trial root on the data partition has been booted and is written again before another trial.
+
+The `rach2.trace=enosys` reading that the issue asks for was not taken: on the GNU root the trace's lines would turn the kernel's 16 KiB log over before the step reads fbdrm's and the console's lines from it, and they are written under the big lock during the judged plays. It needs a boot of its own.
+
+### What Chromium still drops
+
+Chromium's drops come while the browser starts, and the big lock is the cause the counters show.
+
+* Of the 14, 24, 23 and 27 drops of the four Chromium plays, 13, 17, 15 and 20 fall in the first 9 s (the page's samples in `trial-2/debian/*.json` and `trial-2/again/*.json`). The other 48 s of each play dropped 1, 7, 8 and 7 frames of some 1,440.
+* In the first 7 s of the repeated H.264 play the four processors were idle 16% of the time and spent 56% in the kernel, and waited 1.56 s for the big lock in each second; from 1.3 s to 6.1 s the idle share was 0 to 17% and the waits 1.5 to 2.3 s a second (`trial-2/again/per-second.txt`). The entries that held the lock longest then were `mmap`, 680 ms of one sample of 1.3 s in 1,487 calls, page faults, 258 ms of the next in 61,101, and `openat`, 196 ms of the third in 217.
+* From 10 s on the processors were idle 59% of the time, 13% in the kernel, and waited 0.44 s a second, with the timer tick holding the lock some 120 ms a second and `ioctl` 68 ms.
+* Firefox's plays never leave that state: 15 to 20% idle from 10 s on and 1.0 s of waits a second, with futex calls and page faults holding the lock, as 76-17a measured under QEMU.
+
+Debian played the same clips on this machine with no drop, compositing on the GPU, with a kernel that serves a starting browser's faults and mappings on four processors at once. Rach2 serves them one at a time. That is the limit 76-17a recorded and the owner put to the next milestone for Firefox's video (`76-17a.md`, The owner's decision); that decision names Firefox's clips and leaves Chromium's drops judged, so whether this task's Done may stand with Chromium at 14 to 27 drops of 1,722 on the Lenovo is the owner's to say. This trial did not measure how many of the drops a GPU's compositing would remove: Debian has no numbers on the firmware's framebuffer with Pixman.

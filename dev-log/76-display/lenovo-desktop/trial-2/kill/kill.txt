@@ -1,0 +1,10 @@
+== killed 91 ; left none
+== supervisor 44 alive: yes
+== kernel
+[  934.216000] console: card0: taken back from a master, the keyboard on
+[  934.216000] console: card0: the firmware's framebuffer again
+== drm
+/sys/class/drm/card0-Unknown-1 enabled disabled
+== term
+         7 term -l
+desktop: result: weston gone; 2 console lines

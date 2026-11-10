@@ -1,0 +1,3 @@
+desktop: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 3,2,3 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+desktop: result: trace: 2407 commits, mean 1.163 ms, most 7.538 ms
+desktop: result: traced weston gone
