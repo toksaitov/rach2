@@ -134,9 +134,14 @@ int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj,
 {
     int32_t rc = drm_handle_insert(&file->objects, obj, handle);
 
-    if (rc == 0) {
-        obj->handle_count++;
-        drm_gem_object_get(obj);
+    if (rc != 0) {
+        return rc;
+    }
+    obj->handle_count++;
+    drm_gem_object_get(obj);
+    rc = obj->funcs && obj->funcs->open ? obj->funcs->open(obj, file) : 0;
+    if (rc != 0) {
+        drm_gem_handle_delete(file, *handle);
     }
     return rc;
 }
@@ -411,7 +416,7 @@ static uintptr_t shmem_obj_page(struct drm_gem_object *obj, uint32_t pgoff)
 }
 
 static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL, NULL,
-                                                        shmem_obj_page, NULL,           NULL};
+                                                        shmem_obj_page, NULL,           NULL, NULL};
 
 struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64_t size, int map_wc)
 {

@@ -245,9 +245,14 @@ static uintptr_t i915_gem_object_page_for_import(struct drm_gem_object *base, ui
     return i915_gem_object_frame((struct drm_i915_gem_object *)base, pgoff);
 }
 
-const struct drm_gem_object_funcs i915_gem_object_funcs = {
-    i915_gem_object_free,      i915_gem_object_mmap_cpu, 0, 0, i915_gem_object_page_for_import, 0,
-    i915_gem_object_cpu_access};
+const struct drm_gem_object_funcs i915_gem_object_funcs = {i915_gem_object_free,
+                                                           i915_gem_object_mmap_cpu,
+                                                           0,
+                                                           0,
+                                                           i915_gem_object_page_for_import,
+                                                           0,
+                                                           i915_gem_object_cpu_access,
+                                                           0};
 
 struct drm_i915_gem_object *i915_gem_object_alloc(struct drm_i915_private *i915, uint64_t size)
 {

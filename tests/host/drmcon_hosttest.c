@@ -262,7 +262,7 @@ static volatile uint8_t *fake_vmap(struct drm_gem_object *obj)
 }
 
 static const struct drm_gem_object_funcs gem_funcs = {NULL,      NULL,      NULL, NULL,
-                                                      fake_page, fake_vmap, NULL};
+                                                      fake_page, fake_vmap, NULL, NULL};
 
 /** The mode `w` by `h` at 60 Hz, preferred when `preferred` is set. */
 static void add_mode(struct drm_connector *c, uint16_t w, uint16_t h, int preferred)

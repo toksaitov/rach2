@@ -443,8 +443,8 @@ static volatile uint8_t *bochs_bo_vmap(struct drm_gem_object *obj)
     return (volatile uint8_t *)(to_bochs(obj->dev)->vram + bo->offset);
 }
 
-static const struct drm_gem_object_funcs bochs_bo_funcs = {bochs_bo_free, bochs_bo_mmap, NULL, NULL,
-                                                           NULL,          bochs_bo_vmap, NULL};
+static const struct drm_gem_object_funcs bochs_bo_funcs = {
+    bochs_bo_free, bochs_bo_mmap, NULL, NULL, NULL, bochs_bo_vmap, NULL, NULL};
 
 /**
  * MODE_CREATE_DUMB, Linux's drm_gem_vram_fill_create_dumb: rows of `width`

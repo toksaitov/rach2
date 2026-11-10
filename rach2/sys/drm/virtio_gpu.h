@@ -760,6 +760,9 @@ void vgpu_context_close(struct drm_device *dev, struct drm_file *file);
  */
 int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
                             struct virtio_gpu_object *bo);
+/** The objects' `open` hook: attach the resource to the context of a file
+ * that has just got a handle to it. */
+int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file);
 /** Detach a resource before its UNREF, or after reset, without sleeping. */
 void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
 /** The driver's 3D, fence and blob ioctl handlers; core copies arguments. */
