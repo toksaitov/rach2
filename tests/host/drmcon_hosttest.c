@@ -29,6 +29,7 @@
  * Returns 0 when every row passes, 1 otherwise.
  */
 
+#define KMS_MODEL_CLIENT
 #include "drm_kms_model.c"
 #include "drm/drm_auth.c"
 #include "drm/drm_client.c"
@@ -65,15 +66,7 @@ int drm_aperture_is_firmware(const struct drm_device *d)
     return firmware;
 }
 
-/* ---- the log and the command line ---- */
-
-/** Drop a line of the log. */
-void klog(int level, const char *subsystem, const char *format, ...)
-{
-    (void)level;
-    (void)subsystem;
-    (void)format;
-}
+/* ---- the command line ---- */
 
 static const char *video_option;
 

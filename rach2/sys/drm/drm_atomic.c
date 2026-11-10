@@ -13,10 +13,10 @@
 #include "../mm/usercopy.h"
 #include "../proc/percpu.h"
 #include "../proc/process.h"
-#ifndef RACH2_HOSTTEST
-#include "../arch/arch.h"
 #include "../klog.h"
 #include "../lib/kirq.h"
+#ifndef RACH2_HOSTTEST
+#include "../arch/arch.h"
 #include "../proc/sched.h"
 #endif
 
