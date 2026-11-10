@@ -2233,7 +2233,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
       "execution": {"program": "vhangprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
-        {"assertion_id": "setup", "checks": "A pair opens, and a child's new session takes the slave and turns its echo off.", "source": "program"},
+        {"assertion_id": "setup", "checks": "A pair opens, a child's new session takes the slave and turns its echo off, and a writer fills the master's ring and sleeps in its wait for room.", "source": "program"},
         {"assertion_id": "vhangup", "checks": "vhangup returns 0 and leaves SIGHUP and SIGCONT pending on the session leader.", "source": "program"},
         {"assertion_id": "old-read", "checks": "A read of the slave descriptor opened before is end of input.", "source": "program"},
         {"assertion_id": "old-write", "checks": "A write of it is EIO.", "source": "program"},
@@ -2242,8 +2242,8 @@
         {"assertion_id": "no-ctty", "checks": "/dev/tty is ENXIO: the session has no controlling terminal.", "source": "program"},
         {"assertion_id": "reopen-defaults", "checks": "A new open of the slave has the default termios, ECHO among them.", "source": "program"},
         {"assertion_id": "eperm", "checks": "A process of uid 1000 gets EPERM.", "source": "program"},
-        {"assertion_id": "blocked-write", "checks": "A writer started before the vhangup with more bytes than the master's ring holds, which nobody reads, ends with the bytes it wrote or EIO.", "source": "program"},
-        {"assertion_id": "output-flush", "checks": "vhangup discards unread slave output; the master in packet mode reads TIOCPKT_FLUSHWRITE alone, then EAGAIN.", "source": "program"},
+        {"assertion_id": "blocked-write", "checks": "The writer, asleep in its wait for room when vhangup ran, ends with the bytes it wrote.", "source": "program"},
+        {"assertion_id": "output-flush", "checks": "vhangup discards unread slave output and leaves the master in packet mode no status: FIONREAD gives 0 and a read EAGAIN at once.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The child exits 0 and the master closes.", "source": "program"}
       ],
       "branches": [],
