@@ -1,25 +1,25 @@
 /**
  * schedattrprobe: sched_setattr(2) and sched_getattr(2), the calls that set
- * and read every scheduling policy, SCHED_DEADLINE's among them, on i386
- * and x86-64, as Linux 6.12 answers them.
+ * and read scheduling policies on i386 and x86-64, with Linux 6.12's
+ * refusals and EBUSY when no deadline bandwidth can be admitted.
  *
  * The probe, which the default suite runs as root, sets each policy with
  * sched_setattr and reads it back with sched_getattr, sched_getscheduler
  * and sched_getparam: SCHED_OTHER and SCHED_BATCH with a nice value,
- * SCHED_IDLE, SCHED_FIFO and SCHED_RR with a priority, and SCHED_DEADLINE
- * with a runtime, deadline, period and flags, and SCHED_FLAG_RESET_ON_FORK
- * beside one. An ordinary thread must read back Linux's default slice for
- * the processors started, or the one it asked for, clamped to 0.1 to 100
+ * SCHED_IDLE, SCHED_FIFO and SCHED_RR with a priority, and
+ * SCHED_FLAG_RESET_ON_FORK beside one. An ordinary thread must read back
+ * Linux's default slice for the processors started, or the one it asked
+ * for, clamped to 0.1 to 100
  * ms. The structure's size rules must hold: E2BIG for a size below 48, past
  * 4096, or larger than 56 with a byte past 56 that is not 0, with 56
  * written back; and sched_getattr must write as many bytes as its size
  * holds, at most 56. SCHED_FLAG_KEEP_POLICY and SCHED_FLAG_KEEP_PARAMS must
- * keep what they name. Deadline threads must be admitted up to 95% of each
- * processor and refused with EBUSY past it, and the bandwidth of the dead
- * returned; on more than one processor, a deadline thread's affinity may not
- * leave one out. A fork must keep the parent's policy, or reset it with
- * SCHED_RESET_ON_FORK, and a deadline thread without it may not fork.
- * sched_rr_get_interval must give 0 for SCHED_FIFO and SCHED_DEADLINE. A
+ * keep what they name. Valid deadline requests must be refused with EBUSY,
+ * as Linux's sched_dl_overflow refuses unavailable bandwidth, without
+ * changing the caller's policy. On more than one processor a thread bound
+ * to one must first get EPERM. A fork must keep the parent's policy, or
+ * reset it with SCHED_RESET_ON_FORK.
+ * sched_rr_get_interval must give 0 for SCHED_FIFO. A
  * child that has dropped root must be refused with EPERM what Linux refuses
  * without CAP_SYS_NICE. RLIMIT_NICE and RLIMIT_RTPRIO must read 0, and a
  * child that has raised them before dropping root must be given the nice
@@ -408,9 +408,7 @@ static void set_and_check(struct sched_attr in, struct sched_attr want, long sch
 static void run_policies(void)
 {
     struct sched_attr dl = mkdl(SCHED_FLAG_RECLAIM | SCHED_FLAG_DL_OVERRUN, 10 * MS, 30 * MS, 0);
-    struct sched_attr dl_back = dl;
 
-    dl_back.sched_period = 30 * MS;
     set_and_check(mk(SCHED_OTHER, 0, 5, 0), with_runtime(mk(SCHED_OTHER, 0, 5, 0), base_slice),
                   SCHED_OTHER,
                   "SCHED_OTHER at nice 5 did not read back as set, with the default slice");
@@ -422,11 +420,14 @@ static void run_policies(void)
                   "SCHED_FIFO at 10 did not read back as set");
     set_and_check(mk(SCHED_RR, 0, 0, 20), mk(SCHED_RR, 0, 0, 20), SCHED_RR,
                   "SCHED_RR at 20 did not read back as set");
-    set_and_check(mkdl(0, 10 * MS, 30 * MS, 100 * MS), mkdl(0, 10 * MS, 30 * MS, 100 * MS),
-                  SCHED_DEADLINE, "SCHED_DEADLINE of 10, 30 and 100 ms did not read back as set");
-    set_and_check(dl, dl_back, SCHED_DEADLINE,
-                  "SCHED_DEADLINE with a period of 0 did not read back its flags and the deadline "
-                  "as its period");
+    if (set(0, mkdl(0, 10 * MS, 30 * MS, 100 * MS)) != -EBUSY || set(0, dl) != -EBUSY) {
+        fail("a valid deadline request was not refused with EBUSY");
+    }
+    {
+        struct sched_attr want = mk(SCHED_RR, 0, 0, 20);
+
+        check(&want, SCHED_RR, "a refused deadline request changed the policy");
+    }
     set_and_check(mk(SCHED_FIFO, SCHED_FLAG_RESET_ON_FORK, 0, 10),
                   mk(SCHED_FIFO, SCHED_FLAG_RESET_ON_FORK, 0, 10), SCHED_FIFO | SCHED_RESET_ON_FORK,
                   "SCHED_FIFO with SCHED_FLAG_RESET_ON_FORK did not read back as set");
@@ -490,72 +491,22 @@ static void run_keep(void)
     report_held();
 }
 
-/** A child that pauses until it is killed. */
-static long pauser(void)
-{
-    long pid = syscall0(SYS_FORK);
-
-    if (pid < 0) {
-        fail("fork");
-    }
-    if (pid == 0) {
-        for (;;) {
-            syscall0(SYS_PAUSE);
-        }
-    }
-    return pid;
-}
-
-/** Kill and reap the child `pid`. */
-static void reap_killed(long pid)
-{
-    int status = 0;
-
-    syscall2(SYS_KILL, pid, SIGKILL);
-    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
-        fail("a child could not be reaped");
-    }
-}
-
-/** Deadline admission at 95% of the processors, and the return of a dead
- * thread's bandwidth. */
+/** Linux's sched_dl_overflow returns EBUSY for unavailable bandwidth. */
 static void run_admission(void)
 {
-    long kids[18];
-    int n, i;
+    struct sched_attr want = with_runtime(mk(SCHED_OTHER, 0, 0, 0), base_slice);
 
-    n = cpus + 1;
-    if (n > 18) {
-        fail("more than 17 processors");
-    }
-    for (i = 0; i < n; i++) {
-        kids[i] = pauser();
-    }
-    for (i = 0; i < cpus; i++) {
-        if (set(kids[i], mkdl(0, 90 * MS, 100 * MS, 100 * MS)) != 0) {
-            fail("a deadline thread of 90% within 95% of each processor was refused");
-        }
-    }
-    if (set(kids[cpus], mkdl(0, 90 * MS, 100 * MS, 100 * MS)) != -EBUSY ||
-        set(0, mkdl(0, 90 * MS, 100 * MS, 100 * MS)) != -EBUSY) {
-        fail("a deadline thread past 95% of the processors was not refused with EBUSY");
-    }
-    if (set(kids[0], mkdl(0, 90 * MS, 100 * MS, 100 * MS)) != 0 ||
-        set(kids[0], mkdl(SCHED_FLAG_RESET_ON_FORK, 90 * MS, 100 * MS, 100 * MS)) != 0) {
-        fail("setting a deadline thread's own parameters again was refused");
-    }
-    for (i = 0; i < n; i++) {
-        reap_killed(kids[i]);
-    }
-    if (set(0, mkdl(0, 90 * MS, 100 * MS, 100 * MS)) != 0) {
-        fail("the bandwidth of dead deadline threads was not returned");
-    }
     ordinary();
+    if (set(0, mkdl(0, 1024, MS, MS)) != -EBUSY ||
+        set(0, mkdl(0, 90 * MS, 100 * MS, 100 * MS)) != -EBUSY ||
+        set(0, mkdl(SCHED_FLAG_RESET_ON_FORK, 10 * MS, 30 * MS, 100 * MS)) != -EBUSY) {
+        fail("Linux's EBUSY path for unavailable deadline bandwidth was not taken");
+    }
+    check(&want, SCHED_OTHER, "deadline admission failure changed the caller");
     report_held();
 }
 
-/** On more than one processor, a deadline thread's affinity may not leave
- * one out, and a thread whose affinity does may not take SCHED_DEADLINE. */
+/** A restricted affinity is refused before deadline admission. */
 static void run_affinity(void)
 {
     unsigned long long one = 1, all = 0;
@@ -564,11 +515,6 @@ static void run_affinity(void)
         if (syscall3(SYS_SCHED_GETAFFINITY, 0, sizeof(all), (long)&all) <= 0) {
             fail("sched_getaffinity");
         }
-        if (set(0, mkdl(0, 10 * MS, 30 * MS, 100 * MS)) != 0 ||
-            syscall3(SYS_SCHED_SETAFFINITY, 0, sizeof(one), (long)&one) != -EBUSY) {
-            fail("a deadline thread's affinity to one processor was not refused with EBUSY");
-        }
-        ordinary();
         if (syscall3(SYS_SCHED_SETAFFINITY, 0, sizeof(one), (long)&one) != 0 ||
             set(0, mkdl(0, 10 * MS, 30 * MS, 100 * MS)) != -EPERM ||
             syscall3(SYS_SCHED_SETAFFINITY, 0, sizeof(all), (long)&all) != 0) {
@@ -624,18 +570,14 @@ static void run_fork(void)
         fail("the child of a SCHED_BATCH parent at nice 4 with the reset flag did not keep both");
     }
     ordinary();
-    if (set(0, mkdl(0, 10 * MS, 30 * MS, 100 * MS)) != 0 || syscall0(SYS_FORK) != -EAGAIN) {
-        fail("a SCHED_DEADLINE thread's fork did not fail with EAGAIN");
-    }
-    if (set(0, mkdl(SCHED_FLAG_RESET_ON_FORK, 10 * MS, 30 * MS, 100 * MS)) != 0 ||
+    if (set(0, mkdl(SCHED_FLAG_RESET_ON_FORK, 10 * MS, 30 * MS, 100 * MS)) != -EBUSY ||
         forked(SCHED_OTHER, 0, 0) != 0) {
-        fail("the child of a SCHED_DEADLINE parent with the reset flag was not SCHED_OTHER");
+        fail("a refused deadline request changed the policy inherited by a child");
     }
-    ordinary();
     report_held();
 }
 
-/** sched_rr_get_interval for SCHED_FIFO, SCHED_DEADLINE and SCHED_RR. */
+/** sched_rr_get_interval for SCHED_FIFO and SCHED_RR. */
 static void run_rr_interval(void)
 {
     struct timespec ts;
@@ -645,12 +587,6 @@ static void run_rr_interval(void)
         syscall2(SYS_SCHED_RR_GET_INTERVAL, 0, (long)&ts) != 0 || ts.tv_sec != 0 ||
         ts.tv_nsec != 0) {
         fail("sched_rr_get_interval of a SCHED_FIFO thread did not give 0");
-    }
-    ts.tv_sec = ts.tv_nsec = 7;
-    if (set(0, mkdl(0, 10 * MS, 30 * MS, 100 * MS)) != 0 ||
-        syscall2(SYS_SCHED_RR_GET_INTERVAL, 0, (long)&ts) != 0 || ts.tv_sec != 0 ||
-        ts.tv_nsec != 0) {
-        fail("sched_rr_get_interval of a SCHED_DEADLINE thread did not give 0");
     }
     ts.tv_sec = ts.tv_nsec = 0;
     if (set(0, mk(SCHED_RR, 0, 0, 10)) != 0 ||
