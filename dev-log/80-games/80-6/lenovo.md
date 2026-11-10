@@ -19,7 +19,7 @@ From the task checkout on the Mac, before taking the machine:
 ```sh
 make ARCH=x86_64 rach2 build/x86_64/utils/sbin/bootctl
 shasum -a 256 build/x86_64/rach2/kernel build/x86_64/utils/sbin/bootctl
-RACH2_TESTING_COPY=/home/testing/rach2/build/worktrees/codex sh tools/dev/testing.sh get build/runs/task2653/root-2961387c696576a3.img.gz
+TMPDIR="$PWD/build/tmp" RACH2_TESTING_COPY=/home/testing/rach2/build/worktrees/codex sh tools/dev/testing.sh get build/runs/task2653/root-2961387c696576a3.img.gz
 gzip -dc build/runs/task2653/root-2961387c696576a3.img.gz | shasum -a 256
 ```
 
