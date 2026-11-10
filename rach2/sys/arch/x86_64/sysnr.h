@@ -279,6 +279,8 @@
 #define SYS_MLOCK2                 325
 #define SYS_COPY_FILE_RANGE        326
 #define SYS_STATX                  332
+#define SYS_NAME_TO_HANDLE_AT      303
+#define SYS_OPEN_BY_HANDLE_AT      304
 #define SYS_PIDFD_SEND_SIGNAL      424
 #define SYS_PIDFD_OPEN             434
 #define SYS_CLONE3                 435

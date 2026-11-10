@@ -46,6 +46,7 @@
 #include "fs/krffsmount.h"
 #include "fs/fat32.h"
 #include "fs/exfat.h"
+#include "fs/ext2.h"
 #include "fs/devfs.h"
 #include "fs/devtree.h"
 #include "fs/synthfs.h"
@@ -8827,6 +8828,355 @@ long sys_statx(isr_params_t *params)
     }
     statx_from_kstat(&sx, &kst);
     return copy_to_user(out, &sx, sizeof(sx)) != 0 ? -EFAULT : 0;
+}
+
+/*
+ * File handles, name_to_handle_at(2) and open_by_handle_at(2). A handle is
+ * Linux's FILEID_INO64_GEN: the file's inode number in 64 bits and a
+ * generation of 0, twelve bytes, which identify the file within its mount.
+ * The types whose files a handle reopens are those Linux gives export
+ * operations, ext2, tmpfs and vfat, and KRFFS; a handle of a file of any
+ * other mount is a FID, which AT_HANDLE_FID asks for, and which identifies
+ * the file and reopens nothing, as Linux's of a type without them.
+ */
+#define MAX_HANDLE_SZ     128
+#define FILEID_INO64_GEN  0x51
+#define HANDLE_BYTES      12u
+#define AT_HANDLE_FID     0x200
+#define HANDLE_WALK_DEPTH 64
+
+/* struct file_handle's fixed part, which f_handle's bytes follow. */
+struct linux_file_handle {
+    uint32_t handle_bytes;
+    int32_t handle_type;
+};
+
+/** Whether the files of the mount `m` reopen from a handle. */
+static int handle_decodable(const struct vfs_mount *m)
+{
+    const struct vfs_type *t = m ? vfs_mount_base(m)->type : NULL;
+
+    return t == &vfs_ext2_type || t == &vfs_tmpfs_type || t == &vfs_vfat_type ||
+           t == &vfs_krffs_type || t == &vfs_krffs_volume_type;
+}
+
+/**
+ * name_to_handle_at takes dirfd, path, the struct file_handle, the int the
+ * mount's id goes into, and flags.
+ *
+ * The file is `stat_at`'s for the same dirfd and path, a final symbolic
+ * link reported itself unless AT_SYMLINK_FOLLOW, and the object dirfd
+ * refers to with AT_EMPTY_PATH and an empty path. Its handle (above) goes
+ * into the struct, and the id /proc/PID/mountinfo gives its mount into the
+ * int. A struct whose handle_bytes is below 12 gets 12 there and no handle,
+ * and the call answers EOVERFLOW, with the mount's id written, so that the
+ * caller can ask again with room, as on Linux.
+ *
+ * 0, or -EINVAL for a flag other than AT_SYMLINK_FOLLOW, AT_EMPTY_PATH and
+ * AT_HANDLE_FID, or a handle_bytes above MAX_HANDLE_SZ; the path's error;
+ * -EOPNOTSUPP for a file whose type reopens nothing without AT_HANDLE_FID,
+ * and for an object on no mount of the table, a pipe, a socket or an
+ * anonymous descriptor; -EOVERFLOW; or -EFAULT.
+ */
+long sys_name_to_handle_at(isr_params_t *params)
+{
+    struct linux_file_handle __user *uh = (struct linux_file_handle __user *)SC_ARG(params, 2);
+    int32_t __user *umnt = (int32_t __user *)SC_ARG(params, 3);
+    int flags = (int)SC_ARG(params, 4);
+    struct linux_file_handle h;
+    unsigned char bytes[HANDLE_BYTES];
+    struct kstat kst;
+    int32_t rc, mnt_id;
+    uint32_t i;
+
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    if (flags & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH | AT_HANDLE_FID)) {
+        return -EINVAL;
+    }
+    rc = stat_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
+                 ((flags & AT_SYMLINK_FOLLOW) ? 0 : AT_SYMLINK_NOFOLLOW) | (flags & AT_EMPTY_PATH),
+                 &kst);
+    if (rc != 0) {
+        return rc;
+    }
+    if (kst.st_mnt_id == 0 ||
+        (!(flags & AT_HANDLE_FID) && !handle_decodable(vfs_mount_at((int)kst.st_mnt_id - 1)))) {
+        return -EOPNOTSUPP;
+    }
+    if (copy_from_user(&h, uh, sizeof(h)) != 0) {
+        return -EFAULT;
+    }
+    if (h.handle_bytes > MAX_HANDLE_SZ) {
+        return -EINVAL;
+    }
+    rc = h.handle_bytes < HANDLE_BYTES ? -EOVERFLOW : 0;
+    h.handle_bytes = HANDLE_BYTES;
+    h.handle_type = FILEID_INO64_GEN;
+    for (i = 0; i < 8; i++) {
+        bytes[i] = (unsigned char)(kst.st_ino >> (8 * i));
+    }
+    bytes[8] = bytes[9] = bytes[10] = bytes[11] = 0;
+    mnt_id = (int32_t)kst.st_mnt_id;
+    if (copy_to_user(umnt, &mnt_id, sizeof(mnt_id)) != 0 || copy_to_user(uh, &h, sizeof(h)) != 0 ||
+        (rc == 0 && copy_to_user((char __user *)uh + sizeof(h), bytes, sizeof(bytes)) != 0)) {
+        return -EFAULT;
+    }
+    return rc;
+}
+
+/* One directory of `handle_find`'s walk: held, open, where its listing is,
+ * and the length of its path in the walk's buffer. */
+struct handle_level {
+    struct vfs_ref dir;
+    void *h;
+    uint32_t cursor;
+    uint32_t len;
+};
+
+/** Open the held directory `dir` as level `l` of a walk, its path `len`
+ * bytes long; on failure `dir` is released. 0, or the type's error. */
+static int32_t handle_push(struct handle_level *l, struct vfs_ref *dir, uint32_t len)
+{
+    int32_t rc = vfs_open_node(dir->mnt, dir->node, 0, &l->h);
+
+    if (rc != 0) {
+        vfs_ref_release(dir);
+        return rc;
+    }
+    l->dir = *dir;
+    l->cursor = 0;
+    l->len = len;
+    return 0;
+}
+
+/** Close and release level `l` of a walk. */
+static void handle_pop(struct handle_level *l)
+{
+    vfs_release(l->dir.mnt, l->h);
+    vfs_ref_release(&l->dir);
+}
+
+/**
+ * Take the entry `de` of the walk's level `depth` of `lv`: put its path in
+ * `out` after the level's, and give 1 when it has the inode `ino`; else
+ * open it as the next level when it is a directory of the mount of `root`
+ * that fits, and give 0. `*depth` is then the deeper level's.
+ */
+static int handle_entry(struct handle_level *lv, int *depth, const struct vfs_dirent *de,
+                        const struct vfs_ref *root, uint64_t ino, char *out)
+{
+    struct handle_level *l = &lv[*depth];
+    uint32_t len = (uint32_t)k_strlen(de->name);
+    uint32_t n = l->len + (l->len ? 1u : 0u) + len;
+    struct vfs_ref dir;
+
+    if ((de->name[0] == '.' && (!de->name[1] || (de->name[1] == '.' && !de->name[2]))) ||
+        n + 1 > VFS_PATH_MAX || (de->ino != ino && !de->is_dir)) {
+        return 0;
+    }
+    if (l->len) {
+        out[l->len] = '/';
+    }
+    k_memcpy(out + n - len, de->name, len + 1);
+    if (de->ino == ino) {
+        return 1;
+    }
+    if (*depth + 1 < HANDLE_WALK_DEPTH &&
+        vfs_resolve(&l->dir, de->name, VFS_WALK_NOFOLLOW, &dir, 0, 0) == 0) {
+        if (dir.mnt != root->mnt) {
+            vfs_ref_release(&dir);
+        } else if (handle_push(&lv[*depth + 1], &dir, n) == 0) {
+            (*depth)++;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Find the entry of inode `ino` on the mount of `root`, its root directory,
+ * held: its path below the root, without a leading slash, into `out` of
+ * VFS_PATH_MAX bytes, "" for the root itself. The tree is read depth first
+ * through the type's readdir, as find(1) reads it, each directory on the way
+ * down held and open; a directory that is another mount's place is passed
+ * by, as is one past HANDLE_WALK_DEPTH or a path that does not fit. 0, or
+ * -ESTALE when no entry has the inode, or -ENOMEM.
+ */
+static int32_t handle_find(const struct vfs_ref *root, uint64_t ino, char *out)
+{
+    struct handle_level *lv = kmalloc(sizeof(*lv) * HANDLE_WALK_DEPTH);
+    struct vfs_dirent *de = kmalloc(sizeof(*de));
+    struct vfs_ref dir;
+    struct vfs_stat st;
+    int depth = 0;
+    int32_t rc = -ESTALE;
+
+    out[0] = '\0';
+    if (!lv || !de) {
+        rc = -ENOMEM;
+    } else if ((vfs_getattr(root->mnt, root->node, &st) == 0 && st.ino == ino) ||
+               (ino == 1 && mnt_is_root(root->mnt) && root->node == krffs_fs->node)) {
+        /* The KRFFS root directory's stat reports inode 1 (`do_stat64`). */
+        rc = 0;
+    } else if (vfs_enter(root->mnt) != 0) {
+        depth = -1;
+    } else {
+        dir = *root;
+        vfs_ref_hold(&dir);
+        depth = handle_push(&lv[0], &dir, 0) == 0 ? 0 : -1;
+        while (depth >= 0 && rc != 0) {
+            struct handle_level *l = &lv[depth];
+
+            if (vfs_readdir(l->dir.mnt, l->h, &l->cursor, de) <= 0) {
+                handle_pop(&lv[depth--]);
+            } else if (handle_entry(lv, &depth, de, root, ino, out)) {
+                rc = 0;
+            }
+        }
+        while (depth >= 0) {
+            handle_pop(&lv[depth--]);
+        }
+    }
+    kfree(lv);
+    kfree(de);
+    return rc;
+}
+
+/**
+ * Read the user's handle `uh` for open_by_handle_at, of a file of the mount
+ * `m`, into `*ino`: 0, or -EFAULT, -EINVAL for a handle_bytes of 0 or above
+ * MAX_HANDLE_SZ or a negative handle_type, or -ESTALE for a handle of
+ * another kind or size or a mount whose files do not reopen.
+ */
+static int32_t handle_read(const struct linux_file_handle __user *uh, const struct vfs_mount *m,
+                           uint64_t *ino)
+{
+    struct linux_file_handle h;
+    unsigned char bytes[HANDLE_BYTES];
+    uint32_t i;
+
+    if (copy_from_user(&h, uh, sizeof(h)) != 0) {
+        return -EFAULT;
+    }
+    if (h.handle_bytes == 0 || h.handle_bytes > MAX_HANDLE_SZ || h.handle_type < 0) {
+        return -EINVAL;
+    }
+    if (h.handle_type != FILEID_INO64_GEN || h.handle_bytes != HANDLE_BYTES ||
+        !handle_decodable(m)) {
+        return -ESTALE;
+    }
+    if (copy_from_user(bytes, (const char __user *)uh + sizeof(h), sizeof(bytes)) != 0) {
+        return -EFAULT;
+    }
+    *ino = 0;
+    for (i = 0; i < 8; i++) {
+        *ino |= (uint64_t)bytes[i] << (8 * i);
+    }
+    return 0;
+}
+
+/**
+ * The path from the caller's root of the file of inode `ino` on the mount
+ * `m` into `path`, a path page: the mount's root's path and the path
+ * `handle_find` gives below it. 0, or -ESTALE for a mount that is going, a
+ * file it does not find or one outside the caller's root, -ENAMETOOLONG,
+ * or -ENOMEM.
+ */
+static int32_t handle_path(struct vfs_mount *m, uint64_t ino, char *path)
+{
+    char *rel = path_buf_get();
+    struct vfs_ref root;
+    uint32_t n;
+    int32_t rc;
+
+    if (!rel) {
+        return -ENOMEM;
+    }
+    root.mnt = m;
+    root.node = m->root;
+    rc = vfs_enter(m) != 0 ? -ESTALE : 0;
+    if (rc == 0) {
+        vfs_ref_hold(&root);
+        rc = vfs_node_path(m, m->root, path, VFS_PATH_MAX);
+        if (rc == 0) {
+            rc = handle_find(&root, ino, rel);
+        }
+        vfs_ref_release(&root);
+    }
+    if (rc == 0 && path_in_root(path) != 0) {
+        rc = -ESTALE;
+    }
+    n = rc == 0 ? (uint32_t)k_strlen(path) : 0;
+    if (rc == 0 && rel[0] && n + 1 + k_strlen(rel) + 1 > VFS_PATH_MAX) {
+        rc = -ENAMETOOLONG;
+    }
+    if (rc == 0 && rel[0]) {
+        if (n > 1) {
+            path[n++] = '/';
+        }
+        k_memcpy(path + n, rel, k_strlen(rel) + 1);
+    }
+    path_buf_put(rel);
+    return rc;
+}
+
+/**
+ * open_by_handle_at takes the descriptor of any file of the mount, the
+ * struct file_handle name_to_handle_at gave, and open flags.
+ *
+ * The mount is that of what the descriptor refers to, the working
+ * directory's for AT_FDCWD. The file with the handle's inode is found on it
+ * (`handle_find`) and opened by its path from the caller's root as open(2)
+ * opens it, with `flags` less O_CREAT and O_EXCL, and O_NOFOLLOW, so that a
+ * symbolic link opens only with O_PATH, as Linux opens the inode itself. The
+ * caller must be privileged, as Linux asks CAP_DAC_READ_SEARCH.
+ *
+ * The descriptor, or -EBADF for a descriptor that is not open, -EPERM for an
+ * unprivileged caller, -EFAULT, -EINVAL for a handle_bytes of 0 or above
+ * MAX_HANDLE_SZ or a negative handle_type, -ESTALE for a handle of another
+ * kind or size, of a mount whose files do not reopen, or of a file that is
+ * gone or outside the caller's root, -ENOMEM, or open(2)'s error.
+ */
+long sys_open_by_handle_at(isr_params_t *params)
+{
+    const struct linux_file_handle __user *uh =
+        (const struct linux_file_handle __user *)SC_ARG(params, 1);
+    int flags = (int)SC_ARG(params, 2) & ~(O_CREAT | O_EXCL);
+    struct kstat kst;
+    struct vfs_mount *m;
+    uint64_t ino = 0;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    rc = stat_at((int)SC_ARG(params, 0), NULL, AT_EMPTY_PATH, &kst);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    m = kst.st_mnt_id ? vfs_mount_at((int)kst.st_mnt_id - 1) : NULL;
+    rc = handle_read(uh, m, &ino);
+    if (rc != 0) {
+        return rc;
+    }
+    path = path_buf_get();
+    if (!path) {
+        return -ENOMEM;
+    }
+    rc = handle_path(m, ino, path);
+    if (rc == 0) {
+        rc = open_named(path_name(path), flags | O_NOFOLLOW, 0, 0);
+        if (rc >= 0) {
+            open_done(rc, path_name(path), flags);
+        }
+    }
+    path_buf_put(path);
+    return rc;
 }
 
 /* access(2) mode bits. */

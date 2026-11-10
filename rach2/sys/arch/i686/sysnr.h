@@ -43,6 +43,8 @@
 #define SYS_MKNOD             14
 #define SYS_MKNODAT           297
 #define SYS_STATX             383
+#define SYS_NAME_TO_HANDLE_AT 341
+#define SYS_OPEN_BY_HANDLE_AT 342
 #define SYS_FLOCK             143
 #define SYS_MEMFD_CREATE      356
 #define SYS_SENDFILE          187

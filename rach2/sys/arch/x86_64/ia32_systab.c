@@ -436,8 +436,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_FANOTIFY_INIT] = NULL;
     table[SYS_FANOTIFY_MARK] = compat_sys_fanotify_mark;
     table[SYS_PRLIMIT64] = sys_prlimit64;
-    table[SYS_NAME_TO_HANDLE_AT] = NULL;
-    table[SYS_OPEN_BY_HANDLE_AT] = compat_sys_open_by_handle_at;
+    table[SYS_NAME_TO_HANDLE_AT] = sys_name_to_handle_at;
+    table[SYS_OPEN_BY_HANDLE_AT] = sys_open_by_handle_at;
     table[SYS_CLOCK_ADJTIME] = sys_clock_adjtime;
     table[SYS_SYNCFS] = sys_syncfs;
     table[SYS_SENDMMSG] = sys_sendmmsg;

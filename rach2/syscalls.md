@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 301 calls, the x86-64 kernel 277, and its compat table 352. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 303 calls, the x86-64 kernel 279, and its compat table 354. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -179,6 +179,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `munlock` | 151 | 150 | 151 | [brk(2)](../man/man2/brk.2) |
 | `munlockall` | 153 | 152 | 153 | [brk(2)](../man/man2/brk.2) |
 | `munmap` | 91 | 11 | 91 | [brk(2)](../man/man2/brk.2) |
+| `name_to_handle_at` | 341 | 303 | 341 | [name_to_handle_at(2)](../man/man2/name_to_handle_at.2) |
 | `nanosleep` | 162 | 35 | 162 | [nanosleep(2)](../man/man2/nanosleep.2) |
 | `newfstatat` | none | 262 | none | [stat(2)](../man/man2/stat.2) |
 | `newselect` | 142 | none | 142 | [select(2)](../man/man2/select.2) |
@@ -189,6 +190,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `oldstat` | none | none | 18 | [stat(2)](../man/man2/stat.2) |
 | `olduname` | none | none | 109 | [uname(2)](../man/man2/uname.2) |
 | `open` | 5 | 2 | 5 | [open(2)](../man/man2/open.2) |
+| `open_by_handle_at` | 342 | 304 | 342 | [name_to_handle_at(2)](../man/man2/name_to_handle_at.2) |
 | `openat` | 295 | 257 | 295 | [open(2)](../man/man2/open.2) |
 | `pause` | 29 | 34 | 29 | [sigaction(2)](../man/man2/sigaction.2) |
 | `personality` | 136 | 135 | 136 | [prctl(2)](../man/man2/prctl.2) |

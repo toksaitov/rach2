@@ -14,7 +14,13 @@
  * reports the basic set. Then the mount id: a file in /tmp, a /proc file,
  * /dev/null and the root each report STATX_MNT_ID, by path and by an O_PATH
  * descriptor, with the id their /proc/self/fdinfo/N gives and that
- * /proc/self/mountinfo gives the mount the path is on. Then the errors: a
+ * /proc/self/mountinfo gives the mount the path is on. Then the handles:
+ * name_to_handle_at of the file with no room answers EOVERFLOW with the
+ * size and the mount id, and with room the twelve bytes of the inode;
+ * a /proc file has a handle only with AT_HANDLE_FID; an unknown flag is
+ * EINVAL; and open_by_handle_at, for root, opens the file again by its
+ * handle and answers ESTALE for a handle of another type, and for any
+ * other user EPERM. Then the errors: a
  * flag statx does not take, both sync flags at once, the reserved mask bit,
  * a missing file, and an empty path without AT_EMPTY_PATH.
  *
@@ -23,9 +29,10 @@
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each row in order: `file`, `wide-time` on x86-64 alone, `directory`,
  * `fifo`, `dev-null`, `proc-self`, `pipe`, `cwd`, `sync-flag`, `mount-id`,
- * `refused-flags` and `refused-paths`; the branch of the group `arch`,
- * `x86-64` or `i686`, says whether `wide-time` ran. The first failure fails
- * its assertion with the row and errno and leaves the rest not run.
+ * `handle`, `refused-flags` and `refused-paths`; the branch of the group
+ * `arch`, `x86-64` or `i686`, says whether `wide-time` ran. The first
+ * failure fails its assertion with the row and errno and leaves the rest
+ * not run.
  */
 
 #define _GNU_SOURCE
@@ -98,6 +105,15 @@ typedef int32_t ksec_t;
  * first of the words musl's header leaves as padding. */
 #define STATX_MNT_ID_BIT 0x1000u
 #define STX_MNT_ID(sx)   ((sx)->__pad1[0])
+
+/* name_to_handle_at's flag for a handle that only identifies the file, and
+ * its struct file_handle with room for the largest handle. */
+#define AT_HANDLE_FID_BIT 0x200
+struct handle {
+    unsigned int handle_bytes;
+    int handle_type;
+    unsigned char f_handle[128];
+};
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -332,13 +348,89 @@ static int mount_ids(void)
     return 0;
 }
 
+/** The raw name_to_handle_at of `path` with `flags` and `room` bytes of
+ * handle, into `h` and `*mnt`. */
+static long to_handle(const char *path, int flags, unsigned room, struct handle *h, int *mnt)
+{
+    memset(h, 0xA5, sizeof(*h));
+    h->handle_bytes = room;
+    *mnt = -1;
+    return syscall(SYS_name_to_handle_at, AT_FDCWD, path, h, mnt, flags);
+}
+
+/** Check name_to_handle_at on FILE_PATH, whose stat is `st`, leaving its
+ * handle in `h`, and on a /proc file. Returns 0, or 1 once the failure is
+ * reported. */
+static int handle_names(const struct stat *st, struct handle *h)
+{
+    unsigned long long want = mountinfo_id(FILE_PATH);
+    struct handle other;
+    int mnt;
+
+    if (to_handle(FILE_PATH, 0, 0, h, &mnt) != -1 || errno != EOVERFLOW || h->handle_bytes != 12 ||
+        (unsigned long long)mnt != want) {
+        return fail("a handle with no room");
+    }
+    if (to_handle(FILE_PATH, 0, 128, h, &mnt) != 0 || h->handle_bytes != 12 ||
+        h->handle_type != 0x51 || (unsigned long long)mnt != want ||
+        memcmp(h->f_handle, &st->st_ino, sizeof(st->st_ino)) != 0) {
+        return fail("a file's handle");
+    }
+    if (to_handle("/proc/self/status", 0, 128, &other, &mnt) != -1 || errno != EOPNOTSUPP ||
+        to_handle("/proc/self/status", AT_HANDLE_FID_BIT, 128, &other, &mnt) != 0 ||
+        (unsigned long long)mnt != mountinfo_id("/proc/self/status")) {
+        return fail("a /proc file's handle");
+    }
+    if (to_handle(FILE_PATH, 0x8, 128, &other, &mnt) != -1 || errno != EINVAL) {
+        return fail("an unknown flag");
+    }
+    return 0;
+}
+
+/** Check name_to_handle_at and open_by_handle_at on FILE_PATH and a /proc
+ * file. Returns 0, or 1 once the failure is reported. */
+static int handles(void)
+{
+    struct handle h, other;
+    struct stat st, again;
+    char text[8];
+    int fd;
+
+    if (stat(FILE_PATH, &st) != 0) {
+        return fail("the file's stat");
+    }
+    if (handle_names(&st, &h) != 0) {
+        return 1;
+    }
+    fd = (int)syscall(SYS_open_by_handle_at, AT_FDCWD, &h, O_RDONLY);
+    if (geteuid() != 0) {
+        if (fd != -1 || errno != EPERM) {
+            return fail("open_by_handle_at of an unprivileged caller");
+        }
+        report_held();
+        return 0;
+    }
+    if (fd < 0 || fstat(fd, &again) != 0 || again.st_ino != st.st_ino ||
+        read(fd, text, sizeof(text)) != 5 || memcmp(text, "stats", 5) != 0) {
+        return fail("a file opened by its handle");
+    }
+    close(fd);
+    other = h;
+    other.handle_type = 1;
+    if (syscall(SYS_open_by_handle_at, AT_FDCWD, &other, O_RDONLY) != -1 || errno != ESTALE) {
+        return fail("a handle of another type");
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report, with the branch of the architecture, and plan its
  * assertions. */
 static void plan(void)
 {
-    static const char *const ids[] = {"file",      "wide-time", "directory",     "fifo",
-                                      "dev-null",  "proc-self", "pipe",          "cwd",
-                                      "sync-flag", "mount-id",  "refused-flags", "refused-paths"};
+    static const char *const ids[] = {
+        "file", "wide-time", "directory", "fifo",   "dev-null",      "proc-self",    "pipe",
+        "cwd",  "sync-flag", "mount-id",  "handle", "refused-flags", "refused-paths"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.statxmusl"));
@@ -360,7 +452,7 @@ static void plan(void)
 int main(void)
 {
     plan();
-    if (kinds() || mount_ids()) {
+    if (kinds() || mount_ids() || handles()) {
         return 1;
     }
     if (!refused(FILE_PATH, 0x1, STATX_BASIC_STATS, EINVAL) ||

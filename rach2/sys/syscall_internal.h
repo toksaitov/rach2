@@ -593,6 +593,10 @@ long sys_fstatat64(isr_params_t *params);
 
 long sys_statx(isr_params_t *params);
 
+long sys_name_to_handle_at(isr_params_t *params);
+
+long sys_open_by_handle_at(isr_params_t *params);
+
 long sys_access(isr_params_t *params);
 
 long sys_faccessat(isr_params_t *params);
