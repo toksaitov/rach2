@@ -34,8 +34,9 @@
 #   va        the video layer's Debian closure, libva, Intel's i965 VA
 #             driver and vainfo (debian/Readme.md)
 #   games     the games layer's Debian closure, which games/install_games.sh
-#             installs (games/Readme.md), on x86-64 umu, umu-launcher and
-#             the Steam Linux Runtime's archive under /opt/umu, and, when
+#             installs (games/Readme.md), on x86-64 /usr/bin/rach2-game,
+#             /usr/bin/crysis.sh with /usr/share/rach2/crysis, umu-launcher
+#             and the Steam Linux Runtime's archive under /opt/umu, and, when
 #             GNU_WESTON is 1, on x86-64, the rebuilt Weston of weston/ in
 #             place of the desktop closure's
 #   kvm       Debian's QEMU and the tests under /opt/kvm-unit-tests and
