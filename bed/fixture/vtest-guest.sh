@@ -13,8 +13,11 @@
 # checks: one boot with the seed, whose `network-config` is empty, runs
 # setup.sh.in, which installs `packages` from the snapshot that file names,
 # adds the services that serve vtest on the guest's port 5555 and turns
-# cloud-init off. The digest of those inputs and of the pins is kept beside
-# the image as prepared.qcow2.key. `run` boots a new overlay of the prepared
+# cloud-init off. The digest of those inputs, of the pins, of the guest's
+# port and of the image's size and its boot's processors and memory is kept
+# beside the image as prepared.qcow2.key. A console silent for 1200 s fails
+# the preparation, and one silent for 300 s fails the boot of `run` and
+# `check`; the bounds are on silence, not on the boot's length. `run` boots a new overlay of the prepared
 # image with CPUS processors (4) and MIB of memory (4096), its port 5555
 # forwarded from a free port on the host's loopback address, waits for the
 # guest to report its server ready on the serial console, runs COMMAND in sh
@@ -47,6 +50,14 @@ cache=${BED_VTEST_CACHE:-$(dirname "$common")/build/cache/bed-vtest}
 prepared=$cache/prepared.qcow2
 pins=$tree/tests/graphics/debian-ref/image
 guest_port=5555
+# The prepared image's size, and the processors and memory of its one boot.
+prepare_size=8G prepare_cpus=4 prepare_mib=4096
+
+usage()
+{
+    echo "usage: vtest-guest.sh prepare | run [-c CPUS] [-m MIB] COMMAND | check [-c CPUS] [-m MIB] | stage DIR" >&2
+    exit 2
+}
 
 die()
 {
@@ -54,11 +65,15 @@ die()
     exit 1
 }
 
-# inputs_key: print the digest of what the prepared image is made from.
+# inputs_key: print the digest of what the prepared image is made from: the
+# recipe's files, the pins, the guest's port and the words of its boot.
 inputs_key()
 {
-    cat "$here/setup.sh.in" "$here/packages" "$here/user-data.in" "$here/meta-data" \
-        "$here/network-config" "$pins" | sha256sum | cut -d ' ' -f 1
+    {
+        cat "$here/setup.sh.in" "$here/packages" "$here/user-data.in" "$here/meta-data" \
+            "$here/network-config" "$pins"
+        echo "port $guest_port size $prepare_size cpus $prepare_cpus mib $prepare_mib"
+    } | sha256sum | cut -d ' ' -f 1
 }
 
 pin()
@@ -132,9 +147,9 @@ prepare()
     cp "$here/meta-data" "$here/network-config" "$work/seed/"
     xorriso -as mkisofs -quiet -o "$work/seed.iso" -V cidata -J -r "$work/seed"
     rm -f "$prepared" "$prepared.key"
-    qemu-img create -q -f qcow2 -F qcow2 -b "$base" "$work/prepared.qcow2" 8G
+    qemu-img create -q -f qcow2 -F qcow2 -b "$base" "$work/prepared.qcow2" "$prepare_size"
     port=$(free_port)
-    machine 4 4096 "$work/prepared.qcow2"
+    machine "$prepare_cpus" "$prepare_mib" "$work/prepared.qcow2"
     echo "vtest-guest: preparing under $ACCEL_OPTS; console in $work/console.log"
     # shellcheck disable=SC2086 # words
     qemu-system-x86_64 $words -drive file="$work/seed.iso",if=virtio,format=raw,readonly=on \
@@ -253,10 +268,8 @@ check()
     "$out/vtestrelay" -1 -v -s "$sock" 127.0.0.1 "$port" 2> "$out/relay.out" &
     relay=$!
     trap 'kill "$relay" "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
-    tries=0
     until [ -S "$sock" ]; do
-        tries=$((tries + 1))
-        [ "$tries" -lt 10 ] || die "the relay did not listen"
+        kill -0 "$relay" 2>/dev/null || die "the relay did not listen: $(cat "$out/relay.out")"
         sleep 1
     done
     drew=0
@@ -264,6 +277,11 @@ check()
     VTEST_SOCKET_NAME=$sock
     export VTEST_SOCKET_NAME
     draw virpipe virpipe || drew=$?
+    # A triangle that failed, or drew elsewhere, may never have connected, and
+    # the relay would wait in accept() for it.
+    if [ "$drew" -ne 0 ] || ! grep -q '^triangle: renderer: virgl' "$out/virpipe.out"; then
+        kill "$relay" 2>/dev/null || true
+    fi
     relayed=0
     wait "$relay" || relayed=$?
     sed 's/^/vtest-guest: /' "$out/relay.out" >&2
@@ -286,7 +304,8 @@ check()
 # into DIR when the file system allows it, and copied when not.
 stage()
 {
-    [ -n "$1" ] && [ ! -e "$1" ] || die "stage: $1 exists"
+    [ -n "$1" ] || usage
+    [ ! -e "$1" ] || die "stage: $1 exists"
     if [ ! -f "$prepared" ] || [ "$(cat "$prepared.key" 2>/dev/null)" != "$(inputs_key)" ]; then
         (prepare)
     fi
@@ -306,8 +325,5 @@ case ${1:-} in
     run) shift; run "$@" ;;
     check) shift; check "$@" ;;
     stage) stage "${2:-}" ;;
-    *)
-        echo "usage: vtest-guest.sh prepare | run [-c CPUS] [-m MIB] COMMAND | check [-c CPUS] [-m MIB] | stage DIR" >&2
-        exit 2
-        ;;
+    *) usage ;;
 esac
