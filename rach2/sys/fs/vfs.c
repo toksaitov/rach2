@@ -2173,21 +2173,17 @@ void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t l
                    struct vfs_cachestat *cs)
 {
     struct vfs_stat st;
-    uint64_t pg;
-    int state;
 
     k_memset(cs, 0, sizeof(*cs));
-    if (vfs_mount_gone(mnt) || !mnt->type->ops->page_cached || vfs_getattr(mnt, node, &st) != 0 ||
+    if (vfs_mount_gone(mnt) || !mnt->type->ops->cachestat || vfs_getattr(mnt, node, &st) != 0 ||
         st.size == 0) {
         return;
     }
     if (last > (st.size - 1u) >> 12) {
         last = (st.size - 1u) >> 12;
     }
-    for (pg = first; pg <= last; pg++) {
-        state = mnt->type->ops->page_cached(mount_base(mnt), node, pg);
-        cs->cache += (state & VFS_PAGE_CACHED) != 0;
-        cs->dirty += (state & VFS_PAGE_DIRTY) != 0;
+    if (first <= last) {
+        mnt->type->ops->cachestat(mount_base(mnt), node, first, last, cs);
     }
 }
 
@@ -3207,7 +3203,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* unlock_node */
     0,                           /* shutdown */
     0,                           /* xattr */
-    0,                           /* page_cached */
+    0,                           /* cachestat */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -3818,7 +3814,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
-    0, /* page_cached */
+    0, /* cachestat */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -3859,7 +3855,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
-    0, /* page_cached */
+    0, /* cachestat */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -3900,7 +3896,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
-    0, /* page_cached */
+    0, /* cachestat */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

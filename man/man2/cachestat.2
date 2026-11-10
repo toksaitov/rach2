@@ -46,12 +46,15 @@ to the one holding its last byte, and stops at the end of the file.
 counts those in memory and
 .Va nr_dirty
 those of them not yet written back.
-A tmpfs or memfd page is in memory once it is allocated, and is dirty;
-a page of
+A tmpfs or memfd page, a page of
 .Xr memfd_secret 2
-is in memory but never dirty, as on Linux.
-An ext2 page is in memory when the buffer cache holds every block of
-it, and dirty when one of them waits to be written.
+included, is in memory once allocated and counts as clean, as on Linux:
+shmem's dirty folio bit does not set the page-cache dirty tag this call counts.
+An ext2 page counts when its resident block map leads to allocated blocks
+all held in the buffer cache or pending write batch; it is dirty when one
+of those blocks waits to be written.
+Holes and uncached map branches are skipped, and no disk read is made.
+Long walks allow other kernel work to run.
 Rach2 keeps no record of pages it has dropped, and writes a block back
 without a state between dirty and clean, so
 .Va nr_writeback ,

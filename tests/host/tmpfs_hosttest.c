@@ -32,6 +32,14 @@ static int fails;
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 
+static unsigned service_points;
+
+/** Count the scheduling points of a sparse cache walk. */
+void sched_service_point(void)
+{
+    service_points++;
+}
+
 /* When positive, the allocation that counts it down to zero fails. */
 static int heap_fails_in;
 
@@ -279,6 +287,7 @@ static void sparse(void)
     static char buf[PAGE_SIZE + 16];
     void *f = make(NULL, "s", 0644);
     int frames = frames_in_use();
+    struct vfs_cachestat cs;
 
     CHECK(tmpfs_write(&mnt, f, "end", 3, 3 * PAGE_SIZE) == 3);
     CHECK(frames_in_use() == frames + 1);
@@ -294,6 +303,16 @@ static void sparse(void)
           k_memcmp(buf, "abcdefgh", 8) == 0 && all_zero(buf + 8, PAGE_SIZE - 4) &&
           k_memcmp(buf + PAGE_SIZE + 4, "end", 3) == 0);
     CHECK(tmpfs_unlink(&mnt, NULL, "s") == 0);
+    tmpfs_put(&mnt, f);
+    CHECK(frames_in_use() == frames);
+    f = make(NULL, "cache", 0644);
+    CHECK(tmpfs_write(&mnt, f, "x", 1, 0) == 1);
+    CHECK(tmpfs_truncate(&mnt, f, SHMEM_MAX_SIZE) == 0);
+    k_memset(&cs, 0, sizeof(cs));
+    service_points = 0;
+    tmpfs_cachestat(&mnt, f, 0, 0xFFFFFFFEu, &cs);
+    CHECK(cs.cache == 1 && cs.dirty == 0 && service_points == 1);
+    CHECK(tmpfs_unlink(&mnt, NULL, "cache") == 0);
     tmpfs_put(&mnt, f);
     CHECK(frames_in_use() == frames);
 }

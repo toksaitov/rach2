@@ -186,6 +186,8 @@ struct vfs_statfs {
     uint32_t namelen;
 };
 
+struct vfs_cachestat;
+
 /*
  * The operations, one set per type. A node handle is the type's own: an
  * address in the mapped image for the KRFFS root, an offset plus one for a
@@ -324,17 +326,14 @@ struct vfs_ops {
      * return 0, or -errno. Size zero queries length. The caller checks access
      * and holds the node lock; flags are Linux's CREATE=1 and REPLACE=2. */
     int (*xattr)(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg);
-    /* Whether page `pgoff`, 4096 bytes, of the regular file `node` is in
-     * memory, for cachestat(2): VFS_PAGE_CACHED when it is, with
-     * VFS_PAGE_DIRTY when it is yet to be written back, else 0. The caller
-     * asks only for pages below the file's size and holds the description's
-     * lock. NULL for a type that keeps no page of a file in memory. */
-    int (*page_cached)(struct vfs_mount *mnt, void *node, uint64_t pgoff);
+    /* Count the inclusive range of 4096-byte pages [first, last], clipped
+     * to the file's size, into the zeroed `cs`. The caller holds the
+     * description lock. Walk resident entries or allocated map branches,
+     * read no disk block, and offer scheduling during a long walk.
+     * NULL for a type that keeps no file page in memory. */
+    void (*cachestat)(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
+                      struct vfs_cachestat *cs);
 };
-
-/* The answers of a type's `page_cached`. */
-#define VFS_PAGE_CACHED 1
-#define VFS_PAGE_DIRTY  2
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
  * widths of Linux's struct cachestat. A page that was in memory and went is
@@ -1096,7 +1095,7 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size);
 /** Count into `*cs`, zeroed first, the pages from `first` to `last` of the
  * regular file `node` of `mnt` that are in memory, by the type's
- * `page_cached`, up to the file's size; the caller holds the description's
+ * `cachestat`, up to the file's size; the caller holds the description's
  * lock. Nothing for a mount that is gone or a type that keeps no page. */
 void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
                    struct vfs_cachestat *cs);

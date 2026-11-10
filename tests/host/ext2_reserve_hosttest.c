@@ -257,6 +257,19 @@ int bcache_state(block_device_t *dev, uint64_t block)
     return block < TEST_BLOCKS && uncached[block] ? 0 : 1;
 }
 
+/** Copy only resident model bytes, without changing cache state. */
+int bcache_copy_cached(block_device_t *dev, uint64_t block, uint32_t offset, void *out,
+                       uint32_t count)
+{
+    (void)dev;
+    if (block >= TEST_BLOCKS || uncached[block] || busy[block] || offset > BCACHE_BLOCK_BYTES ||
+        count > BCACHE_BLOCK_BYTES - offset) {
+        return 0;
+    }
+    k_memcpy(out, buffers[block].data + offset, count);
+    return 1;
+}
+
 /** Whether another process holds block `block`, as the model says. */
 int bcache_busy(block_device_t *dev, uint64_t block)
 {

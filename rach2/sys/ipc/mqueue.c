@@ -1270,7 +1270,7 @@ static const struct vfs_ops mqfs_ops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
-    0, /* page_cached */
+    0, /* cachestat */
 };
 
 const struct vfs_type vfs_mqueue_type = {"mqueue", mqfs_mount, &mqfs_ops, 0, 1, 0, 0};
