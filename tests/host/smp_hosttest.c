@@ -62,6 +62,10 @@ static uintptr_t ipi_page[NR_CPUS];
 static int takes_stop[NR_CPUS];
 static unsigned long waited_us;
 
+/** The host model runs no code a barrier must serialize. */
+void arch_sync_core(void)
+{}
+
 /** Count an interrupt sent to `cpu` and answer its requests at once, as
  * `smp_service` would: a stop when `takes_stop` says so, a page to drop,
  * and a directory to give up for the kernel's. */

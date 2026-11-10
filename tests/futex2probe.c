@@ -517,7 +517,6 @@ static void run_wake_op(void)
 /** The flags, masks, values, deadlines and counts Linux 6.12 refuses. */
 static void run_einval(void)
 {
-    static volatile unsigned int words[2];
     struct futex_waitv w[2];
     struct timespec64 at;
     unsigned int bad_flags[5];
@@ -566,8 +565,8 @@ static void run_einval(void)
         futex(&word_a, FUTEX_CMP_REQUEUE, 1, -1, &word_b, 0) != -EINVAL) {
         fail("futex_requeue's flags, NULL array or a negative count was not refused with EINVAL");
     }
-    if (futex_wake((volatile unsigned int *)((char *)words + 2), ALL, 1, F2) != -EINVAL ||
-        futex_wait((volatile unsigned int *)((char *)words + 2), 0, ALL, F2, 0, 0) != -EINVAL) {
+    if (futex_wake((volatile unsigned int *)((char *)&word_a + 2), ALL, 1, F2) != -EINVAL ||
+        futex_wait((volatile unsigned int *)((char *)&word_a + 2), 0, ALL, F2, 0, 0) != -EINVAL) {
         fail("a word not aligned to four bytes was not refused with EINVAL");
     }
     at.tv_sec = 0;
@@ -591,6 +590,7 @@ static void run_einval(void)
 static void run_efault(void)
 {
     struct futex_waitv w[2];
+    unsigned long unmapped = 8;
     long gone;
 
     gone = probe_mmap(0, 4096, 0x3, 0x22, -1, 0);
@@ -598,8 +598,9 @@ static void run_efault(void)
         fail("mmap and munmap of a page");
     }
     if (futex_wait((volatile unsigned int *)gone, 0, ALL, FUTEX2_SIZE_U32, 0, 0) != -EFAULT ||
-        futex_wait(&word_a, 0, ALL, F2, (struct timespec64 *)8, CLOCK_MONOTONIC) != -EFAULT ||
-        futex_requeue((struct futex_waitv *)8, 0, 1, 1) != -EFAULT) {
+        futex_wait(&word_a, 0, ALL, F2, (struct timespec64 *)unmapped, CLOCK_MONOTONIC) !=
+            -EFAULT ||
+        futex_requeue((struct futex_waitv *)unmapped, 0, 1, 1) != -EFAULT) {
         fail("an unmapped word, deadline or array was not refused with EFAULT");
     }
     entry(&w[0], (volatile unsigned int *)gone, 0, F2);

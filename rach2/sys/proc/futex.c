@@ -531,7 +531,7 @@ static int futex_requeue(uintptr_t addr1, uintptr_t addr2, unsigned int shared, 
     int shared1 = (shared & FUTEX_SHARED1) != 0, shared2 = (shared & FUTEX_SHARED2) != 0;
     const void *space1, *space2;
     uintptr_t key1, key2;
-    uint32_t b1, b2, flags, word;
+    uint32_t b1, b2, flags = 0, word = 0;
     struct futex_q **pp;
     int rc, count = 0;
 
@@ -680,7 +680,7 @@ static int futex_wake_op(uintptr_t addr1, uintptr_t addr2, int nr_wake, int nr_w
 {
     const void *space1, *space2;
     uintptr_t key1, key2;
-    uint32_t flags;
+    uint32_t flags = 0;
     int rc, cond, more;
 
     rc = futex_addr_check(addr1, shared);
@@ -1672,7 +1672,7 @@ static int futex2_deadline(const struct futex_timespec64 __user *utime, int32_t 
         if (sizeof(long) == 4u || in_compat_syscall()) {
             ts.tv_nsec = (int64_t)(uint32_t)ts.tv_nsec;
         }
-        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
+        if (ts.tv_sec < 0 || (uint64_t)ts.tv_nsec >= 1000000000u) {
             return -EINVAL;
         }
         *ticks = futex_ticks_until(ts.tv_sec, (uint32_t)ts.tv_nsec, clockid == CLOCK_REALTIME);
