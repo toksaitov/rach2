@@ -99,6 +99,7 @@ and their sets,
 .Dv KVM_INTERRUPT ,
 .Dv KVM_NMI ,
 .Dv KVM_GET_TSC_KHZ ,
+.Dv KVM_KVMCLOCK_CTRL ,
 .Dv KVM_SET_SIGNAL_MASK ,
 .Dv KVM_GET_LAPIC ,
 .Dv KVM_SET_LAPIC ,
@@ -376,18 +377,108 @@ and
 .Dv KVM_HC_SCHED_YIELD
 return 0.
 .Dv KVM_HC_KICK_CPU
-wakes the halted vCPU whose APIC id is in RCX.
+wakes the halted vCPU whose APIC id is in RCX, whatever its interrupt flag.
 .Dv KVM_HC_SEND_IPI ,
 with the local APIC in the kernel, sends the interrupt command in RSI to the
 vCPUs that the bitmap in RBX and RCX names, bit 0 the APIC id in RDX, and
 returns the number that took it.
 .Dv KVM_HC_CLOCK_PAIRING
-returns
-.Er -KVM_EOPNOTSUPP ,
-any other number
+writes at the guest-physical address in RBX the real time and the guest's
+TSC read together, for the clock type
+.Dv KVM_CLOCK_PAIRING_WALLCLOCK
+in RCX while the kernel's clock reads the TSC, and returns 0, or
+.Er -KVM_EOPNOTSUPP .
+Any other number returns
 .Er -KVM_ENOSYS ,
 and a call from outside the guest's kernel
 .Er -KVM_EPERM .
+Under
+.Dv KVM_CAP_ENFORCE_PV_FEATURE_CPUID
+a hypercall whose feature the vCPU's CPUID does not name returns
+.Er -KVM_ENOSYS .
+.Ss The kvmclock
+.Dv KVM_GET_SUPPORTED_CPUID
+gives KVM's leaves: 0x40000000, with the signature
+.Ql KVMKVMKVM
+and 0x40000001 in EAX, and 0x40000001, whose EAX names
+.Dv KVM_FEATURE_NOP_IO_DELAY ,
+.Dv KVM_FEATURE_PV_UNHALT ,
+.Dv KVM_FEATURE_PV_SEND_IPI ,
+.Dv KVM_FEATURE_POLL_CONTROL
+and
+.Dv KVM_FEATURE_PV_SCHED_YIELD ,
+and, once the kernel has measured the TSC's rate,
+.Dv KVM_FEATURE_CLOCKSOURCE ,
+.Dv KVM_FEATURE_CLOCKSOURCE2
+and
+.Dv KVM_FEATURE_CLOCKSOURCE_STABLE_BIT .
+.Dv KVM_SET_CPUID2
+finds them at any base from 0x40000000 to 0x4000ff00 in steps of 0x100,
+and drops
+.Dv KVM_FEATURE_PV_UNHALT
+while the VM has
+.Dv KVM_X86_DISABLE_EXITS_HLT .
+.Pp
+A guest's write of
+.Dv MSR_KVM_SYSTEM_TIME_NEW
+or
+.Dv MSR_KVM_SYSTEM_TIME
+names the
+.Vt struct pvclock_vcpu_time_info
+the kernel keeps in its memory, and of
+.Dv MSR_KVM_WALL_CLOCK_NEW
+or
+.Dv MSR_KVM_WALL_CLOCK
+the
+.Vt struct pvclock_wall_clock
+it writes once.
+The kvmclock is the host's monotonic clock plus the VM's offset, 0 when the
+VM is made.
+While the kernel's clock reads the TSC, every vCPU's TSC is matched and
+the boot vCPU's guest uses the new MSR, the VM has Linux's master clock:
+every vCPU's copy is taken at one moment and has
+.Dv PVCLOCK_TSC_STABLE_BIT ,
+and
+.Dv KVM_GET_CLOCK
+sets
+.Dv KVM_CLOCK_TSC_STABLE ,
+.Dv KVM_CLOCK_REALTIME
+and
+.Dv KVM_CLOCK_HOST_TSC
+with the real time and the host's TSC at
+.Va clock .
+Otherwise its flags are 0.
+A vCPU made, and a TSC that
+.Dv KVM_SET_MSRS
+writes within a second of the one the last write would read now, keeps
+the matched TSC.
+.Dv KVM_KVMCLOCK_CTRL
+sets
+.Dv PVCLOCK_GUEST_STOPPED
+in the vCPU's next copy, or fails with
+.Er EINVAL
+when its guest has no kvmclock.
+Under
+.Dv KVM_CAP_ENFORCE_PV_FEATURE_CPUID ,
+which
+.Dv KVM_ENABLE_CAP
+sets on a vCPU, the guest's access to an MSR of a feature its CPUID does
+not name raises #GP; the caller's
+.Dv KVM_GET_MSRS
+reads it as 0, and
+.Dv KVM_SET_MSRS
+takes a write of 0.
+.Pp
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_X86_DISABLE_EXITS
+on a VM takes
+.Dv KVM_X86_DISABLE_EXITS_HLT
+and
+.Dv KVM_X86_DISABLE_EXITS_PAUSE ,
+which
+.Dv KVM_CHECK_EXTENSION
+names, at any time; a vCPU made afterwards runs HLT in the guest.
 .Ss Hyper-V
 A vCPU whose CPUID, given by
 .Dv KVM_SET_CPUID2 ,
@@ -648,5 +739,8 @@ No
 .Dv KVM_CAP_X2APIC_API ,
 no coalesced MMIO, no dirty ring, no SMM and no nested virtualization, so
 no enlightened VMCS and no direct TLB flush of Hyper-V's.
+Of KVM's paravirtual features there are no asynchronous page faults, steal
+time, paravirtual EOI or TLB flush, and without a measured TSC rate no
+kvmclock.
 The APIC and PIT timers are checked at each entry, and the host's tick of 1 ms
 makes the guest exit, so an expiry reaches the guest within a tick.
