@@ -303,6 +303,24 @@ do nothing.
 The wait for idle ends with
 .Er EINTR
 at a signal.
+.It Pa dri/DEVICE/i915_params
+A directory with a file for each of the driver's and the display's
+parameters, as Linux has, each giving its value and a newline, a boolean as
+.Ql Y
+or
+.Ql N .
+Two are written, mode 0600, by Linux's rules:
+.Pa reset ,
+a number in any base
+.Fn kstrtouint
+takes or a boolean: 0 makes a hang wedge the GPU, 1 resets the whole GPU
+alone, and 2 or more, the default 3, an engine first;
+.Pa enable_hangcheck ,
+a boolean as
+.Fn kstrtobool
+reads it, which off stops the heartbeat that finds hangs and makes new
+contexts not persistent.
+The rest are read-only, mode 0400, at Linux's defaults.
 .It Pa dri/DEVICE/i915_error_state
 Mode 0644.
 The text of the first error state captured at a hang since boot or the
