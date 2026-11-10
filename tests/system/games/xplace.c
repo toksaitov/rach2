@@ -434,7 +434,7 @@ static void count_motion(Display *dpy, Window win, GC gc, int width, int height,
     XIEventMask mask;
     Window child;
     unsigned int buttons;
-    int x, y, wx, wy, i;
+    int x, y, wx, wy, i, motions = 0, mx = 0, my = 0;
     XEvent ev;
 
     memset(bits, 0, sizeof(bits));
@@ -455,11 +455,17 @@ static void count_motion(Display *dpy, Window win, GC gc, int width, int height,
             XFreeEventData(dpy, &ev.xcookie);
         } else if (ev.type == Expose && ev.xexpose.count == 0)
             draw(dpy, win, gc, width, height);
-        else if (ev.type == KeyPress) {
+        else if (ev.type == MotionNotify) {
+            if (motions++ == 0)
+                printf("xplace: first core motion at %d,%d\n", ev.xmotion.x_root,
+                       ev.xmotion.y_root);
+            mx = ev.xmotion.x_root, my = ev.xmotion.y_root;
+        } else if (ev.type == KeyPress) {
             printf("xplace: key %u\n", ev.xkey.keycode);
             break;
         }
     }
+    printf("xplace: core motion events %d, the last at %d,%d\n", motions, mx, my);
     for (i = 0; i < nsources; i++)
         printf("xplace: raw %s dx %ld dy %ld events %ld %s\n", sources[i].name, sources[i].dx,
                sources[i].dy, sources[i].events, sources[i].relative ? "relative" : "absolute");
