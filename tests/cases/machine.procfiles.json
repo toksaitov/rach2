@@ -621,6 +621,26 @@
           "assertion_id": "interrupt-total",
           "checks": "proc stat counts at least the sum of the vector counts, which includes the timer",
           "source": "scenario"
+        },
+        {
+          "assertion_id": "thread-names",
+          "checks": "183 threads each take a name written to /proc/self/task/TID/comm and give it back with a newline from /proc/PID/task/TID/comm",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "thread-name-count",
+          "checks": "a 22-byte write to a thread's comm returns 22",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "thread-name-cut",
+          "checks": "the thread's comm keeps the first 15 bytes of the 22-byte name",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "thread-name-other",
+          "checks": "a write to the parent's comm fails with EINVAL, or EACCES at the open for a parent the writer does not own",
+          "source": "scenario"
         }
       ],
       "branches": [],

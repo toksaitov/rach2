@@ -7296,7 +7296,8 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         synth_pid_owner(procfs_resolve_id(vp), kst);
         if (vp->procfile == SYNTH_PROC_OOM_ADJ || vp->procfile == SYNTH_PROC_UID_MAP ||
-            vp->procfile == SYNTH_PROC_GID_MAP || vp->procfile == SYNTH_PROC_SETGROUPS) {
+            vp->procfile == SYNTH_PROC_GID_MAP || vp->procfile == SYNTH_PROC_SETGROUPS ||
+            vp->procfile == SYNTH_PROC_COMM) {
             kst->st_mode = S_IFREG | 0644;
         }
         return 0;

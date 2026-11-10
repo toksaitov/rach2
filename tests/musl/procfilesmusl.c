@@ -1,7 +1,10 @@
 /*
  * procfilesmusl.c: the installed programs that read the machine's /proc
- * files.
+ * files, and the thread names a program writes there.
  */
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +12,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 
 #include "../probe_report.h"
@@ -379,6 +383,135 @@ static void interrupt_rows(void)
           "the interrupt total is below the vector sum");
 }
 
+/* The threads Wine named in step 8's run, each through its own comm. */
+#define NAMED_THREADS 183
+
+static pthread_mutex_t gate_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gate_cond = PTHREAD_COND_INITIALIZER;
+static int gate_open, tids_known;
+static pid_t thread_tids[NAMED_THREADS];
+
+/** A named thread: publish its id, then wait until the names are read. */
+static void *named_thread(void *arg)
+{
+    int slot = (int)(long)arg;
+
+    pthread_mutex_lock(&gate_lock);
+    thread_tids[slot] = (pid_t)syscall(SYS_gettid);
+    tids_known++;
+    pthread_cond_broadcast(&gate_cond);
+    while (!gate_open) {
+        pthread_cond_wait(&gate_cond, &gate_lock);
+    }
+    pthread_mutex_unlock(&gate_lock);
+    return NULL;
+}
+
+/** Write `len` bytes of `name` to the comm of thread `tid` of this process:
+ * what write returns, or -errno. */
+static long comm_write(pid_t tid, const char *name, size_t len)
+{
+    char path[64];
+    long n;
+    int fd;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/comm", (int)tid);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        return -errno;
+    }
+    n = write(fd, name, len);
+    n = n < 0 ? -errno : n;
+    close(fd);
+    return n;
+}
+
+/** Read the comm of thread `tid` into `out` of `cap` bytes: its length, or
+ * -1. */
+static int comm_read(pid_t tid, char *out, size_t cap)
+{
+    char path[64];
+    ssize_t n;
+    int fd;
+
+    snprintf(path, sizeof(path), "/proc/%d/task/%d/comm", (int)getpid(), (int)tid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return -1;
+    }
+    n = read(fd, out, cap - 1);
+    close(fd);
+    if (n < 0) {
+        return -1;
+    }
+    out[n] = '\0';
+    return (int)n;
+}
+
+/**
+ * Name NAMED_THREADS threads through /proc/self/task/TID/comm, as Wine does
+ * for each thread it makes, and read every name back; then check Linux's
+ * rules of the write: 15 bytes kept of a longer name, all of the count
+ * taken, and EINVAL for a thread of another process.
+ */
+static void thread_name_rows(void)
+{
+    pthread_t threads[NAMED_THREADS];
+    int made = 0, named = 0, read_back = 0, i;
+    char name[32], got[32];
+    long n;
+    int fd;
+
+    for (i = 0; i < NAMED_THREADS; i++) {
+        if (pthread_create(&threads[i], NULL, named_thread, (void *)(long)i) != 0) {
+            break;
+        }
+        made++;
+    }
+    pthread_mutex_lock(&gate_lock);
+    while (tids_known < made) {
+        pthread_cond_wait(&gate_cond, &gate_lock);
+    }
+    pthread_mutex_unlock(&gate_lock);
+    for (i = 0; i < made; i++) {
+        snprintf(name, sizeof(name), "wine-%03d", i);
+        if (comm_write(thread_tids[i], name, strlen(name)) == (long)strlen(name)) {
+            named++;
+        }
+    }
+    for (i = 0; i < made; i++) {
+        snprintf(name, sizeof(name), "wine-%03d\n", i);
+        if (comm_read(thread_tids[i], got, sizeof(got)) > 0 && strcmp(got, name) == 0) {
+            read_back++;
+        }
+    }
+    printf("procfiles: threads: %d made, %d named, %d read back\n", made, named, read_back);
+    check("thread-names", made == NAMED_THREADS && named == made && read_back == made,
+          "a thread's comm did not take or give back its name");
+    n = made > 0 ? comm_write(thread_tids[0], "a-name-of-twenty-bytes", 22) : -1;
+    check("thread-name-count", n == 22, "the write did not take all of its count");
+    check("thread-name-cut",
+          made > 0 && comm_read(thread_tids[0], got, sizeof(got)) == 16 &&
+              strcmp(got, "a-name-of-twent\n") == 0,
+          "a long name was not cut to 15 bytes");
+    snprintf(name, sizeof(name), "/proc/%d/comm", (int)getppid());
+    fd = open(name, O_WRONLY);
+    n = fd < 0 ? -errno : write(fd, "other", 5);
+    n = n < 0 && fd >= 0 ? -errno : n;
+    if (fd >= 0) {
+        close(fd);
+    }
+    check("thread-name-other", n == -EINVAL || n == -EACCES,
+          "a write renamed a thread of another process");
+    pthread_mutex_lock(&gate_lock);
+    gate_open = 1;
+    pthread_cond_broadcast(&gate_cond);
+    pthread_mutex_unlock(&gate_lock);
+    for (i = 0; i < made; i++) {
+        pthread_join(threads[i], NULL);
+    }
+}
+
 /** Run the applet rows with the independently known root size in KiB. */
 int main(int argc, char **argv)
 {
@@ -393,6 +526,7 @@ int main(int argc, char **argv)
     ipv6_rows();
     netdev_rows();
     interrupt_rows();
+    thread_name_rows();
     report_end();
     return failures != 0;
 }

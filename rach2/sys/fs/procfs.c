@@ -6063,7 +6063,8 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
         procfs_oom_owner(f->origin_pid, uid, gid) != 0) {
         return -1;
     }
-    return f->origin_file == SYNTH_PROC_OOM_ADJ || procfs_is_idmap(f->origin_file);
+    return f->origin_file == SYNTH_PROC_OOM_ADJ || f->origin_file == SYNTH_PROC_COMM ||
+           procfs_is_idmap(f->origin_file);
 }
 
 int procfs_fd_writable(struct fd_entry *e)
@@ -6278,18 +6279,21 @@ static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
     return t->len;
 }
 
-/** Read a user namespace's file opened for writing as well: its text at
- * this read, from the description's offset; -ESRCH once the process has
- * been reaped. */
+/** Read a user namespace's file or a `comm` opened for writing as well:
+ * its text at this read, from the description's offset; -ESRCH once the
+ * process has been reaped. */
 static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
     struct procfs_text t;
     uint32_t n = 0;
+    int rc;
 
     procfs_text_init(&t);
-    if (procfs_gen_idmap(&t, f->origin_pid, f->origin_file) < 0 || t.nomem) {
+    rc = f->origin_file == SYNTH_PROC_COMM ? procfs_gen_comm(&t, f->origin_pid)
+                                           : procfs_gen_idmap(&t, f->origin_pid, f->origin_file);
+    if (rc < 0 || t.nomem) {
         kfree(t.buf);
         return t.nomem ? -ENOMEM : -ESRCH;
     }
@@ -6341,23 +6345,62 @@ static const struct file_ops procfs_idmap_ops = {
     procfs_idmap_read, procfs_idmap_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 /**
- * Open /proc/<pid>/uid_map, gid_map or setgroups, `file`, for writing, or
- * for reading and writing; who may write it is the namespace's rule
- * (`ns_map_write`), checked at the write, which must be at the start.
- * -EACCES for an access mode of 3, and -ENOENT for no such process.
+ * Write /proc/<pid>/comm or /proc/<pid>/task/<tid>/comm as Linux's
+ * `comm_write` does: the first 15 bytes of `buf`, NUL-padded, become the
+ * thread's name, whatever they hold, a newline included. Only a thread of
+ * the writer's own thread group is renamed. `count`, all of it taken even
+ * when cut, or -EFAULT, -EINVAL for a thread of another group, or -ESRCH
+ * once the thread has been reaped.
+ */
+static int32_t procfs_comm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    char name[sizeof(((process_t *)0)->comm)];
+    uint32_t n = count < sizeof(name) - 1u ? count : (uint32_t)sizeof(name) - 1u;
+    process_t *p;
+
+    k_memset(name, 0, sizeof(name));
+    if (copy_from_user(name, buf, n) != 0) {
+        return -EFAULT;
+    }
+    p = procfs_proc(f->origin_pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    if (p->tg != current_proc->tg) {
+        return -EINVAL;
+    }
+    k_memcpy(p->comm, name, sizeof(name));
+    return (int32_t)count;
+}
+
+static const struct file_ops procfs_comm_ops = {
+    procfs_idmap_read, procfs_comm_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+
+/**
+ * Open /proc/<pid>/uid_map, gid_map, setgroups or comm, `file`, for
+ * writing, or for reading and writing. Who may write a map is the
+ * namespace's rule (`ns_map_write`), checked at the write, which must be at
+ * the start; a `comm`, whose mode is 0644, takes a writer that owns it
+ * (`procfs_oom_owner`) or a privileged one, checked here. -EACCES for an
+ * access mode of 3 or a writer who may not, and -ENOENT for no such process.
  */
 static int procfs_open_idmap(int file, int pid, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
+    uint32_t uid, gid;
     int acc = flags & 3;
     int fd;
 
     if (acc == 3) {
         return -EACCES;
     }
-    if (!procfs_proc(pid)) {
+    if (procfs_oom_owner(pid, &uid, &gid) != 0) {
         return -ENOENT;
+    }
+    if (file == SYNTH_PROC_COMM && !proc_privileged(current_proc) && current_proc->euid != uid) {
+        return -EACCES;
     }
     f = kzalloc(sizeof(*f));
     if (!f) {
@@ -6374,7 +6417,7 @@ static int procfs_open_idmap(int file, int pid, int flags)
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
-    e->ops = &procfs_idmap_ops;
+    e->ops = file == SYNTH_PROC_COMM ? &procfs_comm_ops : &procfs_idmap_ops;
     e->priv = f;
     e->ofd->offset = 0;
     e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
@@ -7455,7 +7498,8 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
         return procfs_open_oom(vp, pid, flags);
     }
-    if (vp->kind == VNODE_PROC_FILE && procfs_is_idmap(vp->procfile) && (flags & 3) != 0) {
+    if (vp->kind == VNODE_PROC_FILE &&
+        (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM) && (flags & 3) != 0) {
         return procfs_open_idmap(vp->procfile, pid, flags);
     }
     if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
