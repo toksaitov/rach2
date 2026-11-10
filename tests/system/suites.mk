@@ -1016,6 +1016,15 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # the guest and judged against the Debian reference guest's checksums, its
 # rate recorded beside the Debian guest's, as the case of
 # tests/cases/machine.vkpresent.json.
+# `tests/run virgl`: OpenGL on virgl over the testing PC's GPU on the GNU
+# root under the virgl profile: the renderer eglinfo and glxinfo name;
+# piglit's quick profile within OpenGL 4.2 and ES 3.1, every 200th test and
+# the list whole in sixteen parts; dEQP-GLES2, GLES3 and GLES31, every 200th
+# case of each and each whole in two or four parts; the WebGL conformance
+# suite in Chromium and Firefox ESR in chunks of 250 pages; each test, case
+# and page judged against the Debian reference guest's stored result; and the
+# reset of the virtio-gpu device under GL programs and Weston, as the Debian
+# guest sees it, as the cases of tests/cases/machine.virgl.json.
 # `tests/run games-native`: SuperTuxKart's profile race and 0 A.D.'s visual
 # replay, the fixed replays the games layer installs, in a small form of
 # 640x400, a race of 10 s to its end and the match for 10 s after its loading
@@ -1024,21 +1033,23 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # tests/cases/machine.games-native.json; their reference is Linux's run of
 # the same replays on the Lenovo, not the Debian guest's.
 # Etude runs them all with graphics_scenario (tests/graphics/Readme.md). Each
-# machine has graphics.ext2, the runners, the IGT list, the dEQP lists, the
-# guest's environment and the references, as a read-only data disk, and a
-# video case clips.ext2, the clips of clips.tar, which debian.sh makes in the
-# Debian guest when this clone's cache does not hold the clips that
-# clips.sha256 pins; modetest's drmcapture goes over the guest channel, which
-# carries some 137 bytes a frame, too slow for the 35 MB of clips. common.sh
-# writes the host's half of each record, and venus-lost.sh kills the render
-# server of the device loss case's QEMU.
-GRAPHICS_LISTS = igt-76.list deqp-vk-venus-smoke.txt deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes
+# machine has graphics.ext2, the runners, the IGT list, the piglit and dEQP
+# lists, the guest's environment and the references, as a read-only data
+# disk, and a video case clips.ext2, the clips of clips.tar, which debian.sh
+# makes in the Debian guest when this clone's cache does not hold the clips
+# that clips.sha256 pins; modetest's drmcapture goes over the guest channel,
+# which carries some 137 bytes a frame, too slow for the 35 MB of clips.
+# common.sh writes the host's half of each record, and venus-lost.sh kills
+# the render server of the device loss case's QEMU.
+GRAPHICS_LISTS = igt-76.list deqp-vk-venus-smoke.txt deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes \
+                 piglit-virgl.txt.gz piglit-virgl.flakes deqp-gles-virgl.txt.gz
+GRAPHICS_REFS = ref/debian ref/venus-wsl ref/virgl-wsl
 GRAPHICS_FILES = $(wildcard tests/graphics/runners/*) tests/graphics/guest-env.sh \
                  $(addprefix tests/graphics/,$(GRAPHICS_LISTS)) \
-                 $(shell find tests/graphics/ref/debian tests/graphics/ref/venus-wsl -type f 2>/dev/null)
+                 $(shell find $(addprefix tests/graphics/,$(GRAPHICS_REFS)) -type f 2>/dev/null)
 build/tests/cases/graphics/graphics.tar: $(GRAPHICS_FILES)
 	@mkdir -p $(@D)
-	tar -cf $@.tmp -C tests/graphics runners guest-env.sh $(GRAPHICS_LISTS) ref/debian ref/venus-wsl
+	tar -cf $@.tmp -C tests/graphics runners guest-env.sh $(GRAPHICS_LISTS) $(GRAPHICS_REFS)
 	mv $@.tmp $@
 build/tests/cases/graphics/common.sh: tests/graphics/runners/common.sh
 	@mkdir -p $(@D)
