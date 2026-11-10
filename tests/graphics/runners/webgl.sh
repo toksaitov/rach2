@@ -69,6 +69,12 @@ done
 shift $((OPTIND - 1))
 [ $# -eq 1 ] || { echo "usage: webgl.sh [-g] [-b BROWSER] [-v VERSION] [-k SIZE] [-s SUITE] [-x OMIT] [-o OUT] CHUNK|all" >&2; exit 2; }
 which=$1
+case $which in
+    all) ;;
+    '' | *[!0-9]*) echo "webgl: no chunk $which" >&2; exit 2 ;;
+    # A shell's arithmetic reads 08 and 09, as the cases name chunks, as octal.
+    *) which=$(echo "$which" | sed 's/^0*\([0-9]\)/\1/') ;;
+esac
 case $browser in chromium|firefox) ;; *) echo "webgl: no browser $browser" >&2; exit 2 ;; esac
 case $version in 1.0.4|2.0.1) ;; *) echo "webgl: no version $version; 1.0.4 or 2.0.1" >&2; exit 2 ;; esac
 [ -f "$suite/00_test_list.txt" ] || { echo "webgl: no suite at $suite" >&2; exit 1; }
