@@ -43,6 +43,8 @@ bind "$edu"
 before=$(counts)
 [ "$(printf '%s\n' "$before" | wc -l)" = 10 ] || fail 'missing assignment counters'
 echo "assign: before: $before"
+awk '$1 == "iommu_dma_faults" || $1 == "iommu_irq_faults" { n++; if ($2 != 0) bad=1 }
+     END { exit n != 2 || bad }' /proc/stat || fail 'IOMMU fault before injection' 
 ulimit -l unlimited
 
 # Every iteration verifies disk data and an answered host-network packet.

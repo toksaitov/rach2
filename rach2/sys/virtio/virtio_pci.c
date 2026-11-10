@@ -439,26 +439,13 @@ static void vp_intx_disable(struct virtio_pci *vp, int off)
     pci_write_config16(vp->pci.bus, vp->pci.device, vp->pci.function, PCI_COMMAND, cmd);
 }
 
-/** Turn `vp`'s MSI-X off, so that the device raises its INTx line. */
-static void vp_msix_off(struct virtio_pci *vp)
-{
-    uint8_t cap =
-        pci_find_capability(vp->pci.bus, vp->pci.device, vp->pci.function, PCI_CAP_ID_MSIX);
-    uint16_t control;
-
-    if (cap == 0 || cap > 0xF4u) {
-        return;
-    }
-    control = pci_read_config16(vp->pci.bus, vp->pci.device, vp->pci.function, (uint8_t)(cap + 2));
-    pci_write_config16(vp->pci.bus, vp->pci.device, vp->pci.function, (uint8_t)(cap + 2),
-                       (uint16_t)(control & ~PCI_MSIX_ENABLE));
-}
-
-/** Give back `vp`'s vectors and slots. */
+/** Mask MSI-X and release its remapping entries before `vp`'s vectors and
+ * slots. Also undoes a partial setup. */
 static void vp_msix_free(struct virtio_pci *vp)
 {
     int e;
 
+    pci_msix_disable(&vp->pci);
     for (e = 0; e <= VIRTIO_MAX_QUEUES; e++) {
         if (vp->vector[e] >= 0) {
             isr_free_vector(vp->vector[e]);
@@ -502,15 +489,14 @@ static uint32_t vp_msix_map(struct virtio_pci *vp)
 
 /**
  * Give `vp` `n` MSI-X entries, entry 0 the configuration's and the rest
- * the queues', each with a vector and a slot, and program every entry but
- * 0, which `pci_msix_enable` writes when irq_start lifts the function mask.
+ * the queues', each with a vector and a slot, and program every entry
+ * through PCI's remapper before irq_start lifts the function mask.
  * MSI-X is held, enabled and masked, meanwhile. Returns 0, or -1 with
  * everything given back.
  */
 static int vp_msix_take(struct virtio_pci *vp, int n)
 {
     int e, k = 0, vector;
-    uint32_t address, data;
 
     if (pci_msix_hold(&vp->pci) != 0) {
         return -1;
@@ -532,14 +518,9 @@ static int vp_msix_take(struct virtio_pci *vp, int n)
         vp->slot[e] = k;
         vp->nentries = e + 1;
         register_isr_handler((uint8_t)vector, vp_slot_handler[k], vp->name);
-        if (e > 0) {
-            uintptr_t entry = vp->msix_table + (uintptr_t)e * 16u;
-
-            pci_msi_message((uint8_t)vector, &address, &data);
-            mmio_write32(entry, address);
-            mmio_write32(entry + 4u, 0);
-            mmio_write32(entry + 8u, data);
-            mmio_write32(entry + 12u, 0);
+        if (pci_msix_entry_set(&vp->pci, vp->msix_table, (unsigned int)e, (uint8_t)vector) != 0) {
+            vp_msix_free(vp);
+            return -1;
         }
     }
     vp_w16(vp, VP_CONFIG_MSIX_VECTOR, 0);
@@ -587,7 +568,7 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
             return 0;
         }
     }
-    vp_msix_off(vp);
+    vp_msix_free(vp);
     vp_w16(vp, VP_CONFIG_MSIX_VECTOR, VIRTIO_NO_VECTOR);
     if (vp->pci.irq == 0 || vp->pci.irq >= 16) {
         vp->mode = VP_IRQ_POLLED;
@@ -604,13 +585,13 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
     return 0;
 }
 
-/** Lift the function mask, programming entry 0 on the way. */
+/** Lift the function mask after every entry has its complete message. */
 static void vp_irq_start(struct virtio_dev *d)
 {
     struct virtio_pci *vp = vp_of(d);
 
     if ((vp->mode == VP_IRQ_MSIX || vp->mode == VP_IRQ_SHARED) && vp->vector[0] >= 0) {
-        (void)pci_msix_enable(&vp->pci, vp->msix_table, (uint8_t)vp->vector[0]);
+        pci_msix_unmask(&vp->pci);
     }
 }
 
@@ -621,7 +602,6 @@ static void vp_irq_release(struct virtio_dev *d)
     struct virtio_pci *vp = vp_of(d);
 
     if (vp->mode == VP_IRQ_MSIX || vp->mode == VP_IRQ_SHARED) {
-        vp_msix_off(vp);
         vp_msix_free(vp);
     }
     vp_intx_disable(vp, 1);
