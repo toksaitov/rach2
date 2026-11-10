@@ -16,7 +16,12 @@ import time
 from wm import record, tone_windows
 
 HERE = Path(__file__).resolve().parent
-ROWS = ("prefix", "draw-64", "draw-32", "maps", "umu")
+ROWS = ("prefix", "draw-64", "draw-32", "maps", "umu", "gpu")
+# The GL renderer Weston and the GL probes must name: virgl in QEMU unless
+# GAMES_RENDERER names another, such as Crocus's "HD Graphics 4400".
+RENDERER = os.environ.get("GAMES_RENDERER", "virgl")
+# WineD3D's renderers the gpu row times the Direct3D 11 round trips on.
+TRIP_RENDERERS = ("gl", "vulkan")
 GAME_ID = "2733"
 # What a refused call leaves in pressure-vessel's log: the strerror(3) text
 # of an errno a kernel without the call or the permission returns.
@@ -224,8 +229,8 @@ class Runner:
         self.record["weston_renderer"] = renderer.group(1) if renderer else None
         self.record["display"] = found.group(1)
         say("weston: renderer %s display %s" % (self.record["weston_renderer"], found.group(1)))
-        if not renderer or "virgl" not in renderer.group(1):
-            raise RuntimeError("weston's GL renderer is not virgl")
+        if not renderer or RENDERER not in renderer.group(1):
+            raise RuntimeError("weston's GL renderer is not %s" % RENDERER)
 
     def start_services(self):
         """
@@ -280,11 +285,22 @@ class Runner:
         good, off, edges, kinds = tone_windows(bytes(samples))
         return status, text, good, len(off), edges, kinds
 
-    def launch(self, name, program, extra=None, wait=True):
-        """Run PROGRAM, a list, through the launcher as NAME, logging to NAME.log."""
+    def launch(self, name, program, extra=None, wait=True, renderer=None):
+        """
+        Run PROGRAM, a list, through the launcher as NAME, logging to NAME.log.
+        With RENDERER, a WINE_D3D_CONFIG renderer other than the route's gl,
+        Proton runs PROGRAM directly with the launcher's settings, which
+        --print lists, and that renderer: the route itself always takes gl.
+        """
         env = dict(self.env)
         env.update(extra or {})
         argv = self.launcher + ["--id", GAME_ID, "--prefix", str(self.prefix), "--"] + program
+        if renderer is not None:
+            listed = subprocess.run(argv[:-len(program) - 1] + ["--print"], env=env,
+                                    stdout=subprocess.PIPE, text=True, check=True).stdout
+            env.update(line.split("=", 1) for line in listed.splitlines() if "=" in line)
+            env["WINE_D3D_CONFIG"] = "renderer=" + renderer
+            argv = [str(self.proton / "proton"), "run"] + program
         if self.umu:
             # pressure-vessel's log, kept per launch, and the work directory
             # and the probes inside the container, where they keep their paths.
@@ -331,12 +347,16 @@ class Runner:
         found = re.search(r"^\s*Video memory: (\d+)MB$", run.stdout, re.M)
         return int(found.group(1)) if found else None
 
-    def probe(self, name, extra=None):
-        """Run the probe NAME.exe; return its status and its output."""
+    def probe(self, name, extra=None, program=None, renderer=None):
+        """
+        Run the probe PROGRAM.exe, NAME.exe by default, as NAME, with WineD3D's
+        RENDERER when one is given (launch); return its status and its output.
+        """
         output = self.work / (name + ".txt")
         env = {"PROBE_OUT": "Z:" + str(output)}
         env.update(extra or {})
-        status = self.launch(name, [str(HERE / "probes" / (name + ".exe"))], env)
+        status = self.launch(name, [str(HERE / "probes" / ((program or name) + ".exe"))], env,
+                             renderer=renderer)
         text = output.read_text(errors="replace") if output.exists() else ""
         (self.out / (name + ".txt")).write_text(text)
         for line in text.splitlines():
@@ -370,8 +390,15 @@ class Runner:
                 status == 0)
 
     def row_draw(self, bits, results, ref):
-        """Run the GL and Direct3D 9 probes of BITS bits and compare their sums."""
+        """Make the prefix and run draw (below)."""
         self.make_prefix()
+        return self.draw(bits, results, ref)
+
+    def draw(self, bits, results, ref):
+        """
+        Run the GL and Direct3D 9 probes of BITS bits in the prefix made and
+        compare their sums with REF's, when REF is not None.
+        """
         ok = True
         for name in ("gl", "d3d9"):
             status, text = self.probe(name + bits)
@@ -383,9 +410,44 @@ class Runner:
             ok = ok and status == 0 and crc is not None and (ref is None or crc.group(1) == want)
             say("%s%s: exit %d crc32 %s linux %s" % (name, bits, status,
                                                      crc.group(1) if crc else None, want))
-        if "virgl" not in (results["gl" + bits]["renderer"] or ""):
-            say("gl%s: the renderer is not virgl" % bits)
+        if RENDERER not in (results["gl" + bits]["renderer"] or ""):
+            say("gl%s: the renderer is not %s" % (bits, RENDERER))
             ok = False
+        return ok
+
+    def row_gpu(self, results, linux):
+        """
+        Run the GL and Direct3D 9 probes at 64 and 32 bits on the machine's
+        own GPU, then time the 64-bit Direct3D 11 round trips on WineD3D's GL
+        and Vulkan renderers. LINUX is the results of the same row under Linux
+        on the same machine, or None when this run records them: each sum must
+        equal Linux's, and each renderer that ran Linux's round trips must run
+        them too. The times are recorded beside Linux's and judge nothing.
+        """
+        self.make_prefix()
+        ok = True
+        for bits in ("64", "32"):
+            ok = self.draw(bits, results, None) and ok
+        for name in [n for n in results if n[:2] in ("gl", "d3")]:
+            want = linux.get(name, {}).get("crc32") if linux is not None else None
+            if linux is not None and results[name]["crc32"] != want:
+                say("%s: crc32 %s differs from linux's %s" % (name, results[name]["crc32"], want))
+                ok = False
+        for renderer in TRIP_RENDERERS:
+            name = "trip-" + renderer
+            status, text = self.probe(name, {"WINEDEBUG": "-all,err+all"}, program="trip64",
+                                      renderer=None if renderer == "gl" else renderer)
+            found = re.search(r"round trips in ([0-9.]+) ms", text)
+            adapter = re.search(r"^adapter: (.*)", text, re.M)
+            results[name] = {"exit": status, "ms": float(found.group(1)) if found else None,
+                             "ok": "TRIP OK" in text,
+                             "adapter": adapter.group(1) if adapter else None}
+            want = linux.get(name) if linux is not None else None
+            say("%s: exit %d ms %s adapter %s linux %s" % (
+                name, status, results[name]["ms"], results[name]["adapter"],
+                want and want.get("ms")))
+            if (want is None or want.get("ok")) and not results[name]["ok"]:
+                ok = False
         return ok
 
     def row_maps(self, results, ref):
@@ -560,7 +622,7 @@ class Runner:
 def main():
     """Run ROW in OUT; compare with ref/linux.json unless GAMES_REFERENCE is set."""
     if len(sys.argv) != 3 or sys.argv[1] not in ROWS:
-        raise SystemExit("usage: run.py prefix|draw-64|draw-32|maps|umu OUT")
+        raise SystemExit("usage: run.py prefix|draw-64|draw-32|maps|umu|gpu OUT")
     row, output = sys.argv[1:]
     if os.geteuid() == 0:
         raise SystemExit("games: run as an ordinary user")
@@ -580,6 +642,10 @@ def main():
             ok = runner.row_maps(results, None if ref is None else ref["maps"])
         elif row == "umu":
             ok = runner.row_umu(results, ref)
+        elif row == "gpu":
+            linux = os.environ.get("GAMES_COMPARE")
+            ok = runner.row_gpu(results, json.loads(Path(linux).read_text())
+                                if linux else None)
         else:
             bits = row.split("-")[1]
             ok = runner.row_draw(bits, results, None if ref is None else ref["draw"])
