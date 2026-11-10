@@ -30,7 +30,6 @@ static volatile unsigned int bkl_claim;
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
 static uint64_t bkl_wait_max_cycles;
-static uint64_t tlb_shootdowns;
 
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
@@ -105,11 +104,10 @@ static void bkl_acquire(struct percpu *cpu)
 }
 
 /** Read the acquisition and shootdown counters with the big lock held. */
-void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint64_t *shootdowns)
+void smp_wait_stats(uint64_t *total_us, uint64_t *max_us)
 {
     *total_us = timer_cycles_us(bkl_wait_cycles);
     *max_us = timer_cycles_us(bkl_wait_max_cycles);
-    *shootdowns = tlb_shootdowns;
 }
 
 void bkl_enter(void)
@@ -257,7 +255,6 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
     int me = (int)arch_cpu_id();
     int c, sent = 0;
 
-    tlb_shootdowns++;
     if (cpus_online < 2) {
         return;
     }
