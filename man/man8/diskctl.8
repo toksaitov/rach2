@@ -105,6 +105,9 @@ free sectors from
 rounded up to a multiple of 2048, to the sector before the next used
 entry or the last sector the table may use once its backup is in the
 disk's last 33 sectors.
+The command refuses a start whose rounding would overflow or whose
+rounded value is below the table's first usable sector, before writing
+either copy of the table.
 Both copies are written as
 .Cm relocate
 writes them, and the table is read again.
@@ -190,6 +193,10 @@ It refuses an MBR disk as
 .Cm relocate
 does, an entry 6 with another name with
 .Ql entry 6 is another partition's ,
+an overflowing start with
+.Ql sector START overflows when rounded up ,
+a rounded start below the table's first usable sector with
+.Ql sector START is below the first usable sector ,
 and a run of fewer than 2048 free sectors with
 .Ql there is not a mebibyte free from sector START .
 .Cm esp
