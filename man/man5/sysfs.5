@@ -75,6 +75,21 @@ for the first VGA function in bus order that decodes memory and I/O, the
 one the firmware's display ran on, as Linux's VGA arbiter takes it, and
 .Ql 0
 for the others.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/resource
+The function's resources, as Linux's pci-sysfs.c writes them: a line for
+each of its six BARs, its expansion ROM and the six resources of SR-IOV,
+and for a bridge four more for its windows, each
+.Ql 0x%016llx 0x%016llx 0x%016llx :
+the first and last address the resource decodes and Linux's
+.Dv IORESOURCE_
+flags.
+A BAR's size is the one the kernel found when it listed the function at
+boot, before any driver started it, with decoding off while it wrote each
+BAR; its address and type are read at the time of the read.
+A resource the function lacks, the upper half of a 64-bit BAR, the SR-IOV
+resources and a bridge's windows are lines of zeros, and so is every line
+of a function a driver reports.
+libpciaccess reads a BAR's size from this file.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/subsystem
 A link to the bus,
 .Pa ../../../bus/pci .

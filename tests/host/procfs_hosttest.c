@@ -4,8 +4,8 @@
  * thread, task ids, descriptor links, /proc/PID/mem, /proc/PID/exe, the
  * paths of /proc/PID/maps, a read of a process's arguments while the process
  * is reaped, oom_score_adj, the cache, NUMA, clock source and DMI files of
- * /sys, and the /sys entries and uevents of a DRM device
- * and of a driver's own attributes, links and PCI identity, and those of
+ * /sys, and the /sys entries and uevents of a DRM device and of a
+ * driver's own attributes, links, PCI identity and resources, and those of
  * a PS/2 keyboard and a USB mouse (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
@@ -950,6 +950,27 @@ uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_
 uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
 {
     return (uint8_t)pci_read_config32(bus, device, function, offset);
+}
+
+/** The resources of the virtio display: a prefetchable BAR 0 of 8 MiB and
+ * a 64-bit BAR 4 of 16 KiB, as pci.c gives them from the walk's sizes. */
+void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r)
+{
+    r->start = 0;
+    r->end = 0;
+    r->flags = 0;
+    if (bus != 0 || device != 4 || function != 0) {
+        return;
+    }
+    if (i == 0) {
+        r->start = 0xFE000000u;
+        r->end = 0xFE7FFFFFu;
+        r->flags = 0x42208u;
+    } else if (i == 4) {
+        r->start = 0xFE800000u;
+        r->end = 0xFE803FFFu;
+        r->flags = 0x14220Cu;
+    }
 }
 
 /** The bus has no function to list. */
@@ -2255,6 +2276,27 @@ static void sysfs_reg_rows(void)
     check(procfs_gen_pciattr(&t, 0xA0, SYSFS_PCI_BOOT_VGA) == 2 &&
               __builtin_memcmp(t.buf, "1\n", 2) == 0,
           "and its boot_vga");
+    t.len = 0;
+    check(procfs_gen_pciresource(&t, 0xA0) == 13 * 57 &&
+              __builtin_memcmp(t.buf, "0x0000000000000000 0x0000000000000000 0x0000000000000000\n",
+                               57) == 0 &&
+              __builtin_memcmp(t.buf + 12 * 57,
+                               "0x0000000000000000 0x0000000000000000 0x0000000000000000\n",
+                               57) == 0,
+          "and a resource file of 13 empty lines, since it has no BARs");
+    t.len = 0;
+    check(procfs_gen_pciresource(&t, 0x20) == 13 * 57 &&
+              __builtin_memcmp(t.buf, "0x00000000fe000000 0x00000000fe7fffff 0x0000000000042208\n",
+                               57) == 0 &&
+              __builtin_memcmp(t.buf + 4 * 57,
+                               "0x00000000fe800000 0x00000000fe803fff 0x000000000014220c\n",
+                               57) == 0 &&
+              __builtin_memcmp(t.buf + 5 * 57,
+                               "0x0000000000000000 0x0000000000000000 0x0000000000000000\n",
+                               57) == 0,
+          "a real function's resource file has its BARs in Linux's format, a line each");
+    t.len = 0;
+    check(procfs_gen_pciresource(&t, 0x28) == -ENOENT, "and a function not there has none");
     t.len = 0;
     check(procfs_gen_uevent(&t, SYSFS_PCI_DEVICE, 0xA0) > 0 && t.buf &&
               __builtin_strstr(t.buf, "PCI_ID=8086:0A16\n") &&

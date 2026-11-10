@@ -455,7 +455,8 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_PCI_CLASS            7
 #define SYSFS_PCI_REVISION         8
 #define SYSFS_PCI_BOOT_VGA         9
-#define SYSFS_PCI_ATTRS            10
+#define SYSFS_PCI_RESOURCE         10
+#define SYSFS_PCI_ATTRS            11
 
 /** The name of the file `attr` of a PCI function's directory, or NULL for a
  * number with none. */

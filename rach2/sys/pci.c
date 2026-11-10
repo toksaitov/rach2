@@ -157,9 +157,11 @@ static void pci_read_device_info(uint8_t bus, uint8_t device, uint8_t function, 
  * the buses that exist (`pci_list_build` has the other root buses). The
  * list is kept in the order of bus, device and function.
  *
- * The list holds each function's place, identity, class and header type;
- * what may change after the walk (the BARs, the interrupt line, a bridge's
- * bus numbers) is read again when a search returns it. The first search is
+ * The list holds each function's place, identity, class and header type,
+ * and the size of each BAR and of its ROM, which the walk finds as Linux's
+ * enumeration does (`pci_list_size`); what may change after the walk (the
+ * BARs' addresses, the interrupt line, a bridge's bus numbers) is read
+ * again when a search returns it. The first search is
  * the page cache's window probe, early in the boot and before a second
  * processor runs, so the walk needs no lock. No function is added or
  * removed after it: the kernel has no PCI hot plug.
@@ -179,6 +181,7 @@ struct pci_place {
     uint16_t device_id;
     uint8_t class_code;
     uint8_t subclass;
+    uint64_t size[PCI_RESOURCES]; /* bytes each BAR and the ROM decode; 0 for none */
 };
 
 /* The list starts in `pci_first` and moves to the heap, twice as long each
@@ -197,8 +200,96 @@ static bool pci_id_absent(uint32_t id)
 }
 
 /**
- * Append a function to the list, reading its class; false, with the reason
- * in the log, when the list is full and no longer one can be had.
+ * The decode size of a BAR from what it read back with all ones written,
+ * `sz`, under the bits `mask` that may hold an address, as Linux's
+ * pci_size: the lowest such bit set, or 0 when none is.
+ */
+static uint64_t pci_decode_size(uint64_t sz, uint64_t mask)
+{
+    sz &= mask;
+    return sz & ~(sz - 1);
+}
+
+/**
+ * Write `mask` over the register at `off` of a function, read what stays,
+ * and put its value back, as Linux's __pci_read_base: what was read.
+ */
+static uint32_t pci_size_reg(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint32_t mask)
+{
+    uint32_t v = pci_read_config32(bus, dev, fn, off), sz;
+
+    pci_write_config32(bus, dev, fn, off, v | mask);
+    sz = pci_read_config32(bus, dev, fn, off);
+    pci_write_config32(bus, dev, fn, off, v);
+    return sz;
+}
+
+/** A low dword or ROM register's read-back as Linux takes it: all ones,
+ * from a function that does not answer, as 0. */
+static uint32_t pci_answered(uint32_t sz)
+{
+    return sz == 0xFFFFFFFFu ? 0 : sz;
+}
+
+/**
+ * Size the BARs and the ROM of the function `p` lists, as Linux's
+ * pci_read_bases does at enumeration: six BARs and the ROM at 0x30 for a
+ * header of type 0, two and the ROM at 0x38 for a bridge, one for a CardBus
+ * bridge. Memory and I/O decoding are off meanwhile, so that no access
+ * lands at an address half written, but for a host bridge, which Linux
+ * keeps decoding (quirk_mmio_always_on). It runs in the walk, before any
+ * driver has started the device.
+ */
+static void pci_list_size(struct pci_place *p)
+{
+    int bars = p->header == 0 ? 6 : p->header == 1 ? 2 : p->header == 2 ? 1 : 0;
+    uint8_t rom = p->header == 0 ? 0x30 : p->header == 1 ? 0x38 : 0;
+    uint8_t off;
+    uint16_t cmd = 0;
+    uint32_t v, lo;
+    uint64_t sz;
+    int i, quiet = !(p->class_code == 0x06 && p->subclass == 0x00);
+
+    for (i = 0; i < PCI_RESOURCES; i++) {
+        p->size[i] = 0;
+    }
+    if (quiet) {
+        cmd = pci_read_config16(p->bus, p->device, p->function, PCI_COMMAND);
+        if (cmd & (PCI_CMD_IO_SPACE | PCI_CMD_MEMORY_SPACE)) {
+            pci_write_config16(p->bus, p->device, p->function, PCI_COMMAND,
+                               (uint16_t)(cmd & ~(PCI_CMD_IO_SPACE | PCI_CMD_MEMORY_SPACE)));
+        }
+    }
+    for (i = 0; i < bars; i++) {
+        off = (uint8_t)(PCI_BAR0 + 4 * i);
+        v = pci_read_config32(p->bus, p->device, p->function, off);
+        lo = pci_answered(pci_size_reg(p->bus, p->device, p->function, off, 0xFFFFFFFFu));
+        if (v & 0x01) {
+            p->size[i] = pci_decode_size(lo, 0xFFFCu);
+        } else if (pci_bar_is_64bit(v) && i + 1 < bars) {
+            sz = (uint64_t)pci_size_reg(p->bus, p->device, p->function, (uint8_t)(off + 4),
+                                        0xFFFFFFFFu)
+                     << 32 |
+                 lo;
+            p->size[i++] = pci_decode_size(sz, 0xFFFFFFFFFFFFFFF0ULL);
+        } else {
+            p->size[i] = pci_decode_size(lo, 0xFFFFFFF0u);
+        }
+    }
+    if (rom) {
+        p->size[PCI_ROM_RESOURCE] = pci_decode_size(
+            pci_answered(pci_size_reg(p->bus, p->device, p->function, rom, 0xFFFFF800u)),
+            0xFFFFF800u);
+    }
+    if (quiet && (cmd & (PCI_CMD_IO_SPACE | PCI_CMD_MEMORY_SPACE))) {
+        pci_write_config16(p->bus, p->device, p->function, PCI_COMMAND, cmd);
+    }
+}
+
+/**
+ * Append a function to the list, reading its class and sizing its BARs;
+ * false, with the reason in the log, when the list is full and no longer
+ * one can be had.
  */
 static bool pci_list_add(uint8_t bus, uint8_t device, uint8_t function, uint32_t id, uint8_t header)
 {
@@ -229,6 +320,7 @@ static bool pci_list_add(uint8_t bus, uint8_t device, uint8_t function, uint32_t
     p->device_id = (uint16_t)(id >> 16);
     p->subclass = (uint8_t)(cls >> 16);
     p->class_code = (uint8_t)(cls >> 24);
+    pci_list_size(p);
     return true;
 }
 
@@ -414,6 +506,54 @@ bool pci_nth(int nth, pci_device_t *out)
     }
     pci_list_take(nth, out);
     return true;
+}
+
+void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r)
+{
+    const struct pci_place *p = NULL;
+    uint8_t off;
+    uint32_t v;
+    int n = pci_list_count(), k;
+
+    r->start = 0;
+    r->end = 0;
+    r->flags = 0;
+    for (k = 0; k < n; k++) {
+        if (pci_list[k].bus == bus && pci_list[k].device == device &&
+            pci_list[k].function == function) {
+            p = &pci_list[k];
+            break;
+        }
+    }
+    if (p == NULL || i < 0 || i >= PCI_RESOURCES || p->size[i] == 0) {
+        return;
+    }
+    if (i == PCI_ROM_RESOURCE) {
+        v = pci_read_config32(bus, device, function, p->header == 1 ? 0x38 : 0x30);
+        r->start = v & 0xFFFFF800u;
+        r->flags = (v & 0x01u) | PCI_IORESOURCE_MEM | PCI_IORESOURCE_PREFETCH |
+                   PCI_IORESOURCE_READONLY | PCI_IORESOURCE_SIZEALIGN;
+    } else {
+        off = (uint8_t)(PCI_BAR0 + 4 * i);
+        v = pci_read_config32(bus, device, function, off);
+        if (v & 0x01u) {
+            r->start = v & 0xFFFFFFFCu;
+            r->flags = (v & 0x03u) | PCI_IORESOURCE_IO;
+        } else {
+            r->start = v & 0xFFFFFFF0u;
+            r->flags = (v & 0x0Fu) | PCI_IORESOURCE_MEM;
+            if (v & 0x08u) {
+                r->flags |= PCI_IORESOURCE_PREFETCH;
+            }
+            if (pci_bar_is_64bit(v)) {
+                r->start |= (uint64_t)pci_read_config32(bus, device, function, (uint8_t)(off + 4))
+                            << 32;
+                r->flags |= PCI_IORESOURCE_MEM_64;
+            }
+        }
+        r->flags |= PCI_IORESOURCE_SIZEALIGN;
+    }
+    r->end = r->start + p->size[i] - 1;
 }
 
 bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_device_t *out)
