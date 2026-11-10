@@ -56,7 +56,8 @@ def main():
     graphics = Path(__file__).resolve().parent.parent
     if mode == "webgl":
         name = "%s-2.0.1-00.pages" % browser
-        args = ["webgl", str(graphics / "ref/debian/virtio-vga" / ("webgl-" + browser + "-2.0.1") / name), str(got / name)]
+        base = graphics / "ref/debian/virtio-vga" / ("webgl-" + browser + "-2.0.1")
+        args = ["webgl", str(base / name), str(got / name)]
     elif mode.startswith("video-"):
         clip = mode[6:] + (".mp4" if mode.startswith("video-h264-") else ".webm")
         name = browser + "-" + clip
@@ -73,6 +74,9 @@ def main():
         assert expected_switches["version"] == actual_switches["version"], "different browser binaries"
         print("browser-judge: result: pass %s %s" % (browser, mode))
         return
+    versions = [next((line for line in (path / "record").read_text().splitlines()
+                      if line.startswith("browser ")), None) for path in (base, got)]
+    assert versions[0] and versions[0] == versions[1], ("different browser binaries", versions)
     subprocess.run([sys.executable, "-I", str(graphics / "runners/judge.py")] + args, check=True)
     print("browser-judge: result: pass %s %s" % (browser, mode))
 
