@@ -245,6 +245,7 @@ constVariable:*tests/lockwaitprobe.c
 constVariable:*tests/mixprobe.c
 constVariable:*tests/loopdevprobe.c
 constVariable:*tests/sigprobe.c
+constVariable:*tests/wow64probe.c
 constVariable:*tools/audio/resamplebench.c
 unassignedVariable:*tests/devprobe.c
 unassignedVariable:*tests/loopprobe.c
