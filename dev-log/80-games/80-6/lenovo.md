@@ -1,6 +1,6 @@
 # The silent Lenovo install
 
-The task is blocked by the priority-inheritance futex implementation (80-10c). Keep this prepared root and its gzip on the testing host. When the dependency closes, use the kernel then, complete the QEMU save/cache proof, update the input identities and readiness note below, and hand the step back with `trial`. The manager has withheld the go for this snapshot because that kernel will change.
+The priority-inheritance futex implementation (80-10c) is merged. The kernel below also blocks a zero relative sleep until the next tick. Keep the prepared root and its gzip on the testing host. The actual QEMU save and cache-hit proof remains open; this step has no manager's go and must not run until that proof and the readiness review are complete.
 
 These are the remaining install commands for task 2653, after the manager's go. They install and verify files; they start no game, desktop or sound. No notice is needed beyond the boots' own text. The save/cache check remains blocked separately as [the record](../80-6.md) says. Do not merge or close the task until both remaining subtasks pass.
 
@@ -8,8 +8,8 @@ These are the remaining install commands for task 2653, after the manager's go. 
 
 The trial root is a private copy of the GNU test root used in the QEMU proof, with the games layer's innoextract and three Boost libraries, their notices, the task's scripts and manifests, and an updated loader cache. It has init's SSH service and no automatic desktop. Its source marker is `/etc/rach2/task2653`. It is a trial image, not a release.
 
-* Code: task/2653, with the installer, context-switch counts and compat TLS fixes.
-* Kernel: `build/x86_64/rach2/kernel`, 3,841,440 bytes, SHA-256 `f791483d90805ee3888579b363ce5f9d08179b7f2103b9bb949f27b09b05c9ab`.
+* Code: task/2653 at `87de537b2`, with the installer, context-switch counts, compat TLS, PI futexes and zero-sleep fix.
+* Kernel: `build/x86_64/rach2/kernel`, 4,029,608 bytes, SHA-256 `54dbe3d11826a2cf798a89e1fe7572b083f3310bdfe2f121015dd283b8fe91db`.
 * Static bootctl: `build/x86_64/utils/sbin/bootctl`, 83,312 bytes, SHA-256 `b342aa2edc01ef6e0ec2e45080ef1f56d6de719292c6a32812680db4250fba49`.
 * Root: `/home/testing/rach2/build/worktrees/codex/build/runs/task2653/root-2961387c696576a3.img`, 24 GiB, SHA-256 `2961387c696576a3af5081f913a50aa94ecd491361b627d250caa8a1e0e3e371`. Its gzip is beside it, 2.1 GiB, SHA-256 `da87025a4070fc947085c9479eae6973933deab7fe4856bb516f4221f2a4710b`. Both are kept until this task closes.
 * Installer source: the Mac's `build/cache/crysis/`, with the three original files and `SHA256SUMS`; never the unpacked `/opt` copy.
@@ -27,7 +27,7 @@ The three digests must match above. A different kernel needs a new readiness rev
 
 ## Readiness
 
-This task adds no register sequence, MMIO access, interrupt handler or hardware wait. Its kernel changes report counters already kept by the scheduler and change the saved FS/GS base of an i386 clone whose selector names its new TLS descriptor. Those bases are 32-bit descriptor addresses and therefore canonical. The exact kernel passed the native x86-64 and compat probes; the shared counter code passed on native i686 too. The installer is a native x86-64 process and ran to all 2,358 hashes in QEMU. The step starts no i386 game and no GPU client.
+This task adds no register sequence, MMIO access, interrupt handler or hardware wait. Its kernel changes report counters already kept by the scheduler and change the saved FS/GS base of an i386 clone whose selector names its new TLS descriptor. Those bases are 32-bit descriptor addresses and therefore canonical. The exact kernel passed the new zero-sleep probe with musl on x86-64 and the compat ABI, and with glibc on x86-64. The same source passed on the native i686 kernel. Every group of 16 zero sleeps reported 16 voluntary switches with a runnable thread on the same processor; before the fix all three groups reported 0, and Linux reported 16. The PI task's author recorded its musl and glibc probes on all three ABIs in that task. PI futexes use the existing wait queues and scheduler, and the zero sleep uses its existing interruptible timed wait. Neither adds a hardware register path. The installer is a native x86-64 process and ran to all 2,358 hashes in QEMU. The step starts no i386 game and no GPU client.
 
 The kernel is nevertheless newer than the Lenovo's installed release and needs the manager's go for the whole branch, including other tasks' changes. Boot with `intel_iommu=off intremap=off` and without `rach2.i915`, as the earlier data-partition trial did. This leaves translation off and uses the firmware framebuffer. No watchdog is opened. The TCO and touchpad paths are the already trialled ones, subject to the manager checking the exact branch delta. A new native hardware path not covered by those trials must be reviewed and tried by its owner first.
 

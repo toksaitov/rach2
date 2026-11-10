@@ -1,0 +1,124 @@
+[New LWP 216 (id 2)]
+[New LWP 215 (id 3)]
+[New LWP 214 (id 4)]
+[New LWP 213 (id 5)]
+[New LWP 212 (id 6)]
+[New LWP 211 (id 7)]
+[New LWP 210 (id 8)]
+[New LWP 209 (id 9)]
+[New LWP 208 (id 10)]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/libthread_db.so.1".
+[Switching to thread 1 (Thread 0x7eae34135740 (LWP 203))]
+0x00007eae3424ad09 in syscall () from /lib/libc.so.6
+orig_rax       0x1c1               449
+rax            0xfffffffffffffffc  -4
+rdi            0x1000fee10         4296011280
+rsi            0x1                 1
+rdx            0x0                 0
+r10            0x0                 0
+rip            0x7eae3424ad09      0x7eae3424ad09 <syscall+25>
+0x7eae319a5780 <g_phys_mutex>:	0x0000000100000000	0x000000007ffffffe
+0x7eae319a5790 <g_phys_mutex+16>:	0x00000000ffffffff	0x0000000000000000
+0x7eae319a57a0 <g_phys_mutex+32>:	0x0000000000000000	0x000055ec2bb3b3c0
+0x7eae319a57b0 <pulse_ctx>:	0x000055ec2b9668d0	0x0000000000000028
+
+Thread 10 (Thread 0x7eae326cc6c0 (LWP 208) "llvmpipe-0"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc9bcb in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 9 (Thread 0x7eae318676c0 (LWP 209) "llvmpipe-1"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc9bcb in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 8 (Thread 0x7eae310666c0 (LWP 210) "llvmpipe-2"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc9bcb in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 7 (Thread 0x7eae174566c0 (LWP 211) "llvmpipe-3"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc9bcb in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 6 (Thread 0x7eae16c556c0 (LWP 212) "Main"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc593b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 5 (Thread 0x7eae164546c0 (LWP 213) "Main"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc593b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 4 (Thread 0x7eae15c536c0 (LWP 214) "Main"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc593b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 3 (Thread 0x7eae154526c0 (LWP 215) "Main"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae17cc593b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 2 (Thread 0x7eae14c516c0 (LWP 216) "Crysis.:disk$0"):
+#0  0x00007eae341d546e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007eae341c9ce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007eae341c9fef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007eae341cc680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+#4  0x00007eae17a06c5d in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#5  0x00007eae179d22ab in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#6  0x00007eae17a06b8b in ?? () from /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so
+#7  0x00007eae341cd07f in start_thread () from /lib/libc.so.6
+
+Thread 1 (Thread 0x7eae34135740 (LWP 203) "Main"):
+#0  0x00007eae3424ad09 in syscall () from /lib/libc.so.6
+#1  0x00007eae34077dde in fsync_wait_objects () from /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+#2  0x00007eae340a503c in NtWaitForSingleObject () from /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+#3  0x00007eae34092a06 in __wine_syscall_dispatcher () from /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+#4  0x00007eae34090b68 in server_init_process_done () from /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+#5  0x00007eae3437017a in ?? ()
+#6  0x0000000000000000 in ?? ()
+[Inferior 1 (process 203) detached]
