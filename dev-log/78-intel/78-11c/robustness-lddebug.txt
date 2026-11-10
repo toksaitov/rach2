@@ -1,0 +1,65 @@
+bash: line 1:   716 Segmentation fault         LD_DEBUG=files VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_hasvk_icd.json setarch -R ./deqp-vk --deqp-caselist-file=/root/t2651/bt/case.txt --deqp-log-filename=/root/t2651/bt/r2.qpa --deqp-log-images=disable --deqp-log-shader-sources=disable > /root/t2651/bt/ld.txt 2>&1
+exit 139
+       716:	file=libc.so.6 [0];  generating link map
+       716:	file=libpng16.so.16 [0];  generating link map
+       716:	file=libEGL.so.1 [0];  generating link map
+       716:	file=libstdc++.so.6 [0];  generating link map
+       716:	file=libm.so.6 [0];  generating link map
+       716:	file=libgcc_s.so.1 [0];  generating link map
+       716:	file=libc.so.6 [0];  generating link map
+       716:	file=libz.so.1 [0];  generating link map
+       716:	file=libGLdispatch.so.0 [0];  generating link map
+       716:	file=libvulkan.so.1 [0];  generating link map
+       716:	file=libvulkan_intel_hasvk.so [0];  generating link map
+       716:	file=libdrm.so.2 [0];  generating link map
+       716:	file=libzstd.so.1 [0];  generating link map
+       716:	file=libxcb.so.1 [0];  generating link map
+       716:	file=libX11-xcb.so.1 [0];  generating link map
+       716:	file=libxcb-dri3.so.0 [0];  generating link map
+       716:	file=libxcb-present.so.0 [0];  generating link map
+       716:	file=libxcb-xfixes.so.0 [0];  generating link map
+       716:	file=libxcb-sync.so.1 [0];  generating link map
+       716:	file=libxcb-randr.so.0 [0];  generating link map
+       716:	file=libxcb-shm.so.0 [0];  generating link map
+       716:	file=libxshmfence.so.1 [0];  generating link map
+       716:	file=libwayland-client.so.0 [0];  generating link map
+       716:	file=libexpat.so.1 [0];  generating link map
+       716:	file=libXau.so.6 [0];  generating link map
+       716:	file=libXdmcp.so.6 [0];  generating link map
+       716:	file=libffi.so.8 [0];  generating link map
+       716:	file=libVkLayer_MESA_device_select.so [0];  generating link map
+       716:	calling fini: /usr/lib/x86_64-linux-gnu/libvulkan_intel_hasvk.so [0]
+       716:	file=libvulkan_intel_hasvk.so [0];  generating link map
+       716:	
+       716:	calling fini: /usr/lib/x86_64-linux-gnu/libvulkan.so.1 [0]
+       716:	
+       716:	
+       716:	file=/usr/lib/x86_64-linux-gnu/libvulkan.so.1 [0];  destroying link map
+[  190.168000] vm: fault: killing pid 601: bad read at 0x7e8f53e4c8e7 (err 0x4)
+[  312.466000] vm: fault: killing pid 716: bad read at 0x7effff853290 (err 0x14)
+       716:	file=libvulkan.so.1 [0];  generating link map
+       716:	  dynamic: 0x00007effff896580  base: 0x00007effff815000   size: 0x0000000000082388
+       716:	    entry: 0x00007effff815000  phdr: 0x00007effff815040  phnum:                  9
+       716:	
+289-       716:	
+290-       716:	
+291:       716:	file=/usr/lib/x86_64-linux-gnu/libVkLayer_MESA_device_select.so [0];  destroying link map
+292-       716:	
+293-       716:	calling fini: /usr/lib/x86_64-linux-gnu/libvulkan_intel_hasvk.so [0]
+--
+342-       716:	
+343-       716:	
+344:       716:	file=/usr/lib/x86_64-linux-gnu/libvulkan_intel_hasvk.so [0];  destroying link map
+345-       716:	
+       716:	file=/usr/lib/x86_64-linux-gnu/libexpat.so.1 [0];  destroying link map
+       716:	
+       716:	file=/usr/lib/x86_64-linux-gnu/libXau.so.6 [0];  destroying link map
+       716:	
+       716:	file=/usr/lib/x86_64-linux-gnu/libXdmcp.so.6 [0];  destroying link map
+       716:	
+       716:	file=/usr/lib/libffi.so.8 [0];  destroying link map
+       716:	
+       716:	calling fini: /usr/lib/x86_64-linux-gnu/libvulkan.so.1 [0]
+       716:	
+       716:	
+       716:	file=/usr/lib/x86_64-linux-gnu/libvulkan.so.1 [0];  destroying link map
