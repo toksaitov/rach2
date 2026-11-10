@@ -410,7 +410,7 @@ int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int 
     state->multiplier = 1;
     state->leds_failed = 0;
     state->shown_len = -1;
-    klog(KLOG_INFO, "usb", "hid: device %d: %s on %s, %d input devices", device, hid->name,
+    klog(KLOG_INFO, "usb", "hid: device %d: %s on %s, input devices: %d", device, hid->name,
          state->phys, (int)hid->ninputs);
     return 0;
 }
