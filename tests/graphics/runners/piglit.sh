@@ -3,29 +3,34 @@
 # guest's Mesa, inside a graphics guest, Rach2's or Debian's, as an ordinary
 # user.
 #
-#   piglit.sh [-g] [-o OUT] PART...|all
-#   piglit.sh [-g] [-o OUT] -l LIST [-e N] [-s START]
+#   piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] PART...|all
+#   piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N] [-s START]
 #
 # Runs the tests of piglit's `quick` profile whose names each PART's pattern
-# matches, or every part's with `all`, or with -l the tests LIST names, by
-# `piglit run`, on the surfaceless EGL platform, which draws into buffers of
-# its own with no display server, the same in both guests (Rach2's root has
-# no Xvfb). GL tests that need a window system skip or crash there, on both
-# sides alike. PIGLIT_NO_FAST_SKIP=1
-# makes each test check its own requirements: piglit's fast skip asks wflinfo
-# for the GL versions, which it does not give on this platform, and skips
-# every test that names one.
+# matches, or every QEMU part's with `all`, or with -l the tests LIST names,
+# by `piglit run`. On the surfaceless EGL platform, the default, it draws
+# into buffers of its own with no display server, the same in both guests
+# (Rach2's root has no Xvfb); GL tests that need a window system skip or
+# crash there, on both sides alike. `-p gbm` runs on the machine's own GPU
+# through GBM, as step 9 of the second discovery run took Linux's reference
+# on the Lenovo, with EGL_PLATFORM=surfaceless, as its reruns of the EGL
+# tests had it, so that a test that opens EGL's default display does not
+# take X11's. PIGLIT_NO_FAST_SKIP=1 makes each test check its own
+# requirements: piglit's fast skip asks wflinfo for the GL versions, which
+# it does not give on the surfaceless platform and which Rach2's root lacks,
+# and skips every test that names one.
 #
-# The tests draw on llvmpipe, which LIBGL_ALWAYS_SOFTWARE=1 names, so that
-# EGL tries no render node of the display first, a test process on each CPU
-# (`piglit run -c`); with -g they draw on the device EGL finds, the guest's
-# GPU, virgl under the virgl display profile, one test at a time (`piglit
-# run -1`): QEMU draws every context of the guest in one thread, so tests at
-# once gain little there, and on the testing PC eight heavy ones at once
-# lose the host's D3D12 device, which ends QEMU
-# (dev-log/77-vgpu/upstream.md). The record's `renderer` line is what
-# `eglinfo -B -p surfaceless` names with the same environment: the renderer,
-# and the OpenGL and OpenGL ES versions.
+# On the surfaceless platform the tests draw on llvmpipe, which
+# LIBGL_ALWAYS_SOFTWARE=1 names, so that EGL tries no render node of the
+# display first, a test process on each CPU (`piglit run -c`); with -g they
+# draw on the device EGL finds, the guest's GPU, virgl under the virgl
+# display profile, one test at a time (`piglit run -1`): QEMU draws every
+# context of the guest in one thread, so tests at once gain little there,
+# and on the testing PC eight heavy ones at once lose the host's D3D12
+# device, which ends QEMU (dev-log/77-vgpu/upstream.md). Through GBM they
+# run a process on each CPU, or one at a time with -g. The record's
+# `renderer` line is what `eglinfo -B` names on the same platform with the
+# same environment: the renderer, and the OpenGL and OpenGL ES versions.
 #
 # The parts, by the name of the patterns:
 #
@@ -36,6 +41,17 @@
 #   sync         GL and EGL fences: ARB_sync, EGL_KHR_fence_sync and
 #                EGL_ANDROID_native_fence_sync, which takes sync files
 #   dmabuf       EXT_image_dma_buf_import, which takes dma-bufs
+#
+# and the Lenovo's five, which together are the whole profile, each some 4
+# to 10 minutes of Linux's run there:
+#
+#   quick-glsl1  the GLSL 1.x tests
+#   quick-glsl2  the other GLSL versions and the GLSL and assembly parsers
+#   quick-arb1   the ARB extensions from a to g
+#   quick-arb2   the ARB extensions from h to z
+#   quick-rest   everything else
+#
+# The `all` of the QEMU suites runs the first seven.
 #
 # LIST has one test's name a line, as `piglit print-cmd --format '{name}'`
 # gives it; a line that begins with `#` is a comment, and the file is
@@ -57,8 +73,9 @@
 # or subtest in the order of their names: `NAME RESULT`, NAME being
 # piglit's, which may hold blanks, with `@SUBTEST` for a subtest, and RESULT
 # piglit's: pass, skip, fail, warn, crash, timeout, dmesg-warn, dmesg-fail,
-# incomplete or notrun. A list also leaves NAME.sample, the names it ran.
-# Each part or list prints one line:
+# incomplete or notrun. A list also leaves NAME.sample, the names it ran,
+# and a part PART.scope, its patterns in judge.py's SCOPE form. Each part or
+# list prints one line:
 #
 #   piglit: result: PART RESULTS results: pass P skip S fail F other O
 #   piglit: result: NAME tests T of M every N from START, RESULTS results:
@@ -84,21 +101,35 @@ pattern()
         fbo) echo '^spec@arb_framebuffer_object@' ;;
         sync) echo '^spec@(arb_sync|egl_khr_fence_sync|egl_android_native_fence_sync)@' ;;
         dmabuf) echo '^spec@ext_image_dma_buf_import@' ;;
+        quick-glsl1) echo '^spec@glsl-1\.' ;;
+        quick-glsl2) echo '^(spec@glsl-[34e]|glslparsertest@|asmparsertest@)' ;;
+        quick-arb1) echo '^spec@arb_[a-g]' ;;
+        quick-arb2) echo '^spec@arb_[h-z]' ;;
+        quick-rest) echo '.' ;;
         *) return 1 ;;
     esac
+}
+
+# others PART: the parts whose tests PART's pattern takes too and leaves to
+# them.
+others()
+{
+    [ "$1" != quick-rest ] || echo quick-glsl1 quick-glsl2 quick-arb1 quick-arb2
 }
 parts='gl-1.0 gl-1.1 glsl-1.10 glsl-1.20 fbo sync dmabuf'
 
 usage()
 {
-    echo "usage: piglit.sh [-g] [-o OUT] PART...|all | piglit.sh [-g] [-o OUT] -l LIST [-e N] [-s START]" >&2
+    echo "usage: piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] PART...|all" \
+        "| piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N] [-s START]" >&2
     exit 2
 }
 
-out=. gpu=0 list='' every=1 start=1
-while getopts o:gl:e:s: o; do
+out=. gpu=0 list='' every=1 start=1 platform=surfaceless
+while getopts o:gp:l:e:s: o; do
     case $o in
         o) out=$OPTARG ;;
+        p) platform=$OPTARG ;;
         g) gpu=1 ;;
         l) list=$OPTARG ;;
         e) every=$OPTARG ;;
@@ -108,6 +139,7 @@ while getopts o:gl:e:s: o; do
 done
 shift $((OPTIND - 1))
 case $every$start in *[!0-9]*) usage ;; esac
+case $platform in surfaceless | gbm) ;; *) usage ;; esac
 if [ -n "$list" ]; then
     [ $# -eq 0 ] && [ "$every" -ge 1 ] && [ "$start" -ge 1 ] && [ "$start" -le "$every" ] || usage
     [ -f "$list" ] || { echo "piglit: no list $list" >&2; exit 1; }
@@ -140,17 +172,26 @@ runner_record "repetitions 1"
 PIGLIT_COMPRESSION=none PIGLIT_NO_FAST_SKIP=1
 export PIGLIT_COMPRESSION PIGLIT_NO_FAST_SKIP
 if [ "$gpu" -eq 1 ]; then
-    at_once=-1
-    runner_record "piglit $(piglit_version), platform surfaceless_egl, one test at a time"
+    at_once=-1 at_once_text='one test at a time'
+else
+    at_once=-c at_once_text='a process on each CPU'
+fi
+if [ "$platform" = gbm ]; then
+    piglit_platform=gbm
+    EGL_PLATFORM=surfaceless
+    export EGL_PLATFORM
+    runner_record "env PIGLIT_NO_FAST_SKIP=1 EGL_PLATFORM=surfaceless"
+elif [ "$gpu" -eq 1 ]; then
+    piglit_platform=surfaceless_egl
     runner_record "env PIGLIT_NO_FAST_SKIP=1"
 else
-    at_once=-c
+    piglit_platform=surfaceless_egl
     LIBGL_ALWAYS_SOFTWARE=1
     export LIBGL_ALWAYS_SOFTWARE
-    runner_record "piglit $(piglit_version), platform surfaceless_egl, a process on each CPU"
     runner_record "env LIBGL_ALWAYS_SOFTWARE=1 PIGLIT_NO_FAST_SKIP=1"
 fi
-runner_record "renderer $(eglinfo -B -p surfaceless 2> /dev/null | awk -F': ' '
+runner_record "piglit $(piglit_version), platform $piglit_platform, $at_once_text"
+runner_record "renderer $(eglinfo -B -p "$platform" 2> /dev/null | awk -F': ' '
     /^OpenGL core profile renderer:/ { r = $2 }
     /^OpenGL core profile version:/ { v = $2 }
     /^OpenGL ES profile version:/ { e = $2 }
@@ -162,7 +203,7 @@ run_piglit()
 {
     log=$1 dir=$2
     shift 2
-    piglit run "$at_once" -o -p surfaceless_egl -l dummy "$@" quick "$dir" > "$log" 2>&1
+    piglit run "$at_once" -o -p "$piglit_platform" -l dummy "$@" quick "$dir" > "$log" 2>&1
 }
 
 # summarize NAME WHAT JSON...: write NAME.results from piglit's results in
@@ -249,8 +290,14 @@ EOF
     fi
 else
     for part; do
-        runner_record "part $part $(pattern "$part")"
-        if ! run_piglit "$out/$part.log" "$RUNNER_WORK/$part" -t "$(pattern "$part")"; then
+        set -- -t "$(pattern "$part")"
+        echo "~$(pattern "$part")" > "$out/$part.scope"
+        for other in $(others "$part"); do
+            set -- "$@" -x "$(pattern "$other")"
+            echo "!$(pattern "$other")" >> "$out/$part.scope"
+        done
+        runner_record "part $part $*"
+        if ! run_piglit "$out/$part.log" "$RUNNER_WORK/$part" "$@"; then
             echo "piglit: $part: piglit run failed: $(tail -n 3 "$out/$part.log")" >&2
             status=1
             continue
