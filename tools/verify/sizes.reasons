@@ -785,6 +785,8 @@ tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the 
 tests/vfsprobe.c:probe_main complexity 102 a probe, one sequence of steps in the order the log records them
 tests/vfsprobe.c:probe_main lines 273 a probe, one sequence of steps in the order the log records them
 
+tests/wow64probe.c:int80_6 params 7 the i386 syscall number and its six register arguments
+
 tools/etude/guest/guest.c:load_invocation complexity 60 a parser over an external format, one check per field in the format's order
 
 tools/etude/guest/wire.c:wire_encode params 10 the parameters are the fields of one message; a struct for them would be filled and unpacked once
@@ -908,4 +910,3 @@ tests/cases/machine/wifi_scenario.c:case_enterprise complexity 29 a scenario, on
 utils/wifi.c:select_wait complexity 27 an event loop, one arm per event wpa_supplicant sends, read as a table
 
 utils/wsimmedium.c:medium_check complexity 26 a parser over an external format, one check per field in the format's order
-tests/wow64probe.c:int80_6 params 7 the i386 syscall number and its six register arguments

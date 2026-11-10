@@ -50,9 +50,12 @@ int ia32_msghdr_get(struct kernel_msghdr *h, uintptr_t u)
 }
 
 /**
- * Write the received lengths and flags of `h` to the i386 header at `u`.
- * Leave its pointers unchanged. The caller holds the big lock; the copies
- * may sleep. Returns 0 or -EFAULT, possibly after a partial write.
+ * Write what a receive gives back of `h` into the i386 msghdr at `u`: the
+ * name's length, only when `h` has a name buffer, as Linux writes it, then
+ * the control length and the flags; the pointers and the vector's length
+ * are left as the caller wrote them. The caller holds the big lock; the
+ * copies may sleep. Returns 0, or -EFAULT with the fields before the one
+ * that failed written.
  */
 int ia32_msghdr_put(uintptr_t u, const struct kernel_msghdr *h)
 {

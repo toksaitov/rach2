@@ -346,20 +346,12 @@ static void limit_rows(void)
 }
 
 /**
- * Run every row; the exit status is the count of failed checks, at most 100.
- *
- * A stack grows down to a page below it at or above its limit, and the
- * pages between come into the region, to fault in later. A page at or above
- * the stack's start is no growth, and a space with no stack has none to
- * grow. A stack does not grow onto or past another region below it, and its
- * growth counts against an address-space limit.
- *
- * mprotect cuts a region in three and merges it back, changes both regions
- * a range covers, and fails for a range with a gap, changing nothing. The
- * free range found is the highest that fits below hi and at or above lo; a
- * hole a removal left is used again, and 0 is returned when nothing fits.
+ * Check the free range `vm_find_free` finds and a hole it uses again, the
+ * fallback of `vm_find_mmap` to a gap across the top-down search's base, and
+ * the gap a growing stack leaves above another mapping. The guard below the
+ * stack's limit that `mmap_place` and `mmap_free` keep is checked in the
+ * guest, by tests/vmprobe.c.
  */
-/** Check the mapping fallback and the guard below a growing stack. */
 static void run_mapping_edges(void)
 {
     /* The free range. */
@@ -408,6 +400,20 @@ static void run_mapping_edges(void)
     }
 }
 
+/**
+ * Run every row; the exit status is the count of failed checks, at most 100.
+ *
+ * A stack grows down to a page below it at or above its limit, and the
+ * pages between come into the region, to fault in later. A page at or above
+ * the stack's start is no growth, and a space with no stack has none to
+ * grow. A stack does not grow onto or past another region below it, and its
+ * growth counts against an address-space limit.
+ *
+ * mprotect cuts a region in three and merges it back, changes both regions
+ * a range covers, and fails for a range with a gap, changing nothing. The
+ * free range found is the highest that fits below hi and at or above lo; a
+ * hole a removal left is used again, and 0 is returned when nothing fits.
+ */
 int main(void)
 {
     vm_space_t vm = {0};
