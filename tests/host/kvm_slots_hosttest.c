@@ -19,8 +19,10 @@
  * KVM_SET_USER_MEMORY_REGION's checks in Linux's order and its answers for a
  * new, moved, flagged, unchanged and deleted slot and an overlap; a 4 KiB slot
  * mapped at each fault with the caller's frame, write-back with the guest's PAT
- * ignored, read-only over a copy-on-write page and writable after the write
- * that breaks it; a slot of 2 MiB-aligned contiguous RAM as one 2 MiB leaf, and
+ * ignored, or in charge while a device that does not snoop is assigned, the
+ * first and the last such device dropping every leaf, read-only over a
+ * copy-on-write page and writable after the write that breaks it; a slot of
+ * 2 MiB-aligned contiguous RAM as one 2 MiB leaf, and
  * as 4 KiB leaves where the slot, the addresses or the frames do not allow one;
  * a device's frames uncached with the guest's PAT in charge, as a 2 MiB leaf
  * too; a read-only slot, a frame with no slot and an address the caller cannot
@@ -391,6 +393,23 @@ static void small_rows(void)
     CHECK((e & 7) == 7 && (e & 0x78) == 0x70 && (e & 0x80) == 0,
           "readable, writable, executable, write-back with the guest's PAT ignored");
     CHECK(kvm_tdp_fault(&vm, 0x50, 0) == 1, "a frame with no slot is MMIO");
+
+    /* A device that does not snoop: RAM honours the guest's PAT while one
+     * is assigned, and the first and the last drop every leaf. */
+    flushed();
+    kvm_tdp_noncoherent(&vm, 1);
+    CHECK(leaf_of(gfn + 3, &level) == 0 && flushed(), "the first such device drops the leaves");
+    CHECK(kvm_tdp_fault(&vm, gfn + 3, 0) == 0 && (leaf_of(gfn + 3, &level) & 0x78) == 0x30,
+          "RAM is write-back with the guest's PAT in charge while it is assigned");
+    kvm_tdp_noncoherent(&vm, 1);
+    CHECK(leaf_of(gfn + 3, &level) != 0 && !flushed(), "a second drops nothing");
+    kvm_tdp_noncoherent(&vm, 0);
+    CHECK(leaf_of(gfn + 3, &level) != 0 && !flushed(), "nor does taking one of two away");
+    kvm_tdp_noncoherent(&vm, 0);
+    CHECK(leaf_of(gfn + 3, &level) == 0 && flushed() && vm.noncoherent == 0,
+          "the last one taken away drops the leaves");
+    CHECK(kvm_tdp_fault(&vm, gfn + 3, 0) == 0 && (leaf_of(gfn + 3, &level) & 0x78) == 0x70,
+          "and RAM is write-back with the guest's PAT ignored again");
 
     /* A copy-on-write page: read-only, then a write gives a new frame. */
     *host_entry(a + 5 * 4096u) = fresh() | PTE_P | PTE_U;
