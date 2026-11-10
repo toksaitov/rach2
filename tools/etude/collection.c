@@ -1153,6 +1153,7 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     struct etude_legacy_set_opts o;
     int rc, machines, alone, enclosed;
     char stream[PATH_SIZE] = "";
+    const char *held;
     if (dry)
         return c->selection_export ? export_selection(c, accel) : print_selection(c);
     if (access(c->record, R_OK) != 0) {
@@ -1216,7 +1217,12 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     o.history_path = stream;
     o.history_path_size = sizeof(stream);
     o.site = c->site[0] ? c->site : NULL;
-    o.site_ledger = enclosed && c->site_ledger[0] ? c->site_ledger : NULL;
+    /* A wrapper whose own claim of the site already holds the run's
+     * processors names that claim, and the cases ask the site for none. */
+    held = getenv("ETUDE_SITE_CPU_CLAIM");
+    if (enclosed && held && *held)
+        printf("run: processors: held by the site claim %s\n", held);
+    o.site_ledger = enclosed && c->site_ledger[0] && !(held && *held) ? c->site_ledger : NULL;
     o.site_cpu = c->site_cpu;
     o.kernel = getenv("RACH2_KERNEL");
     memcpy(o.cap, c->cap, sizeof(o.cap));
