@@ -4478,16 +4478,25 @@ static int32_t openat2_real(char *real, uint32_t len, int rc, const char *leaf, 
  * Resolve the directory an openat2 path `name` under `resolve` starts at,
  * as the anchor of `scope`, with its real path into the path page
  * `anchor`: the directory `dirfd` names for a relative path or under
- * BENEATH and IN_ROOT, `*outside` set as `openat2_dir` sets it, and the
- * caller's root for any other absolute path. 0 with the anchor held, or an
- * error.
+ * IN_ROOT, `*outside` set as `openat2_dir` sets it, and the caller's root
+ * for any other absolute path. An absolute path under BENEATH is -EXDEV
+ * before `dirfd` is read, as Linux's path_init answers it. The scope's
+ * sequence is read before the anchor's walk, which may sleep, so that a
+ * rename during that walk or the scoped walk after it trips the replay.
+ * 0 with the anchor held, or an error.
  */
 static int32_t openat2_anchor(int dirfd, const char *name, uint32_t resolve,
                               struct vfs_scope *scope, char *anchor, int *outside)
 {
-    char *dir = path_buf_get();
-    int32_t rc = dir ? 0 : -ENOMEM;
+    uint32_t seq = vfs_tree_seq();
+    char *dir;
+    int32_t rc;
 
+    if (name[0] == '/' && (resolve & VFS_RESOLVE_BENEATH)) {
+        return -EXDEV;
+    }
+    dir = path_buf_get();
+    rc = dir ? 0 : -ENOMEM;
     if (rc == 0 && (name[0] != '/' || (resolve & OPENAT2_RESOLVE_ROOT))) {
         rc = openat2_dir(dirfd, dir, outside);
     } else if (rc == 0) {
@@ -4508,7 +4517,7 @@ static int32_t openat2_anchor(int dirfd, const char *name, uint32_t resolve,
     scope->resolve = resolve;
     scope->anchor_real = anchor;
     scope->anchor_len = anchor[1] == '\0' ? 0 : (uint32_t)k_strlen(anchor);
-    scope->seq = vfs_tree_seq();
+    scope->seq = seq;
     return 0;
 }
 
@@ -4516,7 +4525,8 @@ static int32_t openat2_anchor(int dirfd, const char *name, uint32_t resolve,
  * The walk of an openat2 path `name` under `resolve` (`vfs_resolve_scoped`),
  * from the directory `dirfd` names: the path it reaches, from the caller's
  * root, into `real`, with the last name it may create after it, and in
- * `*seq` the tree's sequence when the walk ended. `walk` has the walk's
+ * `*seq` the tree's sequence from before the walk began, which the replay
+ * compares. `walk` has the walk's
  * VFS_WALK_ flags. A link of /proc to an object at the end of the path,
  * /proc/PID/fd/N or a namespace's, which the system call layer follows
  * itself, is judged here as the walk judges one on the way. Returns 0, or
@@ -4540,7 +4550,7 @@ static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int w
         return rc;
     }
     rc = vfs_resolve_scoped(&scope, name, walk, &ref, leaf, real);
-    *seq = vfs_tree_seq();
+    *seq = scope.seq;
     vfs_ref_release(&scope.anchor);
     path_buf_put(anchor);
     if (rc < 0) {
@@ -4620,7 +4630,7 @@ static long openat2_named(int dirfd, const char *name, const struct open_how *ho
  * takes the path that walk reached, which has no `..` and no link in it but
  * a link of /proc to an object the walk allowed, as a replay
  * (`vfs_replay`): the replay answers -EAGAIN when it meets a link or when a
- * rename or a mount has changed the tree since the checked walk ended, so
+ * rename or a mount has changed the tree since the checked walk began, so
  * the open never reaches a file the checked walk did not. The call then
  * walks again, OPENAT2_TRIES times in all, before it gives the caller
  * -EAGAIN, which Linux gives only for a rename racing a scoped `..`.
