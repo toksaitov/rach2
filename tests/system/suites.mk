@@ -1854,6 +1854,8 @@ $(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-p
 # `tests/run d3d`: Direct3D 9, 11 and 12 pixels on lavapipe through GE-Proton.
 # `tests/run d3d-wine`: Wine's Direct3D units on both paths against Debian.
 # `tests/run d3d-vkd3d`: vkd3d-proton's units on lavapipe against Debian.
+# `tests/run d3dvenus`: the same probes, Wine units and vkd3d-proton units on
+# Venus against Debian on Venus.
 include tests/graphics/d3d/rules.mk
 
 # `tests/run games-wine`: GE-Proton's Wine through rach2-game under Xwayland
