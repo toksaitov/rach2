@@ -393,6 +393,16 @@ void drm_client_dev_unregister(struct drm_device *dev)
     (void)dev;
 }
 
+void drm_client_dev_hotplug(struct drm_device *dev)
+{
+    (void)dev;
+}
+
+void drm_sysfs_connector_hotplug_event(struct drm_connector *connector)
+{
+    (void)connector;
+}
+
 void arch_drm_probe(int phase)
 {
     (void)phase;
