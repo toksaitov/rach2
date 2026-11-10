@@ -148,6 +148,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_SETFSUID          122
 #define SYS_SETFSGID          123
 #define SYS_GETSID            124
+#define SYS_CAPSET            126
 #define SYS_RT_SIGPENDING     127
 #define SYS_SIGALTSTACK       131
 #define SYS_MKNOD             133
@@ -383,6 +384,7 @@ static __inline__ long syscall0(long n)
 #define SYS_RT_SIGPENDING     176
 #define SYS_PREAD64           180
 #define SYS_GETCWD            183
+#define SYS_CAPSET            185
 #define SYS_SIGALTSTACK       186
 #define SYS_VFORK             190
 #define SYS_GETRLIMIT         191

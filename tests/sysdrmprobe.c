@@ -16,6 +16,10 @@
  *   pci-sysfs.c writes them, the same IDs at their offsets of `config` and
  *   in the PCI_ID of `uevent`, its own name as PCI_SLOT_NAME, a `subsystem`
  *   link to /sys/bus/pci, and `boot_vga` exactly when it is a VGA function.
+ *   The first resourceN file found, root's with mode 0600, is opened as
+ *   Linux judges a file, by the file-system user id: root is refused it
+ *   with EACCES after setfsuid(1000), and opens it for reading and writing
+ *   as its owner once capset has dropped every capability.
  * * `cards`: each node of /dev/dri, found as libdrm's drmGetDevices2 finds
  *   it: its numbers from stat, the subsystem from the last name of
  *   /sys/dev/char/226:N/device/subsystem, and for a PCI device its slot
@@ -124,6 +128,9 @@ struct cmsghdr {
     int cmsg_level;
     int cmsg_type;
 };
+
+/* The first resourceN file of a PCI function found, or "". */
+static char bar_path[128];
 
 /* The first card found, whose uevent the last check writes, or "", and its
  * path below /sys; and the node the `drm` directory is searched for. */
@@ -519,7 +526,7 @@ static void pci_function(const char *name, void *arg)
     struct pci_ident id;
     char dir[96], path[128], text[512];
     const char *slot;
-    int vga;
+    int vga, bar;
 
     join(dir, sizeof(dir), "/sys/bus/pci/devices/", name, 0);
     pci_files(dir, &id);
@@ -540,7 +547,38 @@ static void pci_function(const char *name, void *arg)
     if (vga && (read_file(path, text, sizeof(text)) != 2 || (text[0] != '0' && text[0] != '1'))) {
         fail2("boot_vga is not 0 or 1: ", name);
     }
+    for (bar = '0'; !bar_path[0] && bar <= '5'; bar++) {
+        text[0] = (char)bar;
+        text[1] = '\0';
+        join(path, sizeof(path), dir, "/resource", text);
+        if (file_mode(path, 0) != 0) {
+            join(bar_path, sizeof(bar_path), path, 0, 0);
+        }
+    }
     ++*(int *)arg;
+}
+
+/** In a child: 0 when root is refused `bar_path` after setfsuid(1000) and
+ * opens it for reading and writing with every capability dropped, else the
+ * step that failed. */
+static int bar_file_child(void)
+{
+    /* capset's header, version 3 with the caller's pid, and its two words
+     * of effective, permitted and inheritable sets, all empty. */
+    unsigned int head[2] = {0x20080522u, 0}, sets[6] = {0, 0, 0, 0, 0, 0};
+    long fd;
+
+    syscall1(SYS_SETFSUID, 1000);
+    fd = syscall3(SYS_OPEN, (long)bar_path, O_RDONLY | O_CLOEXEC, 0);
+    if (fd != -13) {
+        return 1;
+    }
+    syscall1(SYS_SETFSUID, 0);
+    if (syscall2(SYS_CAPSET, (long)head, (long)sets) != 0) {
+        return 2;
+    }
+    fd = syscall3(SYS_OPEN, (long)bar_path, O_RDWR | O_CLOEXEC, 0);
+    return fd >= 0 ? 0 : 3;
 }
 
 /** Every PCI function has Linux's files, and there is at least one. */
@@ -548,8 +586,30 @@ static void pci_row(void)
 {
     int count = 0;
 
+    long pid;
+    int status = 0;
+
     if (each_entry("/sys/bus/pci/devices", pci_function, &count) < 0 || count == 0) {
         fail("no function in /sys/bus/pci/devices");
+    }
+    if (!bar_path[0]) {
+        fail("no function in /sys/bus/pci/devices has a resourceN file");
+    }
+    pid = syscall0(SYS_FORK);
+    if (pid == 0) {
+        sys_exit(bar_file_child());
+    }
+    if (pid < 0 || syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
+        fail("the resourceN child was not reaped");
+    }
+    if (status == 1 << 8) {
+        fail2("root opens a resourceN file after setfsuid(1000): ", bar_path);
+    }
+    if (status == 2 << 8) {
+        fail("capset could not drop every capability");
+    }
+    if (status != 0) {
+        fail2("uid 0 without capabilities cannot open its resourceN file: ", bar_path);
     }
     report_held();
 }
