@@ -189,18 +189,21 @@ static uint32_t ring_masked(uint32_t old, uint32_t value)
     return (old & ~mask) | (value & mask & 0xffffu);
 }
 
-/** The ring at power-on: disabled, empty, not stopped, its interrupt
- * masked. */
+/** The ring at power-on, as a reset leaves it: disabled, empty, not
+ * stopped, its interrupt masked, and no PPGTT. */
 static void ring_reset_at(struct i915_model *m, void *priv, uint32_t base)
 {
     struct i915_model_ring *r = (struct i915_model_ring *)priv;
 
     struct i915_model_ctx none = {0, 0, 0, 0, 0, 0, 0};
 
-    r->executed = r->fault = 0;
+    r->executed = r->fault = r->batches = 0;
     r->faulted = r->stuck = r->idle_stuck = r->start_fails = r->flush_stuck = 0;
     r->ctx = none;
     i915_model_poke(m, CCID(base), 0);
+    i915_model_poke(m, RING_PP_DIR_DCLV(base), 0);
+    i915_model_poke(m, RING_PP_DIR_BASE(base), 0);
+    i915_model_poke(m, RING_MODE_GEN7(base), 0);
     i915_model_poke(m, RING_CTL(base), 0);
     i915_model_poke(m, RING_HEAD(base), 0);
     i915_model_poke(m, RING_TAIL(base), 0);
@@ -274,11 +277,116 @@ static uint32_t *ring_dword(struct i915_model *m, uint32_t addr)
     return page ? (uint32_t *)(void *)(page + (phys & 0xffcu)) : 0;
 }
 
+/**
+ * The physical address the aliasing PPGTT of the ring at `base` maps the
+ * address `addr` to, as the chip walks it: the directory entry among the
+ * global GTT's entries at PP_DIR_BASE, whose bits 31:16 count 64 bytes,
+ * then the entry of the table it names. 0 while RING_MODE_GEN7 has no
+ * PPGTT bit, for an address past 2 GiB or whose 64 MiB PP_DIR_DCLV does
+ * not mark valid, or where an entry is not valid or a table not reached.
+ */
+static uint64_t ring_ppgtt_phys(struct i915_model *m, uint32_t base, uint32_t addr)
+{
+    struct i915_model_irq *irq = i915_model_irq_state(m);
+    uint32_t pdi = addr >> 22, pd, pde, pte;
+    uint64_t pt_phys;
+    uint32_t *pt;
+
+    if (!(i915_model_peek(m, RING_MODE_GEN7(base)) & GFX_PPGTT_ENABLE) || pdi >= I915_PPGTT_PDES ||
+        !(i915_model_peek(m, RING_PP_DIR_DCLV(base)) & (1u << (pdi / 16u))) || !irq || !irq->dma) {
+        return 0;
+    }
+    pd = (i915_model_peek(m, RING_PP_DIR_BASE(base)) >> 16) * 64u;
+    if (pd / 4u + pdi >= (I915_MODEL_BAR0 - I915_GSM_OFFSET) / 4u) {
+        return 0;
+    }
+    pde = i915_model_peek(m, I915_GSM_OFFSET + pd + pdi * 4u);
+    if (!(pde & GEN6_PDE_VALID)) {
+        return 0;
+    }
+    pt_phys = (uint64_t)(pde & 0xfffff000u) | ((uint64_t)(pde & 0xff0u) << 28);
+    pt = (uint32_t *)irq->dma(m, pt_phys);
+    if (!pt) {
+        return 0;
+    }
+    pte = pt[(addr >> 12) & (I915_PPGTT_PTES - 1u)];
+    if (!(pte & GEN6_PTE_VALID)) {
+        return 0;
+    }
+    return (uint64_t)(pte & 0xfffff000u) | ((uint64_t)(pte & 0x7f0u) << 28) | (addr & 0xfffu);
+}
+
+/** The host address of the dword at `addr` in the PPGTT of the ring at
+ * `base` when `ppgtt` is set, else in the global GTT, or NULL. */
+static uint32_t *ring_space_dword(struct i915_model *m, uint32_t base, int ppgtt, uint32_t addr)
+{
+    struct i915_model_irq *irq = i915_model_irq_state(m);
+    uint64_t phys;
+    uint8_t *page;
+
+    if (!ppgtt) {
+        return ring_dword(m, addr);
+    }
+    phys = ring_ppgtt_phys(m, base, addr & ~3u);
+    if (!irq || !irq->dma || phys == 0) {
+        return 0;
+    }
+    page = (uint8_t *)irq->dma(m, phys & ~(uint64_t)0xfffu);
+    return page ? (uint32_t *)(void *)(page + (phys & 0xffcu)) : 0;
+}
+
 /** Stop the ring at the command `dw`, which it cannot run. */
 static void ring_fault(struct i915_model_ring *r, uint32_t dw)
 {
     r->faulted = 1;
     r->fault = dw;
+}
+
+/**
+ * Run the batch that the MI_BATCH_BUFFER_START `d`, of `len` dwords, starts
+ * on the ring at `base`, up to its MI_BATCH_BUFFER_END: through the ring's
+ * PPGTT when the command's bit 8 asks for it, as the driver's unprivileged
+ * batches do, else through the global GTT. Of a batch's commands the model
+ * runs MI_NOOP and MI_STORE_DWORD_IMM, whose address lies in the batch's
+ * own space. A store that asks for the global GTT from a PPGTT batch, a
+ * command the model does not know, an address it cannot reach, a batch of
+ * more than 1024 dwords or a start of the wrong length faults the ring at
+ * the batch's start.
+ */
+static void ring_batch(struct i915_model *m, struct i915_model_ring *r, uint32_t base,
+                       const uint32_t *d, uint32_t len)
+{
+    int ppgtt = (d[0] & MI_BATCH_PPGTT_HSW) != 0;
+    uint32_t addr = d[1] & ~3u, n = 0, dw, *p, *a, *v, *out;
+
+    r->batches++;
+    while (len == 2u && n < 1024u) {
+        p = ring_space_dword(m, base, ppgtt, addr + 4u * n);
+        if (!p) {
+            break;
+        }
+        dw = *p;
+        if (dw == MI_BATCH_BUFFER_END) {
+            return;
+        }
+        if (dw == MI_NOOP) {
+            n++;
+            continue;
+        }
+        if ((dw >> 29) != 0 || MI_OPCODE(dw) != 0x20u || MI_LENGTH(dw) != 4u ||
+            (ppgtt && (dw & MI_USE_GGTT))) {
+            break;
+        }
+        a = ring_space_dword(m, base, ppgtt, addr + 4u * (n + 2u));
+        v = ring_space_dword(m, base, ppgtt, addr + 4u * (n + 3u));
+        out = a && v ? ring_space_dword(m, base, ppgtt, *a) : 0;
+        if (!out) {
+            break;
+        }
+        *out = *v;
+        n += 4u;
+    }
+    ring_fault(r, d[0]);
 }
 
 /* The commands of contexts and flushes, i915_model_ctx.c, which
@@ -358,6 +466,9 @@ static void ring_run(struct i915_model *m, struct i915_model_ring *r, uint32_t b
                 break;
             }
             *out = d[2];
+            break;
+        case 0x31: /* MI_BATCH_BUFFER_START: the batch's address in d[1] */
+            ring_batch(m, r, base, d, len);
             break;
         default:
             if (!ring_ctx_command(m, r, base, d, len)) {
