@@ -420,7 +420,8 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
         }
         vq->indirect_free &= ~(1u << t);
         tbl = vq->indirect + t * VIRTQ_INDIRECT_LEN;
-        for (k = 0, d = 0; k < total; k = j) {
+        d = 0;
+        for (k = 0; k < total; k = j) {
             j = virtqueue_run(sg, k, out, total, &len);
             virtqueue_fill(&tbl[d], &sg[k], k >= out, len, j < total, (uint16_t)(d + 1u));
             d++;
