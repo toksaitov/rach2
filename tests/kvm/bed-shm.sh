@@ -28,7 +28,8 @@
 # be gone (`revoke`, `leak`).
 #
 # Each check prints one line, `bed-shm: CHECK: pass` or `fail` with the
-# reason, and the last line is `bed-shm: result: pass` or `fail`. The
+# reason, and the last line is `bed-shm: result: pass` or `fail`, after the
+# VM's last 40 lines of console, `bed-shm: vm: LINE`, on a failure. The
 # console of the VM, ivshmemd's output and the counters are kept in DIR.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy=''
@@ -278,6 +279,9 @@ fi
 if [ "$bad" -eq 0 ]; then
     echo "bed-shm: result: pass"
 else
+    # The VM's console is lost with the machine; its last lines go with
+    # the result.
+    tail -n 40 "$out/console.log" 2>/dev/null | tr -d '\r' | sed 's/^/bed-shm: vm: /'
     echo "bed-shm: result: fail: $bad check(s)"
     exit 1
 fi
