@@ -511,10 +511,26 @@ void elantech_disconnect(void)
 {}
 
 /** No ALPS pad's bytes come, since `alps_init` found none. */
-void alps_byte(uint8_t data)
+int alps_byte(uint8_t data)
 {
     (void)data;
+    return ALPS_GOOD;
 }
+
+/* The rest of alps.h, which a port without an ALPS pad never calls;
+ * alps_hosttest.c tests it. */
+int alps_packet_start(void)
+{
+    return 1;
+}
+
+int alps_reconnect(void)
+{
+    return -1;
+}
+
+void alps_disconnect(void)
+{}
 
 /** No ALPS pad's set-up fails, so no mouse takes its name. */
 const char *alps_mouse_name(const char *proto)

@@ -575,9 +575,96 @@ int synaptics_init(void)
 }
 
 /** No Synaptics pad's bytes come. */
-void synaptics_byte(uint8_t data)
+int synaptics_byte(uint8_t data)
 {
     (void)data;
+    return SYNAPTICS_GOOD;
+}
+
+/* The rest of synaptics.h and trackpoint.h, which a port without a
+ * Synaptics pad never calls; trackpoint_hosttest.c tests them. */
+int synaptics_packet_start(void)
+{
+    return 1;
+}
+
+int synaptics_has_pass_through(void)
+{
+    return 0;
+}
+
+/** A pass-through port that never answers. */
+static int no_send(uint8_t cmd)
+{
+    (void)cmd;
+    return -1;
+}
+
+/** Nothing comes from that port. */
+static int no_receive(void)
+{
+    return -1;
+}
+
+const struct ps2io synaptics_pt = {no_send, no_receive};
+
+void synaptics_pt_activate(int packet_size)
+{
+    (void)packet_size;
+}
+
+int synaptics_reconnect(void)
+{
+    return -1;
+}
+
+void synaptics_disconnect(void)
+{}
+
+int trackpoint_detect(const struct ps2io *io)
+{
+    (void)io;
+    return -1;
+}
+
+int trackpoint_identify(const struct ps2io *io)
+{
+    (void)io;
+    return -1;
+}
+
+const char *trackpoint_vendor(void)
+{
+    return "";
+}
+
+int trackpoint_buttons(void)
+{
+    return 3;
+}
+
+int trackpoint_reconnect(const struct ps2io *io)
+{
+    (void)io;
+    return -1;
+}
+
+int trackpoint_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+void evdev_sysfs_serio_files(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+/** The 10 ms a pass-through probe waits, which no ALPS row reaches. */
+void k_udelay(uint32_t usec)
+{
+    (void)usec;
 }
 
 /** The Elantech probe, which runs when no ALPS pad answered: none here. */
@@ -588,10 +675,26 @@ int elantech_init(void)
 }
 
 /** No Elantech pad's bytes come, since `elantech_init` found none. */
-void elantech_byte(uint8_t data)
+int elantech_byte(uint8_t data)
 {
     (void)data;
+    return ELANTECH_GOOD;
 }
+
+/* The rest of elantech.h, which a port without an Elantech pad never
+ * calls; elantech_hosttest.c tests it. */
+int elantech_packet_start(void)
+{
+    return 1;
+}
+
+int elantech_reconnect(void)
+{
+    return -1;
+}
+
+void elantech_disconnect(void)
+{}
 
 /** No table is mapped: the SMBIOS reader reads the row's from memory. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
@@ -854,6 +957,12 @@ static void model_reset(int kind)
     mouse_dev = NULL;
     touchpad = 0;
     alps = 0;
+    state = STATE_ACTIVE;
+    bad_in_a_row = 0;
+    bat_held = 0;
+    reconnect_wanted = 0;
+    cmd_busy = 0;
+    packet_index = 0;
     bare_failed = 0;
     rejected_stick = 0;
     sync_losses = 0;
@@ -2162,6 +2271,93 @@ static void ss4_packet_rows(void)
     CHECK("an SS5's stick packet moves its stick", reads(&n_stick, stick_ev, NEV(stick_ev)));
 }
 
+/* The bytes the bring-up sent, which a reconnect sends again from the
+ * reset that follows the CS19 check. */
+static uint8_t bringup_took[TOOK_MAX];
+static int n_bringup_took;
+
+/* The pad's registers at power-on, which its reset restores and the
+ * model's reset leaves as they were. */
+static uint8_t power_on_regs[sizeof(regs)];
+
+/** Reconnect the pad as kpsmoused does, its registers at their power-on
+ * values as its reset leaves them. */
+static void reconnect_pad(void)
+{
+    k_memcpy(regs, power_on_regs, sizeof(regs));
+    n_took = 0;
+    ps2mouse_reconnect();
+}
+
+/** Whether the device took, since `n_took` was cleared, the bring-up's
+ * bytes from its reset after the CS19 check: Linux's `alps_reconnect`, its
+ * reset, `alps_identify` and the version's `hw_init`, then
+ * `psmouse_initialize` and the enable. */
+static int took_reconnect(void)
+{
+    /* The reset and defaults, the trial identification and the CS19
+     * check's 0xE1, which the reconnect does not send. */
+    int skip = 3 + 19 + 1;
+
+    n_want = 0;
+    expect_n(bringup_took + skip, n_bringup_took - skip);
+    return took_expected();
+}
+
+/** A version 3 DualPoint reconnected after five packets out of form in a
+ * row and after its announcement, keeping its event devices, as Linux's
+ * psmouse and `alps_reconnect` do; and probed anew when no ALPS pad
+ * answers in its place. */
+static void reconnect_rows(void)
+{
+    static const uint8_t one[6] = {0x8F, 0x3E, 0x2B, 0x08, 0x2C, 0x32};
+    struct evdev *pad_dev, *stick_dev;
+    int i;
+
+    v3_setup();
+    k_memcpy(power_on_regs, regs, sizeof(regs));
+    CHECK("a version 3 DualPoint is brought up", bring_up() == 0 && alps == 1);
+    k_memcpy(bringup_took, took, sizeof(took));
+    n_bringup_took = n_took;
+    pad_dev = pad;
+    stick_dev = stick;
+    for (i = 0; i < 4; i++) {
+        irq_byte(0x00);
+    }
+    CHECK("four first bytes out of form are four bad packets",
+          bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted);
+    send(one, 6);
+    CHECK("a whole packet ends the count", bad_in_a_row == 0);
+    for (i = 0; i < 5; i++) {
+        irq_byte(0x00);
+    }
+    CHECK("the fifth in a row stops the port and asks for a reconnect",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
+    reconnect_pad();
+    CHECK("the pad is reconnected with Linux's commands, in Linux's order", took_reconnect());
+    CHECK("it is in absolute mode again and reports",
+          regs[0x0004] == 0x06 && !cmd_mode && reporting && state == STATE_ACTIVE);
+    CHECK("it keeps its event devices", pad == pad_dev && stick == stick_dev && alps == 1);
+    send(one, 6);
+    CHECK("and its packets are read", pktcnt == 0 && bad_in_a_row == 0);
+
+    irq_byte(0xAA);
+    irq_byte(0x00);
+    CHECK("its announcement 0xAA 0x00 asks for a reconnect",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
+    reconnect_pad();
+    CHECK("which sends the same commands", took_reconnect() && pad == pad_dev);
+
+    for (i = 0; i < 5; i++) {
+        irq_byte(0x00);
+    }
+    dev_kind = KIND_PLAIN;
+    ps2mouse_reconnect();
+    CHECK("a mouse that answers in the pad's place is probed anew",
+          alps == 0 && pad == 0 && stick == 0 && mouse_dev != NULL && reporting &&
+              state == STATE_ACTIVE);
+}
+
 int main(void)
 {
     table_rows();
@@ -2184,6 +2380,7 @@ int main(void)
     v6_packet_rows();
     v7_packet_rows();
     ss4_packet_rows();
+    reconnect_rows();
     model_reset(KIND_PLAIN);
     if (fails == 0) {
         printf("alps-test: pass\n");
