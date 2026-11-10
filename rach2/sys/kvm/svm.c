@@ -1940,13 +1940,19 @@ static int exit_msr(struct kvm_vcpu *v)
     return 0;
 }
 
-/** VMMCALL: Linux's answer to a hypercall it does not know, -KVM_ENOSYS in
- * RAX, or -KVM_EPERM above CPL 0; no hypercall is offered. */
+/** Dispatch an enabled Hyper-V hypercall, else return Linux's
+ * -KVM_ENOSYS in RAX, or -KVM_EPERM above CPL 0. */
 static int exit_vmmcall(struct kvm_vcpu *v)
 {
     uint64_t ret =
         kvm_emul_cpl(v) > 0 ? (uint64_t)-(int64_t)KVM_EPERM : (uint64_t)-(int64_t)KVM_ENOSYS;
     uint64_t rax = v->regs.rax;
+    uint32_t len;
+
+    if (kvm_hv_hypercall_enabled(v)) {
+        len = sv(v)->ex.next_rip ? (uint32_t)(sv(v)->ex.next_rip - v->regs.rip) : 3u;
+        return kvm_hv_hypercall(v, len);
+    }
 
     v->regs.rax = kvm_emul_mode(v) == 64 ? ret : (ret & 0xFFFFFFFFull);
     if (!skip(v)) {

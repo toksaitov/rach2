@@ -38,6 +38,10 @@ Under TCG, VMRUN and VMEXIT, the intercepts of I/O, MSRs, selective CR0 writes, 
 
 The Debian guest reports the profile's features: under `host-svm` and KVM, `svm npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold`, with none of the three the profile declares absent; under `max-svm` and TCG, `svm npt vgif`. It boots to its token in 1 s under KVM and 3 s under TCG on the testing PC, and in 9 s under TCG in the GNU root's QEMU on an x86-64 Rach2 that runs under KVM there, as `boot-debian-tcg` boots it.
 
+The SVM backend boots Debian 6.12.107 to `KVMGUEST OK` under TCG on WSL and the Mac, and under nested KVM on WSL. The entry probe, active memory-slot changes, device mapping, 4 MiB GEM mapping and vCPU termination checks pass under TCG on the Mac. The QEMU termination check passes under TCG on WSL and returns all five KVM counts and the open-file count. These were individual author runs, not a run of the suite or either corpus. The i686 guest's intermittent page fault, double fault and shutdown are being investigated in task 81-2b.
+
+For checkpoint planning, allow about 15 minutes for the 22 serial QEMU cases. The existing Debian boots took 18 s under TCG on WSL and 9 s under TCG on the Mac, as the runner reported; with outer exit tracing, WSL took 20 s. The small Mac entry, slot and termination payload completed before the outer kernel's 0.519 s shutdown timestamp; that is guest time, not elapsed host time. The estimate allows roughly 30 s per case plus 4 minutes for setup and the nested-KVM check. The corpus has not run under Rach2's SVM, so its share and the nested-KVM elapsed time are allowances, not measurements; revise the estimate from the reviewed checkpoint's own output. The Lenovo trial is separate. These figures came from the existing runs; no timing run was added.
+
 ## Design
 
 The lists, [`unit-tests.list`](unit-tests.list) and [`selftests.list`](selftests.list), name every test of the two corpora, one a line: its name, what Rach2's KVM must give (`pass`; `skip`, the test's own skip for what the processor or QEMU lacks; `fail`, where Rach2 is to fail as Linux does; or `excluded`, not run), Linux's result on the testing PC, and the reason. Linux's results were taken by the same tests under WSL's Linux 6.18.58 with its KVM on the Ryzen 9 7950X3D, kvm-unit-tests with `kernel-irqchip=split`, and are kept in [`ref/`](ref). A test Linux passes must pass; a test Linux skips for a lack of the processor or of the testing PC's kernel, such as SEV, AMX, PKS, CET, TSX, Xen's hypercalls or the forced emulation prefix, must skip; a test Linux fails there must still pass, since its failure is the outer layers' or a selftest older than the kernel, and the row names Linux's failure, except `hyperv_connections`, which fails one of its seven tests under Linux and is expected to fail as it does there. The excluded tests are nested virtualization (every SVM, VMX and EPT test, and the selftest `hyperv_svm_test`), which the owner excluded on 2026-11-10; the PMU, which Rach2's KVM does not yet give; and kvm-unit-tests' three tests built only for i386.
@@ -57,7 +61,7 @@ A guest of its own goes under `guests/` with its recipe, the token its console p
 
 ## Limits
 
-* The SVM backend has passed `svm-entry.c` under TCG on the Mac. Its larger guests and the corpus still await qualification.
+* The Debian x86-64 guest boots under SVM on both outer profiles. The i686 guest and the corpus still await qualification.
 * No selftest goes past its start until Rach2's `/sys` has `/sys/module/kvm/parameters/force_emulation_prefix`, as the KVM layer's Readme says.
 * The `max-svm` profile under TCG lacks NRIP save, TSC scaling and the pause filter, and has the five faults of Results, the last of which can leave a guest of Rach2's KVM that spins with its IF clear waiting on an interrupt QEMU does not deliver; the `host-svm` profile runs only on the testing PC.
 

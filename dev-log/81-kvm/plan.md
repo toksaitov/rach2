@@ -218,3 +218,7 @@ The exit cost and the selftests' timing cases on the Lenovo beside Linux's there
   * 81-7.4 Lenovo step, silent, a trial boot of its own, `mixer vol 1` after the boot: `vmexit_*` and the selftests' timing cases, boot time, exit microbenchmarks and a workload's throughput, each apart; reusing 81-3b's trial kernel when nothing changed; check: each beside 80-2's Linux numbers in `81-7.md`.
   * 81-7.5 The big lock's cost on the hottest exits read from the counts, as risk 9 asks; check: the report says which exits a lock-free path would serve, with the numbers.
 * Done: the exit costs on the Lenovo beside Linux's, counted by kind, and the fuzzer clean.
+
+## Checkpoints
+
+Allow about 15 minutes for the 22 serial QEMU cases of milestone 81, with the Lenovo trial separate. The existing boot measurements and the unmeasured parts of this estimate are recorded in [the KVM results](../../tests/kvm/Readme.md#results). No extra run was made for this estimate. The manager split the i686 guest and its intermittent double fault into 81-2b on 2026-11-10; 81-2 closes on the Debian x86-64 boot, with the corpus proof left to the reviewed checkpoint.
