@@ -23,8 +23,8 @@
       "workload": {
         "arguments": [],
         "inputs": {
-          "frames": "tests/graphics/ref/venus-wsl/vkcube/frames",
-          "timing": "tests/graphics/ref/venus-wsl/vkcube/timing"
+          "frames": "tests/graphics/ref/venus-wsl/vkcube/frames.out",
+          "timing": "tests/graphics/ref/venus-wsl/vkcube/timing.out"
         },
         "repetitions": 1,
         "seed": null
