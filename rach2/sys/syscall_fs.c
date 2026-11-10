@@ -10685,10 +10685,11 @@ long sys__llseek(isr_params_t *params)
  * end past the signed range is -EINVAL, and a directory is -EISDIR.
  *
  * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
- * mouse, and a device other than a raw disk window, the log and the three
- * whose seek always lands at 0, /dev/null, /dev/zero and /dev/full. A /proc
- * snapshot is read at an offset, as Linux reads one, and the framebuffer
- * written at one.
+ * mouse, a device other than a raw disk window, the log and the three
+ * whose seek always lands at 0, /dev/null, /dev/zero and /dev/full, and an
+ * anonymous object with no `llseek`. A /proc snapshot is read at an
+ * offset, as Linux reads one, the framebuffer written at one, and an
+ * anonymous object with a position, a VFIO device's, both.
  * Returns 0 with the descriptor in `*out`, or the errno.
  */
 static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_entry_t **out)
@@ -10708,6 +10709,10 @@ static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_en
     if (entry->type == FD_TYPE_DEVICE) {
         if (!devfs_fd_is_raw(entry) && !devfs_fd_log_size(entry, NULL) &&
             !devfs_lseek_zero(entry)) {
+            return -ESPIPE;
+        }
+    } else if (entry->type == FD_TYPE_ANON) {
+        if (!entry->ops || !entry->ops->llseek) {
             return -ESPIPE;
         }
     } else if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR &&
