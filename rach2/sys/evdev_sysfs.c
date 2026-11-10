@@ -817,7 +817,7 @@ static int iface_dir(struct input_sys *r, int index, int ifnum)
     struct usb_sys_row row;
     struct iface_sys *f = NULL;
     struct emit e;
-    int key, made = 0, h, i;
+    int key, made = 0, h, i, rc;
 
     if (usb_core_interface(index, ifnum, &row) != 0 || (key = sysfs_usb_key(&row)) < 0) {
         return -ENOENT;
@@ -848,11 +848,11 @@ static int iface_dir(struct input_sys *r, int index, int ifnum)
     if (made) {
         k_memset(f, 0, sizeof(*f));
         f->usb = row;
-        if (add_attrs(h, attrs, 6, f, IF_NUMBER) < 0 ||
-            sysfs_add_uevent(h, show_iface, f, IF_UEVENT) < 0 ||
-            sysfs_add_link(h, "subsystem", sysfs_anchor(SYSFS_BUS_USB, 0)) < 0) {
+        if ((rc = add_attrs(h, attrs, 6, f, IF_NUMBER)) < 0 ||
+            (rc = sysfs_add_uevent(h, show_iface, f, IF_UEVENT)) < 0 ||
+            (rc = sysfs_add_link(h, "subsystem", sysfs_anchor(SYSFS_BUS_USB, 0))) < 0) {
             sysfs_remove(h);
-            return -ENOMEM;
+            return rc;
         }
         f->dir = h;
         h = sysfs_add_link(sysfs_anchor(SYSFS_USB_LINKS, 0), name, f->dir);
@@ -1102,7 +1102,7 @@ void evdev_sysfs_sync(void)
 {
     struct evdev_desc d;
     uint8_t tried[EVDEV_MAX];
-    uint32_t best;
+    uint32_t best, failed;
     int n, next, rc;
 
     (void)class_dir();
@@ -1134,8 +1134,9 @@ void evdev_sysfs_sync(void)
             break;
         }
         tried[next] = 1;
+        failed = records[next].failed; /* publish clears the record */
         rc = publish(&records[next], next, &d);
-        if (rc < 0 && records[next].failed != d.gen) {
+        if (rc < 0 && failed != d.gen) {
             klog(KLOG_WARN, "input", "sysfs: event%d: refused: error %d", next, (int)rc);
         }
         records[next].failed = rc < 0 ? d.gen : 0;
