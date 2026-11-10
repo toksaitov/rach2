@@ -519,6 +519,35 @@ enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
     return client_result(u, output, st, &result, r);
 }
 
+enum etude_status net_guest_start(struct net_case *u, struct etude_case_machine *m,
+                                  const char *const argv[], const char *const env[],
+                                  const char *ready)
+{
+    enum etude_status st;
+
+    if (!net_ok(u))
+        return u->st;
+    st = etude_guest_start(m, argv, env, NULL);
+    if (st == ETUDE_OK)
+        st = etude_guest_output_wait(m, ready);
+    return failed(u, st, "the guest program did not start: %s", status_text(st));
+}
+
+enum etude_status net_guest_finish(struct net_case *u, struct etude_case_machine *m, int cancel,
+                                   const char *output, struct net_run *r)
+{
+    struct etude_guest_result result;
+    enum etude_status st;
+
+    memset(r, 0, sizeof(*r));
+    r->end.end = ETUDE_END_LOST;
+    r->end.value = -1;
+    st = etude_guest_finish(m, cancel || !net_ok(u), output, &result);
+    if (!net_ok(u))
+        return u->st;
+    return client_result(u, output, st, &result, r);
+}
+
 /** Fetch a generated client key to the scenario's private file. */
 static enum etude_status client_key_file(struct net_case *u, const char *guest, const char *host,
                                          const char *evidence)
