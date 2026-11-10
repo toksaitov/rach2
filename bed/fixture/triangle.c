@@ -50,6 +50,7 @@ typedef char GLchar;
 #define EGL_SYNC_FENCE_KHR              0x30F9
 #define EGL_PLATFORM_SURFACELESS_MESA   0x31DD
 #define EGL_SYNC_FLUSH_COMMANDS_BIT_KHR 0x0001
+#define EGL_FOREVER_KHR                 0xFFFFFFFFFFFFFFFFULL
 
 #define GL_NO_ERROR             0
 #define GL_FALSE                0
@@ -123,8 +124,8 @@ ENTRY_POINTS(POINTER)
 /* The picture's side, which the texture's side equals. */
 #define SIDE 256
 
-/* The fence's wait, in nanoseconds: a minute, far past any draw here. */
-#define FENCE_WAIT_NS 60000000000ULL
+/* The fence's wait is unbounded; the runner stops a draw that never ends. */
+#define FENCE_WAIT_NS EGL_FOREVER_KHR
 
 /* The colors, as RGBA bytes: the triangle and the texture's two squares. */
 static const unsigned char tri_color[4] = {255, 64, 0, 255};

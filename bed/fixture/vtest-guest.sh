@@ -6,25 +6,33 @@
 #   vtest-guest.sh prepare
 #   vtest-guest.sh run [-c CPUS] [-m MIB] COMMAND
 #   vtest-guest.sh check [-c CPUS] [-m MIB]
+#   vtest-guest.sh stage DIR
 #
 # `prepare` makes the prepared image, an overlay of the cloud image that
 # tests/graphics/debian-ref/image pins, which debian-ref.sh fetches and
 # checks: one boot with the seed, whose `network-config` is empty, runs
 # setup.sh.in, which installs `packages` from the snapshot that file names,
 # adds the services that serve vtest on the guest's port 5555 and turns
-# cloud-init off. `run` boots a new overlay of the prepared image with CPUS
-# processors (4) and MIB of memory (4096), its port 5555 forwarded from a
-# free port on the host's loopback address, waits for the guest to report
-# its server ready on the serial console, runs COMMAND in sh on the host with
-# VTEST_HOST and VTEST_PORT set to that address, stops the guest and removes
-# the overlay. It writes the guest's record, its versions, QEMU's and the
-# accelerator, to standard error as `vtest-guest: record:` lines, and exits
-# with COMMAND's status.
+# cloud-init off. The digest of those inputs and of the pins is kept beside
+# the image as prepared.qcow2.key. `run` boots a new overlay of the prepared
+# image with CPUS processors (4) and MIB of memory (4096), its port 5555
+# forwarded from a free port on the host's loopback address, waits for the
+# guest to report its server ready on the serial console, runs COMMAND in sh
+# on the host with VTEST_HOST and VTEST_PORT set to that address, stops the
+# guest and removes the overlay. It writes the guest's record, its versions,
+# QEMU's and the accelerator, to standard error as `vtest-guest: record:`
+# lines, and exits with COMMAND's status.
 #
 # `check` builds the relay and triangle.c into build/bed with CC (cc),
-# CFLAGS and LDLIBS (-ldl), draws the triangle on the host's
-# llvmpipe, then through the relay to the guest with Mesa's virpipe, and
-# passes when both pictures check and their checksums are equal.
+# CFLAGS and LDLIBS (-ldl), draws the triangle on the host's llvmpipe, then
+# through the relay to the guest with Mesa's virpipe, and passes when both
+# pictures check and their checksums are equal.
+#
+# `stage` makes DIR, the contents of the bed-vtest suite's data disk, which
+# vtest-rach2.sh reads on Rach2: the cloud image, a copy of the prepared
+# image that names it as its backing file by its bare name, triangle.c and
+# vtest-rach2.sh. It prepares the image first when it is missing or its key
+# is not the inputs' digest.
 #
 # The images are in BED_VTEST_CACHE, by default build/cache/bed-vtest of the
 # clone whose worktree this is, so that its worktrees share one prepared
@@ -44,6 +52,13 @@ die()
 {
     echo "vtest-guest: $*" >&2
     exit 1
+}
+
+# inputs_key: print the digest of what the prepared image is made from.
+inputs_key()
+{
+    cat "$here/setup.sh.in" "$here/packages" "$here/user-data.in" "$here/meta-data" \
+        "$here/network-config" "$pins" | sha256sum | cut -d ' ' -f 1
 }
 
 pin()
@@ -116,7 +131,7 @@ prepare()
     sed -e "s|@SETUP@|$(base64 -w0 < "$work/setup.sh")|" "$here/user-data.in" > "$work/seed/user-data"
     cp "$here/meta-data" "$here/network-config" "$work/seed/"
     xorriso -as mkisofs -quiet -o "$work/seed.iso" -V cidata -J -r "$work/seed"
-    rm -f "$prepared"
+    rm -f "$prepared" "$prepared.key"
     qemu-img create -q -f qcow2 -F qcow2 -b "$base" "$work/prepared.qcow2" 8G
     port=$(free_port)
     machine 4 4096 "$work/prepared.qcow2"
@@ -132,6 +147,7 @@ prepare()
     grep -aq 'vtest-guest: prepared' "$work/console.log" || die "result: preparation failed"
     mv "$work/prepared.qcow2" "$prepared"
     chmod a-w "$prepared"
+    inputs_key > "$prepared.key"
     echo "vtest-guest: result: prepared $prepared"
 }
 
@@ -265,12 +281,33 @@ check()
     echo "vtest-guest: result: the triangle through the relay equals llvmpipe's, $got"
 }
 
+# stage DIR: make DIR the data disk's contents, preparing the image first
+# when it is missing or was made from other inputs. The cloud image is linked
+# into DIR when the file system allows it, and copied when not.
+stage()
+{
+    [ -n "$1" ] && [ ! -e "$1" ] || die "stage: $1 exists"
+    if [ ! -f "$prepared" ] || [ "$(cat "$prepared.key" 2>/dev/null)" != "$(inputs_key)" ]; then
+        (prepare)
+    fi
+    base_image
+    mkdir -p "$1"
+    name=$(basename "$base")
+    ln "$base" "$1/$name" 2>/dev/null || cp "$base" "$1/$name"
+    cp "$prepared" "$1/prepared.qcow2"
+    chmod u+w "$1/prepared.qcow2"
+    qemu-img rebase -u -F qcow2 -b "$name" "$1/prepared.qcow2"
+    cp "$here/triangle.c" "$here/vtest-rach2.sh" "$1/"
+    echo "vtest-guest: result: staged $1"
+}
+
 case ${1:-} in
     prepare) prepare ;;
     run) shift; run "$@" ;;
     check) shift; check "$@" ;;
+    stage) stage "${2:-}" ;;
     *)
-        echo "usage: vtest-guest.sh prepare | run [-c CPUS] [-m MIB] COMMAND | check [-c CPUS] [-m MIB]" >&2
+        echo "usage: vtest-guest.sh prepare | run [-c CPUS] [-m MIB] COMMAND | check [-c CPUS] [-m MIB] | stage DIR" >&2
         exit 2
         ;;
 esac
