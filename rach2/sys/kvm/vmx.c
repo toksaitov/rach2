@@ -988,6 +988,12 @@ static void vmx_panic(void)
     }
 }
 
+/** Whether `cr` has every bit `fixed0` sets and none `fixed1` clears. */
+static int fixed_ok(uint64_t cr, uint64_t fixed0, uint64_t fixed1)
+{
+    return (cr & fixed0) == fixed0 && (cr & ~fixed1) == 0;
+}
+
 /**
  * Turn VMX on on this processor and make `x`'s VMCS current, with
  * interrupts off: CR4.VMXE, IA32_FEATURE_CONTROL locked with VMX on where
@@ -1011,6 +1017,12 @@ static int vmx_on(struct vmx_vcpu *x, int cpu, uint64_t *cr4)
         fc_checked[cpu] = 1;
     }
     *cr4 = vmx_op->read_cr(4);
+    /* CR0 or CR4 outside the fixed bits makes VMXON #GP, which Linux's
+     * kvm_cpu_vmxon catches from its exception table; refuse it before. */
+    if (!fixed_ok(vmx_op->read_cr(0), caps.cr0_fixed0, caps.cr0_fixed1) ||
+        !fixed_ok(*cr4 | CR4_VMXE, caps.cr4_fixed0, caps.cr4_fixed1)) {
+        return -EIO;
+    }
     vmx_cr4[cpu] = *cr4;
     if (!(*cr4 & CR4_VMXE)) {
         vmx_op->write_cr4(*cr4 | CR4_VMXE);
