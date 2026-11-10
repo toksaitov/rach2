@@ -21,7 +21,8 @@
  * otherwise "DRMCOMPATPROBE FAIL: what" and exits 1 at the first failure.
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
  * assertion for each check in order: `open`, `version`, `resources`,
- * `addfb2`, `getfb2` and `vblank`. Built for i686 alone (tests/Makefile).
+ * `addfb2`, `getfb2`, `vblank`, `legacy`, `tail-padding` and
+ * `descriptors`. Built for i686 alone (tests/Makefile).
  * Freestanding; direct system calls (probe.h).
  */
 
@@ -151,6 +152,8 @@ I386_SIZE(drm_wait_vblank_reply, 16);
 /* The dumb buffer's size in pixels and bits per pixel. */
 #define DUMB_SIDE 64
 #define DUMB_BPP  32
+
+static u32 first_crtc;
 
 /* A structure of up to 128 bytes and its guard. */
 union guarded {
@@ -333,6 +336,7 @@ static void resources_row(int fd)
     if (r->count_crtcs != n_crtcs || r->count_connectors != n_connectors) {
         fail("GETRESOURCES's counts differ with arrays");
     }
+    first_crtc = crtcs[0];
     for (i = 0; i < n_crtcs; i++) {
         if (crtcs[i] == 0) {
             fail("GETRESOURCES lists a CRTC of id 0");
@@ -433,6 +437,87 @@ static void vblank_row(int fd)
     report_held();
 }
 
+/** Legacy structures use 32-bit longs and leave their guards intact. */
+static void legacy_rows(int fd)
+{
+    union guarded g;
+    u32 *words;
+    unsigned int i;
+
+    words = guard_set(&g, 8);
+    if (drm_ioctl(fd, 0xC0086401u, words) != 0 || words[0] != 0 || words[1] != 0) {
+        fail("GET_UNIQUE before SET_VERSION");
+    }
+    guard_check(&g, 8, "GET_UNIQUE wrote past its 8 bytes");
+    words = guard_set(&g, 24);
+    if (drm_ioctl(fd, 0xC0186405u, words) != 0 || words[2] != (u32)syscall0(SYS_GETPID)) {
+        fail("GET_CLIENT's pid in the i386 structure");
+    }
+    guard_check(&g, 24, "GET_CLIENT wrote past its 24 bytes");
+    guard_set(&g, 124);
+    fill(g.bytes, 0xA5, 124);
+    if (drm_ioctl(fd, 0x807C6406u, g.bytes) != 0) {
+        fail("GET_STATS");
+    }
+    for (i = 0; i < 124; i++) {
+        if (g.bytes[i] != 0) {
+            fail("GET_STATS left a nonzero byte");
+        }
+    }
+    guard_check(&g, 124, "GET_STATS wrote past its 124 bytes");
+    report_held();
+}
+
+/** The three KMS structures with tail padding use the encoded short size. */
+static void tail_padding_row(int fd)
+{
+    union guarded g;
+    u32 *words = guard_set(&g, 12);
+    long rc;
+
+    if (drm_ioctl(fd, 0xC00C64B5u, words) != 0) {
+        fail("GETPLANERESOURCES with its i386 size");
+    }
+    guard_check(&g, 12, "GETPLANERESOURCES copied native tail padding");
+    words = guard_set(&g, 28);
+    words[5] = first_crtc;
+    words[6] = 0xCCCCCCCCu;
+    if (drm_ioctl(fd, 0xC01C64B9u, words) != 0) {
+        fail("OBJ_GETPROPERTIES with its i386 size");
+    }
+    guard_check(&g, 28, "OBJ_GETPROPERTIES copied native tail padding");
+    words = guard_set(&g, 20);
+    words[3] = first_crtc;
+    words[4] = 0xCCCCCCCCu;
+    rc = drm_ioctl(fd, 0xC01464BAu, words);
+    if (rc != -2 && rc != -22 && rc != -13) {
+        fail("OBJ_SETPROPERTY accepted property zero");
+    }
+    guard_check(&g, 20, "OBJ_SETPROPERTY copied native tail padding");
+    report_held();
+}
+
+/** DRM's local replies require an open DRM node. */
+static void descriptor_row(void)
+{
+    static const unsigned long commands[] = {0x807C6406u, 0x40086410u, 0x4014643Fu};
+    union guarded g;
+    int fd = (int)syscall3(SYS_OPEN, (long)"/dev/null", O_RDWR, 0);
+    unsigned int i;
+
+    if (fd < 0) {
+        fail("open a non-DRM descriptor");
+    }
+    for (i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+        if (drm_ioctl(fd, commands[i], g.bytes) != -25 ||
+            drm_ioctl(-1, commands[i], g.bytes) != -9) {
+            fail("DRM answered on another device or a closed descriptor");
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -440,7 +525,8 @@ PROBE_SP_ENTRY;
 /** Run the rows in order; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
-    static const char *const ids[] = {"open", "version", "resources", "addfb2", "getfb2", "vblank"};
+    static const char *const ids[] = {"open",   "version", "resources",    "addfb2",     "getfb2",
+                                      "vblank", "legacy",  "tail-padding", "descriptors"};
     char name[64];
     unsigned i;
     int fd;
@@ -454,6 +540,9 @@ void probe_main(unsigned long *sp)
     resources_row(fd);
     fb2_rows(fd);
     vblank_row(fd);
+    legacy_rows(fd);
+    tail_padding_row(fd);
+    descriptor_row();
     syscall1(SYS_CLOSE, fd);
     report_end();
     probe_line("DRMCOMPATPROBE CARD ", name, 0);

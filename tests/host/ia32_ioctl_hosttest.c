@@ -139,6 +139,12 @@ fd_entry_t *fd_get(fd_table_t *t, int fd)
  * console and one opened with O_PATH. */
 enum { FD_DEV = 3, FD_INET = 4, FD_INET6 = 5, FD_CON = 6, FD_PATHFD = 7 };
 
+/** The device slot models a DRM node; the other descriptors do not. */
+int drm_is_file(const fd_entry_t *entry)
+{
+    return entry == &entries[FD_DEV];
+}
+
 /** Three interfaces with an IPv4 address. */
 int netdev_seen_count(void)
 {
@@ -922,7 +928,8 @@ static void test_drm_mode(void)
 
     fresh();
     CHECK("a driver's request goes to the GPU translations",
-          ioctl32(FD_DEV, 0xC0106440, 0x1000) == -ENOTTY && native_calls == 0);
+          ioctl32(FD_DEV, 0xC0106440, 0x1000) == 0 && native_calls == 1 &&
+              native_cmd == 0xC0106440);
     fresh();
     native_rc = 3;
     CHECK("GET_CAP passes", ioctl32(FD_DEV, 0xC010640C, 0x1000) == 3);
@@ -931,10 +938,32 @@ static void test_drm_mode(void)
     CHECK("OBJ_GETPROPERTIES of 28 bytes passes as numbered",
           ioctl32(FD_DEV, 0xC01C64B9, 0x1000) == 0 && native_cmd == 0xC01C64B9);
     fresh();
-    CHECK("dma-buf goes to the GPU translations", ioctl32(FD_DEV, 0x40086200, 0x1000) == -ENOTTY);
-    CHECK("sync_file goes to the GPU translations", ioctl32(FD_DEV, 0xC0303E03, 0x1000) == -ENOTTY);
-    CHECK("udmabuf goes to the GPU translations", ioctl32(FD_DEV, 0x40187542, 0x1000) == -ENOTTY);
-    CHECK("none of them runs natively", native_calls == 0);
+    CHECK("dma-buf goes to the GPU translations",
+          ioctl32(FD_DEV, 0x40086200, 0x1000) == 0 && native_cmd == 0x40086200);
+    CHECK("sync_file goes to the GPU translations",
+          ioctl32(FD_DEV, 0xC0303E03, 0x1000) == 0 && native_cmd == 0xC0303E03);
+    CHECK("udmabuf goes to the GPU translations",
+          ioctl32(FD_DEV, 0x40187542, 0x1000) == 0 && native_cmd == 0x40187542);
+    CHECK("the GPU families reach their native handlers", native_calls == 3);
+}
+
+/** Local DRM replies still require a DRM descriptor. */
+static void test_drm_descriptors(void)
+{
+    static const uint32_t commands[] = {0x807C6406u, 0x40086410u, 0x4014643Fu};
+    unsigned int i;
+
+    for (i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+        fresh();
+        native_rc = -ENOTTY;
+        CHECK("a local DRM request on another device reaches that device",
+              ioctl32(FD_CON, commands[i], 0x1000) == -ENOTTY && native_calls == 1 &&
+                  to_user_copies == 0);
+        fresh();
+        CHECK("a local DRM request on a closed descriptor is EBADF",
+              ioctl32(2, commands[i], 0x1000) == -EBADF && native_calls == 0 &&
+                  to_user_copies == 0);
+    }
 }
 
 int main(void)
@@ -950,6 +979,7 @@ int main(void)
     proc.fds = &table;
     cpu_table[0].current = &proc;
 
+    test_drm_descriptors();
     test_path();
     test_pass();
     test_fs_attr();
