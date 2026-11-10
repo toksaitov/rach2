@@ -590,6 +590,12 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
     if (err == -EAGAIN) {
         link_retry(i915);
     }
+    /* Linux's intel_crtc_enable_pipe_crc: a running source again, its
+     * first frame dropped. */
+    if (c->crc_ctl != 0) {
+        c->crc_skip = 1;
+        i915_write(hw, PIPE_CRC_CTL(c->pipe), c->crc_ctl);
+    }
     klog(KLOG_INFO, "i915",
          "display: pipe %c set: %ux%u in %ux%u@%u, %u kHz, %u bpp, %u lane%s at %u kHz%s",
          'A' + c->pipe, (unsigned)cfg->src_w, (unsigned)cfg->src_h, (unsigned)cfg->mode.hdisplay,
@@ -615,6 +621,10 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     }
     i915_posting_read(&i915->hw, DSPSURF(c->pipe));
     intel_wm_cancel(c);
+    /* Linux's intel_crtc_disable_pipe_crc: no CRC of a pipe going off. */
+    if (c->crc_ctl != 0) {
+        i915_write(&i915->hw, PIPE_CRC_CTL(c->pipe), 0);
+    }
     if (c->cfg.active) {
         intel_ddi_disable(i915);
         intel_ddi_post_disable(i915, c, &c->cfg);
