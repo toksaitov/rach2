@@ -1,6 +1,6 @@
 /*
  * i915_gem_execbuffer.c: EXECBUFFER2, a program's batch run on the render
- * or blitter ring, after Linux 6.18's gem/i915_gem_execbuffer.c on a
+ * or blitter ring, after Linux 6.12's gem/i915_gem_execbuffer.c on a
  * legacy ring: the objects looked up, bound and relocated, the batch
  * checked, its request built behind its fences, and the objects' implicit
  * fences and domains moved to it.

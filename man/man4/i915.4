@@ -142,7 +142,7 @@ fall in the families below.
 .Dv DRM_IOCTL_VERSION
 answers as above.
 .Dv DRM_IOCTL_I915_GETPARAM
-answers each parameter as Linux 6.18 answers it on this device: the
+answers each parameter as Linux 6.12 answers it on this device: the
 device id, the revision, the rings that run (render and blitter; no video
 or video enhancement ring yet), the LLC, write-through eDRAM, the slice,
 subslice and EU counts the fuses give, the command streamer's timestamp
@@ -438,7 +438,7 @@ one, and to a privileged process the resets of the device.
 .Dv DRM_IOCTL_I915_GEM_EXECBUFFER2
 and
 .Dv DRM_IOCTL_I915_GEM_EXECBUFFER2_WR
-run a batch on the render or blitter ring as Linux 6.18 does on Haswell.
+run a batch on the render or blitter ring as Linux 6.12 does on Haswell.
 The objects are bound in the global GTT, at the offset each entry
 presumed when it is free, at a pinned offset under
 .Dv EXEC_OBJECT_PINNED ,

@@ -1510,7 +1510,7 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
 void i915_gem_unplug(struct drm_i915_private *i915);
 
 /**
- * GEM_EXECBUFFER2 and its _WR form, as Linux 6.18's
+ * GEM_EXECBUFFER2 and its _WR form, as Linux 6.12's
  * i915_gem_execbuffer2_ioctl on a legacy ring (i915_gem_execbuffer.c): the
  * objects bound and relocated, the batch started on the engine the flags
  * or the context's map name, its fences awaited and signalled.
@@ -1984,7 +1984,7 @@ uint32_t i915_tiled_offset(uint32_t tiling, uint32_t stride, uint32_t swizzle, u
 
 /*
  * Contexts, requests and parameters (i915_gem_context.c, i915_request.c,
- * i915_getparam.c), after Linux 6.18's gem/i915_gem_context.c,
+ * i915_getparam.c), after Linux 6.12's gem/i915_gem_context.c,
  * gt/intel_context.c, i915_request.c, gt/intel_ring_submission.c,
  * i915_getparam.c and i915_query.c. Every call is made under the big
  * kernel lock; those that wait may sleep, and the lock is let go while

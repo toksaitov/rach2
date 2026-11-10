@@ -1291,7 +1291,8 @@ static void row_requests(void)
 
 /* ---- 78-5a.4: GETPARAM and I915_QUERY ---- */
 
-/* GETPARAM's answers on the Lenovo, as Linux 6.18 gave them. */
+/* GETPARAM's answers on the Lenovo, as Linux 6.18.58 gave them, which are
+ * 6.12's but for MMAP_GTT_VERSION (i915_getparam.c). */
 static const struct {
     int32_t param;
     int32_t err;
