@@ -1455,6 +1455,21 @@ static int32_t set_signal_mask(struct kvm_vcpu *v, uintptr_t arg)
     return 0;
 }
 
+/** Disable the optional VAPIC page, which QEMU does on APIC reset even
+ * without KVM_CAP_VAPIC. A nonzero page is not offered by this interface. */
+static int32_t set_vapic(struct kvm_vcpu *v, uintptr_t arg)
+{
+    uint64_t address;
+
+    if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&address, (const void __user *)arg, sizeof(address)) != 0) {
+        return -EFAULT;
+    }
+    return address ? -EINVAL : 0;
+}
+
 /** KVM_ENABLE_CAP of a vCPU: Linux's x86 vCPU capabilities are Hyper-V's,
  * hyperv.c's, and the enforcement of paravirtual features, which is not
  * offered. -EINVAL for a flag or a capability not enabled, as Linux. */
@@ -1548,6 +1563,8 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return set_mce(v, arg);
     case KVM_SET_SIGNAL_MASK:
         return set_signal_mask(v, arg);
+    case KVM_SET_VAPIC_ADDR:
+        return set_vapic(v, arg);
     case KVM_GET_LAPIC:
     case KVM_SET_LAPIC:
         if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
