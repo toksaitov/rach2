@@ -243,24 +243,36 @@ static int kd_visible_mode(void)
     return kd_held ? kd_held_mode : kd_mode;
 }
 
+/* A hold is marked before the mode goes to K_OFF and cleared after the
+ * mode comes back, so that `kd_visible_mode` never shows the console K_OFF
+ * meanwhile: COM1's input, which `kd_translates` lets through, would be
+ * discarded in that window. */
 void kd_hold(void)
 {
+    uint32_t flags;
+
     kd_init();
     if (kd_held) {
         return;
     }
+    flags = spin_lock_irqsave(&kd_lock);
     kd_held_mode = kd_mode;
-    kd_apply_mode(K_OFF, 0);
     kd_held = 1;
+    spin_unlock_irqrestore(&kd_lock, flags);
+    kd_apply_mode(K_OFF, 0);
 }
 
 void kd_unhold(void)
 {
+    uint32_t flags;
+
     if (!kd_held) {
         return;
     }
-    kd_held = 0;
     kd_apply_mode(kd_held_mode, 0);
+    flags = spin_lock_irqsave(&kd_lock);
+    kd_held = 0;
+    spin_unlock_irqrestore(&kd_lock, flags);
 }
 
 /**
