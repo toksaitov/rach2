@@ -29,7 +29,8 @@ ending by
 .Xr exit 2
 of the group or by a fatal signal; not while its core file is written.
 An exec killing its other threads does not make the process dying,
-but a group exit or a SIGKILL sent to the process during exec does.
+but a group exit, or a SIGKILL sent during exec to the process or to the
+thread making the exec, does.
 Every other process that shares its address space, by
 .Dv CLONE_VM ,
 must be dying too.

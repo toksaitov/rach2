@@ -401,9 +401,11 @@ long sys_process_madvise(isr_params_t *params)
 
 /** Whether the thread group `tg` is dying and will free its memory, as
  * Linux's __task_will_free_mem: not while its core is written; once the
- * group is exiting or has a pending SIGKILL, even during exec. Outside
- * exec a thread's pending SIGKILL also counts; exec posts its own thread
- * kills without ending the process. */
+ * group is exiting or has a pending SIGKILL, even during exec. A thread's
+ * pending SIGKILL also counts, as Linux's complete_signal makes it fatal to
+ * the group; during exec only the exec'ing thread's does, since the
+ * SIGKILLs exec posts to the other threads end them without ending the
+ * process. */
 static int pvm_dying(const struct tgroup *tg)
 {
     const process_t *p;
@@ -414,11 +416,9 @@ static int pvm_dying(const struct tgroup *tg)
     if (tg->exiting || (tg->pending & KSIG_BIT(SIGKILL))) {
         return 1;
     }
-    if (tg->exec_task) {
-        return 0;
-    }
     for (p = proc_list; p; p = p->next) {
-        if (p->tg == tg && (p->sig_pending & KSIG_BIT(SIGKILL))) {
+        if (p->tg == tg && (!tg->exec_task || p == tg->exec_task) &&
+            (p->sig_pending & KSIG_BIT(SIGKILL))) {
             return 1;
         }
     }
