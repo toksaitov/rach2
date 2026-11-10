@@ -24,11 +24,14 @@
 /*
  * The tables of a VM. Each is a frame of the allocator's, reached through
  * the direct map, which covers every frame on x86-64; `tables` counts
- * them, the top one among them. A table below the top is freed when a zap
- * covers its whole span, and the rest go with the VM.
+ * them, the top one among them. A table below the top that a zap empties
+ * waits on `dead`, linked through its first entry, until the flush after
+ * the zap, since a vCPU in the guest may walk it, or hold it in its
+ * paging-structure caches, until then; the rest go with the VM.
  */
 struct tdp {
     uint64_t root; /* the top table's physical address */
+    uint64_t dead; /* the first table to free after the flush, or 0 */
     uint32_t tables;
 };
 
@@ -166,8 +169,12 @@ uint64_t kvm_tdp_root(struct kvm_vm *vm)
  * kvm_mmu_max_gfn bounds a slot's last frame. */
 uint64_t kvm_tdp_frames(void)
 {
+    static uint64_t frames;
     uint32_t a = 0, b = 0, c = 0, d = 0, bits = 36;
 
+    if (frames) {
+        return frames;
+    }
     kcpu_id(0x80000000u, &a, &b, &c, &d);
     if (a >= 0x80000008u) {
         kcpu_id(0x80000008u, &a, &b, &c, &d);
@@ -176,7 +183,8 @@ uint64_t kvm_tdp_frames(void)
     if (bits > 48u) {
         bits = 48u;
     }
-    return 1ull << (bits - 12u);
+    frames = 1ull << (bits - 12u);
+    return frames;
 }
 
 /** A vCPU leaves the guest within a moment of its kick, and does not
@@ -211,9 +219,10 @@ static int table_empty(const uint64_t *table)
 /**
  * Clear the entries of `table`, of level `level` and with `base` its first
  * frame, that meet the frames [lo, hi): a leaf goes whole, a 2 MiB one
- * that the range only meets among them, and a table below goes once it
- * maps nothing, so that a deleted slot leaves no table behind and a later
- * 2 MiB leaf finds no table in its place. Whether a leaf was cleared.
+ * that the range only meets among them, and a table below goes to the
+ * dead list once it maps nothing, so that a deleted slot leaves no table
+ * behind and a later 2 MiB leaf finds no table in its place. Whether a
+ * leaf was cleared.
  */
 static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, uint64_t lo,
                      uint64_t hi)
@@ -235,13 +244,16 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, u
         }
         cleared |= zap_level(t, table_at(e & fmt()->addr), level - 1, from, lo, hi);
         if ((lo <= from && from + span <= hi) || table_empty(table_at(e & fmt()->addr))) {
-            table_free(t, e & fmt()->addr);
             table[i] = 0;
+            table_at(e & fmt()->addr)[0] = t->dead;
+            t->dead = e & fmt()->addr;
         }
     }
     return cleared;
 }
 
+/** A table on the dead list is freed only after the flush, and a table
+ * that goes needs the flush even when no leaf did. */
 void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
 {
     struct tdp *t = (struct tdp *)vm->tdp;
@@ -249,8 +261,14 @@ void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
     if (!t || npages == 0 || gfn >= kvm_tdp_frames()) {
         return;
     }
-    if (zap_level(t, table_at(t->root), TDP_LEVELS, 0, gfn, gfn + npages)) {
+    if (zap_level(t, table_at(t->root), TDP_LEVELS, 0, gfn, gfn + npages) || t->dead) {
         kvm_tdp_flush(vm);
+    }
+    while (t->dead) {
+        uint64_t p = t->dead;
+
+        t->dead = table_at(p)[0];
+        table_free(t, p);
     }
 }
 

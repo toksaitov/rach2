@@ -470,7 +470,8 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write);
 
 /** Drop what the tables map of the `npages` frames from `gfn`, and get
  * every vCPU out of the guest with its translations to drop
- * (`kvm_tdp_flush`) when anything was mapped. Does not sleep. */
+ * (`kvm_tdp_flush`) when anything was mapped, before a table it emptied is
+ * freed. Does not sleep. */
 void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
 
 /** Take the write right from the 4 KiB leaves of the frames `gfn` + i for
