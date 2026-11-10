@@ -29,6 +29,7 @@
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
 #include "../../proc/rseq.h"
+#include "../../proc/membarrier.h"
 #include "../../proc/process_vm.h"
 #include "../../mm/mempolicy.h"
 #include "../../proc/pidfd.h"
@@ -261,6 +262,9 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SCHED_GET_PRIORITY_MAX] = sys_sched_get_priority_max;
     table[SYS_SCHED_GET_PRIORITY_MIN] = sys_sched_get_priority_min;
     table[SYS_SCHED_RR_GET_INTERVAL] = sys_sched_rr_get_interval;
+    table[SYS_SCHED_SETATTR] = sys_sched_setattr;
+    table[SYS_SCHED_GETATTR] = sys_sched_getattr;
+    table[SYS_MEMBARRIER] = sys_membarrier;
     table[SYS_SCHED_SETAFFINITY] = sys_sched_setaffinity;
     table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
     table[SYS_PRCTL] = sys_prctl;
@@ -362,6 +366,9 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
+    table[SYS_FUTEX_WAKE] = sys_futex_wake;
+    table[SYS_FUTEX_WAIT] = sys_futex_wait;
+    table[SYS_FUTEX_REQUEUE] = sys_futex_requeue;
     table[SYS_FCHMODAT2] = sys_fchmodat2;
     table[SYS_EXIT_GROUP] = sys_exit_group;
     table[SYS_SOCKET] = sys_socket;

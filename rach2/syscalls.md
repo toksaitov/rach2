@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 321 calls, the x86-64 kernel 293, and its compat table 367. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 327 calls, the x86-64 kernel 299, and its compat table 373. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -83,8 +83,11 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `ftruncate` | 93 | 77 | 93 | [truncate(2)](../man/man2/truncate.2) |
 | `ftruncate64` | 194 | none | 194 | [truncate(2)](../man/man2/truncate.2) |
 | `futex` | 240 | 202 | 240 | [futex(2)](../man/man2/futex.2) |
+| `futex_requeue` | 456 | 456 | 456 | [futex(2)](../man/man2/futex.2) |
 | `futex_time64` | none | none | 422 | [futex(2)](../man/man2/futex.2) |
+| `futex_wait` | 455 | 455 | 455 | [futex(2)](../man/man2/futex.2) |
 | `futex_waitv` | 449 | 449 | 449 | [futex(2)](../man/man2/futex.2) |
+| `futex_wake` | 454 | 454 | 454 | [futex(2)](../man/man2/futex.2) |
 | `futimesat` | none | none | 299 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
 | `get_mempolicy` | 275 | 239 | 275 | [get_mempolicy(2)](../man/man2/get_mempolicy.2) |
 | `get_robust_list` | 312 | 274 | 312 | [futex(2)](../man/man2/futex.2) |
@@ -149,6 +152,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `lstat64` | 196 | none | 196 | [stat(2)](../man/man2/stat.2) |
 | `madvise` | 219 | 28 | 219 | [brk(2)](../man/man2/brk.2) |
 | `mbind` | 274 | 237 | 274 | [mbind(2)](../man/man2/mbind.2) |
+| `membarrier` | 375 | 324 | 375 | [membarrier(2)](../man/man2/membarrier.2) |
 | `memfd_create` | 356 | 319 | 356 | [memfd_create(2)](../man/man2/memfd_create.2) |
 | `migrate_pages` | 294 | 256 | 294 | [move_pages(2)](../man/man2/move_pages.2) |
 | `mincore` | 218 | 27 | 218 | [brk(2)](../man/man2/brk.2) |
@@ -250,11 +254,13 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `sched_get_priority_max` | 159 | 146 | 159 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_get_priority_min` | 160 | 147 | 160 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_getaffinity` | 242 | 204 | 242 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_getattr` | 352 | 315 | 352 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_getparam` | 155 | 143 | 155 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_getscheduler` | 157 | 145 | 157 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_rr_get_interval` | 161 | 148 | 161 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_rr_get_interval_time64` | none | none | 423 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_setaffinity` | 241 | 203 | 241 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_setattr` | 351 | 314 | 351 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_setparam` | 154 | 142 | 154 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_setscheduler` | 156 | 144 | 156 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_yield` | 158 | 24 | 158 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |

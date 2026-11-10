@@ -6,6 +6,8 @@
 .Nm sched_getscheduler ,
 .Nm sched_setparam ,
 .Nm sched_getparam ,
+.Nm sched_setattr ,
+.Nm sched_getattr ,
 .Nm sched_get_priority_max ,
 .Nm sched_get_priority_min ,
 .Nm sched_rr_get_interval ,
@@ -24,6 +26,10 @@
 .Fn sched_setparam "pid_t pid" "const struct sched_param *param"
 .Ft int
 .Fn sched_getparam "pid_t pid" "struct sched_param *param"
+.Ft int
+.Fn sched_setattr "pid_t pid" "struct sched_attr *attr" "unsigned int flags"
+.Ft int
+.Fn sched_getattr "pid_t pid" "struct sched_attr *attr" "unsigned int size" "unsigned int flags"
 .Ft int
 .Fn sched_get_priority_max "int policy"
 .Ft int
@@ -52,7 +58,9 @@ until unlock, timeout or interruption removes the donation.
 .Dv SCHED_BATCH
 and
 .Dv SCHED_IDLE
-have priority 0 and rotate in the ordinary ready order.
+have priority 0 and rotate in the ordinary ready order, and so does
+.Dv SCHED_DEADLINE ,
+below.
 Each processor has its own run queue: a woken process joins the
 processor it last ran on unless that one is busy and another it may run
 on is idle, and a processor with nothing to run takes a process from the
@@ -76,6 +84,9 @@ or
 or
 .Dv SCHED_RR
 .Pq 2 ,
+or
+.Dv SCHED_DEADLINE
+.Pq 6 ,
 with
 .Dv SCHED_RESET_ON_FORK
 added when it was set with it, and
@@ -97,10 +108,21 @@ which Linux counts as nice 20 and lets a thread leave only as far as
 .Dv SCHED_RESET_ON_FORK ;
 either fails with
 .Er EPERM .
-A fork's child has its parent's policy without
+A fork's child has its parent's policy and parameters without
 .Dv SCHED_RESET_ON_FORK ,
-which Linux clears in the child and which resets only the real-time and
-deadline policies, and an exec keeps both.
+which Linux clears in the child, and an exec keeps both.
+With the flag, a real-time or deadline policy becomes
+.Dv SCHED_OTHER
+at nice 0 in the child, a negative nice value becomes 0, and a slice
+asked for the default.
+A
+.Dv SCHED_DEADLINE
+thread without the flag may not fork, and
+.Xr fork 2
+and
+.Xr clone 2
+fail with
+.Er EAGAIN .
 A privileged caller can set
 .Dv SCHED_FIFO
 or
@@ -108,11 +130,116 @@ or
 with priority 1 to 99.
 An unprivileged caller may keep its existing real-time policy and lower
 its priority, but cannot raise it or enter a real-time policy.
-.Dv SCHED_RESET_ON_FORK
-returns a real-time child to
-.Dv SCHED_OTHER
-at priority 0.
-Other policies are refused with
+.Dv SCHED_DEADLINE
+takes its parameters from
+.Fn sched_setattr
+alone, and
+.Fn sched_setscheduler
+and
+.Fn sched_setparam
+refuse it with
+.Er EINVAL ,
+as they do
+.Dv SCHED_EXT
+and the numbers Linux does not define.
+.Pp
+.Fn sched_setattr
+sets the policy and parameters a
+.Vt struct sched_attr
+gives:
+.Bd -literal -offset indent
+struct sched_attr {
+	uint32_t size;		/* 48, 56, or 0 for 48 */
+	uint32_t sched_policy;
+	uint64_t sched_flags;	/* SCHED_FLAG_ */
+	int32_t sched_nice;	/* ordinary policies */
+	uint32_t sched_priority;	/* SCHED_FIFO, SCHED_RR */
+	uint64_t sched_runtime;	/* ns */
+	uint64_t sched_deadline;	/* ns, SCHED_DEADLINE */
+	uint64_t sched_period;	/* ns, SCHED_DEADLINE */
+	uint32_t sched_util_min;	/* size 56 */
+	uint32_t sched_util_max;
+};
+.Ed
+.Pp
+with the same layout on i386 and x86-64.
+A
+.Fa size
+below 48 or past 4096 fails with
+.Er E2BIG ,
+and so does a larger one than 56 whose further bytes are not all 0; either
+writes 56 into the caller's
+.Fa size .
+It takes each policy
+.Fn sched_setscheduler
+takes, with the same checks and result, and
+.Dv SCHED_DEADLINE .
+For the ordinary policies it sets the nice value, clamped to -20 to 19,
+and a slice of
+.Fa sched_runtime
+nanoseconds, clamped to 0.1 to 100 ms, or the default for 0; lowering the
+nice value needs privilege, as
+.Dv RLIMIT_NICE
+is 0, and fails with
+.Er EPERM .
+.Dv SCHED_FLAG_RESET_ON_FORK
+(1) is
+.Dv SCHED_RESET_ON_FORK ;
+.Dv SCHED_FLAG_KEEP_POLICY
+(8) keeps the thread's policy and its reset flag;
+.Dv SCHED_FLAG_KEEP_PARAMS
+(16) checks the thread's present parameters in place of the structure's
+and changes only the reset flag;
+.Dv SCHED_FLAG_RECLAIM
+(2) and
+.Dv SCHED_FLAG_DL_OVERRUN
+(4) are kept with a deadline thread's parameters.
+The utilization clamps,
+.Dv SCHED_FLAG_UTIL_CLAMP_MIN
+(32) and
+.Dv SCHED_FLAG_UTIL_CLAMP_MAX
+(64), fail with
+.Er EOPNOTSUPP ,
+as from a Linux built without them, and with
+.Er EINVAL
+in a structure of 48 bytes.
+.Pp
+.Dv SCHED_DEADLINE
+needs privilege.
+Its
+.Fa sched_runtime
+must be 1024 ns at least and at most the deadline, the deadline nonzero
+and at most the period, and the period, or the deadline when the period
+is 0, from 100 us to 2^22 us, or the call fails with
+.Er EINVAL .
+A thread whose affinity leaves out a processor that is started fails with
+.Er EPERM .
+The runtimes over the periods of all the deadline threads may come to 95%
+of each processor started, Linux's default admission; past that the call
+fails with
+.Er EBUSY .
+Such a thread's affinity may not then leave out a processor:
+.Fn sched_setaffinity
+fails with
+.Er EBUSY .
+.Pp
+.Fn sched_getattr
+writes the thread's policy, its
+.Dv SCHED_FLAG_RESET_ON_FORK ,
+and the parameters of its policy: a deadline thread's runtime, deadline,
+period and flags, a real-time thread's priority, or an ordinary thread's
+nice value and slice, which is the one it asked for or Linux's default,
+0.75 ms times one more than the base-2 logarithm of the processors
+started, eight at most.
+It writes as many bytes as
+.Fa size
+holds, at most 56, and that count in the structure's
+.Fa size .
+A
+.Fa size
+below 48 or past 4096, or
+.Fa flags
+other than 0, fails with
 .Er EINVAL .
 .Pp
 .Fn sched_get_priority_max
@@ -131,7 +258,11 @@ and 0 to 0 for
 and
 .Dv SCHED_EXT .
 .Fn sched_rr_get_interval
-stores the round-robin time slice, one 1 ms tick.
+stores the round-robin time slice, one 1 ms tick, and 0 for a
+.Dv SCHED_FIFO
+or
+.Dv SCHED_DEADLINE
+thread, as Linux does.
 .Pp
 .Fn sched_getaffinity
 stores the processors the process may run on, of those started, a bit
@@ -179,6 +310,16 @@ thread that wakes take the processor from the running one, and gives a
 thread a weight far below nice 19's; here both take their turn as
 .Dv SCHED_OTHER
 does.
+The nice value and the slice an ordinary thread asks for are kept and
+reported, and the scheduler does not read them.
+Linux runs a
+.Dv SCHED_DEADLINE
+thread before every real-time thread, by the earliest deadline, and stops
+it once it has used its runtime in a period; this scheduler has no
+deadline class, and runs such a thread among the ordinary threads, since a
+real-time priority without that limit would let one that overran its
+runtime starve the rest.
+Its admission is Linux's.
 .Ss System call interface
 The i386 system call numbers are 154 for
 .Fn sched_setparam ,
@@ -203,6 +344,11 @@ and 242 for
 on x86-64 they are 142 to 148 in the same order but for
 .Fn sched_yield ,
 which is 24, and 203 and 204.
+.Fn sched_setattr
+and
+.Fn sched_getattr
+are 351 and 352 on i386 and 314 and 315 on x86-64, and an i386 program on
+the x86-64 kernel has them at 351 and 352.
 The raw
 .Fn sched_getaffinity
 returns the bytes of the mask it wrote, a long for each long's bits of
@@ -264,9 +410,17 @@ and reads each back, sets an affinity of the last processor alone, after which
 returns that processor, and checks the refusals of the other policies, of
 an affinity of a processor past the last, and of another user's process.
 .Sh ERRORS
-.Bl -tag -width "[EFAULT]"
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er E2BIG
+A
+.Vt struct sched_attr
+is of a size below 48 or past 4096, or larger than 56 with a byte past 56
+that is not 0.
+.It Bq Er EBUSY
+The deadline threads' bandwidth would pass 95% of the processors, or a
+deadline thread's affinity would leave out a processor.
 .It Bq Er EFAULT
-A parameter, time slice or mask cannot be read or written.
+A parameter, structure, time slice or mask cannot be read or written.
 .It Bq Er EINVAL
 A
 .Fa pid
@@ -283,18 +437,34 @@ for
 .Fn sched_getaffinity
 is shorter than the mask or not a multiple of a long, or a mask for
 .Fn sched_setaffinity
-has no processor that is started.
+has no processor that is started; or for
+.Fn sched_setattr
+and
+.Fn sched_getattr ,
+the structure is null, the flags argument is not 0, a flag is unknown,
+the deadline parameters are out of their bounds, or the clamps are given
+in 48 bytes, and for
+.Fn sched_getattr
+the size is below 48 or past 4096.
+.It Bq Er EOPNOTSUPP
+.Fn sched_setattr
+was given the utilization clamps.
 .It Bq Er EPERM
 The caller may not change the process, asked without privilege to enter
 a real-time policy or raise its priority, or asked without privilege to leave
-.Dv SCHED_IDLE
-or to clear
-.Dv SCHED_RESET_ON_FORK .
+.Dv SCHED_IDLE ,
+to clear
+.Dv SCHED_RESET_ON_FORK ,
+to lower the nice value or to set
+.Dv SCHED_DEADLINE ;
+or a thread whose affinity leaves out a processor was given
+.Dv SCHED_DEADLINE .
 .It Bq Er ESRCH
 No process has the ID
 .Fa pid .
 .El
 .Sh SEE ALSO
+.Xr fork 2 ,
 .Xr getpriority 2 ,
 .Xr proc 5 ,
 .Xr vdso 7

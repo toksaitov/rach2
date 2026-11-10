@@ -38,6 +38,7 @@
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
 #include "../../proc/rseq.h"
+#include "../../proc/membarrier.h"
 #include "../../proc/process_vm.h"
 #include "../../mm/mempolicy.h"
 #include "../../proc/pidfd.h"
@@ -446,8 +447,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_PROCESS_VM_WRITEV] = sys_process_vm_writev;
     table[SYS_KCMP] = sys_kcmp;
     table[SYS_FINIT_MODULE] = NULL;
-    table[SYS_SCHED_SETATTR] = NULL;
-    table[SYS_SCHED_GETATTR] = NULL;
+    table[SYS_SCHED_SETATTR] = sys_sched_setattr;
+    table[SYS_SCHED_GETATTR] = sys_sched_getattr;
     table[SYS_RENAMEAT2] = sys_renameat2;
     table[SYS_SECCOMP] = sys_seccomp;
     table[SYS_GETRANDOM] = sys_getrandom;
@@ -470,7 +471,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_RECVMSG] = sys_recvmsg;
     table[SYS_SHUTDOWN] = sys_shutdown;
     table[SYS_USERFAULTFD] = NULL;
-    table[SYS_MEMBARRIER] = NULL;
+    table[SYS_MEMBARRIER] = sys_membarrier;
     table[SYS_MLOCK2] = sys_mlock2;
     table[SYS_COPY_FILE_RANGE] = sys_copy_file_range;
     table[SYS_PREADV2] = compat_sys_preadv2;
@@ -542,9 +543,9 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_CACHESTAT] = NULL;
     table[SYS_FCHMODAT2] = sys_fchmodat2;
     table[SYS_MAP_SHADOW_STACK] = NULL;
-    table[SYS_FUTEX_WAKE] = NULL;
-    table[SYS_FUTEX_WAIT] = NULL;
-    table[SYS_FUTEX_REQUEUE] = NULL;
+    table[SYS_FUTEX_WAKE] = sys_futex_wake;
+    table[SYS_FUTEX_WAIT] = sys_futex_wait;
+    table[SYS_FUTEX_REQUEUE] = sys_futex_requeue;
     table[SYS_STATMOUNT] = NULL;
     table[SYS_LISTMOUNT] = NULL;
     table[SYS_LSM_GET_SELF_ATTR] = NULL;
