@@ -652,6 +652,19 @@ static void mmio_unaligned_rows(void)
 {}
 #endif
 
+/** The protection keys are off in the host test, as on a processor without
+ * them. */
+int fpu_pkeys(void)
+{
+    return 0;
+}
+
+/** PKRU with the keys off. */
+uint32_t fpu_pkru(void)
+{
+    return 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {

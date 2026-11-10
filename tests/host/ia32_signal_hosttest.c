@@ -837,6 +837,18 @@ static void run_ptrace_writes(void)
           "the i386 core x87 note uses the tracee's data selector");
 }
 
+/** PKRU with the keys off, which the host test's frames carry. */
+uint32_t fpu_pkru(void)
+{
+    return 0;
+}
+
+/** Writing PKRU does nothing with the keys off. */
+void fpu_pkru_set(uint32_t pkru)
+{
+    (void)pkru;
+}
+
 int main(void)
 {
     run_layout();
