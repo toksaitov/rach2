@@ -50,12 +50,18 @@ int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t
  * where Linux fails the mapping with EPERM and the seal with EBUSY. */
 uint32_t tmpfs_seals(void *node);
 
+/* The chunk a write to a file sealed against growth is cut at: 2 MiB, the
+ * largest folio of Linux's shmem with CONFIG_TRANSPARENT_HUGEPAGE. */
+#define TMPFS_GROW_CHUNK 0x200000u
+
 /**
  * The bytes of a write of `count` at `pos` that F_SEAL_GROW lets into a
  * file of `size` bytes: all of them when the write ends at or before the
- * end, and otherwise those before the last page boundary at or below the
- * end, as Linux's generic_perform_write takes a write a page at a time and
- * shmem_write_begin refuses the first page that would pass the end. 0 when
+ * end, and otherwise those before the last TMPFS_GROW_CHUNK boundary at or
+ * below the end. Linux's generic_perform_write takes a write in chunks of
+ * the mapping's largest folio, aligned to it, which for shmem under a
+ * kernel with transparent huge pages, as Debian's, is 2 MiB, and
+ * shmem_write_begin refuses the first chunk that would pass the end. 0 when
  * no byte fits, which the write answers -EPERM.
  */
 uint32_t tmpfs_grow_room(uint64_t pos, uint32_t count, uint64_t size);

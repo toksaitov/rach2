@@ -7,14 +7,20 @@
  * seals start empty. Under F_SEAL_SHRINK a smaller ftruncate fails with EPERM
  * and a larger one succeeds. Under F_SEAL_GROW a write past the end and a
  * larger ftruncate fail and an overwrite succeeds, and a writev whose two
- * elements together pass the end fails whole, with nothing written, since
- * no whole page before the end fits. Under F_SEAL_FUTURE_WRITE a write
- * fails; after F_SEAL_SEAL a further seal fails; F_GET_SEALS reports each
- * one. A write, a writev and a pwritev that would pass the end of a file
- * of 10000 bytes sealed against growth write the whole pages before it,
- * 8192 bytes from 0 and 3192 from 5000, as Linux writes a page at a time,
- * and a write of 2000 bytes from 9000, and a writev and a pwritev there of
- * two elements of 1000, with no whole page before the end, fail with
+ * elements together pass the end fails whole, with nothing written. Under
+ * F_SEAL_FUTURE_WRITE a write fails; after F_SEAL_SEAL a further seal
+ * fails; F_GET_SEALS reports each one.
+ *
+ * A write past the end of a file sealed against growth writes the whole
+ * 2 MiB-aligned chunks before the end and fails with EPERM when there are
+ * none, as Linux 6.12 with transparent huge pages, the reference Debian
+ * kernel, writes shmem in chunks of its 2 MiB folios and refuses the first
+ * that passes the end. On a file of 10000 bytes a write, a writev and a
+ * pwritev of 12000 bytes from 0 and a write of 6000 from 5000 fail with
+ * nothing written. On a file of 2 MiB and 10000 bytes, a write, a writev
+ * and a pwritev of 16096 bytes from 4096 before the 2 MiB mark write the
+ * 4096 bytes up to the mark, and a write of 12000 from the mark, and a
+ * writev and a pwritev from 9000 past it of two elements of 1000, fail with
  * nothing written, though a vector's first element alone would fit.
  *
  * A memfd made without MFD_ALLOW_SEALING starts with F_SEAL_SEAL, and
@@ -32,8 +38,8 @@
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each check in order: `descriptor`, `file`, `fd-link`, `seal-shrink`,
  * `seal-grow`, `writev-grow`, `seal-future-write`, `seal-seal`,
- * `seal-grow-pages`,
- * `unsealable`, `noexec-seal`, `krffs-seals`, `tmpfs-seals` and `refused`.
+ * `seal-grow-pages`, `unsealable`, `noexec-seal`, `krffs-seals`,
+ * `tmpfs-seals` and `refused`.
  * The first failure fails its assertion with the check and errno and leaves
  * the rest not run.
  */
@@ -82,36 +88,80 @@ static int size_is(int fd, off_t size)
     return fstat(fd, &st) == 0 && st.st_size == size;
 }
 
+/* The chunk Linux writes shmem in, its largest folio with transparent huge
+ * pages. */
+#define CHUNK 0x200000L
+
 /**
- * Check that a sealed memfd of 10000 bytes takes the whole pages before its
- * end of a write that would pass it, by write, writev and pwritev, and
- * refuses a write with no whole page before the end. Returns 0, or 1 after
- * the failure is printed.
+ * Check that a sealed memfd of 10000 bytes refuses a write past its end by
+ * write, writev or pwritev with nothing written, since no whole 2 MiB chunk
+ * lies before the end. Returns 1 when every call held.
  */
-static int grow_pages(void)
+static int grow_small(char *big)
 {
-    static char big[12000];
-    struct iovec halves[2] = {{big, 6000}, {big, 6000}};
-    struct iovec stream[2] = {{big, 9000}, {big, 3000}};
-    struct iovec small[2] = {{big, 1000}, {big, 1000}};
+    struct iovec halves[2] = {{NULL, 6000}, {NULL, 6000}};
+    struct iovec stream[2] = {{NULL, 9000}, {NULL, 3000}};
     char at[2];
-    int fd = memfd_create("pages", MFD_ALLOW_SEALING);
+    int fd = memfd_create("chunks", MFD_ALLOW_SEALING);
     int ok;
 
-    memset(big, 'b', sizeof(big));
+    halves[0].iov_base = halves[1].iov_base = stream[0].iov_base = stream[1].iov_base = big;
     ok = fd >= 0 && ftruncate(fd, 10000) == 0 && fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) == 0 &&
-         pwrite(fd, big, 12000, 0) == 8192 && writev(fd, halves, 2) == 8192 &&
-         lseek(fd, 0, SEEK_CUR) == 8192 && pwritev(fd, stream, 2, 0) == 8192 &&
-         pwrite(fd, big, 6000, 5000) == 3192 && refused(pwrite(fd, big, 2000, 9000), EPERM) &&
-         lseek(fd, 9000, SEEK_SET) == 9000 && refused(writev(fd, small, 2), EPERM) &&
-         refused(pwritev(fd, small, 2, 9000), EPERM) && pread(fd, at, 1, 8191) == 1 &&
-         at[0] == 'b' && pread(fd, at, 1, 8192) == 1 && at[0] == '\0' &&
-         pread(fd, at, 1, 9000) == 1 && at[0] == '\0' && size_is(fd, 10000);
+         refused(pwrite(fd, big, 12000, 0), EPERM) && refused(writev(fd, halves, 2), EPERM) &&
+         lseek(fd, 0, SEEK_CUR) == 0 && refused(pwritev(fd, stream, 2, 0), EPERM) &&
+         refused(pwrite(fd, big, 6000, 5000), EPERM) && pread(fd, at, 1, 0) == 1 && at[0] == '\0' &&
+         pread(fd, at, 1, 9999) == 1 && at[0] == '\0' && size_is(fd, 10000);
     if (fd >= 0) {
         close(fd);
     }
-    if (!ok) {
-        return fail("a write past the end of a sealed file of whole pages");
+    return ok;
+}
+
+/**
+ * Check that a sealed memfd of CHUNK + 10000 bytes takes, of a write of
+ * 16096 bytes from 4096 before CHUNK by write, writev or pwritev, the 4096
+ * bytes up to CHUNK, and refuses writes from CHUNK and past it with nothing
+ * written. Returns 1 when every call held.
+ */
+static int grow_large(char *big)
+{
+    struct iovec across[2] = {{NULL, 8048}, {NULL, 8048}};
+    struct iovec small[2] = {{NULL, 1000}, {NULL, 1000}};
+    char at[2];
+    int fd = memfd_create("large", MFD_ALLOW_SEALING);
+    int ok;
+
+    across[0].iov_base = across[1].iov_base = small[0].iov_base = small[1].iov_base = big;
+    ok = fd >= 0 && ftruncate(fd, CHUNK + 10000) == 0 && fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) == 0 &&
+         pwrite(fd, big, 16096, CHUNK - 4096) == 4096 &&
+         lseek(fd, CHUNK - 4096, SEEK_SET) == CHUNK - 4096 && writev(fd, across, 2) == 4096 &&
+         lseek(fd, 0, SEEK_CUR) == CHUNK && pwritev(fd, across, 2, CHUNK - 4096) == 4096 &&
+         refused(pwrite(fd, big, 12000, CHUNK), EPERM) &&
+         lseek(fd, CHUNK + 9000, SEEK_SET) == CHUNK + 9000 &&
+         refused(writev(fd, small, 2), EPERM) &&
+         refused(pwritev(fd, small, 2, CHUNK + 9000), EPERM);
+    ok = ok && pread(fd, at, 1, CHUNK - 1) == 1 && at[0] == 'b' && pread(fd, at, 1, CHUNK) == 1 &&
+         at[0] == '\0' && pread(fd, at, 1, CHUNK + 9000) == 1 && at[0] == '\0' &&
+         size_is(fd, CHUNK + 10000);
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok;
+}
+
+/**
+ * Check that a sealed memfd takes, of a write that would pass its end, the
+ * whole 2 MiB chunks before the end, and refuses one with no whole chunk
+ * before the end with nothing written (`grow_small`, `grow_large`). Returns
+ * 0, or 1 after the failure is printed.
+ */
+static int grow_chunks(void)
+{
+    static char big[16096];
+
+    memset(big, 'b', sizeof(big));
+    if (!grow_small(big) || !grow_large(big)) {
+        return fail("a write past the end of a sealed file of whole 2 MiB chunks");
     }
     report_held();
     return 0;
@@ -248,7 +298,7 @@ int main(void)
     for (i = 0; i < sizeof(plan) / sizeof(plan[0]); i++) {
         report_plan(plan[i]);
     }
-    if (sealing() || grow_pages() || others()) {
+    if (sealing() || grow_chunks() || others()) {
         return 1;
     }
     report_end();

@@ -66,12 +66,14 @@ or
 to a smaller size.
 .It Dv F_SEAL_GROW
 Refuse a truncation to a larger size, and cut a write that would pass
-the end to the whole pages before it, as Linux writes a page at a time; a
+the end to the whole 2 MiB-aligned chunks before it, as Linux 6.12 with
+transparent huge pages writes shmem in chunks of its 2 MiB folios; a
 .Xr writev 2
 or
 .Xr pwritev 2
 is cut the same way, its elements taken as one run of bytes.
-A write with no whole page before the end fails with nothing written.
+A write with no whole chunk before the end fails with nothing written,
+so on a file under 2 MiB any write past the end does.
 .It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
 Refuse a
 .Xr write 2 ,
