@@ -6187,7 +6187,7 @@
     },
     {
       "case_id": "guest.default.memcallmusl",
-      "behavior": "The memory calls of Linux 6.10 to 6.12, mseal, process_madvise, process_mrelease, cachestat and memfd_secret, and the answers for memory keys and shadow stacks give what Linux 6.12 gives on a processor with neither, on both kernels and for an i386 program on the x86-64 kernel.",
+      "behavior": "The memory calls of Linux 6.10 to 6.12, mseal, process_madvise, process_mrelease, cachestat and memfd_secret, and the answers for memory keys and shadow stacks give what Linux 6.12 gives, on both kernels and for an i386 program on the x86-64 kernel.",
       "units": ["default", "musl/memcallmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -6196,7 +6196,7 @@
       "execution": {"program": "memcallmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "mseal", "checks": "On the x86-64 kernel, for x86-64 and i386 programs, mseal refuses a flag and an unaligned start with EINVAL and a range with a hole with ENOMEM, takes an empty range, and a sealed page refuses munmap, which unmaps nothing, mremap, MAP_FIXED and mprotect, which changes the page below first, with EPERM, refuses MADV_DONTNEED when read-only and MADV_GUARD_INSTALL, keeping its bytes, shows sl in smaps, may be sealed again and stays sealed in a child; on the i686 kernel mseal is EPERM, as Linux's 32-bit kernel answers.", "source": "program"},
-        {"assertion_id": "pkey", "checks": "On the x86-64 kernel pkey_alloc is EINVAL for a flag or an unknown right and ENOSPC otherwise, pkey_free is EINVAL, and pkey_mprotect is mprotect with key -1 and EINVAL with another key but 0 for an empty range, as Linux 6.12 answers on a processor without memory keys; on the i686 kernel the three are ENOSYS.", "source": "program"},
+        {"assertion_id": "pkey", "checks": "On the x86-64 kernel pkey_alloc is EINVAL for a flag or an unknown right, pkey_free of a key not allocated is EINVAL, and pkey_mprotect is mprotect with key -1 and EINVAL with a key not allocated but 0 for an empty range; pkey_alloc is then ENOSPC on a processor without memory keys and gives key 1 on one with them, as Linux 6.12 answers; on the i686 kernel the three are ENOSYS.", "source": "program"},
         {"assertion_id": "shadow-stack", "checks": "map_shadow_stack is EOPNOTSUPP on the x86-64 kernel and ENOSYS on the i686 one.", "source": "program"},
         {"assertion_id": "cachestat", "checks": "cachestat counts two pages in memory and two dirty for a memfd written in the first and last of three pages, none for its middle page or past its end, and is EBADF for a closed or O_PATH descriptor, EFAULT for an unreadable range and EINVAL for a flag.", "source": "program"},
         {"assertion_id": "cachestat-perm", "checks": "cachestat is EPERM for a process that neither owns nor may write a file it opened for reading.", "source": "program"},
@@ -6215,6 +6215,41 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "memcallmusl", "node": "tests/musl/memcallmusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}]}
+    },
+    {
+      "case_id": "guest.default.pkeymusl",
+      "behavior": "Memory protection keys give what Linux 6.12 gives: on the x86-64 kernel under QEMU's max processor, which has them, real keys kept in regions and page tables, PKRU kept through faults, signals, fork, threads, exec and ptrace, and the kernel's copies honouring it; on a processor without them, and on the i686 kernel, the answers of one without them; for x86-64 and i386 programs alike.",
+      "units": ["default", "musl/pkeymusl"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "pkeymusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "cpu", "checks": "With the keys on, cpuid has OSPKE, /proc/cpuinfo pku and ospke, XCR0 PKRU, the XSAVE size of XCR0 reaches past PKRU, and PKRU starts as 0x55555554; with them off neither OSPKE nor ospke.", "source": "program"},
+        {"assertion_id": "alloc", "checks": "pkey_alloc refuses a flag and an unknown right with EINVAL, gives keys 1 to 15 in order with their rights written into PKRU, then ENOSPC; a freed key is given again, a second free, 16 and -1 are EINVAL, and key 0 may be freed and given again. Without the keys pkey_alloc is ENOSPC and pkey_free EINVAL; on the i686 kernel both are ENOSYS.", "source": "program"},
+        {"assertion_id": "mprotect", "checks": "pkey_mprotect splits a region by key as smaps shows it, refuses a key not allocated, 16 and -2 with EINVAL but takes an empty range, refuses an unaligned start, and mprotect, a merge back to key 0, mremap and fork keep the key. Without the keys key -1 is mprotect and key 0 EINVAL, and smaps has no key.", "source": "program"},
+        {"assertion_id": "fault", "checks": "A read or write of a page under a key PKRU denies, present or not, raises SIGSEGV with SEGV_PKUERR, si_pkey and si_addr; the handler runs with PKRU 0x55555554, the frame holds the interrupted PKRU marked in use, and the access runs again on the PKRU the handler writes there; a key denied writes faults writes alone; a write of a read-only page is SEGV_PKUERR under a denied key and SEGV_ACCERR under an open one.", "source": "program"},
+        {"assertion_id": "signal", "checks": "A handler runs with PKRU 0x55555554, its frame holds the interrupted PKRU marked in use, and sigreturn gives that PKRU back, or the one the handler wrote in the frame.", "source": "program"},
+        {"assertion_id": "kernel", "checks": "read into and write from a page whose key PKRU denies are EFAULT, read into a page denied writes is EFAULT and write from it works, while /proc/self/mem, process_vm_readv and PTRACE_PEEKDATA reach a denied page.", "source": "program"},
+        {"assertion_id": "exec-only", "checks": "mprotect and mmap with PROT_EXEC alone give the execute-only key, the lowest free one, which PKRU denies: the page runs, a read of it is SEGV_PKUERR with the key, pkey_alloc passes the key over, pkey_free and pkey_mprotect refuse it, and PROT_READ|PROT_EXEC moves the page to key 0. Without the keys the page runs and reads.", "source": "program"},
+        {"assertion_id": "inherit", "checks": "A child of fork and a new thread start with their creator's PKRU, and an exec starts with PKRU 0x55555554 and no keys.", "source": "program"},
+        {"assertion_id": "ptrace", "checks": "NT_X86_XSTATE of a stopped tracee holds its PKRU marked in use, and the tracee runs on the PKRU a tracer writes there.", "source": "program"},
+        {"assertion_id": "proc", "checks": "Each region of /proc/self/smaps has a ProtectionKey line with the keys on, and none has one with them off.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "pkeymusl", "node": "tests/musl/pkeymusl", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}

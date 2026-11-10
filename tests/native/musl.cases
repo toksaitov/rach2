@@ -63,6 +63,7 @@ case musl/passwdmusl root:ext2-dir ids:1000,1001 -- musl/passwdmusl machine=nati
 case musl/pathmaxmusl root:krffs stage:hello,native/hello.txt -- musl/pathmaxmusl
 case musl/permmusl root:krffs ids:1000 stage:native/hello.txt -- musl/permmusl
 case musl/pipemusl -- musl/pipemusl
+case musl/pkeymusl -- musl/pkeymusl
 case musl/pollmusl -- musl/pollmusl
 case musl/prctlmusl root:ext2-dir ids:1000 -- musl/prctlmusl
 case musl/preadmusl root:ext2-dir -- musl/preadmusl

@@ -185,6 +185,9 @@ musl/mknodmusl
 # memfd_create, its descriptor and name, and each seal.
 musl/memfdmusl
 musl/memcallmusl
+# Memory protection keys: the three calls, PKRU through faults, signals,
+# fork, exec and ptrace, and the execute-only key, as Linux 6.12 gives them.
+musl/pkeymusl
 # chroot on KRFFS and tmpfs: paths, links and ".." inside the root, fork and
 # exec keeping it, and the rmdir and unmount it refuses.
 musl/chrootmusl

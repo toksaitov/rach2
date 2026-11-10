@@ -2,7 +2,7 @@
  * memcallmusl: check the memory calls of Linux 6.10 to 6.12 that Rach2
  * adds, mseal, process_madvise, process_mrelease, cachestat and
  * memfd_secret, and its answers for memory keys and shadow stacks, against
- * what Linux 6.12 gives on a processor with neither.
+ * what Linux 6.12 gives.
  *
  * What it expects follows the kernel, whose architecture ETUDE_KERNEL in the
  * environment names, or the program's own where it is unset: an i386
@@ -20,9 +20,11 @@
  * is EPERM, as Linux's 32-bit kernel answers.
  *
  * `pkey`: on the x86-64 kernel pkey_alloc refuses a flag and an unknown
- * access right with EINVAL and is otherwise ENOSPC, pkey_free is EINVAL,
- * and pkey_mprotect with key -1 is mprotect, while another key is EINVAL,
- * but 0 for an empty range; on the i686 kernel the three are ENOSYS.
+ * access right with EINVAL, pkey_free of a key not allocated is EINVAL,
+ * and pkey_mprotect with key -1 is mprotect, while a key not allocated is
+ * EINVAL, but 0 for an empty range; pkey_alloc is then ENOSPC on a
+ * processor without the keys, and gives key 1 where cpuid has OSPKE, which
+ * pkeymusl checks further. On the i686 kernel the three are ENOSYS.
  *
  * `shadow-stack`: map_shadow_stack is EOPNOTSUPP on the x86-64 kernel and
  * ENOSYS on the i686 one.
@@ -368,7 +370,27 @@ static void wipe_rows(void)
     close(fd);
 }
 
-/** The memory keys and the shadow stack, which neither kernel has. */
+/** pkey_alloc with no flag: ENOSPC on a processor without the keys, and
+ * with them, where cpuid has OSPKE, key 1, which pkey_free gives back. */
+static void alloc_row(void)
+{
+    unsigned a, b, c, d;
+    long key;
+
+    __asm__ __volatile__("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7u), "c"(0u));
+    if ((c & 0x10u) == 0) {
+        expect("pkey_alloc", syscall(NR_PKEY_ALLOC, 0ul, 1ul), 0, ENOSPC);
+        return;
+    }
+    key = syscall(NR_PKEY_ALLOC, 0ul, 1ul);
+    expect("pkey_alloc with the keys on", key, 1, 0);
+    if (key > 0) {
+        expect("pkey_free of the key", syscall(NR_PKEY_FREE, key), 0, 0);
+    }
+}
+
+/** The memory keys, whose calls only the x86-64 kernel has, and the shadow
+ * stack, which neither kernel has. */
 static void key_rows(void)
 {
     char *m = anon(1, PROT_READ | PROT_WRITE);
@@ -386,7 +408,6 @@ static void key_rows(void)
     } else {
         expect("pkey_alloc with a flag", syscall(NR_PKEY_ALLOC, 1ul, 0ul), 0, EINVAL);
         expect("pkey_alloc with an unknown right", syscall(NR_PKEY_ALLOC, 0ul, 4ul), 0, EINVAL);
-        expect("pkey_alloc", syscall(NR_PKEY_ALLOC, 0ul, 1ul), 0, ENOSPC);
         expect("pkey_free", syscall(NR_PKEY_FREE, 1ul), 0, EINVAL);
         expect("pkey_mprotect with key -1",
                syscall(NR_PKEY_MPROTECT, m, PAGE, (long)PROT_READ, -1l), 0, 0);
@@ -396,6 +417,7 @@ static void key_rows(void)
                syscall(NR_PKEY_MPROTECT, m, 0ul, (long)PROT_READ, 1l), 0, 0);
         expect("pkey_mprotect of an unaligned start with key 1",
                syscall(NR_PKEY_MPROTECT, m + 1, PAGE, (long)PROT_READ, 1l), 0, EINVAL);
+        alloc_row();
     }
     report_part("shadow-stack");
     expect("map_shadow_stack", syscall(NR_MAP_SHADOW_STACK, 0ul, PAGE, 0ul), 0,
