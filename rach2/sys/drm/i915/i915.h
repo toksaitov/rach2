@@ -294,6 +294,43 @@ struct i915_engine {
     uint8_t kick;
 };
 
+/* The aliasing PPGTT's shape (gt/intel_gtt.h): 512 directory entries, each
+ * naming a table of 1024 entries of 4 KiB pages, 2 GiB in all; the
+ * directory's entries lie in the global GTT's own, 2 MiB of its space
+ * aligned to 64 KiB, as GEN6_PD_ALIGN. */
+#define I915_PPGTT_PDES     512u
+#define I915_PPGTT_PTES     1024u
+#define I915_PPGTT_SIZE     ((uint64_t)I915_PPGTT_PDES * I915_PPGTT_PTES * I915_GTT_PAGE_SIZE)
+#define I915_PPGTT_PD_BYTES (I915_PPGTT_PDES * I915_GTT_PAGE_SIZE)
+#define I915_PPGTT_PD_ALIGN 0x10000u
+
+/*
+ * The aliasing PPGTT (i915_ppgtt.c), Linux's gen6_ppgtt as Haswell runs
+ * it: one table of the GPU's addresses that every context shares, which
+ * maps each buffer's binding at the binding's offset in the global GTT,
+ * and nothing of the GT's own objects. Its directory is the global GTT's
+ * entries at `pd_ggtt`, which the GT's space holds, `pd_take` bytes of it
+ * with the alignment's pad. `pt[i]` is the table of directory entry i and
+ * `pt_phys[i]` its address, made when a binding first reaches its 4 MiB
+ * and kept until the PPGTT goes, as Linux keeps them while the directory
+ * is bound, since the chip caches directory entries with no way to
+ * invalidate them; `tables` counts them. An entry with no table names
+ * `scratch_pt`, each of whose entries maps the global GTT's scratch page.
+ * `pp_dir` is what each ring's PP_DIR_BASE takes. `ready` is set once the
+ * directory is written. Under the lock of the bindings, as the GTT's.
+ */
+struct i915_ppgtt {
+    uint32_t *pt[I915_PPGTT_PDES];
+    uint64_t pt_phys[I915_PPGTT_PDES];
+    uint32_t tables;
+    uint32_t *scratch_pt;
+    uint64_t scratch_pt_phys;
+    uint32_t pd_ggtt;
+    uint32_t pd_take;
+    uint32_t pp_dir;
+    uint8_t ready;
+};
+
 /*
  * The GT's own objects (i915_ring.c): the status pages and rings, and
  * first light's page, which take the global GTT from its top down, from
@@ -312,7 +349,7 @@ struct i915_engine {
  * `reset_count` counts the GPU's resets, for GET_RESET_STATS.
  * `submit_next` links the devices whose requests may wait for fences, for
  * the submission worker, and `submit_listed` says the device is on that
- * list.
+ * list. `ppgtt` is the aliasing PPGTT, made with the rings.
  */
 struct i915_gt {
     uint64_t ggtt_top;
@@ -327,6 +364,7 @@ struct i915_gt {
     uint32_t reset_count;
     uint8_t submit_listed;
     struct drm_i915_private *submit_next;
+    struct i915_ppgtt ppgtt;
 };
 
 /*
@@ -1213,12 +1251,12 @@ void i915_irq_handle(struct drm_i915_private *i915);
 
 /**
  * Set up and start the render and blitter rings, as Linux's
- * xcs_resume: for each a status page and a ring in the global GTT, the
- * ring stopped and emptied, the status page's address written and the
- * TLB flushed, the PPGTT's registers (`i915_ppgtt_enable_ring`), and the
- * ring started with RING_VALID, each wait bounded; then its user
- * interrupt registered, masked until a waiter needs it. Holds forcewake
- * throughout.
+ * xcs_resume: for each a status page and a ring in the global GTT; the
+ * aliasing PPGTT made (`i915_ppgtt_init`); then each ring stopped and
+ * emptied, the status page's address written and the TLB flushed, the
+ * PPGTT's registers (`i915_ppgtt_enable_ring`), and the ring started with
+ * RING_VALID, each wait bounded; then its user interrupt registered,
+ * masked until a waiter needs it. Holds forcewake throughout.
  *
  * @return 0; -ENOMEM; -ENOSPC when the GTT has no room at its top; -EIO
  *         when a ring would not stop or start, its wait named in
@@ -1227,7 +1265,7 @@ void i915_irq_handle(struct drm_i915_private *i915);
 int32_t i915_gt_init(struct drm_i915_private *i915);
 
 /** Stop every ring, unregister its interrupt, clear its GTT entries and
- * free its pages; for the unplug and a failed bind. */
+ * free its pages, then the PPGTT; for the unplug and a failed bind. */
 void i915_gt_fini(struct drm_i915_private *i915);
 
 /**
@@ -1310,9 +1348,50 @@ int32_t i915_engine_wait(struct drm_i915_private *i915, struct i915_engine *engi
 /* ---- i915_ppgtt.c ---- */
 
 /**
+ * Make the aliasing PPGTT, as Linux's gen6_ppgtt_create and pd_vma_bind:
+ * the scratch table, the directory's space taken from the GT's at a 64 KiB
+ * boundary, and every directory entry written to name the scratch table.
+ * `i915_gt_init` calls it before the rings start, which need it.
+ *
+ * @return 0; -ENOMEM; or -ENOSPC when the GT's space has no room.
+ */
+int32_t i915_ppgtt_init(struct drm_i915_private *i915);
+
+/** Undo `i915_ppgtt_init`, any part of it done: the directory's entries
+ * on the scratch page again and every table freed. For `i915_gt_fini`,
+ * once the rings have stopped. */
+void i915_ppgtt_fini(struct drm_i915_private *i915);
+
+/**
+ * Map the `n` pages `pages` at the GPU address `offset` at the cache level
+ * `cache`, as Linux's gen6_alloc_va_range and gen6_ppgtt_insert_entries:
+ * the tables the range lacks made first, each filled with the scratch
+ * page's entry and named in the directory, whose entries are then read
+ * back and the GTT's cache flushed. The entries are the global GTT's
+ * encoding; the request's TLB invalidation makes the chip see them. The
+ * binding code calls it beside `i915_ggtt_insert`, at the same offset,
+ * for the buffers alone. Nothing to do before the PPGTT is made.
+ *
+ * @return 0; -EINVAL for a range that is not whole pages inside 2 GiB; or
+ *         -ENOMEM when a table cannot be made, no entry written.
+ */
+int32_t i915_ppgtt_insert(struct drm_i915_private *i915, uint64_t offset, const uint64_t *pages,
+                          uint32_t n, int cache);
+
+/** Point the PPGTT's entries of [offset, offset + size) at the scratch
+ * page again, as gen6_ppgtt_clear_range; the tables stay. Beside
+ * `i915_ggtt_clear_range` for a buffer's binding. */
+void i915_ppgtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size);
+
+/**
  * Point `engine`'s ring at the aliasing PPGTT, at ring start and after a
- * reset, as Linux's set_pp_dir: until the PPGTT exists it writes nothing
- * and the ring runs on the global GTT.
+ * reset, as Linux's set_pp_dir: PP_DIR_DCLV with the whole 2 GiB valid,
+ * PP_DIR_BASE with the directory, and RING_MODE_GEN7's PPGTT bit, the
+ * render ring's being GFX_MODE_GEN7. For the render ring it first sets
+ * what Linux's gen7_ppgtt_enable sets at each hardware init, the PPGTT's
+ * caching in GAC_ECO_BITS and GAM_ECOCHK, so that every start, a reset's
+ * among them, leaves them set. Under forcewake. Writes nothing before the
+ * PPGTT is made.
  *
  * @return 0.
  */

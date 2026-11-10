@@ -65,6 +65,9 @@
  */
 
 #define GAM_ECOCHK                      0x4090
+#define ECOCHK_PPGTT_WB_HSW             (3u << 3)
+#define GAC_ECO_BITS                    0x14090
+#define ECOBITS_PPGTT_CACHE64B          (3u << 8)
 #define HSW_IDICR                       0x9008
 #define HSW_PAVP_FUSE1                  0x911c
 #define HSW_F1_EU_DIS_SHIFT             16 /* EUs disabled per subslice */
@@ -508,10 +511,15 @@
 #define HSW_WT_ELLC_LLC_AGE0           HSW_CACHEABILITY_CONTROL(0x6u)
 #define HSW_PTE_UNCACHED               0u
 #define HSW_GTT_ADDR_ENCODE(addr)      ((uint32_t)(addr) | ((uint32_t)((uint64_t)(addr) >> 28) & 0x7f0u))
-#define GFX_FLSH_CNTL_GEN6             0x101008 /* the GTT's cache */
-#define GFX_FLSH_CNTL_EN               (1u << 0)
-#define GEN6_PDE_SHIFT                 22
+/* A PPGTT directory entry names a table with bits 39:32 of its address in
+ * bits 11:4. */
 #define GEN6_PDE_VALID                 (1u << 0)
+#define GEN6_PDE_ADDR_ENCODE(addr) \
+    ((uint32_t)(addr) | ((uint32_t)((uint64_t)(addr) >> 28) & 0xff0u))
+#define GFX_FLSH_CNTL_GEN6 0x101008 /* the GTT's cache */
+#define GFX_FLSH_CNTL_EN   (1u << 0)
+#define GEN6_PDE_SHIFT     22
+#define GEN6_PDE_VALID     (1u << 0)
 
 /* ------------------------------------------------------------------------
  * RC6, frequency and the pcode mailbox (i915_reg.h, gt/intel_gt_regs.h)

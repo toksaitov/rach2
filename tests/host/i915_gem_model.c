@@ -85,6 +85,25 @@ int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
     }
     return 0;
 }
+
+/* The aliasing PPGTT, which comes with the rings: none here. */
+int32_t i915_ppgtt_insert(struct drm_i915_private *i915, uint64_t offset, const uint64_t *pages,
+                          uint32_t n, int cache)
+{
+    (void)i915;
+    (void)offset;
+    (void)pages;
+    (void)n;
+    (void)cache;
+    return 0;
+}
+
+void i915_ppgtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size)
+{
+    (void)i915;
+    (void)offset;
+    (void)size;
+}
 #endif
 
 /* ---- the chip ---- */

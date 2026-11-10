@@ -119,6 +119,35 @@ int32_t i915_hw_fault(struct i915_hw *hw, int point)
     return 0;
 }
 
+/* The GTT's own entries, which the aliasing PPGTT's directory takes; the
+ * chip's GTT keeps its pages in `gtt` and walks no PPGTT. */
+static uint32_t gsm[GTT_ENTRIES];
+
+uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index)
+{
+    (void)hw;
+    return index < GTT_ENTRIES ? gsm[index] : 0;
+}
+
+void i915_gtt_write(struct i915_hw *hw, uint32_t index, uint32_t pte)
+{
+    (void)hw;
+    if (index < GTT_ENTRIES) {
+        gsm[index] = pte;
+    }
+}
+
+void i915_ggtt_invalidate(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+uint32_t i915_ggtt_pte_encode(uint64_t addr, int cache)
+{
+    return GEN6_PTE_VALID | HSW_GTT_ADDR_ENCODE(addr) |
+           (cache != I915_CACHE_NONE ? HSW_WB_LLC_AGE3 : 0);
+}
+
 void i915_delay_us(struct i915_hw *hw, uint32_t us)
 {
     (void)hw;
@@ -1068,7 +1097,8 @@ int main(void)
     CHECK(i915_gt_init(dev_a) == 0, "setup: the rings start");
     CHECK(i915_driver_open(&dev_a->drm, &file_a) == 0, "setup: the file opened");
     rings();
-    before = allocations;
+    /* The PPGTT's tables, made as buffers are bound, stay with the rings. */
+    before = allocations - (int)dev_a->gt.ppgtt.tables;
     checks();
     relocations();
     placement();
@@ -1078,7 +1108,8 @@ int main(void)
     sol_and_faults();
     idle();
     drm_syncobj_release(&file_a);
-    CHECK(allocations == before, "the end: every record of the calls freed");
+    CHECK(allocations - (int)dev_a->gt.ppgtt.tables == before,
+          "the end: every record of the calls freed");
     CHECK(irq_depth == 0, "the end: the interrupt flag as it was");
     printf("%s: %s\n", MODEL_TEST, failures ? "failed" : "ok");
     return failures != 0;
