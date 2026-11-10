@@ -880,8 +880,33 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     obj_release(bo);
 }
 
-static const struct drm_gem_object_funcs vgpu_obj_funcs = {vgpu_obj_free, obj_mmap, NULL, NULL,
-                                                           obj_page,      NULL,     NULL};
+/**
+ * Attach the object's resource to the 3D context of `file`, which has just
+ * got a handle to it, as Linux's virtio_gpu_gem_object_open: so that a
+ * buffer another file made, imported by PRIME or opened by name, is the
+ * context's to use, as Venus asks when it imports memory. On a device
+ * without CONTEXT_INIT it first makes the file's default context, as Linux
+ * does; a file without a context yet on a device with it, or a device
+ * without virgl, attaches nothing. 0, or -ENOMEM.
+ */
+int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file)
+{
+    struct virtio_gpu_device *vg = to_vg(obj->dev);
+    int32_t rc;
+
+    if (!vg->has_virgl) {
+        return 0;
+    }
+    rc = vg->has_context_init ? 0 : vgpu_context_ensure(vg, file);
+    if (rc == -ENOMEM) {
+        return rc;
+    }
+    rc = vgpu_context_attach(vg, file, vgpu_bo(obj));
+    return rc == -ENOMEM ? rc : 0;
+}
+
+static const struct drm_gem_object_funcs vgpu_obj_funcs = {
+    vgpu_obj_free, obj_mmap, NULL, NULL, obj_page, NULL, NULL, vgpu_obj_open};
 
 /**
  * Make `bo`, zeroed, an object of `vg` of `size` bytes, a whole number of

@@ -351,7 +351,10 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * out, or NULL when the kernel cannot reach it so; NULL `vmap` is the same.
  * `cpu_access` is the exporter's part of a dma-buf's DMA_BUF_IOCTL_SYNC,
  * with its DMA_BUF_SYNC_ flags, once the fences are waited for: 0 or
- * -errno; NULL does nothing. It may sleep.
+ * -errno; NULL does nothing. It may sleep. `open` sees each handle a file
+ * gets to the object, by creation, GEM_OPEN or PRIME import, as Linux's
+ * drm_gem_object_funcs.open: 0, or -errno, which takes the handle back;
+ * NULL does nothing. It may sleep.
  */
 struct drm_gem_object_funcs {
     void (*free)(struct drm_gem_object *obj);
@@ -361,6 +364,7 @@ struct drm_gem_object_funcs {
     uintptr_t (*page)(struct drm_gem_object *obj, uint32_t pgoff);
     volatile uint8_t *(*vmap)(struct drm_gem_object *obj);
     int32_t (*cpu_access)(struct drm_gem_object *obj, uint64_t flags);
+    int32_t (*open)(struct drm_gem_object *obj, struct drm_file *file);
 };
 
 /*
@@ -415,7 +419,8 @@ void drm_gem_object_get(struct drm_gem_object *obj);
  * drops its device. NULL is allowed. */
 void drm_gem_object_put(struct drm_gem_object *obj);
 /** Give `file` a new handle to `obj`, the lowest free from 1, in `*handle`,
- * with a reference of its own: 0, or -ENOMEM. */
+ * with a reference of its own, and run the object's `open` hook: 0, or
+ * -ENOMEM, or the hook's -errno, which leaves no handle. */
 int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj, uint32_t *handle);
 /** The object of `file`'s `handle`, with a reference taken, or NULL. */
 struct drm_gem_object *drm_gem_object_lookup(struct drm_file *file, uint32_t handle);
