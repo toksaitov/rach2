@@ -28,6 +28,7 @@ Rach2's own. The structures and numbers of `kvm_abi.h` follow Linux's `include/u
 | `kvm.c` | `/dev/kvm`, the capability table, the VM's descriptor and its ioctls, the kvmclock |
 | `vcpu.c` | the vCPU's descriptor, its reset state, the run pages and their mapping, the run loop, the state ioctls and their checks |
 | `cpuid.c` | KVM_GET_SUPPORTED_CPUID from the host's CPUID, the guest's XCR0 |
+| `pmu.c`, `pmu.h` | the guest performance counters, event filters, overflow delivery and physical counter switching |
 | `msr.c` | the MSR index lists, the feature MSRs, the MSRs a vCPU keeps and their checks |
 | `vmx.c`, `vmx_run.s` | Intel's backend: VMXON and the VMCS around each run, EPT, VPID, the unrestricted guest, the preemption timer, the exits, the events injected, the caller's guest debugging |
 | `svm.c`, `svm_run.s` | AMD's backend: VMCBs, host save areas, ASIDs, nested paging, intercepts and event injection |
@@ -103,6 +104,16 @@ An MMIO exit tells the backend the guest-physical address and, on VMX, whether t
 
 An instruction outside that set, one whose ModRM names a register, a LOCK the processor would refuse with #UD, and one that would pass 15 bytes are refused. The backend then does what Linux's `handle_emulation_failure` does: it injects #UD into a guest above CPL 0, and at CPL 0 reports KVM_EXIT_INTERNAL_ERROR through `kvm_decode_fail`, which lays out the run page as Linux's `prepare_emulation_failure_exit`: suberror KVM_INTERNAL_ERROR_EMULATION, the flag that the instruction's bytes follow, the bytes padded with 0x90, then the exit's reason and qualifications.
 
+### Performance counters
+
+`pmu.c` offers Intel's architectural PMU up to version 2, with up to eight general counters and three fixed counters, bounded by the host's CPUID; AMD has four legacy counters, six through PerfCtrExtCore, and PerfMonV2's global registers when CPUID 0x80000022 offers them. Intel's CPUID 0xA reports the host's widths and architectural events. AMD's legacy MSRs have no presence bit, so a recoverable read and write probe checks that a counter retains a value before offering the PMU; TCG's ignored writes leave it disabled. A vCPU's CPUID bounds its registers, its counter widths and RDPMC indices. The register permissions and reserved bits follow Linux's `arch/x86/kvm/pmu.c`, `svm/pmu.c` and `vmx/pmu_intel.c`: Intel rejects reserved control bits, AMD ignores them, and Intel's legacy guest counter writes sign-extend 32 bits while its full-width aliases reject bits past the counter width. RDPMC requires CPL 0 or CR4.PCE.
+
+The kernel reserves the physical counters for KVM and has no competing host performance monitor. Counters start at zero for each entry and their deltas are added to the vCPU's software counters on exit. SVM programs the selectors with GuestOnly and disables them before returning to the run loop. VMX puts the counters and selectors in its guest MSR load/store list and disables the selectors and global control through its host MSR load list. The physical interrupt bits remain clear. A delta that wraps a virtual counter sets its global status bit and, if its interrupt is enabled, queues one PMI through the virtual APIC's LVTPC at the next entry preparation. The host's tick or VMX preemption timer ends a guest run, so an overflow reaches the guest after an exit; it does not interrupt the host directly. Emulated retired instructions also count, under Linux's selector and privilege rules.
+
+KVM_SET_PMU_EVENT_FILTER replaces a VM's filter under the big lock: up to 300 event words, ALLOW or DENY, a separate fixed-counter bitmap, and optionally Linux's masked unit matches and exclusion entries. A matched exclusion wins over an inclusion before ALLOW or DENY is applied. Each vCPU is kicked when the filter changes. Entry preparation reads the filter under the big lock and keeps only the resulting run masks, so a backend outside that lock never touches a freed filter. KVM_CAP_PMU_EVENT_FILTER and KVM_CAP_PMU_EVENT_MASKED_EVENTS advertise both forms. KVM_ENABLE_CAP of KVM_CAP_PMU_CAPABILITY accepts KVM_PMU_CAP_DISABLE before the VM has any vCPU.
+
+PERF_CAPABILITIES offers full-width writes on Intel. The caller can set it before the first KVM_RUN; the guest can only read it, with CPUID.PDCM. LBR and PEBS are not advertised. `/sys/module/kvm/parameters/enable_pmu` reads `Y` when the host's PMU is usable and `N` otherwise; `force_emulation_prefix` reads `0`, since that debugging interface is absent. Both files are read-only.
+
 ### Interrupts
 
 The split controller is Linux's: KVM_ENABLE_CAP of KVM_CAP_SPLIT_IRQCHIP on the VM, before its first vCPU, with the caller's IOAPIC's pin count in `args[0]`, at most 4096, puts each vCPU's local APIC in the kernel and leaves the PIC and IOAPIC to the caller. KVM_CREATE_IRQCHIP, the whole controller in the kernel, is `ENXIO`, or `EEXIST` after the split one. QEMU 10's pc and q35 machines ask for the whole controller by default and stop when it fails, so they run with `-machine kernel-irqchip=split`, or with `off`, which keeps every controller, the local APIC too, in QEMU and injects through KVM_INTERRUPT.
@@ -153,7 +164,7 @@ AMD's SYSCFG and NB_CFG MSRs read as zero, and NB_CFG writes are ignored, as Lin
 * At most 64 vCPUs in a VM, with ids below 256; 256 memory slots, in address space 0 alone, with no KVM_SET_USER_MEMORY_REGION2 and no guest_memfd; 256 entries for KVM_SET_CPUID2 and KVM_GET_CPUID2, and fewer than 256 MSRs at once for KVM_GET_MSRS and KVM_SET_MSRS, as Linux's bounds.
 * Only the machine type 0. The in-kernel interrupt controller is the split one alone: no in-kernel PIC, IOAPIC or PIT, no routes but MSI and SINT routes, and no irqfd resample. There is no KVM_CAP_X2APIC_API, no coalesced MMIO, no dirty ring, and no SMM, SMI or nested virtualization.
 * The MMIO decoder knows the instructions `decode.h` lists, which compilers emit for device registers; Linux's emulator knows nearly all of x86, so an MMIO access through another instruction, such as BT, CMPXCHG, a string compare or an SSE move, is an internal error here and emulated there.
-* KVM_GET_SUPPORTED_CPUID offers no paravirtual leaf, no performance counters, no PKU and no AMX.
+* KVM_GET_SUPPORTED_CPUID offers no paravirtual leaf, no PKU and no AMX.
 * The guest-physical tables have 4 KiB and 2 MiB leaves, no 1 GiB ones, and a 2 MiB leaf only where the caller's 512 pages are consecutive frames, since user memory is mapped in 4 KiB pages here; Linux's KVM maps the caller's transparent huge pages as 2 MiB leaves.
 * SVM boots the Debian x86-64 guest under TCG on WSL and the Mac and under nested KVM on WSL. The i686 guest's intermittent double fault is being investigated in 81-2b; the corpus still awaits qualification ([results](../../../tests/kvm/Readme.md#results)).
 * Hyper-V's enlightened VMCS and direct TLB flush, which serve a nested guest, are not offered, and neither is the paravirtual EOI of the VP assist page, so the guest always writes its EOI. A sparse VP set reaches VP indexes below 64, the most vCPUs a VM has. The reenlightenment MSRs are kept but never notify, since a VM's TSC rate does not change.
@@ -161,6 +172,8 @@ AMD's SYSCFG and NB_CFG MSRs read as zero, and NB_CFG writes are ignored, as Lin
 * Each entry turns VMX on and loads the VMCS anew, where Linux keeps VMX on and the VMCS current on a processor between runs.
 
 ## Tests
+
+* `tests/host/kvm_pmu_hosttest.c` drives the production PMU through Intel and AMD register models: discovery and absent MSRs, CPUID bounds, counter widths and MSR permissions, RDPMC privilege, migration and INIT, masked event filters and copy failures, VMX load/store lists, AMD guest-only selectors, isolation between vCPUs, overflow status and deferred PMI delivery.
 
 * `tests/host/kvm_vfio_hosttest.c` includes `vfio.c` over modeled file descriptions and a VM: creation and copy-back failure, one bridge per VM, attribute errors and the caller check, duplicate descriptors, file references surviving close, serialization of mutations, DMA cache policy transitions and every allocation and reference returned.
 

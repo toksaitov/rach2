@@ -194,6 +194,7 @@ static void vcpu_reset(struct kvm_vcpu *v)
     v->mp_state = KVM_MP_STATE_RUNNABLE;
     v->tsc_offset = -(int64_t)arch_cycles();
     kvm_msr_reset(v);
+    kvm_pmu_init(v);
     v->dirty = KVM_PART_ALL;
 }
 
@@ -203,6 +204,7 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
 
     reset_arch(v);
     v->sregs.apic_base = base;
+    kvm_pmu_reset(v);
     v->dirty |= KVM_PART_REGS | KVM_PART_SREGS | KVM_PART_EVENTS | KVM_PART_DEBUG | KVM_PART_CR8;
 }
 
@@ -618,7 +620,7 @@ static int32_t run_enter(struct kvm_vcpu *v)
 
     v->cpu = (int32_t)arch_cpu_id();
     v->mode = KVM_MODE_IN_GUEST;
-    if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) {
+    if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT | KVM_REQ_PMU)) {
         v->mode = KVM_MODE_OUTSIDE;
         kirq_restore(flags);
         return -EAGAIN;
@@ -676,6 +678,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r != 0) {
             return 0;
         }
+        kvm_pmu_prepare(v);
         if (split) {
             r = kvm_lapic_prepare(v);
             if (r != 0) {
@@ -1159,6 +1162,7 @@ static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
     kfree(v->cpuid);
     v->cpuid = ent;
     v->cpuid_nent = head.nent;
+    kvm_pmu_refresh(v);
     v->dirty |= KVM_PART_CPUID;
     return 0;
 }

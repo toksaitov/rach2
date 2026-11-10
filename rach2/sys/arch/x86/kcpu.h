@@ -35,4 +35,13 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi);
 /** Write `hi` and `lo` to the model-specific register `msr`. */
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi);
 
+#if defined(__x86_64__) || defined(RACH2_HOST_X86_64)
+/** Read an optional MSR into value on x86-64. Return 0, or -1 on #GP,
+ * leaving value unchanged. The fault fixup is local to the instruction. */
+int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value);
+
+/** Write an optional MSR on x86-64. Return 0, or -1 on #GP. */
+int kcpu_wrmsr_safe(uint32_t msr, uint64_t value);
+#endif
+
 #endif /* _KCPU_H_ */

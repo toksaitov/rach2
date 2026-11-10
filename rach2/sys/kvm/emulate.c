@@ -129,6 +129,7 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
 {
     uint64_t rip = v->regs.rip + len;
 
+    kvm_pmu_retired(v);
     v->regs.rip = kvm_emul_mode(v) == 64 ? rip : (rip & 0xFFFFFFFFull);
     if (v->events.interrupt.shadow) {
         v->events.interrupt.shadow = 0;
@@ -577,6 +578,9 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
     r = kvm_lapic_msr(v, index, write, value, 0);
     if (r == 1) {
         r = kvm_hv_msr(v, index, write, value, 0);
+    }
+    if (r == 1) {
+        r = kvm_pmu_msr(v, index, write, value, 0);
     }
     if (r != 1) {
         return r;

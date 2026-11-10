@@ -21,11 +21,12 @@
  * Linux's kvm_set_cpu_caps masks them, less what needs a part of KVM that
  * is not yet in the kernel. Leaf 1, ECX: SSE3, PCLMULQDQ, SSSE3, FMA,
  * CX16, PCID, SSE4.1, SSE4.2, MOVBE, POPCNT, AES, XSAVE, AVX, F16C and
- * RDRAND; not MONITOR, DS-CPL, VMX, SMX, EST, TM2, xTPR, PDCM or DCA, nor
+ * RDRAND; not MONITOR, DS-CPL, VMX, SMX, EST, TM2, xTPR or DCA, nor
  * OSXSAVE, which the guest's CR4 gives, nor the TSC deadline, which
  * KVM_CAP_TSC_DEADLINE_TIMER offers instead; x2APIC and HYPERVISOR are
  * set whatever the host has, since the local APIC in the kernel emulates
  * x2APIC, as Linux sets it. EDX: all but PSN, DS, ACPI, HTT, TM and PBE.
+ * pmu.c supplies PDCM when the host has performance counters.
  */
 #define L1_ECX            0x76DA3203u
 #define L1_ECX_X2APIC     (1u << 21)
@@ -55,8 +56,8 @@
 /* Leaf 0x80000001. ECX: LAHF_LM, CMP_LEGACY, CR8_LEGACY, ABM, SSE4A,
  * MISALIGNSSE, 3DNOWPREFETCH, XOP, FMA4 and TBM; not SVM, the extended
  * APIC space, OSVW, IBS, SKINIT, WDT, TOPOEXT, whose leaves are not
- * offered, or the core performance counters. EDX: the long-mode bits and
- * the bits of leaf 1 AMD repeats. */
+ * offered. pmu.c supplies the core performance counters. EDX: the long-mode
+ * bits and the bits of leaf 1 AMD repeats. */
 #define LX1_ECX     0x002109F3u
 #define LX1_EDX     0xEFD3FBFFu
 #define LX1_ECX_AVX 0x00010800u /* XOP, FMA4 */
@@ -142,7 +143,7 @@ static int filter(struct kvm_cpuid_entry2 *e, uint64_t xcr0)
             e->eax = e->ebx = e->ecx = e->edx = 0;
         }
         return 1;
-    case 0xA: /* the performance counters, not offered */
+    case 0xA: /* pmu.c supplies the architectural performance counters */
         e->eax = e->ebx = e->ecx = e->edx = 0;
         return 1;
     case 0xD:
@@ -244,8 +245,8 @@ int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
         if (i == 0 && top > 0x1Fu) {
             top = 0x1Fu;
         }
-        if (i == 1 && top > 0x80000008u) {
-            top = 0x80000008u;
+        if (i == 1 && top > 0x80000022u) {
+            top = 0x80000022u;
         }
         for (leaf = base[i]; leaf <= top; leaf++) {
             subs = 1;
@@ -257,12 +258,13 @@ int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
                 if (i == 0 && leaf == 0 && e.eax > 0x1Fu) {
                     e.eax = 0x1F;
                 }
-                if (i == 1 && leaf == base[1] && e.eax > 0x80000008u) {
-                    e.eax = 0x80000008u;
+                if (i == 1 && leaf == base[1] && e.eax > 0x80000022u) {
+                    e.eax = 0x80000022u;
                 }
                 if (!filter(&e, xcr0)) {
                     continue;
                 }
+                kvm_pmu_cpuid(&e);
                 if (count == max) {
                     return -E2BIG;
                 }

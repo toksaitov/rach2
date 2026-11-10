@@ -56,6 +56,18 @@ awk '!/^#/ && NF >= 2 && $2 == "excluded" {
     r = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", r); print "kvm-corpus: " $1 ": excluded: " r }' "$list"
 excluded=$(awk '!/^#/ && NF >= 2 && $2 == "excluded"' "$list" | wc -l | tr -d ' ')
 
+# PMU expectations follow the machine that runs the corpus. AMD has no
+# legacy PMU presence bit, so its unit test fails when the host has none;
+# the selftests read enable_pmu and skip. The Intel selftests skip on AMD.
+pmu_enabled=
+if [ -r /sys/module/kvm/parameters/enable_pmu ]; then
+    read -r pmu_enabled < /sys/module/kvm/parameters/enable_pmu
+fi
+pmu_intel=0
+if grep -q 'GenuineIntel' /proc/cpuinfo; then
+    pmu_intel=1
+fi
+
 # results: write NAME RESULT a line to $work/got, RESULT pass, skip or fail.
 : > "$work/got"
 if [ "$kind" = unit ]; then
@@ -83,6 +95,14 @@ fi
 # Judge each test that ran against the list.
 total=0 bad=0 names=''
 while read -r name expect; do
+    case "$pmu_enabled:$pmu_intel:$name" in
+        N:0:pmu) expect=fail ;;
+        N:1:pmu) expect=skip ;;
+        N:*:x86_64/pmu_counters_test|N:*:x86_64/pmu_event_filter_test|N:*:x86_64/vmx_pmu_caps_test)
+            expect=skip ;;
+        Y:1:x86_64/pmu_counters_test|Y:1:x86_64/vmx_pmu_caps_test)
+            expect=pass ;;
+    esac
     got=$(awk -v n="$name" '$1 == n { print $2; exit }' "$work/got")
     got=${got:-missing}
     total=$((total + 1))

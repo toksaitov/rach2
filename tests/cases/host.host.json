@@ -806,6 +806,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kvm_pmu",
+          "checks": "tests/host/kvm_pmu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "kvm_slots",
           "checks": "tests/host/kvm_slots_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

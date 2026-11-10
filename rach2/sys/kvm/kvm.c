@@ -100,6 +100,7 @@ void kvm_vm_put(struct kvm_vm *vm)
         kvm_vcpu_free(vm->vcpus[i]);
     }
     kvm_hv_vm_free(vm);
+    kvm_pmu_vm_free(vm);
     kvm_tdp_free(vm);
     kvm_slots_free(vm);
     if (kvm_backend && kvm_backend->vm_free) {
@@ -135,7 +136,11 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_CHECK_EXTENSION_VM:
     case KVM_CAP_GET_MSR_FEATURES:
     case KVM_CAP_SET_BOOT_CPU_ID:
+    case KVM_CAP_PMU_EVENT_FILTER:
+    case KVM_CAP_PMU_EVENT_MASKED_EVENTS:
         return 1;
+    case KVM_CAP_PMU_CAPABILITY:
+        return KVM_PMU_CAP_DISABLE;
     case KVM_CAP_XSAVE:
     case KVM_CAP_XCRS:
         return kvm_xcr0_supported() != 0;
@@ -431,6 +436,9 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     if (cap.cap == KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) {
         return kvm_dirty_enable_manual(vm, &cap);
     }
+    if (cap.cap == KVM_CAP_PMU_CAPABILITY) {
+        return kvm_pmu_enable(vm, &cap);
+    }
     return -EINVAL;
 }
 
@@ -503,6 +511,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return 0;
     case KVM_ENABLE_CAP:
         return vm_enable_cap(vm, arg);
+    case KVM_SET_PMU_EVENT_FILTER:
+        return kvm_pmu_filter(vm, arg);
     case KVM_CREATE_IRQCHIP:
     case KVM_IRQ_LINE:
     case KVM_IRQ_LINE_STATUS:
@@ -542,6 +552,7 @@ void kvm_start(void)
         klog(KLOG_INFO, "kvm", "none: the processor has neither VMX nor SVM");
         return;
     }
+    kvm_pmu_start();
     if (devfs_node_register(&kvm_node) != 0) {
         klog(KLOG_WARN, "kvm", "failed: /dev/kvm not registered");
         kvm_backend = NULL;

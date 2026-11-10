@@ -1542,6 +1542,8 @@ static int vmx_enter(struct kvm_vcpu *v)
     struct vmx_vcpu *x = vx(v);
     struct vmx_host host;
     uint64_t cr4, eptp, host_dr7 = 0, host_db[4] = {0, 0, 0, 0};
+    uint32_t ng, nh, gbase = caps.rdtscp ? N_GUEST_MSRS : N_GUEST_MSRS - 1u;
+    uint32_t hbase = caps.rdtscp ? N_HOST_MSRS : N_HOST_MSRS - 1u;
     int cpu = (int)arch_cpu_id(), r, tlb, nmi = 0, mce = 0;
 
     if (v->emul.resume) {
@@ -1572,6 +1574,11 @@ static int vmx_enter(struct kvm_vcpu *v)
         x->flush_vpid = 0;
     }
     entry_fields(v);
+    kvm_pmu_vmx_enter(v, (struct kvm_pmu_msr *)x->msrs + gbase,
+                      (struct kvm_pmu_msr *)x->msrs + HOST_LIST + hbase, &ng, &nh);
+    vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, gbase + ng);
+    vmcs_write(VM_EXIT_MSR_STORE_COUNT, gbase + ng);
+    vmcs_write(VM_EXIT_MSR_LOAD_COUNT, hbase + nh);
     vmx_op->fpu_load(x->host_fpu, v->xsave, v->xcr0);
     dr_load(v, &host_dr7, host_db);
     x->ex.failed = vmx_op->run(&v->regs, &v->sregs.cr2, 0);
@@ -1580,6 +1587,9 @@ static int vmx_enter(struct kvm_vcpu *v)
     vmx_op->restore_host(&host);
     after_run(v);
     if (x->ex.failed == VMX_OK) {
+        if (!(x->ex.reason & EXIT_FAILED_ENTRY)) {
+            kvm_pmu_vmx_exit(v, (const struct kvm_pmu_msr *)x->msrs + gbase);
+        }
         nmi = exit_is_nmi(&x->ex);
         mce = exit_is_mce(&x->ex);
     }
@@ -2160,8 +2170,9 @@ static int exit_insn(struct kvm_vcpu *v, uint32_t reason)
         kvm_emul_skip(v, len);
         return 1;
     case EXIT_RDPMC:
-        /* No performance counter is offered, so every counter is #GP. */
-        gp(v);
+        if (kvm_pmu_rdpmc(v) == 0) {
+            kvm_emul_skip(v, len);
+        }
         return 1;
     case EXIT_XSETBV:
         if (kvm_emul_xsetbv(v) == 0) {

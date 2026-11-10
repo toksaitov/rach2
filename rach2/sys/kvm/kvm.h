@@ -11,6 +11,7 @@
 #include "../lib/kint.h"
 #include "kvm_abi.h"
 #include "decode.h"
+#include "pmu.h"
 #include "../io/anon.h"
 #include "../proc/wait_queue.h"
 
@@ -219,6 +220,8 @@ struct kvm_vm {
     void *iobus;           /* iobus.c's */
     void *vfio;            /* vfio.c's bridge; holds a VM reference */
     void *hv;              /* hyperv.c's */
+    void *pmu_filter;      /* pmu.c's event filter, read under the big lock */
+    int pmu_disabled;      /* KVM_CAP_PMU_CAPABILITY, set before vCPUs exist */
     void *backend;         /* the backend's */
 };
 
@@ -231,14 +234,15 @@ struct kvm_vm {
 
 /* The requests another thread leaves a vCPU, in `requests`, which the run
  * loop answers before each entry. */
-#define KVM_REQ_EXIT         0x1u  /* go back to the caller */
-#define KVM_REQ_EVENT        0x2u  /* an event to inject */
-#define KVM_REQ_TRIPLE_FAULT 0x4u  /* end in KVM_EXIT_SHUTDOWN */
-#define KVM_REQ_EOI_EXIT     0x8u  /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
-#define KVM_REQ_TLB_FLUSH    0x10u /* the backend drops the VM's guest-physical translations */
-#define KVM_REQ_HV_EXIT      0x20u /* end in KVM_EXIT_HYPERV (hyperv.c) */
-#define KVM_REQ_HV_CRASH     0x40u /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
-#define KVM_REQ_HV_RESET     0x80u /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
+#define KVM_REQ_EXIT         0x1u   /* go back to the caller */
+#define KVM_REQ_EVENT        0x2u   /* an event to inject */
+#define KVM_REQ_TRIPLE_FAULT 0x4u   /* end in KVM_EXIT_SHUTDOWN */
+#define KVM_REQ_EOI_EXIT     0x8u   /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
+#define KVM_REQ_TLB_FLUSH    0x10u  /* the backend drops the VM's guest-physical translations */
+#define KVM_REQ_HV_EXIT      0x20u  /* end in KVM_EXIT_HYPERV (hyperv.c) */
+#define KVM_REQ_HV_CRASH     0x40u  /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
+#define KVM_REQ_HV_RESET     0x80u  /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
+#define KVM_REQ_PMU          0x100u /* refresh the event filter before entry */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -328,6 +332,7 @@ struct kvm_vcpu {
     int64_t tsc_offset; /* the guest's TSC less the host's */
     uint64_t mcg_cap, mcg_status, mcg_ctl;
     uint64_t mce_banks[KVM_MAX_MCE_BANKS * 4]; /* CTL, STATUS, ADDR, MISC of each */
+    struct kvm_pmu pmu;
 
     /* Set by the backend after each exit, for the run page. */
     int if_flag;     /* RFLAGS.IF */
@@ -697,6 +702,10 @@ int kvm_lapic_mmio(struct kvm_vcpu *v);
  * not the APIC's.
  */
 int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
+
+/** Deliver a performance-counter overflow through the local LVTPC entry,
+ * if it is enabled. Under the big lock, never from the backend's entry. */
+void kvm_lapic_pmi(struct kvm_vcpu *v);
 
 /** Set the APIC base of `v` to `value`, with the checks of Linux's
  * kvm_set_apic_base: 0, or -1 for reserved bits, an invalid mode, or, from

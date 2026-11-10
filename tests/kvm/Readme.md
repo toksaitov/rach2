@@ -44,12 +44,14 @@ For checkpoint planning, allow about 15 minutes for the 22 serial QEMU cases. Th
 
 ## Design
 
-The lists, [`unit-tests.list`](unit-tests.list) and [`selftests.list`](selftests.list), name every test of the two corpora, one a line: its name, what Rach2's KVM must give (`pass`; `skip`, the test's own skip for what the processor or QEMU lacks; `fail`, where Rach2 is to fail as Linux does; or `excluded`, not run), Linux's result on the testing PC, and the reason. Linux's results were taken by the same tests under WSL's Linux 6.18.58 with its KVM on the Ryzen 9 7950X3D, kvm-unit-tests with `kernel-irqchip=split`, and are kept in [`ref/`](ref). A test Linux passes must pass; a test Linux skips for a lack of the processor or of the testing PC's kernel, such as SEV, AMX, PKS, CET, TSX, Xen's hypercalls or the forced emulation prefix, must skip; a test Linux fails there must still pass, since its failure is the outer layers' or a selftest older than the kernel, and the row names Linux's failure, except `hyperv_connections`, which fails one of its seven tests under Linux and is expected to fail as it does there. The excluded tests are nested virtualization (every SVM, VMX and EPT test, and the selftest `hyperv_svm_test`), which the owner excluded on 2026-11-10; the PMU, which Rach2's KVM does not yet give; and kvm-unit-tests' three tests built only for i386.
+The lists, [`unit-tests.list`](unit-tests.list) and [`selftests.list`](selftests.list), name every test of the two corpora, one a line: its name, what Rach2's KVM must give (`pass`; `skip`, the test's own skip for what the processor or QEMU lacks; `fail`, where Rach2 is to fail as Linux does; or `excluded`, not run), Linux's result on the testing PC, and the reason. Linux's results were taken by the same tests under WSL's Linux 6.18.58 with its KVM on the Ryzen 9 7950X3D, kvm-unit-tests with `kernel-irqchip=split`, and are kept in [`ref/`](ref). A test Linux passes must pass; a test Linux skips for a lack of the processor or of the testing PC's kernel, such as SEV, AMX, PKS, CET, TSX, Xen's hypercalls or the forced emulation prefix, must skip; a test Linux fails there must still pass, since its failure is the outer layers' or a selftest older than the kernel, and the row names Linux's failure, except `hyperv_connections`, which fails one of its seven tests under Linux and is expected to fail as it does there. The excluded tests are nested virtualization (every SVM, VMX and EPT test, and the selftest `hyperv_svm_test`), which the owner excluded on 2026-11-10; kvm-unit-tests' three tests built only for i386.
 
 | List | Pass | Skip | Fail | Excluded |
 | --- | --- | --- | --- | --- |
-| `unit-tests.list` | 50 | 7 | 1 | 29 |
-| `selftests.list` | 51 | 15 | 0 | 19 |
+| `unit-tests.list` | 51 | 9 | 1 | 26 |
+| `selftests.list` | 52 | 17 | 0 | 16 |
+
+The PMU rows run. `corpus.sh` adjusts their expected result from `/sys/module/kvm/parameters/enable_pmu` and the host vendor in `/proc/cpuinfo`: without a PMU the selftests skip, Intel's unit test skips, and AMD's legacy unit test fails because it has no presence bit to test; with Intel's PMU the two Intel selftests must pass. The table gives the lists' AMD defaults. LBR and PEBS remain the tests' own skips because neither is advertised. The new counter implementation has a passing host register model; its corpus results on the testing PC and Lenovo still await the task's runs.
 
 The Debian guest, which [`guests/mkdebian.sh`](guests/mkdebian.sh) makes, is trixie's cloud kernel, 6.12.107, and an initramfs of Debian's static BusyBox 1.37.0 whose [`/init`](guests/debian-init) prints the kernel's version, the processor count and the first processor's flags, then `KVMGUEST OK`, and powers off. Both packages are pinned in [`guests/debian.txt`](guests/debian.txt) by the SHA-256 that the Debian layer's signed snapshot index gives. The guest boots in seconds even under TCG inside Rach2 and needs no disk, so a failure to reach its token is the hypervisor's. Make writes it to `build/kvm/guests/debian`, and puts it with the runners and the lists into `build/tests/cases/kvm/kvm.ext2`, which every case mounts read-only and copies to `/tmp/kvm`.
 
@@ -62,7 +64,6 @@ A guest of its own goes under `guests/` with its recipe, the token its console p
 ## Limits
 
 * The Debian x86-64 guest boots under SVM on both outer profiles. The i686 guest and the corpus still await qualification.
-* No selftest goes past its start until Rach2's `/sys` has `/sys/module/kvm/parameters/force_emulation_prefix`, as the KVM layer's Readme says.
 * The `max-svm` profile under TCG lacks NRIP save, TSC scaling and the pause filter, and has the five faults of Results, the last of which can leave a guest of Rach2's KVM that spins with its IF clear waiting on an interrupt QEMU does not deliver; the `host-svm` profile runs only on the testing PC.
 
 ## Tests

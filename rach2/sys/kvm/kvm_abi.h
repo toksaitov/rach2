@@ -52,6 +52,7 @@
 #define KVM_GET_CLOCK              KVM_IOR(0x7Cu, 48u)
 #define KVM_ENABLE_CAP             KVM_IOW(0xA3u, 104u)
 #define KVM_SIGNAL_MSI             KVM_IOW(0xA5u, 32u)
+#define KVM_SET_PMU_EVENT_FILTER   KVM_IOW(0xB2u, 32u)
 #define KVM_HYPERV_EVENTFD         KVM_IOW(0xBDu, 24u)
 #define KVM_CLEAR_DIRTY_LOG        KVM_IOWR(0xC0u, 24u)
 #define KVM_CREATE_DEVICE          KVM_IOWR(0xE0u, 12u)
@@ -178,6 +179,20 @@
 #define KVM_CAP_HYPERV_DIRECT_TLBFLUSH      175
 #define KVM_CAP_SYS_HYPERV_CPUID            191
 #define KVM_CAP_HYPERV_ENFORCE_CPUID        199
+#define KVM_CAP_PMU_EVENT_FILTER            173
+#define KVM_CAP_PMU_CAPABILITY              212
+#define KVM_CAP_PMU_EVENT_MASKED_EVENTS     226
+
+#define KVM_PMU_CAP_DISABLE              1u
+#define KVM_PMU_EVENT_ALLOW              0u
+#define KVM_PMU_EVENT_DENY               1u
+#define KVM_PMU_EVENT_FLAG_MASKED_EVENTS 1u
+
+/* KVM_SET_PMU_EVENT_FILTER, followed by nevents uint64_t entries. */
+struct kvm_pmu_event_filter {
+    uint32_t action, nevents, fixed_counter_bitmap, flags;
+    uint32_t pad[4];
+};
 
 /* The exit reasons of kvm_run.exit_reason. */
 #define KVM_EXIT_UNKNOWN         0

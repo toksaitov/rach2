@@ -99,7 +99,7 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       0x400000F5u, /* SYNDBG_PENDING_BUFFER */
                                       MSR_TSC_AUX};
 
-static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV};
+static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV, 0x345u}; /* PERF_CAPABILITIES */
 
 #define N_INDEX   (sizeof(index_list) / sizeof(index_list[0]))
 #define N_FEATURE (sizeof(feature_list) / sizeof(feature_list[0]))
@@ -119,12 +119,19 @@ static int host_rdtscp(void)
 
 const uint32_t *kvm_msr_list(int feature, uint32_t *n)
 {
+    static uint32_t list[N_INDEX + 32u];
+    uint32_t i;
+
     if (feature) {
         *n = N_FEATURE;
         return feature_list;
     }
     *n = (uint32_t)N_INDEX - (host_rdtscp() ? 0u : 1u);
-    return index_list;
+    for (i = 0; i < *n; i++) {
+        list[i] = index_list[i];
+    }
+    *n += kvm_pmu_msr_list(list + *n);
+    return list;
 }
 
 int kvm_msr_feature(uint32_t index, uint64_t *value)
@@ -133,7 +140,7 @@ int kvm_msr_feature(uint32_t index, uint64_t *value)
         *value = UCODE_REV_VAL;
         return 0;
     }
-    return -1;
+    return kvm_pmu_feature(index, value);
 }
 
 /** Whether `t` is a memory type an MTRR or PAT may name: UC, WC, WT, WP
@@ -242,6 +249,9 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
     if (r == 1) {
         r = kvm_hv_msr(v, index, 0, value, 1);
     }
+    if (r == 1) {
+        r = kvm_pmu_msr(v, index, 0, value, 1);
+    }
     if (r != 1) {
         return r;
     }
@@ -333,6 +343,9 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     slot = kvm_lapic_msr(v, index, 1, &value, 1);
     if (slot == 1) {
         slot = kvm_hv_msr(v, index, 1, &value, 1);
+    }
+    if (slot == 1) {
+        slot = kvm_pmu_msr(v, index, 1, &value, 1);
     }
     if (slot != 1) {
         return slot;
