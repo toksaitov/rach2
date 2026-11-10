@@ -80,6 +80,14 @@
 /* The highest MP state Linux knows, KVM_MP_STATE_SUSPENDED. */
 #define KVM_MP_STATE_MAX 10u
 
+static uint64_t guest_exits;
+
+/** Read completed backend entries since boot, under the big lock. */
+uint64_t kvm_exit_count(void)
+{
+    return guest_exits;
+}
+
 /** Whether no ioctl of `arg`, a vCPU, is under way. */
 static int vcpu_idle(void *arg)
 {
@@ -686,6 +694,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r != 0) {
             return r;
         }
+        guest_exits++;
         r = kvm_backend->exit ? kvm_backend->exit(v) : -EOPNOTSUPP;
         if (r != 0) {
             return r;

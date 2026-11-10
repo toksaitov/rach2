@@ -1,0 +1,19 @@
+#!/bin/busybox sh
+# Bind the assigned NIC, ping its outer gateway, then power off or keep traffic.
+b=/bin/busybox
+$b mount -t proc proc /proc
+$b mount -t sysfs sysfs /sys
+$b mount -t devtmpfs devtmpfs /dev
+for name in failover net_failover virtio virtio_ring virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci virtio_net; do
+    [ -f /modules/$name.ko ] || continue
+    $b insmod /modules/$name.ko || { echo "assignguest: module failed: $name"; $b poweroff -f; }
+done
+if $b ip link set eth0 up && $b ip addr add 10.0.3.15/24 dev eth0 &&
+    $b ping -c 8 10.0.3.2; then
+    echo 'ASSIGNGUEST OK'
+    case " $($b cat /proc/cmdline) " in
+        *' assign.hold '*)
+            while $b ping -c 8 10.0.3.2; do echo 'ASSIGNGUEST TRAFFIC'; done ;;
+    esac
+fi
+$b poweroff -f

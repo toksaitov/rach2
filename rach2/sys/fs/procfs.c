@@ -2902,7 +2902,9 @@ static void procfs_assignment_counts(struct procfs_text *t)
         ap_u32(t, counts[i]);
         ap_ch(t, '\n');
     }
-    ap_str(t, "iommu_dma_faults ");
+    ap_str(t, "kvm_exits ");
+    ap_u64(t, kvm_exit_count());
+    ap_str(t, "\niommu_dma_faults ");
     ap_u64(t, iommu_dma_faults());
     ap_str(t, "\niommu_irq_faults ");
     ap_u64(t, iommu_irq_faults());

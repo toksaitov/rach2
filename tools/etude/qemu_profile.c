@@ -24,7 +24,7 @@ static const char *accel_option(enum etude_accel accel)
 }
 
 /* The network cards a profile may name, each on a user network of its own. */
-static const char *const nic_models[] = {"rtl8139", "e1000", NULL};
+static const char *const nic_models[] = {"rtl8139", "e1000", "virtio-net-pci", NULL};
 
 /* The places of the IDE controllers of QEMU's PC, two on each channel, and
  * the ports of an ich9-ahci. */
