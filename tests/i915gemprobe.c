@@ -375,7 +375,8 @@ static void working_set_row(void)
 /** The state letter of /proc/PID/stat of `pid`, or 0 when unread. */
 static char proc_state(long pid)
 {
-    char path[32] = "/proc/", text[256];
+    static char text[256];
+    char path[32] = "/proc/";
     char digits[24];
     long n;
     int fd, i = 6, k = 0;
@@ -397,6 +398,9 @@ static char proc_state(long pid)
     }
     n = syscall3(SYS_READ, fd, (long)text, (long)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0;
+    }
     /* The state follows the command's closing parenthesis and a space. */
     for (i = (int)n - 1; i > 0 && text[i] != ')'; i--) {
     }
