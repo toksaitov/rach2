@@ -521,7 +521,7 @@
         },
         {
           "assertion_id": "replay",
-          "checks": "the fake's file counts one more batch on rcs0, the second context's, and GET_RESET_STATS gives the first context one batch active at a hang and the second none, with no reset of the GPU",
+          "checks": "the fake's file counts on rcs0 the batch starts of one more batch, the second context's, as many as the first batch of the probe took, and GET_RESET_STATS gives the first context one batch active at a hang and the second none, with no reset of the GPU",
           "source": "program"
         },
         {
