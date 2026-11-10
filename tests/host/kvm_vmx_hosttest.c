@@ -32,7 +32,8 @@
  * steps and breakpoints, a RIP above 4 GiB, the host's interrupt,
  * NMI and machine check, the preemption timer, a triple fault and the two
  * kinds of failed entry; a move to another processor; a state read between
- * runs; VMXON and VMPTRLD failing; VPIDs; and a panic inside a run, which
+ * runs; VMXON and VMPTRLD failing; a failed VMWRITE reported once; VPIDs;
+ * and a panic inside a run, which
  * turns VMX off.
  */
 #include "kvm/vmx.c"
@@ -291,11 +292,13 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
+static int warnings; /* klog's warnings */
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    (void)level;
     (void)subsystem;
     (void)format;
+    warnings += level == KLOG_WARN;
 }
 
 void *kmap_temp(uintptr_t phys)
@@ -698,6 +701,7 @@ static struct {
     int ud, gp, bad_writes, bad_reads;
     int nmis, mces, wbinvds, fpu_loads, fpu_stores, restores;
     int fail_vmxon, fail_vmptrld, fail_launch;
+    uint32_t refuse; /* a field whose VMWRITE fails as unsupported, or 0 */
     /* The script, and what the last entry injected. */
     struct row script[16];
     int script_len, script_at;
@@ -874,6 +878,10 @@ static int m_vmwrite(uint64_t field, uint64_t value)
     }
     if (!m.cur) {
         return VMX_FAIL_INVALID;
+    }
+    if (m.refuse && field == m.refuse) {
+        m.cur->f[VM_INSTRUCTION_ERROR] = 12;
+        return VMX_FAIL_VALID;
     }
     if (!field_known(field) || ((field >> 10) & 3u) == 1u) {
         printf("kvm-vmx-hosttest: VMWRITE refused for field 0x%x\n", (unsigned int)field);
@@ -1967,6 +1975,14 @@ static void host_rows(int fd)
 {
     struct kvm_run *rp = run_of(fd);
     struct row *w;
+    int before = warnings;
+
+    m.refuse = HOST_FS_BASE;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && warnings == before + 1, "a failed VMWRITE is reported after the exit");
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && warnings == before + 1, "once");
+    m.refuse = 0;
 
     script(EXIT_EXTERNAL_INTR, 0, 0);
     script(EXIT_PREEMPTION_TIMER, 0, 0);
