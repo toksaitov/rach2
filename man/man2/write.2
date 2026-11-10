@@ -224,14 +224,21 @@ any point of the call.
 The i386 system call numbers are 4 for
 .Nm write ,
 146 for
-.Nm writev
-and 181 for
+.Nm writev ,
+181 for
 .Nm pwrite64 ,
 which takes the descriptor, the buffer and the count in EBX, ECX and
-EDX, and the offset's low and high 32 bits in ESI and EDI.
+EDX, and the offset's low and high 32 bits in ESI and EDI,
+334 for
+.Nm pwritev ,
+whose offset is in the fourth and fifth arguments, low word first, and
+379 for
+.Nm pwritev2 ,
+which adds flags in the sixth.
 Musl's and GNU libc's
 .Fn pwrite
-are this call.
+are
+.Nm pwrite64 .
 .Pp
 On x86-64 the numbers are 1 for
 .Nm write ,
@@ -239,9 +246,12 @@ On x86-64 the numbers are 1 for
 .Nm writev ,
 18 for
 .Nm pwrite64 ,
-which takes the offset whole in R10, and 296 for
-.Nm pwritev ,
-which i386 does not have here.
+which takes the offset whole in R10, 296 for
+.Nm pwritev
+and 328 for
+.Nm pwritev2 ,
+each with the offset whole in its fourth argument and its fifth, the
+offset's high half, not read.
 .Fn pwritev
 writes the buffers of
 .Fa iov
@@ -258,33 +268,43 @@ which
 .Xr ia32 7
 describes, i386's
 .Nm writev
-(146), whose vector is of 32-bit addresses and lengths;
+(146), whose vector is of 32-bit addresses and lengths, and i386's
 .Nm pwritev
-(334), whose offset is in the fourth and fifth arguments, low word first;
-and
+(334) and
 .Nm pwritev2
-(379), which adds flags in the sixth.
+(379), with i386's arguments.
 .Pp
-The native x86-64
 .Nm pwritev2
-call is 328, with a whole offset in its fourth argument and flags in its
-sixth; its fifth argument is ignored.
-Both forms write as
+writes as
 .Nm writev
-at offset -1, and after a write with
+at offset -1 and as
+.Nm pwritev
+at another, and after a write with
 .Dv RWF_DSYNC
 or
 .Dv RWF_SYNC
-do what
+does what
 .Fn fdatasync
 or
 .Fn fsync
-does.
+does, to the file the write went to even when another thread closes the
+descriptor meanwhile.
 .Dv RWF_APPEND
-writes at the file's end under its inode lock, moving the descriptor's
-offset only when the supplied offset is -1.
+writes at the file's end, moving the descriptor's offset only when the
+supplied offset is -1, and fails with the file system's error when the
+end cannot be read.
+An append, by
+.Dv RWF_APPEND
+or by
+.Dv O_APPEND ,
+reads the end and writes there under one hold of the file's lock, or, on
+a file system with no lock of each file, such as FAT32 and exFAT, of the
+mount's lock, so that two opens of one file appending at once each add
+their bytes.
 .Dv RWF_HIPRI
-is also accepted; another flag is
+is also accepted.
+The descriptor is checked before the flags, as Linux checks it, and only
+then is another flag
 .Er EOPNOTSUPP .
 .Sh RETURN VALUES
 On success, these functions return the number of bytes written.
@@ -307,7 +327,7 @@ writes a file at offsets with
 checks that the descriptor's offset does not move, and that
 .Dv O_APPEND
 writes at the end.
-On x86-64 it writes buffers of 2, 0 and 5 bytes at offset 12 with
+It writes buffers of 2, 0 and 5 bytes at offset 12 with
 .Fn pwritev ,
 requires 7, and requires
 .Er EFAULT

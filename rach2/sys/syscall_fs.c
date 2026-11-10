@@ -641,7 +641,8 @@ struct file_write_state {
  * end again under O_APPEND, where another writer may have moved it
  * meanwhile: the rest is cut again to what RLIMIT_FSIZE lets through
  * (`fsize_fit`), and a write that finds the end at the limit stops there,
- * -EFBIG when it has moved no byte.
+ * -EFBIG when it has moved no byte. An end that cannot be read again ends
+ * the write with the bytes moved.
  */
 static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_state *state,
                                  int mapped, const char __user *buf, uint32_t count, uint64_t *pos)
@@ -676,9 +677,11 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_stat
         if (state->append || (ofd->status_flags & OFD_APPEND)) {
             struct vfs_stat vst;
 
-            if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
-                *pos = vst.size;
+            n = vfs_getattr(ofd->vmnt, ofd->vnode, &vst);
+            if (n != 0) {
+                break;
             }
+            *pos = vst.size;
             if (fsize_fit(*pos, count - done) == 0) {
                 n = done > 0 ? 0 : fsize_refused(*pos + 1);
                 break;
@@ -694,34 +697,48 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_stat
  * `own` says the type uses a file lock; `append` requests end placement for
  * this operation without changing the shared O_APPEND flag. The caller
  * has faulted in the buffer; a later fault may release and reacquire the
- * file lock through file_write_pieces. Return bytes or a negative errno.
+ * file lock through file_write_pieces. Return bytes or a negative errno,
+ * the getattr's error among them when the end of an append cannot be read.
+ *
+ * On a type that does not set `file_locked` the description's lock orders
+ * only the writes through that description, so an append there, and a
+ * write to a file shared mappings hold, takes the mount's namespace lock
+ * (`vfs_node_lock`) from before the size is read to after the bytes are
+ * written: another open's append then waits and finds the new end. The
+ * type's own write takes the same lock again, which its holder may.
  */
 static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint32_t count,
                                  const uint64_t *at, const struct file_write_state *state)
 {
     struct open_file *ofd = entry->ofd;
+    int append = state->append || (ofd->status_flags & OFD_APPEND);
+    int mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
+    int held = !state->own && (append || mapped);
     uint64_t pos;
     int32_t written;
-    int mapped;
 
-    pos = at ? *at : ofd->offset;
-    if (state->append || (ofd->status_flags & OFD_APPEND)) {
-        struct vfs_stat vst;
-
-        if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
-            pos = vst.size;
-        }
-    }
-    if (count > 0 && fsize_refused(pos + 1) != 0) {
-        return -EFBIG;
-    }
-    count = fsize_fit(pos, count);
-    mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
-    if (mapped && !state->own) {
+    if (held) {
         vfs_node_lock(&state->file);
     }
+    pos = at ? *at : ofd->offset;
+    if (append) {
+        struct vfs_stat vst;
+        int rc = vfs_getattr(ofd->vmnt, ofd->vnode, &vst);
+
+        if (rc != 0) {
+            written = rc;
+            goto out;
+        }
+        pos = vst.size;
+    }
+    if (count > 0 && fsize_refused(pos + 1) != 0) {
+        written = -EFBIG;
+        goto out;
+    }
+    count = fsize_fit(pos, count);
     written = file_write_pieces(entry, state, mapped, buf, count, &pos);
-    if (mapped && !state->own) {
+out:
+    if (held) {
         vfs_node_unlock(&state->file);
     }
     if (written > 0) {
@@ -748,9 +765,10 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
  * Returns the bytes written, or a negative errno: -EBADF for a descriptor
  * not open for writing or not on a file of a mount, -EFAULT, -EBUSY, -EFBIG,
  * or the file system's error. Takes the description's lock, then the file's
- * (`vfs_node_lock`) on a type that sets `file_locked`, from before the size
- * O_APPEND reads to after the write, and the mount's namespace lock on
- * another type for a file shared mappings hold; may sleep.
+ * (`vfs_node_lock`): on a type that sets `file_locked` always, and on
+ * another, where it is the mount's namespace lock, for an O_APPEND write
+ * and for a file shared mappings hold; each from before the size O_APPEND
+ * reads to after the write. May sleep.
  *
  * With O_APPEND every write lands at the current end of the file, whatever
  * the offset says and whatever `at` asks for, as Linux's pwrite does. The
@@ -4410,6 +4428,24 @@ long sys_close(isr_params_t *params)
 }
 
 /**
+ * Flush what the descriptor `e`, which the caller holds and has checked,
+ * is open on, by `sync_op`, as `sync_fd` says: a file or directory of a
+ * mount through its type, with the pages shared mappings of the file hold
+ * written back first, and anything else by writing back the whole cache.
+ * Returns 0, -EIO, or the type's error.
+ */
+static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void *handle))
+{
+    if (e->ofd && e->ofd->vmnt) {
+        int32_t mapped = filemap_sync_file(e->ofd->vmnt, e->ofd->ino);
+        int32_t rc = sync_op(e->ofd->vmnt, e->ofd->fhandle);
+
+        return mapped != 0 ? -EIO : rc;
+    }
+    return pc_sync() != 0 ? -EIO : 0;
+}
+
+/**
  * The body of fsync(2) and fdatasync(2), whose argument is fd.
  *
  * Any open descriptor but an O_PATH one is accepted, whatever its type. A
@@ -4426,28 +4462,16 @@ long sys_close(isr_params_t *params)
  */
 static long sync_fd(isr_params_t *params, int (*sync_op)(struct vfs_mount *mnt, void *handle))
 {
-    int fd = (int)SC_ARG(params, 0);
+    fd_entry_t *e;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    {
-        fd_entry_t *e = fd_get(current_proc->fds, fd);
-
-        if (!e || (e->flags & FD_FLAG_PATH)) {
-            return -EBADF;
-        }
-        if (e->ofd && e->ofd->vmnt) {
-            int32_t mapped = filemap_sync_file(e->ofd->vmnt, e->ofd->ino);
-            int32_t rc = sync_op(e->ofd->vmnt, e->ofd->fhandle);
-
-            return mapped != 0 ? -EIO : rc;
-        }
+    e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    if (!e || (e->flags & FD_FLAG_PATH)) {
+        return -EBADF;
     }
-    if (pc_sync() != 0) {
-        return -EIO;
-    }
-    return 0;
+    return sync_entry(e, sync_op);
 }
 
 /** Flush a file and its attributes to stable storage (fsync(2)), by the
@@ -8557,12 +8581,13 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
 }
 
 /**
- * Validate sync_file_range's range and inode kind, then flush the file's
- * data for WRITE (bit 1). All writes here finish synchronously, so the
- * WAIT_BEFORE and WAIT_AFTER bits need no separate wait. Returns 0,
- * -EINVAL for flags outside 0..7 or a negative or overflowing range,
- * -EBADF for an absent or O_PATH descriptor, -ESPIPE for an inode other
- * than a regular file, directory, block device or symlink, or a flush error.
+ * Validate sync_file_range's descriptor, range and inode kind, in Linux's
+ * order, then flush the file's data for WRITE (bit 1) as fdatasync does
+ * (`sync_entry`). All writes here finish synchronously, so the WAIT_BEFORE
+ * and WAIT_AFTER bits need no separate wait. Returns 0, -EBADF for an
+ * absent or O_PATH descriptor, -EINVAL for flags outside 0..7 or a
+ * negative or overflowing range, -ESPIPE for an inode other than a regular
+ * file, directory, block device or symlink, or a flush error.
  */
 long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags)
 {
@@ -8571,15 +8596,15 @@ long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags)
     uint32_t kind;
     long rc;
 
-    if ((flags & ~7u) || off < 0 || len < 0 || off > 0x7FFFFFFFFFFFFFFFll - len) {
-        return -EINVAL;
-    }
     if (!current_proc) {
         return -ESRCH;
     }
     entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
+    }
+    if ((flags & ~7u) || off < 0 || len < 0 || off > 0x7FFFFFFFFFFFFFFFll - len) {
+        return -EINVAL;
     }
     rc = fstat_fill(entry, &st);
     if (rc != 0) {
@@ -8592,13 +8617,7 @@ long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags)
     if (!(flags & 2u)) {
         return 0;
     }
-    if (entry->ofd && entry->ofd->vmnt) {
-        int32_t mapped = filemap_sync_file(entry->ofd->vmnt, entry->ofd->ino);
-
-        rc = vfs_fdatasync(entry->ofd->vmnt, entry->ofd->fhandle);
-        return mapped != 0 ? -EIO : rc;
-    }
-    return pc_sync() == 0 ? 0 : -EIO;
+    return sync_entry(entry, vfs_fdatasync);
 }
 
 /** sync_file_range(2) with one register each for its 64-bit range. */
@@ -11569,49 +11588,74 @@ long sys_pwritev(isr_params_t *params)
 }
 
 /**
- * Append a regular file's vector while holding its description and file
- * locks across the elements. Copy the vector and fault in its buffers
- * before taking those locks. The explicit position is ignored; -1 alone
- * advances the shared offset. Returns bytes written or the first error.
+ * Copy the `count` elements of the vector at `addr` into `iov` and check
+ * each as a write's: 0 with their total in `*wanted`, -EFAULT for a vector
+ * or a buffer the caller cannot reach, or -EINVAL for a total of 2 GiB or
+ * more. May sleep.
  */
-static long iov_append(int fd, uintptr_t addr, int count, long long pos)
+static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
+{
+    int i;
+
+    *wanted = 0;
+    for (i = 0; i < count; i++) {
+        if (iov_fetch(&iov[i], addr, (uint32_t)i) != 0) {
+            return -EFAULT;
+        }
+        if (iov[i].iov_len > 0x7FFFFFFFu || *wanted > 0x7FFFFFFFu - iov[i].iov_len) {
+            return -EINVAL;
+        }
+        if (iov[i].iov_len && !user_buffer_ok(iov[i].iov_base, iov[i].iov_len, 0)) {
+            return -EFAULT;
+        }
+        *wanted += (uint32_t)iov[i].iov_len;
+    }
+    return 0;
+}
+
+/**
+ * Append the vector of `count` elements at `addr` to the regular file of
+ * the descriptor `entry`, which the caller holds, holding its description
+ * and file locks across the elements (`file_write_locked`). The vector is
+ * copied and checked before the descriptor, since the copy may sleep, and
+ * the descriptor is checked before its locks are taken. The explicit
+ * position `pos` is ignored; -1 alone advances the shared offset. Returns
+ * the bytes written or the first error: -EINVAL for a count below 0 or past
+ * IOV_MAX_LOCAL or a vector of 2 GiB or more, -EFAULT for a vector or a
+ * buffer the caller cannot reach, -EBADF for a descriptor that is not a
+ * file of a mount open for writing, -EBUSY for a file that backs a loop
+ * device, or the write's error.
+ */
+static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long pos)
 {
     struct kernel_iovec *iov;
-    fd_entry_t *entry = NULL;
     struct open_file *ofd;
     struct file_write_state state;
     uint64_t at = 0;
     uint32_t wanted = 0;
-    long total = 0, rc;
+    long total = 0, rc = 0;
     int i;
 
-    if (count < 0 || count > IOV_MAX_LOCAL || pos < -1) {
+    if (count < 0 || count > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
-    rc = pio_entry(fd, 1, 0, pos == -1 ? 0 : pos, &entry);
-    if (rc != 0 || count == 0) {
-        return rc;
-    }
-    iov = kmalloc((size_t)count * sizeof(*iov));
+    iov = kmalloc((size_t)(count > 0 ? count : 1) * sizeof(*iov));
     if (!iov) {
         return -ENOMEM;
     }
-    for (i = 0; i < count; i++) {
-        if (iov_fetch(&iov[i], addr, (uint32_t)i) != 0) {
-            rc = -EFAULT;
-            goto out;
-        }
-        if (iov[i].iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov[i].iov_len) {
-            rc = -EINVAL;
-            goto out;
-        }
-        if (iov[i].iov_len && !user_buffer_ok(iov[i].iov_base, iov[i].iov_len, 0)) {
-            rc = -EFAULT;
-            goto out;
-        }
-        wanted += (uint32_t)iov[i].iov_len;
+    rc = iov_copy_in(iov, addr, count, &wanted);
+    if (rc != 0) {
+        goto out;
     }
     ofd = entry->ofd;
+    if (entry->type != FD_TYPE_FILE || entry->ops || !ofd || !ofd->vmnt ||
+        !(entry->flags & FD_FLAG_WRITE)) {
+        rc = -EBADF;
+        goto out;
+    }
+    if (wanted == 0) {
+        goto out;
+    }
     fd_ofd_lock(ofd);
     state.own = file_lock(ofd, &state.file);
     state.append = 1;
@@ -11648,39 +11692,76 @@ out:
 #define RWF_APPEND 0x10u
 
 /**
- * preadv2 or pwritev2: -1 uses the shared offset, APPEND places a write at
- * the file's end without changing O_APPEND, and SYNC or DSYNC flushes the
- * write. A flag outside the supported set is -EOPNOTSUPP. The other
- * arguments and errors are preadv's and pwritev's.
+ * The descriptor checks of preadv2 and pwritev2, which Linux makes before
+ * it reads the flags: -EINVAL for a position below -1, -EBADF for a
+ * descriptor `fd` that is not open or not open for the direction `write`
+ * names, and at a position other than -1 `pio_entry`'s errors but
+ * -EISDIR, which the read itself answers. 0 with the held entry in
+ * `*entry`, NULL for a directory.
  */
-static long rwv2(isr_params_t *params, int write)
+static long rwv2_entry(int fd, long long pos, int write, fd_entry_t **entry)
 {
-    int fd = (int)SC_ARG(params, 0);
-    long long pos = pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3));
-    uint32_t flags = (uint32_t)SC_ARG(params, 5);
-    fd_entry_t *entry;
+    fd_entry_t *e;
     long rc;
 
-    if (flags & ~(RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_APPEND)) {
-        return -EOPNOTSUPP;
+    *entry = NULL;
+    if (pos < -1) {
+        return -EINVAL;
     }
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(current_proc->fds, fd);
-    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+    if (pos != -1) {
+        rc = pio_entry(fd, write, 0, pos, entry);
+        if (rc == -EISDIR) {
+            *entry = NULL;
+            return 0;
+        }
+        return rc;
+    }
+    e = fd_get(current_proc->fds, fd);
+    if (!e || (e->flags & FD_FLAG_PATH) || !(e->flags & (write ? FD_FLAG_WRITE : FD_FLAG_READ))) {
         return -EBADF;
     }
-    if (write && (flags & RWF_APPEND) && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd &&
-        entry->ofd->vmnt) {
-        rc = iov_append(fd, SC_ARG(params, 1), (int)SC_ARG(params, 2), pos);
+    *entry = e;
+    return 0;
+}
+
+/**
+ * preadv2 or pwritev2: -1 uses the shared offset, APPEND places a write at
+ * the file's end without changing O_APPEND, and SYNC or DSYNC flushes the
+ * write. The descriptor is checked before the flags, as Linux checks it: a
+ * position below -1 is -EINVAL, then a descriptor that is not open, or not
+ * open for the call's direction, is -EBADF, a descriptor that cannot seek
+ * with a position other than -1 is -ESPIPE, and only then is a flag outside
+ * the supported set -EOPNOTSUPP. The flush goes to the open file the call
+ * holds (`sync_entry`), so a close of the number by another thread while
+ * the write sleeps does not lose it. The other arguments and errors are
+ * preadv's and pwritev's.
+ */
+static long rwv2(isr_params_t *params, int write)
+{
+    long long pos = pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3));
+    uint32_t flags = (uint32_t)SC_ARG(params, 5);
+    fd_entry_t *entry = NULL;
+    long rc = rwv2_entry((int)SC_ARG(params, 0), pos, write, &entry);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (flags & ~(RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_APPEND)) {
+        return -EOPNOTSUPP;
+    }
+    if (write && (flags & RWF_APPEND) && entry && entry->type == FD_TYPE_FILE && !entry->ops &&
+        entry->ofd && entry->ofd->vmnt) {
+        rc = iov_append(entry, SC_ARG(params, 1), (int)SC_ARG(params, 2), pos);
     } else if (pos == -1) {
         rc = write ? sys_writev(params) : sys_readv(params);
     } else {
         rc = write ? sys_pwritev(params) : sys_preadv(params);
     }
-    if (rc > 0 && write && (flags & (RWF_DSYNC | RWF_SYNC))) {
-        long synced = (flags & RWF_SYNC) ? sys_fsync(params) : sys_fdatasync(params);
+    if (rc > 0 && write && entry && (flags & (RWF_DSYNC | RWF_SYNC))) {
+        long synced = sync_entry(entry, (flags & RWF_SYNC) ? vfs_fsync : vfs_fdatasync);
 
         if (synced < 0) {
             return synced;

@@ -501,7 +501,8 @@ long sys_pread64(isr_params_t *params);
 
 long sys_pwrite64(isr_params_t *params);
 
-/** Flush the data of a validated sync_file_range range; may sleep. */
+/** sync_file_range(2) with its range whole: checks the descriptor, the
+ * flags, the range and the file's kind, then flushes its data; may sleep. */
 long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags);
 long sys_sync_file_range(isr_params_t *params);
 long sys_preadv2(isr_params_t *params);
