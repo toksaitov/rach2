@@ -54,7 +54,7 @@ The disk is opened with `snapshot=on`. Rach2's ordinary kernel refuses every wri
 
 `kvm` is `-accel kvm,kernel-irqchip=split -cpu host`, since Rach2's KVM has the split interrupt controller alone ([the KVM tests](../../tests/kvm/Readme.md)). It is the default and what a Rach2 on hardware uses.
 
-The family's cases pass `-a tcg`. Their Rach2 is itself a guest of the testing PC's KVM, which is a guest of Hyper-V, so a guest of Rach2's KVM is at the third level, where every exit is emulated twice over. Measured there, Debian's kernel printed its first line more than two minutes after QEMU started, systemd's wait for a partition's device ran out, and Debian stopped in emergency mode after 12 minutes without its SSH server ([83-2.md](../../dev-log/83-testbed/83-2.md)). Under QEMU's emulator the same guest answers SSH in 45 to 68 s. The [testing skill](../../.agents/skills/testing/SKILL.md) has the same rule for every third-level guest of the testing PC.
+The family's cases pass `-a tcg`. Their Rach2 is itself a guest of the testing PC's KVM, which is a guest of Hyper-V, so a guest of Rach2's KVM is at the third level, where every exit is emulated twice over. Measured there, Debian's kernel printed its first line more than two minutes after QEMU started, systemd's wait for a partition's device ran out, and Debian stopped in emergency mode after 12 to 15 minutes without its SSH server ([83-2.md](../../dev-log/83-testbed/83-2.md)). Under QEMU's emulator the same guest answers SSH in 38 to 68 s. The [testing skill](../../.agents/skills/testing/SKILL.md) has the same rule for every third-level guest of the testing PC.
 
 ### The scenes
 
