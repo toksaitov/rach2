@@ -1,9 +1,11 @@
 /*
- * intel_dp_link_training.c: the eDP link's training at 8b/10b, after
+ * intel_dp_link_training.c: a DisplayPort link's training at 8b/10b, after
  * Linux's display/intel_dp_link_training.c with its drm_dp_helper.c
  * helpers: the link's configuration in the sink's DPCD, clock recovery on
  * pattern 1, channel equalization on pattern 2 or 3, the fallback after
- * failures, and the end of training. eDP has no LTTPRs to train.
+ * failures, and the end of training. LTTPRs train in their transparent
+ * mode, since Linux detects them only from display version 10, whose AUX
+ * timeout is long enough.
  */
 
 #include "i915.h"
@@ -152,12 +154,12 @@ static int adjust_changed(const struct intel_dp *dp, const uint8_t *a, const uin
 }
 
 /** Wait `us` microseconds, sleeping for a millisecond or more. */
-static void train_delay(struct drm_i915_private *i915, uint32_t us)
+static void train_delay(struct intel_dp *dp, uint32_t us)
 {
     if (us >= 1000u) {
-        intel_display_msleep(i915, us / 1000u);
+        intel_display_msleep(dp->i915, us / 1000u);
     } else {
-        i915_delay_us(&i915->hw, us);
+        i915_delay_us(&dp->i915->hw, us);
     }
 }
 
@@ -179,24 +181,23 @@ static uint32_t status_delay(const struct intel_dp *dp, int cr)
 }
 
 /** Read the link's six status bytes; 0, or -EIO. */
-static int32_t read_status(struct drm_i915_private *i915, uint8_t *status)
+static int32_t read_status(struct intel_dp *dp, uint8_t *status)
 {
-    return intel_dp_dpcd_read(i915, DP_LANE0_1_STATUS, status, LINK_STATUS_LEN) == LINK_STATUS_LEN
+    return intel_dp_dpcd_read(dp, DP_LANE0_1_STATUS, status, LINK_STATUS_LEN) == LINK_STATUS_LEN
                ? 0
                : -EIO;
 }
 
 /** Drive pattern `pat` on the port and write it, with the lanes' levels,
  * to the sink, Linux's intel_dp_set_link_train; 0, or -EIO. */
-static int32_t set_link_train(struct drm_i915_private *i915, uint8_t pat)
+static int32_t set_link_train(struct intel_dp *dp, uint8_t pat)
 {
-    struct intel_dp *dp = &i915->display.dp;
     uint8_t buf[5];
 
-    intel_ddi_set_link_train(i915, pat);
+    intel_ddi_set_link_train(dp, pat);
     buf[0] = pat;
     k_memcpy(buf + 1, dp->train_set, dp->lane_count);
-    return intel_dp_dpcd_write(i915, DP_TRAINING_PATTERN_SET, buf, dp->lane_count + 1u) ==
+    return intel_dp_dpcd_write(dp, DP_TRAINING_PATTERN_SET, buf, dp->lane_count + 1u) ==
                    (int32_t)(dp->lane_count + 1u)
                ? 0
                : -EIO;
@@ -204,12 +205,10 @@ static int32_t set_link_train(struct drm_i915_private *i915, uint8_t pat)
 
 /** Drive the levels `train_set` names and write them to the sink, Linux's
  * intel_dp_update_link_train; 0, or -EIO. */
-static int32_t update_link_train(struct drm_i915_private *i915)
+static int32_t update_link_train(struct intel_dp *dp)
 {
-    struct intel_dp *dp = &i915->display.dp;
-
-    intel_ddi_set_signal_levels(i915);
-    return intel_dp_dpcd_write(i915, DP_TRAINING_LANE0_SET, dp->train_set, dp->lane_count) ==
+    intel_ddi_set_signal_levels(dp);
+    return intel_dp_dpcd_write(dp, DP_TRAINING_LANE0_SET, dp->train_set, dp->lane_count) ==
                    (int32_t)dp->lane_count
                ? 0
                : -EIO;
@@ -230,13 +229,12 @@ static int enhanced_framing(const struct intel_dp *dp)
  * table after a reread of the table, and the lanes with enhanced
  * framing.
  */
-static void prepare_link_train(struct drm_i915_private *i915)
+static void prepare_link_train(struct intel_dp *dp)
 {
-    struct intel_dp *dp = &i915->display.dp;
     uint8_t cfg[2], lanes = (uint8_t)dp->lane_count, rates[2 * DP_MAX_SUPPORTED_RATES];
     int i, select = 0;
 
-    intel_ddi_prepare_link_retrain(i915, enhanced_framing(dp));
+    intel_ddi_prepare_link_retrain(dp, enhanced_framing(dp));
     if (enhanced_framing(dp)) {
         lanes |= DP_LANE_COUNT_ENHANCED_FRAME_EN;
     }
@@ -246,18 +244,18 @@ static void prepare_link_train(struct drm_i915_private *i915)
         }
     }
     if (dp->use_rate_select) {
-        (void)intel_dp_dpcd_read(i915, DP_SUPPORTED_LINK_RATES, rates, sizeof(rates));
+        (void)intel_dp_dpcd_read(dp, DP_SUPPORTED_LINK_RATES, rates, sizeof(rates));
     }
     cfg[0] = 0;
     cfg[1] = DP_SET_ANSI_8B10B;
-    (void)intel_dp_dpcd_write(i915, DP_DOWNSPREAD_CTRL, cfg, 2);
+    (void)intel_dp_dpcd_write(dp, DP_DOWNSPREAD_CTRL, cfg, 2);
     if (!dp->use_rate_select) {
         cfg[0] = (uint8_t)(dp->link_rate / 27000u);
         cfg[1] = lanes;
-        (void)intel_dp_dpcd_write(i915, DP_LINK_BW_SET, cfg, 2);
+        (void)intel_dp_dpcd_write(dp, DP_LINK_BW_SET, cfg, 2);
     } else {
-        (void)intel_dp_dpcd_writeb(i915, DP_LANE_COUNT_SET, lanes);
-        (void)intel_dp_dpcd_writeb(i915, DP_LINK_RATE_SET, (uint8_t)select);
+        (void)intel_dp_dpcd_writeb(dp, DP_LANE_COUNT_SET, lanes);
+        (void)intel_dp_dpcd_writeb(dp, DP_LINK_RATE_SET, (uint8_t)select);
     }
 }
 
@@ -268,9 +266,8 @@ static void prepare_link_train(struct drm_i915_private *i915)
  * every lane has its clock, the same request 5 times, or the swing at its
  * most. 0, or -EIO.
  */
-static int32_t clock_recovery(struct drm_i915_private *i915)
+static int32_t clock_recovery(struct intel_dp *dp)
 {
-    struct intel_dp *dp = &i915->display.dp;
     uint8_t status[LINK_STATUS_LEN], old[LINK_STATUS_LEN];
     uint32_t delay = status_delay(dp, 1);
     int tries, max = dp->dpcd[DP_DPCD_REV] >= DP_DPCD_REV_14 ? CR_TRIES_14 : CR_TRIES_OLD;
@@ -278,34 +275,34 @@ static int32_t clock_recovery(struct drm_i915_private *i915)
 
     k_memset(dp->train_set, 0, sizeof(dp->train_set));
     k_memset(old, 0, sizeof(old));
-    intel_ddi_set_signal_levels(i915);
-    if (set_link_train(i915, DP_TRAINING_PATTERN_1 | DP_LINK_SCRAMBLING_DISABLE) != 0) {
-        klog(KLOG_ERR, "i915", "edp: failed to enable link training");
+    intel_ddi_set_signal_levels(dp);
+    if (set_link_train(dp, DP_TRAINING_PATTERN_1 | DP_LINK_SCRAMBLING_DISABLE) != 0) {
+        klog(KLOG_ERR, "i915", "%s: failed to enable link training", dp->name);
         return -EIO;
     }
     for (tries = 0; tries < max; tries++) {
-        train_delay(i915, delay);
-        if (read_status(i915, status) != 0) {
-            klog(KLOG_ERR, "i915", "edp: failed to get link status");
+        train_delay(dp, delay);
+        if (read_status(dp, status) != 0) {
+            klog(KLOG_ERR, "i915", "%s: failed to get link status", dp->name);
             return -EIO;
         }
         if (cr_ok(status, dp->lane_count)) {
             return 0;
         }
         if (voltage_tries == VOLTAGE_TRIES || max_vswing) {
-            klog(KLOG_INFO, "i915", "edp: clock recovery: %s",
+            klog(KLOG_INFO, "i915", "%s: clock recovery: %s", dp->name,
                  max_vswing ? "the most swing reached" : "the same swing tried 5 times");
             return -EIO;
         }
         get_adjust_train(dp, status);
-        if (update_link_train(i915) != 0) {
+        if (update_link_train(dp) != 0) {
             return -EIO;
         }
         voltage_tries = adjust_changed(dp, old, status) ? 1 : voltage_tries + 1;
         k_memcpy(old, status, sizeof(old));
         max_vswing = max_vswing_reached(dp);
     }
-    klog(KLOG_ERR, "i915", "edp: clock recovery failed %d times, giving up", max);
+    klog(KLOG_ERR, "i915", "%s: clock recovery failed %d times, giving up", dp->name, max);
     return -EIO;
 }
 
@@ -315,9 +312,8 @@ static int32_t clock_recovery(struct drm_i915_private *i915)
  * scrambling off, up to 5 status reads while every lane keeps its clock.
  * 0, or -EIO.
  */
-static int32_t channel_equalization(struct drm_i915_private *i915)
+static int32_t channel_equalization(struct intel_dp *dp)
 {
-    struct intel_dp *dp = &i915->display.dp;
     uint8_t status[LINK_STATUS_LEN];
     uint8_t pat =
         dp->dpcd[DP_DPCD_REV] >= DP_DPCD_REV_12 && (dp->dpcd[DP_MAX_LANE_COUNT] & DP_TPS3_SUPPORTED)
@@ -326,63 +322,62 @@ static int32_t channel_equalization(struct drm_i915_private *i915)
     uint32_t delay = status_delay(dp, 0);
     int tries;
 
-    if (set_link_train(i915, (uint8_t)(pat | DP_LINK_SCRAMBLING_DISABLE)) != 0) {
-        klog(KLOG_ERR, "i915", "edp: failed to start channel equalization");
+    if (set_link_train(dp, (uint8_t)(pat | DP_LINK_SCRAMBLING_DISABLE)) != 0) {
+        klog(KLOG_ERR, "i915", "%s: failed to start channel equalization", dp->name);
         return -EIO;
     }
     for (tries = 0; tries < EQ_TRIES; tries++) {
-        train_delay(i915, delay);
-        if (read_status(i915, status) != 0) {
-            klog(KLOG_ERR, "i915", "edp: failed to get link status");
+        train_delay(dp, delay);
+        if (read_status(dp, status) != 0) {
+            klog(KLOG_ERR, "i915", "%s: failed to get link status", dp->name);
             return -EIO;
         }
         if (!cr_ok(status, dp->lane_count)) {
-            klog(KLOG_INFO, "i915", "edp: clock recovery lost in channel equalization");
+            klog(KLOG_INFO, "i915", "%s: clock recovery lost in channel equalization", dp->name);
             return -EIO;
         }
         if (eq_ok(status, dp->lane_count)) {
             return 0;
         }
         get_adjust_train(dp, status);
-        if (update_link_train(i915) != 0) {
+        if (update_link_train(dp) != 0) {
             return -EIO;
         }
     }
-    klog(KLOG_INFO, "i915", "edp: channel equalization failed 5 times");
+    klog(KLOG_INFO, "i915", "%s: channel equalization failed 5 times", dp->name);
     return -EIO;
 }
 
 /** One training at the link's rate and lanes, the port left on its idle
  * pattern; 0, or -EIO. Linux's intel_dp_link_train_all_phys. */
-static int32_t train_once(struct drm_i915_private *i915)
+static int32_t train_once(struct intel_dp *dp)
 {
     int32_t ret;
 
-    prepare_link_train(i915);
-    ret = clock_recovery(i915);
+    prepare_link_train(dp);
+    ret = clock_recovery(dp);
     if (ret == 0) {
-        ret = channel_equalization(i915);
+        ret = channel_equalization(dp);
     }
-    intel_ddi_set_idle_link_train(i915);
+    intel_ddi_set_idle_link_train(dp);
     return ret;
 }
 
 /**
  * Choose the link to train next after two failures, Linux's
- * intel_dp_get_link_train_fallback_values for eDP: first the sink's most,
+ * intel_dp_get_link_train_fallback_values: for eDP first the sink's most;
  * then the next lower rate at the same lanes or, at the lowest, half the
- * lanes at the highest rate, while the panel's mode at 18 bits a pixel
- * still fits. 0, or -EIO when no lower link is left.
+ * lanes at the highest rate, for eDP only while the panel's mode at 18
+ * bits a pixel still fits. 0, or -EIO when no lower link is left.
  */
-static int32_t fallback(struct drm_i915_private *i915, uint32_t mode_clock)
+static int32_t fallback(struct intel_dp *dp, uint32_t mode_clock)
 {
-    struct intel_dp *dp = &i915->display.dp;
     uint32_t rate = 0, lanes = dp->lane_count;
     int i;
 
-    if (!dp->use_max_params) {
+    if (dp->edp && !dp->use_max_params) {
         dp->use_max_params = 1;
-        klog(KLOG_INFO, "i915", "edp: retrying link training with the most parameters");
+        klog(KLOG_INFO, "i915", "%s: retrying link training with the most parameters", dp->name);
         return 0;
     }
     for (i = 0; i < dp->nrates; i++) {
@@ -397,21 +392,20 @@ static int32_t fallback(struct drm_i915_private *i915, uint32_t mode_clock)
         lanes >>= 1;
         rate = dp->rates[dp->nrates - 1];
     }
-    if ((mode_clock * 18u + 7u) / 8u > rate * lanes) {
-        klog(KLOG_INFO, "i915", "edp: retrying link training with the same parameters");
+    if (dp->edp && (mode_clock * 18u + 7u) / 8u > rate * lanes) {
+        klog(KLOG_INFO, "i915", "%s: retrying link training with the same parameters", dp->name);
         return 0;
     }
-    klog(KLOG_INFO, "i915", "edp: reducing the link from %ux%u to %ux%u", (unsigned)dp->lane_count,
-         (unsigned)dp->link_rate, (unsigned)lanes, (unsigned)rate);
+    klog(KLOG_INFO, "i915", "%s: reducing the link from %ux%u to %ux%u", dp->name,
+         (unsigned)dp->lane_count, (unsigned)dp->link_rate, (unsigned)lanes, (unsigned)rate);
     dp->link_max_rate = rate;
     dp->link_max_lanes = lanes;
     return 0;
 }
 
-int32_t intel_dp_start_link_train(struct drm_i915_private *i915, uint32_t mode_clock)
+int32_t intel_dp_start_link_train(struct intel_dp *dp, uint32_t mode_clock)
 {
-    struct intel_dp *dp = &i915->display.dp;
-    int32_t ret = train_once(i915);
+    int32_t ret = train_once(dp);
 
     if (ret == 0) {
         dp->train_failures = 0;
@@ -420,27 +414,46 @@ int32_t intel_dp_start_link_train(struct drm_i915_private *i915, uint32_t mode_c
     /* Linux checks the link at once after a first failure and trains it
      * again; a second failure in a row falls back. */
     if (++dp->train_failures < 2) {
-        ret = train_once(i915);
+        ret = train_once(dp);
         if (ret == 0) {
             dp->train_failures = 0;
             return 0;
         }
         dp->train_failures++;
     }
-    klog(KLOG_ERR, "i915", "edp: link training failed at %u kHz on %u lanes",
+    if (!dp->edp && !intel_dp_connected(dp)) {
+        klog(KLOG_INFO, "i915", "%s: link training failed on a disconnected sink", dp->name);
+        return -EIO;
+    }
+    klog(KLOG_ERR, "i915", "%s: link training failed at %u kHz on %u lanes", dp->name,
          (unsigned)dp->link_rate, (unsigned)dp->lane_count);
-    if (fallback(i915, mode_clock) != 0) {
-        klog(KLOG_ERR, "i915", "edp: can't reduce link training parameters after failure");
+    if (fallback(dp, mode_clock) != 0) {
+        klog(KLOG_ERR, "i915", "%s: can't reduce link training parameters after failure", dp->name);
         return -EIO;
     }
     return -EAGAIN;
 }
 
-void intel_dp_stop_link_train(struct drm_i915_private *i915)
+int intel_dp_link_ok(struct intel_dp *dp)
+{
+    uint8_t status[LINK_STATUS_LEN];
+
+    if (read_status(dp, status) != 0) {
+        return -EIO;
+    }
+    if (eq_ok(status, dp->lane_count)) {
+        return 1;
+    }
+    klog(KLOG_INFO, "i915", "%s: link not ok, status %02x %02x %02x", dp->name, (unsigned)status[0],
+         (unsigned)status[1], (unsigned)status[2]);
+    return 0;
+}
+
+void intel_dp_stop_link_train(struct intel_dp *dp)
 {
     uint8_t off = DP_TRAINING_PATTERN_DISABLE;
 
-    i915->display.dp.link_trained = 1;
-    (void)intel_dp_dpcd_write(i915, DP_TRAINING_PATTERN_SET, &off, 1);
-    intel_ddi_set_link_train(i915, DP_TRAINING_PATTERN_DISABLE);
+    dp->link_trained = 1;
+    (void)intel_dp_dpcd_write(dp, DP_TRAINING_PATTERN_SET, &off, 1);
+    intel_ddi_set_link_train(dp, DP_TRAINING_PATTERN_DISABLE);
 }

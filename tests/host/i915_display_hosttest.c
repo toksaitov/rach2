@@ -8,7 +8,7 @@
  * host-deps: tests/host/i915_model.c rach2/sys/display/backlight.c
  * host-deps: rach2/sys/display/intelbl.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
- * host-deps: rach2/sys/drm/i915/intel_bios.c
+ * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The rows: the readout of pipe A, the eDP transcoder, DDI A, the plane and the
@@ -50,6 +50,10 @@
 #include "drm/i915/intel_cdclk.c"
 #include "drm/i915/intel_pps.c"
 #include "drm/i915/intel_dp_aux.c"
+#include "drm/i915/intel_gmbus.c"
+#include "drm/i915/intel_dpll.c"
+#include "drm/i915/intel_hdmi.c"
+#include "drm/i915/intel_hotplug.c"
 #include "drm/i915/intel_ddi.c"
 #include "drm/i915/intel_dp_link_training.c"
 #include "drm/i915/intel_dp.c"
@@ -332,6 +336,9 @@ static int32_t bring_up(void)
           "the VBT is read and decoded");
     gpu.pci = model.pci;
     gpu.hw = model.hw;
+    /* The reference the bind's i915_power_init holds for its life. */
+    gpu.power.count = 1;
+    gpu.power.on = 1;
     gpu.msi_vector = 48;
     driver.ident.name = "i915";
     gpu.drm.driver = &driver;

@@ -296,6 +296,11 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
     if (ps->rotation & DRM_MODE_ROTATE_180) {
         cntr |= DISP_ROTATE_180;
     }
+    /* Linux's i9xx_plane_ctl_crtc: through the pipe's matrix when it
+     * makes limited range RGB. */
+    if (c->cfg.limited_range) {
+        cntr |= DISP_PIPE_CSC_ENABLE;
+    }
     if (state->crtcs_new[c->base.index] && state->crtcs_new[c->base.index]->async_flip) {
         i915_write(hw, DSPCNTR(c->pipe), cntr | DISP_ASYNC_FLIP);
         i915_write(hw, DSPSURF(c->pipe), surf);
@@ -378,6 +383,9 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     }
     if (ps->rotation & DRM_MODE_ROTATE_180) {
         ctl |= SPRITE_ROTATE_180;
+    }
+    if (c->cfg.limited_range) {
+        ctl |= SPRITE_PIPE_CSC_ENABLE;
     }
     i915_write(hw, SPRSTRIDE(c->pipe), ps->fb->pitches[0]);
     i915_write(hw, SPRPOS(c->pipe), (uint32_t)ps->dst.y1 << 16 | (uint32_t)ps->dst.x1);
