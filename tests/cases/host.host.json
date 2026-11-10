@@ -596,6 +596,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_ppgtt",
+          "checks": "tests/host/i915_ppgtt_hosttest.c makes the Intel graphics driver's aliasing PPGTT on the HD 4400's host model, whose rings walk it from PP_DIR_BASE: the directory in the GT's space at a 64 KiB boundary, each ring's PPGTT registers written between its start and RING_VALID, bindings mirrored with their tables made and kept, a batch's stores on the render and blitter rings landing on the pages the global GTT maps, the GT's own objects out of reach, and the PPGTT on again after a reset of the rings, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_trial",
           "checks": "tests/host/i915_trial_hosttest.c binds the Intel graphics driver to the HD 4400's host model as the Lenovo's firmware leaves it, without and with first light, and finds no wait at its bound, no display register or framebuffer GTT entry written, the power well kept, no memory reached but the driver's own and every interrupt source masked, under ASan and UBSan and exits 0",
           "source": "scenario"

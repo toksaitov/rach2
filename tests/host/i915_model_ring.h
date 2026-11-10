@@ -36,9 +36,13 @@ struct i915_model_ctx {
  * One ring of the model. While it is enabled (RING_CTL's RING_VALID) and
  * not stopped (MI_MODE's STOP_RING) and not `stuck`, each wait of the
  * driver runs its commands from its head to its tail through the global
- * GTT. `executed` counts the commands run. A command the model does not
- * know, or an address it cannot reach, stops the ring there: `fault` is
- * set to that command's first dword and the ring runs nothing more.
+ * GTT. `executed` counts the commands run. MI_BATCH_BUFFER_START runs a
+ * batch of stores, through the aliasing PPGTT when its bit 8 is set, which
+ * the ring walks from PP_DIR_BASE while RING_MODE_GEN7's PPGTT bit is set
+ * and PP_DIR_DCLV marks the address valid; `batches` counts them. A reset
+ * of the ring clears those registers. A command the model does not know,
+ * or an address it cannot reach, stops the ring there: `fault` is set to
+ * that command's first dword and the ring runs nothing more.
  *
  * `ctx` is the state of its contexts and flushes.
  *
@@ -48,6 +52,7 @@ struct i915_model_ctx {
  */
 struct i915_model_ring {
     uint32_t executed;
+    uint32_t batches;
     uint32_t fault;
     int faulted;
     int stuck;
