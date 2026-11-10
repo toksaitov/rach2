@@ -131,11 +131,10 @@ all : $(KERNEL_BIN)
 # tools/inspect/elfcheck, built with the host compiler by the top-level
 # Makefile before each link, so a changed checker is rebuilt first.
 #
-# The kernel every loader reads has no debug sections. They are more than half
-# of the linked file, which with them would nearly fill the 4 MiB kernel slot
-# of a boot partition (tools/image/mkdisk_grub.sh). The linked file with them
-# is kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB.
-# Both keep the symbol table, which the checker's `_end` test and `nm` read.
+# The kernel every loader reads has no debug sections or local symbols, to
+# fit the 4 MiB kernel slot of a boot partition (tools/image/mkdisk_grub.sh).
+# The complete linked file stays beside it as `kernel.debug`, which debug.sh
+# loads into GDB. Both keep the global symbols the checker and `nm` read.
 # The rule names this file among its inputs, so a change to how the kernel is
 # made makes it again.
 ELFCHECK = ../build/tools/inspect/elfcheck
@@ -150,7 +149,7 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).l
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp" "$$tmp.debug"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@.debug ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) && \
-	$(CROSS_OBJCOPY) --strip-debug "$$tmp.debug" "$$tmp" && \
+	$(CROSS_OBJCOPY) --strip-debug --discard-all "$$tmp.debug" "$$tmp" && \
 	$(KERNEL_CHECK) "$$tmp" && \
 	mv "$$tmp.debug" $@.debug && \
 	mv "$$tmp" $@
