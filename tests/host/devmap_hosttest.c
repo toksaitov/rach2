@@ -177,10 +177,11 @@ void *mmu_frame_table(struct frame_map *map, size_t bytes)
 }
 
 /** Nothing: one processor, no TLB. */
-void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
+void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
     (void)dir;
-    (void)va;
+    (void)start;
+    (void)end;
 }
 
 /** Nothing. */

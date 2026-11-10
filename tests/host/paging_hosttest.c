@@ -337,10 +337,11 @@ void arch_space_load(uintptr_t root)
 }
 
 /** One processor: no other has a translation to drop. */
-void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
+void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
     (void)dir;
-    (void)va;
+    (void)start;
+    (void)end;
 }
 
 /** Count a change of kernel mappings. */
