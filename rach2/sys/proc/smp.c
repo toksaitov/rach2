@@ -33,6 +33,8 @@ static uint64_t bkl_wait_max_cycles;
 static uint64_t bkl_hold_max_cycles; /* the longest hold, from take to give back */
 static uint32_t bkl_hold_vector;     /* its entry's vector, 0 for none */
 static int32_t bkl_hold_nr = -1;     /* its entry's system call number, or -1 */
+static uint64_t bkl_seen_max_cycles; /* the oldest hold an interrupt has found */
+static uintptr_t bkl_seen_pc;        /* the instruction that interrupt stopped */
 
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
@@ -129,6 +131,21 @@ void bkl_note_entry(uint32_t vector, int32_t nr)
     }
 }
 
+void bkl_hold_sample(uintptr_t pc)
+{
+    struct percpu *cpu = this_cpu();
+    uint64_t held;
+
+    if (cpu->bkl_depth < 2) {
+        return;
+    }
+    held = arch_cycles() - cpu->bkl_since;
+    if (held > bkl_seen_max_cycles) {
+        bkl_seen_max_cycles = held;
+        bkl_seen_pc = pc;
+    }
+}
+
 /** Read the acquisition and shootdown counters with the big lock held. */
 void smp_wait_stats(uint64_t *total_us, uint64_t *max_us)
 {
@@ -141,6 +158,12 @@ void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr)
     *max_us = timer_cycles_us(bkl_hold_max_cycles);
     *vector = bkl_hold_vector;
     *nr = bkl_hold_nr;
+}
+
+void smp_hold_sample(uint64_t *age_us, uintptr_t *pc)
+{
+    *age_us = timer_cycles_us(bkl_seen_max_cycles);
+    *pc = bkl_seen_pc;
 }
 
 void bkl_enter(void)
@@ -208,6 +231,8 @@ void bkl_take(int depth)
 
     if (depth > 0) {
         bkl_acquire(cpu);
+        cpu->bkl_vector = 0;
+        cpu->bkl_nr = -1;
         cpu->bkl_depth = depth;
     }
 }
