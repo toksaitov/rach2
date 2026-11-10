@@ -273,7 +273,6 @@ int main(void)
     int ok;
 
     probe_output();
-    setvbuf(stdout, NULL, _IONBF, 0);
     dev = make_device();
     pso = make_pipeline(dev, &rs);
     rtv = make_targets(dev, &rt, &rb);

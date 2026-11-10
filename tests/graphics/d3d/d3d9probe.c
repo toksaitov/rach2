@@ -37,7 +37,6 @@ int main(void)
     int ok;
 
     probe_output();
-    setvbuf(stdout, NULL, _IONBF, 0);
     w = CreateWindowA("STATIC", "d3d9probe", WS_POPUP, 0, 0, 64, 64, NULL, NULL, NULL, NULL);
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d) {

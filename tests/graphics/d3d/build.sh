@@ -13,14 +13,17 @@ if [ "${1:-}" = guest ]; then
     cd "$work"
     tar -xf /tmp/d3d-input.tar
     sudo DEBIAN_FRONTEND=noninteractive apt-get -q -y install \
-        gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64-tools \
+        gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gcc-mingw-w64-i686 mingw-w64-tools \
         flex bison libvulkan-dev glslang-tools meson ninja-build cmake pkg-config
+    # Each probe twice: d3dN.exe for x86-64 and d3dN-32.exe for i386.
     for n in 9 11 12; do
         libs=-ld3d9
         [ "$n" = 9 ] || libs="-ld3d$n -ldxgi -ld3dcompiler_47"
-        # shellcheck disable=SC2086 # the selected import libraries are words
-        x86_64-w64-mingw32-gcc -std=c99 -O2 -Wall -Wextra -Werror \
-            "src/d3d${n}probe.c" -o "stage/probes/d3d$n.exe" $libs
+        for cc in x86_64-w64-mingw32-gcc:'' i686-w64-mingw32-gcc:-32; do
+            # shellcheck disable=SC2086 # the import libraries are words
+            "${cc%%:*}" -std=c99 -O2 -Wall -Wextra -Werror \
+                "src/d3d${n}probe.c" -o "stage/probes/d3d$n${cc#*:}.exe" $libs
+        done
     done
     tar -xf sources/wine-11.0.tar.xz
     mkdir wine-build
