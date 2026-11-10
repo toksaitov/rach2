@@ -44,7 +44,7 @@ before=$(counts)
 [ "$(printf '%s\n' "$before" | wc -l)" = 10 ] || fail 'missing assignment counters'
 echo "assign: before: $before"
 awk '$1 == "iommu_dma_faults" || $1 == "iommu_irq_faults" { n++; if ($2 != 0) bad=1 }
-     END { exit n != 2 || bad }' /proc/stat || fail 'IOMMU fault before injection' 
+     END { exit n != 2 || bad }' /proc/stat || fail 'IOMMU fault before injection'
 ulimit -l unlimited
 
 # Every iteration verifies disk data and an answered host-network packet.
@@ -132,6 +132,11 @@ wait "$traffic" || fail 'host traffic failed'
 traffic=
 after=$(counts)
 echo "assign: after: $after"
+awk -v mode="$mode" '
+    $1 == "iommu_dma_faults" { n++; dma=$2; if ($2 != (mode == "dma")) bad=1 }
+    $1 == "iommu_irq_faults" { n++; irq=$2; if ($2 != (mode == "index" || mode == "compat")) bad=1 }
+    END { print "assign: faults: dma " dma ", irq " irq; exit n != 2 || bad }
+' /proc/stat || fail 'unexpected IOMMU fault count'
 [ "$before" = "$after" ] || fail 'assignment resources leaked'
 echo "assign: traffic: $(wc -l < "$work/traffic") verified disk and network rounds"
 echo "assign: result: pass: $mode"
