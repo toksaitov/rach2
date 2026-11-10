@@ -328,6 +328,7 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
         }
         futex_key(v[i].addr, v[i].shared, &q->space, &q->uaddr);
         q->pi = NULL;
+        q->task = current_proc;
         q->requeue = 0;
         q->woken = 0;
         q->s = s;
@@ -484,15 +485,21 @@ static struct futex_pi *pi_find(const void *space, uintptr_t key)
     return NULL;
 }
 
-/** Append a waiter to its bucket, keeping equal-priority waiters FIFO. */
+/** Queue PI and requeue waiters by priority, FIFO among equal priorities. */
 static void futex_enqueue(struct futex_q *q)
 {
     struct futex_q **pp = &_waiters[futex_bucket(q->space, q->uaddr)];
 
     while (*pp) {
-        pp = &(*pp)->next;
+        struct futex_q *at = *pp;
+
+        if (at->space == q->space && at->uaddr == q->uaddr && q->task && at->task &&
+            sched_priority(q->task) > sched_priority(at->task)) {
+            break;
+        }
+        pp = &at->next;
     }
-    q->next = NULL;
+    q->next = *pp;
     *pp = q;
 }
 
