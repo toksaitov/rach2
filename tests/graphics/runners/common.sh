@@ -15,7 +15,11 @@
 #
 # The browser draws into a headless Weston of its own at 1280x800, the
 # display profiles' fixed window, under kiosk-shell, so that each page is
-# fullscreen; Chromium and Firefox are both Wayland clients there.
+# fullscreen; Chromium and Firefox are both Wayland clients there. With
+# RUNNER_SESSION=1, as on the Lenovo, it draws instead into the compositor
+# that already runs on the machine's display, named by XDG_RUNTIME_DIR and
+# WAYLAND_DISPLAY, fullscreen at the output's own size, as Linux's references
+# there were taken.
 
 RUNNER_WIDTH=1280
 RUNNER_HEIGHT=800
@@ -71,7 +75,11 @@ runner_start()
     runner_record "cache mesa $(find "${MESA_SHADER_CACHE_DIR:-/nonexistent}" -type f 2>/dev/null | wc -l) files in ${MESA_SHADER_CACHE_DIR:-none}, emptied at start: ${GRAPHICS_DONE:-0}"
     if [ "${1:-}" != plain ]; then
         runner_record "cache browser a new profile for each browser started"
-        runner_record "size ${RUNNER_WIDTH}x$RUNNER_HEIGHT"
+        if [ "${RUNNER_SESSION:-0}" = 1 ]; then
+            runner_record "size the session's output, fullscreen"
+        else
+            runner_record "size ${RUNNER_WIDTH}x$RUNNER_HEIGHT"
+        fi
     fi
     runner_record "load start $(cut -d' ' -f1-3 /proc/loadavg)"
     runner_record "processes start $(ps -e -o pid= 2>/dev/null | wc -l)"
@@ -113,7 +121,9 @@ runner_finish()
 }
 
 # runner_weston: start a headless Weston at the fixed size under kiosk-shell,
-# with its own runtime directory, and export WAYLAND_DISPLAY for the browser.
+# with its own runtime directory, and export WAYLAND_DISPLAY for the browser;
+# or, with RUNNER_SESSION=1, check that the session's compositor answers at
+# XDG_RUNTIME_DIR/WAYLAND_DISPLAY and use it.
 # Weston's renderer is RUNNER_RENDERER, Pixman when it is unset. Pixman
 # offers clients shared memory alone, so that Mesa's Wayland platform renders
 # a client's GL with llvmpipe: with its GL renderer on virtio-gpu Weston
@@ -127,6 +137,13 @@ runner_finish()
 # display it listens on, once Weston's log names it.
 runner_weston()
 {
+    if [ "${RUNNER_SESSION:-0}" = 1 ]; then
+        [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/${WAYLAND_DISPLAY:-none}" ] ||
+            runner_die "no session compositor at ${XDG_RUNTIME_DIR:-?}/${WAYLAND_DISPLAY:-?}"
+        export XDG_RUNTIME_DIR WAYLAND_DISPLAY
+        runner_record "compositor $(weston --version 2>/dev/null) the session's, $WAYLAND_DISPLAY"
+        return 0
+    fi
     XDG_RUNTIME_DIR=$RUNNER_WORK/run
     WAYLAND_DISPLAY=wayland-runner
     export XDG_RUNTIME_DIR WAYLAND_DISPLAY
