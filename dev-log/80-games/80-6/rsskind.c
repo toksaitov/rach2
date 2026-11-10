@@ -51,6 +51,22 @@ static long touch(const char *p, long bytes)
     return sum;
 }
 
+/** Map LEN bytes as mmap(2) does with PROT and FLAGS over FD at OFF, and
+ * exit with status 1 when the mapping fails. */
+static char *map(long len, int prot, int flags, int fd, long off)
+{
+    char *p = mmap(NULL, len, prot, flags, fd, off);
+
+    if (p == MAP_FAILED) {
+        perror("rsskind: mmap");
+        exit(1);
+    }
+    return p;
+}
+
+/** Map and write memory of each kind and print how the four counts change
+ * at each step; FILE, argv[1], is the scratch file, unlinked once open.
+ * Exit 0 unless a file, a mapping or a write fails. */
 int main(int argc, char **argv)
 {
     char *anon, *shared, *mem, *priv, *file;
@@ -69,6 +85,10 @@ int main(int argc, char **argv)
     }
     unlink(argv[1]);
     anon = malloc(MIB);
+    if (anon == NULL) {
+        perror("rsskind: malloc");
+        return 1;
+    }
     memset(anon, 1, MIB);
     if (write(fd, anon, MIB) != MIB || fsync(fd) != 0) {
         perror("rsskind: write");
@@ -79,31 +99,31 @@ int main(int argc, char **argv)
     printf("rsskind: at the start: rss %ld anon %ld file %ld shmem %ld kB\n", last[0], last[1],
            last[2], last[3]);
 
-    anon = mmap(NULL, 32 * MIB, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    anon = map(32 * MIB, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     memset(anon, 1, 32 * MIB);
     report("32 MiB private anonymous written");
 
-    shared = mmap(NULL, 8 * MIB, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    shared = map(8 * MIB, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     memset(shared, 1, 8 * MIB);
     report("8 MiB shared anonymous written");
 
-    mem = mmap(NULL, 16 * MIB, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+    mem = map(16 * MIB, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
     memset(mem, 1, 16 * MIB);
     report("16 MiB shared memfd written");
 
-    priv = mmap(NULL, 4 * MIB, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    priv = map(4 * MIB, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
     sum += touch(priv, 4 * MIB);
     report("4 MiB private disk file read");
     memset(priv, 2, MIB);
     report("1 MiB of it written");
 
-    file = mmap(NULL, 2 * MIB, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 4 * MIB);
+    file = map(2 * MIB, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 4 * MIB);
     sum += touch(file, 2 * MIB);
     report("2 MiB shared disk file read");
     memset(file, 3, MIB);
     report("1 MiB of it written");
 
-    priv = mmap(NULL, 4 * MIB, PROT_READ | PROT_WRITE, MAP_PRIVATE, mfd, 0);
+    priv = map(4 * MIB, PROT_READ | PROT_WRITE, MAP_PRIVATE, mfd, 0);
     sum += touch(priv, 4 * MIB);
     report("4 MiB private memfd read");
     memset(priv, 4, MIB);

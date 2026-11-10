@@ -28,11 +28,15 @@ static void status(const char *key)
     }
 }
 
+/** Touch BYTES of anonymous memory, time CALLS getrusage calls, unmap it
+ * and check that ru_maxrss still gives the peak; exit 0 when it does, 1
+ * when it does not or the mapping fails. */
 int main(void)
 {
     struct rusage ru;
     struct timespec a, b;
-    long before, peak, after, ns;
+    long before, peak, after;
+    long long ns;
     char *p;
     int i;
 
@@ -49,7 +53,7 @@ int main(void)
         getrusage(RUSAGE_THREAD, &ru);
     }
     clock_gettime(CLOCK_MONOTONIC, &b);
-    ns = (b.tv_sec - a.tv_sec) * 1000000000l + (b.tv_nsec - a.tv_nsec);
+    ns = (b.tv_sec - a.tv_sec) * 1000000000ll + (b.tv_nsec - a.tv_nsec);
     peak = ru.ru_maxrss;
     status("VmHWM");
     status("VmRSS");
@@ -60,7 +64,7 @@ int main(void)
     status("VmRSS");
     printf("maxrss: before %ld kB, with %ld MiB touched %ld kB, after munmap %ld kB\n", before,
            BYTES >> 20, peak, after);
-    printf("maxrss: %d getrusage calls took %ld ns each\n", CALLS, ns / CALLS);
+    printf("maxrss: %d getrusage calls took %lld ns each\n", CALLS, ns / CALLS);
     if (peak < (BYTES >> 10) || after < peak) {
         printf("maxrss: result: fail: the peak was not kept\n");
         return 1;
