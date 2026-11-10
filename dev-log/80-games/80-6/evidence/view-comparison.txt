@@ -1,0 +1,96 @@
+# Level load times, from each run's Game.log
+Game-rach2-3.log:*LOADING: Level island loading time: 29.43 seconds
+Game-rach2-2.log:*LOADING: Level island loading time: 26.79 seconds
+Game-rach2-1.log:*LOADING: Level island loading time: 416.20 seconds
+Game-linux-1.log:*LOADING: Level island loading time: 11.19 seconds
+
+# The getrusage probe (80-6/maxrss.c), 512 MiB touched; Linux, the kernel before, the kernel after
+## linux-probe-l
+Linux debian-ref 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+Linux debian-ref 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+crysis-view: probe status 0
+maxrss: VmHWM:	  525888 kB
+maxrss: VmRSS:	  526084 kB
+maxrss: VmHWM:	  526076 kB
+maxrss: VmRSS:	    1796 kB
+maxrss: before 2964 kB, with 512 MiB touched 525760 kB, after munmap 526076 kB
+maxrss: 20000 getrusage calls took 286 ns each
+maxrss: result: pass
+## rach2-probe-old
+crysis-view: kernel cc53b51ff5fb24165844bfa16be1be8222e2eb257da72b5ee2db2016ef019006
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+crysis-view: probe status 1
+maxrss: VmHWM:	  524908 kB
+maxrss: VmRSS:	  524992 kB
+maxrss: VmHWM:	     708 kB
+maxrss: VmRSS:	     708 kB
+maxrss: before 544 kB, with 512 MiB touched 524848 kB, after munmap 708 kB
+maxrss: 20000 getrusage calls took 208156 ns each
+maxrss: result: fail: the peak was not kept
+## rach2-probe-new
+crysis-view: kernel 2cdc3b3b2edd85b3699465bf417c8ec1da5305f9eae5e150fdded62f63bfa3e2
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+crysis-view: probe status 0
+maxrss: VmHWM:	  524904 kB
+maxrss: VmRSS:	  524988 kB
+maxrss: VmHWM:	  524992 kB
+maxrss: VmRSS:	     704 kB
+maxrss: before 540 kB, with 512 MiB touched 524844 kB, after munmap 524992 kB
+maxrss: 20000 getrusage calls took 305 ns each
+maxrss: result: pass
+
+## i686 kernel 05640935452f237c..., os-real RAM image, TCG on the Mac, 256 MiB touched
+maxrss: VmHWM:	  262172 kB
+maxrss: VmRSS:	  262192 kB
+maxrss: VmHWM:	  262196 kB
+maxrss: VmRSS:	      48 kB
+maxrss: before 20 kB, with 256 MiB touched 262164 kB, after munmap 262196 kB
+maxrss: 20000 getrusage calls took 3965 ns each
+maxrss: result: pass
+status 0
+
+# Kernel RIP samples, 4 processors x 400 samples at 20 ms, during the level load on kernel cc53b51f
+   937  58.6% arch_relax
+   235  14.7% paging_user_count
+   110   6.9% arch_idle_resume
+    72   4.5% user
+    67   4.2% smp_service
+    45   2.8% arch_cpu_id
+    27   1.7% hpet_read
+    25   1.6% bkl_acquire
+    23   1.4% apic_write
+    18   1.1% table_for
+    11   0.7% inb
+     7   0.4% user_span
+     4   0.2% irq0
+     4   0.2% mmu_user_skip
+     3   0.2% arch_irq_enable
+     3   0.2% mm_resident
+
+# The same during the cutscene on kernel 2cdc3b3b
+   604  37.8% user
+   441  27.6% arch_idle_resume
+   304  19.0% arch_relax
+    61   3.8% apic_write
+    50   3.1% hpet_read
+    42   2.6% inb
+    19   1.2% smp_service
+    12   0.8% arch_cpu_id
+    10   0.6% apic_read
+     5   0.3% find_free_frame
+     5   0.3% bkl_acquire
+     4   0.2% table_for
+     3   0.2% irq0
+     3   0.2% sched_find_rt
+     3   0.2% fd_ofd_access
+     2   0.1% arch_fill_words
+
+# Calls the kernel lacks, rach2.trace=enosys, runs rach2-1, rach2-2 and rach2-3
+   3 323: not implemented (asked for by wine)
+  33 323: not implemented (asked for by wine64)
+   6 430: not implemented (asked for by mount)
+
+# QEMU commands
+qemu-system-x86_64 -accel kvm -cpu host,invtsc=on -smp 4 -m 4096 -nodefaults -display none -no-reboot -machine q35 -drive file=/home/testing/rach2/build/worktrees/m3/build/runs/task2653/debian-linux-1.qcow2,if=none,id=boot,format=qcow2 -device virtio-blk-pci,drive=boot,bootindex=0 -device virtio-vga -device virtio-rng-pci -drive file=/home/testing/rach2/build/worktrees/m3/build/runs/task2653/root-linux-1.qcow2,format=qcow2,if=none,id=root -device ide-hd,drive=root,bus=ide.0 -drive file=/home/testing/rach2/build/worktrees/m3/build/runs/task2653/data-linux-1.qcow2,format=qcow2,if=none,id=data -device ide-hd,drive=data,bus=ide.1 -drive file=/home/testing/rach2/build/worktrees/codex/build/runs/task2653/runtime.ext2,format=raw,if=none,id=runtime,snapshot=on -device ide-hd,drive=runtime,bus=ide.2 -netdev user,id=net,hostfwd=tcp:127.0.0.1:40211-:22 -device virtio-net-pci,netdev=net -serial stdio
+qemu-system-x86_64 -accel kvm -cpu host,invtsc=on -smp 4 -m 4096 -nodefaults -display none -no-reboot -kernel /home/testing/rach2/build/worktrees/codex/build/runs/task2653/kernel -append 'rach2.root=ext2 rach2.ip=10.0.2.15/24 rach2.gateway=10.0.2.2 rach2.trace=enosys' -device ich9-ahci,id=ahci -device virtio-vga -drive file=/home/testing/rach2/build/worktrees/m3/build/runs/task2653/root-rach2-1.qcow2,format=qcow2,if=none,id=root -device ide-hd,drive=root,bus=ahci.0 -drive file=/home/testing/rach2/build/worktrees/m3/build/runs/task2653/data-rach2-1.qcow2,format=qcow2,if=none,id=data -device ide-hd,drive=data,bus=ahci.1 -drive file=/home/testing/rach2/build/worktrees/codex/build/runs/task2653/runtime.ext2,format=raw,if=none,id=runtime,snapshot=on -device ide-hd,drive=runtime,bus=ahci.2 -netdev user,id=net,hostfwd=tcp:127.0.0.1:45413-:22 -device rtl8139,netdev=net -serial stdio
+qemu-system-x86_64 -accel kvm -cpu host,invtsc=on -smp 4 -m 4096 -nodefaults -display none -no-reboot -kernel /home/testing/rach2/build/worktrees/m3/build/runs/task2653/kernel-2cdc3b3b -append 'rach2.root=ext2 rach2.ip=10.0.2.15/24 rach2.gateway=10.0.2.2 rach2.trace=enosys' -device ich9-ahci,id=ahci -device virtio-vga -drive file=/home/testing/rach2/build/worktrees/m3/build/runs/task2653/root-rach2-3.qcow2,format=qcow2,if=none,id=root -device ide-hd,drive=root,bus=ahci.0 -drive file=/home/testing/rach2/build/worktrees/m3/build/runs/task2653/data-rach2-3.qcow2,format=qcow2,if=none,id=data -device ide-hd,drive=data,bus=ahci.1 -drive file=/home/testing/rach2/build/worktrees/codex/build/runs/task2653/runtime.ext2,format=raw,if=none,id=runtime,snapshot=on -device ide-hd,drive=runtime,bus=ahci.2 -netdev user,id=net,hostfwd=tcp:127.0.0.1:54729-:22 -device rtl8139,netdev=net -serial stdio -qmp unix:/home/testing/rach2/build/worktrees/m3/build/runs/task2653/qmp-rach2-3.sock,server=on,wait=off
