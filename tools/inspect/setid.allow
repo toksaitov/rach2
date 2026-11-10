@@ -131,8 +131,10 @@ init init-metal
 # bash, root's login shell, which /bin/bash links to and /bin/sh is a second
 # name of, and D-Bus's daemon and dbus-send, which root's login profile runs
 # for its session bus. term, which init runs as root on a boot with
-# rach2.console=term, is staged by the manifest.
-manifest os-real-gnu
+# rach2.console=term, is staged by the manifest. This entry is gnu-test's,
+# the root less /src, which mk/gnu-image.mk stages for the machine cases;
+# os-real-gnu's below adds the files of /src.
+manifest gnu-test
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/login 04755:0:0 build/vendor/busybox/busybox-suid
@@ -164,12 +166,16 @@ trusted overlay 0755:0:0 /usr/bin/dbus-daemon build/vendor/gnu/chromium/usr/bin/
 trusted overlay 0755:0:0 /usr/bin/dbus-send build/vendor/gnu/chromium/usr/bin/dbus-send
 trusted file 0600:0:0 /root/.ssh/authorized_keys krffs/authorized_keys
 trusted file 0755:0:0 /bin/bootctl build/utils/sbin/bootctl
+init init-metal
+sysroot
+
+# The GNU system's root itself: gnu-test's set with the sources of /src,
+# which root's builds on the machine read.
+manifest os-real-gnu copy gnu-test
 trusted file 0644:0:0 /src/rach2/guest.mk rach2/guest.mk
 trusted file 0644:0:0 /src/utils/guest.mk utils/guest.mk
 trusted file 0644:0:0 /src/ish/guest.mk ish/guest.mk
 trusted file 0644:0:0 /src/rach2/sys/syscall.c rach2/sys/syscall.c
-init init-metal
-sysroot
 
 # `tests/run grub` boots os-real with marked GRUB cores staged beside it;
 # its privilege set is os-real's and must stay so.
