@@ -685,6 +685,12 @@ static void run_stacks(void)
     sa.flags = SA_SIGINFO | SA_RESTORER;
     check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && fpu_puts == 0,
           "a frame above 4 GiB is refused before the modeled memory accepts it");
+    setup(&tf, LOW_4G + 512u + 64u);
+    memory_base = LOW_4G - USER_LEN / 2u;
+    check(fpu_frame32_place(tf.rsp) < LOW_4G &&
+              fpu_frame32_place(tf.rsp) + fpu_frame32_bytes() > LOW_4G &&
+              ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && fpu_puts == 0,
+          "a frame whose floating-point state starts below 4 GiB and ends above it is refused");
     setup(&tf, 0xFFFFFF00u);
     memory_base = LOW_4G - USER_LEN / 2u;
     check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == 0 && tf.rsp < LOW_4G,
@@ -707,14 +713,20 @@ static void run_legacy_stack(void)
     k_memset(&sa, 0, sizeof(sa));
     k_memset(&info, 0, sizeof(info));
     sa.handler = 0x08049000u;
-    sa.restorer = USER_BASE + 0xE000u;
+    sa.restorer = USER_BASE + 0xD000u;
     sa.flags = SA_SIGINFO;
     vdso_rt = 0x0F7F0400u;
     check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == 0 && tf.rsp > USER_BASE + 0xA000u &&
-              tf.rsp < USER_BASE + 0xE000u && word_at(tf.rsp) == vdso_rt,
-          "the LDT stack switches to sa_restorer and returns through the vDSO");
+              tf.rsp < USER_BASE + 0xD000u && word_at(tf.rsp) == vdso_rt,
+          "the LDT stack switches to sa_restorer, below the alternate stack's top, and returns "
+          "through the vDSO");
     check(!ldt_loaded && seg_from_frame(15) == 15 && ldt_loaded,
           "the data selector check loads a newly published LDT before lar");
+    tf.rsp = 0x2000u;
+    tf.ss = 15;
+    sa.restorer = USER_BASE + 0x9000u;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1,
+          "an sa_restorer stack below the alternate stack is refused");
     tf.rsp = 0x2000u;
     tf.ss = 15;
     sa.flags |= SA_RESTORER;

@@ -1027,28 +1027,38 @@ static void run_sockstamp(void)
     report_held();
 }
 
-/** Failed and partial compat directory copies preserve the next entry. */
-static void run_directory_copy(void)
+/**
+ * Failed and partial compat directory copies of the directory `path`
+ * preserve the next entry: a getdents to an address it cannot write, and
+ * one whose buffer ends after its first record, consume no entry they did
+ * not deliver, nor does an old readdir to an address it cannot write. Each
+ * read again from the start gives the bytes of the first, entry for entry,
+ * so the directory must not change while it runs.
+ */
+static void directory_copy(const char *path)
 {
     static unsigned char reference[1024], retry[1024], old[266];
     unsigned char *edge;
     unsigned long mapping;
     unsigned int first, i;
-    long fd = syscall3(SYS_OPEN, (long)"/proc", 0, 0);
+    long fd = syscall3(SYS_OPEN, (long)path, 0, 0);
     int n;
 
     if (fd < 0 || (n = int80(141, fd, (unsigned long)reference, sizeof(reference))) <= 0) {
         fail("compat directory reference");
     }
     first = reference[8] | (unsigned int)reference[9] << 8;
+    if (first >= (unsigned int)n) {
+        fail("the directory has a single entry");
+    }
     syscall3(SYS_LSEEK, fd, 0, 0);
     if (int80(141, fd, 1, sizeof(reference)) != -14 || syscall3(SYS_LSEEK, fd, 0, 1) != 0 ||
         int80(141, fd, (unsigned long)retry, sizeof(retry)) != n) {
         fail("getdents consumed entries after a failed copy");
     }
-    for (i = 0; i < first; i++) {
+    for (i = 0; i < (unsigned int)n; i++) {
         if (retry[i] != reference[i]) {
-            fail("getdents retry skipped its first entry");
+            fail("getdents retry after a failed copy changed an entry");
         }
     }
     mapping = map(0, 8192, MAP_PRIVATE | MAP_32BIT);
@@ -1058,7 +1068,7 @@ static void run_directory_copy(void)
     edge = (unsigned char *)(mapping + 4096 - first);
     syscall3(SYS_LSEEK, fd, 0, 0);
     if (int80(141, fd, (unsigned long)edge, sizeof(reference)) != (int)first ||
-        int80(141, fd, (unsigned long)retry, sizeof(retry)) <= 0) {
+        int80(141, fd, (unsigned long)retry, sizeof(retry)) < n - (int)first) {
         fail("getdents partial copy did not retain its delivered entry");
     }
     for (i = 0; i < first; i++) {
@@ -1066,8 +1076,10 @@ static void run_directory_copy(void)
             fail("getdents partial copy changed its first entry");
         }
     }
-    if (retry[10] != reference[first + 10] || retry[11] != reference[first + 11]) {
-        fail("getdents partial retry skipped the next entry");
+    for (i = 0; i < (unsigned int)n - first; i++) {
+        if (retry[i] != reference[first + i]) {
+            fail("getdents partial retry skipped or changed the next entry");
+        }
     }
     syscall2(SYS_MUNMAP, mapping, 8192);
     syscall3(SYS_LSEEK, fd, 0, 0);
@@ -1085,15 +1097,29 @@ static void run_directory_copy(void)
         }
     }
     syscall1(SYS_CLOSE, fd);
+}
+
+/** The compat directory copies on a directory of each of getdents' two
+ * kinds: /proc/self, which the process table lists (`synth_getdents`), and
+ * the root, which its file system's readdir lists. */
+static void run_directory_copy(void)
+{
+    directory_copy("/proc/self");
+    directory_copy("/");
     report_held();
 }
 
-/** A missing pselect mask still selects a timespec in each time ABI. */
+/**
+ * A missing pselect mask still selects a timespec in each time ABI: 1,000,000
+ * nanoseconds, valid in a timespec and not as a timeval's microseconds, with
+ * a ready pipe, returns the pipe in both, and one billion nanoseconds is
+ * EINVAL in the time64 form.
+ */
 static void run_pselect_null(void)
 {
     static unsigned int bits[32], ts32[2] = {0, 1000000};
-    static unsigned long ts64[2] = {0, 1000000000};
-    int pipefd[2], rc32, rc64;
+    static unsigned long ts64[2] = {0, 1000000000}, ms64[2] = {0, 1000000};
+    int pipefd[2], rc32, rc64, ok64;
 
     if (syscall1(SYS_PIPE, (long)pipefd) != 0 || (unsigned int)pipefd[0] >= 1024u ||
         syscall3(SYS_WRITE, pipefd[1], (long)"x", 1) != 1) {
@@ -1102,19 +1128,26 @@ static void run_pselect_null(void)
     bits[pipefd[0] / 32] = 1u << (pipefd[0] % 32);
     rc32 = int80_6(308, pipefd[0] + 1, (unsigned long)bits, 0, 0, (unsigned long)ts32, 0);
     bits[pipefd[0] / 32] = 1u << (pipefd[0] % 32);
+    ok64 = int80_6(413, pipefd[0] + 1, (unsigned long)bits, 0, 0, (unsigned long)ms64, 0);
+    bits[pipefd[0] / 32] = 1u << (pipefd[0] % 32);
     rc64 = int80_6(413, pipefd[0] + 1, (unsigned long)bits, 0, 0, (unsigned long)ts64, 0);
     syscall1(SYS_CLOSE, pipefd[0]);
     syscall1(SYS_CLOSE, pipefd[1]);
-    if (rc32 != 1 || rc64 != -22) {
+    if (rc32 != 1 || ok64 != 1 || rc64 != -22) {
         fail("pselect with a null mask used a timeval");
     }
     report_held();
 }
 
-/** Native and compat vector flags append without changing O_APPEND. */
+/**
+ * Native and compat vector flags append without changing O_APPEND: each
+ * ABI's pwritev2 with RWF_APPEND at offset 0, which leaves the
+ * descriptor's offset, and at -1, which moves it to the end; then each
+ * ABI's preadv2 reads every byte back, into a buffer cleared before.
+ */
 static void run_vector_flags(void)
 {
-    static char data[] = "CDEF", readback[8];
+    static char data[] = "CDEFGH", readback[8];
     static unsigned long native[4];
     static unsigned int compat_vec[4];
     long fd = syscall2(319, (long)"wow64-vector", 0);
@@ -1131,27 +1164,43 @@ static void run_vector_flags(void)
     if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"ab", 2) != 2 ||
         syscall6(328, fd, (long)native, 2, 0, 0, 0x10) != 2 || syscall3(SYS_LSEEK, fd, 0, 1) != 2 ||
         int80_6(379, fd, (unsigned long)compat_vec, 2, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x10) != 2 ||
-        syscall3(SYS_LSEEK, fd, 0, 1) != 6 || (syscall3(SYS_FCNTL, fd, 3, 0) & 02000) != 0) {
-        fail("RWF_APPEND changed the wrong offset or the shared append flag");
+        syscall3(SYS_LSEEK, fd, 0, 1) != 6) {
+        fail("RWF_APPEND at 0 natively or at -1 by int $0x80 changed the wrong offset");
+    }
+    native[0] = (unsigned long)data + 4;
+    compat_vec[0] = (unsigned int)(unsigned long)(data + 5);
+    if (syscall3(SYS_LSEEK, fd, 1, 0) != 1 ||
+        syscall6(328, fd, (long)native, 1, -1, -1, 0x10) != 1 ||
+        syscall3(SYS_LSEEK, fd, 0, 1) != 7 || syscall3(SYS_LSEEK, fd, 1, 0) != 1 ||
+        int80_6(379, fd, (unsigned long)compat_vec, 1, 0, 0, 0x10) != 1 ||
+        syscall3(SYS_LSEEK, fd, 0, 1) != 1 || (syscall3(SYS_FCNTL, fd, 3, 0) & 02000) != 0) {
+        fail("RWF_APPEND at -1 natively or at 0 by int $0x80 changed the wrong offset or the "
+             "shared append flag");
     }
     native[0] = (unsigned long)readback;
-    native[1] = 6;
-    if (syscall6(327, fd, (long)native, 1, 0, 0, 0) != 6) {
+    native[1] = 8;
+    if (syscall6(327, fd, (long)native, 1, 0, 0, 0) != 8) {
         fail("native preadv2 is absent or cannot read the vector");
     }
-    for (i = 0; i < 6; i++) {
-        if (readback[i] != "abCDEF"[i]) {
+    for (i = 0; i < 8; i++) {
+        if (readback[i] != "abCDEFGH"[i]) {
             fail("RWF_APPEND overwrote existing data");
         }
+        readback[i] = 0;
     }
     compat_vec[0] = (unsigned int)(unsigned long)readback;
-    compat_vec[1] = 6;
+    compat_vec[1] = 8;
     syscall3(SYS_LSEEK, fd, 0, 0);
-    if (int80_6(378, fd, (unsigned long)compat_vec, 1, 0xFFFFFFFFu, 0xFFFFFFFFu, 0) != 6 ||
-        syscall3(SYS_LSEEK, fd, 0, 1) != 6) {
+    if (int80_6(378, fd, (unsigned long)compat_vec, 1, 0xFFFFFFFFu, 0xFFFFFFFFu, 0) != 8 ||
+        syscall3(SYS_LSEEK, fd, 0, 1) != 8) {
         fail("compat preadv2 did not use the shared offset at -1");
     }
-    if (syscall4(277, fd, 0, 6, 0) != 0 || int80_6(314, fd, 0, 0, 6, 0, 0) != 0) {
+    for (i = 0; i < 8; i++) {
+        if (readback[i] != "abCDEFGH"[i]) {
+            fail("compat preadv2 read other bytes than the file holds");
+        }
+    }
+    if (syscall4(277, fd, 0, 8, 0) != 0 || int80_6(314, fd, 0, 0, 8, 0, 0) != 0) {
         fail("sync_file_range is absent from the native table");
     }
     syscall1(SYS_CLOSE, fd);

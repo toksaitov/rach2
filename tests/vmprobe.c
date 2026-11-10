@@ -3,8 +3,10 @@
  * space: brk() (query, grow, lazy-zero, read/write, shrink), anonymous
  * mmap() (map, lazy-zero, read/write, munmap), brk refusing to grow over an
  * mmap region, a mapping placed below the break once the room above it is
- * taken, as Linux places it, and stack growth by deep recursion that faults
- * pages well past the initial one.
+ * taken, as Linux places it, the guard gap of 1 MiB below the stack's
+ * growth window, which neither a hint nor a mapping that fills the address
+ * space reaches, and stack growth by deep recursion that faults pages well
+ * past the initial one.
  *
  * Prints "VMPROBE OK" and exits 0 when every check passes, and otherwise
  * "VMPROBE FAIL count=N" and exits with N, the count of failed checks. The
@@ -15,8 +17,9 @@
  * assertion for each check, which `check` names: `brk-grow`, `brk-zero`,
  * `brk-readback`, `brk-shrink`, `mmap`, `mmap-zero`, `mmap-readback`,
  * `munmap`, `collision-map`, `collision-above`, `collision-refused`,
- * `below-break` and `stack`. A check left out because the mapping it needs
- * failed is reported not run.
+ * `below-break`, `stack-gap-hint`, `stack-gap-fill` and `stack`. A check
+ * left out because the mapping it needs failed, or because RLIMIT_STACK is
+ * not the 8 MiB that places the window, is reported not run.
  */
 
 #include "probe.h"
@@ -209,11 +212,118 @@ static void below_break(void)
     }
 }
 
+/* The stack's growth window under the default RLIMIT_STACK, and the guard
+ * gap below it that no mapping without MAP_FIXED takes (VM_STACK_GUARD_GAP). */
+#define STACK_WINDOW 0x800000ul
+#define GUARD_GAP    0x100000ul
+
+/** The value of the hexadecimal digits at `*p`, which moves past them. */
+static unsigned long hex_at(const char **p)
+{
+    unsigned long v = 0;
+
+    for (;; (*p)++) {
+        char c = **p;
+
+        if (c >= '0' && c <= '9') {
+            v = v * 16 + (unsigned long)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            v = v * 16 + (unsigned long)(c - 'a' + 10);
+        } else {
+            return v;
+        }
+    }
+}
+
+/** The end of the [stack] line of /proc/self/maps, the top of the stack's
+ * window, or 0. */
+static unsigned long stack_end(void)
+{
+    static char maps[8192];
+    int fd = (int)syscall3(SYS_OPEN, (long)"/proc/self/maps", 0, 0);
+    int n, i, line = 0;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)syscall3(SYS_READ, fd, (long)maps, (long)sizeof(maps) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0;
+    }
+    maps[n] = 0;
+    for (i = 0; i < n; i++) {
+        if (maps[i] == '\n') {
+            line = i + 1;
+        } else if (maps[i] == '[' && maps[i + 1] == 's' && maps[i + 2] == 't' &&
+                   maps[i + 3] == 'a' && maps[i + 4] == 'c' && maps[i + 5] == 'k') {
+            const char *q = maps + line;
+
+            hex_at(&q);
+            q++;
+            return hex_at(&q);
+        }
+    }
+    return 0;
+}
+
+/**
+ * The guard gap below the stack's window, whose bottom, the stack's limit,
+ * lies STACK_WINDOW below the stack's top under the default RLIMIT_STACK:
+ * a hint whose page ends at the gap is taken and one in the gap is not
+ * (`mmap_place`), and PROT_NONE reservations without a hint, each the
+ * largest that still fits, take every free range there is, the highest of
+ * them ending at the gap (`mmap_free`). The reservations are removed before
+ * it returns.
+ */
+static void stack_gap(void)
+{
+    static unsigned long held[400][2];
+    unsigned long rl[2], top = stack_end(), gap, high = 0, p;
+    unsigned long len = 1ul << (sizeof(long) == 8 ? 46 : 30);
+    unsigned n = 0, i;
+
+    if (syscall2(SYS_GETRLIMIT, 3, (long)rl) != 0 || rl[0] != STACK_WINDOW ||
+        top < STACK_WINDOW + GUARD_GAP) {
+        report_notrun("stack-gap-hint", "RLIMIT_STACK or the stack's top is not known");
+        report_notrun("stack-gap-fill", "RLIMIT_STACK or the stack's top is not known");
+        return;
+    }
+    gap = top - STACK_WINDOW - GUARD_GAP;
+    p = (unsigned long)probe_mmap((long)(gap - PAGE), PAGE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS,
+                                  -1, 0);
+    check(p == gap - PAGE, "stack-gap-hint", "a hint whose page ends at the guard gap is taken");
+    if (!sys_failed((long)p)) {
+        sys_munmap(p, PAGE);
+    }
+    p = (unsigned long)probe_mmap((long)gap, PAGE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check(p != gap, "stack-gap-hint", "a hint in the guard gap is not taken");
+    if (!sys_failed((long)p)) {
+        sys_munmap(p, PAGE);
+    }
+    while (len >= PAGE && n < 400) {
+        p = mmap_anon(len, PROT_NONE);
+        if (sys_failed((long)p)) {
+            len >>= 1;
+            continue;
+        }
+        held[n][0] = p;
+        held[n][1] = len;
+        n++;
+        high = p + len > high ? p + len : high;
+    }
+    check(len < PAGE && high == gap, "stack-gap-fill",
+          "mappings that fill the address space end at the guard gap below the stack's limit");
+    for (i = 0; i < n; i++) {
+        sys_munmap(held[i][0], held[i][1]);
+    }
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe: the five cases of the opening comment in order, each counted
+/** The probe: the six cases of the opening comment in order, each counted
  * by `check`; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
@@ -295,7 +405,10 @@ void probe_main(unsigned long *sp)
     /* 4. A mapping goes below the break once the room above it is taken. */
     below_break();
 
-    /* 5. Stack growth by about 64 KiB of recursion, far past the first page. */
+    /* 5. No mapping without MAP_FIXED reaches the guard gap below the stack. */
+    stack_gap();
+
+    /* 6. Stack growth by about 64 KiB of recursion, far past the first page. */
     check(recurse(64) == 64 * 65 / 2, "stack", "stack grew under deep recursion");
 
     report_finish();
