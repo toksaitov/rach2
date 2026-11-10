@@ -70,28 +70,34 @@ struct usb_interface_info {
     int class_code; /* its class, subclass and protocol */
     int subclass;
     int protocol;
-    int ep_number; /* the interrupt IN endpoint a keyboard, mouse or hub
-                    * reports on, or the bulk IN endpoint a stick answers on */
+    int ep_number; /* the interrupt IN endpoint a HID device or hub reports
+                    * on, or the bulk IN endpoint a stick answers on */
     int ep_max_packet;
     int ep_interval; /* the descriptor's bInterval, unconverted */
     /* A stick's bulk OUT endpoint; zero on an interface of another kind. */
     int ep_out_number;
     int ep_out_max_packet;
     int config_value; /* the configuration's bConfigurationValue */
+    /* A HID interface's HID descriptor: bcdHID and the bytes of its report
+     * descriptor, 0 when it has none. */
+    int hid_version;
+    int report_length;
 };
 
 /**
  * Find the first interface this kernel can drive in the configuration
  * descriptor `buffer`, `length` bytes, and its endpoints.
  *
- * An interface on alternate setting zero is a candidate when it is a boot
- * keyboard or mouse, a hub (class 9, protocol 0 to 3), or SCSI storage over
- * Bulk-Only. A keyboard, mouse or hub needs an interrupt IN endpoint, and a
- * stick a bulk IN and a bulk OUT endpoint, the first of each. A candidate
- * whose endpoints do not all follow it before the next interface is dropped
- * and the walk goes on. `out` is cleared first; `out->found` says whether an
- * interface was found. A configuration value of zero, or a buffer shorter
- * than the nine-byte header, finds nothing.
+ * An interface on alternate setting zero is a candidate when it is a HID
+ * interface (class 3, of any subclass and protocol), a hub (class 9,
+ * protocol 0 to 3), or SCSI storage over Bulk-Only. A HID interface or a
+ * hub needs an interrupt IN endpoint, and a stick a bulk IN and a bulk OUT
+ * endpoint, the first of each; a HID interface's HID descriptor, before
+ * or after its endpoints, gives bcdHID and its report descriptor's length.
+ * A candidate whose endpoints do not all follow it before the next
+ * interface is dropped and the walk goes on. `out` is cleared first;
+ * `out->found` says whether an interface was found. A configuration value
+ * of zero, or a buffer shorter than the nine-byte header, finds nothing.
  *
  * The descriptors are walked by their own length fields, which is the only
  * way they can be walked, and the walk stops at the first one shorter than two
@@ -255,9 +261,9 @@ struct usb_sys_row {
     uint16_t vendor, product, release;
     int config;     /* bConfigurationValue */
     int ifnum;      /* bInterfaceNumber */
-    int ifclass;    /* bInterfaceClass, 3 for a keyboard or a mouse */
-    int ifsubclass; /* bInterfaceSubClass, 1 for the boot protocol */
-    int ifprotocol; /* bInterfaceProtocol, 1 a keyboard and 2 a mouse */
+    int ifclass;    /* bInterfaceClass, 3 for a HID device */
+    int ifsubclass; /* bInterfaceSubClass, 1 for one with a boot protocol */
+    int ifprotocol; /* bInterfaceProtocol, 1 a boot keyboard and 2 a mouse */
 };
 
 /** Fill `row` for the device of table entry `index`; 0, or -1 when that
