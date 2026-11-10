@@ -34,7 +34,9 @@
 #include "vgpushm.h"
 
 /* virtio-gpu's wire format, from the virtio 1.2 specification, 5.7.6. */
-#define GPU_F_VIRGL 0
+#define GPU_F_VIRGL        0
+#define GPU_F_CONTEXT_INIT 4
+#define GPU_CAPSET_VENUS   4
 
 #define GPU_CMD_GET_DISPLAY_INFO        0x0100
 #define GPU_CMD_RESOURCE_CREATE_2D      0x0101
@@ -64,6 +66,7 @@
 #define GPU_RESP_ERR_INVALID_PARAMETER   0x1205
 
 #define GPU_FLAG_FENCE            1u
+#define GPU_RESOURCE_Y_0_TOP      1u /* create_3d's flags: row 0 is the top */
 #define GPU_FORMAT_B8G8R8X8_UNORM 2u
 #define GPU_MAX_SCANOUTS          16
 
@@ -164,15 +167,22 @@ struct gpu_transfer_3d {
 #define VIRGL_CCMD_CLEAR                 7
 #define VIRGL_CCMD_SET_SUB_CTX           28
 #define VIRGL_CCMD_CREATE_SUB_CTX        29
+#define VIRGL_CCMD_CLEAR_TEXTURE         47
 #define VIRGL_OBJECT_SURFACE             8
 #define PIPE_TEXTURE_2D                  2
 #define PIPE_BIND_RENDER_TARGET          2
+#define PIPE_BIND_SCANOUT                (1u << 18)
+#define PIPE_BIND_SHARED                 (1u << 20)
 #define PIPE_CLEAR_COLOR0                4
 
 /* The test image: a 32 by 32 resource of 32-bit pixels. */
 #define IMG_W     32u
 #define IMG_H     32u
 #define IMG_BYTES (IMG_W * IMG_H * 4u)
+
+/* The display frame's stream: a 1024 by 768 scanout with a box drawn in. */
+#define FRAME_W 1024u
+#define FRAME_H 768u
 
 static const char *prog = "peer";
 static double timeout_s = 10.0;
@@ -901,6 +911,8 @@ struct drv {
     int ndump;
     uint64_t fence;
     struct bells *bells; /* the ivshmem server's doorbells, or 0 */
+    int show;            /* -o: put the replay's first image on scanout 0 */
+    int venus;           /* -v: attach the replay's resources to Venus too */
 };
 
 /*
@@ -1365,7 +1377,7 @@ static uint8_t *slurp(const char *path, size_t *n)
 
 /* A recorded resource as the replay made it, for its readback. */
 struct made {
-    uint32_t id, format, width, height;
+    uint32_t id, format, width, height, flags;
     uint64_t backing;
 };
 
@@ -1413,13 +1425,36 @@ static void replay_resource(struct drv *dr, const uint8_t *data, uint32_t len, u
     m->format = create.format;
     m->width = create.width;
     m->height = create.height;
+    m->flags = create.flags;
     m->backing = entry.addr;
+}
+
+/** Return the CRC-32 of an image of w by h pixels with its rows in reverse
+ * order, as a display shows a resource whose row 0 is the bottom. */
+static uint32_t crc32_flipped(const uint8_t *px, uint32_t w, uint32_t h)
+{
+    size_t row = (size_t)w * 4;
+    uint8_t *f = malloc(row * h);
+    uint32_t y, crc;
+
+    if (f == NULL) {
+        die("%s", "cannot allocate the flipped readback");
+    }
+    for (y = 0; y < h; y++) {
+        memcpy(f + row * y, px + row * (h - 1 - y), row);
+    }
+    crc = crc32(f, row * h);
+    free(f);
+    return crc;
 }
 
 /**
  * Read a replayed B8G8R8X8 resource back from the device into its backing
- * and print its CRC-32 and, when every pixel has one colour, the colour, so
- * that a check can compare what the stream drew. Other formats are skipped.
+ * and print its CRC-32, X bytes set to 0xff, and, when every pixel has one
+ * colour, the colour, so that a check can compare what the stream drew. The
+ * CRC is of the rows as stored; for a resource stored bottom row first it is
+ * followed by the CRC of the rows as a display shows them. Other formats are
+ * skipped.
  */
 static void readback(struct drv *dr, const struct made *m, uint32_t ctx)
 {
@@ -1445,11 +1480,15 @@ static void readback(struct drv *dr, const struct made *m, uint32_t ctx)
         die("%s", "cannot allocate the readback");
     }
     region_get(dr->base, m->backing, px, (size_t)n);
-    for (i = 4; i < n && uniform; i += 4) {
-        uniform = memcmp(px, px + i, 3) == 0;
+    for (i = 0; i < n; i += 4) {
+        px[i + 3] = 0xff;
+        uniform = uniform && memcmp(px, px + i, 3) == 0;
     }
     printf("peer: readback: resource 0x%x, %ux%u, crc %08x", (unsigned)m->id, (unsigned)m->width,
            (unsigned)m->height, (unsigned)crc32(px, (size_t)n));
+    if ((m->flags & GPU_RESOURCE_Y_0_TOP) == 0) {
+        printf(", shown crc %08x", (unsigned)crc32_flipped(px, m->width, m->height));
+    }
     if (uniform) {
         printf(", every pixel b,g,r %u,%u,%u", px[0], px[1], px[2]);
     }
@@ -1457,10 +1496,83 @@ static void readback(struct drv *dr, const struct made *m, uint32_t ctx)
     free(px);
 }
 
+/** Put a replayed resource on scanout 0 and flush it, fenced, so that the
+ * device's display shows it. */
+static void show(struct drv *dr, const struct made *m)
+{
+    union {
+        struct gpu_set_scanout ss;
+        struct gpu_flush fl;
+    } u;
+    struct gpu_hdr response;
+
+    hdr(&u, sizeof(u.ss), GPU_CMD_SET_SCANOUT, 0, 0);
+    u.ss.r.width = m->width;
+    u.ss.r.height = m->height;
+    u.ss.resource_id = m->id;
+    expect(send_cmd(dr, "show-scanout", &(struct gpu_message){&u, sizeof(u.ss), 0, 0}, &response,
+                    sizeof(response)),
+           GPU_RESP_OK_NODATA, "show-scanout");
+    hdr(&u, sizeof(u.fl), GPU_CMD_RESOURCE_FLUSH, GPU_FLAG_FENCE, 0);
+    u.fl.r.width = m->width;
+    u.fl.r.height = m->height;
+    u.fl.resource_id = m->id;
+    expect(send_cmd(dr, "show-flush", &(struct gpu_message){&u, sizeof(u.fl), 0, 0}, &response,
+                    sizeof(response)),
+           GPU_RESP_OK_NODATA, "show-flush");
+    printf("peer: show: resource 0x%x on scanout 0\n", (unsigned)m->id);
+}
+
+/** Send a context's command of n bytes in u, which the device must take. */
+static void ctx_command(struct drv *dr, const char *name, void *u, uint32_t n)
+{
+    struct gpu_hdr response;
+
+    expect(send_cmd(dr, name, &(struct gpu_message){u, n, 0, 0}, &response, sizeof(response)),
+           GPU_RESP_OK_NODATA, name);
+}
+
+/**
+ * Create a Venus context and attach each of the n replayed resources to it,
+ * then detach them and destroy it: the device hands each resource to its
+ * Venus renderer, which must take it as a dma-buf.
+ */
+static void venus(struct drv *dr, const struct made *made, uint32_t n)
+{
+    union {
+        struct gpu_ctx_create cc;
+        struct gpu_resource rs;
+        struct gpu_hdr h;
+    } u;
+    uint32_t ctx = VGS_ID_MAKE(2, 1), i, pass;
+
+    if ((dr->me.features & (1ULL << GPU_F_CONTEXT_INIT)) == 0) {
+        die("%s", "cannot make a Venus context: the device offers no context_init");
+    }
+    hdr(&u, sizeof(u.cc), GPU_CMD_CTX_CREATE, 0, ctx);
+    u.cc.nlen = 5;
+    u.cc.context_init = GPU_CAPSET_VENUS;
+    memcpy(u.cc.debug_name, "venus", 5);
+    ctx_command(dr, "venus-create", &u, sizeof(u.cc));
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < n; i++) {
+            hdr(&u, sizeof(u.rs),
+                pass == 0 ? GPU_CMD_CTX_ATTACH_RESOURCE : GPU_CMD_CTX_DETACH_RESOURCE, 0, ctx);
+            u.rs.resource_id = made[i].id;
+            ctx_command(dr, pass == 0 ? "venus-attach" : "venus-detach", &u, sizeof(u.rs));
+        }
+    }
+    hdr(&u, sizeof(u.h), GPU_CMD_CTX_DESTROY, 0, ctx);
+    ctx_command(dr, "venus-destroy", &u, sizeof(u.h));
+    printf("peer: venus: %u resource(s) attached and detached\n", (unsigned)n);
+}
+
 /**
  * Replay a recorded virgl stream in a new context: each CREATE_3D record
  * makes a resource with backing and attaches it, each SUBMIT record goes in
  * one SUBMIT_3D, and the context and its resources are then destroyed.
+ * Against a real device each image is read back first; -o shows the first
+ * on scanout 0 and -v hands every resource to a Venus context.
  */
 static void replay(struct drv *dr, const char *path)
 {
@@ -1523,6 +1635,15 @@ static void replay(struct drv *dr, const char *path)
     for (i = 0; i < nmade && dr->child == 0; i++) {
         readback(dr, &made[i], ctx);
     }
+    for (i = 0; i < nmade && dr->show; i++) {
+        if (made[i].format == GPU_FORMAT_B8G8R8X8_UNORM) {
+            show(dr, &made[i]);
+            break;
+        }
+    }
+    if (dr->venus) {
+        venus(dr, made, nmade);
+    }
     for (i = 0; i < nmade; i++) {
         hdr(&u, sizeof(u.rs), GPU_CMD_CTX_DETACH_RESOURCE, 0, ctx);
         u.rs.resource_id = made[i].id;
@@ -1543,8 +1664,13 @@ static void replay(struct drv *dr, const char *path)
     free(rec);
 }
 
-/** Write the built-in stream: a render target cleared to one color. */
-static void write_stream(const char *path)
+/**
+ * Write a built-in stream: a render target cleared to one colour, or with
+ * frame set a 1024 by 768 scanout that a display can share, cleared and
+ * then given an orange box in its top-left quarter, off centre, so that its
+ * rows and columns cannot be read in the wrong order unnoticed.
+ */
+static void write_stream(const char *path, int frame)
 {
     uint32_t res[12] = {VGS_ID_MAKE(2, 1),
                         PIPE_TEXTURE_2D,
@@ -1561,6 +1687,12 @@ static void write_stream(const char *path)
     float rgba[4] = {0.25f, 0.5f, 0.75f, 1.0f};
     uint32_t s[64], n = 0, kind;
     FILE *f = fopen(path, "wb");
+
+    if (frame) {
+        res[3] |= PIPE_BIND_SCANOUT | PIPE_BIND_SHARED;
+        res[4] = FRAME_W;
+        res[5] = FRAME_H;
+    }
 
     s[n++] = VIRGL_CMD0(VIRGL_CCMD_CREATE_SUB_CTX, 0, 1);
     s[n++] = 1;
@@ -1583,6 +1715,21 @@ static void write_stream(const char *path)
     s[n++] = 0; /* depth, a double */
     s[n++] = 0;
     s[n++] = 0; /* stencil */
+    if (frame) {
+        s[n++] = VIRGL_CMD0(VIRGL_CCMD_CLEAR_TEXTURE, 0, 12);
+        s[n++] = res[0];
+        s[n++] = 0;           /* level */
+        s[n++] = 64;          /* x */
+        s[n++] = 32;          /* y */
+        s[n++] = 0;           /* z */
+        s[n++] = 256;         /* width */
+        s[n++] = 128;         /* height */
+        s[n++] = 1;           /* depth */
+        s[n++] = 0xff0080ffu; /* one B8G8R8X8 pixel: b 255, g 128, r 0 */
+        s[n++] = 0;
+        s[n++] = 0;
+        s[n++] = 0;
+    }
     if (f == 0) {
         die("cannot write %s", path);
     }
@@ -1749,11 +1896,12 @@ static int check_files(int argc, char **argv)
 /** Print the accepted command forms and exit with status 2. */
 static void usage(void)
 {
-    fprintf(stderr,
-            "usage: %s [-l | -f PATH | -S SOCKET] [-s SIZE] [-r STREAM] [-d DIR] [-t SECONDS]\n"
-            "       %s -c IMAGE...\n"
-            "       %s -w STREAM\n",
-            prog, prog, prog);
+    fprintf(
+        stderr,
+        "usage: %s [-l | -f PATH | -S SOCKET] [-s SIZE] [-r STREAM [-ov]] [-d DIR] [-t SECONDS]\n"
+        "       %s -c IMAGE...\n"
+        "       %s -w STREAM | -W STREAM\n",
+        prog, prog, prog);
     exit(2);
 }
 
@@ -1914,7 +2062,7 @@ int main(int argc, char **argv)
     }
     memset(&dr, 0, sizeof(dr));
     dr.report = -1;
-    while ((opt = getopt(argc, argv, "cd:f:lr:s:S:t:w:")) != -1) {
+    while ((opt = getopt(argc, argv, "cd:f:lor:s:S:t:vw:W:")) != -1) {
         switch (opt) {
         case 'c':
             return check_files(argc - optind, argv + optind);
@@ -1926,6 +2074,9 @@ int main(int argc, char **argv)
             break;
         case 'l':
             loop = 1;
+            break;
+        case 'o':
+            dr.show = 1;
             break;
         case 'r':
             stream = optarg;
@@ -1939,8 +2090,12 @@ int main(int argc, char **argv)
         case 't':
             timeout_s = strtod(optarg, 0);
             break;
+        case 'v':
+            dr.venus = 1;
+            break;
         case 'w':
-            write_stream(optarg);
+        case 'W':
+            write_stream(optarg, opt == 'W');
             return 0;
         default:
             usage();
@@ -1961,7 +2116,11 @@ int main(int argc, char **argv)
         fresh = map_region(&dr, file, size);
     }
 
-    handshake(&dr, fresh, stream ? 1ULL << GPU_F_VIRGL : 0);
+    if ((dr.show || dr.venus) && (stream == 0 || dr.child)) {
+        usage();
+    }
+    handshake(&dr, fresh,
+              (stream ? 1ULL << GPU_F_VIRGL : 0) | (dr.venus ? 1ULL << GPU_F_CONTEXT_INIT : 0));
     run_2d(&dr, id, &backing);
     if (stream) {
         replay(&dr, stream);
