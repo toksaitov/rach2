@@ -55,6 +55,7 @@ and
 .Dv KVM_CREATE_VCPU ,
 .Dv KVM_CHECK_EXTENSION ,
 .Dv KVM_SET_USER_MEMORY_REGION ,
+.Dv KVM_SET_USER_MEMORY_REGION2 ,
 .Dv KVM_GET_DIRTY_LOG ,
 .Dv KVM_CLEAR_DIRTY_LOG ,
 .Dv KVM_SET_TSS_ADDR ,
@@ -147,7 +148,13 @@ is never restarted, with or without
 as on Linux.
 Guests run under VMX on Intel processors and SVM with nested paging on AMD processors.
 .Ss Memory
-.Dv KVM_SET_USER_MEMORY_REGION
+.Dv KVM_SET_USER_MEMORY_REGION ,
+or
+.Dv KVM_SET_USER_MEMORY_REGION2 ,
+whose larger structure begins with the same members and whose flag
+.Dv KVM_MEM_GUEST_MEMFD
+is
+.Er EINVAL ,
 gives the guest a slot: the
 .Va memory_size
 bytes of the caller's memory from

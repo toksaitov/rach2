@@ -348,6 +348,7 @@ static void capability_rows(void)
     CHECK(KVM_GET_DIRTY_LOG == 0x4010AE42u && KVM_CLEAR_DIRTY_LOG == 0xC018AEC0u,
           "KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG");
     CHECK(kvm_slots_check_extension(KVM_CAP_USER_MEMORY) == 1, "USER_MEMORY");
+    CHECK(kvm_slots_check_extension(KVM_CAP_USER_MEMORY2) == 1, "USER_MEMORY2");
     CHECK(kvm_slots_check_extension(KVM_CAP_READONLY_MEM) == 1, "READONLY_MEM");
     CHECK(kvm_slots_check_extension(KVM_CAP_SYNC_MMU) == 1, "SYNC_MMU");
     CHECK(kvm_slots_check_extension(KVM_CAP_NR_MEMSLOTS) == 256, "NR_MEMSLOTS");

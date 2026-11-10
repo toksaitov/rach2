@@ -327,6 +327,7 @@ int32_t kvm_slots_check_extension(long cap)
 {
     switch (cap) {
     case KVM_CAP_USER_MEMORY:
+    case KVM_CAP_USER_MEMORY2:
     case KVM_CAP_DESTROY_MEMORY_REGION_WORKS:
     case KVM_CAP_JOIN_MEMORY_REGIONS_WORKS:
     case KVM_CAP_READONLY_MEM:
