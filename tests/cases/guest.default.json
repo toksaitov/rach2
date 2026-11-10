@@ -2223,7 +2223,7 @@
     },
     {
       "case_id": "guest.default.vhangprobe",
-      "behavior": "vhangup hangs up the caller's controlling terminal: the descriptors opened before read end of input and fail writes and ioctls, the session loses the terminal, its termios return to the defaults, and a caller without CAP_SYS_TTY_CONFIG gets EPERM.",
+      "behavior": "vhangup hangs up the caller's controlling terminal: the descriptors opened before read end of input and fail writes and ioctls, a writer waiting on the slave stops, the session loses the terminal, its termios return to the defaults, and a caller without CAP_SYS_TTY_CONFIG gets EPERM.",
       "units": ["default", "vhangprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -2240,6 +2240,7 @@
         {"assertion_id": "no-ctty", "checks": "/dev/tty is ENXIO: the session has no controlling terminal.", "source": "program"},
         {"assertion_id": "reopen-defaults", "checks": "A new open of the slave has the default termios, ECHO among them.", "source": "program"},
         {"assertion_id": "eperm", "checks": "A process of uid 1000 gets EPERM.", "source": "program"},
+        {"assertion_id": "blocked-write", "checks": "A writer started before the vhangup with more bytes than the master's ring holds, which nobody reads, ends with the bytes it wrote or EIO.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The child exits 0 and the master closes.", "source": "program"}
       ],
       "branches": [],
