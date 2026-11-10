@@ -359,10 +359,10 @@ static void fault_row(uint32_t batch, uint32_t data)
     report_held();
 }
 
-/** A batch on a hung ring never completes: a bounded WAIT gives ETIME, as
- * Linux's does before a reset, BUSY reports the object busy, and the
- * out-fence stays active. Nothing takes the ring back, so this row is the
- * last. */
+/** A batch on a hung ring does not complete before its reset: a bounded
+ * WAIT gives ETIME, as Linux's does, BUSY reports the object busy, and the
+ * out-fence stays active. The heartbeat resets the ring seconds later,
+ * which i915resetprobe checks; this row is the last. */
 static void hang_row(uint32_t batch, uint32_t data)
 {
     int f;

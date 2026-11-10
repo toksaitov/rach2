@@ -239,11 +239,14 @@ Present for a device bound to the fake chip of
 .Xr i915 4 ,
 under
 .Cm rach2.i915fake .
-A read gives a line for each fault, each ring and the device's messages,
-and the result of the last first light:
+A read gives a line for each fault and each ring, the resets of each
+ring's domain alone and of the whole GPU through
+.Dv GEN6_GDRST ,
+the device's messages, and the result of the last first light:
 .Bd -literal -offset indent
 fault NAME armed COUNT injected COUNT
 ring rcs0 commands COUNT batches COUNT hung 0|1
+resets rcs0 COUNT bcs0 COUNT full COUNT
 messages COUNT
 light never|ok|error -ERRNO
 .Ed

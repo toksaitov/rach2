@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.i915fake",
-  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks, crocus's batches, the connector and planes modetest lists, and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back, and the batches i915execprobe submits",
+  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks, crocus's batches, the connector and planes modetest lists, and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back, the batches i915execprobe submits, and the hang i915resetprobe recovers from",
   "cases": [
     {
       "case_id": "machine.i915fake.crocus",
@@ -372,7 +372,7 @@
         "privileges": "root, as etude-guest runs it, which the fake's debugfs file and a batch with a length need",
         "isolation": [],
         "children": "none",
-        "cleanup": "the probe closes what it made; the hung ring ends with the machine"
+        "cleanup": "the probe closes what it made; the heartbeat resets the hung ring after it"
       },
       "assertions": [
         {
@@ -435,6 +435,140 @@
         {
           "name": "i915execprobe",
           "node": "tests/i915execprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs QEMU's edu device, which no installed machine has"
+      }
+    },
+    {
+      "case_id": "machine.i915fake.reset",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and a batch the fake's hang fault hangs on the render ring is found by the heartbeat and its engine reset: its out-fence ends with EIO, the batch of another context queued behind it runs, GET_RESET_STATS charges the guilty context alone, and the guilty context's third hang within 120 s bans it, EXECBUFFER2 refusing it with EIO while the other context's batches still run",
+      "units": [
+        "rach2/sys/drm/i915/i915_hangcheck.c",
+        "rach2/sys/drm/i915/i915_reset.c",
+        "rach2/sys/drm/i915/i915_gem_context.c",
+        "i915resetprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "devices": [
+            "edu"
+          ],
+          "boot_options": [
+            "rach2.i915fake"
+          ]
+        }
+      },
+      "execution": {
+        "program": "i915resetprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root, as etude-guest runs it, which the fake's debugfs file, a batch with a length and the reset count need",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "the probe closes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "hang",
+          "checks": "under the hang fault a batch of one context and a batch of another queued behind it on the render ring are accepted, and neither out-fence has signalled",
+          "source": "program"
+        },
+        {
+          "assertion_id": "reset",
+          "checks": "the second batch's out-fence signals once the heartbeat has reset the engine, the first's ends with EIO, and the fake's file counts the two resets of rcs0's domain that Linux's engine reset writes, none of bcs0's or of the whole GPU, and rcs0 no longer hung",
+          "source": "program"
+        },
+        {
+          "assertion_id": "replay",
+          "checks": "the fake's file counts one more batch on rcs0, the second context's, and GET_RESET_STATS gives the first context one batch active at a hang and the second none, with no reset of the GPU",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ban",
+          "checks": "two more hangs of the first context end its batches with EIO, after which EXECBUFFER2 refuses it with EIO, GET_RESET_STATS counts its three hangs, the fake's file counts six resets of rcs0's domain, and the second context's batch still completes",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "i915resetprobe",
+          "node": "tests/i915resetprobe",
           "per_architecture": true
         },
         {

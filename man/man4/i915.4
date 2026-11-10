@@ -541,7 +541,25 @@ when a userptr object's pages changed;
 .Er EFAULT
 for memory that cannot be read; and
 .Er EIO
-once the GPU is wedged.
+once the GPU is wedged or the context is banned.
+.Pp
+A batch that does not finish is found by the driver's heartbeat, which
+beats every 2.5 seconds while the GPU is busy, and its engine is reset
+between 5 and 7.5 seconds after the batch reached it, or the whole GPU
+when the engine does not reset.
+The batch's out-fence ends with
+.Er EIO ,
+and the batches behind it run; after a reset of the whole GPU those of
+the other engine run again with
+.Er EAGAIN
+on their fences.
+A context is banned at its third hang within 120 seconds, or at its first
+when it is not recoverable.
+A file scores 3 for each ban and 1 for a hang within a minute of its last,
+and at 9 can make no more contexts.
+A GPU that does not reset is wedged: every batch fails with
+.Er EIO
+until a later reset succeeds.
 .Ss Command parser
 A batch whose length the call gives,
 .Fa batch_len

@@ -33,7 +33,7 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
 PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe evprobe \
         rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe frag6probe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe ldtprobe fsbaseprobe wow64probe pure64probe futexvprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe drmprobe drmcompatprobe gpucompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
+        tlsprobe ldtprobe fsbaseprobe wow64probe pure64probe futexvprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe i915resetprobe drmprobe drmcompatprobe gpucompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
         usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
@@ -85,7 +85,7 @@ $(TARGETS): $(CONFIG)
 # headers it includes in the .d that -MF names, so a changed header rebuilds it.
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(if $(filter udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe gpucompatprobe,$*),$(UDMABUF_CFLAGS)) -MF $(BUILD)/$*.d -o $@ $<
+	$(CC) $(CFLAGS) $(if $(filter udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe i915resetprobe gpucompatprobe,$*),$(UDMABUF_CFLAGS)) -MF $(BUILD)/$*.d -o $@ $<
 
 # The shared kernel ABI header uses C89's bool typedef.
 UDMABUF_CFLAGS = -std=c99

@@ -398,10 +398,12 @@ $(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdo
 # with their formats, and first light fails by name under each fault of the
 # chip's debugfs file; and under the test image, i915gemprobe's X tiled buffer
 # written through a GTT map reads back detiled through a CPU map, its memory
-# rows run a working set past the aperture, an aperture full of busy bindings, a
-# userptr object and pressure past memory to ENOMEM, and i915execprobe's batches
-# complete, relocate and fail by each fault. The cases are
-# tests/cases/machine.i915fake.json; the first boots gnu-test.disk.
+# rows run a working set past the aperture, an aperture full of busy
+# bindings, a userptr object and pressure past memory to ENOMEM,
+# i915execprobe's batches complete, relocate and fail by each fault, and
+# i915resetprobe's hung batch is reset with its context alone charged, the
+# batch behind it run, and the context banned at its third hang. The cases
+# are tests/cases/machine.i915fake.json; the first boots gnu-test.disk.
 
 $(ARCH_BUILD)/utils/sbin/gfxtool: utils/gfxtool.c utils/programs.mk $(LIBC_STAMP)
 	$(MAKE) -C utils ../$@
