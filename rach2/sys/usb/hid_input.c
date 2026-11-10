@@ -621,9 +621,11 @@ static int map_desktop(struct hid_input *in, struct hid_field *f, struct hid_usa
         *type = relative ? EV_REL : EV_ABS;
         return MAP_SET;
     case HID_GD_HATSWITCH:
-        /* Linux's hat_min < hat_max: a range stored backwards, such as 0
-         * to 0xFFFFFFFF, is an axis. */
-        u->hat = f->logical_minimum < f->logical_maximum;
+        /* Linux's hat_min < hat_max, kept in 16 bits: a range stored
+         * backwards, such as 0 to 0xFFFFFFFF, or one whose ends cut to 16
+         * bits are not in order, such as INT32_MIN to INT32_MAX, is an
+         * axis. */
+        u->hat = (int16_t)f->logical_minimum < (int16_t)f->logical_maximum;
         *type = EV_ABS;
         *code = ABS_HAT0X;
         return MAP_SET;
@@ -1448,29 +1450,26 @@ static void handle_scroll(struct hid_input *in, struct hid_usage *u, int32_t val
 }
 
 /* The bound below which a hat's numbers take Linux's arithmetic whole. */
-#define HAT_SMALL 0x08000000
+/* The largest value whose distance from a 16-bit minimum, times 8, fits
+ * an int32_t. */
+#define HAT_SMALL 0x0FFFFFFF
 
 /**
  * The direction, 1 to 8 or 0 for centred, of hat switch field `f` at
- * `value`, Linux's `(value - hat_min) * 8 / (hat_max - hat_min + 1) + 1`.
- * Linux's sum overflows for a range as wide as INT32_MIN to INT32_MAX and
- * divides by 0; a range or value that large is cut in eighths in unsigned
- * arithmetic instead, and a value outside it is centred. `f`'s minimum is
- * below its maximum.
+ * `value`, Linux's `(value - hat_min) * 8 / (hat_max - hat_min + 1) + 1`,
+ * with its minimum and maximum cut to 16 bits as Linux keeps them, so that
+ * the divisor is from 2 to 65536. A value too far out for Linux's int to
+ * hold the product is centred, as every value that far gives Linux a
+ * direction past 8 or below 0.
  */
 static int hat_direction(const struct hid_field *f, int32_t value)
 {
-    int32_t min = f->logical_minimum, max = f->logical_maximum;
-    uint32_t span = (uint32_t)max - (uint32_t)min;
+    int32_t min = (int16_t)f->logical_minimum, max = (int16_t)f->logical_maximum;
 
-    if (span < HAT_SMALL && min > -HAT_SMALL && min < HAT_SMALL && value > -HAT_SMALL &&
-        value < HAT_SMALL) {
-        return (value - min) * 8 / (int32_t)(span + 1u) + 1;
-    }
-    if (value < min || value > max) {
+    if (value > HAT_SMALL || value < -HAT_SMALL) {
         return 0;
     }
-    return (int)(((uint32_t)value - (uint32_t)min) / (span / 8u + 1u)) + 1;
+    return (value - min) * 8 / (max - min + 1) + 1;
 }
 
 /** The event of hat switch or D-pad usage `u` of field `f` at `value`: a
