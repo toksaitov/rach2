@@ -226,20 +226,28 @@ and its
 links each.
 .It Pa /sys/devices/platform/i8042/serioK
 The PS/2 controller's port K, 0 for the keyboard's and 1 for the mouse's,
-linked from
+and serio2 below serio1, a Synaptics touchpad's pass-through port, as
+Linux numbers them, each linked from
 .Pa /sys/bus/serio/devices
 once a device on it registers:
 .Pa description ,
-.Ql i8042 KBD port
+.Ql i8042 KBD port ,
+.Ql i8042 AUX port
 or
-.Ql i8042 AUX port ;
+.Ql Synaptics pass-through ;
 .Pa modalias ,
 .Ql serio:ty06pr00id00ex00
-for the keyboard's translated port and
+for the keyboard's translated port,
 .Ql serio:ty01pr00id00ex00
-for the mouse's;
+for the mouse's and
+.Ql serio:ty05pr00id00ex00
+for the pass-through port;
 .Pa bind_mode ,
 .Ql auto ;
+.Pa firmware_id ,
+the device's ACPI PNP IDs as Linux's i8042 writes them,
+.Ql PNP: LEN0036 PNP0f13
+or the like, or empty;
 .Pa id/type ,
 .Pa id/proto ,
 .Pa id/id
@@ -258,8 +266,33 @@ or
 .Ql psmouse ,
 the four
 .Ql SERIO_
-variables and
-.Ql MODALIAS .
+variables,
+.Ql MODALIAS
+and, for a port with PNP IDs,
+.Ql SERIO_FIRMWARE_ID .
+A TrackPoint's port has its settings beside, as Linux's trackpoint.c makes
+them, mode 0644:
+.Pa sensitivity ,
+.Pa speed ,
+.Pa inertia ,
+.Pa reach ,
+.Pa draghys ,
+.Pa mindrag ,
+.Pa thresh ,
+.Pa upthresh ,
+.Pa ztime ,
+.Pa jenks ,
+.Pa drift_time ,
+.Pa press_to_select ,
+.Pa skipback
+and
+.Pa ext_dev
+for an IBM stick, and
+.Pa sensitivity
+and
+.Pa press_to_select
+alone for the others; see
+.Xr input 4 .
 The i8042's own
 .Pa uevent
 has
@@ -795,7 +828,7 @@ The DRM nodes and the event devices by their numbers.
 .It Pa /sys/class/input
 The input devices and their event devices.
 .It Pa /sys/bus/serio/devices
-The i8042's ports.
+The i8042's ports and a touchpad's pass-through port.
 .It Pa /sys/devices/platform
 The platform devices.
 .It Pa /sys/kernel/debug

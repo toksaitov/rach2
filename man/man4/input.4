@@ -154,6 +154,68 @@ back to relative mode and named for the mouse protocol it answers,
 .Dq PS/2 Synaptics TouchPad
 and the like.
 .Pp
+What PS/2 does not tell, Linux 6.12 takes from the ACPI PNP IDs of the PS/2
+mouse, which are its serio port's
+.Pa firmware_id ,
+.Ql PNP: LEN0036 PNP0f13
+and the like, and so does the kernel.
+The ThinkPads Linux's
+.Va min_max_pnpid_table
+names get the
+.Dv ABS_X
+and
+.Dv ABS_Y
+limits it sets in place of what their pads report.
+A clickpad whose ID is in Linux's
+.Va topbuttonpad_pnp_ids ,
+and which has no stick's buttons wired to it, has
+.Dv INPUT_PROP_TOPBUTTONPAD .
+A ForcePad, SYN300D or SYN3014, gives
+.Dv BTN_LEFT
+only for one finger pressed for more than 50 ms, until it lifts, since it
+gives its click for more fingers too.
+A pad that offers SMBus stays on PS/2, as Linux's does without its SMBus
+driver, and the log says whether Linux built with one would move it there.
+.Pp
+A pad with a pass-through port, as a ThinkPad's is, carries the packets of
+the device behind it, which is found as Linux's psmouse finds one there:
+its ID, a TrackPoint's read-ID command, and the IntelliMouse knocks.
+A TrackPoint is
+.Dq TPPS/2 IBM TrackPoint ,
+or
+.Dq ALPS ,
+.Dq Elan ,
+.Dq NXP ,
+.Dq JYT_Synaptics
+or
+.Dq Synaptics
+in place of
+.Dq IBM
+as its kind is, product 10 and vendor 2 on the PS/2 controller's bus, at
+.Dq synaptics-pt/serio0/input0 ,
+with
+.Dv BTN_LEFT ,
+.Dv BTN_RIGHT ,
+.Dv BTN_MIDDLE
+when it has three buttons,
+.Dv REL_X ,
+.Dv REL_Y ,
+.Dv INPUT_PROP_POINTER
+and
+.Dv INPUT_PROP_POINTING_STICK .
+It is set up as Linux sets it: an IBM stick is reset to its power-on
+settings, and any other stick, or one whose reset fails, is given Linux's.
+Its settings are files of its serio port, which
+.Xr sysfs 5
+lists: each reads as a number, and root writes a number from 0 to 255, or
+for a switch a truth as Linux's
+.Fn kstrtobool
+reads it, which the stick takes at once.
+The buttons of a stick that the pad wires to itself are reported on the
+stick's node.
+A mouse behind the port is named and numbered as the PS/2 mouse above, at
+.Dq synaptics-pt/serio0/input0 .
+.Pp
 An ALPS touchpad, which answers the ALPS reports when no Synaptics pad has
 answered, is identified and set up as Linux's alps driver does it: an old
 model by its signature in Linux's table, protocol versions 1 and 2 and
@@ -302,6 +364,15 @@ pad whose absolute mode Linux does not use, is reset and named for the
 mouse protocol it answers,
 .Dq PS/2 Elantech Touchpad
 and the like.
+.Pp
+After five packets of the pad's in a row that break their form, or the
+bytes 0xAA 0x00 that a device sends when it has reset itself, the kernel
+thread kpsmoused reconnects it as Linux's psmouse does: the pad is reset,
+must give the identity, model and capabilities it gave before, and is set
+up again, then the device behind its port, and their nodes stay.
+A pad that does not answer, or is another one, is probed anew, its nodes
+removed and registered again; so is a device behind the port that no
+longer answers as it did.
 .Pp
 The ACPI devices of
 .Xr acpi 4
@@ -706,13 +777,6 @@ The touchpad drivers are Synaptics', ALPS's and Elantech's alone: another
 touchpad, or an ALPS pad of version 9, is driven as the PS/2 mouse it also
 is, and a Synaptics or Elantech pad that offers its SMBus bus is driven
 over PS/2.
-Linux's quirks that it chooses by the pad's ACPI PNP ID are not applied:
-the coordinates of some ThinkPads, the top buttons of others and
-ForcePads.
-A Synaptics pad's pass-through port, where a pointing stick reports, is not
-driven, and the stick's packets are dropped.
-A packet whose bytes break its form is dropped, as Linux drops it, but the
-pad is not reset after the fifth in a row, as Linux's psmouse resets it.
 The keys of a device with keys that is no keyboard, such as the power
 button, reach no console, whether reported or written, while Linux's
 console takes them; it shows in Linux's raw keyboard modes alone.
