@@ -159,7 +159,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
 /* ---- the driver's buffer objects: a few, bound in the aperture by the
  * pin, which counts what it is asked ---- */
 
-#define NBO 15
+#define NBO 16
 
 const struct drm_gem_object_funcs i915_gem_object_funcs;
 static struct drm_i915_gem_object bo[NBO];
@@ -1083,6 +1083,18 @@ static void row_mode_limits(void)
     CHECK(ok, "mode: the panel's mode taken; no front porch, a short blank or 32 pixels refused");
 }
 
+/** The framebuffer limit of Linux's display 7, 16384 pixels each way: one
+ * across three 3840-pixel monitors is made. */
+static void row_fb_limit(void)
+{
+    uint32_t h = bo_new(15, 11520u * 4u * 2160u, I915_TILING_NONE, 0);
+    uint32_t fb = addfb(h, 11520, 2160, DRM_FORMAT_XRGB8888, 11520u * 4u, NO_MODIFIER);
+
+    CHECK(mc->max_width == 16384 && mc->max_height == 16384 && fb != 0,
+          "fb: 16384 by 16384 at most, a framebuffer 11520 wide made");
+    CHECK(fb && drm_mode_rmfb_ioctl(&gpu.drm, &fb, &fa) == 0, "fb: the wide one removed");
+}
+
 /** Write `text` to attribute `attr` of backlight 0. */
 static int bl_store(int attr, const char *text)
 {
@@ -1357,6 +1369,7 @@ int main(void)
     row_cursor();
     row_cursor_unpin();
     row_mode_limits();
+    row_fb_limit();
     row_backlight();
     row_crc();
     row_modeset();
