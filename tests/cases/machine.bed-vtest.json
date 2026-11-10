@@ -282,7 +282,7 @@
                 "bus": "ahci"
               }
             ],
-            "cpu": "host-svm",
+            "cpu": "max-svm",
             "processors": 2,
             "memory_bytes": 4294967296,
             "firmware": "direct",
@@ -387,7 +387,7 @@
       "native": {
         "plan": "none",
         "class": "boot",
-        "reason": "the case runs the vtest guest under Rach2's SVM, which the testing PC gives Rach2 by nested KVM on the host-svm profile; the Lenovo has VMX"
+        "reason": "the case runs the vtest guest under Rach2's SVM, which the max-svm processor profile gives Rach2 under the run's accelerator; on the Mac Rach2 itself runs under TCG, so the guest's whole Debian boot would be emulated twice, and the case runs on Linux alone; the Lenovo has VMX"
       }
     }
   ]
