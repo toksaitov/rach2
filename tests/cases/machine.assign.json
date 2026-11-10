@@ -50,7 +50,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -274,7 +274,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -498,7 +498,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -722,7 +722,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -946,7 +946,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -1170,7 +1170,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -1394,7 +1394,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -1618,7 +1618,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot the GNU root on NVMe by its MBR identity, with virtio-gpu and remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
         },
         {
           "step_id": "stage",
