@@ -148,7 +148,7 @@ or video enhancement ring yet), the LLC, write-through eDRAM, the slice,
 subslice and EU counts the fuses give, the command streamer's timestamp
 frequency of 12.5 MHz, and the features of the buffer and submission calls.
 .Dv I915_PARAM_CMD_PARSER_VERSION
-is 0, as Linux answers when no ring parses commands.
+is 10, the version of Linux's command parser, which both rings run.
 A parameter Linux answers with
 .Er ENODEV
 on Haswell, such as
@@ -493,9 +493,10 @@ for no such object, context or syncobj, or a closed context;
 for
 .Dv I915_EXEC_SECURE
 from other than a privileged master;
-.Er EACCES
-for a batch with a length from an unprivileged caller, since the command
-parser is not yet here;
+.Er EINVAL
+for a batch with a length that the command parser cannot read, as below;
+.Er ENODEV
+for such a batch in an object imported from another device;
 .Er ENOSPC
 when the objects do not fit in the GTT;
 .Er EAGAIN
@@ -504,8 +505,35 @@ when a userptr object's pages changed;
 for memory that cannot be read; and
 .Er EIO
 once the GPU is wedged.
-A privileged caller's batch with a length runs privileged, as Linux runs
-a parsed batch.
+.Ss Command parser
+A batch whose length the call gives,
+.Fa batch_len
+above 0, is checked by Linux 6.12's command parser for Haswell, whoever
+the caller is; a batch without a length runs unprivileged as it is.
+The parser copies the batch to a shadow the program cannot reach and
+reads its commands from there.
+A batch whose every command the parser's tables allow runs privileged
+from the shadow, so that commands the chip refuses in an unprivileged
+batch, such as
+.Dv MI_LOAD_REGISTER_IMM
+to the registers OpenGL and Vulkan need, take effect.
+A batch with a command the tables refuse runs unprivileged from the
+original, where the chip turns what it must into no-ops, and the call
+succeeds: a privileged command such as
+.Dv MI_USER_INTERRUPT
+or
+.Dv MI_SET_CONTEXT ,
+a register outside the ring's allowlist, a masked register written with
+a value its mask refuses or other than by
+.Dv MI_LOAD_REGISTER_IMM ,
+an access through the global GTT, and any
+.Dv MI_BATCH_BUFFER_START ,
+whose chain the chip then follows unprivileged.
+A command of a client the ring does not run, a command that runs past the
+batch's length, and a batch without
+.Dv MI_BATCH_BUFFER_END
+fail the call with
+.Er EINVAL .
 .Ss Display
 The device has three CRTCs, pipes A to C, each with a primary plane, a
 sprite and a cursor, Linux's planes for Haswell; a TMDS encoder on DDI A;
