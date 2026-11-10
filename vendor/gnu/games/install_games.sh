@@ -10,20 +10,42 @@
 # account for, refusing a file the root already has; then it refuses the root
 # when a library that a program or library of the layer needs is in none of
 # the root's library directories, since nothing resolved the layer's
-# libraries against the root.
+# libraries against the root. On x86-64 it adds the Proton launcher, and on
+# a root with /usr/games it puts that directory on the path.
 #
 
 install_debian games
 
-# Each ELF file the layer installed; a link is left to its target.
+# Each ELF file the layer installed; a link is left to its target. A file's
+# RUNPATH or RPATH directories are searched as well, with $ORIGIN taken as
+# the file's own directory, since 0 A.D.'s engine finds its private libraries
+# in /usr/lib/games/0ad by its RUNPATH.
 while read -r path; do
     f="$TREE/${path#./}"
     if [ -L "$f" ] || [ ! -f "$f" ] ||
         [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" != 7f454c46 ]; then
         continue
     fi
-    needs "the games layer's /${path#./}" "$f" lib usr/lib "usr/lib/$GNU_MULTIARCH"
+    origin=$(dirname "${path#./}")
+    runpath=$(LC_ALL=C readelf -d "$f" |
+        sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]$/\2/p' | tr ':' '\n' |
+        sed -e "s|^\\\$ORIGIN|/$origin|" -e "s|^\\\${ORIGIN}|/$origin|" -e 's|^/||' | tr '\n' ' ')
+    # shellcheck disable=SC2086 # the directories are words without blanks
+    needs "the games layer's /${path#./}" "$f" lib usr/lib "usr/lib/$GNU_MULTIARCH" $runpath
 done < "$WORK/new"
+
+# Debian's games are in /usr/games, which Debian's /etc/profile puts on an
+# ordinary user's path; here every login shell gets it, after the rest.
+if [ -d "$TREE/usr/games" ]; then
+    if [ -e "$TREE/etc/profile.d/games.sh" ]; then
+        echo 'gnu: games: /etc/profile.d/games.sh already exists' >&2
+        exit 1
+    fi
+    mkdir -p "$TREE/etc/profile.d"
+    # shellcheck disable=SC2016 # the shell that reads the file expands it
+    printf '%s\n' 'PATH=$PATH:/usr/local/games:/usr/games' > "$TREE/etc/profile.d/games.sh"
+    chmod 0644 "$TREE/etc/profile.d/games.sh"
+fi
 
 if [ "$RACH2_ARCH" = x86_64 ]; then
     if [ -e "$TREE/usr/bin/rach2-game" ] || [ -L "$TREE/usr/bin/rach2-game" ]; then

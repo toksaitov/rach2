@@ -133,7 +133,7 @@ $(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
 # from the same snapshot, which install_root.sh installs after the desktop's.
 GNU_GAMES_STAMP = $(GNU_OUT)/games.stamp
 GNU_STEP_STAMPS += $(GNU_GAMES_STAMP)
-GNU_GAMES_LISTS = games/layer.list
+GNU_GAMES_LISTS = games/layer.list games/native.list
 GNU_GAMES_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
                     vendor/gnu/debian/resolve_debs.py \
                     $(addprefix vendor/gnu/,$(GNU_GAMES_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
