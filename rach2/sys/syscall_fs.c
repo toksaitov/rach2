@@ -2044,6 +2044,29 @@ static int mount_permanent_at(const struct vfs_mount *m)
     return 0;
 }
 
+/** Keep the mount of a synthetic open for later descriptor-link checks.
+ * `ref` remains held by the caller. A followed magic link keeps its
+ * object's mount instead; namespace objects have no file-system mount. */
+static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags)
+{
+    struct open_file *ofd;
+    struct vfs_ref root;
+
+    if (fd < 0 || ((vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_NS_LINK) &&
+                   !(flags & O_NOFOLLOW))) {
+        return;
+    }
+    ofd = current_proc->fds->entries[fd].ofd;
+    if (!ofd || ofd->vmnt || ofd->synth_mnt) {
+        return;
+    }
+    root.mnt = ref->mnt;
+    root.node = root.mnt->root;
+    vfs_ref_hold(&root);
+    vfs_desc_open(root.mnt);
+    ofd->synth_mnt = root.mnt;
+}
+
 /**
  * Record `name`, a path as `ofd_record_path` takes it, in the description of
  * `fd`, a descriptor the open of a synthetic node made, when it is open on a
@@ -2431,6 +2454,16 @@ static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry
     return 0;
 }
 
+/** Check a descriptor target against NO_XDEV's mount, or allow no rule.
+ * The description's mount is stable while nothing sleeps; anonymous
+ * objects have no file-system mount and cannot stay on the link's. */
+static int proc_fd_xdev(const fd_entry_t *entry, const struct vfs_mount *mnt)
+{
+    const struct open_file *ofd = entry->ofd;
+
+    return mnt && (!ofd || (ofd->vmnt ? ofd->vmnt : ofd->synth_mnt) != mnt) ? -EXDEV : 0;
+}
+
 /**
  * open(2) of /proc/PID/fd/N, which /dev/fd/N, /dev/stdin, /dev/stdout and
  * /dev/stderr are for the caller, following the link to what the descriptor
@@ -2453,6 +2486,10 @@ static int32_t proc_fd_open(const struct vpath *vp, int flags)
     int32_t rc;
 
     rc = proc_fd_entry(vp, &p, &src);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = proc_fd_xdev(src, current_proc->walk_replay_mnt);
     if (rc != 0) {
         return rc;
     }
@@ -2645,6 +2682,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         }
         return procfs_may_read(procfs_resolve_pid(vp->pid)) ? procfs_open(vp, flags) : -EACCES;
     case VNODE_PROC_NS_LINK:
+        if (current_proc->walk_replay_mnt) {
+            return -EXDEV;
+        }
         return procfs_resolve_id(vp) < 0 ? -ENOENT
                                          : procfs_open_ns(procfs_resolve_id(vp), vp->procfd, flags);
     default:
@@ -3641,10 +3681,11 @@ again:
             int permanent = mount_permanent_at(ref.mnt);
 
             vfs_walk_unlock(ref.mnt);
-            vfs_ref_release(&ref);
             fd_free(current_proc->fds, fd);
             fd = -1;
             rc = ro ? -EROFS : open_synth_node(&vpc, flags);
+            synth_mount_record(rc, &ref, &vpc, flags);
+            vfs_ref_release(&ref);
             synth_dir_record(rc, permanent, name);
             goto out;
         }
@@ -4550,19 +4591,54 @@ static int32_t openat2_anchor(int dirfd, const char *name, uint32_t resolve,
     return 0;
 }
 
+/** Apply openat2's rules to a final magic link before the open follows it.
+ * `vp` is NULL for an ordinary node; `mnt` is the link's held mount.
+ * Return 0 or the link restriction's error. */
+static int openat2_magic(const struct vpath *vp, struct vfs_mount *mnt, uint32_t resolve)
+{
+    process_t *owner;
+    fd_entry_t *src;
+    int rc;
+
+    if (!vp || (vp->kind != VNODE_PROC_FD_LINK && vp->kind != VNODE_PROC_NS_LINK)) {
+        return 0;
+    }
+    if (resolve & (VFS_RESOLVE_NO_SYMLINKS | VFS_RESOLVE_NO_MAGICLINKS)) {
+        return -ELOOP;
+    }
+    if (resolve & OPENAT2_RESOLVE_ROOT) {
+        return -EXDEV;
+    }
+    if (!(resolve & VFS_RESOLVE_NO_XDEV)) {
+        return 0;
+    }
+    if (vp->kind == VNODE_PROC_NS_LINK) {
+        return -EXDEV;
+    }
+    rc = proc_fd_entry(vp, &owner, &src);
+    return rc == 0 ? proc_fd_xdev(src, mnt) : rc;
+}
+
+/* What the checked walk keeps for the ordinary open's replay. */
+struct openat2_checked {
+    uint32_t seq;
+    struct vfs_ref xdev; /* held mount root under NO_XDEV, otherwise NULL */
+};
+
 /**
  * The walk of an openat2 path `name` under `resolve` (`vfs_resolve_scoped`),
  * from the directory `dirfd` names: the path it reaches, from the caller's
  * root, into `real`, with the last name it may create after it, and in
- * `*seq` the tree's sequence from before the walk began, which the replay
- * compares. `walk` has the walk's
+ * `checked->seq` the tree's sequence from before the walk began, which the
+ * replay compares. `walk` has the walk's
  * VFS_WALK_ flags. A link of /proc to an object at the end of the path,
  * /proc/PID/fd/N or a namespace's, which the system call layer follows
- * itself, is judged here as the walk judges one on the way. Returns 0, or
- * the walk's error.
+ * itself, is judged here as the walk judges one on the way. Under NO_XDEV
+ * keep the mount's root in `checked->xdev`, to put after the replay.
+ * Returns 0, or the walk's error.
  */
 static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int walk, char *real,
-                            uint32_t *seq)
+                            struct openat2_checked *checked)
 {
     char leaf[VFS_NAME_MAX + 1];
     struct vfs_scope scope;
@@ -4570,7 +4646,6 @@ static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int w
     char *anchor = path_buf_get();
     const struct vpath *vp;
     int outside = 0;
-    int kind;
     int32_t rc;
 
     rc = anchor ? openat2_anchor(dirfd, name, resolve, &scope, anchor, &outside) : -ENOMEM;
@@ -4579,27 +4654,38 @@ static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int w
         return rc;
     }
     rc = vfs_resolve_scoped(&scope, name, walk, &ref, leaf, real);
-    *seq = scope.seq;
+    checked->seq = scope.seq;
     vfs_ref_release(&scope.anchor);
     path_buf_put(anchor);
     if (rc < 0) {
         return rc;
     }
     vp = rc == 0 && !(walk & VFS_WALK_NOFOLLOW) ? vfs_synth_vpath(ref.mnt, ref.node) : NULL;
-    kind = vp ? vp->kind : -1; /* the release frees a synthetic node */
+    if (rc == 0) {
+        rc = openat2_magic(vp, ref.mnt, resolve);
+    }
+    if (rc >= 0 && (resolve & VFS_RESOLVE_NO_XDEV)) {
+        checked->xdev.mnt = ref.mnt;
+        checked->xdev.node = ref.mnt->root;
+        vfs_ref_hold(&checked->xdev);
+        vfs_desc_open(checked->xdev.mnt);
+    }
     if (walk & VFS_WALK_LOCK) {
         vfs_walk_unlock(ref.mnt);
     }
     vfs_ref_release(&ref);
-    if (kind == VNODE_PROC_FD_LINK || kind == VNODE_PROC_NS_LINK) {
-        if (resolve & (VFS_RESOLVE_NO_SYMLINKS | VFS_RESOLVE_NO_MAGICLINKS)) {
-            return -ELOOP;
-        }
-        if (resolve & OPENAT2_RESOLVE_ROOT) {
-            return -EXDEV;
-        }
+    if (rc < 0) {
+        return rc;
     }
     return openat2_real(real, (uint32_t)k_strlen(real), rc, leaf, outside);
+}
+
+/** Release the mount and root kept across an openat2 replay, if any. */
+static void openat2_xdev_put(struct vfs_ref *ref)
+{
+    if (ref->mnt) {
+        vfs_desc_close(ref->mnt, ref->node, NULL);
+    }
 }
 
 #define OPENAT2_TRIES 4
@@ -4619,7 +4705,6 @@ static long openat2_named(int dirfd, const char *name, const struct open_how *ho
     int walk = (flags & O_NOFOLLOW) || (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)
                    ? VFS_WALK_NOFOLLOW
                    : 0;
-    uint32_t seq;
     int tries;
     long rc;
 
@@ -4628,8 +4713,14 @@ static long openat2_named(int dirfd, const char *name, const struct open_how *ho
         walk |= VFS_WALK_CREATE;
     }
     for (tries = 1;; tries++) {
-        rc = openat2_walk(dirfd, name, resolve, walk, real, &seq);
+        struct openat2_checked checked;
+        int retry;
+
+        checked.xdev.mnt = NULL;
+        checked.xdev.node = NULL;
+        rc = openat2_walk(dirfd, name, resolve, walk, real, &checked);
         if (rc != 0) {
+            openat2_xdev_put(&checked.xdev);
             return rc;
         }
         if (end == PATH_END_DOT && k_strlen(real) + 3 <= VFS_PATH_MAX) {
@@ -4637,9 +4728,11 @@ static long openat2_named(int dirfd, const char *name, const struct open_how *ho
         }
         vfs_replay(!(resolve &
                      (VFS_RESOLVE_NO_SYMLINKS | VFS_RESOLVE_NO_MAGICLINKS | OPENAT2_RESOLVE_ROOT)),
-                   seq);
+                   checked.seq, checked.xdev.mnt);
         rc = open_named(path_name(real), flags, (uint32_t)how->mode, end);
-        if (!vfs_replay_end() || rc != -EAGAIN || tries == OPENAT2_TRIES) {
+        retry = vfs_replay_end();
+        openat2_xdev_put(&checked.xdev);
+        if (!retry || rc != -EAGAIN || tries == OPENAT2_TRIES) {
             break;
         }
     }
@@ -8197,6 +8290,10 @@ static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
     if (rc != 0) {
         return rc;
     }
+    rc = proc_fd_xdev(src, current_proc->walk_replay_mnt);
+    if (rc != 0) {
+        return rc;
+    }
     if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
         rc = proc_fd_file(vp, &ref, &held);
         if (rc != 0) {
@@ -8264,9 +8361,10 @@ static int32_t open_path(const char *name, int flags)
         int permanent = mount_permanent_at(ref.mnt);
 
         vfs_walk_unlock(locked);
-        vfs_ref_release(&ref);
         vfs_name_put(entry);
         rc = synth_open_path(&vpc, name, flags);
+        synth_mount_record(rc, &ref, &vpc, flags);
+        vfs_ref_release(&ref);
         synth_dir_record(rc, permanent, name);
         return rc;
     }

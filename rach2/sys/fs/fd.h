@@ -128,6 +128,9 @@ struct open_file {
      * all three through `vfs_desc_close`, so the file system sees one release
      * for each open. `vmnt` is NULL for every other kind of description. */
     struct vfs_mount *vmnt;
+    /* The held mount of a synthetic node opened by path, for NO_XDEV when
+     * /proc/PID/fd follows this description; NULL on anonymous objects. */
+    struct vfs_mount *synth_mnt;
     void *vnode;
     void *fhandle;
     /* With `vmnt`, the inode number the file had when it was opened, or for

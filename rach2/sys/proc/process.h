@@ -240,6 +240,8 @@ struct process {
      * other time, and the tree's sequence the replay must still see. */
     uint32_t walk_replay;
     uint32_t walk_replay_seq;
+    /* NO_XDEV's mount during the replay, held by the open, or NULL. */
+    struct vfs_mount *walk_replay_mnt;
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so
