@@ -50,7 +50,8 @@
         "resources": {"$ref": "#/$defs/resources"},
         "prepare": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
         "timing": {"type": "array", "items": {"$ref": "#/$defs/timing"}},
-        "native": {"$ref": "#/$defs/native"}
+        "native": {"$ref": "#/$defs/native"},
+        "ia32": {"$ref": "#/$defs/ia32"}
       },
       "allOf": [
         {"if": {"properties": {"domain": {"const": "machine"}}},
@@ -422,6 +423,14 @@
       "allOf": [
         {"if": {"properties": {"kind": {"const": "clock_reference"}}}, "then": {"properties": {"uncertainty_us": {"$ref": "#/$defs/positive"}}}}
       ]
+    },
+    "ia32": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runs", "why"],
+      "properties": {
+        "runs": {"type": "boolean"},
+        "why": {"$ref": "#/$defs/text"}
+      }
     },
     "native": {
       "type": "object", "additionalProperties": false,

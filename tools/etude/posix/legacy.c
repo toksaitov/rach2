@@ -370,17 +370,34 @@ static int admit_machine(struct prep *p)
     }
     if (o->kernel != NULL && !plain_name(o->kernel))
         return refuse(p, "%s: a kernel's name is letters, digits, '_' and '-'", o->kernel);
+    if (ETUDE_KERNEL_IS_IA32(o->kernel)) {
+        if (strcmp(arch, "i686") != 0)
+            return refuse(p,
+                          "%s: the ia32 profile boots the i686 images, so its architecture "
+                          "is i686 alone",
+                          arch);
+        /* The kernel the i686 cases boot is x86-64's, which the x86-64
+         * target's components build. */
+        p->t[1].arch = "x86_64";
+        p->nt = 2;
+    }
     for (i = 0; i < p->nt; i++) {
         t = &p->t[i];
         t->build = strcmp(t->arch, "x86_64") == 0 ? "build/x86_64" : "build";
         t->var = format("ARCH=%s", t->arch);
-        if (o->kernel != NULL) {
+        if (ETUDE_KERNEL_IS_IA32(o->kernel)) {
+            /* No BOOT_KERNEL: an i686 make that named the x86-64 kernel as a
+             * prerequisite would build it by tests/cases/host/scripts.mk's
+             * rule, with the GNU disk. */
+            t->kernel = format("%s", ETUDE_KERNEL_IA32_PATH);
+        } else if (o->kernel != NULL) {
             t->kernel = format("%s/rach2-%s/kernel", t->build, o->kernel);
             t->kernel_var = t->kernel != NULL ? format("BOOT_KERNEL=%s", t->kernel) : NULL;
         } else {
             t->kernel = format("%s/rach2/kernel", t->build);
         }
-        if (t->var == NULL || t->kernel == NULL || (o->kernel != NULL && t->kernel_var == NULL))
+        if (t->var == NULL || t->kernel == NULL ||
+            (o->kernel != NULL && !ETUDE_KERNEL_IS_IA32(o->kernel) && t->kernel_var == NULL))
             return sys_error(p, "the request", ENOMEM);
     }
     p->at = &p->t[0];
@@ -1198,7 +1215,10 @@ static int prepare_target(struct prep *p)
     args[3] = "prepare";
     args[4] = p->tree;
     args[5] = (char *)p->at->arch;
-    args[6] = (char *)(p->o->kernel != NULL ? p->o->kernel : "");
+    /* The ia32 profile's kernel is the x86-64 target's own, which needs no
+     * step of its own. */
+    args[6] =
+        (char *)(p->o->kernel != NULL && !ETUDE_KERNEL_IS_IA32(p->o->kernel) ? p->o->kernel : "");
     for (i = 0; i < p->o->ngoals; i++)
         if (goal_of(p, p->at, p->o->goals[i]))
             args[n++] = (char *)p->o->goals[i];
@@ -1215,7 +1235,7 @@ static int prepare_target(struct prep *p)
     char *kernel_goal;
     int status = build_step(p, "components", "-j", "components");
 
-    if (status == 0 && p->o->kernel != NULL) {
+    if (status == 0 && p->o->kernel != NULL && !ETUDE_KERNEL_IS_IA32(p->o->kernel)) {
         kernel_goal = format("%s-kernel", p->o->kernel);
         status = kernel_goal != NULL ? build_step(p, "kernel", kernel_goal, NULL)
                                      : failed(p, "kernel: memory ran out");

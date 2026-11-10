@@ -27,15 +27,20 @@ struct legacy_case {
     long long reps;   /* the workload's repetitions */
     int seeded;       /* the workload's seed is not null */
     long long seed;
-    int scratch;        /* its isolation has the `scratch` fixture */
-    int guest;          /* it is of the domain `guest`, placed under QEMU */
-    int machine;        /* it is of the domain `machine`, whose program is
-                           its scenario */
-    char **goals;       /* its prepare artifacts as make goals of the tree,
-                           `build/NODE` or `build/x86_64/NODE`, with a guest
-                           case's `rach2/kernel` as `rach2-NAME/kernel`
-                           under `-n NAME`, from malloc */
-    const char **names; /* each goal's artifact name, beside `goals` */
+    int scratch;           /* its isolation has the `scratch` fixture */
+    int guest;             /* it is of the domain `guest`, placed under QEMU */
+    int machine;           /* it is of the domain `machine`, whose program is
+                              its scenario */
+    char **goals;          /* its prepare artifacts as make goals of the tree,
+                              `build/NODE` or `build/x86_64/NODE`, with a guest
+                              case's `rach2/kernel` as `rach2-NAME/kernel`
+                              under `-n NAME`, or the kernel an i686 case boots
+                              as ETUDE_KERNEL_IA32_PATH under `-n ia32`, from
+                              malloc */
+    const char *boot_arch; /* the architecture of the kernel and the QEMU a
+                              guest case boots: the run's, or x86_64 under
+                              the ia32 profile */
+    const char **names;    /* each goal's artifact name, beside `goals` */
     size_t ngoals;
     size_t program;    /* the index of the goal its program names */
     const char **args; /* the workload's arguments */
@@ -92,12 +97,27 @@ struct legacy_manifest {
  * With `kernel`, the NAME of `-n NAME`, a guest case whose QEMU profile
  * boots the node `rach2/kernel` is given the goal of `rach2-NAME/kernel` for
  * it in place of that node's; a case that boots another node keeps it.
+ * Under the ia32 profile, `-n ia32`, `arch` must be i686, and only the cases
+ * legacy_ia32_runs takes are read: each kernel such a case boots from
+ * `rach2/kernel` by direct firmware is ETUDE_KERNEL_IA32_PATH, and a guest
+ * case's machine is x86-64's.
  *
  * @return 0 with `m` filled; -1 with the reason in `m->why`, which begins
  *         with the manifest's path.
  */
 int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char *path,
                          const char *suite, const char *arch, const char *kernel);
+
+/**
+ * Say whether case `c` runs under the ia32 profile: its `ia32` member does
+ * not say it does not, and it is a guest case whose QEMU profile, or a
+ * machine case with a machine whose profile, boots the node `rach2/kernel`
+ * of its `prepare` by direct firmware and names no architecture of its own.
+ * The caller checks that the case runs on i686.
+ *
+ * @return 1, or 0 with the reason in `*why`, the case's own or NULL.
+ */
+int legacy_ia32_runs(const struct json *c, const char **why);
 
 /* Fix the case and progress-gap bounds from successful matching attempts. */
 int legacy_case_learn(struct legacy_case *k, const uint64_t *elapsed, size_t n,

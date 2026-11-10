@@ -107,7 +107,7 @@ extern char **environ;
 #define RESULT "etude prepare: result: "
 
 /* The most variables a case's program is given by its item. */
-#define CASE_VARS 7
+#define CASE_VARS 8
 
 /* The memory profile of the 72 GiB boundary boot, and the line of the site
  * policy that permits its lazy backing, which the owner adds once the
@@ -4136,6 +4136,20 @@ static int check(struct set *x)
     return check_cases(x);
 }
 
+/** Give a host or machine case member `m` ETUDE_TREE, and a machine case
+ * under the ia32 profile RACH2_KERNEL, as its variables from index `v` on;
+ * the index past them. */
+static size_t tree_vars(const struct set *x, struct member *m, size_t v)
+{
+    const struct legacy_case *k = m->k;
+
+    if (!k->guest)
+        snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_TREE=%s", x->tree);
+    if (k->machine && ETUDE_KERNEL_IS_IA32(x->o->kernel))
+        snprintf(m->vars[v++], sizeof(m->vars[0]), "RACH2_KERNEL=%s", x->o->kernel);
+    return v;
+}
+
 /** Name the files of case member `m`, the repetition `m->rep` of its case:
  * its item, its attempt, its workspace, its output and the judge's, its
  * program, a machine case's invocation, and the variables its program is
@@ -4175,8 +4189,7 @@ static int case_paths(struct set *x, struct member *m)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "ARCH=%s", k->arch);
     if (k->scratch)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "TMPDIR=%s", m->work);
-    if (!k->guest)
-        snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_TREE=%s", x->tree);
+    v = tree_vars(x, m, v);
 #ifdef _WIN32
     snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_COLLECTION_ARCH=%s", item_arch(x, k));
     if (fit(m->vars[v++], sizeof(m->vars[0]), "PATH=%s/build/tools/etude/commands;%s", x->tree,

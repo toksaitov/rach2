@@ -329,7 +329,7 @@ static int make_profile(struct legacy_guest *g)
         (initrd != NULL && stock(g, initrd, hex, g->initrd, &n) != 0) ||
         (audio_input != NULL && stock(g, audio_input, hex, g->audio_input, &n) != 0))
         return -1;
-    p->architecture = g->spec.arch;
+    p->architecture = g->k->boot_arch;
     p->kernel = g->kernel;
     p->initrd = initrd != NULL ? g->initrd : NULL;
     p->disks = g->disks;
@@ -375,10 +375,11 @@ static const char *on_path(const char *name, char *out, size_t size)
 }
 
 /** Fill the site of the attempt's machine: the accelerator and QEMU's
- * program for its architecture; 0, or -1 with why in `g->why`. */
+ * program for the architecture of the kernel it boots; 0, or -1 with why in
+ * `g->why`. */
 static int make_site(struct legacy_guest *g)
 {
-    int x86_64 = strcmp(g->spec.arch, "x86_64") == 0;
+    int x86_64 = strcmp(g->k->boot_arch, "x86_64") == 0;
     const char *program = x86_64 ? "qemu-system-x86_64" : "qemu-system-i386";
 
 #ifdef _WIN32
@@ -443,9 +444,10 @@ static void digest_of(const void *p, size_t n, char hex[65])
 /**
  * Write the attempt's invocation (schemas/invocation.schema.json): the
  * case's program and arguments in the workspace, the case's identity, seed
- * and architecture in its environment, its scratch as TMPDIR, and its bound
- * as the deadline; and its digest and the attempt's token, the first digits
- * of the digest of the attempt's identity.
+ * and architecture and the architecture of the kernel it runs on in its
+ * environment, its scratch as TMPDIR, and its bound as the deadline; and its
+ * digest and the attempt's token, the first digits of the digest of the
+ * attempt's identity.
  */
 static void make_invocation(struct legacy_guest *g)
 {
@@ -478,6 +480,7 @@ static void make_invocation(struct legacy_guest *g)
     }
     if (strcmp(k->arch, "none") != 0)
         put_member(&b, "ARCH", k->arch, 0);
+    put_member(&b, "ETUDE_KERNEL", k->boot_arch, 0);
     if (k->scratch)
         put_member(&b, "TMPDIR", "${WORKSPACE}", 0);
     jbuf_puts(&b, "},\"stdin\":null,\"role\":\"ordinary\",\"files\":[{");

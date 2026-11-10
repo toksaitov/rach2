@@ -69,6 +69,7 @@ struct collection {
     char site_ledger[PATH_SIZE];
     uint64_t site_cpu;
     int stop_on_fail, list, boots_machines;
+    int by_set; /* the suites are `all` or `core`, not named */
     struct etude_portlock ports;
 };
 
@@ -387,6 +388,7 @@ static int select_suites(struct collection *c, int argc, char **argv)
     if (!argc)
         return refused("no suite named");
     if (set) {
+        c->by_set = 1;
         for (i = 0; i < c->nsuites; i++)
             if (!strcmp(argv[0], "all") || !strcmp(c->suites[i].tier, "core"))
                 c->suites[i].selected = arch_mask(c->arches) & arch_mask(c->suites[i].arches);
@@ -553,12 +555,22 @@ struct case_selection {
     const char *rows;
     char **ordered;
     size_t nrows, count;
+    size_t left_out; /* the cases the ia32 profile left out */
 };
 
 static int selected_architecture(const struct suite_entry *s, const struct json *one)
 {
     return ((s->selected & 1) && runs_on(one, "i686")) ||
            ((s->selected & 2) && runs_on(one, "x86_64"));
+}
+
+/** Say whether case `k` runs in this run: under the ia32 profile, as
+ * legacy_ia32_runs says, and otherwise always. */
+static int ia32_runs(const struct json *k)
+{
+    const char *why;
+
+    return !ETUDE_KERNEL_IS_IA32(getenv("RACH2_KERNEL")) || legacy_ia32_runs(k, &why);
 }
 
 static int choose_identities(struct collection *c, const struct suite_entry *s,
@@ -590,6 +602,12 @@ static int choose_identities(struct collection *c, const struct suite_entry *s,
             return refused("a chosen case does not run on this host");
         if (!etude_case_runs_here(selection->cases->item[j]))
             continue;
+        if (!ia32_runs(selection->cases->item[j])) {
+            if (identities != NULL)
+                return refused("a chosen case does not run under the ia32 profile");
+            selection->left_out++;
+            continue;
+        }
         selection->picked[selection->count++] = selection->cases->item[j];
     }
     return 0;
@@ -614,6 +632,8 @@ static int choose_rows(const struct suite_entry *s, struct case_selection *selec
         }
         if (!etude_case_hosted(selection->cases->item[j], etude_host_system()))
             return refused("a chosen row does not run on this host");
+        if (!ia32_runs(selection->cases->item[j]))
+            return refused("a chosen row does not run under the ia32 profile");
         selection->picked[selection->count++] = selection->cases->item[j];
     }
     return 0;
@@ -627,6 +647,23 @@ static const char *suite_rows(const struct suite_entry *s)
     if (rows && !*rows)
         rows = NULL;
     return rows;
+}
+
+/**
+ * Settle suite `s`, which `selection` left with no case: under the ia32
+ * profile, a suite of `all` or `core` whose cases it left out is dropped;
+ * 0, or 2 after the refusal of any other.
+ */
+static int left_empty(struct collection *c, struct suite_entry *s,
+                      const struct case_selection *selection)
+{
+    if (selection->left_out == 0)
+        return refused("the selection leaves a suite with no case");
+    if (!c->by_set || c->nwanted > 0 || selection->rows != NULL)
+        return refused("the selection leaves a suite with no case under the ia32 profile");
+    printf("run: ia32: left out: %s: no case of it runs under the profile\n", s->name);
+    s->selected = 0;
+    return 0;
 }
 
 static int choose_cases(struct collection *c)
@@ -661,7 +698,7 @@ static int choose_cases(struct collection *c)
         picked = calloc(cases->count + 1, sizeof(*picked));
         if (!picked)
             return 2;
-        struct case_selection selection = {cases, picked, rows, ordered, nrows, 0};
+        struct case_selection selection = {cases, picked, rows, ordered, nrows, 0, 0};
         int error = choose_identities(c, s, identities, &selection);
         if (!error)
             error = choose_rows(s, &selection);
@@ -672,7 +709,10 @@ static int choose_cases(struct collection *c)
         }
         if (!count) {
             free(picked);
-            return refused("the selection leaves a suite with no case");
+            error = left_empty(c, s, &selection);
+            if (error)
+                return error;
+            continue;
         }
         if (identities || rows)
             c->selection_cases += count;
@@ -1281,6 +1321,10 @@ static int collection_options(struct collection *c, struct request *r, int argc,
     if (strcmp(c->arches, "i686") && strcmp(c->arches, "x86_64") &&
         strcmp(c->arches, "i686,x86_64")) {
         refused("architectures must be i686, x86_64 or both");
+        return 2;
+    }
+    if (ETUDE_KERNEL_IS_IA32(getenv("RACH2_KERNEL")) && strcmp(c->arches, "i686")) {
+        refused("the ia32 profile boots the i686 images, so ARCH must be i686");
         return 2;
     }
     if (!c->width || c->width > COLLECTION_MAX || !c->cpus || c->cpus > 64 || !c->memory) {
