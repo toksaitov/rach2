@@ -62,7 +62,6 @@ A guest of its own goes under `guests/` with its recipe, the token its console p
 ## Limits
 
 * The Debian x86-64 guest boots under SVM on both outer profiles. The i686 guest and the corpus still await qualification.
-* No selftest goes past its start until Rach2's `/sys` has `/sys/module/kvm/parameters/force_emulation_prefix`, as the KVM layer's Readme says.
 * The `max-svm` profile under TCG lacks NRIP save, TSC scaling and the pause filter, and has the five faults of Results, the last of which can leave a guest of Rach2's KVM that spins with its IF clear waiting on an interrupt QEMU does not deliver; the `host-svm` profile runs only on the testing PC.
 
 ## Tests

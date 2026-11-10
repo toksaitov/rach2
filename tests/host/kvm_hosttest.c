@@ -181,6 +181,32 @@ int32_t devfs_node_register(struct devfs_node *node)
     return 0;
 }
 
+/* /sys/module's directories and files, which the model takes and forgets. */
+static int sysfs_handles;
+
+int sysfs_anchor(int node, int key)
+{
+    (void)node;
+    (void)key;
+    return ++sysfs_handles;
+}
+
+int sysfs_add_dir(int parent, const char *name)
+{
+    (void)parent;
+    (void)name;
+    return ++sysfs_handles;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return ++sysfs_handles;
+}
+
 void mm_hold(struct mm *mm)
 {
     (void)mm;
