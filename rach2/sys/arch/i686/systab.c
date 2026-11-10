@@ -392,6 +392,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MSYNC] = sys_msync;
     table[SYS_MREMAP] = sys_mremap;
     table[SYS_MADVISE] = sys_madvise;
+    table[SYS_MSEAL] = sys_mseal;
     table[SYS_EVENTFD] = sys_eventfd;
     table[SYS_EVENTFD2] = sys_eventfd2;
     table[SYS_INOTIFY_INIT] = sys_inotify_init;

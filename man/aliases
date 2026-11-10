@@ -814,3 +814,5 @@ nice 2 getpriority
 olduname 2 uname
 oldolduname 2 uname
 umount 2 mount
+pkey_free 2 pkey_alloc
+pkey_mprotect 2 pkey_alloc

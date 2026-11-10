@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 327 calls, the x86-64 kernel 299, and its compat table 373. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 328 calls, the x86-64 kernel 304, and its compat table 378. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -151,6 +151,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `lstat` | 107 | 6 | 107 | [stat(2)](../man/man2/stat.2) |
 | `lstat64` | 196 | none | 196 | [stat(2)](../man/man2/stat.2) |
 | `madvise` | 219 | 28 | 219 | [brk(2)](../man/man2/brk.2) |
+| `map_shadow_stack` | none | 453 | 453 | [map_shadow_stack(2)](../man/man2/map_shadow_stack.2) |
 | `mbind` | 274 | 237 | 274 | [mbind(2)](../man/man2/mbind.2) |
 | `membarrier` | 375 | 324 | 375 | [membarrier(2)](../man/man2/membarrier.2) |
 | `memfd_create` | 356 | 319 | 356 | [memfd_create(2)](../man/man2/memfd_create.2) |
@@ -178,6 +179,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `mq_timedsend_time64` | 418 | none | 418 | [mq_open(2)](../man/man2/mq_open.2) |
 | `mq_unlink` | 278 | 241 | 278 | [mq_open(2)](../man/man2/mq_open.2) |
 | `mremap` | 163 | 25 | 163 | [brk(2)](../man/man2/brk.2) |
+| `mseal` | 462 | 462 | 462 | [mseal(2)](../man/man2/mseal.2) |
 | `msgctl` | 402 | 71 | 402 | [msgget(2)](../man/man2/msgget.2) |
 | `msgget` | 399 | 68 | 399 | [msgget(2)](../man/man2/msgget.2) |
 | `msgrcv` | 401 | 70 | 401 | [msgget(2)](../man/man2/msgget.2) |
@@ -208,6 +210,9 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `pipe` | 42 | 22 | 42 | [pipe(2)](../man/man2/pipe.2) |
 | `pipe2` | 331 | 293 | 331 | [pipe(2)](../man/man2/pipe.2) |
 | `pivot_root` | 217 | 155 | 217 | [pivot_root(2)](../man/man2/pivot_root.2) |
+| `pkey_alloc` | none | 330 | 381 | [pkey_alloc(2)](../man/man2/pkey_alloc.2) |
+| `pkey_free` | none | 331 | 382 | [pkey_alloc(2)](../man/man2/pkey_alloc.2) |
+| `pkey_mprotect` | none | 329 | 380 | [pkey_alloc(2)](../man/man2/pkey_alloc.2) |
 | `poll` | 168 | 7 | 168 | [poll(2)](../man/man2/poll.2) |
 | `ppoll` | 309 | 271 | 309 | [poll(2)](../man/man2/poll.2) |
 | `ppoll_time64` | none | none | 414 | [poll(2)](../man/man2/poll.2) |

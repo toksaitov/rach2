@@ -1,0 +1,93 @@
+.Dd November 11, 2026
+.Dt PKEY_ALLOC 2
+.Os
+.Sh NAME
+.Nm pkey_alloc ,
+.Nm pkey_free ,
+.Nm pkey_mprotect
+.Nd memory protection keys, which the processor's keys being off leave none of
+.Sh SYNOPSIS
+.In sys/mman.h
+.Ft int
+.Fn pkey_alloc "unsigned int flags" "unsigned int access_rights"
+.Ft int
+.Fn pkey_free "int pkey"
+.Ft int
+.Fn pkey_mprotect "void *addr" "size_t len" "int prot" "int pkey"
+.Sh DESCRIPTION
+Linux on x86-64 gives each page a protection key, whose rights a thread
+sets in the PKRU register, where the processor has protection keys and
+the kernel turns them on.
+Rach2 does not turn them on: CR4.PKE stays clear, so the OSPKE bit of
+CPUID leaf 7 reads 0 to a program, and the three calls answer as Linux's
+do on a processor without keys.
+.Pp
+.Fn pkey_alloc
+fails with
+.Er EINVAL
+when
+.Fa flags
+is not 0 or
+.Fa access_rights
+has a bit other than
+.Dv PKEY_DISABLE_ACCESS
+(1) and
+.Dv PKEY_DISABLE_WRITE
+(2), and otherwise with
+.Er ENOSPC ,
+there being no key to give.
+.Pp
+.Fn pkey_free
+fails with
+.Er EINVAL
+for every key, none being allocated.
+.Pp
+.Fn pkey_mprotect
+with
+.Fa pkey
+-1 is
+.Xr mprotect 2 .
+With any other key it checks the address and the range as
+.Fn mprotect
+does, returning 0 for an empty range, and then fails with
+.Er EINVAL ,
+the default key 0 not being one a program may name.
+.Pp
+Linux builds the three calls on x86-64 alone: the i686 kernel has no
+entry for them and answers
+.Er ENOSYS .
+The x86-64 kernel answers an i386 program as it answers a 64-bit one.
+.Sh RETURN VALUES
+.Fn pkey_mprotect
+returns 0 when
+.Fa pkey
+is -1 and
+.Fn mprotect
+succeeds, or when the range is empty.
+Otherwise each call returns -1 with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[ENOSPC]"
+.It Bq Er EINVAL
+As above; and for
+.Fn pkey_mprotect ,
+an address not page-aligned.
+.It Bq Er ENOMEM
+.Fn pkey_mprotect
+with a key other than -1 was given a range that wraps.
+.It Bq Er ENOSPC
+.Fn pkey_alloc
+has no key to give.
+.It Bq Er ENOSYS
+The kernel is the i686 one.
+.El
+.Pp
+.Fn pkey_mprotect
+with key -1 fails as
+.Xr mprotect 2
+does.
+.Sh SEE ALSO
+.Xr brk 2 ,
+.Xr map_shadow_stack 2 ,
+.Xr mseal 2

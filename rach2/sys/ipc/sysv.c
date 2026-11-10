@@ -645,7 +645,9 @@ static int32_t shm_at(int32_t id, uintptr_t addr, uint32_t flag, uintptr_t *base
 }
 
 /** shmdt: unmap the segment attached at `addr`. EINVAL when no attachment
- * begins there; other unmap errors are returned without recording a detach. */
+ * begins there; an attachment mseal sealed stays, with 0 and no detach
+ * recorded, as Linux's shmdt ignores the unmap's EPERM; other unmap errors
+ * are returned without recording a detach. */
 static int32_t shm_dt(uintptr_t addr)
 {
     int i;
@@ -661,6 +663,9 @@ static int32_t shm_dt(uintptr_t addr)
             rc = munmap_shm(addr, shm_mem(s), s->size);
             if (rc == -EINVAL) {
                 continue;
+            }
+            if (rc == -EPERM) {
+                return 0; /* sealed: Linux's shmdt leaves it and answers 0 */
             }
             if (rc != 0) {
                 return rc;

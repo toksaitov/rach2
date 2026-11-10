@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
@@ -366,6 +366,22 @@ on x86-64.
 The call removes, trims or splits overlapping VMAs and frees their
 resident frames in the range.
 Unmapped pages and pages never accessed require no frame release.
+A range that meets a mapping
+.Xr mseal 2
+sealed is refused with
+.Er EPERM
+and nothing is unmapped; so is a
+.Dv MAP_FIXED
+mapping over one, a
+.Fn brk
+that would shrink the heap through one, which leaves the break as it is,
+and an
+.Fn mremap
+of one or with
+.Dv MREMAP_FIXED
+onto one.
+.Xr shmdt 2
+of a sealed attachment leaves it and returns 0, as on Linux.
 .Ss Protection
 .Fn mprotect ,
 kernel call 125, gives the range beginning at the page-aligned
@@ -399,7 +415,13 @@ served as a private one, may never be made writable:
 refuses write over a range that reaches one with
 .Er EACCES ,
 as Linux does.
-The whole range is checked before anything changes.
+So is execute over a mapping of
+.Xr memfd_secret 2 .
+The whole range is checked before anything changes, except that a sealed
+mapping stops the call with
+.Er EPERM
+after the mappings below it in the range have taken the new protection,
+as Linux changes one mapping after another.
 .Ss Resizing and advice
 .Fn mremap ,
 kernel call 163, resizes the mapping at the page-aligned
@@ -482,13 +504,30 @@ does, so a guard shows in
 .Pa /proc/ Ns Ar pid Ns Pa /maps
 as an area of its own with the protection it was cut with.
 .Pp
+Over a sealed mapping of anonymous private memory without write, the
+advice that would discard its pages,
+.Dv MADV_DONTNEED ,
+.Dv MADV_DONTNEED_LOCKED ,
+.Dv MADV_FREE ,
+.Dv MADV_DONTFORK
+and
+.Dv MADV_WIPEONFORK ,
+stops with
+.Er EPERM ,
+the mappings below it in the range advised first, as on Linux.
+.Pp
 Any other advice Linux defines from
 .Dv MADV_NORMAL
 (0) to
 .Dv MADV_COLLAPSE
 (25) is accepted and changes nothing, except
 .Dv MADV_REMOVE ,
-which is refused.
+which is refused, and
+.Dv MADV_COLD
+(20) and
+.Dv MADV_PAGEOUT
+(21), which are refused over a locked mapping and a device object's, as
+Linux refuses them.
 So is every other number: Linux defines none from 5 to 7, and its
 .Dv MADV_HWPOISON
 (100) and
@@ -726,7 +765,11 @@ an advice it does not accept, as above, or
 .Dv MADV_FREE
 or
 .Dv MADV_DOFORK
-over a device object's mapping, or
+over a device object's mapping,
+.Dv MADV_COLD
+or
+.Dv MADV_PAGEOUT
+over a locked mapping or a device object's, or
 .Dv MADV_GUARD_INSTALL
 or
 .Dv MADV_GUARD_REMOVE
@@ -753,7 +796,9 @@ A mapping of a file or a device object whose descriptor is not open for
 reading, or a writable shared one whose descriptor is not open for
 writing;
 .Fn mprotect
-asking write of a shared mapping of a file that may never be written.
+asking write of a shared mapping of a file that may never be written, or
+execute of a mapping of
+.Xr memfd_secret 2 .
 .It Er EBUSY
 A shared mapping, through a descriptor open for writing, of a file a loop
 device stands on.
@@ -807,12 +852,14 @@ memory do.
 .It Er EPERM
 A device object refuses the caller or the range, as
 .Pa /dev/mem
-refuses a caller without privilege and a frame of RAM.
+refuses a caller without privilege and a frame of RAM; or the range meets
+a sealed mapping, as above.
 .It Er ESRCH
 The kernel has no current process.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,
+.Xr mseal 2 ,
 .Xr open 2 ,
 .Xr prlimit64 2 ,
 .Xr mem 4 ,

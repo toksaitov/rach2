@@ -184,6 +184,11 @@
 #define SYS_FUTEX_REQUEUE           456
 #define SYS_MEMBARRIER              375
 #define SYS_FCHMODAT2               452
+#define SYS_PROCESS_MADVISE         440
+#define SYS_MEMFD_SECRET            447
+#define SYS_PROCESS_MRELEASE        448
+#define SYS_CACHESTAT               451
+#define SYS_MSEAL                   462
 #define SYS_WAITID                  284
 #define SYS_UTIMENSAT               320
 #define SYS_NANOSLEEP               162

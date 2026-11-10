@@ -599,25 +599,27 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
     return 0;
 }
 
-/* An option of `vm_change`, above every protection bit: a region with
- * VM_PROT_NOWRITE stops the change. */
+/* Options of `vm_change`, above every protection bit: a region with
+ * VM_PROT_NOWRITE, or with VM_PROT_SECRET, stops the change. */
 #define VM_CHANGE_NOWRITE 0x80000000u
+#define VM_CHANGE_NOEXEC  0x40000000u
 
 /**
- * Give each region of [start, end) the protection `(prot & ~mask) | bits`,
- * for `vm_protect`, `vm_advise` and `vm_lock`, splitting the regions the
- * range cuts at its ends and merging the pieces with neighbours that then
- * match. `opts` holds protection bits, a region with any of which keeps its
- * protection, and VM_CHANGE_NOWRITE, with which a region with
- * VM_PROT_NOWRITE stops the change with -3. An empty range changes nothing.
- * 0, -1 for a gap, -2 when a split has no room, or -3; of -1 and -3, the
- * one met first in address order, and every error leaves the regions as
- * they were.
+ * Give each region of [start, end) the protection `(prot & ~mask) | bits`, for
+ * `vm_protect`, `vm_advise` and `vm_lock`, splitting the regions the range cuts
+ * at its ends and merging the pieces with neighbours that then match. `opts`
+ * holds protection bits, a region with any of which keeps its protection, and
+ * VM_CHANGE_NOWRITE and VM_CHANGE_NOEXEC, with which a region with
+ * VM_PROT_NOWRITE, or VM_PROT_SECRET, stops the change with -3, as Linux's
+ * mprotect answers EACCES without VM_MAYWRITE or VM_MAYEXEC. An empty range
+ * changes nothing. 0, -1 for a gap, -2 when a split has no room, or -3; of -1
+ * and -3, the one met first in address order, and every error leaves the
+ * regions as they were.
  */
 static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t mask, uint32_t bits,
                      uint32_t opts)
 {
-    uint32_t skip = opts & ~(uint32_t)VM_CHANGE_NOWRITE;
+    uint32_t skip = opts & ~(uint32_t)(VM_CHANGE_NOWRITE | VM_CHANGE_NOEXEC);
     uintptr_t at = start;
     vma_t *r, *first, *last = NULL;
     uint32_t splits;
@@ -630,7 +632,8 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
         if (r->start > at) {
             break;
         }
-        if ((opts & VM_CHANGE_NOWRITE) && (r->prot & VM_PROT_NOWRITE)) {
+        if (((opts & VM_CHANGE_NOWRITE) && (r->prot & VM_PROT_NOWRITE)) ||
+            ((opts & VM_CHANGE_NOEXEC) && (r->prot & VM_PROT_SECRET))) {
             return -3;
         }
         at = r->end;
@@ -666,14 +669,27 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
 {
     return vm_change(vm, start, end, ~(uint32_t)VM_PROT_KEPT, prot & ~(uint32_t)VM_PROT_KEPT,
-                     (prot & VM_PROT_WRITE) ? VM_CHANGE_NOWRITE : 0u);
+                     ((prot & VM_PROT_WRITE) ? VM_CHANGE_NOWRITE : 0u) |
+                         ((prot & VM_PROT_EXEC) ? VM_CHANGE_NOEXEC : 0u));
 }
 
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
 {
-    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD);
+    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD | VM_PROT_SEALED);
 
     return vm_change(vm, start, end, mask, set & mask, 0);
+}
+
+uintptr_t vm_sealed_at(const vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    const vma_t *r;
+
+    for (r = vm_lower(vm, start); r && r->start < end; r = vm_next(r)) {
+        if (r->prot & VM_PROT_SEALED) {
+            return r->start > start ? r->start : start;
+        }
+    }
+    return end;
 }
 
 int vm_lock(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t bits)
