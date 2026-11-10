@@ -16,9 +16,29 @@ The machine has `intel-iommu,intremap=on,caching-mode=on`, a `virtio-net-pci,dis
 
 The counters are the kernel's `/proc/stat` records, described in [vfio](../../rach2/sys/vfio/Readme.md#interfaces) and [VT-d](../../rach2/sys/arch/x86/iommu/Readme.md#use). The EDU register offsets and DMA commands follow [QEMU's EDU specification](https://www.qemu.org/docs/master/specs/edu.html). No elapsed time decides a result.
 
+## Local changes
+
+The outer QEMU needs `qemu-vtd-cfi.patch`. QEMU 10.2.1 does not acknowledge GCMD.CFI in GSTS.CFIS and forwards compatibility-format MSIs even when CFI is clear. The patch adds the status update and fault reason 0x25, preserving delivery when CFI is set or interrupt remapping is off. The patch changes the test host's emulator, not QEMU in the GNU guest.
+
 ## Building
 
 `make ARCH=x86_64 build/tests/cases/assign/assign.ext2` builds the payload. `mkguest.sh` uses the Debian kernel and BusyBox packages pinned by `tests/kvm/guests/debian.txt`. The initramfs includes the NIC modules and their dependencies in load order, leaving out dependencies Debian built into its kernel. The guest uses a static address, pings its gateway eight times, prints `ASSIGNGUEST OK` and powers off. With `assign.hold` it keeps pinging and prints `ASSIGNGUEST TRAFFIC` after each completed batch.
+
+### The outer emulator
+
+Use the official [QEMU 10.2.1 archive](https://download.qemu.org/qemu-10.2.1.tar.xz), SHA-256 `a3717477d8e2c84d630bfffbc20f6cd3293eb45aa1e6dac6d0cc27689991c9e1`. Keep it and its extracted source under `build/cache/qemu`, apply `patch -p1 < tests/assign/qemu-vtd-cfi.patch` in the extracted source, and configure in a separate `build/cache/qemu/out` directory. Through the testing host's installed build admission, run:
+
+```sh
+../qemu-10.2.1/configure --target-list=x86_64-softmmu \
+    --without-default-features --enable-system --enable-kvm --enable-tcg \
+    --enable-slirp --enable-pixman --disable-docs --disable-guest-agent \
+    --disable-rust --disable-download --with-pkgversion=rach2-vtd-cfi
+ninja -j8 qemu-system-x86_64
+```
+
+The build needs GLib, pixman, slirp and their development headers, Ninja, Meson, Python pip and setuptools. On the testing host their Ubuntu packages are unpacked with `dpkg-deb -x` into `build/cache/qemu/deps`, without a package installation. Set `PATH` to its `usr/bin`, `PYTHONPATH` to its `usr/lib/python3/dist-packages`, and `PKG_CONFIG_LIBDIR` to its `usr/lib/x86_64-linux-gnu/pkgconfig` followed by the system pkg-config directories. Relocate `prefix=/usr` in the private `.pc` files to that private `usr` directory. Set `LD_LIBRARY_PATH` to its `usr/lib/x86_64-linux-gnu`. GLib's pkg-config dependencies also need the private `libpcre2-dev`, `libffi-dev` and `libsysprof-capture-4-dev` packages. Keep the private libraries with the emulator.
+
+Put the absolute `build/cache/qemu/out` directory first on `PATH` for the assignment run, and retain that `LD_LIBRARY_PATH`. The build tree finds its shipped firmware through its `pc-bios` link. No global emulator is replaced. Record `qemu-system-x86_64 --version`, the binary's SHA-256 and the private dependency versions with the run.
 
 ## Tests
 
