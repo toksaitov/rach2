@@ -1012,7 +1012,8 @@ int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
 
     for (;;) {
         i915_retire_requests(i915);
-        for (i = 0, rq = 0; i < I915_NUM_ENGINES && !rq; i++) {
+        rq = 0;
+        for (i = 0; i < I915_NUM_ENGINES && !rq; i++) {
             rq = i915->gt.engine[i].requests_tail;
         }
         if (!rq) {
