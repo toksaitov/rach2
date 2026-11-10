@@ -468,36 +468,49 @@ def record(stop, samples, ready):
         os.close(fd)
 
 
+def rms(block):
+    """Give the root mean square of BLOCK's samples."""
+    return math.sqrt(sum(x * x for x in block) / len(block))
+
+
 def tone_windows(data):
     """
-    Count the 50 ms windows of the loopback that measure 440 Hz, as desktop.py
-    does, and give the others as (index, RMS, Hz), the index counted among
-    the loud windows, so that the tone's ends tell apart from gaps within it.
+    Sort the 50 ms windows of the loopback: those that measure 440 Hz, those
+    the tone fills that measure another frequency, as (index among the loud
+    windows, RMS, Hz), and those the tone fills in part, which hold its
+    start, its end or the edge of a gap. A gap is a stream's underrun, a
+    matter of when its writer ran; the row judges the samples that came, and
+    prints the windows.
     """
     values = struct.unpack("<%dh" % (len(data) // 2), data)
-    good, off, loud, kinds = 0, [], 0, ""
+    good, off, edges, loud, kinds = 0, [], 0, 0, ""
     for at in range(0, len(values) - 2400, 2400):
         block = values[at:at + 2400]
-        rms = math.sqrt(sum(x * x for x in block) / len(block))
-        if rms < 200:
+        if rms(block) < 200:
             kinds += "."
             continue
+        loud += 1
         hz = sum(a <= 0 < b for a, b in zip(block, block[1:])) * 20
-        if abs(hz - 440) <= 40:
+        if min(rms(block[i:i + 240]) for i in range(0, 2400, 240)) < 200:
+            edges += 1
+            kinds += "-"
+        elif abs(hz - 440) <= 40:
             good += 1
             kinds += "#"
         else:
-            off.append((loud, int(rms), hz))
+            off.append((loud, int(rms(block)), hz))
             kinds += "x"
-        loud += 1
-    # The windows from the tone's first to its last: # at 440 Hz, x loud at
-    # another, . quiet.
-    say("tone windows: %s" % kinds.strip("."))
-    return good, off
+    # From the tone's first window to its last: # at 440 Hz, x whole at
+    # another frequency, - filled in part, . quiet.
+    kinds = kinds.strip(".")
+    return good, off, edges, kinds
 
 
 def row_wineio():
     """Wine's waveOut tone through PulseAudio on OSS, and DirectInput's devices."""
+    settings = subprocess.run(desktop("rach2-game --print"), stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True).stdout
+    check("latency", "PULSE_LATENCY_MSEC=60\n" in settings, "rach2-game --print")
     make_prefix()
     for bits in ("64", "32"):
         stop, ready = threading.Event(), threading.Event()
@@ -514,10 +527,11 @@ def row_wineio():
             reader.join()
         text = output.read_text(errors="replace") if output.exists() else ""
         print(text, end="", flush=True)
-        good, off = tone_windows(samples)
-        check("tone" + bits, status == 0 and "TONE OK" in text and good >= 10 and
-              len(off) * 5 <= good, "status %d, %d windows of 440 Hz, %d others %s" % (
-                  status, good, len(off), off))
+        good, off, edges, kinds = tone_windows(samples)
+        check("tone" + bits, status == 0 and "TONE OK" in text and good >= 20 and
+              len(off) * 5 <= good,
+              "status %d, %d windows of 440 Hz, %d of another frequency %s, %d partial, %s" % (
+                  status, good, len(off), off, edges, kinds))
     proc, output = launch("dinput64", extra="WINEDEBUG=-all,err+all,trace+dinput,trace+hid ")
     status = proc.wait()
     text = output.read_text(errors="replace") if output.exists() else ""
