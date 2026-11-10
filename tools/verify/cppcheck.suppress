@@ -100,6 +100,10 @@ unusedStructMember:*tests/drmcompatprobe.c
 # not set are the layout.
 unusedStructMember:*tests/mixprobe.c
 
+# The Direct3D 9 Wine probe's `struct vtx` is the vertex layout that
+# D3DFVF_XYZRHW | D3DFVF_DIFFUSE names, which DrawPrimitiveUP reads whole.
+unusedStructMember:*tests/system/games/d3d9probe.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 and x86-64 signal frames, statx, the rusage, the siginfo a wait
