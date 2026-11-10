@@ -254,7 +254,7 @@ stage_tree()
     git ls-files -z -c -o --exclude-standard | tr '\0' '\n' > "$STAGE/git"
     mkdir -p "$STAGE/build"
     git ls-files -z -c -o --exclude-standard -- Makefile CLAUDE.md AGENTS.md Readme.md \
-        tests tools mk utils krffs rach2 ish ports term vendor > "$STAGE/build/gnu-source-files"
+        tests tools mk utils krffs rach2 ish ports term vendor bed > "$STAGE/build/gnu-source-files"
     sh krffs/manifest_deps.sh "$MANIFEST" > "$STAGE/products" || :
     echo "$MANIFEST" >> "$STAGE/products"
     echo "$MUSL_CRYPT_SRC" >> "$STAGE/products"
