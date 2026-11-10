@@ -94,18 +94,21 @@ static uint64_t table_entry(uint64_t phys)
 }
 
 /**
- * A leaf for the frame at `phys`, 2 MiB for `large`, executable and
- * readable, writable for `writable`. A device's frame is uncached with the
- * guest's PAT in charge, so that the guest may make it write-combining; RAM
- * is write-back with the guest's PAT ignored, as Linux's vmx_get_mt_mask
- * gives a VM without a device that does not snoop.
+ * A leaf of `vm` for the frame at `phys`, 2 MiB for `large`, executable
+ * and readable, writable for `writable`, with the memory type of Linux's
+ * vmx_get_mt_mask: a device's frame is uncached with the guest's PAT in
+ * charge, so that the guest may make it write-combining; RAM is write-back
+ * with the guest's PAT ignored, or, while a device that does not snoop is
+ * assigned to the VM, write-back with the guest's PAT in charge, so that
+ * the guest's uncached buffers stay uncached for that device.
  */
-static uint64_t leaf_entry(uint64_t phys, int writable, int large, int device)
+static uint64_t leaf_entry(const struct kvm_vm *vm, uint64_t phys, int writable, int large,
+                           int device)
 {
     const struct kvm_tdp_format *f = fmt();
     uint64_t e = phys | f->read | f->exec | f->user | f->accessed;
 
-    e |= device ? f->cache(KVM_MT_UC, 0) : f->cache(KVM_MT_WB, 1);
+    e |= device ? f->cache(KVM_MT_UC, 0) : f->cache(KVM_MT_WB, vm->noncoherent == 0);
     if (writable) {
         e |= f->write | f->dirty;
     }
@@ -477,7 +480,7 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
         }
     }
     if (large_ok(mm, t, gfn, write, &s, &big)) {
-        return map(vm, t, gfn, 2, leaf_entry(big.phys, big.writable, 1, big.device));
+        return map(vm, t, gfn, 2, leaf_entry(vm, big.phys, big.writable, 1, big.device));
     }
     phys = PTE_ADDR(pte);
     writable = (pte & PTE_W) && !(s.flags & KVM_MEM_READONLY);
@@ -489,5 +492,22 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
             writable = 0;
         }
     }
-    return map(vm, t, gfn, 1, leaf_entry(phys, writable, 0, paging_frame_is_device(phys)));
+    return map(vm, t, gfn, 1, leaf_entry(vm, phys, writable, 0, paging_frame_is_device(phys)));
+}
+
+void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned)
+{
+    uint32_t before = vm->noncoherent;
+
+    if (assigned) {
+        vm->noncoherent++;
+    } else if (vm->noncoherent) {
+        vm->noncoherent--;
+    }
+    /* The first such device and the last one change every RAM leaf's
+     * type, so every leaf goes and the next fault makes it anew, as Linux's
+     * kvm_noncoherent_dma_assignment_start_or_stop zaps them. */
+    if ((before == 0) != (vm->noncoherent == 0)) {
+        kvm_tdp_zap(vm, 0, kvm_tdp_frames());
+    }
 }
