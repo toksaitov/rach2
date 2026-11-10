@@ -144,6 +144,25 @@ static void irqfd_update(struct irq_vm *iv, struct irqfd *f)
     spin_unlock_irqrestore(&iv->lock, flags);
 }
 
+static uint32_t events[KVM_EVENT_TOTAL];
+static struct spinlock events_lock;
+
+/** Count one event under a lock of its own, since an irqfd's runs with an
+ * eventfd's lock held and perhaps without the big lock. */
+void kvm_event_add(enum kvm_event event)
+{
+    uint32_t flags = spin_lock_irqsave(&events_lock);
+
+    events[event]++;
+    spin_unlock_irqrestore(&events_lock, flags);
+}
+
+/** Read an event's count. */
+uint32_t kvm_event_count(enum kvm_event event)
+{
+    return events[event];
+}
+
 /** The eventfd of the irqfd `h` rose: raise its GSI's route and take the
  * counter, as Linux's irqfd_wakeup. Runs with the eventfd's lock held and
  * interrupts off, perhaps without the big lock. */
@@ -168,6 +187,7 @@ static int irqfd_signal(struct eventfd_hook *h)
         }
     } else if (r.valid) {
         set_msi(f->vm, &r, 1);
+        kvm_event_add(KVM_EVENT_IRQFD);
     }
     return 1;
 }

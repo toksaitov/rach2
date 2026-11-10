@@ -215,6 +215,7 @@ int kvm_iobus_write(struct kvm_vcpu *v)
             return 0;
         }
         eventfd_signal(p->ev);
+        kvm_event_add(KVM_EVENT_IOEVENTFD);
         return 1;
     }
     /* A string OUT signals once for each element, as Linux's kernel_pio;
@@ -227,6 +228,7 @@ int kvm_iobus_write(struct kvm_vcpu *v)
             return i != 0;
         }
         eventfd_signal(p->ev);
+        kvm_event_add(KVM_EVENT_IOEVENTFD);
     }
     return 1;
 }
