@@ -2156,16 +2156,12 @@ struct out_fences {
 
 /**
  * Linux's setup_out_fence for CRTC `i` of `out`: reserve the descriptor,
- * write it where OUT_FENCE_PTR points, and make the sync file, named as
- * Linux's sync_file_get_name names a file given no name, all before the
- * commit, so that a commit that succeeds cannot then fail to give it. 0, or
+ * write it where OUT_FENCE_PTR points, and make the sync file, all before
+ * the commit, so that a commit that succeeds cannot then fail to give it. 0, or
  * -EMFILE, -EFAULT or -ENOMEM with nothing reserved or made.
  */
-static int32_t out_fence_setup(struct drm_crtc *crtc, struct out_fences *out, int i)
+static int32_t out_fence_setup(struct out_fences *out, int i)
 {
-    struct dma_fence *f = out->fence[i];
-    char name[32];
-    uint32_t at = 0;
     int32_t fd = fd_alloc(current_proc->fds);
 
     if (fd < 0) {
@@ -2175,13 +2171,7 @@ static int32_t out_fence_setup(struct drm_crtc *crtc, struct out_fences *out, in
         fd_free(current_proc->fds, fd);
         return -EFAULT;
     }
-    put_str(name, sizeof(name), &at, crtc->dev->driver->ident.name);
-    put_str(name, sizeof(name), &at, "-");
-    put_str(name, sizeof(name), &at, crtc_fence_timeline(f));
-    put_dec(name, sizeof(name), &at, f->context);
-    put_str(name, sizeof(name), &at, "-");
-    put_dec(name, sizeof(name), &at, f->seqno);
-    out->file[i] = sync_file_new(f, name);
+    out->file[i] = sync_file_new(out->fence[i], NULL);
     if (!out->file[i]) {
         fd_free(current_proc->fds, fd);
         return -ENOMEM;
@@ -2241,7 +2231,7 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
             cs->event->fence = fence;
             out->fence[i] = dma_fence_get(fence);
             out->ptr[i] = cs->out_fence_ptr;
-            rc = out_fence_setup(cs->crtc, out, i);
+            rc = out_fence_setup(out, i);
             if (rc != 0) {
                 return rc;
             }

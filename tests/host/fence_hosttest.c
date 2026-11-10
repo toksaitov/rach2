@@ -8,6 +8,7 @@
 #include "dmabuf/sw_sync.c"
 
 int printf(const char *format, ...);
+int snprintf(char *out, unsigned long size, const char *format, ...);
 
 struct percpu cpu_table[NR_CPUS];
 static process_t self;
@@ -434,6 +435,56 @@ static void buffer_answers(void)
     close_fd(&table, fd);
     dma_buf_put(b);
 }
+/** Whether two strings are equal. */
+static int same(const char *x, const char *y)
+{
+    while (*x && *x == *y) {
+        x++;
+        y++;
+    }
+    return *x == *y;
+}
+/** The name FILE_INFO reports of sync file `fd`. */
+static void name_of(int fd, char *out)
+{
+    struct sync_file_info info;
+    k_memset(&info, 0, sizeof(info));
+    CHECK(!sync_ioctl(fd_get(&table, fd), SYNC_IOC_FILE_INFO, (uintptr_t)&info), "file info");
+    k_memcpy(out, info.name, sizeof(info.name));
+}
+/** A sync file is named as Linux's sync_file_get_name names it: the
+ * user's name from MERGE, else "driver-timelineCONTEXT-SEQNO" of its
+ * fence, whatever name CREATE_FENCE was given. */
+static void name_cases(void)
+{
+    struct sw_sync_create_fence_data data;
+    struct sync_merge_data merge;
+    struct dma_fence *f;
+    fd_entry_t timeline;
+    char name[32], want[64];
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(!sw_sync_open(&timeline), "open software timeline");
+    k_memset(&data, 0, sizeof(data));
+    data.value = 5;
+    k_strncpy(data.name, "ignored", sizeof(data.name));
+    CHECK(!sw_ioctl(&timeline, SW_SYNC_IOC_CREATE_FENCE, (uintptr_t)&data), "a software fence");
+    f = sync_file_get_fence(data.fence);
+    snprintf(want, sizeof(want), "%s-%s%llu-%lld", f->ops->get_driver_name(f),
+             f->ops->get_timeline_name(f), (unsigned long long)f->context, (long long)f->seqno);
+    want[31] = 0;
+    name_of(data.fence, name);
+    CHECK(same(name, want), "named from its fence, not the caller's name");
+    k_memset(&merge, 0, sizeof(merge));
+    merge.fd2 = data.fence;
+    k_strncpy(merge.name, "joined", sizeof(merge.name));
+    CHECK(!sync_ioctl(fd_get(&table, data.fence), SYNC_IOC_MERGE, (uintptr_t)&merge), "merge");
+    name_of(merge.fence, name);
+    CHECK(same(name, "joined"), "a merge keeps the user's name");
+    close_fd(&table, merge.fence);
+    close_fd(&table, data.fence);
+    dma_fence_put(f);
+    sw_close(&timeline);
+}
 /** Run the model cases and fail on any assertion. */
 int main(void)
 {
@@ -449,6 +500,7 @@ int main(void)
     timeline_cases();
     copy_out_cases();
     buffer_answers();
+    name_cases();
     for (i = 0; i < 64; i++)
         CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");
     if (!failures)

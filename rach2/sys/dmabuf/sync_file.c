@@ -4,11 +4,12 @@
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../timer.h"
 
 struct sync_file {
     struct anon_obj anon;
     struct dma_fence *fence;
-    char name[32];
+    char name[32]; /* the user's, from MERGE; empty for one made from the fence */
 };
 
 /** Poll a sync file through its fence's own completion wait queue. */
@@ -35,6 +36,55 @@ static void sync_name(char *out, const char *name)
 {
     k_strncpy(out, name ? name : "", 32);
     out[31] = 0;
+}
+
+/** Append `src` to the 32 bytes at `out` from `*at`, cut to fit. */
+static void name_put(char *out, uint32_t *at, const char *src)
+{
+    while (*src && *at < 31)
+        out[(*at)++] = *src++;
+    out[*at] = 0;
+}
+
+/** Append the decimal `v` to the 32 bytes at `out` from `*at`, as a signed
+ * number when `sign`. */
+static void name_dec(char *out, uint32_t *at, uint64_t v, int sign)
+{
+    char digits[21];
+    uint32_t rem;
+    int n = 0;
+    if (sign && (int64_t)v < 0) {
+        name_put(out, at, "-");
+        v = 0 - v;
+    }
+    do {
+        v = tick_div(v, 10, &rem);
+        digits[n++] = (char)('0' + rem);
+    } while (v);
+    while (n > 0 && *at < 31)
+        out[(*at)++] = digits[--n];
+    out[*at] = 0;
+}
+
+/** The name FILE_INFO reports, Linux's sync_file_get_name: the user's from
+ * MERGE, else the fence's driver and timeline, its context and its number,
+ * as "%s-%s%llu-%lld". */
+static void file_name(const struct sync_file *s, char *out)
+{
+    struct dma_fence *f = s->fence;
+    uint32_t at = 0;
+    if (s->name[0]) {
+        sync_name(out, s->name);
+        return;
+    }
+    out[0] = 0;
+    name_put(out, &at, f->ops && f->ops->get_driver_name ? f->ops->get_driver_name(f) : "rach2");
+    name_put(out, &at, "-");
+    name_put(out, &at,
+             f->ops && f->ops->get_timeline_name ? f->ops->get_timeline_name(f) : "dma_fence");
+    name_dec(out, &at, f->context, 0);
+    name_put(out, &at, "-");
+    name_dec(out, &at, f->seqno, 1);
 }
 
 /**
@@ -89,7 +139,7 @@ static int32_t sync_info(struct sync_file *s, uintptr_t arg)
         if (rc)
             return rc;
     }
-    sync_name(info.name, s->name);
+    file_name(s, info.name);
     info.num_fences = n;
     return copy_to_user((void __user *)arg, &info, sizeof(info)) ? -EFAULT : 0;
 }
@@ -151,7 +201,7 @@ struct sync_file *sync_file_new(struct dma_fence *f, const char *name)
         return NULL;
     s->anon.name = "sync_file";
     s->fence = dma_fence_get(f);
-    sync_name(s->name, name ? name : "dma_fence");
+    sync_name(s->name, name);
     return s;
 }
 

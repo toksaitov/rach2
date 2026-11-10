@@ -83,8 +83,10 @@ int64_t dma_fence_now(void);
  * Return its descriptor or -errno. name may be NULL. */
 int32_t sync_file_create(struct dma_fence *fence, const char *name);
 struct sync_file;
-/** A sync file of `fence` with a reference of its own, named `name` (NULL:
- * "dma_fence"), that no descriptor holds yet; NULL for no memory. */
+/** A sync file of `fence` with a reference of its own, that no descriptor
+ * holds yet; NULL for no memory. `name` is the user's name for it, which
+ * only MERGE gives; NULL or empty names it from its fence, as Linux's
+ * sync_file_get_name. */
 struct sync_file *sync_file_new(struct dma_fence *fence, const char *name);
 /** Free `s`, made by sync_file_new and never attached, and its fence
  * reference; nothing for NULL. */
