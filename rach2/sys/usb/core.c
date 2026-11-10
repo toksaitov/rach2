@@ -243,10 +243,13 @@ struct usb_device_state {
     /* A HID device's output report, its LEDs or a Feature report, is out on
      * its control endpoint for interface `output_if`, and the `core_ms` by
      * which it must have completed; `output_next` is the interface offered
-     * the next turn, so that each has one. */
+     * the next turn, so that each has one. `output_quiesce` is set when one
+     * failed or timed out: the control endpoint is being quiesced, and no
+     * output goes out, nor is its buffer touched, until that has ended. */
     int output_out;
     int output_if;
     int output_next;
+    int output_quiesce;
     uint32_t output_deadline;
     /* A HID device: its interfaces, a frame of their own, NULL on another
      * kind; the interface whose endpoint is being opened, being set up, or,
@@ -1161,6 +1164,35 @@ static int output_offer(struct usb_device_state *d, int k)
 }
 
 /**
+ * Quiesce the control endpoint of the HID device `d` after an output report
+ * failed or timed out (`output_quiesce`), on the core's command turn: a
+ * stall or a transaction error leaves the endpoint halted, and a report
+ * never answered leaves its transfer on the ring, reading a buffer the next
+ * report would reuse or free. Returns 1 once the endpoint is usable again,
+ * its transfers retired and any completion that came meanwhile dropped; 0
+ * while the quiesce runs; -1 when it would not, and `d` has failed.
+ */
+static int output_quiesce_step(struct usb_device_state *d)
+{
+    int answer;
+
+    if (!d->output_quiesce) {
+        return 1;
+    }
+    answer = usb_core_endpoint_quiesce(d->hc, d->slot, 1);
+    if (answer == 0) {
+        return 0;
+    }
+    d->output_quiesce = 0;
+    d->have_control = 0;
+    if (answer < 0) {
+        fail(d, "its control endpoint would not reset after a failed output report");
+        return -1;
+    }
+    return 1;
+}
+
+/**
  * Send the running HID device `d` the output reports its driver has for its
  * interfaces, one report at a time on its control endpoint, the next only
  * after the last has completed, so a keyboard connected later or a change
@@ -1168,9 +1200,10 @@ static int output_offer(struct usb_device_state *d, int k)
  * from `output_next`, so that one with a report always ready does not hold
  * the others back. The completion is the control endpoint's, which nothing
  * else uses on a running device. A report that fails or has not completed in
- * STEP_MS is told to the driver as failed: a stall leaves the control
- * endpoint halted, and a keyboard without LEDs may refuse the request for
- * good.
+ * STEP_MS is told to the driver as failed, and the control endpoint, which
+ * every interface's reports share, is quiesced before another goes out
+ * (`output_quiesce_step`); a keyboard without LEDs may refuse the request
+ * for good. `d` may have failed on return.
  */
 static void output_step(struct usb_device_state *d)
 {
@@ -1180,14 +1213,21 @@ static void output_step(struct usb_device_state *d)
         d->have_control = 0;
         if (d->output_out) {
             d->output_out = 0;
+            if (d->control.status != USB_XFER_OK) {
+                d->output_quiesce = 1;
+            }
             hid_output_sent(d->index + 1, d->output_if, d->control.status == USB_XFER_OK);
         }
     }
     if (d->output_out) {
         if ((int32_t)(core_ms - d->output_deadline) >= 0) {
             d->output_out = 0;
+            d->output_quiesce = 1;
             hid_output_sent(d->index + 1, d->output_if, 0);
         }
+        return;
+    }
+    if (output_quiesce_step(d) <= 0) {
         return;
     }
     for (n = 0; n < d->hid->count; n++) {
@@ -1284,6 +1324,9 @@ static void step_running(struct usb_device_state *d)
     }
 
     output_step(d);
+    if (d->state != ST_RUNNING) {
+        return;
+    }
 
     for (k = 0; k < d->hid->count; k++) {
         if (d->hid->at[k].live && !d->hid->at[k].reporting) {
@@ -1307,6 +1350,7 @@ static void start_running(struct usb_device_state *d)
     d->state = ST_RUNNING;
     d->output_out = 0;
     d->output_next = 0;
+    d->output_quiesce = 0;
     enumerating[bus_of(d)] = -1;
     klog(KLOG_INFO, "usb",
          "device: port %s: %x:%x, class %d protocol %d, endpoint %d, HID interfaces %d of %d%s",
@@ -1643,12 +1687,17 @@ static void ep0reset_step(struct usb_device_state *d)
 /**
  * The step of ST_HALTED: quiesce the halted report endpoint of `d`'s
  * interface `hid_if`, and run again once it is usable, or fail the device
- * when it will not be.
+ * when it will not be. A quiesce of the control endpoint that a failed
+ * output report began ends first, since a device has one quiesce at a time.
  */
 static void halted_step(struct usb_device_state *d)
 {
-    int answer = usb_core_endpoint_quiesce(d->hc, d->slot, d->hid->at[d->hid_if].ep_dci);
+    int answer;
 
+    if (output_quiesce_step(d) <= 0) {
+        return;
+    }
+    answer = usb_core_endpoint_quiesce(d->hc, d->slot, d->hid->at[d->hid_if].ep_dci);
     if (answer == 0) {
         return;
     }
