@@ -1,0 +1,4 @@
+webgl: result: firefox 1.0.4 chunk 0 of 4 pages 250 pass 244 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 5 rerun 1 subtests passed 18691 failed 4
+webgl: result: firefox 1.0.4 chunk 1 of 4 pages 250 pass 248 fail 2 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 2 subtests passed 8585 failed 4
+webgl: result: firefox 1.0.4 chunk 2 of 4 pages 250 pass 247 fail 3 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 3 subtests passed 21559 failed 57
+webgl: result: firefox 1.0.4 chunk 3 of 4 pages 221 pass 218 fail 3 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 3 subtests passed 211963 failed 6

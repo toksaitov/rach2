@@ -1,0 +1,103 @@
+runner webgl
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 8
+memory_kib 8136944
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.16 0.03 0.01
+processes start 200
+kernel_before cpu  95 0 399 3249 177 0 28 0 0 0
+kernel_before cpu0 12 0 100 356 11 0 19 0 0 0
+kernel_before cpu1 32 0 39 394 23 0 4 0 0 0
+kernel_before cpu2 4 0 38 420 30 0 2 0 0 0
+kernel_before cpu3 5 0 45 428 17 0 1 0 0 0
+kernel_before cpu4 8 0 59 399 24 0 0 0 0 0
+kernel_before cpu5 15 0 51 394 22 0 0 0 0 0
+kernel_before cpu6 9 0 29 437 15 0 0 0 0 0
+kernel_before cpu7 8 0 35 418 29 0 0 0 0 0
+kernel_before intr 86789 24 9 0 0 394 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 864 587 0 335 485 234 432 404 430 251 174 0 0 5 0 70 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 31447
+kernel_before btime 1794350365
+kernel_before processes 839
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 11936 0 720 5 1245 0 0 17 2164 0 7785
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=8
+env GRAPHICS_MEMORY_KIB=8136944
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case webgl chromium 2.0.1 chunk 9 of 250 pages
+warmup 0
+repetitions 1, and each page that does not pass once more
+suite /tmp/webgl
+omitted conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-float.html
+browser Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
+switches --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-gpu-blocklist --disable-gpu-process-crash-limit --js-flags=--expose-gc --disable-background-timer-throttling --disable-renderer-backgrounding --disable-background-networking --disable-hang-monitor --autoplay-policy=no-user-gesture-required
+compositor weston 14.0.2 headless gl kiosk no-config
+list 2.0.1 2865 pages sha256 9d7bddb435701ca417201b55f82c6b9f88933fbd175a3b346ddc4165917a380b
+renderer webgl WebKit WebGL; WebGL 1.0 (OpenGL ES 2.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
+renderer webgl2 WebKit WebGL; WebGL 2.0 (OpenGL ES 3.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
+list fetches failed 1
+load end 0.20 0.19 0.09
+busy 5.9%
+kernel_after cpu  5262 0 7370 228901 288 0 1940 14 0 0
+kernel_after cpu0 663 0 1088 28431 29 0 1239 1 0 0
+kernel_after cpu1 711 0 990 28517 35 0 406 1 0 0
+kernel_after cpu2 685 0 867 28627 58 0 153 1 0 0
+kernel_after cpu3 632 0 889 28676 26 0 65 1 0 0
+kernel_after cpu4 643 0 850 28686 43 0 33 1 0 0
+kernel_after cpu5 712 0 907 28598 34 0 19 1 0 0
+kernel_after cpu6 690 0 946 28548 25 0 15 1 0 0
+kernel_after cpu7 522 0 830 28815 35 0 7 1 0 0
+kernel_after intr 1847293 24 9 0 0 397 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 4486 3361 0 1014 702 1692 647 1626 1081 451 317 0 0 16 0 123342 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 2819398
+kernel_after btime 1794350366
+kernel_after processes 4968
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 374262 0 30428 9 28897 0 0 19 137954 0 176955
+guest profile virgl
+guest firmware seabios
+guest accelerator kvm
+guest cpu host,invtsc=on
+guest cpus 8
+guest memory_mib 8192
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-m:3303343:1794350362
+guest host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+guest host_load 0.74 1.36 2.24
+guest host_claims 1
+guest host_ledger etude-ledger 1
+guest host_ledger claim debian-ref:toksaitov-m:3303343:1794350362
+guest host_ledger system linux
+guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+guest host_ledger owner 3303343 8127104 1
+guest host_ledger account toksaitov-m
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 3303634 8127147 1
+guest host_ledger process case 3303635 8127147 1
+guest host_ledger end
+guest env GRAPHICS_CLASS=conformance
+guest env GRAPHICS_CPUS=8
+guest env GRAPHICS_MEMORY_KIB=8136944
+guest env LP_NUM_THREADS=0
+guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+guest env MESA_SHADER_CACHE_FILES=0
+guest env GRAPHICS_DONE=1
+guest env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 0.84 1.26 1.97
+host_claims 0
+host_ledger etude-ledger 1

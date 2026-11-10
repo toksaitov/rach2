@@ -1,0 +1,12 @@
+webgl: result: chromium 2.0.1 chunk 0 of 12 pages 250 pass 249 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 1 subtests passed 26585 failed 2
+webgl: result: chromium 2.0.1 chunk 1 of 12 pages 250 pass 249 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 1 subtests passed 8782 failed 2
+webgl: result: chromium 2.0.1 chunk 2 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 43484 failed 0
+webgl: result: chromium 2.0.1 chunk 3 of 12 pages 250 pass 201 fail 49 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 49 subtests passed 226654176 failed 1367
+webgl: result: chromium 2.0.1 chunk 4 of 12 pages 250 pass 132 fail 118 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 118 subtests passed 463732567 failed 2339
+webgl: result: chromium 2.0.1 chunk 5 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 87787123 failed 0
+webgl: result: chromium 2.0.1 chunk 6 of 12 pages 250 pass 224 fail 26 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 26 subtests passed 391608951 failed 948
+webgl: result: chromium 2.0.1 chunk 7 of 12 pages 250 pass 246 fail 4 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 4 subtests passed 45210 failed 147
+webgl: result: chromium 2.0.1 chunk 8 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 92252 failed 0
+webgl: result: chromium 2.0.1 chunk 9 of 12 pages 250 pass 246 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 4 rerun 0 subtests passed 55741 failed 0
+webgl: result: chromium 2.0.1 chunk 10 of 12 pages 250 pass 234 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 16 rerun 0 subtests passed 70714 failed 0
+webgl: result: chromium 2.0.1 chunk 11 of 12 pages 115 pass 110 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 5 rerun 0 subtests passed 15977 failed 0
