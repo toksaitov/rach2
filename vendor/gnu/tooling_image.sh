@@ -258,7 +258,7 @@ stage_tree()
     sh krffs/manifest_deps.sh "$MANIFEST" > "$STAGE/products" || :
     echo "$MANIFEST" >> "$STAGE/products"
     echo "$MUSL_CRYPT_SRC" >> "$STAGE/products"
-    if [ "${GNU_TEST_PRODUCTS:-}" = 1 ] && [ "$RACH2_ARCH" = x86_64 ]; then
+    if [ "$(basename "$OUT")" = gnu-host-checks.tar ]; then
         echo build/tests/host/exfat_writer >> "$STAGE/products"
         find build/tests/host-suite/tools/exfat_external -type f >> "$STAGE/products"
     fi
