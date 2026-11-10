@@ -94,7 +94,8 @@ uint32_t tsc_counts_per_tick(void);
 /*
  * The wait `k_udelay` makes instead of counting channel 0, or NULL to count
  * it: set by the platform on a machine with no 8254, where it is the HPET's
- * or the PM timer's (refclock.c). Defined in udelay.c.
+ * or the PM timer's (refclock.c), and by pit.c to the TSC's once the TSC
+ * keeps the clock. Defined in udelay.c.
  */
 extern void (*udelay_wait)(uint32_t usec);
 
