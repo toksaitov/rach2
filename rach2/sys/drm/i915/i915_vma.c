@@ -27,20 +27,68 @@ static uint64_t align_up(uint64_t v, uint64_t align)
     return r < v ? ~(uint64_t)0 : r;
 }
 
-/**
- * The first range of the GTT below `hi` of `size` bytes aligned to `align`
- * that no binding, no kept surface of the firmware's and none of the GT's
- * own objects touches, the lowest, or with I915_PIN_HIGH the highest, into
- * `*at`: 0, or -ENOSPC. A range in the way moves the candidate past it and
- * starts the search again.
- */
-static int32_t ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t hi,
-                         uint32_t flags, uint64_t *at)
+/** Whether [start, start + size) meets a kept surface of the firmware's;
+ * if so, its range in `*a` and `*b`. */
+static int kept_hit(const struct i915_ggtt *ggtt, uint64_t start, uint64_t size, uint64_t *a,
+                    uint64_t *b)
 {
-    const struct i915_ggtt *ggtt = &i915->ggtt;
+    int i;
+
+    for (i = 0; i < ggtt->nkept; i++) {
+        if (ggtt->kept[i].start < start + size && start < ggtt->kept[i].end) {
+            *a = ggtt->kept[i].start;
+            *b = ggtt->kept[i].end;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The highest range for `i915_ggtt_find`: a candidate below `hi` moves
+ * below whatever it meets, and the search starts again.
+ */
+static int32_t ggtt_find_high(struct drm_i915_private *i915, uint64_t size, uint64_t align,
+                              uint64_t hi, uint64_t *at)
+{
     struct i915_vma *v;
-    uint64_t start;
-    int i, moved = 1;
+    uint64_t start = (hi - size) & ~(align - 1);
+    int moved = 1;
+
+    while (moved) {
+        uint64_t a = 0, b = 0;
+        int hit = 0;
+
+        moved = 0;
+        for (v = i915->gem.bound; v && !hit; v = v->ggtt_next) {
+            if (!v->evict && v->start < start + size && start < v->start + v->node_size) {
+                a = v->start;
+                hit = 1;
+            }
+        }
+        if (!hit) {
+            hit = kept_hit(&i915->ggtt, start, size, &a, &b);
+        }
+        if (hit) {
+            if (a < size) {
+                return -ENOSPC;
+            }
+            start = (a - size) & ~(align - 1);
+            moved = 1;
+        }
+    }
+    *at = start;
+    return 0;
+}
+
+/* The lowest range is found in one pass over the bindings, which lie by
+ * offset and never overlap: a binding that ends at or before the candidate
+ * stays behind it however far it moves. */
+int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t hi,
+                       uint32_t flags, uint64_t *at)
+{
+    struct i915_vma *v = i915->gem.bound;
+    uint64_t start = 0, a, b;
 
     if (hi > i915->gt.ggtt_bottom) {
         hi = i915->gt.ggtt_bottom;
@@ -48,39 +96,22 @@ static int32_t ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t 
     if (size == 0 || size > hi) {
         return -ENOSPC;
     }
-    start = (flags & I915_PIN_HIGH) ? (hi - size) & ~(align - 1) : 0;
-    while (moved) {
-        uint64_t a = 0, b = 0;
-        int hit = 0;
-
-        moved = 0;
+    if (flags & I915_PIN_HIGH) {
+        return ggtt_find_high(i915, size, align, hi, at);
+    }
+    for (;;) {
         if (start > hi || size > hi - start) {
             return -ENOSPC;
         }
-        for (v = i915->gem.bound; v && !hit; v = v->ggtt_next) {
-            if (v->start < start + size && start < v->start + v->node_size) {
-                a = v->start;
-                b = v->start + v->node_size;
-                hit = 1;
-            }
+        while (v && (v->evict || v->start + v->node_size <= start)) {
+            v = v->ggtt_next;
         }
-        for (i = 0; i < ggtt->nkept && !hit; i++) {
-            if (ggtt->kept[i].start < start + size && start < ggtt->kept[i].end) {
-                a = ggtt->kept[i].start;
-                b = ggtt->kept[i].end;
-                hit = 1;
-            }
-        }
-        if (hit) {
-            if (flags & I915_PIN_HIGH) {
-                if (a < size) {
-                    return -ENOSPC;
-                }
-                start = (a - size) & ~(align - 1);
-            } else {
-                start = align_up(b, align);
-            }
-            moved = 1;
+        if (v && v->start < start + size) {
+            start = align_up(v->start + v->node_size, align);
+        } else if (kept_hit(&i915->ggtt, start, size, &a, &b)) {
+            start = align_up(b, align);
+        } else {
+            break;
         }
     }
     *at = start;
@@ -112,6 +143,39 @@ static void ggtt_unlink(struct drm_i915_private *i915, struct i915_vma *vma)
     }
 }
 
+/** Take `vma` off the list by last use. */
+static void lru_unlink(struct drm_i915_private *i915, struct i915_vma *vma)
+{
+    if (vma->lru_prev) {
+        vma->lru_prev->lru_next = vma->lru_next;
+    } else if (i915->gem.lru_head == vma) {
+        i915->gem.lru_head = vma->lru_next;
+    }
+    if (vma->lru_next) {
+        vma->lru_next->lru_prev = vma->lru_prev;
+    } else if (i915->gem.lru_tail == vma) {
+        i915->gem.lru_tail = vma->lru_prev;
+    }
+    vma->lru_prev = vma->lru_next = 0;
+}
+
+/** Make `vma` the most recently used binding, at the list's tail, as
+ * Linux moves a binding it uses to the tail of its bound list. */
+static void lru_bump(struct drm_i915_private *i915, struct i915_vma *vma)
+{
+    if (i915->gem.lru_tail == vma) {
+        return;
+    }
+    lru_unlink(i915, vma);
+    vma->lru_prev = i915->gem.lru_tail;
+    if (i915->gem.lru_tail) {
+        i915->gem.lru_tail->lru_next = vma;
+    } else {
+        i915->gem.lru_head = vma;
+    }
+    i915->gem.lru_tail = vma;
+}
+
 /**
  * Find room for `size` bytes aligned to `align` inside the aperture with
  * I915_PIN_MAPPABLE, anywhere in the GTT without, making room by eviction
@@ -121,12 +185,12 @@ static int32_t ggtt_room(struct drm_i915_private *i915, uint64_t size, uint64_t 
                          uint32_t flags, uint64_t *at)
 {
     uint64_t hi = (flags & I915_PIN_MAPPABLE) ? i915->ggtt.mappable_end : i915->ggtt.total;
-    int32_t err = ggtt_find(i915, size, align, hi, flags, at);
+    int32_t err = i915_ggtt_find(i915, size, align, hi, flags, at);
 
     if (err == -ENOSPC && !(flags & I915_PIN_NOEVICT)) {
-        err = i915_gem_evict_something(i915, size, align, 0, hi);
+        err = i915_gem_evict_something(i915, size, align, 0, hi, flags);
         if (err == 0) {
-            err = ggtt_find(i915, size, align, hi, flags, at);
+            err = i915_ggtt_find(i915, size, align, hi, flags, at);
         }
     }
     return err;
@@ -235,6 +299,38 @@ static struct i915_vma *vma_lookup(struct drm_i915_gem_object *obj, uint32_t vie
     return 0;
 }
 
+/**
+ * The binding of the view that `i915_vma_pin` may reuse, in `*out`, or NULL
+ * once a binding that does not serve is undone: one on the scratch page
+ * since a userptr object's pages changed, one outside the aperture when it
+ * is asked for, or one not aligned to `align`. 0; -EAGAIN when the first
+ * kind is held, -ENOSPC when another is.
+ */
+static int32_t vma_existing(struct drm_i915_gem_object *obj, uint32_t view_offset,
+                            uint32_t view_pages, uint32_t flags, uint32_t align,
+                            struct i915_vma **out)
+{
+    struct i915_vma *vma = vma_lookup(obj, view_offset, view_pages);
+    int32_t err;
+
+    *out = 0;
+    if (!vma) {
+        return 0;
+    }
+    if (obj->userptr.stale) {
+        /* Its entries map the scratch page since the program's pages
+         * changed: undone, and bound again on new frames, unless held. */
+        return i915_vma_unbind(vma) == 0 ? 0 : -EAGAIN;
+    }
+    if (((flags & I915_PIN_MAPPABLE) && !vma->mappable) || (vma->start & (align - 1))) {
+        /* Misplaced, as Linux's i915_vma_misplaced: moved, unless held. */
+        err = i915_vma_unbind(vma);
+        return err == -EAGAIN ? -ENOSPC : err;
+    }
+    *out = vma;
+    return 0;
+}
+
 int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
                      uint32_t flags, uint32_t align, struct i915_vma **out)
 {
@@ -250,24 +346,13 @@ int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint
     if (align < I915_GTT_PAGE_SIZE) {
         align = I915_GTT_PAGE_SIZE;
     }
-    vma = vma_lookup(obj, view_offset, view_pages);
-    if (vma && ((flags & I915_PIN_MAPPABLE) && !vma->mappable)) {
-        /* Misplaced, as Linux's i915_vma_misplaced: moved, unless held. */
-        err = i915_vma_unbind(vma);
-        if (err != 0) {
-            return err == -EAGAIN ? -ENOSPC : err;
-        }
-        vma = 0;
-    }
-    if (vma && (vma->start & (align - 1))) {
-        err = i915_vma_unbind(vma);
-        if (err != 0) {
-            return err == -EAGAIN ? -ENOSPC : err;
-        }
-        vma = 0;
+    err = vma_existing(obj, view_offset, view_pages, flags, align, &vma);
+    if (err != 0) {
+        return err;
     }
     if (vma) {
         vma->pin_count++;
+        lru_bump(i915, vma);
         *out = vma;
         return 0;
     }
@@ -309,6 +394,7 @@ int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint
     vma->obj_next = obj->vmas;
     obj->vmas = vma;
     ggtt_link(i915, vma);
+    lru_bump(i915, vma);
     *out = vma;
     return 0;
 }
@@ -317,6 +403,11 @@ void i915_vma_unpin(struct i915_vma *vma)
 {
     if (vma->pin_count) {
         vma->pin_count--;
+        if (vma->pin_count == 0 && vma->obj && vma->obj->userptr.stale) {
+            /* It maps the scratch page since the program's pages changed;
+             * with it go the old frames. */
+            (void)i915_vma_unbind(vma);
+        }
     }
 }
 
@@ -364,6 +455,7 @@ int32_t i915_vma_unbind(struct i915_vma *vma)
     (void)i915_ggtt_clear_range(i915, vma->start, vma->node_size);
     i915_gem_object_unpin_pages(obj);
     ggtt_unlink(i915, vma);
+    lru_unlink(i915, vma);
     for (link = &obj->vmas; *link; link = &(*link)->obj_next) {
         if (*link == vma) {
             *link = vma->obj_next;

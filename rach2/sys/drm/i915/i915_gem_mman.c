@@ -58,8 +58,9 @@ int32_t i915_gem_object_mmap_cpu(struct drm_gem_object *base, vma_t *vma)
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
 
     /* As Linux's i915_gem_dmabuf_mmap, the object's pages write-back. An
-     * import's are another device's. */
-    if (obj->base.import) {
+     * import's are another device's, and a userptr object's the
+     * program's own. */
+    if (obj->base.import || i915_gem_object_is_userptr(obj)) {
         return -ENODEV;
     }
     return vm_device_map(vma, &cpu_vm_ops, &obj->mmo[I915_MMAP_OFFSET_WB], 0u);
@@ -99,8 +100,8 @@ static int32_t gtt_fault_pin(struct drm_i915_gem_object *obj, uint32_t pgoff, st
  * The `page` of a GTT map, as Linux's vm_fault_gtt: the object bound inside
  * the aperture and fenced for its tiling, and the aperture's page mapped,
  * the binding marked as mapped by programs so that unbinding it or moving
- * its fence revokes the mapping. A failure, no room in the aperture or no
- * fence free among them, raises SIGBUS, where Linux evicts and retries.
+ * its fence revokes the mapping. A partial view evicts idle bindings for
+ * its room; a failure, no room even so or no fence free, raises SIGBUS.
  */
 static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
 {
@@ -176,8 +177,9 @@ int32_t i915_gem_mmo_mmap(struct drm_mmap_node *node, vma_t *vma)
  * offset in the device's mmap space for a mapping of the kind `flags`
  * names. EINVAL for another kind or for an extension, which none is
  * defined, EFAULT for one that cannot be read; ENODEV for write-combining
- * and uncached without PAT, for FIXED, which only discrete parts have, and
- * for a mapping of an import's pages, which are another device's; ENOENT
+ * and uncached without PAT, for FIXED, which only discrete parts have, for
+ * a mapping of an import's pages, which are another device's, and for any
+ * mapping of a userptr object, whose pages the program maps already; ENOENT
  * for no such object; ENOSPC when the mmap space is full. `pad` is not
  * read, as Linux has never refused it.
  */
@@ -219,7 +221,7 @@ int32_t i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data, struct dr
     if (!obj) {
         return -ENOENT;
     }
-    if (args->flags == I915_MMAP_OFFSET_FIXED ||
+    if (args->flags == I915_MMAP_OFFSET_FIXED || i915_gem_object_is_userptr(obj) ||
         (args->flags != I915_MMAP_OFFSET_GTT && obj->base.import)) {
         err = -ENODEV;
     } else {

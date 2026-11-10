@@ -372,7 +372,9 @@ struct drm_gem_object_funcs {
  * `dma_buf` is the dma-buf exported of it, kept so that a second export
  * and a self-import find it again; the dma-buf holds a reference on the
  * object, not the other way. `import` is the dma-buf it was made from,
- * held. `resv` is its implicit fences, or its import's.
+ * held. `resv` is its implicit fences, or its import's. `no_export` is set
+ * by a driver whose object PRIME may not export, which then answers
+ * EINVAL, as Linux's i915 refuses its userptr objects.
  */
 struct drm_gem_object {
     uint32_t refs;
@@ -385,8 +387,9 @@ struct drm_gem_object {
     struct dma_resv *resv;
     struct dma_resv resv_own;
     const struct drm_gem_object_funcs *funcs;
-    int map_wc;                       /* PRIME mappings use write-combining */
-    uint32_t handle_count;            /* handles any file has to it */
+    int map_wc;            /* PRIME mappings use write-combining */
+    uint32_t handle_count; /* handles any file has to it */
+    uint8_t no_export;
     struct drm_gem_object *dev_next;  /* the device's objects */
     struct drm_gem_object *mmap_next; /* the device's objects with an offset, by offset */
 };

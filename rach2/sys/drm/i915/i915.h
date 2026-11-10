@@ -6,6 +6,8 @@
 #define _I915_H_
 
 #include "../drm.h"
+#include "../../mm/notify.h"
+#include "../../mm/pressure.h"
 #include "../../mm/shmem.h"
 #include "../../fs/sysfs.h"
 #include "../../lib/spinlock.h"
@@ -402,7 +404,10 @@ struct i915_fence_reg {
  * `fence_alignment` what a fence needs of it for the object's tiling.
  * `userfault` is set while programs map it through the aperture, and
  * `ggtt_write` while writes through the aperture may not have reached
- * memory.
+ * memory. `evict` is set while an eviction's scan counts its space as free
+ * (i915_gem_evict.c). A binding of an object is on the device's list by
+ * last use, `lru_prev` and `lru_next`, the least recent first; a range the
+ * kernel reserved is on none.
  */
 struct i915_vma {
     struct drm_i915_gem_object *obj;
@@ -419,8 +424,11 @@ struct i915_vma {
     uint8_t cache;
     uint8_t userfault;
     uint8_t ggtt_write;
+    uint8_t evict;
     struct i915_vma *obj_next;  /* the object's bindings */
     struct i915_vma *ggtt_next; /* the GTT's, by offset */
+    struct i915_vma *lru_prev;
+    struct i915_vma *lru_next;
 };
 
 /* What the object's caching makes coherent between the processor and the
@@ -429,12 +437,27 @@ struct i915_vma {
 #define I915_BO_CACHE_COHERENT_FOR_WRITE 0x2u
 
 /*
+ * The part of an object of GEM_USERPTR (i915_gem_userptr.c): `ptr` is the
+ * first byte of the program's memory it stands for, never 0, and `range`
+ * is registered on that address space from the object's making, so that a
+ * change to the pages there revokes the object's bindings and drops the
+ * frames it pinned. `stale` is set when that happened while a binding was
+ * pinned, whose frames go with its last pin, which undoes the binding.
+ */
+struct i915_userptr {
+    uintptr_t ptr;
+    struct mmn_range range;
+    uint8_t stale;
+};
+
+/*
  * An object, Linux's drm_i915_gem_object. Its pages are a shmem table,
  * given as they are first touched, or, for an import, the pages of the
- * dma-buf `base.import`. While anything needs them where the GPU reads,
- * `pages_pin_count` is above 0 and `frames` holds each page's physical
- * address, the object's own pinned through `pin` (sys/mm/pin.h); the
- * array stays until the object goes.
+ * dma-buf `base.import`, or, for a userptr object, a program's. While
+ * anything needs them where the GPU reads, `pages_pin_count` is above 0 and
+ * `frames` holds each page's physical address, the object's own pinned
+ * through `pin` (sys/mm/pin.h); the array stays until the object goes, is
+ * purged, or, for a userptr object, until the program's pages change.
  *
  * `cache_level` is the I915_CACHE_ level its GTT entries take, and
  * `cache_coherent` what that leaves coherent; `cache_dirty` is set when
@@ -443,7 +466,9 @@ struct i915_vma {
  * last moved to (SET_DOMAIN). `tiling` and `stride` are its layout
  * (SET_TILING), `vmas` its bindings, `mmo` its mmap offsets by kind, and
  * `userfault_count` how many of its bindings programs map through the
- * aperture. The device's list of objects holds it (`base.dev_next`).
+ * aperture. `madv` is the I915_MADV_ state of its pages: WILLNEED, or
+ * DONTNEED when reclaim may purge them, or __I915_MADV_PURGED once it did.
+ * The device's list of objects holds it (`base.dev_next`).
  */
 struct drm_i915_gem_object {
     struct drm_gem_object base;
@@ -461,7 +486,12 @@ struct drm_i915_gem_object {
     struct i915_vma *vmas;
     struct i915_mmap_offset mmo[I915_MMAP_TYPES];
     uint32_t userfault_count;
+    uint8_t madv;
+    struct i915_userptr userptr;
 };
+
+/* Whether `obj` was made by GEM_USERPTR. */
+#define i915_gem_object_is_userptr(obj) ((obj)->userptr.ptr != 0)
 
 /*
  * A fence of the driver's own, which work on one of its engines signals:
@@ -475,6 +505,13 @@ struct i915_fence {
 
 extern const struct dma_fence_ops i915_fence_ops;
 
+/* The device's shrinker: reclaim's record first, so that reclaim's
+ * pointer is this one's, and the device it purges. */
+struct i915_shrinker {
+    struct mem_shrinker base;
+    struct drm_i915_private *i915;
+};
+
 /*
  * The device's buffer state (i915_gem.c, i915_vma.c, i915_gem_tiling.c).
  * `bound` lists the bindings by GTT offset. `fences` are the fence
@@ -482,10 +519,19 @@ extern const struct dma_fence_ops i915_fence_ops;
  * `swizzle_y` are the swizzles of bit 6 the memory controller gives X and
  * Y tiles (I915_BIT_6_SWIZZLE_): none, 9 or 9/10 on Haswell, whose
  * controller never swizzles by bit 17. `aperture` reaches the aperture for
- * the kernel's own accesses.
+ * the kernel's own accesses. `lru_head` and `lru_tail` are the ends of
+ * the list of the objects' bindings by last use. `shrinker` is what
+ * reclaim calls to purge objects (i915_gem_shrinker.c); `evictions`
+ * counts the bindings eviction undid and `purged` the objects reclaim
+ * purged.
  */
 struct i915_gem {
     struct i915_vma *bound;
+    struct i915_vma *lru_head;
+    struct i915_vma *lru_tail;
+    struct i915_shrinker shrinker;
+    uint32_t evictions;
+    uint32_t purged;
     struct i915_fence_reg fences[I915_NUM_FENCES];
     uint32_t fence_clock;
     uint32_t swizzle_x;
@@ -1083,7 +1129,8 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 
 /*
  * Buffers (i915_gem.c, i915_vma.c, i915_gem_tiling.c, i915_gem_mman.c,
- * i915_gem_prime.c, i915_gem_evict.c and i915_fence.c). Every one is
+ * i915_gem_prime.c, i915_gem_evict.c, i915_gem_shrinker.c,
+ * i915_gem_userptr.c and i915_fence.c). Every one is
  * called under the big kernel lock; those that wait may sleep, and the lock
  * is let go while they do.
  */
@@ -1091,22 +1138,34 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 12
+#define I915_NUM_IOCTLS 15
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
  * Hold the object's pages where the GPU reads them, as Linux's
  * i915_gem_object_pin_pages: a shmem object's pages are all given and
- * pinned at the first pin, an import's are its dma-buf's. The physical
- * addresses stay in `obj->frames` until the object goes.
+ * pinned at the first pin, memory short of them reclaimed first and once
+ * more after a failure; an import's are its dma-buf's; a userptr object's
+ * are the program's (`i915_gem_userptr_get_pages`). The physical addresses
+ * stay in `obj->frames` until the object goes or is purged. An object
+ * without pages whose `madv` is not WILLNEED has none to give.
  *
- * @return 0, -ENOMEM, -EFAULT when a page cannot be had, or -ENODEV once
- *         the device is gone.
+ * @return 0; -ENOMEM; -EFAULT when a page cannot be had or the object is
+ *         purgeable or purged; -ENODEV once the device is gone; or the
+ *         userptr's errors.
  */
 int32_t i915_gem_object_pin_pages(struct drm_i915_gem_object *obj);
 
-/** Drop a pin `i915_gem_object_pin_pages` took. */
+/** Drop a pin `i915_gem_object_pin_pages` took; a userptr object's stale
+ * frames go with the last. */
 void i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj);
+
+/** Whether the object has pages: frames held, or a shmem page given. */
+int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj);
+
+/** Whether a fence of the object's reservation has not signalled, so that
+ * the GPU may still read or write its pages. */
+int i915_gem_object_is_active(const struct drm_i915_gem_object *obj);
 
 /** The physical address of the object's page `pgoff`, a shmem page given
  * on the first touch; 0 past its end or when none can be had. */
@@ -1185,6 +1244,9 @@ int32_t i915_gem_wait_ioctl(struct drm_device *dev, void *data, struct drm_file 
 int32_t i915_gem_set_tiling_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_get_tiling_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 
 /** Revoke every program's mapping of every object, once the device is
  * unplugged, so that the next access faults to a device that refuses it. */
@@ -1219,7 +1281,9 @@ void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset);
 int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
                      uint32_t flags, uint32_t align, struct i915_vma **out);
 
-/** Drop a pin `i915_vma_pin` took; the binding stays. */
+/** Drop a pin `i915_vma_pin` took; the binding stays, but for a userptr
+ * object's whose program's pages changed while it was pinned, which the
+ * last pin undoes. */
 void i915_vma_unpin(struct i915_vma *vma);
 
 /** Unmap the binding's pages from every program that maps them through
@@ -1250,11 +1314,75 @@ struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgo
  * changed, and whether it still serves a GTT map and a fence. */
 void i915_vma_update_fenceable(struct i915_vma *vma);
 
-/** Make room in [start, end) of the global GTT for `size` bytes aligned
- * to `align`, as Linux's i915_gem_evict_something: -ENOSPC, since nothing
- * is evicted yet. */
+/**
+ * The range of `size` bytes aligned to `align` below `hi` of the global
+ * GTT that no binding, kept surface or object of the GT's touches, the
+ * lowest, or with I915_PIN_HIGH the highest, in `*at`; a binding marked
+ * `evict` counts as free. 0, or -ENOSPC.
+ */
+int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t hi,
+                       uint32_t flags, uint64_t *at);
+
+/**
+ * Make room in [start, end) of the global GTT for `size` bytes aligned to
+ * `align`, at the end `flags` names, as Linux's i915_gem_evict_something:
+ * the bindings of objects are scanned least recently used first, each
+ * unpinned one whose object is idle counted as free, until a range fits;
+ * then those of the scanned that lie in the range are undone. A pinned
+ * binding, one whose object the GPU may still use, and a range the kernel
+ * reserved are never undone. Does not sleep.
+ *
+ * @return 0, or -ENOSPC when even the idle bindings make no room.
+ */
 int32_t i915_gem_evict_something(struct drm_i915_private *i915, uint64_t size, uint64_t align,
-                                 uint64_t start, uint64_t end);
+                                 uint64_t start, uint64_t end, uint32_t flags);
+
+/* ---- i915_gem_shrinker.c ---- */
+
+/**
+ * Purge the object, as Linux's i915_gem_object_truncate on shmem: every
+ * program's map of it revoked, its frames unpinned and its pages freed,
+ * and `madv` made __I915_MADV_PURGED. The caller has undone its bindings
+ * and holds no pin of its pages. Returns the frames freed.
+ */
+uint32_t i915_gem_object_truncate(struct drm_i915_gem_object *obj);
+
+/**
+ * Purge the idle objects of the device whose pages programs said they can
+ * lose (MADVISE's DONTNEED) until `want` frames came back, as Linux's
+ * i915_gem_shrink with its purgeable objects: an object is passed over
+ * while the GPU may use it or a pin holds its pages or a binding of it.
+ * Does not sleep. Returns the frames freed.
+ */
+uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want);
+
+/** Register the device's shrinker with reclaim, once it is bound. */
+void i915_gem_shrinker_register(struct drm_i915_private *i915);
+
+/** Take the device's shrinker off; nothing when it is not registered. */
+void i915_gem_shrinker_unregister(struct drm_i915_private *i915);
+
+/* ---- i915_gem_userptr.c ---- */
+
+/**
+ * Pin a userptr object's pages, the program's, for the GPU, as Linux's
+ * i915_gem_object_userptr_submit_init and get_pages: each page brought in
+ * for a write and its frame pinned, which no limit of RLIMIT_MEMLOCK
+ * counts, as on Linux. Only the address space that made the object may.
+ * May sleep. Called by `i915_gem_object_pin_pages`.
+ *
+ * @return 0; -EFAULT for another address space, one that has ended, or a
+ *         page outside the program's memory or without write access;
+ *         -EAGAIN while stale frames are still pinned; or -ENOMEM.
+ */
+int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj);
+
+/** Drop a userptr object's frames, which no pin holds any more. */
+void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj);
+
+/** Take a userptr object's range off its address space and drop its
+ * frames, for its `free`. */
+void i915_gem_userptr_release(struct drm_i915_gem_object *obj);
 
 /** The bytes of a tile row, `stride` times the tile's height, for
  * `tiling`; 0 untiled. */
