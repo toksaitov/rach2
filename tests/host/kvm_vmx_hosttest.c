@@ -26,7 +26,8 @@
  * a VM and its vCPU; each entry inside VMXON and VMPTRLD and each exit followed
  * by VMCLEAR and VMXOFF with CR4 as it was, on every path; the VMCS built and
  * checked by the model; each exit the corpus's guests cause handled in the
- * kernel or given to the caller: CPUID, port I/O and its string form, EPT
+ * kernel or given to the caller: CPUID, port I/O and its string form, with
+ * RF across a REP cut at a page and a 64-bit address size at offset 0, EPT
  * faults on RAM and MMIO reads, writes and read-modify-writes, an instruction
  * the decoder refuses, the control and debug registers, real to long mode and
  * PAE's PDPTEs, the MSRs, XSETBV, VMCALL, KVM's and Hyper-V's once the CPUID
@@ -1874,6 +1875,110 @@ static void io_rows(int fd)
           "and counts CX and SI off, stepped past");
 }
 
+/* RFLAGS.RF, the resume flag. */
+#define F_RF 0x10000u
+
+/** REP OUTSB cut at a page: RF set while it repeats and cleared once it
+ * ends, as Linux's x86_emulate_insn leaves it. */
+static void outs_rf_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+    struct row *w;
+
+    set_regs(fd, 0x1000, 0, 3, 0);
+    r = regs_of(fd);
+    r.rsi = 0x2FFE;
+    r.rflags &= ~(uint64_t)F_RF;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with SI two bytes short of a page");
+    ram[0x2FFE] = 'p';
+    ram[0x2FFF] = 'q';
+    ram[0x3000] = 'r';
+    w = script(EXIT_IO, 0x30u | (0x3F8ull << 16), 2);
+    w->insn_info = 3u << 15;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 2 &&
+              v->pio[0] == 'p' && v->pio[1] == 'q',
+          "REP OUTSB stops at the page's end");
+    r = regs_of(fd);
+    CHECK(r.rcx == 1 && r.rsi == 0x3000 && r.rip == 0x1000 && (r.rflags & F_RF),
+          "and repeats with RF set");
+    w = script(EXIT_IO, 0x30u | (0x3F8ull << 16), 2);
+    w->insn_info = 3u << 15;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 1 &&
+              v->pio[0] == 'r',
+          "the guest's next pass moves the last byte");
+    r = regs_of(fd);
+    CHECK(r.rcx == 0 && r.rsi == 0x3001 && r.rip == 0x1002 && !(r.rflags & F_RF),
+          "and ends the instruction with RF clear");
+}
+
+/** REP INSB cut at a page, whose elements are written at the next
+ * KVM_RUN: RF set while it repeats and cleared once it ends. */
+static void ins_rf_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+
+    set_regs(fd, 0x1000, 0, 2, 0);
+    r = regs_of(fd);
+    r.rdi = 0x2FFF;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with DI a byte short of a page");
+    script(EXIT_IO, 0x38u | (0x60ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.direction == KVM_EXIT_IO_IN &&
+              rp->u.io.count == 1,
+          "REP INSB stops at the page's end");
+    v->pio[0] = 'i';
+    script(EXIT_IO, 0x38u | (0x60ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 1,
+          "the answer is stored at the next KVM_RUN, and the guest's next pass reads again");
+    r = regs_of(fd);
+    CHECK(ram[0x2FFF] == 'i' && r.rcx == 1 && r.rdi == 0x3000 && r.rip == 0x1000 &&
+              (r.rflags & F_RF),
+          "with the first element stored and RF set while it repeats");
+    v->pio[0] = 'j';
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "the last answer ends it");
+    r = regs_of(fd);
+    CHECK(ram[0x3000] == 'j' && r.rcx == 0 && r.rdi == 0x3001 && r.rip == 0x1003 &&
+              !(r.rflags & F_RF),
+          "with RF clear and RIP past it");
+}
+
+/** A REP OUTSB at offset 0 with a 64-bit address size, which the model's
+ * exit may give in any mode: no wrap is near, so it moves whole. */
+static void outs_wrap_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+    struct row *w;
+
+    set_regs(fd, 0x1000, 0, 3, 0);
+    r = regs_of(fd);
+    r.rsi = 0;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with SI 0");
+    ram[0] = 'a';
+    ram[1] = 'b';
+    ram[2] = 'c';
+    w = script(EXIT_IO, 0x30u | (0x3F8ull << 16), 2);
+    w->insn_info = (2u << 7) | (3u << 15);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 3 &&
+              v->pio[0] == 'a' && v->pio[2] == 'c',
+          "REP OUTSB at offset 0 with a 64-bit address size moves every byte at once");
+    r = regs_of(fd);
+    CHECK(r.rcx == 0 && r.rsi == 3 && r.rip == 0x1002, "and counts RCX and RSI off, stepped past");
+}
+
+/** The string I/O instructions cut at a page, and one near no wrap. */
+static void io_string_rows(int fd)
+{
+    outs_rf_rows(fd);
+    ins_rf_rows(fd);
+    outs_wrap_rows(fd);
+}
+
 /** Write the instruction `bytes` of `n` bytes at `rip` and point RIP at
  * it with RAX `rax`. */
 static void code(int fd, uint64_t rip, const char *bytes, uint32_t n, uint64_t rax)
@@ -3619,6 +3724,7 @@ int main(void)
     fd = make_vcpu(vm, 0);
     launch_rows(fd);
     io_rows(fd);
+    io_string_rows(fd);
     ept_rows(fd);
     cr_rows(fd);
     insn_rows(fd);
