@@ -34,6 +34,7 @@
 
 #include <stdarg.h>
 
+#define KMS_MODEL_KERNEL
 #include "drm_kms_model.c"
 #include "drm/i915/intel_display.c"
 #include "drm/i915/intel_plane.c"
@@ -46,6 +47,9 @@
 #include "drm/i915/intel_dp_aux.c"
 #include "drm/i915/intel_ddi.c"
 #include "drm/i915/intel_dp_link_training.c"
+#include "drm/i915/intel_dp.c"
+#include "drm/i915/intel_panel.c"
+#include "drm/i915/intel_pfit.c"
 #include "i915_model.h"
 #include "i915_model_pipe.h"
 #include "i915_model_sink.h"
@@ -562,6 +566,11 @@ static void row_train_fail(void)
               dp->link_max_lanes == 1,
           "fail: a mode that fits 1.62 Gb/s falls back to it");
 
+    dp->link_rate = 162000;
+    log_clear();
+    CHECK(intel_dp_start_link_train(&gpu, 50000) == -EIO && logged("can't reduce"),
+          "fail: no link left below 1.62 Gb/s on one lane");
+
     s = link_setup();
     s->eq_preemph = 3; /* pre-emphasis 3 leaves no swing for the clock */
     CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EAGAIN && !s->trained,
@@ -569,6 +578,134 @@ static void row_train_fail(void)
     CHECK(logged("clock recovery lost in channel equalization"),
           "fail: when the clock is lost for the pre-emphasis");
     CHECK(gpu.hw.timeouts == 0, "fail: no wait timed out");
+}
+
+/* ---- the panel and a mode's configuration ---- */
+
+/** The output's init against the panel: its DPCD, EDID and fixed mode,
+ * the rates both ends take and its colour depth, as Linux reported them
+ * on the Lenovo. */
+static void row_init(void)
+{
+    struct intel_dp *dp = &gpu.display.dp;
+    const struct drm_mode_modeinfo *f = &dp->fixed[0];
+
+    fresh();
+    gpu.vbt = vbt;
+    CHECK(intel_dp_init(&gpu) == 0 && dp->present, "init: the panel answers");
+    CHECK(dp->nfixed == 1 && f->hdisplay == 1366 && f->vdisplay == 768 && f->clock == PANEL_CLOCK &&
+              f->htotal == 1558 && f->vtotal == 816 && (f->type & DRM_MODE_TYPE_PREFERRED),
+          "init: the EDID's 1366x768 the one fixed mode");
+    CHECK(dp->nrates == 2 && dp->rates[0] == 162000 && dp->rates[1] == 270000 &&
+              dp->max_lanes == 1 && dp->edid_bpc == 6 && dp->use_max_params,
+          "init: 1.62 and 2.7 Gb/s on one lane, 6 bits a colour, the most for eDP before 1.4");
+    CHECK(logged("panel: the EDID's preferred fixed mode 1366x768@60, 76300 kHz") &&
+              logged("edp: DPCD 1.1, eDP 0, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 "
+                     "bytes"),
+          "init: the log's lines");
+    k_memset(&gpu.vbt, 0, sizeof(gpu.vbt)); /* the row's copy; `vbt` owns it */
+}
+
+/** A configuration of the panel's own mode on pipe A for `conn`. */
+static int32_t config(const struct drm_connector_state *conn, uint32_t src_w, uint32_t src_h,
+                      struct intel_crtc_config *cfg)
+{
+    k_memset(cfg, 0, sizeof(*cfg));
+    cfg->mode = gpu.display.dp.fixed[0];
+    cfg->src_w = src_w;
+    cfg->src_h = src_h;
+    return intel_dp_compute_config(&gpu, I915_PIPE_A, conn, 0, cfg);
+}
+
+/** The link and the M/N values of the panel's mode, the firmware's own;
+ * a refresh rate a hertz off taken, more refused. */
+static void row_config(void)
+{
+    struct drm_connector_state conn;
+    struct intel_crtc_config cfg;
+    struct drm_mode_modeinfo m;
+
+    k_memset(&conn, 0, sizeof(conn));
+    conn.scaling_mode = DRM_MODE_SCALE_ASPECT;
+    conn.max_requested_bpc = 12;
+    CHECK(config(&conn, 1366, 768, &cfg) == 0 && cfg.bpp == 18 && cfg.dither &&
+              cfg.port_clock == 270000 && cfg.lanes == 1 && !cfg.pfit && !cfg.force_thru,
+          "config: 18 bits a pixel, dithered, on one lane at 2.7 Gb/s, no fitter");
+    /* Linux's data M, 171675 kB/s of 270000 scaled to N 0x800000; the
+     * firmware's is 21 more, its own rounding. */
+    CHECK(cfg.tu == 64 && cfg.data_m == 5333756u && cfg.data_n == LENOVO_DATA_N &&
+              cfg.link_m == LENOVO_LINK_M && cfg.link_n == LENOVO_LINK_N,
+          "config: Linux's M/N values, the link's the firmware's");
+    gpu.display.dp.use_max_params = 1;
+    CHECK(config(&conn, 1366, 768, &cfg) == 0 && cfg.port_clock == 270000,
+          "config: after failures, the sink's most");
+    gpu.display.dp.use_max_params = 0;
+    m = gpu.display.dp.fixed[0];
+    m.clock = 77600; /* 61 Hz */
+    CHECK(intel_panel_compute_config(&gpu, &m) == 0 && m.clock == PANEL_CLOCK,
+          "config: 61 Hz is the panel's 60");
+    m.clock = 79000; /* 62 Hz */
+    CHECK(intel_panel_compute_config(&gpu, &m) == -EINVAL, "config: 62 Hz refused");
+    m = gpu.display.dp.fixed[0];
+    CHECK(intel_panel_mode_valid(&gpu, &m) == 0, "config: the panel's size and rate valid");
+    m.hdisplay = 1024;
+    CHECK(intel_panel_mode_valid(&gpu, &m) == -EINVAL, "config: another size not the panel's");
+}
+
+/** A fitter's window for a source of `w` by `h` on `pipe` with
+ * `scaling`: 0 and its position and size, or the error. */
+static int32_t window(int pipe, uint32_t scaling, uint32_t w, uint32_t h, uint32_t *pos,
+                      uint32_t *size)
+{
+    struct intel_crtc_config cfg;
+    int32_t err;
+
+    k_memset(&cfg, 0, sizeof(cfg));
+    cfg.mode = gpu.display.dp.fixed[0];
+    cfg.src_w = w;
+    cfg.src_h = h;
+    err = intel_pfit_compute_config(pipe, scaling, &cfg);
+    *pos = cfg.pf_pos;
+    *size = cfg.pf_size;
+    return err == 0 && !cfg.pfit ? -1 : err;
+}
+
+/** The fitter's windows as Linux's intel_pch_panel_fitting sets them,
+ * its limits, and the pixel rate it reads at. */
+static void row_pfit(void)
+{
+    struct intel_crtc_config cfg;
+    uint32_t pos, size;
+
+    CHECK(window(0, DRM_MODE_SCALE_ASPECT, 800, 600, &pos, &size) == 0 && pos == PF_WIN_XPOS(171) &&
+              size == (PF_WIN_XSIZE(1024) | 768u),
+          "pfit: Full aspect pillarboxes 800x600");
+    CHECK(window(0, DRM_MODE_SCALE_ASPECT, 1366, 600, &pos, &size) == 0 && pos == 84u &&
+              size == (PF_WIN_XSIZE(1366) | 600u),
+          "pfit: and letterboxes 1366x600");
+    CHECK(window(0, DRM_MODE_SCALE_CENTER, 800, 600, &pos, &size) == 0 &&
+              pos == (PF_WIN_XPOS(283) | 84u) && size == (PF_WIN_XSIZE(800) | 600u),
+          "pfit: Center leaves 800x600 unscaled in the middle");
+    CHECK(window(0, DRM_MODE_SCALE_FULLSCREEN, 800, 600, &pos, &size) == 0 && pos == 0 &&
+              size == (PF_WIN_XSIZE(1366) | 768u),
+          "pfit: Full stretches it");
+    CHECK(window(0, DRM_MODE_SCALE_FULLSCREEN, 1600, 900, &pos, &size) == -ERANGE,
+          "pfit: a scale down past 1.125 refused");
+    CHECK(window(0, DRM_MODE_SCALE_FULLSCREEN, 2100, 1200, &pos, &size) == -ERANGE &&
+              window(1, DRM_MODE_SCALE_FULLSCREEN, 2100, 1200, &pos, &size) == -EINVAL,
+          "pfit: pipe B's fitter takes no source wider than 2048");
+    k_memset(&cfg, 0, sizeof(cfg));
+    cfg.mode = gpu.display.dp.fixed[0];
+    cfg.src_w = 1500;
+    cfg.src_h = 800;
+    CHECK(intel_pfit_compute_config(0, DRM_MODE_SCALE_FULLSCREEN, &cfg) == 0 &&
+              intel_pfit_pixel_rate(&cfg) == 87275u,
+          "pfit: a scale down reads the source faster");
+    cfg.src_w = 800;
+    cfg.src_h = 600;
+    CHECK(intel_pfit_compute_config(0, DRM_MODE_SCALE_FULLSCREEN, &cfg) == 0 &&
+              intel_pfit_pixel_rate(&cfg) == PANEL_CLOCK,
+          "pfit: a scale up at the panel's clock");
 }
 
 /* ---- the panel power sequencer ---- */
@@ -664,6 +801,9 @@ int main(void)
     row_edid();
     row_train();
     row_train_fail();
+    row_init();
+    row_config();
+    row_pfit();
     row_pps_init();
     row_pps_order();
     i915_model_free(&model);
