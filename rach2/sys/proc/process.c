@@ -238,18 +238,6 @@ void init_proc(void)
     current_proc = NULL;
 }
 
-/**
- * `next_pid` starts at 0 and the boot self-tests spawn processes before init
- * exists, but init must be pid 1: `kill(1, ...)` is how BusyBox's `halt`,
- * `poweroff` and `reboot` ask for a shutdown. `alloc_process` skips any pid
- * that is still live, so a self-test record that outlived its test would
- * push init to the next free number and not collide with it.
- */
-void proc_reclaim_boot_pids(void)
-{
-    next_pid = 1;
-}
-
 /* The running total /proc/stat reports; see process.h. */
 static uint32_t _forks_since_boot = 0;
 
@@ -292,6 +280,35 @@ static uint32_t pid_next(void)
     } while (get_process(candidate) != NULL);
     last_pid = candidate;
     return candidate;
+}
+
+/**
+ * `next_pid` starts at 0 and the boot self-tests spawn processes before init
+ * exists, but init must be pid 1: `kill(1, ...)` is how BusyBox's `halt`,
+ * `poweroff` and `reboot` ask for a shutdown. A kernel thread made during
+ * the boot that holds pid 1, such as the DRM commit worker a display
+ * driver starts at its bind, takes the next free pid here, as nothing finds
+ * a kernel thread by its pid. `alloc_process` skips any pid that is still
+ * live, so a self-test's record that outlived its test would push init to
+ * the next free number and not collide with it.
+ */
+void proc_reclaim_boot_pids(void)
+{
+    process_t *p = get_process(1);
+    uint32_t flags;
+
+    if (p && p->tgid == 1 && !p->page_dir && !p->space_root) {
+        flags = kirq_save();
+        pid_remove(p);
+        next_pid = 2;
+        p->pid = pid_next();
+        p->tgid = p->pid;
+        p->sid = p->pid;
+        p->pgid = p->pid;
+        pid_insert(p);
+        kirq_restore(flags);
+    }
+    next_pid = 1;
 }
 
 /** Give a new record the resource limits every process starts with. */
