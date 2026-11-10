@@ -546,8 +546,9 @@ static int events_readable(void *arg)
 
 /**
  * Take the first queued event of `file` into `*out` if it fits in `room`
- * bytes, giving its space back, as Linux's drm_read under its event lock:
- * 1 taken, 0 none queued, -1 the first does not fit.
+ * bytes, as Linux's drm_read under its event lock: 1 taken, 0 none queued,
+ * -1 the first does not fit. The event keeps its space until `event_done`,
+ * so that the count stays within DRM_EVENT_SPACE while its copy sleeps.
  */
 static int event_take(struct drm_file *file, uint32_t room, struct drm_pending_event **out)
 {
@@ -565,14 +566,25 @@ static int event_take(struct drm_file *file, uint32_t room, struct drm_pending_e
         if (!file->events) {
             file->events_tail = NULL;
         }
-        file->event_space += ev->length;
         *out = ev;
     }
     kirq_restore(flags);
     return rc;
 }
 
-/** Put `ev`, taken by event_take, back at the head of `file`'s queue. */
+/** Give back the space of `ev`, taken by event_take and copied, and free it. */
+static void event_done(struct drm_file *file, struct drm_pending_event *ev)
+{
+    uint32_t flags = kirq_save();
+
+    file->event_space += ev->length;
+    kirq_restore(flags);
+    kfree(ev);
+}
+
+/** Put `ev`, taken by event_take, back at the head of `file`'s queue, and
+ * wake the readers and pollers that found the queue empty meanwhile, as
+ * Linux's drm_read does after a failed copy. */
 static void event_put_back(struct drm_file *file, struct drm_pending_event *ev)
 {
     uint32_t flags = kirq_save();
@@ -582,8 +594,8 @@ static void event_put_back(struct drm_file *file, struct drm_pending_event *ev)
     if (!file->events_tail) {
         file->events_tail = ev;
     }
-    file->event_space -= ev->length;
     kirq_restore(flags);
+    wq_wake(&file->event_wait, WQ_DATA);
 }
 
 /**
@@ -623,7 +635,7 @@ static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
             return done ? (int32_t)done : -EFAULT;
         }
         done += ev->length;
-        kfree(ev);
+        event_done(file, ev);
     }
 }
 
