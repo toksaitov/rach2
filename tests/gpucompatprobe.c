@@ -11,6 +11,7 @@
 static int gpu = -1, mem = -1, udma = -1, buffer = -1, fence = -1;
 static uint32_t bo, syncobj;
 static void *mapping, *high;
+static int compat; /* the i386 probe runs on the x86-64 kernel */
 
 /* Compile against i386's layouts, including GETPARAM's eight bytes. */
 #define SIZE(t, n) typedef char size_##t[sizeof(struct t) == (n) ? 1 : -1]
@@ -124,9 +125,10 @@ static void open_gpu(const char *driver)
     require(0, "no render node for the requested driver");
 }
 
-/** GETPARAM reads exactly eight bytes and writes exactly one int through
- * an address with bit 31 set, even with altered size and direction bits.
- * The request ends at an inaccessible page and is then made read-only. */
+/** Compat GETPARAM reads exactly eight bytes and writes exactly one int
+ * through an address with bit 31 set, even with altered size and direction
+ * bits. The request ends at an inaccessible page and is then read-only;
+ * a native i686 kernel instead follows the encoded copies, as Linux does. */
 static void intel_params(void)
 {
     struct drm_i915_getparam *p;
@@ -149,8 +151,13 @@ static void intel_params(void)
                 value[-1] == 0x12345678 && value[1] == 0x12345678,
             "GETPARAM's high pointer and guarded int");
     *value = -1;
-    require(call(gpu, DRM_IO(DRM_COMMAND_BASE + DRM_I915_GETPARAM), p) == 0 && *value == 0x0a16,
-            "GETPARAM ignores the encoded direction and size");
+    if (compat) {
+        require(call(gpu, DRM_IO(DRM_COMMAND_BASE + DRM_I915_GETPARAM), p) == 0 && *value == 0x0a16,
+                "compat GETPARAM ignores the encoded direction and size");
+    } else {
+        require(call(gpu, DRM_IO(DRM_COMMAND_BASE + DRM_I915_GETPARAM), p) == -22,
+                "native GETPARAM with no input has an invalid parameter");
+    }
     require(call(gpu, DRM_IOCTL_I915_GETPARAM, (char *)p + 4) == -14,
             "GETPARAM's partial request returns EFAULT");
     p->value = (int *)(at + PAGE);
@@ -163,8 +170,8 @@ static void intel_params(void)
     p->param = I915_PARAM_HAS_GEM;
     p->value = &answer;
     require(syscall3(SYS_MPROTECT, at, PAGE, 1) == 0, "read-only request page");
-    require(call(gpu, DRM_IOCTL_I915_GETPARAM, p) == 0 && answer == 1,
-            "GETPARAM does not write back its request");
+    require(call(gpu, DRM_IOCTL_I915_GETPARAM, p) == (compat ? 0 : -14) && answer == 1,
+            "only native GETPARAM writes back its request");
     report_held();
 }
 
@@ -239,7 +246,8 @@ static void virtio_rows(void)
     zero(&m, sizeof(m));
     m.handle = bo;
     require(call(gpu, DRM_IOCTL_VIRTGPU_MAP, &m) == 0, "virtio MAP");
-    at = probe_mmap(0, PAGE, 3, 1, gpu, m.offset);
+    /* The byte offset can exceed 4 GiB; mmap2's page offset still fits. */
+    at = syscall6(SYS_MMAP2, 0, PAGE, 3, 1, gpu, (long)(m.offset >> 12));
     require((unsigned long)at < (unsigned long)-4095, "virtio mmap");
     mapping = (void *)at;
     bytes = mapping;
@@ -285,6 +293,39 @@ static void syncobj_row(void)
     report_held();
 }
 
+/** The last successful SET_NAME remains visible after rejected names. */
+static void name_row(void)
+{
+    char path[64], number[12], text[256];
+    const char *p = "/proc/self/fdinfo/", *digits;
+    const char *wanted = "name:\tgpucompat-b\n";
+    unsigned n = 0, i, j;
+    long fd, bytes;
+    int found = 0;
+
+    while (*p) {
+        path[n++] = *p++;
+    }
+    digits = report_decimal(number, buffer);
+    while (*digits) {
+        path[n++] = *digits++;
+    }
+    path[n] = 0;
+    fd = syscall3(SYS_OPEN, (long)path, 0, 0);
+    require(fd >= 0, "open dma-buf fdinfo");
+    bytes = syscall3(SYS_READ, fd, (long)text, sizeof(text));
+    syscall1(SYS_CLOSE, fd);
+    require(bytes > 0, "read dma-buf fdinfo");
+    for (i = 0; i < (unsigned)bytes; i++) {
+        for (j = 0; wanted[j] && i + j < (unsigned)bytes && text[i + j] == wanted[j]; j++)
+            ;
+        if (!wanted[j]) {
+            found = 1;
+        }
+    }
+    require(found, "dma-buf name survived rejected names");
+}
+
 /** udmabuf exports a sealed memfd; dma-buf takes both name encodings and
  * CPU sync, and exports a sync file whose fixed-width info is readable. */
 static void sharing_rows(void)
@@ -293,6 +334,9 @@ static void sharing_rows(void)
     struct dma_buf_sync s;
     struct dma_buf_export_sync_file e;
     struct sync_file_info info;
+    struct sync_fence_info row;
+    char long_name[DMA_BUF_NAME_LEN];
+    unsigned i;
 
     mem = (int)syscall2(SYS_MEMFD_CREATE, (long)"gpucompatprobe", 3);
     require(mem >= 0 && probe_ftruncate64(mem, PAGE) == 0 && syscall3(SYS_FCNTL, mem, 1033, 2) == 0,
@@ -309,6 +353,13 @@ static void sharing_rows(void)
     require(call(buffer, DMA_BUF_SET_NAME_A, "gpucompat-a") == 0 &&
                 call(buffer, DMA_BUF_SET_NAME_B, "gpucompat-b") == 0,
             "both dma-buf names");
+    for (i = 0; i < sizeof(long_name); i++) {
+        long_name[i] = 'x';
+    }
+    require(call(buffer, DMA_BUF_SET_NAME_A, long_name) == -36 &&
+                call(buffer, DMA_BUF_SET_NAME_B, 0) == -14,
+            "invalid dma-buf names");
+    name_row();
     s.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
     require(call(buffer, DMA_BUF_IOCTL_SYNC, &s) == 0, "dma-buf CPU sync start");
     s.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
@@ -320,8 +371,12 @@ static void sharing_rows(void)
     fence = e.fd;
     report_held();
     zero(&info, sizeof(info));
-    require(call(fence, SYNC_IOC_FILE_INFO, &info) == 0 && info.status == 1 && info.num_fences == 0,
-            "empty sync file is signalled");
+    require(call(fence, SYNC_IOC_FILE_INFO, &info) == 0 && info.status == 1 && info.num_fences == 1,
+            "empty sync file has a signalled stub");
+    zero(&row, sizeof(row));
+    info.sync_fence_info = (uintptr_t)&row;
+    require(call(fence, SYNC_IOC_FILE_INFO, &info) == 0 && row.status == 1,
+            "sync-file info's 64-bit pointer");
     report_held();
 }
 
@@ -334,6 +389,7 @@ void probe_main(unsigned long *sp)
     char **argv = (char **)(sp + 1);
     int intel = sp[0] > 1 && same(argv[1], "i915");
     const char *driver = intel ? "i915" : "virtio_gpu";
+    char uts[6][65];
 
     report_begin(report_case(argv + sp[0] + 1, "guest.gpucompat"));
     report_plan("open");
@@ -343,6 +399,8 @@ void probe_main(unsigned long *sp)
     report_plan("udmabuf");
     report_plan("dmabuf");
     report_plan("sync-file");
+    require(syscall1(SYS_UNAME, (long)uts) == 0, "kernel architecture");
+    compat = same(uts[4], "x86_64");
     open_gpu(driver);
     if (intel) {
         intel_params();

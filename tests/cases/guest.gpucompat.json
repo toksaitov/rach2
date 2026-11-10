@@ -79,12 +79,12 @@
         },
         {
           "assertion_id": "dmabuf",
-          "checks": "Both SET_NAME encodings, CPU sync and sync-file export pass",
+          "checks": "Both SET_NAME encodings pass, invalid names are refused, CPU sync and sync-file export pass",
           "source": "program"
         },
         {
           "assertion_id": "sync-file",
-          "checks": "The exported empty sync file reports signalled status and no fences",
+          "checks": "The exported empty sync file reports one signalled stub fence through a 64-bit field holding the i386 info pointer",
           "source": "program"
         }
       ],
@@ -228,12 +228,12 @@
         },
         {
           "assertion_id": "dmabuf",
-          "checks": "Both SET_NAME encodings, CPU sync and sync-file export pass",
+          "checks": "Both SET_NAME encodings pass, invalid names are refused, CPU sync and sync-file export pass",
           "source": "program"
         },
         {
           "assertion_id": "sync-file",
-          "checks": "The exported empty sync file reports signalled status and no fences",
+          "checks": "The exported empty sync file reports one signalled stub fence through a 64-bit field holding the i386 info pointer",
           "source": "program"
         }
       ],
