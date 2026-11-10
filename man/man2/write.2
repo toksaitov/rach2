@@ -309,6 +309,8 @@ reads the end and writes there under one hold of the file's lock, or, on
 a file system with no lock of each file, such as FAT32 and exFAT, of the
 mount's lock, so that two opens of one file appending at once each add
 their bytes.
+A vector append holds that lock across all its elements;
+another open's append cannot split a record between elements.
 .Dv RWF_HIPRI
 is also accepted.
 The descriptor is checked before the flags, as Linux checks it, and only

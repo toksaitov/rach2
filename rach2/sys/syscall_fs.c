@@ -1146,9 +1146,13 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
     return total;
 }
 
+/** Append a copied user vector under the file's lock, as defined below. */
+static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long pos);
+
 /**
- * writev(2) takes fd, the vector and its count. The elements are written in
- * order (`writev_elements`); on a tmpfs file the mount's lock is held across
+ * writev(2) takes fd, the vector and its count. An O_APPEND mounted file
+ * uses iov_append's lock across the vector. Otherwise elements are written
+ * in order (`writev_elements`); on a tmpfs file the mount's lock is held across
  * them, and a vector a seal refuses whole is refused before the first
  * (`writev_begin`). Returns the bytes written, or a negative errno: -EINVAL
  * for a count below 0 or past IOV_MAX_LOCAL, -EPERM for a vector the seal
@@ -1159,6 +1163,7 @@ long sys_writev(isr_params_t *params)
     int fd = (int)SC_ARG(params, 0);
     uintptr_t iov_user = SC_ARG(params, 1);
     int iovcnt = (int)SC_ARG(params, 2);
+    fd_entry_t *entry;
     struct vfs_mount *held;
     int32_t rc;
 
@@ -1170,7 +1175,13 @@ long sys_writev(isr_params_t *params)
     }
     rc = writev_begin(fd, iov_user, iovcnt, &held);
     if (rc == 0) {
-        rc = writev_elements(fd, iov_user, iovcnt);
+        entry = fd_get(current_proc->fds, fd);
+        if (entry && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd && entry->ofd->vmnt &&
+            (entry->ofd->status_flags & OFD_APPEND)) {
+            rc = (int32_t)iov_append(entry, iov_user, iovcnt, -1);
+        } else {
+            rc = writev_elements(fd, iov_user, iovcnt);
+        }
     }
     if (held) {
         vfs_ns_unlock(held);
@@ -11701,7 +11712,8 @@ static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uin
 /**
  * Append the vector of `count` elements at `addr` to the regular file of
  * the descriptor `entry`, which the caller holds, holding its description
- * and file locks across the elements (`file_write_locked`). The vector is
+ * and file locks across the elements (`file_write_locked`), or the mount's
+ * namespace lock on a type without per-file locks. The vector is
  * copied and checked before the descriptor, since the copy may sleep, and
  * the descriptor is checked before its locks are taken. The explicit
  * position `pos` is ignored; -1 alone advances the shared offset. Returns
@@ -11743,6 +11755,9 @@ static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long p
     }
     fd_ofd_lock(ofd);
     state.own = file_lock(ofd, &state.file);
+    if (!state.own) {
+        vfs_node_lock(&state.file);
+    }
     state.append = 1;
     rc = loop_backs(ofd->vmnt, ofd->vnode) ? -EBUSY : 0;
     for (i = 0; rc >= 0 && i < count; i++) {
@@ -11758,6 +11773,9 @@ static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long p
         if ((unsigned long)rc < iov[i].iov_len) {
             break;
         }
+    }
+    if (!state.own) {
+        vfs_node_unlock(&state.file);
     }
     file_unlock(&state.file, state.own);
     fd_ofd_unlock(ofd);
