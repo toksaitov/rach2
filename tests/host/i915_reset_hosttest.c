@@ -1014,8 +1014,8 @@ static void row_wedge(void)
     rq = submit(r, 0, 0);
     rq2 = submit(r, 0, 0);
     (void)beat_until_hung(10000, &hung);
-    CHECK("wedge: the engine's reset and four of the GPU's tried",
-          hung == 1u && rs->writes == 5 && rs->resets[0] == 0 && rs->resets[1] == 0 &&
+    CHECK("wedge: the engine's reset and four rounds of three of the GPU's tried",
+          hung == 1u && rs->writes == 13 && rs->resets[0] == 0 && rs->resets[1] == 0 &&
               logged("reset: the chip did not reset: GDRST reads 0x00000001"));
     CHECK("wedge: wedged, every request failed with EIO, the GT parked",
           i915->gt.wedged && !i915->gt.wedged_terminal && ended(rq, -EIO) && ended(rq2, -EIO) &&
