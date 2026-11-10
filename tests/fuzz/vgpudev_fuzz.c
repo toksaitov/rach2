@@ -14,7 +14,7 @@
  * frames bed/shm/corpus holds, in order: the loopback run of bed/shm/peer.c.
  *
  * fuzz-deps: bed/vm/backend/device.c
- * fuzz-cflags: -I bed/shm -I bed/vm/backend
+ * fuzz-cflags: -I rach2/sys/virtio -I bed/vm/backend
  */
 #include <string.h>
 

@@ -280,7 +280,7 @@ check()
         echo "snapshot $(pin snapshot)"
         echo "device $([ "$vfio" = 1 ] && echo vfio-pci || echo vgpushm)"
     } | sed 's/^/bed-vm: record: /' >&2
-    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend bed/shm/vgpushm.h) |
+    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
         vm 'rm -rf bed && tar xf -'
     guest "$vfio" > "$work/guest.sh"
     status=0
