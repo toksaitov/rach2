@@ -434,8 +434,11 @@ static void round_trip(void)
     virtqueue_kick(ctrlq);
     model_step();
     check(m.served == 1 && m.last_nseg == 2 && m.last_out == 1, "the device read the chain");
+    k_memset(&region[0][0] + ctrlq->desc_addr, 0xff, (size_t)ctrlq->size * 16u);
     vshm_serve(vs, 0);
     check(done_calls == 1 && done_token == cmd && done_len == 24, "the response returned");
+    check(ctrlq->nfree == ctrlq->size && ctrlq->free_head == 0 && ctrlq->next[0] == 1,
+          "the chain freed by the core's own links, whatever the device wrote over the table");
     check(cmd[1024] == 0x5a && cmd[1047] == 0x5a && cmd[1048] == 0, "the device's bytes");
     virtio_dma_free(&vs->vdev, cmd, 4096);
     check(vs->heap_used == 0, "the page given back");

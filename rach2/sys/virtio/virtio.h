@@ -150,6 +150,8 @@ struct virtqueue {
     void *token[VIRTQ_MAX_SIZE];    /* by head; NULL for a free head */
     uint32_t inlen[VIRTQ_MAX_SIZE]; /* bytes the device may write into a head's chain */
     uint16_t chain[VIRTQ_MAX_SIZE]; /* descriptors a head's chain holds */
+    uint16_t next[VIRTQ_MAX_SIZE];  /* the free list's and chains' links: the
+                                     * device's table is written, never read */
     int8_t table[VIRTQ_MAX_SIZE];   /* a head's indirect table, or -1 */
     virtqueue_done_t done;
     void *priv; /* the driver's */
