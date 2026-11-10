@@ -1,0 +1,48 @@
+{
+  "gl64": {
+    "exit": 0,
+    "crc32": "f1c362f2",
+    "renderer": "llvmpipe (LLVM 19.1.7, 256 bits) vendor Mesa version 4.5 (Compatibility Profile) Mesa 25.0.7-2+deb13u1"
+  },
+  "d3d964": {
+    "exit": 0,
+    "crc32": "b2c0c4e2",
+    "renderer": "llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff"
+  },
+  "gl32": {
+    "exit": 0,
+    "crc32": "f1c362f2",
+    "renderer": "llvmpipe (LLVM 19.1.7, 256 bits) vendor Mesa version 4.5 (Compatibility Profile) Mesa 25.0.7-2+deb13u1"
+  },
+  "d3d932": {
+    "exit": 0,
+    "crc32": "b2c0c4e2",
+    "renderer": "llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff"
+  },
+  "trip-gl": {
+    "exit": 0,
+    "ms": 934.5,
+    "ok": true,
+    "renderer": "OpenGL",
+    "adapter": "llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff"
+  },
+  "trip-vulkan": {
+    "exit": 0,
+    "ms": 8.9,
+    "ok": true,
+    "renderer": "Vulkan",
+    "adapter": "llvmpipe (LLVM 19.1.7, 256 bits) vendor 0x0005 device 0x0000"
+  },
+  "record": {
+    "uname": [
+      "Linux",
+      "rach2",
+      "6.18.0-rach2",
+      "#1 Rach2 1.0.0",
+      "x86_64"
+    ],
+    "memory_mib": 8171,
+    "weston_renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+    "display": ":1"
+  }
+}

@@ -1,0 +1,39 @@
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :1
+games: prefix: status 0 rach2-game: prefix: made /data/trial2654/out/rach2-games.i0d8l9y8/compat/pfx
+games: gl64: renderer: llvmpipe (LLVM 19.1.7, 256 bits) vendor Mesa version 4.5 (Compatibility Profile) Mesa 25.0.7-2+deb13u1
+games: gl64: glprobe: pixels crc32 f1c362f2 centre 61 129 65 255 corner 0 0 128 255
+games: gl64: draw OK
+games: gl64: GL OK
+games: gl64: exit 0 crc32 f1c362f2 linux None
+games: d3d964: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: d3d964: texture memory: 4095 MiB
+games: d3d964: d3d9probe: pixels crc32 b2c0c4e2 centre 64 128 64 255 corner 0 0 128 255
+games: d3d964: draw OK
+games: d3d964: D3D9 OK
+games: d3d964: exit 0 crc32 b2c0c4e2 linux None
+games: gl32: renderer: llvmpipe (LLVM 19.1.7, 256 bits) vendor Mesa version 4.5 (Compatibility Profile) Mesa 25.0.7-2+deb13u1
+games: gl32: glprobe: pixels crc32 f1c362f2 centre 61 129 65 255 corner 0 0 128 255
+games: gl32: draw OK
+games: gl32: GL OK
+games: gl32: exit 0 crc32 f1c362f2 linux None
+games: d3d932: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: d3d932: texture memory: 4095 MiB
+games: d3d932: d3d9probe: pixels crc32 b2c0c4e2 centre 64 128 64 255 corner 0 0 128 255
+games: d3d932: draw OK
+games: d3d932: D3D9 OK
+games: d3d932: exit 0 crc32 b2c0c4e2 linux None
+games: trip-gl: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl: feature level: 0xb000
+games: trip-gl: tripprobe: 1000 round trips in 934.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl: TRIP OK
+games: trip-gl: exit 0 ms 934.5 renderer OpenGL adapter llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff linux None
+games: trip-vulkan: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0x0005 device 0x0000
+games: trip-vulkan: feature level: 0xb000
+games: trip-vulkan: tripprobe: 1000 round trips in 8.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-vulkan: TRIP OK
+games: trip-vulkan: exit 0 ms 8.9 renderer Vulkan adapter llvmpipe (LLVM 19.1.7, 256 bits) vendor 0x0005 device 0x0000 linux None
+GAMESROW OK gpu
+     12 323: not implemented (asked for by wine)
+    105 323: not implemented (asked for by wine64)
+gpu: result: status 0, results in /data/trial2654/out/gpu/results.json
+GPU OK
