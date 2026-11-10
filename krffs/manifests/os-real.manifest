@@ -208,6 +208,9 @@ dir 0755 /var/log
 # Where `ifup` records the interfaces it has brought up. It writes the file
 # through a temporary beside it, so the directory must exist.
 dir 0755 /var/run
+# The files a program keeps across a reboot, as Linux's /var/tmp: QEMU's
+# snapshot=on puts its overlay there unless TMPDIR says otherwise.
+dir 1777 /var/tmp
 
 dir 0755 /usr
 dir 0755 /usr/share
@@ -262,9 +265,9 @@ file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 # 1000:1000 at 0700 and 0600, so that no account but it and root may read
 # them.
 
-# The one sticky directory of the image: any account may make files in /tmp,
-# and only a file's owner or root may remove or rename one, so root and the
-# test account can share it.
+# Sticky, as /var/tmp is: any account may make files in /tmp, and only a
+# file's owner or root may remove or rename one, so root and the test account
+# can share it.
 dir 1777 /tmp
 dir 0755 /home
 dir 0700:1000:1000 /home/test
