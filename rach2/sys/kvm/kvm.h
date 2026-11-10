@@ -288,25 +288,59 @@ struct kvm_pio {
     uint32_t count;
 };
 
+/* What an instruction under way keeps: the answers of its MMIO reads,
+ * its writes, and the pages those writes were translated to. */
+#define KVM_EMUL_READS  40
+#define KVM_EMUL_WRITES 8
+#define KVM_EMUL_CHUNKS 16
+#define KVM_EMUL_WBUF   4104 /* a page of INS's elements, and one across its end */
+
+/* The answer of one MMIO read: `len` bytes at `gpa`, 8 at most. */
+struct kvm_emul_read {
+    uint64_t gpa;
+    uint32_t len;
+    uint8_t data[8];
+};
+
+/* One write an instruction queued: `len` bytes of `wbuf` from `off`, to
+ * the linear address `la`, in pieces of `unit` bytes where it is MMIO. */
+struct kvm_emul_write {
+    uint64_t la;
+    uint32_t off, len, unit;
+};
+
+/* The part of a queued write that lies in one page, at `gpa`: RAM, which
+ * is written at once, or MMIO, of which `done` bytes have left. */
+struct kvm_emul_chunk {
+    uint64_t gpa;
+    uint32_t off, len, unit, done;
+    int mmio;
+};
+
 /*
  * The guest instruction emulate.c has under way across exits to the
- * caller: an MMIO instruction waiting for its read's answer or with its
- * write to make, or a port read waiting for its answer. While `resume` is
- * set the backend's next `enter` enters no guest, and its `exit` gives
- * `kvm_emul_resume`'s exit, the write that follows a read.
+ * caller: an instruction that waits for the answer of an MMIO read, after
+ * which it runs again from its start with the answers kept in `rd`; one
+ * that has ended and has MMIO writes left to deliver; or a port read that
+ * waits for its answer. While `resume` is set the backend's next `enter`
+ * enters no guest, and its `exit` gives `kvm_emul_resume`'s exit.
  */
 struct kvm_emul {
     uint32_t stage;       /* emulate.c's EMUL_* */
     int resume;           /* the next exit is the instruction's next step */
-    int fail;             /* that step is the internal error of a non-RAM operand */
-    struct kvm_insn insn; /* the MMIO instruction */
-    uint64_t gpa;         /* its MMIO operand's guest-physical address */
-    uint64_t value;       /* the value its write stores */
-    uint64_t src_gpa, dst_gpa;
-    int src_mmio, dst_mmio; /* MOVS's operands that are no slot's */
-    uint64_t info[5];       /* the exit's reason and qualifications, for an internal error */
-    int step_trap;          /* an instruction was stepped under KVM_GUESTDBG_SINGLESTEP */
-    struct kvm_pio pio;     /* the port instruction */
+    int ud;               /* a #UD exit brought the instruction */
+    struct kvm_insn insn; /* the instruction */
+    struct kvm_emul_read rd[KVM_EMUL_READS];
+    uint32_t rcount; /* the answers kept; the read that waits is the next */
+    struct kvm_emul_write w[KVM_EMUL_WRITES];
+    uint32_t nw;
+    struct kvm_emul_chunk chunk[KVM_EMUL_CHUNKS];
+    uint32_t nchunk, wcur; /* the chunks, and the first that may have MMIO left */
+    uint8_t wbuf[KVM_EMUL_WBUF];
+    uint32_t wlen;
+    uint64_t info[5];   /* the exit's reason and qualifications, for an internal error */
+    int step_trap;      /* an instruction was stepped under KVM_GUESTDBG_SINGLESTEP */
+    struct kvm_pio pio; /* the port instruction */
 };
 
 /*
@@ -1132,14 +1166,28 @@ int kvm_emul_xsetbv(struct kvm_vcpu *v);
 int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value);
 
 /**
- * Begin the instruction of `v` whose access to the guest-physical address
- * `gpa`, in no slot, exited: fetch it at CS:RIP, decode it, and make
- * `v->exit` its first MMIO access, or KVM_X_AGAIN with an exception queued,
- * or KVM_X_INTERNAL for an instruction the decoder refuses at CPL 0, whose
- * report carries `info`, the exit's reason, qualifications, interrupt
- * information and error code. 0, or -EFAULT.
+ * Carry out the instruction of `v` whose access to memory in no slot
+ * exited, as Linux's emulator does: fetch it at CS:RIP, decode it, and run
+ * it on the record's registers, with its operands found through the
+ * guest's own tables. `v->exit` becomes its first MMIO read, whose answer
+ * `kvm_emul_complete` takes before the instruction runs again; or, the
+ * instruction done, its first MMIO write, with `emul.resume` set while more
+ * follow; or KVM_X_AGAIN, with an exception queued when it faulted; or
+ * KVM_X_INTERNAL for an instruction the emulator does not know at CPL 0,
+ * whose report carries `info`, the exit's reason, qualifications,
+ * interrupt information and error code, where above CPL 0 the guest takes
+ * #UD. 0, or -EFAULT.
  */
-int kvm_emul_mmio(struct kvm_vcpu *v, uint64_t gpa, const uint64_t info[5]);
+int kvm_emul_mmio(struct kvm_vcpu *v, const uint64_t info[5]);
+
+/**
+ * Carry out the instruction at CS:RIP of `v` that raised #UD on the
+ * host's processor, when it is one Linux's emulator runs after a #UD:
+ * SYSCALL, SYSENTER and SYSEXIT, which a processor of the other vendor
+ * refuses in some modes, and MOVBE. Any other is given back to the guest
+ * as the #UD it raised. `v->exit` as `kvm_emul_mmio`. 0, or -EFAULT.
+ */
+int kvm_emul_ud(struct kvm_vcpu *v);
 
 /**
  * `count` pages whose frames are consecutive, set to all ones, for a
@@ -1153,16 +1201,21 @@ uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa);
 
 /** Begin the port I/O instruction `p` of `v`: `v->exit` its KVM_X_IO, an
  * OUT's bytes from RAX or the string in guest memory, RIP stepped for an
- * OUT; KVM_X_AGAIN with an exception queued. 0, or -EFAULT. */
+ * OUT; KVM_X_AGAIN with an exception queued; or the MMIO read of a string
+ * OUT's element that is in device memory, after whose answer the
+ * instruction runs again. 0, or -EFAULT. */
 int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p);
 
 /** Give the instruction under way the answer of its read, in `v->exit`, from
- * the backend's `complete`: it finishes, or sets `v->emul.resume` for the
- * write it makes next. 0. */
+ * the backend's `complete`: a port read finishes, with `v->emul.resume` set
+ * when its string has elements to write to device memory; an MMIO read's
+ * answer is kept and `v->emul.resume` set for the instruction to run
+ * again. 0. */
 int kvm_emul_complete(struct kvm_vcpu *v);
 
 /** The exit of the step `v->emul.resume` asked for, into `v->exit`, from
- * the backend's `exit` after an `enter` that entered no guest. 0. */
+ * the backend's `exit` after an `enter` that entered no guest: the
+ * instruction run again, or its next MMIO write. 0, or -EFAULT. */
 int kvm_emul_resume(struct kvm_vcpu *v);
 
 /** Read the four PAE PDPTEs at `cr3` of `v` into `pdpte`, as Linux's
