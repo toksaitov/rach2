@@ -285,7 +285,7 @@ static void select_contract(int closed)
 
 /** Select writable fd 1 with the timeval `tv`, through i386's old form
  * when `old` and through the usual five-argument form otherwise. */
-static long select_timeval(long tv[2], int old)
+static long select_timeval(long *tv, int old)
 {
     unsigned long set = 1ul << 1;
 

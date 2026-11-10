@@ -1073,9 +1073,9 @@ static int trace_edit(int *pid, int mode)
             return 0;
         }
     } else if (mode == T_RESTORE) {
-        if (syscall4(SYS_PTRACE, PTRACE_GETREGS, *pid, 0, (long)saved) != 0 ||
+        if (syscall4(SYS_PTRACE, PTRACE_GETREGS, *pid, 0, (long)&saved) != 0 ||
             !poke(*pid, USER_ORIG, -1) || !poke(*pid, USER_RET, 0) ||
-            syscall4(SYS_PTRACE, PTRACE_SETREGS, *pid, 0, (long)saved) != 0) {
+            syscall4(SYS_PTRACE, PTRACE_SETREGS, *pid, 0, (long)&saved) != 0) {
             return 0;
         }
     }
