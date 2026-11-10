@@ -110,6 +110,14 @@ its effective one, whether or not the effective ID changed, and each of
 the group ID calls its file-system group ID, which undoes what
 .Xr setfsuid 2
 set apart.
+The exception is a
+.Fn setresuid
+or
+.Fn setresgid
+that would change no ID: one whose every field is \-1 or the ID it
+already names, with an effective ID that equals the file-system one.
+It returns 0 at once, as on Linux, and changes nothing, the file-system
+ID, the dumpable flag and the parent-death signal included.
 .Pp
 A change of real user ID makes the thread count against the new user's
 total for
