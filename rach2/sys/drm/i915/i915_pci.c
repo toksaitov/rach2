@@ -355,6 +355,29 @@ static void i915_registered(struct drm_i915_private *i915)
     i915_handoff_bound(i915);
 }
 
+/**
+ * Undo a bind that failed before its registration, in reverse, as Linux's
+ * i915_driver_probe unwinds: the aperture's windows, the GTT, the display
+ * power well's reference, the GTT's mapping, the VBT and the OpRegion; put
+ * the command word back to `command` and free the record. The registers'
+ * mapping is the caller's.
+ */
+static void bind_unwind(struct drm_i915_private *i915, uint16_t command)
+{
+    const pci_device_t *pdev = &i915->pci;
+
+    i915_aperture_fini(&i915->gem.aperture);
+    i915_ggtt_fini(i915);
+    if (i915->power.count) {
+        i915_power_put(i915);
+    }
+    i915_gsm_unmap(&i915->hw);
+    intel_bios_fini(&i915->vbt);
+    intel_opregion_fini(&i915->opregion);
+    pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
+    kfree(i915);
+}
+
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
 {
     const struct i915_id *id;
@@ -402,12 +425,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
         err = i915_devices_add(i915);
     }
     if (err < 0) {
-        i915_ggtt_fini(i915);
-        i915_gsm_unmap(&i915->hw);
-        intel_bios_fini(&i915->vbt);
-        intel_opregion_fini(&i915->opregion);
-        pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
-        kfree(i915);
+        bind_unwind(i915, command);
         return err;
     }
     i915_msi_start(i915);
