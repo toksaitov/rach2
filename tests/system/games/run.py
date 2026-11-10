@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """Run one row of the Wine probes through the game launcher under Xwayland."""
-import array
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -15,7 +13,7 @@ import tempfile
 import threading
 import time
 
-from wm import tone_windows
+from wm import record, tone_windows
 
 HERE = Path(__file__).resolve().parent
 ROWS = ("prefix", "draw-64", "draw-32", "maps", "umu")
@@ -27,12 +25,17 @@ REFUSED = re.compile(r"Operation not permitted|Function not implemented|Invalid 
                      r"Inappropriate ioctl for device|No such device(?! or address)")
 
 
-def refusal(line):
-    """Return LINE of pressure-vessel's log without its time, process ids and
-    temporary names, so that Rach2's lines compare with Linux's."""
+def refusal(line, work):
+    """Return LINE of pressure-vessel's log without its time, process ids,
+    the runner's work directory WORK and the six-character temporary names
+    of pressure-vessel and the launcher, so that Rach2's lines compare with
+    Linux's."""
     line = re.sub(r"^[0-9:.]+: ", "", line)
     line = re.sub(r"\[\d+\]", "[]", line)
-    return re.sub(r"(tmp|\.rach2-game|rach2-games)[-.][A-Za-z0-9]{6}", r"\1-X", line)
+    line = line.replace(str(work), "WORK")
+    return re.sub(r"(tmp|\.rach2-game)[-.][A-Za-z0-9]{6}", r"\1-X", line)
+
+
 # Wine 11's preloader reserves these ranges for a 64-bit process, which a
 # WoW64 process is too (loader/preloader.c, preload_info): the DOS area, the
 # low memory area, the 32-bit top-down area with the shared user data, and
@@ -126,24 +129,6 @@ def show_logs(out):
             say("%s: %s" % (log.name, line))
 
 
-def record(stop, samples, ready):
-    """Read mono signed 16-bit frames at 48000 Hz from the audio loopback,
-    /dev/dsp under rach2.audio.loopback, until STOP."""
-    fd = os.open("/dev/dsp", os.O_RDONLY)
-    try:
-        # SNDCTL_DSP_SETFMT S16_LE, SNDCTL_DSP_CHANNELS 1, SNDCTL_DSP_SPEED.
-        for request, value in [(0xc0045005, 16), (0xc0045006, 1), (0xc0045002, 48000)]:
-            arg = array.array("i", [value])
-            fcntl.ioctl(fd, request, arg, True)
-            if arg[0] != value:
-                raise RuntimeError("/dev/dsp gave %d for request %#x" % (arg[0], request))
-        ready.set()
-        while not stop.is_set():
-            samples.extend(os.read(fd, 4800))
-    finally:
-        os.close(fd)
-
-
 def wait_path(path, proc):
     """Return once PATH exists; raise if PROC ends first."""
     while not path.exists():
@@ -188,11 +173,17 @@ def find_process(comm, uid):
 
 
 class Runner:
-    """One row's workspace: Weston with Xwayland, the launcher and its logs."""
+    """
+    One row's workspace: Weston with Xwayland, the launcher and its logs.
+    REFERENCE is true when the row records Linux's results in the Debian
+    guest, which has neither Rach2's audio loopback nor its PulseAudio
+    configuration.
+    """
 
-    def __init__(self, out, work):
+    def __init__(self, out, work, reference=False):
         self.out = out
         self.work = work
+        self.reference = reference
         self.launcher = shlex.split(os.environ.get("GAMES_LAUNCHER", "rach2-game"))
         self.proton = Path(os.environ.get("GAMES_PROTON", "/opt/proton"))
         self.weston = None
@@ -241,14 +232,19 @@ class Runner:
         Start a D-Bus session bus and PulseAudio on the root's OSS
         configuration, as the desktop session does, with their sockets in the
         runner's runtime directory, and export their addresses, which
-        pressure-vessel passes into its container.
+        pressure-vessel passes into its container. A reference run starts the
+        bus alone, and only where dbus-daemon is installed.
         """
         run = Path(self.env["XDG_RUNTIME_DIR"])
+        if self.reference and shutil.which("dbus-daemon") is None:
+            return
         bus = start(["dbus-daemon", "--session", "--nofork", "--nopidfile",
                      "--address=unix:path=%s/bus" % run], self.env, self.out / "dbus.log")
         self.services.append(bus)
         wait_path(run / "bus", bus)
         self.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=%s/bus" % run
+        if self.reference:
+            return
         pulse = start(["pulseaudio", "-n", "--daemonize=no", "--use-pid-file=no",
                        "--exit-idle-time=-1", "--disallow-exit", "--file=/etc/pulse/rach2.pa"],
                       self.env, self.out / "pulseaudio.log")
@@ -452,7 +448,9 @@ class Runner:
         the /dev/dri that pressure-vessel passes in, and the tone probe must be
         recorded through the loopback from PulseAudio's socket there, as it is
         directly; the container must have the session bus. The container's log
-        must hold no refused call that Linux's lacks.
+        must hold no refused call that the stored Linux reference's lacks. A
+        reference run records the refused calls and leaves out the sound and
+        the session's services, which the Debian guest does not have.
         """
         self.start_services()
         self.umu = True
@@ -468,7 +466,7 @@ class Runner:
         gl_status, gl_text = self.probe("gl64", {"WINEDEBUG": "-all,err+all"})
         gl_crc = re.search(r"pixels crc32 ([0-9a-f]{8})", gl_text)
         renderer = re.search(r"^renderer: (.*?) vendor ", gl_text, re.M)
-        tone = self.tone("tone64")
+        tone = self.tone("tone64") if not self.reference else (0, "", 0, 0, 0, [])
         inside = {}
         for log in sorted(self.out.glob("tone64.slr-*.log")):
             for key, value in re.findall(r"pv-adverb\[\d+\]: D: \t'(PULSE_SERVER|"
@@ -495,7 +493,7 @@ class Runner:
         for log in sorted(self.out.glob("*.slr-*.log")):
             for line in log.read_text(errors="replace").splitlines():
                 if REFUSED.search(line):
-                    refused.append(refusal(line))
+                    refused.append(refusal(line, self.work))
         results["refused"] = refused
         linux = set(ref.get("umu_refused", [])) if ref is not None else set()
         refused = [line for line in refused if line not in linux]
@@ -505,7 +503,7 @@ class Runner:
         self.prefix = self.work / "direct"
         self.make_prefix()
         status, text = self.probe("d3d964", {"WINEDEBUG": "-all,err+all"})
-        tone = self.tone("tone64")
+        tone = self.tone("tone64") if not self.reference else (0, "", 0, 0, 0, [])
         results["direct"] = dict(self.options("d3d964"), exit=status, tone_exit=tone[0],
                                  tone_ok="TONE OK" in tone[1], tone_windows=tone[2],
                                  tone_off=tone[3], tone_edges=tone[4], tone_kinds=tone[5])
@@ -524,6 +522,10 @@ class Runner:
         say("umu: container PULSE_SERVER %s DBUS_SESSION_BUS_ADDRESS %s" % (u["pulse"], u["bus"]))
         say("umu: direct exit %d options %s fsync %s opengl %s; second start fetched %s cache %s" % (
             d["exit"], d["options"], d["fsync"], d["opengl"], u["again"], u["cache"]))
+        heard = self.reference or (all(
+            r["tone_exit"] == 0 and r["tone_ok"] and r["tone_windows"] >= 20 and
+            r["tone_off"] * 5 <= r["tone_windows"] for r in (u, d)) and
+            u["pulse"] is not None and u["bus"] is not None)
         return (u["unpacked"] is not None and not u["again"] and not u["cache"] and
                 u["exit"] == 0 and d["exit"] == 0 and u["crc32"] is not None and
                 (want is None or u["crc32"] == want) and u["options"] is not None and
@@ -531,10 +533,7 @@ class Runner:
                 "wined3d" in u["options"] and u["fsync"] and d["fsync"] and u["opengl"] and
                 d["opengl"] and u["gl_exit"] == 0 and u["gl_crc32"] is not None and
                 (gl_want is None or u["gl_crc32"] == gl_want) and
-                "virgl" in (u["renderer"] or "") and all(
-                    r["tone_exit"] == 0 and r["tone_ok"] and r["tone_windows"] >= 20 and
-                    r["tone_off"] * 5 <= r["tone_windows"] for r in (u, d)) and
-                u["pulse"] is not None and u["bus"] is not None and not refused)
+                "virgl" in (u["renderer"] or "") and heard and not refused)
 
     def stop(self):
         """End the Wine server, the session's services and Weston and reap them."""
@@ -573,7 +572,7 @@ def main():
     runner = None
     results = {}
     try:
-        runner = Runner(out, work)
+        runner = Runner(out, work, reference=bool(reference))
         runner.start_weston()
         if row == "prefix":
             ok = runner.row_prefix(results)
