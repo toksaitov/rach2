@@ -38,6 +38,8 @@
 #include "drm/i915/intel_cdclk.c"
 #include "drm/i915/intel_pps.c"
 #include "drm/i915/intel_dp_aux.c"
+#include "drm/i915/intel_ddi.c"
+#include "drm/i915/intel_dp_link_training.c"
 #include "i915_model.h"
 #include "i915_model_pipe.h"
 #include "i915_model_sink.h"
@@ -462,6 +464,107 @@ static void row_edid(void)
     CHECK(gpu.hw.timeouts == 0, "edid: no wait timed out");
 }
 
+/* ---- link training ---- */
+
+/** The pixel clock of the panel's mode, kHz. */
+#define PANEL_CLOCK 76300u
+
+/** What the connector's init leaves for a training at 2.7 Gb/s on one
+ * lane: the sink's caps, the rates both ends take, the buffer's bits of
+ * the firmware's that stay, and DDI A's translations written. */
+static struct i915_model_sink *link_setup(void)
+{
+    struct i915_model_sink *s = fresh();
+    struct intel_dp *dp = &gpu.display.dp;
+
+    k_memcpy(dp->dpcd, s->dpcd, sizeof(dp->dpcd));
+    dp->rates[0] = 162000;
+    dp->rates[1] = 270000;
+    dp->nrates = 2;
+    dp->max_lanes = 1;
+    dp->link_rate = 270000;
+    dp->lane_count = 1;
+    dp->saved_port_bits = reg(DDI_BUF_CTL(0)) & (DDI_BUF_PORT_REVERSAL | DDI_A_4_LANES);
+    intel_ddi_prepare_buf_trans(&gpu);
+    intel_ddi_init_dp_buf_reg(&gpu, dp->lane_count);
+    return s;
+}
+
+/** A training that needs one step of swing and one of pre-emphasis, in
+ * Linux's register and DPCD order. */
+static void row_train(void)
+{
+    struct i915_model_sink *s = link_setup();
+    uint32_t from = model.nlog;
+    long buf_off, off, tp, on;
+
+    CHECK(reg(DDI_BUF_TRANS_LO(0, 8)) == 0x80d75fffu && reg(DDI_BUF_TRANS_HI(0, 8)) == 0x000b0000u,
+          "train: DDI A's translations are Linux's");
+    s->trained = s->normal = 0;
+    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == 0, "train: the link trains");
+    CHECK(s->trained && s->trained_bw == DP_LINK_BW_2_7 && s->trained_lanes == 1,
+          "train: at 2.7 Gb/s on one lane");
+    CHECK(s->levels_bad == 0, "train: the buffer drives the levels the sink was told");
+    CHECK(s->cr_reads == 2 && s->eq_reads == 2,
+          "train: one step of swing in clock recovery and one of pre-emphasis after");
+    CHECK((reg(DDI_BUF_CTL(0)) & DDI_BUF_EMP_MASK) == DDI_BUF_TRANS_SELECT(5),
+          "train: swing 1 and pre-emphasis 1 are translation 5");
+    CHECK(s->dpcd[DP_LINK_BW_SET] == DP_LINK_BW_2_7 &&
+              s->dpcd[DP_LANE_COUNT_SET] == (1 | DP_LANE_COUNT_ENHANCED_FRAME_EN) &&
+              s->dpcd[DP_DOWNSPREAD_CTRL] == 0 &&
+              s->dpcd[DP_MAIN_LINK_CHANNEL_CODING_SET] == DP_SET_ANSI_8B10B,
+          "train: the sink is set to 8b/10b, 2.7 Gb/s and one lane with enhanced framing");
+    off = i915_model_find_write(&model, DP_TP_CTL(0), LENOVO_FW_DP_TP_CTL_A & ~DP_TP_CTL_ENABLE,
+                                from);
+    tp = i915_model_find_write(
+        &model, DP_TP_CTL(0),
+        DP_TP_CTL_ENABLE | DP_TP_CTL_LINK_TRAIN_PAT1 | DP_TP_CTL_ENHANCED_FRAME_ENABLE, from);
+    on = i915_model_find_write(&model, DDI_BUF_CTL(0), DDI_BUF_CTL_ENABLE, from);
+    buf_off = i915_model_find_write(&model, DDI_BUF_CTL(0),
+                                    LENOVO_FW_DDI_BUF_CTL_A & ~DDI_BUF_CTL_ENABLE, from);
+    CHECK(buf_off >= 0 && off > buf_off && tp > off && on > tp,
+          "train: the firmware's link goes off, then pattern 1, then the buffer on one lane");
+    CHECK((reg(DP_TP_CTL(0)) & DP_TP_CTL_LINK_TRAIN_MASK) == DP_TP_CTL_LINK_TRAIN_IDLE,
+          "train: the port is left on its idle pattern");
+    intel_dp_stop_link_train(&gpu);
+    CHECK(s->dpcd[DP_TRAINING_PATTERN_SET] == DP_TRAINING_PATTERN_DISABLE && s->normal &&
+              gpu.display.dp.link_trained,
+          "train: the end of training sends pictures on the trained link");
+    CHECK(gpu.hw.timeouts == 0, "train: no wait timed out");
+}
+
+/** Trainings that fail: tried again at once, then the most parameters,
+ * then the same link while the mode needs it, then a lower rate. */
+static void row_train_fail(void)
+{
+    struct i915_model_sink *s = link_setup();
+    struct intel_dp *dp = &gpu.display.dp;
+
+    s->cr_swing = 3; /* more than Haswell's swing at any pre-emphasis */
+    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EIO && !s->trained,
+          "fail: a sink that never recovers its clock fails");
+    CHECK(s->cr_reads == 2u * 6u,
+          "fail: each try ends after a read at swing 0 and the same swing asked 5 times");
+    CHECK(dp->train_failures == 2 && dp->use_max_params && dp->link_max_rate == 0,
+          "fail: two failures in a row, then the sink's most is tried");
+    CHECK(logged("edp: link training failed at 270000 kHz on 1 lanes"), "fail: and logged");
+    log_clear();
+    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EIO && dp->link_max_rate == 0,
+          "fail: then the same link, since the mode needs 2.7 Gb/s");
+    CHECK(logged("same parameters"), "fail: and that is logged");
+    CHECK(intel_dp_start_link_train(&gpu, 50000) == -EIO && dp->link_max_rate == 162000 &&
+              dp->link_max_lanes == 1,
+          "fail: a mode that fits 1.62 Gb/s falls back to it");
+
+    s = link_setup();
+    s->eq_preemph = 3; /* pre-emphasis 3 leaves no swing for the clock */
+    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EIO && !s->trained,
+          "fail: a sink that never equalizes fails");
+    CHECK(logged("clock recovery lost in channel equalization"),
+          "fail: when the clock is lost for the pre-emphasis");
+    CHECK(gpu.hw.timeouts == 0, "fail: no wait timed out");
+}
+
 int main(void)
 {
     model_start("i915-edp-test");
@@ -474,6 +577,8 @@ int main(void)
     row_aux_retries();
     row_aux_vdd();
     row_edid();
+    row_train();
+    row_train_fail();
     i915_model_free(&model);
     intel_bios_fini(&vbt);
     if (failures == 0) {
