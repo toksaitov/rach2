@@ -462,7 +462,7 @@
     },
     {
       "case_id": "guest.default.vmprobe",
-      "behavior": "brk, an anonymous mmap and the stack grow, read zero and keep their bytes, and brk does not grow over a mapping above the break.",
+      "behavior": "brk, an anonymous mmap and the stack grow, read zero and keep their bytes, brk does not grow over a mapping above the break, and a mapping goes below the break once the room above it is taken.",
       "units": ["default", "vmprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -481,6 +481,7 @@
         {"assertion_id": "collision-map", "checks": "A one-page mmap meant for a place above the break succeeds.", "source": "program"},
         {"assertion_id": "collision-above", "checks": "That page is placed above the break.", "source": "program"},
         {"assertion_id": "collision-refused", "checks": "brk refuses to grow across the page, returning the old break.", "source": "program"},
+        {"assertion_id": "below-break", "checks": "Once reservations take the room between the break and the mmap base, an mmap without a hint is placed below the break.", "source": "program"},
         {"assertion_id": "stack", "checks": "64 levels of recursion with 1 KiB frames each keep their bytes.", "source": "program"}
       ],
       "branches": [],

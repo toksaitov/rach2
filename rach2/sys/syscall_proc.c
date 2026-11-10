@@ -6896,24 +6896,31 @@ static uintptr_t task_size(void)
 }
 
 /**
- * The range of `vm` a mapping without a hint is placed in, from `*lo` to
- * `*hi`: from the heap's top to the mmap base, and in an i386 call of a
- * 64-bit program below IA32_MMAP_BASE, Linux's mmap_compat_base, so that the
- * call's 32-bit result holds the address, from the bottom of user space
- * when the heap lies above it.
+ * The highest free range of `vm` that holds `len` bytes, for a mapping
+ * without a usable hint, or 0: below the mmap base, down to the bottom of
+ * user space whatever the heap's place, as Linux's top-down search goes, and
+ * when that has no room, as Linux then falls back to its bottom-up search,
+ * between the mmap base and the stack's growth window. In an i386 call the
+ * mmap base is at most IA32_MMAP_BASE, Linux's mmap_compat_base, and the
+ * range ends by IA32_TASK_SIZE, so that the call's 32-bit result holds the
+ * address. The search goes below the heap's top: an i386 Wine reserves
+ * nearly all that lies above its loader's heap until its program starts.
  */
-static void mmap_range(const vm_space_t *vm, uintptr_t *lo, uintptr_t *hi)
+static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
 {
-    *lo = PAGE_UP(vm->brk);
-    *hi = vm->mmap_base;
+    uintptr_t hi = vm->mmap_base, end = vm->stack_limit, base;
+
 #if ELF_IA32
-    if (in_compat_syscall() && *hi > IA32_MMAP_BASE) {
-        *hi = IA32_MMAP_BASE;
+    if (in_compat_syscall()) {
+        hi = hi < IA32_MMAP_BASE ? hi : IA32_MMAP_BASE;
+        end = end < IA32_TASK_SIZE ? end : IA32_TASK_SIZE;
     }
 #endif
-    if (*lo > *hi) {
-        *lo = USER_ADDR_MIN;
+    base = vm_find_free(vm, len, USER_ADDR_MIN, hi);
+    if (base == 0 && end > hi) {
+        base = vm_find_free(vm, len, hi, end);
     }
+    return base;
 }
 
 /**
@@ -6921,8 +6928,8 @@ static void mmap_range(const vm_space_t *vm, uintptr_t *lo, uintptr_t *hi)
  * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
  * use and with ENOMEM for one past the address space's end (`task_size`);
  * otherwise the hint rounded down to its page when that range is free
- * below the stack's growth window, and without one the highest free range
- * of `mmap_range`, so the ranges munmap frees are used again. MAP_32BIT in
+ * below the stack's growth window, and without one `mmap_free`'s, the
+ * highest free range, so the ranges munmap frees are used again. MAP_32BIT in
  * a 64-bit call, as on Linux, rounds the hint up, takes it only when its
  * range ends by 2 GiB, and otherwise takes the highest free range from
  * 1 GiB to 2 GiB; a 32-bit call ignores it, its every address being below
@@ -6935,9 +6942,8 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
 {
     unsigned long limit = current_proc->rlim[RLIM_AS].cur;
     uintptr_t top = vm->stack_limit;
-    uintptr_t lo, hi;
+    int low = 0;
 
-    mmap_range(vm, &lo, &hi);
     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
         if (addr < USER_ADDR_MIN || len > task_size() || addr > task_size() - len) {
             return -ENOMEM;
@@ -6949,8 +6955,7 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
         return vm_total(vm) - vm_covered(vm, addr, addr + len) + len > limit ? -ENOMEM : 0;
     }
     if ((flags & MAP_32BIT) && sizeof(void *) > 4u && !in_compat_syscall()) {
-        lo = MAP_32BIT_LO;
-        hi = MAP_32BIT_HI;
+        low = 1;
         top = top < MAP_32BIT_HI ? top : MAP_32BIT_HI;
         addr = PAGE_UP(addr);
     }
@@ -6961,7 +6966,7 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
         *base = addr;
     }
     if (*base == 0) {
-        *base = vm_find_free(vm, len, lo, hi);
+        *base = low ? vm_find_free(vm, len, MAP_32BIT_LO, MAP_32BIT_HI) : mmap_free(vm, len);
     }
     return *base == 0 || vm_total(vm) + len > limit ? -ENOMEM : 0;
 }
@@ -7421,7 +7426,6 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
                          uint32_t flags, uintptr_t to)
 {
     vm_space_t *vm = &current_proc->mm->vm;
-    uintptr_t lo, hi;
 
     if (flags & MREMAP_FIXED) {
         return remap_fixed(vm, addr, old_len, to, new_len);
@@ -7450,8 +7454,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     if (!(flags & MREMAP_MAYMOVE)) {
         return -ENOMEM;
     }
-    mmap_range(vm, &lo, &hi);
-    to = vm_find_free(vm, new_len, lo, hi);
+    to = mmap_free(vm, new_len);
     if (to == 0) {
         return -ENOMEM;
     }
