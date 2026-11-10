@@ -461,7 +461,8 @@ and
 .Pa phys ,
 the strings of EVIOCGNAME and EVIOCGPHYS;
 .Pa uniq ,
-empty, since no driver gives a serial number;
+the serial string of a USB device in the report protocol, the string of
+EVIOCGUNIQ, and empty for any other device;
 .Pa properties
 and
 .Pa capabilities/ev ,
@@ -496,9 +497,10 @@ link to its parent, but under
 and its
 .Pa uevent :
 .Ql PRODUCT ,
-.Ql NAME
-and
+.Ql NAME ,
 .Ql PHYS
+and
+.Ql UNIQ
 when it has them,
 .Ql PROP ,
 .Ql EV ,
