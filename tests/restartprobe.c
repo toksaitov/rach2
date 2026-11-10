@@ -429,13 +429,14 @@ static char state_of(int pid)
 }
 
 /** Wait until process `pid` sleeps in a wait; whether it does, 0 when it
- * has exited or cannot be read first. */
+ * has exited, stopped or cannot be read first, since none of those ends
+ * in the sleep without the probe. */
 static int wait_sleeping(int pid)
 {
     char st;
 
     while ((st = state_of(pid)) != 'S') {
-        if (st == 'Z' || st == 'X' || st == 0) {
+        if (st == 'Z' || st == 'X' || st == 'T' || st == 't' || st == 0) {
             return 0;
         }
         nap(5000L);
