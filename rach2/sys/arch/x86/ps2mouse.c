@@ -226,10 +226,11 @@ static void wait_turn(void)
  */
 static int ps2_wait_mouse_output(void)
 {
-    int timeout = PS2_TIMEOUT;
+    uint32_t start = ps2_wait_begin();
+    int reads = 0;
     uint8_t status;
 
-    while (timeout-- > 0) {
+    while (!ps2_wait_over(start, reads++)) {
         status = inb(PS2_STATUS_PORT);
         if ((status & PS2_STATUS_OUTPUT_FULL) == 0) {
             wait_turn();
