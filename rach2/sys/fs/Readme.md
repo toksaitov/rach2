@@ -48,7 +48,7 @@ A vector append through `writev`, `pwritev` or `pwritev2` holds the description 
 
 `RWF_NOAPPEND` uses the same locked vector write with end placement disabled, without changing the description's O_APPEND flag. An explicit position leaves the shared offset alone; -1 uses and advances it. Reads accept NOAPPEND and ignore it. Both directions reject APPEND together with NOAPPEND for a nonempty vector, as Linux 6.12's `kiocb_set_rw_flags` in `include/linux/fs.h` does.
 
-A synthetic descriptor keeps the mount where its node was opened, so following its `/proc/PID/fd/N` link under `RESOLVE_NO_XDEV` compares the target's actual mount. Anonymous objects cross out of proc. The replay keeps the original mount restriction and checks the descriptor again before opening its target.
+A synthetic descriptor keeps the mount where its node was opened, so following its `/proc/PID/fd/N` link under `RESOLVE_NO_XDEV` compares the target's actual mount. A descriptor on no file-system mount, such as a pipe or a socket, gives `EXDEV` when its link is followed under `RESOLVE_NO_XDEV` (`proc_fd_xdev` in `../syscall_fs.c`). The replay keeps the original mount restriction and checks the descriptor again before opening its target.
 
 ### Copies between descriptors
 
