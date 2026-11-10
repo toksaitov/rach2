@@ -131,9 +131,10 @@ long sys_ppoll(struct isr_params *params);
  * of those five, Linux's struct sel_arg_struct. Returns the count of bits
  * set in the sets written back, 0 at the timeout, -EBADF for a set bit of a
  * descriptor that is not open or was opened with O_PATH, -EINVAL for a
- * count negative or past 1024 or a timeval out of range, -EFAULT, -EINTR or
- * -ENOMEM. The time left goes back to the timeval, and a signal that runs
- * no handler restarts the call with it (`poll_finish`).
+ * negative count or a timeval whose normalized seconds or fraction are
+ * negative, -EFAULT, -EINTR or -ENOMEM. The time left goes back to the
+ * timeval, and a signal that runs no handler restarts the call with it
+ * (`poll_finish`).
  */
 long sys_select(struct isr_params *params);
 long sys__newselect(struct isr_params *params);

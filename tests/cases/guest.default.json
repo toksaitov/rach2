@@ -2048,7 +2048,7 @@
     },
     {
       "case_id": "guest.default.pollprobe",
-      "behavior": "poll and select on pipes, sockets and the console, the terminal of the debug shell's init, answer readiness and time out as Linux does",
+      "behavior": "poll and select on pipes, sockets and the console, the terminal of the debug shell's init, answer readiness and time out as Linux does; select normalizes excess microseconds and leaves refused or normalized-zero timevals unchanged, through both i386 select forms",
       "units": ["default", "pollprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

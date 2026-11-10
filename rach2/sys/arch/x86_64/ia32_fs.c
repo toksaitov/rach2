@@ -689,13 +689,28 @@ int ia32_get_timespec(uintptr_t u, long ts[2])
 /* The kinds of timeout of the select calls. */
 enum { SEL_TIMEVAL, SEL_TIMESPEC, SEL_TIMESPEC64 };
 
+/** Whether the timeout `ts`, of `kind`, is zero after normalization.
+ * A timeval's fields came from signed 32-bit words, so its sum fits. */
+static int select_timeout_zero(int kind, const long ts[2])
+{
+    if (kind == SEL_TIMEVAL) {
+        return ts[0] + ts[1] / 1000000L == 0 && ts[1] % 1000000L == 0;
+    }
+    return ts[0] == 0 && ts[1] == 0;
+}
+
 /** Give the time left, which the native call wrote to `ts`, back to the
  * timeout at `ut`, of the kind `kind`, unless it was `zero`, as
- * `poll_left_out` does; returns `rc`, the call's result. */
+ * `poll_left_out` does; returns `rc`, the call's result. Here the native
+ * call has nonnegative nfds and kernel-backed sets, so EINVAL or EFAULT
+ * means its timeout or signal-mask validation failed before the wait. */
 static long select_left_out(long rc, uintptr_t ut, int kind, int zero, const long ts[2])
 {
     int form = kind == SEL_TIMEVAL ? POLL_LEFT_USEC : kind == SEL_TIMESPEC64 ? POLL_LEFT_WIDE : 0;
 
+    if (rc == -EINVAL || rc == -EFAULT) {
+        return rc;
+    }
     return poll_left_out((int32_t)rc, ut, form, zero, ts[0],
                          kind == SEL_TIMEVAL ? ts[1] * 1000L : ts[1]);
 }
@@ -755,7 +770,7 @@ static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t
     }
     if (rc == 0 && ut) {
         if (kind == SEL_TIMEVAL) {
-            struct ia32_timeval tv;
+            struct ia32_timeval tv = {0, 0};
 
             if (copy_from_user(&tv, (const void __user *)ut, sizeof(tv)) != 0) {
                 rc = -EFAULT;
@@ -769,7 +784,7 @@ static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t
         kts = KPTR(b->ts);
     }
     if (rc == 0 && usig) {
-        struct ia32_sigset_arg sa;
+        struct ia32_sigset_arg sa = {0, 0};
 
         if (copy_from_user(&sa, (const void __user *)usig, sizeof(sa)) != 0) {
             rc = -EFAULT;
@@ -779,7 +794,7 @@ static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t
         ksig = KPTR(b->sigarg);
     }
     if (rc == 0) {
-        int zero = b->ts[0] == 0 && b->ts[1] == 0;
+        int zero = select_timeout_zero(kind, b->ts);
 
         rc = ia32_native(params, kind == SEL_TIMEVAL ? sys__newselect : sys_pselect6, b, size,
                          (unsigned long)nfds, kset[0], kset[1], kset[2], kts, ksig);
