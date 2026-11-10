@@ -16,8 +16,11 @@
  * mprotect, which changes the page below it first, with EPERM, refuses
  * MADV_DONTNEED when it is read-only, and MADV_GUARD_INSTALL, which keeps
  * its bytes, as Linux 6.13 does, shows `sl` in smaps, may be sealed
- * again and stays sealed in a child of fork. On the i686 kernel every call
- * is EPERM, as Linux's 32-bit kernel answers.
+ * again and stays sealed in a child of fork. An mprotect to PROT_EXEC over a
+ * populated anonymous page and a sealed page of memfd_secret above it is
+ * EACCES, and has already made the first page read-only, so that a write
+ * there raises SIGSEGV. On the i686 kernel every call is EPERM, as Linux's
+ * 32-bit kernel answers.
  *
  * `pkey`: on the x86-64 kernel pkey_alloc refuses a flag and an unknown
  * access right with EINVAL, pkey_free of a key not allocated is EINVAL,
@@ -31,7 +34,8 @@
  *
  * `cachestat`: a memfd of three pages written in its first and last counts
  * two pages in memory and none dirty, a range of its middle page none, and a
- * range past its end none; EBADF for a descriptor that is not open and an
+ * range past its end none, and grown by ftruncate to 0xFFFFFFFF000 bytes
+ * it still counts two; EBADF for a descriptor that is not open and an
  * O_PATH one, EFAULT for a range it cannot read and EINVAL for a flag.
  *
  * `cachestat-perm`: a process that neither owns nor may write a file it
@@ -52,9 +56,10 @@
  * cachestat counts its touched page as in memory and not dirty.
  *
  * `secret-refused`: /proc/self/mem cannot read the mapping (EIO),
- * process_vm_readv and get_mempolicy cannot (EFAULT), and mlock fails
- * with ENOMEM and leaves no lock mark in smaps, after which munlock
- * succeeds.
+ * process_vm_readv and get_mempolicy cannot (EFAULT), the last of a page
+ * touched and of one not, which it leaves unfilled, so that cachestat still
+ * counts one page; mlock fails with ENOMEM and leaves no lock mark in smaps,
+ * after which munlock succeeds.
  *
  * `secret-memlock`: under an RLIMIT_MEMLOCK of one page, a child may touch
  * one page of memfd_secret and is killed by SIGBUS at the second, whether or
@@ -64,7 +69,11 @@
  * COLLAPSE, and a descriptor that is no pidfd are EINVAL, EINVAL and EBADF;
  * MADV_COLD and MADV_PAGEOUT over a page of the caller give its 4096 bytes,
  * and over no mapping ENOMEM; over a page of a child they give 4096 for
- * root and EPERM for anyone else, who lacks CAP_SYS_NICE.
+ * root and EPERM for anyone else, who lacks CAP_SYS_NICE. As root, over a
+ * process of user 1000, a caller with that user's file-system IDs and user
+ * 1001's real and effective ones passes the access check, which Linux makes
+ * with the file-system IDs, and is EPERM, where real or effective IDs would
+ * make it EACCES.
  *
  * `process-mrelease`: a flag is EINVAL, a descriptor that is no pidfd
  * EBADF, the caller and a child that is not dying EINVAL; a child killed
@@ -714,9 +723,11 @@ static pid_t sleeper(int *fd)
     return *fd >= 0 ? pid : -1;
 }
 
-/** In an isolated caller, reach READ_FSCREDS with IDs unlike the effective
- * ones, then require EPERM at CAP_SYS_NICE. Reap the target on every path;
- * 0 on success, or 1 on a setup or result failure. */
+/** In an isolated caller whose file-system IDs alone are the target's, its
+ * real and effective ones another user's, require EPERM at CAP_SYS_NICE:
+ * a kernel that judged the access by real or effective IDs would refuse it
+ * first with EACCES. Reap the target on every path; 0 on success, or 1 on a
+ * setup or result failure. */
 static int madvise_fsids(void)
 {
     uid_t uid = (uid_t)probe_id(1000), other = (uid_t)probe_id(1001);
@@ -745,8 +756,8 @@ static int madvise_fsids(void)
         goto out;
     }
     fd = (int)syscall(NR_PIDFD_OPEN, pid, 0ul);
-    if (fd < 0 || setresgid((gid_t)uid, (gid_t)other, (gid_t)uid) != 0 ||
-        setresuid(uid, other, uid) != 0) {
+    if (fd < 0 || setresgid((gid_t)other, (gid_t)other, (gid_t)uid) != 0 ||
+        setresuid(other, other, uid) != 0) {
         goto out;
     }
     setfsgid((gid_t)uid);
