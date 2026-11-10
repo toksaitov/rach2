@@ -863,7 +863,7 @@ static void process_packet_v3(void)
  * which ends in 0x7f, a quarter of its motion; or the pad's place and
  * pressure, whose buttons Linux reports on the stick's device. Linux leaves
  * that device's packet open until the stick's next, so a click of the pad
- * waits for the stick to move (dev-log/76-graphics/upstream.md); here the
+ * waits for the stick to move (dev-log/76-display/upstream.md); here the
  * stick's packet is ended with the pad's.
  */
 static void process_packet_v6(void)

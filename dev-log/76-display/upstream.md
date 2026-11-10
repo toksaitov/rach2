@@ -45,3 +45,25 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `rach2/sys/arch/x86/elantech.c`'s `etd_report_trackpoint` drops the packet when the pad has no stick, in task 3322's driver commit.
 * Status: unreported, draft record from the host run.
 * Next: confirm on Linux with a version 3 pad, or with a fault-injected packet through serio's userspace device, then send a patch that checks `etd->tp_dev` in `elantech_packet_check_v3` as the v4 check does.
+
+## Linux leaves a version 6 ALPS pad's button on the stick's device without a sync
+
+* Project: Linux 6.12, `drivers/input/mouse/alps.c` at the tag `v6.12` (SHA-256 f7e52165edc72a9cb5af764eca26af78cf494a33ce4f1825f9de96b3ec234294); master's copy of 2026-11-10 (SHA-256 681442adef1ebb93223e28138908753786b96fb96053b2ca6527e95ea21581fd) has the same code.
+* Fails: `alps_process_packet_v6` reports a touchpad packet's buttons on the stick's device, `psmouse_report_standard_buttons(dev2, packet[3])` (`alps.c:884`), and then syncs only the touchpad's, `input_sync(dev)` (`alps.c:886`). The button events wait in the stick device's buffer until the stick's next packet calls `input_sync(dev2)` (`alps.c:860`), so a click on the pad reaches a program only when the stick next moves.
+* Found: 2026-11-10, on the Mac, by reading the code while porting it for task 76-25 of milestone 76.
+* Reproduction: not run on hardware, which Rach2 does not have. On a version 6 pad, the Dell Latitude XT2's (E7 report 73 00 14), press a touchpad button without touching the stick and read the stick's event device with `evtest`: the press should show only after the stick moves.
+* Evidence: `rach2/sys/arch/x86/alps.c`, `process_packet_v6`; `tests/host/alps_hosttest.c`, `v6_packet_rows`, the row "the pad's button is the stick device's, its packet ended".
+* Rach2: ends the stick device's packet after the pad's, in task 3317's driver commit.
+* Status: unreported.
+* Next: search the linux-input list for the fault, then send a patch that adds `input_sync(dev2)` after `input_sync(dev)`.
+
+## Linux's alps.rst misdescribes the version 6 and 8 packets
+
+* Project: Linux 6.12, `Documentation/input/devices/alps.rst` at the tag `v6.12` (SHA-256 4583165cd317cf8fae98a3db9ec55b24d6c1dc9d82770c4ddbd5345a6adfbd75).
+* Fails: the document and `drivers/input/mouse/alps.c` disagree. It says the driver "supports seven protocol versions" and lists eight (`alps.rst:7-8`). Its version 6 touchpad packet puts x3 to x0 in byte 1 and x7 to x4 in byte 3 (`alps.rst:286-288`), while `alps_process_packet_v6` takes seven bits of X from byte 1 and bits 7 to 10 from byte 3's bits 3 to 6 (`alps.c:865`), and the same for Y. Its version 8 table "Touchpad packet (APD = 0x2)" (`alps.rst:343`) is the stick's packet in the code (`SS4_PACKET_ID_STICK`, `alps.c:1166`). Its two-finger and three-or-four-finger tables give byte 5 as "BY8 BY7 BY5 BY5" (`alps.rst:376`, `alps.rst:388`), where `SS4_STD_MF_Y_V2` (`alps.h:104`) reads BY5 to BY8 from byte 5's low four bits.
+* Found: 2026-11-10, on the Mac, while building the packets of `tests/host/alps_hosttest.c` from the document for task 76-25 of milestone 76.
+* Reproduction: read the document's tables beside the decoders it names.
+* Evidence: `tests/host/alps_hosttest.c`, whose version 6 and 8 packets follow the code where the two differ; `rach2/sys/arch/x86/alps.c`, which follows the code.
+* Rach2: nothing to work around; the driver and the test follow Linux's code.
+* Status: unreported.
+* Next: check master's `alps.rst`, which was not read, then send a documentation patch that corrects the count, the version 6 layout, the APD 2 title and the BY6 bit.
