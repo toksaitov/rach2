@@ -21,8 +21,8 @@
  * driver's ioctls that Mesa's Crocus and hasvk call, against Linux's
  * numbers, and the sync files of an image's dma-buf (78-11a.2); the
  * command parser's shadow and trampoline on the call's path (78-8b), and
- * the objects held until the request retires; a ring that refuses the
- * commands.
+ * the objects held until the request retires, their bindings kept while
+ * the object is busy (78-5c); a ring that refuses the commands.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -706,6 +706,47 @@ static void store_batch(uint32_t b, struct drm_i915_gem_relocation_entry *r, uin
     r->presumed_offset = 0xdead0000u;
     r->read_domains = I915_GEM_DOMAIN_RENDER;
     r->write_domain = I915_GEM_DOMAIN_RENDER;
+}
+
+/**
+ * 78-5c: a program that closes its objects while their batch runs leaves
+ * them to the request, which keeps their bindings and pages until the chip
+ * is past it and it retires, as Linux's active bindings keep an object;
+ * a binding of a busy object is not undone meanwhile.
+ */
+static void lifetime(void)
+{
+    uint32_t t = create(&file_a, 8192), b = create(&file_a, 4096);
+    struct drm_i915_gem_relocation_entry r;
+    struct drm_i915_gem_exec_object2 o[2];
+    struct drm_i915_gem_execbuffer2 a;
+    struct drm_i915_gem_object *obj = object(&file_a, t);
+    struct i915_vma *v;
+    uint64_t ts, bs;
+    uintptr_t frame;
+
+    store_batch(b, &r, t, 0x100);
+    entry_init(&o[0], t);
+    entry_init(&o[1], b);
+    o[1].relocation_count = 1;
+    o[1].relocs_ptr = (uintptr_t)&r;
+    args_init(&a, o, 2, I915_EXEC_RENDER);
+    CHECK(execbuf(&a) == 0, "lifetime: the call passes");
+    ts = offset_of(t);
+    bs = offset_of(b);
+    frame = (uintptr_t)chip_a.gtt[ts >> 12];
+    close_handle(&file_a, t);
+    close_handle(&file_a, b);
+    v = eb_binding(obj);
+    CHECK(i915_gem_object_is_active(obj) && v && v->start == ts && frame != 0 &&
+              (uintptr_t)chip_a.gtt[ts >> 12] == frame && chip_a.gtt[bs >> 12] != 0,
+          "lifetime: closed while the request runs, both keep their bindings");
+    CHECK(v && i915_vma_unbind(v) == -EBUSY && i915_gem_object_unbind(obj) == -EAGAIN &&
+              chip_a.gtt[ts >> 12] != 0,
+          "lifetime: a busy object's binding is not undone");
+    idle();
+    CHECK(chip_a.gtt[ts >> 12] == 0 && chip_a.gtt[bs >> 12] == 0,
+          "lifetime: both freed and unbound once the request retires");
 }
 
 /**
@@ -1462,6 +1503,7 @@ int main(void)
     wsi_sync_files();
     parser();
     sol_and_faults();
+    lifetime();
     idle();
     drm_syncobj_release(&file_a);
     CHECK(allocations - (int)dev_a->gt.ppgtt.tables == before,

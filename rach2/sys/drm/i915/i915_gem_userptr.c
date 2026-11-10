@@ -40,8 +40,10 @@ void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
  * copy-on-write break, a page dropped, or the end of the address space.
  * The bindings are revoked first, as Linux's did before the pages went: an
  * unpinned one is undone, and a pinned one is pointed at the scratch page
- * until its last pin goes. Then the frames are let go, or, while a pin
- * still holds them, marked stale, to go with its last. Does not sleep.
+ * until its last pin goes. A binding the GPU still uses keeps its entries,
+ * and with them the frames, until the work is done, as Linux keeps the
+ * pinned pages of a busy object. Then the frames are let go, or, while a
+ * pin still holds them, marked stale, to go with its last. Does not sleep.
  */
 static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
@@ -82,8 +84,13 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     int tries, err;
 
     if (obj->userptr.stale) {
-        /* The unpinned bindings of the old frames go, and with the last
-         * pin the frames; a pinned binding keeps them. */
+        /* The unpinned bindings of the old frames go once the GPU is done
+         * with them, and with the last pin the frames; a pinned binding
+         * keeps them. */
+        err = i915_gem_object_wait_idle(obj, 1);
+        if (err != 0) {
+            return err;
+        }
         (void)i915_gem_object_unbind(obj);
         if (obj->userptr.stale) {
             return -EAGAIN;

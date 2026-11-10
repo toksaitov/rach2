@@ -142,6 +142,34 @@ int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
     return 0;
 }
 
+int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
+{
+    struct dma_resv *r = obj->base.resv;
+    struct dma_fence *f;
+    uint32_t i;
+    int32_t err;
+
+    for (;;) {
+        f = fence_busy(r->write) ? r->write : 0;
+        for (i = 0; !f && i < r->nreads; i++) {
+            if (fence_busy(r->reads[i])) {
+                f = r->reads[i];
+            }
+        }
+        if (!f) {
+            return 0;
+        }
+        /* A reference of its own, since the reservation may change while
+         * the wait sleeps. */
+        (void)dma_fence_get(f);
+        err = dma_fence_wait_until(f, intr, -1);
+        dma_fence_put(f);
+        if (err == -EINTR) {
+            return err;
+        }
+    }
+}
+
 uintptr_t i915_gem_object_frame(struct drm_i915_gem_object *obj, uint32_t pgoff)
 {
     uintptr_t phys;
@@ -215,9 +243,12 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int le
     obj->cache_dirty = !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
-/** The `free` of an object, once its last reference goes: every binding
- * undone, its mmap offsets taken out of the device's space, its pages
- * unpinned and freed, a userptr object's range taken off. */
+/**
+ * The `free` of an object, once its last reference goes, which no request
+ * the chip has not passed holds: every binding undone, its mmap offsets
+ * taken out of the device's space, its pages unpinned and freed, a userptr
+ * object's range taken off. The DRM core has let its fences go by then.
+ */
 static void i915_gem_object_free(struct drm_gem_object *base)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
