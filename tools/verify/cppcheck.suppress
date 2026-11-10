@@ -94,6 +94,12 @@ unusedStructMember:*tests/drmprobe.c
 # probe checks whole; it reads some members, and the rest are the layout.
 unusedStructMember:*tests/drmcompatprobe.c
 
+# mixprobe's `struct sock_filter`, `struct k_sigaction` and `struct msghdr`
+# are Linux's, in the layout of the ABI the probe is built for, which seccomp,
+# rt_sigaction and recvmsg read or fill whole; the members the probe does
+# not set are the layout.
+unusedStructMember:*tests/mixprobe.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 and x86-64 signal frames, statx, the rusage, the siginfo a wait
@@ -232,6 +238,7 @@ constVariable:*tests/devprobe.c
 constVariable:*tests/exitprobe.c
 constVariable:*tests/limitprobe.c
 constVariable:*tests/lockwaitprobe.c
+constVariable:*tests/mixprobe.c
 constVariable:*tests/loopdevprobe.c
 constVariable:*tests/sigprobe.c
 constVariable:*tools/audio/resamplebench.c
@@ -239,6 +246,9 @@ unassignedVariable:*tests/devprobe.c
 unassignedVariable:*tests/loopprobe.c
 unassignedVariable:*tests/procprobe.c
 unassignedVariable:*tests/sigprobe.c
+# mixprobe's recvfd reads into its buffer through the raw read call, so
+# cppcheck takes the buffer it then compares for one nothing wrote.
+uninitvar:*tests/mixprobe.c
 
 # The limit and pty probes give the kernel Linux's struct sigaction, whose
 # members the probes set in an initializer and the kernel reads.
@@ -255,6 +265,9 @@ constParameter:*tests/xsaveprobe.c
 # freestanding and has no libc, so it clears a structure with a byte loop.
 knownConditionTrueFalse:*tests/netifprobe.c
 useStandardLibrary:*tests/netifprobe.c
+# mixprobe is freestanding as well and clears its structures with a byte
+# loop.
+useStandardLibrary:*tests/mixprobe.c
 # The raw socket probe likewise reads a socket option the kernel writes
 # through an address it passes as an integer in the socketcall argument
 # block, so cppcheck calls the test of the value read constant.
