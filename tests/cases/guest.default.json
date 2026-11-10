@@ -1535,7 +1535,7 @@
     },
     {
       "case_id": "guest.default.fsidprobe",
-      "behavior": "setfsuid and setfsgid set the file-system ids that a new file's owner, an open's permission check and the status file's fourth columns go by, take the file-system capabilities from the effective set while the user id is not 0, and are reset by setuid and setgid.",
+      "behavior": "setfsuid and setfsgid set the file-system ids that a new file's owner, an open's permission check and the status file's fourth columns go by, take the file-system capabilities from the effective set while the user id is not 0, are kept by setresuid and setresgid that change no id, and are reset by setuid and setgid.",
       "units": ["default", "fsidprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -1550,6 +1550,7 @@
         {"assertion_id": "status-ids", "checks": "/proc/self/status gives 1000 as the fourth column of its Uid and Gid lines.", "source": "program"},
         {"assertion_id": "capeff", "checks": "CapEff is the set it was less Linux's CAP_FS_SET.", "source": "program"},
         {"assertion_id": "restore", "checks": "setfsuid(0) and setfsgid(0) return 1000, CapEff comes back, the file opens and the status lines end in 0.", "source": "program"},
+        {"assertion_id": "setres-keeps", "checks": "With both file-system ids at 1000, setresuid and setresgid that change no id return 0 and leave them, the dumpable flag and the parent-death signal; setresuid(-1, 0, -1) and setresgid(-1, 0, -1) make them 0 again.", "source": "program"},
         {"assertion_id": "setuid-resets", "checks": "setuid(0) and setgid(0) make the file-system ids 0 again.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The probe's files and directory are removed.", "source": "program"}
       ],
