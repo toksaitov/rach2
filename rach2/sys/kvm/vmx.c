@@ -2053,18 +2053,19 @@ static int exit_vmcall(struct kvm_vcpu *v)
 }
 
 /** The exit's numbers for an internal error's report, as Linux's
- * vmx_get_exit_info orders them: the reason, the qualification, the
- * guest-physical address, and the exit's interruption with its error
- * code. */
+ * vmx_get_exit_info gives them: the reason, the qualification, the IDT
+ * vectoring information, and the exit's interruption information with its
+ * error code, 0 unless that is an exception with one. */
 static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
 {
     const struct vmx_exit *e = &vx(v)->ex;
+    uint32_t coded = INTR_VALID | INTR_ERRCODE;
 
     info[0] = e->reason;
     info[1] = e->qual;
-    info[2] = e->gpa;
+    info[2] = e->idt_info;
     info[3] = e->intr_info;
-    info[4] = e->intr_error;
+    info[4] = (e->intr_info & coded) == coded ? e->intr_error : 0;
 }
 
 /** An EPT violation (exit 48): a fault on the guest-physical tables,
