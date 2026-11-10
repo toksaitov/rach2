@@ -8,7 +8,7 @@ The assignment cases boot the GNU root on q35 with an emulated Intel VT-d unit. 
 
 The machine has `intel-iommu,intremap=on,caching-mode=on`, a `virtio-net-pci,disable-legacy=on,iommu_platform=on` at `0000:00:06.0` on the user network `10.0.3.0/24`, and EDU at `0000:00:07.0` with its DMA mask covering every address. The host's e1000 uses a separate user network, `10.0.2.0/24`. The two gateways end in `.2`. `iommu_platform=on` makes the NIC use the bus's DMA address space through VT-d.
 
-`run.sh` runs as root in the GNU guest. It binds the two functions to vfio-pci and sets the locked-memory limit to unlimited. During each case it writes random data to the ext2 root, flushes and verifies it, and pings the host's gateway. It compares the live VFIO, KVM and free interrupt-vector counts before and after the operation. The kill case requires live pinned DMA pages before sending SIGKILL; the reassignment case then boots a second guest with the same function.
+`run.sh` runs as root in the GNU guest. It binds the two functions to vfio-pci and sets the locked-memory limit to unlimited. During each case it writes random data to the ext2 root, flushes and verifies it, and pings the host's gateway. It compares the live VFIO, KVM and free interrupt-vector counts before and after the operation. The kill case requires live pinned DMA pages before sending SIGKILL; the reassignment case then boots a second guest with the same function. The first guest's console is printed as it arrives and kept beside QEMU's diagnostics in the case's scratch directory, which remains after a failure or an interrupted run.
 
 ## Interfaces
 
