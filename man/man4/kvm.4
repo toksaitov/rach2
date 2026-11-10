@@ -139,9 +139,10 @@ That
 is never restarted, with or without
 .Dv SA_RESTART ,
 as on Linux.
-The backends that run guests are not in this kernel yet:
+On an Intel processor the guest runs under VMX.
+AMD's SVM does not run guests yet:
 .Dv KVM_RUN
-otherwise fails with
+on an AMD processor fails with
 .Er EOPNOTSUPP .
 .Ss Memory
 .Dv KVM_SET_USER_MEMORY_REGION
@@ -387,8 +388,8 @@ ended by
 .Va immediate_exit ,
 a signal or a request to stop.
 .It Bq Er EOPNOTSUPP
-.Dv KVM_RUN ,
-until the backends run guests.
+.Dv KVM_RUN
+on an AMD processor, until its backend runs guests.
 .El
 .Sh SEE ALSO
 .Xr eventfd 2 ,
