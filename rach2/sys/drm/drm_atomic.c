@@ -15,6 +15,8 @@
 #include "../proc/process.h"
 #include "../klog.h"
 #include "../lib/kirq.h"
+#include "../rtc.h"
+#include "../timer.h"
 #ifndef RACH2_HOSTTEST
 #include "../arch/arch.h"
 #include "../proc/sched.h"
@@ -1435,6 +1437,120 @@ void drm_connector_hotplug_later(struct drm_connector *connector)
     }
 }
 
+/* The drivers' works that wait for the worker, in the order queued, under
+ * the interrupt flag; static storage starts it empty. */
+static struct drm_work *dev_works, **dev_works_tail = &dev_works;
+
+/* Counts the works queued, so that the worker's wait ends on a new one
+ * whose time may come before the deadline it armed. */
+static uint32_t dev_works_gen;
+
+void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32_t ms)
+{
+    uint64_t due = ms ? rtc_ticks_now() + MS_TO_TICKS(ms) + 1u : 0;
+    uint32_t flags = kirq_save();
+
+    if (work->queued) {
+        if (work->due > due) {
+            work->due = due;
+            dev_works_gen++;
+        }
+        kirq_restore(flags);
+        if (due == 0) {
+            wq_wake_all(&work_wait);
+        }
+        return;
+    }
+    drm_dev_get(dev);
+    work->dev = dev;
+    work->next = NULL;
+    work->queued = 1;
+    work->due = due;
+    *dev_works_tail = work;
+    dev_works_tail = &work->next;
+    dev_works_gen++;
+    kirq_restore(flags);
+    if (commit_worker_start() == 0) {
+        wq_wake_all(&work_wait);
+    }
+}
+
+void drm_dev_work_later(struct drm_device *dev, struct drm_work *work)
+{
+    drm_dev_work_later_ms(dev, work, 0);
+}
+
+/** Whether `work`'s time has come. */
+static int dev_work_due(const struct drm_work *work, uint64_t now)
+{
+    return work->due == 0 || work->due <= now;
+}
+
+/** Unlink `work` from the queue; the caller holds the interrupt flag and
+ * `work` is queued. */
+static void dev_work_unlink(struct drm_work *work)
+{
+    struct drm_work **link = &dev_works;
+
+    while (*link != work) {
+        link = &(*link)->next;
+    }
+    *link = work->next;
+    if (dev_works_tail == &work->next) {
+        dev_works_tail = link;
+    }
+    work->queued = 0;
+}
+
+void drm_dev_work_cancel(struct drm_work *work)
+{
+    uint32_t flags = kirq_save();
+    struct drm_device *dev = work->dev;
+
+    if (!work->queued) {
+        kirq_restore(flags);
+        return;
+    }
+    dev_work_unlink(work);
+    kirq_restore(flags);
+    drm_dev_put(dev);
+}
+
+/** Run the queued drivers' works whose time has come, each once; the
+ * number run. A work that queues itself again waits for the next round. */
+static int dev_work_run(void)
+{
+    struct drm_work *work;
+    struct drm_device *dev;
+    uint64_t now = rtc_ticks_now();
+    uint32_t flags;
+    int n = 0, todo = 0;
+
+    flags = kirq_save();
+    for (work = dev_works; work; work = work->next) {
+        todo += dev_work_due(work, now);
+    }
+    kirq_restore(flags);
+    while (n < todo) {
+        flags = kirq_save();
+        for (work = dev_works; work && !dev_work_due(work, now); work = work->next) {
+        }
+        if (!work) {
+            kirq_restore(flags);
+            break;
+        }
+        dev_work_unlink(work);
+        kirq_restore(flags);
+        dev = work->dev;
+        if (!dev->unplugged) {
+            work->fn(work);
+        }
+        drm_dev_put(dev);
+        n++;
+    }
+    return n;
+}
+
 /** Send the queued hotplug events, Linux's
  * drm_kms_helper_connector_hotplug_event for each; the number sent. */
 static int hotplug_work(void)
@@ -1466,7 +1582,9 @@ int drm_atomic_commit_work(void)
 {
     struct commit_work **link = &works, *w;
     struct drm_device *dev;
-    int n = hotplug_work();
+    int n = dev_work_run();
+
+    n += hotplug_work();
 
     while ((w = *link) != NULL) {
         if (w->waiting) {
@@ -1486,14 +1604,22 @@ int drm_atomic_commit_work(void)
 #ifndef RACH2_HOSTTEST
 static process_t *commit_thread;
 
-/** Whether a queued commit has all its fences. */
+/** Whether a queued commit has all its fences, a hotplug event or a
+ * driver's work waits whose time has come, or a work was queued since the
+ * wait began, whose generation `arg` holds. */
 static int work_ready(void *arg)
 {
     const struct commit_work *w;
+    const struct drm_work *dw;
+    uint64_t now = rtc_ticks_now();
 
-    (void)arg;
-    if (nhotplugs != 0) {
+    if (nhotplugs != 0 || dev_works_gen != *(const uint32_t *)arg) {
         return 1;
+    }
+    for (dw = dev_works; dw; dw = dw->next) {
+        if (dev_work_due(dw, now)) {
+            return 1;
+        }
     }
     for (w = works; w; w = w->next) {
         if (!w->waiting) {
@@ -1508,9 +1634,25 @@ static int work_ready(void *arg)
  * does. */
 static void commit_thread_main(void)
 {
+    const struct drm_work *dw;
+    uint64_t next;
+    uint32_t gen, flags;
+
     arch_irq_enable();
     for (;;) {
-        (void)wq_wait_event_idle(&work_wait, work_ready, NULL);
+        /* Sleep until the soonest delayed work's tick at the latest. */
+        flags = kirq_save();
+        gen = dev_works_gen;
+        next = 0;
+        for (dw = dev_works; dw; dw = dw->next) {
+            if (dw->due && (next == 0 || dw->due < next)) {
+                next = dw->due;
+            }
+        }
+        current_proc->wakeup_tick = next;
+        kirq_restore(flags);
+        (void)wq_wait_event_idle(&work_wait, work_ready, &gen);
+        current_proc->wakeup_tick = 0;
         (void)drm_atomic_commit_work();
     }
 }

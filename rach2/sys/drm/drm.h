@@ -1489,6 +1489,37 @@ int drm_atomic_commit_work(void);
  * console's answer takes. Once while one waits; any context. */
 void drm_connector_hotplug_later(struct drm_connector *connector);
 
+/*
+ * A driver's work for the commit worker, which runs `fn` in process context
+ * with the big kernel lock held and no commit lock, as Linux's drivers
+ * queue work on their own workqueues: a hotplug's probe, which may sleep on
+ * the sink and may commit, as Linux's delayed work too. `queued` and `due`
+ * are the core's: set while the work waits, and the tick of rtc_ticks_now
+ * it waits for, 0 for none; `dev` holds a reference to its device
+ * meanwhile.
+ */
+struct drm_work {
+    void (*fn)(struct drm_work *work);
+    struct drm_device *dev;
+    struct drm_work *next;
+    int queued;
+    uint64_t due;
+};
+
+/** Have the commit worker run `work` once, before the hotplug events it
+ * sends; a work already waiting stays queued once, and runs now. Any
+ * context. */
+void drm_dev_work_later(struct drm_device *dev, struct drm_work *work);
+
+/** The same, `ms` milliseconds from now at the soonest, as Linux's
+ * queue_delayed_work; a work already waiting keeps the sooner of its time
+ * and this one. Any context. */
+void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32_t ms);
+
+/** Take `work` off the worker's queue if it waits; for a driver going
+ * away. Process context. */
+void drm_dev_work_cancel(struct drm_work *work);
+
 /* ---- Vblanks, their events and CRCs, in drm_vblank.c ---- */
 
 /*
