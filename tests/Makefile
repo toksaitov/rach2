@@ -71,14 +71,16 @@ TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 # The i386 builds the x86-64 test image stages under /ia32, for the cases
 # that run an i386 program beside an x86-64 one on the x86-64 kernel:
 # mixprobe's i386 roles. The x86-64 compiler makes them with -m32, which a
-# probe can use, since it links no libgcc; they go to $(BUILD)/ia32/.
+# probe can use, since it links no libgcc, and the linker is told the i386
+# emulation, which Homebrew's compiler does not pass on for -m32; they go
+# to $(BUILD)/ia32/.
 IA32_PROGS = mixprobe
 ifeq ($(ARCH),x86_64)
 IA32_TARGETS = $(addprefix $(BUILD)/ia32/, $(IA32_PROGS))
 TARGETS += $(IA32_TARGETS)
 endif
-IA32_CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -Wl,--build-id=none \
-              $(DEPFLAGS) $(EXTRA)
+IA32_CFLAGS = -m32 -Wl,-m,elf_i386 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
+              -Wl,--build-id=none $(DEPFLAGS) $(EXTRA)
 
 # The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
 # reinstalled compiler rebuilds every probe. The purge names only this
