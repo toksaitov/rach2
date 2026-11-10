@@ -324,7 +324,11 @@ of a handle the file does not hold, or
 .Xr mmap 2
 at an offset in no buffer, past its buffer's end, or private.
 .It Er ENODEV
-The device was unplugged.
+The device was unplugged, or
+.Dv DRM_IOCTL_MODE_MAP_DUMB
+of a buffer nothing can map, such as the firmware's framebuffer that
+.Xr i915 4
+adopts.
 .It Er ENOENT
 A handle the file does not hold, for
 .Dv DRM_IOCTL_GEM_FLINK ,
