@@ -2,23 +2,25 @@
 # deqp.sh: dEQP-GLES2, GLES3, GLES31 or VK of VK-GL-CTS, every Nth case of a
 # list, in a few processes, inside a graphics guest, Rach2's or Debian's.
 #
-#   deqp.sh [-v VERSION] [-e N] [-j JOBS] [-l LIST] [-f FLAKES] [-c CTS]
-#           [-o OUT] [-q] SUITE [OPTION...]
+#   deqp.sh [-v VERSION] [-e N] [-s START] [-j JOBS] [-l LIST] [-f FLAKES]
+#           [-i ICD] [-c CTS] [-o OUT] [-q] SUITE [OPTION...]
 #
 # SUITE is gles2, gles3, gles31 or vk. The cases are every Nth (1, every
-# case) of LIST, counted from its first, as the second discovery run's step 9
-# chose them: by default the release's mustpass list, the AOSP list
-# GLESN-main for GLES and vk-default with its includes expanded for Vulkan,
-# which the build stages compressed in CTS/mustpass; LIST is a file of one
-# case a line, `#` beginning a comment. VERSION is 1.4.7.1, the Lenovo's
-# references, or 1.4.1.1, Mesa 25.0.7's CI pin; CTS is
+# case) of LIST, counted from its STARTth (1, its first), as the second
+# discovery run's step 9 chose them from the first, so that START 1 to N of
+# the same N run the list once in N parts. LIST is by default the release's
+# mustpass list, the AOSP list GLESN-main for GLES and vk-default with its
+# includes expanded for Vulkan, which the build stages compressed in
+# CTS/mustpass, or a file of one case a line, `#` beginning a comment,
+# compressed with gzip when its name ends in .gz. VERSION is 1.4.7.1, the
+# Lenovo's references, or 1.4.1.1, Mesa 25.0.7's CI pin; CTS is
 # /opt/vk-gl-cts-VERSION. GLES runs glcts and Vulkan deqp-vk, from their
 # directories, with dEQP's watchdog on, its own limit, at 300 s a case and
 # an iteration, or in 1.4.1.1, which has no options for them, at its fixed
 # 300 s a case and 30 s an iteration, the OPTIONs after SUITE added. GLES
 # draws to 256x256 pbuffers of the config rgba8888d24s8ms0 on EGL's
 # surfaceless platform, as Mesa's CI runs it and step 9 did; Vulkan takes
-# the ICDs the environment names.
+# the ICD file ICD, as VK_DRIVER_FILES, or the ICDs the environment names.
 #
 # JOBS processes (4) run at once, each given every JOBSth case of the
 # sample. A process that dies runs again on the cases it had left, and the
@@ -53,15 +55,17 @@ RUNNER_DIR=$(cd "$(dirname "$0")" && pwd)
 
 usage()
 {
-    echo "usage: deqp.sh [-v VERSION] [-e N] [-j JOBS] [-l LIST] [-f FLAKES] [-c CTS] [-o OUT] [-q] SUITE [OPTION...]" >&2
+    echo "usage: deqp.sh [-v VERSION] [-e N] [-s START] [-j JOBS] [-l LIST] [-f FLAKES] [-i ICD] [-c CTS] [-o OUT] [-q] SUITE [OPTION...]" >&2
     exit 2
 }
 
-version=1.4.7.1 every=1 jobs=4 list='' flakes='' cts='' out=. keep=0
-while getopts v:e:j:l:f:c:o:q o; do
+version=1.4.7.1 every=1 start=1 jobs=4 list='' flakes='' icd='' cts='' out=. keep=0
+while getopts v:e:s:j:l:f:i:c:o:q o; do
     case $o in
         v) version=$OPTARG ;;
         e) every=$OPTARG ;;
+        s) start=$OPTARG ;;
+        i) icd=$OPTARG ;;
         j) jobs=$OPTARG ;;
         l) list=$OPTARG ;;
         f) flakes=$OPTARG ;;
@@ -75,8 +79,13 @@ shift $((OPTIND - 1))
 [ $# -ge 1 ] || usage
 suite=$1
 shift
-case $every$jobs in *[!0-9]*) usage ;; esac
-[ "$every" -ge 1 ] && [ "$jobs" -ge 1 ] || usage
+case $every$start$jobs in *[!0-9]*) usage ;; esac
+[ "$every" -ge 1 ] && [ "$start" -ge 1 ] && [ "$start" -le "$every" ] && [ "$jobs" -ge 1 ] || usage
+if [ -n "$icd" ]; then
+    [ -f "$icd" ] || { echo "deqp: no ICD file $icd" >&2; exit 1; }
+    VK_DRIVER_FILES=$icd
+    export VK_DRIVER_FILES
+fi
 cts=${cts:-/opt/vk-gl-cts-$version}
 case $suite in
     gles2 | gles3 | gles31)
@@ -143,10 +152,10 @@ case $list in
     *) cat "$list" ;;
 esac | sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' > "$work/list"
 all=$(wc -l < "$work/list" | tr -d ' ')
-awk -v e="$every" '(NR - 1) % e == 0' "$work/list" > "$work/sample"
+awk -v e="$every" -v s="$start" '(NR - s) % e == 0 && NR >= s' "$work/list" > "$work/sample"
 cases=$(wc -l < "$work/sample" | tr -d ' ')
 [ "$cases" -gt 0 ] || runner_die "the list $list has no case"
-runner_record "case deqp $suite $version every $every of $list, $jobs processes"
+runner_record "case deqp $suite $version every $every from $start of $list, $jobs processes"
 runner_record "list $list $all cases sha256 $(sha256sum < "$work/list" | awk '{ print $1 }')"
 runner_record "sample $cases cases sha256 $(sha256sum < "$work/sample" | awk '{ print $1 }')"
 runner_record "program $dir/$prog $(grep '^release ' "$cts/build-info" 2>/dev/null | cut -d' ' -f2)"
@@ -298,7 +307,7 @@ if [ -n "$flakes" ]; then
 fi
 cp "$work/flakes" "$RUNNER_OUT/flakes"
 {
-    echo "cases $cases of $all (every ${every}th), wall $((t1 - t0)) s, jobs $jobs"
+    echo "cases $cases of $all (every ${every}th from case $start), wall $((t1 - t0)) s, jobs $jobs"
     cut -d, -f2 "$work/results.csv" | LC_ALL=C sort | uniq -c | awk '{ print $2, $1 }'
 } > "$RUNNER_OUT/summary.txt"
 for f in "$logs"/*.out; do
