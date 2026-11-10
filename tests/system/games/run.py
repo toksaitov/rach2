@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Run one row of the Wine probes through the game launcher under Xwayland."""
+import array
+import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shlex
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -101,6 +106,50 @@ def show_logs(out):
             say("%s: %s" % (log.name, line))
 
 
+def record(stop, samples, ready):
+    """Read mono signed 16-bit frames at 48000 Hz from the audio loopback,
+    /dev/dsp under rach2.audio.loopback, until STOP."""
+    fd = os.open("/dev/dsp", os.O_RDONLY)
+    try:
+        # SNDCTL_DSP_SETFMT S16_LE, SNDCTL_DSP_CHANNELS 1, SNDCTL_DSP_SPEED.
+        for request, value in [(0xc0045005, 16), (0xc0045006, 1), (0xc0045002, 48000)]:
+            arg = array.array("i", [value])
+            fcntl.ioctl(fd, request, arg, True)
+            if arg[0] != value:
+                raise RuntimeError("/dev/dsp gave %d for request %#x" % (arg[0], request))
+        ready.set()
+        while not stop.is_set():
+            samples.extend(os.read(fd, 4800))
+    finally:
+        os.close(fd)
+
+
+def tone_windows(data):
+    """Count the 50 ms windows of loopback DATA that measure 440 Hz by their
+    zero crossings, and the other windows that are not silent."""
+    values = struct.unpack("<%dh" % (len(data) // 2), data)
+    good = off = 0
+    for at in range(0, len(values) - 2400, 2400):
+        block = values[at:at + 2400]
+        if math.sqrt(sum(x * x for x in block) / len(block)) < 200:
+            continue
+        hz = sum(a <= 0 < b for a, b in zip(block, block[1:])) * 20
+        if abs(hz - 440) <= 40:
+            good += 1
+        else:
+            off += 1
+    return good, off
+
+
+def wait_path(path, proc):
+    """Return once PATH exists; raise if PROC ends first."""
+    while not path.exists():
+        if proc.poll() is not None:
+            raise RuntimeError("%s ended before it made %s" % (proc.args[0], path))
+        # Poll the path; elapsed time decides no verdict.
+        time.sleep(0.05)
+
+
 def mem_mib():
     """Return MemTotal of /proc/meminfo in MiB, as the launcher computes it."""
     for line in Path("/proc/meminfo").read_text().splitlines():
@@ -144,6 +193,7 @@ class Runner:
         self.launcher = shlex.split(os.environ.get("GAMES_LAUNCHER", "rach2-game"))
         self.proton = Path(os.environ.get("GAMES_PROTON", "/opt/proton"))
         self.weston = None
+        self.services = []
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(
             ("PROTON_", "WINE", "STEAM_", "DXVK_", "VKD3D_", "WAYLAND_", "LP_"))
             and k not in ("SteamGameId", "SteamAppId", "GALLIUM_DRIVER",
@@ -182,6 +232,53 @@ class Runner:
         say("weston: renderer %s display %s" % (self.record["weston_renderer"], found.group(1)))
         if not renderer or "virgl" not in renderer.group(1):
             raise RuntimeError("weston's GL renderer is not virgl")
+
+    def start_services(self):
+        """
+        Start a D-Bus session bus and PulseAudio on the root's OSS
+        configuration, as the desktop session does, with their sockets in the
+        runner's runtime directory, and export their addresses, which
+        pressure-vessel passes into its container.
+        """
+        run = Path(self.env["XDG_RUNTIME_DIR"])
+        bus = start(["dbus-daemon", "--session", "--nofork", "--nopidfile",
+                     "--address=unix:path=%s/bus" % run], self.env, self.out / "dbus.log")
+        self.services.append(bus)
+        wait_path(run / "bus", bus)
+        self.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=%s/bus" % run
+        pulse = start(["pulseaudio", "-n", "--daemonize=no", "--use-pid-file=no",
+                       "--exit-idle-time=-1", "--disallow-exit", "--file=/etc/pulse/rach2.pa"],
+                      self.env, self.out / "pulseaudio.log")
+        self.services.append(pulse)
+        wait_path(run / "pulse" / "native", pulse)
+        self.env["PULSE_SERVER"] = "unix:%s/pulse/native" % run
+
+    def tone(self, name):
+        """Run the tone probe as NAME while the loopback records; return its
+        status, its output and the 440 Hz and other windows recorded."""
+        stop, ready = threading.Event(), threading.Event()
+        samples = bytearray()
+        failed = []
+
+        def reader():
+            try:
+                record(stop, samples, ready)
+            except Exception as error:  # reported by the row below
+                failed.append(error)
+                ready.set()
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        try:
+            ready.wait()
+            if failed:
+                raise RuntimeError("the loopback reader failed: %s" % failed[0])
+            status, text = self.probe(name)
+        finally:
+            stop.set()
+            thread.join()
+        good, off = tone_windows(bytes(samples))
+        return status, text, good, off
 
     def launch(self, name, program, extra=None, wait=True):
         """Run PROGRAM, a list, through the launcher as NAME, logging to NAME.log."""
@@ -348,9 +445,12 @@ class Runner:
         and directly, and compare Proton's settings and the pixels. The first
         launch unpacks the runtime; the second must download and unpack nothing.
         The 64-bit GL probe must draw on virgl inside the container, through
-        the /dev/dri that pressure-vessel passes in. The container's log must
-        hold no refused call that Linux's lacks.
+        the /dev/dri that pressure-vessel passes in, and the tone probe must be
+        recorded through the loopback from PulseAudio's socket there, as it is
+        directly; the container must have the session bus. The container's log
+        must hold no refused call that Linux's lacks.
         """
+        self.start_services()
         self.umu = True
         self.make_prefix()
         first = (self.out / "prefix.log").read_text(errors="replace")
@@ -364,6 +464,13 @@ class Runner:
         gl_status, gl_text = self.probe("gl64", {"WINEDEBUG": "-all,err+all"})
         gl_crc = re.search(r"pixels crc32 ([0-9a-f]{8})", gl_text)
         renderer = re.search(r"^renderer: (.*?) vendor ", gl_text, re.M)
+        tone = self.tone("tone64")
+        inside = {}
+        for log in sorted(self.out.glob("tone64.slr-*.log")):
+            for key, value in re.findall(r"pv-adverb\[\d+\]: D: \t'(PULSE_SERVER|"
+                                         r"DBUS_SESSION_BUS_ADDRESS)=([^']*)'",
+                                         log.read_text(errors="replace")):
+                inside[key] = value
         cache = Path(self.env["XDG_CACHE_HOME"]) / "umu"
         downloads = sorted(p.name for p in cache.glob("*")) if cache.is_dir() else []
         results["umu"] = dict(self.options("d3d964"), exit=status,
@@ -371,6 +478,10 @@ class Runner:
                               adapter=adapter.group(1) if adapter else None,
                               gl_exit=gl_status, gl_crc32=gl_crc.group(1) if gl_crc else None,
                               renderer=renderer.group(1) if renderer else None,
+                              tone_exit=tone[0], tone_ok="TONE OK" in tone[1],
+                              tone_windows=tone[2], tone_off=tone[3],
+                              pulse=inside.get("PULSE_SERVER"),
+                              bus=inside.get("DBUS_SESSION_BUS_ADDRESS"),
                               unpacked=unpacked.group(1) if unpacked else None,
                               again="unpacked" in second or "Downloading" in second or
                               "Downloading" in first, cache=downloads)
@@ -389,7 +500,10 @@ class Runner:
         self.prefix = self.work / "direct"
         self.make_prefix()
         status, text = self.probe("d3d964", {"WINEDEBUG": "-all,err+all"})
-        results["direct"] = dict(self.options("d3d964"), exit=status)
+        tone = self.tone("tone64")
+        results["direct"] = dict(self.options("d3d964"), exit=status, tone_exit=tone[0],
+                                 tone_ok="TONE OK" in tone[1], tone_windows=tone[2],
+                                 tone_off=tone[3])
         u, d = results["umu"], results["direct"]
         want = ref["draw"].get("d3d964") if ref is not None else None
         say("umu: runtime %s exit %d crc32 %s linux %s adapter %s options %s fsync %s opengl %s" % (
@@ -398,6 +512,10 @@ class Runner:
         gl_want = ref["draw"].get("gl64") if ref is not None else None
         say("umu: gl64 exit %d crc32 %s linux %s renderer %s" % (
             u["gl_exit"], u["gl_crc32"], gl_want, u["renderer"]))
+        say("umu: tone exit %d ok %s windows %d off %d; direct exit %d ok %s windows %d off %d" % (
+            u["tone_exit"], u["tone_ok"], u["tone_windows"], u["tone_off"], d["tone_exit"],
+            d["tone_ok"], d["tone_windows"], d["tone_off"]))
+        say("umu: container PULSE_SERVER %s DBUS_SESSION_BUS_ADDRESS %s" % (u["pulse"], u["bus"]))
         say("umu: direct exit %d options %s fsync %s opengl %s; second start fetched %s cache %s" % (
             d["exit"], d["options"], d["fsync"], d["opengl"], u["again"], u["cache"]))
         return (u["unpacked"] is not None and not u["again"] and not u["cache"] and
@@ -407,16 +525,25 @@ class Runner:
                 "wined3d" in u["options"] and u["fsync"] and d["fsync"] and u["opengl"] and
                 d["opengl"] and u["gl_exit"] == 0 and u["gl_crc32"] is not None and
                 (gl_want is None or u["gl_crc32"] == gl_want) and
-                "virgl" in (u["renderer"] or "") and not refused)
+                "virgl" in (u["renderer"] or "") and all(
+                    r["tone_exit"] == 0 and r["tone_ok"] and r["tone_windows"] >= 10 and
+                    r["tone_off"] * 5 <= r["tone_windows"] for r in (u, d)) and
+                u["pulse"] is not None and u["bus"] is not None and not refused)
 
     def stop(self):
-        """End the Wine server and Weston and reap them."""
+        """End the Wine server, the session's services and Weston and reap them."""
         if self.prefix.exists():
             env = dict(self.env)
             env["WINEPREFIX"] = str(self.prefix / "pfx")
             server = str(self.proton / "files/bin/wineserver")
             subprocess.run([server, "-k"], env=env, check=False)
             subprocess.run([server, "-w"], env=env, check=False)
+        for proc in self.services:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            finish(proc)
         if self.weston is not None:
             try:
                 os.killpg(self.weston.pid, signal.SIGTERM)
