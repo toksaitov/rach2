@@ -449,6 +449,34 @@ variables,
 .Ql MODALIAS
 and, for a port with PNP IDs,
 .Ql SERIO_FIRMWARE_ID .
+The mouse's port and the pass-through port have psmouse's files, mode
+0644:
+.Pa protocol ,
+the name of the protocol the device speaks, which a write of a name
+switches;
+.Pa rate ,
+samples a second;
+.Pa resolution ,
+counts an inch;
+.Pa resetafter ,
+the bad packets in a row before the device is reconnected, 0 for never;
+and
+.Pa resync_time ,
+the seconds idle after which a packet's first byte begins a resync, 0 for
+none.
+An Elantech pad's port has its registers and settings beside, as Linux's
+elantech.c makes them, mode 0644:
+.Pa reg_07 ,
+.Pa reg_10 ,
+.Pa reg_11 ,
+.Pa reg_20
+to
+.Pa reg_26 ,
+.Pa debug ,
+.Pa paritycheck
+and
+.Pa crc_enabled ,
+each a byte in hexadecimal.
 A TrackPoint's port has its settings beside, as Linux's trackpoint.c makes
 them, mode 0644:
 .Pa sensitivity ,
