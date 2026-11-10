@@ -20,6 +20,9 @@
  * of an empty, wrapping or unmapped range, or a write pin of a read-only
  * one, is refused and pins nothing, and a privileged process has no limit;
  * a pin of an object's frames refuses a frame the allocator does not count;
+ * the frame KVM shares with another program (`paging_user_ram_frame`) is
+ * given for a writable private page and refused for a memfd_secret page and
+ * for every page once the address space has ended, its directory gone;
  * a fork copies a pinned private page for the child, and a pin of a page
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
@@ -254,6 +257,33 @@ static void frame_rows(void)
     check(pin_frames(NULL, frames, 1, &holder, &p) == 0, "one charged to no one is made");
     unpin(p);
     memlock(0xFFFFFFFFu);
+}
+
+/** The frame of a page for another program to map: given for an ordinary
+ * writable page, refused for a memfd_secret page and once the address space
+ * has ended, as mm_put leaves it with no directory. */
+static void ram_frame_rows(void)
+{
+    uintptr_t plain = VA + 64 * P, secret = VA + 68 * P;
+    struct mm ended;
+
+    check(vm_insert(&mm_a.vm, plain, plain + P, RW, VM_ANON) == 0 &&
+              vm_insert(&mm_a.vm, secret, secret + P, RW | VM_PROT_SECRET, VM_ANON) == 0,
+          "an ordinary and a secret region are made");
+    check(vm_resolve_in(&mm_a, plain, 1, ~(uintptr_t)0) == 1 &&
+              vm_resolve_in(&mm_a, secret, 1, ~(uintptr_t)0) == 1 &&
+              (pte_of(&dir_a, secret) & (PTE_P | PTE_W)) == (PTE_P | PTE_W),
+          "a page of each is in and writable");
+    check(paging_user_ram_frame(&mm_a, plain) != 0 &&
+              paging_user_ram_frame(&mm_a, plain) == PTE_ADDR(pte_of(&dir_a, plain)),
+          "the ordinary page's frame is given");
+    check(paging_user_ram_frame(&mm_a, secret) == 0, "the secret page's frame is refused");
+    ended = mm_a;
+    ended.dir = NULL;
+    check(paging_user_ram_frame(&ended, plain) == 0,
+          "no frame is given once the address space has ended");
+    vm_remove(&mm_a.vm, plain, secret + P);
+    unmap_user_range(&dir_a, plain, secret + P);
 }
 
 /** A fork copies a pinned private page for the child; a pin of a page
@@ -671,6 +701,7 @@ int main(void)
     model_start(NAME);
     pin_rows();
     frame_rows();
+    ram_frame_rows();
     fork_rows();
     release_rows();
     io_rows();
