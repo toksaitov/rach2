@@ -190,27 +190,35 @@ static uint32_t word32(const uint8_t *bits, unsigned at)
  * Append the `count` bits at `bits` as Linux's input_print_bitmap writes
  * them: the kernel's longs in hexadecimal from the highest that has a bit,
  * separated by spaces, or "0" when none has. A long is 32 bits on i686 and
- * to an i386 program, whose `in_compat_syscall` is true, and 64 on x86-64.
+ * to an i386 program, whose `in_compat_syscall` is true, and 64 on x86-64,
+ * where it is printed as its 32-bit halves, the low half padded to 8 digits
+ * when the high one has a bit.
  */
 static void emit_bitmap(struct emit *e, const uint8_t *bits, unsigned count)
 {
-    unsigned wbytes = sizeof(long) == 4 || in_compat_syscall() ? 4u : 8u;
-    int words = (int)((count + 8 * wbytes - 1) / (8 * wbytes));
-    int i, printed = 0;
-    uint32_t lo, hi;
+    unsigned halves = sizeof(long) == 4 || in_compat_syscall() ? 1u : 2u;
+    int longs = (int)((count + 32 * halves - 1) / (32 * halves));
+    int i, j, top, printed = 0;
 
-    for (i = words - 1; i >= 0; i--) {
-        lo = word32(bits, (unsigned)i * wbytes);
-        hi = wbytes == 8 ? word32(bits, (unsigned)i * wbytes + 4) : 0;
-        if (hi) {
-            emit_hex(e, hi, 0, 0);
-            emit_hex(e, lo, 8, 0);
-            printed = 1;
-        } else if (lo || printed) {
-            emit_hex(e, lo, 0, 0);
-            printed = 1;
+    for (i = longs - 1; i >= 0; i--) {
+        /* The highest half of this long that has a bit, or -1. */
+        for (top = (int)halves - 1; top >= 0; top--) {
+            if (word32(bits, ((unsigned)i * halves + (unsigned)top) * 4u) != 0) {
+                break;
+            }
         }
-        if (printed && i > 0) {
+        if (top < 0 && !printed) {
+            continue;
+        }
+        if (top < 0) {
+            top = 0;
+        }
+        for (j = top; j >= 0; j--) {
+            emit_hex(e, word32(bits, ((unsigned)i * halves + (unsigned)j) * 4u), j < top ? 8 : 0,
+                     0);
+        }
+        printed = 1;
+        if (i > 0) {
             emit_str(e, " ");
         }
     }
