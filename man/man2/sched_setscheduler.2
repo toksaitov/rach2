@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt SCHED_SETSCHEDULER 2
 .Os
 .Sh NAME
@@ -102,9 +102,9 @@ effective user ID.
 keeps the policy and changes its base priority.
 Without privilege a caller may not leave
 .Dv SCHED_IDLE ,
-which Linux counts as nice 20 and lets a thread leave only as far as
+which Linux counts as nice 20 and lets a thread leave only when its
 .Dv RLIMIT_NICE ,
-0 here, allows, and may not clear
+0 by default, allows its nice value, and may not clear
 .Dv SCHED_RESET_ON_FORK ;
 either fails with
 .Er EPERM .
@@ -128,8 +128,12 @@ A privileged caller can set
 or
 .Dv SCHED_RR
 with priority 1 to 99.
-An unprivileged caller may keep its existing real-time policy and lower
-its priority, but cannot raise it or enter a real-time policy.
+An unprivileged caller may enter a real-time policy only while the
+thread's
+.Dv RLIMIT_RTPRIO
+is above 0, and raise the priority only up to it; it may always lower
+the priority of its present real-time policy.
+The limit is 0 by default, as on Linux, which allows neither.
 .Dv SCHED_DEADLINE
 takes its parameters from
 .Fn sched_setattr
@@ -178,9 +182,9 @@ For the ordinary policies it sets the nice value, clamped to -20 to 19,
 and a slice of
 .Fa sched_runtime
 nanoseconds, clamped to 0.1 to 100 ms, or the default for 0; lowering the
-nice value needs privilege, as
+nice value past what the thread's
 .Dv RLIMIT_NICE
-is 0, and fails with
+allows, 20 less its soft value, needs privilege, and fails with
 .Er EPERM .
 .Dv SCHED_FLAG_RESET_ON_FORK
 (1) is
@@ -291,18 +295,6 @@ order.
 It returns when the caller's turn comes again, at once when no other
 process is ready.
 .Ss Differences from Linux
-Linux grants
-.Dv SCHED_FIFO
-and
-.Dv SCHED_RR
-to a caller with
-.Dv CAP_SYS_NICE
-or a
-.Dv RLIMIT_RTPRIO
-that allows the priority.
-This kernel permits them to a privileged caller and keeps
-.Dv RLIMIT_RTPRIO
-at 0.
 Linux does not let a
 .Dv SCHED_BATCH
 thread that wakes take the processor from the running one, and gives a
@@ -409,6 +401,22 @@ and reads each back, sets an affinity of the last processor alone, after which
 .Fn getcpu
 returns that processor, and checks the refusals of the other policies, of
 an affinity of a processor past the last, and of another user's process.
+.Pp
+.Pa tests/schedattrprobe.c
+sets each policy with
+.Fn sched_setattr
+and reads it back with
+.Fn sched_getattr ,
+.Fn sched_getscheduler
+and
+.Fn sched_getparam ,
+and checks the structure's size rules, the flags, the slices, the
+deadline admission and affinity rules, what a fork's child takes, the
+round-robin interval, the refusals to a caller without root and what
+.Dv RLIMIT_NICE
+and
+.Dv RLIMIT_RTPRIO
+allow it.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er E2BIG
@@ -451,11 +459,15 @@ the size is below 48 or past 4096.
 was given the utilization clamps.
 .It Bq Er EPERM
 The caller may not change the process, asked without privilege to enter
-a real-time policy or raise its priority, or asked without privilege to leave
-.Dv SCHED_IDLE ,
-to clear
-.Dv SCHED_RESET_ON_FORK ,
-to lower the nice value or to set
+a real-time policy or raise its priority past what
+.Dv RLIMIT_RTPRIO
+allows, or asked without privilege to leave
+.Dv SCHED_IDLE
+or lower the nice value past what
+.Dv RLIMIT_NICE
+allows, to clear
+.Dv SCHED_RESET_ON_FORK
+or to set
 .Dv SCHED_DEADLINE ;
 or a thread whose affinity leaves out a processor was given
 .Dv SCHED_DEADLINE .
