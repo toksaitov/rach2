@@ -67,6 +67,13 @@ int hid_report_size(int device);
 void hid_report(int device, const uint8_t *report, int length);
 
 /**
+ * The bytes the core must give `hid_output_report` for `device`: its
+ * longest output or Feature report, with its ID byte, in the report
+ * protocol, 1 for a boot keyboard or mouse, and 0 for a device not taken.
+ */
+int hid_output_size(int device);
+
+/**
  * The next report the core is to send `device` with SET_REPORT on its
  * control endpoint, built in `out` of `size` bytes, with the request's
  * wValue, the report's type and ID, in `*value`. First a report that sets

@@ -229,6 +229,9 @@ static struct {
     uint32_t length;
     int direction;
     int data;
+    /* The last transfer on another endpoint: its length and buffer. */
+    uint32_t in_length;
+    const uint8_t *in_buffer;
 } ring;
 
 /*
@@ -356,6 +359,10 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         return -1; /* what the driver does while the core quiesces the endpoint */
     }
     ring.submits++;
+    if (transfer->setup == 0) {
+        ring.in_length = transfer->length;
+        ring.in_buffer = transfer->buffer;
+    }
     if (endpoint == 1 && transfer->setup != 0) {
         ring.control_submits++;
         for (i = 0; i < 8; i++) {
@@ -576,19 +583,43 @@ void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
     (void)ids;
 }
 
-/** Return 0, for the core to ask for the endpoint's packet. */
+/* The longest report the rows have the HID driver give, 0 for the
+ * endpoint's packet, and the last report the core handed on. */
+static int report_size_model;
+static const uint8_t *report_seen;
+static int report_seen_len = -1;
+
+/** Return `report_size_model`. */
 int hid_report_size(int device)
 {
     (void)device;
-    return 0;
+    return report_size_model;
 }
 
-/** Do nothing: the HID driver has its own test, hid_hosttest.c. */
+/** Keep the report handed on. */
 void hid_report(int device, const uint8_t *report, int length)
 {
     (void)device;
-    (void)report;
-    (void)length;
+    report_seen = report;
+    report_seen_len = length;
+}
+
+/** Zeroed memory from the host's heap, as the kernel's kzalloc gives. */
+void *kzalloc(size_t size)
+{
+    unsigned char *p = (unsigned char *)malloc((unsigned long)(size ? size : 1));
+    size_t i;
+
+    for (i = 0; p && i < size; i++) {
+        p[i] = 0;
+    }
+    return p;
+}
+
+/** Give back what `kzalloc` gave. */
+void kfree(void *p)
+{
+    free(p);
 }
 
 /** Do nothing, as `hid_report` does. */
@@ -604,19 +635,32 @@ static int led_wanted = -1;
 static int led_asked;
 static int led_offered = -1;
 static int led_sent_device, led_sent_report, led_sent_ok, led_sent_count;
+static int led_length = 1; /* the report's bytes, each `led_wanted` */
 
-/** Offer `led_wanted` as a one-byte LED report, wValue 0x0200. */
-int hid_output_report(int device, uint8_t *out, int size, int *value)
+/** The output report's bytes, `led_length`. */
+int hid_output_size(int device)
 {
     (void)device;
+    return led_length;
+}
+
+/** Offer `led_wanted` as an LED report of `led_length` bytes, wValue
+ * 0x0200. */
+int hid_output_report(int device, uint8_t *out, int size, int *value)
+{
+    int i;
+
+    (void)device;
     led_asked++;
-    if (led_wanted < 0 || size < 1) {
+    if (led_wanted < 0 || size < led_length) {
         return -1;
     }
-    out[0] = (uint8_t)led_wanted;
+    for (i = 0; i < led_length; i++) {
+        out[i] = (uint8_t)led_wanted;
+    }
     *value = 0x0200;
     led_offered = led_wanted;
-    return 1;
+    return led_length;
 }
 
 /** Record what the core sent. */
@@ -1239,6 +1283,47 @@ static void leds_rows(void)
 }
 
 /**
+ * Check a device whose reports pass 64 bytes: its input reports are asked
+ * for and handed on whole, in a buffer of its longest report, as usbhid
+ * sizes its buffer, and an output report of 100 bytes goes out whole.
+ */
+static void long_report_rows(void)
+{
+    struct usb_device_state *d;
+
+    usb_core_reset();
+    ring_reset();
+    d = hid_at(0, 1, USB_PROTOCOL_MOUSE);
+    report_size_model = 200;
+    led_wanted = -1;
+    step_running(d);
+    CHECK("long: a report of 200 bytes is asked for whole",
+          ring.in_length == 200 && d->long_report && ring.in_buffer == d->long_report);
+    d->report_done.status = USB_XFER_OK;
+    d->report_done.length = 200;
+    d->report_done.residual = 0;
+    d->have_report = 1;
+    step_running(d);
+    CHECK("long: and handed on whole", report_seen_len == 200 && report_seen == d->long_report);
+    led_wanted = 0x07;
+    led_length = 100;
+    step_running(d);
+    CHECK("long: an output report of 100 bytes goes out whole",
+          ring.control_submits == 1 && ring.length == 100 && ring.data == 0x07);
+    control_done(d, USB_XFER_OK);
+    led_wanted = 0x09;
+    led_length = 5000;
+    step_running(d);
+    CHECK("long: and one of 5000 bytes, from a buffer of its length",
+          ring.control_submits == 2 && ring.length == 5000 && ring.data == 0x09 && d->long_output &&
+              d->long_output_cap == 5000);
+    led_wanted = -1;
+    led_length = 1;
+    report_size_model = 0;
+    usb_core_reset();
+}
+
+/**
  * Check what the walk reads of a HID interface: its HID descriptor's bcdHID
  * and report descriptor length, and an interface of any subclass and
  * protocol taken, since its report descriptor says what it reports.
@@ -1285,6 +1370,7 @@ int main(void)
     quiesce_rows();
     slot_timeout_rows();
     leds_rows();
+    long_report_rows();
     interface_rows();
     hid_interface_rows();
 

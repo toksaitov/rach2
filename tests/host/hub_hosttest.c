@@ -88,6 +88,21 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
+extern void *calloc(unsigned long n, unsigned long size);
+extern void free(void *p);
+
+/** Zeroed memory from the host's heap, as the kernel's kzalloc gives. */
+void *kzalloc(size_t size)
+{
+    return calloc(1, (unsigned long)(size ? size : 1));
+}
+
+/** Give back what `kzalloc` gave. */
+void kfree(void *p)
+{
+    free(p);
+}
+
 /* The slots `hid_gone` was called with, the first 16, and the calls. */
 static int hid_gone_slot[16];
 static int hid_gone_count;
@@ -123,6 +138,13 @@ void hid_report(int device, const uint8_t *report, int length)
     (void)device;
     (void)report;
     (void)length;
+}
+
+/** No output report: the hub driver is under test. */
+int hid_output_size(int device)
+{
+    (void)device;
+    return 0;
 }
 
 /** Return -1: no row sends an output report. */

@@ -61,8 +61,8 @@
  * HID_MOUSE. */
 #define HID_REPORT 3
 
-/* The most bytes of an output report kept to compare with the next. */
-#define OUTPUT_MAX 16
+/* The bytes of a boot keyboard's output report, its LEDs. */
+#define BOOT_OUTPUT_LEN 1
 
 /* Which report `hid_output_report` gave last. */
 #define OFFER_NONE       0
@@ -124,9 +124,14 @@ struct hid_state {
     int multiplier;           /* a multiplier report is still to be sent */
     int leds_failed;          /* an LED report failed since it was taken */
     int shown_len;            /* the LED report last taken, -1 before one */
-    uint8_t shown[OUTPUT_MAX];
-    uint8_t offered[OUTPUT_MAX];
+    /* The LED report last taken and the one offered, each of `out_cap`
+     * bytes: a report-protocol device's in its tables (`hid_dev.outbuf`),
+     * a boot keyboard's in `boot_out`. */
+    uint8_t *shown;
+    uint8_t *offered;
+    int out_cap;
     int offered_len;
+    uint8_t boot_out[2][BOOT_OUTPUT_LEN];
 };
 
 static struct hid_state states[USB_MAX_DEVICES + 1];
@@ -338,6 +343,7 @@ static void free_tables(struct hid_dev *hid)
     kfree(hid->desc.usages);
     kfree(hid->desc.collections);
     kfree(hid->inbuf);
+    kfree(hid->outbuf);
     kfree(hid);
 }
 
@@ -386,7 +392,15 @@ static int parse_tables(const uint8_t *rdesc, int length, struct hid_dev **out)
     }
     hid->insize = insize;
     hid->inbuf = (uint8_t *)kzalloc(insize + 1);
-    if (!hid->inbuf) {
+    for (i = 0; i < hid->desc.nreports; i++) {
+        const struct hid_report *r = &hid->desc.reports[i];
+
+        if (r->type != HID_INPUT_REPORT && hid_report_len(r) > hid->outsize) {
+            hid->outsize = hid_report_len(r);
+        }
+    }
+    hid->outbuf = (uint8_t *)kzalloc(2 * hid->outsize + 1);
+    if (!hid->inbuf || !hid->outbuf) {
         free_tables(hid);
         return -ENOMEM;
     }
@@ -434,6 +448,9 @@ int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int 
     state->multiplier = 1;
     state->leds_failed = 0;
     state->shown_len = -1;
+    state->offered = hid->outbuf;
+    state->shown = hid->outbuf + hid->outsize;
+    state->out_cap = (int)hid->outsize;
     klog(KLOG_INFO, "usb", "hid: device %d: %s on %s, input devices: %d", device, hid->name,
          state->phys, (int)hid->ninputs);
     return 0;
@@ -451,6 +468,9 @@ void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
     state->multiplier = 0;
     state->leds_failed = 0;
     state->shown_len = -1;
+    state->offered = state->boot_out[0];
+    state->shown = state->boot_out[1];
+    state->out_cap = BOOT_OUTPUT_LEN;
     name_phys(state, device);
     if (kind == HID_MOUSE) {
         name_device(state->name, sizeof(state->name), ids, "USB HIDBP Mouse ");
@@ -552,6 +572,13 @@ static int same_bytes(const uint8_t *a, const uint8_t *b, int n)
     return 1;
 }
 
+int hid_output_size(int device)
+{
+    struct hid_state *state = state_of(device);
+
+    return state && state->mode ? state->out_cap : 0;
+}
+
 int hid_output_report(int device, uint8_t *out, int size, int *value)
 {
     struct hid_state *state = state_of(device);
@@ -572,7 +599,7 @@ int hid_output_report(int device, uint8_t *out, int size, int *value)
     if (state->leds_failed) {
         return -1;
     }
-    n = leds_report(state, state->offered, (int)sizeof(state->offered), value);
+    n = leds_report(state, state->offered, state->out_cap, value);
     if (n < 0 || n > size) {
         return -1;
     }
@@ -625,6 +652,8 @@ void hid_gone(int device)
     evdev_unregister(state->mouse);
     state->hid = 0;
     state->mouse = NULL;
+    state->offered = state->shown = NULL;
+    state->out_cap = 0;
     state->mode = 0;
     state->offer = OFFER_NONE;
     state->multiplier = 0;

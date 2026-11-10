@@ -178,7 +178,7 @@ struct xhci_td {
     int retired;
     int held;      /* the caller checks it until it lets it go */
     int delivered; /* one completion per transfer */
-    int control;   /* setup, data and status blocks; the data block is `idx[1]` */
+    int control;   /* setup, data and status blocks; the data blocks from `idx[1]` */
     int outcome;   /* the first outcome an event gave, a USB_XFER_ value, or -1 */
     int code;
     uint32_t generation;
@@ -2291,6 +2291,7 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
 
     ep0 = context_entry(hc, hc->input_ctx, 2);
     ep0[1] = (4u << 3) | (3u << 1) | (default_packet_size(s->speed) << 16);
+    s->max_packet[1] = default_packet_size(s->speed);
     ep0[2] = (uint32_t)s->ring_phys[1] | TRB_CYCLE;
     ep0[3] = phys_hi(s->ring_phys[1]);
     ep0[4] = 8;
@@ -2329,6 +2330,9 @@ int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
     control[1] = 0x2u; /* endpoint zero alone */
     ep0 = context_entry(hc, hc->input_ctx, 2);
     ep0[1] = (4u << 3) | (3u << 1) | ((uint32_t)max_packet << 16);
+    if (max_packet > 0) {
+        hc->slots[device].max_packet[1] = (uint32_t)max_packet;
+    }
     xhci_barrier();
     return xhci_command_issue(hc, TRB_TYPE_EVALUATE_CTX, (uint64_t)virt_to_phys(hc->input_ctx),
                               (uint32_t)device);
@@ -2700,7 +2704,7 @@ static uint32_t td_size(uint32_t total, uint32_t through, uint32_t max_packet, i
 {
     uint32_t packets, sent, left;
 
-    if (last) {
+    if (last || max_packet == 0) {
         return 0;
     }
     packets = (total + max_packet - 1) / max_packet;
@@ -2709,15 +2713,65 @@ static uint32_t td_size(uint32_t total, uint32_t through, uint32_t max_packet, i
     return left > 31 ? 31 : left;
 }
 
+/* A transfer's pieces, one for each page-bounded part of its buffer: each
+ * one's physical address and bytes. */
+struct td_pieces {
+    uintptr_t phys[XHCI_TD_TRBS];
+    uint32_t len[XHCI_TD_TRBS];
+    uint32_t n;
+};
+
 /**
- * A control transfer is a setup block, a data block when there is data and
- * a status block, one record over the three, with an event on the data
- * block, which is the one that says how much came, and on the status block,
- * which is the transfer's last. A bulk or interrupt transfer is a chain of
- * Normal blocks, one per page-bounded piece of the buffer, each with the
- * piece's physical address and the packets left after it, the chain bit on
- * all but the last, an event on a short packet on the intermediate IN blocks
- * and on the last block's end (4.10.1.1.2, 4.11.7).
+ * Write the pieces `p` of `transfer` on endpoint `dci` of `device` as record
+ * `t`'s blocks, and return the first: a bulk or interrupt transfer's Normal
+ * blocks, the first written with its cycle bit wrong, or a control
+ * transfer's data stage, a Data Stage block and a Normal block chained to it
+ * for each further piece (4.11.2.2). Each block but the last has the chain
+ * bit and, going IN, an event on a short packet; the last has an event;
+ * each has the packets left after it, except a control transfer's lone data
+ * block (4.10.1.1.2, 4.11.7).
+ */
+static uint32_t *put_pieces(struct xhci_ctrl *hc, int device, uint32_t dci, struct xhci_td *t,
+                            const struct usb_transfer *transfer, const struct td_pieces *p)
+{
+    struct xhci_slot *s = &hc->slots[device];
+    int control = transfer->setup != 0;
+    int in = transfer->direction == USB_DIR_IN;
+    uint32_t i, through = 0;
+    uint32_t *first = 0, *trb;
+
+    for (i = 0; i < p->n; i++) {
+        int last = i + 1 == p->n;
+        uint32_t type = control && i == 0 ? TRB_TYPE_DATA : TRB_TYPE_NORMAL;
+        uint32_t flags = (type << TRB_TYPE_SHIFT) | (control && i == 0 && in ? TRB_DIR_IN : 0u) |
+                         (last ? TRB_IOC : (TRB_CHAIN | (in ? TRB_ISP : 0u)));
+        uint32_t words = p->len[i]; /* the length and, above it, the packets left */
+
+        through += p->len[i];
+        if (!control || p->n > 1) {
+            words |= td_size(transfer->length, through, s->max_packet[dci], last)
+                     << TRB_TD_SIZE_SHIFT;
+        }
+        t->idx[t->count] = s->enqueue[dci];
+        t->len[t->count] = p->len[i];
+        t->count++;
+        trb =
+            ring_put(hc, device, dci, (uint32_t)p->phys[i], (uint32_t)((uint64_t)p->phys[i] >> 32),
+                     words, flags, !last, !control && i == 0);
+        if (i == 0) {
+            first = trb;
+        }
+    }
+    return first;
+}
+
+/**
+ * A control transfer is a setup block, a data stage when there is data and
+ * a status block, one record over them all, with an event on the data
+ * stage's last block, which is the one that says how much came, and on the
+ * status block, which is the transfer's last. A bulk or interrupt transfer
+ * is a chain of Normal blocks. Both are written by `put_pieces`, a block
+ * for each page-bounded piece of the buffer.
  *
  * The record and every translation are taken before a block is written, so
  * a transfer that cannot be described whole leaves the ring untouched: one
@@ -2734,12 +2788,9 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     struct xhci_slot *s;
     struct xhci_td *t;
     uint32_t dci = (uint32_t)endpoint;
-    uintptr_t phys[XHCI_TD_TRBS];
-    uint32_t len[XHCI_TD_TRBS];
-    uint32_t pieces = 0;
+    struct td_pieces p;
+    uint32_t off = 0;
     uint32_t blocks;
-    uint32_t i;
-    uint32_t through = 0;
     uint32_t *first = 0;
 
     if (device <= 0 || device > (int)hc->nslots || dci == 0 || dci >= XHCI_MAX_DCI) {
@@ -2752,42 +2803,29 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     if (s->ep_state[dci] == XHCI_EP_HALTED || s->ep_state[dci] == XHCI_EP_ERROR) {
         return -1; /* nothing runs until the endpoint is reset or moved on */
     }
-    if (transfer->setup != 0) {
-        if (transfer->length != 0) {
-            phys[0] = td_phys((uintptr_t)transfer->buffer);
-            len[0] = transfer->length;
-            if (phys[0] == 0) {
-                return -1;
-            }
-            pieces = 1;
-        }
-        blocks = 2 + pieces;
-    } else {
-        uint32_t off = 0;
+    p.n = 0;
+    while (off < transfer->length) {
+        uintptr_t va = (uintptr_t)transfer->buffer + off;
+        uint32_t chunk = PAGE_SIZE - (uint32_t)(va & (PAGE_SIZE - 1));
 
-        while (off < transfer->length) {
-            uintptr_t va = (uintptr_t)transfer->buffer + off;
-            uint32_t chunk = PAGE_SIZE - (uint32_t)(va & (PAGE_SIZE - 1));
-
-            if (chunk > transfer->length - off) {
-                chunk = transfer->length - off;
-            }
-            if (pieces == XHCI_TD_TRBS) {
-                return -1;
-            }
-            phys[pieces] = td_phys(va);
-            if (phys[pieces] == 0) {
-                return -1;
-            }
-            len[pieces] = chunk;
-            pieces++;
-            off += chunk;
+        if (chunk > transfer->length - off) {
+            chunk = transfer->length - off;
         }
-        if (pieces == 0) {
+        if (p.n == XHCI_TD_TRBS) {
             return -1;
         }
-        blocks = pieces;
+        p.phys[p.n] = td_phys(va);
+        if (p.phys[p.n] == 0) {
+            return -1;
+        }
+        p.len[p.n] = chunk;
+        p.n++;
+        off += chunk;
     }
+    if (transfer->setup == 0 && p.n == 0) {
+        return -1;
+    }
+    blocks = transfer->setup != 0 ? 2 + p.n : p.n;
 
     if (dci < XHCI_TD_DCI && !s->td[dci]) {
         s->td[dci] = kzalloc(sizeof(struct xhci_td) * XHCI_TD_RECORDS);
@@ -2799,7 +2837,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     if (!t) {
         return -1;
     }
-    if (!ring_room(s, dci, blocks) || td_bounce(hc, t, transfer, phys, len, pieces) != 0) {
+    if (!ring_room(s, dci, blocks) || td_bounce(hc, t, transfer, p.phys, p.len, p.n) != 0) {
         return -1;
     }
 
@@ -2833,15 +2871,8 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         t->count++;
         first = ring_put(hc, device, dci, setup_lo, setup_hi, 8,
                          (TRB_TYPE_SETUP << TRB_TYPE_SHIFT) | TRB_IDT | trt, 0, 1);
-        if (transfer->length != 0) {
-            t->idx[t->count] = s->enqueue[dci];
-            t->len[t->count] = transfer->length;
-            t->count++;
-            ring_put(hc, device, dci, (uint32_t)phys[0], (uint32_t)((uint64_t)phys[0] >> 32),
-                     transfer->length,
-                     (TRB_TYPE_DATA << TRB_TYPE_SHIFT) | TRB_IOC |
-                         (transfer->direction == USB_DIR_IN ? TRB_DIR_IN : 0u),
-                     0, 0);
+        if (p.n > 0) {
+            put_pieces(hc, device, dci, t, transfer, &p);
         }
         /* The status stage is IN unless the data stage is IN. */
         t->idx[t->count] = s->enqueue[dci];
@@ -2853,35 +2884,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
                 ((transfer->length != 0 && transfer->direction == USB_DIR_IN) ? 0u : TRB_DIR_IN),
             0, 0);
     } else {
-        /* A transfer with no piece has returned -1 above. */
-        i = 0;
-        do {
-            int last = i + 1 == pieces;
-            uint32_t flags = TRB_TYPE_NORMAL << TRB_TYPE_SHIFT;
-            uint32_t words; /* the length and, above it, the packets left */
-            uint32_t *trb;
-
-            through += len[i];
-            words = len[i] | (td_size(transfer->length, through, s->max_packet[dci], last)
-                              << TRB_TD_SIZE_SHIFT);
-            if (last) {
-                flags |= TRB_IOC;
-            } else {
-                flags |= TRB_CHAIN;
-                if (transfer->direction == USB_DIR_IN) {
-                    flags |= TRB_ISP;
-                }
-            }
-            t->idx[t->count] = s->enqueue[dci];
-            t->len[t->count] = len[i];
-            t->count++;
-            trb = ring_put(hc, device, dci, (uint32_t)phys[i], (uint32_t)((uint64_t)phys[i] >> 32),
-                           words, flags, !last, i == 0);
-            if (i == 0) {
-                first = trb;
-            }
-            i++;
-        } while (i < pieces);
+        first = put_pieces(hc, device, dci, t, transfer, &p);
     }
 
     xhci_barrier();
