@@ -754,6 +754,41 @@ static void sys_registry(void)
 }
 
 /**
+ * The registry past the table's first 512 slots: 1500 attributes below one
+ * directory, each reached by name and by path, a handle taken before the
+ * table grew still naming its entry, and all gone with the directory.
+ */
+static void sys_registry_grows(void)
+{
+    static const struct sysfs_attr attr = {"a", 0444u, 0, 0};
+    struct sysfs_attr a = attr;
+    struct vpath vp;
+    char name[8];
+    int dir = sysfs_add_dir(sysfs_anchor(SYSFS_KERNEL, 0), "many"), h[1500], i, ok = 1;
+
+    CHECK(dir > 0);
+    for (i = 0; i < 1500; i++) {
+        name[0] = 'a';
+        name[1] = (char)('0' + i / 1000);
+        name[2] = (char)('0' + i / 100 % 10);
+        name[3] = (char)('0' + i / 10 % 10);
+        name[4] = (char)('0' + i % 10);
+        name[5] = '\0';
+        a.name = name;
+        h[i] = sysfs_add_attr(dir, &a, 0, i);
+        ok = ok && h[i] > 0 && sysfs_node_child(dir, name, 5) == h[i];
+    }
+    CHECK(ok && sysfs_node_count(dir) == 1500);
+    CHECK(sysfs_node_kind(dir) == SYSFS_NODE_DIR && eq(sysfs_node_name(h[0]), "a0000") &&
+          eq(sysfs_node_name(h[1499]), "a1499"));
+    CHECK(synth_classify("sys/kernel/many/a1234", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_REG && vp.syskey == h[1234]);
+    sysfs_remove(dir);
+    CHECK(sysfs_node_kind(dir) == 0 && sysfs_node_kind(h[0]) == 0 && sysfs_node_kind(h[1499]) == 0);
+    CHECK(synth_classify("sys/kernel/many/a1234", &vp) == VNODE_ENOENT);
+}
+
+/**
  * VFIO's paths: /dev/vfio, its container and group nodes as devices of
  * the directory, and the entries VFIO adds to /sys through the registry,
  * as rach2/sys/vfio/group.c adds them: a group below
@@ -895,6 +930,7 @@ int main(void)
     sys_tree();
     sys_later();
     sys_registry();
+    sys_registry_grows();
     sys_class();
     sys_wireless();
     sys_rfkill();
