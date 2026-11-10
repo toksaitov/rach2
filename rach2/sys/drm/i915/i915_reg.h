@@ -766,6 +766,9 @@
 #define CURSOR_POS_X_SIGN         (1u << 15)
 #define CURSOR_POS_MASK           0x7fffu
 #define CURSURFLIVE(p)            (0x700ac + (p) * 0x1000)
+#define CUR_FBC_CTL(p)            (0x700a0 + (p) * 0x1000) /* a cursor's height */
+#define CUR_FBC_EN                (1u << 31)
+#define CUR_FBC_HEIGHT_MASK       0xffu /* lines less one */
 
 /* The sprite planes of Ivy Bridge and Haswell
  * (display/intel_sprite_regs.h), one a pipe. */

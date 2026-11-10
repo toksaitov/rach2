@@ -757,7 +757,8 @@ XBGR2101010 and XBGR16161616F, the sprite XRGB8888, XBGR8888, the two
 2101010 formats, XRGB16161616F, XBGR16161616F, YUYV, YVYU, UYVY and VYUY,
 each linear or X-tiled
 .Pq Dv I915_FORMAT_MOD_X_TILED ,
-and the cursor ARGB8888 squares of 64, 128 or 256 pixels, linear.
+and the cursor ARGB8888, linear, 64, 128 or 256 pixels wide and from 8
+lines to its width high, square when turned by 180 degrees.
 A commit fails with
 .Er EINVAL
 for C8, which needs a gamma table the CRTCs do not have; a modifier that
