@@ -23,7 +23,8 @@
 #   i386      the i386 layer, when GNU_I386 is 1, on x86-64: the Multi-Arch
 #             `same` packages of debian/i386 and the i386 Venus driver of
 #             venus-i386, with /lib/ld-linux.so.2, as dpkg installs a second
-#             architecture
+#             architecture, and vulkan-tools' i386 vulkaninfo as
+#             /usr/bin/vulkaninfo.i386-linux-gnu
 #   proton    GE-Proton under /opt/proton, on x86-64
 #   webgl     the pinned conformance suite under /usr/share/webgl
 #   igt       IGT's tests under /usr/libexec/igt-gpu-tools and its runner,
@@ -454,6 +455,16 @@ if [ "${GNU_I386:-}" = 1 ]; then
         exit 1
     fi
     ln -s ../usr/lib/i386-linux-gnu/ld-linux.so.2 "$TREE/lib/ld-linux.so.2"
+    # vulkan-tools is Multi-Arch foreign, so dpkg would keep amd64's
+    # vulkaninfo alone; the i386 one goes beside it under the name
+    # mesa-utils-bin gives its i386 programs.
+    if [ ! -f "$OUT/debian/i386/usr/bin/vulkaninfo" ]; then
+        echo "gnu: install: refused: the i386 closure has no vulkaninfo" >&2
+        exit 1
+    fi
+    cp "$OUT/debian/i386/usr/bin/vulkaninfo" "$TREE/usr/bin/vulkaninfo.i386-linux-gnu"
+    chmod 0755 "$TREE/usr/bin/vulkaninfo.i386-linux-gnu"
+    needs "the i386 vulkaninfo" "$TREE/usr/bin/vulkaninfo.i386-linux-gnu" usr/lib/i386-linux-gnu
 fi
 
 install_part proton
