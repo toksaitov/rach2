@@ -93,8 +93,8 @@ void init_idt(void)
     _idt_set_desciptor(47, (uintptr_t)&irq15, 0x08, 0x8E);
 
     /* Vectors 48 to 239 carry messages from PCI devices, but for 128. */
-    if (isr_msi_stubs_end - isr_msi_stubs !=
-        (ISR_MSI_LAST - ISR_MSI_FIRST + 1) * ISR_MSI_STUB_BYTES) {
+    if ((uintptr_t)isr_msi_stubs_end - (uintptr_t)isr_msi_stubs !=
+        (uintptr_t)(ISR_MSI_LAST - ISR_MSI_FIRST + 1) * ISR_MSI_STUB_BYTES) {
         k_panic("idt: a message vector's stub is not 16 bytes from the last");
     }
     for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
