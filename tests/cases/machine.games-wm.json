@@ -60,7 +60,7 @@
           "step_id": "row",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run wm.py's row as root in the boot session, dumping the screen, moving the pointer and pressing Escape through QMP at each of its ready lines"
+          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
         }
       ],
       "machines": [
@@ -105,17 +105,7 @@
       "assertions": [
         {
           "assertion_id": "row",
-          "checks": "each window's place, frame, focus and fullscreen state, the screen dumps' sample points, the grab, the raw motion sums and the pointer's place hold, and the runner prints GAMESWM OK place",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "screen-xplace-1366",
-          "checks": "QMP's screendump while xplace-1366 is held is 1366x768 with red at the left half's sample points and green at the right half's",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "screen-full-1366",
-          "checks": "QMP's screendump while full-1366 is held is 1366x768 with red at the left half's sample points and green at the right half's",
+          "checks": "each window's place, frame, focus and fullscreen state, weston-screenshooter's sample points, the grab, the raw motion sums and the pointer's place hold, and the runner prints GAMESWM OK place",
           "source": "scenario"
         }
       ],
@@ -201,7 +191,7 @@
       "native": {
         "plan": "none",
         "class": "image",
-        "reason": "the row needs QEMU's virgl display, QMP's screendump and input, and the HDA loopback"
+        "reason": "the row needs QEMU's virgl display, QMP's input, and the HDA loopback"
       }
     },
     {
@@ -261,7 +251,7 @@
           "step_id": "row",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run wm.py's row as root in the boot session, dumping the screen, moving the pointer and pressing Escape through QMP at each of its ready lines"
+          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
         }
       ],
       "machines": [
@@ -306,17 +296,7 @@
       "assertions": [
         {
           "assertion_id": "row",
-          "checks": "xplace's mode, place, frame, focus and fullscreen state, Wine's window's place, and the screen dumps' sample points across the whole output hold, and the runner prints GAMESWM OK scaled",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "screen-xplace-800",
-          "checks": "QMP's screendump while xplace-800 is held is 1366x768 with red at the left half's sample points and green at the right half's",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "screen-full-800",
-          "checks": "QMP's screendump while full-800 is held is 1366x768 with red at the left half's sample points and green at the right half's",
+          "checks": "xplace's mode, place, frame, focus and fullscreen state, Wine's window's place, and weston-screenshooter's sample points across the whole output hold, and the runner prints GAMESWM OK scaled",
           "source": "scenario"
         }
       ],
@@ -402,7 +382,7 @@
       "native": {
         "plan": "none",
         "class": "image",
-        "reason": "the row needs QEMU's virgl display, QMP's screendump and input, and the HDA loopback"
+        "reason": "the row needs QEMU's virgl display, QMP's input, and the HDA loopback"
       }
     },
     {
@@ -462,7 +442,7 @@
           "step_id": "row",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run wm.py's row as root in the boot session, dumping the screen, moving the pointer and pressing Escape through QMP at each of its ready lines"
+          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
         }
       ],
       "machines": [
@@ -593,7 +573,7 @@
       "native": {
         "plan": "none",
         "class": "image",
-        "reason": "the row needs QEMU's virgl display, QMP's screendump and input, and the HDA loopback"
+        "reason": "the row needs QEMU's virgl display, QMP's input, and the HDA loopback"
       }
     }
   ]

@@ -17,6 +17,7 @@ import struct
 import subprocess
 import sys
 import threading
+import zlib
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -25,7 +26,16 @@ ROWS = ("place", "scaled", "wineio")
 SERVICES = Path("/var/log/services")
 INI = Path("/etc/xdg/weston/weston.ini")
 SUPERVISOR = Path("/run/rach2-desktop.pid")
+SESSION = Path("/usr/libexec/rach2-session")
 WORK = Path("/tmp/games-wm")
+# Where weston-screenshooter writes, through XDG_PICTURES_DIR.
+SHOTS = WORK / "shots"
+# The output, and the points of it whose colours show a window at its
+# origin drawing its left half red and its right half green across the
+# whole output, scaled or not: each half's corners and the two sides of the
+# middle, as (x, y, red).
+SCREEN = (1366, 768)
+POINTS = ((8, 8, 1), (8, 759, 1), (670, 384, 1), (696, 384, 0), (1357, 8, 0), (1357, 759, 0))
 GAME_ID = "2734"
 UID = 1001
 # CVT's 1366x768 at 60 Hz, which Weston sets when the EDID lists no such mode.
@@ -71,16 +81,28 @@ def log_from(offset):
 
 def session(mode):
     """
-    Give the session's output MODE through weston.ini, start the session
-    again and wait until Weston lights the output in that mode and its
-    Xwayland listens. Returns the output's name.
+    Wait for the boot session's Weston to light its DRM output, give the
+    output MODE through weston.ini, start the session again and wait until
+    Weston lights the output in that mode and its Xwayland listens. Returns
+    the output's name.
     """
-    text = log_from(0)
-    output = re.findall(r"Output (\S+) \(crtc \d+\) video modes:\n", text)
-    assert output, "no DRM output in the services log"
+    while True:
+        text = log_from(0)
+        output = re.findall(r"Output (\S+) \(crtc \d+\) video modes:\n", text)
+        if output:
+            break
+        assert not re.search(r"fatal: |failed to create backend|Segmentation fault", text), \
+            text[-3000:]
+        time.sleep(0.2)
     listed = re.search(r"Output %s \(crtc \d+\) video modes:\n((?:\s+\d+x\d+@.*\n)+)" %
                        re.escape(output[-1]), text)
     wanted = mode if listed and re.search(r"^\s+%s@" % mode, listed.group(1), re.M) else MODELINE
+    # --debug lets weston-screenshooter capture the output, since QEMU's
+    # screendump has no surface while virgl scans out a GL resource.
+    text = SESSION.read_text()
+    if "weston --debug " not in text:
+        assert text.count("weston --backend=") == 1, "rach2-session starts no weston"
+        SESSION.write_text(text.replace("weston --backend=", "weston --debug --backend="))
     core = INI.read_text().split("\n[output]")[0].rstrip("\n")
     INI.write_text(core + "\n[output]\nname=%s\nmode=%s\n" % (output[-1], wanted))
     offset = SERVICES.stat().st_size
@@ -126,6 +148,72 @@ def start(argv, out=subprocess.PIPE):
     return proc
 
 
+def png_rows(path, last):
+    """
+    Decode PATH, an 8-bit RGB or RGBA PNG without interlace, up to row LAST.
+    Gives its width, height, bytes per pixel and rows of unfiltered bytes.
+    """
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "%s is no PNG" % path
+    pos, idat, head = 8, [], None
+    while pos + 8 <= len(data):
+        size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        if kind == b"IHDR":
+            head = struct.unpack(">IIBBBBB", data[pos + 8:pos + 21])
+        elif kind == b"IDAT":
+            idat.append(data[pos + 8:pos + 8 + size])
+        pos += 12 + size
+    width, height, depth, kind, _, _, interlace = head
+    assert depth == 8 and kind in (2, 6) and interlace == 0, head
+    bpp = 3 if kind == 2 else 4
+    raw, stride = zlib.decompress(b"".join(idat)), width * bpp
+    rows, prior = [], bytearray(stride)
+    for y in range(min(height, last + 1)):
+        at = y * (stride + 1)
+        kind, line = raw[at], bytearray(raw[at + 1:at + 1 + stride])
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0
+            b, c = prior[i], prior[i - bpp] if i >= bpp else 0
+            if kind == 1:
+                line[i] = (line[i] + a) & 255
+            elif kind == 2:
+                line[i] = (line[i] + b) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (a + b) // 2) & 255
+            elif kind == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(line)
+        prior = line
+    return width, height, bpp, rows
+
+
+def screen(name):
+    """
+    Capture the output with weston-screenshooter and check, as NAME, that it
+    is SCREEN's size and that each of POINTS has its half's colour.
+    """
+    shutil.rmtree(SHOTS, ignore_errors=True)
+    SHOTS.mkdir(mode=0o755)
+    os.chown(SHOTS, UID, UID)
+    run = subprocess.run(desktop("XDG_PICTURES_DIR=%s exec weston-screenshooter" % SHOTS),
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    shots = sorted(SHOTS.glob("wayland-screenshot-*.png"))
+    if run.returncode != 0 or not shots:
+        check(name, False, "weston-screenshooter: status %d %s" % (run.returncode,
+                                                                  run.stdout.strip()))
+        return
+    width, height, bpp, rows = png_rows(shots[-1], max(y for _, y, _ in POINTS))
+    off = []
+    for x, y, red in POINTS if (width, height) == SCREEN else ():
+        r, g, b = rows[y][x * bpp:x * bpp + 3]
+        if not (r > 200 and g < 60 and b < 60 if red else r < 60 and g > 200 and b < 60):
+            off.append("%d,%d is %d %d %d" % (x, y, r, g, b))
+    check(name, (width, height) == SCREEN and not off, "%dx%d, %d points off the left-red, "
+          "right-green halves %s" % (width, height, len(off), off))
+
+
 def xplace(width, height):
     """
     Run xplace at WIDTH by HEIGHT, announce it once it is ready, and return
@@ -137,6 +225,7 @@ def xplace(width, height):
         lines.append(line.rstrip("\n"))
         print(line, end="", flush=True)
         if line.startswith("xplace: ready"):
+            screen("screen-xplace-%d" % width)
             say("ready: xplace-%d" % width)
     status = proc.wait()
     check("xplace-%d-exit" % width, status == 0, "status %d" % status)
@@ -208,6 +297,7 @@ def full(width, height):
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         print(query.stdout, end="", flush=True)
         placed("full-%d" % width, query.stdout, 1366, 768)
+        screen("screen-full-%d" % width)
         say("ready: full-%d" % width)
         wait_key(fd)
         go.touch()
@@ -261,18 +351,24 @@ def record(stop, samples, ready):
 
 
 def tone_windows(data):
-    """Count the 50 ms windows of the loopback that measure 440 Hz, and the others."""
+    """
+    Count the 50 ms windows of the loopback that measure 440 Hz, as desktop.py
+    does, and give the others as (index, RMS, Hz), the index counted among
+    the loud windows, so that the tone's ends tell apart from gaps within it.
+    """
     values = struct.unpack("<%dh" % (len(data) // 2), data)
-    good = off = 0
+    good, off, loud = 0, [], 0
     for at in range(0, len(values) - 2400, 2400):
         block = values[at:at + 2400]
-        if math.sqrt(sum(x * x for x in block) / len(block)) < 200:
+        rms = math.sqrt(sum(x * x for x in block) / len(block))
+        if rms < 200:
             continue
         hz = sum(a <= 0 < b for a, b in zip(block, block[1:])) * 20
         if abs(hz - 440) <= 40:
             good += 1
         else:
-            off += 1
+            off.append((loud, int(rms), hz))
+        loud += 1
     return good, off
 
 
@@ -295,8 +391,9 @@ def row_wineio():
         text = output.read_text(errors="replace") if output.exists() else ""
         print(text, end="", flush=True)
         good, off = tone_windows(samples)
-        check("tone" + bits, status == 0 and "TONE OK" in text and good >= 10 and off * 5 <= good,
-              "status %d, %d windows of 440 Hz, %d others" % (status, good, off))
+        check("tone" + bits, status == 0 and "TONE OK" in text and good >= 10 and
+              len(off) * 5 <= good, "status %d, %d windows of 440 Hz, %d others %s" % (
+                  status, good, len(off), off))
     proc, output = launch("dinput64", extra="WINEDEBUG=-all,err+all,trace+dinput,trace+hid ")
     status = proc.wait()
     text = output.read_text(errors="replace") if output.exists() else ""
