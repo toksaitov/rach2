@@ -645,6 +645,35 @@ void evdev_sysfs_serio_files(int port, int (*add)(int dir))
     files_add = add;
 }
 
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
+}
+
 /** Record the file asked for; its handle is its place in the record. */
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
 {

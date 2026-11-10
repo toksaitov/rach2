@@ -1533,6 +1533,19 @@ void evdev_sysfs_serio_files(int port, int (*add)(int dir))
     (void)add;
 }
 
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
+}
+
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
 {
     (void)parent;
@@ -1953,17 +1966,28 @@ static void expect_custom(const uint8_t *seq, int n, uint8_t end)
     expect(end);
 }
 
-/** Expect the bring-up's start, the reset and the defaults, the Synaptics
+/** Expect the bring-up's start, the reset and the defaults, a Kensington
+ * ThinkingMouse's rates and ID, which psmouse tries first, the Synaptics
  * knock, which an Elantech pad does not answer as a Synaptics pad, and the
  * Elantech magic knock with its firmware query, Linux's
  * `elantech_detect`. */
 static void expect_start(void)
 {
+    static const uint8_t thinking[9] = {20, 60, 40, 20, 20, 60, 40, 20, 20};
     int i;
 
     n_want = 0;
     expect(0xFF);
     expect(0xF6);
+    expect(0xF3);
+    expect(10);
+    expect(0xE8);
+    expect(0x00);
+    for (i = 0; i < 9; i++) {
+        expect(0xF3);
+        expect(thinking[i]);
+    }
+    expect(0xF2);
     for (i = 0; i < 4; i++) {
         expect(0xE8);
         expect(0x00);
