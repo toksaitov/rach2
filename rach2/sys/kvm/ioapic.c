@@ -19,6 +19,7 @@ struct guest_ioapic {
     uint32_t delivered;                    /* edge requests delivered since the last line update */
     uint64_t rtc_pending;                  /* vCPU indices awaiting the RTC vector's EOI */
     uint8_t rtc_vector[KVM_MAX_VCPUS];     /* vector at each tracked delivery */
+    uint32_t counts[KVM_IOAPIC_NUM_PINS][KVM_PIN_STEPS]; /* by enum kvm_pin_step */
 };
 
 /** The IOAPIC of `vm`, or NULL before KVM_CREATE_IRQCHIP. */
@@ -51,6 +52,7 @@ static int ioapic_deliver(struct kvm_vm *vm, uint32_t pin, int status)
     int result;
 
     if ((entry & IOA_MASKED) || ((entry & IOA_LEVEL) && (entry & IOA_REMOTE))) {
+        p->counts[pin][KVM_PIN_HELD]++;
         return -1;
     }
     irq.vector = (uint32_t)entry & 0xFFu;
@@ -74,6 +76,7 @@ static int ioapic_deliver(struct kvm_vm *vm, uint32_t pin, int status)
             }
         }
     }
+    p->counts[pin][result > 0 ? KVM_PIN_DELIVER : KVM_PIN_MISS]++;
     if (result > 0 && (entry & IOA_LEVEL)) {
         p->state.redirtbl[pin] |= IOA_REMOTE;
     }
@@ -90,9 +93,11 @@ static int ioapic_level(struct kvm_vm *vm, uint32_t pin, int level, int status)
         p->state.irr &= ~bit;
         return 1;
     }
+    p->counts[pin][KVM_PIN_RAISE]++;
     if (pin == IOA_RTC_PIN && status) {
         ioapic_rtc_sync(vm);
         if (p->rtc_pending) {
+            p->counts[pin][KVM_PIN_COALESCE]++;
             return 0;
         }
     }
@@ -100,10 +105,27 @@ static int ioapic_level(struct kvm_vm *vm, uint32_t pin, int level, int status)
     if (!(p->state.redirtbl[pin] & IOA_LEVEL)) {
         p->delivered &= ~bit;
         if (old & bit) {
+            p->counts[pin][KVM_PIN_COALESCE]++;
             return 0;
         }
     }
     return ioapic_deliver(vm, pin, status);
+}
+
+/** Copy the counts of `pin` into `counts`, KVM_PIN_STEPS of them by enum
+ * kvm_pin_step; 0, or -1 with no IOAPIC in the kernel or no such pin. */
+int kvm_ioapic_counts(struct kvm_vm *vm, uint32_t pin, uint32_t *counts)
+{
+    struct guest_ioapic *p = ioapic_of(vm);
+    uint32_t i;
+
+    if (!p || pin >= KVM_IOAPIC_NUM_PINS) {
+        return -1;
+    }
+    for (i = 0; i < KVM_PIN_STEPS; i++) {
+        counts[i] = p->counts[pin][i];
+    }
+    return 0;
 }
 
 /** Allocate a reset IOAPIC, all entries masked, at 0xFEC00000. */

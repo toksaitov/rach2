@@ -814,6 +814,9 @@ static void entry_fields(struct kvm_vcpu *v)
     }
     c->event_inj = s->inj;
     c->event_inj_err = s->inj_err;
+    if ((s->inj & EV_VALID) && EV_TYPE(s->inj) == EV_INTR) {
+        v->irq_counts[EV_VECTOR(s->inj)][KVM_VEC_INJECT]++;
+    }
     if (caps.nrips && (s->inj & EV_VALID) &&
         (EV_TYPE(s->inj) == EV_SOFT ||
          (EV_TYPE(s->inj) == EV_EXCEPTION &&
@@ -1527,6 +1530,9 @@ static void complete_events(struct kvm_vcpu *v)
         v->events.interrupt.injected = 1;
         v->events.interrupt.nr = (uint8_t)vec;
         v->events.interrupt.soft = (uint8_t)(type == EV_SOFT);
+        if (type == EV_INTR) {
+            v->irq_counts[vec & 0xFFu][KVM_VEC_SAVE]++;
+        }
         break;
     default:
         break;

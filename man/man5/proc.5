@@ -1967,6 +1967,26 @@ For a dma-buf with a name set by
 .Dv DMA_BUF_SET_NAME ,
 .Ql name:
 gives that name.
+On x86-64, a KVM VM's descriptor,
+.Ql anon_inode:kvm-vm ,
+adds
+.Ql kvm_irqchip: ,
+the interrupt controller in the kernel,
+.Ql kernel ,
+.Ql split
+or
+.Ql none ,
+then a
+.Ql kvm_ioapic_pin:
+line for each pin of the kernel's I/O APIC with a count, the pin and its
+inputs raised, coalesced into an interrupt still pending, held by the
+entry's mask or remote IRR, delivered, and delivered to no APIC, and a
+.Ql kvm_vcpu_vector:
+line for each vector of each vCPU with a count, the vCPU's index, the
+vector and its interrupts accepted into IRR, dropped by a disabled APIC,
+acknowledged into ISR, injected at an entry, saved from an exit that cut
+their delivery off, and ended by an EOI.
+The counts are Rach2's own, not Linux's, and wrap at 2^32.
 Linux adds lines of each kind of file.
 Another user's is
 .Er EACCES ,

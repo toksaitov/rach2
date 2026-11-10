@@ -515,6 +515,76 @@ static void vm_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
+void *kvm_vm_irq_hold(const struct fd_entry *e)
+{
+    struct kvm_vm *vm;
+
+    if (e->type != FD_TYPE_ANON || e->ops != &vm_ops || !e->priv) {
+        return NULL;
+    }
+    vm = (struct kvm_vm *)e->priv;
+    kvm_vm_get(vm);
+    return vm;
+}
+
+/** Whether `counts`, `n` of them, holds a nonzero count. */
+static int any_count(const uint32_t *counts, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (counts[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int kvm_vm_irq_row(void *arg, uint32_t n, struct kvm_irq_row *row)
+{
+    struct kvm_vm *vm = (struct kvm_vm *)arg;
+    uint32_t pin, i, vec;
+
+    k_memset(row, 0, sizeof(*row));
+    row->pin = 1;
+    for (pin = 0; pin < KVM_IOAPIC_NUM_PINS; pin++) {
+        if (kvm_ioapic_counts(vm, pin, row->counts) != 0) {
+            break;
+        }
+        if (any_count(row->counts, KVM_PIN_STEPS) && n-- == 0) {
+            row->index = pin;
+            return 1;
+        }
+    }
+    row->pin = 0;
+    for (i = 0; i < vm->nr_vcpus; i++) {
+        for (vec = 0; vec < 256u; vec++) {
+            if (any_count(vm->vcpus[i]->irq_counts[vec], KVM_VEC_STEPS) && n-- == 0) {
+                row->vcpu = i;
+                row->index = vec;
+                k_memcpy(row->counts, vm->vcpus[i]->irq_counts[vec], sizeof(row->counts));
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+void kvm_vm_irq_done(void *vm)
+{
+    kvm_vm_put((struct kvm_vm *)vm);
+}
+
+const char *kvm_vm_irqchip_name(void *arg)
+{
+    struct kvm_vm *vm = (struct kvm_vm *)arg;
+
+    if (vm->irqchip == KVM_IRQCHIP_KERNEL) {
+        return "kernel";
+    }
+    return vm->irqchip == KVM_IRQCHIP_SPLIT ? "split" : "none";
+}
+
 static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl, NULL, NULL, NULL};
 
 /* /dev/kvm, the misc device 10:232, read and written by everyone, as
