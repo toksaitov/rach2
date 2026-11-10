@@ -1,6 +1,6 @@
 video: result: chromium h264-720p.mp4 codec h264 size 1280x720 frames 300,300,300 dropped 0,0,0 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
-video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 0,0,0 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
-video: result: chromium vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 0,0,0 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
-video: result: chromium vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 4,0,6 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
-video: result: chromium av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 0,6,4 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
-video: result: chromium av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 7,0,0 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 8,12,1 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+video: result: chromium vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 7,19,9 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+video: result: chromium vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 18,0,12 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+video: result: chromium av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 15,0,1 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+video: result: chromium av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 39,53,87 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
