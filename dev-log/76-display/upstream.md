@@ -34,3 +34,14 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `bochs_set_mode` enables with `VBE_DISPI_NOCLEARMEM`, in task 2544's bochs commit.
 * Status: unreported, draft record from Rach2's run.
 * Next: read the current `bochs_hw_setmode` and QEMU's `vbe_ioport_write_data`, reproduce under Linux with two clients, and check whether TTM's placement there ever puts a buffer in the cleared range.
+
+## Linux's elantech reports a v3 pad's stick packet to no device
+
+* Project: Linux 6.12, `drivers/input/mouse/elantech.c`, as tagged `v6.12` in torvalds/linux; the source tarball is not kept by Rach2.
+* Fails: on a version 3 pad without crc and without a pointing stick, `elantech_packet_check_v3` returns `PACKET_TRACKPOINT` for any packet whose byte 3 has 0x06 in its low four bits (line 868), without the `etd->tp_dev` check that `elantech_packet_check_v4` makes (line 883). `elantech_process_byte` then calls `elantech_report_trackpoint` (line 964), which reports buttons, `REL_X`, `REL_Y` and a sync to `etd->tp_dev` (lines 536 to 541), NULL on a pad whose capabilities have no stick bit, and `input_event` reads the NULL device's `evbit`. A packet of the stick's form and in its range must come from the pad for this to happen, so a pad that never sends one is not affected.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, while task 3322 checked Rach2's Elantech driver against Linux's decoder compiled on the host with a stand-in input core.
+* Reproduction: compile Linux 6.12's `elantech_packet_check_v3` and `elantech_report_trackpoint` with an input core that logs its device, set up a version 3 pad of firmware 0x450f01 and capabilities 0x78 0x15 0x0c, as an Asus K53SV's, and feed the six bytes `21 80 00 16 05 fd`: the stand-in logs six calls on a NULL device. A run on a Linux machine with such a pad remains to be made.
+* Evidence: the step "a stick's packet on a pad with no stick is not reported" of profile `V3_K53SV` in `tests/host/elantech_hosttest.c`; the stand-in core and its log were kept only in the worker's scratch. Linux's master branch of 2026-11-10 has the same lines at the same numbers.
+* Rach2: `rach2/sys/arch/x86/elantech.c`'s `etd_report_trackpoint` drops the packet when the pad has no stick, in task 3322's driver commit.
+* Status: unreported, draft record from the host run.
+* Next: confirm on Linux with a version 3 pad, or with a fault-injected packet through serio's userspace device, then send a patch that checks `etd->tp_dev` in `elantech_packet_check_v3` as the v4 check does.
