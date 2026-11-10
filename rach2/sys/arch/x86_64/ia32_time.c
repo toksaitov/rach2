@@ -190,7 +190,7 @@ static long sleep_call(isr_params_t *params, syscall_fn_t fn, int clock, long t[
         } else {
             bad = put_time32(urem, t + 2) != 0;
         }
-        if (bad && rc == 0) {
+        if (bad) {
             return -EFAULT;
         }
     }
