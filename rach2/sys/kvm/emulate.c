@@ -135,8 +135,13 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
         v->dirty |= KVM_PART_EVENTS;
     }
     /* A trap flag set before the instruction raises #DB after it, as the
-     * processor would have, unless the caller debugs the guest itself. */
-    if ((v->regs.rflags & RFLAGS_TF) && !(v->guest_debug.control & KVM_GUESTDBG_SINGLESTEP)) {
+     * processor would have; under the caller's single step the backend
+     * ends the exit as KVM_EXIT_DEBUG instead, as Linux's
+     * kvm_vcpu_do_singlestep. */
+    if ((v->guest_debug.control & KVM_GUESTDBG_ENABLE) &&
+        (v->guest_debug.control & KVM_GUESTDBG_SINGLESTEP)) {
+        v->emul.step_trap = 1;
+    } else if (v->regs.rflags & RFLAGS_TF) {
         v->debugregs.dr6 |= DR6_BS;
         v->dirty |= KVM_PART_DEBUG;
         kvm_queue_exception(v, DB_VECTOR, 0, 0);

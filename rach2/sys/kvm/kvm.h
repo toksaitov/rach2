@@ -267,6 +267,7 @@ struct kvm_emul {
     uint64_t src_gpa, dst_gpa;
     int src_mmio, dst_mmio; /* MOVS's operands that are no slot's */
     uint64_t info[5];       /* the exit's reason and qualifications, for an internal error */
+    int step_trap;          /* an instruction was stepped under KVM_GUESTDBG_SINGLESTEP */
     struct kvm_pio pio;     /* the port instruction */
 };
 
@@ -720,7 +721,8 @@ void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t
 
 /** Step `v` past an instruction of `len` bytes it ran in the kernel, as
  * Linux's kvm_skip_emulated_instruction: RIP, the interrupt shadow cleared,
- * and #DB queued when RFLAGS.TF was set. */
+ * and #DB queued when RFLAGS.TF was set, or `emul.step_trap` set under the
+ * caller's single step, for the backend to end the exit as a debug one. */
 void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len);
 
 /** Translate the linear address `la` of `v` through its page tables for an

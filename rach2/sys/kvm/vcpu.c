@@ -1254,9 +1254,10 @@ static int32_t set_debugregs(struct kvm_vcpu *v, uintptr_t arg)
     return 0;
 }
 
-/** KVM_SET_GUEST_DEBUG, which the backend acts on at the next entry: an
- * INJECT flag queues #DB or #BP, -EBUSY while an exception waits; -EINVAL
- * for a flag Linux does not know. */
+/** KVM_SET_GUEST_DEBUG, which the backend acts on at the next entry,
+ * where events are weighed again: an INJECT flag queues #DB or #BP,
+ * -EBUSY while an exception waits; -EINVAL for a flag Linux does not
+ * know. */
 static int32_t set_guest_debug(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_guest_debug d;
@@ -1279,6 +1280,8 @@ static int32_t set_guest_debug(struct kvm_vcpu *v, uintptr_t arg)
     }
     v->guest_debug = d;
     v->dirty |= KVM_PART_DEBUG;
+    /* An event BLOCKIRQ held goes in now, as Linux's kvm_set_rflags asks. */
+    req_set(v, KVM_REQ_EVENT);
     return 0;
 }
 
