@@ -182,6 +182,7 @@ static const char *const assertion_id[] = {"far-call",
                                            "signal-return",
                                            "ia32-altstack-frame",
                                            "ia32-altstack-return",
+                                           "sleep-remainder",
                                            "seccomp-native-kept",
                                            "seccomp-i386-killed",
                                            "ptrace-arch",
@@ -590,6 +591,42 @@ static void run_ia32_signal(void)
     report_held();
 }
 
+/** Ignore SIGALRM so each interval can interrupt the sleeping call. */
+static void on_alarm(int sig, void *info, void *ucontext)
+{
+    (void)sig;
+    (void)info;
+    (void)ucontext;
+}
+
+/** Each compat sleep reports EFAULT when its interrupted remainder is lost. */
+static void run_sleep_remainder(void)
+{
+    static unsigned int req32[2] = {100000, 0};
+    static unsigned int req64[4] = {100000, 0, 0, 0};
+    struct k_sigaction ka;
+    unsigned long timer[4] = {0, 10000, 0, 10000};
+    unsigned long off[4] = {0, 0, 0, 0};
+    long rc[3];
+
+    ka.handler = on_alarm;
+    ka.flags = SA_SIGINFO | SA_RESTORER;
+    ka.restorer = sig_restorer;
+    ka.mask[0] = ka.mask[1] = 0;
+    if (syscall4(SYS_RT_SIGACTION, 14, (long)&ka, 0, 8) != 0 ||
+        syscall3(SYS_SETITIMER, 0, (long)timer, 0) != 0) {
+        fail("sleep interrupt timer");
+    }
+    rc[0] = int80(162, (unsigned long)req32, 1, 0);
+    rc[1] = int80_5(267, 1, 0, (unsigned long)req32, 1, 0);
+    rc[2] = int80_5(407, 1, 0, (unsigned long)req64, 1, 0);
+    if (syscall3(SYS_SETITIMER, 0, (long)off, 0) != 0 || rc[0] != -14 || rc[1] != -14 ||
+        rc[2] != -14) {
+        fail("an interrupted compat sleep hid a failed remainder copy");
+    }
+    report_held();
+}
+
 /** A seccomp filter that kills the i386 getpid and allows the rest. */
 static void run_seccomp(void)
 {
@@ -598,29 +635,41 @@ static void run_seccomp(void)
         {BPF_LD_W_ABS, 0, 0, SECCOMP_DATA_NR},       {BPF_JEQ_K, 0, 1, I386_GETPID},
         {BPF_RET_K, 0, 0, SECCOMP_RET_KILL_PROCESS}, {BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW}};
     struct sock_fprog prog;
-    long pid;
-    int status;
+    long pid, got;
+    int status, pipefd[2];
+    char marker = 0;
 
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0) {
+        fail("seccomp pipe");
+    }
     pid = syscall0(SYS_FORK);
     if (pid < 0) {
         fail("fork");
     }
     if (pid == 0) {
+        unsigned long iov[2];
+
+        syscall1(SYS_CLOSE, pipefd[0]);
+        iov[0] = (unsigned long)"x";
+        iov[1] = 1;
         prog.len = sizeof(code) / sizeof(code[0]);
         prog.filter = code;
         if (syscall5(SYS_PRCTL, PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 ||
             syscall3(SYS_SECCOMP, SECCOMP_SET_MODE_FILTER, 0, (long)&prog) != 0) {
             sys_exit(2);
         }
-        /* x86-64's 20 is writev; with no vectors it writes nothing. */
-        if (syscall3(SYS_WRITEV, 1, 0, 0) != 0) {
+        /* x86-64's 20 is writev; its byte proves the call returned. */
+        if (syscall3(SYS_WRITEV, pipefd[1], (long)iov, 1) != 1) {
             sys_exit(3);
         }
         int80(I386_GETPID, 0, 0, 0);
         sys_exit(4);
     }
+    syscall1(SYS_CLOSE, pipefd[1]);
+    got = syscall3(SYS_READ, pipefd[0], (long)&marker, 1);
+    syscall1(SYS_CLOSE, pipefd[0]);
     status = child_status(pid);
-    if (status == (2 << 8) || status == (3 << 8)) {
+    if (got != 1 || marker != 'x' || status == (2 << 8) || status == (3 << 8)) {
         fail("the filter was not installed, or killed the x86-64 call of number 20");
     }
     report_held();
@@ -954,6 +1003,7 @@ void probe_main(unsigned long *sp)
     run_tls();
     run_signal();
     run_ia32_signal();
+    run_sleep_remainder();
     run_seccomp();
     run_ptrace();
     run_orig();
