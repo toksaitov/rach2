@@ -1,6 +1,6 @@
 /*
  * i915_getparam.c: what the Intel graphics driver tells programs of the
- * device: GETPARAM and I915_QUERY, as Linux 6.18's i915_getparam.c and
+ * device: GETPARAM and I915_QUERY, as Linux 6.12's i915_getparam.c and
  * i915_query.c answer them on the Lenovo's HD 4400, and the slices,
  * subslices and EUs they report, after gt/intel_sseu.c.
  */
@@ -21,8 +21,10 @@
  * 12.5 MHz (Linux's gen6 read of the clock and i915_perf). */
 #define I915_HSW_TIMESTAMP_HZ 12500000
 
-/* MMAP_GTT_VERSION and PERF_REVISION, Linux 6.18's
- * i915_gem_mmap_gtt_version and i915_perf_ioctl_version. */
+/* MMAP_GTT_VERSION and PERF_REVISION, Linux's i915_gem_mmap_gtt_version
+ * and i915_perf_ioctl_version. MMAP_GTT_VERSION is 6.18's 5, which the
+ * Lenovo gave under Linux 6.18.58: it announces partial maps from inside an
+ * object, which 6.12 already makes and answers 4. */
 #define I915_MMAP_GTT_VERSION 5
 #define I915_PERF_REVISION    7
 
@@ -75,7 +77,7 @@ void i915_sseu_init(struct drm_i915_private *i915)
 }
 
 /* The parameters whose answers are the same on every Haswell GT2 with the
- * render and blitter rings, as Linux 6.18 answers them. CMD_PARSER_VERSION
+ * render and blitter rings, as Linux 6.12 answers them. CMD_PARSER_VERSION
  * is the parser's, since both rings parse (i915_cmd_parser.c).
  * HAS_CONTEXT_FREQ_HINT needs GuC, and Linux answers its error as the
  * value. HAS_CONTEXT_ISOLATION is the classes with a default context

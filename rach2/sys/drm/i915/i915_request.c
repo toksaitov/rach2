@@ -2,7 +2,7 @@
  * i915_request.c: the Intel graphics driver's requests on the render and
  * blitter rings: their commands, the context switch, the breadcrumb that
  * closes each, their fences signalled from the user interrupt, waits and
- * retirement, and the default context image, after Linux 6.18's
+ * retirement, and the default context image, after Linux 6.12's
  * i915_request.c, gt/intel_ring_submission.c, gt/gen6_engine_cs.c,
  * gt/intel_gt_requests.c and gt/intel_gt.c on Haswell.
  */

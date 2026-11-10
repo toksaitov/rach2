@@ -2,7 +2,7 @@
  * i915_gem_context.c: the Intel graphics driver's contexts: a file's
  * contexts and their parameters, the engine maps programs give them, their
  * states on each engine with the render ring's image, and the reset
- * statistics, after Linux 6.18's gem/i915_gem_context.c and
+ * statistics, after Linux 6.12's gem/i915_gem_context.c and
  * gt/intel_context.c on a legacy ring.
  */
 
