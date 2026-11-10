@@ -8,29 +8,36 @@
  * host-deps: tests/host/i915_model.c rach2/sys/display/backlight.c
  * host-deps: rach2/sys/display/intelbl.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/drm/i915/intel_bios.c
+ * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The rows: the readout of pipe A, the eDP transcoder, DDI A, the plane and
  * the panel power sequencer, against what Linux's i915_display_info read on
  * the Lenovo (78-9.1); the bind's adoption, which writes no register of the
- * display, the eDP connector's probe, and the console's takeover commit,
- * which keeps the mode, pins the new framebuffer and lets the firmware's go
- * once the next flip replaced it, while a mode change is refused (78-9.2);
+ * pipe, its link or the backlight but reads the panel over AUX, the eDP
+ * connector's probe, and the console's takeover commit, which keeps the
+ * mode, pins the new framebuffer and lets the firmware's go once the next
+ * flip replaced it, while a refresh rate the panel lacks is refused (78-9.2);
  * the planes' formats, Linux's Haswell lists, and their checks of stride,
  * tiling and offset, the X-tiled offset's split and the sprite's registers
  * (78-9.3); a page flip's event at the vblank that shows it, with its count
  * and a rising stamp, an async flip's at flip done, and the count of
  * vblanks the frame counter kept while the interrupt was off (78-9.4); the
  * cursor's registers and the backlight, taken over from the boot's driver,
- * set and switched, off with the pipe and given back at the end (78-9.5);
- * and the pipe CRC through crc/control and crc/data, its first frame
- * dropped, "auto" the primary plane on the eDP pipe and "pipe" refused
- * there (78-9.6).
+ * set and switched, off with the pipe, its transcoder and the panel's
+ * power, and given back at the end (78-9.5); the pipe CRC through
+ * crc/control and crc/data, its first frame dropped, "auto" the primary
+ * plane on the eDP pipe and "pipe" refused there (78-9.6); and a mode
+ * smaller than the panel's, set in Linux's register order through the
+ * fitter with its aspect kept, then stretched by "scaling mode", and the
+ * panel's own mode again (78-10b).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
 #include <stdarg.h>
 
+#define KMS_MODEL_KERNEL
 #include "drm_kms_model.c"
 #include "drm/i915/intel_display.c"
 #include "drm/i915/intel_plane.c"
@@ -38,14 +45,27 @@
 #include "drm/i915/intel_vblank.c"
 #include "drm/i915/i915_display_debugfs.c"
 #include "drm/i915/intel_backlight.c"
+#include "drm/i915/intel_cdclk.c"
+#include "drm/i915/intel_pps.c"
+#include "drm/i915/intel_dp_aux.c"
+#include "drm/i915/intel_ddi.c"
+#include "drm/i915/intel_dp_link_training.c"
+#include "drm/i915/intel_dp.c"
+#include "drm/i915/intel_panel.c"
+#include "drm/i915/intel_pfit.c"
 #include "i915_model.h"
 #include "i915_model_pipe.h"
 #include "i915_model_ring.h"
+#include "i915_model_sink.h"
+#include "i915_lenovo.h"
 
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
 extern char *strstr(const char *s, const char *t);
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern int sscanf(const char *s, const char *format, ...);
+extern int open(const char *path, int flags, ...);
+extern long read(int fd, void *buf, unsigned long n);
+extern int close(int fd);
 
 /* ---- the kernel around the driver ---- */
 
@@ -81,6 +101,13 @@ uint32_t kirq_save(void)
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
+}
+
+/** The scheduler, which never runs here: the driver's sleeps are waits
+ * on the model's clock. */
+int sched_is_enabled(void)
+{
+    return 0;
 }
 
 void k_udelay(uint32_t usec)
@@ -201,11 +228,21 @@ static void take_messages(void)
     }
 }
 
-/** One frame of pipe A, 16.67 ms on the monotonic clock: its vblank and
- * the messages it raises. */
+static int64_t clock_base_ns; /* the monotonic time at the model's 0 */
+
+/** After each wait of the driver: the monotonic clock follows the
+ * model's. */
+static void follow_clock(struct i915_model *m)
+{
+    model_now_ns = clock_base_ns + (int64_t)m->now_us * 1000;
+}
+
+/** One frame of pipe A, 16.67 ms on the model's clock and the monotonic
+ * one: its vblank and the messages it raises. */
 static void frame(void)
 {
-    model_now_ns += 16666667ll;
+    model.now_us += 16667u;
+    follow_clock(&model);
     i915_model_pipe_vblank(&model, 0);
     take_messages();
 }
@@ -272,7 +309,24 @@ static const struct backlight_ops boot_ops = {boot_get, boot_set, NULL};
  */
 static int32_t bring_up(void)
 {
+    static uint8_t lenovo_vbt[LENOVO_VBT_BYTES];
+    long got = 0, r;
+    int fd;
+
     CHECK(i915_model_init(&model) == 0, "the model is made");
+    clock_base_ns = model_now_ns - (int64_t)model.now_us * 1000;
+    model.on_delay = follow_clock;
+    fd = open(LENOVO_VBT_FILE, 0);
+    while (fd >= 0 && got < LENOVO_VBT_BYTES &&
+           (r = read(fd, lenovo_vbt + got, (unsigned long)(LENOVO_VBT_BYTES - got))) > 0) {
+        got += r;
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    CHECK(got == LENOVO_VBT_BYTES &&
+              intel_bios_init(&gpu.vbt, lenovo_vbt, LENOVO_VBT_BYTES, "test") == 0,
+          "the VBT is read and decoded");
     gpu.pci = model.pci;
     gpu.hw = model.hw;
     gpu.msi_vector = 48;
@@ -493,21 +547,26 @@ static void row_readout(void)
 
 /* ---- 78-9.2: adoption and the takeover ---- */
 
-/** The bind's adoption: no register of the pipes, planes, transcoders or
- * panel written; pipe A on in the atomic state with the firmware's mode
- * and framebuffer; the eDP connector connected with that one mode. */
+/** The bind's adoption: no register of the pipes, planes, transcoders,
+ * DDI buffers, clocks or backlight written, the panel's sequencer given
+ * Linux's delays and AUX messages sent; pipe A on in the atomic state with
+ * the firmware's mode and framebuffer, and its configuration read. */
 static void row_adopt(void)
 {
     struct drm_plane_state *ps = pa->primary.state;
-    struct drm_mode_get_connector gc;
-    struct drm_mode_modeinfo modes[2];
-    uint32_t enc;
 
-    CHECK(!wrote_range(0x60000u, 0x7ffffu, log_at_init) &&
-              !wrote_range(0xc7200u, 0xc72ffu, log_at_init) &&
+    CHECK(!wrote_range(0x60000u, 0x6400fu, log_at_init) &&
+              !wrote_range(0x64028u, 0x7ffffu, log_at_init) &&
+              !wrote_range(0x45000u, 0x452ffu, log_at_init) &&
+              !wrote_range(0x46100u, 0x46114u, log_at_init) &&
+              !wrote_range(0xc7200u, 0xc7203u, log_at_init) &&
               !wrote_range(0xc8250u, 0xc8258u, log_at_init) &&
               !wrote_range(0x48250u, 0x48254u, log_at_init),
-          "adopt: nothing of the display written");
+          "adopt: nothing of the pipe, its link or the backlight written");
+    CHECK(wrote_range(DP_AUX_CH_CTL(0), DP_AUX_CH_CTL(0), log_at_init) &&
+              i915_model_find_write(&model, PP_ON_DELAYS, 0x07d00001u, log_at_init) >= 0 &&
+              (reg(PP_CONTROL) & PANEL_POWER_ON),
+          "adopt: the panel read over AUX, the sequencer given its delays, the panel on");
     CHECK(pa->base.state->active && pa->base.state->enable &&
               drm_mode_equal(&pa->base.state->mode, &pa->hw.mode),
           "adopt: pipe A on with the firmware's mode");
@@ -518,30 +577,49 @@ static void row_adopt(void)
     CHECK(gpu.display.fw_taken && pa->shown[INTEL_PLANE_PRIMARY].fb == ps->fb,
           "adopt: the firmware's framebuffer taken and held as shown");
     fw_obj = ps->fb->obj[0];
-    CHECK(logged("display: pipe A adopted: 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz"),
-          "adopt: the log's line");
+    CHECK(logged("display: pipe A adopted: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at "
+                 "270000 kHz") &&
+              logged("edp: DPCD 1.1, eDP 0, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 "
+                     "bytes") &&
+              pa->cfg.active && !pa->cfg.pfit && pa->cfg.bpp == 18 && pa->cfg.lanes == 1 &&
+              gpu.display.dp.link_trained,
+          "adopt: the log's lines, the pipe's configuration and the link trained");
+}
+
+/** The eDP connector's probe after the adoption: connected, with the
+ * panel's one mode, on its encoder, which reaches every pipe, and Linux's
+ * "scaling mode" and "max bpc". */
+static void row_probe(void)
+{
+    struct drm_mode_get_connector gc;
+    struct drm_mode_modeinfo modes[2];
+    uint32_t enc;
+
     k_memset(&gc, 0, sizeof(gc));
     gc.connector_id = gpu.display.connector.base.id;
     CHECK(drm_mode_getconnector(&gpu.drm, &gc, &fa) == 0 && gc.count_modes == 1,
-          "adopt: GETCONNECTOR probes one mode");
+          "probe: GETCONNECTOR probes one mode");
     gc.modes_ptr = UPTR(modes);
     gc.count_modes = 2;
     gc.encoders_ptr = UPTR(&enc);
     gc.count_encoders = 1;
     gc.count_props = 0;
-    CHECK(drm_mode_getconnector(&gpu.drm, &gc, &fa) == 0, "adopt: GETCONNECTOR");
+    CHECK(drm_mode_getconnector(&gpu.drm, &gc, &fa) == 0, "probe: GETCONNECTOR");
     CHECK(gc.connection == DRM_CONNECTOR_CONNECTED && gc.connector_type == DRM_MODE_CONNECTOR_eDP &&
               gc.count_modes == 1 && drm_mode_equal(&modes[0], &pa->hw.mode) &&
               gc.encoder_id == gpu.display.encoder.base.id,
-          "adopt: eDP-1 connected, the firmware's mode alone, on its encoder");
-    CHECK(gpu.display.encoder.possible_crtcs == 1u, "adopt: the panel stays on pipe A");
+          "probe: eDP-1 connected, the firmware's mode alone, on its encoder");
+    CHECK(gpu.display.encoder.possible_crtcs == 7u && gpu.display.connector.scaling_mode_property &&
+              gpu.display.connector.max_bpc_property &&
+              gpu.display.connector.state->scaling_mode == DRM_MODE_SCALE_ASPECT,
+          "probe: the panel reaches every pipe, with scaling mode Full aspect and max bpc");
 }
 
 static uint32_t h_con, fb_con;
 
 /** The console's takeover: a dumb buffer of the loader's size shown with
- * the adopted mode, a fastset that writes the plane alone, pinned at the
- * scanout's alignment; a mode the firmware did not leave is refused. */
+ * the adopted mode, a commit that writes the plane alone, pinned at the
+ * scanout's alignment. */
 static void row_takeover(void)
 {
     struct drm_mode_modeinfo other = pa->hw.mode;
@@ -565,12 +643,8 @@ static void row_takeover(void)
     CHECK(pa->shown[0].fb && pa->shown[0].fb->base.id == fb_con && pa->parked[0].fb &&
               pa->parked[0].fb->obj[0] == fw_obj,
           "takeover: the firmware's framebuffer parked until the next flip");
-    other.hdisplay = 1024;
-    drm_mode_set_name(&other);
-    CHECK(setcrtc(&other, fb_con) == -EINVAL, "takeover: another mode refused");
-    other = pa->hw.mode;
-    other.clock = 76000;
-    CHECK(setcrtc(&other, fb_con) == -EINVAL, "takeover: another clock refused");
+    other.clock = 50000;
+    CHECK(setcrtc(&other, fb_con) == -EINVAL, "takeover: a refresh rate the panel lacks refused");
 }
 
 /* ---- 78-9.4: flips and their events ---- */
@@ -659,7 +733,7 @@ static void row_count(void)
     uint64_t before;
     int i;
 
-    model_now_ns += (int64_t)DRM_VBLANK_OFFDELAY_MS * 1000000ll;
+    model.now_us += (uint64_t)DRM_VBLANK_OFFDELAY_MS * 1000u;
     frame();
     CHECK(!pa->base.vblank.enabled && !pa->vbl_on && (reg(DEIMR) & DE_PIPE_VBLANK_IVB(0)),
           "count: the interrupt off once nothing holds it");
@@ -865,8 +939,9 @@ static void row_backlight(void)
           "backlight: bl_power on sets it");
     CHECK(set_active(0) == 0 && !(reg(PP_CONTROL) & EDP_BLC_ENABLE) && reg(DSPCNTR(0)) == 0,
           "backlight: off with the pipe, its planes off");
-    CHECK((reg(TRANSCONF(I915_TRANS_EDP)) & TRANSCONF_ENABLE) && (reg(PP_CONTROL) & PANEL_POWER_ON),
-          "backlight: the transcoder and the panel power left on");
+    CHECK(!(reg(TRANSCONF(I915_TRANS_EDP)) & TRANSCONF_ENABLE) &&
+              !(reg(PP_CONTROL) & PANEL_POWER_ON) && !(reg(BLC_PWM_PCH_CTL1) & BLM_PCH_PWM_ENABLE),
+          "backlight: the transcoder, the panel's power and the PWM off");
     CHECK(bl_store(BACKLIGHT_POWER, "0") == 0 && !(reg(PP_CONTROL) & EDP_BLC_ENABLE),
           "backlight: bl_power on waits for the pipe");
     frame();
@@ -921,6 +996,112 @@ static void row_crc(void)
     drm_crtc_crc_release(&pa->base);
 }
 
+/* ---- 78-10b: mode sets ---- */
+
+/** The log index of the first write to `r` whose bits under `mask` are
+ * `want`, at or after `from`, or -1. */
+static long first_write(uint32_t r, uint32_t mask, uint32_t want, uint32_t from)
+{
+    uint32_t i;
+
+    for (i = from; i < model.nlog; i++) {
+        if (model.log[i].op == I915_MODEL_WRITE && model.log[i].reg == r &&
+            (model.log[i].value & mask) == want) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+/** Whether the indices `n` are each found and in rising order. */
+static int in_order(const long *n, int count)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (n[i] < 0 || (i > 0 && n[i] <= n[i - 1])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Set the connector's "scaling mode" to `mode` by ATOMIC. */
+static int32_t set_scaling(uint64_t mode)
+{
+    struct req r;
+
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &gpu.display.connector.base, gpu.display.connector.scaling_mode_property, mode);
+    return req_commit(&r, DRM_MODE_ATOMIC_ALLOW_MODESET);
+}
+
+/**
+ * A mode smaller than the panel's: the pipe off and on again in Linux's
+ * register order (hsw_crtc_disable, then hsw_crtc_enable with the eDP
+ * encoder's hooks), the source 1024x768 fitted to the panel's 1366x768
+ * with its aspect kept, then stretched by "scaling mode" Full, and the
+ * panel's own mode again with the fitter off.
+ */
+static void row_modeset(void)
+{
+    struct drm_mode_modeinfo small = pa->hw.mode;
+    uint32_t from = model.nlog;
+    long off[7], on[9];
+
+    small.hdisplay = 1024;
+    drm_mode_set_name(&small);
+    log_text[0] = 0;
+    CHECK(setcrtc(&small, fb_con) == 0, "modeset: SETCRTC of 1024x768");
+    off[0] = first_write(PP_CONTROL, EDP_BLC_ENABLE, 0, from);
+    off[1] = first_write(TRANSCONF(I915_TRANS_EDP), TRANSCONF_ENABLE, 0, from);
+    off[2] = first_write(TRANS_DDI_FUNC_CTL(I915_TRANS_EDP), TRANS_DDI_FUNC_ENABLE, 0, from);
+    off[3] = first_write(DDI_BUF_CTL(0), DDI_BUF_CTL_ENABLE, 0, from);
+    off[4] = first_write(PP_CONTROL, PANEL_POWER_ON, 0, from);
+    off[5] = first_write(PORT_CLK_SEL(0), PORT_CLK_SEL_MASK, PORT_CLK_SEL_NONE, from);
+    off[6] = first_write(PORT_CLK_SEL(0), PORT_CLK_SEL_MASK, PORT_CLK_SEL_LCPLL_1350, from);
+    CHECK(in_order(off, 7),
+          "modeset: off as Linux: backlight, transcoder, its DDI function, buffer, power, clock");
+    from = (uint32_t)off[6];
+    on[0] = from;
+    on[1] = first_write(DDI_BUF_CTL(0), DDI_BUF_CTL_ENABLE, DDI_BUF_CTL_ENABLE, from);
+    on[2] = first_write(PIPESRC(0), 0xffffffffu, 1023u << 16 | 767u, from);
+    on[3] = first_write(TRANS_HTOTAL(I915_TRANS_EDP), 0xffffffffu, 1365u | 1557u << 16, from);
+    on[4] = first_write(PF_CTL(0), 0xffffffffu, PF_ENABLE | PF_FILTER_MED_3x3, from);
+    on[5] = first_write(TRANS_DDI_FUNC_CTL(I915_TRANS_EDP), TRANS_DDI_FUNC_ENABLE,
+                        TRANS_DDI_FUNC_ENABLE, from);
+    on[6] = first_write(TRANSCONF(I915_TRANS_EDP), TRANSCONF_ENABLE, TRANSCONF_ENABLE, from);
+    on[7] = first_write(DP_TP_CTL(0), DP_TP_CTL_LINK_TRAIN_MASK, DP_TP_CTL_LINK_TRAIN_NORMAL, from);
+    on[8] = first_write(PP_CONTROL, EDP_BLC_ENABLE, EDP_BLC_ENABLE, from);
+    CHECK(in_order(on, 9),
+          "modeset: on as Linux: clock, trained buffer, source, timings, fitter, DDI function, "
+          "transcoder, normal pattern, backlight");
+    CHECK(reg(PF_WIN_POS(0)) == PF_WIN_XPOS(171) &&
+              reg(PF_WIN_SZ(0)) == (PF_WIN_XSIZE(1024) | 768u) &&
+              (reg(TRANS_DDI_FUNC_CTL(I915_TRANS_EDP)) & TRANS_DDI_EDP_INPUT_MASK) ==
+                  TRANS_DDI_EDP_INPUT_A_ONOFF,
+          "modeset: Full aspect pillarboxes 1024x768 in the middle, through the fitter's well");
+    CHECK((reg(TRANSCONF(I915_TRANS_EDP)) & TRANSCONF_ENABLE) &&
+              (reg(PP_CONTROL) & PANEL_POWER_ON) && (reg(DSPCNTR(0)) & DISP_ENABLE) &&
+              reg(DSPSURF(0)) == BO_GGTT(0),
+          "modeset: the transcoder, the panel and the console's plane on");
+    CHECK(logged("display: pipe A set: 1024x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at "
+                 "270000 kHz, fitted"),
+          "modeset: the log's line");
+    frame();
+    frame();
+    CHECK(set_scaling(DRM_MODE_SCALE_FULLSCREEN) == 0 && reg(PF_WIN_POS(0)) == 0 &&
+              reg(PF_WIN_SZ(0)) == (PF_WIN_XSIZE(1366) | 768u),
+          "modeset: scaling mode Full stretches it, by a mode set");
+    frame();
+    CHECK(setcrtc(&pa->hw.mode, fb_con) == 0 && reg(PF_CTL(0)) == 0 &&
+              reg(PIPESRC(0)) == (1365u << 16 | 767u) &&
+              (reg(TRANS_DDI_FUNC_CTL(I915_TRANS_EDP)) & TRANS_DDI_EDP_INPUT_MASK) ==
+                  TRANS_DDI_EDP_INPUT_A_ON,
+          "modeset: the panel's own mode with the fitter off");
+    frame();
+}
+
 /** The display let go: the backlight left to a stand-in, every pin and
  * framebuffer released. */
 static void row_fini(void)
@@ -941,6 +1122,7 @@ int main(void)
     CHECK(bring_up() == 0, "the display is made");
     row_readout();
     row_adopt();
+    row_probe();
     row_formats();
     row_takeover();
     row_flip();
@@ -951,11 +1133,13 @@ int main(void)
     row_cursor();
     row_backlight();
     row_crc();
+    row_modeset();
     row_fini();
     if (fw_obj && fw_obj->refs == 0) {
         fw_obj->funcs->free(fw_obj);
     }
     i915_model_free(&model);
+    intel_bios_fini(&gpu.vbt);
     if (failures == 0) {
         printf("i915-display-test: ok\n");
     }
