@@ -116,6 +116,10 @@ struct mm {
      * counts its own from none. */
     unsigned long resident;
     unsigned long resident_peak;
+    /* Whether process_mrelease has freed the private pages of the space of
+     * a dying process, as Linux's MMF_OOM_SKIP: a second call then has
+     * nothing to do and answers 0. 0 in a new space and in a fork's copy. */
+    uint32_t reaped;
     struct mm *dir_next; /* the next in its chain of the table by directory */
 };
 
