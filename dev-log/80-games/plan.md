@@ -204,7 +204,7 @@ umu-launcher with its Steam Linux Runtime, pinned: the container's namespaces, m
 * Subtasks:
   * 80-8b.1 umu-launcher and Steam Linux Runtime 4 (steamrt4), which GE-Proton11-12's `toolmanifest.vdf` requires, fetched once, checked, staged, and umu's runtime update turned off; check: a second start downloads nothing.
   * 80-8b.2 `rach2-game --umu` starts the Direct3D 9 probe in the container with WoW64 and WineD3D; check: Proton's log in the container shows the same settings as the direct route.
-  * 80-8b.3 What the container needs from the kernel, listed from pressure-vessel's own log; each refusal fixed in Rach2 or brought to the owner as a scope decision; check: the log has no refused call.
+  * 80-8b.3 What the container needs from the kernel, listed from pressure-vessel's own log; each refusal fixed in Rach2 or brought to the owner as a scope decision; check: the log has no refused call that Linux's log of the same row lacks.
   * 80-8b.4 `/dev/dri`, the PulseAudio socket and the D-Bus proxy inside the container; check: the probe draws on virgl and plays a tone recorded through the loopback.
   * 80-8b.5 The pin and download in the Readme, with their sizes; check: the Readme's table.
   * 80-8b.6 The `games-umu` family with 80-8b.2's and 80-8b.4's checks; check: `tests/run` lists its cases, and its author runs one once. The release runs the family whole.

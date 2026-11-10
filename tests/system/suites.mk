@@ -2025,8 +2025,8 @@ include tests/system/games/rules.mk
 # runtime unpacked once with its updates off, the direct route's Proton
 # settings, Linux's pixels, the GL probe on virgl, Wine's tone through the
 # container's PulseAudio socket recorded through the HDA loopback, the session
-# bus, and no refused call in pressure-vessel's log. It reads the payload
-# games-wine makes.
+# bus, and no refused call in pressure-vessel's log that the stored Linux
+# reference's lacks. It reads the payload games-wine makes.
 
 # `tests/run desktop`: an ordinary headless Weston session at boot, input
 # discovery, and browser and ALSA tones measured through OSS loopback; Weston
