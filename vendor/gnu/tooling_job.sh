@@ -177,7 +177,7 @@ build_image()
     [ -z "$RACH2_PATH_MAP" ] || export RACH2_PATH_MAP
     RACH2_ARCH=$RACH2_ARCH GNU_AGENTS="$GNU_AGENTS" GNU_TEST_PRODUCTS=${GNU_TEST_PRODUCTS:-} \
         GNU_I386=${GNU_I386:-} SOURCE_DATE_EPOCH=${IMAGE_TIME:-1} exec sh tools/image/mkext2.sh \
-        --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest "$MNT/out/$IMAGE" "$SIZE"
+        --overlay vendor/gnu/install_root.sh "${MANIFEST:-krffs/manifests/os-real-gnu.manifest}" "$MNT/out/$IMAGE" "$SIZE"
 }
 
 WORK=$(pwd)

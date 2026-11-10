@@ -9,10 +9,13 @@
 # tools/image/mkext2.sh, with RACH2_ARCH, GNU_AGENTS, GNU_LINK and GNU_I386 set
 # as for that rule, RACH2_PATH_MAP as the Makefile exports it, and
 # MUSL_CRYPT_SRC, the file of the extracted musl that the KRFFS tools compile.
-# It stages the tree as one tar archive: the files git tracks or would track,
-# the products of this host that krffs/manifests/os-real-gnu.manifest names, and
-# MUSL_CRYPT_SRC. It then runs tooling_job.sh in the tooling machine
-# (tools/etude/Readme.md, The tooling machine), made first if it is not, with a
+# GNU_MANIFEST names the manifest the image is staged from,
+# krffs/manifests/os-real-gnu.manifest unless given; the gnu-test image's is
+# that one less /src, which mk/gnu-image.mk writes under build/. It stages the
+# tree as one tar archive: the files git tracks or would track, the manifest,
+# the products of this host that it names, and MUSL_CRYPT_SRC. It then runs
+# tooling_job.sh in the tooling machine (tools/etude/Readme.md, The tooling
+# machine), made first if it is not, with a
 # network and two raw disks: the layer's build disk, tooling.disk in the layer's
 # build tree (build/vendor/gnu or build/x86_64/vendor/gnu), and a new sparse
 # file of SIZE MiB that the job writes the image to. When the job succeeds and
@@ -72,6 +75,10 @@ case "$SIZE" in
         echo "usage: tooling_image.sh OUTPUT SIZE" >&2
         exit 2
         ;;
+esac
+MANIFEST="${GNU_MANIFEST:-krffs/manifests/os-real-gnu.manifest}"
+case "$MANIFEST" in
+    /* | *..*) echo "gnu: tooling: the manifest is not a path in the tree: $MANIFEST" >&2; exit 2 ;;
 esac
 CPUS="${GNU_TOOLING_CPUS:-${ETUDE_BUILD_JOBS:-8}}"
 case "$CPUS" in
@@ -245,7 +252,8 @@ stage_tree()
     mkdir -p "$STAGE/build"
     git ls-files -z -c -o --exclude-standard -- Makefile CLAUDE.md AGENTS.md Readme.md \
         tests tools mk utils krffs rach2 ish ports term vendor > "$STAGE/build/gnu-source-files"
-    sh krffs/manifest_deps.sh krffs/manifests/os-real-gnu.manifest > "$STAGE/products" || :
+    sh krffs/manifest_deps.sh "$MANIFEST" > "$STAGE/products" || :
+    echo "$MANIFEST" >> "$STAGE/products"
     echo "$MUSL_CRYPT_SRC" >> "$STAGE/products"
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ] && [ "$RACH2_ARCH" = x86_64 ]; then
         echo build/tests/host/exfat_writer >> "$STAGE/products"
@@ -271,7 +279,7 @@ stage_tree()
 # write_env: write STAGE/job.env, the job's settings, as shell assignments.
 write_env()
 {
-    for v in "$RACH2_ARCH" "${GNU_AGENTS:-}" "${GNU_LINK:-}" "${RACH2_PATH_MAP:-}" "$MUSL_CRYPT_SRC"; do
+    for v in "$RACH2_ARCH" "${GNU_AGENTS:-}" "${GNU_LINK:-}" "${RACH2_PATH_MAP:-}" "$MUSL_CRYPT_SRC" "$MANIFEST"; do
         case "$v" in
             *"'"*)
                 echo "gnu: tooling: a setting has a quote: $v" >&2
@@ -287,6 +295,7 @@ GNU_I386='${GNU_I386:+1}'
 GNU_TEST_PRODUCTS='${GNU_TEST_PRODUCTS:+1}'
 RACH2_PATH_MAP='${RACH2_PATH_MAP:-}'
 MUSL_CRYPT_SRC='$MUSL_CRYPT_SRC'
+MANIFEST='$MANIFEST'
 IMAGE='$(basename "$OUT")'
 SIZE='$SIZE'
 JOBS='$CPUS'

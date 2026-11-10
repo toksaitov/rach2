@@ -50,7 +50,7 @@ GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
                    $(if $(filter x86_64,$(ARCH)),$(GNU_KVM_STAMP))
 # The native games' replays, which install_games.sh copies into the root.
 GNU_GAMES_REPLAYS = $(shell find vendor/gnu/games/replays -type f 2>/dev/null)
-GNU_IMAGE_DEPS = mk/gnu-image.mk $(GNU_I386_OPTION) $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
+GNU_IMAGE_DEPS = mk/gnu-image.mk $(GNU_I386_OPTION) $(DEMO_CREDS) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  $(wildcard vendor/gnu/desktop/*) $(wildcard vendor/gnu/games/*.sh) $(GNU_GAMES_REPLAYS) vendor/gnu/kvm/install_kvm.sh \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
@@ -82,27 +82,43 @@ endif
 
 .PHONY: gnu-image os-real-gnu-ext2 os-real-gnu-agents-ext2
 gnu-image: os-real-gnu-ext2
+# gnu-test.ext2 is staged from os-real-gnu.manifest less the lines of /src:
+# the sources of the kernel, the utilities, ish and term, from which an
+# installed machine builds its own, and which no case that boots the image
+# reads. With them, every change to the kernel's sources would make the image
+# again. The filtered manifest is rewritten only when it changes.
+GNU_ROOT_MANIFEST = krffs/manifests/os-real-gnu.manifest
+GNU_TEST_MANIFEST = $(IMAGES_DIR)/gnu-test.manifest
+GNU_TEST_MANIFEST_FILTER = awk '$$1 !~ /^\#/ && ($$3 == "/src" || index($$3, "/src/") == 1) { next } { print }'
+MANIFEST_DEPS_gnu_test := $(shell $(GNU_TEST_MANIFEST_FILTER) $(GNU_ROOT_MANIFEST) | $(MANIFEST_DEPS) -)
+GNU_ROOT_MANIFEST_DEPS = $(GNU_ROOT_MANIFEST) $(MANIFEST_DEPS_os_real_gnu)
+GNU_TEST_MANIFEST_DEPS = $(GNU_TEST_MANIFEST) $(MANIFEST_DEPS_gnu_test)
+$(GNU_TEST_MANIFEST): $(GNU_ROOT_MANIFEST) mk/gnu-image.mk
+	@mkdir -p $(@D)
+	@$(GNU_TEST_MANIFEST_FILTER) $(GNU_ROOT_MANIFEST) > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+
 os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)
 os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 
 ifeq ($(GNU_TOOLING),)
-$(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
+$(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_TEST_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
     $(GNU_SANITIZERS_STAMP) $(GNU_HOST_PRODUCTS_STAMP) $(GNU_FSTOOLS_STAMP) \
     $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_STAMP) $(GNU_VK_GL_CTS_STAMP)) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 GNU_I386=$(GNU_I386_ON) \
 	    GNU_VK_GL_CTS=$(if $(filter x86_64,$(ARCH)),1) \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
-	    krffs/manifests/os-real-gnu.manifest $@ 24576
+	    $(GNU_TEST_MANIFEST) $@ 24576
 
 GNU_IGT_ON = $(if $(filter x86_64,$(ARCH)),1)
-$(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
+$(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
                      $(if $(GNU_IGT_ON),$(GNU_IGT_STAMP) $(GNU_VK_GL_CTS_STAMP)) tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_IGT=$(GNU_IGT_ON) GNU_VK_GL_CTS=$(GNU_IGT_ON) \
 	    GNU_I386=$(GNU_I386_ON) sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 	$(GNU_STAGE_LOGINS)
 
-$(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_STAMPS) | $(GNU_IMAGE_ORDER)
+$(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_STAMPS) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_I386=$(GNU_I386_ON) sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 else
@@ -117,23 +133,23 @@ GNU_TOOLING_ORDER = $(GNU_IMAGE_ORDER) $(ETUDE) $(SHA256TOOL)
 GNU_AGENTS_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(filter $(GNU_AGENTS_ALL),$(GNU_AGENTS_ON)))
 GNU_AGENTS_ALL_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(GNU_AGENTS_ALL))
 
-$(GNU_TEST_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
+$(GNU_TEST_EXT2): $(GNU_TOOLING_DEPS) $(GNU_TEST_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
     $(GNU_SANITIZER_SOURCES) $(GNU_HOST_PRODUCTS_SOURCES) $(GNU_FSTOOLS_SOURCES) \
     $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_SOURCES) \
         build/tests/host-suite/tools/exfat_external/exfat_external.img) \
     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
-	    GNU_TEST_PRODUCTS=1 MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) \
+	    GNU_TEST_PRODUCTS=1 GNU_MANIFEST=$(GNU_TEST_MANIFEST) MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) \
 	    sh vendor/gnu/tooling_image.sh $@ 24576
 
-$(OS_REAL_GNU_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
+$(OS_REAL_GNU_EXT2): $(GNU_TOOLING_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
                      $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) $(GNU_LOGINS_STAMP) \
                      tools/image/stage_logins.sh | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
 	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 16384
 	$(GNU_STAGE_LOGINS)
 
-$(OS_REAL_GNU_AGENTS_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_RECIPES) \
+$(OS_REAL_GNU_AGENTS_EXT2): $(GNU_TOOLING_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_RECIPES) \
                             $(GNU_AGENTS_SOURCES) | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
 	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 16384
