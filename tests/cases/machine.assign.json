@@ -111,7 +111,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
@@ -334,7 +335,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
@@ -557,7 +559,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
@@ -780,7 +783,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
@@ -1003,7 +1007,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
@@ -1226,7 +1231,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
@@ -1449,7 +1455,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
@@ -1672,7 +1679,8 @@
                 "dhcpstart": "10.0.3.15",
                 "properties": {
                   "addr": "06.0",
-                  "iommu_platform": "on"
+                  "iommu_platform": "on",
+                  "disable-legacy": "on"
                 }
               },
               {
