@@ -60,6 +60,12 @@ unusedStructMember:*tests/musl/ptracemusl.c
 # time, and the members after them are the layout.
 unusedStructMember:*tests/musl/callsmusl.c
 
+# `struct run_head` in the KVM slot probe is the head of Linux's struct
+# kvm_run through its `io` member, which the vCPU's mapping holds; the probe
+# reads the exit reason and an I/O exit's direction, port and data offset,
+# and the members around them are the layout.
+unusedStructMember:*tests/musl/kvmslotmusl.c
+
 # `struct input_event` and `struct mixer_info` in the event probe are Linux's,
 # which a read of an event device and SOUND_MIXER_INFO fill whole; the probe
 # reads an event's type, code and value and the info's id and name, and the
