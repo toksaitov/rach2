@@ -55,8 +55,8 @@ static void i915_release(struct drm_device *dev);
 
 /* What the driver says of itself: Linux's i915, with its buffer ioctls. */
 static const struct drm_driver i915_drm_driver = {
-    DRM_IDENT_I915,  0,           0, 0, i915_gem_prime_import, i915_unplug, i915_ioctls,
-    I915_NUM_IOCTLS, i915_release};
+    DRM_IDENT_I915, i915_driver_open, i915_driver_postclose, 0,           i915_gem_prime_import,
+    i915_unplug,    i915_ioctls,      I915_NUM_IOCTLS,       i915_release};
 
 const struct i915_id *i915_id_lookup(uint16_t device_id)
 {
@@ -149,15 +149,16 @@ static void i915_devices_remove(struct drm_i915_private *i915)
 }
 
 /**
- * The DRM core's unplug hook: RPS and RC6 turned off, the device stops
- * interrupting, its message and vector are given back, its rings stop and
- * give their pages back, and programs' maps of its buffers are revoked.
- * The record stays until its last reference.
+ * The DRM core's unplug hook: its requests fail and retire, RPS and RC6
+ * turned off, the device stops interrupting, its message and vector are
+ * given back, its rings stop and give their pages back, and programs' maps
+ * of its buffers are revoked. The record stays until its last reference.
  */
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
+    i915_requests_unplug(i915);
     i915_gt_pm_disable(i915);
     if (i915->attached && i915->hw.ops->detach) {
         i915->hw.ops->detach(&i915->hw);

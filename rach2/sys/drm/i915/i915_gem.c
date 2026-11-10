@@ -22,10 +22,6 @@
 #define I915_CLFLUSH_BEFORE 0x1u
 #define I915_CLFLUSH_AFTER  0x2u
 
-/* The engine class Linux gives a fence of no engine, which BUSY reports in
- * every bit (I915_ENGINE_CLASS_INVALID). */
-#define I915_ENGINE_CLASS_INVALID 0xffffu
-
 /* ------------------------------------------------------------------------
  * The driver's fences
  */
@@ -1230,6 +1226,18 @@ void i915_gem_unplug(struct drm_i915_private *i915)
 
 /* The driver's own ioctls, which a render node may call, as Linux's. */
 const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
+    {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW, i915_getparam_ioctl, "I915_GETPARAM"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_context_create_ioctl,
+     "I915_GEM_CONTEXT_CREATE"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW, i915_gem_context_destroy_ioctl,
+     "I915_GEM_CONTEXT_DESTROY"},
+    {DRM_IOCTL_I915_GET_RESET_STATS, DRM_RENDER_ALLOW, i915_gem_context_reset_stats_ioctl,
+     "I915_GET_RESET_STATS"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, DRM_RENDER_ALLOW, i915_gem_context_getparam_ioctl,
+     "I915_GEM_CONTEXT_GETPARAM"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, DRM_RENDER_ALLOW, i915_gem_context_setparam_ioctl,
+     "I915_GEM_CONTEXT_SETPARAM"},
+    {DRM_IOCTL_I915_QUERY, DRM_RENDER_ALLOW, i915_query_ioctl, "I915_QUERY"},
     {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW, i915_gem_busy_ioctl, "I915_GEM_BUSY"},
     {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl, "I915_GEM_CREATE"},
     {DRM_IOCTL_I915_GEM_PREAD, DRM_RENDER_ALLOW, i915_gem_pread_ioctl, "I915_GEM_PREAD"},

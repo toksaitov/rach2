@@ -1,0 +1,1000 @@
+/*
+ * i915_gem_context.c: the Intel graphics driver's contexts: a file's
+ * contexts and their parameters, the engine maps programs give them, their
+ * states on each engine with the render ring's image, and the reset
+ * statistics, after Linux 6.18's gem/i915_gem_context.c and
+ * gt/intel_context.c on a legacy ring.
+ */
+
+#include "i915.h"
+#include "i915_drm.h"
+#include "i915_reg.h"
+
+#include "../../lib/kerrno.h"
+#include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
+#include "../../mm/paging.h"
+#include "../../mm/usercopy.h"
+#include "../../proc/percpu.h"
+
+/* The user address a 64-bit field of a call names. */
+#define I915_USER_PTR(v) ((void __user *)(uintptr_t)(v))
+
+/* How many extensions a chain may hold, Linux's i915_user_extensions. */
+#define I915_MAX_EXTENSIONS 512
+
+/** Whether the caller may do what Linux asks CAP_SYS_ADMIN for. */
+static int i915_capable(void)
+{
+    return current_proc && proc_privileged(current_proc);
+}
+
+/* ------------------------------------------------------------------------
+ * The states of a context on an engine
+ */
+
+struct i915_engine *i915_engine_lookup_user(struct drm_i915_private *i915, uint16_t cls,
+                                            uint16_t instance)
+{
+    if (instance != 0) {
+        return 0;
+    }
+    if (cls == I915_ENGINE_CLASS_RENDER) {
+        return &i915->gt.engine[I915_RCS0];
+    }
+    if (cls == I915_ENGINE_CLASS_COPY) {
+        return &i915->gt.engine[I915_BCS0];
+    }
+    return 0;
+}
+
+uint16_t i915_engine_uabi_class(const struct i915_engine *engine)
+{
+    return engine->mmio_base == RENDER_RING_BASE ? I915_ENGINE_CLASS_RENDER
+                                                 : I915_ENGINE_CLASS_COPY;
+}
+
+struct intel_context *intel_context_create(struct drm_i915_private *i915,
+                                           struct i915_engine *engine, struct i915_gem_context *ctx)
+{
+    struct intel_context *ce = (struct intel_context *)kzalloc(sizeof(*ce));
+
+    if (!ce) {
+        return 0;
+    }
+    ce->i915 = i915;
+    ce->engine = engine;
+    ce->refs = 1;
+    ce->ctx = ctx;
+    if (ctx) {
+        ctx->refs++;
+    }
+    if (engine == &i915->gt.engine[I915_RCS0]) {
+        /* The render ring's slices and EUs are the GT's, as Linux's
+         * intel_sseu_from_device_info; the other engines have none. */
+        i915_sseu_init(i915);
+        ce->slice_mask = i915->sseu.slice_mask;
+        ce->subslice_mask = i915->sseu.subslice_mask;
+        ce->min_eus = ce->max_eus = i915->sseu.eu_per_subslice;
+    }
+    return ce;
+}
+
+struct intel_context *intel_context_get(struct intel_context *ce)
+{
+    if (ce) {
+        ce->refs++;
+    }
+    return ce;
+}
+
+/** Unmap and free a state's image; for the last reference. */
+static void intel_context_image_free(struct intel_context *ce)
+{
+    struct drm_i915_private *i915 = ce->i915;
+    uint64_t size = (uint64_t)I915_HSW_CXT_PAGES * I915_GTT_PAGE_SIZE;
+
+    if (!ce->image) {
+        return;
+    }
+    (void)i915_ggtt_clear_range(i915, ce->image_ggtt, size);
+    i915_ggtt_release(i915, ce->image_ggtt);
+    kfree_pages(ce->image, I915_HSW_CXT_PAGES);
+    ce->image = 0;
+}
+
+void intel_context_put(struct intel_context *ce)
+{
+    if (!ce || --ce->refs != 0) {
+        return;
+    }
+    intel_context_image_free(ce);
+    if (ce->ctx) {
+        i915_gem_context_put(ce->ctx);
+    }
+    kfree(ce);
+}
+
+int32_t intel_context_pin_image(struct intel_context *ce)
+{
+    struct drm_i915_private *i915 = ce->i915;
+    uint64_t pages[I915_HSW_CXT_PAGES], offset;
+    uint64_t size = (uint64_t)I915_HSW_CXT_PAGES * I915_GTT_PAGE_SIZE;
+    uint8_t *v;
+    int32_t err;
+    uint32_t i;
+
+    if (ce->image || ce->engine != &i915->gt.engine[I915_RCS0]) {
+        return 0;
+    }
+    v = (uint8_t *)kalloc_pages(I915_HSW_CXT_PAGES, 0);
+    if (!v) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < I915_HSW_CXT_PAGES; i++) {
+        pages[i] = paging_virt_to_phys((uintptr_t)(v + (size_t)i * I915_GTT_PAGE_SIZE));
+        if (pages[i] == 0) {
+            kfree_pages(v, I915_HSW_CXT_PAGES);
+            return -ENOMEM;
+        }
+    }
+    /* High in the GTT, as Linux pins a context's state (PIN_HIGH). */
+    err = i915_ggtt_reserve(i915, size, I915_PIN_HIGH, &offset);
+    if (err < 0) {
+        kfree_pages(v, I915_HSW_CXT_PAGES);
+        return err;
+    }
+    if (i915->gt.default_state) {
+        k_memcpy(v, i915->gt.default_state, (size_t)size);
+    } else {
+        k_memset(v, 0, (size_t)size);
+    }
+    err = i915_ggtt_insert(i915, offset, pages, I915_HSW_CXT_PAGES, I915_CACHE_LLC);
+    if (err < 0) {
+        i915_ggtt_release(i915, offset);
+        kfree_pages(v, I915_HSW_CXT_PAGES);
+        return err;
+    }
+    ce->image = (uint32_t *)(void *)v;
+    ce->image_ggtt = (uint32_t)offset;
+    ce->image_valid = i915->gt.default_state != 0;
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
+ * Contexts
+ */
+
+/** A new proto context of `i915` with Linux's defaults, one reference, the
+ * file's, or NULL. */
+static struct i915_gem_context *context_alloc(struct drm_i915_private *i915)
+{
+    struct i915_gem_context *ctx = (struct i915_gem_context *)kzalloc(sizeof(*ctx));
+
+    if (!ctx) {
+        return 0;
+    }
+    ctx->i915 = i915;
+    ctx->refs = 1;
+    ctx->proto = 1;
+    ctx->nmap = -1;
+    /* Bannable and recoverable, and persistent since hangcheck is on, as
+     * Linux's proto_context_create. */
+    ctx->flags = I915_CTX_BANNABLE | I915_CTX_RECOVERABLE | I915_CTX_PERSISTENCE;
+    return ctx;
+}
+
+void i915_gem_context_put(struct i915_gem_context *ctx)
+{
+    if (!ctx || --ctx->refs != 0) {
+        return;
+    }
+    kfree(ctx->ce);
+    kfree(ctx->map);
+    kfree(ctx);
+}
+
+/**
+ * Take `ctx` from its file and give up the file's reference, as Linux's
+ * context_close: its states let go of, each staying while the requests
+ * made on it hold it. A persistent context's requests run on.
+ */
+static void context_close(struct i915_gem_context *ctx)
+{
+    uint32_t i;
+
+    ctx->closed = 1;
+    for (i = 0; i < ctx->nce; i++) {
+        struct intel_context *ce = ctx->ce[i];
+
+        ctx->ce[i] = 0;
+        intel_context_put(ce);
+    }
+    i915_gem_context_put(ctx);
+}
+
+/**
+ * Make the states of a proto context, as Linux's i915_gem_create_context:
+ * one for each engine by index, or one for each slot of its map.
+ *
+ * @return 0, or -ENOMEM with the context left a proto context.
+ */
+static int32_t context_finalize(struct i915_gem_context *ctx)
+{
+    struct drm_i915_private *i915 = ctx->i915;
+    uint32_t i, n = ctx->nmap >= 0 ? (uint32_t)ctx->nmap : I915_NUM_ENGINES;
+    struct intel_context **ce;
+
+    ce = (struct intel_context **)kzalloc((n ? n : 1u) * sizeof(*ce));
+    if (!ce) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < n; i++) {
+        int idx = ctx->nmap >= 0 ? ctx->map[i] : (int)i;
+
+        if (idx < 0) {
+            continue;
+        }
+        ce[i] = intel_context_create(i915, &i915->gt.engine[idx], ctx);
+        if (!ce[i]) {
+            while (i-- > 0) {
+                intel_context_put(ce[i]);
+            }
+            kfree(ce);
+            return -ENOMEM;
+        }
+    }
+    ctx->ce = ce;
+    ctx->nce = n;
+    ctx->proto = 0;
+    return 0;
+}
+
+/** The file's state of `file`. */
+static struct i915_file *file_priv(struct drm_file *file)
+{
+    return (struct i915_file *)file->driver_priv;
+}
+
+/** The context `id` of `fp`, proto or not, without a reference, or NULL. */
+static struct i915_gem_context *context_find(struct i915_file *fp, uint32_t id)
+{
+    struct i915_gem_context *ctx;
+
+    for (ctx = fp->contexts; ctx && ctx->id <= id; ctx = ctx->next) {
+        if (ctx->id == id) {
+            return ctx;
+        }
+    }
+    return 0;
+}
+
+/** Give `ctx` the lowest id from 1 that `fp` has free and add it to the
+ * file's list, as Linux's xa_alloc on context_xa. */
+static void context_register(struct i915_file *fp, struct i915_gem_context *ctx)
+{
+    struct i915_gem_context **pp = &fp->contexts;
+    uint32_t id = 1;
+
+    /* The list is sorted, 0 first: the first gap is the lowest id free. */
+    while (*pp && (*pp)->id < id) {
+        pp = &(*pp)->next;
+    }
+    while (*pp && (*pp)->id == id) {
+        id++;
+        pp = &(*pp)->next;
+    }
+    ctx->id = id;
+    ctx->next = *pp;
+    *pp = ctx;
+}
+
+int32_t i915_gem_context_lookup(struct drm_file *file, uint32_t id, struct i915_gem_context **out)
+{
+    struct i915_gem_context *ctx = context_find(file_priv(file), id);
+    int32_t err;
+
+    if (!ctx) {
+        return -ENOENT;
+    }
+    if (ctx->proto) {
+        err = context_finalize(ctx);
+        if (err < 0) {
+            return err;
+        }
+    }
+    ctx->refs++;
+    *out = ctx;
+    return 0;
+}
+
+struct intel_context *i915_gem_context_engine(struct i915_gem_context *ctx, uint32_t idx)
+{
+    if (ctx->proto || idx >= ctx->nce) {
+        return 0;
+    }
+    return intel_context_get(ctx->ce[idx]);
+}
+
+/** The state an SSEU parameter names, with a reference, as Linux's
+ * lookup_user_engine: by class and instance without an engine map, by the
+ * slot in `instance` with one and the flag ENGINE_INDEX; -EINVAL. */
+static int32_t lookup_user_engine(struct i915_gem_context *ctx, uint32_t flags,
+                                  const struct i915_engine_class_instance *ci,
+                                  struct intel_context **out)
+{
+    struct i915_engine *engine;
+    uint32_t idx;
+
+    if (!!(flags & I915_CONTEXT_SSEU_FLAG_ENGINE_INDEX) != (ctx->nmap >= 0)) {
+        return -EINVAL;
+    }
+    if (ctx->nmap < 0) {
+        engine = i915_engine_lookup_user(ctx->i915, ci->engine_class, ci->engine_instance);
+        if (!engine) {
+            return -EINVAL;
+        }
+        idx = (uint32_t)(engine - ctx->i915->gt.engine);
+    } else {
+        idx = ci->engine_instance;
+    }
+    *out = i915_gem_context_engine(ctx, idx);
+    return *out ? 0 : -EINVAL;
+}
+
+/* ------------------------------------------------------------------------
+ * Extensions
+ */
+
+typedef int32_t (*i915_ext_fn)(uintptr_t ext, void *data);
+
+/** 0 when the `size` bytes at the user address `at` are zero, -EINVAL when
+ * not, -EFAULT when they cannot be read, as Linux's check_user_mbz. */
+static int32_t check_user_mbz(uintptr_t at, size_t size)
+{
+    uint8_t v[8];
+    size_t i;
+
+    if (copy_from_user(v, I915_USER_PTR(at), size) != 0) {
+        return -EFAULT;
+    }
+    for (i = 0; i < size; i++) {
+        if (v[i]) {
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+/** Read `size` bytes at the user address `at`: 0 or -EFAULT. */
+static int32_t get_user_bytes(void *dst, uintptr_t at, size_t size)
+{
+    return copy_from_user(dst, I915_USER_PTR(at), size) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * Walk the chain of extensions from the user address `ext`, as Linux's
+ * i915_user_extensions: each one's flags and reserved words must be 0,
+ * and its name must have a handler in `tbl` of `count`.
+ *
+ * @return 0; -E2BIG past I915_MAX_EXTENSIONS; -EINVAL for a word that must
+ *         be 0 or an unknown name; -EFAULT; or a handler's error.
+ */
+static int32_t user_extensions(uint64_t ext, const i915_ext_fn *tbl, uint32_t count, void *data)
+{
+    struct i915_user_extension e;
+    uint32_t depth = I915_MAX_EXTENSIONS;
+    int32_t err;
+    int i;
+
+    while (ext) {
+        uintptr_t at = (uintptr_t)ext;
+
+        if (depth-- == 0) {
+            return -E2BIG;
+        }
+        err = check_user_mbz(at + 12u, 4);
+        for (i = 0; i < 4 && err == 0; i++) {
+            err = check_user_mbz(at + 16u + 4u * (uint32_t)i, 4);
+        }
+        if (err == 0) {
+            err = get_user_bytes(&e.name, at + 8u, 4);
+        }
+        if (err < 0) {
+            return err;
+        }
+        err = e.name < count && tbl[e.name] ? tbl[e.name](at, data) : -EINVAL;
+        if (err < 0) {
+            return err;
+        }
+        if (get_user_bytes(&e.next_extension, at, 8) < 0 ||
+            e.next_extension > (uint64_t)(uintptr_t)-1) {
+            return -EFAULT;
+        }
+        ext = e.next_extension;
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
+ * Engine maps
+ */
+
+/* An engine map being read: its slots, each an engine index or -1. */
+struct engines_set {
+    struct drm_i915_private *i915;
+    uint32_t n;
+    int8_t *map;
+};
+
+/** LOAD_BALANCE: a virtual engine over siblings, which only execlists
+ * give: -ENODEV, as Linux on Haswell. */
+static int32_t engines_balance(uintptr_t ext, void *data)
+{
+    (void)ext;
+    (void)data;
+    return -ENODEV;
+}
+
+/** BOND, as Linux's set_proto_ctx_engines_bond: checked and then ignored,
+ * since nothing on a legacy ring acts on it. */
+static int32_t engines_bond(uintptr_t ext, void *data)
+{
+    struct engines_set *set = (struct engines_set *)data;
+    struct i915_engine_class_instance ci;
+    uint16_t idx, nbonds;
+    int32_t err;
+    uint32_t n;
+
+    if (get_user_bytes(&idx, ext + 36u, 2) < 0) {
+        return -EFAULT;
+    }
+    if (idx >= set->n || set->map[idx] < 0) {
+        return -EINVAL;
+    }
+    err = check_user_mbz(ext + 40u, 8);
+    for (n = 0; n < 4 && err == 0; n++) {
+        err = check_user_mbz(ext + 48u + 8u * n, 8);
+    }
+    if (err < 0) {
+        return err;
+    }
+    if (get_user_bytes(&ci, ext + 32u, sizeof(ci)) < 0) {
+        return -EFAULT;
+    }
+    if (!i915_engine_lookup_user(set->i915, ci.engine_class, ci.engine_instance)) {
+        return -EINVAL;
+    }
+    if (get_user_bytes(&nbonds, ext + 38u, 2) < 0) {
+        return -EFAULT;
+    }
+    for (n = 0; n < nbonds; n++) {
+        if (get_user_bytes(&ci, ext + 80u + 4u * n, sizeof(ci)) < 0) {
+            return -EFAULT;
+        }
+        if (!i915_engine_lookup_user(set->i915, ci.engine_class, ci.engine_instance)) {
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+/**
+ * PARALLEL_SUBMIT, as Linux's set_proto_ctx_engines_parallel_submit
+ * without GuC: one sibling for each of `width` contexts, of one class
+ * other than render, each the next logical instance of the last. No class
+ * here has two engines, so every map fails that last check with -EINVAL,
+ * as on Linux on Haswell.
+ */
+static int32_t engines_parallel(uintptr_t ext, void *data)
+{
+    struct engines_set *set = (struct engines_set *)data;
+    struct i915_engine_class_instance ci, prev;
+    uint16_t slot, width, nsiblings;
+    uint64_t flags;
+    uint32_t mask = 0, prev_mask = 0, i;
+    struct i915_engine *engine;
+    int32_t err;
+
+    if (get_user_bytes(&slot, ext + 32u, 2) < 0 || get_user_bytes(&width, ext + 34u, 2) < 0 ||
+        get_user_bytes(&nsiblings, ext + 36u, 2) < 0) {
+        return -EFAULT;
+    }
+    if (nsiblings != 1 || slot >= set->n || set->map[slot] >= 0) {
+        return -EINVAL;
+    }
+    if (get_user_bytes(&flags, ext + 40u, 8) < 0) {
+        return -EFAULT;
+    }
+    if (flags) {
+        return -EINVAL;
+    }
+    for (i = 0; i < 3; i++) {
+        err = check_user_mbz(ext + 48u + 8u * i, 8);
+        if (err < 0) {
+            return err;
+        }
+    }
+    if (width < 2) {
+        return -EINVAL;
+    }
+    for (i = 0; i < width; i++) {
+        if (get_user_bytes(&ci, ext + 72u + 4u * i, sizeof(ci)) < 0) {
+            return -EFAULT;
+        }
+        engine = i915_engine_lookup_user(set->i915, ci.engine_class, ci.engine_instance);
+        if (!engine || ci.engine_class == I915_ENGINE_CLASS_RENDER ||
+            (i > 0 && prev.engine_class != ci.engine_class)) {
+            return -EINVAL;
+        }
+        prev = ci;
+        /* Each engine is logical instance 0 of its class. */
+        mask = 1u << 0;
+        if (i > 0 && mask != prev_mask << 1) {
+            return -EINVAL;
+        }
+        prev_mask = mask;
+    }
+    /* Not reached: the second context always fails the mask's check. */
+    return -EINVAL;
+}
+
+static const i915_ext_fn engines_extensions[] = {engines_balance, engines_bond, engines_parallel};
+
+/** ENGINES on a proto context, as Linux's set_proto_ctx_engines: the
+ * slots, each an engine or a hole, then their extensions. */
+static int32_t set_engines(struct i915_gem_context *ctx,
+                           const struct drm_i915_gem_context_param *args)
+{
+    struct engines_set set;
+    struct i915_engine_class_instance ci;
+    struct i915_engine *engine;
+    uint64_t extensions;
+    uintptr_t user = (uintptr_t)args->value;
+    int32_t err;
+    uint32_t n;
+
+    if (ctx->nmap >= 0) {
+        return -EINVAL;
+    }
+    if (args->size < I915_CONTEXT_PARAM_ENGINES_HEADER ||
+        (args->size - I915_CONTEXT_PARAM_ENGINES_HEADER) % sizeof(ci) != 0) {
+        return -EINVAL;
+    }
+    set.i915 = ctx->i915;
+    set.n = (args->size - I915_CONTEXT_PARAM_ENGINES_HEADER) / sizeof(ci);
+    if (set.n > I915_CONTEXT_MAX_ENGINES) {
+        return -EINVAL;
+    }
+    set.map = (int8_t *)kmalloc(set.n ? set.n : 1u);
+    if (!set.map) {
+        return -ENOMEM;
+    }
+    for (n = 0; n < set.n; n++) {
+        if (get_user_bytes(&ci, user + I915_CONTEXT_PARAM_ENGINES_HEADER + 4u * n, sizeof(ci)) <
+            0) {
+            kfree(set.map);
+            return -EFAULT;
+        }
+        set.map[n] = -1;
+        if (ci.engine_class == I915_ENGINE_CLASS_INVALID &&
+            ci.engine_instance == I915_ENGINE_CLASS_INVALID_NONE) {
+            continue;
+        }
+        engine = i915_engine_lookup_user(ctx->i915, ci.engine_class, ci.engine_instance);
+        if (!engine) {
+            kfree(set.map);
+            return -ENOENT;
+        }
+        set.map[n] = (int8_t)(engine - ctx->i915->gt.engine);
+    }
+    err = get_user_bytes(&extensions, user, 8);
+    if (err == 0) {
+        err = user_extensions(extensions, engines_extensions,
+                              sizeof(engines_extensions) / sizeof(engines_extensions[0]), &set);
+    }
+    if (err < 0) {
+        kfree(set.map);
+        return err;
+    }
+    ctx->nmap = (int)set.n;
+    ctx->map = set.map;
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
+ * Parameters
+ */
+
+/** PRIORITY: -EINVAL with a size, then -ENODEV, since a legacy ring has no
+ * scheduler to order by priority (Linux's validate_priority). */
+static int32_t set_priority(const struct drm_i915_gem_context_param *args)
+{
+    return args->size ? -EINVAL : -ENODEV;
+}
+
+/** SSEU: -EINVAL for a size short of the structure, then -ENODEV, since
+ * only graphics version 11 takes a context's own (Linux's set_sseu). */
+static int32_t set_sseu(const struct drm_i915_gem_context_param *args)
+{
+    return args->size < sizeof(struct drm_i915_gem_context_param_sseu) ? -EINVAL : -ENODEV;
+}
+
+/**
+ * PERSISTENCE: on, since hangcheck is on, or off, which needs preemption
+ * to cancel the context's work and so is -ENODEV, as Linux's
+ * __context_set_persistence. A finalized context that is already as asked
+ * is left alone.
+ */
+static int32_t set_persistence(struct i915_gem_context *ctx,
+                               const struct drm_i915_gem_context_param *args)
+{
+    if (args->size) {
+        return -EINVAL;
+    }
+    if (!ctx->proto && !!(ctx->flags & I915_CTX_PERSISTENCE) == !!args->value) {
+        return 0;
+    }
+    if (!args->value) {
+        return -ENODEV;
+    }
+    ctx->flags |= I915_CTX_PERSISTENCE;
+    return 0;
+}
+
+/**
+ * Set a parameter of `ctx`, as Linux's set_proto_ctx_param on a proto
+ * context and ctx_setparam on a finalized one: the virtual memory, the
+ * engine map and protected content only before the first use.
+ *
+ * @return 0; -EINVAL for a size where none is taken, a parameter Linux
+ *         refuses or one only a proto context takes; -EPERM to make a
+ *         context unbannable without privilege; -ENODEV for what Haswell
+ *         lacks; or the engine map's errors.
+ */
+static int32_t context_setparam(struct i915_gem_context *ctx,
+                                const struct drm_i915_gem_context_param *args)
+{
+    switch (args->param) {
+    case I915_CONTEXT_PARAM_NO_ERROR_CAPTURE:
+        if (args->size) {
+            return -EINVAL;
+        }
+        ctx->flags = args->value ? ctx->flags | I915_CTX_NO_ERROR_CAPTURE
+                                 : ctx->flags & ~I915_CTX_NO_ERROR_CAPTURE;
+        return 0;
+    case I915_CONTEXT_PARAM_BANNABLE:
+        if (args->size) {
+            return -EINVAL;
+        }
+        if (!args->value && !i915_capable()) {
+            return -EPERM;
+        }
+        ctx->flags = args->value ? ctx->flags | I915_CTX_BANNABLE : ctx->flags & ~I915_CTX_BANNABLE;
+        return 0;
+    case I915_CONTEXT_PARAM_RECOVERABLE:
+        if (args->size) {
+            return -EINVAL;
+        }
+        ctx->flags =
+            args->value ? ctx->flags | I915_CTX_RECOVERABLE : ctx->flags & ~I915_CTX_RECOVERABLE;
+        return 0;
+    case I915_CONTEXT_PARAM_PRIORITY:
+        return set_priority(args);
+    case I915_CONTEXT_PARAM_SSEU:
+        return set_sseu(args);
+    case I915_CONTEXT_PARAM_PERSISTENCE:
+        return set_persistence(ctx, args);
+    case I915_CONTEXT_PARAM_VM:
+        /* A context's own address space needs a full PPGTT. */
+        if (!ctx->proto) {
+            return -EINVAL;
+        }
+        return args->size ? -EINVAL : -ENODEV;
+    case I915_CONTEXT_PARAM_ENGINES:
+        return ctx->proto ? set_engines(ctx, args) : -EINVAL;
+    case I915_CONTEXT_PARAM_PROTECTED_CONTENT:
+        /* Protected content needs PXP, which Haswell has not. */
+        if (!ctx->proto) {
+            return -EINVAL;
+        }
+        return args->value ? -ENODEV : 0;
+    default:
+        /* LOW_LATENCY needs GuC, CONTEXT_IMAGE a debug build, and
+         * NO_ZEROMAP, BAN_PERIOD and RINGSIZE are gone, as on Linux. */
+        return -EINVAL;
+    }
+}
+
+/** SSEU's value: the size of the structure for a size of 0, otherwise the
+ * slices and EUs of the state it names, as Linux's get_sseu. */
+static int32_t get_sseu(struct i915_gem_context *ctx, struct drm_i915_gem_context_param *args)
+{
+    struct drm_i915_gem_context_param_sseu u;
+    struct intel_context *ce;
+    int32_t err;
+
+    if (args->size != 0) {
+        if (args->size < sizeof(u)) {
+            return -EINVAL;
+        }
+        if (get_user_bytes(&u, (uintptr_t)args->value, sizeof(u)) < 0) {
+            return -EFAULT;
+        }
+        if (u.rsvd || (u.flags & ~I915_CONTEXT_SSEU_FLAG_ENGINE_INDEX)) {
+            return -EINVAL;
+        }
+        err = lookup_user_engine(ctx, u.flags, &u.engine, &ce);
+        if (err < 0) {
+            return err;
+        }
+        u.slice_mask = ce->slice_mask;
+        u.subslice_mask = ce->subslice_mask;
+        u.min_eus_per_subslice = ce->min_eus;
+        u.max_eus_per_subslice = ce->max_eus;
+        intel_context_put(ce);
+        if (copy_to_user(I915_USER_PTR(args->value), &u, sizeof(u)) != 0) {
+            return -EFAULT;
+        }
+    }
+    args->size = sizeof(u);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
+ * The ioctls
+ */
+
+/* What CONTEXT_CREATE's extensions work on. */
+struct create_ext {
+    struct i915_gem_context *ctx;
+};
+
+/** CONTEXT_CREATE's SETPARAM: a parameter set before the context exists,
+ * whose context id must be 0. */
+static int32_t create_setparam(uintptr_t ext, void *data)
+{
+    struct drm_i915_gem_context_create_ext_setparam local;
+
+    if (get_user_bytes(&local, ext, sizeof(local)) < 0) {
+        return -EFAULT;
+    }
+    if (local.param.ctx_id) {
+        return -EINVAL;
+    }
+    return context_setparam(((struct create_ext *)data)->ctx, &local.param);
+}
+
+/** CONTEXT_CREATE's CLONE, which Linux has dropped: -EINVAL. */
+static int32_t create_clone(uintptr_t ext, void *data)
+{
+    (void)ext;
+    (void)data;
+    return -EINVAL;
+}
+
+static const i915_ext_fn create_extensions[] = {create_setparam, create_clone};
+
+/**
+ * GEM_CONTEXT_CREATE, as Linux's i915_gem_context_create_ioctl before
+ * graphics version 13: a proto context with the lowest id free, its
+ * parameters from the extensions, finalized at its first use.
+ *
+ * @return 0; -EINVAL for an unknown flag or SINGLE_TIMELINE, which needs
+ *         execlists; -EIO when the GPU is wedged or the file is banned;
+ *         -ENOMEM; or an extension's error.
+ */
+int32_t i915_gem_context_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_private *i915 = to_i915(dev);
+    struct drm_i915_gem_context_create_ext *args = (struct drm_i915_gem_context_create_ext *)data;
+    struct i915_file *fp = file_priv(file);
+    struct create_ext ext;
+    int32_t err;
+
+    if (args->flags & I915_CONTEXT_CREATE_FLAGS_UNKNOWN) {
+        return -EINVAL;
+    }
+    if (i915->gt.wedged || fp->ban_score >= I915_CLIENT_SCORE_BANNED) {
+        return -EIO;
+    }
+    if (args->flags & I915_CONTEXT_CREATE_FLAGS_SINGLE_TIMELINE) {
+        return -EINVAL;
+    }
+    ext.ctx = context_alloc(i915);
+    if (!ext.ctx) {
+        return -ENOMEM;
+    }
+    if (args->flags & I915_CONTEXT_CREATE_FLAGS_USE_EXTENSIONS) {
+        err = user_extensions(args->extensions, create_extensions,
+                              sizeof(create_extensions) / sizeof(create_extensions[0]), &ext);
+        if (err < 0) {
+            i915_gem_context_put(ext.ctx);
+            return err;
+        }
+    }
+    context_register(fp, ext.ctx);
+    args->ctx_id = ext.ctx->id;
+    return 0;
+}
+
+/**
+ * GEM_CONTEXT_DESTROY: the context taken from the file; its requests run
+ * on. 0; -EINVAL for a pad that is not 0; -ENOENT for the default
+ * context or no such context.
+ */
+int32_t i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_context_destroy *args = (struct drm_i915_gem_context_destroy *)data;
+    struct i915_file *fp = file_priv(file);
+    struct i915_gem_context **pp, *ctx;
+
+    (void)dev;
+    if (args->pad != 0) {
+        return -EINVAL;
+    }
+    if (args->ctx_id == 0) {
+        return -ENOENT;
+    }
+    for (pp = &fp->contexts; *pp && (*pp)->id != args->ctx_id; pp = &(*pp)->next) {
+    }
+    ctx = *pp;
+    if (!ctx) {
+        return -ENOENT;
+    }
+    *pp = ctx->next;
+    ctx->next = 0;
+    context_close(ctx);
+    return 0;
+}
+
+/**
+ * GEM_CONTEXT_GETPARAM, as Linux's i915_gem_context_getparam_ioctl, the
+ * context finalized: the GTT's size, the flags, the priority, the slices
+ * and EUs, and protected content, each with a size of 0 but SSEU's.
+ *
+ * @return 0; -ENOENT for no such context; -ENODEV for VM without a full
+ *         PPGTT; -EINVAL for a parameter Linux does not read back; or
+ *         SSEU's errors.
+ */
+int32_t i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_context_param *args = (struct drm_i915_gem_context_param *)data;
+    struct i915_gem_context *ctx;
+    int32_t err;
+
+    (void)dev;
+    err = i915_gem_context_lookup(file, args->ctx_id, &ctx);
+    if (err < 0) {
+        return err;
+    }
+    switch (args->param) {
+    case I915_CONTEXT_PARAM_GTT_SIZE:
+        /* Without a full PPGTT the context works in the global GTT. */
+        args->size = 0;
+        args->value = ctx->i915->ggtt.total;
+        break;
+    case I915_CONTEXT_PARAM_NO_ERROR_CAPTURE:
+        args->size = 0;
+        args->value = !!(ctx->flags & I915_CTX_NO_ERROR_CAPTURE);
+        break;
+    case I915_CONTEXT_PARAM_BANNABLE:
+        args->size = 0;
+        args->value = !!(ctx->flags & I915_CTX_BANNABLE);
+        break;
+    case I915_CONTEXT_PARAM_RECOVERABLE:
+        args->size = 0;
+        args->value = !!(ctx->flags & I915_CTX_RECOVERABLE);
+        break;
+    case I915_CONTEXT_PARAM_PRIORITY:
+        args->size = 0;
+        args->value = I915_CONTEXT_DEFAULT_PRIORITY;
+        break;
+    case I915_CONTEXT_PARAM_SSEU:
+        err = get_sseu(ctx, args);
+        break;
+    case I915_CONTEXT_PARAM_VM:
+        err = -ENODEV;
+        break;
+    case I915_CONTEXT_PARAM_PERSISTENCE:
+        args->size = 0;
+        args->value = !!(ctx->flags & I915_CTX_PERSISTENCE);
+        break;
+    case I915_CONTEXT_PARAM_PROTECTED_CONTENT:
+        args->size = 0;
+        args->value = 0;
+        break;
+    default:
+        err = -EINVAL;
+        break;
+    }
+    i915_gem_context_put(ctx);
+    return err;
+}
+
+/**
+ * GEM_CONTEXT_SETPARAM, as Linux's i915_gem_context_setparam_ioctl: on a
+ * proto context before its first use, on the context after. 0, -ENOENT,
+ * or the parameter's errors (context_setparam).
+ */
+int32_t i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_context_param *args = (struct drm_i915_gem_context_param *)data;
+    struct i915_gem_context *ctx = context_find(file_priv(file), args->ctx_id);
+
+    (void)dev;
+    return ctx ? context_setparam(ctx, args) : -ENOENT;
+}
+
+/**
+ * GET_RESET_STATS, as Linux's i915_gem_context_reset_stats_ioctl, for
+ * every context: the GPU's resets, to a privileged caller only, and the
+ * context's batches active at a hang and pending behind one. 0, -EINVAL
+ * for flags or a pad that are not 0, -ENOENT, or -ENOMEM.
+ */
+int32_t i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
+                                           struct drm_file *file)
+{
+    struct drm_i915_reset_stats *args = (struct drm_i915_reset_stats *)data;
+    struct i915_gem_context *ctx;
+    int32_t err;
+
+    if (args->flags || args->pad) {
+        return -EINVAL;
+    }
+    err = i915_gem_context_lookup(file, args->ctx_id, &ctx);
+    if (err < 0) {
+        return err;
+    }
+    args->reset_count = i915_capable() ? to_i915(dev)->gt.reset_count : 0;
+    args->batch_active = ctx->guilty_count;
+    args->batch_pending = ctx->active_count;
+    i915_gem_context_put(ctx);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
+ * Files
+ */
+
+int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
+{
+    struct drm_i915_private *i915 = to_i915(dev);
+    struct i915_file *fp = (struct i915_file *)kzalloc(sizeof(*fp));
+    struct i915_gem_context *ctx;
+
+    if (!fp) {
+        return -ENOMEM;
+    }
+    fp->i915 = i915;
+    /* The default context, 0, made whole at once, as Linux's
+     * i915_gem_context_open. */
+    ctx = context_alloc(i915);
+    if (!ctx || context_finalize(ctx) < 0) {
+        i915_gem_context_put(ctx);
+        kfree(fp);
+        return -ENOMEM;
+    }
+    ctx->id = 0;
+    fp->contexts = ctx;
+    file->driver_priv = fp;
+    return 0;
+}
+
+void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
+{
+    struct i915_file *fp = file_priv(file);
+    struct i915_gem_context *ctx;
+
+    if (!fp) {
+        return;
+    }
+    while ((ctx = fp->contexts) != 0) {
+        fp->contexts = ctx->next;
+        ctx->next = 0;
+        context_close(ctx);
+    }
+    i915_retire_requests(to_i915(dev));
+    kfree(fp);
+    file->driver_priv = 0;
+}

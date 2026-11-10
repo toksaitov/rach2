@@ -458,6 +458,26 @@ void i915_gem_shrinker_unregister(struct drm_i915_private *i915)
     (void)i915;
 }
 
+/* The contexts and requests, i915_gem_context.c and i915_request.c, which
+ * the bind reaches only through the DRM core's hooks and the unplug. */
+int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
+{
+    (void)dev;
+    (void)file;
+    return 0;
+}
+
+void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
+{
+    (void)dev;
+    (void)file;
+}
+
+void i915_requests_unplug(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 /* A page of a backend that stands in for the aperture, which the chip's
  * backend here has not. */
 void *kmap_temp(uintptr_t phys)
