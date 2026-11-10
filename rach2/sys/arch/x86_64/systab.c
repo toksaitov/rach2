@@ -344,6 +344,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_INOTIFY_ADD_WATCH] = sys_inotify_add_watch;
     table[SYS_INOTIFY_RM_WATCH] = sys_inotify_rm_watch;
     table[SYS_OPENAT] = sys_openat;
+    table[SYS_OPENAT2] = sys_openat2;
     table[SYS_MKDIRAT] = sys_mkdirat;
     table[SYS_MKNODAT] = sys_mknodat;
     table[SYS_FCHOWNAT] = sys_fchownat;

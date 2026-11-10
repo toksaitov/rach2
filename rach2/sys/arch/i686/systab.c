@@ -158,6 +158,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_NAME_TO_HANDLE_AT] = sys_name_to_handle_at;
     table[SYS_OPEN_BY_HANDLE_AT] = sys_open_by_handle_at;
     table[SYS_OPENAT] = sys_openat;
+    table[SYS_OPENAT2] = sys_openat2;
     table[SYS_READLINK] = sys_readlink;
     table[SYS_READLINKAT] = sys_readlinkat;
     table[SYS_ACCESS] = sys_access;

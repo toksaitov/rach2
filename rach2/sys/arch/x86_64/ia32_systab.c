@@ -525,7 +525,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_PIDFD_OPEN] = sys_pidfd_open;
     table[SYS_CLONE3] = sys_clone3;
     table[SYS_CLOSE_RANGE] = sys_close_range;
-    table[SYS_OPENAT2] = NULL;
+    table[SYS_OPENAT2] = sys_openat2;
     table[SYS_PIDFD_GETFD] = sys_pidfd_getfd;
     table[SYS_FACCESSAT2] = sys_faccessat2;
     table[SYS_PROCESS_MADVISE] = NULL;

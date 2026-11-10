@@ -101,6 +101,7 @@ static long sys_mount(isr_params_t *params);
 static long sys_umount2(isr_params_t *params);
 static long sys_open(isr_params_t *params);
 static long sys_openat(isr_params_t *params);
+static long sys_openat2(isr_params_t *params);
 static long sys_close(isr_params_t *params);
 static long sys_fsync(isr_params_t *params);
 static long sys_fdatasync(isr_params_t *params);
@@ -844,6 +845,10 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     truncates++;
     return truncate_error;
 }
+
+/** Count nothing: no walk here runs scoped. */
+void vfs_tree_changed(void)
+{}
 
 /** Release a successfully opened handle, never more than were opened. */
 void vfs_release(struct vfs_mount *mnt, void *at)

@@ -21,10 +21,11 @@ typedef char pathbuf_is_one_page[VFS_PATH_MAX == PAGE_SIZE ? 1 : -1];
  *
  * The pages stay with the record once taken, so a process pays a frame for
  * the most paths one of its calls used at once and not for every call. The
- * deepest caller takes four: a rename's two paths, and the target of a link
- * the resolver follows with the path it joins it to. A call that finds all
- * `PATH_BUFS` in use has broken that count; it gets NULL, and the kernel log
- * a line.
+ * deepest caller takes six: an openat2's path, the path its walk reached,
+ * the directory it starts in and that joined to the path, and the target of
+ * a link the resolver follows with the path it joins it to. A call that
+ * finds all `PATH_BUFS` in use has broken that count; it gets NULL, and
+ * the kernel log a line.
  */
 char *path_buf_get(void)
 {

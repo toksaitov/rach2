@@ -431,6 +431,8 @@ long sys_open(isr_params_t *params);
 
 long sys_openat(isr_params_t *params);
 
+long sys_openat2(isr_params_t *params);
+
 long sys_close(isr_params_t *params);
 
 long sys_fsync(isr_params_t *params);

@@ -183,6 +183,33 @@ void vfs_ref_put(struct vfs_ref *r)
     r->node = 0;
 }
 
+/* The tree's sequence (`vfs_tree_seq`). */
+static uint32_t tree_seq;
+
+uint32_t vfs_tree_seq(void)
+{
+    return tree_seq;
+}
+
+void vfs_tree_changed(void)
+{
+    tree_seq++;
+}
+
+void vfs_replay(int magic, uint32_t seq)
+{
+    current_proc->walk_replay = VFS_REPLAY_ON | (magic ? VFS_REPLAY_MAGIC : 0u);
+    current_proc->walk_replay_seq = seq;
+}
+
+int vfs_replay_end(void)
+{
+    int tripped = (current_proc->walk_replay & VFS_REPLAY_TRIPPED) != 0;
+
+    current_proc->walk_replay = 0;
+    return tripped;
+}
+
 int vfs_enter(struct vfs_mount *mnt)
 {
     if (mnt->state != VFS_ACTIVE) {
@@ -931,8 +958,17 @@ static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char 
 /* What `walk_object` returns when the walk has moved to the link's object. */
 #define WALK_AT_OBJECT 2
 
-/* A flag of `resolve_path` beside the VFS_WALK_ ones, for an unmount's walk. */
+/* Flags of `resolve_path` beside the VFS_WALK_ ones: for an unmount's
+ * walk, and for a scoped walk through an anchor of a type that takes the
+ * rest of a path (`walk_rules`). */
 #define WALK_UNMOUNT 0x100
+#define WALK_SYNTH   0x200
+
+/* What `walk_rest_kind` finds a node of a type that takes the rest of a
+ * path to be. */
+#define WALK_REST_OBJECT  1
+#define WALK_REST_THROUGH 2
+#define WALK_REST_LINK    3
 
 /** The start of the last component of `path`, trailing slashes passed over:
  * the leaf a parent walk returns once a link's target is spliced into its
@@ -1131,7 +1167,281 @@ static void walk_name_end(struct walk_name *wn)
 struct walk_record {
     char *real;
     struct vfs_name **entry;
+    const struct vfs_scope *scope; /* an openat2's, or NULL */
 };
+
+/* The restrictions one walk applies: an openat2's scope (`vfs_resolve_scoped`)
+ * and the calling thread's replay (`vfs_replay`). */
+struct walk_rules {
+    const struct vfs_scope *scope; /* NULL for any other walk */
+    uint32_t resolve;              /* the scope's VFS_RESOLVE_*, or 0 */
+    int scoped;                    /* BENEATH or IN_ROOT */
+    /* The anchor is inside a type that takes the rest of a path from its
+     * mount's root, so the walk goes from the caller's root through the
+     * anchor's real path, whose `..`s the scope has checked in the text
+     * (`scope_text`). */
+    int synth;
+    uint32_t replay;        /* the thread's VFS_REPLAY_* */
+    struct vfs_mount *xdev; /* the mount NO_XDEV keeps the walk on */
+    int xdev_armed;         /* the walk has reached `xdev` */
+};
+
+/**
+ * Set `rules` for a walk of `flags` with `record`, and return where a
+ * relative path starts: a scoped walk's anchor, unless it goes through the
+ * anchor's real path (`synth`), or `start`.
+ */
+static const struct vfs_ref *walk_rules_init(struct walk_rules *rules,
+                                             const struct walk_record *record, int flags,
+                                             const struct vfs_ref *start)
+{
+    rules->scope = record ? record->scope : NULL;
+    rules->resolve = rules->scope ? rules->scope->resolve : 0;
+    rules->scoped = (rules->resolve & (VFS_RESOLVE_BENEATH | VFS_RESOLVE_IN_ROOT)) != 0;
+    rules->synth = (flags & WALK_SYNTH) != 0;
+    rules->replay = !rules->scope && current_proc ? current_proc->walk_replay : 0;
+    rules->xdev = NULL;
+    rules->xdev_armed = 0;
+    return rules->scope && !rules->synth ? &rules->scope->anchor : start;
+}
+
+/** Whether the synthetic node `vp` is a link of /proc to an object, which
+ * Linux calls a magic link: a descriptor, a working directory, a root, a
+ * program or a namespace. */
+static int walk_magic(const struct vpath *vp)
+{
+    return vp && (vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_CWD ||
+                  vp->kind == VNODE_PROC_ROOT || vp->kind == VNODE_PROC_EXE ||
+                  vp->kind == VNODE_PROC_NS_LINK);
+}
+
+/**
+ * Whether the walk under `rules` may follow a link, a magic one when
+ * `magic`: 0, or -ELOOP under NO_SYMLINKS, and for a magic link under
+ * NO_MAGICLINKS; -EXDEV for a magic link of a scoped walk; -EAGAIN in a
+ * replay for any link but a magic one it allows.
+ */
+static int walk_link_ok(const struct walk_rules *rules, int magic)
+{
+    if ((rules->resolve & VFS_RESOLVE_NO_SYMLINKS) ||
+        (magic && (rules->resolve & VFS_RESOLVE_NO_MAGICLINKS))) {
+        return -ELOOP;
+    }
+    if (magic && rules->scoped) {
+        return -EXDEV;
+    }
+    if (rules->replay && !(magic && (rules->replay & VFS_REPLAY_MAGIC))) {
+        current_proc->walk_replay |= VFS_REPLAY_TRIPPED;
+        return -EAGAIN;
+    }
+    return 0;
+}
+
+/** Start the record `wn` at the anchor of the walk `rules` has, or at the
+ * root when `rules` is NULL or has no scope, as `walk_name_root` does. */
+static void walk_name_anchor(struct walk_name *wn, char *buf, const struct walk_rules *rules)
+{
+    walk_name_root(wn, buf);
+    if (buf && rules && rules->scope) {
+        k_memcpy(buf, rules->scope->anchor_real, rules->scope->anchor_len);
+        wn->len = (int)rules->scope->anchor_len;
+    }
+}
+
+/** Whether a scoped walk under `rules` has its anchor as its root. */
+static int walk_anchor_root(const struct walk_rules *rules)
+{
+    return rules->scoped && !rules->synth;
+}
+
+/**
+ * Begin the walk under `rules` of the path `p`: a scoped walk's root is its
+ * anchor, and the record `wn` starts at the anchor for a path that starts
+ * there.
+ */
+static void walk_scope_begin(const struct walk_rules *rules, struct vfs_ref *root,
+                             struct walk_name *wn, const char *p)
+{
+    if (walk_anchor_root(rules)) {
+        *root = rules->scope->anchor;
+    }
+    if (rules->scope && !rules->synth && (p[0] != '/' || rules->scoped)) {
+        walk_name_anchor(wn, wn->buf, rules);
+    }
+}
+
+/** Set the mount NO_XDEV keeps the walk under `rules` on: the one it starts
+ * on, `mnt`, or for a walk through the anchor's real path, the anchor's,
+ * from when the walk reaches it. */
+static void walk_xdev_begin(struct walk_rules *rules, struct vfs_mount *mnt)
+{
+    rules->xdev = rules->synth ? rules->scope->anchor.mnt : mnt;
+    rules->xdev_armed = !rules->synth;
+}
+
+/** Note that the walk under `rules` is on `mnt`: -EXDEV under NO_XDEV once
+ * it has left its mount, else 0. */
+static int walk_xdev(struct walk_rules *rules, struct vfs_mount *mnt)
+{
+    rules->xdev_armed |= mnt == rules->xdev;
+    return (rules->resolve & VFS_RESOLVE_NO_XDEV) && rules->xdev_armed && mnt != rules->xdev
+               ? -EXDEV
+               : 0;
+}
+
+/** Whether the walk under `rules` must start again for a jump to its root
+ * or a `..`, since the caller's root has moved; a scoped walk's root is its
+ * anchor, which the caller holds. */
+static int walk_root_moved(const struct walk_rules *rules, const struct vfs_ref *root)
+{
+    return !walk_anchor_root(rules) && !root_current(root);
+}
+
+/**
+ * Whether the walk under `rules` may take `..` from `cur`, whose root is
+ * `root`: -EXDEV for a walk through the anchor's real path, which met a `..`
+ * the text did not have, and at the anchor under BENEATH; -EAGAIN for a
+ * scoped walk once a rename or a mount has moved the tree's sequence.
+ */
+static int walk_dotdot_ok(const struct walk_rules *rules, const struct vfs_ref *cur,
+                          const struct vfs_ref *root)
+{
+    if (!rules->scoped) {
+        return 0;
+    }
+    if (rules->synth || ((rules->resolve & VFS_RESOLVE_BENEATH) && cur->mnt == root->mnt &&
+                         cur->node == root->node)) {
+        return -EXDEV;
+    }
+    return vfs_tree_seq() != rules->scope->seq ? -EAGAIN : 0;
+}
+
+/** Look `name` up in `dir` as the walk under `rules` does: from the name
+ * cache alone under CACHED (`dcache_lookup_cached`). */
+static int walk_lookup(const struct walk_rules *rules, struct vfs_mount *mnt, void *dir,
+                       const char *name, void **out)
+{
+    return (rules->resolve & VFS_RESOLVE_CACHED) ? dcache_lookup_cached(mnt, dir, name, out)
+                                                 : dcache_lookup(mnt, dir, name, out);
+}
+
+/**
+ * The end of a walk under `rules` on `mnt` that found its node: -EXDEV under
+ * NO_XDEV off the walk's mount, -EAGAIN for a replay once the tree's
+ * sequence has moved, else 0.
+ */
+static int walk_end_ok(const struct walk_rules *rules, struct vfs_mount *mnt)
+{
+    if ((rules->resolve & VFS_RESOLVE_NO_XDEV) && mnt != rules->xdev) {
+        return -EXDEV;
+    }
+    if (rules->replay && vfs_tree_seq() != current_proc->walk_replay_seq) {
+        current_proc->walk_replay |= VFS_REPLAY_TRIPPED;
+        return -EAGAIN;
+    }
+    return 0;
+}
+
+/** Whether the text `t` has a `..` component. */
+static int text_climbs(const char *t)
+{
+    while (*t) {
+        if (t[0] == '.' && t[1] == '.' && (t[2] == '/' || t[2] == '\0')) {
+            return 1;
+        }
+        while (*t && *t != '/') {
+            t++;
+        }
+        while (*t == '/') {
+            t++;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Prepare the jump of the walk under `rules` to its root for an absolute
+ * link's target, which is now at the start of `linkpath`: -EXDEV under
+ * BENEATH; under IN_ROOT, the anchor is the root, which a walk through an
+ * anchor of a type that takes the rest of a path reaches by its real path
+ * put in front of the target, with the target's `..`s -EXDEV; 0 with the
+ * record `wn` started at the root the walk goes to.
+ */
+static int walk_jump(const struct walk_rules *rules, struct walk_name *wn, char *linkpath)
+{
+    uint32_t tl;
+
+    if (rules->resolve & VFS_RESOLVE_BENEATH) {
+        return -EXDEV;
+    }
+    if (rules->scoped && rules->synth) {
+        if (text_climbs(linkpath)) {
+            return -EXDEV;
+        }
+        tl = (uint32_t)k_strlen(linkpath);
+        if (rules->scope->anchor_len + tl + 1 > VFS_PATH_MAX) {
+            return -ENAMETOOLONG;
+        }
+        k_memmove(linkpath + rules->scope->anchor_len, linkpath, tl + 1);
+        k_memcpy(linkpath, rules->scope->anchor_real, rules->scope->anchor_len);
+    }
+    walk_name_anchor(wn, wn->buf, walk_anchor_root(rules) ? rules : 0);
+    return 0;
+}
+
+/**
+ * Check the target of a link the walk under `rules` follows, now at the
+ * start of `linkpath`: an absolute one as `walk_jump` does; a relative one
+ * with a `..` is -EXDEV for a scoped walk through the anchor's real path,
+ * whose text it was not checked in.
+ */
+static int walk_target(const struct walk_rules *rules, struct walk_name *wn, char *linkpath,
+                       int absolute)
+{
+    if (absolute) {
+        return walk_jump(rules, wn, linkpath);
+    }
+    return rules->synth && rules->scoped && text_climbs(linkpath) ? -EXDEV : 0;
+}
+
+/** Whether nothing but slashes follows `p`: the name before it is the
+ * path's last. */
+static int walk_at_end(const char *p)
+{
+    while (*p == '/') {
+        p++;
+    }
+    return *p == '\0';
+}
+
+/** Whether the walk of `flags` ends at the missing name it creates: the
+ * lookup gave `rc`, and `p` follows the name. */
+static int walk_creates(int rc, int flags, const char *p)
+{
+    return rc == -ENOENT && (flags & VFS_WALK_CREATE) && walk_at_end(p);
+}
+
+/**
+ * How the walk of `flags` goes on from the node `found` of `mnt` that a
+ * type's `lookup_rest` gave with `rc`, whose /proc meaning is `vp`, before
+ * the leaf of a parent walk (`parent`): WALK_REST_OBJECT to the object of a
+ * /proc link, WALK_REST_THROUGH or WALK_REST_LINK through a link it
+ * follows, or 0 when it stays at the node.
+ */
+static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt, void *found,
+                          int parent, int flags)
+{
+    if (walk_to_object(vp, rc, parent, flags)) {
+        return WALK_REST_OBJECT;
+    }
+    if (walk_rest_through(rc, mnt, found)) {
+        return WALK_REST_THROUGH;
+    }
+    if (!parent && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(mnt, found)) {
+        return WALK_REST_LINK;
+    }
+    return 0;
+}
 
 /** Capture a regular file's final entry before its parent hold is released. */
 static int walk_record_entry(struct walk_record *record, const struct vfs_ref *parent, void *found,
@@ -1294,6 +1604,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                         struct walk_record *record)
 {
     struct walk_name name;
+    struct walk_rules rules;
     struct vfs_ref cur;
     struct vfs_ref root;
     const char *p;
@@ -1302,7 +1613,9 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
     int links;
     int jumped;
+    int kind;
     int locked = (flags & VFS_WALK_LOCK) != 0;
+    int missing = 0;
     char *linkpath = 0;
     char *target = 0;
     int rc;
@@ -1314,6 +1627,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     if (mounts[0]->state != VFS_ACTIVE) {
         return -ENOENT;
     }
+    start = walk_rules_init(&rules, record, flags, start);
 
     if (flags & VFS_WALK_PARENT) {
         rc = walk_leaf(path, leaf, leafcap, &leaf_comp);
@@ -1329,11 +1643,13 @@ begin:
     jumped = 0;
     walk_name_root(&name, record ? record->real : NULL);
     walk_root(&root);
+    walk_scope_begin(&rules, &root, &name, p);
     cur = (p[0] == '/' || !start) ? root : *start;
-    if (p[0] == '/' && p[1] == '/') {
+    if (p[0] == '/' && p[1] == '/' && !rules.scope) {
         cur.mnt = mounts[0];
         cur.node = mounts[0]->root;
     }
+    walk_xdev_begin(&rules, cur.mnt);
     if (vfs_enter(cur.mnt) != 0) {
         path_buf_put(linkpath);
         path_buf_put(target);
@@ -1350,6 +1666,10 @@ begin:
 
         while (*p == '/') {
             p++;
+        }
+        rc = walk_xdev(&rules, cur.mnt);
+        if (rc != 0) {
+            goto out_err;
         }
         if (*p == '\0' || (last_comp && p >= last_comp)) {
             break;
@@ -1387,13 +1707,19 @@ begin:
             }
             p = rc == VFS_LINK ? left : p + rlen;
             vp = vfs_synth_vpath(cur.mnt, found);
-            if (walk_to_object(vp, rc, last_comp != 0, flags)) {
+            kind = walk_rest_kind(vp, rc, cur.mnt, found, last_comp != 0, flags);
+            rc = kind ? walk_link_ok(&rules, walk_magic(vp)) : 0;
+            if (rc != 0) {
+                node_put(cur.mnt, found);
+                goto out_err;
+            }
+            if (kind == WALK_REST_OBJECT) {
                 jumped = 1;
                 walk_name_text(&name, from, p);
                 rc = walk_object(&cur, found, p, &linkpath, &target, locked);
-            } else if (walk_rest_through(rc, cur.mnt, found)) {
+            } else if (kind == WALK_REST_THROUGH) {
                 rc = walk_rest_link(cur.mnt, found, from, p, &linkpath, &target, &links);
-            } else if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
+            } else if (kind == WALK_REST_LINK) {
                 if (vp->kind == VNODE_PROC_EXE) {
                     walk_name_text(&name, from, p);
                     rc = walk_exe(&cur, found, locked, record ? record->entry : NULL);
@@ -1414,15 +1740,19 @@ begin:
             if (rc == WALK_AT_OBJECT) {
                 continue;
             }
+            kind = rc;
+            rc = walk_target(&rules, &name, linkpath, kind);
+            if (rc != 0) {
+                goto out_err;
+            }
             p = linkpath;
             if (last_comp) {
                 last_comp = walk_last_comp(linkpath);
             }
-            if (rc == 1) {
-                if (!root_current(&root)) {
+            if (kind == 1) {
+                if (walk_root_moved(&rules, &root)) {
                     goto restart;
                 }
-                walk_name_root(&name, name.buf);
                 rc = walk_move(&cur, root.mnt, root.node, locked);
                 if (rc != 0) {
                     goto out_err;
@@ -1452,8 +1782,12 @@ begin:
             continue;
         }
         if (comp[0] == '.' && comp[1] == '.' && comp[2] == '\0') {
-            if (!root_current(&root)) {
+            if (walk_root_moved(&rules, &root)) {
                 goto restart;
+            }
+            rc = walk_dotdot_ok(&rules, &cur, &root);
+            if (rc != 0) {
+                goto out_err;
             }
             if (dotdot_stays(&cur, &root)) {
                 continue;
@@ -1486,7 +1820,12 @@ begin:
             continue;
         }
 
-        rc = dcache_lookup(mount_base(cur.mnt), cur.node, comp, &found);
+        rc = walk_lookup(&rules, mount_base(cur.mnt), cur.node, comp, &found);
+        if (walk_creates(rc, flags, p)) {
+            k_memcpy(leaf, comp, len + 1); /* VFS_NAME_MAX + 1 bytes */
+            missing = 1;
+            break;
+        }
         if (rc != 0) {
             goto out_err;
         }
@@ -1506,22 +1845,32 @@ begin:
                 goto out_err;
             }
             if ((lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
-                int absolute = walk_link(cur.mnt, found, rest, &linkpath, &target, &links);
+                int absolute = walk_link_ok(&rules, 0);
+
+                if (absolute != 0) {
+                    node_put(cur.mnt, found);
+                    rc = absolute;
+                    goto out_err;
+                }
+                absolute = walk_link(cur.mnt, found, rest, &linkpath, &target, &links);
 
                 if (absolute < 0) {
                     rc = absolute;
+                    goto out_err;
+                }
+                walk_name_add(&name, "..", 2);
+                rc = walk_target(&rules, &name, linkpath, absolute);
+                if (rc != 0) {
                     goto out_err;
                 }
                 if (last_comp) {
                     last_comp = walk_last_comp(linkpath);
                 }
                 p = linkpath;
-                walk_name_add(&name, "..", 2);
                 if (absolute) {
-                    if (!root_current(&root)) {
+                    if (walk_root_moved(&rules, &root)) {
                         goto restart;
                     }
-                    walk_name_root(&name, name.buf);
                     rc = walk_move(&cur, root.mnt, root.node, locked);
                     if (rc != 0) {
                         goto out_err;
@@ -1541,7 +1890,8 @@ begin:
         }
     }
 
-    rc = walk_finish(&cur, flags);
+    rc = walk_finish(&cur, missing ? flags | VFS_WALK_PARENT : flags);
+    rc = rc == 0 ? walk_end_ok(&rules, cur.mnt) : rc;
     if (rc != 0) {
         goto out_err;
     }
@@ -1549,7 +1899,7 @@ begin:
     path_buf_put(target);
     walk_name_end(&name);
     *out = cur;
-    return 0;
+    return missing ? VFS_MISSING : 0;
 
 restart:
     walk_release(&cur, locked);
@@ -1566,7 +1916,95 @@ out_err:
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap)
 {
-    return resolve_path(start, path, flags, out, leaf, leafcap, 0);
+    return resolve_path(start, path, flags & ~VFS_WALK_CREATE, out, leaf, leafcap, 0);
+}
+
+/**
+ * Put in the path page `out` the anchor's real path joined to `path`, for a
+ * walk through an anchor of a type that takes the rest of a path: under
+ * BENEATH and IN_ROOT with the path's `..`s applied in the text, where one
+ * that would climb above the anchor is -EXDEV under BENEATH and stays at it
+ * under IN_ROOT, and an absolute path is taken from the anchor; otherwise
+ * as written. 0, or -ENAMETOOLONG.
+ */
+static int scope_text(const struct vfs_scope *scope, const char *path, char *out)
+{
+    int scoped = (scope->resolve & (VFS_RESOLVE_BENEATH | VFS_RESOLVE_IN_ROOT)) != 0;
+    uint32_t len = scope->anchor_len;
+    const char *from = path;
+
+    k_memcpy(out, scope->anchor_real, len);
+    while (*path) {
+        const char *c;
+        uint32_t clen;
+
+        while (*path == '/') {
+            path++;
+        }
+        c = path;
+        while (*path && *path != '/') {
+            path++;
+        }
+        clen = (uint32_t)(path - c);
+        if (clen == 0 || (scoped && clen == 1 && c[0] == '.')) {
+            continue;
+        }
+        if (scoped && clen == 2 && c[0] == '.' && c[1] == '.') {
+            if (len == scope->anchor_len) {
+                if (scope->resolve & VFS_RESOLVE_BENEATH) {
+                    return -EXDEV;
+                }
+                continue;
+            }
+            while (out[len - 1] != '/') {
+                len--;
+            }
+            len--;
+            continue;
+        }
+        if (len + 1 + clen + 1 > VFS_PATH_MAX) {
+            return -ENAMETOOLONG;
+        }
+        out[len] = '/';
+        k_memcpy(out + len + 1, c, clen);
+        len += 1 + clen;
+    }
+    if (path > from && path[-1] == '/' && len + 2 <= VFS_PATH_MAX) {
+        out[len++] = '/';
+    }
+    out[len] = '\0';
+    return 0;
+}
+
+int vfs_resolve_scoped(const struct vfs_scope *scope, const char *path, int flags,
+                       struct vfs_ref *out, char *leaf, char *real)
+{
+    int scoped = (scope->resolve & (VFS_RESOLVE_BENEATH | VFS_RESOLVE_IN_ROOT)) != 0;
+    struct walk_record record;
+    char *joined;
+    int rc;
+
+    record.real = real;
+    record.entry = NULL;
+    record.scope = scope;
+    flags &= VFS_WALK_NOFOLLOW | VFS_WALK_LOCK | VFS_WALK_CREATE;
+    if (path[0] == '/' && (scope->resolve & VFS_RESOLVE_BENEATH)) {
+        return -EXDEV;
+    }
+    if (!scope->anchor.mnt->type->ops->lookup_rest ||
+        scope->anchor.node == scope->anchor.mnt->root || (path[0] == '/' && !scoped)) {
+        return resolve_path(0, path, flags, out, leaf, VFS_NAME_MAX + 1, &record);
+    }
+    joined = path_buf_get();
+    if (!joined) {
+        return -ENOMEM;
+    }
+    rc = scope_text(scope, path, joined);
+    if (rc == 0) {
+        rc = resolve_path(0, joined, flags | WALK_SYNTH, out, leaf, VFS_NAME_MAX + 1, &record);
+    }
+    path_buf_put(joined);
+    return rc;
 }
 
 int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real)
@@ -1581,7 +2019,8 @@ int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *re
 
     record.real = real;
     record.entry = entry;
-    return resolve_path(0, path, flags & ~VFS_WALK_PARENT, out, 0, 0, &record);
+    record.scope = NULL;
+    return resolve_path(0, path, flags & ~(VFS_WALK_PARENT | VFS_WALK_CREATE), out, 0, 0, &record);
 }
 
 void vfs_ref_release(struct vfs_ref *r)
@@ -3663,6 +4102,7 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     old->parent = m;
     old->covered = 0;
     old->seq = ++mount_seq;
+    tree_seq++;
     k_strncpy(old->covered_path, place, sizeof(old->covered_path));
     m->refs++;
     *host = old;
@@ -3944,6 +4384,7 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     mount_lock_init(m);
     m->claim = -1;
     m->seq = ++mount_seq;
+    tree_seq++;
     k_strncpy(m->covered_path, canon, sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
@@ -4730,6 +5171,7 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
         current_proc && current_proc->fs->root_mnt ? current_proc->fs->root_node : mounts[0]->root;
     int i, rc, same = 0;
 
+    tree_seq++;
     rc = vfs_resolve(0, new_root, 0, &nref, 0, 0);
     if (rc != 0) {
         return rc;
@@ -4824,6 +5266,7 @@ static int unmount_mount(struct vfs_mount *m)
     block_device_t *dev = m->dev;
 
     m->state = VFS_UNMOUNTING;
+    tree_seq++;
     while (m->inprogress > 0) {
         wq_wait_event_nointr(&m->drain_wq, drained, m);
     }
