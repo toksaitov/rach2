@@ -1,5 +1,6 @@
 /*
- * smbios.c: find the firmware's table and read the BIOS vendor out of it.
+ * smbios.c: find the firmware's table and read the BIOS vendor and the
+ * system's maker and product out of it.
  *
  * The anchor is the entry point UEFI's configuration table names, under SMBIOS
  * 3's GUID or the older one's, when the loader passed the firmware's system
@@ -11,8 +12,10 @@
  * is a run of structures each with a four-byte header followed by its formatted
  * area and then its strings, one after another, ending with an empty one.
  *
- * Only the first structure of type 0, BIOS Information, is wanted, and out of
- * it the string its vendor field names. Everything else is stepped over.
+ * Only the first structure of type 0, BIOS Information, and the first of
+ * type 1, System Information, are wanted, and out of them the strings their
+ * vendor, manufacturer and product name fields name. Everything else is
+ * stepped over.
  *
  * The region below a megabyte is inside the identity-mapped window. What
  * UEFI's tables and the anchors point at need not be: a machine with more
@@ -67,10 +70,13 @@ static const uint8_t smbios3_guid[16] = {0x44, 0x15, 0xFD, 0xF2, 0x94, 0x97, 0x2
 static const uint8_t smbios_guid[16] = {0x31, 0x2D, 0x9D, 0xEB, 0x88, 0x2D, 0xD3, 0x11,
                                         0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F, 0xC1, 0x4D};
 
-/* The vendor as read, and whether it has been; a host test's structures and
+/* The BIOS vendor, the system's maker and its product name as read, and
+ * whether they have been; a host test's structures and
  * their length, NULL for the search; and the UEFI system table's physical
  * address, 0 for none, and whether its pointers are 64 bits. */
 static char vendor[SMBIOS_VENDOR_MAX];
+static char sys_vendor[SMBIOS_VENDOR_MAX];
+static char product[SMBIOS_VENDOR_MAX];
 static int vendor_read;
 static const uint8_t *forced_table;
 static uint32_t forced_len;
@@ -296,10 +302,12 @@ static void copy_string(const uint8_t *s, const uint8_t *end, int want, char *ou
 }
 
 /**
- * Read the vendor out of the table, leaving `vendor` empty when there is
- * none. In the first BIOS Information structure, type 0, the byte at offset
- * 4 is the number of the string that is the vendor, and 0 there means the
- * structure names none; it is not always the first string.
+ * Read the strings out of the table, leaving each empty when there is none.
+ * In the first BIOS Information structure, type 0, the byte at offset 4 is
+ * the number of the string that is the vendor; in the first System
+ * Information structure, type 1, the bytes at offsets 4 and 5 are the
+ * manufacturer's and the product name's. A 0 there means the structure
+ * names none; the number is not always the first string's.
  */
 static void read_vendor(void)
 {
@@ -308,8 +316,11 @@ static void read_vendor(void)
     uint64_t at = 0;
     uint32_t len = 0;
     const uint8_t *end;
+    int seen = 0; /* bit 0 type 0's structure, bit 1 type 1's */
 
     vendor[0] = '\0';
+    sys_vendor[0] = '\0';
+    product[0] = '\0';
     vendor_read = 1;
 
     if (forced_table) {
@@ -329,7 +340,7 @@ static void read_vendor(void)
         return;
     }
     end = p + len;
-    while (p + 4 <= end) {
+    while (p + 4 <= end && seen != 3) {
         uint8_t type = p[0];
         uint8_t flen = p[1];
         const uint8_t *strings;
@@ -338,13 +349,20 @@ static void read_vendor(void)
             return; /* a header that does not fit is a table this cannot read */
         }
         strings = p + flen;
-        if (type == 0) {
+        if (type == 0 && !(seen & 1)) {
             if (flen >= 5 && p[4] != 0) {
                 copy_string(strings, end, (int)p[4], vendor, SMBIOS_VENDOR_MAX);
             }
-            return;
-        }
-        if (type == 127) {
+            seen |= 1;
+        } else if (type == 1 && !(seen & 2)) {
+            if (flen >= 5 && p[4] != 0) {
+                copy_string(strings, end, (int)p[4], sys_vendor, SMBIOS_VENDOR_MAX);
+            }
+            if (flen >= 6 && p[5] != 0) {
+                copy_string(strings, end, (int)p[5], product, SMBIOS_VENDOR_MAX);
+            }
+            seen |= 2;
+        } else if (type == 127) {
             return; /* the end-of-table structure */
         }
         /* Past the strings, which end with an empty one. */
@@ -377,6 +395,30 @@ int smbios_vendor_is(const char *prefix)
     return i > 0;
 }
 
+/** Whether `s` holds `sub`, as Linux's `strstr` in `dmi_matches`. */
+static int contains(const char *s, const char *sub)
+{
+    int i, j;
+
+    for (i = 0; s[i] != '\0'; i++) {
+        for (j = 0; sub[j] != '\0' && s[i + j] == sub[j]; j++) {
+        }
+        if (sub[j] == '\0') {
+            return 1;
+        }
+    }
+    return sub[0] == '\0';
+}
+
+int smbios_system_is(const char *maker, const char *name)
+{
+    if (!vendor_read) {
+        read_vendor();
+    }
+    return sys_vendor[0] != '\0' && product[0] != '\0' && contains(sys_vendor, maker) &&
+           contains(product, name);
+}
+
 void smbios_init(uint64_t systab, int wide)
 {
     efi_systab = systab;
@@ -396,4 +438,6 @@ void smbios_set_table(const void *at, unsigned int len)
     forced_len = (uint32_t)len;
     vendor_read = 0;
     vendor[0] = '\0';
+    sys_vendor[0] = '\0';
+    product[0] = '\0';
 }

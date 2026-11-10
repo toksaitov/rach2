@@ -8,11 +8,13 @@
  *
  * The firmware publishes a table, found by the entry point UEFI's
  * configuration table names or by an anchor this scans the read-only region
- * below a megabyte for. Only one thing is read out of it: the
- * vendor of the BIOS, which is what decides whether a reset command meant for
- * one firmware's system-management handler is sent at all. A machine whose
- * firmware is not the one that command belongs to must not be sent it: the
- * byte reaches a handler that was written for something else.
+ * below a megabyte for. Three strings are read out of it. The vendor of the
+ * BIOS decides whether a reset command meant for one firmware's
+ * system-management handler is sent at all: a machine whose firmware is not
+ * the one that command belongs to must not be sent it, since the byte
+ * reaches a handler that was written for something else. The system's maker
+ * and product name choose a driver's quirks for a machine, as Linux's DMI
+ * tables choose them.
  *
  * Nothing here writes, and nothing here is required. A machine with no table,
  * or a table this cannot read, reports an empty vendor and the caller falls
@@ -43,6 +45,16 @@ void smbios_init(uint64_t systab, int wide);
  * between machines of the same firmware.
  */
 int smbios_vendor_is(const char *prefix);
+
+/**
+ * Whether the system's manufacturer holds `maker` and its product name holds
+ * `name`, as the System Information structure gives them and as Linux's
+ * `DMI_MATCH` of DMI_SYS_VENDOR and DMI_PRODUCT_NAME matches them: each a
+ * substring, case-sensitively. A table that names neither matches nothing.
+ * A driver's quirk for a machine is chosen by this, as Linux's DMI table
+ * chooses it.
+ */
+int smbios_system_is(const char *maker, const char *name);
 
 /**
  * Read the structures at `at`, `len` bytes of them, rather than scanning for

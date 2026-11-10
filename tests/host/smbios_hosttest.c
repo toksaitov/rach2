@@ -13,7 +13,9 @@
  * read says which table was found: the SMBIOS 3 one first, past 4 GiB; the
  * SMBIOS one when there is no other or the other's checksum fails; the
  * 32-bit system table's; and the scanned one when the loader passed no
- * system table or one whose signature is wrong.
+ * system table or one whose signature is wrong. Structures given whole
+ * through `smbios_set_table` check the system's maker and product name
+ * matched as Linux's DMI_MATCH matches them.
  */
 
 extern int printf(const char *fmt, ...);
@@ -194,6 +196,39 @@ static int vendor_is(const char *want)
     return strcmp(smbios_bios_vendor(), want) == 0;
 }
 
+/**
+ * The System Information structure, type 1, read through
+ * `smbios_set_table`: its manufacturer and product name matched as Linux's
+ * DMI_MATCH matches them, a substring of each, whether it comes before or
+ * after the BIOS's structure, and a product the structure does not name.
+ */
+static void system_rows(void)
+{
+    /* Type 0 naming string 1; type 1, 27 bytes, naming strings 1 and 2. */
+    static const uint8_t bios_first[] = {
+        0,   18,  0,   0,   1,   0,   0,   0,   0,   0, 0,   0,   0,   0,   0,   0,   0,
+        0,   'I', 'n', 's', 'y', 'd', 'e', 0,   0,   1, 27,  1,   0,   1,   2,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0,   0,   0,   0,   0,   0,   0,
+        0,   0,   'F', 'U', 'J', 'I', 'T', 'S', 'U', 0, 'C', 'E', 'L', 'S', 'I', 'U', 'S',
+        ' ', 'H', '7', '3', '0', 0,   0,   127, 4,   2, 0,   0,   0};
+    /* Type 1 first, naming string 2 as the maker and no product. */
+    static const uint8_t no_product[] = {1,   8,   1,   0,   2,   0,   0,   0,   'x', 0,
+                                         'G', 'I', 'G', 'A', 'B', 'Y', 'T', 'E', 0,   0,
+                                         0,   5,   0,   0,   1,   'A', 'M', 'I', 0,   0};
+
+    smbios_set_table(bios_first, sizeof(bios_first));
+    CHECK(vendor_is("Insyde"), "the BIOS vendor before the system's structure");
+    CHECK(smbios_system_is("FUJITSU", "CELSIUS H730"), "the maker and product as named");
+    CHECK(smbios_system_is("FUJ", "H73"), "a part of each matches, as DMI_MATCH");
+    CHECK(!smbios_system_is("FUJITSU", "CELSIUS H760"), "another product does not match");
+    CHECK(!smbios_system_is("fujitsu", "CELSIUS H730"), "the match is case-sensitive");
+
+    smbios_set_table(no_product, sizeof(no_product));
+    CHECK(vendor_is("AMI"), "the BIOS vendor after the system's structure");
+    CHECK(!smbios_system_is("GIGABYTE", ""), "a system with no product name matches nothing");
+    smbios_set_table(0, 0);
+}
+
 /** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
@@ -242,6 +277,9 @@ int main(void)
     at_of(SCAN, 0x5A30)[0] = 0;
     smbios_init(0, 0);
     CHECK(vendor_is(""), "with no entry point anywhere the vendor is empty");
+    CHECK(!smbios_system_is("", ""), "with no table no system matches");
+
+    system_rows();
 
     if (fails) {
         printf("smbios_hosttest: %d check(s) failed\n", fails);
