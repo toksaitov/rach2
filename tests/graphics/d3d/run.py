@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run one Direct3D row in a private workspace; retain the named evidence directory."""
 import concurrent.futures
+import getopt
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,10 @@ def interrupted(signum, _frame):
 
 
 STALL = "dxgi.c:8040: Test marked todo: d3d10: test 2: Got unexpected present count 1, expected 2."
+# Each Vulkan device's ICD and the Linux reference taken on it.
+ADAPTERS = {"lavapipe": ("lvp_icd*.json", "linux.json"), "venus": ("venus_icd*.json", "venus.json")}
+# Each Wine path's DLL overrides, native or builtin, and WineD3D's renderer.
+PATHS = {"proton": ("n", "gl"), "wined3d": ("b", "gl"), "wined3dvk": ("b", "vulkan")}
 
 
 def run_command(argv, env, log, stop_at=None):
@@ -71,11 +76,35 @@ def summaries(text, expression):
     return [sum(int(row[i]) for row in found) for i in range(len(found[0]))] if found else None
 
 
+def adapter_name(text):
+    """Return the adapter a probe named, up to its vendor ID, or None when it named none."""
+    found = re.search(r"^adapter: (.*?) vendor 0x", text, re.M)
+    return found.group(1) if found else None
+
+
 def main():
-    """Run FAMILY ROW in OUT and compare each unit with the recorded Linux outcomes."""
-    if len(sys.argv) != 4:
-        raise SystemExit("usage: run.py probe|wine|vkd3d|private ROW OUT")
-    family, row, output = sys.argv[1:]
+    """Run FAMILY ROW in OUT and compare each unit with the recorded Linux outcomes.
+
+    -a names the Vulkan device, lavapipe (the default) or venus, whose ICD
+    alone the loader sees and whose Linux reference judges the row. -R runs
+    the row with no reference and records each unit, as the references are
+    taken; it fails only when a unit cannot be run.
+    """
+    usage = "usage: run.py [-a lavapipe|venus] [-R] probe|wine|vkd3d|private ROW OUT"
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "a:R")
+    except getopt.GetoptError:
+        raise SystemExit(usage)
+    adapter = "lavapipe"
+    record = False
+    for opt, value in opts:
+        if opt == "-a":
+            adapter = value
+        else:
+            record = True
+    if len(args) != 3 or adapter not in ADAPTERS:
+        raise SystemExit(usage)
+    family, row, output = args
     if os.geteuid() == 0:
         raise SystemExit("d3d: run as an ordinary user")
     out = Path(output).resolve()
@@ -90,7 +119,9 @@ def main():
             raise SystemExit(status)
         print("D3DROW OK private files", flush=True)
         return
-    ref = json.loads((HERE / "ref" / "linux.json").read_text())
+    pattern, reference = ADAPTERS[adapter]
+    tests = list(json.loads((HERE / "ref" / "linux.json").read_text())["vkd3d"])
+    ref = {} if record else json.loads((HERE / "ref" / reference).read_text())
     env = os.environ.copy()
     for key in ("PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
         env.pop(key, None)
@@ -100,10 +131,10 @@ def main():
                SteamGameId="2693", DXVK_LOG_PATH=str(out),
                PROTON_LOG="0" if family == "wine" else "1",
                PROTON_LOG_DIR=str(out))
-    icds = sorted(Path("/usr/share/vulkan/icd.d").glob("lvp_icd*.json"))
+    icds = sorted(Path("/usr/share/vulkan/icd.d").glob(pattern))
     icds = [p for p in icds if "i686" not in p.name]
     if len(icds) != 1:
-        raise SystemExit("d3d: expected one x86-64 lavapipe ICD")
+        raise SystemExit("d3d: expected one x86-64 %s ICD" % adapter)
     env["VK_DRIVER_FILES"] = str(icds[0])
     env["VK_ICD_FILENAMES"] = str(icds[0])
     work = None
@@ -139,15 +170,16 @@ def main():
                 os.close(wr)
         cpus = int(env.get("GRAPHICS_CPUS", os.cpu_count()))
         env["LP_NUM_THREADS"] = "0" if family == "wine" else str(cpus)
-        record = {
+        context = {
             "uname": list(os.uname()), "family": family, "row": row,
+            "adapter": adapter, "reference": None if record else reference,
             "environment": {k: v for k, v in env.items() if k.startswith((
                 "VK", "DXVK", "PROTON", "LP_", "MESA_", "GALLIUM", "GRAPHICS"))},
             "display": "Xvfb -noreset 1280x800x24", "cache": "empty private directory",
             "iommu": Path("/proc/cmdline").read_text(),
         }
-        (out / "environment.json").write_text(json.dumps(record, indent=2) + "\n")
-        print("d3d: environment: " + json.dumps(record), flush=True)
+        (out / "environment.json").write_text(json.dumps(context, indent=2) + "\n")
+        print("d3d: environment: " + json.dumps(context), flush=True)
         proton = Path(env.get("D3D_PROTON", "/opt/proton"))
         launch = [sys.executable, str(proton / "proton")]
         if family in ("probe", "wine"):
@@ -159,37 +191,47 @@ def main():
                 raise RuntimeError("Proton prefix creation failed: %s" % status)
             print("d3d: prefix: ready", flush=True)
             env["WINEPREFIX"] = str(work / "compat/pfx")
-            path = "proton" if family == "probe" else row.split("/", 1)[0]
-            kind = "b" if path == "wined3d" else "n"
+            # A probe's row is N, on Proton, or PATH/N; a unit's PATH/EXE:NAME.
+            path, _, tail = row.rpartition("/") if family == "probe" else row.partition("/")
+            path = path or "proton"
+            if path not in PATHS:
+                raise RuntimeError("unknown Wine path")
+            kind, renderer = PATHS[path]
             env["WINEDLLOVERRIDES"] = ";".join(
                 name + "=" + kind for name in ("d3d9", "d3d10core", "d3d11", "dxgi", "d3d12", "d3d12core"))
-            env["WINE_D3D_CONFIG"] = "renderer=gl"
+            env["WINE_D3D_CONFIG"] = "renderer=" + renderer
             if family == "probe":
-                if row not in ("9", "11", "12"):
+                if tail not in ("9", "11", "12"):
                     raise RuntimeError("unknown probe")
                 pixel = out / "pixels.txt"
                 env["PROBE_OUT"] = "Z:" + str(pixel)
-                rc, _ = run_command(launch + ["runinprefix", str(HERE / "probes" / ("d3d" + row + ".exe"))],
+                rc, _ = run_command(launch + ["runinprefix", str(HERE / "probes" / ("d3d" + tail + ".exe"))],
                                     env, out / "probe.log")
                 text = pixel.read_text() if pixel.exists() else ""
-                results[row] = {"exit": rc, "pixels": text,
-                                "matched": rc == 0 and ("D3D" + row + " OK") in text.splitlines()}
+                named = adapter_name(text)
+                # A reference that names the adapter requires the same one here.
+                expected = ref.get("probe", {}).get(row, {})
+                results[row] = {"exit": rc, "pixels": text, "adapter": named,
+                                "matched": record or (rc == 0 and ("D3D" + tail + " OK") in text.splitlines() and
+                                                      expected.get("adapter", named) == named)}
             else:
-                unit = row.split("/", 1)[1]
-                expected = ref["wine"][path][unit]
+                unit = tail
+                expected = {} if record else ref["wine"][path][unit]
                 exe, name = unit.split(":")
+                # Recording stops WineD3D's DXGI unit where it stalls on GL.
+                stall = expected.get("progress") or (record and path != "proton" and unit == "dxgi:dxgi")
                 rc, stopped = run_command(launch + ["runinprefix", str(HERE / "wine" / (exe + "_test.exe")), name],
-                                          env, out / "unit.log", STALL if expected.get("progress") else None)
+                                          env, out / "unit.log", STALL if stall else None)
                 counts = summaries((out / "unit.log").read_text(errors="replace"), WINE_SUMMARY % re.escape(name))
                 actual = {"exit": rc, "summary": counts, "progress": stopped}
-                actual["matched"] = stopped if expected.get("progress") else (
+                actual["matched"] = record or (stopped if expected.get("progress") else (
                     rc == expected["exit"] and (counts is not None) == expected["summary"] and
                     (counts is None or (counts[3] == expected["failures"] and
-                     counts[0] >= expected["min_checks"] and counts[4] <= expected["max_skipped"])))
+                     counts[0] >= expected["min_checks"] and counts[4] <= expected["max_skipped"]))))
                 results[unit] = actual
         elif family == "vkd3d":
             env["LD_LIBRARY_PATH"] = str(HERE / "vkd3d") + ":" + env.get("LD_LIBRARY_PATH", "")
-            names = list(ref["vkd3d"])
+            names = tests
             if row.isdigit() and int(row) < 8:
                 part = int(row)
                 names = (["test_create_device"] if part == 0 else
@@ -207,10 +249,15 @@ def main():
                 rc, _ = run_command([str(HERE / "vkd3d/d3d12")], unit_env, out / (name + ".log"))
                 text = (out / (name + ".log")).read_text(errors="replace")
                 counts = summaries(text, VK_SUMMARY)
+                if record:
+                    result = {"exit": rc, "summary": counts, "begun": name + " begin" in text,
+                              "ended": name + " end" in text, "matched": True}
+                    print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
+                    return name, result
                 expected = ref["vkd3d"][name]
                 # The discovery's SIGKILLs are memory exhaustion, never flakes.
                 flake = (rc in (-signal.SIGSEGV, 128 + signal.SIGSEGV) and
-                         name in ref["lavapipe_flakes"] and name + " begin" in text)
+                         name in ref["flakes"] and name + " begin" in text)
                 matched = flake or (counts is not None and name + " begin" in text and
                                     name + " end" in text and rc in (0, 1) and
                                     counts[1] in expected["failures"] and counts[0] >= expected["min_checks"] and
@@ -228,7 +275,7 @@ def main():
                 print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
         if not results or not all(v["matched"] for v in results.values()):
             return 1
-        print("D3DROW OK %s %s" % (family, row), flush=True)
+        print("D3DROW %s %s %s" % ("RECORDED" if record else "OK", family, row), flush=True)
         return 0
     finally:
         if server and work:
