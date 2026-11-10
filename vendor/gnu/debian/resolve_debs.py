@@ -27,14 +27,22 @@ def term(text):
 
 
 def resolve(index, output, unfollowed, roots):
-    """Write one deterministic closure, refusing unmet version constraints."""
+    """Write one deterministic closure, refusing unmet version constraints.
+
+    Of a package that several suites list, the highest version is taken, as
+    apt takes it; of equal versions, the later suite's entry.
+    """
     packages = {}
     with open(index, encoding='utf-8') as stream:
         for line in stream:
             row = line.rstrip('\n').split('\t')
             if len(row) != 8 or not re.fullmatch('[0-9a-f]{64}', row[5]):
                 raise ValueError('incomplete package index row')
-            packages[row[0]] = row
+            # A suite's older version, such as a security update that a
+            # point release superseded, never replaces a newer one.
+            had = packages.get(row[0])
+            if had is None or not accepts(row[1], ('<<', had[1])):
+                packages[row[0]] = row
     providers = collections.defaultdict(list)
     for name in sorted(packages):
         for provided in filter(None, packages[name][7].split(',')):
@@ -48,13 +56,20 @@ def resolve(index, output, unfollowed, roots):
                 return None
             if name in packages and accepts(packages[name][1], relation):
                 return name
-        for name, relation in alternatives:
-            for provider, version in providers[name]:
-                if relation is None or (version and accepts(version, relation)):
-                    return provider
+        # A provider already wanted satisfies a virtual package, as apt
+        # takes an installed one; failing that, the first by name.
+        found = [provider for name, relation in alternatives
+                 for provider, version in providers[name]
+                 if relation is None or (version and accepts(version, relation))]
+        for provider in found:
+            if provider in wanted or provider in seen:
+                return provider
+        if found:
+            return found[0]
         raise ValueError('no package satisfies ' + clause)
 
     queue = collections.deque()
+    wanted = set()
     for root in roots:
         name, sep, version = root.partition('=')
         if name not in packages:
@@ -62,6 +77,7 @@ def resolve(index, output, unfollowed, roots):
         if sep and packages[name][1] != version:
             raise ValueError(root + ': snapshot has ' + packages[name][1])
         queue.append(name)
+        wanted.add(name)
     seen = set()
     while queue:
         name = queue.popleft()
