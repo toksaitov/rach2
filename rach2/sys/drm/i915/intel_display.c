@@ -592,8 +592,11 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
         i915_write(hw, PIPE_DATA_N1(t), cfg->data_n);
         i915_write(hw, PIPE_LINK_M1(t), cfg->link_m);
         i915_write(hw, PIPE_LINK_N1(t), cfg->link_n);
-        /* The second set, for a refresh rate switch Rach2 does not make:
-         * zeroes, with the transfer unit's field of 0 less one. */
+    }
+    /* The second set, for a refresh rate switch Rach2 does not make:
+     * zeroes, with the transfer unit's field of 0 less one. Haswell has it
+     * on the eDP transcoder alone (intel_cpu_transcoder_has_m2_n2). */
+    if (cfg->output != INTEL_OUTPUT_HDMI && t == I915_TRANS_EDP) {
         i915_write(hw, PIPE_DATA_M2(t), 0x3fu << TU_SIZE_SHIFT);
         i915_write(hw, PIPE_DATA_N2(t), 0);
         i915_write(hw, PIPE_LINK_M2(t), 0);
@@ -639,24 +642,13 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
     i915_posting_read(hw, TRANSCONF(t));
 }
 
-/**
- * The pipe's colour, Linux's color commit for a pipe without tables or
- * user matrix: the legacy 8-bit gamma after the matrix, and for limited
- * range RGB the matrix that scales to 16-235, Linux's
- * ilk_csc_matrix_limited_range, which the planes then pass through.
- */
-static void color_commit(struct intel_crtc *c, const struct intel_crtc_config *cfg)
+/** Pipe `pipe`'s matrix for limited range RGB, Linux's
+ * ilk_csc_matrix_limited_range through ilk_update_pipe_csc. */
+static void write_csc_limited(struct i915_hw *hw, int pipe)
 {
-    struct i915_hw *hw = &c->i915->hw;
-    int pipe = c->pipe;
     /* (235 - 16) / 255 in 1.12, and 16 / 255 of full scale. */
     const uint32_t coeff = (235u - 16u) << 4, postoff = 16u << 4;
 
-    i915_write(hw, GAMMA_MODE(pipe), GAMMA_MODE_MODE_8BIT);
-    i915_write(hw, PIPE_CSC_MODE(pipe), CSC_MODE_YUV_TO_RGB | CSC_POSITION_BEFORE_GAMMA);
-    if (!cfg->limited_range) {
-        return;
-    }
     i915_write(hw, PIPE_CSC_PREOFF_HI(pipe), 0);
     i915_write(hw, PIPE_CSC_PREOFF_ME(pipe), 0);
     i915_write(hw, PIPE_CSC_PREOFF_LO(pipe), 0);
@@ -669,6 +661,26 @@ static void color_commit(struct intel_crtc *c, const struct intel_crtc_config *c
     i915_write(hw, PIPE_CSC_POSTOFF_HI(pipe), postoff);
     i915_write(hw, PIPE_CSC_POSTOFF_ME(pipe), postoff);
     i915_write(hw, PIPE_CSC_POSTOFF_LO(pipe), postoff);
+}
+
+/**
+ * The pipe's colour, Linux's color commit for a pipe without tables or
+ * user matrix: the legacy 8-bit gamma, and for limited range RGB the
+ * matrix that scales to 16-235, which the planes then pass through.
+ */
+static void color_commit(struct intel_crtc *c, const struct intel_crtc_config *cfg)
+{
+    struct i915_hw *hw = &c->i915->hw;
+    int pipe = c->pipe;
+
+    /* Linux's ivb_csc_mode: the matrix after the gamma when it makes
+     * limited range, before it otherwise; hsw_color_commit_arm writes the
+     * matrix first (ilk_color_commit_noarm) and the modes after. */
+    if (cfg->limited_range) {
+        write_csc_limited(hw, pipe);
+    }
+    i915_write(hw, GAMMA_MODE(pipe), GAMMA_MODE_MODE_8BIT);
+    i915_write(hw, PIPE_CSC_MODE(pipe), cfg->limited_range ? 0 : CSC_POSITION_BEFORE_GAMMA);
 }
 
 /** The link failed to train and a new mode set should try the link the
@@ -687,12 +699,75 @@ int intel_crtc_needs_well(int pipe, const struct intel_crtc_config *cfg)
            cfg->port != INTEL_PORT_A;
 }
 
+/** Wait for pipe `pipe`'s next vblank by its frame counter, 100 ms at
+ * most, as Linux's intel_crtc_wait_for_next_vblank; a pipe whose counter
+ * does not move is logged. */
+static void wait_next_vblank(struct drm_i915_private *i915, int pipe)
+{
+    uint32_t start = i915_read(&i915->hw, PIPE_FRMCOUNT_G4X(pipe));
+    int ms;
+
+    for (ms = 0; ms < 100; ms++) {
+        intel_display_msleep(i915, 1);
+        if (i915_read(&i915->hw, PIPE_FRMCOUNT_G4X(pipe)) != start) {
+            return;
+        }
+    }
+    klog(KLOG_WARN, "i915", "display: pipe %c: no vblank in 100 ms", 'A' + pipe);
+}
+
+/**
+ * The pipe whose vblanks pipe `c` waits for once it is on, Linux's
+ * hsw_mode_set_planes_workaround on Haswell: the first pipe `state` turns
+ * on waits for the one pipe already on and kept, and with none kept on,
+ * the second pipe it turns on waits for the first. -1 for none, as when
+ * two pipes stay on.
+ */
+static int workaround_pipe(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    struct drm_i915_private *i915 = c->i915;
+    int pipe, first = -1, other = -1, enabled = -1;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        const struct drm_crtc_state *cs = state->crtcs_new[i915->display.crtc[pipe].base.index];
+
+        if (cs && cs->active && drm_atomic_crtc_needs_modeset(cs)) {
+            if (first < 0) {
+                first = pipe;
+            } else if (other < 0) {
+                other = pipe;
+            }
+        }
+    }
+    if (first < 0) {
+        return -1;
+    }
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        struct drm_crtc *crtc = &i915->display.crtc[pipe].base;
+        const struct drm_crtc_state *cs =
+            state->crtcs_new[crtc->index] ? state->crtcs_new[crtc->index] : crtc->state;
+
+        if (!cs || !cs->active || drm_atomic_crtc_needs_modeset(cs)) {
+            continue;
+        }
+        if (enabled >= 0) {
+            return -1;
+        }
+        enabled = pipe;
+    }
+    if (enabled >= 0) {
+        return c->pipe == first ? enabled : -1;
+    }
+    return c->pipe == other ? first : -1;
+}
+
 /**
  * Turn pipe `c` on for its new state, Linux's hsw_crtc_enable with the
  * DDI encoder's hooks: the display well and the PLL, the link up (and
  * for DisplayPort trained), the pipe's source, the transcoder's M/N and
  * timings, the fitter, the colour, the primary plane off, the line times
- * and the watermarks, then the transcoder on and the output's last step.
+ * and the watermarks, then the transcoder on and the output's last step,
+ * and Haswell's two vblanks of another pipe when one comes on beside it.
  */
 static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
 {
@@ -703,6 +778,7 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
     struct drm_connector *connector;
     struct intel_dpll_plan plan;
     int32_t err;
+    int wa;
 
     err = compute_config(c, state->crtcs_new[c->base.index], state, cfg);
     if (err == 0 && cfg->active) {
@@ -732,6 +808,11 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
     intel_ddi_enable(i915, c->pipe, cfg);
     if (err == -EAGAIN && connector) {
         link_retry(connector);
+    }
+    wa = workaround_pipe(c, state);
+    if (wa >= 0) {
+        wait_next_vblank(i915, wa);
+        wait_next_vblank(i915, wa);
     }
     /* Linux's intel_crtc_enable_pipe_crc: a running source again, its
      * first frame dropped. */
