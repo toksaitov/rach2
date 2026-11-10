@@ -79,10 +79,12 @@ struct fd_entry;
  * lock. */
 void *kvm_vm_irq_hold(const struct fd_entry *e);
 
-/** Fill `row` with the `n`-th row with a nonzero count of the VM `vm`
- * holds, the pins first, then each vCPU's vectors in order. 1, or 0 past
- * the last. Under the big lock. */
-int kvm_vm_irq_row(void *vm, uint32_t n, struct kvm_irq_row *row);
+/** Fill `row` with the first row with a nonzero count of the VM `vm` at or
+ * after the position `*pos`, 0 at the start, the pins first, then each
+ * vCPU's vectors in order, and move `*pos` past it, so that a walk that
+ * sleeps between rows resumes where it stopped and prints no row twice. 1,
+ * or 0 past the last. Under the big lock. */
+int kvm_vm_irq_row(void *vm, uint32_t *pos, struct kvm_irq_row *row);
 
 /** Drop the reference `kvm_vm_irq_hold` took. */
 void kvm_vm_irq_done(void *vm);

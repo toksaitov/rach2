@@ -717,33 +717,37 @@ static int any_count(const uint32_t *counts, uint32_t n)
     return 0;
 }
 
-int kvm_vm_irq_row(void *arg, uint32_t n, struct kvm_irq_row *row)
+int kvm_vm_irq_row(void *arg, uint32_t *pos, struct kvm_irq_row *row)
 {
     struct kvm_vm *vm = (struct kvm_vm *)arg;
-    uint32_t pin, i, vec;
+    uint32_t at, i, vec;
 
     k_memset(row, 0, sizeof(*row));
     row->pin = 1;
-    for (pin = 0; pin < KVM_IOAPIC_NUM_PINS; pin++) {
-        if (kvm_ioapic_counts(vm, pin, row->counts) != 0) {
+    for (at = *pos; at < KVM_IOAPIC_NUM_PINS; at++) {
+        if (kvm_ioapic_counts(vm, at, row->counts) != 0) {
+            at = KVM_IOAPIC_NUM_PINS;
             break;
         }
-        if (any_count(row->counts, KVM_PIN_STEPS) && n-- == 0) {
-            row->index = pin;
+        if (any_count(row->counts, KVM_PIN_STEPS)) {
+            row->index = at;
+            *pos = at + 1u;
             return 1;
         }
     }
     row->pin = 0;
-    for (i = 0; i < vm->nr_vcpus; i++) {
-        for (vec = 0; vec < 256u; vec++) {
-            if (any_count(vm->vcpus[i]->irq_counts[vec], KVM_VEC_STEPS) && n-- == 0) {
-                row->vcpu = i;
-                row->index = vec;
-                k_memcpy(row->counts, vm->vcpus[i]->irq_counts[vec], sizeof(row->counts));
-                return 1;
-            }
+    for (at -= KVM_IOAPIC_NUM_PINS; at / 256u < vm->nr_vcpus; at++) {
+        i = at / 256u;
+        vec = at % 256u;
+        if (any_count(vm->vcpus[i]->irq_counts[vec], KVM_VEC_STEPS)) {
+            row->vcpu = i;
+            row->index = vec;
+            k_memcpy(row->counts, vm->vcpus[i]->irq_counts[vec], sizeof(row->counts));
+            *pos = KVM_IOAPIC_NUM_PINS + at + 1u;
+            return 1;
         }
     }
+    *pos = KVM_IOAPIC_NUM_PINS + at;
     return 0;
 }
 
