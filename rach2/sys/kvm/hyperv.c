@@ -350,9 +350,6 @@ static uint64_t mul_hi(uint64_t a, uint64_t b)
     return a1 * b1 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
 }
 
-/** The host's TSC in hertz, at the rate the kernel measured, or 0 when it
- * measured none. */
-
 /** The guest's TSC of `v` now. */
 static uint64_t guest_tsc(const struct kvm_vcpu *v)
 {
