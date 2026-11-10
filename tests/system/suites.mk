@@ -975,6 +975,11 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # reference guest's stored result, and the loss of the host's render server
 # under four dEQP-VK processes, as the Debian guest sees it, as the cases of
 # tests/cases/machine.venus.json.
+# `tests/run vkpresent`: vkcube presenting through Venus to Weston on the GNU
+# root under the venus profile, the frames it is held at read back inside
+# the guest and judged against the Debian reference guest's checksums, its
+# rate recorded beside the Debian guest's, as the case of
+# tests/cases/machine.vkpresent.json.
 # Etude runs them all with graphics_scenario (tests/graphics/Readme.md). Each
 # machine has graphics.ext2, the runners, the IGT list, the dEQP lists, the
 # guest's environment and the references, as a read-only data disk, and a

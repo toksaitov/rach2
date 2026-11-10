@@ -1,11 +1,11 @@
 /*
  * graphics_scenario.c: the graphics runners' cases (machine.webgl.json,
  * machine.video.json, machine.igt.json, machine.modetest.json,
- * machine.piglit.json, machine.glmark2.json and machine.venus.json). Each
- * boots an overlay of the GNU root with a display, runs one runner of
- * tests/graphics/runners on its case, and judges the result against the
- * Debian reference guest's stored one, with judge.py or, for the loss of
- * Venus's render server, diff, in the guest.
+ * machine.piglit.json, machine.glmark2.json, machine.venus.json and
+ * machine.vkpresent.json). Each boots an overlay of the GNU root with a
+ * display, runs one runner of tests/graphics/runners on its case, and judges
+ * the result against the Debian reference guest's stored one, with judge.py
+ * or, for the loss of Venus's render server, diff, in the guest.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +25,7 @@
 #define GRAPHICS_REF GRAPHICS_DIR "/ref/debian"
 #define VENUS_REF    GRAPHICS_DIR "/ref/venus-wsl/deqp"
 #define VENUS_LOST   GRAPHICS_DIR "/ref/venus-wsl/lost/lost.out"
+#define VKCUBE_REF   GRAPHICS_DIR "/ref/venus-wsl/vkcube"
 
 /* The Venus cases' dEQP-VK: the release Mesa 25.0.7's CI pins, Venus's ICD
  * alone, so that the guest's lavapipe is not the device, the lists and the
@@ -32,12 +33,16 @@
 #define VENUS_DEQP                                       \
     "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -i " \
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
-#define VENUS_SMOKE    GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
-#define VENUS_LIST     GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
-#define VENUS_FLAKES   GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
-#define VENUS_PARTS    8
+#define VENUS_SMOKE   GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
+#define VENUS_LIST    GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
+#define VENUS_FLAKES  GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
+#define VENUS_PARTS   8
 /* The run's counts and wall time, after its result line, for the log. */
-#define VENUS_SUMMARY  " && cat " GRAPHICS_DIR "/out/summary.txt"
+#define VENUS_SUMMARY " && cat " GRAPHICS_DIR "/out/summary.txt"
+/* vkcube presenting through Venus's ICD alone, as root. */
+#define VKCUBE_RUN                              \
+    "sh " GRAPHICS_DIR "/runners/vkcube.sh -i " \
+    "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
 /* The device loss case's runner, in the guest, as the test account. */
 #define VENUS_LOST_RUN "su -s /bin/sh test -c 'sh " GRAPHICS_DIR "/runners/venus-lost.sh "
 
@@ -51,7 +56,7 @@
 #define GRAPHICS_DATA "/tmp/graphics-data"
 
 /* The runners, by the family of the case's identity. */
-enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2, VENUS };
+enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2, VENUS, VKPRESENT };
 
 /* What one attempt shares among its steps. */
 struct graphics_case {
@@ -144,13 +149,14 @@ static int parse_venus(struct graphics_case *s, const char *name)
  * Read the case from the last part of its identity, after its family:
  * webgl's and video's as parse_browser says; igt's TEST-PROFILE, IGT's test
  * program TEST, whose name has no dash, on PROFILE; modetest's PROFILE;
- * piglit's PART, on virtio-vga; glmark2's `wayland`, on virtio-vga; and
- * venus's as parse_venus says. Give 0 for an identity of no such form.
+ * piglit's PART, on virtio-vga; glmark2's `wayland`, on virtio-vga;
+ * venus's as parse_venus says; and vkpresent's `vkcube`, on venus. Give 0
+ * for an identity of no such form.
  */
 static int parse(struct graphics_case *s, const char *id)
 {
-    static const char *const families[] = {".webgl.",  ".video.",   ".igt.",  ".modetest.",
-                                           ".piglit.", ".glmark2.", ".venus."};
+    static const char *const families[] = {".webgl.",  ".video.",   ".igt.",   ".modetest.",
+                                           ".piglit.", ".glmark2.", ".venus.", ".vkpresent."};
     const char *name = strrchr(id, '.'), *dash;
     size_t i, n;
 
@@ -186,6 +192,9 @@ static int parse(struct graphics_case *s, const char *id)
         return strcmp(name, "wayland") == 0 && set_profile(s, "virtio-vga");
     case VENUS:
         return parse_venus(s, name);
+    case VKPRESENT:
+        strcpy(s->profile, "venus");
+        return strcmp(name, "vkcube") == 0;
     }
     return 0;
 }
@@ -270,14 +279,14 @@ static void stage(struct graphics_case *s)
 /**
  * Write the runner's command line for the case to `runner`, and the line
  * that begins its result to `*pattern`. Give 1 when the runner runs as
- * root, IGT and modetest, which take the card's master, and 0 when it runs
- * as the test account.
+ * root, IGT, modetest and vkcube, which take the card's master, and 0 when
+ * it runs as the test account.
  */
 static int runner_line(struct graphics_case *s, char *runner, size_t size, const char **pattern)
 {
     static const char *const results[] = {
-        "webgl: result: ",  "video: result: ",   "igt: result: ", "modetest: result: ",
-        "piglit: result: ", "glmark2: result: ", "deqp: result: "};
+        "webgl: result: ",  "video: result: ",   "igt: result: ",  "modetest: result: ",
+        "piglit: result: ", "glmark2: result: ", "deqp: result: ", "vkcube: result: "};
 
     *pattern = results[s->runner];
     switch (s->runner) {
@@ -320,14 +329,18 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
                                 " vk" VENUS_SUMMARY,
                      VENUS_PARTS, s->part);
         return 0;
+    case VKPRESENT:
+        snprintf(runner, size, VKCUBE_RUN);
+        return 1;
     }
     return 0;
 }
 
 /**
  * Run the runner, as root or as the test account, with the environment of
- * a Done's run of its class, performance for glmark2 and conformance for
- * the others, assert that it ran its whole case, and print what it printed.
+ * a Done's run of its class, performance for glmark2 and vkcube and
+ * conformance for the others, assert that it ran its whole case, and print
+ * what it printed.
  */
 static void run(struct graphics_case *s)
 {
@@ -339,7 +352,8 @@ static void run(struct graphics_case *s)
     snprintf(env, sizeof(env),
              "GRAPHICS_CLASS=%s GRAPHICS_DONE=1; export GRAPHICS_CLASS GRAPHICS_DONE; "
              ". " GRAPHICS_DIR "/guest-env.sh && graphics_env > /tmp/graphics.env && %s",
-             s->runner == GLMARK2 ? "performance" : "conformance", runner);
+             s->runner == GLMARK2 || s->runner == VKPRESENT ? "performance" : "conformance",
+             runner);
     if (root)
         snprintf(command, sizeof(command), "%s", env);
     else
@@ -440,6 +454,12 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
         snprintf(command, size,
                  "glmark2 " GRAPHICS_REF "/%s/glmark2/validations " GRAPHICS_DIR "/out/validations",
                  s->profile);
+        break;
+    case VKPRESENT:
+        /* The rates are printed beside the verdict and not judged. */
+        snprintf(command, size,
+                 "vkcube " VKCUBE_REF "/frames " GRAPHICS_DIR "/out/frames " VKCUBE_REF
+                 "/timing " GRAPHICS_DIR "/out/timing");
         break;
     case VENUS:
         if (strcmp(s->test, "device-lost") == 0) {

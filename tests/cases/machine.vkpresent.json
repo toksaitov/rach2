@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.vkpresent",
+  "summary": "vkcube presenting through Venus over the testing PC's lavapipe to Weston on the GNU root under the venus profile, its held frames read back inside the guest and judged against the Debian reference guest's checksums in the same QEMU, its rate recorded beside the Debian guest's; the runner is tests/graphics/runners/vkcube.sh and the scenario tests/cases/machine/graphics_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.vkpresent.vkcube",
+      "behavior": "vkcube presents through Venus over the testing PC's lavapipe to a Weston of its own on the virtio-gpu card, with its GL renderer on virgl, and the 300th and 345th frames, held on the screen by a layer of the runner's, read back inside the guest give the Debian reference guest's checksums in the same QEMU; the rate of the first 300 presents in FIFO is recorded beside the Debian guest's",
+      "units": [
+        "tests/graphics/runners/vkcube.sh",
+        "tests/graphics/runners/vkhold.c",
+        "tests/graphics/runners/frame.py",
+        "tests/graphics/runners/judge.py",
+        "Vulkan-Tools' vkcube",
+        "Weston's DRM backend and GL renderer",
+        "Mesa 26.1.6's Venus driver and its Wayland swapchain",
+        "the virtio-gpu driver's blobs, PRIME and page flips"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "frames": "tests/graphics/ref/venus-wsl/vkcube/frames",
+          "timing": "tests/graphics/ref/venus-wsl/vkcube/timing"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "graphics_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root, which opens the card through libseat's noop backend for its Weston and ends the boot session's",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the venus display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the references"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run vkcube.sh -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json, Venus's ICD alone, as root with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel: it builds its layer with the root's compiler, ends the boot session's Weston, starts its own on the card, presents 346 frames, and reads back and checksums the 300th and the 345th while vkcube is held after each"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run judge.py vkcube on the frames and the Debian reference's, and print both rates"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 8,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "venus"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "vkcube.sh exits 0, vkcube having presented every frame and ended by itself with status 0 after each held frame was read back, and prints its result line",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "judge.py finds the 300th and the 345th frames read back at the Debian reference guest's size with its checksums, stored under tests/graphics/ref/venus-wsl/vkcube, and prints judge: result: pass",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 8000,
+        "cpu_ceiling_millis": 8000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics_scenario",
+          "node": "tests/cases/machine/graphics_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case compares a QEMU guest's vkcube through Venus with the Debian reference guest's in the same QEMU display profile"
+      }
+    }
+  ]
+}
