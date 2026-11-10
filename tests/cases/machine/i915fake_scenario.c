@@ -75,7 +75,7 @@ static int drm_field(const char *out, const char *key, const char *value)
 static int kms_listed(const char *out)
 {
     return net_find(out, "eDP-1") == NULL &&
-           net_count(out, "formats: C8 * RG16 XR24 XB24 XR30 XB30 XB4H") == 3 &&
+           net_count(out, "formats: C8*RG16 XR24 XB24 XR30 XB30 XB4H") == 3 &&
            net_count(out, "formats: XR24 XB24 XR30 XB30 XR4H XB4H YUYV YVYU UYVY VYUY") == 3 &&
            net_count(out, "formats: AR24") == 3;
 }

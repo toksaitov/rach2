@@ -106,7 +106,7 @@
         },
         {
           "assertion_id": "kms",
-          "checks": "modetest lists eDP-1 disconnected, and three primary planes of C8, RG16, XR24, XB24, XR30, XB30 and XB4H, three sprites of XR24, XB24, XR30, XB30, XR4H, XB4H, YUYV, YVYU, UYVY and VYUY, and three cursors of AR24",
+          "checks": "modetest lists no eDP-1 connector, and three primary planes of C8, RG16, XR24, XB24, XR30, XB30 and XB4H, three sprites of XR24, XB24, XR30, XB30, XR4H, XB4H, YUYV, YVYU, UYVY and VYUY, and three cursors of AR24",
           "source": "scenario"
         },
         {
