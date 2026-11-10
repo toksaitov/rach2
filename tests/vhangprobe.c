@@ -92,6 +92,16 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Zero the `n` bytes at `p`, a buffer the kernel fills. */
+static void clear(void *p, size_t n)
+{
+    char *d = p;
+
+    while (n--) {
+        *d++ = 0;
+    }
+}
+
 /** Copy `n` bytes from `src` to `dst`. */
 static void copy(void *dst, const void *src, size_t n)
 {
@@ -143,6 +153,7 @@ static long lflag_of(int fd)
     unsigned char tio[TIO_SIZE];
     unsigned int lflag;
 
+    clear(tio, sizeof(tio));
     if (syscall3(SYS_IOCTL, fd, TCGETS, (long)tio) != 0) {
         return -1;
     }
@@ -181,17 +192,16 @@ static int eperm_row(long uid)
  */
 static int child_rows(int ptn, long uid)
 {
-    /* The kernel's sigaction: handler (SIG_IGN), flags, restorer, mask. */
-    struct {
-        unsigned long handler, flags, restorer;
-        unsigned long long mask;
-    } action = {1, 0, 0, 0};
+    /* The kernel's sigaction as words: the handler, SIG_IGN, then the
+     * flags, the restorer and the 64-bit mask, all zero. */
+    static const unsigned long action[5] = {1, 0, 0, 0, 0};
     unsigned char tio[TIO_SIZE];
     unsigned int lflag;
     struct pollfd pfd;
     char path[24], byte;
     long slave, fd;
 
+    clear(tio, sizeof(tio));
     pts_path(path, ptn);
     if (syscall0(SYS_SETSID) < 0) {
         return ROW_SETUP;
@@ -207,7 +217,7 @@ static int child_rows(int ptn, long uid)
     if (syscall3(SYS_IOCTL, slave, TCSETS, (long)tio) != 0 || (lflag_of((int)slave) & ECHO)) {
         return ROW_SETUP;
     }
-    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)&action, 0, 8) != 0) {
+    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)action, 0, 8) != 0) {
         return ROW_SETUP;
     }
     if (syscall0(SYS_VHANGUP) != 0) {

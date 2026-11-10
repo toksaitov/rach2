@@ -56,6 +56,16 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Zero the `n` bytes at `p`, a buffer the kernel fills. */
+static void clear(void *p, size_t n)
+{
+    char *d = p;
+
+    while (n--) {
+        *d++ = 0;
+    }
+}
+
 /** Copy `n` bytes from `src` to `dst`. */
 static void copy(void *dst, const void *src, size_t n)
 {
@@ -235,6 +245,7 @@ static int owner_of(long fd, unsigned long *uid, unsigned long *gid)
     unsigned char st[KSTAT_SIZE];
     unsigned int u, g;
 
+    clear(st, sizeof(st));
     if (syscall2(SYS_FSTAT, fd, (long)st) != 0) {
         return -1;
     }
