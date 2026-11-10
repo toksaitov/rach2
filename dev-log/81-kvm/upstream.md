@@ -78,3 +78,14 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Rach2: `h_hypercall` in `rach2/sys/kvm/emulate.c` writes at CS's base plus RIP.
 * Status: unreported.
 * Next: run the reproduction on a current kernel as a kvm-unit-tests case, check whether a later release adds the segment's base, and report it to the KVM list with the case.
+
+## Cppcheck calls a test of a negated 64-bit value always true or always false
+
+* Project: Cppcheck 2.19.0, Ubuntu's build on the testing PC under WSL, which `tools/setup/judges` records, and Cppcheck 2.22.0, Homebrew's build on the Mac.
+* Fails: after `lo = 0u - lo;` on an `unsigned long long` or, on an LP64 platform, an `unsigned long`, the check `knownConditionTrueFalse` says that `lo == 0` is always true, and after `lo = ~lo + 1u;` that it is always false. Neither is so: the first holds only for a `lo` of 0, and the second fails only then. With `unsigned` operands and `lo = -lo;` there is no message. The lines of Cppcheck's source that do it are not traced.
+* Found: 2026-11-10, on the Mac, in milestone 81, task 81-12, when the push hook refused `h_div` in `rach2/sys/kvm/emulate.c`, which negates IDIV's 128-bit dividend and takes the carry from the low half.
+* Reproduction: `cppcheck --std=c89 --platform=unix64 -q --enable=warning,style m.c` on a file that holds `typedef unsigned long long uint64_t; uint64_t f(uint64_t hi, uint64_t lo); uint64_t f(uint64_t hi, uint64_t lo) { lo = 0u - lo; if (lo == 0) { hi++; } return hi ^ lo; }` prints `Condition 'lo==0' is always true`; with `lo = ~lo + 1u;` it prints `always false`. Both versions print both.
+* Evidence: `dev-log/81-kvm/upstream.md`; the commit "Take IDIV's carry from the dividend's low half before negating it, which Cppcheck misjudges after".
+* Rach2: `h_div` tests the low half before it negates it, a form Cppcheck does not misjudge; no suppression was added.
+* Status: unreported.
+* Next: try Cppcheck's current release and its `--debug` value flow on the reproduction, search its tracker for the unsigned negation, and report it there with the file.
