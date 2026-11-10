@@ -206,9 +206,9 @@ struct kvm_vm {
     uint32_t refs;
     struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
     uint32_t nr_vcpus;
-    uint64_t tss_addr;     /* KVM_SET_TSS_ADDR */
-    uint64_t ident_addr;   /* KVM_SET_IDENTITY_MAP_ADDR; 0xFEFFC000 by default */
-    int64_t clock_offset;  /* the guest's kvmclock less the host's monotonic ns */
+    uint64_t tss_addr;    /* KVM_SET_TSS_ADDR */
+    uint64_t ident_addr;  /* KVM_SET_IDENTITY_MAP_ADDR; 0xFEFFC000 by default */
+    int64_t clock_offset; /* the guest's kvmclock less the host's monotonic ns */
     /* The kvmclock's master clock (pvclock.c): while `master_clock` is set,
      * the kvmclock at the host's TSC count t is master_ns + clock_offset
      * plus t - master_tsc at the TSC's rate, `master_mul` and
@@ -229,20 +229,20 @@ struct kvm_vm {
     int64_t tsc_cur_offset;
     uint64_t tsc_last_ns, tsc_last_write, tsc_last_khz;
     uint32_t disable_exits; /* KVM_CAP_X86_DISABLE_EXITS: KVM_X86_DISABLE_EXITS_* */
-    int irqchip;           /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
-    uint32_t boot_cpu_id;  /* KVM_SET_BOOT_CPU_ID */
-    uint32_t dirty_manual; /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
-    uint32_t noncoherent;  /* devices assigned that do not snoop (`kvm_tdp_noncoherent`) */
-    void *slots;           /* slots.c's */
-    void *tdp;             /* tdp.c's */
-    void *irq;             /* irq.c's */
-    void *pic;             /* i8259.c's, with the full irqchip */
-    void *ioapic;          /* ioapic.c's, with the full irqchip */
-    void *pit;             /* i8254.c's, after KVM_CREATE_PIT or PIT2 */
-    void *iobus;           /* iobus.c's */
-    void *vfio;            /* vfio.c's bridge; holds a VM reference */
-    void *hv;              /* hyperv.c's */
-    void *backend;         /* the backend's */
+    int irqchip;            /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
+    uint32_t boot_cpu_id;   /* KVM_SET_BOOT_CPU_ID */
+    uint32_t dirty_manual;  /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
+    uint32_t noncoherent;   /* devices assigned that do not snoop (`kvm_tdp_noncoherent`) */
+    void *slots;            /* slots.c's */
+    void *tdp;              /* tdp.c's */
+    void *irq;              /* irq.c's */
+    void *pic;              /* i8259.c's, with the full irqchip */
+    void *ioapic;           /* ioapic.c's, with the full irqchip */
+    void *pit;              /* i8254.c's, after KVM_CREATE_PIT or PIT2 */
+    void *iobus;            /* iobus.c's */
+    void *vfio;             /* vfio.c's bridge; holds a VM reference */
+    void *hv;               /* hyperv.c's */
+    void *backend;          /* the backend's */
 };
 
 #define KVM_IRQCHIP_NONE   0
