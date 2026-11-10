@@ -1,0 +1,42 @@
+judge: worse: igt@gem_busy@busy@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_busy@busy@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_busy@close-race: fail here, pass in the reference
+judge: worse: igt@gem_busy@extended@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_busy@extended@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_busy@parallel@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_busy@parallel@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_create@busy-create: fail here, pass in the reference
+judge: worse: igt@gem_create@busy-create@smem0: fail here, pass in the reference
+judge: worse: igt@gem_create@hog-create: fail here, pass in the reference
+judge: worse: igt@gem_create@hog-create@smem0: fail here, pass in the reference
+judge: worse: igt@gem_exec_basic@basic@vcs0-smem: not run here, pass in the reference
+judge: worse: igt@gem_exec_basic@basic@vecs0-smem: not run here, pass in the reference
+judge: worse: igt@gem_exec_store@cachelines@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_exec_store@cachelines@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_exec_store@dword@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_exec_store@dword@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_exec_store@pages@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_exec_store@pages@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@await: fail here, pass in the reference
+judge: worse: igt@gem_wait@await@all-engines: fail here, pass in the reference
+judge: worse: igt@gem_wait@await@bcs0: fail here, pass in the reference
+judge: worse: igt@gem_wait@await@rcs0: fail here, pass in the reference
+judge: worse: igt@gem_wait@await@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@await@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@busy@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@busy@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@wait@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@wait@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@write-busy: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@all-engines: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@bcs0: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@rcs0: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@write-busy@vecs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@write-wait: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@all-engines: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@bcs0: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@rcs0: fail here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@vcs0: not run here, pass in the reference
+judge: worse: igt@gem_wait@write-wait@vecs0: not run here, pass in the reference
+judge: result: fail results 211 in the reference, 187 here, 41 worse than Debian's
