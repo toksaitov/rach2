@@ -1201,6 +1201,10 @@ A call the vDSO answers is not counted.
 Live KVM virtual machines, virtual processors, memory slots, guest-physical
 table pages and run-page mapping objects, on x86-64.
 A fork shares a mapping object; the last reference releases it.
+.It Li kvm_ioeventfd_signals , kvm_irqfd_raises
+Guest writes that an ioeventfd took, and MSIs that an irqfd raised, since
+boot, modulo 2^32, on x86-64: the work KVM did for a guest without an exit
+to its caller.
 These counts include objects retained by mappings after their descriptors close
 .Pq Xr kvm 4 .
 .It Li kvm_exits

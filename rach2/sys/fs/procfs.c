@@ -2869,7 +2869,8 @@ static void procfs_entry_holds(struct procfs_text *t)
     }
 }
 
-/** Append live KVM objects on x86-64; every count is under the big lock. */
+/** Append live KVM objects on x86-64, each counted under the big lock, and
+ * the work KVM did for guests without an exit to their callers. */
 static void procfs_kvm_counts(struct procfs_text *t)
 {
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
@@ -2882,6 +2883,11 @@ static void procfs_kvm_counts(struct procfs_text *t)
         ap_u32(t, kvm_resource_count((enum kvm_resource)i));
         ap_ch(t, '\n');
     }
+    ap_str(t, "kvm_ioeventfd_signals ");
+    ap_u32(t, kvm_event_count(KVM_EVENT_IOEVENTFD));
+    ap_str(t, "\nkvm_irqfd_raises ");
+    ap_u32(t, kvm_event_count(KVM_EVENT_IRQFD));
+    ap_ch(t, '\n');
 #else
     (void)t;
 #endif
