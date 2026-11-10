@@ -302,7 +302,9 @@ fi
 # SKIP does not name and no earlier such layer installed. A package an earlier
 # layer of the build's architecture installed is left out of a later one when
 # its version is the same and refused when it is not; WORK/debian.packages
-# lists each package and version those layers installed.
+# lists each package and version those layers installed. A later layer's
+# package that the i386 layer installed at the same version, which
+# WORK/i386.packages lists, shares its files with it as above.
 install_debian()
 {
     meta="$OUT/work/debian/$1"
