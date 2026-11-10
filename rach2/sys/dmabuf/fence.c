@@ -235,7 +235,22 @@ static void array_release(struct dma_fence *f)
     kfree(a);
 }
 
-static const struct dma_fence_ops array_ops = {NULL, NULL, NULL, array_release};
+/** An array's driver name, Linux's dma-fence-array's. */
+static const char *array_driver_name(struct dma_fence *f)
+{
+    (void)f;
+    return "dma_fence_array";
+}
+
+/** An array's timeline name, Linux's dma-fence-array's. */
+static const char *array_timeline_name(struct dma_fence *f)
+{
+    (void)f;
+    return "unbound";
+}
+
+static const struct dma_fence_ops array_ops = {array_driver_name, array_timeline_name, NULL,
+                                               array_release};
 
 /** Carry a child's error and complete the array after its last child. */
 static void array_done(struct dma_fence *f, struct dma_fence_cb *cb)
