@@ -154,7 +154,8 @@ landed()
 
 # tidy: remove what finished work left in the clone. A worktree under the
 # clone's .claude/worktrees or build/worktrees goes when `closed_task` finds its
-# task closed, since a rebased task's commit is not master's, or, when it is not
+# task closed, since a rebased task's commit is not master's, after `salvage`
+# has moved its run logs out, or, when it is not
 # named for a task, when its HEAD has landed, which a task's new worktree has
 # before its first commit while its session works in it from the clone's top; no
 # process has its working directory in it, as a loop has in the worktree it runs
@@ -177,10 +178,12 @@ tidy()
         else
             landed "$head" || continue
         fi
-        if ! disposable "$w"; then
-            log "tidy: kept: $w: $why"
-        elif inside "$w" "$busy"; then
+        if inside "$w" "$busy"; then
             log "tidy: kept: $w: a process has its working directory in it"
+        elif [ -n "$(task_of "$w")" ] && ! salvage "$w"; then
+            log "tidy: kept: $w: its run logs could not be moved out"
+        elif ! disposable "$w"; then
+            log "tidy: kept: $w: $why"
         elif err=$(git worktree remove "$w" 2>&1); then
             log "tidy: removed the worktree $w"
         else
@@ -194,6 +197,24 @@ tidy()
             log "tidy: deleted the branch $b"
         fi
     done
+}
+
+# salvage W: move the run evidence of the closed task's worktree W out of
+# it, so that the worktree and its images can go: each file under W's
+# build/runs and build/flow smaller than 16 MiB, its logs and notes, goes to
+# the same path under build/runs/task-N of the main working tree, where
+# sweep.sh ages it out as any other log; the larger files, disk images and
+# dumps, go with the worktree. Fail, and leave W whole, when a file cannot be
+# copied.
+salvage()
+{
+    n=$(task_of "$1")
+    dest=$(primary "$1")/build/runs/task-$n
+    (cd "$1/build" 2> /dev/null && find runs flow -type f -size -16384k 2> /dev/null) |
+        while read -r f; do
+            mkdir -p "$dest/$(dirname "$f")" && cp -p "$1/build/$f" "$dest/$f" || exit 1
+        done || return 1
+    rm -rf "$1/build/runs" "$1/build/flow"
 }
 
 # task_of W: print N when W is a worktree named N, tN or task-N, made for the
