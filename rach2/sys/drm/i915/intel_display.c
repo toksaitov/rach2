@@ -752,12 +752,15 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
         return;
     }
     klog(KLOG_INFO, "i915",
-         "display: pipe %c set: %ux%u in %ux%u@%u on %s %c, %u kHz, %u bpp, %u lane%s at %u kHz%s",
+         "display: pipe %c set: %ux%u in %ux%u@%u, %u kHz, %u bpp, %u lane%s at %u kHz%s%s",
          'A' + c->pipe, (unsigned)cfg->src_w, (unsigned)cfg->src_h, (unsigned)cfg->mode.hdisplay,
          (unsigned)cfg->mode.vdisplay, (unsigned)drm_mode_vrefresh(&cfg->mode),
-         cfg->output == INTEL_OUTPUT_EDP ? "eDP" : "DP", 'A' + cfg->port, (unsigned)cfg->mode.clock,
-         (unsigned)cfg->bpp, (unsigned)cfg->lanes, cfg->lanes == 1 ? "" : "s",
-         (unsigned)cfg->port_clock, cfg->pfit ? ", fitted" : "");
+         (unsigned)cfg->mode.clock, (unsigned)cfg->bpp, (unsigned)cfg->lanes,
+         cfg->lanes == 1 ? "" : "s", (unsigned)cfg->port_clock, cfg->pfit ? ", fitted" : "",
+         cfg->output != INTEL_OUTPUT_DP ? ""
+         : cfg->port == INTEL_PORT_B    ? ", DP B"
+         : cfg->port == INTEL_PORT_C    ? ", DP C"
+                                        : ", DP D");
 }
 
 /**
@@ -1211,6 +1214,7 @@ static int32_t ports_init(struct drm_i915_private *i915)
 
         p->port = port;
         p->hpd_pin = HPD_PORT_B + i;
+        p->dp.i915 = i915;
         if (!enc || !(strap & strap_bit[i])) {
             continue;
         }
