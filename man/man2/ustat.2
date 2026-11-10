@@ -1,0 +1,107 @@
+.Dd November 10, 2026
+.Dt USTAT 2
+.Os
+.Sh NAME
+.Nm ustat
+.Nd get the free space of a mounted file system by its device
+.Sh SYNOPSIS
+.In ustat.h
+.Ft int
+.Fn ustat "dev_t dev" "struct ustat *ubuf"
+.Sh DESCRIPTION
+.Fn ustat
+reports in
+.Fa ubuf
+the free blocks and free inodes of the mounted file system whose device
+number is
+.Fa dev ,
+in the encoding
+.Xr stat 2
+gives
+.Va st_dev :
+the device node a volume was mounted from, or the number of its own
+that a mount on no device has.
+A bind mount shows a file system that is already mounted, and is not
+one of its own.
+.Bd -literal -offset indent
+struct ustat {
+    daddr_t f_tfree;    /* free blocks */
+    ino_t   f_tinode;   /* free inodes */
+    char    f_fname[6]; /* zero */
+    char    f_fpack[6]; /* zero */
+};
+.Ed
+.Pp
+The counts are those of
+.Xr statfs 2 :
+.Va f_tfree
+is its
+.Va f_bfree ,
+in its unit of
+.Va f_bsize ,
+and
+.Va f_tinode
+its
+.Va f_ffree .
+A file system that keeps no count of them, as
+.Pa /proc ,
+.Pa /dev
+and
+.Pa /sys
+keep none, gives zero.
+.Va f_tfree
+is an int, and a count past it is cut to its low 32 bits, as Linux cuts
+it.
+.Ss System call numbers
+The call is 62 on i386 and 136 on x86-64.
+An i386 program's
+.Vt struct ustat
+is 20 bytes, with a 32-bit
+.Va f_tinode ;
+an x86-64 program's is 32, with a 64-bit one.
+The x86-64 kernel gives a program that enters it by
+.Ql int $0x80
+the i386 layout, with both counts cut to 32 bits, as
+.Xr ia32 7
+describes.
+.Sh RETURN VALUES
+.Rv -std ustat
+.Sh EXAMPLES
+The default suite's
+.Pa tests/oldfsprobe.c
+calls
+.Fn ustat
+with the
+.Va st_dev
+of a tmpfs file and compares the counts with those
+.Xr statfs 2
+gives, and checks that a device number no mount has is
+.Er EINVAL .
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EINVAL
+No mounted file system has the device number
+.Fa dev .
+.It Bq Er EFAULT
+.Fa ubuf
+is outside the caller's writable memory.
+.El
+.Pp
+The error of the file system's own count, such as
+.Er EIO
+from a disk, is returned as it comes.
+.Sh SEE ALSO
+.Xr stat 2 ,
+.Xr statfs 2 ,
+.Xr sysfs 2
+.Sh STANDARDS
+The call is Linux's, which still builds it, and its rules are those of
+Linux 6.12.
+musl declares it in
+.In sys/ustat.h
+only for some architectures; a program calls it through
+.Xr syscall 2 .
+The root of the boot image, whose
+.Va st_dev
+is 0, answers as any other mount does; Linux gives no file system that
+number.

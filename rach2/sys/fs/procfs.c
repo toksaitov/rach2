@@ -4169,28 +4169,48 @@ static int procfs_gen_loop(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/** Render /proc/filesystems: devfs and proc, each after `nodev`, then every
- * type mount(2) accepts (`vfs_type_at`), KRFFS volumes among them, with
- * `nodev` before one that stands on no device. The type of the KRFFS root
- * is not among them: the root is an image the kernel maps, which mount(2)
- * does not place. */
+/* The types /proc/filesystems lists ahead of those mount(2) accepts. */
+static const char *const procfs_fixed_types[] = {"devfs", "proc"};
+
+/** The types /proc/filesystems lists: devfs and proc, then every type
+ * mount(2) accepts (`vfs_type_at`), KRFFS volumes among them. The type of
+ * the KRFFS root is not among them: the root is an image the kernel maps,
+ * which mount(2) does not place. */
+int procfs_filesystem_at(int idx, const char **name)
+{
+    const struct vfs_type *ty;
+    int fixed = (int)(sizeof(procfs_fixed_types) / sizeof(procfs_fixed_types[0]));
+
+    if (idx < 0) {
+        return -1;
+    }
+    if (idx < fixed) {
+        *name = procfs_fixed_types[idx];
+        return 1;
+    }
+    ty = vfs_type_at(idx - fixed);
+    if (!ty) {
+        return -1;
+    }
+    *name = ty->name;
+    return ty->nodev ? 1 : 0;
+}
+
+/** Render /proc/filesystems: a line for each type `procfs_filesystem_at`
+ * gives, with `nodev` before one that stands on no device. */
 static int procfs_gen_filesystems(struct procfs_text *t)
 {
+    const char *name;
+    int nodev;
     int i;
 
-    ap_str(t, "nodev\tdevfs\n");
-    ap_str(t, "nodev\tproc\n");
-    for (i = 0; vfs_type_at(i); i++) {
-        const struct vfs_type *ty = vfs_type_at(i);
-
-        if (ty) {
-            if (ty->nodev) {
-                ap_str(t, "nodev");
-            }
-            ap_ch(t, '\t');
-            ap_str(t, ty->name);
-            ap_ch(t, '\n');
+    for (i = 0; (nodev = procfs_filesystem_at(i, &name)) >= 0; i++) {
+        if (nodev) {
+            ap_str(t, "nodev");
         }
+        ap_ch(t, '\t');
+        ap_str(t, name);
+        ap_ch(t, '\n');
     }
     return t->nomem ? -1 : t->len;
 }

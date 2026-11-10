@@ -152,6 +152,8 @@
 #define SYS_FSTAT64                 197
 #define SYS_STATFS64                268
 #define SYS_FSTATFS64               269
+#define SYS_USTAT                   62
+#define SYS_SYSFS                   135
 #define SYS_FCNTL64                 221
 #define SYS_GETTID                  224
 #define SYS_OPENAT                  295

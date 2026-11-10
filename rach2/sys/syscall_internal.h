@@ -600,6 +600,19 @@ long sys_statfs64(isr_params_t *params);
 
 long sys_fstatfs64(isr_params_t *params);
 
+/**
+ * The free blocks and free inodes of the mounted file system whose device
+ * number, in the encoding stat(2) gives st_dev, is `dev`: the core of
+ * ustat(2) on both ABIs. 0, or -EINVAL when no active mount has that
+ * number, or the error of the file system's statfs. A bind mount is not a
+ * file system of its own; a type that counts neither gives 0 for both.
+ */
+int ksys_ustat_counts(uint32_t dev, uint64_t *bfree, uint64_t *ffree);
+
+long sys_ustat(isr_params_t *params);
+
+long sys_sysfs(isr_params_t *params);
+
 long sys_fstat64(isr_params_t *params);
 
 long sys_fstatat64(isr_params_t *params);

@@ -874,8 +874,25 @@ long compat_sys_epoll_pwait2(isr_params_t *params)
                        UPTR(SC_ARG(params, 4)), SC_ARG(params, 5));
 }
 
+/** ustat (62): the device number and i386's struct ustat, whose counts are
+ * truncated to 32 bits as Linux's compat_sys_ustat truncates them. */
+long compat_sys_ustat(isr_params_t *params)
+{
+    struct ia32_ustat u;
+    uint64_t bfree;
+    uint64_t ffree;
+    int rc = ksys_ustat_counts((uint32_t)SC_ARG(params, 0), &bfree, &ffree);
+
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(&u, 0, sizeof(u));
+    u.f_tfree = (int32_t)bfree;
+    u.f_tinode = (uint32_t)ffree;
+    return copy_to_user((void __user *)UPTR(SC_ARG(params, 1)), &u, sizeof(u)) != 0 ? -EFAULT : 0;
+}
+
 /* Each answers ENOSYS until its translation is written (ia32.h). */
-IA32_STUB(compat_sys_ustat)
 IA32_STUB(compat_sys_io_setup)
 IA32_STUB(compat_sys_io_getevents_time32)
 IA32_STUB(compat_sys_io_submit)

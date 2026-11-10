@@ -265,6 +265,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_PERSONALITY] = sys_personality;
     table[SYS_STATFS] = sys_statfs;
     table[SYS_FSTATFS] = sys_fstatfs;
+    table[SYS_USTAT] = sys_ustat;
+    table[SYS_SYSFS] = sys_sysfs;
     table[SYS_GETPRIORITY] = sys_getpriority;
     table[SYS_SETPRIORITY] = sys_setpriority;
     table[SYS_SCHED_SETPARAM] = sys_sched_setparam;
