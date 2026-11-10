@@ -155,12 +155,11 @@ static const char *const fake_fault_names[FAKE_NFAULTS] = {"submit", "bind", "ha
  * which neither the tiling nor the swizzle moves a byte. */
 #define FAKE_DETILE_RUN 16u
 
-/* The shadow of one page of the aperture: `va` its kernel address and
- * `phys` its frame, NULL and 0 until it is first reached; `pte` the GTT's
- * entry and `fence_lo` and `fence_hi` the fence over it when it was last
- * filled, 0 for none. */
+/* The shadow of one page of the aperture: `phys` its frame, 0 until it is
+ * first reached, a frame of the allocator's and not of the kernel's heap,
+ * since a full aperture is 256 MiB; `pte` the GTT's entry and `fence_lo`
+ * and `fence_hi` the fence over it when it was last filled, 0 for none. */
 struct fake_shadow {
-    uint8_t *va;
     uintptr_t phys;
     uint32_t pte;
     uint32_t fence_lo;
@@ -784,8 +783,11 @@ static void fake_shadow_copy(struct i915_fake *f, struct fake_shadow *sh, uint32
     uint32_t tiling = (lo & (1u << I965_FENCE_TILING_Y_SHIFT)) ? I915_TILING_Y : I915_TILING_X;
     uint32_t swizzle = fake_swizzle(f, tiling), off;
     uintptr_t mapped = 0;
-    uint8_t *page = 0;
+    uint8_t *page = 0, *va = (uint8_t *)kmap_temp(sh->phys);
 
+    if (!va) {
+        return;
+    }
     for (off = 0; off < 4096u; off += FAKE_DETILE_RUN) {
         uint32_t at = addr + off;
         uint64_t phys;
@@ -796,7 +798,7 @@ static void fake_shadow_copy(struct i915_fake *f, struct fake_shadow *sh, uint32
         phys = fake_gtt_phys(f, at);
         if (phys == 0 || phys > (uint64_t)(uintptr_t)-1) {
             if (!to_memory) {
-                k_memset(sh->va + off, 0, FAKE_DETILE_RUN);
+                k_memset(va + off, 0, FAKE_DETILE_RUN);
             }
             continue;
         }
@@ -807,18 +809,19 @@ static void fake_shadow_copy(struct i915_fake *f, struct fake_shadow *sh, uint32
             mapped = (uintptr_t)(phys & ~(uint64_t)0xfffu);
             page = (uint8_t *)kmap_temp(mapped);
             if (!page) {
-                return;
+                break;
             }
         }
         if (to_memory) {
-            k_memcpy(page + (phys & 0xfffu), sh->va + off, FAKE_DETILE_RUN);
+            k_memcpy(page + (phys & 0xfffu), va + off, FAKE_DETILE_RUN);
         } else {
-            k_memcpy(sh->va + off, page + (phys & 0xfffu), FAKE_DETILE_RUN);
+            k_memcpy(va + off, page + (phys & 0xfffu), FAKE_DETILE_RUN);
         }
     }
     if (page) {
         kunmap_temp(page);
     }
+    kunmap_temp(va);
 }
 
 /** The shadow of the aperture's page `index`, made when `make`; NULL when
@@ -838,10 +841,10 @@ static struct fake_shadow *fake_shadow_of(struct i915_fake *f, uint32_t index, i
         }
     }
     sh = &(*dir)[index % FAKE_SHADOW_DIR];
-    if (!sh->va && make) {
-        sh->va = (uint8_t *)kalloc_pages(1, &sh->phys);
+    if (!sh->phys && make) {
+        sh->phys = alloc_frame();
     }
-    return sh->va ? sh : 0;
+    return sh->phys ? sh : 0;
 }
 
 /** Fill the shadow `sh` of the aperture's page at `addr` from memory and
@@ -928,8 +931,8 @@ static void fake_shadow_free(struct i915_fake *f)
             continue;
         }
         for (i = 0; i < FAKE_SHADOW_DIR; i++) {
-            if (f->shadow[d][i].va) {
-                kfree_pages(f->shadow[d][i].va, 1);
+            if (f->shadow[d][i].phys) {
+                free_frame(f->shadow[d][i].phys);
             }
         }
         kfree(f->shadow[d]);
