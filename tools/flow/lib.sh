@@ -153,16 +153,17 @@ landed()
 }
 
 # tidy: remove what finished work left in the clone. A worktree under the
-# clone's .claude/worktrees or build/worktrees goes when its HEAD has landed,
-# or `closed_task` finds its task closed, since a rebased task's commit is not
-# master's; no process has its working directory in it, as a loop has in the
-# worktree it runs in, and `git worktree remove` takes it without force, which
-# it refuses for a worktree with changes, untracked files or a lock, as Claude
-# Code keeps on a helper's worktree while the helper runs, and only when
-# `disposable` finds nothing ignored in it but build output, which goes with
-# it. A branch goes when it has landed, unless it is master or a branch checked
-# out here or in a worktree, which git refuses to delete. Each removal is
-# logged.
+# clone's .claude/worktrees or build/worktrees goes when `closed_task` finds its
+# task closed, since a rebased task's commit is not master's, or, when it is not
+# named for a task, when its HEAD has landed, which a task's new worktree has
+# before its first commit while its session works in it from the clone's top; no
+# process has its working directory in it, as a loop has in the worktree it runs
+# in, and `git worktree remove` takes it without force, which it refuses for a
+# worktree with changes, untracked files or a lock, as Claude Code keeps on a
+# helper's worktree while the helper runs, and only when `disposable` finds
+# nothing ignored in it but build output, which goes with it. A branch goes when
+# it has landed, unless it is master or a branch checked out here or in a
+# worktree, which git refuses to delete. Each removal is logged.
 tidy()
 {
     top=$(git rev-parse --show-toplevel) || return 1
@@ -170,7 +171,11 @@ tidy()
     git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r w; do
         case $w in "$top"/.claude/worktrees/*|"$top"/build/worktrees/*) ;; *) continue ;; esac
         head=$(git -C "$w" rev-parse -q --verify HEAD) || continue
-        landed "$head" || closed_task "$w" "$head" || continue
+        if [ -n "$(task_of "$w")" ]; then
+            closed_task "$w" "$head" || continue
+        else
+            landed "$head" || continue
+        fi
         disposable "$w" && ! inside "$w" "$busy" &&
             git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
     done
@@ -183,12 +188,19 @@ tidy()
     done
 }
 
-# closed_task W HEAD: succeed when W, a worktree named tN or task-N, was made
+# task_of W: print N when W is a worktree named N, tN or task-N, made for the
+# task N.
+task_of()
+{
+    basename "$1" | sed -n 's/^t\{0,1\}\(ask-\)\{0,1\}\([0-9][0-9]*\)$/\2/p'
+}
+
+# closed_task W HEAD: succeed when W, a worktree named N, tN or task-N, was made
 # for the task N and that issue is closed. A detached W's commit HEAD gets the
 # branch done/N, so that removing W leaves it on a branch.
 closed_task()
 {
-    n=$(basename "$1" | sed -n 's/^t\(ask-\)\{0,1\}\([0-9][0-9]*\)$/\2/p')
+    n=$(task_of "$1")
     [ -n "$n" ] || return 1
     [ "$(gh issue view "$n" --repo toksaitov/rach2 --json state --jq .state 2> /dev/null)" = CLOSED ] ||
         return 1
