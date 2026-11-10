@@ -796,10 +796,13 @@ static void check_base(struct i915_fake *f)
               bound->hw.gsm == f->gtt);
     CHECK("probe: every entry on the scratch page",
           f->gtt[0] == bound->ggtt.scratch_pte && f->gtt[1000] == bound->ggtt.scratch_pte);
-    CHECK("probe: both rings started", bound->gt.engine[I915_RCS0].running &&
-                                           bound->gt.engine[I915_BCS0].running &&
-                                           (R(f, RING_CTL(RENDER_RING_BASE)) & RING_VALID) &&
-                                           (R(f, RING_CTL(BLT_RING_BASE)) & RING_VALID));
+    CHECK("probe: the four rings started",
+          bound->gt.engine[I915_RCS0].running && bound->gt.engine[I915_BCS0].running &&
+              bound->gt.engine[I915_VCS0].running && bound->gt.engine[I915_VECS0].running &&
+              (R(f, RING_CTL(RENDER_RING_BASE)) & RING_VALID) &&
+              (R(f, RING_CTL(BLT_RING_BASE)) & RING_VALID) &&
+              (R(f, RING_CTL(GEN6_BSD_RING_BASE)) & RING_VALID) &&
+              (R(f, RING_CTL(VEBOX_RING_BASE)) & RING_VALID));
     CHECK("probe: no wait timed out", bound->hw.timeouts == 0 && bound->uncore.fifo_timeouts == 0 &&
                                           bound->uncore.thread_timeouts == 0);
 }
@@ -818,7 +821,10 @@ static void check_after_bind(struct i915_fake *f)
     CHECK("probe: edu's registers mapped", edu_maps == 1 && f->doorbell == (uintptr_t)edu_regs);
     CHECK("probe: every source masked but the user interrupts and the master enable",
           R(f, GTIMR) == 0xffffffffu && R(f, DEIMR) == 0xffffffffu &&
-              R(f, GTIER) == (GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT) &&
+              R(f, GEN6_PMIMR) == 0xffffffffu &&
+              R(f, GTIER) ==
+                  (GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT | GT_BSD_USER_INTERRUPT) &&
+              (R(f, GEN6_PMIER) & PM_VEBOX_USER_INTERRUPT) &&
               R(f, DEIER) == DE_MASTER_IRQ_CONTROL && f->messages == 0);
 }
 

@@ -36,6 +36,7 @@ extern void free(void *p);
 static const struct i915_model_block *const i915_model_blocks[I915_MODEL_BLOCKS + 1] = {
     &i915_model_ring_rcs,   &i915_model_reset_block,
     &i915_model_rc6_rps,    &i915_model_base_fw,
+    &i915_model_ring_vcs,   &i915_model_ring_vecs,
     &i915_model_ring_bcs,   &i915_model_base_unclaimed,
     &i915_model_ring_irq,   &i915_model_base_pw,
     &i915_model_sink_block, &i915_model_ddi_ports,

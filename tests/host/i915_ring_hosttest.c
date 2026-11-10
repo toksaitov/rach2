@@ -135,7 +135,7 @@ static int npages, pages_live, pages_refuse;
 
 /* The pages the started GT holds: each ring's four and its status page,
  * and the PPGTT's scratch table. */
-#define TEST_GT_PAGES 11
+#define TEST_GT_PAGES 21
 static uint64_t next_phys = 0x50000000ull;
 
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
@@ -467,6 +467,27 @@ static void check_started(struct i915_model *m, struct drm_i915_private *i915,
               e->ring_ggtt + I915_RING_SIZE <= i915->ggtt.total);
 }
 
+/** Whether the user interrupts of the render, blitter and video rings are
+ * the GT's enables and the video enhancement ring's power management's,
+ * with both banks masked. */
+static int user_irqs_enabled(struct i915_model *m)
+{
+    return i915_model_peek(m, GTIER) ==
+               (GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT | GT_BSD_USER_INTERRUPT) &&
+           i915_model_peek(m, GTIMR) == 0xffffffffu &&
+           i915_model_peek(m, GEN6_PMIER) == PM_VEBOX_USER_INTERRUPT &&
+           i915_model_peek(m, GEN6_PMIMR) == 0xffffffffu;
+}
+
+/** Whether each ring's handler is registered at its bit of its bank. */
+static int handlers_registered(struct drm_i915_private *i915)
+{
+    return i915->irq.fn[I915_IRQ_GT][0] && i915->irq.fn[I915_IRQ_GT][22] &&
+           i915->irq.data[I915_IRQ_GT][22] == &i915->gt.engine[I915_BCS0] &&
+           i915->irq.data[I915_IRQ_GT][12] == &i915->gt.engine[I915_VCS0] &&
+           i915->irq.data[I915_IRQ_PM][10] == &i915->gt.engine[I915_VECS0];
+}
+
 /** The rings started on a quiet chip, and stopped. */
 static void row_start(void)
 {
@@ -476,7 +497,7 @@ static void row_start(void)
     int i;
 
     m.nlog = 0;
-    CHECK("start: both rings start", i915_gt_init(i915) == 0);
+    CHECK("start: the four rings start", i915_gt_init(i915) == 0);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         check_started(&m, i915, &i915->gt.engine[i]);
     }
@@ -487,10 +508,10 @@ static void row_start(void)
     CHECK("start: the blitter's", i915->gt.engine[I915_BCS0].mmio_base == BLT_RING_BASE &&
                                       i915->gt.engine[I915_BCS0].hws_pga == BLT_HWS_PGA_GEN7 &&
                                       i915->gt.engine[I915_BCS0].irq_bit == GT_BLT_USER_INTERRUPT);
-    CHECK("start: four objects in 40 KiB below the GTT's top, the PPGTT's directory below them",
+    CHECK("start: eight objects in 80 KiB below the GTT's top, the PPGTT's directory below them",
           i915->gt.ggtt_top == i915->ggtt.total &&
               i915->gt.ppgtt.pd_ggtt ==
-                  ((i915->ggtt.total - 2u * (4096u + I915_RING_SIZE) - I915_PPGTT_PD_BYTES) &
+                  ((i915->ggtt.total - 4u * (4096u + I915_RING_SIZE) - I915_PPGTT_PD_BYTES) &
                    ~(uint64_t)(I915_PPGTT_PD_ALIGN - 1u)) &&
               i915->gt.ggtt_bottom == i915->gt.ppgtt.pd_ggtt);
     wake = at(&m, FORCEWAKE_MT, 0x00010001u);
@@ -499,26 +520,26 @@ static void row_start(void)
     last = at(&m, RING_MI_MODE(BLT_RING_BASE), I915_MASKED_DISABLE(STOP_RING));
     CHECK("start: under forcewake, released after",
           wake < first && last < release && i915->uncore.wake_count == 0);
-    CHECK("start: the GT's user interrupts of both rings enabled, and masked",
-          i915_model_peek(&m, GTIER) == (GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT) &&
-              i915_model_peek(&m, GTIMR) == 0xffffffffu);
+    CHECK("start: the GT's user interrupts of three rings and power management's of the "
+          "fourth enabled, and masked",
+          user_irqs_enabled(&m));
     CHECK("start: every other source masked and off, the master enable on",
           i915_model_peek(&m, DEIER) == DE_MASTER_IRQ_CONTROL &&
-              i915_model_peek(&m, DEIMR) == 0xffffffffu && i915_model_peek(&m, GEN6_PMIER) == 0 &&
-              i915_model_peek(&m, GEN6_PMIMR) == 0xffffffffu && i915_model_peek(&m, SDEIER) == 0 &&
+              i915_model_peek(&m, DEIMR) == 0xffffffffu && i915_model_peek(&m, SDEIER) == 0 &&
               i915_model_peek(&m, SDEIMR) == 0xffffffffu);
-    CHECK("start: the handlers registered",
-          i915->irq.fn[I915_IRQ_GT][0] && i915->irq.fn[I915_IRQ_GT][22] &&
-              i915->irq.data[I915_IRQ_GT][22] == &i915->gt.engine[I915_BCS0]);
+    CHECK("start: the handlers registered", handlers_registered(i915));
     CHECK("start: no wait reached its bound", i915->hw.timeouts == 0);
-    CHECK("start: logged", logged("rings: rcs0 and bcs0 started: 16 KiB each"));
+    CHECK("start: logged", logged("rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each"));
 
     i915_gt_fini(i915);
     CHECK("stop: each ring disabled and its interrupt off",
           i915_model_peek(&m, RING_CTL(RENDER_RING_BASE)) == 0 &&
               i915_model_peek(&m, RING_CTL(BLT_RING_BASE)) == 0 &&
-              i915_model_peek(&m, GTIER) == 0 && !i915->gt.engine[0].running &&
-              !i915->gt.engine[1].running);
+              i915_model_peek(&m, RING_CTL(GEN6_BSD_RING_BASE)) == 0 &&
+              i915_model_peek(&m, RING_CTL(VEBOX_RING_BASE)) == 0 &&
+              i915_model_peek(&m, GTIER) == 0 && i915_model_peek(&m, GEN6_PMIER) == 0 &&
+              !i915->gt.engine[0].running && !i915->gt.engine[1].running &&
+              !i915->gt.engine[2].running && !i915->gt.engine[3].running);
     CHECK("stop: the pages given back and the GTT's space",
           pages_live == 0 && i915->gt.ggtt_bottom == i915->gt.ggtt_top);
     CHECK("stop: the entries on the scratch page again",

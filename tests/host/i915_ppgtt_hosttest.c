@@ -136,7 +136,7 @@ static int pages_left = -1;
 
 /* The pages the started GT holds: each ring's four and its status page,
  * and the PPGTT's scratch table. */
-#define TEST_GT_PAGES 11
+#define TEST_GT_PAGES 21
 static uint64_t next_phys = 0x50000000ull;
 
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
@@ -453,7 +453,7 @@ static void row_init(void)
     struct i915_model m;
     struct drm_i915_private *i915 = fresh(&m);
     struct i915_ppgtt *pp = &i915->gt.ppgtt;
-    uint64_t rings_bottom = i915->ggtt.total - 2u * (4096u + I915_RING_SIZE);
+    uint64_t rings_bottom = i915->ggtt.total - 4u * (4096u + I915_RING_SIZE);
     uint32_t i, ok = 1, pd_index;
     long eco, gam, rcs_dclv;
 
@@ -486,6 +486,8 @@ static void row_init(void)
                                         0)) >= 0);
     check_ring(&m, i915, &i915->gt.engine[I915_RCS0]);
     check_ring(&m, i915, &i915->gt.engine[I915_BCS0]);
+    check_ring(&m, i915, &i915->gt.engine[I915_VCS0]);
+    check_ring(&m, i915, &i915->gt.engine[I915_VECS0]);
     eco = last_write(&m, GAC_ECO_BITS);
     gam = last_write(&m, GAM_ECOCHK);
     rcs_dclv = at(&m, RING_PP_DIR_DCLV(RENDER_RING_BASE), PP_DIR_DCLV_2G);
@@ -505,9 +507,9 @@ static void row_init(void)
               !pp->scratch_pt);
     done(&m);
 
-    /* Room for the rings' four allocations, none for the scratch table. */
+    /* Room for the rings' eight allocations, none for the scratch table. */
     i915 = fresh(&m);
-    pages_left = 4;
+    pages_left = 8;
     CHECK("init: no page for the scratch table fails the start",
           i915_gt_init(i915) == -ENOMEM && logged("ppgtt: no page for the scratch table"));
     CHECK("init: nothing left", pages_live == 0 && !pp->ready &&

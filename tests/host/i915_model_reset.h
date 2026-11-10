@@ -14,8 +14,9 @@
 
 /*
  * The reset. A write of GEN6_GDRST resets each domain whose bit it sets:
- * the rings of the render domain, of the blitter's, or of the whole GPU go
- * back to their power-on state, which ends a hang, and a reset of the
+ * the rings of the render domain, the blitter's, the media domain's, the
+ * video enhancement engine's, or of the whole GPU go back to their
+ * power-on state, which ends a hang, and a reset of the
  * whole GPU clears every fence register as well; the bit then reads clear.
  * A domain whose bit is in `stuck`, the test's, resets nothing and its bit
  * stays set. `writes` counts the writes and `resets` each domain's resets

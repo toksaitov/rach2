@@ -665,8 +665,9 @@ static long at(const struct i915_model *m, uint32_t reg, uint32_t value)
  * twice more by RPS's own reset, as Linux's gen6_rps_reset_interrupts. */
 static const uint32_t banks[][5] = {
     {DEIMR, DEIER, DEIIR, DE_MASTER_IRQ_CONTROL, 2},
-    {GTIMR, GTIER, GTIIR, GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT, 2},
-    {GEN6_PMIMR, GEN6_PMIER, GEN6_PMIIR, 0, 4},
+    {GTIMR, GTIER, GTIIR, GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT | GT_BSD_USER_INTERRUPT,
+     2},
+    {GEN6_PMIMR, GEN6_PMIER, GEN6_PMIIR, PM_VEBOX_USER_INTERRUPT, 4},
     {SDEIMR, SDEIER, SDEIIR, 0, 2}};
 
 /**

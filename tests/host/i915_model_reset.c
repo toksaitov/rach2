@@ -46,6 +46,12 @@ static void reset_write(struct i915_model *m, void *priv, uint32_t reg, uint32_t
     if (done & (GEN6_GRDOM_FULL | GEN6_GRDOM_BLT)) {
         bcs_reset(m, i915_model_ring_state(m, 1));
     }
+    if (done & (GEN6_GRDOM_FULL | GEN6_GRDOM_MEDIA)) {
+        vcs_reset(m, i915_model_ring_state(m, 2));
+    }
+    if (done & (GEN6_GRDOM_FULL | GEN6_GRDOM_VECS)) {
+        vecs_reset(m, i915_model_ring_state(m, 3));
+    }
     if (done & GEN6_GRDOM_FULL) {
         for (i = 0; i < I915_FENCE_REGS_HSW; i++) {
             i915_model_poke(m, FENCE_REG_GEN6_LO(i), 0);

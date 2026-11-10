@@ -82,7 +82,8 @@ struct i915_model_irq {
     void *(*dma)(struct i915_model *m, uint64_t phys);
 };
 
-/** The render ring's state of `m` (0) or the blitter's (1). */
+/** The state of the ring of `m` at the engine index `ring` (I915_RCS0,
+ * I915_BCS0, I915_VCS0 or I915_VECS0 of i915.h), or NULL. */
 struct i915_model_ring *i915_model_ring_state(struct i915_model *m, int ring);
 
 /** The interrupt state of `m`. */

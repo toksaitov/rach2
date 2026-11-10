@@ -544,11 +544,31 @@ static struct dma_fence *sync_fence(int32_t fd)
 
 /* ---- the rows ---- */
 
+/** 78-14a.1: the batch `b` started on the video rings, the fifth to the
+ * seventh start of rings() below, and retired. */
+static void rings_video(uint32_t b)
+{
+    CHECK(exec1(b, I915_EXEC_BSD) == 0 && nstarts == 5 && starts[4].engine == I915_VCS0 &&
+              starts[4].cmd == (MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_I965),
+          "rings: BSD starts it on vcs0, unprivileged");
+    CHECK(exec1(b, I915_EXEC_BSD | I915_EXEC_BSD_RING2) == 0 && nstarts == 6 &&
+              starts[5].engine == I915_VCS0,
+          "rings: BSD's ring flags name vcs0 too, Haswell's one video ring");
+    CHECK(exec1(b, I915_EXEC_VEBOX) == 0 && nstarts == 7 && starts[6].engine == I915_VECS0 &&
+              starts[6].cmd == (MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_I965),
+          "rings: VEBOX starts it on vecs0, unprivileged");
+    idle();
+    CHECK(!dev_a->gt.engine[I915_VCS0].requests && !dev_a->gt.engine[I915_VECS0].requests,
+          "rings: the video rings' requests retired once their interrupts are taken");
+}
+
 /**
- * 78-5b.2: the batch starts on the ring the flags name, unprivileged, at
- * its binding plus its start, the default and RENDER on the render ring
- * and BLT on the blitter; the request's fence is on the object until it
- * retires; the engines that do not run are refused.
+ * 78-5b.2 and 78-14a.1: the batch starts on the ring the flags name,
+ * unprivileged, at its binding plus its start, the default and RENDER on
+ * the render ring, BLT on the blitter, BSD with any of its ring flags on
+ * the video ring and VEBOX on the video enhancement ring; the request's
+ * fence is on the object until it retires; a ring number past them and
+ * BSD's flags on another ring are refused.
  */
 static void rings(void)
 {
@@ -581,10 +601,10 @@ static void rings(void)
     CHECK(execbuf(&a) == 0 && nstarts == 4 && starts[3].addr == (uint32_t)offset_of(b) + 64u,
           "rings: the batch starts at its start");
     idle();
-    CHECK(exec1(b, I915_EXEC_BSD) == -EINVAL && exec1(b, I915_EXEC_VEBOX) == -EINVAL &&
-              exec1(b, 5) == -EINVAL && exec1(b, I915_EXEC_RENDER | (1u << 13)) == -EINVAL &&
-              nstarts == 4,
-          "rings: BSD, VEBOX, ring 5 and BSD's flags on RENDER EINVAL");
+    rings_video(b);
+    CHECK(exec1(b, 5) == -EINVAL && exec1(b, I915_EXEC_RENDER | (1u << 13)) == -EINVAL &&
+              nstarts == 7,
+          "rings: ring 5 and BSD's flags on RENDER EINVAL");
     close_handle(&file_a, b);
 }
 

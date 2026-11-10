@@ -646,6 +646,25 @@ static int32_t ctx_set(uint32_t id, uint64_t param, uint32_t size, uint64_t valu
 
 /* ---- 78-5a.1: hardware contexts ---- */
 
+/**
+ * Whether the commands around the MI_SET_CONTEXT at byte `at` of `ring`
+ * are Linux's mi_set_context on Haswell's four rings: arbitration off, an
+ * MI_LOAD_REGISTER_IMM of the other three rings' RING_PSMI_CTL before it
+ * and after it, the last read back by MI_STORE_REGISTER_MEM, and
+ * arbitration on.
+ */
+static int around_set_context(const uint32_t *ring, long at)
+{
+    const uint32_t *c = ring + at / 4;
+
+    return at >= 36 && c[-9] == (MI_ARB_ON_OFF | MI_ARB_DISABLE) &&
+           c[-8] == MI_LOAD_REGISTER_IMM(3) && c[-7] == RING_PSMI_CTL(BLT_RING_BASE) &&
+           c[-5] == RING_PSMI_CTL(GEN6_BSD_RING_BASE) && c[-3] == RING_PSMI_CTL(VEBOX_RING_BASE) &&
+           c[3] == MI_LOAD_REGISTER_IMM(3) && c[8] == RING_PSMI_CTL(VEBOX_RING_BASE) &&
+           c[10] == (MI_STORE_REGISTER_MEM | MI_SRM_LRM_GLOBAL_GTT) &&
+           c[11] == RING_PSMI_CTL(VEBOX_RING_BASE) && c[14] == (MI_ARB_ON_OFF | MI_ARB_ENABLE);
+}
+
 /** 78-5a.1: the images, the default state, the switch and its flags. */
 static void row_contexts(void)
 {
@@ -692,11 +711,9 @@ static void row_contexts(void)
     CHECK("contexts: MI_SET_CONTEXT with the image, saved and restored with its extended state",
           at >= 0 && rcs->ring[at / 4 + 1] == (a->image_ggtt | flags) &&
               rcs->ring[at / 4 + 2] == MI_NOOP && rcs->ring[at / 4 - 1] == MI_NOOP);
-    CHECK("contexts: arbitration off around it, and the blitter's sleep messages held",
-          at >= 20 && rcs->ring[at / 4 - 5] == (MI_ARB_ON_OFF | MI_ARB_DISABLE) &&
-              rcs->ring[at / 4 - 4] == MI_LOAD_REGISTER_IMM(1) &&
-              rcs->ring[at / 4 - 3] == RING_PSMI_CTL(BLT_RING_BASE) &&
-              rcs->ring[at / 4 + 10] == (MI_ARB_ON_OFF | MI_ARB_ENABLE));
+    CHECK("contexts: arbitration off around it, and the other three engines' sleep messages "
+          "held, the last one's read after as a delay",
+          around_set_context(rcs->ring, at));
     CHECK("contexts: the request completes, its image restored",
           rq && i915_request_wait(rq, 0, 100000000) == 0 && !ring->faulted &&
               ring->ctx.restores >= 1 && rcs->last_ce == a);
@@ -893,6 +910,16 @@ static void row_create_destroy(void)
     done(&m);
 }
 
+/** Whether SSEU through `p`, which points at `sseu`, answers no slices
+ * and no EUs for the engine class `engine_class`. */
+static int sseu_none(struct drm_i915_gem_context_param *p,
+                     struct drm_i915_gem_context_param_sseu *sseu, uint16_t engine_class)
+{
+    sseu->engine.engine_class = engine_class;
+    return i915_gem_context_getparam_ioctl(&dev.drm, p, &file_a) == 0 && sseu->slice_mask == 0 &&
+           sseu->max_eus_per_subslice == 0;
+}
+
 /** 78-5a.2: CONTEXT_GETPARAM and SETPARAM, each parameter and refusal. */
 static void row_params(void)
 {
@@ -941,11 +968,9 @@ static void row_params(void)
           i915_gem_context_getparam_ioctl(&dev.drm, &p, &file_a) == 0 && sseu.slice_mask == 1 &&
               sseu.subslice_mask == 3 && sseu.min_eus_per_subslice == 10 &&
               sseu.max_eus_per_subslice == 10);
-    sseu.engine.engine_class = I915_ENGINE_CLASS_COPY;
-    CHECK("getparam: SSEU of the blitter: none",
-          i915_gem_context_getparam_ioctl(&dev.drm, &p, &file_a) == 0 && sseu.slice_mask == 0 &&
-              sseu.max_eus_per_subslice == 0);
-    sseu.engine.engine_class = I915_ENGINE_CLASS_VIDEO;
+    CHECK("getparam: SSEU of the blitter: none", sseu_none(&p, &sseu, I915_ENGINE_CLASS_COPY));
+    CHECK("getparam: SSEU of the video ring: none", sseu_none(&p, &sseu, I915_ENGINE_CLASS_VIDEO));
+    sseu.engine.engine_class = 4; /* I915_ENGINE_CLASS_COMPUTE */
     CHECK("getparam: SSEU of an engine that does not run is EINVAL",
           i915_gem_context_getparam_ioctl(&dev.drm, &p, &file_a) == -EINVAL);
     sseu.engine.engine_class = I915_ENGINE_CLASS_RENDER;
@@ -1111,8 +1136,10 @@ static void row_engine_maps(void)
     CHECK("engines: a map that cannot be read is EFAULT",
           ctx_set(id, I915_CONTEXT_PARAM_ENGINES, 12, BAD_USER) == -EFAULT);
     map.engines[1].engine_class = I915_ENGINE_CLASS_VIDEO;
+    map.engines[1].engine_instance = 1;
+    CHECK("engines: a second video ring, which Haswell lacks, is ENOENT",
+          set_map(id, 2) == -ENOENT);
     map.engines[1].engine_instance = 0;
-    CHECK("engines: an engine that does not run is ENOENT", set_map(id, 2) == -ENOENT);
     map.engines[1].engine_class = I915_ENGINE_CLASS_COPY;
     CHECK("engines: an empty map is taken", set_map(id, 0) == 0 && engine_of(&file_a, id, 0) == 0);
 
@@ -1136,7 +1163,7 @@ static void row_engine_maps(void)
     ext_put16(36, 2);
     CHECK("engines: BOND past the map is EINVAL", set_map(id, 2) == -EINVAL);
     ext_put16(36, 0);
-    ext_buf[32] = I915_ENGINE_CLASS_VIDEO;
+    ext_buf[32] = 4; /* I915_ENGINE_CLASS_COMPUTE */
     CHECK("engines: BOND with a master that does not run is EINVAL", set_map(id, 2) == -EINVAL);
     ext_buf[32] = I915_ENGINE_CLASS_RENDER;
     ext_buf[48] = 1;
@@ -1325,7 +1352,7 @@ static const struct {
     {I915_PARAM_HAS_OVERLAY, 0, 0},
     {I915_PARAM_HAS_PAGEFLIPPING, 0, 1},
     {I915_PARAM_HAS_EXECBUF2, 0, 1},
-    {I915_PARAM_HAS_BSD, 0, 0},
+    {I915_PARAM_HAS_BSD, 0, 1},
     {I915_PARAM_HAS_BLT, 0, 1},
     {I915_PARAM_HAS_RELAXED_FENCING, 0, 1},
     {I915_PARAM_HAS_COHERENT_RINGS, 0, 1},
@@ -1337,7 +1364,7 @@ static const struct {
     {I915_PARAM_HAS_WAIT_TIMEOUT, 0, 1},
     {I915_PARAM_HAS_SEMAPHORES, 0, 0},
     {I915_PARAM_HAS_PRIME_VMAP_FLUSH, 0, 1},
-    {I915_PARAM_HAS_VEBOX, 0, 0},
+    {I915_PARAM_HAS_VEBOX, 0, 1},
     {I915_PARAM_HAS_SECURE_BATCHES, 0, 0},
     {I915_PARAM_HAS_PINNED_BATCHES, 0, 1},
     {I915_PARAM_HAS_EXEC_NO_RELOC, 0, 1},
@@ -1444,6 +1471,25 @@ static void row_getparam(void)
     done(&m);
 }
 
+/**
+ * Whether the four entries of ENGINE_INFO at `info` are rcs0, bcs0, vcs0
+ * and vecs0, in that order, each instance 0 with its logical instance 0
+ * and no capabilities, as Linux answers on Haswell.
+ */
+static int engines_listed(const struct drm_i915_engine_info *info)
+{
+    static const uint16_t classes[4] = {I915_ENGINE_CLASS_RENDER, I915_ENGINE_CLASS_COPY,
+                                        I915_ENGINE_CLASS_VIDEO, I915_ENGINE_CLASS_VIDEO_ENHANCE};
+    int i, ok = 1;
+
+    for (i = 0; i < 4; i++) {
+        ok &= info[i].engine.engine_class == classes[i] && info[i].engine.engine_instance == 0 &&
+              info[i].flags == I915_ENGINE_INFO_HAS_LOGICAL_INSTANCE &&
+              info[i].logical_instance == 0 && info[i].capabilities == 0;
+    }
+    return ok;
+}
+
 /** 78-5a.4: each I915_QUERY item and the call's refusals. */
 static void row_query(void)
 {
@@ -1476,23 +1522,18 @@ static void row_query(void)
     CHECK("query: TOPOLOGY_INFO that cannot be written is EFAULT",
           query1(DRM_I915_QUERY_TOPOLOGY_INFO, 0, 22, (void *)(uintptr_t)BAD_USER) == -EFAULT);
 
-    CHECK("query: ENGINE_INFO's length is two engines'",
-          query1(DRM_I915_QUERY_ENGINE_INFO, 0, 0, 0) == 16 + 2 * 56);
+    CHECK("query: ENGINE_INFO's length is four engines'",
+          query1(DRM_I915_QUERY_ENGINE_INFO, 0, 0, 0) == 16 + 4 * 56);
     memset(buf, 0, sizeof(buf));
-    CHECK("query: ENGINE_INFO answered", query1(DRM_I915_QUERY_ENGINE_INFO, 0, 128, buf) == 128);
-    CHECK("query: rcs0 then bcs0, logical instance 0, no capabilities",
-          ei->num_engines == 2 && info[0].engine.engine_class == I915_ENGINE_CLASS_RENDER &&
-              info[1].engine.engine_class == I915_ENGINE_CLASS_COPY &&
-              info[0].engine.engine_instance == 0 && info[1].engine.engine_instance == 0 &&
-              info[0].flags == I915_ENGINE_INFO_HAS_LOGICAL_INSTANCE &&
-              info[1].flags == I915_ENGINE_INFO_HAS_LOGICAL_INSTANCE && info[0].capabilities == 0 &&
-              info[1].logical_instance == 0);
+    CHECK("query: ENGINE_INFO answered", query1(DRM_I915_QUERY_ENGINE_INFO, 0, 240, buf) == 240);
+    CHECK("query: rcs0, bcs0, vcs0 then vecs0, logical instance 0, no capabilities",
+          ei->num_engines == 4 && engines_listed(info));
     CHECK("query: ENGINE_INFO with a count given is EINVAL",
-          query1(DRM_I915_QUERY_ENGINE_INFO, 0, 128, buf) == -EINVAL);
+          query1(DRM_I915_QUERY_ENGINE_INFO, 0, 240, buf) == -EINVAL);
     memset(buf, 0, sizeof(buf));
     ei->rsvd[1] = 1;
     CHECK("query: ENGINE_INFO with a reserved word is EINVAL",
-          query1(DRM_I915_QUERY_ENGINE_INFO, 0, 128, buf) == -EINVAL);
+          query1(DRM_I915_QUERY_ENGINE_INFO, 0, 240, buf) == -EINVAL);
 
     CHECK("query: PERF_CONFIG without i915 perf: ENODEV, EINVAL for another kind",
           query1(DRM_I915_QUERY_PERF_CONFIG, DRM_I915_QUERY_PERF_CONFIG_LIST, 0, 0) == -ENODEV &&
@@ -1529,7 +1570,7 @@ static void row_query(void)
     q.items_ptr = (uint64_t)(uintptr_t)items;
     CHECK("query: three items in one call", i915_query_ioctl(&dev.drm, &q, &file_a) == 0 &&
                                                 items[0].length == 22 && items[1].length == 22 &&
-                                                items[2].length == 128);
+                                                items[2].length == 240);
     q.flags = 1;
     CHECK("query: the call's flags are EINVAL", i915_query_ioctl(&dev.drm, &q, &file_a) == -EINVAL);
     q.flags = 0;
