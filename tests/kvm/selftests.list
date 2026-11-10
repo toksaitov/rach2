@@ -45,13 +45,13 @@ x86_64/hyperv_evmcs excluded skip Hyper-V: Rach2's KVM has no Hyper-V enlightenm
 x86_64/hyperv_extended_hypercalls excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
 x86_64/hyperv_features excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
 x86_64/hyperv_ipi excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
-x86_64/hyperv_svm_test excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_svm_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX, which the test's nested half needs
 x86_64/hyperv_tlb_flush excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
 x86_64/kvm_clock_test pass pass
 x86_64/kvm_pv_test pass fail Linux: KVM_ENABLE_CAP failed, rc: -1 errno: 22 (Invalid argument)
 x86_64/max_vcpuid_cap_test pass pass
 x86_64/monitor_mwait_test skip skip Requirement not met: this_cpu_has(X86_FEATURE_MWAIT)
-x86_64/nested_exceptions_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/nested_exceptions_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/nx_huge_pages_test skip skip Running via nx_huge_pages_test.sh, which also handles environment setup, is strongly recommended.
 x86_64/platform_info_test pass fail Linux: KVM_SET_MSRS failed on MSR_PLATFORM_INFO, value = 0x80000000
 x86_64/pmu_counters_test excluded skip PMU: Rach2's KVM gives its guests no performance counters
@@ -67,10 +67,10 @@ x86_64/sev_smoke_test skip skip Requirement not met: kvm_cpu_has(X86_FEATURE_SEV
 x86_64/smaller_maxphyaddr_emulation_test skip skip Requirement not met: kvm_has_cap(KVM_CAP_SMALLER_MAXPHYADDR)
 x86_64/smm_test pass pass
 x86_64/state_test pass pass
-x86_64/svm_int_ctl_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/svm_nested_shutdown_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/svm_nested_soft_inject_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/svm_vmcall_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/svm_int_ctl_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/svm_nested_shutdown_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/svm_nested_soft_inject_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/svm_vmcall_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/sync_regs_test pass pass
 x86_64/triple_fault_event_test pass pass
 x86_64/tsc_msrs_test pass pass
@@ -78,17 +78,17 @@ x86_64/tsc_scaling_sync pass pass
 x86_64/ucna_injection_test skip skip MCG_CMCI_P is not supported, skipping test
 x86_64/userspace_io_test pass pass
 x86_64/userspace_msr_exit_test pass fail Linux: not ok 3 user_msr.msr_permission_bitmap
-x86_64/vmx_apic_access_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_close_while_nested_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_dirty_log_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_exception_with_invalid_guest_state excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_invalid_nested_guest_state excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_msrs_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_nested_tsc_scaling_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_apic_access_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_close_while_nested_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_dirty_log_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_exception_with_invalid_guest_state excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_invalid_nested_guest_state excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_msrs_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_nested_tsc_scaling_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/vmx_pmu_caps_test excluded skip PMU: Rach2's KVM gives its guests no performance counters
-x86_64/vmx_preemption_timer_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_set_nested_state_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
-x86_64/vmx_tsc_adjust_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_preemption_timer_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_set_nested_state_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_tsc_adjust_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/xapic_ipi_test pass pass
 x86_64/xapic_state_test pass pass
 x86_64/xcr0_cpuid_test pass pass
