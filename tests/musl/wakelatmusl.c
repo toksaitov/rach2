@@ -228,6 +228,26 @@ static struct trace trace_read(void)
     return t;
 }
 
+/** Print the kernel's lock counters at a load boundary, when present.
+ * Linux has none of these lines; its measured workload is unchanged. */
+static void lock_stats(const char *where)
+{
+    FILE *f = fopen("/proc/stat", "r");
+    char line[512];
+
+    if (!f)
+        fail("open stat");
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "bkl_", 4))
+            printf("wakelat: lock: %s %s", where, line);
+    }
+    if (ferror(f)) {
+        fclose(f);
+        fail("read stat");
+    }
+    fclose(f);
+}
+
 /** Wait once through the selected interface; return 0 only for its timeout.
  * The five-millisecond interval is the measured workload. */
 static int wait_once(int method, long long due)
@@ -420,18 +440,21 @@ int main(int argc, char **argv)
            rounds, load, PERIOD_NS);
     printf("wakelat: columns_us: irq timer_bkl timer_work queue return blocked "
            "queue_bkl return_bkl\n");
+    lock_stats("before");
     load_start(&allowed, load);
     if (bind_cpu(cpu) != 0)
         fail("bind sleeper");
     report_held();
     for (i = 0; i < 6; i++) {
         measure(i, rounds, load);
+        lock_stats(methods[i]);
         report_held();
     }
     for (i = 0; i < worker_count; i++)
         printf("wakelat: worker: cpu=%d calls=%d rounds=%lu\n", workers[i].cpu, workers[i].calls,
                __atomic_load_n(&workers[i].rounds, __ATOMIC_ACQUIRE));
     cleanup();
+    lock_stats("after");
     report_held();
     report_end();
     puts("WAKELAT OK");
