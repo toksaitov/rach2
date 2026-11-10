@@ -8674,14 +8674,10 @@ struct sched_attr {
 
 /* SCHED_DEADLINE's bounds, Linux's defaults: a period of 100 us to 2^22 us
  * (sched_deadline_period_min_us and _max_us), a runtime of 1024 ns at
- * least, and the bandwidth of the admitted threads, runtime over period in
- * fixed point of SCHED_BW_SHIFT bits, at most 95% of each processor
- * (sched_rt_runtime_us over sched_rt_period_us). */
+ * least. */
 #define SCHED_DL_PERIOD_MIN  ((uint64_t)100000u)
 #define SCHED_DL_PERIOD_MAX  (((uint64_t)1 << 22) * 1000u)
 #define SCHED_DL_RUNTIME_MIN 1024u
-#define SCHED_BW_SHIFT       20
-#define SCHED_DL_BW_CPU      996147u
 
 /* The slice an ordinary thread may ask for, Linux's clamp of 0.1 to 100 ms,
  * and the default one before its scaling by the processors. */
@@ -8721,30 +8717,6 @@ static int sched_policy_rt(int policy)
     return policy == SCHED_FIFO || policy == SCHED_RR;
 }
 
-/**
- * `runtime` over `period` as a fraction of SCHED_BW_SHIFT bits, Linux's
- * to_ratio; 0 for a period of 0. Long division, since the freestanding
- * kernel has no 64-bit divide; runtime is under 2^43 ns where it is
- * called, so the shift does not overflow.
- */
-static uint64_t sched_bw(uint64_t period, uint64_t runtime)
-{
-    uint64_t n = runtime << SCHED_BW_SHIFT, q = 0, r = 0;
-    int i;
-
-    if (period == 0) {
-        return 0;
-    }
-    for (i = 63; i >= 0; i--) {
-        r = (r << 1) | ((n >> i) & 1u);
-        if (r >= period) {
-            r -= period;
-            q |= (uint64_t)1 << i;
-        }
-    }
-    return q;
-}
-
 /** Whether `a` has deadline parameters Linux's __checkparam_dl takes. */
 static int sched_dl_valid(const struct sched_req *a)
 {
@@ -8759,36 +8731,6 @@ static int sched_dl_valid(const struct sched_req *a)
     }
     return period >= a->deadline && a->deadline >= a->runtime && period >= SCHED_DL_PERIOD_MIN &&
            period <= SCHED_DL_PERIOD_MAX;
-}
-
-/**
- * Whether admitting `p` with `policy` and the parameters of `a` would pass
- * the deadline bandwidth, as Linux's sched_dl_overflow: the bandwidth of
- * every other live SCHED_DEADLINE thread and the new one together over 95%
- * of each processor started. A thread leaving the policy, or keeping its
- * bandwidth, always passes.
- */
-static int sched_dl_overflow(const process_t *p, int policy, const struct sched_req *a)
-{
-    uint64_t total, cap, bw;
-    const process_t *q;
-
-    if (policy != SCHED_DEADLINE || (a->flags & SCHED_FLAG_SUGOV)) {
-        return 0;
-    }
-    bw = sched_bw(a->period ? a->period : a->deadline, a->runtime);
-    if (p->sched_policy == SCHED_DEADLINE && bw == sched_bw(p->dl_period, p->dl_runtime)) {
-        return 0;
-    }
-    total = bw;
-    for (q = proc_list; q; q = q->next) {
-        if (q != p && q->sched_policy == SCHED_DEADLINE && q->state != PROC_ZOMBIE &&
-            q->state != PROC_UNUSED) {
-            total += sched_bw(q->dl_period, q->dl_runtime);
-        }
-    }
-    cap = (uint64_t)SCHED_DL_BW_CPU * (uint64_t)smp_cpu_count();
-    return total > cap;
 }
 
 /**
@@ -8876,14 +8818,12 @@ static void sched_store(process_t *p, const struct sched_req *a, int policy)
  * errors (__sched_setscheduler): a policy Linux does not take, -EINVAL;
  * `sched_check`'s errors; SCHED_DEADLINE for a thread whose affinity leaves
  * out a processor started, -EPERM; and bandwidth the deadline threads do
- * not have (`sched_dl_overflow`), -EBUSY. A request that leaves a deadline
- * thread's parameters as they are keeps only its reset flag, and so does
- * one with SCHED_FLAG_KEEP_PARAMS.
+ * not have, -EBUSY. SCHED_FLAG_KEEP_PARAMS changes only the reset flag
+ * after those checks.
  *
- * A SCHED_DEADLINE thread takes its turn among the ordinary threads: the
- * scheduler has no deadline class, and a real-time priority without
- * Linux's throttling at the runtime would let one that overran its
- * runtime starve the rest.
+ * The scheduler has no deadline class, so no deadline bandwidth is
+ * available: every otherwise valid request for that policy is -EBUSY,
+ * as Linux's sched_dl_overflow refuses bandwidth it cannot provide.
  */
 static int32_t sched_apply(process_t *p, const struct sched_req *a)
 {
@@ -8905,16 +8845,10 @@ static int32_t sched_apply(process_t *p, const struct sched_req *a)
     if (rc != 0) {
         return rc;
     }
-    if (policy == p->sched_policy && policy == SCHED_DEADLINE && a->runtime == p->dl_runtime &&
-        a->deadline == p->dl_deadline && a->period == p->dl_period &&
-        (a->flags & SCHED_DL_FLAGS) == p->dl_flags) {
-        p->sched_reset = (uint8_t)reset;
-        return 0;
-    }
     if (policy == SCHED_DEADLINE && (p->affinity & online) != online) {
         return -EPERM;
     }
-    if (sched_dl_overflow(p, policy, a)) {
+    if (policy == SCHED_DEADLINE) {
         return -EBUSY;
     }
     p->sched_reset = (uint8_t)reset;

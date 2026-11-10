@@ -218,10 +218,10 @@ is 0, from 100 us to 2^22 us, or the call fails with
 .Er EINVAL .
 A thread whose affinity leaves out a processor that is started fails with
 .Er EPERM .
-The runtimes over the periods of all the deadline threads may come to 95%
-of each processor started, Linux's default admission; past that the call
-fails with
-.Er EBUSY .
+The scheduler cannot provide deadline bandwidth, so every request that
+passes these checks fails with
+.Er EBUSY ,
+as Linux's sched_dl_overflow refuses unavailable bandwidth.
 Such a thread's affinity may not then leave out a processor:
 .Fn sched_setaffinity
 fails with
@@ -308,10 +308,9 @@ Linux runs a
 .Dv SCHED_DEADLINE
 thread before every real-time thread, by the earliest deadline, and stops
 it once it has used its runtime in a period; this scheduler has no
-deadline class, and runs such a thread among the ordinary threads, since a
-real-time priority without that limit would let one that overran its
-runtime starve the rest.
-Its admission is Linux's.
+deadline class, and refuses that policy with
+.Er EBUSY
+after checking its arguments, privilege and affinity.
 .Ss System call interface
 The i386 system call numbers are 154 for
 .Fn sched_setparam ,
@@ -411,7 +410,7 @@ and reads it back with
 and
 .Fn sched_getparam ,
 and checks the structure's size rules, the flags, the slices, the
-deadline admission and affinity rules, what a fork's child takes, the
+deadline refusal and affinity checks, what a fork's child takes, the
 round-robin interval, the refusals to a caller without root and what
 .Dv RLIMIT_NICE
 and
@@ -425,8 +424,8 @@ A
 is of a size below 48 or past 4096, or larger than 56 with a byte past 56
 that is not 0.
 .It Bq Er EBUSY
-The deadline threads' bandwidth would pass 95% of the processors, or a
-deadline thread's affinity would leave out a processor.
+The scheduler cannot provide deadline bandwidth, or a deadline thread's
+affinity would leave out a processor.
 .It Bq Er EFAULT
 A parameter, structure, time slice or mask cannot be read or written.
 .It Bq Er EINVAL
