@@ -34,6 +34,7 @@
 #include "arch/x86/i8042.c"
 #include "arch/x86/ps2mouse.c"
 #include "arch/x86/synaptics.c"
+#include "arch/x86/trackpoint.c"
 
 #include "fs/fd.h"
 #include "lib/kerrno.h"
@@ -369,6 +370,28 @@ int in_compat_syscall(void)
 
 uint32_t kirq_save(void)
 {
+    return 0;
+}
+
+/* What the pass-through port's guest needs, which this pad, without the
+ * port, never calls; trackpoint_hosttest.c tests the guest. */
+void k_udelay(uint32_t usec)
+{
+    (void)usec;
+}
+
+void evdev_sysfs_serio_files(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
     return 0;
 }
 
