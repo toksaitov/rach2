@@ -137,6 +137,11 @@ def main():
         raise SystemExit("d3d: expected one x86-64 %s ICD" % adapter)
     env["VK_DRIVER_FILES"] = str(icds[0])
     env["VK_ICD_FILENAMES"] = str(icds[0])
+    env.pop("MESA_VK_WSI_DEBUG", None)
+    if adapter == "venus":
+        # Mesa's X11 WSI presents a GPU's images only over DRI3, which Xvfb
+        # lacks; sw presents through the CPU, as it does for lavapipe.
+        env["MESA_VK_WSI_DEBUG"] = "sw"
     work = None
     xvfb = None
     server = None
