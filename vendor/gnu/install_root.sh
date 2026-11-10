@@ -323,10 +323,12 @@ install_debian()
     # below every other byte, since tar gives a directory its mode once it has
     # left it, and a mode from the store has no write permission.
     : > "$WORK/debian"
-    touch "$WORK/debian.packages"
+    : > "$WORK/debian.same"
+    touch "$WORK/debian.packages" "$WORK/i386.packages"
     while read -r name version _; do
         if [ "$1" = i386 ]; then
             [ "$(awk -v n="$name" '$1 == n { print $2 }' "$meta/multiarch.txt")" = same ] || continue
+            echo "$name $version" >> "$WORK/i386.packages"
         else
             skipped "$name" && continue
             had=$(awk -v n="$name" '$1 == n { print $2 }' "$WORK/debian.packages")
@@ -338,7 +340,11 @@ install_debian()
             echo "$name $version" >> "$WORK/debian.packages"
         fi
         sed -e 's|^\./bin/|./usr/bin/|' -e 's|^\./lib/|./usr/lib/|' \
-            -e 's|^\./sbin/|./usr/sbin/|' -e 's|/$||' "$meta/files/$name" >> "$WORK/debian"
+            -e 's|^\./sbin/|./usr/sbin/|' -e 's|/$||' "$meta/files/$name" > "$WORK/package"
+        cat "$WORK/package" >> "$WORK/debian"
+        if [ "$1" != i386 ] && grep -qxF "$name $version" "$WORK/i386.packages"; then
+            cat "$WORK/package" >> "$WORK/debian.same"
+        fi
     done < "$meta/closure.txt"
     grep -v '^\.$' "$WORK/debian" | LC_ALL=C sort -u > "$WORK/debian.list"
     nodes "$stage" > "$WORK/debian.have"
@@ -356,6 +362,18 @@ install_debian()
         shared "$WORK/new"
         cat "$WORK/venus25" >> "$WORK/shared"
         LC_ALL=C sort -o "$WORK/shared" "$WORK/shared"
+        LC_ALL=C comm -23 "$WORK/debian.list" "$WORK/shared" > "$WORK/debian.keep"
+        mv "$WORK/debian.keep" "$WORK/debian.list"
+    elif [ -s "$WORK/debian.same" ]; then
+        # A package the i386 layer has at the same version is Multi-Arch:
+        # same, and dpkg lets its two architectures share a file of equal
+        # contents, such as its /usr/share/doc.
+        LC_ALL=C sort -u "$WORK/debian.same" | LC_ALL=C comm -12 - "$WORK/new" > "$WORK/same"
+        SHARED_FROM="$stage"
+        shared "$WORK/same"
+        LC_ALL=C sort -o "$WORK/shared" "$WORK/shared"
+        LC_ALL=C comm -23 "$WORK/new" "$WORK/shared" > "$WORK/new.same"
+        mv "$WORK/new.same" "$WORK/new"
         LC_ALL=C comm -23 "$WORK/debian.list" "$WORK/shared" > "$WORK/debian.keep"
         mv "$WORK/debian.keep" "$WORK/debian.list"
     fi
