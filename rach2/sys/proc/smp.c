@@ -44,6 +44,14 @@ static uint64_t bkl_early_cycles[NR_CPUS][BKL_SAMPLE_MARKS];
 static uintptr_t bkl_hold_early_pc[BKL_SAMPLE_MARKS][BKL_SAMPLE_PCS];
 static uint64_t bkl_hold_early_cycles[BKL_SAMPLE_MARKS];
 
+/* The holds of the big lock by the entry that took it (`smp_entry_hold`):
+ * their sum in TSC cycles and their number. */
+static uint64_t bkl_entry_cycles[BKL_ENTRY_KEYS];
+static uint32_t bkl_entry_holds[BKL_ENTRY_KEYS];
+
+/* Set once the first hold, the boot processor's start-up, has ended. */
+static int bkl_booted;
+
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
  * second covers a claimant that does not run, since under a hypervisor a
@@ -118,12 +126,26 @@ static void bkl_acquire(struct percpu *cpu)
     bkl_flush(cpu);
 }
 
-/** Count the hold that ends now on `cpu`, which still holds the lock. */
+/** Count the hold that ends now on `cpu`, which still holds the lock, under
+ * its entry and against the longest. The first hold to end, the boot
+ * processor's start-up, which nobody waits on, is left out. */
 static void bkl_hold_end(struct percpu *cpu)
 {
     uint64_t held = arch_cycles() - cpu->bkl_since;
     int c = arch_cpu_id();
+    int key;
 
+    if (!bkl_booted) {
+        bkl_booted = 1;
+        return;
+    }
+    if (cpu->bkl_nr >= 0) {
+        key = cpu->bkl_nr < BKL_ENTRY_SYSCALLS ? cpu->bkl_nr : BKL_ENTRY_KEYS - 1;
+    } else {
+        key = BKL_ENTRY_SYSCALLS + (int)(cpu->bkl_vector & 0xffu);
+    }
+    bkl_entry_cycles[key] += held;
+    bkl_entry_holds[key]++;
     if (held > bkl_hold_max_cycles) {
         bkl_hold_max_cycles = held;
         bkl_hold_vector = cpu->bkl_vector;
@@ -210,6 +232,12 @@ void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
     for (i = 0; i < BKL_SAMPLE_PCS; i++) {
         pc[i] = bkl_seen_pc[i];
     }
+}
+
+void smp_entry_hold(int key, uint64_t *held_us, uint32_t *holds)
+{
+    *held_us = timer_cycles_us(bkl_entry_cycles[key]);
+    *holds = bkl_entry_holds[key];
 }
 
 void smp_hold_early(int mark, uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
