@@ -441,7 +441,7 @@ BEGIN {
     print ""
     print "### Games packages"
     print ""
-    print "The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands on both architectures, from its own Debian closure. On x86-64 it also stages `/usr/bin/rach2-game` ([rach2-game(1)](man1/rach2-game.1)), which runs a Windows game through Proton with WoW64, WineD3D on OpenGL and fsync."
+    print "The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands from its own Debian closure: innoextract on both architectures, and SuperTuxKart and 0 A.D. on x86-64 alone. On x86-64 it also stages `/usr/bin/rach2-game` ([rach2-game(1)](man1/rach2-game.1)), which runs a Windows game through Proton with WoW64, WineD3D on OpenGL and fsync."
     print ""
     print "| Program | Package | Path | Page |"
     print "| --- | --- | --- | --- |"

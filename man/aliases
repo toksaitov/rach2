@@ -316,6 +316,7 @@ pwd 1 busybox-coreutils
 pwdx 1 busybox-procps
 pwrite 2 write
 pwrite64 2 write
+pyrogenesis 1 0ad
 qemu-system-amd64 1 qemu-system
 qemu-system-i386 1 qemu-system
 qemu-system-x86_64 1 qemu-system

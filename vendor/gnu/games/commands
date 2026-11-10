@@ -1,2 +1,5 @@
 # Canonical commands in the games closure: name, package, path.
+0ad 0ad /usr/games/0ad
 innoextract innoextract /usr/bin/innoextract
+pyrogenesis 0ad /usr/games/pyrogenesis
+supertuxkart supertuxkart /usr/games/supertuxkart
