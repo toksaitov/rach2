@@ -1792,12 +1792,20 @@ int paging_frame_is_device(uintptr_t phys)
 
 uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va)
 {
-    const vma_t *vma = vm_find(&mm->vm, va);
-    pte_t *e = user_pte(mm->dir, va);
+    const vma_t *vma;
+    pte_t *e;
     uintptr_t phys;
 
-    if (!vma || !region_allows(vma, 1) || (vma->prot & (VM_PROT_IO | VM_PROT_GUARD)) || !e ||
-        (*e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (*e & PTE_COW)) {
+    if (!mm->dir) {
+        return 0;
+    }
+    vma = vm_find(&mm->vm, va);
+    if (!vma || !region_allows(vma, 1) ||
+        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
+        return 0;
+    }
+    e = user_pte(mm->dir, va);
+    if (!e || (*e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (*e & PTE_COW)) {
         return 0;
     }
     phys = PTE_ADDR(*e);

@@ -522,10 +522,11 @@ struct mm;
  * The frame of the RAM page `mm` maps at the user address `va`, for a
  * mapping of it into another program that writes it, as KVM gives a
  * guest's page to the transport over memory shared with the VM: present,
- * writable and not copy-on-write in a writable region that is not a
- * device's, a frame the allocator counts, and, in a private region, mapped
- * by no other address space. 0 for any other page. It brings nothing in
- * and does not sleep.
+ * writable and not copy-on-write in a writable region that is neither a
+ * device's, a guard nor memfd_secret's, a frame the allocator counts, and,
+ * in a private region, mapped by no other address space. 0 for any other
+ * page, and for every page once `mm` has ended (`mm->dir` NULL). It brings
+ * nothing in and does not sleep.
  */
 uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va);
 
