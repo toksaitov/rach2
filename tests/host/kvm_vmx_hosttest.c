@@ -122,6 +122,12 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return p;
 }
 
+/** A kernel address is its own physical address here. */
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    return va;
+}
+
 void kfree_pages(void *p, uint32_t count)
 {
     (void)count;

@@ -2507,18 +2507,16 @@ static int svm_vm_init(struct kvm_vm *vm)
 
     vm->backend = NULL;
     if (!iopm) {
-        iopm = kalloc_pages(3, &iopm_pa);
+        iopm = kvm_map_pages(3, &iopm_pa);
         if (!iopm) {
             return -ENOMEM;
         }
-        k_memset(iopm, 0xFF, 3u * 4096u);
     }
     if (!msrpm) {
-        msrpm = kalloc_pages(2, &msrpm_pa);
+        msrpm = kvm_map_pages(2, &msrpm_pa);
         if (!msrpm) {
             return -ENOMEM;
         }
-        k_memset(msrpm, 0xFF, 2u * 4096u);
         /* MSRs 0xC0000000 to 0xC0001FFF from byte 2048, two bits each, the
          * read's then the write's: FS_BASE, GS_BASE and KERNEL_GS_BASE. */
         msrpm[2048 + (0x100 * 2) / 8] &= (uint8_t)~0x3Fu;

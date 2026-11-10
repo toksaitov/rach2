@@ -296,8 +296,7 @@ struct kvm_vcpu {
     struct kvm_vm *vm;
     uint32_t id;                /* the caller's id, the APIC id */
     uint32_t index;             /* the place in the VM's `vcpus` */
-    struct kvm_run *run;        /* the run page, from `run_phys` */
-    uintptr_t run_phys;         /* the physical address of the KVM_RUN_PAGES */
+    struct kvm_run *run;        /* the run page, the first of KVM_RUN_PAGES */
     uint8_t *pio;               /* the port I/O page, the second */
     volatile uint32_t mode;     /* KVM_MODE_* */
     volatile uint32_t requests; /* KVM_REQ_* */
@@ -894,6 +893,16 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
  * information and error code. 0, or -EFAULT.
  */
 int kvm_emul_mmio(struct kvm_vcpu *v, uint64_t gpa, const uint64_t info[5]);
+
+/**
+ * `count` pages whose frames are consecutive, set to all ones, for a
+ * permission map, which the processor reads by its physical address and
+ * across its pages; `*pa` receives the first frame's address. The heap's
+ * pages are contiguous only in virtual memory, so a run whose frames are
+ * not consecutive is held until one is found, so that the allocator gives
+ * other frames, and then freed. NULL after 16 such runs or without memory.
+ */
+uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa);
 
 /** Begin the port I/O instruction `p` of `v`: `v->exit` its KVM_X_IO, an
  * OUT's bytes from RAX or the string in guest memory, RIP stepped for an
