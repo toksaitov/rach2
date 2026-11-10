@@ -561,6 +561,15 @@ static void collect(struct graphics_case *s)
 
     if (net_step(&s->u, "collect") != ETUDE_OK)
         return;
+    /* The record, with the kernel's counters before and after the run, goes
+     * to the case's output, which is kept when the case passes too. */
+    if (as_root(s, "cat " GRAPHICS_DIR "/out/record", "record", &r) == ETUDE_OK) {
+        if (net_exited0(&r)) {
+            fputs("graphics-evidence: record\n", stdout);
+            fputs(r.out, stdout);
+        }
+        net_run_free(&r);
+    }
     must(s, "tar -czf " GRAPHICS_DIR "/out.tar.gz -C " GRAPHICS_DIR "/out .", "pack",
          "the output could not be packed");
     if (net_ok(&s->u) &&
