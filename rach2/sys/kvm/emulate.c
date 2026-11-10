@@ -249,9 +249,7 @@ static void step_trap(struct kvm_vcpu *v, int tf)
         (v->guest_debug.control & KVM_GUESTDBG_SINGLESTEP)) {
         v->emul.step_trap = 1;
     } else if (tf) {
-        v->debugregs.dr6 |= DR6_BS;
-        v->dirty |= KVM_PART_DEBUG;
-        kvm_queue_exception(v, DB_VECTOR, 0, 0);
+        kvm_queue_db(v, DR6_BS);
     }
 }
 
@@ -1389,6 +1387,7 @@ int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index,
 #define EMUL_PIO_RUN  6 /* the string OUT runs again at the next step */
 #define EMUL_PIO_OUT  7 /* an OUT's bytes are out, and RIP is still at it */
 #define EMUL_STEP     8 /* the caller's single step waits to be reported */
+#define EMUL_FAIL     9 /* a string IN's failure, `fail`, waits to be reported */
 
 /* How a pass or one of its steps ends; a negative errno ends KVM_RUN. */
 #define X_OK    0
@@ -2570,8 +2569,10 @@ static int h_xchg(struct xc *x)
     const struct kvm_insn *in = x->in;
     uint64_t old[2];
 
-    if (in->dst.kind == KVM_OPND_REG && in->dst.reg == in->src.reg &&
-        in->dst.high8 == in->src.high8) {
+    /* Only 0x90, XCHG of the accumulator with itself, is a NOP, as in
+     * Linux; 87 C0 clears the upper half in 64-bit mode. */
+    if ((in->bytes[in->len - 1u] & 0xF8u) == 0x90u && in->dst.kind == KVM_OPND_REG &&
+        in->dst.reg == in->src.reg) {
         x->write = 0;
         return X_OK;
     }
@@ -3871,9 +3872,13 @@ static void x_commit(struct xc *x, const struct kvm_regs *before)
     if (x->sregs) {
         v->dirty |= KVM_PART_SREGS;
     }
+    /* RF stays set while a REP repeats and clears once the instruction
+     * ends, as Linux's x86_emulate_insn leaves it. */
     if (x->again) {
+        v->regs.rflags |= RFLAGS_RF;
         return;
     }
+    v->regs.rflags &= ~RFLAGS_RF;
     v->regs.rip = kvm_emul_mode(v) == 64 ? x->next : (x->next & 0xFFFFFFFFull);
     if (v->events.interrupt.shadow & shadow) {
         shadow = 0;
@@ -4046,21 +4051,18 @@ int kvm_emul_ud(struct kvm_vcpu *v, const uint64_t info[5])
 static void string_step(struct kvm_vcpu *v, int n, uint32_t size, uint32_t addr_size,
                         uint32_t count)
 {
-    uint64_t *r = gpr(v, n), m = size_mask(addr_size), step = (uint64_t)size * count;
-    uint64_t x = (v->regs.rflags & RFLAGS_DF) ? (*r - step) : (*r + step);
+    uint64_t step = (uint64_t)size * count;
 
-    *r = (*r & ~m) | (x & m);
+    reg_add(v, n, (v->regs.rflags & RFLAGS_DF) ? (uint64_t)0 - step : step, addr_size);
 }
 
 /** Count `done` elements of a REP string instruction off rCX: whether the
  * instruction is finished, with RIP stepped past it, or repeats. */
 static int string_done(struct kvm_vcpu *v, int rep, uint32_t addr_size, uint32_t done, uint32_t len)
 {
-    uint64_t m = size_mask(addr_size), *c = gpr(v, 1);
-
     if (rep) {
-        *c = (*c & ~m) | ((*c - done) & m);
-        if ((*c & m) != 0) {
+        reg_add(v, 1, (uint64_t)0 - done, addr_size);
+        if ((v->regs.rcx & size_mask(addr_size)) != 0) {
             return 0;
         }
     }
@@ -4119,7 +4121,7 @@ static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
 {
     struct kvm_emul *em = &v->emul;
     struct kvm_exit *ex = &v->exit;
-    uint64_t m = size_mask(p->addr_size), count = 1, la, room;
+    uint64_t m = size_mask(p->addr_size), count = 1, la, room, off;
 
     ex->kind = KVM_X_IO;
     k_memset(&ex->io, 0, sizeof(ex->io));
@@ -4137,9 +4139,14 @@ static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
             }
         }
         /* At most the rest of the page of the first element, and of the
-         * port I/O page, one element when DF counts down. */
-        la = p->in ? linear(v, KVM_SEG_ES, v->regs.rdi & m) : linear(v, p->seg, v->regs.rsi & m);
+         * port I/O page, and the elements before the offset wraps at the
+         * address size; one element when DF counts down. */
+        off = (p->in ? v->regs.rdi : v->regs.rsi) & m;
+        la = linear(v, p->in ? KVM_SEG_ES : p->seg, off);
         room = (4096u - (la & 0xFFFu)) / p->size;
+        if (room > (m - off) / p->size + 1u) {
+            room = (m - off) / p->size + 1u;
+        }
         if (room == 0 || (v->regs.rflags & RFLAGS_DF)) {
             room = 1;
         }
@@ -4176,8 +4183,10 @@ int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p)
 
 /** Finish a port read with the bytes the caller or a device answered in
  * `v->exit.data`: the accumulator, or the string at ES:rDI, whose elements
- * in device memory leave as MMIO writes, one for each. */
-static void pio_complete(struct kvm_vcpu *v)
+ * in device memory leave as MMIO writes, one for each. X_OK; X_FAULT with
+ * the fault queued; or, for a string that cannot be written, X_FAIL or
+ * -EFAULT, with the registers as they were. */
+static int pio_complete(struct kvm_vcpu *v)
 {
     struct kvm_emul *em = &v->emul;
     struct kvm_pio *p = &em->pio;
@@ -4190,7 +4199,7 @@ static void pio_complete(struct kvm_vcpu *v)
         x = (x & ~size_mask(p->size)) | bytes_value(v->exit.data, p->size);
         v->regs.rax = x;
         kvm_emul_skip(v, p->len);
-        return;
+        return X_OK;
     }
     r = wq_add(v, linear(v, KVM_SEG_ES, v->regs.rdi & size_mask(p->addr_size)), v->exit.data,
                p->count * p->size, p->size);
@@ -4199,7 +4208,7 @@ static void pio_complete(struct kvm_vcpu *v)
     }
     if (r != X_OK) {
         wq_reset(v);
-        return;
+        return r;
     }
     string_step(v, 7, p->size, p->addr_size, p->count);
     (void)string_done(v, p->rep, p->addr_size, p->count, p->len);
@@ -4207,6 +4216,7 @@ static void pio_complete(struct kvm_vcpu *v)
         em->stage = EMUL_WRITE;
         em->resume = 1;
     }
+    return X_OK;
 }
 
 /** A port instruction ended outside the backend's `exit`, which reads
@@ -4227,10 +4237,21 @@ int kvm_emul_complete(struct kvm_vcpu *v)
 {
     struct kvm_emul *em = &v->emul;
     struct kvm_emul_read *c;
+    int r;
 
     if (em->stage == EMUL_PIO && v->exit.kind == KVM_X_IO) {
-        pio_complete(v);
-        pio_stepped(v);
+        r = pio_complete(v);
+        if (r == X_FAIL || r < X_FAULT) {
+            /* The next step, with no guest entered, reports it. */
+            em->stage = EMUL_FAIL;
+            em->fail = r;
+            em->resume = 1;
+            return 0;
+        }
+        if (r == X_OK) {
+            pio_stepped(v);
+        }
+        em->step_trap = 0;
         return 0;
     }
     if (em->stage == EMUL_PIO_OUT) {
@@ -4278,6 +4299,15 @@ int kvm_emul_resume(struct kvm_vcpu *v)
     case EMUL_STEP:
         em->stage = EMUL_IDLE;
         em->step_trap = 1;
+        return 0;
+    case EMUL_FAIL:
+        /* As `pio_outs` reports the same failures. */
+        em->stage = EMUL_IDLE;
+        if (em->fail != X_FAIL) {
+            return em->fail;
+        }
+        v->exit.kind = KVM_X_INTERNAL;
+        kvm_decode_fail(&v->exit.internal, NULL, 0, NULL);
         return 0;
     default:
         return 0;
