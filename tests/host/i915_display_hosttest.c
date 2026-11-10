@@ -159,7 +159,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
 /* ---- the driver's buffer objects: a few, bound in the aperture by the
  * pin, which counts what it is asked ---- */
 
-#define NBO 12
+#define NBO 15
 
 const struct drm_gem_object_funcs i915_gem_object_funcs;
 static struct drm_i915_gem_object bo[NBO];
@@ -1022,6 +1022,44 @@ static void row_cursor(void)
     frame();
 }
 
+/**
+ * Cursor images set within one frame through the legacy ioctl, which has
+ * no stall: the one the pipe latched stays pinned until a vblank has
+ * passed, and one never latched goes at once.
+ */
+static void row_cursor_unpin(void)
+{
+    struct drm_mode_cursor c;
+    uint32_t k1 = bo_new(12, 64u * 64u * 4u, I915_TILING_NONE, 0);
+    uint32_t k2 = bo_new(13, 64u * 64u * 4u, I915_TILING_NONE, 0);
+    uint32_t k3 = bo_new(14, 64u * 64u * 4u, I915_TILING_NONE, 0);
+
+    k_memset(&c, 0, sizeof(c));
+    c.crtc_id = pa->base.base.id;
+    c.flags = DRM_MODE_CURSOR_BO;
+    c.width = 64;
+    c.height = 64;
+    c.handle = k1;
+    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0, "cursor unpin: K1 set");
+    frame();
+    c.handle = k2;
+    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0, "cursor unpin: K2 set");
+    c.handle = k3;
+    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0, "cursor unpin: K3 set in the same frame");
+    CHECK(bo_vma[12].pin_count == 1 && bo_vma[13].pin_count == 0 && bo_vma[14].pin_count == 1,
+          "cursor unpin: K1, which the pipe latched, stays pinned; K2, never latched, goes");
+    frame();
+    c.handle = k1;
+    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0 && bo_vma[12].pin_count == 1 &&
+              bo_vma[14].pin_count == 1,
+          "cursor unpin: after a vblank the old K1 goes, K3 kept as the latched one");
+    c.handle = 0;
+    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0 && bo_vma[12].pin_count == 0 &&
+              bo_vma[14].pin_count == 1,
+          "cursor unpin: hidden in the same frame, K1 goes and K3 stays");
+    frame();
+}
+
 /** Write `text` to attribute `attr` of backlight 0. */
 static int bl_store(int attr, const char *text)
 {
@@ -1294,6 +1332,7 @@ int main(void)
     row_addfb_tiling();
     row_sprite();
     row_cursor();
+    row_cursor_unpin();
     row_backlight();
     row_crc();
     row_modeset();
