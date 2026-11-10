@@ -51,7 +51,7 @@ int32_t i915_aperture_phys(struct i915_hw *hw, const struct i915_aperture *ap, u
 
 void *i915_aperture_kmap(struct i915_hw *hw, struct i915_aperture *ap, uint64_t offset)
 {
-    struct i915_aperture_window *w, *lru = 0;
+    struct i915_aperture_window *w = 0, *lru = 0;
     uint64_t base = offset & ~(uint64_t)(I915_APERTURE_WINDOW - 1);
     uintptr_t phys;
     int i;

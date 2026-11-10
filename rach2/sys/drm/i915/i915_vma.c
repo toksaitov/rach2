@@ -197,7 +197,7 @@ static int32_t vma_bind(struct drm_i915_private *i915, struct i915_vma *vma)
     struct drm_i915_gem_object *obj = vma->obj;
     uint32_t n = (uint32_t)(vma->size >> PAGE_SHIFT), done = 0;
     uint64_t chunk[I915_BIND_CHUNK];
-    int32_t err = 0;
+    int32_t err;
 
     while (done < n) {
         uint32_t k = n - done < I915_BIND_CHUNK ? n - done : I915_BIND_CHUNK, i;
