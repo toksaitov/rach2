@@ -32,6 +32,26 @@ def sandbox(result, browser):
             "sandbox": result["chrome://sandbox"].strip()}
 
 
+def crocus(result, browser, fake):
+    """Require the GPU profile's evidence to name Crocus, and its pixel unless on the fake chip.
+
+    The fake chip completes every batch without drawing, so that a readback
+    there is whatever the buffer held; `fake` leaves the pixel unjudged.
+    """
+    if browser == "firefox":
+        graphics = result["graphics"]
+        assert graphics.get("Compositing") == "WebRender", graphics
+        assert "crocus" in graphics.get("Driver Vendor", ""), graphics
+        assert (graphics.get("Vendor ID"), graphics.get("Device ID")) == ("0x8086", "0x0a16"), graphics
+    else:
+        assert "HD Graphics 4400" in (result["gl_renderer"] or ""), result["gl_renderer"]
+        assert result["webgl_status"] == "WebGL: Hardware accelerated", result["webgl_status"]
+        assert any("crocus" in line for line in result["loader"]), result["loader"]
+    assert "llvmpipe" not in result["webgl"]["renderer"].lower(), result["webgl"]
+    if not fake:
+        assert result["webgl"]["pixel"] == [255, 128, 0, 255], result["webgl"]
+
+
 def canonical(result, mode, browser):
     """Return only the behavior a reference comparison judges."""
     if mode == "sandbox":
@@ -68,8 +88,14 @@ def canonical(result, mode, browser):
 
 
 def main():
-    """Require complete evidence and compare the selected case with Debian's."""
-    browser, mode, ref_name, got_name = sys.argv[1:]
+    """Require complete evidence and compare the selected case with Debian's.
+
+    The arguments are the browser, the mode, the references, the evidence
+    and, for the GPU profile on the fake chip, `fake`. The GPU profile's
+    sandboxes are compared with Debian's sandbox case on the same binaries.
+    """
+    browser, mode, ref_name, got_name = sys.argv[1:5]
+    fake = sys.argv[5:] == ["fake"]
     ref, got = Path(ref_name), Path(got_name)
     graphics = Path(__file__).resolve().parent.parent
     if mode == "webgl":
@@ -83,6 +109,15 @@ def main():
         args = ["video", str(base / (name + ".plays")), str(got / (name + ".plays")),
                 str(base / (name + ".decoders")), str(got / (name + ".decoders")),
                 str(graphics / "runners/video.limits")]
+    elif mode == "gpu":
+        base = ref / (browser + "-sandbox")
+        expected, actual = read(base / "result.json"), read(got / "result.json")
+        assert sandbox(expected, browser) == sandbox(actual, browser), (expected, actual)
+        crocus(actual, browser, fake)
+        expected_switches, actual_switches = read(base / "switches.json"), read(got / "switches.json")
+        assert expected_switches["version"] == actual_switches["version"], "different browser binaries"
+        print("browser-judge: result: pass %s %s%s" % (browser, mode, " fake" if fake else ""))
+        return
     else:
         base = ref / (browser + "-" + mode)
         expected, actual = read(base / "result.json"), read(got / "result.json")

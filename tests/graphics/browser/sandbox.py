@@ -36,8 +36,15 @@ def snapshot(children):
 
 
 def main():
-    """Start the browser as the selected ordinary user and answer one snapshot request."""
-    user, browser, out_name = sys.argv[1:]
+    """Start the browser as the selected ordinary user and answer one snapshot request.
+
+    The arguments are the user, the browser, the output directory and the
+    runner's mode, `sandbox` when it is left out, or `gpu` for the GPU
+    profile's case, which reads the same snapshot.
+    """
+    user, browser, out_name = sys.argv[1:4]
+    mode = sys.argv[4] if len(sys.argv) > 4 else "sandbox"
+    assert mode in ("sandbox", "gpu"), mode
     assert os.getuid() == 0, "sandbox proc reader needs root"
     out = Path(out_name).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -45,7 +52,7 @@ def main():
     os.chown(out, account.pw_uid, account.pw_gid)
     here = Path(__file__).resolve().parent
     command = ("export GRAPHICS_CLASS=conformance GRAPHICS_DONE=1; . %s/../guest-env.sh && "
-               "sh %s/run.sh %s sandbox %s" % (here, here, browser, shlex.quote(str(out))))
+               "sh %s/run.sh %s %s %s" % (here, here, browser, mode, shlex.quote(str(out))))
     player = None
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: sys.exit(1))
