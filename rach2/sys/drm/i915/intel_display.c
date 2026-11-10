@@ -221,7 +221,7 @@ static void fw_obj_free(struct drm_gem_object *obj)
 }
 
 static const struct drm_gem_object_funcs fw_obj_funcs = {fw_obj_free, NULL, NULL, NULL,
-                                                         NULL,        NULL, NULL};
+                                                         NULL,        NULL, NULL, NULL};
 
 /** Whether `fb` shows the firmware's framebuffer. */
 static int fb_is_firmware(const struct drm_framebuffer *fb)
