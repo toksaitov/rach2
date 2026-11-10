@@ -163,7 +163,8 @@ enum etude_status net_host(struct net_case *u, char *const argv[], const char *o
                            struct net_run *r);
 
 /** Run an installed guest program through its already-open channel and
- * read the ordinary result evidence into R. */
+ * read the ordinary result evidence into R. INPUT names a host file for
+ * standard input, or NULL for an empty input stream. */
 enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
                             const char *const argv[], const char *const env[], const char *input,
                             const char *output, struct net_run *r);
