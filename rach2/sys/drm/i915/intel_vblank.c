@@ -73,6 +73,15 @@ void intel_crtc_send_event(struct intel_crtc *c)
     drm_crtc_vblank_put(&c->base);
 }
 
+void intel_crtc_arm_flip_done(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    struct drm_crtc_state *cs = state->crtcs_new[c->base.index];
+
+    if (cs && cs->async_flip && cs->event) {
+        i915_irq_unmask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
+    }
+}
+
 void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
 {
     struct drm_crtc_state *cs = state->crtcs_new[c->base.index];
@@ -99,9 +108,15 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
         c->event_frame = intel_get_vblank_counter(&c->base);
         c->event_async = cs->async_flip != 0;
         if (c->event_async) {
+            /* Unmasked before the planes were written, and again in case
+             * the event left over masked it; IIR keeps a flip done that
+             * came between. */
             i915_irq_unmask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
         }
     } else {
+        if (cs->async_flip) {
+            i915_irq_mask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
+        }
         drm_crtc_send_vblank_event(&c->base, e);
     }
     kirq_restore(flags);
