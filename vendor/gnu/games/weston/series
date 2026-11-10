@@ -1,4 +1,5 @@
 kiosk-active-tree.patch
 kiosk-fullscreen-centre.patch
 xwm-emulated-mode.patch
+xwm-mapped-managed.patch
 version.patch

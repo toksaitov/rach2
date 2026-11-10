@@ -1,0 +1,27 @@
+Description: Manage a window that asks to be mapped as an ordinary window
+ The window manager took a window's override-redirect flag from its
+ CreateNotify and kept it. Wine creates a fullscreen window
+ override-redirect and clears the flag before it maps the window, so the
+ window manager framed and showed the window but, counting it
+ override-redirect, never gave it the input focus, answered none of its
+ ConfigureRequests and sent it no ConfigureNotify; the X focus stayed None
+ and the program's keys reached no window. A MapRequest comes only for a
+ window that is not override-redirect, so the window manager now clears the
+ flag there.
+Author: Rach2
+Forwarded: no
+---
+--- a/xwayland/window-manager.c
++++ b/xwayland/window-manager.c
+@@ -1297,6 +1297,11 @@
+ 	if (!wm_lookup_window(wm, map_request->window, &window))
+ 		return;
+ 
++	/* The X server redirects the map of a window only when it is not
++	 * override-redirect, so a client that created the window as one has
++	 * since made it an ordinary window, as Wine does; manage it as one. */
++	window->override_redirect = 0;
++
+ 	weston_wm_window_read_properties(window);
+ 
+ 	/* For a new Window, MapRequest happens before the Window is realized
