@@ -5,22 +5,32 @@
 #
 #   virgl-lost.sh [-f FRAMES] [-o OUT]
 #
-# Ends any Weston that runs, such as Rach2's boot session, and starts a
-# Weston of its own on the DRM card with its GL renderer, virgl's, through
-# libseat's noop backend, as vkcube.sh does. weston-simple-egl draws to it,
-# so that Weston's renderer composites, and glreset.c, which the runner
-# builds with the guest's GCC, draws with the most robust context the driver
-# gives. Once glreset has drawn its frames right, the runner resets the
-# device: on Rach2 by writing 1 to the driver's debugfs file,
-# /sys/kernel/debug/dri/N/virtio_gpu_reset, and on Linux, which has no such
-# file, by unbinding the card's virtio device from the virtio_gpu driver.
-# Either way the driver unplugs its DRM device and resets the virtio device,
-# and QEMU's virglrenderer frees every context and resource. glreset then
-# draws FRAMES frames more (200) and makes a new context, and the runner
-# reads what is left: whether Weston and its client still run, what Weston's
-# log says of its repaints, the DRM nodes, the renderer a new Weston gets on
-# the headless backend with its GL renderer, and how a new Weston on the DRM
-# backend ends.
+# Ends any Weston that runs, such as Rach2's boot session when the runner is
+# started by hand, and starts a Weston of its own on the DRM card with its
+# GL renderer, virgl's, through libseat's noop backend, as vkcube.sh does.
+# weston-simple-egl draws to it, so that Weston's renderer composites, and
+# glreset.c, which the runner builds with the guest's GCC, draws with the
+# most robust context the driver gives. Once the client has printed its
+# first count of frames, after five seconds of them, so that it draws, on
+# the card, with its buffers made, and glreset has drawn its frames right,
+# the runner resets the device: on Rach2 by writing 1 to the driver's
+# debugfs file, /sys/kernel/debug/dri/N/virtio_gpu_reset, and on Linux,
+# which has no such file, by unbinding the card's virtio device from the
+# virtio_gpu driver. Either way the driver unplugs its DRM device and resets
+# the virtio device, and QEMU's virglrenderer frees every context and
+# resource. glreset then draws FRAMES frames more (200) and makes a new
+# context. The runner then starts weston-simple-shm, a client that needs no
+# GPU, so that Weston has frames to repaint whatever became of the first
+# client, and once Weston has logged ten lines reads what is left: whether
+# Weston and its first client still run, what Weston's log says of its
+# repaints, the DRM nodes, the renderer a new Weston gets on the headless
+# backend with its GL renderer, and how a new Weston on the DRM backend
+# ends.
+#
+# A client that starts as the device goes is another matter, which the
+# runner keeps out of the result: one that has not opened the card draws in
+# software, and one whose first buffer cannot be made dies in Mesa's Wayland
+# platform (dev-log/77-vgpu/upstream.md).
 #
 # OUT (.) gets the record; `lost.txt`, the lines below, which the case
 # compares with the Debian guest's; and the logs of glreset, the client and
@@ -40,8 +50,9 @@
 #
 # with llvmpipe named without its LLVM, and then `virgl-lost: result: reset
 # by HOW`. The runner waits for each program's own line or end, and for
-# Weston's line 600 tries. The status is 0 when every step ran; what the
-# programs saw is a result, which the case compares with the reference's.
+# Weston's ten lines 100 tries, ten seconds. The status is 0 when every step
+# ran; what the programs saw is a result, which the case compares with the
+# reference's.
 set -eu
 
 RUNNER_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -58,7 +69,7 @@ while getopts f:o: o; do
 done
 shift $((OPTIND - 1))
 [ $# -eq 0 ] || { echo "usage: virgl-lost.sh [-f FRAMES] [-o OUT]" >&2; exit 2; }
-for program in weston weston-simple-egl gcc; do
+for program in weston weston-simple-egl weston-simple-shm stdbuf gcc; do
     command -v "$program" > /dev/null || { echo "virgl-lost: no $program" >&2; exit 1; }
 done
 
@@ -99,7 +110,7 @@ await()
 # common.sh's cleanup ends; installed as the exit trap.
 cleanup()
 {
-    for pid in $gl $client $again; do
+    for pid in $gl $client $shm $again; do
         kill -KILL "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
     done
@@ -109,7 +120,7 @@ cleanup()
     runner_cleanup
 }
 
-gl='' client='' again=''
+gl='' client='' shm='' again=''
 runner_init virgl-lost "$out"
 trap cleanup EXIT
 runner_start plain
@@ -134,7 +145,8 @@ WAYLAND_DISPLAY=wayland-lost
 export XDG_RUNTIME_DIR WAYLAND_DISPLAY
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 LIBSEAT_BACKEND=noop setsid weston --backend=drm --renderer=gl --shell=kiosk --idle-time=0 \
-    --no-config --socket="$WAYLAND_DISPLAY" --log="$out/weston.log" < /dev/null > /dev/null 2>&1 &
+    --continue-without-input --no-config --socket="$WAYLAND_DISPLAY" --log="$out/weston.log" \
+    < /dev/null > /dev/null 2>&1 &
 RUNNER_WESTON=$!
 until [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do
     kill -0 "$RUNNER_WESTON" 2>/dev/null || runner_die "weston ended: $(tail -n 3 "$out/weston.log")"
@@ -143,13 +155,17 @@ done
 runner_record "compositor $(weston --version 2>/dev/null) drm gl kiosk"
 runner_record "renderer $(sed -n 's/.*GL renderer: *//p' "$out/weston.log" | head -n 1)"
 
-weston-simple-egl > "$out/client.log" 2>&1 < /dev/null &
+stdbuf -oL weston-simple-egl > "$out/client.log" 2>&1 < /dev/null &
 client=$!
 "$RUNNER_WORK/glreset" "$RUNNER_WORK/before" "$RUNNER_WORK/after" "$frames" \
     > "$out/glreset.log" 2>&1 < /dev/null &
 gl=$!
 await "$out/glreset.log" '^glreset: drawing$' "$gl" glreset
-kill -0 "$client" 2>/dev/null || runner_die "the client ended early: $(tail -n 3 "$out/client.log")"
+await "$out/client.log" ' frames in ' "$client" "the client"
+# A client that could not open the card draws in software, which no reset
+# touches.
+! grep -q 'could not open' "$out/client.log" || runner_die "the client does not draw on the card"
+runner_record "client $(grep ' frames in ' "$out/client.log" | head -n 1)"
 : > "$RUNNER_WORK/before"
 await "$out/glreset.log" '^glreset: before: ' "$gl" glreset
 logged=$(wc -l < "$out/weston.log")
@@ -178,11 +194,14 @@ runner_record "reset $how at $(date +%H:%M:%S.%N)"
 st=0
 wait "$gl" || st=$?
 gl=''
-# Weston's first line since the reset, without its time: wait for it while
-# Weston runs, 600 tries at most.
+weston-simple-shm > "$out/shm.log" 2>&1 < /dev/null &
+shm=$!
+# Weston's first line since the reset, without its time: wait for ten lines
+# while Weston runs, by when the first client has had its frame callbacks,
+# 100 tries at most, which a case's bound on silence allows.
 tries=0
-while [ "$(wc -l < "$out/weston.log")" -le "$logged" ] && kill -0 "$RUNNER_WESTON" 2>/dev/null &&
-    [ "$tries" -lt 600 ]; do
+while [ "$(wc -l < "$out/weston.log")" -lt "$((logged + 10))" ] &&
+    kill -0 "$RUNNER_WESTON" 2>/dev/null && [ "$tries" -lt 100 ]; do
     tries=$((tries + 1))
     sleep 0.1
 done
@@ -192,7 +211,7 @@ first=$(tail -n "+$((logged + 1))" "$out/weston.log" | sed -n '1s/^\[[0-9:.]*\] 
     grep '^glreset: ' "$out/glreset.log" | grep -v '^glreset: drawing$'
     echo "glreset: exit $st"
     state weston "$RUNNER_WESTON"
-    echo "weston: log: ${first:-nothing in 600 tries}"
+    echo "weston: log: ${first:-nothing in 100 tries}"
     state client "$client"
     nodes=
     for f in /dev/dri/*; do
@@ -200,9 +219,10 @@ first=$(tail -n "+$((logged + 1))" "$out/weston.log" | sed -n '1s/^\[[0-9:.]*\] 
     done
     echo "nodes: ${nodes:-none}"
 } > "$RUNNER_WORK/lost"
-kill -KILL "$RUNNER_WESTON" "$client" 2>/dev/null || true
+kill -KILL "$RUNNER_WESTON" "$client" "$shm" 2>/dev/null || true
 wait "$client" 2>/dev/null || true
-client=''
+wait "$shm" 2>/dev/null || true
+client='' shm=''
 wait "$RUNNER_WESTON" 2>/dev/null || true
 RUNNER_WESTON=''
 
@@ -223,8 +243,8 @@ else
 fi
 again=''
 WAYLAND_DISPLAY=wayland-drm
-LIBSEAT_BACKEND=noop weston --backend=drm --renderer=gl --no-config --socket="$WAYLAND_DISPLAY" \
-    --log="$out/weston-drm.log" < /dev/null > /dev/null 2>&1 &
+LIBSEAT_BACKEND=noop weston --backend=drm --renderer=gl --continue-without-input --no-config \
+    --socket="$WAYLAND_DISPLAY" --log="$out/weston-drm.log" < /dev/null > /dev/null 2>&1 &
 again=$!
 until [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] || ! kill -0 "$again" 2>/dev/null; do
     sleep 0.1
