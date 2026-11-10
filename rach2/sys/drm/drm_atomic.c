@@ -1386,10 +1386,11 @@ static void commit_tail(struct drm_atomic_state *state)
 
 /*
  * A nonblocking commit whose in-fences had not all signalled, which the
- * worker finishes once they have: the commit's states, moved from the
- * caller's after the swap, a callback on each plane's fence, how many have
- * yet to signal, and a hold on the device. The queue is in the order the
- * commits were made.
+ * worker, or a blocking commit of the same objects, finishes once they
+ * have: the commit's states, moved from the caller's after the swap, a
+ * callback on each plane's fence, how many have yet to signal, whether
+ * its tail has begun, and a hold on the device. The queue is in the order
+ * the commits were made, and a work stays on it until its tail ends.
  */
 struct commit_work;
 struct commit_fence_cb {
@@ -1400,12 +1401,17 @@ struct commit_work {
     struct drm_atomic_state state;
     struct commit_fence_cb cbs[DRM_MAX_PLANES];
     uint32_t waiting;
+    int running;
     struct commit_work *next;
 };
 
 static struct commit_work *works;
 /* The worker sleeps here; static storage starts it empty. */
 static wait_queue_t work_wait;
+/* A commit stalled on a queued one sleeps here, woken as a queued
+ * commit's fences signal or its tail ends; static storage starts it
+ * empty. */
+static wait_queue_t work_done_wait;
 
 /** A fence of a queued commit signalled: one fewer to wait for. In the
  * signaller's context, which may be an interrupt. */
@@ -1416,6 +1422,7 @@ static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
     (void)fence;
     if (--w->waiting == 0) {
         wq_wake_all(&work_wait);
+        wq_wake_all(&work_done_wait);
     }
 }
 
@@ -1593,24 +1600,42 @@ static int hotplug_work(void)
     }
 }
 
+/** Run the tail of `w`, a queued commit whose fences have signalled, then
+ * take it off the queue and free it. May sleep in the drivers' hooks. */
+static void work_finish(struct commit_work *w)
+{
+    struct commit_work **link;
+    struct drm_device *dev = w->state.dev;
+
+    w->running = 1;
+    commit_tail(&w->state);
+    for (link = &works; *link != w; link = &(*link)->next) {
+    }
+    *link = w->next;
+    drm_dev_put(dev);
+    kfree(w);
+    wq_wake_all(&work_done_wait);
+}
+
+/** The first queued commit whose fences have signalled and whose tail has
+ * not begun, or NULL. */
+static struct commit_work *work_next_ready(void)
+{
+    struct commit_work *w;
+
+    for (w = works; w && (w->waiting || w->running); w = w->next) {
+    }
+    return w;
+}
+
 int drm_atomic_commit_work(void)
 {
-    struct commit_work **link = &works, *w;
-    struct drm_device *dev;
+    struct commit_work *w;
     int n = dev_work_run();
 
     n += hotplug_work();
-
-    while ((w = *link) != NULL) {
-        if (w->waiting) {
-            link = &w->next;
-            continue;
-        }
-        *link = w->next;
-        dev = w->state.dev;
-        commit_tail(&w->state);
-        drm_dev_put(dev);
-        kfree(w);
+    while ((w = work_next_ready()) != NULL) {
+        work_finish(w);
         n++;
     }
     return n;
@@ -1624,7 +1649,6 @@ static process_t *commit_thread;
  * wait began, whose generation `arg` holds. */
 static int work_ready(void *arg)
 {
-    const struct commit_work *w;
     const struct drm_work *dw;
     uint64_t now = rtc_ticks_now();
 
@@ -1636,12 +1660,7 @@ static int work_ready(void *arg)
             return 1;
         }
     }
-    for (w = works; w; w = w->next) {
-        if (!w->waiting) {
-            return 1;
-        }
-    }
-    return 0;
+    return work_next_ready() != NULL;
 }
 
 /** The worker, kdrm: sleep in an idle wait until a queued commit has its
@@ -1796,17 +1815,83 @@ static int32_t wait_for_fences(struct drm_atomic_state *state, int intr)
     return 0;
 }
 
+/** The first queued commit of `state`'s device that holds a state of a
+ * CRTC, plane or connector `state` changes, whose tail reads the states
+ * that `state`'s tail would free as old; or NULL. */
+static struct commit_work *work_overlapping(const struct drm_atomic_state *state)
+{
+    struct commit_work *w;
+    int i, hit;
+
+    for (w = works; w; w = w->next) {
+        if (w->state.dev != state->dev) {
+            continue;
+        }
+        hit = 0;
+        for (i = 0; i < DRM_MAX_PLANES; i++) {
+            hit |= state->planes_new[i] && w->state.planes_new[i];
+        }
+        for (i = 0; i < DRM_MAX_CRTCS; i++) {
+            hit |= state->crtcs_new[i] && w->state.crtcs_new[i];
+        }
+        for (i = 0; i < DRM_MAX_CONNECTORS; i++) {
+            hit |= state->connectors_new[i] && w->state.connectors_new[i];
+        }
+        if (hit) {
+            return w;
+        }
+    }
+    return NULL;
+}
+
+/** Whether a commit of `arg`, its state, stalled on a queued one may act:
+ * none holds its objects, or the first that does has its fences and its
+ * tail has not begun. */
+static int overlap_ready(void *arg)
+{
+    const struct commit_work *w = work_overlapping((const struct drm_atomic_state *)arg);
+
+    return !w || (!w->waiting && !w->running);
+}
+
 /**
- * Linux's stall_checks: a nonblocking commit may not get ahead of a flip; a
- * blocking one waits for it, at once for one the worker has yet to program,
- * whose states it would otherwise replace under it, then at most 10 s for
- * its vblank. 0, -EBUSY or -EINTR.
+ * Linux's stall on the commits of a state's objects, which a queued commit
+ * has yet to finish: EBUSY for a nonblocking commit; a blocking one waits
+ * for the queued commit's fences and runs its tail itself, or waits for the
+ * worker to end a tail it began, since the worker's other works may want
+ * the commit lock the caller holds. 0, -EBUSY or -EINTR.
+ */
+static int32_t stall_on_works(struct drm_atomic_state *state, int nonblock)
+{
+    struct commit_work *w;
+
+    while ((w = work_overlapping(state)) != NULL) {
+        if (nonblock) {
+            return -EBUSY;
+        }
+        if (overlap_ready(state)) {
+            work_finish(w);
+        } else if (wq_wait_event(&work_done_wait, overlap_ready, state) != 0) {
+            return -EINTR;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Linux's stall_checks: a nonblocking commit may not get ahead of a queued
+ * commit of its objects or of a flip; a blocking one finishes the queued
+ * commit first, as stall_on_works says, then waits at most 10 s for each
+ * flip's vblank. 0, -EBUSY or -EINTR.
  */
 static int32_t stall_checks(struct drm_atomic_state *state, int nonblock)
 {
-    int32_t rc;
+    int32_t rc = stall_on_works(state, nonblock);
     int i;
 
+    if (rc != 0) {
+        return rc;
+    }
     for (i = 0; i < DRM_MAX_CRTCS; i++) {
         struct drm_crtc_state *cs = state->crtcs_new[i];
 

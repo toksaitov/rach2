@@ -750,6 +750,55 @@ static void row_fences(void)
     CHECK(!works, "no commit left queued");
 }
 
+/** A request that shows `fb_id` on primary plane 1, on CRTC 1, with the
+ * in-fence `in_fd`, and changes nothing of the CRTC. */
+static void req_plane1(struct req *r, uint32_t fb_id, int32_t in_fd)
+{
+    k_memset(r, 0, sizeof(*r));
+    req_add(r, &primary[1].base, mc->prop_fb_id, fb_id);
+    req_add(r, &primary[1].base, mc->prop_crtc_id, crtc[1].base.id);
+    req_add(r, &primary[1].base, mc->prop_src_w, 1366u << 16);
+    req_add(r, &primary[1].base, mc->prop_src_h, 768u << 16);
+    req_add(r, &primary[1].base, mc->prop_crtc_w, 1366);
+    req_add(r, &primary[1].base, mc->prop_crtc_h, 768);
+    if (in_fd >= 0) {
+        req_add(r, &primary[1].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
+    }
+}
+
+/** A commit queued on an in-fence over a CRTC that is off has no flip, so
+ * only its objects tell a later commit to stall: a nonblocking one of the
+ * same plane answers EBUSY, and a blocking one finishes it first, without
+ * the worker, before its own tail frees the queued commit's states. */
+static void row_queued_off(void)
+{
+    fd_entry_t timeline;
+    struct req r;
+    int32_t in_fd;
+
+    req_mode(&r, 1, 0, 0);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_ALLOW_MODESET, 0) == 0 && !crtc[1].state->active,
+          "CRTC 1 off");
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(sw_sync_open(&timeline) == 0, "a sw_sync timeline");
+    in_fd = sw_point(&timeline, 1);
+    req_plane1(&r, fb_a, in_fd);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK, 0) == 0 && works && !crtc[1].flip_pending,
+          "a plane queued on its fence over the CRTC that is off, with no flip");
+    req_plane1(&r, fb_b, -1);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK, 0) == -EBUSY,
+          "a nonblocking commit of the same plane: EBUSY");
+    late_timeline = &timeline;
+    CHECK(req_commit(&r, 0, 0) == 0 && !late_timeline && !works &&
+              primary[1].state->fb->base.id == fb_b,
+          "a blocking one waits for the fence and finishes the queued commit first");
+    fd_free(&table, in_fd);
+    sw_close(&timeline);
+    req_mode(&r, 1, mode_id, fb_b);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_ALLOW_MODESET, 0) == 0 && crtc[1].state->active,
+          "CRTC 1 on again");
+}
+
 /* ---- 76-5b.4: connector forcing, the EDID override and CRCs ---- */
 
 /** Force a connector off and back, as debugfs's `force` does. */
@@ -899,6 +948,7 @@ int main(void)
     row_events();
     row_off();
     row_fences();
+    row_queued_off();
     row_force();
     row_edid_override();
     row_crc();
