@@ -13,8 +13,13 @@ import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
-ROWS = ("prefix", "draw-64", "draw-32", "maps")
+ROWS = ("prefix", "draw-64", "draw-32", "maps", "umu")
 GAME_ID = "2733"
+# What a refused call leaves in pressure-vessel's log: the strerror(3) text
+# of an errno a kernel without the call or the permission returns.
+REFUSED = re.compile(r"Operation not permitted|Function not implemented|Invalid argument|"
+                     r"Permission denied|Operation not supported|Bad address|"
+                     r"Inappropriate ioctl for device|No such device\b")
 # Wine 11's preloader reserves these ranges for a 64-bit process, which a
 # WoW64 process is too (loader/preloader.c, preload_info): the DOS area, the
 # low memory area, the 32-bit top-down area with the shared user data, and
@@ -123,14 +128,17 @@ class Runner:
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(
             ("PROTON_", "WINE", "STEAM_", "DXVK_", "VKD3D_", "WAYLAND_", "LP_"))
             and k not in ("SteamGameId", "SteamAppId", "GALLIUM_DRIVER",
-                          "LIBGL_ALWAYS_SOFTWARE", "DISPLAY", "XDG_DATA_HOME")}
+                          "LIBGL_ALWAYS_SOFTWARE", "DISPLAY", "XDG_DATA_HOME",
+                          "XDG_CACHE_HOME")}
         run = work / "run"
         run.mkdir(mode=0o700)
         self.env.update(XDG_RUNTIME_DIR=str(run), XDG_DATA_HOME=str(work / "data"),
+                        XDG_CACHE_HOME=str(work / "cache"),
                         MESA_SHADER_CACHE_DIR=str(work / "shader-cache"),
                         STEAM_COMPAT_CLIENT_INSTALL_PATH=str(work / "steam"),
                         PROTON_LOG_DIR=str(work / "logs"), WINEDEBUG="-all,err+all")
         self.prefix = work / "compat"
+        self.umu = False
         self.record = {"uname": list(os.uname()), "memory_mib": mem_mib()}
 
     def start_weston(self):
@@ -161,6 +169,13 @@ class Runner:
         env = dict(self.env)
         env.update(extra or {})
         argv = self.launcher + ["--id", GAME_ID, "--prefix", str(self.prefix), "--"] + program
+        if self.umu:
+            # pressure-vessel's log, kept per launch, and the work directory
+            # and the probes inside the container, where they keep their paths.
+            argv.insert(len(self.launcher), "--umu")
+            env.update(STEAM_LINUX_RUNTIME_LOG="1", STEAM_LINUX_RUNTIME_KEEP_LOGS="1",
+                       STEAM_LINUX_RUNTIME_LOG_DIR=str(self.work / "slr"),
+                       PRESSURE_VESSEL_FILESYSTEMS_RW="%s:%s" % (self.work, HERE))
         proc = start(argv, env, self.out / (name + ".log"))
         if not wait:
             return proc
@@ -286,6 +301,67 @@ class Runner:
                     want.get(range_name) if want else None))
         return ok
 
+    def options(self, name):
+        """Return the Options set, fsync and renderer lines of NAME's Proton log."""
+        path = self.out / (name + ".proton.log")
+        text = path.read_text(errors="replace") if path.exists() else ""
+        found = re.search(r"^Options: (.*)$", text, re.M)
+        return {"options": sorted(re.findall(r"'([^']*)'", found.group(1))) if found else None,
+                "fsync": "fsync: up and running." in text,
+                "opengl": "Using the OpenGL renderer." in text}
+
+    def row_umu(self, results, ref):
+        """
+        Run the 64-bit Direct3D 9 probe through umu in the Steam Linux Runtime
+        and directly, and compare Proton's settings and the pixels. The first
+        launch unpacks the runtime; the second must download and unpack nothing.
+        The container's log must hold no refused call.
+        """
+        self.umu = True
+        self.make_prefix()
+        first = (self.out / "prefix.log").read_text(errors="replace")
+        unpacked = re.search(r"rach2-game: umu: unpacked the Steam Linux Runtime (\S+)", first)
+        status, text = self.probe("d3d964", {"WINEDEBUG": "-all,err+all"})
+        second = (self.out / "d3d964.log").read_text(errors="replace")
+        crc = re.search(r"pixels crc32 ([0-9a-f]{8})", text)
+        adapter = re.search(r"^adapter: (.*)", text, re.M)
+        cache = Path(self.env["XDG_CACHE_HOME"]) / "umu"
+        downloads = sorted(p.name for p in cache.glob("*")) if cache.is_dir() else []
+        results["umu"] = dict(self.options("d3d964"), exit=status,
+                              crc32=crc.group(1) if crc else None,
+                              adapter=adapter.group(1) if adapter else None,
+                              unpacked=unpacked.group(1) if unpacked else None,
+                              again="unpacked" in second or "Downloading" in second or
+                              "Downloading" in first, cache=downloads)
+        self.server_wait()
+        refused = []
+        for log in sorted((self.work / "slr").glob("slr-*.log")):
+            shutil.copy(log, self.out / log.name)
+            for line in log.read_text(errors="replace").splitlines():
+                if REFUSED.search(line):
+                    refused.append(line)
+        results["refused"] = refused
+        for line in refused:
+            say("umu: refused: %s" % line)
+        self.umu = False
+        self.prefix = self.work / "direct"
+        self.make_prefix()
+        status, text = self.probe("d3d964", {"WINEDEBUG": "-all,err+all"})
+        results["direct"] = dict(self.options("d3d964"), exit=status)
+        u, d = results["umu"], results["direct"]
+        want = ref.get("d3d964") if ref is not None else None
+        say("umu: runtime %s exit %d crc32 %s linux %s adapter %s options %s fsync %s opengl %s" % (
+            u["unpacked"], u["exit"], u["crc32"], want, u["adapter"], u["options"], u["fsync"],
+            u["opengl"]))
+        say("umu: direct exit %d options %s fsync %s opengl %s; second start fetched %s cache %s" % (
+            d["exit"], d["options"], d["fsync"], d["opengl"], u["again"], u["cache"]))
+        return (u["unpacked"] is not None and not u["again"] and not u["cache"] and
+                u["exit"] == 0 and d["exit"] == 0 and u["crc32"] is not None and
+                (want is None or u["crc32"] == want) and u["options"] is not None and
+                u["options"] == d["options"] and "wow64" in u["options"] and
+                "wined3d" in u["options"] and u["fsync"] and d["fsync"] and u["opengl"] and
+                d["opengl"] and not refused)
+
     def stop(self):
         """End the Wine server and Weston and reap them."""
         if self.prefix.exists():
@@ -305,7 +381,7 @@ class Runner:
 def main():
     """Run ROW in OUT; compare with ref/linux.json unless GAMES_REFERENCE is set."""
     if len(sys.argv) != 3 or sys.argv[1] not in ROWS:
-        raise SystemExit("usage: run.py prefix|draw-64|draw-32|maps OUT")
+        raise SystemExit("usage: run.py prefix|draw-64|draw-32|maps|umu OUT")
     row, output = sys.argv[1:]
     if os.geteuid() == 0:
         raise SystemExit("games: run as an ordinary user")
@@ -323,6 +399,8 @@ def main():
             ok = runner.row_prefix(results)
         elif row == "maps":
             ok = runner.row_maps(results, None if ref is None else ref["maps"])
+        elif row == "umu":
+            ok = runner.row_umu(results, None if ref is None else ref["draw"])
         else:
             bits = row.split("-")[1]
             ok = runner.row_draw(bits, results, None if ref is None else ref["draw"])

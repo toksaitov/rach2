@@ -2020,6 +2020,12 @@ include tests/graphics/d3d/rules.mk
 # and DirectInput's devices; the same payload, with wm.py.
 include tests/system/games/rules.mk
 
+# `tests/run games-umu`: the Wine probes' 64-bit Direct3D 9 program through
+# rach2-game --umu, umu-launcher and the Steam Linux Runtime's container: the
+# runtime unpacked once with its updates off, the direct route's Proton
+# settings, Linux's pixels, and no refused call in pressure-vessel's log. It
+# reads the payload games-wine makes.
+
 # `tests/run desktop`: an ordinary headless Weston session at boot, input
 # discovery, and browser and ALSA tones measured through OSS loopback; Weston
 # at boot on bochs with Pixman and on virtio-gpu with GL, the browsers taking
