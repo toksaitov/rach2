@@ -923,8 +923,11 @@ static int32_t make_files(struct drm_device *dev)
         rc = rc ? rc : debugfs_create_text(path, 0444u, &state_ops, dev);
     }
     for (i = 0; rc == 0 && i < mc->num_crtc && i < DRM_MAX_CRTCS; i++) {
+        indexed_path(path, dev, "crtc", i, NULL);
+        rc = debugfs_create_dir(path, NULL, NULL);
         /* Linux's drm_debugfs_crtc_crc_add: CRC files only with CRCs. */
-        if (!mc->crtcs[i]->funcs->set_crc_source || !mc->crtcs[i]->funcs->verify_crc_source) {
+        if (rc != 0 || !mc->crtcs[i]->funcs->set_crc_source ||
+            !mc->crtcs[i]->funcs->verify_crc_source) {
             continue;
         }
         indexed_path(path, dev, "crtc", i, "crc/control");
