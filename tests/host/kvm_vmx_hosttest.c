@@ -3,11 +3,13 @@
  *
  * host-deps: rach2/sys/kvm/kvm.c rach2/sys/kvm/vcpu.c rach2/sys/kvm/cpuid.c
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
+ * host-deps: rach2/sys/kvm/hyperv.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
  * can point at the model; the run loop, the vCPU ioctls, the CPUID and MSR
- * tables, the instruction emulator and the decoder are linked as they are.
+ * tables, the instruction emulator, the decoder and Hyper-V's enlightenments
+ * are linked as they are.
  * The model is the Lenovo's Haswell as its capability MSRs read, with
  * IA32_FEATURE_CONTROL locked with VMX on (0x5), and VMXON, VMXOFF,
  * VMCLEAR, VMPTRLD, VMREAD, VMWRITE, INVEPT, INVVPID, VMLAUNCH and VMRESUME
@@ -19,23 +21,23 @@
  * fields. Memory is one slot of 1 MiB at guest-physical 0, the host's.
  *
  * The rows run the trial's path start to finish: the probe, refusing a
- * processor without what the backend needs and choosing the Lenovo's
- * controls; a VM and its vCPU; each entry inside VMXON and VMPTRLD and each
- * exit followed by VMCLEAR and VMXOFF with CR4 as it was, on every path;
- * the VMCS built and checked by the model; each exit the corpus's guests
- * cause handled in the kernel or given to the caller: CPUID, port I/O and
- * its string form, EPT faults on RAM and MMIO reads, writes and
- * read-modify-writes, an instruction the decoder refuses, the control and
- * debug registers, real to long mode and PAE's PDPTEs, the MSRs, XSETBV,
- * VMCALL and the instructions answered alone, the interrupt and NMI
- * windows, an event the exit found under delivery, the caller's single
- * steps and breakpoints, a RIP above 4 GiB, the host's interrupt,
- * NMI and machine check, the preemption timer, a triple fault and the two
- * kinds of failed entry; hardware task switches by CALL, IRET, JMP and
- * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults;
- * a move to another processor; a state read between runs; VMXON and
- * VMPTRLD failing; a failed VMWRITE reported once; VPIDs; and a panic
- * inside a run, which turns VMX off.
+ * processor without what the backend needs and choosing the Lenovo's controls;
+ * a VM and its vCPU; each entry inside VMXON and VMPTRLD and each exit followed
+ * by VMCLEAR and VMXOFF with CR4 as it was, on every path; the VMCS built and
+ * checked by the model; each exit the corpus's guests cause handled in the
+ * kernel or given to the caller: CPUID, port I/O and its string form, EPT
+ * faults on RAM and MMIO reads, writes and read-modify-writes, an instruction
+ * the decoder refuses, the control and debug registers, real to long mode and
+ * PAE's PDPTEs, the MSRs, XSETBV, VMCALL, KVM's and Hyper-V's once the CPUID
+ * and the guest's id name it, and the instructions answered alone, the
+ * interrupt and NMI windows, an event the exit found under delivery, the
+ * caller's single steps and breakpoints, a RIP above 4 GiB, the host's
+ * interrupt, NMI and machine check, the preemption timer, a triple fault and
+ * the two kinds of failed entry; hardware task switches by CALL, IRET, JMP and
+ * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults; a
+ * move to another processor; a state read between runs; VMXON and VMPTRLD
+ * failing; a failed VMWRITE reported once; VPIDs; and a panic inside a run,
+ * which turns VMX off.
  */
 #include "kvm/vmx.c"
 
@@ -639,6 +641,50 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
     }
     return 0;
 }
+
+/* What hyperv.c calls of vlapic.c, eventfd.c and the clock, with no APIC
+ * in the kernel, no eventfd and no TSC rate measured. */
+
+int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector)
+{
+    (void)v;
+    (void)vector;
+    return -1;
+}
+
+int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *value)
+{
+    (void)v;
+    (void)reg;
+    (void)write;
+    (void)value;
+    return 1;
+}
+
+struct eventfd *eventfd_get(int fd, int32_t *err)
+{
+    (void)fd;
+    *err = -EBADF;
+    return NULL;
+}
+
+void eventfd_put(struct eventfd *ev)
+{
+    (void)ev;
+}
+
+void eventfd_signal(struct eventfd *ev)
+{
+    (void)ev;
+}
+
+uint32_t timer_calibrate(void)
+{
+    return 0;
+}
+
+void arch_relax(void)
+{}
 
 /* SVM, which this processor does not have. */
 static int svm_probe(void)
@@ -2443,6 +2489,51 @@ static void ts_rows(int vm)
     fdclose(fd);
 }
 
+/** A VMCALL goes to Hyper-V's hypercalls once the CPUID names Hyper-V and
+ * the guest has written its id, on a vCPU of its own on `vm`. */
+static void hv_rows(int vm)
+{
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[1];
+    } msrs;
+    struct kvm_cpuid_entry2 *e = (struct kvm_cpuid_entry2 *)(buf.bytes + sizeof(buf.cpuid));
+    struct {
+        struct kvm_cpuid2 h;
+        struct kvm_cpuid_entry2 e[10];
+    } hv;
+    uint32_t ud = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    struct kvm_sregs s;
+    int fd = fdio(vm, KVM_CREATE_VCPU, 3);
+
+    CHECK(fd > vm, "KVM_CREATE_VCPU");
+    buf.cpuid.nent = 256;
+    hv.h.nent = 10;
+    CHECK(dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf) == 0 &&
+              dev(KVM_GET_SUPPORTED_HV_CPUID, (uintptr_t)&hv) == 0 && hv.h.nent == 10,
+          "the supported CPUID and Hyper-V's leaves");
+    k_memcpy(e + buf.cpuid.nent, hv.e, sizeof(hv.e));
+    buf.cpuid.nent += 10;
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 with Hyper-V's leaves");
+    s = sregs_of(fd);
+    s.cs.base = 0;
+    s.cs.selector = 0;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && (uint32_t)regs_of(fd).rax == (uint32_t)-1000,
+          "VMCALL is KVM's before the guest names itself");
+    msrs.h.nmsrs = 1;
+    msrs.h.pad = 0;
+    k_memset(msrs.e, 0, sizeof(msrs.e));
+    msrs.e[0].index = 0x40000000u;
+    msrs.e[0].data = 0x8100000000000000ull;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 1, "the guest's id set");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
+          "VMCALL is Hyper-V's, #UD in real mode and not stepped, before the HLT");
+    fdclose(fd);
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -2469,6 +2560,7 @@ int main(void)
     pae_rows(fd);
     vpid_panic_rows(vm);
     ts_rows(vm);
+    hv_rows(vm);
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
     fdclose(fd);

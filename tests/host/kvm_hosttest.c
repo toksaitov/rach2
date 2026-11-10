@@ -2,12 +2,14 @@
  * Check the KVM interface, /dev/kvm and its VM and vCPU descriptors,
  * against a fake backend.
  *
- * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c
+ * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c rach2/sys/kvm/hyperv.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
- * kvm.c and vcpu.c are the kernel's, included whole; cpuid.c and msr.c are
- * linked. The processor is a model of the Lenovo's Haswell: its CPUID,
- * with VMX, AVX and XSAVE of x87, SSE and AVX. The backend is a fake whose
+ * kvm.c and vcpu.c are the kernel's, included whole; cpuid.c, msr.c and
+ * hyperv.c are linked, the last with no guest memory, APIC or eventfd under
+ * it, which tests/host/kvm_hyperv_hosttest.c gives it. The processor is a
+ * model of the Lenovo's Haswell: its CPUID, with VMX, AVX and XSAVE of x87,
+ * SSE and AVX. The backend is a fake whose
  * entry either refuses, as the stubs do, or reports the exits a script
  * gives, and the memory slots, the interrupt routing, the in-kernel bus and
  * the local APIC are fakes that answer the capabilities their files make
@@ -647,6 +649,85 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
     return 0;
 }
 
+/* What hyperv.c calls of emulate.c, vlapic.c, eventfd.c and the clock,
+ * for a VM with no guest memory, no APIC and no eventfd. */
+
+int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write)
+{
+    (void)v;
+    (void)gpa;
+    (void)buf;
+    (void)n;
+    (void)write;
+    return 1;
+}
+
+int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector)
+{
+    (void)v;
+    (void)vector;
+    return -1;
+}
+
+int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *value)
+{
+    (void)v;
+    (void)reg;
+    (void)write;
+    (void)value;
+    return 1;
+}
+
+void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t error)
+{
+    (void)v;
+    (void)nr;
+    (void)has_error;
+    (void)error;
+}
+
+int kvm_emul_cpl(const struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
+int kvm_emul_mode(const struct kvm_vcpu *v)
+{
+    (void)v;
+    return 64;
+}
+
+void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
+{
+    v->regs.rip += len;
+}
+
+struct eventfd *eventfd_get(int fd, int32_t *err)
+{
+    (void)fd;
+    *err = -EBADF;
+    return NULL;
+}
+
+void eventfd_put(struct eventfd *ev)
+{
+    (void)ev;
+}
+
+void eventfd_signal(struct eventfd *ev)
+{
+    (void)ev;
+}
+
+uint32_t timer_calibrate(void)
+{
+    return 0;
+}
+
+void arch_relax(void)
+{}
+
 /** The compare-and-exchange, on one processor. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
@@ -720,6 +801,24 @@ static void abi_rows(void)
           "KVM_GET_XSAVE and KVM_GET_XCRS");
     CHECK(KVM_GET_VCPU_EVENTS == 0x8040AE9Fu && KVM_GET_CLOCK == 0x8030AE7Cu,
           "KVM_GET_VCPU_EVENTS and KVM_GET_CLOCK");
+}
+
+/** Check Hyper-V's structures, ioctls and capabilities against Linux's. */
+static void hv_abi_rows(void)
+{
+    CHECK(sizeof(struct kvm_hyperv_exit) == 56 && sizeof(struct kvm_hyperv_eventfd) == 24 &&
+              sizeof(struct kvm_irq_routing_hv_sint) == 8,
+          "Hyper-V's exit, eventfd and SINT route have Linux's sizes");
+    CHECK(KVM_GET_SUPPORTED_HV_CPUID == 0xC008AEC1u && KVM_HYPERV_EVENTFD == 0x4018AEBDu &&
+              KVM_EXIT_HYPERV == 27,
+          "KVM_GET_SUPPORTED_HV_CPUID, KVM_HYPERV_EVENTFD and KVM_EXIT_HYPERV");
+    CHECK(KVM_CAP_HYPERV_TIME == 96 && KVM_CAP_HYPERV_SYNIC == 123 &&
+              KVM_CAP_HYPERV_SYNIC2 == 148 && KVM_CAP_HYPERV_VP_INDEX == 149 &&
+              KVM_CAP_HYPERV_EVENTFD == 154 && KVM_CAP_HYPERV_TLBFLUSH == 155 &&
+              KVM_CAP_HYPERV_SEND_IPI == 161 && KVM_CAP_HYPERV_ENLIGHTENED_VMCS == 163 &&
+              KVM_CAP_HYPERV_CPUID == 167 && KVM_CAP_HYPERV_DIRECT_TLBFLUSH == 175 &&
+              KVM_CAP_SYS_HYPERV_CPUID == 191 && KVM_CAP_HYPERV_ENFORCE_CPUID == 199,
+          "the Hyper-V capabilities' numbers");
 }
 
 /* The capabilities QEMU 10 requires of KVM on x86 (kvm-all.c and
@@ -998,9 +1097,13 @@ static void startup_regs(int vcpu, uint32_t n)
     CHECK(fdio(vcpu, KVM_SET_SREGS, (uintptr_t)&sregs) == 0, "KVM_SET_SREGS");
 }
 
-/** The value QEMU puts at reset in the MSR `index`. */
+/** The value QEMU puts at reset in the MSR `index`: 0 in Hyper-V's, whose
+ * state QEMU zeroes. */
 static uint64_t reset_value(uint32_t index)
 {
+    if ((index >> 12) == 0x40000u) {
+        return 0;
+    }
     if (index == 0x277) {
         return 0x0007040600070406ull;
     }
@@ -1480,6 +1583,7 @@ int main(void)
     caller.mm = &caller_mm;
     caller.fds = &table;
     abi_rows();
+    hv_abi_rows();
     kvm_start();
     CHECK(kvm_backend == &kvm_vmx && registered && registered->major == 10 &&
               registered->minor == 232 && registered->mode == 0666,
