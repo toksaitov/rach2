@@ -462,19 +462,59 @@ static int fetch(struct kvm_vcpu *v, uint8_t *buf)
 
 /* ---- CPUID, XSETBV and MSRs ---- */
 
+/**
+ * The entry a CPUID of `*function` that `v`'s table lacks reads, as Linux's
+ * get_out_of_range_cpuid_entry: past the highest leaf of its range, the
+ * highest basic leaf, whose number goes in `*function`, as on Intel's
+ * processors; NULL, for zeros, inside the range or for a guest whose vendor
+ * is AMD or Hygon, as on theirs. The ranges are the basic, the hypervisor's
+ * of 256 leaves from 0x40000000, the extended and Centaur's from 0xC0000000.
+ */
+static const struct kvm_cpuid_entry2 *cpuid_out_of_range(const struct kvm_vcpu *v,
+                                                         uint32_t *function, uint32_t index)
+{
+    const struct kvm_cpuid_entry2 *basic = kvm_cpuid_find(v, 0, 0), *class;
+    uint32_t f = *function;
+
+    if (!basic ||
+        (basic->ebx == 0x68747541u && basic->ecx == 0x444D4163u &&
+         basic->edx == 0x69746E65u) /* "AuthenticAMD" */
+        ||
+        (basic->ebx == 0x6F677948u && basic->ecx == 0x656E6975u &&
+         basic->edx == 0x6E65476Eu) /* "HygonGenuine" */) {
+        return NULL;
+    }
+    if (f >= 0x40000000u && f <= 0x4FFFFFFFu) {
+        class = kvm_cpuid_find(v, f & 0xFFFFFF00u, 0);
+    } else if (f >= 0xC0000000u) {
+        class = kvm_cpuid_find(v, 0xC0000000u, 0);
+    } else {
+        class = kvm_cpuid_find(v, f & 0x80000000u, 0);
+    }
+    if (class && f <= class->eax) {
+        return NULL;
+    }
+    *function = basic->eax;
+    return kvm_cpuid_find(v, basic->eax, index);
+}
+
 void kvm_emul_cpuid(struct kvm_vcpu *v)
 {
     uint32_t function = (uint32_t)v->regs.rax, index = (uint32_t)v->regs.rcx;
     const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, function, index);
-    const struct kvm_cpuid_entry2 *top;
     uint32_t a = 0, b = 0, c = 0, d = 0;
 
     if (!e) {
-        /* A leaf past the highest basic one reads as that leaf, as on
-         * Intel's processors and Linux's kvm_cpuid. */
-        top = kvm_cpuid_find(v, function & 0x80000000u, 0);
-        if (top && function > top->eax && !(function & 0x80000000u)) {
-            e = kvm_cpuid_find(v, top->eax, index);
+        e = cpuid_out_of_range(v, &function, index);
+    }
+    if (!e && (function == 0xBu || function == 0x1Fu)) {
+        /* An undefined subleaf of a topology leaf that has subleaf 1 gives
+         * CL back and the x2APIC id in EDX, as Linux's kvm_cpuid. */
+        e = kvm_cpuid_find(v, function, 1);
+        if (e) {
+            c = index & 0xFFu;
+            d = e->edx;
+            e = NULL;
         }
     }
     if (e) {
