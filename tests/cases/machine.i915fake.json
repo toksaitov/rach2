@@ -468,11 +468,12 @@
     },
     {
       "case_id": "machine.i915fake.reset",
-      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and a batch the fake's hang fault hangs on the render ring is found by the heartbeat and its engine reset: its out-fence ends with EIO, the batch of another context queued behind it runs, GET_RESET_STATS charges the guilty context alone, and the guilty context's third hang within 120 s bans it, EXECBUFFER2 refusing it with EIO while the other context's batches still run",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and a batch the fake's hang fault hangs on the render ring is found by the heartbeat and its engine reset: its out-fence ends with EIO, the batch of another context queued behind it runs, GET_RESET_STATS charges the guilty context alone, and the guilty context's third hang within 120 s bans it, EXECBUFFER2 refusing it with EIO while the other context's batches still run; then each of the driver's debugfs files reads with Linux's first line, the error state reads the same in debugfs and in the card's error in /sys, a write clears it, a write of Linux's VCS0 bit to i915_wedged captures a state of vcs0, and i915_gem_drop_caches takes every bit",
       "units": [
         "rach2/sys/drm/i915/i915_hangcheck.c",
         "rach2/sys/drm/i915/i915_reset.c",
         "rach2/sys/drm/i915/i915_gem_context.c",
+        "rach2/sys/drm/i915/i915_debugfs.c",
         "i915resetprobe"
       ],
       "domain": "guest",
@@ -509,7 +510,7 @@
         "program": "i915resetprobe",
         "stdin": null,
         "role": "ordinary",
-        "privileges": "root, as etude-guest runs it, which the fake's debugfs file, a batch with a length and the reset count need",
+        "privileges": "root, as etude-guest runs it, which the fake's debugfs file, a batch with a length, the reset count and the driver's debugfs files need",
         "isolation": [],
         "children": "none",
         "cleanup": "the probe closes what it made"
@@ -533,6 +534,16 @@
         {
           "assertion_id": "ban",
           "checks": "two more hangs of the first context end its batches with EIO, after which EXECBUFFER2 refuses it with EIO, GET_RESET_STATS counts its three hangs, the fake's file counts six resets of rcs0's domain, and the second context's batch still completes",
+          "source": "program"
+        },
+        {
+          "assertion_id": "files",
+          "checks": "i915_capabilities, i915_engine_info, i915_frequency_info, i915_cdclk_info, i915_gem_objects, i915_gpu_info and crtc-0's i915_pipe and i915_current_bpc read with Linux's text, i915_wedged reads 0 and i915_gem_drop_caches 0x000003ff, and the error state the hangs left names rcs0 and begins with the same line in debugfs's i915_error_state and the card's error in /sys",
+          "source": "program"
+        },
+        {
+          "assertion_id": "writes",
+          "checks": "a write of i915_error_state clears the state, which debugfs then reads empty and /sys as not collected; a write of 0x400, Linux's VCS0, to i915_wedged captures a state whose message names the video class, GPU HANG: ecode 7:4:, and, vcs0 being idle, makes the fake count no reset, as Linux passes over an engine that is not awake, with the GPU not wedged; and i915_gem_drop_caches takes a write of 0x3ff",
           "source": "program"
         }
       ],
