@@ -34,10 +34,11 @@ So do the keys of any other device that can report a key below
 or a Braille key, as Linux's console takes them: the power and sleep
 buttons, a hotkey device, a keypad.
 .Pp
-A USB human-interface device is read by its report descriptor, as Linux's
-usbhid and hid-generic read it, and has a node for each application of the
-descriptor, a System Control or Consumer Control application sharing a
-keyboard's.
+Each human-interface interface of a USB device is read by its report
+descriptor, as Linux's usbhid and hid-generic read it, and has a node for
+each application of the descriptor, a System Control or Consumer Control
+application sharing a keyboard's; a keyboard whose media keys are a second
+interface has nodes for both.
 Its name is its manufacturer's and product's strings, a space between, or
 .Dq HID VVVV:PPPP ,
 its vendor and product in hexadecimal, when it has neither; a device of more
@@ -48,7 +49,8 @@ or
 .Dq Consumer Control ,
 unless the name ends with it.
 Its bus is 3, its version bcdHID from its HID descriptor, and its place
-.Dq usb-N/input0 .
+.Dq usb-N/inputI ,
+I the interface's number.
 Its capabilities and events are those Linux gives the same descriptor: each
 key and button is reported with its usage as
 .Dv MSC_SCAN ,
@@ -619,8 +621,8 @@ the others.
 The device's name and its place,
 .Dq isa0060/serio0/input0
 for the PS/2 keyboard and
-.Dq usb-N/input0
-for a USB keyboard, cut to the length the request gives, as Linux cuts
+.Dq usb-N/inputI
+for interface I of a USB keyboard, cut to the length the request gives, as Linux cuts
 them; the answer is the bytes copied.
 .It Dv EVIOCGUNIQ
 The serial number of a USB device in the report protocol, its serial
@@ -844,8 +846,8 @@ or
 .Xr sysfs 5
 .Sh CAVEATS
 A USB device's digitizer usages are not mapped, so a touchscreen or pen
-that reports through them has no node, and only the first human-interface
-interface of a device is read.
+that reports through them has no node, and no more than eight
+human-interface interfaces of a device are read.
 The touchpad drivers are Synaptics', ALPS's and Elantech's alone: another
 touchpad, or an ALPS pad of version 9, is driven as the PS/2 mouse it also
 is, and a Synaptics or Elantech pad that offers its SMBus bus is driven

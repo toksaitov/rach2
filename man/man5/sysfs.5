@@ -247,8 +247,9 @@ its bus and the controller's slot for it, three decimal digits each; and
 .Ql DEVTYPE=usb_device .
 A write of an action sends that uevent.
 .It Pa /sys/devices/usb/B-P[.P...]/B-P[.P...]:C.I
-The interface of a USB keyboard or mouse, by its configuration value C
-and its number I, made with its input device and linked from
+Each human-interface interface of a USB keyboard or mouse that has an
+input device, by its configuration value C and its number I, made with
+its first input device and linked from
 .Pa /sys/bus/usb/devices :
 .Pa bInterfaceNumber ,
 .Pa bAlternateSetting ,
