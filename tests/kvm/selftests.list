@@ -1,0 +1,97 @@
+# selftests.list: Linux's KVM selftests in the KVM suite, one a line: the
+# program's path under /opt/kvm-selftests, what corpus.sh requires of it
+# under Rach2's KVM, Linux's result on the testing PC, and the reason.
+# EXPECT is `pass`, an exit of 0; `skip`, the kselftest skip, exit 4, for
+# what the processor lacks, as Linux skips it there; or `excluded`, not run,
+# for one of the reasons the stack's approved plan allows. LINUX is the result
+# of the same 6.12.115 programs under Linux 6.18.58, WSL's, as
+# ref/linux-selftests.status has it; a row Linux failed
+# there, where the programs are older than the kernel, still expects a pass,
+# its failure named after `Linux:`.
+#
+# NAME EXPECT LINUX REASON
+access_tracking_perf_test skip skip CONFIG_IDLE_PAGE_TRACKING is not enabled
+coalesced_io_test pass pass
+demand_paging_test pass pass
+dirty_log_perf_test pass pass
+dirty_log_test pass fail Linux: Set page 369 value 1 incorrect (iteration=3)
+guest_memfd_test pass fail Linux: guest_memfd() with flag '0x1' should fail with EINVAL
+guest_print_test pass pass
+hardware_disable_test pass pass
+kvm_binary_stats_test pass pass
+kvm_create_max_vcpus pass pass
+kvm_page_table_test pass pass
+max_guest_memory_test pass pass
+memslot_modification_stress_test pass pass
+memslot_perf_test pass pass
+pre_fault_memory_test pass pass
+rseq_test pass pass
+set_memory_region_test pass fail Linux: Unexpected exit mmio address = 0x180000
+steal_time pass pass
+system_counter_offset_test pass pass
+x86_64/amx_test skip skip Required XSAVE feature 'XFEATURE_MASK_XTILE_DATA' not supported
+x86_64/apic_bus_clock_test pass pass
+x86_64/cpuid_test pass pass
+x86_64/cr4_cpuid_sync_test pass pass
+x86_64/debug_regs pass pass
+x86_64/dirty_log_page_splitting_test skip skip HUGETLB is not enabled in /proc/sys/vm/nr_hugepages
+x86_64/exit_on_emulation_failure_test pass pass
+x86_64/fix_hypercall_test pass pass
+x86_64/get_msr_index_features pass pass
+x86_64/hwcr_msr_test pass pass
+x86_64/hyperv_clock excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_cpuid excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_evmcs excluded skip Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_extended_hypercalls excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_features excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_ipi excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_svm_test excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_tlb_flush excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/kvm_clock_test pass pass
+x86_64/kvm_pv_test pass fail Linux: KVM_ENABLE_CAP failed, rc: -1 errno: 22 (Invalid argument)
+x86_64/max_vcpuid_cap_test pass pass
+x86_64/monitor_mwait_test skip skip Requirement not met: this_cpu_has(X86_FEATURE_MWAIT)
+x86_64/nested_exceptions_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/nx_huge_pages_test skip skip Running via nx_huge_pages_test.sh, which also handles environment setup, is strongly recommended.
+x86_64/platform_info_test pass fail Linux: KVM_SET_MSRS failed on MSR_PLATFORM_INFO, value = 0x80000000
+x86_64/pmu_counters_test excluded skip PMU: Rach2's KVM gives its guests no performance counters
+x86_64/pmu_event_filter_test excluded pass PMU: Rach2's KVM gives its guests no performance counters
+x86_64/private_mem_conversions_test skip skip Requirement not met: kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_SW_PROTECTED_VM)
+x86_64/private_mem_kvm_exits_test skip skip Requirement not met: kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_SW_PROTECTED_VM)
+x86_64/recalc_apic_map_test pass pass
+x86_64/set_boot_cpu_id pass pass
+x86_64/set_sregs_test pass fail Linux: Failed to set supported CR4 bits (0x350fff)
+x86_64/sev_init2_tests skip skip Requirement not met: __kvm_has_device_attr(kvm_fd, KVM_X86_GRP_SEV, KVM_X86_SEV_VMSA_FEATURES) == 0
+x86_64/sev_migrate_tests skip skip Requirement not met: kvm_cpu_has(X86_FEATURE_SEV)
+x86_64/sev_smoke_test skip skip Requirement not met: kvm_cpu_has(X86_FEATURE_SEV)
+x86_64/smaller_maxphyaddr_emulation_test skip skip Requirement not met: kvm_has_cap(KVM_CAP_SMALLER_MAXPHYADDR)
+x86_64/smm_test pass pass
+x86_64/state_test pass pass
+x86_64/svm_int_ctl_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/svm_nested_shutdown_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/svm_nested_soft_inject_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/svm_vmcall_test excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/sync_regs_test pass pass
+x86_64/triple_fault_event_test pass pass
+x86_64/tsc_msrs_test pass pass
+x86_64/tsc_scaling_sync pass pass
+x86_64/ucna_injection_test skip skip MCG_CMCI_P is not supported, skipping test
+x86_64/userspace_io_test pass pass
+x86_64/userspace_msr_exit_test pass fail Linux: not ok 3 user_msr.msr_permission_bitmap
+x86_64/vmx_apic_access_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_close_while_nested_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_dirty_log_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_exception_with_invalid_guest_state excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_invalid_nested_guest_state excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_msrs_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_nested_tsc_scaling_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_pmu_caps_test excluded skip PMU: Rach2's KVM gives its guests no performance counters
+x86_64/vmx_preemption_timer_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_set_nested_state_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/vmx_tsc_adjust_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x86_64/xapic_ipi_test pass pass
+x86_64/xapic_state_test pass pass
+x86_64/xcr0_cpuid_test pass pass
+x86_64/xen_shinfo_test skip skip Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_SHARED_INFO
+x86_64/xen_vmcall_test skip skip Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+x86_64/xss_msr_test pass pass

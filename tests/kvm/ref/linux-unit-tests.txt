@@ -1,0 +1,87 @@
+SKIP cmpxchg8b (i386 only)
+PASS smptest3 (1 tests)
+PASS smptest (1 tests)
+PASS ioapic (30 tests)
+PASS vmexit_cpuid 
+PASS vmexit_mov_from_cr8 
+PASS vmexit_mov_to_cr8 
+PASS vmexit_vmcall 
+PASS vmexit_inl_pmtimer 
+PASS vmexit_ipi 
+PASS vmexit_ple_round_robin 
+PASS vmexit_ipi_halt 
+PASS vmexit_tscdeadline 
+PASS vmexit_tscdeadline_immed 
+PASS vmexit_cr4_pge 
+SKIP access-reduced-maxphyaddr (/sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y)
+SKIP access_fep (1 tests, 1 skipped)
+PASS vmexit_cr0_wp 
+PASS smap (18 tests)
+PASS access (1 tests)
+SKIP pks (1 tests, 1 skipped)
+SKIP pku (0 tests)
+PASS hypercall (4 tests)
+PASS eventinj (13 tests)
+PASS emulator (151 tests, 2 skipped)
+PASS idt_test (4 tests)
+PASS memory (7 tests, 1 skipped)
+PASS asyncpf (2 tests, 1 skipped)
+FAIL pmu (77 tests, 10 unexpected failures, 10 skipped)
+SKIP pmu_lbr (1 tests, 1 skipped)
+SKIP vmware_backdoors (/sys/module/kvm/parameters/enable_vmware_backdoor not equal to Y)
+SKIP pmu_pebs (1 tests, 1 skipped)
+PASS msr (1844 tests)
+PASS realmode 
+PASS msr64 (1838 tests)
+PASS setjmp (10 tests)
+PASS s3 
+PASS syscall (2 tests)
+PASS tsc (6 tests)
+PASS rmap_chain 
+PASS tsc_adjust (6 tests)
+FAIL svm_unsupported_instruction_intercept_test (10 tests, 3 unexpected failures)
+FAIL x2apic (timeout; duration=30)
+PASS xsave (386 tests)
+PASS svm_pause_filter (4 tests)
+SKIP taskswitch (i386 only)
+SKIP taskswitch2 (i386 only)
+PASS svm_npt (138 tests, 3 skipped)
+PASS pcid-enabled (2 tests)
+PASS sieve 
+PASS pcid-asymmetric (2 tests)
+FAIL pcid-disabled (2 tests, 1 unexpected failures)
+PASS umip (21 tests)
+PASS rdpru (1 tests)
+SKIP vmx (0 tests)
+FAIL la57 
+SKIP ept (qemu-system-x86_64: Property 'max-x86_64-cpu.vmx-mbec' not found)
+SKIP ept-mbec (qemu-system-x86_64: Property 'Skylake-Server-x86_64-cpu.vmx-mbec' not found)
+PASS kvmclock_test (1 tests)
+SKIP vmx_hlt_with_rvi_test (0 tests)
+SKIP vmx_eoi_bitmap_ioapic_scan (0 tests)
+SKIP vmx_apicv_test (0 tests)
+SKIP vmx_posted_intr_test (0 tests)
+SKIP vmx_apic_passthrough_thread (0 tests)
+SKIP vmx_init_signal_test (0 tests)
+SKIP vmx_sipi_signal_test (0 tests)
+SKIP vmx_apic_passthrough_tpr_threshold_test (0 tests)
+SKIP vmx_vmcs_shadow_test (0 tests)
+SKIP vmx_pf_exception_test (0 tests)
+SKIP vmx_pf_exception_test_fep (0 tests)
+SKIP vmx_pf_vpid_test (0 tests)
+SKIP vmx_pf_exception_test_reduced_maxphyaddr (/sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y)
+SKIP vmx_pf_invvpid_test (0 tests)
+SKIP vmx_pf_no_vpid_test (0 tests)
+PASS hyperv_synic (1 tests)
+FAIL hyperv_connections (7 tests, 1 unexpected failures)
+PASS hyperv_stimer (12 tests)
+PASS hyperv_stimer_direct (8 tests)
+PASS intel_iommu (11 tests)
+SKIP tsx-ctrl (1 tests, 1 skipped)
+SKIP cet (1 tests, 1 skipped)
+PASS lam (19 tests)
+PASS hyperv_clock (3 tests)
+FAIL xapic (timeout; duration=60)
+FAIL debug 
+FAIL svm (timeout; duration=90s)
+FAIL svm_no_npt (timeout; duration=90s)
