@@ -324,6 +324,29 @@ struct vfs_ops {
      * return 0, or -errno. Size zero queries length. The caller checks access
      * and holds the node lock; flags are Linux's CREATE=1 and REPLACE=2. */
     int (*xattr)(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg);
+    /* Whether page `pgoff`, 4096 bytes, of the regular file `node` is in
+     * memory, for cachestat(2): VFS_PAGE_CACHED when it is, with
+     * VFS_PAGE_DIRTY when it is yet to be written back, else 0. The caller
+     * asks only for pages below the file's size and holds the description's
+     * lock. NULL for a type that keeps no page of a file in memory. */
+    int (*page_cached)(struct vfs_mount *mnt, void *node, uint64_t pgoff);
+};
+
+/* The answers of a type's `page_cached`. */
+#define VFS_PAGE_CACHED 1
+#define VFS_PAGE_DIRTY  2
+
+/* What cachestat(2) counts over a file's range of pages, in the order and
+ * widths of Linux's struct cachestat. A page that was in memory and went is
+ * counted by Linux as evicted, and as recently evicted when it went lately;
+ * no type here keeps a trace of the pages it lets go, so both stay 0, and
+ * so does `writeback`, a write-back never being under way between calls. */
+struct vfs_cachestat {
+    uint64_t cache;
+    uint64_t dirty;
+    uint64_t writeback;
+    uint64_t evicted;
+    uint64_t recently_evicted;
 };
 
 /* One file-system kind: the name mount(2) takes and /proc/filesystems
@@ -1069,6 +1092,12 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
  * the KRFFS root is the node: 0, -EBUSY for a file that backs a loop
  * device, -EROFS for a type without `truncate`, or the type's error. */
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size);
+/** Count into `*cs`, zeroed first, the pages from `first` to `last` of the
+ * regular file `node` of `mnt` that are in memory, by the type's
+ * `page_cached`, up to the file's size; the caller holds the description's
+ * lock. Nothing for a mount that is gone or a type that keeps no page. */
+void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
+                   struct vfs_cachestat *cs);
 /** fallocate(2) through an open handle: the type's operation, -EOPNOTSUPP
  * for a type without one, -EROFS on a read-only mount, -EBUSY for a file
  * that backs a loop device, and -EPERM for an immutable file or a mode

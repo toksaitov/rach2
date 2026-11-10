@@ -160,6 +160,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MINCORE] = sys_mincore;
     table[SYS_MADVISE] = sys_madvise;
     table[SYS_MSEAL] = sys_mseal;
+    table[SYS_CACHESTAT] = sys_cachestat;
     table[SYS_PKEY_MPROTECT] = sys_pkey_mprotect;
     table[SYS_PKEY_ALLOC] = sys_pkey_alloc;
     table[SYS_PKEY_FREE] = sys_pkey_free;

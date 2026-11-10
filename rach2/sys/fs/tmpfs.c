@@ -1221,6 +1221,20 @@ const char *tmpfs_label(void *node)
     return ((struct tmpfs_node *)node)->label;
 }
 
+/** A page of a tmpfs file is in memory for as long as the file has it, and
+ * dirty, there being nothing to write it back to, as Linux's shmem keeps
+ * the pages a write or a store made dirty. */
+static int tmpfs_page_cached(struct vfs_mount *mnt, void *node, uint64_t pgoff)
+{
+    struct tmpfs_node *n = (struct tmpfs_node *)node;
+
+    (void)mnt;
+    if (pgoff > 0xFFFFFFFFu || shmem_resident(&n->data, (uint32_t)pgoff) == 0) {
+        return 0;
+    }
+    return VFS_PAGE_CACHED | VFS_PAGE_DIRTY;
+}
+
 /**
  * The `remount` of tmpfs takes a new size=, as Linux's tmpfs does; one
  * smaller than the pages the files hold is -EINVAL. A tmpfs has nothing on
@@ -1285,6 +1299,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
+    tmpfs_page_cached,
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0};

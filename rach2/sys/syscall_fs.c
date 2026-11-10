@@ -13717,6 +13717,73 @@ long sys_memfd_create(isr_params_t *params)
     return fd;
 }
 
+/**
+ * Whether the caller may count the cached pages of what `e` is open on, as
+ * Linux's can_do_cachestat has it since a fix that 6.12's stable kernels
+ * carry: the descriptor is open for writing, or the caller owns the file
+ * or is privileged, or may write it by its mode.
+ */
+static int cachestat_allowed(fd_entry_t *e)
+{
+    struct kstat st;
+
+    if (e->flags & FD_FLAG_WRITE) {
+        return 1;
+    }
+    if (fstat_fill(e, &st) != 0) {
+        return 0;
+    }
+    return (uint32_t)st.st_uid == current_proc->euid || cred_privileged() ||
+           access_fd(e, W_OK, AT_EACCESS) == 0;
+}
+
+/**
+ * cachestat(2) takes fd, a range, a record and flags.
+ *
+ * The counts of the pages of the file `fd` is open on, in the range of
+ * Linux's struct cachestat_range, an offset and a length in bytes, a length
+ * of 0 reaching to the end, that are in memory and dirty there
+ * (`vfs_cachestat`), copied out as Linux's struct cachestat; the layouts are
+ * the same for an i386 program. What is not a file of a mounted file system
+ * counts no page. Returns 0 or a negative errno, in Linux 6.12's order: a
+ * descriptor that is not open, or is an O_PATH one, is EBADF; a range that
+ * cannot be read EFAULT; a caller `cachestat_allowed` refuses EPERM; flags
+ * not 0 EINVAL; a record that cannot be written EFAULT.
+ */
+long sys_cachestat(isr_params_t *params)
+{
+    fd_entry_t *e;
+    uint64_t range[2], first, last;
+    struct vfs_cachestat cs;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    if (!e || (e->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (copy_from_user(range, (const void __user *)SC_ARG(params, 1), sizeof(range)) != 0) {
+        return -EFAULT;
+    }
+    if (!cachestat_allowed(e)) {
+        return -EPERM;
+    }
+    if ((uint32_t)SC_ARG(params, 3) != 0) {
+        return -EINVAL;
+    }
+    first = range[0] >> 12;
+    last = range[1] == 0 ? ~(uint64_t)0 : (range[0] + range[1] - 1u) >> 12;
+    k_memset(&cs, 0, sizeof(cs));
+    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt &&
+        e->ofd->vnode) {
+        fd_ofd_lock(e->ofd);
+        vfs_cachestat(e->ofd->vmnt, e->ofd->vnode, first, last, &cs);
+        fd_ofd_unlock(e->ofd);
+    }
+    return copy_to_user((void __user *)SC_ARG(params, 2), &cs, sizeof(cs)) != 0 ? -EFAULT : 0;
+}
+
 /* flock(2)'s obsolete mandatory-lock bit, which Linux accepts and ignores. */
 #define LOCK_MAND 32
 

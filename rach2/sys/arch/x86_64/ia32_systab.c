@@ -540,7 +540,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_PROCESS_MRELEASE] = sys_process_mrelease;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
     table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;
-    table[SYS_CACHESTAT] = NULL;
+    table[SYS_CACHESTAT] = sys_cachestat;
     table[SYS_FCHMODAT2] = sys_fchmodat2;
     table[SYS_MAP_SHADOW_STACK] = sys_map_shadow_stack;
     table[SYS_FUTEX_WAKE] = sys_futex_wake;

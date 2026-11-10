@@ -789,6 +789,17 @@ int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
     return 0;
 }
 
+/** cachestat's count, which no row asks for: no page. */
+void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
+                   struct vfs_cachestat *cs)
+{
+    (void)mnt;
+    (void)node;
+    (void)first;
+    (void)last;
+    k_memset(cs, 0, sizeof(*cs));
+}
+
 /** fallocate, which no row calls: EOPNOTSUPP. */
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
 {

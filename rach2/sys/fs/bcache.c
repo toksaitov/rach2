@@ -1131,6 +1131,13 @@ int bcache_cached(block_device_t *dev, uint64_t blk)
     return index_find(dev, blk) != 0;
 }
 
+int bcache_state(block_device_t *dev, uint64_t blk)
+{
+    struct bbuf *b = index_find(dev, blk);
+
+    return b == 0 ? 0 : b->dirty ? 2 : 1;
+}
+
 int bcache_busy(block_device_t *dev, uint64_t blk)
 {
     struct bbuf *b = index_find(dev, blk);

@@ -249,6 +249,14 @@ int bcache_cached(block_device_t *dev, uint64_t block)
     return 1;
 }
 
+/** The state cachestat reads, which no row asks for: the block is cached
+ * and clean as `bcache_cached` says. */
+int bcache_state(block_device_t *dev, uint64_t block)
+{
+    (void)dev;
+    return block < TEST_BLOCKS && uncached[block] ? 0 : 1;
+}
+
 /** Whether another process holds block `block`, as the model says. */
 int bcache_busy(block_device_t *dev, uint64_t block)
 {
