@@ -869,6 +869,30 @@ static void save_restore(void)
     CHECK(locks_held == 0, "every lock is given back");
 }
 
+/** A DRM master's hold: the keys reach nothing, COM1's input stays open, a
+ * KDSKBMODE meanwhile is kept for the end, and neither the hold nor its end
+ * discards the console's unread input. */
+static void hold(void)
+{
+    int m = -1;
+
+    mode(K_UNICODE);
+    flushes = repeat_cancels = ninput = 0;
+    kd_hold();
+    CHECK(kd_translates(), "a hold leaves COM1's input open");
+    kd_key_event(&caller, 30, KD_KEY_PRESS);
+    kd_key_event(&caller, 30, KD_KEY_RELEASE);
+    CHECK(ninput == 0, "a held keyboard sends nothing");
+    CHECK(kd_ioctl(KDSKBMODE, K_MEDIUMRAW) == 0 && kd_ioctl(KDGKBMODE, (uintptr_t)&m) == 0 &&
+              m == K_MEDIUMRAW && kd_mode == K_OFF && !kd_translates(),
+          "a mode set during the hold is kept for its end");
+    CHECK(kd_ioctl(KDSKBMODE, K_UNICODE) == 0 && kd_translates(), "and set back");
+    kd_unhold();
+    CHECK(kd_mode == K_UNICODE && kd_translates(), "the hold's end puts the mode back");
+    CHECK(flushes == 0 && repeat_cancels == 2, "the hold and its end discard no input");
+    CHECK(locks_held == 0, "every lock is given back");
+}
+
 /** evdev's EVIOCGREP and EVIOCSREP on a keyboard, and -ENOSYS on a device
  * that is no keyboard. */
 static void evdev_repeat(void)
@@ -923,6 +947,7 @@ int main(void)
     raw_modes();
     translating();
     save_restore();
+    hold();
     evdev_repeat();
     CHECK(locks_held == 0, "every lock is given back at the end");
     printf("kd-test: result: %d failures\n", failures);

@@ -180,12 +180,13 @@ static int kd_mode_translates(int mode)
     return mode == K_XLATE || mode == K_UNICODE;
 }
 
-/** Put the keyboard in mode `mode`, K_*, now: stop a held key's repeat and
- * discard the console's unread input, as Linux does after KDSKBMODE.
- * Leaving a mode that does not translate rebuilds the translator's held
- * modifiers from the keys down now, since it saw none of their presses and
- * releases meanwhile. -EINVAL for a mode that is none of the five. */
-static int32_t kd_apply_mode(int mode)
+/** Put the keyboard in mode `mode`, K_*, now: stop a held key's repeat and,
+ * when `flush` is set, discard the console's unread input, as Linux does
+ * after KDSKBMODE. Leaving a mode that does not translate rebuilds the
+ * translator's held modifiers from the keys down now, since it saw none of
+ * their presses and releases meanwhile. -EINVAL for a mode that is none of
+ * the five. */
+static int32_t kd_apply_mode(int mode, int flush)
 {
     unsigned char held[KM_NR_KEYS / 8];
     struct keymap map;
@@ -214,7 +215,9 @@ static int32_t kd_apply_mode(int mode)
     kd_mode = mode;
     spin_unlock_irqrestore(&kd_lock, flags);
     input_cancel_repeat();
-    tty_flush_input(&console_tty);
+    if (flush) {
+        tty_flush_input(&console_tty);
+    }
     return 0;
 }
 
@@ -230,7 +233,7 @@ static int32_t kd_set_mode(int mode)
         kd_held_mode = mode;
         return 0;
     }
-    return kd_apply_mode(mode);
+    return kd_apply_mode(mode, 1);
 }
 
 /** The keyboard's mode as KDGKBMODE and a save read it: the one held for
@@ -247,7 +250,7 @@ void kd_hold(void)
         return;
     }
     kd_held_mode = kd_mode;
-    kd_apply_mode(K_OFF);
+    kd_apply_mode(K_OFF, 0);
     kd_held = 1;
 }
 
@@ -257,7 +260,7 @@ void kd_unhold(void)
         return;
     }
     kd_held = 0;
-    kd_apply_mode(kd_held_mode);
+    kd_apply_mode(kd_held_mode, 0);
 }
 
 /**
@@ -636,7 +639,7 @@ int32_t kd_ioctl(uint32_t request, uintptr_t arg)
 
 int kd_translates(void)
 {
-    return kd_mode_translates(kd_mode);
+    return kd_mode_translates(kd_visible_mode());
 }
 
 void kd_raw_code(uint8_t code)

@@ -320,6 +320,8 @@ by another program fails with
 and the keyboard is in
 .Dv K_OFF ,
 so that keys typed meanwhile reach no program.
+Bytes received on COM1 still reach the console, and neither the hand-over
+nor the return discards unread input.
 .Dv KDGKBMODE
 then reports, and
 .Dv KDSKBMODE
@@ -448,7 +450,9 @@ gives nothing, and is the mode while a DRM master holds the screen, as
 describes.
 In the last three modes the lock keys, the scrollback keys and the
 kernel shell's Ctrl-C do nothing, and bytes received on COM1 are
-discarded; the key bytes pass through the line discipline, whose
+discarded, except while a DRM master holds the keyboard in
+.Dv K_OFF ;
+the key bytes pass through the line discipline, whose
 settings the program sets itself.
 Setting a mode discards unread input and stops a held key's repeat.
 .It Dv KDGKBMETA , KDSKBMETA

@@ -525,8 +525,9 @@ static uint32_t reader_drains, tick_drains;
 /**
  * Whether COM1's bytes are kept out of the console's input, because its
  * keyboard is in K_RAW, K_MEDIUMRAW or K_OFF and the input holds key codes
- * alone (`kd_translates`); the ring is then emptied, its bytes discarded, so
- * that none waits to be typed after the mode ends. Interrupts off.
+ * alone (`kd_translates`), a DRM master's hold of K_OFF aside; the ring is
+ * then emptied, its bytes discarded, so that none waits to be typed after
+ * the mode ends. Interrupts off.
  */
 static int console_serial_closed(void)
 {
