@@ -67,7 +67,8 @@ that would shrink the heap through it, which leaves the break as it was.
 .El
 .Pp
 .Xr shmdt 2
-of a sealed System V attachment leaves it and returns 0, as Linux does.
+of a System V attachment unmaps its mappings but the sealed ones, which it
+leaves, and returns 0, as Linux does.
 The seal does not stop
 .Xr mlock 2 ,
 the stack's growth, or the end of the mapping at

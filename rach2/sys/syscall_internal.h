@@ -1127,9 +1127,11 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
               char *path);
 
 /** Unmap the System V attachment at `addr`: the regions from it on that map
- * the pages `sh` from the segment's start, within `size` bytes. -EINVAL
- * when no such region begins at `addr`, -EPERM when one of them is sealed,
- * or -ENOMEM if removing the regions fails. */
+ * the pages `sh` from the segment's start, within `size` bytes, but those
+ * mseal sealed, which stay, as Linux's shmdt unmaps each region and ignores
+ * a sealed one's EPERM. 0 when a region went; -EINVAL when no such region
+ * begins at `addr`, -EPERM when every one is sealed, or -ENOMEM if removing
+ * the first region fails. */
 int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size);
 
 /** How many attachments the pages `sh` have, each address space's regions
