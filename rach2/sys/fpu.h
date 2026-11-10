@@ -56,4 +56,33 @@ void fpu_init_area(void *area);
 /** Load the initial state into the registers, for a handler about to run. */
 void fpu_reset(void);
 
+/*
+ * Memory protection keys, which the x86-64 kernel turns on where the
+ * processor has them (PKU): each user page carries a key from 0 to 15 in
+ * its page table entry, and each thread has a register, PKRU, with two
+ * bits for each key, the low one denying every data access to the pages of
+ * the key and the high one denying writes to them, the kernel's on the
+ * thread's behalf too. Instruction fetches are never refused by a key.
+ * PKRU is a component of the extended state, so it follows the thread
+ * through every switch, a fork and a signal as the rest of the state does,
+ * and an exec or a signal handler starts with PKRU_INIT. Elsewhere, on the
+ * i686 kernel and on a processor without the keys, no key is ever given
+ * and PKRU reads as 0.
+ */
+#define FPU_PKEYS  16
+/* PKRU's access-disable and write-disable bits of the key `k`. */
+#define PKRU_AD(k) (1u << (2u * (uint32_t)(k)))
+#define PKRU_WD(k) (2u << (2u * (uint32_t)(k)))
+/* Linux's init_pkru_value: key 0 open, every other key denied all access. */
+#define PKRU_INIT  0x55555554u
+
+/** Nonzero when the processor's protection keys are on. */
+int fpu_pkeys(void);
+
+/** The running thread's live PKRU, or 0 with the keys off. */
+uint32_t fpu_pkru(void);
+
+/** Write the running thread's live PKRU; nothing with the keys off. */
+void fpu_pkru_set(uint32_t pkru);
+
 #endif /* _FPU_H_ */
