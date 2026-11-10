@@ -245,8 +245,10 @@ static struct {
 
     /* The first 32 control requests, each its bRequest, its descriptor
      * type for GET_DESCRIPTOR, and the low byte of its wIndex, packed as
-     * `request(...)` packs them; `requests` counts them all. */
+     * `request(...)` packs them, and the last, packed the same way;
+     * `requests` counts them all. */
     int request[32];
+    int last_request;
     int requests;
 } ring;
 
@@ -397,10 +399,11 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         ring.in_endpoints |= 1u << (endpoint & 31);
     }
     if (endpoint == 1 && transfer->setup != 0) {
+        ring.last_request =
+            request(transfer->setup[1], transfer->setup[1] == 6 ? transfer->setup[3] : 0,
+                    transfer->setup[4]);
         if (ring.requests < 32) {
-            ring.request[ring.requests] =
-                request(transfer->setup[1], transfer->setup[1] == 6 ? transfer->setup[3] : 0,
-                        transfer->setup[4]);
+            ring.request[ring.requests] = ring.last_request;
         }
         ring.requests++;
         ring.control_submits++;
@@ -605,10 +608,11 @@ void msc_slot_closed(struct xhci_ctrl *hc, int device)
 }
 
 /* The interfaces the HID driver took, by their place on the device, a bit
- * each, in the report protocol and in the boot protocol, and the
- * bInterfaceNumber each was given. */
+ * each, in the report protocol and in the boot protocol, the
+ * bInterfaceNumber each was given, and the kind the last boot one was. */
 static uint32_t attached, attached_boot;
 static int attached_number[USB_HID_INTERFACES];
+static int attached_kind;
 
 /** Take any interface: the HID driver has its own test, hid_hosttest.c. */
 int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *rdesc, int length)
@@ -625,7 +629,7 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
 int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
 {
     (void)device;
-    (void)kind;
+    attached_kind = kind;
     attached_boot |= 1u << iface;
     attached_number[iface] = ids->interface;
     return 0;
@@ -1608,10 +1612,9 @@ static struct usb_device_state *enumerate(const unsigned char *config, int lengt
             ring.answer = 1;
         }
         if (ring.control_submits > seen) {
-            int last = ring.request[(ring.requests - 1) & 31];
-
             seen = ring.control_submits;
-            control_done(d, last == request(6, 0x22, refuse) ? USB_XFER_STALLED : USB_XFER_OK);
+            control_done(d, ring.last_request == request(6, 0x22, refuse) ? USB_XFER_STALLED
+                                                                          : USB_XFER_OK);
         }
         step_device(d);
     }
@@ -1838,6 +1841,34 @@ static void multi_gone_rows(void)
 }
 
 /**
+ * Check a device whose second interface, a boot mouse, refuses its report
+ * descriptor: that interface alone falls back to the boot protocol, with
+ * SET_PROTOCOL to its own number, and the first runs in the report protocol.
+ */
+static void multi_boot_rows(void)
+{
+    unsigned char mouse_second[sizeof(two_config)];
+    struct usb_device_state *d;
+    unsigned i;
+
+    for (i = 0; i < sizeof(mouse_second); i++) {
+        mouse_second[i] = two_config[i];
+    }
+    mouse_second[40] = 1; /* interface 1: boot subclass, mouse protocol */
+    mouse_second[41] = 2;
+    d = enumerate(mouse_second, (int)sizeof(mouse_second), 1);
+    CHECK("multi: a second interface that refuses its descriptor runs in the boot protocol",
+          d->state == ST_RUNNING && d->hid->at[0].live && d->hid->at[1].live &&
+              d->hid->at[1].boot && !d->hid->at[0].boot);
+    CHECK("multi: with SET_PROTOCOL to that interface alone",
+          requested(request(11, 0, 1)) && !requested(request(11, 0, 0)));
+    CHECK("multi: and the driver takes it as a boot mouse, the first in the report protocol",
+          attached == 1 && attached_boot == 2 && attached_kind == HID_MOUSE &&
+              attached_number[1] == 1);
+    usb_core_reset();
+}
+
+/**
  * Write in `out` a configuration of sixteen HID interfaces, numbered 0 to
  * 15, each with a report descriptor of 25 bytes and an interrupt IN
  * endpoint: 1 to 15 for the first fifteen, and 1 again for the last, which
@@ -1927,6 +1958,7 @@ int main(void)
     multi_two_rows();
     multi_three_rows();
     multi_gone_rows();
+    multi_boot_rows();
     multi_full_rows();
 
     /* A configuration as a device sends it. */
