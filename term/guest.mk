@@ -25,7 +25,9 @@
 TCC = /bin/cc
 
 LIBTSM = vendor/libtsm
-POINTER_BYTES != uname -m | sed -e s/x86_64/8/ -e s/i686/4/
+# The pointer size of $(TCC), from its ELF header's class, and not of the
+# kernel `uname -m` names, which may be x86-64 under an i686 system.
+POINTER_BYTES != od -An -tx1 -j4 -N1 $(TCC) | sed -e 's/^ *01$$/4/' -e 's/^ *02$$/8/'
 TCFLAGS = -Wall -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -Dwcwidth=tsm_wcwidth \
 	-D__SIZEOF_POINTER__=$(POINTER_BYTES) -I$(LIBTSM)/src/tsm -I$(LIBTSM)/src/shared \
 	-I$(LIBTSM)/external -I$(LIBTSM)/external/wcwidth
