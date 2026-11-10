@@ -783,7 +783,11 @@ void _irq_router(isr_params_t *params)
         bkl_enter();
     }
     bkl_note_entry((uint32_t)params->vector, -1);
-    bkl_hold_sample((uintptr_t)FRAME_PC(params));
+#if defined(__x86_64__)
+    bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
+#else
+    bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
+#endif
     irq_count++;
     if (params->vector >= 32 && params->vector <= ISR_MSI_LAST) {
         vector_count[params->vector - 32]++;

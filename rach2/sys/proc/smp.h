@@ -79,15 +79,20 @@ void bkl_note_entry(uint32_t vector, int32_t nr);
  * the big lock. The time is zero without a calibrated invariant TSC. */
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
 
+/* The instruction a hold's sample keeps, and the return addresses above it. */
+#define BKL_SAMPLE_PCS 8
+
 /** Sample a hold of the big lock from an interrupt that found this processor
  * holding it: when the hold is the oldest any interrupt has found, keep `pc`,
- * the instruction the interrupt stopped. A hold that keeps interrupts off is
- * never sampled. */
-void bkl_hold_sample(uintptr_t pc);
+ * the instruction the interrupt stopped, and the return addresses of the
+ * frames from `fp`, its frame pointer. A hold that keeps interrupts off is
+ * sampled only when it turns them on. */
+void bkl_hold_sample(uintptr_t pc, uintptr_t fp);
 
 /** Read the oldest hold an interrupt has found, in microseconds since its
- * take, and the instruction it stopped. The caller holds the big lock. */
-void smp_hold_sample(uint64_t *age_us, uintptr_t *pc);
+ * take, and the instruction it stopped with its callers, 0 past the last.
+ * The caller holds the big lock. */
+void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
 
 /** Answer the requests other processors left this one: stop for good, drop
  * a translation or every one, or give up a page directory for the
