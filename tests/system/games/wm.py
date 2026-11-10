@@ -48,7 +48,8 @@ ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 DISPLAY=
        "STEAM_COMPAT_CLIENT_INSTALL_PATH=%s/steam PROTON_LOG_DIR=%s/logs "
        "WINEDEBUG=-all,err+all; " % (WORK, WORK, WORK))
 # What the rebuilt Weston of vendor/gnu/games/weston prints for --version.
-REBUILT = "(Rach2 14.0.2-1+rach2.1: kiosk-active-tree, xwm-emulated-mode)"
+REBUILT = ("(Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, "
+           "xwm-emulated-mode)")
 EV_KEY = 1
 KEY_ESC = 1
 CHILDREN = []
