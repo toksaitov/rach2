@@ -42,8 +42,8 @@ pcid-enabled pass pass
 pks skip skip PKS not enabled: the processor has no PKS
 pku skip skip PKU not enabled
 pmu pass fail PMU counters; without a host PMU the legacy AMD test fails as Linux does
-pmu_lbr skip skip LBR is not advertised
-pmu_pebs skip skip PEBS is not advertised
+pmu_lbr skip skip Linux's AMD result; Intel needs its own reference
+pmu_pebs skip skip Linux's AMD result; Intel needs its own reference
 rdpru pass pass
 realmode pass pass
 rmap_chain pass pass
