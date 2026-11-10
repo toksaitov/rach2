@@ -1426,6 +1426,26 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long p
  * `sl`, last, as Linux's highest bit.
  * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
  */
+/** Append the VmFlags line of smaps for the region `r`, the names Linux's
+ * show_smap_vma_flags gives the flags this kernel keeps, in Linux's order. */
+static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
+{
+    ap_str(t, "VmFlags:");
+    ap_str(t, (r->prot & VM_PROT_READ) ? " rd" : "");
+    ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
+    ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
+    ap_str(t, r->type == VM_SHARED ? " sh" : "");
+    ap_str(t, r->type == VM_STACK ? " gd" : "");
+    ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
+    ap_str(t, (r->prot & VM_PROT_IO) ? " io pf" : "");
+    ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
+    ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
+    ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
+    ap_str(t, (r->prot & VM_PROT_SECRET) ? " dd" : "");
+    ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
+    ap_ch(t, '\n');
+}
+
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
@@ -1461,19 +1481,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_kb(t, "Swap:", 0);
         ap_smaps_kb(t, "SwapPss:", 0);
         ap_smaps_kb(t, "Locked:", (r->prot & VM_PROT_LOCKED) ? clean + dirty : 0);
-        ap_str(t, "VmFlags:");
-        ap_str(t, (r->prot & VM_PROT_READ) ? " rd" : "");
-        ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
-        ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
-        ap_str(t, shared ? " sh" : "");
-        ap_str(t, r->type == VM_STACK ? " gd" : "");
-        ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
-        ap_str(t, (r->prot & VM_PROT_IO) ? " io pf" : "");
-        ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
-        ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
-        ap_str(t, (r->prot & VM_PROT_SECRET) ? " dd" : "");
-        ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
-        ap_ch(t, '\n');
+        ap_smaps_flags(t, r);
     }
     return t->len;
 }

@@ -2482,8 +2482,8 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
     for (region = vm_first(&from->vm); region && rc == 0; region = vm_next(region)) {
         uintptr_t va, next;
 
-        if (region->prot & VM_PROT_DONTFORK) {
-            continue;
+        if (region->prot & (VM_PROT_DONTFORK | VM_PROT_WIPEONFORK)) {
+            continue; /* a wiped region's child faults in zero pages */
         }
         if (region->type != VM_SHARED && (region->prot & VM_PROT_WRITE)) {
             mmn_notify(from, MMN_PROTECT, region->start, region->end);

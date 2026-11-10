@@ -67,6 +67,13 @@
  * with SIGKILL is 0, or ESRCH when it has already left its memory, and once
  * reaped ESRCH.
  *
+ * `wipe-on-fork`: after MADV_WIPEONFORK over the first of two written pages,
+ * which shows `wf` in smaps, a child of fork reads zeros there and the
+ * second page's byte, and so does its own child after it wrote the first;
+ * the parent keeps its byte. After MADV_KEEPONFORK a child reads the byte.
+ * MADV_WIPEONFORK over shared anonymous memory and over a private mapping
+ * of a memfd is EINVAL, as Linux takes it on private anonymous memory alone.
+ *
  * Prints `MEMCALLMUSL OK` and exits 0 when every part held, and prints
  * `MEMCALLMUSL FAIL (detail)` for each failed check and exits 1 otherwise.
  */
@@ -110,8 +117,8 @@
 #endif
 
 /* madvise's advice of Linux 5.4 and 6.1, and fcntl's seal command. */
-#define ADV_COLD        20
-#define ADV_PAGEOUT     21
+#define ADV_COLD          20
+#define ADV_PAGEOUT       21
 #define ADV_DONTNEED      4
 #define ADV_WIPEONFORK    18
 #define ADV_KEEPONFORK    19
@@ -297,6 +304,68 @@ static void seal_rows(void)
         miss("a child of fork could unmap the sealed page");
     }
     munmap(hole, 3 * PAGE);
+}
+
+/** In a child of fork: 0 when the page `w` reads zero and the page after
+ * it `q`, also in a child of its own after it wrote `w`; 1 otherwise. */
+static int wiped_child(char *w)
+{
+    pid_t pid;
+
+    if (w[0] != 0 || w[PAGE] != 'q') {
+        return 1;
+    }
+    w[0] = 'c';
+    pid = fork();
+    if (pid == 0) {
+        _exit(w[0] == 0 && w[PAGE] == 'q' ? 0 : 1);
+    }
+    return pid < 0 || reap(pid) != 0 || w[0] != 'c';
+}
+
+/** MADV_WIPEONFORK and MADV_KEEPONFORK through fork, and the regions
+ * WIPEONFORK refuses. */
+static void wipe_rows(void)
+{
+    char *w = anon(2, PROT_READ | PROT_WRITE);
+    char *shared = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    int fd = memfd_create("memcallmusl", 0);
+    char *file = fd >= 0 && ftruncate(fd, (off_t)PAGE) == 0
+                     ? mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)
+                     : MAP_FAILED;
+    pid_t pid;
+
+    if (w == NULL || shared == MAP_FAILED || file == MAP_FAILED) {
+        miss("mmap of the regions");
+        return;
+    }
+    w[0] = 'p';
+    w[PAGE] = 'q';
+    expect("MADV_WIPEONFORK", madvise(w, PAGE, ADV_WIPEONFORK), 0, 0);
+    if (!has_flag(w, "wf") || has_flag(w + PAGE, "wf")) {
+        miss("smaps shows wf on the wiped page alone");
+    }
+    pid = fork();
+    if (pid == 0) {
+        _exit(wiped_child(w));
+    }
+    if (pid < 0 || reap(pid) != 0 || w[0] != 'p') {
+        miss("a child of fork read the wiped page's byte");
+    }
+    expect("MADV_KEEPONFORK", madvise(w, PAGE, ADV_KEEPONFORK), 0, 0);
+    pid = fork();
+    if (pid == 0) {
+        _exit(w[0] == 'p' ? 0 : 1);
+    }
+    if (pid < 0 || reap(pid) != 0) {
+        miss("a child of fork read zeros after MADV_KEEPONFORK");
+    }
+    expect("MADV_WIPEONFORK of shared memory", madvise(shared, PAGE, ADV_WIPEONFORK), 0, EINVAL);
+    expect("MADV_WIPEONFORK of a file", madvise(file, PAGE, ADV_WIPEONFORK), 0, EINVAL);
+    munmap(w, 2 * PAGE);
+    munmap(shared, PAGE);
+    munmap(file, PAGE);
+    close(fd);
 }
 
 /** The memory keys and the shadow stack, which neither kernel has. */
@@ -672,6 +741,8 @@ int main(int argc, char **argv)
     secret_memlock_rows();
     madvise_rows();
     mrelease_rows();
+    report_part("wipe-on-fork");
+    wipe_rows();
     report_finish();
     if (failures != 0) {
         return 1;

@@ -7767,6 +7767,7 @@ long sys_mremap(isr_params_t *params)
 #define MADV_DONTFORK        10
 #define MADV_DOFORK          11
 #define MADV_WIPEONFORK      18
+#define MADV_KEEPONFORK      19
 #define MADV_COLD            20
 #define MADV_PAGEOUT         21
 #define MADV_DONTNEED_LOCKED 24
@@ -7791,9 +7792,10 @@ static int madvise_known(uint32_t advice)
 
 /**
  * Whether the region `r` may hold a guard, as Linux 6.13's
- * is_valid_guard_vma has it: anonymous and private, the memory of mmap's
- * MAP_ANONYMOUS, the heap or the stack, and not device memory; and for an
- * `install` not locked, whose pages Linux will not drop.
+ * is_valid_guard_vma has it, or be wiped at a fork, as Linux's
+ * MADV_WIPEONFORK takes it: anonymous and private, the memory of mmap's
+ * MAP_ANONYMOUS, the heap or the stack, and not device memory; and for a
+ * guard's `install` not locked, whose pages Linux will not drop.
  */
 static int madvise_guard_allowed(const vma_t *r, int install)
 {
@@ -7805,17 +7807,18 @@ int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t adv
 {
     int drop = advice == MADV_DONTNEED || advice == MADV_FREE || advice == MADV_COLD ||
                advice == MADV_PAGEOUT;
-    int guard = advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE;
+    int anon =
+        advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE || advice == MADV_WIPEONFORK;
     uintptr_t at;
 
-    if (!drop && !guard && advice != MADV_DONTNEED_LOCKED && advice != MADV_DOFORK) {
+    if (!drop && !anon && advice != MADV_DONTNEED_LOCKED && advice != MADV_DOFORK) {
         return 0;
     }
     for (at = start; at < end; at = vm_find(vm, at)->end) {
         const vma_t *r = vm_find(vm, at);
 
-        if (guard ? !madvise_guard_allowed(r, advice == MADV_GUARD_INSTALL)
-                  : (r->prot & VM_PROT_IO) || (drop && (r->prot & VM_PROT_LOCKED))) {
+        if (anon ? !madvise_guard_allowed(r, advice == MADV_GUARD_INSTALL)
+                 : (r->prot & VM_PROT_IO) || (drop && (r->prot & VM_PROT_LOCKED))) {
             return 1;
         }
     }
@@ -7851,6 +7854,26 @@ static uintptr_t madvise_sealed_at(vm_space_t *vm, uintptr_t start, uintptr_t en
     return end;
 }
 
+/** The mark of a region (vm.h) that `advice` sets or clears: VM_PROT_DONTFORK
+ * for MADV_DONTFORK and MADV_DOFORK, VM_PROT_WIPEONFORK for MADV_WIPEONFORK
+ * and MADV_KEEPONFORK, VM_PROT_GUARD for the two of guards, or 0. */
+static uint32_t madvise_mark_bit(uint32_t advice)
+{
+    switch (advice) {
+    case MADV_DONTFORK:
+    case MADV_DOFORK:
+        return VM_PROT_DONTFORK;
+    case MADV_WIPEONFORK:
+    case MADV_KEEPONFORK:
+        return VM_PROT_WIPEONFORK;
+    case MADV_GUARD_INSTALL:
+    case MADV_GUARD_REMOVE:
+        return VM_PROT_GUARD;
+    default:
+        return 0;
+    }
+}
+
 /**
  * Advice about a range (madvise(2)). Its arguments are address, length and
  * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
@@ -7866,18 +7889,23 @@ static uintptr_t madvise_sealed_at(vm_space_t *vm, uintptr_t start, uintptr_t en
  * first, as Linux advises region by region. MADV_DONTFORK marks the regions so
  * that a fork's child does not get them, and MADV_DOFORK clears the mark;
  * DOFORK is EINVAL over device memory, as on Linux for VM_IO, and either is
- * ENOMEM when a region cannot be split. MADV_GUARD_INSTALL makes the range a
- * guard (VM_PROT_GUARD, vm.h), whose pages go and whose every access is SIGSEGV
- * with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard, leaving pages that
- * read as zeros; both are EINVAL over a region that may not hold a guard
- * (`madvise_guard_allowed`) and ENOMEM when a region cannot be split. Linux
- * marks a guard's pages in its page tables and splits no region, so a guard
- * shows in /proc/PID/maps here as a region of its own, with the protection of
- * the region it was cut from. Any other advice `madvise_known` takes changes
- * nothing, and the rest is EINVAL, as Linux refuses an advice it does not
- * define. A range with a page in no region is ENOMEM, as in Linux. A range that
- * runs past user space is EINVAL, judged by the length as given: a length
- * within a page of 4 GiB rounds up to 0, which would pass for an empty range.
+ * ENOMEM when a region cannot be split. MADV_WIPEONFORK marks the regions so
+ * that a fork's child gets them without their pages, reading zeros, and
+ * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
+ * EINVAL over a region that is not private anonymous memory, as on Linux,
+ * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
+ * makes the range a guard (VM_PROT_GUARD, vm.h), whose pages go and whose every
+ * access is SIGSEGV with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard,
+ * leaving pages that read as zeros; both are EINVAL over a region that may not
+ * hold a guard (`madvise_guard_allowed`) and ENOMEM when a region cannot be
+ * split. Linux marks a guard's pages in its page tables and splits no region,
+ * so a guard shows in /proc/PID/maps here as a region of its own, with the
+ * protection of the region it was cut from. Any other advice `madvise_known`
+ * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
+ * does not define. A range with a page in no region is ENOMEM, as in Linux. A
+ * range that runs past user space is EINVAL, judged by the length as given: a
+ * length within a page of 4 GiB rounds up to 0, which would pass for an empty
+ * range.
  */
 long sys_madvise(isr_params_t *params)
 {
@@ -7905,11 +7933,10 @@ long sys_madvise(isr_params_t *params)
     if (madvise_refused(vm, addr, end, advice)) {
         return -EINVAL;
     }
-    if (advice == MADV_DONTFORK || advice == MADV_DOFORK || advice == MADV_GUARD_INSTALL ||
-        advice == MADV_GUARD_REMOVE) {
-        uint32_t bit =
-            advice == MADV_DONTFORK || advice == MADV_DOFORK ? VM_PROT_DONTFORK : VM_PROT_GUARD;
-        int set = advice == MADV_DONTFORK || advice == MADV_GUARD_INSTALL;
+    if (madvise_mark_bit(advice) != 0) {
+        uint32_t bit = madvise_mark_bit(advice);
+        int set =
+            advice == MADV_DONTFORK || advice == MADV_GUARD_INSTALL || advice == MADV_WIPEONFORK;
 
         if (vm_advise(vm, addr, end, set ? bit : 0u, set ? 0u : bit) != 0) {
             vma_exhausted("madvise");

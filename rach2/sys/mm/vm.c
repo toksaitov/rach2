@@ -675,7 +675,8 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
 
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
 {
-    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD | VM_PROT_SEALED);
+    uint32_t mask =
+        (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_WIPEONFORK);
 
     return vm_change(vm, start, end, mask, set & mask, 0);
 }
