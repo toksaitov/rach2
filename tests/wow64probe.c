@@ -145,6 +145,7 @@
 #define X86_64_EXIT 60
 
 /** End the process with `status`; it does not return. */
+static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
@@ -199,6 +200,7 @@ static const char *const assertion_id[] = {"far-call",
 
 /** Print "WOW64PROBE FAIL: " and `why`, end the report at the assertion that
  * `why` fails, and exit 1. */
+static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
     say("WOW64PROBE FAIL: ");
@@ -620,11 +622,11 @@ static void on_alarm(int sig, void *info, void *ucontext)
 /** Each compat sleep reports EFAULT when its interrupted remainder is lost. */
 static void run_sleep_remainder(void)
 {
-    static unsigned int req32[2] = {100000, 0};
-    static unsigned int req64[4] = {100000, 0, 0, 0};
+    static const unsigned int req32[2] = {100000, 0};
+    static const unsigned int req64[4] = {100000, 0, 0, 0};
     struct k_sigaction ka;
-    unsigned long timer[4] = {0, 10000, 0, 10000};
-    unsigned long off[4] = {0, 0, 0, 0};
+    const unsigned long timer[4] = {0, 10000, 0, 10000};
+    const unsigned long off[4] = {0, 0, 0, 0};
     long rc[3];
 
     ka.handler = on_alarm;
@@ -1072,7 +1074,7 @@ static void run_pselect_null(void)
     static unsigned long ts64[2] = {0, 1000000000};
     int pipefd[2], rc32, rc64;
 
-    if (syscall1(SYS_PIPE, (long)pipefd) != 0 || pipefd[0] >= 1024 ||
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0 || (unsigned int)pipefd[0] >= 1024u ||
         syscall3(SYS_WRITE, pipefd[1], (long)"x", 1) != 1) {
         fail("pselect ready pipe");
     }
