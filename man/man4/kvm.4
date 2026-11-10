@@ -528,7 +528,7 @@ at its next exit and moves
 A write that finds the ring full ends the run as any other.
 .Dv KVM_UNREGISTER_COALESCED_MMIO
 removes each zone that holds its range.
-A bus holds 1000 zones and ioeventfds together.
+A bus holds 1000 zones; ioeventfds have no limit of their own, but none is added to a bus that holds 1000 zones.
 .Ss Statistics
 .Dv KVM_GET_STATS_FD
 on a VM or a vCPU
@@ -956,7 +956,7 @@ when the guest touches a page of a slot the caller cannot touch.
 .Dv KVM_IOEVENTFD
 or
 .Dv KVM_REGISTER_COALESCED_MMIO
-on a bus that holds 1000 of the two.
+on a bus that holds 1000 zones.
 .It Bq Er EPERM
 .Dv KVM_SIGNAL_MSI
 that no APIC took.
