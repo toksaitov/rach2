@@ -20,6 +20,8 @@ static void print_missing(const struct net_boot *b)
         net_copy_line(p, line, sizeof(line));
         p += strcspn(p, "\r\n");
         call = strstr(line, "syscall: ");
+        if (call == NULL)
+            continue;
         len = strlen(call);
         if (seen != NULL && strstr(seen, call) != NULL)
             continue;
