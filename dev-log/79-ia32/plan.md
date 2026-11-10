@@ -361,3 +361,63 @@ Waits and collisions found while splitting, and what removes each:
 * A code task that waits on a Lenovo task waits on the machine: 78-9, 78-11a, 78-12a and 78-14a wait only on code; the Lenovo steps 78-11c, 78-12b, 78-13b and 78-14b wait on earlier steps as evidence, and the queue orders them.
 * `tools/etude/` is changed by 76-22 and 79-8a: 79-8a waits on 76-22.
 * Downloads: Mesa 26.1.6 (77-7a), VK-GL-CTS's sources (77-9), the VA packages (78-14a) and the i386 packages (79-8b) are on the one downloads card that the manager files with the milestones (decision G in `plan.md`), so no loop stops on a question.
+
+## Review fixes, 79-10
+
+The Codex and Fable reviews at `9671f1c18` raised the findings below. Task 79-10 fixes them before the checkpoint slice. Changed kernel sources and regression programs compile; no test or suite ran in this task. The fixes still need both reviews and the checkpoint's proof.
+
+### File calls
+
+* `getdents` and old `readdir` advanced before delivery and could rewind over another reader's progress. Both now use `ksys_getdents32` in the shared directory reader, which holds the open file's lock through each copy and commits only delivered records. `wow64probe` retries failed copies, checks a partial batch, and checks old `readdir`.
+* `pselect6` and `pselect6_time64` chose `select` when their mask argument was null. The compat wrapper now chooses by the call variant. `wow64probe` checks both forms on a ready pipe with a nanosecond value invalid as microseconds.
+* Native x86-64 `preadv2`, `pwritev2` and `sync_file_range` were absent. They are registered at 327, 328 and 277, sharing the compat implementations' helpers. `wow64probe` reaches both ABIs.
+* `RWF_APPEND` was refused. It now selects the end of the file under the inode lock without changing the open file's append flag, and changes the shared offset only for offset -1. `wow64probe` checks contents, offsets and the flag.
+* `sync_file_range` accepted character devices. The shared helper now requires a regular file, directory, symbolic link or block device and returns ESPIPE otherwise. `wow64probe` checks a character device in both ABIs.
+
+### Entry and mappings
+
+* The fast i386 entry copied the saved EBP without the big lock. It now takes the lock first and calls `isr_router_locked`, preserving the one acquisition expected by `isr_leave`. The new `vdso32_hosttest` models both fast entries, successful and failed copies, and the lock depth at each step.
+* Automatic mappings could meet the stack's growth limit. `mmap_place` and `mmap_free` now leave a 1 MiB guard below that limit, while fixed mappings keep their requested placement. `vm_hosttest` checks the guard boundary.
+* Splitting the fallback search at the mmap base missed free ranges that cross it. `vm_find_mmap` now searches down from the mmap base, then up across the whole allowed range. `vm_hosttest` provides a range that only the second search can find and that crosses the first search's limit.
+
+### Signals
+
+* A signal on a non-flat stack segment ignored the legacy `sa_restorer` stack. The i386 frame builder now selects it when Linux does, with neither SA_ONSTACK nor SA_RESTORER set and outside the alternate stack. `ia32_signal_hosttest` checks that selection and alternate-stack overflow.
+* Both signal-return paths validated LDT selectors before loading the table. They now load it first. The host model requires that order.
+* The 4 GiB frame-boundary test failed in its memory model before it could reach the boundary check. The model now accepts memory around 4 GiB; the frame's crossing of that boundary alone must reject it.
+
+### Tracing, TLS and core notes
+
+* A register-set user copy could sleep before a tracee pointer was reused. The shared ptrace code now finds and checks the stopped tracee again after each copy and rechecks the register-set view and its size. `ptrace_hosttest` changes the stop or the view during each copy and rejects use of the former state; the compat register setters bound their accesses by the current view.
+* SS writes accepted only the flat selector and discarded it. The register setter now retains a nonzero RPL-3 selector. `ia32_signal_hosttest` checks an LDT SS and rejects a null SS.
+* Compat FS and GS writes lost LDT bases. `ia32_selector_base` now reads LDT descriptors as well as TLS entries. The tracing and TLS host cases check their bases.
+* `NT_386_TLS` replaced descriptors without changing the saved FS and GS bases. It now uses the same update helper as `PTRACE_SET_THREAD_AREA`; the host case checks each affected base.
+* Compat `CLONE_SETTLS` allocated entry -1. It now accepts only an explicit entry from 12 to 14, without writing back or allocating. `tls64_hosttest` checks both forms.
+* The core's x87 note treated FXSAVE64's pointers as selector fields. It now uses `fpu_env32_get` with the thread's CS and DS, as the compat ptrace view does. `ia32_signal_hosttest` checks both selector fields in the note.
+
+### DRM ioctls
+
+The closed-descriptor part of the finding did not stand: `compat_sys_ioctl` already returned EBADF before dispatch, and rejected O_PATH too. The non-DRM part stood: GET_STATS, SET_UNIQUE and UPDATE_DRAW answered locally without checking the file. The dispatcher now requires `drm_is_file` before any DRM translation. The host cases and `drmcompatprobe` cover closed and non-DRM descriptors.
+
+The record layouts in `drm/uapi.h`, compiled for i386 and x86-64, have seven request structures with field differences. Each already had a translation or a defined legacy result:
+
+| Structure | i386 bytes | x86-64 bytes | Compat handling in `ia32_ioctl_drm.c` |
+| --- | ---: | ---: | --- |
+| `drm_version` | 36 | 64 | `version`, including the three string pointers and lengths |
+| `drm_unique` | 8 | 16 | `get_unique`; SET_UNIQUE returns EINVAL |
+| `drm_client` | 24 | 40 | `get_client` |
+| `drm_stats` | 124 | 248 | `get_stats`, zeroing the legacy reply |
+| `drm_update_draw` | 20 | 24 | UPDATE_DRAW is a successful legacy no-op |
+| `drm_wait_vblank` | 16 | 24 | `wait_vblank`, translating the union's request and reply |
+| `drm_mode_fb_cmd2` | 100 | 104 | `addfb2` and `getfb2`, moving modifiers from offset 68 to 72 |
+
+`drm_mode_get_plane_res` (12/16 bytes), `drm_mode_obj_get_properties` (28/32) and `drm_mode_obj_set_property` (20/24) differ only in tail padding. The native DRM dispatcher zero-fills its request buffer and copies the size encoded in the command. Guarded cases now check those three and the legacy replies in `drmcompatprobe`, beside its existing VERSION, framebuffer and vblank cases. The driver-specific i915 GETPARAM translation remains in `ia32_ioctl_gpu.c`; the other GPU requests use their fixed-width native layouts. The ioctl host test now expects those forwarded requests instead of the removed GPU stubs' ENOTTY.
+
+### Time and seccomp
+
+* An interrupted compat sleep hid a failed remainder copy. `sleep_call` now returns EFAULT for that copy regardless of the sleep's result. `wow64probe` interrupts nanosleep and both clock_nanosleep forms with an inaccessible remainder address.
+* The seccomp case could pass if its native writev was killed first. The child now writes a byte to a pipe with that call; the parent requires the byte before accepting SIGSYS from the later compat call.
+
+### Documents and comments
+
+The TLS Readme now lists both kernels' tracing requests, the x86-64 TLS register set, accepted selectors and saved-base updates. The ia32 manual names the vDSO before inline signal-return code and the registered ldtprobe case. The exec manual and architecture Readme describe the mapping search and its fallback. The call inventory distinguishes an absent implementation from an empty table row: eleven absent compat entries still point at ENOSYS stubs. The message-header helpers, core-note helpers, native-call wrapper and flagged-vector helper have function contracts, and the set_thread_area comment precedes its own function. The read, write and sync pages include the new native calls and append behaviour; the generated syscall list was updated.

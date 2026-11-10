@@ -247,15 +247,19 @@ describes, i386's
 and
 .Nm preadv2
 (378), which adds flags in the sixth.
+.Pp
+The native x86-64
 .Nm preadv2
-reads as
+call is 327, with a whole offset in its fourth argument and flags in its
+sixth; its fifth argument is ignored.
+Both forms read as
 .Nm readv
-at offset -1, takes
+at offset -1, take
 .Dv RWF_HIPRI ,
 .Dv RWF_DSYNC
 and
 .Dv RWF_SYNC
-and refuses another flag with
+and refuse another flag with
 .Er EOPNOTSUPP .
 .Sh RETURN VALUES
 On success, these functions return the number of bytes read.

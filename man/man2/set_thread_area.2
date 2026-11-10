@@ -142,6 +142,9 @@ empties them.
 An i386
 .Dv CLONE_SETTLS
 on x86-64 replaces the requested descriptor in the child.
+It requires an explicit entry from 12 to 14; entry -1 fails with
+.Er EINVAL
+without allocating an entry or writing its number back.
 If the child's FS or GS selector names that entry, its saved base changes
 too, so the first context switch uses the child's thread pointer.
 .Pp

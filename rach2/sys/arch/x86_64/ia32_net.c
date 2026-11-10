@@ -28,6 +28,10 @@
  * array of 32-bit words.
  */
 
+/**
+ * Read the i386 message header at user address `u` into `h`.
+ * The caller holds the big lock; the copy may sleep. Returns 0 or -EFAULT.
+ */
 int ia32_msghdr_get(struct kernel_msghdr *h, uintptr_t u)
 {
     struct ia32_msghdr m;
@@ -45,6 +49,11 @@ int ia32_msghdr_get(struct kernel_msghdr *h, uintptr_t u)
     return 0;
 }
 
+/**
+ * Write the received lengths and flags of `h` to the i386 header at `u`.
+ * Leave its pointers unchanged. The caller holds the big lock; the copies
+ * may sleep. Returns 0 or -EFAULT, possibly after a partial write.
+ */
 int ia32_msghdr_put(uintptr_t u, const struct kernel_msghdr *h)
 {
     int32_t namelen = h->msg_namelen;
@@ -62,6 +71,10 @@ int ia32_msghdr_put(uintptr_t u, const struct kernel_msghdr *h)
     return 0;
 }
 
+/**
+ * Read the i386 control header at user address `at` into `h`.
+ * The caller holds the big lock; the copy may sleep. Returns 0 or -EFAULT.
+ */
 int ia32_cmsg_get(struct kernel_cmsghdr *h, uintptr_t at)
 {
     struct ia32_cmsghdr c;
@@ -75,6 +88,11 @@ int ia32_cmsg_get(struct kernel_cmsghdr *h, uintptr_t at)
     return 0;
 }
 
+/**
+ * Write `h` as an i386 control header at user address `at`.
+ * The caller bounds its length to 32 bits and holds the big lock; the copy
+ * may sleep. Returns 0 or -EFAULT.
+ */
 int ia32_cmsg_put(uintptr_t at, const struct kernel_cmsghdr *h)
 {
     struct ia32_cmsghdr c;

@@ -36,6 +36,8 @@
  * among them; `in_compat_syscall` still reads the real frame, so a shared
  * reader that picks the i386 layout for an i386 call (`iov_fetch`) does so
  * for the user's own structures, and no window holds such a structure.
+ * The caller holds the big lock and owns `win` for the call; a null window
+ * opens nothing. Returns the handler's result. The handler may sleep.
  */
 long ia32_native(const isr_params_t *params, syscall_fn_t fn, void *win, uint32_t winlen,
                  unsigned long a0, unsigned long a1, unsigned long a2, unsigned long a3,
@@ -612,7 +614,11 @@ long compat_sys_pwritev(isr_params_t *params)
                        (unsigned long)ARG64(params, 3, 4), 0, 0);
 }
 
-/** Join the split offset of preadv2 or pwritev2 before the native call. */
+/**
+ * Join the split offset of preadv2 or pwritev2 before the native call.
+ * `write` selects pwritev2; otherwise read. The caller holds the big lock.
+ * Returns the native handler's count or negative error; it may sleep.
+ */
 static long rw2(isr_params_t *params, int write)
 {
     return ia32_native(params, write ? sys_pwritev2 : sys_preadv2, NULL, 0,
