@@ -34,7 +34,12 @@
 # window starts 5 s after the last frame of 1 s or more in the dump's first
 # 120 s, the end of the loading screen, and lasts to the end of the dump for
 # SuperTuxKart and 150 s for 0 A.D.; games.sh ends 0 A.D. once the dump holds
-# that whole window.
+# that whole window. It never starts before the game's own start, which comes
+# later only where every frame lasts about a second, as under TCG: for 0 A.D.
+# the frames the HUD had written when the engine printed GAME STARTED, and
+# for SuperTuxKart the race's frames counted back from the dump's end until
+# they make the race's time, each giving at most 50 ms of it, as its main
+# loop gives.
 #
 # OUT (.) gets the record, the game's log, `hud`, every frame time the HUD
 # wrote, one a line, `frametimes`, the window's, and `summary`, a line each:
@@ -143,12 +148,13 @@ for v in SDL_VIDEODRIVER SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR GALLIUM_HUD GALLIUM_HU
     runner_record "env $v=$(printenv "$v")"
 done
 
-# frames [SPAN]: the window's frame times, one a line, after a line `# FIRST
-# LAST` that gives its bounds in the dump, as frames.py chooses them; nothing
-# while the dump does not yet reach the window's end, when SPAN is given.
+# frames [SPAN [FROM]]: the window's frame times, one a line, after a line
+# `# FIRST LAST` that gives its bounds in the dump, as frames.py chooses them
+# but past the dump's first FROM frames; nothing while the dump does not yet
+# reach the window's end, when SPAN is given.
 frames()
 {
-    cat "$RUNNER_WORK/hud/"* 2>/dev/null | awk -v span="${1:-}" '
+    cat "$RUNNER_WORK/hud/"* 2>/dev/null | awk -v span="${1:-}" -v from="${2:-0}" '
         NF { v[++n] = $NF }
         END {
             t = 0; last = 0
@@ -158,6 +164,7 @@ frames()
             }
             t = 0
             for (i = last + 1; i <= n && t < 5000; i++) t += v[i]
+            if (i <= from) i = from + 1
             start = i; t = 0
             for (; i <= n && (span == "" || t < span * 1000); i++) t += v[i]
             if (span != "" && t < span * 1000) exit
@@ -185,6 +192,11 @@ case $game in
         grep -q 'Number of frames: ' "$log" ||
             runner_die "supertuxkart printed no profile summary: $(tail -n 3 "$log")"
         runner_record "profile $(sed -n 's/.*\(Number of frames: .*\)/\1/p' "$log" | tail -n 1)"
+        race=$(echo "$words" | sed -n 's/.*--profile-time=\([0-9]*\).*/\1/p')
+        from=$(cat "$RUNNER_WORK/hud/"* 2>/dev/null | awk -v race="$((race * 1000))" '
+            NF { v[++n] = $NF }
+            END { for (i = n; i >= 1 && t < race; i--) t += v[i] < 50 ? v[i] : 50; print i + 0 }')
+        runner_record "start frame $from of the dump, the race's first counted back from its end"
         end=profile
         ;;
     0ad)
@@ -199,9 +211,14 @@ case $game in
         # shellcheck disable=SC2086 # the arguments are words
         setsid 0ad $words > "$log" 2>&1 < /dev/null &
         RUNNER_GAME=$!
-        until [ -n "$(frames "$span" | head -n 1)" ]; do
+        from=''
+        while [ -z "$from" ] || [ -z "$(frames "$span" "$from" | head -n 1)" ]; do
             kill -0 "$RUNNER_GAME" 2>/dev/null ||
                 runner_die "0 A.D. ended before its window was whole: $(tail -n 3 "$log")"
+            if [ -z "$from" ] && grep -q 'GAME STARTED, ALL INIT COMPLETE' "$log"; then
+                from=$(cat "$RUNNER_WORK/hud/"* 2>/dev/null | grep -c .)
+                runner_record "start frame $from of the dump, when the engine printed GAME STARTED"
+            fi
             sleep 1
         done
         game_stop
@@ -213,7 +230,7 @@ runner_finish
 
 [ -n "$(ls "$RUNNER_WORK/hud")" ] || runner_die "the HUD wrote no frame times"
 cat "$RUNNER_WORK/hud/"* > "$out/hud"
-frames "$span" > "$RUNNER_WORK/window"
+frames "$span" "$from" > "$RUNNER_WORK/window"
 sed 1d "$RUNNER_WORK/window" > "$out/frametimes"
 [ -s "$out/frametimes" ] || runner_die "no frame in the window"
 # frames.py's figures: of the window's sorted times, the one at the index
