@@ -13763,7 +13763,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run virgl-lost.sh as root with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel: it builds glreset with the root's GCC, ends the boot session's Weston, starts its own on the card with weston-simple-egl and glreset, writes 1 to /sys/kernel/debug/dri/N/virtio_gpu_reset once glreset has drawn its frames right, lets glreset draw 200 frames more and make a new context, and reads what is left"
+          "does": "run virgl-lost.sh as root with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel, once the root's desktop services have stopped: it builds glreset with the root's GCC, starts a Weston on the card with weston-simple-egl and glreset, writes 1 to /sys/kernel/debug/dri/N/virtio_gpu_reset once the client has printed its first count of frames and glreset has drawn its frames right, lets glreset draw 200 frames more and make a new context, starts weston-simple-shm so that Weston repaints, and reads what is left"
         },
         {
           "step_id": "judge",
