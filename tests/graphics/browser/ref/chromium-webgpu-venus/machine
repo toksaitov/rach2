@@ -1,0 +1,105 @@
+profile venus
+firmware seabios
+accelerator kvm
+cpu host,invtsc=on
+cpus 4
+memory_mib 8192
+qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+snapshot 20261108T000000Z
+claim debian-ref:testing:607535:1794315922
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 9.78 14.55 15.07
+host_claims 8
+host_ledger etude-ledger 1
+host_ledger claim launch:352f0905574d608a47b8d5f0cdc6f139
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 287447 4550467 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource memory_bytes 5368709120
+host_ledger process keeper 287462 4550471 1
+host_ledger process case 287463 4550471 1
+host_ledger end
+host_ledger claim debian-ref:toksaitov-m:561957:1794315578
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 561957 4648419 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 562431 4648624 1
+host_ledger process case 562432 4648624 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130313Z.593098:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 593098 4669505 1
+host_ledger account toksaitov-d
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130313Z.593098:machine.bed-vtest.triangle-kvm:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 593098 4669505 1
+host_ledger account toksaitov-d
+host_ledger state running
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 5368709120
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 596415 4670133 1
+host_ledger process case 596416 4670133 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130346Z.535671:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 535671 4632961 1
+host_ledger account testing
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130346Z.535671:machine.games-wm.place:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 535671 4632961 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 599363 4677108 1
+host_ledger process case 599364 4677109 1
+host_ledger end
+host_ledger claim bed-forward-hand:toksaitov-s:600794
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 600794 4677914 1
+host_ledger account toksaitov-s
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 13958643712
+host_ledger process keeper 600816 4677917 1
+host_ledger process case 600817 4677917 1
+host_ledger end
+host_ledger claim debian-ref:testing:607535:1794315922
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 607535 4682925 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 607878 4682981 1
+host_ledger process case 607879 4682981 1
+host_ledger end
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=8138032
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset

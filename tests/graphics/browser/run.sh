@@ -27,6 +27,14 @@ mkdir -p "$out"
 RUNNER_WORK=$(mktemp -d "${TMPDIR:-/tmp}/browser.XXXXXX")
 runner_start
 runner_record "case $browser $mode"
+case $mode in
+    webgpu-venus|webgpu-venus-native)
+        VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
+        export VK_DRIVER_FILES
+        runner_record "icd $VK_DRIVER_FILES"
+        runner_record 'browser_platform wayland'
+        ;;
+esac
 if [ "$mode" = pages ]; then
     # shellcheck disable=SC2034 # common.sh loads the private module
     RUNNER_SEAT_MODULE=$here/seat.so

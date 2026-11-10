@@ -75,8 +75,8 @@ window.tone = async hz => {
  oscillator.connect(gain).connect(audio.destination); oscillator.start();
  return {state: audio.state, hz};
 };
-window.gpu = async () => {
- const adapter = await navigator.gpu.requestAdapter({forceFallbackAdapter: true});
+window.gpu = async (selected) => {
+ const adapter = selected || await navigator.gpu.requestAdapter({forceFallbackAdapter: true});
  if (!adapter) throw Error('no fallback WebGPU adapter');
  const info = adapter.info;
  const device = await adapter.requestDevice();

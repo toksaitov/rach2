@@ -44,6 +44,24 @@ def canonical(result, mode, browser):
         return {"readback": result["readback"],
                 "cts": {name: row["status"] for name, row in result["cts"]["results"]},
                 "samples": result["samples"]}
+    if mode in ("webgpu-venus", "webgpu-venus-native"):
+        assert browser == "chromium" and result["platform"] == "wayland", result
+        assert set(result["requests"]) == {"default", "fallback"}, result
+        passes = 0
+        for row in result["requests"].values():
+            adapter, readback = row["adapter"], row["readback"]
+            if adapter is not None:
+                assert set(adapter) == {"vendor", "architecture", "description", "device", "fallback"}
+                assert isinstance(adapter["fallback"], bool), adapter
+            if adapter and re.search(r"\bVenus\b", adapter["description"], re.I) and not adapter["fallback"]:
+                assert readback and readback["adapter"] == adapter, row
+                assert readback["words"] == 1024 and readback["errors"] == 0, row
+                assert readback["pixel"] == [255, 128, 0, 255], row
+                passes += 1
+            else:
+                assert readback is None, "a non-Venus adapter counted as a WebGPU pass"
+        assert result["venus_passes"] == passes, result
+        return result
     if mode == "sound":
         return result["tabs"]
     return result
@@ -73,6 +91,31 @@ def main():
             assert read(got / "sound.json")["mixed_windows"] >= 10
         expected_switches, actual_switches = read(base / "switches.json"), read(got / "switches.json")
         assert expected_switches["version"] == actual_switches["version"], "different browser binaries"
+        if mode in ("webgpu-venus", "webgpu-venus-native"):
+            switches = []
+            devices = []
+            for path, record in ((base, expected_switches), (got, actual_switches)):
+                args = [s for s in record["argv"] if not s.startswith("--user-data-dir=")]
+                assert "--ozone-platform=wayland" in args and "--enable-unsafe-webgpu" in args
+                assert not any(s.startswith("--use-webgpu-adapter=") for s in args), args
+                assert ("--use-vulkan=native" in args) == (mode == "webgpu-venus-native"), args
+                assert record["environment"]["VK_DRIVER_FILES"] == "/usr/share/vulkan/icd.d/venus_icd.x86_64.json"
+                vulkan = (path / "vulkaninfo.out").read_text()
+                assert "Virtio-GPU Venus" in vulkan
+                fields = ("apiVersion", "driverVersion", "vendorID", "deviceID", "deviceType",
+                          "deviceName", "driverID", "driverName", "driverInfo", "conformanceVersion")
+                device = [line.strip() for line in vulkan.splitlines()
+                          if line.split("=", 1)[0].strip() in fields]
+                assert len(device) == len(fields), "missing or multiple Vulkan devices"
+                devices.append(device)
+                diagnostic = (path / "gpu.txt").read_text()
+                assert "Vulkan backend" in diagnostic, "missing Dawn adapter list"
+                if mode == "webgpu-venus-native":
+                    assert "Virtio-GPU Venus" in diagnostic, "Dawn did not enumerate Venus"
+                switches.append(args)
+            assert switches[0] == switches[1], "different browser switches"
+            assert devices[0] == devices[1], "different Venus drivers or host devices"
+            print("browser-judge: Venus readback passes: %d" % actual["venus_passes"])
         print("browser-judge: result: pass %s %s" % (browser, mode))
         return
     versions = [next((line for line in (path / "record").read_text().splitlines()

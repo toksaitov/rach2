@@ -1,0 +1,146 @@
+runner browser
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 8138032
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.64 0.13 0.04
+processes start 158
+kernel_before cpu  116 0 592 2942 113 0 30 1 0 0
+kernel_before cpu0 26 0 182 720 18 0 9 0 0 0
+kernel_before cpu1 26 0 112 765 28 0 8 0 0 0
+kernel_before cpu2 38 0 142 709 46 0 7 0 0 0
+kernel_before cpu3 24 0 154 746 19 0 4 0 0 0
+kernel_before intr 41953 34 9 0 0 444 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 487 593 1211 503 0 99 108 0 0 5 0 95 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 22382
+kernel_before btime 1794315877
+kernel_before processes 834
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 13002 0 975 5 219 0 0 5 2705 0 9093
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=8138032
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case chromium webgpu-venus-native
+icd /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+browser_platform wayland
+compositor weston 14.0.2 headless pixman kiosk no-config
+load end 0.70 0.16 0.05
+busy 30.4%
+kernel_after cpu  354 0 964 4371 192 0 77 1 0 0
+kernel_after cpu0 100 0 303 1023 50 0 21 0 0 0
+kernel_after cpu1 86 0 205 1124 45 0 22 0 0 0
+kernel_after cpu2 89 0 226 1083 64 0 23 0 0 0
+kernel_after cpu3 78 0 227 1139 31 0 9 0 0 0
+kernel_after intr 59699 34 9 0 0 444 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 2560 1526 2418 1143 0 616 334 0 0 6 0 241 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 54819
+kernel_after btime 1794315877
+kernel_after processes 1063
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 20498 0 1679 6 1107 0 0 6 4857 0 12843
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 10.22 15.30 15.32
+host_claims 9
+host_ledger etude-ledger 1
+host_ledger claim launch:352f0905574d608a47b8d5f0cdc6f139
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 287447 4550467 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource memory_bytes 5368709120
+host_ledger process keeper 287462 4550471 1
+host_ledger process case 287463 4550471 1
+host_ledger end
+host_ledger claim debian-ref:toksaitov-m:561957:1794315578
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 561957 4648419 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 562431 4648624 1
+host_ledger process case 562432 4648624 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T125956Z.549859:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 549859 4645735 1
+host_ledger account testing
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T125956Z.549859:host.host.scripts_tools:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 549859 4645735 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource cpu_millis 2000
+host_ledger resource memory_bytes 2952790016
+host_ledger resource disk_bytes 13421772800
+host_ledger process keeper 571679 4650683 1
+host_ledger process case 571682 4650683 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130313Z.593098:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 593098 4669505 1
+host_ledger account toksaitov-d
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130313Z.593098:machine.bed-vtest.triangle-kvm:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 593098 4669505 1
+host_ledger account toksaitov-d
+host_ledger state running
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 5368709120
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 596415 4670133 1
+host_ledger process case 596416 4670133 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130346Z.535671:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 535671 4632961 1
+host_ledger account testing
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T130346Z.535671:machine.games-wm.place:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 535671 4632961 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 599363 4677108 1
+host_ledger process case 599364 4677109 1
+host_ledger end
+host_ledger claim bed-forward-hand:toksaitov-s:600794
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 600794 4677914 1
+host_ledger account toksaitov-s
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 13958643712
+host_ledger process keeper 600816 4677917 1
+host_ledger process case 600817 4677917 1
+host_ledger end
