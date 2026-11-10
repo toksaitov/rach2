@@ -149,8 +149,9 @@ static void driven(struct net_case *u, struct net_boot *b, const struct driven *
  * click the left button, and type the page's keys. Each input waits until
  * the page has reported the one before it: keys sent back to back, with the
  * pointer's move among them, reached the keyboard's event device whole and
- * in order, but the page missed some of them, and its reports, each a fetch
- * of its own, came in any order. */
+ * in order, but the page missed some of them, a click sent just after the
+ * move never reached it, and its reports, each a fetch of its own, came in
+ * any order. */
 static void page_input(struct net_case *u, struct net_boot *b)
 {
     char seen[64];
@@ -159,6 +160,8 @@ static void page_input(struct net_case *u, struct net_boot *b)
     events(u, b,
            "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 20}}, "
            "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 20}}]");
+    if (net_ok(u) && etude_guest_output_wait(b->m, "desktop: pointer: on the page") != ETUDE_OK)
+        net_fail(u, "the page reported no pointer");
     events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
     events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
     if (net_ok(u) && etude_guest_output_wait(b->m, "desktop: click: button 0") != ETUDE_OK)
