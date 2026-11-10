@@ -100,3 +100,36 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `xwm-mapped-managed.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, clears the flag in `weston_wm_handle_map_request` before the window's properties are read.
 * Status: unreported.
 * Next: check Weston's main branch; report with the patch.
+
+## Weston starts a fullscreen surface's pointer constraint on whatever view has the focus
+
+* Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `libweston/input.c` at the tag `14.0.2`; source package as in the kiosk-shell entry above.
+* Fails: Weston aborts when a client constrains the pointer to its fullscreen surface before the pointer's focus has reached that surface, and the mouse then moves. `init_pointer_constraint` (lines 4932 to 4992) enables a fullscreen surface's constraint at once on `pointer->focus` (lines 4984 to 4988) without checking that the view belongs to the constrained surface. Between the surface's becoming fullscreen and the repaint that picks the focus again, the focus is whatever lies under the pointer, under kiosk-shell its background view. The confine and lock grabs' focus handlers are empty (lines 5094 and 4722), so the focus never reaches the surface, and `confined_pointer_grab_pointer_motion` asserts `pointer->focus->surface == constraint->surface` (line 5719).
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, with `tests/system/games/xplace.c` in Rach2's boot session on kiosk-shell under QEMU's `virgl` profile, once the seat had its pointer.
+* Reproduction: `tests/run games-wm`, row `place`, with a Weston without the patch. xplace grabs the pointer, confined to its window, at the window's first Expose, before it draws. Weston's protocol scope (`--logger-scopes=proto`) shows Xwayland's `zwp_pointer_constraints_v1.confine_pointer` answered with `confined` at once, with no `wl_pointer.enter` before it; at the scenario's first move Weston prints that the assertion of line 5719 failed in `confined_pointer_grab_pointer_motion` and aborts, and xplace loses its display. With the grab after xplace's first drawing, in the run before, the `wl_pointer.enter` came 15 ms before the request and the constraint held.
+* Evidence: the two place rows' outputs of task 80-4, quoted above; `vendor/gnu/games/weston/pointer-constraint-view.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `pointer-constraint-view.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, starts the constraint on the focus only when it is a view of the constrained surface, and otherwise on the surface's first mapped view, which takes the focus; while the surface has no mapped view the constraint waits as any other does.
+* Status: unreported.
+* Next: check Weston's main branch; report with the reproduction and the patch.
+
+## Xwayland forgets a grab's confinement made while the seat has no pointer
+
+* Project: Xwayland 24.1.6, Debian's `xwayland` 2:24.1.6-1, SHA-256 `7e51a144e858d5be7e91d6644c2758a618e425c7222234d2e8f059e5aba6c1f5`; read in `hw/xwayland/xwayland-input.c` and `hw/xwayland/xwayland-screen.c` at the tag `xwayland-24.1.6`, commit `5b1d9da00f217d3b52bfd3cc862dff79a9433e63`. Debian's patches to the package were not read.
+* Fails: an X client's pointer grab with a confine-to window, taken while the compositor's seat has no pointer, confines nothing, then or after the seat gains one. The X server tells Xwayland of the confinement once, as the grab activates: `xwl_cursor_confined_to` (`xwayland-screen.c`, lines 386 to 421) calls `xwl_seat_confine_pointer` (`xwayland-input.c`, lines 3537 to 3569), which returns at line 3547 when the seat has no `wl_pointer`, before it records the window in `cursor_confinement_window`. `init_pointer` (lines 1699 to 1712), which `seat_handle_capabilities` (line 1886) runs when the seat gains a pointer, asks for no confinement. Weston gives its seat a pointer only at a device's first pointer event (`libweston/libinput-device.c`, lines 71 to 83, in 14.0.2), so in a session whose mouse has not moved a game's grab is lost this way, and the moves that come before Xwayland has its `wl_pointer` reach no X client.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, while finding why xplace's raw motion summed to less than the scenario sent.
+* Reproduction: in a new Weston session on kiosk-shell, before any pointer event, run `xplace 1366 768`, which grabs the pointer confined to its window, and then move the mouse by dx -2000 and dy 200 in fifteen moves. At the grab the X server lists `xwayland-keyboard:17` and no pointer device of the seat's. Weston's protocol scope shows no `zwp_pointer_constraints_v1` request; `wl_seat.capabilities(3)` and Xwayland's `get_pointer` come with the first move, and the first `wl_pointer.enter` carries serial 0, the focus having been set before Xwayland had a pointer. xplace's raw motion summed to dx 0 and to a dy between 0 and 160 from run to run, while the kernel's evdev counted all of it.
+* Evidence: the games-wm place row's outputs of task 80-4, quoted above.
+* Rach2: nothing in Xwayland. The place row's scenario moves the mouse once before xplace starts, and `wm.py` waits for the X server's pointer device (`seat_pointer`), as a desktop in use has had its first move before a game starts.
+* Status: unreported.
+* Next: check the X server's main branch and the newest Xwayland 24.1; report with a patch that records the window before the return and asks for the confinement in `init_pointer`.
+
+## QEMU's PS/2 mouse holds motion its queue has no room for until the next input event
+
+* Project: QEMU 10.2.1, Ubuntu's 1:10.2.1+ds-1ubuntu3.3 on the testing PC; `hw/input/ps2.c` at the tag `v10.2.1`.
+* Fails: motion sent to the PS/2 mouse faster than the guest reads it can stay unsent for as long as no other input event comes. `ps2_mouse_event` adds each move to `mouse_dx` and `mouse_dy`. `ps2_mouse_sync` sends packets while `ps2_mouse_send_packet` returns 1, and that function returns 0 and leaves the deltas when the queue of `PS2_QUEUE_SIZE`, 16 bytes (line 80), has no room for a packet of three or four bytes. `ps2_read_data`, by which the guest empties the queue, sends nothing; the rest goes with the next input event's sync, or when the guest writes the poll command, 0xEB.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, by reading, after a run of the games-wm place row in which the scenario sent its fifteen moves through QMP's `input-send-event` without waiting, the kernel's count of them never reached their sum, and the case ran to its bound of 900 s without progress. The count the kernel reached in that run was not recorded, so the run does not prove this cause.
+* Reproduction: not yet run. Send relative moves through `input-send-event` faster than the guest's i8042 handler reads them, and stop: the sum of the guest's evdev events should stay short of the moves' until one more event is sent.
+* Evidence: QEMU's `hw/input/ps2.c` at `v10.2.1`, the four functions named above.
+* Rach2: `tests/cases/machine/gameswm_scenario.c` sends each move only once `wm.py` has printed the kernel's count of the last (`move_to`).
+* Status: unreported.
+* Next: run the reproduction; check QEMU's main branch; report, with a patch that sends the pending deltas as the guest reads the queue.
