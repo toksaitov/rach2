@@ -76,7 +76,7 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
 {
     struct backlight *b;
     uint32_t flags;
-    int i, len;
+    int i, len, level;
 
     for (len = 0; name[len] != '\0'; len++) {
     }
@@ -89,9 +89,8 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
     b->ops = ops;
     b->ctx = ctx;
     b->max = max;
-    if (b->level > max) {
-        b->level = max;
-    }
+    level = ops->get(ctx);
+    b->level = level < 0 ? 0 : level > max ? max : level;
     spin_unlock_irqrestore(&lock, flags);
     return i;
 }

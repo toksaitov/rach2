@@ -66,8 +66,9 @@ int backlight_register(const char *name, int max, const struct backlight_ops *op
  * Drive the backlight `name` through `ops` and `ctx` from now on, with
  * `max` its highest level, as a driver does that takes the panel over from
  * the one that registered it: i915 from the boot's intelbl, and intelbl
- * again when i915's device goes. The level and bl_power root set are kept,
- * clamped to `max`, and nothing is written to the hardware. Returns the
+ * again when i915's device goes. The level is read from the new driver,
+ * whose units it is in, clamped to `max`; bl_power as root set it is
+ * kept, and nothing is written to the hardware. Returns the
  * backlight's index, or -1 for no backlight of that name or a `max` that is
  * not positive. Any context; it does not sleep.
  */
