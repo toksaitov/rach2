@@ -94,11 +94,13 @@ with its version and mailboxes, and
 with the table's signature, source, version and number of outputs, or that
 there is none and each port takes Linux's defaults.
 .Pp
-It then starts the render and blitter rings: for each a status page and a
+It then starts its four rings, the render ring, the blitter ring, the
+video ring and the video enhancement ring: for each a status page and a
 ring of 16 KiB in the global GTT, the ring stopped, emptied and started
 again with every wait bounded.
 Each ring's user interrupt is enabled and stays masked except while the
-driver waits for that ring's work; every other source stays masked.
+driver waits for that ring's work, the video enhancement ring's among the
+power management events as on Linux; every other source stays masked.
 A ring that does not start is logged, and the device takes no work.
 .Pp
 With the rings comes the aliasing PPGTT, as Linux runs it on Haswell: one
@@ -154,12 +156,12 @@ fall in the families below.
 answers as above.
 .Dv DRM_IOCTL_I915_GETPARAM
 answers each parameter as Linux 6.12 answers it on this device: the
-device id, the revision, the rings that run (render and blitter; no video
-or video enhancement ring yet), the LLC, write-through eDRAM, the slice,
+device id, the revision, the rings that run (render, blitter, video and
+video enhancement), the LLC, write-through eDRAM, the slice,
 subslice and EU counts the fuses give, the command streamer's timestamp
 frequency of 12.5 MHz, and the features of the buffer and submission calls.
 .Dv I915_PARAM_CMD_PARSER_VERSION
-is 10, the version of Linux's command parser, which both rings run.
+is 10, the version of Linux's command parser, which every ring runs.
 A parameter Linux answers with
 .Er ENODEV
 on Haswell, such as
@@ -181,9 +183,11 @@ the item's error, as Linux does:
 .Dv DRM_I915_QUERY_TOPOLOGY_INFO ,
 one slice of two subslices and their EUs;
 .Dv DRM_I915_QUERY_ENGINE_INFO ,
-.Li rcs0
+.Li rcs0 ,
+.Li bcs0 ,
+.Li vcs0
 and
-.Li bcs0 ;
+.Li vecs0 ;
 .Dv DRM_I915_QUERY_MEMORY_REGIONS ,
 system memory alone, of the size of the machine's memory.
 .Dv DRM_I915_QUERY_PERF_CONFIG ,
@@ -461,7 +465,18 @@ for another register or flag.
 .Dv DRM_IOCTL_I915_GEM_EXECBUFFER2
 and
 .Dv DRM_IOCTL_I915_GEM_EXECBUFFER2_WR
-run a batch on the render or blitter ring as Linux 6.12 does on Haswell.
+run a batch on one of the four rings as Linux 6.12 does on Haswell:
+.Dv I915_EXEC_DEFAULT
+and
+.Dv I915_EXEC_RENDER
+name the render ring,
+.Dv I915_EXEC_BLT
+the blitter,
+.Dv I915_EXEC_BSD ,
+with any of its ring flags since Haswell has one video ring, the video
+ring, and
+.Dv I915_EXEC_VEBOX
+the video enhancement ring.
 The objects are bound in the global GTT, at the offset each entry
 presumed when it is free, at a pinned offset under
 .Dv EXEC_OBJECT_PINNED ,
@@ -557,7 +572,7 @@ describes.
 The batch's out-fence ends with
 .Er EIO ,
 and the batches behind it run; after a reset of the whole GPU those of
-the other engine run again with
+the other engines run again with
 .Er EAGAIN
 on their fences.
 A context is banned at its third hang within 120 seconds, or at its first
@@ -591,6 +606,8 @@ a value its mask refuses or other than by
 an access through the global GTT, and any
 .Dv MI_BATCH_BUFFER_START ,
 whose chain the chip then follows unprivileged.
+The video and video enhancement rings have no allowlist, as on Linux, so
+a batch there that names any register runs unprivileged.
 A command of a client the ring does not run, a command that runs past the
 batch's length, and a batch without
 .Dv MI_BATCH_BUFFER_END

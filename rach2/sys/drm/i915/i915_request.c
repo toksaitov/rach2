@@ -1,6 +1,6 @@
 /*
- * i915_request.c: the Intel graphics driver's requests on the render and
- * blitter rings: their commands, the context switch, the breadcrumb that
+ * i915_request.c: the Intel graphics driver's requests on the GPU's
+ * rings: their commands, the context switch, the breadcrumb that
  * closes each, their fences signalled from the user interrupt, waits and
  * retirement, and the default context image, after Linux 6.12's
  * i915_request.c, gt/intel_ring_submission.c, gt/gen6_engine_cs.c,
@@ -27,15 +27,17 @@
 
 /* The dwords of the commands a request takes: the render ring's flush
  * with its invalidation, Linux's gen7_emit_flush_rcs with gen7_stall_cs,
- * and without it; the blitter's, mi_flush_dw; the PPGTT's directory
+ * and without it; the other rings', mi_flush_dw; the PPGTT's directory
  * loaded, load_pd_dir; the context switch, mi_set_context on Haswell with
- * one other engine; and the breadcrumbs, gen7_emit_breadcrumb_rcs and
- * _xcs, the blitter's with GEN7_XCS_WA stores. */
+ * the I915_NUM_ENGINES - 1 other engines; and the breadcrumbs,
+ * gen7_emit_breadcrumb_rcs and _xcs, the others' with GEN7_XCS_WA
+ * stores. */
 #define I915_FLUSH_RCS_DW      8u
 #define I915_WRITE_FLUSH_DW    4u
 #define I915_FLUSH_XCS_DW      4u
 #define I915_LOAD_PD_DW        12u
-#define I915_SET_CONTEXT_DW    16u
+#define I915_SIGNALLERS        (I915_NUM_ENGINES - 1u)
+#define I915_SET_CONTEXT_DW    (4u + 2u + 4u * I915_SIGNALLERS + 6u)
 #define I915_BREADCRUMB_RCS_DW 6u
 #define I915_XCS_WA            32u
 #define I915_BREADCRUMB_XCS_DW (3u + 3u * I915_XCS_WA + 3u + 2u)
@@ -601,7 +603,8 @@ uint32_t *i915_request_begin(struct i915_request *rq, uint32_t ndw)
 
 /** Invalidate the caches and TLBs before a request's commands: on the
  * render ring a stall, then a PIPE_CONTROL with a post-sync write to the
- * scratch page; on the blitter MI_FLUSH_DW with the TLBs. 0 or -EIO. */
+ * scratch page; on the others MI_FLUSH_DW with the TLBs, and on the video
+ * ring its own caches too, as Linux's gen6_emit_flush_vcs. 0 or -EIO. */
 static int32_t emit_invalidate(struct i915_request *rq)
 {
     struct i915_gt *gt = &rq->i915->gt;
@@ -613,6 +616,9 @@ static int32_t emit_invalidate(struct i915_request *rq)
             return -EIO;
         }
         cs[0] = MI_FLUSH_DW | MI_FLUSH_DW_STORE_INDEX | MI_FLUSH_DW_OP_STOREDW | MI_INVALIDATE_TLB;
+        if (rq->engine == &gt->engine[I915_VCS0]) {
+            cs[0] |= MI_INVALIDATE_BSD;
+        }
         cs[1] = HWS_SCRATCH_ADDR | MI_FLUSH_DW_USE_GTT;
         cs[2] = 0;
         cs[3] = MI_NOOP;
@@ -641,7 +647,7 @@ static int32_t emit_invalidate(struct i915_request *rq)
 
 /** Flush the caches' writes, as Linux's emit_flush with EMIT_FLUSH: on the
  * render ring a PIPE_CONTROL with its post-sync write to the scratch page,
- * on the blitter MI_FLUSH_DW without the TLBs. 0 or -EIO. */
+ * on the others MI_FLUSH_DW without the TLBs. 0 or -EIO. */
 static int32_t emit_write_flush(struct i915_request *rq)
 {
     struct i915_gt *gt = &rq->i915->gt;
@@ -713,36 +719,46 @@ static int32_t request_switch_mm(struct i915_request *rq)
 
 /**
  * Load the render ring's state `ce` with MI_SET_CONTEXT, as Linux's
- * mi_set_context on Haswell: arbitration off and the blitter's sleep
- * messages held around it, the image saved and restored with its extended
- * state, or its restore inhibited while it holds nothing, then a register
- * read written to the scratch page as a delay before the next switch.
- * 0 or -EIO.
+ * mi_set_context on Haswell: arbitration off and every other engine's
+ * sleep messages held around it, the image saved and restored with its
+ * extended state, or its restore inhibited while it holds nothing, then a
+ * read of the last engine's register written to the scratch page as a
+ * delay before the next switch. 0 or -EIO.
  */
 static int32_t emit_set_context(struct i915_request *rq, struct intel_context *ce, uint32_t flags)
 {
-    uint32_t psmi = RING_PSMI_CTL(rq->i915->gt.engine[I915_BCS0].mmio_base);
-    uint32_t *cs = i915_request_begin(rq, I915_SET_CONTEXT_DW);
+    struct i915_gt *gt = &rq->i915->gt;
+    uint32_t *cs = i915_request_begin(rq, I915_SET_CONTEXT_DW), psmi = 0, n = 0;
+    int i;
 
     if (!cs) {
         return -EIO;
     }
-    cs[0] = MI_ARB_ON_OFF | MI_ARB_DISABLE;
-    cs[1] = MI_LOAD_REGISTER_IMM(1);
-    cs[2] = psmi;
-    cs[3] = I915_MASKED_ENABLE(GEN6_PSMI_SLEEP_MSG_DISABLE);
-    cs[4] = MI_NOOP;
-    cs[5] = MI_SET_CONTEXT;
-    cs[6] = ce->image_ggtt | flags;
-    cs[7] = MI_NOOP; /* MI_SET_CONTEXT is followed by MI_NOOP, as Linux */
-    cs[8] = MI_LOAD_REGISTER_IMM(1);
-    cs[9] = psmi;
-    cs[10] = I915_MASKED_DISABLE(GEN6_PSMI_SLEEP_MSG_DISABLE);
-    cs[11] = MI_STORE_REGISTER_MEM | MI_SRM_LRM_GLOBAL_GTT;
-    cs[12] = psmi;
-    cs[13] = rq->i915->gt.scratch_ggtt + I915_SCRATCH_DEFAULT;
-    cs[14] = MI_NOOP;
-    cs[15] = MI_ARB_ON_OFF | MI_ARB_ENABLE;
+    cs[n++] = MI_ARB_ON_OFF | MI_ARB_DISABLE;
+    cs[n++] = MI_LOAD_REGISTER_IMM(I915_SIGNALLERS);
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        if (&gt->engine[i] != rq->engine) {
+            cs[n++] = RING_PSMI_CTL(gt->engine[i].mmio_base);
+            cs[n++] = I915_MASKED_ENABLE(GEN6_PSMI_SLEEP_MSG_DISABLE);
+        }
+    }
+    cs[n++] = MI_NOOP;
+    cs[n++] = MI_SET_CONTEXT;
+    cs[n++] = ce->image_ggtt | flags;
+    cs[n++] = MI_NOOP; /* MI_SET_CONTEXT is followed by MI_NOOP, as Linux */
+    cs[n++] = MI_LOAD_REGISTER_IMM(I915_SIGNALLERS);
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        if (&gt->engine[i] != rq->engine) {
+            psmi = RING_PSMI_CTL(gt->engine[i].mmio_base);
+            cs[n++] = psmi;
+            cs[n++] = I915_MASKED_DISABLE(GEN6_PSMI_SLEEP_MSG_DISABLE);
+        }
+    }
+    cs[n++] = MI_STORE_REGISTER_MEM | MI_SRM_LRM_GLOBAL_GTT;
+    cs[n++] = psmi;
+    cs[n++] = gt->scratch_ggtt + I915_SCRATCH_DEFAULT;
+    cs[n++] = MI_NOOP;
+    cs[n] = MI_ARB_ON_OFF | MI_ARB_ENABLE;
     return 0;
 }
 
@@ -750,8 +766,8 @@ static int32_t emit_set_context(struct i915_request *rq, struct intel_context *c
  * Switch the chip to the request's state, as Linux's switch_context: the
  * PPGTT's directory loaded on either ring; on the render ring the image
  * loaded, valid from then on, and the engine's `last_ce` made it, the
- * request keeping the one it replaces until it retires. The blitter has no
- * state to switch. 0 or -EIO.
+ * request keeping the one it replaces until it retires. The other rings
+ * have no state to switch. 0 or -EIO.
  */
 static int32_t request_switch(struct i915_request *rq)
 {

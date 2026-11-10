@@ -347,6 +347,7 @@
 #define MI_FLUSH_DW                MI_INSTR(0x26, 1)
 #define MI_FLUSH_DW_STORE_INDEX    (1u << 21)
 #define MI_INVALIDATE_TLB          (1u << 18)
+#define MI_INVALIDATE_BSD          (1u << 7)
 #define MI_FLUSH_DW_OP_STOREDW     (1u << 14)
 #define MI_FLUSH_DW_USE_GTT        (1u << 2)
 
@@ -389,6 +390,8 @@
 #define INSTR_SUBCLIENT_SHIFT 27
 #define INSTR_SUBCLIENT_MASK  0x18000000u
 #define INSTR_MEDIA_SUBCLIENT 0x2u
+#define INSTR_26_TO_24_MASK   0x07000000u
+#define INSTR_26_TO_24_SHIFT  24
 
 #define MI_SET_PREDICATE                MI_INSTR(0x01, 0)
 #define MI_WAIT_FOR_EVENT               MI_INSTR(0x03, 0)
@@ -440,6 +443,9 @@
 #define PIPE_CONTROL_POST_SYNC_OP_MASK       (3u << 14)
 #define PIPE_CONTROL_NOTIFY                  (1u << 8)
 #define COLOR_BLT                            ((2u << 29) | (0x40u << 22))
+/* The video ring's wait for its codec, MEDIA_INSTR(1, 0, 0, 0), one dword
+ * whatever its length field says. */
+#define MFX_WAIT                             ((3u << 29) | (1u << 27) | (0u << 24) | (0x00u << 16))
 #define SRC_COPY_BLT                         ((2u << 29) | (0x43u << 22))
 
 /* The video ring's base on graphics 4 and 5, whose timestamp Linux's
@@ -503,7 +509,9 @@
 #define GEN2_IIR                    0x20a4
 #define I915_MASTER_ERROR_INTERRUPT (1u << 15)
 #define RING_FAULT_REG_RCS          0x4094
+#define RING_FAULT_REG_VCS          0x4194
 #define RING_FAULT_REG_BCS          0x4294
+#define RING_FAULT_REG_VECS         0x4394
 #define RING_FAULT_VALID            (1u << 0)
 
 /* ------------------------------------------------------------------------

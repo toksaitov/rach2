@@ -478,6 +478,9 @@ struct drm_i915_gem_exec_fence {
 #define I915_EXEC_HANDLE_LUT        (1u << 12)
 #define I915_EXEC_BSD_SHIFT         13
 #define I915_EXEC_BSD_MASK          (3u << I915_EXEC_BSD_SHIFT)
+#define I915_EXEC_BSD_DEFAULT       (0u << I915_EXEC_BSD_SHIFT)
+#define I915_EXEC_BSD_RING1         (1u << I915_EXEC_BSD_SHIFT)
+#define I915_EXEC_BSD_RING2         (2u << I915_EXEC_BSD_SHIFT)
 #define I915_EXEC_RESOURCE_STREAMER (1u << 15)
 #define I915_EXEC_FENCE_IN          (1u << 16)
 #define I915_EXEC_FENCE_OUT         (1u << 17)

@@ -1,6 +1,6 @@
 /*
- * i915_gem_execbuffer.c: EXECBUFFER2, a program's batch run on the render
- * or blitter ring, after Linux 6.12's gem/i915_gem_execbuffer.c on a
+ * i915_gem_execbuffer.c: EXECBUFFER2, a program's batch run on one of the
+ * GPU's rings, after Linux 6.12's gem/i915_gem_execbuffer.c on a
  * legacy ring: the objects looked up, bound and relocated, the batch
  * checked, its request built behind its fences, and the objects' implicit
  * fences and domains moved to it.
@@ -1042,7 +1042,7 @@ static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
 
 /**
  * Emit MI_BATCH_BUFFER_START of the batch at `addr`, as hsw_emit_bb_start
- * on the render ring and gen6_emit_bb_start on the blitter: unprivileged
+ * on the render ring and gen6_emit_bb_start on the others: unprivileged
  * through the PPGTT unless `secure`. 0, or -EIO when the ring refuses it.
  */
 static int32_t eb_emit_start(struct i915_request *rq, uint32_t addr, int secure)
@@ -1073,7 +1073,7 @@ static int32_t eb_emit_start(struct i915_request *rq, uint32_t addr, int secure)
  * The aliasing PPGTT maps the shadow where the global GTT does, so its
  * one binding serves both starts.
  *
- * @return 0; -EINVAL for the reset on the blitter; -EIO when the ring
+ * @return 0; -EINVAL for the reset off the render ring; -EIO when the ring
  *         refuses the commands.
  */
 static int32_t eb_emit(struct eb *eb, struct i915_request *rq)
@@ -1113,11 +1113,12 @@ static int32_t eb_emit(struct eb *eb, struct i915_request *rq)
 /**
  * The context's state the flags name, as Linux's eb_select_engine: with
  * the context's engine map, the slot in I915_EXEC_RING_MASK; without, the
- * legacy ring, where the default ring and RENDER run on rcs0 and BLT on
- * bcs0, and BSD, VEBOX, BSD's flags with another ring and any other number
- * name no engine that runs. With a reference in `*out`; 0, -EINVAL, or
- * -EIO for a state a hang banned, which runs nothing more, as Linux's
- * __eb_pin_engine refuses it.
+ * legacy ring of eb_select_legacy_ring, where the default ring and RENDER
+ * run on rcs0, BLT on bcs0, BSD on vcs0 whatever its I915_EXEC_BSD_MASK
+ * says, since Haswell has one video ring, and VEBOX on vecs0; BSD's flags
+ * with another ring and any other number name no engine. With a reference
+ * in `*out`; 0, -EINVAL, or -EIO for a state a hang banned, which runs
+ * nothing more, as Linux's __eb_pin_engine refuses it.
  */
 static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
 {
@@ -1131,6 +1132,10 @@ static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
         idx = I915_RCS0;
     } else if (ring == I915_EXEC_BLT) {
         idx = I915_BCS0;
+    } else if (ring == I915_EXEC_BSD) {
+        idx = I915_VCS0;
+    } else if (ring == I915_EXEC_VEBOX) {
+        idx = I915_VECS0;
     } else {
         return -EINVAL;
     }
@@ -1242,7 +1247,7 @@ static int32_t eb_hold_make(struct eb *eb)
  * The request takes the call's hold, made first.
  *
  * @return 0; the errors of `i915_request_create`; -ENOMEM; -EAGAIN; -EINVAL
- *         for I915_EXEC_GEN7_SOL_RESET on the blitter; -ENOENT for a
+ *         for I915_EXEC_GEN7_SOL_RESET off the render ring; -ENOENT for a
  *         context destroyed meanwhile; -EIO.
  */
 static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)

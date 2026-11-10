@@ -36,22 +36,22 @@ int i915_capable(void)
 struct i915_engine *i915_engine_lookup_user(struct drm_i915_private *i915, uint16_t cls,
                                             uint16_t instance)
 {
+    int i;
+
     if (instance != 0) {
         return 0;
     }
-    if (cls == I915_ENGINE_CLASS_RENDER) {
-        return &i915->gt.engine[I915_RCS0];
-    }
-    if (cls == I915_ENGINE_CLASS_COPY) {
-        return &i915->gt.engine[I915_BCS0];
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        if (i915->gt.engine[i].uabi_class == cls) {
+            return &i915->gt.engine[i];
+        }
     }
     return 0;
 }
 
 uint16_t i915_engine_uabi_class(const struct i915_engine *engine)
 {
-    return engine->mmio_base == RENDER_RING_BASE ? I915_ENGINE_CLASS_RENDER
-                                                 : I915_ENGINE_CLASS_COPY;
+    return engine->uabi_class;
 }
 
 struct intel_context *intel_context_create(struct drm_i915_private *i915,

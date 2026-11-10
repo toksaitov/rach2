@@ -166,14 +166,21 @@ struct fake_shadow {
     uint32_t fence_hi;
 };
 
-/* One of the two rings the driver starts. `hung` is set from a hang until
- * a reset of `domain`; `commands` and `batches` count what it ran, and
- * `resets` the resets of its domain alone. */
+/* The rings the driver starts, as many as it has engines. */
+#define FAKE_RINGS I915_NUM_ENGINES
+
+/* One of the rings. Its user interrupt is `irq_bit` in its RING_IMR and in
+ * the bank whose mask and identity registers are `imr` and `iir`, the
+ * GT's, or power management's for the video enhancement ring. `hung` is
+ * set from a hang until a reset of `domain`; `commands` and `batches`
+ * count what it ran, and `resets` the resets of its domain alone. */
 struct fake_ring {
     const char *name;
     uint32_t base;
     uint32_t hws_pga;
     uint32_t irq_bit;
+    uint32_t imr;
+    uint32_t iir;
     uint32_t domain;
     uint8_t hung;
     uint32_t commands;
@@ -199,7 +206,7 @@ struct i915_fake {
     uint32_t *gtt;
     uint32_t gtt_entries;
     struct fake_shadow *shadow[FAKE_SHADOW_DIRS];
-    struct fake_ring ring[2];
+    struct fake_ring ring[FAKE_RINGS];
     uint32_t armed[FAKE_NFAULTS];
     uint32_t injected[FAKE_NFAULTS];
     int line;
@@ -219,6 +226,10 @@ struct i915_fake {
 /** The register at `reg`, as stored. */
 #define R(f, reg) ((f)->regs[(reg) / 4u])
 
+/* The rings' register bases, as `ring` holds them. */
+static const uint32_t fake_ring_bases[FAKE_RINGS] = {RENDER_RING_BASE, BLT_RING_BASE,
+                                                     GEN6_BSD_RING_BASE, VEBOX_RING_BASE};
+
 /** Whether `reg` is a masked register: one whose high half enables the
  * bits of the low half that a write changes. */
 static int fake_masked(uint32_t reg)
@@ -228,8 +239,8 @@ static int fake_masked(uint32_t reg)
     if (reg == FORCEWAKE_MT) {
         return 1;
     }
-    for (i = 0; i < 2; i++) {
-        uint32_t b = i ? BLT_RING_BASE : RENDER_RING_BASE;
+    for (i = 0; i < FAKE_RINGS; i++) {
+        uint32_t b = fake_ring_bases[i];
 
         if (reg == RING_MI_MODE(b) || reg == RING_INSTPM(b) || reg == RING_MODE_GEN7(b)) {
             return 1;
@@ -243,7 +254,7 @@ static struct fake_ring *fake_ring_of(struct i915_fake *f, uint32_t reg)
 {
     int i;
 
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < FAKE_RINGS; i++) {
         if (reg >= f->ring[i].base && reg < f->ring[i].base + 0x1000u) {
             return &f->ring[i];
         }
@@ -293,8 +304,9 @@ static void fake_irq_eval(struct i915_fake *f)
     f->line = line;
 }
 
-/** The user interrupt of ring `r`: latched in GTIIR when RING_IMR and
- * GTIMR let it through, unless a lost interrupt is armed. */
+/** The user interrupt of ring `r`: latched in its bank's identity register
+ * when RING_IMR and the bank's mask let it through, unless a lost
+ * interrupt is armed. */
 static void fake_user_interrupt(struct i915_fake *f, struct fake_ring *r)
 {
     if (R(f, RING_IMR(r->base)) & r->irq_bit) {
@@ -304,7 +316,7 @@ static void fake_user_interrupt(struct i915_fake *f, struct fake_ring *r)
         klog(KLOG_INFO, "i915", "fake: injected: irq: %s's user interrupt lost", r->name);
         return;
     }
-    R(f, GTIIR) |= r->irq_bit & ~R(f, GTIMR);
+    R(f, r->iir) |= r->irq_bit & ~R(f, r->imr);
     fake_irq_eval(f);
 }
 
@@ -489,7 +501,7 @@ static void fake_reset(struct i915_fake *f, uint32_t domains)
     if (domains & GEN6_GRDOM_FULL) {
         f->full_resets++;
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < FAKE_RINGS; i++) {
         struct fake_ring *r = &f->ring[i];
 
         if (!(domains & (GEN6_GRDOM_FULL | r->domain))) {
@@ -1004,9 +1016,9 @@ static void text_num(struct fake_text *t, uint32_t n, int negative)
 /**
  * The file's text, one line each: `fault NAME armed N injected M` for each
  * fault, with `always` for N; `ring NAME commands N batches M hung 0|1` for
- * each ring; `resets rcs0 N bcs0 M full K`, the resets of each ring's
- * domain alone and of the whole GPU; `messages N`; and `light never`,
- * `light ok` or `light error -E`.
+ * each ring; `resets rcs0 N bcs0 N vcs0 N vecs0 N full N`, the resets of
+ * each ring's domain alone and of the whole GPU; `messages N`; and
+ * `light never`, `light ok` or `light error -E`.
  */
 static void fake_text(struct i915_fake *f, struct fake_text *t)
 {
@@ -1028,7 +1040,7 @@ static void fake_text(struct i915_fake *f, struct fake_text *t)
         text_num(t, f->injected[i], 0);
         text_put(t, "\n");
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < FAKE_RINGS; i++) {
         text_put(t, "ring ");
         text_put(t, f->ring[i].name);
         text_put(t, " commands ");
@@ -1037,10 +1049,13 @@ static void fake_text(struct i915_fake *f, struct fake_text *t)
         text_num(t, f->ring[i].batches, 0);
         text_put(t, f->ring[i].hung ? " hung 1\n" : " hung 0\n");
     }
-    text_put(t, "resets rcs0 ");
-    text_num(t, f->ring[0].resets, 0);
-    text_put(t, " bcs0 ");
-    text_num(t, f->ring[1].resets, 0);
+    text_put(t, "resets");
+    for (i = 0; i < FAKE_RINGS; i++) {
+        text_put(t, " ");
+        text_put(t, f->ring[i].name);
+        text_put(t, " ");
+        text_num(t, f->ring[i].resets, 0);
+    }
     text_put(t, " full ");
     text_num(t, f->full_resets, 0);
     text_put(t, "\n");
@@ -1284,6 +1299,20 @@ static const struct i915_hw_ops fake_ops = {
     "fake",     fake_read32, fake_write32, fake_delay_us, fake_gtt_map,       fake_config_read32,
     fake_fault, fake_attach, fake_detach,  fake_release,  fake_aperture_page, fake_aperture_sync};
 
+/* The rest of each ring's identity, in the order of `fake_ring_bases`;
+ * `pm` says its user interrupt is power management's. */
+static const struct {
+    const char *name;
+    uint32_t hws_pga;
+    uint32_t irq_bit;
+    int pm;
+    uint32_t domain;
+} fake_ring_info[FAKE_RINGS] = {
+    {"rcs0", RENDER_HWS_PGA_GEN7, GT_RENDER_USER_INTERRUPT, 0, GEN6_GRDOM_RENDER},
+    {"bcs0", BLT_HWS_PGA_GEN7, GT_BLT_USER_INTERRUPT, 0, GEN6_GRDOM_BLT},
+    {"vcs0", BSD_HWS_PGA_GEN7, GT_BSD_USER_INTERRUPT, 0, GEN6_GRDOM_MEDIA},
+    {"vecs0", VEBOX_HWS_PGA_GEN7, PM_VEBOX_USER_INTERRUPT, 1, GEN6_GRDOM_VECS}};
+
 /**
  * Make a fake chip at power-on, with every interrupt source masked, every
  * ring disabled and its RING_IMR set, and `hw` the backend over it, which
@@ -1303,16 +1332,15 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
         kfree(f);
         return 0;
     }
-    f->ring[0].name = "rcs0";
-    f->ring[0].base = RENDER_RING_BASE;
-    f->ring[0].hws_pga = RENDER_HWS_PGA_GEN7;
-    f->ring[0].irq_bit = GT_RENDER_USER_INTERRUPT;
-    f->ring[0].domain = GEN6_GRDOM_RENDER;
-    f->ring[1].name = "bcs0";
-    f->ring[1].base = BLT_RING_BASE;
-    f->ring[1].hws_pga = BLT_HWS_PGA_GEN7;
-    f->ring[1].irq_bit = GT_BLT_USER_INTERRUPT;
-    f->ring[1].domain = GEN6_GRDOM_BLT;
+    for (i = 0; i < FAKE_RINGS; i++) {
+        f->ring[i].name = fake_ring_info[i].name;
+        f->ring[i].base = fake_ring_bases[i];
+        f->ring[i].hws_pga = fake_ring_info[i].hws_pga;
+        f->ring[i].irq_bit = fake_ring_info[i].irq_bit;
+        f->ring[i].imr = fake_ring_info[i].pm ? GEN6_PMIMR : GTIMR;
+        f->ring[i].iir = fake_ring_info[i].pm ? GEN6_PMIIR : GTIIR;
+        f->ring[i].domain = fake_ring_info[i].domain;
+    }
     for (i = 0; i < sizeof(imr) / sizeof(imr[0]); i++) {
         R(f, imr[i]) = 0xffffffffu;
     }
