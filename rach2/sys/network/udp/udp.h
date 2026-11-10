@@ -71,11 +71,10 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
 int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen, const struct net_txopt *opt);
 
-/** Bind `sock` to `port` at its `local_ip`, under the caller's effective
- * uid; 0 on success, -1 on conflict, -ENOMEM on allocation failure. Two
- * bindings conflict when one is to any address or both are to the same one;
- * sharing requires SO_REUSEADDR on every such socket and the caller's
- * effective uid on every such binding. Takes `net_lock` itself. */
+/** Bind `sock` to `port` at its `local_ip`: 0 on success, -1 on conflict,
+ * -ENOMEM on allocation failure. Two bindings conflict when one is to any
+ * address or both are to the same one; sharing requires SO_REUSEADDR on
+ * every such socket, regardless of its owner. Takes `net_lock` itself. */
 int udp_bind(uint16_t port, struct socket *sock);
 
 /** Bind `sock` to the next port from 49152 to 65535 that no binding has, at

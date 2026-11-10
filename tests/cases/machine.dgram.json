@@ -47,7 +47,7 @@
         {"assertion_id": "unspec-stream", "checks": "a two-byte AF_UNSPEC connect of a stream socket answers EAFNOSUPPORT", "source": "scenario"},
         {"assertion_id": "packet-connect", "checks": "a connect of each of eight packet sockets answers EOPNOTSUPP", "source": "scenario"},
         {"assertion_id": "packet-binding", "checks": "after the eight packet sockets a datagram socket still binds a port", "source": "scenario"},
-        {"assertion_id": "reuse-both", "checks": "a second bind of a bound port answers EADDRINUSE until both sockets set SO_REUSEADDR", "source": "scenario"},
+        {"assertion_id": "reuse-both", "checks": "a second bind of a bound port answers EADDRINUSE until both sockets set SO_REUSEADDR, then succeeds even when different file-system user ids opened and bound the sockets", "source": "scenario"},
         {"assertion_id": "reuse-reply", "checks": "of two sockets on one port, the reply goes to the one connected to the sender, and the listener does not take it", "source": "scenario"},
         {"assertion_id": "reuse-close", "checks": "closing one of two sockets on a port leaves the other bound", "source": "scenario"},
         {"assertion_id": "low-port", "checks": "uid 1000 binding port 68 answers EACCES", "source": "scenario"},
