@@ -19,4 +19,7 @@ void kvm_count(enum kvm_resource resource, int change);
 /** The live count of resource; called under the big kernel lock. */
 uint32_t kvm_resource_count(enum kvm_resource resource);
 
+/** Completed backend entries since boot; read under the big lock. */
+uint64_t kvm_exit_count(void);
+
 #endif

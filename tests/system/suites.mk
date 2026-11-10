@@ -1977,3 +1977,31 @@ build/tests/graphics/desktop_display.py: tests/graphics/desktop_display.py
 build/tests/cases/gnu/pi-futex.c: tests/musl/pifutexmusl.c
 	@mkdir -p $(@D)
 	cp $< $@
+
+# `tests/run assign`: a NIC assigned to a Debian guest through VT-d and VFIO,
+# DMA and MSI isolation under host traffic, and release after a killed guest.
+ASSIGN_DIR = build/tests/cases/assign
+$(ASSIGN_DIR)/initrd: tests/assign/mkguest.sh tests/assign/guest-init \
+                      tests/kvm/guests/debian.txt build/tools/wifi/mkcpio $(SHA256TOOL)
+	sh tests/assign/mkguest.sh $(@D)
+$(ASSIGN_DIR)/edu: tests/assign/edu.c $(LIBC_STAMP)
+	@mkdir -p $(@D) build/tmp
+	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
+	    -static -Wl,-z,noexecstack $< -o $@
+$(ASSIGN_DIR)/assign.tar: tests/assign/run.sh $(ASSIGN_DIR)/initrd $(ASSIGN_DIR)/edu \
+                        $(KVM_GUEST_DIR)/vmlinuz tests/kvm/kvm-boot.sh
+	tar -cf $@.tmp -C tests assign/run.sh kvm/kvm-boot.sh \
+	    -C $(CURDIR)/$(ASSIGN_DIR)/.. assign/initrd assign/edu \
+	    -C $(CURDIR)/build/kvm/guests/debian vmlinuz
+	mv $@.tmp $@
+$(ASSIGN_DIR)/assign.ext2: $(ASSIGN_DIR)/assign.tar
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/assign-disk.XXXXXX); \
+	tar -xf $< -C "$$work"; mv "$$work/vmlinuz" "$$work/assign/vmlinuz"; \
+	kib=$$(($$(wc -c < $<) / 1024 * 5 / 4 + 8192)); \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp $${kib}k; \
+	mv $@.tmp $@
