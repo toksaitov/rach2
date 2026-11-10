@@ -21,7 +21,13 @@
  * each bounded, a channel that stays busy, and VDD forced on for a panel
  * without power and let go five power cycles later; the EDID read in
  * pieces of 16 bytes over I2C, through I2C DEFER replies, a base block
- * that never sums to 0, and extension blocks good and bad.
+ * that never sums to 0, and extension blocks good and bad; the link's
+ * training at 2.7 Gb/s on one lane in Linux's register and DPCD order, the
+ * buffer driving the levels the sink was told, and trainings that fail in
+ * clock recovery or equalization, tried again and then fallen back from as
+ * Linux does; the sequencer's delays from the firmware and the VBT, and
+ * the panel off and on again with T9, T10, the power cycle, T1+T3 and T8
+ * kept.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -565,6 +571,85 @@ static void row_train_fail(void)
     CHECK(gpu.hw.timeouts == 0, "fail: no wait timed out");
 }
 
+/* ---- the panel power sequencer ---- */
+
+/** The sequencer's delays: the larger of the firmware's and the VBT's,
+ * written with the backlight's as 1 and the power cycle in the divisor. */
+static void row_pps_init(void)
+{
+    struct intel_pps *pps;
+    uint32_t from;
+
+    i915_model_free(&model);
+    k_memset(&gpu, 0, sizeof(gpu));
+    CHECK(i915_model_init(&model) == 0, "the model is made");
+    gpu.hw = model.hw;
+    gpu.display.dp.vbt.panel_type = -1;
+    intel_bios_panel_init(&vbt, &gpu.display.dp.vbt, intel_bios_encoder_lookup(&vbt, INTEL_PORT_A),
+                          lenovo_panel_edid, 1);
+    from = model.nlog;
+    log_clear();
+    intel_pps_init(&gpu);
+    pps = &gpu.display.dp.pps;
+    CHECK(pps->power_up_ms == 200 && pps->power_down_ms == 50 && pps->power_cycle_ms == 500 &&
+              pps->backlight_on_ms == 1 && pps->backlight_off_ms == 200,
+          "pps init: the delays Linux reported on the Lenovo");
+    CHECK(i915_model_find_write(&model, PP_ON_DELAYS, 0x07d00001u, from) >= 0 &&
+              i915_model_find_write(&model, PP_OFF_DELAYS, 0x01f40001u, from) >= 0,
+          "pps init: the delays written, the backlight's as 1");
+    CHECK(i915_model_find_write(&model, PP_DIVISOR, 0x0004af06u, from) >= 0,
+          "pps init: 100 us of the 24 MHz raw clock and a 500 ms power cycle");
+    CHECK(logged("pps: power up 200 ms, down 50 ms, cycle 500 ms, backlight on 1 ms, off 200 ms"),
+          "pps init: logged");
+}
+
+/** The panel off and on again in Linux's order, each delay of the
+ * sequence kept on the model's clock. */
+static void row_pps_order(void)
+{
+    struct i915_model_panel *p;
+    struct intel_pps *pps;
+    uint64_t t0;
+
+    fresh();
+    p = i915_model_panel(&model);
+    pps = &gpu.display.dp.pps;
+    CHECK(p->on && intel_pps_have_power_or_vdd(&gpu), "pps: the firmware's panel is on");
+    t0 = model.now_us;
+    intel_pps_backlight_off(&gpu);
+    CHECK(!(reg(PP_CONTROL) & EDP_BLC_ENABLE) && p->blc_off_at == t0,
+          "pps: the backlight goes off first");
+    CHECK(model.now_us - p->blc_off_at >= 200000u, "pps: and the video stays for T9");
+    intel_pps_vdd_on_unlocked(&gpu);
+    intel_pps_off(&gpu);
+    CHECK(p->down_from >= p->blc_off_at + 200000u, "pps: the power goes off after T9");
+    CHECK(!p->on && p->down_at - p->down_from >= 50000u && model.now_us >= p->down_at,
+          "pps: the sequencer took T10 and the driver waited for it");
+    CHECK(!(reg(PP_CONTROL) & (PANEL_POWER_ON | EDP_FORCE_VDD | EDP_BLC_ENABLE)) && !pps->want_vdd,
+          "pps: power, VDD and backlight go off together");
+
+    intel_pps_on(&gpu);
+    CHECK(p->on && p->up_at >= p->down_at + 500000u + 200000u,
+          "pps: power on waits the power cycle, then T1+T3");
+    CHECK((reg(PP_CONTROL) & (PANEL_POWER_ON | PANEL_POWER_RESET)) ==
+              (PANEL_POWER_ON | PANEL_POWER_RESET),
+          "pps: power on with the reset bit, as Linux sets it past Ironlake");
+    CHECK(model.now_us >= p->up_at && (reg(PP_STATUS) & PP_SEQUENCE_STATE_MASK) == 8,
+          "pps: the driver waits until the panel is on and idle");
+    intel_pps_backlight_on(&gpu);
+    CHECK((reg(PP_CONTROL) & EDP_BLC_ENABLE) && p->blc_on_at >= p->up_at + 1000u,
+          "pps: the backlight goes on T8 after the power");
+    CHECK(p->power_ups == 1 && p->power_downs == 1, "pps: one cycle of the panel");
+
+    t0 = model.now_us;
+    intel_pps_backlight_off(&gpu);
+    intel_pps_vdd_on_unlocked(&gpu);
+    intel_pps_off(&gpu);
+    intel_pps_on(&gpu);
+    CHECK(p->up_at - p->down_at >= 500000u, "pps: an off and on at once still waits the cycle");
+    CHECK(gpu.hw.timeouts == 0, "pps: no wait timed out");
+}
+
 int main(void)
 {
     model_start("i915-edp-test");
@@ -579,6 +664,8 @@ int main(void)
     row_edid();
     row_train();
     row_train_fail();
+    row_pps_init();
+    row_pps_order();
     i915_model_free(&model);
     intel_bios_fini(&vbt);
     if (failures == 0) {
