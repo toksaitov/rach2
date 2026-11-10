@@ -4,9 +4,9 @@
  * test's whose aperture holds what a program or the kernel last wrote
  * through it until the driver syncs it, with the kernel around it: memory
  * with a limit and reclaim, a program's memory for userptr, descriptors,
- * clocks, waits and programs' mappings. i915_gem_hosttest.c and
- * i915_evict_hosttest.c include it, and list kstring.c and kctypes.c in
- * their host-deps.
+ * clocks, waits and programs' mappings. i915_gem_hosttest.c,
+ * i915_evict_hosttest.c and i915_exec_hosttest.c include it, and list
+ * kstring.c and kctypes.c in their host-deps.
  */
 
 #include "drm/drm_gem.c"
@@ -47,8 +47,10 @@ static int failures;
         }                                            \
     } while (0)
 
-/* The calls of contexts, requests and parameters, i915_gem_context.c and
- * i915_getparam.c, which the table names and no row here makes. */
+/* The calls of contexts, requests, parameters and submission, which the
+ * table names and no row here makes, unless the including test defines
+ * MODEL_HAS_REQUESTS and includes their files. */
+#ifndef MODEL_HAS_REQUESTS
 #define NOT_HERE(name)                                                      \
     int32_t name(struct drm_device *dev, void *data, struct drm_file *file) \
     {                                                                       \
@@ -64,6 +66,26 @@ NOT_HERE(i915_gem_context_destroy_ioctl)
 NOT_HERE(i915_gem_context_getparam_ioctl)
 NOT_HERE(i915_gem_context_setparam_ioctl)
 NOT_HERE(i915_gem_context_reset_stats_ioctl)
+NOT_HERE(i915_gem_execbuffer2_ioctl)
+
+/* The GPU's idling, which eviction waits for when only busy bindings are
+ * left: `idle_signals`, a fence a row names, signals, as its request would
+ * retire. `idle_waits` counts the waits. */
+static struct dma_fence *idle_signals;
+static int idle_waits;
+
+int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
+{
+    (void)i915;
+    (void)intr;
+    idle_waits++;
+    if (idle_signals) {
+        dma_fence_signal(idle_signals);
+        idle_signals = 0;
+    }
+    return 0;
+}
+#endif
 
 /* ---- the chip ---- */
 
@@ -236,11 +258,18 @@ static const struct i915_hw_ops chip_ops = {.name = "test", .aperture_sync = chi
 
 /* ---- the driver's boundary, over the chip ---- */
 
+/* What a test's chip does besides keeping a register's value, such as
+ * running a ring whose tail moved; NULL for nothing. */
+static void (*chip_write_hook)(struct chip *c, uint32_t reg, uint32_t value);
+
 void i915_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
 {
     struct chip *c = chip_of(hw);
 
     c->regs[reg / 4] = value;
+    if (chip_write_hook) {
+        chip_write_hook(c, reg, value);
+    }
     if (reg >= FENCE_REG_GEN6_LO(0) && reg < FENCE_REG_GEN6_LO(I915_NUM_FENCES) && !(reg & 4u)) {
         int i = (int)((reg - FENCE_REG_GEN6_LO(0)) / 8u);
         uint32_t old_lo = c->fence_lo[i], old_hi = c->fence_hi[i];
@@ -727,6 +756,7 @@ int fd_free(fd_table_t *t, int fd)
     return 0;
 }
 
+#ifndef MODEL_HAS_SYNC_FILE
 int32_t sync_file_create(struct dma_fence *fence, const char *name)
 {
     (void)fence;
@@ -739,6 +769,7 @@ struct dma_fence *sync_file_get_fence(int32_t fd)
     (void)fd;
     return 0;
 }
+#endif
 
 void drm_dev_get(struct drm_device *dev)
 {
