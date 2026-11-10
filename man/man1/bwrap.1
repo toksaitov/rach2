@@ -85,8 +85,11 @@ After
 the old root's mounts are hidden, not moved: a descriptor or working
 directory left outside the new root still reaches them by their paths.
 .It
-User namespaces nest at most 7 deep below the first, and a map of one has
-at most 5 extents.
+User namespaces nest at most 7 deep below the first.
+A map of one has at most 340 extents, and mount namespaces are bounded by
+memory and by
+.Pa /proc/sys/user/max_mnt_namespaces ,
+as on Linux.
 .It
 The port has no SELinux, and its shell completions are not installed.
 .El

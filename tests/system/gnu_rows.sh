@@ -612,6 +612,74 @@ row_utillinux() {
     has "lsns" "$(lsns -n -o TYPE)" "user"
 }
 
+# bubblewrap as the Steam runtime's container needs it, past the limits
+# Rach2 once had: forty sandboxes at once, each in a mount namespace of its
+# own with a tmpfs that it alone sees, all in one user namespace whose uid
+# map has 340 extents, the most Linux takes, written by root from outside it
+# as newuidmap writes one. A 341st extent is EINVAL, the map reads back
+# sorted by the first id, and every sandbox reads the whole map.
+row_bwrapns() {
+    local holder='' i line ok=0 maps=0 own=0 pids=() rfd gfd
+    trap '[ -z "$holder" ] || kill "$holder" 2>/dev/null; [ ${#pids[@]} -eq 0 ] || kill "${pids[@]}" 2>/dev/null; wait' EXIT
+    same "a limit of mount namespaces past 40" "$(( $(cat /proc/sys/user/max_mnt_namespaces) > 40 ))" "1"
+    unshare -U sleep infinity &
+    holder=$!
+    while [ "$(readlink /proc/$holder/ns/user)" = "$(readlink /proc/self/ns/user)" ]; do
+        kill -0 "$holder" 2>/dev/null || { fail "unshare -U did not start"; return; }
+        sleep 0.1
+    done
+    for ((i = 339; i >= 0; i--)); do
+        printf '%d %d 1\n' $((2 * i)) $((3 * i))
+    done > "$WORK/map"
+    { printf '680 1020 1\n'; cat "$WORK/map"; } > "$WORK/map341"
+    dd if="$WORK/map341" of=/proc/$holder/uid_map bs=8192 conv=notrunc status=none 2> "$WORK/dd341"
+    has "a uid map of 341 extents" "$(cat "$WORK/dd341")" "Invalid argument"
+    runs "a uid map of 340 extents" \
+        dd if="$WORK/map" of=/proc/$holder/uid_map bs=8192 conv=notrunc status=none
+    echo '0 0 65536' > "$WORK/gidmap"
+    runs "its gid map" dd if="$WORK/gidmap" of=/proc/$holder/gid_map bs=64 conv=notrunc status=none
+    same "the map's lines" "$(wc -l < /proc/$holder/uid_map)" "340"
+    same "its first line, the lowest first id" "$(sed -n 1p /proc/$holder/uid_map)" \
+        "$(printf '%10u %10u %10u' 0 0 1)"
+    same "its 201st line" "$(sed -n 201p /proc/$holder/uid_map)" "$(printf '%10u %10u %10u' 400 600 1)"
+    mkdir "$WORK/bw"
+    mkfifo "$WORK/ready" "$WORK/go"
+    exec {rfd}<> "$WORK/ready" {gfd}<> "$WORK/go"
+    for ((i = 0; i < 40; i++)); do
+        # shellcheck disable=SC2016 # the dollars are the sandbox's shell's
+        { bwrap --userns 3 --dev-bind / / --tmpfs "$WORK/bw" -- /bin/bash -c '
+              touch "$2/bw/$1" &&
+              echo "ok $1 $(readlink /proc/self/ns/mnt) $(wc -l < /proc/self/uid_map)" > "$2/ready" &&
+              read -r _ < "$2/go" && ls "$2/bw" > "$2/seen-$1"' bash "$i" "$WORK" \
+              3< /proc/$holder/ns/user 2> "$WORK/err-$i" || echo "fail $i" > "$WORK/ready"; } &
+        pids+=($!)
+    done
+    for ((i = 0; i < 40; i++)); do
+        read -r line <&"$rfd"
+        echo "$line" >> "$WORK/lines"
+    done
+    ok=$(grep -c '^ok ' "$WORK/lines")
+    maps=$(grep -c ' 340$' "$WORK/lines")
+    same "sandboxes made at once" "$ok" "40"
+    same "their mount namespaces" "$(grep '^ok ' "$WORK/lines" | cut -d ' ' -f 3 | sort -u | wc -l)" "40"
+    same "sandboxes that read the whole map" "$maps" "40"
+    same "their mounts seen outside" "$(find "$WORK/bw" -mindepth 1 | wc -l)" "0"
+    for ((i = 0; i < 40; i++)); do
+        echo >&"$gfd"
+    done
+    wait "${pids[@]}"
+    pids=()
+    for ((i = 0; i < 40; i++)); do
+        [ "$(cat "$WORK/seen-$i" 2>/dev/null)" != "$i" ] || own=$((own + 1))
+    done
+    same "sandboxes that saw their own file alone" "$own" "40"
+    [ "$ok" = 40 ] || fail "the first refusal: $(cat "$WORK"/err-* | head -n 1)"
+    exec {rfd}<&- {gfd}<&-
+    kill "$holder"
+    wait "$holder"
+    trap - EXIT
+}
+
 # zstd compresses and decompresses, in its own format and in gzip's, and
 # tar calls it for --zstd.
 row_zstd() {
