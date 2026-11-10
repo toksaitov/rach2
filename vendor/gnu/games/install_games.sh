@@ -52,11 +52,17 @@ if [ -d "$TREE/usr/games" ]; then
 fi
 
 if [ "$RACH2_ARCH" = x86_64 ]; then
-    if [ -e "$TREE/usr/bin/rach2-game" ] || [ -L "$TREE/usr/bin/rach2-game" ]; then
-        echo 'gnu: games: /usr/bin/rach2-game already exists' >&2
-        exit 1
-    fi
+    for command in rach2-game crysis.sh; do
+        if [ -e "$TREE/usr/bin/$command" ] || [ -L "$TREE/usr/bin/$command" ]; then
+            echo "gnu: games: /usr/bin/$command already exists" >&2
+            exit 1
+        fi
+    done
     install -m 0755 "$DIR/games/rach2-game.sh" "$TREE/usr/bin/rach2-game"
+    install -m 0755 "$DIR/games/crysis.sh" "$TREE/usr/bin/crysis.sh"
+    mkdir -p "$TREE/usr/share/rach2/crysis"
+    install -m 0644 "$DIR/games/game.sha256" "$DIR/games/crysis-installers.sha256" \
+        "$TREE/usr/share/rach2/crysis/"
     # The native games' fixed replays, which the games-native suite and the
     # Lenovo's runs play.
     if [ -e "$TREE/usr/share/games/rach2" ] || [ -L "$TREE/usr/share/games/rach2" ]; then

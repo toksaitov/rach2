@@ -58,6 +58,59 @@ No program is needed in this mode.
 prints usage.
 .Fl -
 ends option processing.
+.Ss Crysis
+The x86-64 GNU root also provides
+.Nm crysis.sh .
+An administrator first mounts the data partition writable at
+.Pa /data
+and creates
+.Pa /data/crysis
+owned by the user who will play.
+As that user, run:
+.Bd -literal -offset indent
+crysis.sh install '/data/installers/setup_crysis_2.0.0.7_(84418).exe'
+crysis.sh verify
+crysis.sh run
+.Ed
+.Pp
+Keep the installer's two
+.Pa .bin
+files beside its executable.
+The installer checks their SHA-256 hashes, unpacks with
+.Xr innoextract 1 ,
+and checks all 2,358 game files against the system's manifest before
+publishing
+.Pa /data/crysis/game .
+An existing game tree is refused; use
+.Cm verify
+to check it again.
+.Pp
+.Cm run
+starts
+.Pa Bin64/Crysis.exe
+with
+.Fl dx9
+from its own directory through
+.Nm rach2-game
+with game ID 17300.
+Additional arguments follow these settings.
+The game's
+.Fl userpath
+is
+.Pa Z:\edata\ecrysis\esaves ;
+its compatibility directory, logs, Steam client directory and Mesa cache
+are respectively
+.Pa /data/crysis/compat ,
+.Pa /data/crysis/logs ,
+.Pa /data/crysis/steam
+and
+.Pa /data/crysis/cache/mesa .
+Mesa's on-disk cache is enabled.
+Set
+.Ev MESA_SHADER_CACHE_SHOW_STATS=true
+to print its hits and misses.
+These files and the saves survive an update of the system's root.
+The game tree needs write access too, for its own logs.
 .Sh ENVIRONMENT
 .Nm
 sets these variables for Proton:
