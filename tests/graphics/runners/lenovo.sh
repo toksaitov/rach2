@@ -55,7 +55,7 @@ work='' stopped=0
 
 usage()
 {
-    sed -n '7,13p' "$0" | sed 's/^# *//' >&2
+    sed -n '6,12p' "$0" | sed 's/^# *//' >&2
     exit 2
 }
 
