@@ -1891,7 +1891,8 @@ static void outs_rf_rows(int fd)
     r = regs_of(fd);
     r.rsi = 0x2FFE;
     r.rflags &= ~(uint64_t)F_RF;
-    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with SI two bytes short of a page");
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0,
+          "KVM_SET_REGS with SI two bytes short of a page");
     ram[0x2FFE] = 'p';
     ram[0x2FFF] = 'q';
     ram[0x3000] = 'r';
@@ -1905,8 +1906,7 @@ static void outs_rf_rows(int fd)
           "and repeats with RF set");
     w = script(EXIT_IO, 0x30u | (0x3F8ull << 16), 2);
     w->insn_info = 3u << 15;
-    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 1 &&
-              v->pio[0] == 'r',
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 1 && v->pio[0] == 'r',
           "the guest's next pass moves the last byte");
     r = regs_of(fd);
     CHECK(r.rcx == 0 && r.rsi == 0x3001 && r.rip == 0x1002 && !(r.rflags & F_RF),
@@ -1924,7 +1924,8 @@ static void ins_rf_rows(int fd)
     set_regs(fd, 0x1000, 0, 2, 0);
     r = regs_of(fd);
     r.rdi = 0x2FFF;
-    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with DI a byte short of a page");
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0,
+          "KVM_SET_REGS with DI a byte short of a page");
     script(EXIT_IO, 0x38u | (0x60ull << 16), 2);
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.direction == KVM_EXIT_IO_IN &&
               rp->u.io.count == 1,
@@ -2014,6 +2015,25 @@ static void refused_rows(int fd)
           "an instruction the decoder refuses at CPL 0 is Linux's emulation failure");
     CHECK(v->events.exception.pending && v->events.exception.nr == UD_VECTOR,
           "with #UD queued for the guest, as Linux queues it");
+    v->events.exception.pending = 0;
+
+    code(fd, 0x1400, "\x0f\x0b", 2, 0);
+    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+    w->gpa = 0xD0000030ull;
+    w->intr_info = 0x800u;
+    w->intr_error = 0x1234;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_INTERNAL_ERROR && rp->u.internal.ndata == 8 &&
+              rp->u.internal.data[6] == 0x800u && rp->u.internal.data[7] == 0,
+          "the report gives no error code for interruption information with its error bit alone");
+    v->events.exception.pending = 0;
+    code(fd, 0x1400, "\x0f\x0b", 2, 0);
+    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+    w->gpa = 0xD0000030ull;
+    w->intr_info = 0x80000B0Eu;
+    w->intr_error = 0x1234;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_INTERNAL_ERROR &&
+              rp->u.internal.data[6] == 0x80000B0Eu && rp->u.internal.data[7] == 0x1234,
+          "and gives it with the valid bit too, as Linux's vmx_get_exit_info");
     v->events.exception.pending = 0;
 }
 
