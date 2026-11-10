@@ -1,0 +1,7 @@
+== killed 105 ; left none
+== supervisor 44 alive: yes
+== kernel
+== drm
+/sys/class/drm/card0-Unknown-1 enabled disabled
+== term
+         7 term -l

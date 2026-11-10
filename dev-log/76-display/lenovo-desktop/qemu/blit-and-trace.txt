@@ -1,0 +1,59 @@
+t2657b: kernel old 957f5d385f5af390 new 851e8698c626b181
+t2657b: root 07a02ae529bdd3ea
+t2657b: old: ssh after 4 tries; rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate nomodeset
+t2657b: old: log: [    2.795000] console: card0: the firmware's framebuffer
+t2657b: old: log: [    2.797000] fbdrm: registered: simpledrm 1280x800, XR24, pitch 5120, at 0xfd000000, card 0
+t2657b: old: log: [    9.211000] console: card0: handed to a master, the keyboard off
+t2657b: old: desktop: result: weston 56 as desktop ; Using Pixman renderer; mode 1280x800@60.0, preferred, current, 61.4 MHz
+t2657b: old: kill: == killed 56 ; left none
+t2657b: old: kill: == supervisor 15 alive: yes
+t2657b: old: kill: == kernel
+t2657b: old: kill: [   13.897000] console: card0: taken back from a master, the keyboard on
+t2657b: old: kill: [   13.898000] console: card0: the firmware's framebuffer again
+t2657b: old: kill: == drm
+t2657b: old: kill: /sys/class/drm/card0-Unknown-1 enabled disabled
+t2657b: old: kill: == term
+t2657b: old: kill: desktop: result: weston gone; 2 console lines
+t2657b: old: blitcheck: result: screen 1280x800 XR24, pitch 5120, at 0xfd000000; buffer pitch 5120
+t2657b: old: blitcheck: result: whole: 0 of 800 rows differ
+t2657b: old: blitcheck: result: clips: 5 rectangles, 0 of 800 rows differ
+t2657b: old: blitcheck: result: time: 100 whole-screen copies of 4096000 bytes: mean 4.988 ms, median 4.854 ms, least 4.739 ms, most 12.544 ms
+t2657b: old: BLITCHECK OK
+t2657b: old: desktop: result: blit status 0
+t2657b: old: after blit: [   20.061000] console: card0: handed to a master, the keyboard off
+t2657b: old: after blit: [   20.608000] console: card0: taken back from a master, the keyboard on
+t2657b: old: after blit: [   20.609000] console: card0: the firmware's framebuffer again
+t2657b: old: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 8,7,2 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657b: old: atomic: 2077 commits, mean 4.616 ms, most 40.801 ms
+t2657b: old: after weston: [  120.184000] console: card0: taken back from a master, the keyboard on
+t2657b: old: after weston: [  120.188000] console: card0: the firmware's framebuffer again
+t2657b: old: done
+t2657b: new: ssh after 4 tries; rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate nomodeset
+t2657b: new: log: [    2.490000] console: card0: the firmware's framebuffer
+t2657b: new: log: [    2.492000] fbdrm: registered: simpledrm 1280x800, XR24, pitch 5120, at 0xfd000000, card 0
+t2657b: new: log: [    7.236000] console: card0: handed to a master, the keyboard off
+t2657b: new: desktop: result: weston 42 as desktop ; Using Pixman renderer; mode 1280x800@60.0, preferred, current, 61.4 MHz
+t2657b: new: kill: == killed 42 ; left none
+t2657b: new: kill: == supervisor 15 alive: yes
+t2657b: new: kill: == kernel
+t2657b: new: kill: [   13.025000] console: card0: taken back from a master, the keyboard on
+t2657b: new: kill: [   13.025000] console: card0: the firmware's framebuffer again
+t2657b: new: kill: == drm
+t2657b: new: kill: /sys/class/drm/card0-Unknown-1 enabled disabled
+t2657b: new: kill: == term
+t2657b: new: kill: desktop: result: weston gone; 2 console lines
+t2657b: new: blitcheck: result: screen 1280x800 XR24, pitch 5120, at 0xfd000000; buffer pitch 5120
+t2657b: new: blitcheck: result: whole: 0 of 800 rows differ
+t2657b: new: blitcheck: result: clips: 5 rectangles, 0 of 800 rows differ
+t2657b: new: blitcheck: result: time: 100 whole-screen copies of 4096000 bytes: mean 0.190 ms, median 0.183 ms, least 0.157 ms, most 0.270 ms
+t2657b: new: BLITCHECK OK
+t2657b: new: desktop: result: blit status 0
+t2657b: new: after blit: [   19.150000] console: card0: handed to a master, the keyboard off
+t2657b: new: after blit: [   19.203000] console: card0: taken back from a master, the keyboard on
+t2657b: new: after blit: [   19.207000] console: card0: the firmware's framebuffer again
+t2657b: new: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 58,46,4 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657b: new: atomic: 1820 commits, mean 0.447 ms, most 41.538 ms
+t2657b: new: after weston: [  117.070000] console: card0: taken back from a master, the keyboard on
+t2657b: new: after weston: [  117.070000] console: card0: the firmware's framebuffer again
+t2657b: new: done
+t2657b: end

@@ -1,0 +1,37 @@
+rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term intel_iommu=off intremap=off
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+bkl_wait_us 1148824
+bkl_wait_max_us 84911
+bkl_hold_max_us 441175
+bkl_hold_max_entry 0 -1
+bkl_hold_sample_us 5303691
+bkl_hold_sample_pc ffffffff80359c01 ffffffff8010fc0a ffffffff80110ba9 ffffffff8011155c ffffffff801119ae ffffffff80111a15 ffffffff8032f039 ffffffff80109cfe
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry vector 0 29963 658718
+bkl_hold_entry vector 32 23506 242843
+bkl_hold_entry vector 14 25743 96334
+bkl_hold_entry vector 50 2917 75990
+bkl_hold_entry syscall 0 2658 73097
+bkl_hold_entry syscall 9 700 43948
+bkl_hold_entry syscall 2 107 32555
+bkl_hold_entry syscall 16 4126 23349
+bkl_hold_entry syscall 3 637 18270
+bkl_hold_entry syscall 59 84 17099
+bkl_hold_entry syscall 257 352 11846
+bkl_hold_entry syscall 56 58 10783
+bkl_hold_entry syscall 20 7 9607
+bkl_hold_entry syscall 231 66 8186
+bkl_hold_entry syscall 46 75 7475
+bkl_hold_entry syscall 4 599 6380
+ 14:34:11 up 0 min,  0 users,  load average: 0.00, 0.00, 0.00
