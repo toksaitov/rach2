@@ -1,6 +1,7 @@
 /* vgshmprobe.c: virtio-gpu over the region Rach2 shares with a VM's device:
- * a frame drawn by virgl in the VM and read back, and the fences that the
- * VM's death must fail. */
+ * a frame drawn by virgl in the VM and read back, the fences that the VM's
+ * death must fail, the blobs whose page lists the VM must refuse, and the
+ * timings of buffers copied and of buffers in the region. */
 #include "probe.h"
 #include "../rach2/sys/drm/uapi.h"
 #include "../rach2/sys/drm/virtio_gpu.h"
@@ -16,6 +17,12 @@
 #define VIRGL_CCMD_SET_SUB_CTX           28u
 #define VIRGL_CCMD_CREATE_SUB_CTX        29u
 #define VIRGL_CCMD_CLEAR_TEXTURE         47u
+#define VIRGL_CCMD_PIPE_RESOURCE_CREATE  48u
+#define VIRGL_FORMAT_R8_UNORM            64u
+#define PIPE_BUFFER                      0u
+#define VIRGL_BIND_VERTEX_BUFFER         (1u << 4)
+#define VIRGL_RESOURCE_FLAG_MAP_PERSIST  1u
+#define VIRGL_RESOURCE_FLAG_MAP_COHERENT 2u
 #define VIRGL_OBJECT_SURFACE             8u
 #define VIRGL_FORMAT_B8G8R8X8_UNORM      2u
 #define PIPE_TEXTURE_2D                  2u
@@ -352,11 +359,219 @@ static void pending(long count)
     probe_line("VGSHMPROBE OK", 0, 0);
 }
 
+/** Microseconds of the monotonic clock. */
+static long now_us(void)
+{
+    long t[2];
+
+    syscall2(SYS_CLOCK_GETTIME, 1, (long)t);
+    return t[0] * 1000000L + t[1] / 1000L;
+}
+
+/** Make a blob of virgl's: a GL buffer of `bytes` that the commands made
+ * with the blob create as blob `id`, mappable when `mappable` is set: 0
+ * with its handle in `*bo`, or the ioctl's error. */
+static long gl_blob(uint32_t id, uint32_t bytes, int mappable, uint32_t *bo)
+{
+    struct drm_virtgpu_resource_create_blob b;
+    uint32_t s[12], n = 0;
+    long r;
+
+    s[n++] = VIRGL_CMD0(VIRGL_CCMD_PIPE_RESOURCE_CREATE, 0, 11);
+    s[n++] = VIRGL_FORMAT_R8_UNORM;
+    s[n++] = VIRGL_BIND_VERTEX_BUFFER;
+    s[n++] = PIPE_BUFFER;
+    s[n++] = bytes;
+    s[n++] = 1;
+    s[n++] = 1;
+    s[n++] = 1;
+    s[n++] = 0;
+    s[n++] = 0;
+    s[n++] = VIRGL_RESOURCE_FLAG_MAP_PERSIST | VIRGL_RESOURCE_FLAG_MAP_COHERENT;
+    s[n++] = id;
+    zero(&b, sizeof(b));
+    b.blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
+    b.blob_flags = mappable ? VIRTGPU_BLOB_FLAG_USE_MAPPABLE : 0;
+    b.size = bytes;
+    b.blob_id = id;
+    b.cmd = (uint64_t)(uintptr_t)s;
+    b.cmd_size = n * 4u;
+    r = call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB, &b);
+    *bo = b.bo_handle;
+    return r;
+}
+
+/** Drop the handle of buffer `bo`. */
+static void bo_close(uint32_t bo)
+{
+    struct drm_gem_close c;
+
+    zero(&c, sizeof(c));
+    c.handle = bo;
+    (void)call(gpu_fd, DRM_IOCTL_GEM_CLOSE, &c);
+}
+
+/**
+ * The blobs whose page lists the VM's device must refuse, or for which it
+ * must not be asked: a GL buffer of virgl's, made mappable, whose memory
+ * virglrenderer cannot export, since a GL buffer of a renderer without GBM
+ * has no descriptor, must fail to be made; the same buffer not mappable is
+ * made, and a map of it is refused.
+ */
+static void refuse(void)
+{
+    struct drm_virtgpu_map m;
+    uint32_t bo = 0;
+    long r, at;
+    char text[12];
+    int bad = 0;
+
+    find_gpu();
+    r = gl_blob(1, 65536, 1, &bo);
+    probe_line("VGSHMPROBE REFUSE: not exported: error ", dec(text, r), 0);
+    if (r == 0) {
+        bad = 1;
+        bo_close(bo);
+    }
+    r = gl_blob(2, 65536, 0, &bo);
+    if (r != 0) {
+        probe_line("VGSHMPROBE REFUSE: not mappable: not made: error ", dec(text, r), 0);
+        fail("a GL buffer that is not mappable was not made");
+    }
+    zero(&m, sizeof(m));
+    m.handle = bo;
+    at = call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m);
+    if (at == 0) {
+        at = probe_mmap(0, 65536, 3, 1, gpu_fd, (long)m.offset);
+        if (!sys_failed(at)) {
+            bad = 1;
+            syscall2(SYS_MUNMAP, at, 65536);
+        }
+    }
+    probe_line("VGSHMPROBE REFUSE: not mappable: map error ", dec(text, sys_failed(at) ? at : 0),
+               0);
+    bo_close(bo);
+    if (bad) {
+        fail("a blob that cannot be mapped from the VM's pages was mapped");
+    }
+    probe_line("VGSHMPROBE OK", 0, 0);
+}
+
+/** Print `VGSHMPROBE MEASURE: what bytes: us us`. */
+static void figure(const char *what, long bytes, long us)
+{
+    char a[12], b[12], line[96];
+    unsigned long i = 0;
+    const char *p;
+
+    for (p = what; *p && i < sizeof(line) - 40; p++) {
+        line[i++] = *p;
+    }
+    line[i++] = ' ';
+    for (p = dec(a, bytes); *p; p++) {
+        line[i++] = *p;
+    }
+    for (p = " bytes: "; *p; p++) {
+        line[i++] = *p;
+    }
+    for (p = dec(b, us); *p; p++) {
+        line[i++] = *p;
+    }
+    line[i] = 0;
+    probe_line("VGSHMPROBE MEASURE: ", line, " us");
+}
+
+/**
+ * The comparison for buffers mapped from the VM's pages: a GL buffer of
+ * `bytes` with its backing in the region, copied to the VM and back
+ * through transfers, each waited for; and eight blobs of the region's own
+ * memory, each made, mapped, touched and freed in turn.
+ */
+static void measure(long bytes)
+{
+    struct drm_virtgpu_resource_create a;
+    struct drm_virtgpu_resource_create_blob b;
+    struct drm_virtgpu_3d_transfer t;
+    struct drm_virtgpu_3d_wait w;
+    struct drm_virtgpu_map m;
+    long t0, at, i, k, made = 0, freed = 0;
+    uint8_t *p;
+
+    find_gpu();
+    zero(&a, sizeof(a));
+    a.target = PIPE_BUFFER;
+    a.format = VIRGL_FORMAT_R8_UNORM;
+    a.bind = VIRGL_BIND_VERTEX_BUFFER;
+    a.width = (uint32_t)bytes;
+    a.height = a.depth = a.array_size = 1;
+    a.size = (uint32_t)bytes;
+    if (call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a) != 0) {
+        fail("a buffer to copy");
+    }
+    zero(&m, sizeof(m));
+    m.handle = a.bo_handle;
+    if (call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m) != 0 ||
+        sys_failed(at = probe_mmap(0, bytes, 3, 1, gpu_fd, (long)m.offset))) {
+        fail("map the buffer to copy");
+    }
+    p = (uint8_t *)at;
+    for (i = 0; i < bytes; i++) {
+        p[i] = (uint8_t)i;
+    }
+    zero(&t, sizeof(t));
+    t.bo_handle = a.bo_handle;
+    t.box.w = (uint32_t)bytes;
+    t.box.h = t.box.d = 1;
+    w.handle = a.bo_handle;
+    w.flags = 0;
+    t0 = now_us();
+    if (call(gpu_fd, DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST, &t) != 0) {
+        fail("copy to the VM");
+    }
+    while ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w)) == -PROBE_EBUSY) {
+    }
+    figure("copy to the VM", bytes, now_us() - t0);
+    t0 = now_us();
+    if (at != 0 || call(gpu_fd, DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST, &t) != 0) {
+        fail("copy from the VM");
+    }
+    while ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w)) == -PROBE_EBUSY) {
+    }
+    figure("copy from the VM", bytes, now_us() - t0);
+    syscall2(SYS_MUNMAP, (long)p, bytes);
+    bo_close(a.bo_handle);
+    for (k = 0; k < 8; k++) {
+        t0 = now_us();
+        zero(&b, sizeof(b));
+        b.blob_mem = VIRTGPU_BLOB_MEM_GUEST;
+        b.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
+        b.size = (uint64_t)bytes;
+        zero(&m, sizeof(m));
+        if (call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB, &b) != 0 ||
+            (m.handle = b.bo_handle, call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m) != 0) ||
+            sys_failed(at = probe_mmap(0, bytes, 3, 1, gpu_fd, (long)m.offset))) {
+            fail("a blob in the region");
+        }
+        p = (uint8_t *)at;
+        for (i = 0; i < bytes; i += 4096) {
+            p[i] = 1;
+        }
+        made += now_us() - t0;
+        t0 = now_us();
+        syscall2(SYS_MUNMAP, (long)p, bytes);
+        bo_close(b.bo_handle);
+        freed += now_us() - t0;
+    }
+    figure("region blob made, mapped and touched, mean of 8,", bytes, made / 8);
+    figure("region blob unmapped and freed, mean of 8,", bytes, freed / 8);
+    probe_line("VGSHMPROBE OK", 0, 0);
+}
+
 void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
-/** `vgshmprobe draw [CRC]` or `vgshmprobe pending N`, entered with `sp` at
- * argc. */
+/** `vgshmprobe draw [CRC]`, `pending N`, `refuse` or `measure BYTES`,
+ * entered with `sp` at argc. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -368,13 +583,21 @@ void probe_main(unsigned long *sp)
         draw(argc >= 3 ? argv[2] : 0);
         syscall1(SYS_EXIT_GROUP, 0);
     }
-    if (argc == 3 && argv[1][0] == 'p') {
+    if (argc == 2 && argv[1][0] == 'r') {
+        refuse();
+        syscall1(SYS_EXIT_GROUP, 0);
+    }
+    if (argc == 3 && (argv[1][0] == 'p' || argv[1][0] == 'm')) {
         for (c = argv[2]; *c >= '0' && *c <= '9'; c++) {
             n = n * 10 + (*c - '0');
         }
-        pending(n);
+        if (argv[1][0] == 'm') {
+            measure(n < 4096 || n % 4096 ? 4096 : n);
+        } else {
+            pending(n);
+        }
         syscall1(SYS_EXIT_GROUP, 0);
     }
-    probe_line("usage: vgshmprobe draw [CRC] | pending N", 0, 0);
+    probe_line("usage: vgshmprobe draw [CRC] | pending N | refuse | measure BYTES", 0, 0);
     syscall1(SYS_EXIT_GROUP, 2);
 }
