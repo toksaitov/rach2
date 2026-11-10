@@ -4,18 +4,24 @@
  *
  * Given `clock=tsc`, the machine must keep its clock from the TSC, as an
  * x86-64 kernel does under `rach2.tscreliable` on QEMU's emulator; given
- * `clock=syscall`, from its other reference, as under `rach2.notsc` and on
- * every i686, where the vDSO's functions make the system call themselves.
+ * `clock=syscall`, from its other reference, as under `rach2.notsc`, where
+ * the vDSO's functions make the system call themselves.
  *
- * On x86-64, in order:
+ * What it checks follows the kernel, whose architecture ETUDE_KERNEL in the
+ * environment names, or the program's own where it is unset. On the x86-64
+ * kernel, which gives an x86-64 program its vDSO and an i386 program the
+ * 32-bit one, as Linux's 64-bit kernel does, in order:
  *
- * `auxv`: AT_SYSINFO_EHDR gives the address of an x86-64 ELF header of a
- * shared object. `maps`: /proc/self/maps has `[vvar]`, one page readable
- * alone, just below it, and `[vdso]`, one page readable and executable, at
- * it. `symbols`: the image's hash table and version tables give
- * `__vdso_clock_gettime`, `__vdso_gettimeofday`, `__vdso_time`,
- * `__vdso_getcpu` and `__vdso_clock_getres`, each of version LINUX_2.6, as
- * musl and glibc look them up.
+ * `auxv`: AT_SYSINFO_EHDR gives the address of the ELF header of a shared
+ * object of the program's class and machine. `maps`: /proc/self/maps has
+ * `[vvar]`, one page readable alone, just below it, and `[vdso]`, one page
+ * readable and executable, at it. `symbols`: the image's hash table and
+ * version tables give `__vdso_clock_gettime`, `__vdso_gettimeofday`,
+ * `__vdso_time`, `__vdso_getcpu` and `__vdso_clock_getres`, each of version
+ * LINUX_2.6, as musl and glibc look them up, and the 32-bit image also
+ * `__vdso_clock_gettime64` of LINUX_2.6, and `__kernel_vsyscall`,
+ * `__kernel_sigreturn` and `__kernel_rt_sigreturn` of LINUX_2.5. An i386
+ * program reads the clocks through `__vdso_clock_gettime64`, as musl does.
  *
  * `source`: /proc/stat's `vdso_tsc` is 1 under `clock=tsc` and 0 under
  * `clock=syscall`.
@@ -34,8 +40,8 @@
  * one processor, and two thousand taken on each processor in turn, are each
  * no earlier than the one before.
  *
- * On i686, `absent`: there is no AT_SYSINFO_EHDR, and maps names neither
- * region; then `source`.
+ * On the i686 kernel, which has no vDSO, `absent`: there is no
+ * AT_SYSINFO_EHDR, and maps names neither region; then `source`.
  *
  * On both, `calls`: 100,000 calls of clock_gettime, gettimeofday and time
  * through musl raise /proc/stat's `clock_calls`, the kernel's count of the
@@ -46,7 +52,7 @@
  * (detail)" and exits 1 at the first failure. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, or guest.vdso.tsc or
  * guest.vdso.syscall as `clock=` says, has the assertions above in their
- * order, with the branch of the group `arch`, `x86-64` or `i686`.
+ * order, with the branch of the group `kernel`, `x86-64` or `i686`.
  */
 
 #define _GNU_SOURCE
@@ -81,6 +87,10 @@
 
 /* Whether the clock is to run from the TSC, as `clock=tsc` says. */
 static int want_tsc;
+
+/* Whether the kernel is x86-64's, as ETUDE_KERNEL says, or where it is unset
+ * the program's own architecture. */
+static int kernel_x86_64;
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -218,10 +228,57 @@ static int source(void)
     return 0;
 }
 
+/*
+ * The vDSO of the program's own class, the image the x86-64 kernel gives:
+ * x86-64's, or for an i386 program the 32-bit one Linux's 64-bit kernel
+ * gives it. An i386 program reads the clock through clock_gettime64, which
+ * fills a timespec of 64-bit time as musl's is, while its clock_getres and
+ * gettimeofday fill the old 32-bit structures, as do the old clock_getres
+ * call's.
+ */
 #if defined __x86_64__
+typedef Elf64_Ehdr Ehdr;
+typedef Elf64_Phdr Phdr;
+typedef Elf64_Dyn Dyn;
+typedef Elf64_Sym Sym;
+typedef Elf64_Verdef Verdef;
+typedef Elf64_Verdaux Verdaux;
+#define VDSO_CLASS   ELFCLASS64
+#define VDSO_MACHINE EM_X86_64
+#define VDSO_KIND    "an x86-64"
+#define ST_TYPE      ELF64_ST_TYPE
+#define GETTIME_SYM  "__vdso_clock_gettime"
+#define SYS_GETTIME  SYS_clock_gettime
+#define SYS_GETRES   SYS_clock_getres
+typedef struct timeval vdso_timeval;
+typedef struct timespec vdso_res;
+#else
+typedef Elf32_Ehdr Ehdr;
+typedef Elf32_Phdr Phdr;
+typedef Elf32_Dyn Dyn;
+typedef Elf32_Sym Sym;
+typedef Elf32_Verdef Verdef;
+typedef Elf32_Verdaux Verdaux;
+#define VDSO_CLASS   ELFCLASS32
+#define VDSO_MACHINE EM_386
+#define VDSO_KIND    "an i386"
+#define ST_TYPE      ELF32_ST_TYPE
+#define GETTIME_SYM  "__vdso_clock_gettime64"
+#define SYS_GETTIME  SYS_clock_gettime64
+#define SYS_GETRES   SYS_clock_getres_time32
+typedef struct {
+    int32_t tv_sec;
+    int32_t tv_usec;
+} vdso_timeval;
+typedef struct {
+    int32_t tv_sec;
+    int32_t tv_nsec;
+} vdso_res;
+#endif
 
 typedef long (*gettime_fn)(long clk, struct timespec *ts);
-typedef long (*gettimeofday_fn)(struct timeval *tv, void *tz);
+typedef long (*getres_fn)(long clk, vdso_res *ts);
+typedef long (*gettimeofday_fn)(vdso_timeval *tv, void *tz);
 typedef long (*time_fn)(long *t);
 typedef long (*getcpu_fn)(unsigned *cpu, unsigned *node, void *cache);
 
@@ -230,34 +287,34 @@ static gettime_fn vdso_clock_gettime;
 static gettimeofday_fn vdso_gettimeofday;
 static time_fn vdso_time;
 static getcpu_fn vdso_getcpu;
-static gettime_fn vdso_clock_getres;
+static getres_fn vdso_clock_getres;
 
 /* The vDSO's tables, as `symbols` finds them through its dynamic section. */
 static const unsigned char *image;
-static const Elf64_Word *hashtab;
-static const Elf64_Sym *symtab;
+static const Elf32_Word *hashtab;
+static const Sym *symtab;
 static const char *strtab;
-static const Elf64_Half *versym;
-static const Elf64_Verdef *verdef;
+static const Elf32_Half *versym;
+static const Verdef *verdef;
 
-/** Check that AT_SYSINFO_EHDR gives an x86-64 shared object's ELF header. */
+/** Check that AT_SYSINFO_EHDR gives the ELF header of a shared object of
+ * the program's class and machine. */
 static int auxv(void)
 {
-    const Elf64_Ehdr *eh;
+    const Ehdr *eh;
 
     image = (const unsigned char *)getauxval(AT_SYSINFO_EHDR);
     if (image == NULL) {
         return fail("no AT_SYSINFO_EHDR in the auxiliary vector");
     }
-    eh = (const Elf64_Ehdr *)image;
-    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_ident[EI_CLASS] != ELFCLASS64 ||
-        eh->e_type != ET_DYN || eh->e_machine != EM_X86_64) {
-        return fail("AT_SYSINFO_EHDR is not an x86-64 shared object's ELF header");
+    eh = (const Ehdr *)image;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_ident[EI_CLASS] != VDSO_CLASS ||
+        eh->e_type != ET_DYN || eh->e_machine != VDSO_MACHINE) {
+        return fail("AT_SYSINFO_EHDR is not " VDSO_KIND " shared object's ELF header");
     }
     report_held();
     return 0;
 }
-
 /** Check maps' `[vvar]` and `[vdso]` against AT_SYSINFO_EHDR. */
 static int maps(void)
 {
@@ -297,55 +354,60 @@ static unsigned long elf_hash(const char *name)
 
 /** Whether version index `index` of the image's definitions is named
  * `version`, as musl's checkver asks. */
-static int version_is(Elf64_Half index, const char *version)
+static int version_is(Elf32_Half index, const char *version)
 {
-    const Elf64_Verdef *d = verdef;
+    const Verdef *d = verdef;
 
     index &= 0x7fff;
     for (;;) {
         if (!(d->vd_flags & VER_FLG_BASE) && (d->vd_ndx & 0x7fff) == index) {
-            const Elf64_Verdaux *a = (const Elf64_Verdaux *)((const char *)d + d->vd_aux);
+            const Verdaux *a = (const Verdaux *)((const char *)d + d->vd_aux);
 
             return strcmp(strtab + a->vda_name, version) == 0;
         }
         if (d->vd_next == 0) {
             return 0;
         }
-        d = (const Elf64_Verdef *)((const char *)d + d->vd_next);
+        d = (const Verdef *)((const char *)d + d->vd_next);
     }
 }
 
 /** The address of the image's defined function `name` of version
- * LINUX_2.6, found through its hash table, or NULL. */
-static void *lookup(const char *name)
+ * `version`, found through its hash table, or NULL. */
+static void *lookup(const char *name, const char *version)
 {
-    Elf64_Word nbucket = hashtab[0];
-    const Elf64_Word *bucket = hashtab + 2;
-    const Elf64_Word *chain = bucket + nbucket;
-    Elf64_Word i;
+    Elf32_Word nbucket = hashtab[0];
+    const Elf32_Word *bucket = hashtab + 2;
+    const Elf32_Word *chain = bucket + nbucket;
+    Elf32_Word i;
 
     for (i = bucket[elf_hash(name) % nbucket]; i != STN_UNDEF; i = chain[i]) {
-        const Elf64_Sym *s = symtab + i;
+        const Sym *s = symtab + i;
 
-        if (ELF64_ST_TYPE(s->st_info) == STT_FUNC && s->st_shndx != SHN_UNDEF &&
-            strcmp(strtab + s->st_name, name) == 0 && version_is(versym[i], "LINUX_2.6")) {
+        if (ST_TYPE(s->st_info) == STT_FUNC && s->st_shndx != SHN_UNDEF &&
+            strcmp(strtab + s->st_name, name) == 0 && version_is(versym[i], version)) {
             return (void *)(image + s->st_value);
         }
     }
     return NULL;
 }
 
-/** Find the dynamic section's tables and the five functions through them. */
+/**
+ * Find the dynamic section's tables and the functions through them: the
+ * five time and processor functions of version LINUX_2.6, and in the 32-bit
+ * image also __vdso_clock_gettime64, and __kernel_vsyscall and the two
+ * signal returns of version LINUX_2.5, as Linux's vdso32 has them.
+ */
 static int symbols(void)
 {
-    const Elf64_Ehdr *eh = (const Elf64_Ehdr *)image;
-    const Elf64_Phdr *ph = (const Elf64_Phdr *)(image + eh->e_phoff);
-    const Elf64_Dyn *dyn = NULL;
+    const Ehdr *eh = (const Ehdr *)image;
+    const Phdr *ph = (const Phdr *)(image + eh->e_phoff);
+    const Dyn *dyn = NULL;
     int i;
 
     for (i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type == PT_DYNAMIC) {
-            dyn = (const Elf64_Dyn *)(image + ph[i].p_offset);
+            dyn = (const Dyn *)(image + ph[i].p_offset);
         }
     }
     for (; dyn != NULL && dyn->d_tag != DT_NULL; dyn++) {
@@ -353,19 +415,19 @@ static int symbols(void)
 
         switch (dyn->d_tag) {
         case DT_HASH:
-            hashtab = (const Elf64_Word *)p;
+            hashtab = (const Elf32_Word *)p;
             break;
         case DT_SYMTAB:
-            symtab = (const Elf64_Sym *)p;
+            symtab = (const Sym *)p;
             break;
         case DT_STRTAB:
             strtab = (const char *)p;
             break;
         case DT_VERSYM:
-            versym = (const Elf64_Half *)p;
+            versym = (const Elf32_Half *)p;
             break;
         case DT_VERDEF:
-            verdef = (const Elf64_Verdef *)p;
+            verdef = (const Verdef *)p;
             break;
         default:
             break;
@@ -374,15 +436,23 @@ static int symbols(void)
     if (hashtab == NULL || symtab == NULL || strtab == NULL || versym == NULL || verdef == NULL) {
         return fail("the vDSO lacks a hash, symbol, string or version table");
     }
-    vdso_clock_gettime = (gettime_fn)lookup("__vdso_clock_gettime");
-    vdso_gettimeofday = (gettimeofday_fn)lookup("__vdso_gettimeofday");
-    vdso_time = (time_fn)lookup("__vdso_time");
-    vdso_getcpu = (getcpu_fn)lookup("__vdso_getcpu");
-    vdso_clock_getres = (gettime_fn)lookup("__vdso_clock_getres");
+    vdso_clock_gettime = (gettime_fn)lookup(GETTIME_SYM, "LINUX_2.6");
+    vdso_gettimeofday = (gettimeofday_fn)lookup("__vdso_gettimeofday", "LINUX_2.6");
+    vdso_time = (time_fn)lookup("__vdso_time", "LINUX_2.6");
+    vdso_getcpu = (getcpu_fn)lookup("__vdso_getcpu", "LINUX_2.6");
+    vdso_clock_getres = (getres_fn)lookup("__vdso_clock_getres", "LINUX_2.6");
     if (vdso_clock_gettime == NULL || vdso_gettimeofday == NULL || vdso_time == NULL ||
-        vdso_getcpu == NULL || vdso_clock_getres == NULL) {
+        vdso_getcpu == NULL || vdso_clock_getres == NULL ||
+        lookup("__vdso_clock_gettime", "LINUX_2.6") == NULL) {
         return fail("a __vdso_ function of version LINUX_2.6 is missing");
     }
+#if !defined __x86_64__
+    if (lookup("__kernel_vsyscall", "LINUX_2.5") == NULL ||
+        lookup("__kernel_sigreturn", "LINUX_2.5") == NULL ||
+        lookup("__kernel_rt_sigreturn", "LINUX_2.5") == NULL) {
+        return fail("a __kernel_ function of version LINUX_2.5 is missing");
+    }
+#endif
     report_held();
     return 0;
 }
@@ -398,7 +468,7 @@ static long long sys_ns(long clk)
 {
     struct timespec ts;
 
-    return syscall(SYS_clock_gettime, clk, &ts) == 0 ? ns(&ts) : -1;
+    return syscall(SYS_GETTIME, clk, &ts) == 0 ? ns(&ts) : -1;
 }
 
 /** Check the vDSO's readings of each clock and of gettimeofday and time
@@ -409,7 +479,7 @@ static int agree(void)
                                   CLOCK_MONOTONIC_RAW,    CLOCK_REALTIME_COARSE,
                                   CLOCK_MONOTONIC_COARSE, CLOCK_BOOTTIME};
     struct timespec ts;
-    struct timeval tv;
+    vdso_timeval tv;
     long long before;
     long long after;
     long long x;
@@ -451,12 +521,13 @@ static int agree(void)
 /** Check the vDSO's clock_getres against the system call's, and clock 12. */
 static int resolution(void)
 {
-    struct timespec v;
-    struct timespec s;
+    vdso_res v;
+    vdso_res s;
+    struct timespec ts;
     long clk;
 
     for (clk = 0; clk <= CLOCK_LAST; clk++) {
-        if (vdso_clock_getres(clk, &v) != 0 || syscall(SYS_clock_getres, clk, &s) != 0 ||
+        if (vdso_clock_getres(clk, &v) != 0 || syscall(SYS_GETRES, clk, &s) != 0 ||
             v.tv_sec != s.tv_sec || v.tv_nsec != s.tv_nsec) {
             printf("vdsomusl: clock %ld: vDSO %ld ns, system call %ld ns\n", clk, (long)v.tv_nsec,
                    (long)s.tv_nsec);
@@ -464,7 +535,7 @@ static int resolution(void)
         }
     }
     if (vdso_clock_getres(CLOCK_NONE, &v) != -EINVAL ||
-        vdso_clock_gettime(CLOCK_NONE, &v) != -EINVAL) {
+        vdso_clock_gettime(CLOCK_NONE, &ts) != -EINVAL) {
         return fail("clock 12 through the vDSO is not -EINVAL");
     }
     report_held();
@@ -533,8 +604,8 @@ static int ordered(void)
     return 0;
 }
 
-/** The rows of x86-64's vDSO, up to `source`. */
-static int rows(void)
+/** The rows of the x86-64 kernel's vDSO, up to `source`. */
+static int vdso_rows(void)
 {
     if (auxv() != 0 || maps() != 0 || symbols() != 0 || source() != 0 || agree() != 0 ||
         resolution() != 0 || getcpu_row() != 0 || ordered() != 0) {
@@ -543,10 +614,8 @@ static int rows(void)
     return 0;
 }
 
-#else
-
-/** Check that the i686 image has no vDSO, then `source`. */
-static int rows(void)
+/** Check that the i686 kernel gave the image no vDSO, then `source`. */
+static int absent_rows(void)
 {
     unsigned long lo;
     unsigned long hi;
@@ -554,33 +623,27 @@ static int rows(void)
 
     if (getauxval(AT_SYSINFO_EHDR) != 0 || maps_region("[vdso]", &lo, &hi, perm) == 0 ||
         maps_region("[vvar]", &lo, &hi, perm) == 0) {
-        return fail("an i686 image has a vDSO");
+        return fail("the i686 kernel gave the image a vDSO");
     }
     report_held();
     return source();
 }
 
-#endif
-
-/** Begin the report, with the branch of the architecture, and plan its
- * assertions in the order they are checked. */
+/** Begin the report, with the branch of the kernel's architecture, and plan
+ * its assertions in the order they are checked. */
 static void plan(void)
 {
-#if defined __x86_64__
-    static const char *const ids[] = {"auxv",       "maps",   "symbols", "source", "agree",
-                                      "resolution", "getcpu", "ordered", "calls"};
-#else
-    static const char *const ids[] = {"absent", "source", "calls"};
-#endif
+    static const char *const with[] = {"auxv",       "maps",   "symbols", "source", "agree",
+                                       "resolution", "getcpu", "ordered", "calls"};
+    static const char *const without[] = {"absent", "source", "calls"};
+    const char *const *ids = kernel_x86_64 ? with : without;
+    unsigned n =
+        kernel_x86_64 ? sizeof(with) / sizeof(with[0]) : sizeof(without) / sizeof(without[0]);
     unsigned i;
 
     report_begin(report_case(environ, want_tsc ? "guest.vdso.tsc" : "guest.vdso.syscall"));
-#if defined __x86_64__
-    report_branch("arch", "x86-64");
-#else
-    report_branch("arch", "i686");
-#endif
-    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+    report_branch("kernel", kernel_x86_64 ? "x86-64" : "i686");
+    for (i = 0; i < n; i++) {
         report_plan(ids[i]);
     }
 }
@@ -588,15 +651,22 @@ static void plan(void)
 int main(int argc, char **argv)
 {
     const char *mode;
+    const char *kernel;
 
     probe_args(argc, argv);
     mode = probe_arg("clock", "syscall");
     want_tsc = strcmp(mode, "tsc") == 0;
+    kernel = getenv("ETUDE_KERNEL");
+#if defined __x86_64__
+    kernel_x86_64 = kernel == NULL || strcmp(kernel, "x86_64") == 0;
+#else
+    kernel_x86_64 = kernel != NULL && strcmp(kernel, "x86_64") == 0;
+#endif
     plan();
     if (!want_tsc && strcmp(mode, "syscall") != 0) {
         return fail("clock= is neither tsc nor syscall");
     }
-    if (rows() != 0 || calls() != 0) {
+    if ((kernel_x86_64 ? vdso_rows() : absent_rows()) != 0 || calls() != 0) {
         return 1;
     }
     report_end();

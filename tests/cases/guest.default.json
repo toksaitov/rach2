@@ -236,6 +236,8 @@
         {"assertion_id": "secure", "checks": "AT_SECURE is present and 0.", "source": "program"},
         {"assertion_id": "entry", "checks": "AT_ENTRY is not 0.", "source": "program"},
         {"assertion_id": "minsigstksz", "checks": "AT_MINSIGSTKSZ is present and above 512.", "source": "program"},
+        {"assertion_id": "sysinfo", "checks": "On the i686 kernel there is no AT_SYSINFO_EHDR or AT_SYSINFO; on the x86-64 kernel AT_SYSINFO_EHDR is page-aligned, and AT_SYSINFO is absent for an x86-64 program and inside the vDSO's page above AT_SYSINFO_EHDR for an i686 one.", "source": "program"},
+        {"assertion_id": "machine", "checks": "uname's machine is the kernel's architecture, i686 or x86_64, for an i686 program too.", "source": "program"},
         {"assertion_id": "random", "checks": "AT_RANDOM is present and its 16 bytes are not all zero.", "source": "program"},
         {"assertion_id": "random-page", "checks": "AT_RANDOM lies just above the auxiliary vector.", "source": "program"}
       ],
@@ -251,7 +253,8 @@
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]},
+      "ia32": {"runs": true, "why": "the x86-64 kernel gives an i386 program AT_SYSINFO and AT_SYSINFO_EHDR, its vDSO's entry and header, as Linux's does, and uname names it x86_64, while the i686 kernel gives neither and is i686; auxvprobe takes the kernel's architecture from ETUDE_KERNEL"}
     },
     {
       "case_id": "guest.default.tlsprobe",
