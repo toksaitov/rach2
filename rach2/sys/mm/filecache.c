@@ -48,9 +48,6 @@
  * few files beside it the pages they were reading. A power of two. */
 #define FC_EPOCHS 256u
 
-/* The most pages one miss of read(2) reads from the file at once. */
-#define FC_RUN 16u
-
 /* A file that has pages in the cache, the list of those pages, so that a
  * change to the file drops them without a search of the other files' pages,
  * and what the file was when they were read. The record lives while the
@@ -321,36 +318,30 @@ static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void
     return hit;
 }
 
-/** Whether the cache has page `pgoff` of `f` as the file is now. */
-static int fc_has(const struct fc_file *f, uint32_t pgoff)
-{
-    uint32_t flags = kirq_save();
-    int has = fc_lookup(f, pgoff) != NULL;
-
-    kirq_restore(flags);
-    return has;
-}
-
-/** A page record with its frame for a new page: the least recently used
- * page's, off its lists, when the cache may take no more frames or heap,
- * else a new one; NULL when there is neither. Interrupts must be off. */
-static struct fc_page *fc_take(void)
+/** A page record off every list, with a frame of its own, for a new page:
+ * a new record and frame while a quarter of the frames are free and the
+ * records fit in an eighth of the heap; past either, the least recently used
+ * page's record, whose frame goes back, while a sixteenth of the frames are
+ * free, above the reserve that `mem_may_take` keeps, so that the new frame
+ * is had; NULL otherwise. Interrupts must be off. */
+static struct fc_page *fc_new(void)
 {
     struct fc_page *p;
     uintptr_t phys;
+    size_t free_frames = frame_free_count(), total = frame_total_count();
 
-    if (pages >= most || frame_free_count() < frame_total_count() / 4u) {
-        p = oldest;
-        if (p) {
-            fc_unlink(p);
-            p->sibling = NULL;
-            p->sibling_link = NULL;
-            p->file = NULL;
+    if (pages < most && free_frames >= total / 4u) {
+        p = kzalloc(sizeof(*p));
+        if (!p) {
+            return NULL;
         }
-        return p;
-    }
-    p = kzalloc(sizeof(*p));
-    if (!p) {
+    } else if (oldest && free_frames >= total / 16u) {
+        p = oldest;
+        fc_unlink(p);
+        /* A reader of the page holds a reference of its own. */
+        free_frame((uintptr_t)p->pfn * PAGE_SIZE);
+        k_memset(p, 0, sizeof(*p));
+    } else {
         return NULL;
     }
     phys = alloc_user_frame();
@@ -362,43 +353,38 @@ static struct fc_page *fc_take(void)
     return p;
 }
 
-/** Keep a copy of page `pgoff` of `f`, from the frame `phys` or, when it is
- * 0, from `buf`, in place of any it had, unless a change of the file has
- * been recorded since `epoch`. A page read from the file as it was before is
- * dropped with the rest of the file's pages. */
-static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, const void *buf,
-                     uint32_t epoch)
+/** Free `p`, which `fc_new` gave and is on no list, and its frame. */
+static void fc_free(struct fc_page *p)
 {
-    struct fc_page *p, *old, **bucket;
-    struct fc_inode *file, *spare = NULL;
-    uint32_t flags;
+    free_frame((uintptr_t)p->pfn * PAGE_SIZE);
+    kfree(p);
+}
 
-    if (!buckets) {
-        return;
-    }
-    flags = kirq_save();
+/** Put `p`, which `fc_new` gave and whose frame holds page `pgoff` of `f`
+ * as just read, into the cache in place of any page it had there, unless a
+ * change of the file has been recorded since `epoch`; a page read from the
+ * file as it was before is dropped with the rest of the file's pages. 1, or
+ * 0 when `p` stays the caller's. */
+static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p, uint32_t epoch)
+{
+    struct fc_page *old, **bucket;
+    struct fc_inode *file, *spare = NULL;
+    uint32_t flags = kirq_save();
+
     file = fc_find(f->mnt, f->ino);
     kirq_restore(flags);
     if (!file || !fc_current(file, f)) {
         spare = kzalloc(sizeof(*spare));
         if (!spare) {
-            return;
+            return 0;
         }
     }
     flags = kirq_save();
-    if (epoch != *fc_changes(f->mnt, f->ino) || !(p = fc_take())) {
+    if (epoch != *fc_changes(f->mnt, f->ino)) {
         kirq_restore(flags);
         kfree(spare);
-        return;
+        return 0;
     }
-    if (!fc_copy((uintptr_t)p->pfn * PAGE_SIZE, NULL, phys, buf)) {
-        kirq_restore(flags);
-        free_frame((uintptr_t)p->pfn * PAGE_SIZE);
-        kfree(p);
-        kfree(spare);
-        return;
-    }
-    p->pgoff = pgoff;
     file = fc_find(f->mnt, f->ino);
     if (file && !fc_current(file, f)) {
         fc_drop_file(file);
@@ -412,14 +398,12 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
             break;
         }
     }
+    if (!file && !spare) {
+        /* The file's record went since the look without the lock. */
+        kirq_restore(flags);
+        return 0;
+    }
     if (!file) {
-        if (!spare) {
-            /* The file's record went since the look without the lock. */
-            kirq_restore(flags);
-            free_frame((uintptr_t)p->pfn * PAGE_SIZE);
-            kfree(p);
-            return;
-        }
         file = spare;
         spare = NULL;
         file->mnt = f->mnt;
@@ -434,6 +418,7 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
         }
         *file->link = file;
     }
+    p->pgoff = pgoff;
     p->file = file;
     p->next = *bucket;
     *bucket = p;
@@ -447,6 +432,31 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
     pages++;
     kirq_restore(flags);
     kfree(spare);
+    return 1;
+}
+
+/** Keep a copy of page `pgoff` of `f`, from the frame `phys` or, when it is
+ * 0, from `buf`, as `fc_insert` keeps a page. */
+static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, const void *buf,
+                     uint32_t epoch)
+{
+    struct fc_page *p;
+    uint32_t flags;
+    int copied;
+
+    if (!buckets) {
+        return;
+    }
+    flags = kirq_save();
+    p = fc_new();
+    kirq_restore(flags);
+    if (!p) {
+        return;
+    }
+    copied = fc_copy((uintptr_t)p->pfn * PAGE_SIZE, NULL, phys, buf);
+    if (!copied || !fc_insert(f, pgoff, p, epoch)) {
+        fc_free(p);
+    }
 }
 
 int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
@@ -464,96 +474,103 @@ int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void 
     return pages && fc_file_of(mnt, node, &f) && fc_read(&f, pgoff, 0, buf);
 }
 
-/** Store the pages of `run`, the `got` bytes read from page `pgoff` of `f`
- * on, each whole page and a last part that ends at the file's end, which is
- * kept with zeros after it; a part that ends short of the end is not kept. */
-static void fc_store_run(const struct fc_file *f, uint32_t pgoff, uint8_t *run, uint32_t got,
-                         uint32_t epoch)
+/**
+ * Read up to `left` bytes at `at` of `f`, open as `ofd`, inside one page,
+ * into the user buffer `dst`: from the cache's frame, with a reference taken
+ * so that a drop meanwhile does not free it, or into a new frame read from
+ * the file, which then joins the cache when it holds a whole page or the
+ * last part of the file. With no frame to be had the file system reads the
+ * whole `left` into `dst` itself. The bytes read, which stop short of the
+ * page's end or of `left` only at the end of the file; -EFAULT; or the file
+ * system's error.
+ */
+static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint64_t at,
+                            char __user *dst, uint32_t left)
 {
-    uint32_t i, have;
+    uint32_t pgoff = (uint32_t)(at / PAGE_SIZE), in = (uint32_t)(at % PAGE_SIZE);
+    uint32_t take = PAGE_SIZE - in < left ? PAGE_SIZE - in : left, epoch = 0, flags;
+    struct fc_page *p = NULL, *hit;
+    uintptr_t phys = 0;
+    int32_t got = PAGE_SIZE, rc = 0;
+    uint8_t *page;
 
-    for (i = 0; i * PAGE_SIZE < got; i++) {
-        have = got - i * PAGE_SIZE;
-        if (have < PAGE_SIZE) {
-            if ((uint64_t)(pgoff + i) * PAGE_SIZE + have != f->size) {
-                return;
-            }
-            k_memset(run + i * PAGE_SIZE + have, 0, PAGE_SIZE - have);
-        }
-        fc_store(f, pgoff + i, 0, run + i * PAGE_SIZE, epoch);
+    flags = kirq_save();
+    hit = pages ? fc_lookup(f, pgoff) : NULL;
+    if (hit) {
+        phys = (uintptr_t)hit->pfn * PAGE_SIZE;
+        frame_ref(phys);
+        fc_use(hit);
+    } else {
+        p = fc_new();
+        phys = p ? (uintptr_t)p->pfn * PAGE_SIZE : 0;
     }
+    kirq_restore(flags);
+    page = phys ? kmap_temp(phys) : NULL;
+    if (!page) {
+        if (p) {
+            fc_free(p);
+        } else if (phys) {
+            free_frame(phys);
+        }
+        return vfs_read(ofd->vmnt, ofd->fhandle, (void __force *)dst, left, at);
+    }
+    if (p) {
+        epoch = *fc_changes(f->mnt, f->ino);
+        got = vfs_read(ofd->vmnt, ofd->fhandle, page, PAGE_SIZE, (uint64_t)pgoff * PAGE_SIZE);
+        if (got >= 0 && got < (int32_t)PAGE_SIZE) {
+            k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
+        }
+        if (got < 0) {
+            rc = got;
+        } else if ((uint32_t)got <= in) {
+            take = 0;
+        } else if (take > (uint32_t)got - in) {
+            take = (uint32_t)got - in;
+        }
+    }
+    if (rc == 0 && take > 0 && copy_to_user(dst, page + in, take) != 0) {
+        rc = -EFAULT;
+    }
+    kunmap_temp(page);
+    if (!p) {
+        free_frame(phys);
+    } else if (got <= 0 ||
+               (got < (int32_t)PAGE_SIZE &&
+                (uint64_t)pgoff * PAGE_SIZE + (uint32_t)got != f->size) ||
+               !fc_insert(f, pgoff, p, epoch)) {
+        fc_free(p);
+    }
+    return rc != 0 ? rc : (int32_t)take;
 }
 
 int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
                         int32_t *got)
 {
     struct fc_file f;
-    uint8_t *run;
     uint32_t done = 0;
-    int32_t rc = 0;
+    int32_t n = 0;
 
     if (!buckets || count == 0 || !fc_file_of(ofd->vmnt, ofd->vnode, &f) ||
         (offset < f.size && (f.size - 1u) / PAGE_SIZE > 0xFFFFFFFFu)) {
         return 0;
     }
-    if (offset >= f.size) {
-        *got = 0;
-        return 1;
-    }
     if (count > f.size - offset) {
-        count = (uint32_t)(f.size - offset);
-    }
-    run = kmalloc(FC_RUN * PAGE_SIZE);
-    if (!run) {
-        return 0;
+        count = offset < f.size ? (uint32_t)(f.size - offset) : 0;
     }
     while (done < count) {
-        uint64_t at = offset + done;
-        uint32_t pgoff = (uint32_t)(at / PAGE_SIZE);
-        uint32_t in = (uint32_t)(at % PAGE_SIZE);
-        uint32_t take = PAGE_SIZE - in, n = 1, epoch;
-        int32_t read;
+        uint32_t in = (uint32_t)((offset + done) % PAGE_SIZE);
+        uint32_t want = PAGE_SIZE - in < count - done ? PAGE_SIZE - in : count - done;
 
-        if (take > count - done) {
-            take = count - done;
-        }
-        if (pages && fc_read(&f, pgoff, 0, run)) {
-            if (copy_to_user(buf + done, run + in, take) != 0) {
-                rc = -EFAULT;
-                break;
-            }
-            done += take;
-            continue;
-        }
-        while (n < FC_RUN && (uint64_t)(pgoff + n) * PAGE_SIZE < offset + count &&
-               !fc_has(&f, pgoff + n)) {
-            n++;
-        }
-        epoch = *fc_changes(f.mnt, f.ino);
-        read = vfs_read(ofd->vmnt, ofd->fhandle, run, n * PAGE_SIZE, (uint64_t)pgoff * PAGE_SIZE);
-        if (read < 0) {
-            rc = read;
+        n = fc_read_page(ofd, &f, offset + done, buf + done, count - done);
+        if (n <= 0) {
             break;
         }
-        fc_store_run(&f, pgoff, run, (uint32_t)read, epoch);
-        if ((uint32_t)read <= in) {
-            break;
-        }
-        take = (uint32_t)read - in;
-        if (take > count - done) {
-            take = count - done;
-        }
-        if (copy_to_user(buf + done, run + in, take) != 0) {
-            rc = -EFAULT;
-            break;
-        }
-        done += take;
-        if ((uint32_t)read < n * PAGE_SIZE) {
+        done += (uint32_t)n;
+        if ((uint32_t)n < want) {
             break;
         }
     }
-    kfree(run);
-    *got = done > 0 ? (int32_t)done : rc;
+    *got = done > 0 || n > 0 ? (int32_t)done : n;
     return 1;
 }
 
