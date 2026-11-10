@@ -321,6 +321,8 @@ static void test_pass(void)
         0x80044501, /* EVIOCGVERSION */
         0x80404506, /* EVIOCGNAME(64) */
         0x80184540, /* EVIOCGABS(ABS_X) */
+        0x3B71,     /* VFIO_IOMMU_MAP_DMA */
+        0x3B6E,     /* VFIO_DEVICE_SET_IRQS */
         0xAE80,     /* KVM_RUN */
         0x4004AE8B, /* KVM_SET_SIGNAL_MASK */
         0x4104,     /* AUDIO_WRITE off the console */
