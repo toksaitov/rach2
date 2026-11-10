@@ -489,10 +489,10 @@ static int32_t engines_bond(uintptr_t ext, void *data)
 static int32_t engines_parallel(uintptr_t ext, void *data)
 {
     struct engines_set *set = (struct engines_set *)data;
-    struct i915_engine_class_instance ci, prev;
+    struct i915_engine_class_instance ci, prev = {0, 0};
     uint16_t slot, width, nsiblings;
     uint64_t flags;
-    uint32_t mask = 0, prev_mask = 0, i;
+    uint32_t prev_mask = 0, i;
     struct i915_engine *engine;
     int32_t err;
 
@@ -529,11 +529,10 @@ static int32_t engines_parallel(uintptr_t ext, void *data)
         }
         prev = ci;
         /* Each engine is logical instance 0 of its class. */
-        mask = 1u << 0;
-        if (i > 0 && mask != prev_mask << 1) {
+        if (i > 0 && 1u != prev_mask << 1) {
             return -EINVAL;
         }
-        prev_mask = mask;
+        prev_mask = 1u;
     }
     /* Not reached: the second context always fails the mask's check. */
     return -EINVAL;

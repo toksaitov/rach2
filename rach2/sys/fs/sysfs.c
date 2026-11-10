@@ -372,7 +372,7 @@ void sysfs_node_path(int handle, char *out, int cap)
 {
     struct sysfs_node *n = node_of(handle);
     const char *names[16];
-    int depth = 0, pos, slot = handle & SLOT_MASK;
+    int depth = 0, pos, slot;
     uint32_t len;
 
     if (cap <= 0) {

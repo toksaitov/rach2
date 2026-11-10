@@ -345,7 +345,8 @@ static void vsyscall_patch(void)
 {
     static const uint8_t by_sysenter[4] = {0x89, 0xE5, 0x0F, 0x34};
     static const uint8_t by_syscall[4] = {0x89, 0xCD, 0x0F, 0x05};
-    uint32_t at = VDSO_TEXT_OFFSET + (uint32_t)(vdso32_vsyscall_entry - vdso32_text_start);
+    uint32_t at = VDSO_TEXT_OFFSET +
+                  (uint32_t)((uintptr_t)vdso32_vsyscall_entry - (uintptr_t)vdso32_text_start);
 
     switch (cpu_ia32_entry()) {
     case IA32_ENTRY_SYSENTER:

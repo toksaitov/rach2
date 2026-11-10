@@ -450,9 +450,14 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         vm->ident_addr = addr;
         return 0;
     case KVM_SET_NR_MMU_PAGES:
-        if (arg < KVM_MIN_MMU_PAGES || arg > 0xFFFFFFFFu) {
+        if (arg < KVM_MIN_MMU_PAGES) {
             return -EINVAL;
         }
+#if defined(__x86_64__)
+        if (arg > 0xFFFFFFFFu) {
+            return -EINVAL;
+        }
+#endif
         vm_rec(vm)->nr_mmu_pages = (uint32_t)arg;
         return 0;
     case KVM_GET_NR_MMU_PAGES:

@@ -9212,6 +9212,8 @@ static int32_t chown_made(int id, uint32_t uid, uint32_t gid)
     return devtree_setattr(id, (uint32_t)-1, uid, gid);
 }
 
+/** Change the mode of name relative to dir, with the caller's ownership
+ * checks; return 0 or a negative error from resolution or the file system. */
 static int32_t do_chmod(const char *name, uint32_t mode, int dir)
 {
     struct vpath vp;
