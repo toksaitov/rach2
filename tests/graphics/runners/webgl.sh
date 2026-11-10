@@ -17,10 +17,11 @@
 # 2.0.1 run of the discovery run and failed 163 pages after it, is replaced
 # by a new one for the pages left, and the page it was running is `crash`.
 # Each page that does not pass is then run once more in a new browser, and
-# its second result is its verdict; the first is kept beside it. A browser
-# whose list differs from the first browser's, as the suite's harness gives
-# one when the fetch of a list file fails, has run nothing, and a new one
-# runs its pages.
+# its second result is its verdict; the first is kept beside it. The suite's
+# harness reads a list file whose fetch failed as an empty one; webgl.html
+# loads again after such a fetch, and the record counts them. A browser
+# whose list still differs from the first browser's has run nothing, and a
+# new one runs its pages.
 #
 # OMIT names pages that BROWSER does not run, a line each, `BROWSER PATH`,
 # PATH as the list gives it, `#` beginning a comment; such a page's status
@@ -187,5 +188,6 @@ if [ "$which" = all ]; then
 else
     chunk "$which" || status=1
 fi
+runner_record "list fetches failed $(grep -c '"kind": "fetchfail"' "$events")"
 runner_finish
 exit "$status"
