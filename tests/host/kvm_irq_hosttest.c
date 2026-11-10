@@ -26,15 +26,15 @@
  * between modes; KVM_GET_LAPIC and KVM_SET_LAPIC with the x2APIC id and
  * the timer's count; KVM_INTERRUPT's ExtINT; the halted vCPU woken by an
  * interrupt, by its timer's tick, or ended by a signal; the split
- * controller's enable, KVM_CREATE_IRQCHIP refused, the routes' refusals,
- * KVM_IRQ_LINE_STATUS and the EOI exit of a level-triggered I/O APIC
- * route; KVM_SIGNAL_MSI; irqfds raised by a write to the eventfd, following
- * a new route, refused twice or with RESAMPLE, deassigned, raised at once
- * by a counter already up, freed by the eventfd's last close, by the VM's
- * end and after a close that left the hangup to run; ioeventfds on ports
- * and MMIO, with and without a data match, any length, string OUTs, their
- * refusals and collisions, a full bus, and deassign; and every allocation
- * given back.
+ * controller's enable, KVM_CREATE_IRQCHIP refused, the routes' refusals, a SINT
+ * route raising Hyper-V's SynIC, KVM_IRQ_LINE_STATUS and the EOI exit of a
+ * level-triggered I/O APIC route; KVM_SIGNAL_MSI; irqfds raised by a write to
+ * the eventfd, following a new route, refused twice or with RESAMPLE,
+ * deassigned, raised at once by a counter already up, freed by the eventfd's
+ * last close, by the VM's end and after a close that left the hangup to run;
+ * ioeventfds on ports and MMIO, with and without a data match, any length,
+ * string OUTs, their refusals and collisions, a full bus, and deassign; and
+ * every allocation given back.
  */
 #include "io/eventfd.c"
 #include "kvm/iobus.c"
@@ -186,6 +186,43 @@ uint64_t tick_count(void)
 uint32_t timer_calibrate(void)
 {
     return 2u * TICK_NS;
+}
+
+/* Hyper-V's SynIC, which kvm_hyperv_hosttest checks: no vector is auto-EOI,
+ * no timer is due, and a SINT raised through a route is recorded. */
+static uint32_t sint_vpidx, sint_num, sint_raises;
+
+int kvm_hv_synic_auto_eoi(struct kvm_vcpu *v, uint32_t vector)
+{
+    (void)v;
+    (void)vector;
+    return 0;
+}
+
+void kvm_hv_synic_eoi(struct kvm_vcpu *v, uint32_t vector)
+{
+    (void)v;
+    (void)vector;
+}
+
+int kvm_hv_synic_set_irq(struct kvm_vm *vm, uint32_t vpidx, uint32_t sint)
+{
+    (void)vm;
+    sint_vpidx = vpidx;
+    sint_num = sint;
+    sint_raises++;
+    return 1;
+}
+
+void kvm_hv_stimers(struct kvm_vcpu *v)
+{
+    (void)v;
+}
+
+uint64_t kvm_hv_stimer_next(const struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
 }
 
 /* The host processor: the TSC deadline in leaf 1. */
@@ -846,6 +883,33 @@ static void route(int i, uint32_t gsi, uint32_t addr, uint32_t data)
     rt.e[i].u.msi.data = data;
 }
 
+/** A KVM_IRQ_ROUTING_HV_SINT route of GSI 5 in `rt`'s first slot, raised
+ * and lowered through KVM_IRQ_LINE_STATUS. */
+static void sint_route_rows(void)
+{
+    struct kvm_irq_level lvl;
+
+    k_memset(&rt.e[0].u, 0, sizeof(rt.e[0].u));
+    rt.e[0].type = KVM_IRQ_ROUTING_HV_SINT;
+    rt.e[0].flags = KVM_MSI_VALID_DEVID;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
+          "a SINT route with a flag");
+    rt.e[0].flags = 0;
+    rt.e[0].u.hv_sint.vcpu = 2;
+    rt.e[0].u.hv_sint.sint = 3;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == 0, "a SINT route");
+    sint_raises = 0;
+    lvl.irq = 5;
+    lvl.level = 1;
+    CHECK(kvm_irq_ioctl(&vm, KVM_IRQ_LINE_STATUS, (uintptr_t)&lvl) == 0 && lvl.irq == 1 &&
+              sint_raises == 1 && sint_vpidx == 2 && sint_num == 3,
+          "a SINT route raises the SINT of its VP index");
+    lvl.irq = 5;
+    lvl.level = 0;
+    kvm_irq_ioctl(&vm, KVM_IRQ_LINE_STATUS, (uintptr_t)&lvl);
+    CHECK(lvl.irq == -1 && sint_raises == 1, "a SINT route lowered is -1");
+}
+
 /** The split controller, routes, KVM_IRQ_LINE and the EOI exit. */
 static void routing_rows(void)
 {
@@ -881,9 +945,10 @@ static void routing_rows(void)
     rt.e[0].type = KVM_IRQ_ROUTING_IRQCHIP;
     CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
           "an irqchip route with the split controller");
-    rt.e[0].type = KVM_IRQ_ROUTING_HV_SINT;
+    rt.e[0].type = 99;
     CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
           "a route type not offered");
+    sint_route_rows();
     route(0, 4096, msi_addr(0, 0), 0);
     CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL, "a GSI past 4095");
     rt.h.nr = 4097;
