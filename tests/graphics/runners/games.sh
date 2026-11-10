@@ -3,7 +3,7 @@
 # graphics guest or on a machine's own display, as an ordinary user, the way
 # Linux's reference runs on the Lenovo took them.
 #
-#   games.sh [-d] [-s WxH] [-o OUT] [-r REPLAYS] supertuxkart|0ad
+#   games.sh [-d] [-s WxH] [-t SECONDS] [-o OUT] [-r REPLAYS] supertuxkart|0ad
 #
 # Plays the game's fixed replay of REPLAYS (/usr/share/games/rach2/replays,
 # which the games layer installs) once, fullscreen at WxH (1280x800) under a
@@ -20,9 +20,13 @@
 # These are the replays, arguments, settings and environment of
 # tools/lenovo/debian-ref/games.sh, which took Linux's numbers, and the
 # measured window and figures are those of its frames.py, so that the two
-# compare. Each game starts with a new home, so that no setting, save or cache
-# of an earlier run is reused; Mesa's shader cache is guest-env.sh's. Run it
-# with guest-env.sh's performance class.
+# compare. -t gives the race SECONDS of its own time in place of
+# supertuxkart.args's, and 0 A.D.'s window SECONDS in place of 150: the small
+# form for a machine that draws a frame in seconds, as llvmpipe does under
+# QEMU's TCG, whose numbers compare with nothing. Each game starts with a new
+# home, so that no setting, save or cache of an earlier run is reused; Mesa's
+# shader cache is guest-env.sh's. Run it with guest-env.sh's performance
+# class.
 #
 # The frame times come from Mesa's Gallium HUD, hidden, which writes, at each
 # frame a GL context presents, the time since the last in milliseconds to a
@@ -52,11 +56,12 @@ RUNNER_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
 . "$RUNNER_DIR/common.sh"
 
-own=1 out=. replays=/usr/share/games/rach2/replays size=
-while getopts ds:o:r: o; do
+own=1 out=. replays=/usr/share/games/rach2/replays size='' seconds=''
+while getopts ds:t:o:r: o; do
     case $o in
         d) own=0 ;;
         s) size=$OPTARG ;;
+        t) seconds=$OPTARG ;;
         o) out=$OPTARG ;;
         r) replays=$OPTARG ;;
         *) exit 2 ;;
@@ -64,7 +69,7 @@ while getopts ds:o:r: o; do
 done
 shift $((OPTIND - 1))
 [ $# -eq 1 ] || {
-    echo "usage: games.sh [-d] [-s WxH] [-o OUT] [-r REPLAYS] supertuxkart|0ad" >&2
+    echo "usage: games.sh [-d] [-s WxH] [-t SECONDS] [-o OUT] [-r REPLAYS] supertuxkart|0ad" >&2
     exit 2
 }
 game=$1
@@ -75,6 +80,11 @@ case $game in
     *) echo "games: no game $game; supertuxkart or 0ad" >&2; exit 2 ;;
 esac
 command -v "$program" > /dev/null || { echo "games: no $program" >&2; exit 1; }
+case $seconds in
+    '') ;;
+    *[!0-9]* | 0*) echo "games: -t $seconds is no whole number of seconds" >&2; exit 2 ;;
+    *) [ "$game" = supertuxkart ] || span=$seconds ;;
+esac
 
 runner_init games "$out"
 RUNNER_GAME=''
@@ -91,6 +101,7 @@ else
     runner_record "compositor the caller's, $WAYLAND_DISPLAY"
 fi
 runner_record "size $size"
+[ -z "$seconds" ] || runner_record "seconds $seconds, the small form"
 
 # game_stop: end the game's session, if it runs, and wait for it.
 game_stop()
@@ -161,6 +172,9 @@ case $game in
         args=$replays/supertuxkart.args
         [ -r "$args" ] || runner_die "no $args"
         words="$(grep -v '^#' "$args" | tr '\n' ' ')--fullscreen --screensize=$size"
+        if [ -n "$seconds" ]; then
+            words=$(echo "$words" | sed "s/--profile-time=[0-9]*/--profile-time=$seconds/")
+        fi
         runner_record "case supertuxkart the profile race of $args"
         runner_record "game $(supertuxkart --version 2>&1 |
             sed -n 's/.*\(SuperTuxKart, [0-9][^ ]*\)\.$/\1/p' | head -n 1)"

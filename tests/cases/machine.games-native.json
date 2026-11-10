@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.games-native.supertuxkart",
-      "behavior": "SuperTuxKart's profile race of supertuxkart.args, four AI karts on the hacienda track for 90 s of the race's time, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, runs to its profile summary, and the time of each frame is recorded",
+      "behavior": "SuperTuxKart's profile race of supertuxkart.args in the small form, four AI karts on the hacienda track for 10 s of the race's time, drawn fullscreen at 640x400 under a headless Weston on Mesa's llvmpipe, runs to its profile summary, and the time of each frame is recorded",
       "units": [
         "tests/graphics/runners/games.sh",
         "vendor/gnu/games/replays/supertuxkart.args",
@@ -63,7 +63,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run games.sh supertuxkart as the test account with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run games.sh -s 640x400 -t 10 supertuxkart as the test account with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "collect",
@@ -207,7 +207,7 @@
     },
     {
       "case_id": "machine.games-native.0ad",
-      "behavior": "0 A.D.'s visual replay of 0ad-mainland/commands.txt, a match of two AI players, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, plays for 150 s after its loading screen, and the time of each frame is recorded",
+      "behavior": "0 A.D.'s visual replay of 0ad-mainland/commands.txt in the small form, a match of two AI players, drawn fullscreen at 640x400 under a headless Weston on Mesa's llvmpipe, plays for 10 s after its loading screen, and the time of each frame is recorded",
       "units": [
         "tests/graphics/runners/games.sh",
         "vendor/gnu/games/replays/0ad-mainland/commands.txt",
@@ -265,7 +265,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run games.sh 0ad as the test account with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run games.sh -s 640x400 -t 10 0ad as the test account with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "collect",
@@ -313,7 +313,7 @@
       "assertions": [
         {
           "assertion_id": "ran",
-          "checks": "0 A.D. is still playing when the HUD's frame times hold the 150 s window after the loading screen, games.sh then ends it, and games.sh prints its result line",
+          "checks": "0 A.D. is still playing when the HUD's frame times hold the 10 s window after the loading screen, games.sh then ends it, and games.sh prints its result line",
           "source": "scenario"
         }
       ],
