@@ -100,3 +100,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `xwm-mapped-managed.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, clears the flag in `weston_wm_handle_map_request` before the window's properties are read.
 * Status: unreported.
 * Next: check Weston's main branch; report with the patch.
+
+## Weston starts a fullscreen surface's pointer constraint on whatever view has the focus
+
+* Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `libweston/input.c` at the tag `14.0.2`.
+* Fails: an X client that grabs the pointer confined to its window right after kiosk-shell makes the window fullscreen gets no pointer motion, core or raw, while the grab holds. `init_pointer_constraint` (line 4984) enables a fullscreen surface's constraint at once on `pointer->focus`, whatever view that is, without checking that it belongs to the constrained surface; before the next repaint it can be kiosk-shell's background view under the window. The lock and confine grabs' focus handlers are empty (lines 4722 and 5094), so the focus is never picked again, and `weston_pointer_send_motion` and the relative motion go to the focus's client, which is not Xwayland.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, with `tests/system/games/xplace.c` in Rach2's boot session on kiosk-shell under QEMU's `virgl` profile.
+* Reproduction: `tests/run games-wm`, row `place`, with Debian's Weston: the kernel's evdev counts all of QMP's motion, dx -2000 and dy 200, while xplace counts no core motion and its XInput 2 raw motion sums to nothing.
+* Evidence: the games-wm rows' output of task 80-4; `vendor/gnu/games/weston/pointer-constraint-view.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `pointer-constraint-view.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, starts the constraint on the focus only when it is a view of the constrained surface, and otherwise on the surface's first mapped view, which takes the focus.
+* Status: unreported.
+* Next: check Weston's main branch; report with the patch.
