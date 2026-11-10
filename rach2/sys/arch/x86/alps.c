@@ -880,7 +880,8 @@ static void process_packet_v6(void)
         y = p[2] | ((p[3] & 0x40) << 1);
         z = p[4];
         if (x == 0x7f && y == 0x7f && z == 0x7f) {
-            x = y = z = 0;
+            x = 0; /* a lift, which Linux reports as no motion */
+            y = 0;
         }
         evdev_report(stick, EV_REL, REL_X, (int8_t)x / 4);
         evdev_report(stick, EV_REL, REL_Y, -((int8_t)y / 4));
