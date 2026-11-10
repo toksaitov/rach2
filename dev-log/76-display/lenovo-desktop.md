@@ -36,4 +36,29 @@ Debian composited on the GPU; Rach2's Weston on fbdrm has no render node and com
 * After `kill`: no `weston` process, the supervisor alive, and the log has `console: card0: taken back from a master, the keyboard on` and `console: card0: the firmware's framebuffer again`.
 * The boot after it returns to the installed root on the release kernel, and the release ends in both slots.
 
+## The rehearsal in QEMU
+
+Run on the testing host on 2026-11-10 from 16:52 to 17:17 UTC+6, under QEMU with KVM, 4 processors and 8 GiB, by the step's own commands over SSH, with the trial's kernel and root image below. The root was partition 1 of an AHCI disk (`rach2.root=/dev/disk0p1`), not an image on a data partition, which 76-15c proved; the display was QEMU's standard VGA with an EDID at 1280x800, so the session ran on bochs-drm, not fbdrm, which 76-11b proved on the Lenovo; and p5 was a second disk with an ext4 partition made by `mke2fs -t ext4 -d` holding 76-17a's H.264 and VP9 clips at 1080p under 80-2's names, 10 s long, in place of Debian's 60 s ones.
+
+* `state`: Weston as `desktop` from boot, "Using Pixman renderer", the output `Virtual-1` at "1280x800@75.0, preferred, current", and `console: card0: handed to a master, the keyboard off` in the log.
+* `clips` with `P5=/dev/disk1p1`: both files read by `debugfs` with the SHA-256 of their sources, `8e566274...` and `d8894694...`.
+* `debian`: every play posted its result; Firefox decoded with "ffmpeg video decoder (RDD remote)" and "ffvpx video decoder (RDD remote)", Chromium with FFmpegVideoDecoder and VpxVideoDecoder. Firefox's per-process `MOZ_LOG_FILE` logs stayed empty under its sandbox in the first pass, so the script reads the decoder from the browser's own output, as `video.sh` does.
+* `video`: twelve result lines, three counted plays each, no media error, status 0; Chromium's decoders FFmpegVideoDecoder, VpxVideoDecoder and Dav1dVideoDecoder, Firefox's ffmpeg for H.264 and ffvpx for VP9 and AV1.
+* `kill`: Weston gone, the supervisor alive and not restarting it, and `console: card0: taken back from a master, the keyboard on` in the log; on bochs the console's next line names its mode, where on fbdrm it is `the firmware's framebuffer again`.
+
+Drops under QEMU are not this task's measure and are not recorded here.
+
+## The trial's files
+
+Built on the testing host from the tree of 437805141, the milestone head, with `make ARCH=x86_64 rach2 os-real-gnu-ext2`; the task's commits change no file either is built from. They stay in `build/cache/lenovo-2657/` of the `toksaitov-m` clone there until the task closes.
+
+| File | SHA-256 | Bytes |
+|---|---|---|
+| `kernel` | `957f5d385f5af390f98e09eabd813a4b61b83a2938bd11264c92e8cc08e3b0af` | 4,179,608 |
+| `bootctl` | `a7bac9d2e0bbd8d62877b914166eaf980ea239a4fc4ef513a57b16497a79868f` | 87,504 |
+| `os-real-gnu.ext2`, the trial root | `07a02ae529bdd3eac7c4f438668427b2623bbb65dcf37a43ba8970a1f443b24b` | 17,179,869,184 |
+| `root.img.gz`, the same gzipped | `932835b39fd74a78bac06521a6bf63ad9875b22ecb201b62586d05dd31433056` | 4,989,042,491 |
+| `debugfs`, e2fsprogs' static build | `aa3b0ca5e01af7c563e62a253634f9ab6138931562cb55f77082956f99774658` | 561,000 |
+| `clips.tar`, 76-17a's six clips | `6806f20e17fb555f2e5547ebafb0dc99b144d03350168391a7c1158474ae33d6` | 35,276,800 |
+
 ## Results
