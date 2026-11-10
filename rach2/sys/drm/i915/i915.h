@@ -401,6 +401,7 @@ struct i915_gt {
     uint8_t wedged_terminal;
     uint32_t reset_count;
     uint32_t reset_engine_count[I915_NUM_ENGINES];
+    uint32_t wa_lost; /* workarounds the chip did not keep, since the bind */
     uint64_t hc_next;
     struct i915_gpu_error *error;
     uint8_t submit_listed;
@@ -1670,6 +1671,17 @@ void i915_irq_handle(struct drm_i915_private *i915);
  */
 int32_t i915_gt_init(struct drm_i915_private *i915);
 
+/**
+ * Write the GT's state that a reset of the whole GPU loses, as Linux's
+ * intel_gt_init_hw does on Haswell before the rings start, at the bind and
+ * after such a reset: the hash mask of a part with eDRAM, the predicate's
+ * second result for the slices the part has, and the GT's workarounds
+ * (hsw_gt_workarounds_init), each read back as Linux verifies it. The
+ * swizzle and the PPGTT's caching are `i915_gem_restore_fences`'s and
+ * `i915_ppgtt_enable_ring`'s. Under forcewake.
+ */
+void i915_gt_init_hw(struct drm_i915_private *i915);
+
 /** Stop every ring, unregister its interrupt, clear its GTT entries and
  * free its pages, then the PPGTT; for the unplug and a failed bind. */
 void i915_gt_fini(struct drm_i915_private *i915);
@@ -1753,11 +1765,13 @@ int32_t i915_engine_wait(struct drm_i915_private *i915, struct i915_engine *engi
 
 /**
  * Start `engine`'s ring again with the chip to run from `head` to `tail`,
- * as Linux's xcs_resume after a reset: stopped and emptied, the status
- * page's address written and the TLB flushed, the ring's start and the
- * PPGTT's registers, enabled empty at `head` with RING_VALID waited for,
- * STOP_RING cleared, and then `tail` given. Every interrupt of the ring
- * is masked in its RING_IMR. Under forcewake.
+ * as Linux's intel_engine_resume and xcs_resume after a reset: the render
+ * engine's workarounds written (rcs_engine_wa_init) and read back, the
+ * ring stopped and emptied, the status page's address written and the TLB
+ * flushed, the ring's start and the PPGTT's registers, enabled empty at
+ * `head` with RING_VALID waited for, STOP_RING cleared, and then `tail`
+ * given. Every interrupt of the ring is masked in its RING_IMR. Under
+ * forcewake.
  *
  * @return 0, or -EIO when the ring would not stop or start, its registers
  *         logged.

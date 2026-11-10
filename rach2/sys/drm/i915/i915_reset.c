@@ -306,6 +306,7 @@ void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const c
             }
         }
         i915_gem_restore_fences(i915);
+        i915_gt_init_hw(i915);
         for (i = 0; i < I915_NUM_ENGINES && err == 0; i++) {
             if (gt->engine[i].running) {
                 err = engine_resume(i915, &gt->engine[i], head[i]);

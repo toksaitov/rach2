@@ -64,45 +64,48 @@
  * Uncore and forcewake (gt/intel_gt_regs.h, intel_mchbar_regs.h)
  */
 
-#define GAM_ECOCHK                      0x4090
-#define ECOCHK_PPGTT_WB_HSW             (3u << 3)
-#define GAC_ECO_BITS                    0x14090
-#define ECOBITS_PPGTT_CACHE64B          (3u << 8)
-#define HSW_IDICR                       0x9008
-#define HSW_PAVP_FUSE1                  0x911c
-#define HSW_F1_EU_DIS_SHIFT             16 /* EUs disabled per subslice */
-#define HSW_F1_EU_DIS_MASK              (3u << 16)
-#define IDIHASHMSK(x)                   (((x) & 0x3fu) << 16)
-#define ECOBUS                          0xa180
-#define FORCEWAKE_MT_ENABLE             (1u << 5)
-#define FORCEWAKE_MT                    0xa188 /* masked: bits 31:16 enable 15:0 */
-#define GTFIFODBG                       0x120000
-#define GT_FIFO_SBDROPERR               (1u << 6)
-#define GT_FIFO_BLOBDROPERR             (1u << 5)
-#define GT_FIFO_SB_READ_ABORTERR        (1u << 4)
-#define GT_FIFO_DROPERR                 (1u << 3)
-#define GT_FIFO_OVFERR                  (1u << 2)
-#define GT_FIFO_IAWRERR                 (1u << 1)
-#define GT_FIFO_IARDERR                 (1u << 0)
-#define GTFIFOCTL                       0x120008
-#define GT_FIFO_FREE_ENTRIES_MASK       0x7fu
-#define GT_FIFO_NUM_RESERVED_ENTRIES    20
-#define HSW_EDRAM_CAP                   0x120010
-#define EDRAM_ENABLED                   (1u << 0)
-#define FORCEWAKE_ACK_HSW               0x130044
-#define FORCEWAKE_KERNEL                (1u << 0)
-#define FORCEWAKE_USER                  (1u << 1)
-#define FORCEWAKE_KERNEL_FALLBACK       (1u << 15)
-#define GEN6_GT_THREAD_STATUS_REG       0x13805c
-#define GEN6_GT_THREAD_STATUS_CORE_MASK 0x7u
-#define GEN6_STOLEN_RESERVED            0x1082c0 /* i915_reg.h */
-#define GEN7_STOLEN_RESERVED_ADDR_MASK  (0x3fffu << 18)
-#define GEN7_STOLEN_RESERVED_SIZE_MASK  (1u << 5)
-#define GEN7_STOLEN_RESERVED_1M         (0u << 5)
-#define GEN7_STOLEN_RESERVED_256K       (1u << 5)
-#define GEN6_STOLEN_RESERVED_ENABLE     (1u << 0)
-#define FPGA_DBG                        0x42300
-#define FPGA_DBG_RM_NOCLAIM             (1u << 31)
+#define GAM_ECOCHK                       0x4090
+#define ECOCHK_PPGTT_WB_HSW              (3u << 3)
+#define HSW_ECOCHK_ARB_PRIO_SOL          (1u << 6)
+#define GAC_ECO_BITS                     0x14090
+#define ECOBITS_PPGTT_CACHE64B           (3u << 8)
+#define HSW_IDICR                        0x9008
+#define GEN7_SQ_CHICKEN_MBCUNIT_CONFIG   0x9030
+#define GEN7_SQ_CHICKEN_MBCUNIT_SQINTMOB (1u << 11)
+#define HSW_PAVP_FUSE1                   0x911c
+#define HSW_F1_EU_DIS_SHIFT              16 /* EUs disabled per subslice */
+#define HSW_F1_EU_DIS_MASK               (3u << 16)
+#define IDIHASHMSK(x)                    (((x) & 0x3fu) << 16)
+#define ECOBUS                           0xa180
+#define FORCEWAKE_MT_ENABLE              (1u << 5)
+#define FORCEWAKE_MT                     0xa188 /* masked: bits 31:16 enable 15:0 */
+#define GTFIFODBG                        0x120000
+#define GT_FIFO_SBDROPERR                (1u << 6)
+#define GT_FIFO_BLOBDROPERR              (1u << 5)
+#define GT_FIFO_SB_READ_ABORTERR         (1u << 4)
+#define GT_FIFO_DROPERR                  (1u << 3)
+#define GT_FIFO_OVFERR                   (1u << 2)
+#define GT_FIFO_IAWRERR                  (1u << 1)
+#define GT_FIFO_IARDERR                  (1u << 0)
+#define GTFIFOCTL                        0x120008
+#define GT_FIFO_FREE_ENTRIES_MASK        0x7fu
+#define GT_FIFO_NUM_RESERVED_ENTRIES     20
+#define HSW_EDRAM_CAP                    0x120010
+#define EDRAM_ENABLED                    (1u << 0)
+#define FORCEWAKE_ACK_HSW                0x130044
+#define FORCEWAKE_KERNEL                 (1u << 0)
+#define FORCEWAKE_USER                   (1u << 1)
+#define FORCEWAKE_KERNEL_FALLBACK        (1u << 15)
+#define GEN6_GT_THREAD_STATUS_REG        0x13805c
+#define GEN6_GT_THREAD_STATUS_CORE_MASK  0x7u
+#define GEN6_STOLEN_RESERVED             0x1082c0 /* i915_reg.h */
+#define GEN7_STOLEN_RESERVED_ADDR_MASK   (0x3fffu << 18)
+#define GEN7_STOLEN_RESERVED_SIZE_MASK   (1u << 5)
+#define GEN7_STOLEN_RESERVED_1M          (0u << 5)
+#define GEN7_STOLEN_RESERVED_256K        (1u << 5)
+#define GEN6_STOLEN_RESERVED_ENABLE      (1u << 0)
+#define FPGA_DBG                         0x42300
+#define FPGA_DBG_RM_NOCLAIM              (1u << 31)
 
 /* A masked register: the high half selects which bits of the low half a
  * write changes (i915_reg_defs.h: _MASKED_BIT_ENABLE and _DISABLE). */
@@ -245,6 +248,7 @@
 #define RING_NOPID(base)            ((base) + 0x94)
 #define RING_HWSTAM(base)           ((base) + 0x98)
 #define RING_MI_MODE(base)          ((base) + 0x9c)
+#define ASYNC_FLIP_PERF_DISABLE     (1u << 14)
 #define MODE_IDLE                   (1u << 9)
 #define STOP_RING                   (1u << 8)
 #define RING_IMR(base)              ((base) + 0xa8)
@@ -266,6 +270,7 @@
 #define GFX_RUN_LIST_ENABLE         (1u << 15)
 #define GFX_INTERRUPT_STEERING      (1u << 14)
 #define GFX_TLB_INVALIDATE_EXPLICIT (1u << 13)
+#define GFX_REPLAY_MODE             (1u << 11)
 #define GFX_PPGTT_ENABLE            (1u << 9)
 #define RING_TIMESTAMP(base)        ((base) + 0x358)
 #define RING_TIMESTAMP_UDW(base)    ((base) + 0x358 + 4)
@@ -285,6 +290,10 @@
 #define INSTPM_FORCE_ORDERING             (1u << 7)
 #define INSTPM_SYNC_FLUSH                 (1u << 5)
 #define GEN7_FF_THREAD_MODE               0x20a0
+#define GEN7_FF_VS_REF_CNT_FFME           (1u << 15)
+#define HSW_MI_PREDICATE_RESULT_2         0x2214
+#define LOWER_SLICE_ENABLED               (1u << 0)
+#define LOWER_SLICE_DISABLED              (0u << 0)
 #define GFX_MODE                          0x2520
 #define ERROR_GEN6                        0x40a0
 #define DONE_REG                          0x40b0
@@ -293,14 +302,20 @@
 #define HSW_GTT_CACHE_EN                  0x4024
 #define CACHE_MODE_0_GEN7                 0x7000
 #define RC_OP_FLUSH_ENABLE                (1u << 0) /* of CACHE_MODE_0_GEN7, masked */
+#define HIZ_RAW_STALL_OPT_DISABLE         (1u << 2)
 #define CACHE_MODE_1                      0x7004
 #define PIXEL_SUBSPAN_COLLECT_OPT_DISABLE (1u << 6) /* of CACHE_MODE_1, masked */
 #define GEN7_GT_MODE                      0x7008
+#define GEN6_WIZ_HASHING(hi, lo)          (((uint32_t)(hi) << 9) | ((uint32_t)(lo) << 7))
+#define GEN6_WIZ_HASHING_16x4             GEN6_WIZ_HASHING(1, 0)
+#define GEN6_WIZ_HASHING_MASK             GEN6_WIZ_HASHING(1, 1)
 #define GEN7_SC_INSTDONE                  0x7100
 #define GEN7_L3CNTLREG1                   0xb01c
 #define GEN7_L3SQCREG4                    0xb034
 #define HSW_SCRATCH1                      0xb038
 #define GEN7_SAMPLER_INSTDONE             0xe160
+#define HSW_HALF_SLICE_CHICKEN3           0xe184
+#define HSW_SAMPLE_C_PERFORMANCE          (1u << 9) /* masked */
 #define GEN7_ROW_INSTDONE                 0xe164
 #define BCS_SWCTRL                        0x22200
 /* The four stream-out buffers' write offsets, which I915_EXEC_GEN7_SOL_RESET
@@ -1075,6 +1090,18 @@
  * of 16. */
 #define SOUTH_CHICKEN2            0xc2004
 #define LPT_PWM_GRANULARITY       (1u << 5)
+
+/* The registers of Linux's hsw_init_clock_gating and lpt_init_clock_gating
+ * that belong to the display (i915_reg.h). */
+#define CHICKEN_PAR1_1                    0x42080
+#define HSW_MASK_VBL_TO_PIPE_IN_SRD       (1u << 15)
+#define CHICKEN_PIPESL_1(pipe)            (0x420b0 + (pipe) * 4)
+#define HSW_FBCQ_DIS                      (1u << 22)
+#define HSW_UNMASK_VBL_TO_REGS_IN_SRD     (1u << 15)
+#define TRANS_CHICKEN1(pipe)              (0xf0060 + (pipe) * 0x1000)
+#define TRANS_CHICKEN1_DP0UNIT_GC_DISABLE (1u << 4)
+#define SOUTH_DSPCLK_GATE_D               0xc2020
+#define PCH_LP_PARTITION_LEVEL_DISABLE    (1u << 12)
 
 /* ------------------------------------------------------------------------
  * DisplayPort AUX (display/intel_dp_aux_regs.h): port A's channel is the

@@ -131,6 +131,111 @@ void i915_gt_pages_unmap(struct drm_i915_private *i915, void *vaddr, uint32_t np
     kfree_pages(vaddr, npages);
 }
 
+/* ------------------------------------------------------------------------
+ * Workarounds
+ */
+
+/*
+ * One register of a workaround list, as Linux's struct i915_wa: the bits
+ * cleared and set, and in `read` the bits a read back must show as `set`
+ * has them, 0 for a register that is not read back. A masked register has
+ * `clr` 0 and is written whole; any other is read first and written only
+ * when the write would change it. A list is in the order of its
+ * registers, as Linux keeps one.
+ */
+struct i915_wa {
+    uint32_t reg;
+    uint32_t clr;
+    uint32_t set;
+    uint32_t read;
+};
+
+/* Haswell's GT workarounds, Linux's hsw_gt_workarounds_init: the vertex
+ * shader's reference count left to the hardware, and L3's atomics off in
+ * the data port and in the rows, which a program turns on through the
+ * command parser's two registers. Linux does not read the row's back. */
+static const struct i915_wa hsw_gt_was[] = {
+    {GEN7_FF_THREAD_MODE, GEN7_FF_VS_REF_CNT_FFME, 0, GEN7_FF_VS_REF_CNT_FFME},
+    {HSW_SCRATCH1, 0xffffffffu, HSW_SCRATCH1_L3_DATA_ATOMICS_DISABLE, 0xffffffffu},
+    {HSW_ROW_CHICKEN3, 0, I915_MASKED_ENABLE(HSW_ROW_CHICKEN3_L3_GLOBAL_ATOMICS_DISABLE), 0}};
+
+/* The render engine's workarounds on Haswell, Linux's rcs_engine_wa_init:
+ * WaDisableAsyncFlipPerfMode, WaBCSVCSTlbInvalidationMode, the HiZ raw
+ * stall optimization on and WaDisable_RenderCache_OperationalFlush,
+ * WaDisable4x2SubspanOptimization, 16x4 WIZ hashing and
+ * WaSampleCChickenBitEnable. The other engines have none. */
+static const struct i915_wa hsw_rcs_was[] = {
+    {RING_MI_MODE(RENDER_RING_BASE), 0, I915_MASKED_ENABLE(ASYNC_FLIP_PERF_DISABLE),
+     ASYNC_FLIP_PERF_DISABLE},
+    {RING_MODE_GEN7(RENDER_RING_BASE), 0,
+     I915_MASKED_ENABLE(GFX_TLB_INVALIDATE_EXPLICIT | GFX_REPLAY_MODE),
+     GFX_TLB_INVALIDATE_EXPLICIT | GFX_REPLAY_MODE},
+    {CACHE_MODE_0_GEN7, 0, I915_MASKED_DISABLE(HIZ_RAW_STALL_OPT_DISABLE | RC_OP_FLUSH_ENABLE),
+     HIZ_RAW_STALL_OPT_DISABLE | RC_OP_FLUSH_ENABLE},
+    {CACHE_MODE_1, 0, I915_MASKED_ENABLE(PIXEL_SUBSPAN_COLLECT_OPT_DISABLE),
+     PIXEL_SUBSPAN_COLLECT_OPT_DISABLE},
+    {GEN7_GT_MODE, 0, GEN6_WIZ_HASHING_MASK << 16 | GEN6_WIZ_HASHING_16x4, GEN6_WIZ_HASHING_MASK},
+    {HSW_HALF_SLICE_CHICKEN3, 0, I915_MASKED_ENABLE(HSW_SAMPLE_C_PERFORMANCE),
+     HSW_SAMPLE_C_PERFORMANCE}};
+
+/**
+ * Write the `n` workarounds of `wa`, as Linux's wa_list_apply, and read
+ * each back as its wa_verify does: one the chip did not keep is logged
+ * under the list's `name` and counted in `gt.wa_lost`. Under forcewake.
+ */
+static void i915_wa_list_apply(struct drm_i915_private *i915, const struct i915_wa *wa, unsigned n,
+                               const char *name)
+{
+    struct i915_hw *hw = &i915->hw;
+    uint32_t old, val, cur;
+    unsigned i;
+
+    for (i = 0; i < n; i++, wa++) {
+        old = wa->clr ? i915_read(hw, wa->reg) : 0;
+        val = (old & ~wa->clr) | wa->set;
+        if (val != old || !wa->clr) {
+            i915_write(hw, wa->reg, val);
+        }
+        if (!wa->read) {
+            continue;
+        }
+        cur = i915_read(hw, wa->reg);
+        if ((cur ^ wa->set) & wa->read) {
+            klog(KLOG_ERR, "i915",
+                 "workarounds: %s: lost: register 0x%x reads 0x%08x, expected 0x%08x of 0x%08x",
+                 name, (unsigned)wa->reg, (unsigned)cur, (unsigned)(wa->set & wa->read),
+                 (unsigned)wa->read);
+            i915->gt.wa_lost++;
+        }
+    }
+}
+
+void i915_gt_init_hw(struct drm_i915_private *i915)
+{
+    struct i915_hw *hw = &i915->hw;
+    int gt3 = i915->id && i915->id->platform->gt == 3;
+
+    if (i915_read(hw, HSW_EDRAM_CAP) & EDRAM_ENABLED) {
+        (void)i915_rmw(hw, HSW_IDICR, 0, IDIHASHMSK(0xf));
+    }
+    i915_write(hw, HSW_MI_PREDICATE_RESULT_2, gt3 ? LOWER_SLICE_ENABLED : LOWER_SLICE_DISABLED);
+    i915_wa_list_apply(i915, hsw_gt_was, sizeof(hsw_gt_was) / sizeof(hsw_gt_was[0]), "gt");
+}
+
+/**
+ * Write the GT's registers of Linux's hsw_init_clock_gating, which it
+ * writes once, at load: the message channel's interrupt mode that
+ * WaCatErrorRejectionIssue needs, and the arbitration priority of stream
+ * output over the vertex fetch, WaSwitchSolVfFArbitrationPriority. The
+ * display's registers of that function are the display's to write
+ * (intel_display.c). Under forcewake.
+ */
+static void i915_gt_init_clock_gating(struct drm_i915_private *i915)
+{
+    (void)i915_rmw(&i915->hw, GEN7_SQ_CHICKEN_MBCUNIT_CONFIG, 0, GEN7_SQ_CHICKEN_MBCUNIT_SQINTMOB);
+    (void)i915_rmw(&i915->hw, GAM_ECOCHK, 0, HSW_ECOCHK_ARB_PRIO_SOL);
+}
+
 /**
  * Stop the command streamer of `e` and empty its ring, as Linux's
  * intel_engine_stop_cs and stop_ring: STOP_RING set and MODE_IDLE waited
@@ -184,6 +289,12 @@ int32_t i915_ring_resume(struct drm_i915_private *i915, struct i915_engine *e, u
     uint32_t base = e->mmio_base;
     int32_t err;
 
+    /* intel_engine_resume: the engine's workarounds first, which a reset of
+     * its domain loses. */
+    if (base == RENDER_RING_BASE) {
+        i915_wa_list_apply(i915, hsw_rcs_was, sizeof(hsw_rcs_was) / sizeof(hsw_rcs_was[0]),
+                           e->name);
+    }
     err = i915_ring_stop(i915, e, 0);
     if (err < 0) {
         return err;
@@ -329,6 +440,8 @@ int32_t i915_gt_init(struct drm_i915_private *i915)
         i915_gt_fini(i915);
         return -EIO;
     }
+    i915_gt_init_clock_gating(i915);
+    i915_gt_init_hw(i915);
     for (i = 0; i < I915_NUM_ENGINES && err == 0; i++) {
         err = i915_ring_start(i915, &gt->engine[i]);
     }
@@ -349,6 +462,9 @@ int32_t i915_gt_init(struct drm_i915_private *i915)
          (unsigned)gt->engine[I915_VECS0].ring_ggtt, (unsigned)gt->engine[I915_RCS0].hws_ggtt,
          (unsigned)gt->engine[I915_BCS0].hws_ggtt, (unsigned)gt->engine[I915_VCS0].hws_ggtt,
          (unsigned)gt->engine[I915_VECS0].hws_ggtt);
+    klog(KLOG_INFO, "i915", "workarounds: applied: %u of the GT and %u of rcs0, %u lost",
+         (unsigned)(sizeof(hsw_gt_was) / sizeof(hsw_gt_was[0])),
+         (unsigned)(sizeof(hsw_rcs_was) / sizeof(hsw_rcs_was[0])), (unsigned)gt->wa_lost);
     return 0;
 }
 
