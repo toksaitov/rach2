@@ -1454,12 +1454,15 @@ int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p);
  * when its string has elements to write to device memory; an MMIO read's
  * answer is kept and `v->emul.resume` set for the instruction to run
  * again; and an OUT that was written, in the kernel or by the caller,
- * steps RIP unless the caller moved it. 0. */
+ * steps RIP unless the caller moved it. A port instruction that ends
+ * here under the caller's single step sets `v->emul.resume` for
+ * `kvm_emul_resume` to report the step. 0. */
 int kvm_emul_complete(struct kvm_vcpu *v);
 
 /** The exit of the step `v->emul.resume` asked for, into `v->exit`, from
  * the backend's `exit` after an `enter` that entered no guest: the
- * instruction run again, or its next MMIO write. 0, or -EFAULT. */
+ * instruction run again, its next MMIO write, or `v->emul.step_trap` set
+ * for a port instruction stepped in `kvm_emul_complete`. 0, or -EFAULT. */
 int kvm_emul_resume(struct kvm_vcpu *v);
 
 /** Read the four PAE PDPTEs at `cr3` of `v` into `pdpte`, as Linux's
