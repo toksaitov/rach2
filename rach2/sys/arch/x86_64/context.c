@@ -20,7 +20,7 @@ extern void isr_return(void);
 
 /* The stack switch and the entry to user mode (switch.s). */
 extern void x86_64_switch(uint64_t *save_sp, uint64_t load_sp);
-extern void x86_64_enter_user(uintptr_t pc, uintptr_t sp) K_NORETURN;
+extern void x86_64_enter_user(uintptr_t pc, uintptr_t sp, uintptr_t cs) K_NORETURN;
 
 /* The registers x86_64_switch pushes: RBP, RBX and R12 to R15. */
 #define SWITCH_SAVED 6
@@ -247,15 +247,23 @@ void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
  * The thread entering user mode here was not switched to, so its kernel stack,
  * TLS descriptors, selectors and bases are loaded here, as `switch_context`
  * would load them; `x86_64_enter_user` (switch.s) then returns to user mode
- * through the frame of an interrupt from it.
+ * through the frame of an interrupt from it. An i386 image takes CS 0x23
+ * and the user data selector in DS and ES, as `arch_exec_frame` gives it.
  */
 void arch_enter_user(uintptr_t pc, uintptr_t sp)
 {
+    uintptr_t cs = GDT_USER_CODE;
+
     if (current_proc) {
+        if (current_proc->mm && current_proc->mm->compat) {
+            cs = GDT_USER_CODE32;
+            current_proc->regs.ds_sel = GDT_USER_DATA;
+            current_proc->regs.es_sel = GDT_USER_DATA;
+        }
         cpu_set_kernel_stack(current_proc->kernel_stack);
         arch_bases_load(current_proc);
     }
-    x86_64_enter_user(pc, sp);
+    x86_64_enter_user(pc, sp, cs);
 }
 
 /* The loads of a selector that may fault, and where each resumes

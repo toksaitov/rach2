@@ -207,11 +207,12 @@ x86_64_load_idt:
     lidt (%rdi)
     ret
 
-# void x86_64_enter_user(uintptr_t pc, uintptr_t sp)
+# void x86_64_enter_user(uintptr_t pc, uintptr_t sp, uintptr_t cs)
 #
 # Enter user mode at pc with the stack pointer sp, interrupts on and every
-# general register cleared, through the frame an interrupt from user mode
-# would have left; the `swapgs` before the `iretq` gives GS the program's
+# general register cleared, in the code segment cs, through the frame an
+# interrupt from user mode would have left; the `swapgs` before the `iretq`
+# gives GS the program's
 # base from IA32_KERNEL_GS_BASE.
 .globl x86_64_enter_user
 x86_64_enter_user:
@@ -219,7 +220,7 @@ x86_64_enter_user:
     pushq $GDT_USER_DATA
     pushq %rsi
     pushq $0x202
-    pushq $GDT_USER_CODE
+    pushq %rdx
     pushq %rdi
     xorl %eax, %eax
     xorl %ebx, %ebx

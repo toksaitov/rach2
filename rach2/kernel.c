@@ -1218,13 +1218,25 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
     uint8_t random16[16];
     uint32_t envc = 0;
     uintptr_t sp = 0;
+    uintptr_t top = USER_STACK_BASE + PAGE_SIZE;
     int rc;
     int i;
 
     while (envp[envc] != 0) {
         envc++;
     }
-    rc = uimage_start(&u, USER_STACK_BASE + PAGE_SIZE, RLIM_STACK_DEFAULT, (uint32_t)argc, envc);
+#if ELF_IA32
+    if (mm->compat) {
+        top = IA32_TASK_SIZE;
+        root.hwcap = ia32_hwcap();
+        root.sysinfo = ehdr ? vdso32_vsyscall_at(ehdr) : 0;
+    }
+#endif
+    rc = uimage_start(&u, top, RLIM_STACK_DEFAULT, (uint32_t)argc, envc);
+    if (mm->compat) {
+        u.word = 4u;
+        u.platform = "i686";
+    }
     if (rc == 0) {
         rc = uimage_push(&u, argv[0]);
     }
@@ -1362,6 +1374,9 @@ static void exec_program(int argc, char *argv[])
     uintptr_t user_sp;
     uintptr_t stack_bottom = USER_STACK_BASE;
     uintptr_t vdso_at = USER_MMAP_BASE + PAGE_SIZE;
+    uintptr_t mmap_base = USER_MMAP_BASE;
+    uintptr_t stack_base = USER_STACK_BASE;
+    int abi = VDSO_NATIVE;
     struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
     static char env_home[] = "HOME=/";
@@ -1407,8 +1422,9 @@ static void exec_program(int argc, char *argv[])
     }
 
     kctx.name = path;
-    if (elf_load_image(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
-                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, &img) != 0 ||
+    if (elf_load_image_at(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
+                          boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, 0, NULL,
+                          &img) != 0 ||
         boot_keep_exe(mm, path) != 0) {
         boot_exec_done();
         mm_put(mm);
@@ -1417,19 +1433,29 @@ static void exec_program(int argc, char *argv[])
     }
     boot_exec_done();
     entry_point = img.entry;
+    mm->compat = img.cls != ELF_CLASS;
+#if ELF_IA32
+    if (mm->compat) {
+        stack_base = IA32_TASK_SIZE - PAGE_SIZE;
+        mmap_base = IA32_MMAP_BASE;
+        vdso_at = mmap_base + PAGE_SIZE;
+        abi = VDSO_IA32;
+    }
+#endif
+    stack_bottom = stack_base;
 
     user_sp = boot_stack(mm, argc, argv, default_envp, &img,
-                         vdso_span(VDSO_NATIVE) ? vdso_at + PAGE_SIZE : 0, &stack_bottom);
+                         vdso_span(abi) ? vdso_at + PAGE_SIZE : 0, &stack_bottom);
     if (user_sp == 0) {
         mm_put(mm);
         console_puts("exec: the initial stack could not be built");
         return;
     }
 
-    if (elf_setup_vmas(&mm->vm, &img, img.image_end, USER_STACK_BASE, VM_STACK_MAX_GROWTH,
-                       USER_MMAP_BASE) != 0 ||
-        vdso_map(&mm->vm, vdso_at, VDSO_NATIVE) < 0 ||
-        (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
+    if (elf_setup_vmas(&mm->vm, &img, img.image_end, stack_base, VM_STACK_MAX_GROWTH, mmap_base) !=
+            0 ||
+        vdso_map(&mm->vm, vdso_at, abi) < 0 ||
+        (stack_bottom < stack_base && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
         mm_put(mm);
         console_puts("exec: no memory for the program's regions");
         return;
