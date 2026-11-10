@@ -7,7 +7,9 @@ Description: Keep the emulated mode's size for a fullscreen X client
  toplevel, so the client's frame drew unscaled in the corner of a window
  larger than its mode. The window manager now reads the property, gives a
  fullscreen window the emulated size in its configure, fullscreens it again
- when the property changes, and takes input over the whole scaled surface.
+ when the property changes, keeps the window at the output's origin while
+ the shell centres the smaller surface, and takes input over the whole
+ scaled surface.
 Author: Rach2
 Forwarded: no
 ---
@@ -68,10 +70,12 @@ Forwarded: no
  
  	for (i = 0; i < ARRAY_LENGTH(props); i++)  {
  		reply = xcb_get_property_reply(wm->conn, cookie[i], NULL);
-@@ -617,6 +624,15 @@
+@@ -615,6 +622,15 @@
+ 					window->maximized_vert = 1;
+ 				if (atom[i] == wm->atom.net_wm_state_maximized_horz)
  					window->maximized_horz = 1;
- 			}
- 			break;
++			}
++			break;
 +		case TYPE_RANDR_EMU:
 +			/* x, y, width and height of each output on which the
 +			 * client set a mode that Xwayland emulates. */
@@ -79,11 +83,9 @@ Forwarded: no
 +			if (reply->format == 32 && reply->value_len >= 4) {
 +				window->emulated_width = xid[2];
 +				window->emulated_height = xid[3];
-+			}
-+			break;
+ 			}
+ 			break;
  		case TYPE_MOTIF_WM_HINTS:
- 			memcpy(&window->motif_hints,
- 			       xcb_get_property_value(reply),
 @@ -658,6 +674,7 @@
  #undef TYPE_MOTIF_WM_HINTS
  #undef TYPE_NET_WM_STATE
@@ -147,3 +149,20 @@ Forwarded: no
  	}
  
  	/* A config event with width == 0 or height == 0 is a hint to the client
+@@ -3141,6 +3188,16 @@
+ 	pos.c = weston_coord(x, y);
+ 	if (!window || !window->wm)
+ 		return;
++
++	/* Xwayland scales a window of the emulated size only at the output's
++	 * origin, where the shell then shows the scaled surface whole; keep
++	 * it there while the shell centres the smaller surface it had. */
++	if (window->fullscreen && window->emulated_width > 0 &&
++	    window->emulated_height > 0 && surface->output) {
++		pos.c = surface->output->pos.c;
++		x = pos.c.x;
++		y = pos.c.y;
++	}
+ 
+ 	wm = window->wm;
+ 	/* We use pos_dirty to tell whether a configure message is in flight.
