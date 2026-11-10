@@ -1457,6 +1457,31 @@ static int32_t ports_init(struct drm_i915_private *i915)
     return 0;
 }
 
+/**
+ * Write the display's registers of Linux's hsw_init_clock_gating and
+ * lpt_init_clock_gating, which it writes once, at load:
+ * WaFbcAsynchFlipDisableFbcQueue, WaPsrDPAMaskVBlankInSRD and, on each
+ * pipe, WaPsrDPRSUnmaskVBlankInSRD; on a low-power PCH, which a ULT or
+ * ULX part has, the partition level's gating off; and
+ * WADPOClockGatingDisable. The GT's registers of those functions are
+ * `i915_gt_init`'s.
+ */
+static void hsw_display_clock_gating(struct drm_i915_private *i915)
+{
+    struct i915_hw *hw = &i915->hw;
+    int pipe;
+
+    (void)i915_rmw(hw, CHICKEN_PIPESL_1(0), 0, HSW_FBCQ_DIS);
+    (void)i915_rmw(hw, CHICKEN_PAR1_1, 0, HSW_MASK_VBL_TO_PIPE_IN_SRD);
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        (void)i915_rmw(hw, CHICKEN_PIPESL_1(pipe), 0, HSW_UNMASK_VBL_TO_REGS_IN_SRD);
+    }
+    if (i915->id && (i915->id->ult || i915->id->ulx)) {
+        (void)i915_rmw(hw, SOUTH_DSPCLK_GATE_D, 0, PCH_LP_PARTITION_LEVEL_DISABLE);
+    }
+    (void)i915_rmw(hw, TRANS_CHICKEN1(0), 0, TRANS_CHICKEN1_DP0UNIT_GC_DISABLE);
+}
+
 int32_t intel_display_init(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
@@ -1470,6 +1495,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     /* The PLLs first, as Linux's intel_shared_dpll_init comes before its
      * readout: a WRPLL's port clock needs the non-SSC reference. */
     intel_dpll_init(i915);
+    hsw_display_clock_gating(i915);
     intel_display_readout(i915);
     err = drm_mode_config_init(dev);
     if (err != 0) {
