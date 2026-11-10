@@ -1,0 +1,33 @@
+# Linux 6.18.58 (the testing host's), ext4
+rsskind: warm                               rss   +2584 anon   +1124 file   +1448 shmem     +12 kB
+rsskind: start                              rss    +460 anon     +12 file    +448 shmem      +0 kB
+rsskind: at the start: rss 3044 anon 1136 file 1896 shmem 12 kB
+rsskind: 32 MiB private anonymous written   rss  +32768 anon  +32768 file      +0 shmem      +0 kB
+rsskind: 8 MiB shared anonymous written     rss   +8192 anon      +0 file      +0 shmem   +8192 kB
+rsskind: 16 MiB shared memfd written        rss  +16384 anon      +0 file      +0 shmem  +16384 kB
+rsskind: 4 MiB private disk file read       rss   +4096 anon      +0 file   +4096 shmem      +0 kB
+rsskind: 1 MiB of it written                rss      +0 anon   +1024 file   -1024 shmem      +0 kB
+rsskind: 2 MiB shared disk file read        rss   +2048 anon      +0 file   +2048 shmem      +0 kB
+rsskind: 1 MiB of it written                rss      +0 anon      +0 file      +0 shmem      +0 kB
+rsskind: 4 MiB private memfd read           rss   +4096 anon      +0 file      +0 shmem   +4096 kB
+rsskind: 1 MiB of it written                rss      +0 anon   +1024 file      +0 shmem   -1024 kB
+rsskind: the private anonymous unmapped     rss  -32768 anon  -32768 file      +0 shmem      +0 kB
+rsskind: the shared memfd unmapped          rss  -16384 anon      +0 file      +0 shmem  -16384 kB
+rsskind: at the end: rss 21476 anon 3184 file 7016 shmem 11276 kB, of which 21476
+
+# Rach2, kernel eb18a7903c94798c, the GNU root on ext2, KVM
+rsskind: warm                               rss   +1616 anon   +1124 file    +492 shmem      +0 kB
+rsskind: start                              rss    +116 anon     +12 file    +104 shmem      +0 kB
+rsskind: at the start: rss 1732 anon 1136 file 596 shmem 0 kB
+rsskind: 32 MiB private anonymous written   rss  +32768 anon  +32768 file      +0 shmem      +0 kB
+rsskind: 8 MiB shared anonymous written     rss   +8192 anon      +0 file      +0 shmem   +8192 kB
+rsskind: 16 MiB shared memfd written        rss  +16384 anon      +0 file      +0 shmem  +16384 kB
+rsskind: 4 MiB private disk file read       rss   +4096 anon      +0 file   +4096 shmem      +0 kB
+rsskind: 1 MiB of it written                rss      +0 anon   +1024 file   -1024 shmem      +0 kB
+rsskind: 2 MiB shared disk file read        rss   +2048 anon      +0 file   +2048 shmem      +0 kB
+rsskind: 1 MiB of it written                rss      +0 anon      +0 file      +0 shmem      +0 kB
+rsskind: 4 MiB private memfd read           rss   +4096 anon      +0 file      +0 shmem   +4096 kB
+rsskind: 1 MiB of it written                rss      +0 anon   +1024 file      +0 shmem   -1024 kB
+rsskind: the private anonymous unmapped     rss  -32768 anon  -32768 file      +0 shmem      +0 kB
+rsskind: the shared memfd unmapped          rss  -16384 anon      +0 file      +0 shmem  -16384 kB
+rsskind: at the end: rss 20164 anon 3184 file 5716 shmem 11264 kB, of which 20164
