@@ -146,7 +146,7 @@ Buffer objects follow Linux's i915 on an LLC part.
 Their pages are anonymous memory, written back, and are bound into the
 global GTT when the aperture or the GPU needs them.
 These calls are served on the card node and the render node alike:
-.Bl -tag -width DRM_IOCTL_I915_GEM_SET_CACHING
+.Bl -tag -width DRM_IOCTL_I915_GEM_GET_APERTURE
 .It Dv DRM_IOCTL_I915_GEM_CREATE
 An object of
 .Fa size
@@ -215,15 +215,80 @@ Whether engines still read or write the object, and a wait for them of
 for ever when it is negative, with the time left written back;
 .Er ETIME
 when the object is still busy at the timeout.
+.It Dv DRM_IOCTL_I915_GEM_GET_APERTURE
+The global GTT's size in
+.Fa aper_size ,
+2 GiB on Haswell's GT2, and in
+.Fa aper_available_size
+what is left of it once the pinned bindings and the kernel's own are
+taken away.
+.It Dv DRM_IOCTL_I915_GEM_MADVISE
+Mark the object's pages as needed,
+.Dv I915_MADV_WILLNEED ,
+or not,
+.Dv I915_MADV_DONTNEED ,
+and set
+.Fa retained
+to whether its pages are still there.
+When memory runs short, the kernel frees the pages of an idle object
+marked DONTNEED, unbinding it and revoking its maps; such an object
+is purged, keeps that state, and fails with
+.Er EFAULT
+on each later use of its pages, and a touch of a map of it raises
+.Dv SIGBUS .
+An object marked DONTNEED that has no pages is purged at once.
+.Er EINVAL
+for any other state.
+.It Dv DRM_IOCTL_I915_GEM_USERPTR
+An object over
+.Fa user_size
+bytes of the caller's memory at
+.Fa user_ptr ,
+both whole pages, and its handle.
+Its pages are pinned on its first use and let go before what the caller
+maps there changes, by an unmap, a change of protection, a fork or a
+copy-on-write break; its next use pins them again, or fails with
+.Er EFAULT
+once they are unmapped.
+Only the address space that made it may pin them.
+.Dv I915_USERPTR_PROBE
+asks that the whole range be memory with pages now.
+PREAD and PWRITE fail on it with
+.Er EINVAL ,
+a map of it with
+.Er ENODEV ,
+and SET_TILING and every caching but
+.Dv I915_CACHING_CACHED
+with
+.Er ENXIO ;
+PRIME does not export it.
+.Er EINVAL
+for an unknown flag, no bytes, or a pointer or size not of whole pages;
+.Er E2BIG
+for a size past what an object holds;
+.Er EFAULT
+for a range outside the caller's memory, or with PROBE not wholly in
+memory with pages;
+.Er ENODEV
+for
+.Dv I915_USERPTR_READ_ONLY ,
+since Haswell's GTT has no read-only entries, and for
+.Dv I915_USERPTR_UNSYNCHRONIZED ,
+which Linux refuses too.
 .El
 .Pp
 A fault on a GTT map binds the object inside the aperture whole when it
 fits, or else a view of at least 1 MiB around the page in whole tile
 rows, and gives it one of the 32 fence registers, the least recently used
 that no fault holds.
+A binding that finds no room in the aperture or the GTT takes the place of
+idle bindings, the least recently used first; one whose object the GPU
+still uses stays.
 A map whose binding or fence is taken away faults again on its next
 touch; one that finds no room or no fence raises
 .Dv SIGBUS .
+An allocation of an object's pages that finds no memory fails with
+.Er ENOMEM .
 .Pp
 The core's PRIME calls export an object as a dma-buf, which
 .Dv DMA_BUF_IOCTL_SYNC
