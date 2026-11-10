@@ -387,6 +387,30 @@ void drm_kms_hotplug_event(struct drm_device *d)
     hotplug_events++;
 }
 
+/** No connector has a sysfs file here. */
+void drm_sysfs_connector_hotplug_event(struct drm_connector *connector)
+{
+    (void)connector;
+}
+
+/** No in-kernel client listens here. */
+void drm_client_dev_hotplug(struct drm_device *dev)
+{
+    (void)dev;
+}
+
+/** One thread: interrupts need no masking. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** Nothing was masked. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 /** An object of `dev`, as drm_gem.c makes one. */
 void drm_gem_object_init(struct drm_device *d, struct drm_gem_object *obj, uint64_t size,
                          const struct drm_gem_object_funcs *funcs)
