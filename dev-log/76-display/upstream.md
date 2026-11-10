@@ -100,3 +100,14 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `rach2/sys/arch/x86/alps.c`'s `dolphin_get_device_area` refuses a pad of fewer than two Y electrodes, in task 3394's commit.
 * Status: unreported.
 * Next: check master's `alps.c`, which was not read, then send a patch that has `alps_dolphin_get_device_area` return an error for fewer than two electrodes on either axis.
+
+## Linux's hid-input never reaches its D-pad case
+
+* Project: Linux 6.12, `drivers/hid/hid-input.c` at the tag `v6.12` (SHA-256 31f38838949d853a932735f2c6d76b4344b445f5d8550fd067c3a3cf88291ef9).
+* Fails: in `hidinput_configure_usage`'s generic desktop case, the test `(usage->hid & 0xf0) == 0x90` for SystemControl (`hid-input.c:813`) comes before the same test for the D-pad (`hid-input.c:847`). The first block maps 0x9b to KEY_DO_NOT_DISTURB and sends every other usage from 0x90 to 0x9f to `ignore`, so the D-pad block, which would give D-pad Up, Down, Right and Left (0x90 to 0x93) their `hat_dir` on ABS_HAT0X, never runs. A gamepad that reports its D-pad with these usages gives no hat events.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by task 3394, which read Linux's code to answer a review finding that Rach2 maps the D-pad to nothing.
+* Reproduction: not run. Plug in a gamepad whose report descriptor has generic desktop usages 0x90 to 0x93 as buttons, press the D-pad and read its event device with `evtest`: no ABS_HAT0X or ABS_HAT0Y event comes.
+* Evidence: the row "gamepad: a D-pad press gives nothing" of `tests/host/hid_parse_hosttest.c`, which feeds such a descriptor.
+* Rach2: `rach2/sys/usb/hid_input.c`'s `map_system` does as Linux does and maps the D-pad to nothing.
+* Status: unreported.
+* Next: check master's `hid-input.c`, which was not read, then ask on the linux-input list whether the SystemControl block should leave 0x90 to 0x93 to the D-pad block below it.
