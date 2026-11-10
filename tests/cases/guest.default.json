@@ -5585,6 +5585,8 @@
         {"assertion_id": "advice-einval", "checks": "an advice Linux does not define fails with EINVAL", "source": "program"},
         {"assertion_id": "madvise-zero-einval", "checks": "madvise of a length that rounds up to 0 fails with EINVAL, and of 4 GiB less one from an i386 program on the x86-64 kernel with ENOMEM", "source": "program"},
         {"assertion_id": "msync-zero-einval", "checks": "msync of a length that rounds up to 0 fails with EINVAL, and of 4 GiB less one from an i386 program on the x86-64 kernel with ENOMEM", "source": "program"},
+        {"assertion_id": "protect-gap-prefix", "checks": "mprotect over a hole fails with ENOMEM and keeps the change of the page before it", "source": "program"},
+        {"assertion_id": "protect-grows", "checks": "mprotect accepts PROT_SEM and PROT_GROWSDOWN over the stack, and refuses PROT_GROWSDOWN elsewhere, PROT_GROWSUP and the two together with EINVAL", "source": "program"},
         {"assertion_id": "forced-mmap", "checks": "a private mapping for the forced write is made", "source": "program"},
         {"assertion_id": "forced-fork-mprotect", "checks": "a fork shares its page, and mprotect makes it read-only", "source": "program"},
         {"assertion_id": "forced-proc-mem", "checks": "a write through /proc/self/mem to the read-only page succeeds", "source": "program"},
