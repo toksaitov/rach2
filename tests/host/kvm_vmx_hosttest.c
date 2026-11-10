@@ -702,6 +702,7 @@ static struct {
     int nmis, mces, wbinvds, fpu_loads, fpu_stores, restores;
     int fail_vmxon, fail_vmptrld, fail_launch;
     uint32_t refuse; /* a field whose VMWRITE fails as unsupported, or 0 */
+    uint64_t cr0;    /* the host's CR0 */
     /* The script, and what the last entry injected. */
     struct row script[16];
     int script_len, script_at;
@@ -786,7 +787,7 @@ static int m_vmxon(uint64_t *pa)
     if (!(m.cr4 & CR4_VMXE)) {
         return not_on();
     }
-    if ((m.fc & 5u) != 5u) {
+    if ((m.fc & 5u) != 5u || (m.cr0 & 0x80000021ull) != 0x80000021ull) {
         m.gp++;
         return VMX_FAIL_INVALID;
     }
@@ -1301,7 +1302,7 @@ static uint64_t m_read_cr(int n)
     if (n == 4) {
         return m.cr4;
     }
-    return n == 0 ? 0x80050033ull : 0x1000ull;
+    return n == 0 ? m.cr0 : 0x1000ull;
 }
 
 /** Write CR4: clearing VMXE in VMX operation is #GP. */
@@ -1415,6 +1416,7 @@ static void model_lenovo(void)
     m.ept_vpid = 0x00000F0106734141ull;
     m.fc = 0x5;
     m.cr4 = HOST_CR4_MODEL;
+    m.cr0 = 0x80050033ull;
 }
 
 /* ---- the rows ---- */
@@ -2047,6 +2049,10 @@ static void path_rows(int fd)
     m.fail_vmptrld = 1;
     CHECK(run(fd) == -EIO && !m.on, "VMPTRLD failing turns VMX off and ends KVM_RUN with EIO");
     m.fail_vmptrld = 0;
+    m.cr0 = 0x80050013ull;
+    CHECK(run(fd) == -EIO && m.gp == 0 && !m.on && m.cr4 == HOST_CR4_MODEL,
+          "a host CR0 without NE ends KVM_RUN with EIO before VMXON could #GP");
+    m.cr0 = 0x80050033ull;
 }
 
 /** PAE paging: the PDPTEs loaded at KVM_SET_SREGS, and one with a reserved
