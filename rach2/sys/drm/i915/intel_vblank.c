@@ -9,6 +9,7 @@
 #include "i915.h"
 #include "i915_reg.h"
 
+#include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kirq.h"
 
@@ -21,10 +22,11 @@
  * interrupts off.
  */
 
-/** The display engine's events of each pipe that the driver takes. */
+/** The display engine's events of each pipe that the driver takes, and
+ * the error interrupt that carries the FIFO underruns. */
 static uint32_t de_bits(void)
 {
-    uint32_t bits = 0;
+    uint32_t bits = DE_ERR_INT_IVB;
     int pipe;
 
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
@@ -122,24 +124,82 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
     kirq_restore(flags);
 }
 
+/** The error interrupt, Linux's ivb_err_int_handler and
+ * intel_cpu_fifo_underrun_irq_handler: each pipe's underrun, while it is
+ * reported, turns its reporting off and is left for the deferred work to
+ * log; GEN7_ERR_INT is cleared of what it held, the pipes' CRC done among
+ * it, which the vblank's work reads instead. Under the interrupt mask's
+ * lock. */
+static void err_int(struct drm_i915_private *i915)
+{
+    struct intel_display *d = &i915->display;
+    uint32_t e = i915_read(&i915->hw, GEN7_ERR_INT);
+    int pipe;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        if ((e & ERR_INT_FIFO_UNDERRUN(pipe)) && !d->crtc[pipe].underrun_off) {
+            d->crtc[pipe].underrun_off = 1;
+            i915_irq_mask_locked(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
+            d->underruns |= 1u << pipe;
+        }
+    }
+    i915_write(&i915->hw, GEN7_ERR_INT, e);
+}
+
 /** The interrupt handler of the display engine's pipe events: kept for the
- * deferred work, under the interrupt mask's lock. */
+ * deferred work, and the error interrupt taken at once, under the
+ * interrupt mask's lock. */
 static void intel_de_irq(struct drm_i915_private *i915, uint32_t iir, void *data)
 {
     (void)data;
+    if (iir & DE_ERR_INT_IVB) {
+        err_int(i915);
+        iir &= ~DE_ERR_INT_IVB;
+    }
     i915->display.de_iir |= iir;
+}
+
+void intel_fifo_underrun_reporting(struct intel_crtc *c, int on)
+{
+    struct drm_i915_private *i915 = c->i915;
+    uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
+    int old = !c->underrun_off, all = 1, pipe;
+
+    c->underrun_off = on ? 0 : 1;
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        all = all && !i915->display.crtc[pipe].underrun_off;
+    }
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
+    if (on) {
+        i915_write(&i915->hw, GEN7_ERR_INT, ERR_INT_FIFO_UNDERRUN(c->pipe));
+        if (all) {
+            i915_irq_unmask(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
+        }
+        return;
+    }
+    i915_irq_mask(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
+    if (old && (i915_read(&i915->hw, GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(c->pipe))) {
+        klog(KLOG_ERR, "i915", "display: uncleared FIFO underrun on pipe %c", 'A' + c->pipe);
+    }
 }
 
 void intel_display_irq_work(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
-    uint32_t flags, iir;
+    uint32_t flags, iir, underruns;
     int pipe;
 
     flags = spin_lock_irqsave(&i915->irq.lock);
     iir = d->de_iir;
     d->de_iir = 0;
+    underruns = d->underruns;
+    d->underruns = 0;
     spin_unlock_irqrestore(&i915->irq.lock, flags);
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        if (underruns & (1u << pipe)) {
+            klog(KLOG_ERR, "i915", "display: CPU pipe %c FIFO underrun", 'A' + pipe);
+        }
+    }
     if (iir == 0) {
         return;
     }
