@@ -46,6 +46,7 @@ modetest|qemu|full||2048
 piglit|qemu|full||8192|x86_64
 glmark2|qemu|full||8192|x86_64
 venus|qemu,mke2fs|full||8192|x86_64
+vkpresent|qemu,mke2fs|full||8192|x86_64
 agents|qemu|full|etude-agents.disk*|4096|x86_64
 agentsaccept|qemu|full||4352|x86_64
 installer-rehearse|qemu,qemu-img,xorriso,shasum|full||512
