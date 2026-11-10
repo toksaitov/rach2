@@ -371,6 +371,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "elantech",
+          "checks": "tests/host/elantech_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "elf",
           "checks": "tests/host/elf_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
