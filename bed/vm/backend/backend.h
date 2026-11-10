@@ -1,7 +1,8 @@
 /*
  * backend.h: the parts of the VM's backend around device.c: the renderer
  * on libvirglrenderer (virgl.c), the scanout on the VM's KMS (kms.c) and
- * the region's sources and doorbells (main.c).
+ * the region's sources and doorbells (main.c), and the probe that imports
+ * resources into Vulkan as Venus does (vkprobe.c).
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef BACKEND_H
@@ -17,6 +18,7 @@ struct vr_export {
     uint32_t fourcc; /* DRM's format */
     uint32_t stride, offset, width, height;
     uint64_t modifier;
+    int bottom_up; /* its first row is the bottom one, as GL draws */
 };
 
 struct vr;
@@ -31,6 +33,10 @@ uint32_t vr_capsets(struct vr *r);
 int vr_read(struct vr *r, uint32_t id, const struct vd_rect *rect, void *dst, uint32_t stride);
 int vr_export(struct vr *r, uint32_t id, struct vr_export *e);
 void vr_set_kms(struct vr *r, struct kms *k);
+void vr_set_probe(struct vr *r, int probe);
+
+/* The Venus import probe: a dma-buf imported into Vulkan and read. */
+int vk_probe(const struct vr_export *e, uint32_t *crc);
 
 /* The display: one connector of a KMS device, its crtc and primary plane. */
 struct kms_counts {
