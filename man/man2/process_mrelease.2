@@ -27,7 +27,8 @@ The process is dying once a
 has been sent to it or to one of its threads, or once its threads are
 ending by
 .Xr exit 2
-of the group or by a fatal signal; not while its core file is written.
+of the group or by a fatal signal; not while its core file is written
+or while an exec ends its other threads.
 Every other process that shares its address space, by
 .Dv CLONE_VM ,
 must be dying too.
