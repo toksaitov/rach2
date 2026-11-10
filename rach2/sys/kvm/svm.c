@@ -2004,16 +2004,18 @@ static int exit_vmmcall(struct kvm_vcpu *v)
 
 /** The exit's numbers for an internal error's report, as Linux's
  * svm_get_exit_info gives them: the code, EXITINFO1 and EXITINFO2, and
- * the event under delivery with its error code, 0 when it has none. */
+ * the event under delivery with its error code, 0 unless the event is
+ * valid and has one. */
 static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
 {
     const struct svm_exit *e = &sv(v)->ex;
+    uint32_t coded = EV_VALID | EV_ERR;
 
     info[0] = e->code;
     info[1] = e->info1;
     info[2] = e->info2;
     info[3] = e->int_info;
-    info[4] = (e->int_info & EV_ERR) ? e->int_err : 0;
+    info[4] = (e->int_info & coded) == coded ? e->int_err : 0;
 }
 
 /** A nested page fault: EXITINFO2's guest-physical address, which
