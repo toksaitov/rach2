@@ -49,6 +49,16 @@ through Proton and prints
 .Dl rach2-game: prefix: made DIR
 on standard error before it starts the program.
 WineD3D takes the video memory from the GL driver, as under Linux.
+.Pp
+.Fl -print
+prints the effective settings, one
+.Ar NAME=value
+per line, without creating directories or starting Proton.
+No program is needed in this mode.
+.Fl -help
+prints usage.
+.Fl -
+ends option processing.
 .Ss umu
 .Fl -umu
 runs Proton through
@@ -87,16 +97,6 @@ umu checks it with
 on the first start and downloads nothing; with
 .Ev UMU_RUNTIME_UPDATE
 set to 0 it does not update the runtime either.
-.Pp
-.Fl -print
-prints the effective settings, one
-.Ar NAME=value
-per line, without creating directories or starting Proton.
-No program is needed in this mode.
-.Fl -help
-prints usage.
-.Fl -
-ends option processing.
 .Ss Crysis
 The x86-64 GNU root also provides
 .Nm crysis.sh .
@@ -145,9 +145,10 @@ are respectively
 and
 .Pa /data/crysis/cache/mesa .
 Mesa's on-disk cache is enabled.
-Set
+With
 .Ev MESA_SHADER_CACHE_SHOW_STATS=true
-to print its hits and misses.
+Mesa prints the cache's hits and misses only when it destroys the cache,
+which Crysis's exit through Wine has not done.
 These files and the saves survive an update of the system's root.
 The game tree needs write access too, for its own logs.
 .Sh ENVIRONMENT
@@ -219,11 +220,15 @@ The launcher creates this directory for Proton without installing Steam.
 .Ev DISPLAY
 and the desktop session's other variables pass through unchanged.
 .Sh EXIT STATUS
-Usage errors exit with status 2.
+Usage errors exit with status 2, as do the launcher's own errors before it
+starts Proton: a root other than x86-64, a missing
+.Pa /opt/proton/proton ,
+a missing
+.Nm umu-run
+or a missing runtime archive with
+.Fl -umu .
 A failed
 .Li wineboot
-or
-.Li reg
 in a new prefix, a
 .Li wineboot
 that leaves no
@@ -233,8 +238,8 @@ Otherwise the exit status is Proton's, or umu's with
 .Fl -umu .
 .Sh EXAMPLES
 .Bd -literal -offset indent
-rach2-game --id 17300 --prefix /data/crysis/compat /data/crysis/Bin64/Crysis.exe -dx9
-rach2-game --umu --id 17300 --prefix /data/crysis/compat /data/crysis/Bin64/Crysis.exe -dx9
+rach2-game --id 17300 --prefix /data/crysis/compat /data/crysis/game/Bin64/Crysis.exe -dx9
+rach2-game --umu --id 17300 --prefix /data/crysis/compat /data/crysis/game/Bin64/Crysis.exe -dx9
 rach2-game --id 17300 --print
 .Ed
 .Sh SEE ALSO
