@@ -39,7 +39,7 @@
 #define I915_MODEL_LOG 8192
 
 /* The most blocks the table holds. */
-#define I915_MODEL_BLOCKS 16
+#define I915_MODEL_BLOCKS 24
 
 enum i915_model_op { I915_MODEL_READ, I915_MODEL_WRITE, I915_MODEL_DELAY };
 
