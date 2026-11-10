@@ -15807,12 +15807,16 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
 #define DIRENT_OLD    2
 
 /**
- * Copy one directory entry in `format` to `buf` of `count` bytes. The
- * offsets name the current entry and the next one; old readdir uses the
- * former, getdents the latter. Returns the record size, or -EINVAL when
- * it does not fit, -EOVERFLOW for an inode an i386 record cannot hold, or
- * -EFAULT. The caller holds the directory's description lock and advances
- * its offset only after this copy succeeds.
+ * Copy the record of the directory entry `de` in `format` to `buf` of
+ * `count` bytes: a native `linux_dirent64`, an i386 `linux_dirent` with
+ * the type in its last byte, or an old readdir `old_linux_dirent`, whose
+ * length field holds the name's length. `here` is the description's offset
+ * at the entry and `next` the one past it; old readdir's offset field takes
+ * the former and getdents' d_off the latter. Returns the record's size, or
+ * -EINVAL when it does not fit, -EOVERFLOW for an inode number an i386
+ * record cannot hold, or -EFAULT, with nothing written. The caller holds
+ * the directory's description lock and moves its offset only after this
+ * copy succeeds, so a record not copied is read again by the next call.
  */
 static long dirent_put(char *buf, uint32_t count, const struct vfs_dirent *de, uint64_t here,
                        uint64_t next, int format)
@@ -15859,13 +15863,15 @@ static long dirent_put(char *buf, uint32_t count, const struct vfs_dirent *de, u
 }
 
 /**
- * getdents64 on the synthetic directory descriptor `e`: the records of the
- * entries `synth_dirent_at` gives from the description's offset on, packed
- * into the user buffer `buf` of `count` bytes as `sys_getdents64` packs
- * them, with each record's d_off the position after its entry's
- * (`synth_dirent_at`) and the offset moved past each record copied. Returns
- * the bytes written, 0 at the end, -EINVAL when the first record does not
- * fit, or -EFAULT when the first copy fails.
+ * getdents64, getdents or old readdir, by `format`, on the synthetic
+ * directory descriptor `e`: the records of the entries `synth_dirent_at`
+ * gives from the description's offset on, packed into the user buffer
+ * `buf` of `count` bytes as `getdents` packs a mounted directory's, each
+ * record's offset the position after its entry and the description's
+ * offset moved past each record copied (`dirent_put`). Old readdir copies
+ * one record and returns 1. Returns the bytes written, 0 at the end, or,
+ * when the first record is not copied, `dirent_put`'s -EINVAL, -EOVERFLOW
+ * or -EFAULT. The caller holds the description's lock.
  */
 static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int format)
 {

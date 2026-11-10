@@ -280,8 +280,9 @@ struct kernel_cmsghdr;
  * lengths zero-extended; 0 or -EFAULT. */
 int ia32_msghdr_get(struct kernel_msghdr *h, uintptr_t u);
 
-/** Write what a receive gives back of `h`, its name's length, its control
- * length and its flags, into the i386 msghdr at `u`; 0 or -EFAULT. */
+/** Write what a receive gives back of `h`, its name's length when it has a
+ * name buffer, its control length and its flags, into the i386 msghdr at
+ * `u`; 0 or -EFAULT. */
 int ia32_msghdr_put(uintptr_t u, const struct kernel_msghdr *h);
 
 /** Read the i386 control message header at `at` into `h`; 0 or -EFAULT. */
