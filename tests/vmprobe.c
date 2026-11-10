@@ -2,8 +2,9 @@
  * vmprobe: the regions and demand paging of a process, tested from user
  * space: brk() (query, grow, lazy-zero, read/write, shrink), anonymous
  * mmap() (map, lazy-zero, read/write, munmap), brk refusing to grow over an
- * mmap region, and stack growth by deep recursion that faults pages well
- * past the initial one.
+ * mmap region, a mapping placed below the break once the room above it is
+ * taken, as Linux places it, and stack growth by deep recursion that faults
+ * pages well past the initial one.
  *
  * Prints "VMPROBE OK" and exits 0 when every check passes, and otherwise
  * "VMPROBE FAIL count=N" and exits with N, the count of failed checks. The
@@ -13,9 +14,9 @@
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
  * assertion for each check, which `check` names: `brk-grow`, `brk-zero`,
  * `brk-readback`, `brk-shrink`, `mmap`, `mmap-zero`, `mmap-readback`,
- * `munmap`, `collision-map`, `collision-above`, `collision-refused` and
- * `stack`. A check left out because the mapping it needs failed is reported
- * not run.
+ * `munmap`, `collision-map`, `collision-above`, `collision-refused`,
+ * `below-break` and `stack`. A check left out because the mapping it needs
+ * failed is reported not run.
  */
 
 #include "probe.h"
@@ -26,6 +27,7 @@
 #define PAGE 4096u
 
 /* mmap prot/flags (Linux's, on i386 and x86-64). */
+#define PROT_NONE     0x0
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
 #define MAP_PRIVATE   0x02
@@ -172,11 +174,46 @@ static int recurse(int n)
     return n + deeper;
 }
 
+/**
+ * Take the room between the break and the mmap base with PROT_NONE
+ * reservations, each the largest that still fits, and check that the next
+ * one goes below the break, as Linux's top-down search places it and as an
+ * i386 Wine, which reserves nearly all above its loader's heap, needs. The
+ * reservations are removed before it returns.
+ */
+static void below_break(void)
+{
+    static unsigned long held[160][2];
+    unsigned long old = sys_brk(0);
+    unsigned long len = 1ul << (sizeof(long) == 8 ? 46 : 30);
+    unsigned n = 0, i;
+
+    while (len >= PAGE && n < 160) {
+        unsigned long p = mmap_anon(len, PROT_NONE);
+
+        if (sys_failed((long)p)) {
+            len >>= 1;
+            continue;
+        }
+        held[n][0] = p;
+        held[n][1] = len;
+        n++;
+        if (p < old) {
+            break;
+        }
+    }
+    check(n > 0 && held[n - 1][0] < old, "below-break",
+          "with the room above the break taken, mmap placed a range below it");
+    for (i = 0; i < n; i++) {
+        sys_munmap(held[i][0], held[i][1]);
+    }
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe: the four cases of the opening comment in order, each counted
+/** The probe: the five cases of the opening comment in order, each counted
  * by `check`; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
@@ -255,7 +292,10 @@ void probe_main(unsigned long *sp)
         }
     }
 
-    /* 4. Stack growth by about 64 KiB of recursion, far past the first page. */
+    /* 4. A mapping goes below the break once the room above it is taken. */
+    below_break();
+
+    /* 5. Stack growth by about 64 KiB of recursion, far past the first page. */
     check(recurse(64) == 64 * 65 / 2, "stack", "stack grew under deep recursion");
 
     report_finish();

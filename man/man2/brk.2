@@ -305,7 +305,9 @@ highest free range below
 .Ql 0xB0000000
 on i686 or
 .Ql 0x00007F0000000000
-on x86-64 and above the heap's top, so the ranges
+on x86-64, down to the bottom of user space, below the heap's top as well,
+and when none is free there, the highest free range between that base and
+the stack's growth limit, so the ranges
 .Fn munmap
 frees are used again.
 .Pp
@@ -659,7 +661,8 @@ The default-suite probe
 queries the raw break, grows it by four pages, checks zero-filled
 memory and writes, then restores the break.
 It also maps eight anonymous read-write pages, checks their contents,
-and unmaps them.
+and unmaps them, and takes the room between the break and the mmap base
+with reservations until one is placed below the break.
 .Pa tests/musl/callsmusl.c
 locks and unlocks a mapped range, is refused one with a gap, and reads a
 touched page's residency with
