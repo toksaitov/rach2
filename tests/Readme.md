@@ -120,6 +120,12 @@ A probe that etude judges writes etude's report records (`tools/etude/Readme.md`
 
 `procprobe` checks that a private page written before fork stays in the child's RssAnon and keeps its dirty count in numa_maps, before and after a child write, with both a regular file and a memfd. `procprobe mount` reports the exact root line its profile gives. `creddisk` reports each publication and lock check across cold boots, and `procfilesmusl` the status and content checks of each installed applet.
 
+The default family's `pifutexmusl` probe exercises raw PI futex locks, deadlines and requeue, pthread PI mutexes, robust PI owner death, a condition variable over a PI mutex and process-shared recovery. Its i686 build also runs through the ia32 profile. The GNU family's `pi_futex` row compiles the same source against its guest's glibc.
+
+`restartprobe` checks restart codes at syscall and signal-delivery stops, writes them back in each tracer's register width, changes the result and call number, and saves and restores a pending restart. Its tracing cases also check that orig -1 and a return with no pending signal leave an injected code visible. Every row removes its System V objects and closes its pipes after reaping its child, including partial setup and fork failures.
+
+`memcallmusl` checks the resident protection of a prefix before mprotect refuses a sealed secret suffix, rejects secret-memory node queries without populating a page, and checks process_madvise with filesystem IDs different from the effective IDs.
+
 `musl/build.sh`, run by `make musl-programs`, builds each `musl/*.c` file for `ARCH` with the cross compiler and the ported musl, under `build/tests/musl/` or `build/x86_64/tests/musl/`. A program that links another source of the tree lists it in a `link-deps:` line of its header comment; a named source that is missing stops the build. The build recompiles a program only when its source, a dependency, a header it included, the installed libc, `mk/arch.sh` or the script is newer than the binary.
 
 `krffs/manifests/test.manifest` stages every probe at `/NAME` and every musl program at `/musl/NAME` in the test image, `build/images/test.krffs` or `build/x86_64/images/test.krffs`, with ISH as `/bin/sh`, the account and name-service files, and the fixtures that need a mode or owner of their own. The image has no `/sbin/init`, so the kernel starts its debug shell.
@@ -147,9 +153,3 @@ A probe is a C file at this directory's top, added to `PROGS` in `tests/Makefile
 Then give the program its place. Add it to `default-probes`, and give it a case of `cases/guest.default.json` with the assertions it reports, when it can run on the test image and must exit 0. Otherwise add it to a suite and list it in `probe-suites` with that suite's name, or, for a fixture or a program run by hand, list it in `probe-helpers` with its use. Then give it a native case in [`native/`](native/Readme.md), which runs it on a Rach2 that is already up, or a line of `native/machine` with the reason it needs a machine of QEMU's. A new suite is described in [the system tests' Readme](system/Readme.md#adding-tests).
 
 Run the new test's suite, `tests/run style` and `tests/run host` before committing.
-
-The default family's `pifutexmusl` probe exercises raw PI futex locks, deadlines and requeue, pthread PI mutexes, robust PI owner death, a condition variable over a PI mutex and process-shared recovery. Its i686 build also runs through the ia32 profile. The GNU family's `pi_futex` row compiles the same source against its guest's glibc.
-
-`restartprobe` checks restart codes at syscall and signal-delivery stops, writes them back in each tracer's register width, changes the result and call number, and saves and restores a pending restart. Its tracing cases also check that orig -1 and a return with no pending signal leave an injected code visible. Every row removes its System V objects and closes its pipes after reaping its child, including partial setup and fork failures.
-
-`memcallmusl` checks the resident protection of a prefix before mprotect refuses a sealed secret suffix, rejects secret-memory node queries without populating a page, and checks process_madvise with filesystem IDs different from the effective IDs.
