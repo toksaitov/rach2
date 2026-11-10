@@ -39,10 +39,10 @@
 # /run/user/1001 and display wayland-0, which /run/rach2-desktop.pid's
 # supervisor starts again on SIGHUP. LENOVO_USER, LENOVO_RUNTIME and
 # LENOVO_DISPLAY name another, such as Debian's on the same machine;
-# LENOVO_IGT, the IGT stage's directory, and LENOVO_CTS, VK-GL-CTS's, other
-# copies of those. A run's environment is guest-env.sh's, with Mesa's shader
-# cache emptied first. It prints the runner's lines and the judge's, and
-# exits 0 when both pass.
+# LENOVO_IGT, the IGT stage's directory, LENOVO_CTS, VK-GL-CTS's, and
+# LENOVO_WEBGL, the WebGL suite's sdk/tests, other copies of those. A run's
+# environment is guest-env.sh's, with Mesa's shader cache emptied first. It
+# prints the runner's lines and the judge's, and exits 0 when both pass.
 set -eu
 
 here=$(pwd)
@@ -242,7 +242,8 @@ case $kind in
         browser=$1 chunk=$2
         session_start
         mixer_low
-        run user conformance webgl.sh -b "$browser" -o "$work/out" "$chunk" || status=$?
+        run user conformance webgl.sh -b "$browser" ${LENOVO_WEBGL:+-s "$LENOVO_WEBGL"} \
+            -o "$work/out" "$chunk" || status=$?
         mixer_low
         if [ "$ref" != - ]; then
             pages=$out/$browser-2.0.1-$(printf '%02d' "$chunk").pages
