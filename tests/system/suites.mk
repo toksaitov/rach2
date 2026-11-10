@@ -1856,6 +1856,12 @@ $(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-p
 # `tests/run d3d-vkd3d`: vkd3d-proton's units on lavapipe against Debian.
 include tests/graphics/d3d/rules.mk
 
+# `tests/run games-wine`: GE-Proton's Wine through rach2-game under Xwayland
+# on virgl: a new prefix with WineD3D's video memory set, GL and Direct3D 9
+# pixels, 64-bit and 32-bit, against the Debian guest's in the same QEMU, and
+# the preloader's reserved ranges against Linux's maps.
+include tests/system/games/rules.mk
+
 # `tests/run desktop`: an ordinary headless Weston session at boot, input
 # discovery, and browser and ALSA tones measured through OSS loopback; Weston
 # at boot on bochs with Pixman and on virtio-gpu with GL, the browsers taking
