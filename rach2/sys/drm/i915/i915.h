@@ -1182,8 +1182,11 @@ struct intel_scanout {
  * planes, made active once the frame counter passes `wm_frame` while
  * `wm_pending`, which holds a vblank reference.
  * `vbl_on` says its vblank interrupt is unmasked. The CRC: `crc_ctl` is
- * PIPE_CRC_CTL's value while a source runs, 0 when none does, and
- * `crc_skip` the frames still to drop after it starts. `shown` and
+ * PIPE_CRC_CTL's value while a source runs, 0 when none does,
+ * `crc_skip` the frames still to drop after it starts, and `crc_res`
+ * PIPE_CRC_RES_HSW as the error interrupt read it at the pipe's CRC done,
+ * which latches a frame's CRC after its vblank, under the interrupt
+ * mask's lock. `shown` and
  * `parked` are each plane's scanouts (`struct intel_scanout`).
  * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
  * `underrun_off` says its FIFO underruns are not reported, Linux's
@@ -1207,6 +1210,7 @@ struct intel_crtc {
     uint8_t vbl_on;
     uint32_t crc_ctl;
     uint32_t crc_skip;
+    uint32_t crc_res;
     uint32_t planes_on;
     uint8_t underrun_off;
     uint8_t inherited;
@@ -1226,8 +1230,9 @@ struct intel_crtc {
  * `fw_taken` says the firmware's framebuffer was made a framebuffer of the
  * device, whose object lies at `fw_ggtt` in the GGTT. `de_iir` holds the
  * display engine's events the interrupt latched and the deferred work has
- * yet to take, and `underruns` a bit for each pipe whose FIFO underrun it
- * has yet to log, both under the interrupt mask's lock.
+ * yet to take, `underruns` a bit for each pipe whose FIFO underrun it
+ * has yet to log, and `crc_done` a bit for each pipe whose CRC (its
+ * `crc_res`) it has yet to enter, all under the interrupt mask's lock.
  * `bl` is the panel's PWM, `bl_index` its backlight's index or -1, and
  * `bl_want_on` what the backlight class last asked of its switch, which
  * holds only while the sequencer's backlight enable is on with the
@@ -1257,6 +1262,7 @@ struct intel_display {
     uint8_t fw_taken;
     uint32_t de_iir;
     uint32_t underruns;
+    uint32_t crc_done;
     struct intelbl bl;
     int bl_index;
     uint8_t bl_want_on;
@@ -3085,10 +3091,10 @@ int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name);
 int32_t intel_crtc_verify_crc_source(struct drm_crtc *crtc, const char *name, uint32_t *values_cnt);
 const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *count);
 
-/** Enter the CRC of the frame that just ended on `crtc` while a source
- * runs, past the first, as Linux's display_pipe_crc_irq_handler; from the
- * deferred interrupt work. */
-void intel_crtc_crc_frame(struct intel_crtc *crtc);
+/** Enter `crc`, the CRC the error interrupt read at `crtc`'s CRC done,
+ * while a source runs, past the first, as Linux's
+ * display_pipe_crc_irq_handler; from the deferred interrupt work. */
+void intel_crtc_crc_frame(struct intel_crtc *crtc, uint32_t crc);
 
 /**
  * Take the eDP panel's backlight over from the boot's driver, Linux's
