@@ -558,10 +558,32 @@ struct i915_fence_reg {
 #define I915_PIN_OFFSET_BIAS  0x20u
 
 /*
+ * A remapped view of an object, Linux's intel_remapped_plane_info for a
+ * single colour plane: `height` rows of `width` pages each, row r the
+ * `width` pages from page `offset` + r * `src_stride` of the object, laid
+ * one after another, so that the view's stride is `width` pages, as
+ * Linux's dst_stride on Haswell. A plane whose framebuffer's stride passes
+ * its limit scans out only its source rectangle through one. A `width` of
+ * 0 names no remapped view.
+ */
+struct i915_remap_info {
+    uint32_t offset;
+    uint32_t width;
+    uint32_t height;
+    uint32_t src_stride;
+};
+
+/* The page of the object that page `k` of the remapped view `r` maps. */
+#define I915_REMAP_PAGE(r, k) \
+    ((r)->offset + ((k) / (r)->width) * (r)->src_stride + (k) % (r)->width)
+
+/*
  * A binding of an object, or of a part of it, into the global GTT, Linux's
  * i915_vma. The view is the whole object when `view_pages` is 0, or the
  * `view_pages` pages from `view_offset`, a partial view, which a GTT map
- * of an object too large for the aperture binds a piece at a time. It lies
+ * of an object too large for the aperture binds a piece at a time, or,
+ * when `remap.width` is not 0, the remapped view `remap` of `view_pages`
+ * pages, which a plane scans out and nothing maps or fences. It lies
  * at [start, start + node_size) of the GTT, whose first `size` bytes map
  * the view's pages; `node_size` is the fence's size for a tiled object
  * inside the aperture, so that a fence covers it. `mappable` is set when
@@ -583,6 +605,7 @@ struct i915_vma {
     uint64_t size;
     uint32_t view_offset;
     uint32_t view_pages;
+    struct i915_remap_info remap;
     uint32_t pin_count;
     uint32_t fence_size;
     uint32_t fence_alignment;
@@ -2245,6 +2268,19 @@ void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset);
 int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
                      uint32_t flags, uint32_t align, struct i915_vma **out);
 
+/**
+ * Bind the remapped view `remap` of the object into the global GTT and pin
+ * the binding, as Linux's i915_gem_object_ggtt_pin with an
+ * I915_GTT_VIEW_REMAPPED view: page k of the binding maps the object's page
+ * I915_REMAP_PAGE(remap, k). A binding of the same view is reused, as
+ * `i915_vma_pin` reuses one. In `*out`.
+ *
+ * @return 0; -EINVAL for an empty view, a row wider than `src_stride` or
+ *         a view past the object; or `i915_vma_pin`'s errors.
+ */
+int32_t i915_vma_pin_remapped(struct drm_i915_gem_object *obj, const struct i915_remap_info *remap,
+                              uint32_t flags, uint32_t align, struct i915_vma **out);
+
 /*
  * Where `i915_vma_pin_args` binds a whole object: `flags` are I915_PIN_*,
  * `align` a power of two or 0, `size` the least bytes its node takes
@@ -2304,7 +2340,7 @@ int32_t i915_vma_unbind(struct i915_vma *vma);
 int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj);
 
 /** The object's binding inside the aperture that maps page `pgoff`, or
- * NULL. */
+ * NULL; a remapped view is never one. */
 struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgoff);
 
 /** Recompute what a fence needs of the binding after its object's tiling
@@ -2532,6 +2568,21 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
 /** The GGTT address of the framebuffer `fb`'s object, which its plane's
  * pin bound: the scanout's base, without the framebuffer's offset. */
 uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb);
+
+/** The GGTT address of the remapped view `remap` of `fb`'s object, which
+ * its plane's pin bound, or 0 when no pinned binding of it is there. */
+uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
+                                const struct i915_remap_info *remap);
+
+/**
+ * Whether the primary or sprite plane state `ps` scans out through a
+ * remapped view, as Linux's intel_plane_needs_remap asks: it is visible,
+ * its framebuffer's object is the driver's, its stride passes the plane's
+ * limit and its layout can be remapped (X tiles, or linear at a stride of
+ * whole pages). 1 with the view in `*remap`, or 0 with `remap->width` 0.
+ * The plane's check has computed `ps`'s source rectangle.
+ */
+int intel_plane_remap(const struct drm_plane_state *ps, struct i915_remap_info *remap);
 
 /**
  * Check a new framebuffer of an object of the driver against the object's
@@ -3225,12 +3276,14 @@ int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
 
 /**
  * Get the object ready to scan out, as Linux's
- * i915_gem_object_pin_to_display_plane: its caching off, bound inside the
- * aperture at a multiple of `align`, and its processor cache flushed. The
- * binding in `*vma`, pinned, which `i915_vma_unpin` lets go. 0 or the
- * binding's error.
+ * i915_gem_object_pin_to_display_plane: its caching off, its view bound
+ * inside the aperture at a multiple of `align`, and its processor cache
+ * flushed. The view is the whole object for a NULL `remap`, or the
+ * remapped view `remap`. The binding in `*vma`, pinned, which
+ * `i915_vma_unpin` lets go. 0 or the binding's error.
  */
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma);
 
 /** Flush the processor's cache of bytes [start, end) of the object, for

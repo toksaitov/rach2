@@ -294,10 +294,33 @@ uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb)
     return 0;
 }
 
-/** Pin `fb` for scanout: its binding in `*vma`, NULL for the firmware's.
- * 0, -EINVAL for an object of another device, or the binding's error. */
-static int32_t fb_pin(struct drm_framebuffer *fb, struct i915_vma **vma)
+uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
+                                const struct i915_remap_info *remap)
 {
+    const struct i915_vma *vma;
+
+    if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
+        return 0;
+    }
+    for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
+        if (vma->pin_count > 0 && vma->remap.width == remap->width &&
+            vma->remap.height == remap->height && vma->remap.offset == remap->offset &&
+            vma->remap.src_stride == remap->src_stride) {
+            return (uint32_t)vma->start;
+        }
+    }
+    return 0;
+}
+
+/** Pin the framebuffer of the plane state `ps` for scanout, through the
+ * remapped view the plane reads when it needs one (`intel_plane_remap`):
+ * its binding in `*vma`, NULL for the firmware's. 0, -EINVAL for an object
+ * of another device, or the binding's error. */
+static int32_t fb_pin(const struct drm_plane_state *ps, struct i915_vma **vma)
+{
+    struct drm_framebuffer *fb = ps->fb;
+    struct i915_remap_info remap;
+
     *vma = NULL;
     if (fb_is_firmware(fb)) {
         return 0;
@@ -306,6 +329,7 @@ static int32_t fb_pin(struct drm_framebuffer *fb, struct i915_vma **vma)
         return -EINVAL;
     }
     return i915_gem_object_pin_to_display((struct drm_i915_gem_object *)fb->obj[0],
+                                          intel_plane_remap(ps, &remap) ? &remap : NULL,
                                           INTEL_SCANOUT_ALIGN, vma);
 }
 
@@ -400,7 +424,7 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
         planes[i] = ps ? ps->plane : NULL;
         from[i] = c ? intel_get_vblank_counter(&c->base) : 0;
         if (ps && ps->fb && err == 0) {
-            err = fb_pin(ps->fb, &pinned[i]);
+            err = fb_pin(ps, &pinned[i]);
             if (err == 0) {
                 fbs[i] = ps->fb;
                 drm_framebuffer_get(fbs[i]);

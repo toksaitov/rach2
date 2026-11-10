@@ -177,11 +177,13 @@ static struct i915_vma bo_vma[NBO];
 /** The GGTT address the pin binds object `i` at, room for a 4K frame. */
 #define BO_GGTT(i) (0x01000000u + (uint32_t)(i) * 0x04000000u)
 
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
     struct i915_vma *v = &bo_vma[obj - bo];
 
+    (void)remap;
     (void)align;
     if (!obj->vmas) {
         v->obj = obj;
