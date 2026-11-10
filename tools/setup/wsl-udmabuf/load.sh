@@ -13,8 +13,12 @@
 # without it. systemd's stock rule makes /dev/udmabuf root:kvm, mode 0660, so
 # an account that runs QEMU must be in the group kvm. Loading it taints the
 # kernel, and an oops in it panics the whole WSL machine for every account,
-# since the kernel has panic_on_oops and panic=-1. Exits 0 when the module is
-# loaded, already or now.
+# since the kernel has panic_on_oops and panic=-1. The module's size_limit_mb,
+# the largest buffer it makes, is set to 16384, a guest's whole memory, in
+# place of its 64: lavapipe exports each allocation that Venus maps through
+# udmabuf, so with 64 a Venus allocation over 64 MiB fails on the host and
+# its context dies. The parameter is raised on a module already loaded too.
+# Exits 0 when the module is loaded, already or now, with that limit.
 set -u
 
 PATH=$PATH:/usr/sbin:/sbin
@@ -28,10 +32,16 @@ die()
     exit 1
 }
 
+limit=16384
+param=/sys/module/udmabuf/parameters/size_limit_mb
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
 echo "wsl-udmabuf: $(date -Is) $(uname -r)"
 if grep -q '^udmabuf ' /proc/modules; then
-    echo "wsl-udmabuf: result: already loaded: $(grep '^udmabuf ' /proc/modules)"
+    if [ "$(cat "$param")" -lt "$limit" ]; then
+        echo "$limit" > "$param" || die "size_limit_mb could not be set"
+    fi
+    echo "wsl-udmabuf: result: already loaded: $(grep '^udmabuf ' /proc/modules), size_limit_mb $(cat "$param")"
     exit 0
 fi
 [ -f "$module" ] || die "no $module; build it with build.sh"
@@ -44,11 +54,12 @@ esac
 sh "$here/crc.sh" "$module" || exit 1
 echo "wsl-udmabuf: tainted before: $(cat /proc/sys/kernel/tainted)"
 lines=$(dmesg | wc -l)
-insmod "$module" || die "insmod failed"
+insmod "$module" size_limit_mb="$limit" || die "insmod failed"
 sleep 1
 dmesg | tail -n +"$((lines + 1))"
 echo "wsl-udmabuf: tainted after: $(cat /proc/sys/kernel/tainted)"
 grep '^udmabuf ' /proc/modules
 ls -l /dev/udmabuf
 echo "wsl-udmabuf: kvm: $(getent group kvm | cut -d: -f4)"
+echo "wsl-udmabuf: size_limit_mb: $(cat "$param")"
 echo "wsl-udmabuf: result: loaded"
