@@ -9,6 +9,18 @@
 #define MODEL_TEST "i915-evict-test"
 #include "i915_gem_model.c"
 
+/** No interrupts on the host: the fences' masking is a no-op. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** The pair of kirq_save. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 /* The working set: 48 objects of 1 MiB, three times the aperture. */
 #define SET_OBJECTS 48u
 #define SET_BYTES   0x100000u

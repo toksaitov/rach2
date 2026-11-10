@@ -822,6 +822,19 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name)
     return -ENOMEM;
 }
 
+/** No sync file can be made, as sync_file_create. */
+int32_t sync_file_copy_out(struct dma_fence *fence, const char *name, void __user *dst, void *src,
+                           uint32_t len, int32_t *fd_at)
+{
+    (void)fence;
+    (void)name;
+    (void)dst;
+    (void)src;
+    (void)len;
+    (void)fd_at;
+    return -ENOMEM;
+}
+
 struct dma_fence *sync_file_get_fence(int32_t fd)
 {
     (void)fd;
