@@ -1792,11 +1792,12 @@ static void image_free(struct image *im)
 /**
  * A node's bytes and their count in `*len`: an ext2 node's own copy, or a
  * KRFFS node's place in the region; NULL with a count of 0 when the data
- * would run past the region.
+ * would run past the region, or for an ext2 node whose bytes the reader did
+ * not keep.
  */
 static const unsigned char *node_bytes(const struct image *im, const struct node *n, size_t *len)
 {
-    if (n->data != NULL) {
+    if (n->data != NULL || im->region == NULL) {
         *len = n->data_len;
         return n->data;
     }
@@ -1900,9 +1901,10 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
    128-byte inodes and without extra_isize, the profile of older images, is
    read too. Any other feature, any block
    outside the volume or inside its structural blocks, any malformed
-   directory entry, any inode it cannot place and a file larger than
-   `EXT2_FILE_MAX` fail the image, so that the build stops on an image this
-   program cannot read. It lists every node reached from the root with its
+   directory entry and any inode it cannot place fail the image, so that
+   the build stops on an image this program cannot read. It keeps the bytes
+   of each regular file of up to `EXT2_FILE_MAX`, and walks a larger file's
+   blocks without keeping them. It lists every node reached from the root with its
    type, owner, group, mode and set-id bits, follows every directory to its
    end, and lists a second name for one inode as a node of its own, so that
    a hard link to a set-id file is an undeclared set-id path. */
@@ -1913,10 +1915,12 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
 #define EXT2_FIRST_INO 11u
 #define EXT2_FT_MAX    7u
 
-/* The largest regular file the reader copies: about twice the largest any
-   image stages, the GNU system's chromium-headless-shell at 197 MiB. The
-   limit bounds the allocation made from an inode's recorded size, which a
-   damaged inode may have wrong. */
+/* The largest regular file whose bytes the reader keeps. The checks read
+   only declared texts, staged headers and a few small files, none near
+   this; a larger file, such as 0 A.D.'s 3.2 GiB public.zip in the GNU root,
+   has its blocks checked but no copy, and so compares as different from
+   any text. The limit also bounds the allocation made from an inode's
+   recorded size, which a damaged inode may have wrong. */
 #define EXT2_FILE_MAX (512ul * 1024 * 1024)
 
 /* An open ext2 volume and the reader's maps of it. */
@@ -2241,6 +2245,40 @@ static int ext2_copy_block(void *ctx, unsigned long index, const unsigned char *
     return 0;
 }
 
+/** Take block `index` of a file whose bytes are not kept, keeping nothing. */
+static int ext2_skip_block(void *ctx, unsigned long index, const unsigned char *block)
+{
+    (void)ctx;
+    (void)index;
+    (void)block;
+    return 0;
+}
+
+/**
+ * Walk the blocks of the regular file `inode` of `size` bytes and set
+ * `*out` to a copy of its bytes, which the caller owns, or to NULL for a
+ * file over `EXT2_FILE_MAX`, whose blocks are checked but not kept. Return
+ * 0, or -1 with `fs->err` set.
+ */
+static int ext2_file_bytes(struct ext2 *fs, const unsigned char *inode, uint64_t size,
+                           const char *path, unsigned char **out)
+{
+    unsigned long blocks = (unsigned long)((size + EXT2_BLOCK - 1) / EXT2_BLOCK);
+    struct ext2_copy c;
+
+    *out = NULL;
+    if (size > EXT2_FILE_MAX)
+        return ext2_walk_blocks(fs, inode, blocks, path, ext2_skip_block, NULL);
+    c.len = size;
+    c.out = xmalloc((size_t)size + 1);
+    if (ext2_walk_blocks(fs, inode, blocks, path, ext2_copy_block, &c) != 0) {
+        free(c.out);
+        return -1;
+    }
+    *out = c.out;
+    return 0;
+}
+
 /**
  * Append to `im` a reserved node for `path` whose id is inode `ino`. `im`
  * takes ownership of `data`, the file's `len` bytes, or NULL.
@@ -2289,7 +2327,8 @@ static int ext2_dir_block(void *ctx, unsigned long index, const unsigned char *b
  * a reader may use it, and an entry whose type differs is malformed. A
  * directory reached twice is an error. The root is a node here, unlike in
  * KRFFS, whose root mode word has the dirty bit, so that the policy sees
- * set-id bits on it. A regular file's bytes are read; a node of any other
+ * set-id bits on it. A regular file's bytes are kept, up to
+ * `EXT2_FILE_MAX`; a node of any other
  * type, which the manifests never stage, is listed with no bytes so that
  * the policy sees it.
  */
@@ -2344,22 +2383,12 @@ static int ext2_reach(struct ext2 *fs, struct image *im, const char *path, unsig
         return 0;
     }
     if (type == 0100000) {
-        struct ext2_copy c;
+        unsigned char *bytes;
 
-        if (size > EXT2_FILE_MAX)
-            return ext2_fail(fs,
-                             "%s: %llu bytes is larger than any staged "
-                             "file",
-                             path, (unsigned long long)size);
-        c.len = size;
-        c.out = xmalloc((size_t)size + 1);
-        if (ext2_walk_blocks(fs, inode, (unsigned long)((size + EXT2_BLOCK - 1) / EXT2_BLOCK), path,
-                             ext2_copy_block, &c) != 0) {
-            free(c.out);
+        if (ext2_file_bytes(fs, inode, size, path, &bytes) != 0)
             return -1;
-        }
         fs->seen_file[ino] = 1;
-        ext2_push(im, path, mode, uid, gid, size, ino, c.out, (size_t)size);
+        ext2_push(im, path, mode, uid, gid, size, ino, bytes, bytes != NULL ? (size_t)size : 0);
         return 0;
     }
     ext2_push(im, path, mode, uid, gid, size, ino, NULL, 0);
