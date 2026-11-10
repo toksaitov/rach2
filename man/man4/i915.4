@@ -785,6 +785,9 @@ While a source runs on pipe A feeding the panel, the pipe's input is set
 through its fitter's power well, by a mode set when the fitter is off, and
 set back when the source stops, as Linux does.
 The first frame after a source is set, or after a mode set, is dropped.
+Each line of
+.Pa crc/data
+gives the frame and five values, the CRC and four zeros, as Linux's i915.
 .Pp
 The panel's backlight,
 .Pa intel_backlight ,
