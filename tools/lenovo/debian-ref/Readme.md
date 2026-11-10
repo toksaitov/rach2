@@ -31,6 +31,8 @@ In order, from the repository's root on the Mac:
 | Fetch | `mac.sh fetch` | `build/runs/80-2/out/` |
 | Leave | `mac.sh leave`, `mac.sh wait-rach2`, `mac.sh restore`, `mac.sh unlock` | p1's SHA-256 equal to `p1-before.sha256`; `bootctl status` as before |
 
+`conformance.sh` serves the GPU conformance cases' Debian boot: from a stage of `lenovo.sh`, the runners and the IGT stage of Rach2's root, it runs IGT's buffer list as root, then Weston as gfx on the panel and on it glmark2's validations and benchmark, the WebGL probe and the WebGL suite, each case through `lenovo.sh` with `-` for the reference, and `conformance.sh collect` gathers the expectations and the gate's lines, as the graphics tests' Readme says ([the Lenovo's conformance](../../../tests/graphics/Readme.md#the-lenovos-conformance)). It needs run2's Debian with step 9's WebGL suite under `/srv/run2/step9/web/webgl`.
+
 `touchpad.sh` serves 76-10c's short session, which boots Debian only to read the touchpad: run from the Mac as `mac.sh sh 'sh -s' < tools/lenovo/debian-ref/touchpad.sh`, it prints the pad's block of `/proc/bus/input/devices`, psmouse's log and each axis's EVIOCGABS in the form `evprobe touchpad` prints Rach2's, and writes nothing. That session takes the lock in its own issue's name rather than with `mac.sh lock`.
 
 ## Design
