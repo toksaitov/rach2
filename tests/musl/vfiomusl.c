@@ -27,26 +27,18 @@
 #include <unistd.h>
 
 /* The ioctls of linux/vfio.h this uses; the port has no such header. */
-#define VFIO_GET_API_VERSION    0x3B64
-#define VFIO_CHECK_EXTENSION    0x3B65
-#define VFIO_SET_IOMMU          0x3B66
-#define VFIO_GROUP_GET_STATUS   0x3B67
-#define VFIO_IOMMU_MAP_DMA      0x3B71
-#define VFIO_TYPE1_IOMMU        1
-#define VFIO_TYPE1v2_IOMMU      3
-#define VFIO_NOIOMMU_IOMMU      8
-#define VFIO_GROUP_FLAGS_VIABLE 1u
+#define VFIO_GET_API_VERSION  0x3B64
+#define VFIO_CHECK_EXTENSION  0x3B65
+#define VFIO_SET_IOMMU        0x3B66
+#define VFIO_GROUP_GET_STATUS 0x3B67
+#define VFIO_IOMMU_MAP_DMA    0x3B71
+#define VFIO_TYPE1_IOMMU      1
+#define VFIO_TYPE1v2_IOMMU    3
+#define VFIO_NOIOMMU_IOMMU    8
 
-struct group_status {
-    unsigned int argsz;
-    unsigned int flags;
-};
-
-struct dma_map {
-    unsigned int argsz;
-    unsigned int flags;
-    unsigned long long vaddr, iova, size;
-};
+/* The arguments are words: vfio_group_status is argsz and flags, and
+ * vfio_iommu_type1_dma_map is argsz and flags in its first eight bytes,
+ * little-endian, then vaddr, iova and size. */
 
 /** Print the failure `detail` about `what` and return 1. */
 static int fail(const char *detail, const char *what)
@@ -74,7 +66,7 @@ static int slurp(const char *path, char *buf, int cap)
 /** The container's rows. */
 static int container_rows(void)
 {
-    struct dma_map map = {sizeof(map), 3, 0x10000, 0x100000, 0x1000};
+    unsigned long long map[4] = {32ull | 3ull << 32, 0x10000, 0x100000, 0x1000};
     struct stat st;
     int fd = open("/dev/vfio/vfio", O_RDWR | O_CLOEXEC);
 
@@ -95,7 +87,7 @@ static int container_rows(void)
     if (ioctl(fd, VFIO_SET_IOMMU, VFIO_TYPE1v2_IOMMU) != -1 || errno != EINVAL) {
         return fail("SET_IOMMU with no group is not EINVAL", "/dev/vfio/vfio");
     }
-    if (ioctl(fd, VFIO_IOMMU_MAP_DMA, &map) != -1 || errno != EINVAL) {
+    if (ioctl(fd, VFIO_IOMMU_MAP_DMA, map) != -1 || errno != EINVAL) {
         return fail("MAP_DMA with no IOMMU set is not EINVAL", "/dev/vfio/vfio");
     }
     close(fd);
@@ -172,7 +164,7 @@ static int devices_rows(const char *dir, const char *name)
 /** The rows of the group `name`. */
 static int group_rows(const char *name)
 {
-    struct group_status gs = {sizeof(gs), 0};
+    unsigned int gs[2] = {8, 0};
     char dir[320], path[400], buf[64];
     struct stat st;
     int fd;
@@ -193,7 +185,7 @@ static int group_rows(const char *name)
     if (fd < 0) {
         return errno == EBUSY ? 0 : fail("open", path);
     }
-    if (ioctl(fd, VFIO_GROUP_GET_STATUS, &gs) != 0 || (gs.flags & ~3u) != 0) {
+    if (ioctl(fd, VFIO_GROUP_GET_STATUS, gs) != 0 || (gs[1] & ~3u) != 0) {
         close(fd);
         return fail("GET_STATUS", path);
     }
