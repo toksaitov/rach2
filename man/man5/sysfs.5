@@ -812,7 +812,10 @@ its distance from itself.
 .It Pa /sys/devices/system/clocksource/clocksource0
 .Pa current_clocksource ,
 the counter that keeps the clock, by Linux's name:
-.Ql tsc ,
+.Ql tsc
+while the clock is read from the time-stamp counter, as the x86-64
+.Xr vdso 7
+reads it,
 .Ql hpet ,
 .Ql acpi_pm ,
 or
