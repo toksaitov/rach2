@@ -1,0 +1,24 @@
+# deqp-vk-smoke.txt: the dEQP-VK cases of VK-GL-CTS 1.4.7.1 that show hasvk
+# working on the Lenovo's Haswell, each one that passed there under Linux in
+# the every-50th run of ref/lenovo/deqp/vk, so that judge.py deqp compares
+# every case with Linux's. They make objects, memory and a shader, copy an
+# image, compute, draw, count fragments, write timestamps, share memory as a
+# dma-buf, pass a fence as a sync file, and order work by timeline
+# semaphores: on the host, between queue submissions, between processes as
+# an opaque fd, and with the signal shared as an fd and the data as a
+# dma-buf, which take EXECBUFFER2's timeline fences and the syncobj calls.
+dEQP-VK.api.smoke.create_shader
+dEQP-VK.api.object_management.single.command_pool
+dEQP-VK.memory.allocation.basic.size_4KiB.forward.count_1000
+dEQP-VK.api.copy_and_blit.core.image_to_buffer.2d_images.tightly_sized_buffer
+dEQP-VK.compute.pipeline.basic.replicated_composites_array_specconstant
+dEQP-VK.draw.renderpass.basic_draw.draw_indexed_indirect.triangle_fan.17_multi_command
+dEQP-VK.query_pool.occlusion_query.get_results_size_32_stride_20_without_availability_dstoffset
+dEQP-VK.pipeline.monolithic.timestamp.misc_tests.timestamp_only_host_query_reset
+dEQP-VK.api.external.memory.dma_buf.suballocated.device_only.dup2
+dEQP-VK.api.external.fence.sync_fd.signal_export_import_wait_temporary
+dEQP-VK.synchronization.timeline_semaphore.device_host.write_copy_buffer_read_ssbo_compute_indirect.buffer_16384
+dEQP-VK.synchronization.implicit.timeline_semaphore.write_copy_buffer_read_copy_buffer.buffer_16384.0103
+dEQP-VK.synchronization.signal_order.shared_timeline_semaphore.write_copy_buffer_read_copy_buffer.buffer_16384_opaque_fd
+dEQP-VK.synchronization.cross_instance.dedicated.write_copy_buffer_read_ssbo_fragment.buffer_16384_timeline_semaphore_fd
+dEQP-VK.synchronization.cross_instance.dedicated.write_ssbo_compute_indirect_read_copy_buffer.buffer_262144_timeline_semaphore_dma_buf
