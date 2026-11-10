@@ -1422,7 +1422,9 @@ static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
 }
 
 /** Append the VmFlags line of smaps for the region `r`, the names Linux's
- * show_smap_vma_flags gives the flags this kernel keeps, in Linux's order. */
+ * show_smap_vma_flags gives the flags this kernel keeps, in the order of
+ * Linux's VM_ bits: gd 0x100, pf 0x400, lo 0x2000, io 0x4000, dc 0x20000,
+ * lf 0x80000, wf 0x2000000, dd 0x4000000, then sl. */
 static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
 {
     ap_str(t, "VmFlags:");
@@ -1431,11 +1433,12 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
     ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
     ap_str(t, r->type == VM_SHARED ? " sh" : "");
     ap_str(t, r->type == VM_STACK ? " gd" : "");
+    ap_str(t, (r->prot & VM_PROT_IO) ? " pf" : "");
     ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
-    ap_str(t, (r->prot & VM_PROT_IO) ? " io pf" : "");
+    ap_str(t, (r->prot & VM_PROT_IO) ? " io" : "");
     ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
-    ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
     ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
+    ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
     ap_str(t, (r->prot & VM_PROT_SECRET) ? " dd" : "");
     ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
     ap_ch(t, '\n');
