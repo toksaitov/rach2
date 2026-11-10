@@ -1172,3 +1172,505 @@ int kvm_emul_resume(struct kvm_vcpu *v)
     }
     return emul_step(v);
 }
+
+/* ---- PAE's PDPTEs ---- */
+
+int kvm_guest_pdptes(struct kvm_vcpu *v, uint64_t cr3, uint64_t pdpte[4])
+{
+    uint64_t reserved = (~0ull << kvm_guest_maxphyaddr(v)) | 0x1E6ull;
+    int i;
+
+    if (kvm_guest_phys_rw(v, cr3 & 0xFFFFFFE0ull, pdpte, 4u * 8u, 0) != 0) {
+        return -1;
+    }
+    for (i = 0; i < 4; i++) {
+        if ((pdpte[i] & GPTE_P) && (pdpte[i] & reserved)) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* ---- the task switch ---- */
+
+#define CR0_TS    0x00000008ull
+#define RFLAGS_NT 0x4000ull
+#define TS_VECTOR 10
+#define NP_VECTOR 11
+#define SS_VECTOR 12
+
+/* DR7's local enables L0 to L3 and LE, which a task switch clears. */
+#define DR7_LOCAL 0x155ull
+
+/* The LDTR's index among the segments a TSS holds, after ES to GS. */
+#define TSS_LDT 6
+
+/* A descriptor of the GDT or LDT: its bytes and its linear address. */
+struct desc {
+    uint8_t b[8];
+    uint64_t la;
+};
+
+#define DESC_TYPE(d) ((uint32_t)(d)->b[5] & 0xFu)
+#define DESC_S(d)    (((uint32_t)(d)->b[5] >> 4) & 1u)
+#define DESC_DPL(d)  (((uint32_t)(d)->b[5] >> 5) & 3u)
+#define DESC_P(d)    ((uint32_t)(d)->b[5] >> 7)
+
+/* Where a TSS keeps each field, by its kind: its size; the width of a
+ * register; the offsets of EIP, EFLAGS, the general registers by the
+ * processor's number, the selectors from ES on, of which there are `nsels`,
+ * the LDT's selector and CR3 (0 for none); and the span a switch away from
+ * the task writes, as Linux's task_switch_32 and task_switch_16. */
+struct tss_layout {
+    uint32_t size, width;
+    uint32_t ip, flags, regs, sels, nsels, ldt, cr3;
+    uint32_t save_from, save_to;
+};
+
+static const struct tss_layout tss32 = {104, 4, 32, 36, 40, 72, 6, 96, 28, 32, 96};
+static const struct tss_layout tss16 = {44, 2, 14, 16, 18, 34, 4, 42, 0, 0, 44};
+
+/* A task switch under way: the descriptors of the new and the current
+ * TSS, their kinds, the new TSS's base, the current TR's selector, and both
+ * TSSes as read. */
+struct task_switch {
+    struct desc next, cur;
+    const struct tss_layout *l, *lo;
+    uint64_t new_base;
+    uint16_t old_sel;
+    uint8_t new_tss[104], old_tss[104];
+};
+
+/** The `n`-byte little-endian value at `p`, `n` 2 or 4. */
+static uint32_t get_le(const uint8_t *p, uint32_t n)
+{
+    uint32_t x = (uint32_t)p[0] | ((uint32_t)p[1] << 8);
+
+    return n == 4u ? x | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24) : x;
+}
+
+/** Store `x` at `p` in `n` bytes, little-endian, `n` 2 or 4. */
+static void put_le(uint8_t *p, uint32_t n, uint32_t x)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        p[i] = (uint8_t)(x >> (i * 8u));
+    }
+}
+
+/** Queue the fault `nr` with `error` for a task switch: -1. */
+static int ts_fault(struct kvm_vcpu *v, uint8_t nr, uint32_t error)
+{
+    kvm_queue_exception(v, nr, 1, error);
+    return -1;
+}
+
+/** Read or write `n` bytes of `v`'s linear memory at `la` as the processor
+ * touches its own tables and TSSes, at privilege 0: 0, or as
+ * `kvm_guest_rw` answers. */
+static int system_rw(struct kvm_vcpu *v, uint64_t la, void *buf, uint32_t n, int write)
+{
+    uint8_t *p = (uint8_t *)buf;
+    uint64_t gpa;
+    uint32_t chunk;
+    int r;
+
+    while (n) {
+        chunk = 4096u - (uint32_t)(la & 0xFFFu);
+        if (chunk > n) {
+            chunk = n;
+        }
+        r = kvm_guest_translate(v, la, write ? PFERR_W : 0u, &gpa);
+        if (r == 0) {
+            r = gpa_rw(v, gpa, p, chunk, write);
+        }
+        if (r != 0) {
+            return r;
+        }
+        p += chunk;
+        la += chunk;
+        n -= chunk;
+    }
+    return 0;
+}
+
+/** The segment register `n` of `v`: KVM_SEG_ES to KVM_SEG_GS, or TSS_LDT. */
+static struct kvm_segment *task_seg(struct kvm_vcpu *v, int n)
+{
+    struct kvm_segment *s[7];
+
+    s[0] = &v->sregs.es;
+    s[1] = &v->sregs.cs;
+    s[2] = &v->sregs.ss;
+    s[3] = &v->sregs.ds;
+    s[4] = &v->sregs.fs;
+    s[5] = &v->sregs.gs;
+    s[6] = &v->sregs.ldt;
+    return s[n];
+}
+
+/** Make `s` the segment of the selector `sel` that `d` describes, its
+ * limit scaled by G. */
+static void desc_seg(struct kvm_segment *s, uint16_t sel, const struct desc *d)
+{
+    const uint8_t *b = d->b;
+    uint32_t limit = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | (((uint32_t)b[6] & 0xFu) << 16);
+
+    k_memset(s, 0, sizeof(*s));
+    s->selector = sel;
+    s->base =
+        (uint32_t)b[2] | ((uint32_t)b[3] << 8) | ((uint32_t)b[4] << 16) | ((uint32_t)b[7] << 24);
+    s->limit = (b[6] & 0x80u) ? (limit << 12) | 0xFFFu : limit;
+    s->type = (uint8_t)DESC_TYPE(d);
+    s->s = (uint8_t)DESC_S(d);
+    s->dpl = (uint8_t)DESC_DPL(d);
+    s->present = (uint8_t)DESC_P(d);
+    s->avl = (uint8_t)((b[6] >> 4) & 1u);
+    s->l = (uint8_t)((b[6] >> 5) & 1u);
+    s->db = (uint8_t)((b[6] >> 6) & 1u);
+    s->g = (uint8_t)(b[6] >> 7);
+    s->unusable = (uint8_t)!s->present;
+}
+
+/**
+ * Read the descriptor of `sel` from `v`'s GDT or, with TI, its LDT, as
+ * Linux's read_segment_descriptor: 0 with `d` and its address; -1 with
+ * #GP(`sel`) queued past the table's limit or with no LDT loaded; 1 or
+ * -EFAULT as `system_rw`.
+ */
+static int desc_read(struct kvm_vcpu *v, uint16_t sel, struct desc *d)
+{
+    uint64_t base = v->sregs.gdt.base;
+    uint32_t limit = v->sregs.gdt.limit, index = (uint32_t)sel >> 3;
+
+    if (sel & 4u) {
+        base = v->sregs.ldt.base;
+        limit = v->sregs.ldt.unusable ? 0 : v->sregs.ldt.limit;
+    }
+    if (limit < index * 8u + 7u) {
+        return ts_fault(v, GP_VECTOR, sel & 0xFFFCu);
+    }
+    d->la = base + index * 8u;
+    if (!(v->sregs.efer & EFER_LMA)) {
+        d->la &= 0xFFFFFFFFull;
+    }
+    return system_rw(v, d->la, d->b, 8, 0);
+}
+
+/** Write `d`'s access byte, its type, S, DPL and P, back to the table. */
+static int desc_write_type(struct kvm_vcpu *v, const struct desc *d)
+{
+    uint8_t t = d->b[5];
+
+    return system_rw(v, d->la + 5u, &t, 1, 1);
+}
+
+/**
+ * The fault, #TS, #NP or #SS, by which a task switch refuses the
+ * descriptor `d` for the segment `n` (KVM_SEG_* or TSS_LDT) with the
+ * selector `sel` at privilege `cpl`, as Linux's __load_segment_descriptor
+ * for X86_TRANSFER_TASK_SWITCH; 0 when it may load.
+ */
+static int seg_refused(int n, uint16_t sel, const struct desc *d, uint32_t cpl)
+{
+    uint32_t type = DESC_TYPE(d), dpl = DESC_DPL(d), rpl = sel & 3u;
+    int bad;
+
+    switch (n) {
+    case KVM_SEG_SS:
+        bad = !DESC_S(d) || rpl != cpl || (type & 0xAu) != 2u || dpl != cpl;
+        break;
+    case KVM_SEG_CS:
+        bad = !DESC_S(d) || !(type & 8u) || ((type & 4u) ? dpl > rpl : dpl != rpl);
+        break;
+    case TSS_LDT:
+        bad = DESC_S(d) || type != 2u;
+        break;
+    default:
+        bad = !DESC_S(d) || (type & 0xAu) == 8u ||
+              ((type & 0xCu) != 0xCu && (rpl > dpl || cpl > dpl));
+        break;
+    }
+    if (bad) {
+        return TS_VECTOR;
+    }
+    if (!DESC_P(d)) {
+        return n == KVM_SEG_SS ? SS_VECTOR : NP_VECTOR;
+    }
+    return 0;
+}
+
+/**
+ * Load `v`'s segment `n` (KVM_SEG_* or TSS_LDT) from its selector, which
+ * the new task's TSS gave, at privilege `cpl`, in virtual-8086 mode with
+ * `vm86`, as Linux's __load_segment_descriptor for a task switch: a null
+ * selector, #GP(0) for CS and SS, loads an unusable segment; a descriptor
+ * is checked and marked accessed, and CS takes `cpl` as its RPL. 0; -1
+ * with the fault queued; 1 or -EFAULT as `system_rw`.
+ */
+static int load_seg(struct kvm_vcpu *v, int n, uint32_t cpl, int vm86)
+{
+    struct kvm_segment *s = task_seg(v, n);
+    uint16_t sel = s->selector;
+    struct desc d;
+    int r, nr;
+
+    if (vm86 && n != TSS_LDT) {
+        k_memset(s, 0, sizeof(*s));
+        s->selector = sel;
+        s->base = (uint64_t)sel << 4;
+        s->limit = 0xFFFFu;
+        s->type = 3;
+        s->present = 1;
+        s->s = 1;
+        s->dpl = 3;
+        return 0;
+    }
+    if (!(sel & 0xFFFCu)) {
+        if (n == KVM_SEG_CS || n == KVM_SEG_SS) {
+            return ts_fault(v, GP_VECTOR, 0);
+        }
+        k_memset(s, 0, sizeof(*s));
+        s->selector = sel;
+        s->unusable = 1;
+        return 0;
+    }
+    r = desc_read(v, sel, &d);
+    if (r != 0) {
+        return r;
+    }
+    nr = seg_refused(n, sel, &d, cpl);
+    if (nr != 0) {
+        return ts_fault(v, (uint8_t)nr, sel & 0xFFFCu);
+    }
+    if (DESC_S(&d) && !(d.b[5] & 1u)) {
+        d.b[5] |= 1u;
+        r = desc_write_type(v, &d);
+        if (r != 0) {
+            return r;
+        }
+    }
+    desc_seg(s, n == KVM_SEG_CS ? (uint16_t)((sel & 0xFFFCu) | cpl) : sel, &d);
+    return 0;
+}
+
+/** The DPL check of the task gate at IDT vector `vec` that an INT n goes
+ * through, which Linux makes for software interrupts: 0, or -1 with
+ * #GP(`vec`, IDT) queued when the gate's DPL is below the CPL or below the
+ * RPL of the TSS selector `sel`. */
+static int gate_check(struct kvm_vcpu *v, uint16_t sel, uint32_t vec)
+{
+    uint32_t error = (vec << 3) | 2u, dpl;
+    uint8_t g[8];
+    int r;
+
+    if (v->sregs.idt.limit < vec * 8u + 7u) {
+        return ts_fault(v, GP_VECTOR, error);
+    }
+    r = system_rw(v, (v->sregs.idt.base + vec * 8u) & 0xFFFFFFFFull, g, 8, 0);
+    if (r != 0) {
+        return r;
+    }
+    dpl = ((uint32_t)g[5] >> 5) & 3u;
+    if ((sel & 3u) > dpl || (uint32_t)kvm_emul_cpl(v) > dpl) {
+        return ts_fault(v, GP_VECTOR, error);
+    }
+    return 0;
+}
+
+/**
+ * The checks and reads a task switch makes before it changes anything,
+ * whose faults the old task takes: the descriptors of the TSS `sel` and of
+ * the current one, the task gate of an INT n at `idt_index` (-1 for
+ * none), the new TSS present and big enough for its kind, as Linux's
+ * emulator_do_task_switch, and both TSSes read. 0; -1 with the fault
+ * queued; 1 or -EFAULT.
+ */
+static int ts_begin(struct kvm_vcpu *v, struct task_switch *ts, uint16_t sel, int reason,
+                    int idt_index)
+{
+    struct kvm_segment n;
+    int r;
+
+    ts->old_sel = v->sregs.tr.selector;
+    r = desc_read(v, sel, &ts->next);
+    if (r == 0) {
+        r = desc_read(v, ts->old_sel, &ts->cur);
+    }
+    if (r == 0 && reason == KVM_TS_GATE && idt_index >= 0) {
+        r = gate_check(v, sel, (uint32_t)idt_index);
+    }
+    if (r != 0) {
+        return r;
+    }
+    ts->l = (DESC_TYPE(&ts->next) & 8u) ? &tss32 : &tss16;
+    ts->lo = (v->sregs.tr.type & 8u) ? &tss32 : &tss16;
+    desc_seg(&n, sel, &ts->next);
+    if (!n.present || n.limit < ts->l->size - 1u) {
+        return ts_fault(v, TS_VECTOR, sel & 0xFFFCu);
+    }
+    ts->new_base = n.base;
+    r = system_rw(v, v->sregs.tr.base, ts->old_tss, ts->lo->size, 0);
+    if (r == 0) {
+        r = system_rw(v, n.base, ts->new_tss, ts->l->size, 0);
+    }
+    return r;
+}
+
+/**
+ * The writes of a task switch, in the order Linux's emulator_do_task_switch
+ * makes them: the current TSS's busy bit cleared for IRET and JMP, its
+ * EIP, EFLAGS (NT cleared for IRET), general registers and selectors saved
+ * with `next_rip` the EIP, the new TSS's back link for CALL and a task
+ * gate, and its busy bit set but for IRET. 0; -1 with #PF queued; 1 or
+ * -EFAULT.
+ */
+static int ts_save(struct kvm_vcpu *v, struct task_switch *ts, int reason, uint64_t next_rip)
+{
+    const struct tss_layout *lo = ts->lo;
+    uint64_t rflags = v->regs.rflags;
+    uint8_t *t = ts->old_tss;
+    int i, r = 0;
+
+    if (reason == KVM_TS_IRET || reason == KVM_TS_JMP) {
+        ts->cur.b[5] &= (uint8_t)~2u;
+        r = desc_write_type(v, &ts->cur);
+    }
+    if (reason == KVM_TS_IRET) {
+        rflags &= ~RFLAGS_NT;
+    }
+    put_le(t + lo->ip, lo->width, (uint32_t)next_rip);
+    put_le(t + lo->flags, lo->width, (uint32_t)rflags);
+    for (i = 0; i < 8; i++) {
+        put_le(t + lo->regs + (uint32_t)i * lo->width, lo->width, (uint32_t)*gpr(v, i));
+    }
+    for (i = 0; i < (int)lo->nsels; i++) {
+        put_le(t + lo->sels + (uint32_t)i * lo->width, lo->width, task_seg(v, i)->selector);
+    }
+    if (!lo->cr3) {
+        put_le(t + lo->ldt, 2, v->sregs.ldt.selector);
+    }
+    if (r == 0) {
+        r = system_rw(v, v->sregs.tr.base + lo->save_from, t + lo->save_from,
+                      lo->save_to - lo->save_from, 1);
+    }
+    if (r == 0 && (reason == KVM_TS_CALL || reason == KVM_TS_GATE)) {
+        put_le(ts->new_tss, 2, ts->old_sel);
+        r = system_rw(v, ts->new_base, ts->new_tss, 2, 1);
+    }
+    if (r == 0 && reason != KVM_TS_IRET) {
+        ts->next.b[5] |= 2u;
+        r = desc_write_type(v, &ts->next);
+    }
+    return r;
+}
+
+/**
+ * Make the new task current, as the processor does once the switch is
+ * committed: TR the new TSS, CR0.TS set, DR7's local enables cleared, then
+ * the TSS's CR3, EIP, EFLAGS (NT set for CALL and a task gate), general
+ * registers and selectors. A CR3 whose PAE PDPTEs do not load is #GP(0)
+ * in the new task, with the registers left as they were. 0 or -1.
+ */
+static int ts_enter(struct kvm_vcpu *v, const struct task_switch *ts, uint16_t sel, int reason)
+{
+    const struct tss_layout *l = ts->l;
+    const uint8_t *t = ts->new_tss;
+    uint64_t cr3, pdpte[4];
+    int i;
+
+    desc_seg(&v->sregs.tr, sel, &ts->next);
+    v->sregs.cr0 |= CR0_TS;
+    v->debugregs.dr7 &= ~DR7_LOCAL;
+    v->events.interrupt.shadow = 0;
+    v->dirty |= KVM_PART_SREGS | KVM_PART_DEBUG | KVM_PART_EVENTS;
+    kvm_vcpu_kick(v, KVM_REQ_EVENT);
+    if (l->cr3) {
+        cr3 = get_le(t + l->cr3, 4);
+        if ((v->sregs.cr0 & CR0_PG) && (v->sregs.cr4 & CR4_PAE) && !(v->sregs.efer & EFER_LMA) &&
+            kvm_guest_pdptes(v, cr3, pdpte) != 0) {
+            return ts_fault(v, GP_VECTOR, 0);
+        }
+        v->sregs.cr3 = cr3;
+    }
+    v->regs.rip = get_le(t + l->ip, l->width);
+    v->regs.rflags = get_le(t + l->flags, l->width) | 2u;
+    if (reason == KVM_TS_CALL || reason == KVM_TS_GATE) {
+        v->regs.rflags |= RFLAGS_NT;
+    }
+    for (i = 0; i < 8; i++) {
+        *gpr(v, i) = get_le(t + l->regs + (uint32_t)i * l->width, l->width);
+    }
+    for (i = 0; i < (int)l->nsels; i++) {
+        task_seg(v, i)->selector = (uint16_t)get_le(t + l->sels + (uint32_t)i * l->width, 2);
+    }
+    v->sregs.ldt.selector = (uint16_t)get_le(t + l->ldt, 2);
+    return 0;
+}
+
+/** Load the descriptors of the new task's selectors, in Linux's order: the
+ * LDT's, then ES, CS, SS, DS and, from a 32-bit TSS, FS and GS. Their faults
+ * are the new task's. 0; -1 with the fault queued; 1 or -EFAULT. */
+static int ts_load(struct kvm_vcpu *v, const struct task_switch *ts)
+{
+    static const int order[7] = {TSS_LDT,    KVM_SEG_ES, KVM_SEG_CS, KVM_SEG_SS,
+                                 KVM_SEG_DS, KVM_SEG_FS, KVM_SEG_GS};
+    int vm86 = (v->regs.rflags & RFLAGS_VM) != 0, i, r;
+    uint32_t cpl = vm86 ? 3u : (v->sregs.cs.selector & 3u);
+
+    for (i = 0; i < (int)ts->l->nsels + 1; i++) {
+        r = load_seg(v, order[i], cpl, vm86);
+        if (r != 0) {
+            return r;
+        }
+    }
+    return 0;
+}
+
+/** Push `error`, the error code of the exception whose task gate made the
+ * switch, on the new task's stack, a word or a doubleword by its TSS's
+ * kind, with #SS(0) past SS's limit. 0; -1 with the fault queued; 1 or
+ * -EFAULT. */
+static int ts_push(struct kvm_vcpu *v, const struct task_switch *ts, uint32_t error)
+{
+    const struct kvm_segment *ss = &v->sregs.ss;
+    uint32_t size = ts->l->width;
+    uint64_t mask = ss->db ? 0xFFFFFFFFull : 0xFFFFull;
+    uint64_t sp = (v->regs.rsp - size) & mask, end = sp + size - 1u;
+    uint8_t b[4];
+    int r;
+
+    if ((ss->type & 4u) ? (sp <= ss->limit || end > mask) : end > ss->limit) {
+        return ts_fault(v, SS_VECTOR, 0);
+    }
+    put_le(b, size, error);
+    r = kvm_guest_rw(v, KVM_SEG_SS, sp, b, size, 1);
+    if (r == 0) {
+        v->regs.rsp = (v->regs.rsp & ~mask) | sp;
+    }
+    return r;
+}
+
+int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index, uint64_t next_rip,
+                    int64_t error)
+{
+    struct task_switch ts;
+    int r;
+
+    r = ts_begin(v, &ts, sel, reason, idt_index);
+    if (r == 0) {
+        r = ts_save(v, &ts, reason, next_rip);
+    }
+    if (r != 0) {
+        return r;
+    }
+    r = ts_enter(v, &ts, sel, reason);
+    if (r == 0) {
+        r = ts_load(v, &ts);
+    }
+    if (r == 0 && error >= 0) {
+        r = ts_push(v, &ts, (uint32_t)error);
+    }
+    return r == -1 ? 0 : r;
+}

@@ -946,16 +946,11 @@ static int pae_paging(const struct kvm_vcpu *v)
 static int pdpte_load(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
-    uint64_t p[4], reserved = (~0ull << kvm_guest_maxphyaddr(v)) | 0x1E6ull;
+    uint64_t p[4];
     int i;
 
-    if (kvm_guest_phys_rw(v, v->sregs.cr3 & 0xFFFFFFE0ull, p, sizeof(p), 0) != 0) {
+    if (kvm_guest_pdptes(v, v->sregs.cr3, p) != 0) {
         return -1;
-    }
-    for (i = 0; i < 4; i++) {
-        if ((p[i] & 1u) && (p[i] & reserved)) {
-            return -1;
-        }
     }
     for (i = 0; i < 4; i++) {
         x->pdpte[i] = p[i];
@@ -2074,6 +2069,48 @@ static int exit_exception(struct kvm_vcpu *v)
 }
 
 /**
+ * A task switch (exit 9), which the kernel carries out, as Linux's
+ * handle_task_switch: the TSS selector and the source from the
+ * qualification; through a task gate, the event the exit found under
+ * delivery taken off the queue, an NMI leaving NMIs blocked and an
+ * exception giving its error code to push; an instruction that caused it
+ * stepped past in the EIP the old task saves. A TSS or table in no slot
+ * is the internal error Linux reports.
+ */
+static int exit_task_switch(struct kvm_vcpu *v)
+{
+    struct vmx_exit *e = &vx(v)->ex;
+    uint32_t info = e->idt_info, type = INTR_TYPE(info);
+    int reason = (int)((e->qual >> 30) & 3u), valid = (info & INTR_VALID) != 0;
+    int has_error = 0, r;
+    uint64_t next = v->regs.rip;
+
+    if (reason == KVM_TS_GATE && valid && type == TYPE_NMI) {
+        v->events.nmi.injected = 0;
+        v->events.nmi.masked = 1;
+    } else if (reason == KVM_TS_GATE && valid &&
+               (type == TYPE_EXT_INTR || type == TYPE_SOFT_INTR)) {
+        v->events.interrupt.injected = 0;
+    } else if (reason == KVM_TS_GATE && valid) {
+        has_error = type == TYPE_HW_EXC && (info & INTR_ERRCODE);
+        v->events.exception.injected = 0;
+        v->events.exception.pending = 0;
+    }
+    if (!valid || (type != TYPE_HW_EXC && type != TYPE_EXT_INTR && type != TYPE_NMI)) {
+        next = (next + e->insn_len) & 0xFFFFFFFFull;
+    }
+    r = kvm_task_switch(v, (uint16_t)e->qual, reason,
+                        valid && type == TYPE_SOFT_INTR ? (int)INTR_VECTOR(info) : -1, next,
+                        has_error ? (int64_t)e->idt_error : -1);
+    if (r > 0) {
+        v->exit.kind = KVM_X_INTERNAL;
+        k_memset(&v->exit.internal, 0, sizeof(v->exit.internal));
+        v->exit.internal.suberror = KVM_INTERNAL_ERROR_EMULATION;
+    }
+    return r < 0 && r != -1 ? r : 0;
+}
+
+/**
  * The exits of instructions the kernel answers alone, each stepped past
  * or faulted: CPUID, HLT, INVD, MONITOR, MWAIT, WBINVD, RDPMC, XSETBV,
  * VMCALL, GETSEC and the VMX instructions of a nested guest, which is not
@@ -2197,6 +2234,8 @@ static int exit_reason(struct kvm_vcpu *v)
         return exit_msr(v, 1);
     case EXIT_EPT_VIOLATION:
         return exit_ept(v);
+    case EXIT_TASK_SWITCH:
+        return exit_task_switch(v);
     default:
         break;
     }
