@@ -1,6 +1,7 @@
 #!/bin/bash
 # Exercise assignment on a private GNU root; the machine case owns this root.
-# Usage: run.sh boot|nic-tcg|nic-kvm|dma|index|compat|kill|reassign
+# Usage: run.sh boot|nic-tcg|nic-kvm|dma|index|compat|kill|reassign|
+#               gpu|gpu-uefi|gpu-grub|gpu-kill
 set -eu
 mode=${1:-}
 work='' pid='' reader='' traffic='' keep=0
@@ -39,7 +40,8 @@ edu=0000:00:07.0
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-assign.XXXXXX")
 [ -e /dev/vfio/vfio ] || fail 'VFIO is absent'
 bind "$nic"
-bind "$edu"
+# In the gpu cases the fake Intel chip has EDU, and gpu.sh takes it from there.
+case $mode in gpu*) ;; *) bind "$edu" ;; esac
 before=$(counts)
 [ "$(printf '%s\n' "$before" | wc -l)" = 11 ] || fail 'missing assignment counters'
 echo "assign: before: $before"
@@ -120,6 +122,23 @@ case $mode in
             sh ../kvm/kvm-boot.sh -a tcg -k vmlinuz -i initrd -t 'ASSIGNGUEST OK' \
                 -o "$work/second" -- -machine q35 -device "vfio-pci,host=$nic" || fail 'second guest failed'
         fi
+        ;;
+    gpu|gpu-uefi|gpu-grub|gpu-kill)
+        # The Lenovo's script and command line, with EDU under the fake chip
+        # of rach2.i915fake in the GPU's place; the guest finds EDU at 00:02.0
+        # and reads its identification register through its BAR.
+        set -- -d "$edu" -a tcg -m 256 -s 1 -o "$work/gpu" -t 'ASSIGNGUEST BAR0 0x010000ED'
+        case $mode in
+            gpu) set -- "$@" -k vmlinuz -i initrd -l assign.gpu ;;
+            gpu-uefi) set -- "$@" -f uefi -k vmlinuz -i initrd -l assign.gpu ;;
+            gpu-grub) set -- "$@" -f uefi -D grub.img ;;
+            gpu-kill) set -- "$@" -k vmlinuz -i initrd -l 'assign.gpu assign.hold' -K 'ASSIGNGUEST HOLD' ;;
+        esac
+        start=$(date +%s)
+        bash gpu.sh "$@" || fail "$mode: the function did not go to the guest and back"
+        grep -q 'ASSIGNGUEST DEVICE 0x1234 0x11e8 ' "$work/gpu/console" || fail 'the guest did not find EDU at 00:02.0'
+        [ "$mode" != gpu-grub ] || grep -q 'ASSIGNGUEST GRUB' "$work/gpu/console" || fail "the guest's GRUB did not run"
+        echo "assign: elapsed: $(( $(date +%s) - start )) s: $mode"
         ;;
     *) fail 'unknown case' ;;
 esac

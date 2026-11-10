@@ -414,6 +414,8 @@ static int32_t handoff_bring_up(const pci_device_t *pdev)
         err = kcmdline_has("rach2.i915fake") ? i915_fake_bind(pdev) : -ENODEV;
         if (err != 0) {
             bind_undo(pdev);
+        } else {
+            klog(KLOG_INFO, "i915", "handoff: %s: bound", name);
         }
         return err;
     }

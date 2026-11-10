@@ -1,9 +1,26 @@
 #!/bin/busybox sh
 # Bind the assigned NIC, ping its outer gateway, then power off or keep traffic.
+# With assign.gpu, report the function assigned at 00:02.0 instead: its ids
+# and class, and the first register of its first memory BAR.
 b=/bin/busybox
 $b mount -t proc proc /proc
 $b mount -t sysfs sysfs /sys
 $b mount -t devtmpfs devtmpfs /dev
+case " $($b cat /proc/cmdline) " in
+    *' assign.gpu '*)
+        d=/sys/bus/pci/devices/0000:00:02.0
+        echo "ASSIGNGUEST DEVICE $($b cat $d/vendor) $($b cat $d/device) $($b cat $d/class)"
+        # The first line of `resource` is BAR 0: its start, its end and its flags.
+        set -- $($b head -n 1 $d/resource)
+        if [ $(($3 & 0x200)) != 0 ] && echo 1 > $d/enable; then
+            echo "ASSIGNGUEST BAR0 $($b devmem "$1" 32)"
+        fi
+        case " $($b cat /proc/cmdline) " in
+            *' assign.hold '*)
+                while :; do echo 'ASSIGNGUEST HOLD'; $b sleep 1; done ;;
+        esac
+        $b poweroff -f ;;
+esac
 for name in failover net_failover virtio virtio_ring virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci virtio_net; do
     [ -f /modules/$name.ko ] || continue
     $b insmod /modules/$name.ko || { echo "assignguest: module failed: $name"; $b poweroff -f; }
