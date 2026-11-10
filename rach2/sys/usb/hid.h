@@ -13,14 +13,15 @@
 #define HID_MOUSE    2
 
 /* What the core read of a device for the driver: its identity, bcdHID from
- * its HID descriptor, and its manufacturer and product strings in UTF-8,
- * empty when it has none. */
+ * its HID descriptor, and its manufacturer, product and serial strings in
+ * UTF-8, each empty when it has none. */
 struct hid_ids {
     uint16_t vendor;
     uint16_t product;
     uint16_t version;
     const char *manufacturer;
     const char *product_name;
+    const char *serial;
 };
 
 /**

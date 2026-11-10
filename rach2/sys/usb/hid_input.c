@@ -1140,6 +1140,7 @@ static void register_input(struct hid_dev *hid, struct hid_input *in)
         evdev_describe(dev, hid->phys, test_bit(in->msc, MSC_SCAN) ? EVDEV_SCAN : 0);
     }
     in->dev = dev;
+    evdev_set_uniq(dev, hid->uniq);
     evdev_set_version(dev, hid->version);
     for (code = 0; code <= REL_MAX; code++) {
         if (test_bit(in->rel, code)) {

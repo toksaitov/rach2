@@ -206,6 +206,29 @@ static void name_device(char *out, size_t size, const struct hid_ids *ids, const
     }
 }
 
+/**
+ * Copy the serial string `serial`, UTF-8 or NULL, into `out` of `size`
+ * bytes, cut before a character that would not fit, as usbhid's
+ * `usb_string` into `hid->uniq` cuts it; "" for none.
+ */
+static void copy_serial(char *out, size_t size, const char *serial)
+{
+    size_t i = 0, need;
+
+    while (serial && serial[i]) {
+        uint8_t c = (uint8_t)serial[i];
+
+        need = c < 0xC0 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        if (i + need >= size) {
+            break;
+        }
+        for (; need > 0 && serial[i]; need--, i++) {
+            out[i] = serial[i];
+        }
+    }
+    out[i] = 0;
+}
+
 /** The state of `device`, or NULL for one out of range. */
 static struct hid_state *state_of(int device)
 {
@@ -395,6 +418,7 @@ int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int 
     name_device(hid->name, sizeof(hid->name), ids, "HID ");
     name_phys(state, device);
     hid->phys = state->phys;
+    copy_serial(hid->uniq, sizeof(hid->uniq), ids->serial);
     hid->vendor = ids->vendor;
     hid->product = ids->product;
     hid->version = ids->version;
