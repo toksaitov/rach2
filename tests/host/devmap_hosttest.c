@@ -708,6 +708,7 @@ int main(void)
 
     _frames = calloc(FRAMES, sizeof(uint32_t));
     _frames_number = FRAMES;
+    _frame_anon = calloc((FRAMES + 7u) / 8u, 1);
     for (i = 0; i < OBJ_PAGES; i++) {
         dev_obj.frame[i] = (uintptr_t)(DEV_FRAME + i) * PAGE_SIZE;
         ram_obj.frame[i] = (uintptr_t)(RAM_FRAME0 + i) * PAGE_SIZE;
@@ -733,6 +734,7 @@ int main(void)
     dir_free(&dir_b);
     vm_free(&mm_a.vm);
     vm_free(&mm_b.vm);
+    free(_frame_anon);
     free(_frames);
 
     if (fails) {

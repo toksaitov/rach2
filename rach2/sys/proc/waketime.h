@@ -33,7 +33,8 @@ struct process;
  * the platform timer when no TSC was calibrated. Interrupts are off. */
 uint32_t waketime_clock(void);
 
-/** Start a timed wake of blocked `p` at tick `due`, in the timer pass.
+/** Start a timed wake of blocked user thread `p` at tick `due`.
+ * A kernel thread has no user return and starts no record.
  * The big lock is held and interrupts are off. An unfinished wake keeps
  * its first deadline, including a later block before returning to user. */
 void waketime_expire(struct process *p, uint64_t due);

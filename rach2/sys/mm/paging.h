@@ -499,20 +499,28 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va);
  * since Linux maps its zero page there, which belongs to no node. */
 int paging_user_page(page_dir_t *dir, uintptr_t va);
 
-/** Count the pages of memory in the user range [start, end) of `dir`, those
- * `paging_user_page` calls PAGING_PAGE_FRAME, into `*frames`; of them those
- * the processor marked dirty into `*dirty` and those pinned for a device
- * (`frame_pin`) into `*pinned`. Absent tables are passed as
- * `paging_user_count` passes them. */
-void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *frames,
-                        unsigned long *dirty, unsigned long *pinned);
+/* Counts of resident RAM pages in a user range; device and zero pages are
+ * excluded. Anonymous ownership is independent of the dirty bit. */
+struct paging_frame_counts {
+    unsigned long frames;
+    unsigned long dirty;
+    unsigned long pinned;
+    unsigned long anon;
+};
+
+/** Count the pages paging_user_page calls PAGING_PAGE_FRAME in [start, end)
+ * of `dir` into `counts`, including dirty, pinned and anonymous subsets.
+ * Pass absent tables as paging_user_count does. */
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
+                        struct paging_frame_counts *counts);
 
 /** Count the present pages of the user range [start, end) of `dir` into
- * `*present`, and of them those the processor marked dirty into `*dirty`,
+ * `*present`, those the processor marked dirty into `*dirty`, and those
+ * whose frames are marked anonymous into `*anon`,
  * passing a span of absent tables in one step (`mmu_user_skip`), so that a
  * large region with few pages costs few steps. */
 void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
-                       unsigned long *dirty);
+                       unsigned long *dirty, unsigned long *anon);
 
 struct mm;
 

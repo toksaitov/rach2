@@ -1893,8 +1893,9 @@ sealed.
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
 Anonymous counts every page of a private region of no file, and the
-dirty pages of a private region read from a file, which Linux has copied
-from the file; gdb's gcore leaves the other regions of a file out of a
+pages of a private file region whose frames have become anonymous.
+The frame keeps this classification across fork and copy-on-write,
+independently of the page-table dirty bit; gdb's gcore leaves the other regions of a file out of a
 core.
 The kernel does not count the processes that map a page, so Pss is Rss.
 Swap and SwapPss read 0, and Locked is Rss for a locked region and 0
@@ -1988,7 +1989,7 @@ voluntary_ctxt_switches and nonvoluntary_ctxt_switches, the times the
 scheduler switched away from the thread while it slept or was stopped,
 and while it could still run.
 .Pp
-Rach2 also reports TimedWakeCount, the thread's completed timed wakes,
+For user threads Rach2 also reports TimedWakeCount, the thread's completed timed wakes,
 and TimedWakeLast, TimedWakeWorst and TimedWakeSum, the last wake, the
 wake with the longest total delay, and the sums of all completed wakes.
 Each of the latter three has eight microsecond columns:

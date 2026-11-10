@@ -93,6 +93,12 @@
 #define SIGKILL      9
 #define ESRCH        3
 
+#if defined __x86_64__
+#define SYS_MEMFD_CREATE 319
+#else
+#define SYS_MEMFD_CREATE 356
+#endif
+
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
@@ -269,6 +275,8 @@ static const struct row {
             {"cwd-walk", ROW_PLAIN},
             {"status-cpus-allowed", ROW_PLAIN},
             {"status-rss-kinds", ROW_PLAIN},
+            {"status-rss-fork-file", ROW_PLAIN},
+            {"status-rss-fork-shmem", ROW_PLAIN},
             {"ns-listing", ROW_PLAIN},
             {"ns-chdir", ROW_PLAIN},
             {"net-class-listed", ROW_PLAIN},
@@ -1531,6 +1539,108 @@ static void status_rss_row(const char *b, int n)
           "/proc/self/status divides VmRSS among RssAnon, RssFile and RssShmem");
 }
 
+/** Read the three resident counts of `pid` into `rss`; 0 or -1. The parent
+ * reads a stopped-at-a-pipe child, so making the text changes no child page. */
+static int child_rss(int pid, int rss[3])
+{
+    char path[40] = "/proc/";
+    int n = 6, k;
+
+    n += dec_of(path + n, (unsigned int)pid);
+    for (k = 0; k < 8; k++) {
+        path[n++] = "/status"[k];
+    }
+    n = slurp(path, buf, (int)sizeof(buf));
+    rss[0] = uint_after(buf, n, "RssAnon:");
+    rss[1] = uint_after(buf, n, "RssFile:");
+    rss[2] = uint_after(buf, n, "RssShmem:");
+    return rss[0] >= 0 && rss[1] >= 0 && rss[2] >= 0 ? 0 : -1;
+}
+
+/** A private file page dirtied before fork stays anonymous in the child,
+ * before and after its own COW write. Removing it must remove exactly 4 KiB
+ * of RssAnon. `memory` selects a memfd instead of the executable's file;
+ * `write_child` asks the child to write before the first snapshot. All
+ * descriptors, mappings and the child are released even after a failure. */
+static int rss_fork_file(int memory, int write_child)
+{
+    struct handshake h;
+    long at = -1;
+    int fd = -1, pid = -1, status = -1, ok = 0, before[3], after[3];
+    char byte = 'r';
+
+    h.ready[0] = h.ready[1] = h.go[0] = h.go[1] = -1;
+    fd = memory ? (int)syscall2(SYS_MEMFD_CREATE, (long)"procprobe-rss", 0)
+                : (int)syscall3(SYS_OPEN, (long)"/proc/self/exe", O_RDONLY, 0);
+    if (fd < 0 || (memory && probe_ftruncate64(fd, 4096) != 0)) {
+        goto out;
+    }
+    at = probe_mmap(0, 4096, 3, 2, fd, 0);
+    if (sys_failed(at)) {
+        goto out;
+    }
+    ((volatile char *)at)[0] ^= 1;
+    if (handshake_open(&h) != 0) {
+        goto out;
+    }
+    pid = (int)syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        handshake_child(&h);
+        if (write_child) {
+            ((volatile char *)at)[0] ^= 1;
+        }
+        handshake_hold(&h);
+        if (syscall2(SYS_MUNMAP, at, 4096) != 0) {
+            sys_exit(1);
+        }
+        handshake_hold(&h);
+        sys_exit(0);
+    }
+    syscall1(SYS_CLOSE, h.ready[1]);
+    syscall1(SYS_CLOSE, h.go[0]);
+    h.ready[1] = h.go[0] = -1;
+    if (pid <= 0 || syscall3(SYS_READ, h.ready[0], (long)&byte, 1) != 1 ||
+        child_rss(pid, before) != 0 || syscall3(SYS_WRITE, h.go[1], (long)&byte, 1) != 1 ||
+        syscall3(SYS_READ, h.ready[0], (long)&byte, 1) != 1 || child_rss(pid, after) != 0) {
+        goto out;
+    }
+    ok = before[0] - after[0] == 4 && before[1] == after[1] && before[2] == after[2];
+    syscall1(SYS_CLOSE, h.go[1]);
+    h.go[1] = -1;
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
+        ok = 0;
+    }
+    pid = -1;
+out:
+    if (pid > 0) {
+        syscall2(SYS_KILL, pid, SIGKILL);
+        syscall3(SYS_WAITPID, pid, (long)&status, 0);
+    }
+    syscall1(SYS_CLOSE, h.ready[0]);
+    syscall1(SYS_CLOSE, h.ready[1]);
+    syscall1(SYS_CLOSE, h.go[0]);
+    syscall1(SYS_CLOSE, h.go[1]);
+    if (!sys_failed(at)) {
+        syscall2(SYS_MUNMAP, at, 4096);
+    }
+    syscall1(SYS_CLOSE, fd);
+    return ok;
+}
+
+/** Check inherited private pages from a regular file and from shmem. */
+static void rss_fork_rows(void)
+{
+    int memory, wrote;
+
+    for (memory = 0; memory < 2; memory++) {
+        for (wrote = 0; wrote < 2; wrote++) {
+            check(memory ? "status-rss-fork-shmem" : "status-rss-fork-file",
+                  rss_fork_file(memory, wrote),
+                  "an inherited private file copy stays RssAnon before and after a child write");
+        }
+    }
+}
+
 /** A /proc/<pid> directory lists its files in their order, `task` last, and a
  * thread's directory under `task` lists them with `children` in place of
  * `task`; /proc/self/limits has Linux's header and sixteen limits; /proc
@@ -2782,6 +2892,7 @@ void probe_main(unsigned long *sp)
 #endif
     anonymous_rows();
     pid_dir_rows();
+    rss_fork_rows();
     pool_full_rows();
     connection_owner_rows();
 

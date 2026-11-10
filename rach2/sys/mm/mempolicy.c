@@ -321,7 +321,7 @@ static long range_scan(struct mm *mm, uintptr_t start, uintptr_t end, unsigned i
                        int gaps_ok, int misplaced)
 {
     const vma_t *r = vm_lower(&mm->vm, start);
-    unsigned long frames, dirty, pinned;
+    struct paging_frame_counts counts;
     long failed = 0;
 
     if (!r || r->start >= end || (!gaps_ok && r->start > start)) {
@@ -337,11 +337,11 @@ static long range_scan(struct mm *mm, uintptr_t start, uintptr_t end, unsigned i
         if (!misplaced || !(flags & MPOL_MF_STRICT) || (r->prot & VM_PROT_IO)) {
             continue;
         }
-        paging_user_frames(mm->dir, s, e, &frames, &dirty, &pinned);
-        if (frames != 0 && !(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL))) {
+        paging_user_frames(mm->dir, s, e, &counts);
+        if (counts.frames != 0 && !(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL))) {
             return -EIO;
         }
-        failed += (long)pinned;
+        failed += (long)counts.pinned;
     }
     return failed;
 }
