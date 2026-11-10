@@ -47,12 +47,15 @@
 # once UNTIL has passed, which puts the loop back on its defaults by itself.
 #
 # A session that ends on the account's usage limit makes the loop wait fifteen
-# minutes. One shorter than two minutes for another reason, such as a lost
-# network or a lapsed login, doubles the wait before the next, from one minute
-# up to thirty. A session still running after six hours is stopped, with
-# every process in its group. A loop that starts while a session of the loop
-# before it still runs, as one does after that loop's tmux session is killed,
-# waits for the session to end before it does anything in the clone.
+# minutes, and STATE/limit keeps the time the limit's message gives for its
+# reset: until then a loop whose task went to another account claims no new
+# one, which it could not work. One shorter than two minutes for another
+# reason, such as a lost network or a lapsed login, doubles the wait before
+# the next, from one minute up to thirty. A session still running after six
+# hours is stopped, with every process in its group. A loop that starts while
+# a session of the loop before it still runs, as one does after that loop's
+# tmux session is killed, waits for the session to end before it does anything
+# in the clone.
 #
 # While it holds no task, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its
@@ -227,6 +230,11 @@ main()
             fi
         fi
         if [ -z "$issue" ]; then
+            until=$(cat "$state/limit" 2> /dev/null)
+            if [ "$(date +%s)" -lt "${until:-0}" ]; then
+                sleep 300
+                continue
+            fi
             tidy
             prune_logs 's-*'
             if ! claim; then
@@ -250,9 +258,11 @@ main()
         session "$issue" "$branch"
         if why=$(limited "$last.jsonl" "$last.err"); then
             log "limit: $why"
+            limit_end "$why" > "$state/limit"
             sleep 900
             continue
         fi
+        rm -f "$state/limit"
         if [ "$took" -lt 120 ] && [ "$(gh issue view "$issue" --repo "$REPO" \
             --json state --jq .state)" != CLOSED ]; then
             fails=$((fails + 1))

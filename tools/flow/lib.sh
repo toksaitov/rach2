@@ -99,6 +99,25 @@ limited()
         tail -n 2 "$2"; } 2> /dev/null | grep -o 'hit your [a-z0-9-]* limit[^"\\]*' | head -n 1 | grep .
 }
 
+# limit_end WHY: print the time, in seconds since the epoch, at which the
+# limit whose message is WHY resets, when the message gives it as a time of
+# day in a zone within the next five hours, as "resets 10:50pm (Asia/Almaty)"
+# does; print 0 for any other message, a weekly limit's among them.
+limit_end()
+{
+    printf '%s\n' "$1" | perl -MPOSIX -ne '
+        if (/resets (\d{1,2})(?::(\d\d))? ?(am|pm) \(([A-Za-z0-9_\/+-]+)\)/) {
+            $ENV{TZ} = $4;
+            tzset();
+            @t = localtime;
+            $d = ($1 % 12 + ($3 eq "pm" ? 12 : 0) - $t[2]) * 3600 +
+                (($2 || 0) - $t[1]) * 60 - $t[0];
+            $d += 86400 if $d < 0;
+            $end = time + $d if $d <= 18600;
+        }
+        END { print $end || 0, "\n" }'
+}
+
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
 # its errors in ERR under `session.pl`, in a process group of its own that
 # STATE/session records before COMMAND starts, and stop the whole group when
