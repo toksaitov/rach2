@@ -51,6 +51,17 @@ Its options are the release (`-v`, 1.4.7.1, the Lenovo's references, or 1.4.1.1,
 
 On Rach2 the `venus` suite, `tests/run venus`, runs the same lists through Venus, a case such as `machine.venus.smoke` or `machine.venus.fraction-3`, and kills the host's render server under it in `machine.venus.device-lost` ([Venus's dEQP](#venuss-deqp)).
 
+The runners draw on the guest's GPU when told to: `piglit.sh -g` and `webgl.sh -g`, and `deqp.sh` whenever EGL finds one. [`runners/glinfo.sh`](runners/glinfo.sh) names the renderer that `eglinfo` and `glxinfo` see, and [`runners/virgl-lost.sh`](runners/virgl-lost.sh), as root, resets the virtio-gpu device under GL programs and a Weston. `piglit.sh -l LIST` runs the tests of a list, every Nth with `-e` and `-s` as `deqp.sh` takes them. `debian.sh` runs each in the Debian guest on the `virgl` profile, as the references of [`ref/virgl-wsl`](ref/virgl-wsl/Readme.md) were made:
+
+    sh tests/graphics/runners/debian.sh glinfo -p virgl -c 8 OUT
+    sh tests/graphics/runners/debian.sh piglit -p virgl -c 8 OUT -g -l /tmp/piglit-virgl.txt.gz -e 16 -s 1
+    sh tests/graphics/runners/debian.sh deqp -p virgl -c 8 OUT -v 1.4.1.1 -e 4 -s 1 \
+        -l /tmp/deqp-gles-virgl.txt.gz gles3
+    sh tests/graphics/runners/debian.sh webgl -p virgl -c 8 OUT -b firefox -v 2.0.1 -g all
+    sh tests/graphics/runners/debian.sh virgl-lost -p virgl -c 8 OUT
+
+On Rach2 the `virgl` suite, `tests/run virgl`, runs them, a case such as `machine.virgl.renderer`, `machine.virgl.piglit-07`, `machine.virgl.deqp-gles31-sample`, `machine.virgl.webgl-chromium-webgl2-03` or `machine.virgl.device-lost` ([virgl's GL](#virgls-gl)).
+
 [`runners/vkcube.sh`](runners/vkcube.sh) presents vkcube to a Weston of its own on the guest's card, as root, holds it at two frames and reads each back inside the guest; `-i` names the Vulkan ICD file to use alone and `-o` the output. `debian.sh vkcube` runs it in the Debian guest, as the reference was made, and the `vkpresent` suite, `tests/run vkpresent`, on Rach2, as the case `machine.vkpresent.vkcube` ([vkcube presenting](#vkcube-presenting)):
 
     sh tests/graphics/runners/debian.sh vkcube -p venus -c 8 OUT \

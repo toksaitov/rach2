@@ -1,0 +1,45 @@
+Rach2's x86-64 GNU root on the virgl profile ran
+tests/graphics/runners/virgl-lost.sh as it then was, which reset the
+virtio-gpu device under a Weston on the DRM card and its client,
+weston-simple-egl 14.0.2 on Debian 13's Mesa 25.0.7-2+deb13u1, without
+waiting for the client's first frames. In five runs the client ended with
+SIGSEGV after the reset, each before it had printed a count of frames;
+Rach2's kernel recorded a read at address 0. The client's output in one of
+them, with the stack a preloaded signal handler printed:
+
+    Using config: r8g8b8a8
+    has EGL_EXT_buffer_age and EGL_EXT_swap_buffers_with_damage
+    has EGL_EXT_surface_compression
+    got error from kernel - expect bad rendering 19
+    segv.so(+0x116e) [0x7e985c11916e]
+    /lib/libc.so.6(+0x40e50) [0x7e985be03e50]
+    /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so(+0x10a51f) [0x7e985922451f]
+    /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so(+0x100ea4) [0x7e985921aea4]
+    /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so(+0x1aa9d9) [0x7e98592c49d9]
+    /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so(+0x1ab844) [0x7e98592c5844]
+    /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so(+0x411f4f) [0x7e985952bf4f]
+    /usr/lib/x86_64-linux-gnu/libgallium-25.0.7-2+deb13u1.so(+0x416c0e) [0x7e9859530c0e]
+    weston-simple-egl(+0x59d0) [0x55fe8ff069d0]
+    /lib/libc.so.6(+0x2ade7) [0x7e985bdedde7]
+    /lib/libc.so.6(__libc_start_main+0x87) [0x7e985bdedf07]
+    weston-simple-egl(+0x62e1) [0x55fe8ff072e1]
+
+The frames in libgallium, by Debian's debug information for build ID
+f34ab849e878d8ffbbb15533a597ca31ebd583ec:
+
+    0x10a51f dri2_allocate_textures src/gallium/frontends/dri/dri2.c:410
+    0x100ea4 dri_st_framebuffer_validate src/gallium/frontends/dri/dri_drawable.c:79
+    0x1aa9d9 st_framebuffer_validate src/mesa/state_tracker/st_manager.c:239
+    0x1ab844 st_manager_validate_framebuffers src/mesa/state_tracker/st_manager.c:1239
+    0x411f4f st_update_framebuffer_state src/mesa/state_tracker/st_atom_framebuffer.c:122
+    0x416c0e st_Clear src/mesa/state_tracker/st_util.h:130 st_Clear src/mesa/state_tracker/st_cb_clear.c:399
+
+In the Debian 13 guest's three runs of the same runner, where the driver's
+unbind is the reset, the reset came before the client had opened the device:
+it printed
+
+    libEGL warning: wayland-egl: could not open /dev/dri/renderD128 (No such device)
+
+twice, drew in software and ran on. With the runner waiting for the
+client's first count of frames, the client outlives the reset in both
+guests.
