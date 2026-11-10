@@ -222,6 +222,11 @@ static const struct step {
     {"a tcp recvmsg did not take the bytes the two buffers hold", "tcp-recvmsg-take"},
     {"a nonblocking tcp recvmsg did not take the rest", "tcp-recvmsg-rest"},
     {"a nonblocking tcp recvmsg of an empty stream was not EAGAIN", "tcp-recvmsg-empty"},
+    {"tcp recvmsg changed a copied vector", "tcp-recvmsg-overlap"},
+    {"tcp recvmsg with empty buffers was not EAGAIN", "tcp-recvmsg-zero-empty"},
+    {"tcp recvmsg with empty buffers did not wait for input", "tcp-recvmsg-zero-wait"},
+    {"tcp recvmsg with empty buffers took queued input", "tcp-recvmsg-zero-ready"},
+    {"tcp recvmsg with empty buffers missed the end of input", "tcp-recvmsg-zero-eof"},
     {"tcp listener socket", "tcp-connect"},
     {"tcp bind", "tcp-connect"},
     {"tcp listen", "tcp-connect"},
@@ -966,6 +971,124 @@ static int recvmsg2_got(const char *want, int alen, int blen)
            mem_eq((const uint8_t *)rm_b, (const uint8_t *)want + alen, blen);
 }
 
+/** Receive on `s` into `count` vectors at `iov`, with no address or control
+ * buffer: the count read or a negated errno. */
+static int recvmsg_vec(int s, struct iovec_probe *iov, size_t count, int flags)
+{
+    struct msghdr_probe msg = {0};
+    unsigned long args[3];
+
+    msg.msg_iov = iov;
+    msg.msg_iovlen = count;
+    args[0] = (unsigned long)s;
+    args[1] = (unsigned long)&msg;
+    args[2] = (unsigned long)flags;
+    return socketcall(SC_RECVMSG, args);
+}
+
+/** A receive that overwrites its second vector must still use its original
+ * destination, for blocking, nonblocking and peeking reads on `cs` from
+ * `as`. The replacement is writable too, so the unfixed kernel fails the
+ * contents check without faulting. */
+static void tcp_recvmsg_overlap(int cs, int as)
+{
+    struct iovec_probe iov[2], replacement;
+    unsigned char wire[sizeof(replacement) + 1], got[sizeof(wire)];
+    char original, other;
+    int mode, flags, j;
+
+    for (mode = 0; mode < 3; mode++) {
+        flags = mode == 0 ? 0 : mode == 1 ? MSG_DONTWAIT : MSG_PEEK;
+        original = other = 0;
+        replacement.iov_base = &other;
+        replacement.iov_len = 1;
+        for (j = 0; j < (int)sizeof(replacement); j++)
+            wire[j] = ((unsigned char *)&replacement)[j];
+        wire[j] = 'x';
+        iov[0].iov_base = &iov[1];
+        iov[0].iov_len = sizeof(iov[1]);
+        iov[1].iov_base = &original;
+        iov[1].iov_len = 1;
+        if (sys_write(as, wire, sizeof(wire)) != (int)sizeof(wire) ||
+            recvmsg_vec(cs, iov, 2, flags) != (int)sizeof(wire) || original != 'x' || other != 0)
+            fail("tcp recvmsg changed a copied vector");
+        if (flags == MSG_PEEK && (sys_read(cs, got, sizeof(got)) != (int)sizeof(got) ||
+                                  !mem_eq(got, wire, sizeof(wire))))
+            fail("tcp recvmsg changed a copied vector");
+    }
+}
+
+/** Both empty vector forms must sleep before the peer sends, then return
+ * zero and leave its byte queued. The parent reaps each receiver. */
+static void tcp_recvmsg_zero_wait(int cs, int as)
+{
+    struct iovec_probe iov[2] = {{0, 0}, {0, 0}};
+    int count, pid, status;
+    char state, byte;
+
+    for (count = 0; count <= 2; count += 2) {
+        pid = sys_fork();
+        if (pid < 0)
+            fail("tcp recvmsg with empty buffers did not wait for input");
+        if (pid == 0)
+            sys_exit(recvmsg_vec(cs, iov, (size_t)count, 0) == 0 ? 0 : 1);
+        while ((state = state_of(pid)) != 'S') {
+            if (state == 0 || state == 'Z') {
+                sys_waitpid(pid, &status);
+                fail("tcp recvmsg with empty buffers did not wait for input");
+            }
+            sys_nanosleep_ms(10);
+        }
+        if (sys_write(as, "z", 1) != 1) {
+            syscall2(SYS_KILL, pid, 9);
+            sys_waitpid(pid, &status);
+            fail("tcp recvmsg with empty buffers did not wait for input");
+        }
+        if (sys_waitpid(pid, &status) != pid || status != 0 || sys_read(cs, &byte, 1) != 1 ||
+            byte != 'z')
+            fail("tcp recvmsg with empty buffers did not wait for input");
+    }
+}
+
+/** Empty TCP buffers, both a zero count and zero lengths, wait on an empty
+ * stream and leave a byte ready after they wake. The parent observes the
+ * child's sleeping state before sending, then reaps it and takes the byte.
+ * The last row closes input on `cs`. */
+static void tcp_recvmsg_zero(int cs, int as)
+{
+    struct iovec_probe iov[2] = {{0, 0}, {0, 0}};
+    unsigned long args[2];
+    int count;
+    char byte;
+
+    for (count = 0; count <= 2; count += 2) {
+        if (recvmsg_vec(cs, iov, (size_t)count, MSG_DONTWAIT) != -EAGAIN ||
+            syscall3(SYS_FCNTL, cs, F_SETFL, O_NONBLOCK) != 0 ||
+            recvmsg_vec(cs, iov, (size_t)count, 0) != -EAGAIN ||
+            syscall3(SYS_FCNTL, cs, F_SETFL, 0) != 0)
+            fail("tcp recvmsg with empty buffers was not EAGAIN");
+    }
+    tcp_recvmsg_zero_wait(cs, as);
+    if (sys_write(as, "r", 1) != 1)
+        fail("tcp recvmsg with empty buffers took queued input");
+    for (count = 0; count <= 2; count += 2) {
+        if (recvmsg_vec(cs, iov, (size_t)count, 0) != 0 ||
+            recvmsg_vec(cs, iov, (size_t)count, MSG_DONTWAIT | MSG_PEEK) != 0)
+            fail("tcp recvmsg with empty buffers took queued input");
+    }
+    if (sys_read(cs, &byte, 1) != 1 || byte != 'r')
+        fail("tcp recvmsg with empty buffers took queued input");
+    args[0] = (unsigned long)cs;
+    args[1] = 2; /* SHUT_RDWR */
+    if (socketcall(SC_SHUTDOWN, args) != 0)
+        fail("tcp recvmsg with empty buffers missed the end of input");
+    for (count = 0; count <= 2; count += 2) {
+        if (recvmsg_vec(cs, iov, (size_t)count, 0) != 0 ||
+            recvmsg_vec(cs, iov, (size_t)count, MSG_DONTWAIT) != 0)
+            fail("tcp recvmsg with empty buffers missed the end of input");
+    }
+}
+
 /** recvmsg on a stream, as QEMU reads its monitor's socket: a peek fills two
  * buffers in order and takes nothing, the header comes back with no
  * address, no control data and no flags, a receive takes what its buffers
@@ -991,6 +1114,8 @@ static void tcp_recvmsg(int cs, int as)
         fail("a nonblocking tcp recvmsg did not take the rest");
     if (recvmsg2(cs, 2, sizeof(rm_b), MSG_DONTWAIT) != -EAGAIN)
         fail("a nonblocking tcp recvmsg of an empty stream was not EAGAIN");
+    tcp_recvmsg_overlap(cs, as);
+    tcp_recvmsg_zero(cs, as);
 }
 
 /** A stream's bytes peeked at with MSG_PEEK stay in its ring: one byte

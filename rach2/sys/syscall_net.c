@@ -3432,20 +3432,22 @@ static int32_t iovs_writable(uintptr_t iov_user, uint32_t iovlen)
 }
 
 /**
- * Read a stream socket into the `iovlen` buffers at `iov_user` in order, as
+ * Read a stream socket into the `iovlen` copied buffers at `iov` in order, as
  * Linux's tcp_recvmsg: the first buffer that is not empty is read as recv(2)
  * reads, waiting for a byte unless MSG_DONTWAIT or O_NONBLOCK, and each later
  * one takes only what is queued already, stopping at the first that is left
  * short. With MSG_PEEK the later buffers are filled from past the bytes the
  * earlier ones were given, and nothing is taken from the queue. The buffers
- * were checked by the caller (`iovs_writable`). Returns the bytes read, 0 at
- * the end of input or for buffers that hold nothing, or -errno as recv(2):
+ * are checked before each use, since an earlier read may sleep. A vector
+ * with no capacity waits for input too, as Linux 6.12's tcp_recvmsg_locked
+ * and sock_rcvlowat do; it takes nothing. Returns the bytes read, 0 at the
+ * end of input or for empty buffers with input ready, or -errno as recv(2):
  * -EAGAIN, -ENOTCONN, -ECONNRESET, -EINTR or -EFAULT.
  */
-static int32_t stream_readv(fd_entry_t *entry, uintptr_t iov_user, uint32_t iovlen, int flags)
+static int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen,
+                            int flags)
 {
     struct socket *sock = entry->sock;
-    struct kernel_iovec iov;
     uint8_t *buf;
     uint32_t i, total = 0;
     int peek = (flags & MSG_PEEK) != 0;
@@ -3455,14 +3457,14 @@ static int32_t stream_readv(fd_entry_t *entry, uintptr_t iov_user, uint32_t iovl
     int32_t r;
 
     for (i = 0; i < iovlen; i++) {
-        if (iov_fetch(&iov, iov_user, i) != 0) {
-            return total ? (int32_t)total : -EFAULT;
-        }
-        if (iov.iov_len == 0) {
+        if (iov[i].iov_len == 0) {
             continue;
         }
-        buf = (uint8_t __force *)(void __user *)iov.iov_base;
-        len = (int)iov.iov_len;
+        if (iov[i].iov_len > 0x7FFFFFFFu || !user_buffer_ok(iov[i].iov_base, iov[i].iov_len, 1)) {
+            return total ? (int32_t)total : -EFAULT;
+        }
+        buf = (uint8_t __force *)(void __user *)iov[i].iov_base;
+        len = (int)iov[i].iov_len;
         if (total == 0) {
             r = nonblock ? socket_tcp_try_recv(sock, buf, len, peek)
                          : socket_tcp_recv(sock, buf, len, peek);
@@ -3483,27 +3485,46 @@ static int32_t stream_readv(fd_entry_t *entry, uintptr_t iov_user, uint32_t iovl
         }
     }
     if (total == 0 && i == iovlen) {
-        r = socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1);
-        return r == SOCK_EAGAIN ? 0 : r;
+        return nonblock ? socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1)
+                        : socket_tcp_recv(sock, (uint8_t *)0, 0, 1);
     }
     return (int32_t)total;
 }
 
 /**
  * recvmsg(2) on the stream socket `entry` with the header `hdr` read from
- * `msg_ptr`: the buffers checked, then read by `stream_readv`, and the header
- * written back with no address and no control data, `msg_flags` keeping only
- * MSG_CMSG_CLOEXEC, as Linux's do. Returns the bytes read, or -errno.
+ * `msg_ptr`: the vector copied once and its buffers checked, then read by
+ * `stream_readv`, and the header written back with no address and no control
+ * data, `msg_flags` keeping only
+ * MSG_CMSG_CLOEXEC, as Linux's do. The copy keeps an earlier buffer that
+ * overlaps the vector list from replacing a later destination. Returns the
+ * bytes read, or -errno, including -ENOMEM for the vector copy.
  */
 static int32_t recvmsg_stream(fd_entry_t *entry, struct kernel_msghdr *hdr, uintptr_t msg_ptr,
                               int flags)
 {
+    struct kernel_iovec local[8], *iov = local;
+    uint32_t count = (uint32_t)hdr->msg_iovlen, i;
     int32_t taken;
 
-    if (iovs_writable(hdr->msg_iov, (uint32_t)hdr->msg_iovlen) != 0) {
-        return -EFAULT;
+    if (count > sizeof(local) / sizeof(local[0])) {
+        iov = kmalloc((size_t)count * sizeof(*iov));
+        if (!iov) {
+            return -ENOMEM;
+        }
     }
-    taken = stream_readv(entry, hdr->msg_iov, (uint32_t)hdr->msg_iovlen, flags);
+    for (i = 0; i < count; i++) {
+        if (iov_fetch(&iov[i], hdr->msg_iov, i) != 0 || iov[i].iov_len > 0x7FFFFFFFu ||
+            (iov[i].iov_len && !user_buffer_ok(iov[i].iov_base, iov[i].iov_len, 1))) {
+            taken = -EFAULT;
+            goto out;
+        }
+    }
+    taken = stream_readv(entry, iov, count, flags);
+out:
+    if (iov != local) {
+        kfree(iov);
+    }
     if (taken < 0) {
         return taken;
     }

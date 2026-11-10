@@ -142,6 +142,8 @@ A listener's completed connections wait in a ring of `SOCK_ACCEPT_BACKLOG` (16) 
 
 ### Sockets
 
+TCP `recvmsg` copies the vector list once, then checks each destination before use, including after an earlier buffer's read waited. A buffer may overlap the list without changing a later destination. A vector with no capacity waits for input as `recv` does, or returns `EAGAIN` when nonblocking; when input is ready it returns zero and takes nothing. These cases follow Linux 6.12's `tcp_recvmsg_locked` and `sock_rcvlowat`. `loopprobe` checks the overlap in blocking, nonblocking and peeking receives, and empty vectors with input absent, queued or ended.
+
 A socket, `struct socket` (`socket/socket.h`), is allocated from the heap when it is opened, or for an incoming SYN in interrupt context, which the heap allows since it masks interrupts and never sleeps, and is freed when its last reference goes. A descriptor of type `FD_TYPE_SOCKET` refers to it, and `dup` and `fork` share it. An accepted connection's socket takes its owner from the listener. A socket made in a network namespace other than the first reaches only that namespace's own `lo` ([`../proc/ns.Readme.md`](../proc/ns.Readme.md)).
 
 Blocked callers and pollers share the socket's wait queue, and each wake gives its kind for an edge-triggered `epoll`: a datagram on a UDP, raw, packet or netlink socket, and TCP data the receive ring took, are data; an acknowledgement that frees send space is room; a connection that completes or ends, a FIN, and a connection queued on a listener are every kind. Data that comes to a socket watched for output alone is no edge, as in Linux.
