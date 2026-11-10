@@ -729,6 +729,7 @@ static void run_legacy_stack(void)
           "an sa_restorer stack below the alternate stack is refused");
     tf.rsp = 0x2000u;
     tf.ss = 15;
+    sa.restorer = USER_BASE + 0xD000u;
     sa.flags |= SA_RESTORER;
     check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1,
           "SA_RESTORER makes its pointer code rather than a legacy stack");

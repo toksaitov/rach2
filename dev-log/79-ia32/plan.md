@@ -438,7 +438,7 @@ The Codex and Fable reviews of 79-10's fixes at `838212926` raised the findings 
 ### Sleeps
 
 * A native `nanosleep` that completed wrote a zero remainder, and EFAULT for a bad address. It now writes the remainder only when a signal ends the sleep, as Linux does.
-* Three native interrupted sleeps dropped a failed copy of the remainder. They now return EFAULT. `wow64probe` interrupts the native `nanosleep` and `clock_nanosleep` on real time and on the process CPU clock beside the compat calls.
+* Three native interrupted sleeps dropped a failed copy of the remainder. They now return EFAULT. `wow64probe` interrupts the native `nanosleep` and `clock_nanosleep` on real time and on the process CPU clock beside the compat calls. These rows cover two of the three native remainder copies: `nanosleep_interrupted` and `sleep_until_cpu`. They do not force a signal in the second phase of `sleep_for`, after its tick wait, where the third copy lies.
 
 ### TLS bases
 

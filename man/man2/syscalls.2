@@ -58,49 +58,27 @@ Linux asks for a capability in each such place, and this kernel asks for
 .Dv CAP_SYS_ADMIN
 in every one.
 .Ss System call numbers
-On i686 the kernel registers the following 307 calls, the operations of
-.Xr socketcall 2
-among them.
+On i686 the kernel registers the following 308 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
-.It 1 Ta Xr socket 2
 .It 2 Ta Xr fork 2
-.It 2 Ta Xr bind 2
 .It 3 Ta Xr read 2
-.It 3 Ta Xr connect 2
 .It 4 Ta Xr write 2
-.It 4 Ta Xr listen 2
 .It 5 Ta Xr open 2
-.It 5 Ta Xr accept 2
 .It 6 Ta Xr close 2
-.It 6 Ta Xr getsockname 2
 .It 7 Ta Xr waitpid 2
-.It 7 Ta Xr getpeername 2
 .It 8 Ta Xr creat 2
-.It 8 Ta Xr socketpair 2
 .It 9 Ta Xr link 2
-.It 9 Ta Xr send 2
 .It 10 Ta Xr unlink 2
-.It 10 Ta Xr recv 2
 .It 11 Ta Xr execve 2
-.It 11 Ta Xr sendto 2
 .It 12 Ta Xr chdir 2
-.It 12 Ta Xr recvfrom 2
 .It 13 Ta Xr time 2
-.It 13 Ta Xr shutdown 2
 .It 14 Ta Xr mknod 2
-.It 14 Ta Xr setsockopt 2
 .It 15 Ta Xr chmod 2
-.It 15 Ta Xr getsockopt 2
 .It 16 Ta Xr lchown 2
-.It 16 Ta Xr sendmsg 2
-.It 17 Ta Xr recvmsg 2
-.It 18 Ta Xr accept4 2
 .It 19 Ta Xr lseek 2
-.It 19 Ta Xr recvmmsg 2
 .It 20 Ta Xr getpid 2
-.It 20 Ta Xr sendmmsg 2
 .It 21 Ta Xr mount 2
 .It 25 Ta Xr stime 2
 .It 26 Ta Xr ptrace 2
@@ -270,6 +248,7 @@ among them.
 .It 269 Ta Xr fstatfs64 2
 .It 270 Ta Xr tgkill 2
 .It 272 Ta Xr fadvise64_64 2
+.It 275 Ta Xr get_mempolicy 2
 .It 277 Ta Xr mq_open 2
 .It 278 Ta Xr mq_unlink 2
 .It 279 Ta Xr mq_timedsend 2
@@ -302,6 +281,7 @@ among them.
 .It 313 Ta Xr splice 2
 .It 314 Ta Xr sync_file_range 2
 .It 315 Ta Xr tee 2
+.It 316 Ta Xr vmsplice 2
 .It 318 Ta Xr getcpu 2
 .It 319 Ta Xr epoll_pwait 2
 .It 320 Ta Xr utimensat 2
@@ -322,25 +302,25 @@ among them.
 .It 335 Ta Xr rt_tgsigqueueinfo 2
 .It 337 Ta Xr recvmmsg 2
 .It 340 Ta Xr prlimit64 2
+.It 341 Ta Xr name_to_handle_at 2
+.It 342 Ta Xr open_by_handle_at 2
 .It 343 Ta Xr clock_adjtime 2
 .It 344 Ta Xr syncfs 2
 .It 345 Ta Xr sendmmsg 2
 .It 346 Ta Xr setns 2
+.It 347 Ta Xr process_vm_readv 2
+.It 348 Ta Xr process_vm_writev 2
+.It 349 Ta Xr kcmp 2
 .It 353 Ta Xr renameat2 2
 .It 354 Ta Xr seccomp 2
 .It 355 Ta Xr getrandom 2
 .It 356 Ta Xr memfd_create 2
+.It 358 Ta Xr execveat 2
 .It 359 Ta Xr socket 2
 .It 360 Ta Xr socketpair 2
 .It 361 Ta Xr bind 2
 .It 362 Ta Xr connect 2
 .It 363 Ta Xr listen 2
-.El
-.Ss Socket operations
-The following operation numbers select calls through system call 102,
-.Xr socketcall 2 .
-.Bl -column "Operation" "System call" -compact
-.It Sy Operation Ta Sy System call
 .It 364 Ta Xr accept4 2
 .It 365 Ta Xr getsockopt 2
 .It 366 Ta Xr setsockopt 2
@@ -356,6 +336,7 @@ The following operation numbers select calls through system call 102,
 .It 378 Ta Xr preadv2 2
 .It 379 Ta Xr pwritev2 2
 .It 383 Ta Xr statx 2
+.It 386 Ta Xr rseq 2
 .It 393 Ta Xr semget 2
 .It 394 Ta Xr semctl 2
 .It 395 Ta Xr shmget 2
@@ -375,6 +356,7 @@ The following operation numbers select calls through system call 102,
 .It 410 Ta Xr timerfd_gettime64 2
 .It 411 Ta Xr timerfd_settime64 2
 .It 412 Ta Xr utimensat_time64 2
+.It 417 Ta Xr recvmmsg_time64 2
 .It 418 Ta Xr mq_timedsend_time64 2
 .It 419 Ta Xr mq_timedreceive_time64 2
 .It 420 Ta Xr semtimedop_time64 2
@@ -385,11 +367,11 @@ The following operation numbers select calls through system call 102,
 .It 438 Ta Xr pidfd_getfd 2
 .It 439 Ta Xr faccessat2 2
 .It 441 Ta Xr epoll_pwait2 2
+.It 449 Ta Xr futex_waitv 2
 .It 452 Ta Xr fchmodat2 2
-.It 0x1000 Ta Xr ping 2
 .El
 .Pp
-On x86-64 it registers the following 263 calls.
+On x86-64 the kernel registers the following 282 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 0 Ta Xr read 2
@@ -538,6 +520,7 @@ On x86-64 it registers the following 263 calls.
 .It 150 Ta Xr munlock 2
 .It 151 Ta Xr mlockall 2
 .It 152 Ta Xr munlockall 2
+.It 154 Ta Xr modify_ldt 2
 .It 155 Ta Xr pivot_root 2
 .It 157 Ta Xr prctl 2
 .It 158 Ta Xr arch_prctl 2
@@ -588,6 +571,7 @@ On x86-64 it registers the following 263 calls.
 .It 232 Ta Xr epoll_wait 2
 .It 233 Ta Xr epoll_ctl 2
 .It 234 Ta Xr tgkill 2
+.It 239 Ta Xr get_mempolicy 2
 .It 240 Ta Xr mq_open 2
 .It 241 Ta Xr mq_unlink 2
 .It 242 Ta Xr mq_timedsend 2
@@ -620,6 +604,7 @@ On x86-64 it registers the following 263 calls.
 .It 275 Ta Xr splice 2
 .It 276 Ta Xr tee 2
 .It 277 Ta Xr sync_file_range 2
+.It 278 Ta Xr vmsplice 2
 .It 280 Ta Xr utimensat 2
 .It 281 Ta Xr epoll_pwait 2
 .It 282 Ta Xr signalfd 2
@@ -640,20 +625,27 @@ On x86-64 it registers the following 263 calls.
 .It 297 Ta Xr rt_tgsigqueueinfo 2
 .It 299 Ta Xr recvmmsg 2
 .It 302 Ta Xr prlimit64 2
+.It 303 Ta Xr name_to_handle_at 2
+.It 304 Ta Xr open_by_handle_at 2
 .It 305 Ta Xr clock_adjtime 2
 .It 306 Ta Xr syncfs 2
 .It 307 Ta Xr sendmmsg 2
 .It 308 Ta Xr setns 2
 .It 309 Ta Xr getcpu 2
+.It 310 Ta Xr process_vm_readv 2
+.It 311 Ta Xr process_vm_writev 2
+.It 312 Ta Xr kcmp 2
 .It 316 Ta Xr renameat2 2
 .It 317 Ta Xr seccomp 2
 .It 318 Ta Xr getrandom 2
 .It 319 Ta Xr memfd_create 2
+.It 322 Ta Xr execveat 2
 .It 325 Ta Xr mlock2 2
 .It 326 Ta Xr copy_file_range 2
 .It 327 Ta Xr preadv2 2
 .It 328 Ta Xr pwritev2 2
 .It 332 Ta Xr statx 2
+.It 334 Ta Xr rseq 2
 .It 400 Ta Xr rach2_ping 2
 .It 424 Ta Xr pidfd_send_signal 2
 .It 434 Ta Xr pidfd_open 2
@@ -662,7 +654,36 @@ On x86-64 it registers the following 263 calls.
 .It 438 Ta Xr pidfd_getfd 2
 .It 439 Ta Xr faccessat2 2
 .It 441 Ta Xr epoll_pwait2 2
+.It 449 Ta Xr futex_waitv 2
 .It 452 Ta Xr fchmodat2 2
+.El
+.Ss Socket operations
+The following operation numbers select calls through i686 system call 102,
+.Xr socketcall 2 .
+They are separate from the system call numbers above.
+.Bl -column "Operation" "System call" -compact
+.It Sy Operation Ta Sy System call
+.It 1 Ta Xr socket 2
+.It 2 Ta Xr bind 2
+.It 3 Ta Xr connect 2
+.It 4 Ta Xr listen 2
+.It 5 Ta Xr accept 2
+.It 6 Ta Xr getsockname 2
+.It 7 Ta Xr getpeername 2
+.It 8 Ta Xr socketpair 2
+.It 9 Ta Xr send 2
+.It 10 Ta Xr recv 2
+.It 11 Ta Xr sendto 2
+.It 12 Ta Xr recvfrom 2
+.It 13 Ta Xr shutdown 2
+.It 14 Ta Xr setsockopt 2
+.It 15 Ta Xr getsockopt 2
+.It 16 Ta Xr sendmsg 2
+.It 17 Ta Xr recvmsg 2
+.It 18 Ta Xr accept4 2
+.It 19 Ta Xr recvmmsg 2
+.It 20 Ta Xr sendmmsg 2
+.It 0x1000 Ta Xr ping 2
 .El
 .Sh ERRORS
 .Bl -tag -width "[ENOSYS]"

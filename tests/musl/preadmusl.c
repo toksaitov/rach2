@@ -425,7 +425,8 @@ static int seek_refusal_rows(void)
     return 0;
 }
 
-/* An address in the kernel's half, which no user buffer may name. */
+/* The x86-64 kernel half, or the i686 kernel's base, which this program
+ * leaves unmapped when it runs under the ia32 profile. */
 #if defined __x86_64__
 #define KERNEL_ADDRESS ((void *)0xffff800000000000UL)
 #else

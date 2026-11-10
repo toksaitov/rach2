@@ -26,9 +26,10 @@
  * whatever it uses after the sleep, since the entry may be removed meanwhile.
  */
 
-#define SYSFS_NODES_MAX 512      /* entries and anchors at once */
-#define SYSFS_NAME_MAX  32       /* bytes of a name, with its NUL */
-#define SYSFS_SHOW_MAX  1048576u /* bytes; the largest, i915's `error`, is under 160 KiB */
+#define SYSFS_NODES_MAX 512 /* entries and anchors at once */
+#define SYSFS_NAME_MAX  32  /* bytes of a name, with its NUL */
+/* Bytes; the largest, i915's `error`, is under 160 KiB. */
+#define SYSFS_SHOW_MAX  1048576u
 
 /* The kinds of entry, as `sysfs_node_kind` answers. */
 #define SYSFS_NODE_ANCHOR 1 /* a fixed directory of synthfs.h */
