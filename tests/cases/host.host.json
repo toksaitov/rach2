@@ -526,6 +526,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "hid_parse",
+          "checks": "tests/host/hid_parse_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "httpd",
           "checks": "tests/host/httpd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
