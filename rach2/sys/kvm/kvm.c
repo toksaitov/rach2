@@ -8,6 +8,8 @@
 #include "../fs/devfs.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
+#include "../fs/synthfs.h"
+#include "../fs/sysfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -138,6 +140,7 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_SET_BOOT_CPU_ID:
     case KVM_CAP_PMU_EVENT_FILTER:
     case KVM_CAP_PMU_EVENT_MASKED_EVENTS:
+    case KVM_CAP_GET_TSC_KHZ:
         return 1;
     case KVM_CAP_PMU_CAPABILITY:
         return KVM_PMU_CAP_DISABLE;
@@ -447,6 +450,7 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct kvm_vm *vm = (struct kvm_vm *)e->priv;
     struct kvm_userspace_memory_region region;
+    struct kvm_userspace_memory_region2 region2;
     uint64_t addr;
 
     if (!kvm_vm_caller_ok(vm)) {
@@ -464,6 +468,13 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
             return -EFAULT;
         }
         return kvm_slots_set(vm, &region);
+    case KVM_SET_USER_MEMORY_REGION2:
+        /* The same slot: KVM_MEM_GUEST_MEMFD is a flag no VM here takes,
+         * as on Linux for a VM without private memory. */
+        if (copy_from_user(&region2, (const void __user *)arg, sizeof(region2)) != 0) {
+            return -EFAULT;
+        }
+        return kvm_slots_set(vm, &region2.region);
     case KVM_GET_DIRTY_LOG:
     case KVM_CLEAR_DIRTY_LOG:
         return kvm_dirty_ioctl(vm, request, arg);
@@ -542,8 +553,89 @@ static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl, NULL, NULL,
  * udev's rule for the kvm group gives it on a machine with one user. */
 static struct devfs_node kvm_node = {"kvm", 10, 232, 0666, &dev_ops, NULL, NULL};
 
+/*
+ * The module parameters Linux's KVM selftests read, as Linux's files under
+ * /sys/module give them, with what Rach2's KVM does: no forced emulation
+ * prefix, host-dependent performance counters, the guest-physical tables
+ * always (EPT or nested paging, with the unrestricted guest on VMX), and no
+ * eager splitting of huge leaves when a dirty log starts. Every selftest
+ * reads `force_emulation_prefix` before its main and skips without it.
+ */
+static const char *const kvm_modules[] = {"kvm", "kvm_intel", "kvm_amd"};
+
+static const struct kvm_param {
+    int module; /* of kvm_modules: kvm, or the backend's kvm_intel or kvm_amd */
+    const char *name;
+    char value; /* the file's character; zero means the host PMU's Y or N */
+} kvm_params[] = {{0, "force_emulation_prefix", '0'},
+                  {0, "enable_pmu", 0},
+                  {0, "tdp_mmu", 'Y'},
+                  {0, "eager_page_split", 'N'},
+                  {1, "ept", 'Y'},
+                  {1, "unrestricted_guest", 'Y'},
+                  {2, "npt", 'Y'},
+                  {2, "avic", 'N'}};
+
+#define KVM_NR_PARAMS (sizeof(kvm_params) / sizeof(kvm_params[0]))
+
+/** A parameter's file: the value of `kvm_params[arg]` and a newline. */
+static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
+{
+    (void)obj;
+    if (cap >= 2u) {
+        buf[0] = kvm_params[arg].value;
+        if (!buf[0]) {
+            buf[0] = kvm_pmu_enabled() ? 'Y' : 'N';
+        }
+        buf[1] = '\n';
+    }
+    return 2;
+}
+
+/**
+ * Make /sys/module/MODULE/parameters for `kvm` and for the backend's
+ * module, `kvm_intel` (`backend` 1) or `kvm_amd` (2), as Linux's modules
+ * show theirs, each file read-only. 0, or the first error of sysfs.h, which
+ * leaves what was made; /dev/kvm works without the files.
+ */
+static int params_start(int backend)
+{
+    struct sysfs_attr attr;
+    int module_dir, dir = 0, h, made = -1;
+    uint32_t i;
+
+    module_dir = sysfs_add_dir(sysfs_anchor(SYSFS_ROOT, 0), "module");
+    if (module_dir < 0) {
+        return module_dir;
+    }
+    attr.mode = 0444u;
+    attr.show = param_show;
+    attr.store = NULL;
+    for (i = 0; i < KVM_NR_PARAMS; i++) {
+        if (kvm_params[i].module != 0 && kvm_params[i].module != backend) {
+            continue;
+        }
+        if (kvm_params[i].module != made) {
+            h = sysfs_add_dir(module_dir, kvm_modules[kvm_params[i].module]);
+            dir = h < 0 ? h : sysfs_add_dir(h, "parameters");
+            if (dir < 0) {
+                return dir;
+            }
+            made = kvm_params[i].module;
+        }
+        attr.name = kvm_params[i].name;
+        h = sysfs_add_attr(dir, &attr, NULL, (int)i);
+        if (h < 0) {
+            return h;
+        }
+    }
+    return 0;
+}
+
 void kvm_start(void)
 {
+    int r;
+
     if (kvm_vmx.probe()) {
         kvm_backend = &kvm_vmx;
     } else if (kvm_svm.probe()) {
@@ -557,6 +649,10 @@ void kvm_start(void)
         klog(KLOG_WARN, "kvm", "failed: /dev/kvm not registered");
         kvm_backend = NULL;
         return;
+    }
+    r = params_start(kvm_backend == &kvm_vmx ? 1 : 2);
+    if (r < 0) {
+        klog(KLOG_WARN, "kvm", "failed: /sys/module/kvm not made: %d", r);
     }
     klog(KLOG_INFO, "kvm", "ready: %s", kvm_backend->name);
 }

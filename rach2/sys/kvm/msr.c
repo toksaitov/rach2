@@ -240,6 +240,13 @@ static int mce_bank_msr(const struct kvm_vcpu *v, uint32_t index, uint32_t *bank
     return 1;
 }
 
+int kvm_msr_mce_status(const struct kvm_vcpu *v, uint32_t index)
+{
+    uint32_t bank, reg;
+
+    return mce_bank_msr(v, index, &bank, &reg) && reg == 1u;
+}
+
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
 {
     uint32_t bank, reg, i;

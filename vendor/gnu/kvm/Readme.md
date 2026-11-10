@@ -58,7 +58,6 @@ QEMU and its firmware follow the Debian layer's snapshot: a new snapshot gives t
 
 * The layer is the x86-64 root's alone. Rach2's KVM runs on the x86-64 kernel, and the tests are built for x86-64.
 * The selftests are built with `-march=x86-64-v2`, which their Makefile adds whenever the compiler accepts it, as on Debian; they stop with an illegal instruction on a processor without SSE4.2, POPCNT and CMPXCHG16B, such as QEMU's default `qemu64`, so the machine that runs them needs a CPU model that has those.
-* Every selftest reads `/sys/module/kvm/parameters/force_emulation_prefix` before its `main`, in `kvm_selftest_arch_init` (`lib/x86_64/processor.c` of the selftests), and skips with "Cannot open /sys/module/kvm/parameters/force_emulation_prefix" where the file is missing, so no selftest goes further on Rach2 until its `/sys` has that file.
 * QEMU's graphical displays other than GL's are not staged: Debian's `qemu-system-gui`, with GTK and SDL, is not in the closure.
 * `qemu-vmsr-helper` stops at once on Rach2, which has no RAPL driver ([qemu-vmsr-helper(8)](../../man/man8/qemu-vmsr-helper.8)).
 

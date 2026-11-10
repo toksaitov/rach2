@@ -82,6 +82,9 @@ if [ "$kind" = unit ]; then
 else
     while read -r name _; do
         mkdir "$work/t"
+        # The programs do not name themselves, so their output is told
+        # apart by this line.
+        echo "kvm-corpus: $name: run" >&2
         (cd "$work/t" && "$tree/$name" < /dev/null) >&2 2>&1
         case $? in
             0) echo "$name pass" ;;

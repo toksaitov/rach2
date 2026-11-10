@@ -55,6 +55,7 @@ and
 .Dv KVM_CREATE_VCPU ,
 .Dv KVM_CHECK_EXTENSION ,
 .Dv KVM_SET_USER_MEMORY_REGION ,
+.Dv KVM_SET_USER_MEMORY_REGION2 ,
 .Dv KVM_GET_DIRTY_LOG ,
 .Dv KVM_CLEAR_DIRTY_LOG ,
 .Dv KVM_SET_TSS_ADDR ,
@@ -90,6 +91,7 @@ and their sets,
 .Dv KVM_SET_MP_STATE ,
 .Dv KVM_INTERRUPT ,
 .Dv KVM_NMI ,
+.Dv KVM_GET_TSC_KHZ ,
 .Dv KVM_SET_SIGNAL_MASK ,
 .Dv KVM_GET_LAPIC ,
 .Dv KVM_SET_LAPIC ,
@@ -148,7 +150,13 @@ is never restarted, with or without
 as on Linux.
 Guests run under VMX on Intel processors and SVM with nested paging on AMD processors.
 .Ss Memory
-.Dv KVM_SET_USER_MEMORY_REGION
+.Dv KVM_SET_USER_MEMORY_REGION ,
+or
+.Dv KVM_SET_USER_MEMORY_REGION2 ,
+whose larger structure begins with the same members and whose flag
+.Dv KVM_MEM_GUEST_MEMFD
+is
+.Er EINVAL ,
 gives the guest a slot: the
 .Va memory_size
 bytes of the caller's memory from
@@ -307,6 +315,27 @@ with
 .Dv KVM_IOEVENTFD_FLAG_DATAMATCH ,
 adds 1 to the counter and goes no further.
 A string OUT adds 1 for each element.
+.Ss Hypercalls
+A VMCALL, or VMMCALL on AMD, that is not Hyper-V's is one of Linux's KVM
+hypercalls: the number in RAX, the arguments in RBX, RCX, RDX and RSI, and
+the result in RAX.
+.Dv KVM_HC_VAPIC_POLL_IRQ
+and
+.Dv KVM_HC_SCHED_YIELD
+return 0.
+.Dv KVM_HC_KICK_CPU
+wakes the halted vCPU whose APIC id is in RCX.
+.Dv KVM_HC_SEND_IPI ,
+with the local APIC in the kernel, sends the interrupt command in RSI to the
+vCPUs that the bitmap in RBX and RCX names, bit 0 the APIC id in RDX, and
+returns the number that took it.
+.Dv KVM_HC_CLOCK_PAIRING
+returns
+.Er -KVM_EOPNOTSUPP ,
+any other number
+.Er -KVM_ENOSYS ,
+and a call from outside the guest's kernel
+.Er -KVM_EPERM .
 .Ss Hyper-V
 A vCPU whose CPUID, given by
 .Dv KVM_SET_CPUID2 ,
@@ -419,9 +448,16 @@ reads Y or N according to the host PMU probe.
 reads 0.
 Both are read-only.
 .Sh FILES
-.Bl -tag -width /dev/kvm
+.Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm
 the interface
+.It Pa /sys/module/kvm/parameters
+the parameters Linux's KVM selftests read, and those of
+.Pa kvm_intel
+or
+.Pa kvm_amd
+beside it; see
+.Xr sysfs 5
 .El
 .Ss VFIO assignment
 .Dv KVM_CAP_DEVICE_CTRL
@@ -571,6 +607,7 @@ a signal or a request to stop.
 .Xr mprotect 2 ,
 .Xr mremap 2 ,
 .Xr munmap 2 ,
+.Xr sysfs 5 ,
 .Xr limits 7
 .Sh STANDARDS
 Linux's KVM API, version 12, for x86, as its

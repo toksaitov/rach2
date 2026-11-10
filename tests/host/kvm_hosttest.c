@@ -104,8 +104,16 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     void *p = aligned_alloc(4096, 4096ul * count);
 
     live++;
-    *phys = (uintptr_t)p;
+    if (phys) {
+        *phys = (uintptr_t)p;
+    }
     return p;
+}
+
+/** A kernel address is its own physical address here. */
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    return va;
 }
 
 /** Give pages back. */
@@ -180,6 +188,32 @@ int32_t devfs_node_register(struct devfs_node *node)
 {
     registered = node;
     return 0;
+}
+
+/* /sys/module's directories and files, which the model takes and forgets. */
+static int sysfs_handles;
+
+int sysfs_anchor(int node, int key)
+{
+    (void)node;
+    (void)key;
+    return ++sysfs_handles;
+}
+
+int sysfs_add_dir(int parent, const char *name)
+{
+    (void)parent;
+    (void)name;
+    return ++sysfs_handles;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return ++sysfs_handles;
 }
 
 void mm_hold(struct mm *mm)
@@ -838,6 +872,10 @@ static void abi_rows(void)
           "KVM_SET_CPUID2 and KVM_GET_SUPPORTED_CPUID");
     CHECK(KVM_SET_USER_MEMORY_REGION == 0x4020AE46u && KVM_ENABLE_CAP == 0x4068AEA3u,
           "KVM_SET_USER_MEMORY_REGION and KVM_ENABLE_CAP");
+    CHECK(KVM_GET_TSC_KHZ == 0xAEA3u, "KVM_GET_TSC_KHZ");
+    CHECK(KVM_SET_USER_MEMORY_REGION2 == 0x40A0AE49u &&
+              sizeof(struct kvm_userspace_memory_region2) == 160,
+          "KVM_SET_USER_MEMORY_REGION2");
     CHECK(KVM_GET_XSAVE == 0x9000AEA4u && KVM_GET_XCRS == 0x8188AEA6u,
           "KVM_GET_XSAVE and KVM_GET_XCRS");
     CHECK(KVM_GET_VCPU_EVENTS == 0x8040AE9Fu && KVM_GET_CLOCK == 0x8030AE7Cu,
@@ -1026,6 +1064,7 @@ static uint32_t startup_cpuid(void)
 static void startup_addrs(int vm)
 {
     struct kvm_userspace_memory_region region = {0, 0, 0, 0x8000000, 0x7F0000000000ull};
+    struct kvm_userspace_memory_region2 region2;
     uint64_t addr = 0xFEFFC000ull;
 
     CHECK(fdio(vm, KVM_SET_IDENTITY_MAP_ADDR, (uintptr_t)&addr) == 0,
@@ -1034,6 +1073,10 @@ static void startup_addrs(int vm)
     CHECK(fdio(vm, KVM_SET_TSS_ADDR, 0xFFFFE000u) == -EINVAL, "a TSS past 4 GiB less 3 pages");
     CHECK(fdio(vm, KVM_SET_USER_MEMORY_REGION, (uintptr_t)&region) == 0 && slots_set == 1,
           "the memory slot goes to slots.c");
+    memset(&region2, 0xFF, sizeof(region2));
+    region2.region = region;
+    CHECK(fdio(vm, KVM_SET_USER_MEMORY_REGION2, (uintptr_t)&region2) == 0 && slots_set == 2,
+          "KVM_SET_USER_MEMORY_REGION2's slot goes there too, its padding unread");
 }
 
 /** Check the mapping of the vCPU on `vcpu`: its two pages, the page past

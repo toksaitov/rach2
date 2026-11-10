@@ -300,8 +300,7 @@ struct kvm_vcpu {
     struct kvm_vm *vm;
     uint32_t id;                /* the caller's id, the APIC id */
     uint32_t index;             /* the place in the VM's `vcpus` */
-    struct kvm_run *run;        /* the run page, from `run_phys` */
-    uintptr_t run_phys;         /* the physical address of the KVM_RUN_PAGES */
+    struct kvm_run *run;        /* the run page, the first of KVM_RUN_PAGES */
     uint8_t *pio;               /* the port I/O page, the second */
     volatile uint32_t mode;     /* KVM_MODE_* */
     volatile uint32_t requests; /* KVM_REQ_* */
@@ -453,6 +452,10 @@ int kvm_msr_feature(uint32_t index, uint64_t *value);
 
 /** Give `v` the MSRs of a vCPU at power-on. */
 void kvm_msr_reset(struct kvm_vcpu *v);
+
+/** Whether `index` is the STATUS register of a machine-check bank `v`
+ * has, which the guest itself may only clear. */
+int kvm_msr_mce_status(const struct kvm_vcpu *v, uint32_t index);
 
 /** Read the MSR `index` of `v` as the caller of KVM_GET_MSRS: 0, or -1
  * for an MSR it does not keep. */
@@ -651,6 +654,14 @@ struct kvm_lapic_irq {
     int redir_hint;
 };
 
+/** KVM_HC_SEND_IPI, as Linux's kvm_pv_send_ipi: the interrupt of `icr`'s
+ * vector, mode, level and trigger to each vCPU of `vm` whose physical
+ * APIC id is `min` plus a bit of `low`, or `min` plus `bits` plus a bit of
+ * `high`, `bits` being 64 or 32 by the caller's mode. How many took it, or
+ * -KVM_EINVAL for a logical destination or a shorthand. */
+int64_t kvm_lapic_pv_ipi(struct kvm_vm *vm, uint64_t low, uint64_t high, uint32_t min, uint64_t icr,
+                         uint32_t bits);
+
 /** Make the local APIC of `v`, a vCPU of a VM whose interrupt controller
  * is split, in the state of a reset: 0 or -ENOMEM. At KVM_CREATE_VCPU. */
 int kvm_lapic_create(struct kvm_vcpu *v);
@@ -661,7 +672,8 @@ int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg);
 
 /** A HLT of `v`: 1 when it goes to the caller as KVM_EXIT_HLT, which it
  * does with no local APIC in the kernel; 0 when the vCPU is HALTED and
- * `kvm_lapic_prepare` waits for its wake-up before the next entry. */
+ * `kvm_lapic_prepare` waits for its wake-up before the next entry, or
+ * when an exception is pending, which the next entry delivers. */
 int kvm_lapic_halt(struct kvm_vcpu *v);
 
 /** Free vlapic.c's share of `v`. */
@@ -851,6 +863,20 @@ int kvm_emul_mode(const struct kvm_vcpu *v);
  * mode. */
 int kvm_emul_cpl(const struct kvm_vcpu *v);
 
+/** Set RFLAGS.RF in the frame of `v`'s pending exception when it is a
+ * fault, at its first injection, as Linux's kvm_check_and_inject_events:
+ * the handler's IRET then resumes past an instruction breakpoint. */
+void kvm_exception_rf(struct kvm_vcpu *v);
+
+/** The answer in RAX to the KVM hypercall `v`'s registers name, as
+ * Linux's kvm_emulate_hypercall gives it, before the caller cuts it to 32
+ * bits outside long mode: -KVM_EPERM above CPL 0; 0 for
+ * KVM_HC_VAPIC_POLL_IRQ and KVM_HC_SCHED_YIELD; KVM_HC_KICK_CPU's wake of
+ * the vCPU with the APIC id in RCX; KVM_HC_SEND_IPI's count;
+ * -KVM_EOPNOTSUPP for KVM_HC_CLOCK_PAIRING, as Linux without a host clock
+ * to pair; and -KVM_ENOSYS for any other. */
+uint64_t kvm_emul_hypercall(struct kvm_vcpu *v);
+
 /** Queue the exception `nr`, with `error` when `has_error`, for the next
  * entry, replacing one queued, and ask for its injection. */
 void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t error);
@@ -903,6 +929,16 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
  * information and error code. 0, or -EFAULT.
  */
 int kvm_emul_mmio(struct kvm_vcpu *v, uint64_t gpa, const uint64_t info[5]);
+
+/**
+ * `count` pages whose frames are consecutive, set to all ones, for a
+ * permission map, which the processor reads by its physical address and
+ * across its pages; `*pa` receives the first frame's address. The heap's
+ * pages are contiguous only in virtual memory, so a run whose frames are
+ * not consecutive is held until one is found, so that the allocator gives
+ * other frames, and then freed. NULL after 16 such runs or without memory.
+ */
+uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa);
 
 /** Begin the port I/O instruction `p` of `v`: `v->exit` its KVM_X_IO, an
  * OUT's bytes from RAX or the string in guest memory, RIP stepped for an

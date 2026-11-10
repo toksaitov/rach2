@@ -657,6 +657,74 @@ int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_
     return r;
 }
 
+/** Deliver `irq` to each vCPU whose physical APIC id is `min` plus a bit
+ * set in `bitmap`'s low `bits`, as Linux's __pv_send_ipi: how many took
+ * it. */
+static int pv_ipi_cluster(struct kvm_vm *vm, uint64_t bitmap, uint32_t min, uint32_t bits,
+                          const struct kvm_lapic_irq *irq)
+{
+    struct lapic *l;
+    uint32_t i, k, id;
+    int count = 0;
+
+    for (i = 0; i < bits; i++) {
+        if (!(bitmap & (1ull << i))) {
+            continue;
+        }
+        for (k = 0; k < vm->nr_vcpus; k++) {
+            l = apic_of(vm->vcpus[k]);
+            if (!l) {
+                continue;
+            }
+            id = x2apic(l) ? reg_get(l, APIC_ID) : reg_get(l, APIC_ID) >> 24;
+            if (id == min + i) {
+                count += accept(l, irq->delivery_mode, irq->vector, irq->level, irq->trig_mode);
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+int64_t kvm_lapic_pv_ipi(struct kvm_vm *vm, uint64_t low, uint64_t high, uint32_t min, uint64_t icr,
+                         uint32_t bits)
+{
+    struct kvm_lapic_irq irq;
+    uint32_t i, top = 0;
+    struct lapic *l;
+    int count = 0;
+
+    if (icr & (APIC_DEST_LOGICAL | APIC_SHORT_MASK)) {
+        return -22; /* -KVM_EINVAL */
+    }
+    irq.vector = (uint32_t)icr & APIC_VECTOR_MASK;
+    irq.delivery_mode = (uint32_t)icr & APIC_MODE_MASK;
+    irq.dest_mode = 0;
+    irq.level = (icr & APIC_INT_ASSERT) != 0;
+    irq.trig_mode = (icr & APIC_LEVEL_TRIG) != 0;
+    irq.shorthand = 0;
+    irq.redir_hint = 0;
+    irq.dest_id = 0;
+    /* Linux reads each half only while `min` is an id some vCPU may have,
+     * and lets the second half's `min` wrap as a 32-bit sum does. */
+    for (i = 0; i < vm->nr_vcpus; i++) {
+        l = apic_of(vm->vcpus[i]);
+        if (l) {
+            uint32_t id = x2apic(l) ? reg_get(l, APIC_ID) : reg_get(l, APIC_ID) >> 24;
+
+            top = id > top ? id : top;
+        }
+    }
+    if (min <= top) {
+        count = pv_ipi_cluster(vm, low, min, bits, &irq);
+    }
+    min += bits;
+    if (min <= top) {
+        count += pv_ipi_cluster(vm, high, min, bits, &irq);
+    }
+    return count;
+}
+
 /** Send the IPI the ICR names, `low` and `high`, as Linux's
  * kvm_apic_send_ipi. */
 static void send_ipi(struct lapic *l, uint32_t low, uint32_t high)
@@ -1179,24 +1247,31 @@ int kvm_lapic_halt(struct kvm_vcpu *v)
     if (!apic_of(v)) {
         return 1;
     }
+    /* A pending exception, the single-step trap of the HLT itself among
+     * them, keeps the vCPU running, as Linux's kvm_vcpu_has_events. */
+    if (v->events.exception.pending) {
+        return 0;
+    }
     v->mp_state = KVM_MP_STATE_HALTED;
     v->dirty |= KVM_PART_MP;
     return 0;
 }
 
-/** Queue the NMIs other processors delivered on the vCPU, at most two
- * waiting, as Linux's process_nmi keeps them. */
+/** Queue the NMIs other processors delivered on the vCPU, as Linux's
+ * process_nmi keeps them: at most two waiting, or one while the guest has
+ * NMIs blocked or one is being injected, since that one stands for the
+ * NMI the processor would hold pending. */
 static void take_nmis(struct lapic *l)
 {
     struct kvm_vcpu *v = l->v;
-    uint32_t n;
+    uint32_t n, limit = (v->events.nmi.masked || v->events.nmi.injected) ? 1u : 2u;
 
     if (l->nmis == 0) {
         return;
     }
     n = arch_atomic_xchg((volatile unsigned int *)&l->nmis, 0);
     n += v->nmi_queued;
-    v->nmi_queued = n > 2u ? 2u : n;
+    v->nmi_queued = n > limit ? limit : n;
     v->dirty |= KVM_PART_EVENTS;
 }
 

@@ -471,6 +471,40 @@ The directory where the kernel mounts debugfs; see
 .Xr debugfs 5 .
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent sent.
+.It Pa /sys/module/kvm/parameters
+On a processor with VMX or SVM, the read-only parameters of KVM that
+Linux's KVM selftests read, each a value and a newline:
+.Pa force_emulation_prefix ,
+.Ql 0 ;
+.Pa enable_pmu ,
+.Ql Y
+when the host has usable performance counters and
+.Ql N
+otherwise;
+.Pa tdp_mmu ,
+.Ql Y ;
+and
+.Pa eager_page_split ,
+.Ql N .
+Beside it,
+.Pa /sys/module/kvm_intel/parameters
+has
+.Pa ept
+and
+.Pa unrestricted_guest ,
+both
+.Ql Y ,
+on VMX, and
+.Pa /sys/module/kvm_amd/parameters
+has
+.Pa npt ,
+.Ql Y ,
+and
+.Pa avic ,
+.Ql N ,
+on SVM.
+See
+.Xr kvm 4 .
 .It Pa /sys/class/net/IF
 A directory for each network interface, named as
 .Xr ip 8
@@ -1080,6 +1114,8 @@ The vfio-pci driver's files.
 Where debugfs is mounted.
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent.
+.It Pa /sys/module
+KVM's parameters.
 .El
 .Sh EXAMPLES
 .Bd -literal -offset indent

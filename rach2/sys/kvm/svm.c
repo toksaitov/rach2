@@ -300,10 +300,6 @@ typedef char vmcb_size_check[sizeof(struct vmcb) == 4096u ? 1 : -1];
 #define SHADOW_MOV_SS 0x1u
 #define SHADOW_STI    0x2u
 
-/* KVM's errors a hypercall returns, Linux's KVM_ENOSYS and KVM_EPERM. */
-#define KVM_ENOSYS 1000
-#define KVM_EPERM  1
-
 /* The guest's entry, svm_run.s. */
 int kvm_svm_vmrun(struct kvm_regs *regs, uint64_t vmcb_pa, uint64_t host_pa);
 
@@ -1942,19 +1938,18 @@ static int exit_msr(struct kvm_vcpu *v)
     return 0;
 }
 
-/** Dispatch an enabled Hyper-V hypercall, else return Linux's
- * -KVM_ENOSYS in RAX, or -KVM_EPERM above CPL 0. */
+/** Dispatch an enabled Hyper-V hypercall, else a KVM hypercall, whose
+ * answer goes in RAX. */
 static int exit_vmmcall(struct kvm_vcpu *v)
 {
-    uint64_t ret =
-        kvm_emul_cpl(v) > 0 ? (uint64_t)-(int64_t)KVM_EPERM : (uint64_t)-(int64_t)KVM_ENOSYS;
-    uint64_t rax = v->regs.rax;
+    uint64_t ret, rax = v->regs.rax;
     uint32_t len;
 
     if (kvm_hv_hypercall_enabled(v)) {
         len = sv(v)->ex.next_rip ? (uint32_t)(sv(v)->ex.next_rip - v->regs.rip) : 3u;
         return kvm_hv_hypercall(v, len);
     }
+    ret = kvm_emul_hypercall(v);
 
     v->regs.rax = kvm_emul_mode(v) == 64 ? ret : (ret & 0xFFFFFFFFull);
     if (!skip(v)) {
@@ -2380,6 +2375,7 @@ static uint32_t inject_exception(struct kvm_vcpu *v)
         v->events.exception.pending = 0;
         return 0;
     }
+    kvm_exception_rf(v);
     /* No error code in real mode, as Linux's kvm_inject_exception drops it
      * outside protected mode. */
     if ((v->events.exception.has_error_code || v->events.exception.pending) && has_error_code(nr) &&
@@ -2510,18 +2506,16 @@ static int svm_vm_init(struct kvm_vm *vm)
 
     vm->backend = NULL;
     if (!iopm) {
-        iopm = kalloc_pages(3, &iopm_pa);
+        iopm = kvm_map_pages(3, &iopm_pa);
         if (!iopm) {
             return -ENOMEM;
         }
-        k_memset(iopm, 0xFF, 3u * 4096u);
     }
     if (!msrpm) {
-        msrpm = kalloc_pages(2, &msrpm_pa);
+        msrpm = kvm_map_pages(2, &msrpm_pa);
         if (!msrpm) {
             return -ENOMEM;
         }
-        k_memset(msrpm, 0xFF, 2u * 4096u);
         /* MSRs 0xC0000000 to 0xC0001FFF from byte 2048, two bits each, the
          * read's then the write's: FS_BASE, GS_BASE and KERNEL_GS_BASE. */
         msrpm[2048 + (0x100 * 2) / 8] &= (uint8_t)~0x3Fu;

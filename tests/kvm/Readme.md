@@ -40,6 +40,8 @@ The Debian guest reports the profile's features: under `host-svm` and KVM, `svm 
 
 The SVM backend boots Debian 6.12.107 to `KVMGUEST OK` under TCG on WSL and the Mac, and under nested KVM on WSL. The entry probe, active memory-slot changes, device mapping, 4 MiB GEM mapping and vCPU termination checks pass under TCG on the Mac. The QEMU termination check passes under TCG on WSL and returns all five KVM counts and the open-file count. These were individual author runs, not a run of the suite or either corpus. The i686 guest's intermittent page fault, double fault and shutdown are being investigated in task 81-2b.
 
+The VMX backend, on the Lenovo by trial boot on 2026-11-10, boots Debian 6.12.107 to `KVMGUEST OK` in 2 s and Rach2's i686 GRUB disk to `boot: starting /sbin/init` at 3.262 s of the guest's clock. Both corpora ran there: of kvm-unit-tests 43 pass, 7 skip and 1 fails as the list expects and 7 of 58 differ (`asyncpf`, `debug`, `emulator`, `hyperv_clock`, `kvmclock_test`, `smap`, `syscall`); of the selftests 15 are as the list expects and 51 of 66 differ, 31 of them because the selftests' library calls KVM_CREATE_IRQCHIP.
+
 For checkpoint planning, allow about 15 minutes for the 22 serial QEMU cases. The existing Debian boots took 18 s under TCG on WSL and 9 s under TCG on the Mac, as the runner reported; with outer exit tracing, WSL took 20 s. The small Mac entry, slot and termination payload completed before the outer kernel's 0.519 s shutdown timestamp; that is guest time, not elapsed host time. The estimate allows roughly 30 s per case plus 4 minutes for setup and the nested-KVM check. The corpus has not run under Rach2's SVM, so its share and the nested-KVM elapsed time are allowances, not measurements; revise the estimate from the reviewed checkpoint's own output. The Lenovo trial is separate. These figures came from the existing runs; no timing run was added.
 
 ## Design
@@ -63,7 +65,7 @@ A guest of its own goes under `guests/` with its recipe, the token its console p
 
 ## Limits
 
-* The Debian x86-64 guest boots under SVM on both outer profiles. The i686 guest and the corpus still await qualification.
+* The Debian x86-64 guest boots under SVM on both outer profiles, and it and the i686 disk under VMX on the Lenovo. The i686 guest under SVM and the corpus still await qualification: the corpus's rows that differ on the Lenovo, which need parts of Linux's KVM that Rach2's lacks, are named in [Results](#results).
 * The `max-svm` profile under TCG lacks NRIP save, TSC scaling and the pause filter, and has the five faults of Results, the last of which can leave a guest of Rach2's KVM that spins with its IF clear waiting on an interrupt QEMU does not deliver; the `host-svm` profile runs only on the testing PC.
 
 ## Tests

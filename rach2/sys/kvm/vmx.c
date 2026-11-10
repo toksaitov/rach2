@@ -344,10 +344,6 @@
 #define MC_VECTOR  18
 #define CP_VECTOR  21
 
-/* KVM's errors a hypercall returns, Linux's KVM_ENOSYS and KVM_EPERM. */
-#define KVM_ENOSYS 1000
-#define KVM_EPERM  1
-
 /* The guest's run, bounded by the preemption timer: about 4 million TSC
  * cycles, 2 ms at the Lenovo's 1.9 GHz, past the host's 1 ms tick, which
  * ends a run first unless something keeps it from the processor. */
@@ -2011,17 +2007,15 @@ static int exit_msr(struct kvm_vcpu *v, int write)
 }
 
 /** VMCALL (exit 18): a Hyper-V hypercall when the guest has Hyper-V
- * (hyperv.c), else Linux's answer to a hypercall it does not know,
- * -KVM_ENOSYS in RAX, or -KVM_EPERM above CPL 0; no KVM hypercall is
- * offered. */
+ * (hyperv.c), else a KVM hypercall, whose answer goes in RAX. */
 static int exit_vmcall(struct kvm_vcpu *v)
 {
-    uint64_t ret =
-        kvm_emul_cpl(v) > 0 ? (uint64_t)-(int64_t)KVM_EPERM : (uint64_t)-(int64_t)KVM_ENOSYS;
+    uint64_t ret;
 
     if (kvm_hv_hypercall_enabled(v)) {
         return kvm_hv_hypercall(v, vx(v)->ex.insn_len);
     }
+    ret = kvm_emul_hypercall(v);
 
     v->regs.rax = kvm_emul_mode(v) == 64 ? ret : (ret & 0xFFFFFFFFull);
     kvm_emul_skip(v, vx(v)->ex.insn_len);
@@ -2366,6 +2360,7 @@ static uint32_t inject_exception(struct kvm_vcpu *v, uint32_t len)
     } else {
         info |= TYPE_HW_EXC << 8;
     }
+    kvm_exception_rf(v);
     /* No error code in real mode, which the entry refuses, as Linux's
      * kvm_inject_exception drops it outside protected mode. */
     if ((v->events.exception.has_error_code || v->events.exception.pending) && has_error_code(nr) &&
