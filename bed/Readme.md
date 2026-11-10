@@ -62,4 +62,4 @@ virglrenderer loads EGL and OpenGL at run time through libepoxy, and Debian's `v
 
 ## Tests
 
-`sh bed/fixture/vtest-guest.sh check` is the relay's check between two Linux machines, the host and the guest; it runs no suite. `tests/run bed-vtest` is the check on Rach2: `triangle` boots the guest under TCG in the GNU root's QEMU, and `triangle-kvm` under Rach2's KVM on the `host-svm` processor profile, which only the testing PC gives, by nested KVM. Both run on Linux alone: on the Mac, Rach2 itself runs under TCG, so the guest's whole Debian boot would be emulated twice.
+`sh bed/fixture/vtest-guest.sh check` is the relay's check between two Linux machines, the host and the guest; it runs no suite. `tests/run bed-vtest` is the check on Rach2: `triangle` boots the guest under TCG in the GNU root's QEMU, and `triangle-kvm` under Rach2's KVM on the `max-svm` processor profile, which gives Rach2 AMD's virtualization under the run's accelerator, TCG or KVM, as the [KVM suite](../tests/kvm/Readme.md) says. Both run on Linux alone: on the Mac, Rach2 itself runs under TCG, so the guest's whole Debian boot would be emulated twice.
