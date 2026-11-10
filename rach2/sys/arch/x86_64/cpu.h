@@ -316,10 +316,10 @@ typedef unsigned int core_uid_t;
 #define SC_CLONE_CTID      3
 
 /* The 8259 pair's sixteen lines arrive on vectors 32 to 47, and a device's
- * messages on 48 to 63. */
+ * messages on 48 to 239, but 128 (x86/vector.h). */
 #define IRQ_VECTOR(line) (32 + (line))
 #define ISR_DEVICE_FIRST 32
-#define ISR_DEVICE_LAST  63
+#define ISR_DEVICE_LAST  0xEF
 
 /* The running processor's index in the per-processor table
  * (proc/percpu.h): the `id` of the processor's own record, which GS's base

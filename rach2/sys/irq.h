@@ -54,7 +54,7 @@ int isr_alloc_vector(void);
 
 /**
  * As `isr_alloc_vector`, but the lowest free vector that is a multiple of
- * `align`, a power of two from 1 to 16: for a device that writes its message
+ * `align`, a power of two from 1 to 32: for a device that writes its message
  * number into the low bits of the data whatever its Multiple Message Enable
  * says, so that message 0 still lands on the vector it was given.
  */

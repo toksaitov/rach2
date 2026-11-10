@@ -49,9 +49,9 @@ int ldt_fault(const isr_params_t *p);
  * /proc/stat's `intr` line reports. */
 static volatile uint32_t irq_count = 0;
 
-/* One count per vector this kernel takes interrupts on, 32 to 63, which is
- * what /proc/interrupts reports. */
-static volatile uint32_t vector_count[32];
+/* One count per vector this kernel takes interrupts on, 32 to ISR_MSI_LAST,
+ * which is what /proc/interrupts reports. */
+static volatile uint32_t vector_count[ISR_MSI_LAST - 31];
 
 /*
  * Each vector has a short chain of handlers, so that devices that share one
@@ -63,7 +63,6 @@ static volatile uint32_t vector_count[32];
  * and the interrupt would repeat without end.
  */
 static isr_handler_t _isr_handlers[256][ISR_MAX_VECTOR_HANDLERS];
-static uint8_t _vector_taken[256]; /* given to a device by isr_alloc_vector */
 
 /* What each handler asked to be called, indexed as the chain is. A name is
  * the only thing /proc/interrupts can say about a line that a number cannot:
@@ -509,24 +508,17 @@ int isr_alloc_vector(void)
 
 /**
  * The lowest free message vector that is a multiple of `align`, marked as
- * given; -1 with a record when none is free. An `align` that is not a power
- * of two from 1 to 16 is taken as 1.
+ * given (`vector_take`); -1 with a record when none is free. An `align`
+ * that is not a power of two from 1 to 32 is taken as 1.
  */
 int isr_alloc_vector_aligned(int align)
 {
-    int v;
+    int v = vector_take(align);
 
-    if (align < 1 || align > 16 || (align & (align - 1)) != 0) {
-        align = 1;
+    if (v < 0) {
+        klog(KLOG_ERR, "isr", "vector: none free for a device, aligned to %d", align);
     }
-    for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
-        if (v % align == 0 && !_vector_taken[v]) {
-            _vector_taken[v] = 1;
-            return v;
-        }
-    }
-    klog(KLOG_ERR, "isr", "vector: none free for a device, aligned to %d", align);
-    return -1;
+    return v;
 }
 
 /**
@@ -537,14 +529,13 @@ void isr_free_vector(int vector)
 {
     int i;
 
-    if (vector < ISR_MSI_FIRST || vector > ISR_MSI_LAST || !_vector_taken[vector]) {
+    if (!vector_give(vector)) {
         return;
     }
     for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
         _isr_handlers[vector][i] = 0;
         _isr_names[vector][i] = 0;
     }
-    _vector_taken[vector] = 0;
 }
 
 /**
@@ -789,7 +780,7 @@ void _irq_router(isr_params_t *params)
         bkl_enter();
     }
     irq_count++;
-    if (params->vector >= 32 && params->vector < 64) {
+    if (params->vector >= 32 && params->vector <= ISR_MSI_LAST) {
         vector_count[params->vector - 32]++;
     }
 
@@ -844,13 +835,13 @@ static uint32_t isr_ticks_unlocked(void)
 /**
  * The count of interrupts taken on `vector`, for /proc/interrupts.
  *
- * Vectors below 32 are exceptions, and those above 63 are the system call
- * gate, the interprocessor interrupt and the APIC's spurious vector, none
- * of which this counts; their count is 0.
+ * Vectors below 32 are exceptions, and those above ISR_MSI_LAST are the
+ * interprocessor interrupt and the APIC's spurious vector, none of which
+ * this counts, any more than the system call gate, 128; their count is 0.
  */
 uint32_t isr_vector_count(int vector)
 {
-    if (vector < 32 || vector >= 64) {
+    if (vector < 32 || vector > ISR_MSI_LAST) {
         return 0;
     }
     return vector_count[vector - 32] + (vector == IRQ_VECTOR(0) ? isr_ticks_unlocked() : 0u);
@@ -878,7 +869,7 @@ uint32_t isr_interrupt_total(void)
 
 const char *isr_vector_source(int vector)
 {
-    if (vector >= ISR_MSI_FIRST) {
+    if (vector >= ISR_MSI_FIRST && vector <= ISR_MSI_LAST) {
         return "MSI";
     }
     if (!lines_apic) {

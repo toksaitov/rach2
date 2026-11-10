@@ -4,6 +4,7 @@
 #include "tss.h"
 #include "../x86/lapic.h"
 #include "../x86/smpboot.h"
+#include "../../panic.h"
 
 idt_descriptor_t idt_descriptors[256];
 idt_ptr_t idt_address;
@@ -31,6 +32,8 @@ static void _idt_set_desciptor(size_t index, uint32_t offset, uint16_t segment_s
  */
 void init_idt(void)
 {
+    int v;
+
     idt_address.base = (uintptr_t)&idt_descriptors;
     idt_address.limit = sizeof(idt_descriptor_t) * 256 - 1;
 
@@ -89,23 +92,19 @@ void init_idt(void)
     _idt_set_desciptor(46, (uintptr_t)&irq14, 0x08, 0x8E);
     _idt_set_desciptor(47, (uintptr_t)&irq15, 0x08, 0x8E);
 
-    /* Vectors 48 to 63 carry messages from PCI devices. */
-    _idt_set_desciptor(48, (uintptr_t)&msi0, 0x08, 0x8E);
-    _idt_set_desciptor(49, (uintptr_t)&msi1, 0x08, 0x8E);
-    _idt_set_desciptor(50, (uintptr_t)&msi2, 0x08, 0x8E);
-    _idt_set_desciptor(51, (uintptr_t)&msi3, 0x08, 0x8E);
-    _idt_set_desciptor(52, (uintptr_t)&msi4, 0x08, 0x8E);
-    _idt_set_desciptor(53, (uintptr_t)&msi5, 0x08, 0x8E);
-    _idt_set_desciptor(54, (uintptr_t)&msi6, 0x08, 0x8E);
-    _idt_set_desciptor(55, (uintptr_t)&msi7, 0x08, 0x8E);
-    _idt_set_desciptor(56, (uintptr_t)&msi8, 0x08, 0x8E);
-    _idt_set_desciptor(57, (uintptr_t)&msi9, 0x08, 0x8E);
-    _idt_set_desciptor(58, (uintptr_t)&msi10, 0x08, 0x8E);
-    _idt_set_desciptor(59, (uintptr_t)&msi11, 0x08, 0x8E);
-    _idt_set_desciptor(60, (uintptr_t)&msi12, 0x08, 0x8E);
-    _idt_set_desciptor(61, (uintptr_t)&msi13, 0x08, 0x8E);
-    _idt_set_desciptor(62, (uintptr_t)&msi14, 0x08, 0x8E);
-    _idt_set_desciptor(63, (uintptr_t)&msi15, 0x08, 0x8E);
+    /* Vectors 48 to 239 carry messages from PCI devices, but for 128. */
+    if (isr_msi_stubs_end - isr_msi_stubs !=
+        (ISR_MSI_LAST - ISR_MSI_FIRST + 1) * ISR_MSI_STUB_BYTES) {
+        k_panic("idt: a message vector's stub is not 16 bytes from the last");
+    }
+    for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
+        if (v != ISR_SYSCALL_VECTOR) {
+            _idt_set_desciptor((size_t)v,
+                               (uintptr_t)isr_msi_stubs +
+                                   (uintptr_t)(v - ISR_MSI_FIRST) * ISR_MSI_STUB_BYTES,
+                               0x08, 0x8E);
+        }
+    }
 
     /* The APIC's spurious vector; without a gate it would raise #GP. */
     _idt_set_desciptor(255, (uintptr_t)&spurious_isr, 0x08, 0x8E);

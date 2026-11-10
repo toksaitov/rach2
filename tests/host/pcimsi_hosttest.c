@@ -2,6 +2,7 @@
  * pcimsi_hosttest.c: `pci_msi_enable` against a model of configuration space.
  *
  * host-deps: rach2/sys/pci.c rach2/sys/arch/x86/pciconf.c
+ * host-deps: rach2/sys/arch/x86/vector.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
  * The rows check the order of the writes: a device told to send messages
@@ -16,6 +17,7 @@
  */
 
 #include "../../rach2/sys/pci.h"
+#include "../../rach2/sys/arch/x86/vector.h"
 
 /* Where a PC writes a message, as arch/x86/pciconf.c builds it: the local
  * APIC's page, with the processor's identity in bits 12 to 19. */
@@ -431,6 +433,71 @@ void mmio_unmap(uintptr_t va, size_t size)
  * write must leave the status word beside the command word alone: its bits
  * are cleared by writing them as one.
  */
+/** A halfword write to the command word of `dev`, beside a latched status
+ * bit. */
+static void halfword_rows(const pci_device_t *dev)
+{
+    model_reset();
+    space[0x04] = 0x03; /* the command word: I/O and memory decoding */
+    space[0x05] = 0x00;
+    space[0x06] = 0x10; /* the status word: a capability list, and */
+    space[0x07] = 0x40; /* a system error the bus latched */
+    pci_write_config16(dev->bus, dev->device, dev->function, 0x04, 0x0007u);
+    check(cfg16(0x04) == 0x0007u, "a halfword write reaches the register it names");
+    check(cfg16(0x06) == 0x4010u, "and leaves the latched status beside it alone");
+}
+
+/**
+ * The pool of message vectors (vector.c): all 191 taken, past the sixteen
+ * of the old pool, none of them 0x80 or outside 48 to 239, the 192nd
+ * refused; vectors given back and taken again, lowest first; aligned
+ * vectors; and the pool whole again at the end.
+ */
+static void vector_rows(void)
+{
+    static int got[ISR_MSI_COUNT];
+    int i, v, bad = 0, dup = 0;
+
+    check(vector_free_count() == 191, "the pool has 191 vectors");
+    for (i = 0; i < ISR_MSI_COUNT; i++) {
+        got[i] = vector_take(1);
+        if (got[i] < ISR_MSI_FIRST || got[i] > ISR_MSI_LAST || got[i] == ISR_SYSCALL_VECTOR) {
+            bad++;
+        }
+        if (i > 0 && got[i] <= got[i - 1]) {
+            dup++;
+        }
+    }
+    check(bad == 0 && dup == 0, "each of 191 takes is a new vector of 48 to 239, never 0x80");
+    check(got[15] == 63 && got[16] == 64, "the seventeenth device gets 64");
+    check(got[ISR_MSI_COUNT - 1] == 0xEF, "the last is 0xEF, below the IPI's 0xF0");
+    check(vector_take(1) == -1 && vector_free_count() == 0, "the 192nd is refused");
+
+    check(vector_give(100) == 1 && vector_give(70) == 1 && vector_give(200) == 1,
+          "three vectors given back");
+    check(vector_give(70) == 0, "a vector given back twice is left alone");
+    check(vector_give(ISR_SYSCALL_VECTOR) == 0 && vector_give(47) == 0 && vector_give(0xF0) == 0,
+          "0x80, a line's vector and the IPI's are not the pool's");
+    check(vector_free_count() == 3, "three are free");
+    check(vector_take(1) == 70 && vector_take(1) == 100 && vector_take(1) == 200,
+          "and come back lowest first");
+
+    for (i = 0; i < ISR_MSI_COUNT; i++) {
+        (void)vector_give(got[i]);
+    }
+    check(vector_free_count() == 191, "every vector given back");
+    v = vector_take(32);
+    check(v == 64, "the first multiple of 32 is 64");
+    check(vector_take(32) == 96 && vector_take(32) == 160,
+          "the next skips 128, the system call's gate");
+    check(vector_take(16) == 48 && vector_take(16) == 80, "multiples of 16 fill the gaps");
+    check(vector_take(3) == 49, "an alignment not a power of two is taken as 1");
+    for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
+        (void)vector_give(v);
+    }
+    check(vector_free_count() == 191, "and the pool is whole again");
+}
+
 int main(void)
 {
     pci_device_t dev;
@@ -582,17 +649,9 @@ int main(void)
     pci_msi_disable(&dev);
     check(nwrites == 0, "disabling a device with no MSI writes nothing");
 
-    /* A halfword write to the command word, beside a latched status bit. */
-    model_reset();
-    space[0x04] = 0x03; /* the command word: I/O and memory decoding */
-    space[0x05] = 0x00;
-    space[0x06] = 0x10; /* the status word: a capability list, and */
-    space[0x07] = 0x40; /* a system error the bus latched */
-    pci_write_config16(dev.bus, dev.device, dev.function, 0x04, 0x0007u);
-    check(cfg16(0x04) == 0x0007u, "a halfword write reaches the register it names");
-    check(cfg16(0x06) == 0x4010u, "and leaves the latched status beside it alone");
-
+    halfword_rows(&dev);
     msix_rows(&dev);
+    vector_rows();
 
     if (fails == 0) {
         printf("pcimsi_hosttest: OK\n");
