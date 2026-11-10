@@ -604,12 +604,15 @@ static void seg_read(const struct vmcb_seg *d, struct kvm_segment *s)
     s->padding = 0;
 }
 
-/** CR0 as the processor runs the guest under it: never CD or NW, as
- * Linux's KVM_X86_QUIRK_CD_NW_CLEARED leaves them, since nested paging
- * gives the memory types. */
-static uint64_t hw_cr0(uint64_t cr0)
+/** `v`'s CR0 as the processor runs the guest under it: without CD and NW
+ * under KVM_X86_QUIRK_CD_NW_CLEARED, since nested paging gives the memory
+ * types, and the guest's own once the quirk is turned off, as Linux's
+ * svm_set_cr0 has it. */
+static uint64_t hw_cr0(const struct kvm_vcpu *v)
 {
-    return cr0 & ~(CR0_CD | CR0_NW);
+    uint64_t cr0 = v->sregs.cr0;
+
+    return KVM_QUIRK(v->vm, KVM_X86_QUIRK_CD_NW_CLEARED) ? cr0 & ~(CR0_CD | CR0_NW) : cr0;
 }
 
 /** The intercepts of the control registers: CR0's reads and writes while
@@ -620,7 +623,7 @@ static uint32_t cr_intercepts(const struct kvm_vcpu *v)
 {
     uint32_t i = (1u << 4) | (1u << (16 + 4)) | (1u << (16 + 8));
 
-    if (hw_cr0(v->sregs.cr0) != v->sregs.cr0) {
+    if (hw_cr0(v) != v->sregs.cr0) {
         i |= 1u | (1u << 16);
     }
     return i;
@@ -848,7 +851,7 @@ static void entry_fields(struct kvm_vcpu *v)
     c->intercept_cr = cr_intercepts(v);
     c->nested_cr3 = kvm_tdp_root(v->vm);
     c->clean = 0;
-    g->cr0 = hw_cr0(v->sregs.cr0);
+    g->cr0 = hw_cr0(v);
     g->cr3 = v->sregs.cr3;
     g->cr4 = v->sregs.cr4 | caps.host_mce;
     g->efer = v->sregs.efer | GEFER_SVME;
