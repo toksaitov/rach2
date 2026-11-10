@@ -2243,7 +2243,7 @@
         {"assertion_id": "reopen-defaults", "checks": "A new open of the slave has the default termios, ECHO among them.", "source": "program"},
         {"assertion_id": "eperm", "checks": "A process of uid 1000 gets EPERM.", "source": "program"},
         {"assertion_id": "blocked-write", "checks": "The writer, asleep in its wait for room when vhangup ran, ends with the bytes it wrote.", "source": "program"},
-        {"assertion_id": "output-flush", "checks": "vhangup discards unread slave output and leaves the master in packet mode no status: FIONREAD gives 0 and a read EAGAIN at once.", "source": "program"},
+        {"assertion_id": "output-flush", "checks": "vhangup leaves the master in packet mode no status and at most a prefix of the slave's output: FIONREAD gives 0 and a read EAGAIN at once, or a count above 0 and a read TIOCPKT_DATA and a prefix of the bytes written, which Linux's read buffer may keep.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The child exits 0 and the master closes.", "source": "program"}
       ],
       "branches": [],
