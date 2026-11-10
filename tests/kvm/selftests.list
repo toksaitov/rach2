@@ -6,7 +6,8 @@
 # fails and Rach2 is to fail as it does; or `excluded`, not run, for one of
 # the reasons the stack's approved plan allows. A test whose result is the
 # processor's has FLAG?A:B there: A on a processor whose `flags` in
-# /proc/cpuinfo have FLAG and B on one without it. LINUX is the result of the
+# /proc/cpuinfo have FLAG, or whose KVM answers KVM_CAP_VM_TSC_CONTROL where
+# FLAG is `kvm_cap_vm_tsc_control`, and B on one without it. LINUX is the result of the
 # same 6.12.115 programs under Linux 6.18.58, WSL's, as ref/linux-
 # selftests.status has it; a row Linux failed there, where the programs are
 # older than the kernel, expects a pass unless its EXPECT is `fail`, and names
@@ -77,7 +78,7 @@ x86_64/svm_vmcall_test excluded pass nested virtualization, excluded by the owne
 x86_64/sync_regs_test pass pass
 x86_64/triple_fault_event_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/tsc_msrs_test pass pass
-x86_64/tsc_scaling_sync tsc_scale?pass:skip pass Requirement not met: kvm_has_cap(KVM_CAP_VM_TSC_CONTROL), on a processor that scales no TSC, as TCG's and the Lenovo's
+x86_64/tsc_scaling_sync kvm_cap_vm_tsc_control?pass:skip pass Requirement not met: kvm_has_cap(KVM_CAP_VM_TSC_CONTROL), on a processor that scales no TSC, as TCG's and the Lenovo's
 x86_64/ucna_injection_test skip skip MCG_CMCI_P is not supported, skipping test
 x86_64/userspace_io_test pass pass
 x86_64/userspace_msr_exit_test pass fail Linux: not ok 3 user_msr.msr_permission_bitmap
