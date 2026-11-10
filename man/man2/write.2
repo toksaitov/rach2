@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt WRITE 2
 .Os
 .Sh NAME
@@ -179,14 +179,21 @@ Zero-length entries are skipped.
 Each nonempty entry is passed to the same operation as
 .Fn write .
 The call stops at the first short write or error.
+Before a byte is written the kernel checks each length, then that each
+range lies in user space, as Linux's import_iovec does: a length negative
+as a signed size, which for a 32-bit program is one past 2147483647,
+gives
+.Er EINVAL ,
+and a range outside user space
+.Er EFAULT .
+The total is cut at 0x7ffff000, as one write's count is, and the buffer
+that crosses it is written only up to it.
 .Pp
-For an append to a mounted file, the kernel copies and range-checks the
-whole vector, then brings in its buffers before taking the file lock.
+For an append to a mounted file, the kernel copies the whole vector, then
+brings in its buffers before taking the file lock.
 A bad data page ends the accessible prefix; bytes before it are written
 and returned as a short count.
-Other writes read and check each vector as they reach it.
-An individual length above 2147483647, or a length that would make the
-running byte total exceed that value, stops the call.
+Other writes read each vector again as they reach it.
 An error found after a positive transfer returns the transferred byte
 count instead of the error.
 With zero vectors, or a readable vector list of zero-length entries
@@ -410,8 +417,8 @@ framebuffer write starts past the mode's end.
 A signal interrupted a wait, or a background terminal write posted
 .Dv SIGTTOU .
 .It Er EINVAL
-The vector count is outside 0 through 1024, a vector length exceeds
-2147483647, or the next length would overflow the running byte total.
+The vector count is outside 0 through 1024, or a vector length is
+negative as a signed size.
 .Fn pwrite
 was given a negative offset or an end past the signed 64-bit range.
 A raw write has an offset or length not divisible by 512.

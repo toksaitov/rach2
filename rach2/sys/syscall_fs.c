@@ -1066,6 +1066,59 @@ int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
                : 0;
 }
 
+/**
+ * Check the `count` elements of the vector at `uvec` as Linux's
+ * __import_iovec does, and return their total, cut at MAX_RW_COUNT
+ * (USER_RW_MAX), or -errno. Every length is checked first: one negative as
+ * the caller's ssize_t, which for an i386 call (`in_compat_syscall`) is one
+ * past 0x7FFFFFFF, is -EINVAL. Then each range must end in user space
+ * (`user_span_ok`), its whole length for a vector of several elements and
+ * its length cut to USER_RW_MAX for one alone, as Linux's import_ubuf cuts
+ * first, or the answer is -EFAULT; the element that crosses USER_RW_MAX is
+ * cut there and those after it to 0. With `prefault` 0 or 1 each element's
+ * cut bytes must also be readable, or writable, and are faulted in
+ * (`user_buffer_ok`), or the answer is -EFAULT, so that a transfer that
+ * cannot be undone meets a bad buffer before a byte moves; -1 skips this.
+ * With `iov` not NULL, it holds `count` elements and gets them, cut. An
+ * unreadable vector is -EFAULT. It may sleep.
+ */
+static long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefault)
+{
+    struct kernel_iovec one;
+    uint32_t total = 0;
+    int pass, i;
+
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < count; i++) {
+            struct kernel_iovec *e = iov ? &iov[i] : &one;
+            unsigned long len;
+
+            if ((pass == 0 || !iov) && iov_fetch(e, uvec, (uint32_t)i) != 0) {
+                return -EFAULT;
+            }
+            if ((long)e->iov_len < 0 || (in_compat_syscall() && e->iov_len > 0x7FFFFFFFu)) {
+                return -EINVAL;
+            }
+            if (pass == 0) {
+                continue;
+            }
+            len = count == 1 ? USER_RW_LEN(e->iov_len) : e->iov_len;
+            if (!user_span_ok(e->iov_base, len)) {
+                return -EFAULT;
+            }
+            if (len > USER_RW_MAX - total) {
+                len = USER_RW_MAX - total;
+            }
+            if (prefault >= 0 && len > 0 && !user_buffer_ok(e->iov_base, len, prefault)) {
+                return -EFAULT;
+            }
+            e->iov_len = len;
+            total += (uint32_t)len;
+        }
+    }
+    return (long)total;
+}
+
 /** The bytes of a vector of `count` bytes that a tmpfs file sealed against
  * growth lets in, into `*room`, before any element is written: the whole
  * pages before its end once the vector would pass it (`tmpfs_grow_room`),
@@ -1102,13 +1155,14 @@ static int32_t iov_seal_grow(const struct open_file *ofd, uint64_t pos, uint32_t
  * takes, to hold across the elements, and put in `*cap` the bytes of the
  * vector a file sealed against growth lets in (`iov_seal_grow`), refusing
  * with EPERM, with nothing written, a vector of which no byte fits. The
- * elements counted are those the writes would reach, up to the first the
- * loop refuses, and their bytes are faulted in before the lock is taken,
- * as one write's are. `*held` is the mount to unlock after the elements,
- * or NULL for a descriptor of anything else, whose `*cap` is no limit.
+ * bytes counted are the first `wanted` of the vector, which `iov_import`
+ * checked, up to the first element that cannot be read, and they are
+ * faulted in before the lock is taken, as one write's are. `*held` is the
+ * mount to unlock after the elements, or NULL for a descriptor of anything
+ * else, whose `*cap` is no limit.
  */
-static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_mount **held,
-                            uint32_t *cap)
+static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, uint32_t wanted,
+                            struct vfs_mount **held, uint32_t *cap)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     struct kernel_iovec iov;
@@ -1123,13 +1177,17 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
         return 0;
     }
     ofd = entry->ofd;
-    for (i = 0; i < iovcnt; i++) {
-        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0 || iov.iov_len > 0x7FFFFFFFu ||
-            extent > 0x7FFFFFFFu - iov.iov_len ||
-            (iov.iov_len > 0 && !user_buffer_ok(iov.iov_base, iov.iov_len, 0))) {
+    for (i = 0; i < iovcnt && extent < wanted; i++) {
+        uint32_t len;
+
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             break;
         }
-        extent += (uint32_t)iov.iov_len;
+        len = iov.iov_len < wanted - extent ? (uint32_t)iov.iov_len : wanted - extent;
+        if (len > 0 && !user_buffer_ok(iov.iov_base, len, 0)) {
+            break;
+        }
+        extent += len;
     }
     vfs_ns_lock(ofd->vmnt);
     *held = ofd->vmnt;
@@ -1144,14 +1202,14 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
 }
 
 /**
- * Write the `iovcnt` elements of the vector at `iov_user` to `fd`, one at a
- * time by `write_fd`, and return the bytes written. A short write ends the
- * call, as writev does. A fault, a length past the signed 32-bit range or
- * one that would carry the total past it (-EINVAL, as on Linux), or a failed
- * write ends the call too: with the error when nothing was written yet, and
- * otherwise with the bytes before it, as a short write does, since a caller
- * that retried after the error would write those bytes again. No more than
- * `cap` bytes are written, which ends the call as a short write does.
+ * Write the `iovcnt` elements of the vector at `iov_user`, which
+ * `iov_import` checked, to `fd`, one at a time by `write_fd`, and return
+ * the bytes written. A short write ends the call, as writev does. A fault
+ * or a failed write ends the call too: with the error when nothing was
+ * written yet, and otherwise with the bytes before it, as a short write
+ * does, since a caller that retried after the error would write those bytes
+ * again. No more than `cap` bytes are written, the total `iov_import` gave
+ * or less, which ends the call as a short write does.
  */
 static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt, uint32_t cap)
 {
@@ -1169,16 +1227,9 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt, uint32_t 
         if (iov.iov_len == 0) {
             continue;
         }
-        if (iov.iov_len > 0x7FFFFFFFu || (uint32_t)total > 0x7FFFFFFFu - iov.iov_len) {
-            return (total > 0) ? total : -EINVAL;
-        }
-        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
+        len = iov.iov_len < cap - (uint32_t)total ? (uint32_t)iov.iov_len : cap - (uint32_t)total;
+        if (!user_access_ok(iov.iov_base, len)) {
             return (total > 0) ? total : -EFAULT;
-        }
-
-        len = USER_LEN32(iov.iov_len);
-        if (len > cap - (uint32_t)total) {
-            len = cap - (uint32_t)total;
         }
         r = write_fd(fd, (const char __user *)iov.iov_base, len);
         if (r < 0) {
@@ -1208,17 +1259,20 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
  * uses iov_file_write's lock across the vector. Otherwise elements are written
  * in order (`writev_elements`); on a tmpfs file the mount's lock is held across
  * them, and a vector that would grow a sealed file is cut to the whole
- * pages before its end (`writev_begin`). Returns the bytes written, or a
- * negative errno: -EINVAL for a count below 0 or past IOV_MAX_LOCAL, -EPERM
- * for a vector of which the seal lets no byte in, or a transfer error when
- * no byte was written. A buffer fault after a positive transfer returns the
- * bytes written before the fault.
+ * pages before its end (`writev_begin`). The vector is checked whole first
+ * (`iov_import`), and its total cut at MAX_RW_COUNT. Returns the bytes
+ * written, or a negative errno: -EINVAL for a count below 0 or past
+ * IOV_MAX_LOCAL or a negative length, -EFAULT for a vector or a range
+ * outside user space, -EPERM for a vector of which the seal lets no byte
+ * in, or a transfer error when no byte was written. A buffer fault after a
+ * positive transfer returns the bytes written before the fault.
  */
 static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
     fd_entry_t *entry;
     struct vfs_mount *held;
     uint32_t cap;
+    long wanted;
     int32_t rc;
 
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
@@ -1227,13 +1281,18 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     if (!current_proc) {
         return -ESRCH;
     }
-    rc = writev_begin(fd, iov_user, iovcnt, &held, &cap);
+    wanted = iov_import(NULL, iov_user, iovcnt, -1);
+    if (wanted < 0) {
+        return wanted;
+    }
+    rc = writev_begin(fd, iov_user, iovcnt, (uint32_t)wanted, &held, &cap);
     if (rc == 0) {
         entry = fd_get(current_proc->fds, fd);
         if (iov_append_file(entry)) {
             rc = (int32_t)iov_file_write(entry, iov_user, iovcnt, -1, 1);
         } else {
-            rc = writev_elements(fd, iov_user, iovcnt, cap);
+            rc = writev_elements(fd, iov_user, iovcnt,
+                                 cap < (uint32_t)wanted ? cap : (uint32_t)wanted);
         }
     }
     if (held) {
@@ -6380,12 +6439,13 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
  * and `scanf` depend on it.
  *
  * The whole array is checked before a byte is taken, since a read cannot be
- * undone: a count past IOV_MAX_LOCAL, or buffers of more than 0x7FFFFFFF
- * bytes in all, is -EINVAL, and an iovec the caller cannot read or a buffer
- * it cannot write is -EFAULT, with the input still queued. The buffers are
- * checked by `user_buffer_ok` with write access, which faults their pages
- * in, so an address inside the user window that is unmapped or read-only
- * fails here and not half way through. An array that asks for nothing
+ * undone (`iov_import`): a count past IOV_MAX_LOCAL, or a negative length,
+ * is -EINVAL, and an iovec the caller cannot read or a buffer it cannot
+ * write is -EFAULT, with the input still queued; the total is cut at
+ * MAX_RW_COUNT, as Linux's is. The buffers are checked by `user_buffer_ok`
+ * with write access, which faults their pages in, so an address inside the
+ * user window that is unmapped or read-only fails here and not half way
+ * through. An array that asks for nothing
  * still checks the descriptor, so a closed one is -EBADF. Once a byte has
  * been read, a later failure ends the call with the total.
  *
@@ -6408,7 +6468,7 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
 {
     struct kernel_iovec iov;
     fd_entry_t *entry;
-    uint32_t wanted = 0;
+    long wanted;
     int32_t total = 0;
     int walk;
     int i;
@@ -6416,23 +6476,10 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
-
-    for (i = 0; i < iovcnt; i++) {
-        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
-            return -EFAULT;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        if (iov.iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov.iov_len) {
-            return -EINVAL;
-        }
-        if (!user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
-            return -EFAULT;
-        }
-        wanted += (uint32_t)iov.iov_len;
+    wanted = iov_import(NULL, iov_user, iovcnt, 1);
+    if (wanted < 0) {
+        return wanted;
     }
-
     if (wanted == 0) {
         return read_fd(fd, (char __user *)0, 0);
     }
@@ -6443,7 +6490,8 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     }
     walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
 
-    for (i = 0; i < iovcnt; i++) {
+    for (i = 0; i < iovcnt && total < wanted; i++) {
+        uint32_t len;
         int32_t r;
 
         if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
@@ -6452,17 +6500,19 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
         if (iov.iov_len == 0) {
             continue;
         }
-        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
+        len = iov.iov_len < (uint32_t)(wanted - total) ? (uint32_t)iov.iov_len
+                                                       : (uint32_t)(wanted - total);
+        if (!user_access_ok(iov.iov_base, len)) {
             return (total > 0) ? total : -EFAULT;
         }
 
         if (total > 0 && !walk) {
-            r = read_ready(entry, fd, (char __user *)iov.iov_base, USER_LEN32(iov.iov_len));
+            r = read_ready(entry, fd, (char __user *)iov.iov_base, len);
             if (r <= 0) {
                 break;
             }
         } else {
-            r = read_fd(fd, (char __user *)iov.iov_base, USER_LEN32(iov.iov_len));
+            r = read_fd(fd, (char __user *)iov.iov_base, len);
             if (r < 0) {
                 return (total > 0) ? total : r;
             }
@@ -12324,36 +12374,6 @@ static long long pos_from_hilo(unsigned long high, unsigned long low)
 }
 
 /**
- * Check the `iovcnt` elements of the vector at `iov_user` for a positioned
- * transfer, as readv checks them, without touching their bytes: 0 with
- * their total in `*wanted`, -EFAULT for an element or a buffer the caller
- * cannot reach, or -EINVAL for a total of 2 GiB or more.
- */
-static long iov_at_check(uintptr_t iov_user, int iovcnt, int write, uint32_t *wanted)
-{
-    struct kernel_iovec iov;
-    int i;
-
-    *wanted = 0;
-    for (i = 0; i < iovcnt; i++) {
-        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
-            return -EFAULT;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        if (iov.iov_len > 0x7FFFFFFFu || *wanted > 0x7FFFFFFFu - iov.iov_len) {
-            return -EINVAL;
-        }
-        if (!user_buffer_ok(iov.iov_base, iov.iov_len, !write)) {
-            return -EFAULT;
-        }
-        *wanted += (uint32_t)iov.iov_len;
-    }
-    return 0;
-}
-
-/**
  * Move the first `wanted` bytes of the checked vector at `iov_user` from or,
  * with `write`, to `fd` at `pos`, element by element through `ksys_pread64`
  * or `ksys_pwrite64`, each at the position the ones before it reached. A
@@ -12398,13 +12418,14 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
  * written to `fd` at the position `pos`, which the descriptor's own offset
  * does not follow. An O_APPEND mounted file goes through iov_file_write, with
  * one lock across the vector. Other transfers check the vector whole first
- * (`iov_at_check`), so a bad element is refused before a byte moves, and
- * then move it (`iov_at_move`), a write cut to the whole pages a sealed
- * tmpfs file lets in (`iov_seal_grow`); a vector of no bytes still has the
- * descriptor checked. Returns the bytes moved or a negative errno: -EINVAL
- * for a negative position, a count past IOV_MAX_LOCAL or below 0, a vector
- * of 2 GiB or more, or one whose end would pass 2^63-1; -EFAULT for a
- * vector or a buffer the caller cannot reach; or the first element's error.
+ * (`iov_import`), so a bad element is refused before a byte moves, its
+ * total cut at MAX_RW_COUNT, and then move it (`iov_at_move`), a write cut
+ * to the whole pages a sealed tmpfs file lets in (`iov_seal_grow`); a
+ * vector of no bytes still has the descriptor checked. Returns the bytes
+ * moved or a negative errno: -EINVAL for a negative position, a count past
+ * IOV_MAX_LOCAL or below 0, a negative length, or a vector whose end would
+ * pass 2^63-1; -EFAULT for a vector or a buffer the caller cannot reach; or
+ * the first element's error.
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
@@ -12419,10 +12440,11 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     if (iov_append_file(entry)) {
         return iov_file_write(entry, iov_user, iovcnt, pos, 1);
     }
-    rc = iov_at_check(iov_user, iovcnt, write, &wanted);
-    if (rc != 0) {
+    rc = iov_import(NULL, iov_user, iovcnt, !write);
+    if (rc < 0) {
         return rc;
     }
+    wanted = (uint32_t)rc;
     if (wanted == 0) {
         return write ? ksys_pwrite64(fd, NULL, 0, pos) : ksys_pread64(fd, NULL, 0, pos);
     }
@@ -12449,32 +12471,6 @@ long sys_pwritev(isr_params_t *params)
 {
     return iov_at((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2),
                   pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3)), 1);
-}
-
-/**
- * Copy the `count` elements of the vector at `addr` into `iov` and check
- * each address range, without touching the buffers: 0 with their total
- * in `*wanted`, -EFAULT for an unreadable vector or a range outside user
- * space, or -EINVAL for a total of 2 GiB or more. Copying the list may sleep.
- */
-static long iov_import_write(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
-{
-    int i;
-
-    *wanted = 0;
-    for (i = 0; i < count; i++) {
-        if (iov_fetch(&iov[i], addr, (uint32_t)i) != 0) {
-            return -EFAULT;
-        }
-        if (iov[i].iov_len > 0x7FFFFFFFu || *wanted > 0x7FFFFFFFu - iov[i].iov_len) {
-            return -EINVAL;
-        }
-        if (iov[i].iov_len && !user_span_ok(iov[i].iov_base, iov[i].iov_len)) {
-            return -EFAULT;
-        }
-        *wanted += (uint32_t)iov[i].iov_len;
-    }
-    return 0;
 }
 
 /** Bring in an imported write vector before taking file locks. At the first
@@ -12516,15 +12512,17 @@ static uint32_t iov_write_prefix(struct kernel_iovec *iov, int count)
     return total;
 }
 
-/** Import a write vector and retain its accessible prefix before locking.
- * Return 0, an import error, or EFAULT when no requested byte is readable. */
+/** Import a write vector (`iov_import`), its total in `*wanted`, and
+ * retain its accessible prefix before locking. Return 0, an import error,
+ * or EFAULT when no requested byte is readable. */
 static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
 {
-    long rc = iov_import_write(iov, addr, count, wanted);
+    long rc = iov_import(iov, addr, count, -1);
 
-    if (rc != 0) {
+    if (rc < 0) {
         return rc;
     }
+    *wanted = (uint32_t)rc;
     return *wanted && iov_write_prefix(iov, count) == 0 ? -EFAULT : 0;
 }
 
@@ -12586,8 +12584,8 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
  * end (`iov_seal_grow`). Returns
  * the bytes written, including those before a bad data page, or an error
  * when no byte was written: -EINVAL for a count below 0 or past
- * IOV_MAX_LOCAL, a vector of 2 GiB or more, or one whose end at `pos`
- * would pass 2^63-1, -EFAULT for a vector or a
+ * IOV_MAX_LOCAL, a negative length, or a vector whose end at `pos` would
+ * pass 2^63-1, -EFAULT for a vector or a
  * buffer the caller cannot reach, -EBADF for a descriptor that is not a
  * file of a mount open for writing, -EBUSY for a file that backs a loop
  * device, or the write's error.
@@ -12703,37 +12701,19 @@ static long rwv2_entry(int fd, long long pos, int write, fd_entry_t **entry)
 
 /**
  * Import `count` vectors from `addr` into `iov`, which holds that many
- * native elements. As Linux 6.12's import_iovec does, check every signed
- * length, then every address range, cap the total at MAX_RW_COUNT, and
- * leave faulting in the data pages to the transfer. Returns the byte count
- * or -EFAULT/-EINVAL. The result keeps the caller's layout, packed back
- * into 32-bit pairs for an i386 entry, for iov_fetch to read through a
- * user-copy window. The caller checks count before allocating iov.
+ * native elements, by `iov_import`, leaving faulting in the data pages to
+ * the transfer. Returns the byte count or -EFAULT/-EINVAL. The result keeps
+ * the caller's layout, packed back into 32-bit pairs for an i386 entry, for
+ * iov_fetch to read through a user-copy window. The caller checks count
+ * before allocating iov.
  */
 static long rwv2_import(struct kernel_iovec *iov, uintptr_t addr, int count)
 {
-    uint32_t total = 0;
+    long total = iov_import(iov, addr, count, -1);
     int i;
 
-    for (i = 0; i < count; i++) {
-        if (iov_fetch(&iov[i], addr, (uint32_t)i) != 0) {
-            return -EFAULT;
-        }
-        if ((long)iov[i].iov_len < 0 || (in_compat_syscall() && iov[i].iov_len > 0x7FFFFFFFu)) {
-            return -EINVAL;
-        }
-    }
-    for (i = 0; i < count; i++) {
-        if (count == 1) {
-            iov[i].iov_len = USER_RW_LEN(iov[i].iov_len);
-        }
-        if (!user_span_ok(iov[i].iov_base, iov[i].iov_len)) {
-            return -EFAULT;
-        }
-        if (iov[i].iov_len > USER_RW_MAX - total) {
-            iov[i].iov_len = USER_RW_MAX - total;
-        }
-        total += (uint32_t)iov[i].iov_len;
+    if (total < 0) {
+        return total;
     }
     if (in_compat_syscall()) {
         for (i = 0; i < count; i++) {
@@ -12744,7 +12724,7 @@ static long rwv2_import(struct kernel_iovec *iov, uintptr_t addr, int count)
             k_memcpy((uint8_t *)iov + (size_t)i * sizeof(pair), pair, sizeof(pair));
         }
     }
-    return (long)total;
+    return total;
 }
 
 /** Transfer the copied vector at `addr`, opened to the user-copy checks,
@@ -13570,21 +13550,25 @@ long sys_tee(isr_params_t *params)
  * caller's vector at `uiov`, in order, for vmsplice: the first buffer waits
  * for bytes unless `nonblock`, as a read does, and the rest take only what
  * the pipe holds, as Linux's vmsplice_to_user stops at an empty pipe once it
- * has copied. Bytes leave the pipe only once copied out. Returns the bytes
+ * has copied. Bytes leave the pipe only once copied out, and no more than
+ * `wanted`, the vector's total cut at MAX_RW_COUNT. Returns the bytes
  * copied, 0 for an empty pipe with no writer, or the first error.
  */
-static long vmsplice_read(fd_entry_t *e, uintptr_t uiov, int iovcnt, int nonblock)
+static long vmsplice_read(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t wanted, int nonblock)
 {
     uint8_t chunk[VMSPLICE_CHUNK];
     struct kernel_iovec iov;
     long total = 0;
     int i;
 
-    for (i = 0; i < iovcnt; i++) {
+    for (i = 0; i < iovcnt && (uint32_t)total < wanted; i++) {
         uintptr_t done = 0;
 
         if (iov_fetch(&iov, uiov, (uint32_t)i) != 0) {
             return total > 0 ? total : -EFAULT;
+        }
+        if (iov.iov_len > wanted - (uint32_t)total) {
+            iov.iov_len = wanted - (uint32_t)total;
         }
         while (done < iov.iov_len) {
             uint32_t want = iov.iov_len - done > VMSPLICE_CHUNK ? VMSPLICE_CHUNK
@@ -13609,20 +13593,24 @@ static long vmsplice_read(fd_entry_t *e, uintptr_t uiov, int iovcnt, int nonbloc
 /**
  * Copy the `iovcnt` buffers of the caller's vector at `uiov` into the pipe
  * of the write end `e`, in order, for vmsplice, each as a write of the pipe
- * does, waiting for room unless `nonblock`. A short write ends the call.
+ * does, waiting for room unless `nonblock`. A short write ends the call,
+ * and so do `wanted` bytes, the vector's total cut at MAX_RW_COUNT.
  * Returns the bytes copied, or the first error when none were.
  */
-static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, int nonblock)
+static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t wanted, int nonblock)
 {
     struct kernel_iovec iov;
     long total = 0;
     int i;
 
-    for (i = 0; i < iovcnt; i++) {
+    for (i = 0; i < iovcnt && (uint32_t)total < wanted; i++) {
         int32_t r;
 
         if (iov_fetch(&iov, uiov, (uint32_t)i) != 0) {
             return total > 0 ? total : -EFAULT;
+        }
+        if (iov.iov_len > wanted - (uint32_t)total) {
+            iov.iov_len = wanted - (uint32_t)total;
         }
         if (iov.iov_len == 0) {
             continue;
@@ -13649,21 +13637,20 @@ static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, int nonblo
  * that does not change a buffer after a SPLICE_F_GIFT. The pipe end waits
  * unless SPLICE_F_NONBLOCK or its description's O_NONBLOCK. Returns the bytes
  * moved or a negative errno, in Linux's order: -EINVAL for an unknown flag,
- * -EBADF for a descriptor not open, -EINVAL for a count past IOV_MAX_LOCAL,
- * buffers of 2 GiB or more, or one of a negative length, -EFAULT for a
- * vector or a buffer the caller cannot reach, 0 for buffers of no bytes,
- * -EBADF for a descriptor that is no pipe, or the pipe's error.
+ * -EBADF for a descriptor not open, -EINVAL for a count past IOV_MAX_LOCAL
+ * or a buffer of a negative length (`iov_import`, which cuts the total at
+ * MAX_RW_COUNT), -EFAULT for a vector or a buffer the caller cannot reach,
+ * 0 for buffers of no bytes, -EBADF for a descriptor that is no pipe, or
+ * the pipe's error.
  */
 long sys_vmsplice(isr_params_t *params)
 {
     uintptr_t uiov = SC_ARG(params, 1);
     unsigned long cnt = SC_ARG(params, 2);
     uint32_t flags = (uint32_t)SC_ARG(params, 3);
-    struct kernel_iovec iov;
-    uint32_t wanted = 0;
     fd_entry_t *e;
     int write, nonblock;
-    uint32_t i;
+    long wanted;
 
     if (flags & ~SPLICE_F_ALL) {
         return -EINVAL;
@@ -13679,30 +13666,16 @@ long sys_vmsplice(isr_params_t *params)
     if (cnt > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
-    for (i = 0; i < (uint32_t)cnt; i++) {
-        if (iov_fetch(&iov, uiov, i) != 0) {
-            return -EFAULT;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        if (iov.iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov.iov_len) {
-            return -EINVAL;
-        }
-        if (!user_buffer_ok(iov.iov_base, iov.iov_len, !write)) {
-            return -EFAULT;
-        }
-        wanted += (uint32_t)iov.iov_len;
-    }
-    if (wanted == 0) {
-        return 0;
+    wanted = iov_import(NULL, uiov, (int)cnt, !write);
+    if (wanted <= 0) {
+        return wanted;
     }
     if (!pipe_is(e)) {
         return -EBADF;
     }
     nonblock = (flags & SPLICE_F_NONBLOCK) || copy_nonblock(e);
-    return write ? vmsplice_write(e, uiov, (int)cnt, nonblock)
-                 : vmsplice_read(e, uiov, (int)cnt, nonblock);
+    return write ? vmsplice_write(e, uiov, (int)cnt, (uint32_t)wanted, nonblock)
+                 : vmsplice_read(e, uiov, (int)cnt, (uint32_t)wanted, nonblock);
 }
 
 /**
