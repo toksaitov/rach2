@@ -44,6 +44,7 @@ ACPICA's core is vendored under [`vendor/acpica/`](../../../vendor/acpica/Readme
 * `boot.c` brings ACPICA up and starts the devices among its steps.
 * `ecio.c` is the embedded controller's command protocol over its two ports, and `ec.c` the controller on ACPICA: its address space and its queries.
 * `button.c` is the power and sleep buttons, `video.c` the video buses, and `ideapad.c` the IdeaPad's `VPC2004`.
+* `pnp.c` finds the 8042's keyboard and PS/2 mouse among the present devices with `_CRS`, as Linux's pnpacpi and i8042 PNP drivers do, and gives their `_HID` and `_CID`s to `i8042_pnp_device`, whose firmware ID chooses the touchpad's quirks ([`sys/arch/x86/`](../arch/x86/Readme.md)).
 * `call.c` is `/proc/acpi/call`.
 * `sleep.c` is the power off.
 

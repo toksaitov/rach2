@@ -43,7 +43,7 @@ Each architecture's `loader.s` (`sys/arch/i686/`, `sys/arch/x86_64/`) has a Mult
 
 ### kernel_main
 
-`kernel_main` (`kernel.c`) takes the big lock, checks that each module lies past the kernel's image and overlaps no other, and brings up the kernel in this order, logging each step: the processor's tables and the floating-point state; the frame map, the page tables and the page cache; ACPI's tables, the interrupt controllers and the 1000 Hz tick; the clock and the random generator's seed; the keyboard, the console terminal and the mouse; the system call table; process 0 and the scheduler; sound; the disks and the root; USB; the pipe and pty pools; the network; the boot's self-tests; and last the other processors, which wait for the big lock until the first program lets it go.
+`kernel_main` (`kernel.c`) takes the big lock, checks that each module lies past the kernel's image and overlaps no other, and brings up the kernel in this order, logging each step: the processor's tables and the floating-point state; the frame map, the page tables and the page cache; ACPI's tables, the interrupt controllers and the 1000 Hz tick; the clock and the random generator's seed; the keyboard and the console terminal; the system call table; process 0 and the scheduler; ACPICA, then the mouse, whose touchpad quirks the PS/2 mouse's PNP IDs choose; sound; the disks and the root; USB; the pipe and pty pools; the network; the boot's self-tests; and last the other processors, which wait for the big lock until the first program lets it go.
 
 ### The root
 
