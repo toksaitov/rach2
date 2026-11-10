@@ -415,6 +415,8 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->id = id;
     v->index = vm->nr_vcpus;
     v->cpu = -1;
+    v->clock_cpu = -1;
+    v->hlt_in_guest = (vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT) != 0;
     k_memcpy(v->name, "kvm-vcpu:", 9);
     put_decimal(v->name + 9, id);
     v->anon.name = v->name;
@@ -448,6 +450,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     }
     vm->vcpus[vm->nr_vcpus++] = v;
     kvm_vm_get(vm);
+    kvm_tsc_sync(v, NULL);
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;
     e->ops = &vcpu_ops;
@@ -720,6 +723,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
                 return r > 0 ? 0 : r;
             }
         }
+        kvm_clock_prepare(v);
         if (kvm_vcpu_test_clear(v, KVM_REQ_EVENT)) {
             if (kvm_backend->inject) {
                 kvm_backend->inject(v);
@@ -1198,6 +1202,7 @@ static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
     kfree(v->cpuid);
     v->cpuid = ent;
     v->cpuid_nent = head.nent;
+    kvm_pv_cpuid_update(v, 1);
     v->dirty |= KVM_PART_CPUID;
     return 0;
 }
@@ -1526,8 +1531,9 @@ static int32_t set_vapic(struct kvm_vcpu *v, uintptr_t arg)
 }
 
 /** KVM_ENABLE_CAP of a vCPU: Linux's x86 vCPU capabilities are Hyper-V's,
- * hyperv.c's, and the enforcement of paravirtual features, which is not
- * offered. -EINVAL for a flag or a capability not enabled, as Linux. */
+ * hyperv.c's, and KVM_CAP_ENFORCE_PV_FEATURE_CPUID, which holds the guest
+ * to the paravirtual features its CPUID names. -EINVAL for a flag or a
+ * capability not enabled, as Linux. */
 static int32_t vcpu_enable_cap(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_enable_cap cap;
@@ -1537,6 +1543,13 @@ static int32_t vcpu_enable_cap(struct kvm_vcpu *v, uintptr_t arg)
     }
     if (cap.flags) {
         return -EINVAL;
+    }
+    if (cap.cap == KVM_CAP_ENFORCE_PV_FEATURE_CPUID) {
+        v->pv_enforce = cap.args[0] != 0;
+        if (v->pv_enforce) {
+            kvm_pv_cpuid_update(v, 0);
+        }
+        return 0;
     }
     return kvm_hv_enable_cap(v, &cap);
 }
@@ -1633,7 +1646,9 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
     case KVM_GET_TSC_KHZ:
         /* The host's rate, which every guest's TSC runs at; 0 when the
          * kernel measured none. */
-        return (int32_t)((uint64_t)timer_calibrate() * TICK_HZ / 1000u);
+        return (int32_t)kvm_tsc_khz();
+    case KVM_KVMCLOCK_CTRL:
+        return kvm_clock_ctrl(v);
     default:
         return -EINVAL;
     }

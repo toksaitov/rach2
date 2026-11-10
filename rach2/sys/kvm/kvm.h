@@ -209,6 +209,26 @@ struct kvm_vm {
     uint64_t tss_addr;     /* KVM_SET_TSS_ADDR */
     uint64_t ident_addr;   /* KVM_SET_IDENTITY_MAP_ADDR; 0xFEFFC000 by default */
     int64_t clock_offset;  /* the guest's kvmclock less the host's monotonic ns */
+    /* The kvmclock's master clock (pvclock.c): while `master_clock` is set,
+     * the kvmclock at the host's TSC count t is master_ns + clock_offset
+     * plus t - master_tsc at the TSC's rate, `master_mul` and
+     * `master_shift` in the kvmclock's form, the same on every vCPU. */
+    int master_clock;
+    uint64_t master_ns;  /* the host's monotonic ns at `master_tsc` */
+    uint64_t master_tsc; /* the host's TSC count */
+    uint32_t master_mul;
+    int8_t master_shift;
+    uint64_t wall_clock; /* the last value of MSR_KVM_WALL_CLOCK(_NEW) */
+    int old_kvmclock;    /* the boot vCPU's guest uses MSR_KVM_SYSTEM_TIME */
+    /* The vCPUs' TSCs as Linux's kvm_synchronize_tsc matches them: the
+     * generation of matched writes, its offset, the vCPUs that joined it
+     * after its first, and the last write's ns, value and rate. */
+    int user_set_tsc;
+    uint32_t tsc_gen;
+    uint32_t tsc_matched;
+    int64_t tsc_cur_offset;
+    uint64_t tsc_last_ns, tsc_last_write, tsc_last_khz;
+    uint32_t disable_exits; /* KVM_CAP_X86_DISABLE_EXITS: KVM_X86_DISABLE_EXITS_* */
     int irqchip;           /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
     uint32_t boot_cpu_id;  /* KVM_SET_BOOT_CPU_ID */
     uint32_t dirty_manual; /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
@@ -235,14 +255,15 @@ struct kvm_vm {
 
 /* The requests another thread leaves a vCPU, in `requests`, which the run
  * loop answers before each entry. */
-#define KVM_REQ_EXIT         0x1u  /* go back to the caller */
-#define KVM_REQ_EVENT        0x2u  /* an event to inject */
-#define KVM_REQ_TRIPLE_FAULT 0x4u  /* end in KVM_EXIT_SHUTDOWN */
-#define KVM_REQ_EOI_EXIT     0x8u  /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
-#define KVM_REQ_TLB_FLUSH    0x10u /* the backend drops the VM's guest-physical translations */
-#define KVM_REQ_HV_EXIT      0x20u /* end in KVM_EXIT_HYPERV (hyperv.c) */
-#define KVM_REQ_HV_CRASH     0x40u /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
-#define KVM_REQ_HV_RESET     0x80u /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
+#define KVM_REQ_EXIT         0x1u   /* go back to the caller */
+#define KVM_REQ_EVENT        0x2u   /* an event to inject */
+#define KVM_REQ_TRIPLE_FAULT 0x4u   /* end in KVM_EXIT_SHUTDOWN */
+#define KVM_REQ_EOI_EXIT     0x8u   /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
+#define KVM_REQ_TLB_FLUSH    0x10u  /* the backend drops the VM's guest-physical translations */
+#define KVM_REQ_HV_EXIT      0x20u  /* end in KVM_EXIT_HYPERV (hyperv.c) */
+#define KVM_REQ_HV_CRASH     0x40u  /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
+#define KVM_REQ_HV_RESET     0x80u  /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
+#define KVM_REQ_CLOCK_UPDATE 0x100u /* write the kvmclock again (pvclock.c) */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -306,9 +327,10 @@ struct kvm_vcpu {
     volatile uint32_t requests; /* KVM_REQ_* */
     volatile int32_t cpu;       /* the processor it last entered on, -1 before */
     int busy;                   /* an ioctl of the vCPU is under way, KVM_RUN among them */
-    int has_run;                /* KVM_RUN has entered the guest */
-    wait_queue_t wq;            /* the ioctls that wait for `busy` to clear */
-    int pending;                /* `exit` is a read the caller answers in the run page */
+    int hlt_in_guest; /* the VM's KVM_X86_DISABLE_EXITS_HLT at creation: HLT does not exit */
+    int has_run;      /* KVM_RUN has entered the guest */
+    wait_queue_t wq;  /* the ioctls that wait for `busy` to clear */
+    int pending;      /* `exit` is a read the caller answers in the run page */
     int has_sigmask;
     uint64_t sigmask; /* KVM_SET_SIGNAL_MASK, less SIGKILL and SIGSTOP */
     uint32_t dirty;   /* KVM_PART_* the backend has yet to load */
@@ -328,7 +350,15 @@ struct kvm_vcpu {
     uint32_t msr_count;
     uint32_t msr_index[KVM_VCPU_MSRS];
     uint64_t msr_value[KVM_VCPU_MSRS];
-    int64_t tsc_offset; /* the guest's TSC less the host's */
+    int64_t tsc_offset;    /* the guest's TSC less the host's */
+    uint32_t tsc_gen;      /* the VM's `tsc_gen` this vCPU's TSC last joined */
+    uint64_t pv_time;      /* MSR_KVM_SYSTEM_TIME(_NEW): the kvmclock's address, KVM_MSR_ENABLED */
+    uint32_t pv_features;  /* KVM_CPUID_FEATURES' EAX in the CPUID, KVM_FEATURE_* bits */
+    int pv_enforce;        /* KVM_CAP_ENFORCE_PV_FEATURE_CPUID: the guest has those alone */
+    uint64_t poll_control; /* MSR_KVM_POLL_CONTROL */
+    int pv_stopped;        /* KVM_KVMCLOCK_CTRL: the next write sets PVCLOCK_GUEST_STOPPED */
+    int32_t clock_cpu;     /* the processor the kvmclock was last written on, -1 for none */
+    uint64_t clock_ns;     /* the host's ns at that write */
     uint64_t mcg_cap, mcg_status, mcg_ctl;
     uint64_t mce_banks[KVM_MAX_MCE_BANKS * 4]; /* CTL, STATUS, ADDR, MISC of each */
 
@@ -424,8 +454,9 @@ int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg);
 /* cpuid.c */
 
 /** KVM_GET_SUPPORTED_CPUID's entries: up to `max` into `out`, from the
- * host's CPUID less what KVM does not offer a guest. The count, or -E2BIG
- * when more than `max` are needed. */
+ * host's CPUID less what KVM does not offer a guest, and KVM's own two
+ * leaves at KVM_CPUID_SIGNATURE. The count, or -E2BIG when more than `max`
+ * are needed. */
 int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max);
 
 /** The entry of `v`'s CPUID for `function` and `index`, or NULL. */
@@ -438,6 +469,22 @@ uint64_t kvm_xcr0_supported(void);
 /** The XCR0 bits `v`'s CPUID allows: leaf 0xD's within the host's, and
  * x87 always. */
 uint64_t kvm_xcr0_guest(const struct kvm_vcpu *v);
+
+/** KVM_GET_SUPPORTED_CPUID's KVM_CPUID_FEATURES bits: the kvmclock's
+ * three where the TSC's rate was measured, the I/O delay hint, PV_UNHALT,
+ * PV_SEND_IPI, POLL_CONTROL and PV_SCHED_YIELD. */
+uint32_t kvm_pv_supported(void);
+
+/** Keep the features of KVM's leaves in `v`'s CPUID, found by their
+ * signature, for `kvm_pv_has`, as Linux's kvm_update_pv_runtime; after
+ * KVM_SET_CPUID2, `set`, first take PV_UNHALT out of them while HLT does
+ * not exit, as Linux's kvm_vcpu_after_set_cpuid. */
+void kvm_pv_cpuid_update(struct kvm_vcpu *v, int set);
+
+/** Whether `v`'s guest may use KVM's paravirtual feature `bit`
+ * (KVM_FEATURE_*): always, unless KVM_CAP_ENFORCE_PV_FEATURE_CPUID holds
+ * it to the CPUID's, as Linux's guest_pv_has. */
+int kvm_pv_has(const struct kvm_vcpu *v, int bit);
 
 /* msr.c */
 
@@ -464,6 +511,68 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value);
  * checks Linux makes of a write from the host: 0, or -1 for an MSR it does
  * not keep or a value it refuses. Marks KVM_PART_MSRS dirty. */
 int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value);
+
+/* pvclock.c: the kvmclock, its master clock, the wall clock and the
+ * matching of the vCPUs' TSCs, as Linux's x86.c keeps them. Each runs
+ * under the big lock. */
+
+/** The TSC's rate a guest sees, the host's as measured, in kHz, as
+ * KVM_GET_TSC_KHZ gives it: 0 when none was measured. */
+uint64_t kvm_tsc_khz(void);
+
+/** Start the clock of a new VM: its kvmclock reads 0 now. */
+void kvm_clock_vm_init(struct kvm_vm *vm);
+
+/** The kvmclock of `vm` now, in ns, as the guests read it: by the master
+ * clock's formula from the host's TSC while it runs, else the host's
+ * monotonic clock plus the VM's offset. */
+uint64_t kvm_clock_ns(const struct kvm_vm *vm);
+
+/** KVM_GET_CLOCK, as Linux's: with the master clock, the kvmclock at a TSC
+ * count read with the real time, and KVM_CLOCK_TSC_STABLE,
+ * KVM_CLOCK_REALTIME and KVM_CLOCK_HOST_TSC; else the kvmclock and no
+ * flag. 0 or -EFAULT. */
+int32_t kvm_clock_get(struct kvm_vm *vm, uintptr_t arg);
+
+/** KVM_SET_CLOCK: the kvmclock reads the caller's `clock` now, advanced by
+ * the real time since its `realtime` with KVM_CLOCK_REALTIME, and every
+ * vCPU's kvmclock is written again before it enters. 0, -EINVAL for a
+ * flag Linux does not take, or -EFAULT. */
+int32_t kvm_clock_set(struct kvm_vm *vm, uintptr_t arg);
+
+/** Set `v`'s TSC as Linux's kvm_synchronize_tsc: to `*value`, the caller's
+ * KVM_SET_MSRS, or for NULL to 0 at the vCPU's creation, with the offset
+ * of the VM's other vCPUs where the write matches theirs, which keeps the
+ * master clock. After the vCPU joined the VM's `vcpus`. */
+void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value);
+
+/** `v`'s guest moved its own TSC: its kvmclock and the reference TSC page
+ * are written again before the next entry. */
+void kvm_tsc_moved(struct kvm_vcpu *v);
+
+/** Read or write, by `write`, the MSR `index` of `v` when it is one of
+ * KVM's own: the kvmclock's four and MSR_KVM_POLL_CONTROL. `host` is 1 for
+ * KVM_GET_MSRS and KVM_SET_MSRS. 0; -1 for a fault the guest takes as #GP,
+ * which an MSR whose feature its CPUID lacks under
+ * KVM_CAP_ENFORCE_PV_FEATURE_CPUID gives, and the caller as a refusal; 1
+ * for an MSR that is not KVM's. */
+int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
+
+/** Write `v`'s kvmclock into guest memory before an entry, when it was
+ * asked for (KVM_REQ_CLOCK_UPDATE) or, without the master clock, when the
+ * vCPU moved to another processor or KVMCLOCK_SYNC_NS passed, as Linux's
+ * kvm_guest_time_update. In `v`'s thread. */
+void kvm_clock_prepare(struct kvm_vcpu *v);
+
+/** KVM_KVMCLOCK_CTRL: the guest's next kvmclock says it was stopped. 0, or
+ * -EINVAL while the kvmclock is off. */
+int32_t kvm_clock_ctrl(struct kvm_vcpu *v);
+
+/** KVM_HC_CLOCK_PAIRING of `type` into the guest's `gpa`, as Linux's
+ * kvm_pv_clock_pairing: the real time and the guest's TSC at one moment.
+ * The hypercall's answer: 0, -KVM_EOPNOTSUPP for another type or without
+ * the host's TSC clock, or -KVM_EFAULT. */
+uint64_t kvm_clock_pairing(struct kvm_vcpu *v, uint64_t gpa, uint64_t type);
 
 /* slots.c: the memory slots, each a range of the caller's memory. */
 
@@ -973,8 +1082,9 @@ void kvm_exception_rf(struct kvm_vcpu *v);
  * bits outside long mode: -KVM_EPERM above CPL 0; 0 for
  * KVM_HC_VAPIC_POLL_IRQ and KVM_HC_SCHED_YIELD; KVM_HC_KICK_CPU's wake of
  * the vCPU with the APIC id in RCX; KVM_HC_SEND_IPI's count;
- * -KVM_EOPNOTSUPP for KVM_HC_CLOCK_PAIRING, as Linux without a host clock
- * to pair; and -KVM_ENOSYS for any other. */
+ * KVM_HC_CLOCK_PAIRING's (`kvm_clock_pairing`); -KVM_ENOSYS for KICK_CPU,
+ * SEND_IPI and SCHED_YIELD when `kvm_pv_has` refuses their features, and
+ * for any other. */
 uint64_t kvm_emul_hypercall(struct kvm_vcpu *v);
 
 /** Queue the exception `nr`, with `error` when `has_error`, for the next

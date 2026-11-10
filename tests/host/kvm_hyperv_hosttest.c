@@ -138,6 +138,12 @@ uint32_t timer_calibrate(void)
     return tsc_per_tick;
 }
 
+/* The kvmclock with no master clock, as pvclock.c reads it. */
+uint64_t kvm_clock_ns(const struct kvm_vm *vm)
+{
+    return kvm_host_ns() + (uint64_t)vm->clock_offset;
+}
+
 /* The backends: only their addresses count. */
 const struct kvm_backend kvm_svm, kvm_vmx;
 const struct kvm_backend *kvm_backend = &kvm_vmx;

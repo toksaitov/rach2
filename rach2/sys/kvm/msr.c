@@ -51,9 +51,9 @@
 #define UCODE_REV_VAL 0x100000000ull
 
 /* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores, the TSC
- * deadline among them, which the local APIC keeps (vlapic.c), and Linux's
- * list of Hyper-V's, which hyperv.c keeps. TSC_AUX is last, and listed only
- * where the host has RDTSCP. */
+ * deadline among them, which the local APIC keeps (vlapic.c), Linux's list
+ * of Hyper-V's, which hyperv.c keeps, and KVM's own that pvclock.c keeps.
+ * TSC_AUX is last, and listed only where the host has RDTSCP. */
 static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_SYSENTER_ESP,
                                       MSR_IA32_SYSENTER_EIP,
@@ -97,6 +97,11 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       0x400000F3u, /* SYNDBG_SEND_BUFFER */
                                       0x400000F4u, /* SYNDBG_RECV_BUFFER */
                                       0x400000F5u, /* SYNDBG_PENDING_BUFFER */
+                                      MSR_KVM_SYSTEM_TIME,
+                                      MSR_KVM_WALL_CLOCK,
+                                      MSR_KVM_SYSTEM_TIME_NEW,
+                                      MSR_KVM_WALL_CLOCK_NEW,
+                                      MSR_KVM_POLL_CONTROL,
                                       MSR_TSC_AUX};
 
 static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV};
@@ -168,13 +173,14 @@ static int mtrr_fixed(uint32_t index)
 }
 
 /** Whether `index` is an MSR the vCPU's table keeps: one of the index
- * list but TSC, MCG_STATUS, MCG_CTL and Hyper-V's, or an MTRR. */
+ * list but TSC, MCG_STATUS, MCG_CTL, Hyper-V's and KVM's, or an MTRR. */
 static int table_msr(uint32_t index)
 {
     uint32_t i;
 
     if (index == MSR_IA32_TSC || index == MSR_IA32_MCG_STATUS || index == MSR_IA32_MCG_CTL ||
-        (index >> 12) == 0x40000u) {
+        (index >> 12) == 0x40000u || index == MSR_KVM_SYSTEM_TIME || index == MSR_KVM_WALL_CLOCK ||
+        (index >> 8) == (MSR_KVM_WALL_CLOCK_NEW >> 8)) {
         return 0;
     }
     for (i = 0; i < N_INDEX; i++) {
@@ -248,6 +254,9 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
     r = kvm_lapic_msr(v, index, 0, value, 1);
     if (r == 1) {
         r = kvm_hv_msr(v, index, 0, value, 1);
+    }
+    if (r == 1) {
+        r = kvm_pv_msr(v, index, 0, value, 1);
     }
     if (r != 1) {
         return r;
@@ -341,6 +350,9 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     if (slot == 1) {
         slot = kvm_hv_msr(v, index, 1, &value, 1);
     }
+    if (slot == 1) {
+        slot = kvm_pv_msr(v, index, 1, &value, 1);
+    }
     if (slot != 1) {
         return slot;
     }
@@ -348,9 +360,7 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     case MSR_AMD64_NB_CFG:
         return 0;
     case MSR_IA32_TSC:
-        v->tsc_offset = (int64_t)(value - arch_cycles());
-        v->dirty |= KVM_PART_TSC;
-        kvm_hv_clock_changed(v->vm);
+        kvm_tsc_sync(v, &value);
         return 0;
     case MSR_IA32_MCG_CAP:
         if (value & ~(MCG_CTL_P | MCG_SER_P | 0xFFull | 0xFF0000ull) ||

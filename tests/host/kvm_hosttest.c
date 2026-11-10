@@ -3,6 +3,7 @@
  * against a fake backend.
  *
  * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c rach2/sys/kvm/hyperv.c
+ * host-deps: rach2/sys/kvm/pvclock.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * kvm.c and vcpu.c are the kernel's, included whole; cpuid.c, msr.c and
@@ -28,8 +29,13 @@
  * signal, a kick from another processor and a triple fault; the big lock
  * let go and interrupts off for the entry; the signal mask swapped for the
  * run; the refusals of the state ioctls Linux makes; EIO from another
- * address space; and every allocation given back when the last reference
- * to the VM goes, the mapping's among them.
+ * address space; every allocation given back when the last reference
+ * to the VM goes, the mapping's among them; and, in a VM of their own with
+ * the TSC's rate known, KVM's CPUID leaves and capabilities, the vCPUs'
+ * TSCs matched under the master clock, which a write of another TSC stops,
+ * the kvmclock in guest memory reading as KVM_GET_CLOCK does, its stop
+ * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
+ * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS.
  */
 #include "kvm/kvm.c"
 #include "kvm/vcpu.c"
@@ -245,6 +251,39 @@ void rtc_realtime(int64_t *s, int64_t *ns)
 uint64_t arch_cycles(void)
 {
     return tsc;
+}
+
+/* Whether the vDSO's clock runs from the TSC, and the TSC's counts in a
+ * tick, 0 for a rate not known; the model's TSC runs at 2 GHz. */
+static int vclock_on;
+static uint32_t tick_counts;
+
+int vclock_running(void)
+{
+    return vclock_on;
+}
+
+int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+{
+    if (!vclock_on) {
+        return 0;
+    }
+    *ns = real ? real_ns : mono_ns;
+    *cycles = tsc;
+    return 1;
+}
+
+uint32_t timer_calibrate(void)
+{
+    return tick_counts;
+}
+
+/** Let `ns` nanoseconds pass on every clock. */
+static void clock_pass(uint64_t ns)
+{
+    mono_ns += ns;
+    real_ns += ns;
+    tsc += ns * 2u;
 }
 
 /* The big lock's depth on this processor, the interrupt flag, the
@@ -701,14 +740,24 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
 /* What hyperv.c calls of emulate.c, vlapic.c, eventfd.c and the clock,
  * for a VM with no guest memory, no APIC and no eventfd. */
 
+/* One guest page at GUEST_PAGE, present only while guest_mem is set, for
+ * the kvmclock's rows; the Hyper-V rows see no guest memory. */
+#define GUEST_PAGE 0x1000u
+static uint8_t guest_page[4096];
+static int guest_mem;
+
 int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write)
 {
     (void)v;
-    (void)gpa;
-    (void)buf;
-    (void)n;
-    (void)write;
-    return 1;
+    if (!guest_mem || gpa < GUEST_PAGE || gpa + n > GUEST_PAGE + sizeof(guest_page)) {
+        return 1;
+    }
+    if (write) {
+        memcpy(guest_page + (gpa - GUEST_PAGE), buf, n);
+    } else {
+        memcpy(buf, guest_page + (gpa - GUEST_PAGE), n);
+    }
+    return 0;
 }
 
 int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector)
@@ -767,11 +816,6 @@ void eventfd_put(struct eventfd *ev)
 void eventfd_signal(struct eventfd *ev)
 {
     (void)ev;
-}
-
-uint32_t timer_calibrate(void)
-{
-    return 0;
 }
 
 void arch_relax(void)
@@ -1010,7 +1054,20 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
     if (e->function == 0xA) {
         CHECK(e->eax == 0, "no performance counters");
     }
-    CHECK(e->function < 0x40000000u || e->function >= 0x80000000u, "no paravirtual leaf");
+    if (e->function == KVM_CPUID_SIGNATURE) {
+        CHECK(e->eax == KVM_CPUID_FEATURES && e->ebx == 0x4B4D564Bu && e->ecx == 0x564B4D56u &&
+                  e->edx == 0x4Du,
+              "KVM's signature leaf");
+    }
+    if (e->function == KVM_CPUID_FEATURES) {
+        CHECK(e->eax == ((1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_PV_UNHALT) |
+                         (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
+                         (1u << KVM_FEATURE_PV_SCHED_YIELD)),
+              "KVM's features, with no kvmclock while the TSC's rate is not known");
+    }
+    CHECK(e->function < 0x40000000u || e->function >= 0x80000000u ||
+              e->function == KVM_CPUID_SIGNATURE || e->function == KVM_CPUID_FEATURES,
+          "no paravirtual leaf but KVM's two");
 }
 
 /** try_get_cpuid: KVM_GET_SUPPORTED_CPUID from one entry, doubling while
@@ -1613,9 +1670,8 @@ static void vm_rows(int vm, int vcpu)
     int32_t before;
 
     k_memset(&clk, 0, sizeof(clk));
-    CHECK(fdio(vm, KVM_GET_CLOCK, (uintptr_t)&clk) == 0 && clk.clock == 0 &&
-              clk.flags == (KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC),
-          "the kvmclock starts at 0 with the VM");
+    CHECK(fdio(vm, KVM_GET_CLOCK, (uintptr_t)&clk) == 0 && clk.clock == 0 && clk.flags == 0,
+          "the kvmclock starts at 0 with the VM, without the master clock");
     mono_ns += 1000;
     clk.clock = 1000000;
     clk.flags = KVM_CLOCK_REALTIME;
@@ -1649,6 +1705,245 @@ static void vm_rows(int vm, int vcpu)
     CHECK(live == 0 && holds == 0, "the mapping's put frees the VM and every allocation");
 }
 
+#define MSR_IA32_TSC 0x010u
+
+/** KVM_SET_MSRS of one MSR, `index`, to `value`, on the vCPU `fd`;
+ * returns the count set. */
+static int32_t set_msr(int fd, uint32_t index, uint64_t value)
+{
+    buf.msrs.nmsrs = 1;
+    MSR_ENTRIES[0].index = index;
+    MSR_ENTRIES[0].reserved = 0;
+    MSR_ENTRIES[0].data = value;
+    return fdio(fd, KVM_SET_MSRS, (uintptr_t)&buf);
+}
+
+/** KVM_GET_CLOCK of the VM `vm` into `clk`. */
+static void get_clock(int vm, struct kvm_clock_data *clk)
+{
+    k_memset(clk, 0, sizeof(*clk));
+    CHECK(fdio(vm, KVM_GET_CLOCK, (uintptr_t)clk) == 0, "KVM_GET_CLOCK");
+}
+
+/** The supported CPUID with KVM's leaves, left in `buf`, and its count. */
+static uint32_t pv_cpuid(void)
+{
+    buf.cpuid.nent = 256;
+    CHECK(dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf) == 0, "KVM_GET_SUPPORTED_CPUID");
+    return buf.cpuid.nent;
+}
+
+/** KVM's leaves and capabilities with the TSC's rate known, and a VM's
+ * vCPUs matching their TSCs under the master clock, as the kvmclock
+ * selftests and kvm-unit-tests' kvmclock_test see them. */
+static void pv_leaf_rows(void)
+{
+    uint32_t i, n, want;
+    int found = 0;
+
+    want = (1u << KVM_FEATURE_CLOCKSOURCE) | (1u << KVM_FEATURE_NOP_IO_DELAY) |
+           (1u << KVM_FEATURE_CLOCKSOURCE2) | (1u << KVM_FEATURE_PV_UNHALT) |
+           (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
+           (1u << KVM_FEATURE_PV_SCHED_YIELD) | (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
+    n = pv_cpuid();
+    for (i = 0; i < n; i++) {
+        if (CPUID_ENTRIES[i].function == KVM_CPUID_FEATURES) {
+            found = 1;
+            CHECK(CPUID_ENTRIES[i].eax == want,
+                  "with the TSC's rate known, the kvmclock and its stable bit are offered");
+        }
+    }
+    CHECK(found, "KVM_CPUID_FEATURES is offered");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_KVMCLOCK_CTRL) == 1, "KVM_CAP_KVMCLOCK_CTRL");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_ENFORCE_PV_FEATURE_CPUID) == 1,
+          "KVM_CAP_ENFORCE_PV_FEATURE_CPUID");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_X86_DISABLE_EXITS) ==
+              (KVM_X86_DISABLE_EXITS_PAUSE | KVM_X86_DISABLE_EXITS_HLT),
+          "KVM_CAP_X86_DISABLE_EXITS offers PAUSE and HLT");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_ADJUST_CLOCK) == KVM_CLOCK_VALID_FLAGS,
+          "KVM_CAP_ADJUST_CLOCK names KVM_GET_CLOCK's flags");
+}
+
+/** The guest's kvmclock at the host's TSC count `now`, by the formula
+ * the vCPU `v`'s copy at GUEST_PAGE gives, as pvclock_clocksource_read. */
+static uint64_t guest_reads(const struct kvm_vcpu *v, uint64_t now)
+{
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    uint64_t delta = now + (uint64_t)v->tsc_offset - pv->tsc_timestamp;
+
+    delta = pv->tsc_shift < 0 ? delta >> -pv->tsc_shift : delta << pv->tsc_shift;
+    return pv->system_time + (uint64_t)(((unsigned __int128)delta * pv->tsc_to_system_mul) >> 32);
+}
+
+/** The kvmclock of the VM `vm` on vCPU `fd0` and its MSRs: the copy in
+ * guest memory, which reads as KVM_GET_CLOCK does, the guest's stop, the
+ * wall clock, the old MSR and KVM_SET_CLOCK. */
+static void pv_clock_rows(int vm, int fd0)
+{
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    const struct pvclock_wall_clock *wc = (const void *)(guest_page + 0x100);
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_clock_data clk;
+    struct kvm_clock_pairing *cp = (void *)(guest_page + 0x200);
+    uint64_t value, epoch;
+
+    CHECK(set_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, GUEST_PAGE | KVM_MSR_ENABLED) == 1,
+          "MSR_KVM_SYSTEM_TIME_NEW");
+    kvm_clock_prepare(v0);
+    CHECK(pv->version == 2 && pv->flags == PVCLOCK_TSC_STABLE_BIT && pv->tsc_shift == 0 &&
+              pv->tsc_to_system_mul == 0x80000000u,
+          "the kvmclock is written, even, stable, at 2 GHz");
+    clock_pass(123456789);
+    get_clock(vm, &clk);
+    CHECK(guest_reads(v0, tsc) == clk.clock, "the guest's kvmclock reads as KVM_GET_CLOCK's");
+    kvm_clock_prepare(v0);
+    CHECK(pv->version == 2, "under the master clock it is not written again");
+    CHECK(fdio(fd0, KVM_KVMCLOCK_CTRL, 0) == 0, "KVM_KVMCLOCK_CTRL");
+    kvm_clock_prepare(v0);
+    CHECK(pv->version == 4 && pv->flags == (PVCLOCK_TSC_STABLE_BIT | PVCLOCK_GUEST_STOPPED),
+          "which sets PVCLOCK_GUEST_STOPPED for the guest to clear");
+
+    CHECK(set_msr(fd0, MSR_KVM_WALL_CLOCK_NEW, GUEST_PAGE + 0x100) == 1, "MSR_KVM_WALL_CLOCK_NEW");
+    get_clock(vm, &clk);
+    epoch = real_ns - clk.clock;
+    CHECK(wc->version == 2 && wc->sec == epoch / 1000000000u && wc->nsec == epoch % 1000000000u,
+          "the wall clock is the real time at which the kvmclock read 0");
+    buf.msrs.nmsrs = 1;
+    MSR_ENTRIES[0].index = MSR_KVM_WALL_CLOCK_NEW;
+    CHECK(fdio(fd0, KVM_GET_MSRS, (uintptr_t)&buf) == 1 &&
+              MSR_ENTRIES[0].data == GUEST_PAGE + 0x100,
+          "and its MSR reads back");
+
+    CHECK(kvm_clock_pairing(v0, GUEST_PAGE + 0x200, KVM_CLOCK_PAIRING_WALLCLOCK) == 0 &&
+              (uint64_t)cp->sec * 1000000000u + (uint64_t)cp->nsec == real_ns &&
+              cp->tsc == tsc + (uint64_t)v0->tsc_offset,
+          "KVM_HC_CLOCK_PAIRING pairs the real time with the guest's TSC");
+    CHECK(kvm_clock_pairing(v0, GUEST_PAGE + 0x200, 1) == (uint64_t)-95, "and no other clock");
+
+    value = GUEST_PAGE | KVM_MSR_ENABLED;
+    CHECK(kvm_pv_msr(v0, MSR_KVM_SYSTEM_TIME, 1, &value, 0) == 0 && !v0->vm->master_clock,
+          "the boot vCPU's guest choosing the old MSR stops the master clock");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == 0, "and KVM_GET_CLOCK's flags with it");
+    CHECK(kvm_pv_msr(v0, MSR_KVM_SYSTEM_TIME_NEW, 1, &value, 0) == 0 && v0->vm->master_clock,
+          "the new MSR starts it again");
+
+    k_memset(&clk, 0, sizeof(clk));
+    clk.clock = 5000000000ull;
+    CHECK(fdio(vm, KVM_SET_CLOCK, (uintptr_t)&clk) == 0, "KVM_SET_CLOCK under the master clock");
+    clock_pass(1000);
+    get_clock(vm, &clk);
+    CHECK(clk.clock == 5000001000ull, "sets the kvmclock exactly");
+    kvm_clock_prepare(v0);
+    CHECK(guest_reads(v0, tsc) == clk.clock, "and the guest's copy follows it");
+}
+
+/** The vCPUs' TSCs of the VM `vm`, vCPUs `fd0` and `fd1`: a new vCPU
+ * matches, a host write elsewhere starts a generation without the master
+ * clock, and a write that matches it again brings the master clock back. */
+static void pv_tsc_rows(int vm, int fd0, int fd1)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv, *v1 = entries[fd1].priv;
+    struct kvm_clock_data clk;
+
+    CHECK(v1->tsc_offset == v0->tsc_offset && v0->vm->master_clock,
+          "a new vCPU takes the TSC of those before it");
+    CHECK(set_msr(fd1, MSR_IA32_TSC, 5000000000000ull) == 1 && !v0->vm->master_clock,
+          "a write of another TSC stops the master clock");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == 0, "KVM_GET_CLOCK then has no flags");
+    clock_pass(1000000);
+    CHECK(set_msr(fd0, MSR_IA32_TSC, 5000000000000ull + 2000000u) == 1 &&
+              v0->tsc_offset == v1->tsc_offset && v0->vm->master_clock,
+          "a write that matches it starts the master clock again");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == (KVM_CLOCK_TSC_STABLE | KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC),
+          "KVM_GET_CLOCK says so");
+}
+
+/** KVM_CAP_ENFORCE_PV_FEATURE_CPUID on vCPU `fd1` of the VM `vm`, and
+ * KVM_CAP_X86_DISABLE_EXITS: PV_UNHALT dropped at KVM_SET_CPUID2 and HLT
+ * left to the guests of vCPUs made after it. */
+static void pv_cap_rows(int vm, int fd0, int fd1)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv, *v1 = entries[fd1].priv, *v2;
+    struct kvm_enable_cap cap;
+    uint64_t value = 0;
+    uint32_t n;
+    int fd2;
+
+    k_memset(&cap, 0, sizeof(cap));
+    cap.cap = KVM_CAP_ENFORCE_PV_FEATURE_CPUID;
+    cap.args[0] = 1;
+    CHECK(fdio(fd1, KVM_ENABLE_CAP, (uintptr_t)&cap) == 0, "KVM_CAP_ENFORCE_PV_FEATURE_CPUID");
+    CHECK(kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 0) == -1 &&
+              !kvm_pv_has(v1, KVM_FEATURE_PV_SEND_IPI),
+          "holds a vCPU with no KVM leaf to no feature");
+    value = 1;
+    CHECK(kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 1) == 0 && value == 0 &&
+              set_msr(fd1, MSR_KVM_SYSTEM_TIME_NEW, 0) == 1 &&
+              set_msr(fd1, MSR_KVM_SYSTEM_TIME_NEW, 1) == 0,
+          "but lets the caller read 0 and write 0");
+    n = pv_cpuid();
+    buf.cpuid.nent = n;
+    CHECK(fdio(fd1, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 &&
+              kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 0) == 0 &&
+              kvm_pv_has(v1, KVM_FEATURE_PV_SEND_IPI),
+          "and to those its CPUID names");
+
+    k_memset(&cap, 0, sizeof(cap));
+    cap.cap = KVM_CAP_X86_DISABLE_EXITS;
+    cap.args[0] = 0x10;
+    CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == -EINVAL, "an exit Linux does not name");
+    cap.args[0] = KVM_X86_DISABLE_EXITS_HLT;
+    CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == 0,
+          "KVM_CAP_X86_DISABLE_EXITS after the vCPUs, as Linux 6.12 takes it");
+    n = pv_cpuid();
+    buf.cpuid.nent = n;
+    CHECK(fdio(fd0, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 &&
+              !(v0->pv_features & (1u << KVM_FEATURE_PV_UNHALT)) &&
+              (v0->pv_features & (1u << KVM_FEATURE_CLOCKSOURCE2)),
+          "KVM_SET_CPUID2 then drops PV_UNHALT");
+    fd2 = fdio(vm, KVM_CREATE_VCPU, 2);
+    v2 = entries[fd2].priv;
+    CHECK(fd2 > fd1 && v2->hlt_in_guest && !v0->hlt_in_guest,
+          "and a vCPU made after it leaves HLT to its guest");
+    fdclose(fd2);
+}
+
+/** The paravirtual rows, in a VM of their own with the TSC's rate known,
+ * the vDSO's clock on the TSC and a page of guest memory. */
+static void pv_rows(void)
+{
+    struct kvm_clock_data clk;
+    int vm, fd0, fd1;
+
+    tick_counts = 2000000;
+    vclock_on = 1;
+    guest_mem = 1;
+    pv_leaf_rows();
+    vm = dev(KVM_CREATE_VM, 0);
+    get_clock(vm, &clk);
+    CHECK(clk.clock == 0 && clk.flags == 0, "no master clock before a vCPU");
+    clock_pass(1000000);
+    fd0 = fdio(vm, KVM_CREATE_VCPU, 0);
+    get_clock(vm, &clk);
+    CHECK(clk.flags == (KVM_CLOCK_TSC_STABLE | KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC) &&
+              clk.clock == 1000000 && clk.host_tsc == tsc && clk.realtime == real_ns,
+          "the master clock with the first vCPU, and its flags");
+    fd1 = fdio(vm, KVM_CREATE_VCPU, 1);
+    pv_tsc_rows(vm, fd0, fd1);
+    pv_clock_rows(vm, fd0);
+    pv_cap_rows(vm, fd0, fd1);
+    fdclose(fd1);
+    fdclose(fd0);
+    fdclose(vm);
+    CHECK(live == 0, "the VM frees every allocation");
+    tick_counts = 0;
+    vclock_on = 0;
+    guest_mem = 0;
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -1667,6 +1962,7 @@ int main(void)
     exit_rows(vcpu);
     state_rows(vcpu);
     vm_rows(vm, vcpu);
+    pv_rows();
     printf("kvm-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

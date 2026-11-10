@@ -363,12 +363,6 @@ static uint64_t guest_tsc(const struct kvm_vcpu *v)
     return arch_cycles() + (uint64_t)v->tsc_offset;
 }
 
-/** The guest's kvmclock of `vm` in ns now. */
-static uint64_t kvmclock_ns(const struct kvm_vm *vm)
-{
-    return kvm_host_ns() + (uint64_t)vm->clock_offset;
-}
-
 /** HV_MSR_TIME_REF_COUNT of `vm`, in 100 ns, as Linux's
  * get_time_ref_counter: by the TSC page's formula from the first vCPU's
  * TSC while the page is set, else the kvmclock's. */
@@ -377,7 +371,7 @@ static uint64_t ref_counter(const struct kvm_vm *vm)
     const struct hv_vm *h = hvm_of(vm);
 
     if (!h || h->tsc_status != TSC_SET || vm->nr_vcpus == 0) {
-        return kvmclock_ns(vm) / 100u;
+        return kvm_clock_ns(vm) / 100u;
     }
     return mul_hi(guest_tsc(vm->vcpus[0]), h->tsc_scale) + (uint64_t)h->tsc_offset;
 }
@@ -447,7 +441,7 @@ static void tsc_page_setup(struct kvm_vcpu *v)
         goto broken;
     }
     tsc = guest_tsc(v->vm->vcpus[0]);
-    ns = kvmclock_ns(v->vm);
+    ns = kvm_clock_ns(v->vm);
     h->tsc_offset = (int64_t)(ns / 100u - mul_hi(tsc, h->tsc_scale));
     k_memcpy(page + 8, &h->tsc_scale, 8);
     k_memcpy(page + 16, &h->tsc_offset, 8);
