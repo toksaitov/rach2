@@ -1101,23 +1101,44 @@ void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 void evdev_sysfs_sync(void)
 {
     struct evdev_desc d;
-    int n, rc;
+    uint8_t tried[EVDEV_MAX];
+    uint32_t best;
+    int n, next, rc;
 
     (void)class_dir();
     for (n = 0; n < EVDEV_MAX; n++) {
-        if (records[n].gen && (!evdev_snapshot(n, &d) || d.gen != records[n].gen)) {
-            withdraw(&records[n]);
-        }
-    }
-    for (n = 0; n < EVDEV_MAX; n++) {
-        if (records[n].gen || !evdev_snapshot(n, &d)) {
+        if (!records[n].gen) {
             continue;
         }
-        rc = publish(&records[n], n, &d);
-        if (rc < 0 && records[n].failed != d.gen) {
-            klog(KLOG_WARN, "input", "sysfs: event%d: refused: error %d", n, (int)rc);
+        if (!evdev_snapshot(n, &d) || d.gen != records[n].gen) {
+            withdraw(&records[n]);
+        } else {
+            records[n].d = d; /* EVIOCSKEYCODE changes the keys a device has */
         }
-        records[n].failed = rc < 0 ? d.gen : 0;
+    }
+    /* The new devices in the order they registered, as Linux numbers them. */
+    k_memset(tried, 0, sizeof(tried));
+    for (;;) {
+        next = -1;
+        best = 0;
+        for (n = 0; n < EVDEV_MAX; n++) {
+            if (records[n].gen || tried[n] || !evdev_snapshot(n, &d)) {
+                continue;
+            }
+            if (next < 0 || d.gen < best) {
+                next = n;
+                best = d.gen;
+            }
+        }
+        if (next < 0 || !evdev_snapshot(next, &d)) {
+            break;
+        }
+        tried[next] = 1;
+        rc = publish(&records[next], next, &d);
+        if (rc < 0 && records[next].failed != d.gen) {
+            klog(KLOG_WARN, "input", "sysfs: event%d: refused: error %d", next, (int)rc);
+        }
+        records[next].failed = rc < 0 ? d.gen : 0;
     }
 }
 
