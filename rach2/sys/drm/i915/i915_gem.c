@@ -1099,8 +1099,17 @@ int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
     if (err != 0) {
         return err;
     }
-    err = remap ? i915_vma_pin_remapped(obj, remap, I915_PIN_MAPPABLE, align, vma)
-                : i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE, align, vma);
+    /* A plane of a chip without a GMCH reads anywhere in the GTT, so the
+     * aperture is only tried first, without a wait, for a normal view, as
+     * Linux's i915_gem_object_pin_to_display_plane. */
+    if (remap) {
+        err = i915_vma_pin_remapped(obj, remap, 0, align, vma);
+    } else {
+        err = i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE | I915_PIN_NONBLOCK, align, vma);
+        if (err != 0) {
+            err = i915_vma_pin(obj, 0, 0, 0, align, vma);
+        }
+    }
     if (err != 0) {
         return err;
     }

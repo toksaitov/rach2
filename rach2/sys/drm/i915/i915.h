@@ -3277,9 +3277,11 @@ int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
 /**
  * Get the object ready to scan out, as Linux's
  * i915_gem_object_pin_to_display_plane: its caching off, its view bound
- * inside the aperture at a multiple of `align`, and its processor cache
- * flushed. The view is the whole object for a NULL `remap`, or the
- * remapped view `remap`. The binding in `*vma`, pinned, which
+ * at a multiple of `align`, and its processor cache flushed. The view is
+ * the whole object for a NULL `remap`, bound inside the aperture when
+ * room there needs no wait and anywhere in the GTT otherwise, as Linux
+ * binds it on a chip without a GMCH, or the remapped view `remap`,
+ * anywhere. The binding in `*vma`, pinned, which
  * `i915_vma_unpin` lets go. 0 or the binding's error.
  */
 int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,

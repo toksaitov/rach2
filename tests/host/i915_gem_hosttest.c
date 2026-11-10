@@ -462,6 +462,34 @@ static void remapped(void)
     CHECK(ok, "remap: the view's entries cleared with the object");
 }
 
+/**
+ * The scanout's binding of a whole object, as Linux's on a chip without a
+ * GMCH (78-18): inside the aperture when it fits there, and an object
+ * larger than the aperture bound past it rather than refused.
+ */
+static void scanout(void)
+{
+    uint32_t small = create(&file_a, 16 * 4096);
+    uint32_t big = create(&file_a, APERTURE_BYTES + 4 * 4096);
+    struct i915_vma *s = 0, *b = 0;
+
+    CHECK(i915_gem_object_pin_to_display(object(&file_a, small), 0, 256u * 1024u, &s) == 0 && s &&
+              s->start + s->size <= APERTURE_BYTES && (s->start & (256u * 1024u - 1u)) == 0,
+          "scanout: a small object bound inside the aperture");
+    CHECK(i915_gem_object_pin_to_display(object(&file_a, big), 0, 256u * 1024u, &b) == 0 && b &&
+              b->view_pages == 0 && b->start + b->size > APERTURE_BYTES &&
+              (b->start & (256u * 1024u - 1u)) == 0,
+          "scanout: an object larger than the aperture bound past it");
+    if (s) {
+        i915_vma_unpin(s);
+    }
+    if (b) {
+        i915_vma_unpin(b);
+    }
+    close_handle(&file_a, small);
+    close_handle(&file_a, big);
+}
+
 /** More objects through the aperture than the windows hold at once: the
  * other device's imports, which have no pages of the processor's, so that
  * PWRITE reaches them through the aperture alone. */
@@ -996,6 +1024,7 @@ int main(void)
     legacy_maps();
     views();
     remapped();
+    scanout();
     windows();
     arithmetic();
     tiling();
