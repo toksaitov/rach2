@@ -413,10 +413,10 @@ static uint32_t package_cores(int cpu)
 static const uint16_t amd_assocs[16] = {0,  1, 2,  0,  4,  0,  8,   0,
                                         16, 0, 32, 48, 64, 96, 128, 0xFFFFu};
 
-/** Where this processor describes its caches, one of the CACHE_ sources:
- * leaf 4 on Intel, and on another vendor but AMD and Hygon; on those two
- * leaf 0x8000001D when TOPOEXT says it is there, and else the older
- * leaves on AMD. */
+/** Where this processor describes its caches, one of the CACHE_ sources,
+ * as Linux's cpuid4_cache_lookup_regs chooses: leaf 4 on Intel, and on
+ * another vendor but AMD and Hygon; leaf 0x8000001D on Hygon, and on AMD
+ * when TOPOEXT says it is there; and else the older leaves on AMD. */
 static int cache_source(void)
 {
     uint32_t max, ext_max, b, c, d, topoext = 0;
@@ -439,7 +439,7 @@ static int cache_source(void)
     if (ext_max >= 0x80000001u) {
         kcpu_id(0x80000001u, 0, 0, &topoext, 0);
     }
-    if ((topoext & (1u << 22)) && ext_max >= 0x8000001Du) {
+    if ((!amd || (topoext & (1u << 22))) && ext_max >= 0x8000001Du) {
         return CACHE_TOPOEXT;
     }
     return amd && ext_max >= 0x80000006u ? CACHE_LEGACY : CACHE_NONE;

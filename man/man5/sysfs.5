@@ -653,8 +653,8 @@ for each of the processor's caches, M from 0, as Linux's
 describes them from
 .Fn cpuid :
 leaf 4 on Intel and on every vendor but AMD and Hygon, leaf 0x8000001D on
-those two when it is there, and otherwise AMD's leaves 0x80000005 and
-0x80000006, which give an L1 data, an L1 instruction, an L2 and an L3
+Hygon and on AMD when TOPOEXT is set, and otherwise AMD's leaves
+0x80000005 and 0x80000006, which give an L1 data, an L1 instruction, an L2 and an L3
 cache, the last only when the processor has one.
 A processor that describes no cache has no
 .Pa cache .
