@@ -23,13 +23,15 @@
 # Once the guest reports its server ready on the serial console, the runner
 # asks QMP for the guest's status over TCP with socat, which must answer
 # `running`, then starts vtestrelay for one client and draws the triangle
-# with virpipe through it. It passes when both pictures check and their
-# checksums are equal.
+# with virpipe through it. When the triangle fails or draws elsewhere, it may
+# never have connected, so the runner stops the relay instead of waiting for
+# it. It passes when both pictures check and their checksums are equal.
 #
 # The guest's console is read once a second, and each 60 s its size and last
 # line are printed; QEMU's end before the server is ready, or SECONDS without
 # a byte on it (600), fails the run. That bound is on silence, not on the
-# boot's length. At each 120 s of silence, and before that failure, the
+# boot's length, and it bounds each question to QMP the same way: QMP silent
+# for SECONDS before it has answered ends the question. At each 120 s of silence, and before that failure, the
 # runner prints what tells where the guest waits: the KVM lines of
 # /proc/stat, the interrupt counts in the fdinfo of QEMU's VM descriptor,
 # and over QMP QEMU's interrupt controllers, each vCPU's local APIC and the
@@ -101,6 +103,41 @@ fail()
     exit 1
 }
 
+# qmp COMMAND...: send QMP's capabilities negotiation and each COMMAND, a JSON
+# object, to QEMU's monitor over TCP with socat, and print what QEMU answers
+# once it has answered each, once QEMU or socat ends, or once QMP has been
+# silent for SECONDS. Until then a newline, which QMP's parser skips, goes
+# each second, so that a socat that has ended ends the writer too.
+qmp()
+{
+    : > "$work/qmp.out"
+    answers=$(($# + 1))
+    # shellcheck disable=SC2094 # the writer counts the answers socat has written
+    {
+        echo '{"execute":"qmp_capabilities"}'
+        printf '%s\n' "$@"
+        heard='' still=0
+        while kill -0 "$qemu" 2>/dev/null && [ "$still" -lt "$silence" ] &&
+            [ "$(tr -d '\r' < "$work/qmp.out" | grep -c '^{"\(return\|error\)"')" -lt "$answers" ]; do
+            sleep 1
+            echo || break
+            size=$(wc -c < "$work/qmp.out")
+            if [ "$size" != "$heard" ]; then
+                heard=$size still=0
+            else
+                still=$((still + 1))
+            fi
+        done
+    } | socat - "TCP:127.0.0.1:$((port + 1))" > "$work/qmp.out" 2>&1
+    tr -d '\r' < "$work/qmp.out"
+}
+
+# hmp COMMAND: print the QMP command that runs the monitor's COMMAND.
+hmp()
+{
+    printf '{"execute":"human-monitor-command","arguments":{"command-line":"%s"}}' "$1"
+}
+
 # dump [all]: print the KVM lines of /proc/stat, the interrupt counts of
 # QEMU's VM in Rach2's KVM and QEMU's `info pic`, and with `all` its `info
 # irq`, the vCPUs' registers and each local APIC too, over QMP, each line
@@ -114,20 +151,14 @@ dump()
         [ "$(readlink "$f" 2>/dev/null)" = anon_inode:kvm-vm ] || continue
         grep -a '^kvm_' /proc/"$qemu"/fdinfo/"${f##*/}" | sed 's/^/vtest-rach2: fdinfo: /'
     done
-    {
-        echo '{"execute":"qmp_capabilities"}'
-        i=0
-        set -- 'info pic'
-        [ -z "$all" ] || set -- "$@" 'info irq' 'info registers -a'
-        while [ -n "$all" ] && [ "$i" -lt "$cpus" ]; do
-            set -- "$@" "info lapic $i"
-            i=$((i + 1))
-        done
-        for c in "$@"; do
-            printf '{"execute":"human-monitor-command","arguments":{"command-line":"%s"}}\n' "$c"
-        done
-    } | socat -t 5 - "TCP:127.0.0.1:$((port + 1))" 2>&1 | tr -d '\r' |
-        sed 's/\\r\\n/\n/g; s/\\n/\n/g' | sed 's/^/vtest-rach2: qmp: /'
+    i=0
+    set -- "$(hmp 'info pic')"
+    [ -z "$all" ] || set -- "$@" "$(hmp 'info irq')" "$(hmp 'info registers -a')"
+    while [ -n "$all" ] && [ "$i" -lt "$cpus" ]; do
+        set -- "$@" "$(hmp "info lapic $i")"
+        i=$((i + 1))
+    done
+    qmp "$@" | sed 's/\\r\\n/\n/g; s/\\n/\n/g' | sed 's/^/vtest-rach2: qmp: /'
 }
 
 # draw NAME DRIVER: draw the triangle with Mesa's DRIVER, its picture into
@@ -216,10 +247,9 @@ echo "vtest-rach2: the guest's server is ready after $waited s"
 
 # QEMU reads its monitor's socket with recvmsg; QMP must answer past its
 # greeting.
-qmp=$(printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"query-status"}' |
-    socat -t 5 - "TCP:127.0.0.1:$((port + 1))" 2>&1 | tr -d '\r')
-printf '%s\n' "$qmp" | sed 's/^/vtest-rach2: qmp: /'
-printf '%s\n' "$qmp" | grep -q '"status": *"running"' ||
+answer=$(qmp '{"execute":"query-status"}')
+printf '%s\n' "$answer" | sed 's/^/vtest-rach2: qmp: /'
+printf '%s\n' "$answer" | grep -q '"status": *"running"' ||
     fail "QMP over TCP did not answer query-status with running"
 dump
 {
@@ -235,10 +265,8 @@ dump
 sock=$work/vtest.sock
 vtestrelay -1 -v -s "$sock" 127.0.0.1 "$port" 2> "$work/relay.out" &
 relay=$!
-tries=0
 until [ -S "$sock" ]; do
-    tries=$((tries + 1))
-    kill -0 "$relay" 2>/dev/null && [ "$tries" -lt 30 ] || {
+    kill -0 "$relay" 2>/dev/null || {
         sed 's/^/vtest-rach2: /' "$work/relay.out"
         fail "the relay did not listen on $sock"
     }
@@ -249,6 +277,11 @@ drew=0
 VTEST_SOCKET_NAME=$sock
 export VTEST_SOCKET_NAME
 draw virpipe virpipe || drew=$?
+# A triangle that failed, or drew elsewhere, may never have connected, and
+# the relay would wait in accept() for it.
+if [ "$drew" -ne 0 ] || ! grep -q '^triangle: renderer: virgl' "$work/virpipe.out"; then
+    kill "$relay" 2>/dev/null
+fi
 relayed=0
 wait "$relay" || relayed=$?
 relay=''
