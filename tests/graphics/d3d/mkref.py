@@ -93,9 +93,11 @@ def main():
                 drew = result["exit"] == 0 and ("D3D%s OK" % n) in result["pixels"].splitlines()
                 if not drew:
                     fail("%s: the probe %s did not draw right on Linux" % (row_dir, row))
-                side = {None: None, "wow64": "x86_64", "i386": "i386"}[env.get("mode")]
-                if side and ("wine-unix: " + side) not in result["pixels"].splitlines():
-                    fail("%s: the probe %s did not run on the %s Wine" % (row_dir, row, side))
+                # An i386 probe's process, as run.py read it while it held.
+                want = {None: None, "wow64": ("x86_64", 64), "i386": ("i386", 32)}[env.get("mode")]
+                if want and (result.get("unix"), result.get("elf")) != want:
+                    fail("%s: the probe %s ran in a %s-bit process of the %s Wine, not as its mode asks" % (
+                        row_dir, row, result.get("elf"), result.get("unix")))
                 old = ref["probe"].get(row)
                 if old and old["adapter"] != result["adapter"]:
                     fail("%s: the probe %s named two adapters" % (row_dir, row))
