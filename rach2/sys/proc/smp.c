@@ -30,6 +30,9 @@ static volatile unsigned int bkl_claim;
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
 static uint64_t bkl_wait_max_cycles;
+static uint64_t bkl_hold_max_cycles; /* the longest hold, from take to give back */
+static uint32_t bkl_hold_vector;     /* its entry's vector, 0 for none */
+static int32_t bkl_hold_nr = -1;     /* its entry's system call number, or -1 */
 
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
@@ -95,12 +98,35 @@ static void bkl_acquire(struct percpu *cpu)
     if (bkl_claim == me) {
         (void)arch_atomic_cmpxchg(&bkl_claim, me, 0u);
     }
-    waited = arch_cycles() - start;
+    cpu->bkl_since = arch_cycles();
+    waited = cpu->bkl_since - start;
     bkl_wait_cycles += waited;
     if (waited > bkl_wait_max_cycles) {
         bkl_wait_max_cycles = waited;
     }
     bkl_flush(cpu);
+}
+
+/** Count the hold that ends now on `cpu`, which still holds the lock. */
+static void bkl_hold_end(struct percpu *cpu)
+{
+    uint64_t held = arch_cycles() - cpu->bkl_since;
+
+    if (held > bkl_hold_max_cycles) {
+        bkl_hold_max_cycles = held;
+        bkl_hold_vector = cpu->bkl_vector;
+        bkl_hold_nr = cpu->bkl_nr;
+    }
+}
+
+void bkl_note_entry(uint32_t vector, int32_t nr)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (cpu->bkl_depth == 1) {
+        cpu->bkl_vector = vector;
+        cpu->bkl_nr = nr;
+    }
 }
 
 /** Read the acquisition and shootdown counters with the big lock held. */
@@ -110,6 +136,13 @@ void smp_wait_stats(uint64_t *total_us, uint64_t *max_us)
     *max_us = timer_cycles_us(bkl_wait_max_cycles);
 }
 
+void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr)
+{
+    *max_us = timer_cycles_us(bkl_hold_max_cycles);
+    *vector = bkl_hold_vector;
+    *nr = bkl_hold_nr;
+}
+
 void bkl_enter(void)
 {
     uint32_t flags = kirq_save();
@@ -117,6 +150,8 @@ void bkl_enter(void)
 
     if (cpu->bkl_depth == 0) {
         bkl_acquire(cpu);
+        cpu->bkl_vector = 0;
+        cpu->bkl_nr = -1;
     }
     cpu->bkl_depth++;
     kirq_restore(flags);
@@ -130,6 +165,9 @@ int bkl_try_enter(void)
         if (bkl_word || bkl_claim || arch_atomic_xchg(&bkl_word, 1u) != 0) {
             return 0;
         }
+        cpu->bkl_since = arch_cycles();
+        cpu->bkl_vector = 0;
+        cpu->bkl_nr = -1;
         bkl_flush(cpu);
     }
     cpu->bkl_depth++;
@@ -145,6 +183,7 @@ void bkl_exit(void)
         k_panic("bkl: an exit from the kernel without its entry");
     }
     if (--cpu->bkl_depth == 0) {
+        bkl_hold_end(cpu);
         (void)arch_atomic_xchg(&bkl_word, 0u);
     }
     kirq_restore(flags);
@@ -156,6 +195,7 @@ int bkl_drop(void)
     int depth = cpu->bkl_depth;
 
     if (depth > 0) {
+        bkl_hold_end(cpu);
         cpu->bkl_depth = 0;
         (void)arch_atomic_xchg(&bkl_word, 0u);
     }
