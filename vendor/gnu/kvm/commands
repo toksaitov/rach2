@@ -1,0 +1,12 @@
+# Canonical commands in the QEMU closure: name, package, path.
+kvm qemu-system-x86 /usr/bin/kvm
+qemu-img qemu-utils /usr/bin/qemu-img
+qemu-io qemu-utils /usr/bin/qemu-io
+qemu-nbd qemu-utils /usr/bin/qemu-nbd
+qemu-pr-helper qemu-system-common /usr/bin/qemu-pr-helper
+qemu-storage-daemon qemu-utils /usr/bin/qemu-storage-daemon
+qemu-system-amd64 qemu-system-x86 /usr/bin/qemu-system-amd64
+qemu-system-i386 qemu-system-x86 /usr/bin/qemu-system-i386
+qemu-system-x86_64 qemu-system-x86 /usr/bin/qemu-system-x86_64
+qemu-system-x86_64-microvm qemu-system-x86 /usr/bin/qemu-system-x86_64-microvm
+qemu-vmsr-helper qemu-system-common /usr/bin/qemu-vmsr-helper

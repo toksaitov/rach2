@@ -1,0 +1,62 @@
+.Dd November 10, 2026
+.Dt QEMU-IO 1
+.Os
+.Sh NAME
+.Nm qemu-io
+.Nd QEMU Disk exerciser
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     qemu-io [-h] [-V] [-rsnm] [-c cmd] ... [file]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     qemu-io is a command line utility to exercise the QEMU I/O path.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     -c, --cmd <cmd>
+            Command to execute
+
+     -r, --read-only
+            Export read-only
+
+     -s, --snapshot
+            Use snapshot file
+
+     -n, --nocache
+            Disable host cache
+
+     -g, --growable
+            Allow file to grow (only applies to protocols)
+
+     -m, --misalign
+            Misalign allocations for O_DIRECT
+
+     -k, --native-aio
+            Use kernel AIO implementation (on Linux only)
+
+     -h, --help
+            Display help and exit
+
+     -V, --version
+            Output version information and exit
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     qemu-img(1), qemu-nbd(8)
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     QEMU project
+
+     This manual page was written by Asias He <asias.hejun@gmail.com>, for
+     the Debian project (and may be used by others). Permission is  granted
+     to  copy, distribute and/or modify this document under the terms of the
+     Creative Commons Attribution-Share Alike 3.0 United States License.
+     (See http://creativecommons.org/licenses/by-sa/3.0/us/legalcode)
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/qemu-utils/copyright .
