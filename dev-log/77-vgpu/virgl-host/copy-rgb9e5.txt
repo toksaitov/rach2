@@ -1,0 +1,43 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran one
+case of VK-GL-CTS 1.4.1.1's dEQP-GLES31 alone in a guest of its own:
+
+    EGL_PLATFORM=surfaceless ./glcts --deqp-caselist-file=LIST --deqp-surface-type=pbuffer \
+        --deqp-gl-config-name=rgba8888d24s8ms0 --deqp-surface-width=256 --deqp-surface-height=256 \
+        --deqp-watchdog=enable
+
+Each case below, with the lines of the guest's glcts and of QEMU 10.2.1 as
+they came, and QEMU's exit status where a wrapper printed it.
+
+    Test case 'dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.r32i_rgb9_e5.texture2d_to_texture2d'..
+    D3D12: Removing Device.
+
+    Test case 'dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.r32i_rgb9_e5.texture2d_to_texture2d'..
+    D3D12: Removing Device.
+    qemu-shim: exit status 5
+
+    Test case 'dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.r32i_rgb9_e5.renderbuffer_to_texture2d'..
+    D3D12: Removing Device.
+    qemu-shim: exit status 5
+
+    Test case 'dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.rgba8_rgb9_e5.texture2d_to_texture2d'..
+    D3D12: Removing Device.
+    vrend_check_no_error: context error reported 2 "glcts" Unknown 1285
+    context 2 failed to dispatch COPY_TRANSFER3D: 22
+    vrend_decode_ctx_submit_cmd: context error reported 2 "glcts" Illegal command buffer 917549
+      Fail (Image comparison of level 0 failed.)
+    qemu-shim: exit status 0
+
+    Test case 'dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.rgb9_e5_r32i.texture2d_to_texture2d'..
+      Pass (Pass)
+
+    Test case 'dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.rgb9_e5_rgb9_e5.texture2d_to_texture2d'..
+      Pass (Pass)
+    qemu-shim: exit status 0
+
+    Test case 'dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.r32ui_r32f.texture2d_to_texture2d'..
+      Pass (Pass)
+
+In the search that found them, a guest running four of the cases
+`copy_image.non_compressed.viewclass_32_bits.r32i_rgb9_e5.*` at once
+printed "D3D12: Removing Device." 0.31 s after they started and ended.
+The host's kernel logged nothing at those times.
