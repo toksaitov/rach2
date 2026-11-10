@@ -90,8 +90,8 @@ int tls_entry_get(const struct process *t, uint32_t entry, struct user_desc *u);
 int tls_entry_set(struct process *t, uint32_t entry, const struct user_desc *u);
 
 /** The base a load of the selector `sel` gives FS or GS in `t`, as Linux's
- * `x86_fsgsbase_read_task` reads it: a TLS entry's base, else 0, since no
- * other user segment of the GDT has a base, and no LDT is loaded. */
+ * `x86_fsgsbase_read_task` reads it: a TLS or LDT entry's base, else 0.
+ * The caller holds the big lock, which protects the table's lifetime. */
 uintptr_t tls_selector_base(const struct process *t, unsigned int sel);
 
 #endif /* _X86_64_TLS_H_ */

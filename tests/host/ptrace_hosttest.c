@@ -26,7 +26,9 @@ static struct mm space;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 uint32_t proc_dead_threads;
-static int failures, resume_on_copy, register_reads, wakes;
+static int failures, resume_on_copy, register_reads, register_sizes, wakes;
+static int resize_on_copy;
+static uint32_t register_bytes;
 static int stops, listen_interrupts, kill_on_resume, resume_signo;
 static unsigned notifications_woken;
 static uint32_t stop_status;
@@ -55,6 +57,9 @@ process_t *get_process(uint32_t pid)
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
+    if (resize_on_copy && --resize_on_copy == 0) {
+        register_bytes *= 2;
+    }
     if (resume_on_copy) {
         tracee.ptrace_status = 0;
         resume_on_copy = 0;
@@ -86,8 +91,9 @@ long arch_regset_size(const process_t *t, unsigned long type, uint32_t *unit)
 {
     (void)t;
     (void)type;
+    register_sizes++;
     *unit = sizeof(unsigned long);
-    return sizeof(unsigned long);
+    return register_bytes;
 }
 
 /** Zero the set's word in `out` and count an access to the registers,
@@ -175,7 +181,8 @@ static void setup(void)
     tracee.tracer = self.tgid;
     tracee.ptrace_status = (PTRACE_EVENT_STOP << 16) | (SIGSTOP << 8) | 0x7f;
     cpu_table[0].current = &self;
-    wakes = register_reads = resume_on_copy = 0;
+    wakes = register_reads = register_sizes = resume_on_copy = resize_on_copy = 0;
+    register_bytes = sizeof(unsigned long);
     stops = listen_interrupts = kill_on_resume = resume_signo = 0;
     posted_to = child_info_receiver = NULL;
     notifications_woken = 0;
@@ -310,12 +317,19 @@ int main(void)
         check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, set) == 0 &&
                   register_reads == 1,
               "stopped regset access");
-        register_reads = 0;
+        register_reads = register_sizes = 0;
         resume_on_copy = 1;
         check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, set) == -ESRCH &&
-                  register_reads == 0,
-              "regset revalidates after sleeping copy");
+                  register_reads == 0 && register_sizes == 0,
+              "regset revalidates before reading the tracee to size the set");
     }
+    setup();
+    iov.iov_base = (uintptr_t)&word;
+    iov.iov_len = sizeof(word);
+    resize_on_copy = 2;
+    check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, 1) == -EIO &&
+              register_reads == 0 && register_sizes == 2,
+          "a set whose view changes during the payload copy is refused");
     setup();
     check(ptrace_listen(&tracee) == 0, "listen accepts group event");
     k_memset(&frame, 0, sizeof(frame));

@@ -196,8 +196,7 @@ static int sel_set(process_t *t, int i, unsigned long sel)
  * Set the user register `i` of the stopped thread `t` to `v`, as Linux's
  * `putreg` does: the flags only where a program may change them, a base
  * only to a user address, CS to the user's 64-bit or 32-bit code selector
- * and SS to its data selector, since a return to user mode with any other
- * would fault in the kernel (isr_exit guards the address), and DS, ES,
+ * and SS to a nonzero selector at RPL 3, and DS, ES,
  * FS and GS only to a selector `sel_set` takes. An orig_rax of -1 stops an
  * interrupted system call from being restarted; it is kept in 32 bits, as
  * the system call number is. Returns 0, or -EIO.
@@ -274,9 +273,10 @@ static int regs_set(process_t *t, int i, unsigned long v)
         tf->rsp = v;
         break;
     case R_SS:
-        if ((v & 0xFFFFu) != GDT_USER_DATA) {
+        if ((v & 3u) != 3u) {
             return -EIO;
         }
+        tf->ss = v & 0xFFFFu;
         break;
     case R_FS_BASE:
     case R_GS_BASE:
@@ -335,7 +335,12 @@ static void regs32_get(const process_t *t, uint32_t *r)
  * i386 tracer on Linux expects. 0, or -EIO. */
 static int regs32_set(process_t *t, int i, uint32_t v)
 {
-    int rc = regs_set(t, r32_native[i], v);
+    int rc;
+
+    if (i < 0 || i >= R32_COUNT) {
+        return -EIO;
+    }
+    rc = regs_set(t, r32_native[i], v);
 
     if (rc == 0 && i == R32_FS) {
         t->tls_base = tls_selector_base(t, v);
@@ -613,6 +618,9 @@ static long regset32_set(process_t *t, unsigned long type, const uint8_t *in, ui
 
     switch (type) {
     case NT_PRSTATUS:
+        if (len > R32_COUNT * 4u || len % 4u != 0) {
+            return -EINVAL;
+        }
         return regs32_set_all(t, in, len);
     case NT_PRFPREG:
         if (len != FPU_ENV_SIZE) {
@@ -626,6 +634,9 @@ static long regset32_set(process_t *t, unsigned long type, const uint8_t *in, ui
         }
         return fpu_fx_set(t->fpu, in) == 0 ? 0 : -EINVAL;
     case NT_386_TLS:
+        if (len > sizeof(u) || len % USER_DESC_SIZE != 0) {
+            return -EINVAL;
+        }
         k_memcpy(u, in, len);
         for (i = 0; i < len / USER_DESC_SIZE; i++) {
             if (!tls_desc_valid(&u[i])) {
@@ -634,6 +645,12 @@ static long regset32_set(process_t *t, unsigned long type, const uint8_t *in, ui
         }
         for (i = 0; i < len / USER_DESC_SIZE; i++) {
             tls_entry_set(t, (uint32_t)(GDT_TLS_MIN + i), &u[i]);
+            if (t->regs.fs_sel == ((GDT_TLS_MIN + i) << 3 | 3u)) {
+                t->tls_base = tls_selector_base(t, t->regs.fs_sel);
+            }
+            if (t->regs.gs_sel == ((GDT_TLS_MIN + i) << 3 | 3u)) {
+                t->regs.gs_base = tls_selector_base(t, t->regs.gs_sel);
+            }
         }
         return 0;
     default:

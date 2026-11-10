@@ -9,6 +9,7 @@
 
 #include "../../lib/kerrno.h"
 #include "../../mm/usercopy.h"
+#include "../../mm/mm.h"
 #include "../../proc/process.h"
 #include "../../syscall.h"
 
@@ -207,29 +208,15 @@ static void tls_reload(unsigned int sel, uint64_t d)
 }
 
 /**
- * set_thread_area(2), i386's 243, through `int $0x80`, as Linux's 64-bit
- * kernel has it: EBX points at a `struct user_desc`. Its `entry_number` is
- * a TLS entry, 12 to 14, or -1 for the first empty one, which is written
- * back. A descriptor Linux calls empty (`LDT_empty`) or all zero clears the
- * entry; any other must be a present 32-bit data segment, and becomes a
- * DPL 3 descriptor of its base, limit and flags, with the long-mode bit
- * clear. The entry is the calling thread's, in its record and in the
- * processor's GDT, and a segment register that holds its selector is
- * loaded again, with the null selector when the entry was cleared.
- *
- * Returns 0; -EFAULT when the descriptor cannot be read or the entry number
- * written back; -EINVAL for a descriptor refused or an entry outside 12 to
- * 14; -ESRCH when -1 finds no empty entry, or with no current process.
- */
-/**
  * Read the `struct user_desc` at `uptr` and make its descriptor, as Linux's
  * `do_set_thread_area` does before it sets one: the entry, 12 to 14, into
  * `*entry`, where -1 picks the calling thread's first empty one and writes
- * it back, and the descriptor into `*desc`. 0; -EFAULT when the structure
+ * it back only if `allocate` is set, and the descriptor into `*desc`.
+ * 0; -EFAULT when the structure
  * cannot be read or the entry written back; -EINVAL for a descriptor
  * refused or an entry outside 12 to 14; -ESRCH when -1 finds none empty.
  */
-static long tls_desc_from_user(uintptr_t uptr, uint32_t *entry, uint64_t *desc)
+static long tls_desc_from_user(uintptr_t uptr, uint32_t *entry, uint64_t *desc, int allocate)
 {
     struct user_desc u;
     int i;
@@ -241,7 +228,7 @@ static long tls_desc_from_user(uintptr_t uptr, uint32_t *entry, uint64_t *desc)
         return -EINVAL;
     }
     *entry = u.entry_number;
-    if (*entry == (uint32_t)-1) {
+    if (*entry == (uint32_t)-1 && allocate) {
         i = 0;
         while (i < ARCH_TLS_ENTRIES && current_proc->regs.tls[i] != 0) {
             i++;
@@ -261,6 +248,21 @@ static long tls_desc_from_user(uintptr_t uptr, uint32_t *entry, uint64_t *desc)
     return 0;
 }
 
+/**
+ * set_thread_area(2), i386's 243, through `int $0x80`, as Linux's 64-bit
+ * kernel has it: EBX points at a `struct user_desc`. Its `entry_number` is
+ * a TLS entry, 12 to 14, or -1 for the first empty one, which is written
+ * back. A descriptor Linux calls empty (`LDT_empty`) or all zero clears the
+ * entry; any other must be a present 32-bit data segment, and becomes a
+ * DPL 3 descriptor of its base, limit and flags, with the long-mode bit
+ * clear. The entry is the calling thread's, in its record and in the
+ * processor's GDT, and a segment register that holds its selector is
+ * loaded again, with the null selector when the entry was cleared.
+ *
+ * Returns 0; -EFAULT when the descriptor cannot be read or the entry number
+ * written back; -EINVAL for a descriptor refused or an entry outside 12 to
+ * 14; -ESRCH when -1 finds no empty entry, or with no current process.
+ */
 long sys_set_thread_area(isr_params_t *params)
 {
     uint32_t entry;
@@ -270,7 +272,7 @@ long sys_set_thread_area(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    rc = tls_desc_from_user(SC_ARG(params, 0), &entry, &d);
+    rc = tls_desc_from_user(SC_ARG(params, 0), &entry, &d, 1);
     if (rc != 0) {
         return rc;
     }
@@ -285,13 +287,12 @@ long sys_set_thread_area(isr_params_t *params)
  * clone's CLONE_SETTLS in an i386 call, whose TLS argument at `uptr` is a
  * `struct user_desc`, as Linux's `set_new_tls` takes it from a compat call:
  * the entry and descriptor the child is to have, read and checked here in
- * the parent, as set_thread_area checks one, an entry of -1 picking the
- * parent's first empty one, which the child's copy of the entries has
- * empty too.
+ * the parent, as set_thread_area checks one, with an explicit entry from
+ * 12 to 14; -1 is refused with -EINVAL and never written back.
  */
 long ia32_clone_tls(unsigned long uptr, uint32_t *entry, uint64_t *desc)
 {
-    return tls_desc_from_user(uptr, entry, desc);
+    return tls_desc_from_user(uptr, entry, desc, 0);
 }
 
 /** Give `child`, not yet run, the TLS descriptor `desc` in entry `entry`,
@@ -310,6 +311,7 @@ void ia32_clone_tls_set(process_t *child, uint32_t entry, uint64_t desc)
     }
 }
 
+/** Describe each TLS entry of `t` in `u`; return the count in use. */
 uint32_t ia32_tls_get(const process_t *t, struct user_desc *u)
 {
     uint32_t i, set = 0;
@@ -380,11 +382,17 @@ int tls_entry_set(process_t *t, uint32_t entry, const struct user_desc *u)
     return 0;
 }
 
+/** Read the base of a TLS or LDT selector of `t`, under the big lock. */
 uintptr_t tls_selector_base(const process_t *t, unsigned int sel)
 {
     unsigned int entry = sel >> 3;
 
-    if ((sel & 4u) != 0 || entry < GDT_TLS_MIN || entry > GDT_TLS_MAX) {
+    if ((sel & 4u) != 0) {
+        const uint64_t *ldt = t->mm ? t->mm->ldt : NULL;
+
+        return ldt && entry < t->mm->ldt_entries ? desc_base(ldt[entry]) : 0;
+    }
+    if (entry < GDT_TLS_MIN || entry > GDT_TLS_MAX) {
         return 0;
     }
     return desc_base(t->regs.tls[entry - GDT_TLS_MIN]);
