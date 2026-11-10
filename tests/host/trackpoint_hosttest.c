@@ -545,6 +545,34 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
+/** No Elantech pad answers where the Synaptics pad does not; the
+ * Elantech pad's own rows are elantech_hosttest.c's. */
+int elantech_init(void)
+{
+    return 0;
+}
+
+/** No Elantech pad's bytes come, since `elantech_init` found none. */
+int elantech_byte(uint8_t data)
+{
+    (void)data;
+    return ELANTECH_GOOD;
+}
+
+/* The rest of elantech.h, which these rows never call. */
+int elantech_packet_start(void)
+{
+    return 1;
+}
+
+int elantech_reconnect(void)
+{
+    return -1;
+}
+
+void elantech_disconnect(void)
+{}
+
 /** The 10 ms a pass-through probe waits pass at once. */
 void k_udelay(uint32_t usec)
 {
