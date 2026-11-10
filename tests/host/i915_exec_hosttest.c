@@ -17,6 +17,7 @@
  * with a pad and an alignment; the batch started on the render and the
  * blitter ring, the stream output reset, and the request's fence; the
  * in-fence, the submit fence, the out-fence and the fence array; the
+ * timeline fences of the call's extension (78-11a.1); the
  * command parser's shadow and trampoline on the call's path (78-8b), and
  * the objects held until the request retires; a ring that refuses the
  * commands.
@@ -940,7 +941,10 @@ static void fence_array(void)
     fa[0].handle = empty;
     CHECK(execbuf(&a) == -EINVAL, "fence array: WAIT on a syncobj with no fence EINVAL");
     fa[0].flags = I915_EXEC_FENCE_WAIT | I915_EXEC_FENCE_SIGNAL;
-    CHECK(execbuf(&a) == 0 && syncobj_fence(empty), "fence array: unless it also signals");
+    CHECK(execbuf(&a) == -EINVAL && !syncobj_fence(empty),
+          "fence array: even when it also signals, as Linux");
+    fa[0].flags = 0;
+    CHECK(execbuf(&a) == 0 && !syncobj_fence(empty), "fence array: neither flag, left alone");
     idle();
     fa[0].handle = 0x999;
     CHECK(execbuf(&a) == -ENOENT, "fence array: no such syncobj ENOENT");
@@ -954,8 +958,207 @@ static void fence_array(void)
     CHECK(execbuf(&a) == 0, "extensions: an empty chain");
     idle();
     k_memset(&ext, 0, sizeof(ext));
+    ext.name = 1;
     a.cliprects_ptr = (uintptr_t)&ext;
-    CHECK(execbuf(&a) == -EINVAL, "extensions: the timeline fences, not yet here, EINVAL");
+    CHECK(execbuf(&a) == -EINVAL, "extensions: an unknown one EINVAL");
+    close_handle(&file_a, b);
+}
+
+/** The timeline extension `t` of `n` entries at `fa` and `pt`, chained to
+ * `next`. */
+static void timeline_init(struct drm_i915_gem_execbuffer_ext_timeline_fences *t,
+                          struct drm_i915_gem_exec_fence *fa, uint64_t *pt, uint64_t n, void *next)
+{
+    k_memset(t, 0, sizeof(*t));
+    t->base.name = DRM_I915_GEM_EXECBUFFER_EXT_TIMELINE_FENCES;
+    t->base.next_extension = (uintptr_t)next;
+    t->fence_count = n;
+    t->handles_ptr = (uintptr_t)fa;
+    t->values_ptr = (uintptr_t)pt;
+}
+
+/** The point of the timeline syncobj `handle` that its fence is, or 0 when
+ * the fence is no point. */
+static uint64_t newest_point(uint32_t handle)
+{
+    struct dma_fence *f = syncobj_fence(handle);
+
+    return f && to_dma_fence_chain(f) ? f->seqno : 0;
+}
+
+/** Add point `point` of `fence` to the syncobj `handle`, as a timeline
+ * signal from elsewhere would. */
+static void point_add(uint32_t handle, struct dma_fence *fence, uint64_t point)
+{
+    struct drm_syncobj *s = drm_syncobj_find(&file_a, handle);
+
+    drm_syncobj_add_point(s, dma_fence_chain_alloc(), fence, point);
+    drm_syncobj_put(s);
+}
+
+/**
+ * 78-11a.1: the timeline fences, DRM_I915_GEM_EXECBUFFER_EXT_TIMELINE_FENCES,
+ * as Linux's add_timeline_fence_array takes them, on the timeline syncobj
+ * `tl`: a point to signal added to it as the request's fence, a point to
+ * wait for holding the batch until its fence signals, a point signalled
+ * and gone skipped. `tl` ends at point 3.
+ */
+static void timeline_points(uint32_t tl)
+{
+    uint32_t b = batch_end();
+    struct drm_i915_gem_execbuffer_ext_timeline_fences t;
+    struct drm_i915_gem_exec_fence fa[2];
+    struct drm_i915_gem_exec_object2 o;
+    struct drm_i915_gem_execbuffer2 a;
+    struct dma_fence *h = test_fence(), *p;
+    uint64_t pt[2];
+
+    entry_init(&o, b);
+    args_init(&a, &o, 1, I915_EXEC_RENDER | I915_EXEC_USE_EXTENSIONS);
+    a.cliprects_ptr = (uintptr_t)&t;
+    fa[0].handle = tl;
+    fa[0].flags = I915_EXEC_FENCE_SIGNAL;
+    pt[0] = 1;
+    timeline_init(&t, fa, pt, 1, 0);
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 1 && newest_point(tl) == 1,
+          "timeline: SIGNAL at point 1 adds the point");
+    p = syncobj_fence(tl);
+    CHECK(p && to_dma_fence_chain(p)->fence->ops == &i915_fence_ops && !dma_fence_is_signaled(p),
+          "timeline: whose fence is the request's");
+    idle();
+    CHECK(dma_fence_is_signaled(syncobj_fence(tl)), "timeline: the point signals as it retires");
+
+    fa[0].flags = I915_EXEC_FENCE_WAIT;
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 1,
+          "timeline: WAIT on a point signalled and gone runs at once");
+    idle();
+
+    point_add(tl, h, 2);
+    fa[0].flags = I915_EXEC_FENCE_WAIT;
+    pt[0] = 2;
+    fa[1].handle = tl;
+    fa[1].flags = I915_EXEC_FENCE_SIGNAL;
+    pt[1] = 3;
+    timeline_init(&t, fa, pt, 2, 0);
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 0 && newest_point(tl) == 3,
+          "timeline: WAIT at point 2 holds the batch, SIGNAL adds point 3");
+    p = syncobj_fence(tl);
+    dma_fence_signal(h);
+    kick();
+    CHECK(nstarts == 1, "timeline: the batch runs once point 2's fence signals");
+    idle();
+    CHECK(dma_fence_is_signaled(p), "timeline: and point 3 signals as it retires");
+    dma_fence_put(h);
+    close_handle(&file_a, b);
+}
+
+/**
+ * 78-11a.1: the timeline fences' refusals as Linux's, with the chain record
+ * of a point taken before a refusal freed; a syncobj with neither flag,
+ * passed over without a fence and waited for with one, as Linux; a binary
+ * syncobj at point 0; two extensions in one chain; and the timeline `tl`
+ * that timeline_points left at point 3.
+ */
+static void timeline_refusals(uint32_t tl)
+{
+    uint32_t b = batch_end(), bin = syncobj_new(), empty = syncobj_new();
+    struct drm_i915_gem_execbuffer_ext_timeline_fences t, t2;
+    struct drm_i915_gem_exec_fence fa[2], fb[1];
+    struct drm_i915_gem_exec_object2 o;
+    struct drm_i915_gem_execbuffer2 a;
+    struct dma_fence *h;
+    struct drm_syncobj *s;
+    uint64_t pt[2], pb[1];
+
+    entry_init(&o, b);
+    args_init(&a, &o, 1, I915_EXEC_RENDER | I915_EXEC_USE_EXTENSIONS);
+    a.cliprects_ptr = (uintptr_t)&t;
+    fa[0].handle = tl;
+    fa[0].flags = I915_EXEC_FENCE_WAIT;
+    pt[0] = 9;
+    timeline_init(&t, fa, pt, 1, 0);
+    CHECK(execbuf(&a) == -EINVAL, "timeline: WAIT on a point not reached EINVAL");
+    fa[0].flags = I915_EXEC_FENCE_WAIT | I915_EXEC_FENCE_SIGNAL;
+    CHECK(execbuf(&a) == -EINVAL && newest_point(tl) == 3,
+          "timeline: WAIT and SIGNAL on one point EINVAL");
+    fa[0].flags = I915_EXEC_FENCE_SIGNAL;
+    pt[0] = 4;
+    fa[1].handle = 0x999;
+    fa[1].flags = I915_EXEC_FENCE_WAIT;
+    pt[1] = 0;
+    timeline_init(&t, fa, pt, 2, 0);
+    CHECK(execbuf(&a) == -ENOENT && newest_point(tl) == 3,
+          "timeline: no such syncobj ENOENT, the point before it not added");
+    fa[1].handle = tl;
+    fa[1].flags = 4;
+    CHECK(execbuf(&a) == -EINVAL, "timeline: an unknown flag EINVAL");
+
+    fa[0].handle = empty;
+    fa[0].flags = I915_EXEC_FENCE_WAIT;
+    pt[0] = 0;
+    timeline_init(&t, fa, pt, 1, 0);
+    CHECK(execbuf(&a) == -EINVAL, "timeline: WAIT on a syncobj with no fence EINVAL");
+    fa[0].flags = 0;
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 1 && !syncobj_fence(empty),
+          "timeline: neither flag on it, skipped");
+    idle();
+    fa[0].flags = I915_EXEC_FENCE_WAIT | I915_EXEC_FENCE_SIGNAL;
+    CHECK(execbuf(&a) == 0 && syncobj_fence(empty) && !to_dma_fence_chain(syncobj_fence(empty)),
+          "timeline: WAIT and SIGNAL at point 0 of one with no fence, as Linux");
+    idle();
+
+    h = test_fence();
+    s = drm_syncobj_find(&file_a, bin);
+    drm_syncobj_replace_fence(s, h);
+    drm_syncobj_put(s);
+    fa[0].handle = bin;
+    fa[0].flags = 0;
+    timeline_init(&t, fa, pt, 1, 0);
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 0 && syncobj_fence(bin) == h,
+          "timeline: neither flag on a binary syncobj with a fence waits for it, as Linux");
+    dma_fence_signal(h);
+    kick();
+    idle();
+    CHECK(nstarts == 1, "timeline: and runs once it signals");
+    dma_fence_put(h);
+
+    fa[0].handle = bin;
+    fa[0].flags = I915_EXEC_FENCE_SIGNAL;
+    pt[0] = 0;
+    fb[0].handle = tl;
+    fb[0].flags = I915_EXEC_FENCE_SIGNAL;
+    pb[0] = 5;
+    timeline_init(&t2, fb, pb, 1, 0);
+    timeline_init(&t, fa, pt, 1, &t2);
+    CHECK(execbuf(&a) == 0 && syncobj_fence(bin)->ops == &i915_fence_ops && newest_point(tl) == 5,
+          "timeline: two extensions in a chain, a binary syncobj and a point both signalled");
+    idle();
+
+    fa[0].handle = tl;
+    fa[0].flags = I915_EXEC_FENCE_SIGNAL;
+    pt[0] = 6;
+    fa[1].handle = syncobj_new();
+    fa[1].flags = 0;
+    pt[1] = 0;
+    timeline_init(&t, fa, pt, 2, 0);
+    CHECK(execbuf(&a) == 0 && newest_point(tl) == 6,
+          "timeline: an empty syncobj with neither flag after a new point, which Linux refuses "
+          "with the point's stale error");
+    idle();
+
+    timeline_init(&t, fa, pt, 0, 0);
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 1, "timeline: no entries");
+    idle();
+    timeline_init(&t, fa, (uint64_t *)(uintptr_t)8, 1, 0);
+    CHECK(execbuf(&a) == -EFAULT, "timeline: points at a bad address EFAULT");
+    timeline_init(&t, fa, pt, (uint64_t)1 << 62, 0);
+    CHECK(execbuf(&a) == -EINVAL, "timeline: too many entries EINVAL");
     close_handle(&file_a, b);
 }
 
@@ -1087,6 +1290,7 @@ static void sol_and_faults(void)
 
 int main(void)
 {
+    uint32_t tl;
     int before;
 
     model_start();
@@ -1104,6 +1308,9 @@ int main(void)
     placement();
     fences();
     fence_array();
+    tl = syncobj_new();
+    timeline_points(tl);
+    timeline_refusals(tl);
     parser();
     sol_and_faults();
     idle();

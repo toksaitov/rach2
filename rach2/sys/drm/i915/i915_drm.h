@@ -412,7 +412,8 @@ struct drm_i915_gem_mmap_offset {
  * `rsvd2` are a sync file to wait for, and with I915_EXEC_FENCE_OUT the
  * call returns a sync file of the batch's fence in its high 32 bits. With
  * I915_EXEC_FENCE_ARRAY `cliprects_ptr` holds `num_cliprects` syncobjs to
- * wait on or to signal.
+ * wait on or to signal; with I915_EXEC_USE_EXTENSIONS it holds a chain of
+ * extensions instead.
  */
 struct drm_i915_gem_relocation_entry {
     uint32_t target_handle;
@@ -489,6 +490,17 @@ struct drm_i915_gem_execbuffer2 {
     uint64_t flags;
     uint64_t rsvd1;
     uint64_t rsvd2;
+};
+
+/* The extension of EXECBUFFER2 that takes timeline syncobjs: `fence_count`
+ * entries at `handles_ptr`, each with its point, 0 for a binary syncobj,
+ * at `values_ptr`. */
+#define DRM_I915_GEM_EXECBUFFER_EXT_TIMELINE_FENCES 0
+struct drm_i915_gem_execbuffer_ext_timeline_fences {
+    struct i915_user_extension base;
+    uint64_t fence_count;
+    uint64_t handles_ptr;
+    uint64_t values_ptr;
 };
 
 struct drm_i915_gem_set_domain {
