@@ -132,7 +132,8 @@ static void fail(const char *why)
     say(why);
     say("\n");
     report_stop(why);
-    sys_exit(1);
+    syscall1(SYS_EXIT_GROUP, 1);
+    __builtin_unreachable();
 }
 
 /**
@@ -323,6 +324,9 @@ static void spawn(void (*fn)(void))
 static void join(int n, const char *why)
 {
     while (done < n) {
+        if (bad != 0) {
+            fail(why);
+        }
         yield();
     }
     if (bad != 0) {
@@ -338,6 +342,9 @@ static void run_wakes(void)
     done = 0;
     spawn(wait_classic);
     while ((r = futex_wake(&word_a, ALL, 1, F2)) == 0) {
+        if (done != 0 || bad != 0) {
+            fail("the classic waiter ended before its wake");
+        }
         yield();
     }
     if (r != 1) {
@@ -349,6 +356,9 @@ static void run_wakes(void)
     done = 0;
     spawn(wait_futex2);
     while ((r = futex(&word_a, FUTEX_WAKE, 0, 0, 0, 0)) == 0) {
+        if (done != 0 || bad != 0) {
+            fail("the futex2 waiter ended before its wake");
+        }
         yield();
     }
     if (r != 1) {
@@ -366,6 +376,9 @@ static void run_wakes(void)
         r = futex_wake(&word_a, 1, 1, F2);
         if (r != 0) {
             break;
+        }
+        if (done != 0 || bad != 0) {
+            fail("the waiter ended before its wake");
         }
         yield();
     }
@@ -423,6 +436,9 @@ static void run_requeue(void)
             fail("FUTEX_REQUEUE of two waiters did not move them");
         }
         moved += r;
+        if (done != 0 || bad != 0) {
+            fail("a waiter ended before its requeue");
+        }
         yield();
     }
     if (futex_wake(&word_a, ALL, 10, F2) != 0 || done != 0) {
@@ -505,6 +521,9 @@ static void run_wake_op(void)
         if (r != 0) {
             break;
         }
+        if (done != 0 || bad != 0) {
+            fail("the waiter ended before its wake");
+        }
         yield();
     }
     if (r != 1) {
@@ -560,6 +579,16 @@ static void run_einval(void)
         fail("a futex_requeue entry's reserved word of 1 was not refused with EINVAL");
     }
     w[1].reserved = 0;
+    w[1].flags = FUTEX2_SIZE_U32;
+    if (futex_requeue(w, 0, 0, 0) != -EINVAL) {
+        fail("unequal futex_requeue entry flags were not refused with EINVAL");
+    }
+    w[0].flags = FUTEX2_SIZE_U32;
+    w[1].flags = F2;
+    if (futex_requeue(w, 0, 0, 0) != -EINVAL) {
+        fail("unequal futex_requeue entry flags in reverse were not refused with EINVAL");
+    }
+    w[0].flags = F2;
     if (futex_requeue(w, 1, 1, 1) != -EINVAL || futex_requeue(0, 0, 1, 1) != -EINVAL ||
         futex_requeue(w, 0, -1, 1) != -EINVAL || futex_requeue(w, 0, 1, -1) != -EINVAL ||
         futex(&word_a, FUTEX_CMP_REQUEUE, 1, -1, &word_b, 0) != -EINVAL) {
