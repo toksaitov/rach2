@@ -92,7 +92,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -286,7 +287,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "std-vga"
           },
@@ -476,7 +478,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -668,7 +671,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -864,7 +868,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -1060,7 +1065,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -1260,7 +1266,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -1460,7 +1467,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -1652,7 +1660,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -1843,7 +1852,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -2035,7 +2045,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
@@ -2226,7 +2237,8 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2"
+              "rach2.root=ext2",
+              "rach2.tscreliable"
             ],
             "display": "none"
           },
