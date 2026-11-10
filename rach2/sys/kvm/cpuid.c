@@ -10,8 +10,12 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 
-/* The XCR0 components the kernel saves, and so can give a guest: x87, SSE,
- * AVX and AVX-512's three (arch/x86/fpu.h). */
+/* The XCR0 components a guest may have: x87, SSE, AVX and AVX-512's three
+ * (arch/x86/fpu.h). Not PKRU, which the kernel saves for its own threads:
+ * a guest is offered no PKU, may not set CR4.PKE, and so never changes
+ * PKRU, which keeps through a run the value the guest's image loads, and
+ * the host's comes back with the rest of its state after the run
+ * (vmx.c's and svm.c's `fpu_store`). */
 #define XCR0_KERNEL 0xE7ull
 
 #define XFEATURE_YMM    0x4ull
@@ -39,8 +43,9 @@
 /* Leaf 7, subleaf 0. EBX: as Linux, less SGX, MPX and Intel PT. ECX:
  * AVX512VBMI, UMIP, VBMI2, GFNI, VAES, VPCLMULQDQ, VNNI, BITALG,
  * VPOPCNTDQ, RDPID, BUS_LOCK_DETECT, CLDEMOTE, MOVDIRI and MOVDIR64B; not
- * PKU, whose PKRU state the kernel does not save, nor LA57 before the
- * guest-physical tables have five levels, nor WAITPKG or SGX_LC. EDX: the
+ * PKU, since a guest's XCR0 may not name PKRU (XCR0_KERNEL), nor LA57
+ * before the guest-physical tables have five levels, nor WAITPKG or
+ * SGX_LC. EDX: the
  * AVX-512 and string extensions, MD_CLEAR, SERIALIZE and TSXLDTRK; not
  * the speculation controls or ARCH_CAPABILITIES, whose MSRs are not
  * offered, nor AMX, whose state the kernel does not save. */

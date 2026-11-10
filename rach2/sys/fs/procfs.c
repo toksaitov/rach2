@@ -16,6 +16,7 @@
 #include "../iommu.h"
 #endif
 
+#include "../fpu.h"
 #include "../klog.h"
 #include "../irq.h"
 #include "procfs.h"
@@ -1409,6 +1410,17 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long p
     ap_str(t, " kB\n");
 }
 
+/** Append the `ProtectionKey:` line of the region `r`, as Linux's smaps has
+ * it where the protection keys are on; nothing where they are off. */
+static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
+{
+    if (fpu_pkeys()) {
+        ap_str(t, "ProtectionKey:  ");
+        ap_u32_width(t, VM_PROT_KEY(r->prot), 8);
+        ap_ch(t, '\n');
+    }
+}
+
 /**
  * /proc/<pid>/smaps: each region's maps line and Linux's fields for it, which
  * BusyBox's pmap and smemcap read. The pages in memory are the present pages
@@ -1423,7 +1435,8 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long p
  * of user memory, so those fields are 0. Locked is Rss for a locked region,
  * flagged `lo`, and `lf` when it is locked on fault; a mapping of
  * memfd_secret is flagged `dd`, left out of a core file, and a sealed region
- * `sl`, last, as Linux's highest bit.
+ * `sl`, last, as Linux's highest bit. Where the protection keys are on, the
+ * region's key comes before the flags, as `ProtectionKey:`.
  * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
  */
 /** Append the VmFlags line of smaps for the region `r`, the names Linux's
@@ -1481,6 +1494,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_kb(t, "Swap:", 0);
         ap_smaps_kb(t, "SwapPss:", 0);
         ap_smaps_kb(t, "Locked:", (r->prot & VM_PROT_LOCKED) ? clean + dirty : 0);
+        ap_smaps_key(t, r);
         ap_smaps_flags(t, r);
     }
     return t->len;
