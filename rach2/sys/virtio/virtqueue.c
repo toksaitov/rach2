@@ -378,14 +378,18 @@ static void virtqueue_release(struct virtqueue *vq, uint16_t head)
 
 int virtqueue_reap(struct virtqueue *vq)
 {
+    uint32_t flags = spin_lock_irqsave(&vq->lock);
+    uint16_t until = vq->used[1], left;
     int n = 0;
 
+    spin_unlock_irqrestore(&vq->lock, flags);
     for (;;) {
-        uint32_t flags = spin_lock_irqsave(&vq->lock);
-        uint16_t used_idx = vq->used[1];
+        uint16_t used_idx;
         uint32_t id, len;
         void *token;
 
+        flags = spin_lock_irqsave(&vq->lock);
+        used_idx = vq->used[1];
         if (used_idx == vq->last_used) {
             spin_unlock_irqrestore(&vq->lock, flags);
             break;
@@ -394,6 +398,12 @@ int virtqueue_reap(struct virtqueue *vq)
             spin_unlock_irqrestore(&vq->lock, flags);
             klog(KLOG_ERR, "virtio", "queue: %s: %d: the device's index ran %d past ours",
                  vq->dev->name, vq->index, (int)(uint16_t)(used_idx - vq->last_used));
+            break;
+        }
+        /* Past `until`, here or in a reap that interrupted this one. */
+        left = (uint16_t)(until - vq->last_used);
+        if (left == 0 || left > vq->size) {
+            spin_unlock_irqrestore(&vq->lock, flags);
             break;
         }
         arch_dma_fence(); /* the element is read after the index */
