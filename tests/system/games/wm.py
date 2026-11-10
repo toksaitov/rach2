@@ -47,8 +47,9 @@ GAME_ID = "2734"
 UID = 1001
 # CVT's 1366x768 at 60 Hz, which Weston sets when the EDID lists no such mode.
 MODELINE = "85.50 1366 1436 1579 1792 768 771 774 798 +hsync +vsync"
-# What the scenario sends while xplace waits: ten moves of -200 on x and
-# five of +40 on y, then one key.
+# What the scenario sends while xplace waits, after the one move that gives
+# the seat its pointer: ten moves of -200 on x and five of +40 on y, then one
+# key.
 MOTION = (-2000, 200)
 ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 "
        "PULSE_SERVER=unix:/run/user/1001/pulse/native XDG_DATA_HOME=%s/data "
@@ -58,6 +59,7 @@ ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 DISPLAY=
 REBUILT = ("(Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, "
            "xwm-emulated-mode, xwm-mapped-managed)")
 EV_KEY = 1
+EV_REL = 2
 KEY_ESC = 1
 CHILDREN = []
 FAILED = []
@@ -149,6 +151,39 @@ def keyboard():
     raise AssertionError("no keyboard in /sys/class/input")
 
 
+def mouse(flags=0):
+    """Open the event device of the mouse, which has REL_X and REL_Y."""
+    for entry in sorted(Path("/sys/class/input").glob("event*")):
+        caps = (entry / "device/capabilities/rel").read_text().split()
+        if caps and int(caps[-1], 16) & 3 == 3:
+            return os.open("/dev/input/" + entry.name, os.O_RDONLY | flags)
+    raise AssertionError("no mouse in /sys/class/input")
+
+
+def seat_pointer():
+    """
+    Have the scenario move the mouse once, and wait for the move and for the
+    X server's pointer device. Weston gives its seat a pointer only at a
+    device's first pointer event, and until Xwayland has the seat's pointer a
+    grab confines nothing and no motion reaches an X client; a desktop in use
+    had its first move long before a game starts.
+    """
+    fd = mouse()
+    try:
+        say("ready: pointer")
+        size = struct.calcsize("llHHi")
+        while True:
+            _, _, kind, _, _ = struct.unpack("llHHi", os.read(fd, size))
+            if kind == EV_REL:
+                break
+    finally:
+        os.close(fd)
+    probe = subprocess.run(desktop("exec %s -p" % (PROBES / "xplace")),
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    check("pointer", probe.returncode == 0 and "pointer device" in probe.stdout,
+          probe.stdout.strip())
+
+
 def kernel_motion(stop, sums):
     """
     Sum the REL_X and REL_Y events of the mouse's event device into SUMS, a
@@ -157,13 +192,7 @@ def kernel_motion(stop, sums):
     reach MOTION: the scenario presses its key only then, since the i8042
     passes a key's bytes before the mouse's that wait.
     """
-    for entry in sorted(Path("/sys/class/input").glob("event*")):
-        caps = (entry / "device/capabilities/rel").read_text().split()
-        if caps and int(caps[-1], 16) & 3 == 3:
-            break
-    else:
-        return
-    fd = os.open("/dev/input/" + entry.name, os.O_RDONLY | os.O_NONBLOCK)
+    fd = mouse(os.O_NONBLOCK)
     size = struct.calcsize("llHHi")
     try:
         while not stop.is_set():
@@ -174,7 +203,7 @@ def kernel_motion(stop, sums):
                 continue
             for at in range(0, len(data) - size + 1, size):
                 _, _, kind, code, value = struct.unpack("llHHi", data[at:at + size])
-                if kind == 2 and code in (0, 1):
+                if kind == EV_REL and code in (0, 1):
                     sums[code] += value
                     sums[2] += 1
                     if tuple(sums[:2]) == MOTION:
@@ -382,6 +411,7 @@ def full(width, height):
 def row_place():
     """xplace and Wine's window at the output's 1366x768, and xplace's raw motion."""
     session("1366x768")
+    seat_pointer()
     offset = SERVICES.stat().st_size
     stop, sums = threading.Event(), [0, 0, 0]
     reader = threading.Thread(target=kernel_motion, args=(stop, sums))
