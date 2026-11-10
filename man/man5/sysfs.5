@@ -91,6 +91,79 @@ a header of zeros besides.
 Its size in
 .Xr stat 2
 is 4096, as every file here has.
+.It Pa /sys/bus/pci/devices/0000:BB:DD.F/iommu_group
+On the x86-64 kernel, a link to the function's IOMMU group under
+.Pa /sys/kernel/iommu_groups ,
+for a function an IOMMU unit translates; see
+.Xr vfio 4 .
+.It Pa /sys/bus/pci/devices/0000:BB:DD.F/driver_override
+The driver that alone may take the function, or
+.Ql (null)
+for none, as on Linux.
+Root writes a name of up to 31 bytes, less a newline, or an empty line to
+clear it; a longer name is
+.Er EINVAL .
+.It Pa /sys/bus/pci/devices/0000:BB:DD.F/driver
+A link to
+.Pa /sys/bus/pci/drivers/vfio-pci
+while the function is bound to it.
+.It Pa /sys/bus/pci/drivers/vfio-pci/{bind,unbind}
+Write-only, mode 0200.
+A function's name written to
+.Pa bind
+gives it to vfio-pci when its
+.Pa driver_override
+names vfio-pci, or it has none and its ids were given to
+.Pa new_id ;
+otherwise, or for a name no function has, the write is
+.Er ENODEV .
+It is
+.Er EBUSY
+while a driver holds the function and
+.Er EINVAL
+for a bridge.
+A name written to
+.Pa unbind
+takes the function back, and is
+.Er EBUSY
+while a program has it open.
+The directory has a link, named as the function, to each function bound.
+.It Pa /sys/bus/pci/drivers/vfio-pci/{new_id,remove_id}
+Write-only, mode 0200.
+.Ql VENDOR DEVICE
+in hexadecimal written to
+.Pa new_id
+adds the ids vfio-pci matches, at most 16, and binds every function of
+them that has no driver;
+.Pa remove_id
+forgets ids it gave, and is
+.Er ENODEV
+for others.
+.It Pa /sys/bus/pci/drivers_probe
+Write-only, mode 0200: a function's name written here gives it to
+vfio-pci if it has no driver and vfio-pci matches it, and leaves it alone
+otherwise.
+.It Pa /sys/kernel/iommu_groups/N
+On the x86-64 kernel, IOMMU group N, which
+.Xr vfio 4
+gives as
+.Pa /dev/vfio/N .
+.Pa type
+reads
+.Ql identity ;
+.Pa reserved_regions
+has a line for each range the group's functions may not map, its start
+and end as
+.Ql 0x
+and sixteen hexadecimal digits and its kind,
+.Ql direct ,
+.Ql direct-relaxable
+or
+.Ql msi ,
+sorted by start, as Linux writes them; and
+.Pa devices
+has a link to each function of the group.
+The directory is there with no group when no IOMMU unit translates.
 .It Pa /sys/bus/usb/devices/B-P[.P...]
 A symbolic link for each running USB device, named by its bus, the number
 of its controller from 1, and its port on the controller and on each hub
@@ -831,6 +904,10 @@ The input devices and their event devices.
 The i8042's ports and a touchpad's pass-through port.
 .It Pa /sys/devices/platform
 The platform devices.
+.It Pa /sys/kernel/iommu_groups
+The IOMMU groups.
+.It Pa /sys/bus/pci/drivers/vfio-pci
+The vfio-pci driver's files.
 .It Pa /sys/kernel/debug
 Where debugfs is mounted.
 .It Pa /sys/kernel/uevent_seqnum
@@ -850,6 +927,7 @@ MODALIAS=pci:v00008086d00000A04sv000017AAsd00003978bc06sc00i00
 .Xr backlight 4 ,
 .Xr drm 4 ,
 .Xr input 4 ,
+.Xr vfio 4 ,
 .Xr debugfs 5 ,
 .Xr proc 5 ,
 .Xr netlink 7
