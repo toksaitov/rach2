@@ -192,10 +192,10 @@ Faults this milestone found in another project's code, one section each, in the 
 ## PulseAudio's OSS sink writes 1% as 0 to the mixer
 
 * Project: PulseAudio 17.0, Debian's `pulseaudio` 17.0+dfsg1-2, its `module-oss` and `oss-util.c`.
-* Fails: a sink volume of 1% (655 of `PA_VOLUME_NORM`'s 65,536) sets the OSS mixer to 0, while a mixer at 1 reads back as 655, so writing the volume PulseAudio itself read lowers the hardware's from 1 to 0. The OSS level appears to be taken as volume times 100 over `PA_VOLUME_NORM`, rounded down, in `pa_oss_set_volume`; the file and lines were not read.
+* Fails: a sink volume of 1% (655 of `PA_VOLUME_NORM`'s 65,536) sets the OSS mixer to 0, while a mixer at 1 reads back as 655, so writing the volume PulseAudio itself read lowers the hardware's from 1 to 0. Where PulseAudio turns a volume into a mixer level, and how it rounds, is missing from the records: `pa_oss_set_volume` was not read.
 * Found: 2026-11-11, on the Lenovo under Rach2 (80-6's trial root, kernel `a7c7686d`), task 80-12.d, while finding which path carries a volume change to the kernel's mixer, with Crysis playing through the session's PulseAudio.
 * Reproduction: with `module-oss` on a device whose mixer reads 1, `pactl set-sink-volume oss_output 3%` sets the mixer to 2 and `pactl set-sink-volume oss_output 1%` sets it to 0, after which `pactl get-sink-volume oss_output` reads 0%.
 * Evidence: `dev-log/80-games/80-12/evidence/volume-paths.txt`; PulseAudio's start reads `Read mixer settings: 0: 655 /   1%` from a mixer at 1, in `build/runs/task3426/lenovo/b/run2/logs.tar.gz` (`80-12/pulse.log`).
 * Rach2: nothing; the steps set `mixer vol 1` themselves.
 * Status: unreported.
-* Next: read `pa_oss_set_volume` and `pa_oss_get_volume` in PulseAudio's current source for the rounding; report with a patch that rounds to nearest, so that a read value written back is unchanged.
+* Next: read `pa_oss_set_volume` and `pa_oss_get_volume` in PulseAudio's current source for the conversion and its rounding; then report, with a patch that makes a read value written back unchanged.

@@ -85,14 +85,15 @@ is not open, or is open with
 .Dv O_PATH .
 .It Bq Er EFAULT
 .Fa range
-cannot be read, or
-.Fa cstat
-cannot be written.
+cannot be read.
 .It Bq Er EPERM
 The caller may not count the file's pages, as above.
 .It Bq Er EINVAL
 .Fa flags
 is not 0.
+.It Bq Er EFAULT
+.Fa cstat
+cannot be written.
 .El
 .Sh SEE ALSO
 .Xr madvise 2 ,
