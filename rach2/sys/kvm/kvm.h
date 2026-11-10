@@ -402,6 +402,12 @@ struct kvm_vcpu {
     int if_flag;     /* RFLAGS.IF */
     int irq_allowed; /* an interrupt can be injected at the next entry */
 
+    /* The steps each vector's interrupts reached, by enum kvm_vec_step,
+     * which the VM's fdinfo shows; written by the vCPU's thread and by a
+     * delivery from another processor without a lock, so a count read
+     * while the guest runs may lag by the steps under way. */
+    uint32_t irq_counts[256][KVM_VEC_STEPS];
+
     struct kvm_exit exit;
     struct kvm_emul emul; /* emulate.c's */
     void *lapic;          /* vlapic.c's */
@@ -814,6 +820,10 @@ void kvm_ioapic_free(struct kvm_vm *vm);
 /** Set an IOAPIC pin's source: -1 masked, 0 coalesced, else deliveries.
  * The pin is below KVM_IOAPIC_NUM_PINS; under the big lock. */
 int kvm_ioapic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level, int status);
+
+/** Copy the counts of `pin`, KVM_PIN_STEPS of them by enum kvm_pin_step:
+ * 0, or -1 with no IOAPIC in the kernel or no such pin. */
+int kvm_ioapic_counts(struct kvm_vm *vm, uint32_t pin, uint32_t *counts);
 
 /** An APIC's EOI broadcast, with the vector's TMR and directed-EOI bit. */
 void kvm_ioapic_eoi(struct kvm_vcpu *v, uint32_t vector, int level, int directed);

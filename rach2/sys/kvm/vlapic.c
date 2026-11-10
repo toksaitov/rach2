@@ -442,6 +442,7 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
             return 0;
         }
         if (!hw_enabled(l) || !sw_enabled(l)) {
+            l->v->irq_counts[vector & 0xFFu][KVM_VEC_DROP]++;
             return 0;
         }
         if (trig) {
@@ -450,6 +451,7 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
             vec_clear(l, APIC_TMR, vector);
         }
         vec_set(l, APIC_IRR, vector);
+        l->v->irq_counts[vector & 0xFFu][KVM_VEC_ACCEPT]++;
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_REMRD:
@@ -820,6 +822,7 @@ static void set_eoi(struct lapic *l)
         return;
     }
     l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] &= ~(1u << ((uint32_t)vector & 31u));
+    l->v->irq_counts[vector][KVM_VEC_EOI]++;
     update_ppr(l);
     kvm_hv_synic_eoi(l->v, (uint32_t)vector);
     kvm_ioapic_eoi(l->v, (uint32_t)vector,
@@ -1316,14 +1319,20 @@ int kvm_lapic_ack(struct kvm_vcpu *v)
     }
     if (accept_pic_intr(l)) {
         if (v->vm->irqchip == KVM_IRQCHIP_KERNEL && kvm_pic_pending(v->vm) >= 0) {
-            return kvm_pic_ack(v->vm);
+            vector = kvm_pic_ack(v->vm);
+            if (vector >= 0) {
+                v->irq_counts[vector & 0xFF][KVM_VEC_ACK]++;
+            }
+            return vector;
         }
         if (l->ext_vector >= 0 && v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
             l->ext_vector = -1;
+            v->irq_counts[vector & 0xFF][KVM_VEC_ACK]++;
             return vector;
         }
     }
     vec_clear(l, APIC_IRR, (uint32_t)vector);
+    v->irq_counts[vector & 0xFF][KVM_VEC_ACK]++;
     if (!kvm_hv_synic_auto_eoi(v, (uint32_t)vector)) {
         l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] |= 1u << ((uint32_t)vector & 31u);
     }

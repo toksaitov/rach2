@@ -7770,13 +7770,52 @@ static int procfs_open_sysctl(int entry, int flags)
     return fd;
 }
 
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+/**
+ * Append the interrupt counts of the VM `vm` for its descriptor's fdinfo:
+ * the controller in the kernel, then a line for each I/O APIC pin and each
+ * vCPU's vector with a count, the counts in the order of enum
+ * kvm_pin_step and enum kvm_vec_step. Under the big lock.
+ */
+static void procfs_kvm_irqs(struct procfs_text *t, void *vm)
+{
+    static const char *const pin_names[KVM_PIN_STEPS] = {" raised ", " coalesced ", " held ",
+                                                         " delivered ", " missed "};
+    static const char *const vec_names[KVM_VEC_STEPS] = {" accepted ", " dropped ", " acked ",
+                                                         " injected ", " saved ",   " eoi "};
+    struct kvm_irq_row row;
+    uint32_t n, i;
+
+    ap_str(t, "kvm_irqchip:\t");
+    ap_str(t, kvm_vm_irqchip_name(vm));
+    ap_ch(t, '\n');
+    for (n = 0; kvm_vm_irq_row(vm, n, &row); n++) {
+        if (row.pin) {
+            ap_str(t, "kvm_ioapic_pin:\t");
+            ap_u32(t, row.index);
+        } else {
+            ap_str(t, "kvm_vcpu_vector:\t");
+            ap_u32(t, row.vcpu);
+            ap_ch(t, ' ');
+            ap_u32(t, row.index);
+        }
+        for (i = 0; i < (row.pin ? (uint32_t)KVM_PIN_STEPS : (uint32_t)KVM_VEC_STEPS); i++) {
+            ap_str(t, row.pin ? pin_names[i] : vec_names[i]);
+            ap_u32(t, row.counts[i]);
+        }
+        ap_ch(t, '\n');
+    }
+}
+#endif
+
 /**
  * The text of /proc/PID/fdinfo/N, descriptor `fd` of process `pid`: its
  * offset, its flags in octal, the access mode with O_APPEND, O_NONBLOCK,
  * O_PATH and O_CLOEXEC, the id of its mount, 0 for an object on none, and
  * its inode number, the four lines Linux gives first. Its length, or
  * -ENOENT for a descriptor that is not open. A dma-buf also gives its
- * supplied name, copied before appending text or the stat can sleep.
+ * supplied name, copied before appending text or the stat can sleep, and a
+ * KVM VM its interrupt counts, from a reference taken then.
  */
 static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 {
@@ -7786,6 +7825,9 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     uint32_t rw, flags, mnt_id;
     uint64_t ino;
     int named = 0;
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    void *vm;
+#endif
 
     if (!p || p->state == PROC_UNUSED || fd < 0 || fd >= fd_table_cap(p->fds)) {
         return -ENOENT;
@@ -7802,6 +7844,9 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
             k_memcpy(name, b->name, sizeof(name));
         }
     }
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    vm = kvm_vm_irq_hold(e);
+#endif
     rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
     flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
     if (e->ofd) {
@@ -7833,6 +7878,12 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
         ap_str(t, name);
         ap_ch(t, '\n');
     }
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    if (vm) {
+        procfs_kvm_irqs(t, vm);
+        kvm_vm_irq_done(vm);
+    }
+#endif
     return t->nomem ? -1 : t->len;
 }
 

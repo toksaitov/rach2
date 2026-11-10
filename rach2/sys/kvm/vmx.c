@@ -1474,6 +1474,9 @@ static void entry_fields(struct kvm_vcpu *v)
         vmcs_write(VM_ENTRY_EXCEPTION_ERROR_CODE, x->inj_error);
         vmcs_write(VM_ENTRY_INSTRUCTION_LEN, x->inj_len);
     }
+    if ((x->inj_info & INTR_VALID) && INTR_TYPE(x->inj_info) == TYPE_EXT_INTR) {
+        v->irq_counts[INTR_VECTOR(x->inj_info)][KVM_VEC_INJECT]++;
+    }
     vmcs_write(GUEST_RSP, v->regs.rsp);
     vmcs_write(GUEST_RIP, v->regs.rip);
     /* The caller's single step is the guest's TF, hidden from the guest's
@@ -1650,6 +1653,9 @@ static void complete_events(struct kvm_vcpu *v)
         v->events.interrupt.nr = (uint8_t)INTR_VECTOR(info);
         v->events.interrupt.soft = (uint8_t)(type == TYPE_SOFT_INTR);
         x->inj_len = type == TYPE_SOFT_INTR ? x->ex.insn_len : 0;
+        if (type == TYPE_EXT_INTR) {
+            v->irq_counts[INTR_VECTOR(info)][KVM_VEC_SAVE]++;
+        }
         break;
     default:
         break;
