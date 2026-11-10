@@ -33,8 +33,8 @@ bind()
         echo "$1" > /sys/bus/pci/drivers/vfio-pci/bind
     fi
 }
-# Both assigned functions are on the root bus at fixed slots of the recipe.
-nic=0000:00:06.0
+# The NIC is behind the recipe's one root port, so QEMU gives it FLR.
+nic=0000:01:00.0
 edu=0000:00:07.0
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-assign.XXXXXX")
 [ -e /dev/vfio/vfio ] || fail 'VFIO is absent'
@@ -92,7 +92,7 @@ case $mode in
             if [ -n "$hold" ] && grep -q 'ASSIGNGUEST TRAFFIC' "$work/console"; then
                 awk '$1 == "vfio_dma_pages" && $2 > 0 { ok=1 } END { exit !ok }' /proc/stat || fail 'no live VFIO pins'
                 echo "assign: live: $(counts)"
-                resets_before=$(dmesg | grep -c 'pci: reset: 0:6.0' || :)
+                resets_before=$(dmesg | grep -c 'pci: reset: 1:0.0' || :)
                 kill -KILL "$pid"
                 break
             fi
@@ -105,7 +105,7 @@ case $mode in
         reader=
         cat "$work/qemu.err"
         if [ -n "$hold" ]; then
-            resets_after=$(dmesg | grep -c 'pci: reset: 0:6.0' || :)
+            resets_after=$(dmesg | grep -c 'pci: reset: 1:0.0' || :)
             [ "$resets_after" -gt "$resets_before" ] || fail 'no device reset after SIGKILL'
         fi
         [ "$rc" = 0 ] || { [ -n "$hold" ] && [ "$rc" = 137 ]; } || fail "QEMU exited $rc"

@@ -642,10 +642,16 @@ static int earlier(const struct etude_qemu_device *p, size_t at, const char *id,
     return 0;
 }
 
-/** Say whether `bus` is `ID.N`, bus N of a device of `p` before device `at`. */
+/** Say whether `bus` is a numbered bus or the bus of an earlier root port. */
 static int bus_ok(const struct etude_qemu_device *p, size_t at, const char *bus)
 {
     const char *dot = strrchr(bus, '.');
+    size_t i;
+
+    for (i = 0; i < at; i++)
+        if (strcmp(p[i].model, "pcie-root-port") == 0 && p[i].id != NULL &&
+            strcmp(p[i].id, bus) == 0)
+            return 1;
 
     return dot != NULL && dot[1] != '\0' && dot[1 + strspn(dot + 1, "0123456789")] == '\0' &&
            earlier(p, at, bus, (size_t)(dot - bus));

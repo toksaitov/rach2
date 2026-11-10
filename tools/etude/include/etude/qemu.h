@@ -63,8 +63,8 @@ struct etude_qemu_guest_forward {
 struct etude_qemu_device {
     const char *model;             /* QEMU's name of it; NULL ends a list */
     const char *id;                /* its identity, or NULL */
-    const char *bus;               /* `ID.N`, bus N of the earlier device ID,
-                                      or NULL */
+    const char *bus;               /* `ID.N`, or ID of an earlier PCIe root
+                                      port; NULL for the default bus */
     const char *port;              /* a USB port, such as `1.2`, or NULL */
     const char *drive;             /* the identity of a disk, or NULL */
     const char *const *properties; /* names and values in turn, ended by
