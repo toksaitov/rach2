@@ -122,7 +122,7 @@ A probe that etude judges writes etude's report records (`tools/etude/Readme.md`
 
 `krffs/manifests/test.manifest` stages every probe at `/NAME` and every musl program at `/musl/NAME` in the test image, `build/images/test.krffs` or `build/x86_64/images/test.krffs`, with ISH as `/bin/sh`, the account and name-service files, and the fixtures that need a mode or owner of their own. The image has no `/sbin/init`, so the kernel starts its debug shell.
 
-The file fixtures of `pathcanon`, `stattest`, `dirgrow` and `exitprobe` are removed before exit. The root parents of `ownprobe` and `permprobe` also remove partially staged fixtures after a failed check, and `xsaveprobe` removes its core file after a failed inspection. `ttyprobe` restores the termios it read before changing the console. The disk probes remove their mount directories after unmounting; files whose contents the host or a later boot checks stay on the test volumes. `krffsprobe crash` deliberately keeps writing until its case ends the machine.
+The file fixtures of `pathcanon`, `stattest`, `dirgrow`, `exitprobe`, `fsidprobe` and `openat2probe` are removed before exit, and `openat2probe` and `oldfsprobe` unmount the tmpfs they mount when no `dir=` names one. The root parents of `ownprobe` and `permprobe` also remove partially staged fixtures after a failed check, and `xsaveprobe` removes its core file after a failed inspection. `ttyprobe` restores the termios it read before changing the console. The disk probes remove their mount directories after unmounting; files whose contents the host or a later boot checks stay on the test volumes. `krffsprobe crash` deliberately keeps writing until its case ends the machine.
 
 ### Where each program runs
 

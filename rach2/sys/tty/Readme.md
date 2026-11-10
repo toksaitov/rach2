@@ -36,6 +36,8 @@ With ISIG set, VINTR, VQUIT and VSUSP are echoed, discard all unread input, as L
 
 `tty_hangup` records end of file after the queued input and wakes every reader. A canonical read consumes that mark once, so an endpoint that hangs up keeps its own state for the reads after it, as the pseudo-terminal slave does with `master_open`.
 
+`tty_vhangup` is vhangup(2)'s hangup of a terminal, Linux's `tty_vhangup`, which the call makes on the caller's controlling terminal once `CAP_SYS_TTY_CONFIG` admits it (`sys_vhangup` in `../syscall.c`). It posts SIGHUP and SIGCONT to the session's leader, takes the terminal from its session, sets the termios back to the discipline's defaults and wakes every reader and writer. Each terminal counts its hangups in `vhangups`, and each description opened on it records the count at its open (`tty_hangups` of `struct open_file`), so a description opened before a hangup is hung up for good while a new open is not (`tty_desc_hung`): a read of it is end of input, a write `EIO`, an ioctl `EIO` but `TIOCSPGRP`'s `ENOTTY`, and poll gives `TTY_HUNG_POLL`, Linux's readable, writable, error and hangup bits.
+
 `tty_set_session` writes `sid` and `fg_pgid` with interrupts off, because the console's interrupt-side drain reads both. `tty_make_sole_ctty` makes a terminal the only controlling terminal of a session, dropping the console and every slave the session had, in one interrupts-off step. A session leader claims the console, when no session owns it, by reading it, and an unowned slave by reading it or by opening it without O_NOCTTY while its session has no controlling terminal; TIOCSCTTY claims either. When a session leader exits, `exit_release_session` in `sys/syscall_proc.c` releases the console and the slaves its session controls. Background reads and writes are as console(4) says.
 
 ### The console terminal
@@ -128,7 +130,7 @@ The suites, each run with `tests/run NAME`:
 
 * `console`: stdintest's line reads, and ttyprobe's cooked line with erases, its raw byte, the screen's answers to its queries, and Alt with x read as ESC and x.
 * `conload`: 360 numbered, checksummed lines typed at COM1 while the machine is loaded, with the reader parked, as type-ahead, after an interrupt character to a foreground child, with that character behind 200 lines nobody read, and across an exec; every line must arrive.
-* `default`: among its probes, ptyprobe, a pair driven as a network login drives it, and jobprobe, sessions, groups and job control.
+* `default`: among its probes, ptyprobe, a pair driven as a network login drives it, vhangprobe, vhangup on a pair's slave, and jobprobe, sessions, groups and job control.
 * `ssh`: dropbear's logins on a pseudo-terminal, with its window size and `stty`.
 * `usb`: keystrokes and mouse movement from USB devices on machines with no 8042, read through the debug shell's buffer, the terminal and the mouse queue, and keylatprobe's Enters, each read as one CR.
 * `keyboard`: the Kyrgyz keymap that `loadkeys -u kg alt-shift` loads, on QEMU's PS/2 keyboard and on its USB keyboard: Latin and Cyrillic letters through `showkey -a`, the switch both ways, Caps Lock on Cyrillic, Ctrl+C on the Cyrillic layer, Enter as CR, a held key's repeats, Caps Lock's LED as `setleds` and QEMU see it, `showkey`'s key codes and `kbdrate`.
