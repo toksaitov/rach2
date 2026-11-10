@@ -870,6 +870,33 @@ static int accept_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t
     }
 }
 
+/**
+ * Whether the console takes the keys of `dev`, as Linux's kbd_match binds
+ * its keyboard handler to a device: one that can report a key below
+ * BTN_MISC or a Braille key, such as a power button, a hotkey device or a
+ * keypad. A keyboard's keys go to the console through input.c, and no
+ * device here has EV_SND, Linux's other match. With the evdev lock held.
+ */
+static int console_match(const struct evdev *dev)
+{
+    unsigned k;
+
+    if (dev->flags & EVDEV_KEYBOARD) {
+        return 0;
+    }
+    for (k = 0; k < BTN_MISC / 8; k++) {
+        if (dev->keys[k]) {
+            return 1;
+        }
+    }
+    for (k = KEY_BRL_DOT1; k <= KEY_BRL_DOT10; k++) {
+        if (bit_on(dev->keys, k)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Queue the event `type`, `code`, `value` for the opens of `dev`, or for
  * the open that holds the grab, with the evdev lock held. Returns whether
  * the readers are to be woken. */
@@ -901,6 +928,7 @@ static int report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
     uint32_t flags;
     int32_t slot = 0;
     int wake = 0;
+    int console;
     int how;
     int i;
 
@@ -935,6 +963,7 @@ static int report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
     }
     *grabbed = dev->grab != NULL;
     handler = dev->grab ? NULL : dev->handler;
+    console = type == EV_KEY && !dev->grab && console_match(dev);
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (wake) {
         wq_wake(&dev->wq, WQ_DATA);
@@ -944,6 +973,9 @@ static int report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
             handler(dev, EV_ABS, ABS_MT_SLOT, slot);
         }
         handler(dev, type, code, value);
+    }
+    if (console) {
+        input_console_key(dev, code, value);
     }
     return 1;
 }
@@ -1546,9 +1578,10 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
  * opens get; any other event takes a driver's path (`evdev_report`), and
  * one that goes out to the opens with no grab held goes on as Linux's input
  * core gives an injected event to its other handlers: a keyboard's key to
- * the console (`input_written`), and a mouse's motion and buttons to the
- * mouse queue (`mouse_written`), unless the mouse has a handler of its own,
- * a touchpad's, which `evdev_report` gave it already.
+ * the console (`input_written`), a key of another device the console takes
+ * to it from `evdev_report`, and a mouse's motion and buttons to the mouse
+ * queue (`mouse_written`), unless the mouse has a handler of its own, a
+ * touchpad's, which `evdev_report` gave it already.
  */
 static void inject(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
 {

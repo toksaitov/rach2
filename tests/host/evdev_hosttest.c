@@ -3,8 +3,9 @@
  * touchpad's, read and asked as Linux's evdev answers: their records and
  * packets, the input core's filters, an overflowed queue, revoke, the
  * clocks of EVIOCSCLOCKID against clock_gettime, the event masks, the
- * absolute axes, the 16-byte records of an i386 reader, and the records a
- * program writes.
+ * absolute axes, the 16-byte records of an i386 reader, the records a
+ * program writes, and the keys of devices that are no keyboards that the
+ * console takes. evdev64_hosttest.c runs the same rows with x86-64's.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -132,6 +133,21 @@ void mouse_written(uint16_t type, uint16_t code, int32_t value)
     n_pointer++;
 }
 
+/* The keys evdev.c gave the console from a device that is no keyboard,
+ * the last of them, and their count. */
+static const void *console_device;
+static unsigned int console_code;
+static int console_value, n_console;
+
+/** Record a key given to the console. */
+void input_console_key(const void *device, unsigned int keycode, int value)
+{
+    console_device = device;
+    console_code = keycode;
+    console_value = value;
+    n_console++;
+}
+
 /* The wakes of every queue. */
 static int wakes;
 
@@ -187,8 +203,9 @@ int in_compat_syscall(void)
     return compat_caller;
 }
 
-/* A key of the keyboard the write rows register. */
-#define KEY_A 30
+/* A key of the keyboard the write rows register, and a keypad's 1. */
+#define KEY_A   30
+#define KEY_KP1 79
 
 /* The ioctls, by Linux's macros. */
 #define IOC(dir, nr, size) (((uint32_t)(dir) << 30) | ((uint32_t)(size) << 16) | ('E' << 8) | (nr))
@@ -790,6 +807,59 @@ static void write_pointer_rows(void)
     evdev_unregister(dev);
 }
 
+/** The console takes the keys of a power button and of a keypad, which are
+ * no keyboards, reported or written, as Linux's kbd_match binds them; a
+ * grab keeps them from it, and a mouse's buttons never reach it. */
+static void console_key_rows(void)
+{
+    uint8_t keys[EVDEV_KEY_BYTES];
+    struct evdev *power, *keypad, *pointer;
+    struct input_event ev[2];
+    struct opened a;
+
+    k_memset(keys, 0, sizeof(keys));
+    power = evdev_register("Power Button", EVDEV_BUS_HOST, 0, 1, keys);
+    evdev_describe(power, "LNXPWRBN/button/input0", 0);
+    evdev_set_capability(power, EV_KEY, KEY_POWER);
+    n_console = 0;
+    packet(power, EV_KEY, KEY_POWER, 1);
+    CHECK("a power button's press reaches the console", n_console == 1 && console_device == power &&
+                                                            console_code == KEY_POWER &&
+                                                            console_value == 1);
+    packet(power, EV_KEY, KEY_POWER, 1);
+    CHECK("a press of the key down does not", n_console == 1);
+    packet(power, EV_KEY, KEY_POWER, 0);
+    CHECK("its release does", n_console == 2 && console_value == 0);
+    open_dev(&a, 0);
+    event(&ev[0], EV_KEY, KEY_POWER, 1);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("so does a press written to it",
+          n_console == 3 && console_code == KEY_POWER && console_value == 1);
+    evdev_ioctl(&a.e, EVIOCGRAB, 1);
+    packet(power, EV_KEY, KEY_POWER, 0);
+    CHECK("a grab keeps its keys from the console", n_console == 3);
+    take(&a);
+    evdev_close(&a.e);
+
+    k_memset(keys, 0, sizeof(keys));
+    keys[KEY_KP1 >> 3] |= (uint8_t)(1u << (KEY_KP1 & 7));
+    keypad = evdev_register("Keypad", EVDEV_BUS_USB, 1, 2, keys);
+    evdev_describe(keypad, "usb-0000:00:04.0-1/input0", 0);
+    packet(keypad, EV_KEY, KEY_KP1, 1);
+    CHECK("a keypad's key reaches the console", n_console == 4 && console_device == keypad &&
+                                                    console_code == KEY_KP1 && console_value == 1);
+    packet(keypad, EV_KEY, KEY_KP1, 0);
+
+    pointer = mouse();
+    packet(pointer, EV_KEY, BTN_LEFT, 1);
+    packet(pointer, EV_KEY, BTN_LEFT, 0);
+    CHECK("a mouse's button does not", n_console == 5);
+    evdev_unregister(pointer);
+    evdev_unregister(keypad);
+    evdev_unregister(power);
+}
+
 /** An i386 writer on the x86-64 kernel writes records of 16 bytes. */
 static void write_compat_rows(void)
 {
@@ -864,6 +934,7 @@ int main(void)
     write_rows();
     write_keyboard_rows();
     write_pointer_rows();
+    console_key_rows();
     write_compat_rows();
     CHECK("every slot is free at the end", !devices[0].used && !devices[1].used);
     if (fails == 0) {
