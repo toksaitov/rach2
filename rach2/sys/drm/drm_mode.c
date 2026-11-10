@@ -2456,7 +2456,8 @@ static int32_t modes_gather(struct drm_connector *connector, struct drm_file *fi
  * GETCONNECTOR's part under the commit lock, as Linux's under its
  * mode_config mutex: the probe the master asks for with no room for modes,
  * then the status, size and encoder, and the modes gathered by
- * modes_gather into `*out`. 0 or -ENOMEM.
+ * modes_gather into `*out`. 0, -ENOMEM, or -EINTR for a signal while a
+ * commit, which may wait on its in-fences without limit, holds the lock.
  */
 static int32_t getconnector_locked(struct drm_device *dev, struct drm_connector *connector,
                                    struct drm_file *file, struct drm_mode_get_connector *req,
@@ -2465,7 +2466,10 @@ static int32_t getconnector_locked(struct drm_device *dev, struct drm_connector 
     uint32_t room = req->count_modes;
     int32_t rc;
 
-    drm_modeset_lock_nointr(dev);
+    rc = drm_modeset_lock(dev);
+    if (rc != 0) {
+        return rc;
+    }
     if (room == 0 && drm_is_current_master(file)) {
         drm_helper_probe_single_connector_modes(connector, dev->mode_config.max_width,
                                                 dev->mode_config.max_height);
