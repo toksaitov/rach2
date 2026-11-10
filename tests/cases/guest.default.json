@@ -6204,7 +6204,8 @@
         {"assertion_id": "secret-refused", "checks": "/proc/self/mem cannot read a mapping of memfd_secret (EIO), process_vm_readv cannot (EFAULT), and mlock of it is ENOMEM.", "source": "program"},
         {"assertion_id": "secret-memlock", "checks": "Under an RLIMIT_MEMLOCK of one page a child touches one page of memfd_secret and is killed by SIGBUS at the second, root or not.", "source": "program"},
         {"assertion_id": "process-madvise", "checks": "process_madvise is EINVAL for a flag and for MADV_DONTNEED and EBADF for a descriptor that is no pidfd; MADV_COLD and MADV_PAGEOUT over the caller's page give 4096 and over no mapping ENOMEM; over a child's page MADV_COLD gives 4096 for root and EPERM for others.", "source": "program"},
-        {"assertion_id": "process-mrelease", "checks": "process_mrelease is EINVAL for a flag, EBADF for a descriptor that is no pidfd, EINVAL for the caller and for a child alive, 0 or ESRCH for a child killed by SIGKILL, and ESRCH once it is reaped.", "source": "program"}
+        {"assertion_id": "process-mrelease", "checks": "process_mrelease is EINVAL for a flag, EBADF for a descriptor that is no pidfd, EINVAL for the caller and for a child alive, 0 or ESRCH for a child killed by SIGKILL, and ESRCH once it is reaped.", "source": "program"},
+        {"assertion_id": "wipe-on-fork", "checks": "After MADV_WIPEONFORK over the first of two written pages, which shows wf in smaps, a child of fork and its own child read zeros there and the second page's byte, the parent keeps its byte, and after MADV_KEEPONFORK a child reads it; MADV_WIPEONFORK over shared anonymous memory and a private mapping of a memfd is EINVAL.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

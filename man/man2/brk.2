@@ -469,6 +469,22 @@ Either splits a mapping the range cuts, as
 .Fn mprotect
 does.
 .Pp
+.Dv MADV_WIPEONFORK
+(18) marks the range so that a child that
+.Xr fork 2
+makes after it gets the mapping without its pages: the child reads zeros
+there, as on Linux, and keeps the mark for its own children.
+It takes only anonymous private memory, of
+.Dv MAP_ANONYMOUS ,
+the heap or the stack, and refuses the rest.
+.Dv MADV_KEEPONFORK
+(19) clears the mark.
+.Pa /proc/ Ns Ar pid Ns Pa /smaps
+gives a marked mapping the
+.Ql wf
+flag.
+Either splits a mapping the range cuts.
+.Pp
 .Dv MADV_GUARD_INSTALL
 (102), which Linux 6.13 added and glibc 2.44 uses for the guard
 below each new thread's stack, makes the range a guard region: its pages

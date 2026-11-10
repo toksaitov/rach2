@@ -78,10 +78,15 @@
  * /proc/PID/mem, process_vm_readv, the pins of devices and KVM are refused
  * its pages; and a core file leaves it out, as Linux's VM_DONTDUMP. */
 #define VM_PROT_SECRET      0x2000u
+/* Kept the same way: a fork's child gets the region without its pages, so
+ * that it reads zeros, as Linux's VM_WIPEONFORK, which MADV_WIPEONFORK sets
+ * on private anonymous memory and MADV_KEEPONFORK clears. The child keeps
+ * the mark. */
+#define VM_PROT_WIPEONFORK  0x4000u
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
-     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET)
+     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -392,10 +397,10 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
 
 /**
  * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK,
- * VM_PROT_GUARD and VM_PROT_SEALED in the protection of each region of
- * [start, end), which regions must cover without a gap, splitting and merging
- * as `vm_protect` does. Returns 0; -1 for a gap; -2 when a split has no room.
- * An error leaves the regions as they were.
+ * VM_PROT_GUARD, VM_PROT_SEALED and VM_PROT_WIPEONFORK in the protection of
+ * each region of [start, end), which regions must cover without a gap,
+ * splitting and merging as `vm_protect` does. Returns 0; -1 for a gap; -2 when
+ * a split has no room. An error leaves the regions as they were.
  */
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear);
 
