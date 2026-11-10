@@ -1,11 +1,12 @@
 /**
  * i915_ctx_hosttest.c: the Intel graphics driver's contexts, requests and
- * parameters, i915_gem_context.c, i915_request.c and i915_getparam.c,
- * against the host model of the Lenovo's HD 4400, whose rings run the
+ * parameters, i915_gem_context.c, i915_request.c and i915_getparam.c, and
+ * THROTTLE, against the host model of the Lenovo's HD 4400, whose rings run the
  * requests' commands from memory and whose render ring saves and restores
  * context images.
  *
  * host-deps: rach2/sys/drm/i915/i915_gem_context.c
+ * host-deps: rach2/sys/drm/i915/i915_user_extensions.c
  * host-deps: rach2/sys/drm/i915/i915_request.c
  * host-deps: rach2/sys/drm/i915/i915_getparam.c
  * host-deps: rach2/sys/drm/i915/i915_reg_read.c
@@ -38,8 +39,9 @@
  * refusals, and engine maps; requests (sequence numbers, the breadcrumbs,
  * fences signalled from the interrupt, retirement, the GT parked, waits
  * with timeouts, a lost interrupt, polling, refused commands taken back,
- * the unplug); GETPARAM and I915_QUERY row by row; GET_RESET_STATS; and
- * 78-11a.2's REG_READ of the render ring's timestamp, which the model
+ * the unplug); GETPARAM and I915_QUERY row by row; GET_RESET_STATS;
+ * 78-5c's THROTTLE, which IGT calls at each open;
+ * and 78-11a.2's REG_READ of the render ring's timestamp, which the model
  * counts on at each read of a half.
  *
  * Returns 0 when every row passes, 1 otherwise.
@@ -70,6 +72,8 @@ extern void *calloc(unsigned long count, unsigned long size);
 extern void *malloc(unsigned long size);
 extern void free(void *p);
 extern char *strstr(const char *s, const char *t);
+extern unsigned long strlen(const char *s);
+extern int snprintf(char *s, unsigned long n, const char *format, ...);
 
 static int fails;
 
@@ -379,6 +383,13 @@ void i915_gt_unpark(struct drm_i915_private *i915)
 {
     (void)i915;
     unparks++;
+}
+
+/* No request here holds a buffer object: execbuffer, which hands them
+ * over, is the exec test's. */
+void i915_gem_object_put(struct drm_i915_gem_object *obj)
+{
+    (void)obj;
 }
 
 /* The GTT's allocator for the kernel's own ranges, i915_vma.c's: from
@@ -1196,6 +1207,54 @@ static void row_engine_maps(void)
 
 /* ---- 78-5a.3: requests ---- */
 
+/** IGT's busy-create on the model: a retired request gives its ring's room
+ * back, so that requests made behind one that never ends do not wait. */
+static void row_ring_room(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *bcs = &i915->gt.engine[I915_BCS0];
+    struct intel_context *b = engine_of(&file_a, 0, I915_BCS0);
+    struct i915_model_ring *br = i915_model_ring_state(&m, 1);
+    struct i915_request *rq, *rq2;
+    uint64_t t0;
+    int i;
+
+    /* IGT's busy-create: requests run and retire on the blitter until its
+     * ring has wrapped, then one never ends, as a spinner, and the next
+     * are made behind it without waiting for it. */
+    rq = 0;
+    for (i = 0; i < 26; i++) {
+        i915_request_put(rq);
+        rq = submit(b, 0, 0);
+        if (!rq || i915_request_wait(rq, 0, 100000000) != 0) {
+            break;
+        }
+    }
+    i915_retire_requests(i915);
+    CHECK("requests: a retired request gives back its room, the head at its end, as Linux's "
+          "i915_request_retire",
+          i == 26 && rq && bcs->head == rq->postfix && !bcs->requests);
+    i915_request_put(rq);
+    br->stuck = 1;
+    rq = submit(b, 0, 0);
+    t0 = m.now_us;
+    for (i = 0; i < 20; i++) {
+        rq2 = submit(b, 0, 0);
+        if (!rq2) {
+            break;
+        }
+        i915_request_put(rq2);
+    }
+    CHECK("requests: twenty made behind one that never ends, none waiting for it",
+          rq && i == 20 && m.now_us == t0 && !i915_request_completed(rq));
+    br->stuck = 0;
+    CHECK("requests: and all of them run once it ends", rq && i915_request_wait(rq, 0, -1) == 0);
+    i915_request_put(rq);
+    intel_context_put(b);
+    done(&m);
+}
+
 /** 78-5a.3: requests, their fences, retirement and waits. */
 static void row_requests(void)
 {
@@ -1624,6 +1683,47 @@ static void row_reset_stats(void)
     done(&m);
 }
 
+/* ---- 78-5c: THROTTLE ---- */
+
+/** 78-5c: THROTTLE. */
+static void row_throttle(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    struct i915_request *old, *young, *t;
+
+    CHECK("throttle: with nothing running it returns at once",
+          i915_gem_throttle_ioctl(&dev.drm, 0, &file_a) == 0);
+    old = submit(r, 0, 0);
+    CHECK("throttle: the first request records the default state and completes",
+          old && i915_request_wait(old, 0, 100000000) == 0);
+    i915_request_put(old);
+    CHECK("throttle: a second file opens", i915_driver_open(&dev.drm, &file_b) == 0);
+    rr->stuck = 1;
+    old = submit(r, 0, 0);
+    run_ms(25);
+    young = submit(r, 0, 0);
+    t = i915_request_throttle_target(r, dma_fence_now() - 20000000ll);
+    CHECK("throttle: it waits for the newest request older than 20 ms", old && young && t == old);
+    i915_request_put(t);
+    CHECK("throttle: none of another file's", i915_gem_throttle_ioctl(&dev.drm, 0, &file_b) == 0);
+    rr->stuck = 0;
+    CHECK("throttle: once the ring runs it returns 0, the old request done",
+          i915_gem_throttle_ioctl(&dev.drm, 0, &file_a) == 0 && old && i915_request_completed(old));
+    CHECK("throttle: the young one completes too",
+          young && i915_request_wait(young, 0, 100000000) == 0);
+    i915_request_put(old);
+    i915_request_put(young);
+    i915->gt.wedged = 1;
+    CHECK("throttle: EIO on a wedged GPU, the ABI's report of it",
+          i915_gem_throttle_ioctl(&dev.drm, 0, &file_a) == -EIO);
+    i915->gt.wedged = 0;
+    intel_context_put(r);
+    done(&m);
+}
+
 /* ---- 78-11a.2: REG_READ ---- */
 
 /* The render ring's timestamp, which moves on by one at each read of a
@@ -1696,9 +1796,11 @@ int main(void)
     row_params();
     row_engine_maps();
     row_requests();
+    row_ring_room();
     row_getparam();
     row_query();
     row_reset_stats();
+    row_throttle();
     row_reg_read();
     CHECK("the heap: every record freed", heap_live == 0);
     if (fails) {
