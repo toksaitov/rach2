@@ -610,6 +610,14 @@ static void crash_rows(struct kvm_vcpu *v)
           "the TSC and APIC frequencies");
     CHECK(wr(v, HV_MSR_TSC_FREQUENCY, 1, 0) == -1 && wr(v, HV_MSR_APIC_FREQUENCY, 1, 1) == 0,
           "the frequencies are read-only, the caller's write ignored");
+    vcpus[1].tsc_khz = 3100000u;
+    vm.apic_bus_ns = 4;
+    CHECK(rd(&vcpus[1], HV_MSR_TSC_FREQUENCY, 0, &r) == 3100000000ull &&
+              rd(v, HV_MSR_TSC_FREQUENCY, 0, &r) == 2400000000ull &&
+              rd(v, HV_MSR_APIC_FREQUENCY, 0, &r) == 250000000ull,
+          "each vCPU's TSC rate, not the host's, and the VM's bus cycle");
+    vcpus[1].tsc_khz = 2400000u;
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
 
     ok = 1;
     for (i = 0; i < 5; i++) {
