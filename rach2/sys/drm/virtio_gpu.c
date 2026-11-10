@@ -32,10 +32,12 @@
 #define YRES_MAX 8192
 
 /* How long an answer is waited for, Linux's five seconds for the displays
- * at probe, here for every command a caller waits on; the step between two
+ * at probe, here for every command a caller waits on but MAP_BLOB, which
+ * Linux waits on without a bound; the step between two
  * polls of a queue while a waiter sleeps; and the step of a waiter that
  * cannot sleep, before the scheduler runs. */
 #define VGPU_WAIT_NS 5000000000ll
+#define VGPU_NEVER   0x7fffffffffffffffll /* the deadline of a wait without one */
 #define VGPU_POLL_NS 10000000ll
 #define VGPU_SPIN_US 100u
 
@@ -385,17 +387,20 @@ static int32_t answer_error(uint32_t type)
  * answer to `out` (NULL for none) and free it. The wait sleeps on the
  * command's fence, polling the queue every 10 ms in case the device has no
  * interrupt, or spins before the scheduler runs. Returns the answer's error
- * (`answer_error`), or -ETIMEDOUT when none came in five seconds; the
+ * (`answer_error`), or -ETIMEDOUT when none came by `deadline` of
+ * dma_fence_now's clock, or in five seconds before the scheduler runs; the
  * command is then left to the reaper, for the answer that may yet come.
- * A command with response pages stays with the caller after completion.
- * With `got`, an answer shorter than `out_len` is copied as it is and its
- * length put in `*got`; without, it is -EIO. May sleep.
+ * With VGPU_NEVER a sleeping wait ends with the answer or with the
+ * device's death, which completes every command. A command with response
+ * pages stays with the caller after completion. With `got`, an answer
+ * shorter than `out_len` is copied as it is and its length put in `*got`;
+ * without, it is -EIO. May sleep.
  */
-int32_t vgpu_cmd_send_wait_len(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
-                               uint32_t *got)
+static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len, uint32_t *got,
+                        int64_t deadline)
 {
     struct virtio_gpu_device *vg = cmd->vg;
-    int64_t deadline = dma_fence_now() + VGPU_WAIT_NS, next;
+    int64_t next;
     uint32_t spins = 0, flags, type = cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type;
     int32_t rc;
 
@@ -453,7 +458,13 @@ int32_t vgpu_cmd_send_wait_len(struct virtio_gpu_cmd *cmd, void *out, uint32_t o
 
 int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len)
 {
-    return vgpu_cmd_send_wait_len(cmd, out, out_len, NULL);
+    return cmd_wait(cmd, out, out_len, NULL, dma_fence_now() + VGPU_WAIT_NS);
+}
+
+int32_t vgpu_cmd_send_wait_map(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
+                               uint32_t *got)
+{
+    return cmd_wait(cmd, out, out_len, got, VGPU_NEVER);
 }
 
 /** Start `cmd` with nobody waiting; the reaper runs `complete`, if any, with

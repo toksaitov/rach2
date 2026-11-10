@@ -721,9 +721,14 @@ void vgpu_cmd_send(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gp
                    void *arg);
 /** Send, wait, copy an inline response and free the command; 0 or -errno. */
 int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes);
-/** As vgpu_cmd_send_wait, taking a shorter answer as it is, its length in
- * `*got`. */
-int32_t vgpu_cmd_send_wait_len(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes,
+/**
+ * As vgpu_cmd_send_wait for RESOURCE_MAP_BLOB, whose answer a device may
+ * take long to give, as when it pins the blob's pages: the wait has no
+ * bound, as Linux's virtio_gpu_vram_mmap, and ends with the answer or the
+ * device's death. With `got`, a shorter answer is taken as it is, its
+ * length in `*got`.
+ */
+int32_t vgpu_cmd_send_wait_map(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes,
                                uint32_t *got);
 /*
  * * Append user command bytes, or allocate response pages when response is
