@@ -18,8 +18,9 @@
  * class; fixed MSIs into IRR, held by PPR, acknowledged into ISR and ended
  * by EOI; TMR for level-triggered ones; physical, flat, cluster and
  * broadcast destinations and lowest priority by Linux's vector hashing;
- * INIT and SIPI through the ICR, an SIPI to a running vCPU dropped and
- * SIPI_RECEIVED from KVM_SET_MP_STATE; NMIs; the timer one-shot, periodic
+ * INIT and SIPI through the ICR, an INIT and its SIPI taken together, an
+ * SIPI to a running vCPU dropped and SIPI_RECEIVED from KVM_SET_MP_STATE;
+ * NMIs; the timer one-shot, periodic
  * with Linux's 200 us floor, TSC-deadline and TSC-deadline refused without
  * the CPUID bit; SPIV's software disable masking the LVT; x2APIC mode, its
  * MSRs, its #GP cases, its self IPI and IPI, its MMIO hole and its moves
@@ -327,6 +328,7 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
     init_resets++;
     k_memset(&v->regs, 0, sizeof(v->regs));
     k_memset(&v->sregs, 0, sizeof(v->sregs));
+    k_memset(&v->events, 0, sizeof(v->events));
     v->regs.rip = 0xFFF0;
     v->sregs.cs.selector = 0xF000;
     v->sregs.cs.base = 0xFFFF0000ull;
@@ -652,18 +654,27 @@ static void init_rows(void)
     wr(vcpu[0], APIC_ICR, 0x4600 | 0x10);
     kvm_lapic_prepare(ap);
     CHECK(ap->sregs.cs.selector == 0x9A00, "a SIPI to a running vCPU is dropped");
+    wr(vcpu[0], APIC_ICR, 0x4500);
+    wr(vcpu[0], APIC_ICR, 0x4600 | 0x9B);
+    CHECK(apic_of(ap)->events == (EV_INIT | EV_SIPI),
+          "an INIT and the SIPI after it wait together for a vCPU that has not looked");
+    CHECK(kvm_lapic_prepare(ap) == 0 && ap->mp_state == KVM_MP_STATE_RUNNABLE &&
+              ap->sregs.cs.selector == 0x9B00 && ap->sregs.cs.base == 0x9B000 && ap->regs.rip == 0,
+          "and the INIT's reset of the vCPU keeps the SIPI's vector");
+    wr(ap, APIC_SPIV, 0x1FF);
     wr(vcpu[0], APIC_ICR, 0x40000 | 0x4500);
     kvm_lapic_prepare(vcpu[0]);
     CHECK(vcpu[0]->mp_state == KVM_MP_STATE_RUNNABLE, "an INIT leaves the boot vCPU running");
     wr(vcpu[0], APIC_SPIV, 0x1FF);
-    ap->events.sipi_vector = 0x30;
+    ap->events.sipi_vector = 0x10;
     mp.mp_state = KVM_MP_STATE_SIPI_RECEIVED;
     CHECK(kvm_lapic_ioctl(ap, KVM_SET_MP_STATE, (uintptr_t)&mp) == 0,
           "KVM_SET_MP_STATE of SIPI_RECEIVED");
     CHECK(ap->mp_state == KVM_MP_STATE_INIT_RECEIVED, "waits for SIPI with one pending");
+    ap->events.sipi_vector = 0x30;
     CHECK(kvm_lapic_ioctl(ap, KVM_GET_MP_STATE, (uintptr_t)&mp) == 0 &&
               mp.mp_state == KVM_MP_STATE_RUNNABLE && ap->sregs.cs.selector == 0x3000,
-          "KVM_GET_MP_STATE takes the SIPI first");
+          "KVM_GET_MP_STATE takes the SIPI first, at the vector the events hold by then");
     mp.mp_state = 5;
     CHECK(kvm_lapic_ioctl(ap, KVM_SET_MP_STATE, (uintptr_t)&mp) == -EINVAL,
           "an MP state of another architecture");
