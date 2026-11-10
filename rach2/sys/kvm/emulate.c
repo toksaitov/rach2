@@ -460,6 +460,7 @@ static int fetch(struct kvm_vcpu *v, uint8_t *buf)
     return (int)got;
 }
 
+/** Read the current instruction for a backend, with fetch's fault contract. */
 int kvm_emul_fetch(struct kvm_vcpu *v, uint8_t *buf)
 {
     return fetch(v, buf);

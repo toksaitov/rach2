@@ -4,8 +4,9 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 
 ## Running
 
-`tests/run kvm` runs the five cases, each on an x86-64 Rach2 that boots `gnu-test.disk` with this directory's files on a data disk, `kvm.ext2`:
+`tests/run kvm` runs these cases, each on an x86-64 Rach2 that boots `gnu-test.disk` with this directory's files on a data disk, `kvm.ext2`:
 
+* `entry`: the small real-mode guest in `svm-entry.c` reads its memory slot, executes CPUID, reads CR0 and EFER, exits through port I/O and HLT, and reads a replacement frame after MAP_FIXED. It starts with XCR0 at its reset value, which also checks that the backend restores the full XSAVE image before applying the guest's XCR0.
 * `boot-debian-tcg`: `kvm-boot.sh -a tcg` boots the Debian guest in Rach2's QEMU under TCG to its token.
 * `unit-tests` and `selftests`: `corpus.sh` runs the corpus under Rach2's KVM, on the `max-svm` profile, on Linux and on macOS.
 * `unit-tests-nested` and `selftests-nested`: the same on the `host-svm` profile, on Linux alone.
@@ -51,7 +52,7 @@ A guest of its own goes under `guests/` with its recipe, the token its console p
 
 ## Limits
 
-* Rach2's SVM backend is a stub until task 81-2, so every corpus case and any boot under `-accel kvm` fails today; `boot-debian-tcg` alone passes.
+* The SVM backend has passed `svm-entry.c` under TCG on the Mac. Its larger guests and the corpus still await qualification.
 * No selftest goes past its start until Rach2's `/sys` has `/sys/module/kvm/parameters/force_emulation_prefix`, as the KVM layer's Readme says.
 * The `max-svm` profile under TCG lacks NRIP save, TSC scaling and the pause filter, and has the five faults of Results, the last of which can leave a guest of Rach2's KVM that spins with its IF clear waiting on an interrupt QEMU does not deliver; the `host-svm` profile runs only on the testing PC.
 

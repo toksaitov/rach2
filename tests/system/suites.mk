@@ -1045,6 +1045,11 @@ build/tests/cases/graphics/%.ext2: build/tests/cases/graphics/%.tar
 # runners, the lists and the guest, as a read-only data disk. The guest is
 # made by tests/kvm/guests/mkdebian.sh from two pinned Debian packages, a
 # download of some 34 MiB kept in the clone's build/cache/gnu.
+KVM_ENTRY = build/x86_64/tests/kvm/svm-entry
+$(KVM_ENTRY): tests/kvm/svm-entry.c rach2/sys/kvm/kvm_abi.h $(LIBC_STAMP)
+	@mkdir -p $(@D) build/tmp
+	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
+	    -static -Wl,-z,noexecstack $< -o $@
 KVM_GUEST_DIR = build/kvm/guests/debian
 $(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.txt \
                          tests/kvm/guests/debian-init vendor/gnu/debian/fetch_asset.sh \
@@ -1053,10 +1058,11 @@ $(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.tx
 $(KVM_GUEST_DIR)/vmlinuz: $(KVM_GUEST_DIR)/initrd
 KVM_FILES = tests/kvm/kvm-boot.sh tests/kvm/corpus.sh tests/kvm/unit-tests.list \
             tests/kvm/selftests.list
-build/tests/cases/kvm/kvm.tar: $(KVM_FILES) $(KVM_GUEST_DIR)/initrd $(KVM_GUEST_DIR)/vmlinuz
+build/tests/cases/kvm/kvm.tar: $(KVM_FILES) $(KVM_GUEST_DIR)/initrd $(KVM_GUEST_DIR)/vmlinuz $(KVM_ENTRY)
 	@mkdir -p $(@D)
 	tar -cf $@.tmp -C tests/kvm $(notdir $(KVM_FILES)) \
-	    -C $(CURDIR)/build/kvm guests/debian/vmlinuz guests/debian/initrd
+	    -C $(CURDIR)/build/kvm guests/debian/vmlinuz guests/debian/initrd \
+	    -C $(CURDIR)/build/x86_64/tests/kvm svm-entry
 	mv $@.tmp $@
 build/tests/cases/kvm/kvm.ext2: build/tests/cases/kvm/kvm.tar
 	@set -e; work=; \

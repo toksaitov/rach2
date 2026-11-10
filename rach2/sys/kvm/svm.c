@@ -1,10 +1,4 @@
-/*
- * svm.c: AMD's SVM backend: the VMCB of each vCPU, VMRUN with the host's
- * state kept by VMSAVE and VMLOAD, nested paging under an ASID of each
- * processor, the intercepts and the instructions they hand over, which a
- * small decoder of its own reads where the processor gives no next RIP or
- * decode assist, and the events injected, NMI blocking among them.
- */
+/* AMD SVM: VMCBs, host state, nested paging, intercepts and event injection. */
 
 #include "kvm.h"
 
@@ -492,22 +486,27 @@ static void hw_xsetbv(uint64_t v)
 }
 
 /* The host's XCR0 while a guest's is loaded. */
-static uint64_t host_xcr0;
+static uint64_t host_xcr0[NR_CPUS];
 
 /** Save the host's floating-point state into `host` and load the guest's
- * image `guest` under its XCR0, by XRSTOR or, without XSAVE, FXRSTOR. */
+ * image `guest` before setting its XCR0, using XRSTOR or FXRSTOR. */
 static void fpu_load(void *host, const void *guest, uint64_t xcr0)
 {
+    uint64_t mask;
+
     fpu_save(host);
     if (kvm_xcr0_supported()) {
-        host_xcr0 = hw_xgetbv();
-        if (xcr0 != host_xcr0) {
-            hw_xsetbv(xcr0);
-        }
+        mask = hw_xgetbv();
+        host_xcr0[arch_cpu_id()] = mask;
+        /* XRSTOR checks the whole header against XCR0, including saved
+         * components that the guest currently has disabled. */
         __asm__ __volatile__(XRSTOR64
                              :
-                             : "D"(guest), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32))
+                             : "D"(guest), "a"((uint32_t)mask), "d"((uint32_t)(mask >> 32))
                              : "memory");
+        if (xcr0 != mask) {
+            hw_xsetbv(xcr0);
+        }
     } else {
         __asm__ __volatile__("fxrstorq (%0)" : : "r"(guest) : "memory");
     }
@@ -516,14 +515,17 @@ static void fpu_load(void *host, const void *guest, uint64_t xcr0)
 /** Save the guest's state into its image and load the host's back. */
 static void fpu_store(void *host, void *guest, uint64_t xcr0)
 {
+    uint64_t mask;
+
     if (kvm_xcr0_supported()) {
+        mask = host_xcr0[arch_cpu_id()];
+        if (xcr0 != mask) {
+            hw_xsetbv(mask);
+        }
         __asm__ __volatile__(XSAVE64
                              :
-                             : "D"(guest), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32))
+                             : "D"(guest), "a"((uint32_t)mask), "d"((uint32_t)(mask >> 32))
                              : "memory");
-        if (xcr0 != host_xcr0) {
-            hw_xsetbv(host_xcr0);
-        }
     } else {
         __asm__ __volatile__("fxsaveq (%0)" : : "r"(guest) : "memory");
     }
