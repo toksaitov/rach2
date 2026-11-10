@@ -454,13 +454,16 @@ def row_scaled():
 
 
 def record(stop, samples, ready):
-    """Read mono signed 16-bit frames at 48000 Hz from the loopback until STOP."""
+    """Read mono signed 16-bit frames at 48000 Hz from the audio loopback,
+    /dev/dsp under rach2.audio.loopback, until STOP."""
     fd = os.open("/dev/dsp", os.O_RDONLY)
     try:
+        # SNDCTL_DSP_SETFMT S16_LE, SNDCTL_DSP_CHANNELS 1, SNDCTL_DSP_SPEED.
         for request, value in [(0xc0045005, 16), (0xc0045006, 1), (0xc0045002, 48000)]:
             arg = array.array("i", [value])
             fcntl.ioctl(fd, request, arg, True)
-            assert arg[0] == value, (request, arg[0])
+            if arg[0] != value:
+                raise RuntimeError("/dev/dsp gave %d for request %#x" % (arg[0], request))
         ready.set()
         while not stop.is_set():
             samples.extend(os.read(fd, 4800))
