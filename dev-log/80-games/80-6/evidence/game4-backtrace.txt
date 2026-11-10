@@ -1,0 +1,88 @@
+[New LWP 225 (id 2)]
+[New LWP 224 (id 3)]
+[New LWP 223 (id 4)]
+[New LWP 222 (id 5)]
+[New LWP 221 (id 6)]
+[New LWP 220 (id 7)]
+[New LWP 219 (id 8)]
+[New LWP 218 (id 9)]
+[New LWP 217 (id 10)]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/libthread_db.so.1".
+[Switching to thread 1 (Thread 0x7e4c3ce49740 (LWP 212))]
+0x00007e4c3cede219 in __lll_lock_wait () from /lib/libc.so.6
+orig_rax       0xca                202
+rax            0xfffffffffffffffc  -4
+rdi            0x7e4c3a6b9780      138865862743936
+rsi            0x80                128
+rdx            0x2                 2
+r10            0x0                 0
+r8             0x0                 0
+rip            0x7e4c3cede219      0x7e4c3cede219 <__lll_lock_wait+41>
+0x7e4c3a6b9780 <g_phys_mutex>:	0x0000000000000002	0x00000001000000ef
+0x7e4c3a6b9790 <g_phys_mutex+16>:	0x0000000000000000	0x0000000000000000
+0x7e4c3a6b97a0 <g_phys_mutex+32>:	0x0000000000000000	0x000055efa84fb530
+0x7e4c3a6b97b0 <pulse_ctx>:	0x000055efa8203300	0x0000000000000028
+0x7e4c3a6b97c0:	0x000c0002000000fa	0x0000000000006010
+0x7e4c3a6b97d0:	0x00000000000000b6	0x000c00020000010b
+
+Thread 10 (Thread 0x7e4c3b3f06c0 (LWP 217) "llvmpipe-0"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 9 (Thread 0x7e4c3a58b6c0 (LWP 218) "llvmpipe-1"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 8 (Thread 0x7e4c39d8a6c0 (LWP 219) "llvmpipe-2"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 7 (Thread 0x7e4c1fee26c0 (LWP 220) "llvmpipe-3"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 6 (Thread 0x7e4c1f6e16c0 (LWP 221) "Crysis.exe"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 5 (Thread 0x7e4c1eee06c0 (LWP 222) "Crysis.exe"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 4 (Thread 0x7e4c1e6df6c0 (LWP 223) "Crysis.exe"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 3 (Thread 0x7e4c1dede6c0 (LWP 224) "Crysis.exe"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 2 (Thread 0x7e4c1d6dd6c0 (LWP 225) "Crysis.:disk$0"):
+#0  0x00007e4c3cee946e in __syscall_cancel_arch () from /lib/libc.so.6
+#1  0x00007e4c3ceddce4 in __internal_syscall_cancel () from /lib/libc.so.6
+#2  0x00007e4c3ceddfef in __futex_abstimed_wait_cancelable64 () from /lib/libc.so.6
+#3  0x00007e4c3cee0680 in pthread_cond_wait@@GLIBC_2.3.2 () from /lib/libc.so.6
+
+Thread 1 (Thread 0x7e4c3ce49740 (LWP 212) "Crysis.exe"):
+#0  0x00007e4c3cede219 in __lll_lock_wait () from /lib/libc.so.6
+#1  0x00007e4c3cee46ad in pthread_mutex_lock@@GLIBC_2.2.5 () from /lib/libc.so.6
+#2  0x00007e4c3a69de61 in free_phys_device_lists () from /opt/proton/files/lib/wine/x86_64-unix/winepulse.so
+#3  0x00007e4c3a69df19 in pulse_process_detach () from /opt/proton/files/lib/wine/x86_64-unix/winepulse.so
+[Inferior 1 (process 212) detached]
