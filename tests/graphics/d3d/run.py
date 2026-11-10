@@ -255,7 +255,7 @@ def main():
                 lines = len(re.findall(TEST_LINE, text, re.M))
                 actual = {"exit": rc, "summary": counts, "progress": stopped, "lines": lines}
                 # A null exit is one that Linux's runs did not agree on.
-                actual["matched"] = record or (stopped if expected.get("progress") else (
+                actual["matched"] = record or ((stopped or counts is not None) if stop else (
                     expected["exit"] in (None, rc) and (counts is not None) == expected["summary"] and
                     (lines >= expected.get("min_lines", 0) if counts is None else
                      (counts[3] == expected["failures"] and
@@ -291,7 +291,9 @@ def main():
                 # The discovery's SIGKILLs are memory exhaustion, never flakes.
                 flake = (rc in (-signal.SIGSEGV, 128 + signal.SIGSEGV) and
                          name in ref["flakes"] and name + " begin" in text)
-                matched = stopped if stop else flake or (counts is not None and name + " begin" in text and
+                # Running to its end where Linux stalled is no worse.
+                ended = counts is not None and name + " end" in text
+                matched = (stopped or ended) if stop else flake or (counts is not None and name + " begin" in text and
                                     name + " end" in text and rc in (0, 1) and
                                     counts[1] in expected["failures"] and counts[0] >= expected["min_checks"] and
                                     counts[3] <= expected["max_skipped"] and (rc == 0) == (counts[1] == 0))
