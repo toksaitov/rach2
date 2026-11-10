@@ -199,6 +199,12 @@ void rseq_preempt(process_t *p)
     (void)p;
 }
 
+/** No process registers for the sync-core barrier in the host model. */
+void membarrier_switch(const struct process *p)
+{
+    (void)p;
+}
+
 /** No debug register is set in the host switch model. */
 void arch_debug_switch(struct process *old, const struct process *next)
 {

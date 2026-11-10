@@ -128,6 +128,19 @@ static void long_set(uint32_t addr, unsigned long w)
     k_memcpy(user + addr, &w, sizeof(w));
 }
 
+/** A user span is valid when it lies in the model's user area. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    return in_user((uint32_t)addr, (uint32_t)len);
+}
+
+/** Every page of the model's user area is resident. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)write;
+    return in_user((uint32_t)addr, (uint32_t)len);
+}
+
 /** Bring a range in; a fault for a write taken with interrupts on is a
  * sleep in which the waiter on the word at `waiters_at` sets its bit, and
  * one at `slow_at` a sleep of `slow_ticks` ticks. */
