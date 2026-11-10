@@ -44,20 +44,10 @@ When the compatibility directory has no
 .Nm
 first makes the prefix: it runs
 .Li wineboot -u
-through Proton, then sets
-.Li VideoMemorySize
-under
-.Li HKCU\eSoftware\eWine\eDirect3D
-to the machine's memory in MiB, the
-.Li MemTotal
-of
-.Pa /proc/meminfo .
-The GPUs Rach2 drives draw from system memory, and WineD3D otherwise takes
-the size the GL driver reports, which virgl gives as a size no memory has.
-It prints
-.Dl rach2-game: prefix: made DIR with VideoMemorySize N MiB
+through Proton and prints
+.Dl rach2-game: prefix: made DIR
 on standard error before it starts the program.
-An existing prefix keeps its key.
+WineD3D takes the video memory from the GL driver, as under Linux.
 .Pp
 .Fl -print
 prints the effective settings, one
