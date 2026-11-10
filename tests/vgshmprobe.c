@@ -362,10 +362,12 @@ static void pending(long count)
 /** Microseconds of the monotonic clock. */
 static long now_us(void)
 {
-    long t[2];
+    struct {
+        long sec, nsec;
+    } t;
 
-    syscall2(SYS_CLOCK_GETTIME, 1, (long)t);
-    return t[0] * 1000000L + t[1] / 1000L;
+    syscall2(SYS_CLOCK_GETTIME, 1, (long)&t);
+    return t.sec * 1000000L + t.nsec / 1000L;
 }
 
 /** Make a blob of virgl's: a GL buffer of `bytes` that the commands made
