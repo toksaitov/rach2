@@ -271,7 +271,7 @@ static int reached(long clock, const struct timespec64 *at)
  * the first failed result of a wait, and the threads' stacks, one for each
  * thread the probe starts, since a thread that has counted its wait as
  * ended still runs on its stack until it exits. */
-#define THREADS 6
+#define THREADS 7
 static volatile unsigned int word_a, word_b, word_x, word_y;
 static volatile int done;
 static volatile long bad;
@@ -615,7 +615,7 @@ static void run_einval(void)
     report_held();
 }
 
-/** The addresses the process cannot reach, and a futex_wake of 0. */
+/** The addresses the process cannot reach. */
 static void run_efault(void)
 {
     struct futex_waitv w[2];
@@ -639,10 +639,30 @@ static void run_efault(void)
         fail("futex_requeue or FUTEX_WAKE_OP of an unmapped word was not refused with EFAULT");
     }
     report_held();
+}
 
-    if (futex_wake(&word_a, ALL, 0, F2) != 0) {
-        fail("a futex_wake of 0 did not return 0");
+/** A zero-count wake leaves a sleeping futex_wait waiter on its queue.
+ * Moving it first proves that it has entered the wait without a delay. */
+static void run_zero(void)
+{
+    long rc;
+
+    done = 0;
+    word_a = word_b = 0;
+    spawn(wait_futex2);
+    while ((rc = futex(&word_a, FUTEX_REQUEUE, 0, 1, &word_b, 0)) == 0) {
+        if (done != 0 || bad != 0) {
+            fail("the zero-count waiter ended before its requeue");
+        }
+        yield();
     }
+    if (rc != 1 || futex_wake(&word_b, ALL, 0, F2) != 0 || done != 0 || bad != 0) {
+        fail("a futex_wake of 0 did not leave its waiter asleep");
+    }
+    if (futex_wake(&word_b, ALL, 1, F2) != 1) {
+        fail("the zero-count wake left no waiter to wake");
+    }
+    join(1, "the zero-count waiter failed");
     report_held();
 }
 
@@ -665,6 +685,7 @@ void probe_main(unsigned long *sp)
     run_wake_op();
     run_einval();
     run_efault();
+    run_zero();
     report_end();
     say("FUTEX2PROBE OK\n");
     sys_exit(0);

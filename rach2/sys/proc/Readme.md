@@ -55,6 +55,7 @@ The calls this document covers, each with the page that has its contract. [sysca
 | `getpid`, `gettid`, `getppid`, `getpgid`, `setpgid`, `getpgrp`, `getsid`, `setsid` | [getpid(2)](../../../man/man2/getpid.2) |
 | `getuid`, `geteuid`, `getgid`, `getegid`, `getresuid`, `getresgid`, `getgroups`, as their `32` forms on i686 | [getuid(2)](../../../man/man2/getuid.2) |
 | `setuid`, `setgid`, `setreuid`, `setregid`, `setresuid`, `setresgid`, `setgroups`, as their `32` forms on i686 | [setuid(2)](../../../man/man2/setuid.2) |
+| `setfsuid`, `setfsgid`, and their `32` forms on i686 | [setfsuid(2)](../../../man/man2/setfsuid.2) |
 | `capget`, `capset` | [capget(2)](../../../man/man2/capget.2) |
 | `prlimit64`, `getrlimit`, `setrlimit`, and `ugetrlimit` on i686 | [prlimit64(2)](../../../man/man2/prlimit64.2) |
 | `getrusage` | [getrusage(2)](../../../man/man2/getrusage.2) |
