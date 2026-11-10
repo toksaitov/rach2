@@ -1,0 +1,6 @@
+venus-lost: kill: 2178805 2173931 /usr/libexec/virgl_render_server --socket-fd 66
+venus-lost: kill: 2179088 2178805 /usr/libexec/virgl_render_server --socket-fd 66
+venus-lost: kill: 2179089 2178805 /usr/libexec/virgl_render_server --socket-fd 66
+venus-lost: kill: 2179094 2178805 /usr/libexec/virgl_render_server --socket-fd 66
+venus-lost: kill: 2179095 2178805 /usr/libexec/virgl_render_server --socket-fd 66
+venus-lost: result: killed 2178805 2179088 2179089 2179094 2179095  of QEMU 2173931

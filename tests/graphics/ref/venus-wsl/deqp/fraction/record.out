@@ -1,0 +1,52 @@
+runner deqp
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 8
+memory_kib 8136936
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+load start 0.24 0.05 0.02
+processes start 207
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=8
+env GRAPHICS_MEMORY_KIB=8136936
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case deqp vk 1.4.1.1 every 1 from 1 of /tmp/deqp-vk-lavapipe.txt.gz, 4 processes
+list /tmp/deqp-vk-lavapipe.txt.gz 96037 cases sha256 408f2e055742af4968758b6c77340a8feb83eec68d89ebb3122371303103f411
+sample 96037 cases sha256 408f2e055742af4968758b6c77340a8feb83eec68d89ebb3122371303103f411
+program /opt/vk-gl-cts-1.4.1.1/vulkan/deqp-vk vulkan-cts-1.4.1.1
+options --deqp-watchdog=enable --deqp-log-images=disable --deqp-log-shader-sources=disable 
+env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
+env LP_NUM_THREADS=0
+flakes /tmp/deqp-vk-lavapipe.flakes 1 patterns
+renderer deviceName Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+renderer apiVersion 1.4.307
+renderer driverVersion 0x06801006
+load end 1.57 2.79 3.24
+busy 27.9%
+guest profile venus
+guest firmware seabios
+guest accelerator kvm
+guest cpu host,invtsc=on
+guest cpus 8
+guest memory_mib 8192
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-v:568686:1794272221
+guest env GRAPHICS_CLASS=conformance
+guest env GRAPHICS_CPUS=8
+guest env GRAPHICS_MEMORY_KIB=8136936
+guest env LP_NUM_THREADS=0
+guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+guest env MESA_SHADER_CACHE_FILES=0
+guest env GRAPHICS_DONE=1
+guest env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 5.08 8.97 13.48
+host_claims 4

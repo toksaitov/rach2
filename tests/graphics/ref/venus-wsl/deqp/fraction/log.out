@@ -1,0 +1,168 @@
+deqp: running 96037 of 96037 cases of vk in 4 processes
+virgl_render_server[569567]: vkr: failed to look up object 31556 of type 8
+virgl_render_server[569567]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[569567]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[569360]: vkr: failed to look up object 51720 of type 8
+virgl_render_server[569360]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[569360]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[569360]: vkr: vkWaitRingSeqnoMESA resulted in CS error
+virgl_render_server[569360]: vkr: submit_cmd: vn_dispatch_command failed
+virgl_render_server[569360]: failed to dispatch context op 5
+virgl_render_server[569360]: vkr: destroying context 5 (deqp) with a valid instance
+virgl_render_server[569360]: vkr: destroying device with valid objects
+virgl_render_server[569360]: vkr: destroying device with valid objects
+virtio_gpu_virgl_process_cmd: ctrl 0x10c, error 0x1200
+virtio_gpu_virgl_process_cmd: ctrl 0x208, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203
+Aborted
+Aborted
+virgl_render_server[569354]: vkr: failed to look up object 31522 of type 8
+virgl_render_server[569354]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[569354]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[629285]: vkr: failed to look up object 11 of type 8
+virgl_render_server[629285]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[629285]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[629285]: vkr: vkWaitRingSeqnoMESA resulted in CS error
+virgl_render_server[629285]: vkr: submit_cmd: vn_dispatch_command failed
+virgl_render_server[629285]: failed to dispatch context op 5
+virgl_render_server[629285]: vkr: destroying context 4 (deqp) with a valid instance
+virgl_render_server[629285]: vkr: destroying device with valid objects
+virgl_render_server[629285]: vkr: destroying device with valid objects
+virtio_gpu_virgl_process_cmd: ctrl 0x10c, error 0x1200
+virtio_gpu_virgl_process_cmd: ctrl 0x208, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203
+Aborted
+virgl_render_server[569355]: vkr: failed to look up object 85019 of type 8
+virgl_render_server[569355]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[569355]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[569355]: vkr: vkWaitRingSeqnoMESA resulted in CS error
+virgl_render_server[569355]: vkr: submit_cmd: vn_dispatch_command failed
+virgl_render_server[569355]: failed to dispatch context op 5
+virgl_render_server[569355]: vkr: destroying context 3 (deqp) with a valid instance
+virgl_render_server[569355]: vkr: destroying device with valid objects
+virgl_render_server[569355]: vkr: destroying device with valid objects
+virtio_gpu_virgl_process_cmd: ctrl 0x10c, error 0x1200
+virtio_gpu_virgl_process_cmd: ctrl 0x208, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203
+Aborted
+Aborted
+virgl_render_server[631470]: vkr: failed to look up object 58559 of type 8
+virgl_render_server[631470]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[631470]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[631185]: vkr: failed to look up object 66935 of type 8
+virgl_render_server[631185]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[631185]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[642172]: vkr: failed to look up object 187 of type 8
+virgl_render_server[642172]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[642172]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[629050]: vkr: failed to look up object 91612 of type 8
+virgl_render_server[629050]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[629050]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[631110]: vkr: failed to look up object 94221 of type 8
+virgl_render_server[631110]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[631110]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[631110]: vkr: submit_cmd: early bail due to fatal decoder state
+virgl_render_server[631110]: failed to dispatch context op 5
+virgl_render_server[631110]: vkr: destroying context 3 (deqp) with a valid instance
+virgl_render_server[631110]: vkr: destroying device with valid objects
+virtio_gpu_virgl_process_cmd: ctrl 0x10c, error 0x1200
+virtio_gpu_virgl_process_cmd: ctrl 0x208, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203
+Aborted
+virgl_render_server[642422]: vkr: failed to look up object 36154 of type 8
+virgl_render_server[642422]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[642422]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[642349]: vkr: failed to look up object 39576 of type 8
+virgl_render_server[642349]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[642349]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[647798]: vkr: failed to look up object 84 of type 8
+virgl_render_server[647798]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[647798]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[647871]: vkr: failed to look up object 36336 of type 8
+virgl_render_server[647871]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[647871]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[647871]: vkr: submit_cmd: early bail due to fatal decoder state
+virgl_render_server[647871]: failed to dispatch context op 5
+virgl_render_server[647871]: vkr: destroying context 4 (deqp) with a valid instance
+virgl_render_server[647871]: vkr: destroying device with valid objects
+virtio_gpu_virgl_process_cmd: ctrl 0x10c, error 0x1200
+virtio_gpu_virgl_process_cmd: ctrl 0x208, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203
+Aborted
+virgl_render_server[648237]: vkr: failed to look up object 35218 of type 8
+virgl_render_server[648237]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[648237]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+Killed
+virgl_render_server[729285]: vkr: destroying context 4 (deqp) with a valid instance
+virgl_render_server[729285]: vkr: destroying device with valid objects
+virgl_render_server[729285]: vkr: destroying device with valid objects
+Killed
+Killed
+Killed
+Killed
+Killed
+deqp: running 21 cases again
+virgl_render_server[1406796]: vkr: failed to look up object 10 of type 8
+virgl_render_server[1406796]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1406796]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[1406805]: vkr: failed to look up object 13 of type 8
+virgl_render_server[1406805]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1406805]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[1406799]: vkr: failed to look up object 11 of type 8
+virgl_render_server[1406799]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1406799]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[1406800]: vkr: failed to look up object 8 of type 8
+virgl_render_server[1406800]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1406800]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+virgl_render_server[1406805]: vkr: destroying context 5 (deqp) with a valid instance
+virgl_render_server[1406805]: vkr: destroying device with valid objects
+Aborted
+Aborted
+Aborted
+virgl_render_server[1407198]: vkr: failed to look up object 11 of type 8
+virgl_render_server[1407198]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1407198]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[1407277]: vkr: failed to look up object 24 of type 8
+virgl_render_server[1407277]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1407277]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[1407280]: vkr: failed to look up object 8 of type 8
+virgl_render_server[1407280]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1407280]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[1407350]: vkr: failed to look up object 10 of type 8
+virgl_render_server[1407350]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1407350]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+Aborted
+Aborted
+Aborted
+virgl_render_server[1407784]: vkr: failed to look up object 8 of type 8
+virgl_render_server[1407784]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1407784]: vkr: ring_submit_cmd: vn_dispatch_command failed
+virgl_render_server[1407864]: vkr: failed to look up object 8 of type 8
+virgl_render_server[1407864]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1407864]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+Aborted
+virgl_render_server[1408176]: vkr: failed to look up object 10 of type 8
+virgl_render_server[1408176]: vkr: vkFreeMemory resulted in CS error
+virgl_render_server[1408176]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Aborted
+Killed
+Killed
+deqp: result: vk 1.4.1.1 cases 96037 of 96037 every 1 jobs 4 pass 37012 fail 0 notsupported 59004 warning 0 crash 15 timeout 6 other 0 missing 0 flake 8
+debian: result: deqp status 0 in build/tmp/ref/fraction
+st=0
