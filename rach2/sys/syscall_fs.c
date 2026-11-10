@@ -1123,12 +1123,12 @@ long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefaul
 
 /** The bytes of a vector of `count` bytes that a tmpfs file sealed against
  * growth lets in, into `*room`, before any element is written: the whole
- * pages before its end once the vector would pass it (`tmpfs_grow_room`),
- * as Linux writes a vector as one stream a page at a time. `pos` is its
- * start unless `append` asks for the end. The caller holds the mount's
- * namespace lock or takes the vector element by element. Return 0, -EPERM
- * when no byte fits, or getattr's error. Other file types have no seals,
- * and `*room` is `count` for them. */
+ * 2 MiB chunks before its end once the vector would pass it
+ * (`tmpfs_grow_room`), as Linux writes a vector as one stream in such
+ * chunks. `pos` is its start unless `append` asks for the end. The caller
+ * holds the mount's namespace lock or takes the vector element by element.
+ * Return 0, -EPERM when no byte fits, or getattr's error. Other file types
+ * have no seals, and `*room` is `count` for them. */
 static int32_t iov_seal_grow(const struct open_file *ofd, uint64_t pos, uint32_t count, int append,
                              uint32_t *room)
 {
@@ -1257,17 +1257,17 @@ static int iov_append_file(const fd_entry_t *entry)
 static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append);
 
 /**
- * writev(2) takes fd, the vector and its count. An O_APPEND mounted file
- * uses iov_file_write's lock across the vector. Otherwise elements are written
- * in order (`writev_elements`); on a tmpfs file the mount's lock is held across
- * them, and a vector that would grow a sealed file is cut to the whole
- * pages before its end (`writev_begin`). The vector is checked whole first
- * (`iov_import`), and its total cut at MAX_RW_COUNT. Returns the bytes
- * written, or a negative errno: -EINVAL for a count below 0 or past
- * IOV_MAX_LOCAL or a negative length, -EFAULT for a vector or a range
- * outside user space, -EPERM for a vector of which the seal lets no byte
- * in, or a transfer error when no byte was written. A buffer fault after a
- * positive transfer returns the bytes written before the fault.
+ * writev(2) takes fd, the vector and its count. An O_APPEND mounted file uses
+ * iov_file_write's lock across the vector. Otherwise elements are written in
+ * order (`writev_elements`); on a tmpfs file the mount's lock is held across
+ * them, and a vector that would grow a sealed file is cut to the whole 2 MiB
+ * chunks before its end (`writev_begin`). The vector is checked whole first
+ * (`iov_import`), and its total cut at MAX_RW_COUNT. Returns the bytes written,
+ * or a negative errno: -EINVAL for a count below 0 or past IOV_MAX_LOCAL or a
+ * negative length, -EFAULT for a vector or a range outside user space, -EPERM
+ * for a vector of which the seal lets no byte in, or a transfer error when no
+ * byte was written. A buffer fault after a positive transfer returns the bytes
+ * written before the fault.
  */
 static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
@@ -12416,20 +12416,20 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
 }
 
 /**
- * The elements of the vector at `iov_user` read from or, with `write`,
- * written to `fd` at the position `pos`, which the descriptor's own offset
- * does not follow. An O_APPEND mounted file goes through iov_file_write, with
- * one lock across the vector. Other transfers check the vector whole first
- * (`iov_import`), so a bad element is refused before a byte moves, its
- * total cut at MAX_RW_COUNT, and then move it (`iov_at_move`), a write cut
- * to the whole pages a sealed tmpfs file lets in (`iov_seal_grow`); a
- * vector of no bytes still has the descriptor checked. Returns the bytes
- * moved or a negative errno: -EINVAL for a negative position, a count past
- * IOV_MAX_LOCAL or below 0, a negative length, or a vector whose end would
- * pass 2^63-1; -EFAULT for a vector or a buffer the caller cannot reach;
- * -EPERM, with nothing written, for a write to a file sealed against growth
- * of which no whole page before the end fits, as Linux takes the vector as
- * one stream; or the first element's error.
+ * The elements of the vector at `iov_user` read from or, with `write`, written
+ * to `fd` at the position `pos`, which the descriptor's own offset does not
+ * follow. An O_APPEND mounted file goes through iov_file_write, with one lock
+ * across the vector. Other transfers check the vector whole first
+ * (`iov_import`), so a bad element is refused before a byte moves, its total
+ * cut at MAX_RW_COUNT, and then move it (`iov_at_move`), a write cut to the
+ * whole 2 MiB chunks a sealed tmpfs file lets in (`iov_seal_grow`); a vector of
+ * no bytes still has the descriptor checked. Returns the bytes moved or a
+ * negative errno: -EINVAL for a negative position, a count past IOV_MAX_LOCAL
+ * or below 0, a negative length, or a vector whose end would pass 2^63-1;
+ * -EFAULT for a vector or a buffer the caller cannot reach; -EPERM, with
+ * nothing written, for a write to a file sealed against growth of which no
+ * whole 2 MiB chunk before the end fits, as Linux takes the vector as one
+ * stream; or the first element's error.
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
@@ -12577,24 +12577,22 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
 }
 
 /**
- * Write the vector of `count` elements at `addr` to the regular file of
- * the descriptor `entry`, which the caller holds, holding its description
- * and file locks across the elements (`file_write_locked`), or the mount's
- * namespace lock on a type without per-file locks. The vector is
- * copied and range-checked first, and its accessible prefix is brought in
- * before the locks, since a fault may need another file's lock. The
- * descriptor is checked after those copies, which may sleep. The explicit
- * position `pos` is ignored when `append` requests end placement; otherwise
- * it is used even on an O_APPEND description. -1 alone uses and advances
- * the shared offset. The shared O_APPEND flag is never changed. A vector
- * that would grow a sealed tmpfs file is cut to the whole pages before its
- * end (`iov_seal_grow`). Returns
- * the bytes written, including those before a bad data page, or an error
- * when no byte was written: -EINVAL for a count below 0 or past
- * IOV_MAX_LOCAL, a negative length, or a vector whose end at `pos` would
- * pass 2^63-1, -EFAULT for a vector or a
- * buffer the caller cannot reach, -EBADF for a descriptor that is not a
- * file of a mount open for writing, -EBUSY for a file that backs a loop
+ * Write the vector of `count` elements at `addr` to the regular file of the
+ * descriptor `entry`, which the caller holds, holding its description and file
+ * locks across the elements (`file_write_locked`), or the mount's namespace
+ * lock on a type without per-file locks. The vector is copied and range-checked
+ * first, and its accessible prefix is brought in before the locks, since a
+ * fault may need another file's lock. The descriptor is checked after those
+ * copies, which may sleep. The explicit position `pos` is ignored when `append`
+ * requests end placement; otherwise it is used even on an O_APPEND description.
+ * -1 alone uses and advances the shared offset. The shared O_APPEND flag is
+ * never changed. A vector that would grow a sealed tmpfs file is cut to the
+ * whole 2 MiB chunks before its end (`iov_seal_grow`). Returns the bytes
+ * written, including those before a bad data page, or an error when no byte was
+ * written: -EINVAL for a count below 0 or past IOV_MAX_LOCAL, a negative
+ * length, or a vector whose end at `pos` would pass 2^63-1, -EFAULT for a
+ * vector or a buffer the caller cannot reach, -EBADF for a descriptor that is
+ * not a file of a mount open for writing, -EBUSY for a file that backs a loop
  * device, or the write's error.
  */
 static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append)

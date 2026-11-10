@@ -578,8 +578,8 @@ static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32
  * its modification and change times; -EISDIR for a directory, -EINVAL for
  * any other node and for a file of memfd_secret. A write under
  * F_SEAL_WRITE or F_SEAL_FUTURE_WRITE is -EPERM, and one past the end under
- * F_SEAL_GROW writes the whole pages before the end (`tmpfs_grow_room`) and
- * is -EPERM when none fits, as on Linux. */
+ * F_SEAL_GROW writes the whole 2 MiB chunks before the end
+ * (`tmpfs_grow_room`) and is -EPERM when none fits, as on Linux. */
 static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                            uint64_t offset)
 {
@@ -1307,7 +1307,7 @@ uint32_t tmpfs_seals(void *node)
 
 uint32_t tmpfs_grow_room(uint64_t pos, uint32_t count, uint64_t size)
 {
-    uint64_t end = size & ~(uint64_t)(PAGE_SIZE - 1u);
+    uint64_t end = size & ~(uint64_t)(TMPFS_GROW_CHUNK - 1u);
 
     if (pos <= size && count <= size - pos) {
         return count;
