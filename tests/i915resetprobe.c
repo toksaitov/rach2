@@ -2,8 +2,9 @@
  * chip in QEMU: a batch the chip's debugfs file hangs is found by the
  * heartbeat and its engine reset, its context alone charged and the batch
  * of another context behind it run again, and a context that hangs three
- * times banned. Runs under rach2.i915fake as root, which the fake's file,
- * a batch with a length and the reset count need. */
+ * times banned; then the driver's debugfs files and the card's error state
+ * in /sys read and written. Runs under rach2.i915fake as root, which the
+ * fake's file, a batch with a length, the reset count and debugfs need. */
 #include "probe.h"
 #include "probe_report.h"
 #include "../rach2/sys/drm/i915/i915_drm.h"
@@ -356,17 +357,177 @@ static void ban_row(uint32_t batch, uint32_t data)
     report_held();
 }
 
+/* A file's text, read whole; the error state of one engine's hang takes
+ * some 30 KiB. */
+static char body[262144];
+
+/** Read the file `path` whole into `body`: its length, or -1 when it does
+ * not open or a read fails. */
+static long slurp(const char *path)
+{
+    int fd = (int)syscall3(SYS_OPEN, (long)path, 0, 0);
+    long n = 0, r = 1;
+
+    if (fd < 0) {
+        return -1;
+    }
+    while (r > 0 && n < (long)sizeof(body) - 1) {
+        r = syscall3(SYS_READ, fd, (long)(body + n), (long)sizeof(body) - 1 - n);
+        n += r > 0 ? r : 0;
+    }
+    syscall1(SYS_CLOSE, fd);
+    body[n] = '\0';
+    return r < 0 ? -1 : n;
+}
+
+/** Write `s` to the file `path` in one write: whether all of it went. */
+static int put(const char *path, const char *s)
+{
+    int fd = (int)syscall3(SYS_OPEN, (long)path, 1, 0);
+    long n = 0, r;
+
+    while (s[n]) {
+        n++;
+    }
+    r = fd < 0 ? -1 : syscall3(SYS_WRITE, fd, (long)s, n);
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    return r == n;
+}
+
+/** Whether `s` begins with `head`. */
+static int begins(const char *s, const char *head)
+{
+    while (*head && *s == *head) {
+        s++;
+        head++;
+    }
+    return *head == '\0';
+}
+
+/** Whether `s` holds `w`. */
+static int holds(const char *s, const char *w)
+{
+    for (; *s; s++) {
+        if (begins(s, w)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A path in the device's debugfs directory, and the card's error in /sys,
+ * named by the same minor as the fake's file. */
+static char dpath[96], epath[64];
+
+/** Make `dpath` the device's debugfs file `name`. */
+static const char *dfile(const char *name)
+{
+    long i = 0, k = 0;
+
+    while (fake[i] && !begins(fake + i, "/i915_fake")) {
+        dpath[i] = fake[i];
+        i++;
+    }
+    dpath[i++] = '/';
+    while (name[k] && i < (long)sizeof(dpath) - 1) {
+        dpath[i++] = name[k++];
+    }
+    dpath[i] = '\0';
+    return dpath;
+}
+
+/** Make `epath` /sys/class/drm/cardN/error, N the minor of the fake's
+ * directory. */
+static void error_path(void)
+{
+    const char *head = "/sys/class/drm/card", *tail = "/error";
+    long i = 0, k = 22;
+
+    while (*head) {
+        epath[i++] = *head++;
+    }
+    while (fake[k] != '/') {
+        epath[i++] = fake[k++];
+    }
+    while (*tail) {
+        epath[i++] = *tail++;
+    }
+    epath[i] = '\0';
+}
+
+/** Each of the driver's debugfs files reads with Linux's first line, and
+ * the error state the hangs left reads the same in debugfs and in /sys. */
+static void files_row(void)
+{
+    static char first[128];
+    long n, i;
+
+    require(slurp(dfile("i915_capabilities")) > 0 && holds(body, "iommu: "),
+            "files: i915_capabilities");
+    require(slurp(dfile("i915_engine_info")) > 0 && begins(body, "GT awake? "),
+            "files: i915_engine_info");
+    require(slurp(dfile("i915_frequency_info")) > 0, "files: i915_frequency_info");
+    require(slurp(dfile("i915_cdclk_info")) > 0 && begins(body, "Current CD clock frequency: "),
+            "files: i915_cdclk_info");
+    require(slurp(dfile("i915_gem_objects")) > 0 && holds(body, " shrinkable [0 free] objects, "),
+            "files: i915_gem_objects");
+    require(slurp(dfile("i915_wedged")) == 2 && begins(body, "0\n"), "files: i915_wedged");
+    require(slurp(dfile("i915_gem_drop_caches")) == 11 && begins(body, "0x000003ff\n"),
+            "files: i915_gem_drop_caches");
+    require(slurp(dfile("crtc-0/i915_pipe")) == 2 && begins(body, "A\n"), "files: i915_pipe");
+    require(slurp(dfile("crtc-0/i915_current_bpc")) > 0 && begins(body, "Current: "),
+            "files: i915_current_bpc");
+    require(slurp(dfile("i915_gpu_info")) > 0 && holds(body, "Kernel: "), "files: i915_gpu_info");
+    n = slurp(dfile("i915_error_state"));
+    require(n > 0 && holds(body, "rcs0"), "files: i915_error_state after the hangs");
+    for (i = 0; i < (long)sizeof(first) - 1 && body[i] && body[i] != '\n'; i++) {
+        first[i] = body[i];
+    }
+    first[i] = '\0';
+    error_path();
+    require(slurp(epath) > 0 && begins(body, first), "files: the card's error in /sys");
+    report_held();
+}
+
+/** A write of i915_error_state clears the state, which /sys then reports
+ * not collected; a write of Linux's VCS0 bit, 0x400, to i915_wedged
+ * captures a state of vcs0, whose message names the video class, 4, and
+ * resets nothing, since vcs0 is idle and Linux's __intel_engine_reset_bh
+ * passes over an engine that is not awake; and a write of
+ * i915_gem_drop_caches takes every bit. */
+static void writes_row(void)
+{
+    uint32_t vcs0 = fake_count("resets", "vcs0"), rcs = fake_count("resets", "rcs0");
+    uint32_t full = fake_count("resets", "full");
+
+    require(put(dfile("i915_error_state"), "1\n"), "writes: i915_error_state cleared");
+    require(slurp(dfile("i915_error_state")) == 0, "writes: no error state in debugfs");
+    require(slurp(epath) > 0 && begins(body, "No error state collected\n"),
+            "writes: no error state in /sys");
+    require(put(dfile("i915_wedged"), "0x400\n"), "writes: i915_wedged takes 0x400");
+    require(slurp(dfile("i915_error_state")) > 0 && begins(body, "GPU HANG: ecode 7:4:"),
+            "writes: the state captured of vcs0, the video class");
+    require(fake_count("resets", "vcs0") == vcs0 && fake_count("resets", "rcs0") == rcs &&
+                fake_count("resets", "full") == full,
+            "writes: no reset of an idle engine");
+    require(slurp(dfile("i915_wedged")) == 2 && begins(body, "0\n"), "writes: not wedged");
+    require(put(dfile("i915_gem_drop_caches"), "0x3ff\n"), "writes: i915_gem_drop_caches");
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
-/** Run the four reported rows and close every resource on exit. */
+/** Run the six reported rows and close every resource on exit. */
 void probe_main(unsigned long *sp)
 {
-    const char *rows[] = {"hang", "reset", "replay", "ban"};
+    const char *rows[] = {"hang", "reset", "replay", "ban", "files", "writes"};
     uint32_t i, batch, data;
 
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "machine.i915fake.reset"));
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 6; i++) {
         report_plan(rows[i]);
     }
     find_gpu();
@@ -377,6 +538,8 @@ void probe_main(unsigned long *sp)
     reset_row();
     replay_row();
     ban_row(batch, data);
+    files_row();
+    writes_row();
     report_end();
     probe_line("I915RESETPROBE OK", 0, 0);
     finish(0);

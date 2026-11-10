@@ -410,7 +410,9 @@ $(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdo
 # bindings, a userptr object and pressure past memory to ENOMEM,
 # i915execprobe's batches complete, relocate and fail by each fault, and
 # i915resetprobe's hung batch is reset with its context alone charged, the
-# batch behind it run, and the context banned at its third hang. The cases
+# batch behind it run, and the context banned at its third hang, after
+# which the driver's debugfs files and the card's error state are read and
+# written. The cases
 # are tests/cases/machine.i915fake.json; the first boots gnu-test.disk.
 
 $(ARCH_BUILD)/utils/sbin/gfxtool: utils/gfxtool.c utils/programs.mk $(LIBC_STAMP)
