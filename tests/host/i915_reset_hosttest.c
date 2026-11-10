@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/drm/i915/i915_reset.c
  * host-deps: rach2/sys/drm/i915/i915_gpu_error.c
  * host-deps: rach2/sys/drm/i915/i915_gem_context.c
+ * host-deps: rach2/sys/drm/i915/i915_user_extensions.c
  * host-deps: rach2/sys/drm/i915/i915_request.c
  * host-deps: rach2/sys/drm/i915/i915_getparam.c
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_irq.c
