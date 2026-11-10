@@ -66,7 +66,7 @@ export STEAM_COMPAT_DATA_PATH STEAM_COMPAT_CLIENT_INSTALL_PATH
 
 # umu-launcher takes the compatibility directory as WINEPREFIX, which it
 # links as its own pfx, and derives SteamGameId and SteamAppId from GAMEID.
-# Its runtime is UMU/steamrt3, which umu would download and update; the
+# Its runtime is UMU/steamrt4, which umu would download and update; the
 # launcher unpacks the root's copy there instead and turns updates off.
 umu_dir=${XDG_DATA_HOME:-$HOME/.local/share}/umu
 if [ -n "$umu" ]; then
@@ -87,7 +87,7 @@ if [ -n "$print" ]; then
         "STEAM_COMPAT_CLIENT_INSTALL_PATH=$STEAM_COMPAT_CLIENT_INSTALL_PATH"
     [ -z "$umu" ] || printf '%s\n' "PROTONPATH=$PROTONPATH" "GAMEID=$GAMEID" \
         "WINEPREFIX=$WINEPREFIX" "UMU_RUNTIME_UPDATE=$UMU_RUNTIME_UPDATE" \
-        "UMU_RUNTIME=$umu_dir/steamrt3"
+        "UMU_RUNTIME=$umu_dir/steamrt4"
     exit 0
 fi
 
@@ -107,24 +107,24 @@ proton_run()
 # umu's own, so that two launches unpack it once.
 unpack_runtime()
 {
-    rt=$umu_dir/steamrt3
-    [ -f /opt/umu/SteamLinuxRuntime_sniper.tar.xz ] && [ -f /opt/umu/VERSIONS.txt ] ||
-        die 'missing /opt/umu/SteamLinuxRuntime_sniper.tar.xz'
+    rt=$umu_dir/steamrt4
+    [ -f /opt/umu/SteamLinuxRuntime_4.tar.xz ] && [ -f /opt/umu/VERSIONS.txt ] ||
+        die 'missing /opt/umu/SteamLinuxRuntime_4.tar.xz'
     mkdir -p "$umu_dir"
     exec 9> "$umu_dir/umu.lock"
     flock 9
     if ! cmp -s /opt/umu/VERSIONS.txt "$rt/VERSIONS.txt"; then
         tmp=$(mktemp -d "$umu_dir/.rach2-game.XXXXXX")
         status=0
-        tar -xJf /opt/umu/SteamLinuxRuntime_sniper.tar.xz -C "$tmp" || status=$?
+        tar -xJf /opt/umu/SteamLinuxRuntime_4.tar.xz -C "$tmp" || status=$?
         if [ "$status" -eq 0 ]; then
             [ ! -e "$rt" ] || mv "$rt" "$tmp/old"
-            mv "$tmp/SteamLinuxRuntime_sniper" "$rt"
+            mv "$tmp/SteamLinuxRuntime_4" "$rt"
         fi
         rm -rf "$tmp"
         [ "$status" -eq 0 ] || { echo "rach2-game: umu: tar failed: status $status" >&2; exit 1; }
         echo "rach2-game: umu: unpacked the Steam Linux Runtime" \
-            "$(awk '$1 == "sniper" { print $2 }' "$rt/VERSIONS.txt") in $rt" >&2
+            "$(awk '$1 == "steamrt4" { print $2 }' "$rt/VERSIONS.txt") in $rt" >&2
     fi
     exec 9>&-
 }
@@ -142,6 +142,9 @@ if [ ! -f "$STEAM_COMPAT_DATA_PATH/pfx/user.reg" ]; then
     status=0
     proton_run 'c:\windows\system32\wineboot.exe' -u || status=$?
     [ "$status" -eq 0 ] || { echo "rach2-game: prefix: wineboot failed: status $status" >&2; exit 1; }
+    # umu-launcher 1.4.4 exits 0 when it could not start Proton at all.
+    [ -f "$STEAM_COMPAT_DATA_PATH/pfx/user.reg" ] ||
+        { echo "rach2-game: prefix: wineboot made no pfx/user.reg" >&2; exit 1; }
     echo "rach2-game: prefix: made $STEAM_COMPAT_DATA_PATH/pfx" >&2
 fi
 [ -n "$umu" ] || exec /opt/proton/proton run "$@"

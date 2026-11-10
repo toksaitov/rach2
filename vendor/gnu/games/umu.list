@@ -2,8 +2,8 @@
 # URL SHA-256, read by fetch_umu.sh through ../debian/fetch_asset.sh.
 # umu-launcher's zipapp is its release's umu-run with its Python
 # dependencies; its digest is the one the release publishes. The runtime is
-# Steam Linux Runtime 3.0, sniper, which GE-Proton's toolmanifest.vdf
-# requires (app 1628350); its digest is the one SHA256SUMS of the same image
+# Steam Linux Runtime 4.0, steamrt4, which GE-Proton11-12's toolmanifest.vdf
+# requires (app 4183110); its digest is the one SHA256SUMS of the same image
 # directory gives.
 umu-launcher 1.4.4 https://github.com/Open-Wine-Components/umu-launcher/releases/download/1.4.4/umu-launcher-1.4.4-zipapp.tar eb590691841f7fad3fc3ad8fd5db4ccb87849fe7948e62b28ece7a4ee48cc851
-steamrt-sniper 3.0.20261021.266025 https://repo.steampowered.com/steamrt3/images/3.0.20261021.266025/SteamLinuxRuntime_sniper.tar.xz 86956ad0ee62e89134f5e30359cd1019d1ecb614c7b677dad82d4d00f51a2696
+steamrt4 4.0.20261021.265997 https://repo.steampowered.com/steamrt4/images/4.0.20261021.265997/SteamLinuxRuntime_4.tar.xz aa9dd1aab2173e65b631faae34b85e2c17fe323d941013154ddd2e1dce8a0910

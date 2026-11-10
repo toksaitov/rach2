@@ -22,22 +22,22 @@ with the Proton that
 .Ev PROTONPATH
 names, inside the container of the Steam Linux Runtime that Proton's
 .Pa toolmanifest.vdf
-requires: sniper, Steam Linux Runtime 3.0, for the root's GE-Proton.
+requires: Steam Linux Runtime 4.0, steamrt4, for the root's GE-Proton.
 pressure-vessel, the runtime's container tool, builds the container with
 bubblewrap in new user, mount and other namespaces, and passes in the
 display, the GPU's device nodes, the PulseAudio socket and the D-Bus buses.
 .Pp
 umu keeps the runtime in
-.Pa $XDG_DATA_HOME/umu/steamrt3 ,
+.Pa $XDG_DATA_HOME/umu/steamrt4 ,
 or
-.Pa $HOME/.local/share/umu/steamrt3 .
+.Pa $HOME/.local/share/umu/steamrt4 .
 A missing runtime would be downloaded from Valve's servers, and an installed
 one updated on each start.
 .Xr rach2-game 1
 with
 .Fl -umu
 unpacks the root's copy of the pinned runtime,
-.Pa /opt/umu/SteamLinuxRuntime_sniper.tar.xz ,
+.Pa /opt/umu/SteamLinuxRuntime_4.tar.xz ,
 there instead, and sets
 .Ev UMU_RUNTIME_UPDATE
 to 0; use it to start games.
@@ -84,10 +84,10 @@ and passes Proton's other variables, such as
 .Ev PROTON_USE_WOW64 ,
 through the container unchanged.
 .Sh FILES
-.Bl -tag -width /opt/umu/SteamLinuxRuntime_sniper.tar.xz
+.Bl -tag -width /opt/umu/SteamLinuxRuntime_4.tar.xz
 .It Pa /opt/umu/umu-run
 The launcher.
-.It Pa /opt/umu/SteamLinuxRuntime_sniper.tar.xz
+.It Pa /opt/umu/SteamLinuxRuntime_4.tar.xz
 The pinned runtime, unpacked by
 .Xr rach2-game 1 .
 .It Pa /opt/umu/VERSIONS.txt

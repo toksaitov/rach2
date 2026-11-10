@@ -53,7 +53,7 @@ WineD3D takes the video memory from the GL driver, as under Linux.
 .Fl -umu
 runs Proton through
 .Xr umu-run 1 ,
-in the container of the pinned Steam Linux Runtime 3.0, sniper, as games
+in the container of the pinned Steam Linux Runtime 4.0, steamrt4, as games
 run outside Steam under Linux.
 The settings and the prefix are the direct route's.
 umu takes the compatibility directory as
@@ -65,9 +65,9 @@ to the directory itself unless
 is already a directory, as in one the direct route made.
 .Pp
 umu keeps the runtime in
-.Pa $XDG_DATA_HOME/umu/steamrt3
+.Pa $XDG_DATA_HOME/umu/steamrt4
 or
-.Pa $HOME/.local/share/umu/steamrt3 .
+.Pa $HOME/.local/share/umu/steamrt4 .
 When that copy's
 .Pa VERSIONS.txt
 differs from
@@ -75,13 +75,13 @@ differs from
 or it has none,
 .Nm
 unpacks
-.Pa /opt/umu/SteamLinuxRuntime_sniper.tar.xz
+.Pa /opt/umu/SteamLinuxRuntime_4.tar.xz
 there, under umu's lock
 .Pa umu.lock
 beside it, replacing the old copy, and prints
 .Dl rach2-game: umu: unpacked the Steam Linux Runtime VERSION in DIR
 on standard error.
-The copy takes 810 MB.
+The copy takes 711 MB.
 umu checks it with
 .Nm pv-verify
 on the first start and downloads nothing; with
@@ -224,7 +224,11 @@ A failed
 .Li wineboot
 or
 .Li reg
-in a new prefix, or a failed unpacking of the runtime, exits with status 1.
+in a new prefix, a
+.Li wineboot
+that leaves no
+.Pa pfx/user.reg ,
+or a failed unpacking of the runtime, exits with status 1.
 Otherwise the exit status is Proton's, or umu's with
 .Fl -umu .
 .Sh EXAMPLES

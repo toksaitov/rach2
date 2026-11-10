@@ -21,7 +21,7 @@ pin()
 }
 
 zipapp=$(asset umu-launcher "$LIST")
-runtime=$(asset steamrt-sniper "$LIST")
+runtime=$(asset steamrt4 "$LIST")
 mkdir -p "$ROOT/opt/umu"
 tar -xf "$zipapp" -C "$ROOT/opt/umu" --strip-components=1 umu/umu-run
 # The zipapp is a shell line before a zip archive, which Python's zipfile reads.
@@ -36,16 +36,16 @@ for n in zipfile.ZipFile(sys.argv[1]).namelist():
 }
 chmod 0755 "$ROOT/opt/umu/umu-run"
 
-# VERSIONS.txt is the archive's third member; the runtime's own line must
+# VERSIONS.txt is the archive's first file; the runtime's own line must
 # name the pinned build, so that the pin and the image directory agree.
 # rach2-game compares its copy beside the archive with a user's runtime.
-tar -xJOf "$runtime" --occurrence=1 SteamLinuxRuntime_sniper/VERSIONS.txt \
+tar -xJOf "$runtime" --occurrence=1 SteamLinuxRuntime_4/VERSIONS.txt \
     > "$ROOT/opt/umu/VERSIONS.txt"
-built=$(awk '$1 == "sniper" { print $2 }' "$ROOT/opt/umu/VERSIONS.txt")
-[ "$built" = "$(pin steamrt-sniper)" ] || {
-    echo "gnu: umu: refused: the runtime is sniper '$built', expected $(pin steamrt-sniper)" >&2
+built=$(awk '$1 == "steamrt4" { print $2 }' "$ROOT/opt/umu/VERSIONS.txt")
+[ "$built" = "$(pin steamrt4)" ] || {
+    echo "gnu: umu: refused: the runtime is steamrt4 '$built', expected $(pin steamrt4)" >&2
     exit 1
 }
-cp "$runtime" "$ROOT/opt/umu/SteamLinuxRuntime_sniper.tar.xz"
-chmod 0644 "$ROOT/opt/umu/SteamLinuxRuntime_sniper.tar.xz" "$ROOT/opt/umu/VERSIONS.txt"
-echo "gnu: umu: result: umu-launcher $version and Steam Linux Runtime sniper $built verified and staged"
+cp "$runtime" "$ROOT/opt/umu/SteamLinuxRuntime_4.tar.xz"
+chmod 0644 "$ROOT/opt/umu/SteamLinuxRuntime_4.tar.xz" "$ROOT/opt/umu/VERSIONS.txt"
+echo "gnu: umu: result: umu-launcher $version and Steam Linux Runtime $built verified and staged"
