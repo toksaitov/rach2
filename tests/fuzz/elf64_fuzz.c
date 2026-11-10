@@ -219,6 +219,13 @@ void *k_memcpy(void *dest, const void *src, size_t n)
     return dest;
 }
 
+/** Whether the kernel runs i386 programs: yes, as the default boot does, so
+ * an ELF32 image reaches the i386 checks. */
+int ia32_enabled_verbose(void)
+{
+    return 1;
+}
+
 /** Copy up to `count` image bytes at `off` to `dst`; the number copied. */
 static int image_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
