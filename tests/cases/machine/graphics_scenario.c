@@ -43,6 +43,20 @@
 #define VKCUBE_RUN                              \
     "sh " GRAPHICS_DIR "/runners/vkcube.sh -i " \
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
+/* Before IGT and modetest, which take the card's master: stop the GNU root's
+ * desktop services for the boot, as one stops the display manager on Linux
+ * before IGT, since the session's Weston takes the master of a connected
+ * display at a time of its own after login. The supervisor, made unrunnable
+ * on the case's overlay so that init does not start it again, ends the
+ * session, seatd and udevd on SIGTERM; the wait is for it and every weston
+ * to exit. vkcube.sh ends the session's Weston itself. */
+#define END_DESKTOP                                                               \
+    "procs() { for p in /proc/[0-9]*; do "                                        \
+    "[ \"$(cat $p/comm 2>/dev/null)\" != \"$1\" ] || echo ${p#/proc/}; done; }; " \
+    "chmod a-x /usr/libexec/rach2-desktop && p=$(procs rach2-desktop) && "        \
+    "{ [ -z \"$p\" ] || kill -TERM $p; } && "                                     \
+    "while [ -n \"$(procs rach2-desktop)$(procs weston)\" ]; do sleep 0.2; done && "
+
 /* The device loss case's runner, in the guest, as the test account. */
 #define VENUS_LOST_RUN "su -s /bin/sh test -c 'sh " GRAPHICS_DIR "/runners/venus-lost.sh "
 
@@ -337,14 +351,15 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
 }
 
 /**
- * Run the runner, as root or as the test account, with the environment of
- * a Done's run of its class, performance for glmark2 and vkcube and
- * conformance for the others, assert that it ran its whole case, and print
- * what it printed.
+ * Run the runner, as root, once the desktop services have stopped
+ * (END_DESKTOP) for IGT and modetest, or as the test account, with the
+ * environment of a Done's run of its class, performance for glmark2 and
+ * vkcube and conformance for the others, assert that it ran its whole case,
+ * and print what it printed.
  */
 static void run(struct graphics_case *s)
 {
-    char runner[512], env[768], command[1024], line[200];
+    char runner[512], env[768], command[1536], line[200];
     const char *pattern;
     struct net_run r;
     int root = runner_line(s, runner, sizeof(runner), &pattern);
@@ -355,7 +370,8 @@ static void run(struct graphics_case *s)
              s->runner == GLMARK2 || s->runner == VKPRESENT ? "performance" : "conformance",
              runner);
     if (root)
-        snprintf(command, sizeof(command), "%s", env);
+        snprintf(command, sizeof(command), "%s%s",
+                 s->runner == IGT || s->runner == MODETEST ? END_DESKTOP : "", env);
     else
         snprintf(command, sizeof(command), "su -s /bin/sh test -c '%s'", env);
     if (net_step(&s->u, "run") == ETUDE_OK)
