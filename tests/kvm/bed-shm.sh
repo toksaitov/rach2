@@ -13,10 +13,10 @@
 # exit to QEMU: every doorbell the VM rang reached Rach2 through a KVM
 # ioeventfd and every one Rach2 rang through an irqfd. Then QEMU is stopped
 # with fenced submissions pending and killed: ivshmemd must detach with the
-# VM's death and every waiter must see an error. Each check prints one line,
-# `bed-shm: CHECK: pass` or `fail` with the reason, and the last line is
-# `bed-shm: result: pass` or `fail`. The console of the VM, ivshmemd's
-# output and the counters are kept in DIR.
+# VM's death, every fence must fail and a wait after the death must too.
+# Each check prints one line, `bed-shm: CHECK: pass` or `fail` with the
+# reason, and the last line is `bed-shm: result: pass` or `fail`. The
+# console of the VM, ivshmemd's output and the counters are kept in DIR.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2
 while getopts d:p:c:o:m:n: o; do

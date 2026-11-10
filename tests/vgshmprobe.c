@@ -287,9 +287,11 @@ static void draw(const char *want)
 }
 
 /**
- * Leave `count` fenced submissions pending, say so, and wait for each
- * fence: each must end with an error, which the VM's death gives it, and
- * the buffer's wait too.
+ * Leave `count` fenced submissions pending, say so, and wait for the
+ * buffer and for each fence: each fence must end with an error, which the
+ * VM's death gives it, and the buffer's wait must return, with 0 once its
+ * fences have ended, as Linux's VIRTGPU_WAIT does; a wait after the death
+ * must fail.
  */
 static void pending(long count)
 {
@@ -301,7 +303,7 @@ static void pending(long count)
         short events, revents;
     } p[PENDING_MAX];
     uint32_t res, bo;
-    long i, failed = 0, r, waited;
+    long i, failed = 0, r, waited, after;
     char text[12];
 
     if (count < 1 || count > PENDING_MAX) {
@@ -335,7 +337,9 @@ static void pending(long count)
         }
     }
     probe_line("VGSHMPROBE WAIT: ", dec(text, waited), 0);
-    if (failed != count || waited == 0) {
+    after = call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w);
+    probe_line("VGSHMPROBE WAIT AFTER: ", dec(text, after), 0);
+    if (failed != count || after == 0) {
         fail("a waiter saw no error");
     }
     probe_line("VGSHMPROBE OK", 0, 0);
