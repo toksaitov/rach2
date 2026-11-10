@@ -21,6 +21,7 @@ vmprobe
 mmapdevprobe
 forkro
 cowregrant
+numaprobe
 usercopyfault
 fdstale
 dirgrow

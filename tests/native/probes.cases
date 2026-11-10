@@ -122,6 +122,7 @@ case mvtest.krffs root:krffs -- mvtest
 # machine=native leaves out every change of address, flags and routes.
 case netifprobe -- netifprobe machine=native
 # machine=native leaves out the two comparisons of HeapUsed.
+case numaprobe ids:1000 -- numaprobe
 case ofdprobe stage:native/hello.txt -- ofdprobe machine=native
 case ownprobe root:krffs ids:1000,2000,3000,4000 -- ownprobe
 # machine=native leaves out the three discovers and their offers and the two
