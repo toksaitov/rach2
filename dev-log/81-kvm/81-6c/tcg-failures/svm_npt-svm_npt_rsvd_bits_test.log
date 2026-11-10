@@ -1,0 +1,139 @@
+enabling apic
+enabling apic
+smp: waiting for 1 APs
+setup: CPU 1 online
+paging enabled
+cr0 = 80010011
+cr3 = 1118000
+cr4 = 20
+NPT detected - running all tests with NPT enabled
+SVM test: svm_npt_rsvd_bits_test
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x8000000000400007.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0xd050000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xd050000400007.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000000d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000000c, PxE = 0x80000000bfec5027.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x19c080, got exit = 0x400
+FAIL: Wanted PFEC = 0x10000001d, got PFEC = 10000001c, PxE = 0xbffdd0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec2027.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x129a8080, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0xbffea0a7.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 0
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 0, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 1, guest.NX = 0, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 0, guest.NX = 1, guest.SMEP = 1
+PASS: Wanted #NPF on rsvd bits = 0x8000000000000000, got exit = 0x400
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 20000000e, PxE = 0x80000000bfec1027.  host.NX = 0, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+FAIL: Wanted #NPF on rsvd bits = 0x100, got exit = 0x81
+FAIL: Wanted PFEC = 0x20000000f, got PFEC = 0, PxE = 0xbfec1127.  host.NX = 1, host.SMEP = 1, guest.NX = 1, guest.SMEP = 1
+SUMMARY: 128 tests, 72 unexpected failures

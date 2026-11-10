@@ -88,6 +88,10 @@ The bullets state only what the records show. A fact the records do not hold, su
 | Linux looks up an AMD L1 cache's eight-bit associativity in a table of sixteen | Linux 6.12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linux-looks-up-an-amd-l1-caches-eight-bit-associativity-in-a-table-of-sixteen) |
 | Linux reads a DMI release one byte past a structure that ends before it | Linux 6.12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linux-reads-a-dmi-release-one-byte-past-a-structure-that-ends-before-it) |
 | Linux's KVM drops the faults of an emulated task switch | Linux 6.12 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#linuxs-kvm-drops-the-faults-of-an-emulated-task-switch) |
+| QEMU's TCG gives no exit for an intercepted CR3 read | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-exit-for-an-intercepted-cr3-read) |
+| QEMU's TCG gives no selective CR0 write exit for LMSW | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-selective-cr0-write-exit-for-lmsw) |
+| QEMU's TCG ends a VMRUN after a failed event injection in #UD | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-ends-a-vmrun-after-a-failed-event-injection-in-ud) |
+| QEMU's TCG raises no nested page fault for reserved bits | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-raises-no-nested-page-fault-for-reserved-bits) |
 | QEMU's intel-iommu leaves CFIS clear when CFI is set | QEMU 10.2.1 | 82 | unreported | [82-assign/upstream.md](82-assign/upstream.md#qemus-intel-iommu-leaves-cfis-clear-when-cfi-is-set) |
 | Mesa's vtest client counts a put's data in words but sends it unpadded | Mesa 26.0.8 | 83 | unreported | [83-testbed/upstream.md](83-testbed/upstream.md#mesas-vtest-client-counts-a-puts-data-in-words-but-sends-it-unpadded) |
 | Debian's virgl-server does not depend on an EGL loader | Debian's virglrenderer 1.1.0-2 | 83 | unreported | [83-testbed/upstream.md](83-testbed/upstream.md#debians-virgl-server-does-not-depend-on-an-egl-loader) |

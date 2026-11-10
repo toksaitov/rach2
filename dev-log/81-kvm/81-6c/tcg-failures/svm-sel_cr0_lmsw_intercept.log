@@ -1,0 +1,12 @@
+enabling apic
+enabling apic
+setup: CPU 1 online
+smp: waiting for 1 APs
+paging enabled
+cr0 = 80010011
+cr3 = 1126000
+cr4 = 20
+NPT detected - running all tests with NPT enabled
+SVM test: sel cr0 lmsw intercept
+FAIL: sel cr0 lmsw intercept
+SUMMARY: 1 tests, 1 unexpected failures
