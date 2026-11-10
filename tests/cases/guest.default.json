@@ -2242,6 +2242,7 @@
         {"assertion_id": "reopen-defaults", "checks": "A new open of the slave has the default termios, ECHO among them.", "source": "program"},
         {"assertion_id": "eperm", "checks": "A process of uid 1000 gets EPERM.", "source": "program"},
         {"assertion_id": "blocked-write", "checks": "A writer started before the vhangup with more bytes than the master's ring holds, which nobody reads, ends with the bytes it wrote or EIO.", "source": "program"},
+        {"assertion_id": "output-flush", "checks": "vhangup discards unread slave output; the master in packet mode reads TIOCPKT_FLUSHWRITE alone, then EAGAIN.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The child exits 0 and the master closes.", "source": "program"}
       ],
       "branches": [],

@@ -214,9 +214,15 @@ Set packet mode from an
 nonzero on, or read it back.
 In packet mode each read of the master begins with a status byte,
 .Dv TIOCPKT_DATA ,
-0, before the slave's output, as screen asks for; Linux also sends the
-byte alone when the slave flushes or stops its output, which this kernel
-does not.
+0, before the slave's output, as screen asks for.
+A slave's
+.Xr vhangup 2
+flushes that output and makes the master readable, with
+.Dv POLLPRI
+as well, for a status byte of
+.Dv TIOCPKT_FLUSHWRITE
+alone.
+Other flushes and output stops send no status byte.
 .It Dv TCFLSH
 With
 .Fa arg

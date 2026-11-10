@@ -22,14 +22,15 @@
 #include "../rtc.h"
 
 /* Linux ioctls. The pty-number requests have the exact values musl uses. */
-#define FIONREAD   0x541B
-#define TIOCGWINSZ 0x5413
-#define TIOCSWINSZ 0x5414
-#define TIOCGPTN   0x80045430 /* master: get the slave index N (arg int*) */
-#define TIOCSPTLCK 0x40045431 /* master: set/clear the slave lock (arg int*, 0 = unlock) */
-#define TIOCPKT    0x5420     /* master: packet mode on or off (arg int*) */
-#define TIOCGPKT   0x80045438 /* master: whether packet mode is on (arg int*) */
-#define TCFLSH     0x540B     /* flush the queues: arg 0 input, 1 output, 2 both */
+#define FIONREAD           0x541B
+#define TIOCGWINSZ         0x5413
+#define TIOCSWINSZ         0x5414
+#define TIOCGPTN           0x80045430 /* master: get the slave index N (arg int*) */
+#define TIOCSPTLCK         0x40045431 /* master: set/clear the slave lock (arg int*, 0 = unlock) */
+#define TIOCPKT_FLUSHWRITE 2
+#define TIOCPKT            0x5420     /* master: packet mode on or off (arg int*) */
+#define TIOCGPKT           0x80045438 /* master: whether packet mode is on (arg int*) */
+#define TCFLSH             0x540B     /* flush the queues: arg 0 input, 1 output, 2 both */
 
 /* O_* flags honored on open (mirror syscall.c / fd.h). */
 #define O_CLOEXEC_FLAG  02000000
@@ -136,6 +137,23 @@ static void wake_master(struct pty *p, uint32_t *from)
     *from = p->m_tail;
 }
 
+/** Discard the slave `t`'s output and report TIOCPKT_FLUSHWRITE to its
+ * master in packet mode, as Linux's pty_flush_buffer. Takes interrupts
+ * off and wakes the master's readers and the slave's writers. */
+static void pty_flush_output(struct tty *t)
+{
+    struct pty *p = t->sink_ctx;
+    uint32_t flags = kirq_save();
+
+    p->m_head = p->m_tail;
+    if (p->packet) {
+        p->pktstatus |= TIOCPKT_FLUSHWRITE;
+        wq_wake(&p->m_read_wq, WQ_DATA);
+    }
+    wq_wake(&t->input_wq, WQ_ROOM);
+    kirq_restore(flags);
+}
+
 /**
  * Allocate a pair at the lowest free index, or return NULL when the heap has
  * no room. One queue serves the master's readers, writers and pollers; the
@@ -159,6 +177,7 @@ static struct pty *pty_alloc(void)
     p->atime = p->mtime = pty_now();
     p->mode = 0620; /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p);
+    p->slave.flush_output = pty_flush_output;
     wait_queue_init(&p->m_read_wq);
     p->slave.space_wq = &p->m_read_wq;
     p->next = ptys;
@@ -174,12 +193,12 @@ static int fd_is_nonblock(fd_entry_t *e)
 
 /* the master end */
 
-/** A master reader can stop blocking: the slave produced output, or every
- * slave descriptor has closed (EOF). */
+/** A master reader can stop blocking: output or packet status is ready,
+ * or every slave descriptor has closed (EOF). */
 static int ptm_readable(void *arg)
 {
     struct pty *p = (struct pty *)arg;
-    return pty_m_avail(p) != 0 || p->slave_opens == 0;
+    return pty_m_avail(p) != 0 || (p->packet && p->pktstatus) || p->slave_opens == 0;
 }
 
 /**
@@ -192,9 +211,9 @@ static int ptm_readable(void *arg)
  * The ring is drained into a stack buffer with interrupts off and copied to
  * user memory, which may fault, after they are restored. In packet mode
  * (TIOCPKT) the bytes follow a status byte, TIOCPKT_DATA, 0, as on Linux,
- * which also sends the byte alone for a flush or a stop of the slave's
- * output; this driver sends only the first kind. Each piece taken from the
- * ring wakes a slave writer waiting for room.
+ * or a pending status byte alone: TIOCPKT_FLUSHWRITE when vhangup flushed
+ * the slave's output. Each piece taken from the ring wakes a slave writer
+ * waiting for room.
  */
 static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -210,7 +229,7 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!user_range_ok((__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
-    while (pty_m_avail(p) == 0) {
+    while (pty_m_avail(p) == 0 && !(p->packet && p->pktstatus)) {
         if (p->hung_up) {
             return -EIO;
         }
@@ -223,6 +242,14 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
         if (wq_wait_event(&p->m_read_wq, ptm_readable, p) < 0) {
             return -EINTR;
         }
+    }
+    if (p->packet && p->pktstatus) {
+        uint32_t flags = kirq_save();
+        uint8_t status = p->pktstatus;
+
+        p->pktstatus = 0;
+        kirq_restore(flags);
+        return copy_to_user((void __user *)buf, &status, 1) != 0 ? -EFAULT : 1;
     }
     to_read = pty_m_avail(p);
     if (to_read > count - lead) {
@@ -351,8 +378,9 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 }
 
 /** Report the master's readiness, all on m_read_wq: POLLIN when the ring has
- * output or every slave has closed, POLLHUP once every slave has closed, and
- * POLLOUT while the slave's discipline has room for a line. */
+ * output or every slave has closed, POLLHUP once every slave has closed,
+ * POLLIN, POLLRDNORM and POLLPRI for pending packet status, and POLLOUT
+ * while the slave's discipline has room for a line. */
 static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -363,6 +391,9 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     }
     if (pty_m_avail(p) != 0 || p->slave_opens == 0) {
         revents |= (short)(events & POLLIN);
+    }
+    if (p->packet && p->pktstatus) {
+        revents |= (short)(events & (POLLIN | POLLRDNORM | POLLPRI));
     }
     if (p->slave_opens == 0) {
         revents |= POLLHUP;
@@ -407,6 +438,9 @@ static int32_t ptm_packet(struct pty *p, uint32_t request, uintptr_t arg)
     }
     if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
         return -EFAULT;
+    }
+    if (on && !p->packet) {
+        p->pktstatus = 0;
     }
     p->packet = on != 0;
     return 0;

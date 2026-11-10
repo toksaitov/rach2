@@ -50,12 +50,13 @@ struct pty {
     /* The master's readers, writers and pollers; the slave's space_wq. */
     wait_queue_t m_read_wq;
 
-    int master_open; /* the master descriptor is open */
-    int slave_opens; /* count of open slave descriptions (distinct OFDs) */
-    int hung_up;     /* every slave description has closed since one opened */
-    int locked;      /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
-    int packet;      /* TIOCPKT: each master read begins with a status byte */
-    int writing;     /* a slave write is in progress, which no other enters */
+    int master_open;   /* the master descriptor is open */
+    int slave_opens;   /* count of open slave descriptions (distinct OFDs) */
+    int hung_up;       /* every slave description has closed since one opened */
+    int locked;        /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
+    int packet;        /* TIOCPKT: each master read begins with a status byte */
+    uint8_t pktstatus; /* pending TIOCPKT_* bits for the next packet read */
+    int writing;       /* a slave write is in progress, which no other enters */
 
     /* Ownership of the slave (/dev/pts/N), the state a login server sets
      * with chown/chmod before handing the terminal to the user. Set at
