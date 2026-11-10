@@ -4,7 +4,7 @@
 # Mem=0MB and 21.6 frames a second on kernel 2cdc3b3b: view-rach2-cave.png
 # The 293 user and 1756 system ticks of /proc/stat in five seconds of the
 # load, the 30 million getrusage calls in 378 seconds and the 29,700
-# comparisons of the count with the walk were read from the runs' consoles
+# comparisons of the count with the walk were read from the runs' outputs
 # in the testing host's copies, which are not committed; 80-6.md holds them.
 
 # Level load times, from each run's Game.log
