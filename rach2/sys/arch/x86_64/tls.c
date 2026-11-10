@@ -287,7 +287,7 @@ long sys_set_thread_area(isr_params_t *params)
  * the entry and descriptor the child is to have, read and checked here in
  * the parent, as set_thread_area checks one, an entry of -1 picking the
  * parent's first empty one, which the child's copy of the entries has
- * empty too. The child's thread pointer stays the parent's.
+ * empty too.
  */
 long ia32_clone_tls(unsigned long uptr, uint32_t *entry, uint64_t *desc)
 {
@@ -295,10 +295,19 @@ long ia32_clone_tls(unsigned long uptr, uint32_t *entry, uint64_t *desc)
 }
 
 /** Give `child`, not yet run, the TLS descriptor `desc` in entry `entry`,
- * which `ia32_clone_tls` made; its first switch writes it into the GDT. */
+ * which `ia32_clone_tls` made. Update the saved base of each selector that
+ * names it, so the first switch keeps the new descriptor's base. */
 void ia32_clone_tls_set(process_t *child, uint32_t entry, uint64_t desc)
 {
+    unsigned int sel = (entry << 3) | 3u;
+
     child->regs.tls[entry - GDT_TLS_MIN] = desc;
+    if (child->regs.fs_sel == sel) {
+        child->tls_base = tls_selector_base(child, sel);
+    }
+    if (child->regs.gs_sel == sel) {
+        child->regs.gs_base = tls_selector_base(child, sel);
+    }
 }
 
 uint32_t ia32_tls_get(const process_t *t, struct user_desc *u)
