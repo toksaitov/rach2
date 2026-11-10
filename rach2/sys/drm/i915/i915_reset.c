@@ -3,7 +3,7 @@
  * reset of a hung engine through its domain of GEN6_GDRST, the whole GPU's
  * when that fails, the guilty request skipped and its context perhaps
  * banned, the requests behind it run again, and the GPU wedged when
- * nothing resets it, after Linux 6.18's gt/intel_reset.c and
+ * nothing resets it, after Linux 6.12's gt/intel_reset.c and
  * gt/intel_ring_submission.c on Haswell.
  */
 

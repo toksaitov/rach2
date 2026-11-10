@@ -3023,10 +3023,10 @@ int intel_panel_get_modes(struct drm_i915_private *i915, struct drm_connector *c
 
 /**
  * Set `cfg`'s fitter for a pipe source of `src_w` by `src_h` shown in its
- * `mode`, Linux 6.18's pch_panel_fitting: none for a source of the mode's
+ * `mode`, Linux 6.12's pch_panel_fitting: none for a source of the mode's
  * size, else a window by `scaling_mode`, DRM_MODE_SCALE_*. 0, -EINVAL for
  * a window or source the fitter of `pipe` cannot take, or -ERANGE for a
- * scale down past 1.125.
+ * scale down past 1.125, by 6.18's checks, which 6.12 lacks.
  */
 int32_t intel_pfit_compute_config(int pipe, uint32_t scaling_mode, struct intel_crtc_config *cfg);
 
@@ -3490,7 +3490,7 @@ void i915_requests_cancel(struct drm_i915_private *i915);
 
 /*
  * Hang detection, reset and the error state (i915_hangcheck.c,
- * i915_reset.c, i915_gpu_error.c), after Linux 6.18's
+ * i915_reset.c, i915_gpu_error.c), after Linux 6.12's
  * gt/intel_engine_heartbeat.c, gt/intel_reset.c, gt/intel_ring_submission.c
  * and i915_gpu_error.c on Haswell. Every call is made under the big kernel
  * lock, in process context.

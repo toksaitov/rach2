@@ -1,7 +1,9 @@
 /*
- * intel_pfit.c: a Haswell pipe's panel fitter, after Linux 6.18's
- * display/intel_pfit.c for a PCH split display: the window a user's mode
- * is scaled into on the panel's fixed mode, its limits, and its registers.
+ * intel_pfit.c: a Haswell pipe's panel fitter, after Linux 6.12's
+ * pch_panel_fitting (display/intel_panel.c) and ilk_pfit_enable and
+ * ilk_pfit_disable (intel_display.c) for a PCH split display: the window a
+ * user's mode is scaled into on the panel's fixed mode, its limits, and
+ * its registers.
  */
 
 #include "i915.h"
@@ -30,10 +32,12 @@ struct pf_win {
     int32_t x, y, w, h;
 };
 
-/** Linux's checks of a fitter's window `win` (intel_pch_pfit_check_*):
- * centred on the pipe, not at x 1, a source the fitter of `pipe` takes, a
- * scale down within its limit and at least 7 lines. 0, -EINVAL or
- * -ERANGE. */
+/** Linux 6.18's checks of a fitter's window `win`
+ * (display/intel_pfit.c, intel_pch_pfit_check_*): centred on the pipe, not
+ * at x 1, a source the fitter of `pipe` takes, a scale down within its
+ * limit and at least 7 lines. 0, -EINVAL or -ERANGE. 6.12 has none of
+ * them and programs a window the fitter cannot scale; these refuse it at
+ * the check, as Bspec limits the fitter. */
 static int32_t pfit_check(int pipe, const struct drm_mode_modeinfo *m, int32_t src_w, int32_t src_h,
                           const struct pf_win *win)
 {
