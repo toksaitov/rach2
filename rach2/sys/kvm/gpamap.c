@@ -112,7 +112,8 @@ static const struct mmn_ops map_ops = {map_invalidate};
 
 /** Check the runs and count their pages and the parts the slots cut them
  * into: 0 with the counts in `*pages` and `*parts`, -EINVAL or -EFAULT as
- * `kvm_gpamap_new` says. */
+ * `kvm_gpamap_new` says, or -ENOMEM when the parts would reach 2^32 - 1,
+ * more than `nruns` counts. */
 static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n,
                        uint64_t *pages, uint32_t *parts)
 {
@@ -203,7 +204,7 @@ int kvm_gpamap_new(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n
     if (n == 0) {
         return -EINVAL;
     }
-    if (!mm) {
+    if (!mm || !mm->dir) {
         return -EFAULT;
     }
     rc = count_parts(vm, runs, n, &pages, &parts);
