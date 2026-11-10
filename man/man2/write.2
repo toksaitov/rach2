@@ -469,7 +469,8 @@ was given
 .Dv RWF_NOAPPEND
 on an append-only file, or a write to a memfd sealed with
 .Dv F_SEAL_GROW
-would pass its end with no whole page before it.
+would pass its end with no byte of the write before the last page
+boundary at or below that end.
 .It Er EPIPE
 A pipe has no reader, or a stream socket can no longer send and has
 no recorded error.
