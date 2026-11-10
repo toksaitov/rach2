@@ -293,10 +293,10 @@ static int i686(struct net_case *u)
     static const struct driven mouse = {"mouse", pointer, "EVPROBE: move the mouse", "EVPROBE OK",
                                         ev_mouse};
     const char *modetest[] = {"/bin/bash", "-c",
-                              "set -e; python3 " PROBE " kill; d=/dev/dri/card0; "
-                              "modetest -D $d -c </dev/null; "
-                              "c=$(modetest -D $d -c </dev/null | awk '$3 == \"connected\" "
-                              "{ print $1; exit }'); modetest -D $d -s \"$c:1024x768\" </dev/null",
+                              "set -e; python3 " PROBE " kill; m=bochs-drm; "
+                              "modetest -M $m -c </dev/null; "
+                              "c=$(modetest -M $m -c </dev/null | awk '$3 == \"connected\" "
+                              "{ print $1; exit }'); modetest -M $m -s \"$c:1024x768\" </dev/null",
                               NULL};
     struct net_boot b;
 
