@@ -532,14 +532,15 @@ static void run_post(struct kvm_vcpu *v)
     run->flags = 0;
 }
 
-/** Give the backend the caller's answer to the read of the last exit: the
- * IN's bytes from the port I/O page, or the MMIO read's from the run page. */
+/** Give the backend the caller's answer to the read of the last exit, the
+ * IN's bytes from the port I/O page or the MMIO read's from the run page,
+ * or the news that the caller has written the last exit's OUT. */
 static void run_complete(struct kvm_vcpu *v)
 {
     struct kvm_exit *ex = &v->exit;
     uint32_t n;
 
-    if (ex->kind == KVM_X_IO) {
+    if (ex->kind == KVM_X_IO && ex->io.direction == KVM_EXIT_IO_IN) {
         n = ex->io.count * ex->io.size;
         k_memcpy(ex->data, v->pio, n < sizeof(ex->data) ? n : sizeof(ex->data));
     } else if (ex->kind == KVM_X_MMIO) {
@@ -561,14 +562,19 @@ static int32_t run_exit(struct kvm_vcpu *v)
     struct kvm_run *run = v->run;
     struct kvm_exit *ex = &v->exit;
     uint32_t n;
-    int r;
+    int r, out;
 
     switch (ex->kind) {
     case KVM_X_AGAIN:
         return 0;
     case KVM_X_IO:
         v->stat[KVM_VCPU_STAT_IO_EXITS]++;
-        if (kvm_irq_io(v) || (ex->io.direction == KVM_EXIT_IO_OUT && kvm_iobus_write(v))) {
+        out = ex->io.direction == KVM_EXIT_IO_OUT;
+        if (kvm_irq_io(v) || (out && kvm_iobus_write(v))) {
+            /* A device in the kernel took the OUT: it is done. */
+            if (out && kvm_backend->complete) {
+                kvm_backend->complete(v);
+            }
             return 0;
         }
         run->exit_reason = KVM_EXIT_IO;
@@ -578,11 +584,10 @@ static int32_t run_exit(struct kvm_vcpu *v)
         if (n > 4096u) {
             n = 4096u;
         }
-        if (ex->io.direction == KVM_EXIT_IO_OUT) {
+        if (out) {
             k_memcpy(v->pio, ex->data, n);
-        } else {
-            v->pending = 1;
         }
+        v->pending = 1;
         return 1;
     case KVM_X_MMIO:
         if (kvm_lapic_mmio(v) || kvm_irq_io(v) || (ex->mmio.is_write && kvm_iobus_write(v))) {
