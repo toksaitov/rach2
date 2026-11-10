@@ -29,7 +29,10 @@
  * EINVAL, and madvise and msync fail with EINVAL for a length that would round
  * up to 0; an i386 program on the x86-64 kernel cannot give such a length,
  * and its 4 GiB less one is ENOMEM, as Linux's compat calls find no region
- * past the program's 4 GiB. A write through
+ * past the program's 4 GiB. mprotect over a hole fails with ENOMEM and
+ * keeps the change of the page before it, accepts PROT_SEM and
+ * PROT_GROWSDOWN over the stack, and refuses PROT_GROWSDOWN elsewhere and
+ * PROT_GROWSUP with EINVAL. A write through
  * /proc/self/mem to a read-only page a fork shared leaves the page read-only.
  * On an ext2 root, through a shared mapping of a file the parent sees a
  * child's store, read(2) sees a store, the mapping sees a write(2) without
@@ -64,6 +67,7 @@
 #include <fcntl.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -182,6 +186,8 @@ static const char *const assertion_id[] = {"private-file",
                                            "advice-einval",
                                            "madvise-zero-einval",
                                            "msync-zero-einval",
+                                           "protect-gap-prefix",
+                                           "protect-grows",
                                            "forced-mmap",
                                            "forced-fork-mprotect",
                                            "forced-proc-mem",
@@ -823,6 +829,57 @@ static int advice(void)
     return 0;
 }
 
+#ifndef PROT_SEM
+#define PROT_SEM 0x8
+#endif
+
+/**
+ * Check that mprotect changes the regions of its range one after another
+ * and keeps the change of those before a page no region holds, failing
+ * with ENOMEM, as Linux does, and that it accepts PROT_SEM, and
+ * PROT_GROWSDOWN over the main stack alone, and refuses PROT_GROWSUP and
+ * the two together with EINVAL. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int protect_stops(void)
+{
+    char *m = mmap(NULL, 3 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *stack = (char *)((uintptr_t)&m & ~(uintptr_t)(PAGE - 1));
+    int status;
+    pid_t pid;
+
+    if (m == MAP_FAILED || munmap(m + PAGE, PAGE) != 0) {
+        return fail("mmap and munmap for mprotect");
+    }
+    m[0] = 'p';
+    m[2 * PAGE] = 'p';
+    if (mprotect(m, 3 * PAGE, PROT_READ) != -1 || errno != ENOMEM) {
+        return fail("mprotect over a hole did not fail with ENOMEM");
+    }
+    pid = fork();
+    if (pid == 0) {
+        m[0] = 'q';
+        _exit(0);
+    }
+    m[2 * PAGE] = 'q';
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGSEGV || m[0] != 'p') {
+        return fail("mprotect over a hole left the page before it writable");
+    }
+    row_held();
+    if (mprotect(m + 2 * PAGE, PAGE, PROT_READ | PROT_WRITE | PROT_SEM) != 0 ||
+        mprotect(m + 2 * PAGE, PAGE, PROT_READ | PROT_GROWSDOWN) != -1 || errno != EINVAL ||
+        mprotect(m + 2 * PAGE, PAGE, PROT_READ | PROT_GROWSUP) != -1 || errno != EINVAL ||
+        mprotect(m + 2 * PAGE, PAGE, PROT_READ | PROT_GROWSDOWN | PROT_GROWSUP) != -1 ||
+        errno != EINVAL || mprotect(stack, PAGE, PROT_READ | PROT_WRITE | PROT_GROWSDOWN) != 0) {
+        return fail("mprotect with PROT_SEM, PROT_GROWSDOWN or PROT_GROWSUP");
+    }
+    m[2 * PAGE] = 'r';
+    row_held();
+    munmap(m, 3 * PAGE);
+    return 0;
+}
+
 /* Where `on_segv` returns to, set by `forced_write` around its store. */
 static sigjmp_buf segv_jump;
 
@@ -1143,8 +1200,8 @@ int main(int argc, char **argv)
     }
     report_start();
     if (private_file() || shared() || root_shared() || truncated_shared() || truncated_wide() ||
-        huge_walks() || readonly_shared() || offsets() || remaps() || advice() || forced_write() ||
-        remap_limit() || exec_segments()) {
+        huge_walks() || readonly_shared() || offsets() || remaps() || advice() || protect_stops() ||
+        forced_write() || remap_limit() || exec_segments()) {
         return 1;
     }
     report_end();
