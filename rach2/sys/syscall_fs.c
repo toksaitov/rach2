@@ -4653,110 +4653,207 @@ int32_t fs_clone_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
 #define XATTR_LINK   1 /* a path, the link itself */
 #define XATTR_FD     2 /* a descriptor */
 
-/**
- * An extended attribute call on the file the first argument names, as a
- * path or as a descriptor by `how`, which returns `result` once the file is
- * found.
- *
- * No file system here stores extended attributes, and Linux answers for a
- * file system built without them: get, set and remove fail with
- * -EOPNOTSUPP and a list is empty. The name is resolved first, so a missing
- * file is -ENOENT and a bad descriptor -EBADF, as there; `cp -a`, `tar` and
- * `rsync -X` read -EOPNOTSUPP as a file system without attributes and go on.
- */
-static int32_t xattr_call(isr_params_t *params, int how, int32_t result)
+/* Private user-copy state for one attribute call. */
+struct xattr_args {
+    struct vfs_xattr attr;
+    char name[256];    /* Linux's full name limit, with its NUL */
+    void __user *user; /* the caller's value or list buffer */
+};
+
+/** Resolve an attribute path or hold its descriptor's node.
+ * Returns 0 with a held ref, 1 for a descriptor outside the VFS, or -errno. */
+static int xattr_ref(isr_params_t *params, int how, struct vfs_ref *ref)
 {
-    const char __user *upath = (const char __user *)SC_ARG(params, 0);
-    struct vfs_ref ref;
     fd_entry_t *e;
     char *path;
-    int dir;
-    int32_t rc;
+    int dir, rc;
 
-    if (!current_proc) {
-        return -ESRCH;
-    }
     if (how == XATTR_FD) {
         e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
-        return !e || (e->flags & FD_FLAG_PATH) ? -EBADF : result;
-    }
-    if (!upath) {
-        return -EFAULT;
-    }
-    rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);
-    if (rc != 0) {
+        if (!e || (e->flags & FD_FLAG_PATH))
+            return -EBADF;
+        if (!e->ofd || !e->ofd->vmnt)
+            return 1;
+        ref->mnt = e->ofd->vmnt;
+        ref->node = e->ofd->vnode;
+        rc = vfs_enter(ref->mnt);
+        if (!rc)
+            vfs_ref_hold(ref);
         return rc;
     }
-    rc = resolve_named(path_name(path), how == XATTR_LINK ? VFS_WALK_NOFOLLOW : 0, dir, &ref);
+    rc = path_from_user_dir(AT_FDCWD, (const char __user *)SC_ARG(params, 0), &path, &dir);
+    if (rc)
+        return rc;
+    rc = resolve_named(path_name(path), how == XATTR_LINK ? VFS_WALK_NOFOLLOW : 0, dir, ref);
     path_buf_put(path);
-    if (rc != 0) {
-        return rc;
-    }
-    vfs_ref_release(&ref);
-    return result;
+    return rc;
 }
 
-/** The twelve extended attribute calls, setxattr to fremovexattr in Linux's
- * order, each by `xattr_call`: set, get and remove are -EOPNOTSUPP and a
- * list is empty, 0, once the file is found. */
+/** Copy a call's arguments into kernel memory before taking a file lock.
+ * The caller zeroes `a`, sets its operation, and frees attr.value on every
+ * return. Empty SET values still have a non-NULL kernel buffer. */
+static int xattr_args(isr_params_t *params, struct xattr_args *a)
+{
+    struct vfs_xattr *arg = &a->attr;
+    uintptr_t size;
+    int rc;
+
+    if (arg->op != VFS_XATTR_LIST) {
+        rc = strncpy_from_user(a->name, (const char __user *)SC_ARG(params, 1), sizeof(a->name));
+        if (rc < 0)
+            return rc == -ENAMETOOLONG ? -ERANGE : rc;
+        if (!rc)
+            return -ERANGE;
+        arg->name = a->name;
+    }
+    if (arg->op == VFS_XATTR_SET) {
+        arg->flags = (int)SC_ARG(params, 4);
+        if (arg->flags & ~3)
+            return -EINVAL;
+    }
+    if (arg->op == VFS_XATTR_REMOVE)
+        return 0;
+    a->user = (void __user *)(arg->op == VFS_XATTR_LIST ? SC_ARG(params, 1) : SC_ARG(params, 2));
+    size = arg->op == VFS_XATTR_LIST ? SC_ARG(params, 2) : SC_ARG(params, 3);
+    if (size > 65536 && arg->op == VFS_XATTR_SET)
+        return -E2BIG;
+    arg->size = size > 65536 ? 65536 : (uint32_t)size;
+    arg->value = kmalloc(arg->size ? arg->size : 1);
+    if (!arg->value)
+        return -ENOMEM;
+    if (arg->op == VFS_XATTR_SET && arg->size && copy_from_user(arg->value, a->user, arg->size))
+        return -EFAULT;
+    return 0;
+}
+
+/** Check Linux's user namespace rules under the inode lock.
+ * Only regular files and directories take user values; a sticky directory
+ * permits its owner or a privileged caller to change them. */
+static int xattr_access(const struct vfs_ref *ref, const struct vfs_xattr *arg)
+{
+    struct vfs_stat st;
+    int rc;
+
+    if (arg->op == VFS_XATTR_LIST ||
+        !(arg->name[0] == 'u' && arg->name[1] == 's' && arg->name[2] == 'e' &&
+          arg->name[3] == 'r' && arg->name[4] == '.'))
+        return 0;
+    rc = vfs_getattr(ref->mnt, ref->node, &st);
+    if (rc)
+        return rc;
+    if ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)
+        return arg->op >= VFS_XATTR_SET ? -EPERM : -ENODATA;
+    if (arg->op >= VFS_XATTR_SET && (st.mode & 01000u) && (st.mode & 0170000u) == 0040000u &&
+        current_proc->euid != st.uid && !proc_privileged(current_proc))
+        return -EPERM;
+    return cred_access_ref(ref, arg->op >= VFS_XATTR_SET ? CRED_W : CRED_R, 0);
+}
+
+/** Dispatch an attribute call with copies outside the inode lock.
+ * Unsupported types retain their empty LIST and -EOPNOTSUPP answers. */
+static int32_t xattr_call(isr_params_t *params, int how, int op)
+{
+    struct vfs_ref ref;
+    struct xattr_args a;
+    int rc;
+
+    if (!current_proc)
+        return -ESRCH;
+    rc = xattr_ref(params, how, &ref);
+    if (rc)
+        return rc == 1 ? (op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP) : rc;
+    if (!ref.mnt->type->ops->xattr) {
+        vfs_ref_release(&ref);
+        return op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP;
+    }
+    k_memset(&a, 0, sizeof(a));
+    a.attr.op = op;
+    rc = xattr_args(params, &a);
+    if (!rc) {
+        vfs_node_lock(&ref);
+        rc = xattr_access(&ref, &a.attr);
+        if (!rc)
+            rc = vfs_xattr(ref.mnt, ref.node, &a.attr);
+        vfs_node_unlock(&ref);
+        if (rc > 0 && a.attr.size && op <= VFS_XATTR_LIST &&
+            copy_to_user(a.user, a.attr.value, (uint32_t)rc))
+            rc = -EFAULT;
+    }
+    kfree(a.attr.value);
+    vfs_ref_release(&ref);
+    return rc;
+}
+
+/** Linux's setxattr, dispatched through the VFS attribute operation. */
 long sys_setxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_FOLLOW, VFS_XATTR_SET);
 }
 
+/** Linux's lsetxattr, dispatched through the VFS attribute operation. */
 long sys_lsetxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_LINK, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_LINK, VFS_XATTR_SET);
 }
 
+/** Linux's fsetxattr, dispatched through the VFS attribute operation. */
 long sys_fsetxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FD, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_FD, VFS_XATTR_SET);
 }
 
+/** Linux's getxattr, dispatched through the VFS attribute operation. */
 long sys_getxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_FOLLOW, VFS_XATTR_GET);
 }
 
+/** Linux's lgetxattr, dispatched through the VFS attribute operation. */
 long sys_lgetxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_LINK, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_LINK, VFS_XATTR_GET);
 }
 
+/** Linux's fgetxattr, dispatched through the VFS attribute operation. */
 long sys_fgetxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FD, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_FD, VFS_XATTR_GET);
 }
 
+/** Linux's listxattr, dispatched through the VFS attribute operation. */
 long sys_listxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FOLLOW, 0);
+    return xattr_call(params, XATTR_FOLLOW, VFS_XATTR_LIST);
 }
 
+/** Linux's llistxattr, dispatched through the VFS attribute operation. */
 long sys_llistxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_LINK, 0);
+    return xattr_call(params, XATTR_LINK, VFS_XATTR_LIST);
 }
 
+/** Linux's flistxattr, dispatched through the VFS attribute operation. */
 long sys_flistxattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FD, 0);
+    return xattr_call(params, XATTR_FD, VFS_XATTR_LIST);
 }
 
+/** Linux's removexattr, dispatched through the VFS attribute operation. */
 long sys_removexattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_FOLLOW, VFS_XATTR_REMOVE);
 }
 
+/** Linux's lremovexattr, dispatched through the VFS attribute operation. */
 long sys_lremovexattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_LINK, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_LINK, VFS_XATTR_REMOVE);
 }
 
+/** Linux's fremovexattr, dispatched through the VFS attribute operation. */
 long sys_fremovexattr(isr_params_t *params)
 {
-    return xattr_call(params, XATTR_FD, -EOPNOTSUPP);
+    return xattr_call(params, XATTR_FD, VFS_XATTR_REMOVE);
 }
 
 /**

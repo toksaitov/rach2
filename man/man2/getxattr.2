@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 10, 2026
 .Dt GETXATTR 2
 .Os
 .Sh NAME
@@ -6,7 +6,7 @@
 .Nm setxattr ,
 .Nm listxattr ,
 .Nm removexattr
-.Nd extended attributes, which no file system here stores
+.Nd read and change extended attributes
 .Sh SYNOPSIS
 .In sys/xattr.h
 .Ft ssize_t
@@ -20,17 +20,61 @@
 .Sh DESCRIPTION
 An extended attribute is a name and a value kept with a file outside its
 data.
-No file system on Rach2 stores them, and these calls answer as Linux does
-for a file system built without them:
-.Fn getxattr ,
-.Fn setxattr
-and
-.Fn removexattr
-fail with
-.Er EOPNOTSUPP ,
-and
+The ext2 file system stores attributes whose names begin with
+.Li user.
+on regular files and directories.
+A value is an arbitrary sequence of bytes, including an empty sequence.
+An attribute name is at most 255 bytes, not counting its terminating NUL.
+All names, values and their format overhead must fit one file-system block.
+Other namespaces fail with
+.Er EOPNOTSUPP .
+Other file systems return an empty list and fail the other operations with
+.Er EOPNOTSUPP .
+.Pp
+.Fn getxattr
+returns the value's length and copies its bytes to
+.Fa value .
 .Fn listxattr
-returns 0, an empty list.
+returns the list's length and copies the names, each terminated by NUL.
+For either call, a
+.Fa size
+of zero asks for the length alone; a nonzero buffer too small fails with
+.Er ERANGE .
+.Pp
+.Fn setxattr
+creates or replaces an attribute.
+With
+.Dv XATTR_CREATE
+(1), an existing name fails with
+.Er EEXIST ;
+with
+.Dv XATTR_REPLACE
+(2), a missing name fails with
+.Er ENODATA .
+With both flags, an existing name is
+.Er EEXIST
+and a missing name
+.Er ENODATA .
+.Fn removexattr
+removes an existing name, or fails with
+.Er ENODATA .
+.Pp
+Reading a user attribute requires read permission, and changing one requires
+write permission.
+Only a sticky directory's owner or a privileged caller may change its
+attributes.
+User attributes on a symbolic link or a special file fail with
+.Er ENODATA
+when read and
+.Er EPERM
+when changed.
+A change on an immutable or append-only inode fails with
+.Er EPERM ;
+a read-only mount fails with
+.Er EROFS .
+A successful change updates the change time and reports
+.Dv IN_ATTRIB
+to inotify.
 .Pp
 Each call first finds the file, so a path that names nothing fails as it
 would for
@@ -54,32 +98,24 @@ The i386 system call numbers are 226 to 237: set, get, list and remove,
 each as the path, link and descriptor forms in that order.
 On x86-64 they are 188 to 199, in the same order.
 .Sh RETURN VALUES
+.Fn getxattr
+and
 .Fn listxattr
-returns 0.
-The others return -1 with
+return a byte count.
+.Fn setxattr
+and
+.Fn removexattr
+return 0.
+A failure returns -1 with
 .Va errno
 set; the kernel returns the negative error number.
-.Sh EXAMPLES
-GNU
-.Xr cp 1
-with
-.Fl a ,
-.Xr tar 1
-with
-.Fl -xattrs
-and
-.Xr setfattr 1
-reach these calls; the first two take
-.Er EOPNOTSUPP
-to mean a file system without attributes and go on.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EBADF
 The descriptor is not open, or was opened with
 .Dv O_PATH .
 .It Bq Er EFAULT
-.Fa path
-is not readable.
+A path, name or nonempty value buffer is inaccessible.
 .It Bq Er ENOENT
 .Fa path
 names nothing.
@@ -88,7 +124,31 @@ A directory in
 .Fa path
 is not a directory.
 .It Bq Er EOPNOTSUPP
-The file system stores no extended attributes, which is every one here.
+The file system or namespace stores no extended attributes.
+.It Bq Er EINVAL
+Unknown flags, or an empty name after
+.Li user. .
+.It Bq Er ENODATA
+The requested attribute does not exist.
+.It Bq Er EEXIST
+.Dv XATTR_CREATE
+found an existing attribute.
+.It Bq Er ERANGE
+A name exceeds 255 bytes or an output buffer is too small.
+.It Bq Er E2BIG
+A set value exceeds 65536 bytes.
+.It Bq Er ENOSPC
+The attributes do not fit a block, or no free block holds a replacement.
+.It Bq Er EACCES
+The file's permissions deny the operation.
+.It Bq Er EPERM
+The file's type, sticky bit or inode flags forbid the change.
+.It Bq Er EROFS
+The mount is read-only.
+.It Bq Er EIO
+An attribute block is malformed or a disk request failed.
+.It Bq Er ENOMEM
+There is no memory for private buffers.
 .El
 .Sh SEE ALSO
 .Xr stat 2 ,

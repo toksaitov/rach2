@@ -41,6 +41,7 @@
  */
 
 #include "ext2.h"
+#include "ext2xattr.h"
 
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -8309,6 +8310,127 @@ static int admit_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, u
     return rc;
 }
 
+/** Read a node's external attribute block into a private checked copy.
+ * The node is locked; NULL in `*out` means no block. Returns 0 or -errno. */
+static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
+{
+    int rc;
+
+    *out = NULL;
+    if (!n->file_acl)
+        return 0;
+    if (!data_block_ok(em, n->file_acl)) {
+        mark_error(em);
+        return -EIO;
+    }
+    *out = kmalloc(em->block_size);
+    if (!*out)
+        return -ENOMEM;
+    rc = read_bytes(em, (uint64_t)n->file_acl * em->block_size, *out, em->block_size);
+    if (!rc)
+        rc = ext2_xattr_check(*out, em->block_size);
+    if (rc == -EIO)
+        mark_error(em);
+    return rc;
+}
+
+/** Replace an inode's attribute block without changing a shared block.
+ * The node is locked. Allocation and contents reach disk before the inode;
+ * the old block's reference goes only after the inode is durable, on every
+ * mount. A failed write leaves allocated blocks for e2fsck, never reuses a
+ * block an uncertain inode write may name. Returns 0 or -errno. */
+static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_t *raw,
+                        int nonempty)
+{
+    struct ext2_mount *em = em_of(mnt);
+    uint32_t old = n->file_acl, fresh = 0;
+    uint8_t feature[4];
+    int rc;
+
+    if (!old && nonempty && n->blocks > 0xFFFFFFFFu - em->block_size / 512)
+        return -EFBIG;
+    rc = assert_writable(mnt, em);
+    if (!rc)
+        rc = writeback_drain(em);
+    if (!rc && nonempty)
+        rc = alloc_block(em, old, &fresh);
+    if (!rc)
+        rc = em_write_out(mnt);
+    if (!rc && nonempty)
+        rc = write_owned(em, n->ino, (uint64_t)fresh * em->block_size, raw, em->block_size,
+                         WRITE_DURABLE);
+    if (!rc && nonempty) {
+        meta_lock(em);
+        em->compat |= 8u; /* EXT2_FEATURE_COMPAT_EXT_ATTR precedes i_file_acl. */
+        LE32_PUT(feature, em->compat);
+        rc = write_bytes(em, 1024 + 92, feature, 4, WRITE_DURABLE);
+        meta_unlock(em);
+    }
+    if (rc)
+        return rc;
+    n->file_acl = fresh;
+    n->blocks += (fresh != 0 ? em->block_size / 512 : 0);
+    n->blocks -= (old != 0 ? em->block_size / 512 : 0);
+    stamp(n, T_CTIME);
+    rc = inode_write(em, n, 0, WRITE_DURABLE);
+    if (rc)
+        return rc;
+    if (old) {
+        uint32_t g = (old - em->first_data) / em->bpg;
+        group_fetch(em, old);
+        block_fetch(em, (uint64_t)old * em->block_size);
+        meta_lock(em);
+        rc = attr_release(em, n->ino, old);
+        node_share(n, le32(em->gd + g * 32));
+        node_share(n, em->first_data + 1 + (g * 32) / em->block_size);
+        meta_unlock(em);
+    }
+    if (!rc)
+        rc = em_write_out(mnt);
+    return rc;
+}
+
+/** The extended attribute operation, admitted and locked for shutdown.
+ * Kernel buffers only; user. attributes of regular files and directories
+ * are supported. Other namespaces return -EOPNOTSUPP. */
+static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
+{
+    int op = arg->op;
+    const char *name = arg->name;
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = node;
+    uint8_t *raw = NULL, *out = NULL;
+    uint32_t type = n->mode & S_IFMT_;
+    int rc;
+
+    if (op != VFS_XATTR_LIST && (!name || k_strlen(name) < 5 || name[0] != 'u' || name[1] != 's' ||
+                                 name[2] != 'e' || name[3] != 'r' || name[4] != '.'))
+        return -EOPNOTSUPP;
+    if (op != VFS_XATTR_LIST && !name[5])
+        return -EINVAL;
+    if (op != VFS_XATTR_LIST && type != S_IFREG_ && type != S_IFDIR_)
+        return op >= VFS_XATTR_SET ? -EPERM : -ENODATA;
+    em_enter_node(em, n);
+    rc = attr_read(em, n, &raw);
+    if (!rc && op <= VFS_XATTR_LIST)
+        rc = ext2_xattr_read(raw, em->block_size, name ? name + 5 : NULL, arg->value, arg->size);
+    else if (!rc) {
+        out = kmalloc(em->block_size);
+        if (out) {
+            struct vfs_xattr edit = *arg;
+            edit.name += 5;
+            rc = ext2_xattr_edit(raw, out, em->block_size, &edit);
+        } else
+            rc = -ENOMEM;
+        if (rc >= 0)
+            rc = attr_replace(mnt, n, out, rc);
+    }
+    kfree(raw);
+    kfree(out);
+    em_finish_node(em, n);
+    return rc;
+}
+
 static const struct vfs_ops ext2_ops = {
     ext2_lookup,
     0, /* lookup_rest */
@@ -8346,6 +8468,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_lock_node,
     ext2_unlock_node,
     ext2_shutdown,
+    ext2_xattr,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1};

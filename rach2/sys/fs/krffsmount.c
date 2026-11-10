@@ -1263,6 +1263,7 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* lock_node */
     0, /* unlock_node */
     0, /* shutdown */
+    0, /* xattr */
 };
 
 /**

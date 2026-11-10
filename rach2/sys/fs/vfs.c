@@ -2732,6 +2732,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* lock_node */
     0,                           /* unlock_node */
     0,                           /* shutdown */
+    0,                           /* xattr */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -3310,6 +3311,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* lock_node */
     0, /* unlock_node */
     0, /* shutdown */
+    0, /* xattr */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -3349,6 +3351,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* lock_node */
     0, /* unlock_node */
     0, /* shutdown */
+    0, /* xattr */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -3388,6 +3391,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* lock_node */
     0, /* unlock_node */
     0, /* shutdown */
+    0, /* xattr */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
@@ -5022,4 +5026,25 @@ void vfs_root_clear(struct process *p)
 void vfs_cwd_clear(struct process *p)
 {
     vfs_cwd_set(p, 0, 0);
+}
+
+int vfs_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
+{
+    struct vfs_stat st;
+    int rc;
+
+    if (vfs_mount_gone(mnt))
+        return -EIO;
+    if (!mnt->type->ops->xattr)
+        return arg->op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP;
+    if (arg->op >= VFS_XATTR_SET) {
+        if (mount_rdonly(mnt))
+            return -EROFS;
+        if (guard_node(mnt, node))
+            return -EPERM;
+    }
+    rc = mnt->type->ops->xattr(mount_base(mnt), node, arg);
+    if (rc == 0 && arg->op >= VFS_XATTR_SET && inotify_watches && watched_node(mnt, node, &st) == 0)
+        inotify_file(mnt, st.ino, IN_ATTRIB);
+    return rc;
 }

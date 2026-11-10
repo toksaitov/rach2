@@ -57,6 +57,7 @@ C_SRC_SHARED = kernel.c \
     sys/fs/fatcommon.c \
     sys/fs/exfat.c \
     sys/fs/ext2.c \
+    sys/fs/ext2xattr.c \
     sys/block/mbr.c \
     sys/block/gpt.c \
     sys/block/usbdisk.c \

@@ -571,6 +571,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* lock_node */
     0, /* unlock_node */
     0, /* shutdown */
+    0, /* xattr */
 };
 
 /** The number at the start of `s` in `base`, 8 or 10, its end in `*end`. */
