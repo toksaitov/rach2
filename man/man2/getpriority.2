@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 11, 2026
 .Dt GETPRIORITY 2
 .Os
 .Sh NAME
@@ -51,10 +51,11 @@ sets the nice value of each selected thread to
 clamped to the range -20 through 19.
 A caller with effective user ID 0 may change any thread.
 Any other caller may change a thread only when its effective user ID
-equals that thread's real or effective user ID, and may only raise the
-nice value, since it may not raise a thread's priority; with a resource
-limit on the nice value of 0, the Linux default, the same rules hold on
-Linux.
+equals that thread's real or effective user ID, and may lower the nice
+value only as far as the thread's
+.Dv RLIMIT_NICE
+allows, 20 less its soft value, as on Linux; at the default of 0 it may
+only raise it.
 When some selected threads may not be changed, the others are changed
 and the call fails with the error of the last refusal.
 .Pp
@@ -83,11 +84,11 @@ as
 .Xr ia32 7
 describes: it adds the increment in EBX, held to -40 through 40, to the
 caller's nice value, which stays within -20 to 19, and returns 0.
-A negative increment without privilege fails with
-.Er EPERM ,
-as on Linux with its default
+A negative increment to a value
 .Dv RLIMIT_NICE
-of 0.
+does not allow fails without privilege with
+.Er EPERM ,
+as on Linux, whose default of 0 allows none.
 The i686 kernel has no
 .Nm nice ;
 musl implements
@@ -119,7 +120,10 @@ process and a lower nice value of its own.
 .Sh ERRORS
 .Bl -tag -width "[EACCES]"
 .It Bq Er EACCES
-A caller without effective user ID 0 asked to lower a nice value.
+A caller without effective user ID 0 asked to lower a nice value past
+what the thread's
+.Dv RLIMIT_NICE
+allows.
 .It Bq Er EINVAL
 .Fa which
 is none of the three.

@@ -21,8 +21,11 @@
  * SCHED_RESET_ON_FORK, and a deadline thread without it may not fork.
  * sched_rr_get_interval must give 0 for SCHED_FIFO and SCHED_DEADLINE. A
  * child that has dropped root must be refused with EPERM what Linux refuses
- * without CAP_SYS_NICE. The other refusals are EINVAL, EOPNOTSUPP for the
- * utilization clamps, as from a kernel built without them, and ESRCH.
+ * without CAP_SYS_NICE. RLIMIT_NICE and RLIMIT_RTPRIO must read 0, and a
+ * child that has raised them before dropping root must be given the nice
+ * values and real-time priorities they allow, and no more. The other
+ * refusals are EINVAL, EOPNOTSUPP for the utilization clamps, as from a
+ * kernel built without them, and ESRCH.
  *
  * The probe writes etude's report records (probe_report.h) for the case
  * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
@@ -43,6 +46,8 @@
 #define SYS_SCHED_GETAFFINITY     204
 #define SYS_SCHED_SETATTR         314
 #define SYS_SCHED_GETATTR         315
+#define SYS_SETPRIORITY           141
+#define SYS_PRLIMIT64             302
 #else
 #define SYS_SCHED_SETPARAM        154
 #define SYS_SCHED_GETPARAM        155
@@ -52,7 +57,12 @@
 #define SYS_SCHED_GETAFFINITY     242
 #define SYS_SCHED_SETATTR         351
 #define SYS_SCHED_GETATTR         352
+#define SYS_SETPRIORITY           97
+#define SYS_PRLIMIT64             340
 #endif
+
+#define RLIMIT_NICE   13
+#define RLIMIT_RTPRIO 14
 
 #define SCHED_OTHER         0
 #define SCHED_FIFO          1
@@ -72,6 +82,7 @@
 #define E2BIG      7
 #define EAGAIN     11
 #define EPERM      1
+#define EACCES     13
 #define ESRCH      3
 #define EBUSY      16
 #define EINVAL     22
@@ -92,6 +103,12 @@ struct sched_attr {
     unsigned long long sched_period;
     unsigned int sched_util_min;
     unsigned int sched_util_max;
+};
+
+/** The limit prlimit64 reads and writes, of 64-bit fields on both. */
+struct rlimit64 {
+    unsigned long long cur;
+    unsigned long long max;
 };
 
 /** The timespec sched_rr_get_interval fills, of longs. */
@@ -127,7 +144,7 @@ static void say(const char *s)
 /* The assertions, a check each, in the order the probe makes them. */
 static const char *const assertion_id[] = {
     "size",         "einval",    "eopnotsupp", "esrch", "policies",    "slice", "keep",
-    "getattr-size", "admission", "affinity",   "fork",  "rr-interval", "eperm"};
+    "getattr-size", "admission", "affinity",   "fork",  "rr-interval", "eperm", "rlimits"};
 
 /** Print "SCHEDATTRPROBE FAIL: " and `why`, end the report at the
  * assertion that `why` fails, and exit 1. */
@@ -702,6 +719,76 @@ static void run_eperm(void)
     report_held();
 }
 
+/** Set the soft and hard limit `resource` of the caller to `value`; 0, or
+ * a negated errno. */
+static long limit(long resource, unsigned long long value)
+{
+    struct rlimit64 r;
+
+    r.cur = r.max = value;
+    return syscall4(SYS_PRLIMIT64, 0, resource, (long)&r, 0);
+}
+
+/**
+ * The checks of a child without root whose RLIMIT_RTPRIO is 10 and whose
+ * RLIMIT_NICE allows nice -5, each step numbered: the exit status is 0, or
+ * the step that went wrong.
+ */
+static int limited(void)
+{
+    if (limit(RLIMIT_RTPRIO, 10) != 0 || limit(RLIMIT_NICE, 25) != 0 ||
+        syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+        return 1;
+    }
+    if (set(0, mk(SCHED_FIFO, 0, 0, 5)) != 0 || set(0, mk(SCHED_FIFO, 0, 0, 11)) != -EPERM ||
+        set(0, mk(SCHED_FIFO, 0, 0, 10)) != 0 || set(0, mk(SCHED_RR, 0, 0, 3)) != 0) {
+        return 2;
+    }
+    if (set(0, mk(SCHED_OTHER, 0, 0, 0)) != 0 || set(0, mk(SCHED_OTHER, 0, -5, 0)) != 0 ||
+        set(0, mk(SCHED_OTHER, 0, -6, 0)) != -EPERM) {
+        return 3;
+    }
+    if (syscall3(SYS_SETPRIORITY, 0, 0, -6) != -EACCES ||
+        syscall3(SYS_SETPRIORITY, 0, 0, -5) != 0) {
+        return 4;
+    }
+    if (set(0, mk(SCHED_IDLE, 0, -5, 0)) != 0 || set(0, mk(SCHED_OTHER, 0, -5, 0)) != 0) {
+        return 5;
+    }
+    return 0;
+}
+
+/** RLIMIT_NICE and RLIMIT_RTPRIO: 0 to begin with, and what they allow a
+ * child without root. */
+static void run_rlimits(void)
+{
+    struct rlimit64 nice, rtprio;
+    long pid;
+    int status = 0;
+
+    nice.cur = nice.max = rtprio.cur = rtprio.max = 7;
+    if (syscall4(SYS_PRLIMIT64, 0, RLIMIT_NICE, 0, (long)&nice) != 0 ||
+        syscall4(SYS_PRLIMIT64, 0, RLIMIT_RTPRIO, 0, (long)&rtprio) != 0 || nice.cur != 0 ||
+        nice.max != 0 || rtprio.cur != 0 || rtprio.max != 0) {
+        fail("RLIMIT_NICE and RLIMIT_RTPRIO did not read as 0, Linux's defaults");
+    }
+    pid = syscall0(SYS_FORK);
+    if (pid < 0) {
+        fail("fork");
+    }
+    if (pid == 0) {
+        sys_exit(limited());
+    }
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
+        fail("a child could not be reaped");
+    }
+    if (status != 0) {
+        fail("a child without root did not have the real-time priorities up to RLIMIT_RTPRIO and "
+             "the nice values RLIMIT_NICE allows, and no more");
+    }
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -730,6 +817,7 @@ void probe_main(unsigned long *sp)
     run_fork();
     run_rr_interval();
     run_eperm();
+    run_rlimits();
     report_end();
     say("SCHEDATTRPROBE OK\n");
     sys_exit(0);

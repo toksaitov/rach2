@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 11, 2026
 .Dt PRLIMIT64 2
 .Os
 .Sh NAME
@@ -56,7 +56,7 @@ If
 is non-null, it receives the values from before the attempted change.
 Either or both pointers may be null.
 .Pp
-Six resources are stored and enforced:
+Nine resources are stored and enforced:
 .Bl -tag -width RLIMIT_NOFILE
 .It Dv RLIMIT_NPROC
 The number of threads with the same real user ID across the machine, as
@@ -153,6 +153,34 @@ and sends the calling thread
 .Dv SIGXFSZ ,
 which ends the process with a core file unless it is caught or ignored,
 as on Linux.
+.It Dv RLIMIT_NICE
+The lowest nice value a caller without privilege may give the process, as
+20 less the value: 25 allows nice -5.
+It is 0 soft and hard by default, as on Linux, which allows no nice value
+below the present one.
+.Xr setpriority 2
+past it fails with
+.Er EACCES ,
+and
+.Xr sched_setattr 2
+and the
+.Xr ia32 7
+.Fn nice
+with
+.Er EPERM ;
+leaving
+.Dv SCHED_IDLE
+needs it to allow the present nice value.
+.It Dv RLIMIT_RTPRIO
+The highest real-time priority a caller without privilege may give the
+process, 0 soft and hard by default, as on Linux.
+While it is 0,
+.Xr sched_setscheduler 2
+and
+.Xr sched_setattr 2
+refuse such a caller a real-time policy with
+.Er EPERM ;
+otherwise they refuse a priority above both it and the present one.
 .El
 .Pp
 For these resources the soft limit must not exceed the hard limit.
@@ -162,14 +190,14 @@ Fork inherits both values and exec preserves them.
 The kernel's initial soft and hard limits are 4096 processes,
 1024 descriptors, and unlimited address space; the stack's are 8 MiB
 soft and unlimited hard, the core file's 0 soft and unlimited hard, a
-file's size unlimited, and locked memory 8 MiB soft and hard, which are
-Linux's.
+file's size unlimited, locked memory 8 MiB soft and hard, and the nice
+and real-time priority limits 0 soft and hard, which are Linux's.
 Init may replace these defaults as described in
 .Xr limits 7 .
 .Pp
 Every other resource number, including an unknown number, reports
 unlimited values.
-Setting any resource other than the seven stored resources succeeds
+Setting any resource other than the nine stored resources succeeds
 without changing anything, even if its soft value exceeds its hard value.
 .Pp
 Linux measures each growth of the stack against the limit in force when

@@ -2034,7 +2034,7 @@ static void ap_limit(struct procfs_text *t, unsigned long v)
 /**
  * /proc/<pid>/limits: Linux's table of the sixteen resource limits, each a
  * name, the soft and hard values or "unlimited", and a unit, in Linux's
- * columns. The six the kernel keeps (`rlim`) are the process's, and the
+ * columns. The nine the kernel keeps (`rlim`) are the process's, and the
  * others unlimited, as getrlimit reports them.
  */
 static int procfs_gen_limits(struct procfs_text *t, int pid)
@@ -2051,13 +2051,13 @@ static int procfs_gen_limits(struct procfs_text *t, int pid)
                 {"Max resident set", -1, "bytes"},
                 {"Max processes", RLIM_NPROC, "processes"},
                 {"Max open files", RLIM_NOFILE, "files"},
-                {"Max locked memory", -1, "bytes"},
+                {"Max locked memory", RLIM_MEMLOCK, "bytes"},
                 {"Max address space", RLIM_AS, "bytes"},
                 {"Max file locks", -1, "locks"},
                 {"Max pending signals", -1, "signals"},
                 {"Max msgqueue size", -1, "bytes"},
-                {"Max nice priority", -1, 0},
-                {"Max realtime priority", -1, 0},
+                {"Max nice priority", RLIM_NICE, 0},
+                {"Max realtime priority", RLIM_RTPRIO, 0},
                 {"Max realtime timeout", -1, "us"}};
     process_t *p = procfs_proc(pid);
     uint32_t i;

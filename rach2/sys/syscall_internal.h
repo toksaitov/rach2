@@ -365,6 +365,13 @@ int cred_privileged(void);
 int cred_fs_privileged(void);
 
 /**
+ * Whether the caller may give `p` the nice value `nice`, as Linux's
+ * can_nice: with privilege, or when `p`'s soft RLIMIT_NICE is at least
+ * 20 less `nice`. The caller checks only a value below `p`'s present one.
+ */
+int proc_nice_allowed(const process_t *p, int32_t nice);
+
+/**
  * Drop the set-id bits a modification must not leave standing on the KRFFS root
  * node `node`: a write or a truncation by a caller without privilege, or a
  * change of owner or group by any caller. A directory keeps its bits, as on

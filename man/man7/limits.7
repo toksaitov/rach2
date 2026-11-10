@@ -1,11 +1,11 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt LIMITS 7
 .Os
 .Sh NAME
 .Nm limits
 .Nd process resource limits
 .Sh DESCRIPTION
-Each process has seven resource limits.
+Each process has nine resource limits.
 Each has an enforced soft value and a hard value that bounds the soft value.
 .Xr prlimit64 2
 maintains them;
@@ -94,6 +94,34 @@ that would grow the file past it fail with
 and send
 .Dv SIGXFSZ
 to the calling thread.
+.It Dv RLIMIT_NICE
+The lowest nice value a caller without privilege may give the process, as
+20 less the value: 25 allows nice -5.
+It is 0 soft and hard by default, as on Linux, which allows no nice value
+below the present one.
+.Xr setpriority 2
+past it fails with
+.Er EACCES ,
+and
+.Xr sched_setattr 2
+and the
+.Xr ia32 7
+.Fn nice
+with
+.Er EPERM ;
+leaving
+.Dv SCHED_IDLE
+needs it to allow the present nice value.
+.It Dv RLIMIT_RTPRIO
+The highest real-time priority a caller without privilege may give the
+process, 0 soft and hard by default, as on Linux.
+While it is 0,
+.Xr sched_setscheduler 2
+and
+.Xr sched_setattr 2
+refuse such a caller a real-time policy with
+.Er EPERM ;
+otherwise they refuse a priority above both it and the present one.
 .El
 .Ss Initial limits
 Init reads
