@@ -39,26 +39,44 @@ ADAPTERS = {"lavapipe": ("lvp_icd*.json", "linux.json"), "venus": ("venus_icd*.j
 PATHS = {"proton": ("n", "gl"), "wined3d": ("b", "gl"), "wined3dvk": ("b", "vulkan")}
 
 
-def run_command(argv, env, log, stop_at=None):
-    """Wait for the command itself, retaining output even if a descendant keeps it open."""
+def stall_of(expected):
+    """Return the line and its count at which Linux's run of a unit stalled, or None.
+
+    A reference's progress is a dict of the line and the count, or, in
+    linux.json, the text of WineD3D's DXGI stall, whose line is STALL once.
+    """
+    progress = expected.get("progress")
+    if isinstance(progress, dict):
+        return progress["line"], progress["count"]
+    return (STALL, 1) if progress else None
+
+
+def run_command(argv, env, log, stop=None):
+    """Wait for the command itself, retaining output even if a descendant keeps it open.
+
+    stop is a line and a count: the command is stopped when its output has
+    had the line that many times, where Linux's run of it stalled.
+    """
     stopped = False
     with log.open("wb") as dest:
         proc = subprocess.Popen(argv, env=env, stdout=dest,
                                 stderr=subprocess.STDOUT, start_new_session=True)
         CHILDREN.add(proc)
         try:
-            if stop_at:
-                marker = stop_at.encode()
+            if stop:
+                marker = stop[0].encode()
                 pending = b""
+                seen = 0
                 with log.open("rb") as source:
                     while proc.poll() is None:
-                        chunk = source.read()
-                        pending = pending + chunk
-                        if marker in pending:
+                        pending = pending + source.read()
+                        seen += pending.count(marker)
+                        if seen >= stop[1]:
                             stopped = True
                             os.killpg(proc.pid, signal.SIGKILL)
                             break
-                        pending = pending[-len(marker):]
+                        # The tail is too short to hold a line already counted.
+                        pending = pending[-(len(marker) - 1):]
                         # Poll output; elapsed time decides no verdict.
                         time.sleep(0.02)
             proc.wait()
@@ -227,9 +245,11 @@ def main():
                 expected = {} if record else ref["wine"][path][unit]
                 exe, name = unit.split(":")
                 # Recording stops WineD3D's DXGI unit where it stalls on GL.
-                stall = expected.get("progress") or (record and path != "proton" and unit == "dxgi:dxgi")
+                stop = stall_of(expected)
+                if record and path != "proton" and unit == "dxgi:dxgi":
+                    stop = (STALL, 1)
                 rc, stopped = run_command(launch + ["runinprefix", str(HERE / "wine" / (exe + "_test.exe")), name],
-                                          env, out / "unit.log", STALL if stall else None)
+                                          env, out / "unit.log", stop)
                 text = (out / "unit.log").read_text(errors="replace")
                 counts = summaries(text, WINE_SUMMARY % re.escape(name))
                 lines = len(re.findall(TEST_LINE, text, re.M))
@@ -258,7 +278,9 @@ def main():
                 unit_env["VKD3D_TEST_MATCH"] = name
                 unit_env["VKD3D_SHADER_CACHE_PATH"] = "0"
                 unit_env["VKD3D_TEST_DEBUG"] = "1"
-                rc, _ = run_command([str(HERE / "vkd3d/d3d12")], unit_env, out / (name + ".log"))
+                expected = {} if record else ref["vkd3d"][name]
+                stop = stall_of(expected)
+                rc, stopped = run_command([str(HERE / "vkd3d/d3d12")], unit_env, out / (name + ".log"), stop)
                 text = (out / (name + ".log")).read_text(errors="replace")
                 counts = summaries(text, VK_SUMMARY)
                 if record:
@@ -266,15 +288,14 @@ def main():
                               "ended": name + " end" in text, "matched": True}
                     print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
                     return name, result
-                expected = ref["vkd3d"][name]
                 # The discovery's SIGKILLs are memory exhaustion, never flakes.
                 flake = (rc in (-signal.SIGSEGV, 128 + signal.SIGSEGV) and
                          name in ref["flakes"] and name + " begin" in text)
-                matched = flake or (counts is not None and name + " begin" in text and
+                matched = stopped if stop else flake or (counts is not None and name + " begin" in text and
                                     name + " end" in text and rc in (0, 1) and
                                     counts[1] in expected["failures"] and counts[0] >= expected["min_checks"] and
                                     counts[3] <= expected["max_skipped"] and (rc == 0) == (counts[1] == 0))
-                result = {"exit": rc, "summary": counts, "linux_flake": flake, "matched": matched}
+                result = {"exit": rc, "summary": counts, "linux_flake": flake, "progress": stopped, "matched": matched}
                 print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
                 return name, result
             with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
