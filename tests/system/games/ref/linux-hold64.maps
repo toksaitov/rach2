@@ -1,0 +1,101 @@
+00010000-00026000 r--p 00000000 fe:01 280420                             /opt/proton/files/lib/wine/x86_64-windows/apisetschema.dll
+00030000-0004b000 rw-p 00000000 00:00 0
+00050000-00113000 r--p 00000000 fe:01 404196                             /opt/proton/files/share/wine/nls/locale.nls
+00120000-00122000 ---p 00000000 00:00 0
+00122000-00320000 rw-p 00000000 00:00 0
+00320000-00322000 r--p 00000000 fe:01 404181                             /opt/proton/files/share/wine/nls/l_intl.nls
+00330000-00341000 r--p 00000000 fe:01 404212                             /opt/proton/files/share/wine/nls/c_1252.nls
+00350000-00361000 r--p 00000000 fe:01 404173                             /opt/proton/files/share/wine/nls/c_437.nls
+00370000-00470000 rw-p 00000000 00:00 0
+00470000-007aa000 r--p 00000000 fe:01 404230                             /opt/proton/files/share/wine/nls/sortdefault.nls
+007b0000-007bf000 r--p 00000000 fe:01 404219                             /opt/proton/files/share/wine/nls/normnfc.nls
+007c0000-007db000 rw-p 00000000 00:00 0
+007e0000-007f1000 r--p 00000000 fe:01 404234                             /opt/proton/files/share/wine/nls/c_20127.nls
+7fde0000-7ffc0000 ---p 00000000 00:00 0
+7ffc0000-7ffe0000 rw-p 00000000 00:00 0
+7ffe0000-7ffe1000 r--s 00000000 00:01 3355                               /memfd:wine-mapping (deleted)
+7ffe1000-7ffe2000 rw-p 00000000 00:00 0
+7ffe2000-7fff0000 ---p 00000000 00:00 0
+100000000-100001000 r--p 00000000 00:00 0
+100001000-100100000 rw-p 00000000 00:00 0
+140000000-14003d000 ---p 00000000 00:00 0
+555593c8e000-555593caf000 rw-p 00000000 00:00 0                          [heap]
+6ffffd790000-6ffffd791000 r--p 00000000 00:21 23                         /tmp/games/probes/hold64.exe
+6ffffd791000-6ffffd798000 r-xp 00000000 00:00 0
+6ffffd798000-6ffffd799000 rw-p 00000000 00:00 0
+6ffffd799000-6ffffd79c000 r--p 00000000 00:00 0
+6ffffd79c000-6ffffd79d000 rw-p 00000000 00:00 0
+6ffffd79d000-6ffffd79e000 r--p 00000000 00:00 0
+6ffffd79e000-6ffffd79f000 rw-p 00000000 00:00 0
+6ffffd79f000-6ffffd7cd000 r--p 00000000 00:00 0
+6fffffa80000-6fffffa81000 r--p 00000000 fe:01 280943                     /opt/proton/files/lib/wine/x86_64-windows/msvcrt.dll
+6fffffa81000-6fffffaf4000 r-xp 00001000 fe:01 280943                     /opt/proton/files/lib/wine/x86_64-windows/msvcrt.dll
+6fffffaf4000-6fffffaf8000 rw-p 00074000 fe:01 280943                     /opt/proton/files/lib/wine/x86_64-windows/msvcrt.dll
+6fffffaf8000-6fffffb23000 r--p 00078000 fe:01 280943                     /opt/proton/files/lib/wine/x86_64-windows/msvcrt.dll
+6fffffb90000-6fffffb91000 r--p 00000000 fe:01 280930                     /opt/proton/files/lib/wine/x86_64-windows/kernelbase.dll
+6fffffb91000-6fffffc20000 r-xp 00001000 fe:01 280930                     /opt/proton/files/lib/wine/x86_64-windows/kernelbase.dll
+6fffffc20000-6fffffc43000 rw-p 00090000 fe:01 280930                     /opt/proton/files/lib/wine/x86_64-windows/kernelbase.dll
+6fffffc43000-6fffffe5e000 r--p 000b3000 fe:01 280930                     /opt/proton/files/lib/wine/x86_64-windows/kernelbase.dll
+6fffffe70000-6fffffe71000 r--p 00000000 fe:01 280901                     /opt/proton/files/lib/wine/x86_64-windows/kernel32.dll
+6fffffe71000-6fffffea4000 r-xp 00001000 fe:01 280901                     /opt/proton/files/lib/wine/x86_64-windows/kernel32.dll
+6fffffea4000-6fffffea5000 rw-p 00034000 fe:01 280901                     /opt/proton/files/lib/wine/x86_64-windows/kernel32.dll
+6fffffea5000-6fffffed6000 r--p 00035000 fe:01 280901                     /opt/proton/files/lib/wine/x86_64-windows/kernel32.dll
+6fffffef0000-6fffffef1000 r--p 00000000 fe:01 280934                     /opt/proton/files/lib/wine/x86_64-windows/ntdll.dll
+6fffffef1000-6ffffff69000 r-xp 00001000 fe:01 280934                     /opt/proton/files/lib/wine/x86_64-windows/ntdll.dll
+6ffffff69000-6ffffff72000 rw-p 00079000 fe:01 280934                     /opt/proton/files/lib/wine/x86_64-windows/ntdll.dll
+6ffffff72000-6ffffffab000 r--p 00082000 fe:01 280934                     /opt/proton/files/lib/wine/x86_64-windows/ntdll.dll
+7f87229e0000-7f87229f0000 rw-s 00000000 00:1a 10                         /dev/shm/wine-1193-fsync
+7f87229f0000-7f8722bf1000 rw-p 00000000 00:00 0
+7f8722bf1000-7f8722bf2000 rw-p 00000000 00:00 0
+7f8722bf2000-7f8722cf2000 rw-p 00000000 00:00 0
+7f8722cf2000-7f8722cf3000 r--p 00000000 fe:01 3918                       /usr/lib/locale/C.utf8/LC_NUMERIC
+7f8722cf3000-7f8722cf4000 r--p 00000000 fe:01 3924                       /usr/lib/locale/C.utf8/LC_TIME
+7f8722cf4000-7f8722cf5000 r--p 00000000 fe:01 3901                       /usr/lib/locale/C.utf8/LC_COLLATE
+7f8722cf5000-7f8722cf6000 r--p 00000000 fe:01 3912                       /usr/lib/locale/C.utf8/LC_MONETARY
+7f8722cf6000-7f8722cf7000 r--p 00000000 fe:01 3909                       /usr/lib/locale/C.utf8/LC_MESSAGES/SYS_LC_MESSAGES
+7f8722cf7000-7f8722cf8000 r--p 00000000 fe:01 3920                       /usr/lib/locale/C.utf8/LC_PAPER
+7f8722cf8000-7f8722cf9000 r--p 00000000 fe:01 3916                       /usr/lib/locale/C.utf8/LC_NAME
+7f8722cf9000-7f8722cfa000 r--p 00000000 fe:01 3899                       /usr/lib/locale/C.utf8/LC_ADDRESS
+7f8722cfa000-7f8722d54000 r--p 00000000 fe:01 3903                       /usr/lib/locale/C.utf8/LC_CTYPE
+7f8722d54000-7f8722d58000 r--p 00000000 fe:01 1512                       /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7f8722d58000-7f8722d7b000 r-xp 00004000 fe:01 1512                       /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7f8722d7b000-7f8722d7f000 r--p 00027000 fe:01 1512                       /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7f8722d7f000-7f8722d80000 r--p 0002b000 fe:01 1512                       /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7f8722d80000-7f8722d81000 rw-p 0002c000 fe:01 1512                       /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7f8722d81000-7f8722d8d000 r--p 00000000 fe:01 282099                     /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+7f8722d8d000-7f8722e02000 r-xp 0000c000 fe:01 282099                     /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+7f8722e02000-7f8722e25000 r--p 00081000 fe:01 282099                     /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+7f8722e25000-7f8722e27000 r--p 000a4000 fe:01 282099                     /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+7f8722e27000-7f8722e29000 rw-p 000a6000 fe:01 282099                     /opt/proton/files/lib/wine/x86_64-unix/ntdll.so
+7f8722e29000-7f8722e70000 rw-p 00000000 00:00 0
+7f8722e70000-7f8722e98000 r--p 00000000 fe:01 5189                       /usr/lib/x86_64-linux-gnu/libc.so.6
+7f8722e98000-7f8722ffb000 r-xp 00028000 fe:01 5189                       /usr/lib/x86_64-linux-gnu/libc.so.6
+7f8722ffb000-7f8723051000 r--p 0018b000 fe:01 5189                       /usr/lib/x86_64-linux-gnu/libc.so.6
+7f8723051000-7f8723055000 r--p 001e0000 fe:01 5189                       /usr/lib/x86_64-linux-gnu/libc.so.6
+7f8723055000-7f8723057000 rw-p 001e4000 fe:01 5189                       /usr/lib/x86_64-linux-gnu/libc.so.6
+7f8723057000-7f8723064000 rw-p 00000000 00:00 0
+7f8723064000-7f8723065000 r--p 00000000 fe:01 3922                       /usr/lib/locale/C.utf8/LC_TELEPHONE
+7f8723065000-7f8723066000 r--p 00000000 fe:01 3907                       /usr/lib/locale/C.utf8/LC_MEASUREMENT
+7f8723066000-7f8723067000 r--p 00000000 fe:01 3905                       /usr/lib/locale/C.utf8/LC_IDENTIFICATION
+7f8723067000-7f872306e000 r--s 00000000 fe:01 5178                       /usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache
+7f872306e000-7f8723070000 rw-p 00000000 00:00 0
+7f8723070000-7f8723071000 r--p 00000000 fe:01 5186                       /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7f8723071000-7f8723099000 r-xp 00001000 fe:01 5186                       /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7f8723099000-7f87230a4000 r--p 00029000 fe:01 5186                       /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7f87230a4000-7f87230a6000 r--p 00034000 fe:01 5186                       /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7f87230a6000-7f87230a7000 rw-p 00036000 fe:01 5186                       /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7f87230a7000-7f87230a8000 rw-p 00000000 00:00 0
+7f87230a8000-7f87230a9000 r--p 00000000 fe:01 281173                     /opt/proton/files/lib/wine/i386-unix/wine64
+7f87230a9000-7f87230aa000 r-xp 00001000 fe:01 281173                     /opt/proton/files/lib/wine/i386-unix/wine64
+7f87230aa000-7f87230ab000 r--p 00002000 fe:01 281173                     /opt/proton/files/lib/wine/i386-unix/wine64
+7f87230ab000-7f87230ac000 r--p 00002000 fe:01 281173                     /opt/proton/files/lib/wine/i386-unix/wine64
+7f87230ac000-7f87230ad000 rw-p 00003000 fe:01 281173                     /opt/proton/files/lib/wine/i386-unix/wine64
+7f87230ad000-7f87230b1000 r--p 00000000 00:00 0                          [vvar]
+7f87230b1000-7f87230b3000 r-xp 00000000 00:00 0                          [vdso]
+7f87230b3000-7f87230b4000 r--p 00000000 fe:01 281167                     /opt/proton/files/lib/wine/i386-unix/wine64-preloader
+7f87230b4000-7f87230b6000 r-xp 00001000 fe:01 281167                     /opt/proton/files/lib/wine/i386-unix/wine64-preloader
+7f87230b6000-7f87230b7000 r--p 00003000 fe:01 281167                     /opt/proton/files/lib/wine/i386-unix/wine64-preloader
+7f87230b7000-7f87230b9000 rw-p 00003000 fe:01 281167                     /opt/proton/files/lib/wine/i386-unix/wine64-preloader
+7ffdf6428000-7ffdf6449000 rw-p 00000000 00:00 0                          [stack]
+7ffffe000000-7fffffbb0000 ---p 00000000 00:00 0
+7fffffbb0000-7fffffff0000 rw-p 00000000 00:00 0
