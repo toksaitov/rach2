@@ -35,6 +35,9 @@ static uint32_t le32(const uint8_t *p)
 #define XA_HEAD  32u
 #define XA_ENTRY 16u
 
+/* An absent block reads as one whose first entry is the terminator. */
+static const uint8_t xa_empty[XA_HEAD + 4];
+
 /** Round a checked byte count up to the format's four-byte alignment. */
 static uint32_t xa_pad(uint32_t n)
 {
@@ -185,7 +188,7 @@ static int xa_pack(const uint8_t *b, uint8_t *out, uint32_t bytes, const uint8_t
     LE32_PUT(out, XA_MAGIC);
     LE32_PUT(out + 4, 1);
     LE32_PUT(out + 8, 1);
-    for (p = XA_HEAD; b && le32(b + p); p += xa_pad(XA_ENTRY + b[p])) {
+    for (p = XA_HEAD; le32(b + p); p += xa_pad(XA_ENTRY + b[p])) {
         int cmp = xa_cmp(key, b + p);
         if (!inserted && cmp <= 0) {
             if (value) {
@@ -234,12 +237,14 @@ int ext2_xattr_edit(const uint8_t *b, uint8_t *out, uint32_t bytes, const struct
         rc = ext2_xattr_check(b, bytes);
         if (rc)
             return rc;
+    } else {
+        b = xa_empty;
     }
     k_memset(key, 0, sizeof(key));
     key[0] = (uint8_t)len;
     key[1] = 1;
     k_memcpy(key + XA_ENTRY, name, len);
-    for (p = XA_HEAD; b && le32(b + p); p += xa_pad(XA_ENTRY + b[p]))
+    for (p = XA_HEAD; le32(b + p); p += xa_pad(XA_ENTRY + b[p]))
         if (!xa_cmp(key, b + p))
             found = 1;
     if (found && (flags & 1))

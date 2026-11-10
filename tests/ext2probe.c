@@ -1381,7 +1381,7 @@ static void xattr_rows(void)
 {
     const char *path = "/e2/xa-file";
     const char *name = "user.DOSATTRIB";
-    char value[64];
+    char value[64] = {0};
     long fd, target, rc;
     int form;
 
