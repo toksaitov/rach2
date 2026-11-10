@@ -617,7 +617,9 @@ static int map_desktop(struct hid_input *in, struct hid_field *f, struct hid_usa
         *type = relative ? EV_REL : EV_ABS;
         return MAP_SET;
     case HID_GD_HATSWITCH:
-        u->hat = 1;
+        /* Linux's hat_min < hat_max: a range stored backwards, such as 0
+         * to 0xFFFFFFFF, is an axis. */
+        u->hat = f->logical_minimum < f->logical_maximum;
         *type = EV_ABS;
         *code = ABS_HAT0X;
         return MAP_SET;
@@ -817,6 +819,13 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
     }
 }
 
+/** `b - a` as Linux computes it, built with -fno-strict-overflow, so that
+ * a range as wide as INT32_MIN to INT32_MAX wraps instead of overflowing. */
+static int32_t wrap_sub(int32_t b, int32_t a)
+{
+    return (int32_t)((uint32_t)b - (uint32_t)a);
+}
+
 /**
  * An axis's resolution, in units per millimetre for a length and per radian
  * for an angle, from its logical and physical ranges and unit, as Linux's
@@ -825,8 +834,8 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
 static int32_t abs_resolution(const struct hid_field *f, unsigned code)
 {
     int32_t exponent = f->unit_exponent;
-    int32_t logical = f->logical_maximum - f->logical_minimum;
-    int32_t physical = f->physical_maximum - f->physical_minimum;
+    int32_t logical = wrap_sub(f->logical_maximum, f->logical_minimum);
+    int32_t physical = wrap_sub(f->physical_maximum, f->physical_minimum);
     int32_t prev;
 
     if (logical <= 0 || physical <= 0) {
@@ -1021,17 +1030,19 @@ static uint8_t input_index(struct hid_dev *hid, const struct hid_input *in)
 }
 
 /** The multiplier the Resolution Multiplier field `f` gives with its value
- * `v`, Linux's `hid_calculate_multiplier`. */
+ * `v`, Linux's `hid_calculate_multiplier`; a logical range that wraps to
+ * -1 gives 1, where Linux's quotient could trap. */
 static int calculate_multiplier(const struct hid_field *f, int32_t v)
 {
+    int32_t range = wrap_sub(f->logical_maximum, f->logical_minimum);
     int32_t m;
 
-    if (f->logical_maximum - f->logical_minimum == 0) {
+    if (range == 0 || range == -1) {
         return 1;
     }
-    m = (v - f->logical_minimum) / (f->logical_maximum - f->logical_minimum) *
-            (f->physical_maximum - f->physical_minimum) +
-        f->physical_minimum;
+    m = (int32_t)((uint32_t)(wrap_sub(v, f->logical_minimum) / range) *
+                      (uint32_t)wrap_sub(f->physical_maximum, f->physical_minimum) +
+                  (uint32_t)f->physical_minimum);
     if (m == 0 || m > 255 || m < -255) {
         m = 1;
     }
@@ -1156,7 +1167,7 @@ static void register_input(struct hid_dev *hid, struct hid_input *in)
                 continue;
             }
             if (f->application == HID_GD_GAMEPAD || f->application == HID_GD_JOYSTICK) {
-                evdev_set_abs(dev, u->code, a, b, (b - a) >> 8, (b - a) >> 4);
+                evdev_set_abs(dev, u->code, a, b, wrap_sub(b, a) >> 8, wrap_sub(b, a) >> 4);
             } else {
                 evdev_set_abs(dev, u->code, a, b, 0, 0);
             }
@@ -1331,6 +1342,32 @@ static void handle_scroll(struct hid_input *in, struct hid_usage *u, int32_t val
     input_event(in, EV_REL, u->code, hi_res, 0);
 }
 
+/* The bound below which a hat's numbers take Linux's arithmetic whole. */
+#define HAT_SMALL 0x08000000
+
+/**
+ * The direction, 1 to 8 or 0 for centred, of hat switch field `f` at
+ * `value`, Linux's `(value - hat_min) * 8 / (hat_max - hat_min + 1) + 1`.
+ * Linux's sum overflows for a range as wide as INT32_MIN to INT32_MAX and
+ * divides by 0; a range or value that large is cut in eighths in unsigned
+ * arithmetic instead, and a value outside it is centred. `f`'s minimum is
+ * below its maximum.
+ */
+static int hat_direction(const struct hid_field *f, int32_t value)
+{
+    int32_t min = f->logical_minimum, max = f->logical_maximum;
+    uint32_t span = (uint32_t)max - (uint32_t)min;
+
+    if (span < HAT_SMALL && min > -HAT_SMALL && min < HAT_SMALL && value > -HAT_SMALL &&
+        value < HAT_SMALL) {
+        return (value - min) * 8 / (int32_t)(span + 1u) + 1;
+    }
+    if (value < min || value > max) {
+        return 0;
+    }
+    return (int)(((uint32_t)value - (uint32_t)min) / (span / 8u + 1u)) + 1;
+}
+
 /** The event of hat switch or D-pad usage `u` of field `f` at `value`: a
  * direction as the two axes of its code and the next. */
 static void hat_event(struct hid_input *in, const struct hid_field *f, const struct hid_usage *u,
@@ -1339,7 +1376,7 @@ static void hat_event(struct hid_input *in, const struct hid_field *f, const str
     int dir = u->hat_dir;
 
     if (!dir) {
-        dir = (value - f->logical_minimum) * 8 / (f->logical_maximum - f->logical_minimum + 1) + 1;
+        dir = hat_direction(f, value);
     }
     if (dir < 0 || dir > 8) {
         dir = 0;
@@ -1439,7 +1476,7 @@ static void hid_event(struct hid_dev *hid, struct hid_field *f, struct hid_usage
 static int array_value_valid(const struct hid_field *f, int32_t value)
 {
     return value >= f->logical_minimum && value <= f->logical_maximum &&
-           (uint32_t)(value - f->logical_minimum) < f->maxusage;
+           (uint32_t)value - (uint32_t)f->logical_minimum < f->maxusage;
 }
 
 /** Read the elements of `f` from `data` into their `new_value`, as Linux's
@@ -1460,7 +1497,7 @@ static void fetch_field(struct hid_dev *hid, struct hid_field *f, const uint8_t 
 
         u[n].new_value = v;
         if (!(f->flags & HID_MAIN_ITEM_VARIABLE) && array_value_valid(f, v) &&
-            u[v - f->logical_minimum].hid == HID_UP_KEYBOARD + 1) {
+            u[(uint32_t)v - (uint32_t)f->logical_minimum].hid == HID_UP_KEYBOARD + 1) {
             f->ignored = 1;
             return;
         }
