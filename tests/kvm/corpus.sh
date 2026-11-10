@@ -7,8 +7,8 @@
 #        corpus.sh selftests LIST
 #
 # LIST is unit-tests.list or selftests.list of this directory: a test a line,
-# its name and EXPECT, `pass`, `skip` or `excluded`. Each test whose EXPECT is
-# not `excluded` runs, in the order of the list:
+# its name and EXPECT, `pass`, `skip`, `fail` or `excluded`. Each test whose
+# EXPECT is not `excluded` runs, in the order of the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, from a copy of /opt/kvm-unit-tests,
 #   with ACCEL `kvm,kernel-irqchip=split`, since Rach2's KVM has only the
