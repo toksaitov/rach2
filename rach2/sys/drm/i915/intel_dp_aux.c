@@ -80,13 +80,15 @@ static void aux_unpack(uint32_t v, uint8_t *dst, int n)
 /**
  * Send `send_bytes` bytes of `send` on the AUX channel of `dp` and take up
  * to `recv_size` bytes of the reply into `recv`, Linux's
- * intel_dp_aux_xfer: an eDP panel's VDD held for the transfer, a channel
- * still busy waited for three times, each send tried five times while it
- * times out or meets a receive error, which costs 400 us.
+ * intel_dp_aux_xfer: an external port with nothing on its hotplug line
+ * refused, an eDP panel's VDD held for the transfer, a channel still busy
+ * waited for three times, each send tried five times while it times out or
+ * meets a receive error, which costs 400 us.
  *
- * @return the bytes received, or -EBUSY for a channel that stayed busy, a
- *         send never done, or a reply of 0 or more than 20 bytes, -EIO for
- *         a receive error and -ETIMEDOUT when no sink answered.
+ * @return the bytes received, or -ENXIO for an external port that is not
+ *         connected, -EBUSY for a channel that stayed busy, a send never
+ *         done, or a reply of 0 or more than 20 bytes, -EIO for a receive
+ *         error and -ETIMEDOUT when no sink answered.
  */
 static int32_t aux_xfer(struct intel_dp *dp, const uint8_t *send, int send_bytes, uint8_t *recv,
                         int recv_size)
@@ -97,6 +99,11 @@ static int32_t aux_xfer(struct intel_dp *dp, const uint8_t *send, int send_bytes
     int32_t ret;
     int i, try, clock = 0, vdd, recv_bytes;
 
+    /* Linux aborts a transfer on a disconnected port, as DP 1.4a's link
+     * CTS 4.2.1.5 asks, sparing the AUX timeouts. */
+    if (!dp->edp && !intel_dp_connected(dp)) {
+        return -ENXIO;
+    }
     vdd = dp->edp ? intel_pps_vdd_on_unlocked(dp->i915) : 0;
     for (try = 0; try < AUX_BUSY_TRIES; try++) {
         status = i915_read(hw, ctl);
