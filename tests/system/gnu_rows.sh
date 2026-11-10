@@ -1321,6 +1321,41 @@ EOF
     [ $((after - before)) -lt 200 ] || fail "a second start read the disk $((after - before)) times"
 }
 
+# On x86-64, the root's i386 layer runs 32-bit programs on the 64-bit kernel:
+# Debian's i386 eglinfo and vulkaninfo find Mesa's i386 llvmpipe and
+# lavapipe, and GE-Proton in its default mode makes a prefix and runs the
+# 32-bit cmd.exe in its i386 Wine, not through WoW64. The program reports
+# itself as an x86 process on an AMD64 system, and the map of its process,
+# which it reads through Wine's drive Z:, has i386 Wine's ntdll. Proton runs
+# as the test account, in a prefix of the row's own.
+row_ia32() {
+    local p=/opt/proton bat dos
+    same "the machine" "$MACHINE" "x86_64"
+    same "eglinfo's class" "$(file -bL /usr/bin/eglinfo.i386-linux-gnu | cut -d, -f1-2)" \
+        "ELF 32-bit LSB executable, Intel i386"
+    output "eglinfo" /usr/bin/eglinfo.i386-linux-gnu -B -p surfaceless
+    has "eglinfo's renderer" "$OUT" "OpenGL core profile renderer: llvmpipe"
+    same "vulkaninfo's class" "$(file -bL /usr/bin/vulkaninfo.i386-linux-gnu | cut -d, -f1-2)" \
+        "ELF 32-bit LSB executable, Intel i386"
+    output "vulkaninfo" env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.i686.json \
+        /usr/bin/vulkaninfo.i386-linux-gnu --summary
+    has "vulkaninfo's device" "$OUT" "DRIVER_ID_MESA_LLVMPIPE"
+    mkdir -p "$WORK/steam" "$WORK/compat" "$WORK/run"
+    chmod 0700 "$WORK/run"
+    dos="Z:${WORK//\//\\}"
+    bat="$WORK/arch.bat"
+    printf '@echo %%PROCESSOR_ARCHITECTURE%% %%PROCESSOR_ARCHITEW6432%%> %s\\arch.txt\r\n' "$dos" > "$bat"
+    printf '@type Z:\\proc\\self\\maps> %s\\maps.txt\r\n' "$dos" >> "$bat"
+    chown -R test "$WORK"
+    OUT=$(su test -c "env -u PROTON_USE_WOW64 STEAM_COMPAT_CLIENT_INSTALL_PATH=$WORK/steam \
+        STEAM_COMPAT_DATA_PATH=$WORK/compat XDG_RUNTIME_DIR=$WORK/run WINEDEBUG=-all \
+        python3 $p/proton run 'c:\\windows\\syswow64\\cmd.exe' /c '$dos\\arch.bat'" 2>&1) ||
+        fail "proton: status $?: $(printf '%s' "$OUT" | tail -n 3 | tr '\n' ' ')"
+    same "the 32-bit program's report" "$(tr -d '\r' < "$WORK/arch.txt" 2> /dev/null)" "x86 AMD64"
+    has "the 32-bit program's map" "$(cat "$WORK/maps.txt" 2> /dev/null)" "/i386-unix/ntdll.so"
+    su test -c "WINEPREFIX=$WORK/compat/pfx $p/files/bin/wineserver -k" > /dev/null 2>&1 || :
+}
+
 # Restart ntpd with the private server, wait for its new step record, then
 # compare the running clock with a bracketed timestamp from that server.
 row_ntpd() {

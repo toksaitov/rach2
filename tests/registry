@@ -38,7 +38,7 @@
 #
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.
-gnu|qemu,ssh,scp,sftp,python3|full|gnu-test*|2048
+gnu|qemu,ssh,scp,sftp,python3|full|gnu-test*|4096
 webgl|qemu|full||8192|x86_64
 video|qemu,qemu-img,ssh,scp,ssh-keygen,xorriso,curl,sha256sum|full||8192|x86_64
 igt|qemu|full||4096|x86_64

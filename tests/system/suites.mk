@@ -902,7 +902,9 @@ $(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(M
 # `tests/run gnu`: the GNU system on its ext2 root, a boot for each case of
 # tests/cases/machine.gnu.json: logins by key and by password over OpenSSH, each
 # port, GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell
-# doing its main job, and tmux at the console. Each case boots an overlay of
+# doing its main job, on x86-64 the i386 layer's eglinfo and vulkaninfo and a
+# 32-bit Windows program under GE-Proton's default mode, and tmux at the
+# console. Each case boots an overlay of
 # this disk: the GNU system's volume at LBA 2048 behind a table of one
 # partition, copied sparse, since the volume is 4 GiB with most of it free. The
 # image is made from the GNU layer, on an x86-64 Linux host or in etude's
