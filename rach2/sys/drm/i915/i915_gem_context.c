@@ -10,6 +10,7 @@
 #include "i915_drm.h"
 #include "i915_reg.h"
 
+#include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -165,10 +166,12 @@ int32_t intel_context_pin_image(struct intel_context *ce)
  */
 
 /** A new proto context of `i915` with Linux's defaults, one reference, the
- * file's, or NULL. */
+ * file's, or NULL; the calling process names it, as Linux's context's pid
+ * and name do. */
 static struct i915_gem_context *context_alloc(struct drm_i915_private *i915)
 {
     struct i915_gem_context *ctx = (struct i915_gem_context *)kzalloc(sizeof(*ctx));
+    uint32_t i;
 
     if (!ctx) {
         return 0;
@@ -177,6 +180,12 @@ static struct i915_gem_context *context_alloc(struct drm_i915_private *i915)
     ctx->refs = 1;
     ctx->proto = 1;
     ctx->nmap = -1;
+    if (current_proc) {
+        ctx->pid = current_proc->pid;
+        for (i = 0; i + 1u < sizeof(ctx->comm) && current_proc->comm[i]; i++) {
+            ctx->comm[i] = current_proc->comm[i];
+        }
+    }
     /* Bannable and recoverable, and persistent since hangcheck is on, as
      * Linux's proto_context_create. */
     ctx->flags = I915_CTX_BANNABLE | I915_CTX_RECOVERABLE | I915_CTX_PERSISTENCE;
@@ -203,6 +212,7 @@ static void context_close(struct i915_gem_context *ctx)
     uint32_t i;
 
     ctx->closed = 1;
+    ctx->file = 0;
     for (i = 0; i < ctx->nce; i++) {
         struct intel_context *ce = ctx->ce[i];
 
@@ -284,6 +294,7 @@ static void context_register(struct i915_file *fp, struct i915_gem_context *ctx)
         pp = &(*pp)->next;
     }
     ctx->id = id;
+    ctx->file = fp;
     ctx->next = *pp;
     *pp = ctx;
 }
@@ -943,6 +954,78 @@ int32_t i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
 }
 
 /* ------------------------------------------------------------------------
+ * Hangs
+ */
+
+/**
+ * Raise the ban score of the file of `ctx`, a context that hung the GPU at
+ * the tick `now`, as Linux's client_mark_guilty: 3 when the context was
+ * banned and 1 more when the file's last hang was within a minute.
+ */
+static void client_mark_guilty(struct i915_gem_context *ctx, int banned, uint64_t now)
+{
+    struct i915_file *fp = ctx->file;
+    uint32_t score = banned ? I915_CLIENT_SCORE_CONTEXT_BAN : 0u;
+    uint64_t prev;
+
+    if (!fp) {
+        return;
+    }
+    prev = fp->hang_ticks;
+    fp->hang_ticks = now;
+    if (prev != 0 && now - prev < I915_CLIENT_FAST_HANG_TICKS) {
+        score += I915_CLIENT_SCORE_HANG_FAST;
+    }
+    if (score) {
+        fp->ban_score += score;
+        klog(KLOG_DEBUG, "i915", "reset: client %s[%u]: gained %u ban score, now %u", ctx->comm,
+             (unsigned)ctx->pid, (unsigned)score, (unsigned)fp->ban_score);
+    }
+}
+
+int i915_gem_context_mark_guilty(struct intel_context *ce, uint64_t now)
+{
+    struct i915_gem_context *ctx = ce->ctx;
+    uint64_t prev;
+    int banned;
+
+    if (!ctx) {
+        return ce->banned;
+    }
+    if (ctx->closed) {
+        return 1;
+    }
+    ctx->guilty_count++;
+    /* An unbannable context, which only a privileged program makes, is
+     * never banned, as Linux's reset tests need. */
+    if (!(ctx->flags & I915_CTX_BANNABLE)) {
+        return 0;
+    }
+    klog(KLOG_INFO, "i915", "reset: %s[%u] context reset due to GPU hang", ctx->comm,
+         (unsigned)ctx->pid);
+    prev = ctx->hang_ticks[0];
+    ctx->hang_ticks[0] = ctx->hang_ticks[1];
+    ctx->hang_ticks[1] = now;
+    banned = !(ctx->flags & I915_CTX_RECOVERABLE);
+    if (prev != 0 && now - prev < I915_CONTEXT_FAST_HANG_TICKS) {
+        banned = 1;
+    }
+    if (banned) {
+        klog(KLOG_DEBUG, "i915", "reset: context %s[%u]: guilty %u, banned", ctx->comm,
+             (unsigned)ctx->pid, (unsigned)ctx->guilty_count);
+    }
+    client_mark_guilty(ctx, banned, now);
+    return banned;
+}
+
+void i915_gem_context_mark_innocent(struct intel_context *ce)
+{
+    if (ce->ctx) {
+        ce->ctx->active_count++;
+    }
+}
+
+/* ------------------------------------------------------------------------
  * Files
  */
 
@@ -965,6 +1048,7 @@ int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
         return -ENOMEM;
     }
     ctx->id = 0;
+    ctx->file = fp;
     fp->contexts = ctx;
     file->driver_priv = fp;
     return 0;
