@@ -2464,18 +2464,45 @@ static int proc_fd_xdev(const fd_entry_t *entry, const struct vfs_mount *mnt)
     return mnt && (!ofd || (ofd->vmnt ? ofd->vmnt : ofd->synth_mnt) != mnt) ? -EXDEV : 0;
 }
 
+static int open_want(int flags);
+
+/**
+ * Open again the device of /dev that the descriptor `src` is open on, as an
+ * open(2) of its /dev path would: the access `flags` ask for is checked
+ * against the device's mode, owner and group, as Linux checks it against
+ * the inode the /proc/PID/fd/N link leads to, whatever access `src` has,
+ * and the device's own open runs again, so that the description is a new
+ * one and a DRM device gives a new file. Nothing before the open sleeps.
+ * Returns the new descriptor, -ENXIO when the device is gone, or the
+ * check's or the open's negative errno.
+ */
+static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
+{
+    uint32_t mode = devfs_fd_mode(src), uid, gid;
+    const char *name = devfs_name_of((mode & 0170000u) == 0060000u, devfs_rdev(src));
+    int32_t rc;
+
+    if (!name) {
+        return -ENXIO;
+    }
+    devfs_fd_owner(src, &uid, &gid);
+    rc = cred_access_bits(uid, gid, mode & 0777u, open_want(flags), 0);
+    return rc != 0 ? rc : devfs_open(name, flags);
+}
+
 /**
  * open(2) of /proc/PID/fd/N, which /dev/fd/N, /dev/stdin, /dev/stdout and
  * /dev/stderr are for the caller, following the link to what the descriptor
  * is open on, as Linux does. A file or directory is opened again
  * (`proc_fd_reopen`), with its description held across the sleeps of that
- * open, since another thread may close the descriptor meanwhile. Anything
- * else, a pipe, a socket, a terminal or a device, has the descriptor's own
- * description shared with the new one (`proc_fd_share`), when the
- * descriptor has the access asked for and is no O_DIRECTORY open of what is
- * not a directory; Linux opens a pipe's other end for the other access, and
- * this answers EACCES. Returns the new descriptor, or a negative errno: an
- * error of `proc_fd_entry`, -EACCES, -ENOTDIR, or the open's.
+ * open, since another thread may close the descriptor meanwhile, and so is
+ * a device of /dev (`proc_fd_reopen_device`). Anything else, a pipe, a
+ * socket or a terminal, has the descriptor's own description shared with
+ * the new one (`proc_fd_share`), when the descriptor has the access asked
+ * for and is no O_DIRECTORY open of what is not a directory; Linux opens a
+ * pipe's other end for the other access, and this answers EACCES. Returns
+ * the new descriptor, or a negative errno: an error of `proc_fd_entry`,
+ * -EACCES, -ENOTDIR, or the open's.
  */
 static int32_t proc_fd_open(const struct vpath *vp, int flags)
 {
@@ -2499,6 +2526,9 @@ static int32_t proc_fd_open(const struct vpath *vp, int flags)
         rc = proc_fd_reopen(held, flags);
         fd_ofd_unref(held);
         return rc;
+    }
+    if (src->type == FD_TYPE_DEVICE && src->dev) {
+        return proc_fd_reopen_device(src, flags);
     }
     if ((src->flags & FD_FLAG_PATH) || (acc != 1 && !(src->flags & FD_FLAG_READ)) ||
         (acc != 0 && !(src->flags & FD_FLAG_WRITE))) {
