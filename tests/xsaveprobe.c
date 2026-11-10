@@ -4,7 +4,9 @@
  * `xsaveprobe` checks first what `cpuid` and XCR0 say: OSXSAVE is set
  * exactly where XSAVE is reported, and XGETBV's XCR0 names x87 and SSE, AVX
  * where `cpuid` reports it, AVX-512's three components where `cpuid`
- * reports AVX512F and leaf 0xD lists them, and nothing else. Then, where
+ * reports AVX512F and leaf 0xD lists them, on x86-64 PKRU where `cpuid`
+ * reports PKU and leaf 0xD lists it, with OSPKE then set, and nothing else;
+ * the i686 kernel turns no protection keys on. Then, where
  * the kernel enabled AVX, the YMM registers, YMM0 to YMM7 or to YMM15 on
  * x86-64, hold values whose upper halves are not zero, and:
  *
@@ -638,8 +640,16 @@ static void run_cpuid(void)
             want_xcr0 |= 0xE0u;
         }
     }
+#if defined __x86_64__
+    if (((r7[2] >> 3) & 1u) && (rd[0] & 0x200u)) {
+        want_xcr0 |= 0x200u;
+    }
+#endif
     if (xcr0_lo != want_xcr0 || xcr0_hi != 0) {
-        fail("XCR0 is not x87, SSE, and AVX and AVX-512 where the processor has them");
+        fail("XCR0 is not x87, SSE, and AVX, AVX-512 and PKRU where the processor has them");
+    }
+    if (((r7[2] >> 4) & 1u) != ((want_xcr0 >> 9) & 1u)) {
+        fail("cpuid's OSPKE does not say whether XCR0 has PKRU");
     }
     report_held();
     xstate_size = rd[1];
@@ -654,6 +664,9 @@ static void run_cpuid(void)
     puts(xcr0_lo & 0xE0u ? "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE, AVX and AVX-512"
                          : (use_avx ? "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE and AVX"
                                     : "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87 and SSE"));
+    if (xcr0_lo & 0x200u) {
+        puts("xsaveprobe: cpuid: OSPKE, XCR0 has PKRU");
+    }
 }
 
 /** The switches row: a forked child finds the parent's values, and parent

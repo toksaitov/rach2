@@ -1678,7 +1678,7 @@
       "execution": {"program": "xsaveprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes its core directory on every path"},
       "assertions": [
         {"assertion_id": "osxsave", "checks": "cpuid reports OSXSAVE exactly where the processor has XSAVE", "source": "program"},
-        {"assertion_id": "xcr0", "checks": "XCR0 is x87, SSE, and AVX and AVX-512 where the processor has them", "source": "program"},
+        {"assertion_id": "xcr0", "checks": "XCR0 is x87, SSE, and AVX, AVX-512 and on x86-64 PKRU where the processor has them, and cpuid has OSPKE exactly where XCR0 has PKRU", "source": "program"},
         {"assertion_id": "image-size", "checks": "leaf 0xD gives an XSAVE image of 576 to 4096 bytes", "source": "program"},
         {"assertion_id": "ptrace-enodev", "checks": "without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE fails with ENODEV", "source": "program"},
         {"assertion_id": "switches", "checks": "a forked child finds the parent's YMM registers, and each keeps its own across switches", "source": "program"},
