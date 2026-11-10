@@ -28,7 +28,8 @@
  * read-modify-writes, an instruction the decoder refuses, the control and
  * debug registers, real to long mode and PAE's PDPTEs, the MSRs, XSETBV,
  * VMCALL and the instructions answered alone, the interrupt and NMI
- * windows, an event the exit found under delivery, the host's interrupt,
+ * windows, an event the exit found under delivery, the caller's single
+ * steps and breakpoints, a RIP above 4 GiB, the host's interrupt,
  * NMI and machine check, the preemption timer, a triple fault and the two
  * kinds of failed entry; a move to another processor; a state read between
  * runs; VMXON and VMPTRLD failing; VPIDs; and a panic inside a run, which
@@ -674,7 +675,9 @@ struct row {
     uint32_t reason;
     uint64_t qual, gpa;
     uint32_t intr_info, intr_error, idt_info, idt_error, len, insn_info, intr_state;
-    int panic; /* a panic comes inside the run */
+    int panic;      /* a panic comes inside the run */
+    uint64_t rip;   /* the guest's RIP at the exit, when it moved without one */
+    uint32_t cs_ar; /* CS's access rights at the exit, when a far jump changed them */
 };
 
 static struct {
@@ -699,7 +702,7 @@ static struct {
     struct row script[16];
     int script_len, script_at;
     uint32_t injected, injected_error;
-    uint64_t entry_cr0, entry_proc;
+    uint64_t entry_cr0, entry_proc, entry_rflags, entry_dr0;
     const char *why; /* the last entry check that failed */
 } m;
 
@@ -1152,13 +1155,19 @@ static void exit_with(const struct row *r)
     f[VM_EXIT_INSTRUCTION_LEN] = r->len;
     f[VMX_INSTRUCTION_INFO] = r->insn_info;
     f[GUEST_INTERRUPTIBILITY_INFO] = r->intr_state;
+    if (r->rip) {
+        f[GUEST_RIP] = r->rip;
+    }
+    if (r->cs_ar) {
+        f[GUEST_ES_AR_BYTES + 2u * SEG_CS] = r->cs_ar;
+    }
     f[VM_ENTRY_INTR_INFO_FIELD] &= ~(uint64_t)INTR_VALID;
 }
 
 /** VMLAUNCH or VMRESUME: the checks, then the script's next run. */
 static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
 {
-    static const struct row none = {EXIT_HLT, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0};
+    static const struct row none = {EXIT_HLT, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
     const struct row *r;
     uint64_t *f;
 
@@ -1193,6 +1202,8 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     m.injected_error = (uint32_t)f[VM_ENTRY_EXCEPTION_ERROR_CODE];
     m.entry_cr0 = f[GUEST_CR0];
     m.entry_proc = f[CPU_BASED_VM_EXEC_CONTROL];
+    m.entry_rflags = f[GUEST_RFLAGS];
+    m.entry_dr0 = m.dr[0];
     if (!check_segments(f) || !check_guest_regs(f) || !check_guest_events(f)) {
         f[VM_EXIT_REASON] = EXIT_FAILED_ENTRY | EXIT_INVALID_STATE;
         f[EXIT_QUALIFICATION] = 0;
@@ -1736,6 +1747,7 @@ static int32_t exits(int fd, uint32_t reason, uint64_t qual, uint32_t len)
 static void cr_rows(int fd)
 {
     struct kvm_vcpu *v = vcpu_of(fd);
+    struct row *w;
     uint64_t *f;
 
     set_regs(fd, 0x1000, 0x60000011u, 0, 0);
@@ -1758,6 +1770,12 @@ static void cr_rows(int fd)
     CHECK((f[VM_ENTRY_CONTROLS] & ENTRY_IA32E) && f[GUEST_IA32_EFER] == 0x500u &&
               f[GUEST_CR0] == 0x80000031u,
           "the entry is in IA-32e mode with EFER.LMA, which the model's checks pass");
+    w = script(EXIT_CPUID, 0, 2);
+    w->rip = 0xFFFFFFFF81000000ull;
+    w->cs_ar = 0xA09B;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0xFFFFFFFF81000003ull,
+          "after a far jump to 64-bit code, CPUID and HLT step a RIP above 4 GiB whole");
 
     set_regs(fd, 0x1000, 5, 0, 0);
     CHECK(exits(fd, EXIT_CR_ACCESS, 8, 4) == 0 && v->sregs.cr8 == 5, "MOV CR8, RAX");
@@ -1878,6 +1896,71 @@ static void event_rows(int fd)
           "an interrupt the exit found under delivery is injected again");
 }
 
+/** KVM_SET_GUEST_DEBUG on the vCPU on `fd` with `control` and the
+ * hardware breakpoint registers DR0 and DR7. */
+static void guest_debug(int fd, uint32_t control, uint64_t dr0, uint64_t dr7)
+{
+    struct kvm_guest_debug d;
+
+    k_memset(&d, 0, sizeof(d));
+    d.control = control;
+    d.debugreg[0] = dr0;
+    d.debugreg[7] = dr7;
+    CHECK(fdio(fd, KVM_SET_GUEST_DEBUG, (uintptr_t)&d) == 0, "KVM_SET_GUEST_DEBUG");
+}
+
+/** The caller's debugging: a single step, one over an instruction the
+ * kernel runs, software and hardware breakpoints, interrupts held, and
+ * the guest's own state back after. */
+static void debug_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    uint64_t *f = fields(fd);
+    struct row *w;
+
+    set_regs(fd, 0x1000, 0, 0, 0);
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP, 0, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0x4000, 0);
+    w->intr_info = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    w->rip = 0x1001;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.exception == DB_VECTOR &&
+              rp->u.debug.dr6 == (DR6_BS | DR6_FIXED) && rp->u.debug.pc == 0x1001,
+          "a single step is KVM_EXIT_DEBUG with DR6.BS at the next instruction");
+    CHECK((m.entry_rflags & RFLAGS_TF) && !(regs_of(fd).rflags & RFLAGS_TF) &&
+              (f[EXCEPTION_BITMAP] & (1u << DB_VECTOR)),
+          "the guest runs under TF and #DB exits, and its RFLAGS hide TF");
+    script(EXIT_CPUID, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.pc == 0x1003,
+          "an instruction the kernel runs is a step too");
+
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP, 0, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0, 1);
+    w->intr_info = BP_VECTOR | (TYPE_SOFT_EXC << 8) | INTR_VALID;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.exception == BP_VECTOR &&
+              rp->u.debug.pc == 0x1003 && (f[EXCEPTION_BITMAP] & (1u << BP_VECTOR)) &&
+              !(f[EXCEPTION_BITMAP] & (1u << DB_VECTOR)),
+          "INT3 under software breakpoints is KVM_EXIT_DEBUG at the INT3");
+
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP, 0x1234, 0x1);
+    w = script(EXIT_EXCEPTION_NMI, 0x1, 0);
+    w->intr_info = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG &&
+              rp->u.debug.dr6 == (1u | DR6_FIXED) && rp->u.debug.dr7 == 1 && f[GUEST_DR7] == 1 &&
+              m.entry_dr0 == 0x1234,
+          "a hardware breakpoint of the caller's runs in DR0 and DR7 and reports B0");
+
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_BLOCKIRQ, 0, 0);
+    CHECK(fdio(fd, KVM_NMI, 0) == 0, "KVM_NMI");
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0, "KVM_GUESTDBG_BLOCKIRQ holds the NMI");
+    guest_debug(fd, 0, 0, 0);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == (NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID),
+          "and it is injected once debugging ends");
+    CHECK(f[EXCEPTION_BITMAP] == (1u << MC_VECTOR) && f[GUEST_DR7] == vcpu_of(fd)->debugregs.dr7,
+          "with the bitmap and DR7 the guest's again");
+}
+
 /** The host's interrupt, NMI and machine check, the preemption timer, a
  * triple fault and the two kinds of failed entry. */
 static void host_rows(int fd)
@@ -1958,6 +2041,7 @@ static void pae_rows(int fd)
     uint64_t pdpte = 0x5001, bad = 0x6003, zero = 0;
 
     k_memcpy(&ram[0x4000], &pdpte, 8);
+    s.cs.l = 0;
     s.cr0 = 0x80000011u;
     s.cr4 = CR4_PAE;
     s.efer = 0;
@@ -2019,6 +2103,7 @@ int main(void)
     cr_rows(fd);
     insn_rows(fd);
     event_rows(fd);
+    debug_rows(fd);
     host_rows(fd);
     path_rows(fd);
     pae_rows(fd);
