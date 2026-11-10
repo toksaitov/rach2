@@ -556,8 +556,10 @@ processor without 1 GiB pages.
 .Li Buffers
 and
 .Li Cached
-give resident buffer-cache memory and the memory of the page caches, the
-disk window's and the copies of file pages kept between mappings.
+give resident buffer-cache memory and the memory of the page caches: the
+disk window's, and the file page cache's, the pages of ext2 files that
+.Xr read 2 ,
+exec and private mappings read, kept while memory is free.
 .Li MemAvailable
 is free memory plus both caches.
 .Li SwapCached
