@@ -386,6 +386,7 @@ struct obj {
     int refs;                   /* references the mappings hold */
     int puts;                   /* `put` calls */
     int revoked;
+    int busy;           /* `page` answers 1, to run the access again */
     uint64_t access_at; /* the offset of the last `access` */
     int accesses;       /* `access` calls */
 };
@@ -397,6 +398,9 @@ static int obj_page(void *o, uint32_t pgoff, uintptr_t *phys)
 
     if (ob->revoked || pgoff >= OBJ_PAGES) {
         return -1;
+    }
+    if (ob->busy) {
+        return 1;
     }
     *phys = ob->frame[pgoff];
     return 0;
@@ -653,6 +657,18 @@ static void zap_rows(void)
     _page_fault_handler(&params);
     check(sent_signo == SIGSEGV && sent_info.code == SEGV_MAPERR,
           "a touch outside every region still raises SIGSEGV");
+    ram_obj.busy = 1;
+    paging_zap_device(&ram_obj, 0, OBJ_PAGES);
+    params.error_code = 0x4; /* a read, from user mode, of a page not present */
+    fault_cr2 = VA_RAM + 0x20;
+    sent_signo = 0;
+    _page_fault_handler(&params);
+    check(sent_signo == 0 && proc_a.fault_retry && !proc_a.bus_fault && pte_of(&dir_a, VA_RAM) == 0,
+          "an object that cannot give the page yet: no signal, nothing mapped, the access to run "
+          "again");
+    check(vm_resolve_in(&mm_a, VA_RAM, 0, ~(uintptr_t)0) == 0,
+          "and the kernel's own resolution of it fails");
+    ram_obj.busy = 0;
 }
 
 /** munmap and exit drop the last references, and the object's goes once. */

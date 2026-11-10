@@ -248,6 +248,10 @@ struct process {
     /* A device object had no page for this thread's access since its last
      * page fault began (`device_fault`): the fault raises SIGBUS. */
     uint32_t bus_fault;
+    /* A device object could not give the page yet since its last page fault
+     * began (`device_fault`): a fault from user mode returns, so that the
+     * thread's signals are handled, and the access runs again. */
+    uint32_t fault_retry;
     /* It waits, with its registers and floating-point state saved, for the
      * core another thread of its process writes (`core_park`). */
     uint32_t core_parked;

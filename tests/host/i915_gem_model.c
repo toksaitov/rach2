@@ -72,15 +72,18 @@ NOT_HERE(i915_gem_throttle_ioctl)
 
 /* The GPU's idling, which eviction waits for when only busy bindings are
  * left: `idle_signals`, a fence a row names, signals, as its request would
- * retire. `idle_waits` counts the waits. */
+ * retire. `idle_waits` counts the waits; with `idle_intr` set a signal is
+ * pending, and a wait that takes one ends at once with -EINTR. */
 static struct dma_fence *idle_signals;
-static int idle_waits;
+static int idle_waits, idle_intr;
 
 int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
 {
     (void)i915;
-    (void)intr;
     idle_waits++;
+    if (intr && idle_intr) {
+        return -EINTR;
+    }
     if (idle_signals) {
         dma_fence_signal(idle_signals);
         idle_signals = 0;
@@ -874,6 +877,16 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
     zap_pgoff = pgoff;
     zap_count = count;
     zaps++;
+}
+
+/** What the mapping `vma`'s `page` gives for its page `page`: 0, -1 for
+ * SIGBUS or 1 to run the access again. */
+static int fault_code(vma_t *vma, uint32_t page)
+{
+    struct region *r = (struct region *)vma->file;
+    uintptr_t phys = 0;
+
+    return r->ops->page(r->obj, vma->pgoff + page, &phys);
 }
 
 /** Fault page `page` of the mapping `vma`, the object's page vma->pgoff +

@@ -317,14 +317,14 @@ static struct i915_vma *vma_lookup(struct drm_i915_gem_object *obj, uint32_t vie
  * Before a binding that does not serve is undone, wait for the GPU to
  * finish with its object, as Linux's unbind does in i915_vma_sync: 0 when
  * the caller may look again, -ENOSPC under I915_PIN_NONBLOCK, or -EINTR
- * for a signal unless I915_PIN_NOINTR.
+ * for a signal.
  */
 static int32_t vma_wait_idle(struct drm_i915_gem_object *obj, uint32_t flags)
 {
     if (flags & I915_PIN_NONBLOCK) {
         return -ENOSPC;
     }
-    return i915_gem_object_wait_idle(obj, !(flags & I915_PIN_NOINTR));
+    return i915_gem_object_wait_idle(obj, 1);
 }
 
 /**
