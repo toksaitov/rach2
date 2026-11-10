@@ -1149,6 +1149,13 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
     return total;
 }
 
+/** Whether a held descriptor selects the mounted-file vector append path. */
+static int iov_append_file(const fd_entry_t *entry)
+{
+    return entry && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd && entry->ofd->vmnt &&
+           (entry->ofd->status_flags & OFD_APPEND);
+}
+
 /** Append a copied user vector under the file's lock, as defined below. */
 static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long pos);
 
@@ -1159,7 +1166,8 @@ static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long p
  * them, and a vector a seal refuses whole is refused before the first
  * (`writev_begin`). Returns the bytes written, or a negative errno: -EINVAL
  * for a count below 0 or past IOV_MAX_LOCAL, -EPERM for a vector the seal
- * refuses, or the error of the first element.
+ * refuses, or a transfer error when no byte was written. A buffer fault
+ * after a positive transfer returns the bytes written before the fault.
  */
 static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
@@ -1176,8 +1184,7 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     rc = writev_begin(fd, iov_user, iovcnt, &held);
     if (rc == 0) {
         entry = fd_get(current_proc->fds, fd);
-        if (entry && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd && entry->ofd->vmnt &&
-            (entry->ofd->status_flags & OFD_APPEND)) {
+        if (iov_append_file(entry)) {
             rc = (int32_t)iov_append(entry, iov_user, iovcnt, -1);
         } else {
             rc = writev_elements(fd, iov_user, iovcnt);
@@ -12117,9 +12124,11 @@ static long long pos_from_hilo(unsigned long high, unsigned long low)
 /**
  * The elements of the vector at `iov_user` read from or, with `write`,
  * written to `fd` at the position `pos`, which the descriptor's own offset
- * does not follow: each through `ksys_pread64` or `ksys_pwrite64`, at the
- * position the elements before it reached. The vector is checked whole
- * first, as readv checks it, so a bad element is refused before a byte
+ * does not follow. An O_APPEND mounted file goes through iov_append, with
+ * one lock across the vector. Other transfers go through `ksys_pread64` or
+ * `ksys_pwrite64`, at the position the elements before it reached.
+ * Their vector is checked whole first, as readv checks it, so a bad element
+ * is refused before a byte
  * moves; a vector of no bytes still has the descriptor checked. A short
  * transfer ends the call, and an error after bytes moved returns those
  * bytes. Returns the bytes moved or a negative errno: -EINVAL for a
@@ -12130,12 +12139,17 @@ static long long pos_from_hilo(unsigned long high, unsigned long low)
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
     struct kernel_iovec iov;
+    fd_entry_t *entry;
     uint32_t wanted = 0;
     long total = 0;
     int i;
 
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL || pos < 0) {
         return -EINVAL;
+    }
+    entry = write && current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    if (iov_append_file(entry)) {
+        return iov_append(entry, iov_user, iovcnt, pos);
     }
     for (i = 0; i < iovcnt; i++) {
         if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
@@ -12195,11 +12209,11 @@ long sys_pwritev(isr_params_t *params)
 
 /**
  * Copy the `count` elements of the vector at `addr` into `iov` and check
- * each as a write's: 0 with their total in `*wanted`, -EFAULT for a vector
- * or a buffer the caller cannot reach, or -EINVAL for a total of 2 GiB or
- * more. May sleep.
+ * each address range, without touching the buffers: 0 with their total
+ * in `*wanted`, -EFAULT for an unreadable vector or a range outside user
+ * space, or -EINVAL for a total of 2 GiB or more. Copying the list may sleep.
  */
-static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
+static long iov_import_write(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
 {
     int i;
 
@@ -12211,7 +12225,7 @@ static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uin
         if (iov[i].iov_len > 0x7FFFFFFFu || *wanted > 0x7FFFFFFFu - iov[i].iov_len) {
             return -EINVAL;
         }
-        if (iov[i].iov_len && !user_buffer_ok(iov[i].iov_base, iov[i].iov_len, 0)) {
+        if (iov[i].iov_len && !user_span_ok(iov[i].iov_base, iov[i].iov_len)) {
             return -EFAULT;
         }
         *wanted += (uint32_t)iov[i].iov_len;
@@ -12219,15 +12233,68 @@ static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uin
     return 0;
 }
 
+/** Bring in an imported write vector before taking file locks. At the first
+ * bad data page keep only the prefix before it, including a partial element,
+ * and clear the lengths after it. Return the accessible byte count. A later
+ * buffer fault must not discard earlier bytes; faults may sleep and take
+ * another file's lock, so this step precedes the destination's locks. */
+static uint32_t iov_write_prefix(struct kernel_iovec *iov, int count)
+{
+    uint32_t total = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        uintptr_t addr = iov[i].iov_base;
+        uint32_t len = (uint32_t)iov[i].iov_len, have = 0;
+
+        if (!len || user_buffer_ok(addr, len, 0)) {
+            total += len;
+            continue;
+        }
+        while (have < len) {
+            uint32_t piece = PAGE_SIZE - ((addr + have) & (PAGE_SIZE - 1));
+
+            if (piece > len - have) {
+                piece = len - have;
+            }
+            if (!user_buffer_ok(addr + have, piece, 0)) {
+                break;
+            }
+            have += piece;
+        }
+        iov[i].iov_len = have;
+        total += have;
+        while (++i < count) {
+            iov[i].iov_len = 0;
+        }
+        break;
+    }
+    return total;
+}
+
+/** Import an append vector and retain its accessible prefix before locking.
+ * Return 0, an import error, or EFAULT when no requested byte is readable. */
+static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
+{
+    long rc = iov_import_write(iov, addr, count, wanted);
+
+    if (rc != 0) {
+        return rc;
+    }
+    return *wanted && iov_write_prefix(iov, count) == 0 ? -EFAULT : 0;
+}
+
 /**
  * Append the vector of `count` elements at `addr` to the regular file of
  * the descriptor `entry`, which the caller holds, holding its description
  * and file locks across the elements (`file_write_locked`), or the mount's
  * namespace lock on a type without per-file locks. The vector is
- * copied and checked before the descriptor, since the copy may sleep, and
- * the descriptor is checked before its locks are taken. The explicit
+ * copied and range-checked first, and its accessible prefix is brought in
+ * before the locks, since a fault may need another file's lock. The
+ * descriptor is checked after those copies, which may sleep. The explicit
  * position `pos` is ignored; -1 alone advances the shared offset. Returns
- * the bytes written or the first error: -EINVAL for a count below 0 or past
+ * the bytes written, including those before a bad data page, or an error
+ * when no byte was written: -EINVAL for a count below 0 or past
  * IOV_MAX_LOCAL or a vector of 2 GiB or more, -EFAULT for a vector or a
  * buffer the caller cannot reach, -EBADF for a descriptor that is not a
  * file of a mount open for writing, -EBUSY for a file that backs a loop

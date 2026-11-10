@@ -4123,7 +4123,11 @@
         {"assertion_id": "rwv2-refusals", "checks": "preadv2 and pwritev2 of a descriptor not open fail with EBADF though a flag is unknown, and of an open one with the unknown flag with EOPNOTSUPP", "source": "program"},
         {"assertion_id": "rwv2-import", "checks": "both calls at offset -1 and 0 check unreadable vectors, excessive counts and negative lengths before flags, and data faults after flags", "source": "program"},
         {"assertion_id": "rwv2-zero", "checks": "both calls at offset -1 and 0 return zero for zero vectors or a zero-length buffer despite an unknown flag", "source": "program"},
-        {"assertion_id": "range-sync", "checks": "sync_file_range with SYNC_FILE_RANGE_WRITE on the file returns 0, of a descriptor not open fails with EBADF though its flags and offset are bad, with an unknown flag fails with EINVAL, and of /dev/null with ESPIPE", "source": "program"}
+        {"assertion_id": "range-sync", "checks": "sync_file_range with SYNC_FILE_RANGE_WRITE on the file returns 0, of a descriptor not open fails with EBADF though its flags and offset are bad, with an unknown flag fails with EINVAL, and of /dev/null with ESPIPE", "source": "program"},
+        {"assertion_id": "append-later-fault", "checks": "writev, pwritev and pwritev2 on O_APPEND retain the bytes before a later unmapped buffer, and only writev advances the shared offset", "source": "program"},
+        {"assertion_id": "append-buffer-fault", "checks": "each append vector call retains the bytes before a fault within its first buffer and writes no later buffer", "source": "program"},
+        {"assertion_id": "append-first-fault", "checks": "each append vector call returns EFAULT with no file or offset change when its first buffer is unmapped", "source": "program"},
+        {"assertion_id": "append-demand-buffer", "checks": "each append vector call reads a valid untouched anonymous buffer and appends its zero bytes followed by the next buffer", "source": "program"}
       ],
       "branches": [
         {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "x86-64", "when": null, "assertions": ["preadv-high-half"]}, {"alternative_id": "i686", "when": null, "assertions": ["mem-write-eio", "preadv-high-word"]}]}

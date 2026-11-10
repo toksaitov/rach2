@@ -54,6 +54,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -85,25 +86,35 @@ extern char **environ;
 
 /* The assertions, a check each, in the order the program makes them, with
  * those of the architecture's alternative of the group `arch` in place. */
-static const char *const assertion_id[] = {
-    "make-file",        "pread-middle",    "pread-across-end",  "pread-past-end",
-    "pwrite-middle",    "pwrite-past-end", "file-after-writes", "read-from-offset",
-    "pread-wide",       "append",          "proc-snapshot",     "dev-zero",
-    "dev-null",         "proc-seek",       "mem-stack",
+static const char *const assertion_id[] = {"make-file",          "pread-middle",
+                                           "pread-across-end",   "pread-past-end",
+                                           "pwrite-middle",      "pwrite-past-end",
+                                           "file-after-writes",  "read-from-offset",
+                                           "pread-wide",         "append",
+                                           "proc-snapshot",      "dev-zero",
+                                           "dev-null",           "proc-seek",
+                                           "mem-stack",
 #if !defined __x86_64__
-    "mem-write-eio",
+                                           "mem-write-eio",
 #endif
-    "proc-sys-4g",      "negative-offset", "sign-bit",          "make-pipe",
-    "pipe-espipe",      "socket-espipe",   "stdout-espipe",     "other-direction",
-    "directory",        "lseek-espipe",    "vector-file",       "pwritev-vector",
-    "preadv-vector",    "preadv-short",
+                                           "proc-sys-4g",        "negative-offset",
+                                           "sign-bit",           "make-pipe",
+                                           "pipe-espipe",        "socket-espipe",
+                                           "stdout-espipe",      "other-direction",
+                                           "directory",          "lseek-espipe",
+                                           "vector-file",        "pwritev-vector",
+                                           "preadv-vector",      "preadv-short",
 #if defined __x86_64__
-    "preadv-high-half",
+                                           "preadv-high-half",
 #else
-    "preadv-high-word",
+                                           "preadv-high-word",
 #endif
-    "pwritev-efault",   "vector-refusals", "pwritev2-append",   "preadv2-readback",
-    "rwv2-refusals",    "rwv2-import",     "rwv2-zero",         "range-sync"};
+                                           "pwritev-efault",     "vector-refusals",
+                                           "pwritev2-append",    "preadv2-readback",
+                                           "rwv2-refusals",      "rwv2-import",
+                                           "rwv2-zero",          "range-sync",
+                                           "append-later-fault", "append-buffer-fault",
+                                           "append-first-fault", "append-demand-buffer"};
 
 /** Begin the report, give the branch of `arch`, and plan the assertions. */
 static void report_start(void)
@@ -536,6 +547,90 @@ static int vector_flag_rows(void)
     return 0;
 }
 
+/** Check one kind of append buffer through writev, pwritev and pwritev2.
+ * `pages` has one mapped page and an unmapped page after it. Each call must
+ * retain its valid prefix, stop at the fault and keep a positioned offset.
+ * Return 1 on success, 0 on any mismatch. */
+static int append_fault_case(int fd, char *pages, int kind)
+{
+    struct iovec out[2];
+    char got[8];
+    const char *want = kind == 3 ? "\0\0UV" : "XY";
+    int mode, bytes = kind == 2 ? 0 : kind == 3 ? 4 : 2;
+
+    for (mode = 0; mode < 3; mode++) {
+        ssize_t n;
+
+        if (ftruncate(fd, 0) != 0 || lseek(fd, 0, SEEK_SET) != 0) {
+            return 0;
+        }
+        out[0].iov_base = "XY";
+        out[0].iov_len = 2;
+        out[1].iov_base = pages + 4096;
+        out[1].iov_len = 2;
+        if (kind == 1) {
+            pages[4094] = 'X';
+            pages[4095] = 'Y';
+            out[0].iov_base = pages + 4094;
+            out[0].iov_len = 4;
+        } else if (kind == 2) {
+            out[0].iov_base = pages + 4096;
+        } else if (kind == 3) {
+            if (madvise(pages, 4096, MADV_DONTNEED) != 0) {
+                return 0;
+            }
+            out[0].iov_base = pages;
+        }
+        if (kind != 0) {
+            out[1].iov_base = "UV";
+        }
+        n = mode == 0   ? writev(fd, out, 2)
+            : mode == 1 ? pwritev(fd, out, 2, 0)
+                        : RWV2(SYS_pwritev2, fd, out, 2, 0LL, 0);
+        if ((kind == 2 ? !refused(n, EFAULT) : n != bytes) ||
+            !offset_is(fd, mode == 0 ? bytes : 0) || pread(fd, got, sizeof(got), 0) != bytes ||
+            memcmp(got, want, (size_t)bytes) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Check append's short counts and demand faults, releasing the file and
+ * mappings before reporting a failure. The caller removes FILE_PATH. */
+static int append_fault_rows(void)
+{
+    static const char *const why[] = {
+        "append retains bytes before a later unmapped buffer",
+        "append retains bytes before a fault within a buffer",
+        "append returns EFAULT with no bytes when its first buffer is unmapped",
+        "append faults in a valid buffer before taking the file lock"};
+    int fd = open(FILE_PATH, O_CREAT | O_RDWR | O_APPEND | O_TRUNC, 0600);
+    char *pages = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int kind, ok = 0;
+    const char *error = "make append file and unmapped buffer";
+
+    if (fd < 0 || pages == MAP_FAILED || munmap(pages + 4096, 4096) != 0) {
+        goto out;
+    }
+    for (kind = 0; kind < 4; kind++) {
+        error = why[kind];
+        if (!append_fault_case(fd, pages, kind)) {
+            goto out;
+        }
+        report_held();
+    }
+    ok = 1;
+out:
+    if (pages != MAP_FAILED) {
+        munmap(pages, 8192);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : fail(error);
+}
+
 /**
  * Check the refusals of preadv and pwritev on the file vector_rows makes.
  * Returns 0, or 1 once the failure is reported.
@@ -647,7 +742,8 @@ int main(void)
 {
     report_start();
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
-        refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0) {
+        refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0 ||
+        append_fault_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }

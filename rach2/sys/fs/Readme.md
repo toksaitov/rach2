@@ -66,6 +66,8 @@ The working directory's path is in the `fs_struct` that `CLONE_FS` shares, in it
 
 An `O_PATH` open of a proc descriptor link keeps the mounted file or synthetic object the source descriptor names. A mounted inode gets a new path description, and a synthetic object shares its held description with access disabled on the new descriptor, so closing the source does not invalidate the path.
 
+A vector append through `writev`, `pwritev` or `pwritev2` holds the description and file locks across its elements, or the mount's namespace lock where the type has no file locks. O_APPEND and RWF_APPEND both use this path. The vector's address ranges are checked first; its buffers are then brought in before taking the locks, retaining only the bytes before the first bad data page. A later buffer fault therefore returns the bytes appended before it. An explicit position leaves the shared offset alone.
+
 ### Permissions, ownership and times
 
 A process is privileged when `proc_privileged` is true of it; [the process subsystem's Readme](../proc/Readme.md) gives the rule. `cred_access_bits` judges one class, owner, group or other, by the effective ids, or the real ones for `access`, and passes a caller whose user id of that kind is 0 and who has kept its capabilities. `cred_access_node` applies it to a node of the KRFFS root and `cred_access_ref` to a node of another type, from the attributes the type reports. Both answer `EACCES` to the execution of a non-directory with no execute bit, even for root, and `cred_access_ref` answers `EPERM` to a write of an immutable file. The KRFFS root directory is judged as mode 0755 and not sticky by its identity, since its stored mode has the dirty flag where the setuid bit would be ([krffs.Readme.md](krffs.Readme.md)).

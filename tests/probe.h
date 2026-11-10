@@ -188,6 +188,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_PRLIMIT64         302
 #define SYS_SYNCFS            306
 #define SYS_GETRANDOM         318
+#define SYS_PWRITEV           296
 #define SYS_PWRITEV2          328
 #define SYS_SETFSUID          122
 #define SYS_SETFSGID          123
@@ -453,6 +454,7 @@ static __inline__ long syscall0(long n)
 #define SYS_RECVMMSG          337
 #define SYS_RECVMMSG_TIME64   417
 #define SYS_SHUTDOWN          373
+#define SYS_PWRITEV           334
 #define SYS_PWRITEV2          379
 
 /* The calls only i386 has, and the narrower calls of the old names. */

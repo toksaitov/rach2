@@ -41,8 +41,8 @@
  * `lagprobe writers [TYPE]`: two children write files on the lagged volume,
  * FAT32 or the type TYPE names, while the parent syncs it; each file reads
  * back as its own bytes. Two more append to one file through opens of
- * their own, one with O_APPEND and one with pwritev2's RWF_APPEND, and the
- * file holds every record of both.
+ * their own, one with O_APPEND through writev, pwritev and pwritev2, and
+ * one with pwritev2's RWF_APPEND. The file holds every record of both.
  *
  * `lagprobe pool`, under `rach2.blockpool=2` with the lag: three readers
  * and a writer on two slots, of which the disk may hold one, so whoever
@@ -654,10 +654,11 @@ static void check_written(const char *path, unsigned char fill)
 #define APPEND_PATH   "/lw/append.bin"
 
 /** An appender of `lagprobe writers`: open APPEND_PATH, which the parent
- * made, and add APPEND_ROUNDS two-element records of `fill`, with writev
- * and O_APPEND or, when `flag`, with pwritev2's RWF_APPEND on a description
- * without it; exit 0,
- * 2 when the open fails and 3 when a write is short. */
+ * made, and add APPEND_ROUNDS two-element records of `fill`: with O_APPEND
+ * through writev, pwritev and pwritev2 in turn, or, when `flag`, with
+ * pwritev2's RWF_APPEND on a description without it. Positioned writes
+ * must leave the shared offset alone. Exit 0, 2 when the open fails and
+ * 3 when a write is short or changes the wrong offset. */
 static void appender(unsigned char fill, int flag)
 {
     static unsigned char record[APPEND_RECORD];
@@ -677,9 +678,19 @@ static void appender(unsigned char fill, int flag)
         sys_exit(2);
     }
     for (i = 0; i < APPEND_ROUNDS; i++) {
-        n = flag ? syscall6(SYS_PWRITEV2, fd, (long)iov, 2, -1, -1, RWF_APPEND)
-                 : syscall3(SYS_WRITEV, fd, (long)iov, 2);
-        if (n != APPEND_RECORD) {
+        long before = syscall3(SYS_LSEEK, fd, 0, 1);
+        int positioned = !flag && i % 3 != 0;
+
+        if (flag) {
+            n = syscall6(SYS_PWRITEV2, fd, (long)iov, 2, -1, -1, RWF_APPEND);
+        } else if (i % 3 == 0) {
+            n = syscall3(SYS_WRITEV, fd, (long)iov, 2);
+        } else if (i % 3 == 1) {
+            n = syscall5(SYS_PWRITEV, fd, (long)iov, 2, 0, 0);
+        } else {
+            n = syscall6(SYS_PWRITEV2, fd, (long)iov, 2, 0, 0, 0);
+        }
+        if (n != APPEND_RECORD || (positioned && syscall3(SYS_LSEEK, fd, 0, 1) != before)) {
             sys_exit(3);
         }
     }
@@ -727,8 +738,8 @@ static void check_appended(unsigned char one, unsigned char other)
  * `lagprobe writers`, under the lag with the second partition mounted for
  * writing: two children each create a file and extend it eight times, two
  * more append records to one file through descriptions of their own, one
- * with writev and O_APPEND and one with RWF_APPEND, each record in two
- * elements, and the parent syncs the volume
+ * with writev, pwritev and pwritev2 on O_APPEND and one with RWF_APPEND,
+ * each record in two elements, and the parent syncs the volume
  * twenty times while they do; every write sleeps in the lag, so the
  * requests interleave, and an append that read the end before another's
  * write and wrote after it would overwrite that record. Each file must read
