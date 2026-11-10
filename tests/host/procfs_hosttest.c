@@ -774,6 +774,13 @@ krffs_node_t *krffs_resolve(const char *path)
 
 const struct vfs_type vfs_tmpfs_type = {0};
 
+/** Whether a node is memfd_secret's, which no row's is: 0. */
+int tmpfs_secret(void *node)
+{
+    (void)node;
+    return 0;
+}
+
 /** The name of a memfd, which no row's node is: NULL. */
 const char *tmpfs_label(void *node)
 {

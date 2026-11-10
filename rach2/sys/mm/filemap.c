@@ -149,8 +149,9 @@ static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 
 /** A page of a shared mapping of memory: shared anonymous memory has every
  * page, and a file in memory those its size reaches, as on Linux, where a
- * touch past a file's end is SIGBUS. Returns 0 with a reference in `phys`,
- * ENXIO past EOF, or ENOMEM when no frame can be had. */
+ * touch past a file's end, or one its quota has no room for, is SIGBUS.
+ * Returns 0 with a reference in `phys`, ENXIO past EOF or with the quota
+ * full, or ENOMEM when no frame can be had. */
 static int filemap_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
 {
     struct filemap *m = (struct filemap *)f;
@@ -159,7 +160,10 @@ static int filemap_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
         return -ENXIO;
     }
     *phys = shmem_map_page(m->sh, pgoff);
-    return *phys ? 0 : -ENOMEM;
+    if (*phys) {
+        return 0;
+    }
+    return shmem_quota_full(m->sh) ? -ENXIO : -ENOMEM;
 }
 
 /** The KRFFS boot-root node the mapping's file is now, including through a

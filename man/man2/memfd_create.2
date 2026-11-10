@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 11, 2026
 .Dt MEMFD_CREATE 2
 .Os
 .Sh NAME
@@ -93,7 +93,9 @@ Every tmpfs file supports the seal commands, and one made by
 .Xr open 2
 starts with
 .Dv F_SEAL_SEAL ;
-a file of any other type answers them with
+a file of any other type, and one of
+.Xr memfd_secret 2 ,
+answers them with
 .Er EINVAL .
 .Pp
 The i386 system call number is 356.
@@ -138,6 +140,7 @@ an open file description.
 .El
 .Sh SEE ALSO
 .Xr fcntl 2 ,
+.Xr memfd_secret 2 ,
 .Xr mount 2 ,
 .Xr truncate 2 ,
 .Xr proc 5

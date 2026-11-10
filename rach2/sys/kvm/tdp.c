@@ -466,7 +466,8 @@ static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
  * and then read again from the caller's tables with nothing that sleeps
  * before the leaf is set, so that the change notice, which runs only under
  * the big lock, cannot come between the read and the leaf. The slot is
- * looked up again after each sleep, since it may have moved or gone.
+ * looked up again after each sleep, since it may have moved or gone. A
+ * page of memfd_secret is -EFAULT, as Linux's get_user_pages refuses one.
  *
  * A page of a slot that logs is mapped writable only when it is dirty
  * already: a write fault marks it, and a read leaves a clean page
@@ -478,6 +479,7 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
     struct mm *mm = kvm_vm_mm(vm);
     struct kvm_slot_view s;
     struct leaf_info big;
+    const vma_t *r;
     uint64_t phys, i;
     int writable;
     pte_t pte;
@@ -487,6 +489,10 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
             return 1;
         }
         if (!t || !mm || !current_proc || current_proc->mm != mm) {
+            return -EFAULT;
+        }
+        r = vm_find(&mm->vm, (uintptr_t)s.hva);
+        if (r && (r->prot & VM_PROT_SECRET)) {
             return -EFAULT;
         }
         pte = host_pte(mm, (uintptr_t)s.hva);

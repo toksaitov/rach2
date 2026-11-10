@@ -46,7 +46,10 @@ to the one holding its last byte, and stops at the end of the file.
 counts those in memory and
 .Va nr_dirty
 those of them not yet written back.
-A tmpfs or memfd page is in memory once it is allocated, and is dirty.
+A tmpfs or memfd page is in memory once it is allocated, and is dirty;
+a page of
+.Xr memfd_secret 2
+is in memory but never dirty, as on Linux.
 An ext2 page is in memory when the buffer cache holds every block of
 it, and dirty when one of them waits to be written.
 Rach2 keeps no record of pages it has dropped, and writes a block back

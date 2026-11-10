@@ -413,6 +413,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SECCOMP] = sys_seccomp;
     table[SYS_GETRANDOM] = sys_getrandom;
     table[SYS_MEMFD_CREATE] = sys_memfd_create;
+    table[SYS_MEMFD_SECRET] = sys_memfd_secret;
     table[SYS_MLOCK2] = sys_mlock2;
     table[SYS_STATX] = sys_statx;
     table[SYS_NAME_TO_HANDLE_AT] = sys_name_to_handle_at;

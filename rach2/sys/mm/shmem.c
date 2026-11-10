@@ -64,12 +64,25 @@ static uintptr_t *slot(struct shmem *sh, uint32_t i, int make)
     return &sh->leaves[leaf][i % SHMEM_LEAF];
 }
 
+int shmem_quota_full(const struct shmem *sh)
+{
+    const struct shmem_quota *q = sh->quota;
+
+    if (!q) {
+        return 0;
+    }
+    if (q->cap) {
+        return q->used >= q->cap();
+    }
+    return q->limit && q->used >= q->limit;
+}
+
 /** Count a frame the table takes: 1, or 0 when the quota has no room for
  * it. */
 static int take_page(struct shmem *sh)
 {
     if (sh->quota) {
-        if (sh->quota->limit && sh->quota->used >= sh->quota->limit) {
+        if (shmem_quota_full(sh)) {
             return 0;
         }
         sh->quota->used++;

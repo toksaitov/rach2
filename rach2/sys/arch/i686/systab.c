@@ -169,6 +169,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_FCNTL64] = sys_fcntl64;
     table[SYS_FLOCK] = sys_flock;
     table[SYS_MEMFD_CREATE] = sys_memfd_create;
+    table[SYS_MEMFD_SECRET] = sys_memfd_secret;
     table[SYS_SENDFILE] = sys_sendfile32;
     table[SYS_SENDFILE64] = sys_sendfile;
     table[SYS_SPLICE] = sys_splice;

@@ -58,6 +58,22 @@ uint32_t tmpfs_seals(void *node);
  */
 int tmpfs_add_seals(void *node, uint32_t seals);
 
+/**
+ * A file of memfd_secret on `mnt`: a regular file of mode 0600 that no
+ * directory names, owned by the caller, whose bytes only its shared mappings
+ * reach. Its pages are counted for the caller's real user, as Linux counts
+ * them in the user's locked_vm, against the RLIMIT_MEMLOCK of the process
+ * that touches each, with no exception for privilege; a touch past the
+ * limit is SIGBUS. read and write are -EINVAL, a size is set only while it
+ * is 0, else -EINVAL, fallocate is -EOPNOTSUPP and fcntl's seal commands
+ * EINVAL, as on Linux. The node comes back in `*node` with one hold. 0, or
+ * -ENOMEM.
+ */
+int tmpfs_secret_file(struct vfs_mount *mnt, void **node);
+
+/** Whether the tmpfs node `node` is a file of memfd_secret. */
+int tmpfs_secret(void *node);
+
 /** The name `tmpfs_memfd` was given for the file `node`, or NULL for a file
  * made in a directory. */
 const char *tmpfs_label(void *node);
