@@ -537,27 +537,55 @@ fail the call with
 .Er EINVAL .
 .Ss Display
 The device has three CRTCs, pipes A to C, each with a primary plane, a
-sprite and a cursor, Linux's planes for Haswell; a TMDS encoder on DDI A;
-and the eDP connector
-.Ql eDP-1 .
+sprite and a cursor, Linux's planes for Haswell; and, when DDI A detects
+a panel that answers on its AUX channel, a TMDS encoder on DDI A and the
+eDP connector
+.Ql eDP-1 ,
+always connected, with the modes of the panel's EDID and its fixed modes,
+and the properties
+.Ql scaling mode ,
+Full aspect by default, Full or Center, and
+.Ql max bpc ,
+6 to 12.
 At bind the driver reads out what the firmware left lit, without a write:
 on the Lenovo pipe A drives the panel through the eDP transcoder at
 .Dq 1366x768 :
 60 76300 1366 1374 1384 1558 768 771 772 816, 18 bits a pixel on one lane
 at 270 MHz.
-It adopts that pipe into the atomic state, on, with that mode, routed to
-the connector and showing the firmware's framebuffer, and logs
+It adopts that pipe into the atomic state, on, with the panel's mode,
+routed to the connector and showing the firmware's framebuffer, and logs
 .Dq i915: display: pipe A adopted
 with the mode, the link and the framebuffer.
-The connector is connected while a lit pipe feeds it, with that mode as
-its one mode, and disconnected otherwise.
 .Pp
-A CRTC takes only the mode the firmware left on it: a commit that keeps
-it changes the planes alone, without a mode set, and one with another
-mode, or that lights a pipe the firmware left dark, fails with
-.Er EINVAL .
-Turning a pipe off turns its planes and the panel's backlight off;
-turning it on again restores them.
+A commit that keeps a pipe's mode and the connector's properties changes
+the planes alone; one that changes them, or turns a pipe on or off, sets
+the mode in Linux's order, with the panel's power, its link trained and
+its backlight, and logs
+.Dq i915: display: pipe A set
+with the sizes, the clock, the bits a pixel and the link.
+Any pipe may drive the panel.
+A mode of the panel's size and refresh rate is driven as it is; a
+smaller one is scaled to the panel by the pipe's fitter as
+.Ql scaling mode
+says, and fails with
+.Er EINVAL
+when the source is wider than the fitter takes, or
+.Er ERANGE
+when it scales down by more than 1.125.
+A mode fails with
+.Er EINVAL
+when its refresh rate is more than a hertz from the panel's, when no link
+carries it at 18 bits a pixel, or when its pixel rate passes the CD
+clock.
+A link that fails to train is set lower, the connector's
+.Ql link-status
+goes
+.Dq Bad
+and a hotplug event asks the compositor to set the mode again, which
+trains the new link and sets the status
+.Dq Good .
+Turning a pipe off turns its planes, backlight, transcoder, link and the
+panel's power off.
 .Pp
 The primary plane takes C8, RGB565, XRGB8888, XBGR8888, XRGB2101010,
 XBGR2101010 and XBGR16161616F, the sprite XRGB8888, XBGR8888, the two
@@ -596,16 +624,11 @@ the sprite, and
 .Ql pf
 and
 .Ql auto ,
-the pipe's output after its panel fitter; on a pipe that feeds the eDP
-transcoder with its fitter off,
-.Ql auto
-is the primary plane and
-.Ql pipe
-and
-.Ql pf
-fail with
-.Er EINVAL .
-The first frame after a source is set is dropped.
+the pipe's output after its panel fitter.
+While a source runs on pipe A feeding the panel, the pipe's input is set
+through its fitter's power well, by a mode set when the fitter is off, and
+set back when the source stops, as Linux does.
+The first frame after a source is set, or after a mode set, is dropped.
 .Pp
 The panel's backlight,
 .Pa intel_backlight ,
