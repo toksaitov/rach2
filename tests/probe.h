@@ -81,7 +81,6 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_RECVFROM          45
 #define SYS_SENDMSG           46
 #define SYS_RECVMSG           47
-#define SYS_RECVMMSG          299
 #define SYS_SHUTDOWN          48
 #define SYS_BIND              49
 #define SYS_LISTEN            50
@@ -146,11 +145,17 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_SETRESGID         119
 #define SYS_GETRESGID         120
 #define SYS_GETPGID           121
+#define SYS_SETFSUID          122
+#define SYS_SETFSGID          123
 #define SYS_GETSID            124
+#define SYS_RT_SIGPENDING     127
 #define SYS_SIGALTSTACK       131
 #define SYS_MKNOD             133
+#define SYS_USTAT             136
 #define SYS_STATFS            137
 #define SYS_FSTATFS           138
+#define SYS_SYSFS             139
+#define SYS_VHANGUP           153
 #define SYS_ARCH_PRCTL        158
 #define SYS_SETRLIMIT         160
 #define SYS_CHROOT            161
@@ -185,16 +190,12 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_ACCEPT4           288
 #define SYS_DUP3              292
 #define SYS_PIPE2             293
+#define SYS_PWRITEV           296
+#define SYS_RECVMMSG          299
 #define SYS_PRLIMIT64         302
 #define SYS_SYNCFS            306
 #define SYS_GETRANDOM         318
-#define SYS_PWRITEV           296
 #define SYS_PWRITEV2          328
-#define SYS_SETFSUID          122
-#define SYS_SETFSGID          123
-#define SYS_USTAT             136
-#define SYS_SYSFS             139
-#define SYS_VHANGUP           153
 #define SYS_OPENAT2           437
 
 /* Offsets in x86-64's struct stat, 144 bytes. */
@@ -341,6 +342,7 @@ static __inline__ long syscall0(long n)
 #define SYS_SETPGID           57
 #define SYS_UMASK             60
 #define SYS_CHROOT            61
+#define SYS_USTAT             62
 #define SYS_DUP2              63
 #define SYS_GETPPID           64
 #define SYS_GETPGRP           65
@@ -356,6 +358,7 @@ static __inline__ long syscall0(long n)
 #define SYS_SYSLOG            103
 #define SYS_SETITIMER         104
 #define SYS_GETITIMER         105
+#define SYS_VHANGUP           111
 #define SYS_WAIT4             114
 #define SYS_SYSINFO           116
 #define SYS_FSYNC             118
@@ -364,8 +367,9 @@ static __inline__ long syscall0(long n)
 #define SYS_MPROTECT          125
 #define SYS_GETPGID           132
 #define SYS_FCHDIR            133
-#define SYS_FLOCK             143
+#define SYS_SYSFS             135
 #define SYS_SELECT            142
+#define SYS_FLOCK             143
 #define SYS_READV             145
 #define SYS_WRITEV            146
 #define SYS_GETSID            147
@@ -376,6 +380,7 @@ static __inline__ long syscall0(long n)
 #define SYS_RT_SIGRETURN      173
 #define SYS_RT_SIGACTION      174
 #define SYS_RT_SIGPROCMASK    175
+#define SYS_RT_SIGPENDING     176
 #define SYS_PREAD64           180
 #define SYS_GETCWD            183
 #define SYS_SIGALTSTACK       186
@@ -401,6 +406,8 @@ static __inline__ long syscall0(long n)
 #define SYS_CHOWN             212
 #define SYS_SETUID            213
 #define SYS_SETGID            214
+#define SYS_SETFSUID          215
+#define SYS_SETFSGID          216
 #define SYS_GETDENTS64        220
 #define SYS_FCNTL             221
 #define SYS_GETTID            224
@@ -428,15 +435,11 @@ static __inline__ long syscall0(long n)
 #define SYS_UTIMENSAT         320
 #define SYS_DUP3              330
 #define SYS_PIPE2             331
+#define SYS_PWRITEV           334
+#define SYS_RECVMMSG          337
 #define SYS_PRLIMIT64         340
 #define SYS_SYNCFS            344
 #define SYS_GETRANDOM         355
-#define SYS_SETFSUID          215
-#define SYS_SETFSGID          216
-#define SYS_USTAT             62
-#define SYS_SYSFS             135
-#define SYS_VHANGUP           111
-#define SYS_OPENAT2           437
 #define SYS_SOCKET            359
 #define SYS_SOCKETPAIR        360
 #define SYS_BIND              361
@@ -451,16 +454,17 @@ static __inline__ long syscall0(long n)
 #define SYS_SENDMSG           370
 #define SYS_RECVFROM          371
 #define SYS_RECVMSG           372
-#define SYS_RECVMMSG          337
-#define SYS_RECVMMSG_TIME64   417
 #define SYS_SHUTDOWN          373
-#define SYS_PWRITEV           334
 #define SYS_PWRITEV2          379
+#define SYS_RECVMMSG_TIME64   417
+#define SYS_OPENAT2           437
 
 /* The calls only i386 has, and the narrower calls of the old names. */
+#define SYS_SOCKETCALL        102
 #define SYS_OLDSTAT           106
 #define SYS_OLDLSTAT          107
-#define SYS_SOCKETCALL        102
+#define SYS_SETFSUID16        138
+#define SYS_SETFSGID16        139
 #define SYS_LLSEEK            140
 #define SYS_MMAP2             192
 #define SYS_TRUNCATE64        193
@@ -468,8 +472,6 @@ static __inline__ long syscall0(long n)
 #define SYS_SET_THREAD_AREA   243
 #define SYS_STATFS64          268
 #define SYS_FSTATFS64         269
-#define SYS_SETFSUID16        138
-#define SYS_SETFSGID16        139
 
 /* Offsets in i386's struct stat64, 96 bytes. */
 #define KSTAT_SIZE            96

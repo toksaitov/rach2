@@ -734,7 +734,7 @@
         {"assertion_id": "mbind-strict", "checks": "MPOL_MF_STRICT is EIO, and binds nothing, over a written page that the mask leaves no node for; it passes pages only read or never touched; a move flag moves the page and sets the policy; and MPOL_DEFAULT ignores it.", "source": "program"},
         {"assertion_id": "mbind-errors", "checks": "mbind's bad address, flag, mode and mask are EINVAL or EFAULT as Linux's, an empty range is 0, and a hole in the range is EFAULT but for MPOL_DEFAULT, unless the range is all hole.", "source": "program"},
         {"assertion_id": "home-node", "checks": "set_mempolicy_home_node gives an MPOL_BIND region its home, is ENOENT without a policy, EOPNOTSUPP at an MPOL_PREFERRED region with the regions before it changed, and EINVAL for node 1, a flag and an address off a page boundary.", "source": "program"},
-        {"assertion_id": "move-status", "checks": "move_pages reports 0 for a written page, -EFAULT for a page only read, an untouched page of anonymous memory and an address in no mapping, and -ENOENT for an untouched page of a memfd, with and without nodes.", "source": "program"},
+        {"assertion_id": "move-status", "checks": "move_pages reports 0 for a written page, -EFAULT for a page only read and an address in no mapping, and -ENOENT for an untouched page of anonymous memory or a memfd, with and without nodes.", "source": "program"},
         {"assertion_id": "move-many", "checks": "Of 20 addresses each gets its own status, the ones past the 16th included.", "source": "program"},
         {"assertion_id": "move-errors", "checks": "move_pages answers EINVAL for MPOL_MF_STRICT, ENODEV for node 1 after the status before it is written, EFAULT for an unreadable or unwritable array, and 0 for no pages.", "source": "program"},
         {"assertion_id": "move-other", "checks": "Root reads the status of a child's page; an ordinary user is refused the root child's pages, MPOL_MF_MOVE_ALL and new nodes other than node 0 with EPERM; and a reaped child's ID is ESRCH.", "source": "program"},
@@ -2233,7 +2233,7 @@
       "execution": {"program": "vhangprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "setup", "checks": "A pair opens, and a child's new session takes the slave and turns its echo off.", "source": "program"},
-        {"assertion_id": "vhangup", "checks": "vhangup returns 0 with SIGHUP ignored.", "source": "program"},
+        {"assertion_id": "vhangup", "checks": "vhangup returns 0 and leaves SIGHUP and SIGCONT pending on the session leader.", "source": "program"},
         {"assertion_id": "old-read", "checks": "A read of the slave descriptor opened before is end of input.", "source": "program"},
         {"assertion_id": "old-write", "checks": "A write of it is EIO.", "source": "program"},
         {"assertion_id": "old-ioctl", "checks": "TCGETS on it is EIO, and TIOCSPGRP ENOTTY.", "source": "program"},

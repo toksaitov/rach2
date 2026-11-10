@@ -2,13 +2,13 @@
  * vhangprobe: vhangup(2) on a pseudo-terminal, as Linux 6.12 answers it.
  *
  * A child makes the slave of a new pair the controlling terminal of a new
- * session, clears ECHO on it, ignores SIGHUP, starts a writer of its own
+ * session, clears ECHO on it, blocks SIGHUP and SIGCONT, starts a writer
  * that writes more to the slave than the master's ring holds, which nobody
  * reads, and calls vhangup:
  *
  * * setup: the pair opens and the child's session takes the slave, whose
  *   echo it turns off.
- * * vhangup: the call returns 0.
+ * * vhangup: the call returns 0 and leaves SIGHUP and SIGCONT pending.
  * * old-read: a read of the descriptor opened before is end of input.
  * * old-write: a write of it is EIO.
  * * old-ioctl: TCGETS on it is EIO, and TIOCSPGRP ENOTTY.
@@ -43,6 +43,8 @@
 #define O_NONBLOCK 04000
 #define EAGAIN     11
 #define SIGHUP     1
+#define SIGCONT    18
+#define EINTR      4
 #define EIO        5
 #define ENXIO      6
 #define EPERM      1
@@ -67,6 +69,9 @@
 
 #define WIFEXITED(s)   (((s) & 0x7f) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xff)
+
+/* The child's writer, killed and reaped on any failed row. */
+static long writer_pid;
 
 struct pollfd {
     int fd;
@@ -179,6 +184,13 @@ static long lflag_of(int fd)
 /** Exit with `code`; does not return. */
 static void leave(int code)
 {
+    if (writer_pid > 0) {
+        int status;
+
+        syscall2(SYS_KILL, writer_pid, 9);
+        while (syscall3(SYS_WAITPID, writer_pid, (long)&status, 0) == -EINTR) {
+        }
+    }
     syscall1(SYS_EXIT, code);
     __builtin_unreachable();
 }
@@ -190,6 +202,7 @@ static int eperm_row(long uid)
     int status = -1;
 
     if (pid == 0) {
+        writer_pid = 0;
         if (syscall1(SYS_SETUID, uid) != 0) {
             leave(2);
         }
@@ -219,14 +232,12 @@ static long start_writer(long slave)
     return -1;
 }
 
-/** Open the child's controlling slave, turn echo off, ignore SIGHUP and
+/** Open the child's controlling slave, turn echo off, block hangup signals and
  * queue output for the hangup, with `master` in packet mode. Its descriptor
  * or -1 when setup fails; `ptn` is the slave's index. */
 static long child_setup(int ptn, long master)
 {
-    /* The kernel's sigaction as words: the handler, SIG_IGN, then the
-     * flags, the restorer and the 64-bit mask, all zero. */
-    static const unsigned long action[5] = {1, 0, 0, 0, 0};
+    unsigned long long mask = (1ull << (SIGHUP - 1)) | (1ull << (SIGCONT - 1));
     unsigned char tio[TIO_SIZE];
     unsigned int lflag;
     char path[24];
@@ -249,7 +260,7 @@ static long child_setup(int ptn, long master)
     if (syscall3(SYS_IOCTL, slave, TCSETS, (long)tio) != 0 || (lflag_of((int)slave) & ECHO)) {
         return -1;
     }
-    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)action, 0, 8) != 0) {
+    if (syscall4(SYS_RT_SIGPROCMASK, 0, (long)&mask, 0, sizeof(mask)) != 0) {
         return -1;
     }
     if (syscall3(SYS_IOCTL, master, TIOCPKT, (long)&packet) != 0 ||
@@ -257,6 +268,30 @@ static long child_setup(int ptn, long master)
         return -1;
     }
     return slave;
+}
+
+/** Hang up the slave and require both signals pending on its session leader. */
+static int hangup_signals(void)
+{
+    unsigned long long pending = 0;
+    unsigned long long want = (1ull << (SIGHUP - 1)) | (1ull << (SIGCONT - 1));
+
+    return syscall0(SYS_VHANGUP) == 0 &&
+           syscall2(SYS_RT_SIGPENDING, (long)&pending, sizeof(pending)) == 0 &&
+           (pending & want) == want;
+}
+
+/** Reap `pid`, the slave writer, and clear its cleanup hold once reaped.
+ * Return whether it exited successfully. */
+static int writer_done(long pid)
+{
+    int status = -1;
+
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
+        return 0;
+    }
+    writer_pid = 0;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 /**
@@ -270,7 +305,6 @@ static int child_rows(int ptn, long uid, long master)
     struct pollfd pfd;
     char path[24], byte;
     long slave = child_setup(ptn, master), fd, writer;
-    int status = -1;
 
     if (slave < 0) {
         return ROW_SETUP;
@@ -280,7 +314,8 @@ static int child_rows(int ptn, long uid, long master)
     if (writer < 0) {
         return ROW_SETUP;
     }
-    if (syscall0(SYS_VHANGUP) != 0) {
+    writer_pid = writer;
+    if (!hangup_signals()) {
         return ROW_VHANGUP;
     }
     if (syscall3(SYS_READ, slave, (long)&byte, 1) != 0) {
@@ -309,8 +344,7 @@ static int child_rows(int ptn, long uid, long master)
     if (!eperm_row(uid)) {
         return ROW_EPERM;
     }
-    if (syscall3(SYS_WAITPID, writer, (long)&status, 0) != writer || !WIFEXITED(status) ||
-        WEXITSTATUS(status) != 0) {
+    if (!writer_done(writer)) {
         return ROW_WRITER;
     }
     if (syscall3(SYS_READ, master, (long)&byte, 1) != 1 || !(byte & TIOCPKT_FLUSHWRITE) ||
@@ -346,7 +380,7 @@ void probe_main(unsigned long *sp)
 {
     static const char *const why[] = {
         "setup: the child's session did not take the slave and turn its echo off",
-        "vhangup: the call did not return 0",
+        "vhangup: the call failed or SIGHUP and SIGCONT were not pending",
         "old-read: a read of the old descriptor was not end of input",
         "old-write: a write of the old descriptor was not EIO",
         "old-ioctl: TCGETS was not EIO, or TIOCSPGRP not ENOTTY",
@@ -374,8 +408,16 @@ void probe_main(unsigned long *sp)
     if (pid == 0) {
         leave(child_rows(ptn, probe_id(1000), master));
     }
-    if (pid < 0 || syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || !WIFEXITED(status)) {
-        fail_at(0, "setup: the child did not exit");
+    if (pid < 0 || syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
+        fail_at(0, "setup: the child could not be reaped");
+    }
+    if (!WIFEXITED(status)) {
+        char signal_why[] = "vhangup: child ended by signal 00";
+        int sig = status & 0x7f;
+
+        signal_why[sizeof(signal_why) - 3] = (char)('0' + sig / 10);
+        signal_why[sizeof(signal_why) - 2] = (char)('0' + sig % 10);
+        fail_at(ROW_VHANGUP - 1, signal_why);
     }
     i = WEXITSTATUS(status);
     if (i > 0 && i <= (int)(sizeof(why) / sizeof(why[0]))) {

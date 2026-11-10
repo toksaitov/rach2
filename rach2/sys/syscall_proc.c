@@ -8710,7 +8710,7 @@ static int sched_policy_valid(int policy)
 /** Whether `policy` is one of the ordinary ones, Linux's fair_policy. */
 static int sched_policy_fair(int policy)
 {
-    return policy == SCHED_OTHER || policy == SCHED_BATCH || policy == SCHED_IDLE;
+    return policy == SCHED_OTHER || policy == SCHED_BATCH;
 }
 
 /** Whether `policy` is SCHED_FIFO or SCHED_RR. */

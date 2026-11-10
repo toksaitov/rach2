@@ -23,8 +23,8 @@
  * own: each buffer at the place the ones before it reached, a buffer of no
  * bytes skipped, and a short read ending the call. The call's fifth
  * argument is the offset's high half on i686, and on x86-64, which has the
- * whole offset in the fourth, it is not read. A vector with a buffer the
- * probe cannot reach is refused before a byte is written, and a negative
+ * whole offset in the fourth, it is not read. A vector with a buffer
+ * outside user memory is refused before a byte is written, and a negative
  * offset, a count past 1024, a pipe, a descriptor open for the other
  * direction and one not open are refused, the last with no buffers too.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
@@ -40,6 +40,11 @@
  * kiocb_set_rw_flags and setfl answer. sync_file_range flushes a range of
  * the file, and refuses a descriptor that is not open with EBADF before its
  * flags and /dev/null with ESPIPE.
+ * noappend-seal refuses a vector that would grow a six-byte sealed memfd
+ * and allows one within its size. The four append-fault rows use writev,
+ * pwritev and pwritev2:
+ * later and mid-buffer faults return the completed prefix, an initial
+ * fault returns EFAULT, and a demand-paged buffer is brought in.
  *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.

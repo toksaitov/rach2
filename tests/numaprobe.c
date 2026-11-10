@@ -73,9 +73,9 @@
  * address off a page boundary, and 0 for an empty range; and is EOPNOTSUPP
  * at an MPOL_PREFERRED region, with the regions before it changed.
  * `move-status`: move_pages without nodes reports 0 for a written page,
- * -EFAULT for a page only read, a page of anonymous memory never touched
- * and an address in no mapping, 0 for a written page of a memfd and -ENOENT
- * for one of its pages never touched; with node 0 for each it reports the
+ * -EFAULT for a page only read and an address in no mapping, 0 for a
+ * written page of a memfd, and -ENOENT for an untouched page of anonymous
+ * memory or a memfd; with node 0 for each it reports the
  * same.
  * `move-many`: of 20 addresses the one in no mapping is -EFAULT and the 19
  * of a written page 0. A 32-bit program on 64-bit Linux 6.12 reads -EFAULT
@@ -869,7 +869,7 @@ static int statuses(const int *got, const int *want, int n)
  * written and second read, and whose third is not touched. */
 static void move_rows(long v)
 {
-    static const int want[6] = {0, -EFAULT, -EFAULT, -EFAULT, 0, -ENOENT};
+    static const int want[6] = {0, -EFAULT, -ENOENT, -EFAULT, 0, -ENOENT};
     static const int nodes[6];
     unsigned long pages[6], many[48];
     int status[21];
