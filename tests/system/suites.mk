@@ -1120,6 +1120,41 @@ build/tests/cases/kvm/kvm.ext2: build/tests/cases/kvm/kvm.tar
 	    -d "$$work" $@.tmp $${kib}k; \
 	mv $@.tmp $@
 
+# `tests/run bed-forward`: the testbed's forward direction, a Debian guest of
+# QEMU on the x86-64 GNU root drawing on Rach2's GPU through QEMU's own
+# virtio-gpu, virgl and then Venus with blobs, as the cases of
+# tests/cases/machine.bed-forward.json, which bedforward_scenario runs
+# (bed/forward/Readme.md). Each machine has forward.ext2, the runner, the
+# guest's key and the scenes with the graphics runners they use, as a
+# read-only data disk, and a disk whose base is guest.qcow2, the Debian
+# reference guest's prepared image, which bed/forward/guest.sh writes whole.
+# That script prepares the reference guest first where this clone's cache has
+# none, a download of some 440 MiB and a few minutes of apt.
+BED_FORWARD_DIR = build/tests/cases/bed-forward
+BED_FORWARD_RUNNERS = $(addprefix tests/graphics/runners/,vkcube.sh common.sh vkhold.c frame.py)
+BED_FORWARD_SCENES = bed/forward/scene.sh bed/fixture/triangle.c tests/graphics/guest-env.sh \
+                     tests/graphics/ref/venus-wsl/vkcube/frames.out $(BED_FORWARD_RUNNERS)
+$(BED_FORWARD_DIR)/guest.qcow2: bed/forward/guest.sh vendor/gnu/debian/venus.list \
+                                $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages \
+                                    setup.sh.in user-data.in meta-data network-config)
+	sh bed/forward/guest.sh $@ $(BED_FORWARD_DIR)/id_ed25519
+$(BED_FORWARD_DIR)/id_ed25519: $(BED_FORWARD_DIR)/guest.qcow2
+$(BED_FORWARD_DIR)/forward.ext2: bed/forward/forward.sh $(BED_FORWARD_SCENES) $(BED_FORWARD_DIR)/id_ed25519
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/bed-forward.XXXXXX); \
+	mkdir -p "$$work/guest/runners" "$$work/disk"; \
+	cp bed/forward/scene.sh bed/fixture/triangle.c tests/graphics/guest-env.sh "$$work/guest/"; \
+	cp tests/graphics/ref/venus-wsl/vkcube/frames.out "$$work/guest/vkcube.ref"; \
+	cp $(BED_FORWARD_RUNNERS) "$$work/guest/runners/"; \
+	tar -cf "$$work/disk/guest.tar" -C "$$work/guest" .; \
+	cp -p bed/forward/forward.sh $(BED_FORWARD_DIR)/id_ed25519 "$$work/disk/"; \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work/disk" $@.tmp 8192k; \
+	mv $@.tmp $@
+
 # `tests/run codexapi`: OpenAI's Responses protocol in the C fake API
 # service, proved against the pinned upstream Codex in a fresh home on an
 # isolated GNU Rach2 machine: two turns over a WebSocket, a refused second
