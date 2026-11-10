@@ -617,7 +617,7 @@
         },
         {
           "assertion_id": "i915_reset",
-          "checks": "tests/host/i915_reset_hosttest.c hangs the Intel graphics driver's render ring on the HD 4400's host model, whose GEN6_GDRST resets the rings: the heartbeat finding a stuck request between Linux's 5 and 7.5 s, from the worker and from a wait, the engine reset through its domain with the guilty payload skipped, the requests behind it run and the error state kept, the whole GPU reset when the domain sticks with the other ring's request innocent, a wedge when nothing resets and the reset that ends it, and the guilty context banned after Linux's count, a context that is not recoverable at once, an unbannable one never, a file refused at a score of 9, and GET_RESET_STATS counting each, under ASan and UBSan and exits 0",
+          "checks": "tests/host/i915_reset_hosttest.c hangs the Intel graphics driver's render ring on the HD 4400's host model, whose GEN6_GDRST resets the rings: the heartbeat finding a stuck request between Linux's 5 and 7.5 s, from the worker and from a wait, the engine reset through its domain with the guilty payload skipped, the requests behind it run and the error state kept, the whole GPU reset when the domain sticks with the other ring's request innocent, the GT's and the render engine's workarounds written at the bind and again after each reset, a wedge when nothing resets and the reset that ends it, and the guilty context banned after Linux's count, a context that is not recoverable at once, an unbannable one never, a file refused at a score of 9, and GET_RESET_STATS counting each, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

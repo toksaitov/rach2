@@ -34,17 +34,30 @@ extern void free(void *p);
 #include "i915_model_ddi.c"
 
 static const struct i915_model_block *const i915_model_blocks[I915_MODEL_BLOCKS + 1] = {
-    &i915_model_ring_rcs,   &i915_model_reset_block,
-    &i915_model_rc6_rps,    &i915_model_base_fw,
-    &i915_model_ring_vcs,   &i915_model_ring_vecs,
-    &i915_model_ring_bcs,   &i915_model_base_unclaimed,
-    &i915_model_ring_irq,   &i915_model_base_pw,
-    &i915_model_sink_block, &i915_model_ddi_ports,
-    &i915_model_pipe_block, &i915_model_ddi_hotplug,
-    &i915_model_ring_south, &i915_model_ddi_gmbus,
-    &i915_model_ddi_aux,    &i915_model_panel_block,
-    &i915_model_base_fifo,  &i915_model_rc6_pcu,
-    &i915_model_base_gtt,   0};
+    &i915_model_ring_rcs,
+    &i915_model_reset_block,
+    &i915_model_rc6_rps,
+    &i915_model_base_fw,
+    &i915_model_ring_vcs,
+    &i915_model_ring_vecs,
+    &i915_model_ring_bcs,
+    &i915_model_base_unclaimed,
+    &i915_model_ring_irq,
+    &i915_model_base_pw,
+    &i915_model_sink_block,
+    &i915_model_ddi_ports,
+    &i915_model_pipe_block,
+    &i915_model_ddi_hotplug,
+    &i915_model_ring_south,
+    &i915_model_ddi_gmbus,
+    &i915_model_ddi_aux,
+    &i915_model_panel_block,
+    &i915_model_base_fifo,
+    &i915_model_rc6_pcu,
+    &i915_model_base_gtt,
+    &i915_model_reset_state_block,
+    &i915_model_reset_chicken_block,
+    0};
 
 int i915_model_nblocks(void)
 {

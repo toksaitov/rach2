@@ -32,7 +32,9 @@
  * The rows, after 78-6a's subtasks: the heartbeat, the engine's reset and
  * the error state it captures; a reset of the whole GPU when the engine's
  * does not finish; a wedge when that does not either, and the reset that
- * ends it; the guilty context's bans and counts.
+ * ends it; the guilty context's bans and counts. One row is 78-6c.1's: the
+ * GT's and the render engine's workarounds, written at the start and again
+ * after each reset.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -905,6 +907,95 @@ static void row_full_reset(void)
     done(&m);
 }
 
+/* ---- 78-6c.1: the workarounds, at the start and after each reset ---- */
+
+/** Whether the render engine's workarounds stand in the model's registers
+ * as Linux's rcs_engine_wa_init leaves them on Haswell. */
+static int rcs_was_stand(struct i915_model *m)
+{
+    uint32_t mode = GFX_TLB_INVALIDATE_EXPLICIT | GFX_REPLAY_MODE;
+
+    return (i915_model_peek(m, RING_MI_MODE(RENDER_RING_BASE)) & ASYNC_FLIP_PERF_DISABLE) &&
+           (i915_model_peek(m, RING_MODE_GEN7(RENDER_RING_BASE)) & mode) == mode &&
+           !(i915_model_peek(m, CACHE_MODE_0_GEN7) &
+             (HIZ_RAW_STALL_OPT_DISABLE | RC_OP_FLUSH_ENABLE)) &&
+           (i915_model_peek(m, CACHE_MODE_1) & PIXEL_SUBSPAN_COLLECT_OPT_DISABLE) &&
+           (i915_model_peek(m, GEN7_GT_MODE) & GEN6_WIZ_HASHING_MASK) == GEN6_WIZ_HASHING_16x4 &&
+           (i915_model_peek(m, HSW_HALF_SLICE_CHICKEN3) & HSW_SAMPLE_C_PERFORMANCE);
+}
+
+/** Whether the GT's state stands as Linux's intel_gt_init_hw leaves it on
+ * a Haswell GT2. */
+static int gt_was_stand(struct i915_model *m)
+{
+    return !(i915_model_peek(m, GEN7_FF_THREAD_MODE) & GEN7_FF_VS_REF_CNT_FFME) &&
+           i915_model_peek(m, HSW_SCRATCH1) == HSW_SCRATCH1_L3_DATA_ATOMICS_DISABLE &&
+           (i915_model_peek(m, HSW_ROW_CHICKEN3) & HSW_ROW_CHICKEN3_L3_GLOBAL_ATOMICS_DISABLE) &&
+           i915_model_peek(m, HSW_MI_PREDICATE_RESULT_2) == LOWER_SLICE_DISABLED;
+}
+
+/** HSW_SCRATCH1 read as a chip that did not keep its write. */
+static uint32_t scratch1_lost(struct i915_model *m, uint32_t reg, uint32_t value)
+{
+    (void)m;
+    return reg == HSW_SCRATCH1 ? 0 : value;
+}
+
+/** 78-6c.1: the GT's and the render engine's workarounds written at the
+ * start, the engine's again after its reset, both after the whole GPU's,
+ * and one the chip does not keep logged and counted. */
+static void row_workarounds(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = ready(&m);
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    struct i915_model_reset *rs = i915_model_reset_state(&m);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    uint32_t hung;
+
+    CHECK("workarounds: the GT's and the render engine's stand after the start",
+          gt_was_stand(&m) && rcs_was_stand(&m) && i915->gt.wa_lost == 0 &&
+              logged("workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost"));
+    CHECK(
+        "workarounds: the GT's two registers of the clock gating, the PPGTT's caching kept",
+        (i915_model_peek(&m, GEN7_SQ_CHICKEN_MBCUNIT_CONFIG) & GEN7_SQ_CHICKEN_MBCUNIT_SQINTMOB) &&
+            (i915_model_peek(&m, GAM_ECOCHK) & (HSW_ECOCHK_ARB_PRIO_SOL | ECOCHK_PPGTT_WB_HSW)) ==
+                (HSW_ECOCHK_ARB_PRIO_SOL | ECOCHK_PPGTT_WB_HSW));
+
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    (void)beat_until_hung(10000, &hung);
+    run_ms(1);
+    CHECK("workarounds: the render engine's written again after its reset",
+          hung == 1u && rs->resets[1] == 2 && rs->resets[0] == 0 && ended(rq, -EIO) &&
+              rcs_was_stand(&m) && gt_was_stand(&m));
+    i915_request_put(rq);
+
+    rs->stuck = GEN6_GRDOM_RENDER;
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    (void)beat_until_hung(10000, &hung);
+    run_ms(1);
+    CHECK("workarounds: the GT's and the engine's written again after the whole GPU's reset",
+          hung == 1u && i915->gt.reset_count == 1 && rs->resets[0] == 2 && ended(rq, -EIO) &&
+              gt_was_stand(&m) && rcs_was_stand(&m) && i915->gt.wa_lost == 0);
+    i915_request_put(rq);
+    rs->stuck = 0;
+
+    m.on_read = scratch1_lost;
+    CHECK("workarounds: forcewake for the GT's", i915_forcewake_get(i915) == 0);
+    i915_gt_init_hw(i915);
+    i915_forcewake_put(i915);
+    m.on_read = 0;
+    CHECK("workarounds: one the chip did not keep is logged and counted",
+          i915->gt.wa_lost == 1 &&
+              logged("workarounds: gt: lost: register 0xb038 reads 0x00000000, expected "
+                     "0x08000000 of 0xffffffff"));
+    intel_context_put(r);
+    done(&m);
+}
+
 /** 78-6a.2: a GPU that does not reset is wedged, every request failed,
  * and a later reset that succeeds lets it take work again. */
 static void row_wedge(void)
@@ -1170,6 +1261,7 @@ int main(void)
     row_error_state();
     row_wait_resets();
     row_full_reset();
+    row_workarounds();
     row_wedge();
     row_wedge_queued();
     row_fence_timeout();

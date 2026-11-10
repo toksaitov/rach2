@@ -1137,11 +1137,13 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
 /**
  * Record the render ring's default state, as Linux's
  * __engines_record_defaults: a fresh context loaded with its restore
- * inhibited takes Linux's context workarounds for graphics version 7
- * (intel_workarounds.c's gen7_ctx_workarounds: INSTPM's forced ordering,
- * CACHE_MODE_0_GEN7's RC op flush off, CACHE_MODE_1's pixel subspan
- * collect optimization off), the switch to the GT's own context saves its
- * image, and the image is kept as the state every new context starts from.
+ * inhibited takes Linux's context workaround for graphics version 7
+ * (intel_workarounds.c's gen7_ctx_workarounds_init: INSTPM's forced
+ * ordering) and, loaded again, two of the render engine's that the ring's
+ * start wrote to the registers (CACHE_MODE_0_GEN7's RC op flush off,
+ * CACHE_MODE_1's pixel subspan collect optimization off), the switch to
+ * the GT's own context saves its image, and the image is kept as the
+ * state every new context starts from.
  * Linux also runs the null render state batch before the switch, which
  * this driver does not make. 0, -ENOMEM, or -EIO when the chip did not
  * finish in time.

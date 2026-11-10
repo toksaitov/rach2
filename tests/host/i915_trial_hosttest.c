@@ -757,9 +757,12 @@ static void on_delay(struct i915_model *m)
  * video enhancement engines, inside their rings' registers too; and
  * the swizzle of tiles, in the display's arbiter, the GT's tile control
  * and ARB_MODE, as Linux's intel_gt_init_swizzling sets it on the
- * Lenovo, whose firmware's surface is linear; and the PPGTT's caching, as
- * Linux's gen7_ppgtt_enable sets it. The fence registers, which the bind
- * clears, are `write_ok`'s. */
+ * Lenovo, whose firmware's surface is linear; the PPGTT's caching, as
+ * Linux's gen7_ppgtt_enable sets it; and the GT's workarounds and the
+ * render engine's, as Linux's hsw_gt_workarounds_init and
+ * rcs_engine_wa_init list them, with the message channel's register of
+ * hsw_init_clock_gating. The fence registers, which the bind clears, are
+ * `write_ok`'s. */
 static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      GEN6_PCODE_DATA,
                                      GEN6_PCODE_DATA1,
@@ -812,7 +815,14 @@ static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      TILECTL,
                                      ARB_MODE,
                                      GAM_ECOCHK,
-                                     GAC_ECO_BITS};
+                                     GAC_ECO_BITS,
+                                     HSW_SCRATCH1,
+                                     HSW_ROW_CHICKEN3,
+                                     CACHE_MODE_0_GEN7,
+                                     CACHE_MODE_1,
+                                     GEN7_GT_MODE,
+                                     HSW_HALF_SLICE_CHICKEN3,
+                                     GEN7_SQ_CHICKEN_MBCUNIT_CONFIG};
 
 /** Whether `reg`, written, belongs to what the bind may write: the GT's
  * forcewake, the fence registers, the four rings and their status page
@@ -945,7 +955,9 @@ static void check_display_bind(int nodisplay)
 }
 
 /** Whether first light ran as its option says: ok, its interrupt taken or
- * latched and its page given back, or nothing run without the option. */
+ * latched and its page given back, which leaves each ring's status page
+ * and four pages and the PPGTT's scratch table, or nothing run without the
+ * option. */
 static void check_light(struct drm_i915_private *i915, struct i915_model_ring *rcs, int firstlight,
                         int interrupts)
 {
@@ -954,7 +966,7 @@ static void check_light(struct drm_i915_private *i915, struct i915_model_ring *r
               logged("first light: ok: rcs0 wrote 0x1915f157") &&
                   logged(interrupts ? "user interrupt taken" : "user interrupt latched"));
         CHECK("light: the value page given back",
-              i915->gt.engine[I915_RCS0].irq_refs == 0 && pages_live == 10);
+              i915->gt.engine[I915_RCS0].irq_refs == 0 && pages_live == I915_NUM_ENGINES * 5 + 1);
     } else {
         CHECK("bind: no first light without its option",
               !logged("first light") && rcs->executed == 0 && i915->gt.engine[I915_RCS0].tail == 0);
