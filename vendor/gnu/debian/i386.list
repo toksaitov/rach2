@@ -6,7 +6,10 @@
 # its bundled i386 libraries name, and those desktop.list gives the 64-bit
 # Wine. fetch_debs.sh resolves it against the i386 indices of the snapshot
 # the desktop's lists use; the i386 Venus driver is venus.list's, and the
-# library it needs beyond Mesa 25.0.7's is at the end.
+# library it needs beyond Mesa 25.0.7's is at the end, after the two
+# programs that show what the i386 drivers give: mesa-utils-bin's
+# eglinfo.i386-linux-gnu and vulkan-tools' vulkaninfo, which install_root.sh
+# installs under that name too.
 libc6
 libgcc-s1
 libstdc++6
@@ -64,4 +67,6 @@ libblas3
 liblapack3
 zlib1g
 libzstd1
+mesa-utils-bin
+vulkan-tools
 libdisplay-info2
