@@ -1912,6 +1912,47 @@ static int32_t stall_checks(struct drm_atomic_state *state, int nonblock)
     return 0;
 }
 
+/**
+ * Give each plane of `state` that shows a framebuffer and has no in-fence
+ * the pending writes of the framebuffer's objects as its fence, Linux's
+ * drm_gem_plane_helper_prepare_fb, which drm_atomic_helper_prepare_planes
+ * runs for every GEM driver without a prepare_fb of its own and i915's
+ * intel_prepare_plane_fb runs too. A flip then waits for the render job
+ * that draws the buffer, which a compositor that passes no IN_FENCE_FD
+ * relies on; an in-fence overrules them, as on Linux. Returns 0, or
+ * -ENOMEM when two objects' writes could not be merged into one fence.
+ */
+static int32_t implicit_fences(struct drm_atomic_state *state)
+{
+    struct dma_fence *w[4];
+    int i, j, k, n;
+
+    for (i = 0; i < DRM_MAX_PLANES; i++) {
+        struct drm_plane_state *ps = state->planes_new[i];
+
+        if (!ps || !ps->fb || ps->fence) {
+            continue;
+        }
+        n = 0;
+        for (j = 0; j < 4; j++) {
+            struct drm_gem_object *obj = ps->fb->obj[j];
+            struct dma_fence *f = obj ? obj->resv->write : NULL;
+
+            for (k = 0; f && k < n && w[k] != f; k++) {
+            }
+            if (f && k == n) {
+                w[n++] = f;
+            }
+        }
+        if (n == 1) {
+            ps->fence = dma_fence_get(w[0]);
+        } else if (n > 1 && !(ps->fence = dma_fence_merge(w, (uint32_t)n))) {
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
 /** The work that defers a nonblocking `state` with an in-fence not yet
  * signalled to the commit worker, or NULL: the commit blocks, no fence
  * waits, or the work or the worker could not be had. */
@@ -1944,6 +1985,9 @@ int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state
     int i;
 
     rc = stall_checks(state, nonblock);
+    if (rc == 0) {
+        rc = implicit_fences(state);
+    }
     if (rc != 0) {
         return rc;
     }
