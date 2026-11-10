@@ -425,8 +425,9 @@ struct vmx_ops {
     uint64_t (*exit_rip)(void);
 };
 
-#ifndef RACH2_HOSTTEST
 #include "../arch/x86/kcpu.h"
+
+#ifndef RACH2_HOSTTEST
 #include "../arch/x86_64/percpu.h"
 
 /* vmx_run.s */
@@ -934,23 +935,29 @@ static int pdpte_load(struct kvm_vcpu *v)
  * operation, which is #UD. */
 static volatile int vmx_live[NR_CPUS];
 static uint64_t vmx_cr4[NR_CPUS];
+static uint64_t *vmx_vmcs[NR_CPUS]; /* the VMCS current there, or NULL */
 
 /** Leave VMX operation on `cpu` and put CR4 back to `cr4`. */
 static void vmx_leave(int cpu, uint64_t cr4)
 {
     vmx_live[cpu] = 0;
+    vmx_vmcs[cpu] = NULL;
     (void)vmx_op->vmxoff();
     vmx_op->write_cr4(cr4);
 }
 
 /** The panic hook: VMX off on the processor that panics, when a panic
  * comes inside a run's section, from an NMI or a machine check taken in
- * VMX root operation or from a fault there. */
+ * VMX root operation or from a fault there; the current VMCS is cleared
+ * first, as Linux's vmx_emergency_disable_virtualization_cpu does. */
 static void vmx_panic(void)
 {
     int cpu = (int)arch_cpu_id();
 
     if (cpu < NR_CPUS && vmx_live[cpu]) {
+        if (vmx_vmcs[cpu]) {
+            (void)vmx_op->vmclear(vmx_vmcs[cpu]);
+        }
         vmx_leave(cpu, vmx_cr4[cpu]);
     }
 }
@@ -992,6 +999,7 @@ static int vmx_on(struct vmx_vcpu *x, int cpu, uint64_t *cr4)
         vmx_leave(cpu, *cr4);
         return -EIO;
     }
+    vmx_vmcs[cpu] = &x->vmcs_pa;
     return 0;
 }
 
@@ -1004,6 +1012,7 @@ static int vmx_on(struct vmx_vcpu *x, int cpu, uint64_t *cr4)
  */
 static void vmx_off(struct vmx_vcpu *x, int cpu, uint64_t cr4)
 {
+    vmx_vmcs[cpu] = NULL;
     (void)vmx_op->vmclear(&x->vmcs_pa);
     vmx_leave(cpu, cr4);
 }
@@ -1039,7 +1048,7 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, n);
     vmcs_write(VM_EXIT_MSR_STORE_ADDR, x->msrs_pa);
     vmcs_write(VM_EXIT_MSR_STORE_COUNT, n);
-    vmcs_write(VM_EXIT_MSR_LOAD_ADDR, x->msrs_pa + HOST_LIST * 8u);
+    vmcs_write(VM_EXIT_MSR_LOAD_ADDR, x->msrs_pa + HOST_LIST * 16u);
     vmcs_write(VM_EXIT_MSR_LOAD_COUNT, caps.rdtscp ? N_HOST_MSRS : N_HOST_MSRS - 1u);
     vmcs_write(VMCS_LINK_POINTER, ~0ull);
     vmcs_write(CR0_GUEST_HOST_MASK, ~CR0_GUEST_OWNED);
@@ -2138,7 +2147,10 @@ static uint32_t inject_exception(struct kvm_vcpu *v, uint32_t len)
     } else {
         info |= TYPE_HW_EXC << 8;
     }
-    if ((v->events.exception.has_error_code || v->events.exception.pending) && has_error_code(nr)) {
+    /* No error code in real mode, which the entry refuses, as Linux's
+     * kvm_inject_exception drops it outside protected mode. */
+    if ((v->events.exception.has_error_code || v->events.exception.pending) && has_error_code(nr) &&
+        (v->sregs.cr0 & CR0_PE)) {
         info |= INTR_ERRCODE;
         x->inj_error = v->events.exception.error_code;
     }
@@ -2199,9 +2211,10 @@ static void vmx_inject(struct kvm_vcpu *v)
     } else if (v->events.nmi.injected) {
         info = NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID;
     } else if (v->nmi_queued && nmi_open(v)) {
+        /* The delivery blocks NMIs, which the exit's interruptibility
+         * then shows; blocking set before the entry would fail it. */
         v->nmi_queued--;
         v->events.nmi.injected = 1;
-        v->events.nmi.masked = 1;
         info = NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID;
     } else if (v->events.interrupt.injected) {
         info = v->events.interrupt.nr | INTR_VALID;
