@@ -235,9 +235,9 @@ struct process {
     uint32_t woken;
     /* The switches away from it while it was blocked or stopped, and while
      * it could still run, counted by `schedule`: /proc's
-     * voluntary_ctxt_switches and nonvoluntary_ctxt_switches. They wrap. */
-    uint32_t nvcsw;
-    uint32_t nivcsw;
+     * voluntary_ctxt_switches and nonvoluntary_ctxt_switches, and getrusage. */
+    unsigned long nvcsw;
+    unsigned long nivcsw;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),
      * which /proc reports as the state D and counts as blocked; a kernel
      * thread's idle wait (`wq_wait_event_idle`) is not marked. */
@@ -619,9 +619,13 @@ void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys);
  * every thread's, those that have ended included. */
 void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major);
 
-/** Add the CPU time and the page faults of `t`, a thread that has ended and
- * whose record goes, to its group's, where `proc_cpu_time` and `proc_faults`
- * find them. */
+/** The voluntary and involuntary switches of the whole process `p` is a
+ * thread of, including threads whose records have gone. Under the big lock;
+ * both counters wrap as native unsigned longs. */
+void proc_switches(const process_t *p, unsigned long *voluntary, unsigned long *involuntary);
+
+/** Add the CPU time, page faults and context switches of `t`, a thread that
+ * has ended and whose record goes, to its group's totals. */
 void proc_thread_fold(const process_t *t);
 
 /* The number of records of ended threads that are neither leaders nor

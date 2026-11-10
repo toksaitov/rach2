@@ -572,6 +572,21 @@ void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major)
     }
 }
 
+void proc_switches(const process_t *p, unsigned long *voluntary, unsigned long *involuntary)
+{
+    const struct tgroup *tg = p->tg;
+    const process_t *t;
+
+    *voluntary = tg->nvcsw;
+    *involuntary = tg->nivcsw;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == tg) {
+            *voluntary += t->nvcsw;
+            *involuntary += t->nivcsw;
+        }
+    }
+}
+
 void proc_thread_fold(const process_t *t)
 {
     struct tgroup *tg = t->tg;
@@ -580,6 +595,8 @@ void proc_thread_fold(const process_t *t)
     tg->stime += t->stime;
     tg->min_flt += t->min_flt;
     tg->maj_flt += t->maj_flt;
+    tg->nvcsw += t->nvcsw;
+    tg->nivcsw += t->nivcsw;
 }
 
 process_t *get_process(uint32_t pid)

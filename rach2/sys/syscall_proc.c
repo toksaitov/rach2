@@ -3236,7 +3236,9 @@ struct kernel_rusage {
     long sizes[3];
     long minflt;
     long majflt;
-    long uncounted[8];
+    long uncounted[6];
+    long nvcsw;
+    long nivcsw;
 };
 
 /** The bytes of the caller's struct rusage: 72, eighteen 32-bit longs, for
@@ -3286,8 +3288,8 @@ static void rusage_from_ticks(struct kernel_rusage *ru, uint64_t user, uint64_t 
 
 /**
  * What a wait reports of a child's usage, as Linux's `RUSAGE_BOTH` has it:
- * the CPU time and the page faults of the process `p` is a thread of, every
- * thread's, with those of the children it has reaped, which its thread group
+ * the CPU time, page faults and switches of the process `p` is a thread of:
+ * every thread's, with those of its reaped children, which its thread group
  * keeps. A traced thread that is not the leader reports its whole
  * process's.
  */
@@ -3297,6 +3299,8 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
     uint64_t sys;
     unsigned long minor;
     unsigned long major;
+    unsigned long voluntary;
+    unsigned long involuntary;
 
     proc_cpu_time(p, &user, &sys);
     rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);
@@ -3305,6 +3309,9 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
     proc_faults(p, &minor, &major);
     ru->minflt = (long)(minor + p->tg->cmin_flt);
     ru->majflt = (long)(major + p->tg->cmaj_flt);
+    proc_switches(p, &voluntary, &involuntary);
+    ru->nvcsw = (long)(voluntary + p->tg->cnvcsw);
+    ru->nivcsw = (long)(involuntary + p->tg->cnivcsw);
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
@@ -3390,8 +3397,8 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
  * Reap zombie `p`, the leader of a process whose threads have all ended,
  * which the wait has taken off the zombies (`wait_hold`), so that no other
  * thread's wait reaps it while the release sleeps: add the process's CPU
- * time and page faults, with its reaped children's, to the children's totals
- * of the caller's process, which its thread group keeps, and give back its
+ * time, page faults and switches, with its reaped children's, to the caller's
+ * children's totals, which its thread group keeps, and give back its
  * address space, kernel stack and record (`proc_release`). The zombie no
  * longer runs on its kernel stack, so the stack can go with the record.
  */
@@ -3402,6 +3409,8 @@ static void wait_reap(process_t *p)
     uint64_t sys;
     unsigned long minor;
     unsigned long major;
+    unsigned long voluntary;
+    unsigned long involuntary;
 
     proc_cpu_time(p, &user, &sys);
     me->cutime += user + p->tg->cutime;
@@ -3409,6 +3418,9 @@ static void wait_reap(process_t *p)
     proc_faults(p, &minor, &major);
     me->cmin_flt += minor + p->tg->cmin_flt;
     me->cmaj_flt += major + p->tg->cmaj_flt;
+    proc_switches(p, &voluntary, &involuntary);
+    me->cnvcsw += voluntary + p->tg->cnvcsw;
+    me->cnivcsw += involuntary + p->tg->cnivcsw;
     if (p->tg->maxrss_kb > me->cmaxrss_kb) {
         me->cmaxrss_kb = p->tg->maxrss_kb;
     }
@@ -3912,8 +3924,9 @@ long sys_waitid(isr_params_t *params)
  * address space's resident size and the most any earlier one had when it
  * ended, in kilobytes, or for RUSAGE_CHILDREN the most a reaped child
  * reported. `ru_minflt` and `ru_majflt` are the page faults of the same
- * threads or children (`proc_faults`). The other counters, through context
- * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
+ * threads or children (`proc_faults`). `ru_nvcsw` and `ru_nivcsw` count
+ * voluntary and involuntary context switches of the same threads or
+ * children. The other counters are zero. -EINVAL for any other `who`, Linux's
  * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
  */
 long sys_getrusage(isr_params_t *params)
@@ -3942,12 +3955,19 @@ long sys_getrusage(isr_params_t *params)
         proc_faults(current_proc, &minor, &major);
         ru.minflt = (long)minor;
         ru.majflt = (long)major;
+        proc_switches(current_proc, &minor, &major);
+        ru.nvcsw = (long)minor;
+        ru.nivcsw = (long)major;
     } else if (who == RUSAGE_THREAD) {
         ru.minflt = (long)current_proc->min_flt;
         ru.majflt = (long)current_proc->maj_flt;
+        ru.nvcsw = (long)current_proc->nvcsw;
+        ru.nivcsw = (long)current_proc->nivcsw;
     } else {
         ru.minflt = (long)current_proc->tg->cmin_flt;
         ru.majflt = (long)current_proc->tg->cmaj_flt;
+        ru.nvcsw = (long)current_proc->tg->cnvcsw;
+        ru.nivcsw = (long)current_proc->tg->cnivcsw;
     }
     if (who == RUSAGE_CHILDREN) {
         ru.maxrss = (long)current_proc->tg->cmaxrss_kb;

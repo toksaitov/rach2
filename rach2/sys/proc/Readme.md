@@ -230,7 +230,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `clone` refuses `CLONE_SIGHAND` without `CLONE_THREAD`, an exit signal other than zero or `SIGCHLD` for a process, `CLONE_PIDFD`, and the cgroup and time namespaces. No descriptor refers to a process, so `waitid`'s `P_PIDFD` fails with `EBADF`.
 * `execve` follows one level of `#!`, and reads a first line of at most 128 bytes.
 * Seven resource limits are kept; `RLIMIT_NICE`, `RLIMIT_RTPRIO` and Linux's others read as unlimited.
-* `getrusage` and `wait4` report the CPU time and `ru_maxrss` alone, and `ru_maxrss` is sampled where an address space ends, not at every fault.
+* `getrusage` and `wait4` report CPU time, resident memory, page faults and voluntary and involuntary context switches; the other resource counters are zero. Context switches include ended threads and reaped descendants. The resident memory peak is sampled when asked and where an address space ends, not at every fault.
 * `prctl` takes twelve options, the parent-death signal, the dumpable flag, the name, the child subreaper flag, `no_new_privs` and the seccomp mode, each set and read; any other is `EINVAL`.
 * seccomp has no user notification: a filter cannot be installed with a listener, and `SECCOMP_RET_USER_NOTIF` fails the call with `ENOSYS`. `SECCOMP_RET_LOG` allows the call and logs nothing.
 * `personality` takes only `PER_LINUX` and `PER_LINUX32`, and its flags change nothing; the kernel places no address at random.
