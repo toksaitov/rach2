@@ -241,3 +241,78 @@ int32_t i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data, struct dr
     i915_gem_object_put(obj);
     return err;
 }
+
+/* ------------------------------------------------------------------------
+ * GEM_MMAP
+ */
+
+/* What GEM_MMAP maps: the object and the cache type of its pages. */
+struct gem_mmap {
+    struct drm_i915_gem_object *obj;
+    uint32_t type;
+    uint32_t pgoff;
+};
+
+/** The `map` of mmap_device for GEM_MMAP: the object's pages from `pgoff`,
+ * the region holding a reference to the object, which mmo_vm_put drops. */
+static int32_t gem_mmap_region(vma_t *vma, void *arg)
+{
+    struct gem_mmap *g = (struct gem_mmap *)arg;
+    int32_t rc;
+
+    vma->pgoff = g->pgoff;
+    drm_gem_object_get(&g->obj->base);
+    rc = vm_device_map(vma, &cpu_vm_ops, &g->obj->mmo[g->type],
+                       g->type == I915_MMAP_OFFSET_WC ? VM_PROT_WC : 0u);
+    if (rc != 0) {
+        i915_gem_object_put(g->obj);
+    }
+    return rc;
+}
+
+/**
+ * GEM_MMAP, as Linux's i915_gem_mmap_ioctl: `size` bytes of the object's
+ * pages from `offset` mapped shared into the caller, readable and
+ * writable, write-back or under I915_MMAP_WC write-combining, the address
+ * in `addr_ptr`; the mapping holds the object, as Linux's holds its shmem
+ * file. EINVAL for another flag, for an offset or size outside the object
+ * or an offset not a multiple of the page, and for a size of 0; ENODEV for
+ * write-combining without PAT; ENOENT for no such object; ENXIO for an
+ * import or a userptr object, which have no pages of their own to map;
+ * ENOMEM with no room in the address space.
+ */
+int32_t i915_gem_mmap_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_mmap *args = (struct drm_i915_gem_mmap *)data;
+    struct gem_mmap g;
+    long addr;
+
+    (void)dev;
+    if (args->flags & ~(uint64_t)I915_MMAP_WC) {
+        return -EINVAL;
+    }
+    if ((args->flags & I915_MMAP_WC) && !pat_write_combining()) {
+        return -ENODEV;
+    }
+    g.obj = i915_gem_object_lookup(file, args->handle);
+    if (!g.obj) {
+        return -ENOENT;
+    }
+    g.type = (args->flags & I915_MMAP_WC) ? I915_MMAP_OFFSET_WC : I915_MMAP_OFFSET_WB;
+    g.pgoff = (uint32_t)(args->offset >> PAGE_SHIFT);
+    if (g.obj->base.import || i915_gem_object_is_userptr(g.obj)) {
+        addr = -ENXIO;
+    } else if (args->offset >= g.obj->base.size || args->size > g.obj->base.size - args->offset ||
+               (args->offset & (PAGE_SIZE - 1u))) {
+        addr = -EINVAL;
+    } else {
+        addr =
+            mmap_device((uintptr_t)args->size, VM_PROT_READ | VM_PROT_WRITE, gem_mmap_region, &g);
+    }
+    i915_gem_object_put(g.obj);
+    if (addr < 0 && addr > -4096L) {
+        return (int32_t)addr;
+    }
+    args->addr_ptr = (uint64_t)(uintptr_t)addr;
+    return 0;
+}

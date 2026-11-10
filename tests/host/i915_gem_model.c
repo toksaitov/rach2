@@ -883,6 +883,26 @@ static void unmap(vma_t *vma)
     vma->file = 0;
 }
 
+/* The region the last GEM_MMAP made, as mmap_device gives it to the
+ * driver, and the address it answers. */
+static vma_t mmapped;
+#define MMAPPED_AT 0x40000000L
+
+long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *arg), void *arg)
+{
+    int32_t rc;
+
+    if (len == 0) {
+        return -EINVAL;
+    }
+    k_memset(&mmapped, 0, sizeof(mmapped));
+    mmapped.end = (len + 4095u) & ~(uintptr_t)4095u;
+    mmapped.prot = prot;
+    mmapped.type = VM_SHARED;
+    rc = map(&mmapped, arg);
+    return rc != 0 ? rc : MMAPPED_AT;
+}
+
 /* ---- the devices ---- */
 
 static const struct i915_platform hsw = {.name = "HASWELL", .graphics_ver = 7, .has_llc = 1};

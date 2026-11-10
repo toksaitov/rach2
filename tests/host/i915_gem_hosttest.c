@@ -219,6 +219,61 @@ static void maps(void)
     close_handle(&file_a, h);
 }
 
+/** GEM_MMAP: `size` bytes of `handle` from `offset` with `flags`; the
+ * ioctl's answer, the address in `*addr`. */
+static int32_t gem_mmap(uint32_t handle, uint64_t offset, uint64_t size, uint64_t flags,
+                        uint64_t *addr)
+{
+    struct drm_i915_gem_mmap m = {0};
+    int32_t err;
+
+    m.handle = handle;
+    m.offset = offset;
+    m.size = size;
+    m.flags = flags;
+    err = i915_gem_mmap_ioctl(&dev_a->drm, &m, &file_a);
+    *addr = m.addr_ptr;
+    return err;
+}
+
+/** 78-14a.5: GEM_MMAP, which libdrm_intel's drm_intel_bo_map uses: the
+ * object's pages from the offset, write-back or write-combining, the
+ * mapping holding the object, and Linux's refusals. */
+static void legacy_maps(void)
+{
+    uint32_t h = create(&file_a, 3 * 4096);
+    struct drm_i915_gem_object *obj = object(&file_a, h);
+    uint64_t addr = 0;
+    uint8_t *p;
+
+    CHECK(gem_mmap(h, 4096, 8192, 0, &addr) == 0 && addr == (uint64_t)MMAPPED_AT &&
+              mmapped.pgoff == 1 && mmapped.end == 8192 &&
+              mmapped.prot == (VM_PROT_READ | VM_PROT_WRITE) &&
+              ((struct region *)mmapped.file)->cache == 0 &&
+              ((struct region *)mmapped.file)->obj == &obj->mmo[I915_MMAP_OFFSET_WB],
+          "gem_mmap: two pages from the second, write-back, at the address mmap gave");
+    p = fault(&mmapped, mmapped.pgoff);
+    CHECK(p && (uintptr_t)p == shmem_resident(&obj->pages, 1),
+          "gem_mmap: its first page is the object's second");
+    CHECK(obj->base.refs == 2, "gem_mmap: the mapping holds the object");
+    unmap(&mmapped);
+    CHECK(obj->base.refs == 1, "gem_mmap: and lets it go with the mapping");
+    CHECK(gem_mmap(h, 0, 4096, I915_MMAP_WC, &addr) == 0 &&
+              ((struct region *)mmapped.file)->cache == VM_PROT_WC &&
+              ((struct region *)mmapped.file)->obj == &obj->mmo[I915_MMAP_OFFSET_WC],
+          "gem_mmap: write-combining under I915_MMAP_WC");
+    unmap(&mmapped);
+    CHECK(gem_mmap(h, 0, 4096, 2, &addr) == -EINVAL, "gem_mmap: another flag, EINVAL");
+    CHECK(gem_mmap(h, 3 * 4096, 0, 0, &addr) == -EINVAL &&
+              gem_mmap(h, 4096, 3 * 4096, 0, &addr) == -EINVAL &&
+              gem_mmap(h, 100, 4096, 0, &addr) == -EINVAL && gem_mmap(h, 0, 0, 0, &addr) == -EINVAL,
+          "gem_mmap: an offset or size outside the object, an offset within a page and a size "
+          "of 0, EINVAL");
+    CHECK(gem_mmap(999, 0, 4096, 0, &addr) == -ENOENT, "gem_mmap: no such object, ENOENT");
+    CHECK(obj->base.refs == 1, "gem_mmap: a refusal holds no reference");
+    close_handle(&file_a, h);
+}
+
 /** An object larger than the aperture: a GTT fault binds a view of 1 MiB
  * around the page, or the object's tail. */
 static void views(void)
@@ -667,6 +722,7 @@ int main(void)
     domains();
     offsets();
     maps();
+    legacy_maps();
     views();
     windows();
     arithmetic();
