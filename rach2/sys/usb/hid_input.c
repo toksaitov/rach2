@@ -25,64 +25,67 @@
 #include "../mouse.h"
 
 /* Usage pages and usages, Linux's HID_UP_ and HID_GD_ values. */
-#define HID_USAGE_PAGE      0xFFFF0000u
-#define HID_USAGE           0x0000FFFFu
-#define HID_UP_UNDEFINED    0x00000000u
-#define HID_UP_GENDESK      0x00010000u
-#define HID_UP_SIMULATION   0x00020000u
-#define HID_UP_GENDEVCTRLS  0x00060000u
-#define HID_UP_KEYBOARD     0x00070000u
-#define HID_UP_LED          0x00080000u
-#define HID_UP_BUTTON       0x00090000u
-#define HID_UP_TELEPHONY    0x000B0000u
-#define HID_UP_CONSUMER     0x000C0000u
-#define HID_UP_DIGITIZER    0x000D0000u
-#define HID_UP_PID          0x000F0000u
-#define HID_UP_BATTERY      0x00850000u
-#define HID_UP_CAMERA       0x00900000u
-#define HID_UP_CUSTOM       0x00FF0000u
-#define HID_UP_MSVENDOR     0xFF000000u
-#define HID_UP_HPVENDOR2    0xFF010000u
-#define HID_UP_LOGIVENDOR2  0xFF090000u
-#define HID_UP_LOGIVENDOR3  0xFF430000u
-#define HID_UP_HPVENDOR     0xFF7F0000u
-#define HID_UP_LOGIVENDOR   0xFFBC0000u
-#define HID_GD_POINTER      0x00010001u
-#define HID_GD_MOUSE        0x00010002u
-#define HID_GD_JOYSTICK     0x00010004u
-#define HID_GD_GAMEPAD      0x00010005u
-#define HID_GD_KEYBOARD     0x00010006u
-#define HID_GD_KEYPAD       0x00010007u
-#define HID_GD_MULTIAXIS    0x00010008u
-#define HID_GD_WIRELESS     0x0001000Cu
-#define HID_GD_SYSMULTIAXIS 0x0001000Eu
-#define HID_GD_X            0x00010030u
-#define HID_GD_Y            0x00010031u
-#define HID_GD_Z            0x00010032u
-#define HID_GD_RX           0x00010033u
-#define HID_GD_RY           0x00010034u
-#define HID_GD_RZ           0x00010035u
-#define HID_GD_SLIDER       0x00010036u
-#define HID_GD_DIAL         0x00010037u
-#define HID_GD_WHEEL        0x00010038u
-#define HID_GD_HATSWITCH    0x00010039u
-#define HID_GD_START        0x0001003Du
-#define HID_GD_SELECT       0x0001003Eu
-#define HID_GD_RESOLUTION   0x00010048u
-#define HID_GD_SYSCONTROL   0x00010080u
-#define HID_GD_UP           0x00010090u
-#define HID_GD_DOWN         0x00010091u
-#define HID_GD_RIGHT        0x00010092u
-#define HID_GD_LEFT         0x00010093u
-#define HID_GD_RFKILL_BTN   0x000100C6u
-#define HID_CP_CONSUMER     0x000C0001u
-#define HID_CP_PROGBUTTONS  0x000C0003u
-#define HID_DG_DIGITIZER    0x000D0001u
-#define HID_DG_PEN          0x000D0002u
-#define HID_DG_TOUCHSCREEN  0x000D0004u
-#define HID_DG_TOUCHPAD     0x000D0005u
-#define HID_DG_WHITEBOARD   0x000D0006u
-#define HID_DG_STYLUS       0x000D0020u
+#define HID_USAGE_PAGE                0xFFFF0000u
+#define HID_USAGE                     0x0000FFFFu
+#define HID_UP_UNDEFINED              0x00000000u
+#define HID_UP_GENDESK                0x00010000u
+#define HID_UP_SIMULATION             0x00020000u
+#define HID_UP_GENDEVCTRLS            0x00060000u
+#define HID_UP_KEYBOARD               0x00070000u
+#define HID_UP_LED                    0x00080000u
+#define HID_UP_BUTTON                 0x00090000u
+#define HID_UP_TELEPHONY              0x000B0000u
+#define HID_UP_CONSUMER               0x000C0000u
+#define HID_UP_DIGITIZER              0x000D0000u
+#define HID_UP_PID                    0x000F0000u
+#define HID_UP_BATTERY                0x00850000u
+#define HID_UP_CAMERA                 0x00900000u
+#define HID_UP_CUSTOM                 0x00FF0000u
+#define HID_UP_MSVENDOR               0xFF000000u
+#define HID_UP_HPVENDOR2              0xFF010000u
+#define HID_UP_LOGIVENDOR2            0xFF090000u
+#define HID_UP_LOGIVENDOR3            0xFF430000u
+#define HID_UP_HPVENDOR               0xFF7F0000u
+#define HID_UP_LOGIVENDOR             0xFFBC0000u
+#define HID_DC_BATTERYSTRENGTH        0x00060020u
+#define HID_BAT_CHARGING              0x00850044u
+#define HID_BAT_ABSOLUTESTATEOFCHARGE 0x00850065u
+#define HID_GD_POINTER                0x00010001u
+#define HID_GD_MOUSE                  0x00010002u
+#define HID_GD_JOYSTICK               0x00010004u
+#define HID_GD_GAMEPAD                0x00010005u
+#define HID_GD_KEYBOARD               0x00010006u
+#define HID_GD_KEYPAD                 0x00010007u
+#define HID_GD_MULTIAXIS              0x00010008u
+#define HID_GD_WIRELESS               0x0001000Cu
+#define HID_GD_SYSMULTIAXIS           0x0001000Eu
+#define HID_GD_X                      0x00010030u
+#define HID_GD_Y                      0x00010031u
+#define HID_GD_Z                      0x00010032u
+#define HID_GD_RX                     0x00010033u
+#define HID_GD_RY                     0x00010034u
+#define HID_GD_RZ                     0x00010035u
+#define HID_GD_SLIDER                 0x00010036u
+#define HID_GD_DIAL                   0x00010037u
+#define HID_GD_WHEEL                  0x00010038u
+#define HID_GD_HATSWITCH              0x00010039u
+#define HID_GD_START                  0x0001003Du
+#define HID_GD_SELECT                 0x0001003Eu
+#define HID_GD_RESOLUTION             0x00010048u
+#define HID_GD_SYSCONTROL             0x00010080u
+#define HID_GD_UP                     0x00010090u
+#define HID_GD_DOWN                   0x00010091u
+#define HID_GD_RIGHT                  0x00010092u
+#define HID_GD_LEFT                   0x00010093u
+#define HID_GD_RFKILL_BTN             0x000100C6u
+#define HID_CP_CONSUMER               0x000C0001u
+#define HID_CP_PROGBUTTONS            0x000C0003u
+#define HID_DG_DIGITIZER              0x000D0001u
+#define HID_DG_PEN                    0x000D0002u
+#define HID_DG_TOUCHSCREEN            0x000D0004u
+#define HID_DG_TOUCHPAD               0x000D0005u
+#define HID_DG_WHITEBOARD             0x000D0006u
+#define HID_DG_STYLUS                 0x000D0020u
 
 /* The event codes this file names beyond evdev.h's, Linux's values. */
 #define KEY_ESC            1
@@ -732,13 +735,20 @@ static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field
     switch (page) {
     case HID_UP_UNDEFINED:
     case HID_UP_DIGITIZER:
-    case HID_UP_GENDEVCTRLS:
-    case HID_UP_BATTERY:
     case HID_UP_MSVENDOR:
     case HID_UP_LOGIVENDOR:
     case HID_UP_LOGIVENDOR2:
     case HID_UP_LOGIVENDOR3:
         return MAP_NONE;
+    case HID_UP_GENDEVCTRLS:
+    case HID_UP_BATTERY:
+        /* Battery Strength, Absolute State Of Charge and Charging feed
+         * Linux's power supply, which has no event; the rest are unknown. */
+        if (u->hid == HID_DC_BATTERYSTRENGTH || u->hid == HID_BAT_ABSOLUTESTATEOFCHARGE ||
+            u->hid == HID_BAT_CHARGING) {
+            return MAP_NONE;
+        }
+        return map_unknown(f, report_type, type, code);
     case HID_UP_KEYBOARD:
         return map_keyboard(in, id, type, code);
     case HID_UP_BUTTON:
@@ -1702,6 +1712,17 @@ int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, in
         }
     }
     return -1;
+}
+
+unsigned int hidinput_leds_lit(struct hid_dev *hid)
+{
+    unsigned int lit = 0;
+    uint32_t i;
+
+    for (i = 0; i < hid->ninputs; i++) {
+        lit |= evdev_leds_lit(hid->inputs[i].dev);
+    }
+    return lit & ~((1u << LED_NUML) | (1u << LED_CAPSL) | (1u << LED_SCROLLL));
 }
 
 /** A Resolution Multiplier's value, its field's logical maximum at `arg`'s

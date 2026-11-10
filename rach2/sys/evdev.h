@@ -352,12 +352,21 @@ int evdev_key_down(struct evdev *dev, uint16_t code);
 void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down);
 
 /**
- * Light the LEDs of the keyboard `dev`, `mask` a bit 1 << LED_* for each LED
- * on: an EV_LED event for each LED that changes, then SYN_REPORT, as Linux's
- * evdev reports the console's LEDs; EVIOCGLED gives the mask. Any context.
+ * Light the Num, Caps and Scroll Lock LEDs of the keyboard `dev`, `mask` a
+ * bit 1 << LED_* for each LED on: an EV_LED event for each that changes,
+ * then SYN_REPORT, as Linux's evdev reports the console's LEDs; EVIOCGLED
+ * gives them, and the device's other LEDs are left as they are. Any context.
  * A NULL `dev` or one that is not a keyboard is ignored.
  */
 void evdev_report_leds(struct evdev *dev, unsigned int mask);
+
+/**
+ * The LEDs lit on `dev`, a bit 1 << LED_* each, as EVIOCGLED gives them: a
+ * keyboard's Num, Caps and Scroll Lock as the console has them, and any
+ * other LED the device has as a program last wrote it with EV_LED, for
+ * its driver to show. 0 for a NULL `dev`. Any context.
+ */
+unsigned int evdev_leds_lit(struct evdev *dev);
 
 /**
  * Give the keyboard `dev` the repeat's times in milliseconds: an EV_REP

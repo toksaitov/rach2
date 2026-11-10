@@ -156,7 +156,9 @@ struct evdev {
     int used;             /* the slot is taken, by a device or by the opens of one gone */
     int gone;             /* unregistered: no node, and its opens read -ENODEV */
     unsigned int flags;   /* EVDEV_SCAN, EVDEV_KEYBOARD */
-    unsigned int leds;    /* a keyboard's LEDs lit, a bit 1 << LED_* each */
+    unsigned int leds;    /* the LEDs lit, a bit 1 << LED_* each: a keyboard's
+                           * first three as the console has them, the others
+                           * as programs wrote them */
     unsigned int ledbits; /* the LEDs it has beyond a keyboard's three */
     int rep[2];           /* a keyboard's REP_DELAY and REP_PERIOD, ms */
     int has_abs;          /* EV_ABS: `absinfo` answers EVIOCGABS */
@@ -1093,6 +1095,7 @@ static void report_changes(struct evdev *dev, uint16_t type, int *old, const int
 void evdev_report_leds(struct evdev *dev, unsigned int mask)
 {
     int old[3], now[3], i;
+    uint32_t flags;
 
     if (!dev || !(dev->flags & EVDEV_KEYBOARD)) {
         return;
@@ -1102,7 +1105,23 @@ void evdev_report_leds(struct evdev *dev, unsigned int mask)
         now[i] = (int)(mask >> i) & 1;
     }
     report_changes(dev, EV_LED, old, now, 3);
-    dev->leds = mask & 7u;
+    flags = spin_lock_irqsave(&evdev_lock);
+    dev->leds = (dev->leds & ~7u) | (mask & 7u);
+    spin_unlock_irqrestore(&evdev_lock, flags);
+}
+
+unsigned int evdev_leds_lit(struct evdev *dev)
+{
+    unsigned int lit;
+    uint32_t flags;
+
+    if (!dev) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    lit = dev->leds;
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return lit;
 }
 
 void evdev_report_repeat(struct evdev *dev, int delay_ms, int period_ms)
@@ -1578,8 +1597,12 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
     k_memset(out, 0, EVDEV_KEY_BYTES);
     switch (type) {
     case 0:
-        out[0] =
-            (uint8_t)(1u << EV_SYN | 1u << EV_KEY | ((dev->flags & EVDEV_SCAN) ? 1u << EV_MSC : 0));
+        out[0] = (uint8_t)(1u << EV_SYN | ((dev->flags & EVDEV_SCAN) ? 1u << EV_MSC : 0));
+        for (i = 0; i < sizeof(dev->keys); i++) {
+            if (dev->keys[i]) {
+                out[0] |= 1u << EV_KEY;
+            }
+        }
         for (i = 0; i < sizeof(dev->rel); i++) {
             if (dev->rel[i]) {
                 out[0] |= 1u << EV_REL;
@@ -1627,11 +1650,36 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
 }
 
 /**
+ * Light or put out LED `code` of `dev` as a program wrote it, as Linux's
+ * input core changes `dev->led`: an LED the device lacks, or one already
+ * so, is dropped; a change goes to the opens and stays for EVIOCGLED and
+ * for the driver, which reads it with `evdev_leds_lit`.
+ */
+static void led_written(struct evdev *dev, uint16_t code, int32_t value)
+{
+    unsigned int bit = code < LED_CNT ? 1u << code : 0;
+    uint32_t flags;
+    int changed, grabbed;
+
+    flags = spin_lock_irqsave(&evdev_lock);
+    changed = (dev->ledbits & bit) && ((dev->leds & bit) != 0) != (value != 0);
+    if (changed) {
+        dev->leds ^= bit;
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (changed) {
+        report(dev, EV_LED, code, value != 0, &grabbed);
+    }
+}
+
+/**
  * Inject the event `type`, `code`, `value` a program wrote to `dev`, as
  * Linux's input_inject_event: an event of a type the device lacks is
- * dropped; a keyboard's EV_LED and EV_REP go to the LEDs and the repeat
- * every keyboard shares (`input_written`), whose change each keyboard's
- * opens get; any other event takes a driver's path (`evdev_report`), and
+ * dropped; a keyboard's Num, Caps and Scroll Lock LEDs and its EV_REP go to
+ * the LEDs and the repeat every keyboard shares (`input_written`), whose
+ * change each keyboard's opens get; any other LED the device has is lit or
+ * put out on it alone (`led_written`); any other event takes a driver's
+ * path (`evdev_report`), and
  * one that goes out to the opens with no grab held goes on as Linux's input
  * core gives an injected event to its other handlers: a keyboard's key to
  * the console (`input_written`), a key of another device the console takes
@@ -1651,6 +1699,10 @@ static void inject(struct evdev *dev, uint16_t type, uint16_t code, int32_t valu
     pointer = !keyboard && !dev->handler && bit_on(dev->rel, REL_X);
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (type >= EV_CNT || !bit_on(types, type)) {
+        return;
+    }
+    if (type == EV_LED && !(keyboard && code <= LED_SCROLLL)) {
+        led_written(dev, code, value);
         return;
     }
     if (type == EV_LED || type == EV_REP) {
@@ -1898,6 +1950,7 @@ static int32_t read_ioctl(struct evdev_client *c, uint32_t nr, uintptr_t arg, ui
         k_memset(leds, 0, sizeof(leds));
         flags = spin_lock_irqsave(&evdev_lock);
         leds[0] = (uint8_t)dev->leds;
+        leds[1] = (uint8_t)(dev->leds >> 8);
         flush_type(c, EV_LED);
         spin_unlock_irqrestore(&evdev_lock, flags);
         return bits_out(arg, len, leds, BITS_BYTES(LED_CNT));

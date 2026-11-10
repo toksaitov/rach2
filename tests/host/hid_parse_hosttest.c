@@ -56,6 +56,8 @@ struct evdev {
     int pending;  /* events since the last SYN_REPORT */
     int keyboard; /* attached to the input layer as a keyboard */
     int gone;
+    char uniq[64];
+    unsigned int lit; /* the LEDs a program lit, for evdev_leds_lit */
 };
 
 #define MAX_DEVS 16
@@ -114,6 +116,18 @@ void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
 {
     dev->phys = phys;
     dev->flags = flags;
+}
+
+/** Keep the serial of `dev`. */
+void evdev_set_uniq(struct evdev *dev, const char *uniq)
+{
+    snprintf(dev->uniq, sizeof(dev->uniq), "%s", uniq ? uniq : "");
+}
+
+/** The LEDs a row lit on `dev`. */
+unsigned int evdev_leds_lit(struct evdev *dev)
+{
+    return dev ? dev->lit : 0;
 }
 
 /** Keep the version of `dev`. */
@@ -380,9 +394,17 @@ static const uint8_t hat_widest[] = {
     0x80, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x17, 0x00, 0x00,
     0x00, 0x80, 0x27, 0xff, 0xff, 0xff, 0x7f, 0x75, 0x20, 0x95, 0x01, 0x81, 0x02, 0xc0};
 
-/* Linux's ABS_HAT0X and ABS_HAT0Y, which hid_input.c defines for itself. */
+/* A gamepad with two bytes of the Generic Device Controls page: Battery
+ * Strength, then usage 0x21, which Linux takes for an unknown axis. */
+static const uint8_t controls[] = {0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x06,
+                                   0x09, 0x20, 0x09, 0x21, 0x15, 0x00, 0x26, 0xff,
+                                   0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02, 0xc0};
+
+/* Linux's ABS_HAT0X, ABS_HAT0Y and ABS_MISC, which hid_input.c defines for
+ * itself. */
 #define TEST_HAT0X 0x10
 #define TEST_HAT0Y 0x11
+#define TEST_MISC  0x28
 
 static int fails;
 
@@ -857,6 +879,10 @@ static void rows_keyboard_leds(struct hid_dev *hid)
     CHECK("keyboard: Kana is bit 4",
           hidinput_led_report(hid, 1u << LED_KANA, out, sizeof(out), &value) == 1 &&
               out[0] == 0x10);
+    hid->inputs[0].dev->lit = 1u << LED_CAPSL | 1u << LED_KANA;
+    CHECK("keyboard: a program's Kana LED is the device's, Caps Lock the console's",
+          hidinput_leds_lit(hid) == 1u << LED_KANA);
+    hid->inputs[0].dev->lit = 0;
     CHECK("keyboard: no multiplier report",
           hidinput_multiplier_report(hid, out, sizeof(out), &value) == -1);
 }
@@ -1033,6 +1059,14 @@ static void rows_gamepad(void)
     feed(hid, zero, sizeof(zero));
     CHECK("hat INT32_MIN to INT32_MAX: 0, half way, is down, with no division by 0",
           saw(EV_ABS, TEST_HAT0Y, 1) && saw(EV_ABS, TEST_HAT0X, 0) == 0);
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(controls, sizeof(controls), "ACME Controls", &inputs);
+    d = &devs[0];
+    CHECK(
+        "device controls: usage 0x21 is ABS_MISC and Battery Strength nothing, as Linux maps them",
+        inputs == 1 && bit(d->abs, TEST_MISC) && count_bits(d->abs, 8) == 1);
     drop(hid);
 }
 
