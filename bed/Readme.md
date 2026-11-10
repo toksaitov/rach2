@@ -36,6 +36,8 @@ It compiles the triangle with the root's GCC and draws it on llvmpipe, then boot
 
 Measured on the testing PC under KVM, with the WSL host's Mesa 26.0.8 and the guest's virglrenderer 1.1.0-2 and Mesa 25.0.7-2+deb13u1: both pictures have 18,432 pixels of the triangle, 192 by 192 halved, and 47,104 of the texture, and the checksum `f0b3cd1d6d2e2625`. Through the relay, the client sent 18 commands: the renderer, the capabilities twice, 4 resources, the texture in 2 transfers in, one submission, 6 busy waits and the picture in one transfer out, 264,849 bytes to the server and 263,924 back; the relay hid 1 version query. With the guest under TCG (`ACCEL=tcg`) the check passes with the same checksum; the client polled 9 busy waits in place of 6 while the slower guest drew.
 
+Measured on Rach2, in the `triangle` case on the testing PC with the outer accelerator KVM, the guest under the root's QEMU 10.0.13 on TCG with 2 CPUs and 2048 MiB: the guest's server was ready 34 s after QEMU started, and Rach2's llvmpipe (LLVM 19.1.7) and virpipe through the relay drew the same picture as on Linux, with checksum `f0b3cd1d6d2e2625`. The relay carried 17 commands, among them 5 busy waits, 264,833 bytes to the server and 263,912 back, and hid 1 version query. The case took 61 s in all.
+
 ## Design
 
 ### The relay
