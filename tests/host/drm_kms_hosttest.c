@@ -445,6 +445,49 @@ static int32_t rmfb(struct drm_file *file, uint32_t id)
 
 static uint32_t fb_main, fb_other, fb_565, h_main, h_other, h_cursor;
 
+static uint32_t race_fb; /* the framebuffer race_rmfb removes */
+
+/** Another thread of the file removes `race_fb` during a copy. */
+static void race_rmfb(void)
+{
+    CHECK(rmfb(&fa, race_fb) == 0, "RMFB during the copy");
+}
+
+/** A probe during a copy replaces the HDMI connector's modes. */
+static void race_probe(void)
+{
+    CHECK(drm_helper_probe_single_connector_modes(&hdmi, 4096, 4096) == 1,
+          "a probe during the copy");
+}
+
+/** GETRESOURCES and GETCONNECTOR gather what they report before copying
+ * it out, since the list they walk may change while a copy sleeps. */
+static void row_copy_races(void)
+{
+    struct drm_mode_card_res r;
+    struct drm_mode_get_connector c;
+    struct drm_mode_modeinfo modes[2];
+    uint32_t ids[8], first;
+
+    first = addfb2(h_cursor, 64, 64, DRM_FORMAT_XRGB8888, 64 * 4, 0);
+    race_fb = addfb2(h_cursor, 64, 64, DRM_FORMAT_XRGB8888, 64 * 4, 0);
+    k_memset(&r, 0, sizeof(r));
+    r.fb_id_ptr = UPTR(ids);
+    r.count_fbs = 8;
+    copy_hook = race_rmfb;
+    CHECK(drm_mode_getresources(&dev, &r, &fa) == 0 && ids[0] == race_fb && ids[1] == first,
+          "GETRESOURCES gives the IDs it found, newest first");
+    CHECK(rmfb(&fa, first) == 0 && rmfb(&fa, race_fb) == -ENOENT, "the RMFB took effect");
+    k_memset(&c, 0, sizeof(c));
+    c.connector_id = hdmi.base.id;
+    c.modes_ptr = UPTR(modes);
+    c.count_modes = 2;
+    copy_hook = race_probe;
+    CHECK(drm_mode_getconnector(&dev, &c, &fa) == 0 && c.count_modes == 1 &&
+              modes[0].hdisplay == 1366,
+          "GETCONNECTOR gives the modes it found");
+}
+
 /** The IN_FORMATS blob: three formats, and each modifier with all three. */
 static void row_in_formats(void)
 {
@@ -1033,6 +1076,7 @@ int main(void)
     row_connectors();
     row_blobs();
     row_framebuffers();
+    row_copy_races();
     row_atomic();
     row_setcrtc();
     row_setplane();
