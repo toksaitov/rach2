@@ -292,8 +292,9 @@ struct usb_sys_row {
 int usb_core_row(int index, struct usb_sys_row *row);
 
 /** Fill `row` as `usb_core_row` does, with the interface whose
- * bInterfaceNumber is `ifnum` of those the device drives; 0, or -1 when
- * the entry is not a running device or does not drive that interface. */
+ * bInterfaceNumber is `ifnum` of those the device drives, or with the one
+ * `usb_core_row` gives for a negative `ifnum`; 0, or -1 when the entry is
+ * not a running device or does not drive that interface. */
 int usb_core_interface(int index, int ifnum, struct usb_sys_row *row);
 
 /**
