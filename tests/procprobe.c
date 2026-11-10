@@ -171,6 +171,7 @@ static const struct row {
             {"meminfo-newline", ROW_PLAIN},
             {"meminfo-memtotal", ROW_PLAIN},
             {"meminfo-swapfree", ROW_PLAIN},
+            {"meminfo-swapcached", ROW_PLAIN},
             {"meminfo-slab", ROW_PLAIN},
             {"meminfo-free-bounded", ROW_PLAIN},
             {"meminfo-no-double-count", ROW_PLAIN},
@@ -2340,6 +2341,8 @@ static void machine_file_rows(void)
           "/proc/meminfo carries MemTotal");
     check("meminfo-swapfree", has_line_starting(buf, n, "SwapFree:"),
           "/proc/meminfo carries SwapFree");
+    check("meminfo-swapcached", uint_after(buf, n, "SwapCached:") == 0,
+          "/proc/meminfo carries SwapCached, 0, which IGT adds to the memory it may use");
     check("meminfo-slab", has_line_starting(buf, n, "Slab:"),
           "/proc/meminfo runs through to its last line, Slab, which nmeter needs");
     check("meminfo-free-bounded", uint_after(buf, n, "MemTotal:") >= uint_after(buf, n, "MemFree:"),

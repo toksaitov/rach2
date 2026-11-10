@@ -2213,6 +2213,7 @@
         {"assertion_id": "meminfo-newline", "checks": "/proc/meminfo ends with its newline", "source": "program"},
         {"assertion_id": "meminfo-memtotal", "checks": "/proc/meminfo has MemTotal", "source": "program"},
         {"assertion_id": "meminfo-swapfree", "checks": "/proc/meminfo has SwapFree", "source": "program"},
+        {"assertion_id": "meminfo-swapcached", "checks": "/proc/meminfo has SwapCached, 0", "source": "program"},
         {"assertion_id": "meminfo-slab", "checks": "/proc/meminfo runs through to its last line, Slab, which nmeter needs", "source": "program"},
         {"assertion_id": "meminfo-free-bounded", "checks": "/proc/meminfo reports no more free memory than there is memory", "source": "program"},
         {"assertion_id": "meminfo-no-double-count", "checks": "MemFree, Buffers, Cached and Slab together are no more than MemTotal", "source": "program"},
