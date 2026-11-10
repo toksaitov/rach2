@@ -82,7 +82,12 @@ extern void *memcpy(void *dst, const void *src, unsigned long n);
 extern void *memset(void *dst, int c, unsigned long n);
 extern int strcmp(const char *a, const char *b);
 extern int fprintf(void *stream, const char *format, ...);
+#ifdef __APPLE__
+extern void *__stderrp; /* macOS's C library names its stderr so */
+#define stderr __stderrp
+#else
 extern void *stderr;
+#endif
 extern void abort(void);
 
 #ifdef FUZZ_REPLAY
