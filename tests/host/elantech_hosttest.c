@@ -46,6 +46,7 @@
 #include "arch/x86/ps2mouse.c"
 #include "arch/x86/synaptics.c"
 #include "arch/x86/elantech.c"
+#include "arch/x86/trackpoint.c"
 
 #include "fs/fd.h"
 #include "lib/kerrno.h"
@@ -1520,6 +1521,23 @@ void k_udelay(uint32_t usec)
     waited_us += usec;
 }
 
+/* What the guest of a Synaptics pad's pass-through port needs, which an
+ * Elantech pad never calls; trackpoint_hosttest.c tests it. */
+void evdev_sysfs_serio_files(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return 0;
+}
+
 /** Nothing is mapped: the SMBIOS table is always one a row gives. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
@@ -1701,6 +1719,30 @@ static int open_named(int which, const char *name)
     return -1;
 }
 
+/** How many nodes are named `name`; every node it opens it closes. */
+static int count_named(const char *name)
+{
+    fd_entry_t e;
+    struct open_file ofd;
+    char text[64];
+    int n, count = 0;
+
+    for (n = 0; n < EVDEV_MAX; n++) {
+        k_memset(&e, 0, sizeof(e));
+        k_memset(&ofd, 0, sizeof(ofd));
+        ofd.status_flags = OFD_NONBLOCK;
+        e.ofd = &ofd;
+        if (evdev_open(&e, n) != 0) {
+            continue;
+        }
+        if (evdev_ioctl(&e, EVIOCGNAME(64), (uintptr_t)text) > 0 && strcmp(text, name) == 0) {
+            count++;
+        }
+        evdev_close(&e);
+    }
+    return count;
+}
+
 /** Read every whole packet of the open `which` into `got`. */
 static int32_t take(int which)
 {
@@ -1765,6 +1807,12 @@ static void model_reset(int kind, int p)
     evdev_unregister(pad);
     pad = NULL;
     touchpad = 0;
+    state = STATE_ACTIVE;
+    out_of_sync = 0;
+    bat_held = 0;
+    reconnect_wanted = 0;
+    cmd_busy = 0;
+    packet_index = 0;
     model_head = 0;
     model_count = 0;
     ctl_config = FIRMWARE_CONFIG;
@@ -2281,6 +2329,100 @@ static void stream_rows(void)
     mouse_clear_packets();
 }
 
+/** Expect the bytes of a version 3 pad's reconnect, Linux's
+ * `elantech_reconnect` then `psmouse_initialize` and the enable. */
+static void expect_v3_reconnect(void)
+{
+    static const uint8_t v3_write[3] = {0x00, 0x10, 0x0b};
+    static const uint8_t v3_read[2] = {0x00, 0x10};
+
+    n_want = 0;
+    expect(0xFF);
+    expect(0xF6);
+    expect(0xF5);
+    expect(0xE6);
+    expect(0xE6);
+    expect(0xE6);
+    expect(0xE9);
+    expect_squery(0x01);
+    expect_custom(v3_write, 3, 0xE6);
+    expect_custom(v3_read, 2, 0xE9);
+    expect_initialize();
+}
+
+/** Feed the handler `n` bytes of `bytes`, or `n` zeros when `bytes` is
+ * NULL, which no version takes as a packet. */
+static void irq_feed(const uint8_t *bytes, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        irq_byte(bytes ? bytes[i] : 0x00);
+    }
+}
+
+/* A version 3 packet of one finger at 700, which the pad takes whole. */
+static const uint8_t v3_finger[6] = {0x55, 0x42, 0xbc, 0x22, 0x61, 0x2c};
+
+/** A pad reconnected after five packets out of form in a row and after its
+ * announcement, keeping its event devices, as Linux's psmouse and
+ * `elantech_reconnect` do. */
+static void reconnect_rows(void)
+{
+    struct evdev *pad_dev, *stick_dev;
+
+    CHECK("the stick's pad comes up", bring_up(V3_STICK));
+    pad_dev = etd_pad;
+    stick_dev = etd_tp;
+    irq_feed(NULL, 24);
+    CHECK("four packets out of form are four bad packets",
+          out_of_sync == 4 && state == STATE_ACTIVE && !reconnect_wanted);
+    irq_feed(v3_finger, 6);
+    CHECK("a whole packet ends the count", out_of_sync == 0);
+    irq_feed(NULL, 30);
+    CHECK("the fifth in a row stops the port and asks for a reconnect",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT && last_warning &&
+              strcmp(last_warning, "sync: %d bad packets in a row: reconnecting") == 0);
+    irq_byte(v3_finger[0]);
+    CHECK("the port then drops every byte", etd_pktcnt == 0);
+    n_took = 0;
+    ps2mouse_reconnect();
+    expect_v3_reconnect();
+    CHECK("the pad is reconnected with Linux's commands, in Linux's order", took_expected());
+    CHECK("its absolute mode is set again and it reports",
+          regs[0x10] == 0x0b && reporting && state == STATE_ACTIVE && out_of_sync == 0);
+    CHECK("it keeps its event devices", etd_pad == pad_dev && etd_tp == stick_dev &&
+                                            count_named("ETPS/2 Elantech Touchpad") == 1 &&
+                                            count_named("ETPS/2 Elantech TrackPoint") == 1);
+    irq_feed(v3_finger, 6);
+    CHECK("and its packets are read", etd_pktcnt == 0 && out_of_sync == 0);
+
+    irq_byte(0xAA);
+    irq_byte(0x00);
+    CHECK("its announcement 0xAA 0x00 asks for a reconnect",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
+    n_took = 0;
+    ps2mouse_reconnect();
+    expect_v3_reconnect();
+    CHECK("which sends the same commands", took_expected() && etd_pad == pad_dev);
+}
+
+/** A mouse that answers in the pad's place at its reconnect, probed anew
+ * as Linux's serio core probes a port whose reconnect failed. */
+static void reconnect_mouse_rows(void)
+{
+    CHECK("the stick's pad comes up", bring_up(V3_STICK));
+    irq_feed(NULL, 30);
+    dev_kind = KIND_LOGITECH;
+    ps2mouse_reconnect();
+    CHECK("a mouse that answers in the pad's place is probed anew",
+          touchpad == 0 && etd_pad == NULL && etd_tp == NULL && reporting && state == STATE_ACTIVE);
+    CHECK("the pad's devices are gone and the mouse's is registered",
+          count_named("ETPS/2 Elantech Touchpad") == 0 &&
+              count_named("ETPS/2 Elantech TrackPoint") == 0 &&
+              count_named("PS/2 Generic Mouse") == 1);
+}
+
 /** A mouse that answers the knock, and pads whose setup fails, go on as
  * mice, as Linux's psmouse sets them up. */
 static void fallback_rows(void)
@@ -2334,6 +2476,8 @@ int main(void)
     packet_rows();
     stream_rows();
     fallback_rows();
+    reconnect_rows();
+    reconnect_mouse_rows();
     model_reset(KIND_PAD, V1_ROCKER);
     if (fails == 0) {
         printf("elantech-test: pass\n");

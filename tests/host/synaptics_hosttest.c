@@ -320,10 +320,26 @@ int elantech_init(void)
 }
 
 /** No Elantech touchpad's bytes come, since `elantech_init` found none. */
-void elantech_byte(uint8_t data)
+int elantech_byte(uint8_t data)
 {
     (void)data;
+    return ELANTECH_GOOD;
 }
+
+/* The rest of elantech.h, which a port without an Elantech pad never
+ * calls; elantech_hosttest.c tests it. */
+int elantech_packet_start(void)
+{
+    return 1;
+}
+
+int elantech_reconnect(void)
+{
+    return -1;
+}
+
+void elantech_disconnect(void)
+{}
 
 void klog(int level, const char *subsystem, const char *format, ...)
 {
