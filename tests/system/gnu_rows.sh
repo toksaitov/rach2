@@ -1332,11 +1332,13 @@ elf_class() {
 # Debian's i386 eglinfo and vulkaninfo find Mesa's i386 llvmpipe and
 # lavapipe, and GE-Proton in its default mode makes a prefix and runs the
 # 32-bit cmd.exe in its i386 Wine, not through WoW64. The program reports
-# itself as an x86 process on an AMD64 system, and the map of its process,
-# which it reads through Wine's drive Z:, has i386 Wine's ntdll. Proton runs
-# as the test account, in a prefix of the row's own.
+# itself as an x86 process on an AMD64 system and then waits for a file the
+# row makes once it has read the program's process: an i386 executable whose
+# map has i386 Wine's ntdll. The row reads the map itself, since Wine's
+# server opens a file for its clients and Z:\proc\self would be the
+# server's. Proton runs as the test account, in a prefix of the row's own.
 row_ia32() {
-    local p=/opt/proton bat dos
+    local p=/opt/proton bat dos pid cmd
     same "the machine" "$MACHINE" "x86_64"
     same "eglinfo's class" "$(elf_class /usr/bin/eglinfo.i386-linux-gnu)" "ELF 32-bit LSB, Intel i386"
     output "eglinfo" /usr/bin/eglinfo.i386-linux-gnu -B -p surfaceless
@@ -1351,14 +1353,26 @@ row_ia32() {
     dos="Z:${WORK//\//\\}"
     bat="$WORK/arch.bat"
     printf '@echo %%PROCESSOR_ARCHITECTURE%% %%PROCESSOR_ARCHITEW6432%%> %s\\arch.txt\r\n' "$dos" > "$bat"
-    printf '@type Z:\\proc\\self\\maps> %s\\maps.txt\r\n' "$dos" >> "$bat"
+    printf ':wait\r\n@if not exist %s\\go goto wait\r\n' "$dos" >> "$bat"
     chown -R test "$WORK"
-    OUT=$(su test -c "env -u PROTON_USE_WOW64 STEAM_COMPAT_CLIENT_INSTALL_PATH=$WORK/steam \
+    su test -c "env -u PROTON_USE_WOW64 STEAM_COMPAT_CLIENT_INSTALL_PATH=$WORK/steam \
         STEAM_COMPAT_DATA_PATH=$WORK/compat XDG_RUNTIME_DIR=$WORK/run WINEDEBUG=-all \
-        python3 $p/proton run 'c:\\windows\\syswow64\\cmd.exe' /c '$dos\\arch.bat'" 2>&1) ||
-        fail "proton: status $?: $(printf '%s' "$OUT" | tail -n 3 | tr '\n' ' ')"
+        python3 $p/proton run 'c:\\windows\\syswow64\\cmd.exe' /c '$dos\\arch.bat'" \
+        > "$WORK/proton.out" 2>&1 &
+    pid=$!
+    while [ ! -s "$WORK/arch.txt" ] && kill -0 "$pid" 2> /dev/null; do
+        sleep 1
+    done
+    cmd=$(pgrep -n -u test -x cmd.exe)
+    if [ -n "$cmd" ]; then
+        same "the 32-bit program's class" "$(elf_class "/proc/$cmd/exe")" "ELF 32-bit LSB, Intel i386"
+        has "the 32-bit program's map" "$(cat "/proc/$cmd/maps")" "/i386-unix/ntdll.so"
+    else
+        fail "no process of the test account is named cmd.exe: $(ps -u test -o pid=,comm=,args= | tr '\n' ' ')"
+    fi
+    touch "$WORK/go"
+    wait "$pid" || fail "proton: status $?: $(tail -n 3 "$WORK/proton.out" | tr '\n' ' ')"
     same "the 32-bit program's report" "$(tr -d '\r' < "$WORK/arch.txt" 2> /dev/null)" "x86 AMD64"
-    has "the 32-bit program's map" "$(cat "$WORK/maps.txt" 2> /dev/null)" "/i386-unix/ntdll.so"
     su test -c "WINEPREFIX=$WORK/compat/pfx $p/files/bin/wineserver -k" > /dev/null 2>&1 || :
 }
 
