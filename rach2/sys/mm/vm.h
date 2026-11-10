@@ -450,6 +450,19 @@ uintptr_t vm_locked_in(const vm_space_t *vm, uintptr_t start, uintptr_t end);
  * what RLIMIT_MEMLOCK bounds for the mlock calls. */
 uintptr_t vm_locked(const vm_space_t *vm);
 
+/**
+ * Where Linux's mprotect, which changes the regions of [start, end) one
+ * after another, stops for the access bits `prot`: the first address of
+ * the range that no region holds, `*why` -1, as Linux answers ENOMEM; the
+ * start of the first region that refuses `prot`, `*why` -3, as `vm_protect`
+ * answers EACCES; or the start of the first sealed region, `*why` -4, as
+ * Linux answers EPERM, a region that refuses first giving -3; `start`
+ * itself when the first region stops the change there. With no stop, `end`
+ * and `*why` 0.
+ */
+uintptr_t vm_protect_stop(const vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot,
+                          int *why);
+
 /** The start of the first region of [start, end) with VM_PROT_SEALED,
  * `start` when that region begins below it, or `end` when no sealed region
  * meets the range. */

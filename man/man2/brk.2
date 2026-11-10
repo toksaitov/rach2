@@ -417,15 +417,43 @@ refuses write over a range that reaches one with
 as Linux does.
 So is execute over a mapping of
 .Xr memfd_secret 2 .
-The whole range is checked before anything changes, except that a sealed
-mapping stops the call with
+.Pp
+The call fails with
+.Er ENOMEM ,
+changing nothing, when no mapping holds the first page of the range.
+Otherwise it changes the mappings one after another, as Linux does, and
+the first that cannot change stops it: a page no mapping holds with
+.Er ENOMEM ,
+a mapping that refuses the rights asked with
+.Er EACCES ,
+and a mapping
+.Xr mseal 2
+sealed with
 .Er EPERM ,
 or
 .Er EACCES
 when its allowed rights require that error first.
-The mappings and resident pages below it take the new protection and
-notify their users before that error is returned, as Linux changes one
-mapping after another.
+The mappings and resident pages before the stop keep the new protection
+and notify their users before the error is returned.
+.Pp
+.Fn mprotect
+also accepts
+.Dv PROT_SEM
+(0x8), which means nothing on x86, and
+.Dv PROT_GROWSDOWN
+(0x01000000), which moves the start of the range down to that of the
+mapping holding it, as glibc asks to make the stack executable; that
+mapping must be the main stack, and any other is refused with
+.Er EINVAL .
+.Dv PROT_GROWSUP
+(0x02000000), and the two together, are refused with
+.Er EINVAL ,
+since no x86 mapping grows up.
+With
+.Dv PROT_EXEC
+alone, where the processor has protection keys, the range takes the
+execute-only key, which is allocated only once the range is known to
+begin in a mapping.
 .Ss Resizing and advice
 .Fn mremap ,
 kernel call 163, resizes the mapping at the page-aligned
