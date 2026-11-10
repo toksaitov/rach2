@@ -141,8 +141,8 @@ void intel_pipe_readout(struct drm_i915_private *i915, int pipe, struct intel_pi
         break;
     }
     read_timings(i915, t, m);
-    m->flags = (ddi & TRANS_DDI_PHSYNC ? DRM_MODE_FLAG_PHSYNC : DRM_MODE_FLAG_NHSYNC) |
-               (ddi & TRANS_DDI_PVSYNC ? DRM_MODE_FLAG_PVSYNC : DRM_MODE_FLAG_NVSYNC);
+    m->flags = ((ddi & TRANS_DDI_PHSYNC) != 0 ? DRM_MODE_FLAG_PHSYNC : DRM_MODE_FLAG_NHSYNC) |
+               ((ddi & TRANS_DDI_PVSYNC) != 0 ? DRM_MODE_FLAG_PVSYNC : DRM_MODE_FLAG_NVSYNC);
     if ((conf & TRANSCONF_INTERLACE_MASK) != 0) {
         m->flags |= DRM_MODE_FLAG_INTERLACE;
     }
@@ -313,7 +313,7 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
     struct drm_framebuffer *fbs[DRM_MAX_PLANES];
     struct drm_plane *planes[DRM_MAX_PLANES];
     int32_t err = 0;
-    int i, slot;
+    int i, slot = 0;
 
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = state->planes_new[i];
