@@ -673,6 +673,9 @@ static const struct virtio_ops vp_ops = {"virtio-pci",
                                          NULL,
                                          NULL,
                                          NULL,
+                                         NULL,
+                                         NULL,
+                                         NULL,
                                          NULL};
 
 /** The device type of virtio-pci function `p`, or 0 when it is none. */

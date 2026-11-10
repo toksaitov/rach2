@@ -324,7 +324,7 @@ static const struct virtio_ops model_ops = {
     m_generation, m_config_read, m_config_write, m_queue_max,    m_queue_enable,
     m_notify,     m_irq_setup,   m_irq_start,    m_irq_release,  m_dma_alloc,
     m_dma_free,   m_shm_region,  NULL,           NULL,           NULL,
-    NULL,         NULL};
+    NULL,         NULL,          NULL,           NULL,           NULL};
 
 /** A fresh model offering VERSION_1 and INDIRECT_DESC and device bits 0, 1
  * and 5, with two queues of 256. */
