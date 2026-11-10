@@ -49,6 +49,8 @@ The functions are listed in the order of bus, device and function.
 The function's variables, one
 .Ql NAME=value
 a line:
+.Ql DRIVER ,
+the driver bound to it, first and only while one is;
 .Ql PCI_CLASS ,
 the 24-bit class code in uppercase hexadecimal, at least four digits;
 .Ql PCI_ID
@@ -126,11 +128,17 @@ Root writes a name of up to 31 bytes, less a newline, or an empty line to
 clear it; a longer name is
 .Er EINVAL .
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F/driver
-A link to the directory of the function's driver,
-.Pa /sys/bus/pci/drivers/vfio-pci
+A link to
+.Pa /sys/bus/pci/drivers/NAME
+while the function is bound to the driver
+.Ar NAME ,
+such as
+.Ql i915
 or
-.Pa /sys/bus/pci/drivers/i915 ,
-while the function is bound to it.
+.Ql vfio-pci ,
+whose directory has a link back to the function by its name, as on
+Linux.
+libudev reads a device's driver from this link.
 .It Pa /sys/bus/pci/drivers/i915/{bind,unbind}
 Write-only, mode 0200; the directory is there once the Intel graphics
 driver has bound a device, under

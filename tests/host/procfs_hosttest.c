@@ -952,6 +952,17 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t 
     return (uint8_t)pci_read_config32(bus, device, function, offset);
 }
 
+/* The owner pci_owner gives every function: NULL, or a driver that shows
+ * itself bound, as vfio-pci does, which a row sets. */
+static const char *pci_owner_name;
+
+const char *pci_owner(uint8_t bus, uint8_t devfn)
+{
+    (void)bus;
+    (void)devfn;
+    return pci_owner_name;
+}
+
 /** The resources of the virtio display: a prefetchable BAR 0 of 8 MiB and
  * a 64-bit BAR 4 of 16 KiB, as pci.c gives them from the walk's sizes. */
 void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r)
@@ -2307,6 +2318,58 @@ static void sysfs_reg_rows(void)
     check(!sysfs_device_exists(SYSFS_PCI_DEVICE, 0xA0), "a withdrawn function is gone");
 }
 
+/** Whether the uevent of the PCI function `key` begins with `first`. */
+static int pci_uevent_begins(int key, const char *first)
+{
+    struct procfs_text t;
+    int ok;
+
+    procfs_text_init(&t);
+    ok = procfs_gen_uevent(&t, SYSFS_PCI_DEVICE, key) > 0 && t.buf &&
+         __builtin_strncmp(t.buf, first, __builtin_strlen(first)) == 0;
+    kfree(t.buf);
+    return ok;
+}
+
+/** A function shown bound to a driver of the kernel, as Linux's driver
+ * core shows it: the driver's directory and the two links, DRIVER= first
+ * in the uevent, and all of it gone when it is unbound. */
+static void sysfs_bound_rows(void)
+{
+    int dev, drivers, dir, link;
+    const char *d;
+
+    check(sysfs_pci_bind(0x20, "virtio-pci") == 0 && sysfs_pci_bind(0x20, "virtio-pci") == 0 &&
+              sysfs_pci_bind(0x20, "bochs-drm") == -EBUSY,
+          "bound: a function is shown bound to one driver");
+    d = sysfs_pci_driver(0x20);
+    check(d && __builtin_strcmp(d, "virtio-pci") == 0 && !sysfs_pci_driver(0x28),
+          "bound: its driver is named, and an unbound function has none");
+    dev = sysfs_anchor(SYSFS_PCI_DEVICE, 0x20);
+    link = sysfs_node_child(dev, "driver", 6);
+    check(link > 0 && link_reads(link, "../../../bus/pci/drivers/virtio-pci"),
+          "bound: the function's driver link names the driver's directory");
+    drivers = sysfs_node_child(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers", 7);
+    dir = drivers > 0 ? sysfs_node_child(drivers, "virtio-pci", 10) : 0;
+    link = dir > 0 ? sysfs_node_child(dir, "0000:00:04.0", 12) : 0;
+    check(link > 0 && link_reads(link, "../../../../devices/pci0000:00/0000:00:04.0"),
+          "bound: and the driver's directory links back to the function by its address");
+    check(pci_uevent_begins(0x20, "DRIVER=virtio-pci\nPCI_CLASS="),
+          "bound: the uevent names the driver first, as Linux's");
+    sysfs_pci_unbind(0x20);
+    check(!sysfs_pci_driver(0x20) && sysfs_node_child(dev, "driver", 6) <= 0 &&
+              sysfs_node_child(dir, "0000:00:04.0", 12) <= 0 &&
+              pci_uevent_begins(0x20, "PCI_CLASS="),
+          "bound: unbound, both links and DRIVER= are gone");
+    pci_owner_name = "vfio-pci";
+    check(pci_uevent_begins(0x20, "DRIVER=vfio-pci\n"),
+          "bound: a function vfio-pci holds names it in its uevent");
+    pci_owner_name = PCI_OWNER_KERNEL;
+    check(pci_uevent_begins(0x20, "PCI_CLASS="),
+          "bound: one the kernel holds unnamed names no driver");
+    pci_owner_name = 0;
+}
+
 /** Whether the uevents sent since `from` hold the bytes of `text`. */
 static int sent_has(uint32_t from, const char *text)
 {
@@ -2635,6 +2698,7 @@ int main(int argc, char **argv)
     pci_config_rows();
     pci_uevent_rows();
     sysfs_reg_rows();
+    sysfs_bound_rows();
     input_publish_rows();
     input_file_rows();
     input_change_rows();

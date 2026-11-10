@@ -118,6 +118,18 @@ int sysfs_add_dir(int parent, const char *name)
     return -ENOENT;
 }
 
+int sysfs_pci_bind(int key, const char *driver)
+{
+    (void)key;
+    (void)driver;
+    return 0;
+}
+
+void sysfs_pci_unbind(int key)
+{
+    (void)key;
+}
+
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
 {
     (void)parent;

@@ -1971,9 +1971,15 @@ int32_t i915_rps_set_boost_mhz(struct drm_i915_private *i915, uint32_t val);
  * gt_cur_freq_mhz, gt_max_freq_mhz, gt_min_freq_mhz, gt_RP0_freq_mhz,
  * gt_RP1_freq_mhz and gt_RPn_freq_mhz, and power/rc6_enable and
  * power/rc6_residency_ms. Once the DRM device is registered; they go with
- * the card's directory. A file that cannot be added is logged.
+ * the card's directory. It also shows the PCI function bound to i915, its
+ * `driver` link and DRIVER= in its uevent, as Linux's driver core does
+ * (`sysfs_pci_bind`). A file that cannot be added is logged.
  */
 void i915_sysfs_register(struct drm_i915_private *i915);
+
+/** Take away the PCI function's binding that `i915_sysfs_register` showed;
+ * at unplug. */
+void i915_sysfs_unregister(struct drm_i915_private *i915);
 
 /**
  * First light whatever the command line says, as the fake chip's debugfs
