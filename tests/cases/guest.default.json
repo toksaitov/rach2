@@ -509,7 +509,7 @@
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "ids", "count": 1}]}
     },
     {
       "case_id": "guest.default.membarrierprobe",

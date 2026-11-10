@@ -35,6 +35,7 @@
  */
 
 #include "probe.h"
+#include "probe_args.h"
 #include "probe_report.h"
 
 #if defined __x86_64__
@@ -667,7 +668,7 @@ static void run_rr_interval(void)
  */
 static int unprivileged(long parent)
 {
-    if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+    if (syscall3(SYS_SETRESUID, probe_id(1000), probe_id(1000), probe_id(1000)) != 0) {
         return 1;
     }
     if (set(0, mk(SCHED_OTHER, 0, 5, 0)) != 0) {
@@ -737,7 +738,7 @@ static long limit(long resource, unsigned long long value)
 static int limited(void)
 {
     if (limit(RLIMIT_RTPRIO, 10) != 0 || limit(RLIMIT_NICE, 25) != 0 ||
-        syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+        syscall3(SYS_SETRESUID, probe_id(1000), probe_id(1000), probe_id(1000)) != 0) {
         return 1;
     }
     if (set(0, mk(SCHED_FIFO, 0, 0, 5)) != 0 || set(0, mk(SCHED_FIFO, 0, 0, 11)) != -EPERM ||
@@ -798,6 +799,7 @@ void probe_main(unsigned long *sp)
 {
     unsigned int i;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.schedattrprobe"));
     for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
         report_plan(assertion_id[i]);
