@@ -2474,6 +2474,41 @@ static void test_usb(void)
     CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "the profile is whole again");
 }
 
+/** Check the unnumbered bus of a PCIe root port and its ordering. */
+static void test_root_port(void)
+{
+    struct etude_qemu_device devices[] = {{.model = "pcie-root-port", .id = "port1"},
+                                          {.model = "virtio-net-pci", .bus = "port1"},
+                                          {0}};
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_profile p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], line[4096];
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "x86_64";
+    p.kernel = "/k/kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.q35 = 1;
+    p.devices = devices;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "a NIC behind a PCIe root port");
+    CHECK(strstr(joined(argv, line, sizeof(line)),
+                 "-device pcie-root-port,id=port1 -netdev user,id=net0 "
+                 "-device virtio-net-pci,netdev=net0,bus=port1") != NULL,
+          "the root port precedes the NIC on its unnumbered bus");
+    devices[0].model = "qemu-xhci";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL,
+          "an unnumbered bus of a controller that needs a number");
+    devices[0].model = "pcie-root-port";
+    devices[0].bus = "port1";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "a root port on its own bus");
+    devices[0].bus = NULL;
+    devices[1].bus = "absent";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "an absent root port");
+}
+
 /**
  * Check that a capture of a card is a `filter-dump` on its network after the
  * card, with its file's commas doubled, and that a capture of a card the
@@ -2690,6 +2725,7 @@ int main(int argc, char **argv)
         test_audio();
         test_audio_backends();
         test_usb();
+        test_root_port();
         test_memory();
         test_host_without_machine();
         test_ends();

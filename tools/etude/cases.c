@@ -500,6 +500,9 @@ static void attached(const struct rule *r, const struct json *qemu)
             for (j = 0; j < i; j++) {
                 const char *id = json_text(devices->item[j], "id");
 
+                if (same(json_text(devices->item[j], "model"), "pcie-root-port") && same(id, bus)) {
+                    break;
+                }
                 if (id != NULL && strlen(id) == len && strncmp(id, bus, len) == 0) {
                     break;
                 }

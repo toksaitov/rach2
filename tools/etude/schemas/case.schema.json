@@ -139,7 +139,7 @@
       "properties": {
         "model": {"$ref": "#/$defs/name"},
         "id": {"$ref": "#/$defs/qemu_id"},
-        "bus": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}[.][0-9]+$"},
+        "bus": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}([.][0-9]+)?$"},
         "port": {"type": "string", "pattern": "^[1-9][0-9]*([.][1-9][0-9]*)*$"},
         "drive": {"$ref": "#/$defs/qemu_id"},
         "properties": {
