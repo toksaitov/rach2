@@ -1343,7 +1343,7 @@ row_ia32() {
     has "eglinfo's renderer" "$OUT" "OpenGL core profile renderer: llvmpipe"
     same "vulkaninfo's class" "$(elf_class /usr/bin/vulkaninfo.i386-linux-gnu)" \
         "ELF 32-bit LSB, Intel i386"
-    output "vulkaninfo" env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.i686.json \
+    output "vulkaninfo" env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
         /usr/bin/vulkaninfo.i386-linux-gnu --summary
     has "vulkaninfo's device" "$OUT" "DRIVER_ID_MESA_LLVMPIPE"
     mkdir -p "$WORK/steam" "$WORK/compat" "$WORK/run"
