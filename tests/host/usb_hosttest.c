@@ -1,7 +1,8 @@
 /*
  * usb_hosttest.c: the USB core, usb/core.c, with no controller: its walk of a
  * configuration's descriptors, the quiesce of an endpoint, the slot given
- * back, and a keyboard's LED report.
+ * back, a keyboard's LED report, and a device of several HID interfaces
+ * enumerated from its configuration to its running.
  *
  * What a device says about itself arrives as a string of descriptors, each
  * giving its own length, and the walk has nothing but those lengths to go
@@ -193,6 +194,7 @@ int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
 #define CMD_DEQUEUE 3
 #define CMD_DISABLE 4
 #define CMD_ENABLE  5
+#define CMD_OPEN    6
 static struct {
     int pending; /* a command issued and not yet answered */
     int answer;  /* 1 to answer it with `status`, 0 to leave it */
@@ -229,10 +231,29 @@ static struct {
     uint32_t length;
     int direction;
     int data;
-    /* The last transfer on another endpoint: its length and buffer. */
+    /* The last transfer on another endpoint: its length and buffer; and
+     * the endpoints, by DCI, a transfer was submitted on, a bit each. */
     uint32_t in_length;
     const uint8_t *in_buffer;
+    uint32_t in_endpoints;
+
+    /* Whether `xhci_endpoint_open` issues its command, and the endpoints
+     * it opened, by DCI, a bit each. */
+    int open_ok;
+    uint32_t opened;
+
+    /* The first 32 control requests, each its bRequest, its descriptor
+     * type for GET_DESCRIPTOR, and the low byte of its wIndex, packed as
+     * `request(...)` packs them; `requests` counts them all. */
+    int request[32];
+    int requests;
 } ring;
+
+/** Pack a control request as `ring.request` keeps it. */
+static int request(int brequest, int desc_type, int windex)
+{
+    return brequest << 16 | desc_type << 8 | windex;
+}
 
 /*
  * Issue a command on `endpoint`, with the preconditions the driver keeps: a
@@ -293,6 +314,10 @@ static void ring_reset(void)
     ring.length = 0;
     ring.direction = -1;
     ring.data = -1;
+    ring.in_endpoints = 0;
+    ring.open_ok = 0;
+    ring.opened = 0;
+    ring.requests = 0;
 }
 
 /** Issue Disable Slot for `device`, recorded as `CMD_DISABLE`. */
@@ -315,12 +340,18 @@ int xhci_command_busy(struct xhci_ctrl *hc)
     return 0;
 }
 
-/** Return -1: no endpoint is configured. */
+/** Issue Configure Endpoint for `endpoint`, recorded as `CMD_OPEN` with its
+ * DCI, when `ring.open_ok` is set; return -1 otherwise. */
 int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *endpoint)
 {
+    int dci = endpoint->number * 2 + (endpoint->direction == USB_DIR_IN ? 1 : 0);
+
     (void)device;
-    (void)endpoint;
-    return -1;
+    if (!ring.open_ok || ring_issue(CMD_OPEN, dci) != 0) {
+        return -1;
+    }
+    ring.opened |= 1u << dci;
+    return 0;
 }
 
 /**
@@ -362,8 +393,15 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     if (transfer->setup == 0) {
         ring.in_length = transfer->length;
         ring.in_buffer = transfer->buffer;
+        ring.in_endpoints |= 1u << (endpoint & 31);
     }
     if (endpoint == 1 && transfer->setup != 0) {
+        if (ring.requests < 32) {
+            ring.request[ring.requests] =
+                request(transfer->setup[1], transfer->setup[1] == 6 ? transfer->setup[3] : 0,
+                        transfer->setup[4]);
+        }
+        ring.requests++;
         ring.control_submits++;
         for (i = 0; i < 8; i++) {
             ring.setup[i] = transfer->setup[i];
@@ -565,43 +603,56 @@ void msc_slot_closed(struct xhci_ctrl *hc, int device)
     slots_closed++;
 }
 
-/** Take nothing: the HID driver has its own test, hid_hosttest.c. */
-int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int length)
+/* The interfaces the HID driver took, by their place on the device, a bit
+ * each, in the report protocol and in the boot protocol, and the
+ * bInterfaceNumber each was given. */
+static uint32_t attached, attached_boot;
+static int attached_number[USB_HID_INTERFACES];
+
+/** Take any interface: the HID driver has its own test, hid_hosttest.c. */
+int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *rdesc, int length)
 {
     (void)device;
-    (void)ids;
     (void)rdesc;
     (void)length;
+    attached |= 1u << iface;
+    attached_number[iface] = ids->interface;
     return 0;
 }
 
-/** Do nothing: the HID driver has its own test, hid_hosttest.c. */
-void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
+/** Take any interface in the boot protocol. */
+int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
 {
     (void)device;
     (void)kind;
-    (void)ids;
+    attached_boot |= 1u << iface;
+    attached_number[iface] = ids->interface;
+    return 0;
 }
 
 /* The longest report the rows have the HID driver give, 0 for the
- * endpoint's packet, and the last report the core handed on. */
+ * endpoint's packet, and the last report the core handed on, with the
+ * interface it was handed on for. */
 static int report_size_model;
 static const uint8_t *report_seen;
 static int report_seen_len = -1;
+static int report_seen_iface = -1;
 
 /** Return `report_size_model`. */
-int hid_report_size(int device)
+int hid_report_size(int device, int iface)
 {
     (void)device;
+    (void)iface;
     return report_size_model;
 }
 
 /** Keep the report handed on. */
-void hid_report(int device, const uint8_t *report, int length)
+void hid_report(int device, int iface, const uint8_t *report, int length)
 {
     (void)device;
     report_seen = report;
     report_seen_len = length;
+    report_seen_iface = iface;
 }
 
 /** Zeroed memory from the host's heap, as the kernel's kzalloc gives. */
@@ -628,31 +679,34 @@ void hid_gone(int device)
     (void)device;
 }
 
-/* The LED byte the rows have the HID driver offer, -1 for none; the times
- * it was asked; the byte it offered last; and the last report the core
- * said it sent: its device and outcome, and how many it said it sent. */
+/* The LED byte the rows have the HID driver offer, -1 for none, and the
+ * interface it is offered for, -1 for every one; the times it was asked;
+ * the byte it offered last; and the last report the core said it sent: its
+ * device, interface and outcome, and how many it said it sent. */
 static int led_wanted = -1;
+static int led_iface = -1;
 static int led_asked;
 static int led_offered = -1;
-static int led_sent_device, led_sent_report, led_sent_ok, led_sent_count;
+static int led_sent_device, led_sent_iface, led_sent_report, led_sent_ok, led_sent_count;
 static int led_length = 1; /* the report's bytes, each `led_wanted` */
 
 /** The output report's bytes, `led_length`. */
-int hid_output_size(int device)
+int hid_output_size(int device, int iface)
 {
     (void)device;
+    (void)iface;
     return led_length;
 }
 
 /** Offer `led_wanted` as an LED report of `led_length` bytes, wValue
- * 0x0200. */
-int hid_output_report(int device, uint8_t *out, int size, int *value)
+ * 0x0200, to interface `led_iface`, or to any when it is -1. */
+int hid_output_report(int device, int iface, uint8_t *out, int size, int *value)
 {
     int i;
 
     (void)device;
     led_asked++;
-    if (led_wanted < 0 || size < led_length) {
+    if (led_wanted < 0 || size < led_length || (led_iface >= 0 && iface != led_iface)) {
         return -1;
     }
     for (i = 0; i < led_length; i++) {
@@ -664,9 +718,10 @@ int hid_output_report(int device, uint8_t *out, int size, int *value)
 }
 
 /** Record what the core sent. */
-void hid_output_sent(int device, int ok)
+void hid_output_sent(int device, int iface, int ok)
 {
     led_sent_device = device;
+    led_sent_iface = iface;
     led_sent_report = led_offered;
     led_sent_ok = ok;
     led_sent_count++;
@@ -724,7 +779,7 @@ static void walk(const unsigned char *bytes, int length, struct usb_interface_in
     for (i = 0; i < length; i++) {
         copy[i] = bytes[i];
     }
-    usb_parse_config(copy, length, out);
+    usb_parse_config(copy, length, out, 1);
     free(copy);
 }
 
@@ -775,6 +830,29 @@ static struct usb_device_state *stick_at(int i, int state, int slot)
 }
 
 /**
+ * Put a running boot keyboard in entry `i`, on `slot`, with its interface
+ * number 2 and its reports on DCI 3; with `protocol` USB_PROTOCOL_MOUSE, a
+ * mouse. Return the entry.
+ */
+static struct usb_device_state *hid_at(int i, int slot, int protocol)
+{
+    struct usb_device_state *d = stick_at(i, ST_RUNNING, slot);
+
+    d->interface.kind = USB_KIND_HID;
+    d->interface.protocol = protocol;
+    d->interface.number = 2;
+    d->interface.ep_max_packet = 8;
+    d->ep_out_dci = 0;
+    d->hid = (struct usb_hid_ifs *)alloc_kernel_frame();
+    k_memset(d->hid, 0, sizeof(*d->hid));
+    d->hid->count = 1;
+    d->hid->info[0] = d->interface;
+    d->hid->at[0].ep_dci = 3;
+    d->hid->at[0].live = 1;
+    return d;
+}
+
+/**
  * Check `usb_core_endpoint_quiesce` on endpoint 3 of a stick in every state
  * of the endpoint and with every failure of a command, then the Disable Slot
  * of a closing stick. The quiesce takes the command turn that enumeration
@@ -805,7 +883,7 @@ static void quiesce_rows(void)
             struct usb_transfer transfer;
 
             transfer.setup = 0;
-            transfer.buffer = d->report;
+            transfer.buffer = d->buffer;
             transfer.length = 8;
             transfer.direction = USB_DIR_IN;
             CHECK("so a submission on it is refused meanwhile",
@@ -967,13 +1045,12 @@ static void quiesce_rows(void)
             usb_core_reset();
             ring_reset();
             port_present = 1;
-            d = stick_at(0, ST_RUNNING, 1);
-            d->interface.kind = USB_KIND_HID;
-            d->reporting = 1;
-            d->have_report = 1;
-            d->report_done.status = which == 0 ? USB_XFER_FAILED : USB_XFER_STALLED;
-            d->report_done.length = 8;
-            d->report_done.residual = 8;
+            d = hid_at(0, 1, USB_PROTOCOL_KBD);
+            d->hid->at[0].reporting = 1;
+            d->hid->at[0].have_report = 1;
+            d->hid->at[0].report_done.status = which == 0 ? USB_XFER_FAILED : USB_XFER_STALLED;
+            d->hid->at[0].report_done.length = 8;
+            d->hid->at[0].report_done.residual = 8;
             ring.ep_state = which == 0 ? XHCI_EP_ERROR : XHCI_EP_HALTED;
             want[0] = which == 0 ? CMD_DEQUEUE : CMD_RESET;
             usb_core_step(1);
@@ -1180,23 +1257,6 @@ static void interface_rows(void)
 
 /* ---- a keyboard's LEDs ---- */
 
-/**
- * Put a running boot keyboard in entry `i`, on `slot`, with its interface
- * number 2 and its reports on DCI 3; with `protocol` USB_PROTOCOL_MOUSE, a
- * mouse. Return the entry.
- */
-static struct usb_device_state *hid_at(int i, int slot, int protocol)
-{
-    struct usb_device_state *d = stick_at(i, ST_RUNNING, slot);
-
-    d->interface.kind = USB_KIND_HID;
-    d->interface.protocol = protocol;
-    d->interface.number = 2;
-    d->interface.ep_max_packet = 8;
-    d->ep_out_dci = 0;
-    return d;
-}
-
 /** Complete the control transfer outstanding on `d` with `status`. */
 static void control_done(struct usb_device_state *d, int status)
 {
@@ -1298,13 +1358,15 @@ static void long_report_rows(void)
     led_wanted = -1;
     step_running(d);
     CHECK("long: a report of 200 bytes is asked for whole",
-          ring.in_length == 200 && d->long_report && ring.in_buffer == d->long_report);
-    d->report_done.status = USB_XFER_OK;
-    d->report_done.length = 200;
-    d->report_done.residual = 0;
-    d->have_report = 1;
+          ring.in_length == 200 && d->hid->at[0].long_report &&
+              ring.in_buffer == d->hid->at[0].long_report);
+    d->hid->at[0].report_done.status = USB_XFER_OK;
+    d->hid->at[0].report_done.length = 200;
+    d->hid->at[0].report_done.residual = 0;
+    d->hid->at[0].have_report = 1;
     step_running(d);
-    CHECK("long: and handed on whole", report_seen_len == 200 && report_seen == d->long_report);
+    CHECK("long: and handed on whole",
+          report_seen_len == 200 && report_seen == d->hid->at[0].long_report);
     led_wanted = 0x07;
     led_length = 100;
     step_running(d);
@@ -1352,6 +1414,240 @@ static void hid_interface_rows(void)
           info.found == 1 && info.kind == USB_KIND_HID && info.subclass == 0);
 }
 
+/* ---- a device of several HID interfaces ---- */
+
+/*
+ * A keyboard whose media keys are a second interface, as many are: a boot
+ * keyboard on interface 0 and, on interface 1, a HID interface with no boot
+ * protocol whose report descriptor gives its consumer keys.
+ */
+static const unsigned char two_config[] = {
+    9, 2,  59,   0, 2, 1, 0,  0xA0, 50, /* configuration, value 1 */
+    9, 4,  0,    0, 1, 3, 1,  1,    0,  /* interface 0: HID, boot, keyboard */
+    9, 33, 0x11, 1, 0, 1, 34, 63,   0,  /* HID 1.11, a report descriptor of 63 */
+    7, 5,  0x81, 3, 8, 0, 10,           /* endpoint 1, in, interrupt, 8 bytes */
+    9, 4,  1,    0, 1, 3, 0,  0,    0,  /* interface 1: HID, no boot protocol */
+    9, 33, 0x11, 1, 0, 1, 34, 25,   0,  /* a report descriptor of 25 */
+    7, 5,  0x82, 3, 4, 0, 10            /* endpoint 2, in, interrupt, 4 bytes */
+};
+
+/*
+ * Three HID interfaces and a vendor's interface among them: the keyboard of
+ * `two_config`, an interface 1 whose report descriptor the rows refuse, a
+ * vendor's interface 2, an alternate setting of interface 1, and a HID
+ * interface 3 with its HID descriptor after its endpoint.
+ */
+static const unsigned char three_config[] = {
+    9, 2,  116,  0, 4, 1,    0,  0xA0, 50, /* configuration, value 1 */
+    9, 4,  0,    0, 1, 3,    1,  1,    0,  /* interface 0: boot keyboard */
+    9, 33, 0x11, 1, 0, 1,    34, 63,   0,  /* its HID descriptor */
+    7, 5,  0x81, 3, 8, 0,    10,           /* endpoint 1 */
+    9, 4,  1,    0, 1, 3,    0,  0,    0,  /* interface 1: HID */
+    9, 33, 0x11, 1, 0, 1,    34, 25,   0,  /* its HID descriptor */
+    7, 5,  0x82, 3, 4, 0,    10,           /* endpoint 2 */
+    9, 4,  2,    0, 1, 0xFF, 0,  0,    0,  /* interface 2: a vendor's */
+    7, 5,  0x84, 3, 8, 0,    10,           /* endpoint 4 */
+    9, 4,  1,    1, 1, 3,    0,  0,    0,  /* interface 1, setting 1 */
+    7, 5,  0x85, 3, 8, 0,    10,           /* endpoint 5 */
+    9, 4,  3,    0, 1, 3,    0,  0,    0,  /* interface 3: HID */
+    7, 5,  0x83, 3, 8, 0,    10,           /* endpoint 3 */
+    9, 33, 0x11, 1, 0, 1,    34, 50,   0   /* its HID descriptor, after */
+};
+
+/** Walk a copy of `length` bytes of `bytes`, as `walk` does, keeping up to
+ * `max` interfaces in `out`; return how many were kept. */
+static int walk_all(const unsigned char *bytes, int length, struct usb_interface_info *out, int max)
+{
+    unsigned char *copy = (unsigned char *)malloc((unsigned long)(length > 0 ? length : 1));
+    int i, kept;
+
+    for (i = 0; i < length; i++) {
+        copy[i] = bytes[i];
+    }
+    kept = usb_parse_config(copy, length, out, max);
+    free(copy);
+    return kept;
+}
+
+/**
+ * Enumerate the configuration `config` of `length` bytes on entry 0, from
+ * its whole configuration read to its running or its failure, in at most
+ * 200 steps: each command is answered with success, and each control
+ * request too, but a GET_DESCRIPTOR of the report descriptor of interface
+ * `refuse`, which stalls. Return the entry.
+ */
+static struct usb_device_state *enumerate(const unsigned char *config, int length, int refuse)
+{
+    struct usb_device_state *d;
+    int n, i, seen = 0;
+
+    usb_core_reset();
+    ring_reset();
+    ring.open_ok = 1;
+    attached = 0;
+    attached_boot = 0;
+    d = dev_take(0);
+    d->state = ST_CONFIGALL;
+    d->slot = 1;
+    d->hc = the_ctrl;
+    d->owner = -1;
+    d->port = 0;
+    d->ops = &root_ops;
+    d->config_length = (uint32_t)length;
+    for (i = 0; i < length; i++) {
+        d->buffer[i] = config[i];
+    }
+    d->deadline = core_ms + STEP_MS;
+    enumerating[0] = 0;
+    d->control.residual = 0;
+    control_done(d, USB_XFER_OK);
+    for (n = 0; n < 200 && d->state != ST_RUNNING && d->state != ST_CLOSING && d->state != ST_FREE;
+         n++) {
+        if (ring.pending) {
+            ring.answer = 1;
+        }
+        if (ring.control_submits > seen) {
+            int last = ring.request[(ring.requests - 1) & 31];
+
+            seen = ring.control_submits;
+            control_done(d, last == request(6, 0x22, refuse) ? USB_XFER_STALLED : USB_XFER_OK);
+        }
+        step_device(d);
+    }
+    return d;
+}
+
+/** Whether the first 32 control requests of the ring include `want`. */
+static int requested(int want)
+{
+    int i;
+
+    for (i = 0; i < ring.requests && i < 32; i++) {
+        if (ring.request[i] == want) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Check the walk of a configuration of several HID interfaces: it keeps
+ * each HID interface on alternate setting 0, up to the room it is given, and
+ * passes over the rest. */
+static void multi_walk_rows(void)
+{
+    struct usb_interface_info info[USB_HID_INTERFACES];
+
+    CHECK("multi: two HID interfaces are kept",
+          walk_all(two_config, (int)sizeof(two_config), info, USB_HID_INTERFACES) == 2 &&
+              info[0].number == 0 && info[0].ep_number == 1 && info[0].report_length == 63 &&
+              info[1].found && info[1].number == 1 && info[1].ep_number == 2 &&
+              info[1].ep_max_packet == 4 && info[1].report_length == 25 &&
+              info[1].config_value == 1);
+    CHECK("multi: three of them, past a vendor's interface and an alternate setting",
+          walk_all(three_config, (int)sizeof(three_config), info, USB_HID_INTERFACES) == 3 &&
+              info[1].number == 1 && info[1].ep_number == 2 && info[2].number == 3 &&
+              info[2].ep_number == 3 && info[2].report_length == 50);
+    CHECK("multi: no more than the room given",
+          walk_all(three_config, (int)sizeof(three_config), info, 2) == 2 && info[1].number == 1);
+    CHECK("multi: the first alone with room for one",
+          walk_all(two_config, (int)sizeof(two_config), info, 1) == 1 && info[0].number == 0);
+}
+
+/**
+ * Check a keyboard of two HID interfaces, as Linux's usbhid binds one to
+ * each: the enumeration opens each one's endpoint and runs SET_IDLE and the
+ * report descriptor on each one's number; each has its own report transfer,
+ * its completions are handed on for it, and an output report goes to the
+ * interface whose driver offered it.
+ */
+static void multi_two_rows(void)
+{
+    struct usb_completion completion;
+    struct usb_sys_row row;
+    struct usb_device_state *d;
+
+    d = enumerate(two_config, (int)sizeof(two_config), -1);
+    CHECK("multi: a keyboard of two HID interfaces runs",
+          d->state == ST_RUNNING && d->hid && d->hid->count == 2 && d->hid->at[0].live &&
+              d->hid->at[1].live);
+    CHECK("multi: each interface's endpoint is opened",
+          ring.opened == ((1u << 3) | (1u << 5)) && d->hid->at[1].ep_dci == 5);
+    CHECK("multi: SET_IDLE and the report descriptor go to each interface",
+          requested(request(10, 0, 0)) && requested(request(6, 0x22, 0)) &&
+              requested(request(10, 0, 1)) && requested(request(6, 0x22, 1)));
+    CHECK("multi: the driver takes each, by its place and its number",
+          attached == 3 && attached_number[0] == 0 && attached_number[1] == 1);
+    led_wanted = -1;
+    step_running(d);
+    CHECK("multi: each interface has its report transfer",
+          ring.in_endpoints == ((1u << 3) | (1u << 5)));
+    completion.hc = the_ctrl;
+    completion.device = 1;
+    completion.endpoint = 5;
+    completion.status = USB_XFER_OK;
+    completion.length = 4;
+    completion.residual = 1;
+    report_route(d->hid, &completion);
+    report_seen_iface = -1;
+    step_running(d);
+    CHECK("multi: a report on the second endpoint goes to the second interface",
+          report_seen_iface == 1 && report_seen_len == 3 && d->hid->at[1].reports == 1 &&
+              d->hid->at[0].reports == 0);
+    CHECK("multi: and the interface gets its next transfer", d->hid->at[1].reporting == 1);
+    CHECK("multi: /sys names each interface",
+          usb_core_interface(0, 1, &row) == 0 && row.ifnum == 1 && row.ifsubclass == 0 &&
+              usb_core_row(0, &row) == 0 && row.ifnum == 0 && row.ifprotocol == 1 &&
+              usb_core_interface(0, 2, &row) == -1);
+    led_wanted = 0x02;
+    led_iface = 1;
+    step_running(d);
+    CHECK("multi: an output report goes to the interface that offered it",
+          ring.setup[1] == 9 && ring.setup[4] == 1 && d->output_out && d->output_if == 1);
+    control_done(d, USB_XFER_OK);
+    led_wanted = -1;
+    step_running(d);
+    CHECK("multi: and its completion is told to that interface",
+          led_sent_iface == 1 && led_sent_ok && !d->output_out);
+    led_iface = -1;
+    usb_core_reset();
+}
+
+/** Check a device of three HID interfaces whose second refuses its report
+ * descriptor, which is given up alone, and a device of one that refuses it,
+ * which fails. */
+static void multi_three_rows(void)
+{
+    struct usb_sys_row row;
+    struct usb_device_state *d;
+    unsigned char lone[sizeof(keyboard_config)];
+    unsigned i;
+
+    d = enumerate(three_config, (int)sizeof(three_config), 1);
+    CHECK("multi: a device whose second interface refuses its descriptor runs",
+          d->state == ST_RUNNING && d->hid && d->hid->count == 3);
+    CHECK("multi: with that interface given up alone", d->hid->at[0].live && !d->hid->at[1].live &&
+                                                           d->hid->at[1].given_up &&
+                                                           d->hid->at[2].live && attached == 5);
+    CHECK("multi: the third interface was set up after the refusal",
+          requested(request(10, 0, 3)) && requested(request(6, 0x22, 3)) &&
+              ring.opened == ((1u << 3) | (1u << 5) | (1u << 7)));
+    step_running(d);
+    CHECK("multi: no report is asked of the interface given up",
+          ring.in_endpoints == ((1u << 3) | (1u << 7)));
+    CHECK("multi: and /sys has no directory for it", usb_core_interface(0, 1, &row) == -1 &&
+                                                         usb_core_interface(0, 3, &row) == 0 &&
+                                                         row.ifclass == 3);
+
+    for (i = 0; i < sizeof(lone); i++) {
+        lone[i] = keyboard_config[i];
+    }
+    lone[15] = 0; /* no boot protocol */
+    d = enumerate(lone, (int)sizeof(lone), 0);
+    CHECK("multi: a device whose one interface refuses its descriptor fails",
+          d->state == ST_CLOSING && attached == 0);
+    usb_core_reset();
+}
+
 /**
  * Run the rows and print the result; return 1 when a row failed.
  *
@@ -1373,6 +1669,9 @@ int main(void)
     long_report_rows();
     interface_rows();
     hid_interface_rows();
+    multi_walk_rows();
+    multi_two_rows();
+    multi_three_rows();
 
     /* A configuration as a device sends it. */
     walk(keyboard_config, (int)sizeof(keyboard_config), &info);
@@ -1472,7 +1771,7 @@ int main(void)
     walk(keyboard_config, 0, &info);
     CHECK("and an empty one is refused", info.found == 0);
 
-    usb_parse_config(0, 9, &info);
+    usb_parse_config(0, 9, &info, 1);
     CHECK("as is nothing at all", info.found == 0);
 
     /* The device table. */

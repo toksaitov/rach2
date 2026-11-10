@@ -1017,6 +1017,12 @@ int usb_core_row(int index, struct usb_sys_row *row)
     return 0;
 }
 
+/** The mouse's interface 0 as `usb_core_row` gives it, and no other. */
+int usb_core_interface(int index, int ifnum, struct usb_sys_row *row)
+{
+    return ifnum == 0 || ifnum == -1 ? usb_core_row(index, row) : -1;
+}
+
 /* The event devices the input rows register, by slot, and whether each is
  * there; and whether the caller is an i386 program. */
 static struct evdev_desc input_devs[EVDEV_MAX];

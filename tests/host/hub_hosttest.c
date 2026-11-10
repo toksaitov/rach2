@@ -108,49 +108,56 @@ static int hid_gone_slot[16];
 static int hid_gone_count;
 
 /** Take any device: no row checks a report descriptor. */
-int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int length)
+int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *rdesc, int length)
 {
     (void)device;
+    (void)iface;
     (void)ids;
     (void)rdesc;
     (void)length;
     return 0;
 }
 
-/** Do nothing: no row checks a device in the boot protocol. */
-void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
+/** Take it: no row checks a device in the boot protocol. */
+int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
 {
     (void)device;
+    (void)iface;
     (void)kind;
     (void)ids;
+    return 0;
 }
 
 /** Return 0, for the core to ask for the endpoint's packet. */
-int hid_report_size(int device)
+int hid_report_size(int device, int iface)
 {
     (void)device;
+    (void)iface;
     return 0;
 }
 
 /** Do nothing: no row checks a report. */
-void hid_report(int device, const uint8_t *report, int length)
+void hid_report(int device, int iface, const uint8_t *report, int length)
 {
     (void)device;
+    (void)iface;
     (void)report;
     (void)length;
 }
 
 /** No output report: the hub driver is under test. */
-int hid_output_size(int device)
+int hid_output_size(int device, int iface)
 {
     (void)device;
+    (void)iface;
     return 0;
 }
 
 /** Return -1: no row sends an output report. */
-int hid_output_report(int device, uint8_t *out, int size, int *value)
+int hid_output_report(int device, int iface, uint8_t *out, int size, int *value)
 {
     (void)device;
+    (void)iface;
     (void)out;
     (void)size;
     (void)value;
@@ -158,9 +165,10 @@ int hid_output_report(int device, uint8_t *out, int size, int *value)
 }
 
 /** Do nothing: no output report is pending. */
-void hid_output_sent(int device, int ok)
+void hid_output_sent(int device, int iface, int ok)
 {
     (void)device;
+    (void)iface;
     (void)ok;
 }
 

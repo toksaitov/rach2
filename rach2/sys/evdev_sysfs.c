@@ -38,11 +38,11 @@
  * writes as Linux's do: "isa0060/serioK/input0" is the i8042's port K,
  * under /sys/devices/platform/i8042/serioK; "synaptics-pt/serio0/input0"
  * is the touchpad's pass-through port, serio2 below serio1, as Linux
- * numbers it after the i8042's two; and "usb-N/input0" is the
- * device of the USB stack's entry N - 1 (hid.c), whose interface directory
- * B-P:C.I is made below its device. Any other, the ACPI buttons', is a
- * device with no parent here, under /sys/devices/virtual/input, as Linux
- * puts one made by uinput.
+ * numbers it after the i8042's two; and "usb-N/inputI" is interface
+ * number I of the device of the USB stack's entry N - 1 (hid.c), whose
+ * directory B-P:C.I is made below its device, one for each interface. Any
+ * other, the ACPI buttons', is a device with no parent here, under
+ * /sys/devices/virtual/input, as Linux puts one made by uinput.
  */
 
 /* Linux's UEVENT_BUFFER_SIZE, the most bytes of a uevent's variables, and
@@ -800,11 +800,12 @@ static int serio_dir(int port)
     return h;
 }
 
-/** The directory of the USB interface of the stack's entry `index`,
+/** The directory of interface number `ifnum` of the stack's entry `index`,
  * B-P:C.I below its device, made when absent, with its files, its
  * `subsystem` link and its link in /sys/bus/usb/devices, and counted as
- * `r`'s: its handle, or -errno, -ENOENT for an entry that is not running. */
-static int iface_dir(struct input_sys *r, int index)
+ * `r`'s: its handle, or -errno, -ENOENT for an entry that is not running
+ * or does not drive that interface. */
+static int iface_dir(struct input_sys *r, int index, int ifnum)
 {
     static const struct sysfs_attr attrs[] = {{"bInterfaceNumber", 0444u, show_iface, NULL},
                                               {"bAlternateSetting", 0444u, show_iface, NULL},
@@ -818,7 +819,7 @@ static int iface_dir(struct input_sys *r, int index)
     struct emit e;
     int key, made = 0, h, i;
 
-    if (usb_core_row(index, &row) != 0 || (key = sysfs_usb_key(&row)) < 0) {
+    if (usb_core_interface(index, ifnum, &row) != 0 || (key = sysfs_usb_key(&row)) < 0) {
         return -ENOENT;
     }
     synth_sys_device_name(SYSFS_USB_DEVICE, key, dev, (int)sizeof(dev));
@@ -902,7 +903,12 @@ static int parent_of(struct input_sys *r)
     }
     if (starts(phys, "usb-")) {
         n = number_at(phys + 4);
-        return n >= 1 ? iface_dir(r, n - 1) : 0;
+        for (phys += 4; *phys >= '0' && *phys <= '9'; phys++) {
+        }
+        if (n < 1 || !starts(phys, "/input") || number_at(phys + 6) < 0) {
+            return 0;
+        }
+        return iface_dir(r, n - 1, number_at(phys + 6));
     }
     return 0;
 }
