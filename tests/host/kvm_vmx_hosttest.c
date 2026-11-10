@@ -33,8 +33,9 @@
  * interrupt and NMI windows, an event the exit found under delivery, the
  * caller's single steps and breakpoints, the guest's own #DB and #AC given
  * back, #UD exits for the instructions Linux's emulator runs after one and
- * for the other vendor's hypercall, a string compare and a bit test on MMIO,
- * a RIP above 4 GiB, the host's
+ * for the other vendor's hypercall, a table of the instructions Linux's
+ * emulator runs with their operand on MMIO, string, far-pointer, MMX and SSE
+ * forms among them, a RIP above 4 GiB, the host's
  * interrupt, NMI and machine check, the preemption timer, a triple fault and
  * the two kinds of failed entry; hardware task switches by CALL, IRET, JMP and
  * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults; a
@@ -55,6 +56,7 @@
 #include "proc/process.h"
 
 extern int printf(const char *format, ...);
+extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *malloc(unsigned long n);
 extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
@@ -2689,14 +2691,179 @@ static int mmio_read(int fd, uint64_t gpa, uint32_t len)
            rp->u.mmio.phys_addr == gpa && rp->u.mmio.len == len;
 }
 
-/** Instructions Linux's emulator runs on device memory that the first
- * decoder refused: a string compare under REPE, each element one exit,
- * and a bit test whose bit number reaches past the operand. */
-static void emul_rows(int fd)
+/* The flags the table's rows name. */
+#define F_CF 0x001u
+#define F_ZF 0x040u
+#define F_SF 0x080u
+#define F_OF 0x800u
+
+/*
+ * One instruction of the table: its bytes, with [EBX] its memory operand
+ * on the device's frame; the flags and EAX, ECX and EDX it starts with;
+ * the bytes it reads there and the device's answer; the bytes it writes
+ * and their value; and what it leaves: the three registers, the flags
+ * under a mask, and EIP when it is not the next instruction's.
+ */
+struct erow {
+    const char *name, *bytes;
+    uint32_t n, fl;
+    uint64_t rax, rcx, rdx;
+    uint32_t rlen;
+    uint64_t rval;
+    uint32_t wlen;
+    uint64_t wval;
+    uint64_t o_rax, o_rcx, o_rdx;
+    uint32_t fmask, fval;
+    uint64_t rip;
+};
+
+static const struct erow erows[] = {
+    {"MUL", "\xf7\x23", 2, 0, 0x10000, 0, 0x55, 4, 0x10000, 0, 0, 0, 0, 1, F_CF | F_OF, F_CF | F_OF,
+     0},
+    {"IMUL r/m", "\xf7\x2b", 2, 0, 0xFFFFFFFFu, 0, 0x55, 4, 5, 0, 0, 0xFFFFFFFBu, 0, 0xFFFFFFFFu,
+     F_CF | F_OF, 0, 0},
+    {"DIV", "\xf7\x33", 2, 0, 100, 0, 0, 4, 7, 0, 0, 14, 0, 2, 0, 0, 0},
+    {"IDIV", "\xf7\x3b", 2, 0, 0xFFFFFF9Cu, 0, 0xFFFFFFFFu, 4, 7, 0, 0, 0xFFFFFFF2u, 0, 0xFFFFFFFEu,
+     0, 0, 0},
+    {"IMUL r, r/m", "\x0f\xaf\x03", 3, 0, 6, 0, 0, 4, 7, 0, 0, 42, 0, 0, F_CF | F_OF, 0, 0},
+    {"IMUL r, r/m, imm8", "\x6b\x03\x03", 3, 0, 0, 0, 0, 4, 0x40000000u, 0, 0, 0xC0000000u, 0, 0,
+     F_CF | F_OF, F_CF | F_OF, 0},
+    {"SHL r/m, CL", "\xd3\x23", 2, 0, 0, 4, 0, 4, 1, 4, 0x10, 0, 4, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"SAR r/m, imm8", "\xc1\x3b\x01", 3, 0, 0, 0, 0, 4, 0x80000001u, 4, 0xC0000000u, 0, 0, 0,
+     F_CF | F_ZF | F_SF, F_CF | F_SF, 0},
+    {"ROL r/m8, 1", "\xd0\x03", 2, 0, 0, 0, 0, 1, 0x81, 1, 0x03, 0, 0, 0, F_CF | F_OF, F_CF | F_OF,
+     0},
+    {"RCR r/m, 1", "\xd1\x1b", 2, F_CF, 0, 0, 0, 4, 2, 4, 0x80000001u, 0, 0, 0, F_CF | F_OF, F_OF,
+     0},
+    {"CMPXCHG, equal", "\x0f\xb1\x0b", 3, 0, 5, 9, 0, 4, 5, 4, 9, 5, 9, 0, F_CF | F_ZF, F_ZF, 0},
+    {"CMPXCHG, different", "\x0f\xb1\x0b", 3, 0, 5, 9, 0, 4, 6, 4, 6, 6, 9, 0, F_CF | F_ZF | F_SF,
+     F_CF | F_SF, 0},
+    {"XADD", "\x0f\xc1\x0b", 3, 0, 0, 2, 0, 4, 1, 4, 3, 0, 1, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"BT r/m, r", "\x0f\xa3\x03", 3, 0, 3, 0, 0, 4, 8, 0, 0, 3, 0, 0, F_CF, F_CF, 0},
+    {"BTR r/m, imm8", "\x0f\xba\x33\x03", 4, 0, 0, 0, 0, 4, 0xF, 4, 7, 0, 0, 0, F_CF, F_CF, 0},
+    {"BSF", "\x0f\xbc\x03", 3, 0, 0, 0, 0, 4, 0x50, 0, 0, 4, 0, 0, F_ZF, 0, 0},
+    {"BSR", "\x0f\xbd\x03", 3, 0, 0, 0, 0, 4, 0x50, 0, 0, 6, 0, 0, F_ZF, 0, 0},
+    {"SHLD r/m, r, CL", "\x0f\xa5\x13", 3, 0, 0, 4, 0x80000000u, 4, 1, 4, 0x18, 0, 4, 0x80000000u,
+     F_CF | F_ZF | F_SF, 0, 0},
+    {"SHRD r/m, r, imm8", "\x0f\xac\x13\x04", 4, 0, 0, 0, 1, 4, 0x10, 4, 0x10000001u, 0, 0, 1,
+     F_CF | F_ZF | F_SF, 0, 0},
+    {"NEG r/m8", "\xf6\x1b", 2, 0, 0, 0, 0, 1, 1, 1, 0xFF, 0, 0, 0, F_CF | F_ZF | F_SF, F_CF | F_SF,
+     0},
+    {"NOT", "\xf7\x13", 2, 0, 0, 0, 0, 4, 0x0F0F0F0Fu, 4, 0xF0F0F0F0u, 0, 0, 0, 0, 0, 0},
+    {"INC r/m16", "\x66\xff\x03", 3, 0, 0, 0, 0, 2, 0xFFFF, 2, 0, 0, 0, 0, F_CF | F_ZF | F_SF, F_ZF,
+     0},
+    {"ADC r/m, r", "\x11\x0b", 2, F_CF, 0, 2, 0, 4, 1, 4, 4, 0, 2, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"SBB r, r/m", "\x1b\x03", 2, F_CF, 10, 0, 0, 4, 3, 0, 0, 6, 0, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"XCHG", "\x87\x0b", 2, 0, 0, 0x22222222u, 0, 4, 0x11111111u, 4, 0x22222222u, 0, 0x11111111u, 0,
+     0, 0, 0},
+    {"TEST", "\x85\x0b", 2, 0, 0, 0x0F, 0, 4, 0xF0, 0, 0, 0, 0x0F, 0, F_CF | F_ZF | F_SF, F_ZF, 0},
+    {"CMP r/m, r", "\x39\x0b", 2, 0, 0, 2, 0, 4, 1, 0, 0, 0, 2, 0, F_CF | F_ZF | F_SF, F_CF | F_SF,
+     0},
+    {"OR r/m8, imm8", "\x80\x0b\x0f", 3, 0, 0, 0, 0, 1, 0xF0, 1, 0xFF, 0, 0, 0, F_CF | F_ZF | F_SF,
+     F_SF, 0},
+    {"LOCK ADD", "\xf0\x01\x0b", 3, 0, 0, 1, 0, 4, 0xFFFFFFFFu, 4, 0, 0, 1, 0, F_CF | F_ZF | F_SF,
+     F_CF | F_ZF, 0},
+    {"MOVZX r, r/m8", "\x0f\xb6\x03", 3, 0, 0xFFFFFFFFu, 0, 0, 1, 0x80, 0, 0, 0x80, 0, 0, 0, 0, 0},
+    {"MOVSX r, r/m16", "\x0f\xbf\x03", 3, 0, 0, 0, 0, 2, 0x8000, 0, 0, 0xFFFF8000u, 0, 0, 0, 0, 0},
+    {"MOVBE r, m", "\x0f\x38\xf0\x03", 4, 0, 0, 0, 0, 4, 0x11223344u, 0, 0, 0x44332211u, 0, 0, 0, 0,
+     0},
+    {"MOVBE m, r", "\x0f\x38\xf1\x03", 4, 0, 0x11223344u, 0, 0, 0, 0, 4, 0x44332211u, 0x11223344u,
+     0, 0, 0, 0, 0},
+    {"SETE", "\x0f\x94\x03", 3, F_ZF, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0},
+    {"SETNE", "\x0f\x95\x03", 3, F_ZF, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
+    {"CMOVE, taken", "\x0f\x44\x03", 3, F_ZF, 9, 0, 0, 4, 7, 0, 0, 7, 0, 0, 0, 0, 0},
+    {"CMOVNE, not taken", "\x0f\x45\x03", 3, F_ZF, 9, 0, 0, 4, 7, 0, 0, 9, 0, 0, 0, 0, 0},
+    {"CMPXCHG8B", "\x0f\xc7\x0b", 3, 0, 2, 7, 1, 8, 0x0000000100000002ull, 8, 0x00000007D0000200ull,
+     2, 7, 1, F_ZF, F_ZF, 0},
+    {"MOV r/m, imm32", "\xc7\x03\x78\x56\x34\x12", 6, 0, 0, 0, 0, 0, 0, 4, 0x12345678u, 0, 0, 0, 0,
+     0, 0},
+    {"MOV EAX, moffs", "\xa1\x00\x02\x00\xd0", 5, 0, 0, 0, 0, 4, 0xCAFEF00Du, 0, 0, 0xCAFEF00Du, 0,
+     0, 0, 0, 0},
+    {"MOV r/m16, Sreg", "\x8c\x1b", 2, 0, 0, 0, 0, 0, 0, 2, 0x10, 0, 0, 0, 0, 0, 0},
+    {"SMSW", "\x0f\x01\x23", 3, 0, 0, 0, 0, 0, 0, 2, 0x11, 0, 0, 0, 0, 0, 0},
+    {"FNSTCW", "\xd9\x3b", 2, 0, 0, 0, 0, 0, 0, 2, 0x37F, 0, 0, 0, 0, 0, 0},
+    {"CALL r/m", "\xff\x13", 2, 0, 0, 0, 0, 4, 0x4000, 0, 0, 0, 0, 0, 0, 0, 0x4000},
+    {"JMP r/m", "\xff\x23", 2, 0, 0, 0, 0, 4, 0x5000, 0, 0, 0, 0, 0, 0, 0, 0x5000},
+};
+
+/** Report a failed check of the table's row `e`. */
+static void erow_failed(const struct erow *e, const char *what)
+{
+    printf("kvm-vmx-hosttest: failed: %s on MMIO: %s\n", e->name, what);
+    failures++;
+}
+
+/** Run the row `e` on the vCPU on `fd` up to its last exit to the caller:
+ * its read, answered, and its write. Whether both were as the row says. */
+static int erow_io(int fd, const struct erow *e)
+{
+    struct kvm_run *rp = run_of(fd);
+    uint64_t got = 0;
+    int ok = 1, runs;
+
+    if (e->rlen) {
+        ok = mmio_read(fd, 0xD0000200ull, e->rlen);
+        k_memcpy(rp->u.mmio.data, &e->rval, 8);
+    } else {
+        script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    }
+    if (!ok) {
+        erow_failed(e, "its read");
+    }
+    if (!e->wlen) {
+        return ok;
+    }
+    runs = m.launches + m.resumes;
+    if (run(fd) != 0 || rp->exit_reason != KVM_EXIT_MMIO || !rp->u.mmio.is_write ||
+        rp->u.mmio.phys_addr != 0xD0000200ull || rp->u.mmio.len != e->wlen) {
+        erow_failed(e, "its write");
+        return 0;
+    }
+    k_memcpy(&got, rp->u.mmio.data, e->wlen);
+    if (got != e->wval || (e->rlen && m.launches + m.resumes != runs)) {
+        erow_failed(e, "the value written, with no guest entered after the read");
+        return 0;
+    }
+    return ok;
+}
+
+/** Run the row `e` on the vCPU on `fd` and check what it leaves. */
+static void erow_run(int fd, const struct erow *e)
+{
+    struct kvm_regs r;
+
+    emul_start(fd, e->bytes, e->n, e->rax, 0xD0000200ull, e->rcx);
+    r = regs_of(fd);
+    r.rdx = e->rdx;
+    r.rflags = 2u | e->fl;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with EDX and the flags");
+    if (!erow_io(fd, e)) {
+        return;
+    }
+    script(EXIT_HLT, 0, 1);
+    if (run(fd) != 0 || run_of(fd)->exit_reason != KVM_EXIT_HLT) {
+        erow_failed(e, "the guest runs on after it");
+        return;
+    }
+    r = regs_of(fd);
+    if ((uint32_t)r.rax != (uint32_t)e->o_rax || (uint32_t)r.rcx != (uint32_t)e->o_rcx ||
+        (uint32_t)r.rdx != (uint32_t)e->o_rdx) {
+        erow_failed(e, "EAX, ECX and EDX");
+    }
+    if ((r.rflags & e->fmask) != e->fval) {
+        erow_failed(e, "the flags");
+    }
+    if (r.rip != (e->rip ? e->rip : 0x1000u + e->n) + 1u) {
+        erow_failed(e, "EIP");
+    }
+}
+
+/** String instructions on device memory, each element one exit to the
+ * caller: REPE CMPSB and REP MOVSD from the device, REPNE SCASB of it. */
+static void string_rows(int fd)
 {
     struct kvm_run *rp = run_of(fd);
     struct kvm_regs r;
-    int launches;
 
     emul_start(fd, "\xf3\xa6", 2, 0, 0, 2);
     ram[0x6000] = 'A';
@@ -2710,21 +2877,128 @@ static void emul_rows(int fd)
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "a byte that differs ends it");
     r = regs_of(fd);
     CHECK(r.rip == 0x1003 && r.rcx == 0 && r.rsi == 0xD0000102ull && r.rdi == 0x6002 &&
-              !(r.rflags & 0x41u),
+              !(r.rflags & (F_ZF | F_CF)),
           "with ECX, ESI, EDI and the flags of the last compare, and RIP past it");
+
+    emul_start(fd, "\xf3\xa5", 2, 0, 0, 2);
+    CHECK(mmio_read(fd, 0xD0000100ull, 4), "REP MOVSD from MMIO reads its first element");
+    put32(0, 0x11111111u);
+    k_memcpy(rp->u.mmio.data, &ram[0], 4);
+    CHECK(mmio_read(fd, 0xD0000104ull, 4) && get32(0x6000) == 0x11111111u,
+          "stores it and reads the second");
+    put32(0, 0x22222222u);
+    k_memcpy(rp->u.mmio.data, &ram[0], 4);
+    script(EXIT_HLT, 0, 1);
+    r = regs_of(fd);
+    CHECK(run(fd) == 0 && get32(0x6004) == 0x22222222u && regs_of(fd).rcx == 0 &&
+              regs_of(fd).rdi == 0x6008 && regs_of(fd).rip == 0x1003,
+          "and ends with ECX 0 and EDI past both");
+
+    emul_start(fd, "\xf2\xae", 2, 'Q', 0, 5);
+    r = regs_of(fd);
+    r.rdi = 0xD0000300ull;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with EDI on MMIO");
+    CHECK(mmio_read(fd, 0xD0000300ull, 1), "REPNE SCASB of MMIO reads its first byte");
+    rp->u.mmio.data[0] = 'x';
+    CHECK(mmio_read(fd, 0xD0000301ull, 1), "and the next after one that differs");
+    rp->u.mmio.data[0] = 'Q';
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rcx == 3 && regs_of(fd).rdi == 0xD0000302ull &&
+              (regs_of(fd).rflags & F_ZF),
+          "the byte that matches ends it with ZF set and ECX counting the two");
+}
+
+/** A bit test past its operand, and the stack with the operand on device
+ * memory. */
+static void stack_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    int runs;
 
     emul_start(fd, "\x0f\xab\x03", 3, 35, 0xD0000200ull, 0);
     CHECK(mmio_read(fd, 0xD0000204ull, 4),
           "BTS [EBX], EAX with bit 35 reads the doubleword after the operand's");
     k_memset(rp->u.mmio.data, 0, 4);
-    launches = m.launches + m.resumes;
+    runs = m.launches + m.resumes;
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
               rp->u.mmio.phys_addr == 0xD0000204ull && rp->u.mmio.len == 4 &&
-              rp->u.mmio.data[0] == 8 && m.launches + m.resumes == launches,
+              rp->u.mmio.data[0] == 8 && m.launches + m.resumes == runs,
           "and writes it back with bit 3 set, no guest entered between");
     script(EXIT_HLT, 0, 1);
-    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1004 && !(regs_of(fd).rflags & 1u),
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1004 && !(regs_of(fd).rflags & F_CF),
           "CF is the bit as it was, and RIP is past the instruction");
+
+    emul_start(fd, "\xff\x33", 2, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 4), "PUSH [EBX] reads its operand on MMIO");
+    put32(0, 0xAABBCCDDu);
+    k_memcpy(rp->u.mmio.data, &ram[0], 4);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rsp == 0x8FFC && get32(0x8FFC) == 0xAABBCCDDu,
+          "and pushes it");
+    emul_start(fd, "\x8f\x03", 2, 0, 0xD0000200ull, 0);
+    put32(0x9000, 0x55667788u);
+    script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
+              rp->u.mmio.len == 4 && rp->u.mmio.data[0] == 0x88 && rp->u.mmio.data[3] == 0x55 &&
+              regs_of(fd).rsp == 0x9004,
+          "POP [EBX] writes the stack's top to MMIO and releases it");
+}
+
+/** Far pointers and segment loads with their operand on device memory,
+ * and a divide's #DE. */
+static void far_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_sregs s;
+
+    emul_start(fd, "\xff\x2b", 2, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 6), "JMP FAR [EBX] reads its six bytes on MMIO");
+    k_memcpy(rp->u.mmio.data, "\x00\x40\x00\x00\x48\x00", 6);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "and the guest runs on");
+    s = sregs_of(fd);
+    CHECK(regs_of(fd).rip == 0x4001 && s.cs.selector == 0x48 && s.cs.limit == 0xFFFF && !s.cs.db,
+          "in the 16-bit code segment the pointer names, at its offset");
+
+    ts_tables();
+    emul_start(fd, "\x0f\x00\x1b", 3, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 2), "LTR [EBX] reads its selector on MMIO");
+    k_memcpy(rp->u.mmio.data, "\x20\x00", 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && sregs_of(fd).tr.selector == 0x20 && sregs_of(fd).tr.base == TS_TSSB &&
+              ram[TS_GDT + 0x25u] == 0x8B,
+          "loads the task register and marks the TSS busy in the GDT");
+    ts_tables();
+
+    emul_start(fd, "\x0f\xb2\x03", 3, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 6), "LSS EAX, [EBX] reads its six bytes on MMIO");
+    k_memcpy(rp->u.mmio.data, "\x78\x56\x34\x12\x50\x00", 6);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && (uint32_t)regs_of(fd).rax == 0x12345678u &&
+              sregs_of(fd).ss.selector == 0x50 && sregs_of(fd).ss.limit == 0xFFFF,
+          "and loads EAX and SS from them");
+
+    emul_start(fd, "\xf7\x33", 2, 1, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 4), "DIV [EBX] reads its divisor on MMIO");
+    k_memset(rp->u.mmio.data, 0, 4);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == ((TYPE_HW_EXC << 8) | INTR_VALID) &&
+              regs_of(fd).rip == 0x1001 && (uint32_t)regs_of(fd).rax == 1,
+          "a divisor of zero is #DE at the instruction, with the registers as they were");
+}
+
+/** Instructions Linux's emulator runs on device memory that the first
+ * decoder refused. */
+static void emul_rows(int fd)
+{
+    uint32_t i;
+
+    for (i = 0; i < sizeof(erows) / sizeof(erows[0]); i++) {
+        erow_run(fd, &erows[i]);
+    }
+    string_rows(fd);
+    stack_rows(fd);
+    far_rows(fd);
 }
 
 /** The #UD exit `fd`'s next run ends with, then the runs `after` gives
@@ -2786,6 +3060,50 @@ static void ud_rows(int fd)
           "VMMCALL that raised #UD is rewritten as VMCALL in the guest's memory");
     CHECK(regs_of(fd).rip == 0x1004 && (uint32_t)regs_of(fd).rax == (uint32_t)-1000,
           "which then runs at the same RIP and is answered");
+}
+
+/** MMX and SSE moves with their memory operand on device memory. */
+static void simd_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_sregs s;
+    int runs;
+
+    emul_start(fd, "\x0f\x6f\x03", 3, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 8) && v->xsave[4] == 0,
+          "MOVQ MM0, [EBX] reads eight bytes on MMIO, the x87 tags as they were until it ends");
+    k_memcpy(rp->u.mmio.data, "\x01\x02\x03\x04\x05\x06\x07\x08", 8);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && memcmp(v->xsave + 32, "\x01\x02\x03\x04\x05\x06\x07\x08", 8) == 0 &&
+              v->xsave[40] == 0xFF && v->xsave[41] == 0xFF && v->xsave[4] == 0xFF,
+          "into the x87 register MM0 names, with its exponent all ones and every tag valid");
+    emul_start(fd, "\x0f\x7f\x03", 3, 0, 0xD0000200ull, 0);
+    script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
+              rp->u.mmio.len == 8 &&
+              memcmp(rp->u.mmio.data, "\x01\x02\x03\x04\x05\x06\x07\x08", 8) == 0,
+          "MOVQ [EBX], MM0 writes them back");
+
+    emul_start(fd, "\xf3\x0f\x6f\x0b", 4, 0, 0xD0000200ull, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && regs_of(fd).rip == 0x1001 &&
+              m.injected == (UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID),
+          "MOVDQU without CR4.OSFXSR is not run after its #UD");
+    emul_start(fd, "\xf3\x0f\x6f\x0b", 4, 0, 0xD0000200ull, 0);
+    s = sregs_of(fd);
+    s.cr4 = 0x200;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS with CR4.OSFXSR");
+    CHECK(mmio_read(fd, 0xD0000200ull, 8), "MOVDQU XMM1, [EBX] reads its low half on MMIO");
+    k_memcpy(rp->u.mmio.data, "ABCDEFGH", 8);
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && !rp->u.mmio.is_write &&
+              rp->u.mmio.phys_addr == 0xD0000208ull && rp->u.mmio.len == 8 &&
+              m.launches + m.resumes == runs,
+          "then its high half, no guest entered between");
+    k_memcpy(rp->u.mmio.data, "IJKLMNOP", 8);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && memcmp(v->xsave + 176, "ABCDEFGHIJKLMNOP", 16) == 0,
+          "into XMM1 of the vCPU's image");
 }
 
 /** The guest's own #DB and #AC, which always exit: each is given back,
@@ -2866,6 +3184,7 @@ static void ts_rows(int vm)
     ts_fault_rows(fd);
     emul_rows(fd);
     ud_rows(fd);
+    simd_rows(fd);
     db_rows(fd);
     fdclose(fd);
 }
