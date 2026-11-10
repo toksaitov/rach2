@@ -22,7 +22,7 @@ if [ "${1:-}" = guest ]; then
         # console window for a console program, and kiosk-shell would show
         # that window and take the focus from the game's.
         for probe in gl:-lopengl32 d3d9:-ld3d9 hold: full:-ld3d9,-mwindows tone:-lwinmm \
-            dinput:-ldinput8,-ldxguid; do
+            dinput:-ldinput8,-ldxguid trip:-ld3d11,-ldxgi; do
             name=${probe%%:*}
             libs=$(echo "${probe#*:}" | tr , ' ')
             # shellcheck disable=SC2086 # the import libraries are words or none
@@ -53,7 +53,7 @@ trap 'exit 143' TERM
 mkdir -p "$tree/build/tmp" "$(dirname "$out")"
 work=$(mktemp -d "$tree/build/tmp/rach2-games-build.XXXXXX")
 tar -cf "$work/games-input.tar" -C "$here" probe.h glprobe.c d3d9probe.c holdprobe.c fullprobe.c \
-    toneprobe.c dinputprobe.c xplace.c
+    toneprobe.c dinputprobe.c tripprobe.c xplace.c
 ref=$tree/tests/graphics/debian-ref/debian-ref.sh
 sh "$ref" prepare -n
 sh "$ref" run -c 4 -m 4096 -l -r "$out.record" -i "$work/games-input.tar" -i "$here/build.sh" \
