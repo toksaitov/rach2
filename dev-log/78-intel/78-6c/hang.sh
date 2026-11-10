@@ -6,8 +6,10 @@
 # after another, while an ordinary user's Crocus draws and reads back beside
 # them; and the residency again.
 #
-# The ordinary user is uid and gid 1000 with no other group, so it reaches
-# the GPU through the render node's mode alone; it need not be in passwd.
+# The ordinary user is uid and gid 1000. Its one other group is the render
+# node's when that group is not root's, as Debian, whose node is 0660 and of
+# group render, grants the GPU to a user; on Rach2, whose node is 0666 and of
+# group 0, it has none. It need not be in passwd.
 # Its programs are three piglit tests that pass under Linux, run in turn on
 # /dev/dri/renderD128 until the last trigger has ended.
 #
@@ -64,10 +66,14 @@ chmod 700 "$home"
 
 say() { echo "hang: $*" | tee -a "$out/summary.txt"; }
 
-# asuser COMMAND...: COMMAND as uid and gid 1000 with no other group.
+# The render node's group, given to the ordinary user unless it is root's.
+ngid=$(stat -c %g "$node")
+[ "$ngid" != 0 ] || ngid=
+
+# asuser COMMAND...: COMMAND as uid and gid 1000 with the render node's group.
 asuser() {
-    HOME=$home python3 -I -c 'import os, sys
-os.setgroups([])
+    HOME=$home NGID=$ngid python3 -I -c 'import os, sys
+os.setgroups([int(os.environ["NGID"])] if os.environ["NGID"] else [])
 os.setgid(1000)
 os.setuid(1000)
 os.execvp(sys.argv[1], sys.argv[1:])' "$@"
