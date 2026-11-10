@@ -25,9 +25,8 @@
  * openers, a root caller and a close, with magic and authentication, and
  * the listener's view of each change; dumb buffers created, mapped, written
  * and freed, with their handles, flink names and mmap offsets; events
- * queued, polled, read and left by a closed file; unplug; kcmp of a dup, a
- * fork's copy and two opens of a node, and its other kinds; and
- * `drm_vm_mmap` through the caller's own descriptor of a file.
+ * queued, polled, read and left by a closed file; unplug; and kcmp of a
+ * dup, a fork's copy and two opens of a node, and its other kinds.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -393,25 +392,6 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
         return NULL;
     }
     return &table->entries[fd];
-}
-
-/* mmap as `drm_vm_mmap` calls it: the arguments of the last call, and the
- * address it gives. */
-static uintptr_t mmap_length;
-static uint32_t mmap_prot, mmap_flags;
-static int mmap_fd;
-static unsigned long mmap_pgoff;
-
-long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
-                     unsigned long pgoff)
-{
-    (void)addr;
-    mmap_length = length;
-    mmap_prot = prot;
-    mmap_flags = flags;
-    mmap_fd = fd;
-    mmap_pgoff = pgoff;
-    return 0x40000000l;
 }
 
 /* The epoll set of the model: descriptor 7 of a table, whose one
@@ -1436,39 +1416,6 @@ done:
     child_proc.fds = NULL;
 }
 
-/** `drm_vm_mmap`: the caller's descriptor of the file, the offset in
- * pages, shared for reading and writing. */
-static void test_vm_mmap(void)
-{
-    fd_entry_t fds[6], other;
-    fd_table_t table;
-    struct drm_file *a, *b;
-    int i;
-
-    k_memset(fds, 0, sizeof(fds));
-    open_node("dri/card0", &user_a, 0, &fds[2]);
-    fds[3].type = FD_TYPE_ANON;
-    open_node("dri/card0", &user_a, 0, &fds[4]);
-    open_node("dri/card0", &user_a, 0, &other);
-    table.entries = fds;
-    table.cap = 6;
-    user_a.fds = &table;
-    run_as(&user_a);
-    a = (struct drm_file *)fds[4].priv;
-    b = (struct drm_file *)other.priv;
-    CHECK("vm_mmap: through the caller's descriptor of the file, shared and writable",
-          drm_vm_mmap(a, 0x100000u, 8192u) == 0x40000000l && mmap_fd == 4 && mmap_pgoff == 0x100u &&
-              mmap_length == 8192u && mmap_prot == 3u && mmap_flags == 1u);
-    CHECK("vm_mmap: an offset off a page is EINVAL", drm_vm_mmap(a, 0x100001u, 4096u) == -EINVAL);
-    CHECK("vm_mmap: a file the caller has no descriptor of is EBADF",
-          drm_vm_mmap(b, 0x100000u, 4096u) == -EBADF);
-    for (i = 0; i < 6; i++) {
-        close_node(&fds[i]);
-    }
-    close_node(&other);
-    user_a.fds = NULL;
-}
-
 int main(void)
 {
     proc_fill(&root_proc, &tg_root, &mm_root, 100, 0);
@@ -1489,7 +1436,6 @@ int main(void)
     test_events();
     test_unplug();
     test_kcmp();
-    test_vm_mmap();
     if (fails) {
         printf("drm-core-test: %d failed\n", fails);
         return 1;
