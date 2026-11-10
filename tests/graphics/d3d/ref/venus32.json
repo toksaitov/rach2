@@ -1,0 +1,56 @@
+{
+  "source": "Debian 13 on Venus over the testing PC's lavapipe, Mesa 26.1.6's Venus driver for both architectures with the root's i386 layer, GE-Proton11-12, 8 CPUs, 16 GiB, udmabuf size_limit_mb 16384; the i386 probes on both paths under WoW64 and in the default mode, twice",
+  "probe": {
+    "proton/9-wow64": {
+      "exit": 0,
+      "adapter": "AMD Radeon RX 6700 XT driver aticfx32.dll"
+    },
+    "wined3dvk/9-i386": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits)) driver wined3d.dll"
+    },
+    "wined3dvk/11-i386": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    },
+    "wined3dvk/12-i386": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    },
+    "proton/11-wow64": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    },
+    "proton/12-wow64": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    },
+    "proton/9-i386": {
+      "exit": 0,
+      "adapter": "AMD Radeon RX 6700 XT driver aticfx32.dll"
+    },
+    "proton/11-i386": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    },
+    "proton/12-i386": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    },
+    "wined3dvk/9-wow64": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits)) driver wined3d.dll"
+    },
+    "wined3dvk/11-wow64": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    },
+    "wined3dvk/12-wow64": {
+      "exit": 0,
+      "adapter": "Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))"
+    }
+  },
+  "wine": {},
+  "vkd3d": {},
+  "flakes": []
+}
