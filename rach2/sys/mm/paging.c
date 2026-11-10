@@ -1706,10 +1706,71 @@ void paging_flush_dir(const page_dir_t *dir, uintptr_t addr)
         smp_kernel_mapping_changed();
         return;
     }
-    if (dir == _curr_dir) {
-        arch_tlb_flush_page(addr);
+    addr &= ~(uintptr_t)(PAGE_SIZE - 1);
+    paging_flush_range(dir, addr, addr + PAGE_SIZE);
+}
+
+void paging_flush_range(const page_dir_t *dir, uintptr_t start, uintptr_t end)
+{
+    uintptr_t va;
+
+    if (start >= end) {
+        return;
     }
-    smp_tlb_shootdown(dir, addr, addr + PAGE_SIZE);
+    if ((end - start) / PAGE_SIZE > PAGING_FLUSH_CEILING) {
+        if (dir == _curr_dir) {
+            arch_space_load(arch_space_root());
+        }
+        smp_tlb_shootdown(dir, CPU_TLB_ALL, 0);
+        return;
+    }
+    if (dir == _curr_dir) {
+        for (va = start; va < end; va += PAGE_SIZE) {
+            arch_tlb_flush_page(va);
+        }
+    }
+    smp_tlb_shootdown(dir, start, end);
+}
+
+/*
+ * The span of user pages of `dir` whose entries a walk changed, which one
+ * flush drops at the walk's end (`batch_flush`) instead of a flush for each
+ * page; `lo` equal to `hi` is an empty span.
+ */
+struct flush_batch {
+    const page_dir_t *dir;
+    uintptr_t lo, hi;
+};
+
+/** Start an empty batch for `dir`. */
+static void batch_start(struct flush_batch *b, const page_dir_t *dir)
+{
+    b->dir = dir;
+    b->lo = b->hi = 0;
+}
+
+/** Add the page `va` to the span of `b`. */
+static void batch_add(struct flush_batch *b, uintptr_t va)
+{
+    va &= ~(uintptr_t)(PAGE_SIZE - 1);
+    if (b->lo == b->hi) {
+        b->lo = va;
+        b->hi = va + PAGE_SIZE;
+        return;
+    }
+    if (va < b->lo) {
+        b->lo = va;
+    }
+    if (va + PAGE_SIZE > b->hi) {
+        b->hi = va + PAGE_SIZE;
+    }
+}
+
+/** Drop the translations of the span of `b` and empty it. */
+static void batch_flush(struct flush_batch *b)
+{
+    paging_flush_range(b->dir, b->lo, b->hi);
+    b->lo = b->hi = 0;
 }
 
 void frame_ref(uintptr_t phys)
@@ -1820,6 +1881,7 @@ uint32_t frame_unref(uintptr_t phys)
 int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 {
     pte_t *table;
+    pte_t old;
 
     virt &= ~(PAGE_SIZE - 1);
     table = mmu_user_table(dir, virt, 1);
@@ -1827,8 +1889,12 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
         return -1;
     }
 
+    old = table[MMU_INDEX(virt)];
     table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
-    paging_flush_dir(dir, virt);
+    /* x86 caches no translation of an entry that is not present. */
+    if (old & PTE_P) {
+        paging_flush_dir(dir, virt);
+    }
     return 0;
 }
 
@@ -1893,6 +1959,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 {
     uintptr_t phys_addr;
     pte_t *table;
+    pte_t old;
 
     virt_addr &= ~(PAGE_SIZE - 1);
 
@@ -1905,20 +1972,33 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;
     }
 
+    old = table[MMU_INDEX(virt_addr)];
     table[MMU_INDEX(virt_addr)] = (pte_t)phys_addr | PTE_P | PTE_W | PTE_U;
-
-    paging_flush_dir(dir, virt_addr);
+    if (old & PTE_P) {
+        paging_flush_dir(dir, virt_addr);
+    }
 
     return phys_addr;
 }
 
+/**
+ * Two walks: the first takes the present bit from each present entry and
+ * leaves its frame in it, marked PTE_NONE, an entry no other code makes,
+ * and the second, after the one flush, clears those entries and drops their
+ * frames. So no processor can reach a frame after it is freed, and a large
+ * unmap costs one shootdown, not one a page. The big lock is held
+ * throughout, and no processor writes an entry that is not present, so
+ * nothing else sees the marked entries.
+ */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
-    uintptr_t addr, next;
+    struct flush_batch b;
+    uintptr_t addr, next, lo, hi;
 
     if (!dir) {
         return;
     }
+    batch_start(&b, dir);
     for (addr = start; addr < end; addr = next) {
         pte_t *table = user_span(dir, addr, end, &next);
 
@@ -1926,9 +2006,27 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             pte_t *e = &table[MMU_INDEX(addr)];
 
             if (*e & PTE_P) {
-                frame_unref(PTE_ADDR(*e));
+                *e = PTE_ADDR(*e) | PTE_NONE;
+                batch_add(&b, addr);
+            }
+        }
+    }
+    lo = b.lo;
+    hi = b.hi;
+    batch_flush(&b);
+    for (addr = lo; addr < hi; addr = next) {
+        pte_t *table = user_span(dir, addr, hi, &next);
+
+        for (; table && addr < next; addr += PAGE_SIZE) {
+            pte_t *e = &table[MMU_INDEX(addr)];
+
+            if ((*e & (PTE_P | PTE_NONE)) == PTE_NONE) {
+                uintptr_t phys = PTE_ADDR(*e);
+
                 *e = 0;
-                paging_flush_dir(dir, addr);
+                if (phys) {
+                    frame_unref(phys);
+                }
             }
         }
     }
@@ -1972,6 +2070,7 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
 int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len)
 {
     uintptr_t addr, next, end = from + len;
+    struct flush_batch moved, replaced;
     pte_t *table;
 
     for (addr = from; addr < end; addr = next) {
@@ -1981,25 +2080,36 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
             }
         }
     }
+    batch_start(&moved, dir);
+    batch_start(&replaced, dir);
     for (addr = from; addr < end; addr = next) {
         for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
             pte_t *e = &table[MMU_INDEX(addr)];
 
             if (*e) {
-                *user_pte(dir, to + (addr - from)) = *e;
+                pte_t *dst = user_pte(dir, to + (addr - from));
+
+                if (*dst & PTE_P) {
+                    batch_add(&replaced, to + (addr - from));
+                }
+                *dst = *e;
+                if (*e & PTE_P) {
+                    batch_add(&moved, addr);
+                }
                 *e = 0;
-                paging_flush_dir(dir, addr);
-                paging_flush_dir(dir, to + (addr - from));
             }
         }
     }
+    batch_flush(&moved);
+    batch_flush(&replaced);
     return 0;
 }
 
-/** Give the present user page `addr`, whose entry in `dir` is `e`, the
- * protection `prot`, for `paging_protect_range`; a page not present is left
- * alone, since its fault reads the region's protection. */
-static void protect_page(page_dir_t *dir, pte_t *e, uintptr_t addr, uint32_t prot)
+/** Give the present user page `addr`, whose entry is `e`, the protection
+ * `prot`, for `paging_protect_range`, and add it to the batch `b` to flush;
+ * a page not present is left alone, since its fault reads the region's
+ * protection. */
+static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32_t prot)
 {
     pte_t pte = *e;
     uintptr_t frame;
@@ -2025,19 +2135,22 @@ static void protect_page(page_dir_t *dir, pte_t *e, uintptr_t addr, uint32_t pro
         }
     }
     *e = pte;
-    paging_flush_dir(dir, addr);
+    batch_add(b, addr);
 }
 
 void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint32_t prot)
 {
+    struct flush_batch b;
     uintptr_t addr, next;
     pte_t *table;
 
+    batch_start(&b, dir);
     for (addr = start; addr < end; addr = next) {
         for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
-            protect_page(dir, &table[MMU_INDEX(addr)], addr, prot);
+            protect_page(&b, &table[MMU_INDEX(addr)], addr, prot);
         }
     }
+    batch_flush(&b);
 }
 
 /**
@@ -2051,9 +2164,11 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
  * stays the parent's as it is, and the child gets a copy with the same
  * rights, as Linux copies a page that may be pinned at fork: a write by the
  * parent would otherwise move the parent to a copy and leave the device
- * with the frame the child has.
+ * with the frame the child has. A parent's page made read-only is added to
+ * the batch `b`, which the caller flushes.
  */
-static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type_t type)
+static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e, uintptr_t va,
+                          vm_type_t type)
 {
     pte_t pte = *e;
     uintptr_t parent_phys = PTE_ADDR(pte);
@@ -2087,7 +2202,7 @@ static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type
             return -1;
         }
         *e = (pte & ~(pte_t)PTE_W) | PTE_COW;
-        paging_flush_tlb(va); /* the parent is the current dir */
+        batch_add(b, va);
     } else if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS) != 0) {
         return -1;
     }
@@ -2101,14 +2216,20 @@ static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type
  * user page lies in a region, and a walk of the whole of user space would
  * take 64 million steps on x86-64. The ranges registered on a writable
  * private region are told first (MMN_PROTECT), since its pages become
- * read-only in the parent.
+ * read-only in the parent. The parent's pages made read-only are flushed
+ * once, at the end, as Linux's fork flushes the parent's whole space once:
+ * a write another thread makes meanwhile through the old translation lands
+ * in the frame both share, as if it came before the fork.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 {
     page_dir_t *parent_dir = from->dir;
     const vma_t *region;
+    struct flush_batch b;
+    int rc = 0;
 
-    for (region = vm_first(&from->vm); region; region = vm_next(region)) {
+    batch_start(&b, parent_dir);
+    for (region = vm_first(&from->vm); region && rc == 0; region = vm_next(region)) {
         uintptr_t va, next;
 
         if (region->prot & VM_PROT_DONTFORK) {
@@ -2120,14 +2241,16 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
         for (va = region->start; va < region->end; va = next) {
             pte_t *table = user_span(parent_dir, va, region->end, &next);
 
-            for (; table && va < next; va += PAGE_SIZE) {
-                if (fork_copy_page(child_dir, &table[MMU_INDEX(va)], va, region->type) != 0) {
-                    return -1;
-                }
+            for (; table && va < next && rc == 0; va += PAGE_SIZE) {
+                rc = fork_copy_page(&b, child_dir, &table[MMU_INDEX(va)], va, region->type);
+            }
+            if (rc != 0) {
+                break;
             }
         }
     }
-    return 0;
+    batch_flush(&b);
+    return rc;
 }
 
 uintptr_t paging_enter_kernel(void)
