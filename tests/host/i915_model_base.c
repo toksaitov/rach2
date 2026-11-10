@@ -213,9 +213,8 @@ static const struct i915_model_block i915_model_base_fifo = {
  * memory mapped in order from GTT offset 0, uncached, its first 0x408000
  * bytes the framebuffer that pipe A's primary plane scans out, and every
  * other entry all ones, where the dump has a stray bit clear here and
- * there. The eDP transcoder drives the panel from pipe A always on. The
- * display's registers are the pipe block's (78-9) once it exists; until
- * then the register file holds them.
+ * there. The display that scans the framebuffer out is the pipe block's
+ * (i915_model_pipe.c).
  */
 static void gtt_reset(struct i915_model *m, void *priv)
 {
@@ -227,14 +226,6 @@ static void gtt_reset(struct i915_model *m, void *priv)
         i915_model_poke(m, I915_GSM_OFFSET + i * 4u,
                         i < stolen ? HSW_GTT_ADDR_ENCODE(addr) | GEN6_PTE_VALID : 0xffffffffu);
     }
-    i915_model_poke(m, TRANS_DDI_FUNC_CTL(I915_TRANS_EDP), LENOVO_FW_EDP_DDI_FUNC);
-    i915_model_poke(m, TRANSCONF(I915_TRANS_EDP), LENOVO_FW_EDP_TRANSCONF);
-    i915_model_poke(m, DSPCNTR(I915_PIPE_A), DISP_ENABLE | DISP_FORMAT_BGRX888);
-    i915_model_poke(m, DSPSURF(I915_PIPE_A), LENOVO_FW_FB_GGTT);
-    i915_model_poke(m, DSPSTRIDE(I915_PIPE_A), LENOVO_FW_FB_STRIDE);
-    i915_model_poke(m, DSPOFFSET(I915_PIPE_A), 0);
-    i915_model_poke(m, PIPESRC(I915_PIPE_A),
-                    ((uint32_t)(LENOVO_FW_FB_WIDTH - 1) << 16) | (LENOVO_FW_FB_HEIGHT - 1));
 }
 
 static const struct i915_model_block i915_model_base_gtt = {
