@@ -2840,14 +2840,15 @@ static void procfs_kvm_counts(struct procfs_text *t)
 }
 
 /** The counts of the kernel's own work for `/proc/stat`, from
- * `process_pid_steps` to `bkl_hold_max_early_pc`, each on a line of its own. */
+ * `process_pid_steps` to the last `bkl_hold_max_mark`, each on a line of
+ * its own. */
 static void procfs_work_counts(struct procfs_text *t)
 {
     uint64_t total, longest, held, age;
     uint32_t vector;
     int32_t nr;
     uintptr_t pc[BKL_SAMPLE_PCS];
-    int i;
+    int i, m;
 
     smp_wait_stats(&total, &longest);
     smp_hold_stats(&held, &vector, &nr);
@@ -2897,13 +2898,16 @@ static void procfs_work_counts(struct procfs_text *t)
         ap_ch(t, ' ');
         ap_xlow(t, (unsigned long)pc[i], 1);
     }
-    smp_hold_early(&age, pc);
-    ap_str(t, "\nbkl_hold_max_early_us ");
-    ap_u64(t, age);
-    ap_str(t, "\nbkl_hold_max_early_pc");
-    for (i = 0; i < BKL_SAMPLE_PCS && pc[i]; i++) {
+    for (m = 0; m < BKL_SAMPLE_MARKS; m++) {
+        smp_hold_early(m, &age, pc);
+        ap_str(t, "\nbkl_hold_max_mark ");
+        ap_u32(t, 1u << m);
         ap_ch(t, ' ');
-        ap_xlow(t, (unsigned long)pc[i], 1);
+        ap_u64(t, age);
+        for (i = 0; i < BKL_SAMPLE_PCS && pc[i]; i++) {
+            ap_ch(t, ' ');
+            ap_xlow(t, (unsigned long)pc[i], 1);
+        }
     }
     ap_ch(t, '\n');
 }
