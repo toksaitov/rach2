@@ -2222,7 +2222,7 @@
         {"assertion_id": "vmstat", "checks": "/proc/vmstat has nr_free_pages, pgpgin and pswpout 0", "source": "program"},
         {"assertion_id": "cpu-online", "checks": "/sys/devices/system/cpu/online lists the processors /proc/stat counts, as 0 or 0-N, and offline lists none", "source": "program"},
         {"assertion_id": "mounts-newline", "checks": "/proc/mounts ends with its newline", "source": "program"},
-        {"assertion_id": "mounts-permanent", "checks": "/proc/mounts has the six lines of the root, /dev, /proc, /dev/shm, /sys and /dev/mqueue, the last with nosuid, nodev and noexec", "source": "program"},
+        {"assertion_id": "mounts-permanent", "checks": "/proc/mounts has the seven lines of the root, /dev, /proc, /dev/shm, /sys, /dev/mqueue and /sys/kernel/debug, the last two with nosuid, nodev and noexec", "source": "program"},
         {"assertion_id": "mounts-last-row", "checks": "the last line of /proc/mounts is a whole fstab row", "source": "program"},
         {"assertion_id": "btime-value", "checks": "/proc/stat's btime is a value", "source": "program"},
         {"assertion_id": "btime-steady", "checks": "btime is the same in two reads 1.5 s apart", "source": "program"},
