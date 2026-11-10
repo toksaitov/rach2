@@ -150,12 +150,12 @@ struct dma_fence *sync_file_get_fence(int32_t fd)
                : NULL;
 }
 
-/** Create a close-on-exec descriptor, keeping the caller's fence reference. */
-int32_t sync_file_create(struct dma_fence *f, const char *name)
+/** Make the descriptor `fd`, reserved and given no type, a sync file of
+ * `f` with a reference of its own. */
+int32_t sync_file_install(int32_t fd, struct dma_fence *f, const char *name)
 {
     struct sync_file *s;
     fd_entry_t *e;
-    int32_t fd;
     if (!f || !current_proc)
         return -EINVAL;
     s = kzalloc(sizeof(*s));
@@ -164,16 +164,27 @@ int32_t sync_file_create(struct dma_fence *f, const char *name)
     s->anon.name = "sync_file";
     s->fence = dma_fence_get(f);
     sync_name(s->name, name ? name : "dma_fence");
-    fd = fd_alloc(current_proc->fds);
-    if (fd < 0) {
-        dma_fence_put(f);
-        kfree(s);
-        return fd;
-    }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;
     e->ops = &sync_ops;
     e->priv = s;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    return 0;
+}
+
+/** Create a close-on-exec descriptor, keeping the caller's fence reference. */
+int32_t sync_file_create(struct dma_fence *f, const char *name)
+{
+    int32_t fd, err;
+    if (!f || !current_proc)
+        return -EINVAL;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0)
+        return fd;
+    err = sync_file_install(fd, f, name);
+    if (err < 0) {
+        fd_free(current_proc->fds, fd);
+        return err;
+    }
     return fd;
 }
