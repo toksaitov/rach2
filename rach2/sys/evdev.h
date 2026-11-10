@@ -545,10 +545,22 @@ void evdev_sysfs_serio_firmware_id(int port, const char *id);
 
 /**
  * Have `add` put a driver's own files below the directory of the serio
- * port `port` when /sys makes it, as Linux's psmouse adds a protocol's
- * attributes to its port: `add` gets the directory and returns 0 or
- * -errno. NULL for none. Called by the driver when it binds, before the
- * device's event device is published. Defined in evdev_sysfs.c.
+ * port `port` when /sys makes it, where they stay, as Linux's serio core
+ * adds a driver's `dev_groups` to its port: `add` gets the directory and
+ * returns 0 or -errno. NULL for none. Called once, before the first event
+ * device of the port is published. Defined in evdev_sysfs.c.
+ */
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir));
+
+/**
+ * Have `add` put a protocol's files below the directory of the serio port
+ * `port`, as Linux's psmouse adds a protocol's attributes to its port, in
+ * place of the files the port's protocol had: `add` gets the directory and
+ * returns 0 or -errno. NULL for none. Called by the driver when a protocol
+ * binds, as the bring-up or a reconnect finds it or a write to `protocol`
+ * sets it. Before /sys makes the directory, the call only keeps `add` for
+ * it; after, it removes the files the last `add` made and calls `add` at
+ * once, under the big lock in process context. Defined in evdev_sysfs.c.
  */
 void evdev_sysfs_serio_files(int port, int (*add)(int dir));
 
