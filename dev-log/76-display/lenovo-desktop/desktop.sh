@@ -225,7 +225,9 @@ cmd_kill()
 {
     out=$1
     outdir "$out"
-    before=$(dmesg | wc -l)
+    # The kernel's log is a ring, so its new lines are those after the last
+    # one it has now, not those past a count.
+    last=$(dmesg | tail -n 1)
     sup=$(cat /run/rach2-desktop.pid 2> /dev/null)
     w=$(westons | tr '\n' ' ')
     [ -n "$w" ] || die "no weston runs"
@@ -233,7 +235,8 @@ cmd_kill()
     kill -KILL $w
     sleep 5
     left=$(westons | tr '\n' ' ')
-    dmesg | tail -n +$((before + 1)) > "$out/dmesg-after-kill.txt"
+    dmesg | awk -v last="$last" '$0 == last { n = 0; next } { new[++n] = $0 }
+        END { for (i = 1; i <= n; i++) print new[i] }' > "$out/dmesg-after-kill.txt"
     {
         echo "== killed $w; left ${left:-none}"
         echo "== supervisor $sup alive: $(kill -0 "$sup" 2> /dev/null && echo yes || echo no)"
