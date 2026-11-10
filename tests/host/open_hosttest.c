@@ -752,6 +752,14 @@ int vfs_setattr(struct vfs_mount *mnt, void *at, int what, const struct vfs_stat
     return 0;
 }
 
+/** The model has no extended attributes; keep the VFS default answers. */
+int vfs_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
+{
+    (void)mnt;
+    (void)node;
+    return arg->op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP;
+}
+
 /** Return an open identity distinct from the node. */
 int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
 {

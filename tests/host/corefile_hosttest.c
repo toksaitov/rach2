@@ -456,6 +456,14 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
     return 0;
 }
 
+/** The model has no extended attributes; keep the VFS default answers. */
+int vfs_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
+{
+    (void)mnt;
+    (void)node;
+    return arg->op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP;
+}
+
 /** No core file is there before the dump makes one: -ENOENT. */
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
