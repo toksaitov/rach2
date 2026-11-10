@@ -112,8 +112,9 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose)
     }
     for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
         virgl_renderer_get_cap_set(ids[i], &ver, &size);
-        /* Venus reports version 0; QEMU too takes a capset by its size. */
-        if (size > 0) {
+        /* Venus reports version 0; QEMU too takes a capset by its size.
+           virglrenderer sizes Venus's capset even when Venus is off. */
+        if (size > 0 && (ids[i] != CAPSET_VENUS || venus)) {
             r->capset[r->ncapsets++] = ids[i];
         }
     }

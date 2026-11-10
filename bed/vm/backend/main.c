@@ -169,6 +169,9 @@ static void vfio_master(struct src *s)
  * Take the region and vectors of the ivshmem device bdf through vfio-pci,
  * under QEMU's emulated IOMMU: BAR 2 mapped, the registers of BAR 0 read
  * and written through the device, and the two MSI-X vectors as eventfds.
+ * The IOMMU must not remap interrupts (intremap=off, and vfio_iommu_type1's
+ * allow_unsafe_interrupts in the VM): QEMU 10.2's ivshmem routes its vectors
+ * before the VM programs them, which remapping refuses, and none then fires.
  */
 static void open_vfio(struct src *s, const char *bdf)
 {
