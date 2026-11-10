@@ -459,7 +459,7 @@ int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint
     struct i915_vma *vma;
     int32_t err;
 
-    if (view_pages && ((uint64_t)view_offset + view_pages > pages || view_pages == pages)) {
+    if (view_pages && (uint64_t)view_offset + view_pages > pages) {
         return -EINVAL;
     }
     if (align < I915_GTT_PAGE_SIZE) {
