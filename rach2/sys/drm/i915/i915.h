@@ -213,11 +213,14 @@ struct i915_irq {
     void (*deferred_display)(struct drm_i915_private *i915);
 };
 
-/* The engines this part of the driver starts, the render and blitter
- * rings, by index into `engine`. */
+/* The engines the driver starts, by index into `engine`: the render,
+ * blitter, video and video enhancement rings, in the order of Linux's
+ * engine ids. */
 #define I915_RCS0        0
 #define I915_BCS0        1
-#define I915_NUM_ENGINES 2
+#define I915_VCS0        2
+#define I915_VECS0       3
+#define I915_NUM_ENGINES 4
 
 /* The bytes of a ring, Linux's legacy ring (SZ_16K). */
 #define I915_RING_SIZE 16384u
@@ -228,8 +231,12 @@ struct i915_irq {
 /*
  * An engine and its ring (i915_ring.c). `mmio_base` is the base of its
  * registers, `hws_pga` the register of its status page's address, and
- * `irq_bit` its user interrupt, one bit in the GT bank and in its own
- * RING_IMR.
+ * `irq_bit` its user interrupt, one bit in the bank `irq_bank` and in its
+ * own RING_IMR: the GT bank's, but power management's for the video
+ * enhancement ring, as Linux's hsw_irq_enable_vecs. `uabi_class` is its
+ * class as programs name it (I915_ENGINE_CLASS_), `linux_id` its index in
+ * Linux's engine ids (RCS0 0, BCS0 1, VCS0 10, VECS0 18), `reset_domain`
+ * its bit of GEN6_GDRST and `fault_reg` its RING_FAULT_REG.
  *
  * The status page is one page at `hws`, the kernel's address, mapped at
  * `hws_ggtt` in the global GTT; the chip writes breadcrumbs into it. The
@@ -280,6 +287,11 @@ struct i915_engine {
     uint32_t mmio_base;
     uint32_t hws_pga;
     uint32_t irq_bit;
+    int irq_bank;
+    uint16_t uabi_class;
+    uint8_t linux_id;
+    uint32_t reset_domain;
+    uint32_t fault_reg;
     uint32_t *hws;
     uint32_t hws_ggtt;
     uint32_t *ring;
@@ -1568,13 +1580,14 @@ void i915_irq_handle(struct drm_i915_private *i915);
 /* ---- i915_ring.c ---- */
 
 /**
- * Set up and start the render and blitter rings, as Linux's
- * xcs_resume: for each a status page and a ring in the global GTT; the
- * aliasing PPGTT made (`i915_ppgtt_init`); then each ring stopped and
- * emptied, the status page's address written and the TLB flushed, the
- * PPGTT's registers (`i915_ppgtt_enable_ring`), and the ring started with
- * RING_VALID, each wait bounded; then its user interrupt registered,
- * masked until a waiter needs it. Holds forcewake throughout.
+ * Set up and start the render, blitter, video and video enhancement
+ * rings, as Linux's xcs_resume: for each a status page and a ring in the
+ * global GTT; the aliasing PPGTT made (`i915_ppgtt_init`); then each ring
+ * stopped and emptied, the status page's address written and the TLB
+ * flushed, the PPGTT's registers (`i915_ppgtt_enable_ring`), and the ring
+ * started with RING_VALID, each wait bounded; then its user interrupt
+ * registered in its bank, masked until a waiter needs it. Holds forcewake
+ * throughout.
  *
  * @return 0; -ENOMEM; -ENOSPC when the GTT has no room at its top; -EIO
  *         when a ring would not stop or start, its wait named in
@@ -2116,8 +2129,7 @@ struct i915_cmd_parse {
 };
 
 /** Whether `engine` parses the batches whose length a call gives, as
- * Linux's intel_engine_using_cmd_parser: on Haswell, the render and
- * blitter rings. */
+ * Linux's intel_engine_using_cmd_parser: on Haswell, every ring. */
 int i915_engine_using_cmd_parser(const struct i915_engine *engine);
 
 /**
@@ -3385,11 +3397,12 @@ void i915_sseu_init(struct drm_i915_private *i915);
 
 /** The engine of the class and instance programs name (I915_ENGINE_CLASS_),
  * or NULL, as Linux's intel_engine_lookup_user over the engines that run:
- * rcs0 and bcs0. */
+ * rcs0, bcs0, vcs0 and vecs0, each instance 0. */
 struct i915_engine *i915_engine_lookup_user(struct drm_i915_private *i915, uint16_t cls,
                                             uint16_t instance);
 
-/** The class programs give `engine`, I915_ENGINE_CLASS_RENDER or _COPY. */
+/** The class programs give `engine`, I915_ENGINE_CLASS_RENDER, _COPY,
+ * _VIDEO or _VIDEO_ENHANCE. */
 uint16_t i915_engine_uabi_class(const struct i915_engine *engine);
 
 /**

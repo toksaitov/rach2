@@ -76,9 +76,9 @@ void i915_sseu_init(struct drm_i915_private *i915)
     sseu->ready = 1;
 }
 
-/* The parameters whose answers are the same on every Haswell GT2 with the
- * render and blitter rings, as Linux 6.12 answers them. CMD_PARSER_VERSION
- * is the parser's, since both rings parse (i915_cmd_parser.c).
+/* The parameters whose answers are the same on every Haswell GT2 with its
+ * four rings, as Linux 6.12 answers them. CMD_PARSER_VERSION is the
+ * parser's, since every ring parses (i915_cmd_parser.c).
  * HAS_CONTEXT_FREQ_HINT needs GuC, and Linux answers its error as the
  * value. HAS_CONTEXT_ISOLATION is the classes with a default context
  * image: render. */
@@ -183,9 +183,9 @@ static int32_t device_param(struct drm_i915_private *i915, int32_t param, int *v
 }
 
 /**
- * GETPARAM, as Linux's i915_getparam_ioctl on Haswell GT2 with the render
- * and blitter rings: the device's identity, what the engines and GEM do,
- * the slices and EUs, and the clocks.
+ * GETPARAM, as Linux's i915_getparam_ioctl on Haswell GT2 with the render,
+ * blitter, video and video enhancement rings: the device's identity, what
+ * the engines and GEM do, the slices and EUs, and the clocks.
  *
  * @return 0 with the value written to `value`; -ENODEV for the old
  *         parameters of user mode setting and for the HuC and PXP, which
@@ -304,8 +304,9 @@ static int32_t query_topology(struct drm_i915_private *i915, struct drm_i915_que
 
 /**
  * ENGINE_INFO, as Linux's query_engine_info: the header, whose count and
- * reserved words must be 0, then rcs0 and bcs0 in Linux's order, each its
- * class and instance, logical instance 0 and no capabilities.
+ * reserved words must be 0, then rcs0, bcs0, vcs0 and vecs0 in Linux's
+ * order, by class, each its class and instance, logical instance 0 and no
+ * capabilities, which Haswell's video rings lack (no HEVC, no SFC).
  */
 static int32_t query_engine_info(struct drm_i915_private *i915, struct drm_i915_query_item *item)
 {

@@ -12,13 +12,6 @@
 #include "../../mm/kheap.h"
 #include "../../rtc.h"
 
-/** The fault register of the engine at index `i`, Linux's RING_FAULT_REG
- * on graphics 6 and 7. */
-static uint32_t fault_reg(int i)
-{
-    return i == I915_RCS0 ? RING_FAULT_REG_RCS : RING_FAULT_REG_BCS;
-}
-
 /** Copy the string `src` into the `cap` bytes at `dst`, cut and ended. */
 static void copy_str(char *dst, uint32_t cap, const char *src)
 {
@@ -45,7 +38,7 @@ static void capture_engine(struct drm_i915_private *i915, int i, struct i915_err
     struct i915_request *rq;
 
     ee->rc_psmi = i915_uncore_read(i915, RING_PSMI_CTL(base));
-    ee->fault_reg = i915_uncore_read(i915, fault_reg(i));
+    ee->fault_reg = i915_uncore_read(i915, e->fault_reg);
     ee->esr = i915_uncore_read(i915, RING_ESR(base));
     ee->faddr = i915_uncore_read(i915, RING_DMA_FADD(base));
     ee->ipeir = i915_uncore_read(i915, RING_IPEIR(base));

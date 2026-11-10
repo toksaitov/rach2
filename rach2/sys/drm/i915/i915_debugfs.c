@@ -357,8 +357,8 @@ static int vtd_active(struct drm_i915_private *i915)
 /* vtd_active's answer as Linux's i915_capabilities words it, by index. */
 static const char *const vtd_state[2] = {"disabled", "enabled"};
 
-/** The engines the driver runs, as Linux's engine mask: RCS0 at bit 0
- * and BCS0 at bit 1. */
+/** The engines the driver runs, as Linux's engine mask, each at the bit
+ * of its Linux engine id: RCS0 0, BCS0 1, VCS0 10 and VECS0 18. */
 static uint32_t engine_mask(struct drm_i915_private *i915)
 {
     uint32_t mask = 0;
@@ -366,7 +366,7 @@ static uint32_t engine_mask(struct drm_i915_private *i915)
 
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if (i915->gt.engine[i].running) {
-            mask |= 1u << i;
+            mask |= 1u << i915->gt.engine[i].linux_id;
         }
     }
     return mask;

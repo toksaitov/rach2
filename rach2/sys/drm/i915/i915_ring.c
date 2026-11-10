@@ -1,12 +1,13 @@
 /*
- * i915_ring.c: Haswell's render and blitter rings: their status pages and
- * ring buffers in the global GTT, ring start and stop, commands, and the
- * breadcrumbs the chip writes and the user interrupt that wakes their
- * waiters, after Linux 6.12's gt/intel_ring_submission.c, gt/intel_ring.c
- * and gt/intel_breadcrumbs.c.
+ * i915_ring.c: Haswell's render, blitter, video and video enhancement
+ * rings: their status pages and ring buffers in the global GTT, ring start
+ * and stop, commands, and the breadcrumbs the chip writes and the user
+ * interrupt that wakes their waiters, after Linux 6.12's
+ * gt/intel_ring_submission.c, gt/intel_ring.c and gt/intel_breadcrumbs.c.
  */
 
 #include "i915.h"
+#include "i915_drm.h"
 #include "i915_reg.h"
 
 #include "../../arch/arch.h"
@@ -18,16 +19,28 @@
 #include "../../proc/percpu.h"
 #include "../../rtc.h"
 
-/* What tells one engine from another (intel_engine_cs.c's intel_engines
- * and intel_ring_submission.c's setup_rcs and setup_bcs). */
+/* What tells one engine from another (intel_engine_cs.c's intel_engines,
+ * intel_ring_submission.c's setup_rcs, setup_bcs, setup_vcs and setup_vecs,
+ * and intel_reset.c's engine reset domains), by index. */
 static const struct {
     const char *name;
     uint32_t mmio_base;
     uint32_t hws_pga;
     uint32_t irq_bit;
+    int irq_bank;
+    uint16_t uabi_class;
+    uint8_t linux_id;
+    uint32_t reset_domain;
+    uint32_t fault_reg;
 } i915_engine_info[I915_NUM_ENGINES] = {
-    {"rcs0", RENDER_RING_BASE, RENDER_HWS_PGA_GEN7, GT_RENDER_USER_INTERRUPT},
-    {"bcs0", BLT_RING_BASE, BLT_HWS_PGA_GEN7, GT_BLT_USER_INTERRUPT}};
+    {"rcs0", RENDER_RING_BASE, RENDER_HWS_PGA_GEN7, GT_RENDER_USER_INTERRUPT, I915_IRQ_GT,
+     I915_ENGINE_CLASS_RENDER, 0, GEN6_GRDOM_RENDER, RING_FAULT_REG_RCS},
+    {"bcs0", BLT_RING_BASE, BLT_HWS_PGA_GEN7, GT_BLT_USER_INTERRUPT, I915_IRQ_GT,
+     I915_ENGINE_CLASS_COPY, 1, GEN6_GRDOM_BLT, RING_FAULT_REG_BCS},
+    {"vcs0", GEN6_BSD_RING_BASE, BSD_HWS_PGA_GEN7, GT_BSD_USER_INTERRUPT, I915_IRQ_GT,
+     I915_ENGINE_CLASS_VIDEO, 10, GEN6_GRDOM_MEDIA, RING_FAULT_REG_VCS},
+    {"vecs0", VEBOX_RING_BASE, VEBOX_HWS_PGA_GEN7, PM_VEBOX_USER_INTERRUPT, I915_IRQ_PM,
+     I915_ENGINE_CLASS_VIDEO_ENHANCE, 18, GEN6_GRDOM_VECS, RING_FAULT_REG_VECS}};
 
 /* Linux's bounds for the stop (1 ms fast and 100 ms slow, taken as one),
  * the TLB flush and the start (gt/intel_engine_cs.c, intel_ring_submission.c),
@@ -292,6 +305,11 @@ int32_t i915_gt_init(struct drm_i915_private *i915)
         e->mmio_base = i915_engine_info[i].mmio_base;
         e->hws_pga = i915_engine_info[i].hws_pga;
         e->irq_bit = i915_engine_info[i].irq_bit;
+        e->irq_bank = i915_engine_info[i].irq_bank;
+        e->uabi_class = i915_engine_info[i].uabi_class;
+        e->linux_id = i915_engine_info[i].linux_id;
+        e->reset_domain = i915_engine_info[i].reset_domain;
+        e->fault_reg = i915_engine_info[i].fault_reg;
         wait_queue_init(&e->wq);
     }
     for (i = 0; i < I915_NUM_ENGINES && err == 0; i++) {
@@ -321,14 +339,16 @@ int32_t i915_gt_init(struct drm_i915_private *i915)
     }
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         struct i915_engine *e = &gt->engine[i];
-        (void)i915_irq_register(i915, I915_IRQ_GT, e->irq_bit, i915_ring_irq, e);
+        (void)i915_irq_register(i915, e->irq_bank, e->irq_bit, i915_ring_irq, e);
     }
     klog(KLOG_INFO, "i915",
-         "rings: rcs0 and bcs0 started: %u KiB each at 0x%x and 0x%x, status pages at 0x%x "
-         "and 0x%x",
+         "rings: rcs0, bcs0, vcs0 and vecs0 started: %u KiB each at 0x%x, 0x%x, 0x%x and 0x%x, "
+         "status pages at 0x%x, 0x%x, 0x%x and 0x%x",
          (unsigned)(I915_RING_SIZE / 1024), (unsigned)gt->engine[I915_RCS0].ring_ggtt,
-         (unsigned)gt->engine[I915_BCS0].ring_ggtt, (unsigned)gt->engine[I915_RCS0].hws_ggtt,
-         (unsigned)gt->engine[I915_BCS0].hws_ggtt);
+         (unsigned)gt->engine[I915_BCS0].ring_ggtt, (unsigned)gt->engine[I915_VCS0].ring_ggtt,
+         (unsigned)gt->engine[I915_VECS0].ring_ggtt, (unsigned)gt->engine[I915_RCS0].hws_ggtt,
+         (unsigned)gt->engine[I915_BCS0].hws_ggtt, (unsigned)gt->engine[I915_VCS0].hws_ggtt,
+         (unsigned)gt->engine[I915_VECS0].hws_ggtt);
     return 0;
 }
 
@@ -342,7 +362,7 @@ void i915_gt_fini(struct drm_i915_private *i915)
         struct i915_engine *e = &gt->engine[i];
 
         if (e->running) {
-            i915_irq_unregister(i915, I915_IRQ_GT, e->irq_bit);
+            i915_irq_unregister(i915, e->irq_bank, e->irq_bit);
             i915_write(&i915->hw, RING_IMR(e->mmio_base), 0xffffffffu);
             (void)i915_ring_stop(i915, e, 0);
             e->running = 0;
@@ -456,10 +476,11 @@ int i915_engine_passed(const struct i915_engine *e, uint32_t seqno)
 void i915_engine_irq_get(struct drm_i915_private *i915, struct i915_engine *e)
 {
     if (e->irq_refs++ == 0) {
-        /* The ring's own mask before the GT's, as gen6_irq_enable. */
+        /* The ring's own mask before its bank's, as gen6_irq_enable and
+         * hsw_irq_enable_vecs. */
         i915_uncore_write(i915, RING_IMR(e->mmio_base), ~e->irq_bit);
         (void)i915_uncore_read(i915, RING_IMR(e->mmio_base));
-        i915_irq_unmask(i915, I915_IRQ_GT, e->irq_bit);
+        i915_irq_unmask(i915, e->irq_bank, e->irq_bit);
     }
 }
 
@@ -470,7 +491,7 @@ void i915_engine_irq_put(struct drm_i915_private *i915, struct i915_engine *e)
     }
     if (--e->irq_refs == 0) {
         i915_uncore_write(i915, RING_IMR(e->mmio_base), 0xffffffffu);
-        i915_irq_mask(i915, I915_IRQ_GT, e->irq_bit);
+        i915_irq_mask(i915, e->irq_bank, e->irq_bit);
     }
 }
 

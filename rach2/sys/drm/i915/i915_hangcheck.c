@@ -23,8 +23,9 @@
  */
 
 /* Why an engine is reset, as Linux's heartbeat says it, by index. */
-static const char *const heartbeat_msg[I915_NUM_ENGINES] = {"stopped heartbeat on rcs0",
-                                                            "stopped heartbeat on bcs0"};
+static const char *const heartbeat_msg[I915_NUM_ENGINES] = {
+    "stopped heartbeat on rcs0", "stopped heartbeat on bcs0", "stopped heartbeat on vcs0",
+    "stopped heartbeat on vecs0"};
 
 void i915_hangcheck_unpark(struct drm_i915_private *i915)
 {

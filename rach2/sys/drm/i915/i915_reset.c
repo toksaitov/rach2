@@ -22,18 +22,6 @@
 #define I915_GDRST_SETTLE_US 50u
 #define I915_RESET_RETRIES   3
 
-/** The domain of GEN6_GDRST that resets the engine at index `i`. */
-static uint32_t engine_domain(int i)
-{
-    return i == I915_RCS0 ? GEN6_GRDOM_RENDER : GEN6_GRDOM_BLT;
-}
-
-/** The fault register of the engine at index `i` (RING_FAULT_REG). */
-static uint32_t engine_fault_reg(int i)
-{
-    return i == I915_RCS0 ? RING_FAULT_REG_RCS : RING_FAULT_REG_BCS;
-}
-
 /**
  * Reset the domains `mask` of GEN6_GDRST, as Linux's gen6_hw_domain_reset:
  * the bits written and waited for until they read clear, twice, since a
@@ -78,8 +66,8 @@ static void clear_error_registers(struct drm_i915_private *i915, uint32_t engine
     }
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if (engine_mask & (1u << i)) {
-            (void)i915_rmw(&i915->hw, engine_fault_reg(i), RING_FAULT_VALID, 0);
-            i915_posting_read(&i915->hw, engine_fault_reg(i));
+            (void)i915_rmw(&i915->hw, i915->gt.engine[i].fault_reg, RING_FAULT_VALID, 0);
+            i915_posting_read(&i915->hw, i915->gt.engine[i].fault_reg);
         }
     }
 }
@@ -170,7 +158,6 @@ static int32_t engine_resume(struct drm_i915_private *i915, struct i915_engine *
 
 int32_t i915_reset_engine(struct drm_i915_private *i915, struct i915_engine *e, const char *msg)
 {
-    int i = e == &i915->gt.engine[I915_RCS0] ? I915_RCS0 : I915_BCS0;
     int32_t err;
 
     if (i915->gt.wedged || !e->running) {
@@ -185,7 +172,7 @@ int32_t i915_reset_engine(struct drm_i915_private *i915, struct i915_engine *e, 
     i915_ring_reset_prepare(i915, e);
     klog(KLOG_INFO, "i915", "reset: %s for %s", e->name, msg);
     i915->gt.reset_engine_count[i915_engine_uabi_class(e)]++;
-    err = gdrst(i915, engine_domain(i));
+    err = gdrst(i915, e->reset_domain);
     if (err == 0) {
         err = engine_resume(i915, e, engine_rewind(e, 1));
     } else {
@@ -238,7 +225,7 @@ static void revoke_mmaps(struct drm_i915_private *i915)
 void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const char *msg)
 {
     struct i915_gt *gt = &i915->gt;
-    uint32_t head[I915_NUM_ENGINES] = {0, 0};
+    uint32_t head[I915_NUM_ENGINES];
     int32_t err;
     int fw, i;
 
@@ -273,6 +260,7 @@ void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const c
              (unsigned)i915_read(&i915->hw, GEN6_GDRST));
     } else {
         for (i = 0; i < I915_NUM_ENGINES; i++) {
+            head[i] = 0;
             if (gt->engine[i].running) {
                 head[i] = engine_rewind(&gt->engine[i], (int)((stalled_mask >> i) & 1u));
             }
