@@ -11,27 +11,28 @@
  * host-deps: rach2/sys/drm/i915/intel_bios.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
- * The rows: the readout of pipe A, the eDP transcoder, DDI A, the plane and
- * the panel power sequencer, against what Linux's i915_display_info read on
- * the Lenovo (78-9.1); the bind's adoption, which writes no register of the
- * pipe, its link or the backlight but reads the panel over AUX, the eDP
- * connector's probe, and the console's takeover commit, which keeps the
- * mode, pins the new framebuffer and lets the firmware's go once the next
- * flip replaced it, while a refresh rate the panel lacks is refused (78-9.2);
- * the planes' formats, Linux's Haswell lists, and their checks of stride,
- * tiling and offset, the X-tiled offset's split and the sprite's registers
- * (78-9.3); a page flip's event at the vblank that shows it, with its count
- * and a rising stamp, an async flip's at flip done, and the count of
- * vblanks the frame counter kept while the interrupt was off (78-9.4); the
- * cursor's registers and the backlight, taken over from the boot's driver,
- * set and switched, off with the pipe, its transcoder and the panel's
- * power, and given back at the end (78-9.5); the pipe CRC through
- * crc/control and crc/data, its first frame dropped, "auto" the primary
- * plane on the eDP pipe and "pipe" refused there (78-9.6); and a mode
- * smaller than the panel's, set in Linux's register order through the
- * fitter with its aspect kept, then stretched by "scaling mode", and the
- * panel's own mode again, and a link that fails to train, its status set
- * bad for a hotplug event and good again with the next mode set (78-10b).
+ * The rows: the readout of pipe A, the eDP transcoder, DDI A, the plane and the
+ * panel power sequencer, against what Linux's i915_display_info read on the
+ * Lenovo (78-9.1); the bind's adoption, which writes no register of the pipe,
+ * its link or the backlight but reads the panel over AUX, the eDP connector's
+ * probe, and the console's takeover commit, which keeps the mode, pins the new
+ * framebuffer and lets the firmware's go once the next flip replaced it, while
+ * a refresh rate the panel lacks is refused (78-9.2); the watermarks of the
+ * console's plane, the low-power levels on after the vblank; the planes'
+ * formats, Linux's Haswell lists, and their checks of stride, tiling and
+ * offset, the X-tiled offset's split and the sprite's registers and watermarks
+ * (78-9.3); a page flip's event at the vblank that shows it, with its count and
+ * a rising stamp, an async flip's at flip done, and the count of vblanks the
+ * frame counter kept while the interrupt was off (78-9.4); the cursor's
+ * registers and the backlight, taken over from the boot's driver, set and
+ * switched, off with the pipe, its transcoder and the panel's power, and given
+ * back at the end (78-9.5); the pipe CRC through crc/control and crc/data, its
+ * first frame dropped, "auto" the primary plane on the eDP pipe and "pipe"
+ * refused there (78-9.6); and a mode smaller than the panel's, set in Linux's
+ * register order through the fitter with its aspect kept, then stretched by
+ * "scaling mode", and the panel's own mode again, and a link that fails to
+ * train, its status set bad for a hotplug event and good again with the next
+ * mode set (78-10b).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -54,6 +55,7 @@
 #include "drm/i915/intel_dp.c"
 #include "drm/i915/intel_panel.c"
 #include "drm/i915/intel_pfit.c"
+#include "drm/i915/intel_wm.c"
 #include "i915_model.h"
 #include "i915_model_pipe.h"
 #include "i915_model_ring.h"
@@ -638,6 +640,17 @@ static void row_takeover(void)
     CHECK(!wrote_range(0x60000u, 0x6ffffu, from) && !wrote_range(0xc7200u, 0xc72ffu, from),
           "takeover: no transcoder, pipe or panel register written");
     CHECK(reg(CPU_VGACNTRL) & VGA_DISP_DISABLE, "takeover: the VGA plane off");
+    /* Linux's values at the latencies 2, 2, 18, 45 and 80 us: level 0, and
+     * LP1 level 1, LP2 level 3 and LP3 level 4 with each level's latency
+     * field, written off before the vblank the blocking commit waits for
+     * and on after it. */
+    CHECK(reg(WM0_PIPE_ILK(0)) == 12u << 16 && !pa->wm_pending &&
+              i915_model_find_write(&model, WM1_LP_ILK, 0x02300c00u, from) >= 0 &&
+              i915_model_find_write(&model, WM1_LP_ILK, 0x82300c00u, from) >
+                  i915_model_find_write(&model, WM1_LP_ILK, 0x02300c00u, from) &&
+              reg(WM1_LP_ILK) == 0x82300c00u && reg(WM2_LP_ILK) == 0x8650d900u &&
+              reg(WM3_LP_ILK) == 0x88715800u,
+          "takeover: the watermarks of 1366 pixels, the low-power levels on after the vblank");
     frame();
     CHECK(i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(0),
           "takeover: the plane scans the console's buffer after the vblank");
@@ -858,9 +871,10 @@ static void row_sprite(void)
               reg(SPRCTL(0)) == (SPRITE_ENABLE | SPRITE_PLANE_GAMMA_DISABLE |
                                  SPRITE_FORMAT_RGBX888 | SPRITE_RGB_ORDER_RGBX),
           "sprite: its registers");
-    CHECK(gpu.display.lp_wm_off && !(reg(WM1_LP_ILK) & WM_LP_ENABLE) &&
-              ((reg(WM0_PIPE_ILK(0)) >> 8) & 0x7fu) != 0,
-          "sprite: its level 0 watermark, the low-power ones off");
+    CHECK(((reg(WM0_PIPE_ILK(0)) >> 8) & 0xffu) == 6u && reg(WM1S_LP_ILK) == 6u &&
+              reg(WM2S_LP_IVB) == 14u && reg(WM3S_LP_IVB) == 18u &&
+              (reg(WM3_LP_ILK) & WM_LP_ENABLE) && !(reg(WM_MISC) & WM_MISC_DATA_PARTITION_5_6),
+          "sprite: its watermarks at levels 0, 1, 3 and 4, the FIFO split 1:1");
     frame();
     CHECK(i915_model_pipes(&model)->pipe[0].sprite.surf == BO_GGTT(8),
           "sprite: scanned after the vblank");

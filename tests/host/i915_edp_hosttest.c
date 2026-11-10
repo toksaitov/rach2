@@ -54,6 +54,7 @@
 #include "drm/i915/intel_dp.c"
 #include "drm/i915/intel_panel.c"
 #include "drm/i915/intel_pfit.c"
+#include "drm/i915/intel_wm.c"
 #include "i915_model.h"
 #include "i915_model_pipe.h"
 #include "i915_model_sink.h"
