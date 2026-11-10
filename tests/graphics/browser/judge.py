@@ -45,8 +45,8 @@ def crocus(result, browser, fake):
         assert (graphics.get("Vendor ID"), graphics.get("Device ID")) == ("0x8086", "0x0a16"), graphics
     else:
         assert "HD Graphics 4400" in (result["gl_renderer"] or ""), result["gl_renderer"]
-        assert result["webgl_status"] == "WebGL: Hardware accelerated", result["webgl_status"]
-        assert any("crocus" in line for line in result["loader"]), result["loader"]
+        assert result["webgl_status"] == "Hardware accelerated", result["webgl_status"]
+        assert result["gpu0"] == ["0x8086", "0x0a16"], result["gpu0"]
     assert "llvmpipe" not in result["webgl"]["renderer"].lower(), result["webgl"]
     if not fake:
         assert result["webgl"]["pixel"] == [255, 128, 0, 255], result["webgl"]
