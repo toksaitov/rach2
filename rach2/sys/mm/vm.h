@@ -427,18 +427,19 @@ int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear);
 
 /**
- * Give each region of [start, end) but those of device memory the lock
- * bits `bits`, VM_PROT_LOCKED alone, with VM_PROT_LOCKONFAULT, or 0 to
- * unlock, in place of those it had; [start, end) must be covered without a
+ * Give each region of [start, end) but those of device memory and of
+ * memfd_secret the lock bits `bits`, VM_PROT_LOCKED alone, with
+ * VM_PROT_LOCKONFAULT, or 0 to unlock, in place of those it had, as Linux's
+ * mlock_fixup passes those over; [start, end) must be covered without a
  * gap, and the regions it cuts are split at its ends and merged as
  * `vm_protect` does. Returns 0; -1 for a gap; -2 when a split has no room.
  * An error leaves the regions as they were.
  */
 int vm_lock(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t bits);
 
-/** Give every region but those of device memory the lock bits `bits`, as
- * `vm_lock` does over the whole space, for mlockall and munlockall; no
- * region is split, so it cannot fail. */
+/** Give every region but those of device memory and of memfd_secret the
+ * lock bits `bits`, as `vm_lock` does over the whole space, for mlockall
+ * and munlockall; no region is split, so it cannot fail. */
 void vm_lock_all(vm_space_t *vm, uint32_t bits);
 
 /** Bytes of [start, end) that locked regions cover, and with the whole

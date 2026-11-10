@@ -53,7 +53,8 @@
  *
  * `secret-refused`: /proc/self/mem cannot read the mapping (EIO),
  * process_vm_readv and get_mempolicy cannot (EFAULT), and mlock fails
- * with ENOMEM.
+ * with ENOMEM and leaves no lock mark in smaps, after which munlock
+ * succeeds.
  *
  * `secret-memlock`: under an RLIMIT_MEMLOCK of one page, a child may touch
  * one page of memfd_secret and is killed by SIGBUS at the second, whether or
@@ -641,7 +642,10 @@ static void secret_map_rows(void)
         counted("secret page query did not populate the file", count(fd, 0, 0, &c), &c, 1, 0);
     }
     expect("mlock", mlock(m, PAGE), 0, ENOMEM);
-    munlock(m, PAGE);
+    if (has_flag(m, "lo")) {
+        miss("mlock marked the secret mapping locked");
+    }
+    expect("munlock", munlock(m, PAGE), 0, 0);
     munmap(m, 3 * PAGE);
     if (twin != MAP_FAILED) {
         munmap(twin, PAGE);

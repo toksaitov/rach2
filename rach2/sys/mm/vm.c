@@ -721,7 +721,8 @@ uintptr_t vm_sealed_at(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 
 int vm_lock(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t bits)
 {
-    return vm_change(vm, start, end, VM_PROT_LOCKS, bits & VM_PROT_LOCKS, VM_PROT_IO);
+    return vm_change(vm, start, end, VM_PROT_LOCKS, bits & VM_PROT_LOCKS,
+                     VM_PROT_IO | VM_PROT_SECRET);
 }
 
 void vm_lock_all(vm_space_t *vm, uint32_t bits)
@@ -729,7 +730,7 @@ void vm_lock_all(vm_space_t *vm, uint32_t bits)
     vma_t *r;
 
     for (r = vm->first; r; r = r->next) {
-        if (!(r->prot & VM_PROT_IO)) {
+        if (!(r->prot & (VM_PROT_IO | VM_PROT_SECRET))) {
             r->prot = (r->prot & ~(uint32_t)VM_PROT_LOCKS) | (bits & VM_PROT_LOCKS);
         }
     }
