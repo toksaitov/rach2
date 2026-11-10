@@ -1,0 +1,33 @@
+{
+  "draw": {
+    "d3d932": "3f9a06f0",
+    "d3d964": "3f9a06f0",
+    "gl32": "0017e166",
+    "gl64": "0017e166"
+  },
+  "maps": {
+    "hold32": {
+      "dos": 1048576,
+      "low": 1743716352,
+      "top32": 16711680,
+      "top64": 33488896
+    },
+    "hold64": {
+      "dos": 987136,
+      "low": 6930432,
+      "top32": 2162688,
+      "top64": 33488896
+    }
+  },
+  "record": {
+    "cpus": 4,
+    "guest_memory_mib": 8192,
+    "made": "2026-11-10 by tests/system/games/reference.sh",
+    "memory_mib": 7947,
+    "profile": "virgl",
+    "proton": "GE-Proton11-12",
+    "qemu": "10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)",
+    "system": "Linux debian-ref 6.12.115+deb13.1-amd64",
+    "weston_renderer": "virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))"
+  }
+}
