@@ -15,10 +15,30 @@
 // is not run; its result is `omitted`. The page posts to /event, as each is
 // known: the renderer, the list's length and digest, each page started, a
 // tick every 10 s while one runs, each page's result, and the end.
+//
+// The harness reads a list file whose fetch failed, with status 0, as an
+// empty one, and so gives a shorter list. The page posts each such fetch as
+// a `fetchfail` and loads again, with try=N counting, before it runs
+// anything; after the fifth such load it ends without a list.
 const q = new URLSearchParams(location.search);
 const VERSION = q.get("version") || "2.0.1";
 const ONLY = (q.get("only") || "").split(",").filter(s => s !== "").map(Number);
 const OMIT = new Set((q.get("omit") || "").split(",").filter(s => s !== ""));
+const TRY = Number(q.get("try") || "0");
+const FAILED = [];
+
+const xhrOpen = XMLHttpRequest.prototype.open;
+const xhrSend = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+  this.runnerUrl = String(url);
+  return xhrOpen.call(this, method, url, ...rest);
+};
+XMLHttpRequest.prototype.send = function (body) {
+  this.addEventListener("loadend", () => {
+    if (this.status === 0) FAILED.push(this.runnerUrl);
+  });
+  return xhrSend.call(this, body);
+};
 
 function post(event) {
   return fetch("/event", { method: "POST", body: JSON.stringify(event), keepalive: true });
@@ -95,6 +115,16 @@ function report(type, url, msg, success, skipped) {
 let harness = null;
 
 async function ready() {
+  if (FAILED.length > 0) {
+    await post({ kind: "fetchfail", try: TRY, urls: FAILED });
+    if (TRY >= 4) {
+      post({ kind: "done", ok: false, message: "the list's files could not be fetched" });
+      return;
+    }
+    q.set("try", String(TRY + 1));
+    location.replace("?" + q.toString());
+    return;
+  }
   post({ kind: "list", version: VERSION, count: files.length, sha256: await digest(files.join("\n") + "\n") });
   const chosen = ONLY.filter(i => i >= 0 && i < files.length);
   await Promise.all(chosen.filter(i => OMIT.has(files[i])).map(i => post({
