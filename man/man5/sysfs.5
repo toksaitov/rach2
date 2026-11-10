@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm sysfs
-.Nd the devices, input devices, display devices, network interfaces, clock, backlights and sleep states under /sys
+.Nd the devices, input devices, display devices, network interfaces, processors, firmware, clock, backlights and sleep states under /sys
 .Sh DESCRIPTION
 The kernel mounts a synthetic, read-only file system at
 .Pa /sys ,
@@ -645,6 +645,143 @@ glibc's
 .Xr sysconf 3
 counts the processors that are online from
 .Pa online .
+.It Pa /sys/devices/system/cpu/cpuN/cache
+A directory
+.Pa indexM
+for each of the processor's caches, M from 0, as Linux's
+.Pa cacheinfo
+describes them from
+.Fn cpuid :
+leaf 4 on Intel and on every vendor but AMD and Hygon, leaf 0x8000001D on
+those two when it is there, and otherwise AMD's leaves 0x80000005 and
+0x80000006, which give an L1 data, an L1 instruction, an L2 and an L3
+cache, the last only when the processor has one.
+A processor that describes no cache has no
+.Pa cache .
+Wine reads these for
+.Fn GetLogicalProcessorInformation .
+.It Pa /sys/devices/system/cpu/cpuN/cache/indexM
+A cache:
+.Pa level ;
+.Pa type ,
+.Ql Data ,
+.Ql Instruction
+or
+.Ql Unified ;
+.Pa size ,
+in KiB with a
+.Ql K
+after it, such as
+.Ql 32K ;
+.Pa coherency_line_size ,
+the line in bytes;
+.Pa ways_of_associativity ;
+.Pa number_of_sets ;
+.Pa physical_line_partition ,
+the lines to a tag;
+.Pa id ,
+the APIC ID above the bits that number the logical processors that share
+it; and
+.Pa shared_cpu_map
+and
+.Pa shared_cpu_list ,
+the processors started that share it, as a mask and as a list.
+Two processors share a cache whose leaf says that several share it when
+their APIC IDs agree above those bits; on AMD's older leaves the L3 is
+shared by the package, and every other cache is the processor's own.
+The figures are Linux's, from the same leaves, in Linux's text.
+.It Pa /sys/devices/system/node
+The NUMA nodes, of which there is one:
+.Pa possible ,
+.Pa online ,
+.Pa has_cpu ,
+.Pa has_memory
+and
+.Pa has_normal_memory ,
+each
+.Ql 0 ,
+and its directory
+.Pa node0 .
+.It Pa /sys/devices/system/node/node0
+The one node, which has every processor and all the memory:
+.Pa cpumap
+and
+.Pa cpulist ,
+the processors started as a mask and as a list, and
+.Pa distance ,
+.Ql 10 ,
+its distance from itself.
+.It Pa /sys/devices/system/clocksource/clocksource0
+.Pa current_clocksource ,
+the counter that keeps the clock, by Linux's name:
+.Ql tsc ,
+.Ql hpet ,
+.Ql acpi_pm ,
+or
+.Ql jiffies
+when the tick alone keeps it; and
+.Pa available_clocksource ,
+the counters there are, best first as Linux rates them, each followed by
+a space.
+Neither may be written.
+.It Pa /sys/class/dmi/id
+The firmware's SMBIOS fields, a file for each that its table holds, as
+Linux's DMI code reads them:
+.Pa bios_vendor ,
+.Pa bios_version ,
+.Pa bios_date
+and
+.Pa bios_release
+from the BIOS Information structure, with
+.Pa ec_firmware_release ;
+.Pa sys_vendor ,
+.Pa product_name ,
+.Pa product_version ,
+.Pa product_serial ,
+.Pa product_uuid ,
+.Pa product_sku
+and
+.Pa product_family
+from the System Information structure;
+.Pa board_vendor ,
+.Pa board_name ,
+.Pa board_version ,
+.Pa board_serial
+and
+.Pa board_asset_tag
+from the Base Board Information structure; and
+.Pa chassis_vendor ,
+.Pa chassis_type ,
+.Pa chassis_version ,
+.Pa chassis_serial
+and
+.Pa chassis_asset_tag
+from the Chassis Information structure.
+Each is taken from the first structure of its type long enough to hold
+it.
+A string that the structure does not name, or one of spaces alone, is
+empty; a release is
+.Ql MAJOR.MINOR ,
+and absent when the firmware gives 0xFF for both; the chassis type is
+in decimal; the UUID is in lowercase with its dashes, with its first
+three fields' bytes reversed from SMBIOS 2.6 on, and absent when it is
+all zeros or all ones.
+The serial numbers and the UUID have mode 0400, and are
+.Er EACCES
+to a caller that is not privileged.
+.Pa modalias
+is
+.Ql dmi: ,
+then for each field of Linux's list the table holds a short prefix and
+the field with its spaces, its colons and its bytes past ASCII taken out,
+each after a colon, and a colon at the end, as Linux makes it for
+udev's hardware database.
+Wine reads these for its own SMBIOS table.
+On Linux
+.Pa id
+is a link to
+.Pa /sys/devices/virtual/dmi/id ;
+here it is the directory itself.
 .It Pa /sys/devices/system/memory
 The memory blocks, which
 .Xr lsmem 1
@@ -808,8 +945,26 @@ is
 Linux's tree has much more: the other device classes, the attribute files
 beside a USB device's
 .Pa uevent ,
-the CPUs and the firmware interfaces.
+the processors' frequency, power and microcode files, and the firmware
+interfaces but the DMI fields.
 Rach2 has none of them.
+A cache's, a node's, the clock source's and the DMI directory have no
+.Pa uevent ,
+.Pa power
+or
+.Pa subsystem ;
+a node has no
+.Pa meminfo ,
+.Pa numastat
+or
+.Pa vmstat ;
+.Pa clocksource0
+has no
+.Pa unbind_clocksource ,
+and its counter cannot be changed.
+Linux lists the HPET and the ACPI PM timer when the machine has both;
+here only the one the kernel found is listed.
+A DMI string is cut at 63 bytes.
 .Pa /sys/dev/char
 lists only the DRM nodes and the event devices.
 A virtio-gpu card's
@@ -887,7 +1042,13 @@ The backlights.
 .It Pa /sys/power/state
 The sleep states.
 .It Pa /sys/devices/system/cpu
-The processors.
+The processors and their caches.
+.It Pa /sys/devices/system/node
+The one NUMA node.
+.It Pa /sys/devices/system/clocksource/clocksource0
+The clock sources.
+.It Pa /sys/class/dmi/id
+The firmware's SMBIOS fields.
 .It Pa /sys/devices/system/memory
 The memory blocks.
 .It Pa /sys/block
