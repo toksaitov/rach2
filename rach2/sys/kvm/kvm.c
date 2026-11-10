@@ -85,6 +85,7 @@ void kvm_vm_put(struct kvm_vm *vm)
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_free(vm->vcpus[i]);
     }
+    kvm_hv_vm_free(vm);
     kvm_tdp_free(vm);
     kvm_slots_free(vm);
     if (kvm_backend && kvm_backend->vm_free) {
@@ -142,6 +143,9 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     }
     if (r == 0) {
         r = kvm_iobus_check_extension(cap);
+    }
+    if (r == 0) {
+        r = kvm_hv_check_extension(cap);
     }
     if (r == 0 && kvm_backend && kvm_backend->check_extension) {
         r = kvm_backend->check_extension(cap);
@@ -337,6 +341,8 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return get_supported_cpuid(arg, 1);
     case KVM_X86_GET_MCE_CAP_SUPPORTED:
         return copy_to_user((void __user *)arg, &mce, sizeof(mce)) ? -EFAULT : 0;
+    case KVM_GET_SUPPORTED_HV_CPUID:
+        return kvm_hv_get_cpuid(NULL, arg);
     default:
         return -ENOTTY;
     }
@@ -385,6 +391,7 @@ static int32_t set_clock(struct kvm_vm *vm, uintptr_t arg)
         }
     }
     vm->clock_offset = (int64_t)(clock - now);
+    kvm_hv_clock_changed(vm);
     return 0;
 }
 
@@ -486,6 +493,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return kvm_irq_ioctl(vm, request, arg);
     case KVM_IOEVENTFD:
         return kvm_iobus_ioctl(vm, request, arg);
+    case KVM_HYPERV_EVENTFD:
+        return kvm_hv_eventfd(vm, arg);
     default:
         return -ENOTTY;
     }

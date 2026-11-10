@@ -329,6 +329,7 @@ void kvm_vcpu_free(struct kvm_vcpu *v)
         kvm_backend->vcpu_free(v);
     }
     kvm_lapic_free(v);
+    kvm_hv_vcpu_free(v);
     if (v->run) {
         kfree_pages(v->run, KVM_RUN_PAGES);
     }
@@ -572,6 +573,10 @@ static int32_t run_exit(struct kvm_vcpu *v)
         run->exit_reason = KVM_EXIT_SYSTEM_EVENT;
         run->u.system_event = ex->system_event;
         return 1;
+    case KVM_X_HYPERV:
+        run->exit_reason = KVM_EXIT_HYPERV;
+        run->u.hyperv = ex->hyperv;
+        return 1;
     default:
         break;
     }
@@ -639,6 +644,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
     if (v->pending) {
         run_complete(v);
     }
+    kvm_hv_complete(v);
     if (run->immediate_exit) {
         return -EINTR;
     }
@@ -650,6 +656,10 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (kvm_vcpu_test_clear(v, KVM_REQ_EXIT) || signal_pending()) {
             run->exit_reason = KVM_EXIT_INTR;
             return -EINTR;
+        }
+        r = kvm_hv_prepare(v);
+        if (r != 0) {
+            return 0;
         }
         if (split) {
             r = kvm_lapic_prepare(v);
@@ -1126,6 +1136,10 @@ static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
         kfree(ent);
         return same ? 0 : -EINVAL;
     }
+    if (kvm_hv_set_cpuid(v, ent, head.nent) != 0) {
+        kfree(ent);
+        return -ENOMEM;
+    }
     kfree(v->cpuid);
     v->cpuid = ent;
     v->cpuid_nent = head.nent;
@@ -1441,17 +1455,20 @@ static int32_t set_signal_mask(struct kvm_vcpu *v, uintptr_t arg)
     return 0;
 }
 
-/** KVM_ENABLE_CAP of a vCPU: Linux's x86 vCPU capabilities are Hyper-V's
- * and the enforcement of paravirtual features, which are not offered:
- * -EINVAL, as for one not enabled. */
-static int32_t vcpu_enable_cap(uintptr_t arg)
+/** KVM_ENABLE_CAP of a vCPU: Linux's x86 vCPU capabilities are Hyper-V's,
+ * hyperv.c's, and the enforcement of paravirtual features, which is not
+ * offered. -EINVAL for a flag or a capability not enabled, as Linux. */
+static int32_t vcpu_enable_cap(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_enable_cap cap;
 
     if (copy_from_user(&cap, (const void __user *)arg, sizeof(cap)) != 0) {
         return -EFAULT;
     }
-    return -EINVAL;
+    if (cap.flags) {
+        return -EINVAL;
+    }
+    return kvm_hv_enable_cap(v, &cap);
 }
 
 /** The ioctls of `v` but KVM_RUN, under its lock. */
@@ -1538,7 +1555,9 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         }
         return kvm_lapic_ioctl(v, request, arg);
     case KVM_ENABLE_CAP:
-        return vcpu_enable_cap(arg);
+        return vcpu_enable_cap(v, arg);
+    case KVM_GET_SUPPORTED_HV_CPUID:
+        return kvm_hv_get_cpuid(v, arg);
     default:
         return -EINVAL;
     }

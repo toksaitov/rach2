@@ -1,7 +1,5 @@
 # sys/kvm/sources.mk: Linux's KVM interface, for sys/arch/x86_64/sources.mk
-# alone, so that the i686 kernel builds without it. The files the later
-# tasks of milestone 81 fill are here from the start, as stubs, so that no
-# task edits this list. One file to a line.
+# alone, so that the i686 kernel builds without it. One file to a line.
 
 KVM_ASM_SRC = sys/kvm/svm_run.s \
     sys/kvm/vmx_run.s
@@ -19,4 +17,5 @@ KVM_C_SRC = sys/kvm/kvm.c \
     sys/kvm/tdp.c \
     sys/kvm/dirty.c \
     sys/kvm/decode.c \
-    sys/kvm/emulate.c
+    sys/kvm/emulate.c \
+    sys/kvm/hyperv.c

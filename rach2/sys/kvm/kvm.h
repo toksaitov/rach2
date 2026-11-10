@@ -67,16 +67,17 @@ struct kvm_vcpu;
  * others go to the caller as their KVM_EXIT_* reasons.
  */
 enum kvm_exit_kind {
-    KVM_X_AGAIN = 0,   /* handled in the kernel; enter again */
-    KVM_X_IO,          /* port I/O */
-    KVM_X_MMIO,        /* an access to guest-physical memory with no slot */
-    KVM_X_HLT,         /* the guest halted with interrupts enabled */
-    KVM_X_SHUTDOWN,    /* a triple fault */
-    KVM_X_IRQ_WINDOW,  /* the window the caller asked for is open */
-    KVM_X_INTERNAL,    /* an exit the backend cannot handle */
-    KVM_X_FAIL_ENTRY,  /* the processor refused the entry */
-    KVM_X_DEBUG,       /* a debug exception under KVM_SET_GUEST_DEBUG */
-    KVM_X_SYSTEM_EVENT /* a reset or shutdown the guest asked for */
+    KVM_X_AGAIN = 0,    /* handled in the kernel; enter again */
+    KVM_X_IO,           /* port I/O */
+    KVM_X_MMIO,         /* an access to guest-physical memory with no slot */
+    KVM_X_HLT,          /* the guest halted with interrupts enabled */
+    KVM_X_SHUTDOWN,     /* a triple fault */
+    KVM_X_IRQ_WINDOW,   /* the window the caller asked for is open */
+    KVM_X_INTERNAL,     /* an exit the backend cannot handle */
+    KVM_X_FAIL_ENTRY,   /* the processor refused the entry */
+    KVM_X_DEBUG,        /* a debug exception under KVM_SET_GUEST_DEBUG */
+    KVM_X_SYSTEM_EVENT, /* a reset or shutdown the guest asked for */
+    KVM_X_HYPERV        /* a Hyper-V hypercall the caller answers */
 };
 
 /*
@@ -85,8 +86,9 @@ enum kvm_exit_kind {
  * port I/O page; for KVM_X_MMIO, `mmio`; for KVM_X_INTERNAL, `internal`
  * as Linux's kvm_run.internal; for KVM_X_FAIL_ENTRY, the processor's reason
  * in `hw_reason`; for KVM_X_DEBUG, `debug`; for KVM_X_SYSTEM_EVENT,
- * `system_event`. A port or MMIO read the caller answers comes back to the
- * backend through `complete` before the next entry.
+ * `system_event`; for KVM_X_HYPERV, `hyperv`. A port or MMIO read the
+ * caller answers comes back to the backend through `complete` before the
+ * next entry.
  */
 struct kvm_exit {
     enum kvm_exit_kind kind;
@@ -95,6 +97,7 @@ struct kvm_exit {
     struct kvm_run_internal internal;
     struct kvm_run_debug debug;
     struct kvm_run_system_event system_event;
+    struct kvm_hyperv_exit hyperv;
     uint64_t hw_reason;
     uint8_t data[4096]; /* the bytes of an OUT, or of an IN once answered */
 };
@@ -159,7 +162,11 @@ struct kvm_tdp_format {
  * base, the TSC deadline and the x2APIC registers go to `kvm_lapic_msr`,
  * and a backend that lets the guest write CR8 without an exit gives the
  * value to `kvm_lapic_set_cr8` after each exit and loads `kvm_lapic_cr8`'s
- * before each entry, since CR8 is the APIC's TPR. `check_extension` answers
+ * before each entry, since CR8 is the APIC's TPR. A guest's VMCALL or
+ * VMMCALL goes to `kvm_hv_hypercall` while `kvm_hv_hypercall_enabled`; the
+ * flush KVM_REQ_TLB_FLUSH asks for must drop the guest's own translations
+ * as well, since the Hyper-V TLB flush hypercalls ask for it to flush the
+ * guest's TLB. `check_extension` answers
  * the capabilities whose truth depends on the processor, such as
  * KVM_CAP_X86_ROBUST_SINGLESTEP: the value KVM_CHECK_EXTENSION gives, 0
  * for none. `tdp` is the format of its guest-physical entries.
@@ -209,6 +216,7 @@ struct kvm_vm {
     void *tdp;             /* tdp.c's */
     void *irq;             /* irq.c's */
     void *iobus;           /* iobus.c's */
+    void *hv;              /* hyperv.c's */
     void *backend;         /* the backend's */
 };
 
@@ -226,6 +234,9 @@ struct kvm_vm {
 #define KVM_REQ_TRIPLE_FAULT 0x4u  /* end in KVM_EXIT_SHUTDOWN */
 #define KVM_REQ_EOI_EXIT     0x8u  /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
 #define KVM_REQ_TLB_FLUSH    0x10u /* the backend drops the VM's guest-physical translations */
+#define KVM_REQ_HV_EXIT      0x20u /* end in KVM_EXIT_HYPERV (hyperv.c) */
+#define KVM_REQ_HV_CRASH     0x40u /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
+#define KVM_REQ_HV_RESET     0x80u /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -323,6 +334,7 @@ struct kvm_vcpu {
     struct kvm_exit exit;
     struct kvm_emul emul; /* emulate.c's */
     void *lapic;          /* vlapic.c's */
+    void *hv;             /* hyperv.c's */
     void *backend;        /* the backend's */
 };
 
@@ -660,7 +672,8 @@ int kvm_lapic_pending(struct kvm_vcpu *v);
 
 /** Take the vector `kvm_lapic_pending` gives, as the processor's
  * acknowledgement does: the external vector is used up, or the APIC's moves
- * from IRR to ISR. The vector, or -1 for none. */
+ * from IRR to ISR, or leaves IRR alone for a SynIC's auto-EOI SINT. The
+ * vector, or -1 for none. */
 int kvm_lapic_ack(struct kvm_vcpu *v);
 
 /** Offer the MMIO access of `v->exit` to `v`'s APIC page: 1 when it was
@@ -691,7 +704,8 @@ void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8);
 
 /**
  * Ready `v` for an entry, before each one, with the local APIC in the
- * kernel: deliver an expired timer, take an INIT or a SIPI, wait while the
+ * kernel: deliver an expired timer, the APIC's or a Hyper-V synthetic
+ * timer (`kvm_hv_stimers`), take an INIT or a SIPI, wait while the
  * vCPU is halted or waits for a SIPI until an event wakes it, and make
  * an interrupt waiting an event to inject (KVM_REQ_EVENT). 0 to enter; 1
  * to go to the caller with the run page's exit set, KVM_EXIT_IOAPIC_EOI;
@@ -703,6 +717,112 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
  * run page's `ready_for_interrupt_injection` with the APIC in the kernel:
  * the guest takes interrupts, none waits, and LINT0 takes ExtINT. */
 int kvm_lapic_ready(struct kvm_vcpu *v);
+
+/** Make `vector` a fixed, edge-triggered interrupt of `v`'s APIC, as
+ * Linux's kvm_apic_set_irq: 1 when the APIC took it, 0 while it is
+ * disabled, -1 with no APIC. Safe from any context. */
+int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector);
+
+/** Read or write, by `write`, the APIC register at `reg` (APIC_EOI,
+ * APIC_ICR or APIC_TASKPRI) of `v` as an x2APIC MSR does, in either mode,
+ * for Hyper-V's EOI, ICR and TPR MSRs: 0, or 1 for a value or register
+ * refused, or no APIC. */
+int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *value);
+
+/* hyperv.c: Hyper-V's enlightenments, for a vCPU whose CPUID has Hyper-V's
+ * interface at leaf 0x40000001. Each runs under the big lock unless it
+ * says otherwise. */
+
+/** The capabilities of hyperv.c: HYPERV, HYPERV_VAPIC, HYPERV_SPIN,
+ * HYPERV_TIME, HYPERV_SYNIC, HYPERV_SYNIC2, HYPERV_VP_INDEX,
+ * HYPERV_EVENTFD, HYPERV_TLBFLUSH, HYPERV_SEND_IPI, HYPERV_CPUID,
+ * HYPERV_ENFORCE_CPUID and SYS_HYPERV_CPUID. */
+int32_t kvm_hv_check_extension(long cap);
+
+/** KVM_GET_SUPPORTED_HV_CPUID, of /dev/kvm for `v` NULL or of the vCPU
+ * `v`, as Linux's kvm_get_hv_cpuid: the ten leaves and their count. 0,
+ * -E2BIG for room for fewer, or -EFAULT. */
+int32_t kvm_hv_get_cpuid(struct kvm_vcpu *v, uintptr_t arg);
+
+/** KVM_HYPERV_EVENTFD: an eventfd for a connection id that the guest's
+ * HvSignalEvent signals, or its removal. 0; -EINVAL for a flag or an id
+ * past 24 bits; -EEXIST for an id assigned; -ENOENT for one not;
+ * eventfd_get's error; -ENOMEM; -EFAULT. */
+int32_t kvm_hv_eventfd(struct kvm_vm *vm, uintptr_t arg);
+
+/** KVM_ENABLE_CAP of the vCPU `v`'s Hyper-V capabilities: HYPERV_SYNIC and
+ * HYPERV_SYNIC2, which need the split controller, and
+ * HYPERV_ENFORCE_CPUID. 0; -ENOTTY for ENLIGHTENED_VMCS and
+ * DIRECT_TLBFLUSH, a nested guest's; -EINVAL for any other; -ENOMEM. */
+int32_t kvm_hv_enable_cap(struct kvm_vcpu *v, const struct kvm_enable_cap *cap);
+
+/** Take `v`'s new CPUID, the `n` entries `e`, before KVM_SET_CPUID2 makes
+ * it the vCPU's: Hyper-V is on when it names the interface, and its
+ * feature leaves are kept. 0, or -ENOMEM. */
+int kvm_hv_set_cpuid(struct kvm_vcpu *v, const struct kvm_cpuid_entry2 *e, uint32_t n);
+
+/** Read or write, by `write`, the MSR `index` of `v` when it is one of
+ * Hyper-V's, from the caller of KVM_GET_MSRS or KVM_SET_MSRS with `host`
+ * 1: 0; -1 for a fault the guest takes as #GP and the caller as a
+ * refusal; 1 for an MSR that is not Hyper-V's. */
+int kvm_hv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
+
+/** Whether `v`'s guest has Hyper-V and has written its guest OS id, so
+ * that its hypercalls are Hyper-V's. */
+int kvm_hv_hypercall_enabled(const struct kvm_vcpu *v);
+
+/** The guest's hypercall, a VMCALL or VMMCALL of `len` bytes: `v->exit`
+ * KVM_X_AGAIN with the result in RAX and RIP stepped, or with #UD queued,
+ * or KVM_X_HYPERV for one the caller answers, whose result
+ * `kvm_hv_complete` takes at the next KVM_RUN. 0. */
+int kvm_hv_hypercall(struct kvm_vcpu *v, uint32_t len);
+
+/** At the start of KVM_RUN, take the caller's answer to the last
+ * KVM_EXIT_HYPERV: a hypercall's result, or the synthetic debugger's
+ * status. */
+void kvm_hv_complete(struct kvm_vcpu *v);
+
+/** Ready `v` for an entry, before each one: write the reference TSC page
+ * once it changed, and end KVM_RUN for a crash, a reset or a SynIC or
+ * debugger MSR the guest wrote. 0 to enter; 1 to go to the caller with the
+ * run page's exit set. */
+int32_t kvm_hv_prepare(struct kvm_vcpu *v);
+
+/** Fire `v`'s synthetic timers that are due, delivering their messages or
+ * vectors, in `v`'s thread with the APIC in the kernel. */
+void kvm_hv_stimers(struct kvm_vcpu *v);
+
+/** The host's ns at which `v`'s next synthetic timer is due, 1 when one
+ * waits to be looked at now, or 0 for none. */
+uint64_t kvm_hv_stimer_next(const struct kvm_vcpu *v);
+
+/** Whether `vector` of `v` is a SINT's with auto-EOI, which the APIC's
+ * acknowledgement takes without putting it in service. */
+int kvm_hv_synic_auto_eoi(struct kvm_vcpu *v, uint32_t vector);
+
+/** An EOI of `vector` of `v`: a timer's message waiting for its SINT's
+ * slot is tried again. */
+void kvm_hv_synic_eoi(struct kvm_vcpu *v, uint32_t vector);
+
+/** Raise SINT `sint` of the vCPU of `vm` whose VP index is `vpidx`, for a
+ * KVM_IRQ_ROUTING_HV_SINT route: the APICs that took it, or -1 for no
+ * such vCPU, no active SynIC or a masked SINT. Safe without the big lock
+ * and with interrupts off. */
+int kvm_hv_synic_set_irq(struct kvm_vm *vm, uint32_t vpidx, uint32_t sint);
+
+/** Whether `v`'s guest is to see no invariant TSC, CPUID 0x80000007 EDX
+ * bit 8: Hyper-V's invariant TSC control is offered and not yet set. */
+int kvm_hv_invtsc_suppressed(const struct kvm_vcpu *v);
+
+/** The guest's clock or TSC of `vm` moved: the reference TSC page is
+ * written again before the next entry. */
+void kvm_hv_clock_changed(struct kvm_vm *vm);
+
+/** Free hyperv.c's share of `v`. */
+void kvm_hv_vcpu_free(struct kvm_vcpu *v);
+
+/** Free hyperv.c's share of `vm`, its connections' eventfds among them. */
+void kvm_hv_vm_free(struct kvm_vm *vm);
 
 /* emulate.c: the guest instructions the backends' exits hand over. Each
  * reads and writes the record's registers, which the backend keeps current
@@ -739,8 +859,8 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
 int kvm_guest_rw(struct kvm_vcpu *v, uint32_t seg, uint64_t ea, void *buf, uint32_t n, int write);
 
 /** CPUID from `v`'s KVM_SET_CPUID2 table for EAX and ECX, into EAX to EDX,
- * with the bits Linux keeps in step with CR4 and the APIC base. The caller
- * steps RIP. */
+ * with the bits Linux keeps in step with CR4, the APIC base and Hyper-V's
+ * invariant TSC control. The caller steps RIP. */
 void kvm_emul_cpuid(struct kvm_vcpu *v);
 
 /** XSETBV of EDX:EAX into XCR ECX, with Linux's checks: 0, or -1 with #GP
@@ -748,8 +868,8 @@ void kvm_emul_cpuid(struct kvm_vcpu *v);
 int kvm_emul_xsetbv(struct kvm_vcpu *v);
 
 /** The guest's RDMSR or WRMSR, by `write`, of `index`, for the MSRs every
- * backend answers the same way: the local APIC's, the TSC, the identity
- * MSRs and those msr.c keeps. 0, or -1 for #GP. */
+ * backend answers the same way: the local APIC's, Hyper-V's, the TSC, the
+ * identity MSRs and those msr.c keeps. 0, or -1 for #GP. */
 int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value);
 
 /**
