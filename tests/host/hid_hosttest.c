@@ -249,8 +249,11 @@ static char model_phys[24];
 static char model_uniq[HID_UNIQ_MAX];
 static uint16_t model_version;
 
+/* The bytes of the model's LED report. */
+static int model_led_len = 1;
+
 /** Refuse a descriptor of no bytes; take any other as one input report of
- * 8 bytes. */
+ * 8 bytes and an output report of `model_led_len`, a keyboard's LEDs. */
 int hid_parse(struct hid_desc *desc, const uint8_t *rdesc, int length)
 {
     (void)rdesc;
@@ -260,10 +263,13 @@ int hid_parse(struct hid_desc *desc, const uint8_t *rdesc, int length)
     desc->max_fields = 1;
     desc->max_usages = 1;
     desc->max_collections = 1;
-    desc->nreports = 1;
+    desc->nreports = 2;
     desc->reports[0].type = HID_INPUT_REPORT;
     desc->reports[0].id = 0;
     desc->reports[0].size = 64;
+    desc->reports[1].type = HID_OUTPUT_REPORT;
+    desc->reports[1].id = 0;
+    desc->reports[1].size = (uint32_t)model_led_len * 8;
     return 0;
 }
 
@@ -304,13 +310,17 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
  * without `model_leds`. */
 int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value)
 {
+    int i;
+
     (void)hid;
-    if (!model_leds || size < 1) {
+    if (!model_leds || size < model_led_len) {
         return -1;
     }
-    out[0] = (uint8_t)leds;
+    for (i = 0; i < model_led_len; i++) {
+        out[i] = (uint8_t)leds;
+    }
     *value = 0x0200;
-    return 1;
+    return model_led_len;
 }
 
 /* The LEDs beyond the first three that programs lit, a bit each. */
@@ -502,7 +512,7 @@ static void leds_rows(void)
 static void report_rows(void)
 {
     static const uint8_t rdesc[4] = {1, 2, 3, 4};
-    uint8_t out[8], report[8] = {0};
+    uint8_t out[8], out20[32], report[8] = {0};
     int value = 0;
 
     model_multiplier = 0;
@@ -555,6 +565,15 @@ static void report_rows(void)
               out[0] == ((1u << LED_NUML) | (1u << 4)));
     model_lit = 0;
     hid_gone(9);
+
+    model_multiplier = 0;
+    model_led_len = 20;
+    hid_attach(9, &qemu_mouse, rdesc, 4);
+    CHECK("report: an LED report of 20 bytes is asked room for and sent whole",
+          hid_output_size(9) == 20 && hid_output_report(9, out20, sizeof(out20), &value) == 20 &&
+              out20[19] == (1u << LED_NUML));
+    hid_gone(9);
+    model_led_len = 1;
     model_multiplier = 0;
 
     CHECK("report: a refused descriptor is passed back",

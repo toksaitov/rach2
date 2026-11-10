@@ -28,6 +28,7 @@
 #include "../klog.h"
 #include "../lib/kstring.h"
 #include "../lib/kirq.h"
+#include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "hid.h"
 #include "hub.h"
@@ -219,11 +220,17 @@ struct usb_device_state {
     char manufacturer[STRING_MAX];
     char product_name[STRING_MAX];
     char serial[STRING_MAX];
-    /* What the controller is given the addresses of: the last report, a
-     * HID device's output report, the setup packet and the descriptor
-     * being read. */
+    /* What the controller is given the addresses of: the last report, in
+     * `report` or, for a report longer, in `long_report` of `long_cap`
+     * bytes from the heap, `report_at` the one the transfer outstanding
+     * fills; the setup packet; and the descriptor being read, which a
+     * running HID device's output report takes the place of. */
     uint8_t report[64];
-    uint8_t output[16];
+    uint8_t *long_report;
+    int long_cap;
+    uint8_t *report_at;
+    uint8_t *long_output; /* an output report longer than `buffer`, of */
+    int long_output_cap;  /* this many bytes from the heap */
     uint8_t setup[8];
     uint8_t buffer[USB_DESC_MAX];
     uint32_t config_length; /* wTotalLength, from the configuration header */
@@ -286,10 +293,12 @@ static struct usb_device_state *dev_take(int i)
     return devices[i];
 }
 
-/** Give back entry `i`'s frame. */
+/** Give back entry `i`'s frame and its long report's buffer. */
 static void dev_release(int i)
 {
     if (devices[i]) {
+        kfree(devices[i]->long_report);
+        kfree(devices[i]->long_output);
         free_kernel_frame(devices[i]);
         devices[i] = 0;
     }
@@ -1017,7 +1026,8 @@ static void readdress_step(struct usb_device_state *d)
  */
 static void output_step(struct usb_device_state *d)
 {
-    int length, value;
+    int length, value, need;
+    uint8_t *out = d->buffer;
 
     if (d->have_control) {
         d->have_control = 0;
@@ -1033,14 +1043,27 @@ static void output_step(struct usb_device_state *d)
         }
         return;
     }
-    length = hid_output_report(d->index + 1, d->output, (int)sizeof(d->output), &value);
+    need = hid_output_size(d->index + 1);
+    if (need > (int)sizeof(d->buffer)) {
+        if (need > d->long_output_cap) {
+            kfree(d->long_output);
+            d->long_output = (uint8_t *)kzalloc((size_t)need);
+            d->long_output_cap = d->long_output ? need : 0;
+        }
+        if (!d->long_output) {
+            return; /* no memory for it yet: asked again next step */
+        }
+        out = d->long_output;
+    }
+    length = hid_output_report(
+        d->index + 1, out, need > (int)sizeof(d->buffer) ? need : (int)sizeof(d->buffer), &value);
     if (length < 0) {
         return;
     }
     setup_fill(d->setup, TYPE_TO_INTERFACE, REQ_SET_REPORT, value, d->interface.number, length);
     /* A transfer the endpoint refuses now is offered again at the next
      * step, since the driver offers what was not taken. */
-    if (control(d, USB_DIR_OUT, d->output, length) == 0) {
+    if (control(d, USB_DIR_OUT, out, length) == 0) {
         d->output_out = 1;
         d->output_deadline = core_ms + STEP_MS;
     }
@@ -1078,8 +1101,10 @@ static void step_running(struct usb_device_state *d)
     if (length < d->interface.ep_max_packet) {
         length = d->interface.ep_max_packet;
     }
-    if (length > (int)sizeof(d->report)) {
-        length = (int)sizeof(d->report);
+    if (length > (int)sizeof(d->report) && length > d->long_cap && !d->reporting) {
+        kfree(d->long_report);
+        d->long_report = (uint8_t *)kzalloc((size_t)length);
+        d->long_cap = d->long_report ? length : 0;
     }
 
     if (d->have_report) {
@@ -1093,7 +1118,7 @@ static void step_running(struct usb_device_state *d)
             return;
         } else {
             d->reports++;
-            hid_report(d->index + 1, d->report, (int)(completion.length - completion.residual));
+            hid_report(d->index + 1, d->report_at, (int)(completion.length - completion.residual));
         }
     }
 
@@ -1102,8 +1127,12 @@ static void step_running(struct usb_device_state *d)
     if (!d->reporting) {
         struct usb_transfer transfer;
 
+        if (length > (int)sizeof(d->report) && length > d->long_cap) {
+            return; /* no memory for its reports yet: asked again next step */
+        }
+        d->report_at = length > (int)sizeof(d->report) ? d->long_report : d->report;
         transfer.setup = 0;
-        transfer.buffer = d->report;
+        transfer.buffer = d->report_at;
         transfer.length = (uint32_t)length;
         transfer.direction = USB_DIR_IN;
         transfer.generation = 0;

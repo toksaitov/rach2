@@ -1888,6 +1888,50 @@ static void dma32_transfer_rows(void)
     xhci_dma32 = 0;
 }
 
+/**
+ * Check a control transfer whose data stage crosses two pages on device 1's
+ * endpoint zero, which the transfer rows have addressed: a Data Stage block
+ * of the first page's piece, a Normal block for each further piece chained
+ * to it, then the status block, and one completion for the whole.
+ */
+static void control_pages_rows(void)
+{
+    static uint8_t span[4 * 4096];
+    static uint8_t setup[8] = {0x21, 9, 0, 2, 0, 0, 0x88, 0x13};
+    uint8_t *at = (uint8_t *)(((uintptr_t)span + 4095) & ~(uintptr_t)4095) + 4000;
+    uint32_t e = hc->slots[1].enqueue[1];
+    const uint32_t *r = hc->slots[1].ring[1];
+    struct usb_transfer transfer;
+    struct usb_completion completion;
+    int fits = e + 5 < XHCI_EP_RING_TRBS - 1;
+
+    transfer.setup = setup;
+    transfer.buffer = at;
+    transfer.length = 5000;
+    transfer.direction = USB_DIR_OUT;
+    transfer.generation = 0;
+    CHECK("a control transfer of 5000 bytes across pages is queued",
+          fits && xhci_submit(hc, 1, 1, &transfer) == 0);
+    r += e * TRB_WORDS;
+    CHECK("its data stage is a Data Stage block of the first page's 96 bytes, chained",
+          ((r[TRB_WORDS + 3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_DATA &&
+              (r[TRB_WORDS + 2] & 0x1FFFFu) == 96 && (r[TRB_WORDS + 3] & TRB_CHAIN) &&
+              !(r[TRB_WORDS + 3] & TRB_IOC));
+    CHECK("then a Normal block of the next page, chained",
+          ((r[2 * TRB_WORDS + 3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_NORMAL &&
+              (r[2 * TRB_WORDS + 2] & 0x1FFFFu) == 4096 && (r[2 * TRB_WORDS + 3] & TRB_CHAIN));
+    CHECK("then the last 808 bytes, which ask for the event",
+          ((r[3 * TRB_WORDS + 3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_NORMAL &&
+              (r[3 * TRB_WORDS + 2] & 0x1FFFFu) == 808 && (r[3 * TRB_WORDS + 3] & TRB_IOC) &&
+              !(r[3 * TRB_WORDS + 3] & TRB_CHAIN));
+    CHECK("then the status block",
+          ((r[4 * TRB_WORDS + 3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_STATUS);
+    xhci_events(hc);
+    CHECK("it is reported whole", xhci_poll(hc, &completion) == 1 &&
+                                      completion.status == USB_XFER_OK &&
+                                      completion.length == 5000 && completion.residual == 0);
+}
+
 /** Run the rows of a controller without AC64. */
 static void dma32_rows(void)
 {
@@ -2927,6 +2971,7 @@ int main(void)
         CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
         xhci_endpoint_retire_all(hc, 1, 1);
 
+        control_pages_rows();
         /* A transfer the controller never answers. */
         transfer_answers = 0;
         CHECK("a fourth transfer is queued", xhci_submit(hc, 1, 1, &transfer) == 0);

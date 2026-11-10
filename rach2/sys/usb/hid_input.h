@@ -51,9 +51,11 @@ struct hid_dev {
     uint16_t product;
     uint16_t version; /* bcdHID, which usbhid gives as the version */
     uint32_t ninputs;
-    uint8_t *inbuf;  /* a report padded to its full length, `insize` bytes */
-    uint32_t insize; /* the longest input report with its ID, plus slack */
-    int multiplier;  /* a Resolution Multiplier report to send, or -1 */
+    uint8_t *inbuf;   /* a report padded to its full length, `insize` bytes */
+    uint32_t insize;  /* the longest input report with its ID, plus slack */
+    uint8_t *outbuf;  /* two of the longest output or Feature report, for hid.c */
+    uint32_t outsize; /* the longest output or Feature report with its ID */
+    int multiplier;   /* a Resolution Multiplier report to send, or -1 */
     struct hid_input inputs[HID_MAX_INPUTS];
 };
 
