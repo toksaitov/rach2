@@ -70,12 +70,10 @@ Forwarded: no
  
  	for (i = 0; i < ARRAY_LENGTH(props); i++)  {
  		reply = xcb_get_property_reply(wm->conn, cookie[i], NULL);
-@@ -615,6 +622,15 @@
- 					window->maximized_vert = 1;
- 				if (atom[i] == wm->atom.net_wm_state_maximized_horz)
+@@ -617,6 +624,15 @@
  					window->maximized_horz = 1;
-+			}
-+			break;
+ 			}
+ 			break;
 +		case TYPE_RANDR_EMU:
 +			/* x, y, width and height of each output on which the
 +			 * client set a mode that Xwayland emulates. */
@@ -83,18 +81,47 @@ Forwarded: no
 +			if (reply->format == 32 && reply->value_len >= 4) {
 +				window->emulated_width = xid[2];
 +				window->emulated_height = xid[3];
- 			}
- 			break;
++			}
++			break;
  		case TYPE_MOTIF_WM_HINTS:
-@@ -658,6 +674,7 @@
+ 			memcpy(&window->motif_hints,
+ 			       xcb_get_property_value(reply),
+@@ -658,8 +674,34 @@
  #undef TYPE_MOTIF_WM_HINTS
  #undef TYPE_NET_WM_STATE
  #undef TYPE_WM_NORMAL_HINTS
 +#undef TYPE_RANDR_EMU
  
++/* Read the emulated mode's size from _XWAYLAND_RANDR_EMU_MONITOR_RECTS alone,
++ * leaving the state that weston_wm_window_read_properties() takes from the
++ * window's other properties as the window manager keeps it. */
  static void
++weston_wm_window_read_emulated(struct weston_wm_window *window)
++{
++	struct weston_wm *wm = window->wm;
++	xcb_get_property_cookie_t cookie;
++	xcb_get_property_reply_t *reply;
++	uint32_t *rect;
++
++	cookie = xcb_get_property(wm->conn, 0, window->id,
++				  wm->atom.xwayland_randr_emu_monitor_rects,
++				  XCB_ATOM_ANY, 0, 2048);
++	reply = xcb_get_property_reply(wm->conn, cookie, NULL);
++	window->emulated_width = 0;
++	window->emulated_height = 0;
++	if (reply && reply->format == 32 && reply->value_len >= 4) {
++		rect = xcb_get_property_value(reply);
++		window->emulated_width = rect[2];
++		window->emulated_height = rect[3];
++	}
++	free(reply);
++}
++
++static void
  weston_wm_window_get_frame_size(struct weston_wm_window *window,
-@@ -1440,8 +1457,15 @@
+ 				int *width, int *height)
+ {
+@@ -1440,8 +1482,15 @@
  		  window->id, input_x, input_y, input_w, input_h);
  
  	pixman_region32_fini(&window->surface->pending.input);
@@ -112,7 +139,7 @@ Forwarded: no
  	window->surface->pending.status |= WESTON_SURFACE_DIRTY_INPUT;
  
  	xwayland_interface->set_window_geometry(window->shsurf,
-@@ -1590,6 +1614,19 @@
+@@ -1590,6 +1639,19 @@
  	if (property_notify->atom == wm->atom.net_wm_name ||
  	    property_notify->atom == XCB_ATOM_WM_NAME)
  		weston_wm_window_schedule_repaint(window);
@@ -126,13 +153,13 @@ Forwarded: no
 +		const struct weston_desktop_xwayland_interface *xwayland_interface =
 +			wm->server->compositor->xwayland_interface;
 +
-+		weston_wm_window_read_properties(window);
++		weston_wm_window_read_emulated(window);
 +		xwayland_interface->set_fullscreen(window->shsurf, NULL);
 +	}
  }
  
  static void
-@@ -3060,6 +3097,16 @@
+@@ -3060,6 +3122,16 @@
  	} else {
  		hborder = 0;
  		vborder = 0;
@@ -149,11 +176,10 @@ Forwarded: no
  	}
  
  	/* A config event with width == 0 or height == 0 is a hint to the client
-@@ -3141,6 +3188,16 @@
- 	pos.c = weston_coord(x, y);
+@@ -3142,6 +3214,16 @@
  	if (!window || !window->wm)
  		return;
-+
+ 
 +	/* Xwayland scales a window of the emulated size only at the output's
 +	 * origin, where the shell then shows the scaled surface whole; keep
 +	 * it there while the shell centres the smaller surface it had. */
@@ -163,6 +189,7 @@ Forwarded: no
 +		x = pos.c.x;
 +		y = pos.c.y;
 +	}
- 
++
  	wm = window->wm;
  	/* We use pos_dirty to tell whether a configure message is in flight.
+ 	 * This is needed in case we send two configure events in a very

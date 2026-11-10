@@ -1,4 +1,4 @@
 # The SHA-256 of the packages build_weston.sh takes from the builder guest,
 # as the build of 14.0.2-1+rach2.1 on 2026-11-10 gave them.
-8bb7b49ec48c7d1f3d6f01e3afde4db3b1083f1c4177b81662b07a05f4d33304 libweston-14-0_14.0.2-1+rach2.1_amd64.deb
-97f86a3fb388206806f37db4d009d2b49247d69b6e38e4155912eafeeffb82ca weston_14.0.2-1+rach2.1_amd64.deb
+abc54edf268195289325ce3f9c939de1591b9edc22656bac90ad321a584b69db libweston-14-0_14.0.2-1+rach2.1_amd64.deb
+b41f4babbe943421ca8e69c546c90d1d25f28db5d3cccd993b7c599675e29020 weston_14.0.2-1+rach2.1_amd64.deb

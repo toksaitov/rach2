@@ -221,7 +221,8 @@ $(GNU_IGT_STAMP): $(GNU_IGT_SOURCES) | $(SHA256TOOL) $(ETUDE)
 GNU_WESTON_STAMP = $(GNU_OUT)/weston.stamp
 GNU_STEP_STAMPS += $(GNU_WESTON_STAMP)
 GNU_WESTON_SOURCES = $(addprefix vendor/gnu/games/weston/,build_weston.sh sources.txt series debs.sha256 \
-                         kiosk-active-tree.patch xwm-emulated-mode.patch version.patch) \
+                         kiosk-active-tree.patch kiosk-fullscreen-centre.patch xwm-emulated-mode.patch \
+                         version.patch) \
                      vendor/gnu/debian/fetch_asset.sh \
                      $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages setup.sh.in \
                          user-data.in meta-data network-config) \

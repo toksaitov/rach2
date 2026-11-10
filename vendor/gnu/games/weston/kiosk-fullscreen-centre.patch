@@ -1,0 +1,39 @@
+Description: Centre a fullscreen surface on each commit
+ kiosk-shell centred a fullscreen surface only when it was mapped or
+ resized. Weston's Xwayland window manager can report a window fullscreen
+ after the window's first commit, at its framed size, placed the view so that
+ the frame's margin sat off the output, and after the commit of its
+ fullscreen size, so that no later commit centred it: an undecorated X
+ window of the output's size stayed 32 pixels up and to the left of the
+ output. The shell now centres a fullscreen surface on each commit.
+Author: Rach2
+Forwarded: no
+---
+--- a/kiosk-shell/kiosk-shell.c
++++ b/kiosk-shell/kiosk-shell.c
+@@ -995,7 +995,6 @@
+ 		weston_desktop_surface_get_surface(desktop_surface);
+ 	const char *app_id =
+ 		weston_desktop_surface_get_app_id(desktop_surface);
+-	bool is_resized;
+ 	bool is_fullscreen;
+ 
+ 	assert(shsurf);
+@@ -1026,12 +1025,14 @@
+ 	 * updating?
+ 	 */
+ 
+-	is_resized = surface->width != shsurf->last_width ||
+-		     surface->height != shsurf->last_height;
+ 	is_fullscreen = weston_desktop_surface_get_maximized(desktop_surface) ||
+ 			weston_desktop_surface_get_fullscreen(desktop_surface);
+ 
+-	if (!weston_surface_is_mapped(surface) || (is_resized && is_fullscreen)) {
++	/* Xwayland's window manager can report a window fullscreen after its
++	 * first commit, which centred it at its framed size, and after the
++	 * commit of its fullscreen size; centre a fullscreen surface on each
++	 * commit. */
++	if (!weston_surface_is_mapped(surface) || is_fullscreen) {
+ 		if (is_fullscreen || !shsurf->xwayland.is_set) {
+ 			weston_shell_utils_center_on_output(shsurf->view,
+ 							    shsurf->output);

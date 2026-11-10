@@ -9,7 +9,7 @@ Forwarded: not-needed
  
  	if (version) {
 -		printf(PACKAGE_STRING "\n");
-+		printf(PACKAGE_STRING " (Rach2 14.0.2-1+rach2.1: kiosk-active-tree, xwm-emulated-mode)\n");
++		printf(PACKAGE_STRING " (Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, xwm-emulated-mode)\n");
  		free(cmdline);
  
  		return EXIT_SUCCESS;
