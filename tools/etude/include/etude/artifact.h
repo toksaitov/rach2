@@ -153,6 +153,12 @@ int etude_store_digests(struct etude_store *s, const char *cache);
  * hashed, and is not copied at all when its object is published and kept;
  * a file that changes while it is copied so is copied again and hashed.
  *
+ * Outside Windows, a regular file of 256 MiB or more on the store's file
+ * system is published as a hard link of itself in place of a copy, once it
+ * has gone two seconds unchanged: it is made read-only, so that the object
+ * changes only when a new file is renamed over `path`, and it replaces an
+ * object of the same content that is a copy.
+ *
  * @return 0, or -1 with errno set: EBADMSG for a digest other than `expect`,
  *         or an error of the system.
  */

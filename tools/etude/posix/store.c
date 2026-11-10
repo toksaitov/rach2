@@ -45,19 +45,28 @@
  * keep the status it had when it was read; its digest is not kept. */
 #define SETTLE_NS 2000000000LL
 
+/* A regular file at least this long is published, where the store can, as a
+ * hard link of the file itself made read-only, so that a disk image of
+ * gigabytes is not kept twice; a shorter one is copied. */
+#define LINK_MIN_BYTES (256LL << 20)
+
 /* The most lines a digests file keeps, and the longest line read from one. */
 #define DIGESTS_MAX  16384
 #define DIGESTS_LINE 8192
 
 #ifdef RACH2_HOSTTEST
-/* In a host test, the settling time, which a test may shorten, and the count
- * of the reads that hashed a file and of the copies made. */
+/* In a host test, the settling time and the length of a file that is linked,
+ * which a test may shorten, and the count of the reads that hashed a file and
+ * of the copies made. */
 long long etude_store_settle_ns = SETTLE_NS;
+long long etude_store_link_min = LINK_MIN_BYTES;
 unsigned long etude_store_hashed, etude_store_copied;
 #define SETTLE         etude_store_settle_ns
+#define LINK_MIN       etude_store_link_min
 #define COUNT(counter) ((counter)++)
 #else
 #define SETTLE         SETTLE_NS
+#define LINK_MIN       LINK_MIN_BYTES
 #define COUNT(counter) ((void)0)
 #endif
 
@@ -1305,6 +1314,210 @@ static int put_copy(int from, int fd, int trust, struct reading *r,
     }
 }
 
+/**
+ * Give in `*trust` whether the digests file keeps a digest, given in
+ * `digest`, for a file of status `k`; 0, or -1 with errno EBADMSG when it
+ * keeps one other than `expect`.
+ */
+static int put_trust(const struct etude_store *s, const struct status *k, const char *expect,
+                     char digest[ETUDE_DIGEST_HEX + 1], int *trust)
+{
+    *trust = s->digests != NULL && digests_find(s->digests, k, digest) == 0;
+    if (*trust && expect != NULL && strcmp(digest, expect) != 0) {
+        errno = EBADMSG;
+        return -1;
+    }
+    return 0;
+}
+
+#ifndef _WIN32
+/**
+ * Wait once until the file `fd`, of status `*st`, has gone unchanged for the
+ * settling time, and give in `*st` its status then and in `*began` the time
+ * that status was taken. A change time ahead of the clock by more than the
+ * settling time is not waited for.
+ *
+ * @return 0, or -1 with errno set.
+ */
+static int settle_wait(int fd, long long *began, struct stat *st)
+{
+    struct status k;
+    struct timespec t;
+    long long left;
+
+    status_of(st, &k);
+    left = k.ctime + SETTLE - now_ns();
+    if (left <= 0 || left > SETTLE)
+        return 0;
+    t.tv_sec = (time_t)(left / 1000000000LL);
+    t.tv_nsec = (long)(left % 1000000000LL);
+    while (nanosleep(&t, &t) != 0)
+        if (errno != EINTR)
+            return -1;
+    *began = now_ns();
+    return fstat(fd, st);
+}
+
+/** Say whether `st` is the status of the file of status `k`. */
+static int same_file(const struct stat *st, const struct status *k)
+{
+    return (unsigned long long)st->st_dev == k->dev && (unsigned long long)st->st_ino == k->ino;
+}
+
+/**
+ * Give the file at `path`, of status `k`, a new name made from `part`, a
+ * template of mkstemp(3), and check that the name is that file, since `path`
+ * may by then name another.
+ *
+ * @return 0, or -1 with no name made.
+ */
+static int link_part(const char *path, char *part, const struct status *k)
+{
+    struct stat st;
+    int fd = mkstemp(part);
+
+    if (fd < 0)
+        return -1;
+    close(fd);
+    if (unlink(part) != 0 || link(path, part) != 0)
+        return -1;
+    if (lstat(part, &st) == 0 && same_file(&st, k))
+        return 0;
+    unlink(part);
+    return -1;
+}
+
+/**
+ * Make the file `from`, of status `k` when it was read, read-only, and give
+ * `part`, a name of it, the name `final` when its size and modification time
+ * are still as they were read.
+ *
+ * @return 0, or -1 with `part` left.
+ */
+static int seal_part(int from, const struct status *k, const char *part, const char *final)
+{
+    struct status now;
+    struct stat st;
+
+    if (fstat(from, &st) != 0 || ((st.st_mode & 07777) != 0444 && fchmod(from, 0444) != 0) ||
+        fstat(from, &st) != 0)
+        return -1;
+    status_of(&st, &now);
+    if (now.size != k->size || now.mtime != k->mtime) {
+        errno = EBADMSG;
+        return -1;
+    }
+    return rename(part, final);
+}
+
+/**
+ * Publish the file at `path`, open as `from` and read whole as `r` says, as
+ * object `digest` by a hard link of the file itself, made read-only. The link
+ * is made under a partial name, checked to be the file read, and renamed to
+ * the object's name once the file is read-only and still as it was read,
+ * over an object of the same content that is a copy.
+ *
+ * @return 0 once published, 1 when the file is to be copied instead, as
+ *         when the store is on another file system or the file changed, or
+ *         -1 with errno set.
+ */
+static int link_object(struct etude_store *s, const char *path, int from, const struct reading *r,
+                       const char *digest)
+{
+    char *final = store_join(s->objects, digest), *part = store_join(s->tmp, PART_PREFIX "XXXXXX");
+    struct status k;
+    struct stat st;
+    int rc = 1, e;
+
+    if (final == NULL || part == NULL) {
+        errno = ENOMEM;
+        rc = -1;
+    } else if (stat(final, &st) == 0 && same_file(&st, &r->before)) {
+        rc = 0;
+    } else if (link_part(path, part, &r->before) == 0) {
+        if (seal_part(from, &r->before, part, final) != 0) {
+            e = errno;
+            unlink(part);
+            errno = e;
+        } else if (dir_sync(s->objects) != 0) {
+            rc = -1;
+        } else {
+            rc = 0;
+            /* The link and the mode changed only the change time. */
+            if (s->digests != NULL && fstat(from, &st) == 0) {
+                status_of(&st, &k);
+                if (k.size == r->before.size && k.mtime == r->before.mtime)
+                    digests_keep(s->digests, final, &k, digest);
+            }
+        }
+    }
+    free(part);
+    free(final);
+    return rc;
+}
+
+/**
+ * Hash the file at `path`, open as `from` and of status `r->before`, in
+ * place, giving its digest in `digest` and keeping it as digests_read does.
+ *
+ * @return 0, 1 when the file's status was not settled when the read began or
+ *         changed during the read, so that a later write could leave it as it
+ *         was, or -1 with errno set.
+ */
+static int hash_in_place(struct etude_store *s, const char *path, int from, struct reading *r,
+                         char digest[ETUDE_DIGEST_HEX + 1])
+{
+    struct stat st;
+
+    if (r->before.ctime + SETTLE > r->began)
+        return 1;
+    if (copy_hash(from, -1, digest, NULL) != 0 || fstat(from, &st) != 0)
+        return -1;
+    status_of(&st, &r->after);
+    if (!status_same(&r->before, &r->after))
+        return 1;
+    digests_read(s->digests, path, r, digest);
+    return 0;
+}
+
+/**
+ * Publish the file at `path`, open as `from`, as its object by a hard link of
+ * itself, as link_object does, once it has gone the settling time unchanged,
+ * hashing it in place unless the digests file keeps its digest, and give
+ * its digest in `digest` and its status in `r->before`.
+ *
+ * @return 0 once published, 1 when the file is to be copied instead, with
+ *         `from` at its start and `r` begun again, or -1 with errno set:
+ *         EBADMSG for a digest other than `expect`, or an error of the system.
+ */
+static int put_large(struct etude_store *s, const char *path, int from, const char *expect,
+                     struct reading *r, char digest[ETUDE_DIGEST_HEX + 1])
+{
+    struct stat st;
+    int trust, rc;
+
+    if (fstat(from, &st) != 0 || settle_wait(from, &r->began, &st) != 0)
+        return -1;
+    status_of(&st, &r->before);
+    if (put_trust(s, &r->before, expect, digest, &trust) != 0)
+        return -1;
+    rc = trust ? 0 : hash_in_place(s, path, from, r, digest);
+    if (rc == 0 && expect != NULL && strcmp(expect, digest) != 0) {
+        errno = EBADMSG;
+        return -1;
+    }
+    if (rc == 0)
+        rc = link_object(s, path, from, r, digest);
+    if (rc <= 0)
+        return rc;
+    r->began = now_ns();
+    if (lseek(from, 0, SEEK_SET) < 0 || fstat(from, &st) != 0)
+        return -1;
+    status_of(&st, &r->before);
+    return 1;
+}
+#endif
+
 int etude_store_put(struct etude_store *s, const char *path, const char *expect,
                     char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size)
 {
@@ -1324,15 +1537,23 @@ int etude_store_put(struct etude_store *s, const char *path, const char *expect,
     if (fstat(from, &st) != 0)
         goto fail;
     status_of(&st, &r.before);
-    trust = s->digests != NULL && digests_find(s->digests, &r.before, digest) == 0;
-    if (trust && expect != NULL && strcmp(digest, expect) != 0) {
-        errno = EBADMSG;
-        goto fail;
+#ifndef _WIN32
+    if (S_ISREG(st.st_mode) && (long long)st.st_size >= LINK_MIN &&
+        (e = put_large(s, path, from, expect, &r, digest)) <= 0) {
+        if (e < 0)
+            goto fail;
+        close(from);
+        if (size != NULL)
+            *size = (uint64_t)r.before.size;
+        return 0;
     }
+#endif
+    if (put_trust(s, &r.before, expect, digest, &trust) != 0)
+        goto fail;
     if (trust && object_known(s, digest)) {
         close(from);
         if (size != NULL)
-            *size = (uint64_t)st.st_size;
+            *size = (uint64_t)r.before.size;
         return 0;
     }
     if (part_open(s, &part, &fd) != 0) {
