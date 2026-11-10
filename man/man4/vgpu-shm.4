@@ -70,9 +70,23 @@ whether a region is attached and virtio-gpu bound over it, the epoch, the
 last states of the driver and the device and the device's error, whether
 both sides use the doorbells, the times virtio-gpu was bound, the
 doorbells rung each way by vector, the passes that found the device's work
-before its doorbell, and the heap's pages, those in use and the
-allocations it refused.
+before its doorbell, the heap's pages, those in use and the
+allocations it refused, and the blobs mapped from the VM's pages since the
+attach, the pages they hold, those that hold them now and those taken back.
 .El
+.Pp
+On x86-64, with the doorbells, the driver accepts page lists: a mappable
+blob of the device's own memory, such as Venus's host-visible memory, is
+answered with the device machine's physical pages, which KVM resolves
+through the machine's memory slots into the frames of its QEMU and holds,
+and a program's
+.Xr mmap 2
+of the blob maps those frames with the cache type the device gave.
+When the machine's memory behind them changes, a slot over them moves or
+goes, or the machine dies, the frames are taken back: every mapping of the
+blob is removed, and the next access raises
+.Dv SIGBUS ,
+as an access to a revoked mapping does on Linux.
 .Pp
 With a KVM guest's ivshmem-doorbell, the device's doorbells reach the
 kernel through KVM ioeventfds and the driver's raise the guest's MSI-X
