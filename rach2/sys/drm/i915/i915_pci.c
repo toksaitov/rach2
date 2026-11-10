@@ -55,8 +55,9 @@ static void i915_release(struct drm_device *dev);
 
 /* What the driver says of itself: Linux's i915, with its buffer ioctls. */
 static const struct drm_driver i915_drm_driver = {
-    DRM_IDENT_I915, i915_driver_open, i915_driver_postclose, i915_gem_dumb_create,
-    i915_gem_prime_import, i915_unplug, i915_ioctls, I915_NUM_IOCTLS, i915_release};
+    DRM_IDENT_I915,       i915_driver_open,      i915_driver_postclose,
+    i915_gem_dumb_create, i915_gem_prime_import, i915_unplug,
+    i915_ioctls,          I915_NUM_IOCTLS,       i915_release};
 
 const struct i915_id *i915_id_lookup(uint16_t device_id)
 {

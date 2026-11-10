@@ -644,8 +644,9 @@ static int32_t vkms_set_crc_source(struct drm_crtc *crtc, const char *name)
     int enabled;
 
     rc = crc_parse_source(name, &enabled);
-    if (enabled && (rc = composer_start(v)) != 0) {
-        enabled = 0;
+    if (rc == 0 && enabled) {
+        rc = composer_start(v);
+        enabled = rc == 0;
     }
     if (enabled && !v->composer_hold && drm_crtc_vblank_get(crtc) == 0) {
         v->composer_hold = 1;
