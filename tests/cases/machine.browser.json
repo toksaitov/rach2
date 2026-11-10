@@ -732,12 +732,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -948,12 +945,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -1169,12 +1163,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -1390,12 +1381,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -1611,12 +1599,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -1832,12 +1817,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -2053,12 +2035,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -3318,12 +3297,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -3534,12 +3510,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -3755,12 +3728,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -3976,12 +3946,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -4197,12 +4164,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -4418,12 +4382,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
@@ -4639,12 +4600,9 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
-              "rach2.root=ext2",
-              "rach2.audio.loopback"
+              "rach2.root=ext2"
             ],
-            "display": "virtio-vga",
-            "audio": "hda",
-            "audio_backend": "none"
+            "display": "virtio-vga"
           },
           "console": "serial",
           "qmp": true,
