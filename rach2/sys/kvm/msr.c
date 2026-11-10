@@ -55,7 +55,8 @@
 #define PLATFORM_INFO_CPUID_FAULT (1ull << 31)
 #define MISC_FEATURES_CPUID_FAULT 1ull
 
-/* The value of UCODE_REV a guest reads, Linux's. */
+/* The value of UCODE_REV a vCPU starts with under
+ * KVM_X86_QUIRK_STUFF_FEATURE_MSRS, Linux's. */
 #define UCODE_REV_VAL 0x100000000ull
 
 /* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores, the TSC
@@ -232,10 +233,12 @@ void kvm_msr_reset(struct kvm_vcpu *v)
     v->mcg_cap = KVM_MAX_MCE_BANKS;
     v->mcg_status = 0;
     v->mcg_ctl = 0;
-    /* CPUID faulting is offered unless the caller fills the feature MSRs
-     * itself, as Linux's kvm_arch_vcpu_create. */
+    /* CPUID faulting is offered, and the microcode revision set, unless
+     * the caller fills the feature MSRs itself, as Linux's
+     * kvm_arch_vcpu_create. */
     v->platform_info =
         KVM_QUIRK(v->vm, KVM_X86_QUIRK_STUFF_FEATURE_MSRS) ? PLATFORM_INFO_CPUID_FAULT : 0;
+    v->ucode_rev = KVM_QUIRK(v->vm, KVM_X86_QUIRK_STUFF_FEATURE_MSRS) ? UCODE_REV_VAL : 0;
     v->misc_features = 0;
 }
 
@@ -333,6 +336,9 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
         return 0;
     case MSR_MISC_FEATURES:
         *value = v->misc_features;
+        return 0;
+    case MSR_IA32_UCODE_REV:
+        *value = v->ucode_rev;
         return 0;
     default:
         break;
@@ -458,6 +464,9 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     switch (index) {
     case MSR_AMD64_NB_CFG:
         return 0;
+    case MSR_IA32_UCODE_REV:
+        v->ucode_rev = value;
+        break;
     case MSR_IA32_TSC:
         kvm_tsc_sync(v, &value);
         return 0;

@@ -2171,11 +2171,34 @@ static void vm_cap_rows(void)
           "CPUID faulting on: one bit, and PLATFORM_INFO keeps offering it");
     fdclose(fd);
     fdclose(vm);
+}
 
-    vm = dev(KVM_CREATE_VM, 0);
-    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+/** The feature MSRs a new vCPU starts with, by
+ * KVM_X86_QUIRK_STUFF_FEATURE_MSRS, as Linux's kvm_arch_vcpu_create fills
+ * them: PLATFORM_INFO and UCODE_REV. */
+static void feature_msr_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v;
+    uint64_t value = 0;
+
     CHECK(get_msr(fd, 0xCE, &value) == 1 && value == 0x80000000u,
           "a new vCPU's PLATFORM_INFO offers CPUID faulting");
+    CHECK(get_msr(fd, 0x8B, &value) == 1 && value == 0x100000000ull,
+          "and its UCODE_REV is Linux's 0x100000000");
+    fdclose(fd);
+    fdclose(vm);
+
+    vm = dev(KVM_CREATE_VM, 0);
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2, KVM_X86_QUIRK_STUFF_FEATURE_MSRS) == 0,
+          "the quirk turned off");
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    CHECK(get_msr(fd, 0x8B, &value) == 1 && value == 0,
+          "with the feature MSRs left to the caller, UCODE_REV starts at 0");
+    CHECK(set_msr(fd, 0x8B, 0x2800000000ull) == 1 && get_msr(fd, 0x8B, &value) == 1 &&
+              value == 0x2800000000ull && v->ucode_rev == value,
+          "the caller writes UCODE_REV");
     fdclose(fd);
     fdclose(vm);
 }
@@ -2620,6 +2643,7 @@ static void selftest_rows(void)
     bound_rows();
     cr4_rows();
     vm_cap_rows();
+    feature_msr_rows();
     attr_rows();
     sync_rows();
 }

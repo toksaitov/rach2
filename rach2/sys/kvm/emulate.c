@@ -837,11 +837,12 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
         *value = FEATURE_CONTROL_LOCKED;
         return 0;
     case MSR_IA32_UCODE_REV:
-        /* Linux's guests write 0 before reading the revision. */
-        if (write) {
-            return 0;
+        /* Linux's guests write 0 before reading the revision, and a
+         * guest's write changes nothing, as on Linux. */
+        if (!write) {
+            *value = v->ucode_rev;
         }
-        return kvm_msr_feature(index, value) == 0 ? 0 : -1;
+        return 0;
     default:
         break;
     }
