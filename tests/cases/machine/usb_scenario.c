@@ -261,7 +261,7 @@ static int hotplug(struct usb_case *u)
     return usb_end(u);
 }
 
-/** The mouse replugged beside a device that cannot be driven. */
+/** The mouse replugged beside a CDC Ethernet device, which cannot be driven. */
 static int replug(struct usb_case *u)
 {
     struct usb_boot b;
