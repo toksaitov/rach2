@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "machine.games-native",
-  "summary": "SuperTuxKart's profile race and 0 A.D.'s visual replay, the fixed replays of vendor/gnu/games/replays, each played to its end on llvmpipe under a headless Weston on the GNU root under the virtio-vga profile, with every frame's time recorded from Mesa's Gallium HUD; the runner is tests/graphics/runners/games.sh and the scenario tests/cases/machine/graphics_scenario.c",
+  "summary": "SuperTuxKart's profile race and 0 A.D.'s visual replay, the fixed replays of vendor/gnu/games/replays that Linux's reference runs on the Lenovo played, each on llvmpipe under a headless Weston on the GNU root under the virtio-vga profile, with every frame's time recorded from Mesa's Gallium HUD and measured as those runs were; the runner is tests/graphics/runners/games.sh and the scenario tests/cases/machine/graphics_scenario.c",
   "cases": [
     {
       "case_id": "machine.games-native.supertuxkart",
-      "behavior": "SuperTuxKart's profile race of supertuxkart.args, four AI karts on two laps of the lighthouse track, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, runs to the race's end, and the time of each frame of the race is recorded",
+      "behavior": "SuperTuxKart's profile race of supertuxkart.args, four AI karts on the hacienda track for 90 s of the race's time, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, runs to its profile summary, and the time of each frame is recorded",
       "units": [
         "tests/graphics/runners/games.sh",
         "vendor/gnu/games/replays/supertuxkart.args",
@@ -111,7 +111,7 @@
       "assertions": [
         {
           "assertion_id": "ran",
-          "checks": "supertuxkart exits 0 after its profile summary, which gives the race's time, and the HUD's frame times of that time are written; games.sh prints its result line",
+          "checks": "supertuxkart exits 0 after printing its profile summary, the HUD's frame times have frames in the window after the loading screen, and games.sh prints its result line",
           "source": "scenario"
         }
       ],
@@ -207,10 +207,10 @@
     },
     {
       "case_id": "machine.games-native.0ad",
-      "behavior": "0 A.D.'s visual replay of 0ad/commands.txt, a match of two AI players for 1,500 turns, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, runs to its last turn, where the mod rach2-replay ends the game, and the time of each frame of the replay is recorded",
+      "behavior": "0 A.D.'s visual replay of 0ad-mainland/commands.txt, a match of two AI players, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, plays for 150 s after its loading screen, and the time of each frame is recorded",
       "units": [
         "tests/graphics/runners/games.sh",
-        "vendor/gnu/games/replays/0ad",
+        "vendor/gnu/games/replays/0ad-mainland/commands.txt",
         "0 A.D.",
         "Weston",
         "Mesa's llvmpipe"
@@ -313,7 +313,7 @@
       "assertions": [
         {
           "assertion_id": "ran",
-          "checks": "pyrogenesis exits 0 after the mod printed the replay's last turn, the commands file's turn count, and the HUD's frame times of the replay are written; games.sh prints its result line",
+          "checks": "0 A.D. is still playing when the HUD's frame times hold the 150 s window after the loading screen, games.sh then ends it, and games.sh prints its result line",
           "source": "scenario"
         }
       ],
