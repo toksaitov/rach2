@@ -51,6 +51,7 @@ The profile leaves out every other case: a host check, a case that boots another
 * GRUB's disk and the recovery and x86-64 kernels: `grow`.
 * The x86-64 kernel by the machine's own architecture, and host checks: `host` and `imagerace`.
 * Host checks alone: `style`, `esctest2` and `krffscheck`.
+* By its own `ia32` member, GRUB's disk under SeaBIOS on the i686 emulator beside a machine that boots the kernel directly: `sealed`, whose case installs the profile's x86-64 kernel on that disk, where the processor has no long mode.
 
 And these cases of suites that otherwise run: the cases of `installer`, `installer-repair`, `usbdisk` and `metal` that boot GRUB's disk; those of `drill`, `memory`, `parts`, `authority` and `man` that boot the recovery kernel, `metal`'s of the x86-64 kernel and `exitline`'s of the harness kernel; the host checks of `usb` and `usbdisk`; and by their own `ia32` member `bootline`'s `cpu-486` and `cpu-pentium`, on processors without long mode, and `fpu`'s `fpuprobe-x87`, under the i686 kernel's `rach2.nofxsr`.
 
