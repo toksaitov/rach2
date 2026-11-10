@@ -273,12 +273,6 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
         test -x "$TREE/usr/sbin/$tool"
     done
     test -x "$TREE/host-products/fstool"
-    if [ "$RACH2_ARCH" = x86_64 ]; then
-        # The store's directory mode must permit the nested fixture copy.
-        chmod u+w "$TREE/host-products"
-        mkdir "$TREE/host-products/host-checks"
-        cp -a "$OUT/host-checks/." "$TREE/host-products/host-checks/"
-    fi
     writable
 fi
 # Build the framed WebSocket fixture against the same TLS libraries as the

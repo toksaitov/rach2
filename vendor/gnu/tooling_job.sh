@@ -157,7 +157,7 @@ build_layer()
         PATH=$TREE/build/tooling-elf:$PATH
         export PATH
         set -- gnu-sanitizers gnu-host-products gnu-fstools
-        [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-host-checks
+        [ "$IMAGE" != gnu-host-checks.tar ] || set -- "$@" gnu-host-checks
     fi
     [ "${GNU_I386:-}" != 1 ] || set -- "$@" gnu-i386
     [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-kvm
@@ -168,10 +168,21 @@ build_layer()
 }
 
 # build_image: as the build's account, make the image as mk/gnu-image.mk's
-# rule for a Linux host makes it, with the KRFFS stager built for this host.
+# rule for a Linux host makes it, with the KRFFS stager built for this host;
+# for gnu-host-checks.tar, the archive of the host checks' directory, as the
+# same file makes it, followed by zeros to the disk's size.
 build_image()
 {
     cd $TREE || exit 1
+    if [ "$IMAGE" = gnu-host-checks.tar ]; then
+        dir=$(readlink -f "build$SUFFIX/vendor/gnu/host-checks") || exit 1
+        tar --format=ustar -C "$(dirname "$dir")" -cf "$MNT/out/$IMAGE" "$(basename "$dir")" || exit 1
+        [ "$(stat -c %s "$MNT/out/$IMAGE")" -le $((SIZE * 1048576)) ] || {
+            echo "gnu: job: the host checks' archive is larger than $SIZE MiB" >&2
+            exit 1
+        }
+        exec truncate -s "${SIZE}M" "$MNT/out/$IMAGE"
+    fi
     make --no-print-directory -C krffs MUSL_CRYPT="../$MUSL_CRYPT_SRC" ../build/krffs/stageimage.krffs ||
         exit 1
     [ -z "$RACH2_PATH_MAP" ] || export RACH2_PATH_MAP

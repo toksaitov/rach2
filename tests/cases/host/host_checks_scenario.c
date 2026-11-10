@@ -22,7 +22,22 @@ static int guest_run(struct etude_case_machine *m, const char *const argv[], con
            result.termination.value == 0 && result.cleanup == ETUDE_CLEANUP_CONFIRMED;
 }
 
-/* The installed tree and driver are immutable inputs of the helper image. */
+/* Begin the step `gnu` by unpacking the host checks, gnu-host-checks.tar on
+ * the helper's raw disk1, into /host-products, where the image does not
+ * carry them since they change with every kernel and case source
+ * (mk/gnu-image.mk). */
+static int guest_stage(struct etude_case *c, struct etude_case_machine *m)
+{
+    const char *argv[] = {"/bin/tar", "-x", "-o", "-f", "-", "-C", "/host-products", NULL};
+    struct etude_guest_result result;
+    return etude_step(c, "gnu") == ETUDE_OK &&
+           etude_guest_command_file(m, argv, NULL, "/dev/disk1", "host-checks-unpack", &result) ==
+               ETUDE_OK &&
+           result.complete && result.termination.end == ETUDE_END_EXITED &&
+           result.termination.value == 0 && result.cleanup == ETUDE_CLEANUP_CONFIRMED;
+}
+
+/* The unpacked tree and driver are immutable inputs of the helper's disk. */
 static int guest_check(struct etude_case_machine *m, const char *group, const char *id,
                        const char *arch)
 {
@@ -162,7 +177,7 @@ int etude_scenario(struct etude_case *c)
     native_count = h.reported;
     if (need_guest && etude_step(c, "products") == ETUDE_OK &&
         etude_boot(c, "products", NULL, &products, &end) == ETUDE_OK)
-        ready = etude_step(c, "gnu") == ETUDE_OK;
+        ready = guest_stage(c, products);
     for (size_t i = 0; i < h.nchecks; i++) {
         struct check *check = &h.checks[i];
         if (check->selected || !declared(&h, check->id))
