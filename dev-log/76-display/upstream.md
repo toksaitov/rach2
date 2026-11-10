@@ -133,3 +133,14 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `rach2/sys/drm/drm_edid.c`'s `do_cvt` reads from byte 6, and its comment says why, in task 3394's commit.
 * Status: unreported, draft.
 * Next: confirm the layout against the VESA E-EDID 1.4 text and with a real monitor's descriptor, then send a patch that adds the version byte before `cvt[4]`.
+
+## Linux's Elantech register files answer a write the pad refused as done
+
+* Project: Linux 6.12, `drivers/input/mouse/elantech.c` at the tag `v6.12` (SHA-256 8c422056eeb241b5cc7b1d8929324371fd8a7a57d662153ff9b6ac36d80b22bb).
+* Fails: `elantech_set_int_attr` (`elantech.c:1288-1315`) keeps the value only when `elantech_write_reg` succeeds, but returns `count` either way, so a write to `reg_07` to `reg_26` that the pad refused or did not answer reports success to the writer; only the kernel log's "failed to write register" says otherwise. `elantech_show_int_attr` (`elantech.c:1271-1283`) prints a failed read as `sprintf("0x%02x\n", -1)`, "0xffffffff", in place of an error.
+* Found: 2026-11-11, on the Mac, milestone 76, by task 3455, which gave Rach2's Elantech pad these files as elantech.c has them.
+* Reproduction: not run on Linux. On an Elantech pad, write a register while the pad leaves its register commands unanswered, for example with its port held by another command, and check the write's return value: it is the byte count.
+* Evidence: the rows "a write the pad refuses is still taken whole, as elantech.c answers it" and "a register read while the port waits for its reconnect fails" of `tests/host/psmouse_attr_hosttest.c`.
+* Rach2: `rach2/sys/arch/x86/elantech.c`'s `store_etd` and `show_etd` do as Linux does, so that programs see the same answers, in task 3455's commit.
+* Status: unreported.
+* Next: check master's `elantech.c`, then send a patch that returns -EIO from `elantech_set_int_attr` and `elantech_show_int_attr` when the register access fails.
