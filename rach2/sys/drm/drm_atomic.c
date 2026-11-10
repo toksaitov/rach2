@@ -790,13 +790,22 @@ static int32_t connector_routing(struct drm_atomic_state *state,
     return 0;
 }
 
-/** Linux's handle_conflicting_encoders: whether two connectors of `state`
- * would take the one encoder each can use. */
-static int conflicting_encoders(const struct drm_atomic_state *state)
+/**
+ * Linux's handle_conflicting_encoders: two connectors of `state` may not
+ * take the one encoder each can use, nor one take an encoder a connector
+ * the commit leaves out holds, unless `disable`, as for a legacy mode set,
+ * takes the encoder from that connector and turns its CRTC off when no
+ * connector is left there. 0, -EINVAL or -ENOMEM.
+ */
+static int32_t conflicting_encoders(struct drm_atomic_state *state, int disable)
 {
-    const struct drm_connector_state *conn;
-    uint32_t used = 0, bit;
-    int i;
+    const struct drm_mode_config *mc = &state->dev->mode_config;
+    struct drm_connector_state *conn;
+    struct drm_connector *connector;
+    struct drm_crtc_state *cs;
+    struct drm_encoder *encoder;
+    uint32_t used = 0, bit, i;
+    int32_t rc;
 
     for (i = 0; i < DRM_MAX_CONNECTORS; i++) {
         conn = state->connectors_new[i];
@@ -805,9 +814,35 @@ static int conflicting_encoders(const struct drm_atomic_state *state)
         }
         bit = 1u << single_encoder(conn->connector)->index;
         if (used & bit) {
-            return 1;
+            return -EINVAL;
         }
         used |= bit;
+    }
+    for (i = 0; used && i < mc->num_connector; i++) {
+        connector = mc->connectors[i];
+        encoder = connector->state->best_encoder;
+        if (state->connectors_new[connector->index] || !encoder ||
+            !(used & (1u << encoder->index))) {
+            continue;
+        }
+        if (!disable) {
+            return -EINVAL;
+        }
+        conn = drm_atomic_get_connector_state(state, connector);
+        if (!conn) {
+            return -ENOMEM;
+        }
+        cs = conn->crtc ? drm_atomic_get_crtc_state(state, conn->crtc) : NULL;
+        conn->best_encoder = NULL;
+        if ((rc = drm_atomic_set_crtc_for_connector(state, conn, NULL)) != 0) {
+            return rc;
+        }
+        if (cs && !cs->connector_mask) {
+            if ((rc = drm_atomic_set_mode_prop_for_crtc(cs, NULL)) != 0) {
+                return rc;
+            }
+            cs->active = 0;
+        }
     }
     return 0;
 }
@@ -843,8 +878,8 @@ static int32_t check_modeset(struct drm_device *dev, struct drm_atomic_state *st
             return -EINVAL;
         }
     }
-    if (conflicting_encoders(state)) {
-        return -EINVAL;
+    if ((rc = conflicting_encoders(state, 0)) != 0) {
+        return rc;
     }
     for (i = 0; i < DRM_MAX_CONNECTORS; i++) {
         conn = state->connectors_new[i];
@@ -2185,6 +2220,9 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
     }
     if (rc == 0) {
         rc = update_output_state(state, set);
+    }
+    if (rc == 0) {
+        rc = conflicting_encoders(state, 1);
     }
     if (rc == 0) {
         rc = drm_atomic_commit(state);
