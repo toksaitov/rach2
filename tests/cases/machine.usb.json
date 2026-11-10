@@ -826,7 +826,7 @@
     },
     {
       "case_id": "machine.usb.undrivable",
-      "behavior": "a tablet, which this kernel cannot drive, is refused at most once and the keyboard and mouse beside it are enumerated",
+      "behavior": "a CDC Ethernet device, which this kernel cannot drive, is refused at most once and the tablet, keyboard and mouse beside it are enumerated",
       "units": ["usb", "usbprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -858,6 +858,7 @@
             "firmware": "direct",
             "devices": [
               {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-net", "bus": "xhci.0"},
               {"model": "usb-tablet", "bus": "xhci.0"},
               {"model": "usb-kbd", "bus": "xhci.0"},
               {"model": "usb-mouse", "bus": "xhci.0"}
@@ -911,7 +912,7 @@
     },
     {
       "case_id": "machine.usb.replug",
-      "behavior": "a device that cannot be driven does not hold an entry of the device table: beside a tablet, the mouse pulled out and plugged back in is enumerated again",
+      "behavior": "a device that cannot be driven does not hold an entry of the device table: beside a CDC Ethernet device, the mouse pulled out and plugged back in is enumerated again",
       "units": ["usb"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -954,7 +955,7 @@
             "firmware": "direct",
             "devices": [
               {"model": "qemu-xhci", "id": "xhci"},
-              {"model": "usb-tablet", "bus": "xhci.0"},
+              {"model": "usb-net", "bus": "xhci.0"},
               {"model": "usb-kbd", "bus": "xhci.0"},
               {"model": "usb-mouse", "id": "themouse", "bus": "xhci.0"}
             ],
