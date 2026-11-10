@@ -2,13 +2,16 @@
  * hid.c: the USB HID class driver, Linux's usbhid with hid-generic, and its
  * boot-protocol drivers, usbkbd and usbmouse, as the fallback.
  *
- * A HID device describes its own reports: its report descriptor says which
- * bits of which report are which key, button or axis. The core reads the
- * descriptor when it configures the device, and this driver parses it
+ * A HID interface describes its own reports: its report descriptor says
+ * which bits of which report are which key, button or axis. The core reads
+ * the descriptor of each HID interface of a device when it configures the
+ * device, and this driver parses it
  * (`hid_parse.c`), maps its usages to event devices and reads each report
  * through it (`hid_input.c`), as Linux does. A keyboard's or mouse's
  * reports are then whatever its descriptor says, and a device that has no
- * boot protocol, such as QEMU's tablet, works as well as one that has.
+ * boot protocol, such as QEMU's tablet, works as well as one that has. Each
+ * interface is driven on its own, as Linux binds usbhid to each, so a
+ * keyboard whose media keys are a second interface gives them too.
  *
  * A keyboard or mouse whose descriptor cannot be read or parsed is put in
  * the boot protocol, whose two report layouts are fixed. There a HID report
@@ -109,17 +112,16 @@ static const uint16_t usage_to_scancode[USAGES] = {
 static const uint16_t modifier_scancode[8] = {0x1D,       0x2A, 0x38,       EXT | 0x5B,
                                               EXT | 0x1D, 0x36, EXT | 0x38, EXT | 0x5C};
 
-/* What each device was reporting last time, one per entry of the core's
- * device table, indexed from one. */
+/* What an interface was reporting last time, and what it was sent. */
 struct hid_state {
-    int mode; /* 0 until taken, HID_KEYBOARD or HID_MOUSE, or HID_REPORT */
+    int mode; /* HID_KEYBOARD or HID_MOUSE, or HID_REPORT */
     uint8_t modifiers;
     uint8_t keys[KEYS_IN_REPORT];
     struct input_keyboard kb; /* a boot keyboard's keys in the input layer */
     struct evdev *mouse;      /* a boot mouse's event device, or NULL */
     struct hid_dev *hid;      /* a report-protocol device's tables, or NULL */
     char name[HID_NAME_MAX];  /* a boot device's name */
-    char phys[24];            /* its EVIOCGPHYS, "usb-N/input0" */
+    char phys[24];            /* its EVIOCGPHYS, "usb-N/inputI" */
     int offer;                /* OFFER_*: what `hid_output_report` gave last */
     int multiplier;           /* a multiplier report is still to be sent */
     int leds_failed;          /* an LED report failed since it was taken */
@@ -134,7 +136,10 @@ struct hid_state {
     uint8_t boot_out[2][BOOT_OUTPUT_LEN];
 };
 
-static struct hid_state states[USB_MAX_DEVICES + 1];
+/* The state of each interface taken, from the heap, by the core's device
+ * table entry plus one and the interface's place on its device; NULL for
+ * one not taken. */
+static struct hid_state *states[USB_MAX_DEVICES + 1][USB_HID_INTERFACES];
 
 /** Append the text `text` to the string in `out`, of `size` bytes. */
 static void append(char *out, size_t size, const char *text)
@@ -176,13 +181,27 @@ static void append_hex4(char *out, size_t size, unsigned n)
     append(out, size, digits);
 }
 
-/** Write the EVIOCGPHYS of `device`, "usb-N/input0", into `state`. */
-static void name_phys(struct hid_state *state, int device)
+/** Write the EVIOCGPHYS of interface number `interface` of `device`,
+ * "usb-N/inputI", into `state`, as usbhid ends it with the interface's
+ * bInterfaceNumber. */
+static void name_phys(struct hid_state *state, int device, int interface)
 {
+    char digits[4];
+    int n = interface & 0xFF, i = 0;
+
+    if (n >= 100) {
+        digits[i++] = (char)('0' + n / 100);
+    }
+    if (n >= 10) {
+        digits[i++] = (char)('0' + n / 10 % 10);
+    }
+    digits[i++] = (char)('0' + n % 10);
+    digits[i] = 0;
     state->phys[0] = 0;
     append(state->phys, sizeof(state->phys), "usb-");
     append_number(state->phys, sizeof(state->phys), device);
-    append(state->phys, sizeof(state->phys), "/input0");
+    append(state->phys, sizeof(state->phys), "/input");
+    append(state->phys, sizeof(state->phys), digits);
 }
 
 /**
@@ -234,10 +253,34 @@ static void copy_serial(char *out, size_t size, const char *serial)
     out[i] = 0;
 }
 
-/** The state of `device`, or NULL for one out of range. */
-static struct hid_state *state_of(int device)
+/** Whether `device` and `iface` name an interface the table has room for. */
+static int in_range(int device, int iface)
 {
-    return device > 0 && device <= USB_MAX_DEVICES ? &states[device] : 0;
+    return device > 0 && device <= USB_MAX_DEVICES && iface >= 0 && iface < USB_HID_INTERFACES;
+}
+
+/** The state of interface `iface` of `device`, or NULL for one not taken
+ * or out of range. */
+static struct hid_state *state_of(int device, int iface)
+{
+    return in_range(device, iface) ? states[device][iface] : 0;
+}
+
+/** A new state, zeroed, for interface `iface` of `device`, which is in
+ * range and has none; NULL when the heap has none. */
+static struct hid_state *state_new(int device, int iface)
+{
+    struct hid_state *state = (struct hid_state *)kzalloc(sizeof(*state));
+
+    states[device][iface] = state;
+    return state;
+}
+
+/** Give back the state of interface `iface` of `device`, in range. */
+static void state_free(int device, int iface)
+{
+    kfree(states[device][iface]);
+    states[device][iface] = 0;
 }
 
 /** The scancode of `usage`, 0 for one the table does not name. */
@@ -408,38 +451,46 @@ static int parse_tables(const uint8_t *rdesc, int length, struct hid_dev **out)
     return 0;
 }
 
-int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int length)
+int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *rdesc, int length)
 {
-    struct hid_state *state = state_of(device);
+    struct hid_state *state;
     struct hid_dev *hid;
     int err;
 
-    if (!state) {
+    if (!in_range(device, iface)) {
         return -ENODEV;
     }
-    if (state->mode) {
+    if (states[device][iface]) {
         return 0;
     }
     err = parse_tables(rdesc, length, &hid);
     if (err) {
-        klog(KLOG_WARN, "usb", "hid: device %d: %x:%x: report descriptor refused: %s", device,
-             (int)ids->vendor, (int)ids->product,
+        klog(KLOG_WARN, "usb", "hid: device %d interface %d: %x:%x: report descriptor refused: %s",
+             device, ids->interface, (int)ids->vendor, (int)ids->product,
              err == -ENOMEM  ? "no memory for its tables"
              : err == -E2BIG ? "past this kernel's tables"
                              : "malformed");
         return err;
     }
+    state = state_new(device, iface);
+    if (!state) {
+        klog(KLOG_WARN, "usb", "hid: device %d interface %d: no memory for its state", device,
+             ids->interface);
+        free_tables(hid);
+        return -ENOMEM;
+    }
     name_device(hid->name, sizeof(hid->name), ids, "HID ");
-    name_phys(state, device);
+    name_phys(state, device, ids->interface);
     hid->phys = state->phys;
     copy_serial(hid->uniq, sizeof(hid->uniq), ids->serial);
     hid->vendor = ids->vendor;
     hid->product = ids->product;
     hid->version = ids->version;
     if (hidinput_connect(hid) < 0) {
-        klog(KLOG_INFO, "usb", "hid: device %d: %s: no input device in its descriptor", device,
-             hid->name);
+        klog(KLOG_INFO, "usb", "hid: device %d interface %d: %s: no input device in its descriptor",
+             device, ids->interface, hid->name);
         free_tables(hid);
+        state_free(device, iface);
         return -ENODEV;
     }
     state->hid = hid;
@@ -451,17 +502,26 @@ int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int 
     state->offered = hid->outbuf;
     state->shown = hid->outbuf + hid->outsize;
     state->out_cap = (int)hid->outsize;
-    klog(KLOG_INFO, "usb", "hid: device %d: %s on %s, input devices: %d", device, hid->name,
-         state->phys, (int)hid->ninputs);
+    klog(KLOG_INFO, "usb", "hid: device %d interface %d: %s on %s, input devices: %d", device,
+         ids->interface, hid->name, state->phys, (int)hid->ninputs);
     return 0;
 }
 
-void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
+int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
 {
-    struct hid_state *state = state_of(device);
+    struct hid_state *state;
 
-    if (!state || state->mode || (kind != HID_KEYBOARD && kind != HID_MOUSE)) {
-        return;
+    if (!in_range(device, iface) || (kind != HID_KEYBOARD && kind != HID_MOUSE)) {
+        return -ENODEV;
+    }
+    if (states[device][iface]) {
+        return 0;
+    }
+    state = state_new(device, iface);
+    if (!state) {
+        klog(KLOG_WARN, "usb", "hid: device %d interface %d: no memory for its state", device,
+             ids->interface);
+        return -ENOMEM;
     }
     state->mode = kind;
     state->offer = OFFER_NONE;
@@ -471,30 +531,31 @@ void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
     state->offered = state->boot_out[0];
     state->shown = state->boot_out[1];
     state->out_cap = BOOT_OUTPUT_LEN;
-    name_phys(state, device);
+    name_phys(state, device, ids->interface);
     if (kind == HID_MOUSE) {
         name_device(state->name, sizeof(state->name), ids, "USB HIDBP Mouse ");
         state->mouse = mouse_register(state->name, state->phys, EVDEV_BUS_USB, ids->vendor,
                                       ids->product, MOUSE_WHEEL | MOUSE_HI_RES | MOUSE_SIDE);
         /* An open of `mouse` fails until a mouse of any kind is found. */
         input_mouse_found();
-        return;
+        return 0;
     }
     name_device(state->name, sizeof(state->name), ids, "USB HIDBP Keyboard ");
     input_keyboard_attach(&state->kb, state->name, state->phys, EVDEV_BUS_USB, ids->vendor,
                           ids->product);
+    return 0;
 }
 
-int hid_report_size(int device)
+int hid_report_size(int device, int iface)
 {
-    struct hid_state *state = state_of(device);
+    struct hid_state *state = state_of(device, iface);
 
     return state && state->mode == HID_REPORT ? (int)state->hid->insize : 0;
 }
 
-void hid_report(int device, const uint8_t *report, int length)
+void hid_report(int device, int iface, const uint8_t *report, int length)
 {
-    struct hid_state *state = state_of(device);
+    struct hid_state *state = state_of(device, iface);
 
     if (!state || length < 0) {
         return;
@@ -572,16 +633,16 @@ static int same_bytes(const uint8_t *a, const uint8_t *b, int n)
     return 1;
 }
 
-int hid_output_size(int device)
+int hid_output_size(int device, int iface)
 {
-    struct hid_state *state = state_of(device);
+    struct hid_state *state = state_of(device, iface);
 
     return state && state->mode ? state->out_cap : 0;
 }
 
-int hid_output_report(int device, uint8_t *out, int size, int *value)
+int hid_output_report(int device, int iface, uint8_t *out, int size, int *value)
 {
-    struct hid_state *state = state_of(device);
+    struct hid_state *state = state_of(device, iface);
     int n;
 
     if (!state || !state->mode) {
@@ -612,9 +673,9 @@ int hid_output_report(int device, uint8_t *out, int size, int *value)
     return n;
 }
 
-void hid_output_sent(int device, int ok)
+void hid_output_sent(int device, int iface, int ok)
 {
-    struct hid_state *state = state_of(device);
+    struct hid_state *state = state_of(device, iface);
 
     if (!state) {
         return;
@@ -628,7 +689,8 @@ void hid_output_sent(int device, int ok)
             state->shown_len = state->offered_len;
         } else {
             if (!state->leds_failed) {
-                klog(KLOG_WARN, "usb", "hid: device %d: the LED report failed", device);
+                klog(KLOG_WARN, "usb", "hid: device %d interface %d: the LED report failed", device,
+                     iface);
             }
             state->leds_failed = 1;
         }
@@ -638,27 +700,20 @@ void hid_output_sent(int device, int ok)
 
 void hid_gone(int device)
 {
-    struct hid_state *state = state_of(device);
-    int i;
+    struct hid_state *state;
+    int iface;
 
-    if (!state) {
-        return;
-    }
-    if (state->mode == HID_REPORT) {
-        hidinput_disconnect(state->hid);
-        free_tables(state->hid);
-    }
-    input_keyboard_detach(&state->kb);
-    evdev_unregister(state->mouse);
-    state->hid = 0;
-    state->mouse = NULL;
-    state->offered = state->shown = NULL;
-    state->out_cap = 0;
-    state->mode = 0;
-    state->offer = OFFER_NONE;
-    state->multiplier = 0;
-    state->modifiers = 0;
-    for (i = 0; i < KEYS_IN_REPORT; i++) {
-        state->keys[i] = 0;
+    for (iface = 0; iface < USB_HID_INTERFACES; iface++) {
+        state = state_of(device, iface);
+        if (!state) {
+            continue;
+        }
+        if (state->mode == HID_REPORT) {
+            hidinput_disconnect(state->hid);
+            free_tables(state->hid);
+        }
+        input_keyboard_detach(&state->kb);
+        evdev_unregister(state->mouse);
+        state_free(device, iface);
     }
 }
