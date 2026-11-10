@@ -254,9 +254,6 @@ static int regs_set(process_t *t, int i, unsigned long v)
         break;
     case R_ORIG_RAX:
         t->orig_nr = (int32_t)v;
-        if ((int32_t)v == -1) {
-            t->restart_nr = 0;
-        }
         break;
     case R_RIP:
         tf->rip = v;

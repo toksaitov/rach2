@@ -2963,24 +2963,6 @@ static long restart_code(int kind)
     }
 }
 
-/** The restart kind a tracer's result `ret` names, one of Linux's restart
- * codes, or -1 for any other result, which makes no restart. */
-static int restart_kind_of(long ret)
-{
-    switch (ret) {
-    case -ERESTARTSYS:
-        return RESTART_SYS;
-    case -ERESTARTNOINTR:
-        return RESTART_NOINTR;
-    case -ERESTARTNOHAND:
-        return RESTART_NOHAND;
-    case -ERESTART_RESTARTBLOCK:
-        return RESTART_BLOCK;
-    default:
-        return -1;
-    }
-}
-
 /**
  * restart_syscall(2): resume the call the thread's restart block holds,
  * which `deliver_signals` makes after a signal that ran no handler cut short
@@ -3001,52 +2983,21 @@ long sys_restart_syscall(isr_params_t *params)
 }
 
 /**
- * Record in `restart_nr` and `restart_kind` whether the call numbered
- * `syscall_num`, which the handler `fn` answered with `ret`, is to be
- * restarted on this return: when `ret` is -EINTR, as the kind the handler
- * set says, or as `syscall_restartable` says for a handler that set none.
- * A call the dispatcher did not run has a NULL `fn`, and no restart.
+ * Translate the -EINTR of handler `fn` into Linux's restart code, as the
+ * kind the handler set says, or as `syscall_restartable` says for a handler
+ * that set none. Keep other results, and those of a call the dispatcher
+ * did not run (a NULL `fn`). Signal delivery decides whether to restart
+ * from the registers after the tracer's stops.
  */
-static void restart_record(const isr_params_t *params, uint32_t syscall_num, syscall_fn_t fn,
-                           long ret)
+static long restart_result(const isr_params_t *params, syscall_fn_t fn, long ret)
 {
-    current_proc->restart_nr = 0;
     if (ret != -EINTR || !fn) {
-        return;
+        return ret;
     }
     if (current_proc->restart_kind == RESTART_SYS && !syscall_restartable(fn, params)) {
         current_proc->restart_kind = RESTART_NONE;
     }
-    if (current_proc->restart_kind != RESTART_NONE) {
-        current_proc->restart_nr = syscall_num + 1u;
-    }
-}
-
-/**
- * The exit stop of a traced call numbered `syscall_num`, whose result is
- * `ret` and which `in_table` says is a number the table has: the tracer
- * reads Linux's restart code in the result register for a call to be
- * restarted, and what it leaves there decides the restart as on Linux
- * (`restart_kind_of`), as does -1 in orig_nr. Returns the result the
- * caller gets: -EINTR for any restart code.
- */
-static long restart_exit_stop(isr_params_t *params, uint32_t syscall_num, int in_table, long ret)
-{
-    int kind;
-
-    SC_RET(params) = current_proc->restart_nr != 0
-                         ? (unsigned long)restart_code(current_proc->restart_kind)
-                         : (unsigned long)ret;
-    ptrace_syscall_stop(params, syscall_num, 1);
-    ret = (long)SC_RET(params);
-    kind = restart_kind_of(ret);
-    if (kind < 0 || current_proc->orig_nr == -1 || !in_table) {
-        current_proc->restart_nr = 0;
-    } else {
-        current_proc->restart_nr = syscall_num + 1u;
-        current_proc->restart_kind = (uint8_t)kind;
-    }
-    return kind >= 0 ? -EINTR : ret;
+    return restart_code(current_proc->restart_kind);
 }
 
 /**
@@ -3121,13 +3072,12 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * The thread's seccomp filters then judge the call the tracer left, as
  * Linux runs them after the stop, and may answer it without running it.
  *
- * Whether `deliver_signals` restarts a call a signal interrupted, on this
- * return, is recorded in `restart_nr` and `restart_kind` before the exit
- * stop. A tracer there reads Linux's restart code in the result register,
- * as on Linux, -ERESTART_RESTARTBLOCK for a sleep and the rest, or -EINTR
- * for a call Linux gives EINTR in every case. It cancels the restart with
- * -1 in orig_nr or with a result that is no restart code, and changes its
- * kind with another code; the caller gets -EINTR for a code it is given.
+ * An interrupted call's result is translated into Linux's restart code
+ * before the exit stop, or left as -EINTR for a call Linux never restarts.
+ * The code stays in the result register through the signal-delivery stop.
+ * `deliver_signals` then reads it and orig_nr to decide the restart, so a
+ * tracer's changes at either stop apply. Without pending signal work, a
+ * code the tracer writes reaches the program unchanged, as on Linux.
  *
  * At the exit the datagrams the call put on the loopback ring are delivered,
  * rather than only at the next tick, so a local transfer is not paced at a
@@ -3181,11 +3131,12 @@ static void _syscall_handler(isr_params_t *params)
 
     fd_holds_release();
     if (current_proc) {
-        restart_record(params, syscall_num, !skip && syscall_num < size ? table[syscall_num] : NULL,
-                       ret);
+        ret = restart_result(params, !skip && syscall_num < size ? table[syscall_num] : NULL, ret);
     }
     if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {
-        ret = restart_exit_stop(params, syscall_num, syscall_num < size, ret);
+        SC_RET(params) = (unsigned long)ret;
+        ptrace_syscall_stop(params, syscall_num, 1);
+        ret = (long)SC_RET(params);
     }
 
     arch_irq_disable();

@@ -232,11 +232,19 @@ keeps all 64.
 orig_eax and orig_rax read -1 at a stop that no system call entered the
 kernel for, a fault, a breakpoint or an interrupt, as on Linux, and the
 call's number from its entry until the thread next enters the kernel
-otherwise.
-An orig_eax of -1 keeps an interrupted system call from being restarted,
-set at its exit stop or at the signal-delivery stop that follows; at the
-exit stop so does a result in EAX other than
-.Er -EINTR .
+otherwise; a signal return also sets it to -1.
+An interrupted restartable call has Linux's restart code in EAX or RAX
+at its exit stop and the signal-delivery stop that follows:
+-512, -513, -514 or -516.
+After the signal stop the current result and orig_eax or orig_rax decide
+whether and which call to restart.
+A result other than a restart code, or an original number of -1,
+cancels the restart.
+A compat result is sign-extended from 32 bits for that decision.
+With no pending signal or stop, or with the original number -1, a restart
+code the tracer wrote reaches the program unchanged.
+Otherwise a code that does not restart after the handler becomes
+.Er EINTR .
 .It Dv PTRACE_GETFPREGS , PTRACE_SETFPREGS
 The
 .Vt user_i387_struct :
@@ -345,11 +353,10 @@ at its next return to user mode.
 A tracee blocked in a system call that a signal would interrupt is
 interrupted for the stop, as a stop signal would interrupt it: a call that
 is restarted after a stop and a continue is restarted when the tracer
-resumes the tracee, and one that is not, such as
-.Xr nanosleep 2 ,
-fails with
-.Er EINTR ,
-where Linux restarts it.
+resumes the tracee, including
+.Xr nanosleep 2
+through
+.Nm restart_syscall .
 A tracee that
 .Dv PTRACE_LISTEN
 keeps in its stop makes the new stop before executing another user

@@ -152,15 +152,17 @@ struct restart_block {
     /* The handler restart_syscall runs, NULL when there is nothing to
      * resume, which Linux's do_no_restart_syscall answers with EINTR. */
     long (*fn)(struct isr_params *params);
-    uint64_t tick;   /* the deadline's tick, or a CPU clock's due ticks */
-    int64_t sec;     /* the deadline by time since boot; 0 with `nsec` 0 */
-    int64_t nsec;    /*   for one ended by its tick alone */
+    uint64_t tick; /* the deadline's tick, or a CPU clock's due ticks */
+    /* Deadline since boot; sec -1 marks a CPU-clock sleep; both 0 for
+     * a wait ended by its tick alone. */
+    int64_t sec;
+    int64_t nsec;
     uintptr_t uaddr; /* poll's array, or the futex word */
     uintptr_t urem;  /* where a sleep's remainder goes, or 0 */
     uint32_t val;    /* poll's count, or the value the futex word holds */
     uint32_t bitset; /* the futex wait's bitset */
     int32_t flags;   /* the futex operation's flags, or the CPU clock */
-    uint8_t timed;   /* poll and the futex wait have a deadline */
+    uint8_t timed;   /* poll has a deadline */
     uint8_t wide;    /* the remainder is two 64-bit words, not two 32-bit */
 };
 
@@ -336,11 +338,6 @@ struct process {
      * puts it back at once. */
     uint64_t saved_sigmask;
     uint32_t sigmask_saved;
-    /* One more than the number of a system call that returned EINTR and
-     * that `deliver_signals` restarts as `restart_kind` says, 0 for none.
-     * Set by the dispatcher, consumed by deliver_signals on the same
-     * return. */
-    uint32_t restart_nr;
     /* Which of Linux's restart codes the interrupted call stands for, a
      * RESTART_ value: the dispatcher sets RESTART_SYS before each call, and
      * a call that Linux restarts otherwise sets another before it returns

@@ -45,6 +45,9 @@
  * a nanosleep that SIGWINCH cut short, then the signal's delivery stop,
  * then an entry stop of restart_syscall, 0 on i386 and 219 on x86-64, and
  * its exit stop with 0, and the program sees nanosleep return 0.
+ * `trace-edits`: the tracer writes a restart code back, cancels at delivery,
+ * changes its call number, saves and restores registers after orig -1,
+ * and leaves injected codes unchanged with orig -1 or no pending signal.
  *
  * Each row of a timed call that goes on checks CLOCK_MONOTONIC: the call
  * ends no sooner than its deadline, a second after it began or for ppoll,
@@ -90,6 +93,9 @@
 
 #define PTRACE_TRACEME  0
 #define PTRACE_PEEKUSER 3
+#define PTRACE_POKEUSER 6
+#define PTRACE_GETREGS  12
+#define PTRACE_SETREGS  13
 #define PTRACE_CONT     7
 #define PTRACE_KILL     8
 #define PTRACE_SYSCALL  24
@@ -117,6 +123,7 @@
 /* The offsets of orig_rax and rax in x86-64's struct user_regs_struct. */
 #define USER_ORIG           (15 * 8)
 #define USER_RET            (10 * 8)
+#define USER_WORDS          27
 #else
 #define SYS_RT_SIGTIMEDWAIT 177
 #define SYS_RT_SIGSUSPEND   179
@@ -138,6 +145,7 @@
 /* The offsets of orig_eax and eax in i386's struct user_regs_struct. */
 #define USER_ORIG           (11 * 4)
 #define USER_RET            (6 * 4)
+#define USER_WORDS          17
 #endif
 
 /* The timeout of a timed call, the hold of a stop, and how far past the
@@ -803,14 +811,29 @@ static void judge(int c, int scen, const struct record *r)
     }
 }
 
+/** Close each acquired end of `fds`, and mark both invalid. */
+static void close_pipe(int fds[2])
+{
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (fds[i] >= 0) {
+            syscall1(SYS_CLOSE, fds[i]);
+            fds[i] = -1;
+        }
+    }
+}
+
 /** Run the call `c` in a child under the disturbance `scen` and check it;
  * the record goes to `*r`, and whether the child reported it. */
 static int run(int c, int scen, struct record *r)
 {
-    int pipefd[2], pid, status = 0, got;
+    int pipefd[2], pid = -1, status = 0, got = 0;
     char byte;
 
     pipefd[0] = pipefd[1] = -1;
+    wake_fd[0] = wake_fd[1] = -1;
+    sem_id = msg_id = -1;
 
     *shared_word = 0;
     sem_id = sem_new();
@@ -818,14 +841,19 @@ static int run(int c, int scen, struct record *r)
     if (syscall1(SYS_PIPE, (long)pipefd) != 0 || syscall1(SYS_PIPE, (long)wake_fd) != 0 ||
         sem_id < 0 || msg_id < 0) {
         miss(calls[c].name, scen, "could not make its pipes and objects", sem_id, 0);
-        return 0;
+        goto out;
     }
     pid = (int)syscall0(SYS_FORK);
+    if (pid < 0) {
+        miss(calls[c].name, scen, "could not fork", pid, 0);
+        goto out;
+    }
     if (pid == 0) {
         syscall1(SYS_CLOSE, pipefd[0]);
         child(c, scen, pipefd[1]);
     }
     syscall1(SYS_CLOSE, pipefd[1]);
+    pipefd[1] = -1;
     got = syscall3(SYS_READ, pipefd[0], (long)&byte, 1) == 1 && wait_sleeping(pid);
     if (got && !disturb(pid, scen)) {
         miss(calls[c].name, scen, "did not stop", 0, 0);
@@ -837,16 +865,26 @@ static int run(int c, int scen, struct record *r)
             break;
         }
     }
-    got = syscall3(SYS_READ, pipefd[0], (long)r, sizeof(*r)) == (long)sizeof(*r);
-    if (!got) {
-        syscall2(SYS_KILL, pid, 9);
+    if (got) {
+        got = syscall3(SYS_READ, pipefd[0], (long)r, sizeof(*r)) == (long)sizeof(*r);
     }
-    syscall4(SYS_WAIT4, pid, (long)&status, 0, 0);
-    syscall1(SYS_CLOSE, pipefd[0]);
-    syscall1(SYS_CLOSE, wake_fd[0]);
-    syscall1(SYS_CLOSE, wake_fd[1]);
-    sem_rm(sem_id);
-    msg_rm(msg_id);
+out:
+    if (pid > 0) {
+        if (!got) {
+            syscall2(SYS_KILL, pid, 9);
+        }
+        if (syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) != pid || status != 0) {
+            got = 0;
+        }
+    }
+    close_pipe(pipefd);
+    close_pipe(wake_fd);
+    if (sem_id >= 0) {
+        sem_rm(sem_id);
+    }
+    if (msg_id >= 0) {
+        msg_rm(msg_id);
+    }
     if (!got) {
         miss(calls[c].name, scen, "reported nothing; status", status, 0);
     }
@@ -882,103 +920,226 @@ static long peek(int pid, long off)
     return word;
 }
 
-/** Resume the tracee `pid` to its next system-call stop, giving it the
- * signal `sig`, and return the stop's signal, or -1 for another end. */
-static int next_stop(int pid, int sig)
+/* The register changes made by each tracing case. */
+enum { T_BLOCK, T_CANCEL, T_NUMBER, T_RESTORE, T_NO_ORIG, T_NO_SIGNAL, T_COUNT };
+
+static const char *const trace_names[T_COUNT] = {"trace-block",   "trace-cancel",
+                                                 "trace-number",  "trace-restore",
+                                                 "trace-no-orig", "trace-no-signal"};
+
+/** Wait for `*pid` to stop and return its signal, or -1 for another end.
+ * Clear the owned pid when wait reaps it, so cleanup cannot signal it. */
+static int trace_stop(int *pid)
 {
     int status = 0;
 
-    if (syscall4(SYS_PTRACE, PTRACE_SYSCALL, pid, 0, sig) != 0 ||
-        syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) != pid || (status & 0xFF) != 0x7F) {
+    if (syscall4(SYS_WAIT4, *pid, (long)&status, 0, 0) != *pid) {
+        return -1;
+    }
+    if ((status & 0xFF) != 0x7F) {
+        *pid = 0;
         return -1;
     }
     return (status >> 8) & 0xFF;
 }
 
-/** The tracee of `trace`: stop, then sleep half a second. */
-static void tracee(void)
+/** Resume `*pid` to its next system-call stop with `sig`; return the
+ * stop's signal, or -1 when the request or wait fails. */
+static int next_stop(int *pid, int sig)
+{
+    if (syscall4(SYS_PTRACE, PTRACE_SYSCALL, *pid, 0, sig) != 0) {
+        return -1;
+    }
+    return trace_stop(pid);
+}
+
+/** Write `value` to the tracee's register at `off`; whether it succeeded. */
+static int poke(int pid, long off, long value)
+{
+    return syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, off, value) == 0;
+}
+
+/** The tracee of `mode`: stop, make the call, and check its edited result. */
+static void tracee(int mode)
 {
     struct ts half = {0, 500000000L};
-    long r;
+    long r, want = 0, me = syscall0(SYS_GETPID);
 
-    syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0);
-    syscall2(SYS_KILL, syscall0(SYS_GETPID), SIGSTOP);
-    /* interval: the sleeps tested, timed against their deadlines */
-    r = syscall2(SYS_NANOSLEEP, (long)&half, 0);
-    sys_exit(r == 0 ? 0 : 1);
+    syscall1(SYS_ALARM, 20);
+    hits = 0;
+    install(SIGUSR1, on_usr1, SA_RESTART);
+    if (syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0) != 0) {
+        sys_exit(1);
+    }
+    syscall2(SYS_KILL, me, SIGSTOP);
+    if (mode == T_NO_SIGNAL) {
+        r = syscall0(SYS_GETPID);
+    } else {
+        /* interval: the sleep whose restart registers the tracer edits */
+        r = syscall2(SYS_NANOSLEEP, (long)&half, 0);
+    }
+    if (mode == T_NUMBER) {
+        want = me;
+    } else if (mode == T_NO_ORIG || mode == T_NO_SIGNAL) {
+        want = -512;
+    }
+    sys_exit(r == want && hits == (mode == T_CANCEL ? 1 : 0) ? 0 : 1);
 }
 
-/** The stops after the tracee `pid` entered its nanosleep, checked
- * against Linux's. */
-static void trace_restart(int pid)
+/** Reach the entry stop of call `nr` in `*pid`; whether it was found. */
+static int trace_entry(int *pid, long nr)
 {
-    int status = 0;
+    int c;
+
+    for (c = 0; c < 8; c++) {
+        if (next_stop(pid, 0) != SIGTRAP) {
+            return 0;
+        }
+        if ((long)(int)peek(*pid, USER_ORIG) == nr) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Stop the nanosleep at its interrupted exit and its signal delivery.
+ * Check and write back the restart code in the tracer's register width. */
+static int trace_interrupt(int *pid, int mode)
+{
+    int sig = mode == T_CANCEL ? SIGUSR1 : SIGWINCH;
+    long code = mode == T_CANCEL ? -512 : -516;
     long v;
 
-    if (syscall4(SYS_PTRACE, PTRACE_SYSCALL, pid, 0, 0) != 0 || !wait_sleeping(pid)) {
-        miss("nanosleep", -1, "did not sleep under the tracer", 0, 0);
-        return;
+    if (syscall4(SYS_PTRACE, PTRACE_SYSCALL, *pid, 0, 0) != 0 || !wait_sleeping(*pid) ||
+        syscall2(SYS_KILL, *pid, sig) != 0 || trace_stop(pid) != SIGTRAP) {
+        return 0;
     }
-    syscall2(SYS_KILL, pid, SIGWINCH);
-    if (syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) != pid ||
-        (status & 0xFFFF) != ((SIGTRAP << 8) | 0x7F) ||
-        (peek(pid, USER_ORIG) & 0xFFFF) != NR_SLEEP) {
-        miss("nanosleep", -1, "gave no exit stop; status", status, (SIGTRAP << 8) | 0x7F);
-        return;
-    }
-    v = (long)(int)peek(pid, USER_RET);
+    v = (long)(int)peek(*pid, USER_RET);
     if (v != -516) {
-        miss("nanosleep", -1, "had at its exit stop", v, -516);
+        miss(trace_names[mode], -1, "had at its exit stop", v, -516);
+        return 0;
     }
-    v = next_stop(pid, 0);
-    if (v != SIGWINCH) {
-        miss("nanosleep", -1, "stopped for the signal", v, SIGWINCH);
+    if (!poke(*pid, USER_RET, code) || next_stop(pid, 0) != sig) {
+        return 0;
     }
-    v = next_stop(pid, 0) == SIGTRAP ? (long)(int)peek(pid, USER_ORIG) : -1;
-    if (v != SYS_RESTART_SYSCALL) {
-        miss("restart_syscall", -1, "entered with orig", v, SYS_RESTART_SYSCALL);
+    v = (long)(int)peek(*pid, USER_RET);
+    if (v != code) {
+        miss(trace_names[mode], -1, "had at its signal stop", v, code);
+        return 0;
     }
-    v = next_stop(pid, 0) == SIGTRAP ? (long)(int)peek(pid, USER_RET) : -1;
-    if (v != 0) {
-        miss("restart_syscall", -1, "left with", v, 0);
+    return 1;
+}
+
+/** Cancel the restart at signal delivery, run the handler, and require
+ * exit_group after sigreturn, with no repeated nanosleep between them. */
+static int trace_cancel(int *pid)
+{
+    long v;
+
+    if (!poke(*pid, USER_RET, 0) || next_stop(pid, SIGUSR1) != SIGTRAP ||
+        (long)(int)peek(*pid, USER_ORIG) != SYS_RT_SIGRETURN || next_stop(pid, 0) != SIGTRAP ||
+        (long)(int)peek(*pid, USER_ORIG) != -1 || next_stop(pid, 0) != SIGTRAP) {
+        return 0;
+    }
+    v = (long)(int)peek(*pid, USER_ORIG);
+    if (v != SYS_EXIT_GROUP) {
+        miss(trace_names[T_CANCEL], -1, "called after its handler", v, SYS_EXIT_GROUP);
+        return 0;
+    }
+    return 1;
+}
+
+/** Apply `mode` at the stopped tracee and check a restart's next entry.
+ * The caller continues and reaps the child, or kills it on failure. */
+static int trace_edit(int *pid, int mode)
+{
+    unsigned long saved[USER_WORDS];
+    long nr, v;
+
+    if (mode == T_NO_SIGNAL) {
+        return next_stop(pid, 0) == SIGTRAP && poke(*pid, USER_RET, -512);
+    }
+    if (!trace_interrupt(pid, mode)) {
+        return 0;
+    }
+    if (mode == T_CANCEL) {
+        return trace_cancel(pid);
+    }
+    if (mode == T_NO_ORIG) {
+        return poke(*pid, USER_ORIG, -1) && poke(*pid, USER_RET, -512);
+    }
+    if (mode == T_NUMBER) {
+        if (!poke(*pid, USER_ORIG, SYS_GETPID) || !poke(*pid, USER_RET, -512)) {
+            return 0;
+        }
+    } else if (mode == T_RESTORE) {
+        if (syscall4(SYS_PTRACE, PTRACE_GETREGS, *pid, 0, (long)saved) != 0 ||
+            !poke(*pid, USER_ORIG, -1) || !poke(*pid, USER_RET, 0) ||
+            syscall4(SYS_PTRACE, PTRACE_SETREGS, *pid, 0, (long)saved) != 0) {
+            return 0;
+        }
+    }
+    nr = mode == T_NUMBER ? SYS_GETPID : SYS_RESTART_SYSCALL;
+    v = next_stop(pid, 0) == SIGTRAP ? (long)(int)peek(*pid, USER_ORIG) : -1;
+    if (v != nr) {
+        miss(trace_names[mode], -1, "restarted with orig", v, nr);
+        return 0;
+    }
+    if (mode == T_BLOCK) {
+        v = next_stop(pid, 0) == SIGTRAP ? (long)(int)peek(*pid, USER_RET) : -1;
+        if (v != 0) {
+            miss(trace_names[mode], -1, "left restart_syscall with", v, 0);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Run one tracing case, cleaning up only its own unreaped child. */
+static void trace_case(int mode)
+{
+    int pid, status = 0, ok = 0;
+    long nr = mode == T_NO_SIGNAL ? SYS_GETPID : NR_SLEEP;
+
+    pid = (int)syscall0(SYS_FORK);
+    if (pid < 0) {
+        miss(trace_names[mode], -1, "could not fork", pid, 0);
+        return;
+    }
+    if (pid == 0) {
+        tracee(mode);
+    }
+    if (trace_stop(&pid) != SIGSTOP || !trace_entry(&pid, nr) || !trace_edit(&pid, mode)) {
+        miss(trace_names[mode], -1, "could not reach or edit its stop", 0, 1);
+        goto out;
+    }
+    if (syscall4(SYS_PTRACE, PTRACE_CONT, pid, 0, 0) != 0) {
+        goto out;
+    }
+    if (syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) == pid && (status & 0xFF) != 0x7F) {
+        pid = 0;
+        ok = status == 0;
+    }
+out:
+    if (pid > 0) {
+        syscall2(SYS_KILL, pid, 9);
+        syscall4(SYS_WAIT4, pid, (long)&status, 0, 0);
+    }
+    if (!ok) {
+        miss(trace_names[mode], -1, "ended with status", status, 0);
     }
 }
 
-/** The row `trace`. */
+/** The row `trace`, including edits at both syscall and signal stops. */
 static void trace_row(void)
 {
-    int pid, status = 0, c;
-    long v;
+    int mode;
 
     report_part("trace");
-    pid = (int)syscall0(SYS_FORK);
-    if (pid == 0) {
-        tracee();
-    }
-    if (syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) != pid ||
-        (status & 0xFFFF) != ((SIGSTOP << 8) | 0x7F)) {
-        miss("tracee", -1, "did not stop; status", status, (SIGSTOP << 8) | 0x7F);
-        syscall2(SYS_KILL, pid, 9);
-        syscall4(SYS_WAIT4, pid, (long)&status, 0, 0);
-        return;
-    }
-    for (c = 0; c < 4; c++) {
-        if (next_stop(pid, 0) != SIGTRAP) {
-            break;
-        }
-        v = peek(pid, USER_ORIG);
-        if ((v & 0xFFFF) == NR_SLEEP) {
-            trace_restart(pid);
-            break;
-        }
-        next_stop(pid, 0);
-    }
-    syscall4(SYS_PTRACE, PTRACE_CONT, pid, 0, 0);
-    syscall4(SYS_WAIT4, pid, (long)&status, 0, 0);
-    if (status != 0) {
-        miss("tracee", -1, "ended with status", status, 0);
-        syscall2(SYS_KILL, pid, 9);
-        syscall4(SYS_WAIT4, pid, (long)&status, 0, 0);
+    trace_case(T_BLOCK);
+    report_part("trace-edits");
+    for (mode = 1; mode < T_COUNT; mode++) {
+        trace_case(mode);
     }
 }
 

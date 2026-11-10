@@ -122,8 +122,9 @@ has
 .Dv STICKY_TIMEOUTS
 keeps its timeout as it gave it.
 A signal that ends the wait with no handler run, as a stop and a continue,
-restarts the call with the time left, so it still ends at its first
-deadline; a handler, whatever its flags, makes it fail with
+restarts the call with the time left when it was interrupted.
+The time spent stopped is added to the first deadline, as on Linux.
+A handler, whatever its flags, makes it fail with
 .Er EINTR .
 When the time left cannot be written, the call fails with
 .Er EINTR
