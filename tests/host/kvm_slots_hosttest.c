@@ -23,7 +23,9 @@
  * first and the last such device dropping every leaf, read-only over a
  * copy-on-write page and writable after the write that breaks it; a slot of
  * 2 MiB-aligned contiguous RAM as one 2 MiB leaf, and
- * as 4 KiB leaves where the slot, the addresses or the frames do not allow one;
+ * as 4 KiB leaves where the slot, the addresses or the frames do not allow one
+ * or a page of memfd_secret lies in the block; a page that stands for the zero
+ * page mapped read-only on a read and writable, its mark ended, on a write;
  * a device's frames uncached with the guest's PAT in charge, as a 2 MiB leaf
  * too; KVM_PRE_FAULT_MEMORY mapping a range a leaf at a time, moving it past
  * what it mapped, and its refusals; the leaves counted by size as pages_4k
@@ -265,11 +267,28 @@ static uintptr_t fresh(void)
 
 static int prefaults;
 
-/** The region of `addr`: none, so that no slot maps memfd_secret's. */
+/* The one region the model knows, of memfd_secret, while `secret_on`. */
+static vma_t secret;
+static int secret_on;
+
+/** The region of `addr`: the secret one, or none. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     (void)vm;
-    (void)addr;
+    return secret_on && addr >= secret.start && addr < secret.end ? &secret : NULL;
+}
+
+/** The first region that ends above `addr`: the secret one, or none. */
+vma_t *vm_lower(const vm_space_t *vm, uintptr_t addr)
+{
+    (void)vm;
+    return secret_on && secret.end > addr ? &secret : NULL;
+}
+
+/** The region after `r`: none, since the model has one. */
+vma_t *vm_next(const vma_t *r)
+{
+    (void)r;
     return NULL;
 }
 
@@ -556,6 +575,61 @@ static void large_rows(void)
           "and no leaf is counted with the slots gone");
 }
 
+/** memfd_secret's pages, refused at their own fault and kept out of a
+ * 2 MiB leaf that a fault on an ordinary page of their block would make. */
+static void secret_rows(void)
+{
+    uintptr_t a = HVA + 2 * MIB2;
+    uint64_t block = 0x400000 / 4096u;
+    int level;
+
+    fill_block(a, phys_of(ram));
+    secret.start = a + 100 * 4096u;
+    secret.end = a + 101 * 4096u;
+    secret.prot = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_SECRET;
+    secret_on = 1;
+    CHECK(set(3, 0, 0x400000, MIB2, a) == 0, "a slot over a block with a page of memfd_secret");
+    CHECK(kvm_tdp_fault(&vm, block + 100, 0) == -EFAULT && leaf_of(block + 100, &level) == 0,
+          "a fault on the secret page is -EFAULT");
+    CHECK(kvm_tdp_fault(&vm, block + 17, 0) == 0 && leaf_of(block + 17, &level) != 0 &&
+              level == 1 && leaf_of(block + 100, &level) == 0,
+          "a fault on another page of the block maps 4 KiB, not the secret page with it");
+    CHECK(set(3, 0, 0, 0, 0) == 0, "deleted");
+    secret_on = 0;
+}
+
+/** A page that stands for the zero page (PTE_ZEROFILL): mapped read-only
+ * on a read, with its mark kept, and writable on a write, with the mark
+ * gone, alone and in a 2 MiB leaf. */
+static void zero_rows(void)
+{
+    uintptr_t a = HVA + 2 * MIB2;
+    uint64_t block = 0x400000 / 4096u, e;
+    int level;
+
+    fill_block(a, phys_of(ram));
+    *host_entry(a + 5 * 4096u) |= PTE_ZEROFILL;
+    CHECK(set(3, 0, 0x400000, MIB2, a) == 0, "a slot over a block with a zero page");
+    CHECK(kvm_tdp_fault(&vm, block + 1, 0) == 0 && (e = leaf_of(block + 1, &level)) != 0 &&
+              level == 2 && !(e & 2) && (*host_entry(a + 5 * 4096u) & PTE_ZEROFILL),
+          "a read maps the block read-only and keeps the mark");
+    CHECK(kvm_tdp_fault(&vm, block + 1, 1) == 0 && (e = leaf_of(block + 1, &level)) != 0 &&
+              level == 2 && (e & 2) && !(*host_entry(a + 5 * 4096u) & PTE_ZEROFILL),
+          "a write maps it writable and ends the mark");
+    CHECK(set(3, 0, 0, 0, 0) == 0, "deleted");
+
+    region(a, 512, 1);
+    *host_entry(a + 7 * 4096u) = fresh() | PTE_P | PTE_U | PTE_W | PTE_ZEROFILL;
+    CHECK(set(3, 0, 0x400000, MIB2, a) == 0, "a slot over a sparse block");
+    CHECK(kvm_tdp_fault(&vm, block + 7, 0) == 0 && (e = leaf_of(block + 7, &level)) != 0 &&
+              level == 1 && !(e & 2) && (*host_entry(a + 7 * 4096u) & PTE_ZEROFILL),
+          "a read maps a lone zero page read-only and keeps the mark");
+    CHECK(kvm_tdp_fault(&vm, block + 7, 1) == 0 && (e = leaf_of(block + 7, &level)) != 0 &&
+              level == 1 && (e & 2) && !(*host_entry(a + 7 * 4096u) & PTE_ZEROFILL),
+          "a write maps it writable and ends the mark");
+    CHECK(set(3, 0, 0, 0, 0) == 0, "deleted");
+}
+
 /* Whether the caller has a signal pending. */
 static int sig_pending;
 
@@ -775,6 +849,8 @@ int main(void)
     small_rows();
     readonly_rows();
     large_rows();
+    secret_rows();
+    zero_rows();
     pre_fault_rows();
     device_rows();
     dirty_rows();
