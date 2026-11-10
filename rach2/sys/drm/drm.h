@@ -2001,16 +2001,22 @@ void drm_client_boot_screen_gone(void);
  * PC-only code and are called through `arch_drm_probe` (sys/arch/arch.h).
  */
 
+/** QEMU's standard VGA and bochs display, as Linux's bochs-drm. */
 int32_t bochs_probe(void);
+/** The framebuffer the loader left, as Linux's simpledrm. */
 int32_t fbdrm_probe(void);
+/** Intel's graphics, when `rach2.i915` asks for it; see i915/Readme.md. */
 int32_t i915_probe(void);
+/** The virtio GPUs on virtio-pci. */
 int32_t virtio_gpu_probe(void);
 struct virtio_dev;
 /** Bind virtio-gpu to `vdev`, a device of a transport other than virtio-pci,
  * such as the shared-memory transport's (../virtio/shmem.c), once its device
  * has answered; 0 or -errno. See virtio_gpu.c. */
 int32_t virtio_gpu_bind(struct virtio_dev *vdev);
+/** vkms, a display in software, when the command line has `rach2.vkms`. */
 int32_t vkms_probe(void);
+/** vgem, buffers in memory with no display, with `rach2.vgem`. */
 int32_t vgem_probe(void);
 /** vkms's vblank timer, from the boot processor's tick with interrupts
  * off: each vblank due on its CRTC since the last call. Nothing while no
@@ -2018,9 +2024,11 @@ int32_t vgem_probe(void);
 void vkms_tick(void);
 
 /* ------------------------------------------------------------------------
- * The ioctl handlers of the core's table, one per number, each in the file
- * of the task that writes it. Until then each answers -EOPNOTSUPP, what
- * Linux answers for a driver without the feature.
+ * The ioctl handlers of the core's table, one per number, in the files the
+ * comments below name. Each takes the device, the argument the dispatcher
+ * copied in and copies back out, and the caller's file, and answers 0 or
+ * -errno; one for a feature the device lacks answers -EOPNOTSUPP, as Linux
+ * does.
  */
 
 /* drm.c (76-4a): the device's identity and the client's view. */

@@ -2639,9 +2639,12 @@ int32_t drm_mode_gamma_get_ioctl(struct drm_device *dev, void *data, struct drm_
 }
 
 /* ------------------------------------------------------------------------
- * Leases, which no driver offers yet
+ * Leases, which no driver offers
  */
 
+/** CREATE_LEASE: -EOPNOTSUPP on every device, since leases are not
+ * supported (Readme.md, Limits); Linux answers so only on a device without
+ * mode setting. */
 int32_t drm_mode_create_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     (void)dev;
@@ -2650,6 +2653,7 @@ int32_t drm_mode_create_lease_ioctl(struct drm_device *dev, void *data, struct d
     return -EOPNOTSUPP;
 }
 
+/** LIST_LESSEES: -EOPNOTSUPP, as CREATE_LEASE. */
 int32_t drm_mode_list_lessees_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     (void)dev;
@@ -2658,6 +2662,7 @@ int32_t drm_mode_list_lessees_ioctl(struct drm_device *dev, void *data, struct d
     return -EOPNOTSUPP;
 }
 
+/** GET_LEASE: -EOPNOTSUPP, as CREATE_LEASE. */
 int32_t drm_mode_get_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     (void)dev;
@@ -2666,6 +2671,7 @@ int32_t drm_mode_get_lease_ioctl(struct drm_device *dev, void *data, struct drm_
     return -EOPNOTSUPP;
 }
 
+/** REVOKE_LEASE: -EOPNOTSUPP, as CREATE_LEASE. */
 int32_t drm_mode_revoke_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     (void)dev;
