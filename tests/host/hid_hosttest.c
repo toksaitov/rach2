@@ -246,6 +246,7 @@ static int model_disconnects;
 static int model_multiplier_set = -1;
 static char model_name[HID_NAME_MAX];
 static char model_phys[24];
+static char model_uniq[HID_UNIQ_MAX];
 static uint16_t model_version;
 
 /** Refuse a descriptor of no bytes; take any other as one input report of
@@ -277,6 +278,7 @@ int hidinput_connect(struct hid_dev *hid)
 {
     copy_string(model_name, hid->name, sizeof(model_name));
     copy_string(model_phys, hid->phys, sizeof(model_phys));
+    copy_string(model_uniq, hid->uniq, sizeof(model_uniq));
     model_version = hid->version;
     hid->ninputs = model_inputs > 0 ? (uint32_t)model_inputs : 0;
     return model_inputs;
@@ -409,9 +411,16 @@ static int sent(int n, int c0, int c1, int c2, int c3)
 }
 
 /* QEMU's identity, with and without its strings. */
-static const struct hid_ids no_strings = {0x0627, 0x0001, 0x0001, "", ""};
-static const struct hid_ids qemu_mouse = {0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Mouse"};
-static const struct hid_ids qemu_tablet = {0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Tablet"};
+static const struct hid_ids no_strings = {0x0627, 0x0001, 0x0001, "", "", ""};
+static const struct hid_ids qemu_mouse = {0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Mouse", ""};
+static const struct hid_ids qemu_tablet = {
+    0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Tablet", "28754-0000:00:04.0-1"};
+/* A serial of 62 letters and a two-byte character, which 63 bytes cannot
+ * hold whole. */
+static const struct hid_ids long_serial = {
+    0x046d,         0xc52b,
+    0x0111,         "Logitech",
+    "USB Receiver", "ABCDEFGHIJABCDEFGHIJABCDEFGHIJABCDEFGHIJABCDEFGHIJABCDEFGHIJAB\xc3\xa9Z"};
 
 /** The byte of the LED report `hid_output_report` offers `device`, with
  * its wValue in `value`; -1 for none. */
@@ -491,6 +500,7 @@ static void report_rows(void)
     CHECK("report: named by its strings, usb-8/input0, version bcdHID",
           same(model_name, "QEMU QEMU USB Tablet") && same(model_phys, "usb-8/input0") &&
               model_version == 1);
+    CHECK("report: its serial string is its uniq", same(model_uniq, "28754-0000:00:04.0-1"));
     CHECK("report: taken once",
           hid_attach(8, &qemu_tablet, rdesc, 4) == 0 && hid_report_size(8) == 8);
     model_reports = 0;
@@ -507,6 +517,11 @@ static void report_rows(void)
 
     CHECK("report: a device without strings is HID vvvv:pppp",
           hid_attach(8, &no_strings, rdesc, 4) == 0 && same(model_name, "HID 0627:0001"));
+    CHECK("report: no serial string is an empty uniq", same(model_uniq, ""));
+    hid_gone(8);
+    hid_attach(8, &long_serial, rdesc, 4);
+    CHECK("report: a long serial is cut before the character 63 bytes cannot hold",
+          strlen(model_uniq) == 62 && model_uniq[61] == 'B');
     hid_gone(8);
 
     model_leds = 1;

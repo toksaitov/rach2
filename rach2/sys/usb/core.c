@@ -142,13 +142,14 @@
 #define HS_LANGID       1
 #define HS_MANUFACTURER 2
 #define HS_PRODUCT      3
-#define HS_IDLE         4
-#define HS_REPORT       5
-#define HS_PROTOCOL     6
-#define HS_DONE         7
+#define HS_SERIAL       4
+#define HS_IDLE         5
+#define HS_REPORT       6
+#define HS_PROTOCOL     7
+#define HS_DONE         8
 
-/* The bytes of a device's manufacturer or product string in UTF-8, with its
- * terminator, as Linux's HID name holds them. */
+/* The bytes of a device's manufacturer, product or serial string in UTF-8,
+ * with its terminator, as Linux's HID name holds them. */
 #define STRING_MAX 128
 
 struct usb_device_state {
@@ -213,9 +214,11 @@ struct usb_device_state {
     int boot;
     uint8_t i_manufacturer;
     uint8_t i_product;
+    uint8_t i_serial;
     uint16_t langid;
     char manufacturer[STRING_MAX];
     char product_name[STRING_MAX];
+    char serial[STRING_MAX];
     /* What the controller is given the addresses of: the last report, a
      * HID device's output report, the setup packet and the descriptor
      * being read. */
@@ -1197,11 +1200,13 @@ static void hid_ids_of(const struct usb_device_state *d, struct hid_ids *ids)
     ids->version = (uint16_t)d->interface.hid_version;
     ids->manufacturer = d->manufacturer;
     ids->product_name = d->product_name;
+    ids->serial = d->serial;
 }
 
 /**
  * Send the request of HID setup step `step` to `d`, or skip it: the
- * language of its strings, its manufacturer and product strings, SET_IDLE
+ * language of its strings, its manufacturer, product and serial strings,
+ * SET_IDLE
  * with a duration of 0, as Linux's usbhid sends it, its report descriptor,
  * and SET_PROTOCOL to the boot protocol. Returns 1 when the request is
  * out, 0 when the step has nothing to send, -1 when it could not be
@@ -1211,13 +1216,16 @@ static int hid_request(struct usb_device_state *d, int step)
 {
     switch (step) {
     case HS_LANGID:
-        if (!d->i_manufacturer && !d->i_product) {
+        if (!d->i_manufacturer && !d->i_product && !d->i_serial) {
             return 0;
         }
         return control_in(d, REQ_GET_DESCRIPTOR, DESC_STRING << 8, 0, STRING_ASK) == 0 ? 1 : -1;
     case HS_MANUFACTURER:
-    case HS_PRODUCT: {
-        int index = step == HS_MANUFACTURER ? d->i_manufacturer : d->i_product;
+    case HS_PRODUCT:
+    case HS_SERIAL: {
+        int index = step == HS_MANUFACTURER ? d->i_manufacturer
+                    : step == HS_PRODUCT    ? d->i_product
+                                            : d->i_serial;
 
         if (!index || !d->langid) {
             return 0;
@@ -1342,6 +1350,9 @@ static void hid_answer(struct usb_device_state *d, int answer)
     case HS_PRODUCT:
         take_string(d, (int)(STRING_ASK - d->short_by), d->product_name);
         break;
+    case HS_SERIAL:
+        take_string(d, (int)(STRING_ASK - d->short_by), d->serial);
+        break;
     case HS_REPORT:
         hid_ids_of(d, &ids);
         if (hid_attach(d->index + 1, &ids, d->buffer, got) != 0) {
@@ -1366,6 +1377,7 @@ static void hid_begin(struct usb_device_state *d)
     d->langid = 0;
     d->manufacturer[0] = 0;
     d->product_name[0] = 0;
+    d->serial[0] = 0;
     hid_advance(d, 0);
 }
 
@@ -1639,6 +1651,7 @@ static void step_device(struct usb_device_state *d)
         d->release = (uint16_t)(d->buffer[12] | (d->buffer[13] << 8));
         d->i_manufacturer = d->buffer[14];
         d->i_product = d->buffer[15];
+        d->i_serial = d->buffer[16];
         if (control_in(d, REQ_GET_DESCRIPTOR, DESC_CONFIG << 8, 0, 9) != 0) {
             fail(d, "its configuration could not be asked for");
             return;

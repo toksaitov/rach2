@@ -610,8 +610,12 @@ for the PS/2 keyboard and
 for a USB keyboard, cut to the length the request gives, as Linux cuts
 them; the answer is the bytes copied.
 .It Dv EVIOCGUNIQ
-.Er ENOENT :
-no device has a serial number.
+The serial number of a USB device in the report protocol, its serial
+string cut to 63 bytes, or the empty string for a device without one, as
+Linux's usbhid gives it;
+.Er ENOENT
+for a PS/2 device and a USB keyboard or mouse in the boot protocol, as
+Linux's usbkbd and usbmouse give none.
 .It Dv EVIOCGBIT
 The bits of the event types the device reports,
 .Dv EV_SYN ,

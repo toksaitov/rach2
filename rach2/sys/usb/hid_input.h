@@ -17,6 +17,9 @@
 /* The bytes of a device's name with its terminator, Linux's `hid->name`. */
 #define HID_NAME_MAX 128
 
+/* The bytes of its serial with its terminator, Linux's `hid->uniq`. */
+#define HID_UNIQ_MAX 64
+
 /* One input device, Linux's `struct hid_input`, with the capabilities its
  * usages were mapped to before its event device is registered. */
 struct hid_input {
@@ -43,6 +46,7 @@ struct hid_dev {
     struct hid_desc desc;
     char name[HID_NAME_MAX]; /* "Manufacturer Product", as usbhid writes it */
     const char *phys;        /* EVIOCGPHYS, kept by its pointer */
+    char uniq[HID_UNIQ_MAX]; /* EVIOCGUNIQ: the serial string, "" for none */
     uint16_t vendor;
     uint16_t product;
     uint16_t version; /* bcdHID, which usbhid gives as the version */
