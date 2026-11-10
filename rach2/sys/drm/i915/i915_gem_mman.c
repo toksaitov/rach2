@@ -8,8 +8,10 @@
 #include "i915.h"
 #include "i915_drm.h"
 
+#include "../../arch/arch.h"
 #include "../../arch/x86/pat.h"
 #include "../../lib/kerrno.h"
+#include "../../lib/kstring.h"
 #include "../../mm/paging.h"
 #include "../../mm/usercopy.h"
 
@@ -27,6 +29,58 @@ static struct drm_i915_gem_object *mmo_object(const struct i915_mmap_offset *mmo
 static void mmo_vm_put(void *data)
 {
     i915_gem_object_put(mmo_object((struct i915_mmap_offset *)data));
+}
+
+/**
+ * The `access` of every mapping of an object, for ptrace and
+ * /proc/PID/mem, as Linux's vm_access: `len` bytes at the byte `offset`
+ * through the object's own pages, whatever the mapping's kind, a GTT map's
+ * as they lie in memory, after the writes made through the aperture are
+ * flushed. 0; -EINVAL past the object's end; -ENODEV for an object without
+ * pages of its own, an import or a userptr object, or once the device is
+ * gone; -ENOMEM when a page cannot be had or mapped.
+ */
+static int mmo_vm_access(void *data, uint64_t offset, void *buf, uint32_t len, int write)
+{
+    struct drm_i915_gem_object *obj = mmo_object((struct i915_mmap_offset *)data);
+    uint8_t *b = (uint8_t *)buf;
+    struct i915_vma *v;
+    uint32_t done = 0;
+
+    if (offset > obj->base.size || len > obj->base.size - offset) {
+        return -EINVAL;
+    }
+    if (obj->base.dev->unplugged || obj->base.import || i915_gem_object_is_userptr(obj)) {
+        return -ENODEV;
+    }
+    for (v = obj->vmas; v; v = v->obj_next) {
+        i915_vma_flush_writes(v);
+    }
+    while (done < len) {
+        uint64_t at = offset + done;
+        uint32_t in = (uint32_t)(at & (PAGE_SIZE - 1));
+        uint32_t n = len - done < PAGE_SIZE - in ? len - done : PAGE_SIZE - in;
+        uintptr_t phys = i915_gem_object_frame(obj, (uint32_t)(at >> PAGE_SHIFT));
+        uint8_t *va = phys ? (uint8_t *)kmap_temp(phys) : 0;
+
+        if (!va) {
+            return -ENOMEM;
+        }
+        if (write) {
+            k_memcpy(va + in, b + done, n);
+            if (!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE)) {
+                arch_dma_flush(va + in, n);
+            }
+        } else {
+            if (!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ)) {
+                arch_dma_flush(va + in, n);
+            }
+            k_memcpy(b + done, va + in, n);
+        }
+        kunmap_temp(va);
+        done += n;
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------------------------
@@ -51,7 +105,7 @@ static int cpu_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
     return 0;
 }
 
-static const struct vm_device_ops cpu_vm_ops = {cpu_vm_page, mmo_vm_put};
+static const struct vm_device_ops cpu_vm_ops = {cpu_vm_page, mmo_vm_put, mmo_vm_access};
 
 int32_t i915_gem_object_mmap_cpu(struct drm_gem_object *base, vma_t *vma)
 {
@@ -75,32 +129,56 @@ int32_t i915_gem_object_mmap_cpu(struct drm_gem_object *base, vma_t *vma)
  */
 
 /**
- * The binding a GTT fault at `pgoff` maps, as Linux's vm_fault_gtt: the
- * whole object inside the aperture when it fits without evicting, or a
- * partial view of at least I915_MIN_CHUNK_PAGES around the page, rounded to
- * whole tile rows (compute_partial_view). Pinned, which the caller drops.
+ * The binding a GTT fault at `pgoff` maps, as Linux's vm_fault_gtt tries
+ * three: the whole object inside the aperture when it is there or fits
+ * without evicting or waiting; then the view of at least
+ * I915_MIN_CHUNK_PAGES around the page, rounded to whole tile rows
+ * (compute_partial_view), without waiting when that is the whole object;
+ * then that view as a partial one, even of the whole object, which is a
+ * binding apart, so that a binding the GPU still uses outside the aperture
+ * is never waited for. Pinned, which the caller drops.
  */
 static int32_t gtt_fault_pin(struct drm_i915_gem_object *obj, uint32_t pgoff, struct i915_vma **vma)
 {
     uint32_t pages = (uint32_t)(obj->base.size >> PAGE_SHIFT);
-    uint32_t chunk = I915_MIN_CHUNK_PAGES, row, offset, n;
+    uint32_t chunk = I915_MIN_CHUNK_PAGES, row, offset = 0, n = pages;
 
-    if (i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE | I915_PIN_NOEVICT, 0, vma) == 0) {
+    if (i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE | I915_PIN_NOEVICT | I915_PIN_NONBLOCK, 0, vma) ==
+        0) {
         return 0;
     }
     row = i915_gem_tile_row_size(obj->tiling, obj->stride) >> PAGE_SHIFT;
     if (row > 1) {
         chunk = (chunk + row - 1) / row * row;
     }
-    /* A fault cannot be restarted, so its wait for the GPU to make room
-     * takes no signal. */
-    if (chunk >= pages) {
-        return i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE | I915_PIN_NOINTR, 0, vma);
+    if (chunk < pages) {
+        offset = pgoff / chunk * chunk;
+        n = pages - offset < chunk ? pages - offset : chunk;
     }
-    offset = pgoff / chunk * chunk;
-    n = pages - offset < chunk ? pages - offset : chunk;
-    return i915_vma_pin(obj, offset, n == pages ? 0 : n, I915_PIN_MAPPABLE | I915_PIN_NOINTR, 0,
-                        vma);
+    if (n == pages && i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE | I915_PIN_NONBLOCK, 0, vma) == 0) {
+        return 0;
+    }
+    return i915_vma_pin(obj, offset, n, I915_PIN_MAPPABLE, 0, vma);
+}
+
+/**
+ * What a GTT fault's error `err` makes of the access, as Linux's
+ * i915_error_to_vmf_fault: a signal that ended a wait, or no room or fence
+ * for now, runs it again (1), so that the signal is handled or the GPU
+ * moves on; any other error raises SIGBUS (-1).
+ */
+static int gtt_fault_error(int32_t err)
+{
+    switch (err) {
+    case -EINTR:
+    case -EAGAIN:
+    case -ENOSPC:
+    case -EBUSY:
+    case -ENOBUFS:
+        return 1;
+    default:
+        return -1;
+    }
 }
 
 /**
@@ -108,8 +186,9 @@ static int32_t gtt_fault_pin(struct drm_i915_gem_object *obj, uint32_t pgoff, st
  * the aperture and fenced for its tiling, and the aperture's page mapped,
  * the binding marked as mapped by programs so that unbinding it or moving
  * its fence revokes the mapping. A partial view evicts idle bindings for
- * its room, waiting for the GPU when only busy bindings stand in the way;
- * a failure, no room even so or no fence free, raises SIGBUS.
+ * its room, waiting for the GPU, until a signal, when only busy bindings
+ * stand in the way. An error gives what `gtt_fault_error` says: the access
+ * again for a signal or for no room or fence yet, SIGBUS for the rest.
  */
 static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
 {
@@ -122,8 +201,9 @@ static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
     if (obj->base.dev->unplugged || (uint64_t)pgoff >= obj->base.size >> PAGE_SHIFT) {
         return -1;
     }
-    if (gtt_fault_pin(obj, pgoff, &vma) != 0) {
-        return -1;
+    err = gtt_fault_pin(obj, pgoff, &vma);
+    if (err != 0) {
+        return gtt_fault_error(err);
     }
     err = i915_vma_pin_fence(vma);
     if (err == 0) {
@@ -142,10 +222,10 @@ static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
         i915_vma_unpin_fence(vma);
     }
     i915_vma_unpin(vma);
-    return err == 0 ? 0 : -1;
+    return err == 0 ? 0 : gtt_fault_error(err);
 }
 
-static const struct vm_device_ops gtt_vm_ops = {gtt_vm_page, mmo_vm_put};
+static const struct vm_device_ops gtt_vm_ops = {gtt_vm_page, mmo_vm_put, mmo_vm_access};
 
 void i915_gem_object_release_mmap_gtt(struct drm_i915_gem_object *obj)
 {

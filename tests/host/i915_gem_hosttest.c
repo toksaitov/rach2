@@ -71,6 +71,101 @@ static void objects(void)
     CHECK(allocations == before && pins_live == 0, "close: the object's records and pins go");
 }
 
+/** A GEM_CREATE_EXT of `size` bytes with `flags` and the chain at `ext`:
+ * its return, the handle closed on success. */
+static int32_t create_ext(uint64_t size, uint32_t flags, const void *ext)
+{
+    struct drm_i915_gem_create_ext c = {0};
+    int32_t err;
+
+    c.size = size;
+    c.flags = flags;
+    c.extensions = (uint64_t)(uintptr_t)ext;
+    err = i915_gem_create_ext_ioctl(&dev_a->drm, &c, &file_a);
+    if (err == 0) {
+        CHECK(c.handle && c.size == ((size + 4095u) & ~(uint64_t)4095u),
+              "create_ext: a handle, the size rounded to pages and written back");
+        close_handle(&file_a, c.handle);
+    }
+    return err;
+}
+
+/** 78-5c: GEM_CREATE_EXT and its extensions, as IGT's gem_create
+ * create-ext-placement-sanity-check and create-clear call them. */
+static void create_ext_rows(void)
+{
+    struct drm_i915_gem_memory_class_instance smem[2] = {{I915_MEMORY_CLASS_SYSTEM, 0},
+                                                         {I915_MEMORY_CLASS_SYSTEM, 0}};
+    struct drm_i915_gem_memory_class_instance bad = {0xffff, 0xffff};
+    struct drm_i915_gem_create_ext_memory_regions r = {{0}}, r2;
+    struct {
+        struct i915_user_extension base;
+        uint32_t flags;
+    } pxp = {{0}};
+    struct i915_user_extension pat = {0};
+    struct drm_i915_gem_create c = {0};
+    int before = allocations;
+
+    CHECK(UAPI_IOC_NR(DRM_IOCTL_I915_GEM_CREATE_EXT) == DRM_COMMAND_BASE + 0x3cu &&
+              UAPI_IOC_SIZE(DRM_IOCTL_I915_GEM_CREATE_EXT) == 24,
+          "create_ext: Linux's number and size");
+    c.size = (uint64_t)-1;
+    CHECK(i915_gem_create_ioctl(&dev_a->drm, &c, &file_a) == -EINVAL && !c.handle,
+          "create: a size that rounds up to 0, EINVAL as Linux's");
+    CHECK(create_ext(4096, 0, 0) == 0, "create_ext: no extensions is GEM_CREATE");
+    CHECK(create_ext(0, 0, 0) == -EINVAL && create_ext((uint64_t)-1, 0, 0) == -EINVAL,
+          "create_ext: 0 bytes, or a size that rounds up to 0, EINVAL");
+    CHECK(create_ext(4096, ~I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS, 0) == -EINVAL,
+          "create_ext: an unknown flag, EINVAL");
+    CHECK(create_ext(4096, I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS, 0) == -EINVAL,
+          "create_ext: NEEDS_CPU_ACCESS with one region to place in, EINVAL");
+    r.base.name = I915_GEM_CREATE_EXT_MEMORY_REGIONS;
+    r.regions = (uint64_t)(uintptr_t)smem;
+    r.num_regions = 1;
+    CHECK(create_ext(5000, 0, &r) == 0, "create_ext: MEMORY_REGIONS of system memory");
+    r.num_regions = 0;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: no regions, EINVAL");
+    r.num_regions = 8;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: more than seven regions, EINVAL");
+    r.num_regions = 2;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: a region named twice, EINVAL");
+    r.num_regions = 1;
+    r.regions = (uint64_t)(uintptr_t)&bad;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: a region the device lacks, EINVAL");
+    smem[1].memory_class = I915_MEMORY_CLASS_DEVICE;
+    r.regions = (uint64_t)(uintptr_t)smem;
+    r.num_regions = 2;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: device memory on Haswell, EINVAL");
+    r.num_regions = 1;
+    r.pad = 1;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: a pad not 0, EINVAL");
+    r.pad = 0;
+    r.regions = 16;
+    CHECK(create_ext(4096, 0, &r) == -EFAULT, "create_ext: regions at a bad address, EFAULT");
+    r.regions = (uint64_t)(uintptr_t)smem;
+    r.base.flags = 1;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: an extension's flags not 0, EINVAL");
+    r.base.flags = 0;
+    r2 = r;
+    r.base.next_extension = (uint64_t)(uintptr_t)&r2;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: MEMORY_REGIONS twice, EINVAL");
+    r.base.next_extension = (uint64_t)(uintptr_t)&r;
+    CHECK(create_ext(4096, 0, &r) == -EINVAL, "create_ext: a chain that loops, ended");
+    r.base.next_extension = 0;
+    pxp.base.name = I915_GEM_CREATE_EXT_PROTECTED_CONTENT;
+    CHECK(create_ext(4096, 0, &pxp) == -ENODEV,
+          "create_ext: PROTECTED_CONTENT, ENODEV without PXP");
+    pxp.flags = 1;
+    CHECK(create_ext(4096, 0, &pxp) == -EINVAL, "create_ext: PROTECTED_CONTENT's flags, EINVAL");
+    pat.name = I915_GEM_CREATE_EXT_SET_PAT;
+    CHECK(create_ext(4096, 0, &pat) == -ENODEV, "create_ext: SET_PAT, ENODEV before 12.70");
+    pat.name = 3;
+    CHECK(create_ext(4096, 0, &pat) == -EINVAL, "create_ext: an unknown extension, EINVAL");
+    CHECK(create_ext(4096, 0, (const void *)(uintptr_t)16) == -EFAULT,
+          "create_ext: a chain at a bad address, EFAULT");
+    CHECK(allocations == before, "create_ext: every record freed");
+}
+
 /* ---- 78-3a.2: domains and caching ---- */
 
 /** SET_DOMAIN, SW_FINISH, SET_CACHING and GET_CACHING. */
@@ -642,6 +737,7 @@ static void prime(void)
     uint8_t out[8192], in[8192];
     struct dma_buf *buf;
     int fd;
+    struct drm_i915_gem_mmap legacy;
     int32_t err;
     vma_t vma;
 
@@ -665,6 +761,11 @@ static void prime(void)
           "mmap_offset: an import's pages are another device's, ENODEV");
     CHECK(mmap_offset(&file_b, imp, I915_MMAP_OFFSET_GTT, &err) != 0,
           "mmap_offset: an import through the aperture");
+    k_memset(&legacy, 0, sizeof(legacy));
+    legacy.handle = imp;
+    legacy.size = 4096;
+    CHECK(i915_gem_mmap_ioctl(&dev_b->drm, &legacy, &file_b) == -ENXIO,
+          "gem_mmap: an import has no pages of its own, ENXIO");
 
     /* The dma-buf's own mapping and its CPU access sync. */
     k_memset(&vma, 0, sizeof(vma));
@@ -712,10 +813,11 @@ static void table_and_unplug(void)
           "ioctls: MMAP_OFFSET extends MMAP_GTT's number");
     h = create(&file_a, 4096);
     CHECK(map(&file_a, h, I915_MMAP_OFFSET_GTT, 1, &gtt) == 0, "mmap: before the unplug");
-    bind_fail = 2;
-    CHECK(fault(&gtt, 0) == 0 && !object(&file_a, h)->vmas &&
+    bind_fail = 3;
+    CHECK(fault_code(&gtt, 0) == 1 && !object(&file_a, h)->vmas &&
               object(&file_a, h)->pages_pin_count == 0,
-          "fault: the binds fail, SIGBUS, nothing left bound and the pages let go");
+          "fault: the three binds fail with ENOSPC, the access to run again as Linux's, nothing "
+          "left bound and the pages let go");
     CHECK(fault(&gtt, 0) != 0, "fault: then it binds");
     zaps = 0;
     dev_a->drm.unplugged = 1;
@@ -728,6 +830,86 @@ static void table_and_unplug(void)
 }
 
 /** Run every row on two devices: 0 when each passed. */
+/** 78-5c: a GTT fault on an object whose binding the GPU still uses
+ * outside the aperture binds a partial view of the whole object and does
+ * not wait, as Linux's vm_fault_gtt, which IGT's pf-nonblock times. */
+static void fault_busy(void)
+{
+    uint32_t h = create(&file_a, 2 * 4096);
+    struct drm_i915_gem_object *obj = object(&file_a, h);
+    struct i915_fence *rcs = engine_fence(0);
+    struct i915_pin_args a = {I915_PIN_HIGH, 0, 0, 0};
+    struct i915_vma *high = 0, *v;
+    vma_t gtt;
+    uint8_t *q;
+
+    CHECK(i915_vma_pin_args(obj, &a, &high) == 0 && high && !high->mappable,
+          "fault busy: the object bound above the aperture");
+    i915_vma_unpin(high);
+    CHECK(dma_resv_add_fence(obj->base.resv, &rcs->base, 1) == 0 && i915_gem_object_is_active(obj),
+          "fault busy: and the GPU writes it");
+    CHECK(map(&file_a, h, I915_MMAP_OFFSET_GTT, 2, &gtt) == 0, "fault busy: a GTT map");
+    signal_on_wait = &rcs->base;
+    q = fault(&gtt, 1);
+    v = i915_vma_for_page(obj, 1);
+    CHECK(q && v && v != high && v->view_offset == 0 && v->view_pages == 2 && v->mappable,
+          "fault busy: a partial view of the whole object, inside the aperture");
+    CHECK(!dma_fence_is_signaled(&rcs->base) && obj->vmas &&
+              (obj->vmas == high || obj->vmas->obj_next == high),
+          "fault busy: no wait, the busy binding kept");
+    signal_on_wait = 0;
+    dma_fence_signal(&rcs->base);
+    unmap(&gtt);
+    close_handle(&file_a, h);
+    dma_fence_put(&rcs->base);
+}
+
+/** 78-5c: ptrace's reach into a GTT map and a write-back map, Linux's
+ * vm_access, through which IGT's gem_mmap_gtt@ptrace peeks and pokes. */
+static void map_access(void)
+{
+    uint32_t h = create(&file_a, 2 * 4096), i;
+    struct drm_i915_gem_object *obj = object(&file_a, h);
+    struct region *rg, *rw;
+    vma_t gtt, wb;
+    uint8_t *q, buf[16], want[16];
+    int ok = 1;
+
+    CHECK(map(&file_a, h, I915_MMAP_OFFSET_GTT, 2, &gtt) == 0 &&
+              map(&file_a, h, I915_MMAP_OFFSET_WB, 2, &wb) == 0,
+          "access: a GTT map and a write-back map");
+    rg = (struct region *)gtt.file;
+    rw = (struct region *)wb.file;
+    q = fault(&gtt, 1);
+    CHECK(q != 0, "access: the GTT map's second page faults");
+    for (i = 0; i < 16; i++) {
+        q[100 + i] = 0x55;
+    }
+    memset(buf, 0, sizeof(buf));
+    memset(want, 0x55, sizeof(want));
+    CHECK(rg->ops->access && rg->ops->access(rg->obj, 4096 + 100, buf, 16, 0) == 0 &&
+              memcmp(buf, want, 16) == 0,
+          "access: a peek through the GTT map reads what the aperture took");
+    memset(buf, 0xaa, sizeof(buf));
+    CHECK(rw->ops->access && rw->ops->access(rw->obj, 4096 + 100, buf, 16, 1) == 0 &&
+              memcmp((uint8_t *)i915_gem_object_frame(obj, 1) + 100, buf, 16) == 0,
+          "access: a poke through the write-back map lands in the page");
+    for (i = 0; i < 16; i++) {
+        buf[i] = (uint8_t)i;
+    }
+    CHECK(rg->ops->access(rg->obj, 4096 - 8, buf, 16, 1) == 0, "access: a poke across pages");
+    for (i = 0; i < 8; i++) {
+        ok &= ((uint8_t *)i915_gem_object_frame(obj, 0))[4088 + i] == i &&
+              ((uint8_t *)i915_gem_object_frame(obj, 1))[i] == i + 8;
+    }
+    CHECK(ok, "access: its bytes in both pages");
+    CHECK(rg->ops->access(rg->obj, 2 * 4096 - 8, buf, 16, 0) == -EINVAL,
+          "access: past the end, EINVAL");
+    unmap(&gtt);
+    unmap(&wb);
+    close_handle(&file_a, h);
+}
+
 int main(void)
 {
     model_start();
@@ -736,6 +918,7 @@ int main(void)
     file_a.dev = &dev_a->drm;
     file_b.dev = &dev_b->drm;
     objects();
+    create_ext_rows();
     domains();
     offsets();
     maps();
@@ -745,6 +928,8 @@ int main(void)
     arithmetic();
     tiling();
     busy_and_wait();
+    fault_busy();
+    map_access();
     prime();
     table_and_unplug();
     CHECK(!dev_a->drm.objects && !dev_b->drm.objects && !dev_a->gem.bound && !frames_live &&

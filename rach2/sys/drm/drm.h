@@ -113,10 +113,10 @@ struct drm_ident {
     int bus;           /* DRM_BUS_* */
 };
 
-/* The five drivers' identities as Linux 6.12 reports them (i915_driver.c
+/* The six drivers' identities as Linux 6.12 reports them (i915_driver.c
  * and i915_driver.h, virtgpu_drv.c and virtgpu_drv.h, tiny/bochs.c,
- * tiny/simpledrm.c and vkms/vkms_drv.c). fbdrm reports itself as
- * simpledrm, the driver Linux gives the firmware's framebuffer. */
+ * tiny/simpledrm.c, vkms/vkms_drv.c and vgem/vgem_drv.c). fbdrm reports
+ * itself as simpledrm, the driver Linux gives the firmware's framebuffer. */
 #define DRM_IDENT_I915                                                              \
     {"i915",                                                                        \
      "Intel Graphics",                                                              \
@@ -152,6 +152,9 @@ struct drm_ident {
      0,                                           \
      DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM, \
      DRM_BUS_PLATFORM}
+#define DRM_IDENT_VGEM                                          \
+    {"vgem", "Virtual GEM provider",     "20120112",      1, 0, \
+     0,      DRIVER_GEM | DRIVER_RENDER, DRM_BUS_PLATFORM}
 
 /* The device numbers of the nodes and the most devices at once. */
 #define DRM_MAJOR             226
@@ -497,6 +500,10 @@ uintptr_t drm_gem_shmem_page(struct drm_gem_shmem_object *obj, uint32_t pgoff);
  * cached. 0, -EINVAL for a size past the helper's reach, or -ENOMEM. */
 int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
                                   struct drm_mode_create_dumb *args);
+/** The same, the objects mapped write-combined, for vgem, whose importers
+ * have no call that would bracket a processor's access. */
+int32_t drm_gem_shmem_dumb_create_wc(struct drm_file *file, struct drm_device *dev,
+                                     struct drm_mode_create_dumb *args);
 
 /* ------------------------------------------------------------------------
  * Open files
@@ -1707,7 +1714,7 @@ struct drm_device {
 /** Probe and register the display devices, once, after the PCI drivers
  * have started: in the order the aperture handoff needs, bochs and
  * virtio-gpu, then fbdrm on what they left, then vkms when `rach2.vkms`
- * asks; and /dev/udmabuf. Logs "drm: start". */
+ * asks and vgem when `rach2.vgem` asks; and /dev/udmabuf. Logs "drm: start". */
 void drm_start(void);
 
 /** Fill a new device for `driver`, with one reference, the caller's, and
@@ -1994,6 +2001,7 @@ int32_t fbdrm_probe(void);
 int32_t i915_probe(void);
 int32_t virtio_gpu_probe(void);
 int32_t vkms_probe(void);
+int32_t vgem_probe(void);
 /** vkms's vblank timer, from the boot processor's tick with interrupts
  * off: each vblank due on its CRTC since the last call. Nothing while no
  * vkms device holds vblanks. */
