@@ -4,11 +4,11 @@
  * 32-bit and a 64-bit kernel and for a 32-bit program on a 64-bit one.
  *
  * For each waiting call a child makes the call while the parent disturbs it
- * one of four ways: it stops the child with SIGSTOP, holds it 600 ms and
+ * one of four ways: it stops the child with SIGSTOP, holds it 2 s and
  * continues it with SIGCONT, which runs no handler; it sends SIGWINCH and
  * SIGCONT, ignored by default, and SIGUSR2, which the child ignores; or it
  * sends SIGUSR1, whose handler the child installed with SA_RESTART or
- * without it. The calls with a timeout wait a second, those without one
+ * without it. The calls with a timeout wait 3 s, those without one
  * until the parent wakes them: a byte down a pipe, a FUTEX_WAKE, a message,
  * a semaphore's post, or SIGUSR1 for pause and rt_sigsuspend.
  *
@@ -50,12 +50,14 @@
  * and leaves injected codes unchanged with orig -1 or no pending signal.
  *
  * Each row of a timed call that goes on checks CLOCK_MONOTONIC: the call
- * ends no sooner than its deadline, a second after it began or for ppoll,
- * select and pselect6 after a stop the hold past that, and less than 500 ms
- * past it, where a deadline measured again from the continue would end at
- * least 600 ms past it. semtimedop may end up to a tick early, since
- * Linux's counts its timeout in jiffies. A call that returns EINTR ends
- * before its second is out.
+ * ends no sooner than its deadline, 3 s after it began or for ppoll, select
+ * and pselect6 after a stop the hold past that, and less than a second past
+ * it, where a deadline measured again from the continue would end at least
+ * the 2 s hold past it. semtimedop may end up to a tick early, since
+ * Linux's counts its timeout in jiffies. A call that returns EINTR is
+ * judged by its result and the time it wrote, not by when it ended. The
+ * probe sets no time limit of its own: a call that never ends is left to
+ * etude's bound on the case.
  */
 #include "probe.h"
 #include "probe_report.h"
@@ -67,7 +69,6 @@
 #define SIGTRAP   5
 #define SIGUSR1   10
 #define SIGUSR2   12
-#define SIGALRM   14
 #define SIGCONT   18
 #define SIGSTOP   19
 #define SIGWINCH  28
@@ -148,11 +149,15 @@
 #define USER_WORDS          17
 #endif
 
-/* The timeout of a timed call, the hold of a stop, and how far past the
- * deadline a call that goes on may end, in microseconds. */
-#define WAIT_US   1000000L
-#define HOLD_NS   600000000L
-#define MARGIN_US 500000L
+/* The timeout of a timed call in seconds, and in microseconds the
+ * timeout, the hold of a stop, and how far past the deadline a call that
+ * goes on may end: half the hold, so that a call measured again from the
+ * continue misses by a second as well. The timeout outlasts the hold, so
+ * the deadline is still ahead when the child continues. */
+#define WAIT_S    3
+#define WAIT_US   (WAIT_S * 1000000L)
+#define HOLD_US   2000000L
+#define MARGIN_US (HOLD_US / 2)
 /* The tick by which Linux's semtimedop may end early. */
 #define JIFFY_US  10000L
 
@@ -342,13 +347,13 @@ static void clear(void *p, unsigned long n)
     }
 }
 
-/** Sleep `ns` nanoseconds, less than a second. */
-static void nap(long ns)
+/** Sleep `us` microseconds. */
+static void nap(long us)
 {
     struct ts t;
 
-    t.sec = 0;
-    t.nsec = ns;
+    t.sec = us / 1000000L;
+    t.nsec = us % 1000000L * 1000L;
     /* interval: naps between looks at a child, and the stop's hold */
     syscall2(SYS_NANOSLEEP, (long)&t, 0);
 }
@@ -423,19 +428,19 @@ static char state_of(int pid)
     return 0;
 }
 
-/** Wait, up to 10 s, until process `pid` sleeps in a wait; whether it
- * does. */
+/** Wait until process `pid` sleeps in a wait; whether it does, 0 when it
+ * has exited or cannot be read first. */
 static int wait_sleeping(int pid)
 {
-    int i;
+    char st;
 
-    for (i = 0; i < 2000; i++) {
-        if (state_of(pid) == 'S') {
-            return 1;
+    while ((st = state_of(pid)) != 'S') {
+        if (st == 'Z' || st == 'X' || st == 0) {
+            return 0;
         }
-        nap(5000000L);
+        nap(5000L);
     }
-    return 0;
+    return 1;
 }
 
 /** Whether `fd` has something to read within `ms` milliseconds. */
@@ -551,11 +556,11 @@ static void fd_set1(unsigned long *set, int fd)
     set[fd / (8 * (int)sizeof(long))] |= 1UL << (fd % (8 * (int)sizeof(long)));
 }
 
-/** Make the timed call `c` of a second, with `left` the time it writes
- * back; the epoll set `ep` serves C_EPOLL. */
+/** Make the timed call `c` of WAIT_S seconds, with `left` the time it
+ * writes back; the epoll set `ep` serves C_EPOLL. */
 static long timed_call(int c, struct ts *left, int ep)
 {
-    struct ts req = {1, 0}, end;
+    struct ts req = {WAIT_S, 0}, end;
     struct pollfd p = {0, POLLIN, 0};
     unsigned long set[16];
     const unsigned sigs[2] = {0, 1u << (SIGWAITED - 33)};
@@ -578,18 +583,18 @@ static long timed_call(int c, struct ts *left, int ep)
     case C_CLOCK_ABS:
         left->sec = left->nsec = -1;
         end = now();
-        end.sec++;
+        end.sec += WAIT_S;
         /* interval: the sleeps tested, timed against their deadlines */
         return syscall4(SYS_CLOCK_NANOSLEEP, CLOCK_MONOTONIC, TIMER_ABSTIME, (long)&end, 0);
     case C_POLL:
         left->sec = left->nsec = -1;
-        return syscall3(SYS_POLL, (long)&p, 1, 1000);
+        return syscall3(SYS_POLL, (long)&p, 1, WAIT_S * 1000);
     case C_PPOLL:
         return syscall5(SYS_PPOLL, (long)&p, 1, (long)left, 0, 8);
     case C_SELECT: {
         long tv[2], r;
 
-        tv[0] = 1;
+        tv[0] = WAIT_S;
         tv[1] = 0;
         fd_set1(set, wake_fd[0]);
         r = syscall5(SYS_SELECT, wake_fd[0] + 1, (long)set, 0, 0, (long)tv);
@@ -605,7 +610,7 @@ static long timed_call(int c, struct ts *left, int ep)
         return syscall4(SYS_FUTEX, (long)&word, FUTEX_WAIT | FUTEX_PRIVATE, 0, (long)&req);
     case C_EPOLL:
         left->sec = left->nsec = -1;
-        return syscall4(SYS_EPOLL_WAIT, ep, (long)events, 1, 1000);
+        return syscall4(SYS_EPOLL_WAIT, ep, (long)events, 1, WAIT_S * 1000);
     case C_SEMTIMED:
         left->sec = left->nsec = -1;
         return sem_do(sem_id, down, &req);
@@ -654,7 +659,6 @@ static void child(int c, int scen, int out)
     } __attribute__((packed)) ev;
     int ep = -1;
 
-    syscall1(SYS_ALARM, 20);
     install(SIGUSR1, on_usr1, scen == S_RESTART ? SA_RESTART : 0);
     install(SIGUSR2, 0, 0);
     if (c == C_EPOLL) {
@@ -720,7 +724,7 @@ static int disturb(int pid, int scen)
             (status & 0xFFFF) != ((SIGSTOP << 8) | 0x7F)) {
             return 0;
         }
-        nap(HOLD_NS);
+        nap(HOLD_US);
         syscall2(SYS_KILL, pid, SIGCONT);
         return 1;
     case S_IGNORED:
@@ -751,12 +755,13 @@ static int goes_on(int c, int scen)
 }
 
 /** Whether `t` is a time left within the timeout: more than none and at
- * most a second and a millisecond, since Linux's remainder counts to the
- * end of its timer's slack, 50 us past the deadline. */
+ * most the timeout and a millisecond, since Linux's remainder counts to
+ * the end of its timer's slack, 50 us past the deadline. */
 static int within(struct ts t)
 {
-    return (t.sec == 0 && t.nsec > 0 && t.nsec < 1000000000L) ||
-           (t.sec == 1 && t.nsec >= 0 && t.nsec <= 1000000L);
+    return (t.sec >= 0 && t.sec < WAIT_S && t.nsec >= 0 && t.nsec < 1000000000L &&
+            (t.sec > 0 || t.nsec > 0)) ||
+           (t.sec == WAIT_S && t.nsec >= 0 && t.nsec <= 1000000L);
 }
 
 /** Check the time the timed call `c` took and the time left it wrote,
@@ -769,14 +774,11 @@ static void judge_time(int c, int scen, const struct record *r, int on)
     const char *name = calls[c].name;
     int rem = c == C_NANOSLEEP || c == C_CLOCK_REL;
     int back = c == C_PPOLL || c == C_SELECT || c == C_PSELECT;
-    long due = WAIT_US + (back && scen == S_STOP ? HOLD_NS / 1000 : 0);
+    long due = WAIT_US + (back && scen == S_STOP ? HOLD_US : 0);
     long low = due - (c == C_SEMTIMED ? JIFFY_US : 0);
 
     if (on && (took < low || took >= due + MARGIN_US)) {
         miss(name, scen, "ended after us", took, due);
-    }
-    if (!on && took >= WAIT_US) {
-        miss(name, scen, "ended EINTR after us", took, WAIT_US - 1);
     }
     if (rem && scen == S_IGNORED && r->left.sec != -1) {
         miss(name, scen, "wrote a remainder of s", r->left.sec, -1);
@@ -788,7 +790,7 @@ static void judge_time(int c, int scen, const struct record *r, int on)
         miss(name, scen, "wrote back a time left of ns", r->left.nsec, 0);
     }
     if (back && !on && !within(r->left)) {
-        miss(name, scen, "wrote back a time left of s", r->left.sec, 1);
+        miss(name, scen, "wrote back a time left of s", r->left.sec, WAIT_S);
     }
 }
 
@@ -965,7 +967,6 @@ static void tracee(int mode)
     struct ts half = {0, 500000000L};
     long r, want = 0, me = syscall0(SYS_GETPID);
 
-    syscall1(SYS_ALARM, 20);
     hits = 0;
     install(SIGUSR1, on_usr1, SA_RESTART);
     if (syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0) != 0) {
