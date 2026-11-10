@@ -35,8 +35,14 @@ def interrupted(signum, _frame):
 # Wine's word that a process has no desktop, which run_proton() runs again.
 LOST = b'"The explorer process failed to start."'
 STALL = "dxgi.c:8040: Test marked todo: d3d10: test 2: Got unexpected present count 1, expected 2."
-# Each Vulkan device's ICD and the Linux reference taken on it.
-ADAPTERS = {"lavapipe": ("lvp_icd*.json", "linux.json"), "venus": ("venus_icd*.json", "venus.json")}
+# Each Vulkan device's ICDs and the Linux references taken on it, of the
+# x86-64 programs and of the i386 ones.
+ADAPTERS = {"lavapipe": ("lvp_icd*.json", "linux.json", "linux32.json"),
+            "venus": ("venus_icd*.json", "venus.json", "venus32.json")}
+# Each mode of an i386 probe: Proton's WoW64, its i386 program on the x86-64
+# Wine, or its default, on the i386 Wine; and the Unix half of Wine the
+# probe must find itself on.
+MODES = {"wow64": "x86_64", "i386": "i386"}
 # Each Wine path's DLL overrides, native or builtin, and WineD3D's renderer.
 PATHS = {"proton": ("n", "gl"), "wined3d": ("b", "gl"), "wined3dvk": ("b", "vulkan")}
 
@@ -170,9 +176,12 @@ def main():
     """Run FAMILY ROW in OUT and compare each unit with the recorded Linux outcomes.
 
     -a names the Vulkan device, lavapipe (the default) or venus, whose ICD
-    alone the loader sees and whose Linux reference judges the row. -R runs
-    the row with no reference and records each unit, as the references are
-    taken; it fails only when a unit cannot be run.
+    alone the loader sees and whose Linux reference judges the row. A probe's
+    ROW is [PATH/]N[-MODE]: the Direct3D N probe on the Wine path PATH, its
+    x86-64 build, or with MODE its i386 build in that mode of MODES, judged
+    by the adapter's reference of i386 programs, which must have the row.
+    -R runs the row with no reference and records each unit, as the
+    references are taken; it fails only when a unit cannot be run.
     """
     usage = "usage: run.py [-a lavapipe|venus] [-R] probe|wine|vkd3d|private ROW OUT"
     try:
@@ -189,6 +198,9 @@ def main():
     if len(args) != 3 or adapter not in ADAPTERS:
         raise SystemExit(usage)
     family, row, output = args
+    mode = row.rpartition("/")[2].partition("-")[2] if family == "probe" else ""
+    if mode and mode not in MODES:
+        raise SystemExit(usage)
     if os.geteuid() == 0:
         raise SystemExit("d3d: run as an ordinary user")
     out = Path(output).resolve()
@@ -203,7 +215,8 @@ def main():
             raise SystemExit(status)
         print("D3DROW OK private files", flush=True)
         return
-    pattern, reference = ADAPTERS[adapter]
+    pattern, reference64, reference32 = ADAPTERS[adapter]
+    reference = reference32 if mode else reference64
     tests = list(json.loads((HERE / "ref" / "linux.json").read_text())["vkd3d"])
     ref = {} if record else json.loads((HERE / "ref" / reference).read_text())
     env = os.environ.copy()
@@ -215,12 +228,20 @@ def main():
                SteamGameId="2693", DXVK_LOG_PATH=str(out),
                PROTON_LOG="0" if family == "wine" else "1",
                PROTON_LOG_DIR=str(out))
+    if mode == "i386":
+        # Proton's default mode runs an i386 program on its i386 Wine.
+        del env["PROTON_USE_WOW64"]
     icds = sorted(Path("/usr/share/vulkan/icd.d").glob(pattern))
-    icds = [p for p in icds if "i686" not in p.name]
-    if len(icds) != 1:
+    files = [p for p in icds if "i686" not in p.name]
+    if len(files) != 1:
         raise SystemExit("d3d: expected one x86-64 %s ICD" % adapter)
-    env["VK_DRIVER_FILES"] = str(icds[0])
-    env["VK_ICD_FILENAMES"] = str(icds[0])
+    if mode == "i386":
+        # The i386 loader passes over the x86-64 ICD and loads this one.
+        files += [p for p in icds if "i686" in p.name]
+        if len(files) != 2:
+            raise SystemExit("d3d: expected one i686 %s ICD" % adapter)
+    env["VK_DRIVER_FILES"] = ":".join(str(p) for p in files)
+    env["VK_ICD_FILENAMES"] = env["VK_DRIVER_FILES"]
     env.pop("MESA_VK_WSI_DEBUG", None)
     if adapter == "venus":
         # Mesa's X11 WSI presents a GPU's images only over DRI3, which Xvfb
@@ -261,7 +282,7 @@ def main():
         env["LP_NUM_THREADS"] = "0" if family == "wine" else str(cpus)
         context = {
             "uname": list(os.uname()), "family": family, "row": row,
-            "adapter": adapter, "reference": None if record else reference,
+            "adapter": adapter, "mode": mode or None, "reference": None if record else reference,
             "environment": {k: v for k, v in env.items() if k.startswith((
                 "VK", "DXVK", "PROTON", "LP_", "MESA_", "GALLIUM", "GRAPHICS"))},
             "display": "Xvfb -noreset 1280x800x24", "cache": "empty private directory",
@@ -280,7 +301,8 @@ def main():
                 raise RuntimeError("Proton prefix creation failed: %s" % status)
             print("d3d: prefix: ready", flush=True)
             env["WINEPREFIX"] = str(work / "compat/pfx")
-            # A probe's row is N, on Proton, or PATH/N; a unit's PATH/EXE:NAME.
+            # A probe's row is [PATH/]N[-MODE], on Proton without PATH; a
+            # unit's PATH/EXE:NAME.
             path, _, tail = row.rpartition("/") if family == "probe" else row.partition("/")
             path = path or "proton"
             if path not in PATHS:
@@ -290,18 +312,25 @@ def main():
                 name + "=" + kind for name in ("d3d9", "d3d10core", "d3d11", "dxgi", "d3d12", "d3d12core"))
             env["WINE_D3D_CONFIG"] = "renderer=" + renderer
             if family == "probe":
-                if tail not in ("9", "11", "12"):
+                n = tail.partition("-")[0]
+                if n not in ("9", "11", "12"):
                     raise RuntimeError("unknown probe")
+                expected = ref.get("probe", {}).get(row, {})
+                if mode and not record and not expected:
+                    raise RuntimeError("%s has no row %s, which Linux did not run" % (reference, row))
                 pixel = out / "pixels.txt"
                 env["PROBE_OUT"] = "Z:" + str(pixel)
-                rc, _ = run_proton(launch + ["runinprefix", str(HERE / "probes" / ("d3d" + tail + ".exe"))],
+                exe = "d3d" + n + ("-32" if mode else "") + ".exe"
+                rc, _ = run_proton(launch + ["runinprefix", str(HERE / "probes" / exe)],
                                    env, out / "probe.log", out, work)
                 text = pixel.read_text() if pixel.exists() else ""
                 named = adapter_name(text)
+                lines = text.splitlines()
+                # An i386 probe must run on the Unix half its mode gives.
+                side = not mode or ("wine-unix: " + MODES[mode]) in lines
                 # A reference that names the adapter requires the same one here.
-                expected = ref.get("probe", {}).get(row, {})
                 results[row] = {"exit": rc, "pixels": text, "adapter": named,
-                                "matched": record or (rc == 0 and ("D3D" + tail + " OK") in text.splitlines() and
+                                "matched": record or (rc == 0 and ("D3D" + n + " OK") in lines and side and
                                                       expected.get("adapter", named) == named)}
             else:
                 unit = tail

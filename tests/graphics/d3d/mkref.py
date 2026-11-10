@@ -87,11 +87,15 @@ def main():
             results = json.loads(results_file.read_text())
             family, row = env["family"], env["row"]
             if family == "probe":
-                path, _, n = row.rpartition("/")
+                # A probe's row is [PATH/]N[-MODE]; its token names N alone.
+                n = row.rpartition("/")[2].partition("-")[0]
                 result = results[row]
                 drew = result["exit"] == 0 and ("D3D%s OK" % n) in result["pixels"].splitlines()
                 if not drew:
                     fail("%s: the probe %s did not draw right on Linux" % (row_dir, row))
+                side = {None: None, "wow64": "x86_64", "i386": "i386"}[env.get("mode")]
+                if side and ("wine-unix: " + side) not in result["pixels"].splitlines():
+                    fail("%s: the probe %s did not run on the %s Wine" % (row_dir, row, side))
                 old = ref["probe"].get(row)
                 if old and old["adapter"] != result["adapter"]:
                     fail("%s: the probe %s named two adapters" % (row_dir, row))
