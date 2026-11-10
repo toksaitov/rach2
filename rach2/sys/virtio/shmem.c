@@ -102,8 +102,10 @@ static struct vshm *vshm_cur;         /* the region attached, or detaching */
 static volatile uint32_t vshm_rang;   /* a bit for each vector rung since the thread looked */
 static wait_queue_t vshm_wq;          /* the thread sleeps here */
 static wait_queue_t vshm_detached_wq; /* a detacher waits here */
-static int vshm_ready;                /* the queues are made */
+#ifndef RACH2_HOSTTEST
+static int vshm_ready; /* the queues are made */
 static process_t *vshm_thread;
+#endif
 
 /* What a sleep of the thread waits for: a doorbell, a detach or `due`. */
 struct vshm_wait {

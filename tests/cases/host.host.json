@@ -1376,6 +1376,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vgpushm",
+          "checks": "tests/host/vgpushm_hosttest.c runs the virtio transport over a shared region against a model of the VM's device through the virtio core and checks the layout, the handshake, the queues in the ring area and their bounds, a round trip, merged and refused chains, a full region that gives ENOMEM, backing from the heap, the doorbells' hooks, the control node's report, a lost device, a refused setup and the detach under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtio_gpu",
           "checks": "tests/host/virtio_gpu_hosttest.c binds the virtio GPU driver to a model of QEMU's device and checks the commands and their fences, the EDID and DMT modes, the scanout, damage, scattered backing, a full queue, error and missing answers, the cursor, a display change, the driver's ioctls, a buffer's release and the unplug under ASan and UBSan",
           "source": "scenario"
