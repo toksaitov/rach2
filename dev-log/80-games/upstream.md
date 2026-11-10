@@ -13,6 +13,16 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: unreported, cause unproved.
 * Next: run it with `WAYLAND_DEBUG=1` to see the last requests and events and whether cage advertises `zxdg_decoration_manager_v1`; try current SDL 2, libdecor and cage; then report to whichever project the trace names.
 
+## GE-Proton loses mutex robustness when priority inheritance is unavailable
+
+* Project: GE-Proton11-12, archive SHA-256 `0595159e417c3dbbfb7cc3ae0d3ed15a617cc607aa23ef756ea79029d7af5d70` in `vendor/gnu/sources-extra.txt`; its Wine base is `fda79a585939fb7512dc220a11249f9ffe825fcf`.
+* Fails: the audio hotplug patch initializes `g_phys_mutex` with robust PI attributes, then retries with default attributes on failure, losing robustness. `free_phys_device_lists` later locks it during detach. See [patch 0010](https://github.com/GloriousEggroll/proton-ge-custom/blob/GE-Proton11-12/patches/proton-ds5-haptic/0010-winepulse-mmdevapi-Add-support-for-hotplugged-audio-.patch#L645), lines 627 and 648-649.
+* Found: 2026-11-10, task 80-6, Rach2 in QEMU on the testing host, running 64-bit Crysis on llvmpipe with a PulseAudio null sink.
+* Reproduction: run `crysis.sh run +quit` where PI initialization returns `ENOTSUP`; the observed detach waits on a default mutex whose owner has ended. A controlled Linux reproduction with PI unavailable is still needed.
+* Evidence: `dev-log/80-games/80-6.md`; `80-6/evidence/game4-backtrace.txt`, `mutex-attributes.txt` and the compressed launch-4 logs beside them. The deployed libc's PI probe returned `ENOSYS`, attributed initialization returned 95 and default initialization had kind 0. The observed mutex had kind 0 and owner 239, absent from the remaining threads.
+* Rach2: no workaround; its absent PI futex operations are the kernel capability gap. The task is returned for the scope decision recorded on its issue.
+* Status: unreported, draft; the exact termination point of owner 239 was not captured.
+* Next: force PI refusal on Linux, check the current GE patch and preserve robust attributes in a fallback; separately provide Linux's PI futex contract in Rach2.
 ## Linux looks up an AMD L1 cache's eight-bit associativity in a table of sixteen
 
 * Project: Linux 6.12, `arch/x86/kernel/cpu/cacheinfo.c` at the tag `v6.12`.
