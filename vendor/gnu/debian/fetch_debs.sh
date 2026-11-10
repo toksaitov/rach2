@@ -159,9 +159,10 @@ step_index()
     done
 }
 
-# Each index becomes one line per package, fields separated by tabs, and the
-# suites are read in order, so that a later suite's entry replaces an earlier
-# one's. A dependency is the first alternative that is a package, or else the
+# Each index becomes one line per package, fields separated by tabs, and of a
+# package that several suites list the resolver takes the highest version, as
+# apt does: a security update that a point release superseded stays out. A
+# dependency is the first alternative that is a package, or else the
 # first a package provides, with version constraints checked by dpkg. A name
 # in UNFOLLOWED ends the search; the image already supplies its function.
 step_resolve()
