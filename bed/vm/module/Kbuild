@@ -1,0 +1,3 @@
+# Kbuild: the vgpushm module of the test bed's VM, built against the VM's
+# kernel headers by Makefile beside it.
+obj-m := vgpushm.o
