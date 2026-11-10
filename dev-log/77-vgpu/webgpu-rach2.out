@@ -1,0 +1,3088 @@
+etude prepare: preparing 6 goals for x86_64 in /home/testing/rach2/build/worktrees/codex
+etude prepare: step: path
+etude prepare: step: components
+utils: building
+RACH2_ARCH=x86_64 sh tests/musl/build.sh
+elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 2 x86_64 offset cases, 8 accepted kernels, 23 refused, each for its own rule; 11 boot-module checks
+doom: building
+tests: building
+guest: building
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+make[2]: Nothing to be done for 'all'.
+sh tools/inspect/check_recovery.sh build/x86_64/rach2-recovery/kernel recovery
+sh tools/inspect/check_diskpolicy.sh build/x86_64/rach2-metal/kernel read-only
+check-recovery: ok: build/x86_64/rach2-recovery/kernel has recovery authority
+sh tools/inspect/check_recovery.sh build/x86_64/rach2/kernel ordinary
+check-recovery: ok: build/x86_64/rach2/kernel has ordinary authority
+sh tools/inspect/check_diskpolicy.sh build/x86_64/rach2-recovery/kernel read-write
+check-setid: OK (26 manifests swept, 39 declared set-id entries staged)
+check-setid: OK (build/x86_64/vendor/busybox/applet_tables-main.h: no forbidden applet or feature; the set-id build has only login, passwd, su; the strict init names no shell)
+check-diskpolicy: ok: build/x86_64/rach2-metal/kernel is read-only
+check-diskpolicy: ok: build/x86_64/rach2-recovery/kernel is read-write
+etude prepare: step: artifacts
+make[1]: 'build/tests/cases/browser/data.ext2' is up to date.
+make[1]: 'build/tests/cases/graphics/common.sh' is up to date.
+make[1]: 'build/tests/cases/machine/browser_scenario' is up to date.
+utils: building
+doom: building
+guest: building
+elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 2 x86_64 offset cases, 8 accepted kernels, 23 refused, each for its own rule; 11 boot-module checks
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+check-elf: OK (loadable by this kernel, and static)
+make[2]: Nothing to be done for 'all'.
+make[1]: 'build/x86_64/rach2/kernel' is up to date.
+check-setid: OK (26 manifests swept, 39 declared set-id entries staged)
+check-setid: OK (build/x86_64/vendor/busybox/applet_tables-main.h: no forbidden applet or feature; the set-id build has only login, passwd, su; the strict init names no shell)
+make: Nothing to be done for 'build/tests/cases/credentials/rach2_demo_password'.
+make: Nothing to be done for 'build/tests/cases/graphics/common.sh'.
+make: Nothing to be done for 'build/tests/cases/machine/browser_scenario'.
+make: Nothing to be done for 'build/x86_64/images/browser-test.disk'.
+make: Nothing to be done for 'build/x86_64/rach2/kernel'.
+etude prepare: result: prepared: 6 goals, 6 files
+run: starting: architecture x86_64, workers 1, accelerator kvm
+etude run: cost: machine.webgpu.chromium-webgpu-venus x86_64: 3600000000 us (0 samples), CPU 4000 (0 samples)
+etude run: cost: machine.webgpu.chromium-webgpu-venus-native x86_64: 3600000000 us (0 samples), CPU 4000 (0 samples)
+etude run: bounds: machine.webgpu.chromium-webgpu-venus x86_64: case 3600000000 us (1 samples), gap 2400000000 us (1 samples)
+etude run: bounds: machine.webgpu.chromium-webgpu-venus-native x86_64: case 3600000000 us (1 samples), gap 2400000000 us (1 samples)
+etude check: result: unchanged: 6 files
+run: webgpu: machine.webgpu.chromium-webgpu-venus: starting
+@etude 1 begin machine.webgpu.chromium-webgpu-venus
+@etude 1 progress stage 1
+@etude 1 progress stage 2
+browser: action: chromium webgpu-venus
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus pass
+@etude 1 assert ran pass
+@etude 1 progress stage 3
+browser-judge: Venus readback passes: 0
+browser-judge: result: pass chromium webgpu-venus
+@etude 1 assert as-debian pass
+@etude 1 progress stage 4
+browser-evidence: result.json
+{
+  "platform": "wayland",
+  "requests": {
+    "default": {
+      "adapter": {
+        "architecture": "swiftshader",
+        "description": "",
+        "device": "",
+        "fallback": true,
+        "vendor": "google"
+      },
+      "readback": null
+    },
+    "fallback": {
+      "adapter": {
+        "architecture": "swiftshader",
+        "description": "",
+        "device": "",
+        "fallback": true,
+        "vendor": "google"
+      },
+      "readback": null
+    }
+  },
+  "venus_passes": 0
+}
+browser-evidence: switches.json
+{
+  "argv": [
+    "chromium",
+    "--ozone-platform=wayland",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--password-store=basic",
+    "--start-fullscreen",
+    "--ignore-certificate-errors",
+    "--remote-debugging-port=0",
+    "--user-data-dir=/tmp/browser.Bf1ui1/profile",
+    "--disable-background-networking",
+    "--disable-hang-monitor",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--autoplay-policy=no-user-gesture-required",
+    "--ignore-gpu-blocklist",
+    "--enable-unsafe-webgpu",
+    "--enable-logging=stderr",
+    "--v=0",
+    "--vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2",
+    "about:blank"
+  ],
+  "certificate": "ephemeral local HTTPS certificate accepted by automation",
+  "environment": {
+    "GRAPHICS_CLASS": "conformance",
+    "GRAPHICS_CPUS": "4",
+    "GRAPHICS_DONE": "1",
+    "LP_NUM_THREADS": "0",
+    "MESA_SHADER_CACHE_DIR": "/tmp/graphics-shader-cache",
+    "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/venus_icd.x86_64.json",
+    "WAYLAND_DISPLAY": "wayland-runner",
+    "XDG_RUNTIME_DIR": "/tmp/browser.Bf1ui1/run"
+  },
+  "prefs": {},
+  "version": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)"
+}
+browser-evidence: record
+runner browser
+system Rach2 1.0.0 with the GNU system
+kernel Linux 6.18.0-rach2
+cpus 4
+memory_kib 8369684
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.08 0.01 0.00
+processes start 32
+kernel_before cpu  90 0 2747 688 0 0 0 0 0 0
+kernel_before cpu0 65 0 1485 192 0 0 0 0 0 0
+kernel_before cpu1 16 0 439 139 0 0 0 0 0 0
+kernel_before cpu2 4 0 418 171 0 0 0 0 0 0
+kernel_before cpu3 3 0 404 184 0 0 0 0 0 0
+kernel_before intr 23119
+kernel_before ctxt 0
+kernel_before btime 1794316524
+kernel_before processes 93
+kernel_before sleeps_interrupted 0
+kernel_before process_pid_steps 3707
+kernel_before process_uid_steps 134
+kernel_before process_timer_steps 15044
+kernel_before process_timer_passes 10520
+kernel_before timer_passes_late 282
+kernel_before tlb_shootdowns 0
+kernel_before tlb_shootdown_ipis 0
+kernel_before scheduler_picks 17803
+kernel_before scheduler_steps 5867
+kernel_before vm_gap_steps 8830
+kernel_before clock_calls 1
+kernel_before vdso_tsc 1
+kernel_before bkl_wait_us 13340360
+kernel_before bkl_wait_max_us 131685
+kernel_before bkl_hold_max_us 521162
+kernel_before bkl_hold_max_entry 0 -1
+kernel_before bkl_hold_sample_us 11258079
+kernel_before bkl_hold_sample_pc ffffffff803384a1 ffffffff8033acad ffffffff801115ee ffffffff801119ae ffffffff80111a15 ffffffff803302bf ffffffff80109cfe ffffffff8033723b
+kernel_before bkl_hold_max_mark 1 0
+kernel_before bkl_hold_max_mark 2 0
+kernel_before bkl_hold_max_mark 4 0
+kernel_before bkl_hold_max_mark 8 0
+kernel_before bkl_hold_max_mark 16 0
+kernel_before bkl_hold_entry vector 0 13913 1614544
+kernel_before bkl_hold_entry vector 14 26912 933413
+kernel_before bkl_hold_entry vector 48 1250 515138
+kernel_before bkl_hold_entry vector 36 174 423947
+kernel_before bkl_hold_entry syscall 1 324 390520
+kernel_before bkl_hold_entry vector 32 3462 349991
+kernel_before bkl_hold_entry syscall 7 182 226476
+kernel_before bkl_hold_entry syscall 9 1260 209369
+kernel_before bkl_hold_entry syscall 257 2583 183927
+kernel_before bkl_hold_entry syscall 0 1048 48690
+kernel_before bkl_hold_entry syscall 3 5979 44022
+kernel_before bkl_hold_entry syscall 2 146 36469
+kernel_before bkl_hold_entry syscall 262 845 35986
+kernel_before bkl_hold_entry syscall 59 68 32101
+kernel_before bkl_hold_entry syscall 5 1806 28123
+kernel_before bkl_hold_entry syscall 74 43 27086
+kernel_before kvm_vms 0
+kernel_before kvm_vcpus 0
+kernel_before kvm_slots 0
+kernel_before kvm_tdp_pages 0
+kernel_before kvm_run_mappings 0
+kernel_before vfio_groups 0
+kernel_before vfio_devices 0
+kernel_before vfio_dma_mappings 0
+kernel_before vfio_dma_pages 0
+kernel_before vfio_dma_io_pages 0
+kernel_before kvm_exits 0
+kernel_before iommu_dma_faults 0
+kernel_before iommu_irq_faults 0
+kernel_before msi_vectors_free 187
+kernel_before latency_timer_us 3332149
+kernel_before latency_disk_us 46913
+kernel_before latency_diskwait_us 0
+kernel_before latency_console_us 29309
+kernel_before wlan_refused_tcp 0
+kernel_before wlan_refused_ack 0
+kernel_before wlan_refused_other 0
+kernel_before wlan_rx_held 0
+kernel_before wlan_rx_wait_most 0
+kernel_before wlan_tx_status_lost 0
+kernel_before wlan_rescue_key 0
+kernel_before wlan_rescue_message4 0
+kernel_before wlan_rescue_silent 0
+kernel_before wlan_rescue_saved 0
+kernel_before wlan_rx_old_far 0
+kernel_before loopback_dropped 0
+kernel_before loopback_peak 0
+kernel_before loopback_delivered_tick 0
+kernel_before loopback_delivered_idle 0
+kernel_before loopback_delivered_call 0
+kernel_before loopback_left_idle 0
+kernel_before namecache_hits 9131
+kernel_before namecache_misses 593
+kernel_before namecache_entries 423
+kernel_before namecache_negative 89
+kernel_before ext2_node_visits 6789
+kernel_before procs_running 2
+kernel_before procs_blocked 0
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=8369684
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 12.99 12.75 13.99
+host_claims 7
+host_ledger etude-ledger 1
+host_ledger claim bed-forward-hand:toksaitov-s:600794
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 600794 4677914 1
+host_ledger account toksaitov-s
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 13958643712
+host_ledger process keeper 600816 4677917 1
+host_ledger process case 600817 4677917 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131300Z.639997:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 639997 4692426 1
+host_ledger account toksaitov-a
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim debian-ref:toksaitov-m:765216:1794316428
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 765216 4733561 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 765533 4733614 1
+host_ledger process case 765534 4733614 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131524Z.768961:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 768961 4742920 1
+host_ledger account testing
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131524Z.768961:machine.webgpu.chromium-webgpu-venus:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 768961 4742920 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 21474836480
+host_ledger process keeper 771832 4743217 1
+host_ledger process case 771833 4743218 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131300Z.639997:machine.d3dvenus.probe-wined3dvk-9-i386:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 639997 4692426 1
+host_ledger account toksaitov-a
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 18253611008
+host_ledger resource disk_bytes 21474836480
+host_ledger process keeper 772268 4744440 1
+host_ledger process case 772269 4744440 1
+host_ledger end
+host_ledger claim launch:5a6e65eea47968f305c1b049393ef47e
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 772385 4744505 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource memory_bytes 35433480192
+host_ledger process keeper 772401 4744509 1
+host_ledger process case 772402 4744509 1
+host_ledger end
+case chromium webgpu-venus
+icd /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+browser_platform wayland
+compositor weston 14.0.2 headless pixman kiosk no-config
+load end 0.59 0.13 0.04
+busy 65.7%
+kernel_after cpu  1017 0 7689 3757 0 0 0 0 0 0
+kernel_after cpu0 437 0 2393 1146 0 0 0 0 0 0
+kernel_after cpu1 181 0 1801 847 0 0 0 0 0 0
+kernel_after cpu2 248 0 1724 856 0 0 0 0 0 0
+kernel_after cpu3 150 0 1770 906 0 0 0 0 0 0
+kernel_after intr 110009
+kernel_after ctxt 0
+kernel_after btime 1794316524
+kernel_after processes 300
+kernel_after sleeps_interrupted 1
+kernel_after process_pid_steps 22326
+kernel_after process_uid_steps 547
+kernel_after process_timer_steps 1036852
+kernel_after process_timer_passes 29024
+kernel_after timer_passes_late 774
+kernel_after tlb_shootdowns 1708
+kernel_after tlb_shootdown_ipis 2640
+kernel_after scheduler_picks 132537
+kernel_after scheduler_steps 49580
+kernel_after vm_gap_steps 1077782
+kernel_after clock_calls 14330
+kernel_after vdso_tsc 1
+kernel_after bkl_wait_us 49667767
+kernel_after bkl_wait_max_us 131685
+kernel_after bkl_hold_max_us 521162
+kernel_after bkl_hold_max_entry 0 -1
+kernel_after bkl_hold_sample_us 11258079
+kernel_after bkl_hold_sample_pc ffffffff803384a1 ffffffff8033acad ffffffff801115ee ffffffff801119ae ffffffff80111a15 ffffffff803302bf ffffffff80109cfe ffffffff8033723b
+kernel_after bkl_hold_max_mark 1 0
+kernel_after bkl_hold_max_mark 2 0
+kernel_after bkl_hold_max_mark 4 0
+kernel_after bkl_hold_max_mark 8 0
+kernel_after bkl_hold_max_mark 16 0
+kernel_after bkl_hold_entry vector 14 279695 6370940
+kernel_after bkl_hold_entry vector 0 93153 4838943
+kernel_after bkl_hold_entry vector 48 8835 3172841
+kernel_after bkl_hold_entry vector 32 26222 2012966
+kernel_after bkl_hold_entry syscall 9 8352 1521952
+kernel_after bkl_hold_entry syscall 257 8810 982107
+kernel_after bkl_hold_entry syscall 1 5024 666531
+kernel_after bkl_hold_entry vector 36 178 431762
+kernel_after bkl_hold_entry syscall 202 16332 374723
+kernel_after bkl_hold_entry syscall 0 10573 366497
+kernel_after bkl_hold_entry syscall 232 14637 334762
+kernel_after bkl_hold_entry syscall 7 1350 318410
+kernel_after bkl_hold_entry syscall 44 6033 229634
+kernel_after bkl_hold_entry syscall 262 4848 202498
+kernel_after bkl_hold_entry syscall 3 13562 168791
+kernel_after bkl_hold_entry syscall 16 2037 128358
+kernel_after kvm_vms 0
+kernel_after kvm_vcpus 0
+kernel_after kvm_slots 0
+kernel_after kvm_tdp_pages 0
+kernel_after kvm_run_mappings 0
+kernel_after vfio_groups 0
+kernel_after vfio_devices 0
+kernel_after vfio_dma_mappings 0
+kernel_after vfio_dma_pages 0
+kernel_after vfio_dma_io_pages 0
+kernel_after kvm_exits 0
+kernel_after iommu_dma_faults 0
+kernel_after iommu_irq_faults 0
+kernel_after msi_vectors_free 187
+kernel_after latency_timer_us 3332149
+kernel_after latency_disk_us 71126
+kernel_after latency_diskwait_us 5121
+kernel_after latency_console_us 29309
+kernel_after wlan_refused_tcp 0
+kernel_after wlan_refused_ack 0
+kernel_after wlan_refused_other 0
+kernel_after wlan_rx_held 0
+kernel_after wlan_rx_wait_most 0
+kernel_after wlan_tx_status_lost 0
+kernel_after wlan_rescue_key 0
+kernel_after wlan_rescue_message4 0
+kernel_after wlan_rescue_silent 0
+kernel_after wlan_rescue_saved 0
+kernel_after wlan_rx_old_far 0
+kernel_after loopback_dropped 0
+kernel_after loopback_peak 37
+kernel_after loopback_delivered_tick 378
+kernel_after loopback_delivered_idle 135
+kernel_after loopback_delivered_call 1827
+kernel_after loopback_left_idle 0
+kernel_after namecache_hits 73811
+kernel_after namecache_misses 3058
+kernel_after namecache_entries 2396
+kernel_after namecache_negative 458
+kernel_after ext2_node_visits 42742
+kernel_after procs_running 2
+kernel_after procs_blocked 0
+browser-evidence: gpu.txt
+
+
+  :host {
+    --green: #080;
+    --yellow: #880;
+    --red: #f00;
+    --gray: #888;
+    --bg-yellow: #ff0;
+
+    display: block;
+    flex: 1;
+    overflow: auto;
+    padding: 10px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :host {
+      --green: #0F0;
+      --yellow: #FF0;
+      --red: #f00;
+      --gray: #888;
+      --bg-yellow: #880;
+    }
+  }
+
+  :host * {
+    user-select: text;
+  }
+
+  :host([selected]) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  h3,
+  ul {
+    margin-bottom: 0;
+    margin-top: 0;
+  }
+
+  #content > div,
+  #download-to-file {
+    margin-bottom: 1em;
+  }
+
+  .feature-green {
+    color: var(--green);
+  }
+
+  .feature-yellow {
+    color: var(--yellow);
+  }
+
+  .feature-red {
+    color: var(--red);
+  }
+
+  .feature-gray {
+    color: var(--gray);
+  }
+
+  .bg-yellow {
+    background-color: var(--bg-yellow);
+  }
+
+  #vulkan-info-value {
+    white-space: pre;
+  }
+
+  #download-to-file {
+    font: inherit;
+    min-height: 2em;
+    user-select: none;
+  }
+
+  h4.dawn-info-header {
+    color: var(--yellow);
+    margin-bottom: 2px;
+    margin-top: 10px;
+  }
+  
+  table.info-table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 100%;
+  }
+  .info-table td {
+    border: 1px solid #777;
+    vertical-align: top;
+    overflow-x: auto;
+  }
+  .info-table td:nth-child(1) {
+    font-weight: bold;
+    width: 25%;
+  }
+  .info-table td:nth-child(2) {
+    font-weight: bold;
+    width: 75%;
+  }
+
+  /*
+  This class is used to show text that is only available
+  when the user copies text or downloads the report to a file.
+  We insert extra but hidden text to make plain text formatting
+  look better, at copy/download time we make the text visible
+  */
+  .copy {
+    display: none;
+  }
+
+
+
+  Download Report to File
+
+
+  GPU Info
+
+
+Graphics Feature Status
+=======================*   Canvas: Hardware accelerated*   Direct Rendering Display Compositor: Disabled*   Compositing: Software only. Hardware acceleration disabled*   Multiple Raster Threads: Enabled*   OpenGL: Enabled*   Rasterization: Hardware accelerated on all pages*   Raw Draw: Disabled*   Skia Graphite: Disabled*   TreesInViz: Disabled*   Video Decode: Hardware accelerated*   Video Encode: Software only. Hardware acceleration disabled*   Vulkan: Disabled*   WebGL: Hardware accelerated but at reduced performance*   WebGPU: Hardware accelerated but at reduced performance*   WebGPU interop: Hardware accelerated*   WebNN: Disabled
+
+Version Information
+===================Data exported              :2026-11-10T13:16:02.730ZChrome version             :Chrome/156.0.8078.79Operating system           :Linux 6.18.0-rach2Software rendering list URL:https://chromium.googlesource.com/chromium/src/+/a21ce95c24ce3964416f09ae1862f53f319eb4d0/gpu/config/software_rendering_list.jsonDriver bug list URL        :https://chromium.googlesource.com/chromium/src/+/a21ce95c24ce3964416f09ae1862f53f319eb4d0/gpu/config/gpu_driver_bug_list.jsonANGLE commit id            :unknown hash2D graphics backend        :Skia/156 aa789d9bd566b9865add4070dc6777b3266c64e9Command Line               :/usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-certificate-errors --remote-debugging-port=0 --user-data-dir=/tmp/browser.Bf1ui1/profile --disable-background-networking --disable-hang-monitor --disable-background-timer-throttling --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required --ignore-gpu-blocklist --enable-unsafe-webgpu --enable-logging=stderr --v=0 --vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2 --flag-switches-begin --flag-switches-end about:blank
+
+Driver Information
+==================Initialization time             :2686In-process GPU                  :falseSkia Backend                    :GaneshGLPassthrough Command Decoder     :trueSandboxed                       :falseGPU0                            :VENDOR= 0x0000 [Google Inc. (Mesa)], DEVICE=0x0000 [ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)], DRIVER_VENDOR=Mesa, DRIVER_VERSION=25.0.7 *ACTIVE*Optimus                         :falseAMD switchable                  :falsePixel shader version            :3.00Vertex shader version           :3.00Max. MSAA samples               :8Machine model name              :Machine model version           :GL implementation parts         :(gl=egl-angle,angle=opengl)Display type                    :ANGLE_OPENGLGL_VENDOR                       :Google Inc. (Mesa)GL_RENDERER                     :ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)GL_VERSION                      :OpenGL ES 3.0 (ANGLE 2.1 git hash: unknown hash)GL_EXTENSIONS                   :GL_AMD_performance_monitor GL_ANGLE_blob_cache GL_ANGLE_client_arrays GL_ANGLE_clip_cull_distance GL_ANGLE_compressed_texture_etc GL_ANGLE_depth_texture GL_ANGLE_framebuffer_blit GL_ANGLE_framebuffer_multisample GL_ANGLE_get_serialized_context_string GL_ANGLE_get_tex_level_parameter GL_ANGLE_instanced_arrays GL_ANGLE_memory_size GL_ANGLE_program_binary_readiness_query GL_ANGLE_program_cache_control GL_ANGLE_renderability_validation GL_ANGLE_request_extension GL_ANGLE_robust_client_memory GL_ANGLE_shader_pixel_local_storage GL_ANGLE_stencil_texturing GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_ANGLE_texture_multisample GL_ANGLE_translated_shader_source GL_ARM_rgba8 GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_bind_uniform_location GL_CHROMIUM_copy_texture GL_CHROMIUM_lose_context GL_EXT_blend_func_extended GL_EXT_blend_minmax GL_EXT_clear_texture GL_EXT_clip_control GL_EXT_clip_cull_distance GL_EXT_color_buffer_float GL_EXT_color_buffer_half_float GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_conservative_depth GL_EXT_debug_label GL_EXT_debug_marker GL_EXT_depth_clamp GL_EXT_discard_framebuffer GL_EXT_disjoint_timer_query GL_EXT_draw_buffers GL_EXT_draw_buffers_indexed GL_EXT_float_blend GL_EXT_frag_depth GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_occlusion_query_boolean GL_EXT_polygon_offset_clamp GL_EXT_read_format_bgra GL_EXT_render_snorm GL_EXT_robustness GL_EXT_sRGB GL_EXT_sRGB_write_control GL_EXT_shadow_samplers GL_EXT_texture_border_clamp GL_EXT_texture_compression_bptc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_compression_s3tc_srgb GL_EXT_texture_filter_anisotropic GL_EXT_texture_format_BGRA8888 GL_EXT_texture_mirror_clamp_to_edge GL_EXT_texture_norm16 GL_EXT_texture_rg GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_EXT_texture_sRGB_decode GL_EXT_texture_shadow_lod GL_EXT_texture_storage GL_EXT_texture_type_2_10_10_10_REV GL_EXT_unpack_subimage GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_debug GL_KHR_parallel_shader_compile GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_KHR_texture_compression_astc_sliced_3d GL_MESA_framebuffer_flip_y GL_NV_fence GL_NV_framebuffer_blit GL_NV_pack_subimage GL_NV_pixel_buffer_object GL_NV_read_depth GL_NV_read_stencil GL_NV_shader_noperspective_interpolation GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3 GL_OES_EGL_sync GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_draw_buffers_indexed GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_get_program_binary GL_OES_mapbuffer GL_OES_packed_depth_stencil GL_OES_required_internalformat GL_OES_rgb8_rgba8 GL_OES_sample_variables GL_OES_shader_multisample_interpolation GL_OES_standard_derivatives GL_OES_surfaceless_context GL_OES_texture_3D GL_OES_texture_border_clamp GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_vertex_array_objectDisabled Extensions             :GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherentDisabled WebGL Extensions       :Window system binding vendor    :Google Inc. (Mesa)Window system binding version   :1.5 (ANGLE 2.1 git hash: unknown hash)Window system binding extensions:EGL_KHR_create_context EGL_KHR_image EGL_KHR_image_base EGL_KHR_gl_colorspace EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_texture_3D_image EGL_KHR_gl_renderbuffer_image EGL_KHR_get_all_proc_addresses EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANGLE_create_context_webgl_compatibility EGL_CHROMIUM_create_context_bind_generates_resource EGL_KHR_swap_buffers_with_damage EGL_EXT_pixel_format_float EGL_KHR_surfaceless_context EGL_ANGLE_display_texture_share_group EGL_ANGLE_display_semaphore_share_group EGL_ANGLE_create_context_client_arrays EGL_ANGLE_program_cache_control EGL_ANGLE_robust_resource_initialization EGL_ANGLE_create_context_extensions_enabled EGL_ANDROID_blob_cache EGL_ANDROID_recordable EGL_ANDROID_native_fence_sync EGL_ANGLE_create_context_backwards_compatible EGL_KHR_no_config_context EGL_KHR_create_context_no_error EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers EGL_KHR_reusable_sync EGL_ANGLE_external_context_and_surface EGL_EXT_buffer_age EGL_ANGLE_context_virtualization EGL_ANGLE_memory_usage_report EGL_ANGLE_create_context_passthrough_shadersInterfaces exposed by the Wayland compositor:wl_compositor:5 wl_subcompositor:1 wp_viewporter:1 zxdg_output_manager_v1:2 wp_presentation:1 wp_single_pixel_buffer_manager_v1:1 wp_tearing_control_manager_v1:1 zwp_relative_pointer_manager_v1:1 zwp_pointer_constraints_v1:1 zwp_input_timestamps_manager_v1:1 weston_capture_v1:1 wl_data_device_manager:3 wl_shm:2 zwp_linux_explicit_synchronization_v1:2 wl_output:4 xdg_wm_base:5Ozone platform                  :waylandDirect rendering version        :unknownReset notification strategy     :0x8261GPU process crash count         :0
+
+Driver Bug Workarounds
+======================*   enable_webgl_timer_query_extensions*   exit_on_context_lost*   disabled_extension_GL_KHR_blend_equation_advanced*   disabled_extension_GL_KHR_blend_equation_advanced_coherent
+
+Problems Detected
+=================*   Accelerated video encode has been disabled, either via blocklist, about:flags or the command line.    Disabled Features: video_encode
+
+*   Gpu compositing has been disabled, either via blocklist, about:flags or the command line. The browser will fall back to software compositing and hardware acceleration will be unavailable.    Disabled Features: gpu_compositing
+
+*   Disable KHR_blend_equation_advanced until cc shaders are updated:
+    661715(http://crbug.com/661715)    Applied Workarounds: disable(GL_KHR_blend_equation_advanced),
+        disable(GL_KHR_blend_equation_advanced_coherent)
+
+*   Expose WebGL's disjoint_timer_query extensions on platforms with site isolation:
+    808744(http://crbug.com/808744), 870491(http://crbug.com/870491)    Applied Workarounds: enable_webgl_timer_query_extensions
+
+*   Some drivers can't recover after OUT_OF_MEM and context lost:
+    893177(http://crbug.com/893177)    Applied Workarounds: exit_on_context_lost
+
+
+
+ANGLE Features
+==============*   allowCompressedFormats (Frontend workarounds): Enabled
+
+*   allowExtensionDisableAfterNonPpTokens (Frontend features): Disabled
+
+*   alwaysEnableEmulatedMultidrawExtensions (Frontend workarounds): Disabled
+
+*   alwaysRunLinkSubJobsThreaded (Frontend features): Disabled
+
+*   cacheCompiledShader (Frontend features): Enabled
+
+*   clipCullDistanceBrokenWithPassthroughShaders (Frontend features): Disabled
+
+*   compileJobIsThreadSafe (Frontend features): Disabled
+
+*   compressProgramBinaryBlob (Frontend features): Disabled
+
+*   disableAnisotropicFiltering (Frontend workarounds): Disabled
+
+*   disableProgramBinary (Frontend features): Disabled
+
+*   disableProgramCaching (Frontend features): Disabled
+
+*   disableProgramCachingForTransformFeedback (Frontend workarounds): Disabled
+
+*   disallowNonZeroBaseLevelAndIncompatibleLevelsOnHardenedContexts (Frontend workarounds): Disabled
+
+*   dumpShaderSource (Frontend features): Disabled
+
+*   dumpTranslatedShaders (Frontend features): Disabled
+
+*   emulatePixelLocalStorage (Frontend features): Enabled
+
+*   enableCaptureLimits (Frontend features): Disabled
+
+*   enableCreateContextBackwardsCompatible (Frontend features): Enabled
+
+*   enableProgramBinaryForCapture (Frontend features): Disabled
+
+*   enableShaderSubstitution (Frontend workarounds): Disabled
+
+*   enableTranslatedShaderSubstitution (Frontend workarounds): Disabled
+
+*   forceDebugContexts (Frontend features): Disabled
+
+*   forceDepthAttachmentInitOnClear (Frontend workarounds): Disabled
+
+*   forceFlushAfterDrawcallUsingShadowmap (Frontend workarounds): Disabled
+
+*   forceGlErrorChecking (Frontend features): Disabled
+
+*   forceInitShaderVariables (Frontend features): Disabled
+
+*   forceMinimumMaxVertexAttributes (Frontend features): Disabled
+
+*   forcePassthroughShaders (Frontend features): Disabled
+
+*   forceRobustResourceInit (Frontend features): Disabled
+
+*   limitMaxBufferBytesTo1MB (Frontend features): Disabled
+
+*   limitMaxTextureBytesTo1MB (Frontend features): Disabled
+
+*   linkJobIsThreadSafe (Frontend features): Disabled
+
+*   loseContextOnOutOfMemory (Frontend workarounds): Enabled
+
+*   loseHardenedContextOnBackendError (Frontend workarounds): Enabled
+
+*   noperspectiveInterpolationBrokenWithPassthroughShaders (Frontend features): Disabled
+
+*   setNeedInitOnInvalidation (Frontend features): Enabled
+
+*   singleThreadedTextureDecompression (Frontend workarounds): Disabled
+
+*   uncurrentEglSurfaceUponSurfaceDestroy (Frontend workarounds): Disabled
+
+*   useIr (Frontend features): Disabled
+
+*   RGBA4IsNotSupportedForColorRendering (OpenGL workarounds): Disabled
+
+*   RGBDXT1TexturesSampleZeroAlpha (OpenGL workarounds): Disabled
+
+*   addAndTrueToLoopCondition (OpenGL workarounds): Disabled
+
+*   adjustSrcDstRegionForBlitFramebuffer (OpenGL workarounds): Enabled
+
+*   allowAstcFormats (OpenGL workarounds): Disabled
+
+*   allowClearForRobustResourceInit (OpenGL workarounds): Disabled
+
+*   allowETCFormats (OpenGL workarounds): Disabled
+
+*   alwaysCallUseProgramAfterLink (OpenGL workarounds): Enabled
+
+*   alwaysUnbindFramebufferTexture2D (OpenGL workarounds): Disabled
+
+*   avoid1BitAlphaTextureFormats (OpenGL workarounds): Disabled
+
+*   avoidBindFragDataLocation (OpenGL workarounds): Disabled
+
+*   avoidComplexExpressionsInStructConstructor (OpenGL workarounds): Disabled
+
+*   bgraTexImageFormatsBroken (OpenGL workarounds): Disabled
+
+*   bindCompleteFramebufferForTimerQueries (OpenGL workarounds): Disabled
+
+*   bindTransformFeedbackBufferBeforeBindBufferRange (OpenGL workarounds): Disabled
+
+*   clampArrayAccess (OpenGL workarounds): Disabled
+
+*   clampFragDepth (OpenGL workarounds): Disabled
+
+*   clampMscRate (OpenGL workarounds): Enabled
+
+*   clampPointSize (OpenGL workarounds): Disabled
+
+*   clearsWithGapsNeedFlush (OpenGL workarounds): Disabled
+
+*   clipSrcRegionForBlitFramebuffer (OpenGL workarounds): Disabled
+
+*   corruptProgramBinaryForTesting (OpenGL workarounds): Disabled
+
+*   decodeEncodeSRGBForGenerateMipmap (OpenGL workarounds): Disabled
+
+*   disableBaseInstanceVertex (OpenGL workarounds): Enabled
+
+*   disableBlendEquationAdvanced (OpenGL workarounds): Disabled
+
+*   disableClearTexImageForRobustInit (OpenGL workarounds): Disabled
+
+*   disableClearTexture (OpenGL workarounds): Disabled
+
+*   disableClipControl (OpenGL features): Disabled
+
+*   disableDrawBuffersIndexed (OpenGL workarounds): Disabled
+
+*   disableGPUSwitchingSupport (OpenGL workarounds): Disabled
+
+*   disableMSAASampleCount1 (OpenGL workarounds): Disabled
+
+*   disableMultisampledRenderToTexture (OpenGL workarounds): Disabled
+
+*   disableNativeParallelCompile (OpenGL workarounds): Disabled
+
+*   disablePassthroughShaders (OpenGL workarounds): Disabled
+
+*   disableRenderSnorm (OpenGL workarounds): Disabled
+
+*   disableSemaphoreFd (OpenGL workarounds): Disabled
+
+*   disableSyncControlSupport (OpenGL workarounds): Disabled
+
+*   disableTextureClampToBorder (OpenGL workarounds): Disabled
+
+*   disableTextureMirrorClampToEdge (OpenGL workarounds): Disabled
+
+*   disableTiledRendering (OpenGL workarounds): Disabled
+
+*   disableTimestampQueries (OpenGL workarounds): Disabled
+
+*   doesSRGBClearsOnLinearFramebufferAttachments (OpenGL workarounds): Disabled
+
+*   dontInitializeUninitializedLocals (OpenGL workarounds): Disabled
+
+*   dontInvalidateIncompleteFBOs (OpenGL workarounds): Disabled
+
+*   dontUseLoopsToInitializeVariables (OpenGL workarounds): Disabled
+
+*   emitMaxGlsl400ForTesting (OpenGL workarounds): Disabled
+
+*   emulateAbsIntFunction (OpenGL workarounds): Disabled
+
+*   emulateAtan2Float (OpenGL workarounds): Disabled
+
+*   emulateClipDistanceState (OpenGL workarounds): Disabled
+
+*   emulateClipOrigin (OpenGL workarounds): Disabled
+
+*   emulateCopyTexImage2D (OpenGL workarounds): Disabled
+
+*   emulateCopyTexImage2DFromRenderbuffers (OpenGL workarounds): Disabled
+
+*   emulateImmutableCompressedTexture3D (OpenGL workarounds): Disabled
+
+*   emulateMaxVertexAttribStride (OpenGL workarounds): Disabled
+
+*   emulatePackSkipRowsAndPackSkipPixels (OpenGL workarounds): Disabled
+
+*   emulatePrimitiveRestartFixedIndex (OpenGL workarounds): Disabled
+
+*   emulateRGB10 (OpenGL workarounds): Disabled
+
+*   ensureNonEmptyBufferIsBoundForDraw (OpenGL features): Disabled
+
+*   explicitFragmentLocations (OpenGL workarounds): Disabled
+
+*   finishBeforeBlitFramebufferMultiAttachment (OpenGL workarounds): Disabled
+
+*   finishDoesNotCauseQueriesToBeAvailable (OpenGL workarounds): Disabled
+
+*   flushBeforeDeleteTextureIfCopiedTo (OpenGL workarounds): Disabled
+
+*   flushBeforeGenerateMipmap (OpenGL workarounds): Disabled
+
+*   flushOnFramebufferChange (OpenGL workarounds): Disabled
+
+*   flushQueriesBeforeDeletingOrUnbindingFbo (OpenGL workarounds): Disabled
+
+*   forceLumaWorkaroundForSameTextureCopyTexImage2D (OpenGL workarounds): Disabled
+
+*   forceMaxCombinedShaderOutputResources (OpenGL features): Disabled
+
+*   initFragmentOutputVariables (OpenGL workarounds): Disabled
+
+*   initializeCurrentVertexAttributes (OpenGL workarounds): Disabled
+
+*   keepBufferShadowCopy (OpenGL workarounds): Disabled
+
+*   limitMax3dArrayTextureSizeTo1024 (OpenGL workarounds): Disabled
+
+*   limitMaxBufferSizeTo1gb (OpenGL workarounds): Disabled
+
+*   limitMaxMSAASamplesTo4 (OpenGL workarounds): Disabled
+
+*   limitOutputVaryingsTo256AtCompileTime (OpenGL workarounds): Disabled
+
+*   limitWebglMaxTextureSizeTo4096 (OpenGL workarounds): Disabled
+
+*   limitWebglMaxTextureSizeTo8192 (OpenGL workarounds): Disabled
+
+*   multiviewViaViewportArray (OpenGL features): Disabled
+
+*   packLargeRowLengthSeparatelyPackBuffer (OpenGL workarounds): Disabled
+
+*   packLastRowSeparatelyForPaddingInclusion (OpenGL workarounds): Disabled
+
+*   packOverlappingRowsSeparatelyPackBuffer (OpenGL workarounds): Disabled
+
+*   passHighpToPackUnormSnormBuiltins (OpenGL workarounds): Disabled
+
+*   preAddTexelFetchOffsets (OpenGL workarounds): Disabled
+
+*   preTransformTextureCubeGradDerivatives (OpenGL workarounds): Disabled
+
+*   promotePackedFormatsTo8BitPerChannel (OpenGL workarounds): Disabled
+
+*   queryCounterBitsGeneratesErrors (OpenGL workarounds): Disabled
+
+*   readPixelsUsingImplementationColorReadFormatForNorm16 (OpenGL workarounds): Enabled
+
+*   reapplyUBOBindingsAfterUsingBinaryProgram (OpenGL workarounds): Disabled
+
+*   reattachFboDepthStencilOnReallocation (OpenGL workarounds): Disabled
+
+*   reattachTextureToFboAfterLayerIncrease (OpenGL workarounds): Disabled
+
+*   recreateImmutableTextureOnBaseLevelIncrease (OpenGL workarounds): Disabled
+
+*   recreateMipmapLevelsBeforeGenerate (OpenGL workarounds): Enabled
+
+*   recreateTextureOnTexImage3dDepthIncrease (OpenGL workarounds): Disabled
+
+*   removeDynamicIndexingOfSwizzledVector (OpenGL workarounds): Disabled
+
+*   removeInvariantAndCentroidForESSL3 (OpenGL workarounds): Disabled
+
+*   resetBaseLevelForASTCImage (OpenGL workarounds): Disabled
+
+*   resetSampleCoverageOnFBOChange (OpenGL workarounds): Disabled
+
+*   resetTexImage2DBaseLevel (OpenGL workarounds): Disabled
+
+*   resetTexStorage2DBaseLevel (OpenGL workarounds): Disabled
+
+*   resyncDepthRangeOnClipControl (OpenGL workarounds): Disabled
+
+*   rewriteRepeatedAssignToSwizzled (OpenGL workarounds): Disabled
+
+*   rewriteRowMajorMatrices (OpenGL workarounds): Disabled
+
+*   roundUp3dTextureSizeToPOTForLimit (OpenGL workarounds): Disabled
+
+*   sanitizeAMDGPURendererString (OpenGL workarounds): Disabled
+
+*   scalarizeVecAndMatConstructorArgs (OpenGL workarounds): Disabled
+
+*   setPrimitiveRestartFixedIndexForDrawArrays (OpenGL workarounds): Disabled
+
+*   setZeroLevelBeforeGenerateMipmap (OpenGL workarounds): Disabled
+
+*   shiftInstancedArrayDataWithOffset (OpenGL workarounds): Disabled
+
+*   splitLevel0PboFullSubImage2D (OpenGL workarounds): Disabled
+
+*   srgbBlendingBroken (OpenGL workarounds): Disabled
+
+*   supportsFragmentShaderInterlockARB (OpenGL features): Disabled
+
+*   supportsFragmentShaderInterlockNV (OpenGL features): Disabled
+
+*   supportsFragmentShaderOrderingINTEL (OpenGL features): Disabled
+
+*   supportsShaderFramebufferFetchEXT (OpenGL features): Disabled
+
+*   supportsShaderFramebufferFetchNonCoherentEXT (OpenGL features): Disabled
+
+*   syncAllVertexArraysToDefault (OpenGL workarounds): Disabled
+
+*   syncDefaultVertexArraysToDefault (OpenGL workarounds): Enabled
+
+*   unbindFBOBeforeSwitchingContext (OpenGL workarounds): Disabled
+
+*   unfoldShortCircuits (OpenGL workarounds): Disabled
+
+*   unpackLastRowSeparatelyForPaddingInclusion (OpenGL workarounds): Disabled
+
+*   unpackOverlappingRowsSeparatelyUnpackBuffer (OpenGL workarounds): Disabled
+
+*   unsizedSRGBReadPixelsDoesntTransform (OpenGL workarounds): Disabled
+
+*   uploadOversizedMipLevelsViaUnpackBuffer (OpenGL workarounds): Disabled
+
+*   uploadTextureDataInChunks (OpenGL workarounds): Disabled
+
+*   useIntermediateTextureForGenerateMipmap (OpenGL workarounds): Disabled
+
+*   useTempForNonZeroBaseLevelGenMipmapUsingCopyImageSubData (OpenGL workarounds): Disabled
+
+*   useTexSubImageForClientDataNpotUploads (OpenGL workarounds): Disabled
+
+*   useUnusedBlocksWithStandardOrSharedLayout (OpenGL workarounds): Disabled
+
+*   validateMaxPerStageUniformBlocksAtCompileTime (OpenGL workarounds): Disabled
+
+*   validateState (OpenGL features): Disabled
+
+*   vertexIDDoesNotIncludeBaseVertex (OpenGL workarounds): Disabled
+
+
+
+Dawn Info
+=========
+
+<Unknown GPU>  OpenGLES backend - ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1) (Compatibility Mode)
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+[WebGPU Status]
+---------------*   Available
+
+[Adapter Supported Features]
+----------------------------*   texture-compression-bc*   texture-compression-etc2*   texture-compression-astc*   texture-compression-astc-sliced-3d*   float32blendable*   dual-source-blending*   texture-component-swizzle*   dawn-internal-usages*   dawn-native*   implicit-device-synchronization*   transient-attachments*   angle-texture-sharing*   unorm16texture-formats*   dawn-format-capabilities*   shared-fence-sync-fd*   shared-fence-egl-sync*   unorm16formats-for-external-texture*   dawn-allow-undefined-load-store-op
+
+[Enabled Toggle Names]
+----------------------*   lazy_clear_resource_on_first_use: 
+    https://crbug.com/dawn/145(https://crbug.com/dawn/145):
+    Clears resource to zero on first usage. This initializes the resource so
+    that no dirty bits from recycled memory is present in the new resource.
+
+*   disable_indexed_draw_buffers: 
+    https://crbug.com/dawn/582(https://crbug.com/dawn/582):
+    Disables the use of indexed draw buffer state which is unsupported on some
+    platforms.
+
+*   flush_before_client_wait_sync: 
+    https://crbug.com/dawn/633(https://crbug.com/dawn/633):
+    Call glFlush before glClientWaitSync to work around bugs in the latter
+
+*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   use_placeholder_fragment_in_vertex_only_pipeline: 
+    https://crbug.com/dawn/136(https://crbug.com/dawn/136):
+    Use a placeholder empty fragment shader in vertex only render pipeline.
+    This toggle must be enabled for OpenGL ES backend, the Vulkan Backend, and
+    serves as a workaround by default enabled on some Metal devices with Intel
+    GPU to ensure the depth result is correct.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+*   use_blit_for_buffer_to_stencil_texture_copy: 
+    https://crbug.com/dawn/1389(https://crbug.com/dawn/1389):
+    Use a blit instead of a copy command to copy buffer data to the stencil
+    aspect of a texture. Works around an issue where stencil writes by copy
+    commands are not visible to a render or compute pass.
+
+*   use_blit_for_depth16unorm_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1782(https://crbug.com/dawn/1782):
+    Use a blit instead of a copy command to copy depth aspect of a texture to
+    a buffer.Workaround for OpenGL and OpenGLES.
+
+*   use_blit_for_depth32float_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1782(https://crbug.com/dawn/1782):
+    Use a blit instead of a copy command to copy depth aspect of a texture to
+    a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_stencil_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1782(https://crbug.com/dawn/1782):
+    Use a blit instead of a copy command to copy stencil aspect of a texture
+    to a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_snorm_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1781(https://crbug.com/dawn/1781):
+    Use a blit instead of a copy command to copy snorm texture to a
+    buffer.Workaround for OpenGLES.
+
+*   use_blit_for_rgb9e5ufloat_texture_copy: 
+    https://crbug.com/dawn/2079(https://crbug.com/dawn/2079):
+    Use a blit instead of a copy command to copy rgb9e5ufloat texture to a
+    texture or a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_rg11b10ufloat_texture_copy: 
+    https://crbug.com/381214487(https://crbug.com/381214487):
+    Use a blit instead of a copy command to copy rg11b10ufloat texture to a
+    texture or a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_float_16_texture_copy: 
+    https://crbug.com/381214487(https://crbug.com/381214487):
+    Use a blit instead of a copy command to copy float16 texture to a texture
+    or a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_non_rgba_unorm_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy non-RGBA unorm textures to a
+    buffer. Workaround for OpenGLES.
+
+*   use_blit_for_non_rgba_float_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy non-RGBA float textures to a
+    buffer. Workaround for OpenGLES.
+
+*   use_blit_for_uint_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy uint textures to a buffer.
+    Workaround for OpenGLES.
+
+*   use_blit_for_sint_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy sint textures to a buffer.
+    Workaround for OpenGLES.
+
+*   use_t2b2t_for_srgb_texture_copy: 
+    https://crbug.com/dawn/2362(https://crbug.com/dawn/2362):
+    Use T2B and B2T copies to emulate a T2T copy between sRGB and non-sRGB
+    textures.Workaround for OpenGLES.
+
+*   enable_integer_range_analysis_in_robustness: 
+    https://crbug.com/348701956(https://crbug.com/348701956):
+    Compute the range of the index with Integer Range Analysis in the
+    robustness transform and skip doing index clamping when the out of bound
+    access cannot happen.
+
+*   blob_cache_hash_validation: 
+    https://crbug.com/429938352(https://crbug.com/429938352):
+    Enable hash validation when loading/storing from/to the blob cache
+
+*   decompose_uniform_buffers: 
+    https://crbug.com/448452698(https://crbug.com/448452698):
+    Decompose uniform buffers into arrays of vec4<u32> on backends for Vulkan
+    and OpenGL.
+
+
+
+[WebGPU Required Toggles - enabled]
+-----------------------------------*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+
+
+<CPU>  Vulkan backend - SwiftShader Device (Subzero)
+----------------------------------------------------
+
+[WebGPU Status]
+---------------*   Blocklisted - crbug.com/40057808: CPU adapters not fully tested or conformant. | 
+
+[Adapter Supported Features]
+----------------------------*   core-features-and-limits*   depth-clip-control*   depth32float-stencil8*   texture-compression-bc*   texture-compression-bc-sliced-3d*   texture-compression-etc2*   texture-compression-astc*   texture-compression-astc-sliced-3d*   timestamp-query*   indirect-first-instance*   rg11b10ufloat-renderable*   bgra8unorm-storage*   float32filterable*   float32blendable*   clip-distances*   subgroups*   texture-component-swizzle*   subgroup-size-control*   texture-compression-unaligned*   dawn-internal-usages*   dawn-multi-planar-formats*   dawn-native*   implicit-device-synchronization*   transient-attachments*   unorm16texture-formats*   adapter-properties-memory-heaps*   adapter-properties-vk*   dawn-format-capabilities*   shared-texture-memory-opaque-fd*   shared-fence-vk-semaphore-opaque-fd*   dawn-load-resolve-texture*   flexible-texture-views*   unorm16formats-for-external-texture*   dawn-allow-undefined-load-store-op
+
+[Enabled Toggle Names]
+----------------------*   lazy_clear_resource_on_first_use: 
+    https://crbug.com/dawn/145(https://crbug.com/dawn/145):
+    Clears resource to zero on first usage. This initializes the resource so
+    that no dirty bits from recycled memory is present in the new resource.
+
+*   use_temporary_buffer_in_texture_to_texture_copy: 
+    https://crbug.com/dawn/42(https://crbug.com/dawn/42):
+    Split texture-to-texture copy into two copies: copy from source texture
+    into a temporary buffer, and copy from the temporary buffer into the
+    destination texture when copying between compressed textures that don't
+    have block-aligned sizes. This workaround is enabled by default on all
+    Vulkan drivers to solve an issue in the Vulkan SPEC about the
+    texture-to-texture copies with compressed formats. See #1005
+    (https://github.com/KhronosGroup/Vulkan-Docs/issues/1005) for more
+    details.
+
+*   vulkan_use_d32s8: 
+    https://crbug.com/dawn/286(https://crbug.com/dawn/286):
+    Vulkan mandates support of either D32_FLOAT_S8 or D24_UNORM_S8. When
+    available the backend will use D32S8 (toggle to on) but setting the toggle
+    to off will make it use the D24S8 format when possible.
+
+*   vulkan_use_s8: 
+    https://crbug.com/dawn/666(https://crbug.com/dawn/666):
+    Vulkan has a pure stencil8 format but it is not universally available.
+    When this toggle is on, the backend will use S8 for the stencil8 format,
+    otherwise it will fallback to D32S8 or D24S8.
+
+*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   vulkan_use_demote_to_helper_invocation_extension: 
+    https://crbug.com/42250787(https://crbug.com/42250787):
+    Sets the use of the vulkan demote to helper extension
+
+*   use_placeholder_fragment_in_vertex_only_pipeline: 
+    https://crbug.com/dawn/136(https://crbug.com/dawn/136):
+    Use a placeholder empty fragment shader in vertex only render pipeline.
+    This toggle must be enabled for OpenGL ES backend, the Vulkan Backend, and
+    serves as a workaround by default enabled on some Metal devices with Intel
+    GPU to ensure the depth result is correct.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+*   use_vulkan_zero_initialize_workgroup_memory_extension: 
+    https://crbug.com/dawn/1302(https://crbug.com/dawn/1302):
+    Initialize workgroup memory with OpConstantNull on Vulkan when the Vulkan
+    extension VK_KHR_zero_initialize_workgroup_memory is supported.
+
+*   use_vulkan_memory_model: 
+    https://crbug.com/392606604(https://crbug.com/392606604):
+    Use the Vulkan Memory Model if available.
+
+*   vulkan_direct_variable_access_transform_handle: 
+    https://crbug.com/387000529(https://crbug.com/387000529):
+    Transform handles using direct variable access.
+
+*   enable_integer_range_analysis_in_robustness: 
+    https://crbug.com/348701956(https://crbug.com/348701956):
+    Compute the range of the index with Integer Range Analysis in the
+    robustness transform and skip doing index clamping when the out of bound
+    access cannot happen.
+
+*   use_spirv_1_4: 
+    https://crbug.com/422421915(https://crbug.com/422421915):
+    Use SPIR-V 1.4 if available
+
+*   blob_cache_hash_validation: 
+    https://crbug.com/429938352(https://crbug.com/429938352):
+    Enable hash validation when loading/storing from/to the blob cache
+
+*   decompose_uniform_buffers: 
+    https://crbug.com/448452698(https://crbug.com/448452698):
+    Decompose uniform buffers into arrays of vec4<u32> on backends for Vulkan
+    and OpenGL.
+
+*   vulkan_use_dynamic_rendering: 
+    https://crbug.com/dawn/463893794(https://crbug.com/dawn/463893794):
+    Makes use of VK_KHR_dynamic_rendering to implement WebGPU RenderPass.
+
+*   enable_spirv_validation: 
+    https://crbug.com/473526415(https://crbug.com/473526415):
+    Enable validation of SPIR-V generated by Tint.
+
+*   vulkan_use_create_render_pass_2: 
+    https://crbug.com/chromium/463893793(https://crbug.com/chromium/463893793):
+    Makes use of VK_KHR_create_renderpass2 when creating VkRenderPass objects.
+    Ignored when vulkan_use_dynamic_rendering is enabled.
+
+*   vulkan_use_rasterization_order_attachment_access: 
+    https://crbug.com/42241389(https://crbug.com/42241389):
+    Use VK_EXT_rasterization_order_attachment_access when it is available.
+
+*   wait_is_thread_safe: 
+    https://crbug.com/412761228(https://crbug.com/412761228):
+    WaitFor* functions are thread-safe and can be called without the
+    device-lock if implicit synchronization is enabled.
+
+
+
+[WebGPU Required Toggles - enabled]
+-----------------------------------*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+
+
+<CPU>  Vulkan backend - Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+---------------------------------------------------------------------------
+
+[WebGPU Status]
+---------------*   Blocklisted - crbug.com/40057808: CPU adapters not fully tested or conformant. | 
+
+[Adapter Supported Features]
+----------------------------*   core-features-and-limits*   depth-clip-control*   depth32float-stencil8*   texture-compression-bc*   texture-compression-bc-sliced-3d*   timestamp-query*   indirect-first-instance*   shader-f16*   rg11b10ufloat-renderable*   bgra8unorm-storage*   float32filterable*   float32blendable*   clip-distances*   dual-source-blending*   subgroups*   primitive-index*   texture-component-swizzle*   subgroup-size-control*   texture-compression-unaligned*   dawn-internal-usages*   dawn-multi-planar-formats*   dawn-native*   implicit-device-synchronization*   transient-attachments*   msaa-render-to-single-sampled*   unorm16texture-formats*   adapter-properties-memory-heaps*   adapter-properties-vk*   dawn-format-capabilities*   dawn-drm-format-capabilities*   shared-texture-memory-dma-buf*   shared-texture-memory-opaque-fd*   shared-fence-sync-fd*   dawn-load-resolve-texture*   flexible-texture-views*   unorm16formats-for-external-texture*   adapter-properties-drm*   dawn-allow-undefined-load-store-op
+
+[Enabled Toggle Names]
+----------------------*   lazy_clear_resource_on_first_use: 
+    https://crbug.com/dawn/145(https://crbug.com/dawn/145):
+    Clears resource to zero on first usage. This initializes the resource so
+    that no dirty bits from recycled memory is present in the new resource.
+
+*   use_temporary_buffer_in_texture_to_texture_copy: 
+    https://crbug.com/dawn/42(https://crbug.com/dawn/42):
+    Split texture-to-texture copy into two copies: copy from source texture
+    into a temporary buffer, and copy from the temporary buffer into the
+    destination texture when copying between compressed textures that don't
+    have block-aligned sizes. This workaround is enabled by default on all
+    Vulkan drivers to solve an issue in the Vulkan SPEC about the
+    texture-to-texture copies with compressed formats. See #1005
+    (https://github.com/KhronosGroup/Vulkan-Docs/issues/1005) for more
+    details.
+
+*   vulkan_use_d32s8: 
+    https://crbug.com/dawn/286(https://crbug.com/dawn/286):
+    Vulkan mandates support of either D32_FLOAT_S8 or D24_UNORM_S8. When
+    available the backend will use D32S8 (toggle to on) but setting the toggle
+    to off will make it use the D24S8 format when possible.
+
+*   vulkan_use_s8: 
+    https://crbug.com/dawn/666(https://crbug.com/dawn/666):
+    Vulkan has a pure stencil8 format but it is not universally available.
+    When this toggle is on, the backend will use S8 for the stencil8 format,
+    otherwise it will fallback to D32S8 or D24S8.
+
+*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   vulkan_use_demote_to_helper_invocation_extension: 
+    https://crbug.com/42250787(https://crbug.com/42250787):
+    Sets the use of the vulkan demote to helper extension
+
+*   use_placeholder_fragment_in_vertex_only_pipeline: 
+    https://crbug.com/dawn/136(https://crbug.com/dawn/136):
+    Use a placeholder empty fragment shader in vertex only render pipeline.
+    This toggle must be enabled for OpenGL ES backend, the Vulkan Backend, and
+    serves as a workaround by default enabled on some Metal devices with Intel
+    GPU to ensure the depth result is correct.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+*   use_vulkan_zero_initialize_workgroup_memory_extension: 
+    https://crbug.com/dawn/1302(https://crbug.com/dawn/1302):
+    Initialize workgroup memory with OpConstantNull on Vulkan when the Vulkan
+    extension VK_KHR_zero_initialize_workgroup_memory is supported.
+
+*   vulkan_use_image_robust_access_2: 
+    https://crbug.com/tint/1890(https://crbug.com/tint/1890):
+    Disable Tint robustness transform on textures when VK_EXT_robustness2 is
+    supported and robustImageAccess2 == VK_TRUE.
+
+*   vulkan_use_buffer_robust_access_2: 
+    https://crbug.com/tint/1890(https://crbug.com/tint/1890):
+    Disable index clamping on the runtime-sized arrays on buffers in Tint
+    robustness transform when VK_EXT_robustness2 is supported and
+    robustBufferAccess2 == VK_TRUE.
+
+*   use_vulkan_memory_model: 
+    https://crbug.com/392606604(https://crbug.com/392606604):
+    Use the Vulkan Memory Model if available.
+
+*   enable_integer_range_analysis_in_robustness: 
+    https://crbug.com/348701956(https://crbug.com/348701956):
+    Compute the range of the index with Integer Range Analysis in the
+    robustness transform and skip doing index clamping when the out of bound
+    access cannot happen.
+
+*   use_spirv_1_4: 
+    https://crbug.com/422421915(https://crbug.com/422421915):
+    Use SPIR-V 1.4 if available
+
+*   blob_cache_hash_validation: 
+    https://crbug.com/429938352(https://crbug.com/429938352):
+    Enable hash validation when loading/storing from/to the blob cache
+
+*   decompose_uniform_buffers: 
+    https://crbug.com/448452698(https://crbug.com/448452698):
+    Decompose uniform buffers into arrays of vec4<u32> on backends for Vulkan
+    and OpenGL.
+
+*   vulkan_use_dynamic_rendering: 
+    https://crbug.com/dawn/463893794(https://crbug.com/dawn/463893794):
+    Makes use of VK_KHR_dynamic_rendering to implement WebGPU RenderPass.
+
+*   enable_spirv_validation: 
+    https://crbug.com/473526415(https://crbug.com/473526415):
+    Enable validation of SPIR-V generated by Tint.
+
+*   vulkan_use_create_render_pass_2: 
+    https://crbug.com/chromium/463893793(https://crbug.com/chromium/463893793):
+    Makes use of VK_KHR_create_renderpass2 when creating VkRenderPass objects.
+    Ignored when vulkan_use_dynamic_rendering is enabled.
+
+*   vulkan_use_rasterization_order_attachment_access: 
+    https://crbug.com/42241389(https://crbug.com/42241389):
+    Use VK_EXT_rasterization_order_attachment_access when it is available.
+
+*   use_spirv_reconvergence_mode: 
+    https://crbug.com/379673383(https://crbug.com/379673383):
+    Use SPIR-V reconvergence execution mode if supported by the device.
+
+*   wait_is_thread_safe: 
+    https://crbug.com/412761228(https://crbug.com/412761228):
+    WaitFor* functions are thread-safe and can be called without the
+    device-lock if implicit synchronization is enabled.
+
+
+
+[WebGPU Required Toggles - enabled]
+-----------------------------------*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+
+
+Compositor Information
+======================Tile Update Mode:One-copyPartial Raster  :Enabled
+
+Display(s) Information
+======================Info                          :Display[15] bounds=[0,0 1280x800], workarea=[0,0 1280x800], scale=1, rotation=0, panel_rotation=0 external detectedColor space (all)             :{primaries:BT709, transfer:SRGB, matrix:RGB, range:FULL}Buffer format (all)           :RGBA_8888Color volume                  :{name:'srgb', r:[0.6400, 0.3300], g:[0.3000, 0.6000], b:[0.1500, 0.0600], w:[0.3127, 0.3290]}SDR white level in nits       :203HDR relative maximum luminance:1Bits per color component      :8Bits per pixel                :24
+
+Video Acceleration Information
+==============================Decoding:Encoding:
+
+Vulkan Information
+==================
+
+Device Performance Information
+==============================
+
+Diagnostics
+===========
+
+Driver Information for Hardware GPU
+===================================
+
+Graphics Feature Status for Hardware GPU
+========================================
+
+Driver Bug Workarounds for Hardware GPU
+=======================================
+
+Problems Detected for Hardware GPU
+==================================
+
+Log Messages
+============[178:178:1110/131552.358628:ERROR:ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc:249] : '--ozone-platform=wayland' is not compatible with Vulkan. Consider switching to '--ozone-platform=x11' or disabling Vulkan
+[178:178:1110/131552.684908:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:434] : WARNING: VulkanPreferredFeatures::addFeaturesToQuery() was not called
+
+[178:178:1110/131552.688958:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:437] : WARNING: VulkanPreferredFeatures::addFeaturesToEnable() was not called
+
+[178:178:1110/131552.767214:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] : InitializeSandbox() called with multiple threads in process gpu-process.
+browser-evidence: gpu-info.json
+{
+  "commandLine": "/usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-certificate-errors --remote-debugging-port=0 --user-data-dir=/tmp/browser.Bf1ui1/profile --disable-background-networking --disable-hang-monitor --disable-background-timer-throttling --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required --ignore-gpu-blocklist --enable-unsafe-webgpu --enable-logging=stderr --v=0 --vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2 --flag-switches-begin --flag-switches-end about:blank",
+  "gpu": {
+    "auxAttributes": {
+      "amdSwitchable": false,
+      "canSupportThreadedTextureMailbox": false,
+      "directRenderingVersion": "",
+      "displayType": "ANGLE_OPENGL",
+      "glExtensions": "GL_AMD_performance_monitor GL_ANGLE_blob_cache GL_ANGLE_client_arrays GL_ANGLE_clip_cull_distance GL_ANGLE_compressed_texture_etc GL_ANGLE_depth_texture GL_ANGLE_framebuffer_blit GL_ANGLE_framebuffer_multisample GL_ANGLE_get_serialized_context_string GL_ANGLE_get_tex_level_parameter GL_ANGLE_instanced_arrays GL_ANGLE_memory_size GL_ANGLE_program_binary_readiness_query GL_ANGLE_program_cache_control GL_ANGLE_renderability_validation GL_ANGLE_request_extension GL_ANGLE_robust_client_memory GL_ANGLE_shader_pixel_local_storage GL_ANGLE_stencil_texturing GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_ANGLE_texture_multisample GL_ANGLE_translated_shader_source GL_ARM_rgba8 GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_bind_uniform_location GL_CHROMIUM_copy_texture GL_CHROMIUM_lose_context GL_EXT_blend_func_extended GL_EXT_blend_minmax GL_EXT_clear_texture GL_EXT_clip_control GL_EXT_clip_cull_distance GL_EXT_color_buffer_float GL_EXT_color_buffer_half_float GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_conservative_depth GL_EXT_debug_label GL_EXT_debug_marker GL_EXT_depth_clamp GL_EXT_discard_framebuffer GL_EXT_disjoint_timer_query GL_EXT_draw_buffers GL_EXT_draw_buffers_indexed GL_EXT_float_blend GL_EXT_frag_depth GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_occlusion_query_boolean GL_EXT_polygon_offset_clamp GL_EXT_read_format_bgra GL_EXT_render_snorm GL_EXT_robustness GL_EXT_sRGB GL_EXT_sRGB_write_control GL_EXT_shadow_samplers GL_EXT_texture_border_clamp GL_EXT_texture_compression_bptc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_compression_s3tc_srgb GL_EXT_texture_filter_anisotropic GL_EXT_texture_format_BGRA8888 GL_EXT_texture_mirror_clamp_to_edge GL_EXT_texture_norm16 GL_EXT_texture_rg GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_EXT_texture_sRGB_decode GL_EXT_texture_shadow_lod GL_EXT_texture_storage GL_EXT_texture_type_2_10_10_10_REV GL_EXT_unpack_subimage GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_debug GL_KHR_parallel_shader_compile GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_KHR_texture_compression_astc_sliced_3d GL_MESA_framebuffer_flip_y GL_NV_fence GL_NV_framebuffer_blit GL_NV_pack_subimage GL_NV_pixel_buffer_object GL_NV_read_depth GL_NV_read_stencil GL_NV_shader_noperspective_interpolation GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3 GL_OES_EGL_sync GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_draw_buffers_indexed GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_get_program_binary GL_OES_mapbuffer GL_OES_packed_depth_stencil GL_OES_required_internalformat GL_OES_rgb8_rgba8 GL_OES_sample_variables GL_OES_shader_multisample_interpolation GL_OES_standard_derivatives GL_OES_surfaceless_context GL_OES_texture_3D GL_OES_texture_border_clamp GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_vertex_array_object ",
+      "glImplementationParts": "(gl=egl-angle,angle=opengl)",
+      "glRenderer": "ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)",
+      "glResetNotificationStrategy": 33377,
+      "glVendor": "Google Inc. (Mesa)",
+      "glVersion": "OpenGL ES 3.0 (ANGLE 2.1 git hash: unknown hash)",
+      "glWsExtensions": "EGL_KHR_create_context EGL_KHR_image EGL_KHR_image_base EGL_KHR_gl_colorspace EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_texture_3D_image EGL_KHR_gl_renderbuffer_image EGL_KHR_get_all_proc_addresses EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANGLE_create_context_webgl_compatibility EGL_CHROMIUM_create_context_bind_generates_resource EGL_KHR_swap_buffers_with_damage EGL_EXT_pixel_format_float EGL_KHR_surfaceless_context EGL_ANGLE_display_texture_share_group EGL_ANGLE_display_semaphore_share_group EGL_ANGLE_create_context_client_arrays EGL_ANGLE_program_cache_control EGL_ANGLE_robust_resource_initialization EGL_ANGLE_create_context_extensions_enabled EGL_ANDROID_blob_cache EGL_ANDROID_recordable EGL_ANDROID_native_fence_sync EGL_ANGLE_create_context_backwards_compatible EGL_KHR_no_config_context EGL_KHR_create_context_no_error EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers EGL_KHR_reusable_sync EGL_ANGLE_external_context_and_surface EGL_EXT_buffer_age EGL_ANGLE_context_virtualization EGL_ANGLE_memory_usage_report EGL_ANGLE_create_context_passthrough_shaders ",
+      "glWsVendor": "Google Inc. (Mesa)",
+      "glWsVersion": "1.5 (ANGLE 2.1 git hash: unknown hash)",
+      "hardwareSupportsVulkan": false,
+      "inProcessGpu": false,
+      "initializationTime": 2.686905,
+      "isAsan": false,
+      "isClangCoverage": false,
+      "jpegDecodeAcceleratorSupported": false,
+      "maxMsaaSamples": "8",
+      "optimus": false,
+      "passthroughCmdDecoder": true,
+      "pixelShaderVersion": "3.00",
+      "processCrashCount": 0,
+      "sandboxed": false,
+      "skiaBackendType": "GaneshGL",
+      "subpixelFontRendering": true,
+      "targetCpuBits": 64,
+      "vertexShaderVersion": "3.00",
+      "visibilityCallbackCallCount": 0
+    },
+    "devices": [
+      {
+        "deviceId": 0,
+        "deviceString": "ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)",
+        "driverVendor": "Mesa",
+        "driverVersion": "25.0.7",
+        "vendorId": 0,
+        "vendorString": "Google Inc. (Mesa)"
+      }
+    ],
+    "driverBugWorkarounds": [
+      "enable_webgl_timer_query_extensions",
+      "exit_on_context_lost",
+      "disabled_extension_GL_KHR_blend_equation_advanced",
+      "disabled_extension_GL_KHR_blend_equation_advanced_coherent"
+    ],
+    "featureStatus": {
+      "2d_canvas": "enabled",
+      "direct_rendering_display_compositor": "disabled_off_ok",
+      "gpu_compositing": "disabled_software",
+      "multiple_raster_threads": "enabled_on",
+      "opengl": "enabled_on",
+      "rasterization": "enabled_force",
+      "raw_draw": "disabled_off_ok",
+      "skia_graphite": "disabled_off",
+      "trees_in_viz": "disabled_off",
+      "video_decode": "enabled",
+      "video_encode": "disabled_software",
+      "vulkan": "disabled_off",
+      "webgl": "enabled_readback",
+      "webgpu": "enabled_readback",
+      "webgpu_on_vk_via_gl_interop": "enabled",
+      "webnn": "disabled_off"
+    },
+    "videoDecoding": [],
+    "videoEncoding": []
+  },
+  "modelName": "",
+  "modelVersion": ""
+}
+browser-evidence: vulkaninfo.out
+==========
+VULKANINFO
+==========
+
+Vulkan Instance Version: 1.4.309
+
+
+Instance Extensions: count = 24
+-------------------------------
+VK_EXT_acquire_drm_display             : extension revision 1
+VK_EXT_acquire_xlib_display            : extension revision 1
+VK_EXT_debug_report                    : extension revision 10
+VK_EXT_debug_utils                     : extension revision 2
+VK_EXT_direct_mode_display             : extension revision 1
+VK_EXT_display_surface_counter         : extension revision 1
+VK_EXT_headless_surface                : extension revision 1
+VK_EXT_surface_maintenance1            : extension revision 1
+VK_EXT_swapchain_colorspace            : extension revision 5
+VK_KHR_device_group_creation           : extension revision 1
+VK_KHR_display                         : extension revision 23
+VK_KHR_external_fence_capabilities     : extension revision 1
+VK_KHR_external_memory_capabilities    : extension revision 1
+VK_KHR_external_semaphore_capabilities : extension revision 1
+VK_KHR_get_display_properties2         : extension revision 1
+VK_KHR_get_physical_device_properties2 : extension revision 2
+VK_KHR_get_surface_capabilities2       : extension revision 1
+VK_KHR_portability_enumeration         : extension revision 1
+VK_KHR_surface                         : extension revision 25
+VK_KHR_surface_protected_capabilities  : extension revision 1
+VK_KHR_wayland_surface                 : extension revision 6
+VK_KHR_xcb_surface                     : extension revision 6
+VK_KHR_xlib_surface                    : extension revision 6
+VK_LUNARG_direct_driver_loading        : extension revision 1
+
+Instance Layers: count = 3
+--------------------------
+VK_LAYER_INTEL_nullhw       INTEL NULL HW                1.1.73   version 1
+VK_LAYER_MESA_device_select Linux device selection layer 1.4.303  version 1
+VK_LAYER_MESA_overlay       Mesa Overlay layer           1.4.303  version 1
+
+Devices:
+========
+GPU0:
+	apiVersion         = 1.4.307
+	driverVersion      = 26.1.6
+	vendorID           = 0x10005
+	deviceID           = 0x0000
+	deviceType         = PHYSICAL_DEVICE_TYPE_CPU
+	deviceName         = Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+	driverID           = DRIVER_ID_MESA_VENUS
+	driverName         = venus
+	driverInfo         = Mesa 26.1.6-1~bpo13+1
+	conformanceVersion = 1.4.0.0
+	deviceUUID         = 085dc710-0d7c-656d-d4a1-27584061bcbc
+	driverUUID         = 1df9cd03-0236-fdde-5a3a-15f556bb7b9b
+browser-evidence: vulkaninfo.err
+'DISPLAY' environment variable not set... skipping surface info
+ERROR while creating surface for extension VK_KHR_wayland_surface : ./vulkaninfo/./vulkaninfo.h:247:vkGetPhysicalDeviceSurfacePresentModesKHR failed with ERROR_SURFACE_LOST_KHR
+browser-evidence: browser.log
+grep: warning: stray \ before -
+[130:164:1110/131548.011057:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:130:1110/131549.000466:WARNING:ui/ozone/platform/wayland/common/wayland_object.cc:120] Binding to wl_shm version 1 but version 2 is available.
+[130:130:1110/131549.002818:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:287] No wl_seat object. The functionality may suffer.
+[130:130:1110/131549.232620:ERROR:content/browser/browser_main_loop.cc:287] Gdk: gdk_seat_get_keyboard: assertion 'GDK_IS_SEAT (seat)' failed
+[130:164:1110/131549.632023:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:164:1110/131549.632426:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:164:1110/131551.009976:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[184:1:1110/131551.034191:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[178:178:1110/131552.358628:ERROR:ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc:249] '--ozone-platform=wayland' is not compatible with Vulkan. Consider switching to '--ozone-platform=x11' or disabling Vulkan
+[178:178:1110/131552.684908:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:434] WARNING: VulkanPreferredFeatures::addFeaturesToQuery() was not called
+
+[178:178:1110/131552.688958:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:437] WARNING: VulkanPreferredFeatures::addFeaturesToEnable() was not called
+
+[178:178:1110/131552.767214:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.
+[130:164:1110/131552.908532:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+
+DevTools listening on ws://127.0.0.1:49153/devtools/browser/fff28f6e-2941-410b-baf1-b4a8486b81df
+[130:130:1110/131553.189521:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:170] Server doesn't support zcr_alpha_compositing_v1.
+[130:130:1110/131553.189707:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:185] Server doesn't support overlay_prioritizer.
+[130:130:1110/131553.189738:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:200] Server doesn't support wp_content_type_v1
+[130:130:1110/131553.189759:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:214] Server doesn't support wp_color_management_surface_v1.
+[130:130:1110/131553.211494:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[221:1:1110/131553.723393:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[130:130:1110/131553.799125:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[230:1:1110/131554.210413:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[229:1:1110/131554.229254:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[130:130:1110/131554.266346:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[130:130:1110/131554.302098:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:164:1110/131554.304043:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:130:1110/131554.309177:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:164:1110/131554.310402:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:130:1110/131554.475608:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:164:1110/131554.478336:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:130:1110/131554.630862:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:130:1110/131554.630982:WARNING:ui/ozone/platform/wayland/host/org_gnome_mutter_idle_monitor.cc:87] org.gnome.Mutter.IdleMonitor D-Bus service does not exist
+[130:130:1110/131555.441957:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:130:1110/131555.465088:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:164:1110/131555.476609:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:130:1110/131555.573918:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:130:1110/131556.041526:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.UPower was not provided by any .service files
+[130:130:1110/131556.041732:WARNING:dbus/property.cc:174] GetAll request failed for: org.freedesktop.UPower.Device
+[130:130:1110/131556.044633:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:164:1110/131556.048141:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[130:130:1110/131556.274682:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:164:1110/131556.278006:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[256:1:1110/131556.345698:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[130:130:1110/131556.673192:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[130:130:1110/131556.673367:WARNING:ui/base/idle/idle_linux.cc:111] None of the known D-Bus ScreenSaver services could be used.
+[130:130:1110/131557.261959:INFO:CONSOLE:0] "Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: chrome://resources/roboto/roboto-regular.woff2", source: chrome://omnibox-popup.top-chrome/ (0)
+[130:130:1110/131558.872620:INFO:CONSOLE:7] "Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: https://localhost:49152/font.ttf", source: https://localhost:49152/page.html (7)
+[130:130:1110/131558.962235:INFO:CONSOLE:574] "Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: chrome://resources/roboto/roboto-regular.woff2", source: chrome://resources/cr_components/composebox/composebox_input.js (574)
+[275:1:1110/131559.497787:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.
+Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.
+Warning: EGL display does not support requested client API 'OpenGL' (supported: OpenGL_ES).
+ - While trying to discover a BackendType::OpenGL adapter.
+
+Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 72 to 16 to fit dynamic offset allocation limit.
+Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 32 to 16 to fit dynamic offset allocation limit.
+[130:130:1110/131603.148912:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[130:130:1110/131603.149227:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[130:130:1110/131603.152772:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[130:130:1110/131603.152873:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[130:130:1110/131603.175016:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[130:130:1110/131603.175336:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[130:130:1110/131603.183129:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[130:130:1110/131603.183172:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+@etude 1 progress stage 5
+@etude 1 end 2
+grep: warning: stray \ before -
+run: webgpu: machine.webgpu.chromium-webgpu-venus-native: starting
+@etude 1 begin machine.webgpu.chromium-webgpu-venus-native
+@etude 1 progress stage 1
+@etude 1 progress stage 2
+browser: action: chromium webgpu-venus-native
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus-native pass
+@etude 1 assert ran pass
+@etude 1 progress stage 3
+browser-judge: Venus readback passes: 0
+browser-judge: result: pass chromium webgpu-venus-native
+@etude 1 assert as-debian pass
+@etude 1 progress stage 4
+browser-evidence: result.json
+{
+  "platform": "wayland",
+  "requests": {
+    "default": {
+      "adapter": {
+        "architecture": "swiftshader",
+        "description": "",
+        "device": "",
+        "fallback": true,
+        "vendor": "google"
+      },
+      "readback": null
+    },
+    "fallback": {
+      "adapter": {
+        "architecture": "swiftshader",
+        "description": "",
+        "device": "",
+        "fallback": true,
+        "vendor": "google"
+      },
+      "readback": null
+    }
+  },
+  "venus_passes": 0
+}
+browser-evidence: switches.json
+{
+  "argv": [
+    "chromium",
+    "--ozone-platform=wayland",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--password-store=basic",
+    "--start-fullscreen",
+    "--ignore-certificate-errors",
+    "--remote-debugging-port=0",
+    "--user-data-dir=/tmp/browser.rZFEET/profile",
+    "--disable-background-networking",
+    "--disable-hang-monitor",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--autoplay-policy=no-user-gesture-required",
+    "--ignore-gpu-blocklist",
+    "--enable-unsafe-webgpu",
+    "--enable-logging=stderr",
+    "--v=0",
+    "--vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2",
+    "--use-vulkan=native",
+    "about:blank"
+  ],
+  "certificate": "ephemeral local HTTPS certificate accepted by automation",
+  "environment": {
+    "GRAPHICS_CLASS": "conformance",
+    "GRAPHICS_CPUS": "4",
+    "GRAPHICS_DONE": "1",
+    "LP_NUM_THREADS": "0",
+    "MESA_SHADER_CACHE_DIR": "/tmp/graphics-shader-cache",
+    "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/venus_icd.x86_64.json",
+    "WAYLAND_DISPLAY": "wayland-runner",
+    "XDG_RUNTIME_DIR": "/tmp/browser.rZFEET/run"
+  },
+  "prefs": {},
+  "version": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)"
+}
+browser-evidence: record
+runner browser
+system Rach2 1.0.0 with the GNU system
+kernel Linux 6.18.0-rach2
+cpus 4
+memory_kib 8369684
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.24 0.04 0.01
+processes start 31
+kernel_before cpu  300 0 7380 961 0 0 0 0 0 0
+kernel_before cpu0 234 0 5350 159 0 0 0 0 0 0
+kernel_before cpu1 14 0 656 297 0 0 0 0 0 0
+kernel_before cpu2 24 0 681 260 0 0 0 0 0 0
+kernel_before cpu3 26 0 692 244 0 0 0 0 0 0
+kernel_before intr 38679
+kernel_before ctxt 0
+kernel_before btime 1794316598
+kernel_before processes 94
+kernel_before sleeps_interrupted 0
+kernel_before process_pid_steps 3638
+kernel_before process_uid_steps 135
+kernel_before process_timer_steps 22839
+kernel_before process_timer_passes 24033
+kernel_before timer_passes_late 607
+kernel_before tlb_shootdowns 0
+kernel_before tlb_shootdown_ipis 0
+kernel_before scheduler_picks 18372
+kernel_before scheduler_steps 5975
+kernel_before vm_gap_steps 9573
+kernel_before clock_calls 1
+kernel_before vdso_tsc 1
+kernel_before bkl_wait_us 26067551
+kernel_before bkl_wait_max_us 97957
+kernel_before bkl_hold_max_us 595275
+kernel_before bkl_hold_max_entry 0 -1
+kernel_before bkl_hold_sample_us 47667934
+kernel_before bkl_hold_sample_pc ffffffff803384f6 ffffffff8033aa92 ffffffff8033aabe ffffffff8033ac3b ffffffff801115ee ffffffff801119ae ffffffff80111a15 ffffffff803302bf
+kernel_before bkl_hold_max_mark 1 0
+kernel_before bkl_hold_max_mark 2 0
+kernel_before bkl_hold_max_mark 4 0
+kernel_before bkl_hold_max_mark 8 0
+kernel_before bkl_hold_max_mark 16 0
+kernel_before bkl_hold_entry vector 0 11945 1835512
+kernel_before bkl_hold_entry vector 14 28277 1396209
+kernel_before bkl_hold_entry syscall 1 325 705984
+kernel_before bkl_hold_entry vector 48 1167 683212
+kernel_before bkl_hold_entry vector 32 4225 426638
+kernel_before bkl_hold_entry syscall 9 1346 336055
+kernel_before bkl_hold_entry vector 36 186 321761
+kernel_before bkl_hold_entry syscall 257 2643 168277
+kernel_before bkl_hold_entry syscall 11 106 90043
+kernel_before bkl_hold_entry syscall 7 186 84503
+kernel_before bkl_hold_entry syscall 0 1028 74736
+kernel_before bkl_hold_entry syscall 59 70 71595
+kernel_before bkl_hold_entry syscall 262 865 70464
+kernel_before bkl_hold_entry syscall 3 6052 60987
+kernel_before bkl_hold_entry syscall 2 152 55170
+kernel_before bkl_hold_entry syscall 61 311 48523
+kernel_before kvm_vms 0
+kernel_before kvm_vcpus 0
+kernel_before kvm_slots 0
+kernel_before kvm_tdp_pages 0
+kernel_before kvm_run_mappings 0
+kernel_before vfio_groups 0
+kernel_before vfio_devices 0
+kernel_before vfio_dma_mappings 0
+kernel_before vfio_dma_pages 0
+kernel_before vfio_dma_io_pages 0
+kernel_before kvm_exits 0
+kernel_before iommu_dma_faults 0
+kernel_before iommu_irq_faults 0
+kernel_before msi_vectors_free 187
+kernel_before latency_timer_us 4944489
+kernel_before latency_disk_us 65118
+kernel_before latency_diskwait_us 0
+kernel_before latency_console_us 7064
+kernel_before wlan_refused_tcp 0
+kernel_before wlan_refused_ack 0
+kernel_before wlan_refused_other 0
+kernel_before wlan_rx_held 0
+kernel_before wlan_rx_wait_most 0
+kernel_before wlan_tx_status_lost 0
+kernel_before wlan_rescue_key 0
+kernel_before wlan_rescue_message4 0
+kernel_before wlan_rescue_silent 0
+kernel_before wlan_rescue_saved 0
+kernel_before wlan_rx_old_far 0
+kernel_before loopback_dropped 0
+kernel_before loopback_peak 0
+kernel_before loopback_delivered_tick 0
+kernel_before loopback_delivered_idle 0
+kernel_before loopback_delivered_call 0
+kernel_before loopback_left_idle 0
+kernel_before namecache_hits 9493
+kernel_before namecache_misses 591
+kernel_before namecache_entries 423
+kernel_before namecache_negative 89
+kernel_before ext2_node_visits 7367
+kernel_before procs_running 2
+kernel_before procs_blocked 0
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=8369684
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 48.71 24.17 17.87
+host_claims 8
+host_ledger etude-ledger 1
+host_ledger claim bed-forward-hand:toksaitov-s:600794
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 600794 4677914 1
+host_ledger account toksaitov-s
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 13958643712
+host_ledger process keeper 600816 4677917 1
+host_ledger process case 600817 4677917 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131300Z.639997:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 639997 4692426 1
+host_ledger account toksaitov-a
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim debian-ref:toksaitov-m:765216:1794316428
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 765216 4733561 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 765533 4733614 1
+host_ledger process case 765534 4733614 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131524Z.768961:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 768961 4742920 1
+host_ledger account testing
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131300Z.639997:machine.d3dvenus.probe-wined3dvk-9-i386:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 639997 4692426 1
+host_ledger account toksaitov-a
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 18253611008
+host_ledger resource disk_bytes 21474836480
+host_ledger process keeper 772268 4744440 1
+host_ledger process case 772269 4744440 1
+host_ledger end
+host_ledger claim launch:5a6e65eea47968f305c1b049393ef47e
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 772385 4744505 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource memory_bytes 35433480192
+host_ledger process keeper 772401 4744509 1
+host_ledger process case 772402 4744509 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T131524Z.768961:machine.webgpu.chromium-webgpu-venus-native:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 768961 4742920 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 21474836480
+host_ledger process keeper 784532 4750520 1
+host_ledger process case 784538 4750521 1
+host_ledger end
+host_ledger claim debian-ref:toksaitov-m:794199:1794316626
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 794199 4753155 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 795315 4753357 1
+host_ledger process case 795327 4753359 1
+host_ledger end
+case chromium webgpu-venus-native
+icd /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+browser_platform wayland
+compositor weston 14.0.2 headless pixman kiosk no-config
+load end 1.41 0.32 0.10
+busy 56.8%
+kernel_after cpu  1237 0 12566 5616 0 0 0 0 0 0
+kernel_after cpu0 703 0 6146 1588 0 0 0 0 0 0
+kernel_after cpu1 137 0 2211 1312 0 0 0 0 0 0
+kernel_after cpu2 216 0 2084 1360 0 0 0 0 0 0
+kernel_after cpu3 179 0 2123 1355 0 0 0 0 0 0
+kernel_after intr 143647
+kernel_after ctxt 0
+kernel_after btime 1794316598
+kernel_after processes 302
+kernel_after sleeps_interrupted 1
+kernel_after process_pid_steps 22661
+kernel_after process_uid_steps 550
+kernel_after process_timer_steps 1111483
+kernel_after process_timer_passes 46957
+kernel_after timer_passes_late 1329
+kernel_after tlb_shootdowns 1789
+kernel_after tlb_shootdown_ipis 2659
+kernel_after scheduler_picks 152033
+kernel_after scheduler_steps 47048
+kernel_after vm_gap_steps 1015970
+kernel_after clock_calls 14245
+kernel_after vdso_tsc 1
+kernel_after bkl_wait_us 64037189
+kernel_after bkl_wait_max_us 97957
+kernel_after bkl_hold_max_us 595275
+kernel_after bkl_hold_max_entry 0 -1
+kernel_after bkl_hold_sample_us 47667934
+kernel_after bkl_hold_sample_pc ffffffff803384f6 ffffffff8033aa92 ffffffff8033aabe ffffffff8033ac3b ffffffff801115ee ffffffff801119ae ffffffff80111a15 ffffffff803302bf
+kernel_after bkl_hold_max_mark 1 0
+kernel_after bkl_hold_max_mark 2 0
+kernel_after bkl_hold_max_mark 4 0
+kernel_after bkl_hold_max_mark 8 0
+kernel_after bkl_hold_max_mark 16 0
+kernel_after bkl_hold_entry vector 14 280738 6940077
+kernel_after bkl_hold_entry vector 0 107724 5144526
+kernel_after bkl_hold_entry vector 48 9242 3618572
+kernel_after bkl_hold_entry vector 32 40292 2996691
+kernel_after bkl_hold_entry syscall 9 8437 1882957
+kernel_after bkl_hold_entry syscall 257 8882 1081528
+kernel_after bkl_hold_entry syscall 1 5247 894220
+kernel_after bkl_hold_entry syscall 0 10041 843406
+kernel_after bkl_hold_entry vector 36 191 331483
+kernel_after bkl_hold_entry syscall 202 14965 261818
+kernel_after bkl_hold_entry syscall 262 4919 233081
+kernel_after bkl_hold_entry syscall 61 1788 229831
+kernel_after bkl_hold_entry syscall 3 13678 192318
+kernel_after bkl_hold_entry syscall 7 1566 189297
+kernel_after bkl_hold_entry syscall 16 2081 176593
+kernel_after bkl_hold_entry syscall 232 14052 172574
+kernel_after kvm_vms 0
+kernel_after kvm_vcpus 0
+kernel_after kvm_slots 0
+kernel_after kvm_tdp_pages 0
+kernel_after kvm_run_mappings 0
+kernel_after vfio_groups 0
+kernel_after vfio_devices 0
+kernel_after vfio_dma_mappings 0
+kernel_after vfio_dma_pages 0
+kernel_after vfio_dma_io_pages 0
+kernel_after kvm_exits 0
+kernel_after iommu_dma_faults 0
+kernel_after iommu_irq_faults 0
+kernel_after msi_vectors_free 187
+kernel_after latency_timer_us 4944489
+kernel_after latency_disk_us 867475
+kernel_after latency_diskwait_us 0
+kernel_after latency_console_us 7064
+kernel_after wlan_refused_tcp 0
+kernel_after wlan_refused_ack 0
+kernel_after wlan_refused_other 0
+kernel_after wlan_rx_held 0
+kernel_after wlan_rx_wait_most 0
+kernel_after wlan_tx_status_lost 0
+kernel_after wlan_rescue_key 0
+kernel_after wlan_rescue_message4 0
+kernel_after wlan_rescue_silent 0
+kernel_after wlan_rescue_saved 0
+kernel_after wlan_rx_old_far 0
+kernel_after loopback_dropped 0
+kernel_after loopback_peak 37
+kernel_after loopback_delivered_tick 267
+kernel_after loopback_delivered_idle 173
+kernel_after loopback_delivered_call 1930
+kernel_after loopback_left_idle 0
+kernel_after namecache_hits 74579
+kernel_after namecache_misses 3061
+kernel_after namecache_entries 2395
+kernel_after namecache_negative 458
+kernel_after ext2_node_visits 44974
+kernel_after procs_running 2
+kernel_after procs_blocked 0
+browser-evidence: gpu.txt
+
+
+  :host {
+    --green: #080;
+    --yellow: #880;
+    --red: #f00;
+    --gray: #888;
+    --bg-yellow: #ff0;
+
+    display: block;
+    flex: 1;
+    overflow: auto;
+    padding: 10px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :host {
+      --green: #0F0;
+      --yellow: #FF0;
+      --red: #f00;
+      --gray: #888;
+      --bg-yellow: #880;
+    }
+  }
+
+  :host * {
+    user-select: text;
+  }
+
+  :host([selected]) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  h3,
+  ul {
+    margin-bottom: 0;
+    margin-top: 0;
+  }
+
+  #content > div,
+  #download-to-file {
+    margin-bottom: 1em;
+  }
+
+  .feature-green {
+    color: var(--green);
+  }
+
+  .feature-yellow {
+    color: var(--yellow);
+  }
+
+  .feature-red {
+    color: var(--red);
+  }
+
+  .feature-gray {
+    color: var(--gray);
+  }
+
+  .bg-yellow {
+    background-color: var(--bg-yellow);
+  }
+
+  #vulkan-info-value {
+    white-space: pre;
+  }
+
+  #download-to-file {
+    font: inherit;
+    min-height: 2em;
+    user-select: none;
+  }
+
+  h4.dawn-info-header {
+    color: var(--yellow);
+    margin-bottom: 2px;
+    margin-top: 10px;
+  }
+  
+  table.info-table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 100%;
+  }
+  .info-table td {
+    border: 1px solid #777;
+    vertical-align: top;
+    overflow-x: auto;
+  }
+  .info-table td:nth-child(1) {
+    font-weight: bold;
+    width: 25%;
+  }
+  .info-table td:nth-child(2) {
+    font-weight: bold;
+    width: 75%;
+  }
+
+  /*
+  This class is used to show text that is only available
+  when the user copies text or downloads the report to a file.
+  We insert extra but hidden text to make plain text formatting
+  look better, at copy/download time we make the text visible
+  */
+  .copy {
+    display: none;
+  }
+
+
+
+  Download Report to File
+
+
+  GPU Info
+
+
+Graphics Feature Status
+=======================*   Canvas: Hardware accelerated*   Direct Rendering Display Compositor: Disabled*   Compositing: Software only. Hardware acceleration disabled*   Multiple Raster Threads: Enabled*   OpenGL: Enabled*   Rasterization: Hardware accelerated on all pages*   Raw Draw: Disabled*   Skia Graphite: Disabled*   TreesInViz: Disabled*   Video Decode: Hardware accelerated*   Video Encode: Software only. Hardware acceleration disabled*   Vulkan: Disabled*   WebGL: Hardware accelerated but at reduced performance*   WebGPU: Hardware accelerated but at reduced performance*   WebGPU interop: Hardware accelerated*   WebNN: Disabled
+
+Version Information
+===================Data exported              :2026-11-10T13:18:01.528ZChrome version             :Chrome/156.0.8078.79Operating system           :Linux 6.18.0-rach2Software rendering list URL:https://chromium.googlesource.com/chromium/src/+/a21ce95c24ce3964416f09ae1862f53f319eb4d0/gpu/config/software_rendering_list.jsonDriver bug list URL        :https://chromium.googlesource.com/chromium/src/+/a21ce95c24ce3964416f09ae1862f53f319eb4d0/gpu/config/gpu_driver_bug_list.jsonANGLE commit id            :unknown hash2D graphics backend        :Skia/156 aa789d9bd566b9865add4070dc6777b3266c64e9Command Line               :/usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-certificate-errors --remote-debugging-port=0 --user-data-dir=/tmp/browser.rZFEET/profile --disable-background-networking --disable-hang-monitor --disable-background-timer-throttling --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required --ignore-gpu-blocklist --enable-unsafe-webgpu --enable-logging=stderr --v=0 --vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2 --use-vulkan=native --flag-switches-begin --flag-switches-end about:blank
+
+Driver Information
+==================Initialization time             :4331In-process GPU                  :falseSkia Backend                    :GaneshGLPassthrough Command Decoder     :trueSandboxed                       :falseGPU0                            :VENDOR= 0x0000 [Google Inc. (Mesa)], DEVICE=0x0000 [ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)], DRIVER_VENDOR=Mesa, DRIVER_VERSION=25.0.7 *ACTIVE*Optimus                         :falseAMD switchable                  :falsePixel shader version            :3.00Vertex shader version           :3.00Max. MSAA samples               :8Machine model name              :Machine model version           :GL implementation parts         :(gl=egl-angle,angle=opengl)Display type                    :ANGLE_OPENGLGL_VENDOR                       :Google Inc. (Mesa)GL_RENDERER                     :ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)GL_VERSION                      :OpenGL ES 3.0 (ANGLE 2.1 git hash: unknown hash)GL_EXTENSIONS                   :GL_AMD_performance_monitor GL_ANGLE_blob_cache GL_ANGLE_client_arrays GL_ANGLE_clip_cull_distance GL_ANGLE_compressed_texture_etc GL_ANGLE_depth_texture GL_ANGLE_framebuffer_blit GL_ANGLE_framebuffer_multisample GL_ANGLE_get_serialized_context_string GL_ANGLE_get_tex_level_parameter GL_ANGLE_instanced_arrays GL_ANGLE_memory_size GL_ANGLE_program_binary_readiness_query GL_ANGLE_program_cache_control GL_ANGLE_renderability_validation GL_ANGLE_request_extension GL_ANGLE_robust_client_memory GL_ANGLE_shader_pixel_local_storage GL_ANGLE_stencil_texturing GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_ANGLE_texture_multisample GL_ANGLE_translated_shader_source GL_ARM_rgba8 GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_bind_uniform_location GL_CHROMIUM_copy_texture GL_CHROMIUM_lose_context GL_EXT_blend_func_extended GL_EXT_blend_minmax GL_EXT_clear_texture GL_EXT_clip_control GL_EXT_clip_cull_distance GL_EXT_color_buffer_float GL_EXT_color_buffer_half_float GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_conservative_depth GL_EXT_debug_label GL_EXT_debug_marker GL_EXT_depth_clamp GL_EXT_discard_framebuffer GL_EXT_disjoint_timer_query GL_EXT_draw_buffers GL_EXT_draw_buffers_indexed GL_EXT_float_blend GL_EXT_frag_depth GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_occlusion_query_boolean GL_EXT_polygon_offset_clamp GL_EXT_read_format_bgra GL_EXT_render_snorm GL_EXT_robustness GL_EXT_sRGB GL_EXT_sRGB_write_control GL_EXT_shadow_samplers GL_EXT_texture_border_clamp GL_EXT_texture_compression_bptc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_compression_s3tc_srgb GL_EXT_texture_filter_anisotropic GL_EXT_texture_format_BGRA8888 GL_EXT_texture_mirror_clamp_to_edge GL_EXT_texture_norm16 GL_EXT_texture_rg GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_EXT_texture_sRGB_decode GL_EXT_texture_shadow_lod GL_EXT_texture_storage GL_EXT_texture_type_2_10_10_10_REV GL_EXT_unpack_subimage GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_debug GL_KHR_parallel_shader_compile GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_KHR_texture_compression_astc_sliced_3d GL_MESA_framebuffer_flip_y GL_NV_fence GL_NV_framebuffer_blit GL_NV_pack_subimage GL_NV_pixel_buffer_object GL_NV_read_depth GL_NV_read_stencil GL_NV_shader_noperspective_interpolation GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3 GL_OES_EGL_sync GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_draw_buffers_indexed GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_get_program_binary GL_OES_mapbuffer GL_OES_packed_depth_stencil GL_OES_required_internalformat GL_OES_rgb8_rgba8 GL_OES_sample_variables GL_OES_shader_multisample_interpolation GL_OES_standard_derivatives GL_OES_surfaceless_context GL_OES_texture_3D GL_OES_texture_border_clamp GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_vertex_array_objectDisabled Extensions             :GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherentDisabled WebGL Extensions       :Window system binding vendor    :Google Inc. (Mesa)Window system binding version   :1.5 (ANGLE 2.1 git hash: unknown hash)Window system binding extensions:EGL_KHR_create_context EGL_KHR_image EGL_KHR_image_base EGL_KHR_gl_colorspace EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_texture_3D_image EGL_KHR_gl_renderbuffer_image EGL_KHR_get_all_proc_addresses EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANGLE_create_context_webgl_compatibility EGL_CHROMIUM_create_context_bind_generates_resource EGL_KHR_swap_buffers_with_damage EGL_EXT_pixel_format_float EGL_KHR_surfaceless_context EGL_ANGLE_display_texture_share_group EGL_ANGLE_display_semaphore_share_group EGL_ANGLE_create_context_client_arrays EGL_ANGLE_program_cache_control EGL_ANGLE_robust_resource_initialization EGL_ANGLE_create_context_extensions_enabled EGL_ANDROID_blob_cache EGL_ANDROID_recordable EGL_ANDROID_native_fence_sync EGL_ANGLE_create_context_backwards_compatible EGL_KHR_no_config_context EGL_KHR_create_context_no_error EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers EGL_KHR_reusable_sync EGL_ANGLE_external_context_and_surface EGL_EXT_buffer_age EGL_ANGLE_context_virtualization EGL_ANGLE_memory_usage_report EGL_ANGLE_create_context_passthrough_shadersInterfaces exposed by the Wayland compositor:wl_compositor:5 wl_subcompositor:1 wp_viewporter:1 zxdg_output_manager_v1:2 wp_presentation:1 wp_single_pixel_buffer_manager_v1:1 wp_tearing_control_manager_v1:1 zwp_relative_pointer_manager_v1:1 zwp_pointer_constraints_v1:1 zwp_input_timestamps_manager_v1:1 weston_capture_v1:1 wl_data_device_manager:3 wl_shm:2 zwp_linux_explicit_synchronization_v1:2 wl_output:4 xdg_wm_base:5Ozone platform                  :waylandDirect rendering version        :unknownReset notification strategy     :0x8261GPU process crash count         :0
+
+Driver Bug Workarounds
+======================*   enable_webgl_timer_query_extensions*   exit_on_context_lost*   disabled_extension_GL_KHR_blend_equation_advanced*   disabled_extension_GL_KHR_blend_equation_advanced_coherent
+
+Problems Detected
+=================*   Accelerated video encode has been disabled, either via blocklist, about:flags or the command line.    Disabled Features: video_encode
+
+*   Gpu compositing has been disabled, either via blocklist, about:flags or the command line. The browser will fall back to software compositing and hardware acceleration will be unavailable.    Disabled Features: gpu_compositing
+
+*   Disable KHR_blend_equation_advanced until cc shaders are updated:
+    661715(http://crbug.com/661715)    Applied Workarounds: disable(GL_KHR_blend_equation_advanced),
+        disable(GL_KHR_blend_equation_advanced_coherent)
+
+*   Expose WebGL's disjoint_timer_query extensions on platforms with site isolation:
+    808744(http://crbug.com/808744), 870491(http://crbug.com/870491)    Applied Workarounds: enable_webgl_timer_query_extensions
+
+*   Some drivers can't recover after OUT_OF_MEM and context lost:
+    893177(http://crbug.com/893177)    Applied Workarounds: exit_on_context_lost
+
+
+
+ANGLE Features
+==============*   allowCompressedFormats (Frontend workarounds): Enabled
+
+*   allowExtensionDisableAfterNonPpTokens (Frontend features): Disabled
+
+*   alwaysEnableEmulatedMultidrawExtensions (Frontend workarounds): Disabled
+
+*   alwaysRunLinkSubJobsThreaded (Frontend features): Disabled
+
+*   cacheCompiledShader (Frontend features): Enabled
+
+*   clipCullDistanceBrokenWithPassthroughShaders (Frontend features): Disabled
+
+*   compileJobIsThreadSafe (Frontend features): Disabled
+
+*   compressProgramBinaryBlob (Frontend features): Disabled
+
+*   disableAnisotropicFiltering (Frontend workarounds): Disabled
+
+*   disableProgramBinary (Frontend features): Disabled
+
+*   disableProgramCaching (Frontend features): Disabled
+
+*   disableProgramCachingForTransformFeedback (Frontend workarounds): Disabled
+
+*   disallowNonZeroBaseLevelAndIncompatibleLevelsOnHardenedContexts (Frontend workarounds): Disabled
+
+*   dumpShaderSource (Frontend features): Disabled
+
+*   dumpTranslatedShaders (Frontend features): Disabled
+
+*   emulatePixelLocalStorage (Frontend features): Enabled
+
+*   enableCaptureLimits (Frontend features): Disabled
+
+*   enableCreateContextBackwardsCompatible (Frontend features): Enabled
+
+*   enableProgramBinaryForCapture (Frontend features): Disabled
+
+*   enableShaderSubstitution (Frontend workarounds): Disabled
+
+*   enableTranslatedShaderSubstitution (Frontend workarounds): Disabled
+
+*   forceDebugContexts (Frontend features): Disabled
+
+*   forceDepthAttachmentInitOnClear (Frontend workarounds): Disabled
+
+*   forceFlushAfterDrawcallUsingShadowmap (Frontend workarounds): Disabled
+
+*   forceGlErrorChecking (Frontend features): Disabled
+
+*   forceInitShaderVariables (Frontend features): Disabled
+
+*   forceMinimumMaxVertexAttributes (Frontend features): Disabled
+
+*   forcePassthroughShaders (Frontend features): Disabled
+
+*   forceRobustResourceInit (Frontend features): Disabled
+
+*   limitMaxBufferBytesTo1MB (Frontend features): Disabled
+
+*   limitMaxTextureBytesTo1MB (Frontend features): Disabled
+
+*   linkJobIsThreadSafe (Frontend features): Disabled
+
+*   loseContextOnOutOfMemory (Frontend workarounds): Enabled
+
+*   loseHardenedContextOnBackendError (Frontend workarounds): Enabled
+
+*   noperspectiveInterpolationBrokenWithPassthroughShaders (Frontend features): Disabled
+
+*   setNeedInitOnInvalidation (Frontend features): Enabled
+
+*   singleThreadedTextureDecompression (Frontend workarounds): Disabled
+
+*   uncurrentEglSurfaceUponSurfaceDestroy (Frontend workarounds): Disabled
+
+*   useIr (Frontend features): Disabled
+
+*   RGBA4IsNotSupportedForColorRendering (OpenGL workarounds): Disabled
+
+*   RGBDXT1TexturesSampleZeroAlpha (OpenGL workarounds): Disabled
+
+*   addAndTrueToLoopCondition (OpenGL workarounds): Disabled
+
+*   adjustSrcDstRegionForBlitFramebuffer (OpenGL workarounds): Enabled
+
+*   allowAstcFormats (OpenGL workarounds): Disabled
+
+*   allowClearForRobustResourceInit (OpenGL workarounds): Disabled
+
+*   allowETCFormats (OpenGL workarounds): Disabled
+
+*   alwaysCallUseProgramAfterLink (OpenGL workarounds): Enabled
+
+*   alwaysUnbindFramebufferTexture2D (OpenGL workarounds): Disabled
+
+*   avoid1BitAlphaTextureFormats (OpenGL workarounds): Disabled
+
+*   avoidBindFragDataLocation (OpenGL workarounds): Disabled
+
+*   avoidComplexExpressionsInStructConstructor (OpenGL workarounds): Disabled
+
+*   bgraTexImageFormatsBroken (OpenGL workarounds): Disabled
+
+*   bindCompleteFramebufferForTimerQueries (OpenGL workarounds): Disabled
+
+*   bindTransformFeedbackBufferBeforeBindBufferRange (OpenGL workarounds): Disabled
+
+*   clampArrayAccess (OpenGL workarounds): Disabled
+
+*   clampFragDepth (OpenGL workarounds): Disabled
+
+*   clampMscRate (OpenGL workarounds): Enabled
+
+*   clampPointSize (OpenGL workarounds): Disabled
+
+*   clearsWithGapsNeedFlush (OpenGL workarounds): Disabled
+
+*   clipSrcRegionForBlitFramebuffer (OpenGL workarounds): Disabled
+
+*   corruptProgramBinaryForTesting (OpenGL workarounds): Disabled
+
+*   decodeEncodeSRGBForGenerateMipmap (OpenGL workarounds): Disabled
+
+*   disableBaseInstanceVertex (OpenGL workarounds): Enabled
+
+*   disableBlendEquationAdvanced (OpenGL workarounds): Disabled
+
+*   disableClearTexImageForRobustInit (OpenGL workarounds): Disabled
+
+*   disableClearTexture (OpenGL workarounds): Disabled
+
+*   disableClipControl (OpenGL features): Disabled
+
+*   disableDrawBuffersIndexed (OpenGL workarounds): Disabled
+
+*   disableGPUSwitchingSupport (OpenGL workarounds): Disabled
+
+*   disableMSAASampleCount1 (OpenGL workarounds): Disabled
+
+*   disableMultisampledRenderToTexture (OpenGL workarounds): Disabled
+
+*   disableNativeParallelCompile (OpenGL workarounds): Disabled
+
+*   disablePassthroughShaders (OpenGL workarounds): Disabled
+
+*   disableRenderSnorm (OpenGL workarounds): Disabled
+
+*   disableSemaphoreFd (OpenGL workarounds): Disabled
+
+*   disableSyncControlSupport (OpenGL workarounds): Disabled
+
+*   disableTextureClampToBorder (OpenGL workarounds): Disabled
+
+*   disableTextureMirrorClampToEdge (OpenGL workarounds): Disabled
+
+*   disableTiledRendering (OpenGL workarounds): Disabled
+
+*   disableTimestampQueries (OpenGL workarounds): Disabled
+
+*   doesSRGBClearsOnLinearFramebufferAttachments (OpenGL workarounds): Disabled
+
+*   dontInitializeUninitializedLocals (OpenGL workarounds): Disabled
+
+*   dontInvalidateIncompleteFBOs (OpenGL workarounds): Disabled
+
+*   dontUseLoopsToInitializeVariables (OpenGL workarounds): Disabled
+
+*   emitMaxGlsl400ForTesting (OpenGL workarounds): Disabled
+
+*   emulateAbsIntFunction (OpenGL workarounds): Disabled
+
+*   emulateAtan2Float (OpenGL workarounds): Disabled
+
+*   emulateClipDistanceState (OpenGL workarounds): Disabled
+
+*   emulateClipOrigin (OpenGL workarounds): Disabled
+
+*   emulateCopyTexImage2D (OpenGL workarounds): Disabled
+
+*   emulateCopyTexImage2DFromRenderbuffers (OpenGL workarounds): Disabled
+
+*   emulateImmutableCompressedTexture3D (OpenGL workarounds): Disabled
+
+*   emulateMaxVertexAttribStride (OpenGL workarounds): Disabled
+
+*   emulatePackSkipRowsAndPackSkipPixels (OpenGL workarounds): Disabled
+
+*   emulatePrimitiveRestartFixedIndex (OpenGL workarounds): Disabled
+
+*   emulateRGB10 (OpenGL workarounds): Disabled
+
+*   ensureNonEmptyBufferIsBoundForDraw (OpenGL features): Disabled
+
+*   explicitFragmentLocations (OpenGL workarounds): Disabled
+
+*   finishBeforeBlitFramebufferMultiAttachment (OpenGL workarounds): Disabled
+
+*   finishDoesNotCauseQueriesToBeAvailable (OpenGL workarounds): Disabled
+
+*   flushBeforeDeleteTextureIfCopiedTo (OpenGL workarounds): Disabled
+
+*   flushBeforeGenerateMipmap (OpenGL workarounds): Disabled
+
+*   flushOnFramebufferChange (OpenGL workarounds): Disabled
+
+*   flushQueriesBeforeDeletingOrUnbindingFbo (OpenGL workarounds): Disabled
+
+*   forceLumaWorkaroundForSameTextureCopyTexImage2D (OpenGL workarounds): Disabled
+
+*   forceMaxCombinedShaderOutputResources (OpenGL features): Disabled
+
+*   initFragmentOutputVariables (OpenGL workarounds): Disabled
+
+*   initializeCurrentVertexAttributes (OpenGL workarounds): Disabled
+
+*   keepBufferShadowCopy (OpenGL workarounds): Disabled
+
+*   limitMax3dArrayTextureSizeTo1024 (OpenGL workarounds): Disabled
+
+*   limitMaxBufferSizeTo1gb (OpenGL workarounds): Disabled
+
+*   limitMaxMSAASamplesTo4 (OpenGL workarounds): Disabled
+
+*   limitOutputVaryingsTo256AtCompileTime (OpenGL workarounds): Disabled
+
+*   limitWebglMaxTextureSizeTo4096 (OpenGL workarounds): Disabled
+
+*   limitWebglMaxTextureSizeTo8192 (OpenGL workarounds): Disabled
+
+*   multiviewViaViewportArray (OpenGL features): Disabled
+
+*   packLargeRowLengthSeparatelyPackBuffer (OpenGL workarounds): Disabled
+
+*   packLastRowSeparatelyForPaddingInclusion (OpenGL workarounds): Disabled
+
+*   packOverlappingRowsSeparatelyPackBuffer (OpenGL workarounds): Disabled
+
+*   passHighpToPackUnormSnormBuiltins (OpenGL workarounds): Disabled
+
+*   preAddTexelFetchOffsets (OpenGL workarounds): Disabled
+
+*   preTransformTextureCubeGradDerivatives (OpenGL workarounds): Disabled
+
+*   promotePackedFormatsTo8BitPerChannel (OpenGL workarounds): Disabled
+
+*   queryCounterBitsGeneratesErrors (OpenGL workarounds): Disabled
+
+*   readPixelsUsingImplementationColorReadFormatForNorm16 (OpenGL workarounds): Enabled
+
+*   reapplyUBOBindingsAfterUsingBinaryProgram (OpenGL workarounds): Disabled
+
+*   reattachFboDepthStencilOnReallocation (OpenGL workarounds): Disabled
+
+*   reattachTextureToFboAfterLayerIncrease (OpenGL workarounds): Disabled
+
+*   recreateImmutableTextureOnBaseLevelIncrease (OpenGL workarounds): Disabled
+
+*   recreateMipmapLevelsBeforeGenerate (OpenGL workarounds): Enabled
+
+*   recreateTextureOnTexImage3dDepthIncrease (OpenGL workarounds): Disabled
+
+*   removeDynamicIndexingOfSwizzledVector (OpenGL workarounds): Disabled
+
+*   removeInvariantAndCentroidForESSL3 (OpenGL workarounds): Disabled
+
+*   resetBaseLevelForASTCImage (OpenGL workarounds): Disabled
+
+*   resetSampleCoverageOnFBOChange (OpenGL workarounds): Disabled
+
+*   resetTexImage2DBaseLevel (OpenGL workarounds): Disabled
+
+*   resetTexStorage2DBaseLevel (OpenGL workarounds): Disabled
+
+*   resyncDepthRangeOnClipControl (OpenGL workarounds): Disabled
+
+*   rewriteRepeatedAssignToSwizzled (OpenGL workarounds): Disabled
+
+*   rewriteRowMajorMatrices (OpenGL workarounds): Disabled
+
+*   roundUp3dTextureSizeToPOTForLimit (OpenGL workarounds): Disabled
+
+*   sanitizeAMDGPURendererString (OpenGL workarounds): Disabled
+
+*   scalarizeVecAndMatConstructorArgs (OpenGL workarounds): Disabled
+
+*   setPrimitiveRestartFixedIndexForDrawArrays (OpenGL workarounds): Disabled
+
+*   setZeroLevelBeforeGenerateMipmap (OpenGL workarounds): Disabled
+
+*   shiftInstancedArrayDataWithOffset (OpenGL workarounds): Disabled
+
+*   splitLevel0PboFullSubImage2D (OpenGL workarounds): Disabled
+
+*   srgbBlendingBroken (OpenGL workarounds): Disabled
+
+*   supportsFragmentShaderInterlockARB (OpenGL features): Disabled
+
+*   supportsFragmentShaderInterlockNV (OpenGL features): Disabled
+
+*   supportsFragmentShaderOrderingINTEL (OpenGL features): Disabled
+
+*   supportsShaderFramebufferFetchEXT (OpenGL features): Disabled
+
+*   supportsShaderFramebufferFetchNonCoherentEXT (OpenGL features): Disabled
+
+*   syncAllVertexArraysToDefault (OpenGL workarounds): Disabled
+
+*   syncDefaultVertexArraysToDefault (OpenGL workarounds): Enabled
+
+*   unbindFBOBeforeSwitchingContext (OpenGL workarounds): Disabled
+
+*   unfoldShortCircuits (OpenGL workarounds): Disabled
+
+*   unpackLastRowSeparatelyForPaddingInclusion (OpenGL workarounds): Disabled
+
+*   unpackOverlappingRowsSeparatelyUnpackBuffer (OpenGL workarounds): Disabled
+
+*   unsizedSRGBReadPixelsDoesntTransform (OpenGL workarounds): Disabled
+
+*   uploadOversizedMipLevelsViaUnpackBuffer (OpenGL workarounds): Disabled
+
+*   uploadTextureDataInChunks (OpenGL workarounds): Disabled
+
+*   useIntermediateTextureForGenerateMipmap (OpenGL workarounds): Disabled
+
+*   useTempForNonZeroBaseLevelGenMipmapUsingCopyImageSubData (OpenGL workarounds): Disabled
+
+*   useTexSubImageForClientDataNpotUploads (OpenGL workarounds): Disabled
+
+*   useUnusedBlocksWithStandardOrSharedLayout (OpenGL workarounds): Disabled
+
+*   validateMaxPerStageUniformBlocksAtCompileTime (OpenGL workarounds): Disabled
+
+*   validateState (OpenGL features): Disabled
+
+*   vertexIDDoesNotIncludeBaseVertex (OpenGL workarounds): Disabled
+
+
+
+Dawn Info
+=========
+
+<Unknown GPU>  OpenGLES backend - ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1) (Compatibility Mode)
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+[WebGPU Status]
+---------------*   Available
+
+[Adapter Supported Features]
+----------------------------*   texture-compression-bc*   texture-compression-etc2*   texture-compression-astc*   texture-compression-astc-sliced-3d*   float32blendable*   dual-source-blending*   texture-component-swizzle*   dawn-internal-usages*   dawn-native*   implicit-device-synchronization*   transient-attachments*   angle-texture-sharing*   unorm16texture-formats*   dawn-format-capabilities*   shared-fence-sync-fd*   shared-fence-egl-sync*   unorm16formats-for-external-texture*   dawn-allow-undefined-load-store-op
+
+[Enabled Toggle Names]
+----------------------*   lazy_clear_resource_on_first_use: 
+    https://crbug.com/dawn/145(https://crbug.com/dawn/145):
+    Clears resource to zero on first usage. This initializes the resource so
+    that no dirty bits from recycled memory is present in the new resource.
+
+*   disable_indexed_draw_buffers: 
+    https://crbug.com/dawn/582(https://crbug.com/dawn/582):
+    Disables the use of indexed draw buffer state which is unsupported on some
+    platforms.
+
+*   flush_before_client_wait_sync: 
+    https://crbug.com/dawn/633(https://crbug.com/dawn/633):
+    Call glFlush before glClientWaitSync to work around bugs in the latter
+
+*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   use_placeholder_fragment_in_vertex_only_pipeline: 
+    https://crbug.com/dawn/136(https://crbug.com/dawn/136):
+    Use a placeholder empty fragment shader in vertex only render pipeline.
+    This toggle must be enabled for OpenGL ES backend, the Vulkan Backend, and
+    serves as a workaround by default enabled on some Metal devices with Intel
+    GPU to ensure the depth result is correct.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+*   use_blit_for_buffer_to_stencil_texture_copy: 
+    https://crbug.com/dawn/1389(https://crbug.com/dawn/1389):
+    Use a blit instead of a copy command to copy buffer data to the stencil
+    aspect of a texture. Works around an issue where stencil writes by copy
+    commands are not visible to a render or compute pass.
+
+*   use_blit_for_depth16unorm_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1782(https://crbug.com/dawn/1782):
+    Use a blit instead of a copy command to copy depth aspect of a texture to
+    a buffer.Workaround for OpenGL and OpenGLES.
+
+*   use_blit_for_depth32float_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1782(https://crbug.com/dawn/1782):
+    Use a blit instead of a copy command to copy depth aspect of a texture to
+    a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_stencil_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1782(https://crbug.com/dawn/1782):
+    Use a blit instead of a copy command to copy stencil aspect of a texture
+    to a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_snorm_texture_to_buffer_copy: 
+    https://crbug.com/dawn/1781(https://crbug.com/dawn/1781):
+    Use a blit instead of a copy command to copy snorm texture to a
+    buffer.Workaround for OpenGLES.
+
+*   use_blit_for_rgb9e5ufloat_texture_copy: 
+    https://crbug.com/dawn/2079(https://crbug.com/dawn/2079):
+    Use a blit instead of a copy command to copy rgb9e5ufloat texture to a
+    texture or a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_rg11b10ufloat_texture_copy: 
+    https://crbug.com/381214487(https://crbug.com/381214487):
+    Use a blit instead of a copy command to copy rg11b10ufloat texture to a
+    texture or a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_float_16_texture_copy: 
+    https://crbug.com/381214487(https://crbug.com/381214487):
+    Use a blit instead of a copy command to copy float16 texture to a texture
+    or a buffer.Workaround for OpenGLES.
+
+*   use_blit_for_non_rgba_unorm_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy non-RGBA unorm textures to a
+    buffer. Workaround for OpenGLES.
+
+*   use_blit_for_non_rgba_float_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy non-RGBA float textures to a
+    buffer. Workaround for OpenGLES.
+
+*   use_blit_for_uint_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy uint textures to a buffer.
+    Workaround for OpenGLES.
+
+*   use_blit_for_sint_texture_to_buffer_copy: 
+    https://issues.chromium.org/issues/556959073(https://issues.chromium.org/issues/556959073):
+    Use a blit instead of a copy command to copy sint textures to a buffer.
+    Workaround for OpenGLES.
+
+*   use_t2b2t_for_srgb_texture_copy: 
+    https://crbug.com/dawn/2362(https://crbug.com/dawn/2362):
+    Use T2B and B2T copies to emulate a T2T copy between sRGB and non-sRGB
+    textures.Workaround for OpenGLES.
+
+*   enable_integer_range_analysis_in_robustness: 
+    https://crbug.com/348701956(https://crbug.com/348701956):
+    Compute the range of the index with Integer Range Analysis in the
+    robustness transform and skip doing index clamping when the out of bound
+    access cannot happen.
+
+*   blob_cache_hash_validation: 
+    https://crbug.com/429938352(https://crbug.com/429938352):
+    Enable hash validation when loading/storing from/to the blob cache
+
+*   decompose_uniform_buffers: 
+    https://crbug.com/448452698(https://crbug.com/448452698):
+    Decompose uniform buffers into arrays of vec4<u32> on backends for Vulkan
+    and OpenGL.
+
+
+
+[WebGPU Required Toggles - enabled]
+-----------------------------------*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+
+
+<CPU>  Vulkan backend - SwiftShader Device (Subzero)
+----------------------------------------------------
+
+[WebGPU Status]
+---------------*   Blocklisted - crbug.com/40057808: CPU adapters not fully tested or conformant. | 
+
+[Adapter Supported Features]
+----------------------------*   core-features-and-limits*   depth-clip-control*   depth32float-stencil8*   texture-compression-bc*   texture-compression-bc-sliced-3d*   texture-compression-etc2*   texture-compression-astc*   texture-compression-astc-sliced-3d*   timestamp-query*   indirect-first-instance*   rg11b10ufloat-renderable*   bgra8unorm-storage*   float32filterable*   float32blendable*   clip-distances*   subgroups*   texture-component-swizzle*   subgroup-size-control*   texture-compression-unaligned*   dawn-internal-usages*   dawn-multi-planar-formats*   dawn-native*   implicit-device-synchronization*   transient-attachments*   unorm16texture-formats*   adapter-properties-memory-heaps*   adapter-properties-vk*   dawn-format-capabilities*   shared-texture-memory-opaque-fd*   shared-fence-vk-semaphore-opaque-fd*   dawn-load-resolve-texture*   flexible-texture-views*   unorm16formats-for-external-texture*   dawn-allow-undefined-load-store-op
+
+[Enabled Toggle Names]
+----------------------*   lazy_clear_resource_on_first_use: 
+    https://crbug.com/dawn/145(https://crbug.com/dawn/145):
+    Clears resource to zero on first usage. This initializes the resource so
+    that no dirty bits from recycled memory is present in the new resource.
+
+*   use_temporary_buffer_in_texture_to_texture_copy: 
+    https://crbug.com/dawn/42(https://crbug.com/dawn/42):
+    Split texture-to-texture copy into two copies: copy from source texture
+    into a temporary buffer, and copy from the temporary buffer into the
+    destination texture when copying between compressed textures that don't
+    have block-aligned sizes. This workaround is enabled by default on all
+    Vulkan drivers to solve an issue in the Vulkan SPEC about the
+    texture-to-texture copies with compressed formats. See #1005
+    (https://github.com/KhronosGroup/Vulkan-Docs/issues/1005) for more
+    details.
+
+*   vulkan_use_d32s8: 
+    https://crbug.com/dawn/286(https://crbug.com/dawn/286):
+    Vulkan mandates support of either D32_FLOAT_S8 or D24_UNORM_S8. When
+    available the backend will use D32S8 (toggle to on) but setting the toggle
+    to off will make it use the D24S8 format when possible.
+
+*   vulkan_use_s8: 
+    https://crbug.com/dawn/666(https://crbug.com/dawn/666):
+    Vulkan has a pure stencil8 format but it is not universally available.
+    When this toggle is on, the backend will use S8 for the stencil8 format,
+    otherwise it will fallback to D32S8 or D24S8.
+
+*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   vulkan_use_demote_to_helper_invocation_extension: 
+    https://crbug.com/42250787(https://crbug.com/42250787):
+    Sets the use of the vulkan demote to helper extension
+
+*   use_placeholder_fragment_in_vertex_only_pipeline: 
+    https://crbug.com/dawn/136(https://crbug.com/dawn/136):
+    Use a placeholder empty fragment shader in vertex only render pipeline.
+    This toggle must be enabled for OpenGL ES backend, the Vulkan Backend, and
+    serves as a workaround by default enabled on some Metal devices with Intel
+    GPU to ensure the depth result is correct.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+*   use_vulkan_zero_initialize_workgroup_memory_extension: 
+    https://crbug.com/dawn/1302(https://crbug.com/dawn/1302):
+    Initialize workgroup memory with OpConstantNull on Vulkan when the Vulkan
+    extension VK_KHR_zero_initialize_workgroup_memory is supported.
+
+*   use_vulkan_memory_model: 
+    https://crbug.com/392606604(https://crbug.com/392606604):
+    Use the Vulkan Memory Model if available.
+
+*   vulkan_direct_variable_access_transform_handle: 
+    https://crbug.com/387000529(https://crbug.com/387000529):
+    Transform handles using direct variable access.
+
+*   enable_integer_range_analysis_in_robustness: 
+    https://crbug.com/348701956(https://crbug.com/348701956):
+    Compute the range of the index with Integer Range Analysis in the
+    robustness transform and skip doing index clamping when the out of bound
+    access cannot happen.
+
+*   use_spirv_1_4: 
+    https://crbug.com/422421915(https://crbug.com/422421915):
+    Use SPIR-V 1.4 if available
+
+*   blob_cache_hash_validation: 
+    https://crbug.com/429938352(https://crbug.com/429938352):
+    Enable hash validation when loading/storing from/to the blob cache
+
+*   decompose_uniform_buffers: 
+    https://crbug.com/448452698(https://crbug.com/448452698):
+    Decompose uniform buffers into arrays of vec4<u32> on backends for Vulkan
+    and OpenGL.
+
+*   vulkan_use_dynamic_rendering: 
+    https://crbug.com/dawn/463893794(https://crbug.com/dawn/463893794):
+    Makes use of VK_KHR_dynamic_rendering to implement WebGPU RenderPass.
+
+*   enable_spirv_validation: 
+    https://crbug.com/473526415(https://crbug.com/473526415):
+    Enable validation of SPIR-V generated by Tint.
+
+*   vulkan_use_create_render_pass_2: 
+    https://crbug.com/chromium/463893793(https://crbug.com/chromium/463893793):
+    Makes use of VK_KHR_create_renderpass2 when creating VkRenderPass objects.
+    Ignored when vulkan_use_dynamic_rendering is enabled.
+
+*   vulkan_use_rasterization_order_attachment_access: 
+    https://crbug.com/42241389(https://crbug.com/42241389):
+    Use VK_EXT_rasterization_order_attachment_access when it is available.
+
+*   wait_is_thread_safe: 
+    https://crbug.com/412761228(https://crbug.com/412761228):
+    WaitFor* functions are thread-safe and can be called without the
+    device-lock if implicit synchronization is enabled.
+
+
+
+[WebGPU Required Toggles - enabled]
+-----------------------------------*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+
+
+<CPU>  Vulkan backend - Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+---------------------------------------------------------------------------
+
+[WebGPU Status]
+---------------*   Blocklisted - crbug.com/40057808: CPU adapters not fully tested or conformant. | 
+
+[Adapter Supported Features]
+----------------------------*   core-features-and-limits*   depth-clip-control*   depth32float-stencil8*   texture-compression-bc*   texture-compression-bc-sliced-3d*   timestamp-query*   indirect-first-instance*   shader-f16*   rg11b10ufloat-renderable*   bgra8unorm-storage*   float32filterable*   float32blendable*   clip-distances*   dual-source-blending*   subgroups*   primitive-index*   texture-component-swizzle*   subgroup-size-control*   texture-compression-unaligned*   dawn-internal-usages*   dawn-multi-planar-formats*   dawn-native*   implicit-device-synchronization*   transient-attachments*   msaa-render-to-single-sampled*   unorm16texture-formats*   adapter-properties-memory-heaps*   adapter-properties-vk*   dawn-format-capabilities*   dawn-drm-format-capabilities*   shared-texture-memory-dma-buf*   shared-texture-memory-opaque-fd*   shared-fence-sync-fd*   dawn-load-resolve-texture*   flexible-texture-views*   unorm16formats-for-external-texture*   adapter-properties-drm*   dawn-allow-undefined-load-store-op
+
+[Enabled Toggle Names]
+----------------------*   lazy_clear_resource_on_first_use: 
+    https://crbug.com/dawn/145(https://crbug.com/dawn/145):
+    Clears resource to zero on first usage. This initializes the resource so
+    that no dirty bits from recycled memory is present in the new resource.
+
+*   use_temporary_buffer_in_texture_to_texture_copy: 
+    https://crbug.com/dawn/42(https://crbug.com/dawn/42):
+    Split texture-to-texture copy into two copies: copy from source texture
+    into a temporary buffer, and copy from the temporary buffer into the
+    destination texture when copying between compressed textures that don't
+    have block-aligned sizes. This workaround is enabled by default on all
+    Vulkan drivers to solve an issue in the Vulkan SPEC about the
+    texture-to-texture copies with compressed formats. See #1005
+    (https://github.com/KhronosGroup/Vulkan-Docs/issues/1005) for more
+    details.
+
+*   vulkan_use_d32s8: 
+    https://crbug.com/dawn/286(https://crbug.com/dawn/286):
+    Vulkan mandates support of either D32_FLOAT_S8 or D24_UNORM_S8. When
+    available the backend will use D32S8 (toggle to on) but setting the toggle
+    to off will make it use the D24S8 format when possible.
+
+*   vulkan_use_s8: 
+    https://crbug.com/dawn/666(https://crbug.com/dawn/666):
+    Vulkan has a pure stencil8 format but it is not universally available.
+    When this toggle is on, the backend will use S8 for the stencil8 format,
+    otherwise it will fallback to D32S8 or D24S8.
+
+*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   vulkan_use_demote_to_helper_invocation_extension: 
+    https://crbug.com/42250787(https://crbug.com/42250787):
+    Sets the use of the vulkan demote to helper extension
+
+*   use_placeholder_fragment_in_vertex_only_pipeline: 
+    https://crbug.com/dawn/136(https://crbug.com/dawn/136):
+    Use a placeholder empty fragment shader in vertex only render pipeline.
+    This toggle must be enabled for OpenGL ES backend, the Vulkan Backend, and
+    serves as a workaround by default enabled on some Metal devices with Intel
+    GPU to ensure the depth result is correct.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+*   use_vulkan_zero_initialize_workgroup_memory_extension: 
+    https://crbug.com/dawn/1302(https://crbug.com/dawn/1302):
+    Initialize workgroup memory with OpConstantNull on Vulkan when the Vulkan
+    extension VK_KHR_zero_initialize_workgroup_memory is supported.
+
+*   vulkan_use_image_robust_access_2: 
+    https://crbug.com/tint/1890(https://crbug.com/tint/1890):
+    Disable Tint robustness transform on textures when VK_EXT_robustness2 is
+    supported and robustImageAccess2 == VK_TRUE.
+
+*   vulkan_use_buffer_robust_access_2: 
+    https://crbug.com/tint/1890(https://crbug.com/tint/1890):
+    Disable index clamping on the runtime-sized arrays on buffers in Tint
+    robustness transform when VK_EXT_robustness2 is supported and
+    robustBufferAccess2 == VK_TRUE.
+
+*   use_vulkan_memory_model: 
+    https://crbug.com/392606604(https://crbug.com/392606604):
+    Use the Vulkan Memory Model if available.
+
+*   enable_integer_range_analysis_in_robustness: 
+    https://crbug.com/348701956(https://crbug.com/348701956):
+    Compute the range of the index with Integer Range Analysis in the
+    robustness transform and skip doing index clamping when the out of bound
+    access cannot happen.
+
+*   use_spirv_1_4: 
+    https://crbug.com/422421915(https://crbug.com/422421915):
+    Use SPIR-V 1.4 if available
+
+*   blob_cache_hash_validation: 
+    https://crbug.com/429938352(https://crbug.com/429938352):
+    Enable hash validation when loading/storing from/to the blob cache
+
+*   decompose_uniform_buffers: 
+    https://crbug.com/448452698(https://crbug.com/448452698):
+    Decompose uniform buffers into arrays of vec4<u32> on backends for Vulkan
+    and OpenGL.
+
+*   vulkan_use_dynamic_rendering: 
+    https://crbug.com/dawn/463893794(https://crbug.com/dawn/463893794):
+    Makes use of VK_KHR_dynamic_rendering to implement WebGPU RenderPass.
+
+*   enable_spirv_validation: 
+    https://crbug.com/473526415(https://crbug.com/473526415):
+    Enable validation of SPIR-V generated by Tint.
+
+*   vulkan_use_create_render_pass_2: 
+    https://crbug.com/chromium/463893793(https://crbug.com/chromium/463893793):
+    Makes use of VK_KHR_create_renderpass2 when creating VkRenderPass objects.
+    Ignored when vulkan_use_dynamic_rendering is enabled.
+
+*   vulkan_use_rasterization_order_attachment_access: 
+    https://crbug.com/42241389(https://crbug.com/42241389):
+    Use VK_EXT_rasterization_order_attachment_access when it is available.
+
+*   use_spirv_reconvergence_mode: 
+    https://crbug.com/379673383(https://crbug.com/379673383):
+    Use SPIR-V reconvergence execution mode if supported by the device.
+
+*   wait_is_thread_safe: 
+    https://crbug.com/412761228(https://crbug.com/412761228):
+    WaitFor* functions are thread-safe and can be called without the
+    device-lock if implicit synchronization is enabled.
+
+
+
+[WebGPU Required Toggles - enabled]
+-----------------------------------*   disallow_spirv: 
+    https://crbug.com/1214923(https://crbug.com/1214923):
+    Disallow usage of SPIR-V completely so that only WGSL is used for shader
+    modules. This is useful to prevent a Chromium renderer process from
+    successfully sending SPIR-V code to be compiled in the GPU process.
+
+*   timestamp_quantization: 
+    https://crbug.com/dawn/1800(https://crbug.com/dawn/1800):
+    Enable timestamp queries quantization to reduce the precision of timers
+    that can be created with timestamp queries.
+
+
+
+Compositor Information
+======================Tile Update Mode:One-copyPartial Raster  :Enabled
+
+Display(s) Information
+======================Info                          :Display[15] bounds=[0,0 1280x800], workarea=[0,0 1280x800], scale=1, rotation=0, panel_rotation=0 external detectedColor space (all)             :{primaries:BT709, transfer:SRGB, matrix:RGB, range:FULL}Buffer format (all)           :RGBA_8888Color volume                  :{name:'srgb', r:[0.6400, 0.3300], g:[0.3000, 0.6000], b:[0.1500, 0.0600], w:[0.3127, 0.3290]}SDR white level in nits       :203HDR relative maximum luminance:1Bits per color component      :8Bits per pixel                :24
+
+Video Acceleration Information
+==============================Decoding:Encoding:
+
+Vulkan Information
+==================
+
+Device Performance Information
+==============================
+
+Diagnostics
+===========
+
+Driver Information for Hardware GPU
+===================================
+
+Graphics Feature Status for Hardware GPU
+========================================
+
+Driver Bug Workarounds for Hardware GPU
+=======================================
+
+Problems Detected for Hardware GPU
+==================================
+
+Log Messages
+============[178:178:1110/131751.619581:ERROR:ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc:249] : '--ozone-platform=wayland' is not compatible with Vulkan. Consider switching to '--ozone-platform=x11' or disabling Vulkan
+[178:178:1110/131752.412724:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:434] : WARNING: VulkanPreferredFeatures::addFeaturesToQuery() was not called
+
+[178:178:1110/131752.424652:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:437] : WARNING: VulkanPreferredFeatures::addFeaturesToEnable() was not called
+
+[178:178:1110/131752.448123:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] : InitializeSandbox() called with multiple threads in process gpu-process.
+browser-evidence: gpu-info.json
+{
+  "commandLine": "/usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-certificate-errors --remote-debugging-port=0 --user-data-dir=/tmp/browser.rZFEET/profile --disable-background-networking --disable-hang-monitor --disable-background-timer-throttling --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required --ignore-gpu-blocklist --enable-unsafe-webgpu --enable-logging=stderr --v=0 --vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2 --use-vulkan=native --flag-switches-begin --flag-switches-end about:blank",
+  "gpu": {
+    "auxAttributes": {
+      "amdSwitchable": false,
+      "canSupportThreadedTextureMailbox": false,
+      "directRenderingVersion": "",
+      "displayType": "ANGLE_OPENGL",
+      "glExtensions": "GL_AMD_performance_monitor GL_ANGLE_blob_cache GL_ANGLE_client_arrays GL_ANGLE_clip_cull_distance GL_ANGLE_compressed_texture_etc GL_ANGLE_depth_texture GL_ANGLE_framebuffer_blit GL_ANGLE_framebuffer_multisample GL_ANGLE_get_serialized_context_string GL_ANGLE_get_tex_level_parameter GL_ANGLE_instanced_arrays GL_ANGLE_memory_size GL_ANGLE_program_binary_readiness_query GL_ANGLE_program_cache_control GL_ANGLE_renderability_validation GL_ANGLE_request_extension GL_ANGLE_robust_client_memory GL_ANGLE_shader_pixel_local_storage GL_ANGLE_stencil_texturing GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_ANGLE_texture_multisample GL_ANGLE_translated_shader_source GL_ARM_rgba8 GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_bind_uniform_location GL_CHROMIUM_copy_texture GL_CHROMIUM_lose_context GL_EXT_blend_func_extended GL_EXT_blend_minmax GL_EXT_clear_texture GL_EXT_clip_control GL_EXT_clip_cull_distance GL_EXT_color_buffer_float GL_EXT_color_buffer_half_float GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_conservative_depth GL_EXT_debug_label GL_EXT_debug_marker GL_EXT_depth_clamp GL_EXT_discard_framebuffer GL_EXT_disjoint_timer_query GL_EXT_draw_buffers GL_EXT_draw_buffers_indexed GL_EXT_float_blend GL_EXT_frag_depth GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_occlusion_query_boolean GL_EXT_polygon_offset_clamp GL_EXT_read_format_bgra GL_EXT_render_snorm GL_EXT_robustness GL_EXT_sRGB GL_EXT_sRGB_write_control GL_EXT_shadow_samplers GL_EXT_texture_border_clamp GL_EXT_texture_compression_bptc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_compression_s3tc_srgb GL_EXT_texture_filter_anisotropic GL_EXT_texture_format_BGRA8888 GL_EXT_texture_mirror_clamp_to_edge GL_EXT_texture_norm16 GL_EXT_texture_rg GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_EXT_texture_sRGB_decode GL_EXT_texture_shadow_lod GL_EXT_texture_storage GL_EXT_texture_type_2_10_10_10_REV GL_EXT_unpack_subimage GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_debug GL_KHR_parallel_shader_compile GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_KHR_texture_compression_astc_sliced_3d GL_MESA_framebuffer_flip_y GL_NV_fence GL_NV_framebuffer_blit GL_NV_pack_subimage GL_NV_pixel_buffer_object GL_NV_read_depth GL_NV_read_stencil GL_NV_shader_noperspective_interpolation GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3 GL_OES_EGL_sync GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_draw_buffers_indexed GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_get_program_binary GL_OES_mapbuffer GL_OES_packed_depth_stencil GL_OES_required_internalformat GL_OES_rgb8_rgba8 GL_OES_sample_variables GL_OES_shader_multisample_interpolation GL_OES_standard_derivatives GL_OES_surfaceless_context GL_OES_texture_3D GL_OES_texture_border_clamp GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_vertex_array_object ",
+      "glImplementationParts": "(gl=egl-angle,angle=opengl)",
+      "glRenderer": "ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)",
+      "glResetNotificationStrategy": 33377,
+      "glVendor": "Google Inc. (Mesa)",
+      "glVersion": "OpenGL ES 3.0 (ANGLE 2.1 git hash: unknown hash)",
+      "glWsExtensions": "EGL_KHR_create_context EGL_KHR_image EGL_KHR_image_base EGL_KHR_gl_colorspace EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_texture_3D_image EGL_KHR_gl_renderbuffer_image EGL_KHR_get_all_proc_addresses EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANGLE_create_context_webgl_compatibility EGL_CHROMIUM_create_context_bind_generates_resource EGL_KHR_swap_buffers_with_damage EGL_EXT_pixel_format_float EGL_KHR_surfaceless_context EGL_ANGLE_display_texture_share_group EGL_ANGLE_display_semaphore_share_group EGL_ANGLE_create_context_client_arrays EGL_ANGLE_program_cache_control EGL_ANGLE_robust_resource_initialization EGL_ANGLE_create_context_extensions_enabled EGL_ANDROID_blob_cache EGL_ANDROID_recordable EGL_ANDROID_native_fence_sync EGL_ANGLE_create_context_backwards_compatible EGL_KHR_no_config_context EGL_KHR_create_context_no_error EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers EGL_KHR_reusable_sync EGL_ANGLE_external_context_and_surface EGL_EXT_buffer_age EGL_ANGLE_context_virtualization EGL_ANGLE_memory_usage_report EGL_ANGLE_create_context_passthrough_shaders ",
+      "glWsVendor": "Google Inc. (Mesa)",
+      "glWsVersion": "1.5 (ANGLE 2.1 git hash: unknown hash)",
+      "hardwareSupportsVulkan": false,
+      "inProcessGpu": false,
+      "initializationTime": 4.331608,
+      "isAsan": false,
+      "isClangCoverage": false,
+      "jpegDecodeAcceleratorSupported": false,
+      "maxMsaaSamples": "8",
+      "optimus": false,
+      "passthroughCmdDecoder": true,
+      "pixelShaderVersion": "3.00",
+      "processCrashCount": 0,
+      "sandboxed": false,
+      "skiaBackendType": "GaneshGL",
+      "subpixelFontRendering": true,
+      "targetCpuBits": 64,
+      "vertexShaderVersion": "3.00",
+      "visibilityCallbackCallCount": 0
+    },
+    "devices": [
+      {
+        "deviceId": 0,
+        "deviceString": "ANGLE (Mesa, virgl (LLVMPIPE (LLVM 21.1.8 256 bits)), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)",
+        "driverVendor": "Mesa",
+        "driverVersion": "25.0.7",
+        "vendorId": 0,
+        "vendorString": "Google Inc. (Mesa)"
+      }
+    ],
+    "driverBugWorkarounds": [
+      "enable_webgl_timer_query_extensions",
+      "exit_on_context_lost",
+      "disabled_extension_GL_KHR_blend_equation_advanced",
+      "disabled_extension_GL_KHR_blend_equation_advanced_coherent"
+    ],
+    "featureStatus": {
+      "2d_canvas": "enabled",
+      "direct_rendering_display_compositor": "disabled_off_ok",
+      "gpu_compositing": "disabled_software",
+      "multiple_raster_threads": "enabled_on",
+      "opengl": "enabled_on",
+      "rasterization": "enabled_force",
+      "raw_draw": "disabled_off_ok",
+      "skia_graphite": "disabled_off",
+      "trees_in_viz": "disabled_off",
+      "video_decode": "enabled",
+      "video_encode": "disabled_software",
+      "vulkan": "disabled_off",
+      "webgl": "enabled_readback",
+      "webgpu": "enabled_readback",
+      "webgpu_on_vk_via_gl_interop": "enabled",
+      "webnn": "disabled_off"
+    },
+    "videoDecoding": [],
+    "videoEncoding": []
+  },
+  "modelName": "",
+  "modelVersion": ""
+}
+browser-evidence: vulkaninfo.out
+==========
+VULKANINFO
+==========
+
+Vulkan Instance Version: 1.4.309
+
+
+Instance Extensions: count = 24
+-------------------------------
+VK_EXT_acquire_drm_display             : extension revision 1
+VK_EXT_acquire_xlib_display            : extension revision 1
+VK_EXT_debug_report                    : extension revision 10
+VK_EXT_debug_utils                     : extension revision 2
+VK_EXT_direct_mode_display             : extension revision 1
+VK_EXT_display_surface_counter         : extension revision 1
+VK_EXT_headless_surface                : extension revision 1
+VK_EXT_surface_maintenance1            : extension revision 1
+VK_EXT_swapchain_colorspace            : extension revision 5
+VK_KHR_device_group_creation           : extension revision 1
+VK_KHR_display                         : extension revision 23
+VK_KHR_external_fence_capabilities     : extension revision 1
+VK_KHR_external_memory_capabilities    : extension revision 1
+VK_KHR_external_semaphore_capabilities : extension revision 1
+VK_KHR_get_display_properties2         : extension revision 1
+VK_KHR_get_physical_device_properties2 : extension revision 2
+VK_KHR_get_surface_capabilities2       : extension revision 1
+VK_KHR_portability_enumeration         : extension revision 1
+VK_KHR_surface                         : extension revision 25
+VK_KHR_surface_protected_capabilities  : extension revision 1
+VK_KHR_wayland_surface                 : extension revision 6
+VK_KHR_xcb_surface                     : extension revision 6
+VK_KHR_xlib_surface                    : extension revision 6
+VK_LUNARG_direct_driver_loading        : extension revision 1
+
+Instance Layers: count = 3
+--------------------------
+VK_LAYER_INTEL_nullhw       INTEL NULL HW                1.1.73   version 1
+VK_LAYER_MESA_device_select Linux device selection layer 1.4.303  version 1
+VK_LAYER_MESA_overlay       Mesa Overlay layer           1.4.303  version 1
+
+Devices:
+========
+GPU0:
+	apiVersion         = 1.4.307
+	driverVersion      = 26.1.6
+	vendorID           = 0x10005
+	deviceID           = 0x0000
+	deviceType         = PHYSICAL_DEVICE_TYPE_CPU
+	deviceName         = Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+	driverID           = DRIVER_ID_MESA_VENUS
+	driverName         = venus
+	driverInfo         = Mesa 26.1.6-1~bpo13+1
+	conformanceVersion = 1.4.0.0
+	deviceUUID         = 085dc710-0d7c-656d-d4a1-27584061bcbc
+	driverUUID         = 1df9cd03-0236-fdde-5a3a-15f556bb7b9b
+browser-evidence: vulkaninfo.err
+'DISPLAY' environment variable not set... skipping surface info
+ERROR while creating surface for extension VK_KHR_wayland_surface : ./vulkaninfo/./vulkaninfo.h:247:vkGetPhysicalDeviceSurfacePresentModesKHR failed with ERROR_SURFACE_LOST_KHR
+browser-evidence: browser.log
+grep: warning: stray \ before -
+[131:165:1110/131742.706589:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:131:1110/131743.877430:WARNING:ui/ozone/platform/wayland/common/wayland_object.cc:120] Binding to wl_shm version 1 but version 2 is available.
+[131:131:1110/131743.942356:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:287] No wl_seat object. The functionality may suffer.
+[131:131:1110/131744.409548:ERROR:content/browser/browser_main_loop.cc:287] Gdk: gdk_seat_get_keyboard: assertion 'GDK_IS_SEAT (seat)' failed
+[131:165:1110/131745.223352:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:165:1110/131745.224517:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:165:1110/131750.752519:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[186:1:1110/131750.781460:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[178:178:1110/131751.619581:ERROR:ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc:249] '--ozone-platform=wayland' is not compatible with Vulkan. Consider switching to '--ozone-platform=x11' or disabling Vulkan
+[178:178:1110/131752.412724:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:434] WARNING: VulkanPreferredFeatures::addFeaturesToQuery() was not called
+
+[178:178:1110/131752.424652:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:437] WARNING: VulkanPreferredFeatures::addFeaturesToEnable() was not called
+
+[178:178:1110/131752.448123:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.
+[131:165:1110/131753.034032:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+
+DevTools listening on ws://127.0.0.1:49153/devtools/browser/984b7f27-6577-459e-9690-f607ec3de716
+[131:131:1110/131753.272115:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:170] Server doesn't support zcr_alpha_compositing_v1.
+[131:131:1110/131753.272255:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:185] Server doesn't support overlay_prioritizer.
+[131:131:1110/131753.272283:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:200] Server doesn't support wp_content_type_v1
+[131:131:1110/131753.272301:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:214] Server doesn't support wp_color_management_surface_v1.
+[131:131:1110/131753.286673:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[223:1:1110/131753.719969:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[131:131:1110/131753.800723:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[231:1:1110/131754.055266:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[232:1:1110/131754.073876:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[131:131:1110/131754.164697:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[131:131:1110/131754.188410:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:165:1110/131754.189470:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:131:1110/131754.194587:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:165:1110/131754.195891:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:131:1110/131754.353775:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:165:1110/131754.354977:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:131:1110/131754.720104:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:131:1110/131754.746028:WARNING:ui/ozone/platform/wayland/host/org_gnome_mutter_idle_monitor.cc:87] org.gnome.Mutter.IdleMonitor D-Bus service does not exist
+[131:131:1110/131755.634831:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:131:1110/131755.683117:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:165:1110/131755.683393:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:131:1110/131755.702442:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:131:1110/131755.904522:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:131:1110/131755.904964:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.UPower was not provided by any .service files
+[131:165:1110/131755.905271:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:131:1110/131755.910220:WARNING:dbus/property.cc:174] GetAll request failed for: org.freedesktop.UPower.Device
+[257:1:1110/131756.041849:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+[131:131:1110/131756.174613:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:165:1110/131756.178186:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[131:131:1110/131756.357236:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[131:131:1110/131756.357347:WARNING:ui/base/idle/idle_linux.cc:111] None of the known D-Bus ScreenSaver services could be used.
+[131:131:1110/131756.844856:INFO:CONSOLE:0] "Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: chrome://resources/roboto/roboto-regular.woff2", source: chrome://omnibox-popup.top-chrome/ (0)
+[131:131:1110/131758.054430:INFO:CONSOLE:7] "Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: https://localhost:49152/font.ttf", source: https://localhost:49152/page.html (7)
+[131:131:1110/131758.100445:INFO:CONSOLE:574] "Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: chrome://resources/roboto/roboto-regular.woff2", source: chrome://resources/cr_components/composebox/composebox_input.js (574)
+[277:1:1110/131758.503727:ERROR:sandbox/linux/seccomp-bpf/trap.cc:106] Existing signal handler when trying to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf.
+Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.
+Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 500000 to 16 to fit dynamic offset allocation limit.
+Warning: EGL display does not support requested client API 'OpenGL' (supported: OpenGL_ES).
+ - While trying to discover a BackendType::OpenGL adapter.
+
+Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 72 to 16 to fit dynamic offset allocation limit.
+Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 32 to 16 to fit dynamic offset allocation limit.
+[131:131:1110/131801.770509:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[131:131:1110/131801.770725:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[131:131:1110/131801.773445:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[131:131:1110/131801.773511:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[131:131:1110/131801.785804:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[131:131:1110/131801.785873:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[131:131:1110/131801.790616:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[131:131:1110/131801.790657:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+@etude 1 progress stage 5
+@etude 1 end 2
+grep: warning: stray \ before -
+etude check: result: unchanged: 6 files
+etude run: result: ran: 1 suites, 1 passed
+run: webgpu: PASS in 195s
+run: result: all 1 suites passed
