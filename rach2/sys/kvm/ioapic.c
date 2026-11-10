@@ -17,7 +17,7 @@ struct guest_ioapic {
     struct kvm_ioapic_state state;
     uint32_t sources[KVM_IOAPIC_NUM_PINS]; /* independent KVM_IRQ_SRC_* */
     uint32_t delivered;                    /* edge requests delivered since the last line update */
-    uint64_t rtc_pending;                  /* vCPU indices awaiting the RTC vector's EOI */
+    uint64_t rtc_pending[KVM_VCPU_WORDS];  /* the vCPUs awaiting the RTC vector's EOI */
     uint8_t rtc_vector[KVM_MAX_VCPUS];     /* vector at each tracked delivery */
     uint32_t counts[KVM_IOAPIC_NUM_PINS][KVM_PIN_STEPS]; /* by enum kvm_pin_step */
 };
@@ -28,25 +28,32 @@ static struct guest_ioapic *ioapic_of(struct kvm_vm *vm)
     return (struct guest_ioapic *)vm->ioapic;
 }
 
-/** Drop RTC acknowledgements whose vectors have left both IRR and ISR. */
-static void ioapic_rtc_sync(struct kvm_vm *vm)
+/** Drop RTC acknowledgements whose vectors have left both IRR and ISR;
+ * whether any is still awaited. */
+static int ioapic_rtc_sync(struct kvm_vm *vm)
 {
     struct guest_ioapic *p = ioapic_of(vm);
     uint32_t i;
+    int awaited = 0;
 
     for (i = 0; i < vm->nr_vcpus; i++) {
-        if ((p->rtc_pending & (1ull << i)) &&
-            !kvm_lapic_pending_eoi(vm->vcpus[i], p->rtc_vector[i])) {
-            p->rtc_pending &= ~(1ull << i);
+        if (!KVM_VCPU_TEST(p->rtc_pending, i)) {
+            continue;
+        }
+        if (kvm_lapic_pending_eoi(vm->vcpus[i], p->rtc_vector[i])) {
+            awaited = 1;
+        } else {
+            KVM_VCPU_CLEAR(p->rtc_pending, i);
         }
     }
+    return awaited;
 }
 
 /** Deliver one unmasked pin and latch remote IRR for a level interrupt. */
 static int ioapic_deliver(struct kvm_vm *vm, uint32_t pin, int status)
 {
     struct guest_ioapic *p = ioapic_of(vm);
-    uint64_t entry = p->state.redirtbl[pin], destinations = 0;
+    uint64_t entry = p->state.redirtbl[pin], destinations[KVM_VCPU_WORDS];
     struct kvm_lapic_irq irq;
     uint32_t i;
     int result;
@@ -67,11 +74,11 @@ static int ioapic_deliver(struct kvm_vm *vm, uint32_t pin, int status)
         p->delivered |= 1u << pin;
     }
     result = kvm_lapic_deliver_tracked(vm, NULL, &irq,
-                                       pin == IOA_RTC_PIN && status ? &destinations : NULL);
+                                       pin == IOA_RTC_PIN && status ? destinations : NULL);
     if (pin == IOA_RTC_PIN && status) {
-        p->rtc_pending = destinations;
+        k_memcpy(p->rtc_pending, destinations, sizeof(p->rtc_pending));
         for (i = 0; i < vm->nr_vcpus; i++) {
-            if (destinations & (1ull << i)) {
+            if (KVM_VCPU_TEST(destinations, i)) {
                 p->rtc_vector[i] = (uint8_t)irq.vector;
             }
         }
@@ -95,8 +102,7 @@ static int ioapic_level(struct kvm_vm *vm, uint32_t pin, int level, int status)
     }
     p->counts[pin][KVM_PIN_RAISE]++;
     if (pin == IOA_RTC_PIN && status) {
-        ioapic_rtc_sync(vm);
-        if (p->rtc_pending) {
+        if (ioapic_rtc_sync(vm)) {
             p->counts[pin][KVM_PIN_COALESCE]++;
             return 0;
         }
@@ -180,7 +186,7 @@ void kvm_ioapic_eoi(struct kvm_vcpu *v, uint32_t vector, int level, int directed
         return;
     }
     if (v->index < KVM_MAX_VCPUS && p->rtc_vector[v->index] == vector) {
-        p->rtc_pending &= ~(1ull << v->index);
+        KVM_VCPU_CLEAR(p->rtc_pending, v->index);
     }
     for (pin = 0; pin < KVM_IOAPIC_NUM_PINS; pin++) {
         entry = &p->state.redirtbl[pin];
@@ -202,7 +208,7 @@ void kvm_ioapic_eoi(struct kvm_vcpu *v, uint32_t vector, int level, int directed
 void kvm_ioapic_restore(struct kvm_vcpu *v)
 {
     struct guest_ioapic *p = ioapic_of(v->vm);
-    uint64_t entry, bit;
+    uint64_t entry;
     uint32_t vector;
 
     if (!p || v->index >= KVM_MAX_VCPUS) {
@@ -212,13 +218,12 @@ void kvm_ioapic_restore(struct kvm_vcpu *v)
     if (!kvm_lapic_match_dest(v, (uint32_t)(entry >> 56), (entry & (1u << 11)) != 0)) {
         return;
     }
-    bit = 1ull << v->index;
     vector = (uint32_t)entry & 0xFFu;
     if (kvm_lapic_pending_eoi(v, vector)) {
-        p->rtc_pending |= bit;
+        KVM_VCPU_SET(p->rtc_pending, v->index);
         p->rtc_vector[v->index] = (uint8_t)vector;
     } else {
-        p->rtc_pending &= ~bit;
+        KVM_VCPU_CLEAR(p->rtc_pending, v->index);
     }
 }
 
@@ -235,7 +240,7 @@ void kvm_ioapic_state(struct kvm_vm *vm, struct kvm_ioapic_state *state, int set
     }
     p->state = *state;
     p->delivered = 0;
-    p->rtc_pending = 0;
+    k_memset(p->rtc_pending, 0, sizeof(p->rtc_pending));
     for (pin = 0; pin < KVM_IOAPIC_NUM_PINS; pin++) {
         if (state->irr & (1u << pin)) {
             p->state.irr &= ~(1u << pin);

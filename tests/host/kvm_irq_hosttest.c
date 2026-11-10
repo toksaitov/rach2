@@ -400,6 +400,7 @@ static void vm_make(int full)
     int i;
 
     k_memset(&vm, 0, sizeof(vm));
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     k_memset(&cap, 0, sizeof(cap));
     cap.cap = KVM_CAP_SPLIT_IRQCHIP;
     cap.args[0] = 24;
@@ -760,6 +761,45 @@ static void timer_rows(void)
     wr(v, APIC_LVT1, 0x400);
     CHECK(rd(v, APIC_LVT1) == (APIC_LVT_MASKED | 0x400), "an LVT write stays masked meanwhile");
     wr(v, APIC_SPIV, 0x1FF);
+    clear_vectors();
+}
+
+/** The local APIC's two quirks turned off, as KVM_CAP_DISABLE_QUIRKS2
+ * turns them, and a bus cycle KVM_CAP_X86_APIC_BUS_CYCLES_NS set; the VM
+ * ends after these rows. */
+static void quirk_rows(void)
+{
+    struct kvm_vcpu *v = vcpu[0];
+    struct lapic *l = apic_of(v);
+
+    vm.disabled_quirks = KVM_X86_QUIRK_LINT0_REENABLED | KVM_X86_QUIRK_LAPIC_MMIO_HOLE;
+    lapic_reset(l, 0);
+    CHECK(rd(v, APIC_LVT0) == APIC_LVT_MASKED,
+          "with LINT0's quirk off the boot vCPU's LINT0 starts masked");
+    v->sregs.apic_base &= ~(uint64_t)APIC_BASE_ENABLE;
+    k_memset(&v->exit, 0, sizeof(v->exit));
+    v->exit.kind = KVM_X_MMIO;
+    v->exit.mmio.phys_addr = BASE + APIC_ID;
+    v->exit.mmio.len = 4;
+    CHECK(kvm_lapic_mmio(v) == 0,
+          "with the MMIO hole's quirk off, the page of an APIC turned off is the caller's");
+    v->sregs.apic_base |= APIC_BASE_ENABLE;
+    vm.disabled_quirks = 0;
+
+    vm.apic_bus_ns = 4;
+    wr(v, APIC_SPIV, 0x1FF);
+    wr(v, APIC_TDCR, 0xB);
+    wr(v, APIC_LVTT, 0xEB);
+    wr(v, APIC_TMICT, 1000);
+    mono_ns += 400;
+    CHECK(rd(v, APIC_TMCCT) == 900, "at a bus cycle of 4 ns, 400 ns count 100 off");
+    mono_ns += 3599;
+    timer_check(l);
+    CHECK(!has(v, APIC_IRR, 0xEB), "and the count of 1000 has not run out after 3999 ns");
+    mono_ns += 1;
+    timer_check(l);
+    CHECK(has(v, APIC_IRR, 0xEB), "but has after 4000");
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     clear_vectors();
 }
 
@@ -1670,6 +1710,7 @@ int main(int argc, char **argv)
         routing_rows();
         irqfd_rows();
         ioeventfd_rows();
+        quirk_rows();
         vm_end();
     }
     full_irqchip_rows();

@@ -1320,8 +1320,9 @@ static int msr_vcpu(struct kvm_vcpu *v, uint32_t msr, int write, uint64_t *value
         if (write) {
             return host ? 0 : -1;
         }
-        /* The APIC timer counts at 1 GHz, one ns a bus cycle. */
-        *value = msr == HV_MSR_TSC_FREQUENCY ? tsc_hz() / 1000u * 1000u : 1000000000ull;
+        /* The APIC timer counts a bus cycle of the VM's `apic_bus_ns`. */
+        *value = msr == HV_MSR_TSC_FREQUENCY ? tsc_hz() / 1000u * 1000u
+                                             : 1000000000ull / v->vm->apic_bus_ns;
         return 0;
     default:
         return -1;

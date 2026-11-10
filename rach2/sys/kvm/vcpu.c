@@ -242,18 +242,29 @@ uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa)
     return p;
 }
 
-/** The page `pgoff` of the run pages of the vCPU `obj`, for a fault of a
- * mapping of them: 0, or -1 past them, which raises SIGBUS. Each page's
+/** The page `pgoff` of `v`'s mapping in the kernel: its run page, its page
+ * of port I/O data, or the VM's ring of coalesced writes at
+ * KVM_COALESCED_MMIO_PAGE_OFFSET; NULL past them. */
+static uint8_t *mapped_page(struct kvm_vcpu *v, uint32_t pgoff)
+{
+    if (pgoff < KVM_RUN_PAGES) {
+        return (uint8_t *)v->run + (uintptr_t)pgoff * 4096u;
+    }
+    return pgoff == KVM_COALESCED_MMIO_PAGE_OFFSET ? (uint8_t *)v->vm->ring : NULL;
+}
+
+/** The page `pgoff` of the mapping of the vCPU `obj`, for a fault of a
+ * mapping of it: 0, or -1 past its pages, which raises SIGBUS. Each page's
  * frame is read from the kernel's tables, since the heap's pages are
  * contiguous only in virtual memory. */
 static int run_page(void *obj, uint32_t pgoff, uintptr_t *phys)
 {
-    struct kvm_vcpu *v = (struct kvm_vcpu *)obj;
+    uint8_t *page = mapped_page((struct kvm_vcpu *)obj, pgoff);
 
-    if (pgoff >= KVM_RUN_PAGES) {
+    if (!page) {
         return -1;
     }
-    *phys = paging_virt_to_phys((uintptr_t)v->run + (uintptr_t)pgoff * 4096u);
+    *phys = paging_virt_to_phys((uintptr_t)page);
     return *phys ? 0 : -1;
 }
 
@@ -279,17 +290,17 @@ struct run_copy {
  * as on Linux. */
 static int run_copy_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
-    struct kvm_vcpu *v = ((struct run_copy *)f)->vcpu;
+    const uint8_t *from = mapped_page(((struct run_copy *)f)->vcpu, pgoff);
     uint8_t *page;
 
-    if (pgoff >= KVM_RUN_PAGES) {
+    if (!from) {
         return -1;
     }
     page = kmap_temp(phys);
     if (!page) {
         return -1;
     }
-    k_memcpy(page, (const uint8_t *)v->run + (uintptr_t)pgoff * 4096u, 4096u);
+    k_memcpy(page, from, 4096u);
     kunmap_temp(page);
     return 0;
 }
@@ -399,6 +410,14 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     int fd;
 
     if (id >= KVM_MAX_VCPU_IDS || vm->nr_vcpus >= KVM_MAX_VCPUS) {
+        return -EINVAL;
+    }
+    /* The first vCPU settles the bound of the ids, as Linux's
+     * kvm_arch_vcpu_precreate. */
+    if (!vm->max_vcpu_ids) {
+        vm->max_vcpu_ids = KVM_MAX_VCPU_IDS;
+    }
+    if (id >= vm->max_vcpu_ids) {
         return -EINVAL;
     }
     for (i = 0; i < vm->nr_vcpus; i++) {
@@ -765,11 +784,19 @@ static int32_t run_loop(struct kvm_vcpu *v)
     }
 }
 
+static int32_t sync_take(struct kvm_vcpu *v);
+static void sync_give(struct kvm_vcpu *v);
+
 /** KVM_RUN, whose argument is 0, under the signal mask of
  * KVM_SET_SIGNAL_MASK when one is set, with the old mask back after, as
- * Linux's kvm_sigset_activate and kvm_sigset_deactivate swap them. */
+ * Linux's kvm_sigset_activate and kvm_sigset_deactivate swap them. The
+ * run page's `kvm_dirty_regs` names the register sets taken from it first
+ * and `kvm_valid_regs` those written to it last (KVM_CAP_SYNC_REGS);
+ * -EINVAL for a set outside KVM_SYNC_X86_VALID_FIELDS in either, or for
+ * registers `sync_take` refuses. */
 static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
 {
+    struct kvm_run *run = v->run;
     uint64_t old = 0;
     int32_t r;
 
@@ -780,21 +807,34 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
         old = current_proc->sig_blocked;
         signal_set_blocked(v->sigmask);
     }
-    r = run_loop(v);
+    if ((run->kvm_valid_regs | run->kvm_dirty_regs) & ~(uint64_t)KVM_SYNC_X86_VALID_FIELDS) {
+        r = -EINVAL;
+    } else {
+        r = sync_take(v);
+        if (r == 0) {
+            r = run_loop(v);
+        }
+    }
     if (v->has_sigmask) {
         signal_set_blocked(old);
     }
+    sync_give(v);
     run_post(v);
     return r;
 }
 
 /** Whether `v`'s CPUID offers the feature in bit `bit` of the register
- * `reg` (0 EAX to 3 EDX) of `function`'s subleaf 0. */
+ * `reg` (0 EAX to 3 EDX) of `function`'s subleaf 0; for a NULL `v`,
+ * whether KVM_GET_SUPPORTED_CPUID does. */
 static int guest_has(const struct kvm_vcpu *v, uint32_t function, int reg, int bit)
 {
-    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, function, 0);
+    const struct kvm_cpuid_entry2 *e;
     uint32_t r;
 
+    if (!v) {
+        return kvm_cpuid_host_has(function, reg, bit);
+    }
+    e = kvm_cpuid_find(v, function, 0);
     if (!e) {
         return 0;
     }
@@ -815,7 +855,9 @@ uint32_t kvm_guest_maxphyaddr(const struct kvm_vcpu *v)
     return 36;
 }
 
-uint64_t kvm_cr4_reserved(const struct kvm_vcpu *v)
+/** The CR4 bits the CPUID of `v` reserves, or for a NULL `v` the CPUID
+ * KVM offers, as Linux's __cr4_reserved_bits. */
+static uint64_t cr4_reserved_by(const struct kvm_vcpu *v)
 {
     uint64_t ok = CR4_BASE;
 
@@ -844,6 +886,13 @@ uint64_t kvm_cr4_reserved(const struct kvm_vcpu *v)
         ok |= CR4_PKE;
     }
     return ~ok;
+}
+
+uint64_t kvm_cr4_reserved(const struct kvm_vcpu *v)
+{
+    uint64_t reserved = cr4_reserved_by(NULL);
+
+    return v->cpuid_set ? reserved | cr4_reserved_by(v) : reserved;
 }
 
 /** Whether `s` is a state KVM_SET_SREGS takes, as Linux's
@@ -878,51 +927,45 @@ static int sregs_valid(const struct kvm_vcpu *v, const struct kvm_sregs *s)
     return 1;
 }
 
-/** KVM_GET_SREGS: the special registers, with the interrupt waiting for
- * injection, if not a software one, set in the bitmap. */
-static int32_t get_sregs(struct kvm_vcpu *v, uintptr_t arg)
+/** The special registers of `v` into `s`, as KVM_GET_SREGS gives them:
+ * with the interrupt waiting for injection, if not a software one, set in
+ * the bitmap. */
+static void sregs_fill(struct kvm_vcpu *v, struct kvm_sregs *s)
 {
-    struct kvm_sregs s;
-
     vcpu_save(v, KVM_PART_SREGS | KVM_PART_EVENTS);
-    s = v->sregs;
+    *s = v->sregs;
     if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
-        s.cr8 = kvm_lapic_cr8(v);
+        s->cr8 = kvm_lapic_cr8(v);
     }
-    k_memset(s.interrupt_bitmap, 0, sizeof(s.interrupt_bitmap));
+    k_memset(s->interrupt_bitmap, 0, sizeof(s->interrupt_bitmap));
     if (v->events.interrupt.injected && !v->events.interrupt.soft) {
-        s.interrupt_bitmap[v->events.interrupt.nr / 64u] |= 1ull << (v->events.interrupt.nr % 64u);
+        s->interrupt_bitmap[v->events.interrupt.nr / 64u] |= 1ull << (v->events.interrupt.nr % 64u);
     }
-    return copy_to_user((void __user *)arg, &s, sizeof(s)) ? -EFAULT : 0;
 }
 
-/** KVM_SET_SREGS: the special registers, and the first interrupt of the
- * bitmap queued for injection; with the local APIC in the kernel, its base
- * and its TPR from CR8 too. 0, -EINVAL for a state Linux refuses, or
- * -EFAULT. */
-static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
+/** Give `v` the special registers `s`, as KVM_SET_SREGS takes them, and
+ * queue the first interrupt of the bitmap for injection; with the local
+ * APIC in the kernel, its base and its TPR from CR8 too. 0, or -EINVAL for
+ * a state Linux refuses. */
+static int32_t sregs_apply(struct kvm_vcpu *v, const struct kvm_sregs *s)
 {
-    struct kvm_sregs s;
     uint32_t i;
 
-    if (copy_from_user(&s, (const void __user *)arg, sizeof(s)) != 0) {
-        return -EFAULT;
-    }
-    if (!sregs_valid(v, &s)) {
+    if (!sregs_valid(v, s)) {
         return -EINVAL;
     }
     if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
-        kvm_lapic_set_base(v, s.apic_base, 1);
-        kvm_lapic_set_cr8(v, s.cr8);
+        kvm_lapic_set_base(v, s->apic_base, 1);
+        kvm_lapic_set_cr8(v, s->cr8);
     }
-    v->sregs = s;
+    v->sregs = *s;
     k_memset(v->sregs.interrupt_bitmap, 0, sizeof(v->sregs.interrupt_bitmap));
     v->dirty |= KVM_PART_SREGS;
     /* `inject` runs before the next entry, where a backend reads PAE's
      * PDPTEs from guest memory, as Linux's __set_sregs loads them. */
     req_set(v, KVM_REQ_EVENT);
     for (i = 0; i < KVM_NR_INTERRUPTS; i++) {
-        if ((s.interrupt_bitmap[i / 64u] >> (i % 64u)) & 1u) {
+        if ((s->interrupt_bitmap[i / 64u] >> (i % 64u)) & 1u) {
             v->events.interrupt.injected = 1;
             v->events.interrupt.nr = (uint8_t)i;
             v->events.interrupt.soft = 0;
@@ -932,6 +975,26 @@ static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
         }
     }
     return 0;
+}
+
+/** KVM_GET_SREGS. */
+static int32_t get_sregs(struct kvm_vcpu *v, uintptr_t arg)
+{
+    struct kvm_sregs s;
+
+    sregs_fill(v, &s);
+    return copy_to_user((void __user *)arg, &s, sizeof(s)) ? -EFAULT : 0;
+}
+
+/** KVM_SET_SREGS: 0, -EINVAL for a state Linux refuses, or -EFAULT. */
+static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
+{
+    struct kvm_sregs s;
+
+    if (copy_from_user(&s, (const void __user *)arg, sizeof(s)) != 0) {
+        return -EFAULT;
+    }
+    return sregs_apply(v, &s);
 }
 
 /** KVM_GET_FPU: the legacy region of the XSAVE image, without MXCSR, which
@@ -1214,6 +1277,7 @@ static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
     kfree(v->cpuid);
     v->cpuid = ent;
     v->cpuid_nent = head.nent;
+    v->cpuid_set = 1;
     kvm_pv_cpuid_update(v, 1);
     v->dirty |= KVM_PART_CPUID;
     return 0;
@@ -1239,35 +1303,139 @@ static int32_t get_cpuid(struct kvm_vcpu *v, uintptr_t arg)
     return copy_to_user((void __user *)arg, &head, sizeof(head)) ? -EFAULT : 0;
 }
 
-/** KVM_GET_VCPU_EVENTS: the events waiting, with an exception reported
- * as injected, since the caller has not enabled exception payloads. */
+/** The events waiting in `v` into `ev`, as KVM_GET_VCPU_EVENTS gives
+ * them, with an exception reported as injected, since the caller has not
+ * enabled exception payloads. */
+static void events_fill(struct kvm_vcpu *v, struct kvm_vcpu_events *ev)
+{
+    vcpu_save(v, KVM_PART_EVENTS);
+    *ev = v->events;
+    ev->exception.injected = (uint8_t)(ev->exception.injected || ev->exception.pending);
+    ev->exception.pending = 0;
+    ev->exception_has_payload = 0;
+    ev->exception_payload = 0;
+    ev->nmi.pending = (uint8_t)(v->nmi_queued != 0);
+    ev->flags =
+        KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SHADOW | KVM_VCPUEVENT_VALID_SMM;
+    k_memset(&ev->smi, 0, sizeof(ev->smi));
+    k_memset(&ev->triple_fault, 0, sizeof(ev->triple_fault));
+    k_memset(ev->reserved, 0, sizeof(ev->reserved));
+}
+
+/** KVM_GET_VCPU_EVENTS. */
 static int32_t get_events(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_vcpu_events ev;
 
-    vcpu_save(v, KVM_PART_EVENTS);
-    ev = v->events;
-    ev.exception.injected = (uint8_t)(ev.exception.injected || ev.exception.pending);
-    ev.exception.pending = 0;
-    ev.exception_has_payload = 0;
-    ev.exception_payload = 0;
-    ev.nmi.pending = (uint8_t)(v->nmi_queued != 0);
-    ev.flags =
-        KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SHADOW | KVM_VCPUEVENT_VALID_SMM;
-    k_memset(&ev.smi, 0, sizeof(ev.smi));
-    k_memset(&ev.triple_fault, 0, sizeof(ev.triple_fault));
-    k_memset(ev.reserved, 0, sizeof(ev.reserved));
+    events_fill(v, &ev);
     return copy_to_user((void __user *)arg, &ev, sizeof(ev)) ? -EFAULT : 0;
 }
 
 /**
- * KVM_SET_VCPU_EVENTS, as Linux's kvm_vcpu_ioctl_x86_set_vcpu_events
+ * Give `v` the events `ev`, as Linux's kvm_vcpu_ioctl_x86_set_vcpu_events
  * takes them with neither exception payloads nor triple-fault events
  * enabled and no SMM: the exception, the interrupt and the NMI's state
  * always, the NMI's pending count, the SIPI vector and the interrupt
- * shadow when their flags say so. -EINVAL for another flag, a payload, an
- * exception past 31 or the NMI's vector, or SMM; -EFAULT.
+ * shadow when their flags say so. 0, or -EINVAL for another flag, a
+ * payload, an exception past 31 or the NMI's vector, or SMM.
  */
+static int32_t events_apply(struct kvm_vcpu *v, const struct kvm_vcpu_events *ev)
+{
+    if (ev->flags & ~(KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SIPI_VECTOR |
+                      KVM_VCPUEVENT_VALID_SHADOW | KVM_VCPUEVENT_VALID_SMM)) {
+        return -EINVAL;
+    }
+    if (ev->exception.injected && (ev->exception.nr > 31 || ev->exception.nr == NMI_VECTOR)) {
+        return -EINVAL;
+    }
+    if ((ev->flags & KVM_VCPUEVENT_VALID_SMM) &&
+        (ev->smi.smm || ev->smi.pending || ev->smi.smm_inside_nmi)) {
+        return -EINVAL;
+    }
+    vcpu_save(v, KVM_PART_EVENTS);
+    v->events.exception = ev->exception;
+    v->events.exception.pending = 0;
+    v->events.interrupt.injected = ev->interrupt.injected;
+    v->events.interrupt.nr = ev->interrupt.nr;
+    v->events.interrupt.soft = ev->interrupt.soft;
+    if (ev->flags & KVM_VCPUEVENT_VALID_SHADOW) {
+        v->events.interrupt.shadow = ev->interrupt.shadow;
+    }
+    v->events.nmi.injected = ev->nmi.injected;
+    v->events.nmi.masked = ev->nmi.masked;
+    if (ev->flags & KVM_VCPUEVENT_VALID_NMI_PENDING) {
+        v->nmi_queued = ev->nmi.pending ? 1u : 0u;
+    }
+    if (ev->flags & KVM_VCPUEVENT_VALID_SIPI_VECTOR) {
+        v->events.sipi_vector = ev->sipi_vector;
+    }
+    v->dirty |= KVM_PART_EVENTS;
+    req_set(v, KVM_REQ_EVENT);
+    return 0;
+}
+
+/**
+ * Take from the run page the register sets its `kvm_dirty_regs` names, as
+ * KVM_SET_REGS, KVM_SET_SREGS and KVM_SET_VCPU_EVENTS take them, and clear
+ * each set's bit, as Linux's sync_regs. The special registers and the
+ * events are judged in a copy, since the page is the caller's to write
+ * while this reads it. 0, or -EINVAL for a set Linux refuses, with its bit
+ * left.
+ */
+static int32_t sync_take(struct kvm_vcpu *v)
+{
+    struct kvm_run *run = v->run;
+    struct kvm_sregs sregs;
+    struct kvm_vcpu_events events;
+
+    if (run->kvm_dirty_regs & KVM_SYNC_X86_REGS) {
+        v->regs = run->s.regs.regs;
+        v->dirty |= KVM_PART_REGS;
+        req_set(v, KVM_REQ_EVENT);
+        run->kvm_dirty_regs &= ~(uint64_t)KVM_SYNC_X86_REGS;
+    }
+    if (run->kvm_dirty_regs & KVM_SYNC_X86_SREGS) {
+        sregs = run->s.regs.sregs;
+        if (sregs_apply(v, &sregs) != 0) {
+            return -EINVAL;
+        }
+        run->kvm_dirty_regs &= ~(uint64_t)KVM_SYNC_X86_SREGS;
+    }
+    if (run->kvm_dirty_regs & KVM_SYNC_X86_EVENTS) {
+        events = run->s.regs.events;
+        if (events_apply(v, &events) != 0) {
+            return -EINVAL;
+        }
+        run->kvm_dirty_regs &= ~(uint64_t)KVM_SYNC_X86_EVENTS;
+    }
+    return 0;
+}
+
+/** Write to the run page the register sets its `kvm_valid_regs` names, as
+ * KVM_GET_REGS, KVM_GET_SREGS and KVM_GET_VCPU_EVENTS give them, as
+ * Linux's store_regs does at every return of KVM_RUN. */
+static void sync_give(struct kvm_vcpu *v)
+{
+    struct kvm_run *run = v->run;
+    uint64_t valid = run->kvm_valid_regs;
+    struct kvm_sregs sregs;
+    struct kvm_vcpu_events events;
+
+    if (valid & KVM_SYNC_X86_REGS) {
+        vcpu_save(v, KVM_PART_REGS);
+        run->s.regs.regs = v->regs;
+    }
+    if (valid & KVM_SYNC_X86_SREGS) {
+        sregs_fill(v, &sregs);
+        run->s.regs.sregs = sregs;
+    }
+    if (valid & KVM_SYNC_X86_EVENTS) {
+        events_fill(v, &events);
+        run->s.regs.events = events;
+    }
+}
+
+/** KVM_SET_VCPU_EVENTS: 0, `events_apply`'s -EINVAL, or -EFAULT. */
 static int32_t set_events(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_vcpu_events ev;
@@ -1275,37 +1443,7 @@ static int32_t set_events(struct kvm_vcpu *v, uintptr_t arg)
     if (copy_from_user(&ev, (const void __user *)arg, sizeof(ev)) != 0) {
         return -EFAULT;
     }
-    if (ev.flags & ~(KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SIPI_VECTOR |
-                     KVM_VCPUEVENT_VALID_SHADOW | KVM_VCPUEVENT_VALID_SMM)) {
-        return -EINVAL;
-    }
-    ev.exception.pending = 0;
-    if (ev.exception.injected && (ev.exception.nr > 31 || ev.exception.nr == NMI_VECTOR)) {
-        return -EINVAL;
-    }
-    if ((ev.flags & KVM_VCPUEVENT_VALID_SMM) &&
-        (ev.smi.smm || ev.smi.pending || ev.smi.smm_inside_nmi)) {
-        return -EINVAL;
-    }
-    vcpu_save(v, KVM_PART_EVENTS);
-    v->events.exception = ev.exception;
-    v->events.interrupt.injected = ev.interrupt.injected;
-    v->events.interrupt.nr = ev.interrupt.nr;
-    v->events.interrupt.soft = ev.interrupt.soft;
-    if (ev.flags & KVM_VCPUEVENT_VALID_SHADOW) {
-        v->events.interrupt.shadow = ev.interrupt.shadow;
-    }
-    v->events.nmi.injected = ev.nmi.injected;
-    v->events.nmi.masked = ev.nmi.masked;
-    if (ev.flags & KVM_VCPUEVENT_VALID_NMI_PENDING) {
-        v->nmi_queued = ev.nmi.pending ? 1u : 0u;
-    }
-    if (ev.flags & KVM_VCPUEVENT_VALID_SIPI_VECTOR) {
-        v->events.sipi_vector = ev.sipi_vector;
-    }
-    v->dirty |= KVM_PART_EVENTS;
-    req_set(v, KVM_REQ_EVENT);
-    return 0;
+    return events_apply(v, &ev);
 }
 
 /** KVM_GET_DEBUGREGS. */

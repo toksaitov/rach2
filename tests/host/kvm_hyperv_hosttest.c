@@ -292,6 +292,7 @@ static void vm_make(int none)
 
     k_memset(&vm, 0, sizeof(vm));
     vm.irqchip = none ? 0 : KVM_IRQCHIP_SPLIT;
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     vm.clock_offset = 123456789;
     for (i = 0; i < NV; i++) {
         k_memset(&vcpus[i], 0, sizeof(vcpus[i]));
@@ -522,7 +523,7 @@ static void vp_index_rows(struct kvm_vcpu *v)
     int r;
 
     CHECK(wr(v, HV_MSR_VP_INDEX, 1, 0) == -1, "#GP for the guest's write of the VP index");
-    CHECK(wr(v, HV_MSR_VP_INDEX, 64, 1) == -1, "a VP index past the vCPUs refused");
+    CHECK(wr(v, HV_MSR_VP_INDEX, KVM_MAX_VCPUS, 1) == -1, "a VP index past the vCPUs refused");
     CHECK(wr(&vcpus[1], HV_MSR_VP_INDEX, 7, 1) == 0 && rd(&vcpus[1], HV_MSR_VP_INDEX, 0, &r) == 7 &&
               vcpu_by_vpidx(&vm, 7) == &vcpus[1] && vcpu_by_vpidx(&vm, 1) == NULL,
           "the caller sets a VP index");

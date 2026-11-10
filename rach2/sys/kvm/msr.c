@@ -11,7 +11,9 @@
 #define MSR_IA32_TSC           0x010u
 #define MSR_IA32_TSC_ADJUST    0x03Bu
 #define MSR_IA32_UCODE_REV     0x08Bu
+#define MSR_PLATFORM_INFO      0x0CEu
 #define MSR_MTRRCAP            0x0FEu
+#define MSR_MISC_FEATURES      0x140u
 #define MSR_IA32_SYSENTER_CS   0x174u
 #define MSR_IA32_SYSENTER_ESP  0x175u
 #define MSR_IA32_SYSENTER_EIP  0x176u
@@ -47,13 +49,20 @@
 #define PAT_RESET       0x0007040600070406ull
 #define MISC_ENABLE_NEW 0x1800ull
 
+/* MISC_ENABLE's MWAIT bit; PLATFORM_INFO's bit that offers CPUID
+ * faulting, and MISC_FEATURES_ENABLES' that turns it on. */
+#define MISC_ENABLE_MWAIT         (1ull << 18)
+#define PLATFORM_INFO_CPUID_FAULT (1ull << 31)
+#define MISC_FEATURES_CPUID_FAULT 1ull
+
 /* The value of UCODE_REV a guest reads, Linux's. */
 #define UCODE_REV_VAL 0x100000000ull
 
 /* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores, the TSC
  * deadline among them, which the local APIC keeps (vlapic.c), Linux's list
- * of Hyper-V's, which hyperv.c keeps, and KVM's own that pvclock.c keeps.
- * TSC_AUX is last, and listed only where the host has RDTSCP. */
+ * of Hyper-V's, which hyperv.c keeps, KVM's own that pvclock.c keeps, and
+ * the two of CPUID faulting. TSC_AUX is last, and listed only where the
+ * host has RDTSCP. */
 static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_SYSENTER_ESP,
                                       MSR_IA32_SYSENTER_EIP,
@@ -102,6 +111,8 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_KVM_SYSTEM_TIME_NEW,
                                       MSR_KVM_WALL_CLOCK_NEW,
                                       MSR_KVM_POLL_CONTROL,
+                                      MSR_PLATFORM_INFO,
+                                      MSR_MISC_FEATURES,
                                       MSR_TSC_AUX};
 
 static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV};
@@ -173,13 +184,15 @@ static int mtrr_fixed(uint32_t index)
 }
 
 /** Whether `index` is an MSR the vCPU's table keeps: one of the index
- * list but TSC, MCG_STATUS, MCG_CTL, Hyper-V's and KVM's, or an MTRR. */
+ * list but TSC, MCG_STATUS, MCG_CTL, Hyper-V's, KVM's and the two of CPUID
+ * faulting, or an MTRR. */
 static int table_msr(uint32_t index)
 {
     uint32_t i;
 
     if (index == MSR_IA32_TSC || index == MSR_IA32_MCG_STATUS || index == MSR_IA32_MCG_CTL ||
-        (index >> 12) == 0x40000u || index == MSR_KVM_SYSTEM_TIME || index == MSR_KVM_WALL_CLOCK ||
+        index == MSR_PLATFORM_INFO || index == MSR_MISC_FEATURES || (index >> 12) == 0x40000u ||
+        index == MSR_KVM_SYSTEM_TIME || index == MSR_KVM_WALL_CLOCK ||
         (index >> 8) == (MSR_KVM_WALL_CLOCK_NEW >> 8)) {
         return 0;
     }
@@ -219,6 +232,37 @@ void kvm_msr_reset(struct kvm_vcpu *v)
     v->mcg_cap = KVM_MAX_MCE_BANKS;
     v->mcg_status = 0;
     v->mcg_ctl = 0;
+    /* CPUID faulting is offered unless the caller fills the feature MSRs
+     * itself, as Linux's kvm_arch_vcpu_create. */
+    v->platform_info =
+        KVM_QUIRK(v->vm, KVM_X86_QUIRK_STUFF_FEATURE_MSRS) ? PLATFORM_INFO_CPUID_FAULT : 0;
+    v->misc_features = 0;
+}
+
+/** The value of the table's MSR `index` of `v`, 0 when it has none. */
+static uint64_t table_value(const struct kvm_vcpu *v, uint32_t index)
+{
+    uint32_t i;
+
+    for (i = 0; i < v->msr_count; i++) {
+        if (v->msr_index[i] == index) {
+            return v->msr_value[i];
+        }
+    }
+    return 0;
+}
+
+int kvm_msr_guest_mwait(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 1, 0);
+
+    if (!e) {
+        return 0;
+    }
+    if (!KVM_QUIRK(v->vm, KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT)) {
+        return (table_value(v, MSR_IA32_MISC_ENABLE) & MISC_ENABLE_MWAIT) != 0;
+    }
+    return (e->ecx >> 3) & 1u;
 }
 
 /** Whether `index` is an MSR of a machine-check bank `v` has; `*bank`
@@ -248,7 +292,7 @@ int kvm_msr_mce_status(const struct kvm_vcpu *v, uint32_t index)
 
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
 {
-    uint32_t bank, reg, i;
+    uint32_t bank, reg;
     int r;
 
     r = kvm_lapic_msr(v, index, 0, value, 1);
@@ -284,6 +328,12 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
         }
         *value = v->mcg_ctl;
         return 0;
+    case MSR_PLATFORM_INFO:
+        *value = v->platform_info;
+        return 0;
+    case MSR_MISC_FEATURES:
+        *value = v->misc_features;
+        return 0;
     default:
         break;
     }
@@ -294,12 +344,7 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
     if (!table_msr(index)) {
         return -1;
     }
-    *value = 0;
-    for (i = 0; i < v->msr_count; i++) {
-        if (v->msr_index[i] == index) {
-            *value = v->msr_value[i];
-        }
-    }
+    *value = table_value(v, index);
     return 0;
 }
 
@@ -341,6 +386,53 @@ static int table_value_ok(uint32_t index, uint64_t value)
     return 1;
 }
 
+/**
+ * Write `value` to MSR_PLATFORM_INFO, MSR_MISC_FEATURES_ENABLES or
+ * MISC_ENABLE of `v`, as Linux's kvm_set_msr_common: PLATFORM_INFO keeps
+ * offering CPUID faulting while the guest has it on, which it turns on
+ * only while it is offered; and with KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT
+ * off MISC_ENABLE's MWAIT bit, which then decides CPUID's, changes only
+ * for a guest with SSE3. 0, -1 for a value refused, or 1 for another MSR.
+ */
+static int feature_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
+{
+    const struct kvm_cpuid_entry2 *e;
+    int slot;
+
+    switch (index) {
+    case MSR_PLATFORM_INFO:
+        if (!(value & PLATFORM_INFO_CPUID_FAULT) &&
+            (v->misc_features & MISC_FEATURES_CPUID_FAULT)) {
+            return -1;
+        }
+        v->platform_info = value;
+        return 0;
+    case MSR_MISC_FEATURES:
+        if ((value & ~MISC_FEATURES_CPUID_FAULT) ||
+            (value && !(v->platform_info & PLATFORM_INFO_CPUID_FAULT))) {
+            return -1;
+        }
+        v->misc_features = value;
+        return 0;
+    case MSR_IA32_MISC_ENABLE:
+        if (!KVM_QUIRK(v->vm, KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT) &&
+            ((table_value(v, index) ^ value) & MISC_ENABLE_MWAIT)) {
+            e = kvm_cpuid_find(v, 1, 0);
+            if (!e || !(e->ecx & 1u)) {
+                return -1;
+            }
+        }
+        slot = table_slot(v, index);
+        if (slot < 0) {
+            return -1;
+        }
+        v->msr_value[slot] = value;
+        return 0;
+    default:
+        return 1;
+    }
+}
+
 int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
 {
     uint32_t bank, reg;
@@ -354,6 +446,13 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
         slot = kvm_pv_msr(v, index, 1, &value, 1);
     }
     if (slot != 1) {
+        return slot;
+    }
+    slot = feature_msr_set(v, index, value);
+    if (slot != 1) {
+        if (slot == 0) {
+            v->dirty |= KVM_PART_MSRS;
+        }
         return slot;
     }
     switch (index) {

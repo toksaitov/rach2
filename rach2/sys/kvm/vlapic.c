@@ -338,11 +338,17 @@ static void update_divide(struct lapic *l)
     l->divide = 1u << (n & 7u);
 }
 
-/** The span in ns of `count` ticks of the timer, at the 1 GHz bus Linux
- * gives a guest (APIC_BUS_CYCLE_NS). */
+/** The ns of one tick of the timer: the divisor's bus cycles, each the
+ * VM's `apic_bus_ns`, 1 unless KVM_CAP_X86_APIC_BUS_CYCLES_NS set another. */
+static uint64_t tick_ns(const struct lapic *l)
+{
+    return l->divide * l->v->vm->apic_bus_ns;
+}
+
+/** The span in ns of `count` ticks of the timer. */
 static uint64_t count_ns(const struct lapic *l, uint32_t count)
 {
-    return (uint64_t)count * l->divide;
+    return (uint64_t)count * tick_ns(l);
 }
 
 /** Stop the one-shot or periodic count. */
@@ -424,7 +430,7 @@ static uint32_t tmcct(const struct lapic *l)
     } else {
         return 0;
     }
-    return (uint32_t)(left / l->divide);
+    return (uint32_t)(left / tick_ns(l));
 }
 
 /**
@@ -639,11 +645,12 @@ int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
     struct lapic *s = src ? apic_of(src) : NULL;
     struct lapic *l;
     uint32_t i, n, dests = 0;
-    uint8_t chosen[KVM_MAX_VCPUS];
+    uint64_t chosen[KVM_VCPU_WORDS];
     int lowest, naccepted, r = -1;
 
+    k_memset(chosen, 0, sizeof(chosen));
     if (destinations) {
-        *destinations = 0;
+        k_memset(destinations, 0, KVM_VCPU_WORDS * sizeof(*destinations));
     }
 
     lowest = irq.delivery_mode == KVM_APIC_DM_LOWEST || irq.redir_hint;
@@ -655,7 +662,6 @@ int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
     n = vm->nr_vcpus;
     for (i = 0; i < n; i++) {
         l = apic_of(vm->vcpus[i]);
-        chosen[i] = 0;
         if (!l || !hw_enabled(l) || !match_dest(l, s, &irq)) {
             continue;
         }
@@ -666,10 +672,10 @@ int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
             naccepted = accept(l, irq.delivery_mode, irq.vector, irq.level, irq.trig_mode);
             r += naccepted;
             if (naccepted && destinations) {
-                *destinations |= 1ull << i;
+                KVM_VCPU_SET(destinations, i);
             }
         } else if (sw_enabled(l)) {
-            chosen[i] = 1;
+            KVM_VCPU_SET(chosen, i);
             dests++;
         }
     }
@@ -678,11 +684,11 @@ int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
         uint32_t k = irq.vector % dests;
 
         for (i = 0; i < n; i++) {
-            if (chosen[i] && k-- == 0) {
+            if (KVM_VCPU_TEST(chosen, i) && k-- == 0) {
                 r = accept(apic_of(vm->vcpus[i]), irq.delivery_mode, irq.vector, irq.level,
                            irq.trig_mode);
                 if (r && destinations) {
-                    *destinations |= 1ull << i;
+                    KVM_VCPU_SET(destinations, i);
                 }
                 break;
             }
@@ -1006,8 +1012,9 @@ static int reg_write(struct lapic *l, uint32_t off, uint32_t val)
 
 /** Reset `l` as Linux's kvm_lapic_reset, for a vCPU's creation or, with
  * `init`, an INIT, which keeps the APIC's mode and its id. The boot vCPU's
- * LINT0 takes ExtINT, as Linux's LINT0_REENABLED quirk sets it, so the
- * caller's PIC reaches it before the guest programs its APIC. */
+ * LINT0 takes ExtINT, as Linux's LINT0_REENABLED quirk sets it until the
+ * caller turns it off, so the caller's PIC reaches it before the guest
+ * programs its APIC. */
 static void lapic_reset(struct lapic *l, int init)
 {
     struct kvm_vcpu *v = l->v;
@@ -1024,7 +1031,7 @@ static void lapic_reset(struct lapic *l, int init)
     l->period_ns = 0;
     l->tscdeadline = 0;
     l->pv_unhalted = 0;
-    if (v->id == v->vm->boot_cpu_id) {
+    if (v->id == v->vm->boot_cpu_id && KVM_QUIRK(v->vm, KVM_X86_QUIRK_LINT0_REENABLED)) {
         reg_set(l, APIC_LVT0, KVM_APIC_DM_EXTINT);
     }
     reg_set(l, APIC_DFR, APIC_DFR_FLAT);
@@ -1208,10 +1215,14 @@ int kvm_lapic_mmio(struct kvm_vcpu *v)
         return 0;
     }
     off = (uint32_t)(addr - base);
+    /* An access through MMIO in x2APIC mode or with the APIC off is dropped,
+     * as Linux's LAPIC_MMIO_HOLE quirk drops it; with the quirk off the
+     * page is no APIC's and the access goes on to the caller. */
+    if ((!hw_enabled(l) || x2apic(l)) && !KVM_QUIRK(v->vm, KVM_X86_QUIRK_LAPIC_MMIO_HOLE)) {
+        return 0;
+    }
     if (ex->mmio.is_write) {
-        /* An access through MMIO in x2APIC mode or with the APIC off is
-         * dropped, as Linux's LAPIC_MMIO_HOLE quirk drops it; a register
-         * is written only whole, at its start. */
+        /* A register is written only whole, at its start. */
         if (hw_enabled(l) && !x2apic(l) && len == 4u && (off & 0xFu) == 0) {
             for (i = 0; i < 4u; i++) {
                 val |= (uint32_t)ex->mmio.data[i] << (i * 8u);
