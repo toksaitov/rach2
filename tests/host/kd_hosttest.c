@@ -175,6 +175,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
     *period_ms = repeat_period;
 }
 
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
+}
+
 /** No device of a row has keys the console takes. */
 void input_console_key(const void *device, unsigned int keycode, int value)
 {

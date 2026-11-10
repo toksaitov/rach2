@@ -330,6 +330,26 @@ void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keyc
     key_event(kb, scan, keycode, down, 1);
 }
 
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    struct input_keyboard *kb;
+    uint32_t flags;
+    int held = 0;
+
+    if (!dev || keycode == 0 || keycode >= INPUT_KEY_BYTES * 8) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&input_lock);
+    for (kb = keyboards; kb && kb->dev != dev; kb = kb->next) {
+    }
+    held = kb && (kb->down[keycode >> 3] & (1u << (keycode & 7))) != 0;
+    spin_unlock_irqrestore(&input_lock, flags);
+    if (held) {
+        key_event(kb, 0, keycode, 0, 0);
+    }
+    return held;
+}
+
 void input_tick(void)
 {
     struct input_keyboard *kb;
