@@ -1231,9 +1231,11 @@ processor has found, in microseconds since its take, and in hexadecimal the
 kernel instruction that interrupt stopped, followed by up to seven return
 addresses of its callers.
 A hold that keeps interrupts off is sampled only where it turns them on.
-.It Li bkl_hold_max_early_us , bkl_hold_max_early_pc
-The first such sample a second or more into the longest hold, its age and
-its instruction with callers; empty when no interrupt came that late.
+.It Li bkl_hold_max_mark
+Five lines, one for each of 1, 2, 4, 8 and 16 seconds: the mark, then the
+first such sample past it in the longest hold, its age in microseconds and
+its instruction with callers; the age is 0 and the addresses absent when no
+interrupt came that late.
 .It Li latency_disk_us
 Longest block request from acceptance to completion, in microseconds.
 .It Li latency_diskwait_us

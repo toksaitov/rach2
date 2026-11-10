@@ -85,8 +85,8 @@ void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
 /** Sample a hold of the big lock from an interrupt that found this processor
  * holding it: when the hold is the oldest any interrupt has found, keep `pc`,
  * the instruction the interrupt stopped, and the return addresses of the
- * frames from `fp`, its frame pointer, and keep the first sample a second
- * or more into each hold, for the longest hold's record. A hold that keeps
+ * frames from `fp`, its frame pointer, and keep the first sample past each
+ * of the marks into each hold, for the longest hold's record. A hold that keeps
  * interrupts off is sampled only when it turns them on. */
 void bkl_hold_sample(uintptr_t pc, uintptr_t fp);
 
@@ -95,10 +95,13 @@ void bkl_hold_sample(uintptr_t pc, uintptr_t fp);
  * The caller holds the big lock. */
 void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
 
-/** Read the longest hold's first sample a second or more into it, its age
- * in microseconds and its instruction with callers, all 0 when none came.
- * The caller holds the big lock. */
-void smp_hold_early(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
+/* The marks a hold is sampled past: 1, 2, 4, 8 and 16 s. */
+#define BKL_SAMPLE_MARKS 5
+
+/** Read the longest hold's first sample past mark `mark`, 2^mark seconds,
+ * its age in microseconds and its instruction with callers, all 0 when no
+ * interrupt came that late. The caller holds the big lock. */
+void smp_hold_early(int mark, uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
 
 /** Answer the requests other processors left this one: stop for good, drop
  * a translation or every one, or give up a page directory for the

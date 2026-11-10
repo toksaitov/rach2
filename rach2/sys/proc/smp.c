@@ -36,12 +36,13 @@ static int32_t bkl_hold_nr = -1;              /* its entry's system call number,
 static uint64_t bkl_seen_max_cycles;          /* the oldest hold an interrupt has found */
 static uintptr_t bkl_seen_pc[BKL_SAMPLE_PCS]; /* that instruction, then its callers */
 
-/* Each processor's first sample a second into its hold under way, its age
- * in cycles 0 until taken, and the longest hold's, kept at its end. */
-static uintptr_t bkl_early_pc[NR_CPUS][BKL_SAMPLE_PCS];
-static uint64_t bkl_early_cycles[NR_CPUS];
-static uintptr_t bkl_hold_early_pc[BKL_SAMPLE_PCS];
-static uint64_t bkl_hold_early_cycles;
+/* Each processor's first sample past 1, 2, 4, 8 and 16 s into its hold under
+ * way, each with its age in cycles, 0 until taken, and the longest hold's,
+ * kept at its end. */
+static uintptr_t bkl_early_pc[NR_CPUS][BKL_SAMPLE_MARKS][BKL_SAMPLE_PCS];
+static uint64_t bkl_early_cycles[NR_CPUS][BKL_SAMPLE_MARKS];
+static uintptr_t bkl_hold_early_pc[BKL_SAMPLE_MARKS][BKL_SAMPLE_PCS];
+static uint64_t bkl_hold_early_cycles[BKL_SAMPLE_MARKS];
 
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
@@ -108,7 +109,7 @@ static void bkl_acquire(struct percpu *cpu)
         (void)arch_atomic_cmpxchg(&bkl_claim, me, 0u);
     }
     cpu->bkl_since = arch_cycles();
-    bkl_early_cycles[arch_cpu_id()] = 0;
+    k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
     waited = cpu->bkl_since - start;
     bkl_wait_cycles += waited;
     if (waited > bkl_wait_max_cycles) {
@@ -121,17 +122,14 @@ static void bkl_acquire(struct percpu *cpu)
 static void bkl_hold_end(struct percpu *cpu)
 {
     uint64_t held = arch_cycles() - cpu->bkl_since;
-
-    int c = arch_cpu_id(), i;
+    int c = arch_cpu_id();
 
     if (held > bkl_hold_max_cycles) {
         bkl_hold_max_cycles = held;
         bkl_hold_vector = cpu->bkl_vector;
         bkl_hold_nr = cpu->bkl_nr;
-        bkl_hold_early_cycles = bkl_early_cycles[c];
-        for (i = 0; i < BKL_SAMPLE_PCS; i++) {
-            bkl_hold_early_pc[i] = bkl_early_cycles[c] ? bkl_early_pc[c][i] : 0;
-        }
+        k_memcpy(bkl_hold_early_cycles, bkl_early_cycles[c], sizeof(bkl_hold_early_cycles));
+        k_memcpy(bkl_hold_early_pc, bkl_early_pc[c], sizeof(bkl_hold_early_pc));
     }
 }
 
@@ -171,16 +169,18 @@ static void sample_chain(uintptr_t out[BKL_SAMPLE_PCS], uintptr_t pc, uintptr_t 
 void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
 {
     struct percpu *cpu = this_cpu();
-    int c = arch_cpu_id();
+    int c = arch_cpu_id(), m;
     uint64_t held;
 
     if (cpu->bkl_depth < 2) {
         return;
     }
     held = arch_cycles() - cpu->bkl_since;
-    if (!bkl_early_cycles[c] && timer_cycles_us(held) >= 1000000u) {
-        bkl_early_cycles[c] = held;
-        sample_chain(bkl_early_pc[c], pc, fp);
+    for (m = 0; m < BKL_SAMPLE_MARKS; m++) {
+        if (!bkl_early_cycles[c][m] && timer_cycles_us(held) >= 1000000u << m) {
+            bkl_early_cycles[c][m] = held;
+            sample_chain(bkl_early_pc[c][m], pc, fp);
+        }
     }
     if (held > bkl_seen_max_cycles) {
         bkl_seen_max_cycles = held;
@@ -212,13 +212,13 @@ void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
     }
 }
 
-void smp_hold_early(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
+void smp_hold_early(int mark, uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
 {
     int i;
 
-    *age_us = timer_cycles_us(bkl_hold_early_cycles);
+    *age_us = timer_cycles_us(bkl_hold_early_cycles[mark]);
     for (i = 0; i < BKL_SAMPLE_PCS; i++) {
-        pc[i] = bkl_hold_early_pc[i];
+        pc[i] = bkl_hold_early_cycles[mark] ? bkl_hold_early_pc[mark][i] : 0;
     }
 }
 
@@ -245,7 +245,7 @@ int bkl_try_enter(void)
             return 0;
         }
         cpu->bkl_since = arch_cycles();
-        bkl_early_cycles[arch_cpu_id()] = 0;
+        k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
         cpu->bkl_vector = 0;
         cpu->bkl_nr = -1;
         bkl_flush(cpu);
