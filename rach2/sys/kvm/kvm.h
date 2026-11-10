@@ -9,6 +9,7 @@
 
 #include "../lib/kint.h"
 #include "kvm_abi.h"
+#include "decode.h"
 #include "../io/anon.h"
 #include "../proc/wait_queue.h"
 
@@ -152,14 +153,16 @@ struct kvm_tdp_format {
  * interrupt at the entry, recording it in `events.interrupt`, and
  * otherwise arms the processor's interrupt-window exit, which it reports
  * as KVM_X_IRQ_WINDOW. It arms that exit, too, while the caller's run page
- * asks for the window. A guest's RDMSR and WRMSR of the APIC base, the TSC
- * deadline and the x2APIC registers go to `kvm_lapic_msr`, and a backend
- * that lets the guest write CR8 without an exit gives the value to
- * `kvm_lapic_set_cr8` after each exit and loads `kvm_lapic_cr8`'s before
- * each entry, since CR8 is the APIC's TPR. `check_extension` answers the
- * capabilities whose truth depends on the processor, such as
- * KVM_CAP_X86_ROBUST_SINGLESTEP: the value KVM_CHECK_EXTENSION gives, 0 for
- * none. `tdp` is the format of its guest-physical entries.
+ * asks for the window. `inject` also runs after KVM_SET_SREGS, so that a
+ * backend whose processor takes PAE's PDPTEs from its own state can read
+ * them from guest memory there. A guest's RDMSR and WRMSR of the APIC
+ * base, the TSC deadline and the x2APIC registers go to `kvm_lapic_msr`,
+ * and a backend that lets the guest write CR8 without an exit gives the
+ * value to `kvm_lapic_set_cr8` after each exit and loads `kvm_lapic_cr8`'s
+ * before each entry, since CR8 is the APIC's TPR. `check_extension` answers
+ * the capabilities whose truth depends on the processor, such as
+ * KVM_CAP_X86_ROBUST_SINGLESTEP: the value KVM_CHECK_EXTENSION gives, 0
+ * for none. `tdp` is the format of its guest-physical entries.
  */
 struct kvm_backend {
     const char *name;
@@ -201,6 +204,7 @@ struct kvm_vm {
     int irqchip;           /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
     uint32_t boot_cpu_id;  /* KVM_SET_BOOT_CPU_ID */
     uint32_t dirty_manual; /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
+    uint32_t noncoherent;  /* devices assigned that do not snoop (`kvm_tdp_noncoherent`) */
     void *slots;           /* slots.c's */
     void *tdp;             /* tdp.c's */
     void *irq;             /* irq.c's */
@@ -226,6 +230,45 @@ struct kvm_vm {
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
 #define KVM_VCPU_MSRS 192
+
+/*
+ * A port I/O instruction as the backend's exit gives it, for
+ * `kvm_emul_pio`: the port, the element's bytes, IN or OUT, the string and
+ * REP forms, OUTS's segment (KVM_SEG_*), the address size of the string's
+ * registers, and the instruction's length. `count` is the elements the
+ * exit moves, which `kvm_emul_pio` sets.
+ */
+struct kvm_pio {
+    uint16_t port;
+    uint32_t size; /* 1, 2 or 4 */
+    int in;
+    int string;
+    int rep;
+    uint32_t seg;
+    uint32_t addr_size; /* 2, 4 or 8 */
+    uint32_t len;
+    uint32_t count;
+};
+
+/*
+ * The guest instruction emulate.c has under way across exits to the
+ * caller: an MMIO instruction waiting for its read's answer or with its
+ * write to make, or a port read waiting for its answer. While `resume` is
+ * set the backend's next `enter` enters no guest, and its `exit` gives
+ * `kvm_emul_resume`'s exit, the write that follows a read.
+ */
+struct kvm_emul {
+    uint32_t stage;       /* emulate.c's EMUL_* */
+    int resume;           /* the next exit is the instruction's next step */
+    int fail;             /* that step is the internal error of a non-RAM operand */
+    struct kvm_insn insn; /* the MMIO instruction */
+    uint64_t gpa;         /* its MMIO operand's guest-physical address */
+    uint64_t value;       /* the value its write stores */
+    uint64_t src_gpa, dst_gpa;
+    int src_mmio, dst_mmio; /* MOVS's operands that are no slot's */
+    uint64_t info[5];       /* the exit's reason and qualifications, for an internal error */
+    struct kvm_pio pio;     /* the port instruction */
+};
 
 /*
  * A vCPU. Its descriptor holds a reference to the VM, and so does each
@@ -277,8 +320,9 @@ struct kvm_vcpu {
     int irq_allowed; /* an interrupt can be injected at the next entry */
 
     struct kvm_exit exit;
-    void *lapic;   /* vlapic.c's */
-    void *backend; /* the backend's */
+    struct kvm_emul emul; /* emulate.c's */
+    void *lapic;          /* vlapic.c's */
+    void *backend;        /* the backend's */
 };
 
 /*
@@ -342,6 +386,14 @@ int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request);
  * debug registers of a reset, keeping the APIC base, the FPU's state, XCR0,
  * the MSRs and the TSC. vlapic.c resets the APIC itself. */
 void kvm_vcpu_init_reset(struct kvm_vcpu *v);
+
+/** The guest's physical address bits, from leaf 0x80000008 of `v`'s CPUID,
+ * 36 without it, as Linux's cpuid_query_maxphyaddr. */
+uint32_t kvm_guest_maxphyaddr(const struct kvm_vcpu *v);
+
+/** The CR4 bits `v`'s CPUID reserves, as Linux's __cr4_reserved_bits:
+ * VMXE and SMXE always, since no nested guest is offered. */
+uint64_t kvm_cr4_reserved(const struct kvm_vcpu *v);
 
 /** The vCPU ioctls, file_ops.ioctl of a vCPU's descriptor. */
 int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg);
@@ -473,6 +525,13 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write);
  * (`kvm_tdp_flush`) when anything was mapped, before a table it emptied is
  * freed. Does not sleep. */
 void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
+
+/** Count a device that does not snoop the processor's caches assigned to
+ * `vm` (`assigned` 1) or taken from it (0). While one is assigned, RAM is
+ * mapped write-back with the guest's PAT in charge, not ignored, as Linux's
+ * kvm_arch_register_noncoherent_dma makes it; the first and the last drop
+ * every leaf. Under the big lock; does not sleep. */
+void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned);
 
 /** Take the write right from the 4 KiB leaves of the frames `gfn` + i for
  * each bit i of `mask`, for the dirty log, without a flush: whether any
@@ -644,7 +703,75 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
  * the guest takes interrupts, none waits, and LINT0 takes ExtINT. */
 int kvm_lapic_ready(struct kvm_vcpu *v);
 
-/* decode.c: the instruction decoder of MMIO exits, in decode.h. */
-#include "decode.h"
+/* emulate.c: the guest instructions the backends' exits hand over. Each
+ * reads and writes the record's registers, which the backend keeps current
+ * at the exit: `regs` always, and `sregs` for an exit that calls these. */
+
+/** The mode of `v`'s code, 16, 32 or 64, for `kvm_decode`. */
+int kvm_emul_mode(const struct kvm_vcpu *v);
+
+/** The privilege level of `v`: SS's DPL, 0 in real mode, 3 in virtual-8086
+ * mode. */
+int kvm_emul_cpl(const struct kvm_vcpu *v);
+
+/** Queue the exception `nr`, with `error` when `has_error`, for the next
+ * entry, replacing one queued, and ask for its injection. */
+void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t error);
+
+/** Step `v` past an instruction of `len` bytes it ran in the kernel, as
+ * Linux's kvm_skip_emulated_instruction: RIP, the interrupt shadow cleared,
+ * and #DB queued when RFLAGS.TF was set. */
+void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len);
+
+/** Translate the linear address `la` of `v` through its page tables for an
+ * access whose #PF error code bits are `access` (W 0x2, U 0x4, I/D 0x10):
+ * 0 with `*gpa`; -1 with #PF queued; 1 for a table in no slot; -EFAULT. */
+int kvm_guest_translate(struct kvm_vcpu *v, uint64_t la, uint32_t access, uint64_t *gpa);
+
+/** Read or write `n` bytes of `v`'s guest-physical memory at `gpa`: 0; 1
+ * for a byte in no slot or a write to a read-only one; -EFAULT. */
+int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write);
+
+/** Read or write `n` bytes at `seg`:`ea` (KVM_SEG_*) of `v`, through its
+ * page tables: 0; -1 with #PF queued; 1 for memory in no slot; -EFAULT. */
+int kvm_guest_rw(struct kvm_vcpu *v, uint32_t seg, uint64_t ea, void *buf, uint32_t n, int write);
+
+/** CPUID from `v`'s KVM_SET_CPUID2 table for EAX and ECX, into EAX to EDX,
+ * with the bits Linux keeps in step with CR4 and the APIC base. The caller
+ * steps RIP. */
+void kvm_emul_cpuid(struct kvm_vcpu *v);
+
+/** XSETBV of EDX:EAX into XCR ECX, with Linux's checks: 0, or -1 with #GP
+ * queued. The caller steps RIP on 0. */
+int kvm_emul_xsetbv(struct kvm_vcpu *v);
+
+/** The guest's RDMSR or WRMSR, by `write`, of `index`, for the MSRs every
+ * backend answers the same way: the local APIC's, the TSC, the identity
+ * MSRs and those msr.c keeps. 0, or -1 for #GP. */
+int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value);
+
+/**
+ * Begin the instruction of `v` whose access to the guest-physical address
+ * `gpa`, in no slot, exited: fetch it at CS:RIP, decode it, and make
+ * `v->exit` its first MMIO access, or KVM_X_AGAIN with an exception queued,
+ * or KVM_X_INTERNAL for an instruction the decoder refuses at CPL 0, whose
+ * report carries `info`, the exit's reason, qualifications, interrupt
+ * information and error code. 0, or -EFAULT.
+ */
+int kvm_emul_mmio(struct kvm_vcpu *v, uint64_t gpa, const uint64_t info[5]);
+
+/** Begin the port I/O instruction `p` of `v`: `v->exit` its KVM_X_IO, an
+ * OUT's bytes from RAX or the string in guest memory, RIP stepped for an
+ * OUT; KVM_X_AGAIN with an exception queued. 0, or -EFAULT. */
+int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p);
+
+/** Give the instruction under way the answer of its read, in `v->exit`, from
+ * the backend's `complete`: it finishes, or sets `v->emul.resume` for the
+ * write it makes next. 0. */
+int kvm_emul_complete(struct kvm_vcpu *v);
+
+/** The exit of the step `v->emul.resume` asked for, into `v->exit`, from
+ * the backend's `exit` after an `enter` that entered no guest. 0. */
+int kvm_emul_resume(struct kvm_vcpu *v);
 
 #endif /* _KVM_H_ */

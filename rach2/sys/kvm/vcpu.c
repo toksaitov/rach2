@@ -721,9 +721,7 @@ static int guest_has(const struct kvm_vcpu *v, uint32_t function, int reg, int b
     return (r >> bit) & 1u;
 }
 
-/** The guest's physical address bits, from leaf 0x80000008 of its CPUID,
- * 36 without it, as Linux's cpuid_query_maxphyaddr. */
-static uint32_t guest_maxphyaddr(const struct kvm_vcpu *v)
+uint32_t kvm_guest_maxphyaddr(const struct kvm_vcpu *v)
 {
     const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 0x80000000u, 0);
 
@@ -736,9 +734,7 @@ static uint32_t guest_maxphyaddr(const struct kvm_vcpu *v)
     return 36;
 }
 
-/** The CR4 bits `v`'s CPUID reserves, as Linux's __cr4_reserved_bits:
- * VMXE and SMXE always, since no nested guest is offered. */
-static uint64_t cr4_reserved(const struct kvm_vcpu *v)
+uint64_t kvm_cr4_reserved(const struct kvm_vcpu *v)
 {
     uint64_t ok = CR4_BASE;
 
@@ -774,7 +770,7 @@ static uint64_t cr4_reserved(const struct kvm_vcpu *v)
  * with the APIC base's reserved bits as kvm_set_apic_base judges them. */
 static int sregs_valid(const struct kvm_vcpu *v, const struct kvm_sregs *s)
 {
-    uint64_t gpa_reserved = ~0ull << guest_maxphyaddr(v);
+    uint64_t gpa_reserved = ~0ull << kvm_guest_maxphyaddr(v);
     uint64_t apic_reserved = gpa_reserved | 0x2FFu;
 
     if ((s->efer & EFER_LME) && (s->cr0 & CR0_PG)) {
@@ -788,7 +784,7 @@ static int sregs_valid(const struct kvm_vcpu *v, const struct kvm_sregs *s)
         ((s->cr0 & CR0_PG) && !(s->cr0 & CR0_PE))) {
         return 0;
     }
-    if (s->cr4 & cr4_reserved(v)) {
+    if (s->cr4 & kvm_cr4_reserved(v)) {
         return 0;
     }
     if (!guest_has(v, 1, 2, 21)) {
@@ -841,6 +837,9 @@ static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
     v->sregs = s;
     k_memset(v->sregs.interrupt_bitmap, 0, sizeof(v->sregs.interrupt_bitmap));
     v->dirty |= KVM_PART_SREGS;
+    /* `inject` runs before the next entry, where a backend reads PAE's
+     * PDPTEs from guest memory, as Linux's __set_sregs loads them. */
+    req_set(v, KVM_REQ_EVENT);
     for (i = 0; i < KVM_NR_INTERRUPTS; i++) {
         if ((s.interrupt_bitmap[i / 64u] >> (i % 64u)) & 1u) {
             v->events.interrupt.injected = 1;
@@ -1062,9 +1061,9 @@ static int32_t msrs_io(struct kvm_vcpu *v, uintptr_t arg, int set)
     if (copy_from_user(ent, (const void __user *)(arg + sizeof(head)), bytes) != 0) {
         goto out;
     }
-    if (!set) {
-        vcpu_save(v, KVM_PART_MSRS | KVM_PART_TSC);
-    }
+    /* A set too, since the APIC base it may write is part of the special
+     * registers the backend loads whole. */
+    vcpu_save(v, KVM_PART_MSRS | KVM_PART_TSC | KVM_PART_SREGS);
     for (i = 0; i < head.nmsrs; i++) {
         if (set ? kvm_msr_set(v, ent[i].index, ent[i].data) != 0
                 : kvm_msr_get(v, ent[i].index, &ent[i].data) != 0) {
