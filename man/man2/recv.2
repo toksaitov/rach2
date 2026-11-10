@@ -204,6 +204,14 @@ With
 .Dv MSG_PEEK
 the later buffers receive the bytes that follow the earlier ones', and
 nothing is taken.
+The vector list is copied once, so a buffer that overlaps it cannot
+replace a later destination.
+Each buffer is checked again before use after an earlier receive waited.
+With no vectors, or only zero-length buffers, the call waits for input
+too, or returns
+.Er EAGAIN
+when nonblocking and no input is ready.
+It returns zero when input arrives or ends, leaving any bytes queued.
 No address and no control data are written:
 .Fa msg Ns ->msg_namelen
 and
