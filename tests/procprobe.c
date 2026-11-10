@@ -1543,14 +1543,14 @@ static void status_rss_row(const char *b, int n)
  * reads a stopped-at-a-pipe child, so making the text changes no child page. */
 static int child_rss(int pid, int rss[3])
 {
-    char path[40] = "/proc/";
+    char child_path[40] = "/proc/";
     int n = 6, k;
 
-    n += dec_of(path + n, (unsigned int)pid);
+    n += dec_of(child_path + n, (unsigned int)pid);
     for (k = 0; k < 8; k++) {
-        path[n++] = "/status"[k];
+        child_path[n++] = "/status"[k];
     }
-    n = slurp(path, buf, (int)sizeof(buf));
+    n = slurp(child_path, buf, (int)sizeof(buf));
     rss[0] = uint_after(buf, n, "RssAnon:");
     rss[1] = uint_after(buf, n, "RssFile:");
     rss[2] = uint_after(buf, n, "RssShmem:");
