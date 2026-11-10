@@ -228,36 +228,55 @@ static void heap_mark(struct vshm *vs, uint32_t i, uint32_t n, int used)
 }
 
 /**
- * Take `n` pages of the heap that follow each other, the first fit from the
- * rover, which moves past them, so that pieces taken one after another
- * follow each other too and a chain of them is one descriptor. Returns the
- * first heap page, or the heap's size when no run is free, which is counted
- * in `refused`: a full region is ENOMEM to the driver, never memory from
- * elsewhere.
+ * Take a run of the heap's pages that follow each other, at most `n` and at
+ * least `least` of them, the first fit from the rover, which moves past
+ * it, so that pieces taken one after another follow each other too and a
+ * chain of them is one descriptor; its length goes in `*got`. Returns the
+ * first heap page, or the heap's size when no such run is free: a full
+ * region is ENOMEM to the driver, never memory from elsewhere.
  */
-static uint32_t heap_take(struct vshm *vs, uint32_t n)
+static uint32_t heap_take(struct vshm *vs, uint32_t n, uint32_t least, uint32_t *got)
 {
     uint32_t flags, pass, i, k, start;
 
     flags = spin_lock_irqsave(&vs->heap_lock);
-    for (pass = 0; pass < 2 && n > 0 && n <= vs->heap_pages; pass++) {
+    for (pass = 0; pass < 2 && least > 0 && least <= n && n <= vs->heap_pages; pass++) {
         start = pass == 0 ? vs->heap_rover : 0;
-        for (i = start; i + n <= vs->heap_pages; i++) {
-            for (k = 0; k < n && !heap_bit(vs, i + k); k++) {
+        for (i = start; i + least <= vs->heap_pages; i++) {
+            for (k = 0; k < n && i + k < vs->heap_pages && !heap_bit(vs, i + k); k++) {
             }
-            if (k == n) {
-                heap_mark(vs, i, n, 1);
-                vs->heap_used += n;
-                vs->heap_rover = i + n < vs->heap_pages ? i + n : 0;
+            if (k >= least) {
+                heap_mark(vs, i, k, 1);
+                vs->heap_used += k;
+                vs->heap_rover = i + k < vs->heap_pages ? i + k : 0;
                 spin_unlock_irqrestore(&vs->heap_lock, flags);
+                *got = k;
                 return i;
             }
             i += k;
         }
     }
+    spin_unlock_irqrestore(&vs->heap_lock, flags);
+    *got = 0;
+    return vs->heap_pages;
+}
+
+/** Count in `refused` what the heap could not give. */
+static void heap_refused(struct vshm *vs)
+{
+    uint32_t flags = spin_lock_irqsave(&vs->heap_lock);
+
     vs->refused++;
     spin_unlock_irqrestore(&vs->heap_lock, flags);
-    return vs->heap_pages;
+}
+
+/** The heap's free pages. */
+static uint32_t heap_free_pages(struct vshm *vs)
+{
+    uint32_t flags = spin_lock_irqsave(&vs->heap_lock), n = vs->heap_pages - vs->heap_used;
+
+    spin_unlock_irqrestore(&vs->heap_lock, flags);
+    return n;
 }
 
 /** Give back `n` heap pages from `i`, each that is in use. */
@@ -631,14 +650,15 @@ static void vs_irq_release(struct virtio_dev *d)
 static void *vs_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 {
     struct vshm *vs = to_vs(d);
-    uint32_t n = bytes / VGS_PAGE + (bytes % VGS_PAGE != 0), i;
+    uint32_t n = bytes / VGS_PAGE + (bytes % VGS_PAGE != 0), i, got;
     uint64_t off;
 
     if (!vs->attached || n == 0) {
         return NULL;
     }
-    i = heap_take(vs, n);
+    i = heap_take(vs, n, n, &got);
     if (i >= vs->heap_pages) {
+        heap_refused(vs);
         return NULL;
     }
     off = (uint64_t)heap_page(vs, i) * VGS_PAGE;
@@ -673,38 +693,27 @@ static int vs_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint6
 }
 
 /**
- * Give `sh` its pages from the heap, a run that follows itself, so that the
- * device's memory entries for them are one: each frame zeroed through the
- * region's window and adopted by `sh` with a reference of its own. 0, or
- * -ENOMEM with nothing taken.
+ * Give `sh` the `n` heap pages of the run from heap page `first` as its
+ * pages from `at` on: each frame zeroed through the region's window and
+ * adopted by `sh` with a reference of its own. 0, or -ENOMEM with the
+ * pages not adopted given back to the heap.
  */
-static int vs_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
+static int backing_adopt(struct vshm *vs, struct shmem *sh, uint32_t at, uint32_t first, uint32_t n)
 {
-    struct vshm *vs = to_vs(d);
-    uint32_t n, i, first;
+    uint32_t i;
     uintptr_t frame, got;
 
-    if (!vs->attached || bytes == 0 || bytes / VGS_PAGE > vs->heap_pages) {
-        return -ENOMEM;
-    }
-    n = (uint32_t)(bytes / VGS_PAGE + (bytes % VGS_PAGE != 0));
-    first = heap_take(vs, n);
-    if (first >= vs->heap_pages) {
-        return -ENOMEM;
-    }
     k_memset((void *)(uintptr_t)(vs->base + (uint64_t)heap_page(vs, first) * VGS_PAGE), 0,
              (size_t)n * VGS_PAGE);
     for (i = 0; i < n; i++) {
         frame = vs->frames[heap_page(vs, first + i)];
         frame_ref(frame);
-        got = shmem_adopt(sh, i, frame);
+        got = shmem_adopt(sh, at + i, frame);
         if (got != frame) {
             if (got) {
                 frame_unref(got);
             }
-            shmem_free(sh);
-            sh->size = bytes;
-            heap_give(vs, first, n);
+            heap_give(vs, first + i, n - i);
             return -ENOMEM;
         }
         frame_unref(got); /* the mapping's reference shmem_adopt adds */
@@ -712,28 +721,67 @@ static int vs_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t byte
     return 0;
 }
 
-/** Give the heap back the run `vs_backing_fill` gave `sh`: each page that
- * holds the region's frame for its place in the run. */
+/** Give the heap back each of the first `n` pages of `sh` that is the
+ * region's frame for a heap page. */
+static void backing_give(struct vshm *vs, struct shmem *sh, uint32_t n)
+{
+    uint32_t i, page;
+    uintptr_t frame;
+
+    for (i = 0; i < n; i++) {
+        frame = shmem_resident(sh, i);
+        page = frame ? vshm_page_of(vs, frame) : vs->npages;
+        if (page < vs->npages && page >= heap_page(vs, 0) && vs->frames[page] == frame) {
+            heap_give(vs, page - heap_page(vs, 0), 1);
+        }
+    }
+}
+
+/**
+ * Give `sh` its pages from the heap: one run that follows itself where the
+ * heap has one, so that the device's memory entries for them are one, else
+ * the free runs from the rover in turn, since pages a few long-lived
+ * commands hold may leave no run as long as a large buffer among many free
+ * pages. 0, or -ENOMEM, counted in `refused`, with nothing taken.
+ */
+static int vs_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
+{
+    struct vshm *vs = to_vs(d);
+    uint32_t n, done, first, got;
+    int rc;
+
+    if (!vs->attached || bytes == 0 || bytes / VGS_PAGE > vs->heap_pages) {
+        return -ENOMEM;
+    }
+    n = (uint32_t)(bytes / VGS_PAGE + (bytes % VGS_PAGE != 0));
+    first = heap_take(vs, n, n, &got);
+    if (first < vs->heap_pages) {
+        rc = backing_adopt(vs, sh, 0, first, n);
+    } else {
+        rc = heap_free_pages(vs) >= n ? 0 : -ENOMEM;
+        for (done = 0; rc == 0 && done < n; done += got) {
+            first = heap_take(vs, n - done, 1, &got);
+            rc = first < vs->heap_pages ? backing_adopt(vs, sh, done, first, got) : -ENOMEM;
+        }
+    }
+    if (rc != 0) {
+        heap_refused(vs);
+        backing_give(vs, sh, n);
+        shmem_free(sh);
+        sh->size = bytes;
+    }
+    return rc;
+}
+
+/** Give the heap back the pages `vs_backing_fill` gave `sh`: each page that
+ * holds the region's frame for a heap page. */
 static void vs_backing_release(struct virtio_dev *d, struct shmem *sh)
 {
     struct vshm *vs = to_vs(d);
-    uint32_t n, i, page, first;
 
-    if (!vs->attached) {
-        return;
+    if (vs->attached) {
+        backing_give(vs, sh, (uint32_t)(sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0)));
     }
-    page = vshm_page_of(vs, shmem_resident(sh, 0));
-    if (page >= vs->npages || page < heap_page(vs, 0)) {
-        return;
-    }
-    first = page - heap_page(vs, 0);
-    n = (uint32_t)(sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0));
-    for (i = 0; i < n && first + i < vs->heap_pages; i++) {
-        if (shmem_resident(sh, i) != vs->frames[heap_page(vs, first + i)]) {
-            break;
-        }
-    }
-    heap_give(vs, first, i);
 }
 
 /** The offset of the region's frame `phys`, which must lie in the heap. */
