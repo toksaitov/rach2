@@ -22,9 +22,10 @@
 #
 # os-real-gnu.ext2 for x86-64 made on that host also has IGT's tests and
 # VK-GL-CTS (mk/gnu-extra.mk), which install_root.sh stages when GNU_IGT and
-# GNU_VK_GL_CTS are 1, and gnu-test.ext2, which the machine cases boot, has
-# VK-GL-CTS; the tooling machine cannot run the builder guest, so an image it
-# makes has neither.
+# GNU_VK_GL_CTS are 1, and gnu-test.ext2, the volume of the disk the machine
+# cases boot, which removes it (tests/system/suites.mk), has VK-GL-CTS; the
+# tooling machine cannot run the builder guest, so an image it makes has
+# neither.
 # The x86-64 root, the gnu-test image and the agents' root have the i386
 # layer (vendor/gnu/Readme.md, The i386 layer) unless GNU_I386 is 0, which
 # makes the root of the pure 64-bit profile; the i686 root has none to leave

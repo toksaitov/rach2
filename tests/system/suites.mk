@@ -906,11 +906,15 @@ $(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(M
 # 32-bit Windows program under GE-Proton's default mode, and tmux at the
 # console. Each case boots an overlay of
 # this disk: the GNU system's volume at LBA 2048 behind a table of one
-# partition, copied sparse, since the volume is 4 GiB with most of it free. The
-# image is made from the GNU layer, on an x86-64 Linux host or in etude's
+# partition, copied sparse, since the volume is 24 GiB with most of it free.
+# The image is made from the GNU layer, on an x86-64 Linux host or in etude's
 # tooling machine (mk/gnu-image.mk), which a set without this suite must not
-# need, so only the cases' preparation asks for it.
+# need, so only the cases' preparation asks for it. No case boots the volume
+# alone, so it is an intermediate file, removed once the disk holds it, whose
+# absence alone does not make the disk again; with the store's object a link
+# of the disk (tools/etude/Readme.md), a tree keeps one copy of the image.
 GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
+.INTERMEDIATE: $(GNU_TEST_EXT2)
 $(GNU_TEST_DISK): $(GNU_TEST_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
 	rm -f $@.tmp
@@ -919,6 +923,7 @@ $(GNU_TEST_DISK): $(GNU_TEST_EXT2) $(MKMBR)
 	dd if=$(GNU_TEST_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
 	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
 	mv $@.tmp $@
+	rm -f $(GNU_TEST_EXT2)
 
 # `tests/run wifi`: Wi-Fi above the radio, a station on the installed system
 # joining the access points of the Linux AP guest (tests/system/wifi) through
