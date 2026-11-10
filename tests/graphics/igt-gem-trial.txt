@@ -5,13 +5,11 @@
 # A line is `igt@TEST`, every subtest of the test program TEST, or
 # `igt@TEST@PATTERN`, its subtests that the shell pattern PATTERN matches in
 # the IGT stage's subtest-list.txt. The list leaves out every subtest that
-# hangs the GPU on purpose, since Rach2 has no reset yet (78-6a), and those
-# that swap, fork many clients or pin CPUs, which test other parts of the
+# hangs the GPU on purpose, which igt-reset-trial.txt runs, and those that
+# swap, fork many clients or pin CPUs, which test other parts of the
 # kernel. igt_runner runs the lines in order: the tests that keep the GPU
 # busy with IGT's spinners come last, so that a spinner that never stops
-# costs only them. Rach2 drives the render and blitter rings alone until
-# 78-14a, so the dynamic subtests of vcs0 and vecs0, which Linux runs, are
-# compared as absent there.
+# costs only them.
 igt@gem_basic
 igt@gem_create@create-*
 igt@gem_ctx_param
