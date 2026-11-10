@@ -140,8 +140,9 @@ static uint32_t *dw(struct pages *p, uint32_t at)
 
 /* ---- the parse ---- */
 
-/* The engines, by their base as the driver's are. */
-static struct i915_engine rcs, bcs, vcs;
+/* The engines, by their base as the driver's are, and one at graphics 4
+ * and 5's video ring base, which Haswell has no ring at. */
+static struct i915_engine rcs, bcs, none;
 
 /* The shadow of the last parse that ran, kept for the rows that read it. */
 static struct pages shadow;
@@ -253,10 +254,11 @@ static int parse_cmd(struct i915_engine *e, uint32_t header, uint32_t ndw, const
 /**
  * 78-8b.1: Linux's tables: sorted as Linux's init checks them, which the
  * allowlists' binary search needs; the render and blitter rings parse and
- * the video ring does not; every entry of each ring's tables judged as its
- * action says, an MI_BATCH_BUFFER_START refused; and every register of
- * each allowlist written through MI_LOAD_REGISTER_IMM and read through
- * MI_STORE_REGISTER_MEM on its ring, and refused on the other.
+ * an engine of no ring Haswell has does not; every entry of each ring's
+ * tables judged as its action says, an MI_BATCH_BUFFER_START refused; and
+ * every register of each allowlist written through MI_LOAD_REGISTER_IMM
+ * and read through MI_STORE_REGISTER_MEM on its ring, and refused on the
+ * other.
  */
 static void tables(void)
 {
@@ -292,8 +294,8 @@ static void tables(void)
     CHECK("tables: every command and register table sorted", sorted);
     CHECK("tables: the render and blitter rings parse",
           i915_engine_using_cmd_parser(&rcs) && i915_engine_using_cmd_parser(&bcs));
-    CHECK("tables: the video ring does not, and its parse is EINVAL",
-          !i915_engine_using_cmd_parser(&vcs) && parse_cmd(&vcs, MI_NOOP, 1, 0) == V_ERROR &&
+    CHECK("tables: an engine of no ring does not, and its parse is EINVAL",
+          !i915_engine_using_cmd_parser(&none) && parse_cmd(&none, MI_NOOP, 1, 0) == V_ERROR &&
               last_ret == -EINVAL);
 
     /* Each entry, four dwords long unless its length is fixed, its fields
@@ -570,8 +572,7 @@ static void lengths(void)
  * privileged from the shadow, or run unprivileged from the original, where
  * the chip turns a refused command into a no-op and the call returns 0.
  * oacontrol-tracking needs a version below 9 and does not run. The
- * basic-rejected cases on the video rings fail in the call before the
- * parser, since Rach2 has neither ring; i915_exec_hosttest.c has them.
+ * basic-rejected cases on the video rings are i915_video_hosttest.c's.
  */
 static void igt(void)
 {
@@ -699,8 +700,8 @@ int main(void)
     rcs.mmio_base = RENDER_RING_BASE;
     bcs.name = "bcs0";
     bcs.mmio_base = BLT_RING_BASE;
-    vcs.name = "vcs0";
-    vcs.mmio_base = GEN6_BSD_RING_BASE;
+    none.name = "none";
+    none.mmio_base = BSD_RING_BASE;
     tables();
     checks_regs();
     checks_bits();

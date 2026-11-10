@@ -617,7 +617,7 @@
         },
         {
           "assertion_id": "i915_ring",
-          "checks": "tests/host/i915_ring_hosttest.c starts the Intel graphics driver's render and blitter rings on the HD 4400's host model, takes their user interrupts through the handler table with every other source masked, wakes breadcrumb waiters from the interrupt, and runs first light end to end, under ASan and UBSan and exits 0",
+          "checks": "tests/host/i915_ring_hosttest.c starts the Intel graphics driver's four rings on the HD 4400's host model, takes their user interrupts through the handler table with every other source masked, wakes breadcrumb waiters from the interrupt, and runs first light end to end, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -643,6 +643,11 @@
         {
           "assertion_id": "i915_parser",
           "checks": "tests/host/i915_parser_hosttest.c runs the Intel graphics driver's command parser on batches across separately allocated pages: Linux 6.12's Haswell tables sorted, every table entry and allowlisted register on the render and blitter rings, the masked registers and checks, the lengths of commands no table holds, the refusals with EINVAL, the copy to the shadow and its trampoline, and every gen7_exec_parse case Linux's parser at version 10 runs, each with Linux's verdict, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "i915_video",
+          "checks": "tests/host/i915_video_hosttest.c starts the Intel graphics driver's video and video enhancement rings on the HD 4400's host model with Linux's identities, wakes a breadcrumb waiter on each from its user interrupt in the GT's and power management's banks, resets each ring's domain alone, and runs the command parser's tables for both rings: Linux 6.12's entries sorted and judged by their actions, every register refused, the masked checks, MFX_WAIT's length, the lengths of commands no table holds and gen7_exec_parse's basic-rejected, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

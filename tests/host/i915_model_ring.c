@@ -1,8 +1,9 @@
 /*
- * i915_model_ring.c: the host model's render and blitter rings and its
- * interrupts: the rings' registers, the commands the driver gives them,
- * and the identity, mask and enable registers that raise the device's
- * message. i915_model.c includes this file and lists its blocks.
+ * i915_model_ring.c: the host model's render, blitter, video and video
+ * enhancement rings and its interrupts: the rings' registers, the commands
+ * the driver gives them, and the identity, mask and enable registers that
+ * raise the device's message. i915_model.c includes this file and lists its
+ * blocks.
  */
 
 #include "i915_model_ring.h"
@@ -145,21 +146,35 @@ static const struct i915_model_block i915_model_ring_south = {
 
 /* ---- the rings ---- */
 
-static const struct i915_model_block i915_model_ring_rcs, i915_model_ring_bcs;
+static const struct i915_model_block i915_model_ring_rcs, i915_model_ring_bcs, i915_model_ring_vcs,
+    i915_model_ring_vecs;
 
 struct i915_model_ring *i915_model_ring_state(struct i915_model *m, int ring)
 {
-    return (struct i915_model_ring *)ring_priv(m,
-                                               ring ? &i915_model_ring_bcs : &i915_model_ring_rcs);
+    static const struct i915_model_block *const blocks[I915_NUM_ENGINES] = {
+        &i915_model_ring_rcs, &i915_model_ring_bcs, &i915_model_ring_vcs, &i915_model_ring_vecs};
+
+    return ring >= 0 && ring < I915_NUM_ENGINES
+               ? (struct i915_model_ring *)ring_priv(m, blocks[ring])
+               : 0;
 }
 
-/** The status page address register and the user interrupt of the ring
- * whose registers start at `base`. */
-static void ring_info(uint32_t base, uint32_t *hws_pga, uint32_t *irq_bit)
+/** The status page address register, the user interrupt and its bank of
+ * the ring whose registers start at `base`: the video enhancement ring's
+ * is power management's. */
+static void ring_info(uint32_t base, uint32_t *hws_pga, uint32_t *irq_bit, int *bank)
 {
+    *bank = I915_IRQ_GT;
     if (base == BLT_RING_BASE) {
         *hws_pga = BLT_HWS_PGA_GEN7;
         *irq_bit = GT_BLT_USER_INTERRUPT;
+    } else if (base == GEN6_BSD_RING_BASE) {
+        *hws_pga = BSD_HWS_PGA_GEN7;
+        *irq_bit = GT_BSD_USER_INTERRUPT;
+    } else if (base == VEBOX_RING_BASE) {
+        *hws_pga = VEBOX_HWS_PGA_GEN7;
+        *irq_bit = PM_VEBOX_USER_INTERRUPT;
+        *bank = I915_IRQ_PM;
     } else {
         *hws_pga = RENDER_HWS_PGA_GEN7;
         *irq_bit = GT_RENDER_USER_INTERRUPT;
@@ -223,6 +238,18 @@ static void rcs_reset(struct i915_model *m, void *priv)
 static void bcs_reset(struct i915_model *m, void *priv)
 {
     ring_reset_at(m, priv, BLT_RING_BASE);
+}
+
+/** The video ring at power-on. */
+static void vcs_reset(struct i915_model *m, void *priv)
+{
+    ring_reset_at(m, priv, GEN6_BSD_RING_BASE);
+}
+
+/** The video enhancement ring at power-on. */
+static void vecs_reset(struct i915_model *m, void *priv)
+{
+    ring_reset_at(m, priv, VEBOX_RING_BASE);
 }
 
 /** A write to a ring's register: MI_MODE, INSTPM and RING_MODE_GEN7 are
@@ -408,12 +435,13 @@ static void ring_run(struct i915_model *m, struct i915_model_ring *r, uint32_t b
     uint32_t head = i915_model_peek(m, RING_HEAD(base)) & HEAD_ADDR;
     uint32_t tail = i915_model_peek(m, RING_TAIL(base)) & TAIL_ADDR;
     uint32_t hws_pga, irq_bit, d[8], len, i, steps = size / 4u;
+    int bank;
 
     if (!(ctl & RING_VALID) || (i915_model_peek(m, RING_MI_MODE(base)) & STOP_RING) || r->stuck ||
         r->faulted) {
         return;
     }
-    ring_info(base, &hws_pga, &irq_bit);
+    ring_info(base, &hws_pga, &irq_bit, &bank);
     while (head != tail && steps-- > 0) {
         uint32_t *p = ring_dword(m, start + head), *out;
 
@@ -446,7 +474,7 @@ static void ring_run(struct i915_model *m, struct i915_model_ring *r, uint32_t b
             break;
         case 0x02: /* MI_USER_INTERRUPT */
             if (!(i915_model_peek(m, RING_IMR(base)) & irq_bit)) {
-                i915_model_irq_event(m, I915_IRQ_GT, irq_bit);
+                i915_model_irq_event(m, bank, irq_bit);
             }
             break;
         case 0x20: /* MI_STORE_DWORD_IMM: the GTT's address in d[2] */
@@ -501,6 +529,20 @@ static void bcs_tick(struct i915_model *m, void *priv, uint32_t us)
     ring_run(m, (struct i915_model_ring *)priv, BLT_RING_BASE);
 }
 
+/** Time passes: the video ring runs. */
+static void vcs_tick(struct i915_model *m, void *priv, uint32_t us)
+{
+    (void)us;
+    ring_run(m, (struct i915_model_ring *)priv, GEN6_BSD_RING_BASE);
+}
+
+/** Time passes: the video enhancement ring runs. */
+static void vecs_tick(struct i915_model *m, void *priv, uint32_t us)
+{
+    (void)us;
+    ring_run(m, (struct i915_model_ring *)priv, VEBOX_RING_BASE);
+}
+
 static const struct i915_model_block i915_model_ring_rcs = {"render ring",
                                                             RENDER_RING_BASE,
                                                             RENDER_RING_BASE + MODEL_RING_SPAN - 4u,
@@ -518,3 +560,22 @@ static const struct i915_model_block i915_model_ring_bcs = {"blitter ring",
                                                             0,
                                                             ring_write,
                                                             bcs_tick};
+
+static const struct i915_model_block i915_model_ring_vcs = {"video ring",
+                                                            GEN6_BSD_RING_BASE,
+                                                            GEN6_BSD_RING_BASE + MODEL_RING_SPAN -
+                                                                4u,
+                                                            sizeof(struct i915_model_ring),
+                                                            vcs_reset,
+                                                            0,
+                                                            ring_write,
+                                                            vcs_tick};
+
+static const struct i915_model_block i915_model_ring_vecs = {"video enhancement ring",
+                                                             VEBOX_RING_BASE,
+                                                             VEBOX_RING_BASE + MODEL_RING_SPAN - 4u,
+                                                             sizeof(struct i915_model_ring),
+                                                             vecs_reset,
+                                                             0,
+                                                             ring_write,
+                                                             vecs_tick};

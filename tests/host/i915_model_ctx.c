@@ -10,13 +10,35 @@
 #include "drm/i915/i915.h"
 #include "drm/i915/i915_reg.h"
 
+/* The rings' register bases. */
+static const uint32_t ctx_ring_bases[4] = {RENDER_RING_BASE, BLT_RING_BASE, GEN6_BSD_RING_BASE,
+                                           VEBOX_RING_BASE};
+
+/** Whether `reg` is some ring's INSTPM. */
+static int ctx_instpm(uint32_t reg)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (reg == RING_INSTPM(ctx_ring_bases[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Whether a write of `reg` is masked: the high half says which of the
  * low half's bits it sets. */
 static int ctx_masked(uint32_t reg)
 {
-    return reg == INSTPM || reg == RING_INSTPM(BLT_RING_BASE) || reg == CACHE_MODE_0_GEN7 ||
-           reg == CACHE_MODE_1 || reg == RING_PSMI_CTL(RENDER_RING_BASE) ||
-           reg == RING_PSMI_CTL(BLT_RING_BASE);
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (reg == RING_PSMI_CTL(ctx_ring_bases[i])) {
+            return 1;
+        }
+    }
+    return ctx_instpm(reg) || reg == CACHE_MODE_0_GEN7 || reg == CACHE_MODE_1;
 }
 
 /* The context registers an image saves, in the order it keeps them. */
@@ -78,8 +100,9 @@ static void ctx_switch(struct i915_model *m, struct i915_model_ring *r, uint32_t
 static int ctx_store(struct i915_model *m, uint32_t base, int index, uint32_t addr, uint32_t value)
 {
     uint32_t hws_pga, irq_bit, *out;
+    int bank;
 
-    ring_info(base, &hws_pga, &irq_bit);
+    ring_info(base, &hws_pga, &irq_bit, &bank);
     out = index ? ring_dword(m, (i915_model_peek(m, hws_pga) & ~0xfffu) + (addr & 0xff8u))
                 : ring_dword(m, addr & ~7u);
     if (!out) {
@@ -128,7 +151,7 @@ static int ring_ctx_command(struct i915_model *m, struct i915_model_ring *r, uin
                 ctx_masked(d[i]) ? ring_masked(i915_model_peek(m, d[i]), d[i + 1u]) : d[i + 1u];
 
             /* INSTPM's TLB invalidation is done at once. */
-            if (d[i] == INSTPM || d[i] == RING_INSTPM(BLT_RING_BASE)) {
+            if (ctx_instpm(d[i])) {
                 v &= ~INSTPM_TLB_INVALIDATE;
             }
             i915_model_poke(m, d[i], v);

@@ -42,7 +42,7 @@
  * screen: no wait reached its bound; nothing outside the GT was written
  * but the interrupt registers, the GT FIFO's and GTT's flush, the power
  * well's takeover and the pcode mailbox, and in the GT nothing but
- * forcewake, the two rings and their status pages, and RC6's and the
+ * forcewake, the four rings and their status pages, and RC6's and the
  * frequency's registers, which Linux writes as the driver does; no write
  * reached the firmware's 1032 framebuffer entries, and the plane, pipe
  * and eDP transcoder read as the firmware left them; the power well was
@@ -733,7 +733,7 @@ static void on_delay(struct i915_model *m)
  * the power well's takeover from the BIOS and the pcode mailbox; in the
  * GT, RC6's and RPS's registers, as Linux's gen6_rc6_enable and
  * gen6_rps_enable write them, with the idle limits of the video and
- * video enhancement engines, whose rings the driver does not start; and
+ * video enhancement engines, inside their rings' registers too; and
  * the swizzle of tiles, in the display's arbiter, the GT's tile control
  * and ARB_MODE, as Linux's intel_gt_init_swizzling sets it on the
  * Lenovo, whose firmware's surface is linear; and the PPGTT's caching, as
@@ -794,17 +794,19 @@ static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      GAC_ECO_BITS};
 
 /** Whether `reg`, written, belongs to what the bind may write: the GT's
- * forcewake, the fence registers, the render and blitter rings and their
- * status page registers, or a register of `writes_ok`, RC6's and RPS's
- * among them. */
+ * forcewake, the fence registers, the four rings and their status page
+ * registers, or a register of `writes_ok`, RC6's and RPS's among them. */
 static int write_ok(uint32_t reg)
 {
     unsigned i;
 
     if (reg == FORCEWAKE_MT || reg == RENDER_HWS_PGA_GEN7 || reg == BLT_HWS_PGA_GEN7 ||
+        reg == BSD_HWS_PGA_GEN7 || reg == VEBOX_HWS_PGA_GEN7 ||
         (reg >= FENCE_REG_GEN6_LO(0) && reg < FENCE_REG_GEN6_LO(I915_NUM_FENCES)) ||
         (reg >= RENDER_RING_BASE && reg < RENDER_RING_BASE + 0x1000u) ||
-        (reg >= BLT_RING_BASE && reg < BLT_RING_BASE + 0x1000u)) {
+        (reg >= BLT_RING_BASE && reg < BLT_RING_BASE + 0x1000u) ||
+        (reg >= GEN6_BSD_RING_BASE && reg < GEN6_BSD_RING_BASE + 0x1000u) ||
+        (reg >= VEBOX_RING_BASE && reg < VEBOX_RING_BASE + 0x1000u)) {
         return 1;
     }
     for (i = 0; i < sizeof(writes_ok) / sizeof(writes_ok[0]); i++) {
@@ -863,11 +865,15 @@ static void check_interrupts(struct i915_model *m)
               i915_model_peek(m, GEN6_PMIMR) == 0xffffffffu &&
               i915_model_peek(m, SDEIMR) == 0xffffffffu &&
               i915_model_peek(m, RING_IMR(RENDER_RING_BASE)) == 0xffffffffu &&
-              i915_model_peek(m, RING_IMR(BLT_RING_BASE)) == 0xffffffffu);
+              i915_model_peek(m, RING_IMR(BLT_RING_BASE)) == 0xffffffffu &&
+              i915_model_peek(m, RING_IMR(GEN6_BSD_RING_BASE)) == 0xffffffffu &&
+              i915_model_peek(m, RING_IMR(VEBOX_RING_BASE)) == 0xffffffffu);
     CHECK("interrupts: only the master enable and the rings' user interrupts enabled",
           i915_model_peek(m, DEIER) == DE_MASTER_IRQ_CONTROL &&
-              i915_model_peek(m, GTIER) == (GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT) &&
-              i915_model_peek(m, GEN6_PMIER) == 0 && i915_model_peek(m, SDEIER) == 0);
+              i915_model_peek(m, GTIER) ==
+                  (GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT | GT_BSD_USER_INTERRUPT) &&
+              i915_model_peek(m, GEN6_PMIER) == PM_VEBOX_USER_INTERRUPT &&
+              i915_model_peek(m, SDEIER) == 0);
     CHECK("interrupts: the firmware's unclaimed access cleared, no error latched",
           !(i915_model_peek(m, FPGA_DBG) & FPGA_DBG_RM_NOCLAIM) &&
               i915_model_peek(m, GEN7_ERR_INT) == 0);
@@ -920,8 +926,10 @@ static void run(int firstlight, int interrupts)
         bcs = i915_model_ring_state(&m, 1);
         CHECK("bind: no wait reached its bound", i915->hw.timeouts == 0);
         CHECK("bind: registered, the rings started",
-              logged("registered: i915 1.6.0") && logged("rings: rcs0 and bcs0 started") &&
-                  i915->gt.engine[I915_RCS0].running && i915->gt.engine[I915_BCS0].running);
+              logged("registered: i915 1.6.0") &&
+                  logged("rings: rcs0, bcs0, vcs0 and vecs0 started") &&
+                  i915->gt.engine[I915_RCS0].running && i915->gt.engine[I915_BCS0].running &&
+                  i915->gt.engine[I915_VCS0].running && i915->gt.engine[I915_VECS0].running);
         CHECK("bind: stolen memory inside the RMRR",
               i915->stolen.size == 0x4000000u && i915->stolen.in_rmrr);
         CHECK("bind: the VBT from the OpRegion's mailbox 4, three outputs",
