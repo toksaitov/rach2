@@ -803,21 +803,32 @@ static uint64_t vmcs_read(uint32_t field)
     return value;
 }
 
-/* The first VMWRITE that failed, which `vmx_exit` reports once, and
- * whether one did. Only a field the processor lacks or a read-only one
- * fails, so a failure is a fault of this file. */
-static uint32_t vmwrite_field, vmwrite_error;
-static int vmwrite_failed, vmwrite_told;
+/* The first VMWRITE, INVEPT or INVVPID that failed, which `vmx_exit`
+ * reports once: its name, its field or type, and VM_INSTRUCTION_ERROR.
+ * Each fails only on an operand this file chose wrong. */
+static const char *failed_insn;
+static uint64_t failed_arg;
+static uint32_t failed_error;
+static int failed_told;
 
-/** VMWRITE `value` into `field`. A failure leaves the field as it was and
- * is kept for `vmx_exit` to report, since this runs with interrupts off;
- * the run goes on, as Linux's vmwrite_error warns once and goes on. */
+/** Keep the failure of the instruction `insn` on `arg` for `vmx_exit` to
+ * report, since the instructions run with interrupts off; the run goes on,
+ * as Linux's vmwrite_error, invept_error and invvpid_error warn once and
+ * go on. */
+static void insn_failed(const char *insn, uint64_t arg)
+{
+    if (!failed_insn) {
+        failed_insn = insn;
+        failed_arg = arg;
+        failed_error = (uint32_t)vmcs_read(VM_INSTRUCTION_ERROR);
+    }
+}
+
+/** VMWRITE `value` into `field`. A failure leaves the field as it was. */
 static void vmcs_write(uint32_t field, uint64_t value)
 {
-    if (vmx_op->vmwrite(field, value) != VMX_OK && !vmwrite_failed) {
-        vmwrite_field = field;
-        vmwrite_error = (uint32_t)vmcs_read(VM_INSTRUCTION_ERROR);
-        vmwrite_failed = 1;
+    if (vmx_op->vmwrite(field, value) != VMX_OK) {
+        insn_failed("vmwrite", field);
     }
 }
 
@@ -1404,16 +1415,22 @@ static void dr_store(struct kvm_vcpu *v, uint64_t host_dr7, const uint64_t host_
 static void flush(struct kvm_vcpu *v, uint64_t eptp, int linear)
 {
     struct vmx_vcpu *x = vx(v);
-    uint64_t desc[2];
+    uint64_t desc[2], type;
 
     desc[1] = 0;
     if (eptp) {
         desc[0] = eptp;
-        (void)vmx_op->invept((caps.ept_vpid & EPT_CAP_INVEPT_CTX) ? INV_SINGLE : INV_ALL, desc);
+        type = (caps.ept_vpid & EPT_CAP_INVEPT_CTX) ? INV_SINGLE : INV_ALL;
+        if (vmx_op->invept(type, desc) != VMX_OK) {
+            insn_failed("invept", type);
+        }
     }
     if (linear && (caps.proc2 & PROC2_VPID)) {
         desc[0] = x->vpid;
-        (void)vmx_op->invvpid((caps.ept_vpid & VPID_CAP_INVVPID_CTX) ? INV_SINGLE : INV_ALL, desc);
+        type = (caps.ept_vpid & VPID_CAP_INVVPID_CTX) ? INV_SINGLE : INV_ALL;
+        if (vmx_op->invvpid(type, desc) != VMX_OK) {
+            insn_failed("invvpid", type);
+        }
     }
 }
 
@@ -2189,20 +2206,20 @@ static int exit_reason(struct kvm_vcpu *v)
 
 /**
  * The backend's `exit`, under the big lock with interrupts on: the first
- * failed VMWRITE reported, once, the exit named, and an instruction the
- * kernel stepped under the caller's single step ended as KVM_EXIT_DEBUG
- * with DR6.BS, as Linux's kvm_vcpu_do_singlestep. 0, or -errno to end
- * KVM_RUN.
+ * failed VMWRITE, INVEPT or INVVPID reported, once, the exit named, and an
+ * instruction the kernel stepped under the caller's single step ended as
+ * KVM_EXIT_DEBUG with DR6.BS, as Linux's kvm_vcpu_do_singlestep. 0, or
+ * -errno to end KVM_RUN.
  */
 static int vmx_exit(struct kvm_vcpu *v)
 {
     struct kvm_run_debug *d = &v->exit.debug;
     int r;
 
-    if (vmwrite_failed && !vmwrite_told) {
-        vmwrite_told = 1;
-        klog(KLOG_WARN, "kvm", "vmx: vmwrite failed: field 0x%x error %u", vmwrite_field,
-             vmwrite_error);
+    if (failed_insn && !failed_told) {
+        failed_told = 1;
+        klog(KLOG_WARN, "kvm", "vmx: %s failed: 0x%lx error %u", failed_insn,
+             (unsigned long)failed_arg, failed_error);
     }
     v->emul.step_trap = 0;
     r = exit_reason(v);
