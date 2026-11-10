@@ -201,7 +201,11 @@ class Runner:
         status = finish(proc)
         self.server_wait()
         for slr in sorted((self.work / "slr").glob("slr-*.log")):
-            shutil.move(str(slr), str(self.out / ("%s.%s" % (name, slr.name))))
+            # slr-latest.log is pressure-vessel's link to the newest log.
+            if slr.is_symlink():
+                slr.unlink()
+            else:
+                shutil.move(str(slr), str(self.out / ("%s.%s" % (name, slr.name))))
         log = self.work / "logs" / ("steam-%s.log" % GAME_ID)
         if log.exists():
             shutil.copy(log, self.out / (name + ".proton.log"))
