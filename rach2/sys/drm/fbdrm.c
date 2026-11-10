@@ -20,7 +20,7 @@
  * console's (`fbcon_window`), `pitch` bytes a row and `mode` its one mode.
  * `format` is the screen's pixel format and `formats` the plane's, the
  * screen's then XRGB8888, which is converted. `line` holds one row of the
- * screen's pixels while a row is converted.
+ * screen's pixels and one of a framebuffer's while a row is converted.
  */
 struct fbdrm_device {
     struct drm_device drm;
@@ -178,6 +178,12 @@ static void fbdrm_read(struct drm_gem_object *obj, uint64_t off, uint8_t *dst, u
  * Copy the rectangle `r` of the framebuffer `fb`, in its pixels, to the
  * screen at (`dx`, `dy`), converted to the screen's format. The caller has
  * clipped both to the screen.
+ *
+ * A row in the screen's own format goes from the buffer's pages straight to
+ * the screen, and a converted row from `line`, both through `k_memcpy`,
+ * which moves words. The kernel is built without optimization, where a loop
+ * over the bytes of the Lenovo's screen, 4 MB, takes 23.6 ms under the
+ * kernel's lock, and Weston commits the whole screen twice for each frame.
  */
 static void fbdrm_blit(struct fbdrm_device *f, const struct drm_framebuffer *fb,
                        const struct drm_rect *r, int32_t dx, int32_t dy)
@@ -185,24 +191,22 @@ static void fbdrm_blit(struct fbdrm_device *f, const struct drm_framebuffer *fb,
     uint32_t cpp = fb->info->cpp[0], w = (uint32_t)(r->x2 - r->x1), out, row_y;
     uint32_t screen_cpp = f->info->cpp[0];
     uint8_t *row = f->line + f->pitch;
-    volatile uint8_t *to;
-    uint32_t i;
+    uint64_t from;
+    uint8_t *to;
 
     out = w * screen_cpp;
     for (row_y = (uint32_t)r->y1; row_y < (uint32_t)r->y2; row_y++) {
-        fbdrm_read(fb->obj[0],
-                   (uint64_t)fb->offsets[0] + (uint64_t)row_y * fb->pitches[0] +
-                       (uint64_t)(uint32_t)r->x1 * cpp,
-                   row, w * cpp);
-        if (fb->format != f->format) {
-            fbdrm_convert(f->line, row, w, f->format);
+        from = (uint64_t)fb->offsets[0] + (uint64_t)row_y * fb->pitches[0] +
+               (uint64_t)(uint32_t)r->x1 * cpp;
+        to = (uint8_t *)(uintptr_t)(f->screen +
+                                    (uint32_t)(dy + (int32_t)(row_y - (uint32_t)r->y1)) * f->pitch +
+                                    (uint32_t)dx * screen_cpp);
+        if (fb->format == f->format) {
+            fbdrm_read(fb->obj[0], from, to, out);
         } else {
-            k_memcpy(f->line, row, out);
-        }
-        to = f->screen + (uint32_t)(dy + (int32_t)(row_y - (uint32_t)r->y1)) * f->pitch +
-             (uint32_t)dx * screen_cpp;
-        for (i = 0; i < out; i++) {
-            to[i] = f->line[i];
+            fbdrm_read(fb->obj[0], from, row, w * cpp);
+            fbdrm_convert(f->line, row, w, f->format);
+            k_memcpy(to, f->line, out);
         }
     }
 }
