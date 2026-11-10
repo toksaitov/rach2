@@ -54,8 +54,7 @@ An IPC namespace tags each System V object and POSIX message queue with the name
 ## Limits
 
 * There are six kinds; the cgroup and time namespaces are refused with `EINVAL`.
-* At most 32 mount namespaces exist at once, and user and PID namespaces nest at most 7 below the first.
-* A map of a user namespace has at most 5 extents, Linux's limit before 4.15.
+* User and PID namespaces nest at most 7 below the first.
 * A network namespace other than the first has its `lo` alone, with IPv4 alone, and no way to be given another interface; `/proc/net` and `/sys/class/net` do not list its `lo`.
 * A PID namespace other than the first numbers its processes up to 32768.
 
