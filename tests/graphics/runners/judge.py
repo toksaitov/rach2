@@ -1,4 +1,4 @@
-"""judge.py: compare a browser runner's result with the Debian reference's.
+"""judge.py: compare a graphics runner's result with the Debian reference's.
 
 Usage:
   python3 -I judge.py webgl REF GOT
@@ -7,6 +7,7 @@ Usage:
   python3 -I judge.py modes REF GOT
   python3 -I judge.py glmark2 REF GOT
   python3 -I judge.py deqp REF GOT [FLAKES]
+  python3 -I judge.py vkcube REF GOT [TIMING-REF TIMING-GOT]
 
 `webgl` compares two pages files of webgl.sh, a chunk's, by page: the lists
 must name the same pages at the same indexes, and a page is worse here when
@@ -45,6 +46,13 @@ support it and it fails here, or when the reference does not have it.
 NotSupported here for a case that passes in the reference is worse, since
 the system offers less. A case that FLAKES, deqp.sh's flakes file, names is
 not worse. It also prints the count of each change of status.
+
+`vkcube` compares two frames files of vkcube.sh by frame: the same frames
+held, each read back at the reference's size with its checksum. With the
+two timing files it also prints both rates and their ratio, `judge: rate:
+R here, R in the reference, ratio Q`, which it does not judge, since the
+rate in FIFO measures the host's load and QEMU's display as much as the
+guest.
 
 Each prints `judge: worse: ...` for each difference and one line, `judge:
 result: pass ...` or `judge: result: fail ...`, and exits 0 or 1.
@@ -229,6 +237,39 @@ def deqp(ref_path, got_path, flakes_path=None):
     return ok
 
 
+def rate(path):
+    """The `rate R` line of a timing file of vkcube.sh, as a number."""
+    for f in lines(path):
+        if f[0] == "rate":
+            return float(f[1])
+    return None
+
+
+def vkcube(ref_path, got_path, ref_timing=None, got_timing=None):
+    ref = {f[1]: f[2:] for f in lines(ref_path)}
+    got = {f[1]: f[2:] for f in lines(got_path)}
+    worse = []
+    for frame in sorted(ref, key=int):
+        g = got.get(frame)
+        if g is None:
+            worse.append("frame %s: not read here" % frame)
+        elif g != ref[frame]:
+            worse.append("frame %s: %s here, %s in the reference" %
+                         (frame, " ".join(g), " ".join(ref[frame])))
+    for frame in sorted(set(got) - set(ref), key=int):
+        worse.append("frame %s: read here alone" % frame)
+    for w in worse:
+        print("judge: worse: %s" % w)
+    if ref_timing is not None:
+        r, g = rate(ref_timing), rate(got_timing)
+        print("judge: rate: %s here, %s in the reference, ratio %s" %
+              (g, r, "%.2f" % (g / r) if r and g is not None else "none"))
+    verdict = "fail" if worse else "pass"
+    print("judge: result: %s vkcube %d frames in the reference, %d here, %d worse than Debian's" %
+          (verdict, len(ref), len(got), len(worse)))
+    return bool(got) and not worse
+
+
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "webgl":
         ok = webgl(sys.argv[2], sys.argv[3])
@@ -238,9 +279,12 @@ def main():
         ok = {"results": results, "modes": modes, "glmark2": glmark2}[sys.argv[1]](*sys.argv[2:4])
     elif len(sys.argv) in (4, 5) and sys.argv[1] == "deqp":
         ok = deqp(*sys.argv[2:])
+    elif len(sys.argv) in (4, 6) and sys.argv[1] == "vkcube":
+        ok = vkcube(*sys.argv[2:])
     else:
         sys.exit("usage: judge.py webgl REF GOT | video REF GOT DECODERS-REF DECODERS-GOT"
-                 " | results|modes|glmark2 REF GOT | deqp REF GOT [FLAKES]")
+                 " | results|modes|glmark2 REF GOT | deqp REF GOT [FLAKES]"
+                 " | vkcube REF GOT [TIMING-REF TIMING-GOT]")
     sys.exit(0 if ok else 1)
 
 

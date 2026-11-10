@@ -9,6 +9,7 @@
 #   debian.sh piglit [-p PROFILE] [-c CPUS] [-m MIB] OUT [PIGLIT-ARG]...
 #   debian.sh glmark2 [-p PROFILE] [-c CPUS] [-m MIB] OUT [GLMARK2-ARG]...
 #   debian.sh deqp [-p PROFILE] [-c CPUS] [-m MIB] OUT [DEQP-ARG]...
+#   debian.sh vkcube [-p PROFILE] [-c CPUS] [-m MIB] OUT [VKCUBE-ARG]...
 #   debian.sh clips [-t TAR] [DIR]
 #
 # A runner's command boots the guest with debian-ref.sh run in the display
@@ -20,20 +21,20 @@
 # host` after the runner's own, the runner's files, `results`, the runner's
 # lines, and `status`, its exit status. The runners of a conformance class
 # (webgl, video, igt, modetest, piglit and deqp) run with
-# GRAPHICS_CLASS=conformance and glmark2 with performance. Each copies in
-# what its runner needs: webgl the pinned WebGL suite; video the clips of DIR
-# of `clips`, by default build/cache/graphics-clips of the main clone; igt
-# the IGT stage of this tree, which it builds with `make ARCH=x86_64 gnu-igt`
-# when it is missing, unpacked over the guest's /usr, with intel-gpu-tools
-# installed for the libraries it links and Linux's sw_sync loaded by
-# ../debian-ref/sw_sync.sh, which Debian's kernel lacks; modetest
+# GRAPHICS_CLASS=conformance and glmark2 and vkcube with performance. Each
+# copies in what its runner needs: webgl the pinned WebGL suite; video the clips
+# of DIR of `clips`, by default build/cache/graphics-clips of the main clone;
+# igt the IGT stage of this tree, which it builds with `make ARCH=x86_64
+# gnu-igt` when it is missing, unpacked over the guest's /usr, with
+# intel-gpu-tools installed for the libraries it links and Linux's sw_sync
+# loaded by ../debian-ref/sw_sync.sh, which Debian's kernel lacks; modetest
 # drmcapture, built there from its source; piglit piglit, installed from the
-# snapshot; deqp the VK-GL-CTS release that its -v names (1.4.7.1 when
-# none), from this tree's GNU build, which it builds with `make ARCH=x86_64
+# snapshot; deqp the VK-GL-CTS release that its -v names (1.4.7.1 when none),
+# from this tree's GNU build, which it builds with `make ARCH=x86_64
 # gnu-vk-gl-cts` when it is missing, unpacked under /opt as the root has it.
-# igt and modetest run their runner as root, with vkms loaded in the profile
-# `none`, and the others as the guest's user. All of them run in /tmp, where
-# the lists are.
+# igt, modetest and vkcube run their runner as root, with vkms loaded in the
+# profile `none`, and the others as the guest's user; vkcube builds its layer
+# with the guest's compiler. All of them run in /tmp, where the lists are.
 # `clips` makes the clips that video.sh names in DIR, unless DIR holds them
 # already, in the guest with Debian's ffmpeg, which it installs from the
 # snapshot for that boot alone, so that the reference guest's browsers find
@@ -133,6 +134,10 @@ run()
         glmark2)
             class=performance
             ;;
+        vkcube)
+            class=performance
+            as='sudo -E'
+            ;;
         deqp)
             release=1.4.7.1 last=
             for a in "$@"; do
@@ -166,7 +171,7 @@ clips=$main/build/cache/graphics-clips
 cmd=${1:-}
 [ $# -gt 0 ] && shift
 case $cmd in
-    webgl|video|igt|modetest|piglit|glmark2|deqp)
+    webgl|video|igt|modetest|piglit|glmark2|deqp|vkcube)
         profile=virtio-vga cpus=4 mib=8192
         while getopts p:c:m: o; do
             case $o in
@@ -214,7 +219,7 @@ case $cmd in
         echo "debian: result: clips in $dir"
         ;;
     *)
-        echo "usage: debian.sh webgl|video|igt|modetest|piglit|glmark2|deqp [-p PROFILE] [-c CPUS] [-m MIB] OUT [ARG]... | clips [-t TAR] [DIR]" >&2
+        echo "usage: debian.sh webgl|video|igt|modetest|piglit|glmark2|deqp|vkcube [-p PROFILE] [-c CPUS] [-m MIB] OUT [ARG]... | clips [-t TAR] [DIR]" >&2
         exit 2
         ;;
 esac
