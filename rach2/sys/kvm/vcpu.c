@@ -193,7 +193,7 @@ static void vcpu_reset(struct kvm_vcpu *v)
     v->xcr0 = XFEATURE_X87;
     k_memset(&v->guest_debug, 0, sizeof(v->guest_debug));
     v->mp_state = KVM_MP_STATE_RUNNABLE;
-    v->tsc_offset = -(int64_t)arch_cycles();
+    v->tsc_offset = -(int64_t)kvm_tsc_scale(v, arch_cycles());
     kvm_msr_reset(v);
     v->dirty = KVM_PART_ALL;
 }
@@ -434,6 +434,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     k_memset(v->run, 0, KVM_RUN_PAGES * 4096u);
     v->pio = (uint8_t *)v->run + KVM_PIO_PAGE_OFFSET * 4096u;
     v->xsave = (uint8_t *)(((uintptr_t)v->xsave_mem + 63u) & ~(uintptr_t)63u);
+    (void)kvm_tsc_set_khz(v, vm->default_tsc_khz);
     vcpu_reset(v);
     if (vm->irqchip != KVM_IRQCHIP_NONE) {
         r = kvm_lapic_create(v);
@@ -1699,6 +1700,20 @@ static int32_t vcpu_enable_cap(struct kvm_vcpu *v, uintptr_t arg)
     return kvm_hv_enable_cap(v, &cap);
 }
 
+/** KVM_SET_TSC_KHZ of a vCPU, as Linux's: 0, or -EINVAL for a rate
+ * `kvm_tsc_khz_arg` or `kvm_tsc_set_khz` refuses. The kvmclock is
+ * written again at the new rate before the next entry. */
+static int32_t set_tsc_khz(struct kvm_vcpu *v, uintptr_t arg)
+{
+    uint32_t khz = kvm_tsc_khz_arg(arg);
+
+    if (khz == 0 || kvm_tsc_set_khz(v, khz) != 0) {
+        return -EINVAL;
+    }
+    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
+    return 0;
+}
+
 /** KVM_PRE_FAULT_MEMORY: the range at `arg` is mapped and written back
  * with what is left of it, as Linux writes it back whatever the result.
  * `kvm_tdp_pre_fault`'s result, or -EFAULT. */
@@ -1806,10 +1821,10 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return vcpu_enable_cap(v, arg);
     case KVM_GET_SUPPORTED_HV_CPUID:
         return kvm_hv_get_cpuid(v, arg);
+    case KVM_SET_TSC_KHZ:
+        return set_tsc_khz(v, arg);
     case KVM_GET_TSC_KHZ:
-        /* The host's rate, which every guest's TSC runs at; 0 when the
-         * kernel measured none. */
-        return (int32_t)kvm_tsc_khz();
+        return (int32_t)v->tsc_khz;
     case KVM_KVMCLOCK_CTRL:
         return kvm_clock_ctrl(v);
     case KVM_GET_STATS_FD:

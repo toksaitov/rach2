@@ -92,6 +92,7 @@
 #define VM_EXIT_MSR_LOAD_ADDR         0x2008u
 #define VM_ENTRY_MSR_LOAD_ADDR        0x200Au
 #define TSC_OFFSET                    0x2010u
+#define TSC_MULTIPLIER                0x2032u
 #define EPT_POINTER                   0x201Au
 #define GUEST_PHYSICAL_ADDRESS        0x2400u
 #define VMCS_LINK_POINTER             0x2800u
@@ -199,12 +200,17 @@
 #define PROC_SECONDARY   0x80000000u
 
 /* The secondary controls. */
-#define PROC2_EPT     0x00000002u
-#define PROC2_RDTSCP  0x00000008u
-#define PROC2_VPID    0x00000020u
-#define PROC2_WBINVD  0x00000040u
-#define PROC2_UG      0x00000080u
-#define PROC2_INVPCID 0x00001000u
+#define PROC2_EPT         0x00000002u
+#define PROC2_RDTSCP      0x00000008u
+#define PROC2_VPID        0x00000020u
+#define PROC2_WBINVD      0x00000040u
+#define PROC2_UG          0x00000080u
+#define PROC2_INVPCID     0x00001000u
+#define PROC2_TSC_SCALING 0x02000000u
+
+/* The TSC multiplier, 16 bits of integer over 48 of fraction: 1. */
+#define TSC_RATIO_BITS 48u
+#define TSC_RATIO_ONE  (1ull << TSC_RATIO_BITS)
 
 /* The exit controls. */
 #define EXIT_SAVE_DEBUG 0x00000004u
@@ -1282,6 +1288,9 @@ static void load_dirty(struct kvm_vcpu *v)
     }
     if (d & KVM_PART_TSC) {
         vmcs_write(TSC_OFFSET, (uint64_t)v->tsc_offset);
+        if (caps.proc2 & PROC2_TSC_SCALING) {
+            vmcs_write(TSC_MULTIPLIER, v->tsc_ratio ? v->tsc_ratio : TSC_RATIO_ONE);
+        }
     }
     if (d & KVM_PART_CPUID) {
         x->proc2 = proc2_for(v);
@@ -2669,8 +2678,8 @@ static int controls(uint32_t msr, uint32_t true_msr, uint32_t want, uint32_t nee
  * the backend locks it so; a VMCS of 4 KiB at most, write-back, in 64-bit
  * addresses; EPT of four levels, write-back, with INVEPT; the unrestricted
  * guest; the preemption timer; virtual NMIs; and the exit and entry
- * controls of EFER and PAT. VPID, RDTSCP, INVPCID and WBINVD exiting are
- * taken where they are. 1 or 0.
+ * controls of EFER and PAT. VPID, RDTSCP, INVPCID, WBINVD exiting and TSC
+ * scaling are taken where they are. 1 or 0.
  */
 static int vmx_probe(void)
 {
@@ -2718,7 +2727,8 @@ static int vmx_probe(void)
         return 0;
     }
     caps.proc2 = (uint32_t)(vmx_op->rdmsr(MSR_IA32_VMX_PROCBASED2) >> 32) &
-                 (PROC2_EPT | PROC2_UG | PROC2_VPID | PROC2_RDTSCP | PROC2_INVPCID | PROC2_WBINVD);
+                 (PROC2_EPT | PROC2_UG | PROC2_VPID | PROC2_RDTSCP | PROC2_INVPCID | PROC2_WBINVD |
+                  PROC2_TSC_SCALING);
     if ((caps.proc2 & proc2_need) != proc2_need ||
         controls(MSR_IA32_VMX_EXIT, MSR_IA32_VMX_TRUE_EXIT, exit_need, exit_need, &caps.exit) ||
         controls(MSR_IA32_VMX_ENTRY, MSR_IA32_VMX_TRUE_ENTRY, entry_need, entry_need,
@@ -2758,11 +2768,20 @@ static uint64_t vmx_cache(int type, int ignore_guest_pat)
     return ((uint64_t)type << 3) | (ignore_guest_pat ? 0x40u : 0u);
 }
 
+/** `kvm_backend`'s tsc_scaling: the TSC multiplier's largest value and
+ * its 48 bits of fraction, or 0 on a processor without the control. */
+static uint64_t vmx_tsc_scaling(uint32_t *frac_bits)
+{
+    *frac_bits = TSC_RATIO_BITS;
+    return (caps.proc2 & PROC2_TSC_SCALING) ? ~0ull : 0;
+}
+
 /* EPT's format: read, write and execute, PS, and the accessed and dirty
  * bits of EPT's A/D. */
 static const struct kvm_tdp_format vmx_tdp = {
     0x7u, 0x1u, 0x2u, 0x4u, 0, 0, 0x80u, 0x000FFFFFFFFFF000ull, 0x100u, 0x200u, vmx_cache};
 
-const struct kvm_backend kvm_vmx = {
-    "vmx",    vmx_probe,    vmx_vm_init, NULL,       vmx_vcpu_init,       vmx_vcpu_free, vmx_enter,
-    vmx_exit, vmx_complete, vmx_save,    vmx_inject, vmx_check_extension, &vmx_tdp};
+const struct kvm_backend kvm_vmx = {"vmx",         vmx_probe,      vmx_vm_init, NULL,
+                                    vmx_vcpu_init, vmx_vcpu_free,  vmx_enter,   vmx_exit,
+                                    vmx_complete,  vmx_save,       vmx_inject,  vmx_check_extension,
+                                    &vmx_tdp,      vmx_tsc_scaling};

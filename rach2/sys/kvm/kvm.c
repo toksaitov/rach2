@@ -213,6 +213,9 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
         return (int32_t)KVM_SYNC_X86_VALID_FIELDS;
     case KVM_CAP_X86_APIC_BUS_CYCLES_NS:
         return KVM_APIC_BUS_NS_DEFAULT;
+    case KVM_CAP_TSC_CONTROL:
+    case KVM_CAP_VM_TSC_CONTROL:
+        return kvm_tsc_control();
     default:
         break;
     }
@@ -541,12 +544,42 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     }
 }
 
+/** KVM_SET_TSC_KHZ of a VM, as Linux's: the rate its later vCPUs start
+ * at, which is not tried on a vCPU here. 0, or -EINVAL for a rate
+ * `kvm_tsc_khz_arg` refuses. */
+static int32_t vm_set_tsc_khz(struct kvm_vm *vm, uintptr_t arg)
+{
+    uint32_t khz = kvm_tsc_khz_arg(arg);
+
+    if (khz == 0) {
+        return -EINVAL;
+    }
+    vm->default_tsc_khz = khz;
+    return 0;
+}
+
+/** KVM_SET_USER_MEMORY_REGION and KVM_SET_USER_MEMORY_REGION2, by
+ * `request`, which set the same slot: KVM_MEM_GUEST_MEMFD is a flag no VM
+ * here takes, as on Linux for a VM without private memory. `kvm_slots_set`'s
+ * result, or -EFAULT. */
+static int32_t vm_set_region(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
+{
+    struct kvm_userspace_memory_region2 region2;
+    uint32_t size = sizeof(region2);
+
+    if (request == KVM_SET_USER_MEMORY_REGION) {
+        size = sizeof(region2.region);
+    }
+    if (copy_from_user(&region2, (const void __user *)arg, size) != 0) {
+        return -EFAULT;
+    }
+    return kvm_slots_set(vm, &region2.region);
+}
+
 /** The ioctls of a VM; -EIO from an address space other than its maker's. */
 static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct kvm_vm *vm = (struct kvm_vm *)e->priv;
-    struct kvm_userspace_memory_region region;
-    struct kvm_userspace_memory_region2 region2;
     uint64_t addr;
 
     if (!kvm_vm_caller_ok(vm)) {
@@ -557,22 +590,17 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return kvm_vfio_create(vm, arg);
     case KVM_GET_STATS_FD:
         return kvm_stats_fd(vm, NULL);
+    case KVM_SET_TSC_KHZ:
+        return vm_set_tsc_khz(vm, arg);
+    case KVM_GET_TSC_KHZ:
+        return (int32_t)vm->default_tsc_khz;
     case KVM_CREATE_VCPU:
         return kvm_vcpu_create(vm, (uint32_t)arg == arg ? (uint32_t)arg : KVM_MAX_VCPU_IDS);
     case KVM_CHECK_EXTENSION:
         return kvm_check_extension(vm, (long)arg);
     case KVM_SET_USER_MEMORY_REGION:
-        if (copy_from_user(&region, (const void __user *)arg, sizeof(region)) != 0) {
-            return -EFAULT;
-        }
-        return kvm_slots_set(vm, &region);
     case KVM_SET_USER_MEMORY_REGION2:
-        /* The same slot: KVM_MEM_GUEST_MEMFD is a flag no VM here takes,
-         * as on Linux for a VM without private memory. */
-        if (copy_from_user(&region2, (const void __user *)arg, sizeof(region2)) != 0) {
-            return -EFAULT;
-        }
-        return kvm_slots_set(vm, &region2.region);
+        return vm_set_region(vm, request, arg);
     case KVM_GET_DIRTY_LOG:
     case KVM_CLEAR_DIRTY_LOG:
         return kvm_dirty_ioctl(vm, request, arg);

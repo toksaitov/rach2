@@ -311,7 +311,7 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
         *value = 0;
         return 0;
     case MSR_IA32_TSC:
-        *value = arch_cycles() + (uint64_t)v->tsc_offset;
+        *value = kvm_tsc_read(v);
         return 0;
     case MSR_MTRRCAP:
         *value = MTRRCAP_VAL;

@@ -326,7 +326,7 @@ static void set_tpr(struct lapic *l, uint32_t tpr)
 /** The guest's TSC now. */
 static uint64_t guest_tsc(const struct kvm_vcpu *v)
 {
-    return arch_cycles() + (uint64_t)v->tsc_offset;
+    return kvm_tsc_read(v);
 }
 
 /** The divisor TDCR gives: 1, or 2 to 128 by powers of two. */
@@ -530,12 +530,12 @@ static void timer_check(struct lapic *l)
 }
 
 /** The host's ns at which the timer next expires, 0 for none. A TSC
- * deadline is turned into ns at the rate the kernel measured, or taken as
- * one tick away when it measured none. */
+ * deadline is turned into ns at the rate of the vCPU's TSC, as Linux
+ * does, or taken as one tick away when no rate is known. */
 static uint64_t timer_next_ns(const struct lapic *l)
 {
     uint64_t now, tsc, left;
-    uint32_t per_tick;
+    uint32_t khz;
 
     if (l->timer_mode != TIMER_DEADLINE) {
         return l->expire_ns;
@@ -548,15 +548,15 @@ static uint64_t timer_next_ns(const struct lapic *l)
     if (tsc >= l->tscdeadline) {
         return now;
     }
-    per_tick = timer_calibrate();
-    if (per_tick == 0) {
+    khz = l->v->tsc_khz;
+    if (khz == 0) {
         return now + TICK_NS;
     }
     left = l->tscdeadline - tsc;
-    if (left / per_tick >= MAX_WAIT_NS / TICK_NS) {
+    if (left / khz >= MAX_WAIT_NS / 1000000u) {
         return now + MAX_WAIT_NS;
     }
-    return now + left * TICK_NS / per_tick;
+    return now + left * 1000000u / khz;
 }
 
 /** IA32_TSC_DEADLINE written: in TSC-deadline mode, the new deadline,

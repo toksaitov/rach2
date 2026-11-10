@@ -265,6 +265,10 @@ struct kvm_tdp_format {
  * the capabilities whose truth depends on the processor, such as
  * KVM_CAP_X86_ROBUST_SINGLESTEP: the value KVM_CHECK_EXTENSION gives, 0
  * for none. `tdp` is the format of its guest-physical entries.
+ * `tsc_scaling`, NULL for a backend without it, gives the largest ratio
+ * the processor scales a guest's TSC by, with the width of its fraction
+ * in `*frac_bits`, or 0 when the processor does not scale; a backend that
+ * scales loads the vCPU's `tsc_ratio`, or 1 for none, with KVM_PART_TSC.
  */
 struct kvm_backend {
     const char *name;
@@ -280,6 +284,7 @@ struct kvm_backend {
     void (*inject)(struct kvm_vcpu *v);
     int32_t (*check_extension)(long cap);
     const struct kvm_tdp_format *tdp;
+    uint64_t (*tsc_scaling)(uint32_t *frac_bits);
 };
 
 /* The two backends, svm.c's and vmx.c's. */
@@ -322,7 +327,8 @@ struct kvm_vm {
     uint32_t tsc_matched;
     int64_t tsc_cur_offset;
     uint64_t tsc_last_ns, tsc_last_write, tsc_last_khz;
-    uint32_t disable_exits;      /* KVM_CAP_X86_DISABLE_EXITS: KVM_X86_DISABLE_EXITS_* */
+    uint64_t tsc_cur_ns, tsc_cur_write; /* the generation's start: a moment, the TSC then */
+    uint32_t disable_exits;             /* KVM_CAP_X86_DISABLE_EXITS: KVM_X86_DISABLE_EXITS_* */
     uint32_t max_vcpu_ids;       /* KVM_CAP_MAX_VCPU_ID: ids are below it; 0 until it is settled */
     uint32_t disabled_quirks;    /* KVM_X86_QUIRK_* turned off (KVM_QUIRK) */
     int exit_on_emulation_error; /* KVM_CAP_EXIT_ON_EMULATION_FAILURE */
@@ -490,8 +496,13 @@ struct kvm_vcpu {
     uint32_t msr_count;
     uint32_t msr_index[KVM_VCPU_MSRS];
     uint64_t msr_value[KVM_VCPU_MSRS];
-    int64_t tsc_offset;    /* the guest's TSC less the host's */
-    uint32_t tsc_gen;      /* the VM's `tsc_gen` this vCPU's TSC last joined */
+    int64_t tsc_offset;     /* the guest's TSC less the host's */
+    uint32_t tsc_gen;       /* the VM's `tsc_gen` this vCPU's TSC last joined */
+    uint32_t tsc_khz;       /* its TSC's rate, KVM_SET_TSC_KHZ's; 0 when none is known */
+    uint64_t tsc_ratio;     /* the processor scales the host's TSC by it; 0 at the host's rate */
+    uint32_t tsc_frac_bits; /* the bits of `tsc_ratio` that are its fraction */
+    int tsc_catchup;        /* a rate above the host's, unscaled: kept before each entry */
+    uint64_t tsc_this_ns, tsc_this_write; /* where its TSC counts from: a moment, its value */
     uint64_t pv_time;      /* MSR_KVM_SYSTEM_TIME(_NEW): the kvmclock's address, KVM_MSR_ENABLED */
     uint32_t pv_features;  /* KVM_CPUID_FEATURES' EAX in the CPUID, KVM_FEATURE_* bits */
     int pv_enforce;        /* KVM_CAP_ENFORCE_PV_FEATURE_CPUID: the guest has those alone */
@@ -703,9 +714,44 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value);
  * matching of the vCPUs' TSCs, as Linux's x86.c keeps them. Each runs
  * under the big lock. */
 
-/** The TSC's rate a guest sees, the host's as measured, in kHz, as
- * KVM_GET_TSC_KHZ gives it: 0 when none was measured. */
+/** The host's TSC rate as measured, in kHz, which a guest's TSC runs at
+ * unless KVM_SET_TSC_KHZ gave it another: 0 when none was measured. */
 uint64_t kvm_tsc_khz(void);
+
+/** Whether the processor scales a guest's TSC, which is what
+ * KVM_CAP_TSC_CONTROL and KVM_CAP_VM_TSC_CONTROL say. */
+int kvm_tsc_control(void);
+
+/** The rate below which KVM_SET_TSC_KHZ takes a value where the processor
+ * scales the TSC, Linux's max_guest_tsc_khz: what the backend's largest
+ * ratio makes of the host's rate, at most 2^31 - 1. */
+uint32_t kvm_tsc_max_khz(void);
+
+/** KVM_SET_TSC_KHZ's argument as Linux checks it, for a vCPU and for a VM
+ * alike: the rate to set, the host's for 0, or 0 for a rate at or past
+ * `kvm_tsc_max_khz`, which is -EINVAL; 0 also where no rate was measured. */
+uint32_t kvm_tsc_khz_arg(uintptr_t arg);
+
+/**
+ * Give `v`'s TSC the rate `khz`, as Linux's kvm_set_tsc_khz: within 250
+ * parts in a million of the host's it runs at the host's; otherwise the
+ * processor scales it, by a ratio the backend loads before the next entry;
+ * and without scaling a rate above the host's is kept by moving the TSC up
+ * before each entry (`kvm_clock_prepare`). 0, or -1 for 0 kHz, for a rate
+ * below the host's without scaling, or for a ratio the backend cannot
+ * hold; the rate is recorded all the same, as Linux records it.
+ */
+int kvm_tsc_set_khz(struct kvm_vcpu *v, uint32_t khz);
+
+/** The count `tsc` of the host's TSC at `v`'s rate, without its offset. */
+uint64_t kvm_tsc_scale(const struct kvm_vcpu *v, uint64_t tsc);
+
+/** `v`'s guest TSC now. */
+uint64_t kvm_tsc_read(const struct kvm_vcpu *v);
+
+/** `v`'s TSC rate in hertz, for the clocks that count by it: the scaled
+ * rate where the processor scales it, and otherwise the host's. */
+uint64_t kvm_tsc_hz(const struct kvm_vcpu *v);
 
 /** Start the clock of a new VM: its kvmclock reads 0 now. */
 void kvm_clock_vm_init(struct kvm_vm *vm);
@@ -734,7 +780,8 @@ int32_t kvm_clock_set(struct kvm_vm *vm, uintptr_t arg);
 void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value);
 
 /** `v`'s guest moved its own TSC: its kvmclock and the reference TSC page
- * are written again before the next entry. */
+ * are written again before the next entry, and a TSC kept above the host's
+ * rate counts on from here. */
 void kvm_tsc_moved(struct kvm_vcpu *v);
 
 /** Read or write, by `write`, the MSR `index` of `v` when it is one of

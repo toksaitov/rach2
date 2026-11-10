@@ -45,8 +45,9 @@
  * which turns VMX off; and what Linux's selftests ask of the guest's side:
  * AMD's hypercall instruction patched or left as its quirk says, MWAIT's
  * quirk, MSR_PLATFORM_INFO and CPUID faulting, an emulation failure above
- * CPL 0 under KVM_CAP_EXIT_ON_EMULATION_FAILURE, and DR7.GD under the
- * caller's breakpoints.
+ * CPL 0 under KVM_CAP_EXIT_ON_EMULATION_FAILURE, DR7.GD under the
+ * caller's breakpoints, and the TSC multiplier on a model whose controls
+ * have TSC scaling.
  */
 #include "kvm/vmx.c"
 
@@ -858,7 +859,7 @@ static struct {
     uint64_t cr4;
     uint64_t vmxon_pa;
     struct mvmcs *cur;
-    struct mvmcs vmcs[5];
+    struct mvmcs vmcs[6];
     int nvmcs;
     uint64_t dr[8];
     int dr6_writes;
@@ -889,7 +890,7 @@ static struct mvmcs *mvmcs_of(uint64_t pa)
             return &m.vmcs[i];
         }
     }
-    if (m.nvmcs == 5) {
+    if (m.nvmcs == 6) {
         return NULL;
     }
     k_memset(&m.vmcs[m.nvmcs], 0, sizeof(m.vmcs[0]));
@@ -904,7 +905,8 @@ static int in(uint32_t f, uint32_t lo, uint32_t hi, int even)
     return f >= lo && f <= hi && (!even || !(f & 1u));
 }
 
-/** Whether `field` is a field of the Haswell's VMCS. */
+/** Whether `field` is a field of the Haswell's VMCS, or the TSC
+ * multiplier on a model whose controls have TSC scaling. */
 static int field_known(uint64_t field)
 {
     static const uint32_t ranges[][3] = {
@@ -916,6 +918,9 @@ static int field_known(uint64_t field)
 
     if (field >> 32) {
         return 0;
+    }
+    if (field == TSC_MULTIPLIER) {
+        return ((m.proc2 >> 32) & PROC2_TSC_SCALING) != 0;
     }
     for (i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
         if (in((uint32_t)field, ranges[i][0], ranges[i][1], (int)ranges[i][2])) {
@@ -3408,6 +3413,37 @@ static void failure_rows(int vm, int fd)
     guest_debug(fd, 0, 0, 0);
 }
 
+/** TSC scaling: the Haswell has none, and on a model with the control a
+ * vCPU of `vm` runs under it with the multiplier of its ratio, 1 for a
+ * TSC at the host's rate. */
+static void tsc_scale_rows(int vm)
+{
+    uint32_t frac = 0, had = caps.proc2;
+    uint64_t model = m.proc2;
+    int fd;
+
+    CHECK(vmx_tsc_scaling(&frac) == 0 && fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 0,
+          "the Haswell scales no TSC, and KVM_CAP_VM_TSC_CONTROL says so");
+    m.proc2 |= (uint64_t)PROC2_TSC_SCALING << 32;
+    caps.proc2 |= PROC2_TSC_SCALING;
+    CHECK(vmx_tsc_scaling(&frac) == ~0ull && frac == 48 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 1,
+          "with the control, a multiplier of 48 bits of fraction and the capability");
+    fd = make_vcpu(vm, 5);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              (fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_TSC_SCALING) &&
+              fields(fd)[TSC_MULTIPLIER] == 1ull << 48,
+          "a vCPU runs under TSC scaling with a multiplier of 1");
+    vcpu_of(fd)->tsc_ratio = 3ull << 47;
+    vcpu_of(fd)->dirty |= KVM_PART_TSC;
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && fields(fd)[TSC_MULTIPLIER] == 3ull << 47,
+          "and with its ratio once it has one");
+    fdclose(fd);
+    m.proc2 = model;
+    caps.proc2 = had;
+}
+
 /** What Linux's selftests ask of the guest's side, on a vCPU of its own
  * on `vm` in protected mode. The rows change the VM's capabilities, so
  * they come last. */
@@ -3420,6 +3456,7 @@ static void selftest_rows(int vm)
     platform_rows(vm, fd);
     failure_rows(vm, fd);
     fdclose(fd);
+    tsc_scale_rows(vm);
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
