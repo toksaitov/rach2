@@ -501,6 +501,12 @@ long sys_pread64(isr_params_t *params);
 
 long sys_pwrite64(isr_params_t *params);
 
+/** Flush the data of a validated sync_file_range range; may sleep. */
+long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags);
+long sys_sync_file_range(isr_params_t *params);
+long sys_preadv2(isr_params_t *params);
+long sys_pwritev2(isr_params_t *params);
+
 long sys_preadv(isr_params_t *params);
 
 long sys_pwritev(isr_params_t *params);
@@ -791,6 +797,10 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 
 long sys_utimensat(isr_params_t *params);
 long sys_utimensat_time64(isr_params_t *params);
+
+/** Read i386 directory records into the user buffer, under the directory
+ * lock. With `old`, ignore `count` and return one old readdir record. */
+long ksys_getdents32(int fd, uintptr_t buf, uint32_t count, int old);
 
 long sys_getdents64(isr_params_t *params);
 

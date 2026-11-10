@@ -191,7 +191,11 @@ static const char *const assertion_id[] = {"far-call",
                                            "map32bit-hint",
                                            "low-hint",
                                            "futexv-int80",
-                                           "sockstamp-int80"};
+                                           "sockstamp-int80",
+                                           "directory-copy",
+                                           "pselect-null-mask",
+                                           "vector-flags",
+                                           "range-sync"};
 
 /** Print "WOW64PROBE FAIL: " and `why`, end the report at the assertion that
  * `why` fails, and exit 1. */
@@ -400,6 +404,20 @@ static int int80_5(long nr, unsigned long a, unsigned long b, unsigned long c, u
     __asm__ __volatile__("int $0x80"
                          : "=a"(r)
                          : "a"(nr), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+                         : "memory", "r8", "r9", "r10", "r11");
+    return (int)r;
+}
+
+/** The i386 call with six arguments, preserving the native frame pointer. */
+static int int80_6(long nr, unsigned long a, unsigned long b, unsigned long c, unsigned long d,
+                   unsigned long e, unsigned long f)
+{
+    long r;
+
+    __asm__ __volatile__("sub $128, %%rsp; push %%rbp; mov %[six], %%rbp; int $0x80; "
+                         "pop %%rbp; add $128, %%rsp"
+                         : "=a"(r)
+                         : "a"(nr), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e), [six] "r"(f)
                          : "memory", "r8", "r9", "r10", "r11");
     return (int)r;
 }
@@ -986,6 +1004,155 @@ static void run_sockstamp(void)
     report_held();
 }
 
+/** Failed and partial compat directory copies preserve the next entry. */
+static void run_directory_copy(void)
+{
+    static unsigned char reference[1024], retry[1024], old[266];
+    unsigned char *edge;
+    unsigned long mapping;
+    unsigned int first, i;
+    long fd = syscall3(SYS_OPEN, (long)"/proc", 0, 0);
+    int n;
+
+    if (fd < 0 || (n = int80(141, fd, (unsigned long)reference, sizeof(reference))) <= 0) {
+        fail("compat directory reference");
+    }
+    first = reference[8] | (unsigned int)reference[9] << 8;
+    syscall3(SYS_LSEEK, fd, 0, 0);
+    if (int80(141, fd, 1, sizeof(reference)) != -14 || syscall3(SYS_LSEEK, fd, 0, 1) != 0 ||
+        int80(141, fd, (unsigned long)retry, sizeof(retry)) != n) {
+        fail("getdents consumed entries after a failed copy");
+    }
+    for (i = 0; i < first; i++) {
+        if (retry[i] != reference[i]) {
+            fail("getdents retry skipped its first entry");
+        }
+    }
+    mapping = map(0, 8192, MAP_PRIVATE | MAP_32BIT);
+    if ((long)mapping < 0 || syscall3(SYS_MPROTECT, mapping + 4096, 4096, 0) != 0) {
+        fail("directory copy fault mapping");
+    }
+    edge = (unsigned char *)(mapping + 4096 - first);
+    syscall3(SYS_LSEEK, fd, 0, 0);
+    if (int80(141, fd, (unsigned long)edge, sizeof(reference)) != (int)first ||
+        int80(141, fd, (unsigned long)retry, sizeof(retry)) <= 0) {
+        fail("getdents partial copy did not retain its delivered entry");
+    }
+    for (i = 0; i < first; i++) {
+        if (edge[i] != reference[i]) {
+            fail("getdents partial copy changed its first entry");
+        }
+    }
+    if (retry[10] != reference[first + 10] || retry[11] != reference[first + 11]) {
+        fail("getdents partial retry skipped the next entry");
+    }
+    syscall2(SYS_MUNMAP, mapping, 8192);
+    syscall3(SYS_LSEEK, fd, 0, 0);
+    if (int80(89, fd, (unsigned long)old, 0) != 1) {
+        fail("old readdir reference");
+    }
+    syscall3(SYS_LSEEK, fd, 0, 0);
+    if (int80(89, fd, 1, 0) != -14 || syscall3(SYS_LSEEK, fd, 0, 1) != 0 ||
+        int80(89, fd, (unsigned long)retry, 0) != 1) {
+        fail("old readdir consumed an entry after a failed copy");
+    }
+    for (i = 0; i < 10u + old[8] + ((unsigned int)old[9] << 8) + 1u; i++) {
+        if (old[i] != retry[i]) {
+            fail("old readdir retry skipped its entry");
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    report_held();
+}
+
+/** A missing pselect mask still selects a timespec in each time ABI. */
+static void run_pselect_null(void)
+{
+    static unsigned int bits[32], ts32[2] = {0, 1000000};
+    static unsigned long ts64[2] = {0, 1000000000};
+    int pipefd[2], rc32, rc64;
+
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0 || pipefd[0] >= 1024 ||
+        syscall3(SYS_WRITE, pipefd[1], (long)"x", 1) != 1) {
+        fail("pselect ready pipe");
+    }
+    bits[pipefd[0] / 32] = 1u << (pipefd[0] % 32);
+    rc32 = int80_6(308, pipefd[0] + 1, (unsigned long)bits, 0, 0, (unsigned long)ts32, 0);
+    bits[pipefd[0] / 32] = 1u << (pipefd[0] % 32);
+    rc64 = int80_6(413, pipefd[0] + 1, (unsigned long)bits, 0, 0, (unsigned long)ts64, 0);
+    syscall1(SYS_CLOSE, pipefd[0]);
+    syscall1(SYS_CLOSE, pipefd[1]);
+    if (rc32 != 1 || rc64 != -22) {
+        fail("pselect with a null mask used a timeval");
+    }
+    report_held();
+}
+
+/** Native and compat vector flags append without changing O_APPEND. */
+static void run_vector_flags(void)
+{
+    static char data[] = "CDEF", readback[8];
+    static unsigned long native[4];
+    static unsigned int compat_vec[4];
+    long fd = syscall2(319, (long)"wow64-vector", 0);
+    unsigned int i;
+
+    native[0] = (unsigned long)data;
+    native[1] = 1;
+    native[2] = (unsigned long)data + 1;
+    native[3] = 1;
+    compat_vec[0] = (unsigned int)(unsigned long)(data + 2);
+    compat_vec[1] = 1;
+    compat_vec[2] = (unsigned int)(unsigned long)(data + 3);
+    compat_vec[3] = 1;
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"ab", 2) != 2 ||
+        syscall6(328, fd, (long)native, 2, 0, 0, 0x10) != 2 || syscall3(SYS_LSEEK, fd, 0, 1) != 2 ||
+        int80_6(379, fd, (unsigned long)compat_vec, 2, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x10) != 2 ||
+        syscall3(SYS_LSEEK, fd, 0, 1) != 6 || (syscall3(SYS_FCNTL, fd, 3, 0) & 02000) != 0) {
+        fail("RWF_APPEND changed the wrong offset or the shared append flag");
+    }
+    native[0] = (unsigned long)readback;
+    native[1] = 6;
+    if (syscall6(327, fd, (long)native, 1, 0, 0, 0) != 6) {
+        fail("native preadv2 is absent or cannot read the vector");
+    }
+    for (i = 0; i < 6; i++) {
+        if (readback[i] != "abCDEF"[i]) {
+            fail("RWF_APPEND overwrote existing data");
+        }
+    }
+    compat_vec[0] = (unsigned int)(unsigned long)readback;
+    compat_vec[1] = 6;
+    syscall3(SYS_LSEEK, fd, 0, 0);
+    if (int80_6(378, fd, (unsigned long)compat_vec, 1, 0xFFFFFFFFu, 0xFFFFFFFFu, 0) != 6 ||
+        syscall3(SYS_LSEEK, fd, 0, 1) != 6) {
+        fail("compat preadv2 did not use the shared offset at -1");
+    }
+    if (syscall4(277, fd, 0, 6, 0) != 0 || int80_6(314, fd, 0, 0, 6, 0, 0) != 0) {
+        fail("sync_file_range is absent from the native table");
+    }
+    syscall1(SYS_CLOSE, fd);
+    report_held();
+}
+
+/** A character device is not a sync_file_range file in either ABI. */
+static void run_range_sync(void)
+{
+    long fd = syscall3(SYS_OPEN, (long)"/dev/null", 2, 0);
+    long native, compat_result;
+
+    if (fd < 0) {
+        fail("range sync character device");
+    }
+    native = syscall4(277, fd, 0, 0, 0);
+    compat_result = int80_6(314, fd, 0, 0, 0, 0, 0);
+    syscall1(SYS_CLOSE, fd);
+    if (native != -29 || compat_result != -29) {
+        fail("sync_file_range accepted a character device");
+    }
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -1010,6 +1177,10 @@ void probe_main(unsigned long *sp)
     run_map32();
     run_futexv();
     run_sockstamp();
+    run_directory_copy();
+    run_pselect_null();
+    run_vector_flags();
+    run_range_sync();
     report_end();
     say("WOW64PROBE OK\n");
     sys_exit(0);

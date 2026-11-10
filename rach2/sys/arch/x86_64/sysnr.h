@@ -241,6 +241,7 @@
 #define SYS_GET_ROBUST_LIST        274
 #define SYS_SPLICE                 275
 #define SYS_TEE                    276
+#define SYS_SYNC_FILE_RANGE        277
 #define SYS_VMSPLICE               278
 #define SYS_UTIMENSAT              280
 #define SYS_EPOLL_PWAIT            281
@@ -278,6 +279,8 @@
 #define SYS_MEMFD_CREATE           319
 #define SYS_MLOCK2                 325
 #define SYS_COPY_FILE_RANGE        326
+#define SYS_PREADV2                327
+#define SYS_PWRITEV2               328
 #define SYS_STATX                  332
 #define SYS_NAME_TO_HANDLE_AT      303
 #define SYS_OPEN_BY_HANDLE_AT      304

@@ -618,14 +618,22 @@ static void file_unlock(const struct vfs_ref *file, int own)
  * between, before it answers -EFAULT. */
 #define WRITE_REFAULTS 8
 
+/* The file lock and per-operation append choice of one write or vector. */
+struct file_write_state {
+    struct vfs_ref file;
+    int own;    /* nonzero when the type's file lock is held */
+    int append; /* end-of-file placement without changing O_APPEND */
+};
+
 /**
  * The writes of `file_write`: `count` bytes of `buf` from `*pos`, which
  * moves past each piece written, the bytes copied into the pages shared
  * mappings hold when `mapped` (`filemap_file_written`). Returns the bytes
  * written, or the first write's error when none were.
  *
- * On a type that sets `file_locked`, `held` is the file whose lock the
- * caller holds, NULL on another type, and the file system copies from `buf`
+ * On a type that sets `file_locked`, `state` names the file whose lock
+ * the caller holds, with `own` clear on another type. The file system
+ * copies from `buf`
  * only while its pages are present (`vm_resident`), answering a short count
  * at the first that is not, since a fault under the lock could wait for
  * another file's lock. The lock then goes while the rest of the buffer is
@@ -635,8 +643,8 @@ static void file_unlock(const struct vfs_ref *file, int own)
  * (`fsize_fit`), and a write that finds the end at the limit stops there,
  * -EFBIG when it has moved no byte.
  */
-static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *held, int mapped,
-                                 const char __user *buf, uint32_t count, uint64_t *pos)
+static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_state *state,
+                                 int mapped, const char __user *buf, uint32_t count, uint64_t *pos)
 {
     struct open_file *ofd = entry->ofd;
     uintptr_t from = (__force uintptr_t)buf;
@@ -654,18 +662,18 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *held, 
             *pos += (uint64_t)n;
             refaults = 0;
         }
-        if (!held || n < 0 || done == count || vm_resident(from + done, count - done, 0)) {
+        if (!state->own || n < 0 || done == count || vm_resident(from + done, count - done, 0)) {
             break;
         }
-        vfs_node_unlock(held);
+        vfs_node_unlock(&state->file);
         n = ++refaults <= WRITE_REFAULTS && vm_prefault_range(from + done, count - done, 0)
                 ? 0
                 : -EFAULT;
-        vfs_node_lock(held);
+        vfs_node_lock(&state->file);
         if (n != 0) {
             break;
         }
-        if (ofd->status_flags & OFD_APPEND) {
+        if (state->append || (ofd->status_flags & OFD_APPEND)) {
             struct vfs_stat vst;
 
             if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
@@ -679,6 +687,56 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *held, 
         }
     }
     return done > 0 ? (int32_t)done : n;
+}
+
+/**
+ * Write with the description and the locks in `state` already held. Its
+ * `own` says the type uses a file lock; `append` requests end placement for
+ * this operation without changing the shared O_APPEND flag. The caller
+ * has faulted in the buffer; a later fault may release and reacquire the
+ * file lock through file_write_pieces. Return bytes or a negative errno.
+ */
+static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint32_t count,
+                                 const uint64_t *at, const struct file_write_state *state)
+{
+    struct open_file *ofd = entry->ofd;
+    uint64_t pos;
+    int32_t written;
+    int mapped;
+
+    pos = at ? *at : ofd->offset;
+    if (state->append || (ofd->status_flags & OFD_APPEND)) {
+        struct vfs_stat vst;
+
+        if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
+            pos = vst.size;
+        }
+    }
+    if (count > 0 && fsize_refused(pos + 1) != 0) {
+        return -EFBIG;
+    }
+    count = fsize_fit(pos, count);
+    mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
+    if (mapped && !state->own) {
+        vfs_node_lock(&state->file);
+    }
+    written = file_write_pieces(entry, state, mapped, buf, count, &pos);
+    if (mapped && !state->own) {
+        vfs_node_unlock(&state->file);
+    }
+    if (written > 0) {
+        if (!cred_privileged()) {
+            if (entry->node) {
+                cred_kill_setid(entry->node);
+            } else {
+                vfs_kill_setid(ofd->vmnt, ofd->vnode);
+            }
+        }
+        if (!at) {
+            ofd->offset = pos;
+        }
+    }
+    return written;
 }
 
 /**
@@ -718,10 +776,8 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
                           const uint64_t *at)
 {
     struct open_file *ofd = entry->ofd;
-    struct vfs_ref file;
-    uint64_t pos;
+    struct file_write_state state;
     int32_t written;
-    int mapped, own;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -736,47 +792,15 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         return -EBUSY;
     }
     fd_ofd_lock(ofd);
-    own = file_lock(ofd, &file);
+    state.own = file_lock(ofd, &state.file);
+    state.append = 0;
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
-        file_unlock(&file, own);
+        file_unlock(&state.file, state.own);
         fd_ofd_unlock(ofd);
         return -EBUSY;
     }
-    pos = at ? *at : ofd->offset;
-    if (ofd->status_flags & OFD_APPEND) {
-        struct vfs_stat vst;
-
-        if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
-            pos = vst.size;
-        }
-    }
-    if (count > 0 && fsize_refused(pos + 1) != 0) {
-        file_unlock(&file, own);
-        fd_ofd_unlock(ofd);
-        return -EFBIG;
-    }
-    count = fsize_fit(pos, count);
-    mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
-    if (mapped && !own) {
-        vfs_node_lock(&file);
-    }
-    written = file_write_pieces(entry, own ? &file : NULL, mapped, buf, count, &pos);
-    if (mapped && !own) {
-        vfs_node_unlock(&file);
-    }
-    if (written > 0) {
-        if (!cred_privileged()) {
-            if (entry->node) {
-                cred_kill_setid(entry->node);
-            } else {
-                vfs_kill_setid(ofd->vmnt, ofd->vnode);
-            }
-        }
-        if (!at) {
-            ofd->offset = pos;
-        }
-    }
-    file_unlock(&file, own);
+    written = file_write_locked(entry, buf, count, at, &state);
+    file_unlock(&state.file, state.own);
     fd_ofd_unlock(ofd);
     if (written > 0 && inotify_watches) {
         inotify_desc(ofd, IN_MODIFY);
@@ -8533,6 +8557,58 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
 }
 
 /**
+ * Validate sync_file_range's range and inode kind, then flush the file's
+ * data for WRITE (bit 1). All writes here finish synchronously, so the
+ * WAIT_BEFORE and WAIT_AFTER bits need no separate wait. Returns 0,
+ * -EINVAL for flags outside 0..7 or a negative or overflowing range,
+ * -EBADF for an absent or O_PATH descriptor, -ESPIPE for an inode other
+ * than a regular file, directory, block device or symlink, or a flush error.
+ */
+long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags)
+{
+    fd_entry_t *entry;
+    struct kstat st;
+    uint32_t kind;
+    long rc;
+
+    if ((flags & ~7u) || off < 0 || len < 0 || off > 0x7FFFFFFFFFFFFFFFll - len) {
+        return -EINVAL;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(current_proc->fds, fd);
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    rc = fstat_fill(entry, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    kind = st.st_mode & S_IFMT;
+    if (kind != S_IFREG && kind != S_IFDIR && kind != S_IFBLK && kind != 0120000u) {
+        return -ESPIPE;
+    }
+    if (!(flags & 2u)) {
+        return 0;
+    }
+    if (entry->ofd && entry->ofd->vmnt) {
+        int32_t mapped = filemap_sync_file(entry->ofd->vmnt, entry->ofd->ino);
+
+        rc = vfs_fdatasync(entry->ofd->vmnt, entry->ofd->fhandle);
+        return mapped != 0 ? -EIO : rc;
+    }
+    return pc_sync() == 0 ? 0 : -EIO;
+}
+
+/** sync_file_range(2) with one register each for its 64-bit range. */
+long sys_sync_file_range(isr_params_t *params)
+{
+    return ksys_sync_file_range((int)SC_ARG(params, 0), (int64_t)SC_ARG(params, 1),
+                                (int64_t)SC_ARG(params, 2), (uint32_t)SC_ARG(params, 3));
+}
+
+/**
  * fstat64(2), and fstat(2) on x86-64: copy out the attributes of what the
  * descriptor in argument 0 is open on (`fstat_fill`), an O_PATH
  * descriptor's included, to the user's buffer in argument 1, with the
@@ -11490,6 +11566,139 @@ long sys_pwritev(isr_params_t *params)
 {
     return iov_at((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2),
                   pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3)), 1);
+}
+
+/**
+ * Append a regular file's vector while holding its description and file
+ * locks across the elements. Copy the vector and fault in its buffers
+ * before taking those locks. The explicit position is ignored; -1 alone
+ * advances the shared offset. Returns bytes written or the first error.
+ */
+static long iov_append(int fd, uintptr_t addr, int count, long long pos)
+{
+    struct kernel_iovec *iov;
+    fd_entry_t *entry = NULL;
+    struct open_file *ofd;
+    struct file_write_state state;
+    uint64_t at = 0;
+    uint32_t wanted = 0;
+    long total = 0, rc;
+    int i;
+
+    if (count < 0 || count > IOV_MAX_LOCAL || pos < -1) {
+        return -EINVAL;
+    }
+    rc = pio_entry(fd, 1, 0, pos == -1 ? 0 : pos, &entry);
+    if (rc != 0 || count == 0) {
+        return rc;
+    }
+    iov = kmalloc((size_t)count * sizeof(*iov));
+    if (!iov) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < count; i++) {
+        if (iov_fetch(&iov[i], addr, (uint32_t)i) != 0) {
+            rc = -EFAULT;
+            goto out;
+        }
+        if (iov[i].iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov[i].iov_len) {
+            rc = -EINVAL;
+            goto out;
+        }
+        if (iov[i].iov_len && !user_buffer_ok(iov[i].iov_base, iov[i].iov_len, 0)) {
+            rc = -EFAULT;
+            goto out;
+        }
+        wanted += (uint32_t)iov[i].iov_len;
+    }
+    ofd = entry->ofd;
+    fd_ofd_lock(ofd);
+    state.own = file_lock(ofd, &state.file);
+    state.append = 1;
+    rc = loop_backs(ofd->vmnt, ofd->vnode) ? -EBUSY : 0;
+    for (i = 0; rc >= 0 && i < count; i++) {
+        if (!iov[i].iov_len) {
+            continue;
+        }
+        rc = file_write_locked(entry, (const char __user *)iov[i].iov_base,
+                               (uint32_t)iov[i].iov_len, pos == -1 ? NULL : &at, &state);
+        if (rc < 0) {
+            break;
+        }
+        total += rc;
+        if ((unsigned long)rc < iov[i].iov_len) {
+            break;
+        }
+    }
+    file_unlock(&state.file, state.own);
+    fd_ofd_unlock(ofd);
+    if (total > 0 && inotify_watches) {
+        inotify_desc(ofd, IN_MODIFY);
+    }
+    rc = total > 0 ? total : rc;
+out:
+    kfree(iov);
+    return rc;
+}
+
+/* Linux's per-call read/write flags; NOWAIT is not supported here. */
+#define RWF_HIPRI  0x01u
+#define RWF_DSYNC  0x02u
+#define RWF_SYNC   0x04u
+#define RWF_APPEND 0x10u
+
+/**
+ * preadv2 or pwritev2: -1 uses the shared offset, APPEND places a write at
+ * the file's end without changing O_APPEND, and SYNC or DSYNC flushes the
+ * write. A flag outside the supported set is -EOPNOTSUPP. The other
+ * arguments and errors are preadv's and pwritev's.
+ */
+static long rwv2(isr_params_t *params, int write)
+{
+    int fd = (int)SC_ARG(params, 0);
+    long long pos = pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3));
+    uint32_t flags = (uint32_t)SC_ARG(params, 5);
+    fd_entry_t *entry;
+    long rc;
+
+    if (flags & ~(RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_APPEND)) {
+        return -EOPNOTSUPP;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(current_proc->fds, fd);
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (write && (flags & RWF_APPEND) && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd &&
+        entry->ofd->vmnt) {
+        rc = iov_append(fd, SC_ARG(params, 1), (int)SC_ARG(params, 2), pos);
+    } else if (pos == -1) {
+        rc = write ? sys_writev(params) : sys_readv(params);
+    } else {
+        rc = write ? sys_pwritev(params) : sys_preadv(params);
+    }
+    if (rc > 0 && write && (flags & (RWF_DSYNC | RWF_SYNC))) {
+        long synced = (flags & RWF_SYNC) ? sys_fsync(params) : sys_fdatasync(params);
+
+        if (synced < 0) {
+            return synced;
+        }
+    }
+    return rc;
+}
+
+/** preadv2(2): preadv's arguments followed by per-call flags. */
+long sys_preadv2(isr_params_t *params)
+{
+    return rwv2(params, 0);
+}
+
+/** pwritev2(2): pwritev's arguments followed by per-call flags. */
+long sys_pwritev2(isr_params_t *params)
+{
+    return rwv2(params, 1);
 }
 
 /* fcntl64's lock commands: struct flock, with 32-bit offsets, for the first
@@ -15511,6 +15720,63 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     return 0;
 }
 
+/* The directory record layouts: native 64-bit, i386, and old readdir. */
+#define DIRENT_NATIVE 0
+#define DIRENT_COMPAT 1
+#define DIRENT_OLD    2
+
+/**
+ * Copy one directory entry in `format` to `buf` of `count` bytes. The
+ * offsets name the current entry and the next one; old readdir uses the
+ * former, getdents the latter. Returns the record size, or -EINVAL when
+ * it does not fit, -EOVERFLOW for an inode an i386 record cannot hold, or
+ * -EFAULT. The caller holds the directory's description lock and advances
+ * its offset only after this copy succeeds.
+ */
+static long dirent_put(char *buf, uint32_t count, const struct vfs_dirent *de, uint64_t here,
+                       uint64_t next, int format)
+{
+    union {
+        struct linux_dirent64 native;
+        uint8_t bytes[VFS_NAME_MAX + SYNTH_DIRENT_NAME + 32];
+    } rec;
+    uint32_t name_len = (uint32_t)k_strlen(de->name);
+    uint32_t len, word;
+    uint16_t half;
+
+    if (format == DIRENT_NATIVE) {
+        len = (19u + name_len + 1u + 7u) & ~7u;
+    } else {
+        if (de->ino > 0xFFFFFFFFu) {
+            return -EOVERFLOW;
+        }
+        len = format == DIRENT_OLD ? 10u + name_len + 1u : (10u + name_len + 2u + 3u) & ~3u;
+    }
+    if (len > count) {
+        return -EINVAL;
+    }
+    k_memset(rec.bytes, 0, len);
+    if (format == DIRENT_NATIVE) {
+        rec.native.d_ino = de->ino;
+        rec.native.d_off = (int64_t)next;
+        rec.native.d_reclen = (uint16_t)len;
+        rec.native.d_type = (uint8_t)de->type;
+        k_memcpy(rec.native.d_name, de->name, name_len + 1u);
+    } else {
+        word = (uint32_t)de->ino;
+        k_memcpy(rec.bytes, &word, sizeof(word));
+        word = (uint32_t)(format == DIRENT_OLD ? here : next);
+        k_memcpy(rec.bytes + 4, &word, sizeof(word));
+        half = (uint16_t)(format == DIRENT_OLD ? name_len : len);
+        k_memcpy(rec.bytes + 8, &half, sizeof(half));
+        k_memcpy(rec.bytes + 10, de->name, name_len + 1u);
+        if (format == DIRENT_COMPAT) {
+            rec.bytes[len - 1u] = (uint8_t)de->type;
+        }
+    }
+    return copy_to_user((void __user *)buf, rec.bytes, len) == 0 ? (long)len : -EFAULT;
+}
+
 /**
  * getdents64 on the synthetic directory descriptor `e`: the records of the
  * entries `synth_dirent_at` gives from the description's offset on, packed
@@ -15520,46 +15786,31 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
  * the bytes written, 0 at the end, -EINVAL when the first record does not
  * fit, or -EFAULT when the first copy fails.
  */
-static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
+static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int format)
 {
     static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0};
     const struct synth_dir *sd = e->priv ? (const struct synth_dir *)e->priv : &none;
     uint32_t written = 0;
     int idx = (int)e->ofd->offset;
-    char name[SYNTH_DIRENT_NAME];
-    uint64_t ino;
+    struct vfs_dirent de;
     uint8_t dtype;
 
-    while (synth_dirent_at(sd, &idx, name, &ino, &dtype)) {
-        union {
-            struct linux_dirent64 rec;
-            uint8_t bytes[SYNTH_DIRENT_NAME + 24];
-        } recbuf;
-        uint32_t name_len = (uint32_t)k_strlen(name);
-        uint32_t rec_len =
-            sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
-        struct linux_dirent64 *d;
+    while (synth_dirent_at(sd, &idx, de.name, &de.ino, &dtype)) {
+        long n;
 
-        rec_len = (rec_len + 7) & ~7u;
-        if (written + rec_len > count) {
-            if (written == 0) {
-                return -EINVAL;
-            }
-            break;
+        de.type = dtype;
+        n = dirent_put(buf + written, count - written, &de, e->ofd->offset, (uint64_t)(idx + 1),
+                       format);
+
+        if (n < 0) {
+            return written > 0 ? (int32_t)written : (int32_t)n;
         }
-        k_memset(recbuf.bytes, 0, rec_len);
-        d = &recbuf.rec;
-        d->d_ino = ino;
-        d->d_off = (int64_t)(idx + 1);
-        d->d_reclen = (uint16_t)rec_len;
-        d->d_type = dtype;
-        k_memcpy(d->d_name, name, name_len + 1);
-        if (copy_to_user((void __user *)(buf + written), recbuf.bytes, rec_len) != 0) {
-            return written > 0 ? (int32_t)written : -EFAULT;
-        }
-        written += rec_len;
+        written += (uint32_t)n;
         idx++;
         e->ofd->offset = idx;
+        if (format == DIRENT_OLD) {
+            return 1;
+        }
     }
     return (int32_t)written;
 }
@@ -15603,21 +15854,16 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
  * entry or see it twice, a concurrent change of the directory that POSIX
  * leaves unspecified.
  */
-long sys_getdents64(isr_params_t *params)
+static long getdents(int fd_num, char *buf, uint32_t count, int format)
 {
-    int fd_num = (int)SC_ARG(params, 0);
-    char *buf = (char *)SC_ARG(params, 1);
-    uint32_t count = USER_LEN32(SC_ARG(params, 2));
     fd_entry_t *entry;
     uint32_t bytes_written = 0;
-    uint32_t name_len;
-    uint32_t rec_len;
-    struct linux_dirent64 *dirent;
 
     if (!current_proc) {
         return -EFAULT;
     }
-    if (count > 0 && (!buf || !user_buffer_ok((uintptr_t)buf, count, 1))) {
+    if (format == DIRENT_NATIVE && count > 0 &&
+        (!buf || !user_buffer_ok((uintptr_t)buf, count, 1))) {
         return -EFAULT;
     }
 
@@ -15627,7 +15873,16 @@ long sys_getdents64(isr_params_t *params)
     }
 
     if (entry->type == FD_TYPE_SYNTH_DIR) {
-        return synth_getdents(entry, buf, count);
+        long n;
+
+        if (!entry->ofd) {
+            return -EBADF;
+        }
+
+        fd_ofd_lock(entry->ofd);
+        n = synth_getdents(entry, buf, count, format);
+        fd_ofd_unlock(entry->ofd);
+        return n;
     }
 
     if (entry->type != FD_TYPE_DIR) {
@@ -15652,10 +15907,7 @@ long sys_getdents64(isr_params_t *params)
         cursor = (uint32_t)ofd->offset;
         for (;;) {
             struct vfs_dirent de;
-            union {
-                struct linux_dirent64 rec;
-                uint8_t bytes[VFS_NAME_MAX + 1 + 32];
-            } recbuf;
+            long n;
             int got;
 
             de.type = VFS_DT_UNKNOWN;
@@ -15667,36 +15919,36 @@ long sys_getdents64(isr_params_t *params)
                 fd_ofd_unlock(ofd);
                 return (bytes_written > 0) ? (int32_t)bytes_written : got;
             }
-            name_len = (uint32_t)k_strlen(de.name);
-            /* 19 bytes of fields, the name and its NUL, padded to 8 bytes */
-            rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) +
-                      name_len + 1;
-            rec_len = (rec_len + 7) & ~7;
-            if (bytes_written + rec_len > count) {
-                if (bytes_written == 0) {
-                    fd_ofd_unlock(ofd);
-                    return -EINVAL;
-                }
+            n = dirent_put(buf + bytes_written, count - bytes_written, &de, ofd->offset, cursor,
+                           format);
+            if (n < 0) {
+                fd_ofd_unlock(ofd);
+                return bytes_written > 0 ? (long)bytes_written : n;
+            }
+            bytes_written += (uint32_t)n;
+            ofd->offset = cursor;
+            if (format == DIRENT_OLD) {
+                bytes_written = 1;
                 break;
             }
-            k_memset(recbuf.bytes, 0, rec_len);
-            dirent = &recbuf.rec;
-            dirent->d_ino = de.ino;
-            dirent->d_off = (int64_t)cursor;
-            dirent->d_reclen = (uint16_t)rec_len;
-            dirent->d_type = (uint8_t)de.type;
-            k_memcpy(dirent->d_name, de.name, name_len + 1);
-            if (copy_to_user((void __user *)(buf + bytes_written), recbuf.bytes, rec_len) != 0) {
-                fd_ofd_unlock(ofd);
-                return (bytes_written > 0) ? (int32_t)bytes_written : -EFAULT;
-            }
-            bytes_written += rec_len;
-            ofd->offset = cursor;
         }
         fd_ofd_unlock(ofd);
     }
 
     return (int32_t)bytes_written;
+}
+
+/** Read Linux's 64-bit directory records under the description lock. */
+long sys_getdents64(isr_params_t *params)
+{
+    return getdents((int)SC_ARG(params, 0), (char *)SC_ARG(params, 1),
+                    USER_LEN32(SC_ARG(params, 2)), DIRENT_NATIVE);
+}
+
+/** Read i386 directory records, one old record when `old` is nonzero. */
+long ksys_getdents32(int fd, uintptr_t buf, uint32_t count, int old)
+{
+    return getdents(fd, (char *)buf, old ? 0xFFFFFFFFu : count, old ? DIRENT_OLD : DIRENT_COMPAT);
 }
 
 /**
