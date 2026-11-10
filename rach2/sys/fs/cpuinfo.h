@@ -62,9 +62,10 @@ struct cpu_cache {
 /**
  * Describe processor `cpu`'s cache `index`, from 0, into `*cache`: 1, or 0
  * past the last and on a processor that describes none. The leaves are
- * those Linux reads: leaf 4, or on AMD and Hygon leaf 0x8000001D or the
- * older leaves 0x80000005 and 0x80000006, which give an L1 data, an L1
- * instruction, an L2 and, when there is one, an L3.
+ * those Linux reads: leaf 4, or on Hygon and AMD leaf 0x8000001D, or on
+ * AMD without TOPOEXT the older leaves 0x80000005 and 0x80000006, which
+ * give an L1 data, an L1 instruction, an L2 and, when there is one, an
+ * L3.
  */
 int cpuinfo_cache(int cpu, int index, struct cpu_cache *cache);
 
