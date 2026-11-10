@@ -1,0 +1,99 @@
+.Dd November 10, 2026
+.Dt UMU-RUN 1
+.Os Rach2
+.Sh NAME
+.Nm umu-run
+.Nd run a Windows program through Proton in the Steam Linux Runtime
+.Sh SYNOPSIS
+.Nm
+.Ar program
+.Op Ar argument ...
+.Sh DESCRIPTION
+The x86-64 GNU root installs umu-launcher 1.4.4, the zipapp of its release,
+as
+.Pa /opt/umu/umu-run ,
+linked from
+.Pa /usr/bin/umu-run .
+It is a Python program.
+.Nm
+runs
+.Ar program
+with the Proton that
+.Ev PROTONPATH
+names, inside the container of the Steam Linux Runtime that Proton's
+.Pa toolmanifest.vdf
+requires: sniper, Steam Linux Runtime 3.0, for the root's GE-Proton.
+pressure-vessel, the runtime's container tool, builds the container with
+bubblewrap in new user, mount and other namespaces, and passes in the
+display, the GPU's device nodes, the PulseAudio socket and the D-Bus buses.
+.Pp
+umu keeps the runtime in
+.Pa $XDG_DATA_HOME/umu/steamrt3 ,
+or
+.Pa $HOME/.local/share/umu/steamrt3 .
+A missing runtime would be downloaded from Valve's servers, and an installed
+one updated on each start.
+.Xr rach2-game 1
+with
+.Fl -umu
+unpacks the root's copy of the pinned runtime,
+.Pa /opt/umu/SteamLinuxRuntime_sniper.tar.xz ,
+there instead, and sets
+.Ev UMU_RUNTIME_UPDATE
+to 0; use it to start games.
+umu checks an unpacked runtime against its mtree with pressure-vessel's
+.Nm pv-verify
+before it first runs it.
+.Sh ENVIRONMENT
+.Bl -tag -width UMU_RUNTIME_UPDATE
+.It Ev PROTONPATH
+The Proton directory,
+.Pa /opt/proton
+on Rach2.
+.It Ev GAMEID
+.Li umu- Ns Ar id ;
+umu sets
+.Ev SteamGameId
+and
+.Ev SteamAppId
+to
+.Ar id .
+.It Ev WINEPREFIX
+The compatibility directory; umu links its
+.Pa pfx
+to the directory itself unless
+.Pa pfx
+is a directory.
+.It Ev UMU_RUNTIME_UPDATE
+0 turns the runtime's update off.
+.It Ev UMU_LOG
+1 or
+.Li debug
+logs umu's steps.
+.It Ev STEAM_LINUX_RUNTIME_LOG
+1 writes pressure-vessel's log to
+.Pa var
+in the runtime's directory.
+.El
+.Pp
+umu sets
+.Ev STEAM_COMPAT_DATA_PATH
+to
+.Ev WINEPREFIX
+and passes Proton's other variables, such as
+.Ev PROTON_USE_WOW64 ,
+through the container unchanged.
+.Sh FILES
+.Bl -tag -width /opt/umu/SteamLinuxRuntime_sniper.tar.xz
+.It Pa /opt/umu/umu-run
+The launcher.
+.It Pa /opt/umu/SteamLinuxRuntime_sniper.tar.xz
+The pinned runtime, unpacked by
+.Xr rach2-game 1 .
+.It Pa /opt/umu/VERSIONS.txt
+The versions of the runtime and pressure-vessel in that archive.
+.El
+.Sh SEE ALSO
+.Xr bwrap 1 ,
+.Xr proton 1 ,
+.Xr rach2-game 1
