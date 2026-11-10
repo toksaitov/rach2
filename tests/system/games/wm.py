@@ -300,7 +300,11 @@ def xplace(width, height):
 
 
 def placed(name, report, width, height):
-    """Check that REPORT puts its window at 0,0, WIDTH by HEIGHT, unframed and focused."""
+    """
+    Check that REPORT puts its window at 0,0, WIDTH by HEIGHT, unframed and
+    focused, by its last report: xplace reports again when its key arrives.
+    """
+    report = report[report.rfind("xplace: window at"):]
     at = re.search(r"window at (-?\d+),(-?\d+) size (\d+)x(\d+)", report)
     check(name + "-place", at is not None and at.groups() == ("0", "0", str(width), str(height)),
           at.group(0) if at else "no place")

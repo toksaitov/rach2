@@ -67,3 +67,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `tests/graphics/runners/games.sh` records the summary's line but takes the frame times from Mesa's HUD, as Linux's runs in task 80-2 did.
 * Status: unreported.
 * Next: check current SuperTuxKart; run the reproduction; report with a patch that counts in the main loop's drawing.
+
+## Weston's Xwayland window manager resizes an emulated mode's window to the output
+
+* Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `xwayland/window-manager.c` at the tag `14.0.2`; source package as in the kiosk-shell entry above.
+* Fails: an X client that sets a lower mode through RandR draws unscaled in the corner of the output under kiosk-shell. Xwayland emulates the mode: it lists the mode's rectangle in `_XWAYLAND_RANDR_EMU_MONITOR_RECTS` on the client's windows and scales a window of that size at the output's origin to the output through `wp_viewport`. Weston's window manager never reads the property: `send_configure` (lines 3042 to 3094) gives a fullscreen window the size the shell asks for, the output's, and kiosk-shell centres any smaller surface, so the window is never the mode's size at the origin and Xwayland never scales it.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, with `tests/system/games/xplace.c`, which sets 800x600 through RandR and maps a fullscreen window of that size, in Rach2's boot session on QEMU's `virgl` profile.
+* Reproduction: `tests/run games-wm`, row `scaled`, with Debian's Weston.
+* Evidence: `vendor/gnu/games/weston/xwm-emulated-mode.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `xwm-emulated-mode.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, reads the property, gives a fullscreen window the emulated size in its configure, keeps its X position at the output's origin, fullscreens it again when the property changes, and takes input over the whole scaled surface. With it, xplace reports `window at 0,0 size 800x600` and `emulated 0,0 800x600`, and Weston's capture of the output shows the window's halves from edge to edge.
+* Status: unreported.
+* Next: check Weston's main branch; report with the patch.
