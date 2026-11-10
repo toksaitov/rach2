@@ -7,14 +7,21 @@
  * tests/graphics/runners on its case, and judges the result against the
  * Debian reference guest's stored one, with judge.py or, for the loss of
  * Venus's render server, diff, in the guest. A native game's replay has no
- * reference in QEMU, since Linux's is taken on the Lenovo: its case asserts
- * that the replay ran to its end and keeps the frame times.
+ * reference in QEMU, since Linux's is taken on the Lenovo: its case plays
+ * the replay's small form, which llvmpipe draws in minutes under TCG,
+ * asserts that it ran through its window and keeps the frame times.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "netcase.h"
+
+/* The native games' small form: the screen, and the race's time or the
+ * match's window in seconds, in place of the Lenovo's 1280x800 and 90 s or
+ * 150 s, since llvmpipe under TCG draws one of their frames in seconds. */
+#define GAMES_SIZE    "640x400"
+#define GAMES_SECONDS "10"
 
 /* The records of the boot the cases wait for: the root mounted and the
  * login prompt. */
@@ -358,7 +365,9 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         snprintf(runner, size, VKCUBE_RUN);
         return 1;
     case GAMES:
-        snprintf(runner, size, "sh " GRAPHICS_DIR "/runners/games.sh -o " GRAPHICS_DIR "/out %s",
+        snprintf(runner, size,
+                 "sh " GRAPHICS_DIR "/runners/games.sh -s " GAMES_SIZE " -t " GAMES_SECONDS
+                 " -o " GRAPHICS_DIR "/out %s",
                  s->test);
         return 0;
     }
