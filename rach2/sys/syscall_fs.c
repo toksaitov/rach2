@@ -623,7 +623,9 @@ struct file_write_state {
     struct vfs_ref file;
     int own;    /* nonzero when the type's file lock is held */
     int append; /* end-of-file placement without changing O_APPEND */
-    int moved;  /* bytes moved in this call, including earlier vector elements */
+    /* nonzero once this call, an earlier vector element included, has moved
+     * a byte */
+    int moved;
 };
 
 /**
@@ -12424,8 +12426,10 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
  * vector of no bytes still has the descriptor checked. Returns the bytes
  * moved or a negative errno: -EINVAL for a negative position, a count past
  * IOV_MAX_LOCAL or below 0, a negative length, or a vector whose end would
- * pass 2^63-1; -EFAULT for a vector or a buffer the caller cannot reach; or
- * the first element's error.
+ * pass 2^63-1; -EFAULT for a vector or a buffer the caller cannot reach;
+ * -EPERM, with nothing written, for a write to a file sealed against growth
+ * of which no whole page before the end fits, as Linux takes the vector as
+ * one stream; or the first element's error.
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
@@ -12451,8 +12455,11 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     if ((uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
         return -EINVAL;
     }
-    if (entry && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd && entry->ofd->vmnt &&
-        iov_seal_grow(entry->ofd, (uint64_t)pos, wanted, 0, &room) == 0) {
+    if (entry && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd && entry->ofd->vmnt) {
+        rc = iov_seal_grow(entry->ofd, (uint64_t)pos, wanted, 0, &room);
+        if (rc != 0) {
+            return rc;
+        }
         wanted = room;
     }
     return iov_at_move(fd, iov_user, iovcnt, pos, write, wanted);
