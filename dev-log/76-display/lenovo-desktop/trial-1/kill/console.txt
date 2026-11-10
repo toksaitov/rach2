@@ -1,0 +1,5 @@
+[    5.179000] console: card0: the firmware's framebuffer
+[    5.186000] fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 0
+[   11.808000] console: card0: handed to a master, the keyboard off
+[ 1003.468000] console: card0: taken back from a master, the keyboard on
+[ 1003.468000] console: card0: the firmware's framebuffer again

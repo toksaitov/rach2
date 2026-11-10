@@ -1,0 +1,27 @@
+t2657c: kernel old 957f5d385f5af390 new 851e8698c626b181
+t2657c: root 07a02ae529bdd3ea
+t2657c: old: ssh after 3 tries; rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate nomodeset
+t2657c: old: log: [    2.487000] console: card0: the firmware's framebuffer
+t2657c: old: log: [    2.489000] fbdrm: registered: simpledrm 1280x800, XR24, pitch 5120, at 0xfd000000, card 0
+t2657c: old: log: [    7.249000] console: card0: handed to a master, the keyboard off
+t2657c: old: run 1: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 7,3,9 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657c: old: run 2: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 5,10,2 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657c: old: run 3: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 2,1,7 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657c: old: cpu  6045 0 20310 37987 0 0 0 0 0 0
+t2657c: old: bkl_wait_us 182333433
+t2657c: old: bkl_hold_entry syscall 16 19260 29664224
+t2657c: old:  15:30:28 up 2 min,  0 users,  load average: 0.69, 0.32, 0.12
+t2657c: old: done
+t2657c: new: ssh after 3 tries; rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate nomodeset
+t2657c: new: log: [    2.233000] console: card0: the firmware's framebuffer
+t2657c: new: log: [    2.235000] fbdrm: registered: simpledrm 1280x800, XR24, pitch 5120, at 0xfd000000, card 0
+t2657c: new: log: [    6.806000] console: card0: handed to a master, the keyboard off
+t2657c: new: run 1: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 2,6,4 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657c: new: run 2: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 9,5,3 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657c: new: run 3: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 2,2,7 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+t2657c: new: cpu  5882 0 13559 43786 0 0 0 0 0 0
+t2657c: new: bkl_wait_us 99086862
+t2657c: new: bkl_hold_entry syscall 16 20636 2354880
+t2657c: new:  15:33:27 up 2 min,  0 users,  load average: 0.35, 0.20, 0.08
+t2657c: new: done
+t2657c: end

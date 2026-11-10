@@ -1,0 +1,13 @@
+desktop: video: result: chromium h264-720p.mp4 codec h264 size 1280x720 frames 300,300,300 dropped 172,172,172 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+desktop: video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 176,176,176 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+desktop: video: result: chromium vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 175,174,174 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+desktop: video: result: chromium vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 180,181,178 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+desktop: video: result: chromium av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 173,172,174 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+desktop: video: result: chromium av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 176,179,175 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+desktop: video: result: firefox h264-720p.mp4 codec h264 size 1280x720 frames 300,302,300 dropped 206,139,130 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 256,260,280 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 165,116,128 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 245,266,267 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 152,133,121 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: video: result: firefox av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 262,261,274 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+desktop: result: video status 0
