@@ -455,6 +455,27 @@ static int parse_tables(const uint8_t *rdesc, int length, struct hid_dev **out)
     return 0;
 }
 
+/**
+ * Take interface `iface` of `device` away, if it was taken: release what it
+ * holds down, stop its repeat, take its event devices away and free its
+ * tables and state.
+ */
+static void state_drop(int device, int iface)
+{
+    struct hid_state *state = state_of(device, iface);
+
+    if (!state) {
+        return;
+    }
+    if (state->mode == HID_REPORT) {
+        hidinput_disconnect(state->hid);
+        free_tables(state->hid);
+    }
+    input_keyboard_detach(&state->kb);
+    evdev_unregister(state->mouse);
+    state_free(device, iface);
+}
+
 int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *rdesc, int length)
 {
     struct hid_state *state;
@@ -464,9 +485,7 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
     if (!in_range(device, iface)) {
         return -ENODEV;
     }
-    if (states[device][iface]) {
-        return 0;
-    }
+    state_drop(device, iface); /* a state left from the entry's last device */
     err = parse_tables(rdesc, length, &hid);
     if (err) {
         klog(KLOG_WARN, "usb", "hid: device %d interface %d: %x:%x: report descriptor refused: %s",
@@ -518,9 +537,7 @@ int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
     if (!in_range(device, iface) || (kind != HID_KEYBOARD && kind != HID_MOUSE)) {
         return -ENODEV;
     }
-    if (states[device][iface]) {
-        return 0;
-    }
+    state_drop(device, iface); /* a state left from the entry's last device */
     state = state_new(device, iface);
     if (!state) {
         klog(KLOG_WARN, "usb", "hid: device %d interface %d: no memory for its state", device,
@@ -703,20 +720,9 @@ void hid_output_sent(int device, int iface, int ok)
 
 void hid_gone(int device)
 {
-    struct hid_state *state;
     int iface;
 
     for (iface = 0; iface < USB_HID_INTERFACES; iface++) {
-        state = state_of(device, iface);
-        if (!state) {
-            continue;
-        }
-        if (state->mode == HID_REPORT) {
-            hidinput_disconnect(state->hid);
-            free_tables(state->hid);
-        }
-        input_keyboard_detach(&state->kb);
-        evdev_unregister(state->mouse);
-        state_free(device, iface);
+        state_drop(device, iface);
     }
 }

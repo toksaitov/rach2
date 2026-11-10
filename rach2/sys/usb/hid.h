@@ -42,10 +42,12 @@ struct hid_ids {
  * take one: the descriptor is parsed (`hid_parse`), and each application of
  * it that input handles becomes an event device named "MANUFACTURER
  * PRODUCT", or "HID VVVV:PPPP" without strings (`hidinput_connect`), on
- * "usb-DEVICE/inputN", N its bInterfaceNumber. Returns 0, also for an
- * interface taken already; -EINVAL or -E2BIG for a descriptor refused,
- * -ENOMEM when its tables cannot be had, and -ENODEV when it makes no input
- * device or names no interface, each logged; nothing is kept then, and the
+ * "usb-DEVICE/inputN", N its bInterfaceNumber. An interface taken already
+ * is a state the entry's last device left, and is taken away first, as
+ * `hid_gone` takes it. Returns 0; -EINVAL or -E2BIG for a descriptor
+ * refused, -ENOMEM when its tables cannot be had, and -ENODEV when it makes
+ * no input device, each logged; or -ENODEV, not logged, when it names no
+ * interface the table has room for. Nothing is kept on an error, and the
  * core may try the boot protocol.
  */
 int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *rdesc, int length);
@@ -55,9 +57,10 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
  * and usbmouse take one: `kind` HID_KEYBOARD is an event device of the
  * keyboard's keys and HID_MOUSE one of five buttons, a wheel and its hi-res
  * axis, each named "MANUFACTURER PRODUCT", or "USB HIDBP Keyboard
- * VVVV:PPPP" or "USB HIDBP Mouse VVVV:PPPP" without strings. Returns 0,
- * also for an interface taken already; -ENOMEM when its state cannot be
- * had, and -ENODEV for a `kind` of neither or an interface out of range.
+ * VVVV:PPPP" or "USB HIDBP Mouse VVVV:PPPP" without strings. An interface
+ * taken already is taken away first, as `hid_attach` does. Returns 0;
+ * -ENOMEM, logged, when its state cannot be had, and -ENODEV for a `kind`
+ * of neither or an interface out of range.
  */
 int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids);
 
