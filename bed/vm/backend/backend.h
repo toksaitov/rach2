@@ -24,6 +24,11 @@ struct vr_export {
 struct vr;
 struct kms;
 
+/* The pins of page lists (VGS_TF_PAGES): made, refused and let go of. */
+struct vr_pin_counts {
+    uint64_t pinned, refused, unpinned;
+};
+
 /* The renderer, after vr_init; ops and cookie go to vd_init. */
 struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose);
 extern const struct vd_ops vr_ops;
@@ -34,6 +39,8 @@ int vr_read(struct vr *r, uint32_t id, const struct vd_rect *rect, void *dst, ui
 int vr_export(struct vr *r, uint32_t id, struct vr_export *e);
 void vr_set_kms(struct vr *r, struct kms *k);
 void vr_set_probe(struct vr *r, int probe);
+void vr_set_module(struct vr *r, int fd);
+const struct vr_pin_counts *vr_pin_counts(struct vr *r);
 
 /* The Venus import probe: a dma-buf imported into Vulkan and read. */
 int vk_probe(const struct vr_export *e, uint32_t *crc);
