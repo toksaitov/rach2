@@ -4400,15 +4400,18 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
 
 /** A stop the tracer asked for with PTRACE_INTERRUPT ends a wait as a stop
  * signal would, so the stop is taken on the way back to user mode
- * (`ptrace_return_stops`). Blocking syscall loops call this on the thread's
- * stack with the big lock held. A deferred kernel debug hit is posted before
- * its mask and disposition are tested; a deferred user hit interrupts
- * whatever either says, but stays deferred until the return to user mode
- * delivers it. Posting can make this thread ready and clear its
- * `wakeup_tick`, so a caller that keeps waiting must arm its deadline again.
- * No wait queue is changed. On the x86-64 debug interrupt stack the kernel
- * calls only `debugreg_defer_user` and, when it declines, `debugreg_defer`;
- * a user debug exception moves to the thread's stack before entering C. */
+ * (`ptrace_return_stops`). A traced thread counts an ignored signal too, as
+ * Linux's sig_ignored does, since its tracer sees each signal at a
+ * signal-delivery stop, where a wait it cut short is restarted. Blocking
+ * syscall loops call this on the thread's stack with the big lock held. A
+ * deferred kernel debug hit is posted before its mask and disposition are
+ * tested; a deferred user hit interrupts whatever either says, but stays
+ * deferred until the return to user mode delivers it. Posting can make this
+ * thread ready and clear its `wakeup_tick`, so a caller that keeps waiting
+ * must arm its deadline again. No wait queue is changed. On the x86-64 debug
+ * interrupt stack the kernel calls only `debugreg_defer_user` and, when it
+ * declines, `debugreg_defer`; a user debug exception moves to the thread's
+ * stack before entering C. */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -4433,6 +4436,9 @@ int signal_pending(void)
             continue;
         }
         sa = &current_proc->sigacts[signo];
+        if (current_proc->ptrace & PT_TRACED) {
+            return 1;
+        }
         if (sa->handler == KSIG_IGN) {
             continue;
         }
