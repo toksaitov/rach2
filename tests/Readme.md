@@ -122,7 +122,7 @@ A probe that etude judges writes etude's report records (`tools/etude/Readme.md`
 
 The default family's `pifutexmusl` probe exercises raw PI futex locks, deadlines and requeue, pthread PI mutexes, robust PI owner death, a condition variable over a PI mutex and process-shared recovery. Its i686 build also runs through the ia32 profile. The GNU family's `pi_futex` row compiles the same source against its guest's glibc.
 
-`restartprobe` checks restart codes at syscall and signal-delivery stops, writes them back in each tracer's register width, changes the result and call number, and saves and restores a pending restart. Its tracing cases also check that orig -1 and a return with no pending signal leave an injected code visible. Every row removes its System V objects and closes its pipes after reaping its child, including partial setup and fork failures.
+`restartprobe` checks restart codes at syscall and signal-delivery stops, writes them back in each tracer's register width, changes the result and call number, and saves and restores a pending restart. Its tracing cases also check that orig -1 and a return with no pending signal leave an injected code visible, and its race case that a read whose signal another thread of its process took while the read sat at its exit stop restarts rather than return -512. Every row removes its System V objects and closes its pipes after reaping its child, including partial setup and fork failures.
 
 `memcallmusl` checks the resident protection of a prefix before mprotect refuses a sealed secret suffix, rejects secret-memory node queries without populating a page, and checks process_madvise with filesystem IDs different from the effective IDs.
 

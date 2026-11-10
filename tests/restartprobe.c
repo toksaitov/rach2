@@ -48,6 +48,11 @@
  * `trace-edits`: the tracer writes a restart code back, cancels at delivery,
  * changes its call number, saves and restores registers after orig -1,
  * and leaves injected codes unchanged with orig -1 or no pending signal.
+ * `race`: a traced thread's pipe read, woken by a signal sent to its
+ * process that only it does not block, is held at its exit stop with -512,
+ * ERESTARTSYS, while a second thread unblocks the signal and runs its
+ * handler; the read then restarts, as Linux restarts a call when get_signal
+ * finds nothing, and never returns the restart code.
  *
  * Each row of a timed call that goes on checks CLOCK_MONOTONIC: the call
  * ends no sooner than its deadline, 3 s after it began or for ppoll, select
@@ -100,6 +105,10 @@
 #define PTRACE_CONT     7
 #define PTRACE_KILL     8
 #define PTRACE_SYSCALL  24
+#define PTRACE_DETACH   17
+
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
 
 #define PROT_RW         3
 #define MAP_SHARED_ANON 0x21
@@ -1145,6 +1154,208 @@ static void trace_row(void)
     }
 }
 
+/**
+ * thread_spawn(fn, stack_top) starts a thread of the probe's process that
+ * runs `fn` on the stack ending at `stack_top`, aligned to 16, and ends when
+ * `fn` returns; the thread's id, or a negated errno. The flags are Linux's
+ * CLONE_VM, CLONE_FS, CLONE_FILES, CLONE_SIGHAND, CLONE_THREAD and
+ * CLONE_SYSVSEM, 0x50f00.
+ */
+long thread_spawn(void (*fn)(void), void *stack_top);
+
+#if defined __x86_64__
+__asm__(".text\n"
+        ".globl thread_spawn\n"
+        "thread_spawn:\n"
+        "    subq $16, %rsi\n"
+        "    movq %rdi, (%rsi)\n"
+        "    movl $0x50f00, %edi\n"
+        "    xorl %edx, %edx\n"
+        "    xorl %r10d, %r10d\n"
+        "    xorl %r8d, %r8d\n"
+        "    movl $56, %eax\n"
+        "    syscall\n"
+        "    testq %rax, %rax\n"
+        "    jnz 1f\n"
+        "    popq %rax\n"
+        "    andq $-16, %rsp\n"
+        "    call *%rax\n"
+        "    xorl %edi, %edi\n"
+        "    movl $60, %eax\n"
+        "    syscall\n"
+        "1:  ret\n");
+#else
+__asm__(".text\n"
+        ".globl thread_spawn\n"
+        "thread_spawn:\n"
+        "    pushl %ebx\n"
+        "    pushl %esi\n"
+        "    pushl %edi\n"
+        "    movl 20(%esp), %ecx\n"
+        "    subl $16, %ecx\n"
+        "    movl 16(%esp), %eax\n"
+        "    movl %eax, (%ecx)\n"
+        "    movl $0x50f00, %ebx\n"
+        "    xorl %edx, %edx\n"
+        "    xorl %esi, %esi\n"
+        "    xorl %edi, %edi\n"
+        "    movl $120, %eax\n"
+        "    int $0x80\n"
+        "    testl %eax, %eax\n"
+        "    jnz 1f\n"
+        "    popl %eax\n"
+        "    call *%eax\n"
+        "    xorl %ebx, %ebx\n"
+        "    movl $1, %eax\n"
+        "    int $0x80\n"
+        "1:  popl %edi\n"
+        "    popl %esi\n"
+        "    popl %ebx\n"
+        "    ret\n");
+#endif
+
+/* The race row's pipes: the tracer's cue to the second thread, the second
+ * thread's answer once its handler has run, and the pipe the traced thread
+ * reads. The thread that ran the handler, by its id, and that thread's
+ * stack. */
+static int race_cue[2], race_done[2], race_data[2];
+static volatile long taker;
+static char race_stack[16384] __attribute__((aligned(16)));
+
+/** The race row's SIGUSR1 handler: note the thread that ran it. */
+static void on_race(int signo)
+{
+    (void)signo;
+    taker = syscall0(SYS_GETTID);
+}
+
+/** The race row's second thread, which starts with SIGUSR1 blocked: at the
+ * tracer's cue unblock it, so that the thread takes the signal pending for
+ * its process and runs the handler, then answer. */
+static void race_thread(void)
+{
+    unsigned int set[2];
+    char byte = 0;
+
+    set[0] = 1u << (SIGUSR1 - 1);
+    set[1] = 0;
+    if (syscall3(SYS_READ, race_cue[0], (long)&byte, 1) == 1) {
+        syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)set, 0, 8);
+    }
+    syscall3(SYS_WRITE, race_done[1], (long)&byte, 1);
+}
+
+/** The race row's tracee: start the second thread with SIGUSR1 blocked,
+ * stop for the tracer, and read a byte; exit 0 when the read gave it and
+ * the second thread ran the handler, 4 when the read returned a restart
+ * code, 5 for another result and 6 when the handler ran elsewhere. */
+static void race_subject(void)
+{
+    unsigned int set[2];
+    long me = syscall0(SYS_GETPID), second, r;
+    char byte;
+
+    set[0] = 1u << (SIGUSR1 - 1);
+    set[1] = 0;
+    install(SIGUSR1, on_race, 0);
+    syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)set, 0, 8);
+    second = thread_spawn(race_thread, race_stack + sizeof(race_stack));
+    if (second < 0) {
+        sys_exit(2);
+    }
+    syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)set, 0, 8);
+    if (syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0) != 0) {
+        sys_exit(3);
+    }
+    syscall3(SYS_TGKILL, me, me, SIGSTOP);
+    r = syscall3(SYS_READ, race_data[0], (long)&byte, 1);
+    if (r != 1) {
+        sys_exit(r <= -512 && r >= -516 ? 4 : 5);
+    }
+    sys_exit(taker == second ? 0 : 6);
+}
+
+/** Drive the race in the stopped tracee `*pid`: let its read sleep, send
+ * its process SIGUSR1, which only it does not block, and hold it at the
+ * read's exit stop while the second thread takes the signal; then require
+ * the read's entry stop again. Whether each step held. */
+static int race_drive(int *pid)
+{
+    char byte = 'r';
+    long v;
+
+    if (trace_stop(pid) != SIGSTOP || !trace_entry(pid, SYS_READ) ||
+        syscall4(SYS_PTRACE, PTRACE_SYSCALL, *pid, 0, 0) != 0 || !wait_sleeping(*pid) ||
+        syscall2(SYS_KILL, *pid, SIGUSR1) != 0 || trace_stop(pid) != SIGTRAP) {
+        miss("race", -1, "could not reach the read's exit stop", 0, 1);
+        return 0;
+    }
+    v = (long)(int)peek(*pid, USER_RET);
+    if (v != -512) {
+        miss("race", -1, "had at the read's exit stop", v, -512);
+        return 0;
+    }
+    if (syscall3(SYS_WRITE, race_cue[1], (long)&byte, 1) != 1 ||
+        syscall3(SYS_READ, race_done[0], (long)&byte, 1) != 1) {
+        miss("race", -1, "had no answer from the second thread", 0, 1);
+        return 0;
+    }
+    v = next_stop(pid, 0) == SIGTRAP ? (long)(int)peek(*pid, USER_ORIG) : -1;
+    if (v != SYS_READ) {
+        miss("race", -1, "called after the signal another thread took", v, SYS_READ);
+        return 0;
+    }
+    if (syscall4(SYS_PTRACE, PTRACE_DETACH, *pid, 0, 0) != 0 ||
+        syscall3(SYS_WRITE, race_data[1], (long)&byte, 1) != 1) {
+        miss("race", -1, "could not detach and wake the read", 0, 1);
+        return 0;
+    }
+    return 1;
+}
+
+/** The row `race`: a read whose process-directed signal another thread of
+ * its process took before the read returned restarts, and the program
+ * never sees the restart code. */
+static void race_row(void)
+{
+    int pid = -1, status = 0, ok = 0;
+
+    report_part("race");
+    race_cue[0] = race_cue[1] = race_done[0] = race_done[1] = -1;
+    race_data[0] = race_data[1] = -1;
+    if (syscall1(SYS_PIPE, (long)race_cue) != 0 || syscall1(SYS_PIPE, (long)race_done) != 0 ||
+        syscall1(SYS_PIPE, (long)race_data) != 0) {
+        miss("race", -1, "could not make its pipes", 0, 0);
+        goto out;
+    }
+    pid = (int)syscall0(SYS_FORK);
+    if (pid < 0) {
+        miss("race", -1, "could not fork", pid, 0);
+        goto out;
+    }
+    if (pid == 0) {
+        race_subject();
+    }
+    if (!race_drive(&pid)) {
+        goto out;
+    }
+    if (syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) == pid) {
+        pid = 0;
+        ok = status == 0;
+    }
+    if (!ok) {
+        miss("race", -1, "ended with status", status, 0);
+    }
+out:
+    if (pid > 0) {
+        syscall2(SYS_KILL, pid, 9);
+        syscall4(SYS_WAIT4, pid, (long)&status, 0, 0);
+    }
+    close_pipe(race_cue);
+    close_pipe(race_done);
+    close_pipe(race_data);
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -1176,6 +1387,7 @@ void probe_main(unsigned long *sp)
         miss("restart_syscall", S_PLAIN, "after a handler returned", direct, -EINTR);
     }
     trace_row();
+    race_row();
     report_finish();
     probe_line(failed ? "RESTARTPROBE FAIL" : "RESTARTPROBE OK", 0, 0);
     sys_exit(failed);

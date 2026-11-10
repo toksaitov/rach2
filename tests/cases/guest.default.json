@@ -774,7 +774,8 @@
         {"assertion_id": "plain-untimed", "checks": "After a handler without SA_RESTART each untimed call returns EINTR.", "source": "program"},
         {"assertion_id": "direct", "checks": "restart_syscall made directly, and after a handler cut a nanosleep short, returns EINTR.", "source": "program"},
         {"assertion_id": "trace", "checks": "A tracer reads -516 at the exit stop of a nanosleep that SIGWINCH cut short, then the signal's delivery stop, then the entry stop of restart_syscall, 0 on i386 and 219 on x86-64, and its exit stop with 0.", "source": "program"},
-        {"assertion_id": "trace-edits", "checks": "A tracer writes restart codes in its register width, changes the result and call number at signal delivery, restores a saved restart after orig -1, and leaves an injected code visible with orig -1 or no pending signal.", "source": "program"}
+        {"assertion_id": "trace-edits", "checks": "A tracer writes restart codes in its register width, changes the result and call number at signal delivery, restores a saved restart after orig -1, and leaves an injected code visible with orig -1 or no pending signal.", "source": "program"},
+        {"assertion_id": "race", "checks": "A traced thread's pipe read, held at its exit stop with -512 while a second thread takes the signal sent to the process and runs its handler, restarts and never returns the restart code.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
