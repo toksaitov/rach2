@@ -105,10 +105,15 @@ static struct {
     int serio[SERIO_PORTS];
 } parents;
 
-/* Each serio port's firmware ID, NULL for none, and the function that adds
- * its driver's own files to its directory, NULL for none. */
+/* Each serio port's firmware ID, NULL for none; the functions that add its
+ * driver's own files to its directory, which stay while it does, and its
+ * protocol's, which a change of protocol replaces, NULL for none; and the
+ * entries the protocol's function made, 0 past the last. */
+#define SERIO_FILES_MAX 24
 static const char *serio_firmware[SERIO_PORTS];
+static int (*serio_driver[SERIO_PORTS])(int dir);
 static int (*serio_files[SERIO_PORTS])(int dir);
+static int serio_made[SERIO_PORTS][SERIO_FILES_MAX];
 
 /* What a show writes: the bytes so far, which may pass `cap`, so that the
  * show returns how many it needs; a `cap` of 0 counts alone. */
@@ -759,9 +764,54 @@ static int serio_bus_devices(void)
     return parents.serio_devices;
 }
 
+/**
+ * Have the protocol's function of the serio port `port` add its files to the
+ * port's directory `dir`, and keep the entries it made, found as those that
+ * were not below `dir` before, so that a change of protocol can remove them.
+ * 0, or the function's -errno, with what it made removed.
+ */
+static int add_serio_files(int port, int dir)
+{
+    int before[SERIO_FILES_MAX * 3], nbefore, n, h, i, j, made = 0, rc;
+
+    k_memset(serio_made[port], 0, sizeof(serio_made[port]));
+    if (!serio_files[port]) {
+        return 0;
+    }
+    nbefore = sysfs_node_count(dir);
+    if (nbefore > (int)(sizeof(before) / sizeof(before[0]))) {
+        return -ENOSPC;
+    }
+    for (i = 0; i < nbefore; i++) {
+        before[i] = sysfs_node_nth(dir, i);
+    }
+    rc = serio_files[port](dir);
+    n = sysfs_node_count(dir);
+    for (i = 0; i < n; i++) {
+        h = sysfs_node_nth(dir, i);
+        for (j = 0; j < nbefore && before[j] != h; j++) {
+        }
+        if (j < nbefore) {
+            continue;
+        }
+        if (made < SERIO_FILES_MAX) {
+            serio_made[port][made++] = h;
+        } else {
+            rc = -ENOSPC; /* the table is sized for the largest protocol's */
+        }
+    }
+    if (rc < 0) {
+        for (i = 0; i < made; i++) {
+            sysfs_remove(serio_made[port][i]);
+        }
+        k_memset(serio_made[port], 0, sizeof(serio_made[port]));
+    }
+    return rc;
+}
+
 /** The serio port `port`, serioK below the i8042, or below serio1 for the
- * pass-through port, with its files and links and its driver's, made on
- * its first use. */
+ * pass-through port, with its files and links and its driver's and
+ * protocol's, made on its first use. */
 static int serio_dir(int port)
 {
     static const struct sysfs_attr attrs[] = {{"description", 0444u, show_serio, NULL},
@@ -789,7 +839,7 @@ static int serio_dir(int port)
             add_attrs(id, ids, 4, NULL, port * 16 + SERIO_TYPE) < 0 ||
             sysfs_add_uevent(h, show_serio, NULL, port * 16 + SERIO_UEVENT) < 0 ||
             sysfs_add_link(h, "subsystem", parents.bus_serio) < 0 ||
-            (serio_files[port] && serio_files[port](h) < 0)) {
+            (serio_driver[port] && serio_driver[port](h) < 0) || add_serio_files(port, h) < 0) {
             sysfs_remove(h);
             return -ENOMEM;
         }
@@ -1091,10 +1141,29 @@ void evdev_sysfs_serio_firmware_id(int port, const char *id)
     }
 }
 
-void evdev_sysfs_serio_files(int port, int (*add)(int dir))
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
 {
     if (port >= 0 && port < SERIO_PORTS) {
-        serio_files[port] = add;
+        serio_driver[port] = add;
+    }
+}
+
+void evdev_sysfs_serio_files(int port, int (*add)(int dir))
+{
+    int i;
+
+    if (port < 0 || port >= SERIO_PORTS) {
+        return;
+    }
+    serio_files[port] = add;
+    if (sysfs_node_kind(parents.serio[port]) != SYSFS_NODE_DIR) {
+        return; /* the directory, when made, takes them */
+    }
+    for (i = 0; i < SERIO_FILES_MAX && serio_made[port][i]; i++) {
+        sysfs_remove(serio_made[port][i]);
+    }
+    if (add_serio_files(port, parents.serio[port]) < 0) {
+        klog(KLOG_WARN, "input", "serio%d: the protocol's files were not made", port);
     }
 }
 

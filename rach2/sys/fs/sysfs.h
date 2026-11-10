@@ -21,9 +21,11 @@
  *
  * Every call runs under the big kernel lock, from a probe, a system call or
  * a worker, never from an interrupt, since adding takes heap. A `show` runs
- * at each open of its file and at each read from offset 0, and must not
- * sleep; a `store` runs at each write and may sleep, holding a reference to
- * whatever it uses after the sleep, since the entry may be removed meanwhile.
+ * at each open of its file and at each read from offset 0, a `store` at each
+ * write. Either may sleep, as a driver's that asks its device does, holding
+ * a reference to whatever it uses after the sleep, since the entry may be
+ * removed meanwhile; a uevent's `show`, which `sysfs_uevent` calls, must
+ * not.
  */
 
 #define SYSFS_NODES_MAX 65536 /* entries and anchors at once; the table grows */
