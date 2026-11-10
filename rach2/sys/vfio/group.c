@@ -968,20 +968,17 @@ int vfio_nodes_start(void)
 }
 
 /**
- * Start VFIO: form the groups of the IOMMU's units, add their nodes and
- * their entries of /sys. Called once at boot, after the IOMMU and the PCI
- * bus are up; nothing is made when no unit translates.
+ * Start VFIO: form the groups of the IOMMU's units, and add the container's
+ * node, each group's and VFIO's entries of /sys. Called once at boot, after
+ * the IOMMU and the PCI bus are up. With no unit translating there are no
+ * groups, but /dev/vfio/vfio, /sys/kernel/iommu_groups and vfio-pci's
+ * directory are there, as on Linux.
  */
 void vfio_start(void)
 {
     int n = vfio_groups_build();
-    int r;
+    int r = vfio_nodes_start();
 
-    if (n == 0) {
-        klog(KLOG_INFO, "vfio", "none: no IOMMU unit translates");
-        return;
-    }
-    r = vfio_nodes_start();
     if (r == 0) {
         r = vfio_sysfs_start();
     }
@@ -990,5 +987,7 @@ void vfio_start(void)
         return;
     }
     klog(KLOG_INFO, "vfio", "ready: %d groups of %d functions%s", n, vfio_ndevices,
-         iommu_irq_remapped() ? "" : ", interrupts not remapped");
+         n == 0                 ? ", no IOMMU unit translates"
+         : iommu_irq_remapped() ? ""
+                                : ", interrupts not remapped");
 }
