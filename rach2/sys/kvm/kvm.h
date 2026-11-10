@@ -351,10 +351,10 @@ struct kvm_vm {
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
     void *backend;                        /* the backend's */
-    void *gpamap;                         /* gpamap.c's: the maps of the guest's pages into programs */
-    struct kvm_vm *next_vm;               /* kvm.c's list of live VMs */
-    uint64_t stat[KVM_VM_STATS];          /* by enum kvm_vm_stat */
-    char stats_id[KVM_STATS_NAME_SIZE];   /* "kvm-PID", its maker's */
+    void *gpamap;                /* gpamap.c's: the maps of the guest's pages into programs */
+    struct kvm_vm *next_vm;      /* kvm.c's list of live VMs */
+    uint64_t stat[KVM_VM_STATS]; /* by enum kvm_vm_stat */
+    char stats_id[KVM_STATS_NAME_SIZE]; /* "kvm-PID", its maker's */
 };
 
 #define KVM_IRQCHIP_NONE   0
