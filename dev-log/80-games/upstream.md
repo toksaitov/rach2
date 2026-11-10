@@ -68,6 +68,17 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: unreported.
 * Next: check current SuperTuxKart; run the reproduction; report with a patch that counts in the main loop's drawing.
 
+## Weston's kiosk-shell leaves an X window's frame where it sat with its margin
+
+* Project: Weston 14.0.2, Debian's `weston` 14.0.2-1, `kiosk-shell/kiosk-shell.c` at the tag `14.0.2`; source package as in the entry above.
+* Fails: an undecorated X window of the output's size that sets no fullscreen state, as games and `tests/system/games/xplace.c` map, keeps its X frame at -32,-32, so X reports the client at -32,-32 or, with the frame resized, its frame off the output. Weston's window manager frames such a window with the theme's 32-pixel margin until kiosk-shell makes it fullscreen, and places the 1430x832 frame at -32,-32 so that the client stays at 0,0. kiosk-shell tells the window manager a view's place only from its transform handler (lines 88 to 113), which returns while the view is unmapped, and `desktop_surface_committed` (lines 976 to 1075) centres a fullscreen surface only when it maps or changes size (line 1021). The view is centred while unmapped and stays at 0,0, so no transform signal reaches the window manager after the window becomes fullscreen, and the frame keeps -32,-32 at 1366x768.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, in Rach2's boot session on QEMU's `virgl` profile, where Weston's capture of the output showed xplace's window from edge to edge while X put its frame at -32,-32.
+* Reproduction: `tests/run games-wm`, row `place`, with Debian's kiosk-shell: `xplace 1366 768` prints `window at -32,-32 size 1366x768` and `frame at -32,-32 size 1366x768 child at 0,0`. The window manager's scope (`weston --debug --logger-scopes=log,xwm-wm-x11`) logs the frame's configure notifications `-32,-32 @ 1430x832` and then `-32,-32 @ 1366x768`, and nothing after.
+* Evidence: the games-wm place row's output of task 80-4; `vendor/gnu/games/weston/kiosk-fullscreen-centre.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `kiosk-fullscreen-centre.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, centres a fullscreen surface on each commit and calls the transform handler at the end of each commit, which sends the window manager the view's place when it changed; the frame's configure notifications then end at `0,0 @ 1366x768`.
+* Status: unreported.
+* Next: check Weston's main branch; report with the reproduction and the patch.
+
 ## Weston's Xwayland window manager resizes an emulated mode's window to the output
 
 * Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `xwayland/window-manager.c` at the tag `14.0.2`; source package as in the kiosk-shell entry above.
@@ -76,5 +87,16 @@ Faults this milestone found in another project's code, one section each, in the 
 * Reproduction: `tests/run games-wm`, row `scaled`, with Debian's Weston.
 * Evidence: `vendor/gnu/games/weston/xwm-emulated-mode.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
 * Rach2: `xwm-emulated-mode.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, reads the property, gives a fullscreen window the emulated size in its configure, keeps its X position at the output's origin, fullscreens it again when the property changes, and takes input over the whole scaled surface. With it, xplace reports `window at 0,0 size 800x600` and `emulated 0,0 800x600`, and Weston's capture of the output shows the window's halves from edge to edge.
+* Status: unreported.
+* Next: check Weston's main branch; report with the patch.
+
+## Weston's Xwayland window manager keeps a window override-redirect after it asks to be mapped
+
+* Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `xwayland/window-manager.c` at the tag `14.0.2`.
+* Fails: a window that a client creates override-redirect and then makes an ordinary window before mapping it, as Wine does with its fullscreen window, never gets the input focus. `weston_wm_window_create` takes `override_redirect` from the CreateNotify (line 1620), and nothing clears it: `weston_wm_handle_map_request` (line 1242) frames and maps the window, but `weston_wm_send_focus_window` returns before `xcb_set_input_focus` for a window it counts override-redirect (line 965), `weston_wm_handle_configure_request` ignores its requests (line 822) and `weston_wm_window_send_configure_notify` sends it none. The X focus stays None, so the program's keys reach no window. The X server sends a MapRequest only for a window that is not override-redirect.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, with `tests/system/games/fullprobe.c` (a WS_POPUP window and a Direct3D 9 device with `Windowed` false) under GE-Proton in Rach2's boot session on kiosk-shell.
+* Reproduction: `tests/run games-wm`, row `place` or `scaled`, with Debian's window manager: `xplace -q fullprobe` prints `focus no: 0x0` while Wine's window fills the output; the window manager's scope logs `XCB_CREATE_NOTIFY (window N, at (0, 0), width 1366, height 768, override)` and then `XCB_MAP_REQUEST (window N, ...)` for the same window.
+* Evidence: the games-wm rows' output of task 80-4; `vendor/gnu/games/weston/xwm-mapped-managed.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `xwm-mapped-managed.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, clears the flag in `weston_wm_handle_map_request` before the window's properties are read.
 * Status: unreported.
 * Next: check Weston's main branch; report with the patch.
