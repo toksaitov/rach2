@@ -78,12 +78,14 @@ static int report(int ctl, const char *when)
     }
     printf("ivshmemd: %s: attached %u, bound %u, epoch %u, driver %u, device %u, error %u, "
            "doorbells %u, binds %u, rung %llu/%llu, woken %llu/%llu, polls %llu, heap %llu of "
-           "%llu pages, refused %llu\n",
+           "%llu pages, refused %llu, maps %llu, map_pages %llu, map_live %llu, revoked %llu\n",
            when, in.attached, in.bound, in.epoch, in.drv_state, in.dev_state, in.dev_error,
            in.doorbells, in.binds, (unsigned long long)in.rung[0], (unsigned long long)in.rung[1],
            (unsigned long long)in.woken[0], (unsigned long long)in.woken[1],
            (unsigned long long)in.polls, (unsigned long long)in.heap_used,
-           (unsigned long long)in.heap_pages, (unsigned long long)in.refused);
+           (unsigned long long)in.heap_pages, (unsigned long long)in.refused,
+           (unsigned long long)in.maps, (unsigned long long)in.map_pages,
+           (unsigned long long)in.map_live, (unsigned long long)in.revoked);
     fflush(stdout);
     return 0;
 }
