@@ -704,7 +704,7 @@ static int mnt(void)
 #define MANY 40
 
 /** The entries of the directory `path` other than . and .., or -1. */
-static int entries(const char *path)
+static int dir_entries(const char *path)
 {
     DIR *d = opendir(path);
     struct dirent *de;
@@ -741,7 +741,7 @@ static void many_child(int i, int ready, int go)
     close(fd);
     write(ready, &c, 1);
     read(go, &c, 1);
-    _exit(entries("/tmp/nsmany") == 1 && access(path, F_OK) == 0 ? 0 : 1);
+    _exit(dir_entries("/tmp/nsmany") == 1 && access(path, F_OK) == 0 ? 0 : 1);
 }
 
 /**
@@ -774,7 +774,7 @@ static int many_mnt(void)
     for (i = 0; i < MANY; i++) {
         made += pids[i] > 0 && read(ready[0], &c, 1) == 1 && c == 'x';
     }
-    if (made == MANY && entries("/tmp/nsmany") != 0) {
+    if (made == MANY && dir_entries("/tmp/nsmany") != 0) {
         made = -1;
     }
     close(go[1]);
