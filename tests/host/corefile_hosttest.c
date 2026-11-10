@@ -733,6 +733,32 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
     return -ENOENT;
 }
 
+/** No row names a device: -ENOENT. */
+int devfs_owner(const char *name, uint32_t *uid, uint32_t *gid)
+{
+    (void)name;
+    (void)uid;
+    (void)gid;
+    return -ENOENT;
+}
+
+/** No row changes a device: -ENOENT. */
+int32_t devfs_setattr(const char *name, uint32_t mode, uint32_t uid, uint32_t gid)
+{
+    (void)name;
+    (void)mode;
+    (void)uid;
+    (void)gid;
+    return -ENOENT;
+}
+
+/** The name of a device descriptor, which no row has: the empty name. */
+const char *devfs_fd_name(struct fd_entry *e)
+{
+    (void)e;
+    return "";
+}
+
 /** The type of a device descriptor, which no row has: 0. */
 uint32_t devfs_fd_mode(struct fd_entry *e)
 {
@@ -1102,6 +1128,32 @@ int inotify_is(int fd)
 {
     (void)fd;
     return 0;
+}
+
+/** No row's file is watched. */
+void inotify_file(struct vfs_mount *mnt, uint64_t ino, uint32_t mask)
+{
+    (void)mnt;
+    (void)ino;
+    (void)mask;
+}
+
+/** No row's directory is watched. */
+void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, uint32_t mask,
+                   uint32_t cookie)
+{
+    (void)mnt;
+    (void)dir_ino;
+    (void)name;
+    (void)mask;
+    (void)cookie;
+}
+
+/** No row changes a file of the boot root, whose times are not kept. */
+void krffs_stamp(krffs_node_t *node, int what)
+{
+    (void)node;
+    (void)what;
 }
 
 /** No row adds a watch: -EINVAL. */

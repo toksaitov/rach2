@@ -516,6 +516,14 @@ void input_set_repeat(int delay_ms, int period_ms)
     repeat_period = period_ms;
 }
 
+/** The harness has no console, so a key of a device goes nowhere. */
+void input_console_key(const void *device, unsigned int keycode, int value)
+{
+    (void)device;
+    (void)keycode;
+    (void)value;
+}
+
 /**
  * Take an event a program wrote to a keyboard's node, or an LED or repeat
  * event to any node, which the kernel gives the console; the harness has
