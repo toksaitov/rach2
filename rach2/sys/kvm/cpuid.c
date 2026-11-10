@@ -279,6 +279,29 @@ static int32_t kvm_leaves(struct kvm_cpuid_entry2 *out, uint32_t *count, uint32_
     return 0;
 }
 
+int32_t kvm_cpuid_emulated(struct kvm_cpuid_entry2 *out, uint32_t max)
+{
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+
+    if (max < 3u) {
+        return -E2BIG;
+    }
+    k_memset(out, 0, 3u * sizeof(*out));
+    out[0].eax = 7;
+    out[1].function = 1;
+    out[1].ecx = 1u << 22;
+    out[2].function = 7;
+    out[2].flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+    kcpu_id(0x80000000u, &a, &b, &c, &d);
+    if (a >= 0x80000001u) {
+        kcpu_id(0x80000001u, &a, &b, &c, &d);
+        if ((d >> 27) & 1u) {
+            out[2].ecx = 1u << 22;
+        }
+    }
+    return 3;
+}
+
 int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
 {
     uint64_t xcr0 = kvm_xcr0_supported();

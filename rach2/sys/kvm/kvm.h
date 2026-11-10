@@ -495,6 +495,13 @@ int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg);
  * are needed. */
 int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max);
 
+/** KVM_GET_EMULATED_CPUID's entries, as Linux's __do_cpuid_func_emulated
+ * gives them, up to `max` into `out`: leaf 0 with the highest leaf, 7;
+ * leaf 1 with MOVBE; and leaf 7 with RDPID where the host has RDTSCP,
+ * the instructions emulate.c runs after the #UD of a processor that lacks
+ * them. The count, 3, or -E2BIG. */
+int32_t kvm_cpuid_emulated(struct kvm_cpuid_entry2 *out, uint32_t max);
+
 /** The entry of `v`'s CPUID for `function` and `index`, or NULL. */
 const struct kvm_cpuid_entry2 *kvm_cpuid_find(const struct kvm_vcpu *v, uint32_t function,
                                               uint32_t index);
@@ -1196,7 +1203,8 @@ int kvm_emul_mmio(struct kvm_vcpu *v, const uint64_t info[5]);
  * Carry out the instruction at CS:RIP of `v` that raised #UD on the
  * host's processor, when it is one Linux's emulator runs after a #UD:
  * SYSCALL, SYSENTER and SYSEXIT, which a processor of the other vendor
- * refuses in some modes; MOVBE; and VMCALL or VMMCALL, whichever the
+ * refuses in some modes; MOVBE and RDPID, for a guest whose CPUID has
+ * them on a processor without; and VMCALL or VMMCALL, whichever the
  * host's processor lacks, which is rewritten in the guest's memory as the
  * one it has and left to run again. Any other is given back to the guest
  * as the #UD it raised. `v->exit` and `info` as `kvm_emul_mmio`. 0, or

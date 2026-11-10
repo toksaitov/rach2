@@ -1408,6 +1408,7 @@ int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index,
 #define MSR_LSTAR             0xC0000082u
 #define MSR_CSTAR             0xC0000083u
 #define MSR_SYSCALL_MASK      0xC0000084u
+#define MSR_TSC_AUX           0xC0000103u
 
 /* Where the XSAVE image keeps what the emulator reads: the control and
  * status words, the abridged tag word, MXCSR, the x87 and MMX registers,
@@ -3748,16 +3749,29 @@ static int h_hypercall(struct xc *x)
                   3);
 }
 
+/** RDPID, as Linux's em_rdpid: IA32_TSC_AUX into the register, or #UD
+ * for a guest whose CPUID lacks RDPID. */
+static int h_rdpid(struct xc *x)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(x->v, 7, 0);
+
+    if (!e || !(e->ecx & (1u << 22))) {
+        return x_fault(x, UD_VECTOR, 0, 0);
+    }
+    x->d[0] = x_msr(x, MSR_TSC_AUX);
+    return X_OK;
+}
+
 /* The function that carries out each operation, by KVM_OP_*. */
 static int (*const handlers[KVM_OP_LAST + 1])(struct xc *) = {
-    0,          h_mov,       h_alu,       h_unary,    h_xchg,      h_shift,   h_muldiv,   h_imul,
-    h_bt,       h_bscan,     h_dshift,    h_cmpxchg,  h_cmpxchg8b, h_xadd,    h_cmov,     h_setcc,
-    h_movbe,    h_bswap,     h_lea,       h_nop,      h_push,      h_pop,     h_pusha,    h_popa,
-    h_pushf,    h_popf,      h_push_sreg, h_pop_sreg, h_enter,     h_leave,   h_jcc,      h_jmp,
-    h_jmp_abs,  h_jmp_far,   h_call,      h_call,     h_call_far,  h_ret,     h_ret_far,  h_loop,
-    h_mov_sreg, h_store_seg, h_load_seg,  h_lseg,     h_store_dt,  h_load_dt, h_smsw,     h_lmsw,
-    h_flag,     h_cbw,       h_cwd,       h_sahf,     h_lahf,      h_bcd,     h_fnst,     h_fnst,
-    h_fninit,   h_fxsave,    h_fxrstor,   h_syscall,  h_sysenter,  h_sysexit, h_hypercall};
+    0,          h_mov,       h_alu,       h_unary,    h_xchg,      h_shift,   h_muldiv,    h_imul,
+    h_bt,       h_bscan,     h_dshift,    h_cmpxchg,  h_cmpxchg8b, h_xadd,    h_cmov,      h_setcc,
+    h_movbe,    h_bswap,     h_lea,       h_nop,      h_push,      h_pop,     h_pusha,     h_popa,
+    h_pushf,    h_popf,      h_push_sreg, h_pop_sreg, h_enter,     h_leave,   h_jcc,       h_jmp,
+    h_jmp_abs,  h_jmp_far,   h_call,      h_call,     h_call_far,  h_ret,     h_ret_far,   h_loop,
+    h_mov_sreg, h_store_seg, h_load_seg,  h_lseg,     h_store_dt,  h_load_dt, h_smsw,      h_lmsw,
+    h_flag,     h_cbw,       h_cwd,       h_sahf,     h_lahf,      h_bcd,     h_fnst,      h_fnst,
+    h_fninit,   h_fxsave,    h_fxrstor,   h_syscall,  h_sysenter,  h_sysexit, h_hypercall, h_rdpid};
 
 /**
  * Step the registers of a string instruction after one element: rSI and
@@ -3944,14 +3958,15 @@ static int emul_run(struct kvm_vcpu *v)
 }
 
 /** Whether Linux's emulator carries `in` out after a #UD, its
- * EmulateOnUD: SYSCALL, SYSENTER, SYSEXIT, MOVBE, VMCALL and VMMCALL. */
+ * EmulateOnUD: SYSCALL, SYSENTER, SYSEXIT, MOVBE, RDPID, VMCALL and
+ * VMMCALL. */
 static int runs_on_ud(const struct kvm_insn *in)
 {
     if (in->flags & KVM_INSN_UD) {
         return 0;
     }
     return in->op == KVM_OP_SYSCALL || in->op == KVM_OP_SYSENTER || in->op == KVM_OP_SYSEXIT ||
-           in->op == KVM_OP_MOVBE || in->op == KVM_OP_HYPERCALL;
+           in->op == KVM_OP_MOVBE || in->op == KVM_OP_HYPERCALL || in->op == KVM_OP_RDPID;
 }
 
 /**

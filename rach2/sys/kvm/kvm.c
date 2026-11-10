@@ -245,9 +245,9 @@ out:
 }
 
 /** KVM_GET_SUPPORTED_CPUID, or KVM_GET_EMULATED_CPUID for `emulated`,
- * which has no entries: the kernel emulates no instruction the processor
- * lacks. The entries and their count, which Linux writes back only when
- * they fit: 0, -E2BIG, -ENOMEM or -EFAULT. */
+ * the features whose instructions the kernel runs for a processor that
+ * lacks them. The entries and their count, which Linux writes back only
+ * when they fit: 0, -E2BIG, -ENOMEM or -EFAULT. */
 static int32_t get_supported_cpuid(uintptr_t arg, int emulated)
 {
     struct kvm_cpuid2 head;
@@ -267,7 +267,7 @@ static int32_t get_supported_cpuid(uintptr_t arg, int emulated)
     if (!ent) {
         return -ENOMEM;
     }
-    n = emulated ? 0 : kvm_cpuid_supported(ent, head.nent);
+    n = emulated ? kvm_cpuid_emulated(ent, head.nent) : kvm_cpuid_supported(ent, head.nent);
     r = n;
     if (n >= 0) {
         head.nent = (uint32_t)n;

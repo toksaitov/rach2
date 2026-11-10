@@ -3054,6 +3054,10 @@ static void ud_rows(int fd)
     CHECK(ud_run(fd, 0, 0) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
           "SYSCALL outside 64-bit mode is #UD for a guest whose vendor is Intel's");
 
+    emul_start(fd, "\xf3\x0f\xc7\xf9", 4, 0, 0, 7);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == ud && regs_of(fd).rcx == 7,
+          "RDPID is #UD for a guest whose CPUID lacks it");
+
     emul_start(fd, "\x0f\x01\xd9", 3, 0, 0, 0);
     CHECK(ud_run(fd, EXIT_VMCALL, 3) == 0 && ram[0x1000] == 0x0F && ram[0x1001] == 0x01 &&
               ram[0x1002] == 0xC1 && m.injected == 0,
@@ -3221,6 +3225,11 @@ static void hv_rows(int vm)
         }
     }
     buf.cpuid.nent = n;
+    for (i = 0; i < n; i++) {
+        if (e[i].function == 7 && e[i].index == 0) {
+            e[i].ecx |= 1u << 22;
+        }
+    }
     k_memcpy(e + buf.cpuid.nent, hv.e, sizeof(hv.e));
     buf.cpuid.nent += 10;
     CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 with Hyper-V's leaves");
@@ -3240,6 +3249,13 @@ static void hv_rows(int vm)
     set_regs(fd, 0x1000, 0, 0, 0);
     CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
           "VMCALL is Hyper-V's, #UD in real mode and not stepped, before the HLT");
+    msrs.e[0].index = MSR_TSC_AUX;
+    msrs.e[0].data = 0x1234;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 1, "IA32_TSC_AUX set");
+    code(fd, 0x1000, "\xf3\x0f\xc7\xf9", 4, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == 0 && regs_of(fd).rcx == 0x1234 &&
+              regs_of(fd).rip == 0x1005,
+          "RDPID that raised #UD reads IA32_TSC_AUX for a guest whose CPUID has it");
     fdclose(fd);
 }
 
