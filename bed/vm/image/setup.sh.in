@@ -1,0 +1,126 @@
+#!/bin/sh
+# setup.sh.in: the VM's setup, which cloud-init runs as root on the
+# preparing boot. vm.sh puts the snapshot's date in place of @SNAPSHOT@, the
+# package list in place of @PACKAGES@ and vkms.patch, in base64, in place of
+# @VKMS_PATCH@. It points apt at Debian's snapshot of that date, installs the
+# packages, rebuilds Debian's virglrenderer with GBM allocation, builds vkms
+# with the patch, readies the kernel for vfio, adds the service that reports
+# the VM ready, turns cloud-init off so that every later boot is the same,
+# and reports on the serial console, which vm.sh reads.
+set -eu
+
+say()
+{
+    echo "bed-vm: $*" > /dev/ttyS0
+}
+
+trap 'say "failed: setup stopped at line $LINENO"' EXIT
+
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+cat > /etc/apt/sources.list.d/debian.sources <<SOURCES
+Types: deb deb-src
+URIs: http://snapshot.debian.org/archive/debian/@SNAPSHOT@
+Suites: trixie trixie-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb deb-src
+URIs: http://snapshot.debian.org/archive/debian-security/@SNAPSHOT@
+Suites: trixie-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SOURCES
+: > /etc/apt/sources.list
+cat > /etc/apt/apt.conf.d/80rach2-snapshot <<'CONF'
+Acquire::Check-Valid-Until "false";
+Acquire::Retries "5";
+APT::Install-Recommends "false";
+CONF
+
+say "updating"
+export DEBIAN_FRONTEND=noninteractive
+apt-get -q update
+say "installing"
+kernel=$(uname -r)
+# shellcheck disable=SC2086 # the list is words
+apt-get -q -y install @PACKAGES@ "linux-headers-$kernel"
+
+# Debian builds virglrenderer without minigbm_allocation, which alone
+# allocates a shared or scanout resource through GBM, so that it exports as
+# a dma-buf to Venus and to the display. Rebuild Debian's own source with
+# it, under a local version, and hold the result.
+say "building virglrenderer"
+mkdir /root/virgl
+cd /root/virgl
+apt-get -q -y build-dep virglrenderer
+apt-get -q source virglrenderer
+cd virglrenderer-*/
+version=$(dpkg-parsechangelog -S Version)
+sed -i 's/^\t-Dtests=true \\$/\t-Dtests=true -Dminigbm_allocation=true \\/' debian/rules
+grep -q -- '-Dminigbm_allocation=true' debian/rules
+DEBFULLNAME="Rach2 testbed" DEBEMAIL=testbed@invalid \
+    dch --local +rach2 --distribution trixie "Build with minigbm_allocation for the testbed."
+dpkg-buildpackage -b -uc -us -j"$(nproc)" > /root/virgl/build.log 2>&1 ||
+    { tail -n 30 /root/virgl/build.log > /dev/ttyS0; exit 1; }
+cd /root/virgl
+dpkg -i libvirglrenderer1_*.deb libvirglrenderer-dev_*.deb virgl-server_*.deb
+apt-mark hold libvirglrenderer1 libvirglrenderer-dev virgl-server
+cd /
+rm -rf /root/virgl
+
+# Debian's kernel is built without vkms; build it from the source of the
+# running kernel's own version with vkms.patch, against its headers, into
+# updates/, loaded at boot with its writeback connector.
+say "building vkms"
+version_k=$(dpkg-query -W -f '${Version}' "linux-image-$kernel")
+apt-get -q -y install "linux-source-6.12=$version_k"
+mkdir -p /root/vkms
+tar -xf /usr/src/linux-source-6.12.tar.xz -C /root/vkms --strip-components=5 \
+    linux-source-6.12/drivers/gpu/drm/vkms
+echo "@VKMS_PATCH@" | base64 -d | patch -d /root/vkms -p1
+make -C "/lib/modules/$kernel/build" M=/root/vkms CONFIG_DRM_VKMS=m modules
+install -D -m 644 /root/vkms/vkms.ko "/lib/modules/$kernel/updates/vkms.ko"
+depmod "$kernel"
+rm -rf /root/vkms
+apt-get -q -y purge linux-source-6.12
+apt-get -q -y clean
+echo vkms > /etc/modules-load.d/vkms.conf
+echo "options vkms enable_writeback=1" > /etc/modprobe.d/vkms.conf
+
+# The vfio way takes the device under QEMU's intel-iommu, which must not
+# remap interrupts (bed/vm/Readme.md), so vfio must allow that.
+sed -i 's/^GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 intel_iommu=on iommu=pt"/' \
+    /etc/default/grub
+update-grub
+echo "options vfio_iommu_type1 allow_unsafe_interrupts=1" > /etc/modprobe.d/vfio.conf
+
+cat > /usr/local/sbin/bed-vm-ready <<'READY'
+#!/bin/sh
+# bed-vm-ready: report the VM's versions and its readiness on the console.
+{
+    for p in libvirglrenderer1 libgl1-mesa-dri mesa-vulkan-drivers; do
+        echo "bed-vm: version: $p $(dpkg-query -W -f '${Version}' $p)"
+    done
+    echo "bed-vm: version: vkms $(modinfo -F vermagic vkms)"
+    echo "bed-vm: version: kernel $(uname -r)"
+    echo "bed-vm: ready"
+} > /dev/ttyS0
+READY
+chmod 755 /usr/local/sbin/bed-vm-ready
+cat > /etc/systemd/system/bed-vm-ready.service <<'UNIT'
+[Unit]
+Description=Report the testbed VM ready on the serial console
+After=ssh.service systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bed-vm-ready
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl enable bed-vm-ready.service
+
+touch /etc/cloud/cloud-init.disabled
+trap - EXIT
+say "prepared"
