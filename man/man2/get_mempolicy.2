@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt GET_MEMPOLICY 2
 .Os
 .Sh NAME
@@ -10,9 +10,12 @@
 .Fn get_mempolicy "int *mode" "unsigned long *nodemask" "unsigned long maxnode" "void *addr" "unsigned long flags"
 .Sh DESCRIPTION
 .Fn get_mempolicy
-answers as Linux 6.12 answers on a machine with one memory node, node 0,
-for a thread that has set no policy, since this kernel has one node and no
-call that sets a policy.
+reports the policy
+.Xr set_mempolicy 2
+gave the calling thread, or the one
+.Xr mbind 2
+gave an address, and answers as Linux 6.12 answers on a machine with one
+memory node, node 0.
 libnuma's
 .Fn numa_available
 calls it to learn whether the kernel has the call at all.
@@ -21,25 +24,38 @@ With
 .Fa flags
 0 and
 .Fa addr
-0 it stores
+0 it stores the thread's mode, with its mode flags, in
+.Fa mode
+and the policy's nodes in
+.Fa nodemask :
 .Dv MPOL_DEFAULT
 .Pq 0
-in
-.Fa mode
-and an empty mask, the default policy's, in
-.Fa nodemask .
+and an empty mask for a thread without a policy, an empty mask for
+.Dv MPOL_LOCAL ,
+node 0 for a policy set without a mode flag, and for one set with a flag
+the mask its caller gave.
 With
 .Dv MPOL_F_ADDR
 .Pq 2
-it answers the same for the mapping that holds
-.Fa addr .
+it answers the same for the policy of the mapping that holds
+.Fa addr ,
+or, in a mapping of a file in memory, of the file's page there; where
+.Xr mbind 2
+gave none the answer is
+.Dv MPOL_DEFAULT ,
+whatever the thread's policy.
 .Dv MPOL_F_NODE
 .Pq 1
 with
 .Dv MPOL_F_ADDR
-stores instead the node of the page at
+stores instead of the mode the node of the page at
 .Fa addr ,
 0, bringing the page in for a read as a fault would.
+.Dv MPOL_F_NODE
+alone stores the node the thread allocates from next, 0, when its policy is
+.Dv MPOL_INTERLEAVE
+or
+.Dv MPOL_WEIGHTED_INTERLEAVE .
 .Dv MPOL_F_MEMS_ALLOWED
 .Pq 4
 stores 0 in
@@ -67,7 +83,9 @@ set; the kernel returns the negative error number.
 .Sh EXAMPLES
 .Pa tests/limitsprobe.c
 reads the default policy with its empty mask, the allowed nodes, and the
-node of a page of its own.
+node of a page of its own, and
+.Pa tests/numaprobe.c
+reads back each policy it sets.
 .Sh ERRORS
 .Bl -tag -width "[EFAULT]"
 .It Bq Er EFAULT
@@ -95,9 +113,11 @@ is not 0 without
 or
 .Dv MPOL_F_NODE
 comes without
-.Dv MPOL_F_ADDR ,
-which Linux answers only for a thread with an interleaving policy.
+.Dv MPOL_F_ADDR
+in a thread whose policy does not interleave.
 .El
 .Sh SEE ALSO
-.Xr brk 2 ,
-.Xr sched_setscheduler 2
+.Xr mbind 2 ,
+.Xr move_pages 2 ,
+.Xr sched_setscheduler 2 ,
+.Xr set_mempolicy 2

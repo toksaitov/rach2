@@ -314,9 +314,15 @@ void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len)
 
 void shmem_free(struct shmem *sh)
 {
+    struct shmem_policy *n;
+
     shmem_truncate(sh, 0);
     kfree(sh->leaves);
     sh->leaves = NULL;
     sh->nleaves = 0;
     sh->npages = 0;
+    while ((n = sh->policies) != NULL) {
+        sh->policies = n->next;
+        kfree(n);
+    }
 }

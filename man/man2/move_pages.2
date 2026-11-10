@@ -1,0 +1,130 @@
+.Dd November 11, 2026
+.Dt MOVE_PAGES 2
+.Os
+.Sh NAME
+.Nm move_pages ,
+.Nm migrate_pages
+.Nd move the pages of a process between memory nodes, on a machine of one node
+.Sh SYNOPSIS
+.In numaif.h
+.Ft long
+.Fn move_pages "int pid" "unsigned long count" "void **pages" "const int *nodes" "int *status" "int flags"
+.Ft long
+.Fn migrate_pages "int pid" "unsigned long maxnode" "const unsigned long *old_nodes" "const unsigned long *new_nodes"
+.Sh DESCRIPTION
+Both calls answer as Linux 6.12 answers on a machine with one memory node,
+node 0, where every page is on the node it could be moved to.
+.Fa pid
+names the process, 0 the caller's.
+Another process must be one the caller may inspect as
+.Xr ptrace 2
+would let it read: a privileged caller may inspect any, and another caller
+one whose real, effective and saved user and group IDs are the caller's
+real ones, which is dumpable and not privileged.
+.Pp
+.Fn move_pages
+takes
+.Fa count
+addresses in
+.Fa pages
+and writes one int for each to
+.Fa status .
+With a null
+.Fa nodes
+it reports where each page is: 0, its node, for a page of memory;
+.Er \-EFAULT
+for an address in no mapping, for a page that was only read, which is
+Linux's zero page, for device memory, and for a page of anonymous memory
+that is not there; and
+.Er \-ENOENT
+for a page of a file or of shared memory that is not there.
+With
+.Fa nodes ,
+an int for each page, it moves each page to its node, which must be 0, and
+writes the same statuses, a page of memory being on its node already.
+The statuses of the pages before a failure are written.
+.Fa flags
+may hold
+.Dv MPOL_MF_MOVE
+.Pq 2
+and
+.Dv MPOL_MF_MOVE_ALL
+.Pq 4 ,
+the second for a privileged caller.
+.Pp
+.Fn migrate_pages
+moves the pages of the process that are on a node of
+.Fa old_nodes
+to the nodes of
+.Fa new_nodes ,
+masks of
+.Fa maxnode No \- 1
+bits read as
+.Xr set_mempolicy 2
+reads its mask.
+.Fa new_nodes
+must name node 0.
+It returns the number of pages it could not move, which is 0: the one
+node a page can be on is the one it would go to.
+.Ss System call interface
+.Fn move_pages
+is number 317 on i386 and 279 on x86-64, and
+.Fn migrate_pages
+294 and 256.
+On the x86-64 kernel a 32-bit program's
+.Fa pages
+are 32-bit pointers and its masks are of 32-bit longs.
+Linux 6.12 reads the wrong addresses for such a program that asks about
+more than 16 pages with a null
+.Fa nodes ;
+this kernel reads each one from its place.
+.Sh RETURN VALUES
+.Fn move_pages
+returns 0, and
+.Fn migrate_pages
+the number of pages not moved.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/numaprobe.c
+asks for the status of a written page, a page only read, a page not there
+and an address in no mapping, of more than 16 pages at once, and of the
+pages of a process it may and may not inspect.
+.Sh ERRORS
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EFAULT
+.Fa pages ,
+.Fa nodes ,
+.Fa old_nodes
+or
+.Fa new_nodes
+cannot be read, or
+.Fa status
+cannot be written.
+.It Bq Er EINVAL
+.Fa flags
+has a bit other than the two;
+the process has no address space;
+a mask is one
+.Xr set_mempolicy 2
+refuses; or
+.Fa new_nodes
+does not name node 0.
+.It Bq Er ENODEV
+An entry of
+.Fa nodes
+is not 0.
+.It Bq Er EPERM
+.Dv MPOL_MF_MOVE_ALL
+from a caller without privilege; a process the caller may not inspect; or
+.Fa new_nodes
+names a node other than node 0 and the caller is not privileged.
+.It Bq Er ESRCH
+No process has the ID
+.Fa pid .
+.El
+.Sh SEE ALSO
+.Xr get_mempolicy 2 ,
+.Xr mbind 2 ,
+.Xr set_mempolicy 2

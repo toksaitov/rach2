@@ -7,6 +7,7 @@
 
 #include "../lib/kdef.h"
 #include "../lib/kint.h"
+#include "vm.h"
 
 /* The pages one leaf of a table reaches: a page of entries. */
 #define SHMEM_LEAF 1024u
@@ -22,6 +23,19 @@ struct shmem_quota {
 };
 
 /*
+ * The policy mbind gave the pages [start, end) of a file in memory, Linux's
+ * shared policy of a shmem inode: it belongs to the pages and not to a
+ * mapping, so that every mapping of them in every process reads it, and it
+ * stays when the last mapping goes. A file's records are in page order and
+ * apart (mempolicy.c); `pol` is a copy, whose `refs` nothing reads.
+ */
+struct shmem_policy {
+    struct shmem_policy *next;
+    uint32_t start, end;
+    struct vm_policy pol;
+};
+
+/*
  * The bytes of a file kept in memory: a table of frames, one per page, a page
  * allocated when it is first written or mapped, and a size. A tmpfs file and
  * the memory of a shared anonymous mapping are one each. The table is a
@@ -31,7 +45,8 @@ struct shmem_quota {
  * a shared mapping holds one more for every page it maps. `maps` counts the
  * mappings (filemap.c) that map the memory, and while it is not 0 a
  * truncation takes the pages it frees out of them first, so that a mapping
- * never keeps a page the file no longer has.
+ * never keeps a page the file no longer has. `policies` are the policies
+ * mbind gave its pages, which a truncation leaves and `shmem_free` frees.
  */
 struct shmem {
     uintptr_t **leaves; /* the directory: each leaf's frames, NULL for none */
@@ -42,6 +57,7 @@ struct shmem {
     uint64_t size;
     uint32_t maps;             /* the mappings of it, which a truncation reaches */
     struct shmem_quota *quota; /* the count its pages are held against, or NULL */
+    struct shmem_policy *policies;
 };
 
 /** Read `count` bytes at `off` into `buf`, a hole as zeros: the bytes read,
@@ -88,7 +104,7 @@ int shmem_allocate(struct shmem *sh, uint64_t off, uint64_t len);
  * walk passes over a leaf the table does not have whole. */
 void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len);
 
-/** Free every page; the size is 0 after. */
+/** Free every page and the policies of the pages; the size is 0 after. */
 void shmem_free(struct shmem *sh);
 
 /* The largest size a file in memory may have, the last page a 32-bit page

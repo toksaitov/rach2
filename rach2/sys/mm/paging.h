@@ -488,6 +488,25 @@ uintptr_t paging_virt_to_phys(uintptr_t va);
  * page is not present. */
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va);
 
+/* What `paging_user_page` finds at an address. */
+#define PAGING_PAGE_NONE   0 /* no page */
+#define PAGING_PAGE_ZERO   1 /* a page a read brought in zeroed, never stored into */
+#define PAGING_PAGE_DEVICE 2 /* a frame the allocator does not count */
+#define PAGING_PAGE_FRAME  3 /* a page of memory */
+
+/** What `dir` maps the user address `va` to, a PAGING_PAGE_ value. A page a
+ * read brought in zeroed and nothing has stored into since is told apart,
+ * since Linux maps its zero page there, which belongs to no node. */
+int paging_user_page(page_dir_t *dir, uintptr_t va);
+
+/** Count the pages of memory in the user range [start, end) of `dir`, those
+ * `paging_user_page` calls PAGING_PAGE_FRAME, into `*frames`; of them those
+ * the processor marked dirty into `*dirty` and those pinned for a device
+ * (`frame_pin`) into `*pinned`. Absent tables are passed as
+ * `paging_user_count` passes them. */
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *frames,
+                        unsigned long *dirty, unsigned long *pinned);
+
 /** Count the present pages of the user range [start, end) of `dir` into
  * `*present`, and of them those the processor marked dirty into `*dirty`,
  * passing a span of absent tables in one step (`mmu_user_skip`), so that a

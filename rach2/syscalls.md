@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 308 calls, the x86-64 kernel 282, and its compat table 354. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 313 calls, the x86-64 kernel 287, and its compat table 359. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -148,7 +148,9 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `lstat` | 107 | 6 | 107 | [stat(2)](../man/man2/stat.2) |
 | `lstat64` | 196 | none | 196 | [stat(2)](../man/man2/stat.2) |
 | `madvise` | 219 | 28 | 219 | [brk(2)](../man/man2/brk.2) |
+| `mbind` | 274 | 237 | 274 | [mbind(2)](../man/man2/mbind.2) |
 | `memfd_create` | 356 | 319 | 356 | [memfd_create(2)](../man/man2/memfd_create.2) |
+| `migrate_pages` | 294 | 256 | 294 | [move_pages(2)](../man/man2/move_pages.2) |
 | `mincore` | 218 | 27 | 218 | [brk(2)](../man/man2/brk.2) |
 | `mkdir` | 39 | 83 | 39 | [mkdir(2)](../man/man2/mkdir.2) |
 | `mkdirat` | 296 | 258 | 296 | [mkdir(2)](../man/man2/mkdir.2) |
@@ -161,6 +163,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `mmap2` | 192 | none | 192 | [brk(2)](../man/man2/brk.2) |
 | `modify_ldt` | none | 154 | 123 | [modify_ldt(2)](../man/man2/modify_ldt.2) |
 | `mount` | 21 | 165 | 21 | [mount(2)](../man/man2/mount.2) |
+| `move_pages` | 317 | 279 | 317 | [move_pages(2)](../man/man2/move_pages.2) |
 | `mprotect` | 125 | 10 | 125 | [brk(2)](../man/man2/brk.2) |
 | `mq_getsetattr` | 282 | 245 | 282 | [mq_open(2)](../man/man2/mq_open.2) |
 | `mq_notify` | 281 | 244 | 281 | [mq_open(2)](../man/man2/mq_open.2) |
@@ -266,6 +269,8 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `sendmmsg` | 345 | 307 | 345 | [send(2)](../man/man2/send.2) |
 | `sendmsg` | 370 | 46 | 370 | [send(2)](../man/man2/send.2) |
 | `sendto` | 369 | 44 | 369 | [send(2)](../man/man2/send.2) |
+| `set_mempolicy` | 276 | 238 | 276 | [set_mempolicy(2)](../man/man2/set_mempolicy.2) |
+| `set_mempolicy_home_node` | 450 | 450 | 450 | [mbind(2)](../man/man2/mbind.2) |
 | `set_robust_list` | 311 | 273 | 311 | [futex(2)](../man/man2/futex.2) |
 | `set_thread_area` | 243 | none | 243 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
 | `set_tid_address` | 258 | 218 | 258 | [set_thread_area(2)](../man/man2/set_thread_area.2) |

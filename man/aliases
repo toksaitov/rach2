@@ -240,6 +240,7 @@ makemime 1 busybox-mailutils
 md5sum 1 busybox-coreutils
 mesg 1 busybox-util-linux
 microcom 1 busybox-miscutils
+migrate_pages 2 move_pages
 mim 1 busybox-miscutils
 mincore 2 brk
 mkdir 1 busybox-coreutils
@@ -386,6 +387,7 @@ sendmail 1 busybox-mailutils
 sendmmsg 2 send
 sendto 2 send
 seq 1 busybox-coreutils
+set_mempolicy_home_node 2 mbind
 set_robust_list 2 futex
 set_tid_address 2 set_thread_area
 setarch 1 busybox-util-linux

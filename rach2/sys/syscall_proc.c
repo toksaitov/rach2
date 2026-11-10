@@ -2660,7 +2660,8 @@ static int32_t fork_nproc(const process_t *parent)
  * SCHED_RESET_ON_FORK and the I/O priority, the OOM score adjustment and
  * its floor, the persona, the no_new_privs flag, whether it
  * gave up its capabilities, the seccomp mode and filters, the limits, the
- * credentials, and the program name, which `execve` sets and a child that
+ * credentials, the memory policy, with a reference that `mm_drop` gives
+ * back, and the program name, which `execve` sets and a child that
  * never execs would otherwise never have: a daemon that forks itself into
  * the background is such a child, and without it shows in `ps` and in
  * /proc/<pid>/stat with no name. The dumpable flag comes with the address
@@ -2697,6 +2698,7 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->ngroups = parent->ngroups;
     k_memcpy(child->groups, parent->groups, sizeof(child->groups));
     k_memcpy(child->comm, parent->comm, sizeof(child->comm));
+    child->mempolicy = vm_policy_get(parent->mempolicy);
 }
 
 /**
@@ -7332,16 +7334,16 @@ long sys_mprotect(isr_params_t *params)
 /** Give [addr, addr + len), which lies in the region `r`, a region at `to`
  * of `new_len` bytes, moving the resident pages there. Returns `to`, or
  * -ENOMEM with no room for the regions or a page table. The file the region
- * maps is held across the move, which removes the old region's hold before
+ * maps and its policy, which the new region keeps as Linux's copy_vma keeps
+ * it, are held across the move, which removes the old region's holds before
  * the new region takes its own. */
 static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, uintptr_t to,
                        uintptr_t new_len)
 {
-    struct vm_file *file = r->file;
+    vma_t like = *r;
     uint32_t pgoff = r->pgoff + (uint32_t)((addr - r->start) / PAGE_SIZE);
-    uint32_t prot = r->prot;
-    vm_type_t type = r->type;
     uintptr_t moved = len < new_len ? len : new_len;
+    int rc;
 
     if (vm_reserve(vm, 3) != 0) {
         vma_exhausted("mremap");
@@ -7351,15 +7353,17 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
         return -ENOMEM;
     }
     mmn_notify(current_proc->mm, MMN_UNMAP, addr, addr + len);
-    vm_file_get(file);
+    vm_file_get(like.file);
+    (void)vm_policy_get(like.policy);
     vm_remove(vm, addr, addr + len);
     unmap_user_range(_curr_dir, addr, addr + len);
-    if (vm_insert_file(vm, to, to + new_len, prot, type, file, pgoff) != 0) {
-        vm_file_put(file);
+    rc = vm_insert_like(vm, to, to + new_len, &like, pgoff);
+    vm_file_put(like.file);
+    vm_policy_put(like.policy);
+    if (rc != 0) {
         unmap_user_range(_curr_dir, to, to + moved);
         return -ENOMEM;
     }
-    vm_file_put(file);
     return (long)to;
 }
 
@@ -7446,7 +7450,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     }
     if (addr + old_len == r->end && addr <= task_size() - new_len &&
         addr + new_len <= vm->stack_limit && !vm_overlaps(vm, addr + old_len, addr + new_len)) {
-        if (vm_insert_file(vm, addr + old_len, addr + new_len, r->prot, r->type, r->file,
+        if (vm_insert_like(vm, addr + old_len, addr + new_len, r,
                            r->pgoff + (uint32_t)((addr + old_len - r->start) / PAGE_SIZE)) != 0) {
             vma_exhausted("mremap");
             return -ENOMEM;

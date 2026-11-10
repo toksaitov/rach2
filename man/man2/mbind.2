@@ -1,0 +1,171 @@
+.Dd November 11, 2026
+.Dt MBIND 2
+.Os
+.Sh NAME
+.Nm mbind ,
+.Nm set_mempolicy_home_node
+.Nd set the memory policy of a range of addresses, on a machine of one memory node
+.Sh SYNOPSIS
+.In numaif.h
+.Ft long
+.Fn mbind "void *addr" "unsigned long len" "int mode" "const unsigned long *nodemask" "unsigned long maxnode" "unsigned int flags"
+.Ft long
+.Fn set_mempolicy_home_node "unsigned long start" "unsigned long len" "unsigned long home_node" "unsigned long flags"
+.Sh DESCRIPTION
+.Fn mbind
+gives the mappings of
+.Fa len
+bytes at
+.Fa addr ,
+rounded up to whole pages, the policy that
+.Fa mode ,
+.Fa nodemask
+and
+.Fa maxnode
+describe as they do for
+.Xr set_mempolicy 2 ,
+and answers as Linux 6.12 answers on a machine with one memory node.
+Every page is on node 0 already, so no page is placed differently; the
+policy is kept and read back by
+.Xr get_mempolicy 2
+with
+.Dv MPOL_F_ADDR ,
+and
+.Pa /proc/PID/numa_maps
+shows it.
+QEMU's memory backends, libnuma and the Java runtime call it.
+.Pp
+A mapping the range cuts is split at the range's ends, and neighbours left
+with equal policies are joined again.
+The policy stays with a mapping through
+.Xr mprotect 2 ,
+.Xr mremap 2
+and a partial
+.Xr munmap 2 ,
+a child of
+.Xr fork 2
+has it, and
+.Xr execve 2
+ends it with the mappings.
+For a file in memory, which is a file of tmpfs, a
+.Xr memfd_create 2
+file, shared anonymous memory or a System V segment, the policy belongs to
+the pages of the file: every mapping of them in every process reads it, and
+it lasts as long as the file.
+.Dv MPOL_DEFAULT
+takes the policy away.
+.Pp
+.Fa flags
+may hold
+.Dv MPOL_MF_STRICT
+.Pq 1 ,
+.Dv MPOL_MF_MOVE
+.Pq 2
+and
+.Dv MPOL_MF_MOVE_ALL
+.Pq 4 ,
+the last for a privileged caller.
+.Dv MPOL_MF_STRICT
+fails with
+.Er EIO ,
+and sets no policy, when a page of the range is on a node the mask does
+not name.
+With the one node that is so only for a mask without node 0, which
+.Dv MPOL_LOCAL ,
+.Dv MPOL_PREFERRED
+with an empty mask and a mode with
+.Dv MPOL_F_RELATIVE_NODES
+may have, and for a page that has been written or belongs to a file: a
+page that was only read is Linux's zero page, and neither it nor device
+memory counts.
+With a move flag such pages are moved, to node 0 where they are, and the
+policy is set; a page pinned for a device cannot be moved, and
+.Dv MPOL_MF_STRICT
+then answers
+.Er EIO
+with the policy set.
+.Dv MPOL_DEFAULT
+ignores
+.Dv MPOL_MF_STRICT .
+.Pp
+.Fn set_mempolicy_home_node
+gives each mapping of the range that has a policy of its own the home node
+.Fa home_node ,
+which must be node 0.
+The policy must be
+.Dv MPOL_BIND
+or
+.Dv MPOL_PREFERRED_MANY ;
+a mapping without a policy is passed over.
+.Xr get_mempolicy 2
+does not report a home node.
+.Ss System call interface
+.Fn mbind
+is number 274 on i386 and 237 on x86-64, and
+.Fn set_mempolicy_home_node
+450 on both.
+On the x86-64 kernel a 32-bit program's mask is of 32-bit longs.
+.Sh RETURN VALUES
+0 on success.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/numaprobe.c
+binds part of a mapping, reads the policy on each side of the cut, joins
+the parts again, and follows the policy through
+.Xr fork 2 ,
+a second mapping of shared memory and
+.Dv MPOL_MF_STRICT .
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EFAULT
+.Fa nodemask
+cannot be read; no mapping meets the range; or, for a mode other than
+.Dv MPOL_DEFAULT ,
+part of the range is not mapped.
+.It Bq Er EINVAL
+.Fa mode ,
+.Fa nodemask
+or
+.Fa maxnode
+is one
+.Xr set_mempolicy 2
+refuses;
+.Fa flags
+has a bit other than the three;
+.Fa addr
+or
+.Fa start
+is not on a page boundary; the range wraps;
+or, for
+.Fn set_mempolicy_home_node ,
+.Fa flags
+is not 0 or
+.Fa home_node
+is not node 0.
+.It Bq Er EIO
+.Dv MPOL_MF_STRICT
+found a page on a node the mask does not name, or a page a move flag
+could not move.
+.It Bq Er ENOENT
+.Fn set_mempolicy_home_node
+found no mapping with a policy of its own in the range.
+.It Bq Er ENOMEM
+There is no memory for the policy or for a mapping to be split.
+.It Bq Er EOPNOTSUPP
+.Fn set_mempolicy_home_node
+met a mapping whose policy is neither
+.Dv MPOL_BIND
+nor
+.Dv MPOL_PREFERRED_MANY ;
+the mappings before it have their home node.
+.It Bq Er EPERM
+.Dv MPOL_MF_MOVE_ALL
+from a caller without privilege.
+.El
+.Sh SEE ALSO
+.Xr get_mempolicy 2 ,
+.Xr move_pages 2 ,
+.Xr set_mempolicy 2 ,
+.Xr proc 5

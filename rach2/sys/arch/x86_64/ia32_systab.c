@@ -370,9 +370,9 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_UTIMES] = compat_sys_utimes_time32;
     table[SYS_FADVISE64_64] = compat_sys_ia32_fadvise64_64;
     table[SYS_VSERVER] = NULL;
-    table[SYS_MBIND] = NULL;
+    table[SYS_MBIND] = sys_mbind;
     table[SYS_GET_MEMPOLICY] = sys_get_mempolicy;
-    table[SYS_SET_MEMPOLICY] = NULL;
+    table[SYS_SET_MEMPOLICY] = sys_set_mempolicy;
     table[SYS_MQ_OPEN] = sys_mq_open;
     table[SYS_MQ_UNLINK] = sys_mq_unlink;
     table[SYS_MQ_TIMEDSEND] = sys_mq_timedsend;
@@ -389,7 +389,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_INOTIFY_INIT] = sys_inotify_init;
     table[SYS_INOTIFY_ADD_WATCH] = sys_inotify_add_watch;
     table[SYS_INOTIFY_RM_WATCH] = sys_inotify_rm_watch;
-    table[SYS_MIGRATE_PAGES] = NULL;
+    table[SYS_MIGRATE_PAGES] = sys_migrate_pages;
     table[SYS_OPENAT] = sys_openat;
     table[SYS_MKDIRAT] = sys_mkdirat;
     table[SYS_MKNODAT] = sys_mknodat;
@@ -412,7 +412,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SYNC_FILE_RANGE] = compat_sys_ia32_sync_file_range;
     table[SYS_TEE] = sys_tee;
     table[SYS_VMSPLICE] = sys_vmsplice;
-    table[SYS_MOVE_PAGES] = NULL;
+    table[SYS_MOVE_PAGES] = sys_move_pages;
     table[SYS_GETCPU] = sys_getcpu;
     table[SYS_EPOLL_PWAIT] = sys_epoll_pwait;
     table[SYS_UTIMENSAT] = compat_sys_utimensat_time32;
@@ -538,7 +538,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_MEMFD_SECRET] = NULL;
     table[SYS_PROCESS_MRELEASE] = NULL;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
-    table[SYS_SET_MEMPOLICY_HOME_NODE] = NULL;
+    table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;
     table[SYS_CACHESTAT] = NULL;
     table[SYS_FCHMODAT2] = sys_fchmodat2;
     table[SYS_MAP_SHADOW_STACK] = NULL;
