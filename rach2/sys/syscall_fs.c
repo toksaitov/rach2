@@ -13922,7 +13922,8 @@ long sys_memfd_secret(isr_params_t *params)
  * Whether the caller may count the cached pages of what `e` is open on, as
  * Linux's can_do_cachestat has it since a fix that 6.12's stable kernels
  * carry: the descriptor is open for writing, or the caller owns the file
- * or is privileged, or may write it by its mode.
+ * by its file-system user id or has privilege over files, as Linux's
+ * inode_owner_or_capable judges, or may write it by its mode.
  */
 static int cachestat_allowed(fd_entry_t *e)
 {
@@ -13934,7 +13935,7 @@ static int cachestat_allowed(fd_entry_t *e)
     if (fstat_fill(e, &st) != 0) {
         return 0;
     }
-    return (uint32_t)st.st_uid == current_proc->euid || cred_privileged() ||
+    return (uint32_t)st.st_uid == proc_fsuid(current_proc) || cred_fs_privileged() ||
            access_fd(e, W_OK, AT_EACCESS) == 0;
 }
 
