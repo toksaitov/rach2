@@ -7084,6 +7084,16 @@ static int32_t synth_fd_visible(int rpid, int fd)
     return procfs_may_read(rpid) ? 0 : -EACCES;
 }
 
+/** Whether the file `procfile` of a process's directory takes a write,
+ * mode 0644 as Linux gives it: oom_score_adj, the ID maps, setgroups and
+ * comm. */
+static int synth_proc_writable(int procfile)
+{
+    return procfile == SYNTH_PROC_OOM_ADJ || procfile == SYNTH_PROC_UID_MAP ||
+           procfile == SYNTH_PROC_GID_MAP || procfile == SYNTH_PROC_SETGROUPS ||
+           procfile == SYNTH_PROC_COMM;
+}
+
 /**
  * Fill `kst` with the attributes stat gives the /dev, /proc or /sys node
  * `vp`, a /proc link followed to what it names when `follow`. Returns 0, or
@@ -7315,9 +7325,7 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         synth_pid_owner(procfs_resolve_id(vp), kst);
-        if (vp->procfile == SYNTH_PROC_OOM_ADJ || vp->procfile == SYNTH_PROC_UID_MAP ||
-            vp->procfile == SYNTH_PROC_GID_MAP || vp->procfile == SYNTH_PROC_SETGROUPS ||
-            vp->procfile == SYNTH_PROC_COMM) {
+        if (synth_proc_writable(vp->procfile)) {
             kst->st_mode = S_IFREG | 0644;
         }
         return 0;
@@ -9013,7 +9021,7 @@ static int32_t handle_find(const struct vfs_ref *root, uint64_t ino, char *out)
     struct vfs_dirent *de = kmalloc(sizeof(*de));
     struct vfs_ref dir;
     struct vfs_stat st;
-    int depth = 0;
+    int depth;
     int32_t rc = -ESTALE;
 
     out[0] = '\0';
@@ -9023,9 +9031,7 @@ static int32_t handle_find(const struct vfs_ref *root, uint64_t ino, char *out)
                (ino == 1 && mnt_is_root(root->mnt) && root->node == krffs_fs->node)) {
         /* The KRFFS root directory's stat reports inode 1 (`do_stat64`). */
         rc = 0;
-    } else if (vfs_enter(root->mnt) != 0) {
-        depth = -1;
-    } else {
+    } else if (vfs_enter(root->mnt) == 0) {
         dir = *root;
         vfs_ref_hold(&dir);
         depth = handle_push(&lv[0], &dir, 0) == 0 ? 0 : -1;
