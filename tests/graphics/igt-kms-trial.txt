@@ -1,0 +1,22 @@
+# igt-kms-trial.txt: the IGT subtests of the display trial on the Lenovo's
+# Haswell (78-10d), which runners/igt.sh runs with -l, on Rach2's i915 and
+# on Debian's Linux alike, as root with no compositor on the card.
+#
+# A line is `igt@TEST`, every subtest of the test program TEST, or
+# `igt@TEST@PATTERN`, its subtests that the shell pattern PATTERN matches in
+# the IGT stage's subtest-list.txt. The list leaves out kms_pipe_crc_basic's
+# suspend-read-crc, which suspends the machine, and hang-read-crc, which
+# hangs the GPU on purpose, and kms_hdmi_inject's inject-audio, since Rach2
+# has no HDMI audio. kms_cursor_crc runs one size, 64 by 64. The panel takes
+# every test that sets a mode; the order puts the tests that only check
+# requests first and the ones that read CRCs last.
+igt@kms_addfb_basic
+igt@kms_atomic
+igt@kms_flip@basic-*
+igt@kms_hdmi_inject@inject-4k
+igt@kms_pipe_crc_basic@bad-source
+igt@kms_pipe_crc_basic@read-crc*
+igt@kms_pipe_crc_basic@nonblocking-crc*
+igt@kms_pipe_crc_basic@disable-crc-after-crtc
+igt@kms_pipe_crc_basic@compare-crc-sanitycheck-*
+igt@kms_cursor_crc@*-64x64
