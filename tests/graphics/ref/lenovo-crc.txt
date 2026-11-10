@@ -1,0 +1,15 @@
+crcmodes: panel 1366x768@60 76300 kHz on CRTC 47 (index 0), scaling mode found
+crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+crcmodes: mode 1280x720 aspect crc 0x6d161eb3 frames 8
+crcmodes: mode 1280x720 full crc 0x6d161eb3 frames 8
+crcmodes: mode 1280x720 center crc 0x85dd3b21 frames 8
+crcmodes: mode 1024x768 aspect crc 0x7d545664 frames 8
+crcmodes: mode 1024x768 full crc 0x651e09c1 frames 8
+crcmodes: mode 1024x768 center crc 0x7d545664 frames 8
+crcmodes: mode 800x600 aspect crc 0x6ed6ad7a frames 8
+crcmodes: mode 800x600 full crc 0x671a0f8e frames 8
+crcmodes: mode 800x600 center crc 0x462a5a66 frames 8
+crcmodes: mode 640x480 aspect crc 0xbe13a794 frames 8
+crcmodes: mode 640x480 full crc 0xd65b1a57 frames 8
+crcmodes: mode 640x480 center crc 0x3c31ba48 frames 8
+crcmodes: result: 13 modes: stable 13 unstable 0 failed 0

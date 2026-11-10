@@ -104,6 +104,8 @@ The display and GL runners write the same record, without the browser's lines an
 
 The Debian references are stored in [`ref/debian`](ref/debian/Readme.md), a directory for each display profile, each run's directory with its `record`, `results` and the files above.
 
+[`ref/lenovo-crc.txt`](ref/lenovo-crc.txt) is Linux 6.12's pipe CRC of the Lenovo's eDP panel at thirteen modes through the fitter, as `crcmodes` printed it under Debian 13; Rach2's i915 gives the same lines.
+
 ## Design
 
 ### Display profiles
