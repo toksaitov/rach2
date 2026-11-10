@@ -920,7 +920,7 @@ static void run_sockstamp(void)
         fail("the UDP socket did not receive its datagram");
     }
     for (i = 0; i < 4; i++) {
-        tv[i] = ts[i] = 0xFFFFFFFFu;
+        tv[i] = ts[i] = wide[i] = 0xFFFFFFFFu;
     }
     if (int80(I386_IOCTL, (unsigned long)u, SIOCGSTAMP_OLD, (unsigned long)tv) != 0 ||
         int80(I386_IOCTL, (unsigned long)u, SIOCGSTAMPNS_OLD, (unsigned long)ts) != 0 ||

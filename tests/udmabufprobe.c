@@ -151,7 +151,7 @@ static void sync_rows(int fd)
     struct dma_buf_sync access;
     struct sync_merge_data merge = {{0}, 0, 0, 0, 0};
     struct sync_file_info info = {{0}, 0, 0, 0, 0, 0};
-    struct sync_fence_info row;
+    volatile struct sync_fence_info row;
     struct {
         int fd;
         short events, revents;
