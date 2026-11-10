@@ -57,6 +57,7 @@ case forktest -- forktest
 case fpuprobe stage:fpuprobe -- fpuprobe
 case fsbaseprobe -- fsbaseprobe
 case fsidprobe root:krffs ids:1000 -- fsidprobe
+case futex2probe -- futex2probe
 case futexvprobe -- futexvprobe
 case hello -- hello
 # intrprobe leaves out the wait for typed keys, the controller's interrupts
@@ -105,6 +106,7 @@ case loopprobe \
     loopprobe machine=native
 case lstest -- lstest
 # machine=native leaves out the fall of MemFree after the unmap.
+case membarrierprobe -- membarrierprobe
 case memprobe -- memprobe machine=native
 case memprobe.total -- memprobe total
 case miscprobe -- miscprobe
@@ -156,6 +158,7 @@ case rawprobe peer:network ids:1000 -- rawprobe machine=native
 case rebootprobe ids:1000 -- rebootprobe
 case rmtest -- rmtest
 case rngprobe -- rngprobe
+case schedattrprobe ids:1000 -- schedattrprobe
 case searchprobe root:krffs ids:1000 -- searchprobe
 case shelltest stage:hello -- shelltest hello=./hello
 # machine=native leaves out the two checks of sleeps_interrupted.
