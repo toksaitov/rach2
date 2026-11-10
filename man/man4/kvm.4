@@ -50,8 +50,14 @@ of the feature MSRs,
 .Dv KVM_GET_EMULATED_CPUID ,
 which lists MOVBE and, where the processor has RDTSCP, RDPID, the
 features the kernel carries out for a guest on a processor without them,
+.Dv KVM_X86_GET_MCE_CAP_SUPPORTED ,
 and
-.Dv KVM_X86_GET_MCE_CAP_SUPPORTED .
+.Dv KVM_GET_DEVICE_ATTR
+and
+.Dv KVM_HAS_DEVICE_ATTR
+of
+.Dv KVM_X86_XCOMP_GUEST_SUPP ,
+the XCR0 bits a guest may have.
 .It a VM
 .Dv KVM_CREATE_VCPU ,
 .Dv KVM_CHECK_EXTENSION ,
@@ -66,6 +72,9 @@ and
 .Dv KVM_GET_CLOCK ,
 .Dv KVM_SET_CLOCK ,
 .Dv KVM_SET_BOOT_CPU_ID ,
+.Dv KVM_SET_TSC_KHZ ,
+.Dv KVM_GET_TSC_KHZ ,
+.Dv KVM_GET_STATS_FD ,
 .Dv KVM_ENABLE_CAP ,
 .Dv KVM_CREATE_IRQCHIP ,
 .Dv KVM_GET_IRQCHIP ,
@@ -81,9 +90,11 @@ and
 .Dv KVM_IRQ_LINE ,
 .Dv KVM_IRQ_LINE_STATUS ,
 .Dv KVM_SIGNAL_MSI ,
-.Dv KVM_IRQFD
+.Dv KVM_IRQFD ,
+.Dv KVM_IOEVENTFD ,
+.Dv KVM_REGISTER_COALESCED_MMIO
 and
-.Dv KVM_IOEVENTFD .
+.Dv KVM_UNREGISTER_COALESCED_MMIO .
 .It a vCPU
 .Dv KVM_RUN ,
 the registers
@@ -99,7 +110,10 @@ and their sets,
 .Dv KVM_SET_MP_STATE ,
 .Dv KVM_INTERRUPT ,
 .Dv KVM_NMI ,
+.Dv KVM_SET_TSC_KHZ ,
 .Dv KVM_GET_TSC_KHZ ,
+.Dv KVM_GET_STATS_FD ,
+.Dv KVM_PRE_FAULT_MEMORY ,
 .Dv KVM_KVMCLOCK_CTRL ,
 .Dv KVM_SET_SIGNAL_MASK ,
 .Dv KVM_GET_LAPIC ,
@@ -122,18 +136,64 @@ accepts address zero with a local APIC in the kernel, to disable the optional
 shared VAPIC page; the kernel does not offer
 .Dv KVM_CAP_VAPIC .
 .Pp
+The bounds are Linux's:
+.Dv KVM_CAP_MAX_VCPUS
+is 1024 and
+.Dv KVM_CAP_MAX_VCPU_ID
+4096, which
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_MAX_VCPU_ID
+on a VM lowers, once and before its first vCPU.
+.Dv KVM_ENABLE_CAP
+on a VM also takes
+.Dv KVM_CAP_EXIT_ON_EMULATION_FAILURE ;
+.Dv KVM_CAP_MSR_PLATFORM_INFO ,
+whose argument 0 makes the guest's read of
+.Dv MSR_PLATFORM_INFO
+#GP; and
+.Dv KVM_CAP_X86_APIC_BUS_CYCLES_NS ,
+the length of the APIC timer's tick, 1 ns unless set, with the local APIC
+in the kernel and before the first vCPU.
+.Pp
+.Dv KVM_CAP_DISABLE_QUIRKS2
+names the quirks that
+.Dv KVM_ENABLE_CAP
+of it, or of
+.Dv KVM_CAP_DISABLE_QUIRKS ,
+turns off; one turned off stays off, as in Linux 6.12.
+They are Linux's:
+.Dv KVM_X86_QUIRK_LINT0_REENABLED ,
+.Dv KVM_X86_QUIRK_CD_NW_CLEARED
+on AMD processors,
+.Dv KVM_X86_QUIRK_LAPIC_MMIO_HOLE ,
+.Dv KVM_X86_QUIRK_OUT_7E_INC_RIP ,
+.Dv KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT ,
+.Dv KVM_X86_QUIRK_FIX_HYPERCALL_INSN ,
+.Dv KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS ,
+.Dv KVM_X86_QUIRK_STUFF_FEATURE_MSRS
+and, on Intel processors that snoop their own caches,
+.Dv KVM_X86_QUIRK_IGNORE_GUEST_PAT .
+.Dv KVM_X86_QUIRK_SLOT_ZAP_ALL
+and
+.Dv KVM_X86_QUIRK_VMCS12_ALLOW_FREEZE_IN_SMM
+are taken and change nothing a guest can see.
+.Pp
 A vCPU's descriptor maps
 .Dv KVM_GET_VCPU_MMAP_SIZE
-bytes, two pages: the
+bytes, three pages: the
 .Vt struct kvm_run
-page and the page port I/O data goes through, at
-.Dv KVM_PIO_PAGE_OFFSET .
+page, the page port I/O data goes through, at
+.Dv KVM_PIO_PAGE_OFFSET ,
+and the VM's ring of coalesced writes, at
+.Dv KVM_COALESCED_MMIO_PAGE_OFFSET ,
+which every vCPU of the VM maps.
 A shared mapping is the kernel's own pages, which
 .Dv KVM_RUN
 reads and writes, and a fork's child shares it.
 A private mapping gives each page as it was when first touched, as a
 private mapping of a file does, and its writes stay its own.
-A page past the two raises
+A page past the three raises
 .Dv SIGBUS .
 .Pp
 A VM belongs to the address space that made it.
@@ -157,6 +217,21 @@ That
 is never restarted, with or without
 .Dv SA_RESTART ,
 as on Linux.
+An OUT that ends the run with
+.Dv KVM_EXIT_IO
+leaves RIP at the instruction, and the next
+.Dv KVM_RUN
+steps past it unless the caller moved RIP meanwhile, as on Linux; a string
+OUT, and an OUT to port 0x7e under its quirk, are stepped before the exit.
+With
+.Dv KVM_CAP_SYNC_REGS ,
+which names the registers, the special registers and the events,
+.Dv KVM_RUN
+takes from the run page those that
+.Va kvm_dirty_regs
+names and writes to it afterwards those that
+.Va kvm_valid_regs
+names.
 Guests run under VMX on Intel processors and SVM with nested paging on AMD processors.
 .Ss Memory
 .Dv KVM_SET_USER_MEMORY_REGION ,
@@ -242,6 +317,19 @@ pages from
 a multiple of 64, and write-protects those pages; with
 .Dv KVM_DIRTY_LOG_INITIALLY_SET
 as well, a slot's log starts with every page set.
+.Pp
+.Dv KVM_PRE_FAULT_MEMORY
+on a vCPU maps the guest-physical range
+.Va gpa
+and
+.Va size
+name, both page-aligned, as the guest's own faults would, and writes the
+two back moved past what it mapped.
+It returns 0 once anything was mapped; otherwise a range that touches no
+slot fails with
+.Er ENOENT
+and a pending signal with
+.Er EINTR .
 .Ss Emulated instructions
 The kernel carries out a guest's instruction in two cases, with the
 results of Linux's emulator.
@@ -266,7 +354,10 @@ An instruction that raised #UD runs when it is SYSCALL, SYSENTER or SYSEXIT
 in a mode where the guest's CPUID vendor has it and the processor does
 not, MOVBE or RDPID, or the hypercall instruction of the other vendor,
 VMCALL on AMD processors and VMMCALL on Intel ones, which is rewritten in
-the guest's memory as the processor's own and run again.
+the guest's memory as the processor's own and run again, or gets its #UD
+once
+.Dv KVM_X86_QUIRK_FIX_HYPERCALL_INSN
+is turned off.
 Any other gets its #UD.
 .Pp
 For an instruction the kernel does not know or cannot finish, the guest
@@ -280,6 +371,9 @@ whose data are Linux's: the flag
 .Dv KVM_INTERNAL_ERROR_EMULATION_FLAG_INSTRUCTION_BYTES ,
 the instruction's length and its 15 bytes, then the exit's reason and
 qualifications.
+Under
+.Dv KVM_CAP_EXIT_ON_EMULATION_FAILURE
+the run ends so at every privilege level, and the guest gets no #UD.
 .Ss Interrupts
 The full and split interrupt controllers follow Linux's interfaces.
 .Dv KVM_CREATE_IRQCHIP
@@ -407,6 +501,61 @@ with
 .Dv KVM_IOEVENTFD_FLAG_DATAMATCH ,
 adds 1 to the counter and goes no further.
 A string OUT adds 1 for each element.
+.Pp
+.Dv KVM_REGISTER_COALESCED_MMIO
+names a zone of MMIO addresses or, with
+.Va pio
+1, of ports
+.Pq Dv KVM_CAP_COALESCED_MMIO , KVM_CAP_COALESCED_PIO .
+A guest's write of 8 bytes at most that lies whole inside a zone is put on
+the VM's ring, Linux's
+.Vt struct kvm_coalesced_mmio_ring
+of 170 entries, and the guest runs on; the caller takes the entries from
+.Va first
+to
+.Va last
+at its next exit and moves
+.Va first .
+A write that finds the ring full ends the run as any other.
+.Dv KVM_UNREGISTER_COALESCED_MMIO
+removes each zone that holds its range.
+A bus holds 1000 zones and ioeventfds together.
+.Ss Statistics
+.Dv KVM_GET_STATS_FD
+on a VM or a vCPU
+.Pq Dv KVM_CAP_BINARY_STATS_FD
+gives a read-only descriptor,
+.Pa anon_inode:kvm-vm-stats
+or
+.Pa anon_inode:kvm-vcpu-stats:N ,
+of Linux's binary statistics, which
+.Fn pread ,
+see
+.Xr read 2 ,
+reads at any offset: the header, the id
+.Ql kvm-PID
+or
+.Ql kvm-PID/vcpu-N ,
+the descriptors of Linux 6.12's statistics in its order and their values.
+A vCPU counts
+.Va exits ,
+.Va io_exits ,
+.Va mmio_exits ,
+.Va halt_exits ,
+.Va irq_window_exits ,
+.Va signal_exits ,
+.Va hypercalls ,
+.Va insn_emulation
+and
+.Va insn_emulation_fail ,
+and a VM
+.Va pages_4k ,
+.Va pages_2m ,
+.Va remote_tlb_flush
+and
+.Va remote_tlb_flush_requests ;
+the rest read 0.
+The descriptor keeps its VM alive.
 .Ss Hypercalls
 A VMCALL, or VMMCALL on AMD, that is not Hyper-V's is one of Linux's KVM
 hypercalls: the number in RAX, the arguments in RBX, RCX, RDX and RSI, and
@@ -518,6 +667,26 @@ and
 which
 .Dv KVM_CHECK_EXTENSION
 names, at any time; a vCPU made afterwards runs HLT in the guest.
+.Ss The TSC's rate
+.Dv KVM_SET_TSC_KHZ
+on a vCPU sets the rate of its TSC in kHz, 0 for the host's, and on a VM
+the rate its later vCPUs start at;
+.Dv KVM_GET_TSC_KHZ
+reads either back, the host's rate until one is set.
+A rate within 250 parts in a million of the host's runs at the host's.
+Another is scaled by the processor, AMD's TSC ratio MSR or Intel's TSC
+multiplier, where it has one, which
+.Dv KVM_CAP_TSC_CONTROL
+and
+.Dv KVM_CAP_VM_TSC_CONTROL
+report; the guest's kvmclock, its APIC's TSC deadline and Hyper-V's
+reference TSC then count at that rate.
+A rate at or above what the largest ratio gives, 2^31 \- 1 kHz at most, is
+.Er EINVAL .
+On a processor that scales nothing, as on Linux, a rate below the host's is
+.Er EINVAL ,
+and a rate above it is kept by moving the guest's TSC forward before each
+entry.
 .Ss Hyper-V
 A vCPU whose CPUID, given by
 .Dv KVM_SET_CPUID2 ,
@@ -662,7 +831,9 @@ or
 which serve a nested guest.
 .It Bq Er EINVAL
 An ioctl that a vCPU does not take; an argument outside Linux's bounds,
-such as a machine type other than 0, a vCPU id of 256 or more, a TSS past
+such as a machine type other than 0, a vCPU id of 4096 or more or past
+.Dv KVM_CAP_MAX_VCPU_ID ,
+a TSS past
 4 GiB less three pages, register state the processor would refuse, an
 XSAVE image past the guest's XCR0, or a flag Linux does not define;
 .Dv KVM_SET_USER_MEMORY_REGION
@@ -673,6 +844,23 @@ address in the caller, size or
 flag;
 .Dv KVM_CLEAR_DIRTY_LOG
 of a range outside the slot or not on 64-page bounds;
+.Dv KVM_SET_TSC_KHZ
+of a rate the processor cannot give the guest;
+.Dv KVM_PRE_FAULT_MEMORY
+with flags or a range that is empty, wraps or is not page-aligned;
+.Dv KVM_REGISTER_COALESCED_MMIO
+with a
+.Va pio
+above 1;
+.Dv KVM_CAP_DISABLE_QUIRKS2
+of a quirk it does not name;
+.Dv KVM_CAP_MAX_VCPU_ID
+a second time with another bound, above 4096 or below the boot vCPU's id;
+.Dv KVM_CAP_X86_APIC_BUS_CYCLES_NS
+once the VM has a vCPU;
+synchronized registers
+.Dv KVM_CAP_SYNC_REGS
+does not name;
 .Dv KVM_CAP_HYPERV_SYNIC
 without a local APIC in the kernel;
 .Dv KVM_HYPERV_EVENTFD
@@ -721,7 +909,16 @@ or
 without the full controller;
 the PIT state or reinjection ioctls without a PIT;
 .Dv KVM_IRQ_LINE
-without a controller in the kernel.
+without a controller in the kernel;
+.Dv KVM_CAP_X86_APIC_BUS_CYCLES_NS
+without the local APIC in the kernel;
+.Dv KVM_GET_DEVICE_ATTR
+or
+.Dv KVM_HAS_DEVICE_ATTR
+on
+.Pa /dev/kvm
+of an attribute other than
+.Dv KVM_X86_XCOMP_GUEST_SUPP .
 .It Bq Er EBADF
 .Dv KVM_IRQFD ,
 .Dv KVM_IOEVENTFD
@@ -740,13 +937,17 @@ of a connection with no eventfd;
 .Dv KVM_GET_DIRTY_LOG
 or
 .Dv KVM_CLEAR_DIRTY_LOG
-of a slot that does not log.
+of a slot that does not log;
+.Dv KVM_PRE_FAULT_MEMORY
+of an address in no slot.
 .It Bq Er EFAULT
 .Dv KVM_RUN
 when the guest touches a page of a slot the caller cannot touch.
 .It Bq Er ENOSPC
 .Dv KVM_IOEVENTFD
-on a bus of 1000 ioeventfds.
+or
+.Dv KVM_REGISTER_COALESCED_MMIO
+on a bus that holds 1000 of the two.
 .It Bq Er EPERM
 .Dv KVM_SIGNAL_MSI
 that no APIC took.
@@ -756,7 +957,9 @@ An ioctl from an address space other than the VM's.
 .Dv KVM_RUN
 ended by
 .Va immediate_exit ,
-a signal or a request to stop.
+a signal or a request to stop;
+.Dv KVM_PRE_FAULT_MEMORY
+ended by a signal before it mapped anything.
 .El
 .Sh SEE ALSO
 .Xr eventfd 2 ,
@@ -766,6 +969,7 @@ a signal or a request to stop.
 .Xr mprotect 2 ,
 .Xr mremap 2 ,
 .Xr munmap 2 ,
+.Xr read 2 ,
 .Xr sysfs 5 ,
 .Xr limits 7
 .Sh STANDARDS
@@ -773,15 +977,16 @@ Linux's KVM API, version 12, for x86, as its
 .Pa Documentation/virt/kvm/api.rst
 gives it.
 .Sh BUGS
-At most 64 vCPUs in a VM, with ids below 256, and 256 memory slots.
+At most 1024 vCPUs in a VM, with ids below 4096, and 256 memory slots.
 No
 .Dv KVM_CAP_X2APIC_API ,
-no coalesced MMIO, no dirty ring, no SMM and no nested virtualization, so
+no dirty ring, no SMM and no nested virtualization, so
 no enlightened VMCS and no direct TLB flush of Hyper-V's.
-No
-.Dv KVM_CAP_DISABLE_QUIRKS2 ,
-so the rewrite of the other vendor's hypercall instruction cannot be
-turned off.
+Most statistics of
+.Dv KVM_GET_STATS_FD
+read 0.
+The TSC's rate is scaled only where the processor scales it, and there is no
+.Dv KVM_VCPU_TSC_CTRL .
 Of KVM's paravirtual features there are no asynchronous page faults, steal
 time, paravirtual EOI or TLB flush, and without a measured TSC rate no
 kvmclock.
