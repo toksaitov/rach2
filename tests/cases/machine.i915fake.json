@@ -314,6 +314,142 @@
         "class": "layout",
         "reason": "the case needs QEMU's edu device, which no installed machine has"
       }
+    },
+    {
+      "case_id": "machine.i915fake.memory",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and 320 MiB of buffer objects written through GTT maps past the 256 MiB aperture read back whole after eviction, a userptr object over the probe's memory is pinned and refused once that memory is unmapped, and buffers given pages until memory gives out end in ENOMEM, a DONTNEED buffer purged on the way",
+      "units": [
+        "rach2/sys/drm/i915/i915_gem_evict.c",
+        "rach2/sys/drm/i915/i915_gem_shrinker.c",
+        "rach2/sys/drm/i915/i915_gem_userptr.c",
+        "i915gemprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "memory"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 1073741824,
+          "firmware": "direct",
+          "devices": [
+            "edu"
+          ],
+          "boot_options": [
+            "rach2.i915fake"
+          ]
+        }
+      },
+      "execution": {
+        "program": "i915gemprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "the probe unmaps and closes what it made, which gives its memory back"
+      },
+      "assertions": [
+        {
+          "assertion_id": "aperture",
+          "checks": "GET_APERTURE reports the fake's global GTT of 2 GiB with part of it available",
+          "source": "program"
+        },
+        {
+          "assertion_id": "working-set",
+          "checks": "20 objects of 16 MiB, each page's first dword written through a GTT map, read back whole through the maps after eviction rebinds them and through PREAD from memory",
+          "source": "program"
+        },
+        {
+          "assertion_id": "userptr",
+          "checks": "GEM_USERPTR refuses UNSYNCHRONIZED with ENODEV, makes an object over 64 KiB of the probe's anonymous memory with PROBE, pins its pages through SET_DOMAIN, refuses PREAD with EINVAL, and answers SET_DOMAIN with EFAULT once that memory is unmapped",
+          "source": "program"
+        },
+        {
+          "assertion_id": "pressure",
+          "checks": "objects of 16 MiB given pages one after another end in ENOMEM before 4 GiB, and a DONTNEED object of 16 MiB made first is no longer retained",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 1207959552,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "i915gemprobe",
+          "node": "tests/i915gemprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs QEMU's edu device, which no installed machine has"
+      }
     }
   ]
 }
