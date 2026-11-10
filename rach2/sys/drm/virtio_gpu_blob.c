@@ -323,10 +323,13 @@ static int32_t blob_commands(struct virtio_gpu_device *vg, uint32_t ctx_id, uint
 }
 
 /**
- * Send `bo`'s RESOURCE_CREATE_BLOB under resource id `id`, with its pages'
- * entries for a blob with guest memory, and wait for the answer. The host
- * has the id once this returns 0, or -ETIMEDOUT, when it may yet; on any
- * other error it does not. May sleep.
+ * Queue `bo`'s RESOURCE_CREATE_BLOB under resource id `id`, with its pages'
+ * entries for a blob with guest memory, without a wait, as Linux's
+ * virtio_gpu_cmd_resource_create_blob, and put its fence in the object's
+ * reservation. Once queued, `bo` has the id, which its UNREF undoes, and
+ * an error answer is logged. 0, or the entries' -ENOMEM, -EINVAL or -E2BIG
+ * with nothing queued and no id given, or the reservation's -ENOMEM after
+ * the queueing. May sleep.
  */
 static int32_t blob_create_cmd(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
                                const struct drm_virtgpu_resource_create_blob *a, uint32_t ctx_id,
@@ -356,7 +359,11 @@ static int32_t blob_create_cmd(struct virtio_gpu_device *vg, struct virtio_gpu_o
     req->nr_entries = n;
     req->blob_id = a->blob_mem == VIRTGPU_BLOB_MEM_GUEST ? 0 : a->blob_id;
     req->size = bo->shmem.base.size;
-    return vgpu_cmd_send_wait(cmd, NULL, 0);
+    vgpu_cmd_prepare(cmd);
+    rc = dma_resv_add_fence(bo->shmem.base.resv, cmd->fence, 1);
+    vgpu_cmd_send(cmd, NULL, NULL);
+    bo->res_id = id;
+    return rc;
 }
 
 /** The answer to ASSIGN_UUID: the blob's UUID, kept, and the hold on the
@@ -421,9 +428,7 @@ static struct virtio_gpu_object *blob_create(struct virtio_gpu_device *vg,
     bo->blob_flags = a->blob_flags;
     id = vgpu_res_id_get(vg);
     *err = id ? blob_create_cmd(vg, bo, a, ctx_id, id) : -ENOSPC;
-    if (*err == 0 || *err == -ETIMEDOUT) {
-        bo->res_id = id;
-    } else if (id) {
+    if (id && !bo->res_id) {
         vgpu_res_id_put(vg, id);
     }
     if (*err == 0 && a->blob_mem == VIRTGPU_BLOB_MEM_HOST3D &&

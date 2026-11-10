@@ -958,11 +958,16 @@ void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, u
 
 /**
  * A new object of `size` bytes with a 2D resource of `format` and
- * `width` by `height` pixels over its pages, which are given now: the
- * RESOURCE_CREATE_2D and the ATTACH_BACKING, whose answer is waited for. One
- * reference, the caller's; NULL with *err -ENODEV for a dead device, -EINVAL
- * for a size of 0 or past the shmem helper's reach, -ENOSPC when every
- * resource id is taken, -ENOMEM, -E2BIG, or the device's answer. May sleep.
+ * `width` by `height` pixels over its pages, which are given now, or with
+ * `virgl` the 3D resource `params` describes: the RESOURCE_CREATE and the
+ * ATTACH_BACKING are queued without a wait, as Linux's
+ * virtio_gpu_object_create, and the attach's fence is put in the object's
+ * reservation, so that a wait on the object waits for both, however slow
+ * the host. An error answer is logged, as Linux does, and the object's
+ * UNREF undoes the id. One reference, the caller's; NULL with *err -ENODEV
+ * for a dead device, -EINVAL for a size of 0 or past the shmem helper's
+ * reach, -ENOSPC when every resource id is taken, -ENOMEM or -E2BIG. May
+ * sleep.
  */
 struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t size,
                                           const struct drm_virtgpu_resource_create *params,
@@ -1034,25 +1039,13 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
         req->width = width;
         req->height = height;
     }
-    *err = vgpu_cmd_send_wait(create, NULL, 0);
-    if (*err != 0) {
-        /* An error answer leaves the host without the id, which an UNREF
-         * would name in vain; only one not answered yet may hold it. */
-        vgpu_cmd_free(attach);
-        if (*err == -ETIMEDOUT) {
-            bo->res_id = id;
-        } else {
-            vgpu_res_id_put(vg, id);
-        }
-        drm_gem_object_put(&bo->shmem.base);
-        return NULL;
-    }
-    /* create completed before backing becomes visible. */
-
-    /* The host has the id from here on: a failure below is undone by the
-     * object's UNREF. */
+    /* The device answers a queue's commands in order: the attach follows
+     * the create, and any command on the object follows both. */
+    vgpu_cmd_send(create, NULL, NULL);
     bo->res_id = id;
-    *err = vgpu_cmd_send_wait(attach, NULL, 0);
+    vgpu_cmd_prepare(attach);
+    *err = dma_resv_add_fence(bo->shmem.base.resv, attach->fence, 1);
+    vgpu_cmd_send(attach, NULL, NULL);
     if (*err != 0) {
         drm_gem_object_put(&bo->shmem.base);
         return NULL;
