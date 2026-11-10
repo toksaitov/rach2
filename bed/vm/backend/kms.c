@@ -556,6 +556,16 @@ static int refuse(struct kms *k, uint32_t id, const char *why)
     return -1;
 }
 
+/** Return whether a buffer of w by h is the scanout's rectangle and the
+ * mode's size, so that the plane can show it whole. */
+static int fills(const struct kms *k, uint32_t w, uint32_t h)
+{
+    const drmModeModeInfo *m = &k->modes[k->mode];
+
+    return k->rect.x == 0 && k->rect.y == 0 && k->rect.width == w && k->rect.height == h &&
+           m->hdisplay == w && m->vdisplay == h;
+}
+
 /**
  * Import the resource's dma-buf as a framebuffer that fills the mode; one
  * stored bottom row first needs a plane that reflects it in y. The handle
@@ -566,20 +576,19 @@ static int import(struct kms *k, uint32_t id)
 {
     uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
     uint64_t mods[4] = {0};
-    drmModeModeInfo *m = &k->modes[k->mode];
     struct vr_export e;
     int err;
 
-    if (k->imp.res == id && k->imp.id) {
+    if (k->imp.res == id && k->imp.id && fills(k, k->imp.width, k->imp.height)) {
         return 0;
     }
     fb_free(k, &k->imp);
     if (vr_export(k->vr, id, &e) != 0) {
         return refuse(k, id, "it has no dma-buf");
     }
-    if (e.width != m->hdisplay || e.height != m->vdisplay || k->rect.x != 0 || k->rect.y != 0) {
+    if (!fills(k, e.width, e.height)) {
         close(e.fd);
-        return refuse(k, id, "it does not fill the mode");
+        return refuse(k, id, "the scanout is not the whole buffer in the whole mode");
     }
     if (e.bottom_up && k->p.rotation == 0) {
         close(e.fd);

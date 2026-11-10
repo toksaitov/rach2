@@ -1,0 +1,23 @@
+# packages: what the VM installs from the snapshot that
+# tests/graphics/debian-ref/image pins, one package a line: the tools that
+# rebuild virglrenderer and build the module, vkms and the backend, the
+# libraries the backend builds against, and Mesa's llvmpipe and lavapipe,
+# which it renders on.
+build-essential
+pkgconf
+dpkg-dev
+devscripts
+fakeroot
+ca-certificates
+pciutils
+kmod
+libdrm-dev
+libepoxy-dev
+libgbm-dev
+libvulkan-dev
+libgl1-mesa-dri
+libegl-mesa0
+libegl1
+libopengl0
+libgbm1
+mesa-vulkan-drivers

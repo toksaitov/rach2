@@ -114,6 +114,7 @@ struct vd_ops {
     int (*display)(void *c, uint32_t scanout, struct vd_mode *m);
     /* Copy the scanout's EDID to out; *size is its length. */
     int (*edid)(void *c, uint32_t scanout, uint8_t *out, uint32_t *size);
+    /* Show resource id's rectangle r; id 0, with r 0, takes the scanout off. */
     int (*scanout)(void *c, uint32_t scanout, uint32_t id, const struct vd_rect *r);
     int (*flush)(void *c, uint32_t scanout, uint32_t id, const struct vd_rect *r);
     /* End every resource and context: a new epoch begins. */
