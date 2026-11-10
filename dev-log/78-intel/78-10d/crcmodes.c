@@ -126,18 +126,18 @@ struct gem_close {
     uint32_t handle, pad;
 };
 
-#define IOCTL_GEM_CLOSE          DRM_IOW(0x09, struct gem_close)
-#define IOCTL_SET_MASTER         DRM_IO(0x1e)
-#define IOCTL_MODE_GETRESOURCES  DRM_IOWR(0xA0, struct mode_card_res)
-#define IOCTL_MODE_SETCRTC       DRM_IOWR(0xA2, struct mode_crtc)
-#define IOCTL_MODE_GETENCODER    DRM_IOWR(0xA6, struct mode_get_encoder)
-#define IOCTL_MODE_GETCONNECTOR  DRM_IOWR(0xA7, struct mode_get_connector)
-#define IOCTL_MODE_GETPROPERTY   DRM_IOWR(0xAA, struct mode_get_property)
-#define IOCTL_MODE_SETPROPERTY   DRM_IOWR(0xAB, struct mode_connector_set_property)
-#define IOCTL_MODE_RMFB          DRM_IOWR(0xAF, uint32_t)
-#define IOCTL_MODE_CREATE_DUMB   DRM_IOWR(0xB2, struct mode_create_dumb)
-#define IOCTL_MODE_MAP_DUMB      DRM_IOWR(0xB3, struct mode_map_dumb)
-#define IOCTL_MODE_ADDFB2        DRM_IOWR(0xB8, struct mode_fb_cmd2)
+#define IOCTL_GEM_CLOSE         DRM_IOW(0x09, struct gem_close)
+#define IOCTL_SET_MASTER        DRM_IO(0x1e)
+#define IOCTL_MODE_GETRESOURCES DRM_IOWR(0xA0, struct mode_card_res)
+#define IOCTL_MODE_SETCRTC      DRM_IOWR(0xA2, struct mode_crtc)
+#define IOCTL_MODE_GETENCODER   DRM_IOWR(0xA6, struct mode_get_encoder)
+#define IOCTL_MODE_GETCONNECTOR DRM_IOWR(0xA7, struct mode_get_connector)
+#define IOCTL_MODE_GETPROPERTY  DRM_IOWR(0xAA, struct mode_get_property)
+#define IOCTL_MODE_SETPROPERTY  DRM_IOWR(0xAB, struct mode_connector_set_property)
+#define IOCTL_MODE_RMFB         DRM_IOWR(0xAF, uint32_t)
+#define IOCTL_MODE_CREATE_DUMB  DRM_IOWR(0xB2, struct mode_create_dumb)
+#define IOCTL_MODE_MAP_DUMB     DRM_IOWR(0xB3, struct mode_map_dumb)
+#define IOCTL_MODE_ADDFB2       DRM_IOWR(0xB8, struct mode_fb_cmd2)
 
 #define MAX_IDS   32
 #define MAX_PROPS 64
@@ -149,11 +149,11 @@ struct panel {
     int fd;
     uint32_t connector, crtc, crtc_index;
     struct mode_modeinfo mode;
-    uint32_t scaling_prop;   /* 0 when the connector has none */
+    uint32_t scaling_prop; /* 0 when the connector has none */
     uint64_t scaling_values[8];
     char scaling_names[8][32];
     uint32_t nscaling;
-    uint64_t scaling_was;    /* the value found at the start */
+    uint64_t scaling_was; /* the value found at the start */
 };
 
 /* A dumb buffer of one mode, added as a framebuffer. */
@@ -251,8 +251,8 @@ static int find_panel(struct panel *p)
         g.connector_id = connectors[i];
         if (drm(p->fd, IOCTL_MODE_GETCONNECTOR, &g) != 0)
             return failed("GETCONNECTOR");
-        if (g.connector_type != CONNECTOR_EDP || g.connection != CONNECTED ||
-            g.count_modes == 0 || g.count_encoders == 0)
+        if (g.connector_type != CONNECTOR_EDP || g.connection != CONNECTED || g.count_modes == 0 ||
+            g.count_encoders == 0)
             continue;
         g.count_modes = g.count_modes < 64 ? g.count_modes : 64;
         g.count_encoders = g.count_encoders < 8 ? g.count_encoders : 8;
