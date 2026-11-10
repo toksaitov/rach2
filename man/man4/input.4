@@ -216,7 +216,13 @@ for a switch a truth as Linux's
 .Fn kstrtobool
 reads it, which the stick takes at once.
 The buttons of a stick that the pad wires to itself are reported on the
-stick's node.
+stick's node when they change.
+.Pp
+A TrackPoint alone on the auxiliary port, which answers its read-ID when
+no touchpad answered, is found, named and set up the same way, at
+.Dq isa0060/serio1/input0 ,
+and its settings are files of serio1.
+.Pp
 A mouse behind the port is named and numbered as the PS/2 mouse above, at
 .Dq synaptics-pt/serio0/input0 .
 .Pp
@@ -225,8 +231,8 @@ answered, is identified and set up as Linux's alps driver does it: an old
 model by its signature in Linux's table, protocol versions 1 and 2 and
 version 6, and a newer one by its firmware's report, versions 3 to 5, 7
 and 8.
-A version 9 pad and ALPS's CS19, a stick with no pad, are left to the mouse
-driver, as Linux leaves them.
+A version 9 pad is left to the mouse driver, as Linux leaves it, and ALPS's
+CS19, a stick with no pad, to the TrackPoint driver, as Linux leaves it.
 The pad is
 .Dq AlpsPS/2 ALPS GlidePoint ,
 or
@@ -786,3 +792,21 @@ The touchpad drivers are Synaptics', ALPS's and Elantech's alone: another
 touchpad, or an ALPS pad of version 9, is driven as the PS/2 mouse it also
 is, and a Synaptics or Elantech pad that offers its SMBus bus is driven
 over PS/2.
+Of Linux's machine quirks for Synaptics pads only the Toshiba rate of 40
+is taken: the Cr-48's profile sensor is read as any pad with the advanced
+gesture mode.
+The serio port has none of Linux's psmouse files,
+.Pa protocol ,
+.Pa rate ,
+.Pa resolution ,
+.Pa resetafter
+and
+.Pa resync_time ,
+and an Elantech pad none of its register files,
+.Pa reg_07
+to
+.Pa reg_26 ,
+.Pa debug ,
+.Pa paritycheck
+and
+.Pa crc_enabled .

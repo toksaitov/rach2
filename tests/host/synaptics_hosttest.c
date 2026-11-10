@@ -5,7 +5,7 @@
  * behind it, with the event device read as a program reads it (evdev.c)
  * and the mouse device's packets (mouse.c).
  *
- * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c
+ * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  *
@@ -328,6 +328,9 @@ int elantech_byte(uint8_t data)
 
 /* The rest of elantech.h, which a port without an Elantech pad never
  * calls; elantech_hosttest.c tests it. */
+void elantech_packet_restart(void)
+{}
+
 int elantech_packet_start(void)
 {
     return 1;
@@ -367,6 +370,14 @@ int alps_byte(uint8_t data)
 
 /* The rest of alps.h, which a port without an ALPS pad never calls;
  * alps_hosttest.c tests it. */
+void alps_packet_restart(void)
+{}
+
+int alps_reset_after(void)
+{
+    return 12;
+}
+
 int alps_packet_start(void)
 {
     return 1;
@@ -1054,7 +1065,8 @@ static void fallback_rows(void)
     CHECK("a plain mouse's bring-up succeeds", init_mouse() == 0);
     CHECK("a plain mouse is no touchpad", touchpad == 0 && pad == NULL);
     expect_start();
-    expect(0xF3); /* the IntelliMouse's knock follows */
+    expect(0xE1); /* the TrackPoint's read-ID, then the IntelliMouse's knock */
+    expect(0xF3);
     CHECK("a plain mouse is knocked as Linux's psmouse knocks", took_expected(n_want));
     CHECK("it is PS/2 Generic Mouse",
           open_pad() == 0 && evdev_ioctl(&open_e, EVIOCGNAME(64), (uintptr_t)name) > 0 &&
@@ -1090,9 +1102,66 @@ static void fallback_rows(void)
     model_reset(KIND_PAD);
 }
 
+/** No table is mapped: the SMBIOS reader reads the row's from memory. */
+uintptr_t map_mmio(uintptr_t phys, size_t size)
+{
+    (void)phys;
+    (void)size;
+    return 0;
+}
+
+/* The SMBIOS table a row gives, of System Information alone. */
+static uint8_t smbios_table[256];
+
+/** Give the SMBIOS reader a table whose System Information, type 1, names
+ * the manufacturer `maker`, the product `product` and its `version`, or,
+ * when `maker` is NULL, a table of no structure but its end. */
+static void set_system(const char *maker, const char *product, const char *version)
+{
+    static const uint8_t end[6] = {127, 4, 0, 0, 0, 0};
+    static const uint8_t header[8] = {1, 8, 0, 1, 1, 2, 3, 0};
+    const char *const strings[3] = {maker, product, version};
+    unsigned int n = 0, i, k;
+
+    if (maker) {
+        k_memcpy(smbios_table, header, sizeof(header));
+        n = sizeof(header);
+        for (k = 0; k < 3; k++) {
+            for (i = 0; strings[k][i]; i++) {
+                smbios_table[n++] = (uint8_t)strings[k][i];
+            }
+            smbios_table[n++] = 0;
+        }
+        smbios_table[n++] = 0;
+    }
+    k_memcpy(smbios_table + n, end, sizeof(end));
+    smbios_set_table(smbios_table, n + (unsigned int)sizeof(end));
+}
+
+/** A Toshiba of Linux's `toshiba_dmi_table`, whose pad reports at 40
+ * packets a second, and a Toshiba that is none. */
+static void toshiba_rows(void)
+{
+    model_reset(KIND_PAD);
+    set_system("TOSHIBA", "Satellite A200", "PSAE0E");
+    CHECK("a Satellite's touchpad is brought up", init_mouse() == 0 && touchpad == 1);
+    CHECK("its mode is set at 80 packets a second, then at psmouse's 40",
+          n_took > 0 && pad_mode == 0x85 && rate_40 && reporting);
+    synaptics_reconnect();
+    CHECK("and its reconnect keeps 40", pad_mode == 0x85);
+
+    model_reset(KIND_PAD);
+    set_system("TOSHIBA", "Portable PC", "Version 2.0");
+    CHECK("a Portable PC of another version keeps 80",
+          init_mouse() == 0 && pad_mode == 0xC5 && !rate_40);
+    set_system(NULL, NULL, NULL);
+}
+
 int main(void)
 {
+    set_system(NULL, NULL, NULL);
     bringup_rows();
+    toshiba_rows();
     capability_rows();
     packet_rows();
     mouse_rows();

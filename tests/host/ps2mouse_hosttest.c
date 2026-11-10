@@ -363,6 +363,9 @@ int synaptics_byte(uint8_t data)
 
 /* The rest of synaptics.h and trackpoint.h, which a bring-up without a
  * touchpad never calls; trackpoint_hosttest.c tests them. */
+void synaptics_packet_restart(void)
+{}
+
 int synaptics_packet_start(void)
 {
     return 1;
@@ -497,6 +500,9 @@ int elantech_byte(uint8_t data)
 
 /* The rest of elantech.h, which a port without an Elantech pad never
  * calls; elantech_hosttest.c tests it. */
+void elantech_packet_restart(void)
+{}
+
 int elantech_packet_start(void)
 {
     return 1;
@@ -519,6 +525,14 @@ int alps_byte(uint8_t data)
 
 /* The rest of alps.h, which a port without an ALPS pad never calls;
  * alps_hosttest.c tests it. */
+void alps_packet_restart(void)
+{}
+
+int alps_reset_after(void)
+{
+    return 12;
+}
+
 int alps_packet_start(void)
 {
     return 1;
@@ -639,12 +653,24 @@ static void handler_rows(void)
     CHECK("a byte without bit 3 is read", interrupt(MOUSE_BYTE, 0x02) == 1);
     CHECK("a first byte without bit 3 is dropped", packet_index == 0);
 
-    /* A packet whose X movement overflowed. */
-    interrupt(MOUSE_BYTE, 0x48);
+    /* A packet whose X movement overflowed, read as Linux's
+     * psmouse_report_standard_motion reads it, its overflow bit not looked
+     * at. */
+    interrupt(MOUSE_BYTE, 0x49);
     interrupt(MOUSE_BYTE, 0x10);
     interrupt(MOUSE_BYTE, 0x10);
-    CHECK("a packet with an overflow bit is dropped", reports == 1);
-    CHECK("a dropped packet starts the next at byte 0", packet_index == 0);
+    CHECK("a packet with an overflow bit is reported as Linux reports it",
+          reports == 2 && reported_buttons == MOUSE_LEFT && reported_dx == 16 &&
+              reported_dy == -16);
+    CHECK("it starts the next at byte 0", packet_index == 0);
+
+    /* Bytes of 0 with their sign bits set, which Linux reads as no
+     * movement. */
+    interrupt(MOUSE_BYTE, 0x38);
+    interrupt(MOUSE_BYTE, 0x00);
+    interrupt(MOUSE_BYTE, 0x00);
+    CHECK("a movement byte of 0 is no movement whatever its sign bit",
+          reports == 3 && reported_buttons == 0 && reported_dx == 0 && reported_dy == 0);
 
     CHECK("the handler writes no port", port_writes == 0);
 }

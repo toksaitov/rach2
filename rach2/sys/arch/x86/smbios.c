@@ -551,6 +551,13 @@ static int contains(const char *s, const char *sub)
     return sub[0] == '\0';
 }
 
+int smbios_field_has(int field, const char *sub)
+{
+    const char *v = dmi_field(field);
+
+    return v && v[0] != '\0' && contains(v, sub);
+}
+
 int smbios_system_is(const char *maker, const char *name)
 {
     const char *sys_vendor = dmi_field(DMI_SYS_VENDOR);

@@ -50,6 +50,11 @@ int elantech_byte(uint8_t data);
  * byte 0xAA may begin a device's announcement. In interrupt context. */
 int elantech_packet_start(void);
 
+/** Drop the packet under way, as Linux's `__psmouse_set_state` does at
+ * each change of the port's state: when a run of commands begins and ends.
+ * In interrupt context or with interrupts off. */
+void elantech_packet_restart(void);
+
 /**
  * Set the pad up again after five bad packets or its announcement, as
  * Linux's `elantech_reconnect` and psmouse's `psmouse_initialize` do: the
