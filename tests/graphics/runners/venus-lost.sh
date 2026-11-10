@@ -5,6 +5,7 @@
 #
 #   venus-lost.sh start [-l LIST] [-c CTS] [-o OUT]
 #   venus-lost.sh after [-o OUT]
+#   venus-lost.sh run [-l LIST] [-c CTS] [-o OUT]
 #   venus-lost.sh kill [WORKSPACE]
 #
 # `start` runs four deqp-vk processes of CTS (/opt/vk-gl-cts-1.4.1.1) on
@@ -22,7 +23,9 @@
 # for N from 0 to 3, STATUS being the shell's, 134 for SIGABRT, and the
 # error line vulkaninfo's first line that names an error, without its
 # source location, or `vulkaninfo: none`. OUT (/tmp/graphics/out) keeps
-# each process's output and .qpa log.
+# each process's output and .qpa log. `run` is `start` and then `after` in
+# one command, for a guest whose commands may leave no process behind, as
+# etude-guest reaps every process a command started when it ends.
 #
 # `kill`, on the host, finds the QEMU whose command line names WORKSPACE, a
 # case's own directory, by default the one above the script's, as etude
@@ -34,7 +37,7 @@ set -eu
 
 lost_usage()
 {
-    echo "usage: venus-lost.sh start [-l LIST] [-c CTS] [-o OUT] | after [-o OUT] | kill [WORKSPACE]" >&2
+    echo "usage: venus-lost.sh start|run [-l LIST] [-c CTS] [-o OUT] | after [-o OUT] | kill [WORKSPACE]" >&2
     exit 2
 }
 
@@ -152,6 +155,13 @@ start)
 after)
     export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
     lost_after "$@"
+    ;;
+run)
+    export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
+    lost_start "$@"
+    # lost_start leaves its output directory in out.
+    OPTIND=1
+    lost_after -o "$out"
     ;;
 kill) lost_kill "$@" ;;
 *) lost_usage ;;

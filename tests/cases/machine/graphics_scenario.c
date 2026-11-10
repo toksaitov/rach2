@@ -362,30 +362,26 @@ static void run(struct graphics_case *s)
 }
 
 /**
- * Run the device loss case: four deqp-vk processes on Venus as the test
- * account, the host's kill of the render server of this case's QEMU, which
- * the artifact venus-lost finds by the workspace its own path is in, and
- * then the processes' ends and a new vulkaninfo; assert that each part ran
- * and print the guest's lines.
+ * Run the device loss case: venus-lost.sh run as the test account, which
+ * prints its ready line once four deqp-vk processes are inside Venus; the
+ * host's kill of the render server of this case's QEMU, which the artifact
+ * venus-lost finds by the workspace its own path is in, while the guest's
+ * command still runs; and the end of that command, which reads the
+ * processes' ends and runs a new vulkaninfo. Assert that each part ran and
+ * print the lines of the kill and the guest.
  */
 static void run_lost(struct graphics_case *s)
 {
+    const char *argv[] = {"/bin/bash", "-c", VENUS_LOST_RUN "run'", NULL};
     char *kill[] = {"venus-lost", "kill", NULL};
-    char line[200];
+    char line[200] = "";
     struct net_run r;
     const char *why = NULL;
 
-    if (net_step(&s->u, "run") == ETUDE_OK)
-        as_root(s, VENUS_LOST_RUN "start'", "start", &r);
-    if (!net_ok(&s->u)) {
-        net_assert(&s->u, "ran", 0, "");
-        return;
-    }
-    if (!net_exited0(&r) || net_find(r.out, "venus-lost: result: ") == NULL)
+    if (net_step(&s->u, "run") == ETUDE_OK &&
+        net_guest_start(&s->u, s->b.m, argv, NULL, "venus-lost: result: 4 deqp-vk") != ETUDE_OK)
         why = "the four processes did not start";
-    net_copy_line(r.err != NULL && *r.err != '\0' ? r.err : r.out, line, sizeof(line));
-    net_run_free(&r);
-    if (why == NULL && net_host(&s->u, kill, "kill", &r) == ETUDE_OK) {
+    if (why == NULL && net_ok(&s->u) && net_host(&s->u, kill, "kill", &r) == ETUDE_OK) {
         if (!net_exited0(&r) || net_find(r.out, "venus-lost: result: killed") == NULL)
             why = "the host did not kill the render server";
         net_copy_line(r.err != NULL && *r.err != '\0' ? r.err : r.out, line, sizeof(line));
@@ -393,11 +389,11 @@ static void run_lost(struct graphics_case *s)
             fputs(r.out, stdout);
         net_run_free(&r);
     }
-    if (why == NULL && net_ok(&s->u) &&
-        as_root(s, VENUS_LOST_RUN "after'", "runner", &r) == ETUDE_OK) {
-        if (!net_exited0(&r) || net_find(r.out, "vulkaninfo exit ") == NULL)
+    if (net_guest_finish(&s->u, s->b.m, why != NULL, "runner", &r) == ETUDE_OK) {
+        if (why == NULL && (!net_exited0(&r) || net_find(r.out, "vulkaninfo exit ") == NULL))
             why = "the processes' ends were not read";
-        net_copy_line(r.err != NULL && *r.err != '\0' ? r.err : r.out, line, sizeof(line));
+        if (why != NULL && strcmp(why, "the processes' ends were not read") == 0)
+            net_copy_line(r.err != NULL && *r.err != '\0' ? r.err : r.out, line, sizeof(line));
         if (r.out != NULL)
             fputs(r.out, stdout);
         net_run_free(&r);

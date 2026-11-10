@@ -168,6 +168,20 @@ enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
                             const char *const argv[], const char *const env[], const char *input,
                             const char *output, struct net_run *r);
 
+/** Start an installed guest program through the machine's open channel
+ * without waiting, and wait for READY on its standard output, so that the
+ * scenario may act on the host while it runs. */
+enum etude_status net_guest_start(struct net_case *u, struct etude_case_machine *m,
+                                  const char *const argv[], const char *const env[],
+                                  const char *ready);
+
+/** Wait for the program net_guest_start started to end, by itself or,
+ * when CANCEL is nonzero, by its cancellation, and read its result
+ * evidence, standard output OUTPUT, into R. It runs even after a failure
+ * of the attempt, so that the program never outlives it. */
+enum etude_status net_guest_finish(struct net_case *u, struct etude_case_machine *m, int cancel,
+                                   const char *output, struct net_run *r);
+
 /** Run an SSH client on the declared channel-client Rach2 machine, with
  * INPUT, a host file, as its standard input. net_host selects the same path
  * for ssh, scp, sftp and ptydrive. The actual SSH protocol still connects to
