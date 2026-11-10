@@ -3408,30 +3408,6 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
 }
 
 /**
- * Check that the `iovlen` buffers at `iov_user` can all be written, before a
- * receive takes what it will put in them. Returns 0, or -EFAULT for a list or
- * a buffer that cannot be read or written, or for one past 2147483647 bytes.
- */
-static int32_t iovs_writable(uintptr_t iov_user, uint32_t iovlen)
-{
-    struct kernel_iovec iov;
-    uint32_t i;
-
-    for (i = 0; i < iovlen; i++) {
-        if (iov_fetch(&iov, iov_user, i) != 0) {
-            return -EFAULT;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        if (iov.iov_len > 0x7FFFFFFFu || !user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
-            return -EFAULT;
-        }
-    }
-    return 0;
-}
-
-/**
  * Read a stream socket into the `iovlen` copied buffers at `iov` in order, as
  * Linux's tcp_recvmsg: the first buffer that is not empty is read as recv(2)
  * reads, waiting for a byte unless MSG_DONTWAIT or O_NONBLOCK, and each later
@@ -3573,7 +3549,8 @@ static int32_t recvmsg_stream(fd_entry_t *entry, struct kernel_msghdr *hdr, uint
  * Returns the bytes taken, or with MSG_TRUNC the datagram's whole length, or
  * -errno: -EOPNOTSUPP on a socket that is neither a stream, a datagram nor a
  * raw socket, or on the raw descriptor that takes only ioctls, -EINVAL for
- * more than IOV_MAX_LOCAL buffers, -EFAULT, or the error of the receive.
+ * more than IOV_MAX_LOCAL buffers or a buffer of a negative length
+ * (`iov_import`), -EFAULT, or the error of the receive.
  */
 static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
 {
@@ -3625,8 +3602,9 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
         return -EFAULT;
     }
-    if (iovs_writable(iov_user, iovlen) != 0) {
-        return -EFAULT;
+    taken = (int32_t)iov_import(NULL, iov_user, (int)iovlen, 1);
+    if (taken < 0) {
+        return taken;
     }
 
     if ((flags & MSG_DONTWAIT) && (taken = socket_dgram_nowait(entry->sock)) < 0) {
