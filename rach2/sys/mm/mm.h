@@ -189,7 +189,8 @@ struct process;
 
 /** Take `p`'s address space from it and drop its user's count, loading the
  * kernel's directory first when this is the last user and its directory is
- * the one in use. `p` is left with none, as a kernel thread has none. The
+ * the one in use. `p` is left with none, as a kernel thread has none, and
+ * without the memory policy set_mempolicy gave it. The
  * last user records the space's peak resident size in the thread group's
  * `maxrss_kb` when it is the largest yet, for `ru_maxrss`. */
 void mm_drop(struct process *p);

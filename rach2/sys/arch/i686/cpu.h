@@ -100,6 +100,11 @@ typedef uint32_t pte_t;
  * user access faults; fork and teardown own it as a user page by this bit,
  * and mprotect makes it a user page again. */
 #define PTE_NONE          0x400u
+/* Bit 11: a page of anonymous memory that a read brought in zeroed. While
+ * PTE_DIRTY is clear beside it nothing has stored into the page, and it is
+ * what Linux maps its zero page for: the memory policy calls and
+ * /proc/PID/numa_maps leave it out as Linux leaves that page out. */
+#define PTE_ZEROFILL      0x800u
 /* Without PAE an entry has no bit that forbids instruction fetches: every
  * page an i686 maps is executable. */
 #define PTE_NOEXEC        0u

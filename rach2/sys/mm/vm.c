@@ -108,6 +108,40 @@ int vm_device_access(struct vm_file *f, uint64_t offset, void *buf, uint32_t len
     return d->ops->access(d->obj, offset, buf, len, write);
 }
 
+struct vm_policy *vm_policy_get(struct vm_policy *p)
+{
+    if (p) {
+        p->refs++;
+    }
+    return p;
+}
+
+void vm_policy_put(struct vm_policy *p)
+{
+    if (p && --p->refs == 0) {
+        kfree(p);
+    }
+}
+
+int vm_policy_equal(const struct vm_policy *a, const struct vm_policy *b)
+{
+    uint32_t i;
+
+    if (a == b) {
+        return 1;
+    }
+    if (!a || !b || a->mode != b->mode || a->flags != b->flags || a->home != b->home ||
+        a->nodes != b->nodes) {
+        return 0;
+    }
+    for (i = 0; a->flags && i < VM_NODES_WORDS; i++) {
+        if (a->user[i] != b->user[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 void vm_file_reap(void)
 {
     struct vm_file *f;
@@ -261,7 +295,8 @@ int vm_reserve(vm_space_t *vm, uint32_t n)
     return vm_nodes_reserve(vm, n);
 }
 
-/** Insert a region from a reserved node, taking its file reference. */
+/** Insert a region from a reserved node, taking its file reference; its
+ * policy is the default. */
 static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                       struct vm_file *file, uint32_t pgoff)
 {
@@ -286,6 +321,7 @@ static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t p
     r->type = type;
     r->file = file;
     r->pgoff = pgoff;
+    r->policy = NULL;
     r->parent = parent;
     r->left = r->right = NULL;
     r->height = 1;
@@ -345,23 +381,29 @@ static void vm_delete(vm_space_t *vm, vma_t *r)
     vm->count--;
     vm->total -= r->end - r->start;
     vm_file_put(r->file);
+    vm_policy_put(r->policy);
+    r->policy = NULL;
     r->next = vm->spare;
     vm->spare = r;
     vm_balance(vm, parent);
 }
 
-/** Split r at an interior address, using a reserved node for the upper part. */
+/** Split r at an interior address, using a reserved node for the upper
+ * part, which takes a reference to r's policy. */
 static vma_t *vm_split(vm_space_t *vm, vma_t *r, uintptr_t at)
 {
     uintptr_t end = r->end;
     uint32_t pgoff = r->pgoff;
+    vma_t *upper;
 
     if (r->file) {
         pgoff += (uint32_t)((at - r->start) >> VM_PAGE_SHIFT);
     }
     r->end = at;
     vm->total -= end - at;
-    return vm_link(vm, at, end, r->prot, r->type, r->file, pgoff);
+    upper = vm_link(vm, at, end, r->prot, r->type, r->file, pgoff);
+    upper->policy = vm_policy_get(r->policy);
+    return upper;
 }
 
 /** Merge a compatible right neighbour into r; return 1 if one was removed. */
@@ -371,7 +413,7 @@ static int vm_merge(vm_space_t *vm, vma_t *r)
     uintptr_t end;
 
     if (!s || r->end != s->start || r->prot != s->prot || r->type != s->type ||
-        r->file != s->file ||
+        r->file != s->file || !vm_policy_equal(r->policy, s->policy) ||
         (r->file && r->pgoff + ((r->end - r->start) >> VM_PAGE_SHIFT) != s->pgoff)) {
         return 0;
     }
@@ -390,6 +432,8 @@ void vm_init(vm_space_t *vm)
     while (r) {
         next = r->next;
         vm_file_put(r->file);
+        vm_policy_put(r->policy);
+        r->policy = NULL;
         r->next = vm->spare;
         vm->spare = r;
         r = next;
@@ -419,6 +463,7 @@ void vm_free(vm_space_t *vm)
 int vm_copy(vm_space_t *dst, const vm_space_t *src)
 {
     const vma_t *r;
+    vma_t *copy;
 
     *dst = *src;
     dst->root = dst->first = dst->last = dst->spare = NULL;
@@ -433,8 +478,9 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     }
     for (r = vm_first(src); r; r = vm_next(r)) {
         if (!(r->prot & VM_PROT_DONTFORK)) {
-            (void)vm_link(dst, r->start, r->end, r->prot & ~(uint32_t)VM_PROT_LOCKS, r->type,
-                          r->file, r->pgoff);
+            copy = vm_link(dst, r->start, r->end, r->prot & ~(uint32_t)VM_PROT_LOCKS, r->type,
+                           r->file, r->pgoff);
+            copy->policy = vm_policy_get(r->policy);
         }
     }
     return 0;
@@ -462,13 +508,52 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
 int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff)
 {
+    vma_t like;
+
+    like.prot = prot;
+    like.type = type;
+    like.file = file;
+    like.policy = NULL;
+    return vm_insert_like(vm, start, end, &like, pgoff);
+}
+
+int vm_insert_like(vm_space_t *vm, uintptr_t start, uintptr_t end, const vma_t *like,
+                   uint32_t pgoff)
+{
     vma_t *r;
 
     if (start >= end || ((start | end) & VM_PAGE_MASK) || vm_overlaps(vm, start, end) ||
         vm_reserve(vm, 1) != 0) {
         return -1;
     }
-    r = vm_link(vm, start, end, prot, type, file, pgoff);
+    r = vm_link(vm, start, end, like->prot, like->type, like->file, pgoff);
+    r->policy = vm_policy_get(like->policy);
+    (void)vm_merge(vm, r);
+    if (r->prev) {
+        (void)vm_merge(vm, r->prev);
+    }
+    return 0;
+}
+
+int vm_set_policy(vm_space_t *vm, uintptr_t start, uintptr_t end, struct vm_policy *pol)
+{
+    vma_t *r = vm_find(vm, start);
+
+    if (!r || start >= end || end > r->end) {
+        return 0;
+    }
+    if (vm_reserve(vm, (uint32_t)(r->start < start) + (uint32_t)(r->end > end)) != 0) {
+        return -1;
+    }
+    if (r->start < start) {
+        r = vm_split(vm, r, start);
+    }
+    if (r->end > end) {
+        (void)vm_split(vm, r, end);
+    }
+    (void)vm_policy_get(pol);
+    vm_policy_put(r->policy);
+    r->policy = pol;
     (void)vm_merge(vm, r);
     if (r->prev) {
         (void)vm_merge(vm, r->prev);
@@ -744,7 +829,10 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     }
     if (r->prot & VM_PROT_GUARD) {
         /* Linux's guard marks pages, not the region: the growth is stack. */
-        return vm_insert(vm, page, r->start, r->prot & ~(uint32_t)VM_PROT_GUARD, VM_STACK) == 0;
+        vma_t like = *r;
+
+        like.prot &= ~(uint32_t)VM_PROT_GUARD;
+        return vm_insert_like(vm, page, r->start, &like, 0) == 0;
     }
     vm->total += growth;
     r->start = page;

@@ -286,6 +286,8 @@ void mm_drop(struct process *p)
 {
     struct mm *mm = p->mm;
 
+    vm_policy_put(p->mempolicy);
+    p->mempolicy = NULL;
     if (!mm) {
         return;
     }

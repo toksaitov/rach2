@@ -180,6 +180,11 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_PROCESS_VM_READV] = sys_process_vm_readv;
     table[SYS_PROCESS_VM_WRITEV] = sys_process_vm_writev;
     table[SYS_GET_MEMPOLICY] = sys_get_mempolicy;
+    table[SYS_MBIND] = sys_mbind;
+    table[SYS_SET_MEMPOLICY] = sys_set_mempolicy;
+    table[SYS_MIGRATE_PAGES] = sys_migrate_pages;
+    table[SYS_MOVE_PAGES] = sys_move_pages;
+    table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;
     table[SYS_GETDENTS64] = sys_getdents64;
     table[SYS_UTIMENSAT] = sys_utimensat;
     table[SYS_UTIMENSAT_TIME64] = sys_utimensat_time64;

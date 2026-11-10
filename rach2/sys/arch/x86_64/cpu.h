@@ -156,6 +156,8 @@ typedef uint64_t pte_t;
 #define PTE_COW           0x200UL
 /* Bit 10: a resident page of a PROT_NONE region, as on i686. */
 #define PTE_NONE          0x400UL
+/* Bit 11: a page a read brought in zeroed, as on i686. */
+#define PTE_ZEROFILL      0x800UL
 /* Bit 63: no instruction fetch from the page. Set only where the processor
  * has the bit and the loader turned EFER.NXE on: elsewhere it is reserved,
  * and an entry with it faults. PTE_NOEXEC, which the shared code sets on a

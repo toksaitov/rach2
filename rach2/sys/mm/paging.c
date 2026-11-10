@@ -253,6 +253,10 @@ void frame_take_boot(uintptr_t frame)
     }
 }
 
+/* Whether the entry `e` maps a page a read brought in zeroed that nothing
+ * has stored into since (PTE_ZEROFILL): Linux's zero page. */
+#define PTE_IS_ZERO(e) (((e) & (pte_t)(PTE_ZEROFILL | PTE_DIRTY)) == (pte_t)PTE_ZEROFILL)
+
 static int cow_fault(struct mm *mm, uintptr_t addr);
 static int page_private(struct mm *mm, uintptr_t addr, int writable);
 static uint32_t frame_maps(uintptr_t frame);
@@ -557,7 +561,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     if (paging_zero_frame(phys) != 0 ||
         map_user_frame(dir, addr, phys,
                        PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                           paging_noexec(prot)) != 0) {
+                           (write ? 0 : PTE_ZEROFILL) | paging_noexec(prot)) != 0) {
         free_frame(phys);
         return 0;
     }
@@ -587,7 +591,10 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  * or a mapping's, or a page of a device object, which the object gives
  * (`device_fault`) or, gone, answers with SIGBUS. An
  * anonymous one gets a zeroed frame, read-only in the PTE when its region
- * is, so a later write faults; a grown stack page stays writable. A file's
+ * is, so a later write faults; a grown stack page stays writable. One a
+ * read brings in is marked PTE_ZEROFILL, and stands for Linux's zero page
+ * until a store sets its dirty bit or the kernel stores into its frame
+ * (`page_private`, `cow_fault`, a pin). A file's
  * page is read into its frame, which may sleep, and when the regions
  * changed meanwhile the resolution runs again (`vm_resolve_once`), so
  * success always means a page that is present and allows the access.
@@ -810,6 +817,7 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
             frames[i] = phys;
             continue;
         }
+        *e &= ~(pte_t)PTE_ZEROFILL;
         if (vma->type != VM_SHARED &&
             ((*e & PTE_COW) || frame_maps(PTE_ADDR(*e) / PAGE_SIZE) > 1) &&
             page_private(mm, page, (vma->prot & VM_PROT_WRITE) != 0) != 0) {
@@ -875,7 +883,7 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     frame = old_phys / PAGE_SIZE;
 
     if (frame >= _frames_number || frame_maps(frame) <= 1) {
-        *e = (pte & ~(pte_t)PTE_COW) | PTE_W;
+        *e = (pte & ~(pte_t)(PTE_COW | PTE_ZEROFILL)) | PTE_W;
         paging_flush_dir(dir, addr);
         return 1;
     }
@@ -938,7 +946,7 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
         addr &= ~(uintptr_t)(PAGE_SIZE - 1);
         mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
     }
-    *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)PTE_COW);
+    *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)(PTE_COW | PTE_ZEROFILL));
     paging_flush_dir(dir, addr);
     if (new_phys != old_phys) {
         frame_unref(old_phys);
@@ -1703,6 +1711,44 @@ static pte_t *user_span(page_dir_t *dir, uintptr_t va, uintptr_t end, uintptr_t 
     return table;
 }
 
+int paging_user_page(page_dir_t *dir, uintptr_t va)
+{
+    pte_t *e = user_pte(dir, va);
+
+    if (!e || !(*e & PTE_P)) {
+        return PAGING_PAGE_NONE;
+    }
+    if (PTE_IS_ZERO(*e)) {
+        return PAGING_PAGE_ZERO;
+    }
+    if (paging_frame_is_device(PTE_ADDR(*e))) {
+        return PAGING_PAGE_DEVICE;
+    }
+    return PAGING_PAGE_FRAME;
+}
+
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *frames,
+                        unsigned long *dirty, unsigned long *pinned)
+{
+    uintptr_t va, next;
+
+    *frames = *dirty = *pinned = 0;
+    for (va = start; va < end; va = next) {
+        pte_t *table = user_span(dir, va, end, &next);
+
+        for (; table && va < next; va += PAGE_SIZE) {
+            pte_t e = table[MMU_INDEX(va)];
+
+            if (!(e & PTE_P) || PTE_IS_ZERO(e) || paging_frame_is_device(PTE_ADDR(e))) {
+                continue;
+            }
+            (*frames)++;
+            *dirty += (e & PTE_DIRTY) != 0;
+            *pinned += frame_pinned(PTE_ADDR(e)) != 0;
+        }
+    }
+}
+
 void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty)
 {
@@ -2349,7 +2395,8 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
     }
     if (pte & PTE_W) {
         if (map_user_frame(child_dir, va, parent_phys,
-                           PTE_P | PTE_U | PTE_COW | (pte & PTE_NOEXEC)) != 0) {
+                           PTE_P | PTE_U | PTE_COW | (pte & PTE_NOEXEC) |
+                               (PTE_IS_ZERO(pte) ? PTE_ZEROFILL : 0)) != 0) {
             return -1;
         }
         *e = (pte & ~(pte_t)PTE_W) | PTE_COW;

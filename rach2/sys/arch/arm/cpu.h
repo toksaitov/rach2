@@ -61,6 +61,7 @@ typedef uint32_t pte_t;
 #define PTE_COW           0x020u
 #define PTE_NONE          0x040u
 #define PTE_NOEXEC        0x080u
+#define PTE_ZEROFILL      0x100u
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 

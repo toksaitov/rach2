@@ -36,3 +36,9 @@ uintptr_t vm_locked(const vm_space_t *vm)
     }
     return total;
 }
+
+/** Drop a reference to a policy; the model's regions and threads hold none. */
+void vm_policy_put(struct vm_policy *p)
+{
+    (void)p;
+}

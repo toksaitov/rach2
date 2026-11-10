@@ -136,6 +136,29 @@ struct vm_device_ops {
     int (*access)(void *obj, uint64_t offset, void *buf, uint32_t len, int write);
 };
 
+/* The nodes a mask given to the memory policy calls may name, Linux's
+ * MAX_NUMNODES as Debian builds it (CONFIG_NODES_SHIFT 10), and the words
+ * of a mask of that many. The machine has one of them, node 0. */
+#define VM_NODES_MAX   1024u
+#define VM_NODES_WORDS (VM_NODES_MAX / (8u * sizeof(unsigned long)))
+
+/*
+ * A memory policy, Linux's struct mempolicy on a machine of one node, which
+ * set_mempolicy gives a thread and mbind a region (mempolicy.c). MPOL_DEFAULT
+ * is no record. A record is never changed once made: its holders share it by
+ * `refs`, and a change makes a new one.
+ */
+struct vm_policy {
+    uint32_t refs;
+    uint16_t mode;  /* MPOL_PREFERRED to MPOL_WEIGHTED_INTERLEAVE */
+    uint16_t flags; /* the MPOL_F_ mode flags the caller gave */
+    int16_t home;   /* the node set_mempolicy_home_node gave, or -1 */
+    uint16_t nodes; /* 1 for node 0; 0, no node, for MPOL_LOCAL alone */
+    /* The mask the caller gave, which Linux keeps and reports when `flags`
+     * is not 0; zeros otherwise. */
+    unsigned long user[VM_NODES_WORDS];
+};
+
 /* A single virtual memory area: [start, end) page-aligned. A region that
  * maps a file has it in `file`, and `pgoff` is the page of the file at
  * `start`; an anonymous region has neither. */
@@ -146,6 +169,7 @@ typedef struct vma {
     vm_type_t type;
     struct vm_file *file;
     uint32_t pgoff;
+    struct vm_policy *policy;          /* mbind's, with a reference; NULL for the default */
     struct vma *left, *right, *parent; /* AVL tree links */
     struct vma *prev, *next;           /* address order; next also links spare nodes */
     unsigned int height;               /* subtree height, a leaf's is 1 */
@@ -203,9 +227,9 @@ void vm_free(vm_space_t *vm);
 
 /** Make `dst`, which owns no nodes, a copy of `src` without its regions
  * marked VM_PROT_DONTFORK, whose regions take a reference each to the files
- * they map and lose their locks, as a fork's child does not inherit them,
- * and whose `def_prot` is 0; 0, or -1 with no memory, with `dst` left
- * empty. */
+ * they map and to their policies and lose their locks, as a fork's child
+ * does not inherit them, and whose `def_prot` is 0; 0, or -1 with no
+ * memory, with `dst` left empty. */
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /** The region that holds `addr` (`start <= addr < end`), or NULL. */
@@ -229,10 +253,11 @@ int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
  * Add the region [start, end) with the protection `prot`, the access bits
  * and those of VM_PROT_KEPT the region needs, and the kind
  * `type`. The range must be non-empty, page-aligned at both ends and clear
- * of every region. The region is merged with a neighbour it touches that
- * has the same kind and protection and maps no file, or the same file
- * without a gap. Returns 0, or -1, with nothing changed, for a range that
- * breaks those rules, at vm_max_map_count, or when no node can be allocated.
+ * of every region. The region has the default policy and is merged with a
+ * neighbour it touches that has the same kind, protection and policy and
+ * maps no file, or the same file without a gap. Returns 0, or -1, with
+ * nothing changed, for a range that breaks those rules, at
+ * vm_max_map_count, or when no node can be allocated.
  */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type);
 
@@ -240,6 +265,35 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
  * takes a reference of its own. */
 int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff);
+
+/** Add the region [start, end) as `vm_insert_file` does, with the
+ * protection, kind, file and policy of `like`, a region or a copy of one
+ * whose file and policy the caller holds, mapping the file from its page
+ * `pgoff`: a mapping mremap moves or grows keeps its policy, as Linux's
+ * copy_vma and vma_merge_extend keep it. 0 or -1. */
+int vm_insert_like(vm_space_t *vm, uintptr_t start, uintptr_t end, const vma_t *like,
+                   uint32_t pgoff);
+
+/** Take a reference to `p` and return it; NULL is passed through. */
+struct vm_policy *vm_policy_get(struct vm_policy *p);
+
+/** Drop a reference to `p`, freeing it with the last; NULL is ignored. */
+void vm_policy_put(struct vm_policy *p);
+
+/** Whether `a` and `b` are one policy, as Linux's mpol_equal: both the
+ * default, or records of the same mode, flags, home node and nodes, and
+ * with flags the same mask of the caller's. */
+int vm_policy_equal(const struct vm_policy *a, const struct vm_policy *b);
+
+/**
+ * Give [start, end), which lies in one region, the policy `pol`, NULL for
+ * the default, of which the region takes a reference: the region is split
+ * at the range's ends and the piece merged with the neighbours that then
+ * match, as Linux's mbind_range does for one region. A range in no region,
+ * or one that passes its region's end, changes nothing. 0, or -1, with
+ * nothing changed, when a split has no room.
+ */
+int vm_set_policy(vm_space_t *vm, uintptr_t start, uintptr_t end, struct vm_policy *pol);
 
 /**
  * Give `vma`, a region mmap made for a file's `mmap` operation

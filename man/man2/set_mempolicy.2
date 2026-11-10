@@ -1,0 +1,130 @@
+.Dd November 11, 2026
+.Dt SET_MEMPOLICY 2
+.Os
+.Sh NAME
+.Nm set_mempolicy
+.Nd set the memory policy of the calling thread, on a machine of one memory node
+.Sh SYNOPSIS
+.In numaif.h
+.Ft long
+.Fn set_mempolicy "int mode" "const unsigned long *nodemask" "unsigned long maxnode"
+.Sh DESCRIPTION
+.Fn set_mempolicy
+gives the calling thread a NUMA memory policy and answers as Linux 6.12
+answers on a machine with one memory node, node 0.
+Every page comes from node 0 under every policy, so the policy changes no
+allocation; it is checked, kept, and read back by
+.Xr get_mempolicy 2 .
+A child of
+.Xr fork 2
+and a new thread take the caller's policy, and
+.Xr execve 2
+keeps it.
+libnuma, numactl and the Java runtime set one.
+.Pp
+.Fa mode
+is one of
+.Dv MPOL_DEFAULT
+.Pq 0 ,
+which leaves the thread without a policy,
+.Dv MPOL_PREFERRED
+.Pq 1 ,
+.Dv MPOL_BIND
+.Pq 2 ,
+.Dv MPOL_INTERLEAVE
+.Pq 3 ,
+.Dv MPOL_LOCAL
+.Pq 4 ,
+.Dv MPOL_PREFERRED_MANY
+.Pq 5
+and
+.Dv MPOL_WEIGHTED_INTERLEAVE
+.Pq 6 ,
+with any of the flags
+.Dv MPOL_F_STATIC_NODES
+.Pq 0x8000 ,
+.Dv MPOL_F_RELATIVE_NODES
+.Pq 0x4000
+and
+.Dv MPOL_F_NUMA_BALANCING
+.Pq 0x2000
+set in it.
+.Dv MPOL_PREFERRED
+with an empty mask is kept, and read back, as
+.Dv MPOL_LOCAL .
+.Pp
+.Fa nodemask
+has
+.Fa maxnode No \- 1
+bits, in longs.
+A null
+.Fa nodemask ,
+and a
+.Fa maxnode
+of 0 or 1, is the empty mask.
+The kernel knows 1024 nodes, as Debian's does; of a longer mask the part
+past them is read a long at a time and must be zeros.
+.Dv MPOL_DEFAULT
+and
+.Dv MPOL_LOCAL
+take the empty mask alone.
+Every other mode needs node 0 in its mask, the nodes the machine does not
+have being dropped from it; under
+.Dv MPOL_F_RELATIVE_NODES
+any node will do, since the mask is folded onto the nodes the thread may
+use, which is node 0.
+A policy set with a flag reads back the mask the caller gave, and one
+without a flag node 0.
+.Ss System call interface
+The system call number is 276 on i386 and 238 on x86-64.
+On the x86-64 kernel a 32-bit program's mask is of 32-bit longs.
+.Sh RETURN VALUES
+0 on success.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/numaprobe.c
+sets each mode, reads it back, and passes it through
+.Xr fork 2
+and
+.Xr execve 2 .
+.Sh ERRORS
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EFAULT
+.Fa nodemask
+cannot be read.
+.It Bq Er EINVAL
+.Fa mode
+is none of the seven;
+.Dv MPOL_F_STATIC_NODES
+comes with
+.Dv MPOL_F_RELATIVE_NODES ;
+.Dv MPOL_F_NUMA_BALANCING
+comes with a mode other than
+.Dv MPOL_BIND
+and
+.Dv MPOL_PREFERRED_MANY ;
+the mask has more bits than a page holds;
+a bit past node 1023 is set;
+.Dv MPOL_DEFAULT
+or
+.Dv MPOL_LOCAL
+has a node in its mask;
+.Dv MPOL_LOCAL ,
+or
+.Dv MPOL_PREFERRED
+with an empty mask, has
+.Dv MPOL_F_STATIC_NODES
+or
+.Dv MPOL_F_RELATIVE_NODES ;
+or another mode has a mask that is empty or, without
+.Dv MPOL_F_RELATIVE_NODES ,
+leaves node 0 out.
+.It Bq Er ENOMEM
+There is no memory for the policy.
+.El
+.Sh SEE ALSO
+.Xr get_mempolicy 2 ,
+.Xr mbind 2 ,
+.Xr move_pages 2

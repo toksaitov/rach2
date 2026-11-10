@@ -381,6 +381,11 @@ struct process {
     uintptr_t robust_list;
     uint32_t robust_len;
     uintptr_t compat_robust_list;
+    /* The memory policy set_mempolicy gave the thread (mm/mempolicy.c),
+     * with a reference, or NULL for the default. A fork and a new thread
+     * take the caller's (`fork_ids`), an exec keeps it, and the thread's
+     * end drops it (`mm_drop`). */
+    struct vm_policy *mempolicy;
     /* rseq(2) (rseq.c): the address of the area the thread registered, 0
      * for none, its length and its signature; the events that abort a
      * critical section, RSEQ_EVENT_ bits, set since a return to user mode
