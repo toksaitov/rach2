@@ -17,11 +17,19 @@
 #define ROOT_MOUNTED "ext2: root: /dev/disk0p1"
 #define LOGIN_PROMPT "rach2 login"
 
-/* Where the case's files go on the machine, and the stored references in
- * the archive of tests/graphics that the case puts there, one directory for
- * each display profile. */
+/* Where the case's files go on the machine, and the stored references among
+ * them, one directory for each display profile. */
 #define GRAPHICS_DIR "/tmp/graphics"
 #define GRAPHICS_REF GRAPHICS_DIR "/ref/debian"
+
+/* The data disks after the root, in the order of the machine's disks: the
+ * files of tests/graphics that every case has, and the clips of a video
+ * case. Each is an ext2 volume the guest mounts read-only, since the serial
+ * channel carries some 137 bytes a frame and would take over an hour for the
+ * 35 MB of clips. */
+#define GRAPHICS_DISK "/dev/disk1"
+#define CLIPS_DISK    "/dev/disk2"
+#define GRAPHICS_DATA "/tmp/graphics-data"
 
 /* The runners, by the family of the case's identity. */
 enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2 };
@@ -192,26 +200,28 @@ static void up(struct graphics_case *s)
         net_fail(&s->u, "the GNU guest command channel did not open");
 }
 
-/** Put the runners, the references and, for a clip, the clips or, for
- * modetest, drmcapture on the machine, owned by the test account. */
+/** Copy the runners and the references from their data disk to the machine,
+ * owned by the test account, mount a video case's clips read-only beside
+ * them, and put modetest's drmcapture there. */
 static void stage(struct graphics_case *s)
 {
     if (net_step(&s->u, "stage") == ETUDE_OK)
-        must(s, "rm -rf " GRAPHICS_DIR " && mkdir -p " GRAPHICS_DIR, "mkdir",
-             "mkdir " GRAPHICS_DIR);
-    put(s, "graphics", GRAPHICS_DIR "/graphics.tar", "0644");
-    if (s->runner == VIDEO)
-        put(s, "clips", GRAPHICS_DIR "/clips.tar", "0644");
+        must(s,
+             "rm -rf " GRAPHICS_DIR " " GRAPHICS_DATA " && mkdir -p " GRAPHICS_DIR " " GRAPHICS_DATA
+             " && mount -t ext2 -o ro " GRAPHICS_DISK " " GRAPHICS_DATA " && cp -R " GRAPHICS_DATA
+             "/. " GRAPHICS_DIR " && umount " GRAPHICS_DATA " && rmdir " GRAPHICS_DATA
+             " " GRAPHICS_DIR "/lost+found",
+             "copy", "the graphics data disk could not be copied");
     if (s->runner == MODETEST)
         put(s, "drmcapture", GRAPHICS_DIR "/drmcapture", "0755");
     if (!net_ok(&s->u))
         return;
-    must(s,
-         "cd " GRAPHICS_DIR " && tar -xf graphics.tar && rm graphics.tar && "
-         "if [ -f clips.tar ]; then mkdir clips && tar -xf clips.tar -C clips && rm clips.tar; fi "
-         "&& "
-         "chown -R test " GRAPHICS_DIR,
-         "unpack", "the case's files could not be unpacked");
+    must(s, "chown -R test " GRAPHICS_DIR, "chown", "the case's files could not be given to test");
+    if (s->runner == VIDEO && net_ok(&s->u))
+        must(s,
+             "mkdir " GRAPHICS_DIR "/clips && mount -t ext2 -o ro " CLIPS_DISK " " GRAPHICS_DIR
+             "/clips",
+             "clips", "the clips' data disk could not be mounted");
 }
 
 /**

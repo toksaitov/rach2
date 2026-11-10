@@ -966,11 +966,13 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # `tests/run glmark2`: glmark2's scenes validated on llvmpipe under a headless
 # Weston on the GNU root as in the Debian reference guest, with the score
 # recorded, as the case of tests/cases/machine.glmark2.json.
-# Etude runs them all with graphics_scenario (tests/graphics/Readme.md). The
-# cases put on the machine graphics.tar, the runners, the IGT list, the
-# guest's environment and the references, for a clip clips.tar, which
-# debian.sh makes in the Debian guest when this clone's cache does not hold
-# the clips that clips.sha256 pins, and for modetest drmcapture; common.sh
+# Etude runs them all with graphics_scenario (tests/graphics/Readme.md). Each
+# machine has graphics.ext2, the runners, the IGT list, the guest's
+# environment and the references, as a read-only data disk, and a video
+# case clips.ext2, the clips of clips.tar, which debian.sh makes in the
+# Debian guest when this clone's cache does not hold the clips that
+# clips.sha256 pins; modetest's drmcapture goes over the guest channel, which
+# carries some 137 bytes a frame, too slow for the 35 MB of clips. common.sh
 # writes the host's half of each record.
 GRAPHICS_FILES = $(wildcard tests/graphics/runners/*) tests/graphics/guest-env.sh \
                  tests/graphics/igt-76.list $(shell find tests/graphics/ref/debian -type f 2>/dev/null)
@@ -984,6 +986,17 @@ build/tests/cases/graphics/common.sh: tests/graphics/runners/common.sh
 build/tests/cases/graphics/clips.tar: tests/graphics/runners/clips.sha256 tests/graphics/runners/video.sh
 	@mkdir -p $(@D)
 	sh tests/graphics/runners/debian.sh clips -t $@.tmp
+	mv $@.tmp $@
+build/tests/cases/graphics/%.ext2: build/tests/cases/graphics/%.tar
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/graphics-disk.XXXXXX); \
+	tar -xf $< -C "$$work"; \
+	kib=$$(($$(wc -c < $<) / 1024 * 5 / 4 + 8192)); \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp $${kib}k; \
 	mv $@.tmp $@
 
 # `tests/run codexapi`: OpenAI's Responses protocol in the C fake API
