@@ -98,8 +98,11 @@ void sched_priority_changed(process_t *p)
     uint32_t flags = spin_lock_irqsave(&sched_lock);
 
     if (p->ready_linked) {
-        sched_remove(p);
-        sched_append(p);
+        struct ready_queue *q = &run_queues[p->cpu];
+
+        q->rt_count -= p->ready_rt;
+        p->ready_rt = sched_priority(p) != 0;
+        q->rt_count += p->ready_rt;
     }
     p->need_resched = 1;
     spin_unlock_irqrestore(&sched_lock, flags);

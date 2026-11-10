@@ -78,6 +78,7 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks)
 /* Thread 5 while it has not ended, and the thread the next copy out ends. */
 static process_t *named;
 static void (*pi_wait_step)(void);
+static int pi_wait_errno;
 static process_t *ends_at_copy;
 /* The word whose waiter sets FUTEX_WAITERS in the next fault for a write. */
 static uint32_t waiters_at;
@@ -275,7 +276,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         pi_wait_step = NULL;
         step();
     }
-    return 0;
+    return pi_wait_errno;
 }
 
 /** The model completes a futex owner's exit before its waiter resumes. */

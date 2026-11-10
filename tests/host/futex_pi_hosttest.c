@@ -32,6 +32,7 @@ static void pi_reset(void)
     named = &owner;
     cpu_table[0].current = &self;
     kernel_ticks = 100;
+    pi_wait_errno = 0;
     tick_pending = slow_at = raced_at = waiters_at = 0;
 }
 
@@ -98,6 +99,33 @@ static void pi_basic_rows(void)
     CHECK(futex_lock_pi(32, NULL, FUTEX_PRIVATE_FLAG, 0) == 0,
           "LOCK_PI retries an atomic exchange race");
     CHECK(futex_unlock_pi(32, FUTEX_PRIVATE_FLAG) == 0, "unlock raced acquisition");
+}
+
+/** Deadline parsing, fault and interrupted acquisition errors. */
+static void pi_error_rows(void)
+{
+    struct kernel_timespec ts;
+
+    pi_reset();
+    word_set(32, owner.pid);
+    CHECK(futex_lock_pi(1020, NULL, FUTEX_PRIVATE_FLAG, 0) == 0, "last aligned word is accessible");
+    CHECK(futex_unlock_pi(1020, FUTEX_PRIVATE_FLAG) == 0, "unlock last aligned word");
+    CHECK(futex_lock_pi(1024, NULL, FUTEX_PRIVATE_FLAG, 0) == -EFAULT, "PI read fault");
+    CHECK(futex_unlock_pi(1024, FUTEX_PRIVATE_FLAG) == -EFAULT, "PI unlock fault");
+    ts.tv_sec = -1;
+    ts.tv_nsec = 0;
+    k_memcpy(user + 64, &ts, sizeof(ts));
+    CHECK(futex_lock_pi(32, (const struct kernel_timespec *)64, FUTEX_PRIVATE_FLAG, 0) == -EINVAL,
+          "negative PI timeout");
+    pi_wait_errno = -EINTR;
+    CHECK(futex_lock_pi(32, NULL, FUTEX_PRIVATE_FLAG, 0) == -EINTR && self.restart_always,
+          "PI signal requests unconditional restart");
+    CHECK(!self.pi_blocked && !pi_states && !owner.pi_priority,
+          "interruption removes waiter and donation");
+    pi_wait_errno = 0;
+    owner.futex_exit_state = 2;
+    CHECK(futex_lock_pi(32, NULL, FUTEX_PRIVATE_FLAG, 0) == -ESRCH,
+          "an owner that finished futex cleanup is ESRCH");
 }
 
 /** Donation, ordered handoff, chain propagation and cycle detection. */
@@ -199,6 +227,7 @@ static void pi_requeue_rows(void)
 int main(void)
 {
     pi_basic_rows();
+    pi_error_rows();
     pi_priority_rows();
     pi_death_rows();
     pi_requeue_rows();
