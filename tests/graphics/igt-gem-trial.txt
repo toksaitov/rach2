@@ -1,0 +1,82 @@
+# igt-gem-trial.txt: the IGT subtests of the first trial of buffer objects
+# and submission on the Lenovo's Haswell (78-5c), which runners/igt.sh runs
+# with -l, on Rach2's i915 and on Debian's Linux alike.
+#
+# A line is `igt@TEST`, every subtest of the test program TEST, or
+# `igt@TEST@PATTERN`, its subtests that the shell pattern PATTERN matches in
+# the IGT stage's subtest-list.txt. The list leaves out every subtest that
+# hangs the GPU on purpose, since Rach2 has no reset yet (78-6a), and those
+# that swap, fork many clients or pin CPUs, which test other parts of the
+# kernel. igt_runner runs the lines in order: the tests that keep the GPU
+# busy with IGT's spinners come last, so that a spinner that never stops
+# costs only them. Rach2 drives the render and blitter rings alone until
+# 78-14a, so the dynamic subtests of vcs0 and vecs0, which Linux runs, are
+# compared as absent there.
+igt@gem_basic
+igt@gem_create@create-*
+igt@gem_ctx_param
+igt@gem_reset_stats@params
+igt@gem_reset_stats@params-ctx
+igt@prime_self_import
+igt@gem_mmap@bad-*
+igt@gem_mmap@basic
+igt@gem_mmap@short-mmap
+igt@gem_mmap@pf-nonblock
+igt@gem_mmap@basic-small-bo
+igt@gem_mmap@big-bo
+igt@gem_mmap@huge-bo
+igt@gem_mmap_gtt@bad-object
+igt@gem_mmap_gtt@basic*
+igt@gem_mmap_gtt@ptrace
+igt@gem_mmap_gtt@coherency
+igt@gem_mmap_gtt@clflush
+igt@gem_mmap_gtt@fault-concurrent*
+igt@gem_mmap_gtt@isolation
+igt@gem_mmap_gtt@zero-extend
+igt@gem_mmap_gtt@close-race
+igt@gem_mmap_gtt@flink-race
+igt@gem_mmap_gtt@pf-nonblock
+igt@gem_mmap_gtt@big-bo*
+igt@gem_mmap_gtt@huge-bo*
+igt@gem_mmap_gtt@medium-copy*
+igt@gem_mmap_gtt@big-copy*
+igt@gem_mmap_gtt@huge-copy*
+igt@gem_exec_basic
+igt@gem_exec_store
+igt@gem_close_race@basic-process
+igt@gem_close_race@basic-threads
+igt@gem_close_race@process-exit
+igt@gem_close_race@contexts
+igt@gem_close_race@gem-close-race
+igt@gem_tiled_blits@basic
+igt@gem_tiled_blits@normal
+igt@gem_userptr_blits@input-checking
+igt@gem_userptr_blits@usage-restrictions
+igt@gem_userptr_blits@invalid-null-pointer
+igt@gem_userptr_blits@forbidden-operations
+igt@gem_userptr_blits@sd-probe
+igt@gem_userptr_blits@set-cache-level
+igt@gem_userptr_blits@relocations
+igt@gem_userptr_blits@create-destroy-sync
+igt@gem_userptr_blits@sync-*
+igt@gem_userptr_blits@coherency-sync
+igt@gem_userptr_blits@dmabuf-sync
+igt@gem_userptr_blits@process-exit
+igt@gem_userptr_blits@process-exit-busy
+igt@gem_userptr_blits@map-fixed-invalidate
+igt@gem_userptr_blits@map-fixed-invalidate-busy
+igt@gem_userptr_blits@access-control
+igt@gem_userptr_blits@probe
+igt@gem_userptr_blits@vma-merge
+igt@gem_wait@invalid-*
+igt@gem_wait@busy
+igt@gem_wait@wait
+igt@gem_wait@await
+igt@gem_wait@write-*
+igt@gem_busy@busy
+igt@gem_busy@extended
+igt@gem_busy@parallel
+igt@gem_busy@semaphore
+igt@gem_busy@close-race
+igt@gem_create@busy-create
+igt@gem_create@hog-create
