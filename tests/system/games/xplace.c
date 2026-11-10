@@ -239,14 +239,67 @@ static void emulated(Display *dpy, Window win)
         XFree(data);
 }
 
+/** Return WIN's _NET_WM_PID, or 0. */
+static unsigned long window_pid(Display *dpy, Window win)
+{
+    Atom type;
+    int format;
+    unsigned long n, left, pid = 0;
+    unsigned char *data = NULL;
+
+    if (XGetWindowProperty(dpy, win, XInternAtom(dpy, "_NET_WM_PID", False), 0, 1, False,
+                           XA_CARDINAL, &type, &format, &n, &left, &data) == Success &&
+        data != NULL && format == 32 && n == 1)
+        pid = *(unsigned long *)data;
+    if (data != NULL)
+        XFree(data);
+    return pid;
+}
+
+/**
+ * Print whether the input focus is WIN, a window inside it or another window
+ * of WIN's process, which Wine moves the focus among, and name the window
+ * that holds it when it is not WIN.
+ */
+static void report_focus(Display *dpy, Window win)
+{
+    Window focus, at, r, parent, *kids = NULL;
+    unsigned int nkids;
+    char *name = NULL;
+    int revert;
+
+    XGetInputFocus(dpy, &focus, &revert);
+    for (at = focus; at != win && at != None && at != PointerRoot; at = parent) {
+        if (!XQueryTree(dpy, at, &r, &parent, &kids, &nkids))
+            break;
+        if (kids != NULL)
+            XFree(kids);
+        if (parent == r)
+            break;
+    }
+    if (at == win) {
+        printf("xplace: focus yes\n");
+        return;
+    }
+    if (focus != None && focus != PointerRoot)
+        XFetchName(dpy, focus, &name);
+    printf("xplace: focus %s: 0x%lx %s\n",
+           focus != None && focus != PointerRoot && window_pid(dpy, win) != 0 &&
+                   window_pid(dpy, focus) == window_pid(dpy, win)
+               ? "yes, a window of the same process"
+               : "no",
+           (unsigned long)focus, name != NULL ? name : "");
+    if (name != NULL)
+        XFree(name);
+}
+
 /** Print where WIN sits on the root and in its manager's frame. */
 static void report_place(Display *dpy, Window root, Window win)
 {
     XWindowAttributes wa, fa;
     Window parent, child, *kids = NULL, r;
-    Window focus;
     unsigned int nkids;
-    int x, y, revert;
+    int x, y;
 
     XGetWindowAttributes(dpy, win, &wa);
     XTranslateCoordinates(dpy, win, root, 0, 0, &x, &y, &child);
@@ -260,8 +313,7 @@ static void report_place(Display *dpy, Window root, Window win)
                fa.height, wa.x, wa.y);
     } else
         printf("xplace: frame none\n");
-    XGetInputFocus(dpy, &focus, &revert);
-    printf("xplace: focus %s\n", focus == win ? "yes" : "no");
+    report_focus(dpy, win);
     printf("xplace: wm-fullscreen %s\n", wm_fullscreen(dpy, win) ? "yes" : "no");
     emulated(dpy, win);
 }
