@@ -26,4 +26,5 @@ musl/sockfillmusl manual listening-socket call test
 musl/statushelper child status and signal fixture for musl/ishmusl
 musl/tcpsendrecv manual tcp peer test
 musl/ttymusl manual terminal test
+musl/vfiomusl VFIO container, groups and their /sys entries, run by the native collection on the Lenovo, whose VT-d no suite profile has yet
 suidhelper identity fixture staged at several owners and modes
