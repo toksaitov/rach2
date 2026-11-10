@@ -35,7 +35,8 @@ trap 'exit 143' TERM
 mkdir -p "$out"
 chown "$user" "$out"
 # HDA starts at 100 on Rach2; nothing here plays, but the level is kept low.
-if command -v mixer > /dev/null; then
+# Linux has no mixer(1), and a machine without a sound card no /dev/mixer.
+if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
 fi
 launcher=rach2-game
@@ -66,10 +67,12 @@ su -s /bin/sh "$user" -c "cd '$out' && HOME='$out/home' TMPDIR='$out' GAMES_REND
     || status=$?
 rm -rf "${out:?}/home"
 # The kernel's log: the GPU's resets and faults, and on Rach2 with
-# rach2.trace=enosys each call it lacks, with the program that asked.
+# rach2.trace=enosys each call it lacks, once for each program that asked,
+# with the number of lines that named it.
 dmesg > "$out/dmesg.txt"
-grep -e 'not implemented' -e 'i915: reset' -e 'wedged' -e 'vtd: fault' "$out/dmesg.txt" || true
-if command -v mixer > /dev/null; then
+grep -e 'i915: reset' -e 'wedged' -e 'vtd: fault' "$out/dmesg.txt" || true
+sed -n 's/.*syscall: \(.*not implemented.*\)/\1/p' "$out/dmesg.txt" | sort | uniq -c
+if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
 fi
 echo "gpu: result: status $status, results in $out/gpu/results.json"
