@@ -526,6 +526,7 @@ static void nap(void)
 
     ts[0] = 0;
     ts[1] = 10000000;
+    /* interval: a nap of 10 ms switches the probe out and back in */
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
