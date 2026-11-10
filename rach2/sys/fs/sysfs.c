@@ -11,10 +11,11 @@
 #include "../network/socket/netlink.h"
 #include "synthfs.h"
 
-#define SLOT_BITS 10
-#define SLOT_MASK ((1 << SLOT_BITS) - 1)
+#define SLOT_BITS   16
+#define SLOT_MASK   ((1 << SLOT_BITS) - 1)
+#define SLOTS_FIRST 512 /* the table's first size, doubled when full */
 
-typedef char sysfs_slots_fit[SYSFS_NODES_MAX <= (1 << SLOT_BITS) ? 1 : -1];
+typedef char sysfs_slots_fit[SYSFS_NODES_MAX == (1 << SLOT_BITS) ? 1 : -1];
 
 /* An entry, from the heap; `parent` is the slot of its directory, -1 for an
  * anchor, which has its fixed node and key in `node` and `key`. */
@@ -32,9 +33,12 @@ struct sysfs_node {
     int uevent; /* 1: a `uevent` file, whose writes send uevents */
 };
 
-static struct sysfs_node *nodes[SYSFS_NODES_MAX];
-/* Each slot's generation, the handle's bits above SLOT_BITS, never 0. */
-static uint32_t gens[SYSFS_NODES_MAX];
+/* The entries by slot, from the heap, `slots` of them, NULL for a free
+ * one; and each slot's generation, the handle's bits above SLOT_BITS, never
+ * 0 once the slot is used. Both grow together and never shrink. */
+static struct sysfs_node **nodes;
+static uint32_t *gens;
+static int slots;
 
 struct pci_virtual {
     int used;
@@ -66,7 +70,7 @@ static struct sysfs_node *node_of(int handle)
 {
     int slot = handle & SLOT_MASK;
 
-    if (handle <= 0 || slot >= SYSFS_NODES_MAX || !nodes[slot] ||
+    if (handle <= 0 || slot >= slots || !nodes[slot] ||
         (uint32_t)(handle >> SLOT_BITS) != gens[slot]) {
         return NULL;
     }
@@ -95,12 +99,46 @@ static int is_dir(const struct sysfs_node *n)
     return n && (n->kind == SYSFS_NODE_DIR || n->kind == SYSFS_NODE_ANCHOR);
 }
 
-/** Take a free slot for `n`, whose `kind` is set: its handle, or -ENOSPC. */
+/** Double the table, from SLOTS_FIRST up to SYSFS_NODES_MAX slots, keeping
+ * every slot and generation: 0, or -ENOSPC at the most, or -ENOMEM. */
+static int grow(void)
+{
+    int more = slots ? slots * 2 : SLOTS_FIRST;
+    struct sysfs_node **n;
+    uint32_t *g;
+
+    if (more > SYSFS_NODES_MAX) {
+        return -ENOSPC;
+    }
+    n = kzalloc((size_t)more * sizeof(*n));
+    g = kzalloc((size_t)more * sizeof(*g));
+    if (!n || !g) {
+        kfree(n);
+        kfree(g);
+        return -ENOMEM;
+    }
+    if (slots) {
+        k_memcpy(n, nodes, (size_t)slots * sizeof(*n));
+        k_memcpy(g, gens, (size_t)slots * sizeof(*g));
+    }
+    kfree(nodes);
+    kfree(gens);
+    nodes = n;
+    gens = g;
+    slots = more;
+    return 0;
+}
+
+/** Take a free slot for `n`, whose `kind` is set, growing the table when
+ * none is free: its handle, or -ENOSPC or -ENOMEM. */
 static int take_slot(struct sysfs_node *n)
 {
-    int slot;
+    int slot, rc;
 
-    for (slot = 0; slot < SYSFS_NODES_MAX; slot++) {
+    for (slot = 0;; slot++) {
+        if (slot == slots && (rc = grow()) < 0) {
+            return rc;
+        }
         if (!nodes[slot]) {
             if (gens[slot] == 0 || gens[slot] >= (0x7FFFFFFFu >> SLOT_BITS)) {
                 gens[slot] = 1;
@@ -109,7 +147,6 @@ static int take_slot(struct sysfs_node *n)
             return handle_of(slot);
         }
     }
-    return -ENOSPC;
 }
 
 int sysfs_anchor(int node, int key)
@@ -139,7 +176,7 @@ int sysfs_anchor_find(int node, int key)
 {
     int slot;
 
-    for (slot = 0; slot < SYSFS_NODES_MAX; slot++) {
+    for (slot = 0; slot < slots; slot++) {
         if (nodes[slot] && nodes[slot]->kind == SYSFS_NODE_ANCHOR && nodes[slot]->node == node &&
             nodes[slot]->key == key) {
             return handle_of(slot);
@@ -247,7 +284,7 @@ void sysfs_remove(int handle)
     if (!n || n->kind == SYSFS_NODE_ANCHOR) {
         return;
     }
-    for (i = 0; i < SYSFS_NODES_MAX; i++) {
+    for (i = 0; i < slots; i++) {
         if (nodes[i] && nodes[i]->parent == slot) {
             sysfs_remove(handle_of(i));
         }
@@ -271,7 +308,7 @@ int sysfs_node_child(int dir, const char *name, int len)
     if (!is_dir(node_of(dir)) || len <= 0 || len >= SYSFS_NAME_MAX) {
         return 0;
     }
-    for (slot = 0; slot < SYSFS_NODES_MAX; slot++) {
+    for (slot = 0; slot < slots; slot++) {
         struct sysfs_node *n = nodes[slot];
 
         if (n && n->parent == parent && named(n, name, len)) {
@@ -288,7 +325,7 @@ int sysfs_node_count(int dir)
     if (!is_dir(node_of(dir))) {
         return 0;
     }
-    for (slot = 0; slot < SYSFS_NODES_MAX; slot++) {
+    for (slot = 0; slot < slots; slot++) {
         if (nodes[slot] && nodes[slot]->parent == parent) {
             count++;
         }
@@ -303,7 +340,7 @@ int sysfs_node_nth(int dir, int n)
     if (!is_dir(node_of(dir)) || n < 0) {
         return 0;
     }
-    for (slot = 0; slot < SYSFS_NODES_MAX; slot++) {
+    for (slot = 0; slot < slots; slot++) {
         if (nodes[slot] && nodes[slot]->parent == parent && n-- == 0) {
             return handle_of(slot);
         }
