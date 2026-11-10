@@ -19,7 +19,8 @@ install_debian games
 # Each ELF file the layer installed; a link is left to its target. A file's
 # RUNPATH or RPATH directories are searched as well, with $ORIGIN taken as
 # the file's own directory, since 0 A.D.'s engine finds its private libraries
-# in /usr/lib/games/0ad by its RUNPATH.
+# in /usr/lib/games/0ad by its RUNPATH. The loader's directory is searched
+# too, since 0 A.D.'s engine names the loader, which resolves its own name.
 while read -r path; do
     f="$TREE/${path#./}"
     if [ -L "$f" ] || [ ! -f "$f" ] ||
@@ -31,7 +32,8 @@ while read -r path; do
         sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]$/\2/p' | tr ':' '\n' |
         sed -e "s|^\\\$ORIGIN|/$origin|" -e "s|^\\\${ORIGIN}|/$origin|" -e 's|^/||' | tr '\n' ' ')
     # shellcheck disable=SC2086 # the directories are words without blanks
-    needs "the games layer's /${path#./}" "$f" lib usr/lib "usr/lib/$GNU_MULTIARCH" $runpath
+    needs "the games layer's /${path#./}" "$f" "$(dirname "${GNU_LOADER#/}")" lib usr/lib \
+        "usr/lib/$GNU_MULTIARCH" $runpath
 done < "$WORK/new"
 
 # Debian's games are in /usr/games, which Debian's /etc/profile puts on an
