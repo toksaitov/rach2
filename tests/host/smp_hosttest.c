@@ -157,6 +157,19 @@ void k_udelay(uint32_t usec)
     waited_us += usec;
 }
 
+/** Zero: these rows do not measure a lock acquisition's duration. */
+uint64_t arch_cycles(void)
+{
+    return 0;
+}
+
+/** Zero: this model calibrates no invariant counter. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    (void)cycles;
+    return 0;
+}
+
 /** Nothing: no row reads the log. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
