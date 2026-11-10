@@ -15,14 +15,17 @@ void futex_pi_recalculate(void);
 
 /**
  * futex takes uaddr, op, val, timeout, uaddr2 and val3. WAIT and WAKE,
- * their BITSET forms, LOCK_PI, LOCK_PI2, TRYLOCK_PI, UNLOCK_PI and the
- * WAIT_REQUEUE_PI/CMP_REQUEUE_PI pair have Linux's operation numbers and
- * PRIVATE flag. CLOCK_REALTIME is accepted by WAIT_BITSET,
- * WAIT_REQUEUE_PI and LOCK_PI2. LOCK_PI always uses a real-time deadline.
- * Locks and waits return 0 on success; wakes and requeues return counts.
- * Errors include EFAULT, EINVAL, EAGAIN, ETIMEDOUT, EINTR, EDEADLK for
- * recursive or cyclic ownership, EPERM for a nonowner unlock or kernel
- * thread owner, ESRCH for a missing owner, ENOMEM and ENOSYS.
+ * their BITSET forms, REQUEUE, CMP_REQUEUE, WAKE_OP, LOCK_PI, LOCK_PI2,
+ * TRYLOCK_PI, UNLOCK_PI and the WAIT_REQUEUE_PI/CMP_REQUEUE_PI pair have
+ * Linux's operation numbers and PRIVATE flag; REQUEUE, CMP_REQUEUE and
+ * WAKE_OP take their second count in the timeout's place, as Linux's do.
+ * CLOCK_REALTIME is accepted by WAIT_BITSET, WAIT_REQUEUE_PI and LOCK_PI2.
+ * LOCK_PI always uses a real-time deadline. A wake of a count of 0 or less
+ * wakes one, as Linux's does. Locks and waits return 0 on success; wakes
+ * and requeues return counts. Errors include EFAULT, EINVAL, EAGAIN,
+ * ETIMEDOUT, EINTR, EDEADLK for recursive or cyclic ownership, EPERM for a
+ * nonowner unlock or kernel thread owner, ESRCH for a missing owner, ENOMEM
+ * and ENOSYS, the last for WAKE_OP's unknown operation or comparison too.
  */
 long sys_futex(isr_params_t *params);
 
@@ -34,12 +37,44 @@ long sys_futex(isr_params_t *params);
  * returns that futex's index. -EAGAIN when a word does not hold its value,
  * -ETIMEDOUT, -EINTR, which the dispatcher restarts since the timeout is
  * absolute; -EINVAL for flags other than 0, a count out of range, a NULL
- * array, another clock with a timeout, an entry whose size is not 32 bits,
- * whose flags are unknown, whose reserved word is not 0, whose value does
- * not fit 32 bits or whose address is not aligned to four; -EFAULT for an
- * array, timeout or word the caller cannot read; -ENOMEM.
+ * array, another clock with a timeout, a timeout with negative seconds or
+ * nanoseconds outside a second, an entry whose size is not 32 bits, whose
+ * flags are unknown, FUTEX2_NUMA among them, whose reserved word is not 0,
+ * whose value does not fit 32 bits or whose address is not aligned to four;
+ * -EFAULT for an array, timeout or word the caller cannot read; -ENOMEM.
  */
 long sys_futex_waitv(isr_params_t *params);
+
+/**
+ * futex_wake takes uaddr, mask, nr and the futex2 flags, and wakes up to nr
+ * waiters of the word whose bitset meets mask, as FUTEX_WAKE_BITSET does,
+ * but none for an nr of 0. The count woken; -EINVAL for flags futex_waitv's
+ * entries may not have, a mask of 0 or past 32 bits, an address not aligned
+ * to four, or a PI waiter; -EFAULT for an address outside user space or a
+ * shared word's page that cannot be had.
+ */
+long sys_futex_wake(isr_params_t *params);
+
+/**
+ * futex_wait takes uaddr, val, mask, the futex2 flags, an absolute timeout
+ * or NULL and its clock, and sleeps while the word holds val, until a wake
+ * whose bitset meets mask, as FUTEX_WAIT_BITSET does. 0; -EAGAIN, -ETIMEDOUT,
+ * -EINTR, which the dispatcher restarts; -EINVAL for the flags, a value or
+ * mask past 32 bits, the timeout futex_waitv refuses, a mask of 0 or an
+ * address not aligned to four; -EFAULT.
+ */
+long sys_futex_wait(isr_params_t *params);
+
+/**
+ * futex_requeue takes an array of two struct futex_waitv, flags, nr_wake
+ * and nr_requeue, and, while the first word holds the first entry's value,
+ * wakes nr_wake waiters of it and moves up to nr_requeue more to the second,
+ * as FUTEX_CMP_REQUEUE does; each entry has its own futex2 flags. The count
+ * woken and moved; -EINVAL for flags other than 0, a NULL array, an entry
+ * futex_waitv refuses, a negative count, an address not aligned to four or
+ * a PI waiter; -EAGAIN; -EFAULT.
+ */
+long sys_futex_requeue(isr_params_t *params);
 
 /**
  * Whether an EINTR from this futex call may be restarted. Ordinary timed
