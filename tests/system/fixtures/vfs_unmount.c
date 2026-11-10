@@ -56,7 +56,6 @@ struct vfs_mount {
     void *root, *covered;
     const char *covered_path;
     int state, refs, inprogress, drain_wq, claim, opens, releases;
-    uint32_t ns_hidden;
     struct vfs_mount *bind_of;
 };
 struct vfs_ref {
@@ -279,20 +278,21 @@ static void loop_unmounted(struct block_device *d)
     (void)d;
 }
 
-/** The bit of the caller's mount namespace, the only one, so that an unmount
- * never only hides the mount from the caller. */
-static uint32_t ns_bit(void)
+/** Whether another mount namespace sees `m`: none, as the caller's is the
+ * only one, so that an unmount never only hides the mount from the caller. */
+static int vfs_mount_shared(const struct vfs_mount *m)
 {
-    return 1u;
+    (void)m;
+    return 0;
 }
-/** The bits of the live namespaces: the caller's alone. */
-static uint32_t mntns_live_bits(void)
+/** Take `m` from the caller's view; never reached, as no mount is shared. */
+static void vfs_mount_hide(struct vfs_mount *m)
 {
-    return 1u;
+    (void)m;
+    failures++;
 }
 
 static int unmount_mount(struct vfs_mount *m);
-int vfs_mount_shared(const struct vfs_mount *m);
 
 #include "unmount.inc"
 

@@ -117,6 +117,7 @@ static void mount_release(struct vfs_mount *m)
 {
     int i;
 
+    vfs_mount_view_free(m);
     for (i = VFS_PERMANENT; i < mount_slots; i++) {
         if (mounts[i] == m) {
             mounts[i] = NULL;
@@ -365,22 +366,6 @@ static int toward_cwd(const struct vfs_ref *start, const char *path, const char 
         }
     }
     return cwd[i] == '/' || cwd[i] == '\0';
-}
-
-/** The bit of the caller's mount namespace. */
-static uint32_t ns_bit(void)
-{
-    return 1u << proc_mntns(current_proc)->bit;
-}
-
-int vfs_mount_seen(const struct vfs_mount *m)
-{
-    return (m->ns_hidden & ns_bit()) == 0;
-}
-
-int vfs_mount_shared(const struct vfs_mount *m)
-{
-    return (~m->ns_hidden & mntns_live_bits() & ~ns_bit()) != 0;
 }
 
 /**
@@ -3504,7 +3489,7 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     m->releases = 0;
     m->claim = -1;
     m->source[0] = '\0';
-    if (type->mount(m, 0, 0, options) != 0) {
+    if (vfs_mount_view_new(m) != 0 || type->mount(m, 0, 0, options) != 0) {
         k_panic("vfs: a permanent mount refused to construct");
     }
     m->state = VFS_ACTIVE;
@@ -3586,6 +3571,7 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
         return -ENOMEM;
     }
     k_memset(m, 0, sizeof(*m));
+    vfs_mount_view_new(m);
     m->type = type;
     m->dev = dev;
     m->state = VFS_MOUNTING;
@@ -3632,6 +3618,7 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     }
     m = mounts[i];
     k_memset(m, 0, sizeof(*m));
+    vfs_mount_view_new(m);
     m->type = type;
     m->dev = dev;
     m->state = VFS_MOUNTING;
@@ -3927,6 +3914,10 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
         return NULL;
     }
     k_memset(m, 0, sizeof(*m));
+    if (vfs_mount_view_new(m) != 0) {
+        mount_release(m);
+        return NULL;
+    }
     m->type = t;
     m->flags = flags;
     m->state = VFS_MOUNTING;
@@ -3934,7 +3925,6 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     m->covered = covered;
     mount_lock_init(m);
     m->claim = -1;
-    m->ns_hidden = ~ns_bit();
     m->seq = ++mount_seq;
     k_strncpy(m->covered_path, canon, sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
@@ -4568,7 +4558,7 @@ int vfs_do_umount(const char *target, int dir)
         return -EBUSY;
     }
     if (vfs_mount_shared(m)) {
-        m->ns_hidden |= ns_bit();
+        vfs_mount_hide(m);
         return 0;
     }
     return unmount_mount(m);
@@ -4606,7 +4596,6 @@ int vfs_do_detach(const char *target, int dir)
 {
     struct vfs_ref tref;
     struct vfs_mount *m, *root = root_mount_of_caller();
-    uint32_t bit = ns_bit();
     int i, rc;
 
     rc = resolve_path(0, target, WALK_UNMOUNT, &tref, 0, 0, 0);
@@ -4632,8 +4621,8 @@ int vfs_do_detach(const char *target, int dir)
     for (i = 0; i < mount_slots; i++) {
         struct vfs_mount *c = mounts[i];
 
-        if (c && c->state == VFS_ACTIVE && !(c->ns_hidden & bit) && detached_by(c, m, root)) {
-            c->ns_hidden |= bit;
+        if (c && c->state == VFS_ACTIVE && vfs_mount_seen(c) && detached_by(c, m, root)) {
+            vfs_mount_hide(c);
         }
     }
     klog(KLOG_INFO, "vfs", "detached: %s", m->covered_path);
@@ -4642,10 +4631,9 @@ int vfs_do_detach(const char *target, int dir)
 }
 
 /**
- * The live namespaces are read again for each candidate, since an unmount
- * may sleep: meanwhile a namespace can be made and a mount made in it,
- * hidden from every bit but the new one, which a mask read before the sleep
- * lacks. The read and the test run under the big lock with no sleep between
+ * Each candidate's view is read again as the loop reaches it, since an
+ * unmount may sleep: meanwhile a namespace can be made and a mount made in
+ * it. The read and the test run under the big lock with no sleep between
  * them, and `unmount_mount` sets VFS_UNMOUNTING before it first sleeps; a
  * namespace made after that copies its parent's view, from which the mount
  * is hidden, so nothing comes to see it.
@@ -4659,8 +4647,8 @@ void vfs_reap_detached(void)
         for (i = VFS_PERMANENT; i < mount_slots; i++) {
             struct vfs_mount *m = mounts[i];
 
-            if (m && m->state == VFS_ACTIVE && (~m->ns_hidden & mntns_live_bits()) == 0 &&
-                m->refs == 0 && m->inprogress == 0 && unmount_mount(m) == 0) {
+            if (m && m->state == VFS_ACTIVE && vfs_mount_unseen(m) && m->refs == 0 &&
+                m->inprogress == 0 && unmount_mount(m) == 0) {
                 progress = 1;
             }
         }
@@ -4672,7 +4660,7 @@ void vfs_reap_detached(void)
 static void reap_if_detached(const struct vfs_mount *mnt)
 {
     if (mnt->refs == 0 && !mount_permanent(mnt) && mnt->state == VFS_ACTIVE &&
-        (~mnt->ns_hidden & mntns_live_bits()) == 0) {
+        vfs_mount_unseen(mnt)) {
         vfs_reap_detached();
     }
 }
@@ -4722,7 +4710,6 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
     struct vfs_mount *rmnt = root_mount_of_caller();
     void *rnode =
         current_proc && current_proc->fs->root_mnt ? current_proc->fs->root_node : mounts[0]->root;
-    uint32_t bit = ns_bit();
     int i, rc, same = 0;
 
     rc = vfs_resolve(0, new_root, 0, &nref, 0, 0);
@@ -4752,9 +4739,9 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
         for (i = VFS_PERMANENT; i < mount_slots; i++) {
             struct vfs_mount *c = mounts[i];
 
-            if (c && c->state == VFS_ACTIVE && !(c->ns_hidden & bit) && mount_within(c, rmnt) &&
+            if (c && c->state == VFS_ACTIVE && vfs_mount_seen(c) && mount_within(c, rmnt) &&
                 !mount_within(c, nref.mnt) && !mount_within(nref.mnt, c)) {
-                c->ns_hidden |= bit;
+                vfs_mount_hide(c);
             }
         }
     } else {
@@ -4890,53 +4877,9 @@ static int unmount_mount(struct vfs_mount *m)
     return 0;
 }
 
-void vfs_mntns_copy(uint32_t from, uint32_t to)
+int vfs_unmount_record(struct vfs_mount *m)
 {
-    int i;
-
-    for (i = 0; i < mount_slots; i++) {
-        if (!mounts[i] || mounts[i]->state == VFS_FREE) {
-            continue;
-        }
-        if (mounts[i]->ns_hidden & (1u << from)) {
-            mounts[i]->ns_hidden |= 1u << to;
-        } else {
-            mounts[i]->ns_hidden &= ~(1u << to);
-        }
-    }
-}
-
-/**
- * The end of the mount namespace `bit`: each active mount no other live
- * namespace sees is unmounted, a child before its parent, and every mount
- * is hidden from the bit, which a namespace made later takes afresh. A
- * mount still busy stays, hidden from every namespace, until the reaper
- * finds it free (`vfs_reap_detached`). The bit stays live until this
- * returns, so no namespace made meanwhile takes it, and the other live
- * namespaces are read again for each mount, as `vfs_reap_detached` does,
- * since an unmount may sleep.
- */
-void vfs_mntns_gone(uint32_t bit)
-{
-    int i, progress = 1;
-
-    while (progress) {
-        progress = 0;
-        for (i = VFS_PERMANENT; i < mount_slots; i++) {
-            struct vfs_mount *m = mounts[i];
-
-            if (m && m->state == VFS_ACTIVE && !(m->ns_hidden & (1u << bit)) &&
-                (~m->ns_hidden & mntns_live_bits() & ~(1u << bit)) == 0 && unmount_mount(m) == 0) {
-                progress = 1;
-            }
-        }
-    }
-    for (i = 0; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE) {
-            mounts[i]->ns_hidden |= 1u << bit;
-        }
-    }
-    vfs_reap_detached();
+    return unmount_mount(m);
 }
 
 /* The working directory's and the root's holds. */

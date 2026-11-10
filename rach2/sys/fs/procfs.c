@@ -6248,13 +6248,19 @@ static int idmap_which(int file)
 static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
 {
     process_t *p = procfs_proc(pid);
-    char text[NS_EXTENTS * 33 + 1];
+    char *text;
 
     if (!p) {
         return -ENOENT;
     }
-    ns_map_text(proc_userns(p), idmap_which(file), current_proc, text, (int)sizeof(text));
+    text = kmalloc(NS_MAP_TEXT_MAX);
+    if (!text) {
+        t->nomem = 1;
+        return t->len;
+    }
+    ns_map_text(proc_userns(p), idmap_which(file), current_proc, text, NS_MAP_TEXT_MAX);
     ap_str(t, text);
+    kfree(text);
     return t->len;
 }
 
@@ -6285,27 +6291,36 @@ static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count
     return (int32_t)n;
 }
 
+/* The bytes a write of a map must stay under, a page, as on Linux. */
+#define IDMAP_WRITE_MAX 4096u
+
 /** Write a user namespace's map or its setgroups, as `ns_map_write` takes
- * it, from at most 256 bytes of `buf`, at offset 0: what `ns_map_write`
- * returns, -EINVAL at another offset, -EFAULT, or -ESRCH once the process
- * has been reaped. */
+ * it, from the `count` bytes of `buf`, fewer than IDMAP_WRITE_MAX, at
+ * offset 0: what `ns_map_write` returns, -EINVAL at another offset or for
+ * a page or more, -EFAULT, -ENOMEM, or -ESRCH once the process has been
+ * reaped. */
 static int32_t procfs_idmap_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     process_t *p = procfs_proc(f->origin_pid);
-    char text[256];
-    uint32_t n = count < sizeof(text) ? count : (uint32_t)sizeof(text);
+    char *text;
+    int32_t rc;
 
     if (!p) {
         return -ESRCH;
     }
-    if (e->ofd->offset != 0) {
+    if (e->ofd->offset != 0 || count >= IDMAP_WRITE_MAX) {
         return -EINVAL;
     }
-    if (copy_from_user(text, buf, n) != 0) {
-        return -EFAULT;
+    text = kmalloc(count + 1u);
+    if (!text) {
+        return -ENOMEM;
     }
-    return ns_map_write(proc_userns(p), idmap_which(f->origin_file), text, n, current_proc);
+    rc = copy_from_user(text, buf, count) != 0
+             ? -EFAULT
+             : ns_map_write(proc_userns(p), idmap_which(f->origin_file), text, count, current_proc);
+    kfree(text);
+    return rc;
 }
 
 static const struct file_ops procfs_idmap_ops = {
@@ -6551,6 +6566,9 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
     if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) {
         ap_str(t, entry == SYNTH_SYS_HOSTNAME ? uts_hostname() : uts_domainname());
         ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
+        ap_int(t, ns_max_mnt(proc_userns(current_proc)));
+        ap_ch(t, '\n');
     } else if (i >= 0) {
         ap_int(t, *sysctl_ints[i].var);
         ap_ch(t, '\n');
@@ -6648,6 +6666,15 @@ static int sysctl_parse_ulong(const char *s, unsigned long *v)
     return 0;
 }
 
+/** Set the caller's user namespace's user/max_mnt_namespaces to `v`:
+ * `count`, or -EINVAL out of its range. */
+static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
+{
+    int rc = ns_set_max_mnt(proc_userns(current_proc), v);
+
+    return rc != 0 ? rc : (int32_t)count;
+}
+
 /**
  * Write a /proc/sys file, as Linux's sysctl handlers take one.
  *
@@ -6657,7 +6684,9 @@ static int sysctl_parse_ulong(const char *s, unsigned long *v)
  * up to LONG_MAX (`sysctl_parse_ulong`). A write to another file is an
  * integer, read as `oom_parse` reads one. A file of `sysctl_ints` stores it
  * in its owner's variable, which the owner reads at its next use, and a
- * value out of the file's range is -EINVAL. To net/ipv4/ip_forward 0, its
+ * value out of the file's range is -EINVAL. user/max_mnt_namespaces is the
+ * limit of the caller's user namespace, from 0 to INT_MAX
+ * (`ns_set_max_mnt`). To net/ipv4/ip_forward 0, its
  * value, is taken, and any other value is -EINVAL, since the stack forwards
  * nothing between interfaces, where Linux would begin to. A file of
  * net/ipv6/conf is `nd6_conf_set`'s, with its checks, and stable_secret
@@ -6722,6 +6751,9 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
 
         rc = which == -ENODEV ? which : nd6_conf_set(which, sysctl_ipv6_keys[key], v);
         return rc != 0 ? rc : (int32_t)count;
+    }
+    if (f->origin_pid == SYNTH_SYS_MAX_MNT_NAMESPACES) {
+        return sysctl_max_mnt_write(v, count);
     }
     i = sysctl_int(f->origin_pid);
     if (i >= 0) {
@@ -7087,10 +7119,12 @@ static int procfs_open_acpicall(int flags)
 /**
  * Open a writable /proc/sys file for writing, or for reading and writing, which
  * needs a privileged caller, as the file's mode, 0644 and owned by root, says;
- * the names of the UTS namespace need privilege over it. O_CREAT and O_TRUNC
- * are taken as they are for a file that exists, which is what a shell's
- * redirection and BusyBox's `sysctl -w` ask for. Each read and write reaches
- * the value as it is then.
+ * the names of the UTS namespace need privilege over it, and a limit of
+ * /proc/sys/user privilege in the caller's user namespace, whose limit it
+ * is, as Linux lets the root of a user namespace write its own. O_CREAT and
+ * O_TRUNC are taken as they are for a file that exists, which is what a
+ * shell's redirection and BusyBox's `sysctl -w` ask for. Each read and
+ * write reaches the value as it is then.
  */
 static int procfs_open_sysctl(int entry, int flags)
 {
@@ -7099,9 +7133,11 @@ static int procfs_open_sysctl(int entry, int flags)
     int acc = flags & 3;
     int fd;
 
-    if (acc == 3 || !((entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME)
-                          ? uts_privileged()
-                          : proc_privileged(current_proc))) {
+    if (acc == 3 ||
+        !((entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) ? uts_privileged()
+          : entry == SYNTH_SYS_MAX_MNT_NAMESPACES
+              ? ns_privileged(current_proc, proc_userns(current_proc))
+              : proc_privileged(current_proc))) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));

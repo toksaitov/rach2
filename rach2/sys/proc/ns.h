@@ -29,8 +29,10 @@
 #define NS_KINDS 6
 
 /* The id extents a map of a user namespace may have, as /proc/PID/uid_map
- * takes them before Linux 4.15. */
-#define NS_EXTENTS 5
+ * takes them since Linux 4.15; and those a map keeps in the namespace's
+ * record, searched in the order written, as Linux keeps its first five. */
+#define NS_EXTENTS      340
+#define NS_BASE_EXTENTS 5
 
 /* The id a map does not cover reads as at boot, Linux's overflowuid and gid. */
 #define NS_OVERFLOW_ID 65534u
@@ -51,6 +53,17 @@ struct ns_extent {
     uint32_t count;
 };
 
+/* A map of a user namespace: up to NS_BASE_EXTENTS extents in `base`, in
+ * the order written; past that, as on Linux, two copies from the heap, one
+ * sorted by the first id in the namespace and one by the first kernel id,
+ * each searched by halves. */
+struct ns_idmap {
+    uint32_t extents; /* 0 until the map is written; written once */
+    struct ns_extent base[NS_BASE_EXTENTS];
+    struct ns_extent *forward; /* by `first`, NULL up to NS_BASE_EXTENTS */
+    struct ns_extent *reverse; /* by `lower`, NULL up to NS_BASE_EXTENTS */
+};
+
 struct userns {
     struct ns_common c;
     struct userns *parent;
@@ -59,17 +72,21 @@ struct userns {
     /* The effective ids of the process that made it, the kernel's. */
     uint32_t owner_uid;
     uint32_t owner_gid;
-    /* Each map and the count of its extents, 0 until the map is written;
-     * a map is written once. */
-    struct ns_extent uid_map[NS_EXTENTS];
-    uint32_t uid_extents;
-    struct ns_extent gid_map[NS_EXTENTS];
-    uint32_t gid_extents;
+    struct ns_idmap uid_map;
+    struct ns_idmap gid_map;
     /* Whether setgroups is denied, as /proc/PID/setgroups's "deny" sets it,
      * which an unprivileged writer of gid_map must do first; a namespace
      * below one that denies it denies it too, whatever this says. */
     uint32_t setgroups_denied;
+    /* Its user.max_mnt_namespaces: the mount namespaces a user may own at
+     * once in it and in those below it (`mntns_charge_ok`). The first's is
+     * NS_LIMIT_UNSET until first read, then half the threads Linux would
+     * allow the machine's memory; the others' start at 0x7FFFFFFF. */
+    int32_t max_mnt;
 };
+
+/* The first user namespace's max_mnt before it is first read. */
+#define NS_LIMIT_UNSET (-1)
 
 struct pidns {
     struct ns_common c;
@@ -85,8 +102,15 @@ struct pidns {
 
 struct mntns {
     struct ns_common c;
-    /* Its bit in a mount's `ns_hidden` (vfs.h). */
-    uint32_t bit;
+    /* Its id in a mount's view (`ns_seen` in vfs.h), the lowest free when
+     * it was made; the first's is 0. */
+    uint32_t id;
+    /* The effective uid of its maker, the kernel's, whom it is charged to
+     * in its owner and the owner's ancestors (`mntns_charge_ok`). */
+    uint32_t maker_uid;
+    /* The list of the live mount namespaces but the first. */
+    struct mntns *next;
+    struct mntns *prev;
 };
 
 struct netdev;
@@ -177,12 +201,18 @@ int ns_ids_mapped(const struct userns *ns, uint32_t uid, uint32_t gid);
 #define NS_MAP_GID       1
 #define NS_MAP_SETGROUPS 2
 
+/* The bytes the text of the longest map takes, its NUL among them: a line
+ * of three ten-column numbers for each extent. */
+#define NS_MAP_TEXT_MAX (NS_EXTENTS * 33 + 1)
+
 /**
  * The text of /proc/PID/uid_map, gid_map or setgroups, `which`, of the user
  * namespace `ns`, as `reader` reads it: a line of ten-column numbers for
  * each extent, the ids in `ns`, the kernel's ids as the reader's namespace
  * sees them, or as `ns`'s parent sees them when the reader is in `ns`, and
- * the count; or "allow" or "deny". Into `out` of `cap` bytes, cut short
+ * the count, in the order written, or by the first id for a map of more
+ * than NS_BASE_EXTENTS extents, as Linux lists one; or "allow" or "deny".
+ * Into `out` of `cap` bytes, cut short
  * where it does not fit, NUL-terminated; its length.
  */
 int ns_map_text(const struct userns *ns, int which, const process_t *reader, char *out, int cap);
@@ -195,7 +225,8 @@ int ns_map_text(const struct userns *ns, int which, const process_t *reader, cha
  * groups only after setgroups was denied. setgroups takes "deny", or
  * "allow" when it was not denied, before the group map is written, from a
  * writer privileged in `ns`. The first namespace's files are not written.
- * The length, or -EPERM or -EINVAL.
+ * The length, or -EPERM, -ENOMEM, or -EINVAL, for more than NS_EXTENTS
+ * lines among others.
  */
 int32_t ns_map_write(struct userns *ns, int which, const char *text, uint32_t len,
                      const process_t *writer);
@@ -236,9 +267,10 @@ uint32_t pid_seen_by(const process_t *viewer, uint32_t kid);
  * in. 0, or -EINVAL for CLONE_NEWUSER or CLONE_NEWPID with CLONE_THREAD,
  * CLONE_NEWUSER with CLONE_FS, or CLONE_THREAD when the parent's next
  * children have a PID namespace other than its own; -EPERM for a namespace
- * the parent may not make, -EUSERS past NS_LEVELS, -ENOSPC past NS_MNT_MAX
- * mount namespaces, or -ENOMEM. A child that failed may have taken some of
- * the references, which the release of its record drops (`ns_release`).
+ * the parent may not make, -EUSERS past NS_LEVELS, -ENOSPC for a mount
+ * namespace past a user's max_mnt_namespaces, or -ENOMEM. A child that
+ * failed may have taken some of the references, which the release of its
+ * record drops (`ns_release`).
  */
 int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags);
 
@@ -382,16 +414,21 @@ struct ns_common *nsfs_ns(const struct fd_entry *e);
 
 /* What the other subsystems do for their namespaces, defined with them. */
 
-/** Make the mount namespace of bit `to` see every mount that of bit `from`
- * sees (fs/vfs.c). */
-void vfs_mntns_copy(uint32_t from, uint32_t to);
+/** Make the mount namespace of id `to` see every mount that of id `from`
+ * sees: 0, or -ENOMEM, after which `to` sees none (fs/vfs_ns.c). */
+int vfs_mntns_copy(uint32_t from, uint32_t to);
 
-/** The end of the mount namespace of bit `bit`: unmount what it alone saw,
- * and hide every mount from the bit (fs/vfs.c). */
-void vfs_mntns_gone(uint32_t bit);
+/** The end of the mount namespace of id `id`: unmount what it alone saw,
+ * and take the id from every mount's view (fs/vfs_ns.c). */
+void vfs_mntns_gone(uint32_t id);
 
-/** The bits of the mount namespaces that exist. */
-uint32_t mntns_live_bits(void);
+/** The user.max_mnt_namespaces of `ns`, as /proc/sys/user shows it to a
+ * process of `ns`. */
+int32_t ns_max_mnt(struct userns *ns);
+
+/** Set the user.max_mnt_namespaces of `ns` to `v`, from 0 to 0x7FFFFFFF:
+ * 0, or -EINVAL out of that range. It limits the namespaces made after. */
+int ns_set_max_mnt(struct userns *ns, int32_t v);
 
 /** The end of the network namespace `ns`: its sockets and connections,
  * which have no reference to it, move to a namespace no process is in,

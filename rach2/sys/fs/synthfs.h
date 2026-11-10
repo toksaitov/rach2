@@ -319,6 +319,9 @@ int synth_sys_count(void);
  * whose values procfs reads from tcp.h's variables. */
 #define SYNTH_SYS_TCP_KEEPALIVE_TIME 44
 #define SYNTH_SYS_TCP_RETRIES2       48
+/* The entry of user/max_mnt_namespaces, whose value is the limit of the
+ * reader's user namespace, which procfs reads and writes through ns.h. */
+#define SYNTH_SYS_MAX_MNT_NAMESPACES 53
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the
