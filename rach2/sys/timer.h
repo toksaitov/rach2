@@ -30,34 +30,37 @@
 extern volatile uint64_t kernel_ticks;
 
 /*
- * The boot processor's tick changes `kernel_ticks`, the uptime's seconds and
+ * A timer pass (kernel.c) changes `kernel_ticks`, the uptime's seconds and
  * ticks, and the clock's record of where the tick began between two
- * increments of `kernel_tick_seq`, which is odd meanwhile. Another processor
- * reads them as one reading by reading them again when the count was odd or
- * has moved (`tick_read_begin`, `tick_read_retry`); every variable they
- * cover is volatile, so the compiler keeps the order of the accesses, and
- * the x86 keeps the order of stores and of loads. The boot processor reads
- * them with interrupts off and needs no second reading: the count is never
- * odd for it but under an NMI, which must not wait for it.
+ * increments of `kernel_tick_seq`, which is odd meanwhile. The boot
+ * processor's tick makes the pass, and so does another processor's when the
+ * boot processor's is late; the writer holds the big lock with interrupts
+ * off. A reader reads them as one reading by reading them again when the
+ * count was odd or has moved (`tick_read_begin`, `tick_read_retry`); every
+ * variable they cover is volatile, so the compiler keeps the order of the
+ * accesses, and the x86 keeps the order of stores and of loads. The writer's
+ * own processor needs no second reading: the count is odd for it only under
+ * an NMI, which must not wait for it.
  */
 extern volatile uint32_t kernel_tick_seq;
 
-/** Begin and end the boot processor's change of the tick, from its timer
- * handler (kernel.c): each adds one to `kernel_tick_seq`. */
+/** Begin and end a timer pass's change of the tick (kernel.c), with the big
+ * lock held and interrupts off: each adds one to `kernel_tick_seq`, and the
+ * first notes this processor as the writer. */
 void tick_write_begin(void);
 void tick_write_end(void);
 
 /**
  * Begin a reading of what `kernel_tick_seq` covers, and return the count to
- * give `tick_read_retry` after it. On the boot processor it returns 0 at
- * once; on another it waits for an even count, serving the other
- * processors' requests of this one (`smp_service`) meanwhile.
+ * give `tick_read_retry` after it. On the processor writing the tick it
+ * returns 0 at once; on another it waits for an even count, serving the
+ * other processors' requests of this one (`smp_service`) meanwhile.
  */
 uint32_t tick_read_begin(void);
 
 /** Whether what was read since `tick_read_begin` gave `seq` must be read
- * again: on a processor other than the boot processor, whether the count
- * has moved; never on the boot processor. */
+ * again: on a processor other than the one writing the tick, whether the
+ * count has moved; never on the writer's. */
 int tick_read_retry(uint32_t seq);
 
 /** The uptime's seconds, the ticks of this second and `kernel_ticks`, as
@@ -135,16 +138,27 @@ uint32_t timer_resolution_ns(void);
 void timer_phase(int *pending, uint32_t *phase_ns);
 
 /**
- * Count the boot processor's tick, from its timer handler within the tick's
- * sequence count and nowhere else, and return the ticks this interrupt
- * counts. Before a reference starts that is 1, and the clock counts a
- * period of the counter under the tick unless a reading of `timer_now_us`
- * has counted it already. The first tick with a reference ready starts it;
- * from then on it is the reference's whole ticks since the last one counted,
- * at most a minute's: 0 for an interrupt a hypervisor delivers again, and
- * more than 1 for one that came late.
+ * Count the tick, from a timer pass within the tick's sequence count and
+ * nowhere else, and return the ticks this interrupt counts. Only the boot
+ * processor's pass calls it until `timer_tick_shared` says any may. Before a
+ * reference starts that is 1, and the clock counts a period of the counter
+ * under the tick unless a reading of `timer_now_us` has counted it already. The
+ * first tick with a reference ready starts it; from then on it is the
+ * reference's whole ticks since the last one counted, at most a minute's: 0 for
+ * an interrupt a hypervisor delivers again, and more than 1 for one that came
+ * late.
  */
 uint32_t timer_tick_clock(void);
+
+/** 1 once a reference keeps the clock, so that a processor other than the
+ * boot one may count the tick (`timer_tick_clock`), which then reads the
+ * reference and not the boot processor's own counter; 0 before. */
+int timer_tick_shared(void);
+
+/** The timer passes since boot that a processor other than the boot one
+ * made because the boot processor's was late (kernel.c), modulo 2^32, which
+ * `/proc/stat` gives as `timer_passes_late`. */
+uint32_t timer_late_passes(void);
 
 /**
  * Whether the clock's arithmetic is right, on fixed readings: the period

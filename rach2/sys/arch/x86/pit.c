@@ -429,6 +429,11 @@ uint32_t tsc_counts_per_tick(void)
     return tsc_per_tick;
 }
 
+int timer_tick_shared(void)
+{
+    return ref_kind != REF_NONE;
+}
+
 const char *timer_reference(void)
 {
     if (ref_kind == REF_COUNTER) {

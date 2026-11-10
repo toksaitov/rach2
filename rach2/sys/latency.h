@@ -9,11 +9,11 @@
 
 /*
  * Four are kept, each a maximum in microseconds from `timer_now_us`: the gap
- * between two timer ticks, which a tick delayed by interrupts held off makes
- * long; a block request from its taking to its completion; a caller's wait
- * for the request limit before it could take one; and a console line from
- * the moment it became readable to the moment a reader had it. `/proc/stat`
- * prints them as `latency_timer_us`, `latency_disk_us`,
+ * between two timer passes, which a tick delayed by interrupts held off or by a
+ * wait for the big lock makes long; a block request from its taking to its
+ * completion; a caller's wait for the request limit before it could take one;
+ * and a console line from the moment it became readable to the moment a reader
+ * had it. `/proc/stat` prints them as `latency_timer_us`, `latency_disk_us`,
  * `latency_diskwait_us` and `latency_console_us`.
  */
 
@@ -39,8 +39,8 @@ void latency_span(int kind, uint32_t from, uint32_t to);
  * outside the four. */
 uint32_t latency_max(int kind);
 
-/** Measure the gap since the last tick, from the boot processor's timer
- * handler at each tick; the first call only starts the measure. */
+/** Measure the gap since the last timer pass, from each pass, on whichever
+ * processor makes it (kernel.c); the first call only starts the measure. */
 void latency_tick(void);
 
 #endif /* _LATENCY_H_ */

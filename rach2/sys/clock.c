@@ -21,21 +21,26 @@ extern volatile uint32_t kernel_second_ticks;
 
 volatile uint32_t kernel_tick_seq;
 
+/* The processor in a change of the tick, plus 1, or 0 between changes. */
+static volatile uint32_t tick_writer;
+
 void tick_write_begin(void)
 {
+    tick_writer = arch_cpu_id() + 1u;
     kernel_tick_seq++;
 }
 
 void tick_write_end(void)
 {
     kernel_tick_seq++;
+    tick_writer = 0;
 }
 
 uint32_t tick_read_begin(void)
 {
     uint32_t seq;
 
-    if (arch_cpu_id() == 0) {
+    if (tick_writer == arch_cpu_id() + 1u) {
         return 0;
     }
     while ((seq = kernel_tick_seq) & 1u) {
@@ -47,7 +52,7 @@ uint32_t tick_read_begin(void)
 
 int tick_read_retry(uint32_t seq)
 {
-    return arch_cpu_id() != 0 && kernel_tick_seq != seq;
+    return tick_writer != arch_cpu_id() + 1u && kernel_tick_seq != seq;
 }
 
 void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks)

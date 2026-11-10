@@ -244,17 +244,90 @@ static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
 static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uintptr_t sp);
 
+/* For each processor past the boot one, the tick count its last tick with
+ * the big lock saw, and how many of its ticks since saw it unchanged
+ * (`timer_pass_late`); and the timer passes those processors made. */
+static uint64_t timer_seen[NR_CPUS];
+static uint32_t timer_unmoved[NR_CPUS];
+static uint32_t timer_passes_late;
+
+/**
+ * Advance the tick count and the uptime by the ticks the clock says this
+ * interrupt counts (`timer_tick_clock`), none for one delivered again and
+ * more than one for one that came late, carry the vDSO's clock on to the
+ * tick (`vclock_tick`), and measure the gap since the last pass
+ * (`latency_tick`). The caller holds the big lock with interrupts off.
+ */
+static void timer_clock_pass(void)
+{
+    uint32_t due;
+
+    tick_write_begin();
+    due = timer_tick_clock();
+    while (due-- > 0) {
+        ++kernel_ticks;
+        if (++kernel_second_ticks >= TICK_HZ) {
+            kernel_second_ticks = 0;
+            ++kernel_uptime_seconds;
+        }
+    }
+    tick_write_end();
+    vclock_tick();
+    latency_tick();
+}
+
+/** Wake the timed sleepers and expire the timerfds whose tick has come; a
+ * second pass at the same tick finds none. The caller holds the big lock. */
+static void timer_wake_pass(void)
+{
+    proc_wake_sleepers(kernel_ticks);
+    timerfd_tick(kernel_ticks);
+}
+
+/**
+ * Whether this processor, not the boot one, whose tick has the big lock,
+ * should make the timer pass: the tick count has not moved over two of its
+ * ticks, so the boot processor's pass is a tick or more late, as when its
+ * tick waits for the lock that a long call on this processor holds; and a
+ * reference keeps the clock, so that any processor may count the tick
+ * (`timer_tick_shared`), whose count then comes from the reference and not
+ * from this processor's ticks. Linux's timers fire from whichever
+ * processor's tick comes, and no futex, poll, epoll or timerfd timeout
+ * waits on one processor's tick here either.
+ */
+static int timer_pass_late(void)
+{
+    uint32_t c = arch_cpu_id();
+
+    if (timer_seen[c] != kernel_ticks) {
+        timer_seen[c] = kernel_ticks;
+        timer_unmoved[c] = 0;
+        return 0;
+    }
+    if (++timer_unmoved[c] < 2u || !timer_tick_shared()) {
+        return 0;
+    }
+    timer_unmoved[c] = 0;
+    timer_passes_late++;
+    return 1;
+}
+
+uint32_t timer_late_passes(void)
+{
+    return timer_passes_late;
+}
+
 /**
  * Service a processor's tick, TICK_HZ a second, and preempt its current
  * process.
  *
- * Every processor has its own tick; a processor other than the boot one only
- * accounts it and preempts. The boot processor's tick also advances the tick
- * count and the uptime by the ticks the clock says this interrupt counts
- * (`timer_tick_clock`), none for one delivered again and more than one for
- * one that came late, carries the vDSO's clock on to the tick
- * (`vclock_tick`), and runs the periodic work of the kernel: the sleepers
- * and timerfds whose time has come, the HDA tick for a controller whose
+ * Every processor has its own tick; a processor other than the boot one
+ * accounts it and preempts, and makes the timer pass below only when the
+ * boot processor's is late (`timer_pass_late`). The boot processor's tick
+ * makes the timer pass, which advances the tick count, carries the vDSO's
+ * clock on and wakes the sleepers and timerfds whose time has come
+ * (`timer_clock_pass`, `timer_wake_pass`), and runs the periodic work of
+ * the kernel: the HDA tick for a controller whose
  * interrupts do not arrive, the network device that is polled, the TCP
  * timers, IPv6 neighbour discovery's and MLD's timers, the loopback
  * delivery, the USB controller's event ring, the
@@ -286,25 +359,16 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  */
 static void timer_handler(isr_params_t *params)
 {
-    uint32_t due;
-
     if (arch_cpu_id() != 0) {
         sched_account_tick(FRAME_USER(params) != 0);
+        if (timer_pass_late()) {
+            timer_clock_pass();
+            timer_wake_pass();
+        }
         sched_preempt();
         return;
     }
-    tick_write_begin();
-    due = timer_tick_clock();
-    while (due-- > 0) {
-        ++kernel_ticks;
-        if (++kernel_second_ticks >= TICK_HZ) {
-            kernel_second_ticks = 0;
-            ++kernel_uptime_seconds;
-        }
-    }
-    tick_write_end();
-    vclock_tick();
-    latency_tick();
+    timer_clock_pass();
 
     sched_account_tick(FRAME_USER(params) != 0);
     sched_load_tick();
@@ -312,8 +376,7 @@ static void timer_handler(isr_params_t *params)
         ip_loop_count_idle();
     }
 
-    proc_wake_sleepers(kernel_ticks);
-    timerfd_tick(kernel_ticks);
+    timer_wake_pass();
 
     hda_tick();
     netdev_poll();
