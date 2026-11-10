@@ -194,6 +194,11 @@ is omitted; the supplied script path, made absolute with repeated slashes
 and dot components removed, is inserted instead.
 The strings added count against the same limits as the caller's.
 Linux inserts the script path as the caller passed it.
+The process is named by the script's base name, as
+.Pa /proc/self/comm
+and
+.Dv PR_GET_NAME
+give it, and not by the interpreter's, as on Linux.
 Only one interpreter level is supported: an interpreter that is itself
 a script is refused.
 A first line that fills the 128-byte read buffer without a newline is
