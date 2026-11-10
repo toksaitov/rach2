@@ -606,6 +606,12 @@ uintptr_t drm_gem_shmem_page(struct drm_gem_shmem_object *obj, uint32_t pgoff)
     return sh->leaves[0][pgoff];
 }
 
+/** A model object's page at `pgoff`, 0 for one not given yet. */
+uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
+{
+    return sh->leaves && pgoff < sh->npages ? sh->leaves[0][pgoff] : 0;
+}
+
 /** Free a model object's pages. */
 void shmem_free(struct shmem *sh)
 {

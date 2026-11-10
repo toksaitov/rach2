@@ -88,6 +88,12 @@ int32_t virtio_gpu_probe(void)
     return -ENODEV;
 }
 
+/** No region is shared with a VM here. */
+int32_t vgpu_shm_start(void)
+{
+    return 0;
+}
+
 int32_t vkms_probe(void)
 {
     return -ENODEV;
