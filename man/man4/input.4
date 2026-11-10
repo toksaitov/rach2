@@ -154,10 +154,94 @@ back to relative mode and named for the mouse protocol it answers,
 .Dq PS/2 Synaptics TouchPad
 and the like.
 .Pp
+An ALPS touchpad, which answers the ALPS reports when no Synaptics pad has
+answered, is identified and set up as Linux's alps driver does it: an old
+model by its signature in Linux's table, protocol versions 1 and 2 and
+version 6, and a newer one by its firmware's report, versions 3 to 5, 7
+and 8.
+A version 9 pad and ALPS's CS19, a stick with no pad, are left to the mouse
+driver, as Linux leaves them.
+The pad is
+.Dq AlpsPS/2 ALPS GlidePoint ,
+or
+.Dq AlpsPS/2 ALPS DualPoint TouchPad
+on a model with a pointing stick, product 8 and vendor 2 on the PS/2
+controller's bus, at
+.Dq isa0060/serio1/input0 ,
+its version the protocol's, 0x100 to 0x800, 0x310 for version 3 in its
+Rushmore form.
+On versions 1, 2 and 6 it reports one finger,
+.Dv ABS_X
+and
+.Dv ABS_Y
+to the pad's limits and
+.Dv ABS_PRESSURE
+to 127, with
+.Dv REL_WHEEL ,
+.Dv BTN_FORWARD
+and
+.Dv BTN_BACK ,
+or
+.Dv BTN_0
+to
+.Dv BTN_3
+on the models that have them.
+Versions 3 to 5 keep four slots that bound the contacts, with
+.Dv INPUT_PROP_SEMI_MT
+and
+.Dv ABS_PRESSURE ;
+versions 7 and 8 keep four slots that follow the contacts at any distance,
+with
+.Dv BTN_TOOL_QUINTTAP ,
+and
+.Dv ABS_PRESSURE
+on version 8 alone.
+No ALPS pad reports
+.Dv ABS_MT_PRESSURE .
+Every pad has
+.Dv BTN_TOUCH ,
+.Dv BTN_TOOL_FINGER ,
+.Dv BTN_LEFT
+and
+.Dv INPUT_PROP_POINTER ;
+a clickpad has no other button and has
+.Dv INPUT_PROP_BUTTONPAD .
+The stick is
+.Dq AlpsPS/2 ALPS DualPoint Stick ,
+product 8 and the pad's version, at
+.Dq isa0060/serio1/input1 ,
+with
+.Dv REL_X ,
+.Dv REL_Y ,
+.Dv BTN_LEFT ,
+.Dv BTN_RIGHT
+and
+.Dv BTN_MIDDLE ,
+.Dv ABS_PRESSURE
+to 127 on versions 3, 7 and 8, and the properties
+.Dv INPUT_PROP_POINTER
+and
+.Dv INPUT_PROP_POINTING_STICK .
+A mouse on the pad's external port is
+.Dq PS/2 ALPS Mouse ,
+product 1 and version 0, at
+.Dq isa0060/serio1/input2 ,
+or input1 on a pad with no stick; its first packet registers it and is
+dropped.
+The stick and the external mouse feed
+.Pa /dev/mouse
+as a mouse does.
+A version 6 pad's buttons are reported on the stick's device, as Linux
+reports them, and that device's packet ends with the pad's.
+A pad that refuses its set-up is driven as a mouse, named for the mouse
+protocol it answers,
+.Dq PS/2 ALPS GlidePoint
+and the like.
+.Pp
 An Elantech touchpad of hardware version 1 to 4, which answers Elantech's
-knock where Synaptics' found nothing, is set up as Linux's elantech driver
-sets it: its firmware and capabilities queried, its registers written for
-absolute mode, 100 packets a second.
+knock where Synaptics' knock and ALPS's reports found nothing, is set up
+as Linux's elantech driver sets it: its firmware and capabilities queried,
+its registers written for absolute mode, 100 packets a second.
 It is
 .Dq ETPS/2 Elantech Touchpad ,
 product 14 and vendor 2 on the PS/2 controller's bus, at
@@ -429,7 +513,9 @@ The interface's version, 0x010001.
 A
 .Vt struct input_id :
 the bus, 0x11 for the PS/2 controller and 0x03 for USB, the vendor, the
-product and the version, 0 but for a touchpad's.
+product and the version: a USB device's HID version, as Linux's usbhid
+gives it, a Synaptics or ALPS touchpad's and an ALPS stick's, and 0 for
+the others.
 .It Dv EVIOCGNAME , EVIOCGPHYS
 The device's name and its place,
 .Dq isa0060/serio0/input0
@@ -481,7 +567,10 @@ for a PS/2 mouse and a touchpad, and
 .Dv INPUT_PROP_BUTTONPAD
 or
 .Dv INPUT_PROP_SEMI_MT
-for a touchpad that is one.
+for a touchpad that is one, and
+.Dv INPUT_PROP_POINTING_STICK
+for a pointing stick, with
+.Dv INPUT_PROP_POINTER .
 .It Dv EVIOCGSND , EVIOCGSW
 No bits: no device here has sounds or switches.
 .It Dv EVIOCGABS , EVIOCSABS
@@ -613,9 +702,10 @@ on a device that is no keyboard.
 A USB device's digitizer usages are not mapped, so a touchscreen or pen
 that reports through them has no node, and only the first human-interface
 interface of a device is read.
-The touchpad drivers are Synaptics' and Elantech's alone: an ALPS or other
-touchpad is driven as the PS/2 mouse it also is, and a Synaptics or Elantech
-pad that offers its SMBus bus is driven over PS/2.
+The touchpad drivers are Synaptics', ALPS's and Elantech's alone: another
+touchpad, or an ALPS pad of version 9, is driven as the PS/2 mouse it also
+is, and a Synaptics or Elantech pad that offers its SMBus bus is driven
+over PS/2.
 Linux's quirks that it chooses by the pad's ACPI PNP ID are not applied:
 the coordinates of some ThinkPads, the top buttons of others and
 ForcePads.

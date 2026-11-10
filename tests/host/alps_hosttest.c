@@ -39,7 +39,7 @@
  * mouse packets each version's packets give, all as Linux 6.12's alps.c,
  * psmouse and input-mt compute them for the same bytes. Each packet's
  * bytes are built from alps.rst's tables; where alps.rst and Linux's code
- * differ, the code's layout is used (dev-log/76-graphics/upstream.md).
+ * differ, the code's layout is used (dev-log/76-display/upstream.md).
  */
 
 #include "arch/x86/i8042.c"
