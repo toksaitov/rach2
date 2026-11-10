@@ -66,8 +66,10 @@ def main():
             subprocess.run(['sh', str(here.parent / 'runners/common.sh'), 'host'],
                            stdout=record, check=True)
         print('browser-load: ready: three bound guests of eight processors', flush=True)
+        # The claim's 28 processors include the measured guest's 4.
         command = subprocess.Popen(sys.argv[3:], start_new_session=True,
-                                   env=dict(os.environ, DEBIAN_REF_CLAIM=claim))
+                                   env=dict(os.environ, DEBIAN_REF_CLAIM=claim,
+                                            ETUDE_SITE_CPU_CLAIM=claim))
         while command.poll() is None:
             assert all(c.poll() is None for c in children), 'load guest exited; see load logs'
             time.sleep(1)  # Poll the command and its load guests until the command exits.
