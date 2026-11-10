@@ -32,6 +32,7 @@ struct fb {
     uint64_t size;
     uint8_t *map; /* a dumb buffer's mapping, or 0 for an import */
     uint32_t res; /* the resource an import shows, or 0 */
+    int flip;     /* its first row is the bottom one: shown reflected */
 };
 
 /* Property ids, found by name once. */
@@ -39,6 +40,7 @@ struct props {
     uint32_t conn_crtc, crtc_mode, crtc_active;
     uint32_t fb, crtc, src_x, src_y, src_w, src_h, crtc_x, crtc_y, crtc_w, crtc_h;
     uint32_t wb_crtc, wb_fb, wb_fence;
+    uint32_t rotation; /* the plane's, with rotate-0 and reflect-y, or 0 */
 };
 
 struct kms {
@@ -54,6 +56,7 @@ struct kms {
     struct fb buf[2], wb, imp;
     uint32_t cur;        /* the dumb buffer shown */
     uint32_t res;        /* the scanout's resource, or 0 */
+    uint32_t refused;    /* the last resource refused direct scanout */
     struct vd_rect rect; /* its rectangle of the resource */
     uint8_t edid[VD_EDID_MAX];
     uint32_t edid_len;
@@ -96,6 +99,29 @@ static uint64_t prop_value(int fd, uint32_t obj, uint32_t type, const char *name
     }
     drmModeFreeObjectProperties(ps);
     return v;
+}
+
+/** Return the plane's rotation property when it can reflect in y. */
+static uint32_t reflect_prop(int fd, uint32_t plane)
+{
+    uint32_t id = prop(fd, plane, DRM_MODE_OBJECT_PLANE, "rotation"), found = 0;
+    drmModePropertyRes *pr;
+    int i;
+
+    if (id == 0 || (pr = drmModeGetProperty(fd, id)) == 0) {
+        return 0;
+    }
+    for (i = 0; i < pr->count_enums; i++) {
+        /* A bitmask property's enum values are bit numbers. */
+        if ((strcmp(pr->enums[i].name, "rotate-0") == 0 &&
+             (1ULL << pr->enums[i].value) == DRM_MODE_ROTATE_0) ||
+            (strcmp(pr->enums[i].name, "reflect-y") == 0 &&
+             (1ULL << pr->enums[i].value) == DRM_MODE_REFLECT_Y)) {
+            found++;
+        }
+    }
+    drmModeFreeProperty(pr);
+    return found == 2 ? id : 0;
 }
 
 /** Keep the connector's modes and EDID; return -1 when it has no mode. */
@@ -209,6 +235,7 @@ static int find_props(struct kms *k)
     p->crtc_y = prop(fd, k->plane, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
     p->crtc_w = prop(fd, k->plane, DRM_MODE_OBJECT_PLANE, "CRTC_W");
     p->crtc_h = prop(fd, k->plane, DRM_MODE_OBJECT_PLANE, "CRTC_H");
+    p->rotation = reflect_prop(fd, k->plane);
     if (k->wb_conn) {
         p->wb_crtc = prop(fd, k->wb_conn, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
         p->wb_fb = prop(fd, k->wb_conn, DRM_MODE_OBJECT_CONNECTOR, "WRITEBACK_FB_ID");
@@ -358,7 +385,8 @@ static int fb_dumb(struct kms *k, struct fb *f, uint32_t w, uint32_t h)
     return 0;
 }
 
-/** Add the primary plane's properties showing f at the top left. */
+/** Add the primary plane's properties showing f at the top left,
+ * reflected in y when its rows are stored bottom first. */
 static void plane_props(struct kms *k, drmModeAtomicReq *req, const struct fb *f, uint32_t w,
                         uint32_t h)
 {
@@ -372,6 +400,10 @@ static void plane_props(struct kms *k, drmModeAtomicReq *req, const struct fb *f
     drmModeAtomicAddProperty(req, k->plane, k->p.crtc_y, 0);
     drmModeAtomicAddProperty(req, k->plane, k->p.crtc_w, w);
     drmModeAtomicAddProperty(req, k->plane, k->p.crtc_h, h);
+    if (k->p.rotation) {
+        drmModeAtomicAddProperty(req, k->plane, k->p.rotation,
+                                 DRM_MODE_ROTATE_0 | (f && f->flip ? DRM_MODE_REFLECT_Y : 0));
+    }
 }
 
 /** Wait up to a second for a sync file to signal; return 0 when it did. */
@@ -506,6 +538,7 @@ int kms_scanout(struct kms *k, uint32_t id, const struct vd_rect *r)
     }
     k->res = id;
     k->rect = *r;
+    k->refused = 0;
     want = choose_mode(k, r->width, r->height);
     if (want != k->mode) {
         return set_mode(k, want);
@@ -513,7 +546,22 @@ int kms_scanout(struct kms *k, uint32_t id, const struct vd_rect *r)
     return 0;
 }
 
-/** Import the resource's dma-buf as a framebuffer that fills the mode. */
+/** Say once per resource why it is copied instead of scanned out. */
+static int refuse(struct kms *k, uint32_t id, const char *why)
+{
+    if (k->refused != id) {
+        fprintf(stderr, "backend: kms: resource %u is copied: %s\n", (unsigned)id, why);
+        k->refused = id;
+    }
+    return -1;
+}
+
+/**
+ * Import the resource's dma-buf as a framebuffer that fills the mode; one
+ * stored bottom row first needs a plane that reflects it in y. The handle
+ * the import makes is the display's own, since GBM has its own open of the
+ * card. Returns 0, or -1 when the resource must be copied.
+ */
 static int import(struct kms *k, uint32_t id)
 {
     uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
@@ -527,26 +575,35 @@ static int import(struct kms *k, uint32_t id)
     }
     fb_free(k, &k->imp);
     if (vr_export(k->vr, id, &e) != 0) {
-        return -1;
+        return refuse(k, id, "it has no dma-buf");
     }
-    if (e.width != m->hdisplay || e.height != m->vdisplay || k->rect.x != 0 || k->rect.y != 0 ||
-        drmPrimeFDToHandle(k->fd, e.fd, &k->imp.handle) != 0) {
+    if (e.width != m->hdisplay || e.height != m->vdisplay || k->rect.x != 0 || k->rect.y != 0) {
         close(e.fd);
-        return -1;
+        return refuse(k, id, "it does not fill the mode");
     }
+    if (e.bottom_up && k->p.rotation == 0) {
+        close(e.fd);
+        return refuse(k, id, "its rows are bottom first and the plane cannot reflect them");
+    }
+    err = drmPrimeFDToHandle(k->fd, e.fd, &k->imp.handle);
     close(e.fd);
+    if (err != 0) {
+        return refuse(k, id, "the display cannot import its dma-buf");
+    }
     handles[0] = k->imp.handle;
     pitches[0] = e.stride;
     offsets[0] = e.offset;
-    mods[0] = e.modifier;
+    /* Without DRM_MODE_FB_MODIFIERS the kernel wants every modifier 0. */
+    mods[0] = e.modifier != DRM_FORMAT_MOD_INVALID ? e.modifier : 0;
     err = drmModeAddFB2WithModifiers(
         k->fd, e.width, e.height, e.fourcc, handles, pitches, offsets, mods, &k->imp.id,
         e.modifier != DRM_FORMAT_MOD_INVALID ? DRM_MODE_FB_MODIFIERS : 0);
     if (err != 0) {
         fb_free(k, &k->imp);
-        return -1;
+        return refuse(k, id, "the display takes no framebuffer of its format");
     }
     k->imp.res = id;
+    k->imp.flip = e.bottom_up;
     k->imp.width = e.width;
     k->imp.height = e.height;
     return 0;
@@ -570,7 +627,7 @@ int kms_flush(struct kms *k, uint32_t id, const struct vd_rect *r)
     }
     k->n.flushes++;
     m = &k->modes[k->mode];
-    if (k->direct && import(k, id) == 0) {
+    if (k->direct && k->refused != id && import(k, id) == 0) {
         k->n.direct++;
         return commit(k, &k->imp, 0, 1);
     }

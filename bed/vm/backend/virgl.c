@@ -24,12 +24,17 @@
 /* virglrenderer's flag for a resource whose first row is the top one. */
 #define RESOURCE_Y_0_TOP 1u
 
+/* The Venus contexts, whose attached resources the probe imports. */
+#define VENUS_CTXS 16
+
 struct vr {
     struct vd *dev;
     struct kms *kms;
     int gbm_fd; /* the DRM device virglrenderer's GBM allocates on, or -1 */
     uint32_t capset[3];
     uint32_t ncapsets;
+    uint32_t venus[VENUS_CTXS]; /* live Venus contexts' ids, 0 when free */
+    int probe;                  /* import each resource a Venus context takes into Vulkan */
     int verbose;
 };
 
@@ -133,6 +138,12 @@ void vr_poll(struct vr *r)
 uint32_t vr_capsets(struct vr *r)
 {
     return r->ncapsets;
+}
+
+/** Import each resource a Venus context takes into Vulkan, with -I. */
+void vr_set_probe(struct vr *r, int probe)
+{
+    r->probe = probe;
 }
 
 /** Give the renderer its display, or none. */
@@ -241,29 +252,79 @@ static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t
     return resp(virgl_renderer_resource_create_blob(&args));
 }
 
+/** Return the slot of Venus context ctx, or of a free one for ctx 0;
+ * -1 when there is none. */
+static int venus_slot(struct vr *r, uint32_t ctx)
+{
+    int i;
+
+    for (i = 0; i < VENUS_CTXS; i++) {
+        if (r->venus[i] == ctx) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 /** Create a context, of a capset when context_init chose one. */
 static int op_ctx_create(void *c, uint32_t ctx, uint32_t capset, uint32_t nlen, const char *name)
 {
-    (void)c;
-    if (capset != 0) {
-        return resp(virgl_renderer_context_create_with_flags(ctx, capset, nlen, name));
+    struct vr *r = c;
+    int err, i;
+
+    if (capset == 0) {
+        return resp(virgl_renderer_context_create(ctx, nlen, name));
     }
-    return resp(virgl_renderer_context_create(ctx, nlen, name));
+    err = resp(virgl_renderer_context_create_with_flags(ctx, capset, nlen, name));
+    if (err == 0 && capset == CAPSET_VENUS && (i = venus_slot(r, 0)) >= 0) {
+        r->venus[i] = ctx;
+    }
+    return err;
 }
 
 /** Destroy a context. */
 static void op_ctx_destroy(void *c, uint32_t ctx)
 {
-    (void)c;
+    struct vr *r = c;
+    int i = venus_slot(r, ctx);
+
+    if (i >= 0) {
+        r->venus[i] = 0;
+    }
     virgl_renderer_context_destroy(ctx);
+}
+
+/**
+ * Import a resource that a Venus context took into Vulkan as a dma-buf,
+ * as Venus's renderer does when the driver allocates memory from it, and
+ * report the CRC-32 of its rows as stored, X bytes set to 0xff.
+ */
+static void venus_probe(uint32_t id)
+{
+    struct vr_export e;
+    uint32_t crc;
+
+    if (vr_export(0, id, &e) != 0) {
+        fprintf(stderr, "backend: venus: resource %u exports no dma-buf\n", (unsigned)id);
+        return;
+    }
+    if (vk_probe(&e, &crc) == 0) {
+        fprintf(stderr, "backend: venus: imported resource %u, %ux%u, crc %08x\n", (unsigned)id,
+                (unsigned)e.width, (unsigned)e.height, (unsigned)crc);
+    }
+    close(e.fd);
 }
 
 /** Attach a resource to a context, or detach it. */
 static void op_ctx_resource(void *c, uint32_t ctx, uint32_t id, int attach)
 {
-    (void)c;
+    struct vr *r = c;
+
     if (attach) {
         virgl_renderer_ctx_attach_resource((int)ctx, (int)id);
+        if (r->probe && venus_slot(r, ctx) >= 0) {
+            venus_probe(id);
+        }
     } else {
         virgl_renderer_ctx_detach_resource((int)ctx, (int)id);
     }
@@ -383,6 +444,7 @@ static void op_reset(void *c)
     if (r->kms) {
         kms_reset(r->kms);
     }
+    memset(r->venus, 0, sizeof(r->venus));
     virgl_renderer_reset();
 }
 
@@ -407,25 +469,61 @@ const struct vd_ops vr_ops = {
     .reset = op_reset,
 };
 
+/** Reverse the order of n rows of len bytes, stride bytes apart. */
+static int flip_rows(uint8_t *p, uint32_t stride, uint32_t len, uint32_t n)
+{
+    uint8_t *t = malloc(len);
+    uint32_t i;
+
+    if (t == 0) {
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    for (i = 0; i < n / 2; i++) {
+        memcpy(t, p + (size_t)stride * i, len);
+        memcpy(p + (size_t)stride * i, p + (size_t)stride * (n - 1 - i), len);
+        memcpy(p + (size_t)stride * (n - 1 - i), t, len);
+    }
+    free(t);
+    return 0;
+}
+
 /**
- * Read a rectangle of a resource's pixels into dst, whose rows are stride
- * bytes apart, top row first. Returns 0 or a VD_RESP_ERR_*.
+ * Read a rectangle of a resource's pixels as a display shows them into
+ * dst, whose rows are stride bytes apart, top row first. A resource stored
+ * bottom row first, as GL draws, shows its last row at the top, as QEMU
+ * shows it; rect counts from the top. Returns 0 or a VD_RESP_ERR_*.
  */
 int vr_read(struct vr *r, uint32_t id, const struct vd_rect *rect, void *dst, uint32_t stride)
 {
     struct vd_box box = {rect->x, rect->y, 0, rect->width, rect->height, 1};
+    struct virgl_renderer_resource_info info;
     struct iovec iov;
+    int bottom_up, err;
 
     (void)r;
+    if (virgl_renderer_resource_get_info((int)id, &info) != 0) {
+        return VD_RESP_ERR_RESOURCE_ID;
+    }
+    bottom_up = (info.flags & RESOURCE_Y_0_TOP) == 0;
+    if (rect->y > info.height || rect->height > info.height - rect->y) {
+        return VD_RESP_ERR_PARAMETER;
+    }
+    if (bottom_up) {
+        box.y = info.height - rect->y - rect->height;
+    }
     iov.iov_base = dst;
     iov.iov_len = (size_t)stride * rect->height;
-    return resp(virgl_renderer_transfer_read_iov(id, 0, 0, stride, 0, VIRGL_BOX(&box), 0, &iov, 1));
+    err = resp(virgl_renderer_transfer_read_iov(id, 0, 0, stride, 0, VIRGL_BOX(&box), 0, &iov, 1));
+    if (err == 0 && bottom_up) {
+        err = flip_rows(dst, stride, rect->width * 4, rect->height);
+    }
+    return err;
 }
 
 /**
- * Export a resource's single plane as a dma-buf for the display. Returns
- * 0, or -1 for a resource that has none, as a GL texture virglrenderer did
- * not allocate through GBM has not, or whose first row is the bottom one.
+ * Export a resource's single plane as a dma-buf. Returns 0, or -1 for a
+ * resource that has none, as a GL texture virglrenderer did not allocate
+ * through GBM has not. r may be 0.
  */
 int vr_export(struct vr *r, uint32_t id, struct vr_export *e)
 {
@@ -433,8 +531,7 @@ int vr_export(struct vr *r, uint32_t id, struct vr_export *e)
     struct virgl_renderer_resource_info info;
 
     (void)r;
-    if (virgl_renderer_resource_get_info((int)id, &info) != 0 ||
-        (info.flags & RESOURCE_Y_0_TOP) == 0) {
+    if (virgl_renderer_resource_get_info((int)id, &info) != 0) {
         return -1;
     }
     memset(&q, 0, sizeof(q));
@@ -452,5 +549,6 @@ int vr_export(struct vr *r, uint32_t id, struct vr_export *e)
     e->modifier = q.out_modifier;
     e->width = info.width;
     e->height = info.height;
+    e->bottom_up = (info.flags & RESOURCE_Y_0_TOP) == 0;
     return 0;
 }

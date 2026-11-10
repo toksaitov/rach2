@@ -247,7 +247,7 @@ static void ring(void *cookie, uint32_t peer, uint32_t vector)
 /* The options. */
 struct opts {
     const char *module, *vfio, *file, *card, *gbm;
-    int direct, writeback, venus, once, verbose;
+    int direct, writeback, venus, probe, once, verbose;
     long peer;
 };
 
@@ -255,7 +255,7 @@ struct opts {
 static void usage(void)
 {
     fprintf(stderr, "usage: vgpu-backend [-m NODE | -V BDF | -f FILE] [-k CARD] [-g DEV] "
-                    "[-d] [-w] [-x] [-p PEER] [-1] [-v]\n");
+                    "[-d] [-w] [-x | -I] [-p PEER] [-1] [-v]\n");
     exit(2);
 }
 
@@ -268,7 +268,7 @@ static void options(int argc, char **argv, struct opts *o)
     o->module = "/dev/vgpushm0";
     o->venus = 1;
     o->peer = -1;
-    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxp:1v")) != -1) {
+    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxIp:1v")) != -1) {
         switch (c) {
         case 'm':
             o->module = optarg;
@@ -294,6 +294,9 @@ static void options(int argc, char **argv, struct opts *o)
         case 'x':
             o->venus = 0;
             break;
+        case 'I':
+            o->probe = 1;
+            break;
         case 'p':
             o->peer = strtol(optarg, 0, 0);
             break;
@@ -307,7 +310,7 @@ static void options(int argc, char **argv, struct opts *o)
             usage();
         }
     }
-    if (optind != argc || o->peer > 0xffff) {
+    if (optind != argc || o->peer > 0xffff || (o->probe && !o->venus)) {
         usage();
     }
 }
@@ -448,14 +451,15 @@ int main(int argc, char **argv)
     } else {
         open_module(&s, o.module);
     }
-    /* One open of the card: its first descriptor is DRM's master, and the
-       GBM device virglrenderer gets is a duplicate of it. */
+    /* The card's first open is DRM's master, so the display's comes before
+       GBM's; GBM has an open of its own, since GEM handles belong to an
+       open file and the display closes the handles it imports. */
     if (o.card && (card = open(o.card, O_RDWR | O_CLOEXEC)) < 0) {
         die("cannot open the display", o.card);
     }
-    gbm = o.gbm ? open(o.gbm, O_RDWR | O_CLOEXEC) : card;
-    if (o.gbm && gbm < 0) {
-        die("cannot open the GBM device", o.gbm);
+    gbm = o.gbm || o.card ? open(o.gbm ? o.gbm : o.card, O_RDWR | O_CLOEXEC) : -1;
+    if ((o.gbm || o.card) && gbm < 0) {
+        die("cannot open the GBM device", o.gbm ? o.gbm : o.card);
     }
     if ((r = vr_init(&dev, gbm, o.venus, o.verbose)) == 0) {
         return 1;
@@ -464,6 +468,7 @@ int main(int argc, char **argv)
         return 1;
     }
     vr_set_kms(r, k);
+    vr_set_probe(r, o.probe);
     make_offer(&off, &s, &o, r, k && kms_edid(k, dev.resp, &(uint32_t){0}) == 0);
     if (vd_init(&dev, s.base, s.size, &off, &vr_ops, r) != 0) {
         die("the offer breaks the transport's rules", 0);
