@@ -778,6 +778,7 @@ static void asid_load(struct svm_vcpu *s, int cpu, int flush)
     if (asid_gen[cpu] == 0) {
         asid_gen[cpu] = 1;
         asid_next[cpu] = 1;
+        c->tlb_ctl = TLB_FLUSH_ALL;
     }
     if (s->cpu != cpu || s->asid_gen != asid_gen[cpu] || (flush && !caps.flushbyasid)) {
         if (asid_next[cpu] > caps.max_asid) {
