@@ -92,6 +92,7 @@ and their sets,
 .Dv KVM_SET_SIGNAL_MASK ,
 .Dv KVM_GET_LAPIC ,
 .Dv KVM_SET_LAPIC ,
+.Dv KVM_SET_VAPIC_ADDR ,
 .Dv KVM_SET_GUEST_DEBUG ,
 .Dv KVM_X86_SETUP_MCE
 and
@@ -101,8 +102,13 @@ and
 .Dv KVM_CHECK_EXTENSION
 answers 1, or a count, for each capability the kernel makes true, and 0
 for the rest.
-A capability turns on with the part of the kernel that gives it: none that
-depends on the backend is given yet.
+The backends offer
+.Dv KVM_CAP_X86_ROBUST_SINGLESTEP
+for their single stepping and event injection.
+.Dv KVM_SET_VAPIC_ADDR
+accepts address zero with the split controller, to disable the optional
+shared VAPIC page; the kernel does not offer
+.Dv KVM_CAP_VAPIC .
 .Pp
 A vCPU's descriptor maps
 .Dv KVM_GET_VCPU_MMAP_SIZE
@@ -139,11 +145,7 @@ That
 is never restarted, with or without
 .Dv SA_RESTART ,
 as on Linux.
-On an Intel processor the guest runs under VMX.
-AMD's SVM does not run guests yet:
-.Dv KVM_RUN
-on an AMD processor fails with
-.Er EOPNOTSUPP .
+Guests run under VMX on Intel processors and SVM with nested paging on AMD processors.
 .Ss Memory
 .Dv KVM_SET_USER_MEMORY_REGION
 gives the guest a slot: the
@@ -482,9 +484,6 @@ An ioctl from an address space other than the VM's.
 ended by
 .Va immediate_exit ,
 a signal or a request to stop.
-.It Bq Er EOPNOTSUPP
-.Dv KVM_RUN
-on an AMD processor, until its backend runs guests.
 .El
 .Sh SEE ALSO
 .Xr eventfd 2 ,
