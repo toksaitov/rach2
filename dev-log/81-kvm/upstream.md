@@ -67,3 +67,14 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Rach2: Rach2's SVM backend sets V_INTR_MASKING and intercepts INTR as the test does, so a guest of Rach2's KVM that spins with its IF clear under TCG may wait on an interrupt QEMU does not deliver; 81-2's cases on `max-svm` meet it there, and nested KVM on the testing PC does not have it.
 * Status: unreported.
 * Next: read the interrupt check of QEMU's TCG loop for a guest in SVM (`svm_check_intercept` and the `CPU_INTERRUPT_HARD` test in `x86_cpu_exec_interrupt`) against the manual's rule, try a current QEMU, and report it with the command.
+
+## Linux's hypercall fix-up writes at RIP without CS's base
+
+* Project: Linux 6.12.115, `arch/x86/kvm/x86.c` (SHA-256 0a4d25f3522b54b7b51d593f987b1221ff84943be03917fff4a901290e5e8233) and `arch/x86/kvm/emulate.c` (b8af3f684d592d1eb44444735c2bb3f596ad6275f7854dd47b463e8c4a08bbd9), read from kernel.org's `linux-6.12.115.tar.xz`.
+* Fails: when a guest runs the other vendor's hypercall instruction from a code segment whose base is not 0, KVM writes the three bytes of the processor's own instruction at the linear address RIP, not at CS.base + RIP where the instruction is, and the instruction that raised #UD is left as it was. `emulator_fix_hypercall` (x86.c line 9719) takes `rip = kvm_rip_read(vcpu)` and passes it to `emulator_write_emulated` (line 9738), whose address is linear; `em_hypercall` (emulate.c line 3421) then puts RIP back on the instruction for the processor to run it again. In real mode, or in protected mode with such a segment, three bytes of other memory are overwritten, the instruction raises #UD again and is patched again in the wrong place, without end.
+* Found: 2026-11-10, on the Mac, in milestone 81, task 81-12, while writing Rach2's fix-up after Linux's code.
+* Reproduction: a guest in real mode with CS above 0, or in 32-bit protected mode with a code segment whose base is not 0, that runs VMMCALL on an Intel processor or VMCALL on an AMD one, with KVM_X86_QUIRK_FIX_HYPERCALL_INSN enabled, as it is by default. Under Linux the bytes at the linear address RIP change and the guest never gets past the instruction. Not yet run on Linux.
+* Evidence: `dev-log/81-kvm/upstream.md`; the commit "Take #UD, #DB and #AC from the guest under VMX and #UD under SVM, and rewrite the other vendor's hypercall".
+* Rach2: `h_hypercall` in `rach2/sys/kvm/emulate.c` writes at CS's base plus RIP.
+* Status: unreported.
+* Next: run the reproduction on a current kernel as a kvm-unit-tests case, check whether a later release adds the segment's base, and report it to the KVM list with the case.
