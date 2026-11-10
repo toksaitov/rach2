@@ -306,6 +306,18 @@ int32_t kvm_clock_set(struct kvm_vm *vm, uintptr_t arg)
     return 0;
 }
 
+/** Have `v`'s kvmclock and the VM's reference TSC page written again
+ * before the next entry, since `v`'s TSC changed. */
+static void tsc_changed(struct kvm_vcpu *v)
+{
+    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
+    kvm_hv_clock_changed(v->vm);
+}
+
+/* A vCPU that joins a generation counts from the generation's moment and
+ * value, not from now, as Linux's __kvm_synchronize_tsc sets
+ * this_tsc_nsec and this_tsc_write, so that catch-up moves it with the
+ * others. */
 void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value)
 {
     struct kvm_vm *vm = v->vm;
@@ -362,15 +374,14 @@ void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value)
     if ((vm->master_clock && !matched) || vm->master_clock != use) {
         master_update(vm);
     }
-    kvm_tsc_moved(v);
+    tsc_changed(v);
 }
 
 void kvm_tsc_moved(struct kvm_vcpu *v)
 {
     v->tsc_this_ns = kvm_host_ns();
     v->tsc_this_write = kvm_tsc_read(v);
-    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
-    kvm_hv_clock_changed(v->vm);
+    tsc_changed(v);
 }
 
 /** The real time at which `vm`'s kvmclock read 0, in ns, as Linux's
