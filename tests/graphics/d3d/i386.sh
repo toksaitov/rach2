@@ -15,7 +15,7 @@
 # Venus ICD, which both architectures share, is diverted already. apt's
 # output goes to /var/tmp/d3d-i386-apt.log, and to standard error only when
 # apt fails: once, after an install that succeeded, apt repeated one warning
-# 453,439 times, past the 64 MiB the run's output may have.
+# past the 64 MiB of output the run may have.
 set -eu
 
 log=/var/tmp/d3d-i386-apt.log
