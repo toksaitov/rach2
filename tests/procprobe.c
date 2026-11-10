@@ -268,6 +268,7 @@ static const struct row {
             {"root-link", ROW_PLAIN},
             {"cwd-walk", ROW_PLAIN},
             {"status-cpus-allowed", ROW_PLAIN},
+            {"status-rss-kinds", ROW_PLAIN},
             {"ns-listing", ROW_PLAIN},
             {"ns-chdir", ROW_PLAIN},
             {"net-class-listed", ROW_PLAIN},
@@ -1517,6 +1518,19 @@ static int listing(const char *dir, char *out, int cap)
     return n == 0 ? 0 : -1;
 }
 
+/** The row of the resident pages by kind, from the `n` bytes of
+ * /proc/self/status at `b`: Linux's three lines, which sum to VmRSS, the
+ * file being of one moment. */
+static void status_rss_row(const char *b, int n)
+{
+    int rss = uint_after(b, n, "VmRSS:"), anon = uint_after(b, n, "RssAnon:");
+    int file = uint_after(b, n, "RssFile:"), shmem = uint_after(b, n, "RssShmem:");
+
+    check("status-rss-kinds",
+          rss > 0 && anon > 0 && file >= 0 && shmem >= 0 && anon + file + shmem == rss,
+          "/proc/self/status divides VmRSS among RssAnon, RssFile and RssShmem");
+}
+
 /** A /proc/<pid> directory lists its files in their order, `task` last, and a
  * thread's directory under `task` lists them with `children` in place of
  * `task`; /proc/self/limits has Linux's header and sixteen limits; /proc
@@ -1601,6 +1615,7 @@ static void pid_dir_rows(void)
         line[k] = '\0';
         check("status-cpus-allowed", cpus > 0 && contains(buf, n, line),
               "/proc/self/status allows every processor /proc/stat lists");
+        status_rss_row(buf, n);
     }
     check("ns-listing",
           listing("/proc/self/ns", got, (int)sizeof(got)) == 0 &&
