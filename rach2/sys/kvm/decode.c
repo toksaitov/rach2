@@ -219,7 +219,8 @@ static const struct row two_byte[] = {
     {0x05, 0x05, {KVM_OP_SYSCALL, 0, 0, 0, 0, 0}},
     {0x0D, 0x0D, {KVM_OP_NOP, 0, 0, O_RM, 0, T_MODRM | T_NOACC}},
     {0x10, 0x11, {KVM_OP_MOV, 0, 0, 0, 0, T_MODRM | T_MOV | T_SSE}},
-    {0x18, 0x1F, {KVM_OP_NOP, 0, 0, O_RM, 0, T_MODRM | T_NOACC}},
+    {0x18, 0x19, {KVM_OP_NOP, 0, 0, O_RM, 0, T_MODRM | T_NOACC}},
+    {0x1C, 0x1F, {KVM_OP_NOP, 0, 0, O_RM, 0, T_MODRM | T_NOACC}},
     {0x28, 0x29, {KVM_OP_MOV, 0, 0, 0, 0, T_MODRM | T_MOV | T_SSE}},
     {0x2B, 0x2B, {KVM_OP_MOV, 0, 0, 0, 0, T_MODRM | T_MOV | T_SSE}},
     {0x34, 0x34, {KVM_OP_SYSENTER, 0, 0, 0, 0, 0}},
@@ -735,6 +736,11 @@ static int member(const struct dec *d, struct opc *e)
             return -1;
         }
         m = &rdpid;
+    }
+    /* Group 15's /7 is CLFLUSH, or CLFLUSHOPT under 0x66; Linux's
+     * pfx_0f_ae_7 refuses it under 0xF2 or 0xF3. */
+    if (g == G15 && d->regf == 7 && d->rep) {
+        return -1;
     }
     if (m->op == 0 && !(m->flags & T_UD)) {
         return -1;
