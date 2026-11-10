@@ -165,8 +165,9 @@ struct input_absinfo {
 
 /**
  * Register an input device and give it the lowest free node. `name` is the
- * text EVIOCGNAME gives, such as "AT Translated Set 2 keyboard", kept by
- * its pointer; `bustype`, `vendor` and `product` are what EVIOCGID gives;
+ * text EVIOCGNAME gives, such as "AT Translated Set 2 keyboard", copied
+ * and cut to EVDEV_NAME_MAX bytes, so that the caller may free it;
+ * `bustype`, `vendor` and `product` are what EVIOCGID gives;
  * `keys`, of EVDEV_KEY_BYTES bytes, has a bit set for each key code the
  * device can report, and is copied. Any context: the devices are a static
  * table, under a spinlock taken with interrupts off. Returns the device, or
@@ -177,11 +178,17 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
 
 /**
  * Give `dev` the text EVIOCGPHYS gives, such as "isa0060/serio0/input0",
- * kept by its pointer, and `flags`, EVDEV_SCAN and EVDEV_KEYBOARD, the
- * event types beyond EV_KEY that EVIOCGBIT says it reports. Called once,
- * after `evdev_register`. A NULL `dev` is ignored.
+ * copied and cut to EVDEV_TEXT_MAX bytes, and `flags`, EVDEV_SCAN and
+ * EVDEV_KEYBOARD, the event types beyond EV_KEY that EVIOCGBIT says it
+ * reports. Called once, after `evdev_register`. A NULL `dev` is ignored.
  */
 void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags);
+
+/** Give `dev` the serial EVIOCGUNIQ, its `uniq` file and its uevent's
+ * UNIQ give, copied and cut to EVDEV_TEXT_MAX bytes; "" is a serial too,
+ * as Linux's USB HID gives a device without one. Until it is given,
+ * EVIOCGUNIQ answers -ENOENT. A NULL `dev` is ignored. */
+void evdev_set_uniq(struct evdev *dev, const char *uniq);
 
 /** Give `dev` the version EVIOCGID gives, 0 until set. A NULL `dev` is
  * ignored. */
@@ -429,9 +436,11 @@ void evdev_close(fd_entry_t *e);
  * the table after each change and brings /sys in line with it.
  */
 
-/* The bytes of a description's texts, with the NUL, and of a set of bits
- * of `n` codes in whole 64-bit words, which EVIOCGBIT's longs fit on both
- * ABIs. */
+/* The bytes of a device's name and of its other texts, with the NUL, the
+ * name's as long as a USB HID device's (HID_NAME_MAX), and of a set of
+ * bits of `n` codes in whole 64-bit words, which EVIOCGBIT's longs fit on
+ * both ABIs. */
+#define EVDEV_NAME_MAX      128
 #define EVDEV_TEXT_MAX      64
 #define EVDEV_BITS_BYTES(n) ((((n) + 63) / 64) * 8)
 
@@ -440,8 +449,10 @@ void evdev_close(fd_entry_t *e);
  * and those EVIOCGPROP gives. */
 struct evdev_desc {
     uint32_t gen; /* the registration's number, new at each `evdev_register` */
-    char name[EVDEV_TEXT_MAX];
+    char name[EVDEV_NAME_MAX];
     char phys[EVDEV_TEXT_MAX]; /* "" for none */
+    char uniq[EVDEV_TEXT_MAX]; /* "" for none or an empty serial */
+    int has_uniq;              /* a serial, perhaps empty, was given */
     uint16_t id[4];            /* bustype, vendor, product, version */
     uint8_t ev[EVDEV_BITS_BYTES(EV_CNT)];
     uint8_t key[EVDEV_KEY_BYTES];
