@@ -17,10 +17,14 @@
  * Before the knocks the bring-up asks for a Synaptics touchpad, as Linux's
  * psmouse does: one that answers speaks its own absolute protocol from then
  * on, and synaptics.c takes its bytes; one whose setup fails is set back to
- * relative mode and goes on as a mouse named a Synaptics TouchPad.
+ * relative mode and goes on as a mouse named a Synaptics TouchPad. When no
+ * Synaptics pad answers, the protocol's probe asks for an Elantech pad, as
+ * psmouse does after its other touchpads, and elantech.c takes the bytes of
+ * one that comes up, or it goes on as a mouse named an Elantech Touchpad.
  */
 #include "i8042.h"
 #include "portio.h"
+#include "elantech.h"
 #include "ps2mouse.h"
 #include "synaptics.h"
 #include "../arch.h"
@@ -77,8 +81,10 @@ static int packet_size = 3;
 static int protocol = PROTO_PS2;
 static struct evdev *mouse_dev;
 
-/* What `synaptics_init` found: 1 a touchpad in absolute mode, whose bytes
- * synaptics.c takes, 0 no touchpad, -1 a touchpad set up as a mouse. */
+/* What `synaptics_init` and `elantech_init` found: 1 a Synaptics and 2 an
+ * Elantech touchpad in absolute mode, whose bytes their drivers take, 0 no
+ * touchpad, -1 a Synaptics and -2 an Elantech touchpad set up as a mouse. */
+#define TOUCHPAD_ELANTECH 2
 static int touchpad;
 
 /* The side and extra buttons held, MOUSE_BUTTON_*: an Explorer's packet
@@ -228,7 +234,9 @@ static void mouse_set(uint8_t cmd, uint8_t arg)
 
 /**
  * Find the protocol the mouse speaks, as Linux's psmouse does, and set it as
- * Linux sets it: the IntelliMouse's knock, rates 200, 100 and 80, then the
+ * Linux sets it: when no Synaptics pad answered, an Elantech touchpad
+ * (`elantech_init`), which speaks its own protocol once it is set up; then
+ * the IntelliMouse's knock, rates 200, 100 and 80, then the
  * Explorer's, 200, 200 and 80, with the rates 200, 80 and 40 that turn on an
  * Explorer 4.0's horizontal wheel; then 100 samples a second, 8 counts a
  * millimetre and 1:1 scaling. A mouse that answers neither knock is a plain
@@ -243,6 +251,16 @@ static void detect_protocol(void)
 
     protocol = PROTO_PS2;
     packet_size = 3;
+    if (touchpad == 0) {
+        i = elantech_init();
+        if (i > 0) {
+            touchpad = TOUCHPAD_ELANTECH;
+            return;
+        }
+        if (i < 0) {
+            touchpad = -TOUCHPAD_ELANTECH;
+        }
+    }
     if (knock(imps) == ID_IMPS) {
         protocol = PROTO_IMPS;
         packet_size = 4;
@@ -260,21 +278,26 @@ static void detect_protocol(void)
 
 /** Register the event device of the mouse, with Linux's name, numbers and
  * capabilities for its protocol: the protocol's name, then the vendor and
- * the device, "Synaptics TouchPad" for a touchpad that answered the
- * Synaptics knock. */
+ * the device, "Synaptics TouchPad" or "Elantech Touchpad" for a touchpad
+ * that answered its vendor's knock and was not set up. */
 static void register_mouse(void)
 {
-    const char *name = touchpad ? "PS/2 Synaptics TouchPad" : "PS/2 Generic Mouse";
+    static const char *const names[3][3] = {
+        {"PS/2 Generic Mouse", "ImPS/2 Generic Wheel Mouse", "ImExPS/2 Generic Explorer Mouse"},
+        {"PS/2 Synaptics TouchPad", "ImPS/2 Synaptics TouchPad", "ImExPS/2 Synaptics TouchPad"},
+        {"PS/2 Elantech Touchpad", "ImPS/2 Elantech Touchpad", "ImExPS/2 Elantech Touchpad"}};
+    const char *const *name = names[-touchpad];
     unsigned int caps = MOUSE_POINTER;
+    int kind = 0;
 
     if (protocol == PROTO_IMPS) {
-        name = touchpad ? "ImPS/2 Synaptics TouchPad" : "ImPS/2 Generic Wheel Mouse";
+        kind = 1;
         caps |= MOUSE_WHEEL;
     } else if (protocol == PROTO_IMEX) {
-        name = touchpad ? "ImExPS/2 Synaptics TouchPad" : "ImExPS/2 Generic Explorer Mouse";
+        kind = 2;
         caps |= MOUSE_WHEEL | MOUSE_HWHEEL | MOUSE_SIDE;
     }
-    mouse_dev = mouse_register(name, "isa0060/serio1/input0", EVDEV_BUS_I8042, 0x0002,
+    mouse_dev = mouse_register(name[kind], "isa0060/serio1/input0", EVDEV_BUS_I8042, 0x0002,
                                (uint16_t)protocol, caps);
 }
 
@@ -356,6 +379,10 @@ static void mouse_irq_handler(isr_params_t *params)
         return;
     }
     data = inb(PS2_DATA_PORT);
+    if (touchpad == TOUCHPAD_ELANTECH) {
+        elantech_byte(data);
+        return;
+    }
     if (touchpad > 0) {
         synaptics_byte(data);
         return;
@@ -452,6 +479,8 @@ int init_mouse(void)
     touchpad = synaptics_init();
     if (touchpad <= 0) {
         detect_protocol();
+    }
+    if (touchpad <= 0) {
         register_mouse();
     }
 

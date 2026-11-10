@@ -7,7 +7,8 @@
  * The PS/2 mouse, on the 8042's auxiliary port: IRQ 12, movement packets of
  * three bytes, or four with a wheel, which it reports through its event
  * device and the mouse queue (../../mouse.h), or a Synaptics touchpad's
- * packets, which synaptics.h reads.
+ * packets, which synaptics.h reads, or an Elantech touchpad's, which
+ * elantech.h reads.
  */
 
 /**
