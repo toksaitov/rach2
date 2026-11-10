@@ -222,9 +222,32 @@ An object of
 .Fa size
 bytes rounded up to a page, and its handle.
 .Er EINVAL
-for 0 and
+for 0 or a size that rounds up past 2^64, and
 .Er E2BIG
 past what an object holds.
+.It Dv DRM_IOCTL_I915_GEM_CREATE_EXT
+The object of GEM_CREATE, after the chain of extensions at
+.Fa extensions .
+.Dv I915_GEM_CREATE_EXT_MEMORY_REGIONS
+names the regions it may be placed in, of which there is one, system
+memory, class
+.Dv I915_MEMORY_CLASS_SYSTEM
+instance 0.
+.Dv I915_GEM_CREATE_EXT_PROTECTED_CONTENT
+and
+.Dv I915_GEM_CREATE_EXT_SET_PAT
+fail with
+.Er ENODEV .
+.Er EINVAL
+for a flag, since
+.Dv I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS
+needs a second region; for an unknown extension, or one whose flags or
+reserved words are not 0; and for a region list that is empty, longer than
+seven, names a region twice or one the device lacks, or comes twice;
+.Er E2BIG
+past 512 extensions;
+.Er EFAULT
+for an address that cannot be read; then GEM_CREATE's errors.
 .It Dv DRM_IOCTL_I915_GEM_PREAD , DRM_IOCTL_I915_GEM_PWRITE
 Copy bytes out of the object or into it, after its work is done.
 PREAD reads through the processor's view; PWRITE writes through the
@@ -313,6 +336,13 @@ Whether engines still read or write the object, and a wait for them of
 for ever when it is negative, with the time left written back;
 .Er ETIME
 when the object is still busy at the timeout.
+.It Dv DRM_IOCTL_I915_GEM_THROTTLE
+Wait for the caller's requests that were submitted more than 20 ms ago,
+so that a client keeps at most 20 ms of work queued.
+.Er EIO
+when the GPU is wedged,
+.Er EINTR
+when a signal comes.
 .It Dv DRM_IOCTL_I915_GEM_GET_APERTURE
 The global GTT's size in
 .Fa aper_size ,
@@ -349,6 +379,9 @@ copy-on-write break; its next use pins them again, or fails with
 .Er EFAULT
 once they are unmapped.
 Only the address space that made it may pin them.
+A range that starts below the caller's memory, at 0 among others, makes an
+object, as on Linux, whose first use fails with
+.Er EFAULT .
 .Dv I915_USERPTR_PROBE
 asks that the whole range be memory with pages now.
 PREAD and PWRITE fail on it with
@@ -365,7 +398,7 @@ for an unknown flag, no bytes, or a pointer or size not of whole pages;
 .Er E2BIG
 for a size past what an object holds;
 .Er EFAULT
-for a range outside the caller's memory, or with PROBE not wholly in
+for a range that ends past user space, or with PROBE one not wholly in
 memory with pages;
 .Er ENODEV
 for
@@ -381,10 +414,14 @@ rows, and gives it one of the 32 fence registers, the least recently used
 that no fault holds.
 A binding that finds no room in the aperture or the GTT takes the place of
 idle bindings, the least recently used first; one whose object the GPU
-still uses stays.
+still uses stays, and the fault waits for the GPU to finish with it until
+a signal comes.
+The fault never waits for a binding the GPU uses above the aperture: it
+binds a view of the whole object beside it.
 A map whose binding or fence is taken away faults again on its next
-touch; one that finds no room or no fence raises
-.Dv SIGBUS .
+touch; one that finds no room or no fence yet, or whose wait a signal
+ends, returns to the program, which handles the signal and touches the
+page again, as on Linux.
 An allocation of an object's pages that finds no memory fails with
 .Er ENOMEM .
 .Pp
@@ -847,6 +884,17 @@ lists them.
 The fault file of a device bound to the fake chip.
 .El
 .Ss The card in /sys
+While the card is registered its PCI function is shown bound to
+.Ql i915 :
+its
+.Pa driver
+link names
+.Pa /sys/bus/pci/drivers/i915
+and its uevent begins with
+.Ql DRIVER=i915 ,
+as
+.Xr sysfs 5
+gives them.
 The card's directory,
 .Pa /sys/class/drm/cardN ,
 holds Linux's files of the GT's frequency, each a decimal number of MHz
