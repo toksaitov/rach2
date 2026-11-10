@@ -131,6 +131,7 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_IMMEDIATE_EXIT:
     case KVM_CAP_ENABLE_CAP:
     case KVM_CAP_ENABLE_CAP_VM:
+    case KVM_CAP_DEVICE_CTRL:
     case KVM_CAP_CHECK_EXTENSION_VM:
     case KVM_CAP_GET_MSR_FEATURES:
     case KVM_CAP_SET_BOOT_CPU_ID:
@@ -444,6 +445,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return -EIO;
     }
     switch (request) {
+    case KVM_CREATE_DEVICE:
+        return kvm_vfio_create(vm, arg);
     case KVM_CREATE_VCPU:
         return kvm_vcpu_create(vm, (uint32_t)arg == arg ? (uint32_t)arg : KVM_MAX_VCPU_IDS);
     case KVM_CHECK_EXTENSION:

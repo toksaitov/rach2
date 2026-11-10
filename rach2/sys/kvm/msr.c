@@ -34,6 +34,8 @@
 #define MSR_SYSCALL_MASK       0xC0000084u
 #define MSR_KERNEL_GS_BASE     0xC0000102u
 #define MSR_TSC_AUX            0xC0000103u
+#define MSR_AMD64_SYSCFG       0xC0010010u
+#define MSR_AMD64_NB_CFG       0xC001001Fu
 
 /* The variable-range MTRRs a guest has, and MTRRcap's value: WC and the
  * fixed ranges with that count, as Linux's KVM_NR_VAR_MTRR gives. */
@@ -244,6 +246,10 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
         return r;
     }
     switch (index) {
+    case MSR_AMD64_SYSCFG:
+    case MSR_AMD64_NB_CFG:
+        *value = 0;
+        return 0;
     case MSR_IA32_TSC:
         *value = arch_cycles() + (uint64_t)v->tsc_offset;
         return 0;
@@ -332,6 +338,8 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
         return slot;
     }
     switch (index) {
+    case MSR_AMD64_NB_CFG:
+        return 0;
     case MSR_IA32_TSC:
         v->tsc_offset = (int64_t)(value - arch_cycles());
         v->dirty |= KVM_PART_TSC;

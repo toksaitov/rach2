@@ -55,6 +55,14 @@ extern void *malloc(unsigned long n);
 extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
 
+/** The device bridge is exercised by kvm_vfio_hosttest. */
+int32_t kvm_vfio_create(struct kvm_vm *vm, uintptr_t arg)
+{
+    (void)vm;
+    (void)arg;
+    return -ENODEV;
+}
+
 static int failures;
 
 /** Count and print a failure when `condition` is false. */

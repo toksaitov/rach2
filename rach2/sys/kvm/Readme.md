@@ -7,6 +7,7 @@ The `kvm/` directory is the kernel's side of Linux's KVM API, version 12, on the
 * `/dev/kvm`, character device 10:232, mode 0666, registered by `kvm_start` (`kernel.c`) when a backend's `probe` succeeds, VMX tried first; the boot logs `kvm: ready: vmx` or `kvm: ready: svm`. Without either there is no node, as Linux loads no KVM module.
 * The ioctls of `/dev/kvm`, of a VM and of a vCPU, numbered and laid out as Linux's (`kvm_abi.h`). An ioctl a level does not have is `ENOTTY` on `/dev/kvm` and a VM, and `EINVAL` on a vCPU, as on Linux. The VM and vCPU descriptors are `anon_inode:kvm-vm` and `anon_inode:kvm-vcpu:N`, read-write and close-on-exec.
 * A vCPU's mapping: KVM_GET_VCPU_MMAP_SIZE is two pages, the `struct kvm_run` page and the page port I/O data goes through (`KVM_PIO_PAGE_OFFSET` 1). A shared mapping maps both pages cached, and a fork's child shares it; a private one copies each page at its first touch, as a private mapping of a file does here ([memory](../mm/Readme.md)). Either holds a reference to the VM, so the pages outlive the descriptors.
+* KVM_CREATE_DEVICE and the VFIO bridge's attributes, described under [VFIO assignment](#vfio-assignment).
 * A VM belongs to the address space that made it: an ioctl of the VM or of its vCPUs from another, a fork's child's, is `EIO`, as Linux's `kvm->mm` check makes it.
 * An ioctl of KVM's type, 0xAE, that ends with `EINTR` is never restarted, whether or not a handler runs, since Linux gives KVM_RUN's `EINTR` to the caller as it is (`ioctl_restartable` in `syscall.c`, [signals](../proc/signal.Readme.md)).
 * KVM_SET_USER_MEMORY_REGION, KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG on a VM, and KVM_ENABLE_CAP of KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, with Linux's checks and errors.
@@ -36,6 +37,7 @@ Rach2's own. The structures and numbers of `kvm_abi.h` follow Linux's `include/u
 | `dirty.c` | KVM_GET_DIRTY_LOG, KVM_CLEAR_DIRTY_LOG and manual protection |
 | `vlapic.c` | the local APIC: its registers through MMIO and the x2APIC MSRs, its timer, delivery, INIT and SIPI, the halted vCPU's wait |
 | `irq.c` | the split controller, the MSI routes, KVM_IRQ_LINE, KVM_SIGNAL_MSI, irqfds and the EOI exit |
+| `vfio.c` | the VFIO device bridge, assigned-file references and DMA cache policy |
 | `iobus.c` | the ioeventfds' buses of ports and MMIO addresses |
 | `hyperv.c` | Hyper-V's enlightenments: the CPUID leaves, the MSRs, the reference TSC page, SynIC and the synthetic timers, the hypercalls, KVM_HYPERV_EVENTFD |
 | `decode.h`, `decode.c` | the decoder of the guest instructions that reach an MMIO exit, and the internal error for one it does not know |
@@ -115,6 +117,12 @@ An irqfd (KVM_IRQFD) is a hook on an eventfd ([io](../io/Readme.md)) that raises
 
 `iobus.c` keeps the ioeventfds (KVM_IOEVENTFD) on Linux's buses, ports, MMIO addresses and s390's notifications, at most 1000 on each: a guest's write at an ioeventfd's address, of its length, or of any length for length 0, and of its value when it has a data match, signals its eventfd and enters the guest again without an exit. A string OUT signals once for each element. Two ioeventfds that some write would both match are `EEXIST`, as in Linux's `ioeventfd_check_collision`. A write that the bus does not take goes to the caller, and a read is never the bus's.
 
+### VFIO assignment
+
+KVM_CAP_DEVICE_CTRL offers KVM_CREATE_DEVICE for KVM_DEV_TYPE_VFIO, one bridge per VM. Its descriptor holds a VM reference. KVM_SET_DEVICE_ATTR of KVM_DEV_VFIO_FILE adds or removes a VFIO group or device descriptor by its open file description, so aliases cannot add the same file twice. The bridge holds each file until removal or its own last close. KVM_HAS_DEVICE_ATTR reports the ADD and DEL attributes; GET is `EPERM`, since neither has a readable value. Every device ioctl requires the VM's address space, as its VM and vCPU ioctls do.
+
+VFIO does not enforce DMA cache coherence, so the first file added calls `kvm_tdp_noncoherent` to drop the existing translations and make new ones observe the guest PAT; the last removal or close releases the files before restoring the ordinary policy. Attribute changes are serialized across a file release that sleeps. The bridge follows Linux's `virt/kvm/vfio.c`.
+
 ### Hyper-V
 
 `hyperv.c` follows Linux's `hyperv.c` and the TLFS. A vCPU has Hyper-V once KVM_SET_CPUID2 gives leaf 0x40000001 the interface "Hv#1"; the leaves the caller takes from KVM_GET_SUPPORTED_HV_CPUID are Linux's ten, with no enlightened VMCS and no direct timers or cluster IPI without the APIC in the kernel. The VM's share, the partition-wide MSRs, and each vCPU's, made at its first need, hang off the records' `hv`. A guest's RDMSR or WRMSR of Hyper-V's range reaches `kvm_hv_msr` through `emulate.c`, #GP without Hyper-V in its CPUID or, under KVM_CAP_HYPERV_ENFORCE_CPUID, for an MSR or hypercall the CPUID does not offer; the caller's KVM_GET_MSRS and KVM_SET_MSRS reach it through `msr.c`, held to neither, and the index list names Linux's 28 MSRs of it. A write of the hypercall MSR, once the guest has written its id, puts VMCALL, or VMMCALL on SVM, and RET in the page it names.
@@ -138,6 +146,8 @@ The run loop lets go of the big lock only inside `enter`, with interrupts off an
 
 The registers, special registers, XSAVE image, XCR0, events, debug registers, MP state, CPUID, MSRs, TSC offset and machine-check banks live in the vCPU's record; `dirty` names the parts a set changed, for the backend to load before the next entry, and `save` brings the backend's copy back before a get. The checks follow Linux's: KVM_SET_SREGS refuses EFER, CR0 and CR4 that the processor would and bits the guest's CPUID does not offer; KVM_SET_XSAVE refuses components past the guest's XCR0, a reserved MXCSR bit and a compacted image; KVM_SET_CPUID2 after the first KVM_RUN accepts only the same table; KVM_SET_MSRS stops at the first MSR it refuses and returns the count before it. A new vCPU has the power-on state Linux gives one, at the reset vector with the boot processor's APIC base.
 
+AMD's SYSCFG and NB_CFG MSRs read as zero, and NB_CFG writes are ignored, as Linux's `kvm_get_msr_common` and `kvm_set_msr_common` specify for the guest's northbridge probes. SYSCFG writes remain refused.
+
 ## Limits
 
 * At most 64 vCPUs in a VM, with ids below 256; 256 memory slots, in address space 0 alone, with no KVM_SET_USER_MEMORY_REGION2 and no guest_memfd; 256 entries for KVM_SET_CPUID2 and KVM_GET_CPUID2, and fewer than 256 MSRs at once for KVM_GET_MSRS and KVM_SET_MSRS, as Linux's bounds.
@@ -151,6 +161,8 @@ The registers, special registers, XSAVE image, XCR0, events, debug registers, MP
 * Each entry turns VMX on and loads the VMCS anew, where Linux keeps VMX on and the VMCS current on a processor between runs.
 
 ## Tests
+
+* `tests/host/kvm_vfio_hosttest.c` includes `vfio.c` over modeled file descriptions and a VM: creation and copy-back failure, one bridge per VM, attribute errors and the caller check, duplicate descriptors, file references surviving close, serialization of mutations, DMA cache policy transitions and every allocation and reference returned.
 
 * `tests/host/kvm_hosttest.c` includes `kvm.c` and `vcpu.c` and links `cpuid.c`, `msr.c` and `hyperv.c` over a model of the Lenovo's Haswell and a fake backend: the structures' sizes and the ioctl and capability numbers against Linux's; QEMU 10's start-up in the order of its sources, to KVM_RUN and the backend's refusal; each exit kind through the run page, with port and MMIO answers, immediate_exit, a signal, a kick and a triple fault; the big lock let go and interrupts off for the entry; the state ioctls' refusals; the shared and private mappings; `EIO` from another address space; and every allocation given back.
 * `tests/host/kvm_vmx_hosttest.c` includes `vmx.c` and links the run loop, `emulate.c` and the decoder over a model of the Lenovo's Haswell, whose capability MSRs are the machine's and whose VMX instructions fail as the SDM says and check each entry as the processor does: the probe's refusals; VMXON, VMLAUNCH, VMCLEAR and VMXOFF around each run, with VMX off and CR4 back after every exit and every failure; port, MMIO, CPUID, control and debug register, MSR and instruction exits, VMCALL among them, KVM's and Hyper-V's; EPT faults and the memory types; real mode, PAE and long mode with a RIP above 4 GiB; task switches from each source to 32-bit, 16-bit and virtual-8086 tasks, and their faults; injection, the windows and an event the exit found under delivery; the host's NMI, machine check and interrupt; the caller's single steps, breakpoints and BLOCKIRQ; VPIDs given and taken back; and a panic inside a run.

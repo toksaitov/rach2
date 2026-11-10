@@ -44,6 +44,11 @@ static int64_t device_llseek(fd_entry_t *e, int64_t offset, int whence);
 static const struct file_ops device_ops = {device_read,  device_write, NULL,         device_ioctl,
                                            device_close, device_mmap,  device_llseek};
 
+int vfio_device_file_is_valid(const struct fd_entry *e)
+{
+    return e && e->type == FD_TYPE_ANON && e->ops == &device_ops && e->priv;
+}
+
 /** Take a reference to `d`, which holds its group. */
 static void device_get(struct vfio_device *d)
 {

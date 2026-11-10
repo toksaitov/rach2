@@ -387,6 +387,48 @@ takes.
 .It Pa /dev/kvm
 the interface
 .El
+.Ss VFIO assignment
+.Dv KVM_CAP_DEVICE_CTRL
+reports the device-control API.
+.Dv KVM_CREATE_DEVICE
+accepts
+.Dv KVM_DEV_TYPE_VFIO
+and returns a close-on-exec descriptor in the request's
+.Va fd
+member.
+Only one such bridge exists per VM; another creation is
+.Er EBUSY .
+.Dv KVM_CREATE_DEVICE_TEST
+checks the type without creating it.
+.Pp
+.Dv KVM_SET_DEVICE_ATTR
+of group
+.Dv KVM_DEV_VFIO_FILE
+accepts
+.Dv KVM_DEV_VFIO_FILE_ADD
+and
+.Dv KVM_DEV_VFIO_FILE_DEL ,
+with
+.Va addr
+pointing to a signed 32-bit VFIO group or device descriptor.
+ADD holds the open file description; adding an alias of a held file is
+.Er EEXIST .
+DEL releases that reference, or returns
+.Er ENOENT
+if the file is absent.
+The bridge's last close releases every remaining file and its VM reference.
+While files are assigned, KVM applies the guest PAT to RAM translations
+because VFIO does not enforce DMA cache coherence.
+.Pp
+.Dv KVM_HAS_DEVICE_ATTR
+reports these two attributes.
+An unknown attribute is
+.Er ENXIO ;
+.Dv KVM_GET_DEVICE_ATTR
+is
+.Er EPERM .
+Device ioctls from another address space are
+.Er EIO .
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er ENOTTY
