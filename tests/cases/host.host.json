@@ -501,6 +501,21 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "futex_pi",
+          "checks": "tests/host/futex_pi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "futex_pi64",
+          "checks": "tests/host/futex_pi64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "sched_pi",
+          "checks": "tests/host/sched_pi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "gpt",
           "checks": "tests/host/gpt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

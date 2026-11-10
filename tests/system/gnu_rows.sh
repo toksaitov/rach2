@@ -1353,6 +1353,13 @@ row_ntpd() {
     same "the daemon started again" "$(pgrep -fc '^ntpd -n$')" "1"
 }
 
+# Compile the same PI mutex probe against the GNU root's own libc.
+row_pi_futex() {
+    runs "compile PI futex probe" cc -pthread -DPI_NO_REPORT "$STAGE/pi-futex.c" -o "$WORK/pi-futex"
+    output "PI futex probe" "$WORK/pi-futex"
+    has "PI futex result" "$OUT" "PIFUTEXMUSL OK"
+}
+
 if ! declare -F "row_$ROW" > /dev/null; then
     echo "GNUROW FAIL $ROW: no such row"
     exit 2

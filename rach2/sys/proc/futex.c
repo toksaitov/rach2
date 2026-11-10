@@ -6,6 +6,8 @@
 
 #include "ns.h"
 #include "process.h"
+#include "sched.h"
+#include "../lib/kstring.h"
 #include "wait_queue.h"
 #include "../mm/mm.h"
 #include "../mm/kheap.h"
@@ -22,13 +24,19 @@
 
 /* The operations of futex(2) and its flags, Linux's values; FUTEX_MATCH_ANY
  * is the bitset of a plain wait or wake, which meets every other. */
-#define FUTEX_WAIT           0
-#define FUTEX_WAKE           1
-#define FUTEX_WAIT_BITSET    9
-#define FUTEX_WAKE_BITSET    10
-#define FUTEX_PRIVATE_FLAG   128
-#define FUTEX_CLOCK_REALTIME 256
-#define FUTEX_MATCH_ANY      0xFFFFFFFFu
+#define FUTEX_WAIT            0
+#define FUTEX_WAKE            1
+#define FUTEX_LOCK_PI         6
+#define FUTEX_UNLOCK_PI       7
+#define FUTEX_TRYLOCK_PI      8
+#define FUTEX_WAIT_REQUEUE_PI 11
+#define FUTEX_CMP_REQUEUE_PI  12
+#define FUTEX_LOCK_PI2        13
+#define FUTEX_WAIT_BITSET     9
+#define FUTEX_WAKE_BITSET     10
+#define FUTEX_PRIVATE_FLAG    128
+#define FUTEX_CLOCK_REALTIME  256
+#define FUTEX_MATCH_ANY       0xFFFFFFFFu
 
 /* futex_waitv's flags for each futex, Linux's FUTEX2_ values: the word's
  * size, of which only 32 bits is taken, and FUTEX2_PRIVATE, which is
@@ -101,6 +109,12 @@ struct futex_q {
     int woken;         /* a wake marked it and took it off its list */
     struct futex_sleeper *s;
     struct futex_q *next;
+    struct futex_pi *pi; /* reference held until this wait returns */
+    process_t *task;
+    int requeue; /* WAIT_REQUEUE_PI, including before transfer to the mutex */
+    const void *target_space;
+    uintptr_t target_key; /* the requeue destination expected by the waiter */
+    uint32_t owner_tid;   /* an exiting owner, in the caller's PID namespace */
 };
 
 /* One futex of a wait, as the caller named it, and its waiter. */
@@ -313,6 +327,8 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
             return rc;
         }
         futex_key(v[i].addr, v[i].shared, &q->space, &q->uaddr);
+        q->pi = NULL;
+        q->requeue = 0;
         q->woken = 0;
         q->s = s;
         bucket = futex_bucket(q->space, q->uaddr);
@@ -425,6 +441,10 @@ static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op
         struct futex_q *q = *pp;
 
         if (q->space == space && q->uaddr == uaddr && (q->bitset & bitset) != 0) {
+            if (q->pi) {
+                kirq_restore(flags);
+                return -EINVAL;
+            }
             q->woken = 1;
             q->s->woken = 1;
             *pp = q->next;
@@ -436,6 +456,613 @@ static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op
     }
     kirq_restore(flags);
     return woken;
+}
+
+/* PI state exists only while a waiter holds a reference to it. The big
+ * lock and masked interrupts serialize its owner and the bucket links. */
+struct futex_pi {
+    const void *space;
+    uintptr_t key;
+    process_t *owner;
+    unsigned int refs;
+    int died; /* the exiting owner could not update a waiter's mapping */
+    struct futex_pi *next;
+};
+static struct futex_pi *pi_states;
+static wait_queue_t pi_exit_queue;
+
+/** Find the PI state of a resident futex key, with interrupts masked. */
+static struct futex_pi *pi_find(const void *space, uintptr_t key)
+{
+    struct futex_pi *pi;
+
+    for (pi = pi_states; pi; pi = pi->next) {
+        if (pi->space == space && pi->key == key) {
+            return pi;
+        }
+    }
+    return NULL;
+}
+
+/** Append a waiter to its bucket, keeping equal-priority waiters FIFO. */
+static void futex_enqueue(struct futex_q *q)
+{
+    struct futex_q **pp = &_waiters[futex_bucket(q->space, q->uaddr)];
+
+    while (*pp) {
+        pp = &(*pp)->next;
+    }
+    q->next = NULL;
+    *pp = q;
+}
+
+/** Find the oldest highest-priority waiter of pi, with interrupts masked. */
+static struct futex_q *pi_top(struct futex_pi *pi)
+{
+    struct futex_q *q, *best = NULL;
+
+    for (q = _waiters[futex_bucket(pi->space, pi->key)]; q; q = q->next) {
+        if (q->pi == pi && (!best || sched_priority(q->task) > sched_priority(best->task))) {
+            best = q;
+        }
+    }
+    return best;
+}
+
+/** Rebuild donations along every blocked-owner chain, without recursion.
+ * Removing all donations first also removes a timed-out waiter's boost. */
+void futex_pi_recalculate(void)
+{
+    struct futex_pi *pi;
+    struct futex_q *q;
+    uint32_t flags = kirq_save();
+    int changed;
+
+    for (pi = pi_states; pi; pi = pi->next) {
+        if (pi->owner) {
+            pi->owner->pi_priority = 0;
+        }
+    }
+    do {
+        changed = 0;
+        for (pi = pi_states; pi; pi = pi->next) {
+            if (!pi->owner) {
+                continue;
+            }
+            q = pi_top(pi);
+            if (q && sched_priority(q->task) > pi->owner->pi_priority) {
+                pi->owner->pi_priority = (uint8_t)sched_priority(q->task);
+                changed = 1;
+            }
+        }
+    } while (changed);
+    for (pi = pi_states; pi; pi = pi->next) {
+        if (pi->owner) {
+            sched_priority_changed(pi->owner);
+        }
+    }
+    kirq_restore(flags);
+}
+
+/** Drop a waiter's reference; no state or owner pointer survives its last
+ * waiter. The owner can then unlock its word entirely in user space. */
+static void pi_put(struct futex_pi *pi)
+{
+    struct futex_pi **pp;
+    process_t *owner;
+
+    if (!pi || --pi->refs != 0) {
+        return;
+    }
+    owner = pi->owner;
+    for (pp = &pi_states; *pp != pi; pp = &(*pp)->next) {
+    }
+    *pp = pi->next;
+    kfree(pi);
+    if (owner) {
+        owner->pi_priority = 0;
+        sched_priority_changed(owner);
+    }
+    futex_pi_recalculate();
+}
+
+/** Whether making task wait on owner would close a blocked-owner cycle.
+ * Existing chains are acyclic, since each new edge passes this check. */
+static int pi_deadlock(process_t *task, process_t *owner)
+{
+    while (owner) {
+        if (owner == task) {
+            return 1;
+        }
+        owner = owner->pi_blocked ? owner->pi_blocked->owner : NULL;
+    }
+    return 0;
+}
+
+/** Reject an ordinary wait mixed with PI ownership at the same key. */
+static int pi_mixed(const void *space, uintptr_t key)
+{
+    struct futex_q *q;
+
+    for (q = _waiters[futex_bucket(space, key)]; q; q = q->next) {
+        if (q->space == space && q->uaddr == key && !q->pi) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Whether the user word agrees with kernel ownership, including the
+ * zero-TID OWNER_DIED interval before a new owner repairs the word. */
+static int pi_owner_matches(const struct futex_pi *pi, uint32_t word)
+{
+    return pi->owner && ((word & FUTEX_TID_MASK) == pid_seen_by(current_proc, pi->owner->pid) ||
+                         ((word & FUTEX_TID_MASK) == 0 && (word & FUTEX_OWNER_DIED)));
+}
+
+/** Attach q to a PI owner, or acquire a free word for q's task.
+ * The word is resident and writable, interrupts are masked, and spare is
+ * preallocated. Returns 1 for acquisition, 0 for an attached waiter, or a
+ * negative Linux error. A failed atomic exchange asks the caller to retry. */
+static int pi_attach(uintptr_t addr, struct futex_q *q, struct futex_pi **spare, int trylock,
+                     int force)
+{
+    const void *space = q->target_space;
+    uintptr_t key = q->target_key;
+    struct futex_pi *pi = pi_find(space, key);
+    process_t *owner;
+    uint32_t word, seen, tid = pid_seen_by(current_proc, q->task->pid);
+    int rc;
+
+    if (get_user_u32(&word, addr) != 0) {
+        return -EFAULT;
+    }
+    if ((word & FUTEX_TID_MASK) == tid) {
+        return -EDEADLK;
+    }
+    if (pi_mixed(space, key)) {
+        return -EINVAL;
+    }
+    if (pi) {
+        if (!pi_owner_matches(pi, word)) {
+            return -EINVAL;
+        }
+        owner = pi->owner;
+    } else if ((word & FUTEX_TID_MASK) == 0) {
+        rc = cmpxchg_user_u32(addr, word,
+                              tid | (word & FUTEX_OWNER_DIED) | (force ? FUTEX_WAITERS : 0), &seen);
+        if (rc != 0 || seen != word) {
+            return rc != 0 ? -EFAULT : -EAGAIN;
+        }
+        return 1;
+    } else {
+        rc = cmpxchg_user_u32(addr, word, word | FUTEX_WAITERS, &seen);
+        if (rc != 0 || seen != word) {
+            return rc != 0 ? -EFAULT : -EAGAIN;
+        }
+        owner = proc_named(word & FUTEX_TID_MASK);
+        if (!owner || owner->state == PROC_ZOMBIE || owner->state == PROC_UNUSED) {
+            return -ESRCH;
+        }
+        if (owner->futex_exit_state) {
+            q->owner_tid = word & FUTEX_TID_MASK;
+            return owner->futex_exit_state == 1 ? -EBUSY : -ESRCH;
+        }
+        if (!owner->mm) {
+            return -EPERM;
+        }
+    }
+    if (trylock) {
+        return -EAGAIN;
+    }
+    if (pi_deadlock(q->task, owner)) {
+        return -EDEADLK;
+    }
+    if (!pi) {
+        pi = *spare;
+        *spare = NULL;
+        pi->space = space;
+        pi->key = key;
+        pi->owner = owner;
+        pi->refs = 0;
+        pi->died = 0;
+        pi->next = pi_states;
+        pi_states = pi;
+    }
+    pi->refs++;
+    q->pi = pi;
+    q->space = space;
+    q->uaddr = key;
+    q->task->pi_blocked = pi;
+    return 0;
+}
+
+/** Transfer kernel ownership and wake the top waiter; its reference keeps
+ * the state alive until it has fixed the user word in its own mapping. */
+static void pi_handoff(struct futex_pi *pi)
+{
+    struct futex_q *q = pi_top(pi);
+    process_t *old = pi->owner;
+
+    pi->owner = q ? q->task : NULL;
+    if (old) {
+        old->pi_priority = 0;
+        sched_priority_changed(old);
+    }
+    if (q) {
+        futex_unlink(q, futex_bucket(q->space, q->uaddr));
+        q->woken = q->s->woken = 1;
+        q->task->pi_blocked = NULL;
+        wq_wake_all(&q->s->wq);
+    }
+    futex_pi_recalculate();
+}
+
+/** Parse a PI wait's absolute deadline before any word fault can sleep. */
+static int pi_deadline(struct futex_sleeper *s, const struct kernel_timespec __user *utime,
+                       int realtime)
+{
+    struct kernel_timespec ts;
+    uint64_t ticks;
+
+    s->timed = utime != NULL;
+    s->woken = 0;
+    wait_queue_init(&s->wq);
+    if (!utime) {
+        s->target = 0;
+        return 0;
+    }
+    if (copy_from_user(&ts, utime, sizeof(ts)) != 0) {
+        return -EFAULT;
+    }
+    if (sizeof(long) > 4u && in_compat_syscall()) {
+        ts.tv_nsec = (long)(uint32_t)ts.tv_nsec;
+    }
+    if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
+        return -EINVAL;
+    }
+    ticks = futex_ticks_until(ts.tv_sec, (uint32_t)ts.tv_nsec, realtime);
+    s->target = ticks ? rtc_ticks_now() + ticks + 1u : tick_count();
+    return 0;
+}
+
+/** Repair a handoff's word through the new owner's mapping, including a
+ * dead owner whose address space no longer exists. Returns 0 or -EFAULT. */
+static int pi_fixup(uintptr_t addr, struct futex_pi *pi)
+{
+    uint32_t word, seen, flags, value;
+
+    if (!vm_prefault_range(addr, sizeof(word), 1)) {
+        return -EFAULT;
+    }
+    flags = kirq_save();
+    for (;;) {
+        if (get_user_u32(&word, addr) != 0) {
+            kirq_restore(flags);
+            return -EFAULT;
+        }
+        value = pid_seen_by(current_proc, current_proc->pid) | FUTEX_WAITERS |
+                ((pi->died || (word & FUTEX_OWNER_DIED)) ? FUTEX_OWNER_DIED : 0);
+        if (cmpxchg_user_u32(addr, word, value, &seen) != 0) {
+            kirq_restore(flags);
+            return -EFAULT;
+        }
+        if (seen == word) {
+            pi->died = 0;
+            kirq_restore(flags);
+            return 0;
+        }
+    }
+}
+
+/** Sleep with a queued PI or requeue waiter and then remove its links.
+ * A handoff wins over a simultaneous timeout or signal. */
+static int pi_sleep(struct futex_q *q, uintptr_t addr)
+{
+    struct futex_sleeper *s = q->s;
+    struct futex_pi *pi;
+    uint32_t flags;
+    int rc;
+
+    current_proc->wakeup_tick = s->timed ? (s->target ? s->target : 1u) : 0;
+    rc = wq_wait_event(&s->wq, futex_sleeper_done, s);
+    current_proc->wakeup_tick = 0;
+    flags = kirq_save();
+    pi = q->pi;
+    if (!q->woken) {
+        futex_unlink(q, futex_bucket(q->space, q->uaddr));
+        current_proc->pi_blocked = NULL;
+        rc = rc != 0 ? rc : -ETIMEDOUT;
+        if (q->requeue && pi && rc == -EINTR) {
+            rc = -EAGAIN;
+        }
+    } else if (!pi) {
+        rc = -EAGAIN;
+    } else {
+        rc = 0;
+    }
+    if (rc == -EINTR) {
+        current_proc->restart_always = 1;
+    }
+    futex_pi_recalculate();
+    kirq_restore(flags);
+    if (q->woken && pi) {
+        rc = pi_fixup(addr, pi);
+        if (rc != 0) {
+            flags = kirq_save();
+            pi_handoff(pi);
+            kirq_restore(flags);
+        }
+    }
+    flags = kirq_save();
+    pi_put(pi);
+    kirq_restore(flags);
+    return rc;
+}
+
+/** Whether a named owner has finished releasing its futexes. A PID lookup
+ * each time avoids retaining a process record across a sleep or reap. */
+static int pi_owner_ready(void *arg)
+{
+    process_t *p = proc_named(*(uint32_t *)arg);
+
+    return !p || p->futex_exit_state != 1;
+}
+
+/** Lock a PI futex, with an absolute real-time deadline for LOCK_PI or
+ * the selected clock for LOCK_PI2. TRYLOCK never sleeps. */
+static int futex_lock_pi(uintptr_t addr, const struct kernel_timespec __user *utime, int op,
+                         int trylock)
+{
+    struct futex_q q;
+    struct futex_sleeper s;
+    struct futex_pi *spare;
+    const void *space;
+    uintptr_t key;
+    uint32_t flags;
+    int rc;
+
+    rc = pi_deadline(&s, trylock ? NULL : utime,
+                     (op & FUTEX_CLOCK_REALTIME) || (op & 127) == FUTEX_LOCK_PI);
+    if (rc != 0) {
+        return rc;
+    }
+    spare = (struct futex_pi *)kmalloc(sizeof(*spare));
+    if (!spare) {
+        return -ENOMEM;
+    }
+    k_memset(&q, 0, sizeof(q));
+    q.task = current_proc;
+    q.s = &s;
+    q.bitset = FUTEX_MATCH_ANY;
+retry_owner:
+    if (!vm_prefault_range(addr, sizeof(uint32_t), 1)) {
+        kfree(spare);
+        return -EFAULT;
+    }
+    flags = kirq_save();
+    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &space, &key);
+    q.target_space = space;
+    q.target_key = key;
+    do {
+        rc = pi_attach(addr, &q, &spare, trylock, 0);
+    } while (rc == -EAGAIN && !trylock);
+    if (rc == 0) {
+        futex_enqueue(&q);
+        futex_pi_recalculate();
+    }
+    kirq_restore(flags);
+    if (rc == -EBUSY) {
+        (void)wq_wait_event_nointr(&pi_exit_queue, pi_owner_ready, &q.owner_tid);
+        goto retry_owner;
+    }
+    kfree(spare);
+    if (rc != 0) {
+        return rc == 1 ? 0 : rc;
+    }
+    return pi_sleep(&q, addr);
+}
+
+/** Unlock a PI word only for its owner, passing it to the top waiter with
+ * WAITERS still set, or atomically clearing it when no waiter remains. */
+static int futex_unlock_pi(uintptr_t addr, int op)
+{
+    const void *space;
+    uintptr_t key;
+    struct futex_pi *pi;
+    struct futex_q *q;
+    uint32_t word, seen, value, flags;
+    int rc = 0;
+
+    if (!vm_prefault_range(addr, sizeof(word), 1)) {
+        return -EFAULT;
+    }
+    flags = kirq_save();
+    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &space, &key);
+    if (get_user_u32(&word, addr) != 0) {
+        rc = -EFAULT;
+    } else if ((word & FUTEX_TID_MASK) != pid_seen_by(current_proc, current_proc->pid)) {
+        rc = -EPERM;
+    } else if (pi_mixed(space, key)) {
+        rc = -EINVAL;
+    } else {
+        pi = pi_find(space, key);
+        q = pi ? pi_top(pi) : NULL;
+        if (pi && pi->owner != current_proc) {
+            rc = -EINVAL;
+        } else {
+            value = q ? FUTEX_WAITERS | pid_seen_by(current_proc, q->task->pid) : 0;
+            if (cmpxchg_user_u32(addr, word, value, &seen) != 0) {
+                rc = -EFAULT;
+            } else if (seen != word) {
+                rc = -EAGAIN;
+            } else if (pi) {
+                pi->died = 0;
+                pi_handoff(pi);
+            }
+        }
+    }
+    kirq_restore(flags);
+    return rc;
+}
+
+/** Wait on a condition word to be requeued to a distinct PI mutex.
+ * Both pages are faulted before the source comparison and queue insertion. */
+static int futex_wait_requeue_pi(uintptr_t addr, uint32_t val,
+                                 const struct kernel_timespec __user *utime, uintptr_t addr2,
+                                 int op)
+{
+    struct futex_q q;
+    struct futex_sleeper s;
+    uint32_t flags, word;
+    int rc;
+
+    if ((addr2 & 3u) || addr == addr2) {
+        return -EINVAL;
+    }
+    rc = pi_deadline(&s, utime, (op & FUTEX_CLOCK_REALTIME) != 0);
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(&q, 0, sizeof(q));
+    q.task = current_proc;
+    q.s = &s;
+    q.bitset = FUTEX_MATCH_ANY;
+    q.requeue = 1;
+    for (;;) {
+        if (!vm_prefault_range(addr2, sizeof(word), 1) ||
+            !vm_prefault_range(addr, sizeof(word), 0)) {
+            return -EFAULT;
+        }
+        flags = kirq_save();
+        if (paging_user_phys(current_proc->page_dir, addr2) != 0) {
+            break;
+        }
+        kirq_restore(flags);
+    }
+    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &q.space, &q.uaddr);
+    futex_key(addr2, !(op & FUTEX_PRIVATE_FLAG), &q.target_space, &q.target_key);
+    if (q.space == q.target_space && q.uaddr == q.target_key) {
+        rc = -EINVAL;
+    } else if (get_user_u32(&word, addr) != 0) {
+        rc = -EFAULT;
+    } else if (word != val) {
+        rc = -EAGAIN;
+    } else {
+        futex_enqueue(&q);
+        rc = 0;
+    }
+    kirq_restore(flags);
+    return rc == 0 ? pi_sleep(&q, addr2) : rc;
+}
+
+/** Move one validated condition waiter, retaining the source bucket before
+ * attachment replaces its key. Returns 0 or the PI attachment error. */
+static int pi_requeue_one(struct futex_q *q, uintptr_t addr, struct futex_pi **spare)
+{
+    uint32_t bucket = futex_bucket(q->space, q->uaddr);
+    int rc = pi_attach(addr, q, spare, 0, 1);
+
+    if (rc < 0) {
+        return rc;
+    }
+    futex_unlink(q, bucket);
+    if (rc == 1) {
+        q->woken = q->s->woken = 1;
+        q->pi = *spare;
+        *spare = NULL;
+        q->pi->space = q->target_space;
+        q->pi->key = q->target_key;
+        q->pi->owner = q->task;
+        q->pi->refs = 1;
+        q->pi->died = 0;
+        q->pi->next = pi_states;
+        pi_states = q->pi;
+        wq_wake_all(&q->s->wq);
+    } else {
+        futex_enqueue(q);
+    }
+    return 0;
+}
+
+/** Compare a condition word and move up to nr_requeue + 1 waiters to its
+ * PI mutex. The first waiter may acquire it immediately; val must be 1. */
+static int futex_cmp_requeue_pi(uintptr_t addr, uint32_t val, uint32_t nr_requeue, uintptr_t addr2,
+                                uint32_t cmp, int op)
+{
+    struct futex_pi *spare;
+    struct futex_q *q, *next;
+    const void *space, *space2;
+    uintptr_t key, key2;
+    uint32_t flags, word;
+    int rc = 0, count = 0;
+
+    if (val != 1 || addr == addr2 || (addr2 & 3u) || nr_requeue > 0x7FFFFFFFu) {
+        return -EINVAL;
+    }
+    spare = (struct futex_pi *)kmalloc(sizeof(*spare));
+    if (!spare) {
+        return -ENOMEM;
+    }
+    for (;;) {
+        if (!vm_prefault_range(addr2, sizeof(word), 1) ||
+            !vm_prefault_range(addr, sizeof(word), 0)) {
+            kfree(spare);
+            return -EFAULT;
+        }
+        flags = kirq_save();
+        if (paging_user_phys(current_proc->page_dir, addr2) != 0) {
+            break;
+        }
+        kirq_restore(flags);
+    }
+    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &space, &key);
+    futex_key(addr2, !(op & FUTEX_PRIVATE_FLAG), &space2, &key2);
+    if (space == space2 && key == key2) {
+        rc = -EINVAL;
+    } else if (get_user_u32(&word, addr) != 0) {
+        rc = -EFAULT;
+    } else if (word != cmp) {
+        rc = -EAGAIN;
+    } else {
+        for (q = _waiters[futex_bucket(space, key)]; q; q = next) {
+            next = q->next;
+            if (q->space != space || q->uaddr != key) {
+                continue;
+            }
+            if (!q->requeue || q->pi || q->target_space != space2 || q->target_key != key2) {
+                rc = -EINVAL;
+                break;
+            }
+            rc = pi_requeue_one(q, addr2, &spare);
+            if (rc < 0) {
+                break;
+            }
+            count++;
+            if ((uint32_t)(count - 1) == nr_requeue) {
+                break;
+            }
+        }
+    }
+    futex_pi_recalculate();
+    kirq_restore(flags);
+    kfree(spare);
+    return rc == -EBUSY ? -EAGAIN : (rc < 0 ? rc : count);
+}
+
+/** Transfer every contended PI lock of an exiting thread. Robust-list
+ * cleanup has already marked accessible words; other mappings are repaired
+ * by the new owners before returning from their waits. */
+static void pi_exit(process_t *p)
+{
+    struct futex_pi *pi;
+
+    for (pi = pi_states; pi; pi = pi->next) {
+        if (pi->owner == p) {
+            pi->died = 1;
+            pi_handoff(pi);
+        }
+    }
 }
 
 int futex_restartable(const isr_params_t *params)
@@ -468,7 +1095,7 @@ int futex_restartable(const isr_params_t *params)
  * take the lock or set FUTEX_WAITERS between the two, and a write of its
  * bytes one at a time would let it see a word that is neither.
  */
-static void robust_release(uintptr_t uaddr, uint32_t tid, int pending)
+static void robust_release(uintptr_t uaddr, uint32_t tid, int pending, int pi)
 {
     uint32_t word, died, seen;
     uint32_t flags;
@@ -496,7 +1123,7 @@ static void robust_release(uintptr_t uaddr, uint32_t tid, int pending)
         }
     }
     kirq_restore(flags);
-    if (wake) {
+    if (wake && !pi) {
         (void)futex_wake(uaddr, 1, FUTEX_MATCH_ANY, 0);
     }
 }
@@ -546,6 +1173,7 @@ static void robust_walk(process_t *p, uintptr_t list, int narrow)
     struct robust_head head;
     uintptr_t entry, pending;
     int left = ROBUST_LIST_LIMIT;
+    int pi_entry;
 
     if (narrow) {
         struct robust_head32 h32;
@@ -559,6 +1187,7 @@ static void robust_walk(process_t *p, uintptr_t list, int narrow)
     } else if (copy_from_user(&head, (const void __user *)list, sizeof(head)) != 0) {
         return;
     }
+    pi_entry = (int)(head.next & 1u);
     entry = head.next & ~(uintptr_t)1;
     pending = head.op_pending & ~(uintptr_t)1;
     while (entry != list && entry != 0 && left-- > 0) {
@@ -568,13 +1197,15 @@ static void robust_walk(process_t *p, uintptr_t list, int narrow)
             break;
         }
         if (entry != pending) {
-            robust_release(robust_uaddr(entry, head.futex_offset, narrow), p->pid, 0);
+            robust_release(robust_uaddr(entry, head.futex_offset, narrow), pid_seen_by(p, p->pid),
+                           0, pi_entry);
         }
+        pi_entry = (int)(next & 1u);
         entry = next & ~(uintptr_t)1;
     }
     if (pending != 0) {
-        robust_release(robust_uaddr(pending, head.futex_offset, narrow), p->pid,
-                       (head.op_pending & 1u) == 0);
+        robust_release(robust_uaddr(pending, head.futex_offset, narrow), pid_seen_by(p, p->pid),
+                       (head.op_pending & 1u) == 0, (head.op_pending & 1u) != 0);
     }
 }
 
@@ -582,11 +1213,22 @@ void proc_thread_gone(process_t *p)
 {
     uint32_t zero = 0;
 
+    p->futex_exit_state = 1;
     if (p->robust_list != 0) {
         robust_walk(p, p->robust_list, 0);
     }
     if (p->compat_robust_list != 0) {
         robust_walk(p, p->compat_robust_list, 1);
+    }
+    {
+        uint32_t flags = kirq_save();
+
+        pi_exit(p);
+        p->futex_exit_state = 2;
+        if (pi_exit_queue.head) {
+            wq_wake_all(&pi_exit_queue);
+        }
+        kirq_restore(flags);
     }
     p->robust_list = 0;
     p->compat_robust_list = 0;
@@ -674,13 +1316,25 @@ long sys_futex(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if ((op & FUTEX_CLOCK_REALTIME) && cmd != FUTEX_WAIT_BITSET) {
+    if ((op & FUTEX_CLOCK_REALTIME) && cmd != FUTEX_WAIT_BITSET && cmd != FUTEX_WAIT_REQUEUE_PI &&
+        cmd != FUTEX_LOCK_PI2) {
         return -ENOSYS;
     }
     if ((uaddr & 3u) != 0) {
         return -EINVAL;
     }
     switch (cmd) {
+    case FUTEX_LOCK_PI:
+    case FUTEX_LOCK_PI2:
+    case FUTEX_TRYLOCK_PI:
+        return futex_lock_pi(uaddr, utime, op, cmd == FUTEX_TRYLOCK_PI);
+    case FUTEX_UNLOCK_PI:
+        return futex_unlock_pi(uaddr, op);
+    case FUTEX_WAIT_REQUEUE_PI:
+        return futex_wait_requeue_pi(uaddr, val, utime, SC_ARG(params, 4), op);
+    case FUTEX_CMP_REQUEUE_PI:
+        return futex_cmp_requeue_pi(uaddr, val, (uint32_t)SC_ARG(params, 3), SC_ARG(params, 4),
+                                    val3, op);
     case FUTEX_WAIT:
         return futex_wait(uaddr, val, utime, FUTEX_MATCH_ANY, 0, op);
     case FUTEX_WAIT_BITSET:

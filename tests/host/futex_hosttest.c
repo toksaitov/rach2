@@ -77,6 +77,7 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks)
 
 /* Thread 5 while it has not ended, and the thread the next copy out ends. */
 static process_t *named;
+static void (*pi_wait_step)(void);
 static process_t *ends_at_copy;
 /* The word whose waiter sets FUTEX_WAITERS in the next fault for a write. */
 static uint32_t waiters_at;
@@ -227,7 +228,17 @@ void kirq_restore(uint32_t flags)
 /** The one thread besides the caller, pid 5, while it has not ended. */
 process_t *get_process(uint32_t pid)
 {
-    return pid == 5 ? named : NULL;
+    process_t *p;
+
+    if (pid == self.pid && pid != 0) {
+        return &self;
+    }
+    for (p = named; p; p = p->next) {
+        if (p->pid == pid) {
+            return p;
+        }
+    }
+    return NULL;
 }
 
 /** The thread the caller names `pid`; in the model its PID namespace is
@@ -235,6 +246,19 @@ process_t *get_process(uint32_t pid)
 process_t *proc_named(uint32_t pid)
 {
     return get_process(pid);
+}
+
+/** PID namespaces are the initial namespace in this model. */
+uint32_t pid_seen_by(const process_t *viewer, uint32_t kid)
+{
+    (void)viewer;
+    return kid;
+}
+
+/** Priority changes need no processor interrupt in this model. */
+void sched_priority_changed(process_t *p)
+{
+    (void)p;
 }
 
 /** A wait that ends at its deadline, noting the tick it was armed for. */
@@ -245,7 +269,19 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     (void)arg;
     waits++;
     armed = current_proc->wakeup_tick;
+    if (pi_wait_step) {
+        void (*step)(void) = pi_wait_step;
+
+        pi_wait_step = NULL;
+        step();
+    }
     return 0;
+}
+
+/** The model completes a futex owner's exit before its waiter resumes. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    return wq_wait_event(wq, cond, arg);
 }
 
 /** Count a wake. */

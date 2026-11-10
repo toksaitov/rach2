@@ -279,6 +279,7 @@ struct process {
      * restarts; 0 for none. Set by the dispatcher, consumed by
      * deliver_signals on the same return. */
     uint32_t restart_nr;
+    uint8_t restart_always; /* Linux ERESTARTNOINTR, even without SA_RESTART */
     /* The trap number, error code and fault address of the last processor
      * exception, for the signal frame's sigcontext. */
     uint32_t trap_nr;
@@ -385,13 +386,16 @@ struct process {
     uint32_t rseq_sig;
     uint32_t rseq_event;
     uint32_t rseq_notify;
-    /* The scheduling policy sched_setscheduler(2) set, SCHED_OTHER (0),
-     * SCHED_BATCH (3) or SCHED_IDLE (5), and whether SCHED_RESET_ON_FORK
-     * came with it. A fork passes the policy on and clears the flag in the
-     * child, as Linux does for these policies; an exec keeps both. The
-     * scheduler does not read the policy. */
+    /* Base policy and real-time priority, 1 to 99 for FIFO/RR, otherwise 0.
+     * Inherited priority is separate so queries and fork see the base. */
     uint8_t sched_policy;
     uint8_t sched_reset;
+    uint8_t rt_priority;
+    uint8_t pi_priority;
+    uint8_t ready_rt;            /* the queued entry counts in its queue's rt_count */
+    uint8_t sched_yielded;       /* allow an equal FIFO peer at the next selection */
+    uint8_t futex_exit_state;    /* 0 live, 1 releasing futexes, 2 released */
+    struct futex_pi *pi_blocked; /* PI lock this thread waits for, or NULL */
     /* Set once this thread has been through the stop in effect in its
      * process, which a tracer may then have resumed it from; cleared when
      * the process continues. */

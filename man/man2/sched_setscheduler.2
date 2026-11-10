@@ -39,16 +39,20 @@
 .Ft int
 .Fn getcpu "unsigned int *cpu" "unsigned int *node"
 .Sh DESCRIPTION
-The scheduler gives every ready process the processor in turn, a tick at
-a time, whatever its policy.
-A thread may have
+The scheduler runs real-time threads before ordinary threads, using the
+highest base or inherited priority.
+.Dv SCHED_FIFO
+threads keep the processor against equal-priority peers until a yield or
+block; equal-priority
+.Dv SCHED_RR
+threads rotate each tick.
+A PI futex waiter donates its effective priority through its blocked owners
+until unlock, timeout or interruption removes the donation.
 .Dv SCHED_OTHER ,
-which it starts with,
 .Dv SCHED_BATCH
-or
-.Dv SCHED_IDLE ,
-each with priority 0, and the policy is kept and reported but changes
-nothing in the order the threads run.
+and
+.Dv SCHED_IDLE
+have priority 0 and rotate in the ordinary ready order.
 Each processor has its own run queue: a woken process joins the
 processor it last ran on unless that one is busy and another it may run
 on is idle, and a processor with nothing to run takes a process from the
@@ -67,11 +71,16 @@ returns the thread's policy,
 or
 .Dv SCHED_IDLE
 .Pq 5 ,
+.Dv SCHED_FIFO
+.Pq 1
+or
+.Dv SCHED_RR
+.Pq 2 ,
 with
 .Dv SCHED_RESET_ON_FORK
 added when it was set with it, and
 .Fn sched_getparam
-stores its priority, 0.
+stores its base priority, without a PI donation.
 .Fn sched_setscheduler
 sets any of the three with priority 0, with
 .Dv SCHED_RESET_ON_FORK
@@ -79,7 +88,7 @@ or without, for a caller that may change the thread: one with effective
 user ID 0, or whose effective user ID equals the thread's real or
 effective user ID.
 .Fn sched_setparam
-keeps the policy and takes priority 0.
+keeps the policy and changes its base priority.
 Without privilege a caller may not leave
 .Dv SCHED_IDLE ,
 which Linux counts as nice 20 and lets a thread leave only as far as
@@ -92,13 +101,18 @@ A fork's child has its parent's policy without
 .Dv SCHED_RESET_ON_FORK ,
 which Linux clears in the child and which resets only the real-time and
 deadline policies, and an exec keeps both.
-The other policies are refused:
+A privileged caller can set
 .Dv SCHED_FIFO
-and
+or
 .Dv SCHED_RR
-with a priority from 1 to 99 with
-.Er EPERM ,
-and every other policy and priority with
+with priority 1 to 99.
+An unprivileged caller may keep its existing real-time policy and lower
+its priority, but cannot raise it or enter a real-time policy.
+.Dv SCHED_RESET_ON_FORK
+returns a real-time child to
+.Dv SCHED_OTHER
+at priority 0.
+Other policies are refused with
 .Er EINVAL .
 .Pp
 .Fn sched_get_priority_max
@@ -117,8 +131,7 @@ and 0 to 0 for
 and
 .Dv SCHED_EXT .
 .Fn sched_rr_get_interval
-stores the time slice, one 1 ms tick, since the timer takes the
-processor from the running process at every tick.
+stores the round-robin time slice, one 1 ms tick.
 .Pp
 .Fn sched_getaffinity
 stores the processors the process may run on, of those started, a bit

@@ -4273,7 +4273,7 @@
         {"assertion_id": "other-accepted", "checks": "SCHED_OTHER at priority 0 is accepted, with SCHED_RESET_ON_FORK and without", "source": "program"},
         {"assertion_id": "setparam-zero", "checks": "sched_setparam of priority 0 is accepted", "source": "program"},
         {"assertion_id": "batch-idle-set", "checks": "SCHED_BATCH, SCHED_IDLE and SCHED_OTHER are each set and read back", "source": "program"},
-        {"assertion_id": "realtime-eperm", "checks": "SCHED_FIFO and SCHED_RR fail with EPERM", "source": "program"},
+        {"assertion_id": "realtime-policy", "checks": "SCHED_FIFO and SCHED_RR keep and report real-time priorities", "source": "program"},
         {"assertion_id": "priority-einval", "checks": "a priority that does not suit its policy fails with EINVAL", "source": "program"},
         {"assertion_id": "policy-einval", "checks": "SCHED_DEADLINE and an unknown policy fail with EINVAL", "source": "program"},
         {"assertion_id": "setparam-einval", "checks": "sched_setparam of priority 5 fails with EINVAL", "source": "program"},
@@ -6857,6 +6857,155 @@
       "prepare": [{"name": "privatefilemusl", "node": "tests/musl/privatefilemusl", "per_architecture": true}, {"name": "kernel", "node": "rach2/kernel", "per_architecture": true}, {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true}, {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}],
       "timing": [],
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.default.pifutexmusl",
+      "behavior": "PI futex owner words, errors, absolute timeouts on both clocks, requeue handoff, pthread PI and robust PI mutexes, a condition variable over a PI mutex and process-shared owner death, on the native kernel or the ia32 profile.",
+      "units": [
+        "default",
+        "musl/pifutexmusl"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "pifutexmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "raw",
+          "checks": "PI locks publish the owner TID and recursive and nonowner operations give Linux errors",
+          "source": "program"
+        },
+        {
+          "assertion_id": "timeouts",
+          "checks": "PI lock deadlines expire on both clocks",
+          "source": "program"
+        },
+        {"assertion_id": "signals", "checks": "PI acquisition restarts after a signal handler without SA_RESTART", "source": "program"},
+        {
+          "assertion_id": "requeue",
+          "checks": "A condition waiter requeues to an owned PI mutex and receives it on unlock",
+          "source": "program"
+        },
+        {
+          "assertion_id": "mutex",
+          "checks": "Pthread PI mutexes acquire and release across threads",
+          "source": "program"
+        },
+        {
+          "assertion_id": "robust",
+          "checks": "A robust PI mutex reports and recovers owner death",
+          "source": "program"
+        },
+        {
+          "assertion_id": "condition",
+          "checks": "A condition variable releases and reacquires a PI mutex",
+          "source": "program"
+        },
+        {
+          "assertion_id": "shared",
+          "checks": "A process-shared robust PI mutex recovers the death of a child process",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "pifutexmusl",
+          "node": "tests/musl/pifutexmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
     }
   ]
 }

@@ -2886,6 +2886,9 @@ static void _syscall_handler(isr_params_t *params)
             SC_RET(params) = (unsigned long)ret;
         }
     }
+    if (current_proc) {
+        current_proc->restart_always = 0;
+    }
     if (skip) {
         ret = (long)SC_RET(params);
     } else if (syscall_num < size && table[syscall_num]) {

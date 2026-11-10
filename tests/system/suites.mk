@@ -1834,3 +1834,8 @@ build/tests/graphics/desktop_display.py: tests/graphics/desktop_display.py
 # `tests/run gpucompat`: i386 GPU driver calls on i915's fault backend and
 # virgl, with syncobj, udmabuf, dma-buf and sync-file requests, run on the
 # x86-64 kernel by RACH2_KERNEL=ia32; tests/cases/guest.gpucompat.json.
+
+# The GNU PI row compiles the musl probe's source against glibc in the guest.
+build/tests/cases/gnu/pi-futex.c: tests/musl/pifutexmusl.c
+	@mkdir -p $(@D)
+	cp $< $@

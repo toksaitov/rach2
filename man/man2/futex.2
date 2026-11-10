@@ -73,6 +73,37 @@ waiters on the word, and return how many were woken.
 .It Dv FUTEX_WAKE_BITSET
 The same, waking only waiters whose bits meet the nonzero
 .Fa val3 .
+.It Dv FUTEX_LOCK_PI
+Acquire the PI mutex, sleeping behind its owner if necessary.
+The timeout is absolute on the real-time clock.
+.It Dv FUTEX_LOCK_PI2
+Acquire the PI mutex with an absolute monotonic timeout, or real time with
+.Dv FUTEX_CLOCK_REALTIME .
+.It Dv FUTEX_TRYLOCK_PI
+Acquire without sleeping; a busy mutex fails with
+.Er EAGAIN .
+.It Dv FUTEX_UNLOCK_PI
+Release a mutex owned by the caller, passing it to the highest-priority
+waiter, with equal priorities in arrival order.
+.It Dv FUTEX_WAIT_REQUEUE_PI
+Compare the condition word with
+.Fa val
+and wait to be transferred to the distinct PI mutex at
+.Fa uaddr2 .
+The timeout is absolute on the monotonic clock, or real time with
+.Dv FUTEX_CLOCK_REALTIME .
+.It Dv FUTEX_CMP_REQUEUE_PI
+Require
+.Fa val
+1, compare the condition word with
+.Fa val3 ,
+and move up to one plus the fourth argument's value waiters to the PI mutex at
+.Fa uaddr2 .
+Each must have used
+.Dv FUTEX_WAIT_REQUEUE_PI
+with that destination.
+The first waiter acquires a free mutex immediately; others wait behind its owner.
+The result counts transferred waiters.
 .El
 .Pp
 A deadline is rounded up to whole 1 ms ticks, counted from the tick the
@@ -93,11 +124,34 @@ A wait with a timeout is not restarted: it fails with
 .Er EINTR
 whatever the handler's flags, as on Linux, and also when no handler runs,
 where Linux restarts it with its first deadline.
-.Fa uaddr2
-is ignored.
-The requeue, wake-and-modify and priority-inheritance operations are not
-implemented, nor on i686 is i386's time64 form, number 422; x86-64 has no
+Ordinary requeue and wake-and-modify operations are not implemented,
+nor on i686 is i386's time64 form, number 422; x86-64 has no
 such form of its own, and takes 422 from an i386 program, below.
+.Ss Priority inheritance
+A PI mutex word is 0 while unlocked; its low 30 bits hold its owner's
+thread ID while locked.
+.Dv FUTEX_WAITERS
+requires an unlock through the kernel and
+.Dv FUTEX_OWNER_DIED
+records an owner's death.
+Waiters donate their effective real-time priority to the owner, through
+any chain of owners blocked on other PI mutexes.
+A donation leaves the base policy and reported priority unchanged.
+Unlock, timeout and signal remove the donation.
+The caller must not mix ordinary and PI waiters on one mutex word.
+.Pp
+PI acquisition restarts after a signal handler even without
+.Dv SA_RESTART ,
+keeping its absolute deadline.
+A requeue wait has the same restart before transfer; after transfer a
+signal returns
+.Er EAGAIN .
+A completed handoff wins over a simultaneous signal or deadline.
+When a thread ends, contended PI locks pass to their top waiters and the
+new owners repair their words before returning.
+Robust PI locks report
+.Dv FUTEX_OWNER_DIED
+also when no waiter was present at exit.
 .Ss Waiting on several words
 .Nm futex_waitv ,
 number 449 on i386 and on x86-64, sleeps while each of
@@ -239,8 +293,12 @@ end a timed wait with
 .Er EINTR .
 .Sh ERRORS
 .Bl -tag -width ETIMEDOUT
+.It Er EDEADLK
+A PI lock is already owned by the caller, or a blocking acquisition would
+close a chain of blocked owners.
 .It Er EAGAIN
-The word did not hold
+A PI trylock is busy, a requeue wait was woken before transfer or interrupted
+after it, a comparison or atomic exchange raced, or the word did not hold
 .Fa val ,
 or a word of
 .Nm futex_waitv
@@ -254,6 +312,10 @@ or a word it names is not readable.
 A signal ended a wait with a timeout, or one without a timeout that is not
 restarted.
 .It Er EINVAL
+PI and ordinary waiters were mixed, the requeue destination equals its
+source, a requeue waiter named another destination, a PI requeue's
+.Fa val
+is not 1, or
 .Fa uaddr
 is not aligned, a bitset operation was given a zero
 .Fa val3 ,
@@ -279,16 +341,20 @@ not aligned to four bytes.
 .Nm futex_waitv
 could not have the memory for its waiters.
 .It Er EPERM
+A PI unlock names another owner, a PI lock names a kernel thread, or
 .Nm get_robust_list
 named a thread of another user, or a privileged thread of another
 process when the caller is not privileged.
 .It Er ENOSYS
-The operation is not one of the four above, or
+The operation is not listed above, or
 .Dv FUTEX_CLOCK_REALTIME
 was given to an operation other than
-.Dv FUTEX_WAIT_BITSET .
+.Dv FUTEX_WAIT_BITSET ,
+.Dv FUTEX_WAIT_REQUEUE_PI
+or
+.Dv FUTEX_LOCK_PI2 .
 .It Er ESRCH
-There is no current process, or
+There is no current process, a PI word names no live owner, or
 .Nm get_robust_list
 named no live thread.
 .It Er ETIMEDOUT

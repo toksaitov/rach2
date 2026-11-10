@@ -26,7 +26,8 @@ static struct spinlock sched_lock = SPINLOCK_INIT;
 
 struct ready_queue {
     process_t *head, *tail;
-    unsigned int count; /* ready records, excluding the current and idle tasks */
+    unsigned int count;    /* ready records, excluding the current and idle tasks */
+    unsigned int rt_count; /* queued threads with an effective RT priority */
 };
 static struct ready_queue run_queues[NR_CPUS];
 static uint32_t pick_count, pick_steps; /* selection attempts and entries examined, modulo 2^32 */
@@ -54,6 +55,8 @@ static void sched_remove(process_t *p)
         q->tail = p->ready_prev;
     }
     q->count--;
+    q->rt_count -= p->ready_rt;
+    p->ready_rt = 0;
     p->ready_prev = p->ready_next = NULL;
     p->ready_linked = 0;
 }
@@ -75,6 +78,8 @@ static void sched_append(process_t *p)
     }
     q->tail = p;
     q->count++;
+    p->ready_rt = sched_priority(p) != 0;
+    q->rt_count += p->ready_rt;
     p->ready_linked = 1;
 }
 
@@ -84,6 +89,43 @@ void sched_forget(process_t *p)
 
     sched_remove(p);
     spin_unlock_irqrestore(&sched_lock, flags);
+}
+
+static int sched_may_run(const process_t *p, int cpu);
+
+void sched_priority_changed(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+
+    if (p->ready_linked) {
+        sched_remove(p);
+        sched_append(p);
+    }
+    p->need_resched = 1;
+    spin_unlock_irqrestore(&sched_lock, flags);
+    smp_kick(p->cpu);
+}
+
+/** Find the highest-priority eligible RT thread; equal priorities keep
+ * queue order. Ordinary queues need no scan. The run queue lock is held. */
+static process_t *sched_find_rt(int cpu)
+{
+    process_t *best = NULL, *p;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (run_queues[c].rt_count == 0) {
+            continue;
+        }
+        for (p = run_queues[c].head; p; p = p->ready_next) {
+            pick_steps++;
+            if (sched_may_run(p, cpu) && sched_priority(p) != 0 &&
+                (!best || sched_priority(p) > sched_priority(best))) {
+                best = p;
+            }
+        }
+    }
+    return best;
 }
 
 /* The ticks in a row a processor passes without the big lock while a process
@@ -103,7 +145,7 @@ void init_sched(void)
     pick_count = pick_steps = 0;
     for (c = 0; c < NR_CPUS; c++) {
         run_queues[c].head = run_queues[c].tail = NULL;
-        run_queues[c].count = 0;
+        run_queues[c].count = run_queues[c].rt_count = 0;
         _wake_turn[c] = 1;
     }
 }
@@ -258,7 +300,8 @@ void sched_make_ready(process_t *p)
     if (cpu_table[target].current != p) {
         sched_append(p);
     }
-    kick = sched_cpu_idle(target) || cpu_table[target].current == p;
+    kick = sched_cpu_idle(target) || cpu_table[target].current == p ||
+           sched_priority(p) > sched_priority(cpu_table[target].current);
     spin_unlock_irqrestore(&sched_lock, flags);
     if (kick) {
         smp_kick(target);
@@ -286,6 +329,65 @@ void sched_set_affinity(process_t *p, uint64_t mask)
     if (p == current_proc && !((mask >> arch_cpu_id()) & 1u)) {
         schedule();
     }
+}
+
+/** Select a real-time thread first, then apply ordinary wake preference.
+ * The run queue lock is held and old's state already reflects blocking,
+ * affinity and suspension. NULL means there is no queued candidate. */
+static process_t *sched_select(int me, process_t *old)
+{
+    process_t *next = sched_find_rt(me);
+    struct percpu *cpu = &cpu_table[me];
+    if (old != cpu->idle && old->state == PROC_RUNNING && sched_priority(old) != 0 &&
+        (!next || sched_priority(old) > sched_priority(next) ||
+         (sched_priority(old) == sched_priority(next) && old->sched_policy != 2 &&
+          !old->sched_yielded))) {
+        old->sched_yielded = 0;
+        return old;
+    }
+    old->sched_yielded = 0;
+    if (!next) {
+        if (_wake_turn[me]) {
+            next = sched_find(me, me, 1);
+        }
+        if (next) {
+            _wake_turn[me] = 0;
+        } else {
+            next = sched_find(me, me, 0);
+            if (next) {
+                _wake_turn[me] = 1;
+            } else if (old == cpu->idle || old->state != PROC_RUNNING) {
+                next = sched_steal(me);
+            }
+        }
+    }
+    return next;
+}
+
+/** Refresh the outgoing task's state and placement before selection.
+ * Returns an idle processor to kick after selection, or -1. */
+static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
+{
+    int kick = -1;
+
+    sched_remove(old);
+    proc_timer_update(old);
+    old->woken = 0;
+    if (old->state == PROC_READY) {
+        old->state = PROC_RUNNING;
+    }
+    if (cpu->idle && old != cpu->idle && (old->state == PROC_RUNNING || old->state == PROC_READY) &&
+        !((old->affinity >> me) & 1u)) {
+        old->state = PROC_READY;
+        old->cpu = sched_choose(old);
+        if (sched_cpu_idle(old->cpu)) {
+            kick = old->cpu;
+        }
+    }
+    if (cpu->idle && old != cpu->idle && old->state == PROC_RUNNING && !suspend_lets_run(old)) {
+        old->state = PROC_READY;
+    }
+    return kick;
 }
 
 /**
@@ -356,36 +458,8 @@ void schedule(void)
     cpu = &cpu_table[me];
     old = cpu->current;
     pick_count++;
-    sched_remove(old);
-    proc_timer_update(old);
-    old->woken = 0;
-    if (old->state == PROC_READY) {
-        old->state = PROC_RUNNING;
-    }
-    if (cpu->idle && old != cpu->idle && (old->state == PROC_RUNNING || old->state == PROC_READY) &&
-        !((old->affinity >> me) & 1u)) {
-        old->state = PROC_READY;
-        old->cpu = sched_choose(old);
-        if (sched_cpu_idle(old->cpu)) {
-            kick = old->cpu;
-        }
-    }
-    if (cpu->idle && old != cpu->idle && old->state == PROC_RUNNING && !suspend_lets_run(old)) {
-        old->state = PROC_READY;
-    }
-    if (_wake_turn[me]) {
-        next = sched_find(me, me, 1);
-    }
-    if (next) {
-        _wake_turn[me] = 0;
-    } else {
-        next = sched_find(me, me, 0);
-        if (next) {
-            _wake_turn[me] = 1;
-        } else if (old == cpu->idle || old->state != PROC_RUNNING) {
-            next = sched_steal(me);
-        }
-    }
+    kick = sched_prepare_old(old, cpu, me);
+    next = sched_select(me, old);
 
     if (!next) {
         if (old == cpu->idle || old->state == PROC_RUNNING || !cpu->idle) {

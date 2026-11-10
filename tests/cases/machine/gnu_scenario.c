@@ -385,6 +385,9 @@ static void stage(struct gnu_case *s, struct etude_case_service **sntp)
     if (strcmp(s->row, "autotools") == 0 && net_ok(&s->u) &&
         !copy_to(s, "sed-tarball", "/tmp/gnu/sed.tar.xz", "scp.sed"))
         net_fail(&s->u, "scp did not put GNU sed's tarball on the machine");
+    if (strcmp(s->row, "pi_futex") == 0 && net_ok(&s->u) &&
+        !copy_to(s, "pi-source", "/tmp/gnu/pi-futex.c", "scp.pi"))
+        net_fail(&s->u, "scp did not put the PI futex source on the machine");
     if (strcmp(s->row, "ntpd") != 0 || !net_ok(&s->u))
         return;
     if (!copy_to(s, "clockmusl", "/tmp/gnu/clockmusl", "scp.clockmusl")) {

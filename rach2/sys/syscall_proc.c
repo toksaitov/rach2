@@ -20,6 +20,7 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/futex.h"
 #include "proc/seccomp.h"
 #include "proc/ns.h"
 #include "proc/wait_queue.h"
@@ -2114,6 +2115,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     int sig;
 
     proc_thread_gone(current_proc);
+    current_proc->futex_exit_state = 0;
     if (current_proc != current_proc->tg->leader) {
         exec_take_leader();
     }
@@ -2647,7 +2649,8 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->pgid = parent->pgid;
     child->nice = parent->nice;
     child->ioprio = parent->ioprio;
-    child->sched_policy = parent->sched_policy;
+    child->sched_policy = parent->sched_reset && parent->rt_priority ? 0 : parent->sched_policy;
+    child->rt_priority = parent->sched_reset ? 0 : parent->rt_priority;
     if (child->tg != parent->tg) {
         child->tg->oom_score_adj = parent->tg->oom_score_adj;
         child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
@@ -5294,6 +5297,12 @@ static int group_stop_taken(void)
     return 1;
 }
 
+/** Whether a handler's flags or ERESTARTNOINTR require a call restart. */
+static int signal_restarts(uint32_t flags, int forced)
+{
+    return forced || (flags & SA_RESTART) != 0;
+}
+
 /**
  * Only a frame that returns to user mode is acted on, and one handler at most
  * is given a frame on each return. A deliverable signal, one pending for the
@@ -5319,6 +5328,7 @@ static int group_stop_taken(void)
 void deliver_signals(isr_params_t *tf)
 {
     uint32_t restart_nr;
+    int restart_always;
 
     if (!current_proc) {
         return;
@@ -5333,7 +5343,9 @@ void deliver_signals(isr_params_t *tf)
         ptrace_return_stops();
     }
     restart_nr = current_proc->restart_nr;
+    restart_always = current_proc->restart_always;
     current_proc->restart_nr = 0;
+    current_proc->restart_always = 0;
 
     for (;;) {
         uint64_t deliverable;
@@ -5381,7 +5393,7 @@ void deliver_signals(isr_params_t *tf)
         }
 
         handler_flags = (uint32_t)sa->flags;
-        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
+        if (restart_nr != 0 && signal_restarts(handler_flags, restart_always)) {
             restart_syscall(tf, restart_nr);
         }
         oldmask =
@@ -8006,6 +8018,7 @@ static int sched_may_change(const process_t *p)
 long sys_sched_yield(isr_params_t *params)
 {
     (void)params;
+    current_proc->sched_yielded = 1;
     schedule();
     return 0;
 }
@@ -8022,8 +8035,8 @@ long sys_sched_yield(isr_params_t *params)
  * pid, -EINVAL; an unreadable parameter, -EFAULT; no such process, -ESRCH; a
  * policy Linux does not define, a priority outside 0 to 99, or one that does
  * not suit the policy, -EINVAL, as for SCHED_DEADLINE, which takes its
- * parameters from sched_setattr alone; SCHED_FIFO and SCHED_RR, -EPERM, as
- * Linux returns to a caller without CAP_SYS_NICE when RLIMIT_RTPRIO is 0.
+ * parameters from sched_setattr alone. FIFO and RR take priority 1 to 99;
+ * entry or a raised priority needs privilege with RLIMIT_RTPRIO 0.
  * Without privilege, -EPERM as well for a caller that may not change the
  * target, for leaving SCHED_IDLE, which Linux counts as nice 20 and allows
  * only as far as RLIMIT_NICE, 0 here, would, and for clearing
@@ -8065,7 +8078,13 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
         break;
     case SCHED_FIFO:
     case SCHED_RR:
-        return priority == 0 ? -EINVAL : -EPERM;
+        if (priority == 0) {
+            return -EINVAL;
+        }
+        if (!cred_privileged() && (policy != p->sched_policy || priority > p->rt_priority)) {
+            return -EPERM;
+        }
+        break;
     default:
         return -EINVAL;
     }
@@ -8076,6 +8095,9 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
     }
     p->sched_policy = (uint8_t)policy;
     p->sched_reset = (uint8_t)reset;
+    p->rt_priority = (uint8_t)priority;
+    futex_pi_recalculate();
+    sched_priority_changed(p);
     return 0;
 }
 
@@ -8116,8 +8138,8 @@ long sys_sched_getscheduler(isr_params_t *params)
 }
 
 /**
- * A process's scheduling parameter (sched_getparam): the priority 0 that
- * every policy kept here has, written to the struct sched_param the second
+ * A process's base scheduling priority, without PI donations, written to
+ * the struct sched_param the second
  * argument points at. -EINVAL for no parameter or a negative pid, -ESRCH,
  * -EFAULT.
  */
@@ -8130,8 +8152,13 @@ long sys_sched_getparam(isr_params_t *params)
     if (!uparam || pid < 0) {
         return -EINVAL;
     }
-    if (!sched_target(pid)) {
-        return -ESRCH;
+    {
+        process_t *p = sched_target(pid);
+
+        if (!p) {
+            return -ESRCH;
+        }
+        priority = p->rt_priority;
     }
     return copy_to_user(uparam, &priority, sizeof(priority)) != 0 ? -EFAULT : 0;
 }
