@@ -16,7 +16,12 @@
  * init's sibling. In a new network namespace a
  * connection to the loopback address fails with ENETUNREACH. A mount made in
  * a new mount namespace is not seen outside it, and a new IPC namespace has
- * none of the first's System V objects.
+ * none of the first's System V objects. Forty mount namespaces exist at
+ * once, past the 32 Rach2 once had room for, each with a mount of its own
+ * that it alone sees. A map of 340 extents, the most Linux takes, written by
+ * root from outside the namespace as newuidmap writes one, is taken, a 341st
+ * extent is EINVAL, the map reads back sorted by the first id, and ids map
+ * through it both ways.
  *
  * As uid 1000, one clone makes a user, a PID and a network namespace, as
  * Chromium's sandbox does; in them the child is pid 1, with uid 65534 until a
@@ -57,6 +62,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/mount.h>
@@ -108,6 +114,12 @@ enum row {
     R_MNT,
     R_MNT_OUTSIDE,
     R_MNT_INSIDE,
+    R_MNT_MANY,
+    R_MNT_MANY_OWN,
+    R_MAP_EXTRA,
+    R_MAP_TAKEN,
+    R_MAP_SORTED,
+    R_MAP_IDS,
     R_SANDBOX_USER,
     R_SANDBOX,
     R_USER_BECOME,
@@ -157,6 +169,12 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "mount-in-namespace",
                                                "mount-unseen-outside",
                                                "mount-seen-inside",
+                                               "mount-forty-namespaces",
+                                               "mount-forty-own-views",
+                                               "map-341st-einval",
+                                               "map-340-extents",
+                                               "map-reads-sorted",
+                                               "map-ids-both-ways",
                                                "sandbox-uid-1000",
                                                "sandbox-clone",
                                                "user-uid-1000",
@@ -682,6 +700,241 @@ static int mnt(void)
     return rc;
 }
 
+/* The mount namespaces `many_mnt` makes at once. */
+#define MANY 40
+
+/** The entries of the directory `path` other than . and .., or -1. */
+static int entries(const char *path)
+{
+    DIR *d = opendir(path);
+    struct dirent *de;
+    int n = 0;
+
+    if (!d) {
+        return -1;
+    }
+    while ((de = readdir(d)) != NULL) {
+        n += strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0;
+    }
+    closedir(d);
+    return n;
+}
+
+/**
+ * One of `many_mnt`'s children, number `i`: unshare a mount namespace, mount
+ * a tmpfs on /tmp/nsmany, make a file named by its number there, say so on
+ * `ready` ('x', or 'n' on a failure), and once `go` closes, exit 0 when its
+ * file is the only entry it sees.
+ */
+static void many_child(int i, int ready, int go)
+{
+    char path[64], c = 'x';
+    int fd;
+
+    snprintf(path, sizeof(path), "/tmp/nsmany/%d", i);
+    if (unshare(CLONE_NEWNS) != 0 || mount("nsmany", "/tmp/nsmany", "tmpfs", 0, NULL) != 0 ||
+        (fd = open(path, O_CREAT | O_WRONLY, 0644)) < 0) {
+        c = 'n';
+        write(ready, &c, 1);
+        _exit(1);
+    }
+    close(fd);
+    write(ready, &c, 1);
+    read(go, &c, 1);
+    _exit(entries("/tmp/nsmany") == 1 && access(path, F_OK) == 0 ? 0 : 1);
+}
+
+/**
+ * Check MANY mount namespaces at once, each with a tmpfs on /tmp/nsmany and a
+ * file of its own there: every one is made, the caller sees none of their
+ * files, and each sees its own alone. Returns 0, or 1 after printing the
+ * failure.
+ */
+static int many_mnt(void)
+{
+    int ready[2], go[2], i, status, made = 0, own = 1;
+    pid_t pids[MANY];
+    char c;
+
+    mkdir("/tmp/nsmany", 0755);
+    if (pipe(ready) != 0 || pipe(go) != 0) {
+        return fail(R_MNT_MANY, "pipe");
+    }
+    for (i = 0; i < MANY; i++) {
+        fflush(stdout);
+        pids[i] = fork();
+        if (pids[i] == 0) {
+            close(ready[0]);
+            close(go[1]);
+            many_child(i, ready[1], go[0]);
+        }
+    }
+    close(ready[1]);
+    close(go[0]);
+    for (i = 0; i < MANY; i++) {
+        made += pids[i] > 0 && read(ready[0], &c, 1) == 1 && c == 'x';
+    }
+    if (made == MANY && entries("/tmp/nsmany") != 0) {
+        made = -1;
+    }
+    close(go[1]);
+    for (i = 0; i < MANY; i++) {
+        if (pids[i] > 0) {
+            own &= waitpid(pids[i], &status, 0) == pids[i] && WIFEXITED(status) &&
+                   WEXITSTATUS(status) == 0;
+        }
+    }
+    close(ready[0]);
+    rmdir("/tmp/nsmany");
+    if (made != MANY) {
+        return fail(R_MNT_MANY, made < 0 ? "a namespace's mount is seen outside it"
+                                         : "40 mount namespaces at once, each with a tmpfs");
+    }
+    return own ? 0 : fail(R_MNT_MANY_OWN, "each of 40 namespaces sees its own mount alone");
+}
+
+/* The extents of the long map, the most Linux takes. */
+#define EXTENTS 340
+
+/** The text of a map of `n` extents, `2k 3k 1` for k from n - 1 down to 0,
+ * into `out` of `cap` bytes. */
+static void descending(char *out, int cap, int n)
+{
+    int k, at = 0;
+
+    for (k = n - 1; k >= 0 && at < cap; k--) {
+        at += snprintf(out + at, (size_t)(cap - at), "%d %d 1\n", 2 * k, 3 * k);
+    }
+}
+
+/** Read the whole of the file `path` into `buf` of `cap` bytes, by as many
+ * reads as it takes, NUL-terminated; the byte count, or -1. */
+static int slurp(const char *path, char *buf, int cap)
+{
+    int fd = open(path, O_RDONLY), at = 0;
+    ssize_t n = 0;
+
+    if (fd < 0) {
+        return -1;
+    }
+    while (at < cap - 1 && (n = read(fd, buf + at, (size_t)(cap - 1 - at))) > 0) {
+        at += (int)n;
+    }
+    close(fd);
+    buf[at] = '\0';
+    return n < 0 ? -1 : at;
+}
+
+/** The kernel's real uid of the process `pid`, from its status file, or -1. */
+static long status_uid(pid_t pid)
+{
+    char path[64], buf[2048], *line;
+
+    snprintf(path, sizeof(path), "/proc/%d/status", (int)pid);
+    if (slurp(path, buf, sizeof(buf)) <= 0 || !(line = strstr(buf, "\nUid:"))) {
+        return -1;
+    }
+    return strtol(line + 5, NULL, 10);
+}
+
+/**
+ * The child of `long_map`: unshare a user namespace, say so on `up` ('u',
+ * or 'n'), wait for its map on `down`, then set its uid to 400 in the
+ * namespace and say so ('s' when its uid read 0 before and 400 after, 'f'
+ * otherwise), and wait on `down` again while its status is read.
+ */
+static void map_child(int up, int down)
+{
+    char c = 'u';
+
+    if (unshare(CLONE_NEWUSER) != 0) {
+        c = 'n';
+    }
+    write(up, &c, 1);
+    if (c == 'n' || read(down, &c, 1) != 1) {
+        _exit(1);
+    }
+    c = getuid() == 0 && setuid(400) == 0 && getuid() == 400 ? 's' : 'f';
+    write(up, &c, 1);
+    read(down, &c, 1);
+    _exit(0);
+}
+
+/** Whether `text` has the line of the extent `first lower count` at line
+ * `at`, in /proc/PID/uid_map's ten-column form. */
+static int map_line(const char *text, int at, unsigned first, unsigned lower, unsigned count)
+{
+    char want[40];
+
+    snprintf(want, sizeof(want), "%10u %10u %10u\n", first, lower, count);
+    return strncmp(text + at * 33, want, 33) == 0;
+}
+
+/**
+ * The rows of `long_map` on the user namespace of `pid`, whose child talks
+ * on `up` and `down`: one more extent than EXTENTS is EINVAL, EXTENTS in
+ * descending order are taken and read back sorted by the first id, and the
+ * namespace's 0 and 400 are the kernel's 0 and 600. Returns 0, or 1 after
+ * printing the failure.
+ */
+static int map_rows(pid_t pid, int up, int down)
+{
+    static char text[8192], back[EXTENTS * 33 + 64];
+    char path[64], c = 0;
+
+    snprintf(path, sizeof(path), "/proc/%d/uid_map", (int)pid);
+    if (read(up, &c, 1) != 1 || c != 'u') {
+        return fail(R_MAP_EXTRA, "unshare a user namespace as root");
+    }
+    descending(text, sizeof(text), EXTENTS + 1);
+    if (put(path, text) == 0 || errno != EINVAL) {
+        return fail(R_MAP_EXTRA, "a map of 341 extents is not EINVAL");
+    }
+    descending(text, sizeof(text), EXTENTS);
+    if (put(path, text) != 0) {
+        return fail(R_MAP_TAKEN, "a map of 340 extents");
+    }
+    if (slurp(path, back, sizeof(back)) != EXTENTS * 33 || !map_line(back, 0, 0, 0, 1) ||
+        !map_line(back, 200, 400, 600, 1)) {
+        return fail(R_MAP_SORTED, "the map reads back sorted by the first id");
+    }
+    if (write(down, &c, 1) != 1 || read(up, &c, 1) != 1 || c != 's' || status_uid(pid) != 600) {
+        return fail(R_MAP_IDS, "the namespace's 0 and 400 are the kernel's 0 and 600");
+    }
+    return 0;
+}
+
+/**
+ * Check a uid map of EXTENTS extents written by root from outside the
+ * namespace, as newuidmap writes one, on a child that unshares a user
+ * namespace (`map_rows`). Returns 0, or 1 after printing the failure.
+ */
+static int long_map(void)
+{
+    int up[2], down[2], rc, status;
+    pid_t pid;
+
+    if (pipe(up) != 0 || pipe(down) != 0) {
+        return fail(R_MAP_EXTRA, "pipe");
+    }
+    fflush(stdout);
+    pid = fork();
+    if (pid == 0) {
+        close(up[0]);
+        close(down[1]);
+        map_child(up[1], down[0]);
+    }
+    close(up[1]);
+    close(down[0]);
+    rc = pid < 0 ? fail(R_MAP_EXTRA, "fork") : map_rows(pid, up[0], down[1]);
+    close(down[1]);
+    close(up[0]);
+    if (pid > 0) {
+        waitpid(pid, &status, 0);
+    }
+    return rc;
+}
+
 /**
  * Check Chromium's sandbox clone as uid 1000: user, PID and network
  * namespaces at once, the child pid 1 with uid 65534 and no network. Returns
@@ -880,9 +1133,10 @@ int main(int argc, char **argv)
         return 1;
     }
     rc = wide_flags() || in_child(uts, R_UTS_LINK) || in_child(pid_ns, R_PID_KEEP) ||
-         in_child(net, R_NET) || in_child(ipc, R_IPC) || mnt() ||
-         in_child(sandbox, R_SANDBOX_USER) || in_child(user, R_USER_BECOME) ||
-         in_child(setid, R_SETID_MAP) || in_child(empty_root, R_FDINFO_OPEN);
+         in_child(net, R_NET) || in_child(ipc, R_IPC) || mnt() || in_child(many_mnt, R_MNT_MANY) ||
+         in_child(long_map, R_MAP_EXTRA) || in_child(sandbox, R_SANDBOX_USER) ||
+         in_child(user, R_USER_BECOME) || in_child(setid, R_SETID_MAP) ||
+         in_child(empty_root, R_FDINFO_OPEN);
     shmctl(id, IPC_RMID, NULL);
     report_rows();
     if (rc) {
