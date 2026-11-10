@@ -260,7 +260,9 @@ take the APIC's 1 KiB page in Linux's layout, with the x2APIC id in bits
 31:24.
 .Pp
 .Dv KVM_SET_GSI_ROUTING
-takes MSI routes alone, one for each GSI.
+takes MSI routes and Hyper-V's
+.Dv KVM_IRQ_ROUTING_HV_SINT
+routes alone, one for each GSI.
 .Dv KVM_IRQ_LINE
 raises a GSI's MSI, and
 .Dv KVM_IRQ_LINE_STATUS
@@ -302,6 +304,82 @@ with
 .Dv KVM_IOEVENTFD_FLAG_DATAMATCH ,
 adds 1 to the counter and goes no further.
 A string OUT adds 1 for each element.
+.Ss Hyper-V
+A vCPU whose CPUID, given by
+.Dv KVM_SET_CPUID2 ,
+has the interface
+.Ql Hv#1
+in leaf 0x40000001 gets Linux's Hyper-V enlightenments.
+.Dv KVM_GET_SUPPORTED_HV_CPUID ,
+on
+.Pa /dev/kvm
+or on a vCPU, gives the ten leaves Linux gives, from 0x40000000 to
+0x4000000a, with no enlightened VMCS; on a vCPU of a VM without the split
+controller they offer no direct timers and no cluster IPI.
+The guest's MSRs from 0x40000000 are Hyper-V's: its id, the hypercall page,
+the VP index, the runtime, the reference counter and the reference TSC
+page, the TSC and APIC frequencies, the APIC's EOI, ICR and TPR, the VP
+assist page, the crash and reset MSRs, the TSC emulation and invariant TSC
+controls, SynIC's, the synthetic timers' and the synthetic debugger's.
+An MSR the guest's CPUID does not offer is #GP under
+.Dv KVM_CAP_HYPERV_ENFORCE_CPUID ,
+which
+.Dv KVM_ENABLE_CAP
+on the vCPU turns on.
+A write of the crash control's notice bit, and of 1 to the reset MSR, ends
+the next
+.Dv KVM_RUN
+in
+.Dv KVM_EXIT_SYSTEM_EVENT
+of type
+.Dv KVM_SYSTEM_EVENT_CRASH
+or
+.Dv KVM_SYSTEM_EVENT_RESET .
+.Pp
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_HYPERV_SYNIC
+or
+.Dv KVM_CAP_HYPERV_SYNIC2 ,
+the second leaving the pages the guest enables as they are, turns SynIC on
+for the vCPU, with the split controller.
+A guest's write of SCONTROL, SIEFP or SIMP ends the run in
+.Dv KVM_EXIT_HYPERV
+of type
+.Dv KVM_EXIT_HYPERV_SYNIC .
+A route of type
+.Dv KVM_IRQ_ROUTING_HV_SINT
+raises the SINT
+.Va sint
+of the vCPU whose VP index is
+.Va vcpu .
+The four synthetic timers of each vCPU deliver their messages to the
+message page, or their vector in direct mode.
+.Pp
+A VMCALL, or VMMCALL on AMD, from the guest's kernel, once the guest has
+written its id, is a hypercall.
+The kernel carries out HvNotifyLongSpinWait, HvSignalEvent for a connection
+that
+.Dv KVM_HYPERV_EVENTFD
+ties to an eventfd, HvCallSendSyntheticClusterIpi, HvFlushVirtualAddressSpace
+and HvFlushVirtualAddressList, the last three in their Ex forms too.
+HvPostMessage, HvSignalEvent for another connection, the extended
+hypercalls and the debugger's end the run in
+.Dv KVM_EXIT_HYPERV
+of type
+.Dv KVM_EXIT_HYPERV_HCALL ;
+the caller puts the status in
+.Va hyperv.u.hcall.result ,
+which the next
+.Dv KVM_RUN
+gives the guest.
+A guest's write of the debugger's control or pending page ends the run in
+.Dv KVM_EXIT_HYPERV_SYNDBG ,
+whose
+.Va status
+the next
+.Dv KVM_RUN
+takes.
 .Sh FILES
 .Bl -tag -width /dev/kvm
 .It Pa /dev/kvm
@@ -312,7 +390,13 @@ the interface
 .It Bq Er ENOTTY
 An ioctl that
 .Pa /dev/kvm
-or a VM does not take.
+or a VM does not take;
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_HYPERV_ENLIGHTENED_VMCS
+or
+.Dv KVM_CAP_HYPERV_DIRECT_TLBFLUSH ,
+which serve a nested guest.
 .It Bq Er EINVAL
 An ioctl that a vCPU does not take; an argument outside Linux's bounds,
 such as a machine type other than 0, a vCPU id of 256 or more, a TSS past
@@ -325,10 +409,16 @@ address in the caller, size or
 .Dv KVM_MEM_READONLY
 flag;
 .Dv KVM_CLEAR_DIRTY_LOG
-of a range outside the slot or not on 64-page bounds.
+of a range outside the slot or not on 64-page bounds;
+.Dv KVM_CAP_HYPERV_SYNIC
+without the split controller;
+.Dv KVM_HYPERV_EVENTFD
+of a connection past 0xffffff.
 .It Bq Er E2BIG
 A list longer than the call takes, more than 256 CPUID entries or 256
-MSRs or more; or a buffer too small for the list asked for, whose count
+MSRs or more;
+.Dv KVM_GET_SUPPORTED_HV_CPUID
+with room for fewer than ten entries; or a buffer too small for the list asked for, whose count
 .Dv KVM_GET_MSR_INDEX_LIST
 and
 .Dv KVM_GET_MSR_FEATURE_INDEX_LIST
@@ -343,7 +433,9 @@ after it;
 .Dv KVM_INTERRUPT
 with the split controller while a vector waits;
 a memory slot at guest addresses another has;
-an ioeventfd that some write would match along with another.
+an ioeventfd that some write would match along with another;
+.Dv KVM_HYPERV_EVENTFD
+of a connection that has an eventfd.
 .It Bq Er EBUSY
 .Dv KVM_SET_IDENTITY_MAP_ADDR
 or
@@ -360,13 +452,16 @@ without the split controller while an interrupt waits;
 .Dv KVM_IRQ_LINE
 without the split controller.
 .It Bq Er EBADF
-.Dv KVM_IRQFD
-or
+.Dv KVM_IRQFD ,
 .Dv KVM_IOEVENTFD
+or
+.Dv KVM_HYPERV_EVENTFD
 of a descriptor that is not open.
 .It Bq Er ENOENT
 .Dv KVM_IOEVENTFD_FLAG_DEASSIGN
 of no ioeventfd;
+.Dv KVM_HYPERV_EVENTFD_DEASSIGN
+of a connection with no eventfd;
 .Dv KVM_GET_DIRTY_LOG
 or
 .Dv KVM_CLEAR_DIRTY_LOG
@@ -406,9 +501,10 @@ Linux's KVM API, version 12, for x86, as its
 gives it.
 .Sh BUGS
 At most 64 vCPUs in a VM, with ids below 256, and 256 memory slots.
-No in-kernel PIC, I/O APIC or PIT, no routes but MSI routes, no irqfd
-resample, no
+No in-kernel PIC, I/O APIC or PIT, no routes but MSI and SINT routes, no
+irqfd resample, no
 .Dv KVM_CAP_X2APIC_API ,
-no coalesced MMIO, no dirty ring, no SMM and no nested virtualization.
+no coalesced MMIO, no dirty ring, no SMM and no nested virtualization, so
+no enlightened VMCS and no direct TLB flush of Hyper-V's.
 The APIC timer is checked at each entry, and the host's tick of 1 ms
 makes the guest exit, so an expiry reaches the guest within a tick.

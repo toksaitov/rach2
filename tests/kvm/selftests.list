@@ -2,8 +2,10 @@
 # program's path under /opt/kvm-selftests, what corpus.sh requires of it
 # under Rach2's KVM, Linux's result on the testing PC, and the reason.
 # EXPECT is `pass`, an exit of 0; `skip`, the kselftest skip, exit 4, for
-# what the processor lacks, as Linux skips it there; or `excluded`, not run,
-# for one of the reasons the stack's approved plan allows. LINUX is the result
+# what the processor lacks, as Linux skips it there; `fail`, another exit,
+# where Linux fails for a cause the row names and Rach2 does as Linux does;
+# or `excluded`, not run, for one of the reasons the stack's approved plan
+# allows. LINUX is the result
 # of the same 6.12.115 programs under Linux 6.18.58, WSL's, as
 # ref/linux-selftests.status has it; a row Linux failed
 # there, where the programs are older than the kernel, still expects a pass,
@@ -39,14 +41,14 @@ x86_64/exit_on_emulation_failure_test pass pass
 x86_64/fix_hypercall_test pass pass
 x86_64/get_msr_index_features pass pass
 x86_64/hwcr_msr_test pass pass
-x86_64/hyperv_clock excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
-x86_64/hyperv_cpuid excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
-x86_64/hyperv_evmcs excluded skip Hyper-V: Rach2's KVM has no Hyper-V enlightenments
-x86_64/hyperv_extended_hypercalls excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
-x86_64/hyperv_features excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
-x86_64/hyperv_ipi excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_clock pass pass
+x86_64/hyperv_cpuid pass pass
+x86_64/hyperv_evmcs skip skip Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/hyperv_extended_hypercalls pass pass
+x86_64/hyperv_features pass pass
+x86_64/hyperv_ipi pass pass
 x86_64/hyperv_svm_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX, which the test's nested half needs
-x86_64/hyperv_tlb_flush excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+x86_64/hyperv_tlb_flush pass pass
 x86_64/kvm_clock_test pass pass
 x86_64/kvm_pv_test pass fail Linux: KVM_ENABLE_CAP failed, rc: -1 errno: 22 (Invalid argument)
 x86_64/max_vcpuid_cap_test pass pass
