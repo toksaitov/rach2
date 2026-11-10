@@ -37,7 +37,8 @@ static void xattr_parser_rows(void)
     a[40] = 255;
     a[41] = 255;
     check(ext2_xattr_check(a, 4096) == -EIO, "a value beyond the block is refused");
-    a[0] = 0;
+    check(ext2_xattr_edit(0, a, 4096, &arg) == 1, "the bad-magic block starts valid");
+    a[3] = 0;
     check(ext2_xattr_check(a, 4096) == -EIO, "bad magic is refused");
 done:
     free(a);
@@ -147,7 +148,7 @@ static void xattr_stop_rows(void)
     void *n;
 
     for (mode = 0; mode < 2; mode++) {
-        for (op = 0; op < 4; op++) {
+        for (op = 0; op < 6; op++) {
             bytes = attr_image(img, 2, 2);
             use_image(img, bytes);
             check((mount_flags(mode ? 0 : VFS_MS_DIRSYNC)) == 0, "the stop volume mounts");
@@ -159,14 +160,18 @@ static void xattr_stop_rows(void)
                 unmount_rw();
                 return;
             }
-            if (op == 3)
+            if (op >= 3)
                 check(xa_call(n, VFS_XATTR_SET, "user.b", "kept", 4, 0) == 0,
                       "the non-last removal has a second attribute");
+            if (op >= 4)
+                check(xa_call(n, VFS_XATTR_REMOVE, "user.b", 0, 0, 0) == 0,
+                      "the private block has only the attribute the row changes");
             check(copy_file(img, base), "the pre-operation disk is copied");
             wlog_reset();
             wlog_capture = 1;
-            rc = xa_call(n, op >= 2 ? VFS_XATTR_REMOVE : VFS_XATTR_SET,
-                         op == 0 ? "user.DOSATTRIB" : "user.a", "new", op >= 2 ? 0 : 3, 0);
+            rc = xa_call(n, op >= 2 && op <= 4 ? VFS_XATTR_REMOVE : VFS_XATTR_SET,
+                         op == 0 ? "user.DOSATTRIB" : "user.a", "new", op >= 2 && op <= 4 ? 0 : 3,
+                         0);
             count = wlog_n;
             wlog_capture = 0;
             check(rc == 0 && count > 0 && !wlog_overflow, "every attribute write was captured");
@@ -199,6 +204,60 @@ static void xattr_stop_rows(void)
             wlog_reset();
         }
     }
+}
+
+/** A private attribute block can change even when no free block remains. */
+static void xattr_full_rows(void)
+{
+    const char *img = fix_path("xa-full.ext2");
+    uint64_t bytes = build_image(img, 4096, 128, ATTR_PROFILE, 4, "tree");
+    void *n;
+    struct vfs_statfs before, after;
+    char value[] = "old", replacement[] = "new";
+    int rc;
+
+    use_image(img, bytes);
+    check(mount_rw() == 0, "the full-disk attribute row mounts");
+    if (!mnt.root)
+        return;
+    n = walk("/hello.txt", &rc);
+    check(n && xa_call(n, VFS_XATTR_SET, "user.a", value, 3, 0) == 0,
+          "the full-disk row first owns an attribute block");
+    check(fill_volume() == 0, "the volume fills to ENOSPC");
+    OPS->statfs(&mnt, &before);
+    check(n && before.bfree == 0 && xa_call(n, VFS_XATTR_SET, "user.a", replacement, 3, 2) == 0,
+          "an unshared block replaces a value with no free block");
+    OPS->statfs(&mnt, &after);
+    check(after.bfree == before.bfree, "replacement allocates no block");
+    if (n)
+        OPS->put(&mnt, n);
+    check(unmount_rw() == 0 && e2fsck_clean(img), "the full volume ends clean");
+}
+
+/** Adding the first attribute promotes a revision-zero volume safely. */
+static void xattr_revision_rows(void)
+{
+    const char *img = fix_path("xa-rev0.ext2");
+    uint64_t bytes = build_image(img, 4096, 128,
+                                 "^sparse_super,^large_file,^filetype,^dir_index,^resize_inode,"
+                                 "^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
+                                 "^metadata_csum,^huge_file,^dir_nlink,^extra_isize",
+                                 4, "tree");
+    void *n;
+    char value[] = "old revision";
+    int rc;
+
+    check(debugfs_script(img, "ssv rev_level 0\n"), "the fixture has revision zero");
+    use_image(img, bytes);
+    check(mount_rw() == 0, "the revision-zero attribute row mounts");
+    if (!mnt.root)
+        return;
+    n = walk("/hello.txt", &rc);
+    check(n && xa_call(n, VFS_XATTR_SET, "user.a", value, sizeof(value), 0) == 0,
+          "the first attribute enables the dynamic revision and its feature");
+    if (n)
+        OPS->put(&mnt, n);
+    check(unmount_rw() == 0 && e2fsck_clean(img), "the promoted superblock is valid to e2fsck");
 }
 
 #ifdef __linux__
@@ -239,6 +298,8 @@ static void xattr_rows(void)
 #ifdef __linux__
     xattr_linux_rows();
 #endif
+    xattr_revision_rows();
+    xattr_full_rows();
     xattr_parser_rows();
     xattr_value_rows();
     xattr_stop_rows();
