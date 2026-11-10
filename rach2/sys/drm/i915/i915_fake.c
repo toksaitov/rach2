@@ -1086,7 +1086,7 @@ static int fake_word(const char *s, uint32_t n, const char *w)
     uint32_t i;
 
     for (i = 0; i < n; i++) {
-        if (w[i] != s[i]) {
+        if (w[i] == '\0' || w[i] != s[i]) {
             return 0;
         }
     }

@@ -536,8 +536,8 @@ static const char *const display_params[] = {"i915.dmc_firmware_path=",
                                              "i915.enable_psr2_sel_fetch=yes",
                                              "i915.enable_dmc_wl=-1"};
 
-/** The `cap` bytes at `buf` hold no text when the device is gone, since
- * its registers are; -ENODEV then, 0 otherwise. */
+/** -ENODEV when the device is unplugged, since its registers are gone and
+ * a file of it has no text; 0 otherwise. */
 static int32_t gone(struct drm_i915_private *i915)
 {
     return i915->drm.unplugged ? -ENODEV : 0;
@@ -1171,12 +1171,29 @@ static int32_t wedged_show(void *data, char *buf, uint32_t cap)
     return emit_end(&e);
 }
 
+/** The driver's mask of engines (1 << index) that Linux's mask `val`,
+ * by Linux's engine ids, names; a bit of no engine here is dropped, as
+ * Linux's intel_gt_handle_error masks with the engines it has. */
+static uint32_t engines_by_index(struct drm_i915_private *i915, uint64_t val)
+{
+    uint32_t mask = 0;
+    int i;
+
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        if ((val >> i915->gt.engine[i].linux_id) & 1u) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+
 /**
  * A write of i915_wedged, Linux's i915_wedged_set: the number written, in
  * any base kstrtoull takes, is a mask of engines by Linux's engine ids,
- * which `i915_handle_error` recovers as from a hang with its state
- * captured: each engine reset alone, the whole GPU where that fails or
- * the GPU is wedged, which IGT's igt_force_gpu_reset writes -1 for.
+ * which `i915_handle_error` recovers, by the driver's indices, as from a
+ * hang with its state captured: each engine reset alone, the whole GPU
+ * where that fails or the GPU is wedged, which IGT's igt_force_gpu_reset
+ * writes -1 for.
  */
 static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
 {
@@ -1202,7 +1219,7 @@ static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
     emitf(&e, "Manually reset engine mask to %Lx", val);
     (void)emit_end(&e);
     msg[sizeof(msg) - 1u] = '\0';
-    i915_handle_error(i915, (uint32_t)val, msg);
+    i915_handle_error(i915, engines_by_index(i915, val), msg);
     return (int32_t)len;
 }
 
@@ -1515,22 +1532,18 @@ static int32_t crtc_pipe_show(void *data, char *buf, uint32_t cap)
 }
 
 /** crtc-N/i915_current_bpc, Linux's i915_current_bpc_show: the pipe's bits
- * a colour in its configuration, under the commit lock. */
+ * a colour in its configuration. Linux reads it under the commit lock; a
+ * show may not sleep, so this reads it under the big kernel lock alone,
+ * and a commit asleep in its middle may show the depth before or after. */
 static int32_t crtc_bpc_show(void *data, char *buf, uint32_t cap)
 {
     struct intel_crtc *c = (struct intel_crtc *)data;
     struct emit e;
-    int32_t rc;
 
-    rc = drm_modeset_lock(&c->i915->drm);
-    if (rc != 0) {
-        return rc;
-    }
     e.buf = buf;
     e.cap = cap;
     e.len = 0;
     emitf(&e, "Current: %u\n", (unsigned)(c->cfg.bpp / 3u));
-    drm_modeset_unlock(&c->i915->drm);
     return emit_end(&e);
 }
 
