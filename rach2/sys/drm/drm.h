@@ -1355,8 +1355,10 @@ int drm_edid_parse_modes(const uint8_t *edid, uint32_t len,
 /** Take `dev`'s commit lock, sleeping while another commit holds it:
  * 0, or -EINTR for a signal. */
 int32_t drm_modeset_lock(struct drm_device *dev);
-/** Take the commit lock with signals ignored, for a release that must
- * take a framebuffer off the display whatever the caller's signals. */
+/** Take the commit lock with signals ignored, as Linux's acquire context
+ * without DRM_MODESET_ACQUIRE_INTERRUPTIBLE: for a release that must take
+ * a framebuffer off the display whatever the caller's signals, and for a
+ * driver's commit of its own. */
 void drm_modeset_lock_nointr(struct drm_device *dev);
 /** Let the commit lock go and wake the next taker. */
 void drm_modeset_unlock(struct drm_device *dev);

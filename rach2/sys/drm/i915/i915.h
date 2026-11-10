@@ -874,7 +874,7 @@ struct intel_dp {
     uint32_t dfp_max_bpc, dfp_max_dotclock, dfp_min_tmds, dfp_max_tmds;
 };
 
-/* ---- The external outputs (78-10c) ---- */
+/* ---- The external outputs, DDI B to D ---- */
 
 /* What a pipe drives, Linux's INTEL_OUTPUT_ types of a DDI port. */
 #define INTEL_OUTPUT_NONE 0
@@ -1082,8 +1082,8 @@ struct intel_hotplug {
 };
 
 /*
- * What a pipe is set to (the outputs' compute_config and the fitter),
- * Linux's part of intel_crtc_state that 78-10b and 78-10c drive:
+ * What a pipe is set to, Linux's part of intel_crtc_state that the
+ * outputs' compute_config and the fitter set:
  * `active`; the output, `output` INTEL_OUTPUT_, on DDI `port` through
  * transcoder `trans`, the eDP transcoder for eDP and the pipe's own for
  * the rest; the timings in `mode` with the pixel clock in kHz, the pipe's
@@ -3169,9 +3169,20 @@ void ilk_pfit_enable(struct drm_i915_private *i915, int pipe, const struct intel
 /** Turn it off when `cfg` had it on, Linux's ilk_pfit_disable. */
 void ilk_pfit_disable(struct drm_i915_private *i915, int pipe, const struct intel_crtc_config *cfg);
 
-/** The CRC hooks of the CRTCs (i915_display_debugfs.c). */
+/**
+ * Start the CRC source `name` on `crtc`, or stop it for NULL or "none",
+ * Linux's intel_crtc_set_crc_source (i915_display_debugfs.c). Sleeps: it
+ * takes the commit lock for the eDP pipe's fitter workaround. 0, -EINVAL
+ * for a source Haswell does not have, or -EIO for a pipe that is off.
+ */
 int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name);
+
+/** Whether `name` is a source of `crtc`: 0 with `*values_cnt` the values
+ * a frame gives, 5, or -EINVAL. Does not sleep. */
 int32_t intel_crtc_verify_crc_source(struct drm_crtc *crtc, const char *name, uint32_t *values_cnt);
+
+/** Linux's names of the CRC sources, `*count` of them, in its order; a
+ * static table. */
 const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *count);
 
 /** Enter `crc`, the CRC the error interrupt read at `crtc`'s CRC done,
@@ -3718,8 +3729,7 @@ void i915_gt_set_wedged(struct drm_i915_private *i915);
  */
 int32_t i915_gt_quiesce(struct drm_i915_private *i915);
 
-/* The requests of an engine the error state keeps, and the ring's dwords
- * at its head. */
+/* The most incomplete requests of an engine the error state keeps. */
 #define I915_ERROR_REQUESTS 8
 
 /* The subslices of Haswell GT2's one slice, whose sampler and row

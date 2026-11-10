@@ -335,8 +335,9 @@ The rest are read-only, mode 0400, at Linux's defaults.
 .It Pa dri/DEVICE/i915_error_state
 Mode 0644.
 The text of the first error state captured at a hang since boot or the
-last clear, in Linux's format, with the ring and status page of each engine
-that hung in Linux's ascii85; empty when there is none.
+last clear, in Linux's format, with the status page and ring of each engine
+with an incomplete request, hung or not, in Linux's ascii85; empty when
+there is none.
 The text is made at the open.
 Any write clears the state.
 .It Pa dri/DEVICE/i915_gpu_info

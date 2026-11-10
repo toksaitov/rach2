@@ -1115,6 +1115,9 @@ static void row_fault_commands(void)
     CHECK("refused: words after clear and light",
           cmd(f, "clear all") == -EINVAL && cmd(f, "light now") == -EINVAL);
     CHECK("refused: nothing", cmd(f, "") == -EINVAL && cmd(f, "\n") == -EINVAL);
+    CHECK("refused: a word with NULs, read no further than the word's name",
+          fake_command(f, "clear\0\0\0\0", 9) == -EINVAL &&
+              fake_command(f, "hang\0\0\0\0\0", 9) == -EINVAL);
     CHECK("refused: nothing armed", f->armed[FAKE_HANG] == 0);
     done();
 }
