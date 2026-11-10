@@ -2450,9 +2450,17 @@ static uint64_t guest_tsc(int fd)
  * entry, from the count and the moment its generation began at. */
 static void tsc_unscaled_rows(void)
 {
-    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
-    struct kvm_vcpu *v = entries[fd].priv;
+    int vm = dev(KVM_CREATE_VM, 0), fd;
+    struct kvm_vcpu *v;
 
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 1000000,
+          "the VM's KVM_SET_TSC_KHZ takes a rate no vCPU could have, as Linux's");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 0) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "and the host's for 0");
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = entries[fd].priv;
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == -EINVAL && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "but none once a vCPU exists, as Linux's x86.c refuses it after created_vcpus");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_TSC_CONTROL) == 0 &&
               fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 0,
           "no KVM_CAP_TSC_CONTROL and no KVM_CAP_VM_TSC_CONTROL without scaling");
@@ -2476,10 +2484,6 @@ static void tsc_unscaled_rows(void)
     CHECK(guest_tsc(fd) == 5000000, "between entries it counts at the host's rate");
     kvm_clock_prepare(v);
     CHECK(guest_tsc(fd) == 6000000, "and is moved up again");
-    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 1000000,
-          "the VM's KVM_SET_TSC_KHZ takes a rate no vCPU could have, as Linux's");
-    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 0) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000,
-          "and the host's for 0");
     fdclose(fd);
     fdclose(vm);
 }

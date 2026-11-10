@@ -464,12 +464,21 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     }
 }
 
-/** KVM_ENABLE_CAP of a VM: KVM_CAP_SPLIT_IRQCHIP, irq.c's,
- * KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, dirty.c's, and
- * KVM_CAP_X86_DISABLE_EXITS, which as in Linux 6.12 may come after vCPUs
- * are made and stops HLT's exits for those made after it; -EINVAL for a
- * flag, an exit Linux does not name, or any other capability, as Linux
- * answers one it does not enable. */
+/**
+ * KVM_ENABLE_CAP of a VM, as Linux 6.12's kvm_vm_ioctl_enable_cap:
+ * KVM_CAP_SPLIT_IRQCHIP, irq.c's; KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2,
+ * dirty.c's; KVM_CAP_X86_DISABLE_EXITS, which may come after vCPUs are
+ * made and stops HLT's exits for those made after it, -EINVAL for an exit
+ * Linux does not name; KVM_CAP_DISABLE_QUIRKS, and KVM_CAP_DISABLE_QUIRKS2,
+ * -EINVAL for a quirk it does not name; KVM_CAP_MAX_VCPU_ID, -EINVAL for a
+ * bound above KVM_MAX_VCPU_IDS, below the boot vCPU's id or other than one
+ * set before; KVM_CAP_EXIT_ON_EMULATION_FAILURE, -EINVAL for a bit other
+ * than 0; KVM_CAP_MSR_PLATFORM_INFO; and KVM_CAP_X86_APIC_BUS_CYCLES_NS,
+ * -EINVAL for 0, a length whose longest timer count overflows 64 bits of
+ * ns, or a VM with a vCPU, and -ENXIO without the local APIC in the kernel.
+ * -EINVAL for a flag or any other capability, as Linux answers one it does
+ * not enable; -EFAULT for a bad pointer.
+ */
 static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_enable_cap cap;
@@ -544,14 +553,15 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     }
 }
 
-/** KVM_SET_TSC_KHZ of a VM, as Linux's: the rate its later vCPUs start
- * at, which is not tried on a vCPU here. 0, or -EINVAL for a rate
- * `kvm_tsc_khz_arg` refuses. */
+/** KVM_SET_TSC_KHZ of a VM, as Linux's: the rate its vCPUs start at,
+ * which is not tried on a vCPU here. 0, or -EINVAL for a rate
+ * `kvm_tsc_khz_arg` refuses or once the VM has a vCPU, as Linux refuses
+ * it once `created_vcpus` is not 0. */
 static int32_t vm_set_tsc_khz(struct kvm_vm *vm, uintptr_t arg)
 {
     uint32_t khz = kvm_tsc_khz_arg(arg);
 
-    if (khz == 0) {
+    if (khz == 0 || vm->nr_vcpus != 0) {
         return -EINVAL;
     }
     vm->default_tsc_khz = khz;
