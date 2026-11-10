@@ -65,6 +65,9 @@ typedef uint32_t pte_t;
 #define PTE_NONE          0x040u
 #define PTE_NOEXEC        0x080u
 #define PTE_ZEROFILL      0x100u
+/* No protection keys. */
+#define PTE_PKEY          0u
+#define PTE_PKEY_SHIFT    0
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -108,6 +111,7 @@ void mmio_write32(uintptr_t a, uint32_t v);
 /* A fetch is a prefetch abort, an exception of its own, which a port's
  * entry tells apart; the data abort above is never one. */
 #define FAULT_EXEC(p)     ((void)(p), 0)
+#define FAULT_PK(p)       ((void)(p), 0)
 
 #define USER_ADDR_MIN 0x00010000UL
 #define USER_ADDR_MAX 0xC0000000UL

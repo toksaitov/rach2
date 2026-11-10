@@ -111,6 +111,9 @@ typedef uint32_t pte_t;
 /* Without PAE an entry has no bit that forbids instruction fetches: every
  * page an i686 maps is executable. */
 #define PTE_NOEXEC        0u
+/* Nor a protection key, which only 64-bit paging has. */
+#define PTE_PKEY          0u
+#define PTE_PKEY_SHIFT    0
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -184,6 +187,8 @@ typedef uint32_t pte_t;
 #define FAULT_USER(p)     (((p)->error_code & 0x4u) != 0)
 /* No fetch is told apart without PAE's NX, and no page refuses one. */
 #define FAULT_EXEC(p)     ((void)(p), 0)
+/* Nor a refusal by a protection key. */
+#define FAULT_PK(p)       ((void)(p), 0)
 
 /* `rep movs` and `rep stos` move the words of k_memcpy and k_memset. */
 #define ARCH_STRING_WORDS 1

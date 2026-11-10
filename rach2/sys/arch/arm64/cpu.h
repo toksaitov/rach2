@@ -64,6 +64,9 @@ typedef uint64_t pte_t;
 #define PTE_NONE          0x040u
 #define PTE_NOEXEC        0x080u
 #define PTE_ZEROFILL      0x100u
+/* No protection keys. */
+#define PTE_PKEY          0u
+#define PTE_PKEY_SHIFT    0
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -106,6 +109,7 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define FAULT_USER(p)     FRAME_USER(p)
 /* An instruction abort from EL0, ESR_EL1's class 0x20. */
 #define FAULT_EXEC(p)     (((p)->error_code >> 26) == 0x20u)
+#define FAULT_PK(p)       ((void)(p), 0)
 
 #define USER_ADDR_MIN 0x0000000000010000UL
 #define USER_ADDR_MAX 0x0001000000000000UL

@@ -83,10 +83,21 @@
  * on private anonymous memory and MADV_KEEPONFORK clears. The child keeps
  * the mark. */
 #define VM_PROT_WIPEONFORK  0x4000u
+/* Kept the same way, in bits 15 to 18: the region's memory protection key,
+ * 0 to 15, which its pages carry in their page table entries
+ * (`paging_prot_bits`) and the running thread's PKRU judges (../fpu.h).
+ * A new region has key 0, but one mmap makes execute-only, which takes
+ * the address space's execute-only key where it can have one;
+ * pkey_mprotect gives a range the key it names, and mprotect keeps each
+ * region's, or moves a range made execute-only to the execute-only key and
+ * one that stops being so back to 0, as Linux does (`vm_protect_key`). */
+#define VM_PROT_PKEY_SHIFT  15
+#define VM_PROT_PKEY        0x78000u
+#define VM_PROT_KEY(prot)   (((prot) & VM_PROT_PKEY) >> VM_PROT_PKEY_SHIFT)
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
-     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK)
+     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -394,6 +405,16 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
  * they were.
  */
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
+
+/**
+ * `vm_protect`, with each region's protection key chosen as Linux's
+ * arch_override_mprotect_pkey chooses it: `key` when it is 0 or more, as
+ * pkey_mprotect names one; otherwise, as mprotect, the region's own, but 0
+ * for a region whose key is `exec_key`, the address space's execute-only
+ * key, or -1 for none. The answers are `vm_protect`'s.
+ */
+int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, int key,
+                   int exec_key);
 
 /**
  * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK,

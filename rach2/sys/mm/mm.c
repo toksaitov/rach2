@@ -59,6 +59,8 @@ struct mm *mm_new(void)
     mm->users = 1;
     mm->holds = 1;
     mm->dumpable = 1;
+    mm->pkeys = 1;
+    mm->pkey_exec = -1;
     mm->dir_next = *dir_chain(mm->dir);
     *dir_chain(mm->dir) = mm;
     return mm;
@@ -245,6 +247,8 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     to->membarrier = from->membarrier;
     to->compat = from->compat;
     to->vdso = from->vdso;
+    to->pkeys = from->pkeys;
+    to->pkey_exec = from->pkey_exec;
 }
 
 unsigned long mm_resident(const struct mm *mm)

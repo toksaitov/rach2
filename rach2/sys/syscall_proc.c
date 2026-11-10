@@ -6,6 +6,7 @@
  */
 #include "arch/arch.h"
 #include "arch/uabi.h"
+#include "fpu.h"
 #include "../kernel.h"
 #include "mm/filecache.h"
 #include "mm/kheap.h"
@@ -6864,6 +6865,90 @@ static void vma_exhausted(const char *what)
          (int)current_proc->pid, current_proc->comm, vm_max_map_count);
 }
 
+/* pkey_alloc's access rights, PKEY_DISABLE_ACCESS and PKEY_DISABLE_WRITE. */
+#define PKEY_DISABLE_ACCESS 1u
+#define PKEY_DISABLE_WRITE  2u
+#define PKEY_ACCESS_MASK    3u
+
+/** Give the key `key` the rights `rights`, of PKEY_ACCESS_MASK, in the
+ * calling thread's PKRU, keeping every other key's, as Linux's
+ * arch_set_user_pkey_access does. */
+static void pkey_rights(int key, uint32_t rights)
+{
+    uint32_t pkru = fpu_pkru() & ~(PKRU_AD(key) | PKRU_WD(key));
+
+    if (rights & PKEY_DISABLE_ACCESS) {
+        pkru |= PKRU_AD(key);
+    }
+    if (rights & PKEY_DISABLE_WRITE) {
+        pkru |= PKRU_WD(key);
+    }
+    fpu_pkru_set(pkru);
+}
+
+/** Allocate the lowest free protection key of `mm`, as Linux's
+ * mm_pkey_alloc: the key, or -1 when the keys are off or all sixteen are
+ * taken. */
+static int pkey_take(struct mm *mm)
+{
+    int key;
+
+    if (!fpu_pkeys()) {
+        return -1;
+    }
+    for (key = 0; key < FPU_PKEYS; key++) {
+        if (!(mm->pkeys & (1u << key))) {
+            mm->pkeys |= 1u << key;
+            return key;
+        }
+    }
+    return -1;
+}
+
+/** Whether a program may name the key `key` of `mm`, as Linux's
+ * mm_pkey_is_allocated: one it allocated, or the default key 0 until it
+ * frees it, but never the execute-only key; none with the keys off. */
+static int pkey_named(const struct mm *mm, int key)
+{
+    return fpu_pkeys() && key >= 0 && key < FPU_PKEYS && key != mm->pkey_exec &&
+           (mm->pkeys & (1u << key)) != 0;
+}
+
+/**
+ * The key of `mm` for a mapping made execute-only, by mmap or mprotect with
+ * PROT_EXEC alone, as Linux's __execute_only_pkey: allocated the first
+ * time, and then denied every data access in the calling thread's PKRU,
+ * as it is again whenever the thread allows it reads. The pages can then
+ * be run and not read. -1 with the keys off or no key free; the mapping
+ * then keeps the key it would have had.
+ */
+static int pkey_exec_only(struct mm *mm)
+{
+    int key = mm->pkey_exec;
+
+    if (key < 0) {
+        key = pkey_take(mm);
+        if (key < 0) {
+            return -1;
+        }
+        mm->pkey_exec = key;
+    } else if (fpu_pkru() & PKRU_AD(key)) {
+        return key;
+    }
+    pkey_rights(key, PKEY_DISABLE_ACCESS);
+    return key;
+}
+
+/** The protection key bits of a new mapping of the mmap `prot`: the
+ * execute-only key for PROT_EXEC alone where there is one, as Linux's
+ * do_mmap takes it, and key 0 otherwise. */
+static uint32_t mmap_key(uint32_t prot)
+{
+    int key = prot == PROT_EXEC ? pkey_exec_only(current_proc->mm) : -1;
+
+    return key > 0 ? (uint32_t)key << VM_PROT_PKEY_SHIFT : 0u;
+}
+
 /** The VMA protection of an mmap or mprotect `prot`. Write and execute each
  * grant read, which x86 paging cannot withhold from them. */
 static uint32_t vm_prot_of(uint32_t prot)
@@ -7238,6 +7323,10 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
  * call returns, as far as memory allows (`vm_populate`); a device's pages
  * are always backed on first touch.
  *
+ * A mapping with PROT_EXEC alone takes the execute-only protection key, which
+ * the calling thread may run and not read, where the keys are on
+ * (`pkey_exec_only`); any other has key 0.
+ *
  * MAP_LOCKED locks the mapping, as mlock does, and so does mlockall's
  * MCL_FUTURE, with its MCL_ONFAULT; a device's mapping is never locked.
  * MAP_LOCKED is EPERM for a process without privilege whose RLIMIT_MEMLOCK
@@ -7288,7 +7377,7 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
         return -EAGAIN;
     }
     mem_balance();
-    src.prot = vm_prot_of(prot);
+    src.prot = vm_prot_of(prot) | mmap_key(prot);
     src.pgoff = (uint32_t)pgoff;
     rc = mmap_backing(flags, fd, len, &src);
     if (rc != 0) {
@@ -7484,8 +7573,9 @@ long sys_munmap(isr_params_t *params)
     return 0;
 }
 
-/** Bring the resident pages of [start, end) to `prot`, region by region, so a
- * shared region's pages stay shared. */
+/** Bring the resident pages of [start, end) to their regions' protection,
+ * `prot` where no region holds them, region by region, so that a shared
+ * region's pages stay shared and each page takes its region's key. */
 static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
 {
     while (start < end) {
@@ -7493,52 +7583,89 @@ static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
         uintptr_t stop = (r && r->end < end) ? r->end : end;
 
         paging_protect_range(_curr_dir, start, stop,
-                             prot | ((r && r->type == VM_SHARED) ? VM_PROT_SHARED : 0u));
+                             r ? r->prot | (r->type == VM_SHARED ? VM_PROT_SHARED : 0u) : prot);
         start = stop;
     }
 }
 
+/** The checks of `mprotect_key` before it looks at the regions, in Linux's
+ * order: 1 to go on, 0 for an empty range, or -errno. */
+static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t length, uint32_t prot,
+                             int key)
+{
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
+        return -EINVAL;
+    }
+    if (length == 0) {
+        return 0;
+    }
+    if (PAGE_UP(length) == 0 || addr + PAGE_UP(length) <= addr) {
+        return -ENOMEM;
+    }
+    if ((prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
+        (key != -1 && !pkey_named(mm, key))) {
+        return -EINVAL;
+    }
+    if (addr < USER_ADDR_MIN || addr >= task_size() || length > task_size() - addr) {
+        return -ENOMEM;
+    }
+    return 1;
+}
+
 /**
- * Change the protection of a range (mprotect(2)). Its arguments are addr
- * (page aligned), length and prot. Returns 0, or -errno: EINVAL for an
- * unaligned address or an unknown protection bit, ENOMEM when a page of the
- * range is not mapped or a split finds no room for its region, EACCES for write
- * asked of a shared mapping that may never be written (the VM_PROT_NOWRITE
- * `mmap_file` and `mmap_shm` give) or for execute asked of a mapping of
- * memfd_secret, with nothing changed. A sealed region (mseal) is EPERM, and
- * the regions below it in the range take the new protection first, as Linux
- * changes region by region and stops at the sealed one. The regions take the
- * new protection first and the resident pages after, so a fault in between
- * reads the protection the call is setting.
+ * Change the protection of a range under the protection key `key`, or -1
+ * for mprotect's: the core of mprotect(2) and pkey_mprotect(2). Its
+ * arguments are addr (page aligned), length and prot. The checks run in
+ * Linux's order: EINVAL for an unaligned address, 0 for an empty range,
+ * ENOMEM for one that wraps, EINVAL for an unknown protection bit or a
+ * key the caller may not name (`pkey_named`), and ENOMEM when a page of
+ * the range is not mapped or a split finds no room for its region. EACCES
+ * for write asked of a shared mapping that may never be written (the
+ * VM_PROT_NOWRITE `mmap_file` and `mmap_shm` give) or for execute asked of
+ * a mapping of memfd_secret, with nothing changed. A sealed region
+ * (mseal) is EPERM, and the regions below it in the range take the new
+ * protection first, as Linux changes region by region and stops at the
+ * sealed one. The regions take the new protection first and the resident
+ * pages after, so a fault in between reads the protection the call is
+ * setting.
+ *
+ * The regions take `key`; with -1, PROT_EXEC alone takes the execute-only
+ * key where the keys are on (`pkey_exec_only`), any other protection moves
+ * a region of that key back to key 0, and every other region keeps its
+ * own, as Linux's arch_override_mprotect_pkey chooses.
  */
-long sys_mprotect(isr_params_t *params)
+static long mprotect_key(isr_params_t *params, int key)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t length = SC_ARG(params, 1);
     uint32_t prot = (uint32_t)SC_ARG(params, 2);
     uintptr_t end, sealed;
     uint32_t vmprot;
-    int rc;
+    int exec_key = -1;
+    struct mm *mm;
+    long rc;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    if ((addr & (PAGE_SIZE - 1)) != 0 ||
-        (prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0) {
-        return -EINVAL;
-    }
-    if (length == 0) {
-        return 0;
-    }
-    if (addr < USER_ADDR_MIN || addr >= task_size() || length > task_size() - addr) {
-        return -ENOMEM;
+    mm = current_proc->mm;
+    rc = mprotect_refused(mm, addr, length, prot, key);
+    if (rc <= 0) {
+        return rc;
     }
     end = PAGE_UP(addr + length);
     vmprot = vm_prot_of(prot);
-    sealed = vm_sealed_at(&current_proc->mm->vm, addr, end);
-    rc = vm_protect(&current_proc->mm->vm, addr, sealed, vmprot);
+    if (key == -1 && prot == PROT_EXEC) {
+        int xo = pkey_exec_only(mm);
+
+        key = xo > 0 ? xo : -1;
+    } else if (key == -1) {
+        exec_key = mm->pkey_exec;
+    }
+    sealed = vm_sealed_at(&mm->vm, addr, end);
+    rc = vm_protect_key(&mm->vm, addr, sealed, vmprot, key, exec_key);
     if (rc == 0 && sealed < end) {
-        const vma_t *r = vm_find(&current_proc->mm->vm, sealed);
+        const vma_t *r = vm_find(&mm->vm, sealed);
 
         rc = ((vmprot & VM_PROT_WRITE) && (r->prot & VM_PROT_NOWRITE)) ||
                      ((vmprot & VM_PROT_EXEC) && (r->prot & VM_PROT_SECRET))
@@ -7555,9 +7682,16 @@ long sys_mprotect(isr_params_t *params)
         vma_exhausted("mprotect");
         return -ENOMEM;
     }
-    mmn_notify(current_proc->mm, MMN_PROTECT, addr, sealed);
+    mmn_notify(mm, MMN_PROTECT, addr, sealed);
     protect_resident(addr, sealed, vmprot);
     return rc == -4 ? -EPERM : 0;
+}
+
+/** Change the protection of a range (mprotect(2)): `mprotect_key` with no
+ * key named. */
+long sys_mprotect(isr_params_t *params)
+{
+    return mprotect_key(params, -1);
 }
 
 #define MREMAP_MAYMOVE   1
@@ -8007,60 +8141,68 @@ long sys_mseal(isr_params_t *params)
     return 0;
 }
 
-/* pkey_alloc's access rights, PKEY_DISABLE_ACCESS and PKEY_DISABLE_WRITE. */
-#define PKEY_ACCESS_MASK 3u
-
 /**
  * Change the protection of a range under a protection key (pkey_mprotect(2)).
- * Its arguments are mprotect's and the key. Rach2 does not turn the
- * processor's keys on, so the call answers as Linux on x86-64 does where the
- * processor has none or they are off: key -1 is mprotect itself, and any
- * other key is EINVAL, no key but the default being allocated and the
- * default not being one a program names, after mprotect's own checks of the
- * address (EINVAL), an empty range (0) and a range that wraps (ENOMEM).
- * Linux builds the keys' calls on x86-64 alone, so the i686 kernel has no
- * row for this one and its two companions, and answers ENOSYS.
+ * Its arguments are mprotect's and the key, an int: -1 is mprotect itself,
+ * and any other must be one the caller may name (`pkey_named`), a key it
+ * allocated or the default key 0, which the range then takes, or EINVAL
+ * after mprotect's checks of the address (EINVAL), an empty range (0) and
+ * one that wraps (ENOMEM), as `mprotect_key` orders them. With the keys
+ * off no key may be named, as on Linux where the processor has none. Linux
+ * builds the keys' calls on x86-64 alone, so the i686 kernel has no row for
+ * this one and its two companions, and answers ENOSYS.
  */
 long sys_pkey_mprotect(isr_params_t *params)
 {
-    uintptr_t addr = SC_ARG(params, 0);
-    uintptr_t len = SC_ARG(params, 1);
-
-    if ((int32_t)SC_ARG(params, 3) == -1) {
-        return sys_mprotect(params);
-    }
-    if ((addr & (PAGE_SIZE - 1)) != 0) {
-        return -EINVAL;
-    }
-    if (len == 0) {
-        return 0;
-    }
-    if (PAGE_UP(len) == 0 || addr + PAGE_UP(len) <= addr) {
-        return -ENOMEM;
-    }
-    return -EINVAL;
+    return mprotect_key(params, (int32_t)SC_ARG(params, 3));
 }
 
 /**
  * Allocate a protection key (pkey_alloc(2)). Its arguments are flags, which
  * must be 0, and the key's first access rights, of PKEY_ACCESS_MASK; either
- * otherwise is EINVAL. With the processor's keys off there is no key to give,
- * and the answer is ENOSPC, as Linux's.
+ * otherwise is EINVAL. The answer is the lowest key, 1 to 15 or 0 once the
+ * program freed it, that the address space has not allocated, with its
+ * rights written into the calling thread's PKRU, as Linux's; ENOSPC when
+ * every key is taken, the execute-only key among them, and always with the
+ * keys off.
  */
 long sys_pkey_alloc(isr_params_t *params)
 {
-    if (SC_ARG(params, 0) != 0 || (SC_ARG(params, 1) & ~(uintptr_t)PKEY_ACCESS_MASK) != 0) {
+    uintptr_t rights = SC_ARG(params, 1);
+    int key;
+
+    if (SC_ARG(params, 0) != 0 || (rights & ~(uintptr_t)PKEY_ACCESS_MASK) != 0) {
         return -EINVAL;
     }
-    return -ENOSPC;
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    key = pkey_take(current_proc->mm);
+    if (key < 0) {
+        return -ENOSPC;
+    }
+    pkey_rights(key, (uint32_t)rights);
+    return key;
 }
 
-/** Free a protection key (pkey_free(2)): with the processor's keys off no
- * key is allocated, and every key is EINVAL, as on Linux. */
+/**
+ * Free a protection key (pkey_free(2)): its argument, an int, must be a key
+ * the caller may name (`pkey_named`), or the answer is EINVAL. The key may
+ * be allocated again; the regions that have it keep it, and PKRU keeps its
+ * rights, as on Linux. With the keys off every key is EINVAL.
+ */
 long sys_pkey_free(isr_params_t *params)
 {
-    (void)params;
-    return -EINVAL;
+    int key = (int32_t)SC_ARG(params, 0);
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    if (!pkey_named(current_proc->mm, key)) {
+        return -EINVAL;
+    }
+    current_proc->mm->pkeys &= ~(1u << key);
+    return 0;
 }
 
 /**
