@@ -31,10 +31,11 @@
  * windows, an event the exit found under delivery, the caller's single
  * steps and breakpoints, a RIP above 4 GiB, the host's interrupt,
  * NMI and machine check, the preemption timer, a triple fault and the two
- * kinds of failed entry; a move to another processor; a state read between
- * runs; VMXON and VMPTRLD failing; a failed VMWRITE reported once; VPIDs;
- * and a panic inside a run, which
- * turns VMX off.
+ * kinds of failed entry; hardware task switches by CALL, IRET, JMP and
+ * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults;
+ * a move to another processor; a state read between runs; VMXON and
+ * VMPTRLD failing; a failed VMWRITE reported once; VPIDs; and a panic
+ * inside a run, which turns VMX off.
  */
 #include "kvm/vmx.c"
 
@@ -707,7 +708,7 @@ static struct {
     struct row script[16];
     int script_len, script_at;
     uint32_t injected, injected_error;
-    uint64_t entry_cr0, entry_proc, entry_rflags, entry_dr0;
+    uint64_t entry_cr0, entry_proc, entry_rflags, entry_dr0, entry_intr;
     const char *why; /* the last entry check that failed */
 } m;
 
@@ -1212,6 +1213,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     m.entry_cr0 = f[GUEST_CR0];
     m.entry_proc = f[CPU_BASED_VM_EXEC_CONTROL];
     m.entry_rflags = f[GUEST_RFLAGS];
+    m.entry_intr = f[GUEST_INTERRUPTIBILITY_INFO];
     m.entry_dr0 = m.dr[0];
     if (!check_segments(f) || !check_guest_regs(f) || !check_guest_events(f)) {
         f[VM_EXIT_REASON] = EXIT_FAILED_ENTRY | EXIT_INVALID_STATE;
@@ -2105,6 +2107,342 @@ static void vpid_panic_rows(int vm)
     fdclose(fd);
 }
 
+/* ---- the task switch ---- */
+
+/* The task-switch rows' guest: a 32-bit protected-mode guest without
+ * paging, whose GDT, LDT, IDT and TSSes are in RAM from 0x80000. */
+#define TS_GDT  0x80000u
+#define TS_TSSA 0x81000u /* the first task's TSS, 32-bit, selector 0x18 */
+#define TS_TSSB 0x81100u /* a 32-bit TSS, selector 0x20 */
+#define TS_TSSC 0x81200u /* a 16-bit TSS, selector 0x30 */
+#define TS_TSSF 0x81300u /* a 32-bit TSS whose DS is not present, 0x60 */
+#define TS_TSSG 0x81400u /* a 32-bit TSS of a virtual-8086 task, 0x68 */
+#define TS_LDT  0x82000u
+#define TS_IDT  0x83000u
+
+/** Store the 32-bit `x` in RAM at `a`. */
+static void put32(uint32_t a, uint32_t x)
+{
+    k_memcpy(&ram[a], &x, 4);
+}
+
+/** The 32-bit value in RAM at `a`. */
+static uint32_t get32(uint32_t a)
+{
+    uint32_t x;
+
+    k_memcpy(&x, &ram[a], 4);
+    return x;
+}
+
+/** The 16-bit value in RAM at `a`. */
+static uint32_t get16(uint32_t a)
+{
+    return (uint32_t)ram[a] | ((uint32_t)ram[a + 1u] << 8);
+}
+
+/** Write a descriptor at `a`: `base`, the 20-bit `limit`, the access byte
+ * `access` and the flags nibble `flags` (G, D/B, L, AVL). */
+static void put_desc(uint32_t a, uint32_t base, uint32_t limit, uint32_t access, uint32_t flags)
+{
+    uint8_t *d = &ram[a];
+
+    d[0] = (uint8_t)limit;
+    d[1] = (uint8_t)(limit >> 8);
+    d[2] = (uint8_t)base;
+    d[3] = (uint8_t)(base >> 8);
+    d[4] = (uint8_t)(base >> 16);
+    d[5] = (uint8_t)access;
+    d[6] = (uint8_t)(((limit >> 16) & 0xFu) | (flags << 4));
+    d[7] = (uint8_t)(base >> 24);
+}
+
+/** Write a task gate to the TSS `sel` with `dpl` at IDT vector `vec`. */
+static void put_gate(uint32_t vec, uint32_t sel, uint32_t dpl)
+{
+    put_desc(TS_IDT + vec * 8u, sel << 16, 0, 0x85u | (dpl << 5), 0);
+}
+
+/** Fill a 32-bit TSS at `a`: CR3 0, `eip`, `eflags`, EAX `eax`, ESP
+ * `esp`, CS 0x08, the data selectors `ds`, FS 0x04 from the LDT, GS 0x58,
+ * which is not yet accessed, and the LDT 0x28. */
+static void put_tss32(uint32_t a, uint32_t eip, uint32_t eflags, uint32_t eax, uint32_t esp,
+                      uint32_t ds)
+{
+    k_memset(&ram[a], 0, 104);
+    put32(a + 32u, eip);
+    put32(a + 36u, eflags);
+    put32(a + 40u, eax);
+    put32(a + 56u, esp);
+    put32(a + 72u, 0x10);
+    put32(a + 76u, 0x08);
+    put32(a + 80u, 0x10);
+    put32(a + 84u, ds);
+    put32(a + 88u, 0x04);
+    put32(a + 92u, 0x58);
+    put32(a + 96u, 0x28);
+}
+
+/** Lay out the tables and TSSes of the task-switch rows. */
+static void ts_tables(void)
+{
+    put_desc(TS_GDT + 0x08u, 0, 0xFFFFF, 0x9B, 0xC);
+    put_desc(TS_GDT + 0x10u, 0, 0xFFFFF, 0x93, 0xC);
+    put_desc(TS_GDT + 0x18u, TS_TSSA, 0x67, 0x8B, 0);
+    put_desc(TS_GDT + 0x20u, TS_TSSB, 0x67, 0x89, 0);
+    put_desc(TS_GDT + 0x28u, TS_LDT, 0x0F, 0x82, 0);
+    put_desc(TS_GDT + 0x30u, TS_TSSC, 0x2B, 0x81, 0);
+    put_desc(TS_GDT + 0x38u, 0x81500, 0x50, 0x89, 0);
+    put_desc(TS_GDT + 0x40u, 0, 0xFFFFF, 0x13, 0xC);
+    put_desc(TS_GDT + 0x48u, 0, 0xFFFF, 0x9B, 0);
+    put_desc(TS_GDT + 0x50u, 0, 0xFFFF, 0x93, 0);
+    put_desc(TS_GDT + 0x58u, 0, 0xFFFFF, 0x92, 0xC);
+    put_desc(TS_GDT + 0x60u, TS_TSSF, 0x67, 0x89, 0);
+    put_desc(TS_GDT + 0x68u, TS_TSSG, 0x67, 0x89, 0);
+    put_desc(TS_GDT + 0x70u, 0x200000, 0x67, 0x89, 0);
+    put_desc(TS_LDT, 0, 0xFFFFF, 0x93, 0xC);
+    put_gate(0x20, 0x20, 3);
+    put_gate(0x21, 0x20, 0);
+    put_gate(NMI_VECTOR, 0x20, 0);
+    put_gate(GP_VECTOR, 0x20, 0);
+    put_tss32(TS_TSSA, 0, 0, 0, 0, 0x10);
+    put_tss32(TS_TSSB, 0x5000, 0x202, 0x11, 0x7000, 0x10);
+    put_tss32(TS_TSSF, 0x5800, 0x2, 0x33, 0x7400, 0x40);
+    put_tss32(TS_TSSG, 0x0100, 0x20202, 0x44, 0xFFE, 0x10);
+    put32(TS_TSSG + 76u, 0x1234);
+    put32(TS_TSSG + 80u, 0x2000);
+    k_memset(&ram[TS_TSSC], 0, 44);
+    ram[TS_TSSC + 14u] = 0x00;
+    ram[TS_TSSC + 15u] = 0x60;
+    ram[TS_TSSC + 16u] = 0x02;
+    ram[TS_TSSC + 18u] = 0x34;
+    ram[TS_TSSC + 19u] = 0x12;
+    ram[TS_TSSC + 27u] = 0x78;
+    ram[TS_TSSC + 34u] = 0x50;
+    ram[TS_TSSC + 36u] = 0x48;
+    ram[TS_TSSC + 38u] = 0x50;
+    ram[TS_TSSC + 40u] = 0x50;
+}
+
+/** A flat 32-bit segment of DPL 0 with the selector `sel`, code by `code`. */
+static struct kvm_segment flat(uint16_t sel, int code)
+{
+    struct kvm_segment s;
+
+    k_memset(&s, 0, sizeof(s));
+    s.selector = sel;
+    s.limit = 0xFFFFFFFFu;
+    s.type = code ? 0xB : 0x3;
+    s.present = 1;
+    s.s = 1;
+    s.db = 1;
+    s.g = 1;
+    return s;
+}
+
+/** Put the vCPU on `fd` in the first task, 0x18, at EIP 0x1000 with EAX
+ * 0xAAAA, ESP 0x9000 and DR7's L0, G0 and LE set. */
+static void ts_start(int fd)
+{
+    struct kvm_sregs s = sregs_of(fd);
+    struct kvm_regs r = regs_of(fd);
+    struct kvm_debugregs d;
+
+    s.cr0 = 0x11;
+    s.cr4 = 0;
+    s.efer = 0;
+    s.cs = flat(0x08, 1);
+    s.ss = s.ds = s.es = s.fs = s.gs = flat(0x10, 0);
+    k_memset(&s.tr, 0, sizeof(s.tr));
+    s.tr.selector = 0x18;
+    s.tr.base = TS_TSSA;
+    s.tr.limit = 0x67;
+    s.tr.type = 11;
+    s.tr.present = 1;
+    k_memset(&s.ldt, 0, sizeof(s.ldt));
+    s.ldt.unusable = 1;
+    s.gdt.base = TS_GDT;
+    s.gdt.limit = 0x7F;
+    s.idt.base = TS_IDT;
+    s.idt.limit = 0x1FF;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS to the first task");
+    k_memset(&r, 0, sizeof(r));
+    r.rip = 0x1000;
+    r.rflags = 0x2;
+    r.rax = 0xAAAA;
+    r.rsp = 0x9000;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS in the first task");
+    k_memset(&d, 0, sizeof(d));
+    d.dr6 = 0xFFFF0FF0u;
+    d.dr7 = 0x557;
+    CHECK(fdio(fd, KVM_SET_DEBUGREGS, (uintptr_t)&d) == 0, "KVM_SET_DEBUGREGS");
+}
+
+/** A task switch to `sel` from `reason` with an instruction of `len`
+ * bytes, then a HLT in the new task, on `fd`: KVM_RUN's result. */
+static int32_t ts_run(int fd, uint32_t sel, uint32_t reason, uint32_t len)
+{
+    script(EXIT_TASK_SWITCH, sel | ((uint64_t)reason << 30), len);
+    script(EXIT_HLT, 0, 1);
+    return run(fd);
+}
+
+/** CALL to a 32-bit TSS, then IRET back. */
+static void ts_call_rows(int fd)
+{
+    struct kvm_sregs s;
+    struct kvm_regs r;
+    struct kvm_debugregs d;
+
+    CHECK(ts_run(fd, 0x20, KVM_TS_CALL, 7) == 0, "CALL to a TSS runs the new task");
+    s = sregs_of(fd);
+    r = regs_of(fd);
+    CHECK(get32(TS_TSSA + 32u) == 0x1007 && get32(TS_TSSA + 40u) == 0xAAAA &&
+              get32(TS_TSSA + 56u) == 0x9000 && get32(TS_TSSA + 76u) == 0x08 &&
+              get32(TS_TSSA + 36u) == 0x2,
+          "the old task saves the EIP after the CALL, its registers and selectors");
+    CHECK(get16(TS_TSSB) == 0x18 && ram[TS_GDT + 0x20u + 5u] == 0x8B &&
+              ram[TS_GDT + 0x18u + 5u] == 0x8B,
+          "the new TSS links back and both are busy");
+    CHECK(s.tr.selector == 0x20 && s.tr.base == TS_TSSB && s.tr.type == 11 && (s.cr0 & 8u) &&
+              s.ldt.selector == 0x28 && s.ldt.base == TS_LDT && s.fs.selector == 0x04 &&
+              s.gs.type == 3 && ram[TS_GDT + 0x58u + 5u] == 0x93,
+          "TR, CR0.TS, the LDT, a segment from it and one marked accessed");
+    CHECK(r.rip == 0x5001 && r.rax == 0x11 && r.rsp == 0x7000 && r.rflags == 0x4202,
+          "the new task's registers, with NT set");
+    CHECK(fdio(fd, KVM_GET_DEBUGREGS, (uintptr_t)&d) == 0 && d.dr7 == 0x402,
+          "DR7's local enables are cleared");
+    CHECK(ts_run(fd, 0x18, KVM_TS_IRET, 1) == 0, "IRET with NT returns to the old task");
+    s = sregs_of(fd);
+    r = regs_of(fd);
+    CHECK(s.tr.selector == 0x18 && r.rip == 0x1008 && r.rax == 0xAAAA && r.rflags == 0x2 &&
+              ram[TS_GDT + 0x20u + 5u] == 0x89 && ram[TS_GDT + 0x18u + 5u] == 0x8B,
+          "IRET restores the old task, frees the nested one and leaves the old one busy");
+    CHECK(get32(TS_TSSB + 32u) == 0x5002 && get32(TS_TSSB + 36u) == 0x202,
+          "the nested task saves its EIP after IRET and its EFLAGS without NT");
+}
+
+/** JMP to a 16-bit TSS and back. */
+static void ts_jmp_rows(int fd)
+{
+    struct kvm_sregs s;
+    struct kvm_regs r;
+
+    CHECK(ts_run(fd, 0x30, KVM_TS_JMP, 7) == 0, "JMP to a 16-bit TSS runs the new task");
+    s = sregs_of(fd);
+    r = regs_of(fd);
+    CHECK(ram[TS_GDT + 0x18u + 5u] == 0x89 && ram[TS_GDT + 0x30u + 5u] == 0x83 &&
+              get16(TS_TSSC) == 0,
+          "JMP frees the old task, marks the new one busy and links nothing");
+    CHECK(r.rip == 0x6001 && r.rax == 0x1234 && r.rsp == 0x7800 && r.rflags == 0x2 &&
+              s.cs.selector == 0x48 && !s.cs.db && s.ss.selector == 0x50 && s.tr.type == 3 &&
+              s.fs.selector == 0x10 && s.ldt.unusable,
+          "the 16-bit task's registers, its 16-bit code, a null LDT and FS kept");
+    CHECK(ts_run(fd, 0x18, KVM_TS_JMP, 5) == 0, "JMP back to the 32-bit task");
+    s = sregs_of(fd);
+    r = regs_of(fd);
+    CHECK(get16(TS_TSSC + 14u) == 0x6006 && get16(TS_TSSC + 18u) == 0x1234 &&
+              get16(TS_TSSC + 36u) == 0x48 && ram[TS_GDT + 0x30u + 5u] == 0x81,
+          "the 16-bit task saves its state in its own format");
+    CHECK(r.rip == 0x1010 && r.rax == 0xAAAA && s.tr.selector == 0x18 && s.cs.db,
+          "the 32-bit task resumes after its JMP");
+}
+
+/** A task gate reached by INT n, by an exception with an error code, by
+ * an external interrupt and by an NMI, each followed by IRET. */
+static void ts_gate_rows(int fd)
+{
+    struct kvm_vcpu_events ev;
+    struct row *w;
+
+    w = script(EXIT_TASK_SWITCH, 0x20 | ((uint64_t)KVM_TS_GATE << 30), 2);
+    w->idt_info = 0x20u | (TYPE_SOFT_INTR << 8) | INTR_VALID;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && get32(TS_TSSA + 32u) == 0x1012 &&
+              get16(TS_TSSB) == 0x18 && (regs_of(fd).rflags & 0x4000u),
+          "INT n through a task gate steps past the INT, links back and sets NT");
+    CHECK(ts_run(fd, 0x18, KVM_TS_IRET, 1) == 0, "and IRET returns");
+    w = script(EXIT_TASK_SWITCH, 0x20 | ((uint64_t)KVM_TS_GATE << 30), 0);
+    w->idt_info = GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    w->idt_error = 0x5678;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && get32(TS_TSSA + 32u) == 0x1013 &&
+              regs_of(fd).rsp == 0x6FFC && get32(0x6FFC) == 0x5678,
+          "an exception through a task gate pushes its error code on the new task's stack");
+    CHECK(ts_run(fd, 0x18, KVM_TS_IRET, 1) == 0, "and IRET returns");
+    w = script(EXIT_TASK_SWITCH, 0x20 | ((uint64_t)KVM_TS_GATE << 30), 0);
+    w->idt_info = 0x22u | (TYPE_EXT_INTR << 8) | INTR_VALID;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && get32(TS_TSSA + 32u) == 0x1014,
+          "an external interrupt through a task gate is not injected again");
+    CHECK(ts_run(fd, 0x18, KVM_TS_IRET, 1) == 0, "and IRET returns");
+    w = script(EXIT_TASK_SWITCH, 0x20 | ((uint64_t)KVM_TS_GATE << 30), 0);
+    w->idt_info = NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID;
+    script(EXIT_HLT, 0, 1)->intr_state = INTR_BLOCK_NMI;
+    CHECK(run(fd) == 0 && m.injected == 0 && (m.entry_intr & INTR_BLOCK_NMI),
+          "an NMI through a task gate leaves NMIs blocked in the new task");
+    CHECK(fdio(fd, KVM_GET_VCPU_EVENTS, (uintptr_t)&ev) == 0 && ev.nmi.masked && !ev.nmi.injected,
+          "KVM_GET_VCPU_EVENTS shows the NMI taken and masked");
+    ev.nmi.masked = 0;
+    CHECK(fdio(fd, KVM_SET_VCPU_EVENTS, (uintptr_t)&ev) == 0, "KVM_SET_VCPU_EVENTS");
+    CHECK(ts_run(fd, 0x18, KVM_TS_IRET, 1) == 0, "and IRET returns");
+}
+
+/** The faults of a task switch: the gate's DPL, a TSS too small, a
+ * segment not present in the new task, and a TSS in no slot; and a
+ * virtual-8086 task. */
+static void ts_fault_rows(int fd)
+{
+    uint32_t gp = GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    uint32_t ts = TS_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    struct kvm_sregs s;
+    struct row *w;
+
+    w = script(EXIT_TASK_SWITCH, 0x23 | ((uint64_t)KVM_TS_GATE << 30), 2);
+    w->idt_info = 0x21u | (TYPE_SOFT_INTR << 8) | INTR_VALID;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == gp && m.injected_error == 0x10A &&
+              sregs_of(fd).tr.selector == 0x18 && regs_of(fd).rip == 0x1017,
+          "INT n through a gate below the selector's RPL is #GP(vector, IDT) in the old task, "
+          "at the INT, which the next row's HLT then steps");
+    CHECK(ts_run(fd, 0x38, KVM_TS_JMP, 5) == 0 && m.injected == ts && m.injected_error == 0x38 &&
+              sregs_of(fd).tr.selector == 0x18 && regs_of(fd).rip == 0x1018,
+          "a TSS below its kind's size is #TS(selector) with nothing changed");
+    script(EXIT_TASK_SWITCH, 0x70 | ((uint64_t)KVM_TS_JMP << 30), 5);
+    CHECK(run(fd) == 0 && run_of(fd)->exit_reason == KVM_EXIT_INTERNAL_ERROR &&
+              run_of(fd)->u.internal.suberror == KVM_INTERNAL_ERROR_EMULATION,
+          "a TSS in no slot is Linux's internal error");
+    CHECK(ts_run(fd, 0x68, KVM_TS_JMP, 5) == 0, "JMP to a virtual-8086 task");
+    s = sregs_of(fd);
+    CHECK(s.cs.selector == 0x1234 && s.cs.base == 0x12340 && s.cs.dpl == 3 &&
+              s.ss.base == 0x20000 && regs_of(fd).rip == 0x101 && (regs_of(fd).rflags & 0x20000u),
+          "its segments are virtual-8086 mode's");
+    ts_start(fd);
+    CHECK(ts_run(fd, 0x60, KVM_TS_JMP, 5) == 0, "JMP to a task whose DS is not present");
+    s = sregs_of(fd);
+    CHECK(m.injected == (NP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID) &&
+              m.injected_error == 0x40 && s.tr.selector == 0x60 && regs_of(fd).rax == 0x33,
+          "is #NP(selector) in the new task");
+}
+
+/** A hardware task switch from each of its sources, on a vCPU of its own
+ * on `vm`. */
+static void ts_rows(int vm)
+{
+    int fd = make_vcpu(vm, 2);
+
+    /* The panic row left its run without the host's state put back. */
+    m.restores = m.launches + m.resumes;
+    m.fpu_stores = m.fpu_loads;
+    ts_tables();
+    ts_start(fd);
+    ts_call_rows(fd);
+    ts_jmp_rows(fd);
+    ts_gate_rows(fd);
+    ts_fault_rows(fd);
+    fdclose(fd);
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -2130,6 +2468,7 @@ int main(void)
     path_rows(fd);
     pae_rows(fd);
     vpid_panic_rows(vm);
+    ts_rows(vm);
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
     fdclose(fd);
