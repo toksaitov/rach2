@@ -1,0 +1,209 @@
+runner webgl
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 8
+memory_kib 8136936
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.08 0.02 0.01
+processes start 169
+kernel_before cpu  129 0 523 7359 271 0 23 0 0 0
+kernel_before cpu0 39 0 103 866 36 0 8 0 0 0
+kernel_before cpu1 10 0 58 923 44 0 5 0 0 0
+kernel_before cpu2 12 0 47 938 42 0 1 0 0 0
+kernel_before cpu3 19 0 87 876 49 0 1 0 0 0
+kernel_before cpu4 9 0 55 939 19 0 1 0 0 0
+kernel_before cpu5 15 0 66 925 19 0 2 0 0 0
+kernel_before cpu6 11 0 53 952 21 0 0 0 0 0
+kernel_before cpu7 9 0 50 937 37 0 1 0 0 0
+kernel_before intr 88839 30 9 0 0 357 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 208 383 238 772 252 396 304 189 0 990 598 0 0 6 0 112 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 31827
+kernel_before btime 1794338585
+kernel_before processes 841
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 13111 0 1060 5 1103 0 0 40 2949 0 7954
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=8
+env GRAPHICS_MEMORY_KIB=8136936
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case webgl firefox 2.0.1 chunk all of 250 pages
+warmup 0
+repetitions 1, and each page that does not pass once more
+suite /tmp/webgl
+omitted conformance/context/context-creation-and-destruction.html,conformance/context/context-creation.html,conformance/context/context-eviction-with-garbage-collection.html,conformance/context/context-release-upon-reload.html,conformance/context/context-release-with-workers.html
+browser Mozilla Firefox 153.6.0esr
+switches --new-instance --no-remote --kiosk MOZ_ENABLE_WAYLAND=1
+prefs user_pref("webgl.sanitize-unmasked-renderer", false);
+prefs user_pref("browser.shell.checkDefaultBrowser", false);
+prefs user_pref("browser.startup.homepage_override.mstone", "ignore");
+prefs user_pref("browser.aboutwelcome.enabled", false);
+prefs user_pref("browser.sessionstore.resume_from_crash", false);
+prefs user_pref("toolkit.startup.max_resumed_crashes", -1);
+prefs user_pref("datareporting.policy.dataSubmissionEnabled", false);
+prefs user_pref("datareporting.healthreport.uploadEnabled", false);
+prefs user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
+prefs user_pref("app.update.auto", false);
+prefs user_pref("dom.max_script_run_time", 0);
+prefs user_pref("dom.max_chrome_script_run_time", 0);
+prefs user_pref("webgl.force-enabled", true);
+prefs user_pref("media.autoplay.default", 0);
+compositor weston 14.0.2 headless gl kiosk no-config
+list 2.0.1 2865 pages sha256 9d7bddb435701ca417201b55f82c6b9f88933fbd175a3b346ddc4165917a380b
+renderer webgl Generic Renderer; WebGL 1.0; unmasked virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)); vendor Mesa
+renderer webgl2 Generic Renderer; WebGL 2.0; unmasked virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)); vendor Mesa
+load end 0.75 0.79 0.81
+busy 12.9%
+kernel_after cpu  359929 136 214104 4312215 848 0 62543 4194 0 0
+kernel_after cpu0 53294 18 26301 530922 84 0 33126 531 0 0
+kernel_after cpu1 51629 12 26433 532375 117 0 15601 530 0 0
+kernel_after cpu2 47599 14 27353 535677 130 0 6763 501 0 0
+kernel_after cpu3 45164 12 26116 540241 175 0 2984 506 0 0
+kernel_after cpu4 44090 16 26929 540479 78 0 1596 530 0 0
+kernel_after cpu5 46048 23 26644 539314 96 0 1020 551 0 0
+kernel_after cpu6 45454 16 27672 539116 89 0 740 433 0 0
+kernel_after cpu7 26649 22 26652 554087 76 0 707 608 0 0
+kernel_after intr 51621308 30 9 0 0 357 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 623 1106 1620 2514 1850 1276 2235 872 0 192082 106584 0 0 111 0 1667861 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 85664505
+kernel_after btime 1794338585
+kernel_after processes 82599
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 9748134 0 796103 93 772598 0 0 862 2828934 0 5349544
+guest profile virgl
+guest firmware seabios
+guest accelerator kvm
+guest cpu host,invtsc=on
+guest cpus 8
+guest memory_mib 8192
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-m:1218863:1794338581
+guest host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+guest host_load 8.83 11.83 12.46
+guest host_claims 6
+guest host_ledger etude-ledger 1
+guest host_ledger claim debian-ref:toksaitov-m:844264:1794337048
+guest host_ledger system linux
+guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+guest host_ledger owner 844264 6795570 1
+guest host_ledger account toksaitov-m
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 845134 6795628 1
+guest host_ledger process case 845135 6795628 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261110T192243Z.1213968:ports
+guest host_ledger system linux
+guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+guest host_ledger owner 1213968 6946956 1
+guest host_ledger account toksaitov-d
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261110T192243Z.1213968:machine.bed-shm.nocopy:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+guest host_ledger owner 1213968 6946956 1
+guest host_ledger account toksaitov-d
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 7516192768
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 1216673 6947188 1
+guest host_ledger process case 1216674 6947188 1
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-m:1218863:1794338581
+guest host_ledger system linux
+guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+guest host_ledger owner 1218863 6948929 1
+guest host_ledger account toksaitov-m
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 1219457 6948986 1
+guest host_ledger process case 1219458 6948986 1
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-m:1218866:1794338581
+guest host_ledger system linux
+guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+guest host_ledger owner 1218866 6948929 1
+guest host_ledger account toksaitov-m
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 1220040 6949895 1
+guest host_ledger process case 1220041 6949895 1
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-m:1219905:1794338591
+guest host_ledger system linux
+guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+guest host_ledger owner 1219905 6949878 1
+guest host_ledger account toksaitov-m
+guest host_ledger state blocked
+guest host_ledger ticket 1
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger end
+guest env GRAPHICS_CLASS=conformance
+guest env GRAPHICS_CPUS=8
+guest env GRAPHICS_MEMORY_KIB=8136936
+guest env LP_NUM_THREADS=0
+guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+guest env MESA_SHADER_CACHE_FILES=0
+guest env GRAPHICS_DONE=1
+guest env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 7.32 8.56 8.59
+host_claims 4
+host_ledger etude-ledger 1
+host_ledger claim tests.x86_64.20261110T210211Z.2265609:ports
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 2265609 7543745 1
+host_ledger account toksaitov-d
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261110T210211Z.2265609:machine.bed-shm.nocopy:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 2265609 7543745 1
+host_ledger account toksaitov-d
+host_ledger state running
+host_ledger resource cpu_millis 2000
+host_ledger resource memory_bytes 7516192768
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 2270142 7543972 1
+host_ledger process case 2270144 7543972 1
+host_ledger end
+host_ledger claim debian-ref:toksaitov-m:2350941:1794344770
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 2350941 7567805 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 2351284 7567858 1
+host_ledger process case 2351285 7567858 1
+host_ledger end
+host_ledger claim launch:f41bf86999631090efc984fe1af5a4f0
+host_ledger system linux
+host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
+host_ledger owner 2359633 7572485 1
+host_ledger account toksaitov-a
+host_ledger state running
+host_ledger resource memory_bytes 5368709120
+host_ledger process keeper 2359648 7572487 1
+host_ledger process case 2359649 7572487 1
+host_ledger end
