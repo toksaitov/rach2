@@ -12,6 +12,9 @@
  * EXDEV and the KRFFS root's EPERM for the links it cannot make; and the
  * links of /proc.
  *
+ * `ext2probe xattr` runs all twelve attribute calls on a writable fixture,
+ * checks remount and final links, and checks KRFFS and tmpfs defaults.
+ *
  * `ext2probe cost` mounts the same fixture for writing with `MS_SYNCHRONOUS`
  * and counts, through `/proc/disk`, the commands and cache flushes of
  * repeated rewrites and of appends. A mount without `sync` writes back, so
