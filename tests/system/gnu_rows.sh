@@ -1321,6 +1321,13 @@ EOF
     [ $((after - before)) -lt 200 ] || fail "a second start read the disk $((after - before)) times"
 }
 
+# elf_class FILE: the class, byte order and machine file(1) gives FILE, as
+# "ELF 32-bit LSB, Intel i386", whether it is a position-independent
+# executable or not.
+elf_class() {
+    file -bL "$1" | cut -d, -f1-2 | sed -e 's/ pie executable//' -e 's/ executable//'
+}
+
 # On x86-64, the root's i386 layer runs 32-bit programs on the 64-bit kernel:
 # Debian's i386 eglinfo and vulkaninfo find Mesa's i386 llvmpipe and
 # lavapipe, and GE-Proton in its default mode makes a prefix and runs the
@@ -1331,12 +1338,11 @@ EOF
 row_ia32() {
     local p=/opt/proton bat dos
     same "the machine" "$MACHINE" "x86_64"
-    same "eglinfo's class" "$(file -bL /usr/bin/eglinfo.i386-linux-gnu | cut -d, -f1-2)" \
-        "ELF 32-bit LSB executable, Intel i386"
+    same "eglinfo's class" "$(elf_class /usr/bin/eglinfo.i386-linux-gnu)" "ELF 32-bit LSB, Intel i386"
     output "eglinfo" /usr/bin/eglinfo.i386-linux-gnu -B -p surfaceless
     has "eglinfo's renderer" "$OUT" "OpenGL core profile renderer: llvmpipe"
-    same "vulkaninfo's class" "$(file -bL /usr/bin/vulkaninfo.i386-linux-gnu | cut -d, -f1-2)" \
-        "ELF 32-bit LSB executable, Intel i386"
+    same "vulkaninfo's class" "$(elf_class /usr/bin/vulkaninfo.i386-linux-gnu)" \
+        "ELF 32-bit LSB, Intel i386"
     output "vulkaninfo" env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.i686.json \
         /usr/bin/vulkaninfo.i386-linux-gnu --summary
     has "vulkaninfo's device" "$OUT" "DRIVER_ID_MESA_LLVMPIPE"
