@@ -1,11 +1,13 @@
 #!/bin/sh
 # sample.sh: on the trial root, as root, read what a frame stall would show,
-# four times a second, so that a stall in the frame times can be set beside
-# the big lock, the sound and the shader cache at the same moment: the
-# processors' times, the big lock's waits, longest wait and longest hold,
-# its sixteen longest-holding entries, HDA's queue line from /proc/audio,
-# the frames Gallium's HUD has dumped so far, the bytes of Mesa's shader
-# cache and the sectors read from the data partition, where the game is.
+# about twice a second, since it sleeps 0.25 s between readings and each
+# reading takes about as long again, so that a stall in the frame times can
+# be set beside the big lock, the sound and the shader cache at the same
+# moment: the processors' times, the big lock's waits, longest wait and
+# longest hold, its sixteen longest-holding entries, HDA's queue line from
+# /proc/audio, the frames Gallium's HUD has dumped so far, the bytes of
+# Mesa's shader cache and the sectors read from the data partition, where
+# the game is.
 #
 # Usage: sample.sh DIR
 #
