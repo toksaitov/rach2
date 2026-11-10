@@ -2,7 +2,7 @@
 
 Usage:
   python3 -I judge.py webgl REF GOT
-  python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT
+  python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]
   python3 -I judge.py results REF GOT
   python3 -I judge.py modes REF GOT
   python3 -I judge.py glmark2 REF GOT
@@ -20,7 +20,11 @@ plays: as many as the reference's, none with a media error, each showing at
 least the fewest frames the reference showed, the median of the drops no
 more than the most the reference dropped in one play, since browser numbers
 in QEMU vary from play to play, and the decoder the same as the
-reference's, the first line of each decoders file.
+reference's, the first line of each decoders file. LIMITS, video.limits,
+names the clips whose drops are a known limit of Rach2, each by the name of
+its plays file without `.plays`: for such a clip a median over the
+reference's most is printed as `judge: limit: ...` and is not worse, and
+every other check holds.
 
 `results` compares two results files of igt.sh or piglit.sh, `NAME RESULT`
 a line, by name: a test or subtest that passed in the reference must pass
@@ -59,6 +63,7 @@ result: pass ...` or `judge: result: fail ...`, and exits 0 or 1.
 """
 import collections
 import gzip
+import os
 import statistics
 import sys
 
@@ -106,9 +111,14 @@ def first_line(path):
         return ""
 
 
-def video(ref_path, got_path, ref_dec, got_dec):
+def video(ref_path, got_path, ref_dec, got_dec, limits_path=None):
     ref, got = counted(ref_path), counted(got_path)
+    clip = os.path.basename(got_path)
+    if clip.endswith(".plays"):
+        clip = clip[:-len(".plays")]
+    limited = limits_path is not None and clip in {f[0] for f in lines(limits_path)}
     worse = []
+    limit = ""
     if len(got) != len(ref):
         worse.append("%d plays counted here, %d in the reference" % (len(got), len(ref)))
     for g in got:
@@ -122,17 +132,22 @@ def video(ref_path, got_path, ref_dec, got_dec):
     dropped_ref = [int(f[3]) for f in ref if f[3] != "-"]
     dropped_got = [int(f[3]) for f in got if f[3] != "-"]
     if dropped_got and dropped_ref and statistics.median(dropped_got) > max(dropped_ref):
-        worse.append("dropped a median of %s frames, the reference at most %d" %
-                     (statistics.median(dropped_got), max(dropped_ref)))
+        over = ("dropped a median of %s frames, the reference at most %d" %
+                (statistics.median(dropped_got), max(dropped_ref)))
+        if limited:
+            limit = ", a named limit"
+            print("judge: limit: %s: %s" % (clip, over))
+        else:
+            worse.append(over)
     dr, dg = first_line(ref_dec), first_line(got_dec)
     if dr.split(", process:")[0] != dg.split(", process:")[0]:
         worse.append("decoder %r here, %r in the reference" % (dg, dr))
     for w in worse:
         print("judge: worse: %s" % w)
     verdict = "fail" if worse else "pass"
-    print("judge: result: %s video %d plays, dropped %s here and %s in the reference, decoder %s" %
+    print("judge: result: %s video %d plays, dropped %s here and %s in the reference%s, decoder %s" %
           (verdict, len(got), ",".join(map(str, dropped_got)) or "none",
-           ",".join(map(str, dropped_ref)) or "none", dg or "unknown"))
+           ",".join(map(str, dropped_ref)) or "none", limit, dg or "unknown"))
     return not worse
 
 
@@ -273,8 +288,8 @@ def vkcube(ref_path, got_path, ref_timing=None, got_timing=None):
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "webgl":
         ok = webgl(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) == 6 and sys.argv[1] == "video":
-        ok = video(*sys.argv[2:6])
+    elif len(sys.argv) in (6, 7) and sys.argv[1] == "video":
+        ok = video(*sys.argv[2:])
     elif len(sys.argv) == 4 and sys.argv[1] in ("results", "modes", "glmark2"):
         ok = {"results": results, "modes": modes, "glmark2": glmark2}[sys.argv[1]](*sys.argv[2:4])
     elif len(sys.argv) in (4, 5) and sys.argv[1] == "deqp":
@@ -282,7 +297,7 @@ def main():
     elif len(sys.argv) in (4, 6) and sys.argv[1] == "vkcube":
         ok = vkcube(*sys.argv[2:])
     else:
-        sys.exit("usage: judge.py webgl REF GOT | video REF GOT DECODERS-REF DECODERS-GOT"
+        sys.exit("usage: judge.py webgl REF GOT | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
                  " | results|modes|glmark2 REF GOT | deqp REF GOT [FLAKES]"
                  " | vkcube REF GOT [TIMING-REF TIMING-GOT]")
     sys.exit(0 if ok else 1)

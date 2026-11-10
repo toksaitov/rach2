@@ -3487,7 +3487,7 @@
     },
     {
       "case_id": "machine.browser.firefox-video-h264-720p",
-      "behavior": "counted video frames and the named decoder match Debian for h264-720p in firefox",
+      "behavior": "counted video frames and the named decoder match Debian for h264-720p in firefox; dropped frames are printed beside Debian's and not judged, a limit that tests/graphics/runners/video.limits names",
       "units": [
         "tests/graphics/browser",
         "firefox"
@@ -3710,7 +3710,7 @@
     },
     {
       "case_id": "machine.browser.firefox-video-h264-1080p",
-      "behavior": "counted video frames and the named decoder match Debian for h264-1080p in firefox",
+      "behavior": "counted video frames and the named decoder match Debian for h264-1080p in firefox; dropped frames are printed beside Debian's and not judged, a limit that tests/graphics/runners/video.limits names",
       "units": [
         "tests/graphics/browser",
         "firefox"
@@ -3933,7 +3933,7 @@
     },
     {
       "case_id": "machine.browser.firefox-video-vp9-720p",
-      "behavior": "counted video frames and the named decoder match Debian for vp9-720p in firefox",
+      "behavior": "counted video frames and the named decoder match Debian for vp9-720p in firefox; dropped frames are printed beside Debian's and not judged, a limit that tests/graphics/runners/video.limits names",
       "units": [
         "tests/graphics/browser",
         "firefox"
@@ -4156,7 +4156,7 @@
     },
     {
       "case_id": "machine.browser.firefox-video-vp9-1080p",
-      "behavior": "counted video frames and the named decoder match Debian for vp9-1080p in firefox",
+      "behavior": "counted video frames and the named decoder match Debian for vp9-1080p in firefox; dropped frames are printed beside Debian's and not judged, a limit that tests/graphics/runners/video.limits names",
       "units": [
         "tests/graphics/browser",
         "firefox"
@@ -4379,7 +4379,7 @@
     },
     {
       "case_id": "machine.browser.firefox-video-av1-720p",
-      "behavior": "counted video frames and the named decoder match Debian for av1-720p in firefox",
+      "behavior": "counted video frames and the named decoder match Debian for av1-720p in firefox; dropped frames are printed beside Debian's and not judged, a limit that tests/graphics/runners/video.limits names",
       "units": [
         "tests/graphics/browser",
         "firefox"
@@ -4602,7 +4602,7 @@
     },
     {
       "case_id": "machine.browser.firefox-video-av1-1080p",
-      "behavior": "counted video frames and the named decoder match Debian for av1-1080p in firefox",
+      "behavior": "counted video frames and the named decoder match Debian for av1-1080p in firefox; dropped frames are printed beside Debian's and not judged, a limit that tests/graphics/runners/video.limits names",
       "units": [
         "tests/graphics/browser",
         "firefox"

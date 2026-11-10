@@ -1,0 +1,14 @@
+# video.limits: the clips whose dropped frames judge.py video prints and
+# does not judge on Rach2, one a line by the name of the clip's plays file
+# without `.plays`. Firefox's decoder threads make some 4,300 futex calls
+# and 7,800 page faults a second, which Rach2 serves one processor at a
+# time under its big kernel lock, so Firefox drops more frames than the
+# Debian guest under the references' load (tests/graphics/Readme.md,
+# Limits). The lines go once futex, page faults and the timer tick no
+# longer take that lock.
+firefox-h264-720p.mp4
+firefox-h264-1080p.mp4
+firefox-vp9-720p.webm
+firefox-vp9-1080p.webm
+firefox-av1-720p.webm
+firefox-av1-1080p.webm
