@@ -38,9 +38,11 @@ struct tty {
     n_tty_out_fn sink;           /* echo/output byte sink; a NULL at tty_init discards */
     void *sink_ctx;              /* opaque context handed to sink */
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
-    int sid;                     /* the session whose controlling terminal this is; 0 = none */
-    int fg_pgid;                 /* foreground process group (ISIG target); 0 = none */
-    int hungup;                  /* tty_hangup ran: a read with nothing to take returns 0 */
+    /* Discard queued output on vhangup; NULL for an unbuffered sink. */
+    void (*flush_output)(struct tty *t);
+    int sid;     /* the session whose controlling terminal this is; 0 = none */
+    int fg_pgid; /* foreground process group (ISIG target); 0 = none */
+    int hungup;  /* tty_hangup ran: a read with nothing to take returns 0 */
     /* The vhangup(2)s of the terminal (`tty_vhangup`). A description opened
      * when the count was lower is hung up: its reads give 0, its writes and
      * ioctls EIO (`tty_desc_hung`). */
@@ -225,7 +227,8 @@ void tty_hangup(struct tty *t);
  * Hang `t` up as vhangup(2) does, Linux's `__tty_hangup` for a terminal that
  * a session leader's exit does not hang up: post SIGHUP and then SIGCONT to
  * the leader of the session `t` controls, take the terminal from that
- * session and its foreground group, discard the unread input, give `t` the
+ * session and its foreground group, discard unread input and queued output,
+ * give `t` the
  * default termios (`n_tty_default_termios`), as Linux resets a pty's and a
  * virtual console's, and count the hangup, which makes every description
  * opened before it a hung-up one (`tty_desc_hung`). Every reader, writer

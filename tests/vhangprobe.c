@@ -20,6 +20,8 @@
  * * eperm: a process of uid 1000, without CAP_SYS_TTY_CONFIG, gets EPERM.
  * * blocked-write: the writer, which waits for room in the ring or has not
  *   begun, ends with the bytes it wrote or EIO, as Linux's n_tty_write.
+ * * output-flush: unread output is discarded, and the master in packet
+ *   mode reads TIOCPKT_FLUSHWRITE alone, then EAGAIN.
  * * cleanup: the child exits 0 and the master closes.
  *
  * The child reports through its exit status the first row that failed; the
@@ -35,21 +37,25 @@
 #include "probe_args.h"
 #include "probe_report.h"
 
-#define O_RDONLY 0
-#define O_RDWR   2
-#define O_NOCTTY 0400
-#define SIGHUP   1
-#define EIO      5
-#define ENXIO    6
-#define EPERM    1
-#define ENOTTY   25
+#define O_RDONLY   0
+#define O_RDWR     2
+#define O_NOCTTY   0400
+#define O_NONBLOCK 04000
+#define EAGAIN     11
+#define SIGHUP     1
+#define EIO        5
+#define ENXIO      6
+#define EPERM      1
+#define ENOTTY     25
 
-#define TIOCSCTTY  0x540E
-#define TIOCSPGRP  0x5410
-#define TIOCGPTN   0x80045430
-#define TIOCSPTLCK 0x40045431
-#define TCGETS     0x5401
-#define TCSETS     0x5402
+#define TIOCPKT            0x5420
+#define TIOCPKT_FLUSHWRITE 2
+#define TIOCSCTTY          0x540E
+#define TIOCSPGRP          0x5410
+#define TIOCGPTN           0x80045430
+#define TIOCSPTLCK         0x40045431
+#define TCGETS             0x5401
+#define TCSETS             0x5402
 
 #define ECHO      0x0008
 #define TIO_LFLAG 12
@@ -80,14 +86,15 @@ struct pollfd {
 #define ROW_REOPEN    8
 #define ROW_EPERM     9
 #define ROW_WRITER    10
+#define ROW_FLUSH     11
 
 /* The bytes the writer writes, more than the master's ring holds. */
 #define WRITER_BYTES 65536
 
 /* The rows, in the order of the report and of the child's exit codes. */
-static const char *const plan[] = {"setup",     "vhangup",       "old-read", "old-write",
-                                   "old-ioctl", "old-poll",      "no-ctty",  "reopen-defaults",
-                                   "eperm",     "blocked-write", "cleanup"};
+static const char *const plan[] = {"setup",     "vhangup",       "old-read",     "old-write",
+                                   "old-ioctl", "old-poll",      "no-ctty",      "reopen-defaults",
+                                   "eperm",     "blocked-write", "output-flush", "cleanup"};
 
 /** The length of the string `s`. */
 static size_t strlen(const char *s)
@@ -212,41 +219,63 @@ static long start_writer(long slave)
     return -1;
 }
 
-/**
- * The child's rows on the slave /dev/pts/`ptn`, with `uid` for the eperm
- * row; returns the ROW_ of the first that failed, or 0 when all held.
- */
-static int child_rows(int ptn, long uid)
+/** Open the child's controlling slave, turn echo off, ignore SIGHUP and
+ * queue output for the hangup, with `master` in packet mode. Its descriptor
+ * or -1 when setup fails; `ptn` is the slave's index. */
+static long child_setup(int ptn, long master)
 {
     /* The kernel's sigaction as words: the handler, SIG_IGN, then the
      * flags, the restorer and the 64-bit mask, all zero. */
     static const unsigned long action[5] = {1, 0, 0, 0, 0};
     unsigned char tio[TIO_SIZE];
     unsigned int lflag;
-    struct pollfd pfd;
-    char path[24], byte;
-    long slave, fd, writer;
-    int status = -1;
+    char path[24];
+    long slave;
+    int packet = 1;
 
     clear(tio, sizeof(tio));
     pts_path(path, ptn);
     if (syscall0(SYS_SETSID) < 0) {
-        return ROW_SETUP;
+        return -1;
     }
     slave = syscall3(SYS_OPEN, (long)path, O_RDWR | O_NOCTTY, 0);
     if (slave < 0 || syscall3(SYS_IOCTL, slave, TIOCSCTTY, 0) != 0 ||
         syscall3(SYS_IOCTL, slave, TCGETS, (long)tio) != 0) {
-        return ROW_SETUP;
+        return -1;
     }
     copy(&lflag, tio + TIO_LFLAG, sizeof(lflag));
     lflag &= ~(unsigned int)ECHO;
     copy(tio + TIO_LFLAG, &lflag, sizeof(lflag));
     if (syscall3(SYS_IOCTL, slave, TCSETS, (long)tio) != 0 || (lflag_of((int)slave) & ECHO)) {
-        return ROW_SETUP;
+        return -1;
     }
     if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)action, 0, 8) != 0) {
+        return -1;
+    }
+    if (syscall3(SYS_IOCTL, master, TIOCPKT, (long)&packet) != 0 ||
+        syscall3(SYS_WRITE, slave, (long)"unread", 6) != 6) {
+        return -1;
+    }
+    return slave;
+}
+
+/**
+ * The child's rows on the slave /dev/pts/`ptn`, with `uid` for the eperm
+ * row and its nonblocking `master` for the output check. Returns the ROW_
+ * of the first that failed, or 0 when all held.
+ */
+static int child_rows(int ptn, long uid, long master)
+{
+    unsigned char tio[TIO_SIZE];
+    struct pollfd pfd;
+    char path[24], byte;
+    long slave = child_setup(ptn, master), fd, writer;
+    int status = -1;
+
+    if (slave < 0) {
         return ROW_SETUP;
     }
+    pts_path(path, ptn);
     writer = start_writer(slave);
     if (writer < 0) {
         return ROW_SETUP;
@@ -283,6 +312,10 @@ static int child_rows(int ptn, long uid)
     if (syscall3(SYS_WAITPID, writer, (long)&status, 0) != writer || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
         return ROW_WRITER;
+    }
+    if (syscall3(SYS_READ, master, (long)&byte, 1) != 1 || !(byte & TIOCPKT_FLUSHWRITE) ||
+        syscall3(SYS_READ, master, (long)&byte, 1) != -EAGAIN) {
+        return ROW_FLUSH;
     }
     return 0;
 }
@@ -321,7 +354,8 @@ void probe_main(unsigned long *sp)
         "no-ctty: /dev/tty was not ENXIO",
         "reopen-defaults: a new open did not have the default termios",
         "eperm: uid 1000 did not get EPERM",
-        "blocked-write: the waiting writer did not end with its bytes or EIO"};
+        "blocked-write: the waiting writer did not end with its bytes or EIO",
+        "output-flush: unread output survived, or packet status was not FLUSHWRITE"};
     int ptn = -1, unlock = 0, status = -1;
     long master, pid;
     int i;
@@ -331,15 +365,14 @@ void probe_main(unsigned long *sp)
         report_plan(plan[i]);
     }
     probe_args((int)sp[0], (char **)(sp + 1));
-    master = syscall3(SYS_OPEN, (long)"/dev/ptmx", O_RDWR | O_NOCTTY, 0);
+    master = syscall3(SYS_OPEN, (long)"/dev/ptmx", O_RDWR | O_NOCTTY | O_NONBLOCK, 0);
     if (master < 0 || syscall3(SYS_IOCTL, master, TIOCGPTN, (long)&ptn) != 0 || ptn < 0 ||
         syscall3(SYS_IOCTL, master, TIOCSPTLCK, (long)&unlock) != 0) {
         fail_at(0, "setup: /dev/ptmx did not open and unlock a pair");
     }
     pid = syscall0(SYS_FORK);
     if (pid == 0) {
-        syscall1(SYS_CLOSE, master);
-        leave(child_rows(ptn, probe_id(1000)));
+        leave(child_rows(ptn, probe_id(1000), master));
     }
     if (pid < 0 || syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || !WIFEXITED(status)) {
         fail_at(0, "setup: the child did not exit");

@@ -676,6 +676,42 @@ static void packet_mode(void)
     CHECK(ptm_flush(&pair, 3) == -EINVAL, "TCFLSH takes 0, 1 and 2");
 }
 
+/** Hang up the slave after the master has blocked in a packet read. */
+static void vhangup_action(void)
+{
+    tty_vhangup(&pair.slave);
+}
+
+/** A slave hangup discards unread output and wakes a packet reader for
+ * FLUSHWRITE even when no output was queued. */
+static void vhangup_output(void)
+{
+    char out[8];
+    wait_queue_t *wq;
+    uint32_t wakes;
+
+    setup_pair();
+    CHECK(pts_write(&slave, "old", 3) == 3, "queue output before vhangup");
+    tty_vhangup(&pair.slave);
+    CHECK(pty_m_avail(&pair) == 0 && !pair.pktstatus,
+          "vhangup discards output without packet status outside packet mode");
+    setup_pair();
+    pair.packet = 1;
+    CHECK(pts_write(&slave, "old", 3) == 3, "queue output in packet mode");
+    wakes = wq_wakes(&pair.m_read_wq, WQ_DATA);
+    tty_vhangup(&pair.slave);
+    CHECK(pty_m_avail(&pair) == 0 && wq_wakes(&pair.m_read_wq, WQ_DATA) == wakes + 1,
+          "vhangup flushes output and wakes packet readers");
+    CHECK(ptm_poll(&master, POLLIN | POLLRDNORM | POLLPRI, &wq) == (POLLIN | POLLRDNORM | POLLPRI),
+          "packet status is readable and urgent");
+    CHECK(ptm_read(&master, out, sizeof(out)) == 1 && out[0] == TIOCPKT_FLUSHWRITE,
+          "vhangup returns FLUSHWRITE alone");
+    CHECK(!ptm_readable(&pair), "the flush left no output or status");
+    scheduled_action = vhangup_action;
+    CHECK(ptm_read(&master, out, sizeof(out)) == 1 && out[0] == TIOCPKT_FLUSHWRITE && switches == 1,
+          "a vhangup with no output wakes a blocked packet reader");
+}
+
 /** A read that does not wait ends the latency span its input started, as a
  * read that waits does, so the next span starts from later input. */
 static void nonblocking_latency(void)
@@ -988,6 +1024,7 @@ int main(void)
     wake_kinds();
     input_room();
     packet_mode();
+    vhangup_output();
     nonblocking_latency();
     output_growth();
     copy_refit();

@@ -103,6 +103,8 @@ Opening `/dev/ptmx` allocates a `struct pty` from the heap at the lowest index n
 * A slave write is output processing into `m_buf`. The writer marks the pair busy for the whole write (`writing` in `struct pty`), so another writer waits until it ends, or fails with EAGAIN when nonblocking, as Linux's `atomic_write_lock` keeps two writes apart. It copies a piece at a time, reserving two bytes of ring for each byte while OPOST is set (ONLCR's CR LF) and one otherwise (`pts_growth`), and fits the piece again after the copy from the user, which may sleep on a page fault while echo fills the ring. While the ring has no room the writer waits on the slave's queue, which a master read wakes, so no output is lost. Echo does not wait, and is dropped when the ring is full.
 * TIOCSWINSZ on the master posts SIGWINCH to the slave's foreground group.
 
+A vhangup of the slave discards its output still in `m_buf` through `flush_output`. In packet mode it sets TIOCPKT_FLUSHWRITE, which the master's next read takes as a status byte alone, and wakes the master's readers. Pending status is readable and has POLLPRI, as on Linux.
+
 The master has one wait queue, `m_read_wq`, for its readers, writers and pollers, and the slave's `space_wq` points at it. Each wake gives its kind of change, which an edge-triggered epoll registration reports. A slave read, an input flush, a termios change, and master input that took bytes out of the slave's discipline (an erase, or a signal character's flush) wake it with `WQ_ROOM`. Slave output and echo wake it with `WQ_DATA` when they put bytes in `m_buf`, and with no kind when they put none, as input written with echo off, or echo the full ring dropped. These wakes are made even when a later user copy of the same write fails. Input written to the master wakes the slave's `input_wq` with `WQ_DATA`.
 
 Closing the master posts SIGHUP to the slave's foreground group and hangs the slave up. Slave readers take what is queued, and then every read returns 0, nonblocking ones included, since `tty_read` tests the slave's `hungup` when the discipline has nothing, and its wait predicate tests it beside the discipline's readiness. A slave write after the close fails with EIO, and poll reports POLLHUP. When the last slave description closes, master readers are woken to read EIO, and the master's poll reports POLLHUP.
@@ -113,7 +115,7 @@ Closing the master posts SIGHUP to the slave's foreground group and hangs the sl
 * The console has one keyboard state: every keyboard shares its locks, its LEDs and its mode, and a USB keyboard and the PS/2 keyboard show the same LEDs.
 * The process that owns `/fb` reads its keys from the console like any other; a game that wants every press and release sets K_RAW and raw termios itself, as Doom does. Each return of the screen restores the receiving owner's keyboard and terminal settings and flushes the console's input, so it cannot become type-ahead for the next owner or login.
 * TIOCSWINSZ on the console or a slave stores the size and posts no SIGWINCH; only the master's posts it.
-* Packet mode sends only TIOCPKT_DATA, never the status bytes for a flush or a stop of output.
+* Packet mode sends TIOCPKT_DATA before output and TIOCPKT_FLUSHWRITE alone when vhangup flushes the slave's output; other flushes and output stops do not send status bytes.
 
 ## Tests
 

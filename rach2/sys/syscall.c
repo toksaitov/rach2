@@ -2321,31 +2321,6 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
 }
 
 /**
- * Device control (ioctl(2)).
- *
- * Its arguments are fd, request and arg. Returns 0, the request's result, or
- * -errno: -ENOTTY for a request the descriptor does not answer, a terminal
- * request on a descriptor that is no terminal among them, as on Linux.
- *
- * The descriptor is checked first, so a bad one is -EBADF whatever the
- * request, `ioctl(-1, TCGETS)` included, and an O_PATH one is -EBADF to every
- * request, as on Linux. The requests then go, in order, to: FIONBIO, which
- * every descriptor answers (`fd_ioctl_nbio`); FS_IOC_GETFLAGS and the other
- * file attribute requests (`fs_flags_ioctl`); FICLONE and FICLONERANGE
- * (`fs_clone_ioctl`); SIOCGSTAMP and SIOCGSTAMPNS on an Internet or packet
- * socket (`socket_gettstamp`); the interface requests of
- * `netif_ioctl` on a socket of any family, as on Linux, where glibc's
- * if_nametoindex uses an AF_UNIX one and a DHCP client sets the machine's
- * address; the termios and session requests of `tty_common_ioctl` on the
- * console and a pty slave, ahead of the slave's own operations; and the
- * `ioctl` of an object with operations of its own, such as a pipe or a pty
- * master, -ENOTTY when it has none; the framebuffer's operations answer
- * its FB_* requests (display/fbdev.c). The console answers its sound
- * requests (`console_ioctl`), by the descriptor's type, so a descriptor 1
- * reopened onto a regular file never reaches the speaker. `ioctl_fd` is the
- * call with its arguments taken out of the frame.
- */
-/**
  * vhangup(2): hang up the caller's controlling terminal as Linux's
  * `tty_vhangup_self` does (`tty_vhangup`), which needs CAP_SYS_TTY_CONFIG
  * in the first user namespace. 0, also for a caller with no controlling
@@ -2370,6 +2345,32 @@ long sys_vhangup(isr_params_t *params)
     return 0;
 }
 
+/**
+ * Device control (ioctl(2)).
+ *
+ * Its arguments are fd, request and arg. Returns 0, the request's result, or
+ * -errno: -ENOTTY for a request the descriptor does not answer, a terminal
+ * request on a descriptor that is no terminal among them, as on Linux.
+ *
+ * The descriptor is checked first, so a bad one is -EBADF whatever the
+ * request, `ioctl(-1, TCGETS)` included, and an O_PATH one is -EBADF to every
+ * request, as on Linux. The requests then go, in order, to: FIONBIO, which
+ * every descriptor answers (`fd_ioctl_nbio`); a hung-up terminal description,
+ * which answers -EIO, or -ENOTTY to TIOCSPGRP; FS_IOC_GETFLAGS and the other
+ * file attribute requests (`fs_flags_ioctl`); FICLONE and FICLONERANGE
+ * (`fs_clone_ioctl`); SIOCGSTAMP and SIOCGSTAMPNS on an Internet or packet
+ * socket (`socket_gettstamp`); the interface requests of
+ * `netif_ioctl` on a socket of any family, as on Linux, where glibc's
+ * if_nametoindex uses an AF_UNIX one and a DHCP client sets the machine's
+ * address; the termios and session requests of `tty_common_ioctl` on the
+ * console and a pty slave, ahead of the slave's own operations; and the
+ * `ioctl` of an object with operations of its own, such as a pipe or a pty
+ * master, -ENOTTY when it has none; the framebuffer's operations answer
+ * its FB_* requests (display/fbdev.c). The console answers its sound
+ * requests (`console_ioctl`), by the descriptor's type, so a descriptor 1
+ * reopened onto a regular file never reaches the speaker. `ioctl_fd` is the
+ * call with its arguments taken out of the frame.
+ */
 long sys_ioctl(isr_params_t *params)
 {
     return ioctl_fd((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), SC_ARG(params, 2));

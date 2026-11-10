@@ -59,6 +59,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->sink = sink ? sink : null_sink;
     t->sink_ctx = sink_ctx;
     t->pump = NULL;
+    t->flush_output = NULL;
     t->sid = 0;
     t->fg_pgid = 0;
     t->hungup = 0;
@@ -482,6 +483,9 @@ void tty_vhangup(struct tty *t)
     flags = kirq_save();
     t->vhangups++;
     kirq_restore(flags);
+    if (t->flush_output) {
+        t->flush_output(t);
+    }
     n_tty_default_termios(&kt);
     tty_set_termios(t, &kt, 1);
     wq_wake_all(&t->input_wq);

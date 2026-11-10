@@ -32,8 +32,11 @@ first.
 It takes the terminal from that session: no process has it as its
 controlling terminal any longer, and it has no foreground process group.
 .It
-It discards the input not yet read and gives the terminal the termios a
-new terminal has, as Linux resets a pseudo-terminal's and a virtual
+It discards input not yet read and a pseudo-terminal slave's output not
+yet read by its master.
+In packet mode the master receives
+.Dv TIOCPKT_FLUSHWRITE .
+It gives the terminal the termios a new terminal has, as Linux resets a pseudo-terminal's and a virtual
 console's:
 .Dv ICRNL
 and
