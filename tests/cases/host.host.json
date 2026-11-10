@@ -1261,6 +1261,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vfio",
+          "checks": "tests/host/vfio_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "vga_gfx",
           "checks": "tests/host/vga_gfx_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
