@@ -287,7 +287,7 @@ uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb)
         return 0;
     }
     for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
-        if (vma->view_pages == 0 && vma->mappable && vma->pin_count > 0) {
+        if (vma->view_pages == 0 && vma->pin_count > 0) {
             return (uint32_t)vma->start;
         }
     }
