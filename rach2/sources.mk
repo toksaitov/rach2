@@ -145,6 +145,7 @@ C_SRC_SHARED = kernel.c \
     sys/usb/xhci.c \
     sys/usb/core.c \
     sys/usb/hid.c \
+    sys/usb/hid_parse.c \
     sys/usb/msc.c \
     sys/usb/hub.c \
     sys/network/wireless/elems.c \
