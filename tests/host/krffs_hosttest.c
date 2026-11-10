@@ -882,7 +882,7 @@ static void hash_rows(void)
  * Two regular files of one name in different directories must not share a
  * number: `cp -a` takes a shared number for a hard link and copies the pair
  * as one file. A file's number is its parent's id mixed with its name, and a
- * directory's number is its id.
+ * directory's number is its id, each folded to 32 bits.
  */
 static void ino_rows(void)
 {
@@ -899,8 +899,10 @@ static void ino_rows(void)
     b.parent_id = 12;
     check(krffs_node_ino(&a) != krffs_node_ino(&b),
           "files of one name in two directories have different inode numbers");
-    check(krffs_node_ino(&a) == krffs_mix_id(a.parent_id, (const char *)a.name),
-          "a file's inode number is its parent's id mixed with its name");
+    check(krffs_node_ino(&a) == krffs_fold_ino(krffs_mix_id(a.parent_id, (const char *)a.name)),
+          "a file's inode number is its parent's id mixed with its name, folded");
+    check(krffs_node_ino(&a) <= 0xFFFFFFFFu && krffs_node_ino(&b) <= 0xFFFFFFFFu,
+          "a file's inode number fits 32 bits");
     memcpy(dir.name, ".ssh", 5);
     dir.mode = KRFFS_S_IFDIR | 0700;
     dir.id = 424242;

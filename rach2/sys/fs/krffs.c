@@ -458,12 +458,23 @@ static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
     return krffs_mix_hash(parent_id, krffs_calculate_djb_hash((const uint8_t *)name));
 }
 
+/** Fold the 64-bit identifier `h` into an inode number of 32 bits that is
+ * neither 0 nor the root's 1. */
+static uint64_t krffs_fold_ino(uint64_t h)
+{
+    uint32_t f = (uint32_t)(h ^ (h >> 32));
+
+    return f > 1u ? f : f + 2u;
+}
+
 /**
  * The root is recognised by its node type, since its stored mode need not
  * have the directory bits. A file's number mixes its stored id, the hash of
  * its name, rather than the name itself: unlink clears the name of a file
  * that is still open and leaves the id, and the file's number must not
- * change while it is open.
+ * change while it is open. Every number fits 32 bits, as ext4's and tmpfs's
+ * do on Linux by default, since i386's stat and getdents on the x86-64
+ * kernel fail with EOVERFLOW for a wider one.
  */
 uint64_t krffs_node_ino(const krffs_node_t *node)
 {
@@ -471,9 +482,9 @@ uint64_t krffs_node_ino(const krffs_node_t *node)
         return 1;
     }
     if (KRFFS_IS_DIR(node->mode)) {
-        return node->id;
+        return krffs_fold_ino(node->id);
     }
-    return krffs_mix_hash(node->parent_id, node->id);
+    return krffs_fold_ino(krffs_mix_hash(node->parent_id, node->id));
 }
 
 /**
