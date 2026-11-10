@@ -153,14 +153,15 @@ struct evdev_slot {
 };
 
 struct evdev {
-    int used;           /* the slot is taken, by a device or by the opens of one gone */
-    int gone;           /* unregistered: no node, and its opens read -ENODEV */
-    unsigned int flags; /* EVDEV_SCAN, EVDEV_KEYBOARD */
-    unsigned int leds;  /* a keyboard's LEDs lit, a bit 1 << LED_* each */
-    int rep[2];         /* a keyboard's REP_DELAY and REP_PERIOD, ms */
-    int has_abs;        /* EV_ABS: `absinfo` answers EVIOCGABS */
-    int stamped;        /* a packet has begun, at `stamp` */
-    uint32_t gen;       /* the registration's number, `evdev_desc`'s */
+    int used;             /* the slot is taken, by a device or by the opens of one gone */
+    int gone;             /* unregistered: no node, and its opens read -ENODEV */
+    unsigned int flags;   /* EVDEV_SCAN, EVDEV_KEYBOARD */
+    unsigned int leds;    /* a keyboard's LEDs lit, a bit 1 << LED_* each */
+    unsigned int ledbits; /* the LEDs it has beyond a keyboard's three */
+    int rep[2];           /* a keyboard's REP_DELAY and REP_PERIOD, ms */
+    int has_abs;          /* EV_ABS: `absinfo` answers EVIOCGABS */
+    int stamped;          /* a packet has begun, at `stamp` */
+    uint32_t gen;         /* the registration's number, `evdev_desc`'s */
     const char *name;
     const char *phys;                          /* NULL: EVIOCGPHYS answers -ENOENT */
     uint16_t id[4];                            /* bustype, vendor, product, version */
@@ -283,6 +284,8 @@ void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code)
         set_bit(dev->keys, code);
     } else if (type == EV_REL && code < REL_CNT) {
         set_bit(dev->rel, code);
+    } else if (type == EV_LED && code < LED_CNT) {
+        dev->ledbits |= 1u << code;
     }
 }
 
@@ -1483,6 +1486,9 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
             out[EV_LED >> 3] |= (uint8_t)(1u << (EV_LED & 7));
             out[EV_REP >> 3] |= (uint8_t)(1u << (EV_REP & 7));
         }
+        if (dev->ledbits) {
+            out[EV_LED >> 3] |= (uint8_t)(1u << (EV_LED & 7));
+        }
         return (int)BITS_BYTES(EV_CNT);
     case EV_KEY:
         k_memcpy(out, dev->keys, EVDEV_KEY_BYTES);
@@ -1502,6 +1508,8 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
         if (dev->flags & EVDEV_KEYBOARD) {
             out[0] = 1u << LED_NUML | 1u << LED_CAPSL | 1u << LED_SCROLLL;
         }
+        out[0] = (uint8_t)(out[0] | (dev->ledbits & 0xFFu));
+        out[1] = (uint8_t)(dev->ledbits >> 8);
         return (int)BITS_BYTES(LED_CNT);
     case EV_SND:
         return (int)BITS_BYTES(SND_CNT);

@@ -353,12 +353,20 @@ void input_keyboard_attach(struct input_keyboard *kb, const char *name, const ch
                            uint16_t bustype, uint16_t vendor, uint16_t product)
 {
     uint8_t keys[EVDEV_KEY_BYTES];
-    uint32_t flags;
+    struct evdev *dev;
 
     k_memset(keys, 0, sizeof(keys));
     set1_keys(keys);
-    kb->dev = evdev_register(name, bustype, vendor, product, keys);
-    evdev_describe(kb->dev, phys, EVDEV_SCAN | EVDEV_KEYBOARD);
+    dev = evdev_register(name, bustype, vendor, product, keys);
+    evdev_describe(dev, phys, EVDEV_SCAN | EVDEV_KEYBOARD);
+    input_keyboard_attach_dev(kb, dev);
+}
+
+void input_keyboard_attach_dev(struct input_keyboard *kb, struct evdev *dev)
+{
+    uint32_t flags;
+
+    kb->dev = dev;
     flags = spin_lock_irqsave(&input_lock);
     evdev_report_repeat(kb->dev, repeat_delay_ms, repeat_period_ms);
     evdev_report_leds(kb->dev, evdev_leds(leds_wanted));

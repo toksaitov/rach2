@@ -70,6 +70,14 @@ void input_keyboard_attach(struct input_keyboard *kb, const char *name, const ch
                            uint16_t bustype, uint16_t vendor, uint16_t product);
 
 /**
+ * Attach the keyboard `kb`, zeroed by its driver, as `input_keyboard_attach`
+ * does, with the event device `dev` its driver registered and described,
+ * whose keys are its own: a USB keyboard's, which its report descriptor
+ * names. `dev` may be NULL.
+ */
+void input_keyboard_attach_dev(struct input_keyboard *kb, struct evdev *dev);
+
+/**
  * Detach `kb`, a keyboard that has gone: release every key it holds, so that
  * none stays down for ever, stop the repeat of its key, and take its event
  * device away. Any context. A keyboard not attached is ignored.
