@@ -764,7 +764,8 @@ struct vmx_vcpu {
     uint32_t inj_info, inj_error, inj_len;   /* the event the next entry injects */
     uint64_t pdpte[4];
     uint64_t debugctl;
-    int guest_dr; /* the guest's DR0 to DR3 and DR6 were loaded for the run */
+    int guest_dr; /* DR0 to DR3 and DR6 were loaded for the run */
+    int tf_set;   /* the entry set RFLAGS.TF for KVM_GUESTDBG_SINGLESTEP */
     struct vmx_exit ex;
 };
 
@@ -772,6 +773,20 @@ struct vmx_vcpu {
 static struct vmx_vcpu *vx(const struct kvm_vcpu *v)
 {
     return (struct vmx_vcpu *)v->backend;
+}
+
+/** Whether the caller debugs `v` with the guest-debug control `flag`
+ * (KVM_GUESTDBG_*), which needs KVM_GUESTDBG_ENABLE too. */
+static int debugging(const struct kvm_vcpu *v, uint32_t flag)
+{
+    return (v->guest_debug.control & KVM_GUESTDBG_ENABLE) && (v->guest_debug.control & flag);
+}
+
+/** The DR7 the guest runs under: the caller's while it sets hardware
+ * breakpoints, else the guest's own. */
+static uint64_t dr7_of(const struct kvm_vcpu *v)
+{
+    return debugging(v, KVM_GUESTDBG_USE_HW_BP) ? v->guest_debug.debugreg[7] : v->debugregs.dr7;
 }
 
 /* ---- the VMCS's fields ---- */
@@ -1126,12 +1141,53 @@ static uint32_t proc2_for(const struct kvm_vcpu *v)
     return p;
 }
 
+/** Write `v`'s interrupt shadow and NMI blocking to the guest's
+ * interruptibility state. */
+static void load_intr(struct kvm_vcpu *v)
+{
+    uint32_t intr = 0;
+
+    if (v->events.interrupt.shadow & SHADOW_STI) {
+        intr |= INTR_STI;
+    }
+    if (v->events.interrupt.shadow & SHADOW_MOV_SS) {
+        intr |= INTR_MOV_SS;
+    }
+    if (v->events.nmi.masked) {
+        intr |= INTR_BLOCK_NMI;
+    }
+    vmcs_write(GUEST_INTERRUPTIBILITY_INFO, intr);
+    /* An interrupt shadow under TF needs the single-step trap pending,
+     * which the entry checks. */
+    if ((intr & (INTR_STI | INTR_MOV_SS)) && (v->regs.rflags & RFLAGS_TF)) {
+        vmcs_write(GUEST_PENDING_DBG_EXCEPTIONS, DR6_BS);
+    }
+}
+
+/** Write the exception bitmap and DR7 for the caller's debugging: #DB for
+ * single steps and hardware breakpoints, #BP for software ones, as Linux's
+ * vmx_update_exception_bitmap, and #MC always. */
+static void load_debug(struct kvm_vcpu *v)
+{
+    struct vmx_vcpu *x = vx(v);
+
+    x->exc_bitmap = 1u << MC_VECTOR;
+    if (debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) {
+        x->exc_bitmap |= 1u << DB_VECTOR;
+    }
+    if (debugging(v, KVM_GUESTDBG_USE_SW_BP)) {
+        x->exc_bitmap |= 1u << BP_VECTOR;
+    }
+    vmcs_write(EXCEPTION_BITMAP, x->exc_bitmap);
+    vmcs_write(GUEST_DR7, dr7_of(v));
+}
+
 /** Write the parts of `v`'s state the record or this file changed since
  * the last entry, and clear their marks. */
 static void load_dirty(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
-    uint32_t d = v->dirty, i, intr;
+    uint32_t d = v->dirty, i;
     uint64_t pat;
     int n;
 
@@ -1168,25 +1224,10 @@ static void load_dirty(struct kvm_vcpu *v)
         }
     }
     if ((d & KVM_PART_EVENTS) || (x->vdirty & VX_INTR)) {
-        intr = 0;
-        if (v->events.interrupt.shadow & SHADOW_STI) {
-            intr |= INTR_STI;
-        }
-        if (v->events.interrupt.shadow & SHADOW_MOV_SS) {
-            intr |= INTR_MOV_SS;
-        }
-        if (v->events.nmi.masked) {
-            intr |= INTR_BLOCK_NMI;
-        }
-        vmcs_write(GUEST_INTERRUPTIBILITY_INFO, intr);
-        /* An interrupt shadow under TF needs the single-step trap pending,
-         * which the entry checks. */
-        if ((intr & (INTR_STI | INTR_MOV_SS)) && (v->regs.rflags & RFLAGS_TF)) {
-            vmcs_write(GUEST_PENDING_DBG_EXCEPTIONS, DR6_BS);
-        }
+        load_intr(v);
     }
     if (d & KVM_PART_DEBUG) {
-        vmcs_write(GUEST_DR7, v->debugregs.dr7);
+        load_debug(v);
     }
     if (d & KVM_PART_MSRS) {
         vmcs_write(GUEST_SYSENTER_CS, table_msr(v, MSR_IA32_SYSENTER_CS));
@@ -1255,7 +1296,9 @@ static void read_sregs(struct kvm_vcpu *v)
     v->sregs.cr3 = vmcs_read(GUEST_CR3);
     cr0 = vmcs_read(GUEST_CR0);
     v->sregs.cr0 = (v->sregs.cr0 & ~CR0_GUEST_OWNED) | (cr0 & CR0_GUEST_OWNED);
-    v->debugregs.dr7 = vmcs_read(GUEST_DR7);
+    if (!debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
+        v->debugregs.dr7 = vmcs_read(GUEST_DR7);
+    }
     if (pae_paging(v)) {
         for (i = 0; i < 4; i++) {
             x->pdpte[i] = vmcs_read(GUEST_PDPTR0 + 2u * (uint32_t)i);
@@ -1267,9 +1310,13 @@ static void read_sregs(struct kvm_vcpu *v)
 /** Whether the exit `e` of `v` needs the special registers in the record
  * for its handling: an access to MMIO, string I/O, a control register's
  * write, a debug register, a hypercall's privilege, an exception, a task
- * switch, and the APIC base's write, which vlapic.c marks as theirs. */
+ * switch, the APIC base's write, which vlapic.c marks as theirs, and any
+ * exit under the caller's single step, whose report gives CS's base. */
 static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
 {
+    if (debugging(v, KVM_GUESTDBG_SINGLESTEP)) {
+        return 1;
+    }
     switch (e->reason) {
     case EXIT_EPT_VIOLATION:
     case EXIT_EPT_MISCONFIG:
@@ -1289,23 +1336,24 @@ static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
     }
 }
 
-/** Load the guest's debug registers for the run when its DR7 enables a
- * breakpoint; the host's DR7, which the exit clears, comes back after. */
+/** Load the debug registers for the run when the DR7 it runs under
+ * enables a breakpoint: the caller's breakpoints while it sets them, else
+ * the guest's; the host's DR7, which the exit clears, comes back after. */
 static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
 {
     struct vmx_vcpu *x = vx(v);
-    int i;
+    int i, hw = debugging(v, KVM_GUESTDBG_USE_HW_BP);
 
     *host_dr7 = vmx_op->read_dr(7);
-    x->guest_dr = (v->debugregs.dr7 & DR7_ENABLES) != 0;
+    x->guest_dr = (dr7_of(v) & DR7_ENABLES) != 0;
     if (!x->guest_dr) {
         return;
     }
     for (i = 0; i < 4; i++) {
         host_db[i] = vmx_op->read_dr(i);
-        vmx_op->write_dr(i, v->debugregs.db[i]);
+        vmx_op->write_dr(i, hw ? v->guest_debug.debugreg[i] : v->debugregs.db[i]);
     }
-    vmx_op->write_dr(6, v->debugregs.dr6);
+    vmx_op->write_dr(6, hw ? DR6_FIXED : v->debugregs.dr6);
 }
 
 /** Take the guest's DR6 back and put the host's debug registers back. */
@@ -1315,7 +1363,9 @@ static void dr_store(struct kvm_vcpu *v, uint64_t host_dr7, const uint64_t host_
     int i;
 
     if (x->guest_dr) {
-        v->debugregs.dr6 = vmx_op->read_dr(6);
+        if (!debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
+            v->debugregs.dr6 = vmx_op->read_dr(6);
+        }
         vmx_op->write_dr(6, 0);
         for (i = 0; i < 4; i++) {
             vmx_op->write_dr(i, host_db[i]);
@@ -1377,7 +1427,10 @@ static void entry_fields(struct kvm_vcpu *v)
     }
     vmcs_write(GUEST_RSP, v->regs.rsp);
     vmcs_write(GUEST_RIP, v->regs.rip);
-    vmcs_write(GUEST_RFLAGS, v->regs.rflags);
+    /* The caller's single step is the guest's TF, hidden from the guest's
+     * RFLAGS after the exit, as Linux's __kvm_set_rflags sets it. */
+    x->tf_set = debugging(v, KVM_GUESTDBG_SINGLESTEP) && !(v->regs.rflags & RFLAGS_TF);
+    vmcs_write(GUEST_RFLAGS, v->regs.rflags | (x->tf_set ? RFLAGS_TF : 0));
     vmcs_write(VMX_PREEMPTION_TIMER_VALUE, VMX_RUN_BOUND_TSC >> caps.timer_shift);
 }
 
@@ -1415,9 +1468,17 @@ static void after_run(struct kvm_vcpu *v)
     v->regs.rsp = vmcs_read(GUEST_RSP);
     v->regs.rip = vmcs_read(GUEST_RIP);
     v->regs.rflags = vmcs_read(GUEST_RFLAGS);
+    if (x->tf_set) {
+        v->regs.rflags &= ~RFLAGS_TF;
+    }
     x->kgs_table = 0;
     if (needs_sregs(v, &x->ex)) {
         read_sregs(v);
+    } else {
+        /* CS gives the mode in which the kernel steps RIP, and SS the
+         * privilege, at every exit, as Linux's is_64_bit_mode reads CS. */
+        seg_read(SEG_CS, &v->sregs.cs);
+        seg_read(SEG_SS, &v->sregs.ss);
     }
 }
 
@@ -1944,6 +2005,35 @@ static void fail_entry(struct kvm_vcpu *v, uint64_t reason)
 }
 
 /**
+ * An exception's exit (0): the host's NMI or machine check, which `enter`
+ * passed on, or the #DB or #BP the caller's debugging takes, which goes to
+ * the caller as KVM_EXIT_DEBUG with the address, DR6 and DR7, as Linux's
+ * handle_exception_nmi gives it. The bitmap takes no other.
+ */
+static int exit_exception(struct kvm_vcpu *v)
+{
+    struct vmx_exit *e = &vx(v)->ex;
+    uint32_t vec = INTR_VECTOR(e->intr_info);
+    struct kvm_run_debug *d = &v->exit.debug;
+
+    if (INTR_TYPE(e->intr_info) == TYPE_NMI || vec == MC_VECTOR) {
+        return 0;
+    }
+    if ((vec == DB_VECTOR && debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) ||
+        (vec == BP_VECTOR && debugging(v, KVM_GUESTDBG_USE_SW_BP))) {
+        v->exit.kind = KVM_X_DEBUG;
+        k_memset(d, 0, sizeof(*d));
+        d->exception = vec;
+        d->pc = v->sregs.cs.base + v->regs.rip;
+        d->dr6 = vec == DB_VECTOR ? ((e->qual & 0x600Full) | DR6_FIXED) : 0;
+        d->dr7 = dr7_of(v);
+        return 0;
+    }
+    unexpected(v);
+    return 0;
+}
+
+/**
  * The exits of instructions the kernel answers alone, each stepped past
  * or faulted: CPUID, HLT, INVD, MONITOR, MWAIT, WBINVD, RDPMC, XSETBV,
  * VMCALL, GETSEC and the VMX instructions of a nested guest, which is not
@@ -2006,12 +2096,11 @@ static int exit_insn(struct kvm_vcpu *v, uint32_t reason)
 }
 
 /**
- * Name the exit `enter` read, under the big lock with interrupts on:
- * handle it in the kernel, KVM_X_AGAIN, or give it to the run loop. Each
- * exit the processor gives with these controls has its case. 0, or -errno
- * to end KVM_RUN.
+ * Name the exit `enter` read: handle it in the kernel, KVM_X_AGAIN, or
+ * give it to the run loop. Each exit the processor gives with these
+ * controls has its case. 0, or -errno to end KVM_RUN.
  */
-static int vmx_exit(struct kvm_vcpu *v)
+static int exit_reason(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
     struct vmx_exit *e = &x->ex;
@@ -2039,12 +2128,7 @@ static int vmx_exit(struct kvm_vcpu *v)
     }
     switch (reason) {
     case EXIT_EXCEPTION_NMI:
-        /* The host's NMI and machine check, which `enter` passed on, are
-         * the only exceptions the bitmap takes. */
-        if (INTR_TYPE(e->intr_info) == TYPE_NMI || INTR_VECTOR(e->intr_info) == MC_VECTOR) {
-            return 0;
-        }
-        break;
+        return exit_exception(v);
     case EXIT_EXTERNAL_INTR:
     case EXIT_PREEMPTION_TIMER:
     case EXIT_INIT_SIGNAL:
@@ -2078,6 +2162,31 @@ static int vmx_exit(struct kvm_vcpu *v)
     }
     unexpected(v);
     return 0;
+}
+
+/**
+ * The backend's `exit`, under the big lock with interrupts on: the exit
+ * named, and an instruction the kernel stepped under the caller's single
+ * step ended as KVM_EXIT_DEBUG with DR6.BS, as Linux's
+ * kvm_vcpu_do_singlestep. 0, or -errno to end KVM_RUN.
+ */
+static int vmx_exit(struct kvm_vcpu *v)
+{
+    struct kvm_run_debug *d = &v->exit.debug;
+    int r;
+
+    v->emul.step_trap = 0;
+    r = exit_reason(v);
+    if (r == 0 && v->emul.step_trap && v->exit.kind == KVM_X_AGAIN) {
+        v->exit.kind = KVM_X_DEBUG;
+        k_memset(d, 0, sizeof(*d));
+        d->exception = DB_VECTOR;
+        d->pc = v->sregs.cs.base + v->regs.rip;
+        d->dr6 = DR6_BS | DR6_FIXED;
+        d->dr7 = dr7_of(v);
+    }
+    v->emul.step_trap = 0;
+    return r;
 }
 
 /** The answer to the read of the last exit, for the instruction under
@@ -2196,6 +2305,9 @@ static void vmx_inject(struct kvm_vcpu *v)
     struct vmx_vcpu *x = vx(v);
     uint32_t info = 0, len = x->inj_len;
     int split = v->vm->irqchip == KVM_IRQCHIP_SPLIT;
+    /* No new NMI or interrupt while the caller's KVM_GUESTDBG_BLOCKIRQ
+     * holds them, as Linux's kvm_check_and_inject_events. */
+    int block = debugging(v, KVM_GUESTDBG_BLOCKIRQ);
 
     x->proc_want &= ~(PROC_INTR_WINDOW | PROC_NMI_WINDOW);
     x->inj_info = 0;
@@ -2210,7 +2322,7 @@ static void vmx_inject(struct kvm_vcpu *v)
         info = inject_exception(v, len);
     } else if (v->events.nmi.injected) {
         info = NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID;
-    } else if (v->nmi_queued && nmi_open(v)) {
+    } else if (v->nmi_queued && nmi_open(v) && !block) {
         /* The delivery blocks NMIs, which the exit's interruptibility
          * then shows; blocking set before the entry would fail it. */
         v->nmi_queued--;
@@ -2230,7 +2342,7 @@ static void vmx_inject(struct kvm_vcpu *v)
         if (kvm_lapic_pending(v) >= 0) {
             x->proc_want |= PROC_INTR_WINDOW;
         }
-    } else if (split) {
+    } else if (split && !block) {
         info = inject_lapic(v);
     }
     x->inj_info = info;
