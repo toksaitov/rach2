@@ -1595,7 +1595,7 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 23
+#define I915_NUM_IOCTLS 24
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
@@ -2775,6 +2775,7 @@ int32_t i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
                                            struct drm_file *file);
 int32_t i915_getparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 
 /** Read the GT's slices, subslices, EUs and eDRAM once, as Linux's
  * hsw_sseu_info_init and its eDRAM probe. */

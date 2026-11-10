@@ -17,7 +17,9 @@
  * with a pad and an alignment; the batch started on the render and the
  * blitter ring, the stream output reset, and the request's fence; the
  * in-fence, the submit fence, the out-fence and the fence array; the
- * timeline fences of the call's extension (78-11a.1); the
+ * timeline fences of the call's extension (78-11a.1); each of the
+ * driver's ioctls that Mesa's Crocus and hasvk call, against Linux's
+ * numbers, and the sync files of an image's dma-buf (78-11a.2); the
  * command parser's shadow and trampoline on the call's path (78-8b), and
  * the objects held until the request retires; a ring that refuses the
  * commands.
@@ -1162,6 +1164,128 @@ static void timeline_refusals(uint32_t tl)
     close_handle(&file_a, b);
 }
 
+/* An ioctl of the driver that Crocus or hasvk calls (78-11a.2): Rach2's
+ * number for it, Linux 6.12's for x86-64, read by compiling Linux's
+ * include/uapi/drm/i915_drm.h, and whether the driver serves it, or it is
+ * a probe whose failure Mesa takes as the feature's absence. */
+struct trace_call {
+    const char *name;
+    uint32_t ours, linux_cmd;
+    int served;
+};
+
+static const struct trace_call trace_calls[] = {
+    {"GETPARAM", DRM_IOCTL_I915_GETPARAM, 0xc0106446u, 1},
+    {"GEM_BUSY", DRM_IOCTL_I915_GEM_BUSY, 0xc0086457u, 1},
+    {"GEM_CREATE", DRM_IOCTL_I915_GEM_CREATE, 0xc010645bu, 1},
+    {"GEM_SET_DOMAIN", DRM_IOCTL_I915_GEM_SET_DOMAIN, 0x400c645fu, 1},
+    {"GEM_SET_TILING", DRM_IOCTL_I915_GEM_SET_TILING, 0xc0106461u, 1},
+    {"GEM_GET_TILING", DRM_IOCTL_I915_GEM_GET_TILING, 0xc0106462u, 1},
+    {"GEM_GET_APERTURE", DRM_IOCTL_I915_GEM_GET_APERTURE, 0x80106463u, 1},
+    {"GEM_MMAP_OFFSET", DRM_IOCTL_I915_GEM_MMAP_OFFSET, 0xc0206464u, 1},
+    {"GEM_MADVISE", DRM_IOCTL_I915_GEM_MADVISE, 0xc00c6466u, 1},
+    {"GEM_EXECBUFFER2", DRM_IOCTL_I915_GEM_EXECBUFFER2, 0x40406469u, 1},
+    {"GEM_EXECBUFFER2_WR", DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, 0xc0406469u, 1},
+    {"GEM_WAIT", DRM_IOCTL_I915_GEM_WAIT, 0xc010646cu, 1},
+    {"GEM_CONTEXT_CREATE", DRM_IOCTL_I915_GEM_CONTEXT_CREATE, 0xc008646du, 1},
+    {"GEM_CONTEXT_CREATE_EXT", DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, 0xc010646du, 1},
+    {"GEM_CONTEXT_DESTROY", DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, 0x4008646eu, 1},
+    {"GEM_SET_CACHING", DRM_IOCTL_I915_GEM_SET_CACHING, 0x4008646fu, 1},
+    {"REG_READ", DRM_IOCTL_I915_REG_READ, 0xc0106471u, 1},
+    {"GET_RESET_STATS", DRM_IOCTL_I915_GET_RESET_STATS, 0xc0186472u, 1},
+    {"GEM_USERPTR", DRM_IOCTL_I915_GEM_USERPTR, 0xc0186473u, 1},
+    {"GEM_CONTEXT_GETPARAM", DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, 0xc0186474u, 1},
+    {"GEM_CONTEXT_SETPARAM", DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, 0xc0186475u, 1},
+    {"PERF_REMOVE_CONFIG", 0x40086478u, 0x40086478u, 0},
+    {"QUERY", DRM_IOCTL_I915_QUERY, 0xc0106479u, 1},
+};
+
+/**
+ * 78-11a.2: each ioctl of the driver that Crocus made for eglinfo and
+ * hasvk for vkcube under Linux on the Lenovo, and that Mesa 25.0.7's
+ * sources make: its number Linux's, so that its structure has Linux's
+ * size, and a row of the driver's table with a handler that a render node
+ * may call and a direction that takes Linux's; the probe of i915 perf's
+ * dynamic configurations has no row, so the dispatcher refuses it.
+ */
+static void trace(void)
+{
+    const struct drm_ioctl_desc *row;
+    uint32_t i, j, nr, bad;
+
+    for (i = 0; i < sizeof(trace_calls) / sizeof(trace_calls[0]); i++) {
+        nr = UAPI_IOC_NR(trace_calls[i].linux_cmd);
+        row = 0;
+        for (j = 0; j < I915_NUM_IOCTLS; j++) {
+            if (UAPI_IOC_NR(i915_ioctls[j].cmd) == nr) {
+                row = &i915_ioctls[j];
+            }
+        }
+        bad = trace_calls[i].ours != trace_calls[i].linux_cmd;
+        if (trace_calls[i].served) {
+            bad |= !row || !row->func || !(row->flags & DRM_RENDER_ALLOW) ||
+                   (UAPI_IOC_DIR(trace_calls[i].linux_cmd) & ~UAPI_IOC_DIR(row->cmd)) != 0;
+        } else {
+            bad |= row != 0;
+        }
+        if (bad) {
+            printf("%s: fail: trace: %s\n", MODEL_TEST, trace_calls[i].name);
+            failures++;
+        }
+    }
+}
+
+/**
+ * 78-11a.2: the sync files that hasvk's window system code moves through
+ * an image's dma-buf each frame: EXPORT_SYNC_FILE for a reader gives the
+ * fence of the batch that wrote the image, and IMPORT_SYNC_FILE of a fence
+ * as a writer holds the next batch that reads the image until it signals.
+ */
+static void wsi_sync_files(void)
+{
+    uint32_t b = batch_end(), img = create(&file_a, 4096);
+    struct drm_i915_gem_exec_object2 o[2];
+    struct drm_i915_gem_execbuffer2 a;
+    struct dma_buf_export_sync_file ex;
+    struct dma_buf_import_sync_file im;
+    struct dma_fence *f = test_fence(), *got;
+    int buf = export_fd(&file_a, img);
+    fd_entry_t *e = fd_get(self.fds, buf);
+
+    entry_init(&o[0], img);
+    o[0].flags = EXEC_OBJECT_WRITE;
+    entry_init(&o[1], b);
+    args_init(&a, o, 2, I915_EXEC_RENDER);
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 1, "wsi: a batch writes the image");
+    ex.flags = DMA_BUF_SYNC_READ;
+    ex.fd = -1;
+    CHECK(e && e->ops->ioctl(e, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, (uintptr_t)&ex) == 0 && ex.fd >= 0,
+          "wsi: EXPORT_SYNC_FILE for a reader");
+    got = sync_fence(ex.fd);
+    CHECK(got && !dma_fence_is_signaled(got), "wsi: its fence waits for the batch");
+    idle();
+    CHECK(got && dma_fence_is_signaled(got), "wsi: and signals as it retires");
+    (void)fd_free(self.fds, ex.fd);
+
+    im.flags = DMA_BUF_SYNC_WRITE;
+    im.fd = sync_file_create(f, "test");
+    CHECK(e && e->ops->ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&im) == 0,
+          "wsi: IMPORT_SYNC_FILE of a writer's fence");
+    o[0].flags = 0;
+    nstarts = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 0, "wsi: the next batch that reads the image waits");
+    dma_fence_signal(f);
+    kick();
+    CHECK(nstarts == 1, "wsi: and runs once the fence signals");
+    idle();
+    (void)fd_free(self.fds, im.fd);
+    (void)fd_free(self.fds, buf);
+    dma_fence_put(f);
+    close_handle(&file_a, img);
+    close_handle(&file_a, b);
+}
+
 /**
  * 78-8b.2: the command parser on the call's path. A batch whose length the
  * call gives runs from its shadow, privileged, then from the trampoline
@@ -1311,6 +1435,8 @@ int main(void)
     tl = syncobj_new();
     timeline_points(tl);
     timeline_refusals(tl);
+    trace();
+    wsi_sync_files();
     parser();
     sol_and_faults();
     idle();
