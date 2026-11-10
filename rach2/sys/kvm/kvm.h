@@ -858,6 +858,12 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
  * page tables: 0; -1 with #PF queued; 1 for memory in no slot; -EFAULT. */
 int kvm_guest_rw(struct kvm_vcpu *v, uint32_t seg, uint64_t ea, void *buf, uint32_t n, int write);
 
+/** The bytes of the instruction at `v`'s CS:RIP, up to KVM_INSN_MAX, into
+ * `buf`, for a backend that decodes an instruction its exit does not
+ * describe: the count read, fewer where the next page cannot be read; -1
+ * with #PF queued when the first byte cannot be; 0 when it is in no slot. */
+int kvm_emul_fetch(struct kvm_vcpu *v, uint8_t *buf);
+
 /** CPUID from `v`'s KVM_SET_CPUID2 table for EAX and ECX, into EAX to EDX,
  * with the bits Linux keeps in step with CR4, the APIC base and Hyper-V's
  * invariant TSC control. The caller steps RIP. */

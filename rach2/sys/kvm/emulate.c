@@ -460,6 +460,11 @@ static int fetch(struct kvm_vcpu *v, uint8_t *buf)
     return (int)got;
 }
 
+int kvm_emul_fetch(struct kvm_vcpu *v, uint8_t *buf)
+{
+    return fetch(v, buf);
+}
+
 /* ---- CPUID, XSETBV and MSRs ---- */
 
 /** Whether leaf 0 `basic` names AMD or Hygon, "AuthenticAMD" or
