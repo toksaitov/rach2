@@ -1,0 +1,1 @@
+ERROR at ./vulkaninfo/./vulkaninfo.h:458:vkCreateInstance failed with ERROR_OUT_OF_HOST_MEMORY

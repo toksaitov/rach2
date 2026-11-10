@@ -1,0 +1,5 @@
+cases 96037 of 96037 (every 1th from case 1), wall 3009 s, jobs 4
+Crash 15
+NotSupported 59004
+Pass 37012
+Timeout 6

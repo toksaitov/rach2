@@ -1,10 +1,11 @@
 /*
  * graphics_scenario.c: the graphics runners' cases (machine.webgl.json,
  * machine.video.json, machine.igt.json, machine.modetest.json,
- * machine.piglit.json and machine.glmark2.json). Each boots an overlay of
- * the GNU root with a display, runs one runner of tests/graphics/runners on
- * its case, and judges the result against the Debian reference guest's
- * stored one with judge.py, in the guest.
+ * machine.piglit.json, machine.glmark2.json and machine.venus.json). Each
+ * boots an overlay of the GNU root with a display, runs one runner of
+ * tests/graphics/runners on its case, and judges the result against the
+ * Debian reference guest's stored one, with judge.py or, for the loss of
+ * Venus's render server, diff, in the guest.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,9 +19,27 @@
 #define LOGIN_PROMPT "rach2 login"
 
 /* Where the case's files go on the machine, and the stored references among
- * them, one directory for each display profile. */
+ * them, one directory for each display profile, and the Venus references of
+ * the testing PC. */
 #define GRAPHICS_DIR "/tmp/graphics"
 #define GRAPHICS_REF GRAPHICS_DIR "/ref/debian"
+#define VENUS_REF    GRAPHICS_DIR "/ref/venus-wsl/deqp"
+#define VENUS_LOST   GRAPHICS_DIR "/ref/venus-wsl/lost/lost.out"
+
+/* The Venus cases' dEQP-VK: the release Mesa 25.0.7's CI pins, Venus's ICD
+ * alone, so that the guest's lavapipe is not the device, the lists and the
+ * flakes, and the parts the release runs the lavapipe fraction in. */
+#define VENUS_DEQP                                       \
+    "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -i " \
+    "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
+#define VENUS_SMOKE    GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
+#define VENUS_LIST     GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
+#define VENUS_FLAKES   GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
+#define VENUS_PARTS    8
+/* The run's counts and wall time, after its result line, for the log. */
+#define VENUS_SUMMARY  " && cat " GRAPHICS_DIR "/out/summary.txt"
+/* The device loss case's runner, in the guest, as the test account. */
+#define VENUS_LOST_RUN "su -s /bin/sh test -c 'sh " GRAPHICS_DIR "/runners/venus-lost.sh "
 
 /* The data disks after the root, in the order of the machine's disks: the
  * files of tests/graphics that every case has, and the clips of a video
@@ -32,7 +51,7 @@
 #define GRAPHICS_DATA "/tmp/graphics-data"
 
 /* The runners, by the family of the case's identity. */
-enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2 };
+enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2, VENUS };
 
 /* What one attempt shares among its steps. */
 struct graphics_case {
@@ -44,7 +63,8 @@ struct graphics_case {
     char version[8];    /* the WebGL suite's version, 1.0.4 or 2.0.1 */
     char chunk[8];      /* the chunk's number, two digits */
     char clip[48];      /* the clip's file name */
-    char test[48];      /* IGT's test program, or piglit's part */
+    char test[48];      /* IGT's test program, piglit's part or Venus's case */
+    int part;           /* the part of the lavapipe fraction, 1 to VENUS_PARTS */
     char password[128]; /* root's, at the console */
 };
 
@@ -100,16 +120,37 @@ static int set_profile(struct graphics_case *s, const char *profile)
 }
 
 /**
+ * Read a Venus case, NAME: `smoke`, `sample`, `device-lost`, or
+ * `fraction-N`, part N of VENUS_PARTS of the lavapipe fraction. Give 0 for
+ * another name.
+ */
+static int parse_venus(struct graphics_case *s, const char *name)
+{
+    strcpy(s->profile, "venus");
+    if (strcmp(name, "smoke") == 0 || strcmp(name, "sample") == 0 ||
+        strcmp(name, "device-lost") == 0) {
+        strcpy(s->test, name);
+        return 1;
+    }
+    if (strncmp(name, "fraction-", 9) != 0 || name[9] < '1' || name[9] > '0' + VENUS_PARTS ||
+        name[10] != '\0')
+        return 0;
+    strcpy(s->test, "fraction");
+    s->part = name[9] - '0';
+    return 1;
+}
+
+/**
  * Read the case from the last part of its identity, after its family:
  * webgl's and video's as parse_browser says; igt's TEST-PROFILE, IGT's test
  * program TEST, whose name has no dash, on PROFILE; modetest's PROFILE;
- * piglit's PART, on virtio-vga; and glmark2's `wayland`, on virtio-vga. Give
- * 0 for an identity of no such form.
+ * piglit's PART, on virtio-vga; glmark2's `wayland`, on virtio-vga; and
+ * venus's as parse_venus says. Give 0 for an identity of no such form.
  */
 static int parse(struct graphics_case *s, const char *id)
 {
-    static const char *const families[] = {".webgl.",    ".video.",  ".igt.",
-                                           ".modetest.", ".piglit.", ".glmark2."};
+    static const char *const families[] = {".webgl.",  ".video.",   ".igt.",  ".modetest.",
+                                           ".piglit.", ".glmark2.", ".venus."};
     const char *name = strrchr(id, '.'), *dash;
     size_t i, n;
 
@@ -143,6 +184,8 @@ static int parse(struct graphics_case *s, const char *id)
         return set_profile(s, "virtio-vga");
     case GLMARK2:
         return strcmp(name, "wayland") == 0 && set_profile(s, "virtio-vga");
+    case VENUS:
+        return parse_venus(s, name);
     }
     return 0;
 }
@@ -233,8 +276,8 @@ static void stage(struct graphics_case *s)
 static int runner_line(struct graphics_case *s, char *runner, size_t size, const char **pattern)
 {
     static const char *const results[] = {
-        "webgl: result: ",    "video: result: ",  "igt: result: ",
-        "modetest: result: ", "piglit: result: ", "glmark2: result: "};
+        "webgl: result: ",  "video: result: ",   "igt: result: ", "modetest: result: ",
+        "piglit: result: ", "glmark2: result: ", "deqp: result: "};
 
     *pattern = results[s->runner];
     switch (s->runner) {
@@ -265,6 +308,18 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
     case GLMARK2:
         snprintf(runner, size, "sh " GRAPHICS_DIR "/runners/glmark2.sh -o " GRAPHICS_DIR "/out");
         return 0;
+    case VENUS:
+        if (strcmp(s->test, "smoke") == 0)
+            snprintf(runner, size, VENUS_DEQP " -l " VENUS_SMOKE " vk" VENUS_SUMMARY);
+        else if (strcmp(s->test, "sample") == 0)
+            snprintf(runner, size,
+                     VENUS_DEQP " -e 500 -l " VENUS_LIST " -f " VENUS_FLAKES " vk" VENUS_SUMMARY);
+        else
+            snprintf(runner, size,
+                     VENUS_DEQP " -e %d -s %d -l " VENUS_LIST " -f " VENUS_FLAKES
+                                " vk" VENUS_SUMMARY,
+                     VENUS_PARTS, s->part);
+        return 0;
     }
     return 0;
 }
@@ -272,7 +327,7 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
 /**
  * Run the runner, as root or as the test account, with the environment of
  * a Done's run of its class, performance for glmark2 and conformance for
- * the others, and assert that it ran its whole case.
+ * the others, assert that it ran its whole case, and print what it printed.
  */
 static void run(struct graphics_case *s)
 {
@@ -300,7 +355,56 @@ static void run(struct graphics_case *s)
                net_copy_line(net_find(r.out, pattern) != NULL ? net_find(r.out, pattern)
                                                               : (r.err != NULL ? r.err : r.out),
                              line, sizeof(line)));
+    /* The runner's own lines, its result among them, go to the run's log. */
+    if (r.out != NULL)
+        fputs(r.out, stdout);
     net_run_free(&r);
+}
+
+/**
+ * Run the device loss case: four deqp-vk processes on Venus as the test
+ * account, the host's kill of the render server of this case's QEMU, which
+ * the artifact venus-lost finds by the workspace its own path is in, and
+ * then the processes' ends and a new vulkaninfo; assert that each part ran
+ * and print the guest's lines.
+ */
+static void run_lost(struct graphics_case *s)
+{
+    char *kill[] = {"venus-lost", "kill", NULL};
+    char line[200];
+    struct net_run r;
+    const char *why = NULL;
+
+    if (net_step(&s->u, "run") == ETUDE_OK)
+        as_root(s, VENUS_LOST_RUN "start'", "start", &r);
+    if (!net_ok(&s->u)) {
+        net_assert(&s->u, "ran", 0, "");
+        return;
+    }
+    if (!net_exited0(&r) || net_find(r.out, "venus-lost: result: ") == NULL)
+        why = "the four processes did not start";
+    net_copy_line(r.err != NULL && *r.err != '\0' ? r.err : r.out, line, sizeof(line));
+    net_run_free(&r);
+    if (why == NULL && net_host(&s->u, kill, "kill", &r) == ETUDE_OK) {
+        if (!net_exited0(&r) || net_find(r.out, "venus-lost: result: killed") == NULL)
+            why = "the host did not kill the render server";
+        net_copy_line(r.err != NULL && *r.err != '\0' ? r.err : r.out, line, sizeof(line));
+        if (r.out != NULL)
+            fputs(r.out, stdout);
+        net_run_free(&r);
+    }
+    if (why == NULL && net_ok(&s->u) &&
+        as_root(s, VENUS_LOST_RUN "after'", "runner", &r) == ETUDE_OK) {
+        if (!net_exited0(&r) || net_find(r.out, "vulkaninfo exit ") == NULL)
+            why = "the processes' ends were not read";
+        net_copy_line(r.err != NULL && *r.err != '\0' ? r.err : r.out, line, sizeof(line));
+        if (r.out != NULL)
+            fputs(r.out, stdout);
+        net_run_free(&r);
+    }
+    if (why == NULL && !net_ok(&s->u))
+        why = "the guest channel failed";
+    net_assert(&s->u, "ran", why == NULL, "%s: %s", why != NULL ? why : "", line);
 }
 
 /** Write judge.py's command line for the case to `command`. */
@@ -340,6 +444,29 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
         snprintf(command, size,
                  "glmark2 " GRAPHICS_REF "/%s/glmark2/validations " GRAPHICS_DIR "/out/validations",
                  s->profile);
+        break;
+    case VENUS:
+        if (strcmp(s->test, "device-lost") == 0) {
+            /* What the guest saw of the loss is the Debian guest's. */
+            snprintf(command - n, size + (size_t)n,
+                     "if diff " VENUS_LOST " " GRAPHICS_DIR "/out/lost.txt; then "
+                     "echo 'judge: result: pass'; else echo 'judge: result: fail'; fi");
+            break;
+        }
+        /* The smoke case's device, as vulkaninfo describes it, is the
+         * Debian guest's: Venus over the same host lavapipe. */
+        snprintf(command, size,
+                 "deqp " VENUS_REF "/%s/results.csv.gz " GRAPHICS_DIR
+                 "/out/results.csv.gz " GRAPHICS_DIR "/out/flakes%s",
+                 strcmp(s->test, "smoke") == 0 ? "smoke" : "fraction",
+                 strcmp(s->test, "smoke") != 0
+                     ? ""
+                     : " && d() { grep -E '^[[:space:]]+(apiVersion|driverVersion|vendorID|"
+                       "deviceID|deviceType|deviceName|driverID|driverName|driverInfo|"
+                       "conformanceVersion)[[:space:]]*=' \"$1\"; } && "
+                       "d " VENUS_REF "/smoke/vulkaninfo.out > /tmp/vk.ref && "
+                       "d " GRAPHICS_DIR "/out/vulkaninfo.out > /tmp/vk.out && "
+                       "grep -q 'Virtio-GPU Venus' /tmp/vk.out && diff /tmp/vk.ref /tmp/vk.out");
         break;
     }
 }
@@ -397,7 +524,10 @@ int etude_scenario(struct etude_case *c)
     net_secret(&s.u, "demo-password", s.password, sizeof(s.password));
     up(&s);
     stage(&s);
-    run(&s);
+    if (s.runner == VENUS && strcmp(s.test, "device-lost") == 0)
+        run_lost(&s);
+    else
+        run(&s);
     judge(&s);
     collect(&s);
     return net_end(&s.u);

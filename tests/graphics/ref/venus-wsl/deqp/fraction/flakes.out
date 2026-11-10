@@ -1,0 +1,8 @@
+dEQP-VK.memory.mapping.suballocation.full.8095.flush_map2,Crash,Pass,rerun
+dEQP-VK.memory.mapping.suballocation.full.33.remap,Crash,Pass,rerun
+dEQP-VK.binding_model.mutable_descriptor.multiple_arrays_mixed.constant_size.noaliasing.update_write.no_source.no_source.pool_expand_types.update_after_bind.index_push_constant.comp,Timeout,Pass,rerun
+dEQP-VK.ray_tracing_pipeline.trace_rays_cmds_maintenance_1.indirect2_cpu.11_13_5,Timeout,Pass,rerun
+dEQP-VK.binding_model.mutable_descriptor.multiple_arrays_mixed.unbounded.noaliasing.update_write.no_source.no_source.pool_no_types.pre_update.index_constant.comp,Timeout,Pass,rerun
+dEQP-VK.binding_model.mutable_descriptor.multiple_arrays_mixed.constant_size.noaliasing.update_copy.mutable_source.host_only_source.pool_same_types.update_after_bind.index_constant.comp,Timeout,Pass,rerun
+dEQP-VK.memory.mapping.suballocation.full.33.invalidate_map2,Crash,Pass,rerun
+dEQP-VK.memory.allocation.random.31,Crash,Pass,rerun

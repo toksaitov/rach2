@@ -1,0 +1,11 @@
+venus-lost: result: 4 deqp-vk processes running
+virtio_gpu_virgl_process_cmd: ctrl 0x10c, error 0x1200
+virtio_gpu_virgl_process_cmd: ctrl 0x208, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x209, error 0x1203
+virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203
+deqp 0 exit 134
+deqp 1 exit 134
+deqp 2 exit 134
+deqp 3 exit 134
+vulkaninfo exit 1
+vulkaninfo: ERROR:vkCreateInstance failed with ERROR_OUT_OF_HOST_MEMORY

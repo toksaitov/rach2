@@ -17,7 +17,28 @@ The run that took `vulkaninfo/`, from the top of the tree, with the outputs then
            cat /usr/share/vulkan/icd.d/venus_icd.x86_64.json;
            dpkg-divert --list | grep mesa25; } > /tmp/icd.out 2>&1'
 
-The dEQP-VK sample and vkcube's timings on Venus are stored here by the tasks that run them on Rach2, and the Direct3D results in `../d3d-venus-wsl/`, each taken on this guest.
+* `deqp/smoke/` and `deqp/fraction/`, taken on 2026-11-10, are `debian.sh deqp`'s output for VK-GL-CTS 1.4.1.1's `deqp-vk` on Venus's ICD alone ([Venus's dEQP](../../Readme.md#venuss-deqp)): `smoke` the 9 cases of `deqp-vk-venus-smoke.txt`, all `Pass`, and `fraction` the 96,037 cases of `deqp-vk-lavapipe.txt.gz` whole, 37,012 `Pass`, 59,004 `NotSupported`, 15 `Crash` and 6 `Timeout`, 8 of the crashes and timeouts passing when run again, in 3009 s with 4 processes. Each has `results.csv.gz`, `flakes.out`, `summary.out`, `vulkaninfo.out`, `record.out`, the runner's `record`, and `log.out`, the command's output with QEMU's and the render server's lines.
+* `lost/`, taken on 2026-11-10, is `venus-lost.sh` with the host's render server killed under its four processes: `lost.out` the lines the case compares, each process ended by SIGABRT and `vulkaninfo` failing with VK_ERROR_OUT_OF_HOST_MEMORY; `deqp-N.out` each process's output; `vulkaninfo.out` vulkaninfo's; `kill.out` the host's kill, the server and the four processes it forked, one for each context; `record.out` the run's record; and `log.out` the command's output with QEMU's lines.
+
+The runs that took them, from the top of the tree, with each output's files then named as here:
+
+    sh tests/graphics/runners/debian.sh deqp -p venus -c 8 -m 8192 OUT -v 1.4.1.1 \
+        -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json -l /tmp/deqp-vk-venus-smoke.txt vk
+    sh tests/graphics/runners/debian.sh deqp -p venus -c 8 -m 8192 OUT -v 1.4.1.1 \
+        -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json \
+        -l /tmp/deqp-vk-lavapipe.txt.gz -f /tmp/deqp-vk-lavapipe.flakes vk
+
+and for `lost/`, with `cts.tar.gz` VK-GL-CTS 1.4.1.1 of the GNU layer's build, `build/x86_64/vendor/gnu/vk-gl-cts/opt/vk-gl-cts-1.4.1.1`, and beside it on the host a loop that waits for `devlost-go` in the guest's console log and then runs `sh tests/graphics/runners/venus-lost.sh kill` on the directory of that log, the run's work directory, which QEMU's command line names:
+
+    sh tests/graphics/debian-ref/debian-ref.sh run -p venus -c 8 -m 8192 -g conformance \
+        -r record.out -i cts.tar.gz -i tests/graphics/runners/venus-lost.sh \
+        -i tests/graphics/deqp-vk-lavapipe.txt.gz -o lost.tar.gz \
+        'sudo tar -xzf /tmp/cts.tar.gz -C /opt &&
+         sh /tmp/venus-lost.sh start -l /tmp/deqp-vk-lavapipe.txt.gz -o /tmp/out &&
+         echo devlost-go | sudo tee /dev/ttyS0 > /dev/null &&
+         sh /tmp/venus-lost.sh after -o /tmp/out && tar -czf /tmp/lost.tar.gz -C /tmp/out .'
+
+vkcube's timings on Venus are stored here by the task that runs them on Rach2, and the Direct3D results in `../d3d-venus-wsl/`, each taken on this guest.
 
 ## Updating
 

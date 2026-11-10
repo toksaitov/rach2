@@ -966,21 +966,34 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # `tests/run glmark2`: glmark2's scenes validated on llvmpipe under a headless
 # Weston on the GNU root as in the Debian reference guest, with the score
 # recorded, as the case of tests/cases/machine.glmark2.json.
+# `tests/run venus`: dEQP-VK through Venus over the testing PC's lavapipe on
+# the GNU root under the venus profile, its smoke cases and vulkaninfo's
+# device, every 500th case of Mesa 25.0.7's lavapipe fraction and that
+# fraction whole in eight parts, each case judged against the Debian
+# reference guest's stored result, and the loss of the host's render server
+# under four dEQP-VK processes, as the Debian guest sees it, as the cases of
+# tests/cases/machine.venus.json.
 # Etude runs them all with graphics_scenario (tests/graphics/Readme.md). Each
-# machine has graphics.ext2, the runners, the IGT list, the guest's
-# environment and the references, as a read-only data disk, and a video
-# case clips.ext2, the clips of clips.tar, which debian.sh makes in the
+# machine has graphics.ext2, the runners, the IGT list, the dEQP lists, the
+# guest's environment and the references, as a read-only data disk, and a
+# video case clips.ext2, the clips of clips.tar, which debian.sh makes in the
 # Debian guest when this clone's cache does not hold the clips that
 # clips.sha256 pins; modetest's drmcapture goes over the guest channel, which
 # carries some 137 bytes a frame, too slow for the 35 MB of clips. common.sh
-# writes the host's half of each record.
+# writes the host's half of each record, and venus-lost.sh kills the render
+# server of the device loss case's QEMU.
+GRAPHICS_LISTS = igt-76.list deqp-vk-venus-smoke.txt deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes
 GRAPHICS_FILES = $(wildcard tests/graphics/runners/*) tests/graphics/guest-env.sh \
-                 tests/graphics/igt-76.list $(shell find tests/graphics/ref/debian -type f 2>/dev/null)
+                 $(addprefix tests/graphics/,$(GRAPHICS_LISTS)) \
+                 $(shell find tests/graphics/ref/debian tests/graphics/ref/venus-wsl -type f 2>/dev/null)
 build/tests/cases/graphics/graphics.tar: $(GRAPHICS_FILES)
 	@mkdir -p $(@D)
-	tar -cf $@.tmp -C tests/graphics runners guest-env.sh igt-76.list ref/debian
+	tar -cf $@.tmp -C tests/graphics runners guest-env.sh $(GRAPHICS_LISTS) ref/debian ref/venus-wsl
 	mv $@.tmp $@
 build/tests/cases/graphics/common.sh: tests/graphics/runners/common.sh
+	@mkdir -p $(@D)
+	cp $< $@
+build/tests/cases/graphics/venus-lost.sh: tests/graphics/runners/venus-lost.sh
 	@mkdir -p $(@D)
 	cp $< $@
 build/tests/cases/graphics/clips.tar: tests/graphics/runners/clips.sha256 tests/graphics/runners/video.sh

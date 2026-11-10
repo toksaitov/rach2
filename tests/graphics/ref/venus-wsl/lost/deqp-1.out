@@ -1,0 +1,228 @@
+Writing test log into /tmp/out/lost.1.qpa
+dEQP Core unknown (0xcafebabe) starting..
+  target implementation = 'Surfaceless'
+
+Test case 'dEQP-VK.api.buffer.suballocation.transfer_src.transfer_dst.uniform.storage.index.create.binding'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.buffer.dedicated_alloc.transfer_dst.uniform_texel.storage_texel.uniform.vertex.create.zero'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.buffer.dedicated_alloc.uniform_texel.storage.create.zero'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.buffer_marker.transfer.default_mem.bottom_of_pipe.memory_dep.buffer_copy'..
+  NotSupported (VK_AMD_buffer_marker is not supported at vktTestCase.cpp:1168)
+
+Test case 'dEQP-VK.api.buffer_view.create.suballocation.storage.r8g8b8a8_unorm'..
+  Pass (BufferView test)
+
+Test case 'dEQP-VK.api.buffer_view.create.suballocation.storage.b8g8r8a8_srgb'..
+  NotSupported (Format not supported at vktApiBufferViewCreateTests.cpp:127)
+
+Test case 'dEQP-VK.api.buffer_view.access.storage_texel_buffer.r16g16b16a16_uint'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.1d_to_2d.r16_sscaled.r16_sscaled.optimal_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.1d_to_2d.r8g8b8a8_sint.r8g8b8a8_sint.optimal_general'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.r8_sint.r8_snorm.general_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.r8g8_unorm.r4g4b4a4_unorm_pack16.optimal_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.r8g8_uint.b5g5r5a1_unorm_pack16.general_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.r8g8_sint.b5g6r5_unorm_pack16.optimal_general'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.r8g8b8a8_uint.b8g8r8a8_uscaled.optimal_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.b8g8r8a8_sscaled.a8b8g8r8_sint_pack32.general_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.a8b8g8r8_unorm_pack32.r8g8b8a8_sscaled.optimal_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.a2r10g10b10_uscaled_pack32.a2b10g10r10_sscaled_pack32.general_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.bc6h_ufloat_block.bc2_unorm_block.general_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_1d.etc2_r8g8b8a8_unorm_block.astc_4x4_srgb_block.optimal_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.r4g4b4a4_unorm_pack16.b4g4r4a4_unorm_pack16.general_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.b8g8r8_unorm.b8g8r8_uscaled.general_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.a8b8g8r8_uscaled_pack32.r8g8b8a8_unorm.optimal_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.a8b8g8r8_srgb_pack32.a8b8g8r8_uscaled_pack32.optimal_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.r16g16_unorm.a2r10g10b10_sint_pack32.general_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.r32_sfloat.r16g16_unorm.optimal_general'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.r16g16b16a16_snorm.bc1_rgb_unorm_block.general_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_2d.r32g32_sfloat.etc2_r8g8b8a1_srgb_block.optimal_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.b5g6r5_unorm_pack16.r8g8_unorm.general_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.r8g8_uscaled.r5g6b5_unorm_pack16.optimal_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.r8g8_sscaled.r4g4b4a4_unorm_pack16.general_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.r8g8_sscaled.r8g8_sint.optimal_optimal'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.r8g8b8a8_sint.r16g16_unorm.general_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.a8b8g8r8_snorm_pack32.r16g16_uint.general_general'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.a2r10g10b10_unorm_pack32.a8b8g8r8_uscaled_pack32.optimal_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.a2b10g10r10_uint_pack32.b8g8r8a8_unorm.optimal_general'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.a2b10g10r10_uint_pack32.a8b8g8r8_srgb_pack32.general_general'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.r16g16_sfloat.r8g8b8a8_unorm.optimal_optimal'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.r32g32b32a32_sfloat.astc_12x10_srgb_block.general_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.all_formats.color.2d_to_3d.astc_4x4_srgb_block.bc2_unorm_block.optimal_general'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:1763)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_image.dimensions.src8192x4_dst8192x4.r32g32b32_sfloat.r32g32b32_sfloat.general_general'..
+  Pass (CopiesAndBlitting test)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.image_to_buffer.2d_images.mip_copies_astc_10x8_unorm_block_64x192_5_layers_compute'..
+  NotSupported (Format not supported at vktApiCopiesAndBlittingTests.cpp:3070)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r32g32_sint.r32g32b32a32_sint.optimal_optimal_nearest'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r4g4_unorm_pack8.r8g8b8a8_uscaled.optimal_linear_cubic'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r4g4b4a4_unorm_pack16.r8g8_sscaled.optimal_optimal_nearest'..
+  NotSupported (Destination format not supported at vktApiCopiesAndBlittingTests.cpp:5492)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r5g6b5_unorm_pack16.a1b5g5r5_unorm_pack16.optimal_optimal_linear'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b5g6r5_unorm_pack16.r5g5b5a1_unorm_pack16.general_general_cubic'..
+  NotSupported (Format feature blit source not supported at vktApiCopiesAndBlittingTests.cpp:5505)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a1b5g5r5_unorm_pack16.r4g4_unorm_pack8.linear_optimal_cubic'..
+  NotSupported (Destination format not supported at vktApiCopiesAndBlittingTests.cpp:5492)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8_unorm.r4g4b4a4_unorm_pack16.linear_general_cubic'..
+  NotSupported (VK_EXT_filter_cubic is not supported at vktTestCase.cpp:1168)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8_unorm.r32_sfloat.optimal_optimal_linear'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8_snorm.r4g4_unorm_pack8.optimal_general_linear'..
+  NotSupported (Destination format not supported at vktApiCopiesAndBlittingTests.cpp:5492)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8_snorm.r16_unorm.general_general_cubic'..
+  NotSupported (VK_EXT_filter_cubic is not supported at vktTestCase.cpp:1168)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8_sscaled.r16g16b16_sfloat.general_optimal_linear'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a8_unorm.a8_unorm.optimal_optimal_nearest'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a8_unorm.r8g8_unorm.general_general_linear'..
+  Pass (Pass)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8g8_uscaled.b8g8r8_uscaled.general_general_nearest'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8g8_uscaled.r8g8b8a8_snorm.general_optimal_nearest'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8g8b8_snorm.a2b10g10r10_sscaled_pack32.optimal_general_nearest'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8_unorm.b8g8r8_unorm.general_general_nearest'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8_snorm.r16_sscaled.general_optimal_cubic'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8_uscaled.a8b8g8r8_unorm_pack32.general_optimal_cubic'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8_sscaled.r8g8b8_snorm.optimal_optimal_linear'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.r8g8b8a8_uscaled.r16g16_sscaled.general_optimal_linear'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8a8_snorm.r4g4_unorm_pack8.linear_optimal_linear'..
+  NotSupported (Destination format not supported at vktApiCopiesAndBlittingTests.cpp:5492)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8a8_snorm.a2b10g10r10_snorm_pack32.optimal_general_linear'..
+  NotSupported (Format feature blit destination not supported at vktApiCopiesAndBlittingTests.cpp:5516)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8a8_uscaled.r16g16b16a16_snorm.general_optimal_cubic'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.b8g8r8a8_sscaled.a2b10g10r10_uscaled_pack32.optimal_optimal_cubic'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a8b8g8r8_uscaled_pack32.b5g5r5a1_unorm_pack16.general_optimal_linear'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2r10g10b10_snorm_pack32.a8b8g8r8_uscaled_pack32.optimal_optimal_cubic'..
+  NotSupported (Destination format not supported at vktApiCopiesAndBlittingTests.cpp:5492)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2r10g10b10_snorm_pack32.a2r10g10b10_uscaled_pack32.optimal_optimal_linear'..
+  NotSupported (Destination format not supported at vktApiCopiesAndBlittingTests.cpp:5492)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2r10g10b10_uscaled_pack32.r8g8b8_uscaled.optimal_general_nearest'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2r10g10b10_uscaled_pack32.r8g8b8a8_unorm.general_optimal_linear'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2r10g10b10_uscaled_pack32.r8g8b8a8_uscaled.general_general_nearest'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2r10g10b10_sscaled_pack32.r16g16b16_unorm.general_general_linear'..
+  NotSupported (Source format not supported at vktApiCopiesAndBlittingTests.cpp:5485)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2b10g10r10_snorm_pack32.r8g8_unorm.general_optimal_nearest'..
+  NotSupported (Format feature blit source not supported at vktApiCopiesAndBlittingTests.cpp:5505)
+
+Test case 'dEQP-VK.api.copy_and_blit.core.blit_image.all_formats.color.2d.a2b10g10r10_snorm_pack32.b8g8r8a8_snorm.general_optimal_linear'..
+Aborted
