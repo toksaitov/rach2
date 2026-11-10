@@ -2773,12 +2773,12 @@ static int h_div(struct xc *x)
     if (sign) {
         if (size != 8u) {
             lo = sx(lo, size == 4u ? 8u : size * 2u);
-            hi = (lo >> 63) ? ~0ull : 0u;
-        }
-        neg = (int)(hi >> 63);
-        if (neg) {
-            lo = ~lo + 1u;
+            neg = (int)(lo >> 63);
+            lo = neg ? 0u - lo : lo;
+        } else if (hi >> 63) {
+            neg = 1;
             hi = ~hi + (lo == 0 ? 1u : 0u);
+            lo = 0u - lo;
         }
         b = sx(b, size);
         bneg = (int)(b >> 63);
