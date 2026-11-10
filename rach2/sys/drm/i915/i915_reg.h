@@ -357,6 +357,114 @@
 #define HWS_SCRATCH_ADDR        (I915_GEM_HWS_SCRATCH << MI_STORE_DWORD_INDEX_SHIFT)
 
 /* ------------------------------------------------------------------------
+ * The command parser's commands and registers (gt/intel_gpu_commands.h,
+ * gt/intel_gt_regs.h, gt/intel_engine_regs.h, i915_reg.h): what the tables
+ * of i915_cmd_parser.c name beside the commands above. A command's client
+ * is in bits 31:29, MI 0, the blitter's 2 and the render pipe's 3, whose
+ * subclient is in bits 28:27; the media subclient is 2.
+ */
+
+#define INSTR_CLIENT_SHIFT    29
+#define INSTR_MI_CLIENT       0x0u
+#define INSTR_BC_CLIENT       0x2u
+#define INSTR_RC_CLIENT       0x3u
+#define INSTR_SUBCLIENT_SHIFT 27
+#define INSTR_SUBCLIENT_MASK  0x18000000u
+#define INSTR_MEDIA_SUBCLIENT 0x2u
+
+#define MI_SET_PREDICATE                MI_INSTR(0x01, 0)
+#define MI_WAIT_FOR_EVENT               MI_INSTR(0x03, 0)
+#define MI_FLUSH                        MI_INSTR(0x04, 0)
+#define MI_ARB_CHECK                    MI_INSTR(0x05, 0)
+#define MI_RS_CONTROL                   MI_INSTR(0x06, 0)
+#define MI_REPORT_HEAD                  MI_INSTR(0x07, 0)
+#define MI_URB_ATOMIC_ALLOC             MI_INSTR(0x09, 0)
+#define MI_SUSPEND_FLUSH                MI_INSTR(0x0b, 0)
+#define MI_PREDICATE                    MI_INSTR(0x0c, 0)
+#define MI_TOPOLOGY_FILTER              MI_INSTR(0x0d, 0)
+#define MI_SET_APPID                    MI_INSTR(0x0e, 0)
+#define MI_RS_CONTEXT                   MI_INSTR(0x0f, 0)
+#define MI_LOAD_SCAN_LINES_INCL         MI_INSTR(0x12, 0)
+#define MI_LOAD_SCAN_LINES_EXCL         MI_INSTR(0x13, 0)
+#define MI_DISPLAY_FLIP                 MI_INSTR(0x14, 2)
+#define MI_SEMAPHORE_MBOX               MI_INSTR(0x16, 1)
+#define MI_URB_CLEAR                    MI_INSTR(0x19, 0)
+#define MI_STORE_DWORD_IMM              MI_INSTR(0x20, 1)
+#define MI_UPDATE_GTT                   MI_INSTR(0x23, 0)
+#define MI_CLFLUSH                      MI_INSTR(0x27, 0)
+#define MI_REPORT_PERF_COUNT            MI_INSTR(0x28, 0)
+#define MI_REPORT_PERF_COUNT_GGTT       (1u << 0)
+#define MI_LOAD_REGISTER_MEM            MI_INSTR(0x29, 1)
+#define MI_LOAD_REGISTER_REG            MI_INSTR(0x2a, 1)
+#define MI_RS_STORE_DATA_IMM            MI_INSTR(0x2b, 0)
+#define MI_LOAD_URB_MEM                 MI_INSTR(0x2c, 0)
+#define MI_STORE_URB_MEM                MI_INSTR(0x2d, 0)
+#define MI_CONDITIONAL_BATCH_BUFFER_END MI_INSTR(0x36, 0)
+#define MI_FLUSH_DW_OP_MASK             (3u << 14)
+#define MI_FLUSH_DW_NOTIFY              (1u << 8)
+
+#define GFX_OP_3DSTATE_VF_STATISTICS         ((3u << 29) | (1u << 27) | (0u << 24) | (0x0bu << 16))
+#define PIPELINE_SELECT                      ((3u << 29) | (1u << 27) | (1u << 24) | (0x04u << 16))
+#define MEDIA_VFE_STATE                      ((3u << 29) | (2u << 27) | (0u << 24) | (0x00u << 16))
+#define MEDIA_VFE_STATE_MMIO_ACCESS_MASK     0x18u
+#define GPGPU_OBJECT                         ((3u << 29) | (2u << 27) | (1u << 24) | (0x04u << 16))
+#define GPGPU_WALKER                         ((3u << 29) | (2u << 27) | (1u << 24) | (0x05u << 16))
+#define GFX_OP_3DSTATE_DX9_CONSTANTF_VS      ((3u << 29) | (3u << 27) | (0u << 24) | (0x39u << 16))
+#define GFX_OP_3DSTATE_DX9_CONSTANTF_PS      ((3u << 29) | (3u << 27) | (0u << 24) | (0x3au << 16))
+#define GFX_OP_3DSTATE_BINDING_TABLE_EDIT_VS ((3u << 29) | (3u << 27) | (0u << 24) | (0x43u << 16))
+#define GFX_OP_3DSTATE_BINDING_TABLE_EDIT_GS ((3u << 29) | (3u << 27) | (0u << 24) | (0x44u << 16))
+#define GFX_OP_3DSTATE_BINDING_TABLE_EDIT_HS ((3u << 29) | (3u << 27) | (0u << 24) | (0x45u << 16))
+#define GFX_OP_3DSTATE_BINDING_TABLE_EDIT_DS ((3u << 29) | (3u << 27) | (0u << 24) | (0x46u << 16))
+#define GFX_OP_3DSTATE_BINDING_TABLE_EDIT_PS ((3u << 29) | (3u << 27) | (0u << 24) | (0x47u << 16))
+#define GFX_OP_3DSTATE_SO_DECL_LIST          ((3u << 29) | (3u << 27) | (1u << 24) | (0x17u << 16))
+#define PIPE_CONTROL_MMIO_WRITE              (1u << 23)
+#define PIPE_CONTROL_STORE_DATA_INDEX        (1u << 21)
+#define PIPE_CONTROL_POST_SYNC_OP_MASK       (3u << 14)
+#define PIPE_CONTROL_NOTIFY                  (1u << 8)
+#define COLOR_BLT                            ((2u << 29) | (0x40u << 22))
+#define SRC_COPY_BLT                         ((2u << 29) | (0x43u << 22))
+
+/* The video ring's base on graphics 4 and 5, whose timestamp Linux's
+ * allowlists name on graphics 7 too (dev-log/78-intel/upstream.md). */
+#define BSD_RING_BASE 0x04000
+
+/* The pipeline's statistics, each the low half of a 64-bit counter whose
+ * high half is 4 bytes above it. */
+#define GPGPU_THREADS_DISPATCHED 0x2290
+#define HS_INVOCATION_COUNT      0x2300
+#define DS_INVOCATION_COUNT      0x2308
+#define IA_VERTICES_COUNT        0x2310
+#define IA_PRIMITIVES_COUNT      0x2318
+#define VS_INVOCATION_COUNT      0x2320
+#define GS_INVOCATION_COUNT      0x2328
+#define GS_PRIMITIVES_COUNT      0x2330
+#define CL_INVOCATION_COUNT      0x2338
+#define CL_PRIMITIVES_COUNT      0x2340
+#define PS_INVOCATION_COUNT      0x2348
+#define PS_DEPTH_COUNT           0x2350
+
+#define MI_PREDICATE_SRC0(base)                    ((base) + 0x400) /* 64-bit */
+#define MI_PREDICATE_SRC1(base)                    ((base) + 0x408) /* 64-bit */
+#define GEN7_3DPRIM_END_OFFSET                     0x2420
+#define GEN7_3DPRIM_START_VERTEX                   0x2430
+#define GEN7_3DPRIM_VERTEX_COUNT                   0x2434
+#define GEN7_3DPRIM_INSTANCE_COUNT                 0x2438
+#define GEN7_3DPRIM_START_INSTANCE                 0x243c
+#define GEN7_3DPRIM_BASE_VERTEX                    0x2440
+#define GEN7_GPGPU_DISPATCHDIMX                    0x2500
+#define GEN7_GPGPU_DISPATCHDIMY                    0x2504
+#define GEN7_GPGPU_DISPATCHDIMZ                    0x2508
+#define GEN8_RING_CS_GPR(base, n)                  ((base) + 0x600 + (n) * 8)     /* 64-bit */
+#define GEN7_SO_NUM_PRIMS_WRITTEN(n)               (0x5200u + (uint32_t)(n) * 8u) /* 64-bit */
+#define GEN7_SO_PRIM_STORAGE_NEEDED(n)             (0x5240u + (uint32_t)(n) * 8u) /* 64-bit */
+#define GEN7_L3SQCREG1                             0xb010
+#define GEN7_L3CNTLREG2                            0xb020
+#define GEN7_L3CNTLREG3                            0xb024
+#define HSW_SCRATCH1_L3_DATA_ATOMICS_DISABLE       (1u << 27)
+#define HSW_ROW_CHICKEN3                           0xe49c
+#define HSW_ROW_CHICKEN3_L3_GLOBAL_ATOMICS_DISABLE (1u << 6)
+
+/* ------------------------------------------------------------------------
  * Reset (gt/intel_gt_regs.h): a domain's bit is set to reset it and reads
  * back clear when the reset is done.
  */

@@ -76,9 +76,9 @@ void i915_sseu_init(struct drm_i915_private *i915)
 
 /* The parameters whose answers are the same on every Haswell GT2 with the
  * render and blitter rings, as Linux 6.18 answers them. CMD_PARSER_VERSION
- * is 0, Linux's answer while no engine parses commands, until 78-8b's
- * parser. HAS_CONTEXT_FREQ_HINT needs GuC, and Linux answers its error as
- * the value. HAS_CONTEXT_ISOLATION is the classes with a default context
+ * is the parser's, since both rings parse (i915_cmd_parser.c).
+ * HAS_CONTEXT_FREQ_HINT needs GuC, and Linux answers its error as the
+ * value. HAS_CONTEXT_ISOLATION is the classes with a default context
  * image: render. */
 static const struct {
     int32_t param;
@@ -89,7 +89,7 @@ static const struct {
                          {I915_PARAM_HAS_OVERLAY, 0},
                          {I915_PARAM_HAS_SEMAPHORES, 0},
                          {I915_PARAM_HAS_SECURE_BATCHES, 0},
-                         {I915_PARAM_CMD_PARSER_VERSION, 0},
+                         {I915_PARAM_CMD_PARSER_VERSION, I915_CMD_PARSER_VERSION},
                          {I915_PARAM_HAS_RESOURCE_STREAMER, 0},
                          {I915_PARAM_HAS_POOLED_EU, 0},
                          {I915_PARAM_MIN_EU_IN_POOL, 0},

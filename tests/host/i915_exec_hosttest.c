@@ -17,7 +17,9 @@
  * with a pad and an alignment; the batch started on the render and the
  * blitter ring, the stream output reset, and the request's fence; the
  * in-fence, the submit fence, the out-fence and the fence array; the
- * command parser's stub; a ring that refuses the commands.
+ * command parser's shadow and trampoline on the call's path (78-8b), and
+ * the objects held until the request retires; a ring that refuses the
+ * commands.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -229,6 +231,10 @@ struct started {
 static struct started starts[64];
 static int nstarts;
 
+/* The last MI_BATCH_BUFFER_START a batch chained to, and how many. */
+static struct started chained;
+static int nchained;
+
 /* The engines whose ring holds still, as a hung GPU's would. */
 static int ring_hung[I915_NUM_ENGINES];
 
@@ -267,12 +273,14 @@ static uint32_t command_dwords(uint32_t dw)
 }
 
 /** Run a batch at the GTT address `addr` up to MI_BATCH_BUFFER_END, of
- * which the chip does MI_STORE_DATA_IMM and passes over the rest. */
+ * which the chip does MI_STORE_DATA_IMM, follows MI_BATCH_BUFFER_START to
+ * the batch it chains to, four deep at most, and passes over the rest. */
 static void batch_run(struct chip *c, uint32_t addr)
 {
-    uint32_t n, dw;
+    uint32_t n = 0, dw;
+    int hops = 0;
 
-    for (n = 0; n < 1024u; n += command_dwords(dw)) {
+    while (n < 1024u) {
         dw = gtt_load(c, addr + 4u * n);
         if (dw == MI_BATCH_BUFFER_END) {
             return;
@@ -280,6 +288,18 @@ static void batch_run(struct chip *c, uint32_t addr)
         if (dw == MI_STORE_DATA_IMM_GTT) {
             gtt_store(c, gtt_load(c, addr + 4u * (n + 2u)), gtt_load(c, addr + 4u * (n + 3u)));
         }
+        if (MI_OPCODE(dw) == MI_OPCODE(MI_BATCH_BUFFER_START) && (dw >> 29) == 0) {
+            if (++hops > 4) {
+                return;
+            }
+            chained.cmd = dw;
+            chained.addr = gtt_load(c, addr + 4u * (n + 1u));
+            nchained++;
+            addr = chained.addr;
+            n = 0;
+            continue;
+        }
+        n += command_dwords(dw);
     }
 }
 
@@ -911,40 +931,99 @@ static void fence_array(void)
 }
 
 /**
- * 78-5b.4: the command parser's stub: an unprivileged batch whose length
- * the call gives is refused with EACCES, one without a length runs
- * unprivileged, and a privileged caller's parsed batch runs privileged;
- * SECURE needs the master and privilege.
+ * 78-8b.2: the command parser on the call's path. A batch whose length the
+ * call gives runs from its shadow, privileged, then from the trampoline
+ * past its length, unprivileged, whoever calls; one the tables refuse has
+ * its shadow end at once and the trampoline chain to the original, which
+ * runs; a command the ring does not know fails the call and starts
+ * nothing. A batch without a length runs as it is; SECURE needs the
+ * master and privilege. The shadow, and a batch closed while it runs, are
+ * freed only when the request retires.
  */
 static void parser(void)
 {
-    uint32_t b = batch_end();
+    uint32_t b = batch_end(), at, shadow, frames;
     struct drm_i915_gem_exec_object2 o;
     struct drm_i915_gem_execbuffer2 a;
+    struct chip *c = &chip_a;
 
     entry_init(&o, b);
     args_init(&a, &o, 1, I915_EXEC_RENDER);
     a.batch_len = 8;
     nstarts = 0;
     self.euid = 1000;
-    CHECK(execbuf(&a) == -EACCES && nstarts == 0, "parser: an unprivileged batch refused");
+    CHECK(execbuf(&a) == 0 && nstarts == 2, "parser: a batch with a length starts twice");
+    shadow = starts[0].addr;
+    CHECK(starts[0].cmd == MI_BATCH_BUFFER_START && shadow != (uint32_t)offset_of(b),
+          "parser: first its shadow, privileged");
+    CHECK(starts[1].cmd == (MI_BATCH_BUFFER_START | MI_BATCH_PPGTT_HSW | MI_BATCH_NON_SECURE_HSW) &&
+              starts[1].addr == shadow + 8u,
+          "parser: then the trampoline past its length, unprivileged");
+    CHECK(gtt_load(c, shadow) == MI_BATCH_BUFFER_END &&
+              gtt_load(c, shadow + 8u) == MI_BATCH_BUFFER_END,
+          "parser: the shadow holds the batch and the trampoline's end");
+    idle();
+    self.euid = 0;
+    CHECK(execbuf(&a) == 0 && nstarts == 4 && starts[2].cmd == MI_BATCH_BUFFER_START,
+          "parser: a privileged caller's batch parsed too");
+    args_init(&a, &o, 1, I915_EXEC_BLT);
+    a.batch_len = 8;
+    CHECK(execbuf(&a) == 0 && nstarts == 6 && starts[4].cmd == MI_BATCH_BUFFER_START &&
+              starts[5].cmd == (MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_I965),
+          "parser: on the blitter too");
+    idle();
+
+    /* A store through the GGTT, which the tables refuse, runs from the
+     * original through the trampoline. */
+    at = (uint32_t)offset_of(b) + 0x800u;
+    dword_put(b, 0, MI_STORE_DATA_IMM_GTT);
+    dword_put(b, 4, 0);
+    dword_put(b, 8, at);
+    dword_put(b, 12, 0x5eedu);
+    dword_put(b, 16, MI_BATCH_BUFFER_END);
+    dword_put(b, 20, MI_NOOP);
+    args_init(&a, &o, 1, I915_EXEC_RENDER);
+    a.batch_len = 24;
+    nstarts = 0;
+    nchained = 0;
+    self.euid = 1000;
+    CHECK(execbuf(&a) == 0 && nstarts == 2 && (uint32_t)offset_of(b) + 0x800u == at,
+          "parser: a refused batch runs");
+    CHECK(gtt_load(c, starts[0].addr) == MI_BATCH_BUFFER_END, "parser: its shadow ends at once");
+    CHECK(nchained == 1 && chained.cmd == (MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_HSW) &&
+              chained.addr == (uint32_t)offset_of(b),
+          "parser: the trampoline chains to the original, unprivileged");
+    idle();
+    CHECK(dword_at(b, 0x800) == 0x5eedu, "parser: the original ran its store");
+
+    dword_put(b, 0, 7u << 29);
+    CHECK(execbuf(&a) == -EINVAL && nstarts == 2, "parser: an unknown client EINVAL, nothing run");
+    dword_put(b, 0, MI_BATCH_BUFFER_END);
+
     a.batch_len = 0;
-    CHECK(execbuf(&a) == 0 && nstarts == 1 && (starts[0].cmd & MI_BATCH_NON_SECURE_HSW),
+    CHECK(execbuf(&a) == 0 && nstarts == 3 && (starts[2].cmd & MI_BATCH_NON_SECURE_HSW) &&
+              starts[2].addr == (uint32_t)offset_of(b),
           "parser: without a length it is not parsed, and runs unprivileged");
     a.flags |= I915_EXEC_SECURE;
     CHECK(execbuf(&a) == -EPERM, "parser: SECURE unprivileged EPERM");
     self.euid = 0;
     CHECK(execbuf(&a) == -EPERM, "parser: SECURE without the master EPERM");
     dev_a->drm.master = &file_a;
-    CHECK(execbuf(&a) == 0 && nstarts == 2 && starts[1].cmd == MI_BATCH_BUFFER_START,
+    CHECK(execbuf(&a) == 0 && nstarts == 4 && starts[3].cmd == MI_BATCH_BUFFER_START,
           "parser: SECURE with both runs privileged");
     dev_a->drm.master = 0;
+    idle();
+
+    /* The shadow's pages and a closed batch's live until the retire. */
+    frames = (uint32_t)frames_live;
     a.flags = I915_EXEC_RENDER;
     a.batch_len = 8;
-    CHECK(execbuf(&a) == 0 && nstarts == 3 && starts[2].cmd == MI_BATCH_BUFFER_START,
-          "parser: a privileged caller's parsed batch runs privileged");
-    idle();
+    CHECK(execbuf(&a) == 0 && (uint32_t)frames_live == frames + 1u,
+          "parser: the shadow's page held while the batch runs");
     close_handle(&file_a, b);
+    CHECK((uint32_t)frames_live == frames + 1u, "parser: the closed batch held while it runs");
+    idle();
+    CHECK((uint32_t)frames_live == frames - 1u, "parser: both freed once the request retires");
 }
 
 /**

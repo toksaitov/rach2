@@ -1438,6 +1438,17 @@ int i915_gem_cpu_write_needs_clflush(const struct drm_i915_gem_object *obj);
 #define I915_CLFLUSH_AFTER  0x2u
 
 /**
+ * Get the object's pages ready for the processor to read through its
+ * cache, as Linux's i915_gem_object_prepare_read: its writers waited for,
+ * its pages pinned, which the caller drops, its write domain flushed, and
+ * in `*needs_clflush` I915_CLFLUSH_BEFORE when the lines must be flushed
+ * before they are read.
+ *
+ * @return 0, -ENODEV for an import, or the wait's and the pin's errors.
+ */
+int32_t i915_gem_object_prepare_read(struct drm_i915_gem_object *obj, uint32_t *needs_clflush);
+
+/**
  * Get the object's pages ready for the processor to write through its
  * cache, as Linux's i915_gem_object_prepare_write: its work waited for, its
  * pages pinned, which the caller drops, its write domain flushed, and in
@@ -1506,16 +1517,51 @@ void i915_gem_unplug(struct drm_i915_private *i915);
  */
 int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 
-/**
- * Check a batch of `len` bytes from `start` in `batch` before `engine`
- * runs it, as Linux's intel_engine_cmd_parser will (i915_cmd_parser.c).
- * A batch of a caller with privilege runs unparsed; until the parser is
- * written every other is refused.
- *
- * @return 0 to run the batch, or -EACCES.
+/* The command parser's version, which GETPARAM gives, Linux 6.12's; and
+ * the bytes past a batch's copy that its shadow keeps for the trampoline,
+ * Linux's I915_CMD_PARSER_TRAMPOLINE_SIZE. */
+#define I915_CMD_PARSER_VERSION         10
+#define I915_CMD_PARSER_TRAMPOLINE_SIZE 8u
+
+/*
+ * A batch to parse and the shadow it is copied to. `batch` and `shadow`
+ * are the frames of each object's pages; `offset` and `len` the bytes of
+ * the batch in its object, each a multiple of 4, `len` above 0, and `addr`
+ * the batch's GTT address at `offset`. `clflush` is I915_CLFLUSH_BEFORE
+ * when the batch's lines must be flushed before they are read. The shadow
+ * holds `shadow_size` bytes, `len` and the trampoline at least.
  */
-int32_t i915_cmd_parser_check(struct i915_engine *engine, struct drm_i915_gem_object *batch,
-                              uint32_t start, uint32_t len, int privileged);
+struct i915_cmd_parse {
+    const uintptr_t *batch;
+    uint32_t offset;
+    uint32_t len;
+    uint32_t addr;
+    uint32_t clflush;
+    const uintptr_t *shadow;
+    uint32_t shadow_size;
+};
+
+/** Whether `engine` parses the batches whose length a call gives, as
+ * Linux's intel_engine_using_cmd_parser: on Haswell, the render and
+ * blitter rings. */
+int i915_engine_using_cmd_parser(const struct i915_engine *engine);
+
+/**
+ * Copy a batch to its shadow and check it before `engine` runs it, as
+ * Linux 6.12's intel_engine_cmd_parser on graphics 7 with its trampoline
+ * (i915_cmd_parser.c). The shadow runs privileged from its start and then
+ * unprivileged from `len`, where the trampoline is: a batch that passes runs
+ * privileged from the copy, and the trampoline ends; one with a command or
+ * register the tables refuse, or any MI_BATCH_BUFFER_START, has its copy
+ * ended at once and the trampoline start the original, unprivileged, so
+ * that the chip refuses what it must as it would without the parser.
+ *
+ * @return 0 to run the shadow; -EINVAL for a command the engine does not
+ *         know, one that runs past the batch, or a batch without
+ *         MI_BATCH_BUFFER_END, which Linux's call refuses; or -ENOMEM
+ *         without a temporary mapping.
+ */
+int32_t i915_cmd_parser(const struct i915_engine *engine, const struct i915_cmd_parse *p);
 
 /**
  * Reserve `size` bytes of the global GTT, inside the aperture with
@@ -2053,8 +2099,18 @@ struct i915_file {
  * MI_NOOP, so that only its breadcrumb runs, as Linux's
  * __i915_request_skip. `awaits` and `added` change under the submission's
  * lock in i915_request.c, since a fence may signal in an interrupt.
+ *
+ * `hold`, when set, is what its batch needs until it retires: the objects
+ * of its call and the parser's shadow, which `hold->release` lets go once
+ * the chip is past it, as Linux's request keeps its vmas active.
  */
 struct i915_await;
+
+/* What a request holds for its batch until it retires; `release` frees it
+ * with what it holds, in process context. */
+struct i915_request_hold {
+    void (*release)(struct i915_request_hold *hold);
+};
 
 struct i915_request {
     struct i915_fence fence;
@@ -2076,6 +2132,7 @@ struct i915_request {
     struct i915_await *await_list;
     struct i915_await *exec_waiters;
     struct i915_request *next; /* the engine's, oldest first */
+    struct i915_request_hold *hold;
 };
 
 /*

@@ -510,13 +510,7 @@ int32_t i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj, int lev
     return i915_gem_object_unbind(obj);
 }
 
-/**
- * Get the object's pages ready for the processor to read through its
- * cache, as Linux's i915_gem_object_prepare_read: pinned, which the caller
- * drops, with the write domain flushed and in `*needs_clflush` whether the
- * lines must be flushed before they are read.
- */
-static int32_t prepare_read(struct drm_i915_gem_object *obj, uint32_t *needs_clflush)
+int32_t i915_gem_object_prepare_read(struct drm_i915_gem_object *obj, uint32_t *needs_clflush)
 {
     int32_t err;
 
@@ -588,7 +582,7 @@ static int32_t shmem_pread(struct drm_i915_gem_object *obj, const struct drm_i91
     uint8_t __user *user = (uint8_t __user *)(uintptr_t)args->data_ptr;
     uint64_t remain = args->size, at = args->offset;
     uint32_t needs_clflush;
-    int32_t err = prepare_read(obj, &needs_clflush);
+    int32_t err = i915_gem_object_prepare_read(obj, &needs_clflush);
 
     if (err != 0) {
         return err;
