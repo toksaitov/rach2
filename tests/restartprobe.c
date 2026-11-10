@@ -153,10 +153,11 @@ struct ts {
     long nsec;
 };
 
+/* rt_sigaction's record, its handler and restorer as words. */
 struct k_sigaction {
-    void (*handler)(int);
+    unsigned long handler;
     unsigned long flags;
-    void (*restorer)(void);
+    unsigned long restorer;
     unsigned mask[2];
 };
 
@@ -164,12 +165,6 @@ struct pollfd {
     int fd;
     short events;
     short revents;
-};
-
-struct sembuf {
-    unsigned short num;
-    short op;
-    short flg;
 };
 
 struct msgbuf {
@@ -372,9 +367,9 @@ static void install(int signo, void (*h)(int), unsigned long flags)
 {
     struct k_sigaction ka;
 
-    ka.handler = h ? h : (void (*)(int))SIG_IGN;
+    ka.handler = h ? (unsigned long)h : SIG_IGN;
     ka.flags = SA_SIGINFO | SA_RESTORER | flags;
-    ka.restorer = restorer;
+    ka.restorer = (unsigned long)restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
     syscall4(SYS_RT_SIGACTION, signo, (long)&ka, 0, 8);
@@ -448,7 +443,7 @@ static int readable(int fd, int ms)
 
 #if defined __x86_64__
 /** semtimedop, or semop for a NULL `t`, of the operation `op` on the set. */
-static long sem_do(int id, struct sembuf *op, const struct ts *t)
+static long sem_do(int id, const short *op, const struct ts *t)
 {
     return t ? syscall4(SYS_SEMTIMEDOP, id, (long)op, 1, (long)t)
              : syscall3(SYS_SEMOP, id, (long)op, 1);
@@ -491,7 +486,7 @@ static void msg_rm(int id)
 }
 #else
 /** semtimedop, or semop for a NULL `t`, through ipc(2). */
-static long sem_do(int id, struct sembuf *op, const struct ts *t)
+static long sem_do(int id, const short *op, const struct ts *t)
 {
     return syscall6(SYS_IPC, t ? IPC_SEMTIMEDOP : IPC_SEMOP, id, 1, 0, (long)op, (long)t);
 }
@@ -556,7 +551,7 @@ static long timed_call(int c, struct ts *left, int ep)
     struct pollfd p = {0, POLLIN, 0};
     unsigned long set[16];
     const unsigned sigs[2] = {0, 1u << (SIGWAITED - 33)};
-    struct sembuf down = {0, -1, 0};
+    const short down[3] = {0, -1, 0}; /* sembuf: the semaphore, the change, flags */
     char events[16];
     int word = 0;
 
@@ -605,7 +600,7 @@ static long timed_call(int c, struct ts *left, int ep)
         return syscall4(SYS_EPOLL_WAIT, ep, (long)events, 1, 1000);
     case C_SEMTIMED:
         left->sec = left->nsec = -1;
-        return sem_do(sem_id, &down, &req);
+        return sem_do(sem_id, down, &req);
     default:
         left->sec = left->nsec = -1;
         return syscall4(SYS_RT_SIGTIMEDWAIT, (long)sigs, 0, (long)&req, 8);
@@ -616,7 +611,7 @@ static long timed_call(int c, struct ts *left, int ep)
 static long untimed_call(int c)
 {
     struct pollfd p = {0, POLLIN, 0};
-    struct sembuf down = {0, -1, 0};
+    const short down[3] = {0, -1, 0}; /* sembuf: the semaphore, the change, flags */
     struct msgbuf m;
     const unsigned none[2] = {0, 0};
     char byte;
@@ -636,7 +631,7 @@ static long untimed_call(int c)
     case C_READ:
         return syscall3(SYS_READ, wake_fd[0], (long)&byte, 1);
     default:
-        return sem_do(sem_id, &down, 0);
+        return sem_do(sem_id, down, 0);
     }
 }
 
@@ -679,7 +674,7 @@ static void child(int c, int scen, int out)
 /** Wake the untimed call `c` of the child `pid` as its waiter would. */
 static void wake(int c, int pid)
 {
-    struct sembuf up = {0, 1, 0};
+    const short up[3] = {0, 1, 0};
     struct msgbuf m;
 
     switch (c) {
@@ -697,7 +692,7 @@ static void wake(int c, int pid)
         msg_send(msg_id, &m);
         break;
     case C_SEMOP:
-        sem_do(sem_id, &up, 0);
+        sem_do(sem_id, up, 0);
         break;
     default:
         syscall3(SYS_WRITE, wake_fd[1], (long)"w", 1);

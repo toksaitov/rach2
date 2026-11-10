@@ -57,6 +57,22 @@ extern int dprintf(int fd, const char *format, ...);
 
 volatile uint64_t kernel_ticks;
 
+/* The processors' records, which `current_proc` reads when a wait writes
+ * back its time left; no thread runs in the model. */
+struct percpu cpu_table[NR_CPUS];
+
+/** Copy `n` bytes to user memory, the host's own in the model; 0. */
+int copy_to_user(void __user *dst, const void *src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = src;
+
+    while (n-- > 0) {
+        *d++ = *s++;
+    }
+    return 0;
+}
+
 /** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
 uint64_t tick_count(void)
 {
