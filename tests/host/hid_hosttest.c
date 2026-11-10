@@ -430,8 +430,8 @@ static const struct hid_ids no_strings = {0x0627, 0x0001, 0x0001, "", "", "", 0}
 static const struct hid_ids qemu_mouse = {0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Mouse", "", 0};
 static const struct hid_ids qemu_tablet = {
     0x0627, 0x0001, 0x0001, "QEMU", "QEMU USB Tablet", "28754-0000:00:04.0-1", 0};
-/* A serial of 62 letters and a two-byte character, which 63 bytes cannot
- * hold whole. */
+/* A serial of 62 letters, a two-byte character, which 63 bytes cannot
+ * hold whole, and a letter. */
 static const struct hid_ids long_serial = {
     0x046d,
     0xc52b,
@@ -539,8 +539,8 @@ static void report_rows(void)
     CHECK("report: no serial string is an empty uniq", same(model_uniq, ""));
     hid_gone(8);
     hid_attach(8, 0, &long_serial, rdesc, 4);
-    CHECK("report: a long serial is cut before the character 63 bytes cannot hold",
-          strlen(model_uniq) == 62 && model_uniq[61] == 'B');
+    CHECK("report: a long serial skips the character 63 bytes cannot hold and copies on",
+          strlen(model_uniq) == 63 && model_uniq[61] == 'B' && model_uniq[62] == 'Z');
     hid_gone(8);
 
     model_leds = 1;
