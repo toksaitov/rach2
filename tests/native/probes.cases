@@ -56,6 +56,7 @@ case forkro -- forkro
 case forktest -- forktest
 case fpuprobe stage:fpuprobe -- fpuprobe
 case fsbaseprobe -- fsbaseprobe
+case fsidprobe root:krffs ids:1000 -- fsidprobe
 case futexvprobe -- futexvprobe
 case hello -- hello
 # intrprobe leaves out the wait for typed keys, the controller's interrupts
@@ -124,6 +125,8 @@ case netifprobe -- netifprobe machine=native
 # machine=native leaves out the two comparisons of HeapUsed.
 case numaprobe ids:1000 -- numaprobe
 case ofdprobe stage:native/hello.txt -- ofdprobe machine=native
+case oldfsprobe tmpfs:1M -- oldfsprobe dir=tmpfs
+case openat2probe tmpfs:1M -- openat2probe dir=tmpfs
 case ownprobe root:krffs ids:1000,2000,3000,4000 -- ownprobe
 # machine=native leaves out the three discovers and their offers and the two
 # comparisons of HeapUsed.
@@ -177,6 +180,7 @@ case unlinkdirprobe.krffs volume:krffs:krffs16 -- unlinkdirprobe dir=vol0/unlink
 case usercopyfault -- usercopyfault
 case vfsprobe.ext2 root:ext2 -- vfsprobe
 case vfsprobe.krffs root:krffs -- vfsprobe
+case vhangprobe ids:1000 -- vhangprobe
 case vmfault end:signal:11 -- vmfault
 case vmprobe -- vmprobe
 case waitprobe stage:native/hello.txt -- waitprobe

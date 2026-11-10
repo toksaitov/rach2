@@ -108,15 +108,17 @@ describes.
 A caller with no controlling terminal gets 0, and nothing is hung up.
 .Sh EXAMPLES
 The default suite's
-.Pa tests/ptyprobe.c
+.Pa tests/vhangprobe.c
 opens a pseudo-terminal, makes its slave the controlling terminal of a
-new session, calls
+new session, turns its echo off, calls
 .Fn vhangup
 with
 .Dv SIGHUP
 ignored, and checks the old descriptor's read, write, ioctl and poll,
-that the session has no controlling terminal, that the termios are the
-defaults and that a new open of the slave works.
+that the session has no controlling terminal, that a new open of the
+slave works and has the default termios, and that a process of another
+user gets
+.Er EPERM .
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EPERM

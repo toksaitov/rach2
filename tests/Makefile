@@ -34,9 +34,9 @@ PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe 
         rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe frag6probe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
         tlsprobe ldtprobe fsbaseprobe wow64probe pure64probe futexvprobe mixprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe vgshmprobe i915gemprobe i915execprobe i915resetprobe drmprobe drmcompatprobe gpucompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
-        usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
+        usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe fsidprobe oldfsprobe openat2probe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
-        ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
+        ptyprobe vhangprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
         idreport fdfull diskfull oomprobe limitprobe limitsprobe numaprobe loadprobe conloadprobe partsprobe busprobe ahciprobe bigfileprobe blankprobe lenovoacpi watchdogprobe \
         drmcapture
 
