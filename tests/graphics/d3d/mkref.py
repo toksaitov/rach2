@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fold the rows that reference.sh recorded into a reference for run.py.
 
-usage: mkref.py SOURCE OUT.json DIR...
+usage: mkref.py [-s UNIT]... SOURCE OUT.json DIR...
 
 Each DIR is a run of reference.sh; each of its numbered directories is one
 row of run.py -R, with its environment.json and results.json. A unit that
@@ -11,7 +11,13 @@ that ends before its summary keeps the fewest test lines it printed, and its
 exit only when every run gave the same one, since a unit that crashes ends
 with an exit that varies from run to run. SOURCE is the reference's own
 description of where it was taken.
+
+-s names a unit, PATH/EXE:NAME of Wine's or a vkd3d-proton test, that its
+author saw stall in Linux's runs, its process alive and idle, and stopped:
+the reference stops it where it stalled, at the last test line its log has,
+counted as often as the log has it, as linux.json stops WineD3D's DXGI unit.
 """
+import getopt
 import json
 from pathlib import Path
 import re
@@ -21,6 +27,7 @@ import sys
 STALL = "dxgi.c:8040, d3d10 test 2, unexpected present count 1, expected 2; stop on this record"
 SEGV = (-signal.SIGSEGV, 128 + signal.SIGSEGV)
 TEST_LINE = r"^\w+\.c:\d+: "
+VK_LINE = r"^test_\w+:\d+: "
 
 
 def fail(text):
@@ -37,11 +44,35 @@ def merge_counts(old, failures, checks, skipped):
             "max_skipped": max(old["max_skipped"], skipped)}
 
 
+def stall(log, expression):
+    """Return a stalled unit's last test line and its count in the log."""
+    text = log.read_text(errors="replace")
+    lines = [l for l in text.splitlines() if re.match(expression, l)]
+    if not lines:
+        fail("%s: a stall with no test line to stop at" % log)
+    return {"line": lines[-1], "count": lines.count(lines[-1])}
+
+
+def merge_stall(old, new, unit):
+    """Keep one stall line for a unit; every run must have stalled on it."""
+    if old is None:
+        return new
+    if "progress" not in old or old["progress"]["line"] != new["progress"]["line"]:
+        fail("%s stalled in one run where another did otherwise" % unit)
+    return {"progress": {"line": new["progress"]["line"],
+                         "count": min(old["progress"]["count"], new["progress"]["count"])}}
+
+
 def main():
     """Read every recorded row and write the reference whole."""
-    if len(sys.argv) < 4:
-        fail("usage: mkref.py SOURCE OUT.json DIR...")
-    source, output, dirs = sys.argv[1], Path(sys.argv[2]), sys.argv[3:]
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "s:")
+    except getopt.GetoptError:
+        opts, args = [], []
+    if len(args) < 3:
+        fail("usage: mkref.py [-s UNIT]... SOURCE OUT.json DIR...")
+    stalled = {value for _, value in opts}
+    source, output, dirs = args[0], Path(args[1]), args[2:]
     ref = {"source": source, "probe": {}, "wine": {}, "vkd3d": {}, "flakes": []}
     adapters = set()
     for top in dirs:
@@ -71,6 +102,11 @@ def main():
                 units = ref["wine"].setdefault(path, {})
                 old = units.get(unit)
                 counts = result["summary"]
+                if row in stalled:
+                    units[unit] = merge_stall(old, {"progress": stall(row_dir / "unit.log", TEST_LINE)}, row)
+                    continue
+                if old is not None and isinstance(old.get("progress"), dict):
+                    fail("%s: %s stalled in one run and not in another" % (row_dir, row))
                 if result["progress"]:
                     new = {"progress": STALL}
                 elif counts is None:
@@ -96,6 +132,12 @@ def main():
                 units[unit] = new
             elif family == "vkd3d":
                 for name, result in results.items():
+                    if name in stalled:
+                        ref["vkd3d"][name] = merge_stall(ref["vkd3d"].get(name),
+                                                         {"progress": stall(row_dir / (name + ".log"), VK_LINE)}, name)
+                        continue
+                    if "progress" in ref["vkd3d"].get(name, {}):
+                        fail("%s: %s stalled in one run and not in another" % (row_dir, name))
                     counts = result["summary"]
                     if counts is None or not result["ended"]:
                         if result["exit"] in SEGV and result["begun"]:
