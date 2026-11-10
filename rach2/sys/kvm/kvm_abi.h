@@ -72,6 +72,7 @@
 #define KVM_SET_LAPIC       KVM_IOW(0x8Fu, 1024u)
 #define KVM_SET_CPUID2      KVM_IOW(0x90u, 8u)
 #define KVM_GET_CPUID2      KVM_IOWR(0x91u, 8u)
+#define KVM_SET_VAPIC_ADDR  KVM_IOW(0x93u, 8u)
 #define KVM_GET_MP_STATE    KVM_IOR(0x98u, 4u)
 #define KVM_SET_MP_STATE    KVM_IOW(0x99u, 4u)
 #define KVM_NMI             KVM_IO(0x9Au)
