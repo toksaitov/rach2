@@ -248,7 +248,11 @@ the last-level cache's,
 .Li apicid ,
 .Li cpuid level ,
 .Li flags ,
-the feature bits by Linux's names,
+the feature bits by Linux's names, among them
+.Li pku
+where the processor has protection keys and
+.Li ospke
+where the kernel turned them on,
 .Li clflush size
 and
 .Li address sizes ,
@@ -1862,7 +1866,10 @@ Each region's
 line, followed by lines of a name, a colon and a size in kilobytes, as
 Linux writes them: Size, KernelPageSize and MMUPageSize, Rss, Pss,
 Shared_Clean, Shared_Dirty, Private_Clean, Private_Dirty, Referenced,
-Anonymous, Swap, SwapPss and Locked, and a VmFlags line of
+Anonymous, Swap, SwapPss and Locked; where the protection keys are on, a
+ProtectionKey line with the region's key, a plain number
+.Pq see Xr pkeys 7 ;
+and a VmFlags line of
 .Ql rd ,
 .Ql wr ,
 .Ql ex ,
