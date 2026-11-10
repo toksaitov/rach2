@@ -1019,6 +1019,40 @@ build/tests/cases/graphics/%.ext2: build/tests/cases/graphics/%.tar
 	    -d "$$work" $@.tmp $${kib}k; \
 	mv $@.tmp $@
 
+# `tests/run kvm`: Rach2's KVM run by Debian's QEMU on the x86-64 GNU root:
+# the Debian guest of tests/kvm/guests booted to its token by kvm-boot.sh,
+# and kvm-unit-tests and Linux's KVM selftests run by corpus.sh as
+# unit-tests.list and selftests.list say, on the processor profiles max-svm
+# and host-svm, as the cases of tests/cases/machine.kvm.json, which
+# kvm_scenario runs (tests/kvm/Readme.md). Each machine has kvm.ext2, the
+# runners, the lists and the guest, as a read-only data disk. The guest is
+# made by tests/kvm/guests/mkdebian.sh from two pinned Debian packages, a
+# download of some 34 MiB kept in the clone's build/cache/gnu.
+KVM_GUEST_DIR = build/kvm/guests/debian
+$(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.txt \
+                         tests/kvm/guests/debian-init vendor/gnu/debian/fetch_asset.sh \
+                         $(WIFI_MKCPIO) $(SHA256TOOL)
+	MKCPIO=$(WIFI_MKCPIO) sh tests/kvm/guests/mkdebian.sh $(KVM_GUEST_DIR)
+$(KVM_GUEST_DIR)/vmlinuz: $(KVM_GUEST_DIR)/initrd
+KVM_FILES = tests/kvm/kvm-boot.sh tests/kvm/corpus.sh tests/kvm/unit-tests.list \
+            tests/kvm/selftests.list
+build/tests/cases/kvm/kvm.tar: $(KVM_FILES) $(KVM_GUEST_DIR)/initrd $(KVM_GUEST_DIR)/vmlinuz
+	@mkdir -p $(@D)
+	tar -cf $@.tmp -C tests/kvm $(notdir $(KVM_FILES)) \
+	    -C $(CURDIR)/build/kvm guests/debian/vmlinuz guests/debian/initrd
+	mv $@.tmp $@
+build/tests/cases/kvm/kvm.ext2: build/tests/cases/kvm/kvm.tar
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/kvm-disk.XXXXXX); \
+	tar -xf $< -C "$$work"; \
+	kib=$$(($$(wc -c < $<) / 1024 * 5 / 4 + 8192)); \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp $${kib}k; \
+	mv $@.tmp $@
+
 # `tests/run codexapi`: OpenAI's Responses protocol in the C fake API
 # service, proved against the pinned upstream Codex in a fresh home on an
 # isolated GNU Rach2 machine: two turns over a WebSocket, a refused second
