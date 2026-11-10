@@ -452,6 +452,19 @@ BEGIN {
     }
     close("vendor/gnu/games/commands")
     print ""
+    print "### Video packages"
+    print ""
+    print "The pinned [video layer](../vendor/gnu/debian/Readme.md#the-video-layer) stages these commands on both architectures, from its own Debian closure: libva, its DRM backend and Intel'"'"'s i965 VA driver, with vainfo."
+    print ""
+    print "| Program | Package | Path | Page |"
+    print "| --- | --- | --- | --- |"
+    while ((getline line < "vendor/gnu/debian/va.commands") > 0) {
+        if (line ~ /^#/) continue
+        split(line, f, " ")
+        printf "| `%s` | `%s` | `%s` | %s |\n", f[1], f[2], f[3], page(f[1])
+    }
+    close("vendor/gnu/debian/va.commands")
+    print ""
     print "### QEMU and the KVM tests"
     print ""
     print "The pinned [KVM layer](../vendor/gnu/kvm/Readme.md) stages these commands on x86-64, from its own Debian closure: Debian'"'"'s QEMU with its OpenGL modules, SeaBIOS, OVMF and iPXE'"'"'s network boot ROMs. Beside them, kvm-unit-tests is under `/opt/kvm-unit-tests` and Linux'"'"'s KVM selftests under `/opt/kvm-selftests`, built from the sources pinned in [kvm/sources.txt](../vendor/gnu/kvm/sources.txt)."

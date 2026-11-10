@@ -613,6 +613,20 @@ batch's length, and a batch without
 .Dv MI_BATCH_BUFFER_END
 fail the call with
 .Er EINVAL .
+.Ss Video
+The video ring runs Haswell's fixed-function decoder and encoder, and the
+video enhancement ring its scaling, deinterlacing and colour conversion,
+as on Linux; a program reaches them through VA-API.
+The GNU root has libva, its DRM backend and Intel's i965 VA driver 2.4.1,
+which libva loads for the render node, and
+.Xr vainfo 1 ,
+which lists what the driver offers: on Haswell, decoding of MPEG-2,
+H.264, VC-1 and JPEG, encoding of MPEG-2 and H.264, and video processing.
+The driver gives its batches to the video ring with
+.Dv I915_EXEC_BSD
+and to the video enhancement ring with
+.Dv I915_EXEC_VEBOX ,
+through the command parser as above.
 .Ss Display
 The device has three CRTCs, pipes A to C, each with a primary plane, a
 sprite and a cursor, Linux's planes for Haswell; and, when DDI A detects
@@ -828,6 +842,7 @@ The milliseconds the GT has spent in RC6 since the bind, in decimal,
 wrapping at 2^32.
 .El
 .Sh SEE ALSO
+.Xr vainfo 1 ,
 .Xr mmap 2 ,
 .Xr backlight 4 ,
 .Xr drm 4 ,

@@ -389,6 +389,14 @@ The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands on
 | --- | --- | --- | --- |
 | `innoextract` | `innoextract` | `/usr/bin/innoextract` | [innoextract(1)](man1/innoextract.1) |
 
+### Video packages
+
+The pinned [video layer](../vendor/gnu/debian/Readme.md#the-video-layer) stages these commands on both architectures, from its own Debian closure: libva, its DRM backend and Intel's i965 VA driver, with vainfo.
+
+| Program | Package | Path | Page |
+| --- | --- | --- | --- |
+| `vainfo` | `vainfo` | `/usr/bin/vainfo` | [vainfo(1)](man1/vainfo.1) |
+
 ### QEMU and the KVM tests
 
 The pinned [KVM layer](../vendor/gnu/kvm/Readme.md) stages these commands on x86-64, from its own Debian closure: Debian's QEMU with its OpenGL modules, SeaBIOS, OVMF and iPXE's network boot ROMs. Beside them, kvm-unit-tests is under `/opt/kvm-unit-tests` and Linux's KVM selftests under `/opt/kvm-selftests`, built from the sources pinned in [kvm/sources.txt](../vendor/gnu/kvm/sources.txt).
