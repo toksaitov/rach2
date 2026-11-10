@@ -31,19 +31,23 @@ mkdir -p "$work/data/trial2654/probes"
 ln "$root" "$work/data/trial2654/$image" 2> /dev/null || cp --sparse=always "$root" "$work/data/trial2654/$image"
 tar -xf "$bundle" -C "$work/data/trial2654/probes"
 # Entry 6 from 1 MiB, 32 GiB, made with Rach2's mke2fs defaults as the
-# Lenovo's was (dev-log/76-display/lenovo-storage.md).
+# Lenovo's was (dev-log/76-display/lenovo-storage.md). The table is written
+# after the file system, since mke2fs wipes the signatures it finds.
 truncate -s 33G "$work/disk.img"
-sgdisk -q -o -U "$guid" -n 6:2048:+32G -t 6:8300 -c 6:'Rach2 data' "$work/disk.img"
-MKE2FS_CONFIG=$tree/vendor/e2fsprogs/mke2fs.conf mke2fs -q -t ext2 -F -E offset=1048576 \
+MKE2FS_CONFIG=$tree/vendor/e2fsprogs/mke2fs.conf mke2fs -q -t ext2 -b 4096 -F -E offset=1048576 \
     -L Rach2_data -d "$work/data" "$work/disk.img" 8388608
+sgdisk -o -U "$guid" -n 6:2048:+32G -t 6:8300 -c 6:'Rach2 data' "$work/disk.img"
+sgdisk -p "$work/disk.img" | tee -a "$out/inputs.txt"
 rm -rf "$work/data"
 echo "qemu: data partition made"
 
+: > "$out/serial.log"
 line="rach2.rootimage=GPTID=$guid,6:/trial2654/$image rach2.slot=trialroot rach2.trace=enosys"
 qemu-system-x86_64 -accel kvm -cpu host,invtsc=on -smp 4 -m 8G -machine q35 \
     -kernel "$kernel" -append "$line" \
     -drive "file=$work/disk.img,format=raw,if=none,id=d0" -device ide-hd,drive=d0,bus=ide.0 \
     -nic "user,model=rtl8139,hostfwd=tcp:127.0.0.1:$port-:22" \
+    -audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
     -display none -vga std -serial "file:$out/serial.log" -monitor none &
 qemu=$!
 L() { ssh -i "$key" -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR \

@@ -439,14 +439,20 @@ class Runner:
                                       renderer=None if renderer == "gl" else renderer)
             found = re.search(r"round trips in ([0-9.]+) ms", text)
             adapter = re.search(r"^adapter: (.*)", text, re.M)
+            log = self.out / (name + ".proton.log")
+            used = re.search(r"wined3d_dll_init Using the (\w+) renderer",
+                             log.read_text(errors="replace") if log.exists() else "")
             results[name] = {"exit": status, "ms": float(found.group(1)) if found else None,
                              "ok": "TRIP OK" in text,
+                             "renderer": used.group(1) if used else None,
                              "adapter": adapter.group(1) if adapter else None}
             want = linux.get(name) if linux is not None else None
-            say("%s: exit %d ms %s adapter %s linux %s" % (
-                name, status, results[name]["ms"], results[name]["adapter"],
-                want and want.get("ms")))
-            if (want is None or want.get("ok")) and not results[name]["ok"]:
+            say("%s: exit %d ms %s renderer %s adapter %s linux %s" % (
+                name, status, results[name]["ms"], results[name]["renderer"],
+                results[name]["adapter"], want and want.get("ms")))
+            expect = "OpenGL" if renderer == "gl" else "Vulkan"
+            if (want is None or want.get("ok")) and not (results[name]["ok"] and
+                                                         results[name]["renderer"] == expect):
                 ok = False
         return ok
 
