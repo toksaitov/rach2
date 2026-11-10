@@ -1036,6 +1036,9 @@ static int setid(void)
     return 0;
 }
 
+/* The lines of a file's fdinfo before its mount id's value, Linux's order. */
+#define FDINFO_HEAD "pos:\t5\nflags:\t02000000\nmnt_id:\t"
+
 /** The helper of `empty_root`: chroot to its own fdinfo directory and end. */
 static int fdinfo_helper(void)
 {
@@ -1043,7 +1046,8 @@ static int fdinfo_helper(void)
 }
 
 /**
- * Check a file of /proc/self/fdinfo, and then, as uid 1000 in a user
+ * Check a file of /proc/self/fdinfo, its offset, flags, mount id and inode
+ * as Linux gives them, and then, as uid 1000 in a user
  * namespace of its own, Chromium's chroot into that directory by a CLONE_FS
  * helper: the root left has no entries and takes none, and a descriptor of
  * /proc opened before still reaches self/fd. Returns 0, or 1 after printing
@@ -1062,8 +1066,10 @@ static int empty_root(void)
         return fail(R_FDINFO_OPEN, "open and seek a file for its fdinfo");
     }
     snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
-    if (get(path, buf, sizeof(buf)) <= 0 || strcmp(buf, "pos:\t5\nflags:\t02000000\n")) {
-        return fail(R_FDINFO, "a file of fdinfo has the offset and the flags");
+    if (get(path, buf, sizeof(buf)) <= 0 ||
+        strncmp(buf, FDINFO_HEAD, sizeof(FDINFO_HEAD) - 1) != 0 || !strstr(buf, "\nino:\t")) {
+        return fail(R_FDINFO,
+                    "a file of fdinfo has the offset, the flags, the mount and the inode");
     }
     if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
         unshare(CLONE_NEWUSER) != 0 || (proc = open("/proc", O_RDONLY | O_DIRECTORY)) < 0) {
