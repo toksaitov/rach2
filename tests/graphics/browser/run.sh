@@ -43,6 +43,13 @@ if [ "$mode" = gpu ]; then
     # shellcheck disable=SC2034 # common.sh starts Weston with it
     RUNNER_RENDERER=gl
 fi
-runner_weston
+if [ "$mode" = webgpu-hasvk ]; then
+    [ "$browser" = chromium ] || runner_die "hasvk needs Chromium"
+    [ -S "${XDG_RUNTIME_DIR:?}/${WAYLAND_DISPLAY:?}" ] || runner_die "no caller's Wayland display"
+    runner_record "compositor caller's DRM Weston on the Lenovo, see ../weston.log"
+    runner_record "icd ${VK_DRIVER_FILES:?}"
+else
+    runner_weston
+fi
 python3 "$here/run.py" "$browser" "$mode" "$out" "$RUNNER_WORK"
 runner_finish

@@ -128,8 +128,8 @@ class Browser:
                         "--disable-background-networking", "--disable-hang-monitor",
                         "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
                         "--autoplay-policy=no-user-gesture-required"]
-                # The GPU profile keeps Chromium's own blocklist, as Debian
-                # runs it; a software renderer needs it lifted for WebGL.
+                # The GPU profile keeps Chromium's blocklist. Software
+                # WebGL and the Lenovo's hasvk WebGPU probe lift it.
                 if self.mode != "gpu":
                     args += ["--ignore-gpu-blocklist"]
                 if self.mode == "webgpu":
@@ -456,6 +456,45 @@ def webgpu_venus(b, url):
     return result
 
 
+def webgpu_hasvk(b, url):
+    """Read hasvk's compute and pixels, capture the panel, then read the sandboxes.
+
+    The caller supplies a DRM Weston with its screenshot protocol enabled.
+    Only the blocklist switch is lifted, as in the Lenovo's Linux reference.
+    """
+    assert b.name == "chromium"
+    with (b.out / "vulkaninfo.err").open("w") as err:
+        vulkan = subprocess.check_output(["vulkaninfo", "--summary"], text=True, stderr=err)
+    (b.out / "vulkaninfo.out").write_text(vulkan)
+    assert "HD Graphics 4400" in vulkan and "llvmpipe" not in vulkan, vulkan
+    assert re.search(r"apiVersion\s*=\s*1\.2\.", vulkan), "hasvk is not at its default API version"
+    b.navigate(url + "/page.html")
+    result = {"readback": b.script("""(async () => {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter || adapter.info.vendor !== 'intel' ||
+            adapter.info.architecture !== 'gen-7' || adapter.info.isFallbackAdapter)
+            throw Error('no native Intel gen-7 adapter');
+        return await gpu(adapter);
+    })()""")}
+    save(b.out / "partial.json", result)
+    got = result["readback"]
+    assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got
+    b.navigate(url + "/hasvk.html")
+    result["picture"] = b.until(lambda: b.script("window.result || null"))
+    save(b.out / "partial.json", result)
+    assert result["picture"]["ok"], result["picture"]
+    shots = b.work / "shots"
+    shots.mkdir()
+    with (b.out / "screenshooter.log").open("w") as log:
+        subprocess.run(["weston-screenshooter"], cwd=shots, stdout=log, stderr=log, check=True)
+    pictures = list(shots.glob("*.png"))
+    assert len(pictures) == 1, "screenshooter did not capture one panel"
+    shutil.copyfile(pictures[0], b.out / "panel.png")
+    save(b.out / "gpu-info.json", b.client.call("SystemInfo.getInfo"))
+    result.update(diagnostics(b, url))
+    return result
+
+
 def sound(b, url):
     """Play three tabs together until the loopback reader has its counted samples."""
     result = []
@@ -494,6 +533,8 @@ def main():
                 result = webgpu(b, url)
             elif mode in ("webgpu-venus", "webgpu-venus-native"):
                 result = webgpu_venus(b, url)
+            elif mode == "webgpu-hasvk":
+                result = webgpu_hasvk(b, url)
             elif mode == "sound":
                 result = sound(b, url)
             else:
