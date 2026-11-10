@@ -29,9 +29,9 @@
  * its state PSMOUSE_ACTIVATED. A run of commands, a change of the guest's
  * settings or a reconnect, takes it back for its length: the handler then
  * leaves the mouse's bytes in the 8042 for the run to read, as Linux's
- * PSMOUSE_CMD_MODE gives them to `ps2_command`. Five packets of the pad's
- * out of form in a row put the port in Linux's PSMOUSE_IGNORE, whose bytes
- * are dropped, until kpsmoused has reconnected the pad.
+ * PSMOUSE_CMD_MODE gives them to `ps2_command`. Five packets out of form in
+ * a row put the port in Linux's PSMOUSE_IGNORE, whose bytes are dropped,
+ * until kpsmoused has reconnected the device.
  */
 #include "i8042.h"
 #include "portio.h"
@@ -817,11 +817,23 @@ static void count_packet(int bad)
     }
 }
 
+/** Whether the device's next byte begins a packet. */
+static int packet_start(void)
+{
+    if (touchpad == TOUCHPAD_SYNAPTICS) {
+        return synaptics_packet_start();
+    }
+    if (touchpad == TOUCHPAD_ELANTECH) {
+        return elantech_packet_start();
+    }
+    return packet_index == 0;
+}
+
 /**
- * Take one byte of the device's packet: the touchpad's to synaptics.c, a
- * mouse's into the packet being assembled, which is reported once whole.
- * A touchpad's packet that synaptics.c refuses is a bad packet, and so is
- * a mouse's byte dropped for its framing bit.
+ * Take one byte of the device's packet: a touchpad's to synaptics.c or
+ * elantech.c, a mouse's into the packet being assembled, which is reported
+ * once whole. A touchpad's packet that its driver refuses is a bad packet,
+ * and so is a mouse's byte dropped for its framing bit.
  */
 static void take_byte(uint8_t data)
 {
@@ -831,6 +843,13 @@ static void take_byte(uint8_t data)
         rc = synaptics_byte(data);
         if (rc != SYNAPTICS_GOOD) {
             count_packet(rc == SYNAPTICS_BAD);
+        }
+        return;
+    }
+    if (touchpad == TOUCHPAD_ELANTECH) {
+        rc = elantech_byte(data);
+        if (rc != ELANTECH_GOOD) {
+            count_packet(rc == ELANTECH_BAD);
         }
         return;
     }
@@ -882,10 +901,6 @@ static void mouse_irq_handler(isr_params_t *params)
     if (state == STATE_IGNORE) {
         return;
     }
-    if (touchpad == TOUCHPAD_ELANTECH) {
-        elantech_byte(data);
-        return;
-    }
     if (alps > 0) {
         alps_byte(data);
         return;
@@ -899,7 +914,7 @@ static void mouse_irq_handler(isr_params_t *params)
             return;
         }
         take_byte(0xAA); /* not an announcement: the packet's first byte */
-    } else if (data == 0xAA && (touchpad == TOUCHPAD_SYNAPTICS ? synaptics_packet_start() : packet_index == 0)) {
+    } else if (data == 0xAA && packet_start()) {
         bat_held = 1;
         return;
     }
@@ -1154,6 +1169,11 @@ void ps2mouse_reconnect(void)
             reconnect_guest();
         }
         klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again");
+    } else if (touchpad == TOUCHPAD_ELANTECH && elantech_reconnect() == 0) {
+        if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
+            klog(KLOG_WARN, "mouse", "the device did not enable reporting");
+        }
+        klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again");
     } else if (touchpad == 0 && mouse_dev && mouse_reconnect() == 0) {
         packet_index = 0;
         if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
@@ -1164,6 +1184,9 @@ void ps2mouse_reconnect(void)
         klog(KLOG_WARN, "mouse", "reconnect: probing the port anew");
         guest_forget();
         synaptics_disconnect();
+        if (touchpad == TOUCHPAD_ELANTECH) {
+            elantech_disconnect();
+        }
         if (mouse_dev) {
             evdev_unregister(mouse_dev);
             mouse_dev = NULL;
