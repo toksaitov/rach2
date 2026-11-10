@@ -3,7 +3,8 @@
  * and its allocation, /proc/uptime, the CPU times of a process and of a
  * thread, task ids, descriptor links, /proc/PID/mem, /proc/PID/exe, the
  * paths of /proc/PID/maps, a read of a process's arguments while the process
- * is reaped, oom_score_adj, and the /sys entries and uevents of a DRM device
+ * is reaped, oom_score_adj, the cache, NUMA, clock source and DMI files of
+ * /sys, and the /sys entries and uevents of a DRM device
  * and of a driver's own attributes, links and PCI identity, and those of
  * a PS/2 keyboard and a USB mouse (evdev_sysfs.c).
  *
@@ -25,6 +26,7 @@ struct vpath;
 struct fd_entry;
 struct vfs_ref;
 struct vfs_name;
+struct vfs_mount;
 static struct vfs_name *procfs_exe_entry(int pid);
 static int procfs_resolve_pid(int pid);
 static int procfs_resolve_id(const struct vpath *vp);
@@ -69,6 +71,9 @@ static int sysfs_block_whole(int key);
 static int sysfs_block_loop(int key);
 static int sysfs_net_wiphy(int index);
 static const char *sysfs_wlan_driver(int index);
+static uint32_t procfs_mount_id(const struct vfs_mount *m);
+static uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint);
+static int sysfs_attr_present(int node, int attr);
 #include "fs/procfs.c"
 #include "drm/drm.h"
 #include "evdev.h"
@@ -176,6 +181,44 @@ uint64_t cpuinfo_siblings(int cpu, int level)
 {
     (void)level;
     return cpu == 0 ? 1 : 0;
+}
+
+/** CPU 0 of the model has two caches: a 32K L1 data cache of its own, 8
+ * ways of 64 sets of 64-byte lines, and a 4M L2 that its package's
+ * processors share, 16 ways of 4096 sets. */
+int cpuinfo_cache(int cpu, int index, struct cpu_cache *cache)
+{
+    if (cpu != 0 || index < 0 || index > 1) {
+        return 0;
+    }
+    cache->level = (uint32_t)index + 1;
+    cache->type = index == 0 ? 1 : 3;
+    cache->line = 64;
+    cache->partitions = 1;
+    cache->ways = index == 0 ? 8 : 16;
+    cache->sets = index == 0 ? 64 : 4096;
+    cache->sharing = index == 0 ? 1 : 16;
+    cache->id = 0;
+    cache->shared = 1;
+    return 1;
+}
+
+/** The model's firmware table, as QEMU's SeaBIOS gives one, with no UUID
+ * and no board. */
+const char *dmi_field(int field)
+{
+    return field == DMI_BIOS_VENDOR    ? "SeaBIOS"
+           : field == DMI_BIOS_RELEASE ? "0.0"
+           : field == DMI_SYS_VENDOR   ? "QEMU"
+           : field == DMI_PRODUCT_NAME ? "Standard PC (i440FX + PIIX, 1996)"
+           : field == DMI_CHASSIS_TYPE ? "1"
+                                       : 0;
+}
+
+/** The clock is kept by the TSC, measured against the HPET. */
+const char *timer_clocksource(int n)
+{
+    return n < 0 ? "tsc" : n == 0 ? "tsc" : n == 1 ? "hpet" : 0;
 }
 
 /* The counters /proc/net/snmp reports, which net_core.c defines, and those
@@ -1608,6 +1651,81 @@ static int reg_text(int h, char *out, int cap)
     return len;
 }
 
+/** Whether the strings `a` and `b` are equal. */
+static int eq(const char *a, const char *b)
+{
+    return __builtin_strcmp(a, b) == 0;
+}
+
+/** The text of the attribute `attr` of the fixed /sys directory `node`,
+ * with device `key`, as an open renders it, NUL-terminated into `out` of
+ * `cap` bytes; its length, or the error. */
+static int sys_text(int node, int key, int attr, char *out, int cap)
+{
+    struct procfs_text text;
+    struct vpath vp;
+    int k = 0, len;
+
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = node;
+    vp.syskey = key;
+    vp.procfile = attr;
+    procfs_text_init(&text);
+    len = procfs_gen_sysfile(&text, &vp, &k);
+    if (len >= 0 && len < cap) {
+        k_memcpy(out, text.buf, (size_t)len);
+        out[len] = '\0';
+    }
+    kfree(text.buf);
+    return len;
+}
+
+/**
+ * The files Wine reads below /sys/devices/system and /sys/class/dmi, in
+ * Linux's text: a cache's size with its K, its type by name and its
+ * sharing processors; the one NUMA node; the clock sources, each with a
+ * space after it; the DMI fields the table holds, and ENOENT for one it
+ * does not; and modalias, whose fields lose their spaces and the colons.
+ */
+static void system_rows(void)
+{
+    char out[256];
+
+    check(sys_text(SYSFS_CPU_CACHE_INDEX, 0, 7, out, (int)sizeof(out)) > 0 && eq(out, "32K\n"),
+          "an L1 data cache of 64 sets of 8 ways of 64 bytes is 32K");
+    check(sys_text(SYSFS_CPU_CACHE_INDEX, 1, 7, out, (int)sizeof(out)) > 0 && eq(out, "4096K\n"),
+          "the L2's size");
+    check(sys_text(SYSFS_CPU_CACHE_INDEX, 0, 8, out, (int)sizeof(out)) > 0 && eq(out, "Data\n"),
+          "a data cache's type");
+    check(sys_text(SYSFS_CPU_CACHE_INDEX, 1, 8, out, (int)sizeof(out)) > 0 && eq(out, "Unified\n"),
+          "a unified cache's type");
+    check(sys_text(SYSFS_CPU_CACHE_INDEX, 0, 9, out, (int)sizeof(out)) > 0 && eq(out, "8\n"),
+          "a cache's ways");
+    check(sys_text(SYSFS_CPU_CACHE_INDEX, 0, 5, out, (int)sizeof(out)) > 0 && eq(out, "0\n"),
+          "a cache's sharing processors as a list");
+    check(sys_text(SYSFS_CPU_CACHE_INDEX, 2, 7, out, (int)sizeof(out)) == -ENOENT,
+          "a cache the processor does not have is ENOENT");
+    check(sys_text(SYSFS_NODE0, 0, 2, out, (int)sizeof(out)) > 0 && eq(out, "10\n"),
+          "node0 is at distance 10 from itself");
+    check(sys_text(SYSFS_NODE, 0, 4, out, (int)sizeof(out)) > 0 && eq(out, "0\n"),
+          "node 0 is the one node possible");
+    check(sys_text(SYSFS_CLOCKSOURCE0, 0, 0, out, (int)sizeof(out)) > 0 && eq(out, "tsc hpet \n"),
+          "the clock sources, each with a space after it");
+    check(sys_text(SYSFS_CLOCKSOURCE0, 0, 1, out, (int)sizeof(out)) > 0 && eq(out, "tsc\n"),
+          "the clock source in use");
+    check(sys_text(SYSFS_DMI_ID, 0, DMI_PRODUCT_NAME, out, (int)sizeof(out)) > 0 &&
+              eq(out, "Standard PC (i440FX + PIIX, 1996)\n"),
+          "a DMI field's text");
+    check(sys_text(SYSFS_DMI_ID, 0, DMI_BOARD_NAME, out, (int)sizeof(out)) == -ENOENT &&
+              !sysfs_attr_present(SYSFS_DMI_ID, DMI_BOARD_NAME) &&
+              sysfs_attr_present(SYSFS_DMI_ID, SYSFS_DMI_MODALIAS),
+          "a DMI field the table does not hold is not there");
+    check(sys_text(SYSFS_DMI_ID, 0, SYSFS_DMI_MODALIAS, out, (int)sizeof(out)) > 0 &&
+              eq(out, "dmi:bvnSeaBIOS:br0.0:svnQEMU:pnStandardPC(i440FX+PIIX,1996):ct1:\n"),
+          "modalias, as Linux's dmi-id.c makes it");
+}
+
 /** The entry below `dir` named `name`. */
 static int child(int dir, const char *name)
 {
@@ -2337,6 +2455,7 @@ int main(void)
     exe_entries();
     image_paths();
     reaped_during_read();
+    system_rows();
     oom_values();
     oom_floor();
     oom_open_errors();

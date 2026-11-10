@@ -6760,6 +6760,7 @@ static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int fo
     if (vp->kind == VNODE_SYS_FILE) {
         kst->st_mode = S_IFREG | (vp->sysent == SYSFS_REG ? sysfs_node_mode(vp->syskey)
                                   : sysfs_attr_writable(vp->sysent, vp->procfile) ? 0644u
+                                  : sysfs_attr_private(vp->sysent, vp->procfile)  ? 0400u
                                                                                   : 0444u);
         kst->st_size = 4096;
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
@@ -6786,6 +6787,9 @@ static int32_t synth_sys_stat(const struct vpath *vp, struct kstat *kst, int fol
     }
     if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
         vp->procfile == SYSFS_PCI_BOOT_VGA && !sysfs_pci_is_vga(vp->syskey)) {
+        return -ENOENT;
+    }
+    if (vp->kind == VNODE_SYS_FILE && !sysfs_attr_present(vp->sysent, vp->procfile)) {
         return -ENOENT;
     }
     synth_sys_identity(vp, kst, follow);
@@ -14907,6 +14911,47 @@ static int synth_sys_cpu_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
 }
 
 /**
+ * The `n`th entry of a processor's directory `node`, SYSFS_CPUN, of its
+ * caches', SYSFS_CPU_CACHE, or of a directory of attribute files, whose
+ * key is `key`, as `synth_sys_dirent` gives it: a processor's `topology`
+ * and, when it describes its caches, `cache`; a directory `indexM` for each
+ * cache; and the attributes `sysfs_attr` lists that are there, of which
+ * /sys/class/dmi/id has only the fields the firmware's table holds.
+ */
+static int synth_sys_attr_dirent(int node, int key, int n, char *name, uint64_t *ino,
+                                 uint8_t *dtype)
+{
+    int i;
+
+    if (node == SYSFS_CPUN) {
+        if (n == 1 && !sysfs_device_exists(SYSFS_CPU_CACHE, key)) {
+            n = 2;
+        }
+        return synth_entry(n == 0   ? "topology"
+                           : n == 1 ? "cache"
+                                    : NULL,
+                           sysfs_ino(n == 0 ? SYSFS_CPU_TOPOLOGY : SYSFS_CPU_CACHE, key, 0), DT_DIR,
+                           name, ino, dtype);
+    }
+    if (node == SYSFS_CPU_CACHE) {
+        if (n > 15 || !sysfs_device_exists(SYSFS_CPU_CACHE_INDEX, key << 4 | n)) {
+            return 0;
+        }
+        k_strncpy(name, "index", 31);
+        k_itoa(n, name + 5, 26, 10, false);
+        *ino = sysfs_ino(SYSFS_CPU_CACHE_INDEX, key << 4 | n, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    for (i = 0; sysfs_attr(node, i); i++) {
+        if (sysfs_attr_present(node, i) && n-- == 0) {
+            break;
+        }
+    }
+    return synth_entry(sysfs_attr(node, i), sysfs_ino(node, key, 1 + i), DT_REG, name, ino, dtype);
+}
+
+/**
  * The `n`th entry of the radio directory `node` of /sys, whose radio or
  * switch is `key`, as `synth_sys_dirent` gives it: /sys/class/ieee80211 a
  * directory for each radio, a radio's its attributes and `device`, the
@@ -15057,7 +15102,13 @@ static int synth_sys_fixed_dirent(int node, int key, int n, char *name, uint64_t
                  {SYSFS_CLASS, "drm", SYSFS_CLASS_DRM},
                  {SYSFS_DEVICES, "platform", SYSFS_PLATFORM},
                  {SYSFS_BUS, "platform", SYSFS_BUS_PLATFORM},
-                 {SYSFS_BUS_PLATFORM, "devices", SYSFS_PLATFORM_LINKS}};
+                 {SYSFS_BUS_PLATFORM, "devices", SYSFS_PLATFORM_LINKS},
+                 {SYSFS_SYSTEM, "node", SYSFS_NODE},
+                 {SYSFS_NODE, "node0", SYSFS_NODE0},
+                 {SYSFS_SYSTEM, "clocksource", SYSFS_CLOCKSOURCE},
+                 {SYSFS_CLOCKSOURCE, "clocksource0", SYSFS_CLOCKSOURCE0},
+                 {SYSFS_CLASS, "dmi", SYSFS_CLASS_DMI},
+                 {SYSFS_CLASS_DMI, "id", SYSFS_DMI_ID}};
     int i;
 
     for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
@@ -15076,29 +15127,14 @@ static int synth_sys_fixed_dirent(int node, int key, int n, char *name, uint64_t
         return synth_entry(backlight_name(n), sysfs_ino(SYSFS_BACKLIGHT, n, 0), DT_DIR, name, ino,
                            dtype);
     }
-    if (node == SYSFS_BACKLIGHT) {
-        return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
-                           dtype);
-    }
     if (node == SYSFS_BLOCK || node == SYSFS_DEV_BLOCK || SYSFS_IS_BLOCK(node)) {
         return synth_sys_block_dirent(node, key, n, name, ino, dtype);
     }
     if (node == SYSFS_CPU) {
         return synth_sys_cpu_dirent(n, name, ino, dtype);
     }
-    if (node == SYSFS_CPUN) {
-        return synth_entry(n == 0 ? "topology" : NULL, sysfs_ino(SYSFS_CPU_TOPOLOGY, key, 0),
-                           DT_DIR, name, ino, dtype);
-    }
-    if (node == SYSFS_CPU_TOPOLOGY) {
-        return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
-                           dtype);
-    }
-    if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER ||
-        node == SYSFS_MEMORY || node == SYSFS_MEMORY0 || node == SYSFS_KERNEL ||
-        node == SYSFS_CLASS_DRM) {
-        return synth_entry(sysfs_attr(node, n), sysfs_ino(node, 0, 1 + n), DT_REG, name, ino,
-                           dtype);
+    if (node == SYSFS_CPUN || node == SYSFS_CPU_CACHE || sysfs_attr(node, 0)) {
+        return synth_sys_attr_dirent(node, key, n, name, ino, dtype);
     }
     if (node >= SYSFS_REG) {
         return 0;

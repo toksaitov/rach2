@@ -19,6 +19,7 @@
 #include "lib/kerrno.h"
 #include "mm/kheap.h"
 #include "rfkill.h"
+#include "dmi.h"
 
 static int fails;
 
@@ -384,6 +385,68 @@ static void sys_cpus(void)
     CHECK(synth_classify("sys/devices/system/cpu/cpu", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/devices/system/cpu/cpux", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/devices/system/cpu/cpu1/x", &vp) == VNODE_ENOENT);
+}
+
+/**
+ * The files Wine reads below /sys/devices/system and /sys/class/dmi: a
+ * processor's caches, `cache/indexM` with M from 0 to 15 and no leading
+ * zero, keyed N << 4 | M, and their attributes; the one NUMA node; the
+ * clock source; and the DMI fields, of which only the serial numbers and
+ * the UUID are private.
+ */
+static void sys_system(void)
+{
+    struct vpath vp;
+    char path[80];
+
+    CHECK(synth_classify("sys/devices/system/cpu/cpu3/cache", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_CPU_CACHE && vp.syskey == 3);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu3/cache/index2", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_CPU_CACHE_INDEX && vp.syskey == (3 << 4 | 2));
+    CHECK(synth_classify("sys/devices/system/cpu/cpu3/cache/index15/size", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_CPU_CACHE_INDEX && vp.syskey == (3 << 4 | 15) &&
+          eq(sysfs_attr(vp.sysent, vp.procfile), "size"));
+    CHECK(synth_classify("sys/devices/system/cpu/cpu0/cache/index0/shared_cpu_map", &vp) ==
+              VNODE_SYS_FILE &&
+          eq(sysfs_attr(vp.sysent, vp.procfile), "shared_cpu_map"));
+    CHECK(synth_classify("sys/devices/system/cpu/cpu0/cache/index16", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu0/cache/index01", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu0/cache/index", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu0/cache/index0/x", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu0/cache/index0/level/x", &vp) == VNODE_ENOTDIR);
+    CHECK(SYSFS_KEYED(SYSFS_CPU_CACHE) && SYSFS_KEYED(SYSFS_CPU_CACHE_INDEX));
+    synth_sys_path(SYSFS_CPU_CACHE_INDEX, 13 << 4 | 3, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/devices/system/cpu/cpu13/cache/index3"));
+    synth_sys_path(SYSFS_CPU_CACHE, 13, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/devices/system/cpu/cpu13/cache"));
+
+    CHECK(synth_classify("sys/devices/system/node/node0/cpumap", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_NODE0 && vp.procfile == 1);
+    CHECK(synth_classify("sys/devices/system/node/possible", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_NODE);
+    CHECK(synth_classify("sys/devices/system/node/node1", &vp) == VNODE_ENOENT);
+    synth_sys_path(SYSFS_NODE0, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/devices/system/node/node0"));
+
+    CHECK(synth_classify("sys/devices/system/clocksource/clocksource0/current_clocksource", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_CLOCKSOURCE0 && vp.procfile == 1);
+    synth_sys_path(SYSFS_CLOCKSOURCE0, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/devices/system/clocksource/clocksource0"));
+
+    CHECK(synth_classify("sys/class/dmi/id", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_DMI_ID);
+    CHECK(synth_classify("sys/class/dmi/id/bios_vendor", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == DMI_BIOS_VENDOR && !sysfs_attr_private(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/dmi/id/product_uuid", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == DMI_PRODUCT_UUID && sysfs_attr_private(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/dmi/id/chassis_serial", &vp) == VNODE_SYS_FILE &&
+          sysfs_attr_private(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/dmi/id/modalias", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_DMI_MODALIAS);
+    CHECK(synth_classify("sys/class/dmi/id/x", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/dmi/x", &vp) == VNODE_ENOENT);
+    synth_sys_path(SYSFS_DMI_ID, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/class/dmi/id"));
 }
 
 /**
@@ -835,6 +898,7 @@ int main(void)
     sys_wireless();
     sys_rfkill();
     sys_cpus();
+    sys_system();
     ipv6_conf();
     vfio_paths();
     return fails > 255 ? 255 : fails;

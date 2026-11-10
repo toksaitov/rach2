@@ -189,4 +189,13 @@ uint32_t timer_calibrate(void);
  * when the counter under the tick keeps it. */
 const char *timer_reference(void);
 
+/**
+ * The `n`th clock source, from 0, by the name Linux gives it, best first as
+ * Linux rates them: "tsc" when the counter under the tick is measured, then
+ * the reference `refclock_init` found, "hpet" or "acpi_pm", or "jiffies"
+ * when there is neither; NULL past the last. With `n` -1, the one that
+ * keeps the clock now, as `timer_reference` names it, or "jiffies".
+ */
+const char *timer_clocksource(int n);
+
 #endif /* _TIMER_H_ */

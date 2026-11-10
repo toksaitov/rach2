@@ -442,6 +442,28 @@ const char *timer_reference(void)
     return ref_kind == REF_TSC || tsc_per_tick ? "tsc" : 0;
 }
 
+/** Linux's name for the reference `name`, as refclock.h names it. */
+static const char *clocksource_name(const char *name)
+{
+    return name[0] == 'p' ? "acpi_pm" : name;
+}
+
+const char *timer_clocksource(int n)
+{
+    const char *now = timer_reference();
+
+    if (n < 0) {
+        return now ? clocksource_name(now) : "jiffies";
+    }
+    if (tsc_per_tick && n-- == 0) {
+        return "tsc";
+    }
+    if (refclock_name() && n-- == 0) {
+        return clocksource_name(refclock_name());
+    }
+    return n == 0 && !tsc_per_tick && !refclock_name() ? "jiffies" : 0;
+}
+
 /**
  * The phase rows of `timer_clock_check`: the period of two sweeps agrees
  * with the reload and the crystal to a hundredth; a count at the reload is

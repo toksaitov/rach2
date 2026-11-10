@@ -11,7 +11,8 @@ The platform defines what these shared headers declare. Each header states its c
 | `sys/platform.h` | the boot's calls into the machine, in the order `kernel.c` makes them | `platform.c`, `smpboot.c`, `ps2mouse.c` |
 | `sys/input.h` | `input_ps2_reply`, the PS/2 keyboard's answers to its commands | `ps2kbd.c` |
 | `sys/irq.h` | handler chains, message vectors, interrupt counts | `isr.c` |
-| `sys/timer.h` | the clock under the tick, and the ticks each interrupt counts | `pit.c` |
+| `sys/dmi.h` | the firmware's SMBIOS fields, as Linux's DMI code keeps them | `smbios.c` |
+| `sys/timer.h` | the clock under the tick, the ticks each interrupt counts, and the clock sources by Linux's names | `pit.c` |
 | `sys/rtc.h` | the battery-backed clock and its alarm | `cmos.c` |
 | `sys/udelay.h` | `k_udelay`, a bounded busy wait | `udelay.c` |
 | `sys/serial.h` | the serial console | `serial.c` |
@@ -22,7 +23,7 @@ The platform defines what these shared headers declare. Each header states its c
 | `sys/fpu.h` | a process's floating-point save area | `fpu.c` |
 | `sys/pci.h` | configuration space, I/O BAR ports, the MSI message | `pciconf.c` |
 | `sys/iommu.h` | the VT-d units: domains for a device given to a VM, interrupt remapping, fault counts; x86-64 alone | `iommu/` ([VT-d](iommu/Readme.md)) |
-| `sys/fs/cpuinfo.h` | the text of `/proc/cpuinfo`, and each processor's package, core and thread | `cpuinfo.c` |
+| `sys/fs/cpuinfo.h` | the text of `/proc/cpuinfo`, each processor's package, core and thread, and its caches | `cpuinfo.c` |
 | `sys/lib/kirq.h` | the interrupt flag saved around a section | `kirq.c` |
 | `sys/arch/arch.h` | the processor primitives and the hardware breakpoints | `cpu.c`, `debugreg.c` |
 
@@ -89,7 +90,7 @@ An exception in user mode becomes a signal ([signals](../../proc/signal.Readme.m
 
 ACPICA, in [`sys/acpi/`](../../acpi/Readme.md), interprets the DSDT and the SSDTs once the scheduler runs, from the RSDP `acpi_init` found. The two sleep types of `\_S5` come from the DSDT without it, so that the power off works with ACPICA left out or refused: `acpi_s5_find` searches its bytes for the name `_S5_` after NameOp, followed by a package whose first two elements are integer constants of at most 7. `acpi_isa_route` gives each ISA line its global system interrupt, trigger and polarity from the MADT's overrides, a line a PCI device uses being level-triggered and active low unless an override gives the polarity.
 
-`smbios.c` reads the BIOS vendor's string, through the UEFI configuration table's entry point or by a search of 0xF0000 to 0xFFFFF, for the restart below, and the System Information structure's manufacturer and product name, by which `alps.c` and `elantech.c` choose Linux's quirks for a machine.
+`smbios.c` finds the table through the UEFI configuration table's entry point or by a search of 0xF0000 to 0xFFFFF, and reads the fields Linux's `dmi_decode` keeps from the BIOS, System, Base Board and Chassis Information structures, each from the first structure long enough to hold it, for `/sys/class/dmi/id` (`dmi_field`, `sys/dmi.h`). Of them the BIOS vendor decides the restart below, and the manufacturer and product name are those by which `alps.c` and `elantech.c` choose Linux's quirks for a machine. A string of spaces alone reads empty, as in Linux; the UUID is written with its first three fields' bytes reversed from version 2.6 on.
 
 ### PCI configuration
 
@@ -173,7 +174,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 * `rach2.diag` (`diag.c`) prints the kernel's end, the free frames and each module's range, and identifies a Realtek 10ec:8168 by its `TxConfig` register, since the family shares one device ID. Before the first program it prints them again with the board, the network card, the disk policy and the entropy source, and waits for a key or a byte on COM1, for a machine whose only output is its screen.
 * `rach2.apicdiag` (`apicdiag.c`) prints what the firmware left in the local APIC, and the MSI and MSI-X capabilities of the first xHCI and HDA controllers.
 
-`cpuinfo_text` (`cpuinfo.c`) writes a processor's block of `/proc/cpuinfo` from `cpuid` on the processor that reads it. `cpuinfo_place` cuts a processor's APIC ID into its package, its core and its thread at the widths `topology_widths` reads: the shifts of leaf 0xB's levels, and without them leaf 1's count of logical processors, divided into cores by leaf 4 on Intel and by leaves 0x80000008 and 0x8000001E on AMD. `cpuinfo_siblings` gives the processors started that share a core or a package, from which `/proc/cpuinfo` counts `siblings` and `cpu cores` and `procfs.c` writes `/sys/devices/system/cpu/cpuN/topology`. `debugreg.c` keeps each thread's debug registers, loads them when it runs, and moves a debug exception taken in kernel mode to the thread's return to user mode, as [ptrace](../../proc/ptrace.Readme.md) describes.
+`cpuinfo_text` (`cpuinfo.c`) writes a processor's block of `/proc/cpuinfo` from `cpuid` on the processor that reads it. `cpuinfo_place` cuts a processor's APIC ID into its package, its core and its thread at the widths `topology_widths` reads: the shifts of leaf 0xB's levels, and without them leaf 1's count of logical processors, divided into cores by leaf 4 on Intel and by leaves 0x80000008 and 0x8000001E on AMD. `cpuinfo_siblings` gives the processors started that share a core or a package, from which `/proc/cpuinfo` counts `siblings` and `cpu cores` and `procfs.c` writes `/sys/devices/system/cpu/cpuN/topology`. `cpuinfo_cache` describes a processor's caches as Linux's `cacheinfo.c` reads them, for `/sys/devices/system/cpu/cpuN/cache/indexM`: leaf 4 on Intel and every vendor but AMD and Hygon, leaf 0x8000001D on those two when TOPOEXT is set, and otherwise AMD's leaves 0x80000005 and 0x80000006 put into leaf 4's layout, as `amd_cpuid4` puts them, with Linux's table of associativity codes applied to the L1's eight-bit count too. A cache's id is the APIC ID above the bits that number the processors sharing it; the processors sharing it are those whose APIC IDs agree above those bits, a run of that many APIC IDs for an L1 or L2 of leaf 0x8000001D, and on AMD's older leaves the package for the L3 and the processor alone for the rest. `debugreg.c` keeps each thread's debug registers, loads them when it runs, and moves a debug exception taken in kernel mode to the thread's return to user mode, as [ptrace](../../proc/ptrace.Readme.md) describes.
 
 ## Limits
 
@@ -186,7 +187,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 * The reference counter is read in 32 bits, or 24 for the PM timer, and extended at each tick, so a stretch without a tick longer than its wrap, 4.7 s for the PM timer and 43 s for QEMU's 100 MHz HPET, loses the wraps. The time-stamp counter's rate is measured over 20 ms and is as good as that measurement. The calibrations are right under a stop of the processor shorter than the reference's wrap, and, against the 8254, when one of the three waits ran without a stop.
 * Five chipsets have power profiles. The sleep type 7 and the ACPI enable 0xA0 of the Lynx Point and Wildcat Point rows are the PCH's encoding and the value their firmware publishes, and no emulator has those chipsets.
 * The stops' waits are loop counts, not times.
-* The serial console is COM1 alone, at 115200 baud; the PS/2 mouse speaks the plain, IntelliMouse or IntelliMouse Explorer protocol, or the touchpad protocols of Synaptics, of ALPS, versions 1 to 8, and of Elantech, and no other vendor's, so an ALPS pad of version 9 or another vendor's touchpad works as a plain mouse; the speaker plays a square wave and no samples; of SMBIOS only the BIOS vendor and the system's maker and product name are read.
+* The serial console is COM1 alone, at 115200 baud; the PS/2 mouse speaks the plain, IntelliMouse or IntelliMouse Explorer protocol, or the touchpad protocols of Synaptics, of ALPS, versions 1 to 8, and of Elantech, and no other vendor's, so an ALPS pad of version 9 or another vendor's touchpad works as a plain mouse; the speaker plays a square wave and no samples; of SMBIOS only the fields `/sys/class/dmi/id` shows are read, each string cut at 63 bytes.
 * The CMOS clock's century is taken as 2000, and the FADT's century register is logged but not used.
 * The floating-point state covers x87, SSE, AVX and AVX-512 alone, `XCR0` bits 0 to 2 and 5 to 7.
 * On the Lenovo an expiry of the TCO watchdog does not bring the machine back: under Linux 6.12, which programs the TCO as `itco.c` does and leaves SMI_EN's TCO_EN set on version 2, the first stage's expiry left the machine down until it was powered on by hand. No hang experiment may count on the watchdog to return it.

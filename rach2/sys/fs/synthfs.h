@@ -360,7 +360,8 @@ const char *synth_sysvipc_name(int origin);
  * /sys: the parts of Linux's sysfs that programs here read: the PCI
  * functions and USB devices with their uevent files, the network interfaces
  * and their statistics, the clock and its wake alarm, the backlights, the
- * sleep states, the disk nodes, the processors and the memory block, and
+ * sleep states, the disk nodes, the processors with their caches, the NUMA
+ * node, the clock sources, the firmware's DMI fields, the memory block, and
  * the entries drivers add (sysfs.h) below these and below the empty
  * directories they need, /sys/class/drm, /sys/dev/char, /sys/kernel and
  * /sys/devices/platform. Each
@@ -429,6 +430,19 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_PLATFORM        47 /* /sys/devices/platform */
 #define SYSFS_BUS_PLATFORM    48 /* /sys/bus/platform */
 #define SYSFS_PLATFORM_LINKS  49 /* /sys/bus/platform/devices */
+#define SYSFS_CPU_CACHE       50 /* /sys/devices/system/cpu/cpuN/cache, whose key is N */
+/* /sys/devices/system/cpu/cpuN/cache/indexM, whose key is N << 4 | M: the
+ * processor's cache M (fs/cpuinfo.h's `cpuinfo_cache`). */
+#define SYSFS_CPU_CACHE_INDEX 51
+#define SYSFS_NODE            52 /* /sys/devices/system/node, the NUMA nodes */
+#define SYSFS_NODE0           53 /* /sys/devices/system/node/node0, the one node */
+#define SYSFS_CLOCKSOURCE     54 /* /sys/devices/system/clocksource */
+#define SYSFS_CLOCKSOURCE0    55 /* /sys/devices/system/clocksource/clocksource0 */
+#define SYSFS_CLASS_DMI       56 /* /sys/class/dmi */
+/* /sys/class/dmi/id, the firmware's SMBIOS fields: its files are numbered
+ * as dmi.h's DMI_ fields, and modalias follows them. */
+#define SYSFS_DMI_ID          57
+#define SYSFS_DMI_MODALIAS    22
 
 /* The `procfile` of each file of a PCI function's directory, by Linux's
  * names (`sysfs_pci_attr`); 1 has no file, since 1 + 1 is the inode number
@@ -460,10 +474,11 @@ const char *sysfs_wlan_driver(int index);
 /** Whether the /sys directory `node` is one of a device, an interface, a
  * processor, a disk node or a registered entry, which `syskey` says, and
  * which exists only while that does. */
-#define SYSFS_KEYED(node)                                                                  \
-    ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
-     (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_CPU_TOPOLOGY ||  \
-     (node) == SYSFS_BACKLIGHT || SYSFS_IS_BLOCK(node) || (node) == SYSFS_RFKILL ||        \
+#define SYSFS_KEYED(node)                                                                         \
+    ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF ||        \
+     (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_CPU_TOPOLOGY ||         \
+     (node) == SYSFS_CPU_CACHE || (node) == SYSFS_CPU_CACHE_INDEX || (node) == SYSFS_BACKLIGHT || \
+     SYSFS_IS_BLOCK(node) || (node) == SYSFS_RFKILL ||                                            \
      ((node) >= SYSFS_WLAN_PHY && (node) <= SYSFS_WLAN_DRIVER) || (node) == SYSFS_REG)
 
 /** Whether `node` is a directory of a disk node: its own, its queue's, its
@@ -479,6 +494,16 @@ const char *sysfs_wlan_driver(int index);
  * order the directory lists them, or NULL past the last, and for a node
  * with none. */
 const char *sysfs_attr(int node, int n);
+
+/** Whether only a privileged process may read the attribute `attr` of
+ * `node`, mode 0400 as Linux gives them: the serial numbers and the UUID of
+ * /sys/class/dmi/id. */
+int sysfs_attr_private(int node, int attr);
+
+/** Whether the attribute `attr` of the fixed /sys directory `node` is
+ * there, in procfs.c: a field of /sys/class/dmi/id only when the firmware's
+ * table holds it, as Linux makes only those files; every other is. */
+int sysfs_attr_present(int node, int attr);
 
 /** Whether the attribute `attr` of `node` is a device's uevent: a PCI
  * function's, a USB device's, an interface's, a disk's, a partition's, a

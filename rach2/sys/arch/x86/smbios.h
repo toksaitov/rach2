@@ -1,6 +1,7 @@
 #ifndef _SMBIOS_H_
 #define _SMBIOS_H_
 
+#include "../../dmi.h"
 #include "../../lib/kint.h"
 
 /*
@@ -8,13 +9,14 @@
  *
  * The firmware publishes a table, found by the entry point UEFI's
  * configuration table names or by an anchor this scans the read-only region
- * below a megabyte for. Three strings are read out of it. The vendor of the
- * BIOS decides whether a reset command meant for one firmware's
- * system-management handler is sent at all: a machine whose firmware is not
- * the one that command belongs to must not be sent it, since the byte
- * reaches a handler that was written for something else. The system's maker
- * and product name choose a driver's quirks for a machine, as Linux's DMI
- * tables choose them.
+ * below a megabyte for. Three of its strings decide something here. The
+ * vendor of the BIOS decides whether a reset command meant for one
+ * firmware's system-management handler is sent at all: a machine whose
+ * firmware is not the one that command belongs to must not be sent it,
+ * since the byte reaches a handler that was written for something else. The
+ * system's maker and product name choose a driver's quirks for a machine, as
+ * Linux's DMI tables choose them. The rest of the fields Linux keeps are
+ * read too, for /sys/class/dmi/id.
  *
  * Nothing here writes, and nothing here is required. A machine with no table,
  * or a table this cannot read, reports an empty vendor and the caller falls
