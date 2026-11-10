@@ -2808,6 +2808,8 @@ static void procfs_work_counts(struct procfs_text *t)
     ap_u32(t, proc_work_count(2));
     ap_str(t, "\nprocess_timer_passes ");
     ap_u32(t, proc_work_count(3));
+    ap_str(t, "\ntimer_passes_late ");
+    ap_u32(t, timer_late_passes());
     ap_str(t, "\ntlb_shootdowns ");
     ap_u32(t, smp_tlb_count(0));
     ap_str(t, "\ntlb_shootdown_ipis ");

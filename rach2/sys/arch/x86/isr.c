@@ -743,8 +743,9 @@ static void irq_dispatch(isr_params_t *params)
  * disk's caller that slept for its command would get one command a
  * scheduler round. The tick's own handler makes its switch itself.
  *
- * The tick of a processor past the first only charges the tick and
- * switches, and when another processor holds the big lock it does neither:
+ * The tick of a processor past the first charges the tick and switches, and
+ * makes the timer pass only when the boot processor's is late (kernel.c);
+ * when another processor holds the big lock it does none of these:
  * it is ended and counted on this processor's record and returns, and the
  * next tick that finds the lock free charges the ticks since
  * (`sched_account_tick`). Waiting for the lock would take from this

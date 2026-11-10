@@ -1166,6 +1166,10 @@ list since boot, modulo 2^32.
 Untimed blocked threads are absent from the timer list.
 .It Li process_timer_passes
 Passes over the active timer list since boot, modulo 2^32.
+.It Li timer_passes_late
+Timer passes since boot that a processor other than the boot processor made
+because the boot processor's tick had not made one over two of its own
+ticks, as while that tick waits for the big lock, modulo 2^32.
 .It Li tlb_shootdowns , tlb_shootdown_ipis
 Requests since boot that had another processor drop user translations after
 a change of page table entries, and the interprocessor interrupts they sent,
@@ -1201,7 +1205,8 @@ and
 that a signal ended before their deadline, since boot.
 A sleep that ran its whole length is not counted.
 .It Li latency_timer_us
-Longest gap between timer ticks, in microseconds.
+Longest gap between two timer passes, which advance the tick count and fire
+the timeouts due, in microseconds.
 .It Li latency_disk_us
 Longest block request from acceptance to completion, in microseconds.
 .It Li latency_diskwait_us
