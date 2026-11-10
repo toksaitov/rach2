@@ -448,7 +448,8 @@ const char *synth_sysvipc_name(int origin);
 
 /* The `procfile` of each file of a PCI function's directory, by Linux's
  * names (`sysfs_pci_attr`); 1 has no file, since 1 + 1 is the inode number
- * of the function's link. boot_vga is there only for a VGA function. */
+ * of the function's link. boot_vga is there only for a VGA function and a
+ * resourceN file only for a BAR with a length (`sysfs_pci_attr_present`). */
 #define SYSFS_PCI_UEVENT           0
 #define SYSFS_PCI_VENDOR           3
 #define SYSFS_PCI_DEVICE_ID        4
@@ -458,7 +459,11 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_PCI_REVISION         8
 #define SYSFS_PCI_BOOT_VGA         9
 #define SYSFS_PCI_RESOURCE         10
-#define SYSFS_PCI_ATTRS            11
+/* resource0 to resource5, one for each standard BAR that decodes a range,
+ * as Linux's pci_create_resource_files makes them. */
+#define SYSFS_PCI_RESOURCE0        11
+#define SYSFS_PCI_BARS             6
+#define SYSFS_PCI_ATTRS            17
 
 /** The name of the file `attr` of a PCI function's directory, or NULL for a
  * number with none. */

@@ -254,6 +254,15 @@ int sysfs_device_exists(int node, int key);
  * its directory has boot_vga. */
 int sysfs_pci_is_vga(int key);
 
+/** The length in bytes of standard BAR `bar` of the PCI function `key`, 0
+ * for a BAR that decodes nothing or a function that is not there. */
+uint64_t sysfs_pci_bar_size(int key, int bar);
+
+/** Whether the file `attr` of the directory of the PCI function `key` is
+ * there: boot_vga for a VGA function alone, resourceN for a BAR with a
+ * length alone, and every other file always. */
+int sysfs_pci_attr_present(int key, int attr);
+
 /** The inode an open descriptor of /proc or /sys, `e`, has by the file it
  * was opened on, so that fstat reports what the stat of its path does; 0
  * when `e` is no such descriptor. */

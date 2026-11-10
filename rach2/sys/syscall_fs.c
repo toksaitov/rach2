@@ -7404,6 +7404,12 @@ static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int fo
                                   : sysfs_attr_private(vp->sysent, vp->procfile)  ? 0400u
                                                                                   : 0444u);
         kst->st_size = 4096;
+        if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile >= SYSFS_PCI_RESOURCE0) {
+            /* A resourceN file is root's alone and as long as its BAR. */
+            kst->st_mode = S_IFREG | 0600u;
+            kst->st_size =
+                (int64_t)sysfs_pci_bar_size(vp->syskey, vp->procfile - SYSFS_PCI_RESOURCE0);
+        }
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
     } else if (vp->kind == VNODE_SYS_LINK && !follow && vp->sysreg) {
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
@@ -7427,7 +7433,7 @@ static int32_t synth_sys_stat(const struct vpath *vp, struct kstat *kst, int fol
         return -ENOENT;
     }
     if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
-        vp->procfile == SYSFS_PCI_BOOT_VGA && !sysfs_pci_is_vga(vp->syskey)) {
+        !sysfs_pci_attr_present(vp->syskey, vp->procfile)) {
         return -ENOENT;
     }
     if (vp->kind == VNODE_SYS_FILE && !sysfs_attr_present(vp->sysent, vp->procfile)) {
@@ -16532,7 +16538,7 @@ static int synth_sys_bus_dirent(int node, int key, int n, char *name, uint64_t *
 
     if (node == SYSFS_PCI_DEVICE) {
         for (attr = 0; attr < SYSFS_PCI_ATTRS; attr++) {
-            if (!sysfs_pci_attr(attr) || (attr == SYSFS_PCI_BOOT_VGA && !sysfs_pci_is_vga(key))) {
+            if (!sysfs_pci_attr(attr) || !sysfs_pci_attr_present(key, attr)) {
                 continue;
             }
             if (n-- == 0) {
