@@ -14,6 +14,7 @@ The driver binds a chip only when the kernel command line has `rach2.i915` ([cmd
     i915: interrupts: messages on vector N
     i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
     i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+    i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
     i915: display: pipe A adopted: 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz, the firmware's framebuffer at GTT 0x0, stride 5504
     i915: backlight: intel_backlight: levels 0 to 937, at N, off with the pipe
     i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
