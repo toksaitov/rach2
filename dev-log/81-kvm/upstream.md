@@ -68,6 +68,28 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Status: unreported.
 * Next: read the interrupt check of QEMU's TCG loop for a guest in SVM (`svm_check_intercept` and the `CPU_INTERRUPT_HARD` test in `x86_cpu_exec_interrupt`) against the manual's rule, try a current QEMU, and report it with the command.
 
+## QEMU's TCG lets an x87 status load on any processor clear processor 0's nested paging
+
+* Project: QEMU's x86 emulation for TCG, Ubuntu's QEMU 10.2.1 (1:10.2.1+ds-1ubuntu3.3) on x86-64 under WSL; the lines below are QEMU v10.2.0's, `target/i386/tcg/system/fpu_helper.c` (SHA-256 7038c59597a2c4d9afc9fb351a2521a992ad4b4ff4a866a337e46e14f5804589), `target/i386/tcg/fpu_helper.c` (59eddcf1cb1aa9adc21ee3d7a2d90bbb9b5319d3a262d509c2bfab54e4cd67ff) and `target/i386/tcg/system/svm_helper.c` (f2b8c150382ac0d2aefa4af0e8d525b6320d62a8082ad9c48987eb5d7a6b68d4).
+* Fails: with a thread for each processor, the default, an FLDENV, FRSTOR, FXRSTOR or XRSTOR on any processor that loads a status word without ES calls `cpu_set_fpus` (fpu_helper.c line 2500), which calls `cpu_clear_ignne` (system/fpu_helper.c line 42). That does `X86_CPU(first_cpu)->env.hflags2 &= ~HF2_IGNNE_MASK` on processor 0's state, by a plain read and write without a lock, from whichever thread runs the instruction. When processor 0 runs a VMRUN with nested paging at the same moment, its `env->hflags2 |= HF2_NPT_MASK` (svm_helper.c line 296) can be lost under the other thread's write, and the nested guest then runs with its guest-physical addresses taken as the host's; a VMEXIT's clear (line 765) can be undone the same way. A guest of the emulated SVM on processor 0 reads the wrong memory or faults; one on another processor does not meet it.
+* Found: 2026-11-11, on the testing PC, in milestone 81, task 81-2b, while tracing the double faults of Rach2's i686 image as a guest of Rach2's SVM under TCG.
+* Reproduction: `svm-entry race SECONDS CPU` (tests/kvm/svm-entry.c) runs a guest whose loop reads a byte through nested paging and writes it to a port, pinned to processor CPU, while a child on the other processor runs FXRSTOR without end. Under `qemu-system-x86_64 -accel tcg -smp 2 -cpu max,svm=on,npt=on` with Rach2's x86-64 kernel, `race 120 0` failed twice, with KVM_EXIT_INTERNAL_ERROR after 68 and after 188 exits, and in a third boot the outer kernel double-faulted. `race 120 1` passed with 1,864,184 exits, and `race 120 0` under `-accel tcg,thread=single` passed with 853,905.
+* Evidence: `dev-log/81-kvm/upstream.md`; the commit "Add svm-entry's race mode, which runs nested paging beside FXRSTOR on another processor".
+* Rach2: the etude gives a machine whose processor profile has `svm` one processor under TCG (`tools/etude/qemu_profile.c`), which has neither this fault nor the next one. `-accel tcg,thread=single` is not a way around it, for the next fault.
+* Status: unreported.
+* Next: report it with the reproduction and the fix, an atomic and of processor 0's `hflags2` or a request run on processor 0, and try a current QEMU.
+
+## QEMU's TCG on one thread delivers interrupts into a nested guest that masks them
+
+* Project: QEMU's SVM emulation for TCG, Ubuntu's QEMU 10.2.1 (1:10.2.1+ds-1ubuntu3.3) on x86-64 under WSL, with `-accel tcg,thread=single`.
+* Fails: with one thread for every processor, a guest of the emulated SVM that runs with IF clear takes vector 32 from its local APIC. Rach2's i686 image under Rach2's SVM stopped with the inner guest's stack holding interrupt frames whose saved EFLAGS was 0x10002, IF clear: one at EIP 0x2bfa4d, inside `bkl_acquire`'s `k_memset`, and one at 0x2bf993, just past a `cli`. The inner local APIC held vector 32 in both the ISR and the IRR with PPR 0x20, so it could not have given that vector a second time, and an instrumented build of Rach2's SVM backend logged no injection while the guest's IF was clear. The lines of QEMU's source are not traced.
+* Found: 2026-11-11, on the testing PC, in milestone 81, task 81-2b, while trying `thread=single` as a way around the fault above.
+* Reproduction: boot Rach2's x86-64 GNU root under `qemu-system-x86_64 -accel tcg,thread=single -smp 2 -cpu max,svm=on,npt=on` and run `tests/kvm/kvm-boot.sh -a kvm -k guests/rach2/kernel -i guests/rach2/ram.krffs -t 'KVMRACH2 OK'` from the KVM case image several times. The inner guest hung in one run of 6, one of 2, one of 9 and one of 1, the last in SeaBIOS at f000:ff53; read `info registers` and `info lapic` in the inner QEMU's monitor. kvm-unit-tests' `reg_corruption` did not end in 700 s with `-smp 2`, where it passes in 209 s with `-smp 1` and in 143 s on a thread for each processor.
+* Evidence: `dev-log/81-kvm/upstream.md`; the measurements of task 81-2b's issue.
+* Rach2: as the fault above: one processor under TCG for a profile with `svm`, on a thread for each processor, the default.
+* Status: unreported.
+* Next: find where TCG's round-robin loop takes a hard interrupt for a processor in guest mode without the guest's IF under V_INTR_MASKING, and report it with the reproduction.
+
 ## Linux's hypercall fix-up writes at RIP without CS's base
 
 * Project: Linux 6.12.115, `arch/x86/kvm/x86.c` (SHA-256 0a4d25f3522b54b7b51d593f987b1221ff84943be03917fff4a901290e5e8233) and `arch/x86/kvm/emulate.c` (b8af3f684d592d1eb44444735c2bb3f596ad6275f7854dd47b463e8c4a08bbd9), read from kernel.org's `linux-6.12.115.tar.xz`.
