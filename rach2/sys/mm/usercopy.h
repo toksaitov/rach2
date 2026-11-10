@@ -41,6 +41,13 @@
  * window (`user_window_open`); else 0. An empty range is always 1. */
 int user_range_ok(uintptr_t addr, size_t len);
 
+/** 1 if [addr, addr + len) ends at or below USER_ADDR_MAX and does not
+ * wrap, as Linux's access_ok, which unlike `user_range_ok` takes a range
+ * that starts below USER_ADDR_MIN, 0 among them; else 0. For a range kept
+ * to be reached later, whose reach then fails on a page that is not
+ * there. */
+int user_span_ok(uintptr_t addr, size_t len);
+
 /**
  * Let the calling thread's user-copy checks take the `len` bytes of kernel
  * memory at `buf` as a present, writable user range, until

@@ -25,6 +25,11 @@ int user_range_ok(uintptr_t addr, size_t len)
     return 1;
 }
 
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    return addr <= USER_ADDR_MAX && len <= USER_ADDR_MAX - addr;
+}
+
 void user_window_open(void *buf, uint32_t len)
 {
     current_proc->uwin_base = (uintptr_t)buf;

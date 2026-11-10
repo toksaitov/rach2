@@ -468,7 +468,14 @@ static void userptr_refusals(void)
     CHECK(userptr(m, 0, 0, &h) == -EINVAL, "userptr: no bytes, EINVAL");
     CHECK(userptr(m + 16, 4096, 0, &h) == -EINVAL && userptr(m, 100, 0, &h) == -EINVAL,
           "userptr: not whole pages, EINVAL");
-    CHECK(userptr(0, 4096, 0, &h) == -EFAULT, "userptr: outside user space, EFAULT");
+    CHECK(userptr((uintptr_t)-4096, 8192, 0, &h) == -EFAULT,
+          "userptr: a range that wraps past user space, EFAULT");
+    CHECK(userptr(0, 4096, I915_USERPTR_PROBE, &h) == -EFAULT,
+          "userptr: PROBE of a pointer of 0, EFAULT");
+    CHECK(userptr(0, 4096, 0, &h) == 0 && h, "userptr: a pointer of 0 without PROBE, as Linux's");
+    CHECK(domain(&file_a, h, I915_GEM_DOMAIN_CPU, 0) == -EFAULT,
+          "userptr: and its first use, EFAULT, as IGT's invalid-null-pointer expects");
+    close_handle(&file_a, h);
     CHECK(userptr(m, 4096, I915_USERPTR_UNSYNCHRONIZED, &h) == -ENODEV,
           "userptr: UNSYNCHRONIZED, ENODEV as Linux 6.12 for everyone");
     CHECK(userptr(m, 4096, I915_USERPTR_READ_ONLY, &h) == -ENODEV,
