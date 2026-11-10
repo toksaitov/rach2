@@ -1366,6 +1366,8 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->fb_dirty = 1;
     mc->atomic_check = intel_atomic_check;
     mc->atomic_commit = intel_atomic_commit;
+    mc->fb_create = intel_fb_create;
+    mc->fb_destroy = intel_fb_destroy;
     intel_cdclk_init(i915);
     intel_wm_init(i915);
     intel_gmbus_setup(i915);

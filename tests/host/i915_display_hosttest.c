@@ -863,6 +863,41 @@ static void row_primary(void)
     frame();
 }
 
+/**
+ * ADDFB2 of tiled objects, as Linux's intel_framebuffer_init checks them
+ * (IGT's kms_addfb_basic): an X-tiled object's framebuffer made without
+ * modifiers takes X tiles and its object counts it, at a pitch other than
+ * the object's stride refused; a modifier that is not the object's tiling
+ * refused; a Y-tiled object refused without modifiers; X tiles that do not
+ * fit the object in whole rows of tiles refused.
+ */
+static void row_addfb_tiling(void)
+{
+    uint32_t hx = bo_new(10, 4096u * 1024u, I915_TILING_X, 4096);
+    uint32_t hy = bo_new(11, 4096u * 1024u, I915_TILING_Y, 4096);
+    uint32_t hs = bo_new(9, 4096u * 1023u, I915_TILING_X, 4096);
+    struct drm_framebuffer *f;
+    uint32_t fb;
+
+    fb = addfb(hx, 512, 512, DRM_FORMAT_XRGB8888, 4096, NO_MODIFIER);
+    f = drm_framebuffer_lookup(&gpu.drm, &fa, fb);
+    CHECK(f && f->modifier == I915_FORMAT_MOD_X_TILED && bo[10].fb_refs == 1,
+          "addfb: an X-tiled object without modifiers, X tiles, counted by the object");
+    drm_framebuffer_put(f);
+    CHECK(drm_mode_rmfb_ioctl(&gpu.drm, &fb, &fa) == 0 && bo[10].fb_refs == 0,
+          "addfb: the count let go with the framebuffer");
+    CHECK(addfb(hx, 512, 512, DRM_FORMAT_XRGB8888, 2048, NO_MODIFIER) == 0,
+          "addfb: a pitch not the object's stride refused");
+    CHECK(addfb(hx, 1024, 1024, DRM_FORMAT_XRGB8888, 4096, DRM_FORMAT_MOD_LINEAR) == 0,
+          "addfb: linear of an X-tiled object refused");
+    CHECK(addfb(hy, 512, 512, DRM_FORMAT_XRGB8888, 4096, NO_MODIFIER) == 0,
+          "addfb: a Y-tiled object without modifiers refused");
+    fb = addfb(hs, 1024, 1016, DRM_FORMAT_XRGB8888, 4096, NO_MODIFIER);
+    CHECK(addfb(hs, 1024, 1020, DRM_FORMAT_XRGB8888, 4096, NO_MODIFIER) == 0 && fb != 0 &&
+              drm_mode_rmfb_ioctl(&gpu.drm, &fb, &fa) == 0,
+          "addfb: X tiles past the object in whole rows refused, within it taken");
+}
+
 /** The sprite's registers, its checks, and the low-power watermarks off
  * once it shows. */
 static void row_sprite(void)
@@ -1201,6 +1236,7 @@ int main(void)
     row_async();
     row_count();
     row_primary();
+    row_addfb_tiling();
     row_sprite();
     row_cursor();
     row_backlight();

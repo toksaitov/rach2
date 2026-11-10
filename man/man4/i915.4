@@ -279,6 +279,15 @@ controller interleaves its two channels.
 A stride must be a multiple of the tile's width, 512 bytes for X and 128
 for Y, and at most 256 KiB.
 GTT maps of the object fault again after a change.
+.Er EBUSY
+for another layout of an object a framebuffer is made of.
+A framebuffer made by
+.Dv DRM_IOCTL_MODE_ADDFB2
+without modifiers of an X-tiled object is X-tiled, and of a Y-tiled one
+is refused with
+.Er EINVAL ,
+as is a modifier other than the object's tiling, a pitch other than its
+stride, or X tiles that do not fit the object in whole rows.
 .It Dv DRM_IOCTL_I915_GEM_SET_CACHING , DRM_IOCTL_I915_GEM_GET_CACHING
 Set or read the object's level in the processor's caches:
 .Dv I915_CACHING_NONE ,

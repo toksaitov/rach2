@@ -97,6 +97,52 @@ static int32_t check_surface(const struct drm_plane_state *ps, uint32_t max_stri
     return 0;
 }
 
+int32_t intel_fb_create(struct drm_device *dev, struct drm_framebuffer *fb)
+{
+    struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)fb->obj[0];
+    uint32_t rows;
+
+    (void)dev;
+    if (!obj || obj->base.funcs != &i915_gem_object_funcs) {
+        return 0;
+    }
+    if (fb->flags & DRM_MODE_FB_MODIFIERS) {
+        /* The planes take linear and X tiles alone, so the core let no
+         * other modifier through. */
+        if (obj->tiling != I915_TILING_NONE &&
+            (obj->tiling != I915_TILING_X || fb->modifier != I915_FORMAT_MOD_X_TILED)) {
+            return -EINVAL;
+        }
+    } else if (obj->tiling == I915_TILING_X) {
+        fb->modifier = I915_FORMAT_MOD_X_TILED;
+    } else if (obj->tiling == I915_TILING_Y) {
+        return -EINVAL;
+    }
+    if (obj->tiling != I915_TILING_NONE && fb->pitches[0] != obj->stride) {
+        return -EINVAL;
+    }
+    /* Linux's intel_fill_fb_info: X tiles take whole rows of tiles. */
+    if (fb->modifier == I915_FORMAT_MOD_X_TILED) {
+        rows = (fb->height + X_TILE_HEIGHT - 1u) / X_TILE_HEIGHT;
+        if ((uint64_t)(fb->offsets[0] & ~(X_TILE_SIZE - 1u)) +
+                (uint64_t)rows * X_TILE_HEIGHT * fb->pitches[0] >
+            obj->base.size) {
+            return -EINVAL;
+        }
+    }
+    obj->fb_refs++;
+    return 0;
+}
+
+void intel_fb_destroy(struct drm_framebuffer *fb)
+{
+    struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)fb->obj[0];
+
+    if (obj && obj->base.funcs == &i915_gem_object_funcs) {
+        obj->fb_refs--;
+    }
+}
+
 /**
  * The surface address and offset of `ps`'s source corner, as Linux's
  * intel_plane_compute_aligned_offset: the framebuffer's offset and the

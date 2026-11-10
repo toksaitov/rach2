@@ -413,11 +413,14 @@ static void swizzle(void)
 }
 
 /** SET_TILING's refusals and answers and GET_TILING's, leaving `h` X
- * tiled with a stride of 2048 bytes. */
+ * tiled with a stride of 2048 bytes; a framebuffer of the object fixes its
+ * layout, as Linux's frontbuffer does (kms_addfb_basic's
+ * framebuffer-vs-set-tiling). */
 static void tiling_ioctls(uint32_t h)
 {
     struct drm_i915_gem_set_tiling st;
     struct drm_i915_gem_get_tiling gt = {0};
+    struct drm_i915_gem_object *obj;
 
     CHECK(tile(&file_a, h, 3, 512, &st) == -EINVAL, "set_tiling: no such tiling, EINVAL");
     CHECK(tile(&file_a, h, I915_TILING_X, 640, &st) == -EINVAL,
@@ -439,6 +442,15 @@ static void tiling_ioctls(uint32_t h)
               gt.tiling_mode == I915_TILING_X && gt.swizzle_mode == I915_BIT_6_SWIZZLE_9_10 &&
               gt.phys_swizzle_mode == I915_BIT_6_SWIZZLE_9_10,
           "get_tiling: X, 9/10, physically too");
+    obj = i915_gem_object_lookup(&file_a, h);
+    obj->fb_refs = 1;
+    CHECK(tile(&file_a, h, I915_TILING_X, 2048, &st) == 0 &&
+              tile(&file_a, h, I915_TILING_X, 1024, &st) == -EBUSY &&
+              tile(&file_a, h, I915_TILING_Y, 2048, &st) == -EBUSY &&
+              st.tiling_mode == I915_TILING_X && st.stride == 2048,
+          "set_tiling: of a framebuffer's object, its own layout taken, another EBUSY");
+    obj->fb_refs = 0;
+    i915_gem_object_put(obj);
 }
 
 /** Fault each of the `pages` pages of the GTT map `gtt` and write each
@@ -684,12 +696,17 @@ static void table_and_unplug(void)
     vma_t gtt;
 
     for (i = 0; i < I915_NUM_IOCTLS; i++) {
-        bad += !i915_ioctls[i].func || !(i915_ioctls[i].flags & DRM_RENDER_ALLOW);
+        /* GET_PIPE_FROM_CRTC_ID is the display's, flags 0 as on Linux. */
+        bad += !i915_ioctls[i].func || (i915_ioctls[i].cmd == DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID
+                                            ? i915_ioctls[i].flags != 0
+                                            : !(i915_ioctls[i].flags & DRM_RENDER_ALLOW));
         for (j = 0; j < i; j++) {
             dup += UAPI_IOC_NR(i915_ioctls[i].cmd) == UAPI_IOC_NR(i915_ioctls[j].cmd);
         }
     }
-    CHECK(!bad && !dup, "ioctls: each has a handler, a render node may call it, numbers apart");
+    CHECK(
+        !bad && !dup,
+        "ioctls: each has a handler, a render node may call each but the display's, numbers apart");
     CHECK(UAPI_IOC_NR(DRM_IOCTL_I915_GEM_MMAP_GTT) == UAPI_IOC_NR(DRM_IOCTL_I915_GEM_MMAP_OFFSET) &&
               UAPI_IOC_SIZE(DRM_IOCTL_I915_GEM_MMAP_OFFSET) == 32,
           "ioctls: MMAP_OFFSET extends MMAP_GTT's number");
