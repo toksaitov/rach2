@@ -1,8 +1,8 @@
 # The silent Lenovo install
 
-The priority-inheritance futex implementation (80-10c) is merged. The kernel below also blocks a zero relative sleep until the next tick. Keep the prepared root and its gzip on the testing host. The QEMU storage proof read the earlier boot's checkpoint and measured 203 Mesa cache hits and 177 misses; this step has no manager's go and must not run until that proof and the readiness review are complete.
+The manager gave the go for this step on the task's issue on 2026-11-10, for the kernel, `bootctl` and root named below. The task's branch has since gained the resident-page count and the milestone's later work, so the kernel of the go is built from `be54ce312`, or taken from `build/runs/task2653/lenovo/kernel-cc53b51f` of the Mac's task checkout, where the session that rebuilt it kept it with `bootctl-b342aa2e`; the digests decide. Keep the prepared root and its gzip on the testing host until the task closes.
 
-These are the remaining install commands for task 2653, after the manager's go. They install and verify files; they start no game, desktop or sound. No notice is needed beyond the boots' own text. The storage proof and its black-view limitation are in [the record](../80-6.md). Do not merge or close the task until the Lenovo install passes.
+These are the remaining install commands for task 2653, after the manager's go. They install and verify files; they start no game, desktop or sound. No notice is needed beyond the boots' own text. The storage proof and the black view's cause are in [the record](../80-6.md). Do not merge or close the task until the Lenovo install passes.
 
 ## Inputs
 
@@ -17,6 +17,7 @@ The trial root is a private copy of the GNU test root used in the QEMU proof, wi
 From the task checkout on the Mac, before taking the machine:
 
 ```sh
+git worktree add build/worktrees/t2653-trial be54ce312 && cd build/worktrees/t2653-trial
 make ARCH=x86_64 rach2 build/x86_64/utils/sbin/bootctl
 shasum -a 256 build/x86_64/rach2/kernel build/x86_64/utils/sbin/bootctl
 TMPDIR="$PWD/build/tmp" RACH2_TESTING_COPY=/home/testing/rach2/build/worktrees/codex sh tools/dev/testing.sh get build/runs/task2653/root-2961387c696576a3.img.gz
