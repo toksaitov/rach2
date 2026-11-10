@@ -2579,8 +2579,10 @@ static void input_file_rows(void)
 
 /**
  * A mouse unplugged sends "remove" for its event node, itself and its
- * interface and leaves nothing of them; plugged again it is input1 again,
- * the lowest number free. A device with every key has its keys cut from
+ * interface and leaves nothing of them; plugged again it is input2, since
+ * Linux never numbers two input devices alike. Two input devices on one
+ * interface each send their "remove" before the interface sends its own.
+ * A device with every key has its keys cut from
  * its uevent's modalias, ended by "+,", so that the uevent fits in 2048
  * bytes, while its modalias file has them all.
  */
@@ -2610,8 +2612,9 @@ static void input_change_rows(void)
     usb_mouse_in = 1;
     evdev_sysfs_sync();
     in_mouse = child(child(child(sysfs_anchor_find(SYSFS_USB_DEVICE, 1 << 20), "1-1:1.0"), "input"),
-                     "input1");
-    check(in_mouse > 0 && child(in_class, "input1") > 0, "plugged again it is input1 again");
+                     "input2");
+    check(in_mouse > 0 && child(in_class, "input2") > 0 && !child(in_class, "input1"),
+          "plugged again it is input2, a number not used before");
     k_memset(&input_devs[2], 0, sizeof(input_devs[2]));
     input_devs[2].gen = 300;
     k_strncpy(input_devs[2].name, "every key", EVDEV_TEXT_MAX);
@@ -2623,18 +2626,42 @@ static void input_change_rows(void)
     mark = uevents_len;
     sent = uevents_sent;
     evdev_sysfs_sync();
-    h = child(child(child(sysfs_anchor_find(SYSFS_DEVICES, 0), "virtual"), "input"), "input2");
+    h = child(child(child(sysfs_anchor_find(SYSFS_DEVICES, 0), "virtual"), "input"), "input3");
     check(uevents_sent == sent + 2 && h > 0 &&
-              uevent_has(mark, 0, "DEVPATH=/devices/virtual/input/input2") &&
+              uevent_has(mark, 0, "DEVPATH=/devices/virtual/input/input3") &&
               sent_has(mark, ",+,ramlsfw"),
           "a device with no parent is virtual, and its uevent's modalias is cut to fit");
     check(reg_text(child(h, "modalias"), text, (int)sizeof(text)) > 2048 &&
               __builtin_strstr(text, ",2FE,ramlsfw\n"),
           "while its modalias file names every key");
-    input_present[0] = input_present[1] = input_present[2] = 0;
-    usb_mouse_in = 0;
+    input_devs[3] = input_devs[1];
+    input_devs[3].gen = 400;
+    k_strncpy(input_devs[3].name, "USB HIDBP Mouse Consumer Control", EVDEV_NAME_MAX);
+    input_present[3] = 1;
     evdev_sysfs_sync();
-    check(!child(in_class, "input0") && !child(in_class, "input2") &&
+    check(
+        child(child(child(child(sysfs_anchor_find(SYSFS_USB_DEVICE, 1 << 20), "1-1:1.0"), "input"),
+                    "input4"),
+              "event3") > 0,
+        "a second input device on the interface is input4, below the same interface");
+    input_present[1] = input_present[3] = 0;
+    usb_mouse_in = 0;
+    mark = uevents_len;
+    sent = uevents_sent;
+    evdev_sysfs_sync();
+    check(uevents_sent == sent + 5 &&
+              __builtin_strcmp(uevents + mark,
+                               "remove@/devices/usb/1-1/1-1:1.0/input/input2/event1") == 0 &&
+              uevent_has(mark, 1, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input2") &&
+              uevent_has(mark, 2, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input4/event3") &&
+              uevent_has(mark, 3, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input4") &&
+              uevent_has(mark, 4, "DEVPATH=/devices/usb/1-1/1-1:1.0"),
+          "unplugged, each sends remove for its event node and itself, and the interface last");
+    check(!child(sysfs_anchor_find(SYSFS_USB_LINKS, 0), "1-1:1.0") && !child(in_class, "input4"),
+          "and nothing of them is left");
+    input_present[0] = input_present[2] = 0;
+    evdev_sysfs_sync();
+    check(!child(in_class, "input0") && !child(in_class, "input3") &&
               sysfs_node_count(in_class) == 0 && !child(in_serio, "input"),
           "every device gone, /sys/class/input is empty and the port keeps no input");
 }

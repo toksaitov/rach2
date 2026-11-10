@@ -56,12 +56,26 @@
 #define SERIO_PORTS       3
 
 /*
+ * A USB interface's directory that published devices are below: its
+ * handle, 0 for a free entry, its link in /sys/bus/usb/devices, the devices
+ * below it, and the interface as the USB stack described it when the
+ * directory was made, which its files show. The last device withdrawn
+ * takes it away, after its own "remove", as Linux's USB core removes an
+ * interface after the input devices below it.
+ */
+struct iface_sys {
+    int dir, link;
+    int users;
+    struct usb_sys_row usb;
+};
+
+static struct iface_sys ifaces[EVDEV_MAX];
+
+/*
  * A device published: the registration whose entries these are, 0 for
- * none; its description; the N of inputN, from 0, the lowest free, as
- * Linux's input core numbers; and the handles of sysfs.h of its entries.
- * `iface` and `iface_link` are the USB interface's directory and its link
- * in /sys/bus/usb/devices when this device made them, else 0; `usb` is that
- * interface's device as the USB stack described it then.
+ * none; its description; the N of inputN, counted from 0 and never used
+ * again, as Linux's input core numbers; the handles of sysfs.h of its
+ * entries; and the USB interface it is below, or NULL.
  */
 struct input_sys {
     uint32_t gen;
@@ -72,11 +86,13 @@ struct input_sys {
     int holder; /* the directory inputN is in */
     int input, event;
     int class_input, class_event, char_link;
-    int iface, iface_link;
-    struct usb_sys_row usb;
+    struct iface_sys *iface;
 };
 
 static struct input_sys records[EVDEV_MAX];
+
+/* The N of the next inputN. */
+static uint32_t next_number;
 
 /* The fixed parents, made on their first use and kept: /sys/class/input,
  * /sys/devices/virtual/input, the i8042 with its link, /sys/bus/serio's
@@ -617,7 +633,7 @@ static void emit_usb_alias(struct emit *e, const struct usb_sys_row *u)
  * modalias and its uevent, with usbhid, Linux's HID driver, bound to it. */
 static int32_t show_iface(void *obj, int arg, char *buf, uint32_t cap)
 {
-    const struct usb_sys_row *u = &((const struct input_sys *)obj)->usb;
+    const struct usb_sys_row *u = &((const struct iface_sys *)obj)->usb;
     struct emit e;
 
     emit_init(&e, buf, cap);
@@ -785,9 +801,9 @@ static int serio_dir(int port)
 }
 
 /** The directory of the USB interface of the stack's entry `index`,
- * B-P:C.I below its device, made for `r` when absent, with its files, its
- * `subsystem` link and its link in /sys/bus/usb/devices: its handle, or
- * -errno, -ENOENT for an entry that is not running. */
+ * B-P:C.I below its device, made when absent, with its files, its
+ * `subsystem` link and its link in /sys/bus/usb/devices, and counted as
+ * `r`'s: its handle, or -errno, -ENOENT for an entry that is not running. */
 static int iface_dir(struct input_sys *r, int index)
 {
     static const struct sysfs_attr attrs[] = {{"bInterfaceNumber", 0444u, show_iface, NULL},
@@ -797,35 +813,54 @@ static int iface_dir(struct input_sys *r, int index)
                                               {"bInterfaceProtocol", 0444u, show_iface, NULL},
                                               {"modalias", 0444u, show_iface, NULL}};
     char dev[SYSFS_NAME_MAX], name[SYSFS_NAME_MAX];
+    struct usb_sys_row row;
+    struct iface_sys *f = NULL;
     struct emit e;
-    int key, made = 0, h;
+    int key, made = 0, h, i;
 
-    if (usb_core_row(index, &r->usb) != 0 || (key = sysfs_usb_key(&r->usb)) < 0) {
+    if (usb_core_row(index, &row) != 0 || (key = sysfs_usb_key(&row)) < 0) {
         return -ENOENT;
     }
     synth_sys_device_name(SYSFS_USB_DEVICE, key, dev, (int)sizeof(dev));
     emit_init(&e, name, sizeof(name) - 1);
     emit_str(&e, dev);
     emit_str(&e, ":");
-    emit_u32(&e, (uint32_t)r->usb.config & 0xFFu);
+    emit_u32(&e, (uint32_t)row.config & 0xFFu);
     emit_str(&e, ".");
-    emit_u32(&e, (uint32_t)r->usb.ifnum & 0xFFu);
+    emit_u32(&e, (uint32_t)row.ifnum & 0xFFu);
     name[e.len < sizeof(name) - 1 ? e.len : sizeof(name) - 1] = '\0';
     h = dir_at(sysfs_anchor(SYSFS_USB_DEVICE, key), name, &made);
-    if (h > 0 && made) {
-        if (add_attrs(h, attrs, 6, r, IF_NUMBER) < 0 ||
-            sysfs_add_uevent(h, show_iface, r, IF_UEVENT) < 0 ||
+    if (h <= 0) {
+        return h;
+    }
+    for (i = 0; i < EVDEV_MAX && !f; i++) {
+        if (made ? ifaces[i].dir == 0 : ifaces[i].dir == h) {
+            f = &ifaces[i];
+        }
+    }
+    if (!f) {
+        if (made) {
+            sysfs_remove(h);
+        }
+        return -ENOMEM;
+    }
+    if (made) {
+        k_memset(f, 0, sizeof(*f));
+        f->usb = row;
+        if (add_attrs(h, attrs, 6, f, IF_NUMBER) < 0 ||
+            sysfs_add_uevent(h, show_iface, f, IF_UEVENT) < 0 ||
             sysfs_add_link(h, "subsystem", sysfs_anchor(SYSFS_BUS_USB, 0)) < 0) {
             sysfs_remove(h);
             return -ENOMEM;
         }
-        r->iface = h;
-        h = sysfs_add_link(sysfs_anchor(SYSFS_USB_LINKS, 0), name, r->iface);
-        r->iface_link = h > 0 ? h : 0;
-        sysfs_uevent(r->iface, "add", NULL);
-        h = r->iface;
+        f->dir = h;
+        h = sysfs_add_link(sysfs_anchor(SYSFS_USB_LINKS, 0), name, f->dir);
+        f->link = h > 0 ? h : 0;
+        sysfs_uevent(f->dir, "add", NULL);
     }
-    return h;
+    f->users++;
+    r->iface = f;
+    return f->dir;
 }
 
 /** The decimal number at `s` up to a character that is no digit, or -1
@@ -872,30 +907,19 @@ static int parent_of(struct input_sys *r)
     return 0;
 }
 
-/** The lowest N of inputN no device published has. */
-static int free_number(void)
-{
-    int n, i;
-
-    for (n = 0;; n++) {
-        for (i = 0; i < EVDEV_MAX && !(records[i].gen && records[i].number == n); i++) {
-        }
-        if (i == EVDEV_MAX) {
-            return n;
-        }
-    }
-}
-
-/** Take away the USB interface `r` made, sending its "remove". */
+/** Let go of the USB interface `r` is below; the last device to let go
+ * takes it away, sending its "remove". */
 static void drop_iface(struct input_sys *r)
 {
-    if (r->iface) {
-        sysfs_uevent(r->iface, "remove", NULL);
-        sysfs_remove(r->iface_link);
-        sysfs_remove(r->iface);
+    struct iface_sys *f = r->iface;
+
+    r->iface = NULL;
+    if (f && --f->users == 0) {
+        sysfs_uevent(f->dir, "remove", NULL);
+        sysfs_remove(f->link);
+        sysfs_remove(f->dir);
+        k_memset(f, 0, sizeof(*f));
     }
-    r->iface = 0;
-    r->iface_link = 0;
 }
 
 /**
@@ -1011,7 +1035,7 @@ static int publish(struct input_sys *r, int slot, const struct evdev_desc *d)
     k_memset(r, 0, sizeof(*r));
     r->slot = slot;
     r->d = *d;
-    r->number = free_number();
+    r->number = (int)next_number;
     parent = class_input < 0 ? class_input : parent_of(r);
     h = parent < 0 ? parent : make_input(r, parent);
     if (h >= 0) {
@@ -1035,6 +1059,7 @@ static int publish(struct input_sys *r, int slot, const struct evdev_desc *d)
         return h;
     }
     r->gen = d->gen;
+    next_number++;
     sysfs_uevent(r->input, "add", NULL);
     sysfs_uevent(r->event, "add", NULL);
     return 0;
