@@ -26,13 +26,13 @@
  * frame counter kept while the interrupt was off (78-9.4); the cursor's
  * registers and the backlight, taken over from the boot's driver, set and
  * switched, off with the pipe, its transcoder and the panel's power, and given
- * back at the end (78-9.5); the pipe CRC through crc/control and crc/data, its
- * first frame dropped, "auto" the primary plane on the eDP pipe and "pipe"
- * refused there (78-9.6); and a mode smaller than the panel's, set in Linux's
- * register order through the fitter with its aspect kept, then stretched by
- * "scaling mode", and the panel's own mode again, and a link that fails to
- * train, its status set bad for a hotplug event and good again with the next
- * mode set (78-10b).
+ * back at the end (78-9.5); the pipe CRC through crc/control and crc/data,
+ * the fitter forced through by a mode set while a source runs and let go after,
+ * "auto" the fitter's output and its first frame dropped (78-9.6); and a mode
+ * smaller than the panel's, set in Linux's register order through the fitter
+ * with its aspect kept, then stretched by "scaling mode", and the panel's own
+ * mode again, and a link that fails to train, its status set bad for a hotplug
+ * event and good again with the next mode set (78-10b).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
