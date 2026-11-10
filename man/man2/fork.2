@@ -268,6 +268,12 @@ is call 57,
 takes the child's tid address before the TLS argument, the order Linux
 x86-64 has, where i386 has the TLS argument first, and the TLS argument is
 the new thread's FS base.
+An i386 call on x86-64 instead supplies a
+.Vt user_desc ,
+as
+.Xr set_thread_area 2
+describes, and a selector that names its entry keeps the new descriptor's
+base when the child first runs.
 .Sh RETURN VALUES
 The parent receives the child's process ID; the child receives 0.
 On failure, the function returns -1 and sets
