@@ -122,7 +122,8 @@ static int32_t sw_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     dma_fence_init(&point->fence, &sw_ops, t->context, data.value);
     k_memcpy(point->timeline, t->name, sizeof(point->timeline));
     data.name[31] = 0;
-    fd = sync_file_copy_out(&point->fence, data.name, (void __user *)arg, &data, sizeof(data),
+    /* Linux ignores the caller's name and names the file from its fence. */
+    fd = sync_file_copy_out(&point->fence, NULL, (void __user *)arg, &data, sizeof(data),
                             &data.fence);
     if (fd < 0) {
         dma_fence_put(&point->fence);

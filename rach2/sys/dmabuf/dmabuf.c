@@ -252,7 +252,7 @@ static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     f = dma_resv_snapshot(b->resv, (data.flags & DMA_BUF_SYNC_WRITE) != 0);
     if (!f)
         return -ENOMEM;
-    rc = sync_file_copy_out(f, "dmabuf", (void __user *)arg, &data, sizeof(data), &data.fd);
+    rc = sync_file_copy_out(f, NULL, (void __user *)arg, &data, sizeof(data), &data.fd);
     dma_fence_put(f);
     return rc;
 }

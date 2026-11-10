@@ -116,6 +116,13 @@ With records asked for, the file's status is the first record's that is
 zero or negative, else one; without, it is the file's fence's own, which
 for a timeline point is one once every point up to it has signalled,
 whatever their errors.
+.Ar name
+is the name
+.Dv SYNC_IOC_MERGE
+gave the file, or for any other file, as Linux, its fence's driver and
+timeline names, context and number, as
+.Ql %s-%s%llu-%lld ,
+cut to 31 bytes.
 .It Dv SYNC_IOC_SET_DEADLINE
 Read a
 .Vt struct sync_set_deadline

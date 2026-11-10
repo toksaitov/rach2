@@ -1284,7 +1284,7 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     }
     eb_signal_fences(eb, rq);
     if (err == 0 && out_fd >= 0) {
-        err = sync_file_install(out_fd, &rq->fence.base, "i915");
+        err = sync_file_install(out_fd, &rq->fence.base, NULL);
         if (err == 0) {
             eb->args->rsvd2 = (eb->args->rsvd2 & 0xffffffffu) | ((uint64_t)(uint32_t)out_fd << 32);
         }
