@@ -477,7 +477,7 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
         snprintf(command, size,
                  "video " GRAPHICS_REF "/%s/video-%s/%s-%s.plays " GRAPHICS_DIR
                  "/out/%s-%s.plays " GRAPHICS_REF "/%s/video-%s/%s-%s.decoders " GRAPHICS_DIR
-                 "/out/%s-%s.decoders",
+                 "/out/%s-%s.decoders " GRAPHICS_DIR "/runners/video.limits",
                  s->profile, s->browser, s->browser, s->clip, s->browser, s->clip, s->profile,
                  s->browser, s->browser, s->clip, s->browser, s->clip);
         break;

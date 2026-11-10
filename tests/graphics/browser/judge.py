@@ -63,7 +63,8 @@ def main():
         name = browser + "-" + clip
         base = graphics / "ref/debian/virtio-vga" / ("video-" + browser)
         args = ["video", str(base / (name + ".plays")), str(got / (name + ".plays")),
-                str(base / (name + ".decoders")), str(got / (name + ".decoders"))]
+                str(base / (name + ".decoders")), str(got / (name + ".decoders")),
+                str(graphics / "runners/video.limits")]
     else:
         base = ref / (browser + "-" + mode)
         expected, actual = read(base / "result.json"), read(got / "result.json")
