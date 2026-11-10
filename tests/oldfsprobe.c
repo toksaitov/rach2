@@ -70,6 +70,16 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Zero the `n` bytes at `p`, a buffer the kernel fills. */
+static void clear(void *p, size_t n)
+{
+    char *d = p;
+
+    while (n--) {
+        *d++ = 0;
+    }
+}
+
 /** Copy `n` bytes from `src` to `dst`. */
 static void copy(void *dst, const void *src, size_t n)
 {
@@ -220,6 +230,7 @@ static void ustat_rows(void)
     struct ustat u;
     int i;
 
+    clear(st, sizeof(st));
     if (syscall2(SYS_STAT, (long)dir, (long)st) != 0 || probe_statfs(dir, fs) != 0) {
         fail("ustat-counts: stat or statfs of the tmpfs failed");
     }

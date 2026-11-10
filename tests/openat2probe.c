@@ -96,6 +96,16 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Zero the `n` bytes at `p`, a buffer the kernel fills. */
+static void clear(void *p, size_t n)
+{
+    char *d = p;
+
+    while (n--) {
+        *d++ = 0;
+    }
+}
+
 /** Copy `n` bytes from `src` to `dst`. */
 static void copy(void *dst, const void *src, size_t n)
 {
@@ -242,6 +252,7 @@ static unsigned long long ino_of(int fd)
     unsigned char st[KSTAT_SIZE];
     unsigned long long ino;
 
+    clear(st, sizeof(st));
     if (syscall2(SYS_FSTAT, fd, (long)st) != 0) {
         return 0;
     }
@@ -418,6 +429,7 @@ static void create_rows(int dfd, int afd)
 {
     unsigned char st[KSTAT_SIZE];
 
+    clear(st, sizeof(st));
     syscall2(SYS_STAT, (long)in_dir("a/f"), (long)st);
     want_open(o2(afd, ".", O_RDONLY | O_DIRECTORY, 0, RESOLVE_CACHED), 0, "cached: . did not open");
     want_open(o2(afd, "f", O_RDONLY, 0, RESOLVE_CACHED), 1,
