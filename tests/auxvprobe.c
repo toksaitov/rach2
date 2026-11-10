@@ -13,11 +13,19 @@
  * general register but the stack pointer is 0, since i386's crt1 registers
  * a nonzero EDX with atexit.
  *
+ * Two checks depend on the kernel, whose architecture ETUDE_KERNEL in the
+ * environment names, or the probe's own where it is unset: `sysinfo`, that
+ * the i686 kernel gives no AT_SYSINFO_EHDR, having no vDSO, while the x86-64
+ * kernel gives it page-aligned, and to an i386 program also AT_SYSINFO, the
+ * vDSO's __kernel_vsyscall, inside the vDSO's page, as Linux's 64-bit
+ * kernel does; and `machine`, that uname(2)'s machine is the kernel's
+ * architecture, x86_64 for an i386 program too.
+ *
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
  * assertion for each check, which `check` names: `registers-zero`,
  * `stack-aligned`, `argv`, `envp`, `auxv-end`, `pagesz`, `phdr`, `phent`,
- * `clktck`, `secure`, `entry`, `minsigstksz`, `random` and `random-page`,
- * each failed with its first failed check.
+ * `clktck`, `secure`, `entry`, `minsigstksz`, `sysinfo`, `machine`, `random`
+ * and `random-page`, each failed with its first failed check.
  */
 
 #include "probe.h"
@@ -28,25 +36,33 @@ typedef unsigned char u8;
 
 #define STDOUT 1
 
-#define AT_NULL        0
-#define AT_PHDR        3
-#define AT_PHENT       4
-#define AT_PHNUM       5
-#define AT_PAGESZ      6
-#define AT_ENTRY       9
-#define AT_CLKTCK      17
-#define AT_SECURE      23
-#define AT_RANDOM      25
-#define AT_MINSIGSTKSZ 51
+#define AT_NULL         0
+#define AT_PHDR         3
+#define AT_PHENT        4
+#define AT_PHNUM        5
+#define AT_PAGESZ       6
+#define AT_ENTRY        9
+#define AT_CLKTCK       17
+#define AT_SECURE       23
+#define AT_RANDOM       25
+#define AT_SYSINFO      32
+#define AT_SYSINFO_EHDR 33
+#define AT_MINSIGSTKSZ  51
+
+/* The bytes of a field of struct utsname, and its fields. */
+#define UTS_FIELD 65
+#define UTS_COUNT 6
 
 /* The size of a program header, which AT_PHENT reports: ELF32's on i386 and
  * ELF64's on x86-64. */
 #if defined __x86_64__
 #define PHENT_SIZE 56
 #define PHENT_TEXT "56"
+#define OWN_ARCH   "x86_64"
 #else
 #define PHENT_SIZE 32
 #define PHENT_TEXT "32"
+#define OWN_ARCH   "i686"
 #endif
 
 /** The write call: the count written, or a negated errno. */
@@ -60,6 +76,16 @@ static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
+}
+
+/** Say whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
 }
 
 /** The length of the string `s`. */
@@ -261,6 +287,74 @@ static void check_random(const u8 *random_ptr, const u8 *end)
     }
 }
 
+/** The kernel's architecture, as ETUDE_KERNEL in the environment `envp`
+ * names it, or the probe's own where it is unset. */
+static const char *env_kernel(char **envp)
+{
+    static const char name[] = "ETUDE_KERNEL=";
+    int i, n;
+
+    for (i = 0; envp[i] != 0; i++) {
+        for (n = 0; name[n] != '\0' && envp[i][n] == name[n]; n++) {
+        }
+        if (name[n] == '\0') {
+            return envp[i] + n;
+        }
+    }
+    return OWN_ARCH;
+}
+
+/** The value of the auxv entry of type `type` in `auxv`, which AT_NULL
+ * ends within 64 pairs, or 0 where it has none. */
+static unsigned long aux_find(const unsigned long *auxv, unsigned long type)
+{
+    int i;
+
+    for (i = 0; i < 128 && auxv[i] != AT_NULL; i += 2) {
+        if (auxv[i] == type) {
+            return auxv[i + 1];
+        }
+    }
+    return 0;
+}
+
+/**
+ * Check the vDSO's auxv entries, `ehdr` and `sysinfo` or 0 where absent,
+ * and uname's machine against `kernel`, the kernel's architecture, as the
+ * head comment says.
+ */
+static void check_kernel(const char *kernel, unsigned long ehdr, unsigned long sysinfo)
+{
+    char uts[UTS_FIELD * UTS_COUNT];
+    int x86_64 = same(kernel, "x86_64");
+
+    puts_("kernel=");
+    puts_(kernel);
+    puts_("\n");
+    if (!x86_64) {
+        check(ehdr == 0 && sysinfo == 0, "sysinfo",
+              "the i686 kernel gave AT_SYSINFO or AT_SYSINFO_EHDR, but it has no vDSO");
+    } else {
+        check(ehdr != 0 && (ehdr & 0xFFF) == 0, "sysinfo",
+              "the x86-64 kernel gave no page-aligned AT_SYSINFO_EHDR");
+#if defined __x86_64__
+        check(sysinfo == 0, "sysinfo", "an x86-64 program was given AT_SYSINFO");
+#else
+        check(sysinfo > ehdr && sysinfo < ehdr + 4096, "sysinfo",
+              "AT_SYSINFO is not inside the vDSO's page above AT_SYSINFO_EHDR");
+#endif
+    }
+    if (syscall1(SYS_UNAME, (long)uts) != 0) {
+        check(0, "machine", "uname failed");
+        return;
+    }
+    puts_("uname machine=");
+    puts_(uts + 4 * UTS_FIELD);
+    puts_("\n");
+    check(same(uts + 4 * UTS_FIELD, kernel), "machine",
+          "uname's machine is not the kernel's architecture");
+}
+
 /**
  * The probe, entered with `sp` at argc. It reads at most 64 auxv pairs.
  * AT_MINSIGSTKSZ must exceed 512 bytes: a signal frame has the
@@ -369,6 +463,7 @@ void probe_main(unsigned long *sp)
     check(saw_secure && secure == 0, "secure", "AT_SECURE missing or nonzero");
     check(entry != 0, "entry", "AT_ENTRY == 0");
     check(minsigstksz > 512, "minsigstksz", "AT_MINSIGSTKSZ missing or smaller than a frame");
+    check_kernel(env_kernel(envp), aux_find(auxv, AT_SYSINFO_EHDR), aux_find(auxv, AT_SYSINFO));
 
     check_random(random_ptr, auxv_end);
 
