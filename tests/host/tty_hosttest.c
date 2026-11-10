@@ -33,6 +33,19 @@
  * tick, the input that arrives then or the timer's wake, and the deadline the
  * reader must have armed in `wakeup_tick` by then. A slave reader whose
  * master closes returns 0, and so does each read after it.
+ *
+ * Output flow is Linux 6.12's: VSTOP from the master stops the slave's
+ * output, a slave writer waits until VSTART wakes it, its POLLOUT goes, and
+ * a master in packet mode reads TIOCPKT_STOP and TIOCPKT_START; the echo
+ * waits while output is stopped; TCOOFF holds against VSTART until TCOON,
+ * and TCIOFF and TCION write their characters; IXON with ^S and ^Q turned
+ * off and on gives TIOCPKT_NOSTOP and TIOCPKT_DOSTOP, and off restarts
+ * output; a signal character discards the slave's output and reports
+ * TIOCPKT_FLUSHREAD and TIOCPKT_FLUSHWRITE before its echo, and under NOFLSH
+ * discards nothing; a VSTOP behind a full slave acts at once and not again
+ * when fed; a master stopped by TCOOFF waits; and on the console a writer
+ * waits for a VSTART from COM1, a VSTOP behind a full console acts at once,
+ * and Hold and the Scroll Lock flag follow the stop.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -56,6 +69,9 @@ static int copy_calls, copy_failure, spans;
 /* The console's keyboard is in K_RAW, K_MEDIUMRAW or K_OFF
  * (`kd_translates`). */
 static int console_raw;
+/* The Scroll Lock flag the console last set (`kd_scroll_lock`), and the
+ * serial input `serial_rx_lookahead` has given. */
+static int scroll_lock, serial_looked;
 static void (*copy_action)(void);
 static const char *serial_bytes;
 static void (*scheduled_action)(void);
@@ -337,6 +353,31 @@ int serial_rx_find(const unsigned char *set, int n)
     (void)set;
     (void)n;
     return -1;
+}
+
+/** Give the serial bytes not given before, at most `max`, into `buf`. */
+int serial_rx_lookahead(unsigned char *buf, int max)
+{
+    int n = 0, at = serial_looked > serial_pos ? serial_looked : serial_pos;
+
+    CHECK(!irq_enabled, "the look ahead excludes input interrupts");
+    while (at < serial_len && n < max) {
+        buf[n++] = (unsigned char)serial_bytes[at++];
+    }
+    serial_looked = at;
+    return n;
+}
+
+/** Whether the next serial byte was given by the look ahead. */
+int serial_rx_looked(void)
+{
+    return serial_looked > serial_pos;
+}
+
+/** Record the Scroll Lock flag the console sets. */
+void kd_scroll_lock(int stopped)
+{
+    scroll_lock = stopped;
 }
 
 /** Drop `count` serial bytes. */
@@ -1042,6 +1083,250 @@ static void long_lines(void)
     CHECK(long_read(done), "the console's read returns 4095 bytes and the newline");
 }
 
+/** The packet status a master read gives alone: its byte, or -1 when the
+ * read gives data or nothing. */
+static int packet_status(void)
+{
+    char out[8];
+
+    return ptm_read(&master, out, sizeof(out)) == 1 ? (unsigned char)out[0] : -1;
+}
+
+/** With a slave writer waiting on stopped output, restart it from the
+ * master. */
+static void restart_action(void)
+{
+    CHECK(pair.slave.ldisc.stopped && pty_m_avail(&pair) == 0,
+          "the slave writer waits while output is stopped");
+    CHECK(ptm_write(&master, "\021", 1) == 1, "the master writes VSTART");
+}
+
+/**
+ * VSTOP from the master stops the slave's output: it reaches no reader, a
+ * master in packet mode reads TIOCPKT_STOP, POLLOUT goes, and a slave writer
+ * waits until VSTART wakes it, after which the master reads TIOCPKT_START
+ * and then the output.
+ */
+static void flow_slave(void)
+{
+    wait_queue_t *wq = NULL;
+    char out[8];
+
+    setup_pair();
+    pair.packet = 1;
+    CHECK(ptm_write(&master, "\023", 1) == 1 && pair.slave.ldisc.stopped,
+          "VSTOP from the master stops the slave's output");
+    CHECK(n_tty_inq(&pair.slave.ldisc) == 0, "VSTOP reaches no reader");
+    CHECK(packet_status() == TIOCPKT_STOP, "a packet master reads TIOCPKT_STOP");
+    CHECK(!(pts_poll(&slave, POLLOUT, &wq) & POLLOUT) && wq == &pair.slave.input_wq,
+          "stopped output takes POLLOUT from the slave");
+    scheduled_action = restart_action;
+    wake_detail = "VSTART wakes the slave writer";
+    CHECK(pts_write(&slave, "hi", 2) == 2 && switches == 1,
+          "the slave writer waits once and writes after VSTART");
+    CHECK(packet_status() == TIOCPKT_START, "a packet master reads TIOCPKT_START");
+    CHECK(ptm_read(&master, out, sizeof(out)) == 3 && out[0] == 0 && out[1] == 'h',
+          "the output follows the status");
+}
+
+/** The echo of input typed while output is stopped waits for VSTART. */
+static void flow_echo(void)
+{
+    char out[8];
+
+    setup_pair();
+    current_proc = &producer;
+    pair.slave.ldisc.tio.c_lflag |= ECHO;
+    CHECK(ptm_write(&master, "\023ab", 3) == 3 && pty_m_avail(&pair) == 0,
+          "the echo waits while output is stopped");
+    CHECK(ptm_write(&master, "\021", 1) == 1 && ptm_read(&master, out, sizeof(out)) == 2 &&
+              out[0] == 'a' && out[1] == 'b',
+          "VSTART gives out the echo held");
+    CHECK(n_tty_inq(&pair.slave.ldisc) == 2, "input typed while stopped is read");
+}
+
+/** TCOOFF holds against VSTART until TCOON; TCIOFF and TCION write their
+ * characters unless TCOOFF stopped output; another action is EINVAL. */
+static void flow_tcflow(void)
+{
+    char out[8];
+
+    setup_pair();
+    current_proc = &producer;
+    CHECK(tty_tcflow(&pair.slave, TTY_TCOOFF) == 0 && pair.slave.ldisc.stopped,
+          "TCOOFF stops output");
+    CHECK(ptm_write(&master, "\021", 1) == 1 && pair.slave.ldisc.stopped,
+          "VSTART does not end TCOOFF's stop");
+    CHECK(tty_tcflow(&pair.slave, TTY_TCIOFF) == 0 && pty_m_avail(&pair) == 0,
+          "TCIOFF writes nothing while TCOOFF holds");
+    CHECK(tty_tcflow(&pair.slave, TTY_TCOON) == 0 && !pair.slave.ldisc.stopped,
+          "TCOON restarts output");
+    CHECK(tty_tcflow(&pair.slave, TTY_TCIOFF) == 0 && tty_tcflow(&pair.slave, TTY_TCION) == 0 &&
+              ptm_read(&master, out, sizeof(out)) == 2 && out[0] == 023 && out[1] == 021,
+          "TCIOFF and TCION write VSTOP and VSTART");
+    CHECK(tty_tcflow(&pair.slave, 4) == -EINVAL, "TCXONC takes four actions");
+    CHECK(ptm_tcflow(&pair, TTY_TCOOFF) == 0 && !ptm_can_feed(&pair) &&
+              !(ptm_poll(&master, POLLOUT, NULL) & POLLOUT),
+          "TCOOFF on the master stops its writes");
+    CHECK(ptm_tcflow(&pair, TTY_TCIOFF) == 0 && !pair.slave.ldisc.stopped,
+          "the master's TCIOFF writes nothing while its TCOOFF holds");
+    CHECK(ptm_tcflow(&pair, TTY_TCOON) == 0 && ptm_tcflow(&pair, TTY_TCIOFF) == 0 &&
+              pair.slave.ldisc.stopped,
+          "the master's TCIOFF stops the slave's output through its IXON");
+}
+
+/** IXON with ^S and ^Q turned off and on gives a packet master
+ * TIOCPKT_NOSTOP and TIOCPKT_DOSTOP, and turned off restarts output. */
+static void flow_termios(void)
+{
+    struct ktermios tio;
+
+    setup_pair();
+    pair.packet = 1;
+    tio = pair.slave.ldisc.tio;
+    tio.c_iflag &= ~(unsigned int)IXON;
+    tty_set_termios(&pair.slave, &tio, 0);
+    CHECK(packet_status() == TIOCPKT_NOSTOP, "IXON off gives TIOCPKT_NOSTOP");
+    tio.c_iflag |= IXON;
+    tty_set_termios(&pair.slave, &tio, 0);
+    CHECK(packet_status() == TIOCPKT_DOSTOP, "IXON on gives TIOCPKT_DOSTOP");
+    tio.c_cc[VSTOP] = 023;
+    tty_set_termios(&pair.slave, &tio, 0);
+    CHECK(!pair.pktstatus, "an unchanged IXON gives no status");
+    CHECK(ptm_write(&master, "\023", 1) == 1 && packet_status() == TIOCPKT_STOP,
+          "VSTOP stops output");
+    tio.c_iflag &= ~(unsigned int)IXON;
+    tty_set_termios(&pair.slave, &tio, 0);
+    CHECK(!pair.slave.ldisc.stopped && packet_status() == (TIOCPKT_NOSTOP | TIOCPKT_START),
+          "IXON off restarts output stopped by VSTOP");
+}
+
+/** A signal character discards the slave's output and input and reports both
+ * flushes before its echo; under NOFLSH it discards nothing. */
+static void signal_flush(void)
+{
+    char out[8];
+
+    setup_pair();
+    current_proc = &producer;
+    pair.packet = 1;
+    pair.slave.ldisc.tio.c_lflag |= ISIG | ECHO;
+    CHECK(pts_write(&slave, "out", 3) == 3 && ptm_write(&master, "in\003", 3) == 3,
+          "the slave writes and the master types a line and VINTR");
+    CHECK(packet_status() == (TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE),
+          "VINTR reports both flushes");
+    CHECK(ptm_read(&master, out, sizeof(out)) == 3 && out[1] == '^' && out[2] == 'C',
+          "VINTR discards the output and the echo before it, then echoes");
+    CHECK(n_tty_inq(&pair.slave.ldisc) == 0, "VINTR discards the input");
+    pair.slave.ldisc.tio.c_lflag |= NOFLSH;
+    CHECK(pts_write(&slave, "out", 3) == 3 && ptm_write(&master, "in\003", 3) == 3,
+          "the same under NOFLSH");
+    CHECK(ptm_read(&master, out, sizeof(out)) == 8 && out[0] == 0 && out[1] == 'o' &&
+              out[4] == 'i' && out[6] == '^',
+          "under NOFLSH the output stays and VINTR is echoed in its turn");
+    CHECK(n_tty_inq(&pair.slave.ldisc) == 2, "under NOFLSH the input stays");
+}
+
+/** With a master writer waiting behind a full slave, check the look ahead
+ * stopped output, restart it, and make room. */
+static void lookahead_action(void)
+{
+    char byte;
+
+    CHECK(pair.slave.ldisc.stopped, "a VSTOP behind a full slave acts at once");
+    tty_input_char(&pair.slave, 021);
+    CHECK(pts_read(&slave, &byte, 1) == 1, "the slave reads a byte");
+}
+
+/** A VSTOP the master writes behind a full slave acts at once, and is fed
+ * later without acting again or reaching the reader. */
+static void flow_lookahead(void)
+{
+    int queued;
+
+    setup_pair();
+    fill_input();
+    queued = n_tty_inq(&pair.slave.ldisc);
+    scheduled_action = lookahead_action;
+    wake_detail = "a slave read wakes the master writer";
+    CHECK(ptm_write(&master, "\023", 1) == 1 && switches == 1, "the master write waits once");
+    CHECK(!pair.slave.ldisc.stopped, "the VSTOP fed after its look ahead does not act again");
+    CHECK(n_tty_inq(&pair.slave.ldisc) == queued - 1, "the VSTOP reaches no reader");
+}
+
+/** With a console writer waiting on stopped output, VSTART arrives at COM1
+ * and the tick services the port. */
+static void console_restart_action(void)
+{
+    CHECK(wq_active(&console_tty.input_wq), "the console writer waits on the queue");
+    serial_bytes = "\021";
+    serial_pos = serial_looked = 0;
+    serial_len = 1;
+    tty_console_poll();
+}
+
+/**
+ * On the console a VSTOP stops output and sets the Scroll Lock flag; a write
+ * then writes nothing, POLLOUT goes, a nonblocking wait is EAGAIN, and a
+ * blocking one ends when VSTART comes from COM1. A VSTOP behind a full
+ * console acts at once. Hold stops and restarts output.
+ */
+static void flow_console(void)
+{
+    static char flood[N_TTY_LINE_MAX + 2];
+    wait_queue_t *wq = NULL;
+    int i;
+
+    setup_pair();
+    tty_console_init();
+    serial_pos = serial_len = serial_looked = 0;
+    tty_input_char(&console_tty, 023);
+    CHECK(console_tty.ldisc.stopped && scroll_lock, "VSTOP stops the console and sets Scroll Lock");
+    CHECK(tty_write(&console_tty, (const unsigned char *)"x", 1) == 0,
+          "a write of stopped output writes nothing");
+    irq_enabled = 0;
+    CHECK(!(tty_poll(&console_tty, POLLOUT, &wq) & POLLOUT) && wq == &console_tty.input_wq,
+          "stopped output takes POLLOUT from the console");
+    irq_enabled = 1;
+    CHECK(tty_wait_output(&console_tty, 1, console_tty.vhangups) == -EAGAIN,
+          "a nonblocking writer gets EAGAIN");
+    scheduled_action = console_restart_action;
+    wake_detail = "COM1's VSTART wakes the console writer";
+    CHECK(tty_wait_output(&console_tty, 0, console_tty.vhangups) == 0 && switches == 1,
+          "the writer waits once, until VSTART");
+    CHECK(!console_tty.ldisc.stopped && !scroll_lock, "VSTART restarts it and clears Scroll Lock");
+    CHECK(tty_write(&console_tty, (const unsigned char *)"x", 1) == 1, "the write goes");
+    tty_console_hold();
+    CHECK(console_tty.ldisc.stopped && scroll_lock, "Hold stops output");
+    tty_console_hold();
+    CHECK(!console_tty.ldisc.stopped && !scroll_lock, "Hold again restarts it");
+
+    console_tty.ldisc.tio.c_lflag &= ~(ICANON | ECHO);
+    for (i = 0; i < N_TTY_LINE_MAX + 1; i++) {
+        flood[i] = 'x';
+    }
+    flood[N_TTY_LINE_MAX + 1] = 023;
+    serial_bytes = flood;
+    serial_pos = serial_looked = 0;
+    serial_len = (int)sizeof(flood);
+    irq_enabled = 0;
+    console_pump(&console_tty);
+    irq_enabled = 1;
+    CHECK(console_tty.ldisc.stopped && serial_pos == serial_len - 1,
+          "a VSTOP behind a full console acts at once and waits its turn");
+    while (n_tty_inq(&console_tty.ldisc) > 0) {
+        tty_read(&console_tty, (unsigned char *)bytes, sizeof(bytes), 1);
+    }
+    tty_tcflow(&console_tty, TTY_TCOOFF);
+    tty_tcflow(&console_tty, TTY_TCOON);
+    irq_enabled = 0;
+    console_pump(&console_tty);
+    irq_enabled = 1;
+    CHECK(!console_tty.ldisc.stopped && serial_pos == serial_len &&
+              n_tty_inq(&console_tty.ldisc) == 0,
+          "the VSTOP fed after its look ahead neither acts again nor is read");
+}
+
 int main(void)
 {
     read_wakes_poll();
@@ -1062,6 +1347,13 @@ int main(void)
     timed_reads();
     hangup_read();
     long_lines();
+    flow_slave();
+    flow_echo();
+    flow_tcflow();
+    flow_termios();
+    signal_flush();
+    flow_lookahead();
+    flow_console();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }
