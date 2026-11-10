@@ -131,13 +131,18 @@ all : $(KERNEL_BIN)
 # tools/inspect/elfcheck, built with the host compiler by the top-level
 # Makefile before each link, so a changed checker is rebuilt first.
 #
-# The kernel every loader reads has no debug sections. They are more than half
-# of the linked file, which with them would nearly fill the 4 MiB kernel slot
-# of a boot partition (tools/image/mkdisk_grub.sh). The linked file with them
-# is kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB.
-# Both keep the symbol table, which the checker's `_end` test and `nm` read.
+# The kernel every loader reads has no debug sections and no local symbols.
+# The debug sections are more than half of the linked file, and the x86-64
+# kernel with its local symbols, 4,331,496 bytes at milestone 80, no longer
+# fit the 4 MiB kernel slot of a boot partition (tools/image/mkdisk_grub.sh,
+# utils/bootctl.c); without them it is 3,965,976. The linked file with both
+# is kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB
+# and which `nm` reads for a static function's address. The kernel keeps its
+# global symbols, which the checker's `_end` test and `nm` read. A kernel
+# larger than the slot fails the link here, since no disk could take it.
 # The rule names this file among its inputs, so a change to how the kernel is
 # made makes it again.
+KERNEL_SLOT_BYTES = 4194304
 ELFCHECK = ../build/tools/inspect/elfcheck
 # The checker takes the profile from the file: an ELF32 kernel loaded where
 # its headers say, or the ELF64 x86-64 kernel loaded through the a.out
@@ -150,8 +155,11 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).l
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp" "$$tmp.debug"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@.debug ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) && \
-	$(CROSS_OBJCOPY) --strip-debug "$$tmp.debug" "$$tmp" && \
+	$(CROSS_OBJCOPY) --strip-debug --discard-all "$$tmp.debug" "$$tmp" && \
 	$(KERNEL_CHECK) "$$tmp" && \
+	size=$$(($$(wc -c < "$$tmp"))) && \
+	{ [ "$$size" -le $(KERNEL_SLOT_BYTES) ] || \
+	  { echo "rach2: kernel: $$size bytes do not fit the $(KERNEL_SLOT_BYTES)-byte kernel slot" >&2; exit 1; }; } && \
 	mv "$$tmp.debug" $@.debug && \
 	mv "$$tmp" $@
 
