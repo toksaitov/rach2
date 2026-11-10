@@ -5,7 +5,7 @@
  * protocol version behind it, with the event devices read as a program
  * reads them (evdev.c) and the mouse device's packets (mouse.c).
  *
- * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c
+ * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  *
@@ -14,7 +14,8 @@
  * synaptics_hosttest.c tests, is a stub that finds no Synaptics pad unless
  * a row says it answered, and the Elantech probe, which runs after ALPS's
  * and which elantech_hosttest.c tests, a stub that counts its calls and
- * finds no pad.
+ * finds no pad. The SMBIOS reader reads a table a row gives it, whose
+ * System Information names the machine.
  *
  * The model pad answers what Linux 6.12's alps.c sends, as
  * Documentation/input/devices/alps.rst describes the hardware: the E6, E7
@@ -141,13 +142,12 @@ static int n_took;
 static uint8_t stick_took[64];
 static int n_stick_took;
 
-/* What the Synaptics probe returns, the Elantech probe's calls, the
- * system's SMBIOS strings, and the warnings logged, the last of them, and
- * the interrupts' state. */
+/* What the Synaptics probe returns, the Elantech probe's calls, the SMBIOS
+ * table, and the warnings logged, the last of them, and the interrupts'
+ * state. */
 static int synaptics_answer;
 static int elantech_asked;
-static const char *sys_vendor = "";
-static const char *sys_product = "";
+static uint8_t smbios_table[96];
 static int warnings;
 static const char *last_warning;
 static const char *warning_log[16];
@@ -593,10 +593,39 @@ void elantech_byte(uint8_t data)
     (void)data;
 }
 
-/** The row's system, matched as Linux's DMI_MATCH matches. */
-int smbios_system_is(const char *manufacturer, const char *product_name)
+/** No table is mapped: the SMBIOS reader reads the row's from memory. */
+uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
-    return strstr(sys_vendor, manufacturer) != 0 && strstr(sys_product, product_name) != 0;
+    (void)phys;
+    (void)size;
+    return 0;
+}
+
+/** Give the SMBIOS reader a table whose System Information, type 1, names
+ * the manufacturer `maker` and the product `product`, or, when `maker` is
+ * NULL, a table of no structure but its end. */
+static void set_system(const char *maker, const char *product)
+{
+    static const uint8_t end[6] = {127, 4, 0, 0, 0, 0};
+    unsigned int n = 0, i;
+
+    if (maker) {
+        static const uint8_t header[8] = {1, 8, 0, 1, 1, 2, 0, 0};
+
+        k_memcpy(smbios_table, header, sizeof(header));
+        n = sizeof(header);
+        for (i = 0; maker[i]; i++) {
+            smbios_table[n++] = (uint8_t)maker[i];
+        }
+        smbios_table[n++] = 0;
+        for (i = 0; product[i]; i++) {
+            smbios_table[n++] = (uint8_t)product[i];
+        }
+        smbios_table[n++] = 0;
+        smbios_table[n++] = 0;
+    }
+    k_memcpy(smbios_table + n, end, sizeof(end));
+    smbios_set_table(smbios_table, n + (unsigned int)sizeof(end));
 }
 
 /** The console's blanking is not modelled. */
@@ -860,8 +889,7 @@ static void model_reset(int kind)
     n_took = 0;
     n_stick_took = 0;
     synaptics_answer = 0;
-    sys_vendor = "";
-    sys_product = "";
+    set_system(0, 0);
     warnings = 0;
     last_warning = 0;
     registered_handler = 0;
@@ -1718,8 +1746,7 @@ static void v2_packet_rows(void)
           reads(&n_stick, z127_ev, NEV(z127_ev)) && reads_nothing(&n_pad));
 
     alps_model(v2, ec, 0);
-    sys_vendor = "Dell Inc.";
-    sys_product = "Latitude D620";
+    set_system("Dell Inc.", "Latitude D620");
     bring_up();
     CHECK("a Latitude D620's pad has its stick buttons in bits of their own",
           (priv.flags & F_STICK_BITS) != 0);
@@ -1728,6 +1755,11 @@ static void v2_packet_rows(void)
     send(psl, 6);
     CHECK("and a press of the stick's left button is the pad's",
           reads(&n_pad, psl_ev, NEV(psl_ev)));
+
+    alps_model(v2, ec, 0);
+    set_system("Dell Inc.", "Latitude D600");
+    bring_up();
+    CHECK("a Latitude D600's has not", (priv.flags & F_STICK_BITS) == 0);
 }
 
 /** A DualPoint that cuts the stick's packets into the pad's: a packet of
