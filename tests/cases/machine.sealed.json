@@ -149,7 +149,8 @@
         {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "image", "reason": "the case writes the machine's disk between boots, destroys its root and replaces its boot loader, which only a copy of the disk under QEMU allows"}
+      "native": {"plan": "none", "class": "image", "reason": "the case writes the machine's disk between boots, destroys its root and replaces its boot loader, which only a copy of the disk under QEMU allows"},
+      "ia32": {"runs": false, "why": "its machine `sealed` boots GRUB's disk under SeaBIOS, which the profile leaves out, on the i686 emulator, whose processor has no long mode, so the x86-64 kernel the case installs there could not boot"}
     }
   ]
 }
