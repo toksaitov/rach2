@@ -41,6 +41,7 @@ musl/ndwatchmusl router advertisements sent on the card, eth0, and a second ndwa
 musl/procfilesmusl the os-real applets with a held host connection and a known image size
 watchdogprobe the q35 watchdog case requires QMP watchdog pause; the Lenovo expiry has its own trial boot in task 78-1b
 vgpuprobe QEMU virtio-vga-gl with a virgl renderer and a destructive reset of that virtual GPU
+vgshmprobe the test bed's VM serving virtio-gpu over a shared region under Rach2's KVM, which it then kills
 i915gemprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, which no installed machine has
 gpucompatprobe an i386 program's GPU requests on the x86-64 kernel, under QEMU virgl or the edu i915 fault backend
 i915execprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, which no installed machine has

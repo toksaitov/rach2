@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bed-shm",
+  "summary": "Rach2's virtio-gpu over the region it shares with the test bed's VM, on the x86-64 GNU root under the host-svm profile: ivshmemd's attach, a frame drawn through the VM with virgl and its pixels checked, the doorbells carried by KVM's ioeventfds and irqfds, and the VM's death with fences pending, as tests/kvm/bed-shm.sh runs them; the scenario is tests/cases/machine/bed_shm_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.bed-shm.virgl",
+      "behavior": "bed-shm.sh on the x86-64 GNU root attaches a region of 32 MiB to /dev/vgpu-shm with ivshmemd and has two more attaches refused, boots the test bed's VM under Rach2's KVM with the region on an ivshmem-doorbell of two vectors, draws the recorded display frame through virtio-gpu over the region with virgl in the VM and reads back llvmpipe's CRC, sees every doorbell carried by a KVM ioeventfd or irqfd, then stops the VM with four fenced submissions pending and kills it, and every fence and wait fails",
+      "units": [
+        "rach2/sys/virtio/shmem.c",
+        "rach2/sys/virtio/virtqueue.c",
+        "rach2/sys/drm/virtio_gpu.c",
+        "rach2/sys/kvm/iobus.c",
+        "rach2/sys/kvm/irq.c",
+        "bed/ivshmemd.c",
+        "bed/vm/image/vm.sh",
+        "tests/vgshmprobe.c",
+        "tests/kvm/bed-shm.sh",
+        "tests/cases/machine/bed_shm_scenario.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "bed-shm.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "bed_shm_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root in the guest, which opens /dev/kvm and /dev/vgpu-shm and mounts the data disk",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlays, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/bed-shm-run and copy there from the read-only data disk the runner and the probe"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run bed-shm.sh on the VM's disk, the third, as root, through the framed guest channel"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "bed-shm-payload",
+                "base": "bed-shm-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "bed-vm-disk",
+                "base": "bed-vm",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "host-svm",
+            "processors": 4,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "attach",
+          "checks": "bed-shm.sh prints bed-shm: attach: pass: ivshmemd attached the region of 33554432 bytes once and two more attaches were refused busy",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "draw",
+          "checks": "bed-shm.sh prints bed-shm: draw: pass: virtio-gpu bound over the region and vgshmprobe draw read back the frame with CRC 6e8e217c, llvmpipe's",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "doorbell",
+          "checks": "bed-shm.sh prints bed-shm: doorbell: pass: both sides took the doorbells, and across the draw kvm_ioeventfd_signals grew by at least the doorbells the VM rang and kvm_irqfd_raises by at least those Rach2 rang",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "death",
+          "checks": "bed-shm.sh prints bed-shm: death: pass: with the VM stopped and then killed, every one of vgshmprobe pending's four fences and its wait failed, and ivshmemd detached the region as lost",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 3600000000,
+            "ceiling_us": 7200000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "bed-shm-data",
+          "node": "tests/cases/bed-shm/bed-shm.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "bed-vm",
+          "node": "tests/cases/bed-shm/vm.disk",
+          "per_architecture": false
+        },
+        {
+          "name": "bed_shm_scenario",
+          "node": "tests/cases/machine/bed_shm_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case boots the GNU root in QEMU under the testing PC's nested KVM, whose own QEMU runs the test bed's VM under Rach2's KVM"
+      }
+    }
+  ]
+}

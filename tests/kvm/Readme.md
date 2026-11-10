@@ -16,6 +16,8 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 
 The accelerator outside is the run's, as for every case: on the testing PC KVM, so that Rach2 runs its guests under nested KVM, and on the Mac TCG, which emulates SVM; `RACH2_QEMU_ACCEL=tcg` runs the `max-svm` cases under TCG on the testing PC too. `host-svm` starts only under KVM.
 
+`tests/run bed-shm` runs the one case of [`machine.bed-shm.json`](../cases/machine.bed-shm.json), `virgl`, on the testing PC alone, under `host-svm`: an x86-64 Rach2 boots `gnu-test.disk` with `bed-shm.sh` and `vgshmprobe` on a data disk, `bed-shm.ext2`, and the test bed's VM, which `bed/vm/image/vm.sh rach2` makes ([bed/vm](../../bed/vm/Readme.md)), as its third disk, `vm.disk`.
+
 On a Rach2 with the GNU root, the runners run alone, as root:
 
     sh kvm-boot.sh -k guests/debian/vmlinuz -i guests/debian/initrd
@@ -23,6 +25,9 @@ On a Rach2 with the GNU root, the runners run alone, as root:
     sh kvm-boot.sh -a tcg -d /tmp/i686.img -t 'RACH2 OK'
     sh corpus.sh unit unit-tests.list
     sh corpus.sh selftests selftests.list
+    sh bed-shm.sh -d /dev/disk2 -p ./vgshmprobe
+
+[`bed-shm.sh`](bed-shm.sh) runs Rach2's virtio-gpu over the region it shares with the VM. ivshmemd attaches a region of 32 MiB to `/dev/vgpu-shm` and two more instances must be refused as busy (`attach`). QEMU boots the VM's disk under `-accel kvm` with the region on an `ivshmem-doorbell` of two vectors; once virtio-gpu has bound over the region, `vgshmprobe draw` draws the recorded display frame with virgl in the VM, reads it back and needs llvmpipe's CRC, 6e8e217c (`draw`). Across the draw both sides must have taken the doorbells, `/proc/stat`'s `kvm_ioeventfd_signals` must have grown by at least the doorbells the VM rang, and `kvm_irqfd_raises` by at least those Rach2 rang, so that no doorbell went through QEMU (`doorbell`). Then QEMU is stopped, `vgshmprobe pending 4` submits four fenced commands, and QEMU is killed: every fence and the wait must fail, and ivshmemd must report the detach for QEMU's closed connection (`death`). Each check prints `bed-shm: NAME: pass` or `fail` with its reason, and the last line is `bed-shm: result: pass` or `fail`; the VM's console, ivshmemd's output and the counts stay in the directory `-o` names, `/tmp/bed-shm` by default. A wait for the VM gives up when its console stays silent for 600 s or QEMU exits.
 
 [`kvm-boot.sh`](kvm-boot.sh) boots a kernel and initramfs, or a raw disk under SeaBIOS, with `-accel kvm,kernel-irqchip=on`, or `-accel tcg`, and the console on a serial port it reads once a second. It passes on the token, `KVMGUEST OK` by default, and fails when QEMU ends without it or the console stays silent for 600 s, a bound on silence that `-w` changes, not on the boot's length. `-I split` keeps the PIC, IOAPIC and PIT in QEMU; `-I off` also keeps the local APIC there. Its header lists the options. [`corpus.sh`](corpus.sh) runs each test that a list runs, kvm-unit-tests' through their own `run_tests.sh` with no timeout, and judges each result against the list; its last line is `kvm-corpus: result: pass` or `fail` with the names of the tests that gave another result.
 
@@ -60,7 +65,7 @@ The i686 Rach2 guest is the ordinary kernel with a 1 MiB KRFFS root. Its shipped
 
 ## Adding tests
 
-A guest of its own goes under `guests/` with its recipe, the token its console prints and a case in `machine.kvm.json` whose last part of the identity [`kvm_scenario.c`](../cases/machine/kvm_scenario.c) reads; its files join `KVM_FILES` or the data disk's rule in `tests/system/suites.mk`. A new revision of a corpus changes its list: each new test gets its row from Linux's result on the testing PC.
+A check of the shared region goes in `bed-shm.sh` as a line `bed-shm: NAME: pass` and an assertion NAME in `machine.bed-shm.json`, which [`bed_shm_scenario.c`](../cases/machine/bed_shm_scenario.c) reads by its list. A guest of its own goes under `guests/` with its recipe, the token its console prints and a case in `machine.kvm.json` whose last part of the identity [`kvm_scenario.c`](../cases/machine/kvm_scenario.c) reads; its files join `KVM_FILES` or the data disk's rule in `tests/system/suites.mk`. A new revision of a corpus changes its list: each new test gets its row from Linux's result on the testing PC.
 
 ## Limits
 
