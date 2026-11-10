@@ -12,11 +12,95 @@
 #include "klog.h"
 #include "pci.h"
 #include "kio.h"
+#include "lib/kerrno.h"
 #include "lib/kirq.h"
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
 #include "mm/kheap.h"
 #include "mm/paging.h"
+
+/*
+ * The owners of functions: the driver that has each, so that a function
+ * goes to one at a time. A driver of the kernel is recorded as it first
+ * turns on a function's decoding, bus mastering, line or messages through
+ * this file (`pci_claim_kernel`); VFIO records itself when a function is
+ * given to vfio-pci. A function with no record has no driver.
+ */
+#define PCI_OWNERS_MAX 64
+
+static struct pci_owner_rec {
+    uint16_t key; /* bus << 8 | device << 3 | function */
+    const char *owner;
+} pci_owners[PCI_OWNERS_MAX];
+
+/** Whether the owners' names `a` and `b` are the same text. */
+static int owner_same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The record of the function `key`, or NULL. */
+static struct pci_owner_rec *owner_find(uint16_t key)
+{
+    int i;
+
+    for (i = 0; i < PCI_OWNERS_MAX; i++) {
+        if (pci_owners[i].owner != NULL && pci_owners[i].key == key) {
+            return &pci_owners[i];
+        }
+    }
+    return NULL;
+}
+
+int pci_claim(uint8_t bus, uint8_t devfn, const char *owner)
+{
+    uint16_t key = (uint16_t)(bus << 8 | devfn);
+    struct pci_owner_rec *r = owner_find(key);
+    int i;
+
+    if (r != NULL) {
+        return owner_same(r->owner, owner) ? 0 : -EBUSY;
+    }
+    for (i = 0; i < PCI_OWNERS_MAX; i++) {
+        if (pci_owners[i].owner == NULL) {
+            pci_owners[i].key = key;
+            pci_owners[i].owner = owner;
+            return 0;
+        }
+    }
+    return -ENOSPC;
+}
+
+void pci_unclaim(uint8_t bus, uint8_t devfn, const char *owner)
+{
+    struct pci_owner_rec *r = owner_find((uint16_t)(bus << 8 | devfn));
+
+    if (r != NULL && owner_same(r->owner, owner)) {
+        r->owner = NULL;
+    }
+}
+
+const char *pci_owner(uint8_t bus, uint8_t devfn)
+{
+    struct pci_owner_rec *r = owner_find((uint16_t)(bus << 8 | devfn));
+
+    return r != NULL ? r->owner : NULL;
+}
+
+/** Record the kernel as `dev`'s owner, unless it has one; a function given
+ * to VFIO stays VFIO's, since VFIO enables its messages through here. */
+static void pci_claim_kernel(const pci_device_t *dev)
+{
+    uint8_t devfn = (uint8_t)(dev->device << 3 | dev->function);
+
+    if (pci_owner(dev->bus, devfn) == NULL) {
+        (void)pci_claim(dev->bus, devfn, PCI_OWNER_KERNEL);
+    }
+}
 
 /** The word is taken from its aligned dword, the half that bit 1 of the
  * offset selects. */
@@ -349,6 +433,7 @@ bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_dev
 void pci_enable_bus_master(pci_device_t *dev)
 {
     uint16_t cmd = pci_read_config16(dev->bus, dev->device, dev->function, PCI_COMMAND);
+    pci_claim_kernel(dev);
     cmd |= PCI_CMD_BUS_MASTER;
     pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, cmd);
 }
@@ -369,6 +454,7 @@ void pci_disable_bus_master(pci_device_t *dev)
 void pci_enable_memory_space(pci_device_t *dev)
 {
     uint16_t cmd = pci_read_config16(dev->bus, dev->device, dev->function, PCI_COMMAND);
+    pci_claim_kernel(dev);
     cmd |= PCI_CMD_MEMORY_SPACE;
     pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, cmd);
 }
@@ -377,6 +463,7 @@ void pci_enable_memory_space(pci_device_t *dev)
 void pci_enable_interrupts(pci_device_t *dev)
 {
     uint16_t cmd = pci_read_config16(dev->bus, dev->device, dev->function, PCI_COMMAND);
+    pci_claim_kernel(dev);
     cmd &= ~PCI_CMD_INTERRUPT_DIS;
     pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, cmd);
 }
@@ -549,11 +636,12 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
 /*
  * The messages enabled through this file, kept so that an interrupt
  * remapper that starts or stops later can rewrite each one: a device's MSI,
- * and entry 0 of its MSI-X table. Each holds the compatibility-format
- * message `pci_msi_message` made and the remapper's entry, if any; the
- * device has the remapped message while the entry is held.
+ * and each entry of its MSI-X table programmed here. Each holds the
+ * compatibility-format message `pci_msi_message` made and the remapper's
+ * entry, if any; the device has the remapped message while the entry is
+ * held.
  */
-#define MSI_RECORDS   64
+#define MSI_RECORDS   256
 #define MSI_KIND_MSI  1
 #define MSI_KIND_MSIX 2
 
@@ -561,6 +649,7 @@ static struct msi_record {
     pci_device_t dev;
     uint8_t kind;     /* 0 for a free record, MSI_KIND_MSI or MSI_KIND_MSIX */
     uint8_t cap;      /* the MSI capability's offset */
+    uint16_t index;   /* the MSI-X entry's index; 0 for MSI */
     uint16_t control; /* its control word, for the place of the data */
     uintptr_t entry;  /* the MSI-X table entry, mapped */
     uint32_t address; /* the compatibility-format message */
@@ -574,27 +663,34 @@ static struct msi_record {
 static const struct pci_msi_remap *msi_remap;
 static struct spinlock msi_lock = SPINLOCK_INIT;
 
-/** The record of `dev`'s message of `kind`, or NULL. */
-static struct msi_record *msi_record_find(const pci_device_t *dev, int kind)
+/** The record of `dev`'s message of `kind` at `index`, its MSI-X entry,
+ * or NULL. */
+static struct msi_record *msi_record_at(const pci_device_t *dev, int kind, unsigned int index)
 {
     int i;
 
     for (i = 0; i < MSI_RECORDS; i++) {
         struct msi_record *r = &msi_records[i];
 
-        if (r->kind == kind && r->dev.bus == dev->bus && r->dev.device == dev->device &&
-            r->dev.function == dev->function) {
+        if (r->kind == kind && r->index == index && r->dev.bus == dev->bus &&
+            r->dev.device == dev->device && r->dev.function == dev->function) {
             return r;
         }
     }
     return NULL;
 }
 
-/** The record of `dev`'s message of `kind`, a free one taken when it has
- * none: NULL when every record is taken. */
-static struct msi_record *msi_record_get(const pci_device_t *dev, int kind)
+/** The record of `dev`'s message of `kind`, entry 0 of an MSI-X table. */
+static struct msi_record *msi_record_find(const pci_device_t *dev, int kind)
 {
-    struct msi_record *r = msi_record_find(dev, kind);
+    return msi_record_at(dev, kind, 0);
+}
+
+/** The record of `dev`'s message of `kind` at `index`, a free one taken
+ * when it has none: NULL when every record is taken. */
+static struct msi_record *msi_record_get_at(const pci_device_t *dev, int kind, unsigned int index)
+{
+    struct msi_record *r = msi_record_at(dev, kind, index);
     int i;
 
     for (i = 0; r == NULL && i < MSI_RECORDS; i++) {
@@ -602,6 +698,7 @@ static struct msi_record *msi_record_get(const pci_device_t *dev, int kind)
             r = &msi_records[i];
             r->dev = *dev;
             r->kind = (uint8_t)kind;
+            r->index = (uint16_t)index;
             r->handle = -1;
         }
     }
@@ -610,6 +707,13 @@ static struct msi_record *msi_record_get(const pci_device_t *dev, int kind)
              dev->device, dev->function);
     }
     return r;
+}
+
+/** The record of `dev`'s message of `kind`, entry 0 of an MSI-X table, a
+ * free one taken when it has none. */
+static struct msi_record *msi_record_get(const pci_device_t *dev, int kind)
+{
+    return msi_record_get_at(dev, kind, 0);
 }
 
 /**
@@ -737,6 +841,7 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
              dev->function);
         return -1;
     }
+    pci_claim_kernel(dev);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
 
     last = (unsigned int)cap + ((control & PCI_MSI_64BIT) ? 12u : 8u) + 1u;
@@ -844,6 +949,7 @@ static int msix_hold_locked(const pci_device_t *dev)
     if (cap == 0) {
         return -1;
     }
+    pci_claim_kernel(dev);
     msi_disable_locked(dev);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
@@ -914,7 +1020,79 @@ int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
     return 0;
 }
 
-/** The function mask goes on before the entry is rewritten, so that the
+/**
+ * The entry is masked by its own vector control bit while its address and
+ * data are written, the address first, and unmasked after, so that the
+ * device never sends half a message; a remapping entry the entry held
+ * before is given back once the new message is written.
+ */
+int pci_msix_entry_set(const pci_device_t *dev, uintptr_t table, unsigned int index, uint8_t vector)
+{
+    uint8_t bar;
+    uint32_t offset, entries, address, data, flags;
+    uintptr_t entry = table + (uintptr_t)index * 16u;
+    struct msi_record *r;
+    int handle, old;
+
+    if (!table || pci_msix_table(dev, &bar, &offset, &entries) != 0 || index >= entries) {
+        return -1;
+    }
+    flags = spin_lock_irqsave(&msi_lock);
+    r = msi_record_get_at(dev, MSI_KIND_MSIX, index);
+    if (r == NULL) {
+        spin_unlock_irqrestore(&msi_lock, flags);
+        return -1;
+    }
+    old = r->handle;
+    if (msi_compose(r, vector, &address, &data, &handle) != 0) {
+        if (old < 0) {
+            r->kind = 0;
+        }
+        spin_unlock_irqrestore(&msi_lock, flags);
+        return -1;
+    }
+    r->entry = entry;
+    mmio_write32(entry + 12, mmio_read32(entry + 12) | 1u);
+    mmio_write32(entry, address);
+    mmio_write32(entry + 4, 0);
+    mmio_write32(entry + 8, data);
+    mmio_write32(entry + 12, mmio_read32(entry + 12) & ~1u);
+    r->handle = handle;
+    if (old >= 0) {
+        msi_remap->unmap(old);
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+    return 0;
+}
+
+/** The entry is masked before its message is written back in the
+ * compatibility format and its remapping entry given back. */
+void pci_msix_entry_clear(const pci_device_t *dev, unsigned int index)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    struct msi_record *r = msi_record_at(dev, MSI_KIND_MSIX, index);
+
+    if (r != NULL) {
+        mmio_write32(r->entry + 12, mmio_read32(r->entry + 12) | 1u);
+        msi_record_drop(r);
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+}
+
+void pci_msix_unmask(const pci_device_t *dev)
+{
+    uint8_t cap = pci_msix_capability(dev);
+    uint16_t control;
+
+    if (cap == 0) {
+        return;
+    }
+    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control & ~PCI_MSIX_MASK_ALL));
+}
+
+/** The function mask goes on before the entries are rewritten, so that the
  * device sends nothing between its last remapped message and the end. */
 void pci_msix_disable(const pci_device_t *dev)
 {
@@ -922,17 +1100,21 @@ void pci_msix_disable(const pci_device_t *dev)
     struct msi_record *r;
     uint16_t control;
     uint32_t flags;
+    int i;
 
     if (cap == 0) {
         return;
     }
     flags = spin_lock_irqsave(&msi_lock);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
-    r = msi_record_find(dev, MSI_KIND_MSIX);
-    if (r != NULL) {
-        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
-                           (uint16_t)(control | PCI_MSIX_MASK_ALL));
-        msi_record_drop(r);
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control | PCI_MSIX_MASK_ALL));
+    for (i = 0; i < MSI_RECORDS; i++) {
+        r = &msi_records[i];
+        if (r->kind == MSI_KIND_MSIX && r->dev.bus == dev->bus && r->dev.device == dev->device &&
+            r->dev.function == dev->function) {
+            msi_record_drop(r);
+        }
     }
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)((control | PCI_MSIX_MASK_ALL) & ~PCI_MSIX_ENABLE));
@@ -995,4 +1177,234 @@ void pci_msi_remap_stop(void)
     }
     msi_remap = NULL;
     spin_unlock_irqrestore(&msi_lock, flags);
+}
+
+/* The registers of the PCI Express capability the reset and the saved
+ * state use, by their offsets in it, and their bits. */
+#define PCIE_FLAGS          0x02
+#define PCIE_DEVCAP         0x04
+#define PCIE_DEVCAP_FLR     (1u << 28)
+#define PCIE_DEVCTL         0x08
+#define PCIE_DEVCTL_BCR_FLR 0x8000u
+#define PCIE_DEVSTA         0x0A
+#define PCIE_DEVSTA_TRPND   0x0020u
+#define PCIE_DEVCTL2        0x28
+#define PCIE_LNKCTL2        0x30
+
+/* The power management capability's control and status word, and the
+ * Advanced Features capability's registers. */
+#define PCI_PM_CTRL          0x04
+#define PCI_PM_STATE_MASK    0x0003u
+#define PCI_PM_NO_SOFT_RESET 0x0008u
+#define PCI_AF_CAP           0x03
+#define PCI_AF_CAP_TP        0x01u
+#define PCI_AF_CAP_FLR       0x02u
+#define PCI_AF_CTRL          0x04
+#define PCI_AF_STATUS        0x05
+
+/* Linux's bound on a function's return from a reset,
+ * PCIE_RESET_READY_POLL_MS. */
+#define PCI_READY_MS 60000u
+
+int pci_reset_method(const pci_device_t *dev)
+{
+    uint8_t pcie = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PCIE);
+    uint8_t af = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_AF);
+    uint8_t pm = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PM);
+    uint8_t afcap;
+
+    if (pcie != 0 && pcie <= 0xF0u &&
+        (pci_read_config32(dev->bus, dev->device, dev->function, (uint8_t)(pcie + PCIE_DEVCAP)) &
+         PCIE_DEVCAP_FLR) != 0) {
+        return PCI_RESET_FLR;
+    }
+    if (af != 0 && af <= 0xF8u) {
+        afcap = pci_read_config8(dev->bus, dev->device, dev->function, (uint8_t)(af + PCI_AF_CAP));
+        if ((afcap & (PCI_AF_CAP_TP | PCI_AF_CAP_FLR)) == (PCI_AF_CAP_TP | PCI_AF_CAP_FLR)) {
+            return PCI_RESET_AF_FLR;
+        }
+    }
+    if (pm != 0 && pm <= 0xF8u &&
+        (pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pm + PCI_PM_CTRL)) &
+         PCI_PM_NO_SOFT_RESET) == 0) {
+        return PCI_RESET_PM;
+    }
+    return PCI_RESET_NONE;
+}
+
+/** The PCI Express control registers the saved state keeps, by their
+ * offsets in the capability: device control, link control, device control 2
+ * and link control 2, the last two only in a capability of version 2. */
+static const uint8_t pcie_saved[4] = {PCIE_DEVCTL, PCIE_LINK_CONTROL, PCIE_DEVCTL2, PCIE_LNKCTL2};
+
+void pci_save_state(const pci_device_t *dev, struct pci_saved_state *st)
+{
+    uint8_t pcie = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PCIE);
+    int i, n;
+
+    for (i = 0; i < 16; i++) {
+        st->header[i] = pci_read_config32(dev->bus, dev->device, dev->function, (uint8_t)(i * 4));
+    }
+    st->pcie_cap = pcie <= 0xC8u ? pcie : 0;
+    n = 0;
+    if (st->pcie_cap != 0) {
+        n = (pci_read_config16(dev->bus, dev->device, dev->function,
+                               (uint8_t)(st->pcie_cap + PCIE_FLAGS)) &
+             0xFu) >= 2
+                ? 4
+                : 2;
+    }
+    st->pcie_count = (uint8_t)n;
+    for (i = 0; i < n; i++) {
+        st->pcie[i] = pci_read_config16(dev->bus, dev->device, dev->function,
+                                        (uint8_t)(st->pcie_cap + pcie_saved[i]));
+    }
+}
+
+/** The PCI Express registers first, then the header from its end down, as
+ * Linux's pci_restore_state, so that the BARs hold their addresses before
+ * the command word turns decoding on; the identity dword is read-only, and
+ * the command word is written alone, since the status word beside it
+ * clears the bits written as one. */
+void pci_restore_state(const pci_device_t *dev, const struct pci_saved_state *st)
+{
+    int i;
+
+    for (i = 0; i < st->pcie_count; i++) {
+        pci_write_config16(dev->bus, dev->device, dev->function,
+                           (uint8_t)(st->pcie_cap + pcie_saved[i]), st->pcie[i]);
+    }
+    for (i = 15; i >= 2; i--) {
+        if (pci_read_config32(dev->bus, dev->device, dev->function, (uint8_t)(i * 4)) !=
+            st->header[i]) {
+            pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(i * 4),
+                               st->header[i]);
+        }
+    }
+    pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, (uint16_t)st->header[1]);
+}
+
+/**
+ * Wait for the bit `mask` of the word at `where` to clear, as Linux's
+ * pci_wait_for_pending: read at once, then after 100, 200 and 400 ms. 1
+ * when it cleared, 0 when it did not.
+ */
+static int wait_for_pending(const pci_device_t *dev, uint8_t where, uint16_t mask,
+                            pci_sleep_t msleep)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (i > 0) {
+            msleep(100u << (i - 1));
+        }
+        if ((pci_read_config16(dev->bus, dev->device, dev->function, where) & mask) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Wait for `dev` to answer after a reset, as Linux's pci_dev_wait: its
+ * identity read until it is neither all ones, as from a function not yet
+ * back, nor vendor 0x0001, a request retried; the waits double from 1 ms,
+ * and stop past PCI_READY_MS. 0, or -ETIMEDOUT.
+ */
+static int wait_ready(const pci_device_t *dev, pci_sleep_t msleep)
+{
+    unsigned int delay = 1, waited = 0;
+    uint32_t id;
+
+    for (;;) {
+        id = pci_read_config32(dev->bus, dev->device, dev->function, PCI_VENDOR_ID);
+        if (id != 0xFFFFFFFFu && (id & 0xFFFFu) != 0x0001u) {
+            return 0;
+        }
+        if (waited > PCI_READY_MS) {
+            klog(KLOG_WARN, "pci", "reset: %x:%x.%d not ready after %u ms", dev->bus, dev->device,
+                 dev->function, waited);
+            return -ETIMEDOUT;
+        }
+        msleep(delay);
+        waited += delay;
+        delay *= 2;
+    }
+}
+
+/**
+ * The reset itself, by `method`, from Linux's pcie_flr, pci_af_flr and
+ * pci_pm_reset: a function-level reset waits for the transactions in
+ * flight and 100 ms after it is started; a reset through power management
+ * puts the function in D3hot for 10 ms and back in D0 for 10 ms.
+ */
+static void reset_by(const pci_device_t *dev, int method, pci_sleep_t msleep)
+{
+    uint8_t cap;
+    uint16_t v;
+
+    if (method == PCI_RESET_FLR) {
+        cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PCIE);
+        if (!wait_for_pending(dev, (uint8_t)(cap + PCIE_DEVSTA), PCIE_DEVSTA_TRPND, msleep)) {
+            klog(KLOG_WARN, "pci", "reset: %x:%x.%d: transactions pending, resetting anyway",
+                 dev->bus, dev->device, dev->function);
+        }
+        v = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + PCIE_DEVCTL));
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + PCIE_DEVCTL),
+                           (uint16_t)(v | PCIE_DEVCTL_BCR_FLR));
+        msleep(100);
+    } else if (method == PCI_RESET_AF_FLR) {
+        cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_AF);
+        /* The status byte's TP is bit 8 of the word at the control byte. */
+        if (!wait_for_pending(dev, (uint8_t)(cap + PCI_AF_CTRL), 0x0100u, msleep)) {
+            klog(KLOG_WARN, "pci", "reset: %x:%x.%d: transactions pending, resetting anyway",
+                 dev->bus, dev->device, dev->function);
+        }
+        pci_write_config8(dev->bus, dev->device, dev->function, (uint8_t)(cap + PCI_AF_CTRL), 1u);
+        msleep(100);
+    } else {
+        cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PM);
+        v = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + PCI_PM_CTRL));
+        v = (uint16_t)(v & ~PCI_PM_STATE_MASK);
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + PCI_PM_CTRL),
+                           (uint16_t)(v | 3u));
+        msleep(10);
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + PCI_PM_CTRL), v);
+        msleep(10);
+    }
+}
+
+/**
+ * As Linux's pci_reset_function: the state saved and the function quieted,
+ * every decoding, bus mastering and its line off; the reset; the wait for
+ * the function to answer; the state restored; and the identity read back,
+ * which must be the one saved.
+ */
+int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep)
+{
+    struct pci_saved_state st;
+    int method = pci_reset_method(dev);
+    int r;
+
+    if (method == PCI_RESET_NONE) {
+        return -ENOTTY;
+    }
+    pci_save_state(dev, &st);
+    pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, PCI_CMD_INTERRUPT_DIS);
+    reset_by(dev, method, msleep);
+    r = wait_ready(dev, msleep);
+    if (r != 0) {
+        return r;
+    }
+    pci_restore_state(dev, &st);
+    if (pci_read_config32(dev->bus, dev->device, dev->function, PCI_VENDOR_ID) != st.header[0]) {
+        klog(KLOG_WARN, "pci", "reset: %x:%x.%d came back as another device", dev->bus, dev->device,
+             dev->function);
+        return -EIO;
+    }
+    klog(KLOG_INFO, "pci", "reset: %x:%x.%d by %s", dev->bus, dev->device, dev->function,
+         method == PCI_RESET_FLR      ? "function-level reset"
+         : method == PCI_RESET_AF_FLR ? "advanced features function-level reset"
+                                      : "power management");
+    return 0;
 }
