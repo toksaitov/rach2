@@ -735,7 +735,7 @@ static void test_register(void)
 /** VERSION, GET_UNIQUE, GET_CLIENT, GET_STATS and SET_VERSION. */
 static void test_identity(void)
 {
-    fd_entry_t card, render;
+    fd_entry_t card, render, second;
     struct drm_version v;
     struct drm_unique u;
     struct drm_client c;
@@ -763,14 +763,10 @@ static void test_identity(void)
     v.name_len = 7;
     CHECK("VERSION to a bad buffer faults", ioc(&card, &user_a, DRM_IOCTL_VERSION, &v) == -EFAULT);
 
-    u.unique_len = 4;
-    u.unique = uniq;
-    CHECK("GET_UNIQUE short",
-          ioc(&card, &user_a, DRM_IOCTL_GET_UNIQUE, &u) == 0 && u.unique_len == 16);
     u.unique_len = sizeof(uniq);
-    k_memset(uniq, 0, sizeof(uniq));
-    CHECK("GET_UNIQUE whole", ioc(&card, &user_a, DRM_IOCTL_GET_UNIQUE, &u) == 0 &&
-                                  u.unique_len == 16 && strcmp(uniq, "pci:0000:00:02.0") == 0);
+    u.unique = uniq;
+    CHECK("GET_UNIQUE empty before SET_VERSION",
+          ioc(&card, &user_a, DRM_IOCTL_GET_UNIQUE, &u) == 0 && u.unique_len == 0);
     CHECK("GET_UNIQUE refused on the render node",
           ioc(&render, &user_a, DRM_IOCTL_GET_UNIQUE, &u) == -EACCES);
 
@@ -794,10 +790,22 @@ static void test_identity(void)
     sv.drm_di_minor = 5;
     CHECK("SET_VERSION past the interface",
           ioc(&card, &user_a, DRM_IOCTL_SET_VERSION, &sv) == -EINVAL && sv.drm_di_minor == 4);
+    u.unique_len = 4;
+    CHECK("GET_UNIQUE short after SET_VERSION",
+          ioc(&card, &user_a, DRM_IOCTL_GET_UNIQUE, &u) == 0 && u.unique_len == 16);
+    u.unique_len = sizeof(uniq);
+    k_memset(uniq, 0, sizeof(uniq));
+    CHECK("GET_UNIQUE whole", ioc(&card, &user_a, DRM_IOCTL_GET_UNIQUE, &u) == 0 &&
+                                  u.unique_len == 16 && strcmp(uniq, "pci:0000:00:02.0") == 0);
+    CHECK("open card0 again", open_node("dri/card0", &user_a, 0, &second) == 0);
+    u.unique_len = sizeof(uniq);
+    CHECK("GET_UNIQUE of a file opened under that master",
+          ioc(&second, &user_a, DRM_IOCTL_GET_UNIQUE, &u) == 0 && u.unique_len == 16);
+    close_node(&second);
 
     close_node(&render);
     close_node(&card);
-    CHECK("the driver saw both closes", postcloses == 2);
+    CHECK("the driver saw each close", postcloses == 3);
     CHECK("no master after the close", fake_dev.master == NULL && fake_dev.open_count == 0);
 }
 

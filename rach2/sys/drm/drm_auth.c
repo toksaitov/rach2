@@ -25,6 +25,7 @@ static void set_master(struct drm_device *dev, struct drm_file *file)
 static void new_set_master(struct drm_device *dev, struct drm_file *file)
 {
     file->master_id = ++dev->next_master_id;
+    file->set_busid = 0;
     file->is_master = 1;
     file->authenticated = 1;
     set_master(dev, file);
@@ -38,6 +39,7 @@ void drm_master_open(struct drm_file *file)
         new_set_master(dev, file);
     } else {
         file->master_id = dev->master->master_id;
+        file->set_busid = dev->master->set_busid;
     }
 }
 

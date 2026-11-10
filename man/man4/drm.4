@@ -35,6 +35,14 @@ device by what
 and
 .Dv DRM_IOCTL_GET_UNIQUE
 say of it, never by its number.
+.Dv DRM_IOCTL_GET_UNIQUE
+gives the bus name, such as
+.Ql pci:0000:00:02.0 ,
+only once the master has asked for interface 1.1 or later with
+.Dv DRM_IOCTL_SET_VERSION ,
+and is empty before, which is how libdrm's
+.Fn drmOpenByName
+tells a card it may open.
 .Pa /dev/dri
 is listed only while it has a node.
 .Pp

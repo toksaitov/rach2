@@ -553,7 +553,10 @@ void *drm_handle_remove(struct drm_handle **list, uint32_t id);
  * it take the role back without privilege while its process is the same.
  * GET_MAGIC gives a magic in the namespace of the file's master id, and
  * AUTH_MAGIC by the master spends it (`magic_spent`) as it authenticates
- * the file. A render node's file has no master id, 0.
+ * the file. SET_VERSION 1.1 or later by the master gives its record the
+ * bus name, Linux's master->unique, which `set_busid` marks on each file
+ * of the record; GET_UNIQUE answers it, or nothing before. A render
+ * node's file has no master id, 0.
  */
 struct drm_file {
     struct drm_device *dev;
@@ -566,7 +569,7 @@ struct drm_file {
     uint32_t master_id;
     int is_master;
     int was_master;
-    int set_busid; /* SET_VERSION 1.1 or later named its master's bus */
+    int set_busid; /* its master record has the bus name: SET_VERSION 1.1 or later */
     int universal_planes, atomic, aspect_ratio, writeback_connectors, stereo_allowed,
         supports_virtualized_cursor_plane;
     struct drm_handle *objects;  /* buffer object handles */
