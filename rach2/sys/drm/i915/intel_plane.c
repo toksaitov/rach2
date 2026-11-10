@@ -160,7 +160,8 @@ static int32_t check_async(struct drm_atomic_state *state, struct drm_plane *pla
  * and a YUV source must start and end on a pair of pixels. A plane is
  * visible only on a CRTC that is on. 0, -EINVAL or -ERANGE.
  */
-static int32_t plane_check(struct drm_plane *plane, struct drm_atomic_state *state, int primary)
+static int32_t intel_plane_check(struct drm_plane *plane, struct drm_atomic_state *state,
+                                 int primary)
 {
     struct drm_plane_state *ps = state->planes_new[plane->index];
     const struct drm_crtc_state *cs;
@@ -251,10 +252,10 @@ static uint32_t primary_format(uint32_t format)
     }
 }
 
-/** The primary plane's check (`plane_check`). */
+/** The primary plane's check (`intel_plane_check`). */
 static int32_t primary_check(struct drm_plane *plane, struct drm_atomic_state *state)
 {
-    return plane_check(plane, state, 1);
+    return intel_plane_check(plane, state, 1);
 }
 
 /**
@@ -340,10 +341,10 @@ static uint32_t sprite_format(uint32_t format)
     }
 }
 
-/** The sprite's check (`plane_check`). */
+/** The sprite's check (`intel_plane_check`). */
 static int32_t sprite_check(struct drm_plane *plane, struct drm_atomic_state *state)
 {
-    return plane_check(plane, state, 0);
+    return intel_plane_check(plane, state, 0);
 }
 
 /**

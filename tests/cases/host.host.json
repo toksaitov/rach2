@@ -561,6 +561,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_display",
+          "checks": "tests/host/i915_display_hosttest.c reads out and adopts the firmware's picture on pipe A of the HD 4400's host model without writing the display, takes the console's buffer over with a fastset and refuses another mode, checks the planes' formats, strides, tiling and offsets, sends a flip's event at the vblank that shows it and an async flip's at flip done, counts the vblanks of the frame counter while the interrupt was off, drives the cursor and the backlight, and reads the pipe CRC through crc/data, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_power",
           "checks": "tests/host/i915_power_hosttest.c enables the Intel graphics driver's RC6 and frequency control on the HD 4400's host model, RC6 entered at idle with its residency read in milliseconds across the counter's wrap, the pcode mailbox bounded, every frequency request within the limits under the up and down interrupts, and the card's /sys files under Linux's names, under ASan and UBSan and exits 0",
           "source": "scenario"
