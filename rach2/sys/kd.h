@@ -155,10 +155,12 @@ void kd_raw_code(uint8_t code);
 
 /**
  * Whether the console translates keys into characters: the keyboard is in
- * K_XLATE or K_UNICODE. In K_RAW, K_MEDIUMRAW and K_OFF the translator, the
- * lock keys, the console's own keys, such as its scrollback and the debug
- * shell's Ctrl+C, and COM1's input are all off, and the console's input
- * holds only what `kd_raw_code` and `kd_key_event` give it. Any context.
+ * K_XLATE or K_UNICODE, or `kd_hold` keeps one of them for the console while
+ * a DRM master holds the screen. In K_RAW, K_MEDIUMRAW and K_OFF the
+ * translator, the lock keys, the console's own keys, such as its scrollback
+ * and the debug shell's Ctrl+C, and COM1's input are all off, and the
+ * console's input holds only what `kd_raw_code` and `kd_key_event` give it;
+ * a hold turns the keys off and leaves COM1's input on. Any context.
  */
 int kd_translates(void);
 
@@ -224,7 +226,9 @@ void kd_state_restore(const struct kd_state *st);
 /**
  * Give the keyboard up while a DRM master holds the screen
  * (sys/drm/drm_client.c): save its mode and set K_OFF, so that no key
- * reaches the console's input. Until `kd_unhold`, KDGKBMODE and
+ * reaches the console's input. COM1's input goes on reaching it, as a serial
+ * console's does on Linux, and neither the hold nor `kd_unhold` discards the
+ * input unread. Until `kd_unhold`, KDGKBMODE and
  * `kd_state_save` read the saved mode, and KDSKBMODE and `kd_state_restore`
  * set it in place of the live one, which stays K_OFF. A second hold does
  * nothing. Process context.
@@ -232,7 +236,8 @@ void kd_state_restore(const struct kd_state *st);
 void kd_hold(void);
 
 /** Put the mode `kd_hold` saved, or set since, in force again, as KDSKBMODE
- * does; nothing while the keyboard is not held. Process context. */
+ * does but keeping the console's unread input; nothing while the keyboard is
+ * not held. Process context. */
 void kd_unhold(void);
 
 #endif
