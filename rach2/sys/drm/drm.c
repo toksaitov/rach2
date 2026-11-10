@@ -536,12 +536,12 @@ void drm_event_cancel_free(struct drm_pending_event *e)
     kfree(e);
 }
 
-/** Whether a reader of `arg`, a file, has an event or its device is gone. */
+/** Whether a reader of `arg`, a file, has an event. */
 static int events_readable(void *arg)
 {
     struct drm_file *file = (struct drm_file *)arg;
 
-    return file->events != NULL || file->dev->unplugged;
+    return file->events != NULL;
 }
 
 /**
@@ -601,10 +601,11 @@ static void event_put_back(struct drm_file *file, struct drm_pending_event *ev)
 /**
  * read of a node: the queued events that fit in `count` bytes, whole, as
  * Linux's drm_read; 0 when the first does not fit. Blocks for one unless
- * O_NONBLOCK, which answers EAGAIN. With none queued, ENODEV once the
- * device is unplugged; EINTR for a signal, EFAULT for a bad buffer before
- * any event was read. Each event leaves the queue before its copy, which
- * may sleep, so that another reader cannot free it meanwhile.
+ * O_NONBLOCK, which answers EAGAIN; EINTR for a signal, EFAULT for a bad
+ * buffer before any event was read. Each event leaves the queue before its
+ * copy, which may sleep, so that another reader cannot free it meanwhile.
+ * An unplugged device changes nothing here, as on Linux: a compositor that
+ * polls the node keeps its loop, and learns of the loss from its ioctls.
  */
 static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -619,9 +620,6 @@ static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
             return (int32_t)done;
         }
         if (got == 0) {
-            if (file->dev->unplugged) {
-                return -ENODEV;
-            }
             if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
                 return -EAGAIN;
             }
@@ -639,16 +637,13 @@ static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     }
 }
 
-/** poll of a node: POLLIN while an event is queued, POLLERR | POLLHUP once
- * the device is unplugged. */
+/** poll of a node: POLLIN while an event is queued and nothing else, of an
+ * unplugged device too, as Linux's drm_poll. */
 static short drm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct drm_file *file = (struct drm_file *)e->priv;
 
     *wq = &file->event_wait;
-    if (file->dev->unplugged) {
-        return POLLERR | POLLHUP;
-    }
     return (short)(events & (file->events ? POLLIN : 0));
 }
 
