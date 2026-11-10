@@ -12,13 +12,27 @@
 # vendor/gnu/debian/venus.list, whose i386 package gives Mesa 26.1.6's i386
 # Venus driver, installed as setup.sh.in installs the amd64 one: under a path
 # of its own, with an ICD, venus_icd.i686.json, that names it. Mesa 25.0.7's
-# Venus ICD, which both architectures share, is diverted already.
+# Venus ICD, which both architectures share, is diverted already. apt's
+# output goes to /var/tmp/d3d-i386-apt.log, and to standard error only when
+# apt fails: once, after an install that succeeded, apt repeated one warning
+# 453,439 times, past the 64 MiB the run's output may have.
 set -eu
+
+log=/var/tmp/d3d-i386-apt.log
 
 die()
 {
     echo "d3d-i386: $*" >&2
     exit 1
+}
+
+# aptq ARG...: run apt-get quietly into the log, showing its end on failure.
+aptq()
+{
+    apt-get -q "$@" >> "$log" 2>&1 || {
+        tail -n 40 "$log" >&2
+        die "apt-get $1 failed; its output is in $log"
+    }
 }
 
 work=
@@ -30,15 +44,18 @@ trap 'exit 143' TERM
 [ $# -eq 2 ] || die "usage: i386.sh I386-LIST VENUS-LIST"
 list=$1 venus=$2
 export DEBIAN_FRONTEND=noninteractive
+: > "$log"
+echo "d3d-i386: $(apt-get --version | head -n 1)"
 dpkg --add-architecture i386
-apt-get -q update
+aptq update
 packages=$(sed 's/#.*//' "$list" | awk 'NF && $1 !~ /^(vulkan-tools|mesa-utils-bin)(=|$)/ {
     n = index($1, "=")
     print n ? substr($1, 1, n - 1) ":i386" substr($1, n) : $1 ":i386"
 }')
 [ -n "$packages" ] || die "$list names no package"
 # shellcheck disable=SC2086 # the list is words
-apt-get -q -y install $packages
+aptq install -y $packages
+echo "d3d-i386: apt: $(grep -c . "$log") lines, $(grep -c '^W: ' "$log") warnings"
 
 # shellcheck disable=SC2046 # the line is NAME VERSION URL SHA-256
 set -- $(awk '$1 == "mesa-vulkan-drivers-i386"' "$venus")
@@ -52,5 +69,5 @@ icd=/usr/share/vulkan/icd.d/venus_icd.i686.json
 install -D -m 755 "$work/data/usr/lib/i386-linux-gnu/libvulkan_virtio.so" "$lib"
 sed "s|\"libvulkan_virtio.so\"|\"$lib\"|" "$work/data/usr/share/vulkan/icd.d/virtio_icd.json" > "$icd"
 grep -q "\"$lib\"" "$icd" || die "$icd does not name $lib"
-apt-get -q -y clean
+aptq clean -y
 echo "d3d-i386: result: $(echo "$packages" | wc -l) i386 packages and Venus $2 installed"
