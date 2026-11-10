@@ -1448,7 +1448,7 @@ static void entry_fields(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
 
-    if (v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+    if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
         x->proc_want &= ~PROC_INTR_WINDOW;
         if (v->run->request_interrupt_window &&
             (x->inj_info || !(v->regs.rflags & RFLAGS_IF) || v->events.interrupt.shadow)) {
@@ -1768,7 +1768,7 @@ static int set_cr4(struct kvm_vcpu *v, uint64_t cr4)
 /** CR8 of `v`: the in-kernel APIC's TPR, or the record's without one. */
 static uint64_t get_cr8(struct kvm_vcpu *v)
 {
-    return v->vm->irqchip == KVM_IRQCHIP_SPLIT ? kvm_lapic_cr8(v) : v->sregs.cr8;
+    return v->vm->irqchip != KVM_IRQCHIP_NONE ? kvm_lapic_cr8(v) : v->sregs.cr8;
 }
 
 /** A control register's access (exit 28), whose qualification names the
@@ -1797,7 +1797,7 @@ static int exit_cr(struct kvm_vcpu *v)
                 r = -1;
                 break;
             }
-            if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
                 kvm_lapic_set_cr8(v, val);
             } else {
                 v->sregs.cr8 = val;
@@ -2398,7 +2398,7 @@ static void vmx_inject(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
     uint32_t info = 0, len = x->inj_len;
-    int split = v->vm->irqchip == KVM_IRQCHIP_SPLIT;
+    int split = v->vm->irqchip != KVM_IRQCHIP_NONE;
     /* No new NMI or interrupt while the caller's KVM_GUESTDBG_BLOCKIRQ
      * holds them, as Linux's kvm_check_and_inject_events. */
     int block = debugging(v, KVM_GUESTDBG_BLOCKIRQ);

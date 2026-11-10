@@ -590,6 +590,13 @@ void kvm_irq_free(struct kvm_vm *vm)
     (void)vm;
 }
 
+/** Legacy I/O is not part of this model. */
+int kvm_irq_io(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
 int32_t kvm_iobus_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
     (void)vm;

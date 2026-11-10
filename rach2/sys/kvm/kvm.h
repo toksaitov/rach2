@@ -216,14 +216,18 @@ struct kvm_vm {
     void *slots;           /* slots.c's */
     void *tdp;             /* tdp.c's */
     void *irq;             /* irq.c's */
+    void *pic;             /* i8259.c's, with the full irqchip */
+    void *ioapic;          /* ioapic.c's, with the full irqchip */
+    void *pit;             /* i8254.c's, after KVM_CREATE_PIT or PIT2 */
     void *iobus;           /* iobus.c's */
     void *vfio;            /* vfio.c's bridge; holds a VM reference */
     void *hv;              /* hyperv.c's */
     void *backend;         /* the backend's */
 };
 
-#define KVM_IRQCHIP_NONE  0
-#define KVM_IRQCHIP_SPLIT 1
+#define KVM_IRQCHIP_NONE   0
+#define KVM_IRQCHIP_SPLIT  1
+#define KVM_IRQCHIP_KERNEL 2
 
 /* How the vCPU stands, for a kick from another processor. */
 #define KVM_MODE_OUTSIDE  0 /* in the kernel, or in the caller */
@@ -603,6 +607,91 @@ int kvm_irq_eoi_exits(struct kvm_vm *vm, uint32_t vector);
 /** Free irq.c's share of `vm`, its irqfds among them. */
 void kvm_irq_free(struct kvm_vm *vm);
 
+/* Independent sources ORed at each pin, as Linux's irq_source_id bitmap. */
+#define KVM_IRQ_SRC_USER     1u
+#define KVM_IRQ_SRC_RESAMPLE 2u
+#define KVM_IRQ_SRC_PIT      4u
+
+/** Set a routed GSI's source level under the big lock; -1 or deliveries.
+ * `status` asks the IOAPIC to count an RTC pulse waiting for its EOI. */
+int kvm_irq_set(struct kvm_vm *vm, uint32_t gsi, uint32_t source, uint32_t level, int status);
+
+/** Notify a controller pin's acknowledgement or mask change under the
+ * big lock, for PIT reinjection and irqfd resampling. */
+void kvm_irq_ack(struct kvm_vm *vm, uint32_t chip, uint32_t pin);
+void kvm_irq_mask(struct kvm_vm *vm, uint32_t chip, uint32_t pin, int masked);
+
+/** Resample a pin: lower its resampling source and signal its resamplefds.
+ * Returns 1 when there is a resampler, else 0; under the big lock. */
+int kvm_irq_resample(struct kvm_vm *vm, uint32_t chip, uint32_t pin);
+
+/** Process irqfds deferred from interrupt context under the big lock. */
+void kvm_irq_process(struct kvm_vm *vm);
+
+/** Whether an irqfd awaits processing; safe in a halted wait condition. */
+int kvm_irq_pending(struct kvm_vm *vm);
+
+/** Handle a PIC/PIT port or IOAPIC MMIO exit, completing reads through
+ * the backend: 1 when handled, 0 for a caller-owned address. */
+int kvm_irq_io(struct kvm_vcpu *v);
+
+/** Make or free the PIC pair; create returns 0 or -ENOMEM. */
+int kvm_pic_create(struct kvm_vm *vm);
+void kvm_pic_free(struct kvm_vm *vm);
+
+/** Set a PIC pin's source under the big lock: -1 masked, 0 coalesced,
+ * 1 accepted. The pin is 0 to 15 and source is KVM_IRQ_SRC_*. */
+int kvm_pic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level);
+
+/** The PIC's next vector without acknowledgement, or -1 with no output. */
+int kvm_pic_pending(struct kvm_vm *vm);
+
+/** Acknowledge the PIC, including the cascade; returns its vector. */
+int kvm_pic_ack(struct kvm_vm *vm);
+
+/** Save or restore one PIC, chip 0 or 1; restore recomputes its output. */
+void kvm_pic_state(struct kvm_vm *vm, uint32_t chip, struct kvm_pic_state *state, int set);
+
+/** Read or write a PIC port: 1 handled, 0 not its port. */
+int kvm_pic_io(struct kvm_vm *vm, uint32_t port, uint32_t size, uint32_t *value, int write);
+
+/** Make or free the IOAPIC; create returns 0 or -ENOMEM. */
+int kvm_ioapic_create(struct kvm_vm *vm);
+void kvm_ioapic_free(struct kvm_vm *vm);
+
+/** Set an IOAPIC pin's source: -1 masked, 0 coalesced, else deliveries.
+ * The pin is below KVM_IOAPIC_NUM_PINS; under the big lock. */
+int kvm_ioapic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level, int status);
+
+/** An APIC's EOI broadcast, with the vector's TMR and directed-EOI bit. */
+void kvm_ioapic_eoi(struct kvm_vcpu *v, uint32_t vector, int level, int directed);
+
+/** Restore the RTC EOI count after a vCPU's local APIC is restored. */
+void kvm_ioapic_restore(struct kvm_vcpu *v);
+
+/** Save or restore the IOAPIC, reinjecting restored pending lines. */
+void kvm_ioapic_state(struct kvm_vm *vm, struct kvm_ioapic_state *state, int set);
+
+/** Read or write IOAPIC MMIO: 1 handled, 0 not its address. */
+int kvm_ioapic_io(struct kvm_vm *vm, uint64_t addr, uint32_t size, uint64_t *value, int write);
+
+/** The PIT creation, state and reinjection ioctls: 0 or -errno. */
+int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
+
+/** Read or write a PIT or dummy speaker port: 1 handled, 0 not its port. */
+int kvm_pit_io(struct kvm_vm *vm, uint32_t port, uint32_t size, uint32_t *value, int write);
+
+/** Inject due PIT ticks under the big lock, retaining unacknowledged ones. */
+void kvm_pit_check(struct kvm_vm *vm);
+
+/** The PIT's next host deadline in ns, or 0 while stopped. */
+uint64_t kvm_pit_next(struct kvm_vm *vm);
+
+/** Acknowledge a PIT tick, reset its queue on unmask, or free the PIT. */
+void kvm_pit_ack(struct kvm_vm *vm);
+void kvm_pit_unmask(struct kvm_vm *vm);
+void kvm_pit_free(struct kvm_vm *vm);
+
 /* iobus.c: the in-kernel bus and ioeventfd. */
 
 /** KVM_IOEVENTFD. */
@@ -683,6 +772,26 @@ void kvm_lapic_free(struct kvm_vcpu *v);
  * wakes.
  */
 int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *irq);
+
+/** Deliver as above and, when non-NULL, fill `destinations` with the vCPU
+ * indices that accepted it, for the IOAPIC's RTC acknowledgement count. */
+int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
+                              const struct kvm_lapic_irq *irq, uint64_t *destinations);
+
+/** Whether a local APIC matches a physical or logical destination. */
+int kvm_lapic_match_dest(struct kvm_vcpu *v, uint32_t id, int logical);
+
+/** Whether a vector remains in the local APIC's IRR or ISR. */
+int kvm_lapic_pending_eoi(struct kvm_vcpu *v, uint32_t vector);
+
+/** Request event processing and wake the APIC's wait; interrupt safe. */
+void kvm_lapic_wake(struct kvm_vcpu *v);
+
+/** Wake the first vCPU that accepts PIC interrupts, under the big lock. */
+void kvm_lapic_pic_wake(struct kvm_vm *vm);
+
+/** Deliver the PIT's virtual-wire NMI to unmasked LINT0s in NMI mode. */
+void kvm_lapic_pit_nmi(struct kvm_vm *vm);
 
 /** The vector `v` takes at its next interrupt boundary: the external
  * vector KVM_INTERRUPT gave while LINT0 takes ExtINT, else the highest one

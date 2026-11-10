@@ -4,13 +4,16 @@
 # serial console, and fail it when QEMU ends without the token or the
 # console stays silent too long.
 #
-# Usage: kvm-boot.sh [-a ACCEL] [-c CPU] [-m MIB] [-s CPUS] [-t TOKEN]
-#                    [-w SECONDS] [-o LOG] (-k KERNEL [-i INITRD] [-l ARGS] |
-#                    -d DISK) [-- QEMU-ARGUMENT...]
+# Usage: kvm-boot.sh [-a ACCEL] [-I IRQCHIP] [-c CPU] [-m MIB] [-s CPUS]
+#                   [-t TOKEN] [-w SECONDS] [-o LOG]
+#                   (-k KERNEL [-i INITRD] [-l ARGS] | -d DISK)
+#                   [-- QEMU-ARGUMENT...]
 #
 # ACCEL is `kvm`, the default, which runs the guest under Rach2's KVM with
-# QEMU's split interrupt controller, the one Rach2's KVM has, or `tcg`, QEMU's
-# emulator. CPU is QEMU's processor model with its features, `host` under KVM
+# the in-kernel interrupt controller, or `tcg`, QEMU's emulator. IRQCHIP is
+# `on` by default; `split` keeps the PIC, IOAPIC and PIT in QEMU, and `off`
+# keeps the local APIC there too. IRQCHIP applies only under KVM. CPU is
+# QEMU's processor model with its features, `host` under KVM
 # and `max` under TCG by default; MIB the guest's memory, 256 by default;
 # CPUS its processors, 1 by default. The guest is KERNEL with INITRD, booted
 # with `console=ttyS0 panic=-1` and ARGS on its command line, or the raw
@@ -30,17 +33,18 @@
 # `kvm-boot: result: fail: REASON`, and exits 0 on a pass, 1 on a failure and
 # 2 on a usage error.
 
-accel=kvm cpu='' mib=256 cpus=1 token='KVMGUEST OK' silence=600 log=kvm-boot.log
+accel=kvm irqchip=on cpu='' mib=256 cpus=1 token='KVMGUEST OK' silence=600 log=kvm-boot.log
 kernel='' initrd='' args='' disk=''
 usage()
 {
-    echo "usage: kvm-boot.sh [-a ACCEL] [-c CPU] [-m MIB] [-s CPUS] [-t TOKEN] [-w SECONDS]" >&2
+    echo "usage: kvm-boot.sh [-a ACCEL] [-I IRQCHIP] [-c CPU] [-m MIB] [-s CPUS] [-t TOKEN] [-w SECONDS]" >&2
     echo "                   [-o LOG] (-k KERNEL [-i INITRD] [-l ARGS] | -d DISK) [-- ARG...]" >&2
     exit 2
 }
-while getopts a:c:m:s:t:w:o:k:i:l:d: o; do
+while getopts a:I:c:m:s:t:w:o:k:i:l:d: o; do
     case $o in
         a) accel=$OPTARG ;;
+        I) irqchip=$OPTARG ;;
         c) cpu=$OPTARG ;;
         m) mib=$OPTARG ;;
         s) cpus=$OPTARG ;;
@@ -61,9 +65,13 @@ fi
 case $silence in
     '' | *[!0-9]*) usage ;;
 esac
+case $irqchip in
+    on | split | off) ;;
+    *) usage ;;
+esac
 case $accel in
     kvm)
-        accel_option=kvm,kernel-irqchip=split
+        accel_option=kvm,kernel-irqchip=$irqchip
         cpu=${cpu:-host}
         ;;
     tcg)

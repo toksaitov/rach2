@@ -515,6 +515,15 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case KVM_ENABLE_CAP:
         return vm_enable_cap(vm, arg);
     case KVM_CREATE_IRQCHIP:
+    case KVM_GET_IRQCHIP:
+    case KVM_SET_IRQCHIP:
+    case KVM_CREATE_PIT:
+    case KVM_CREATE_PIT2:
+    case KVM_GET_PIT:
+    case KVM_SET_PIT:
+    case KVM_GET_PIT2:
+    case KVM_SET_PIT2:
+    case KVM_REINJECT_CONTROL:
     case KVM_IRQ_LINE:
     case KVM_IRQ_LINE_STATUS:
     case KVM_SET_GSI_ROUTING:

@@ -13,6 +13,9 @@ KVM_C_SRC = sys/kvm/kvm.c \
     sys/kvm/vmx.c \
     sys/kvm/vlapic.c \
     sys/kvm/irq.c \
+    sys/kvm/i8259.c \
+    sys/kvm/ioapic.c \
+    sys/kvm/i8254.c \
     sys/kvm/iobus.c \
     sys/kvm/slots.c \
     sys/kvm/tdp.c \

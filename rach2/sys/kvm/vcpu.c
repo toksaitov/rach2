@@ -429,7 +429,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->pio = (uint8_t *)v->run + KVM_PIO_PAGE_OFFSET * 4096u;
     v->xsave = (uint8_t *)(((uintptr_t)v->xsave_mem + 63u) & ~(uintptr_t)63u);
     vcpu_reset(v);
-    if (vm->irqchip == KVM_IRQCHIP_SPLIT) {
+    if (vm->irqchip != KVM_IRQCHIP_NONE) {
         r = kvm_lapic_create(v);
         if (r != 0) {
             goto fail;
@@ -513,7 +513,7 @@ static void run_post(struct kvm_vcpu *v)
 
     run->if_flag = (uint8_t)(v->if_flag != 0);
     run->apic_base = v->sregs.apic_base;
-    if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
         run->cr8 = kvm_lapic_cr8(v);
         run->ready_for_interrupt_injection = (uint8_t)kvm_lapic_ready(v);
     } else {
@@ -559,7 +559,7 @@ static int32_t run_exit(struct kvm_vcpu *v)
     case KVM_X_AGAIN:
         return 0;
     case KVM_X_IO:
-        if (ex->io.direction == KVM_EXIT_IO_OUT && kvm_iobus_write(v)) {
+        if (kvm_irq_io(v) || (ex->io.direction == KVM_EXIT_IO_OUT && kvm_iobus_write(v))) {
             return 0;
         }
         run->exit_reason = KVM_EXIT_IO;
@@ -576,7 +576,7 @@ static int32_t run_exit(struct kvm_vcpu *v)
         }
         return 1;
     case KVM_X_MMIO:
-        if (kvm_lapic_mmio(v) || (ex->mmio.is_write && kvm_iobus_write(v))) {
+        if (kvm_lapic_mmio(v) || kvm_irq_io(v) || (ex->mmio.is_write && kvm_iobus_write(v))) {
             return 0;
         }
         run->exit_reason = KVM_EXIT_MMIO;
@@ -598,7 +598,7 @@ static int32_t run_exit(struct kvm_vcpu *v)
         run->exit_reason = KVM_EXIT_SHUTDOWN;
         return 1;
     case KVM_X_IRQ_WINDOW:
-        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
             /* The window the APIC's interrupt waited for; the loop gives
              * it to the caller too when the caller asked. */
             req_set(v, KVM_REQ_EVENT);
@@ -684,7 +684,7 @@ static int32_t run_enter(struct kvm_vcpu *v)
 static int32_t run_loop(struct kvm_vcpu *v)
 {
     struct kvm_run *run = v->run;
-    int split = v->vm->irqchip == KVM_IRQCHIP_SPLIT;
+    int in_kernel = v->vm->irqchip != KVM_IRQCHIP_NONE;
     int32_t r;
 
     if (v->vm->irqchip == KVM_IRQCHIP_NONE && run->cr8 != v->sregs.cr8) {
@@ -714,7 +714,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r != 0) {
             return 0;
         }
-        if (split) {
+        if (in_kernel) {
             r = kvm_lapic_prepare(v);
             if (r != 0) {
                 return r > 0 ? 0 : r;
@@ -741,7 +741,8 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r != 0) {
             return r > 0 ? 0 : r;
         }
-        if (split && run->request_interrupt_window && kvm_lapic_ready(v)) {
+        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT && run->request_interrupt_window &&
+            kvm_lapic_ready(v)) {
             run->exit_reason = KVM_EXIT_IRQ_WINDOW_OPEN;
             return 0;
         }
@@ -869,7 +870,7 @@ static int32_t get_sregs(struct kvm_vcpu *v, uintptr_t arg)
 
     vcpu_save(v, KVM_PART_SREGS | KVM_PART_EVENTS);
     s = v->sregs;
-    if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
         s.cr8 = kvm_lapic_cr8(v);
     }
     k_memset(s.interrupt_bitmap, 0, sizeof(s.interrupt_bitmap));
@@ -894,7 +895,7 @@ static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
     if (!sregs_valid(v, &s)) {
         return -EINVAL;
     }
-    if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
         kvm_lapic_set_base(v, s.apic_base, 1);
         kvm_lapic_set_cr8(v, s.cr8);
     }
@@ -1582,13 +1583,13 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return get_cpuid(v, arg);
     case KVM_GET_MP_STATE:
         vcpu_save(v, KVM_PART_MP);
-        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
             return kvm_lapic_ioctl(v, request, arg);
         }
         mp.mp_state = v->mp_state;
         return copy_to_user((void __user *)arg, &mp, sizeof(mp)) ? -EFAULT : 0;
     case KVM_SET_MP_STATE:
-        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+        if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
             return kvm_lapic_ioctl(v, request, arg);
         }
         return set_mp_state(v, arg);
