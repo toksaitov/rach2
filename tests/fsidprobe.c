@@ -15,6 +15,10 @@
  *   user id, Linux's CAP_FS_SET, and kept the rest.
  * * restore: setfsuid(0) brings them back, the file opens again, and the
  *   status lines end in 0.
+ * * setres-keeps: with both file-system ids set apart, setresuid and
+ *   setresgid that change no id return 0 and leave them, the dumpable flag
+ *   and the parent-death signal as they were; one that names the effective
+ *   id makes the file-system id the effective one again.
  * * setuid-resets: setuid(0) and setgid(0) make the file-system ids the
  *   effective ones again, though the effective ids do not change.
  * * cleanup: the files and the directory are removed.
@@ -38,6 +42,17 @@
 #define O_EXCL   0200
 #define R_OK     4
 #define EACCES   13
+
+#if defined __x86_64__
+#define SYS_PRCTL 157
+#else
+#define SYS_PRCTL 172
+#endif
+#define PR_SET_PDEATHSIG 1
+#define PR_GET_PDEATHSIG 2
+#define PR_GET_DUMPABLE  3
+#define PR_SET_DUMPABLE  4
+#define SIGUSR1          10
 
 /* Linux's CAP_FS_SET: CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER, FSETID,
  * LINUX_IMMUTABLE, MKNOD and MAC_OVERRIDE. */
@@ -292,6 +307,44 @@ static void query_row(unsigned long id)
 #endif
 }
 
+/**
+ * The setres-keeps row: with both file-system ids at `id`, setresuid and
+ * setresgid that change no id return 0 early, as Linux 6.12's do, and leave
+ * the file-system ids, the dumpable flag and the parent-death signal; then
+ * a call that names the effective id 0 makes each file-system id 0 again.
+ * The row ends with both file-system ids 0 and no parent-death signal.
+ */
+static void setres_row(unsigned long id)
+{
+    int sig = 0;
+
+    syscall1(SYS_SETFSUID, (long)id);
+    syscall1(SYS_SETFSGID, (long)id);
+    want(syscall2(SYS_PRCTL, PR_SET_DUMPABLE, 1), 0, "setres-keeps: PR_SET_DUMPABLE failed");
+    want(syscall2(SYS_PRCTL, PR_SET_PDEATHSIG, SIGUSR1), 0,
+         "setres-keeps: PR_SET_PDEATHSIG failed");
+    want(syscall3(SYS_SETRESUID, -1, -1, -1), 0, "setres-keeps: setresuid(-1, -1, -1) failed");
+    want(syscall3(SYS_SETRESUID, 0, -1, 0), 0, "setres-keeps: setresuid(0, -1, 0) failed");
+    want(syscall3(SYS_SETRESGID, -1, -1, -1), 0, "setres-keeps: setresgid(-1, -1, -1) failed");
+    want(syscall3(SYS_SETRESGID, 0, -1, 0), 0, "setres-keeps: setresgid(0, -1, 0) failed");
+    want(syscall1(SYS_SETFSUID, -1), (long)id,
+         "setres-keeps: a setresuid that changed nothing reset the file-system user id");
+    want(syscall1(SYS_SETFSGID, -1), (long)id,
+         "setres-keeps: a setresgid that changed nothing reset the file-system group id");
+    want(syscall2(SYS_PRCTL, PR_GET_DUMPABLE, 0), 1,
+         "setres-keeps: a call that changed nothing cleared the dumpable flag");
+    want(syscall2(SYS_PRCTL, PR_GET_PDEATHSIG, (long)&sig), 0,
+         "setres-keeps: PR_GET_PDEATHSIG failed");
+    want(sig, SIGUSR1, "setres-keeps: a call that changed nothing cleared the parent-death signal");
+    want(syscall3(SYS_SETRESUID, -1, 0, -1), 0, "setres-keeps: setresuid(-1, 0, -1) failed");
+    want(syscall1(SYS_SETFSUID, -1), 0,
+         "setres-keeps: setresuid(-1, 0, -1) left the file-system user id");
+    want(syscall3(SYS_SETRESGID, -1, 0, -1), 0, "setres-keeps: setresgid(-1, 0, -1) failed");
+    want(syscall1(SYS_SETFSGID, -1), 0,
+         "setres-keeps: setresgid(-1, 0, -1) left the file-system group id");
+    syscall2(SYS_PRCTL, PR_SET_PDEATHSIG, 0);
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -301,9 +354,9 @@ PROBE_SP_ENTRY;
  */
 void probe_main(unsigned long *sp)
 {
-    static const char *const plan[] = {"query",       "create-owner",  "open-denied",
-                                       "access-real", "status-ids",    "capeff",
-                                       "restore",     "setuid-resets", "cleanup"};
+    static const char *const plan[] = {
+        "query",  "create-owner", "open-denied",  "access-real",   "status-ids",
+        "capeff", "restore",      "setres-keeps", "setuid-resets", "cleanup"};
     unsigned long id, uid, gid;
     unsigned long long caps;
     long fd;
@@ -362,6 +415,9 @@ void probe_main(unsigned long *sp)
     if (!status_has_fsid(0)) {
         fail("restore: the Uid and Gid lines do not end in 0");
     }
+    report_held();
+
+    setres_row(id);
     report_held();
 
     syscall1(SYS_SETFSUID, (long)id);

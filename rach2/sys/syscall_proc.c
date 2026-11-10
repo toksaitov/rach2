@@ -6203,9 +6203,11 @@ long sys_setregid(isr_params_t *params)
 /**
  * setresuid takes a real, an effective and a saved user ID, -1 keeping any of
  * them. A caller that is not privileged (`id_privileged`) may set each only to
- * one of its current three. Ids that leave root empty the ambient set
- * (`ambient_uid_moved`). -EINVAL for an ID the namespace does not map,
- * -EPERM.
+ * one of its current three. A call that would change no id, the file-system
+ * one included, returns 0 at once, as Linux's does, and so leaves an id that
+ * setfsuid set apart, the dumpable flag and the parent-death signal. Ids that
+ * leave root empty the ambient set (`ambient_uid_moved`). -EINVAL for an ID
+ * the namespace does not map, -EPERM.
  */
 long sys_setresuid(isr_params_t *params)
 {
@@ -6224,6 +6226,11 @@ long sys_setresuid(isr_params_t *params)
     r = v[0];
     e = v[1];
     s = v[2];
+    if ((r == SC_ID_KEEP || r == p->ruid) &&
+        (e == SC_ID_KEEP || (e == p->euid && e == proc_fsuid(p))) &&
+        (s == SC_ID_KEEP || s == p->suid)) {
+        return 0;
+    }
     if (!id_privileged()) {
         int i;
 
@@ -6248,7 +6255,8 @@ long sys_setresuid(isr_params_t *params)
     return 0;
 }
 
-/** setresgid: setresuid's rule over the group IDs. */
+/** setresgid: setresuid's rule over the group IDs, with its early return
+ * for a call that would change no group id. */
 long sys_setresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -6265,6 +6273,11 @@ long sys_setresgid(isr_params_t *params)
     r = v[0];
     e = v[1];
     s = v[2];
+    if ((r == SC_ID_KEEP || r == p->rgid) &&
+        (e == SC_ID_KEEP || (e == p->egid && e == proc_fsgid(p))) &&
+        (s == SC_ID_KEEP || s == p->sgid)) {
+        return 0;
+    }
     if (!id_privileged()) {
         int i;
 
