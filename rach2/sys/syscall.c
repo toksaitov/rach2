@@ -1113,7 +1113,8 @@ long sys_clock_getres(isr_params_t *params)
  * End a sleep a signal cut short before its deadline, the tick `target`: the
  * process runs again, the kernel counts the sleep, and `urem`, when there is
  * one, gets the time left to that tick, less how far into the tick in
- * progress the timer is (`rtc_tick_phase`).
+ * progress the timer is (`rtc_tick_phase`). Returns -EINTR, or -EFAULT
+ * when `urem` cannot be written, as Linux answers.
  */
 static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint64_t target)
 {
@@ -1134,7 +1135,9 @@ static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint64
             ns += 1000000000;
         }
         rem.tv_nsec = ns > 0 ? ns : 0;
-        (void)copy_to_user(urem, &rem, sizeof(rem));
+        if (copy_to_user(urem, &rem, sizeof(rem)) != 0) {
+            return -EFAULT;
+        }
     }
     return -EINTR;
 }
@@ -1152,7 +1155,8 @@ static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint64
  * Once the deadline tick has come the sleep is over, and the call returns 0
  * whether or not a signal is pending. A signal the process acts on, found
  * pending before then, ends the sleep through `nanosleep_interrupted`, which
- * writes `urem` when it is not NULL and returns -EINTR; a wake by one it does
+ * writes `urem` when it is not NULL and returns -EINTR, or -EFAULT when the
+ * write fails; a wake by one it does
  * not act on sends it back to sleep with the deadline stored again.
  */
 static int32_t sleep_until(uint64_t target, struct kernel_timespec __user *urem)
@@ -1268,7 +1272,9 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
  * A signal's remainder, written to `urem`, is the time left to the deadline
  * tick, so a caller that sleeps again for the remainder ends at the first
  * sleep's deadline, and later by the time it takes to call again; once that
- * tick has come, it is the time left until the clock reaches the end.
+ * tick has come, it is the time left until the clock reaches the end. A
+ * remainder that cannot be written makes the call -EFAULT, and a sleep that
+ * completes writes none.
  */
 static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timespec __user *urem)
 {
@@ -1310,7 +1316,9 @@ static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timesp
             rem.tv_sec = 0;
             rem.tv_nsec = 0;
         }
-        (void)copy_to_user(urem, &rem, sizeof(rem));
+        if (copy_to_user(urem, &rem, sizeof(rem)) != 0) {
+            return -EFAULT;
+        }
     }
     return rc;
 }
@@ -1321,7 +1329,8 @@ static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timesp
  * Its arguments are const struct timespec* req and struct timespec* rem
  * (optional). Sleeps to the first tick at or after the interval's end through
  * `sleep_for`, which has the rules of the deadline, the signals and the
- * remainder. rem is written as zero on normal completion.
+ * remainder: rem is written only when a signal cuts the sleep short, as
+ * Linux writes it, and a rem that cannot be written is then -EFAULT.
  */
 long sys_nanosleep(isr_params_t *params)
 {
@@ -1329,7 +1338,6 @@ long sys_nanosleep(isr_params_t *params)
         (const struct kernel_timespec __user *)SC_ARG(params, 0);
     struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec req;
-    int32_t rc;
 
     if (!current_proc || !ureq) {
         return -EFAULT;
@@ -1340,20 +1348,7 @@ long sys_nanosleep(isr_params_t *params)
     if (!timespec_valid(&req)) {
         return -EINVAL;
     }
-    rc = sleep_for(&req, urem);
-    if (rc != 0) {
-        return rc;
-    }
-
-    if (urem) {
-        struct kernel_timespec zero;
-        zero.tv_sec = 0;
-        zero.tv_nsec = 0;
-        if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {
-            return -EFAULT;
-        }
-    }
-    return 0;
+    return sleep_for(&req, urem);
 }
 
 /**
@@ -1366,7 +1361,7 @@ long sys_nanosleep(isr_params_t *params)
  * clock with no other thread does not advance while it sleeps, and neither
  * does a reaped process's, so the wait for either ends only at a signal. A
  * relative sleep's remainder is the ticks still due at the last reading.
- * Returns 0, or -EINTR.
+ * Returns 0, -EINTR, or -EFAULT when the remainder cannot be written.
  */
 static int32_t sleep_until_cpu(int32_t clk, uint64_t due, struct kernel_timespec __user *urem)
 {
@@ -1394,7 +1389,9 @@ static int32_t sleep_until_cpu(int32_t clk, uint64_t due, struct kernel_timespec
 
                 rem.tv_sec = (long)tick_div(due - now, TICK_HZ, &rest);
                 rem.tv_nsec = (long)(rest * TICK_NS);
-                (void)copy_to_user(urem, &rem, sizeof(rem));
+                if (copy_to_user(urem, &rem, sizeof(rem)) != 0) {
+                    return -EFAULT;
+                }
             }
             return rc;
         }

@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 10, 2026
 .Dt NANOSLEEP 2
 .Os
 .Sh NAME
@@ -135,12 +135,14 @@ The kernel limits the seconds field to 2^40, about 34800 years, keeps the
 nanoseconds and rounds the interval up to whole ticks; a sleep so cut ends
 at its tick without the clock's check.
 .Pp
-The raw
-.Fn nanosleep
-call writes a zero remainder on normal completion.
-If interrupted, it attempts to write the remainder but returns
-.Er EINTR
-even if that copy fails.
+The raw calls write the remainder only when a signal ends the sleep, as
+Linux's do; a sleep that reaches its deadline leaves
+.Fa rem
+as it was.
+A remainder that cannot be written then makes the call fail with
+.Er EFAULT
+in place of
+.Er EINTR .
 .Pp
 musl converts its public timespec to the kernel's 32-bit structure; a
 .Fa tv_sec
@@ -208,9 +210,7 @@ The kernel handlers return:
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EFAULT
 The request is null or cannot be read, there is no current process,
-or, for
-.Fn nanosleep ,
-the remainder cannot be written after normal completion.
+or a signal ended the sleep and the remainder cannot be written.
 The musl wrapper reads the public request and writes the public
 remainder in user space.
 .It Bq Er EINTR
