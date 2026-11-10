@@ -379,16 +379,18 @@ static int frame_past(uint32_t a, uint32_t b)
  * no more. After a stall the flip before latched, so what the plane showed
  * before it goes. A legacy cursor update has no stall, and its write only
  * arms the plane for the next vblank, as Linux unpins the old cursor from
- * a vblank work: with no vblank since the plane's last write began, what
- * it shows was never latched and goes, while what it showed before is
- * still read and stays; after a vblank during that write, the next one is
- * waited for. May sleep.
+ * a vblank work: with no vblank from the start of the plane's last write
+ * to the end of this one, what it shows was never latched and goes, while
+ * what it showed before is still read and stays. Otherwise what it shows
+ * may have latched and is kept until the next update, and what it showed
+ * before goes, after the next vblank when none came since the last write
+ * ended. May sleep.
  */
 static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout next, uint32_t from,
                            uint32_t to, int nostall)
 {
     if (nostall && c->cfg.active) {
-        if (from == c->shown_from[slot]) {
+        if (from == c->shown_from[slot] && to == from) {
             scanout_put(&c->shown[slot]);
             c->shown[slot] = next;
             c->shown_to[slot] = to;
