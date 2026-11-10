@@ -1538,6 +1538,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "host-checks",
+          "node": "x86_64/images/gnu-host-checks.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -1580,6 +1585,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-checks-disk",
+                "base": "host-checks",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1859,6 +1870,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "host-checks",
+          "node": "x86_64/images/gnu-host-checks.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -1901,6 +1917,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-checks-disk",
+                "base": "host-checks",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -2045,6 +2067,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "host-checks",
+          "node": "x86_64/images/gnu-host-checks.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -2087,6 +2114,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-checks-disk",
+                "base": "host-checks",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -2433,6 +2466,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "host-checks",
+          "node": "x86_64/images/gnu-host-checks.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -2475,6 +2513,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-checks-disk",
+                "base": "host-checks",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -2654,6 +2698,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "host-checks",
+          "node": "x86_64/images/gnu-host-checks.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -2696,6 +2745,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-checks-disk",
+                "base": "host-checks",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
