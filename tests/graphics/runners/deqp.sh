@@ -37,7 +37,8 @@
 # OUT (.) gets the record; results.csv.gz, `CASE,STATUS` a line in the
 # sample's order, the form of step 9's results; flakes, `CASE,FIRST,SECOND,WHY`
 # a line, WHY being `rerun` or `named`; summary.txt, the count of each status;
-# and logs/, each process's output compressed, with its .qpa logs when -q
+# for vk, vulkaninfo.out, `vulkaninfo --summary` of the same drivers; and
+# logs/, each process's output compressed, with its .qpa logs when -q
 # is given. It prints one line:
 #
 #   deqp: result: SUITE VERSION cases N of M every E jobs J pass P fail F
@@ -267,6 +268,11 @@ for c in $info; do
             ;;
     esac
 done
+
+if [ "$suite" = vk ]; then
+    vulkaninfo --summary > "$RUNNER_OUT/vulkaninfo.out" 2>&1 < /dev/null ||
+        runner_die "vulkaninfo failed: $(tail -n 3 "$RUNNER_OUT/vulkaninfo.out")"
+fi
 
 echo "deqp: running $cases of $all cases of $suite in $jobs processes" >&2
 t0=$(date +%s)
