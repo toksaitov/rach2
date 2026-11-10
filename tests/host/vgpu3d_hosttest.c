@@ -163,6 +163,10 @@ static void capabilities(void)
               "capset bytes equal the device's independent sequence");
     }
     CHECK(bytes[5000] == 0xa5, "GET_CAPS does not copy beyond the host's size");
+    k_memset(bytes, 0xa5, sizeof(bytes));
+    CHECK(vgpu_get_caps_ioctl(dev, &a, &file) == 0 && three.cap_reads == 1 &&
+              bytes[4999] == (uint8_t)(4999 * 7 + 2),
+          "GET_CAPS answers a set and version again from its cache, as Linux");
     a.size = 17;
     a.cap_set_id = 1;
     CHECK(vgpu_get_caps_ioctl(dev, &a, &file) == 0 && bytes[16] == 113,

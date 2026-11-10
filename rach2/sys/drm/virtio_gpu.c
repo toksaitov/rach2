@@ -1873,6 +1873,7 @@ static void vgpu_release(struct drm_device *dev)
     kfree(vg->outputs);
     kfree(vg->res_ids);
     kfree(vg->capsets);
+    vgpu_caps_cache_free(vg);
     virtio_put(vg->vdev);
     kfree(vg);
 }

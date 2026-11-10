@@ -590,6 +590,15 @@ struct vgpu_capset {
     uint32_t id, version, size;
 };
 
+/* A capability set as the host gave it for one version, `size` bytes at
+ * `data`, which GET_CAPS answers from for the device's life, as Linux's
+ * cap_cache does, so that every process sees the set the first one did. */
+struct vgpu_caps_cache {
+    struct vgpu_caps_cache *next;
+    uint32_t id, version, size;
+    unsigned char *data; /* follows the record in its allocation */
+};
+
 struct vgpu_attachment {
     struct vgpu_attachment *next;
     struct virtio_gpu_object *bo; /* borrowed; its free detaches every context */
@@ -627,6 +636,7 @@ struct virtio_gpu_device {
     int has_virgl;
     struct vgpu_capset *capsets;
     uint32_t capset_mask;
+    struct vgpu_caps_cache *caps_cache;
     struct vgpu_context *contexts;
     struct virtio_gpu_object *resources; /* includes objects awaiting UNREF */
     char reset_path[48];
@@ -711,8 +721,11 @@ int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes
  * nonzero.
  * 0 or -errno. No page becomes visible to the device before submission. */
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response);
-/** Copy a completed response after its header to user; 0 or -EFAULT. */
-int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes);
+/** Copy `bytes` of a completed response after its header to `to`; 0 or
+ * -EIO when the response is shorter. */
+int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, unsigned char *to, uint32_t bytes);
+/** Free the device's cached capability sets. */
+void vgpu_caps_cache_free(struct virtio_gpu_device *vg);
 /** Fill an ATTACH_BACKING or CREATE_BLOB request of `req` bytes with the
  * memory entries of `bo`'s pages; *n gets their count. 0 or -errno. */
 int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_object *bo, uint32_t *n);
