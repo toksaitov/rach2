@@ -86,8 +86,18 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 }
 
 /** Copy to a test address. */
+/* Run once by the next copy_to_user before it copies: another thread's
+ * work while the copy sleeps. */
+static void (*copy_hook)(void);
+
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
+    void (*hook)(void) = copy_hook;
+
+    copy_hook = NULL;
+    if (hook) {
+        hook();
+    }
     if ((uintptr_t)dst < 4096) {
         return -EFAULT;
     }

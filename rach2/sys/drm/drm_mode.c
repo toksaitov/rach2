@@ -2120,6 +2120,45 @@ static int32_t put_id(uint64_t ptr, uint32_t i, uint32_t room, uint32_t id)
     return 0;
 }
 
+/**
+ * GETRESOURCES' framebuffers: the IDs of `file`'s, newest first, the first
+ * `res->count_fbs` of them written to the user's array, and their number
+ * put in `res->count_fbs`. The IDs are gathered before any copy, which may
+ * sleep while another thread of the file removes a framebuffer. 0, -ENOMEM
+ * or -EFAULT.
+ */
+static int32_t getresources_fbs(struct drm_mode_card_res *res, struct drm_file *file)
+{
+    struct drm_framebuffer *fb;
+    uint32_t *ids = NULL;
+    uint32_t i, room, count = 0;
+    int32_t rc = 0;
+
+    for (fb = file->fbs; fb; fb = fb->file_next) {
+        count++;
+    }
+    room = count < res->count_fbs ? count : res->count_fbs;
+    if (room) {
+        ids = (uint32_t *)kmalloc(room * sizeof(*ids));
+        if (!ids) {
+            return -ENOMEM;
+        }
+    }
+    count = 0;
+    for (fb = file->fbs; fb; fb = fb->file_next) {
+        if (count < room) {
+            ids[count] = fb->base.id;
+        }
+        count++;
+    }
+    for (i = 0; i < room && rc == 0; i++) {
+        rc = put_id(res->fb_id_ptr, i, room, ids[i]);
+    }
+    kfree(ids);
+    res->count_fbs = count;
+    return rc;
+}
+
 /** GETRESOURCES, Linux's drm_mode_getresources: the caller's framebuffers,
  * newest first, and the CRTCs, encoders and connectors, with the size
  * limits. */
@@ -2127,19 +2166,16 @@ int32_t drm_mode_getresources(struct drm_device *dev, void *data, struct drm_fil
 {
     struct drm_mode_card_res *res = (struct drm_mode_card_res *)data;
     struct drm_mode_config *mc = &dev->mode_config;
-    struct drm_framebuffer *fb;
-    uint32_t i, count = 0;
+    uint32_t i, count;
+    int32_t rc;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
         return -EOPNOTSUPP;
     }
-    for (fb = file->fbs; fb; fb = fb->file_next) {
-        if (put_id(res->fb_id_ptr, count, res->count_fbs, fb->base.id) != 0) {
-            return -EFAULT;
-        }
-        count++;
+    rc = getresources_fbs(res, file);
+    if (rc != 0) {
+        return rc;
     }
-    res->count_fbs = count;
     res->max_height = mc->max_height;
     res->min_height = mc->min_height;
     res->max_width = mc->max_width;
@@ -2374,6 +2410,76 @@ static int mode_exposed(const struct drm_display_mode *given, const struct drm_d
     return 1;
 }
 
+/**
+ * The modes of `connector` that go to `file`, as the records GETCONNECTOR
+ * gives: their number in `*count`, and, when it is not 0 and fits in
+ * `room`, a new array of them in `*out`, which the caller frees; else
+ * `*out` is NULL. The commit lock is held, since a probe replaces the list.
+ * 0 or -ENOMEM.
+ */
+static int32_t modes_gather(struct drm_connector *connector, struct drm_file *file, uint32_t room,
+                            struct drm_mode_modeinfo **out, uint32_t *count)
+{
+    struct drm_display_mode *m;
+    struct drm_mode_modeinfo *u;
+    uint32_t n = 0;
+
+    *out = NULL;
+    for (m = connector->modes; m; m = m->next) {
+        n += mode_exposed(connector->modes, m, file);
+    }
+    *count = n;
+    if (n == 0 || room < n) {
+        return 0;
+    }
+    u = (struct drm_mode_modeinfo *)kmalloc(n * sizeof(*u));
+    if (!u) {
+        return -ENOMEM;
+    }
+    n = 0;
+    for (m = connector->modes; m; m = m->next) {
+        if (!mode_exposed(connector->modes, m, file)) {
+            continue;
+        }
+        u[n] = m->info;
+        u[n].vrefresh = drm_mode_vrefresh(&u[n]);
+        if (!file->aspect_ratio) {
+            u[n].flags &= ~(uint32_t)DRM_MODE_FLAG_PIC_AR_MASK;
+        }
+        n++;
+    }
+    *out = u;
+    return 0;
+}
+
+/**
+ * GETCONNECTOR's part under the commit lock, as Linux's under its
+ * mode_config mutex: the probe the master asks for with no room for modes,
+ * then the status, size and encoder, and the modes gathered by
+ * modes_gather into `*out`. 0 or -ENOMEM.
+ */
+static int32_t getconnector_locked(struct drm_device *dev, struct drm_connector *connector,
+                                   struct drm_file *file, struct drm_mode_get_connector *req,
+                                   struct drm_mode_modeinfo **out)
+{
+    uint32_t room = req->count_modes;
+    int32_t rc;
+
+    drm_modeset_lock_nointr(dev);
+    if (room == 0 && drm_is_current_master(file)) {
+        drm_helper_probe_single_connector_modes(connector, dev->mode_config.max_width,
+                                                dev->mode_config.max_height);
+    }
+    req->mm_width = connector->mm_width;
+    req->mm_height = connector->mm_height;
+    req->subpixel = connector->subpixel;
+    req->connection = (uint32_t)connector->status;
+    req->encoder_id = connector->state->best_encoder ? connector->state->best_encoder->base.id : 0;
+    rc = modes_gather(connector, file, room, out, &req->count_modes);
+    drm_modeset_unlock(dev);
+    return rc;
+}
+
 /** GETCONNECTOR, Linux's drm_mode_getconnector: the connector's encoders,
  * its modes, probed afresh when the master asks with no room for them, its
  * status, size and encoder, and its properties. */
@@ -2381,9 +2487,9 @@ int32_t drm_mode_getconnector(struct drm_device *dev, void *data, struct drm_fil
 {
     struct drm_mode_get_connector *req = (struct drm_mode_get_connector *)data;
     struct drm_connector *connector;
-    struct drm_display_mode *m;
-    struct drm_mode_modeinfo u;
+    struct drm_mode_modeinfo *modes;
     uint32_t i, n = 0, count;
+    int32_t rc;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
         return -EOPNOTSUPP;
@@ -2413,39 +2519,20 @@ int32_t drm_mode_getconnector(struct drm_device *dev, void *data, struct drm_fil
     req->connector_id = connector->base.id;
     req->connector_type = connector->connector_type;
     req->connector_type_id = connector->connector_type_id;
-    if (req->count_modes == 0 && drm_is_current_master(file) && drm_modeset_lock(dev) == 0) {
-        drm_helper_probe_single_connector_modes(connector, dev->mode_config.max_width,
-                                                dev->mode_config.max_height);
-        drm_modeset_unlock(dev);
+    rc = getconnector_locked(dev, connector, file, req, &modes);
+    if (rc != 0) {
+        return rc;
     }
-    req->mm_width = connector->mm_width;
-    req->mm_height = connector->mm_height;
-    req->subpixel = connector->subpixel;
-    req->connection = (uint32_t)connector->status;
-    count = 0;
-    for (m = connector->modes; m; m = m->next) {
-        count += mode_exposed(connector->modes, m, file);
-    }
-    if (req->count_modes >= count && count) {
-        n = 0;
-        for (m = connector->modes; m; m = m->next) {
-            if (!mode_exposed(connector->modes, m, file)) {
-                continue;
-            }
-            u = m->info;
-            u.vrefresh = drm_mode_vrefresh(&u);
-            if (!file->aspect_ratio) {
-                u.flags &= ~(uint32_t)DRM_MODE_FLAG_PIC_AR_MASK;
-            }
-            if (copy_to_user((void __user *)(uintptr_t)(req->modes_ptr + n * sizeof(u)), &u,
-                             sizeof(u)) != 0) {
-                return -EFAULT;
-            }
-            n++;
+    if (modes) {
+        rc = copy_to_user((void __user *)(uintptr_t)req->modes_ptr, modes,
+                          req->count_modes * sizeof(*modes)) != 0
+                 ? -EFAULT
+                 : 0;
+        kfree(modes);
+        if (rc != 0) {
+            return rc;
         }
     }
-    req->count_modes = count;
-    req->encoder_id = connector->state->best_encoder ? connector->state->best_encoder->base.id : 0;
     return object_properties(&connector->base, file->atomic, req->props_ptr, req->prop_values_ptr,
                              &req->count_props);
 }
