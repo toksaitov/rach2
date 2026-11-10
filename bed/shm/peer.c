@@ -27,35 +27,35 @@
 /* virtio-gpu's wire format, from the virtio 1.2 specification, 5.7.6. */
 #define GPU_F_VIRGL 0
 
-#define GPU_CMD_GET_DISPLAY_INFO 0x0100
-#define GPU_CMD_RESOURCE_CREATE_2D 0x0101
-#define GPU_CMD_RESOURCE_UNREF 0x0102
-#define GPU_CMD_SET_SCANOUT 0x0103
-#define GPU_CMD_RESOURCE_FLUSH 0x0104
-#define GPU_CMD_TRANSFER_TO_HOST_2D 0x0105
+#define GPU_CMD_GET_DISPLAY_INFO        0x0100
+#define GPU_CMD_RESOURCE_CREATE_2D      0x0101
+#define GPU_CMD_RESOURCE_UNREF          0x0102
+#define GPU_CMD_SET_SCANOUT             0x0103
+#define GPU_CMD_RESOURCE_FLUSH          0x0104
+#define GPU_CMD_TRANSFER_TO_HOST_2D     0x0105
 #define GPU_CMD_RESOURCE_ATTACH_BACKING 0x0106
 #define GPU_CMD_RESOURCE_DETACH_BACKING 0x0107
-#define GPU_CMD_CTX_CREATE 0x0200
-#define GPU_CMD_CTX_DESTROY 0x0201
-#define GPU_CMD_CTX_ATTACH_RESOURCE 0x0202
-#define GPU_CMD_CTX_DETACH_RESOURCE 0x0203
-#define GPU_CMD_RESOURCE_CREATE_3D 0x0204
-#define GPU_CMD_SUBMIT_3D 0x0207
-#define GPU_CMD_UPDATE_CURSOR 0x0300
-#define GPU_CMD_MOVE_CURSOR 0x0301
+#define GPU_CMD_CTX_CREATE              0x0200
+#define GPU_CMD_CTX_DESTROY             0x0201
+#define GPU_CMD_CTX_ATTACH_RESOURCE     0x0202
+#define GPU_CMD_CTX_DETACH_RESOURCE     0x0203
+#define GPU_CMD_RESOURCE_CREATE_3D      0x0204
+#define GPU_CMD_SUBMIT_3D               0x0207
+#define GPU_CMD_UPDATE_CURSOR           0x0300
+#define GPU_CMD_MOVE_CURSOR             0x0301
 
-#define GPU_RESP_OK_NODATA 0x1100
-#define GPU_RESP_OK_DISPLAY_INFO 0x1101
-#define GPU_RESP_ERR_UNSPEC 0x1200
-#define GPU_RESP_ERR_OUT_OF_MEMORY 0x1201
-#define GPU_RESP_ERR_INVALID_SCANOUT_ID 0x1202
+#define GPU_RESP_OK_NODATA               0x1100
+#define GPU_RESP_OK_DISPLAY_INFO         0x1101
+#define GPU_RESP_ERR_UNSPEC              0x1200
+#define GPU_RESP_ERR_OUT_OF_MEMORY       0x1201
+#define GPU_RESP_ERR_INVALID_SCANOUT_ID  0x1202
 #define GPU_RESP_ERR_INVALID_RESOURCE_ID 0x1203
-#define GPU_RESP_ERR_INVALID_CONTEXT_ID 0x1204
-#define GPU_RESP_ERR_INVALID_PARAMETER 0x1205
+#define GPU_RESP_ERR_INVALID_CONTEXT_ID  0x1204
+#define GPU_RESP_ERR_INVALID_PARAMETER   0x1205
 
-#define GPU_FLAG_FENCE 1u
+#define GPU_FLAG_FENCE            1u
 #define GPU_FORMAT_B8G8R8X8_UNORM 2u
-#define GPU_MAX_SCANOUTS 16
+#define GPU_MAX_SCANOUTS          16
 
 struct gpu_hdr {
     uint32_t type;
@@ -135,30 +135,32 @@ struct gpu_submit {
 };
 
 /* A recorded stream: this magic, then records of a kind, a length and bytes. */
-#define REC_MAGIC "VGSREC1\n"
+#define REC_MAGIC     "VGSREC1\n"
 #define REC_CREATE_3D 1u /* gpu_create_3d without its header: 48 bytes */
-#define REC_SUBMIT 2u    /* virgl commands for SUBMIT_3D, whole dwords */
+#define REC_SUBMIT    2u /* virgl commands for SUBMIT_3D, whole dwords */
 
 /* virgl's encoding, from Mesa's virgl_protocol.h and p_defines.h. */
-#define VIRGL_CMD0(cmd, obj, len) ((uint32_t)(cmd) | ((uint32_t)(obj) << 8) | ((uint32_t)(len) << 16))
-#define VIRGL_CCMD_CREATE_OBJECT 1
+#define VIRGL_CMD0(cmd, obj, len) \
+    ((uint32_t)(cmd) | ((uint32_t)(obj) << 8) | ((uint32_t)(len) << 16))
+#define VIRGL_CCMD_CREATE_OBJECT         1
 #define VIRGL_CCMD_SET_FRAMEBUFFER_STATE 5
-#define VIRGL_CCMD_CLEAR 7
-#define VIRGL_CCMD_SET_SUB_CTX 28
-#define VIRGL_CCMD_CREATE_SUB_CTX 29
-#define VIRGL_OBJECT_SURFACE 8
-#define PIPE_TEXTURE_2D 2
-#define PIPE_BIND_RENDER_TARGET 2
-#define PIPE_CLEAR_COLOR0 4
+#define VIRGL_CCMD_CLEAR                 7
+#define VIRGL_CCMD_SET_SUB_CTX           28
+#define VIRGL_CCMD_CREATE_SUB_CTX        29
+#define VIRGL_OBJECT_SURFACE             8
+#define PIPE_TEXTURE_2D                  2
+#define PIPE_BIND_RENDER_TARGET          2
+#define PIPE_CLEAR_COLOR0                4
 
 /* The test image: a 32 by 32 resource of 32-bit pixels. */
-#define IMG_W 32u
-#define IMG_H 32u
+#define IMG_W     32u
+#define IMG_H     32u
 #define IMG_BYTES (IMG_W * IMG_H * 4u)
 
 static const char *prog = "peer";
 static double timeout_s = 10.0;
 
+/** Print fmt with arg and exit with status 1. */
 static void die(const char *fmt, const char *arg)
 {
     fprintf(stderr, "%s: ", prog);
@@ -167,6 +169,7 @@ static void die(const char *fmt, const char *arg)
     exit(1);
 }
 
+/** Return the monotonic clock in seconds. */
 static double now(void)
 {
     struct timespec ts;
@@ -175,6 +178,7 @@ static double now(void)
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+/** Yield the processor between shared-memory polls. */
 static void pause_briefly(void)
 {
     struct timespec ts = {0, 50000};
@@ -198,7 +202,7 @@ static uint32_t crc32(const uint8_t *p, size_t n)
     return ~c;
 }
 
-/* Copy between private memory and the region, which is volatile. */
+/** Copy n bytes at off from the volatile region into dst. */
 static void region_get(volatile uint8_t *base, uint64_t off, void *dst, size_t n)
 {
     uint8_t *d = dst;
@@ -209,6 +213,7 @@ static void region_get(volatile uint8_t *base, uint64_t off, void *dst, size_t n
     }
 }
 
+/** Copy n bytes of src into the volatile region at off. */
 static void region_put(volatile uint8_t *base, uint64_t off, const void *src, size_t n)
 {
     const uint8_t *s = src;
@@ -219,6 +224,7 @@ static void region_put(volatile uint8_t *base, uint64_t off, const void *src, si
     }
 }
 
+/** Clear n bytes of the volatile region at off. */
 static void region_zero(volatile uint8_t *base, uint64_t off, uint64_t n)
 {
     uint64_t i;
@@ -258,6 +264,7 @@ struct dev {
     int virgl;
 };
 
+/** Publish the device state and error after its preceding writes. */
 static void dev_publish(struct dev *d, uint32_t state, uint32_t err)
 {
     volatile struct vgs_device *v = VGS_DEVICE(d->base);
@@ -270,7 +277,7 @@ static void dev_publish(struct dev *d, uint32_t state, uint32_t err)
     VGS_MB();
 }
 
-/* Write the device's offer for epoch, every field before the state. */
+/** Write the device's offer for epoch, every field before the state. */
 static void dev_offer(struct dev *d, uint32_t epoch)
 {
     volatile struct vgs_device *v = VGS_DEVICE(d->base);
@@ -302,6 +309,7 @@ static void dev_offer(struct dev *d, uint32_t epoch)
     VGS_MB();
 }
 
+/** Find a resource in the current epoch, or return NULL. */
 static struct dev_res *dev_res(struct dev *d, uint32_t id)
 {
     struct vgs_obj *o = vgs_table_find(&d->t, VGS_OBJ_RESOURCE, id);
@@ -309,13 +317,14 @@ static struct dev_res *dev_res(struct dev *d, uint32_t id)
     return o ? &d->res[o - d->obj] : 0;
 }
 
+/** Return whether r is nonempty and contained in w by h pixels. */
 static int rect_in(const struct gpu_rect *r, uint32_t w, uint32_t h)
 {
     return r->width != 0 && r->height != 0 && r->x <= w && r->width <= w - r->x && r->y <= h &&
            r->height <= h - r->y;
 }
 
-/* Copy n bytes at offset off of a resource's backing out of the region. */
+/** Copy n bytes at offset off of a resource's backing out of the region. */
 static int dev_backing_get(struct dev *d, struct dev_res *r, uint64_t off, uint8_t *dst, uint64_t n)
 {
     uint32_t i;
@@ -340,7 +349,7 @@ static int dev_backing_get(struct dev *d, struct dev_res *r, uint64_t off, uint8
     return n == 0;
 }
 
-/* Count the virgl commands in a stream, or return -1 when one overruns it. */
+/** Count the virgl commands in a stream, or return -1 when one overruns it. */
 static long virgl_frame(const uint8_t *p, uint32_t bytes)
 {
     uint32_t n = bytes / 4, i = 0;
@@ -360,15 +369,334 @@ static long virgl_frame(const uint8_t *p, uint32_t bytes)
     return cmds;
 }
 
-/*
- * Carry out one command of rlen bytes in cmd, writing the response to resp
- * and returning its length. A command the device refuses gets an error
- * response; the transport is not at fault.
+/** Return the bytes in a four-byte image, or 0 for an empty image or one
+ * larger than limit. Check each dimension before multiplying. */
+static uint64_t image_bytes(uint32_t w, uint32_t h, uint32_t depth, uint32_t layers, uint64_t limit)
+{
+    uint32_t dims[4] = {w, h, depth, layers};
+    uint64_t bytes = 4;
+    unsigned int i;
+
+    for (i = 0; i < 4; i++) {
+        if (dims[i] == 0 || dims[i] > limit / bytes) {
+            return 0;
+        }
+        bytes *= dims[i];
+    }
+    return bytes;
+}
+
+/** Handle create against the loopback device; return the GPU response type. */
+static uint32_t dev_create(struct dev *d, const uint8_t *cmd, uint32_t rlen,
+                           const struct gpu_hdr *h)
+{
+    uint32_t type = GPU_RESP_OK_NODATA;
+    uint32_t id, w, hh, depth = 1, layers = 1;
+    int err;
+
+    if (h->type == GPU_CMD_RESOURCE_CREATE_2D) {
+        struct gpu_create_2d c;
+
+        if (rlen < sizeof(c)) {
+            return GPU_RESP_ERR_INVALID_PARAMETER;
+        }
+        memcpy(&c, cmd, sizeof(c));
+        id = c.resource_id;
+        w = c.width;
+        hh = c.height;
+        if (c.format != GPU_FORMAT_B8G8R8X8_UNORM && c.format != 1) {
+            return GPU_RESP_ERR_INVALID_PARAMETER;
+        }
+    } else {
+        struct gpu_create_3d c;
+
+        if (rlen < sizeof(c)) {
+            return GPU_RESP_ERR_INVALID_PARAMETER;
+        }
+        memcpy(&c, cmd, sizeof(c));
+        if (!d->virgl) {
+            return GPU_RESP_ERR_UNSPEC;
+        }
+        id = c.resource_id;
+        w = c.width;
+        hh = c.height;
+        depth = c.depth;
+        layers = c.array_size;
+    }
+    if (image_bytes(w, hh, depth, layers, d->t.limits.max_backing) == 0) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    err = vgs_table_add(&d->t, VGS_OBJ_RESOURCE, id);
+    if (err == VGS_E_QUOTA) {
+        return GPU_RESP_ERR_OUT_OF_MEMORY;
+    }
+    if (err != VGS_OK) {
+        return GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    {
+        struct dev_res *r = dev_res(d, id);
+
+        r->w = w;
+        r->h = hh * depth * layers;
+        r->image = calloc((size_t)w * r->h, 4);
+        if (r->image == 0) {
+            vgs_table_del(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, id));
+            type = GPU_RESP_ERR_OUT_OF_MEMORY;
+        }
+    }
+    return type;
+}
+
+/** Handle unref against the loopback device; return the GPU response type. */
+static uint32_t dev_unref(struct dev *d, const uint8_t *cmd, uint32_t rlen)
+{
+    struct gpu_resource c;
+    struct dev_res *r;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if ((r = dev_res(d, c.resource_id)) == 0) {
+        return GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    free(r->image);
+    memset(r, 0, sizeof(*r));
+    if (d->scanout == c.resource_id) {
+        d->scanout = 0;
+    }
+    vgs_table_del(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, c.resource_id));
+    return GPU_RESP_OK_NODATA;
+}
+
+/** Handle attach against the loopback device; return the GPU response type. */
+static uint32_t dev_attach(struct dev *d, const uint8_t *cmd, uint32_t rlen)
+{
+    struct gpu_attach c;
+    struct dev_res *r;
+    uint64_t total = 0;
+    uint32_t i;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if ((r = dev_res(d, c.resource_id)) == 0) {
+        return GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    if (r->nent != 0 || c.nr_entries == 0 || c.nr_entries > d->t.limits.max_entries ||
+        rlen < sizeof(c) + (uint64_t)c.nr_entries * sizeof(struct gpu_mem_entry)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    for (i = 0; i < c.nr_entries; i++) {
+        struct gpu_mem_entry e;
+
+        memcpy(&e, cmd + sizeof(c) + i * sizeof(e), sizeof(e));
+        if (vgs_check_range(&d->l, e.addr, e.length) != VGS_OK) {
+            return GPU_RESP_ERR_INVALID_PARAMETER;
+        }
+        r->ent[i] = e;
+        total += e.length;
+    }
+    if (vgs_table_charge(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, c.resource_id), total) !=
+        VGS_OK) {
+        return GPU_RESP_ERR_OUT_OF_MEMORY;
+    }
+    r->nent = c.nr_entries;
+    return GPU_RESP_OK_NODATA;
+}
+
+/** Handle detach against the loopback device; return the GPU response type. */
+static uint32_t dev_detach(struct dev *d, const uint8_t *cmd, uint32_t rlen)
+{
+    struct gpu_resource c;
+    struct dev_res *r;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if ((r = dev_res(d, c.resource_id)) == 0 || r->nent == 0) {
+        return r ? GPU_RESP_ERR_UNSPEC : GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    vgs_table_charge(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, c.resource_id), 0);
+    r->nent = 0;
+    return GPU_RESP_OK_NODATA;
+}
+
+/** Handle transfer against the loopback device; return the GPU response type.
+ */
+static uint32_t dev_transfer(struct dev *d, const uint8_t *cmd, uint32_t rlen)
+{
+    struct gpu_transfer_2d c;
+    struct dev_res *r;
+    uint32_t y, stride;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if ((r = dev_res(d, c.resource_id)) == 0) {
+        return GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    if (!rect_in(&c.r, r->w, r->h) || r->nent == 0) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    stride = r->w * 4;
+    for (y = 0; y < c.r.height; y++) {
+        uint64_t src = c.offset + (uint64_t)y * stride;
+        uint8_t *dst = r->image + ((size_t)(c.r.y + y) * r->w + c.r.x) * 4;
+
+        if (!dev_backing_get(d, r, src, dst, (uint64_t)c.r.width * 4)) {
+            return GPU_RESP_ERR_INVALID_PARAMETER;
+        }
+    }
+    return GPU_RESP_OK_NODATA;
+}
+
+/** Handle scanout against the loopback device; return the GPU response type. */
+static uint32_t dev_scanout(struct dev *d, const uint8_t *cmd, uint32_t rlen)
+{
+    struct gpu_set_scanout c;
+    struct dev_res *r;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if (c.scanout_id >= d->me.num_scanouts) {
+        return GPU_RESP_ERR_INVALID_SCANOUT_ID;
+    }
+    if (c.resource_id == 0) {
+        d->scanout = 0;
+        return GPU_RESP_OK_NODATA;
+    }
+    if ((r = dev_res(d, c.resource_id)) == 0) {
+        return GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    if (!rect_in(&c.r, r->w, r->h)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    d->scanout = c.resource_id;
+    return GPU_RESP_OK_NODATA;
+}
+
+/** Handle flush against the loopback device; return the GPU response type. */
+static uint32_t dev_flush(struct dev *d, const uint8_t *cmd, uint32_t rlen)
+{
+    uint32_t type = GPU_RESP_OK_NODATA;
+    struct gpu_flush c;
+    struct dev_res *r;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if ((r = dev_res(d, c.resource_id)) == 0) {
+        return GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    if (!rect_in(&c.r, r->w, r->h)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    if (d->scanout == c.resource_id && d->report >= 0) {
+        uint32_t crc = crc32(r->image, (size_t)r->w * r->h * 4);
+
+        if (write(d->report, &crc, sizeof(crc)) != sizeof(crc)) {
+            type = GPU_RESP_ERR_UNSPEC;
+        }
+    }
+    return type;
+}
+
+/** Handle context create against the loopback device; return the GPU response
+ * type.
+ */
+static uint32_t dev_context_create(struct dev *d, const uint8_t *cmd, uint32_t rlen,
+                                   const struct gpu_hdr *h)
+{
+    uint32_t type = GPU_RESP_OK_NODATA;
+    struct gpu_ctx_create c;
+    int err;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if (!d->virgl || c.nlen > sizeof(c.debug_name) || c.context_init != 0) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    err = vgs_table_add(&d->t, VGS_OBJ_CONTEXT, h->ctx_id);
+    if (err != VGS_OK) {
+        type = err == VGS_E_QUOTA ? GPU_RESP_ERR_OUT_OF_MEMORY : GPU_RESP_ERR_INVALID_CONTEXT_ID;
+    }
+    return type;
+}
+
+/** Handle context destroy against the loopback device; return the GPU
+ * response type.
+ */
+static uint32_t dev_context_destroy(struct dev *d, const struct gpu_hdr *h)
+{
+    struct vgs_obj *c = vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h->ctx_id);
+
+    if (c == 0) {
+        return GPU_RESP_ERR_INVALID_CONTEXT_ID;
+    }
+    vgs_table_del(&d->t, c);
+    return GPU_RESP_OK_NODATA;
+}
+
+/** Handle context resource against the loopback device; return the GPU
+ * response type.
+ */
+static uint32_t dev_context_resource(struct dev *d, const uint8_t *cmd, uint32_t rlen,
+                                     const struct gpu_hdr *h)
+{
+    uint32_t type = GPU_RESP_OK_NODATA;
+    struct gpu_resource c;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if (vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h->ctx_id) == 0) {
+        type = GPU_RESP_ERR_INVALID_CONTEXT_ID;
+    } else if (dev_res(d, c.resource_id) == 0) {
+        type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
+    }
+    return type;
+}
+
+/** Handle submit against the loopback device; return the GPU response type. */
+static uint32_t dev_submit(struct dev *d, const uint8_t *cmd, uint32_t rlen,
+                           const struct gpu_hdr *h)
+{
+    struct gpu_submit c;
+    long cmds;
+
+    if (rlen < sizeof(c)) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    memcpy(&c, cmd, sizeof(c));
+    if (vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h->ctx_id) == 0) {
+        return GPU_RESP_ERR_INVALID_CONTEXT_ID;
+    }
+    if (c.size % 4 != 0 || c.size > rlen - sizeof(c) ||
+        (cmds = virgl_frame(cmd + sizeof(c), c.size)) < 0) {
+        return GPU_RESP_ERR_INVALID_PARAMETER;
+    }
+    printf("responder: submit: %ld virgl command(s)\n", cmds);
+    return GPU_RESP_OK_NODATA;
+}
+
+/**
+ * Execute cmd of rlen bytes and write its response to resp, which has room
+ * for gpu_display_info. Return the response length, echoing a fence if set.
  */
 static uint32_t dev_command(struct dev *d, const uint8_t *cmd, uint32_t rlen, uint8_t *resp)
 {
     struct gpu_hdr h, *o = (struct gpu_hdr *)resp;
-    uint32_t type = GPU_RESP_OK_NODATA, rsize = sizeof(struct gpu_hdr);
+    uint32_t type, rsize = sizeof(struct gpu_hdr);
 
     memset(resp, 0, sizeof(struct gpu_display_info));
     if (rlen < sizeof(h)) {
@@ -376,287 +704,53 @@ static uint32_t dev_command(struct dev *d, const uint8_t *cmd, uint32_t rlen, ui
         return rsize;
     }
     memcpy(&h, cmd, sizeof(h));
-#define NEED(T)                                                                                                        \
-    do {                                                                                                               \
-        if (rlen < sizeof(T)) {                                                                                        \
-            type = GPU_RESP_ERR_INVALID_PARAMETER;                                                                     \
-            goto out;                                                                                                  \
-        }                                                                                                              \
-    } while (0)
     switch (h.type) {
-    case GPU_CMD_GET_DISPLAY_INFO: {
-        struct gpu_display_info *di = (struct gpu_display_info *)resp;
-
-        di->pmodes[0].r.width = 1024;
-        di->pmodes[0].r.height = 768;
-        di->pmodes[0].enabled = 1;
+    case GPU_CMD_GET_DISPLAY_INFO:
+        ((struct gpu_display_info *)resp)->pmodes[0].r.width = 1024;
+        ((struct gpu_display_info *)resp)->pmodes[0].r.height = 768;
+        ((struct gpu_display_info *)resp)->pmodes[0].enabled = 1;
         type = GPU_RESP_OK_DISPLAY_INFO;
-        rsize = sizeof(*di);
+        rsize = sizeof(struct gpu_display_info);
         break;
-    }
     case GPU_CMD_RESOURCE_CREATE_2D:
-    case GPU_CMD_RESOURCE_CREATE_3D: {
-        uint32_t id, w, hh, depth = 1, layers = 1;
-        int err;
-
-        if (h.type == GPU_CMD_RESOURCE_CREATE_2D) {
-            struct gpu_create_2d c;
-
-            NEED(c);
-            memcpy(&c, cmd, sizeof(c));
-            id = c.resource_id;
-            w = c.width;
-            hh = c.height;
-            if (c.format != GPU_FORMAT_B8G8R8X8_UNORM && c.format != 1) {
-                type = GPU_RESP_ERR_INVALID_PARAMETER;
-                break;
-            }
-        } else {
-            struct gpu_create_3d c;
-
-            NEED(c);
-            memcpy(&c, cmd, sizeof(c));
-            if (!d->virgl) {
-                type = GPU_RESP_ERR_UNSPEC;
-                break;
-            }
-            id = c.resource_id;
-            w = c.width;
-            hh = c.height;
-            depth = c.depth;
-            layers = c.array_size;
-        }
-        if (w == 0 || hh == 0 || depth == 0 || layers == 0 ||
-            (uint64_t)w * hh * depth * layers * 4 > d->t.limits.max_backing) {
-            type = GPU_RESP_ERR_INVALID_PARAMETER;
-            break;
-        }
-        err = vgs_table_add(&d->t, VGS_OBJ_RESOURCE, id);
-        if (err == VGS_E_QUOTA) {
-            type = GPU_RESP_ERR_OUT_OF_MEMORY;
-            break;
-        }
-        if (err != VGS_OK) {
-            type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            break;
-        }
-        {
-            struct dev_res *r = dev_res(d, id);
-
-            r->w = w;
-            r->h = hh * depth * layers;
-            r->image = calloc((size_t)w * r->h, 4);
-            if (r->image == 0) {
-                vgs_table_del(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, id));
-                type = GPU_RESP_ERR_OUT_OF_MEMORY;
-            }
-        }
+    case GPU_CMD_RESOURCE_CREATE_3D:
+        type = dev_create(d, cmd, rlen, &h);
         break;
-    }
-    case GPU_CMD_RESOURCE_UNREF: {
-        struct gpu_resource c;
-        struct dev_res *r;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if ((r = dev_res(d, c.resource_id)) == 0) {
-            type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            break;
-        }
-        free(r->image);
-        memset(r, 0, sizeof(*r));
-        if (d->scanout == c.resource_id) {
-            d->scanout = 0;
-        }
-        vgs_table_del(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, c.resource_id));
+    case GPU_CMD_RESOURCE_UNREF:
+        type = dev_unref(d, cmd, rlen);
         break;
-    }
-    case GPU_CMD_RESOURCE_ATTACH_BACKING: {
-        struct gpu_attach c;
-        struct dev_res *r;
-        uint64_t total = 0;
-        uint32_t i;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if ((r = dev_res(d, c.resource_id)) == 0) {
-            type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            break;
-        }
-        if (r->nent != 0 || c.nr_entries == 0 || c.nr_entries > d->t.limits.max_entries ||
-            rlen < sizeof(c) + (uint64_t)c.nr_entries * sizeof(struct gpu_mem_entry)) {
-            type = GPU_RESP_ERR_INVALID_PARAMETER;
-            break;
-        }
-        for (i = 0; i < c.nr_entries; i++) {
-            struct gpu_mem_entry e;
-
-            memcpy(&e, cmd + sizeof(c) + i * sizeof(e), sizeof(e));
-            if (vgs_check_range(&d->l, e.addr, e.length) != VGS_OK) {
-                type = GPU_RESP_ERR_INVALID_PARAMETER;
-                goto out;
-            }
-            r->ent[i] = e;
-            total += e.length;
-        }
-        if (vgs_table_charge(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, c.resource_id), total) != VGS_OK) {
-            type = GPU_RESP_ERR_OUT_OF_MEMORY;
-            break;
-        }
-        r->nent = c.nr_entries;
+    case GPU_CMD_RESOURCE_ATTACH_BACKING:
+        type = dev_attach(d, cmd, rlen);
         break;
-    }
-    case GPU_CMD_RESOURCE_DETACH_BACKING: {
-        struct gpu_resource c;
-        struct dev_res *r;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if ((r = dev_res(d, c.resource_id)) == 0 || r->nent == 0) {
-            type = r ? GPU_RESP_ERR_UNSPEC : GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            break;
-        }
-        vgs_table_charge(&d->t, vgs_table_find(&d->t, VGS_OBJ_RESOURCE, c.resource_id), 0);
-        r->nent = 0;
+    case GPU_CMD_RESOURCE_DETACH_BACKING:
+        type = dev_detach(d, cmd, rlen);
         break;
-    }
-    case GPU_CMD_TRANSFER_TO_HOST_2D: {
-        struct gpu_transfer_2d c;
-        struct dev_res *r;
-        uint32_t y, stride;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if ((r = dev_res(d, c.resource_id)) == 0) {
-            type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            break;
-        }
-        if (!rect_in(&c.r, r->w, r->h) || r->nent == 0) {
-            type = GPU_RESP_ERR_INVALID_PARAMETER;
-            break;
-        }
-        stride = r->w * 4;
-        for (y = 0; y < c.r.height; y++) {
-            uint64_t src = c.offset + (uint64_t)y * stride;
-            uint8_t *dst = r->image + ((size_t)(c.r.y + y) * r->w + c.r.x) * 4;
-
-            if (!dev_backing_get(d, r, src, dst, (uint64_t)c.r.width * 4)) {
-                type = GPU_RESP_ERR_INVALID_PARAMETER;
-                break;
-            }
-        }
+    case GPU_CMD_TRANSFER_TO_HOST_2D:
+        type = dev_transfer(d, cmd, rlen);
         break;
-    }
-    case GPU_CMD_SET_SCANOUT: {
-        struct gpu_set_scanout c;
-        struct dev_res *r;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if (c.scanout_id >= d->me.num_scanouts) {
-            type = GPU_RESP_ERR_INVALID_SCANOUT_ID;
-            break;
-        }
-        if (c.resource_id == 0) {
-            d->scanout = 0;
-            break;
-        }
-        if ((r = dev_res(d, c.resource_id)) == 0) {
-            type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            break;
-        }
-        if (!rect_in(&c.r, r->w, r->h)) {
-            type = GPU_RESP_ERR_INVALID_PARAMETER;
-            break;
-        }
-        d->scanout = c.resource_id;
+    case GPU_CMD_SET_SCANOUT:
+        type = dev_scanout(d, cmd, rlen);
         break;
-    }
-    case GPU_CMD_RESOURCE_FLUSH: {
-        struct gpu_flush c;
-        struct dev_res *r;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if ((r = dev_res(d, c.resource_id)) == 0) {
-            type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            break;
-        }
-        if (!rect_in(&c.r, r->w, r->h)) {
-            type = GPU_RESP_ERR_INVALID_PARAMETER;
-            break;
-        }
-        if (d->scanout == c.resource_id && d->report >= 0) {
-            uint32_t crc = crc32(r->image, (size_t)r->w * r->h * 4);
-
-            if (write(d->report, &crc, sizeof(crc)) != sizeof(crc)) {
-                type = GPU_RESP_ERR_UNSPEC;
-            }
-        }
+    case GPU_CMD_RESOURCE_FLUSH:
+        type = dev_flush(d, cmd, rlen);
         break;
-    }
-    case GPU_CMD_CTX_CREATE: {
-        struct gpu_ctx_create c;
-        int err;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if (!d->virgl || c.nlen > sizeof(c.debug_name) || c.context_init != 0) {
-            type = GPU_RESP_ERR_INVALID_PARAMETER;
-            break;
-        }
-        err = vgs_table_add(&d->t, VGS_OBJ_CONTEXT, h.ctx_id);
-        if (err != VGS_OK) {
-            type = err == VGS_E_QUOTA ? GPU_RESP_ERR_OUT_OF_MEMORY : GPU_RESP_ERR_INVALID_CONTEXT_ID;
-        }
+    case GPU_CMD_CTX_CREATE:
+        type = dev_context_create(d, cmd, rlen, &h);
         break;
-    }
-    case GPU_CMD_CTX_DESTROY: {
-        struct vgs_obj *c = vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h.ctx_id);
-
-        if (c == 0) {
-            type = GPU_RESP_ERR_INVALID_CONTEXT_ID;
-            break;
-        }
-        vgs_table_del(&d->t, c);
+    case GPU_CMD_CTX_DESTROY:
+        type = dev_context_destroy(d, &h);
         break;
-    }
     case GPU_CMD_CTX_ATTACH_RESOURCE:
-    case GPU_CMD_CTX_DETACH_RESOURCE: {
-        struct gpu_resource c;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if (vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h.ctx_id) == 0) {
-            type = GPU_RESP_ERR_INVALID_CONTEXT_ID;
-        } else if (dev_res(d, c.resource_id) == 0) {
-            type = GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        }
+    case GPU_CMD_CTX_DETACH_RESOURCE:
+        type = dev_context_resource(d, cmd, rlen, &h);
         break;
-    }
-    case GPU_CMD_SUBMIT_3D: {
-        struct gpu_submit c;
-        long cmds;
-
-        NEED(c);
-        memcpy(&c, cmd, sizeof(c));
-        if (vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h.ctx_id) == 0) {
-            type = GPU_RESP_ERR_INVALID_CONTEXT_ID;
-            break;
-        }
-        if (c.size % 4 != 0 || c.size > rlen - sizeof(c) || (cmds = virgl_frame(cmd + sizeof(c), c.size)) < 0) {
-            type = GPU_RESP_ERR_INVALID_PARAMETER;
-            break;
-        }
-        printf("responder: submit: %ld virgl command(s)\n", cmds);
+    case GPU_CMD_SUBMIT_3D:
+        type = dev_submit(d, cmd, rlen, &h);
         break;
-    }
     default:
         type = GPU_RESP_ERR_UNSPEC;
         break;
     }
-#undef NEED
-out:
     o->type = type;
     if (h.flags & GPU_FLAG_FENCE) {
         o->flags = GPU_FLAG_FENCE;
@@ -666,7 +760,7 @@ out:
     return rsize;
 }
 
-/*
+/**
  * Serve one queue's available chains. Returns VGS_OK, or the transport
  * fault that puts the device in NEEDS_RESET.
  */
@@ -709,7 +803,7 @@ static int dev_queue(struct dev *d, int qi)
     return VGS_OK;
 }
 
-/*
+/**
  * The loopback device: answer the driver's handshake for each epoch, serve
  * its queues, and stop when the driver detaches or the parent goes. Returns
  * the process's exit status.
@@ -719,6 +813,9 @@ static int responder(volatile uint8_t *base, uint64_t size, int report)
     struct dev *d = calloc(1, sizeof(*d));
     int err;
 
+    if (d == NULL) {
+        return 1;
+    }
     d->base = base;
     d->report = report;
     vgs_table_init(&d->t, d->obj, DEV_OBJS, &dev_limits, 0);
@@ -788,7 +885,7 @@ struct drv {
     uint64_t fence;
 };
 
-/* Write a copy of the region as a seed when seeds are asked for. */
+/** Write a copy of the region as a seed when seeds are asked for. */
 static void dump(struct drv *dr, const char *name, const uint8_t *img)
 {
     char path[1024];
@@ -798,16 +895,20 @@ static void dump(struct drv *dr, const char *name, const uint8_t *img)
         return;
     }
     snprintf(path, sizeof(path), "%s/%02d-%s", dr->dump, ++dr->ndump, name);
-    if ((f = fopen(path, "wb")) == 0 || fwrite(img, 1, (size_t)dr->size, f) != dr->size || fclose(f) != 0) {
+    if ((f = fopen(path, "wb")) == 0 || fwrite(img, 1, (size_t)dr->size, f) != dr->size ||
+        fclose(f) != 0) {
         die("cannot write %s", path);
     }
 }
 
-/* Return a private copy of the region, for a seed. */
+/** Return a private copy of the region, for a seed. */
 static uint8_t *snapshot(struct drv *dr)
 {
     uint8_t *img = malloc((size_t)dr->size);
 
+    if (img == NULL) {
+        die("%s", "cannot allocate a region snapshot");
+    }
     VGS_MB();
     region_get(dr->base, 0, img, (size_t)dr->size);
     return img;
@@ -825,6 +926,7 @@ static uint64_t heap_alloc(struct drv *dr, uint64_t n)
     return a;
 }
 
+/** Reap an exited loopback device and fail its outstanding work. */
 static void device_alive(struct drv *dr)
 {
     int st;
@@ -835,7 +937,7 @@ static void device_alive(struct drv *dr)
     }
 }
 
-/* Wait until the device's block answers this epoch in one of two states. */
+/** Wait until the device's block answers this epoch in one of two states. */
 static void wait_device(struct drv *dr, uint32_t want, uint32_t want2)
 {
     double end = now() + timeout_s;
@@ -857,7 +959,7 @@ static void wait_device(struct drv *dr, uint32_t want, uint32_t want2)
     }
 }
 
-/* Store the driver's block: fields first, then epoch, then state. */
+/** Store the driver's block: fields first, then epoch, then state. */
 static void drv_store(volatile uint8_t *base, const struct vgs_driver *me)
 {
     volatile struct vgs_driver *v = VGS_DRIVER(base);
@@ -872,7 +974,7 @@ static void drv_store(volatile uint8_t *base, const struct vgs_driver *me)
     VGS_MB();
 }
 
-/*
+/**
  * Start a new epoch: lay the region out when it is not, store the driver's
  * block in RESET, take the device's offer, accept it and wait for RUNNING.
  */
@@ -925,7 +1027,8 @@ static void handshake(struct drv *dr, int fresh, uint64_t want)
     dr->me.transport_features = 0;
     off = vgs_queue_place(&dr->me.queue[VGS_QUEUE_CONTROL], dr->l.ring_off,
                           dr->dev.limits.max_queue < 64 ? dr->dev.limits.max_queue : 64);
-    vgs_queue_place(&dr->me.queue[VGS_QUEUE_CURSOR], off, 16 < dr->dev.limits.max_queue ? 16 : dr->dev.limits.max_queue);
+    vgs_queue_place(&dr->me.queue[VGS_QUEUE_CURSOR], off,
+                    16 < dr->dev.limits.max_queue ? 16 : dr->dev.limits.max_queue);
     dr->me.state = VGS_DRV_OK;
     free(img);
     /* Rings start empty in each epoch. */
@@ -942,17 +1045,21 @@ static void handshake(struct drv *dr, int fresh, uint64_t want)
     printf("peer: running: features 0x%llx\n", (unsigned long long)dr->me.features);
 }
 
-/*
- * Send one command on the control queue: cmd of clen bytes, then an
- * optional second readable buffer, then a response buffer of rlen bytes.
- * Waits for the device, checks the used element and returns the response
- * type, with the response copied to resp.
- */
-static uint32_t send_cmd(struct drv *dr, const char *name, void *cmd, uint32_t clen, const void *data,
-                         uint32_t dlen, void *resp, uint32_t rlen)
+/* One command's header and optional second readable buffer. */
+struct gpu_message {
+    void *header;
+    uint32_t header_size;
+    const void *data;
+    uint32_t data_size;
+};
+
+/** Send message on the control queue and copy at most rlen bytes to resp;
+ * return its response type, or exit after a transport or fence fault. */
+static uint32_t send_cmd(struct drv *dr, const char *name, const struct gpu_message *message,
+                         void *resp, uint32_t rlen)
 {
     const struct vgs_queue *q = &dr->me.queue[VGS_QUEUE_CONTROL];
-    struct gpu_hdr *h = cmd, r;
+    struct gpu_hdr *h = message->header, r;
     struct vgs_desc ds[3];
     uint32_t n = 0, i, id, len;
     uint64_t mark = dr->brk;
@@ -962,21 +1069,22 @@ static uint32_t send_cmd(struct drv *dr, const char *name, void *cmd, uint32_t c
     if (h->flags & GPU_FLAG_FENCE) {
         h->fence_id = ++dr->fence;
     }
-    ds[n].addr = heap_alloc(dr, clen);
-    ds[n].len = clen;
-    region_put(dr->base, ds[n].addr, cmd, clen);
+    ds[n].addr = heap_alloc(dr, message->header_size);
+    ds[n].len = message->header_size;
+    region_put(dr->base, ds[n].addr, message->header, message->header_size);
     n++;
-    if (dlen != 0) {
-        ds[n].addr = heap_alloc(dr, dlen);
-        ds[n].len = dlen;
-        region_put(dr->base, ds[n].addr, data, dlen);
+    if (message->data_size != 0) {
+        ds[n].addr = heap_alloc(dr, message->data_size);
+        ds[n].len = message->data_size;
+        region_put(dr->base, ds[n].addr, message->data, message->data_size);
         n++;
     }
     ds[n].addr = heap_alloc(dr, rlen);
     ds[n].len = rlen;
     n++;
     for (i = 0; i < n; i++) {
-        ds[i].flags = (uint16_t)((i + 1 < n ? VGS_DESC_F_NEXT : 0) | (i + 1 == n ? VGS_DESC_F_WRITE : 0));
+        ds[i].flags =
+            (uint16_t)((i + 1 < n ? VGS_DESC_F_NEXT : 0) | (i + 1 == n ? VGS_DESC_F_WRITE : 0));
         ds[i].next = (uint16_t)(i + 1 < n ? i + 1 : 0);
         vgs_desc_write(dr->base, q, i, &ds[i]);
     }
@@ -1007,7 +1115,8 @@ static uint32_t send_cmd(struct drv *dr, const char *name, void *cmd, uint32_t c
         }
         pause_briefly();
     }
-    if (vgs_used_elem(dr->base, q, dr->used, &id, &len) != VGS_OK || id != 0 || len > rlen || len < sizeof(r)) {
+    if (vgs_used_elem(dr->base, q, dr->used, &id, &len) != VGS_OK || id != 0 || len > rlen ||
+        len < sizeof(r)) {
         die("bad used element for %s", name);
     }
     dr->used++;
@@ -1020,15 +1129,18 @@ static uint32_t send_cmd(struct drv *dr, const char *name, void *cmd, uint32_t c
     return r.type;
 }
 
+/** Require response got to equal want, or exit after naming the command. */
 static void expect(uint32_t got, uint32_t want, const char *name)
 {
     if (got != want) {
-        fprintf(stderr, "%s: %s: response 0x%x, expected 0x%x\n", prog, name, (unsigned)got, (unsigned)want);
+        fprintf(stderr, "%s: %s: response 0x%x, expected 0x%x\n", prog, name, (unsigned)got,
+                (unsigned)want);
         exit(1);
     }
     printf("peer: %s: ok\n", name);
 }
 
+/** Clear n bytes of cmd and fill its command header. */
 static void hdr(void *cmd, size_t n, uint32_t type, uint32_t flags, uint32_t ctx)
 {
     struct gpu_hdr *h = cmd;
@@ -1039,6 +1151,7 @@ static void hdr(void *cmd, size_t n, uint32_t type, uint32_t flags, uint32_t ctx
     h->ctx_id = ctx;
 }
 
+/** Require the loopback flush CRC to equal want; return 1, or exit. */
 static uint32_t check_flush_report(struct drv *dr, uint32_t want)
 {
     uint32_t got = 0;
@@ -1050,14 +1163,15 @@ static uint32_t check_flush_report(struct drv *dr, uint32_t want)
         die("no flush report from %s", "the responder");
     }
     if (got != want) {
-        fprintf(stderr, "%s: flush: crc %08x, expected %08x\n", prog, (unsigned)got, (unsigned)want);
+        fprintf(stderr, "%s: flush: crc %08x, expected %08x\n", prog, (unsigned)got,
+                (unsigned)want);
         exit(1);
     }
     printf("peer: flush: crc %08x matches\n", (unsigned)got);
     return 1;
 }
 
-/* The 2D sequence: a patterned 32 by 32 resource put on scanout 0. */
+/** The 2D sequence: a patterned 32 by 32 resource put on scanout 0. */
 static uint32_t run_2d(struct drv *dr, uint32_t id, uint64_t *backing)
 {
     union {
@@ -1074,7 +1188,8 @@ static uint32_t run_2d(struct drv *dr, uint32_t id, uint64_t *backing)
     uint32_t x, y;
 
     hdr(&u, sizeof(u.di.hdr), GPU_CMD_GET_DISPLAY_INFO, 0, 0);
-    expect(send_cmd(dr, "display-info", &u, sizeof(u.di.hdr), 0, 0, &resp, sizeof(resp.di)),
+    expect(send_cmd(dr, "display-info", &(struct gpu_message){&u, sizeof(u.di.hdr), 0, 0}, &resp,
+                    sizeof(resp.di)),
            GPU_RESP_OK_DISPLAY_INFO, "display-info");
 
     hdr(&u, sizeof(u.c2), GPU_CMD_RESOURCE_CREATE_2D, 0, 0);
@@ -1082,8 +1197,9 @@ static uint32_t run_2d(struct drv *dr, uint32_t id, uint64_t *backing)
     u.c2.format = GPU_FORMAT_B8G8R8X8_UNORM;
     u.c2.width = IMG_W;
     u.c2.height = IMG_H;
-    expect(send_cmd(dr, "create-2d", &u, sizeof(u.c2), 0, 0, &resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "create-2d");
+    expect(send_cmd(dr, "create-2d", &(struct gpu_message){&u, sizeof(u.c2), 0, 0}, &resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "create-2d");
 
     for (y = 0; y < IMG_H; y++) {
         for (x = 0; x < IMG_W; x++) {
@@ -1103,33 +1219,37 @@ static uint32_t run_2d(struct drv *dr, uint32_t id, uint64_t *backing)
     e.addr = *backing;
     e.length = IMG_BYTES;
     e.padding = 0;
-    expect(send_cmd(dr, "attach-backing", &u, sizeof(u.at), &e, sizeof(e), &resp, sizeof(struct gpu_hdr)),
+    expect(send_cmd(dr, "attach-backing", &(struct gpu_message){&u, sizeof(u.at), &e, sizeof(e)},
+                    &resp, sizeof(struct gpu_hdr)),
            GPU_RESP_OK_NODATA, "attach-backing");
 
     hdr(&u, sizeof(u.tr), GPU_CMD_TRANSFER_TO_HOST_2D, 0, 0);
     u.tr.r.width = IMG_W;
     u.tr.r.height = IMG_H;
     u.tr.resource_id = id;
-    expect(send_cmd(dr, "transfer-2d", &u, sizeof(u.tr), 0, 0, &resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "transfer-2d");
+    expect(send_cmd(dr, "transfer-2d", &(struct gpu_message){&u, sizeof(u.tr), 0, 0}, &resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "transfer-2d");
 
     hdr(&u, sizeof(u.ss), GPU_CMD_SET_SCANOUT, 0, 0);
     u.ss.r.width = IMG_W;
     u.ss.r.height = IMG_H;
     u.ss.resource_id = id;
-    expect(send_cmd(dr, "set-scanout", &u, sizeof(u.ss), 0, 0, &resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "set-scanout");
+    expect(send_cmd(dr, "set-scanout", &(struct gpu_message){&u, sizeof(u.ss), 0, 0}, &resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "set-scanout");
 
     hdr(&u, sizeof(u.fl), GPU_CMD_RESOURCE_FLUSH, GPU_FLAG_FENCE, 0);
     u.fl.r.width = IMG_W;
     u.fl.r.height = IMG_H;
     u.fl.resource_id = id;
-    expect(send_cmd(dr, "flush", &u, sizeof(u.fl), 0, 0, &resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "flush");
+    expect(send_cmd(dr, "flush", &(struct gpu_message){&u, sizeof(u.fl), 0, 0}, &resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "flush");
     return check_flush_report(dr, crc32(pix, IMG_BYTES));
 }
 
-/* Read a whole file into memory; its length goes to *n. */
+/** Read a whole file into memory; its length goes to *n. */
 static uint8_t *slurp(const char *path, size_t *n)
 {
     FILE *f = fopen(path, "rb");
@@ -1155,7 +1275,50 @@ static uint8_t *slurp(const char *path, size_t *n)
     return buf;
 }
 
-/*
+/** Create and back one recorded resource from data of len bytes, attach it
+ * to ctx and return its id. A malformed record in path ends the process. */
+static uint32_t replay_resource(struct drv *dr, const uint8_t *data, uint32_t len, uint32_t ctx,
+                                const char *path)
+{
+    struct gpu_create_3d create;
+    struct gpu_attach attach;
+    struct gpu_resource resource;
+    struct gpu_mem_entry entry;
+    struct gpu_hdr response;
+    uint64_t bytes;
+
+    if (len != sizeof(create) - sizeof(struct gpu_hdr)) {
+        die("bad resource record in %s", path);
+    }
+    hdr(&create, sizeof(create), GPU_CMD_RESOURCE_CREATE_3D, 0, ctx);
+    memcpy((uint8_t *)&create + sizeof(struct gpu_hdr), data, len);
+    bytes = image_bytes(create.width, create.height, create.depth, create.array_size,
+                        dr->dev.limits.max_backing);
+    if (bytes == 0) {
+        die("invalid resource dimensions in %s", path);
+    }
+    expect(send_cmd(dr, "create-3d", &(struct gpu_message){&create, sizeof(create), 0, 0},
+                    &response, sizeof(response)),
+           GPU_RESP_OK_NODATA, "create-3d");
+    entry.addr = heap_alloc(dr, bytes);
+    entry.length = (uint32_t)bytes;
+    entry.padding = 0;
+    hdr(&attach, sizeof(attach), GPU_CMD_RESOURCE_ATTACH_BACKING, 0, 0);
+    attach.resource_id = create.resource_id;
+    attach.nr_entries = 1;
+    expect(send_cmd(dr, "attach-3d",
+                    &(struct gpu_message){&attach, sizeof(attach), &entry, sizeof(entry)},
+                    &response, sizeof(response)),
+           GPU_RESP_OK_NODATA, "attach-3d");
+    hdr(&resource, sizeof(resource), GPU_CMD_CTX_ATTACH_RESOURCE, 0, ctx);
+    resource.resource_id = create.resource_id;
+    expect(send_cmd(dr, "ctx-attach", &(struct gpu_message){&resource, sizeof(resource), 0, 0},
+                    &response, sizeof(response)),
+           GPU_RESP_OK_NODATA, "ctx-attach");
+    return create.resource_id;
+}
+
+/**
  * Replay a recorded virgl stream in a new context: each CREATE_3D record
  * makes a resource with backing and attaches it, each SUBMIT record goes in
  * one SUBMIT_3D, and the context and its resources are then destroyed.
@@ -1164,8 +1327,6 @@ static void replay(struct drv *dr, const char *path)
 {
     union {
         struct gpu_ctx_create cc;
-        struct gpu_create_3d c3;
-        struct gpu_attach at;
         struct gpu_resource rs;
         struct gpu_submit sb;
         uint8_t raw[256];
@@ -1184,8 +1345,9 @@ static void replay(struct drv *dr, const char *path)
     hdr(&u, sizeof(u.cc), GPU_CMD_CTX_CREATE, 0, ctx);
     u.cc.nlen = 4;
     memcpy(u.cc.debug_name, "peer", 4);
-    expect(send_cmd(dr, "ctx-create", &u, sizeof(u.cc), 0, 0, &resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "ctx-create");
+    expect(send_cmd(dr, "ctx-create", &(struct gpu_message){&u, sizeof(u.cc), 0, 0}, &resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "ctx-create");
     while (pos < n) {
         uint32_t kind, len;
 
@@ -1199,37 +1361,19 @@ static void replay(struct drv *dr, const char *path)
             die("bad record length in %s", path);
         }
         if (kind == REC_CREATE_3D) {
-            struct gpu_mem_entry e;
-            uint64_t bytes;
-
-            if (len != sizeof(u.c3) - sizeof(struct gpu_hdr) || nmade == 16) {
-                die("bad resource record in %s", path);
+            if (nmade == 16) {
+                die("too many resource records in %s", path);
             }
-            hdr(&u, sizeof(u.c3), GPU_CMD_RESOURCE_CREATE_3D, 0, ctx);
-            memcpy((uint8_t *)&u.c3 + sizeof(struct gpu_hdr), rec + pos, len);
-            bytes = (uint64_t)u.c3.width * u.c3.height * u.c3.depth * u.c3.array_size * 4;
-            made[nmade++] = u.c3.resource_id;
-            expect(send_cmd(dr, "create-3d", &u, sizeof(u.c3), 0, 0, &resp, sizeof(struct gpu_hdr)),
-                   GPU_RESP_OK_NODATA, "create-3d");
-            e.addr = heap_alloc(dr, bytes);
-            e.length = (uint32_t)bytes;
-            e.padding = 0;
-            hdr(&u, sizeof(u.at), GPU_CMD_RESOURCE_ATTACH_BACKING, 0, 0);
-            u.at.resource_id = made[nmade - 1];
-            u.at.nr_entries = 1;
-            expect(send_cmd(dr, "attach-3d", &u, sizeof(u.at), &e, sizeof(e), &resp, sizeof(struct gpu_hdr)),
-                   GPU_RESP_OK_NODATA, "attach-3d");
-            hdr(&u, sizeof(u.rs), GPU_CMD_CTX_ATTACH_RESOURCE, 0, ctx);
-            u.rs.resource_id = made[nmade - 1];
-            expect(send_cmd(dr, "ctx-attach", &u, sizeof(u.rs), 0, 0, &resp, sizeof(struct gpu_hdr)),
-                   GPU_RESP_OK_NODATA, "ctx-attach");
+            made[nmade++] = replay_resource(dr, rec + pos, len, ctx, path);
         } else if (kind == REC_SUBMIT) {
             if (sizeof(u.sb) + len > dr->dev.limits.max_cmd) {
                 die("a submit in %s is larger than the device takes", path);
             }
             hdr(&u, sizeof(u.sb), GPU_CMD_SUBMIT_3D, GPU_FLAG_FENCE, ctx);
             u.sb.size = len;
-            expect(send_cmd(dr, "submit-3d", &u, sizeof(u.sb), rec + pos, len, &resp, sizeof(struct gpu_hdr)),
+            expect(send_cmd(dr, "submit-3d",
+                            &(struct gpu_message){&u, sizeof(u.sb), rec + pos, len}, &resp,
+                            sizeof(struct gpu_hdr)),
                    GPU_RESP_OK_NODATA, "submit-3d");
         } else {
             die("unknown record kind in %s", path);
@@ -1239,25 +1383,38 @@ static void replay(struct drv *dr, const char *path)
     for (i = 0; i < nmade; i++) {
         hdr(&u, sizeof(u.rs), GPU_CMD_CTX_DETACH_RESOURCE, 0, ctx);
         u.rs.resource_id = made[i];
-        expect(send_cmd(dr, "ctx-detach", &u, sizeof(u.rs), 0, 0, &resp, sizeof(struct gpu_hdr)),
+        expect(send_cmd(dr, "ctx-detach", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, &resp,
+                        sizeof(struct gpu_hdr)),
                GPU_RESP_OK_NODATA, "ctx-detach");
         hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
         u.rs.resource_id = made[i];
-        expect(send_cmd(dr, "unref-3d", &u, sizeof(u.rs), 0, 0, &resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-               "unref-3d");
+        expect(send_cmd(dr, "unref-3d", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, &resp,
+                        sizeof(struct gpu_hdr)),
+               GPU_RESP_OK_NODATA, "unref-3d");
     }
     hdr(&u, sizeof(struct gpu_hdr), GPU_CMD_CTX_DESTROY, 0, ctx);
-    expect(send_cmd(dr, "ctx-destroy", &u, sizeof(struct gpu_hdr), 0, 0, &resp, sizeof(struct gpu_hdr)),
+    expect(send_cmd(dr, "ctx-destroy", &(struct gpu_message){&u, sizeof(struct gpu_hdr), 0, 0},
+                    &resp, sizeof(struct gpu_hdr)),
            GPU_RESP_OK_NODATA, "ctx-destroy");
     dr->brk = mark;
     free(rec);
 }
 
-/* Write the built-in stream: a render target cleared to one color. */
+/** Write the built-in stream: a render target cleared to one color. */
 static void write_stream(const char *path)
 {
-    uint32_t res[12] = {VGS_ID_MAKE(2, 1), PIPE_TEXTURE_2D, GPU_FORMAT_B8G8R8X8_UNORM, PIPE_BIND_RENDER_TARGET,
-                        IMG_W, IMG_H, 1, 1, 0, 0, 0, 0};
+    uint32_t res[12] = {VGS_ID_MAKE(2, 1),
+                        PIPE_TEXTURE_2D,
+                        GPU_FORMAT_B8G8R8X8_UNORM,
+                        PIPE_BIND_RENDER_TARGET,
+                        IMG_W,
+                        IMG_H,
+                        1,
+                        1,
+                        0,
+                        0,
+                        0,
+                        0};
     float rgba[4] = {0.25f, 0.5f, 0.75f, 1.0f};
     uint32_t s[64], n = 0, kind;
     FILE *f = fopen(path, "wb");
@@ -1302,7 +1459,7 @@ static void write_stream(const char *path)
     }
 }
 
-/*
+/**
  * Make a resource in the slot of the one just freed, with the next
  * generation, then reset into a new epoch and show that it is gone.
  */
@@ -1317,18 +1474,20 @@ static void run_reset(struct drv *dr, uint32_t id)
     c2.format = GPU_FORMAT_B8G8R8X8_UNORM;
     c2.width = IMG_W;
     c2.height = IMG_H;
-    expect(send_cmd(dr, "recreate-2d", &c2, sizeof(c2), 0, 0, resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "recreate-2d");
+    expect(send_cmd(dr, "recreate-2d", &(struct gpu_message){&c2, sizeof(c2), 0, 0}, resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "recreate-2d");
     handshake(dr, 0, 1ULL << GPU_F_VIRGL);
     hdr(&tr, sizeof(tr), GPU_CMD_TRANSFER_TO_HOST_2D, 0, 0);
     tr.r.width = IMG_W;
     tr.r.height = IMG_H;
     tr.resource_id = id;
-    expect(send_cmd(dr, "stale-id", &tr, sizeof(tr), 0, 0, resp, sizeof(struct gpu_hdr)),
+    expect(send_cmd(dr, "stale-id", &(struct gpu_message){&tr, sizeof(tr), 0, 0}, resp,
+                    sizeof(struct gpu_hdr)),
            GPU_RESP_ERR_INVALID_RESOURCE_ID, "stale-id");
 }
 
-/* Take the 2D resource off the scanout and free it. */
+/** Take the 2D resource off the scanout and free it. */
 static void run_teardown(struct drv *dr, uint32_t id)
 {
     union {
@@ -1338,20 +1497,24 @@ static void run_teardown(struct drv *dr, uint32_t id)
     uint8_t resp[64];
 
     hdr(&u, sizeof(u.ss), GPU_CMD_SET_SCANOUT, 0, 0);
-    expect(send_cmd(dr, "scanout-off", &u, sizeof(u.ss), 0, 0, resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "scanout-off");
+    expect(send_cmd(dr, "scanout-off", &(struct gpu_message){&u, sizeof(u.ss), 0, 0}, resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "scanout-off");
     hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_DETACH_BACKING, 0, 0);
     u.rs.resource_id = id;
-    expect(send_cmd(dr, "detach-backing", &u, sizeof(u.rs), 0, 0, resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA,
-           "detach-backing");
+    expect(send_cmd(dr, "detach-backing", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "detach-backing");
     hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
     u.rs.resource_id = id;
-    expect(send_cmd(dr, "unref", &u, sizeof(u.rs), 0, 0, resp, sizeof(struct gpu_hdr)), GPU_RESP_OK_NODATA, "unref");
+    expect(send_cmd(dr, "unref", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "unref");
 }
 
 /* ---- The seed check. ---- */
 
-/*
+/**
  * Check one region image with the header's checks, as either side would
  * read it: the layout, both blocks for the same epoch, the driver's setup
  * against the offer, every chain the device has still to take and every
@@ -1373,7 +1536,8 @@ static int check_image(const uint8_t *img, size_t n)
     if (l.region_size != n) {
         return VGS_E_LAYOUT;
     }
-    if ((err = vgs_snap_driver(img, &drv)) != VGS_OK || (err = vgs_snap_device(img, &dev)) != VGS_OK) {
+    if ((err = vgs_snap_driver(img, &drv)) != VGS_OK ||
+        (err = vgs_snap_device(img, &dev)) != VGS_OK) {
         return err;
     }
     if (drv.epoch == 0 || drv.state == VGS_DRV_NONE || drv.state > VGS_DRV_GONE) {
@@ -1405,7 +1569,8 @@ static int check_image(const uint8_t *img, size_t n)
             return err;
         }
         for (pos = used; pos != avail; pos++) {
-            if ((err = vgs_chain_read(img, &l, q, &dev.limits, vgs_avail_head(img, q, pos), &c)) != VGS_OK) {
+            if ((err = vgs_chain_read(img, &l, q, &dev.limits, vgs_avail_head(img, q, pos), &c)) !=
+                VGS_OK) {
                 return err;
             }
         }
@@ -1418,6 +1583,7 @@ static int check_image(const uint8_t *img, size_t n)
     return VGS_OK;
 }
 
+/** Check argc region images named by argv; return 1 if any fails. */
 static int check_files(int argc, char **argv)
 {
     int i, bad = 0;
@@ -1437,6 +1603,7 @@ static int check_files(int argc, char **argv)
     return bad ? 1 : 0;
 }
 
+/** Print the accepted command forms and exit with status 2. */
 static void usage(void)
 {
     fprintf(stderr,
@@ -1447,14 +1614,67 @@ static void usage(void)
     exit(2);
 }
 
+/** Map file or an anonymous loopback region of size bytes into dr, starting
+ * its responder for loopback. Return 1 for a new layout, 0 for an old one;
+ * mapping or responder creation failures end the process. */
+static int map_region(struct drv *dr, const char *file, uint64_t size)
+{
+    int fresh = 1;
+    int fds[2];
+
+    if (file) {
+        struct stat st;
+        int fd = open(file, O_RDWR);
+        struct vgs_layout l;
+
+        if (fd < 0 || fstat(fd, &st) != 0) {
+            die("cannot open %s", file);
+        }
+        size = (uint64_t)st.st_size;
+        dr->base = mmap(0, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (dr->base == MAP_FAILED) {
+            die("cannot map %s", file);
+        }
+        close(fd);
+        /* A region already laid out keeps its epochs. */
+        if (vgs_snap_layout(dr->base, &l) == VGS_OK && vgs_check_layout(&l, size) == VGS_OK) {
+            dr->l = l;
+            fresh = 0;
+        }
+    } else {
+        dr->base = mmap(0, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+        if (dr->base == MAP_FAILED) {
+            die("cannot map %s", "the loopback region");
+        }
+        if (pipe(fds) != 0) {
+            die("%s", "cannot make a pipe");
+        }
+        fflush(stdout);
+        if ((dr->child = fork()) == 0) {
+            close(fds[0]);
+            _exit(responder(dr->base, size, fds[1]));
+        }
+        if (dr->child < 0) {
+            close(fds[0]);
+            close(fds[1]);
+            die("%s", "cannot fork the loopback responder");
+        }
+        close(fds[1]);
+        dr->report = fds[0];
+    }
+    dr->size = size;
+    return fresh;
+}
+
+/** Parse the transport options, run the driver and reap its loopback device;
+ * return 0 on success, or exit 1 for a failure and 2 for invalid options. */
 int main(int argc, char **argv)
 {
     struct drv dr;
     const char *file = 0, *stream = 0;
     uint64_t size = VGS_REGION_MIN, backing;
     uint32_t id = VGS_ID_MAKE(1, 1), one = 1;
-    int loop = 0, opt, fresh = 1;
-    int fds[2];
+    int loop = 0, opt, fresh;
 
     if (*(uint8_t *)&one != 1) {
         die("%s", "the transport is little-endian");
@@ -1494,42 +1714,7 @@ int main(int argc, char **argv)
         usage();
     }
     setvbuf(stdout, 0, _IOLBF, 0);
-    if (file) {
-        struct stat st;
-        int fd = open(file, O_RDWR);
-        struct vgs_layout l;
-
-        if (fd < 0 || fstat(fd, &st) != 0) {
-            die("cannot open %s", file);
-        }
-        size = (uint64_t)st.st_size;
-        dr.base = mmap(0, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (dr.base == MAP_FAILED) {
-            die("cannot map %s", file);
-        }
-        close(fd);
-        /* A region already laid out keeps its epochs. */
-        if (vgs_snap_layout(dr.base, &l) == VGS_OK && vgs_check_layout(&l, size) == VGS_OK) {
-            dr.l = l;
-            fresh = 0;
-        }
-    } else {
-        dr.base = mmap(0, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
-        if (dr.base == MAP_FAILED) {
-            die("cannot map %s", "the loopback region");
-        }
-        if (pipe(fds) != 0) {
-            die("%s", "cannot make a pipe");
-        }
-        fflush(stdout);
-        if ((dr.child = fork()) == 0) {
-            close(fds[0]);
-            _exit(responder(dr.base, size, fds[1]));
-        }
-        close(fds[1]);
-        dr.report = fds[0];
-    }
-    dr.size = size;
+    fresh = map_region(&dr, file, size);
 
     handshake(&dr, fresh, stream ? 1ULL << GPU_F_VIRGL : 0);
     run_2d(&dr, id, &backing);
