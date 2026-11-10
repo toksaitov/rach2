@@ -467,7 +467,7 @@ BEGIN {
     print ""
     print "### QEMU and the KVM tests"
     print ""
-    print "The pinned [KVM layer](../vendor/gnu/kvm/Readme.md) stages these commands on x86-64, from its own Debian closure: Debian'"'"'s QEMU with its OpenGL modules, SeaBIOS, OVMF and iPXE'"'"'s network boot ROMs. Beside them, kvm-unit-tests is under `/opt/kvm-unit-tests` and Linux'"'"'s KVM selftests under `/opt/kvm-selftests`, built from the sources pinned in [kvm/sources.txt](../vendor/gnu/kvm/sources.txt)."
+    print "The pinned [KVM layer](../vendor/gnu/kvm/Readme.md) stages these commands on x86-64, from its own Debian closure: Debian'"'"'s QEMU with its OpenGL modules, SeaBIOS, OVMF, iPXE'"'"'s network boot ROMs and virglrenderer'"'"'s test and render servers. Beside them, kvm-unit-tests is under `/opt/kvm-unit-tests` and Linux'"'"'s KVM selftests under `/opt/kvm-selftests`, built from the sources pinned in [kvm/sources.txt](../vendor/gnu/kvm/sources.txt)."
     print ""
     print "| Program | Package | Path | Page |"
     print "| --- | --- | --- | --- |"
