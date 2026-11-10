@@ -1,0 +1,225 @@
+.Dd November 10, 2026
+.Dt VFIO 4
+.Os
+.Sh NAME
+.Nm vfio
+.Nd PCI devices given to programs
+.Sh SYNOPSIS
+.Pa /dev/vfio/vfio
+.Pa /dev/vfio/N
+.Sh DESCRIPTION
+.Nm
+is Linux's VFIO interface, API version 0, through which a program such as
+QEMU drives a PCI function itself: its registers, its interrupts and its
+DMA, which the IOMMU confines to the memory the program maps for it.
+The x86-64 kernel has it; the i686 kernel has neither node.
+A program uses it through the structures and ioctls of Linux's
+.In linux/vfio.h .
+.Pp
+The IOMMU groups the functions it cannot tell apart, as Linux's
+.Fn pci_device_group
+does: a function shares the group of every function its path to the root
+does not isolate from it by ACS, and of the other functions of its slot
+when they have no ACS.
+The Intel PCH root ports Linux takes as isolating are taken so here.
+Groups are numbered from 0, unit by unit and each unit's functions in bus
+order.
+A function that no IOMMU unit translates is in no group, and with no unit
+there is no group at all.
+The boot records the count,
+.Ql vfio: ready: G groups of F functions .
+.Ss Binding
+A function is given to the vfio-pci driver through
+.Pa /sys ,
+as on Linux:
+.Bd -literal -offset indent
+echo vfio-pci > /sys/bus/pci/devices/0000:00:02.0/driver_override
+echo 0000:00:02.0 > /sys/bus/pci/drivers/vfio-pci/bind
+.Ed
+.Pp
+or by writing its vendor and device to
+.Pa /sys/bus/pci/drivers/vfio-pci/new_id ,
+which binds every function of those ids that has no driver.
+The bind fails with
+.Er EBUSY
+while a driver of the kernel's holds the function, and with
+.Er EINVAL
+for a bridge.
+A group is viable while none of its functions but a bridge has a driver
+other than vfio-pci.
+.Xr sysfs 5
+lists the files.
+.Ss Nodes
+.Pa /dev/vfio/vfio ,
+character device 10:196, mode 0666, opens a new container.
+.Pa /dev/vfio/N ,
+character device 242:N, mode 0600, is group N; one descriptor may hold it
+at a time, and a second open fails with
+.Er EBUSY .
+Every descriptor
+.Nm
+gives is open for reading and writing.
+.Bl -tag -width Ds
+.It a container
+.Dv VFIO_GET_API_VERSION ,
+which answers 0;
+.Dv VFIO_CHECK_EXTENSION ,
+1 for
+.Dv VFIO_TYPE1_IOMMU ,
+.Dv VFIO_TYPE1v2_IOMMU
+and
+.Dv VFIO_UNMAP_ALL
+and 0 for the rest;
+.Dv VFIO_SET_IOMMU ;
+and, once it is set,
+.Dv VFIO_IOMMU_GET_INFO ,
+.Dv VFIO_IOMMU_MAP_DMA
+and
+.Dv VFIO_IOMMU_UNMAP_DMA .
+.It a group
+.Dv VFIO_GROUP_GET_STATUS ,
+.Dv VFIO_GROUP_SET_CONTAINER ,
+which fails with
+.Er EPERM
+for a group that is not viable,
+.Dv VFIO_GROUP_UNSET_CONTAINER ,
+which fails with
+.Er EBUSY
+while a device of the group is open, and
+.Dv VFIO_GROUP_GET_DEVICE_FD ,
+which takes a function's name,
+.Ql 0000:BB:DD.F ,
+bound to vfio-pci and in the group, once the container has its IOMMU.
+.It a device
+.Dv VFIO_DEVICE_GET_INFO ,
+.Dv VFIO_DEVICE_GET_REGION_INFO ,
+.Dv VFIO_DEVICE_GET_IRQ_INFO ,
+.Dv VFIO_DEVICE_SET_IRQS
+and
+.Dv VFIO_DEVICE_RESET .
+.Dv VFIO_DEVICE_GET_PCI_HOT_RESET_INFO
+and
+.Dv VFIO_DEVICE_PCI_HOT_RESET
+fail with
+.Er ENODEV ,
+as on a root bus.
+.El
+.Ss Type1
+.Dv VFIO_SET_IOMMU
+gives every function of the container's groups one IOMMU domain.
+It fails with
+.Er EPERM
+on a host whose interrupts are not remapped, where a function could raise
+any interrupt by a message, unless the boot line has
+.Ql vfio_iommu_type1.allow_unsafe_interrupts=1 ,
+as Linux's module parameter.
+.Dv VFIO_IOMMU_GET_INFO
+gives page sizes of 4 KiB, 2 MiB and 1 GiB, the valid IOVA ranges, which
+leave out each function's reserved regions but the relaxable ones, and
+the count of mappings left.
+.Pp
+.Dv VFIO_IOMMU_MAP_DMA
+pins the caller's pages, charged against its
+.Dv RLIMIT_MEMLOCK
+as
+.Xr limits 7
+says, and maps them at the IOVA with the access its flags give.
+Its addresses and size are multiples of 4 KiB, and its range lies within
+one valid range, or it fails with
+.Er EINVAL ;
+it fails with
+.Er EEXIST
+over a mapping, and with
+.Er ENOSPC
+at 65535 mappings.
+When the program unmaps the pinned memory, or its address space ends, the
+device can no longer reach those pages.
+.Dv VFIO_IOMMU_UNMAP_DMA
+removes the mappings of a range, or every one with
+.Dv VFIO_DMA_UNMAP_FLAG_ALL ;
+under
+.Dv VFIO_TYPE1v2_IOMMU
+a range that would split a mapping fails with
+.Er EINVAL .
+.Ss Regions
+A device's region N lies at offset N << 40 of its descriptor and is read
+and written with
+.Xr pread 2
+and
+.Xr pwrite 2 :
+the six BARs, 0 to 5, the ROM, 6, and the configuration space, 7.
+An Intel display adds, read-only and each with Linux's type capability,
+its OpRegion, 9, and the configuration spaces of the host bridge, 10, and
+the LPC bridge, 11.
+A memory BAR of a page or more can be mapped with
+.Xr mmap 2 ,
+uncached; its pages fault in only while the function decodes memory, and
+a reset or turning decoding off takes them from every mapping.
+The MSI-X table's bytes read as all ones and take no write.
+.Pp
+The configuration space is the function's but for what
+.Nm
+keeps, as on Linux: the BARs and the ROM's address, the Interrupt Disable
+bit, the interrupt line, the MSI capability and the MSI-X enable and mask
+bits.
+A write cannot start a function level reset, and the OpRegion's address
+takes no write.
+The extended space reads as the function answers it and takes no write.
+.Ss Interrupts
+.Dv VFIO_DEVICE_SET_IRQS
+gives an eventfd to the line, to MSI, to each MSI-X entry, and to the
+error and request indexes.
+At an interrupt of the line,
+.Nm
+masks it by the function's Interrupt Disable bit and signals its eventfd;
+an unmask, by ioctl or by an eventfd given to
+.Dv VFIO_IRQ_SET_ACTION_UNMASK ,
+lifts the mask.
+The line is offered only to a function that masks it that way.
+MSI-X entries can be set and cleared while MSI-X is on.
+.Ss Release
+When the last descriptor and mapping of a device close, or their owner
+dies, every interrupt goes off, bus mastering goes off, the function is
+reset and its state at the open written back.
+It stays bound to vfio-pci.
+.Sh LIMITS
+MSI of more than one message is answered with one, as Linux answers when
+it gives fewer; MSI-X has every entry.
+There is no VGA region, no hot reset, and no
+.Dv VFIO_DEVICE_IOEVENTFD
+or
+.Dv VFIO_DEVICE_FEATURE ,
+which fail with
+.Er ENOTTY ,
+so no migration.
+The error and request eventfds are never signalled.
+A device's descriptor answers
+.Xr lseek 2 ,
+where Linux's is not seekable.
+At most 64 groups, 128 functions in groups and 16 ids given by
+.Pa new_id .
+.Sh FILES
+.Bl -tag -width /sys/kernel/iommu_groups
+.It Pa /dev/vfio/vfio
+The container's node.
+.It Pa /dev/vfio/N
+Group N's node.
+.It Pa /sys/kernel/iommu_groups
+The groups, their functions and their reserved regions.
+.It Pa /sys/bus/pci/drivers/vfio-pci
+The driver's bind, unbind, new_id and remove_id.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+$ readlink /sys/bus/pci/devices/0000:00:02.0/iommu_group
+\&../../../kernel/iommu_groups/0
+.Ed
+.Pp
+The native case
+.Nm vfiomusl
+checks the container, each group's node and its entries of
+.Pa /sys .
+.Sh SEE ALSO
+.Xr kvm 4 ,
+.Xr sysfs 5 ,
+.Xr limits 7

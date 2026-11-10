@@ -149,6 +149,15 @@ A KVM virtual machine,
 has at most 64 vCPUs, with ids below 256, and 256 memory slots;
 a vCPU takes at most 256 CPUID entries, and fewer than 256 MSRs in one
 call.
+A VFIO container,
+.Xr vfio 4 ,
+holds at most 65535 DMA mappings, whose pages count against
+.Dv RLIMIT_MEMLOCK ;
+the machine has 64 IOMMU groups and 128 functions in groups at most, and
+a function's MSI-X table at most 2048 entries.
+The devices' messages share 191 interrupt vectors, from 48 to 239 less the
+system call's 128; a request past them fails with
+.Er ENOSPC .
 .Sh FILES
 .Bl -tag -width /etc/rach2/limits
 .It Pa /etc/rach2/limits
@@ -165,5 +174,6 @@ by name.
 .Xr sh 1 ,
 .Xr prlimit64 2 ,
 .Xr kvm 4 ,
+.Xr vfio 4 ,
 .Xr core 5 ,
 .Xr memory 7
