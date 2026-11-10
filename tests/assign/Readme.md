@@ -1,12 +1,12 @@
 # Device assignment
 
-The assignment cases boot the GNU root on q35 with an emulated Intel VT-d unit. A virtio NIC goes to Debian through Rach2's VFIO, while Rach2 keeps its e1000, NVMe root, AHCI payload disk and virtio-gpu display. The EDU device forces DMA and interrupt faults through the same unit. Each case has its own root overlay and powers its nested guest off or kills and reaps it; etude stops the outer machine.
+The assignment cases boot the GNU root on q35 with an emulated Intel VT-d unit. Its root has the GNU product layers, with no test inventories or staged personal logins, and is selected by the fixed MBR identity `82274701:1` so disk enumeration cannot select the payload. A virtio NIC goes to Debian through Rach2's VFIO, while Rach2 keeps its e1000, NVMe root, AHCI payload disk and virtio-gpu display. The EDU device forces DMA and interrupt faults through the same unit. Each case has its own root overlay and powers its nested guest off or kills and reaps it; etude stops the outer machine.
 
 ## Running
 
 `ARCH=x86_64 tests/run assign` runs the cases in `tests/cases/machine.assign.json`. They run on Linux; `nic-kvm` needs the testing PC's nested SVM profile. `RACH2_CASES=machine.assign.boot` selects just the boot. The remaining cases are `nic-tcg`, `nic-kvm`, `dma`, `index`, `compat`, `kill` and `reassign`.
 
-The machine has `intel-iommu,intremap=on,caching-mode=on`, a `virtio-net-pci` at `0000:00:06.0` on the user network `10.0.3.0/24`, and EDU at `0000:00:07.0` with its DMA mask covering every address. The host's e1000 uses a separate user network, `10.0.2.0/24`. The two gateways end in `.2`.
+The machine has `intel-iommu,intremap=on,caching-mode=on`, a `virtio-net-pci,iommu_platform=on` at `0000:00:06.0` on the user network `10.0.3.0/24`, and EDU at `0000:00:07.0` with its DMA mask covering every address. The host's e1000 uses a separate user network, `10.0.2.0/24`. The two gateways end in `.2`. `iommu_platform=on` makes the NIC use the bus's DMA address space through VT-d.
 
 `run.sh` runs as root in the GNU guest. It binds the two functions to vfio-pci and sets the locked-memory limit to unlimited. During each case it writes random data to the ext2 root, flushes and verifies it, and pings the host's gateway. It compares the live VFIO, KVM and free interrupt-vector counts before and after the operation. The kill case requires live pinned DMA pages before sending SIGKILL; the reassignment case then boots a second guest with the same function.
 

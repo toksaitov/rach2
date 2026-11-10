@@ -1035,6 +1035,8 @@ On the serial console `etude-guest` keeps every sequenced frame it sent until it
 
 ### The QEMU launcher
 
+A KVM machine with an `intel-iommu` device uses `kernel-irqchip=split`, since QEMU's interrupt remapping needs the I/O APIC in userspace ([QEMU's invocation reference](https://www.qemu.org/docs/master/system/invocation.html)).
+
 [`qemu.h`](include/etude/qemu.h) boots a guest or machine case's QEMU profile on the site's accelerator. [`qemu_profile.c`](qemu_profile.c) makes the command line, and [`posix/qemu.c`](posix/qemu.c) runs the machine on Linux and macOS.
 
 The machine is QEMU's default PC, or its q35 when the profile's `machine` is `q35`, whose own AHCI controller is function 2 of device 31 on the first bus, 0:31.2, as on the Intel chipsets of real machines. Direct and SeaBIOS boots use `qemu-system-i386` for an i686 kernel and `qemu-system-x86_64` for an x86-64 kernel, as the site names them. OVMF boots use the site's `qemu_x86_64` and `ovmf_x86_64` for either kernel, as the uefi suite does; the processor profile must run x86-64 firmware. The site's `ovmf_i686` field is reserved and unused. `-nodefaults` leaves it the board's own devices and those of the profile, and `-display none`, or the `virgl` or `venus` display's backend, `-no-reboot` and `-S` give it no window, make a reset end QEMU, and keep its processors stopped until the launcher starts them. On Windows `-no-shutdown` follows the monitor's arguments, so that a shutdown, reset or panic of the guest stops it and leaves QEMU running until the launcher asks it to quit. The profile becomes these arguments:

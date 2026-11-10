@@ -166,6 +166,7 @@ static int dma_fault(struct device *d)
     if (ioctl(d->container, VFIO_IOMMU_UNMAP_DMA, &unmap) < 0 || unmap.size != map.size)
         return error("sentinel unmap");
     memset(d->guard, 0xa5, 4096);
+    printf("assign-edu: control: DMA copied 4096 bytes; IOVA now unmapped\n");
     before = counter("iommu_dma_faults");
     dma(d, 0x40000, map.iova, 3);
     while (counter("iommu_dma_faults") == before)
@@ -218,6 +219,8 @@ static int irq_fault(struct device *d, int compatibility)
         usleep(1000);
     }
     d->bar[0x64 / 4] = 1;
+    printf("assign-edu: control: remapped MSI delivered; forging %s\n",
+           compatibility ? "compatibility format" : "index 32767");
     before = counter("iommu_irq_faults");
     d->raw_msi = 1;
     config_write(d, cap + 4, compatibility ? 0xfee00000 : 0xfeeffff0);
@@ -240,6 +243,7 @@ int main(int argc, char **argv)
     struct device d;
     int r;
 
+    setvbuf(stdout, NULL, _IONBF, 0);
     memset(&d, 0, sizeof(d));
     d.container = d.group = d.fd = d.event = -1;
     d.bar = MAP_FAILED;

@@ -1984,7 +1984,7 @@ ASSIGN_DIR = build/tests/cases/assign
 $(ASSIGN_DIR)/initrd: tests/assign/mkguest.sh tests/assign/guest-init \
                       tests/kvm/guests/debian.txt build/tools/wifi/mkcpio $(SHA256TOOL)
 	sh tests/assign/mkguest.sh $(@D)
-$(ASSIGN_DIR)/edu: tests/assign/edu.c $(LIBC_STAMP)
+$(ASSIGN_DIR)/edu: tests/assign/edu.c rach2/sys/vfio/vfio_abi.h $(LIBC_STAMP)
 	@mkdir -p $(@D) build/tmp
 	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
 	    -static -Wl,-z,noexecstack $< -o $@
@@ -2004,4 +2004,22 @@ $(ASSIGN_DIR)/assign.ext2: $(ASSIGN_DIR)/assign.tar
 	. tools/setup/e2fsprogs_path.sh; \
 	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
 	    -d "$$work" $@.tmp $${kib}k; \
+	mv $@.tmp $@
+
+# Assignment needs the product's GNU root, without the GNU test inventories
+# or a person's staged logins. Give it a fixed MBR identity so the AHCI
+# payload may be enumerated before the NVMe root.
+ASSIGN_ROOT = $(ARCH_BUILD)/tests/cases/assign/root.ext2
+ASSIGN_DISK = $(ARCH_BUILD)/tests/cases/assign/gnu.disk
+$(ASSIGN_ROOT): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_I386=$(GNU_I386_ON) \
+	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
+	    krffs/manifests/os-real-gnu.manifest $@ 16384
+$(ASSIGN_DISK): $(ASSIGN_ROOT) $(MKMBR)
+	@mkdir -p $(@D)
+	@set -e; trap 'rm -f "$@.tmp"' EXIT; \
+	mib=$$(($$(wc -c < $<) / 1048576)); \
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null; \
+	dd if=$< of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null; \
+	$(MKMBR) --lba --id 82274701 $@.tmp 2048:$$((mib * 2048)):83; \
 	mv $@.tmp $@

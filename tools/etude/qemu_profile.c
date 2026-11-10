@@ -1362,10 +1362,21 @@ static void add_display(struct line *l, const struct etude_qemu_profile *p)
  *
  * @return 0, or EINVAL for an ACPI table that -acpitable cannot take.
  */
-static int add_machine(struct line *l, const struct etude_qemu_profile *p)
+static int add_machine(struct line *l, const struct etude_qemu_profile *p, enum etude_accel accel)
 {
     const char *table;
+    size_t i;
 
+    if (accel == ETUDE_ACCEL_KVM) {
+        for (i = 0; p->devices != NULL && p->devices[i].model != NULL; i++) {
+            if (strcmp(p->devices[i].model, "intel-iommu") == 0) {
+                /* QEMU remaps interrupts only with a userspace I/O APIC. */
+                add(l, 0, "-machine");
+                add(l, 0, "kernel-irqchip=split");
+                break;
+            }
+        }
+    }
     if (p->q35) {
         add(l, 0, "-machine");
         add(l, 0, "q35");
@@ -1442,7 +1453,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add_boundary_memory(&l, number);
     else if (p->display != NULL && display_find(p->display)->shared)
         add_shared_memory(&l, number);
-    if ((e = add_machine(&l, p)) != 0)
+    if ((e = add_machine(&l, p, s->accel)) != 0)
         return e;
     add_display(&l, p);
     add_firmware(&l, p, ovmf);
