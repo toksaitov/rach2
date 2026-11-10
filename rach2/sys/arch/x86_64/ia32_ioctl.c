@@ -7,6 +7,7 @@
 #include "ia32.h"
 
 #include "../../fs/fd.h"
+#include "../../drm/drm.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../mm/usercopy.h"
@@ -691,8 +692,7 @@ static long tty(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned
 /** The DRM requests, type 'd' (ia32_ioctl_drm.c). */
 static long drm(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned long arg)
 {
-    (void)e;
-    return ia32_ioctl_drm(fd, cmd, arg);
+    return drm_is_file(e) ? ia32_ioctl_drm(fd, cmd, arg) : pass(fd, cmd, arg);
 }
 
 /** The requests of dma-buf, sync_file and udmabuf (ia32_ioctl_gpu.c). */

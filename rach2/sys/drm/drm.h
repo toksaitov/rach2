@@ -635,6 +635,9 @@ void drm_mode_file_release(struct drm_file *file);
  */
 int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg);
 
+/** Whether a held descriptor is an open DRM card or render node. */
+int drm_is_file(const fd_entry_t *entry);
+
 /* ------------------------------------------------------------------------
  * Display state: mode objects and their atomic state (76-5a, 76-5b)
  *
