@@ -443,7 +443,7 @@ tests/host/i915_ctx_hosttest.c:row_requests lines 133 a test's rows, each a case
 
 tests/host/i915_reset_hosttest.c:row_engine_reset complexity 33 a test's rows, each a case, read as one table
 
-tests/host/kd_hosttest.c:translating lines 101 a test's rows, each a case, read as one table
+tests/host/kd_hosttest.c:translating lines 102 a test's rows, each a case, read as one table
 
 tests/host/kheap_hosttest.c:main lines 114 a test's rows, each a case, read as one table
 
