@@ -65,6 +65,7 @@ udmabufprobe dmabuf
 fenceprobe dmabuf
 drmfuzz dmabuf
 vgpuprobe vgpu
+vgshmprobe bed-shm
 i915gemprobe i915fake
 gpucompatprobe gpucompat
 i915execprobe i915fake
