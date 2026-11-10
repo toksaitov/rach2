@@ -442,6 +442,10 @@ int main(int argc, char **argv)
            "queue_bkl return_bkl\n");
     lock_stats("before");
     load_start(&allowed, load);
+    if (__atomic_load_n(&worker_error, __ATOMIC_ACQUIRE)) {
+        errno = __atomic_load_n(&worker_error, __ATOMIC_ACQUIRE);
+        fail("worker setup");
+    }
     if (bind_cpu(cpu) != 0)
         fail("bind sleeper");
     report_held();
