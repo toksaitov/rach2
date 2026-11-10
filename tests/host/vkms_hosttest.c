@@ -28,6 +28,7 @@
  */
 
 #define KMS_MODEL_DEVICES
+#define KMS_MODEL_KERNEL
 #include "drm_kms_model.c"
 #include "drm/vkms.c"
 

@@ -5,8 +5,11 @@
  * copies, a clock the test may move, waits that never sleep, events,
  * buffer objects and fences. A test that defines KMS_MODEL_FENCES brings
  * the real fences and sync files and their descriptors itself, one that
- * defines KMS_MODEL_DEVICES its own device holds, and one that sets
- * `model_wait` makes a wait's condition come true, as a sleep would.
+ * defines KMS_MODEL_DEVICES its own device holds, one that defines
+ * KMS_MODEL_KERNEL its own log and interrupt flags, one that defines
+ * KMS_MODEL_CLIENT the console's client, and one that sets `model_wait`
+ * makes a wait's condition come true, as a sleep would. The hotplug
+ * events the core sends are counted in `model_hotplugs`.
  */
 
 #include "drm/drm_mode.c"
@@ -421,6 +424,49 @@ void drm_dev_put(struct drm_device *dev)
 {
     CHECK(dev->refs > 0, "a device is put no more than it is held");
     dev->refs--;
+}
+#endif
+
+#ifndef KMS_MODEL_KERNEL
+/* ---- the log, dropped, and interrupt flags that are never off ---- */
+
+/** Drop a log line. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
+/** The flags, which no host test reads. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** Nothing to put back. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+#endif
+
+/* ---- hotplug events, counted ---- */
+
+static int model_hotplugs;
+
+/** Count `connector`'s event to user space. */
+void drm_sysfs_connector_hotplug_event(struct drm_connector *connector)
+{
+    (void)connector;
+    model_hotplugs++;
+}
+
+#ifndef KMS_MODEL_CLIENT
+/** The console's answer, which no client here gives. */
+void drm_client_dev_hotplug(struct drm_device *dev)
+{
+    (void)dev;
 }
 #endif
 
