@@ -80,6 +80,32 @@
 #define MSR_P6_EVNTSEL0          0x186u
 #define MSR_K7_EVNTSEL0          0xC0010000u
 
+/* The registers of particular processors that a guest's kernel reads or
+ * writes by the processor's family, with no CPUID bit to check first, and
+ * the old performance counters: Linux's KVM reads them as zero or drops
+ * their writes, so that the access does not fault (msr_reads_zero and
+ * msr_write_dropped). */
+#define MSR_IA32_UCODE_WRITE      0x079u
+#define MSR_IA32_PERF_CTL         0x199u
+#define MSR_IA32_LASTBRANCHFROMIP 0x1DBu /* then LASTBRANCHTOIP, LASTINTFROMIP */
+#define MSR_IA32_LASTINTTOIP      0x1DEu
+#define MSR_RAPL_POWER_UNIT       0x606u
+#define MSR_PKG_ENERGY_STATUS     0x611u
+#define MSR_DRAM_ENERGY_STATUS    0x619u
+#define MSR_PP0_ENERGY_STATUS     0x639u
+#define MSR_PP1_ENERGY_STATUS     0x641u
+#define MSR_AMD64_SYSCFG          0xC0010010u
+#define MSR_AMD64_NB_CFG          0xC001001Fu
+#define MSR_AMD64_PATCH_LOADER    0xC0010020u
+#define MSR_K8_INT_PENDING_MSG    0xC0010055u
+#define MSR_FAM10H_MMIO_CONF_BASE 0xC0010058u
+#define MSR_K8_TSEG_ADDR          0xC0010112u
+#define MSR_K8_TSEG_MASK          0xC0010113u
+#define MSR_AMD64_DC_CFG          0xC0011022u
+#define MSR_AMD64_TW_CFG          0xC0011023u
+#define MSR_AMD64_BU_CFG2         0xC001102Au
+#define MSR_F15H_EX_CFG           0xC001102Cu
+
 /* IA32_FEATURE_CONTROL as a guest without VMX, SMX or LMCE reads it:
  * locked with nothing enabled, the state Linux's KVM reaches once such a
  * guest's firmware locks it. */
@@ -655,6 +681,73 @@ static int perf_msr(uint32_t index)
 }
 
 /**
+ * Whether a guest reads the MSR `index` as zero, as Linux's
+ * kvm_get_msr_common answers it: the identity MSRs, the last-branch
+ * records, AMD's configuration registers, the performance state control,
+ * the RAPL energy counters, and the old performance counters of a VM
+ * without a PMU. A Linux guest on an AMD processor reads SYSCFG with its
+ * MTRRs, and a #GP there puts a warning and a stack trace in its log.
+ */
+static int msr_reads_zero(uint32_t index)
+{
+    if (perf_msr(index) || (index >= MSR_IA32_LASTBRANCHFROMIP && index <= MSR_IA32_LASTINTTOIP)) {
+        return 1;
+    }
+    switch (index) {
+    case MSR_IA32_PLATFORM_ID:
+    case MSR_EBL_CR_POWERON:
+    case MSR_IA32_PERF_CTL:
+    case MSR_RAPL_POWER_UNIT:
+    case MSR_PKG_ENERGY_STATUS:
+    case MSR_DRAM_ENERGY_STATUS:
+    case MSR_PP0_ENERGY_STATUS:
+    case MSR_PP1_ENERGY_STATUS:
+    case MSR_AMD64_SYSCFG:
+    case MSR_AMD64_NB_CFG:
+    case MSR_K8_INT_PENDING_MSG:
+    case MSR_FAM10H_MMIO_CONF_BASE:
+    case MSR_K8_TSEG_ADDR:
+    case MSR_K8_TSEG_MASK:
+    case MSR_AMD64_DC_CFG:
+    case MSR_AMD64_TW_CFG:
+    case MSR_AMD64_BU_CFG2:
+    case MSR_F15H_EX_CFG:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/**
+ * Whether a guest's write of `value` to the MSR `index` is taken and
+ * dropped, as Linux's kvm_set_msr_common drops it: a microcode update,
+ * AMD's configuration registers, the old performance counters of a VM
+ * without a PMU, and a zero for the MMIO configuration base. A Linux
+ * guest on an AMD processor sets a bit of NB_CFG on each processor it
+ * brings up.
+ */
+static int msr_write_dropped(uint32_t index, uint64_t value)
+{
+    if (perf_msr(index)) {
+        return 1;
+    }
+    switch (index) {
+    case MSR_IA32_UCODE_WRITE:
+    case MSR_AMD64_NB_CFG:
+    case MSR_AMD64_PATCH_LOADER:
+    case MSR_AMD64_DC_CFG:
+    case MSR_AMD64_TW_CFG:
+    case MSR_AMD64_BU_CFG2:
+    case MSR_F15H_EX_CFG:
+        return 1;
+    case MSR_FAM10H_MMIO_CONF_BASE:
+        return value == 0;
+    default:
+        return 0;
+    }
+}
+
+/**
  * A guest's write of `value` to IA32_TSC or IA32_TSC_ADJUST, as Linux's
  * kvm_set_msr_common: a write of the adjustment moves the TSC by what it
  * changes, and is ignored when the guest's CPUID lacks TSC_ADJUST; a write
@@ -696,14 +789,13 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
     if (r != 1) {
         return r;
     }
-    switch (index) {
-    case MSR_IA32_PLATFORM_ID:
-    case MSR_EBL_CR_POWERON:
-        if (write) {
-            return -1;
+    if (write ? msr_write_dropped(index, *value) : msr_reads_zero(index)) {
+        if (!write) {
+            *value = 0;
         }
-        *value = 0;
         return 0;
+    }
+    switch (index) {
     case MSR_IA32_FEATURE_CONTROL:
         if (write) {
             return -1;
@@ -718,12 +810,6 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
         return kvm_msr_feature(index, value) == 0 ? 0 : -1;
     default:
         break;
-    }
-    if (perf_msr(index)) {
-        if (!write) {
-            *value = 0;
-        }
-        return 0;
     }
     if (write && (index == MSR_IA32_TSC || index == MSR_IA32_TSC_ADJUST)) {
         return tsc_write(v, index, *value);

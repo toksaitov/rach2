@@ -1914,6 +1914,37 @@ static void cr_rows(int fd)
           "and the next entry delivers #GP(0)");
 }
 
+/** The MSRs of particular processors that Linux's KVM reads as zero or
+ * whose writes it drops; `gpe` is the #GP that any other access injects. */
+static void msr_family_rows(int fd, uint32_t gpe)
+{
+    set_regs(fd, 0x1000, 0x55, 0xC0010010u, 0x66);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0 &&
+              regs_of(fd).rdx == 0 && regs_of(fd).rip == 0x1003,
+          "RDMSR of AMD's SYSCFG reads zero, as Linux's KVM reads it");
+    set_regs(fd, 0x1000, 0, 0xC001001Fu, 0x4000);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "WRMSR of AMD's NB_CFG is taken and dropped");
+    set_regs(fd, 0x1000, 0, 0xC001001Fu, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0 &&
+              regs_of(fd).rdx == 0,
+          "and NB_CFG still reads zero");
+    set_regs(fd, 0x1000, 1, 0xC0010010u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
+          "WRMSR of SYSCFG, which Linux does not drop, is #GP");
+    set_regs(fd, 0x1000, 0, 0xC0010058u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "WRMSR of zero to the MMIO configuration base is dropped");
+    set_regs(fd, 0x1000, 1, 0xC0010058u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe, "and of another value is #GP");
+    set_regs(fd, 0x1000, 0x55, 0x17, 0x66);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0,
+          "RDMSR of the platform id reads zero");
+    set_regs(fd, 0x1000, 1, 0x17, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe,
+          "WRMSR of the platform id is #GP");
+}
+
 /** The debug registers, MSRs, XSETBV, VMCALL and the instructions the
  * kernel answers alone. */
 static void insn_rows(int fd)
@@ -1934,6 +1965,7 @@ static void insn_rows(int fd)
     set_regs(fd, 0x1000, 0, 0x12345678u, 0);
     CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
           "RDMSR of an MSR nobody knows is #GP");
+    msr_family_rows(fd, gpe);
     set_regs(fd, 0x1000, 1, 0x6E0, 0);
     CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
           "WRMSR of the TSC deadline goes to the local APIC's MSRs");
