@@ -428,7 +428,8 @@ while the port waits for its reconnect.
 reads the name of the protocol the device speaks.
 A name or alias of psmouse's table written to it, matched whole as
 written, with no newline, switches the port as psmouse switches it: the
-protocol's own detect and set-up, a device that does not speak it reset
+old protocol's touchpad put back in relative mode, the new protocol's
+own detect and set-up, a device that does not speak it reset
 and set to PS/2, a node registered for it before the old one is removed,
 and the protocol's files; the node's name keeps the vendor and model a
 detect gave before, as psmouse keeps them.

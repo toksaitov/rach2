@@ -1215,6 +1215,7 @@ void synaptics_disconnect(void)
     if (pad) {
         evdev_unregister(pad);
         pad = 0;
+        mode_cmd(0); /* Linux's synaptics_reset: relative mode, gestures on */
     }
     pktcnt = 0;
 }
