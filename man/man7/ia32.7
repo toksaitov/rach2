@@ -359,6 +359,15 @@ of, turns it off; any other is ignored, and the last value read wins.
 The kernel built with
 .Ql IA32=0
 has no ABI to turn on and ignores the option.
+.Pp
+An i386 handler taken on a non-flat stack segment uses a nonzero
+.Fa sa_restorer
+as its stack top when neither
+.Dv SA_ONSTACK
+nor
+.Dv SA_RESTORER
+is set and the interrupted stack is outside the alternate stack.
+The frame must fit the alternate stack, as on Linux.
 .Sh LIMITS
 An i386 frame without
 .Dv SA_RESTORER

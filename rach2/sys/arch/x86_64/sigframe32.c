@@ -196,6 +196,9 @@ static int seg_loadable(unsigned int sel)
     if ((sel & ~3u) == 0) {
         return 1;
     }
+    if (sel & 4u) {
+        ldt_switch(current_proc->mm);
+    }
     ar = x86_64_lar(sel);
     if ((ar & (AR_P | AR_S | AR_DPL3)) != (AR_P | AR_S | AR_DPL3)) {
         return 0;
@@ -303,8 +306,9 @@ static uint32_t restorer_of(const struct k_sigaction *sa, int rt, uintptr_t retc
  * The frame goes below the interrupted stack pointer, an i386 stack having
  * no red zone, or at the top of the alternate stack under SA_ONSTACK, with
  * the floating-point state above it (`fpu_frame32_place`). Linux's switch
- * to the stack in `sa_restorer` for a 16-bit SS is left out, since no
- * other SS can be loaded here without an LDT. A frame any byte of which
+ * to the stack in `sa_restorer` for a non-flat SS applies without
+ * SA_ONSTACK or SA_RESTORER, when not already on the alternate stack.
+ * A frame any byte of which
  * lies at or past 4 GiB, which a 64-bit program's stack can put it, is
  * refused, where Linux writes it and its handler faults on the truncated
  * stack pointer. The restorer is SA_RESTORER's, else the 32-bit vDSO's,
@@ -331,6 +335,10 @@ int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *s
     if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
         sp = (uintptr_t)current_proc->altstack_sp + (uintptr_t)current_proc->altstack_size;
         on_alt = 1;
+    } else if (!(sa->flags & (SA_ONSTACK | SA_RESTORER)) && !was_on && tf->ss != GDT_USER_DATA &&
+               sa->restorer) {
+        sp = (uintptr_t)sa->restorer;
+        on_alt = 1;
     }
     fp_addr = fpu_frame32_place(sp);
     size = rt ? sizeof(frame.rt) : sizeof(frame.plain);
@@ -340,7 +348,7 @@ int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *s
     if (on_alt && !sigframe_on_altstack(frame_addr)) {
         return -1;
     }
-    if (fp_addr + fpu_frame32_bytes() > LOW_4G) {
+    if (frame_addr >= LOW_4G || fp_addr >= LOW_4G || fpu_frame32_bytes() > LOW_4G - fp_addr) {
         return -1;
     }
 

@@ -140,9 +140,12 @@ static uint64_t get64(const uint8_t *p)
  * tests: `lar` leaves its 0 where the descriptor is out of reach. */
 int sigframe_ss_valid(unsigned int sel)
 {
-    uint32_t ar = 0;
+    uint32_t ar;
 
-    __asm__ __volatile__("larl %1, %0" : "+r"(ar) : "r"((uint32_t)sel));
+    if (sel & 4u) {
+        ldt_switch(current_proc->mm);
+    }
+    ar = x86_64_lar(sel);
     ar &= AR_TYPE_MASK | AR_S | AR_DPL3 | AR_P;
     return ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA) ||
            ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA_EXPDOWN);
