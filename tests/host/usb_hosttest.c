@@ -19,6 +19,7 @@ extern void *malloc(unsigned long size);
 extern void free(void *p);
 
 #include "../../rach2/sys/usb/core.h"
+#include "../../rach2/sys/usb/hid.h"
 #include "../../rach2/sys/usb/hub.h"
 
 /* ---- the functions outside core.c that it calls ---- */
@@ -557,48 +558,72 @@ void msc_slot_closed(struct xhci_ctrl *hc, int device)
     slots_closed++;
 }
 
-/** Do nothing: the HID driver has its own test, hid_hosttest.c. */
-void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
+/** Take nothing: the HID driver has its own test, hid_hosttest.c. */
+int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int length)
 {
     (void)device;
-    (void)kind;
-    (void)vendor;
-    (void)product;
+    (void)ids;
+    (void)rdesc;
+    (void)length;
+    return 0;
 }
 
 /** Do nothing: the HID driver has its own test, hid_hosttest.c. */
-void hid_report(int slot, int kind, const uint8_t *report, int length)
+void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
 {
-    (void)slot;
+    (void)device;
     (void)kind;
+    (void)ids;
+}
+
+/** Return 0, for the core to ask for the endpoint's packet. */
+int hid_report_size(int device)
+{
+    (void)device;
+    return 0;
+}
+
+/** Do nothing: the HID driver has its own test, hid_hosttest.c. */
+void hid_report(int device, const uint8_t *report, int length)
+{
+    (void)device;
     (void)report;
     (void)length;
 }
 
 /** Do nothing, as `hid_report` does. */
-void hid_gone(int slot)
-{
-    (void)slot;
-}
-
-/* The LED report the rows have the HID driver ask for, -1 for none, and the
- * last report the core said it sent: its device, byte and outcome, and how
- * many it said it sent. */
-static int led_wanted = -1;
-static int led_sent_device, led_sent_report, led_sent_ok, led_sent_count;
-
-/** Return `led_wanted`. */
-int hid_led_report(int device)
+void hid_gone(int device)
 {
     (void)device;
-    return led_wanted;
+}
+
+/* The LED byte the rows have the HID driver offer, -1 for none; the times
+ * it was asked; the byte it offered last; and the last report the core
+ * said it sent: its device and outcome, and how many it said it sent. */
+static int led_wanted = -1;
+static int led_asked;
+static int led_offered = -1;
+static int led_sent_device, led_sent_report, led_sent_ok, led_sent_count;
+
+/** Offer `led_wanted` as a one-byte LED report, wValue 0x0200. */
+int hid_output_report(int device, uint8_t *out, int size, int *value)
+{
+    (void)device;
+    led_asked++;
+    if (led_wanted < 0 || size < 1) {
+        return -1;
+    }
+    out[0] = (uint8_t)led_wanted;
+    *value = 0x0200;
+    led_offered = led_wanted;
+    return 1;
 }
 
 /** Record what the core sent. */
-void hid_led_sent(int device, int report, int ok)
+void hid_output_sent(int device, int ok)
 {
     led_sent_device = device;
-    led_sent_report = report;
+    led_sent_report = led_offered;
     led_sent_ok = ok;
     led_sent_count++;
 }
@@ -641,7 +666,7 @@ static int fails;
 static const unsigned char keyboard_config[] = {
     9, 2,  34,   0, 1, 1, 0,  0xA0, 50, /* configuration, value 1 */
     9, 4,  0,    0, 1, 3, 1,  1,    0,  /* interface: HID, boot, keyboard */
-    9, 33, 0x11, 1, 0, 1, 34, 63,   0,  /* the HID descriptor, which is skipped */
+    9, 33, 0x11, 1, 0, 1, 34, 63,   0,  /* HID 1.11, a report descriptor of 63 */
     7, 5,  0x81, 3, 8, 0, 10            /* endpoint 1, in, interrupt, 8 bytes */
 };
 
@@ -1139,9 +1164,10 @@ static void control_done(struct usb_device_state *d, int status)
 /**
  * Check a running keyboard's LED report: SET_REPORT of the Output report to
  * its interface, a one-byte OUT data stage with the byte the HID driver
- * asks for, one at a time, its outcome told to the HID driver on its
- * completion, as a failure on a stall and after STEP_MS with none, and not
- * sent to a mouse or while the control endpoint refuses transfers.
+ * offers, one at a time, its outcome told to the HID driver on its
+ * completion, as a failure on a stall and after STEP_MS with none, offered
+ * again while the control endpoint refuses transfers, and asked of a
+ * mouse's driver too.
  */
 static void leds_rows(void)
 {
@@ -1191,12 +1217,12 @@ static void leds_rows(void)
     led_wanted = -1;
     step_running(d);
     CHECK("leds: no completion in STEP_MS is a failure", led_sent_count == 3 && !led_sent_ok);
-    CHECK("leds: and the transfer is no longer out", d->leds_out == 0);
+    CHECK("leds: and the transfer is no longer out", d->output_out == 0);
 
     led_wanted = 0x04;
     ring.quiescing[1] = 1;
     step_running(d);
-    CHECK("leds: a refused transfer is not out", d->leds_out == 0 && led_sent_count == 3);
+    CHECK("leds: a refused transfer is not out", d->output_out == 0 && led_sent_count == 3);
     ring.quiescing[1] = 0;
     step_running(d);
     CHECK("leds: and is tried at the next step", ring.control_submits == 4 && ring.data == 0x04);
@@ -1204,11 +1230,41 @@ static void leds_rows(void)
     usb_core_reset();
     ring_reset();
     d = hid_at(0, 1, USB_PROTOCOL_MOUSE);
-    led_wanted = 0x02;
-    step_running(d);
-    CHECK("leds: none to a mouse", ring.control_submits == 0 && ring.submits == 1);
     led_wanted = -1;
+    led_asked = 0;
+    step_running(d);
+    CHECK("leds: a mouse's driver is asked too, and offers none",
+          led_asked == 1 && ring.control_submits == 0 && ring.submits == 1);
     usb_core_reset();
+}
+
+/**
+ * Check what the walk reads of a HID interface: its HID descriptor's bcdHID
+ * and report descriptor length, and an interface of any subclass and
+ * protocol taken, since its report descriptor says what it reports.
+ */
+static void hid_interface_rows(void)
+{
+    struct usb_interface_info info;
+    unsigned char broken[sizeof(keyboard_config)];
+    unsigned i;
+
+    walk(keyboard_config, (int)sizeof(keyboard_config), &info);
+    CHECK("a HID interface's bcdHID and report descriptor length",
+          info.hid_version == 0x0111 && info.report_length == 63);
+
+    for (i = 0; i < sizeof(broken); i++) {
+        broken[i] = keyboard_config[i];
+    }
+    broken[16] = 5; /* HID, boot, but a protocol with no boot layout */
+    walk(broken, (int)sizeof(broken), &info);
+    CHECK("a HID interface of another protocol is taken, for its report descriptor",
+          info.found == 1 && info.kind == USB_KIND_HID && info.protocol == 5);
+
+    broken[15] = 0; /* and with no boot protocol */
+    walk(broken, (int)sizeof(broken), &info);
+    CHECK("an interface with no boot protocol is taken, for its report descriptor",
+          info.found == 1 && info.kind == USB_KIND_HID && info.subclass == 0);
 }
 
 /**
@@ -1230,6 +1286,7 @@ int main(void)
     slot_timeout_rows();
     leds_rows();
     interface_rows();
+    hid_interface_rows();
 
     /* A configuration as a device sends it. */
     walk(keyboard_config, (int)sizeof(keyboard_config), &info);
@@ -1248,16 +1305,8 @@ int main(void)
     }
     broken[19] = 0x22; /* the HID descriptor, given a type with no case */
     walk(broken, (int)sizeof(broken), &info);
-    CHECK("a descriptor this kernel does not know is stepped over by its length", info.found == 1);
-
-    for (i = 0; i < sizeof(broken); i++) {
-        broken[i] = keyboard_config[i];
-    }
-    broken[14] = 3;
-    broken[15] = 1;
-    broken[16] = 5; /* HID, boot, but a protocol with no report layout */
-    walk(broken, (int)sizeof(broken), &info);
-    CHECK("a boot interface of neither kind is not taken", info.found == 0);
+    CHECK("a descriptor this kernel does not know is stepped over by its length",
+          info.found == 1 && info.report_length == 0);
 
     for (i = 0; i < sizeof(broken); i++) {
         broken[i] = keyboard_config[i];
@@ -1287,13 +1336,6 @@ int main(void)
     broken[14] = 8; /* a mass-storage interface */
     walk(broken, (int)sizeof(broken), &info);
     CHECK("an interface of another class is not taken", info.found == 0);
-
-    for (i = 0; i < sizeof(broken); i++) {
-        broken[i] = keyboard_config[i];
-    }
-    broken[15] = 0; /* HID, but with no boot protocol */
-    walk(broken, (int)sizeof(broken), &info);
-    CHECK("an interface with no boot protocol is not taken", info.found == 0);
 
     for (i = 0; i < sizeof(broken); i++) {
         broken[i] = keyboard_config[i];
