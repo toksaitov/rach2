@@ -5994,6 +5994,56 @@ static int procfs_gen_pciattr(struct procfs_text *t, int key, int attr)
     return t->len;
 }
 
+/** Append `v` to `t` as 0x and sixteen hex digits, as Linux's "0x%016llx". */
+static void ap_hex64(struct procfs_text *t, uint64_t v)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    ap_str(t, "0x");
+    for (i = 15; i >= 0; i--) {
+        ap_ch(t, digits[(unsigned)(v >> (i * 4)) & 0xFu]);
+    }
+}
+
+/**
+ * Render the `resource` file of the PCI function `key`, as Linux's
+ * resource_show: a line for each resource, its start, end and flags in
+ * hex (`pci_resource`), BARs 0 to 5 and the ROM, then the six of SR-IOV,
+ * which no function here has, and for a bridge its four windows, which
+ * Linux shows as 0 too. libpciaccess reads a BAR's size from it. A
+ * function a driver reports has no BARs, so its lines are 0. -ENOENT for
+ * a function that is not there.
+ */
+static int procfs_gen_pciresource(struct procfs_text *t, int key)
+{
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
+    struct pci_resource r;
+    int real = sysfs_pci_real(key), lines = 13, i;
+
+    if (!sysfs_pci_present(key)) {
+        return -ENOENT;
+    }
+    if (real && (pci_read_config8(bus, dev, fn, 0x0E) & 0x7F) != 0) {
+        lines = 17;
+    }
+    for (i = 0; i < lines; i++) {
+        r.start = 0;
+        r.end = 0;
+        r.flags = 0;
+        if (real && i < PCI_RESOURCES) {
+            pci_resource(bus, dev, fn, i, &r);
+        }
+        ap_hex64(t, r.start);
+        ap_ch(t, ' ');
+        ap_hex64(t, r.end);
+        ap_ch(t, ' ');
+        ap_hex64(t, r.flags);
+        ap_ch(t, '\n');
+    }
+    return t->len;
+}
+
 /**
  * Render the registered attribute `handle` (sysfs.h) through its `show`,
  * into room that grows to what the show asks for, up to SYSFS_SHOW_MAX:
@@ -6068,6 +6118,9 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
     }
     if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile == SYSFS_PCI_CONFIG) {
         return procfs_gen_pciconfig(t, vp->syskey);
+    }
+    if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile == SYSFS_PCI_RESOURCE) {
+        return procfs_gen_pciresource(t, vp->syskey);
     }
     if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile >= SYSFS_PCI_VENDOR) {
         return procfs_gen_pciattr(t, vp->syskey, vp->procfile);
