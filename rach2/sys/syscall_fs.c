@@ -4495,6 +4495,7 @@ static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int w
     char *anchor = path_buf_get();
     const struct vpath *vp;
     int outside = 0;
+    int kind;
     int32_t rc;
 
     rc = anchor ? openat2_anchor(dirfd, name, resolve, &scope, anchor, &outside) : -ENOMEM;
@@ -4510,11 +4511,12 @@ static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int w
         return rc;
     }
     vp = rc == 0 && !(walk & VFS_WALK_NOFOLLOW) ? vfs_synth_vpath(ref.mnt, ref.node) : NULL;
+    kind = vp ? vp->kind : -1; /* the release frees a synthetic node */
     if (walk & VFS_WALK_LOCK) {
         vfs_walk_unlock(ref.mnt);
     }
     vfs_ref_release(&ref);
-    if (vp && (vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_NS_LINK)) {
+    if (kind == VNODE_PROC_FD_LINK || kind == VNODE_PROC_NS_LINK) {
         if (resolve & (VFS_RESOLVE_NO_SYMLINKS | VFS_RESOLVE_NO_MAGICLINKS)) {
             return -ELOOP;
         }
