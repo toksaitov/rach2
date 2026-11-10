@@ -34,3 +34,14 @@ own, three tries each, before these pages were left out:
 Chunk 10 holds the RGB9_E5 pages of image_bitmap_from_image,
 image_bitmap_from_video, image_bitmap_from_canvas and image_bitmap_from_blob,
 and chunk 11 those of image_bitmap_from_image_bitmap alone.
+
+With those 24 pages left out, chunk 11 ended QEMU in three tries of three,
+after 36 s each, "D3D12: Removing Device.". Streamed, the page started last
+with no result was 2842, conformance2/uniforms/incompatible-texture-type-for-sampler.html,
+which makes a texture of each of 63 internal formats and samples it. Alone:
+
+    the page as the suite has it:           "D3D12: Removing Device.", QEMU ended
+    the page without its RGB9_E5 entry
+    (the line t[gl.RGB9_E5] removed):       pass, 5374 subtests passed, 0 failed
+
+Firefox passes the whole page, 5468 subtests.
