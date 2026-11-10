@@ -41,7 +41,7 @@ static uint32_t pps_rd(struct drm_i915_private *i915, uint32_t reg)
 /** The time now in milliseconds. */
 static uint64_t pps_now_ms(void)
 {
-    return rtc_ticks_now() * 1000u / TICK_HZ;
+    return drm_div64(rtc_ticks_now() * 1000u, TICK_HZ);
 }
 
 /** Whether the deadline at `arg`, in ticks, has passed. */
@@ -64,7 +64,7 @@ void intel_display_msleep(struct drm_i915_private *i915, uint32_t ms)
     }
     /* A whole tick more, so that a sleep begun late in a tick is never
      * short. */
-    due = rtc_ticks_now() + ((uint64_t)ms * TICK_HZ + 999u) / 1000u + 1u;
+    due = rtc_ticks_now() + drm_div64((uint64_t)ms * TICK_HZ + 999u, 1000u) + 1u;
     saved = current_proc->wakeup_tick;
     current_proc->wakeup_tick = due;
     (void)wq_wait_event_nointr(&pps->sleep, deadline_passed, &due);
