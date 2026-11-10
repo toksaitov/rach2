@@ -1,13 +1,13 @@
 # unit-tests.list: kvm-unit-tests' tests in the KVM suite, one a line: the
 # test's name in x86/unittests.cfg, what corpus.sh requires of it under
 # Rach2's KVM, Linux's result on the testing PC, and the reason. EXPECT is
-# `pass`; `skip`, the test's own skip for what the processor or QEMU lacks,
-# as Linux skips it there, with its reason; `fail`, where Linux fails for a
-# cause the row names and Rach2 does as Linux does; or `excluded`, not run,
-# for one of the reasons the stack's approved plan allows. LINUX is the result of
-# Linux 6.18.58, WSL's, with QEMU 10.2.1 and kernel-irqchip=split, as
-# ref/linux-unit-tests.txt has it: a row Linux failed
-# there still expects a pass, its failure named after `Linux:`.
+# `pass`; `skip`, the test's own skip for what the processor or QEMU lacks, as
+# Linux skips it there, with its reason; `fail`, where Linux fails and Rach2
+# is to fail as it does; or `excluded`, not run, for one of the reasons the
+# stack's approved plan allows. LINUX is the result of Linux 6.18.58, WSL's,
+# with QEMU 10.2.1 and kernel-irqchip=split, as ref/linux-unit-tests.txt has
+# it: a row Linux failed there expects a pass unless its EXPECT is `fail`, and
+# names Linux's failure after `Linux:`.
 #
 # NAME EXPECT LINUX REASON
 access pass pass
@@ -23,7 +23,7 @@ ept-mbec excluded skip nested virtualization, excluded by the owner's decision o
 eventinj pass pass
 hypercall pass pass
 hyperv_clock pass pass
-hyperv_connections fail fail 1 of 7 fails on Linux too: QEMU's hyperv-testdev routes its SINTs through an irqfd with KVM_IRQFD_FLAG_RESAMPLE, which the split controller refuses
+hyperv_connections fail fail Linux: 7 tests, 1 unexpected failures
 hyperv_stimer pass pass
 hyperv_stimer_direct pass pass
 hyperv_synic pass pass
