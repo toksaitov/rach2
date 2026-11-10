@@ -233,29 +233,25 @@ static void name_device(char *out, size_t size, const struct hid_ids *ids, const
 
 /**
  * Copy the serial string `serial`, UTF-8 or NULL, into `out` of `size`
- * bytes, a character that would not fit skipped and the copy going on, as
- * usbhid's `usb_string` into `hid->uniq` gets it from utf16s_to_utf8s;
- * "" for none.
+ * bytes, cut before the first character that would not fit, as usbhid's
+ * `usb_string` into `hid->uniq` gets it from utf16s_to_utf8s; "" for none.
  */
 static void copy_serial(char *out, size_t size, const char *serial)
 {
-    size_t i = 0, o = 0, need;
+    size_t i = 0, need;
 
     while (serial && serial[i]) {
         uint8_t c = (uint8_t)serial[i];
 
         need = c < 0xC0 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-        if (o + need >= size) {
-            for (; need > 0 && serial[i]; need--) {
-                i++;
-            }
-            continue;
+        if (i + need >= size) {
+            break;
         }
-        for (; need > 0 && serial[i]; need--) {
-            out[o++] = serial[i++];
+        for (; need > 0 && serial[i]; need--, i++) {
+            out[i] = serial[i];
         }
     }
-    out[o] = 0;
+    out[i] = 0;
 }
 
 /** Whether `device` and `iface` name an interface the table has room for. */

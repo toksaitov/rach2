@@ -626,8 +626,8 @@ for interface I of a USB keyboard, cut to the length the request gives, as Linux
 them; the answer is the bytes copied.
 .It Dv EVIOCGUNIQ
 The serial number of a USB device in the report protocol, its serial
-string in at most 63 bytes, a character that would not fit left out, or
-the empty string for a device without one, as Linux's usbhid gives it;
+string in at most 63 bytes, cut before the first character that would
+not fit, or the empty string for a device without one, as Linux's usbhid gives it;
 .Er ENOENT
 for a PS/2 device and a USB keyboard or mouse in the boot protocol, as
 Linux's usbkbd and usbmouse give none.

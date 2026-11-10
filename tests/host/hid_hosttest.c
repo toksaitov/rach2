@@ -539,8 +539,8 @@ static void report_rows(void)
     CHECK("report: no serial string is an empty uniq", same(model_uniq, ""));
     hid_gone(8);
     hid_attach(8, 0, &long_serial, rdesc, 4);
-    CHECK("report: a long serial skips the character 63 bytes cannot hold and copies on",
-          strlen(model_uniq) == 63 && model_uniq[61] == 'B' && model_uniq[62] == 'Z');
+    CHECK("report: a long serial stops at the character 63 bytes cannot hold, as utf16s_to_utf8s",
+          strlen(model_uniq) == 62 && model_uniq[61] == 'B');
     hid_gone(8);
 
     model_leds = 1;
