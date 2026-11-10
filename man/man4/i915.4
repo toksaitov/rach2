@@ -101,6 +101,16 @@ Each ring's user interrupt is enabled and stays masked except while the
 driver waits for that ring's work; every other source stays masked.
 A ring that does not start is logged, and the device takes no work.
 .Pp
+With the rings comes the aliasing PPGTT, as Linux runs it on Haswell: one
+table of the GPU's addresses that every context of every program shares,
+which maps each buffer bound in the global GTT at the same address and
+none of the driver's own objects.
+A batch that is not privileged runs in it, so every program's batches can
+read and write every buffer any program has bound, as on Linux.
+The kernel logs
+.Dq i915: ppgtt: aliasing
+with its size and the directory's place.
+.Pp
 With
 .Cm rach2.i915.firstlight
 the render ring writes one value to a page of the global GTT before any
