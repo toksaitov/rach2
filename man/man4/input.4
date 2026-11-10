@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm input
-.Nd the event devices of the keyboards, mice and buttons
+.Nd the event devices of the keyboards, mice, tablets and buttons
 .Sh SYNOPSIS
 .In linux/input.h
 .Pp
@@ -22,15 +22,56 @@ below the PS/2 port or USB interface the device came from, and a uevent
 announces each as it comes and goes, as udev and libinput expect; see
 .Xr sysfs 5 .
 The PS/2 keyboard is
-.Dq AT Translated Set 2 keyboard
-and each USB keyboard
-.Dq USB keyboard N ,
-N being its place in the USB stack's table, as
+.Dq AT Translated Set 2 keyboard ,
+as
 .Dv EVIOCGNAME
-gives them.
+gives it.
 A keyboard's keys reach its node beside the console, which every keyboard
 shares; see
 .Xr console 4 .
+.Pp
+A USB human-interface device is read by its report descriptor, as Linux's
+usbhid and hid-generic read it, and has a node for each application of the
+descriptor, a System Control or Consumer Control application sharing a
+keyboard's.
+Its name is its manufacturer's and product's strings, a space between, or
+.Dq HID VVVV:PPPP ,
+its vendor and product in hexadecimal, when it has neither; a device of more
+than one application adds the application's name to each node's, as
+.Dq Keyboard ,
+.Dq Mouse
+or
+.Dq Consumer Control ,
+unless the name ends with it.
+Its bus is 3, its version bcdHID from its HID descriptor, and its place
+.Dq usb-N/input0 .
+Its capabilities and events are those Linux gives the same descriptor: each
+key and button is reported with its usage as
+.Dv MSC_SCAN ,
+a wheel with
+.Dv REL_WHEEL_HI_RES
+in 120ths of a detent, and an absolute axis over its logical range.
+QEMU's
+.Cm usb-tablet
+is
+.Dq QEMU QEMU USB Tablet ,
+with
+.Dv BTN_LEFT
+to
+.Dv BTN_EXTRA ,
+.Dv REL_WHEEL ,
+.Dv REL_WHEEL_HI_RES ,
+and
+.Dv ABS_X
+and
+.Dv ABS_Y
+from 0 to 32767.
+A keyboard or mouse whose descriptor cannot be read runs in the boot
+protocol, as
+.Dq USB HIDBP Keyboard VVVV:PPPP
+or
+.Dq USB HIDBP Mouse VVVV:PPPP
+when it has no strings, as Linux's usbkbd and usbmouse name it.
 .Pp
 The PS/2 mouse is named for the protocol it answers, as Linux's psmouse
 names it: a mouse that answers Microsoft's IntelliMouse Explorer knock is
@@ -45,13 +86,11 @@ Each is vendor 2 on the PS/2 controller's bus, at
 .Dq isa0060/serio1/input0 ,
 with the property
 .Dv INPUT_PROP_POINTER .
-A USB mouse in the boot protocol is
-.Dq USB HIDBP Mouse VVVV:PPPP ,
-its vendor and product in hexadecimal, as Linux's boot-protocol driver
-names it, with a wheel and five buttons and no property.
-Every mouse also feeds
+A USB mouse has the buttons, axes and wheel its descriptor names and no
+property.
+Every mouse with relative axes also feeds
 .Pa /dev/mouse ,
-whose three-byte packets carry no wheel.
+whose three-byte packets carry no wheel; a tablet does not.
 .Pp
 A Synaptics touchpad on the PS/2 port, which answers the Synaptics knock
 before the mouse's, is set up as Linux's psmouse sets it: absolute mode, 80
@@ -571,10 +610,9 @@ on a device that is no keyboard.
 .Xr mixer 4 ,
 .Xr sysfs 5
 .Sh CAVEATS
-A USB device that offers no boot protocol, such as QEMU's absolute
-.Cm usb-tablet ,
-gets no node: the USB stack reads only the boot protocol's fixed reports and
-no report descriptor, so a tablet's absolute axes are not reported.
+A USB device's digitizer usages are not mapped, so a touchscreen or pen
+that reports through them has no node, and only the first human-interface
+interface of a device is read.
 The touchpad drivers are Synaptics' and Elantech's alone: an ALPS or other
 touchpad is driven as the PS/2 mouse it also is, and a Synaptics or Elantech
 pad that offers its SMBus bus is driven over PS/2.
