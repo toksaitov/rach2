@@ -10,7 +10,8 @@
 # cross compiler instead. Its manual pages are made by Doc/ttman, which must
 # run on the build host and so is built with the host's compiler. Its
 # Makefile takes the version from `git describe`, which in a build tree
-# inside a clone describes the clone, so the version is given to make.
+# inside a clone describes the clone, so the version is given to make. Its
+# FFmpeg input finds FFmpeg's libraries in /usr/lib/ffmpeg by its run path.
 VERSION=2.12.0
 DEPENDS="ncurses ffmpeg"
 DEBIAN=cmus-debian
@@ -21,7 +22,7 @@ port_build()
     sed -i 's|^\tif test -f /usr/include/sys/soundcard.h$|\tif try_compile "#include <sys/soundcard.h>"|' configure
     grep -q '^	if try_compile "#include <sys/soundcard.h>"$' configure || return 1
     ./configure prefix=/usr DEBUG=0 CROSS="$TARGET-" HOSTCC=cc \
-        PKG_CONFIG="$TARGET-pkg-config" \
+        PKG_CONFIG="$TARGET-pkg-config" LDFLAGS=-Wl,-rpath,/usr/lib/ffmpeg \
         CONFIG_OSS=y CONFIG_FFMPEG=y CONFIG_WAV=y CONFIG_CUE=y \
         CONFIG_AAC=n CONFIG_AAUDIO=n CONFIG_ALSA=n CONFIG_AO=n CONFIG_ARTS=n \
         CONFIG_CDDB=n CONFIG_CDIO=n CONFIG_COREAUDIO=n CONFIG_DISCID=n \

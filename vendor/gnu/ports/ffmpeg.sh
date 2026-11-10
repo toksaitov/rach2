@@ -1,12 +1,18 @@
 # shellcheck shell=sh disable=SC2034 # build_port.sh reads the variables
 # FFmpeg and ffprobe, with OSS input and output and the built-in audio
 # decoders for WAV, MP3, FLAC, Ogg Vorbis, Opus and AAC.
-# Shared libraries serve cmus; no external library is detected or enabled.
+# Shared libraries serve cmus from /usr/lib/ffmpeg, off the loader's path,
+# so that a program that loads the newest libavcodec it finds, as Firefox
+# does, gets Debian's with its video decoders and not this audio build; the
+# programs find them by their run path. No external library is detected or
+# enabled.
 VERSION=9.0.2
 
 port_build()
 {
     "$SRC/configure" --prefix=/usr --enable-cross-compile \
+        --libdir=/usr/lib/ffmpeg --shlibdir=/usr/lib/ffmpeg \
+        --pkgconfigdir=/usr/lib/pkgconfig --enable-rpath \
         --target-os=linux --arch="$RACH2_ARCH" \
         --cross-prefix="$TARGET-" --sysroot="$ROOT" \
         --pkg-config=false --disable-autodetect --disable-iconv --enable-pthreads \
