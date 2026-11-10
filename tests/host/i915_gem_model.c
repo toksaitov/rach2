@@ -496,8 +496,18 @@ uint32_t mem_reclaim(void)
     return got;
 }
 
+/* Run once at the next balance, as another thread would run while reclaim
+ * sleeps in writeback. */
+static void (*balance_sleep)(void);
+
 void mem_balance(void)
 {
+    void (*hook)(void) = balance_sleep;
+
+    balance_sleep = 0;
+    if (hook) {
+        hook();
+    }
     if (frame_limit && frame_limit - frames_live < frame_limit / 16) {
         (void)mem_reclaim();
     }

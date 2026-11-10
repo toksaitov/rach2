@@ -99,6 +99,20 @@ int32_t i915_gem_object_pin_pages(struct drm_i915_gem_object *obj)
             return err == -EINVAL ? -EFAULT : err;
         }
     }
+    if (obj->frames || obj->madv != I915_MADV_WILLNEED) {
+        /* Reclaim slept: another caller pinned the pages meanwhile, or the
+         * object was made purgeable, or purged. */
+        unpin(pin);
+        kfree(frames);
+        if (obj->frames) {
+            obj->pages_pin_count++;
+            return 0;
+        }
+        if (obj->madv == __I915_MADV_PURGED) {
+            shmem_free(&obj->pages);
+        }
+        return -EFAULT;
+    }
     obj->frames = frames;
     obj->pin = pin;
     obj->pages_pin_count = 1;

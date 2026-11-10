@@ -110,6 +110,19 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
             kfree(frames);
             return err;
         }
+        if (seq == obj->userptr.range.seq && obj->frames) {
+            /* Another caller pinned the range while this one slept: its
+             * frames serve, unless a change has made them stale since. */
+            for (i = 0; i < n; i++) {
+                frame_unpin(frames[i]);
+            }
+            kfree(frames);
+            if (obj->userptr.stale) {
+                return -EAGAIN;
+            }
+            obj->pages_pin_count++;
+            return 0;
+        }
         if (seq == obj->userptr.range.seq) {
             obj->frames = frames;
             obj->pages_pin_count = 1;
@@ -182,7 +195,7 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         ~(I915_USERPTR_READ_ONLY | I915_USERPTR_UNSYNCHRONIZED | I915_USERPTR_PROBE)) {
         return -EINVAL;
     }
-    if (args->user_size > (uint64_t)(size_t)-1) {
+    if (args->user_size > SHMEM_MAX_SIZE || args->user_size > (uint64_t)(size_t)-1) {
         return -E2BIG;
     }
     if (!args->user_size) {

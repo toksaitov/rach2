@@ -2007,7 +2007,9 @@ extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
  * more after a failure; an import's are its dma-buf's; a userptr object's
  * are the program's (`i915_gem_userptr_get_pages`). The physical addresses
  * stay in `obj->frames` until the object goes or is purged. An object
- * without pages whose `madv` is not WILLNEED has none to give.
+ * without pages whose `madv` is not WILLNEED has none to give. Reclaim and
+ * the userptr's pin may sleep, so both look again after it: a caller that
+ * finds the pages given meanwhile counts one more pin on them.
  *
  * @return 0; -ENOMEM; -EFAULT when a page cannot be had or the object is
  *         purgeable or purged; -ENODEV once the device is gone; or the
