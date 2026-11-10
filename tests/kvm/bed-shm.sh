@@ -173,7 +173,7 @@ nocopy_rows()
     else
         fail refuse "$(grep 'VGSHMPROBE' "$out/refuse.out" | tr '\n' ' ')"
     fi
-    : > "$out/measure.txt"
+    { qemu-system-x86_64 --version | head -n 1; uname -sr; } > "$out/measure.txt" 2>&1
     ok=1
     for b in 4096 65536 1048576 16777216 67108864; do
         nc serial 8 "$b" >> "$out/measure.txt" 2>&1 || ok=0
