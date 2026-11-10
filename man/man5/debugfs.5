@@ -202,6 +202,17 @@ A buffer too short for the line fails with
 reports
 .Dv POLLIN
 while a line waits.
+.It Pa dri/DEVICE/crtc-N/i915_pipe
+Mode 0444, for a device bound by
+.Xr i915 4 .
+The CRTC's pipe as its letter and a newline, such as
+.Ql A ,
+by which IGT finds a CRTC's pipe, as Linux's.
+.It Pa dri/DEVICE/crtc-N/i915_current_bpc
+Mode 0444, for the same.
+.Ql Current: N
+and a newline, N the bits a colour of the pipe's configuration, a third of
+its bits a pixel.
 .It Pa dri/DEVICE/encoder-N/bridges
 Mode 0444.
 The bridges of the encoder's chain, which no driver has; empty.

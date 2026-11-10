@@ -1307,9 +1307,12 @@ void i915_gem_unplug(struct drm_i915_private *i915)
     }
 }
 
-/* The driver's own ioctls, which a render node may call, as Linux's. */
+/* The driver's own ioctls, with Linux's flags: a render node may call each
+ * but GET_PIPE_FROM_CRTC_ID. */
 const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
     {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW, i915_getparam_ioctl, "I915_GETPARAM"},
+    {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, 0, intel_get_pipe_from_crtc_id_ioctl,
+     "I915_GET_PIPE_FROM_CRTC_ID"},
     {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_context_create_ioctl,
      "I915_GEM_CONTEXT_CREATE"},
     {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW, i915_gem_context_destroy_ioctl,

@@ -106,6 +106,15 @@ void i915_ppgtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint
 }
 #endif
 
+/** GET_PIPE_FROM_CRTC_ID, which the table names; the display is not here. */
+int32_t intel_get_pipe_from_crtc_id_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    (void)dev;
+    (void)data;
+    (void)file;
+    return -ENOENT;
+}
+
 /** REG_READ, which the table names and i915_ctx_hosttest.c runs on its
  * register model. */
 int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
