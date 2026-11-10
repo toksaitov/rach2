@@ -1093,7 +1093,10 @@ static void tcp_recvmsg_zero(int cs, int as)
  * buffers in order and takes nothing, the header comes back with no
  * address, no control data and no flags, a receive takes what its buffers
  * hold and leaves the rest, a nonblocking one takes that rest, and one of an
- * empty stream fails with EAGAIN. */
+ * empty stream fails with EAGAIN. Receives retain copied vectors when a
+ * buffer overlaps the list. Empty buffers wait for data or EOF, take no
+ * bytes, and return EAGAIN on an empty nonblocking stream. The empty-buffer
+ * rows shut down cs before this function returns. */
 static void tcp_recvmsg(int cs, int as)
 {
     const char *msg = "recvmsg-tcp";

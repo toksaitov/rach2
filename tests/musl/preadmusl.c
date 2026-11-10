@@ -29,7 +29,10 @@
  * direction and one not open are refused, the last with no buffers too.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
- * preadv2 reads the bytes back. preadv2 and pwritev2 refuse a descriptor
+ * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
+ * leaving the flag set for later writes; preadv2 takes it and reads the
+ * bytes back. Both calls refuse APPEND with NOAPPEND after vector import,
+ * except for zero bytes, which return before flags. They refuse a descriptor
  * that is not open with EBADF whatever the flags, and only then a flag they
  * do not take with EOPNOTSUPP. sync_file_range flushes a range of the file,
  * and refuses a descriptor that is not open with EBADF before its flags
@@ -86,35 +89,60 @@ extern char **environ;
 
 /* The assertions, a check each, in the order the program makes them, with
  * those of the architecture's alternative of the group `arch` in place. */
-static const char *const assertion_id[] = {"make-file",          "pread-middle",
-                                           "pread-across-end",   "pread-past-end",
-                                           "pwrite-middle",      "pwrite-past-end",
-                                           "file-after-writes",  "read-from-offset",
-                                           "pread-wide",         "append",
-                                           "proc-snapshot",      "dev-zero",
-                                           "dev-null",           "proc-seek",
+static const char *const assertion_id[] = {"make-file",
+                                           "pread-middle",
+                                           "pread-across-end",
+                                           "pread-past-end",
+                                           "pwrite-middle",
+                                           "pwrite-past-end",
+                                           "file-after-writes",
+                                           "read-from-offset",
+                                           "pread-wide",
+                                           "append",
+                                           "proc-snapshot",
+                                           "dev-zero",
+                                           "dev-null",
+                                           "proc-seek",
                                            "mem-stack",
 #if !defined __x86_64__
                                            "mem-write-eio",
 #endif
-                                           "proc-sys-4g",        "negative-offset",
-                                           "sign-bit",           "make-pipe",
-                                           "pipe-espipe",        "socket-espipe",
-                                           "stdout-espipe",      "other-direction",
-                                           "directory",          "lseek-espipe",
-                                           "vector-file",        "pwritev-vector",
-                                           "preadv-vector",      "preadv-short",
+                                           "proc-sys-4g",
+                                           "negative-offset",
+                                           "sign-bit",
+                                           "make-pipe",
+                                           "pipe-espipe",
+                                           "socket-espipe",
+                                           "stdout-espipe",
+                                           "other-direction",
+                                           "directory",
+                                           "lseek-espipe",
+                                           "vector-file",
+                                           "pwritev-vector",
+                                           "preadv-vector",
+                                           "preadv-short",
 #if defined __x86_64__
                                            "preadv-high-half",
 #else
                                            "preadv-high-word",
 #endif
-                                           "pwritev-efault",     "vector-refusals",
-                                           "pwritev2-append",    "preadv2-readback",
-                                           "rwv2-refusals",      "rwv2-import",
-                                           "rwv2-zero",          "range-sync",
-                                           "append-later-fault", "append-buffer-fault",
-                                           "append-first-fault", "append-demand-buffer"};
+                                           "pwritev-efault",
+                                           "vector-refusals",
+                                           "pwritev2-append",
+                                           "preadv2-readback",
+                                           "rwv2-refusals",
+                                           "rwv2-import",
+                                           "rwv2-zero",
+                                           "range-sync",
+                                           "noappend-position",
+                                           "noappend-shared",
+                                           "noappend-read",
+                                           "noappend-flags",
+                                           "noappend-seal",
+                                           "append-later-fault",
+                                           "append-buffer-fault",
+                                           "append-first-fault",
+                                           "append-demand-buffer"};
 
 /** Begin the report, give the branch of `arch`, and plan the assertions. */
 static void report_start(void)
@@ -448,6 +476,15 @@ static int seek_refusal_rows(void)
 #ifndef RWF_APPEND
 #define RWF_APPEND 0x10
 #endif
+#ifndef RWF_NOAPPEND
+#define RWF_NOAPPEND 0x20
+#endif
+#ifndef RWF_ATOMIC
+#define RWF_ATOMIC 0x40
+#endif
+
+/* Outside Linux 6.12's RWF_SUPPORTED, whose 0x40 is RWF_ATOMIC. */
+#define UNKNOWN_RWF 0x10000000
 
 /* preadv2's and pwritev2's position as the two words the call takes, low
  * first, and the position -1, the descriptor's own offset. */
@@ -467,10 +504,10 @@ static int vector_flag_order(int fd)
 
     for (i = 0; i < 2; i++) {
         for (pos = -1; pos <= 0; pos++) {
-            if (!refused(RWV2(calls[i], fd, (void *)0x1, 1, pos, 0x40), EFAULT) ||
-                !refused(RWV2(calls[i], fd, &empty, 1025, pos, 0x40), EINVAL) ||
-                !refused(RWV2(calls[i], fd, &invalid, 1, pos, 0x40), EINVAL) ||
-                !refused(RWV2(calls[i], fd, &unfaulted, 1, pos, 0x40), EOPNOTSUPP)) {
+            if (!refused(RWV2(calls[i], fd, (void *)0x1, 1, pos, UNKNOWN_RWF), EFAULT) ||
+                !refused(RWV2(calls[i], fd, &empty, 1025, pos, UNKNOWN_RWF), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &invalid, 1, pos, UNKNOWN_RWF), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &unfaulted, 1, pos, UNKNOWN_RWF), EOPNOTSUPP)) {
                 return fail("vector import precedes flags, but data faults follow flags");
             }
         }
@@ -478,8 +515,8 @@ static int vector_flag_order(int fd)
     report_held();
     for (i = 0; i < 2; i++) {
         for (pos = -1; pos <= 0; pos++) {
-            if (RWV2(calls[i], fd, (void *)0x1, 0, pos, 0x40) != 0 ||
-                RWV2(calls[i], fd, &empty, 1, pos, 0x40) != 0) {
+            if (RWV2(calls[i], fd, (void *)0x1, 0, pos, UNKNOWN_RWF) != 0 ||
+                RWV2(calls[i], fd, &empty, 1, pos, UNKNOWN_RWF) != 0) {
                 return fail("zero bytes return before an unknown vector flag");
             }
         }
@@ -522,10 +559,10 @@ static int vector_flag_rows(void)
         return fail("preadv2 reads the appended bytes back");
     }
     report_held();
-    ok = refused(RWV2(SYS_preadv2, 999, in, 1, 0LL, 0x40), EBADF) &&
-         refused(RWV2(SYS_pwritev2, 999, out, 1, -1LL, 0x40), EBADF) &&
-         refused(RWV2(SYS_preadv2, fd, in, 1, 0LL, 0x40), EOPNOTSUPP) &&
-         refused(RWV2(SYS_pwritev2, fd, out, 1, -1LL, 0x40), EOPNOTSUPP);
+    ok = refused(RWV2(SYS_preadv2, 999, in, 1, 0LL, UNKNOWN_RWF), EBADF) &&
+         refused(RWV2(SYS_pwritev2, 999, out, 1, -1LL, UNKNOWN_RWF), EBADF) &&
+         refused(RWV2(SYS_preadv2, fd, in, 1, 0LL, UNKNOWN_RWF), EOPNOTSUPP) &&
+         refused(RWV2(SYS_pwritev2, fd, out, 1, -1LL, UNKNOWN_RWF), EOPNOTSUPP);
     if (!ok) {
         return fail("preadv2 and pwritev2 refuse a bad descriptor before a bad flag");
     }
@@ -542,6 +579,110 @@ static int vector_flag_rows(void)
     close(fd);
     if (!ok) {
         return fail("sync_file_range flushes a file and refuses in Linux's order");
+    }
+    report_held();
+    return 0;
+}
+
+/** Check reads with NOAPPEND and both directions' conflicting flags on
+ * the append descriptor `fd` after the write rows. Leave it open at offset
+ * 3. Return a failure message or NULL, reporting each completed row. */
+static const char *noappend_read_flags(int fd)
+{
+    const long calls[2] = {SYS_preadv2, SYS_pwritev2};
+    char back[8];
+    struct iovec in = {back, 2}, empty = {0, 0};
+    int flags = RWF_APPEND | RWF_NOAPPEND;
+    int i, pos;
+    const char *error;
+
+    error = "preadv2 takes NOAPPEND at both offset forms";
+    if (RWV2(SYS_preadv2, fd, &in, 1, 1LL, RWF_NOAPPEND) != 2 || memcmp(back, "XY", 2) != 0 ||
+        !offset_is(fd, 7) || lseek(fd, 1, SEEK_SET) != 1 ||
+        RWV2(SYS_preadv2, fd, &in, 1, -1LL, RWF_NOAPPEND) != 2 || memcmp(back, "XY", 2) != 0 ||
+        !offset_is(fd, 3)) {
+        return error;
+    }
+    report_held();
+    error = "APPEND and NOAPPEND conflict after import and before known unsupported flags";
+    for (i = 0; i < 2; i++) {
+        for (pos = -1; pos <= 0; pos++) {
+            if (!refused(RWV2(calls[i], fd, &in, 1, pos, flags), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &in, 1, pos, flags | RWF_ATOMIC), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &in, 1, pos, flags | UNKNOWN_RWF), EOPNOTSUPP) ||
+                !refused(RWV2(calls[i], fd, (void *)0x1, 1, pos, flags), EFAULT) ||
+                RWV2(calls[i], fd, (void *)0x1, 0, pos, flags) != 0 ||
+                RWV2(calls[i], fd, &empty, 1, pos, flags) != 0) {
+                return error;
+            }
+        }
+    }
+    if (!offset_is(fd, 3) || (fcntl(fd, F_GETFL) & O_APPEND) == 0 ||
+        pread(fd, back, sizeof(back), 0) != 7 || memcmp(back, "aXYdUV!", 7) != 0) {
+        return error;
+    }
+    report_held();
+    return NULL;
+}
+
+/** Check NOAPPEND at an explicit and the shared offset, without changing
+ * O_APPEND, and its read and conflicting-flag rules. Close the file on
+ * every exit; main removes it. Return 0, or report a failure and return 1. */
+static int vector_noappend_rows(void)
+{
+    char back[8];
+    struct iovec out[2] = {{"X", 1}, {"Y", 1}};
+    int fd = open(FILE_PATH, O_RDWR | O_APPEND | O_TRUNC);
+    const char *error = "NOAPPEND writes at the explicit offset and keeps O_APPEND";
+
+    if (fd < 0 || write(fd, "abcdef", 6) != 6 || lseek(fd, 4, SEEK_SET) != 4 ||
+        RWV2(SYS_pwritev2, fd, out, 2, 1LL, RWF_NOAPPEND) != 2 || !offset_is(fd, 4) ||
+        (fcntl(fd, F_GETFL) & O_APPEND) == 0 || pread(fd, back, sizeof(back), 0) != 6 ||
+        memcmp(back, "aXYdef", 6) != 0) {
+        goto out;
+    }
+    report_held();
+    error = "NOAPPEND advances the shared offset and later writes still append";
+    out[0].iov_base = "U";
+    out[1].iov_base = "V";
+    if (RWV2(SYS_pwritev2, fd, out, 2, -1LL, RWF_NOAPPEND) != 2 || !offset_is(fd, 6) ||
+        (fcntl(fd, F_GETFL) & O_APPEND) == 0 || lseek(fd, 0, SEEK_SET) != 0 ||
+        write(fd, "!", 1) != 1 || !offset_is(fd, 7) || pread(fd, back, sizeof(back), 0) != 7 ||
+        memcmp(back, "aXYdUV!", 7) != 0) {
+        goto out;
+    }
+    report_held();
+    error = noappend_read_flags(fd);
+out:
+    if (fd >= 0) {
+        close(fd);
+    }
+    return error ? fail(error) : 0;
+}
+
+/** Check a NOAPPEND vector against F_SEAL_GROW before it writes any byte,
+ * at both offset forms, then an allowed write within the file. Close the
+ * memfd on every exit. Return 0, or report a failure and return 1. */
+static int noappend_seal_row(void)
+{
+    struct iovec out[2] = {{"X", 1}, {"Y", 1}};
+    char back[8];
+    int fd = memfd_create("preadmusl", MFD_ALLOW_SEALING);
+    int ok = fd >= 0 && write(fd, "abcdef", 6) == 6 && fcntl(fd, F_SETFL, O_APPEND) == 0 &&
+             fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) == 0 && lseek(fd, 5, SEEK_SET) == 5 &&
+             refused(RWV2(SYS_pwritev2, fd, out, 2, 5LL, RWF_NOAPPEND), EPERM) &&
+             refused(RWV2(SYS_pwritev2, fd, out, 2, -1LL, RWF_NOAPPEND), EPERM) &&
+             offset_is(fd, 5) && pread(fd, back, sizeof(back), 0) == 6 &&
+             memcmp(back, "abcdef", 6) == 0 &&
+             RWV2(SYS_pwritev2, fd, out, 2, 2LL, RWF_NOAPPEND) == 2 && offset_is(fd, 5) &&
+             (fcntl(fd, F_GETFL) & O_APPEND) != 0 && pread(fd, back, sizeof(back), 0) == 6 &&
+             memcmp(back, "abXYef", 6) == 0;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (!ok) {
+        return fail("NOAPPEND refuses sealed growth before writing any element");
     }
     report_held();
     return 0;
@@ -743,7 +884,7 @@ int main(void)
     report_start();
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
         refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0 ||
-        append_fault_rows() != 0) {
+        vector_noappend_rows() != 0 || noappend_seal_row() != 0 || append_fault_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }
