@@ -157,7 +157,7 @@ fails with
 .Er ENOSPC .
 A KVM virtual machine,
 .Xr kvm 4 ,
-has at most 64 vCPUs, with ids below 256, and 256 memory slots;
+has at most 1024 vCPUs, with ids below 4096, and 256 memory slots;
 a vCPU takes at most 256 CPUID entries, and fewer than 256 MSRs in one
 call.
 A VFIO container,

@@ -89,3 +89,14 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Rach2: `h_div` tests the low half before it negates it, a form Cppcheck does not misjudge; no suppression was added.
 * Status: unreported.
 * Next: try Cppcheck's current release and its `--debug` value flow on the reproduction, search its tracker for the unsigned negation, and report it there with the file.
+
+## Linux 6.12.115's monitor_mwait_test turns a quirk back on, which its KVM no longer does
+
+* Project: Linux 6.12.115, `arch/x86/kvm/x86.c` (SHA-256 0a4d25f3522b54b7b51d593f987b1221ff84943be03917fff4a901290e5e8233) and `tools/testing/selftests/kvm/x86_64/monitor_mwait_test.c` (ca17d45ddd29d2d9e259e4078f80b0e857175355617444d431562127ead086aa), read from kernel.org's `linux-6.12.115.tar.xz`.
+* Fails: the selftest and the kernel of one release disagree, so the selftest must fail wherever it runs. KVM_ENABLE_CAP of KVM_CAP_DISABLE_QUIRKS2 ORs its argument into the VM's disabled quirks (x86.c lines 6068 to 6079), so a quirk turned off stays off. The selftest uses one VM for its six cases and calls `vm_enable_cap(vm, KVM_CAP_DISABLE_QUIRKS2, disabled_quirks)` before each with that case's set alone (line 107), which turns a quirk back on only if the capability assigns. Its second case turns KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS off; its third (line 61), with only KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT off and MWAIT absent from the guest's CPUID, expects MONITOR to run, but `kvm_emulate_monitor_mwait` (x86.c line 1694) finds the first quirk still off and the CPUID bit clear and raises #UD, which the guest's assertion reports.
+* Found: 2026-11-11, on the Mac, in milestone 81, task 81-13, by reading both sources while settling the selftest's row in `tests/kvm/selftests.list`; Rach2's capability follows the kernel's OR.
+* Reproduction: run 6.12.115's `monitor_mwait_test` on Linux 6.12.115 on a processor whose CPUID has MONITOR and MWAIT, on bare metal, since the test skips without them and a guest of Hyper-V or of KVM has none. Not yet run on Linux: the testing PC's Linux, a guest of Hyper-V, skips it (`tests/kvm/ref/linux-selftests.status`).
+* Evidence: the two sources at the lines named above; the row of `x86_64/monitor_mwait_test` in `tests/kvm/selftests.list`, which expects the failure on a processor with `monitor`.
+* Rach2: nothing in the kernel, whose KVM_CAP_DISABLE_QUIRKS2 keeps Linux's OR; the list's row expects a failure where the processor has MONITOR and MWAIT and a skip where it does not.
+* Status: unreported.
+* Next: run the reproduction on the Lenovo's Debian or another bare-metal Linux 6.12.115, then find the stable commit that made the capability OR its argument and whether mainline changed the selftest with it, and report the missing backport to the stable and KVM lists.
