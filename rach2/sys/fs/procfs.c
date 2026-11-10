@@ -2891,13 +2891,13 @@ static void procfs_kvm_counts(struct procfs_text *t)
 static void procfs_assignment_counts(struct procfs_text *t)
 {
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
-    static const char *const names[4] = {"vfio_groups ", "vfio_devices ", "vfio_dma_mappings ",
-                                         "vfio_dma_pages "};
-    uint32_t counts[4];
+    static const char *const names[5] = {"vfio_groups ", "vfio_devices ", "vfio_dma_mappings ",
+                                         "vfio_dma_pages ", "vfio_dma_io_pages "};
+    uint32_t counts[5];
     int i;
 
     vfio_resource_counts(counts);
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 5; i++) {
         ap_str(t, names[i]);
         ap_u32(t, counts[i]);
         ap_ch(t, '\n');

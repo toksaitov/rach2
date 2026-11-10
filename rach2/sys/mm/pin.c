@@ -20,7 +20,8 @@ struct pin {
     const struct pin_holder *holder;
     uintptr_t *frames; /* the physical address of each page */
     uint32_t count;
-    uint32_t live; /* 1 while the frames are held */
+    uint32_t ram_pages; /* frames pinned and charged, excluding device pages */
+    uint32_t live;      /* 1 while the frames are held */
 };
 
 /** Drop what `pin` holds, once: its range's registration, its frames'
@@ -38,22 +39,23 @@ static void pin_drop(struct pin *pin)
         frame_unpin(pin->frames[i]);
     }
     if (pin->mm) {
-        pin->mm->pinned -= pin->count;
+        pin->mm->pinned -= pin->ram_pages;
         pin->mm = NULL;
     }
 }
 
 /** The pin's range heard of a change: an unmap of a page of a user range,
  * or the end of the address space, takes the pin back after the holder
- * has stopped the device. Other changes leave the pinned frames as they
- * are, as Linux's long-term pins do. */
+ * has stopped the device. A pin with device pages also ends before their
+ * revocation or protection change; RAM pins survive those changes. */
 static void pin_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
     struct pin *pin = (struct pin *)r;
 
     (void)start;
     (void)end;
-    if (event != MMN_UNMAP && event != MMN_RELEASE) {
+    if (event != MMN_UNMAP && event != MMN_RELEASE &&
+        !(pin->ram_pages != pin->count && (event == MMN_TRUNCATE || event == MMN_PROTECT))) {
         return;
     }
     if (pin->holder && pin->holder->release) {
@@ -85,6 +87,7 @@ static int pin_new(struct mm *mm, uint32_t count, const struct pin_holder *holde
     }
     pin->holder = holder;
     pin->count = count;
+    pin->ram_pages = count;
     *out = pin;
     return 0;
 }
@@ -96,7 +99,7 @@ static void pin_start(struct pin *pin, struct mm *mm, uintptr_t start, uintptr_t
     pin->live = 1;
     if (mm) {
         pin->mm = mm;
-        mm->pinned += pin->count;
+        mm->pinned += pin->ram_pages;
         mmn_register(mm, &pin->note, start, end, &pin_note_ops, pin);
     }
 }
@@ -127,12 +130,17 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     if (pages != (uint32_t)pages) {
         return -ENOMEM; /* more than a record counts */
     }
-    rc = pin_new(mm, (uint32_t)pages, holder, &pin);
+    rc = pin_new((flags & PIN_IO) ? NULL : mm, (uint32_t)pages, holder, &pin);
     if (rc != 0) {
         return rc;
     }
-    rc = paging_pin_range(mm, start, end, (flags & PIN_WRITE) != 0, pin->frames);
-    if (rc == 0 && !mem_lock_room(mm->pinned, pin->count)) {
+    if (flags & PIN_IO) {
+        rc = paging_dma_range(mm, start, end, (flags & PIN_WRITE) != 0, pin->frames,
+                              &pin->ram_pages);
+    } else {
+        rc = paging_pin_range(mm, start, end, (flags & PIN_WRITE) != 0, pin->frames);
+    }
+    if (rc == 0 && pin->ram_pages != 0 && !mem_lock_room(mm->pinned, pin->ram_pages)) {
         uint32_t i;
 
         for (i = 0; i < pin->count; i++) {
@@ -198,6 +206,11 @@ int pin_live(const struct pin *pin)
 uint32_t pin_count(const struct pin *pin)
 {
     return pin->count;
+}
+
+uint32_t pin_ram_count(const struct pin *pin)
+{
+    return pin->ram_pages;
 }
 
 uintptr_t pin_phys(const struct pin *pin, uint32_t i)
