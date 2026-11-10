@@ -10,3 +10,4 @@ qemu-system-i386 qemu-system-x86 /usr/bin/qemu-system-i386
 qemu-system-x86_64 qemu-system-x86 /usr/bin/qemu-system-x86_64
 qemu-system-x86_64-microvm qemu-system-x86 /usr/bin/qemu-system-x86_64-microvm
 qemu-vmsr-helper qemu-system-common /usr/bin/qemu-vmsr-helper
+virgl_test_server virgl-server /usr/bin/virgl_test_server

@@ -1,0 +1,61 @@
+.Dd November 10, 2026
+.Dt VIRGL_TEST_SERVER 1
+.Os
+.Sh NAME
+.Nm virgl_test_server
+.Nd rendering server for separating OpenGL clients from host hardware
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     virgl_test_server [options]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     virgl_test_server  provides a rendering server that interfaces with the
+     OpenGL hardware.  Clients connect to it by using the mesa 3D virgl gal-
+     lium software renderer.
+
+     With the server running, the clients can connect to it  by  running  it
+     with  specific  environment  variables  set to make mesa pick the virgl
+     driver for rendering:
+
+       LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=virpipe <client software>
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     --no-fork Run the server single threaded
+
+     --no-loop-or-fork Run the server single threaded and exit after the
+     client closes the connection
+
+     --use-gles Force a GLES context on the host
+
+     --use-glx Use the GLX interface on the host
+
+     --use-egl-surfaceless Use the EGL surfaceless interface on the host
+.Ed
+.Ss "AUTHORS AND CONTRIBUTORS"
+.Bd -literal
+        Dave  Airlie,  Gert  Wollny,  Erik  Faye-Lund,  Marc-Andre   Lureau,
+     Gurchetan Singh,
+        Emil Velikov, Robert Foss, Jakob Bornecrantz, Elie Tournier, Alexan-
+     dros Frantzis,
+        David  Riley, Tomeu Vizoso, Li Qiang, Stephane Marchesin, Chia-I Wu,
+     Po-Hsien Wang,
+        Lepton Wu, Ramin Azarmehr, Robert Tarasov, Michal Privoznik, Alexan-
+     der Kanavin,
+        Joe M. Kniss,  Karol  Herbst,  Ondrej  Sukup,  Gerd  Hoffmann,  Ilia
+     Mirkin, Joe Kniss,
+        Nathan Gauer, Zhenyu Wang
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/virgl-server/copyright .
+.Pp
+The package also installs
+.Pa /usr/libexec/virgl_render_server ,
+the process in which virglrenderer runs a Venus context's Vulkan calls.
+QEMU's virtio-gpu starts it when its device has
+.Cm venus=on ;
+nobody runs it by hand.
