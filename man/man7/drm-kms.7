@@ -271,7 +271,9 @@ move it, through the CRTC's cursor plane;
 gives the hotspot as well.
 .It Dv DRM_IOCTL_MODE_PAGE_FLIP
 Show another framebuffer of the same format on a CRTC's primary plane,
-without a modeset, with an event when asked.
+without a modeset, with an event when asked;
+.Er EINVAL
+while DPMS leaves the CRTC off.
 .It Dv DRM_IOCTL_MODE_DIRTYFB
 Give the planes that show a framebuffer its changed rectangles as
 .Ql FB_DAMAGE_CLIPS ,
