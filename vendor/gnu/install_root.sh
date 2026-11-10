@@ -20,6 +20,10 @@
 #   debian    the desktop closure, including chromium-headless-shell
 #   venus     Mesa 26.1.6's Venus driver, in place of the closure's Mesa
 #             25.0.7 Venus driver
+#   i386      the i386 layer, when GNU_I386 is 1, on x86-64: the Multi-Arch
+#             `same` packages of debian/i386 and the i386 Venus driver of
+#             venus-i386, with /lib/ld-linux.so.2, as dpkg installs a second
+#             architecture
 #   proton    GE-Proton under /opt/proton, on x86-64
 #   webgl     the pinned conformance suite under /usr/share/webgl
 #   igt       IGT's tests under /usr/libexec/igt-gpu-tools and its runner,
@@ -90,6 +94,16 @@ if [ "${GNU_IGT:-}" = 1 ] && [ ! -d "$OUT/igt" ]; then
     echo "gnu: install: no $OUT/igt; run make ARCH=x86_64 gnu-igt" >&2
     exit 1
 fi
+if [ "${GNU_I386:-}" = 1 ]; then
+    if [ "$RACH2_ARCH" != x86_64 ]; then
+        echo "gnu: install: the i386 layer is the x86-64 root's" >&2
+        exit 1
+    fi
+    if [ ! -f "$OUT/work/debian/i386/multiarch.txt" ] || [ ! -d "$OUT/venus-i386" ]; then
+        echo "gnu: install: no i386 layer in $OUT; run make ARCH=x86_64 gnu-i386" >&2
+        exit 1
+    fi
+fi
 if [ "${GNU_VK_GL_CTS:-}" = 1 ] && [ ! -d "$OUT/vk-gl-cts" ]; then
     echo "gnu: install: no $OUT/vk-gl-cts; run make ARCH=x86_64 gnu-vk-gl-cts" >&2
     exit 1
@@ -135,6 +149,34 @@ fresh()
     fi
 }
 
+# shared LIST: take out of the sorted LIST each path the tree already has
+# with the same contents, or as a link to the same target, as dpkg lets two
+# architectures' packages share a file, and fail when the tree has one with
+# other contents. The paths taken out are added to WORK/shared.
+shared()
+{
+    nodes "$TREE" > "$WORK/have"
+    LC_ALL=C comm -12 "$WORK/have" "$1" > "$WORK/both"
+    : > "$WORK/differ"
+    while IFS= read -r p; do
+        if [ -L "$TREE/$p" ] || [ -L "$SHARED_FROM/$p" ]; then
+            [ -L "$TREE/$p" ] && [ -L "$SHARED_FROM/$p" ] &&
+                [ "$(readlink "$TREE/$p")" = "$(readlink "$SHARED_FROM/$p")" ] && continue
+        elif cmp -s "$TREE/$p" "$SHARED_FROM/$p"; then
+            continue
+        fi
+        printf '%s\n' "$p" >> "$WORK/differ"
+    done < "$WORK/both"
+    if [ -s "$WORK/differ" ]; then
+        echo "gnu: install: these would replace files the root has with others:" >&2
+        head -n 20 "$WORK/differ" >&2
+        exit 1
+    fi
+    cat "$WORK/both" >> "$WORK/shared"
+    LC_ALL=C comm -23 "$1" "$WORK/both" > "$WORK/unshared"
+    mv "$WORK/unshared" "$1"
+}
+
 # writable: give the owner write permission on every node of the tree. A
 # part that comes from the host's store of step outputs is read-only, and the
 # volume must not depend on where the layer was built, so every node is
@@ -145,12 +187,17 @@ writable()
     chmod -R u+w "$TREE"
 }
 
-# install_part PART: copy PART of the build tree over the tree. The Info
-# directory index lists only the manuals of the part that wrote it, so none
-# is kept, as build_port.sh keeps none.
+# install_part PART [shared]: copy PART of the build tree over the tree. The
+# Info directory index lists only the manuals of the part that wrote it, so
+# none is kept, as build_port.sh keeps none. With `shared`, a file the tree
+# has with the same contents is left as it is (shared above).
 install_part()
 {
     nodes "$OUT/$1" > "$WORK/new"
+    if [ "${2:-}" = shared ]; then
+        SHARED_FROM="$OUT/$1"
+        shared "$WORK/new"
+    fi
     fresh "$WORK/new"
     cp -a "$OUT/$1/." "$TREE/"
     writable
@@ -208,10 +255,16 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
 fi
 
 # install_debian LAYER: copy a named closure, refusing replaced root files.
+# Of the i386 layer it takes the packages multiarch.txt calls `same`, whose
+# files under /usr/share the amd64 packages of the same version may have too
+# (shared above), less the Venus driver of Mesa 25.0.7 and its ICD, which
+# venus-i386 replaces, as venus replaces amd64's; of any other layer, those
+# SKIP does not name.
 install_debian()
 {
     meta="$OUT/work/debian/$1"
     stage="$OUT/debian/$1"
+    : > "$WORK/shared"
     # Each package's list is the listing of its unpack, where /bin, /lib
     # and /sbin were links into /usr, as trixie has them; here
     # they are directories of the musl system, so those paths are taken under
@@ -222,13 +275,33 @@ install_debian()
     # left it, and a mode from the store has no write permission.
     : > "$WORK/debian"
     while read -r name _; do
-        skipped "$name" && continue
+        if [ "$1" = i386 ]; then
+            [ "$(awk -v n="$name" '$1 == n { print $2 }' "$meta/multiarch.txt")" = same ] || continue
+        else
+            skipped "$name" && continue
+        fi
         sed -e 's|^\./bin/|./usr/bin/|' -e 's|^\./lib/|./usr/lib/|' \
             -e 's|^\./sbin/|./usr/sbin/|' -e 's|/$||' "$meta/files/$name" >> "$WORK/debian"
     done < "$meta/closure.txt"
     grep -v '^\.$' "$WORK/debian" | LC_ALL=C sort -u > "$WORK/debian.list"
     nodes "$stage" > "$WORK/debian.have"
     LC_ALL=C comm -12 "$WORK/debian.list" "$WORK/debian.have" > "$WORK/new"
+    if [ "$1" = i386 ]; then
+        printf '%s\n' ./usr/lib/i386-linux-gnu/libvulkan_virtio.so \
+            ./usr/share/vulkan/icd.d/virtio_icd.json > "$WORK/venus25"
+        if [ "$(LC_ALL=C comm -12 "$WORK/new" "$WORK/venus25" | wc -l)" -ne 2 ]; then
+            echo "gnu: install: refused: the i386 closure lacks the Venus files venus-i386 replaces" >&2
+            exit 1
+        fi
+        LC_ALL=C comm -23 "$WORK/new" "$WORK/venus25" > "$WORK/new.i386"
+        mv "$WORK/new.i386" "$WORK/new"
+        SHARED_FROM="$stage"
+        shared "$WORK/new"
+        cat "$WORK/venus25" >> "$WORK/shared"
+        LC_ALL=C sort -o "$WORK/shared" "$WORK/shared"
+        LC_ALL=C comm -23 "$WORK/debian.list" "$WORK/shared" > "$WORK/debian.keep"
+        mv "$WORK/debian.keep" "$WORK/debian.list"
+    fi
     fresh "$WORK/new"
     tr / '\001' < "$WORK/debian.list" | LC_ALL=C sort | tr '\001' / > "$WORK/debian.order"
     tar -cf "$WORK/debian.tar" -C "$stage" --no-recursion -T "$WORK/debian.order"
@@ -287,14 +360,43 @@ for f in "usr/share/vulkan/icd.d/virtio_icd.json" "usr/lib/$GNU_MULTIARCH/libvul
     rm "$TREE/$f"
 done
 install_part venus
-venus="$TREE/usr/lib/$GNU_MULTIARCH/venus/libvulkan_virtio.so"
-for lib in $(LC_ALL=C readelf -d "$venus" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p'); do
-    for d in lib usr/lib "usr/lib/$GNU_MULTIARCH"; do
-        if [ -e "$TREE/$d/$lib" ] || [ -L "$TREE/$d/$lib" ]; then continue 2; fi
+
+# needs WHAT FILE DIR...: fail when a library that the ELF file FILE needs is
+# in none of the tree's directories DIR. WHAT names FILE in the message.
+needs()
+{
+    what=$1
+    file=$2
+    shift 2
+    for lib in $(LC_ALL=C readelf -d "$file" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p'); do
+        for d in "$@"; do
+            if [ -e "$TREE/$d/$lib" ] || [ -L "$TREE/$d/$lib" ]; then continue 2; fi
+        done
+        echo "gnu: install: refused: $what needs $lib, which the root lacks" >&2
+        exit 1
     done
-    echo "gnu: install: refused: the venus driver needs $lib, which the root lacks" >&2
-    exit 1
-done
+}
+
+needs "the venus driver" "$TREE/usr/lib/$GNU_MULTIARCH/venus/libvulkan_virtio.so" \
+    lib usr/lib "usr/lib/$GNU_MULTIARCH"
+
+# The i386 layer, after the desktop closure, whose packages of the same
+# versions share its files under /usr/share. Its venus-i386 replaces the
+# closure's i386 Venus driver as venus replaces amd64's. i386's glibc names
+# its loader /lib/ld-linux.so.2, which libc6 puts in /usr/lib, where Debian's
+# /lib is a link to; here /lib is a directory, so it gets a link of its own.
+if [ "${GNU_I386:-}" = 1 ]; then
+    install_debian i386
+    install_part venus-i386 shared
+    needs "the i386 venus driver" "$TREE/usr/lib/i386-linux-gnu/venus/libvulkan_virtio.so" \
+        usr/lib/i386-linux-gnu
+    if [ -e "$TREE/lib/ld-linux.so.2" ] || [ -L "$TREE/lib/ld-linux.so.2" ] ||
+        [ ! -e "$TREE/usr/lib/i386-linux-gnu/ld-linux.so.2" ]; then
+        echo "gnu: install: refused: /lib/ld-linux.so.2 is in the tree, or the i386 loader is not" >&2
+        exit 1
+    fi
+    ln -s ../usr/lib/i386-linux-gnu/ld-linux.so.2 "$TREE/lib/ld-linux.so.2"
+fi
 
 install_part proton
 install_part webgl
@@ -306,12 +408,35 @@ if [ "${GNU_VK_GL_CTS:-}" = 1 ]; then
 fi
 
 # These alternatives are made by Debian's postinst, which is not run here.
-for name in blas lapack; do
-    libdir="$TREE/usr/lib/$GNU_MULTIARCH"
-    if [ -f "$libdir/$name/lib$name.so.3" ]; then
-        ln -s "$name/lib$name.so.3" "$libdir/lib$name.so.3"
-    fi
+libdirs="usr/lib/$GNU_MULTIARCH"
+[ "${GNU_I386:-}" != 1 ] || libdirs="$libdirs usr/lib/i386-linux-gnu"
+for d in $libdirs; do
+    for name in blas lapack; do
+        libdir="$TREE/$d"
+        if [ -f "$libdir/$name/lib$name.so.3" ]; then
+            ln -s "$name/lib$name.so.3" "$libdir/lib$name.so.3"
+        fi
+    done
 done
+
+# GE-Proton's 32-bit Wine runs on the i386 layer: each library that its i386
+# modules and its own i386 libraries need is the layer's or Proton's, whose
+# directories Wine puts on the library path.
+if [ "${GNU_I386:-}" = 1 ]; then
+    i386s=0
+    for f in "$TREE"/opt/proton/files/lib/wine/i386-unix/* "$TREE"/opt/proton/files/lib/i386-linux-gnu/*; do
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        [ "$(head -c 5 "$f" | od -An -tx1 | tr -d ' \n')" = 7f454c4601 ] || continue
+        needs "GE-Proton's ${f#"$TREE"}" "$f" usr/lib/i386-linux-gnu \
+            opt/proton/files/lib/i386-linux-gnu opt/proton/files/lib/wine/i386-unix
+        i386s=$((i386s + 1))
+    done
+    if [ "$i386s" -eq 0 ]; then
+        echo "gnu: install: refused: GE-Proton has no i386 module to check" >&2
+        exit 1
+    fi
+    echo "gnu: install: i386: the libraries of $i386s of GE-Proton's i386 files are in the root"
+fi
 
 for name in ${GNU_AGENTS:-}; do
     install_part "agents/$name"

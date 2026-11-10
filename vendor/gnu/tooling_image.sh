@@ -6,18 +6,18 @@
 # Usage: tooling_image.sh OUTPUT SIZE
 #
 # mk/gnu-image.mk runs it on such a host, where an x86-64 Linux host runs
-# tools/image/mkext2.sh, with RACH2_ARCH, GNU_AGENTS and GNU_LINK set as for
-# that rule, RACH2_PATH_MAP as the Makefile exports it, and MUSL_CRYPT_SRC,
-# the file of the extracted musl that the KRFFS tools compile. It stages the
-# tree as one tar archive: the files git tracks or would track, the products
-# of this host that krffs/manifests/os-real-gnu.manifest names, and
+# tools/image/mkext2.sh, with RACH2_ARCH, GNU_AGENTS, GNU_LINK and GNU_I386 set
+# as for that rule, RACH2_PATH_MAP as the Makefile exports it, and
+# MUSL_CRYPT_SRC, the file of the extracted musl that the KRFFS tools compile.
+# It stages the tree as one tar archive: the files git tracks or would track,
+# the products of this host that krffs/manifests/os-real-gnu.manifest names, and
 # MUSL_CRYPT_SRC. It then runs tooling_job.sh in the tooling machine
-# (tools/etude/Readme.md, The tooling machine), made first if it is not, with
-# a network and two raw disks: the layer's build disk, tooling.disk in the
-# layer's build tree (build/vendor/gnu or build/x86_64/vendor/gnu), and a new
-# sparse file of SIZE MiB that the job writes the image to. When the job
-# succeeds and the file's SHA-256 is the one the job computed in the machine,
-# the file is renamed OUTPUT.
+# (tools/etude/Readme.md, The tooling machine), made first if it is not, with a
+# network and two raw disks: the layer's build disk, tooling.disk in the layer's
+# build tree (build/vendor/gnu or build/x86_64/vendor/gnu), and a new sparse
+# file of SIZE MiB that the job writes the image to. When the job succeeds and
+# the file's SHA-256 is the one the job computed in the machine, the file is
+# renamed OUTPUT.
 #
 # The build disk is a sparse file that keeps the layer's build tree, its
 # downloads and the job's logs between jobs, so a job that stops or fails
@@ -290,6 +290,7 @@ write_env()
 RACH2_ARCH='$RACH2_ARCH'
 GNU_AGENTS='${GNU_AGENTS:-}'
 GNU_LINK='${GNU_LINK:-}'
+GNU_I386='${GNU_I386:+1}'
 GNU_TEST_PRODUCTS='${GNU_TEST_PRODUCTS:+1}'
 RACH2_PATH_MAP='${RACH2_PATH_MAP:-}'
 MUSL_CRYPT_SRC='$MUSL_CRYPT_SRC'
