@@ -1262,8 +1262,14 @@ static uint8_t *slurp(const char *path, size_t *n)
     *n = 0;
     for (;;) {
         if (*n == cap) {
+            if (cap > SIZE_MAX / 2) {
+                die("file is too large: %s", path);
+            }
             cap = cap ? 2 * cap : 65536;
             buf = realloc(buf, cap);
+            if (buf == NULL) {
+                die("cannot allocate file buffer for %s", path);
+            }
         }
         got = fread(buf + *n, 1, cap - *n, f);
         if (got == 0) {
