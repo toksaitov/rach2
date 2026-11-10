@@ -116,6 +116,7 @@ busy for more than 95% of an interval of 16 ms at low frequencies, 13 ms
 between and 10 ms near RP0; down when it was busy for less than 85% of
 32 ms; and on the down timeout, to RPe and then RPn.
 Parked, the GT runs at RPn.
+A request unparks it, and it parks again when every ring is idle.
 The bind leaves the GT parked, and logs
 .Dq i915: rps:
 with RPn, RP1, RP0, RPe and the highest frequency allowed.
@@ -137,9 +138,47 @@ fall in the families below.
 .Dv DRM_IOCTL_VERSION
 answers as above.
 .Dv DRM_IOCTL_I915_GETPARAM
-and
+answers each parameter as Linux 6.18 answers it on this device: the
+device id, the revision, the rings that run (render and blitter; no video
+or video enhancement ring yet), the LLC, write-through eDRAM, the slice,
+subslice and EU counts the fuses give, the command streamer's timestamp
+frequency of 12.5 MHz, and the features of the buffer and submission calls.
+.Dv I915_PARAM_CMD_PARSER_VERSION
+is 0, as Linux answers when no ring parses commands.
+A parameter Linux answers with
+.Er ENODEV
+on Haswell, such as
+.Dv I915_PARAM_IRQ_ACTIVE ,
+.Dv I915_PARAM_HUC_STATUS
+or
+.Dv I915_PARAM_PXP_STATUS ,
+fails with it; an unknown one fails with
+.Er EINVAL ,
+and a value that cannot be written with
+.Er EFAULT .
 .Dv DRM_IOCTL_I915_SETPARAM
-are not yet served and fail with
+is not served and fails with
+.Er EINVAL .
+.Pp
+.Dv DRM_IOCTL_I915_QUERY
+answers each item in its own length, which is the size of the answer, or
+the item's error, as Linux does:
+.Dv DRM_I915_QUERY_TOPOLOGY_INFO ,
+one slice of two subslices and their EUs;
+.Dv DRM_I915_QUERY_ENGINE_INFO ,
+.Li rcs0
+and
+.Li bcs0 ;
+.Dv DRM_I915_QUERY_MEMORY_REGIONS ,
+system memory alone, of the size of the machine's memory.
+.Dv DRM_I915_QUERY_PERF_CONFIG ,
+.Dv DRM_I915_QUERY_HWCONFIG_BLOB ,
+.Dv DRM_I915_QUERY_GEOMETRY_SUBSLICES
+and
+.Dv DRM_I915_QUERY_GUC_SUBMISSION_VERSION
+are
+.Er ENODEV ,
+and an unknown item
 .Er EINVAL .
 .Ss Buffers
 Buffer objects follow Linux's i915 on an LLC part.
@@ -298,9 +337,99 @@ All of these calls fail with
 .Er ENOENT
 for a handle that names no object.
 .Ss Contexts
-.Dv DRM_IOCTL_I915_GEM_CONTEXT_CREATE
-and the context calls are not yet served and fail with
+A context is a file's own state of the GPU: on the render ring a hardware
+image of 17 pages, which the chip saves when it switches away and restores
+when it switches back, made from a default image the driver records once
+with Linux's context workarounds; the blitter keeps no image.
+Each open file has the default context, 0; the others are numbered from 1,
+the lowest free number first, and are freed with the file.
+A context's parameters can be set until its first use, which fixes them.
+.Bl -tag -width DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM
+.It Dv DRM_IOCTL_I915_GEM_CONTEXT_CREATE , DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT
+A new context and its id.
+With
+.Dv I915_CONTEXT_CREATE_FLAGS_USE_EXTENSIONS ,
+the chain of extensions at
+.Fa extensions
+is read, at most 512 deep
+.Pq Er E2BIG ;
+each
+.Dv I915_CONTEXT_CREATE_EXT_SETPARAM
+sets a parameter as SETPARAM does, and
+.Dv I915_CONTEXT_CREATE_EXT_CLONE
+or an unknown extension is
 .Er EINVAL .
+.Dv I915_CONTEXT_CREATE_FLAGS_SINGLE_TIMELINE
+and unknown flags are
+.Er EINVAL .
+A file banned for hanging the GPU gets
+.Er EIO .
+.It Dv DRM_IOCTL_I915_GEM_CONTEXT_DESTROY
+Destroys a context; its image stays until the chip has switched away from
+it.
+.Er ENOENT
+for context 0 or no such context.
+.It Dv DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM
+.Dv I915_CONTEXT_PARAM_GTT_SIZE ,
+the global GTT's size;
+.Dv BANNABLE ,
+.Dv RECOVERABLE
+and
+.Dv PERSISTENCE ,
+1 by default;
+.Dv NO_ERROR_CAPTURE ,
+.Dv PRIORITY
+and
+.Dv PROTECTED_CONTENT ;
+and
+.Dv SSEU ,
+the slices, subslices and EUs of an engine, which a size of 0 answers with
+the structure's size.
+.Dv VM
+is
+.Er ENODEV ,
+since there is no full PPGTT.
+.It Dv DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM
+.Dv NO_ERROR_CAPTURE
+and
+.Dv RECOVERABLE ;
+.Dv BANNABLE ,
+which only a privileged process may clear
+.Pq Er EPERM ;
+.Dv PERSISTENCE ,
+which cannot be cleared without preemption
+.Pq Er ENODEV ;
+and, before the first use,
+.Dv ENGINES ,
+a map of up to 64 engines by class and instance, holes allowed, whose
+.Dv I915_CONTEXT_ENGINES_EXT_LOAD_BALANCE
+is
+.Er ENODEV ,
+.Dv I915_CONTEXT_ENGINES_EXT_BOND
+is checked and has no effect, and
+.Dv I915_CONTEXT_ENGINES_EXT_PARALLEL_SUBMIT
+is
+.Er EINVAL ,
+as on Linux without GuC.
+.Dv PRIORITY ,
+.Dv SSEU
+and
+.Dv VM
+are
+.Er ENODEV .
+.El
+.Pp
+Each call takes Linux's
+.Er EINVAL
+for a size, flag, pad or reserved field where none belongs,
+.Er ENOENT
+for no such context or an engine of the map that does not run, and
+.Er EFAULT
+for memory that cannot be read.
+.Pp
+.Dv DRM_IOCTL_I915_GET_RESET_STATS
+gives a context's batches that were active at a hang and pending behind
+one, and to a privileged process the resets of the device.
 .Ss Submission
 .Dv DRM_IOCTL_I915_GEM_EXECBUFFER2
 and its variants are not yet served and fail with
