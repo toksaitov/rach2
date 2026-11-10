@@ -47,6 +47,7 @@ ulimit -l unlimited
 # Every iteration verifies disk data and an answered host-network packet.
 traffic_loop()
 {
+    trap - EXIT
     trap 'exit 0' TERM
     while [ ! -e "$work/stop" ]; do
         dd if=/dev/urandom of="$work/data" bs=4096 count=16 2>/dev/null
@@ -87,6 +88,7 @@ case $mode in
             if [ -n "$hold" ] && grep -q 'ASSIGNGUEST TRAFFIC' "$work/console"; then
                 awk '$1 == "vfio_dma_pages" && $2 > 0 { ok=1 } END { exit !ok }' /proc/stat || fail 'no live VFIO pins'
                 echo "assign: live: $(counts)"
+                resets_before=$(dmesg | grep -c 'pci: reset: 0:6.0' || :)
                 kill -KILL "$pid"
                 break
             fi
@@ -96,6 +98,10 @@ case $mode in
         wait "$pid" || rc=$?
         pid=
         cat "$work/console" "$work/qemu.err"
+        if [ -n "$hold" ]; then
+            resets_after=$(dmesg | grep -c 'pci: reset: 0:6.0' || :)
+            [ "$resets_after" -gt "$resets_before" ] || fail 'no device reset after SIGKILL'
+        fi
         [ "$rc" = 0 ] || { [ -n "$hold" ] && [ "$rc" = 137 ]; } || fail "QEMU exited $rc"
         grep -q 'ASSIGNGUEST OK' "$work/console" || fail 'guest did not ping gateway'
         exits_after=$(awk '$1 == "kvm_exits" { print $2 }' /proc/stat)
