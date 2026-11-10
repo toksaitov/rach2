@@ -2621,6 +2621,8 @@
         {"assertion_id": "cwd-walk", "checks": "the directory reached through /proc/self/cwd lists as the working directory does", "source": "program"},
         {"assertion_id": "status-cpus-allowed", "checks": "/proc/self/status gives Cpus_allowed_list as every processor /proc/stat lists", "source": "program"},
         {"assertion_id": "status-rss-kinds", "checks": "/proc/self/status gives RssAnon, RssFile and RssShmem, which sum to VmRSS", "source": "program"},
+        {"assertion_id": "status-rss-fork-file", "checks": "a private file page written before fork remains RssAnon in the child before and after a child write", "source": "program"},
+        {"assertion_id": "status-rss-fork-shmem", "checks": "a private memfd page written before fork remains RssAnon in the child before and after a child write", "source": "program"},
         {"assertion_id": "ns-listing", "checks": "/proc/self/ns lists user, pid, mnt, net, uts and ipc", "source": "program"},
         {"assertion_id": "ns-chdir", "checks": "chdir to /proc/self/ns makes the working directory /proc/PID/ns", "source": "program"},
         {"assertion_id": "net-class-listed", "checks": "/sys/class/net lists eth0", "source": "program"},

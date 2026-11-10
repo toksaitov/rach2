@@ -31,6 +31,9 @@ page_dir_t *_kernel_dir;
 
 uint32_t *_frames;
 size_t _frames_number;
+/* One bit per frame: a private anonymous page, kept across fork and COW.
+ * Reserved beside the reference table and changed under frame_lock. */
+static uint8_t *_frame_anon;
 /* The frames of the window, below HARD_MEMORY_LIMIT, which
  * `alloc_kernel_frame` gives out: frames whose physical address a device can
  * be given. */
@@ -40,6 +43,8 @@ static size_t _managed_frames;
 static size_t _free_frames; /* words of the table that are 0, kept by every writer */
 
 static void frame_take(uintptr_t frame);
+static void frame_make_anon(uintptr_t phys);
+static int frame_is_anon(uintptr_t phys);
 /* Where the next scan of the window for a free frame starts: no frame of
  * the window from `_user_frames_start` up to it is free. A scan from the
  * bottom of a million-frame table for every page would cost the table's
@@ -160,7 +165,7 @@ void init_paging(struct frame_map *map)
     _frames_number = map->top_frame ? (size_t)map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
                                                                     : HARD_MEMORY_LIMIT / PAGE_SIZE;
-    table_bytes = _frames_number * sizeof(uint32_t);
+    table_bytes = _frames_number * sizeof(uint32_t) + (_frames_number + 7u) / 8u;
     _frames = mmu_frame_table(map, table_bytes);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
@@ -181,6 +186,8 @@ void init_paging(struct frame_map *map)
             k_panic("init_paging: the frame table splits more ranges than the map keeps");
         }
     }
+    _frame_anon = (uint8_t *)(_frames + _frames_number);
+    k_memset(_frame_anon, 0, (_frames_number + 7u) / 8u);
     if (map->top_frame == 0) {
         k_memset(_frames, 0, table_bytes);
     } else {
@@ -317,8 +324,9 @@ static void fault_count(int major)
 
 /**
  * Back a page of a region that maps a file: a frame filled from the file and
- * mapped once it is full, writable when the region is. The mapping is
- * private: a store changes the frame, never the file. The fault counts as
+ * mapped once it is full. A read maps it copy-on-write; a store marks it
+ * anonymous and maps it writable. The mapping is private: a store changes
+ * the frame, never the file. The fault counts as
  * major when the fill read the page through the file system.
  *
  * The fill may sleep in the disk. The file is held from before the fill, so
@@ -330,8 +338,10 @@ static void fault_count(int major)
  * gives. 1 with the page mapped, 0 when no frame could be had or the read
  * failed, -1 to resolve again.
  */
-static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
+static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
+    page_dir_t *dir = mm->dir;
+    vm_space_t *vm = &mm->vm;
     struct vm_file *f = vma->file;
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
@@ -352,9 +362,12 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
         rc = -1;
     }
     vm_file_put(f);
-    if (rc == 1 && map_user_frame(dir, page, phys,
-                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                                      paging_noexec(prot)) == 0) {
+    if (rc == 1 && write) {
+        frame_make_anon(phys);
+    }
+    if (rc == 1 &&
+        map_user_frame(dir, page, phys,
+                       PTE_P | PTE_U | (write ? PTE_W : PTE_COW) | paging_noexec(prot)) == 0) {
         fault_count(filled > 0);
         return 1;
     }
@@ -549,7 +562,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
         }
         if (vma->file) {
             return vma->file->share ? shared_fault(mm, vma, addr, write)
-                                    : file_fault(dir, vm, vma, addr);
+                                    : file_fault(mm, vma, addr, write);
         }
     }
 
@@ -558,6 +571,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     if (phys == 0) {
         return 0;
     }
+    frame_make_anon(phys);
     if (paging_zero_frame(phys) != 0 ||
         map_user_frame(dir, addr, phys,
                        PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
@@ -887,6 +901,7 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     frame = old_phys / PAGE_SIZE;
 
     if (frame >= _frames_number || frame_maps(frame) <= 1) {
+        frame_make_anon(old_phys);
         *e = (pte & ~(pte_t)(PTE_COW | PTE_ZEROFILL)) | PTE_W;
         paging_flush_dir(dir, addr);
         return 1;
@@ -902,6 +917,7 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     }
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
     mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
+    frame_make_anon(new_phys);
     *e = (pte_t)new_phys | PTE_P | PTE_W | PTE_U | (pte & PTE_NOEXEC);
     paging_flush_dir(dir, addr);
     frame_unref(old_phys);
@@ -950,6 +966,7 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
         addr &= ~(uintptr_t)(PAGE_SIZE - 1);
         mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
     }
+    frame_make_anon(new_phys);
     *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)(PTE_COW | PTE_ZEROFILL));
     paging_flush_dir(dir, addr);
     if (new_phys != old_phys) {
@@ -1620,6 +1637,29 @@ static void frame_take(uintptr_t frame)
         }
     }
     _frames[frame] = 1;
+    _frame_anon[frame / 8u] &= (uint8_t)~(1u << (frame % 8u));
+}
+
+/** Mark an allocated frame as anonymous before publishing a private copy.
+ * The caller owns a reference and holds the big lock. */
+static void frame_make_anon(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+
+    if (frame < _frames_number && _frames[frame] && _frames[frame] < FRAME_REF_MAX) {
+        _frame_anon[frame / 8u] |= (uint8_t)(1u << (frame % 8u));
+    }
+    spin_unlock_irqrestore(&frame_lock, flags);
+}
+
+/** Whether a mapped frame is anonymous, under the big lock. Its mark lasts
+ * until reuse, independent of each mapping's hardware dirty bit. */
+static int frame_is_anon(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+
+    return frame < _frames_number && (_frame_anon[frame / 8u] & (1u << (frame % 8u))) != 0;
 }
 
 /**
@@ -1733,12 +1773,12 @@ int paging_user_page(page_dir_t *dir, uintptr_t va)
     return PAGING_PAGE_FRAME;
 }
 
-void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *frames,
-                        unsigned long *dirty, unsigned long *pinned)
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
+                        struct paging_frame_counts *counts)
 {
     uintptr_t va, next;
 
-    *frames = *dirty = *pinned = 0;
+    k_memset(counts, 0, sizeof(*counts));
     for (va = start; va < end; va = next) {
         pte_t *table = user_span(dir, va, end, &next);
 
@@ -1748,19 +1788,20 @@ void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigne
             if (!(e & PTE_P) || PTE_IS_ZERO(e) || paging_frame_is_device(PTE_ADDR(e))) {
                 continue;
             }
-            (*frames)++;
-            *dirty += (e & PTE_DIRTY) != 0;
-            *pinned += frame_pinned(PTE_ADDR(e)) != 0;
+            counts->frames++;
+            counts->dirty += (e & PTE_DIRTY) != 0;
+            counts->pinned += frame_pinned(PTE_ADDR(e)) != 0;
+            counts->anon += frame_is_anon(PTE_ADDR(e));
         }
     }
 }
 
 void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
-                       unsigned long *dirty)
+                       unsigned long *dirty, unsigned long *anon)
 {
     uintptr_t va, next;
 
-    *present = *dirty = 0;
+    *present = *dirty = *anon = 0;
     for (va = start; va < end; va = next) {
         pte_t *table = user_span(dir, va, end, &next);
 
@@ -1770,6 +1811,7 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
             if (e & PTE_P) {
                 (*present)++;
                 *dirty += (e & PTE_DIRTY) != 0;
+                *anon += frame_is_anon(PTE_ADDR(e));
             }
         }
     }
@@ -2168,6 +2210,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;
     }
 
+    frame_make_anon(phys_addr);
     old = table[MMU_INDEX(virt_addr)];
     table[MMU_INDEX(virt_addr)] = (pte_t)phys_addr | PTE_P | PTE_W | PTE_U;
     mm_resident_add(dir, 1 - ((old & PTE_P) != 0));
@@ -2384,6 +2427,9 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
         copy = alloc_user_frame();
         if (copy == 0) {
             return -1;
+        }
+        if (frame_is_anon(parent_phys)) {
+            frame_make_anon(copy);
         }
         if (paging_copy_frame(copy, parent_phys) != 0 ||
             map_user_frame(child_dir, va, copy, pte & PTE_FLAGS) != 0) {

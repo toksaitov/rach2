@@ -116,7 +116,7 @@ A probe that etude judges writes etude's report records (`tools/etude/Readme.md`
 
 `threadmusl` has a thread set K_RAW and raw termios with VMIN and VTIME zero before reading the empty console; closing `/fb` restores the console's settings.
 
-`procprobe mount` reports the exact root line its profile gives. `creddisk` reports each publication and lock check across cold boots, and `procfilesmusl` the status and content checks of each installed applet.
+`procprobe` checks that a private page written before fork stays in the child's RssAnon, before and after a child write, with both a regular file and a memfd. `procprobe mount` reports the exact root line its profile gives. `creddisk` reports each publication and lock check across cold boots, and `procfilesmusl` the status and content checks of each installed applet.
 
 `musl/build.sh`, run by `make musl-programs`, builds each `musl/*.c` file for `ARCH` with the cross compiler and the ported musl, under `build/tests/musl/` or `build/x86_64/tests/musl/`. A program that links another source of the tree lists it in a `link-deps:` line of its header comment; a named source that is missing stops the build. The build recompiles a program only when its source, a dependency, a header it included, the installed libc, `mk/arch.sh` or the script is newer than the binary.
 

@@ -1440,11 +1440,11 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
     }
     mm = p->mm;
     for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
-        unsigned long present, clean, dirty;
+        unsigned long present, clean, dirty, anon;
         int shared = r->type == VM_SHARED;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
-        paging_user_count(mm->dir, r->start, r->end, &present, &dirty);
+        paging_user_count(mm->dir, r->start, r->end, &present, &dirty, &anon);
         clean = present - dirty;
         ap_maps_line(t, mm, r);
         ap_smaps_kb(t, "Size:", (r->end - r->start) / PAGE_SIZE);
@@ -1457,7 +1457,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_kb(t, "Private_Clean:", shared ? 0 : clean);
         ap_smaps_kb(t, "Private_Dirty:", shared ? 0 : dirty);
         ap_smaps_kb(t, "Referenced:", clean + dirty);
-        ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : dirty);
+        ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : anon);
         ap_smaps_kb(t, "Swap:", 0);
         ap_smaps_kb(t, "SwapPss:", 0);
         ap_smaps_kb(t, "Locked:", (r->prot & VM_PROT_LOCKED) ? clean + dirty : 0);
@@ -1575,16 +1575,20 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
     for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
         const struct vm_policy *pol = mempolicy_at(r, r->start);
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
-        unsigned long frames, dirty, pinned, anon;
+        struct paging_frame_counts counts;
+        unsigned long frames, dirty, anon;
 
         ap_xlow(t, r->start, 8);
         ap_ch(t, ' ');
         ap_numa_policy(t, pol ? pol : p->mempolicy);
         ap_numa_place(t, mm, r);
-        paging_user_frames(mm->dir, r->start, r->end, &frames, &dirty, &pinned);
+        paging_user_frames(mm->dir, r->start, r->end, &counts);
+        frames = counts.frames;
+        dirty = counts.dirty;
+        anon = counts.anon;
         if (frames != 0) {
             dirty = of_file ? dirty : frames;
-            anon = !of_file ? frames : r->type == VM_SHARED ? 0 : dirty;
+            anon = !of_file ? frames : r->type == VM_SHARED ? 0 : anon;
             if (anon) {
                 ap_numa_count(t, " anon=", anon);
             }
@@ -1827,8 +1831,8 @@ static void procfs_waketime(struct procfs_text *t, const process_t *p)
  * file's pages are counted as shared memory when the file is in memory (a
  * tmpfs file, a memfd, shared anonymous memory), and as file pages
  * otherwise, device memory among them. This walks the regions' page
- * tables, since the dirty bit tells the written pages; the three sum to
- * the count VmRSS gives.
+ * tables and each frame's anonymous mark, which fork and copy-on-write
+ * preserve independently of the dirty bit; the three sum to VmRSS.
  */
 static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long *file,
                         unsigned long *shmem)
@@ -1839,11 +1843,11 @@ static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long 
     *file = 0;
     *shmem = 0;
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
-        unsigned long present, dirty, own;
+        unsigned long present, dirty, own, copies;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
-        paging_user_count(mm->dir, r->start, r->end, &present, &dirty);
-        own = r->type == VM_SHARED ? 0 : of_file ? dirty : present;
+        paging_user_count(mm->dir, r->start, r->end, &present, &dirty, &copies);
+        own = r->type == VM_SHARED ? 0 : of_file ? copies : present;
         *anon += own;
         if (filemap_in_memory(r->file)) {
             *shmem += present - own;
