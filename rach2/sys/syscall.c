@@ -1269,6 +1269,9 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
  * clock showed it had lasted `req`. A sleep that `tick_span` cuts ends at
  * its tick.
  *
+ * A zero interval blocks until the next tick, as Linux arms a timer even
+ * for a zero relative sleep; a caller can give a woken thread time to run.
+ *
  * A signal's remainder, written to `urem`, is the time left to the deadline
  * tick, so a caller that sleeps again for the remainder ends at the first
  * sleep's deadline, and later by the time it takes to call again; once that
@@ -1285,7 +1288,7 @@ static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timesp
     int32_t rc;
 
     if (req->tv_sec == 0 && req->tv_nsec == 0) {
-        return 0;
+        return sleep_until(tick_count() + 1u, urem);
     }
     rtc_monotonic(&sec, &nsec);
     rtc_tick_phase(&now, &phase_ns);
