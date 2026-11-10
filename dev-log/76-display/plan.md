@@ -327,6 +327,46 @@ The touchpad driver's first run on the Lenovo, on a kernel trial boot, silent.
   * 76-10c.2 Lenovo step: `bootctl kernel FILE`, boot, `mixer vol 1`, read the touchpad's capabilities and the setup's log with `evprobe` over SSH, return to the installed kernel. Events from a finger are the sitting's (84-1).
 * Done: on the Lenovo's trial boot the touchpad comes up in absolute mode and its evdev capabilities equal Debian's for the same device.
 
+### 76-23 USB HID report descriptors
+
+The USB HID driver reads every report descriptor as Linux's `hid-core.c`, `hid-input.c` and `usbhid` do, so that a device without the boot protocol, QEMU's `usb-tablet` among them, and a keyboard's consumer keys get event devices. Added during the milestone as issue 3307.
+
+* Files: `rach2/sys/usb/hid.c`; `rach2/sys/usb/hid_parse.c` and `hid_input.c` (new); `tests/host/hid_parse_hosttest.c` (new); `rach2/sys/usb/Readme.md`; `man/man4/input.4`.
+* Waits on: nothing.
+* Labels: none.
+* Subtasks: 76-23.1 the report descriptor parser; 76-23.2 usages to events as `hid-input.c` maps them; 76-23.3 reports in the report protocol, the boot protocol as Linux's fallback; 76-23.4 QEMU's `usb-tablet` against Debian.
+* Done: on QEMU's `usb-tablet` the event device matches Linux's in name, IDs and capabilities, and QMP's moves and clicks give the events evtest shows on Debian; USB keyboards and mice keep their events and LEDs.
+
+### 76-24 Pointing sticks and touchpad quirks
+
+A TrackPoint on a Synaptics pad's pass-through port or alone on the auxiliary port, as Linux's `trackpoint.c` and `psmouse-base.c` drive one, Linux's Synaptics quirks chosen by the pad's ACPI PNP ID and by the machine, and the reset after five bad packets. Added during the milestone as issue 3312.
+
+* Files: `rach2/sys/arch/x86/ps2mouse.c` (this task owns it; 76-25 and 76-26 add only their probe calls to `detect_protocol`), `synaptics.c` and `.h`, `trackpoint.c` and `.h` (new); the PS/2 mouse's PNP ID from ACPICA; `tests/host/synaptics_hosttest.c`, `trackpoint_hosttest.c` (new); `man/man4/input.4`.
+* Waits on: nothing. 76-14b.9, the reset after five bad packets, moved here.
+* Labels: none.
+* Subtasks: 76-24.1 the PNP ID; 76-24.2 the quirks by PNP ID; 76-24.3 the pass-through port and TrackPoints; 76-24.4 every pass-through and quirk case against Linux; 76-24.5 the reset after five bad packets.
+* Done: a host test feeds pass-through packets and each kind of TrackPoint's, with every PNP ID of Linux 6.12's quirk tables, and checks events, ranges, properties and the TrackPoint's files against Linux 6.12's code.
+
+### 76-25 ALPS touchpads
+
+ALPS pads of protocol versions 1 to 8, identified and decoded as Linux's `alps.c` does. Added during the milestone as issue 3317.
+
+* Files: `rach2/sys/arch/x86/alps.c` and `.h` (new); the probe call in `ps2mouse.c`'s `detect_protocol` alone; `tests/host/alps_hosttest.c` (new); `man/man4/input.4`.
+* Waits on: nothing.
+* Labels: none.
+* Subtasks: 76-25.1 identification by the E6 and E7 reports and `alps_model_data`; 76-25.2 versions 1 to 3; 76-25.3 versions 4 to 8; 76-25.4 the documents.
+* Done: a host test feeds each version's packets, built from `alps.rst` and Linux's decoder, with their sticks', and checks events, slots and capabilities against Linux 6.12's code.
+
+### 76-26 Elantech touchpads
+
+Elantech pads of hardware versions 1 to 4, identified and decoded as Linux's `elantech.c` does. Added during the milestone as issue 3322.
+
+* Files: `rach2/sys/arch/x86/elantech.c` and `.h` (new); the probe call in `ps2mouse.c`'s `detect_protocol` alone; `tests/host/elantech_hosttest.c` (new); `man/man4/input.4`.
+* Waits on: nothing.
+* Labels: none.
+* Subtasks: 76-26.1 identification of the pad and its firmware; 76-26.2 versions 1 and 2; 76-26.3 versions 3 and 4, with the stick, clickpad and crc forms; 76-26.4 the documents.
+* Done: a host test feeds each version's packets, built from `elantech.rst` and Linux's decoder, and checks events, slots and capabilities against Linux 6.12's code.
+
 ### 76-11a Console on DRM
 
 The console as a DRM client that follows the mode, and the handover to a master and back on drop, close, exit or death. Split from its Lenovo step (76-11b), since 76-14b and 78-9 need the code.
