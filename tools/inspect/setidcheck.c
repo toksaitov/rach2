@@ -982,22 +982,20 @@ typedef int (*dir_look)(void *ctx, const char *path, unsigned long *mode, unsign
                         unsigned long *gid);
 
 /**
- * Check the directories above every declared path of `e`, the `overlay`
- * ones with `overlays`, through `look`: each must be staged, owned by user
- * and group 0, and writable by neither group nor others, because `unlink`
- * and `rename` are decided on the parent directory's write permission.
+ * Check the directories above every path of `paths`, as `declared_paths`
+ * gives them, through `look`: each must be staged, owned by user and group
+ * 0, and writable by neither group nor others, because `unlink` and
+ * `rename` are decided on the parent directory's write permission.
  * Findings name `where`.
  */
-static void check_ancestors(const char *where, const struct entry *e, int overlays, dir_look look,
-                            void *ctx, struct list *problems)
+static void check_ancestors(const char *where, const struct list *paths, dir_look look, void *ctx,
+                            struct list *problems)
 {
-    struct list paths = {NULL, 0, 0};
     struct list seen = {NULL, 0, 0};
     int i;
 
-    declared_paths(e, overlays, &paths);
-    for (i = 0; i < paths.n; i++) {
-        const char *guest = paths.items[i];
+    for (i = 0; i < paths->n; i++) {
+        const char *guest = paths->items[i];
         const char *p = guest + 1;
         char parent[512];
 
@@ -1030,8 +1028,27 @@ static void check_ancestors(const char *where, const struct entry *e, int overla
                      where, parent, fmt_entry(mode, uid, gid));
         }
     }
-    free(paths.items);
     list_free(&seen);
+}
+
+/**
+ * Remove from `paths` each `optional-file` path of `e` for which `absent`
+ * says the image or manifest leaves the file out: a file that is not there
+ * has no directories to check. The items stay borrowed from `e`.
+ */
+static void drop_absent(const struct entry *e, struct list *paths,
+                        int (*absent)(const void *ctx, const char *path), const void *ctx)
+{
+    int i, j, k;
+
+    for (i = 0; i < e->n_trusted; i++) {
+        if (strcmp(e->trusted[i].verb, "optional-file") != 0 || !absent(ctx, e->trusted[i].path))
+            continue;
+        for (j = k = 0; j < paths->n; j++)
+            if (strcmp(paths->items[j], e->trusted[i].path) != 0)
+                paths->items[k++] = paths->items[j];
+        paths->n = k;
+    }
 }
 
 /* What the sweep records as staged for a path. */
@@ -1133,6 +1150,29 @@ static int manifest_dir_look(void *ctx, const char *path, unsigned long *mode, u
     return found;
 }
 
+/** The `absent` of `drop_absent` for a manifest: no directive stages it. */
+static int staged_absent(const void *ctx, const char *path)
+{
+    return staged_find((struct staged_map *)ctx, path) == NULL;
+}
+
+/**
+ * Check the directories above the paths a manifest stages of those `e`
+ * declares, its overlay files and the optional files it leaves out apart.
+ */
+static void manifest_ancestors(const char *name, const struct entry *e, const struct manifest *m,
+                               struct staged_map *staged, struct list *problems)
+{
+    struct manifest_dirs dctx;
+    struct list paths = {NULL, 0, 0};
+
+    declared_paths(e, 0, &paths);
+    drop_absent(e, &paths, staged_absent, staged);
+    dctx.m = m;
+    check_ancestors(name, &paths, manifest_dir_look, &dctx, problems);
+    free(paths.items);
+}
+
 /** The first verb a manifest uses for a guest path, or NULL. */
 static const char *first_verb(const struct manifest *m, const char *guest)
 {
@@ -1209,7 +1249,6 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
     const struct entry *e = find_entry((struct allow *)allow, stem);
     struct manifest m;
     struct staged_map staged = {NULL, 0};
-    struct manifest_dirs dctx;
     struct list sorted = {NULL, 0, 0};
     int i, j;
 
@@ -1314,8 +1353,7 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
     }
     sorted.n = 0;
 
-    dctx.m = &m;
-    check_ancestors(name, e, 0, manifest_dir_look, &dctx, problems);
+    manifest_ancestors(name, e, &m, &staged, problems);
 
     for (i = 0; i < e->n_trusted; i++)
         list_push(&sorted, e->trusted[i].path);
@@ -1832,6 +1870,27 @@ static int image_dir_look(void *ctx, const char *path, unsigned long *mode, unsi
     *uid = n->uid;
     *gid = n->gid;
     return 0;
+}
+
+/** The `absent` of `drop_absent` for an image: it has no node at `path`. */
+static int image_absent(const void *ctx, const char *path)
+{
+    return path_find((const struct image *)ctx, path) == NULL;
+}
+
+/**
+ * Check the directories above the paths an image has of those `e` declares,
+ * the optional files it leaves out apart.
+ */
+static void image_ancestors(const char *iname, const struct entry *e, const struct image *im,
+                            struct list *problems)
+{
+    struct list paths = {NULL, 0, 0};
+
+    declared_paths(e, 1, &paths);
+    drop_absent(e, &paths, image_absent, im);
+    check_ancestors(iname, &paths, image_dir_look, (void *)im, problems);
+    free(paths.items);
 }
 
 /**
@@ -2632,7 +2691,7 @@ static void check_image(const char *image, const char *manifest, int64_t offset,
                  iname, decl->path, fmt_entry(decl->mode, decl->uid, decl->gid));
     }
 
-    check_ancestors(iname, e, 1, image_dir_look, (void *)&im, problems);
+    image_ancestors(iname, e, &im, problems);
 
     sorted.n = 0;
     for (i = 0; i < e->n_trusted; i++)
