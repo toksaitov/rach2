@@ -21,6 +21,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 
 | Fault | Project | Milestone | Status | Entry |
 |---|---|---|---|---|
+| PulseAudio's OSS sink writes 1% as 0 to the mixer | PulseAudio 17.0 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#pulseaudios-oss-sink-writes-1-as-0-to-the-mixer) |
 | Wine DirectInput waits for a terminated worker during process detach | Wine 11.0, GE-Proton11-12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#wine-directinput-waits-for-a-terminated-worker-during-process-detach) |
 | GE-Proton loses mutex robustness when priority inheritance is unavailable | GE-Proton11-12 | 80 | unreported, draft | [80-games/upstream.md](80-games/upstream.md#ge-proton-loses-mutex-robustness-when-priority-inheritance-is-unavailable) |
 | Marionette returns before a script finishes with a null timeout | Firefox ESR 153.6.0 | 76 | unreported | [76-display/upstream.md](76-display/upstream.md#marionettes-null-script-timeout-returns-before-the-script-finishes) |

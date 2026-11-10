@@ -1,0 +1,81 @@
+== attempt 2
+TimeDemo Play Started , (Total Frames: 2000, Recorded Time: 111.86s)
+!TimeDemo Run 0 Finished.
+    Play Time: 79.43s, Average FPS: 25.18
+    Min FPS: 8.00 at frame 1459, Max FPS: 41.67 at frame 69
+!TimeDemo Run 1 Finished.
+    Play Time: 81.84s, Average FPS: 24.44
+    Min FPS: 3.26 at frame 1057, Max FPS: 43.76 at frame 869
+!TimeDemo Run 2 Finished.
+    Play Time: 85.99s, Average FPS: 23.26
+    Min FPS: 3.26 at frame 1057, Max FPS: 43.76 at frame 869
+!TimeDemo Run 3 Finished.
+    Play Time: 74.42s, Average FPS: 26.88
+    Min FPS: 3.26 at frame 1057, Max FPS: 45.71 at frame 1011
+TimeDemo Play Ended, (4 Runs Performed)
+== attempt 3
+TimeDemo Play Started , (Total Frames: 2000, Recorded Time: 111.86s)
+!TimeDemo Run 0 Finished.
+    Play Time: 78.26s, Average FPS: 25.55
+    Min FPS: 4.42 at frame 1065, Max FPS: 43.75 at frame 878
+TimeDemo Play Ended, (1 Runs Performed)
+== attempt 5
+TimeDemo Play Started , (Total Frames: 2000, Recorded Time: 111.86s)
+!TimeDemo Run 0 Finished.
+    Play Time: 73.70s, Average FPS: 27.14
+    Min FPS: 10.93 at frame 1990, Max FPS: 45.47 at frame 892
+!TimeDemo Run 1 Finished.
+    Play Time: 78.12s, Average FPS: 25.60
+    Min FPS: 10.62 at frame 1913, Max FPS: 45.47 at frame 892
+!TimeDemo Run 2 Finished.
+    Play Time: 93.46s, Average FPS: 21.40
+    Min FPS: 6.81 at frame 1945, Max FPS: 45.47 at frame 892
+!TimeDemo Run 3 Finished.
+    Play Time: 92.30s, Average FPS: 21.67
+    Min FPS: 6.81 at frame 1945, Max FPS: 45.47 at frame 892
+TimeDemo Play Ended, (4 Runs Performed)
+== attempt 6
+TimeDemo Play Started , (Total Frames: 2000, Recorded Time: 111.86s)
+!TimeDemo Run 0 Finished.
+    Play Time: 73.63s, Average FPS: 27.16
+    Min FPS: 18.17 at frame 1952, Max FPS: 40.36 at frame 895
+!TimeDemo Run 1 Finished.
+    Play Time: 86.38s, Average FPS: 23.15
+    Min FPS: 7.82 at frame 641, Max FPS: 40.36 at frame 895
+!TimeDemo Run 2 Finished.
+    Play Time: 80.85s, Average FPS: 24.74
+    Min FPS: 7.82 at frame 641, Max FPS: 40.36 at frame 895
+!TimeDemo Run 3 Finished.
+    Play Time: 83.20s, Average FPS: 24.04
+    Min FPS: 7.82 at frame 641, Max FPS: 40.36 at frame 895
+TimeDemo Play Ended, (4 Runs Performed)
+== attempt 7
+TimeDemo Play Started , (Total Frames: 2000, Recorded Time: 111.86s)
+!TimeDemo Run 0 Finished.
+    Play Time: 93.16s, Average FPS: 21.47
+    Min FPS: 4.65 at frame 653, Max FPS: 37.22 at frame 879
+!TimeDemo Run 1 Finished.
+    Play Time: 107.57s, Average FPS: 18.59
+    Min FPS: 4.65 at frame 653, Max FPS: 37.22 at frame 879
+!TimeDemo Run 2 Finished.
+    Play Time: 100.06s, Average FPS: 19.99
+    Min FPS: 4.65 at frame 653, Max FPS: 37.22 at frame 879
+!TimeDemo Run 3 Finished.
+    Play Time: 108.88s, Average FPS: 18.37
+    Min FPS: 4.40 at frame 1967, Max FPS: 37.22 at frame 879
+TimeDemo Play Ended, (4 Runs Performed)
+== attempt 8
+TimeDemo Play Started , (Total Frames: 2000, Recorded Time: 111.86s)
+!TimeDemo Run 0 Finished.
+    Play Time: 78.05s, Average FPS: 25.62
+    Min FPS: 8.79 at frame 1911, Max FPS: 37.67 at frame 908
+!TimeDemo Run 1 Finished.
+    Play Time: 97.36s, Average FPS: 20.54
+    Min FPS: 8.79 at frame 1911, Max FPS: 37.67 at frame 908
+!TimeDemo Run 2 Finished.
+    Play Time: 101.43s, Average FPS: 19.72
+    Min FPS: 8.79 at frame 1911, Max FPS: 37.67 at frame 908
+!TimeDemo Run 3 Finished.
+    Play Time: 92.40s, Average FPS: 21.64
+    Min FPS: 6.58 at frame 1940, Max FPS: 37.67 at frame 908
+TimeDemo Play Ended, (4 Runs Performed)
