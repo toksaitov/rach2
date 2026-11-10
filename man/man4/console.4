@@ -132,7 +132,22 @@ normally Ctrl-C and Ctrl-Z, send
 .Dv SIGINT
 and
 .Dv SIGTSTP
-to the foreground process group.
+to the foreground process group, and discard the unread input and the
+output not yet shown, unless
+.Dv NOFLSH
+is set.
+With
+.Dv IXON ,
+which a new terminal has, Ctrl-S stops the terminal's output and Ctrl-Q
+restarts it, and neither reaches a reader; with
+.Dv IXANY
+any key restarts it.
+A write waits while output is stopped, Scroll Lock and its LED are on,
+and the Hold key, Scroll Lock, stops and restarts output, as on Linux.
+.Dv TCXONC
+does the same from a program, as
+.Xr ioctl 2
+describes.
 .Pp
 A background process reading its controlling terminal receives
 .Dv SIGTTIN .

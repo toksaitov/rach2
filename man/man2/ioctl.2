@@ -53,7 +53,14 @@ This is the kernel layout, the same on i386 and x86-64, with 19 control
 characters, not musl's
 larger termios structure with 32 control characters and speed fields.
 A new terminal has Linux's control flags,
-.Dv B38400 | CS8 | CREAD | HUPCL .
+.Dv B38400 | CS8 | CREAD | HUPCL ,
+and
+.Dv IXON
+among its input flags, with
+.Dv VSTART
+^Q and
+.Dv VSTOP
+^S.
 .It Dv TCSETS , TCSETSW , TCSETSF
 Read a 36-byte kernel termios from
 .Fa arg
@@ -107,6 +114,46 @@ selects the queue:
 discard a pseudo-terminal slave's output its master has not read; the
 console writes its output at once, so there they do nothing.
 Other values are invalid.
+.It Dv TCXONC
+The integer
+.Fa arg
+selects the action, as
+.Xr tcflow 3
+gives it:
+.Dv TCOOFF
+(0) stops the terminal's output and
+.Dv TCOON
+(1) restarts it; a stop made so outlasts
+.Dv VSTART
+and
+.Dv IXANY ,
+which end only a stop that
+.Dv VSTOP
+made.
+.Dv TCIOFF
+(2) and
+.Dv TCION
+(3) send the
+.Dv VSTOP
+and
+.Dv VSTART
+characters as output, also while output is stopped by
+.Dv VSTOP ,
+but not while it is stopped by
+.Dv TCOOFF ;
+a disabled character sends nothing.
+Other values are
+.Er EINVAL .
+While output is stopped, a write waits, or with
+.Dv O_NONBLOCK
+fails with
+.Er EAGAIN
+once it has written nothing, and
+.Xr poll 2
+gives no
+.Dv POLLOUT .
+On the console a stop lights Scroll Lock, and the Hold key, Scroll Lock,
+stops and restarts output, as on Linux.
 .It Dv FIONREAD
 Write an
 .Vt int
@@ -230,17 +277,45 @@ and
 .Dv TIOCPKT_FLUSHWRITE
 after its output is discarded by
 .Dv TCFLSH ,
-or both.
+or both, as a signal character does unless
+.Dv NOFLSH
+is set.
+.Dv TIOCPKT_STOP
+and
+.Dv TIOCPKT_START
+follow a stop and a restart of the slave's output, and
+.Dv TIOCPKT_NOSTOP
+and
+.Dv TIOCPKT_DOSTOP
+a termios change that ends or begins flow control by ^S and ^Q, that is
+.Dv IXON
+with those two characters.
 A slave's
 .Xr vhangup 2
 leaves no status pending.
-A signal character and output stops send no status byte.
 .It Dv TCFLSH
 With
 .Fa arg
 0, drop the slave's output the master has not read; with 1, the input the
 slave has not read; with 2, both.
+.It Dv TCXONC
+.Dv TCOOFF
+stops the master's writes, which wait, or fail with
+.Er EAGAIN
+under
+.Dv O_NONBLOCK ,
+until
+.Dv TCOON ;
+.Dv TCIOFF
+and
+.Dv TCION
+feed ^S and ^Q to the slave as input, unless the master's writes are
+stopped.
 .El
+.Pp
+A master's write fails with
+.Er EIO
+once every slave description has closed, as Linux's does.
 .Ss Disk requests
 Raw disk windows and loop devices with a file attached accept:
 .Bl -tag -width "BLKGETSIZE64"
