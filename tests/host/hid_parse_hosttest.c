@@ -879,6 +879,8 @@ static void rows_map_keyboard(void)
  * usages are its scan codes, as hid-input numbers them. */
 static void rows_keyboard_keymap(struct hid_dev *hid, struct evdev *d)
 {
+    static const uint8_t shift_a[] = {0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t none[8] = {0};
     struct evdev_keymap_entry ke;
     uint16_t old = 0;
 
