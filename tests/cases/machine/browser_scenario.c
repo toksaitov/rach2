@@ -1,4 +1,5 @@
-/* Run one browser acceptance case in a private desktop root. */
+/* Run one browser acceptance case in a private desktop root, or the
+ * accelerated browsers' checks on the fake i915 chip. */
 #include <stdio.h>
 #include <string.h>
 
@@ -14,7 +15,12 @@ static void stage(struct net_case *u, struct net_boot *b, const char *mode)
                           "chown desktop /tmp/browser-out";
 
     memset(&r, 0, sizeof(r));
-    if (strncmp(mode, "video-", 6) == 0)
+    if (strcmp(mode, "fake") == 0)
+        command = "mkdir -p /tmp/graphics /tmp/d3d /tmp/browser-out && "
+                  "mount -t ext2 -o ro /dev/disk1 /tmp/graphics && "
+                  "mount -t ext2 -o ro /dev/disk2 /tmp/d3d && "
+                  "chown desktop /tmp/browser-out";
+    else if (strncmp(mode, "video-", 6) == 0)
         command = "mkdir -p /tmp/graphics /tmp/browser-out && "
                   "mount -t ext2 -o ro /dev/disk1 /tmp/graphics && "
                   "mount -t ext2 -o ro /dev/disk2 /tmp/graphics/clips && "
@@ -50,37 +56,58 @@ static void host_record(struct net_case *u, struct net_boot *b)
 }
 
 /**
- * Boot the case's root, run its ordinary browser and retain the result.
- * The guest channel stages files as root; the browser keeps its sandbox.
+ * Run browsers-gpu.sh on the fake chip and judge each check's verdict.
+ * The fake draws nothing, so that the script's -f leaves the readbacks
+ * unjudged; each browser's line still requires its GPU path on Crocus and
+ * its sandboxes as Debian's.
  */
-int etude_scenario(struct etude_case *c)
+static void crocus_fake(struct net_case *u, struct net_boot *b)
 {
-    struct net_case u;
-    struct net_boot b;
     struct net_run r;
-    const char *id = etude_case_id(c), *tail = strrchr(id, '.');
+    const char *argv[] = {"/bin/bash", "-c",
+                          "sh /tmp/graphics/lenovo/browsers-gpu.sh -f desktop /tmp/browser-out",
+                          NULL};
+    int ran = 0, crocus = 0;
+
+    memset(&r, 0, sizeof(r));
+    if (net_step(u, "run") == ETUDE_OK &&
+        net_guest(u, b->m, argv, NULL, NULL, "browsers-gpu", &r) == ETUDE_OK) {
+        fputs(r.out, stdout);
+        fputs(r.err, stderr);
+        ran = net_find(r.out, "browsers-gpu: result: d3d9 ") != NULL;
+        if (net_step(u, "judge") == ETUDE_OK)
+            crocus = net_exited0(&r) &&
+                     net_find(r.out, "browsers-gpu: result: chromium pass") != NULL &&
+                     net_find(r.out, "browsers-gpu: result: firefox pass") != NULL &&
+                     net_find(r.out, "browsers-gpu: result: x11 pass") != NULL &&
+                     net_find(r.out, "browsers-gpu: result: d3d9 pass") != NULL &&
+                     net_find(r.out, "browsers-gpu: result: pass on the fake chip") != NULL;
+        net_run_free(&r);
+    }
+    net_assert(u, "ran", ran, "browsers-gpu.sh did not reach its last check");
+    net_assert(u, "crocus", crocus,
+               "a check of browsers-gpu.sh failed on the fake chip; see browsers-gpu evidence");
+    argv[2] = "tar -czf /tmp/browser-out.tar.gz -C /tmp/browser-out .";
+    if (net_step(u, "collect") == ETUDE_OK &&
+        net_guest(u, b->m, argv, NULL, NULL, "pack", &r) == ETUDE_OK && net_exited0(&r) &&
+        etude_guest_get(b->m, "/tmp/browser-out.tar.gz", "browser-out.tar.gz") != ETUDE_OK)
+        net_fail(u, "the browser output could not be fetched");
+    net_run_free(&r);
+}
+
+/**
+ * Run the ordinary browser's case `mode`, judge it against Debian's and
+ * fetch its evidence.
+ */
+static void browser_case(struct net_case *u, struct net_boot *b, const char *browser,
+                         const char *mode)
+{
+    struct net_run r;
     const char *argv[] = {"/bin/bash", "-c", NULL, NULL};
-    char browser[16], mode[32], password[128], command[2048], token[128];
+    char command[2048], token[128];
     int ran = 0, judged = 0;
 
-    memset(&b, 0, sizeof(b));
     memset(&r, 0, sizeof(r));
-    net_case(&u, c);
-    b.u = &u;
-    if (tail == NULL || sscanf(tail + 1, "%15[^-]-%31s", browser, mode) != 2 ||
-        (strcmp(browser, "chromium") != 0 && strcmp(browser, "firefox") != 0)) {
-        net_fail(&u, "unknown browser case %s", id);
-        return net_end(&u);
-    }
-    net_secret(&u, "demo-password", password, sizeof(password));
-    if (net_step(&u, "boot") == ETUDE_OK)
-        net_boot(&b, &u, "gnu", 1, NULL);
-    net_seen(&b, "ext2: root: /dev/disk0p1");
-    net_seen(&b, "rach2 login");
-    if (net_login(&b, "root", password, "# ") == ETUDE_OK && etude_guest_open(b.m) != ETUDE_OK)
-        net_fail(&u, "the browser guest command channel did not open");
-    stage(&u, &b, mode);
-    host_record(&u, &b);
     snprintf(command, sizeof(command),
              "su -s /bin/sh desktop -c 'GRAPHICS_CLASS=conformance GRAPHICS_DONE=1; "
              "export GRAPHICS_CLASS GRAPHICS_DONE; . /tmp/graphics/guest-env.sh && "
@@ -94,8 +121,8 @@ int etude_scenario(struct etude_case *c)
         snprintf(command, sizeof(command),
                  "python3 /tmp/graphics/browser/sandbox.py desktop %s /tmp/browser-out", browser);
     argv[2] = command;
-    if (net_step(&u, "run") == ETUDE_OK &&
-        net_guest(&u, b.m, argv, NULL, NULL, "browser", &r) == ETUDE_OK) {
+    if (net_step(u, "run") == ETUDE_OK &&
+        net_guest(u, b->m, argv, NULL, NULL, "browser", &r) == ETUDE_OK) {
         fputs(r.out, stdout);
         fputs(r.err, stderr);
         snprintf(token, sizeof(token), "browser: result: %s %s", browser, mode);
@@ -106,22 +133,21 @@ int etude_scenario(struct etude_case *c)
         ran = net_exited0(&r) && net_find(r.out, token) != NULL;
         net_run_free(&r);
     }
-    net_assert(&u, "ran", ran,
-               "the browser acceptance case did not complete; see browser evidence");
+    net_assert(u, "ran", ran, "the browser acceptance case did not complete; see browser evidence");
     snprintf(command, sizeof(command),
              "python3 /tmp/graphics/browser/judge.py %s %s /tmp/graphics/browser/ref "
              "/tmp/browser-out",
              browser, mode);
-    if (net_step(&u, "judge") == ETUDE_OK &&
-        net_guest(&u, b.m, argv, NULL, NULL, "judge", &r) == ETUDE_OK) {
+    if (net_step(u, "judge") == ETUDE_OK &&
+        net_guest(u, b->m, argv, NULL, NULL, "judge", &r) == ETUDE_OK) {
         judged = net_exited0(&r) && net_find(r.out, "browser-judge: result: pass") != NULL;
         fputs(r.out, stdout);
         fputs(r.err, stderr);
         net_run_free(&r);
     }
-    net_assert(&u, "as-debian", judged,
+    net_assert(u, "as-debian", judged,
                "the browser acceptance differs from Debian; see judge evidence");
-    if (net_step(&u, "collect") == ETUDE_OK) {
+    if (net_step(u, "collect") == ETUDE_OK) {
         snprintf(command, sizeof(command),
                  "cd /tmp/browser-out && "
                  "for f in result.json switches.json sound.json record %s "
@@ -132,12 +158,52 @@ int etude_scenario(struct etude_case *c)
                      ? "gpu.txt gpu-info.json vulkaninfo.out vulkaninfo.err browser.log"
                      : "");
         argv[2] = command;
-        if (net_guest(&u, b.m, argv, NULL, NULL, "pack", &r) == ETUDE_OK && net_exited0(&r)) {
+        if (net_guest(u, b->m, argv, NULL, NULL, "pack", &r) == ETUDE_OK && net_exited0(&r)) {
             fputs(r.out, stdout);
-            if (etude_guest_get(b.m, "/tmp/browser-out.tar.gz", "browser-out.tar.gz") != ETUDE_OK)
-                net_fail(&u, "the browser output could not be fetched");
+            if (etude_guest_get(b->m, "/tmp/browser-out.tar.gz", "browser-out.tar.gz") != ETUDE_OK)
+                net_fail(u, "the browser output could not be fetched");
         }
         net_run_free(&r);
     }
+}
+
+/**
+ * Boot the case's root, run its ordinary browser and retain the result.
+ * The guest channel stages files as root; the browser keeps its sandbox.
+ * The case `crocus-fake` boots on the fake i915 chip and runs the
+ * accelerated browsers' checks instead.
+ */
+int etude_scenario(struct etude_case *c)
+{
+    struct net_case u;
+    struct net_boot b;
+    const char *id = etude_case_id(c), *tail = strrchr(id, '.');
+    char browser[16], mode[32], password[128];
+    int fake;
+
+    memset(&b, 0, sizeof(b));
+    net_case(&u, c);
+    b.u = &u;
+    fake = tail != NULL && strcmp(tail + 1, "crocus-fake") == 0;
+    if (tail == NULL || sscanf(tail + 1, "%15[^-]-%31s", browser, mode) != 2 ||
+        (!fake && strcmp(browser, "chromium") != 0 && strcmp(browser, "firefox") != 0)) {
+        net_fail(&u, "unknown browser case %s", id);
+        return net_end(&u);
+    }
+    net_secret(&u, "demo-password", password, sizeof(password));
+    if (net_step(&u, "boot") == ETUDE_OK)
+        net_boot(&b, &u, "gnu", 1, NULL);
+    if (fake)
+        net_seen(&b, "edu stands in for 8086:0a16");
+    net_seen(&b, "ext2: root: /dev/disk0p1");
+    net_seen(&b, "rach2 login");
+    if (net_login(&b, "root", password, "# ") == ETUDE_OK && etude_guest_open(b.m) != ETUDE_OK)
+        net_fail(&u, "the browser guest command channel did not open");
+    stage(&u, &b, mode);
+    host_record(&u, &b);
+    if (fake)
+        crocus_fake(&u, &b);
+    else
+        browser_case(&u, &b, browser, mode);
     return net_end(&u);
 }

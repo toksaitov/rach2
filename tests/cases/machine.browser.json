@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.browser",
-  "summary": "Ordinary browsers under Weston match Debian on HTTPS, sandboxing, video, WebGL, WebGPU, sound and GPU recovery",
+  "summary": "Ordinary browsers under Weston match Debian on HTTPS, sandboxing, video, WebGL, WebGPU, sound and GPU recovery, and start their GPU paths on Crocus on the fake i915 chip",
   "cases": [
     {
       "case_id": "machine.browser.chromium-pages",
@@ -4821,6 +4821,234 @@
         "plan": "none",
         "class": "boot",
         "reason": "the comparison uses QEMU with the pinned Debian guest and kernel audio loopback"
+      }
+    },
+    {
+      "case_id": "machine.browser.crocus-fake",
+      "behavior": "with rach2.i915fake both browsers start their GPU paths on Crocus under a headless Weston on GL, Chromium's GPU process and WebGL naming the HD 4400 and Firefox's about:support WebRender on crocus, each process sandboxed as Debian's on the same binaries, and glxinfo and glmark2 through Xwayland and Direct3D 9 through Wine on WineD3D's GL renderer run to their readbacks, which the fake chip leaves unjudged",
+      "units": [
+        "tests/graphics/lenovo/browsers-gpu.sh",
+        "tests/graphics/browser",
+        "chromium",
+        "firefox-esr",
+        "rach2/sys/drm/i915/i915_fake.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "browser": "both",
+          "case": "gpu"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "browser_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the guest and removes its overlay; the runner reaps its browser, compositor, server and capture before removing scratch"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot the private desktop root with edu and rach2.i915fake, wait for the fake chip's bind and open the guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the pinned browser files and the Direct3D payload read-only from their data disks; retain the host load and live admission ledger in the runner record"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run browsers-gpu.sh -f, the Lenovo step's checks, as root for the ordinary desktop account"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "read each check's verdict from the script's output"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the checks' evidence"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "browser-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "browser-payload",
+                "base": "browser-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "d3d-payload",
+                "base": "d3d-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [
+              "edu"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.i915fake"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "browsers-gpu.sh runs every check to its verdict and prints its result",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "crocus",
+          "checks": "each browser's check passes: its GPU path names Crocus on the HD 4400 and its sandboxes equal Debian's, and the X11 GL and Direct3D 9 checks run to their readbacks on it",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_class": "bound",
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 21474836480,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "browser-image",
+          "node": "images/browser-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "browser-data",
+          "node": "tests/cases/browser/data.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "browser_scenario",
+          "node": "tests/cases/machine/browser_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "d3d-data",
+          "node": "tests/graphics/d3d/data.ext2",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the fake chip stands on QEMU's edu device, which no machine has"
       }
     }
   ]

@@ -1979,7 +1979,9 @@ build/tests/graphics/desktop.py: tests/graphics/desktop.py
 # `tests/run webgpu`: Chromium adapter answers on Venus, compared with Debian.
 
 # `tests/run browser`: HTTPS pages, browser sandbox diagnostics, WebGPU,
-# concurrent sound, GPU recovery, and the fixed WebGL and video comparisons.
+# concurrent sound, GPU recovery, the fixed WebGL and video comparisons, and
+# the accelerated browsers' checks on the fake i915 chip, which also read the
+# Direct3D payload's disk.
 BROWSER_TEST_EXT2 = $(IMAGES_DIR)/browser-test.ext2
 BROWSER_TEST_DISK = $(IMAGES_DIR)/browser-test.disk
 $(BROWSER_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
@@ -1994,7 +1996,7 @@ $(BROWSER_TEST_DISK): $(BROWSER_TEST_EXT2) $(MKMBR)
 	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
 	mv $@.tmp $@
 BROWSER_FILES = $(wildcard tests/graphics/browser/*) $(GRAPHICS_FILES) \
-                $(wildcard tests/graphics/browser/ref/*/*)
+                $(wildcard tests/graphics/browser/ref/*/*) $(wildcard tests/graphics/lenovo/*)
 build/tests/cases/browser/seat.so: tests/graphics/browser/seat.c tests/graphics/browser/seat-build.sh
 	sh tests/graphics/browser/seat-build.sh $@
 build/tests/cases/browser/files.tar.gz: $(BROWSER_FILES) build/tests/cases/browser/seat.so
