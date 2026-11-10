@@ -1250,7 +1250,8 @@ thread or a take again after an idle halt, and its system call number, or
 The oldest hold of the big kernel lock that an interrupt on the holding
 processor has found, in microseconds since its take, and in hexadecimal the
 kernel instruction that interrupt stopped, followed by up to seven return
-addresses of its callers.
+addresses of its callers, read from the interrupted thread's kernel stack
+alone.
 A hold that keeps interrupts off is sampled only where it turns them on.
 .It Li bkl_hold_max_mark
 Five lines, one for each of 1, 2, 4, 8 and 16 seconds: the mark, then the
