@@ -193,7 +193,7 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
         }
     }
     for (i = 0; i < size; i++) {
-        vq->desc[i].next = (uint16_t)(i + 1u);
+        vq->next[i] = (uint16_t)(i + 1u);
         vq->table[i] = -1;
     }
     vq->free_head = 0;
@@ -395,7 +395,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
     if (descs <= vq->nfree) {
         i = head;
         for (k = 0; k < total; k = j) {
-            uint16_t next = vq->desc[i].next;
+            uint16_t next = vq->next[i];
 
             j = virtqueue_run(sg, k, out, total, &len);
             virtqueue_fill(&vq->desc[i], &sg[k], k >= out, len, j < total, next);
@@ -403,7 +403,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
                 i = next;
             }
         }
-        vq->free_head = vq->desc[i].next;
+        vq->free_head = vq->next[i];
         vq->nfree = (uint16_t)(vq->nfree - descs);
         vq->chain[head] = (uint16_t)descs;
         vq->table[head] = -1;
@@ -421,7 +421,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
             j = virtqueue_run(sg, k, out, total, &len);
             virtqueue_fill(&tbl[d], &sg[k], k >= out, len, j < total, (uint16_t)(d + 1u));
         }
-        vq->free_head = vq->desc[head].next;
+        vq->free_head = vq->next[head];
         vq->desc[head].addr =
             vq->indirect_addr + (uint64_t)t * VIRTQ_INDIRECT_LEN * sizeof(struct virtq_desc);
         vq->desc[head].len = (uint32_t)(descs * sizeof(struct virtq_desc));
@@ -467,10 +467,10 @@ static void virtqueue_release(struct virtqueue *vq, uint16_t head)
         vq->table[head] = -1;
     } else {
         for (k = 1; k < vq->chain[head]; k++) {
-            last = vq->desc[last].next;
+            last = vq->next[last];
         }
     }
-    vq->desc[last].next = vq->free_head;
+    vq->next[last] = vq->free_head;
     vq->free_head = head;
     vq->nfree = (uint16_t)(vq->nfree + vq->chain[head]);
     vq->chain[head] = 0;
