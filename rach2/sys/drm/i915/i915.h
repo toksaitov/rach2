@@ -1228,30 +1228,29 @@ struct intel_crtc {
 
 /*
  * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
- * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by
- * port less one. `gmbus` are the PCH's GMBUS pins, by pin, and `dpll` the
- * PLLs, by DPLL_ID_. `hotplug` is the ports' hotplug. `pps` is the sequencer's
- * readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most it
- * may be, both read at init (intel_cdclk.c). `wm_latency` are the memory
- * latencies of the watermark levels, level 0 in 0.1 us and the rest in
- * 0.5 us, and `wm_hw` the watermark registers as written.
- * `fw_taken` says the firmware's framebuffer was made a framebuffer of the
- * device, whose object lies at `fw_ggtt` in the GGTT. `de_iir` holds the
- * display engine's events the interrupt latched and the deferred work has
- * yet to take, `underruns` a bit for each pipe whose FIFO underrun it
- * has yet to log, and `crc_done` a bit for each pipe whose CRC (its
- * `crc_res`) it has yet to enter, all under the interrupt mask's lock.
- * `bl` is the panel's PWM, `bl_index` its backlight's index or -1, and
- * `bl_want_on` what the backlight class last asked of its switch, which
- * holds only while the sequencer's backlight enable is on with the
- * panel's pipe (`bl_pipe_on`). `bl_enabled` says the PWM is on, as the
+ * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by port less
+ * one. `gmbus` are the PCH's GMBUS pins, by pin, and `dpll` the PLLs, by
+ * DPLL_ID_, with `dpll_nssc` the non-SSC reference in kHz of a non-ULT part, 24
+ * or 135 MHz as FUSE_STRAP3 says. `hotplug` is the ports' hotplug. `pps` is the
+ * sequencer's readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most
+ * it may be, both read at init (intel_cdclk.c). `wm_latency` are the memory
+ * latencies of the watermark levels, level 0 in 0.1 us and the rest in 0.5 us,
+ * and `wm_hw` the watermark registers as written. `fw_taken` says the
+ * firmware's framebuffer was made a framebuffer of the device, whose object
+ * lies at `fw_ggtt` in the GGTT. `de_iir` holds the display engine's events the
+ * interrupt latched and the deferred work has yet to take, `underruns` a bit
+ * for each pipe whose FIFO underrun it has yet to log, and `crc_done` a bit for
+ * each pipe whose CRC (its `crc_res`) it has yet to enter, all under the
+ * interrupt mask's lock. `bl` is the panel's PWM, `bl_index` its backlight's
+ * index or -1, and `bl_want_on` what the backlight class last asked of its
+ * switch, which holds only while the sequencer's backlight enable is on with
+ * the panel's pipe (`bl_pipe_on`). `bl_enabled` says the PWM is on, as the
  * pipe's enable leaves it, `bl_level` is the PWM's level it shows then,
- * `bl_min` the least the VBT allows, `bl_dark` says the class asked for
- * its level 0, which Linux shows by turning the backlight off, and
- * `bl_alt` says the PCH counts the PWM in its coarse steps
- * (LPT_PWM_GRANULARITY). `vga_off` says the VGA plane has been turned off.
- * `ready` is set once the device's mode configuration is made, which its
- * release frees.
+ * `bl_min` the least the VBT allows, `bl_dark` says the class asked for its
+ * level 0, which Linux shows by turning the backlight off, and `bl_alt` says
+ * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off`
+ * says the VGA plane has been turned off. `ready` is set once the device's mode
+ * configuration is made, which its release frees.
  */
 struct intel_display {
     struct intel_crtc crtc[I915_NUM_PIPES];
@@ -1261,6 +1260,7 @@ struct intel_display {
     struct intel_ddi_port ddi[3];
     struct intel_gmbus gmbus[GMBUS_NUM_PINS];
     struct intel_dpll dpll[INTEL_NUM_DPLLS];
+    uint32_t dpll_nssc;
     struct intel_hotplug hotplug;
     struct intel_pps_readout pps;
     uint32_t cdclk, max_cdclk;
@@ -2562,6 +2562,12 @@ int32_t intel_planes_init(struct intel_crtc *crtc);
 /** Make the cursor plane of `crtc`, as `intel_planes_init` does. */
 int32_t intel_cursor_init(struct intel_crtc *crtc);
 
+/** The bits of the primary plane's DSPCNTR that set the pipe and not the
+ * plane, Linux's i9xx_plane_ctl_crtc: the pipe's colour space conversion
+ * when it makes limited range RGB. A disabled plane keeps them, since
+ * they also act on the pipe's background. */
+uint32_t intel_plane_ctl_crtc(const struct intel_crtc *crtc);
+
 /*
  * The watermarks (intel_wm.c), Linux's i9xx_wm.c for Haswell.
  */
@@ -2903,9 +2909,11 @@ void intel_dpll_init(struct drm_i915_private *i915);
 void intel_dpll_calc_wrpll(uint32_t clock, uint32_t *r2, uint32_t *n2, uint32_t *p);
 
 /** The clock in kHz of symbol clock a WRPLL_CTL value `wrpll` gives,
- * Linux's hsw_ddi_wrpll_get_freq on a ULT part: the LCPLL's 2.7 GHz or
- * the PCH's 135 MHz SSC as reference; 0 for another reference. */
-uint32_t intel_dpll_wrpll_freq(uint32_t wrpll);
+ * Linux's hsw_ddi_wrpll_get_freq: the LCPLL's 2.7 GHz, the PCH's 135 MHz
+ * SSC, or for WRPLL_REF_SPECIAL_HSW the SSC on a ULT part and the
+ * non-SSC reference intel_dpll_init read (`dpll_nssc`) on another; 0 for
+ * another reference. */
+uint32_t intel_dpll_wrpll_freq(const struct drm_i915_private *i915, uint32_t wrpll);
 
 /** The clock in kHz an SPLL_CTL value `spll` gives, Linux's
  * hsw_ddi_spll_get_freq; 0 for a frequency it does not name. */
@@ -2926,11 +2934,6 @@ void intel_dpll_plan_init(struct drm_i915_private *i915, uint32_t leaving,
  */
 int32_t intel_dpll_compute(struct drm_i915_private *i915, struct intel_dpll_plan *plan, int pipe,
                            struct intel_crtc_config *cfg);
-
-/** The SPLL_CTL value of a link of `port_clock` kHz, Linux's
- * hsw_ddi_spll_compute_dpll: 1350 MHz from the muxed SSC, the one rate
- * it takes; 0 for another rate. */
-uint32_t intel_dpll_spll_compute(uint32_t port_clock);
 
 /** Read out pipe `pipe`'s PLL from the clock select `sel` of its port into
  * `cfg`: the PLL, its value and the link's clock, and count the pipe on

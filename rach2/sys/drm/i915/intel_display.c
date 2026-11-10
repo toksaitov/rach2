@@ -60,9 +60,9 @@ static uint32_t port_clock(struct drm_i915_private *i915, uint32_t sel)
 {
     switch (sel & PORT_CLK_SEL_MASK) {
     case PORT_CLK_SEL_WRPLL1:
-        return intel_dpll_wrpll_freq(rd(i915, WRPLL_CTL(0)));
+        return intel_dpll_wrpll_freq(i915, rd(i915, WRPLL_CTL(0)));
     case PORT_CLK_SEL_WRPLL2:
-        return intel_dpll_wrpll_freq(rd(i915, WRPLL_CTL(1)));
+        return intel_dpll_wrpll_freq(i915, rd(i915, WRPLL_CTL(1)));
     case PORT_CLK_SEL_SPLL:
         return intel_dpll_spll_freq(rd(i915, SPLL_CTL));
     case PORT_CLK_SEL_LCPLL_810:
@@ -90,6 +90,28 @@ static int edp_input_pipe(uint32_t ddi)
     default:
         return -1;
     }
+}
+
+/**
+ * The dot clock in kHz of a pipe read out into `out`, Linux's
+ * intel_crtc_dotclock: M/N of the link's symbol clock for DisplayPort
+ * (`dp`), 0 without an N; for HDMI and DVI the TMDS clock, scaled to 8
+ * bits a colour to the nearest kHz for deep colour on an HDMI sink,
+ * divided by the pixel multiplier.
+ */
+static uint32_t dotclock(const struct intel_pipe_readout *out, int dp)
+{
+    uint32_t clock;
+
+    if (dp) {
+        return out->link_n != 0
+                   ? (uint32_t)drm_div64((uint64_t)out->link_m * out->port_clock + out->link_n - 1u,
+                                         out->link_n)
+                   : 0;
+    }
+    clock = out->bpp > 24 && out->has_hdmi_sink ? (out->port_clock * 24u + out->bpp / 2u) / out->bpp
+                                                : out->port_clock;
+    return clock / out->pixel_multiplier;
 }
 
 /** Read transcoder `t`'s timings into `m`, each field plus one, as Linux's
@@ -175,19 +197,7 @@ void intel_pipe_readout(struct drm_i915_private *i915, int pipe, struct intel_pi
     out->data_n = rd(i915, PIPE_DATA_N1(t)) & DATA_LINK_M_N_MASK;
     out->link_m = rd(i915, PIPE_LINK_M1(t)) & DATA_LINK_M_N_MASK;
     out->link_n = rd(i915, PIPE_LINK_N1(t)) & DATA_LINK_M_N_MASK;
-    /* Linux's ddi_dotclock_get: M/N of the link's symbol clock for
-     * DisplayPort; for HDMI and DVI the TMDS clock at 8 bits a colour,
-     * divided by the pixel multiplier. */
-    if (mode_sel == TRANS_DDI_MODE_SELECT_DP_SST) {
-        if (out->link_n != 0) {
-            m->clock = (uint32_t)drm_div64(
-                (uint64_t)out->link_m * out->port_clock + out->link_n - 1u, out->link_n);
-        }
-    } else {
-        m->clock = out->bpp != 24 && out->has_hdmi_sink ? out->port_clock * 24u / out->bpp
-                                                        : out->port_clock;
-        m->clock /= out->pixel_multiplier;
-    }
+    m->clock = dotclock(out, mode_sel == TRANS_DDI_MODE_SELECT_DP_SST);
     m->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
     m->vrefresh = drm_mode_vrefresh(m);
     drm_mode_set_name(m);
@@ -619,14 +629,15 @@ static void intel_crtc_enable(struct drm_crtc *crtc, struct drm_atomic_state *st
     (void)state;
 }
 
-/** Turn a plane's registers off and arm the change for the next vblank. */
+/** Turn a plane's registers off and arm the change for the next vblank;
+ * the primary plane keeps the pipe's bits of its control. */
 static void plane_off(struct intel_crtc *c, int slot)
 {
     struct i915_hw *hw = &c->i915->hw;
 
     switch (slot) {
     case INTEL_PLANE_PRIMARY:
-        i915_write(hw, DSPCNTR(c->pipe), 0);
+        i915_write(hw, DSPCNTR(c->pipe), intel_plane_ctl_crtc(c));
         i915_write(hw, DSPSURF(c->pipe), 0);
         break;
     case INTEL_PLANE_SPRITE:
@@ -716,7 +727,9 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
  * ilk_csc_matrix_limited_range through ilk_update_pipe_csc. */
 static void write_csc_limited(struct i915_hw *hw, int pipe)
 {
-    /* (235 - 16) / 255 in 1.12, and 16 / 255 of full scale. */
+    /* A gain of 219/256, exponent 0 and a 12-bit fraction, and an offset
+     * of 16/256 of full scale: Linux's ILK_CSC_COEFF_LIMITED_RANGE and
+     * ILK_CSC_POSTOFF_LIMITED_RANGE. */
     const uint32_t coeff = (235u - 16u) << 4, postoff = 16u << 4;
 
     i915_write(hw, PIPE_CSC_PREOFF_HI(pipe), 0);
