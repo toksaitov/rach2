@@ -1101,7 +1101,7 @@ static void directory_copy(const char *path)
 }
 
 /** The compat directory copies on a directory of each of getdents' two
- * kinds: /proc/self, which the process table lists (`synth_getdents`), and
+ * kinds: /proc/self, whose entries the kernel makes up (`synth_getdents`), and
  * the root, which its file system's readdir lists. */
 static void run_directory_copy(void)
 {

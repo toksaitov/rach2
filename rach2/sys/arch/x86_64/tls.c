@@ -177,9 +177,10 @@ static void desc_to_ud(uint64_t d, uint32_t entry, struct user_desc *u)
 
 /**
  * Load each of DS, ES, FS and GS that holds a selector of TLS entry `entry`,
- * at any RPL (`TLS_SEL_NAMES`), again with the selector it holds, after the
- * entry's descriptor changed to `d`, as Linux does; with the null selector
- * where `d` is no segment, whose load would fault. A load into FS or GS
+ * again with the selector it holds after the descriptor changed to `d`,
+ * as Linux does at RPL 3. TLS_SEL_NAMES also covers RPL 0 to 2, beyond
+ * Linux. Use the null selector where `d` is no segment, whose load would
+ * fault. A load into FS or GS
  * sets its base, which the record then takes, as the switch away would.
  */
 static void tls_reload(uint32_t entry, uint64_t d)

@@ -1407,8 +1407,8 @@ static int32_t sleep_until_cpu(int32_t clk, uint64_t due, struct kernel_timespec
  *
  * Its arguments are clockid, flags, const struct timespec *req and struct
  * timespec *rem. Flags 0 makes `req` an interval, which sleeps as `nanosleep`
- * does except that nothing is written to `rem` on completion; TIMER_ABSTIME
- * makes it a time of the clock, reached as `sleep_until_time` or
+ * does; TIMER_ABSTIME makes it a time of the clock, reached as
+ * `sleep_until_time` or
  * `sleep_until_cpu` describe, and returns at once for a time already past.
  * Other flag bits are ignored, as Linux ignores them, and `rem` is written only
  * for an interval a signal cut short.

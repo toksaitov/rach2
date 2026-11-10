@@ -61,7 +61,6 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_PREAD64           17
 #define SYS_READV             19
 #define SYS_WRITEV            20
-#define SYS_PWRITEV2          328
 #define SYS_ACCESS            21
 #define SYS_PIPE              22
 #define SYS_SELECT            23
@@ -189,6 +188,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_PRLIMIT64         302
 #define SYS_SYNCFS            306
 #define SYS_GETRANDOM         318
+#define SYS_PWRITEV2          328
 
 /* Offsets in x86-64's struct stat, 144 bytes. */
 #define KSTAT_SIZE       144
@@ -361,7 +361,6 @@ static __inline__ long syscall0(long n)
 #define SYS_SELECT            142
 #define SYS_READV             145
 #define SYS_WRITEV            146
-#define SYS_PWRITEV2          379
 #define SYS_GETSID            147
 #define SYS_SCHED_YIELD       158
 #define SYS_NANOSLEEP         162
@@ -442,6 +441,7 @@ static __inline__ long syscall0(long n)
 #define SYS_RECVMMSG          337
 #define SYS_RECVMMSG_TIME64   417
 #define SYS_SHUTDOWN          373
+#define SYS_PWRITEV2          379
 
 /* The calls only i386 has, and the narrower calls of the old names. */
 #define SYS_OLDSTAT           106
