@@ -344,7 +344,7 @@ int fd_free(fd_table_t *table, int fd)
 
 /* ---- the device's record and its objects, as drm.c and drm_gem.c ---- */
 
-static int hotplugs, registered, released, unplugged_calls;
+static int hotplug_events, registered, released, unplugged_calls;
 
 /** Fill a device for `driver`, as drm.c does. */
 void drm_dev_init(struct drm_device *d, const struct drm_driver *driver)
@@ -384,7 +384,7 @@ void drm_dev_put(struct drm_device *d)
 void drm_kms_hotplug_event(struct drm_device *d)
 {
     (void)d;
-    hotplugs++;
+    hotplug_events++;
 }
 
 /** An object of `dev`, as drm_gem.c makes one. */
@@ -1315,7 +1315,7 @@ static void model_reset(void)
     gpu.answer = ANSWER_KICK;
     pci_present = 0;
     nremoved = 0;
-    hotplugs = 0;
+    hotplug_events = 0;
 }
 
 /** Bind the model's device and open a file as its master: the probe's
@@ -1765,10 +1765,11 @@ static void row_hotplug(void)
     gpu.scanout[0].h = 900;
     gpu.config.events_read = VIRTIO_GPU_EVENT_DISPLAY;
     gpu.dev.config_changed(&gpu.dev);
-    CHECK(vg->display_pending && hotplugs == 0, "the interrupt only marks the change");
+    CHECK(vg->display_pending && hotplug_events == 0, "the interrupt only marks the change");
     before = gpu.nlog;
     CHECK(vgpu_open(dev, &file) == 0, "an open serves the change");
-    CHECK(logged(before, VIRTIO_GPU_CMD_GET_DISPLAY_INFO) && hotplugs == 1 && !vg->display_pending,
+    CHECK(logged(before, VIRTIO_GPU_CMD_GET_DISPLAY_INFO) && hotplug_events == 1 &&
+              !vg->display_pending,
           "the displays are read again and one hotplug sent");
     CHECK(gpu.config.events_clear == VIRTIO_GPU_EVENT_DISPLAY && gpu.config.events_read == 0,
           "the event is cleared");
@@ -1778,7 +1779,8 @@ static void row_hotplug(void)
           "the new size is preferred");
     gpu.config.events_read = 0;
     gpu.dev.config_changed(&gpu.dev);
-    CHECK(vgpu_open(dev, &file) == 0 && hotplugs == 1, "no hotplug without the display event");
+    CHECK(vgpu_open(dev, &file) == 0 && hotplug_events == 1,
+          "no hotplug without the display event");
 }
 
 /** The driver's ioctls without 3D. */
