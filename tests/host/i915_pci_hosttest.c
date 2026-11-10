@@ -484,6 +484,11 @@ void i915_gem_unplug(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void i915_debugfs_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 void i915_gem_shrinker_register(struct drm_i915_private *i915)
 {
     (void)i915;

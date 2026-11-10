@@ -10,6 +10,7 @@
 #include "i915_drm.h"
 #include "i915_reg.h"
 
+#include "../../dmabuf/dmabuf.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
@@ -20,9 +21,6 @@
 
 /* The user address a 64-bit field of a call names. */
 #define I915_USER_PTR(v) ((void __user *)(uintptr_t)(v))
-
-/* How many extensions a chain may hold, Linux's i915_user_extensions. */
-#define I915_MAX_EXTENSIONS 512
 
 int i915_capable(void)
 {
@@ -359,64 +357,10 @@ static int32_t lookup_user_engine(struct i915_gem_context *ctx, uint32_t flags,
  * Extensions
  */
 
-/** 0 when the `size` bytes at the user address `at` are zero, -EINVAL when
- * not, -EFAULT when they cannot be read, as Linux's check_user_mbz. */
-static int32_t check_user_mbz(uintptr_t at, size_t size)
-{
-    uint8_t v[8];
-    size_t i;
-
-    if (copy_from_user(v, I915_USER_PTR(at), size) != 0) {
-        return -EFAULT;
-    }
-    for (i = 0; i < size; i++) {
-        if (v[i]) {
-            return -EINVAL;
-        }
-    }
-    return 0;
-}
-
 /** Read `size` bytes at the user address `at`: 0 or -EFAULT. */
 static int32_t get_user_bytes(void *dst, uintptr_t at, size_t size)
 {
     return copy_from_user(dst, I915_USER_PTR(at), size) != 0 ? -EFAULT : 0;
-}
-
-int32_t i915_user_extensions(uint64_t ext, const i915_ext_fn *tbl, uint32_t count, void *data)
-{
-    struct i915_user_extension e;
-    uint32_t depth = I915_MAX_EXTENSIONS;
-    int32_t err;
-    int i;
-
-    while (ext) {
-        uintptr_t at = (uintptr_t)ext;
-
-        if (depth-- == 0) {
-            return -E2BIG;
-        }
-        err = check_user_mbz(at + 12u, 4);
-        for (i = 0; i < 4 && err == 0; i++) {
-            err = check_user_mbz(at + 16u + 4u * (uint32_t)i, 4);
-        }
-        if (err == 0) {
-            err = get_user_bytes(&e.name, at + 8u, 4);
-        }
-        if (err < 0) {
-            return err;
-        }
-        err = e.name < count && tbl[e.name] ? tbl[e.name](at, data) : -EINVAL;
-        if (err < 0) {
-            return err;
-        }
-        if (get_user_bytes(&e.next_extension, at, 8) < 0 ||
-            e.next_extension > (uint64_t)(uintptr_t)-1) {
-            return -EFAULT;
-        }
-        ext = e.next_extension;
-    }
-    return 0;
 }
 
 /* ------------------------------------------------------------------------
@@ -455,9 +399,9 @@ static int32_t engines_bond(uintptr_t ext, void *data)
     if (idx >= set->n || set->map[idx] < 0) {
         return -EINVAL;
     }
-    err = check_user_mbz(ext + 40u, 8);
+    err = i915_check_user_mbz(ext + 40u, 8);
     for (n = 0; n < 4 && err == 0; n++) {
-        err = check_user_mbz(ext + 48u + 8u * n, 8);
+        err = i915_check_user_mbz(ext + 48u + 8u * n, 8);
     }
     if (err < 0) {
         return err;
@@ -513,7 +457,7 @@ static int32_t engines_parallel(uintptr_t ext, void *data)
         return -EINVAL;
     }
     for (i = 0; i < 3; i++) {
-        err = check_user_mbz(ext + 48u + 8u * i, 8);
+        err = i915_check_user_mbz(ext + 48u + 8u * i, 8);
         if (err < 0) {
             return err;
         }
@@ -931,6 +875,48 @@ int32_t i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data, stru
 
     (void)dev;
     return ctx ? context_setparam(ctx, args) : -ENOENT;
+}
+
+/* How old a request THROTTLE waits for is, Linux's
+ * DRM_I915_THROTTLE_JIFFIES: 20 ms. */
+#define I915_THROTTLE_NS 20000000ll
+
+/**
+ * THROTTLE, as Linux's i915_gem_throttle_ioctl: wait, interruptibly, for
+ * the newest request of each of the file's contexts on each engine that
+ * was added more than 20 ms ago, so that a program runs no further ahead
+ * of the GPU. A wait sleeps, and contexts may come and go meanwhile, so
+ * the walk starts again after each; a request waited for has completed,
+ * so each walk finds fewer. 0; -EIO when the GPU is wedged, which is the
+ * ABI's report of it; -EINTR.
+ */
+int32_t i915_gem_throttle_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_private *i915 = to_i915(dev);
+    struct i915_file *fp = file_priv(file);
+    int64_t before = dma_fence_now() - I915_THROTTLE_NS;
+    struct i915_gem_context *ctx;
+    struct i915_request *rq;
+    int32_t err;
+    uint32_t i;
+
+    (void)data;
+    if (i915->gt.wedged) {
+        return -EIO;
+    }
+    do {
+        rq = 0;
+        for (ctx = fp->contexts; ctx && !rq; ctx = ctx->next) {
+            for (i = 0; ctx->ce && i < ctx->nce && !rq; i++) {
+                if (ctx->ce[i]) {
+                    rq = i915_request_throttle_target(ctx->ce[i], before);
+                }
+            }
+        }
+        err = rq ? i915_request_wait(rq, 1, -1) : 0;
+        i915_request_put(rq);
+    } while (rq && err == 0);
+    return err;
 }
 
 /**

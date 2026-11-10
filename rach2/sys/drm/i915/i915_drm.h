@@ -19,6 +19,7 @@
 
 #define DRM_I915_GETPARAM              0x06
 #define DRM_I915_GEM_BUSY              0x17
+#define DRM_I915_GEM_THROTTLE          0x18
 #define DRM_I915_GEM_CREATE            0x1b
 #define DRM_I915_GEM_PREAD             0x1c
 #define DRM_I915_GEM_PWRITE            0x1d
@@ -43,6 +44,7 @@
 #define DRM_I915_GEM_CONTEXT_GETPARAM  0x34
 #define DRM_I915_GEM_CONTEXT_SETPARAM  0x35
 #define DRM_I915_QUERY                 0x39
+#define DRM_I915_GEM_CREATE_EXT        0x3c
 
 /* GETPARAM: the parameter `param`'s value, written as an int to `value`. */
 #define I915_PARAM_IRQ_ACTIVE               1
@@ -351,6 +353,36 @@ struct drm_i915_gem_create {
     uint32_t pad;
 };
 
+/* GEM_CREATE_EXT: GEM_CREATE with `flags` and a chain of extensions, whose
+ * MEMORY_REGIONS names the regions the object may be placed in. */
+struct drm_i915_gem_create_ext {
+    uint64_t size;
+    uint32_t handle;
+    uint32_t flags;
+    uint64_t extensions;
+};
+
+#define I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS 0x1u
+
+#define I915_GEM_CREATE_EXT_MEMORY_REGIONS    0
+#define I915_GEM_CREATE_EXT_PROTECTED_CONTENT 1
+#define I915_GEM_CREATE_EXT_SET_PAT           2
+
+/* A memory region, as MEMORY_REGIONS of I915_QUERY names it. */
+struct drm_i915_gem_memory_class_instance {
+    uint16_t memory_class;
+    uint16_t memory_instance;
+};
+
+/* MEMORY_REGIONS: `num_regions` regions at `regions`, each a
+ * drm_i915_gem_memory_class_instance. */
+struct drm_i915_gem_create_ext_memory_regions {
+    struct i915_user_extension base;
+    uint32_t pad;
+    uint32_t num_regions;
+    uint64_t regions;
+};
+
 /* GEM_PREAD and GEM_PWRITE: `size` bytes at `offset` in the object, to or
  * from the user buffer at `data_ptr`. */
 struct drm_i915_gem_pread {
@@ -633,6 +665,7 @@ struct drm_i915_gem_userptr {
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_CREATE, struct drm_i915_gem_create)
 #define DRM_IOCTL_I915_GEM_PREAD \
     DRM_IOW(DRM_COMMAND_BASE + DRM_I915_GEM_PREAD, struct drm_i915_gem_pread)
+#define DRM_IOCTL_I915_GEM_THROTTLE DRM_IO(DRM_COMMAND_BASE + DRM_I915_GEM_THROTTLE)
 #define DRM_IOCTL_I915_GEM_PWRITE \
     DRM_IOW(DRM_COMMAND_BASE + DRM_I915_GEM_PWRITE, struct drm_i915_gem_pwrite)
 #define DRM_IOCTL_I915_GEM_MMAP \
@@ -680,5 +713,7 @@ struct drm_i915_gem_userptr {
 #define DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_SETPARAM, struct drm_i915_gem_context_param)
 #define DRM_IOCTL_I915_QUERY DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_QUERY, struct drm_i915_query)
+#define DRM_IOCTL_I915_GEM_CREATE_EXT \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_CREATE_EXT, struct drm_i915_gem_create_ext)
 
 #endif /* _I915_DRM_H_ */
