@@ -583,6 +583,9 @@ int synaptics_byte(uint8_t data)
 
 /* The rest of synaptics.h and trackpoint.h, which a port without a
  * Synaptics pad never calls; trackpoint_hosttest.c tests them. */
+void synaptics_packet_restart(void)
+{}
+
 int synaptics_packet_start(void)
 {
     return 1;
@@ -621,10 +624,21 @@ int synaptics_reconnect(void)
 void synaptics_disconnect(void)
 {}
 
+/* The kind the stub's TrackPoint answered, 0 for none. */
+static uint8_t tp_kind;
+
+/** The TrackPoint's read-ID alone, which the CS19 answers as ALPS's
+ * stick; trackpoint_hosttest.c tests the rest of the set-up. */
 int trackpoint_detect(const struct ps2io *io)
 {
-    (void)io;
-    return -1;
+    uint8_t id[2] = {0, 0};
+
+    tp_kind = 0;
+    if (ps2io_command(io, 0xE1, 0, 0, id, 2) < 0 || id[0] < 1 || id[0] > 6) {
+        return -1;
+    }
+    tp_kind = id[0];
+    return 0;
 }
 
 int trackpoint_identify(const struct ps2io *io)
@@ -635,7 +649,7 @@ int trackpoint_identify(const struct ps2io *io)
 
 const char *trackpoint_vendor(void)
 {
-    return "";
+    return tp_kind == 2 ? "ALPS" : "";
 }
 
 int trackpoint_buttons(void)
@@ -683,6 +697,9 @@ int elantech_byte(uint8_t data)
 
 /* The rest of elantech.h, which a port without an Elantech pad never
  * calls; elantech_hosttest.c tests it. */
+void elantech_packet_restart(void)
+{}
+
 int elantech_packet_start(void)
 {
     return 1;
@@ -1473,6 +1490,10 @@ static void v5_v6_setup_rows(void)
           priv.proto_version == PROTO_V5 && priv.x_bits == 23 && priv.y_bits == 12 &&
               priv.x_max == 1408 && priv.y_max == 704);
 
+    v5_setup();
+    regs[0x0033] = 0x0f; /* 8 + 15 X electrodes, 1 + 0 Y */
+    CHECK("a version 5 pad of one Y electrode is not driven as ALPS", bring_up() == 0 && alps == 0);
+
     v6_setup();
     CHECK("a version 6 pad is brought up", bring_up() == 0 && alps == 1);
     CHECK("it is version 6, a DualPoint without pressure",
@@ -1536,6 +1557,7 @@ static void left_alone_rows(void)
     static const uint8_t v9_e7[3] = {0x73, 0x03, 0xc8};
     static const uint8_t v9_ec[3] = {0x73, 0x01, 0x0a};
     static const uint8_t cs19_e7[3] = {0x20, 0x02, 0x0e};
+    uint8_t props[8] = {0};
 
     alps_model(v9_e7, v9_ec, 3);
     CHECK("a version 9 pad is left to the PS/2 driver", bring_up() == 0 && alps == 0);
@@ -1544,7 +1566,13 @@ static void left_alone_rows(void)
 
     alps_model(cs19_e7, v9_ec, 0);
     cs19 = 1;
-    CHECK("the CS19 stick is left to the PS/2 driver", bring_up() == 0 && alps == 0 && pad == 0);
+    CHECK("the CS19 stick is left to the TrackPoint driver",
+          bring_up() == 0 && alps == 0 && pad == 0 && protocol == PROTO_TRACKPOINT);
+    CHECK("which names it as Linux's does, a pointing stick",
+          open_named(&n_bare, "TPPS/2 ALPS TrackPoint") &&
+              evdev_ioctl(&n_bare.e, EVIOCGPROP(8), (uintptr_t)props) > 0 &&
+              (props[0] & (1u << INPUT_PROP_POINTING_STICK)));
+    close_node(&n_bare);
 }
 
 /** A plain mouse, a Synaptics pad, a pad whose set-up fails, and a pad
@@ -1554,20 +1582,21 @@ static void probe_rows(void)
     static const uint8_t v1[3] = {0x33, 0x02, 0x0a};
     static const uint8_t v2[3] = {0x20, 0x02, 0x0e};
     static const uint8_t ec[3] = {0x00, 0x00, 0x00};
-    static const uint8_t trial[23] = {0xFF, 0xF6, 0xF6, 0xE8, 0x00, 0xE6, 0xE6, 0xE6,
+    static const uint8_t trial[24] = {0xFF, 0xF6, 0xF6, 0xE8, 0x00, 0xE6, 0xE6, 0xE6,
                                       0xE9, 0xE8, 0x00, 0xE7, 0xE7, 0xE7, 0xE9, 0xE8,
-                                      0x00, 0xEC, 0xEC, 0xEC, 0xE9, 0xEA, 0xF3};
+                                      0x00, 0xEC, 0xEC, 0xEC, 0xE9, 0xEA, 0xE1, 0xF3};
     char name[64];
     int i;
 
     model_reset(KIND_PLAIN);
     CHECK("a plain mouse's bring-up succeeds", bring_up() == 0);
-    for (i = 0; i < 23 && i < n_took; i++) {
+    for (i = 0; i < 24 && i < n_took; i++) {
         if (took[i] != trial[i]) {
             break;
         }
     }
-    CHECK("it is asked the three reports, and then knocked as a wheel mouse", i == 23);
+    CHECK("it is asked the three reports and a TrackPoint's ID, and then knocked as a wheel mouse",
+          i == 24);
     CHECK("it is no ALPS pad", alps == 0 && pad == 0 && stick == 0);
     CHECK("and is asked for an Elantech pad after", elantech_asked == 1);
     CHECK("it is PS/2 Generic Mouse", open_named(&n_pad, "PS/2 Generic Mouse"));
@@ -2312,7 +2341,7 @@ static int took_reconnect(void)
     return took_expected();
 }
 
-/** A version 3 DualPoint reconnected after five packets out of form in a
+/** A version 3 DualPoint reconnected after twelve bytes out of form in a
  * row and after its announcement, keeping its event devices, as Linux's
  * psmouse and `alps_reconnect` do; and probed anew when no ALPS pad
  * answers in its place. */
@@ -2336,10 +2365,14 @@ static void reconnect_rows(void)
           bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted);
     send(one, 6);
     CHECK("a whole packet ends the count", bad_in_a_row == 0);
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < 11; i++) {
         irq_byte(0x00);
     }
-    CHECK("the fifth in a row stops the port and asks for a reconnect",
+    CHECK("eleven bad bytes, two lost packets' worth, leave the port as it is",
+          bad_in_a_row == 11 && state == STATE_ACTIVE && !reconnect_wanted);
+    irq_byte(0x00);
+    CHECK("the twelfth, Linux's resetafter of twice the packet's size, stops the port and "
+          "asks for a reconnect",
           state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
     reconnect_pad();
     CHECK("the pad is reconnected with Linux's commands, in Linux's order", took_reconnect());
@@ -2356,7 +2389,7 @@ static void reconnect_rows(void)
     reconnect_pad();
     CHECK("which sends the same commands", took_reconnect() && pad == pad_dev);
 
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < 12; i++) {
         irq_byte(0x00);
     }
     dev_kind = KIND_PLAIN;

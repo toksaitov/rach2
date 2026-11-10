@@ -72,7 +72,9 @@ int ps2io_command(const struct ps2io *io, uint8_t cmd, const uint8_t *param, int
  * 12 handler leaves the auxiliary device's bytes in the 8042 for the
  * caller's commands, as Linux's psmouse leaves them to `ps2_command` while
  * its state is PSMOUSE_CMD_MODE. One run at a time: a second caller waits
- * for the first to end.
+ * for the first to end. The packet under way, the driver's and the
+ * mouse's, is dropped, as it is again at the run's end, as Linux's
+ * `__psmouse_set_state` drops it.
  */
 void ps2mouse_cmd_begin(void);
 
@@ -117,20 +119,25 @@ int ps2mouse_guest_packet_size(void);
 void ps2mouse_guest_buttons(uint8_t buttons);
 
 /**
- * Begin a change of the guest's settings, as Linux's
+ * Begin a change of a TrackPoint's settings, as Linux's
  * `psmouse_attr_set_helper` begins one: a run of commands, the touchpad and
- * then the guest disabled. Returns the guest's line, or NULL, having begun
- * nothing, when no guest reports. Process context.
+ * then the guest disabled, or the port's device alone when it is the
+ * TrackPoint. Returns the stick's line, or NULL, having begun nothing, when
+ * no guest reports and the port's device is no TrackPoint. Process
+ * context.
  */
 const struct ps2io *ps2mouse_guest_change_begin(void);
 
 /** End the change `ps2mouse_guest_change_begin` began: the guest and then
- * the touchpad enabled again, and the run ended. */
+ * the touchpad enabled again, or the port's TrackPoint, and the run
+ * ended. */
 void ps2mouse_guest_change_end(void);
 
 /** Sleep `ms` milliseconds, as Linux's `ssleep` and `msleep` let a
- * command run wait for a device. Process context; the host tests move the
- * tick instead. */
+ * command run wait for a device: in a run of commands, the caller sleeps;
+ * during `init_mouse`, whose process cannot sleep, it waits with
+ * interrupts on, so that the ticks run. The host tests move the tick
+ * instead. */
 void ps2mouse_msleep(unsigned int ms);
 
 /**

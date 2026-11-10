@@ -56,6 +56,11 @@ int synaptics_byte(uint8_t data);
  * looks for a device's announcement. */
 int synaptics_packet_start(void);
 
+/** Drop the packet under way, as Linux's `__psmouse_set_state` does at
+ * each change of the port's state: when a run of commands begins and ends.
+ * In interrupt context or with interrupts off. */
+void synaptics_packet_restart(void);
+
 /** Whether the pad set up has a pass-through port, Linux's
  * SYN_CAP_PASS_THROUGH, on which `synaptics_pt` reaches the guest. */
 int synaptics_has_pass_through(void);

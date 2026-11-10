@@ -33,7 +33,6 @@
 #include "../../lib/kstring.h"
 #include "../../mouse.h"
 #include "../../timer.h"
-#include "../../udelay.h"
 
 /* The mouse commands the pad's requests are made of. */
 #define CMD_SET_SCALE11 0xE6
@@ -191,7 +190,7 @@ static int etd_ps2_command(uint8_t *param, uint8_t cmd)
 
     for (tries = 0; tries < COMMAND_TRIES; tries++) {
         if (tries > 0) {
-            k_udelay(COMMAND_DELAY * 1000u);
+            ps2mouse_msleep(COMMAND_DELAY);
         }
         if ((param ? etd_getinfo(param) : etd_command(cmd)) == 0) {
             return 0;
@@ -639,7 +638,7 @@ static int etd_set_absolute_mode(void)
             if (rc == 0 || --tries <= 0) {
                 break;
             }
-            k_udelay(READ_BACK_DELAY * 1000u);
+            ps2mouse_msleep(READ_BACK_DELAY);
         }
         if (rc == 0 && etd_info.hw_version == 1 && !(val & R10_ABSOLUTE_MODE)) {
             klog(KLOG_WARN, "elantech", "mode: the touchpad refuses absolute mode");
@@ -1334,6 +1333,11 @@ void elantech_disconnect(void)
 int elantech_packet_start(void)
 {
     return etd_pktcnt == 0;
+}
+
+void elantech_packet_restart(void)
+{
+    etd_pktcnt = 0;
 }
 
 /** Check and report a whole packet, Linux's `elantech_process_byte`.

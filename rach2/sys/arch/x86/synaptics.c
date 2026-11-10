@@ -35,6 +35,8 @@
 
 #include "i8042.h"
 #include "ps2mouse.h"
+#include "smbios.h"
+#include "../../dmi.h"
 #include "../../evdev.h"
 #include "../../klog.h"
 #include "../../lib/kstring.h"
@@ -489,16 +491,30 @@ static int has_multifinger(void)
     return CAP_MULTIFINGER(info.capabilities) || has_agm();
 }
 
+/* The machine is one of Linux's `toshiba_dmi_table`, whose controller
+ * loses a pad's bytes at 80 packets a second, so that psmouse's rate is 40
+ * and the pad reports at 40. */
+static int rate_40;
+
+/** Whether the machine is one of Linux's `toshiba_dmi_table`. */
+static int impaired_toshiba_kbc(void)
+{
+    return smbios_system_is("TOSHIBA", "Satellite") || smbios_system_is("TOSHIBA", "dynabook") ||
+           smbios_system_is("TOSHIBA", "PORTEGE M300") ||
+           (smbios_system_is("TOSHIBA", "Portable PC") &&
+            smbios_field_has(DMI_PRODUCT_VERSION, "Version 1.0"));
+}
+
 /**
  * Set the mode as Linux's `synaptics_set_mode` and `synaptics_set_rate` do
- * for the rate of 100 psmouse asks: absolute mode, gestures off on
- * firmware 4 and later, 80 packets a second, W mode when the pad has the
- * extended capabilities; then the advanced gesture mode of a pad that has
- * it.
+ * for the rate psmouse asks: absolute mode, gestures off on firmware 4 and
+ * later, 80 packets a second, or 40 on a Toshiba of `rate_40`, W mode when
+ * the pad has the extended capabilities; then the advanced gesture mode of
+ * a pad that has it.
  */
 static int set_mode(void)
 {
-    mode = MODE_ABSOLUTE | MODE_HIGH_RATE;
+    mode = MODE_ABSOLUTE | (rate_40 ? 0 : MODE_HIGH_RATE);
     if (ID_MAJOR(info.identity) >= 4) {
         mode |= MODE_DISABLE_GESTURE;
     }
@@ -602,8 +618,8 @@ static int register_pad(void)
 }
 
 /** The rate, resolution and scaling that Linux's `psmouse_initialize` sets
- * on the pad: the mode byte again for the rate of 100, which keeps 80
- * packets a second, 200 dpi and 1:1. */
+ * on the pad: the mode byte again for psmouse's rate, 100, which keeps 80
+ * packets a second, or a Toshiba's 40, then 200 dpi and 1:1. */
 static void initialize(void)
 {
     mode_cmd(mode);
@@ -638,6 +654,7 @@ int synaptics_init(void)
     }
     apply_quirks();
     press = report_press = 0;
+    rate_40 = 0;
     if (set_mode() < 0) {
         klog(KLOG_WARN, "synaptics", "mode: the touchpad refused absolute mode");
         goto relative;
@@ -652,6 +669,12 @@ int synaptics_init(void)
     if (register_pad() < 0) {
         klog(KLOG_WARN, "synaptics", "register: no event device for the touchpad");
         goto relative;
+    }
+    if (impaired_toshiba_kbc()) {
+        klog(KLOG_INFO, "synaptics", "quirk: Toshiba %s detected, limiting rate to 40pps",
+             dmi_field(DMI_PRODUCT_NAME));
+        rate_40 = 1;
+        mode &= (uint8_t)~MODE_HIGH_RATE;
     }
     initialize();
     mouse_attach_touchpad(pad);
@@ -1055,6 +1078,11 @@ static void pass_pt_packet(void)
 int synaptics_packet_start(void)
 {
     return pktcnt == 0;
+}
+
+void synaptics_packet_restart(void)
+{
+    pktcnt = 0;
 }
 
 int synaptics_byte(uint8_t data)

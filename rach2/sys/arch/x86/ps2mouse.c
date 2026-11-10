@@ -23,7 +23,8 @@
  * no Synaptics pad answers, the protocol's probe asks for an ALPS touchpad
  * and then an Elantech one, in psmouse's order: alps.c or elantech.c takes
  * the bytes of one that comes up, and one whose setup fails goes on as a
- * mouse named for its vendor.
+ * mouse named for its vendor. When no touchpad answers at all, it asks for
+ * a TrackPoint, which trackpoint.c sets up on the port itself.
  *
  * After the bring-up the handler owns the port, as Linux's psmouse does in
  * its state PSMOUSE_ACTIVATED. A run of commands, a change of the guest's
@@ -105,7 +106,7 @@
 #define STATE_IGNORE 2
 
 /* Linux's `resetafter`: the bad packets in a row after which the device is
- * reconnected. */
+ * reconnected, but for an ALPS pad, which gives its own. */
 #define RESET_AFTER 5
 
 /* The guest's place, as Linux's psmouse names the device of the touchpad's
@@ -151,6 +152,9 @@ static int bad_in_a_row;
 static volatile int cmd_busy;
 static volatile int reconnect_wanted;
 
+/* `init_mouse` is bringing the device up, with interrupts off. */
+static int booting;
+
 /* The byte 0xAA began a packet: with 0x00 after it, the announcement of a
  * device that reset itself, Linux's PSMOUSE_RET_BAT and PSMOUSE_RET_ID. */
 static int bat_held;
@@ -182,8 +186,10 @@ static struct {
     uint8_t extra;
 } guest;
 
-/* The guest's name, built for a TrackPoint from its vendor. */
+/* The names of the guest and of a TrackPoint on the port itself, built
+ * from the stick's vendor. */
 static char guest_name[40];
+static char port_name[40];
 
 /* How many bytes the first drain reads before it calls the controller
    stuck. A PS/2 output buffer has one byte, so anything past a handful is a
@@ -410,11 +416,13 @@ static void mouse_set(uint8_t cmd, uint8_t arg)
  * Linux sets it: when no Synaptics pad answered, an ALPS touchpad
  * (`alps_init`), which alps.c sets up whole, and when no ALPS pad answered
  * either, an Elantech touchpad (`elantech_init`); each speaks its own
- * protocol once it is set up. Then the IntelliMouse's knock, rates 200, 100
- * and 80, then the Explorer's, 200, 200 and 80, with the rates 200, 80 and
- * 40 that turn on an Explorer 4.0's horizontal wheel; then 100 samples a
- * second, 8 counts a millimetre and 1:1 scaling. A mouse that answers
- * neither knock is a plain PS/2 mouse of three buttons.
+ * protocol once it is set up. When no touchpad answered at all, a
+ * TrackPoint (`trackpoint_detect`), which speaks the plain protocol;
+ * otherwise the IntelliMouse's knock, rates 200, 100 and 80, then the
+ * Explorer's, 200, 200 and 80, with the rates 200, 80 and 40 that turn on
+ * an Explorer 4.0's horizontal wheel. Then 100 samples a second, 8 counts a
+ * millimetre and 1:1 scaling. A mouse that answers neither knock is a plain
+ * PS/2 mouse of three buttons.
  */
 static void detect_protocol(void)
 {
@@ -440,7 +448,9 @@ static void detect_protocol(void)
             touchpad = -TOUCHPAD_ELANTECH;
         }
     }
-    if (knock(imps) == ID_IMPS) {
+    if (touchpad == 0 && alps == 0 && trackpoint_detect(&ps2mouse_aux) == 0) {
+        protocol = PROTO_TRACKPOINT;
+    } else if (knock(imps) == ID_IMPS) {
         protocol = PROTO_IMPS;
         packet_size = 4;
         if (knock(imex) == ID_IMEX) {
@@ -455,11 +465,32 @@ static void detect_protocol(void)
     mouse_send_command(MOUSE_CMD_SET_SCALE11);
 }
 
+/** Write a TrackPoint's name, Linux's "TPPS/2 " and the vendor and
+ * " TrackPoint", to `buf`, of 40 bytes, and return it. */
+static const char *trackpoint_name(char *buf)
+{
+    const char *v;
+    int n = 0;
+
+    for (v = "TPPS/2 "; *v; v++) {
+        buf[n++] = *v;
+    }
+    for (v = trackpoint_vendor(); *v && n < 40 - 12; v++) {
+        buf[n++] = *v;
+    }
+    for (v = " TrackPoint"; *v; v++) {
+        buf[n++] = *v;
+    }
+    buf[n] = 0;
+    return buf;
+}
+
 /** Register the event device of the mouse, with Linux's name, numbers and
  * capabilities for its protocol: the protocol's name, then the vendor and
  * the device, "Synaptics TouchPad" or "Elantech Touchpad" for a touchpad
  * that answered its vendor's knock and was not set up, and the ALPS pad's
- * name for one whose set-up failed. A pad in ALPS's absolute protocol has
+ * name for one whose set-up failed; a TrackPoint's as the guest's, with
+ * its settings' files on serio1. A pad in ALPS's absolute protocol has
  * alps.c's devices instead. */
 static void register_mouse(void)
 {
@@ -475,7 +506,16 @@ static void register_mouse(void)
     if (alps > 0) {
         return;
     }
-
+    if (protocol == PROTO_TRACKPOINT) {
+        if (trackpoint_buttons() < 3) {
+            caps |= MOUSE_NO_MIDDLE;
+        }
+        mouse_dev = mouse_register(trackpoint_name(port_name), "isa0060/serio1/input0",
+                                   EVDEV_BUS_I8042, 0x0002, PROTO_TRACKPOINT, caps);
+        evdev_set_prop(mouse_dev, INPUT_PROP_POINTING_STICK);
+        evdev_sysfs_serio_files(1, trackpoint_sysfs_add);
+        return;
+    }
     if (protocol == PROTO_IMPS) {
         kind = 1;
         caps |= MOUSE_WHEEL;
@@ -486,6 +526,7 @@ static void register_mouse(void)
     mouse_dev =
         mouse_register(alps < 0 ? alps_mouse_name(protocols[kind]) : name[kind],
                        "isa0060/serio1/input0", EVDEV_BUS_I8042, 0x0002, (uint16_t)protocol, caps);
+    evdev_sysfs_serio_files(1, NULL);
 }
 
 /** The low `bits` + 1 bits of `v` as a signed number, bit `bits` its sign,
@@ -500,27 +541,18 @@ static int sign_extend(unsigned v, int bits)
 /**
  * Report the whole packet in `packet_bytes`: its buttons, its 9-bit
  * movements, Y turned to Linux's way up, and the fourth byte of a wheel's
- * protocol, as Linux's `psmouse_process_byte` reads it. A packet with an
- * overflow bit set, bit 6 or 7, has a movement that cannot be used, and is
- * dropped.
+ * protocol, as Linux's `psmouse_process_byte` and
+ * `psmouse_report_standard_motion` read them: the overflow bits are not
+ * looked at, and a movement byte of 0 is no movement whatever its sign.
  */
 static void report_packet(void)
 {
     uint8_t flags = packet_bytes[0];
     uint8_t b3 = packet_bytes[3];
-    int dx = packet_bytes[1];
-    int dy = packet_bytes[2];
+    int dx = packet_bytes[1] ? (int)packet_bytes[1] - (int)((flags << 4) & 0x100u) : 0;
+    int dy = packet_bytes[2] ? (int)packet_bytes[2] - (int)((flags << 3) & 0x100u) : 0;
     int wheel = 0, hwheel = 0;
 
-    if (flags & 0xC0) {
-        return;
-    }
-    if (flags & 0x10) {
-        dx -= 256;
-    }
-    if (flags & 0x20) {
-        dy -= 256;
-    }
     if (protocol == PROTO_IMPS) {
         wheel = -(int)(int8_t)b3;
     } else if (protocol == PROTO_IMEX) {
@@ -625,8 +657,6 @@ static void guest_register(void)
 {
     const char *name = "PS/2 Generic Mouse";
     unsigned int caps = MOUSE_POINTER;
-    const char *v;
-    int n = 0;
 
     if (guest.protocol == PROTO_IMPS) {
         name = "ImPS/2 Generic Wheel Mouse";
@@ -635,17 +665,7 @@ static void guest_register(void)
         name = "ImExPS/2 Generic Explorer Mouse";
         caps |= MOUSE_WHEEL | MOUSE_HWHEEL | MOUSE_SIDE;
     } else if (guest.protocol == PROTO_TRACKPOINT) {
-        for (v = "TPPS/2 "; *v; v++) {
-            guest_name[n++] = *v;
-        }
-        for (v = trackpoint_vendor(); *v && n < (int)sizeof(guest_name) - 12; v++) {
-            guest_name[n++] = *v;
-        }
-        for (v = " TrackPoint"; *v; v++) {
-            guest_name[n++] = *v;
-        }
-        guest_name[n] = 0;
-        name = guest_name;
+        name = trackpoint_name(guest_name);
         if (trackpoint_buttons() < 3) {
             caps |= MOUSE_NO_MIDDLE;
         }
@@ -775,9 +795,7 @@ void ps2mouse_guest_packet(const uint8_t *bytes)
             break;
         }
     }
-    /* Linux's psmouse_report_standard_packet: no overflow check, and a
-     * byte of 0 no movement whatever its sign bit. */
-    b0 = bytes[0] | guest.extra;
+    b0 = bytes[0] | guest.extra; /* report_packet's reading */
     dx = bytes[1] ? (int)bytes[1] - (int)((b0 << 4) & 0x100u) : 0;
     dy = bytes[2] ? (int)bytes[2] - (int)((b0 << 3) & 0x100u) : 0;
     mouse_report(guest.dev, (b0 & 0x07u) | guest.side, dx, -dy, wheel, hwheel);
@@ -790,8 +808,8 @@ int ps2mouse_guest_packet_size(void)
 
 void ps2mouse_guest_buttons(uint8_t buttons)
 {
-    if (!guest.dev) {
-        return;
+    if (!guest.dev || (buttons & 0x07u) == guest.extra) {
+        return; /* Linux's input core passes on no unchanged key */
     }
     mouse_report(guest.dev, (buttons & 0x07u) | guest.side, 0, 0, 0, 0);
     guest.extra = (uint8_t)(buttons & 0x07u);
@@ -799,16 +817,19 @@ void ps2mouse_guest_buttons(uint8_t buttons)
 
 /**
  * Count a bad packet of the device, when `bad` is 1, or a whole one, as
- * Linux's `psmouse_handle_byte` counts them: the fifth bad packet in a row
- * puts the port in STATE_IGNORE and asks for a reconnect, and a whole
- * packet ends the count.
+ * Linux's `psmouse_handle_byte` counts them: the fifth bad packet in a row,
+ * or an ALPS pad's `alps_reset_after`th bad byte, puts the port in
+ * STATE_IGNORE and asks for a reconnect, and a whole packet ends the
+ * count.
  */
 static void count_packet(int bad)
 {
+    int limit = alps > 0 ? alps_reset_after() : RESET_AFTER;
+
     if (bad) {
-        if (++bad_in_a_row == RESET_AFTER) {
+        if (++bad_in_a_row == limit) {
             state = STATE_IGNORE;
-            klog(KLOG_WARN, "mouse", "sync: %d bad packets in a row: reconnecting", RESET_AFTER);
+            klog(KLOG_WARN, "mouse", "sync: %d bad packets in a row: reconnecting", limit);
             request_reconnect(RECONNECT_PORT);
         }
     } else if (bad_in_a_row) {
@@ -1017,7 +1038,9 @@ int init_mouse(void)
     }
     outb(PS2_DATA_PORT, config);
 
+    booting = 1;
     connect_device();
+    booting = 0;
 
     response = mouse_send_command(MOUSE_CMD_ENABLE);
     if (response < 0) {
@@ -1063,15 +1086,41 @@ static int wanted(void *arg)
 
 #endif
 
+/**
+ * Drop the packet under way and the count of bad packets, as Linux's
+ * `__psmouse_set_state` does at each change of the port's state, so that
+ * the bytes after a run of commands start a packet: the run's own replies
+ * and the packet it cut short are not the device's next packet. With
+ * interrupts off.
+ */
+static void restart_packet(void)
+{
+    packet_index = 0;
+    bat_held = 0;
+    bad_in_a_row = 0;
+    if (touchpad == TOUCHPAD_SYNAPTICS) {
+        synaptics_packet_restart();
+    } else if (touchpad == TOUCHPAD_ELANTECH) {
+        elantech_packet_restart();
+    } else if (alps > 0) {
+        alps_packet_restart();
+    }
+}
+
 void ps2mouse_cmd_begin(void)
 {
+    uint32_t flags;
+
 #ifndef RACH2_HOSTTEST
     while (cmd_busy) {
         (void)wq_wait_event_nointr(&cmd_wq, cmd_free, NULL);
     }
 #endif
+    flags = kirq_save();
     cmd_busy = 1;
     state = STATE_CMD;
+    restart_packet();
+    kirq_restore(flags);
 }
 
 void ps2mouse_cmd_end(void)
@@ -1081,6 +1130,7 @@ void ps2mouse_cmd_end(void)
 
     flags = kirq_save();
     state = STATE_ACTIVE;
+    restart_packet();
     cmd_busy = 0;
     status = inb(PS2_STATUS_PORT);
     if ((status & PS2_STATUS_OUTPUT_FULL) && (status & PS2_STATUS_MOUSE_DATA)) {
@@ -1092,9 +1142,20 @@ void ps2mouse_cmd_end(void)
 #endif
 }
 
+/** Whether the port's own device is a TrackPoint, whose settings a change
+ * writes in place of a guest's. */
+static int port_trackpoint(void)
+{
+    return protocol == PROTO_TRACKPOINT && mouse_dev && touchpad == 0 && alps == 0;
+}
+
 const struct ps2io *ps2mouse_guest_change_begin(void)
 {
     ps2mouse_cmd_begin();
+    if (port_trackpoint()) {
+        (void)deactivate(&ps2mouse_aux);
+        return &ps2mouse_aux;
+    }
     if (!guest.active) {
         ps2mouse_cmd_end();
         return NULL;
@@ -1106,7 +1167,7 @@ const struct ps2io *ps2mouse_guest_change_begin(void)
 
 void ps2mouse_guest_change_end(void)
 {
-    if (io_cmd(guest.io, MOUSE_CMD_ENABLE) < 0) {
+    if (!port_trackpoint() && io_cmd(guest.io, MOUSE_CMD_ENABLE) < 0) {
         klog(KLOG_WARN, "mouse", "pass-through: the guest did not enable reporting");
     }
     if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
@@ -1137,16 +1198,27 @@ static void reconnect_guest(void)
 }
 
 /**
- * Set the mouse up again as Linux's `psmouse_reconnect` does for a protocol
- * that has no reconnect of its own: the reset and the defaults, and its
- * protocol found again, which must be the one found before. Returns 0 when
- * it is, and the mouse keeps its event device; -1 when the mouse does not
- * answer its reset, speaks another protocol now or is a touchpad.
+ * Set the mouse up again as Linux's `psmouse_reconnect` does: a
+ * TrackPoint by `trackpoint_reconnect`, and a protocol that has no
+ * reconnect of its own by the reset and the defaults, and its protocol
+ * found again, which must be the one found before; then the rate,
+ * resolution and scaling. Returns 0 when it is, and the mouse keeps its
+ * event device; -1 when the mouse does not answer its reset, speaks
+ * another protocol now or is a touchpad.
  */
 static int mouse_reconnect(void)
 {
     int old = protocol;
 
+    if (protocol == PROTO_TRACKPOINT) {
+        if (trackpoint_reconnect(&ps2mouse_aux) < 0) {
+            return -1;
+        }
+        mouse_set(MOUSE_CMD_SET_RATE, 100);
+        mouse_set(MOUSE_CMD_SET_RES, 3);
+        mouse_send_command(MOUSE_CMD_SET_SCALE11);
+        return 0;
+    }
     if (mouse_reset() < 0) {
         return -1;
     }
@@ -1213,11 +1285,22 @@ void ps2mouse_reconnect(void)
 
 void ps2mouse_msleep(unsigned int ms)
 {
+#ifndef RACH2_HOSTTEST
+    uint64_t due;
+#endif
+
+    if (booting) {
+        /* The boot's process cannot sleep; IRQ 12 has no handler yet and
+         * stays unrouted, so the ticks may run while it waits. */
+        arch_irq_enable();
+        k_udelay(ms * 1000u);
+        arch_irq_disable();
+        return;
+    }
 #ifdef RACH2_HOSTTEST
     kernel_ticks += MS_TO_TICKS(ms);
 #else
-    uint64_t due = tick_count() + MS_TO_TICKS(ms);
-
+    due = tick_count() + MS_TO_TICKS(ms);
     current_proc->wakeup_tick = due;
     (void)wq_wait_event_idle(&sleep_wq, tick_passed, &due);
     current_proc->wakeup_tick = 0;

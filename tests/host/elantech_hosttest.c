@@ -1191,6 +1191,7 @@ static const char *last_warning;
 static const char *last_info;
 static int waits;
 static uint32_t waited_us;
+static int waits_irq_on; /* those made with interrupts on */
 
 /** Put `data` in the output buffer behind what waits there. */
 static void model_put(uint8_t data)
@@ -1519,6 +1520,9 @@ void k_udelay(uint32_t usec)
 {
     waits++;
     waited_us += usec;
+    if (irq_on) {
+        waits_irq_on++;
+    }
 }
 
 /* What the guest of a Synaptics pad's pass-through port needs, which an
@@ -1578,6 +1582,14 @@ int alps_byte(uint8_t data)
 
 /* The rest of alps.h, which a port without an ALPS pad never calls;
  * alps_hosttest.c tests it. */
+void alps_packet_restart(void)
+{}
+
+int alps_reset_after(void)
+{
+    return 12;
+}
+
 int alps_packet_start(void)
 {
     return 1;
@@ -1875,6 +1887,7 @@ static void model_reset(int kind, int p)
     last_info = 0;
     waits = 0;
     waited_us = 0;
+    waits_irq_on = 0;
     etd_pktcnt = 0;
     etd_sync_losses = 0;
     k_memset(etd_mt, 0, sizeof(etd_mt));
@@ -2451,6 +2464,8 @@ static void reconnect_mouse_rows(void)
  * mice, as Linux's psmouse sets them up. */
 static void fallback_rows(void)
 {
+    uint64_t ticks_before;
+
     model_reset(KIND_LOGITECH, V4_CLICKPAD);
     CHECK("a mouse that answers the knock comes up", init_mouse() == 0);
     CHECK("its version, a rate, says it is no Elantech pad", touchpad == 0 && etd_pad == NULL);
@@ -2472,6 +2487,7 @@ static void fallback_rows(void)
     CHECK("as a mouse", touchpad == -TOUCHPAD_ELANTECH && etd_pad == NULL && etd_tp == NULL);
     CHECK("each command of the write tried three times, half a second apart",
           waits == 2 && waited_us == 1000000);
+    CHECK("with interrupts on while it waits, so that the ticks run", waits_irq_on == 2);
     CHECK("the refusal is logged",
           last_warning && strcmp(last_warning, "mode: the registers would not set") == 0);
     CHECK("it is reset and named PS/2 Elantech Touchpad",
@@ -2490,6 +2506,16 @@ static void fallback_rows(void)
     CHECK("the read back tried again after three tries of half a second and two seconds",
           waits == 3 && waited_us == 3000000);
     CHECK("its registers are set", regs[0x10] == 0x54);
+    CHECK("each wait with interrupts on", waits_irq_on == 3 && irq_on);
+
+    drop_reads = 9;
+    waits = 0;
+    ticks_before = kernel_ticks;
+    reconnect_wanted = RECONNECT_PORT;
+    ps2mouse_reconnect();
+    CHECK("at its reconnect kpsmoused sleeps the same waits, as Linux's msleep does",
+          touchpad == TOUCHPAD_ELANTECH && waits == 0 &&
+              kernel_ticks - ticks_before == MS_TO_TICKS(3000) && regs[0x10] == 0x54);
 }
 
 int main(void)
