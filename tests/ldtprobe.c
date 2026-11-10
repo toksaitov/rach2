@@ -360,7 +360,7 @@ static void run_refusals(void)
         -EINVAL) {
         fail("the old mode's conforming code segment was not refused with EINVAL");
     }
-    if (modify_ldt(0x11, (void *)16, sizeof(u)) != -EFAULT) {
+    if (modify_ldt(0x11, (void *)0x10, sizeof(u)) != -EFAULT) {
         fail("an argument that cannot be read was not refused with EFAULT");
     }
     if (modify_ldt(7, &u, sizeof(u)) != -ENOSYS) {
