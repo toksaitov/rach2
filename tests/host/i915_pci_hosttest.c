@@ -559,6 +559,9 @@ void drm_dev_put(struct drm_device *dev)
 static void fresh(struct i915_model *m)
 {
     CHECK("the model is made", i915_model_init(m) == 0);
+    /* The bind writes the GTT's 524288 entries, which would fill the log
+     * before the registers this test checks. */
+    m->quiet_gtt = 1;
     bus = m;
     msi_ready = 1;
     msi_refuse = 0;
@@ -690,14 +693,21 @@ static const uint32_t banks[][5] = {
  */
 static void check_masks(struct i915_model *m)
 {
-    uint32_t posting = 0, reads = 0, i;
+    uint32_t others = 0, i, j;
     long base = -1;
 
+    /* Before the base, only the posting reads of the masks and identities
+     * the bind writes. */
     for (i = 0; i < m->nlog && base < 0; i++) {
         if (m->log[i].reg == FPGA_DBG) {
             base = (long)i;
         } else if (m->log[i].op == I915_MODEL_READ) {
-            reads++;
+            for (j = 0; j < (uint32_t)(sizeof(banks) / sizeof(banks[0])); j++) {
+                if (m->log[i].reg == banks[j][0] || m->log[i].reg == banks[j][2]) {
+                    break;
+                }
+            }
+            others += j == (uint32_t)(sizeof(banks) / sizeof(banks[0]));
         }
     }
     CHECK("bind: the base after the masks", base > at(m, SERR_INT, 0xffffffffu));
@@ -713,15 +723,13 @@ static void check_masks(struct i915_model *m)
               i915_model_peek(m, banks[i][0]) == 0xffffffffu &&
                   i915_model_peek(m, banks[i][1]) == banks[i][3]);
         CHECK("bind: each source masked before the message", msi_enabled_at > clear);
-        posting += i915_model_count(m, I915_MODEL_READ, banks[i][0]) +
-                   i915_model_count(m, I915_MODEL_READ, banks[i][2]);
     }
     CHECK("bind: the error interrupt cleared", at(m, GEN7_ERR_INT, 0xffffffffu) < msi_enabled_at);
     CHECK("bind: the self refresh's masked and cleared",
           at(m, EDP_PSR_IMR, 0xffffffffu) < msi_enabled_at &&
               at(m, EDP_PSR_IIR, 0xffffffffu) < msi_enabled_at);
     CHECK("bind: the south errors cleared", at(m, SERR_INT, 0xffffffffu) < msi_enabled_at);
-    CHECK("bind: no register read before the base but by the posting reads", reads == posting);
+    CHECK("bind: no register read before the base but by the posting reads", others == 0);
 }
 
 /** Check the configuration words the bind of `m` read and wrote. */
