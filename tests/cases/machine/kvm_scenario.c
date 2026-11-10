@@ -22,7 +22,7 @@
 #define KVM_DATA "/tmp/kvm-data"
 
 /* The runners, by the last part of the case's identity. */
-enum runner { BOOT, UNIT, SELFTESTS };
+enum runner { BOOT, UNIT, SELFTESTS, ENTRY };
 
 /* What one attempt shares among its steps. */
 struct kvm_case {
@@ -46,6 +46,10 @@ static int parse(struct kvm_case *s, const char *id)
     if (name == NULL)
         return 0;
     name++;
+    if (strcmp(name, "entry") == 0) {
+        s->runner = ENTRY;
+        return 1;
+    }
     if (strcmp(name, "boot-debian-kvm") == 0 || strcmp(name, "boot-debian-tcg") == 0) {
         s->runner = BOOT;
         strcpy(s->accel, name + strlen("boot-debian-"));
@@ -112,14 +116,16 @@ static void stage(struct kvm_case *s)
  */
 static void run(struct kvm_case *s)
 {
-    static const char *const assertion[] = {"token", "as-listed", "as-listed"};
+    static const char *const assertion[] = {"token", "as-listed", "as-listed", "entry"};
     static const char *const pattern[] = {"kvm-boot: result: pass", "kvm-corpus: result: pass",
-                                          "kvm-corpus: result: pass"};
+                                          "kvm-corpus: result: pass", "SVMENTRY OK"};
     char command[512], line[200];
     const char *result;
     struct net_run r;
 
-    if (s->runner == BOOT)
+    if (s->runner == ENTRY)
+        snprintf(command, sizeof(command), KVM_DIR "/svm-entry");
+    else if (s->runner == BOOT)
         snprintf(command, sizeof(command),
                  "cd " KVM_DIR " && sh kvm-boot.sh -a %s -o " KVM_DIR "/boot.log"
                  " -k guests/debian/vmlinuz -i guests/debian/initrd",
@@ -134,7 +140,9 @@ static void run(struct kvm_case *s)
         net_assert(&s->u, assertion[s->runner], 0, "");
         return;
     }
-    result = net_find(r.out, s->runner == BOOT ? "kvm-boot: result: " : "kvm-corpus: result: ");
+    result = net_find(r.out, s->runner == ENTRY  ? "SVMENTRY "
+                             : s->runner == BOOT ? "kvm-boot: result: "
+                                                 : "kvm-corpus: result: ");
     net_assert(&s->u, assertion[s->runner],
                net_exited0(&r) && net_find(r.out, pattern[s->runner]) != NULL, "%s",
                net_copy_line(result != NULL ? result : (r.err != NULL ? r.err : r.out), line,

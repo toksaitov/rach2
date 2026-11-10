@@ -605,22 +605,27 @@ static void hw_xsetbv(uint64_t v)
 }
 
 /* The host's XCR0 while a guest's is loaded, or 0 without XSAVE. */
-static uint64_t host_xcr0;
+static uint64_t host_xcr0[NR_CPUS];
 
 /** Save the host's floating-point state into `host` and load the guest's
- * image `guest` under its XCR0. */
+ * image `guest` before setting its XCR0. */
 static void hw_fpu_load(void *host, const void *guest, uint64_t xcr0)
 {
+    uint64_t mask;
+
     fpu_save(host);
     if (kvm_xcr0_supported()) {
-        host_xcr0 = hw_xgetbv();
-        if (xcr0 != host_xcr0) {
-            hw_xsetbv(xcr0);
-        }
+        mask = hw_xgetbv();
+        host_xcr0[arch_cpu_id()] = mask;
+        /* XRSTOR checks the whole header against XCR0, including saved
+         * components that the guest currently has disabled. */
         __asm__ __volatile__(XRSTOR64
                              :
-                             : "D"(guest), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32))
+                             : "D"(guest), "a"((uint32_t)mask), "d"((uint32_t)(mask >> 32))
                              : "memory");
+        if (xcr0 != mask) {
+            hw_xsetbv(xcr0);
+        }
     } else {
         __asm__ __volatile__("fxrstorq (%0)" : : "r"(guest) : "memory");
     }
@@ -629,14 +634,17 @@ static void hw_fpu_load(void *host, const void *guest, uint64_t xcr0)
 /** Save the guest's state into its image and load the host's back. */
 static void hw_fpu_store(void *host, void *guest, uint64_t xcr0)
 {
+    uint64_t mask;
+
     if (kvm_xcr0_supported()) {
+        mask = host_xcr0[arch_cpu_id()];
+        if (xcr0 != mask) {
+            hw_xsetbv(mask);
+        }
         __asm__ __volatile__(XSAVE64
                              :
-                             : "D"(guest), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32))
+                             : "D"(guest), "a"((uint32_t)mask), "d"((uint32_t)(mask >> 32))
                              : "memory");
-        if (xcr0 != host_xcr0) {
-            hw_xsetbv(host_xcr0);
-        }
     } else {
         __asm__ __volatile__("fxsaveq (%0)" : : "r"(guest) : "memory");
     }
