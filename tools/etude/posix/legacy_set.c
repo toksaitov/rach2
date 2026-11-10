@@ -3074,12 +3074,12 @@ static int superseded(const struct names *now, const struct names *was, const ch
 static int names_write(const char *path, const struct names *now, const struct names *was,
                        const struct kept *k)
 {
-    char part[PATH_LEN + 80];
+    char fresh[PATH_LEN + 80];
     size_t i;
     FILE *f;
     int ok, saved;
 
-    if (fit(part, sizeof(part), "%s.new", path) != 0 || (f = fopen(part, "w")) == NULL)
+    if (fit(fresh, sizeof(fresh), "%s.new", path) != 0 || (f = fopen(fresh, "w")) == NULL)
         return -1;
     ok = 1;
     for (i = 0; ok && i < now->n; i++)
@@ -3089,10 +3089,10 @@ static int names_write(const char *path, const struct names *now, const struct n
             bsearch(was->v[i].hex, k->hex, k->n, sizeof(*k->hex), by_digest) != NULL)
             ok = fprintf(f, "%s %s\n", was->v[i].hex, was->v[i].path) > 0;
     ok = fclose(f) == 0 && ok;
-    if (ok && rename(part, path) == 0)
+    if (ok && rename(fresh, path) == 0)
         return 0;
     saved = errno;
-    (void)unlink(part);
+    (void)unlink(fresh);
     errno = saved;
     return -1;
 }
