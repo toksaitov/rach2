@@ -10,18 +10,21 @@
 #   debian.sh glmark2 [-p PROFILE] [-c CPUS] [-m MIB] OUT [GLMARK2-ARG]...
 #   debian.sh deqp [-p PROFILE] [-c CPUS] [-m MIB] OUT [DEQP-ARG]...
 #   debian.sh vkcube [-p PROFILE] [-c CPUS] [-m MIB] OUT [VKCUBE-ARG]...
+#   debian.sh glinfo [-p PROFILE] [-c CPUS] [-m MIB] OUT
+#   debian.sh virgl-lost [-p PROFILE] [-c CPUS] [-m MIB] OUT [LOST-ARG]...
 #   debian.sh clips [-t TAR] [DIR]
 #
 # A runner's command boots the guest with debian-ref.sh run in the display
 # PROFILE (virtio-vga) with CPUS processors (4) and MIB of memory (8192), as
 # a Done's run with an empty shader cache, copies in this directory,
-# igt-76.list and the dEQP lists of tests/graphics, runs the runner with the
+# igt-76.list and the piglit and dEQP lists of tests/graphics, runs the
+# runner with the
 # ARGs and -o, and puts the runner's output in OUT: the record, which gets
 # the guest machine's lines from debian-ref.sh and the host's from `common.sh
 # host` after the runner's own, the runner's files, `results`, the runner's
 # lines, and `status`, its exit status. The runners of a conformance class
-# (webgl, video, igt, modetest, piglit and deqp) run with
-# GRAPHICS_CLASS=conformance and glmark2 and vkcube with performance. Each
+# (webgl, video, igt, modetest, piglit, deqp, glinfo and virgl-lost) run
+# with GRAPHICS_CLASS=conformance and glmark2 and vkcube with performance. Each
 # copies in what its runner needs: webgl the pinned WebGL suite; video the clips
 # of DIR of `clips`, by default build/cache/graphics-clips of the main clone;
 # igt the IGT stage of this tree, which it builds with `make ARCH=x86_64
@@ -32,9 +35,10 @@
 # snapshot; deqp the VK-GL-CTS release that its -v names (1.4.7.1 when none),
 # from this tree's GNU build, which it builds with `make ARCH=x86_64
 # gnu-vk-gl-cts` when it is missing, unpacked under /opt as the root has it.
-# igt, modetest and vkcube run their runner as root, with vkms loaded in the
-# profile `none`, and the others as the guest's user; vkcube builds its layer
-# with the guest's GCC. All of them run in /tmp, where the lists are.
+# igt, modetest, vkcube and virgl-lost run their runner as root, with vkms
+# loaded in the profile `none`, and the others as the guest's user; vkcube
+# builds its layer with the guest's GCC, and virgl-lost its glreset. All of
+# them run in /tmp, where the lists are.
 # `clips` makes the clips that video.sh names in DIR, unless DIR holds them
 # already, in the guest with Debian's ffmpeg, which it installs from the
 # snapshot for that boot alone, so that the reference guest's browsers find
@@ -65,8 +69,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "${TMPDIR:-$tree/build/tmp}"
 work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/debian-runner.XXXXXX")
-tar -czf "$work/runners.tar.gz" -C "$here/.." runners igt-76.list deqp-vk-lavapipe.txt.gz \
-    deqp-vk-lavapipe.flakes deqp-vk-venus-smoke.txt
+tar -czf "$work/runners.tar.gz" -C "$here/.." runners igt-76.list piglit-virgl.txt.gz deqp-gles-virgl.txt.gz \
+    deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes deqp-vk-venus-smoke.txt
 
 # suite: the path of the pinned WebGL archive, fetched into the main
 # clone's cache as the GNU layer's step fetches it.
@@ -138,6 +142,10 @@ run()
             class=performance
             as='sudo -E'
             ;;
+        glinfo) ;;
+        virgl-lost)
+            as='sudo -E'
+            ;;
         deqp)
             release=1.4.7.1 last=
             for a in "$@"; do
@@ -171,7 +179,7 @@ clips=$main/build/cache/graphics-clips
 cmd=${1:-}
 [ $# -gt 0 ] && shift
 case $cmd in
-    webgl|video|igt|modetest|piglit|glmark2|deqp|vkcube)
+    webgl|video|igt|modetest|piglit|glmark2|deqp|vkcube|glinfo|virgl-lost)
         profile=virtio-vga cpus=4 mib=8192
         while getopts p:c:m: o; do
             case $o in
@@ -219,7 +227,7 @@ case $cmd in
         echo "debian: result: clips in $dir"
         ;;
     *)
-        echo "usage: debian.sh webgl|video|igt|modetest|piglit|glmark2|deqp|vkcube [-p PROFILE] [-c CPUS] [-m MIB] OUT [ARG]... | clips [-t TAR] [DIR]" >&2
+        echo "usage: debian.sh webgl|video|igt|modetest|piglit|glmark2|deqp|vkcube|glinfo|virgl-lost [-p PROFILE] [-c CPUS] [-m MIB] OUT [ARG]... | clips [-t TAR] [DIR]" >&2
         exit 2
         ;;
 esac

@@ -3,7 +3,7 @@
 Usage:
   python3 -I judge.py webgl REF GOT
   python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]
-  python3 -I judge.py results REF GOT
+  python3 -I judge.py results REF GOT [SAMPLE [FLAKES]]
   python3 -I judge.py modes REF GOT
   python3 -I judge.py glmark2 REF GOT
   python3 -I judge.py deqp REF GOT [FLAKES]
@@ -32,6 +32,11 @@ here, one the reference skipped must skip here, as Linux's skips are the
 guest's answers about its devices, and one that failed or crashed in the
 reference may end as it likes. A name the reference has and this run lacks
 is worse, and so is one this run alone has that neither passes nor skips.
+REF may be compressed with gzip. SAMPLE, the names a list's run of piglit.sh
+took, its NAME.sample, keeps of the reference those tests and their
+subtests, for a run of a part of the list the reference ran whole. FLAKES
+names the tests and subtests that are not judged, one extended regular
+expression a line, searched for in the name, `#` beginning a comment.
 
 `modes` compares two modes files of modetest.sh by mode: the same modes in
 the same order, and each mode that the reference set and read back set here
@@ -64,6 +69,7 @@ result: pass ...` or `judge: result: fail ...`, and exits 0 or 1.
 import collections
 import gzip
 import os
+import re
 import statistics
 import sys
 
@@ -152,30 +158,56 @@ def video(ref_path, got_path, ref_dec, got_dec, limits_path=None):
 
 
 def named(path):
-    """The `NAME RESULT` lines of PATH as a dictionary; a name may hold blanks."""
-    with open(path, encoding="utf-8") as f:
+    """The `NAME RESULT` lines of PATH, gzip's or plain, as a dictionary; a
+    name may hold blanks."""
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as f:
         return dict(line.rstrip("\n").rsplit(None, 1) for line in f
                     if line.strip() and not line.startswith("#"))
 
 
-def results(ref_path, got_path):
+def sampled(ref, sample_path):
+    """The results of REF for the tests SAMPLE_PATH names, one a line, and
+    for their subtests, `TEST@SUBTEST`."""
+    with open(sample_path, encoding="utf-8") as f:
+        tests = {line.rstrip("\n") for line in f if line.strip()}
+    kept = {}
+    for name, result in ref.items():
+        cut = len(name)
+        while cut != -1 and name[:cut] not in tests:
+            cut = name.rfind("@", 0, cut)
+        if cut != -1:
+            kept[name] = result
+    return kept
+
+
+def results(ref_path, got_path, sample_path=None, flakes_path=None):
     ref, got = named(ref_path), named(got_path)
+    if sample_path:
+        ref = sampled(ref, sample_path)
+    flakes = []
+    if flakes_path:
+        with open(flakes_path, encoding="utf-8") as f:
+            flakes = [re.compile(line.strip()) for line in f
+                      if line.strip() and not line.startswith("#")]
+    flaky = {name for name in set(ref) | set(got) if any(p.search(name) for p in flakes)}
     worse = []
-    for name in sorted(ref):
+    for name in sorted(set(ref) - flaky):
         r, g = ref[name], got.get(name)
         if g is None:
             worse.append("%s: not run here, %s in the reference" % (name, r))
         elif r in ("pass", "skip") and g != r:
             worse.append("%s: %s here, %s in the reference" % (name, g, r))
-    for name in sorted(set(got) - set(ref)):
+    for name in sorted(set(got) - set(ref) - flaky):
         if got[name] not in ("pass", "skip"):
             worse.append("%s: %s here, not in the reference" % (name, got[name]))
     for w in worse:
         print("judge: worse: %s" % w)
-    verdict = "fail" if worse else "pass"
-    print("judge: result: %s results %d in the reference, %d here, %d worse than Debian's" %
-          (verdict, len(ref), len(got), len(worse)))
-    return not worse
+    verdict = "fail" if worse or not got else "pass"
+    print("judge: result: %s results %d in the reference, %d here, %d worse than Debian's%s" %
+          (verdict, len(ref), len(got), len(worse),
+           ", %d flakes named" % len(flaky) if flakes_path else ""))
+    return verdict == "pass"
 
 
 def modes(ref_path, got_path):
@@ -290,15 +322,18 @@ def main():
         ok = webgl(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (6, 7) and sys.argv[1] == "video":
         ok = video(*sys.argv[2:])
-    elif len(sys.argv) == 4 and sys.argv[1] in ("results", "modes", "glmark2"):
-        ok = {"results": results, "modes": modes, "glmark2": glmark2}[sys.argv[1]](*sys.argv[2:4])
+    elif len(sys.argv) in (4, 5, 6) and sys.argv[1] == "results":
+        ok = results(*sys.argv[2:])
+    elif len(sys.argv) == 4 and sys.argv[1] in ("modes", "glmark2"):
+        ok = {"modes": modes, "glmark2": glmark2}[sys.argv[1]](*sys.argv[2:4])
     elif len(sys.argv) in (4, 5) and sys.argv[1] == "deqp":
         ok = deqp(*sys.argv[2:])
     elif len(sys.argv) in (4, 6) and sys.argv[1] == "vkcube":
         ok = vkcube(*sys.argv[2:])
     else:
         sys.exit("usage: judge.py webgl REF GOT | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
-                 " | results|modes|glmark2 REF GOT | deqp REF GOT [FLAKES]"
+                 " | results REF GOT [SAMPLE [FLAKES]] | modes|glmark2 REF GOT"
+                 " | deqp REF GOT [FLAKES]"
                  " | vkcube REF GOT [TIMING-REF TIMING-GOT]")
     sys.exit(0 if ok else 1)
 
