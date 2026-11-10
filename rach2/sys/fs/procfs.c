@@ -3128,7 +3128,9 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  * are the two counts outright. Buffers and Cached are what the buffer cache
  * and the page caches hold, the disk window's and the file page cache's,
  * which reclaim gives back under pressure, so
- * MemAvailable is the free count and the two together. HeapPages and
+ * MemAvailable is the free count and the two together. SwapCached, which
+ * IGT adds to Cached, is 0, as SwapTotal and SwapFree are, since nothing is
+ * swapped. HeapPages and
  * HeapUsed are the kernel heap's pages and the bytes in use inside it, for a
  * test that makes and frees objects and requires the heap back where it
  * started. Slab, last, is the heap's pages but the buffer cache's, which
@@ -3159,6 +3161,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_frames_as_kb(t, buffers);
     ap_str(t, "Cached:         ");
     ap_frames_as_kb(t, cached);
+    ap_str(t, "SwapCached:            0 kB\n");
     ap_str(t, "HeapPages:      ");
     ap_u32(t, heap_pages);
     ap_str(t, "\n");
