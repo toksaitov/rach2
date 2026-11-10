@@ -20,6 +20,7 @@
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
+#include "../rtc.h"
 #include "../udelay.h"
 
 /* Linux's bounds of a scanout's size, and the size it gives the first
@@ -382,14 +383,43 @@ static int32_t answer_error(uint32_t type)
     return type ? -EIO : -ENODEV;
 }
 
+/** Whether `arg`, a command, has its answer; a wait's condition. */
+static int cmd_answered(void *arg)
+{
+    return cmd_is_done((struct virtio_gpu_cmd *)arg);
+}
+
+/**
+ * Sleep until `cmd` is answered, for one poll step at most. Every answer
+ * wakes vgpu_wake, so the sleep does not rest on the command's fence, which
+ * the answer to a later command may signal before this one's is reaped
+ * (cmd_done); a wait on that fence would return at once and the waiter
+ * would spin under the big lock, which the device's answer may need. Before
+ * the device's probe has set vgpu_wake up, the fence's wait. May sleep.
+ */
+static void cmd_sleep(struct virtio_gpu_cmd *cmd, int64_t until)
+{
+    uint64_t saved;
+
+    if (!vgpu_wake_ready) {
+        (void)dma_fence_wait_until(cmd->fence, 0, until);
+        return;
+    }
+    saved = current_proc->wakeup_tick;
+    current_proc->wakeup_tick = rtc_ticks_now() + VGPU_POLL_NS / 1000000 + 1;
+    (void)wq_wait_event_nointr(&vgpu_wake, cmd_answered, cmd);
+    current_proc->wakeup_tick = saved;
+}
+
 /**
  * Start `cmd`, wait for its answer, copy up to `out_len` bytes of the
- * answer to `out` (NULL for none) and free it. The wait sleeps on the
- * command's fence, polling the queue every 10 ms in case the device has no
- * interrupt, or spins before the scheduler runs. Returns the answer's error
- * (`answer_error`), or -ETIMEDOUT when none came by `deadline` of
- * dma_fence_now's clock, or in five seconds before the scheduler runs; the
- * command is then left to the reaper, for the answer that may yet come.
+ * answer to `out` (NULL for none) and free it. The wait sleeps until an
+ * answer comes (cmd_sleep), polling the queue every 10 ms in case the
+ * device has no interrupt, or spins before the scheduler runs. Returns
+ * the answer's error (`answer_error`), or -ETIMEDOUT when none came by
+ * `deadline` of dma_fence_now's clock, or in five seconds before the
+ * scheduler runs; the command is then left to the reaper, for the answer
+ * that may yet come.
  * With VGPU_NEVER a sleeping wait ends with the answer or with the
  * device's death, which completes every command. A command with response
  * pages stays with the caller after completion. With `got`, an answer
@@ -418,7 +448,7 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
                 break;
             }
             next = dma_fence_now() + VGPU_POLL_NS;
-            (void)dma_fence_wait_until(cmd->fence, 0, next < deadline ? next : deadline);
+            cmd_sleep(cmd, next < deadline ? next : deadline);
         } else {
             if (spins++ >= (uint32_t)(VGPU_WAIT_NS / 1000 / VGPU_SPIN_US)) {
                 break;
