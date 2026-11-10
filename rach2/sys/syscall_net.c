@@ -3493,18 +3493,19 @@ static int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, u
 
 /**
  * recvmsg(2) on the stream socket `entry` with the header `hdr` read from
- * `msg_ptr`: the vector copied once and its buffers checked, then read by
- * `stream_readv`, and the header written back with no address and no control
- * data, `msg_flags` keeping only
- * MSG_CMSG_CLOEXEC, as Linux's do. The copy keeps an earlier buffer that
- * overlaps the vector list from replacing a later destination. Returns the
- * bytes read, or -errno, including -ENOMEM for the vector copy.
+ * `msg_ptr`: the vector copied once, its buffers checked and its total cut
+ * at MAX_RW_COUNT (`iov_import`), then read by `stream_readv`, and the
+ * header written back with no address and no control data, `msg_flags`
+ * keeping only MSG_CMSG_CLOEXEC, as Linux's do. The copy keeps an earlier
+ * buffer that overlaps the vector list from replacing a later destination.
+ * Returns the bytes read, or -errno, including -ENOMEM for the vector copy.
  */
 static int32_t recvmsg_stream(fd_entry_t *entry, struct kernel_msghdr *hdr, uintptr_t msg_ptr,
                               int flags)
 {
     struct kernel_iovec local[8], *iov = local;
-    uint32_t count = (uint32_t)hdr->msg_iovlen, i;
+    uint32_t count = (uint32_t)hdr->msg_iovlen;
+    long checked;
     int32_t taken;
 
     if (count > sizeof(local) / sizeof(local[0])) {
@@ -3513,15 +3514,8 @@ static int32_t recvmsg_stream(fd_entry_t *entry, struct kernel_msghdr *hdr, uint
             return -ENOMEM;
         }
     }
-    for (i = 0; i < count; i++) {
-        if (iov_fetch(&iov[i], hdr->msg_iov, i) != 0 || iov[i].iov_len > 0x7FFFFFFFu ||
-            (iov[i].iov_len && !user_buffer_ok(iov[i].iov_base, iov[i].iov_len, 1))) {
-            taken = -EFAULT;
-            goto out;
-        }
-    }
-    taken = stream_readv(entry, iov, count, flags);
-out:
+    checked = iov_import(iov, hdr->msg_iov, (int)count, 1);
+    taken = checked < 0 ? (int32_t)checked : stream_readv(entry, iov, count, flags);
     if (iov != local) {
         kfree(iov);
     }

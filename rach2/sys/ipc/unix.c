@@ -2576,15 +2576,15 @@ int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uin
     return rc;
 }
 
-/** The caller's iovec array in `*iov`, copied in in its layout
- * (`iov_fetch`) and checked, with its
- * total length in `*total`: 0, or -EMSGSIZE past IOV_MAX_LOCAL vectors,
- * -EINVAL for a total past 2^31 - 1, -ENOMEM, -EFAULT. The caller frees the
- * array, whatever the result. */
+/** The caller's iovec array in `*iov`, copied in in its layout and checked
+ * (`iov_import`), with its total length, cut at MAX_RW_COUNT, in `*total`:
+ * 0, or -EMSGSIZE past IOV_MAX_LOCAL vectors, -EINVAL for a negative
+ * length, -ENOMEM, -EFAULT. The caller frees the array, whatever the
+ * result. */
 static int32_t get_iov(uintptr_t uiov, unsigned long iovlen, struct kernel_iovec **iov,
                        uint32_t *total)
 {
-    unsigned long i;
+    long rc;
 
     *iov = NULL;
     *total = 0;
@@ -2598,15 +2598,11 @@ static int32_t get_iov(uintptr_t uiov, unsigned long iovlen, struct kernel_iovec
     if (!*iov) {
         return -ENOMEM;
     }
-    for (i = 0; i < iovlen; i++) {
-        if (iov_fetch(&(*iov)[i], uiov, (uint32_t)i) != 0) {
-            return -EFAULT;
-        }
-        if ((*iov)[i].iov_len > 0x7FFFFFFFu - *total) {
-            return -EINVAL;
-        }
-        *total += (uint32_t)(*iov)[i].iov_len;
+    rc = iov_import(*iov, uiov, (int)iovlen, -1);
+    if (rc < 0) {
+        return (int32_t)rc;
     }
+    *total = (uint32_t)rc;
     return 0;
 }
 

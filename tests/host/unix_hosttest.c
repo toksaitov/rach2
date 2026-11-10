@@ -343,6 +343,45 @@ int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
                : 0;
 }
 
+/* syscall_fs.c's iov_import for a native call: every length checked as a
+ * signed one, then each range, the total cut at USER_RW_MAX. */
+long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefault)
+{
+    struct kernel_iovec one;
+    uint32_t total = 0;
+    int pass, i;
+
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < count; i++) {
+            struct kernel_iovec *e = iov ? &iov[i] : &one;
+            unsigned long len;
+
+            if ((pass == 0 || !iov) && iov_fetch(e, uvec, (uint32_t)i) != 0) {
+                return -EFAULT;
+            }
+            if ((long)e->iov_len < 0) {
+                return -EINVAL;
+            }
+            if (pass == 0) {
+                continue;
+            }
+            len = count == 1 ? USER_RW_LEN(e->iov_len) : e->iov_len;
+            if (!user_span_ok(e->iov_base, len)) {
+                return -EFAULT;
+            }
+            if (len > USER_RW_MAX - total) {
+                len = USER_RW_MAX - total;
+            }
+            if (prefault >= 0 && len > 0 && !user_buffer_ok(e->iov_base, len, prefault)) {
+                return -EFAULT;
+            }
+            e->iov_len = len;
+            total += (uint32_t)len;
+        }
+    }
+    return (long)total;
+}
+
 uint32_t msghdr_size(void)
 {
     return (uint32_t)sizeof(struct kernel_msghdr);
