@@ -791,13 +791,17 @@ struct drm_crtc_state {
 };
 
 /* A connector's state: the CRTC it is routed to and the encoder that drives
- * it there, which the check chooses. */
+ * it there, which the check chooses, and the values of the properties a
+ * driver may attach: "scaling mode" in `scaling_mode`, DRM_MODE_SCALE_*,
+ * and "max bpc" in `max_requested_bpc`. */
 struct drm_connector_state {
     struct drm_connector *connector;
     struct drm_crtc *crtc;
     struct drm_encoder *best_encoder;
     uint32_t link_status; /* DRM_MODE_LINK_STATUS_* */
     uint32_t content_protection;
+    uint32_t scaling_mode;
+    uint32_t max_requested_bpc;
 };
 
 /*
@@ -1026,6 +1030,7 @@ struct drm_connector {
     uint32_t edid_override_len;
     const struct drm_connector_funcs *funcs;
     struct drm_connector_state *state;
+    struct drm_property *scaling_mode_property, *max_bpc_property; /* NULL until attached */
 };
 
 /*
@@ -1150,6 +1155,16 @@ int32_t drm_connector_attach_encoder(struct drm_connector *connector, struct drm
 /** Give a virtual connector the EDID property, for a driver whose virtual
  * sink has an EDID (virtio-gpu, bochs). */
 void drm_connector_attach_edid_property(struct drm_connector *connector);
+/** Attach "scaling mode" to `connector` with the DRM_MODE_SCALE_* values
+ * whose bits `mask` has, two at least, Linux's
+ * drm_connector_attach_scaling_mode_property; the driver sets the state's
+ * first value. 0, -EINVAL for a mask of fewer, or -ENOMEM. */
+int32_t drm_connector_attach_scaling_mode_property(struct drm_connector *connector, uint32_t mask);
+/** Attach "max bpc", `min` to `max` bits a colour, to `connector`, its
+ * state's value `max`, Linux's drm_connector_attach_max_bpc_property. 0,
+ * or -ENOMEM. */
+int32_t drm_connector_attach_max_bpc_property(struct drm_connector *connector, uint32_t min,
+                                              uint32_t max);
 /** Attach FB_DAMAGE_CLIPS to `plane`, for a driver that copies only damage. */
 void drm_plane_enable_fb_damage_clips(struct drm_plane *plane);
 /** Attach "rotation", the bitmask of `supported` DRM_MODE_ROTATE_* and
