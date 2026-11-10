@@ -1,18 +1,21 @@
 /*
- * iobus.c: the in-kernel bus of ioeventfds, as Linux's kvm_io_bus and the
- * ioeventfd half of eventfd.c: a guest's write to a port or an MMIO address
- * that an ioeventfd names signals its eventfd and goes no further, so the
- * guest enters again without a trip to the caller.
+ * iobus.c: the in-kernel bus of ioeventfds and coalesced zones, as Linux's
+ * kvm_io_bus, the ioeventfd half of eventfd.c and coalesced_mmio.c: a
+ * guest's write to a port or an MMIO address that an ioeventfd names signals
+ * its eventfd, one inside a coalesced zone is queued on the VM's ring, and
+ * either goes no further, so the guest enters again without a trip to the
+ * caller.
  */
 
 #include "kvm.h"
 
 #include "../io/eventfd.h"
 #include "../lib/kerrno.h"
+#include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 
-/* The buses an ioeventfd sits on, by its flags. */
+/* The buses an ioeventfd or a zone sits on. */
 #define BUS_MMIO 0
 #define BUS_PIO  1
 #define BUS_CCW  2 /* s390's virtio notifications: registered, never written */
@@ -33,11 +36,31 @@ struct ioeventfd {
     int wildcard;
 };
 
-/* iobus.c's share of a VM. */
+/* One coalesced zone: the writes that lie wholly in `size` bytes at `addr`
+ * of bus `bus`. */
+struct zone {
+    struct zone *next;
+    uint64_t addr;
+    uint32_t size;
+    int bus;
+};
+
+/* iobus.c's share of a VM. `count` is of ioeventfds and zones together,
+ * as they share Linux's bus. */
 struct iobus {
     struct ioeventfd *list;
+    struct zone *zones;
     uint32_t count[NR_BUSES];
 };
+
+/** The VM's bus, made at first need, or NULL when memory is short. */
+static struct iobus *bus_get(struct kvm_vm *vm)
+{
+    if (!vm->iobus) {
+        vm->iobus = kzalloc(sizeof(struct iobus));
+    }
+    return (struct iobus *)vm->iobus;
+}
 
 /** The bus the flags `flags` name, as Linux's ioeventfd_bus_from_flags. */
 static int bus_of(uint32_t flags)
@@ -66,7 +89,7 @@ static int collide(const struct ioeventfd *p, const struct ioeventfd *q)
  * bus; eventfd_get's error; -ENOMEM. */
 static int32_t assign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
 {
-    struct iobus *b = (struct iobus *)vm->iobus;
+    struct iobus *b;
     struct ioeventfd *p, *q;
     int32_t err = 0;
 
@@ -84,12 +107,9 @@ static int32_t assign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
         (!a->len && (a->flags & KVM_IOEVENTFD_FLAG_DATAMATCH))) {
         return -EINVAL;
     }
+    b = bus_get(vm);
     if (!b) {
-        b = kzalloc(sizeof(*b));
-        if (!b) {
-            return -ENOMEM;
-        }
-        vm->iobus = b;
+        return -ENOMEM;
     }
     p = kzalloc(sizeof(*p));
     if (!p) {
@@ -160,10 +180,80 @@ static int32_t deassign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
     return err;
 }
 
+/** Whether `len` bytes at `addr` lie wholly in the zone `z`, as Linux's
+ * coalesced_mmio_in_range. */
+static int zone_holds(const struct zone *z, uint64_t addr, uint32_t len)
+{
+    return addr + len >= addr && addr >= z->addr && addr + len <= z->addr + z->size;
+}
+
+/** KVM_REGISTER_COALESCED_MMIO, as Linux's
+ * kvm_vm_ioctl_register_coalesced_mmio. 0; -EINVAL for a `pio` not 0 or 1;
+ * -ENOSPC for a full bus; -ENOMEM. */
+static int32_t zone_add(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zone *a)
+{
+    struct iobus *b;
+    struct zone *z;
+
+    if (a->pio > 1u) {
+        return -EINVAL;
+    }
+    b = bus_get(vm);
+    z = b ? kzalloc(sizeof(*z)) : NULL;
+    if (!z) {
+        return -ENOMEM;
+    }
+    z->addr = a->addr;
+    z->size = a->size;
+    z->bus = a->pio ? BUS_PIO : BUS_MMIO;
+    if (b->count[z->bus] >= MAX_BUS_DEVS) {
+        kfree(z);
+        return -ENOSPC;
+    }
+    b->count[z->bus]++;
+    z->next = b->zones;
+    b->zones = z;
+    return 0;
+}
+
+/** KVM_UNREGISTER_COALESCED_MMIO, as Linux's
+ * kvm_vm_ioctl_unregister_coalesced_mmio: every zone of this bus that holds
+ * the whole range goes, and none is no error. 0; -EINVAL for a `pio` not 0
+ * or 1. */
+static int32_t zone_remove(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zone *a)
+{
+    struct iobus *b = (struct iobus *)vm->iobus;
+    struct zone **zp, *z;
+    int bus = a->pio ? BUS_PIO : BUS_MMIO;
+
+    if (a->pio > 1u) {
+        return -EINVAL;
+    }
+    zp = b ? &b->zones : NULL;
+    while (zp && *zp) {
+        z = *zp;
+        if (z->bus != bus || !zone_holds(z, a->addr, a->size)) {
+            zp = &z->next;
+            continue;
+        }
+        *zp = z->next;
+        b->count[bus]--;
+        kfree(z);
+    }
+    return 0;
+}
+
 int32_t kvm_iobus_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
+    struct kvm_coalesced_mmio_zone z;
     struct kvm_ioeventfd a;
 
+    if (request == KVM_REGISTER_COALESCED_MMIO || request == KVM_UNREGISTER_COALESCED_MMIO) {
+        if (copy_from_user(&z, (const void __user *)arg, sizeof(z)) != 0) {
+            return -EFAULT;
+        }
+        return request == KVM_REGISTER_COALESCED_MMIO ? zone_add(vm, &z) : zone_remove(vm, &z);
+    }
     if (request != KVM_IOEVENTFD) {
         return -ENOTTY;
     }
@@ -199,36 +289,73 @@ static struct ioeventfd *find(struct iobus *b, int bus, uint64_t addr, uint32_t 
     return NULL;
 }
 
+/** Queue a write of `len` bytes of `data` at `addr` of bus `bus` on the
+ * VM's ring when a zone holds it, as Linux's coalesced_mmio_write: 1 when
+ * queued, 0 when no zone holds it or the ring has no room, which leaves the
+ * write to the caller. The ring's page is the caller's to scribble on, so
+ * `last` is read once and checked. */
+static int coalesce(struct kvm_vm *vm, int bus, uint64_t addr, uint32_t len, const uint8_t *data)
+{
+    struct iobus *b = (struct iobus *)vm->iobus;
+    struct kvm_coalesced_mmio_ring *ring = vm->ring;
+    struct kvm_coalesced_mmio *e;
+    struct zone *z;
+    uint32_t insert;
+
+    for (z = b->zones; z; z = z->next) {
+        if (z->bus == bus && zone_holds(z, addr, len)) {
+            break;
+        }
+    }
+    if (!z || !ring || len > sizeof(e->data)) {
+        return 0;
+    }
+    insert = ring->last;
+    if (insert >= KVM_COALESCED_MMIO_MAX || (insert + 1u) % KVM_COALESCED_MMIO_MAX == ring->first) {
+        return 0;
+    }
+    e = &ring->coalesced_mmio[insert];
+    e->phys_addr = addr;
+    e->len = len;
+    k_memcpy(e->data, data, len);
+    e->pio = bus == BUS_PIO;
+    ring->last = (insert + 1u) % KVM_COALESCED_MMIO_MAX;
+    return 1;
+}
+
+/** Give one write to the bus: an ioeventfd it hits is signalled, and
+ * otherwise a zone that holds it queues it. 1 when either took it. */
+static int bus_write(struct kvm_vm *vm, int bus, uint64_t addr, uint32_t len, const uint8_t *data)
+{
+    struct ioeventfd *p = find((struct iobus *)vm->iobus, bus, addr, len, data);
+
+    if (!p) {
+        return coalesce(vm, bus, addr, len, data);
+    }
+    eventfd_signal(p->ev);
+    kvm_event_add(KVM_EVENT_IOEVENTFD);
+    return 1;
+}
+
 int kvm_iobus_write(struct kvm_vcpu *v)
 {
-    struct iobus *b = (struct iobus *)v->vm->iobus;
     struct kvm_exit *ex = &v->exit;
-    struct ioeventfd *p;
     uint32_t i, size;
 
-    if (!b) {
+    if (!v->vm->iobus) {
         return 0;
     }
     if (ex->kind == KVM_X_MMIO) {
-        p = find(b, BUS_MMIO, ex->mmio.phys_addr, ex->mmio.len, ex->mmio.data);
-        if (!p) {
-            return 0;
-        }
-        eventfd_signal(p->ev);
-        kvm_event_add(KVM_EVENT_IOEVENTFD);
-        return 1;
+        return bus_write(v->vm, BUS_MMIO, ex->mmio.phys_addr, ex->mmio.len, ex->mmio.data);
     }
-    /* A string OUT signals once for each element, as Linux's kernel_pio;
+    /* A string OUT is one write for each element, as Linux's kernel_pio;
      * only a miss on the first goes to the caller, and the elements after
      * a later miss are dropped. */
     size = ex->io.size;
     for (i = 0; i < ex->io.count && (i + 1u) * size <= sizeof(ex->data); i++) {
-        p = find(b, BUS_PIO, ex->io.port, size, ex->data + i * size);
-        if (!p) {
+        if (!bus_write(v->vm, BUS_PIO, ex->io.port, size, ex->data + i * size)) {
             return i != 0;
         }
-        eventfd_signal(p->ev);
-        kvm_event_add(KVM_EVENT_IOEVENTFD);
     }
     return 1;
 }
@@ -239,7 +366,10 @@ int32_t kvm_iobus_check_extension(long cap)
     case KVM_CAP_IOEVENTFD:
     case KVM_CAP_IOEVENTFD_ANY_LENGTH:
     case KVM_CAP_IOEVENTFD_NO_LENGTH:
+    case KVM_CAP_COALESCED_PIO:
         return 1;
+    case KVM_CAP_COALESCED_MMIO:
+        return KVM_COALESCED_MMIO_PAGE_OFFSET;
     default:
         return 0;
     }
@@ -249,6 +379,7 @@ void kvm_iobus_free(struct kvm_vm *vm)
 {
     struct iobus *b = (struct iobus *)vm->iobus;
     struct ioeventfd *p;
+    struct zone *z;
 
     if (!b) {
         return;
@@ -258,6 +389,11 @@ void kvm_iobus_free(struct kvm_vm *vm)
         b->list = p->next;
         eventfd_put(p->ev);
         kfree(p);
+    }
+    while (b->zones) {
+        z = b->zones;
+        b->zones = z->next;
+        kfree(z);
     }
     kfree(b);
     vm->iobus = NULL;

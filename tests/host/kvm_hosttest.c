@@ -1014,7 +1014,7 @@ static void startup_caps(int vm)
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_MAX_VCPUS) == KVM_MAX_VCPUS, "KVM_CAP_MAX_VCPUS");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_NR_MEMSLOTS) == KVM_MEM_SLOTS, "KVM_CAP_NR_MEMSLOTS");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_MCE) == KVM_MAX_MCE_BANKS, "KVM_CAP_MCE is the banks");
-    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_COALESCED_MMIO) == 0, "a capability not offered is 0");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_PV_MMU) == 0, "a capability not offered is 0");
     CHECK(dev(KVM_CHECK_EXTENSION, 100000) == 0, "an unknown capability is 0");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SPLIT_IRQCHIP) == 1, "the split irqchip is offered");
 }
