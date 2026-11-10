@@ -168,7 +168,8 @@ struct virtqueue {
  * context and may not be called from a handler.
  *
  * get_status, set_status: the device status byte. A write of 0 resets.
- * get_features: the 64 feature bits the device offers.
+ * get_features: the 64 feature bits the device offers; a transport with no
+ *     device to offer them adds FAILED to the status.
  * set_features: the bits the driver accepts.
  * config_generation: a count the device changes whenever its configuration
  *     changes, read before and after a read of several fields.
@@ -291,7 +292,8 @@ int virtio_reset(struct virtio_dev *d);
  * VIRTIO_F_ORDER_PLATFORM). Then prepare interrupts for `nqueues` queues.
  *
  * @return 0 with `d->features` set; -ETIMEDOUT when the reset did not
- *         finish, -ENODEV for a device without VIRTIO_F_VERSION_1, -EIO
+ *         finish, -ENODEV for a device without VIRTIO_F_VERSION_1 or one
+ *         the transport marked FAILED while offering its features, -EIO
  *         when it refused the features, -EINVAL for more than
  *         VIRTIO_MAX_QUEUES queues, or the transport's error from its
  *         interrupts. On an error the status has FAILED set where the

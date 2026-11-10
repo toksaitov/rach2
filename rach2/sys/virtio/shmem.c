@@ -431,8 +431,9 @@ static void vs_set_status(struct virtio_dev *d, uint8_t status)
 
 /**
  * The device's offer for the driver's epoch, waited for without bound,
- * since the VM may still be booting; 0 at a detach or for an offer the
- * transport's checks refuse, which the core takes for a legacy device.
+ * since the VM may still be booting. At a detach, or for an offer the
+ * transport's checks refuse, 0 with FAILED added to the status, which ends
+ * the core's bring-up.
  */
 static uint64_t vs_get_features(struct virtio_dev *d)
 {
@@ -440,12 +441,14 @@ static uint64_t vs_get_features(struct virtio_dev *d)
     int err;
 
     if (!vs->attached || !vshm_await(vs, VGS_DEV_READY, 0)) {
+        vs->status |= VIRTIO_STATUS_FAILED;
         return 0;
     }
     err = vgs_check_offer(&vs->dev, vs->me.epoch, vs->me.peer);
     if (err != VGS_OK) {
         klog(KLOG_WARN, "vgpu-shm", "refused: epoch %u: the offer: %s", (unsigned)vs->me.epoch,
              vgs_strerror(err));
+        vs->status |= VIRTIO_STATUS_FAILED;
         return 0;
     }
     return vs->dev.features;
