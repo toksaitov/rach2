@@ -273,11 +273,13 @@ static struct drm_i915_reset_stats stats(uint32_t ctx)
 }
 
 /* The contexts, the guilty and the innocent, the out-fences of the hang
- * row's batches, and the fake's counts before the hang: rcs0's batches and
- * the resets of each domain, the fake's own at its start among them. */
+ * row's batches, and the fake's counts before the hang: rcs0's batches,
+ * the batch starts one batch takes (two when the command parser runs it
+ * from its shadow through the trampoline), and the resets of each domain,
+ * the fake's own at its start among them. */
 static uint32_t ctx_a, ctx_b;
 static int fence_a, fence_b;
-static uint32_t batches0, rcs0, bcs0, full0;
+static uint32_t batches0, per_batch, rcs0, bcs0, full0;
 
 /** A batch of context A on a ring the fake hangs, and one of context B
  * queued behind it, are both accepted and neither has completed. A batch
@@ -287,7 +289,10 @@ static void hang_row(uint32_t batch, uint32_t data)
 {
     int f;
 
+    batches0 = fake_count("ring rcs0", "batches");
     require(submit(0, data, batch, &f) == 0 && fence_end(f) == 1, "hang: a first batch runs");
+    per_batch = fake_count("ring rcs0", "batches") - batches0;
+    require(per_batch > 0, "hang: the fake counts the first batch");
     ctx_a = context();
     ctx_b = context();
     batches0 = fake_count("ring rcs0", "batches");
@@ -323,7 +328,7 @@ static void replay_row(void)
 {
     struct drm_i915_reset_stats a = stats(ctx_a), b = stats(ctx_b);
 
-    require(fake_count("ring rcs0", "batches") == batches0 + 1,
+    require(fake_count("ring rcs0", "batches") == batches0 + per_batch,
             "replay: B's batch ran and A's did not");
     require(a.batch_active == 1 && a.batch_pending == 0 && a.reset_count == 0,
             "replay: A charged with one hang");
