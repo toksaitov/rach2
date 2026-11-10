@@ -120,6 +120,14 @@ struct mm {
      * a dying process, as Linux's MMF_OOM_SKIP: a second call then has
      * nothing to do and answers 0. 0 in a new space and in a fork's copy. */
     uint32_t reaped;
+    /* The protection keys the space has allocated, bit k for key k, and the
+     * key it gives an execute-only mapping, or -1 before it has one, as
+     * Linux's pkey_allocation_map and execute_only_pkey (../fpu.h): key 0,
+     * the default, alone and -1 in a new space and in an image an exec
+     * builds, and a fork's copy takes both. They count only where the
+     * keys are on (`fpu_pkeys`). */
+    uint32_t pkeys;
+    int32_t pkey_exec;
     struct mm *dir_next; /* the next in its chain of the table by directory */
 };
 
@@ -129,8 +137,8 @@ struct mm *mm_new(void);
 
 /** Copy what `from` keeps beside its pages, for /proc and the dumpable flag,
  * into `to`, a copy of its address space that fork made: the program's file,
- * and its ELF interpreter, whose descriptions the two then share, and the
- * path when there is room. */
+ * and its ELF interpreter, whose descriptions the two then share, the path
+ * when there is room, and the protection keys allocated. */
 void mm_copy_info(struct mm *to, const struct mm *from);
 
 /** Keep the heap copy of the path `path` as the path the exec found `mm`'s

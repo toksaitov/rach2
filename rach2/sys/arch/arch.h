@@ -58,11 +58,13 @@
  *   pte_t, PTE_*, MMU_TABLE_ENTRIES  a page table entry, its bits, and the
  *                          entries of a leaf table (mm/paging.h);
  *                          PTE_NOEXEC forbids instruction fetches from a
- *                          user page, or is 0 where the processor cannot
+ *                          user page, or is 0 where the processor cannot;
+ *                          PTE_PKEY holds a page's protection key from bit
+ *                          PTE_PKEY_SHIFT, or is 0 where there are none
  *   HARD_MEMORY_LIMIT, KVA_*  the kernel's own layout
- *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p), FAULT_EXEC(p)  the
- *                          page fault: a write, from user mode, an
- *                          instruction fetch
+ *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p), FAULT_EXEC(p),
+ *   FAULT_PK(p)            the page fault: a write, from user mode, an
+ *                          instruction fetch, a protection key's refusal
  *   arch_cpu_id()          the running processor's index in the
  *                          per-processor table (proc/percpu.h)
  *   IRQ_VECTOR(line)       the vector a platform interrupt line arrives on

@@ -171,6 +171,10 @@ typedef uint64_t pte_t;
  * page without PROT_EXEC, is `mmu_nx`, which mmu.c makes PTE_NX or 0. */
 #define PTE_NX            0x8000000000000000UL
 #define PTE_NOEXEC        mmu_nx
+/* Bits 59 to 62: the page's protection key, whose rights PKRU holds where
+ * CR4.PKE is set (../../fpu.h); 0, the default key, elsewhere. */
+#define PTE_PKEY          0x7800000000000000UL
+#define PTE_PKEY_SHIFT    59
 extern pte_t mmu_nx;
 #define PTE_FLAGS   0xFFF0000000000FFFUL
 #define PTE_ADDR(e) ((e) & ~(pte_t)PTE_FLAGS)
@@ -254,6 +258,8 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v);
 #define FAULT_USER(p)     (((p)->error_code & 0x4u) != 0)
 /* An instruction fetch, which the error code reports where NX is on. */
 #define FAULT_EXEC(p)     (((p)->error_code & 0x10u) != 0)
+/* A data access that the page's protection key and PKRU refused. */
+#define FAULT_PK(p)       (((p)->error_code & 0x20u) != 0)
 
 /* `rep movsq` and `rep stosq` move the words of k_memcpy and k_memset. */
 #define ARCH_STRING_WORDS 1

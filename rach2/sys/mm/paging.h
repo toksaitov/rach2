@@ -167,9 +167,10 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable);
  */
 void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec);
 
-/** The PTE_NOEXEC of a user page of a region with the protection `prot`
- * (VM_PROT_*): the bit when the region has no VM_PROT_EXEC, else 0. */
-pte_t paging_noexec(uint32_t prot);
+/** The bits of a user page's entry that a region with the protection `prot`
+ * (VM_PROT_*) gives it beside its access: PTE_NOEXEC when the region has no
+ * VM_PROT_EXEC, and its protection key (VM_PROT_KEY) in PTE_PKEY. */
+pte_t paging_prot_bits(uint32_t prot);
 
 /** Drop the translation of `addr` in the running processor's directory
  * wherever a processor has it (`paging_flush_dir`). */
