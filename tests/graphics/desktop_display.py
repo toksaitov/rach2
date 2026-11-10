@@ -220,6 +220,9 @@ PAGE = b'''<!doctype html><title>Desktop input</title>
 <body><script>
 const say = path => fetch(path, {cache: "no-store"});
 document.addEventListener("keydown", e => say("/key?k=" + encodeURIComponent(e.key)));
+let moved = false;
+for (const kind of ["mouseover", "mousemove", "pointerover", "pointermove"])
+ document.addEventListener(kind, e => { if (!moved) { moved = true; say("/move?e=" + kind); } });
 document.addEventListener("mousedown", e => say("/click?b=" + e.button));
 (function ready() {
  if (document.hasFocus()) say("/ready"); else setTimeout(ready, 100);
@@ -239,6 +242,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif url.path == "/key":
             self.server.keys += query["k"][0]
             print("desktop: key: %s" % query["k"][0], flush=True)
+        elif url.path == "/move":
+            print("desktop: pointer: on the page, %s" % query["e"][0], flush=True)
         elif url.path == "/click":
             self.server.clicks += 1
             print("desktop: click: button %s" % query["b"][0], flush=True)
