@@ -3,17 +3,18 @@
 # Usage: run.sh boot|nic-tcg|nic-kvm|dma|index|compat|kill|reassign
 set -eu
 mode=${1:-}
-work='' pid='' traffic='' keep=0
+work='' pid='' reader='' traffic='' keep=0
 cleanup()
 {
     [ -z "$pid" ] || { kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; }
+    [ -z "$reader" ] || { kill "$reader" 2>/dev/null || :; wait "$reader" 2>/dev/null || :; }
     [ -z "$traffic" ] || { kill "$traffic" 2>/dev/null || :; wait "$traffic" 2>/dev/null || :; }
     [ "$keep" = 1 ] || [ -z "$work" ] || rm -rf "$work"
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=1; exit 129' HUP
+trap 'keep=1; exit 130' INT
+trap 'keep=1; exit 143' TERM
 fail()
 {
     echo "assign: result: fail: $*" >&2
@@ -78,11 +79,14 @@ case $mode in
         case $mode in kill|reassign) hold=assign.hold ;; esac
         exits_before=$(awk '$1 == "kvm_exits" { print $2 }' /proc/stat)
         start=$(date +%s)
+        mkfifo "$work/serial"
+        tee "$work/console" < "$work/serial" &
+        reader=$!
         qemu-system-x86_64 -nodefaults -no-reboot -display none -machine q35 \
             -accel "$accel" -cpu "$cpu" -m 128 -smp 1 \
             -kernel vmlinuz -initrd initrd -append "console=ttyS0 panic=-1 $hold" \
-            -serial "file:$work/console" -device "vfio-pci,host=$nic" \
-            > "$work/qemu.out" 2> "$work/qemu.err" < /dev/null &
+            -serial stdio -device "vfio-pci,host=$nic" \
+            > "$work/serial" 2> "$work/qemu.err" < /dev/null &
         pid=$!
         while kill -0 "$pid" 2>/dev/null; do
             if [ -n "$hold" ] && grep -q 'ASSIGNGUEST TRAFFIC' "$work/console"; then
@@ -97,7 +101,9 @@ case $mode in
         rc=0
         wait "$pid" || rc=$?
         pid=
-        cat "$work/console" "$work/qemu.err"
+        wait "$reader" || fail 'serial reader failed'
+        reader=
+        cat "$work/qemu.err"
         if [ -n "$hold" ]; then
             resets_after=$(dmesg | grep -c 'pci: reset: 0:6.0' || :)
             [ "$resets_after" -gt "$resets_before" ] || fail 'no device reset after SIGKILL'
