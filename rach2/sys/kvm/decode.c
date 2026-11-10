@@ -391,6 +391,13 @@ static const struct opc groups[13][8] = {
      {KVM_OP_NOP, 0, 0, O_M, 0, T_BYTE}},
 };
 
+/* VMCALL, 0x0F 0x01 0xC1, and VMMCALL, 0x0F 0x01 0xD9, which group 7's
+ * register forms tell apart by the whole ModRM byte. */
+static const struct opc hypercalls[2] = {
+    {KVM_OP_HYPERCALL, 0, 0, 0, 0, 0},
+    {KVM_OP_HYPERCALL, 1, 0, 0, 0, 0},
+};
+
 /*
  * The decoder's state while it reads one instruction: the bytes it may
  * read, how many it has, and what the prefixes and the ModRM byte said.
@@ -716,6 +723,9 @@ static int member(const struct dec *d, struct opc *e)
         g = G7R;
     }
     m = &groups[g][d->regf];
+    if (g == G7R && (d->modrm == 0xC1 || d->modrm == 0xD9)) {
+        m = &hypercalls[d->modrm == 0xD9];
+    }
     if (m->op == 0 && !(m->flags & T_UD)) {
         return -1;
     }

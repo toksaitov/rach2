@@ -344,6 +344,13 @@
 #define MC_VECTOR  18
 #define CP_VECTOR  21
 
+/* The exceptions that always exit, as Linux's vmx_update_exception_bitmap
+ * has them with EPT: #DB and #AC, so that a guest cannot hold the
+ * processor in an endless loop of either (CVE-2015-8104, CVE-2015-5307);
+ * #UD, for the instructions emulate.c runs after one; and #MC, which is
+ * the host's. */
+#define EXC_ALWAYS ((1u << DB_VECTOR) | (1u << UD_VECTOR) | (1u << AC_VECTOR) | (1u << MC_VECTOR))
+
 /* The guest's run, bounded by the preemption timer: about 4 million TSC
  * cycles, 2 ms at the Lenovo's 1.9 GHz, past the host's 1 ms tick, which
  * ends a run first unless something keeps it from the processor. */
@@ -769,7 +776,7 @@ struct vmx_vcpu {
     uint32_t inj_info, inj_error, inj_len;   /* the event the next entry injects */
     uint64_t pdpte[4];
     uint64_t debugctl;
-    int guest_dr; /* DR0 to DR3 and DR6 were loaded for the run */
+    int guest_dr; /* DR0 to DR3 were loaded for the run */
     int tf_set;   /* the entry set RFLAGS.TF for KVM_GUESTDBG_SINGLESTEP */
     struct vmx_exit ex;
 };
@@ -1086,7 +1093,7 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(VM_EXIT_CONTROLS, caps.exit);
     x->entry = caps.entry & ~ENTRY_IA32E;
     vmcs_write(VM_ENTRY_CONTROLS, x->entry);
-    x->exc_bitmap = 1u << MC_VECTOR;
+    x->exc_bitmap = EXC_ALWAYS;
     vmcs_write(EXCEPTION_BITMAP, x->exc_bitmap);
     vmcs_write(PAGE_FAULT_ERROR_CODE_MASK, 0);
     vmcs_write(PAGE_FAULT_ERROR_CODE_MATCH, 0);
@@ -1197,17 +1204,15 @@ static void load_intr(struct kvm_vcpu *v)
     }
 }
 
-/** Write the exception bitmap and DR7 for the caller's debugging: #DB for
- * single steps and hardware breakpoints, #BP for software ones, as Linux's
- * vmx_update_exception_bitmap, and #MC always. */
+/** Write the exception bitmap and DR7: the exceptions taken always, and
+ * #BP while the caller's debugging sets software breakpoints, as Linux's
+ * vmx_update_exception_bitmap; DR7 the caller's while it sets hardware
+ * breakpoints, else the guest's. */
 static void load_debug(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
 
-    x->exc_bitmap = 1u << MC_VECTOR;
-    if (debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) {
-        x->exc_bitmap |= 1u << DB_VECTOR;
-    }
+    x->exc_bitmap = EXC_ALWAYS;
     if (debugging(v, KVM_GUESTDBG_USE_SW_BP)) {
         x->exc_bitmap |= 1u << BP_VECTOR;
     }
@@ -1369,9 +1374,14 @@ static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
     }
 }
 
-/** Load the debug registers for the run when the DR7 it runs under
- * enables a breakpoint: the caller's breakpoints while it sets them, else
- * the guest's; the host's DR7, which the exit clears, comes back after. */
+/**
+ * Load DR0 to DR3 for the run when the DR7 it runs under enables a
+ * breakpoint: the caller's breakpoints while it sets them, else the
+ * guest's; the host's DR7, which the exit clears, comes back after. DR6
+ * is not loaded: the guest reads and writes the record's, since every MOV
+ * DR exits, and a #DB exits with its bits in the qualification and the
+ * processor's DR6 as it was.
+ */
 static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
 {
     struct vmx_vcpu *x = vx(v);
@@ -1386,20 +1396,15 @@ static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
         host_db[i] = vmx_op->read_dr(i);
         vmx_op->write_dr(i, hw ? v->guest_debug.debugreg[i] : v->debugregs.db[i]);
     }
-    vmx_op->write_dr(6, hw ? DR6_FIXED : v->debugregs.dr6);
 }
 
-/** Take the guest's DR6 back and put the host's debug registers back. */
+/** Put the host's debug registers back. */
 static void dr_store(struct kvm_vcpu *v, uint64_t host_dr7, const uint64_t host_db[4])
 {
     struct vmx_vcpu *x = vx(v);
     int i;
 
     if (x->guest_dr) {
-        if (!debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
-            v->debugregs.dr6 = vmx_op->read_dr(6);
-        }
-        vmx_op->write_dr(6, 0);
         for (i = 0; i < 4; i++) {
             vmx_op->write_dr(i, host_db[i]);
         }
@@ -2018,6 +2023,21 @@ static int exit_vmcall(struct kvm_vcpu *v)
     return 0;
 }
 
+/** The exit's numbers for an internal error's report, as Linux's
+ * vmx_get_exit_info orders them: the reason, the qualification, the
+ * guest-physical address, and the exit's interruption with its error
+ * code. */
+static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
+{
+    const struct vmx_exit *e = &vx(v)->ex;
+
+    info[0] = e->reason;
+    info[1] = e->qual;
+    info[2] = e->gpa;
+    info[3] = e->intr_info;
+    info[4] = e->intr_error;
+}
+
 /** An EPT violation (exit 48): a fault on the guest-physical tables,
  * which `kvm_tdp_fault` maps, or an access to a frame no slot holds, MMIO,
  * which emulate.c carries out. */
@@ -2035,12 +2055,8 @@ static int exit_ept(struct kvm_vcpu *v)
         v->exit.kind = KVM_X_AGAIN;
         return 0;
     }
-    info[0] = x->ex.reason;
-    info[1] = x->ex.qual;
-    info[2] = x->ex.gpa;
-    info[3] = x->ex.intr_info;
-    info[4] = x->ex.intr_error;
-    return kvm_emul_mmio(v, x->ex.gpa, info);
+    exit_info(v, info);
+    return kvm_emul_mmio(v, info);
 }
 
 /** The failed entry's exit: KVM_EXIT_FAIL_ENTRY with the instruction's
@@ -2053,31 +2069,74 @@ static void fail_entry(struct kvm_vcpu *v, uint64_t reason)
 }
 
 /**
+ * The guest's own #DB, as Linux's handle_exception_nmi gives it back: its
+ * bits, which the qualification holds, folded into the guest's DR6, and
+ * the exception queued. INT1 exits on the instruction, so RIP steps past
+ * it, without the single-step trap it outranks, and the interrupt shadow
+ * ends. For any other under a shadow with TF, the entry needs the
+ * single-step trap pending, which `load_intr` writes with the event.
+ */
+static void guest_db(struct kvm_vcpu *v)
+{
+    struct vmx_exit *e = &vx(v)->ex;
+    uint64_t rip;
+
+    if (INTR_TYPE(e->intr_info) == TYPE_PRIV_SOFT) {
+        rip = v->regs.rip + e->insn_len;
+        v->regs.rip = kvm_emul_mode(v) == 64 ? rip : (rip & 0xFFFFFFFFull);
+        v->events.interrupt.shadow = 0;
+    }
+    kvm_queue_db(v, e->qual);
+}
+
+/**
  * An exception's exit (0): the host's NMI or machine check, which `enter`
- * passed on, or the #DB or #BP the caller's debugging takes, which goes to
- * the caller as KVM_EXIT_DEBUG with the address, DR6 and DR7, as Linux's
- * handle_exception_nmi gives it. The bitmap takes no other.
+ * passed on; #UD, whose instruction emulate.c runs when it is one Linux's
+ * emulator runs after a #UD, as Linux's handle_ud; #AC, given back to the
+ * guest; the guest's own #DB, given back; and the #DB or #BP the caller's
+ * debugging takes, which goes to the caller as KVM_EXIT_DEBUG with the
+ * address, DR6 and DR7, as Linux's handle_exception_nmi gives it. The
+ * bitmap takes no other.
  */
 static int exit_exception(struct kvm_vcpu *v)
 {
     struct vmx_exit *e = &vx(v)->ex;
     uint32_t vec = INTR_VECTOR(e->intr_info);
     struct kvm_run_debug *d = &v->exit.debug;
+    uint64_t info[5];
 
     if (INTR_TYPE(e->intr_info) == TYPE_NMI || vec == MC_VECTOR) {
         return 0;
     }
-    if ((vec == DB_VECTOR && debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) ||
-        (vec == BP_VECTOR && debugging(v, KVM_GUESTDBG_USE_SW_BP))) {
-        v->exit.kind = KVM_X_DEBUG;
-        k_memset(d, 0, sizeof(*d));
-        d->exception = vec;
-        d->pc = v->sregs.cs.base + v->regs.rip;
-        d->dr6 = vec == DB_VECTOR ? ((e->qual & 0x600Full) | DR6_FIXED) : 0;
-        d->dr7 = dr7_of(v);
+    switch (vec) {
+    case UD_VECTOR:
+        exit_info(v, info);
+        return kvm_emul_ud(v, info);
+    case AC_VECTOR:
+        kvm_queue_exception(v, AC_VECTOR, 1, e->intr_error);
+        return 0;
+    case DB_VECTOR:
+        if (!debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) {
+            guest_db(v);
+            return 0;
+        }
+        break;
+    case BP_VECTOR:
+        if (debugging(v, KVM_GUESTDBG_USE_SW_BP)) {
+            break;
+        }
+        unexpected(v);
+        return 0;
+    default:
+        unexpected(v);
         return 0;
     }
-    unexpected(v);
+    v->exit.kind = KVM_X_DEBUG;
+    k_memset(d, 0, sizeof(*d));
+    d->exception = vec;
+    d->pc = v->sregs.cs.base + v->regs.rip;
+    d->dr6 = vec == DB_VECTOR ? ((e->qual & 0x600Full) | DR6_FIXED) : 0;
+    d->dr7 = dr7_of(v);
     return 0;
 }
 
