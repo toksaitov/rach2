@@ -21,6 +21,7 @@
 #include "../proc/process.h"
 #include "../proc/sched.h"
 #include "../rtc.h"
+#include "../timer.h"
 #include "../udelay.h"
 
 /* Linux's bounds of a scanout's size, and the size it gives the first
@@ -383,6 +384,47 @@ static int32_t answer_error(uint32_t type)
     return type ? -EIO : -ENODEV;
 }
 
+/* What a sleep of the driver's watches: its own condition, and the
+ * deadline, of dma_fence_now's clock, at which it ends regardless. */
+struct vgpu_sleep_wait {
+    int (*cond)(void *arg);
+    void *arg;
+    int64_t until;
+};
+
+/** Whether a sleep's condition holds or its deadline has passed; a wait's
+ * condition, which wq_wait needs true once the deadline it armed is gone. */
+static int vgpu_sleep_ready(void *arg)
+{
+    struct vgpu_sleep_wait *w = (struct vgpu_sleep_wait *)arg;
+
+    return w->cond(w->arg) || dma_fence_now() >= w->until;
+}
+
+/**
+ * Sleep on vgpu_wake until `cond(arg)` holds or `until` of dma_fence_now's
+ * clock passes, with the process's timer armed for `until` and restored
+ * after. Every answer of the device wakes vgpu_wake. Process context, with
+ * vgpu_wake set up. May sleep.
+ */
+static void vgpu_sleep(int (*cond)(void *arg), void *arg, int64_t until)
+{
+    struct vgpu_sleep_wait w;
+    uint64_t saved, delta;
+    int64_t left;
+
+    w.cond = cond;
+    w.arg = arg;
+    w.until = until;
+    left = until - dma_fence_now();
+    delta = tick_div((uint64_t)(left > 0 ? left : 0), 1000, NULL);
+    delta = tick_div(delta + 999, 1000, NULL);
+    saved = current_proc->wakeup_tick;
+    current_proc->wakeup_tick = rtc_ticks_now() + delta + 1;
+    (void)wq_wait_event_nointr(&vgpu_wake, vgpu_sleep_ready, &w);
+    current_proc->wakeup_tick = saved;
+}
+
 /** Whether `arg`, a command, has its answer; a wait's condition. */
 static int cmd_answered(void *arg)
 {
@@ -390,25 +432,21 @@ static int cmd_answered(void *arg)
 }
 
 /**
- * Sleep until `cmd` is answered, for one poll step at most. Every answer
- * wakes vgpu_wake, so the sleep does not rest on the command's fence, which
- * the answer to a later command may signal before this one's is reaped
+ * Sleep until `cmd` is answered or `until` of dma_fence_now's clock, the
+ * caller's next poll of the queue or its deadline. Every answer wakes
+ * vgpu_wake, so the sleep does not rest on the command's fence, which the
+ * answer to a later command may signal before this one's is reaped
  * (cmd_done); a wait on that fence would return at once and the waiter
  * would spin under the big lock, which the device's answer may need. Before
  * the device's probe has set vgpu_wake up, the fence's wait. May sleep.
  */
 static void cmd_sleep(struct virtio_gpu_cmd *cmd, int64_t until)
 {
-    uint64_t saved;
-
     if (!vgpu_wake_ready) {
         (void)dma_fence_wait_until(cmd->fence, 0, until);
         return;
     }
-    saved = current_proc->wakeup_tick;
-    current_proc->wakeup_tick = rtc_ticks_now() + VGPU_POLL_NS / 1000000 + 1;
-    (void)wq_wait_event_nointr(&vgpu_wake, cmd_answered, cmd);
-    current_proc->wakeup_tick = saved;
+    vgpu_sleep(cmd_answered, cmd, until);
 }
 
 /* What a wait for the heap's pages watches: the device, and the count of
@@ -433,29 +471,35 @@ static int unref_moved(void *arg)
  * of it until the device answers their UNREF: the shared region's heap is
  * a few MiB, and a program that frees and makes buffers faster than the
  * device answers would find it full of pages already let go, which an
- * allocator waits for and does not refuse. 0, or -ENOMEM once no UNREF is
- * in flight, or the device has died. May sleep.
+ * allocator waits for and does not refuse. The wait wakes at each answer
+ * and polls the queues every 10 ms, for a device without interrupts. 0;
+ * -ENOMEM once no UNREF is in flight; or -ENODEV when the device has died,
+ * which a reset during the wait does, freeing its queues and the
+ * transport's heap, so that the caller must not go on to use them. May
+ * sleep.
  */
 static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
     struct unref_wait w;
-    uint64_t saved;
 
     w.vg = vg;
     for (;;) {
+        if (vg->dead) {
+            return -ENODEV;
+        }
         if (virtio_backing_fill(vg->vdev, &bo->shmem.pages, bo->shmem.base.size) == 0) {
             return 0;
         }
         w.seen = vg->unrefs;
-        if (vg->dead || w.seen == 0 || !can_sleep() || !vgpu_wake_ready) {
+        if (w.seen == 0 || !can_sleep() || !vgpu_wake_ready) {
             return -ENOMEM;
         }
         vgpu_reap(vg);
+        if (vg->dead) {
+            return -ENODEV;
+        }
         if (vg->unrefs == w.seen) {
-            saved = current_proc->wakeup_tick;
-            current_proc->wakeup_tick = rtc_ticks_now() + VGPU_POLL_NS / 1000000 + 1;
-            (void)wq_wait_event_nointr(&vgpu_wake, unref_moved, &w);
-            current_proc->wakeup_tick = saved;
+            vgpu_sleep(unref_moved, &w, dma_fence_now() + VGPU_POLL_NS);
             vgpu_reap(vg);
         }
     }
@@ -776,8 +820,9 @@ static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint3
  * transport's device reaches where it has its own (`backing_fill`), runs of
  * pages adjacent in the device's addresses as one entry, and set its
  * segments; their count goes in *n. 0; -ENOMEM, -EINVAL for an imported
- * page the device cannot reach, or -E2BIG for a chain of more segments than
- * the queue takes.
+ * page the device cannot reach, -E2BIG for a chain of more segments than
+ * the queue takes, or -ENODEV when the device died while the pages were
+ * waited for. May sleep.
  */
 int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_object *bo, uint32_t *n)
 {
@@ -787,11 +832,12 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
     struct virtio_dev *vdev = cmd->vg->vdev;
     uintptr_t phys;
     uint64_t addr;
+    int32_t rc;
 
     *n = 0;
     if (!bo->shmem.base.import && pages && !shmem_resident(&bo->shmem.pages, 0) &&
-        backing_fill(cmd->vg, bo) != 0) {
-        return -ENOMEM;
+        (rc = backing_fill(cmd->vg, bo)) != 0) {
+        return rc;
     }
     for (p = 0; p < pages; p++) {
         phys = drm_gem_shmem_page(&bo->shmem, p);
@@ -833,7 +879,7 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
 
 /**
  * An ATTACH_BACKING of `bo`'s pages to its resource `res`, not yet started
- * (`vgpu_backing_entries`). NULL with *err -ENOMEM or -E2BIG.
+ * (`vgpu_backing_entries`). NULL with that function's error in *err.
  */
 static struct virtio_gpu_cmd *vgpu_attach_cmd(struct virtio_gpu_device *vg,
                                               struct virtio_gpu_object *bo, uint32_t res,
