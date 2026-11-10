@@ -933,6 +933,35 @@ static void row_sprite(void)
 
 /* ---- 78-9.5: the cursor and the backlight ---- */
 
+/** A cursor lower than it is wide, as Linux's i9xx_cursor_size_ok takes
+ * on Haswell: shown from a taller framebuffer, as IGT's probe of a size
+ * asks, refused under 8 lines, and its height in CUR_FBC_CTL; `h` is the
+ * handle of a 64-pixel square. */
+static void row_cursor_height(uint32_t h)
+{
+    static const struct place low = {0, 0, 64, 32, 0, 0, 64, 32};
+    static const struct place thin = {0, 0, 64, 4, 0, 0, 64, 4};
+    struct drm_mode_cursor c;
+    uint32_t fb = addfb(h, 64, 64, DRM_FORMAT_ARGB8888, 256, NO_MODIFIER);
+
+    CHECK(fb && plane_commit(&pa->cursor, fb, &low, DRM_MODE_ATOMIC_TEST_ONLY) == 0,
+          "cursor: 64 by 32 of a taller framebuffer taken");
+    CHECK(plane_commit(&pa->cursor, fb, &thin, DRM_MODE_ATOMIC_TEST_ONLY) == -EINVAL,
+          "cursor: under 8 lines refused");
+    CHECK(drm_mode_rmfb_ioctl(&gpu.drm, &fb, &fa) == 0, "cursor: the framebuffer removed");
+    k_memset(&c, 0, sizeof(c));
+    c.crtc_id = pa->base.base.id;
+    c.flags = DRM_MODE_CURSOR_BO;
+    c.handle = h;
+    c.width = 64;
+    c.height = 32;
+    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0 &&
+              reg(CUR_FBC_CTL(0)) == (CUR_FBC_EN | 31u) &&
+              reg(CURCNTR(0)) == MCURSOR_MODE_64_ARGB_AX,
+          "cursor: 64 by 32, its height in CUR_FBC_CTL");
+    frame();
+}
+
 /** The cursor through the legacy ioctl: its mode, a negative place in
  * sign and magnitude, and its base; a size it does not take refused. */
 static void row_cursor(void)
@@ -962,8 +991,11 @@ static void row_cursor(void)
     c.width = 32;
     c.height = 32;
     CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == -EINVAL, "cursor: 32 pixels refused");
+    row_cursor_height(h);
     c.handle = 0;
-    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0 && reg(CURCNTR(0)) == 0, "cursor: hidden");
+    CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0 && reg(CURCNTR(0)) == 0 &&
+              reg(CUR_FBC_CTL(0)) == 0,
+          "cursor: hidden");
     frame();
 }
 
