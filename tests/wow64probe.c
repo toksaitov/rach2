@@ -199,9 +199,10 @@ static const char *const assertion_id[] = {"far-call",
                                            "vector-flags",
                                            "range-sync"};
 
+static void fail(const char *why) __attribute__((noreturn));
+
 /** Print "WOW64PROBE FAIL: " and `why`, end the report at the assertion that
  * `why` fails, and exit 1. */
-static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
     say("WOW64PROBE FAIL: ");
