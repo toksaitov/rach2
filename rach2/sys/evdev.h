@@ -304,6 +304,40 @@ typedef void (*evdev_handler_t)(struct evdev *dev, uint16_t type, uint16_t code,
  */
 void evdev_set_handler(struct evdev *dev, evdev_handler_t fn);
 
+/* One entry of a device's keymap, as Linux's struct input_keymap_entry
+ * names it: the entry's place in the map, its scan code, its key code, and
+ * whether the entry is asked for by its place rather than its scan code. */
+struct evdev_keymap_entry {
+    uint32_t index;
+    uint32_t scancode;
+    uint16_t keycode;
+    int by_index;
+};
+
+/*
+ * A device's keymap, which EVIOCGKEYCODE and EVIOCSKEYCODE read and change,
+ * as a driver's getkeycode and setkeycode serve Linux's: `get` fills in the
+ * entry `ke` names, by its scan code or its place, with its place, scan
+ * code and key code; `set` gives that entry `ke->keycode`, storing the key
+ * code it had in `*old`; `maps` says whether any entry has key code `code`.
+ * Each of the first two returns 0, or -EINVAL for no such entry. They are
+ * called with the evdev lock held, so that the device cannot go meanwhile,
+ * and may neither sleep nor report.
+ */
+struct evdev_keymap {
+    int (*get)(void *ctx, struct evdev_keymap_entry *ke);
+    int (*set)(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old);
+    int (*maps)(void *ctx, uint16_t code);
+    void *ctx;
+};
+
+/**
+ * Give `dev` the keymap `km`, copied, for EVIOCGKEYCODE and EVIOCSKEYCODE;
+ * a device without one answers them -EINVAL, as Linux's input core answers
+ * for a device with no key code table. A NULL `dev` is ignored.
+ */
+void evdev_set_keymap(struct evdev *dev, const struct evdev_keymap *km);
+
 /**
  * Take `dev` away: its node goes from /dev/input, a reader of an open of it
  * is woken and gets -ENODEV, and its slot is free for another device once
