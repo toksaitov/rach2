@@ -401,7 +401,7 @@ static int32_t i2c_drain(struct drm_i915_private *i915, const struct intel_dp_au
 static int32_t i2c_xfer(struct drm_i915_private *i915, struct i2c_msg *msgs, int n)
 {
     struct intel_dp_aux_msg msg;
-    uint32_t j, transfer = DP_AUX_MAX_PAYLOAD_BYTES;
+    uint32_t j, transfer;
     int32_t err = 0;
     int i;
 
