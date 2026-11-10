@@ -16,6 +16,9 @@
  * and one valid. The rows read each region through the transport's table
  * and check that no window was mapped at a region's address.
  *
+ * The interrupt rows give every MSI-X entry a remapped message, release
+ * them before vectors, and force vector and remapper allocation failures.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -55,6 +58,10 @@ static pci_device_t fns[FUNCTIONS];
 static uint8_t windows[FUNCTIONS][0x4000] __attribute__((aligned(4096)));
 static uint64_t mapped[16];
 static int nmapped;
+static int msix_ready, msix_held, msix_enabled, vector_limit = 3;
+static int reject_entry = -1;
+static unsigned live_vectors, remapped_entries;
+static unsigned starts;
 static char log_text[2048];
 
 /** The function at device `dev` of bus 0. */
@@ -137,33 +144,61 @@ void pci_enable_memory_space(pci_device_t *dev)
     (void)dev;
 }
 
-void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data)
-{
-    (void)vector;
-    *address = *data = 0;
-}
-
+/** Expose three entries in the notification BAR's unused final page. */
 int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries)
 {
     (void)dev;
-    (void)bar;
-    (void)offset;
-    (void)entries;
-    return -1;
+    if (!msix_ready)
+        return -1;
+    *bar = 2;
+    *offset = 0x3000;
+    *entries = 3;
+    return 0;
 }
 
+/** Hold the function mask while its messages are programmed. */
 int pci_msix_hold(const pci_device_t *dev)
 {
     (void)dev;
-    return -1;
+    msix_held = msix_enabled = 1;
+    return 0;
 }
 
-int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
+/** Model the remapper, including an allocation failure at one entry. */
+int pci_msix_entry_set(const pci_device_t *dev, uintptr_t table, unsigned int index, uint8_t vector)
+{
+    uint32_t *entry = (uint32_t *)table + index * 4;
+
+    CHECK(dev->device == 0 && table == (uintptr_t)&windows[0][0x3000],
+          "MSI-X belongs to the device's table");
+    CHECK(msix_held && msix_enabled && index < 3, "program under the function mask");
+    CHECK(live_vectors & (1u << (vector - 64)), "a message has a live vector");
+    if ((int)index == reject_entry)
+        return -1;
+    CHECK(!(remapped_entries & (1u << index)), "each entry registered once");
+    remapped_entries |= 1u << index;
+    entry[0] = 0xfee00010u | (index << 5);
+    entry[1] = entry[2] = entry[3] = 0;
+    return 0;
+}
+
+/** Release every remapping before the transport frees any vector. */
+void pci_msix_disable(const pci_device_t *dev)
 {
     (void)dev;
-    (void)table;
-    (void)vector;
-    return -1;
+    msix_held = 1;
+    msix_enabled = 0;
+    remapped_entries = 0;
+}
+
+/** Require complete messages before any interrupt can be sent. */
+void pci_msix_unmask(const pci_device_t *dev)
+{
+    (void)dev;
+    CHECK(msix_held && msix_enabled && remapped_entries == live_vectors && live_vectors,
+          "all vectors remapped before interrupts start");
+    msix_held = 0;
+    starts++;
 }
 
 /** A window of a function's BAR 2 is host memory of the model's; any other
@@ -200,19 +235,31 @@ void free_kernel_frame(void *frame)
     (void)frame;
 }
 
+/** Allocate from a small vector pool to force shared-vector fallback. */
 int isr_alloc_vector(void)
 {
+    int i;
+
+    for (i = 0; i < vector_limit; i++) {
+        if (!(live_vectors & (1u << i))) {
+            live_vectors |= 1u << i;
+            return 64 + i;
+        }
+    }
     return -1;
 }
 
 void isr_free_vector(int vector)
 {
-    (void)vector;
+    CHECK(msix_held && !remapped_entries, "remappings released before vectors");
+    CHECK(vector >= 64 && vector < 67 && (live_vectors & (1u << (vector - 64))),
+          "release a live vector once");
+    live_vectors &= ~(1u << (vector - 64));
 }
 
 int isr_msi_ready(void)
 {
-    return 0;
+    return msix_ready;
 }
 
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
@@ -397,11 +444,49 @@ static void refusals(void)
     CHECK(!was_mapped(base + GIB), "no region is mapped");
 }
 
+/** Exercise queue and configuration remapping, reuse and partial rollback. */
+static void interrupts(void)
+{
+    struct virtio_dev *d;
+    unsigned i;
+    uint32_t *table = (uint32_t *)&windows[0][0x3000];
+
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0, "reuse the first function");
+    msix_ready = 1;
+    for (i = 0; i < 2; i++) {
+        CHECK(d->ops->irq_setup(d, 2) == 0, "set up two queues and configuration");
+        CHECK(remapped_entries == 7 && live_vectors == 7,
+              "configuration and both queues use remapped messages");
+        CHECK((table[0] & 0x10) && (table[4] & 0x10) && (table[8] & 0x10),
+              "every message has the remapped format");
+        d->ops->irq_start(d);
+        CHECK(!msix_held && starts == i + 1, "lift the mask only at start");
+        d->ops->irq_release(d);
+        CHECK(!remapped_entries && !live_vectors && !msix_enabled,
+              "teardown returns messages and vectors");
+    }
+    vector_limit = 2;
+    CHECK(d->ops->irq_setup(d, 2) == 0, "share a vector after a partial allocation");
+    CHECK(remapped_entries == 3 && live_vectors == 3,
+          "shared queues retain two complete remappings");
+    d->ops->irq_start(d);
+    d->ops->irq_release(d);
+    CHECK(!remapped_entries && !live_vectors, "shared teardown returns resources");
+    vector_limit = 3;
+    reject_entry = 1;
+    CHECK(d->ops->irq_setup(d, 2) == 0, "fall back when the remapper is full");
+    CHECK(!remapped_entries && !live_vectors && !msix_enabled,
+          "failed dedicated and shared setups leave no resources");
+    d->ops->irq_release(d);
+    reject_entry = -1;
+}
+
 /** Run the rows. */
 int main(void)
 {
     qemu_layout();
     refusals();
+    interrupts();
     printf("virtio-pci-shm-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }

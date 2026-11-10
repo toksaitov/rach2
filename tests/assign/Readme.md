@@ -26,7 +26,7 @@ The outer QEMU needs `qemu-vtd-cfi.patch`. QEMU 10.2.1 does not acknowledge GCMD
 
 ### The outer emulator
 
-Use the official [QEMU 10.2.1 archive](https://download.qemu.org/qemu-10.2.1.tar.xz), SHA-256 `a3717477d8e2c84d630bfffbc20f6cd3293eb45aa1e6dac6d0cc27689991c9e1`. Keep it and its extracted source under `build/cache/qemu`, apply `patch -p1 < tests/assign/qemu-vtd-cfi.patch` in the extracted source, and configure in a separate `build/cache/qemu/out` directory. Through the testing host's installed build admission, run:
+Use the official [QEMU 10.2.1 archive](https://download.qemu.org/qemu-10.2.1.tar.xz), SHA-256 `a3717477d8e2c84d630bfffbc20f6cd3293eb45aa1e6dac6d0cc27689991c9e1`. Keep it and its extracted source under `build/cache/qemu`, apply `patch -p1 -d build/cache/qemu/qemu-10.2.1 < tests/assign/qemu-vtd-cfi.patch` from the repository root, and configure in a separate `build/cache/qemu/out` directory. Through the testing host's installed build admission, run:
 
 ```sh
 ../qemu-10.2.1/configure --target-list=x86_64-softmmu \
