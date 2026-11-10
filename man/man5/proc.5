@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -1894,6 +1894,66 @@ for another.
 BusyBox's
 .Xr pmap 1
 and smemcap read it.
+.It Pa /proc/PID/numa_maps
+A line for each region, as Linux writes it on a machine of one memory
+node: the region's start in hexadecimal; the memory policy that governs
+it; what it maps, which is
+.Ql file=
+and the path
+.Pa maps
+gives it, with a space written as
+.Ql \e040 ,
+or
+.Ql heap
+or
+.Ql stack ,
+or nothing for anonymous memory; and, for a region with pages of memory,
+their counts:
+.Ql anon=
+the anonymous ones,
+.Ql dirty=
+those written,
+.Ql mapped=
+all of them when they are neither all anonymous nor all written,
+.Ql N0=
+those on node 0, which is all of them, and
+.Ql kernelpagesize_kB=4 .
+The policy is the one
+.Xr mbind 2
+gave the region's first page, written as Linux names it:
+.Ql default ,
+.Ql prefer ,
+.Ql bind ,
+.Ql interleave ,
+.Ql local ,
+.Ql prefer (many)
+or
+.Ql weighted interleave ,
+then
+.Ql =static ,
+.Ql =relative
+or
+.Ql =balancing
+for a mode flag, and
+.Ql :0
+for a policy with nodes.
+A region
+.Xr mbind 2
+gave no policy shows the policy
+.Xr set_mempolicy 2
+gave the thread read.
+A page that was only read is Linux's zero page and is not counted, nor is
+device memory.
+Linux's
+.Ql mapmax=
+and
+.Ql active=
+are not written, since the kernel counts no mappings of a page and keeps
+no active list.
+The file needs what
+.Pa maps
+needs.
+numastat reads it.
 .It Pa /proc/PID/status
 Lines of a name, a colon, a tab and a value:
 Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,

@@ -268,8 +268,10 @@ static void shared_set(struct shmem *sh, uint32_t start, uint32_t end, const str
  * own policy is `pol` already is passed over; any other is split at the
  * range's ends and takes it (`vm_set_policy`), and the pages of a file in
  * memory that the part maps take it too (`shared_set`), which is the
- * policy get_mempolicy reads for them. Gaps are passed. 0, or -ENOMEM when
- * a split or a record has no room, with the regions before changed.
+ * policy get_mempolicy reads for them. Gaps are passed. The walk goes by
+ * address and not by region, since a part that takes the policy may join
+ * the region after the range. 0, or -ENOMEM when a split or a record has no
+ * room, with the regions before changed.
  */
 static int range_bind(struct mm *mm, uintptr_t start, uintptr_t end, struct vm_policy *pol)
 {
@@ -278,7 +280,7 @@ static int range_bind(struct mm *mm, uintptr_t start, uintptr_t end, struct vm_p
     const vma_t *r;
     int rc = 0;
 
-    while (rc == 0 && (r = vm_lower(&mm->vm, at)) != NULL && r->start < end) {
+    while (rc == 0 && at < end && (r = vm_lower(&mm->vm, at)) != NULL && r->start < end) {
         uintptr_t s = r->start > at ? r->start : at;
         uintptr_t e = r->end < end ? r->end : end;
         struct shmem *sh = filemap_in_memory(r->file) ? filemap_shmem(r->file) : NULL;
@@ -463,7 +465,7 @@ long sys_set_mempolicy_home_node(isr_params_t *params)
     if (end == start) {
         return 0;
     }
-    while (mm && (r = vm_lower(&mm->vm, at)) != NULL && r->start < end) {
+    while (mm && at < end && (r = vm_lower(&mm->vm, at)) != NULL && r->start < end) {
         uintptr_t s = r->start > at ? r->start : at;
         struct vm_policy *pol;
 

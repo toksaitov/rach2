@@ -519,6 +519,7 @@ static int synth_pid_file(struct comp name, int task)
                  {"cmdline", SYNTH_PROC_CMDLINE},
                  {"maps", SYNTH_PROC_MAPS},
                  {"smaps", SYNTH_PROC_SMAPS},
+                 {"numa_maps", SYNTH_PROC_NUMA_MAPS},
                  {"status", SYNTH_PROC_STATUS},
                  {"statm", SYNTH_PROC_STATM},
                  {"auxv", SYNTH_PROC_AUXV},

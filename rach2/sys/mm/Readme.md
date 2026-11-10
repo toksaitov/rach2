@@ -29,6 +29,17 @@ The calls that change a process's regions are in `sys/syscall_proc.c`. [brk(2)](
 * [fork(2)](../../../man/man2/fork.2) and [execve(2)](../../../man/man2/execve.2) make and replace address spaces, [ptrace(2)](../../../man/man2/ptrace.2) and `/proc/PID/mem` reach another process's pages, `shmat` and `shmdt` map System V segments ([the IPC Readme](../ipc/Readme.md)), and [prctl(2)](../../../man/man2/prctl.2) sets the dumpable flag an address space keeps.
 * `/proc/meminfo`, `/proc/slabinfo` and `/proc/PID/maps` report what this code counts ([proc(5)](../../../man/man5/proc.5)); `/dev/mem` maps device memory, the first object to map itself through its `mmap` operation ([mem(4)](../../../man/man4/mem.4)); `/dev/framefail` fails a frame allocation on purpose ([bootlog(4)](../../../man/man4/bootlog.4)). [memory(7)](../../../man/man7/memory.7) gives the boot's memory report as a user reads it, and [cmdline.md](../../cmdline.md) the boot-line switches `rach2.framefail`, `rach2.framehigh`, `rach2.fswindow` and `rach2.fsdisk`.
 
+The NUMA memory policy calls are in `mempolicy.c`, and answer as Linux 6.12 does on a machine of one memory node. [set_mempolicy(2)](../../../man/man2/set_mempolicy.2), [mbind(2)](../../../man/man2/mbind.2), [get_mempolicy(2)](../../../man/man2/get_mempolicy.2) and [move_pages(2)](../../../man/man2/move_pages.2) give their contracts, and `/proc/PID/numa_maps` shows each region's policy.
+
+| Call | i686 | x86-64 |
+| --- | --- | --- |
+| `mbind` | 274 | 237 |
+| `get_mempolicy` | 275 | 239 |
+| `set_mempolicy` | 276 | 238 |
+| `migrate_pages` | 294 | 256 |
+| `move_pages` | 317 | 279 |
+| `set_mempolicy_home_node` | 450 | 450 |
+
 ### The kernel's layout
 
 Each architecture's `cpu.h` defines the regions:
@@ -202,6 +213,16 @@ A new frame is filled or zeroed before it is mapped, since a thread on another p
 
 `brk`, `munmap` and `mremap` change the regions first and the page tables after, and `madvise` drops pages and leaves the regions, or marks them for fork (`vm_advise`); a page never touched has no frame to drop. `mremap` makes every table the new range needs before it moves the entries (`paging_move_range`). `mprotect` changes the regions before the resident pages, so a fault in between reads the protection being set. Each of these calls, and `shmdt`, a `MAP_FIXED` mapping over a range and a `madvise` that drops pages, tells the ranges registered on what it changed ([the change notice](#the-change-notice)).
 
+### Memory policy
+
+The machine has one memory node, node 0, so no allocation reads a policy: `mempolicy.c` checks each policy as Linux does, keeps it, and reports it. A policy, `struct vm_policy` (`vm.h`), is a mode, its mode flags, a home node and, when it has a flag, the node mask its caller gave. It does not change once made and is shared by reference. A thread holds the one `set_mempolicy` gave it (`process_t.mempolicy`): `fork_ids` gives a child and a new thread the caller's, an exec keeps it, and `mm_drop` puts it when the thread ends. A region holds the one `mbind` gave it (`vma_t.policy`): `vm_set_policy` splits the region at the range's ends, `vm_merge` joins neighbours only when their policies are equal, and a split, a fork's copy, `mremap`'s move and a stack's growth carry it (`vm_insert_like`).
+
+A file in memory, which is a tmpfs or memfd file, shared anonymous memory or a System V segment, keeps the policy of its pages itself, as Linux's shared policy of a shmem inode: a list of page ranges in `struct shmem`, which `mbind` changes through any mapping, `mempolicy_at` reads for every mapping in every process, and `shmem_free` frees with the file.
+
+Linux maps one shared zero page where an anonymous page is first read, and its policy calls tell that page from a page of memory: `mbind` under `MPOL_MF_STRICT` does not count it, `move_pages` answers `-EFAULT` for it, and `numa_maps` leaves it out. Rach2 gives such a read a frame of its own and marks the entry `PTE_ZEROFILL`, a software bit. The page stands for Linux's zero page until the processor sets the entry's dirty bit or the kernel stores into the frame (`cow_fault`, `page_private`, a pin), and a fork passes the mark to the child's entry. `paging_user_page` and `paging_user_frames` read it for the policy calls and for `numa_maps`.
+
+`migrate_pages` and `move_pages` find every page on the node it would go to, so they check their arguments and the caller's right to inspect the process, as `ptrace` would for a read, and move nothing. `move_pages` reads a 32-bit program's addresses as 32-bit pointers at every index; Linux 6.12 misreads them past the first 16 when no nodes are given, a fault [the index of upstream faults](../../../dev-log/upstream.md) records.
+
 ### Locked memory and pins
 
 A region locked by `mlock`, `mlock2`, `mlockall` or `MAP_LOCKED` has `VM_PROT_LOCKED` in its protection, and with `MLOCK_ONFAULT` or `MCL_ONFAULT` also `VM_PROT_LOCKONFAULT`; `vm_lock` splits and merges the regions as `mprotect` does, and passes over device memory. There is no swap, so a lock only brings the pages in (`vm_populate`), unless it is on fault, and counts them: VmLck is the bytes of the locked regions (`vm_locked`). `mlockall(MCL_FUTURE)` keeps the lock bits in the address space's `def_prot`, which `mmap` and `brk` give each new region. A fork's copy has no lock and no `def_prot`, as Linux's has no `VM_LOCKED` and no `def_flags`, and `MADV_DONTNEED` and `MADV_FREE` over a locked region fail with EINVAL.
@@ -260,6 +281,7 @@ The cache has `PC_SLOTS`, 4096 slots, and uses as many as half the caches' targe
 * A process has at most 65536 regions, unless `vm.max_map_count` is raised.
 * A KRFFS disk root is at most 512 MiB, less on i686 where a BAR shortens the window, and the disk page cache keeps at most 4096 pages.
 * The MMIO region is 128 MiB, of which one window may take the longest free run, 127.8 MiB under QEMU; i686 maps it in 4 KiB pages and only below 4 GiB. The modules together have 64 MiB and must lie below 4 GiB, and i686 has 1024 temporary mappings.
+* The machine is one memory node. A node mask may name 1024 nodes, as on Debian's kernel, on both architectures; `numa_maps` has no `mapmax=` and no `active=`, since the kernel counts no mappings of a page and keeps no active list; and `mbind`'s move flags count as unmovable only a page pinned for a device.
 * i686 does not randomize addresses, and x86-64 places the first program, which the kernel loads itself, at fixed addresses.
 
 ## Tests
@@ -267,6 +289,7 @@ The cache has `PC_SLOTS`, 4096 slots, and uses as many as half the caches' targe
 `tests/run NAME` runs a suite on the architecture in `ARCH`, i686 by default, and `ARCH=x86_64 tests/run NAME` on x86-64 ([the suite inventory](../../../tests/system/suites.md)). `default`, `fault`, `memory`, `pools` and `ext2` are in the core tier, which `make test` runs.
 
 * `tests/run default` runs the guest probes ([the tests' Readme](../../../tests/Readme.md)): `vmprobe` (the heap, anonymous memory, a mapping below the heap once the room above it is taken, and stack growth), `forkro` and `cowregrant` (copy-on-write, and the frames of 200 forks that come back), `oomprobe` (the `SIGKILL` of a process out of memory), `usercopyfault` (EFAULT for a path that runs into an unmapped page), `musl/vmamusl` (300 mappings at once), `mmapdevprobe` (mappings of `/dev/mem`, their refusals, fork, `MADV_DONTFORK`, advice, `mremap` and `munmap`), `musl/mapmusl` (mappings of files and of shared memory, `mprotect`, `mremap`, `madvise`, `msync`, `/proc/self/mem`, and the program's own segments, which read its file again after `madvise`, in a copy of it whose file was renamed and unlinked as well) and `musl/callsmusl` (the `mlock` calls with VmLck read after each, `RLIMIT_MEMLOCK`'s ENOMEM and EPERM, `MCL_FUTURE`, and `mincore`).
+* `numaprobe`, also of `tests/run default`, sets and reads back each memory policy of a thread and of a range, follows a range's policy through a split, a join, a fork and a second mapping of shared memory, and asks `move_pages` and `migrate_pages` about its own pages and another process's; its rows are what the same program prints on Linux 6.12 with one node, on both kernels and as a 32-bit program on x86-64.
 * `tests/run fault` runs `vmfault` and `winprobe`, which touch no mapping and the page-cache window, each in a boot of its own, and each must die on `SIGSEGV` with the kernel's record of the kill and the machine running.
 * `tests/run memory` requires the recovery kernel at 8 MiB to print `memory: refused` and not fault, checks the report's four numbers at 64 MiB, 3 GiB and 4 GiB against the map and the size, runs `memprobe` at 64 MiB, inside the window, and at 4 GiB, mostly past it, fails frame allocations through fork and exec under `rach2.framefail`, and runs kernel stacks out.
 * `tests/run bigmem`, on x86-64 alone, requires all of a machine's 8 GiB to be counted, none of it unreachable, with MemTotal the frames the kernel manages, and a program's 5 GiB of pages to read back as written, and on a processor without 1 GiB pages a machine of 72 GiB to be counted to the direct map's 64 GiB; that machine boots only on Linux and macOS hosts, since QEMU on Windows commits its whole 72 GiB, and only where the site permits the lazy memory profile that reserves 4 GiB for it.
