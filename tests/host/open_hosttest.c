@@ -1296,6 +1296,40 @@ int sysfs_device_exists(int node, int key)
     (void)key;
     return 0;
 }
+/** No row names a device: -ENOENT. */
+int devfs_owner(const char *name, uint32_t *uid, uint32_t *gid)
+{
+    (void)name;
+    (void)uid;
+    (void)gid;
+    return -ENOENT;
+}
+
+/** No row changes a device: -ENOENT. */
+int32_t devfs_setattr(const char *name, uint32_t mode, uint32_t uid, uint32_t gid)
+{
+    (void)name;
+    (void)mode;
+    (void)uid;
+    (void)gid;
+    return -ENOENT;
+}
+
+/** The name of a device descriptor, which no row has: the empty name. */
+const char *devfs_fd_name(struct fd_entry *e)
+{
+    (void)e;
+    return "";
+}
+
+/** The owner of a device descriptor, which no row has: root. */
+void devfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+{
+    (void)e;
+    *uid = 0;
+    *gid = 0;
+}
+
 /** Every mount's id is 1, as the first slot's. */
 uint32_t procfs_mount_id(const struct vfs_mount *m)
 {
@@ -2505,7 +2539,7 @@ static void attrs_after_move(void)
         mount.type = &locked_type;
         attr_row = 1;
         waiting = write_moves;
-        check((round == 0 ? do_chmod("f", 0600, 0) : do_chown("f", 5, (uint32_t)-1, 1, 0)) == 0,
+        check((round == 0 ? do_chmod("f", 0600, 0, 1) : do_chown("f", 5, (uint32_t)-1, 1, 0)) == 0,
               "a chmod or chown of a file a write moves");
         check(attrs == 1 && ns_depth == 0 && !waiting,
               "the change is made once, with the mount's lock given back");
