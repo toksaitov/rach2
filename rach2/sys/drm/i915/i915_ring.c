@@ -279,6 +279,11 @@ int32_t i915_gt_init(struct drm_i915_private *i915)
         i915_gt_fini(i915);
         return err;
     }
+    err = i915_ppgtt_init(i915);
+    if (err < 0) {
+        i915_gt_fini(i915);
+        return err;
+    }
     if (i915_forcewake_get(i915) < 0) {
         i915_gt_fini(i915);
         return -EIO;
@@ -325,6 +330,7 @@ void i915_gt_fini(struct drm_i915_private *i915)
         i915_gt_pages_unmap(i915, e->hws, 1, e->hws_ggtt);
         e->hws = 0;
     }
+    i915_ppgtt_fini(i915);
     if (fw) {
         i915_forcewake_put(i915);
     }

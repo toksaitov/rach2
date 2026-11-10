@@ -731,8 +731,9 @@ static void on_delay(struct i915_model *m)
  * video enhancement engines, whose rings the driver does not start; and
  * the swizzle of tiles, in the display's arbiter, the GT's tile control
  * and ARB_MODE, as Linux's intel_gt_init_swizzling sets it on the
- * Lenovo, whose firmware's surface is linear. The fence registers, which
- * the bind clears, are `write_ok`'s. */
+ * Lenovo, whose firmware's surface is linear; and the PPGTT's caching, as
+ * Linux's gen7_ppgtt_enable sets it. The fence registers, which the bind
+ * clears, are `write_ok`'s. */
 static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      GEN6_PCODE_DATA,
                                      GEN6_PCODE_DATA1,
@@ -783,7 +784,9 @@ static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      HSW_PWR_WELL_CTL2,
                                      DISP_ARB_CTL,
                                      TILECTL,
-                                     ARB_MODE};
+                                     ARB_MODE,
+                                     GAM_ECOCHK,
+                                     GAC_ECO_BITS};
 
 /** Whether `reg`, written, belongs to what the bind may write: the GT's
  * forcewake, the fence registers, the render and blitter rings and their

@@ -259,8 +259,10 @@ void i915_vma_update_fenceable(struct i915_vma *vma)
     vma->mappable = (uint8_t)vma_fenceable(i915, vma);
 }
 
-/** Write the GTT's entries of `vma`'s view at the object's cache level:
- * 0, or `i915_ggtt_insert`'s error. */
+/** Write the entries of `vma`'s view at the object's cache level in the
+ * global GTT and, at the same offset, in the aliasing PPGTT, which every
+ * context's batches see, as Linux's aliasing_gtt_bind_vma: 0, or
+ * `i915_ggtt_insert`'s or `i915_ppgtt_insert`'s error. */
 static int32_t vma_bind(struct drm_i915_private *i915, struct i915_vma *vma)
 {
     struct drm_i915_gem_object *obj = vma->obj;
@@ -270,16 +272,23 @@ static int32_t vma_bind(struct drm_i915_private *i915, struct i915_vma *vma)
 
     while (done < n) {
         uint32_t k = n - done < I915_BIND_CHUNK ? n - done : I915_BIND_CHUNK, i;
+        uint64_t at = vma->start + ((uint64_t)done << PAGE_SHIFT);
 
         for (i = 0; i < k; i++) {
             chunk[i] = obj->frames[vma->view_offset + done + i];
         }
-        err = i915_ggtt_insert(i915, vma->start + ((uint64_t)done << PAGE_SHIFT), chunk, k,
-                               obj->cache_level);
+        err = i915_ggtt_insert(i915, at, chunk, k, obj->cache_level);
+        if (err == 0) {
+            err = i915_ppgtt_insert(i915, at, chunk, k, obj->cache_level);
+            if (err != 0) {
+                (void)i915_ggtt_clear_range(i915, at, (uint64_t)k << PAGE_SHIFT);
+            }
+        }
         if (err != 0) {
             /* A failed insert writes nothing; the chunks before it go. */
             if (done) {
                 (void)i915_ggtt_clear_range(i915, vma->start, (uint64_t)done << PAGE_SHIFT);
+                i915_ppgtt_clear_range(i915, vma->start, (uint64_t)done << PAGE_SHIFT);
             }
             return err;
         }
@@ -564,6 +573,7 @@ int32_t i915_vma_unbind(struct i915_vma *vma)
     i915_vma_flush_writes(vma);
     i915_vma_revoke_fence(vma);
     (void)i915_ggtt_clear_range(i915, vma->start, vma->node_size);
+    i915_ppgtt_clear_range(i915, vma->start, vma->node_size);
     i915_gem_object_unpin_pages(obj);
     ggtt_unlink(i915, vma);
     lru_unlink(i915, vma);

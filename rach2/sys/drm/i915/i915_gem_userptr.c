@@ -59,6 +59,7 @@ static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, 
         next = v->obj_next;
         if (v->pin_count) {
             (void)i915_ggtt_clear_range(i915, v->start, v->node_size);
+            i915_ppgtt_clear_range(i915, v->start, v->node_size);
         } else {
             (void)i915_vma_unbind(v);
         }

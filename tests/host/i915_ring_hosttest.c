@@ -132,6 +132,10 @@ static struct {
     uint64_t phys;
 } pages[TEST_PAGES];
 static int npages, pages_live, pages_refuse;
+
+/* The pages the started GT holds: each ring's four and its status page,
+ * and the PPGTT's scratch table. */
+#define TEST_GT_PAGES 11
 static uint64_t next_phys = 0x50000000ull;
 
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
@@ -483,9 +487,12 @@ static void row_start(void)
     CHECK("start: the blitter's", i915->gt.engine[I915_BCS0].mmio_base == BLT_RING_BASE &&
                                       i915->gt.engine[I915_BCS0].hws_pga == BLT_HWS_PGA_GEN7 &&
                                       i915->gt.engine[I915_BCS0].irq_bit == GT_BLT_USER_INTERRUPT);
-    CHECK("start: four objects in 40 KiB below the GTT's top",
+    CHECK("start: four objects in 40 KiB below the GTT's top, the PPGTT's directory below them",
           i915->gt.ggtt_top == i915->ggtt.total &&
-              i915->gt.ggtt_bottom == i915->ggtt.total - 2u * (4096u + I915_RING_SIZE));
+              i915->gt.ppgtt.pd_ggtt ==
+                  ((i915->ggtt.total - 2u * (4096u + I915_RING_SIZE) - I915_PPGTT_PD_BYTES) &
+                   ~(uint64_t)(I915_PPGTT_PD_ALIGN - 1u)) &&
+              i915->gt.ggtt_bottom == i915->gt.ppgtt.pd_ggtt);
     wake = at(&m, FORCEWAKE_MT, 0x00010001u);
     release = last_write(&m, FORCEWAKE_MT);
     first = at(&m, RING_MI_MODE(RENDER_RING_BASE), I915_MASKED_ENABLE(STOP_RING));
@@ -967,8 +974,9 @@ static void row_firstlight(void)
           logged("first light: ok: rcs0 wrote 0x1915f157") && logged("user interrupt latched"));
     CHECK("light: the page given back, its entry on the scratch page",
           i915->gt.ggtt_bottom == bottom &&
-              i915_ggtt_pte(i915, bottom - 4096u) == i915->ggtt.scratch_pte && pages_live == 10 &&
-              rcs->irq_refs == 0 && i915_model_peek(&m, GTIMR) == 0xffffffffu);
+              i915_ggtt_pte(i915, bottom - 4096u) == i915->ggtt.scratch_pte &&
+              pages_live == TEST_GT_PAGES && rcs->irq_refs == 0 &&
+              i915_model_peek(&m, GTIMR) == 0xffffffffu);
 
     /* The processor's interrupts on: the message the first raised is
      * taken, then first light again. */
@@ -987,7 +995,7 @@ static void row_firstlight(void)
                                 strcmp(i915->hw.last_timeout, "first light breadcrumb") == 0);
     i915_model_ring_state(&m, 0)->stuck = 0;
     i915_delay_us(&i915->hw, 1);
-    CHECK("light: the page back after a failure too", pages_live == 10);
+    CHECK("light: the page back after a failure too", pages_live == TEST_GT_PAGES);
     CHECK("light: the late write went to the scratch page",
           scratch_page[0] == 0x1915f157u && !i915_model_ring_state(&m, 0)->faulted);
 
