@@ -67,10 +67,11 @@
  * over it ends it. */
 #define VM_PROT_GUARD       0x800u
 /* Kept the same way: the region is sealed, as mseal makes it and Linux's
- * VM_SEALED: munmap, mremap, mprotect, a mapping over it, a brk or shmdt
- * that would remove it, and the madvise kinds that discard the pages of
- * anonymous memory it may not write fail with EPERM. Nothing takes the
- * seal away; a fork's child keeps it, and exec and exit end the region. */
+ * VM_SEALED: munmap, mremap, mprotect, a mapping over it, and the madvise
+ * kinds that discard pages of anonymous memory it may not write fail
+ * with EPERM. A brk that would remove it keeps the break; shmdt returns 0
+ * and leaves sealed regions mapped. Nothing takes the seal away; a fork's
+ * child keeps it, and exec and exit end the region. */
 #define VM_PROT_SEALED      0x1000u
 /* Kept the same way: the region maps a file of memfd_secret, whose pages
  * only the mappings of the file reach. It is never executable, so mprotect

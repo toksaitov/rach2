@@ -456,7 +456,7 @@
         {"assertion_id": "wake-op-wake", "checks": "FUTEX_WAKE_OP wakes the second word's waiter when its comparison holds, and not when it fails", "source": "program"},
         {"assertion_id": "einval", "checks": "sizes of 8, 16 and 64 bits, FUTEX2_NUMA, flag 0x100, a mask of 0, a value or mask past 32 bits on x86-64, a futex_requeue entry's value past 32 bits or reserved word, futex_requeue's flags, NULL array or negative counts, a FUTEX_CMP_REQUEUE count of -1, an unaligned word, a deadline of 1000000000 ns or -1 s and clock 2 each fail with EINVAL", "source": "program"},
         {"assertion_id": "efault", "checks": "a word in an unmapped page, a deadline or array at address 8, futex_requeue of an unmapped word and FUTEX_WAKE_OP on an unmapped word each fail with EFAULT", "source": "program"},
-        {"assertion_id": "zero", "checks": "a futex_wake of 0 returns 0", "source": "program"}
+        {"assertion_id": "zero", "checks": "a futex_wake of 0 returns 0 with a futex_wait waiter proved asleep by a requeue, and leaves it for a wake of 1", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -1535,7 +1535,7 @@
     },
     {
       "case_id": "guest.default.fsidprobe",
-      "behavior": "setfsuid and setfsgid set the file-system ids that a new file's owner, an open's permission check and the status file's fourth columns go by, take the file-system capabilities from the effective set while the user id is not 0, are kept by setresuid and setresgid that change no id, and are reset by setuid and setgid.",
+      "behavior": "setfsuid and setfsgid set the file-system ids that a new file's owner, an open's permission check and the status file's fourth columns go by, take the file-system capabilities from the effective set while the file-system user id is not 0, are kept by setresuid and setresgid that change no id, and are reset by setuid and setgid.",
       "units": ["default", "fsidprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],

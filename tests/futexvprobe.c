@@ -113,7 +113,8 @@ static void fail(const char *why)
     say(why);
     say("\n");
     report_stop(why);
-    sys_exit(1);
+    syscall1(SYS_EXIT_GROUP, 1);
+    __builtin_unreachable();
 }
 
 /**

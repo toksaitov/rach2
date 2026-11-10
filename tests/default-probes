@@ -184,6 +184,7 @@ musl/tmpfsmusl
 musl/mknodmusl
 # memfd_create, its descriptor and name, and each seal.
 musl/memfdmusl
+# Memory seals, remote advice and release, cache counts and secret memory.
 musl/memcallmusl
 # Memory protection keys: the three calls, PKRU through faults, signals,
 # fork, exec and ptrace, and the execute-only key, as Linux 6.12 gives them.
