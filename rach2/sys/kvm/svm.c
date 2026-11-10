@@ -2486,12 +2486,10 @@ static void svm_inject(struct kvm_vcpu *v)
     v->dirty |= KVM_PART_EVENTS;
 }
 
-/** The capabilities whose truth is the processor's: none beyond those
- * the other files answer. */
+/** Single stepping and event injection are handled by the backend. */
 static int32_t svm_check_extension(long cap)
 {
-    (void)cap;
-    return 0;
+    return cap == KVM_CAP_X86_ROBUST_SINGLESTEP ? 1 : 0;
 }
 
 /** The backend's share of a new VM: the host save areas of the processors
