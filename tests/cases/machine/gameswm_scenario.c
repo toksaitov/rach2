@@ -9,18 +9,6 @@
 
 #include "netcase.h"
 
-/* The output the row sets, and the points of the screen whose colours show
- * a window at its origin drawing its left half red and its right half
- * green across the whole output, scaled or not: each half's corners and the
- * two sides of the middle. */
-#define SCREEN_W 1366
-#define SCREEN_H 768
-static const struct {
-    int x, y, red;
-} points[] = {
-    {8, 8, 1}, {8, 759, 1}, {670, 384, 1}, {696, 384, 0}, {1357, 8, 0}, {1357, 759, 0},
-};
-
 /** Boot machine `gnu` into `b`, log in as root, open the guest command
  * channel and mount the payload's disk, as step `boot`. */
 static void booted(struct net_case *u, struct net_boot *b)
@@ -72,58 +60,10 @@ static void move(struct net_case *u, struct net_boot *b, int dx, int dy)
 }
 
 /**
- * Dump the screen into evidence `name` and report assertion `name`: a
- * SCREEN_W by SCREEN_H binary PPM whose sample points are red on the left
- * half and green on the right.
- */
-static void screen(struct net_case *u, struct net_boot *b, const char *name)
-{
-    char path[4096], args[4200], magic[3] = "";
-    unsigned long w = 0, h = 0;
-    unsigned max = 0, i, bad = 0;
-    unsigned char px[3];
-    char *reply = NULL;
-    FILE *f;
-
-    if (net_path(u, name, path, sizeof(path)) == NULL)
-        return;
-    snprintf(args, sizeof(args), "{\"filename\": \"%s\"}", path);
-    if (net_ok(u) && etude_qmp(b->m, "screendump", args, &reply) != ETUDE_OK)
-        net_fail(u, "QMP's screendump was not taken: %s", reply != NULL ? reply : "");
-    free(reply);
-    if (!net_ok(u))
-        return;
-    f = fopen(path, "rb");
-    if (f == NULL || fscanf(f, "%2s %lu %lu %u", magic, &w, &h, &max) != 4 ||
-        strcmp(magic, "P6") != 0 || max != 255 || fgetc(f) == EOF) {
-        net_assert(u, name, 0, "%s is no binary PPM", name);
-        if (f != NULL)
-            fclose(f);
-        return;
-    }
-    long data = ftell(f);
-    for (i = 0; w == SCREEN_W && h == SCREEN_H && i < sizeof(points) / sizeof(points[0]); i++) {
-        if (fseek(f, data + ((long)points[i].y * (long)w + points[i].x) * 3, SEEK_SET) != 0 ||
-            fread(px, 1, 3, f) != 3) {
-            bad++;
-            continue;
-        }
-        if (points[i].red ? !(px[0] > 200 && px[1] < 60 && px[2] < 60)
-                          : !(px[0] < 60 && px[1] > 200 && px[2] < 60)) {
-            printf("gameswm: %s: %d,%d is %d %d %d\n", name, points[i].x, points[i].y, px[0], px[1],
-                   px[2]);
-            bad++;
-        }
-    }
-    fclose(f);
-    net_assert(u, name, w == SCREEN_W && h == SCREEN_H && bad == 0,
-               "%s: %lux%lu, %u points off the left-red, right-green halves", name, w, h, bad);
-}
-
-/**
  * Run wm.py's ROW through the guest channel and act on each of its ready
- * lines in turn: dump the screen while a window is held, move the pointer
- * while xplace counts raw motion, and press Escape to end the window.
+ * lines in turn: move the pointer while xplace counts raw motion, and press
+ * Escape to end the window. wm.py checks the screen itself, since QEMU's
+ * screendump has no surface while virgl scans out a GL resource.
  */
 static void row(struct net_case *u, struct net_boot *b, const char *row)
 {
@@ -151,8 +91,6 @@ static void row(struct net_case *u, struct net_boot *b, const char *row)
             net_fail(u, "wm.py never printed \"%s\"", ready);
             break;
         }
-        snprintf(token, sizeof(token), "screen-%s", *readies);
-        screen(u, b, token);
         if (strcmp(*readies, "xplace-1366") == 0) {
             /* wm.py's MOTION: -2000 on x, which pushes the pointer to the
              * window's left edge, and +200 on y. */
