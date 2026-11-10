@@ -89,3 +89,14 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: nothing to work around; the driver and the test follow Linux's code.
 * Status: unreported.
 * Next: check master's `alps.rst`, which was not read, then send a documentation patch that corrects the count, the version 6 layout, the APD 2 title and the BY6 bit.
+
+## Linux divides by zero for a version 5 ALPS pad of one Y electrode
+
+* Project: Linux 6.12, `drivers/input/mouse/alps.c` at the tag `v6.12` (SHA-256 f7e52165edc72a9cb5af764eca26af78cf494a33ce4f1825f9de96b3ec234294).
+* Fails: `alps_dolphin_get_device_area` takes the pad's Y electrodes as 1 plus the high nibble of its register's third byte (`alps.c:2641`) and stores them in `priv->y_bits` without a check (`alps.c:2643`). A nibble of 0 gives `y_bits` 1, and `alps_process_bitmap` then divides by `2 * (priv->y_bits - 1)`, which is 0 (`alps.c:435`, `443`, `451` and `459`), in the interrupt handler, on the first two-finger packet with both bitmaps set. The answer must come from a faulty or unusual pad.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by the review of the graphics stack at 9671f1c18, which found the same arithmetic in Rach2's port; task 3394 read Linux's code to confirm it.
+* Reproduction: not run. A version 5 pad, E7 report 73 03 50, whose register 0x0033 reads with a high nibble of 0, then a two-finger touch.
+* Evidence: the row "a version 5 pad of one Y electrode is not driven as ALPS" of `tests/host/alps_hosttest.c`, which feeds the register 0x0f.
+* Rach2: `rach2/sys/arch/x86/alps.c`'s `dolphin_get_device_area` refuses a pad of fewer than two Y electrodes, in task 3394's commit.
+* Status: unreported.
+* Next: check master's `alps.c`, which was not read, then send a patch that has `alps_dolphin_get_device_area` return an error for fewer than two electrodes on either axis.

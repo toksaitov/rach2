@@ -1535,6 +1535,18 @@ int alps_packet_start(void)
     return pktcnt == 0;
 }
 
+void alps_packet_restart(void)
+{
+    pktcnt = 0;
+    out_of_sync = 0;
+    flush_armed = 0;
+}
+
+int alps_reset_after(void)
+{
+    return 2 * pktsize;
+}
+
 /* Command mode. */
 
 /** Send nibble `n` of the version's table, Linux's
@@ -2140,7 +2152,8 @@ static int set_defaults_ss4_v2(void)
 }
 
 /** A version 5 pad's electrodes, and so its size, from its register,
- * Linux's `alps_dolphin_get_device_area`. */
+ * Linux's `alps_dolphin_get_device_area`. Returns -1 for a pad of fewer
+ * than two Y electrodes, whose bitmaps have no place to divide. */
 static int dolphin_get_device_area(void)
 {
     uint8_t param[4];
@@ -2161,6 +2174,10 @@ static int dolphin_get_device_area(void)
     }
     num_x = DOLPHIN_PROFILE_XOFFSET + (param[2] & 0x0F);
     num_y = DOLPHIN_PROFILE_YOFFSET + ((param[2] >> 4) & 0x0F);
+    if (num_y < 2) { /* bitmap_place divides by num_y - 1; Linux does not check */
+        exit_command_mode();
+        return -1;
+    }
     priv.x_bits = num_x;
     priv.y_bits = num_y;
     priv.x_max = (num_x - 1) * DOLPHIN_COUNT_PER_ELECTRODE;
