@@ -441,6 +441,7 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct kvm_vm *vm = (struct kvm_vm *)e->priv;
     struct kvm_userspace_memory_region region;
+    struct kvm_userspace_memory_region2 region2;
     uint64_t addr;
 
     if (!kvm_vm_caller_ok(vm)) {
@@ -458,6 +459,13 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
             return -EFAULT;
         }
         return kvm_slots_set(vm, &region);
+    case KVM_SET_USER_MEMORY_REGION2:
+        /* The same slot: KVM_MEM_GUEST_MEMFD is a flag no VM here takes,
+         * as on Linux for a VM without private memory. */
+        if (copy_from_user(&region2, (const void __user *)arg, sizeof(region2)) != 0) {
+            return -EFAULT;
+        }
+        return kvm_slots_set(vm, &region2.region);
     case KVM_GET_DIRTY_LOG:
     case KVM_CLEAR_DIRTY_LOG:
         return kvm_dirty_ioctl(vm, request, arg);

@@ -34,27 +34,28 @@
 /* KVM_GET_MSRS is also an ioctl of /dev/kvm, for the feature MSRs. */
 
 /* The ioctls of a VM. */
-#define KVM_CREATE_VCPU            KVM_IO(0x41u)
-#define KVM_GET_DIRTY_LOG          KVM_IOW(0x42u, 16u)
-#define KVM_SET_NR_MMU_PAGES       KVM_IO(0x44u)
-#define KVM_GET_NR_MMU_PAGES       KVM_IO(0x45u)
-#define KVM_SET_USER_MEMORY_REGION KVM_IOW(0x46u, 32u)
-#define KVM_SET_TSS_ADDR           KVM_IO(0x47u)
-#define KVM_SET_IDENTITY_MAP_ADDR  KVM_IOW(0x48u, 8u)
-#define KVM_CREATE_IRQCHIP         KVM_IO(0x60u)
-#define KVM_IRQ_LINE               KVM_IOW(0x61u, 8u)
-#define KVM_IRQ_LINE_STATUS        KVM_IOWR(0x67u, 8u)
-#define KVM_SET_GSI_ROUTING        KVM_IOW(0x6Au, 8u)
-#define KVM_IRQFD                  KVM_IOW(0x76u, 32u)
-#define KVM_SET_BOOT_CPU_ID        KVM_IO(0x78u)
-#define KVM_IOEVENTFD              KVM_IOW(0x79u, 64u)
-#define KVM_SET_CLOCK              KVM_IOW(0x7Bu, 48u)
-#define KVM_GET_CLOCK              KVM_IOR(0x7Cu, 48u)
-#define KVM_ENABLE_CAP             KVM_IOW(0xA3u, 104u)
-#define KVM_SIGNAL_MSI             KVM_IOW(0xA5u, 32u)
-#define KVM_HYPERV_EVENTFD         KVM_IOW(0xBDu, 24u)
-#define KVM_CLEAR_DIRTY_LOG        KVM_IOWR(0xC0u, 24u)
-#define KVM_CREATE_DEVICE          KVM_IOWR(0xE0u, 12u)
+#define KVM_CREATE_VCPU             KVM_IO(0x41u)
+#define KVM_GET_DIRTY_LOG           KVM_IOW(0x42u, 16u)
+#define KVM_SET_NR_MMU_PAGES        KVM_IO(0x44u)
+#define KVM_GET_NR_MMU_PAGES        KVM_IO(0x45u)
+#define KVM_SET_USER_MEMORY_REGION  KVM_IOW(0x46u, 32u)
+#define KVM_SET_TSS_ADDR            KVM_IO(0x47u)
+#define KVM_SET_IDENTITY_MAP_ADDR   KVM_IOW(0x48u, 8u)
+#define KVM_SET_USER_MEMORY_REGION2 KVM_IOW(0x49u, 160u)
+#define KVM_CREATE_IRQCHIP          KVM_IO(0x60u)
+#define KVM_IRQ_LINE                KVM_IOW(0x61u, 8u)
+#define KVM_IRQ_LINE_STATUS         KVM_IOWR(0x67u, 8u)
+#define KVM_SET_GSI_ROUTING         KVM_IOW(0x6Au, 8u)
+#define KVM_IRQFD                   KVM_IOW(0x76u, 32u)
+#define KVM_SET_BOOT_CPU_ID         KVM_IO(0x78u)
+#define KVM_IOEVENTFD               KVM_IOW(0x79u, 64u)
+#define KVM_SET_CLOCK               KVM_IOW(0x7Bu, 48u)
+#define KVM_GET_CLOCK               KVM_IOR(0x7Cu, 48u)
+#define KVM_ENABLE_CAP              KVM_IOW(0xA3u, 104u)
+#define KVM_SIGNAL_MSI              KVM_IOW(0xA5u, 32u)
+#define KVM_HYPERV_EVENTFD          KVM_IOW(0xBDu, 24u)
+#define KVM_CLEAR_DIRTY_LOG         KVM_IOWR(0xC0u, 24u)
+#define KVM_CREATE_DEVICE           KVM_IOWR(0xE0u, 12u)
 
 /* The ioctls of a device created by KVM_CREATE_DEVICE. */
 #define KVM_SET_DEVICE_ATTR KVM_IOW(0xE1u, 24u)
@@ -178,6 +179,7 @@
 #define KVM_CAP_HYPERV_DIRECT_TLBFLUSH      175
 #define KVM_CAP_SYS_HYPERV_CPUID            191
 #define KVM_CAP_HYPERV_ENFORCE_CPUID        199
+#define KVM_CAP_USER_MEMORY2                231
 
 /* The exit reasons of kvm_run.exit_reason. */
 #define KVM_EXIT_UNKNOWN         0
@@ -414,6 +416,17 @@ struct kvm_userspace_memory_region {
     uint64_t guest_phys_addr;
     uint64_t memory_size; /* bytes */
     uint64_t userspace_addr;
+};
+
+/* KVM_SET_USER_MEMORY_REGION2's argument: the same slot, then the file of
+ * guest_memfd, which no VM here has, and Linux's padding, which it does
+ * not read. */
+struct kvm_userspace_memory_region2 {
+    struct kvm_userspace_memory_region region;
+    uint64_t guest_memfd_offset;
+    uint32_t guest_memfd;
+    uint32_t pad1;
+    uint64_t pad2[14];
 };
 
 #define KVM_MEM_LOG_DIRTY_PAGES 1u

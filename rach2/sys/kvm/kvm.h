@@ -667,7 +667,8 @@ int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg);
 
 /** A HLT of `v`: 1 when it goes to the caller as KVM_EXIT_HLT, which it
  * does with no local APIC in the kernel; 0 when the vCPU is HALTED and
- * `kvm_lapic_prepare` waits for its wake-up before the next entry. */
+ * `kvm_lapic_prepare` waits for its wake-up before the next entry, or
+ * when an exception is pending, which the next entry delivers. */
 int kvm_lapic_halt(struct kvm_vcpu *v);
 
 /** Free vlapic.c's share of `v`. */

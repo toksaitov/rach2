@@ -1238,6 +1238,11 @@ int kvm_lapic_halt(struct kvm_vcpu *v)
     if (!apic_of(v)) {
         return 1;
     }
+    /* A pending exception, the single-step trap of the HLT itself among
+     * them, keeps the vCPU running, as Linux's kvm_vcpu_has_events. */
+    if (v->events.exception.pending) {
+        return 0;
+    }
     v->mp_state = KVM_MP_STATE_HALTED;
     v->dirty |= KVM_PART_MP;
     return 0;
