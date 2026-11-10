@@ -188,7 +188,10 @@ nocopy_rows()
     else
         fail release "kvm_gpa_maps $maps0 to $(stat kvm_gpa_maps), kvm_gpa_map_pages $pages0 to $(stat kvm_gpa_map_pages), map_live $(info map_live)"
     fi
+    # The VM's console comes behind its work, at the serial port's pace.
     "$probe" refuse > "$out/refuse.out" 2>&1
+    until_line "$out/console.log" 'backend: map: resource .*: refused: not exported' 60 "$qemu" ||
+        true
     if grep -q 'VGSHMPROBE OK' "$out/refuse.out" &&
         grep -q 'backend: map: resource .*: refused: not exported' "$out/console.log"; then
         pass refuse "$(sed -n 's/^VGSHMPROBE REFUSE: //p' "$out/refuse.out" | tr '\n' ';')"
@@ -202,7 +205,7 @@ nocopy_rows()
     done
     figure nc held 32 65536
     figure nc bandwidth 67108864
-    for b in 4096 1048576 16777216; do
+    for b in 4096 1048576 4194304; do
         figure "$probe" measure "$b"
     done
     if [ "$ok" = 1 ]; then
@@ -301,10 +304,9 @@ if [ "$bad" -eq 0 ]; then
     echo "bed-shm: result: pass"
 else
     # The VM's console is lost with the machine; its last lines but the
-    # backend's for each pin and each piece of a page list go with the
-    # result.
+    # backend's for each pin go with the result.
     tr -d '\r' < "$out/console.log" 2>/dev/null |
-        grep -v 'backend: map: resource [0-9]*, pages\|backend: pin: resource' | tail -n 80 |
+        grep -v 'backend: pin: resource' | tail -n 80 |
         sed 's/^/bed-shm: vm: /'
     echo "bed-shm: result: fail: $bad check(s)"
     exit 1
