@@ -57,7 +57,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/graphics and unpack there the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
         },
         {
           "step_id": "run",
@@ -88,6 +88,12 @@
               {
                 "name": "gnu-disk",
                 "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -188,8 +194,8 @@
           "per_architecture": false
         },
         {
-          "name": "graphics",
-          "node": "tests/cases/graphics/graphics.tar",
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
           "per_architecture": false
         },
         {
@@ -264,7 +270,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/graphics and unpack there the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
         },
         {
           "step_id": "run",
@@ -295,6 +301,12 @@
               {
                 "name": "gnu-disk",
                 "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -395,8 +407,8 @@
           "per_architecture": false
         },
         {
-          "name": "graphics",
-          "node": "tests/cases/graphics/graphics.tar",
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
           "per_architecture": false
         },
         {
@@ -471,7 +483,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/graphics and unpack there the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
         },
         {
           "step_id": "run",
@@ -502,6 +514,12 @@
               {
                 "name": "gnu-disk",
                 "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -602,8 +620,8 @@
           "per_architecture": false
         },
         {
-          "name": "graphics",
-          "node": "tests/cases/graphics/graphics.tar",
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
           "per_architecture": false
         },
         {
@@ -678,7 +696,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/graphics and unpack there the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
         },
         {
           "step_id": "run",
@@ -709,6 +727,12 @@
               {
                 "name": "gnu-disk",
                 "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -809,8 +833,8 @@
           "per_architecture": false
         },
         {
-          "name": "graphics",
-          "node": "tests/cases/graphics/graphics.tar",
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
           "per_architecture": false
         },
         {
@@ -885,7 +909,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/graphics and unpack there the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
         },
         {
           "step_id": "run",
@@ -916,6 +940,12 @@
               {
                 "name": "gnu-disk",
                 "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1016,8 +1046,8 @@
           "per_architecture": false
         },
         {
-          "name": "graphics",
-          "node": "tests/cases/graphics/graphics.tar",
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
           "per_architecture": false
         },
         {
@@ -1092,7 +1122,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/graphics and unpack there the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
         },
         {
           "step_id": "run",
@@ -1123,6 +1153,12 @@
               {
                 "name": "gnu-disk",
                 "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1223,8 +1259,8 @@
           "per_architecture": false
         },
         {
-          "name": "graphics",
-          "node": "tests/cases/graphics/graphics.tar",
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
           "per_architecture": false
         },
         {
@@ -1299,7 +1335,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/graphics and unpack there the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the IGT list and the Debian references, owned by the test account"
         },
         {
           "step_id": "run",
@@ -1330,6 +1366,12 @@
               {
                 "name": "gnu-disk",
                 "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1430,8 +1472,8 @@
           "per_architecture": false
         },
         {
-          "name": "graphics",
-          "node": "tests/cases/graphics/graphics.tar",
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
           "per_architecture": false
         },
         {
