@@ -79,6 +79,19 @@ void bkl_note_entry(uint32_t vector, int32_t nr);
  * the big lock. The time is zero without a calibrated invariant TSC. */
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
 
+/* The keys of the holds by entry (`smp_entry_hold`): a system call's number
+ * below `BKL_ENTRY_SYSCALLS`, then each interrupt vector's, the last for the
+ * system calls numbered past the first range. */
+#define BKL_ENTRY_SYSCALLS 512
+#define BKL_ENTRY_KEYS     (BKL_ENTRY_SYSCALLS + 256 + 1)
+
+/** Read the holds of the big lock that entry `key` took since boot, the
+ * boot processor's start-up left out: their sum in microseconds and their
+ * number. A hold counts under the entry that took the lock, which a system
+ * call keeps while it sleeps and the processor runs others, up to its next
+ * return to user mode or idle halt. The caller holds the big lock. */
+void smp_entry_hold(int key, uint64_t *held_us, uint32_t *holds);
+
 /* The instruction a hold's sample keeps, and the return addresses above it. */
 #define BKL_SAMPLE_PCS 8
 

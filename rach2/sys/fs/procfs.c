@@ -2821,6 +2821,52 @@ static void procfs_wlan_refused(struct procfs_text *t)
     ap_u32(t, far);
 }
 
+/* The entries `procfs_entry_holds` lists, the longest first. */
+#define PROCFS_HOLD_ENTRIES 16
+
+/** Append to `t` the `bkl_hold_entry` lines: the entries that held the big
+ * lock longest since boot, as many as `PROCFS_HOLD_ENTRIES`, each with its
+ * kind, its number, its holds and their sum in microseconds. */
+static void procfs_entry_holds(struct procfs_text *t)
+{
+    static unsigned char shown[BKL_ENTRY_KEYS];
+    uint64_t us, best_us;
+    uint32_t holds, best_holds = 0;
+    int n, key, best;
+
+    k_memset(shown, 0, sizeof(shown));
+    for (n = 0; n < PROCFS_HOLD_ENTRIES; n++) {
+        best = -1;
+        best_us = 0;
+        for (key = 0; key < BKL_ENTRY_KEYS; key++) {
+            smp_entry_hold(key, &us, &holds);
+            if (!shown[key] && holds != 0 && (best < 0 || us > best_us)) {
+                best = key;
+                best_us = us;
+                best_holds = holds;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        shown[best] = 1;
+        ap_str(t, "\nbkl_hold_entry ");
+        if (best < BKL_ENTRY_SYSCALLS) {
+            ap_str(t, "syscall ");
+            ap_u32(t, (uint32_t)best);
+        } else if (best < BKL_ENTRY_KEYS - 1) {
+            ap_str(t, "vector ");
+            ap_u32(t, (uint32_t)(best - BKL_ENTRY_SYSCALLS));
+        } else {
+            ap_str(t, "syscall -1");
+        }
+        ap_ch(t, ' ');
+        ap_u32(t, best_holds);
+        ap_ch(t, ' ');
+        ap_u64(t, best_us);
+    }
+}
+
 /** Append live KVM objects on x86-64; every count is under the big lock. */
 static void procfs_kvm_counts(struct procfs_text *t)
 {
@@ -2840,7 +2886,7 @@ static void procfs_kvm_counts(struct procfs_text *t)
 }
 
 /** The counts of the kernel's own work for `/proc/stat`, from
- * `process_pid_steps` to the last `bkl_hold_max_mark`, each on a line of
+ * `process_pid_steps` to the last `bkl_hold_entry`, each on a line of
  * its own. */
 static void procfs_work_counts(struct procfs_text *t)
 {
@@ -2909,6 +2955,7 @@ static void procfs_work_counts(struct procfs_text *t)
             ap_xlow(t, (unsigned long)pc[i], 1);
         }
     }
+    procfs_entry_holds(t);
     ap_ch(t, '\n');
 }
 
