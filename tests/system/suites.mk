@@ -390,8 +390,10 @@ $(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdo
 # answering as the HD 4400, under the GNU root: libdrm reads 8086:0a16, Mesa's
 # loader picks crocus, and first light fails by name under each fault of the
 # chip's debugfs file; and under the test image, i915gemprobe's X tiled
-# buffer written through a GTT map reads back detiled through a CPU map. The
-# cases are tests/cases/machine.i915fake.json; the first boots gnu-test.disk.
+# buffer written through a GTT map reads back detiled through a CPU map, and
+# its memory rows run a working set past the aperture, a userptr object and
+# pressure past memory to ENOMEM. The cases are
+# tests/cases/machine.i915fake.json; the first boots gnu-test.disk.
 
 $(ARCH_BUILD)/utils/sbin/gfxtool: utils/gfxtool.c utils/programs.mk $(LIBC_STAMP)
 	$(MAKE) -C utils ../$@
