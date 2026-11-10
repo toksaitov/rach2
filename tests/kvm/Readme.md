@@ -39,7 +39,7 @@ Under TCG, VMRUN and VMEXIT, the intercepts of I/O, MSRs, selective CR0 writes, 
 
 The Debian guest reports the profile's features: under `host-svm` and KVM, `svm npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold`, with none of the three the profile declares absent; under `max-svm` and TCG, `svm npt vgif`. It boots to its token in 1 s under KVM and 3 s under TCG on the testing PC, and in 9 s under TCG in the GNU root's QEMU on an x86-64 Rach2 that runs under KVM there, as `boot-debian-tcg` boots it.
 
-The SVM backend boots Debian 6.12.107 to `KVMGUEST OK` under TCG on WSL and the Mac, and under nested KVM on WSL. The entry probe, active memory-slot changes, device mapping, 4 MiB GEM mapping and vCPU termination checks pass under TCG on the Mac. The QEMU termination check passes under TCG on WSL and returns all five KVM counts and the open-file count. These were individual author runs, not a run of the suite or either corpus. The i686 guest's intermittent page fault, double fault and shutdown are being investigated in task 81-2b.
+The SVM backend boots Debian 6.12.107 to `KVMGUEST OK` under TCG on WSL and the Mac, and under nested KVM on WSL. The entry probe, active memory-slot changes, device mapping, 4 MiB GEM mapping and vCPU termination checks pass under TCG on the Mac. The QEMU termination check passes under TCG on WSL and returns all five KVM counts and the open-file count. These were individual author runs, not a run of the suite or either corpus. On 2026-11-10 the full in-kernel controller booted Debian 6.12.107 to `KVMGUEST OK` in 11 s and the i686 KRFFS guest to `KVMRACH2 OK` in 23 s on the Mac, with an outer QEMU under TCG on `max-svm` and QEMU 10.0.13 in Rach2. Each inner guest had one processor and 256 MiB of memory. The corpus still waits for the reviewed checkpoint and the Lenovo trial's last run; these boots do not establish its results.
 
 The VMX backend, on the Lenovo by trial boot on 2026-11-10, boots Debian 6.12.107 to `KVMGUEST OK` in 2 s and Rach2's i686 GRUB disk to `boot: starting /sbin/init` at 3.262 s of the guest's clock. Both corpora ran there: of kvm-unit-tests 43 pass, 7 skip and 1 fails as the list expects and 7 of 58 differ (`asyncpf`, `debug`, `emulator`, `hyperv_clock`, `kvmclock_test`, `smap`, `syscall`); of the selftests 15 are as the list expects and 51 of 66 differ, 31 of them because the selftests' library calls KVM_CREATE_IRQCHIP.
 
@@ -64,7 +64,7 @@ A guest of its own goes under `guests/` with its recipe, the token its console p
 
 ## Limits
 
-* The Debian x86-64 guest boots under SVM on both outer profiles, and it and the i686 disk under VMX on the Lenovo. The i686 guest under SVM and the corpus still await qualification: the corpus's rows that differ on the Lenovo, which need parts of Linux's KVM that Rach2's lacks, are named in [Results](#results).
+* The full controller boots the Debian x86-64 and i686 KRFFS guests under SVM on `max-svm`. The full controller's nested-KVM and VMX boots and the corpus still await qualification. The earlier split-controller boots and the corpus's rows that differed on the Lenovo are named in [Results](#results).
 * The `max-svm` profile under TCG lacks NRIP save, TSC scaling and the pause filter, and has the five faults of Results, the last of which can leave a guest of Rach2's KVM that spins with its IF clear waiting on an interrupt QEMU does not deliver; the `host-svm` profile runs only on the testing PC.
 
 ## Tests
