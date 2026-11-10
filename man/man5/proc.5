@@ -1985,7 +1985,8 @@ entry's mask or remote IRR, delivered, and delivered to no APIC, and a
 line for each vector of each vCPU with a count, the vCPU's index, the
 vector and its interrupts accepted into IRR, dropped by a disabled APIC,
 acknowledged into ISR, injected at an entry, saved from an exit that cut
-their delivery off, and ended by an EOI.
+their delivery off, and ended by an EOI; one taken from the PIC is ended
+at the PIC and counts no EOI.
 The counts are Rach2's own, not Linux's, and wrap at 2^32.
 Linux adds lines of each kind of file.
 Another user's is
