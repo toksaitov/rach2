@@ -296,11 +296,11 @@ static int collection_source_archive(const struct etude_tooling_job *job)
 }
 
 /**
- * Check a job whose goal is a GNU test image and return its products.
+ * Check a job whose goal is a GNU products archive and return its products.
  *
- * The image stages the source archive, so the job builds the archive before
- * the image, takes the host's copy in its place when the host has one, and
- * returns the archive with the image. The stand-in returns the host's copy
+ * The products archive stages the source archive, so the job builds that
+ * first, takes the host's copy in its place when the host has one, and
+ * returns it with the products archive. The stand-in returns the host's copy
  * when it was given one, and otherwise the seed's.
  */
 static int collection_assets_job(const struct etude_tooling_job *job, const char *script)
@@ -315,11 +315,11 @@ static int collection_assets_job(const struct etude_tooling_job *job, const char
     char own[128], images[256], back[256];
     snprintf(own, sizeof own, "make -j%u ARCH='x86_64' '%s'\n", collection_cpus, assets);
     snprintf(images, sizeof images,
-             "make -j%u ARCH='x86_64' 'build/x86_64/images/gnu-test.disk' "
+             "make -j%u ARCH='x86_64' 'build/x86_64/images/gnu-test-products.tar' "
              "'build/x86_64/rach2/kernel' '%s'\n",
              collection_cpus, assets);
     snprintf(back, sizeof back,
-             "tar --sparse -cf \"$ETUDE_DISK2\" 'build/x86_64/images/gnu-test.disk' "
+             "tar --sparse -cf \"$ETUDE_DISK2\" 'build/x86_64/images/gnu-test-products.tar' "
              "'build/x86_64/rach2/kernel' '%s'\n",
              assets);
     const char *built = strstr(script, own), *adopt = strstr(script, "tar -dzf \"$given\"");
@@ -340,7 +340,7 @@ static int collection_assets_job(const struct etude_tooling_job *job, const char
                           job->disks[1],
                           "-C",
                           seed,
-                          "build/x86_64/images/gnu-test.disk",
+                          "build/x86_64/images/gnu-test-products.tar",
                           "build/x86_64/rach2/kernel",
                           assets,
                           NULL};
@@ -654,26 +654,28 @@ static void collection_native_inputs_row(void)
     }
 }
 
-/** Check that a GNU test image's job returns the source archive it stages. */
+/** Check that a products archive's job returns the source archive it stages. */
 static void collection_assets_row(void)
 {
     const char *directories[] = {"seed/build/x86_64/images", "seed/build/tests",
                                  "seed/build/tests/host-suite"};
     for (size_t i = 0; i < sizeof directories / sizeof(*directories); i++)
         COLLECTION_CHECK(!mkdir(collection_path(directories[i]), 0700));
-    collection_put(collection_path("seed/build/x86_64/images/gnu-test.disk"), "image bytes");
+    collection_put(collection_path("seed/build/x86_64/images/gnu-test-products.tar"),
+                   "image bytes");
     collection_put(collection_path("seed/build/tests/host-suite/scripts-assets.tar"),
                    "workspace archive");
     const char *archive = collection_path("build/tests/host-suite/scripts-assets.tar");
     setenv("COLLECTION_TEST_ROW", "prepare-assets", 1);
-    char *args[] = {"prepare", collection_root, "x86_64", "", "build/x86_64/images/gnu-test.disk"};
+    char *args[] = {"prepare", collection_root, "x86_64", "",
+                    "build/x86_64/images/gnu-test-products.tar"};
     COLLECTION_CHECK(!etude_collection_tools_main(5, args));
     COLLECTION_CHECK(collection_bytes(archive, "workspace archive"));
     collection_put(archive, "host archive");
     COLLECTION_CHECK(!etude_collection_tools_main(5, args));
     COLLECTION_CHECK(collection_bytes(archive, "host archive"));
-    COLLECTION_CHECK(
-        collection_bytes(collection_path("build/x86_64/images/gnu-test.disk"), "image bytes"));
+    COLLECTION_CHECK(collection_bytes(collection_path("build/x86_64/images/gnu-test-products.tar"),
+                                      "image bytes"));
 }
 
 /** Check a preparation's machine size, its source and products, on i686. */

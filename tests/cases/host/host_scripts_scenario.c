@@ -25,7 +25,7 @@ static int prepare(struct etude_case *c, struct etude_case_machine *m)
                            "/tmp/etude-host-scripts/tree",
                            NULL};
     const char *readable[] = {"/bin/chmod", "-R", "a+rX", "/tmp/etude-host-scripts/tree", NULL};
-    return host_assets_match(c, m) && execute(m, mkdir, "products-workspace") &&
+    return host_assets_stage(c, m) && execute(m, mkdir, "products-workspace") &&
            execute(m, untar, "products-assets") && execute(m, readable, "products-source-modes");
 }
 static int native(struct etude_case *c, const struct host_script_row *row)

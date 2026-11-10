@@ -118,6 +118,11 @@
           "per_architecture": true
         },
         {
+          "name": "products-files",
+          "node": "images/gnu-test-products.tar",
+          "per_architecture": true
+        },
+        {
           "name": "kernel",
           "node": "rach2/kernel",
           "per_architecture": true
@@ -162,6 +167,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "products-files-disk",
+                "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }

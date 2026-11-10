@@ -531,6 +531,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "products-files",
+          "node": "x86_64/images/gnu-test-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -568,6 +573,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "products-files-disk",
+                "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -726,6 +737,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "products-files",
+          "node": "x86_64/images/gnu-test-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -763,6 +779,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "products-files-disk",
+                "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -914,6 +936,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "products-files",
+          "node": "x86_64/images/gnu-test-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -951,6 +978,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "products-files-disk",
+                "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1117,6 +1150,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "products-files",
+          "node": "x86_64/images/gnu-test-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -1154,6 +1192,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "products-files-disk",
+                "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1279,6 +1323,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "products-files",
+          "node": "x86_64/images/gnu-test-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -1316,6 +1365,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "products-files-disk",
+                "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1445,6 +1500,11 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "products-files",
+          "node": "x86_64/images/gnu-test-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -1482,6 +1542,12 @@
               {
                 "name": "products-disk",
                 "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "products-files-disk",
+                "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }

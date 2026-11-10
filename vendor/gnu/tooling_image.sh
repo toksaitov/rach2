@@ -247,13 +247,6 @@ stage_tree()
         tests tools mk utils krffs rach2 ish ports term vendor > "$STAGE/build/gnu-source-files"
     sh krffs/manifest_deps.sh krffs/manifests/os-real-gnu.manifest > "$STAGE/products" || :
     echo "$MUSL_CRYPT_SRC" >> "$STAGE/products"
-    if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
-        {
-            echo build/tests/host-suite/scripts-assets.tar
-            echo "build$ARCH_SUFFIX/rach2/kernel"
-            echo "build$ARCH_SUFFIX/rach2-metal/kernel"
-        } >> "$STAGE/products"
-    fi
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ] && [ "$RACH2_ARCH" = x86_64 ]; then
         echo build/tests/host/exfat_writer >> "$STAGE/products"
         find build/tests/host-suite/tools/exfat_external -type f >> "$STAGE/products"

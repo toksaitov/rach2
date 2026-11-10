@@ -1354,7 +1354,7 @@ static const char col_sync[] =
     "git --literal-pathspecs add -f --pathspec-from-file=\"$ETUDE_WORK/source-index\" "
     "--pathspec-file-nul\n";
 
-/* The archive of tracked sources that the GNU test image stages. */
+/* The archive of tracked sources that the GNU products archive stages. */
 static const char col_assets[] = "build/tests/host-suite/scripts-assets.tar";
 
 /* Take the host's archive when it holds the same files, bytes and modes. */
@@ -1376,21 +1376,20 @@ static int col_stages_assets(const char *goal)
 {
     const char *base = strrchr(goal, '/');
     base = base ? base + 1 : goal;
-    return !strcmp(goal, col_assets) || !strcmp(base, "gnu-test.disk") ||
-           !strcmp(base, "gnu-test.ext2");
+    return !strcmp(goal, col_assets) || !strcmp(base, "gnu-test-products.tar");
 }
 
 /**
- * Make the GNU test images of every workspace stage one source archive.
+ * Make the GNU products archives of every workspace stage one source archive.
  *
  * Each architecture's workspace builds `col_assets` itself, with its own file
- * times, so the images of two workspaces would stage different bytes, and
- * neither need equal the archive the host records. When a guest goal stages
- * the archive, the job is given the host's copy, if there is one, builds its
- * own before the images, and takes the host's in its place when the two
- * differ only in their times. The archive is then returned with the images.
- * `etude prepare` runs the x86-64 job after the i686 one, so the x86-64
- * images stage the archive that the i686 job returned.
+ * times, so the products archives of two workspaces would stage different
+ * bytes, and neither need equal the archive the host records. When a guest
+ * goal stages the archive, the job is given the host's copy, if there is one,
+ * builds its own before the products archive, and takes the host's in its
+ * place when the two differ only in their times. The archive is then returned
+ * with the goals. `etude prepare` runs the x86-64 job after the i686 one, so
+ * the x86-64 products archive stages the archive that the i686 job returned.
  *
  * @return 0, or -1 when memory runs out or the host's copy is not a file.
  */
