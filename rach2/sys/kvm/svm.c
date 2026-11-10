@@ -2073,7 +2073,7 @@ static int exit_task_switch(struct kvm_vcpu *v)
     struct svm_exit *e = &sv(v)->ex;
     uint32_t info = e->int_info, type = EV_TYPE(info), vec = EV_VECTOR(info);
     int valid = (info & EV_VALID) != 0, reason, has_error = 0, r;
-    uint64_t next = v->regs.rip, rip = v->regs.rip;
+    uint64_t next = v->regs.rip;
     uint32_t len;
 
     if (e->info2 & TS_IRET) {
@@ -2109,7 +2109,7 @@ static int exit_task_switch(struct kvm_vcpu *v)
         if (len == 0) {
             return 0;
         }
-        next = (rip + len) & 0xFFFFFFFFull;
+        next = (next + len) & 0xFFFFFFFFull;
     }
     r = kvm_task_switch(v, (uint16_t)e->info1, reason, valid && type == EV_SOFT ? (int)vec : -1,
                         next, has_error ? (int64_t)(uint32_t)e->info2 : -1);
