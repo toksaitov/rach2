@@ -142,6 +142,11 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
 /**
  * Queue RESOURCE_UNMAP_BLOB of `bo`, whose piece goes back to the region
  * once the host has also answered the UNREF after it. 0, or -ENOMEM.
+ *
+ * The command carries no fence, as Linux's virtio_gpu_cmd_unmap: QEMU
+ * suspends an UNMAP_BLOB until the mapping is gone, and keeps an unfenced
+ * one at the head of the queue meanwhile, but moves a fenced one aside and
+ * runs the UNREF behind it on a resource still mapped, which then fails.
  */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -151,6 +156,8 @@ int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     if (!cmd) {
         return -ENOMEM;
     }
+    kfree(cmd->fence);
+    cmd->fence = NULL;
     ((struct virtio_gpu_resource_unref *)(void *)cmd->page)->resource_id = bo->res_id;
     vgpu_cmd_send(cmd, NULL, NULL);
     return 0;
