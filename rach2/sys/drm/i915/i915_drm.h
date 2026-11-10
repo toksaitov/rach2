@@ -17,31 +17,32 @@
  * it serves, in the order of their numbers.
  */
 
-#define DRM_I915_GETPARAM             0x06
-#define DRM_I915_GEM_BUSY             0x17
-#define DRM_I915_GEM_CREATE           0x1b
-#define DRM_I915_GEM_PREAD            0x1c
-#define DRM_I915_GEM_PWRITE           0x1d
-#define DRM_I915_GEM_MMAP             0x1e
-#define DRM_I915_GEM_SET_DOMAIN       0x1f
-#define DRM_I915_GEM_SW_FINISH        0x20
-#define DRM_I915_GEM_SET_TILING       0x21
-#define DRM_I915_GEM_GET_TILING       0x22
-#define DRM_I915_GEM_GET_APERTURE     0x23
-#define DRM_I915_GEM_MMAP_GTT         0x24
-#define DRM_I915_GEM_MADVISE          0x26
-#define DRM_I915_GEM_EXECBUFFER2      0x29
-#define DRM_I915_GEM_WAIT             0x2c
-#define DRM_I915_GEM_CONTEXT_CREATE   0x2d
-#define DRM_I915_GEM_CONTEXT_DESTROY  0x2e
-#define DRM_I915_GEM_SET_CACHING      0x2f
-#define DRM_I915_GEM_GET_CACHING      0x30
-#define DRM_I915_REG_READ             0x31
-#define DRM_I915_GET_RESET_STATS      0x32
-#define DRM_I915_GEM_USERPTR          0x33
-#define DRM_I915_GEM_CONTEXT_GETPARAM 0x34
-#define DRM_I915_GEM_CONTEXT_SETPARAM 0x35
-#define DRM_I915_QUERY                0x39
+#define DRM_I915_GETPARAM              0x06
+#define DRM_I915_GEM_BUSY              0x17
+#define DRM_I915_GEM_CREATE            0x1b
+#define DRM_I915_GEM_PREAD             0x1c
+#define DRM_I915_GEM_PWRITE            0x1d
+#define DRM_I915_GEM_MMAP              0x1e
+#define DRM_I915_GEM_SET_DOMAIN        0x1f
+#define DRM_I915_GEM_SW_FINISH         0x20
+#define DRM_I915_GEM_SET_TILING        0x21
+#define DRM_I915_GEM_GET_TILING        0x22
+#define DRM_I915_GEM_GET_APERTURE      0x23
+#define DRM_I915_GEM_MMAP_GTT          0x24
+#define DRM_I915_GET_PIPE_FROM_CRTC_ID 0x25
+#define DRM_I915_GEM_MADVISE           0x26
+#define DRM_I915_GEM_EXECBUFFER2       0x29
+#define DRM_I915_GEM_WAIT              0x2c
+#define DRM_I915_GEM_CONTEXT_CREATE    0x2d
+#define DRM_I915_GEM_CONTEXT_DESTROY   0x2e
+#define DRM_I915_GEM_SET_CACHING       0x2f
+#define DRM_I915_GEM_GET_CACHING       0x30
+#define DRM_I915_REG_READ              0x31
+#define DRM_I915_GET_RESET_STATS       0x32
+#define DRM_I915_GEM_USERPTR           0x33
+#define DRM_I915_GEM_CONTEXT_GETPARAM  0x34
+#define DRM_I915_GEM_CONTEXT_SETPARAM  0x35
+#define DRM_I915_QUERY                 0x39
 
 /* GETPARAM: the parameter `param`'s value, written as an int to `value`. */
 #define I915_PARAM_IRQ_ACTIVE               1
@@ -113,6 +114,12 @@
 struct drm_i915_getparam {
     int32_t param;
     int __user *value;
+};
+
+/* GET_PIPE_FROM_CRTC_ID: the pipe, 0 for A, of the CRTC of ID `crtc_id`. */
+struct drm_i915_get_pipe_from_crtc_id {
+    uint32_t crtc_id;
+    uint32_t pipe;
 };
 
 /* The engines as programs name them: a class and an instance in it. The
@@ -617,6 +624,9 @@ struct drm_i915_gem_userptr {
 
 #define DRM_IOCTL_I915_GETPARAM \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GETPARAM, struct drm_i915_getparam)
+#define DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID                    \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GET_PIPE_FROM_CRTC_ID, \
+             struct drm_i915_get_pipe_from_crtc_id)
 #define DRM_IOCTL_I915_GEM_BUSY \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_BUSY, struct drm_i915_gem_busy)
 #define DRM_IOCTL_I915_GEM_CREATE \

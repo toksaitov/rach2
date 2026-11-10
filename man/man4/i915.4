@@ -765,6 +765,18 @@ flips the primary plane between X-tiled framebuffers of the same format,
 stride and place without waiting for a vblank, and its event comes when
 the plane has taken the new surface.
 .Pp
+.Dv DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID
+gives the pipe, 0 for A, of the CRTC whose id it is given, or fails with
+.Er ENOENT
+for none; a render node may not call it.
+Each CRTC's
+.Pa i915_pipe
+and
+.Pa i915_current_bpc
+in
+.Xr debugfs 5
+give the same pipe and the bits a colour the pipe runs at.
+.Pp
 The pipe CRC is read through
 .Pa crc/control
 and

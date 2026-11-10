@@ -12,7 +12,9 @@
  *
  * The rows follow the trial's step in its order: the bind's adoption of
  * pipe A, which writes no register of the pipe, its link or the backlight,
- * and the outputs probed with no hotplug event; then crcmodes'
+ * and the outputs probed with no hotplug event; GET_PIPE_FROM_CRTC_ID,
+ * by which IGT maps each CRTC to its pipe; the desktop's first commit,
+ * Weston's at boot, taken on the adopted pipe; then crcmodes'
  * (dev-log/78-intel/78-10d/crcmodes.c) mode sets, the panel's own mode and
  * four smaller ones under each scaling mode, each by SETPROPERTY and
  * SETCRTC with the panel's timings, its fitter's window as Linux's
@@ -162,7 +164,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
 /* ---- the driver's buffer objects: one a size, bound in the aperture by
  * the pin ---- */
 
-#define NBO 8
+#define NBO 9
 
 const struct drm_gem_object_funcs i915_gem_object_funcs;
 static struct drm_i915_gem_object bo[NBO];
@@ -528,6 +530,117 @@ static void row_adopt(void)
     CHECK(pa->underrun_off && (reg(DEIMR) & DE_ERR_INT_IVB),
           "adopt: pipe A's underruns unreported until its first commit, as Linux's");
     CHECK(!timed_out(), "adopt: no wait at its bound");
+}
+
+/** GET_PIPE_FROM_CRTC_ID, by which IGT's igt_display_require maps each CRTC
+ * to its pipe when the CRTC's i915_pipe cannot be read: each pipe's own,
+ * and ENOENT for an ID that is no CRTC. */
+static void row_pipe_ids(void)
+{
+    struct drm_i915_get_pipe_from_crtc_id g;
+    int pipe, right = 0;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        g.crtc_id = disp->crtc[pipe].base.base.id;
+        g.pipe = 99;
+        right +=
+            intel_get_pipe_from_crtc_id_ioctl(&gpu.drm, &g, &fa) == 0 && g.pipe == (uint32_t)pipe;
+    }
+    g.crtc_id = disp->connector.base.id;
+    CHECK(right == I915_NUM_PIPES &&
+              intel_get_pipe_from_crtc_id_ioctl(&gpu.drm, &g, &fa) == -ENOENT,
+          "igt: GET_PIPE_FROM_CRTC_ID gives each CRTC's pipe, ENOENT for another object");
+}
+
+/* ---- the desktop ---- */
+
+/* One commit's properties, as a program lists them for ATOMIC. */
+struct atomic_req {
+    uint32_t objs[16], counts[16], props[48];
+    uint64_t values[48];
+    uint32_t nobjs, nprops;
+};
+
+/** Add `prop` of `value` to object `id` of `r`, after its others. */
+static void atomic_add(struct atomic_req *r, uint32_t id, const struct drm_property *prop,
+                       uint64_t value)
+{
+    if (r->nobjs == 0 || r->objs[r->nobjs - 1] != id) {
+        r->objs[r->nobjs] = id;
+        r->counts[r->nobjs++] = 0;
+    }
+    r->counts[r->nobjs - 1]++;
+    r->props[r->nprops] = prop->base.id;
+    r->values[r->nprops++] = value;
+}
+
+/**
+ * Weston's first commit on the adopted pipe, as the trial root's desktop
+ * made it at boot (its drm-backend log): the outputs it does not drive
+ * and every plane off, then pipe A at the panel's mode with the eDP
+ * connector at "max bpc" 12 and the primary plane showing a framebuffer
+ * of its own, allowed to set the mode. Linux takes it.
+ */
+static void row_desktop(void)
+{
+    struct drm_mode_config *mc = &gpu.drm.mode_config;
+    struct drm_connector *off[3];
+    struct drm_property_blob *blob;
+    struct drm_mode_modeinfo mode;
+    struct drm_mode_atomic a;
+    struct atomic_req r;
+    uint32_t fb = fb_new(8, 1366, 768), i;
+    int32_t err;
+
+    off[0] = &disp->ddi[0].hdmi_connector;
+    off[1] = &disp->ddi[1].dp_connector;
+    off[2] = &disp->ddi[1].hdmi_connector;
+    CHECK(fb != 0 && probe(&disp->connector, 1366, 768, 60, &mode) >= 0,
+          "desktop: a framebuffer and the panel's mode");
+    blob = drm_property_create_blob(&gpu.drm, sizeof(mode), &mode, &err);
+    CHECK(blob != NULL, "desktop: the mode's blob");
+    if (fb == 0 || blob == NULL) {
+        return;
+    }
+    k_memset(&r, 0, sizeof(r));
+    for (i = 0; i < 3; i++) {
+        atomic_add(&r, off[i]->base.id, mc->prop_crtc_id, 0);
+    }
+    for (i = 0; i < mc->num_plane; i++) {
+        atomic_add(&r, mc->planes[i]->base.id, mc->prop_crtc_id, 0);
+        atomic_add(&r, mc->planes[i]->base.id, mc->prop_fb_id, 0);
+    }
+    atomic_add(&r, pa->base.base.id, mc->prop_mode_id, blob->base.id);
+    atomic_add(&r, pa->base.base.id, mc->prop_active, 1);
+    atomic_add(&r, pa->base.base.id, mc->prop_vrr_enabled, 0);
+    atomic_add(&r, disp->connector.base.id, mc->prop_crtc_id, pa->base.base.id);
+    atomic_add(&r, disp->connector.base.id, disp->connector.max_bpc_property, 12);
+    atomic_add(&r, pa->primary.base.id, mc->prop_fb_id, fb);
+    atomic_add(&r, pa->primary.base.id, mc->prop_crtc_id, pa->base.base.id);
+    atomic_add(&r, pa->primary.base.id, mc->prop_src_x, 0);
+    atomic_add(&r, pa->primary.base.id, mc->prop_src_y, 0);
+    atomic_add(&r, pa->primary.base.id, mc->prop_src_w, (uint64_t)1366 << 16);
+    atomic_add(&r, pa->primary.base.id, mc->prop_src_h, (uint64_t)768 << 16);
+    atomic_add(&r, pa->primary.base.id, mc->prop_crtc_x, 0);
+    atomic_add(&r, pa->primary.base.id, mc->prop_crtc_y, 0);
+    atomic_add(&r, pa->primary.base.id, mc->prop_crtc_w, 1366);
+    atomic_add(&r, pa->primary.base.id, mc->prop_crtc_h, 768);
+    atomic_add(&r, pa->primary.base.id, pa->primary.rotation_property, DRM_MODE_ROTATE_0);
+    k_memset(&a, 0, sizeof(a));
+    a.flags = DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT;
+    a.count_objs = r.nobjs;
+    a.objs_ptr = UPTR(r.objs);
+    a.count_props_ptr = UPTR(r.counts);
+    a.props_ptr = UPTR(r.props);
+    a.prop_values_ptr = UPTR(r.values);
+    err = drm_mode_atomic_ioctl(&gpu.drm, &a, &fa);
+    if (err != 0) {
+        printf("i915-kms-trial-test: desktop: ATOMIC: error %d\n", (int)err);
+    }
+    CHECK(err == 0 && pa->base.state->active && pa->primary.state->fb &&
+              pa->primary.state->fb->base.id == fb,
+          "desktop: weston's first commit on the adopted pipe taken, as Linux takes it");
+    CHECK(!timed_out(), "desktop: no wait at its bound");
 }
 
 /* ---- crcmodes ---- */
@@ -979,6 +1092,8 @@ int main(void)
     model_start("i915-kms-trial-test");
     CHECK(bring_up() == 0, "the display is made");
     row_adopt();
+    row_pipe_ids();
+    row_desktop();
     row_modes();
     row_underrun();
     row_backlight();

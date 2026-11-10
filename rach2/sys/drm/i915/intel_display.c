@@ -1442,3 +1442,15 @@ void intel_display_fini(struct drm_i915_private *i915)
         }
     }
 }
+
+int32_t intel_get_pipe_from_crtc_id_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_get_pipe_from_crtc_id *args = (struct drm_i915_get_pipe_from_crtc_id *)data;
+    struct drm_crtc *crtc = drm_crtc_find(dev, file, args->crtc_id);
+
+    if (!crtc) {
+        return -ENOENT;
+    }
+    args->pipe = (uint32_t)to_intel_crtc(crtc)->pipe;
+    return 0;
+}

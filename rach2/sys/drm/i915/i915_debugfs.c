@@ -1500,6 +1500,66 @@ static const struct {
     {"i915_cdclk_info", 0444u, &cdclk_info_ops},      {"i915_wedged", 0644u, &wedged_ops},
     {"i915_gem_drop_caches", 0644u, &drop_caches_ops}};
 
+/** crtc-N/i915_pipe, Linux's intel_crtc_pipe_show: the pipe's letter, by
+ * which IGT maps a CRTC to its pipe. */
+static int32_t crtc_pipe_show(void *data, char *buf, uint32_t cap)
+{
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emit_c(&e, (char)('A' + ((struct intel_crtc *)data)->pipe));
+    emit_c(&e, '\n');
+    return emit_end(&e);
+}
+
+/** crtc-N/i915_current_bpc, Linux's i915_current_bpc_show: the pipe's bits
+ * a colour in its configuration, under the commit lock. */
+static int32_t crtc_bpc_show(void *data, char *buf, uint32_t cap)
+{
+    struct intel_crtc *c = (struct intel_crtc *)data;
+    struct emit e;
+    int32_t rc;
+
+    rc = drm_modeset_lock(&c->i915->drm);
+    if (rc != 0) {
+        return rc;
+    }
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emitf(&e, "Current: %u\n", (unsigned)(c->cfg.bpp / 3u));
+    drm_modeset_unlock(&c->i915->drm);
+    return emit_end(&e);
+}
+
+static const struct debugfs_text_ops crtc_pipe_ops = {crtc_pipe_show, NULL};
+static const struct debugfs_text_ops crtc_bpc_ops = {crtc_bpc_show, NULL};
+
+/** Make each CRTC's files beside the DRM core's crc directory, Linux's
+ * intel_crtc_debugfs_add: i915_current_bpc and i915_pipe. 0, or the first
+ * error. */
+static int32_t crtcs_register(struct drm_i915_private *i915, char *path, uint32_t cap)
+{
+    static const char *const files[] = {"crtc-0/i915_current_bpc", "crtc-0/i915_pipe"};
+    const struct drm_mode_config *mc = &i915->drm.mode_config;
+    char name[32];
+    int32_t rc = 0;
+    uint32_t n, i;
+
+    for (n = 0; rc == 0 && n < mc->num_crtc && n < 10u; n++) {
+        for (i = 0; rc == 0 && i < NELEM(files); i++) {
+            k_strncpy(name, files[i], sizeof(name));
+            name[5] = (char)('0' + n);
+            drm_debugfs_path(&i915->drm, name, path, cap);
+            rc = debugfs_create_text(path, 0444u, i == 0 ? &crtc_bpc_ops : &crtc_pipe_ops,
+                                     to_intel_crtc(mc->crtcs[n]));
+        }
+    }
+    return rc;
+}
+
 void i915_debugfs_register(struct drm_i915_private *i915)
 {
     char path[64];
@@ -1509,6 +1569,9 @@ void i915_debugfs_register(struct drm_i915_private *i915)
 
     if (!i915->drm.debugfs) {
         return;
+    }
+    if (i915->drm.features & DRIVER_MODESET) {
+        rc = crtcs_register(i915, path, sizeof(path));
     }
     for (i = 0; rc == 0 && i < NELEM(text_files); i++) {
         drm_debugfs_path(&i915->drm, text_files[i].name, path, sizeof(path));
