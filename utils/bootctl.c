@@ -67,9 +67,11 @@
 
 #define SLOT_MAX (4 * 1024 * 1024)
 
-/* The ELF class of the kernel this system can boot: that of its own
- * programs, since the x86-64 kernel runs no i386 program and the i686 kernel
- * no x86-64 one. bootslot.c validates either kind. */
+/* The ELF class of the kernel of this system's own architecture. The i686
+ * kernel runs no x86-64 program, so an x86-64 system takes only its own; the
+ * x86-64 kernel runs i386 programs (ia32(7)), so an i686 system takes it too
+ * on a processor with long mode, as Debian's i386 systems take its amd64
+ * kernel. bootslot.c validates either kind. */
 #if defined __x86_64__
 #define KERNEL_CLASS 2
 #define KERNEL_ARCH  "x86-64"
@@ -156,6 +158,42 @@ static int cmdline_has(const char *token)
             return 1;
         }
     }
+    return 0;
+}
+
+#if !defined __x86_64__
+/** Whether /proc/cpuinfo lists the flag `lm`, long mode, which the x86-64
+ *  kernel needs; 0 when it does not read. */
+static int long_mode(void)
+{
+    char line[2048];
+    FILE *f = fopen("/proc/cpuinfo", "r");
+    int lm = 0;
+
+    while (f != NULL && !lm && fgets(line, sizeof(line), f) != NULL) {
+        lm = strncmp(line, "flags", 5) == 0 &&
+             (strstr(line, " lm ") != NULL || strstr(line, " lm\n") != NULL);
+    }
+    if (f != NULL) {
+        fclose(f);
+    }
+    return lm;
+}
+#endif
+
+/** Whether this system can run the kernel whose ELF header starts `hdr`,
+ *  `size` bytes: one of its own class, or, on i686, the x86-64 kernel on a
+ *  processor with long mode. */
+static int kernel_fits(const uint8_t *hdr, size_t size)
+{
+    if (size <= 4 || memcmp(hdr, "\177ELF", 4) != 0 || hdr[4] == KERNEL_CLASS) {
+        return 1;
+    }
+#if !defined __x86_64__
+    if (hdr[4] == 2) {
+        return long_mode();
+    }
+#endif
     return 0;
 }
 
@@ -454,10 +492,10 @@ static int cmd_commit(void)
  * Stage the kernel in `path` into the candidate slot for one trial boot.
  *
  * The boot line must have `rach2.slot=candidate`, `rach2.slot=fallback` or
- * `rach2.slot=recovery`. A file larger than any slot, or a kernel of the other
- * architecture, fails before the disk is opened; `bootslot_install` checks
- * the file and the fallback and does the writes the file header lists.
- * Returns 0, or 1 having said why not.
+ * `rach2.slot=recovery`. A file larger than any slot, or a kernel that
+ * cannot run this system's programs (`kernel_fits`), fails before the disk
+ * is opened; `bootslot_install` checks the file and the fallback and does
+ * the writes the file header lists. Returns 0, or 1 having said why not.
  */
 static int cmd_kernel(const char *path)
 {
@@ -487,9 +525,9 @@ static int cmd_kernel(const char *path)
         return 1;
     }
     fclose(f);
-    if (size > 4 && memcmp(image, "\177ELF", 4) == 0 && image[4] != KERNEL_CLASS) {
-        fprintf(stderr, "bootctl: '%s' is not an %s kernel, which this system's programs need\n",
-                path, KERNEL_ARCH);
+    if (!kernel_fits(image, size)) {
+        fprintf(stderr, "bootctl: '%s' is not a kernel that runs this system's %s programs\n", path,
+                KERNEL_ARCH);
         return 1;
     }
     if (open_slot() != 0) {
