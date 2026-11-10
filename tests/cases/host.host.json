@@ -566,6 +566,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_ctx",
+          "checks": "tests/host/i915_ctx_hosttest.c runs the Intel graphics driver's contexts and requests on the HD 4400's host model, whose render ring saves and restores context images: the 17-page image and the default state with Linux's workarounds, MI_SET_CONTEXT's flags and a context's registers across a switch, every context ioctl's refusals as Linux 6.18 gives them, sequence numbers, fences signalled from the interrupt, retirement, waits with timeouts, GETPARAM and I915_QUERY row by row and GET_RESET_STATS, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_ring",
           "checks": "tests/host/i915_ring_hosttest.c starts the Intel graphics driver's render and blitter rings on the HD 4400's host model, takes their user interrupts through the handler table with every other source masked, wakes breadcrumb waiters from the interrupt, and runs first light end to end, under ASan and UBSan and exits 0",
           "source": "scenario"

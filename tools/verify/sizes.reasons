@@ -436,6 +436,14 @@ tests/host/hub_hosttest.c:main lines 583 a test's rows, each a case, read as one
 tests/host/hub_hosttest.c:xhci_submit complexity 104 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:xhci_submit lines 296 a test's rows, each a case, read as one table
 
+tests/host/i915_ctx_hosttest.c:row_contexts complexity 47 a test's rows, each a case, read as one table
+tests/host/i915_ctx_hosttest.c:row_engine_maps lines 108 a test's rows, each a case, read as one table
+tests/host/i915_ctx_hosttest.c:row_params complexity 60 a test's rows, each a case, read as one table
+tests/host/i915_ctx_hosttest.c:row_params lines 134 a test's rows, each a case, read as one table
+tests/host/i915_ctx_hosttest.c:row_query complexity 30 a test's rows, each a case, read as one table
+tests/host/i915_ctx_hosttest.c:row_requests complexity 68 a test's rows, each a case, read as one table
+tests/host/i915_ctx_hosttest.c:row_requests lines 133 a test's rows, each a case, read as one table
+
 tests/host/kd_hosttest.c:translating lines 101 a test's rows, each a case, read as one table
 
 tests/host/kheap_hosttest.c:main lines 114 a test's rows, each a case, read as one table

@@ -9,12 +9,38 @@
 #include "i915_model.h"
 
 /*
+ * The commands of contexts and flushes a ring runs (i915_model_ctx.c).
+ * MI_SET_CONTEXT, the render ring's alone, to an image other than the one
+ * CCID names saves the context registers, INSTPM, CACHE_MODE_0_GEN7 and
+ * CACHE_MODE_1, into the old image behind a marker, and restores them
+ * from the new one unless MI_RESTORE_INHIBIT is set; a restore of an image
+ * that holds no saved state faults the ring, as does a switch while
+ * arbitration is on. `switches`, `saves`, `restores` and `inhibited` count
+ * them, and `pipe_controls` and `flush_dws` the flushes run.
+ */
+struct i915_model_ctx {
+    uint32_t switches;
+    uint32_t saves;
+    uint32_t restores;
+    uint32_t inhibited;
+    uint32_t pipe_controls;
+    uint32_t flush_dws;
+    int arb_off;
+};
+
+/* The marker a saved image begins with, and the dwords after it that hold
+ * INSTPM, CACHE_MODE_0_GEN7 and CACHE_MODE_1. */
+#define I915_MODEL_CTX_SAVED 0x1915c0deu
+
+/*
  * One ring of the model. While it is enabled (RING_CTL's RING_VALID) and
  * not stopped (MI_MODE's STOP_RING) and not `stuck`, each wait of the
  * driver runs its commands from its head to its tail through the global
  * GTT. `executed` counts the commands run. A command the model does not
  * know, or an address it cannot reach, stops the ring there: `fault` is
  * set to that command's first dword and the ring runs nothing more.
+ *
+ * `ctx` is the state of its contexts and flushes.
  *
  * The test's switches: `stuck` runs nothing, `idle_stuck` never reports
  * MODE_IDLE, `start_fails` drops RING_VALID from each write of RING_CTL,
@@ -28,6 +54,7 @@ struct i915_model_ring {
     int idle_stuck;
     int start_fails;
     int flush_stuck;
+    struct i915_model_ctx ctx;
 };
 
 /*
