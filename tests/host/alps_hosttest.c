@@ -2369,19 +2369,20 @@ static void reconnect_rows(void)
     for (i = 0; i < 4; i++) {
         irq_byte(0x00);
     }
-    CHECK("four first bytes out of form are four bad packets",
+    CHECK("four first bytes out of form are four bad bytes",
           bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted);
     send(one, 6);
     CHECK("a whole packet ends the count", bad_in_a_row == 0);
     for (i = 0; i < 11; i++) {
         irq_byte(0x00);
     }
-    CHECK("eleven bad bytes, two lost packets' worth, leave the port as it is",
+    CHECK("eleven bad bytes, one short of two packets' worth, leave the port as it is",
           bad_in_a_row == 11 && state == STATE_ACTIVE && !reconnect_wanted);
     irq_byte(0x00);
     CHECK("the twelfth, Linux's resetafter of twice the packet's size, stops the port and "
-          "asks for a reconnect",
-          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
+          "asks for a reconnect, counting bytes in its warning",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT &&
+              warned("bad bytes in a row"));
     reconnect_pad();
     CHECK("the pad is reconnected with Linux's commands, in Linux's order", took_reconnect());
     CHECK("it is in absolute mode again and reports",
