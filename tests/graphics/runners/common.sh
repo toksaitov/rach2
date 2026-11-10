@@ -1,3 +1,4 @@
+#!/bin/sh
 # common.sh: what the runners share, sourced by webgl.sh, video.sh and
 # deqp.sh inside the guest, Rach2's or Debian's, and run on the host as
 # `sh common.sh host` for the host's half of a run's record.

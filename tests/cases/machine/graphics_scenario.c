@@ -370,7 +370,7 @@ static void judge(struct graphics_case *s)
  * evidence. */
 static void collect(struct graphics_case *s)
 {
-    char *argv[] = {"sh", NULL, "host", NULL};
+    char *argv[] = {"common", "host", NULL};
     struct net_run r;
 
     if (net_step(&s->u, "collect") != ETUDE_OK)
@@ -380,8 +380,9 @@ static void collect(struct graphics_case *s)
     if (net_ok(&s->u) &&
         etude_guest_get(s->b.m, GRAPHICS_DIR "/out.tar.gz", "out.tar.gz") != ETUDE_OK)
         net_fail(&s->u, "the output could not be fetched");
-    argv[1] = (char *)etude_artifact(s->u.c, "common");
-    if (net_ok(&s->u) && argv[1] != NULL && net_host(&s->u, argv, "host-record", &r) == ETUDE_OK)
+    /* common.sh runs as the artifact itself, by its #! line, since sh is
+     * no tool of the cases' manifests. */
+    if (net_ok(&s->u) && net_host(&s->u, argv, "host-record", &r) == ETUDE_OK)
         net_run_free(&r);
 }
 
