@@ -199,6 +199,13 @@ A read of an evdev node gives an i386 caller records of 16 bytes, with
 .Pa rach2/ia32.md
 lists the families and what each translates.
 .Pp
+Intel's
+.Dv DRM_IOCTL_I915_GETPARAM
+reads an eight-byte request with a 32-bit pointer to the returned int.
+It writes only that int, leaving the request unchanged.
+The GEM, virtio-gpu, dma-buf, syncobj, sync-file and udmabuf requests
+carry fixed-width fields and pass through the native handlers.
+.Pp
 For a call that entered by
 .Ql int $0x80 ,
 a
