@@ -41,7 +41,7 @@ rach2/kernel.c:process_command nesting 6 a dispatcher, one arm per command, read
 rach2/kernel.c:root_spec_matches complexity 31 a parser over an external format, one check per field in the format's order
 rach2/kernel.c:boot_stack params 7 the parameters are the parts of one new image's stack: its space, arguments, environment, image and auxiliary vector
 
-rach2/sys/arch/i686/systab.c:arch_syscall_init lines 306 a table, one entry per system call number
+rach2/sys/arch/i686/systab.c:arch_syscall_init lines 311 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/ia32_fs.c:ia32_native params 10 the parameters are the six registers of one x86-64 call, its handler and the kernel buffer it may reach
 

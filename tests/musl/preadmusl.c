@@ -19,14 +19,21 @@
  * a directory. lseek of a socket and of a pseudo-terminal master is ESPIPE, by
  * _llseek and by call 19 (lseek, call 8, on x86-64), as on Linux.
  *
- * On x86-64, preadv and pwritev move a vector at an offset and leave the
- * descriptor's own: each buffer at the place the ones before it reached, a
- * buffer of no bytes skipped, a short read ending the call, and the call's
- * fifth argument, the offset's high half, not read. A vector with a buffer
- * the probe cannot reach is refused before a byte is written, and a negative
+ * preadv and pwritev move a vector at an offset and leave the descriptor's
+ * own: each buffer at the place the ones before it reached, a buffer of no
+ * bytes skipped, and a short read ending the call. The call's fifth
+ * argument is the offset's high half on i686, and on x86-64, which has the
+ * whole offset in the fourth, it is not read. A vector with a buffer the
+ * probe cannot reach is refused before a byte is written, and a negative
  * offset, a count past 1024, a pipe, a descriptor open for the other
- * direction and one not open are refused, the last with no buffers too. The
- * i686 kernel has neither call, and musl's preadv and pwritev are ENOSYS.
+ * direction and one not open are refused, the last with no buffers too.
+ * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
+ * offset at offset -1 and not at another, and leaves O_APPEND clear;
+ * preadv2 reads the bytes back. preadv2 and pwritev2 refuse a descriptor
+ * that is not open with EBADF whatever the flags, and only then a flag they
+ * do not take with EOPNOTSUPP. sync_file_range flushes a range of the file,
+ * and refuses a descriptor that is not open with EBADF before its flags
+ * and /dev/null with ESPIPE.
  *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
@@ -35,9 +42,9 @@
  * names, an assertion for each check, as `assertion_id` lists them; a failed
  * check fails its assertion and leaves those after it not run. The branch of
  * the group `arch` is the architecture the program was built for: `x86-64`
- * with the assertions of preadv and pwritev, from `vector-file` to
- * `vector-refusals`, and `i686` with `mem-write-eio`, the write past 32 bits
- * of /proc/self/mem, and `no-vectors`.
+ * with `preadv-high-half`, the fifth argument not read, and `i686` with
+ * `mem-write-eio`, the write past 32 bits of /proc/self/mem, and
+ * `preadv-high-word`, the fifth argument read as the offset's high half.
  */
 
 #define _GNU_SOURCE
@@ -88,14 +95,15 @@ static const char *const assertion_id[] = {
 #endif
     "proc-sys-4g",      "negative-offset", "sign-bit",          "make-pipe",
     "pipe-espipe",      "socket-espipe",   "stdout-espipe",     "other-direction",
-    "directory",        "lseek-espipe",
+    "directory",        "lseek-espipe",    "vector-file",       "pwritev-vector",
+    "preadv-vector",    "preadv-short",
 #if defined __x86_64__
-    "vector-file",      "pwritev-vector",  "preadv-vector",     "preadv-short",
-    "preadv-high-half", "pwritev-efault",  "vector-refusals"
+    "preadv-high-half",
 #else
-    "no-vectors"
+    "preadv-high-word",
 #endif
-};
+    "pwritev-efault",   "vector-refusals", "pwritev2-append",   "preadv2-readback",
+    "rwv2-refusals",    "range-sync"};
 
 /** Begin the report, give the branch of `arch`, and plan the assertions. */
 static void report_start(void)
@@ -417,9 +425,79 @@ static int seek_refusal_rows(void)
     return 0;
 }
 
-#if defined __x86_64__
 /* An address in the kernel's half, which no user buffer may name. */
+#if defined __x86_64__
 #define KERNEL_ADDRESS ((void *)0xffff800000000000UL)
+#else
+#define KERNEL_ADDRESS ((void *)0xc0000000UL)
+#endif
+
+/* RWF_APPEND, which musl's headers may not name. */
+#ifndef RWF_APPEND
+#define RWF_APPEND 0x10
+#endif
+
+/* preadv2's and pwritev2's position as the two words the call takes, low
+ * first, and the position -1, the descriptor's own offset. */
+#define POS_LO(p)                      ((long)(p))
+#define POS_HI(p)                      ((long)((unsigned long long)(p) >> 32))
+#define RWV2(nr, fd, iov, n, p, flags) syscall(nr, fd, iov, n, POS_LO(p), POS_HI(p), flags)
+
+/**
+ * Check pwritev2's RWF_APPEND, preadv2's read back, the two calls' refusals
+ * and sync_file_range on a new copy of the file. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int vector_flag_rows(void)
+{
+    char back[8];
+    struct iovec out[2], in[1];
+    int fd, null, ok;
+
+    fd = open(FILE_PATH, O_RDWR | O_TRUNC);
+    out[0].iov_base = "C";
+    out[0].iov_len = 1;
+    out[1].iov_base = "D";
+    out[1].iov_len = 1;
+    if (fd < 0 || write(fd, "ab", 2) != 2 || lseek(fd, 0, SEEK_SET) != 0 ||
+        RWV2(SYS_pwritev2, fd, out, 2, -1LL, RWF_APPEND) != 2 || !offset_is(fd, 4)) {
+        return fail("pwritev2 with RWF_APPEND at -1 writes at the end and moves the offset");
+    }
+    out[0].iov_base = "E";
+    if (lseek(fd, 1, SEEK_SET) != 1 || RWV2(SYS_pwritev2, fd, out, 1, 0LL, RWF_APPEND) != 1 ||
+        !offset_is(fd, 1) || (fcntl(fd, F_GETFL) & O_APPEND) != 0) {
+        return fail("pwritev2 with RWF_APPEND at 0 writes at the end and leaves the offset");
+    }
+    report_held();
+    memset(back, 'x', sizeof(back));
+    in[0].iov_base = back;
+    in[0].iov_len = sizeof(back);
+    if (RWV2(SYS_preadv2, fd, in, 1, 0LL, 0) != 5 || memcmp(back, "abCDExxx", 8) != 0 ||
+        !offset_is(fd, 1)) {
+        return fail("preadv2 reads the appended bytes back");
+    }
+    report_held();
+    ok = refused(RWV2(SYS_preadv2, 999, in, 1, 0LL, 0x40), EBADF) &&
+         refused(RWV2(SYS_pwritev2, 999, out, 1, -1LL, 0x40), EBADF) &&
+         refused(RWV2(SYS_preadv2, fd, in, 1, 0LL, 0x40), EOPNOTSUPP) &&
+         refused(RWV2(SYS_pwritev2, fd, out, 1, -1LL, 0x40), EOPNOTSUPP);
+    if (!ok) {
+        return fail("preadv2 and pwritev2 refuse a bad descriptor before a bad flag");
+    }
+    report_held();
+    null = open("/dev/null", O_RDWR);
+    ok = sync_file_range(fd, 0, 5, SYNC_FILE_RANGE_WRITE) == 0 &&
+         refused(sync_file_range(999, -1, 0, 0x100), EBADF) &&
+         refused(sync_file_range(fd, 0, 0, 0x100), EINVAL) && null >= 0 &&
+         refused(sync_file_range(null, 0, 0, 0), ESPIPE);
+    close(null);
+    close(fd);
+    if (!ok) {
+        return fail("sync_file_range flushes a file and refuses in Linux's order");
+    }
+    report_held();
+    return 0;
+}
 
 /**
  * Check the refusals of preadv and pwritev on the file vector_rows makes.
@@ -513,35 +591,20 @@ static int vector_rows(void)
     report_held();
     in[0].iov_base = three;
     in[0].iov_len = sizeof(three);
+#if defined __x86_64__
     if (syscall(SYS_preadv, fd, in, 1, 4L, 0xdeadL) != 3 || memcmp(three, "456", 3) != 0) {
         return fail("preadv does not read the offset's high half");
     }
-    report_held();
-    close(fd);
-    return vector_refusal_rows();
-}
 #else
-/** Check that the i686 kernel has neither preadv nor pwritev. Returns 0, or
- * 1 once the failure is reported. */
-static int vector_rows(void)
-{
-    char buf[4];
-    struct iovec iov;
-    int fd, ok;
-
-    iov.iov_base = buf;
-    iov.iov_len = sizeof(buf);
-    fd = open(FILE_PATH, O_RDWR);
-    ok = fd >= 0 && refused(preadv(fd, &iov, 1, 0), ENOSYS) &&
-         refused(pwritev(fd, &iov, 1, 0), ENOSYS);
-    close(fd);
-    if (!ok) {
-        return fail("i686 has neither preadv nor pwritev");
+    if (syscall(SYS_preadv, fd, in, 1, 4L, 1L) != 0 ||
+        syscall(SYS_preadv, fd, in, 1, 4L, 0L) != 3 || memcmp(three, "456", 3) != 0) {
+        return fail("preadv reads its fifth argument as the offset's high half");
     }
-    report_held();
-    return 0;
-}
 #endif
+    report_held();
+    close(fd);
+    return vector_refusal_rows() != 0 ? 1 : vector_flag_rows();
+}
 
 int main(void)
 {

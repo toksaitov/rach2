@@ -203,14 +203,21 @@ A zero count returns zero once the descriptor has passed these checks.
 The i386 system call numbers are 3 for
 .Nm read ,
 145 for
-.Nm readv
-and 180 for
+.Nm readv ,
+180 for
 .Nm pread64 ,
 which takes the descriptor, the buffer and the count in EBX, ECX and
-EDX, and the offset's low and high 32 bits in ESI and EDI.
+EDX, and the offset's low and high 32 bits in ESI and EDI,
+333 for
+.Nm preadv ,
+whose offset is in the fourth and fifth arguments, low word first, and
+378 for
+.Nm preadv2 ,
+which adds flags in the sixth.
 Musl's and GNU libc's
 .Fn pread
-are this call.
+are
+.Nm pread64 .
 .Pp
 On x86-64 the numbers are 0 for
 .Nm read ,
@@ -218,9 +225,12 @@ On x86-64 the numbers are 0 for
 .Nm readv ,
 17 for
 .Nm pread64 ,
-which takes the offset whole in R10, and 295 for
-.Nm preadv ,
-which i386 does not have here.
+which takes the offset whole in R10, 295 for
+.Nm preadv
+and 327 for
+.Nm preadv2 ,
+each with the offset whole in its fourth argument and its fifth, the
+offset's high half, not read, as on Linux.
 .Fn preadv
 reads the buffers of
 .Fa iov
@@ -232,8 +242,6 @@ and leaves the descriptor's offset where it was; the vector is checked
 whole, as
 .Fn readv
 checks it, before a byte is read, and a short read ends the call.
-The offset's high half, the call's fifth argument, is not read, as on
-Linux, since the fourth holds the whole of it.
 .Pp
 The x86-64 kernel runs, for a program that enters it by
 .Ql int $0x80 ,
@@ -241,25 +249,29 @@ which
 .Xr ia32 7
 describes, i386's
 .Nm readv
-(145), whose vector is of 32-bit addresses and lengths;
+(145), whose vector is of 32-bit addresses and lengths, and i386's
 .Nm preadv
-(333), whose offset is in the fourth and fifth arguments, low word first;
-and
+(333) and
 .Nm preadv2
-(378), which adds flags in the sixth.
+(378), with i386's arguments.
 .Pp
-The native x86-64
 .Nm preadv2
-call is 327, with a whole offset in its fourth argument and flags in its
-sixth; its fifth argument is ignored.
-Both forms read as
+reads as
 .Nm readv
-at offset -1, take
+at offset -1 and as
+.Nm preadv
+at another.
+It checks the descriptor before its flags, as Linux does: a descriptor
+that is not open is
+.Er EBADF
+whatever the flags.
+Both forms take
 .Dv RWF_HIPRI ,
-.Dv RWF_DSYNC
-and
+.Dv RWF_DSYNC ,
 .Dv RWF_SYNC
-and refuse another flag with
+and
+.Dv RWF_APPEND ,
+which a read ignores, and refuse another flag with
 .Er EOPNOTSUPP .
 .Sh RETURN VALUES
 On success, these functions return the number of bytes read.
@@ -292,10 +304,9 @@ reads a file at offsets with
 and checks that the descriptor's offset does not move, and that a pipe,
 a socket and a terminal return
 .Er ESPIPE .
-On x86-64 it reads 2, 0 and 4 bytes from offset 13 with
-.Fn preadv ,
-requires 6 and the bytes in turn, and on i686 requires
-.Er ENOSYS .
+It reads 2, 0 and 4 bytes from offset 13 with
+.Fn preadv
+and requires 6 and the bytes in turn.
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EAGAIN
@@ -347,7 +358,9 @@ The stream socket is not connected and has not been shut down.
 A boot window is not present; a removed disk's node gives
 .Er EIO .
 .It Er EOPNOTSUPP
-The descriptor is an ioctl-only socket.
+The descriptor is an ioctl-only socket, or
+.Nm preadv2
+was given a flag it does not take.
 .It Er EPERM
 A loop device node was read directly.
 .It Er ESPIPE
