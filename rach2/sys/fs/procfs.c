@@ -8103,12 +8103,12 @@ static void procfs_kvm_irqs(struct procfs_text *t, void *vm)
     static const char *const vec_names[KVM_VEC_STEPS] = {" accepted ", " dropped ", " acked ",
                                                          " injected ", " saved ",   " eoi "};
     struct kvm_irq_row row;
-    uint32_t n, i;
+    uint32_t pos = 0, i;
 
     ap_str(t, "kvm_irqchip:\t");
     ap_str(t, kvm_vm_irqchip_name(vm));
     ap_ch(t, '\n');
-    for (n = 0; kvm_vm_irq_row(vm, n, &row); n++) {
+    while (kvm_vm_irq_row(vm, &pos, &row)) {
         if (row.pin) {
             ap_str(t, "kvm_ioapic_pin:\t");
             ap_u32(t, row.index);
