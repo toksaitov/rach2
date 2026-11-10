@@ -30,11 +30,11 @@ static volatile unsigned int bkl_claim;
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
 static uint64_t bkl_wait_max_cycles;
-static uint64_t bkl_hold_max_cycles; /* the longest hold, from take to give back */
-static uint32_t bkl_hold_vector;     /* its entry's vector, 0 for none */
-static int32_t bkl_hold_nr = -1;     /* its entry's system call number, or -1 */
-static uint64_t bkl_seen_max_cycles; /* the oldest hold an interrupt has found */
-static uintptr_t bkl_seen_pc;        /* the instruction that interrupt stopped */
+static uint64_t bkl_hold_max_cycles;          /* the longest hold, from take to give back */
+static uint32_t bkl_hold_vector;              /* its entry's vector, 0 for none */
+static int32_t bkl_hold_nr = -1;              /* its entry's system call number, or -1 */
+static uint64_t bkl_seen_max_cycles;          /* the oldest hold an interrupt has found */
+static uintptr_t bkl_seen_pc[BKL_SAMPLE_PCS]; /* that instruction, then its callers */
 
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
@@ -131,18 +131,34 @@ void bkl_note_entry(uint32_t vector, int32_t nr)
     }
 }
 
-void bkl_hold_sample(uintptr_t pc)
+void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
 {
     struct percpu *cpu = this_cpu();
+    uintptr_t first = fp;
     uint64_t held;
+    int i;
 
     if (cpu->bkl_depth < 2) {
         return;
     }
     held = arch_cycles() - cpu->bkl_since;
-    if (held > bkl_seen_max_cycles) {
-        bkl_seen_max_cycles = held;
-        bkl_seen_pc = pc;
+    if (held <= bkl_seen_max_cycles) {
+        return;
+    }
+    bkl_seen_max_cycles = held;
+    bkl_seen_pc[0] = pc;
+    /* The kernel keeps frame pointers: each frame holds the caller's frame
+     * pointer, then the return address. The walk stays on one stack. */
+    for (i = 1; i < BKL_SAMPLE_PCS; i++) {
+        if (fp < USER_ADDR_MAX || fp % sizeof(uintptr_t) != 0 || fp < first ||
+            fp - first > 0x10000u) {
+            break;
+        }
+        bkl_seen_pc[i] = ((const uintptr_t *)fp)[1];
+        fp = ((const uintptr_t *)fp)[0];
+    }
+    for (; i < BKL_SAMPLE_PCS; i++) {
+        bkl_seen_pc[i] = 0;
     }
 }
 
@@ -160,10 +176,14 @@ void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr)
     *nr = bkl_hold_nr;
 }
 
-void smp_hold_sample(uint64_t *age_us, uintptr_t *pc)
+void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
 {
+    int i;
+
     *age_us = timer_cycles_us(bkl_seen_max_cycles);
-    *pc = bkl_seen_pc;
+    for (i = 0; i < BKL_SAMPLE_PCS; i++) {
+        pc[i] = bkl_seen_pc[i];
+    }
 }
 
 void bkl_enter(void)

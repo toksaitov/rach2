@@ -2846,11 +2846,12 @@ static void procfs_work_counts(struct procfs_text *t)
     uint64_t total, longest, held, age;
     uint32_t vector;
     int32_t nr;
-    uintptr_t pc;
+    uintptr_t pc[BKL_SAMPLE_PCS];
+    int i;
 
     smp_wait_stats(&total, &longest);
     smp_hold_stats(&held, &vector, &nr);
-    smp_hold_sample(&age, &pc);
+    smp_hold_sample(&age, pc);
     ap_str(t, "process_pid_steps ");
     ap_u32(t, proc_work_count(0));
     ap_str(t, "\nprocess_uid_steps ");
@@ -2891,8 +2892,11 @@ static void procfs_work_counts(struct procfs_text *t)
     }
     ap_str(t, "\nbkl_hold_sample_us ");
     ap_u64(t, age);
-    ap_str(t, "\nbkl_hold_sample_pc ");
-    ap_xlow(t, (unsigned long)pc, 1);
+    ap_str(t, "\nbkl_hold_sample_pc");
+    for (i = 0; i < BKL_SAMPLE_PCS && pc[i]; i++) {
+        ap_ch(t, ' ');
+        ap_xlow(t, (unsigned long)pc[i], 1);
+    }
     ap_ch(t, '\n');
 }
 

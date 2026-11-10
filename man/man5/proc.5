@@ -1228,8 +1228,9 @@ thread or a take again after an idle halt, and its system call number, or
 .It Li bkl_hold_sample_us , bkl_hold_sample_pc
 The oldest hold of the big kernel lock that an interrupt on the holding
 processor has found, in microseconds since its take, and in hexadecimal the
-kernel instruction that interrupt stopped.
-A hold that keeps interrupts off is never sampled.
+kernel instruction that interrupt stopped, followed by up to seven return
+addresses of its callers.
+A hold that keeps interrupts off is sampled only where it turns them on.
 .It Li latency_disk_us
 Longest block request from acceptance to completion, in microseconds.
 .It Li latency_diskwait_us
