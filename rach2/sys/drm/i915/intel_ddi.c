@@ -445,13 +445,14 @@ void intel_ddi_post_disable(struct drm_i915_private *i915, struct intel_crtc *cr
         return;
     }
     /* Linux's intel_ddi_post_disable_dp: the sink powered down before the
-     * port, lest it signal the link's loss. */
+     * port, lest it signal the link's loss, and before Gen 12 the
+     * transcoder's clock taken before the buffer goes off. */
     dp = port_dp(i915, cfg->port);
     clear_infoframes(i915, cfg->trans);
     intel_dp_set_power(dp, DP_SET_POWER_D3);
+    disable_transcoder_clock(i915, cfg);
     disable_buf(i915, dp->port, 1);
     dp->buf_ctl &= ~DDI_BUF_CTL_ENABLE;
-    disable_transcoder_clock(i915, cfg);
     if (dp->edp) {
         (void)intel_pps_vdd_on_unlocked(i915);
         intel_pps_off(i915);
