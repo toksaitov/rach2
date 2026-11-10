@@ -47,8 +47,8 @@ while getopts d:p:c:k:o:m:n: o; do
     esac
 done
 [ -n "$disk" ] || { echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-o DIR]" >&2; exit 2; }
-daemon='' qemu='' waiter='' holder='' sampler='' pid='' bad=0
-trap 'kill -9 $qemu $waiter $holder $sampler $pid 2>/dev/null; kill $daemon 2>/dev/null; wait 2>/dev/null' EXIT
+daemon='' qemu='' waiter='' holder='' pid='' bad=0
+trap 'kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon 2>/dev/null; wait 2>/dev/null' EXIT
 rm -rf "$out"
 mkdir -p "$out"
 
@@ -136,14 +136,10 @@ nc() { VK_DRIVER_FILES=$icd "$out/nocopy" "$@"; }
 # and printed, each as `bed-shm: figure: LINE`, after `bed-shm: measuring:
 # COMMAND`; ok=0 when it fails, with ivshmemd's counts. Every 30 s while
 # it runs, ivshmemd's counts and the VM's last lines show how far it has
-# got, and the most of the region's heap in use, sampled five times a
-# second, follows it.
+# got.
 figure()
 {
     echo "bed-shm: measuring: $*"
-    { while :; do ivshmemd -i | sed -n 's/.* heap \([0-9]*\) of .*/\1/p'; sleep 0.2; done; } \
-        > "$out/heap.txt" 2>/dev/null &
-    sampler=$!
     "$@" > "$out/figure.out" 2>&1 &
     pid=$! s=0
     while kill -0 "$pid" 2>/dev/null; do
@@ -154,9 +150,6 @@ figure()
         tr -d '\r' < "$out/console.log" | tail -n 3 | sed 's/^/bed-shm: running: vm: /'
     done
     wait "$pid" || { ok=0; echo "bed-shm: failed: $(ivshmemd -i 2>&1 | tr '\n' ' ')"; }
-    kill "$sampler" 2>/dev/null
-    wait "$sampler" 2>/dev/null
-    echo "bed-shm: figure: heap: at most $(sort -n "$out/heap.txt" | tail -n 1) pages in use"
     cat "$out/figure.out" >> "$out/measure.txt"
     sed 's/^/bed-shm: figure: /' "$out/figure.out"
 }
