@@ -1,0 +1,1751 @@
+/*
+ * vfio_hosttest.c: VFIO, rach2/sys/vfio/, against models of the PCI bus,
+ * the IOMMU, pins, eventfds, vectors, /sys and /dev.
+ *
+ * host-deps: rach2/sys/vfio/group.c rach2/sys/vfio/container.c
+ * host-deps: rach2/sys/vfio/pci.c rach2/sys/vfio/config.c
+ * host-deps: rach2/sys/vfio/irq.c rach2/sys/vfio/igd.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kstd.c
+ * host-deps: rach2/sys/lib/kctypes.c
+ * host-cflags: -DRACH2_HOST_X86_64
+ *
+ * The bus is the Lenovo's Haswell in small: the host bridge, the HD 4400
+ * with its OpRegion, an xHCI with MSI-X, a Lynx Point root port that the
+ * Intel PCH quirk isolates with a network card behind it, a root port
+ * without ACS with an endpoint behind it, and the LPC bridge with two
+ * functions beside it, one held by a kernel driver. The rows check the
+ * groups as Linux's pci_device_group forms them and their entries of /sys
+ * and /dev; binding by driver_override, new_id and drivers_probe; the
+ * group and container ioctls; Type1's checks, mappings and capabilities;
+ * the device's regions and their information; the configuration space as
+ * the owner sees it; the line, MSI and MSI-X into eventfds; and the reset
+ * at the open, at VFIO_DEVICE_RESET and at the release, with every vector
+ * and eventfd given back.
+ */
+
+#include "vfio/vfio.h"
+
+#include "fs/devfs.h"
+#include "fs/fd.h"
+#include "fs/file.h"
+#include "fs/synthfs.h"
+#include "fs/sysfs.h"
+#include "io/eventfd.h"
+#include "iommu.h"
+#include "irq.h"
+#include "lib/kerrno.h"
+#include "lib/kstring.h"
+#include "mm/kheap.h"
+#include "mm/paging.h"
+#include "mm/pin.h"
+#include "mm/usercopy.h"
+#include "mm/vm.h"
+
+extern int printf(const char *format, ...);
+extern void *malloc(unsigned long n);
+extern void *calloc(unsigned long n, unsigned long size);
+extern void free(void *p);
+extern int strcmp(const char *a, const char *b);
+extern int memcmp(const void *a, const void *b, unsigned long n);
+
+static int failures;
+
+/** Count and print a failure when `condition` is false. */
+#define CHECK(condition, detail)                           \
+    do {                                                   \
+        if (!(condition)) {                                \
+            printf("vfio-hosttest: failed: %s\n", detail); \
+            failures++;                                    \
+        }                                                  \
+    } while (0)
+
+/* ---- the bus ---- */
+
+#define NFN 12
+
+/* A function of the model: its place, configuration space, BAR and ROM
+ * sizes, owner, reset method and the resets it took. */
+struct fn {
+    uint8_t bus, dev, fn;
+    uint8_t cfg[4096];
+    uint64_t barsz[6];
+    uint32_t romsz;
+    const char *owner;
+    int method;
+    int resets;
+    int unit;             /* its IOMMU unit, or -1 */
+    uint8_t mem[0x10000]; /* BAR 0's first 64 KiB */
+};
+
+static struct fn fns[NFN];
+static int nfns;
+
+/** The function at (bus, dev, fn), or NULL. */
+static struct fn *fn_at(uint8_t bus, uint8_t dev, uint8_t f)
+{
+    int i;
+
+    for (i = 0; i < nfns; i++) {
+        if (fns[i].bus == bus && fns[i].dev == dev && fns[i].fn == f) {
+            return &fns[i];
+        }
+    }
+    return NULL;
+}
+
+/** Store `v` at `p`, little-endian, as configuration space holds it. */
+static void put16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
+/** Store the dword `v` at `p`, little-endian. */
+static void put32(uint8_t *p, uint32_t v)
+{
+    put16(p, (uint16_t)v);
+    put16(p + 2, (uint16_t)(v >> 16));
+}
+
+/** The dword at `p`, little-endian. */
+static uint32_t get32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+/** Add a function with its identity, device << 16 | vendor, its class and
+ * its header type. */
+static struct fn *add_fn(uint8_t bus, uint8_t dev, uint8_t f, uint32_t id, uint16_t cls,
+                         uint8_t header)
+{
+    struct fn *m = &fns[nfns++];
+
+    k_memset(m, 0, sizeof(*m));
+    m->bus = bus;
+    m->dev = dev;
+    m->fn = f;
+    m->unit = 1;
+    put32(m->cfg, id);
+    put16(m->cfg + 0x0A, cls);
+    m->cfg[0x0E] = header;
+    return m;
+}
+
+/** Link a capability `id` at `at` of `len` bytes into the list. */
+static void add_cap(struct fn *m, uint8_t id, uint8_t at)
+{
+    uint8_t *p = &m->cfg[0x34];
+
+    m->cfg[6] |= 0x10;
+    while (*p != 0) {
+        p = &m->cfg[*p + 1];
+    }
+    *p = at;
+    m->cfg[at] = id;
+    m->cfg[at + 1] = 0;
+}
+
+/** Give BAR `i` the address `addr` and size `size`, 64-bit when `wide`. */
+static void add_bar(struct fn *m, int i, uint64_t addr, uint64_t size, int io, int wide)
+{
+    m->barsz[i] = size;
+    put32(m->cfg + 0x10 + 4 * i, (uint32_t)addr | (io ? 1u : wide ? 4u : 0u));
+    if (wide) {
+        put32(m->cfg + 0x14 + 4 * i, (uint32_t)(addr >> 32));
+    }
+}
+
+uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    struct fn *m = fn_at(bus, device, function);
+
+    return m != NULL ? get32(m->cfg + (offset & 0xFC)) : 0xFFFFFFFFu;
+}
+
+uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset)
+{
+    struct fn *m = fn_at(bus, device, function);
+
+    if (m == NULL || (offset >= 256 && get32(m->cfg + 0x100) == 0)) {
+        return 0xFFFFFFFFu;
+    }
+    return get32(m->cfg + (offset & 0xFFC));
+}
+
+uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    return (uint16_t)(pci_read_config32(bus, device, function, offset) >> (8 * (offset & 2)));
+}
+
+uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    return (uint8_t)(pci_read_config32(bus, device, function, offset) >> (8 * (offset & 3)));
+}
+
+/** A dword write as a device takes it: a BAR or the ROM keeps only the bits
+ * its size lets it hold. */
+void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                        uint32_t value)
+{
+    struct fn *m = fn_at(bus, device, function);
+    int i = (offset - 0x10) / 4;
+
+    if (m == NULL) {
+        return;
+    }
+    offset &= 0xFC;
+    if (offset >= 0x10 && offset < 0x28 && m->barsz[i] != 0) {
+        uint32_t flags = get32(m->cfg + offset) & ((m->cfg[offset] & 1) ? 3u : 0xFu);
+
+        value = (value & ~(uint32_t)(m->barsz[i] - 1) & ~0xFu) | flags;
+    } else if (offset == 0x30) {
+        value = m->romsz != 0 ? (value & ~(m->romsz - 1) & 0xFFFFF800u) | (value & 1u) : 0;
+    }
+    put32(m->cfg + offset, value);
+}
+
+void pci_write_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                            uint32_t value)
+{
+    struct fn *m = fn_at(bus, device, function);
+
+    if (m != NULL) {
+        put32(m->cfg + (offset & 0xFFC), value);
+    }
+}
+
+void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                        uint16_t value)
+{
+    struct fn *m = fn_at(bus, device, function);
+
+    if (m != NULL) {
+        put16(m->cfg + (offset & 0xFE), value);
+    }
+}
+
+void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint8_t value)
+{
+    struct fn *m = fn_at(bus, device, function);
+
+    if (m != NULL) {
+        m->cfg[offset] = value;
+    }
+}
+
+uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id)
+{
+    struct fn *m = fn_at(bus, device, function);
+    uint8_t at;
+
+    if (m == NULL || !(m->cfg[6] & 0x10)) {
+        return 0;
+    }
+    for (at = m->cfg[0x34]; at != 0; at = m->cfg[at + 1]) {
+        if (m->cfg[at] == cap_id) {
+            return at;
+        }
+    }
+    return 0;
+}
+
+/** Fill `out` from the model's function `m`. */
+static void fill(const struct fn *m, pci_device_t *out)
+{
+    k_memset(out, 0, sizeof(*out));
+    out->vendor_id = (uint16_t)(m->cfg[0] | m->cfg[1] << 8);
+    out->device_id = (uint16_t)(m->cfg[2] | m->cfg[3] << 8);
+    out->class_code = m->cfg[0x0B];
+    out->subclass = m->cfg[0x0A];
+    out->bus = m->bus;
+    out->device = m->dev;
+    out->function = m->fn;
+    out->irq = m->cfg[0x3C];
+}
+
+bool pci_nth(int nth, pci_device_t *out)
+{
+    if (nth < 0 || nth >= nfns) {
+        return false;
+    }
+    fill(&fns[nth], out);
+    return true;
+}
+
+bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
+{
+    int i;
+
+    for (i = 0; i < nfns; i++) {
+        if ((fns[i].cfg[0x0E] & 0x7F) == 1 && fns[i].cfg[0x19] == bus) {
+            fill(&fns[i], out);
+            return true;
+        }
+    }
+    return false;
+}
+
+uint64_t pci_bar_size64(const pci_device_t *dev, int i)
+{
+    return fn_at(dev->bus, dev->device, dev->function)->barsz[i];
+}
+
+uint64_t pci_bar_address64(const pci_device_t *dev, int i)
+{
+    const uint8_t *c = fn_at(dev->bus, dev->device, dev->function)->cfg;
+    uint64_t lo = get32(c + 0x10 + 4 * i) & ~0xFu;
+
+    return (get32(c + 0x10 + 4 * i) & 6u) == 4u ? lo | (uint64_t)get32(c + 0x14 + 4 * i) << 32 : lo;
+}
+
+static int windows; /* windows mapped now */
+
+uintptr_t pci_bar_map(const pci_device_t *dev, int i, uint64_t offset, size_t size, pte_t cache,
+                      struct pci_window *w)
+{
+    struct fn *m = fn_at(dev->bus, dev->device, dev->function);
+
+    (void)cache;
+    if (i != 0 || offset + size > sizeof(m->mem)) {
+        return 0;
+    }
+    w->va = (uintptr_t)(m->mem + offset);
+    w->size = size;
+    windows++;
+    return w->va;
+}
+
+void pci_bar_unmap(struct pci_window *w)
+{
+    if (w->va != 0) {
+        windows--;
+    }
+    w->va = 0;
+}
+
+static int msi_vector = -1; /* the vector MSI was last enabled with */
+static int msi_enables;
+static int msix_vectors[16]; /* each MSI-X entry's vector, or -1 */
+static int msix_unmasks;
+
+int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
+{
+    (void)dev;
+    msi_vector = vector;
+    msi_enables++;
+    return 0;
+}
+
+void pci_msi_disable(const pci_device_t *dev)
+{
+    (void)dev;
+    msi_vector = -1;
+}
+
+int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries)
+{
+    struct fn *m = fn_at(dev->bus, dev->device, dev->function);
+    uint8_t at = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
+
+    if (at == 0) {
+        return -1;
+    }
+    *bar = (uint8_t)(get32(m->cfg + at + 4) & 7u);
+    *offset = get32(m->cfg + at + 4) & ~7u;
+    *entries = ((uint32_t)(m->cfg[at + 2] | m->cfg[at + 3] << 8) & 0x7FFu) + 1u;
+    return 0;
+}
+
+int pci_msix_hold(const pci_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+void pci_msix_disable(const pci_device_t *dev)
+{
+    int i;
+
+    (void)dev;
+    for (i = 0; i < 16; i++) {
+        msix_vectors[i] = -1;
+    }
+}
+
+int pci_msix_entry_set(const pci_device_t *dev, uintptr_t table, unsigned int index, uint8_t vector)
+{
+    struct fn *m = fn_at(dev->bus, dev->device, dev->function);
+
+    if (table != (uintptr_t)(m->mem + 0x2000) || index >= 16) {
+        return -1;
+    }
+    msix_vectors[index] = vector;
+    return 0;
+}
+
+void pci_msix_entry_clear(const pci_device_t *dev, unsigned int index)
+{
+    (void)dev;
+    msix_vectors[index] = -1;
+}
+
+void pci_msix_unmask(const pci_device_t *dev)
+{
+    (void)dev;
+    msix_unmasks++;
+}
+
+static uint8_t ports[0x10000];
+
+uint8_t pci_io_read8(uint16_t port)
+{
+    return ports[port];
+}
+
+uint16_t pci_io_read16(uint16_t port)
+{
+    return (uint16_t)(ports[port] | ports[port + 1] << 8);
+}
+
+uint32_t pci_io_read32(uint16_t port)
+{
+    return get32(&ports[port]);
+}
+
+void pci_io_write8(uint16_t port, uint8_t value)
+{
+    ports[port] = value;
+}
+
+void pci_io_write16(uint16_t port, uint16_t value)
+{
+    put16(&ports[port], value);
+}
+
+void pci_io_write32(uint16_t port, uint32_t value)
+{
+    put32(&ports[port], value);
+}
+
+int pci_claim(uint8_t bus, uint8_t devfn, const char *owner)
+{
+    struct fn *m = fn_at(bus, devfn >> 3, devfn & 7);
+
+    if (m->owner != NULL) {
+        return -EBUSY;
+    }
+    m->owner = owner;
+    return 0;
+}
+
+void pci_unclaim(uint8_t bus, uint8_t devfn, const char *owner)
+{
+    struct fn *m = fn_at(bus, devfn >> 3, devfn & 7);
+
+    if (m->owner != NULL && strcmp(m->owner, owner) == 0) {
+        m->owner = NULL;
+    }
+}
+
+const char *pci_owner(uint8_t bus, uint8_t devfn)
+{
+    return fn_at(bus, devfn >> 3, devfn & 7)->owner;
+}
+
+int pci_reset_method(const pci_device_t *dev)
+{
+    return fn_at(dev->bus, dev->device, dev->function)->method;
+}
+
+void pci_save_state(const pci_device_t *dev, struct pci_saved_state *st)
+{
+    k_memset(st, 0, sizeof(*st));
+    k_memcpy(st->header, fn_at(dev->bus, dev->device, dev->function)->cfg, 64);
+}
+
+void pci_restore_state(const pci_device_t *dev, const struct pci_saved_state *st)
+{
+    k_memcpy(fn_at(dev->bus, dev->device, dev->function)->cfg, st->header, 64);
+}
+
+/** A reset as pci_reset_function makes one: the state kept, the function
+ * reset, which here clears its command word, and the state put back. */
+int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep)
+{
+    struct fn *m = fn_at(dev->bus, dev->device, dev->function);
+    struct pci_saved_state st;
+
+    if (m->method == PCI_RESET_NONE) {
+        return -ENOTTY;
+    }
+    pci_save_state(dev, &st);
+    put16(m->cfg + 4, 0);
+    msleep(100);
+    pci_restore_state(dev, &st);
+    m->resets++;
+    return 0;
+}
+
+/* ---- the IOMMU ---- */
+
+static int remapped;
+static struct {
+    uint64_t iova, phys, size;
+    int prot;
+} maps[64];
+static int nmaps, unmaps, attaches, detaches, domains;
+static uint64_t unmapped;
+
+struct iommu_domain {
+    int id;
+};
+static struct iommu_domain the_domain;
+
+int iommu_present(void)
+{
+    return 1;
+}
+
+int iommu_irq_remapped(void)
+{
+    return remapped;
+}
+
+int iommu_unit_of(uint8_t bus, uint8_t devfn)
+{
+    struct fn *m = fn_at(bus, devfn >> 3, devfn & 7);
+
+    return m != NULL ? m->unit : -1;
+}
+
+struct iommu_domain *iommu_domain_alloc(void)
+{
+    domains++;
+    return &the_domain;
+}
+
+void iommu_domain_free(struct iommu_domain *d)
+{
+    (void)d;
+    domains--;
+}
+
+uint64_t iommu_domain_limit(const struct iommu_domain *d)
+{
+    (void)d;
+    return 1ull << 39;
+}
+
+int iommu_map(struct iommu_domain *d, uint64_t iova, uint64_t phys, uint64_t size, int prot)
+{
+    (void)d;
+    if (nmaps < 64) {
+        maps[nmaps].iova = iova;
+        maps[nmaps].phys = phys;
+        maps[nmaps].size = size;
+        maps[nmaps].prot = prot;
+        nmaps++;
+    }
+    return 0;
+}
+
+int iommu_unmap(struct iommu_domain *d, uint64_t iova, uint64_t size)
+{
+    (void)d;
+    (void)iova;
+    unmaps++;
+    unmapped += size;
+    return 0;
+}
+
+uint64_t iommu_iova_to_phys(const struct iommu_domain *d, uint64_t iova)
+{
+    (void)d;
+    (void)iova;
+    return ~0ull;
+}
+
+int iommu_attach(struct iommu_domain *d, uint8_t bus, uint8_t devfn)
+{
+    (void)d;
+    (void)bus;
+    (void)devfn;
+    attaches++;
+    return 0;
+}
+
+void iommu_detach(struct iommu_domain *d, uint8_t bus, uint8_t devfn)
+{
+    (void)d;
+    (void)bus;
+    (void)devfn;
+    detaches++;
+}
+
+/** The GPU's relaxable RMRR, the network card's direct one, and every
+ * device's message window. */
+int iommu_reserved_regions(uint8_t bus, uint8_t devfn, struct iommu_region *out, int max)
+{
+    int n = 0;
+
+    (void)max;
+    if (bus == 0 && devfn == 0x10) {
+        out[n].start = 0xA0000000u;
+        out[n].end = 0xA1FFFFFFu;
+        out[n++].type = IOMMU_RESV_DIRECT_RELAXABLE;
+    }
+    if (bus == 2) {
+        out[n].start = 0xB0000000u;
+        out[n].end = 0xB00FFFFFu;
+        out[n++].type = IOMMU_RESV_DIRECT;
+    }
+    out[n].start = 0xFEE00000u;
+    out[n].end = 0xFEEFFFFFu;
+    out[n++].type = IOMMU_RESV_MSI;
+    return n;
+}
+
+/* ---- pins ---- */
+
+struct pin {
+    uint32_t count;
+    uint64_t base;
+    int live;
+    const struct pin_holder *holder;
+};
+static int pins;         /* pins held */
+static uint32_t pin_gap; /* the page after which the frames jump, or 0 */
+
+int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
+             const struct pin_holder *holder, struct pin **out)
+{
+    struct pin *p;
+
+    (void)mm;
+    (void)flags;
+    if (addr == 0) {
+        return -EFAULT;
+    }
+    p = (struct pin *)calloc(1, sizeof(*p));
+    p->count = (uint32_t)(len / 4096);
+    p->base = 0x200000000ull + addr;
+    p->live = 1;
+    p->holder = holder;
+    *out = p;
+    pins++;
+    return 0;
+}
+
+void unpin(struct pin *pin)
+{
+    free(pin);
+    pins--;
+}
+
+int pin_live(const struct pin *pin)
+{
+    return pin->live;
+}
+
+uint32_t pin_count(const struct pin *pin)
+{
+    return pin->count;
+}
+
+uintptr_t pin_phys(const struct pin *pin, uint32_t i)
+{
+    if (!pin->live || i >= pin->count) {
+        return 0;
+    }
+    return (uintptr_t)(pin->base + (uint64_t)i * 4096 +
+                       (pin_gap != 0 && i >= pin_gap ? 0x100000u : 0));
+}
+
+/** An unmap of the pinned range, as the memory manager makes it. */
+static void pin_take_back(struct pin *pin)
+{
+    pin->holder->release(pin, pin->holder->owner);
+    pin->live = 0;
+}
+
+/* ---- eventfds, vectors, user memory, the heap, the log ---- */
+
+struct eventfd {
+    uint64_t count;
+    int refs;
+    struct eventfd_hook *hooks;
+};
+static struct eventfd evs[8]; /* descriptors 100 to 107 */
+
+struct eventfd *eventfd_get(int fd, int32_t *err)
+{
+    if (fd < 100 || fd >= 108) {
+        *err = -EBADF;
+        return NULL;
+    }
+    evs[fd - 100].refs++;
+    return &evs[fd - 100];
+}
+
+void eventfd_put(struct eventfd *ev)
+{
+    ev->refs--;
+}
+
+void eventfd_signal(struct eventfd *ev)
+{
+    struct eventfd_hook *h;
+
+    ev->count++;
+    for (h = ev->hooks; h != NULL; h = h->next) {
+        if (h->signal(h)) {
+            ev->count = 0;
+        }
+    }
+}
+
+int eventfd_hook_add(struct eventfd *ev, struct eventfd_hook *h)
+{
+    h->next = ev->hooks;
+    ev->hooks = h;
+    return ev->count > 0;
+}
+
+int eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt)
+{
+    struct eventfd_hook **pp;
+
+    (void)cnt;
+    for (pp = &ev->hooks; *pp != NULL; pp = &(*pp)->next) {
+        if (*pp == h) {
+            *pp = h->next;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static isr_handler_t handlers[256];
+static int vector_taken[256];
+
+int isr_alloc_vector(void)
+{
+    int v;
+
+    for (v = 48; v < 240; v++) {
+        if (!vector_taken[v]) {
+            vector_taken[v] = 1;
+            return v;
+        }
+    }
+    return -1;
+}
+
+void isr_free_vector(int vector)
+{
+    vector_taken[vector] = 0;
+    handlers[vector] = NULL;
+}
+
+void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
+{
+    (void)name;
+    handlers[vector] = handler;
+}
+
+/** The vectors VFIO holds now. */
+static int vectors_held(void)
+{
+    int v, n = 0;
+
+    for (v = 48; v < 240; v++) {
+        n += vector_taken[v];
+    }
+    return n;
+}
+
+/** Raise `vector`, as the router does. */
+static void raise(int vector)
+{
+    isr_params_t p;
+
+    k_memset(&p, 0, sizeof(p));
+    p.vector = (uint64_t)vector;
+    if (handlers[vector] != NULL) {
+        handlers[vector](&p);
+    }
+}
+
+int copy_to_user(void __user *dst, const void *src, size_t n)
+{
+    if (dst == NULL) {
+        return -EFAULT;
+    }
+    k_memcpy(dst, src, n);
+    return 0;
+}
+
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    if (src == NULL) {
+        return -EFAULT;
+    }
+    k_memcpy(dst, src, n);
+    return 0;
+}
+
+int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        dst[i] = src[i];
+        if (src[i] == '\0') {
+            return (int)i;
+        }
+    }
+    return -ENAMETOOLONG;
+}
+
+void *kmalloc(size_t size)
+{
+    return malloc(size != 0 ? size : 1);
+}
+
+void *kzalloc(size_t size)
+{
+    return calloc(1, size != 0 ? size : 1);
+}
+
+void kfree(void *p)
+{
+    free(p);
+}
+
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
+/* ---- /sys and /dev ---- */
+
+#define NNODES 256
+
+/* A node of the model's /sys: a directory, an attribute or a link. */
+struct snode {
+    int parent;
+    char name[32];
+    const struct sysfs_attr *attr;
+    int arg;
+    int target;
+    int live;
+};
+static struct snode snodes[NNODES];
+static int nsnodes = 1;
+
+/** A new node below `parent`: its handle. */
+static int snode_add(int parent, const char *name)
+{
+    struct snode *s = &snodes[nsnodes];
+
+    k_memset(s, 0, sizeof(*s));
+    s->parent = parent;
+    k_memcpy(s->name, name, k_strlen(name) + 1);
+    s->live = 1;
+    return nsnodes++;
+}
+
+int sysfs_anchor(int node, int key)
+{
+    char name[32] = "anchor-";
+    int i;
+
+    (void)k_itoa(node * 0x10000 + key, name + 7, sizeof(name) - 7, 'x', false);
+    for (i = 1; i < nsnodes; i++) {
+        if (snodes[i].parent == 0 && strcmp(snodes[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return snode_add(0, name);
+}
+
+int sysfs_add_dir(int parent, const char *name)
+{
+    return snode_add(parent, name);
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    int h = snode_add(parent, attr->name);
+
+    (void)obj;
+    snodes[h].attr = attr;
+    snodes[h].arg = arg;
+    return h;
+}
+
+int sysfs_add_link(int parent, const char *name, int target)
+{
+    int h = snode_add(parent, name);
+
+    snodes[h].target = target;
+    return h;
+}
+
+void sysfs_remove(int handle)
+{
+    snodes[handle].live = 0;
+}
+
+int sysfs_node_child(int dir, const char *name, int len)
+{
+    int i;
+
+    for (i = 1; i < nsnodes; i++) {
+        if (snodes[i].live && snodes[i].parent == dir && (int)k_strlen(snodes[i].name) == len &&
+            memcmp(snodes[i].name, name, (unsigned long)len) == 0) {
+            return i;
+        }
+    }
+    return -ENOENT;
+}
+
+/** The live child `name` of `dir`, or 0. */
+static int child(int dir, const char *name)
+{
+    int h = sysfs_node_child(dir, name, (int)k_strlen(name));
+
+    return h > 0 ? h : 0;
+}
+
+/** What the attribute `h` shows, NUL-terminated, in `buf`. */
+static const char *show(int h, char *buf, uint32_t cap)
+{
+    int32_t n = h > 0 && snodes[h].attr->show != NULL
+                    ? snodes[h].attr->show(NULL, snodes[h].arg, buf, cap - 1)
+                    : -1;
+
+    buf[n >= 0 && (uint32_t)n < cap ? n : 0] = '\0';
+    return buf;
+}
+
+/** A write of `text` to the attribute `h`: its result. */
+static int32_t store(int h, const char *text)
+{
+    return snodes[h].attr->store(NULL, snodes[h].arg, text, (uint32_t)k_strlen(text));
+}
+
+static struct devfs_node *dev_nodes[80];
+static int ndev_nodes;
+
+int32_t devfs_node_register(struct devfs_node *node)
+{
+    dev_nodes[ndev_nodes++] = node;
+    return 0;
+}
+
+void devfs_node_unregister(struct devfs_node *node)
+{
+    (void)node;
+}
+
+/** The registered node `name`, or NULL. */
+static struct devfs_node *dev_node(const char *name)
+{
+    int i;
+
+    for (i = 0; i < ndev_nodes; i++) {
+        if (strcmp(dev_nodes[i]->name, name) == 0) {
+            return dev_nodes[i];
+        }
+    }
+    return NULL;
+}
+
+/* ---- memory mappings, descriptors and the rest of hw.c ---- */
+
+static const struct vm_device_ops *mapped_ops;
+static void *mapped_obj;
+static int zaps;
+
+int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache)
+{
+    (void)vma;
+    CHECK(cache == VM_PROT_UC, "a BAR is mapped uncached");
+    mapped_ops = ops;
+    mapped_obj = obj;
+    return 0;
+}
+
+void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
+{
+    (void)obj;
+    (void)pgoff;
+    (void)count;
+    zaps++;
+}
+
+static fd_entry_t fds[64];
+static struct open_file ofds[64];
+static int nfds = 3;
+static int unsafe_option;
+static unsigned int slept;
+
+/* The OpRegion at the GPU's ASLS. */
+#define ASLS 0xDAF00000u
+static uint8_t opregion[0x2000];
+
+void vfio_hw_msleep(unsigned int ms)
+{
+    slept += ms;
+}
+
+struct mm *vfio_hw_mm(void)
+{
+    static int mm;
+
+    return (struct mm *)(void *)&mm;
+}
+
+int32_t vfio_hw_fd_new(const struct file_ops *ops, void *priv)
+{
+    int fd = nfds++;
+
+    fds[fd].type = FD_TYPE_ANON;
+    fds[fd].ops = ops;
+    fds[fd].priv = priv;
+    fds[fd].ofd = &ofds[fd];
+    fds[fd].flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    return fd;
+}
+
+void *vfio_hw_fd_object(int fd, const struct file_ops *ops)
+{
+    return fd >= 0 && fd < nfds && fds[fd].ops == ops ? fds[fd].priv : NULL;
+}
+
+uintptr_t vfio_hw_map(uint64_t phys, uint32_t size)
+{
+    (void)size;
+    return phys == ASLS ? (uintptr_t)opregion : 0;
+}
+
+void vfio_hw_unmap(uintptr_t va, uint32_t size)
+{
+    (void)va;
+    (void)size;
+}
+
+int vfio_hw_option(const char *word)
+{
+    return unsafe_option && strcmp(word, "vfio_iommu_type1.allow_unsafe_interrupts=1") == 0;
+}
+
+/** Open the registered node `name` as a new descriptor: the descriptor,
+ * or the open's error. */
+static int open_node(const char *name)
+{
+    struct devfs_node *n = dev_node(name);
+    int fd = nfds;
+    int32_t r;
+
+    fds[fd].type = FD_TYPE_DEVICE;
+    fds[fd].ops = n->ops;
+    fds[fd].ofd = &ofds[fd];
+    r = n->open(n, &fds[fd], 0);
+    if (r != 0) {
+        return r;
+    }
+    nfds++;
+    return fd;
+}
+
+/** An ioctl on descriptor `fd`. */
+static int32_t ioc(int fd, uint32_t request, uintptr_t arg)
+{
+    return fds[fd].ops->ioctl(&fds[fd], request, arg);
+}
+
+/** The last close of descriptor `fd`. */
+static void closefd(int fd)
+{
+    fds[fd].ops->close(&fds[fd]);
+    fds[fd].ops = NULL;
+}
+
+/** pread on a device's descriptor at `pos`. */
+static int32_t pread_at(int fd, uint64_t pos, void *buf, uint32_t n)
+{
+    ofds[fd].offset = pos;
+    return fds[fd].ops->read(&fds[fd], (char __user *)buf, n);
+}
+
+/** pwrite on a device's descriptor at `pos`. */
+static int32_t pwrite_at(int fd, uint64_t pos, const void *buf, uint32_t n)
+{
+    ofds[fd].offset = pos;
+    return fds[fd].ops->write(&fds[fd], (const char __user *)buf, n);
+}
+
+/* ---- the machine ---- */
+
+/** Build the bus of the opening comment. */
+static void build(void)
+{
+    struct fn *m;
+
+    m = add_fn(0, 0, 0, 0x0A048086, 0x0600, 0);
+    m->owner = PCI_OWNER_KERNEL;
+    m = add_fn(0, 2, 0, 0x0A168086, 0x0300, 0);
+    m->unit = 0;
+    m->method = PCI_RESET_AF_FLR;
+    m->cfg[0x3C] = 11;
+    m->cfg[0x3D] = 1;
+    add_bar(m, 0, 0xF0000000u, 0x400000u, 0, 1);
+    add_bar(m, 2, 0xE0000000u, 0x10000000u, 0, 1);
+    add_bar(m, 4, 0x3000u, 64, 1, 0);
+    add_cap(m, PCI_CAP_ID_MSI, 0x90);
+    put16(m->cfg + 0x92, 0x0082); /* 64-bit, two messages */
+    add_cap(m, PCI_CAP_ID_PM, 0xD0);
+    add_cap(m, PCI_CAP_ID_AF, 0xA4);
+    m->cfg[0xA6] = 0x03;
+    put32(m->cfg + 0xFC, ASLS);
+    m = add_fn(0, 0x14, 0, 0x9C318086, 0x0C03, 0);
+    m->method = PCI_RESET_PM;
+    add_bar(m, 0, 0xF7100000u, 0x10000u, 0, 1);
+    add_cap(m, PCI_CAP_ID_MSIX, 0x80);
+    put16(m->cfg + 0x82, 7); /* eight entries */
+    put32(m->cfg + 0x84, 0x2000);
+    put32(m->cfg + 0x88, 0x3000);
+    m = add_fn(0, 0x1C, 0, 0x9C108086, 0x0604, 1);
+    m->cfg[0x19] = 2;
+    add_cap(m, PCI_CAP_ID_PCIE, 0x40);
+    put16(m->cfg + 0x42, 0x0042); /* a root port */
+    m->owner = PCI_OWNER_KERNEL;
+    m = add_fn(0, 0x1D, 0, 0x12348086, 0x0604, 1);
+    m->cfg[0x19] = 3;
+    add_cap(m, PCI_CAP_ID_PCIE, 0x40);
+    put16(m->cfg + 0x42, 0x0042);
+    add_fn(0, 0x1F, 0, 0x9C438086, 0x0601, 0x80);
+    m = add_fn(0, 0x1F, 2, 0x9C038086, 0x0106, 0);
+    m->owner = PCI_OWNER_KERNEL;
+    add_fn(0, 0x1F, 3, 0x9C228086, 0x0C05, 0);
+    m = add_fn(2, 0, 0, 0x0034168C, 0x0280, 0);
+    m->method = PCI_RESET_FLR;
+    add_bar(m, 0, 0xF7000000u, 0x80000u, 0, 1);
+    add_cap(m, PCI_CAP_ID_PCIE, 0x40);
+    put16(m->cfg + 0x42, 0x0002); /* an endpoint */
+    put32(m->cfg + 0x100, 0x00010001u);
+    add_fn(3, 0, 0, 0x816810EC, 0x0200, 0);
+    k_memcpy(opregion, "IntelGraphicsMem", 16);
+    put32(opregion + 0x10, 8);
+    put16(opregion + 0x16, 0x0200);
+}
+
+/** The model's function of the vfio device named `name`. */
+static struct vfio_device *vdev(const char *name)
+{
+    return vfio_device_by_name(name, (int)k_strlen(name));
+}
+
+/* ---- groups, /sys and binding ---- */
+
+/** The groups and their entries of /sys and /dev, and binding. */
+static void group_rows(void)
+{
+    char buf[256];
+    int groups, g0, gpu, kernel;
+
+    CHECK(vfio_groups_build() == 7, "seven groups");
+    CHECK(vdev("0000:00:02.0")->group == 0, "the GPU, alone on unit 0, is group 0");
+    CHECK(vdev("0000:00:00.0")->group == 1, "unit 1's groups follow in bus order");
+    CHECK(vdev("0000:02:00.0")->group == 6, "the PCH quirk isolates the card behind 00:1c.0");
+    CHECK(vdev("0000:03:00.0")->group == vdev("0000:00:1d.0")->group,
+          "a root port without ACS joins the group of what is behind it");
+    CHECK(vdev("0000:00:1f.2")->group == vdev("0000:00:1f.0")->group &&
+              vdev("0000:00:1f.3")->group == vdev("0000:00:1f.0")->group,
+          "the functions of a slot without ACS share a group");
+    CHECK(vfio_nodes_start() == 0 && vfio_sysfs_start() == 0, "nodes and /sys start");
+    CHECK(dev_node("vfio/vfio") != NULL && dev_node("vfio/vfio")->major == 10 &&
+              dev_node("vfio/vfio")->minor == 196 && dev_node("vfio/vfio")->mode == 0666,
+          "/dev/vfio/vfio is 10:196, 0666");
+    CHECK(dev_node("vfio/0") != NULL && dev_node("vfio/6") != NULL && dev_node("vfio/7") == NULL,
+          "/dev/vfio/N for each group");
+    groups = child(sysfs_anchor(SYSFS_KERNEL, 0), "iommu_groups");
+    g0 = child(groups, "0");
+    CHECK(strcmp(show(child(g0, "type"), buf, sizeof(buf)), "identity\n") == 0, "type");
+    CHECK(strcmp(show(child(g0, "reserved_regions"), buf, sizeof(buf)),
+                 "0x00000000a0000000 0x00000000a1ffffff direct-relaxable\n"
+                 "0x00000000fee00000 0x00000000feefffff msi\n") == 0,
+          "reserved_regions, sorted, with their kinds");
+    gpu = sysfs_anchor(SYSFS_PCI_DEVICE, 0x0010);
+    CHECK(child(child(g0, "devices"), "0000:00:02.0") != 0, "the group's devices link");
+    CHECK(snodes[child(gpu, "iommu_group")].target == g0, "iommu_group links to the group");
+    CHECK(strcmp(show(child(gpu, "driver_override"), buf, sizeof(buf)), "(null)\n") == 0,
+          "driver_override shows (null) unset");
+    kernel = child(child(child(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers"), "vfio-pci"), "bind");
+    CHECK(store(kernel, "0000:00:02.0\n") == -ENODEV, "bind refuses a device that does not match");
+    CHECK(store(child(gpu, "driver_override"), "vfio-pci\n") == 9, "driver_override takes a name");
+    CHECK(strcmp(show(child(gpu, "driver_override"), buf, sizeof(buf)), "vfio-pci\n") == 0,
+          "driver_override shows the name");
+    CHECK(store(kernel, "0000:00:02.0\n") == 13 && vdev("0000:00:02.0")->bound,
+          "bind gives the device to vfio-pci");
+    CHECK(strcmp(pci_owner(0, 0x10), "vfio-pci") == 0, "the device's owner is vfio-pci");
+    CHECK(child(gpu, "driver") != 0, "the bound device has a driver link");
+    CHECK(store(child(sysfs_anchor(SYSFS_PCI_DEVICE, 0x00FA), "driver_override"), "vfio-pci") == 8,
+          "driver_override of the SATA function");
+    CHECK(store(kernel, "0000:00:1f.2") == -EBUSY, "bind refuses a device a kernel driver has");
+    CHECK(vfio_group_viable(&vfio_groups[0]), "the GPU's group is viable");
+    CHECK(!vfio_group_viable(&vfio_groups[vdev("0000:00:1f.0")->group]),
+          "a group with a kernel driver's function is not");
+    CHECK(vfio_group_viable(&vfio_groups[6]) && vfio_group_viable(&vfio_groups[3]),
+          "a bridge with a kernel driver keeps its group viable");
+}
+
+/** new_id, remove_id, unbind and drivers_probe. */
+static void binding_rows(void)
+{
+    int drv = child(child(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers"), "vfio-pci");
+    int probe = child(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers_probe");
+
+    CHECK(store(child(drv, "new_id"), "168c 0034\n") == 10 && vdev("0000:02:00.0")->bound,
+          "new_id binds every free device of the ids");
+    CHECK(store(child(drv, "remove_id"), "168c 0034") == 9, "remove_id forgets them");
+    CHECK(store(child(drv, "remove_id"), "168c 0034") == -ENODEV, "and refuses ids not given");
+    CHECK(store(child(drv, "unbind"), "0000:02:00.0") == 12 && !vdev("0000:02:00.0")->bound &&
+              pci_owner(2, 0) == NULL,
+          "unbind takes the device back");
+    CHECK(store(child(sysfs_anchor(SYSFS_PCI_DEVICE, 0x0200), "driver_override"), "vfio-pci") ==
+                  8 &&
+              store(probe, "0000:02:00.0") == 12 && vdev("0000:02:00.0")->bound,
+          "drivers_probe binds by driver_override");
+    CHECK(store(child(sysfs_anchor(SYSFS_PCI_DEVICE, 0x00A0), "driver_override"), "vfio-pci") ==
+                  8 &&
+              store(probe, "0000:00:14.0") == 12 && vdev("0000:00:14.0")->bound,
+          "and the xHCI");
+}
+
+/* ---- groups and containers ---- */
+
+static int container, group0, device;
+
+/** The container and group ioctls up to SET_IOMMU. */
+static void container_rows(void)
+{
+    struct vfio_group_status st = {sizeof(st), 0};
+    struct vfio_iommu_type1_dma_map map = {sizeof(map), 3, 0x10000, 0x100000, 0x4000};
+    int32_t fd;
+
+    container = open_node("vfio/vfio");
+    CHECK(ioc(container, VFIO_GET_API_VERSION, 0) == 0, "API version 0");
+    CHECK(ioc(container, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU) == 1 &&
+              ioc(container, VFIO_CHECK_EXTENSION, VFIO_TYPE1v2_IOMMU) == 1 &&
+              ioc(container, VFIO_CHECK_EXTENSION, VFIO_UNMAP_ALL) == 1,
+          "Type1, v2 and UNMAP_ALL");
+    CHECK(ioc(container, VFIO_CHECK_EXTENSION, VFIO_DMA_CC_IOMMU) == 0 &&
+              ioc(container, VFIO_CHECK_EXTENSION, VFIO_UPDATE_VADDR) == 0,
+          "neither cache coherence nor UPDATE_VADDR");
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -EINVAL, "MAP_DMA needs a driver");
+    CHECK(ioc(container, VFIO_SET_IOMMU, VFIO_TYPE1v2_IOMMU) == -EINVAL, "SET_IOMMU needs a group");
+    group0 = open_node("vfio/0");
+    CHECK(open_node("vfio/0") == -EBUSY, "a group opens once at a time");
+    CHECK(ioc(group0, VFIO_GROUP_GET_STATUS, (uintptr_t)&st) == 0 &&
+              st.flags == VFIO_GROUP_FLAGS_VIABLE,
+          "the group is viable and in no container");
+    fd = container;
+    CHECK(ioc(group0, VFIO_GROUP_SET_CONTAINER, (uintptr_t)&fd) == 0, "SET_CONTAINER");
+    CHECK(ioc(group0, VFIO_GROUP_GET_STATUS, (uintptr_t)&st) == 0 &&
+              st.flags == (VFIO_GROUP_FLAGS_VIABLE | VFIO_GROUP_FLAGS_CONTAINER_SET),
+          "the group is in the container");
+    CHECK(ioc(group0, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:02.0") == -EINVAL,
+          "GET_DEVICE_FD needs the IOMMU set");
+    CHECK(ioc(container, VFIO_SET_IOMMU, VFIO_TYPE1v2_IOMMU) == -EPERM,
+          "SET_IOMMU refuses a host without interrupt remapping");
+    unsafe_option = 1;
+    CHECK(ioc(container, VFIO_SET_IOMMU, VFIO_TYPE1v2_IOMMU) == 0 && attaches == 1 && domains == 1,
+          "allow_unsafe_interrupts lets it, and the GPU goes into the domain");
+    CHECK(ioc(container, VFIO_SET_IOMMU, VFIO_TYPE1v2_IOMMU) == -EBUSY, "set once");
+}
+
+/** VFIO_IOMMU_GET_INFO and its capabilities. */
+static void iommu_info_rows(void)
+{
+    uint8_t info[256];
+    struct vfio_iommu_type1_info *ti = (struct vfio_iommu_type1_info *)(void *)info;
+    struct vfio_iommu_type1_info_cap_iova_range *cap;
+    struct vfio_iova_range *r;
+
+    ti->argsz = 16;
+    CHECK(ioc(container, VFIO_IOMMU_GET_INFO, (uintptr_t)ti) == 0 &&
+              ti->flags == VFIO_IOMMU_INFO_PGSIZES && ti->iova_pgsizes == 0x40201000ull,
+          "GET_INFO's page sizes");
+    ti->argsz = 24;
+    CHECK(ioc(container, VFIO_IOMMU_GET_INFO, (uintptr_t)ti) == 0 && ti->argsz == 24 + 48 + 16 &&
+              ti->cap_offset == 0 && (ti->flags & VFIO_IOMMU_INFO_CAPS),
+          "GET_INFO grows argsz for its capabilities");
+    ti->argsz = sizeof(info);
+    CHECK(ioc(container, VFIO_IOMMU_GET_INFO, (uintptr_t)ti) == 0 && ti->cap_offset == 24,
+          "GET_INFO's capabilities follow it");
+    cap = (struct vfio_iommu_type1_info_cap_iova_range *)(void *)(info + 24);
+    r = (struct vfio_iova_range *)(void *)(info + 24 + sizeof(*cap));
+    CHECK(cap->header.id == VFIO_IOMMU_TYPE1_INFO_CAP_IOVA_RANGE && cap->header.next == 72 &&
+              cap->nr_iovas == 2,
+          "two IOVA ranges");
+    CHECK(r[0].start == 0 && r[0].end == 0xFEDFFFFFu && r[1].start == 0xFEF00000u &&
+              r[1].end == (1ull << 39) - 1,
+          "the message window is taken out, the relaxable RMRR kept");
+    CHECK(((struct vfio_info_cap_header *)(void *)(info + 72))->id ==
+                  VFIO_IOMMU_TYPE1_INFO_DMA_AVAIL &&
+              ((struct vfio_iommu_type1_info_dma_avail *)(void *)(info + 72))->avail == 65535,
+          "65535 mappings available");
+}
+
+/** MAP_DMA and UNMAP_DMA. */
+static void dma_rows(void)
+{
+    struct vfio_iommu_type1_dma_map map = {sizeof(map), 3, 0x10000, 0x100000, 0x4000};
+    struct vfio_iommu_type1_dma_unmap um = {sizeof(um), 0, 0x101000, 0x1000};
+    struct vfio_container *c = (struct vfio_container *)fds[container].priv;
+    int32_t fd = container;
+
+    pin_gap = 2;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == 0 && nmaps == 2 &&
+              maps[0].iova == 0x100000 && maps[0].size == 0x2000 &&
+              maps[0].phys == 0x200010000ull && maps[1].iova == 0x102000 &&
+              maps[1].phys == 0x200112000ull && maps[0].prot == (IOMMU_READ | IOMMU_WRITE),
+          "MAP_DMA maps each contiguous run of the pinned pages");
+    pin_gap = 0;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -EEXIST, "an overlap is EEXIST");
+    map.iova = 0xFEE00000u;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -EINVAL,
+          "the message window is no IOVA");
+    map.iova = 0x200800;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -EINVAL, "an unaligned IOVA");
+    map.iova = 0x200000;
+    map.flags = 0;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -EINVAL, "no access");
+    map.flags = 1;
+    c->ndma = VFIO_DMA_MAX;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -ENOSPC, "past the limit");
+    c->ndma = 1;
+    CHECK(ioc(container, VFIO_IOMMU_UNMAP_DMA, (uintptr_t)&um) == -EINVAL,
+          "v2 refuses to split a mapping");
+    um.iova = 0x100000;
+    um.size = 0x4000;
+    CHECK(ioc(container, VFIO_IOMMU_UNMAP_DMA, (uintptr_t)&um) == 0 && um.size == 0x4000 &&
+              unmaps == 1 && pins == 0,
+          "UNMAP_DMA removes the mapping and unpins it");
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == 0 && maps[2].prot == IOMMU_READ,
+          "a read-only mapping");
+    map.iova = 0x300000;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == 0, "a second mapping");
+    pin_take_back(c->dmas->pin);
+    CHECK(unmaps == 2 && unmapped == 0x8000, "an unmap of the pinned memory unmaps the IOVA");
+    um.flags = VFIO_DMA_UNMAP_FLAG_ALL;
+    CHECK(ioc(container, VFIO_IOMMU_UNMAP_DMA, (uintptr_t)&um) == -EINVAL,
+          "UNMAP_ALL takes no range");
+    um.iova = um.size = 0;
+    CHECK(ioc(container, VFIO_IOMMU_UNMAP_DMA, (uintptr_t)&um) == 0 && um.size == 0x8000 &&
+              unmaps == 3 && pins == 0 && c->ndma == 0,
+          "UNMAP_ALL removes every mapping, the one taken back without a second unmap");
+    CHECK(ioc(vfio_groups[5].open ? 0 : open_node("vfio/5"), VFIO_GROUP_SET_CONTAINER,
+              (uintptr_t)&fd) == -EPERM,
+          "a group that is not viable is refused");
+}
+
+/* ---- the device ---- */
+
+/** The device's descriptor and its regions' information. */
+static void region_rows(void)
+{
+    struct vfio_device_info di = {sizeof(di), 0, 0, 0, 0, 0};
+    struct vfio_region_info ri;
+    uint8_t buf[64];
+    struct vfio_region_info_cap_type *ct = (struct vfio_region_info_cap_type *)(void *)(buf + 32);
+    struct vfio_region_info *rp = (struct vfio_region_info *)(void *)buf;
+
+    device = ioc(group0, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:02.0");
+    CHECK(device > 0 && fns[1].resets == 1, "the device opens with a reset");
+    CHECK(ioc(group0, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:14.0") == -ENODEV,
+          "a device of another group is refused");
+    CHECK(ioc(device, VFIO_DEVICE_GET_INFO, (uintptr_t)&di) == 0 &&
+              di.flags == (VFIO_DEVICE_FLAGS_PCI | VFIO_DEVICE_FLAGS_RESET) &&
+              di.num_regions == 12 && di.num_irqs == 5,
+          "GET_INFO: the IGD's three regions after the nine");
+    ri.argsz = sizeof(ri);
+    ri.index = 0;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)&ri) == 0 && ri.size == 0x400000 &&
+              ri.offset == 0 &&
+              ri.flags == (VFIO_REGION_INFO_FLAG_READ | VFIO_REGION_INFO_FLAG_WRITE |
+                           VFIO_REGION_INFO_FLAG_MMAP),
+          "BAR 0");
+    ri.index = 1;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)&ri) == 0 && ri.size == 0 &&
+              ri.offset == 1ull << 40,
+          "a 64-bit BAR's upper half is empty");
+    ri.index = 4;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)&ri) == 0 && ri.size == 64 &&
+              ri.flags == (VFIO_REGION_INFO_FLAG_READ | VFIO_REGION_INFO_FLAG_WRITE),
+          "an I/O BAR is not mapped");
+    ri.index = VFIO_PCI_CONFIG_REGION_INDEX;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)&ri) == 0 && ri.size == 256 &&
+              ri.offset == 7ull << 40,
+          "the configuration space");
+    ri.index = VFIO_PCI_VGA_REGION_INDEX;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)&ri) == -EINVAL, "no VGA region");
+    k_memset(buf, 0, sizeof(buf));
+    rp->argsz = 32;
+    rp->index = 9;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)rp) == 0 && rp->argsz == 48 &&
+              rp->cap_offset == 0 && (rp->flags & VFIO_REGION_INFO_FLAG_CAPS),
+          "the OpRegion's information asks for room for its type");
+    rp->argsz = sizeof(buf);
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)rp) == 0 && rp->size == 0x2000 &&
+              rp->cap_offset == 32 && rp->offset == 9ull << 40 &&
+              rp->flags == (VFIO_REGION_INFO_FLAG_READ | VFIO_REGION_INFO_FLAG_CAPS),
+          "the OpRegion region");
+    CHECK(ct->header.id == VFIO_REGION_INFO_CAP_TYPE && ct->type == 0x80008086u &&
+              ct->subtype == VFIO_REGION_SUBTYPE_INTEL_IGD_OPREGION,
+          "its type is Intel's OpRegion");
+    rp->index = 11;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)rp) == 0 && rp->size == 256 &&
+              ct->subtype == VFIO_REGION_SUBTYPE_INTEL_IGD_LPC_CFG,
+          "the LPC bridge's region");
+    rp->index = 12;
+    CHECK(ioc(device, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)rp) == -EINVAL, "no thirteenth");
+}
+
+/** The configuration space and the other regions as the owner reads and
+ * writes them. */
+static void config_rows(void)
+{
+    uint32_t v = 0xFFFFFFFFu;
+    uint16_t w;
+    uint8_t b[16];
+    struct fn *m = &fns[1];
+    uint64_t cfg = 7ull << 40;
+
+    CHECK(pread_at(device, cfg, &v, 4) == 4 && v == 0x0A168086u, "the identity reads through");
+    v = 0xFFFFFFFFu;
+    CHECK(pwrite_at(device, cfg + 0x10, &v, 4) == 4 && pread_at(device, cfg + 0x10, &v, 4) == 4 &&
+              v == 0xFFC00004u,
+          "BAR 0 sized by all ones answers its size, as a device does");
+    CHECK(get32(m->cfg + 0x10) == 0xF0000004u, "the device's BAR keeps its address");
+    CHECK(pread_at(device, cfg + 0x14, &v, 4) == 4 && v == 0xF0000004u - 0xF0000004u,
+          "the upper half was not written");
+    w = 0x0406; /* memory, bus master and Interrupt Disable */
+    CHECK(pwrite_at(device, cfg + 4, &w, 2) == 2 && pread_at(device, cfg + 4, &w, 2) == 2 &&
+              w == 0x0406,
+          "the command word reads back as written");
+    CHECK((m->cfg[5] & 0x04) && (m->cfg[4] & 0x06) == 0x06, "decoding and mastering go through");
+    w = 0x0004;
+    v = (uint32_t)zaps;
+    CHECK(pwrite_at(device, cfg + 4, &w, 2) == 2 && zaps == (int)v + 2,
+          "turning memory off takes the BARs from the mappings");
+    CHECK((m->cfg[5] & 0x04) != 0, "the line stays off while the owner has no interrupt");
+    w = 0x0406;
+    (void)pwrite_at(device, cfg + 4, &w, 2);
+    b[0] = 0x01;
+    CHECK(pwrite_at(device, cfg + 0x92, b, 1) == 1 && pread_at(device, cfg + 0x92, b, 1) == 1 &&
+              b[0] == 0x83 && m->cfg[0x92] == 0x82,
+          "MSI's enable bit is VFIO's");
+    b[0] = 0x0E;
+    CHECK(pwrite_at(device, cfg + 0x92, b, 1) == 1 && pread_at(device, cfg + 0x92, b, 1) == 1 &&
+              b[0] == 0x82,
+          "MSI's capable count cannot be written");
+    v = 0;
+    CHECK(pwrite_at(device, cfg + 0xFC, &v, 4) == 4 && pread_at(device, cfg + 0xFC, &v, 4) == 4 &&
+              v == ASLS,
+          "ASLS reads the OpRegion's address and takes no write");
+    b[0] = 0x01;
+    CHECK(pwrite_at(device, cfg + 0xA8, b, 1) == 1 && m->cfg[0xA8] == 0,
+          "the AF capability's FLR bit is taken out");
+    b[0] = 0x55;
+    CHECK(pwrite_at(device, cfg + 0x60, b, 1) == 1 && m->cfg[0x60] == 0x55,
+          "a byte outside every capability goes through");
+    CHECK(pread_at(device, cfg + 0x100, b, 4) == -EINVAL, "conventional space ends at 256");
+    CHECK(pread_at(device, 9ull << 40, b, 16) == 16 && memcmp(b, "IntelGraphicsMem", 16) == 0,
+          "the OpRegion reads with its signature");
+    CHECK(pread_at(device, (9ull << 40) + 0x16, &w, 2) == 2 && w == 0x0200, "and its version");
+    CHECK(pwrite_at(device, 9ull << 40, b, 4) == -EINVAL, "the OpRegion takes no write");
+    CHECK(pread_at(device, 10ull << 40, &v, 4) == 4 && v == 0x0A048086u,
+          "the host bridge's region reads its configuration");
+    ports[0x3004] = 0x5A;
+    CHECK(pread_at(device, (4ull << 40) + 4, b, 1) == 1 && b[0] == 0x5A, "an I/O BAR reads ports");
+}
+
+/** A PCI Express device in a second group of the container. */
+static void pcie_rows(void)
+{
+    struct vfio_group_status st = {sizeof(st), 0};
+    int g6 = open_node("vfio/6"), wifi;
+    int32_t fd = container;
+    uint8_t b = 0x80;
+
+    CHECK(ioc(g6, VFIO_GROUP_SET_CONTAINER, (uintptr_t)&fd) == 0 && attaches == 2,
+          "a second group joins the container and its domain");
+    CHECK(ioc(g6, VFIO_GROUP_GET_STATUS, (uintptr_t)&st) == 0 && st.flags == 3, "and is set");
+    wifi = ioc(g6, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:02:00.0");
+    CHECK(wifi > 0 && fns[8].resets == 1, "the card opens with a function-level reset");
+    CHECK(pwrite_at(wifi, (7ull << 40) + 0x49, &b, 1) == 1 && fns[8].cfg[0x49] == 0,
+          "Initiate Function Level Reset is taken out of a write");
+    CHECK(vfio_device_by_name("0000:02:00.0", 12)->cfg_size == 4096,
+          "a PCI Express device has the extended space");
+    closefd(wifi);
+    CHECK(fns[8].resets == 2, "the card is reset at its release");
+    closefd(g6);
+    CHECK(detaches == 1 && domains == 1, "its group leaves the domain at the last close");
+}
+
+/** Mappings of the BARs. */
+static void map_rows(void)
+{
+    vma_t vma;
+    uintptr_t phys = 0;
+    struct vfio_device *d = vdev("0000:00:02.0");
+
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = 0x2000;
+    vma.pgoff = (2u << 28) + 1;
+    CHECK(fds[device].ops->mmap(&fds[device], &vma) == 0 && mapped_obj == d && d->refs == 2,
+          "BAR 2 is mapped, holding the device");
+    CHECK(mapped_ops->page(d, (2u << 28) + 1, &phys) == 0 && phys == 0xE0001000u,
+          "a page of the mapping is the BAR's");
+    fns[1].cfg[4] &= (uint8_t)~0x02;
+    CHECK(mapped_ops->page(d, (2u << 28) + 1, &phys) == -1, "not with memory decoding off");
+    fns[1].cfg[4] |= 0x02;
+    vma.pgoff = 4u << 28;
+    CHECK(fds[device].ops->mmap(&fds[device], &vma) == -EINVAL, "an I/O BAR cannot be mapped");
+    vma.pgoff = 0x3FFu;
+    CHECK(fds[device].ops->mmap(&fds[device], &vma) == -EINVAL, "nor past a BAR's end");
+}
+
+/* ---- interrupts ---- */
+
+/** VFIO_DEVICE_GET_IRQ_INFO. */
+static void info_rows(void)
+{
+    struct vfio_irq_info ii = {sizeof(ii), 0, VFIO_PCI_INTX_IRQ_INDEX, 0};
+
+    CHECK(ioc(device, VFIO_DEVICE_GET_IRQ_INFO, (uintptr_t)&ii) == 0 && ii.count == 1 &&
+              ii.flags ==
+                  (VFIO_IRQ_INFO_EVENTFD | VFIO_IRQ_INFO_MASKABLE | VFIO_IRQ_INFO_AUTOMASKED),
+          "the line is maskable and masked at each interrupt");
+    ii.index = VFIO_PCI_MSI_IRQ_INDEX;
+    CHECK(ioc(device, VFIO_DEVICE_GET_IRQ_INFO, (uintptr_t)&ii) == 0 && ii.count == 2 &&
+              ii.flags == (VFIO_IRQ_INFO_EVENTFD | VFIO_IRQ_INFO_NORESIZE),
+          "MSI's two messages");
+    ii.index = VFIO_PCI_MSIX_IRQ_INDEX;
+    CHECK(ioc(device, VFIO_DEVICE_GET_IRQ_INFO, (uintptr_t)&ii) == 0 && ii.count == 0 &&
+              ii.flags == VFIO_IRQ_INFO_EVENTFD,
+          "no MSI-X, which may grow");
+    ii.index = VFIO_PCI_ERR_IRQ_INDEX;
+    CHECK(ioc(device, VFIO_DEVICE_GET_IRQ_INFO, (uintptr_t)&ii) == 0 && ii.count == 0,
+          "no error eventfd without PCI Express");
+    ii.index = VFIO_PCI_REQ_IRQ_INDEX;
+    CHECK(ioc(device, VFIO_DEVICE_GET_IRQ_INFO, (uintptr_t)&ii) == 0 && ii.count == 1,
+          "a request eventfd");
+    ii.index = 5;
+    CHECK(ioc(device, VFIO_DEVICE_GET_IRQ_INFO, (uintptr_t)&ii) == -EINVAL, "no sixth kind");
+}
+
+/* A SET_IRQS with room for four eventfds. */
+struct set {
+    struct vfio_irq_set h;
+    int32_t fd[4];
+};
+
+/** SET_IRQS on `fd` with the header's fields and up to four values. */
+static int32_t set_irqs(int fd, uint32_t flags, uint32_t index, uint32_t start, uint32_t count,
+                        const int32_t *v)
+{
+    struct set s;
+    uint32_t i;
+
+    k_memset(&s, 0, sizeof(s));
+    s.h.argsz = sizeof(s);
+    s.h.flags = flags;
+    s.h.index = index;
+    s.h.start = start;
+    s.h.count = count;
+    for (i = 0; i < count && i < 4 && v != NULL; i++) {
+        s.fd[i] = v[i];
+    }
+    if (flags & VFIO_IRQ_SET_DATA_BOOL) {
+        k_memset(s.fd, 0, sizeof(s.fd));
+        for (i = 0; i < count && i < 4 && v != NULL; i++) {
+            ((uint8_t *)s.fd)[i] = (uint8_t)v[i];
+        }
+    }
+    return ioc(fd, VFIO_DEVICE_SET_IRQS, (uintptr_t)&s);
+}
+
+#define EVENTFD_TRIGGER (VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER)
+#define NONE_TRIGGER    (VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_TRIGGER)
+
+/** The line: its eventfd, its mask at each interrupt, its unmasks. */
+static void intx_rows(void)
+{
+    int32_t fd = 100, un = 101;
+    struct fn *m = &fns[1];
+    uint16_t w = 0x0006;
+
+    (void)pwrite_at(device, (7ull << 40) + 4, &w, 2); /* the owner's INTx on */
+    CHECK(set_irqs(device, EVENTFD_TRIGGER, 5, 0, 1, &fd) == -EINVAL, "no sixth kind");
+    CHECK(set_irqs(device, EVENTFD_TRIGGER, 0, 1, 1, &fd) == -EINVAL, "start past the count");
+    CHECK(set_irqs(device, EVENTFD_TRIGGER | VFIO_IRQ_SET_DATA_BOOL, 0, 0, 1, &fd) == -EINVAL,
+          "two kinds of data");
+    CHECK(
+        set_irqs(device,
+                 VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_MASK | VFIO_IRQ_SET_ACTION_TRIGGER,
+                 0, 0, 1, &fd) == -ENOTTY,
+        "two actions");
+    CHECK(set_irqs(device, EVENTFD_TRIGGER, 0, 0, 1, &fd) == 0 && evs[0].refs == 1 &&
+              handlers[IRQ_VECTOR(11)] != NULL,
+          "the line's eventfd, with VFIO's handler on line 11");
+    CHECK((m->cfg[5] & 0x04) == 0, "Interrupt Disable lifted for the owner's line");
+    raise(IRQ_VECTOR(11));
+    CHECK(evs[0].count == 0, "a line the device does not assert is not its");
+    m->cfg[6] |= 0x08;
+    raise(IRQ_VECTOR(11));
+    CHECK(evs[0].count == 1 && (m->cfg[5] & 0x04), "an interrupt masks the line and signals");
+    raise(IRQ_VECTOR(11));
+    CHECK(evs[0].count == 1, "a masked line signals no more");
+    CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_UNMASK, 0, 0, 1, NULL) ==
+                  0 &&
+              evs[0].count == 2 && (m->cfg[5] & 0x04),
+          "an unmask while the line is asserted stays masked and signals again");
+    m->cfg[6] &= (uint8_t)~0x08;
+    CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_UNMASK, 0, 0, 1, NULL) ==
+                  0 &&
+              (m->cfg[5] & 0x04) == 0,
+          "an unmask lifts the mask");
+    CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_MASK, 0, 0, 1, &fd) ==
+              -ENOTTY,
+          "masking by eventfd is ENOTTY, as on Linux");
+    CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_UNMASK, 0, 0, 1, &un) ==
+                  0 &&
+              evs[1].refs == 1,
+          "an unmask eventfd");
+    m->cfg[6] |= 0x08;
+    raise(IRQ_VECTOR(11));
+    m->cfg[6] &= (uint8_t)~0x08;
+    eventfd_signal(&evs[1]);
+    CHECK((m->cfg[5] & 0x04) == 0 && evs[1].count == 0, "a write of it unmasks the line");
+    CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 4,
+          "a trigger without data signals the eventfd");
+    CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, &fd) == -EINVAL,
+          "MSI while the line is on is refused");
+    CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 0, NULL) == 0 && evs[0].refs == 0 &&
+              evs[1].refs == 0 && (m->cfg[5] & 0x04),
+          "no data and no count turns the line off");
+}
+
+/** MSI, and VFIO_DEVICE_RESET with it on. */
+static void msi_rows(void)
+{
+    int32_t fd[4] = {102, 103, -1, 104};
+    int v;
+
+    CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 2, fd) == 1,
+          "two messages are answered with the one there is");
+    CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, fd) == 0 &&
+              msi_vector >= 48 && vectors_held() == 1,
+          "MSI takes a vector");
+    v = msi_vector;
+    raise(v);
+    CHECK(evs[2].count == 1, "a message signals its eventfd");
+    CHECK(ioc(device, VFIO_DEVICE_RESET, 0) == 0 && fns[1].resets == 2 && msi_enables == 2 &&
+              msi_vector == v,
+          "a reset programs the message again");
+    CHECK(set_irqs(device, NONE_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 0, NULL) == 0 &&
+              vectors_held() == 0 && evs[2].refs == 0 && msi_vector == -1,
+          "MSI off gives its vector back");
+}
+
+/** MSI-X on the xHCI, entry by entry. */
+static void msix_rows(void)
+{
+    int32_t fd[4] = {102, 103, -1, 104};
+    int32_t g2fd = container;
+    int xhci, v, g2;
+
+    g2 = open_node("vfio/2");
+    CHECK(ioc(g2, VFIO_GROUP_SET_CONTAINER, (uintptr_t)&g2fd) == 0, "the xHCI's group");
+    xhci = ioc(g2, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:14.0");
+    CHECK(xhci > 0, "the xHCI opens");
+    CHECK(set_irqs(xhci, EVENTFD_TRIGGER, VFIO_PCI_MSIX_IRQ_INDEX, 0, 4, fd) == 0 &&
+              msix_vectors[0] >= 48 && msix_vectors[1] >= 48 && msix_vectors[2] == -1 &&
+              msix_vectors[3] >= 48 && msix_unmasks == 1 && windows == 1,
+          "MSI-X programs each entry given an eventfd, with the table mapped");
+    raise(msix_vectors[3]);
+    CHECK(evs[4].count == 1, "an entry's message signals its eventfd");
+    fd[0] = -1;
+    CHECK(set_irqs(xhci, EVENTFD_TRIGGER, VFIO_PCI_MSIX_IRQ_INDEX, 0, 1, fd) == 0 &&
+              msix_vectors[0] == -1 && vectors_held() == 2,
+          "an entry given -1 is masked and its vector given back");
+    fd[0] = 105;
+    CHECK(set_irqs(xhci, EVENTFD_TRIGGER, VFIO_PCI_MSIX_IRQ_INDEX, 6, 1, fd) == 0 &&
+              msix_vectors[6] >= 48,
+          "an entry is added while MSI-X is on");
+    CHECK(pread_at(xhci, 0x2000, &v, 4) == 4 && v == -1, "the table reads as all ones");
+    v = 0x12345678;
+    CHECK(pwrite_at(xhci, 0x2000, &v, 4) == 4 && get32(fns[2].mem + 0x2000) == 0,
+          "and takes no write");
+    fns[2].mem[0x10] = 0xAB;
+    CHECK(pread_at(xhci, 0x10, &v, 1) == 1 && (v & 0xFF) == 0xAB, "the rest of BAR 0 reads");
+    closefd(xhci);
+    CHECK(vectors_held() == 0 && evs[3].refs == 0 && evs[4].refs == 0 && evs[5].refs == 0 &&
+              windows == 0 && fns[2].resets == 2,
+          "the release gives back every vector, eventfd and window, and resets");
+    closefd(g2);
+}
+
+/** The release after the last descriptor and mapping, and the group
+ * and container after it. */
+static void release_rows(void)
+{
+    struct vfio_device *d = vdev("0000:00:02.0");
+    int32_t fd = 106;
+
+    CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER,
+                   VFIO_PCI_REQ_IRQ_INDEX, 0, 1, &fd) == 0 &&
+              evs[6].refs == 1,
+          "the request eventfd is kept");
+    fns[1].cfg[0x0C] = 0x77;
+    closefd(device);
+    CHECK(d->refs == 1 && fns[1].resets == 2, "the mapping holds the device past its close");
+    CHECK(ioc(group0, VFIO_GROUP_UNSET_CONTAINER, 0) == -EBUSY,
+          "the group stays in its container while the device is held");
+    mapped_ops->put(d);
+    CHECK(d->refs == 0 && fns[1].resets == 3 && fns[1].cfg[0x0C] == 0 && evs[6].refs == 0,
+          "the last reference resets the device and puts its state back");
+    CHECK(ioc(group0, VFIO_GROUP_UNSET_CONTAINER, 0) == 0 && detaches == 3 && domains == 0,
+          "the last group out releases the driver and its domain");
+    closefd(group0);
+    closefd(container);
+    CHECK(slept != 0, "the resets waited through VFIO's sleep");
+}
+
+int main(void)
+{
+    build();
+    group_rows();
+    binding_rows();
+    container_rows();
+    iommu_info_rows();
+    dma_rows();
+    region_rows();
+    config_rows();
+    pcie_rows();
+    map_rows();
+    info_rows();
+    intx_rows();
+    msi_rows();
+    msix_rows();
+    release_rows();
+    printf("vfio-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
+    return failures ? 1 : 0;
+}

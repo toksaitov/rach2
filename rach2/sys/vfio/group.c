@@ -869,11 +869,11 @@ static int32_t get_device_fd(struct vfio_group *g, uintptr_t arg)
     int32_t n;
 
     n = strncpy_from_user(name, (const char __user *)arg, sizeof(name));
-    if (n < 0) {
-        return -EFAULT;
+    if (n == -ENAMETOOLONG) {
+        return -ENODEV; /* longer than any device's name */
     }
-    if (n >= (int32_t)sizeof(name)) {
-        return -EINVAL;
+    if (n < 0) {
+        return n;
     }
     d = vfio_device_by_name(name, (int)n);
     if (d == NULL || &vfio_groups[d->group] != g || !d->bound) {
