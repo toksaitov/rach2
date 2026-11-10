@@ -1020,6 +1020,8 @@ long sys_madvise(isr_params_t *params);
 
 long sys_mseal(isr_params_t *params);
 
+long sys_cachestat(isr_params_t *params);
+
 long sys_pkey_mprotect(isr_params_t *params);
 
 long sys_pkey_alloc(isr_params_t *params);

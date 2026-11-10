@@ -8471,6 +8471,40 @@ static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
     return rc;
 }
 
+/**
+ * Whether page `pgoff` of the regular file `node` is in memory, for
+ * cachestat(2): it is when each block of it below the file's size that the
+ * file has is in the buffer cache, and dirty when one of them is; a page of
+ * holes alone is not, as ext2 keeps no page for a hole. A block of the map
+ * the cache lacks is read on the way, under the node's lock.
+ */
+static int ext2_page_cached(struct vfs_mount *mnt, void *node, uint64_t pgoff)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = node;
+    uint64_t at = pgoff << 12, end = at + 4096u;
+    int state = 0, any = 0, missing = 0, s;
+    uint32_t b;
+
+    node_lock(n);
+    if (end > n->size) {
+        end = n->size;
+    }
+    for (; at < end && !missing; at += em->block_size) {
+        if ((at >> em->block_shift) > 0xFFFFFFFFu ||
+            block_at(em, n, (uint32_t)(at >> em->block_shift), &b) != 0) {
+            missing = 1;
+        } else if (b != 0) {
+            s = bcache_state(em->dev, ((uint64_t)b << em->block_shift) >> BCACHE_BLOCK_SHIFT);
+            missing = s == 0;
+            any = 1;
+            state |= s == 2 ? VFS_PAGE_DIRTY : 0;
+        }
+    }
+    node_unlock(n);
+    return any && !missing ? VFS_PAGE_CACHED | state : 0;
+}
+
 static const struct vfs_ops ext2_ops = {
     ext2_lookup,
     0, /* lookup_rest */
@@ -8509,6 +8543,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_unlock_node,
     ext2_shutdown,
     ext2_xattr,
+    ext2_page_cached,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1};
