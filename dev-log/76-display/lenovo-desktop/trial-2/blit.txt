@@ -1,0 +1,6 @@
+blitcheck: result: screen 1366x768 XR24, pitch 5504, at 0xb0000000; buffer pitch 5464
+blitcheck: result: whole: 0 of 768 rows differ
+blitcheck: result: clips: 5 rectangles, 0 of 768 rows differ
+blitcheck: result: time: 100 whole-screen copies of 4196352 bytes: mean 0.923 ms, median 0.922 ms, least 0.868 ms, most 1.004 ms
+BLITCHECK OK
+desktop: result: blit status 0
