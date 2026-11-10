@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt READ 2
 .Os
 .Sh NAME
@@ -126,10 +126,13 @@ struct iovec {
 .Ed
 .Pp
 Buffers are filled in order; zero-length entries are skipped.
-The count must be between 0 and 1024, and the sum of the lengths must
-not exceed 2147483647.
-The kernel checks the whole vector list and write access to every
-nonempty destination before taking input.
+The count must be between 0 and 1024, and no length may be negative as a
+signed size, which for a 32-bit program is one past 2147483647.
+The total is cut at 0x7ffff000, as one read's count is, and the buffer
+that crosses it is filled only up to it.
+The kernel checks every length first, then that every range lies in user
+space and write access to every nonempty destination, before taking
+input.
 An invalid destination therefore fails before consuming input.
 A list requesting no bytes still checks the descriptor and returns zero
 only if it exists.
@@ -348,8 +351,8 @@ An ext2 read requires a block beyond the file system's addressing limit.
 A signal interrupted a wait, or a background terminal read posted
 .Dv SIGTTIN .
 .It Er EINVAL
-The vector count is outside 0 through 1024, the total vector length
-exceeds 2147483647, a file system has no read operation, or
+The vector count is outside 0 through 1024, a vector length is negative
+as a signed size, a file system has no read operation, or
 .Fn pread
 was given a negative offset or an end past the signed 64-bit range.
 A boot window,

@@ -27,6 +27,9 @@
  * outside user memory is refused before a byte is written, and a negative
  * offset, a count past 1024, a pipe, a descriptor open for the other
  * direction and one not open are refused, the last with no buffers too.
+ * writev to /dev/null of a vector past 2 GiB returns 0x7ffff000, Linux's
+ * MAX_RW_COUNT, on x86-64, and on i686, where a length of 2 GiB is a
+ * negative ssize_t, fails with EINVAL.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
  * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
@@ -876,9 +879,39 @@ out:
     return ok ? 0 : fail(error);
 }
 
+/* The buffer writev_cut names past its end; /dev/null reads no byte of it. */
+static char cut_buffer[16];
+
 /**
- * Check the refusals of preadv and pwritev on the file vector_rows makes.
- * Returns 0, or 1 once the failure is reported.
+ * Whether writev to /dev/null takes a vector past 2 GiB as Linux's
+ * import_iovec does: on x86-64 a length of 2 GiB alone, or one of 2 GiB - 1
+ * after 16 bytes, is cut to a total of 0x7ffff000, MAX_RW_COUNT; on i686,
+ * where 2 GiB is a negative ssize_t, the call is EINVAL.
+ */
+static int writev_cut(void)
+{
+    struct iovec v[2];
+    int fd = open("/dev/null", O_WRONLY), ok;
+
+    v[0].iov_base = cut_buffer;
+    v[0].iov_len = 0x80000000ul;
+#if defined __x86_64__
+    ok = writev(fd, v, 1) == 0x7ffff000L;
+    v[0].iov_len = sizeof(cut_buffer);
+    v[1].iov_base = cut_buffer;
+    v[1].iov_len = 0x7ffffffful;
+    ok = ok && writev(fd, v, 2) == 0x7ffff000L;
+#else
+    ok = refused(writev(fd, v, 1), EINVAL);
+#endif
+    close(fd);
+    return fd >= 0 && ok;
+}
+
+/**
+ * Check the refusals of preadv and pwritev on the file vector_rows makes,
+ * and writev's cut of a vector past 2 GiB (`writev_cut`). Returns 0, or 1
+ * once the failure is reported.
  */
 static int vector_refusal_rows(void)
 {
@@ -911,6 +944,9 @@ static int vector_refusal_rows(void)
     close(pipefd[1]);
     if (!ok) {
         return fail("the refusals of preadv and pwritev");
+    }
+    if (!writev_cut()) {
+        return fail("writev of a vector past 2 GiB is not cut at 0x7ffff000 (EINVAL on i686)");
     }
     report_held();
     return 0;

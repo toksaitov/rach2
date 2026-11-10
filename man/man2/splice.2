@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 11, 2026
 .Dt SPLICE 2
 .Os
 .Sh NAME
@@ -195,7 +195,8 @@ A signal came before a byte moved.
 .It Bq Er EINVAL
 A flag is unknown, a
 .Fn vmsplice
-vector has more than 1024 buffers or 2 GiB or more in all, neither
+vector has more than 1024 buffers or a length negative as a signed size,
+neither
 .Fn splice
 descriptor is a pipe, both are one pipe, a
 .Fn tee
