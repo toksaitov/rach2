@@ -2,6 +2,8 @@
 
 The kernel makes `/dev`, `/proc` and `/sys` from its own tables each time a program opens, stats or lists them, and stores none of the three. `/dev` gives the devices, `/proc` the processes and the system's counters as text, and `/sys` the device records that Linux's tools read. They exist so that musl, BusyBox, util-linux and the GNU programs find the files they open on Linux, at the same paths and in the same formats. [synthfs.c](synthfs.c) turns a path into a kind and its coordinates, [devfs.c](devfs.c) implements the devices, [procfs.c](procfs.c) writes the text of `/proc` and `/sys`, and the system-call layer, [../syscall_fs.c](../syscall_fs.c), opens, stats and lists all three.
 
+A dma-buf descriptor's `/proc/PID/fdinfo/N` includes its `name:` once `DMA_BUF_SET_NAME` has supplied one; [dma-buf(7)](../../../man/man7/dma-buf.7) gives the request's contract.
+
 ## Interfaces
 
 `install_permanent` in [vfs.c](vfs.c) mounts the three at boot as permanent entries of the mount table; the table in [vfs.Readme.md](vfs.Readme.md) gives their slots and flags. Each has a device number of its own:

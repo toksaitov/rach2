@@ -15,6 +15,7 @@
 #include "procfs.h"
 
 #include "../latency.h"
+#include "../dmabuf/dmabuf.h"
 #include "../network/ip/ip.h"
 #include "../network/ip6/ip6.h"
 #include "../network/ip6/route6.h"
@@ -7132,14 +7133,16 @@ static int procfs_open_sysctl(int entry, int flags)
  * The text of /proc/PID/fdinfo/N, descriptor `fd` of process `pid`: its
  * offset, and its flags in octal, the access mode with O_APPEND,
  * O_NONBLOCK, O_PATH and O_CLOEXEC, the first two lines Linux gives. Its
- * length, or -ENOENT for a descriptor that is not open.
+ * length, or -ENOENT for a descriptor that is not open. A dma-buf also
+ * gives its supplied name, copied before appending text can sleep.
  */
 static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 {
     process_t *p = get_process((uint32_t)pid);
     const fd_entry_t *e;
-    char pos[24];
+    char pos[24], name[DMA_BUF_NAME_LEN];
     uint32_t rw, flags;
+    int named = 0;
 
     if (!p || p->state == PROC_UNUSED || fd < 0 || fd >= fd_table_cap(p->fds)) {
         return -ENOENT;
@@ -7147,6 +7150,14 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     e = &p->fds->entries[fd];
     if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
         return -ENOENT;
+    }
+    if (is_dma_buf_file(e)) {
+        const struct dma_buf *b = e->priv;
+
+        named = b->named;
+        if (named) {
+            k_memcpy(name, b->name, sizeof(name));
+        }
     }
     rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
     flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
@@ -7165,6 +7176,11 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     ap_str(t, "\nflags:\t0");
     ap_num_width(t, (int32_t)flags, 0, 1);
     ap_ch(t, '\n');
+    if (named) {
+        ap_str(t, "name:\t");
+        ap_str(t, name);
+        ap_ch(t, '\n');
+    }
     return t->nomem ? -1 : t->len;
 }
 

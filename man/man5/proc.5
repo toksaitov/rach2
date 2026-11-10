@@ -1825,7 +1825,7 @@ values, and the others are unlimited, as
 .Xr prlimit64 2
 reports them.
 .It Pa /proc/PID/fdinfo
-A file for each open descriptor, named by its number, of two lines:
+A file for each open descriptor, named by its number, beginning with two lines:
 .Ql pos: ,
 the offset, and
 .Ql flags: ,
@@ -1835,6 +1835,10 @@ in octal, the access mode with
 .Dv O_PATH
 and
 .Dv O_CLOEXEC .
+For a dma-buf with a name set by
+.Dv DMA_BUF_SET_NAME ,
+.Ql name:
+gives that name.
 Linux adds the mount, the inode number and lines of each kind of file.
 Another user's is
 .Er EACCES ,

@@ -75,6 +75,13 @@ static const char *sysfs_wlan_driver(int index);
 #include "arch/i686/mmu.h"
 #include "ns_first.h"
 
+/** No dma-buf descriptor is installed in this model. */
+int is_dma_buf_file(const fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** No backlight is registered in this model. */
 int backlight_count(void)
 {

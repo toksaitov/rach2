@@ -203,7 +203,7 @@ static int valid_access(uint32_t flags)
     return flags && !(flags & ~(uint32_t)DMA_BUF_SYNC_RW);
 }
 
-/** Synchronize CPU access, or import and export explicit fence snapshots. */
+/** Set the buffer's name, synchronize CPU access, or share fence snapshots. */
 static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct dma_buf *b = e->priv;
@@ -211,6 +211,22 @@ static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     struct dma_buf_export_sync_file data;
     struct dma_fence *f;
     int32_t rc;
+    if (request == DMA_BUF_SET_NAME_A || request == DMA_BUF_SET_NAME_B) {
+        char name[DMA_BUF_NAME_LEN];
+        uint32_t i;
+
+        k_memset(name, 0, sizeof(name));
+        for (i = 0; i < sizeof(name); i++) {
+            if (arg + i < arg || copy_from_user(&name[i], (void __user *)(arg + i), 1))
+                return -EFAULT;
+            if (name[i] == '\0') {
+                k_memcpy(b->name, name, sizeof(name));
+                b->named = 1;
+                return 0;
+            }
+        }
+        return -ENAMETOOLONG;
+    }
     if (request == DMA_BUF_IOCTL_SYNC) {
         if (copy_from_user(&sync, (void __user *)arg, sizeof(sync)))
             return -EFAULT;

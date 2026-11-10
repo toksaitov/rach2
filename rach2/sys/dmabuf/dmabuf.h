@@ -27,8 +27,10 @@ struct dma_buf {
     uint64_t size, ino;
     const struct dma_buf_ops *ops;
     void *priv;
-    int read_only;      /* export descriptor mode; 0 for read/write */
-    uint32_t map_flags; /* VM_PROT_WC or VM_PROT_UC, 0 for cached RAM */
+    int read_only;               /* export descriptor mode; 0 for read/write */
+    uint32_t map_flags;          /* VM_PROT_WC or VM_PROT_UC, 0 for cached RAM */
+    char name[DMA_BUF_NAME_LEN]; /* SET_NAME's terminated name, at most 31 bytes */
+    uint8_t named;               /* SET_NAME has supplied a name, possibly empty */
     struct dma_resv *resv;
     struct dma_resv own;
     wait_queue_t wq;
