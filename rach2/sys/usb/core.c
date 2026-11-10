@@ -1035,11 +1035,11 @@ static void output_step(struct usb_device_state *d)
         return;
     }
     setup_fill(d->setup, TYPE_TO_INTERFACE, REQ_SET_REPORT, value, d->interface.number, length);
+    /* A transfer the endpoint refuses now is offered again at the next
+     * step, since the driver offers what was not taken. */
     if (control(d, USB_DIR_OUT, d->output, length) == 0) {
         d->output_out = 1;
         d->output_deadline = core_ms + STEP_MS;
-    } else {
-        hid_output_sent(d->index + 1, 0);
     }
 }
 
