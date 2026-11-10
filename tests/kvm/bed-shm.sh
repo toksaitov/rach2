@@ -49,22 +49,29 @@ info() { ivshmemd -i | tr ',' '\n' | sed -n "s/^.* $1 \([0-9/]*\).*$/\1/p" | hea
 # a guest of it runs and stays while the guest waits halted.
 busy() { awk '{ print $14 + $15 }' "/proc/$1/stat" 2>/dev/null || echo 0; }
 
+# quiet FILE SILENCE [PID]: one second of a wait, which `last=-1 still=0`
+# starts; it fails once process PID has ended, or once for SILENCE seconds
+# FILE has not grown and PID has used no processor time.
+quiet()
+{
+    [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
+    sleep 1
+    size=$({ wc -c < "$1"; } 2>/dev/null || echo 0):$([ -z "${3:-}" ] || busy "$3")
+    if [ "$size" = "$last" ]; then
+        still=$((still + 1))
+        [ "$still" -lt "$2" ] || return 1
+    else
+        last=$size still=0
+    fi
+}
+
 # until_line FILE PATTERN SILENCE [PID]: wait until FILE has a line
-# matching PATTERN, for as long as process PID runs and, within each SILENCE
-# seconds, FILE grows or PID uses processor time.
+# matching PATTERN, while quiet FILE SILENCE PID holds.
 until_line()
 {
     last=-1 still=0
     until grep -q "$2" "$1" 2>/dev/null; do
-        [ -z "${4:-}" ] || kill -0 "$4" 2>/dev/null || return 1
-        sleep 1
-        size=$({ wc -c < "$1"; } 2>/dev/null || echo 0):$([ -z "${4:-}" ] || busy "$4")
-        if [ "$size" = "$last" ]; then
-            still=$((still + 1))
-            [ "$still" -lt "$3" ] || return 1
-        else
-            last=$size still=0
-        fi
+        quiet "$1" "$3" "${4:-}" || return 1
     done
 }
 
@@ -93,12 +100,12 @@ TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu
     -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
     -serial file:"$out/console.log" > "$out/qemu.out" 2>&1 &
 qemu=$!
-if until_line "$out/ivshmemd.out" 'QEMU connected' 60 "$qemu" &&
-    until_line "$out/console.log" 'bed-vm: ready' 600 "$qemu"; then
-    tries=0
-    until [ "$(info bound)" = 1 ] || [ "$tries" -ge 120 ] || ! kill -0 "$qemu" 2>/dev/null; do
-        tries=$((tries + 1))
-        sleep 1
+# The VM's backend binds virtio-gpu once its service starts, before the
+# VM's boot has ended.
+if until_line "$out/ivshmemd.out" 'QEMU connected' 60 "$qemu"; then
+    last=-1 still=0
+    until [ "$(info bound)" = 1 ]; do
+        quiet "$out/console.log" 600 "$qemu" || break
     done
 fi
 ivshmemd -i > "$out/info-bound.txt" 2>&1
