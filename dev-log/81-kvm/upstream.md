@@ -1,0 +1,14 @@
+# Upstream faults of milestone 81
+
+The format and the index of every milestone's faults are in [the upstream index](../upstream.md).
+
+## Linux's KVM drops the faults of an emulated task switch
+
+* Project: Linux 6.12, `arch/x86/kvm/emulate.c` (SHA-256 55ded5bb83d0d2cc8698206178ab1cdd6d20a852304d1d1f5a18db94b02785d8), `arch/x86/kvm/x86.c` (0ee7bd359a222004aa3de5c313909a892ca0d7bcff18d48f0c63625002318176) and `arch/x86/kvm/vmx/vmx.c` (745d6c8542331c7acf9fe6d9ade5b4c036e120a5aeef9ebfe84ec413131b1881), read from the v6.12 tag.
+* Fails: a fault that the emulated task switch raises never reaches the guest, and the guest goes on with part of the switch made. `emulator_do_task_switch` returns X86EMUL_PROPAGATE_FAULT with `ctxt->exception` set for #TS (a TSS below its size), #GP (a task gate's DPL, a selector past its table, a CR3 whose PDPTEs do not load), #NP, #SS and #TS (the new task's segments) and #PF (a TSS or table not mapped). `emulator_task_switch` (emulate.c line 3011) turns every result but X86EMUL_UNHANDLEABLE into EMULATION_OK. `kvm_task_switch` (x86.c line 11842) then writes `ctxt->eip` and `ctxt->eflags` back and returns 1, and never injects `ctxt->exception`, as `x86_emulate_instruction` does through `inject_emulated_exception`. RIP is the old one, already stepped past the instruction by `handle_task_switch` (vmx.c line 5720). The segments `__load_segment_descriptor` loaded before the fault stay loaded, TR and the busy bits are as far as the switch got, and EFLAGS may be the new task's.
+* Found: 2026-11-10, on the Mac, in milestone 81, task 81-3a.5, while emulating the task switch for Rach2's VMX backend after Linux's code.
+* Reproduction: a 32-bit guest that JMPs to a TSS descriptor with a limit below 0x67, or whose new TSS names a data segment that is not present, under KVM on an Intel processor. The processor would deliver #TS or #NP; under Linux 6.12 the guest runs on with no fault. Not yet run on Linux.
+* Evidence: `dev-log/81-kvm/upstream.md`; the commit "Emulate a VMX guest's hardware task switch as Linux does, with the faults the processor raises, which Linux drops"; the rows of `tests/host/kvm_vmx_hosttest.c` for a TSS too small, a gate's DPL and a segment not present.
+* Rach2: `kvm_task_switch` in `rach2/sys/kvm/emulate.c` queues each fault as the processor raises it. A fault found before the switch is committed leaves the old task as it was, with RIP at the instruction. A fault in loading the new task's state comes after TR, the busy bits, NT and the registers are the new task's, as the SDM's order of a task switch gives.
+* Status: unreported.
+* Next: run the reproduction on a current kernel under KVM, check whether a later release injects `ctxt->exception` in `kvm_task_switch`, and report it to the KVM list with the reproduction as a kvm-unit-tests case.
