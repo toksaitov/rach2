@@ -1238,6 +1238,9 @@ void drm_framebuffer_put(struct drm_framebuffer *fb)
             break;
         }
     }
+    if (fb->dev->mode_config.fb_destroy) {
+        fb->dev->mode_config.fb_destroy(fb);
+    }
     for (i = 0; i < 4; i++) {
         drm_gem_object_put(fb->obj[i]);
     }
@@ -1411,6 +1414,13 @@ struct drm_framebuffer *drm_internal_framebuffer_create(struct drm_device *dev,
     fb->flags = r->flags;
     fb->width = r->width;
     fb->height = r->height;
+    if (mc->fb_create && (*err = mc->fb_create(dev, fb)) != 0) {
+        for (i = 0; i < info->num_planes; i++) {
+            drm_gem_object_put(fb->obj[i]);
+        }
+        kfree(fb);
+        return NULL;
+    }
     fb->base.refs = 1;
     object_add(dev, &fb->base, DRM_MODE_OBJECT_FB);
     for (link = &dev->mode_config.fbs; *link; link = &(*link)->next) {

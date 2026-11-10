@@ -633,12 +633,14 @@ struct i915_userptr {
  * the processor's cache may hold lines the GPU must not miss.
  * `read_domains` and `write_domain` are the I915_GEM_DOMAIN_ bits it was
  * last moved to (SET_DOMAIN). `tiling` and `stride` are its layout
- * (SET_TILING), `vmas` its bindings, `mmo` its mmap offsets by kind, and
- * `userfault_count` how many of its bindings programs map through the
- * aperture. `madv` is the I915_MADV_ state of its pages: WILLNEED, or
- * DONTNEED when reclaim may purge them, or __I915_MADV_PURGED once it did.
- * `dumb` says it was made as a dumb buffer, whose processor maps are
- * write-combined. The device's list of objects holds it (`base.dev_next`).
+ * (SET_TILING), fixed while `fb_refs`, the framebuffers made of it, is
+ * above 0, as Linux's frontbuffer fixes it. `vmas` are its bindings,
+ * `mmo` its mmap offsets by kind, and `userfault_count` how many of its
+ * bindings programs map through the aperture. `madv` is the I915_MADV_
+ * state of its pages: WILLNEED, or DONTNEED when reclaim may purge them,
+ * or __I915_MADV_PURGED once it did. `dumb` says it was made as a dumb
+ * buffer, whose processor maps are write-combined. The device's list of
+ * objects holds it (`base.dev_next`).
  */
 struct drm_i915_gem_object {
     struct drm_gem_object base;
@@ -653,6 +655,7 @@ struct drm_i915_gem_object {
     uint32_t write_domain;
     uint32_t tiling;
     uint32_t stride;
+    uint32_t fb_refs;
     struct i915_vma *vmas;
     struct i915_mmap_offset mmo[I915_MMAP_TYPES];
     uint32_t userfault_count;
@@ -2476,6 +2479,20 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
 /** The GGTT address of the framebuffer `fb`'s object, which its plane's
  * pin bound: the scanout's base, without the framebuffer's offset. */
 uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb);
+
+/**
+ * Check a new framebuffer of an object of the driver against the object's
+ * layout, Linux's intel_fb_bo_framebuffer_init and intel_fill_fb_info: a
+ * framebuffer made without modifiers of an X-tiled object takes X tiles
+ * and of a Y-tiled one is refused; a modifier must match the object's
+ * tiling and the pitch its stride; X tiles must fit the object in whole
+ * rows of tiles. Then the object counts it (`fb_refs`). 0 or -EINVAL; the
+ * mode configuration's `fb_create`.
+ */
+int32_t intel_fb_create(struct drm_device *dev, struct drm_framebuffer *fb);
+
+/** Let go the count `intel_fb_create` took; `fb_destroy`. */
+void intel_fb_destroy(struct drm_framebuffer *fb);
 
 /** The modifier `fb` is scanned out with: its own, or X tiling for a
  * framebuffer made without modifiers of an X-tiled object, as Linux's

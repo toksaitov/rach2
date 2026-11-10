@@ -193,8 +193,9 @@ void i915_vma_revoke_fence(struct i915_vma *vma)
  * Change the object's layout, as Linux's i915_gem_object_set_tiling: the
  * bindings in the aperture that a fence of the new layout no longer fits
  * are undone, the rest learn the new fence's size and their fences are
- * rewritten at the next use, and the GTT maps fault again. 0, or -EAGAIN
- * when a binding that must go is held.
+ * rewritten at the next use, and the GTT maps fault again. 0, -EBUSY for
+ * an object a framebuffer is made of, or -EAGAIN when a binding that must
+ * go is held.
  */
 static int32_t set_tiling(struct drm_i915_gem_object *obj, uint32_t tiling, uint32_t stride)
 {
@@ -204,6 +205,9 @@ static int32_t set_tiling(struct drm_i915_gem_object *obj, uint32_t tiling, uint
 
     if (obj->tiling == tiling && obj->stride == stride) {
         return 0;
+    }
+    if (obj->fb_refs > 0) {
+        return -EBUSY;
     }
     /* Linux's i915_gem_object_fence_prepare. */
     if (tiling != I915_TILING_NONE) {
@@ -237,7 +241,8 @@ static int32_t set_tiling(struct drm_i915_gem_object *obj, uint32_t tiling, uint
 /**
  * GEM_SET_TILING, as Linux's i915_gem_set_tiling_ioctl: ENOENT for no such
  * object, ENXIO for a userptr object, EINVAL for a layout the chip cannot
- * fence; otherwise the swizzle
+ * fence, EBUSY for a new layout of an object a framebuffer is made of;
+ * otherwise the swizzle
  * programs must apply is returned with the layout. Linear takes stride 0.
  * The object's layout and stride are written back even on an error, as
  * Linux keeps that ABI.

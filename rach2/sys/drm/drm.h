@@ -1064,7 +1064,11 @@ struct drm_atomic_state {
  * `drm_atomic_helper_check` and `drm_atomic_helper_commit`. `fb_dirty` says
  * DIRTYFB sends its rectangles to the planes that show the framebuffer as
  * FB_DAMAGE_CLIPS, as Linux's drm_atomic_helper_dirtyfb does; without it
- * DIRTYFB answers ENOSYS.
+ * DIRTYFB answers ENOSYS. `fb_create`, when set, checks a framebuffer
+ * ADDFB or ADDFB2 made, before it gets its ID, as Linux's driver's
+ * fb_create does: it may give a legacy framebuffer its object's modifier,
+ * and an error refuses it; `fb_destroy` lets go what it took, before the
+ * last put of the framebuffer drops its objects.
  */
 struct drm_mode_config {
     uint32_t min_width, max_width, min_height, max_height;
@@ -1096,6 +1100,8 @@ struct drm_mode_config {
     struct drm_property *modifiers_property, *size_hints_property;
     int32_t (*atomic_check)(struct drm_device *dev, struct drm_atomic_state *state);
     int32_t (*atomic_commit)(struct drm_device *dev, struct drm_atomic_state *state, int nonblock);
+    int32_t (*fb_create)(struct drm_device *dev, struct drm_framebuffer *fb);
+    void (*fb_destroy)(struct drm_framebuffer *fb);
 };
 
 /* The index masks of Linux's drm_crtc_mask, drm_plane_mask and
