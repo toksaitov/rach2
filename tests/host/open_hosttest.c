@@ -1415,6 +1415,23 @@ int sysfs_pci_is_vga(int key)
     (void)key;
     return 0;
 }
+
+/** No PCI function of /sys exists, so none has a BAR. */
+uint64_t sysfs_pci_bar_size(int key, int bar)
+{
+    (void)key;
+    (void)bar;
+    return 0;
+}
+
+/** No PCI function of /sys exists, so it has none of its files. */
+int sysfs_pci_attr_present(int key, int attr)
+{
+    (void)key;
+    (void)attr;
+    return 0;
+}
+
 /** No descriptor is of /proc/sys. */
 int procfs_fd_is_sys(struct fd_entry *e)
 {
