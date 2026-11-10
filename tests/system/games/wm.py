@@ -58,6 +58,7 @@ ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 DISPLAY=
 # What the rebuilt Weston of vendor/gnu/games/weston prints for --version.
 REBUILT = ("(Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, "
            "xwm-emulated-mode, xwm-mapped-managed)")
+EV_SYN = 0
 EV_KEY = 1
 EV_REL = 2
 KEY_ESC = 1
@@ -188,9 +189,13 @@ def kernel_motion(stop, sums):
     """
     Sum the REL_X and REL_Y events of the mouse's event device into SUMS, a
     list of dx, dy and events, until STOP, so that motion lost in the kernel
-    tells apart from motion lost above it. Print "wm: moved" once the sums
-    reach MOTION: the scenario presses its key only then, since the i8042
-    passes a key's bytes before the mouse's that wait.
+    tells apart from motion lost above it. Print "wm: motion DX DY", the
+    sums, after each packet. The scenario sends its next move once the sums
+    hold the last: QEMU's PS/2 mouse keeps what its queue of 16 bytes has no
+    room for until its next event, so moves sent faster than the guest reads
+    them can leave the last one's rest unsent. It presses its key after the
+    last move's line, since the i8042 passes a key's bytes before the mouse's
+    that wait.
     """
     fd = mouse(os.O_NONBLOCK)
     size = struct.calcsize("llHHi")
@@ -206,8 +211,8 @@ def kernel_motion(stop, sums):
                 if kind == EV_REL and code in (0, 1):
                     sums[code] += value
                     sums[2] += 1
-                    if tuple(sums[:2]) == MOTION:
-                        say("moved")
+                elif kind == EV_SYN and code == 0:
+                    say("motion %d %d" % (sums[0], sums[1]))
     finally:
         os.close(fd)
 

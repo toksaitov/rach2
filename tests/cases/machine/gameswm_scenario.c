@@ -60,6 +60,22 @@ static void move(struct net_case *u, struct net_boot *b, int dx, int dy)
 }
 
 /**
+ * Move the pointer by DX, DY and wait until wm.py's count of the kernel's
+ * motion reaches X, Y, the sums of the moves so far. QEMU's PS/2 mouse keeps
+ * what its queue of 16 bytes has no room for until its next event, so a move
+ * sent before the guest has read the last could stay there.
+ */
+static void move_to(struct net_case *u, struct net_boot *b, int dx, int dy, int x, int y)
+{
+    char line[64];
+
+    move(u, b, dx, dy);
+    snprintf(line, sizeof(line), "wm: motion %d %d\n", x, y);
+    if (net_ok(u) && etude_guest_output_wait(b->m, line) != ETUDE_OK)
+        net_fail(u, "wm.py never printed \"wm: motion %d %d\"", x, y);
+}
+
+/**
  * Run wm.py's ROW through the guest channel and act on each of its ready
  * lines in turn: move the pointer once so that Weston's seat has one, move
  * it while xplace counts raw motion, and press Escape to end the window.
@@ -100,15 +116,13 @@ static void row(struct net_case *u, struct net_boot *b, const char *row)
         }
         if (strcmp(*readies, "xplace-1366") == 0) {
             /* wm.py's MOTION: -2000 on x, which pushes the pointer to the
-             * window's left edge, and +200 on y. */
-            for (i = 0; i < 10; i++)
-                move(u, b, -200, 0);
-            for (i = 0; i < 5; i++)
-                move(u, b, 0, 40);
-            /* The i8042 passes the key's bytes before the mouse's that
-             * wait, so press it once the kernel has every move. */
-            if (etude_guest_output_wait(b->m, "wm: moved") != ETUDE_OK)
-                net_fail(u, "wm.py never printed \"wm: moved\"");
+             * window's left edge, and +200 on y. The i8042 passes the key's
+             * bytes before the mouse's that wait, so the key follows the
+             * kernel's count of the last move. */
+            for (i = 1; i <= 10; i++)
+                move_to(u, b, -200, 0, -200 * i, 0);
+            for (i = 1; i <= 5; i++)
+                move_to(u, b, 0, 40, -2000, 40 * i);
         }
         escape(u, b);
     }
