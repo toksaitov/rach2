@@ -14,10 +14,11 @@
 #include "../../lib/kerrno.h"
 #include "../../rtc.h"
 
-/* Linux's bounds (gen6_hw_domain_reset, do_reset): 2 ms for GDRST's
- * acknowledgement, which is asked for twice, a settling delay of 50 us
- * after it, and three more tries of the whole GPU's reset, 10 ms more
- * apart each time (RESET_MAX_RETRIES). */
+/* Linux's bounds (gen6_hw_domain_reset, __intel_gt_reset, do_reset): 2 ms
+ * for GDRST's acknowledgement, which is asked for twice, a settling delay
+ * of 50 us after it, three tries of the whole GPU's reset one after
+ * another, and three more rounds of them, 10 ms more apart each time
+ * (RESET_MAX_RETRIES). */
 #define I915_GDRST_US        2000u
 #define I915_GDRST_SETTLE_US 50u
 #define I915_RESET_RETRIES   3
@@ -41,6 +42,22 @@ static int32_t gdrst(struct drm_i915_private *i915, uint32_t mask)
         err = i915_wait_for(hw, "gdrst", GEN6_GDRST, mask, 0, I915_GDRST_US);
     } while (err == 0 && --loops > 0);
     i915_delay_us(hw, I915_GDRST_SETTLE_US);
+    return err;
+}
+
+/**
+ * Reset the whole GPU, as Linux's __intel_gt_reset of every engine: up to
+ * three tries one after another while the domain does not read clear.
+ * Under forcewake. 0 or -ETIMEDOUT.
+ */
+static int32_t gdrst_full(struct drm_i915_private *i915)
+{
+    int32_t err = -ETIMEDOUT;
+    int retry;
+
+    for (retry = 0; err == -ETIMEDOUT && retry < I915_RESET_RETRIES; retry++) {
+        err = gdrst(i915, GEN6_GRDOM_FULL);
+    }
     return err;
 }
 
@@ -230,8 +247,9 @@ static void revoke_mmaps(struct drm_i915_private *i915)
 
 /**
  * Stop every running ring by force and reset the whole GPU, as Linux's
- * reset.prepare of each engine and __intel_gt_reset of all of them: the
- * full domain's reset, and three more tries 10 ms more apart each time.
+ * reset.prepare of each engine and do_reset's __intel_gt_reset of all of
+ * them: the full domain's reset, three tries at most, and three more
+ * rounds 10 ms more apart each time.
  * The rings stay stopped. Under forcewake.
  *
  * @return 0, or -ETIMEDOUT when no try reset the GPU, which is logged.
@@ -247,10 +265,10 @@ static int32_t gt_stop_and_reset(struct drm_i915_private *i915)
             i915_ring_reset_prepare(i915, &gt->engine[i]);
         }
     }
-    err = gdrst(i915, GEN6_GRDOM_FULL);
+    err = gdrst_full(i915);
     for (i = 0; err < 0 && i < I915_RESET_RETRIES; i++) {
         i915_delay_us(&i915->hw, 10000u * (uint32_t)(i + 1));
-        err = gdrst(i915, GEN6_GRDOM_FULL);
+        err = gdrst_full(i915);
     }
     if (err < 0) {
         klog(KLOG_ERR, "i915", "reset: the chip did not reset: GDRST reads 0x%08x",
