@@ -101,15 +101,11 @@ where it would read a directory, so that a caller can try a fast open
 first and do the slow one elsewhere.
 .El
 .Pp
-A rename or a mount anywhere in the system while a walk under
-.Dv RESOLVE_BENEATH
-or
-.Dv RESOLVE_IN_ROOT
-takes
-.Ql ..
-may have moved the walk out of
-.Fa dirfd ;
-the call then fails with
+Under a
+.Va resolve
+flag, a rename or a mount anywhere in the system between the checked walk
+and the open of the path it reached makes the kernel walk again; after
+four such races in a row the call fails with
 .Er EAGAIN
 and the caller tries again.
 .Ss System call numbers
@@ -179,10 +175,9 @@ and
 .It Bq Er EAGAIN
 .Dv RESOLVE_CACHED
 is set and a name is not in the cache, or the flags would create or
-truncate; or a rename or a mount raced a walk under
-.Dv RESOLVE_BENEATH
-or
-.Dv RESOLVE_IN_ROOT .
+truncate; or a rename or a mount raced a walk under any
+.Va resolve
+flag four times in a row, as STANDARDS says.
 .It Bq Er ELOOP
 .Dv RESOLVE_NO_SYMLINKS
 is set and the walk meets a link it would follow, or

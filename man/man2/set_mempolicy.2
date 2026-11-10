@@ -59,9 +59,17 @@ has
 bits, in longs.
 A null
 .Fa nodemask ,
+whatever
+.Fa maxnode ,
 and a
 .Fa maxnode
-of 0 or 1, is the empty mask.
+of 1 is the empty mask; a
+.Fa maxnode
+of 0 with a mask that is not null gives
+.Er EINVAL ,
+since
+.Fa maxnode No \- 1
+wraps to the largest value, as in Linux.
 The kernel knows 1024 nodes, as Debian's does; of a longer mask the part
 past them is read a long at a time and must be zeros.
 .Dv MPOL_DEFAULT
@@ -105,7 +113,11 @@ comes with a mode other than
 .Dv MPOL_BIND
 and
 .Dv MPOL_PREFERRED_MANY ;
-the mask has more bits than a page holds;
+the mask has more bits than a page holds, or
+.Fa maxnode
+is 0 and
+.Fa nodemask
+is not null;
 a bit past node 1023 is set;
 .Dv MPOL_DEFAULT
 or

@@ -94,8 +94,9 @@ static int get_bitmap(unsigned long *mask, uintptr_t umask, unsigned long bits)
 /**
  * Read the node mask at `umask` of `maxnode` bits into `nodes`, of
  * VM_NODES_WORDS words, as Linux's get_nodes: the mask has `maxnode - 1`
- * bits; none, or a null `umask`, is the empty mask; more than a page of
- * them is -EINVAL; and of a mask longer than VM_NODES_MAX the part past it
+ * bits; a null `umask`, or a `maxnode` of 1, is the empty mask; more than
+ * a page of bits is -EINVAL, and so is a `maxnode` of 0 with a mask, since
+ * `maxnode - 1` wraps; and of a mask longer than VM_NODES_MAX the part past it
  * is read a long at a time from its end, the whole of the long that holds
  * its last bit included, and must be zeros, or the answer is -EINVAL. An
  * unreadable mask is -EFAULT.
