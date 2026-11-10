@@ -29,6 +29,7 @@
 #include "../mm/filecache.h"
 #include "../mm/filemap.h"
 #include "../mm/kheap.h"
+#include "../mm/mempolicy.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
 #include "dcache.h"
@@ -1473,6 +1474,130 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
     return t->len;
 }
 
+/** Append the policy `pol`, NULL for the default, as Linux's mpol_to_str
+ * writes it in numa_maps: the mode's name; for a policy with a mode flag
+ * "=" and "static" or "relative", then "balancing", after a "|" when it
+ * follows one of the two; and ":0", the policy's nodes, for a mode that has
+ * nodes. */
+static void ap_numa_policy(struct procfs_text *t, const struct vm_policy *pol)
+{
+    static const char *const names[] = {
+        "default", "prefer", "bind", "interleave", "local", "prefer (many)", "weighted interleave"};
+    uint32_t mode = pol ? pol->mode : 0u;
+    uint32_t flags = pol ? pol->flags : 0u;
+
+    ap_str(t, mode < sizeof(names) / sizeof(names[0]) ? names[mode] : "unknown");
+    if (flags) {
+        ap_ch(t, '=');
+        ap_str(t, (flags & MPOL_F_STATIC_NODES)     ? "static"
+                  : (flags & MPOL_F_RELATIVE_NODES) ? "relative"
+                                                    : "");
+        if (flags & MPOL_F_NUMA_BALANCING) {
+            ap_str(t, flags != MPOL_F_NUMA_BALANCING ? "|balancing" : "balancing");
+        }
+    }
+    if (pol && pol->nodes) {
+        ap_str(t, ":0");
+    }
+}
+
+/** Append what region `r` of `mm` maps, as numa_maps names it: " heap",
+ * " stack", or " file=" and the path maps gives the region, with a newline,
+ * a tab, a space and an equals sign each written as a backslash and three
+ * octal digits, as Linux's seq_path writes them; nothing for anonymous
+ * memory and for the vDSO's two regions. */
+static void ap_numa_place(struct procfs_text *t, const struct mm *mm, const vma_t *r)
+{
+    const char *path = maps_path(mm, r);
+
+    if (r->type == VM_HEAP || r->type == VM_STACK) {
+        ap_str(t, r->type == VM_HEAP ? " heap" : " stack");
+        return;
+    }
+    if (!path || vdso_region_name(r->file)) {
+        return;
+    }
+    ap_str(t, " file=");
+    for (; *path; path++) {
+        if (*path == '\n' || *path == '\t' || *path == ' ' || *path == '=') {
+            ap_ch(t, '\\');
+            ap_ch(t, (char)('0' + ((*path >> 6) & 3)));
+            ap_ch(t, (char)('0' + ((*path >> 3) & 7)));
+            ap_ch(t, (char)('0' + (*path & 7)));
+        } else {
+            ap_ch(t, *path);
+        }
+    }
+}
+
+/** Append `name` and the count `n`, a field of a numa_maps line. */
+static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long n)
+{
+    ap_str(t, name);
+    ap_ulong(t, n);
+}
+
+/**
+ * /proc/<pid>/numa_maps: a line for each region, in Linux's form: the start,
+ * the policy that governs it, and what it maps (`ap_numa_place`); then, for
+ * a region with pages of memory, the counts of them Linux gives: anon=, the
+ * anonymous ones; dirty=, those written; mapped=, all of them, when they are
+ * neither all anonymous nor all dirty; N0=, those on node 0, which is all;
+ * and the page size in kilobytes. The policy is the one mbind gave the
+ * region's first page (`mempolicy_at`), and where it gave none the policy
+ * of the thread read, as on Linux. The pages are the frames of the region's
+ * page tables (`paging_user_frames`): a page a read brought in zeroed is
+ * Linux's zero page and is not one, nor is device memory. Memory of no
+ * file is anonymous and counts as written, as Linux's anonymous pages are
+ * from their first store; of a private region read from a file the pages
+ * written since are the anonymous ones, as in smaps. Linux's mapmax=, the
+ * most mappings a page has, and active=, the pages on the active list, are
+ * not given: the kernel counts no mappings of a page and has no such list.
+ * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
+ */
+static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const struct mm *mm;
+    const vma_t *r;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    mm = p->mm;
+    for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
+        const struct vm_policy *pol = mempolicy_at(r, r->start);
+        int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
+        unsigned long frames, dirty, pinned, anon;
+
+        ap_xlow(t, r->start, 8);
+        ap_ch(t, ' ');
+        ap_numa_policy(t, pol ? pol : p->mempolicy);
+        ap_numa_place(t, mm, r);
+        paging_user_frames(mm->dir, r->start, r->end, &frames, &dirty, &pinned);
+        if (frames != 0) {
+            dirty = of_file ? dirty : frames;
+            anon = !of_file ? frames : r->type == VM_SHARED ? 0 : dirty;
+            if (anon) {
+                ap_numa_count(t, " anon=", anon);
+            }
+            if (dirty) {
+                ap_numa_count(t, " dirty=", dirty);
+            }
+            if (frames != anon && frames != dirty) {
+                ap_numa_count(t, " mapped=", frames);
+            }
+            ap_numa_count(t, " N0=", frames);
+            ap_numa_count(t, " kernelpagesize_kB=", PAGE_SIZE / 1024u);
+        }
+        ap_ch(t, '\n');
+    }
+    return t->len;
+}
+
 /** The bytes of `mm`'s regions of type `type`. */
 static unsigned long mm_bytes(const struct mm *mm, vm_type_t type)
 {
@@ -1953,6 +2078,8 @@ static const char *procfs_pid_file_name(int kind)
         return "maps";
     case SYNTH_PROC_SMAPS:
         return "smaps";
+    case SYNTH_PROC_NUMA_MAPS:
+        return "numa_maps";
     case SYNTH_PROC_STATUS:
         return "status";
     case SYNTH_PROC_STATM:
@@ -8009,6 +8136,8 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
         return procfs_gen_maps(t, pid);
     case SYNTH_PROC_SMAPS:
         return procfs_gen_smaps(t, pid);
+    case SYNTH_PROC_NUMA_MAPS:
+        return procfs_gen_numa_maps(t, pid);
     case SYNTH_PROC_STATUS:
         return procfs_gen_status(t, pid);
     case SYNTH_PROC_STATM:
