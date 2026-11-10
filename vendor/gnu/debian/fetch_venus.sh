@@ -1,8 +1,8 @@
 #!/bin/sh
 # Stage Mesa 26.1.6's Venus driver, alone, from the package venus.list pins,
-# under a library path and ICD file of its own. Usage: fetch_venus.sh.
+# under a library path and ICD file of its own. Usage: fetch_venus.sh [STAGE].
 #
-# The stage, venus/ of the GNU build tree, holds:
+# The stage, STAGE of the GNU build tree, venus/ by default, holds:
 #
 #   usr/lib/MULTIARCH/venus/libvulkan_virtio.so   the driver
 #   usr/share/vulkan/icd.d/venus_icd.ARCH.json    its ICD, by absolute path
@@ -22,8 +22,11 @@ REPO="$(cd "$GNU/../.." && pwd)"
 . "$GNU/arch.sh"
 . "$DIR/fetch_asset.sh"
 OUT="$GNU_OUT"
-STAGE="$OUT/venus"
-WORK="$OUT/work/venus"
+case ${1:-venus} in
+    *[!a-z0-9_-]*) echo "gnu: venus: invalid stage: $1" >&2; exit 2 ;;
+esac
+STAGE="$OUT/${1:-venus}"
+WORK="$OUT/work/${1:-venus}"
 LIB="usr/lib/$GNU_MULTIARCH/venus/libvulkan_virtio.so"
 ICD="usr/share/vulkan/icd.d/venus_icd.$RACH2_ARCH.json"
 
