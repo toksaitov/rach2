@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "guest.wakelat.idle",
-      "behavior": "Six 5 ms timed waits finish beside pinned idle load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "behavior": "64 timed waits of 5 ms through each of six interfaces finish beside pinned idle load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
       "units": [
         "wakelat",
         "musl/wakelatmusl",
@@ -65,32 +65,32 @@
         },
         {
           "assertion_id": "nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "clock_nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "poll",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "epoll_wait",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "timerfd",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "futex",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
@@ -179,7 +179,7 @@
     },
     {
       "case_id": "guest.wakelat.user",
-      "behavior": "Six 5 ms timed waits finish beside pinned user load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "behavior": "64 timed waits of 5 ms through each of six interfaces finish beside pinned user load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
       "units": [
         "wakelat",
         "musl/wakelatmusl",
@@ -239,32 +239,32 @@
         },
         {
           "assertion_id": "nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "clock_nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "poll",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "epoll_wait",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "timerfd",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "futex",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
@@ -353,7 +353,7 @@
     },
     {
       "case_id": "guest.wakelat.kernel",
-      "behavior": "Six 5 ms timed waits finish beside pinned kernel load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "behavior": "64 timed waits of 5 ms through each of six interfaces finish beside pinned kernel load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
       "units": [
         "wakelat",
         "musl/wakelatmusl",
@@ -413,32 +413,32 @@
         },
         {
           "assertion_id": "nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "clock_nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "poll",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "epoll_wait",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "timerfd",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "futex",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
@@ -527,7 +527,7 @@
     },
     {
       "case_id": "guest.wakelat.mixed",
-      "behavior": "Six 5 ms timed waits finish beside pinned mixed load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "behavior": "64 timed waits of 5 ms through each of six interfaces finish beside pinned mixed load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
       "units": [
         "wakelat",
         "musl/wakelatmusl",
@@ -587,32 +587,32 @@
         },
         {
           "assertion_id": "nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "clock_nanosleep",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "poll",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "epoll_wait",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "timerfd",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
           "assertion_id": "futex",
-          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "checks": "Each of the 64 waits returns its expected timeout or timerfd count, every recorded timed wake has each big-lock subset no greater than its enclosing stage, and where the kernel keeps the records at least one wait is recorded",
           "source": "program"
         },
         {
