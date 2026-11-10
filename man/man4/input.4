@@ -115,6 +115,71 @@ back to relative mode and named for the mouse protocol it answers,
 .Dq PS/2 Synaptics TouchPad
 and the like.
 .Pp
+An Elantech touchpad of hardware version 1 to 4, which answers Elantech's
+knock where Synaptics' found nothing, is set up as Linux's elantech driver
+sets it: its firmware and capabilities queried, its registers written for
+absolute mode, 100 packets a second.
+It is
+.Dq ETPS/2 Elantech Touchpad ,
+product 14 and vendor 2 on the PS/2 controller's bus, at
+.Dq isa0060/serio1/input0 ,
+version 0, with the capabilities Linux gives the same pad:
+.Dv ABS_X
+and
+.Dv ABS_Y
+with the pad's range, and on version 4 its resolution,
+.Dv BTN_TOUCH ,
+.Dv BTN_TOOL_FINGER ,
+.Dv BTN_TOOL_DOUBLETAP
+and
+.Dv BTN_TOOL_TRIPLETAP ,
+.Dv BTN_LEFT
+and
+.Dv BTN_RIGHT ,
+.Dv BTN_MIDDLE
+on a pad Linux knows to have one, and
+.Dv INPUT_PROP_POINTER .
+Version 1 adds
+.Dv BTN_FORWARD
+and
+.Dv BTN_BACK
+on a pad with a rocker.
+Versions 2 and 3 keep two slots that bound two contacts, with
+.Dv INPUT_PROP_SEMI_MT ,
+.Dv ABS_PRESSURE
+to 255 and
+.Dv ABS_TOOL_WIDTH
+to 15 where the pad reports pressure, and version 2
+.Dv BTN_TOOL_QUADTAP .
+Version 4 keeps five slots with
+.Dv ABS_MT_PRESSURE
+and
+.Dv ABS_MT_TOUCH_MAJOR ,
+and
+.Dv BTN_TOOL_QUADTAP .
+A clickpad of version 3 or 4 has
+.Dv BTN_LEFT
+alone and
+.Dv INPUT_PROP_BUTTONPAD .
+A pointing stick on a version 3 or 4 pad is a node of its own, registered
+before the pad's,
+.Dq ETPS/2 Elantech TrackPoint ,
+product 14 at
+.Dq isa0060/serio1/input1 ,
+with three buttons,
+.Dv REL_X ,
+.Dv REL_Y ,
+.Dv INPUT_PROP_POINTER
+and
+.Dv INPUT_PROP_POINTING_STICK ;
+it also moves the pointer of
+.Pa /dev/mouse .
+A pad that answers the knock but not a query or a register, or a version 3
+pad whose absolute mode Linux does not use, is reset and named for the
+mouse protocol it answers,
+.Dq PS/2 Elantech Touchpad
+and the like.
+.Pp
 The ACPI devices of
 .Xr acpi 4
 are nodes too:
@@ -510,14 +575,14 @@ A USB device that offers no boot protocol, such as QEMU's absolute
 .Cm usb-tablet ,
 gets no node: the USB stack reads only the boot protocol's fixed reports and
 no report descriptor, so a tablet's absolute axes are not reported.
-The touchpad drivers are Synaptics' alone: an ALPS, Elantech or other
-touchpad is driven as the PS/2 mouse it also is, and a Synaptics pad that
-offers its SMBus bus is driven over PS/2.
+The touchpad drivers are Synaptics' and Elantech's alone: an ALPS or other
+touchpad is driven as the PS/2 mouse it also is, and a Synaptics or Elantech
+pad that offers its SMBus bus is driven over PS/2.
 Linux's quirks that it chooses by the pad's ACPI PNP ID are not applied:
 the coordinates of some ThinkPads, the top buttons of others and
 ForcePads.
-A pad's pass-through port, where a pointing stick reports, is not driven,
-and the stick's packets are dropped.
+A Synaptics pad's pass-through port, where a pointing stick reports, is not
+driven, and the stick's packets are dropped.
 A packet whose bytes break its form is dropped, as Linux drops it, but the
 pad is not reset after the fifth in a row, as Linux's psmouse resets it.
 The keys of a device with keys that is no keyboard, such as the power
