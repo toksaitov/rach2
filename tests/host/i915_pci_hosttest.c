@@ -167,15 +167,18 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
 }
 
 /* The firmware's memory, the OpRegion at ASLS and the option ROM's
- * shadow, which this test does not give: each map is counted and fails. */
-static int fw_maps;
+ * shadow, which this test does not give: each map is counted and fails.
+ * `aperture_maps` counts those of the aperture, BAR 2, among them. */
+static int fw_maps, aperture_maps;
 
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
 {
-    (void)phys;
     (void)size;
     (void)cache;
     fw_maps++;
+    if (phys >= LENOVO_GPU_BAR2 && phys < (uint64_t)LENOVO_GPU_BAR2 + LENOVO_GPU_BAR2_SIZE) {
+        aperture_maps++;
+    }
     return 0;
 }
 
@@ -578,6 +581,7 @@ static void fresh(struct i915_model *m)
     registered = released = 0;
     last_registered = 0;
     maps = 0;
+    aperture_maps = 0;
     udelays = 0;
     frames = frames_freed = 0;
     cmdline_i915 = 0;
@@ -926,16 +930,23 @@ static void row_register_fails(void)
 }
 
 /** A bind whose GTT gets no scratch page lets the display power well's
- * reference go, and leaves the command word as found. */
+ * reference go, leaves the command word as found and maps no window of
+ * the aperture. */
 static void row_gtt_fails(void)
 {
     struct i915_model m;
+    uint32_t command;
 
     fresh(&m);
+    m.config[PCI_COMMAND] = 0x01; /* I/O only */
+    m.config[PCI_COMMAND + 1] = 0x00;
+    command = i915_model_config(&m, PCI_COMMAND, 2);
     frame_refused = 1;
     CHECK("gtt fails: ENOMEM", i915_driver_bind(&m.pci, &m.hw) == -ENOMEM);
     CHECK("gtt fails: the driver's request for the power well dropped",
           (i915_read(&m.hw, HSW_PWR_WELL_CTL2) & HSW_PWR_WELL_CTL_REQ(HSW_PW_CTL_IDX_GLOBAL)) == 0);
+    CHECK("gtt fails: the command word as found", i915_model_config(&m, PCI_COMMAND, 2) == command);
+    CHECK("gtt fails: no window of the aperture mapped", aperture_maps == 0);
     CHECK("gtt fails: no frame kept, no record released", frames == 0 && released == 0);
     done(&m);
 }
