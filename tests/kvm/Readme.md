@@ -7,7 +7,8 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 `tests/run kvm` runs these cases, each on an x86-64 Rach2 that boots `gnu-test.disk` with this directory's files on a data disk, `kvm.ext2`:
 
 * `entry`: the small real-mode guest in `svm-entry.c` reads its memory slot, executes CPUID, reads CR0 and EFER, exits through port I/O and HLT, and reads a replacement frame after MAP_FIXED. It starts with XCR0 at its reset value, which also checks that the backend restores the full XSAVE image before applying the guest's XCR0.
-* `slots`: `svm-entry slots` repeats the read after fork, mprotect, discard and munmap with a replacement page. A guest then counts in another page while the caller forks, protects and replaces the data page; its first counter increment proves it was running before the changes, and it exits only after reading the replacement value.
+* `slots`: `svm-entry slots` repeats the read after fork, mprotect, discard and munmap with a replacement page. A guest then counts in another page while the caller forks, protects and replaces the data page; its first counter increment proves it was running before the changes, and it exits only after reading the replacement value. The same case reads VGA memory through a `/dev/mem` slot and the end of a 4 MiB GEM object through another slot, on std-vga.
+* `leak`: `leak.sh` kills QEMU after the Debian guest prints its kernel version. The five live KVM counts and `fs.file-nr` must return to their initial values, QEMU must have no pinned pages before the kill, and its address space must disappear after it is reaped.
 * `boot-debian-tcg`: `kvm-boot.sh -a tcg` boots the Debian guest in Rach2's QEMU under TCG to its token.
 * `unit-tests` and `selftests`: `corpus.sh` runs the corpus under Rach2's KVM, on the `max-svm` profile, on Linux and on macOS.
 * `unit-tests-nested` and `selftests-nested`: the same on the `host-svm` profile, on Linux alone.
