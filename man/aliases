@@ -9,7 +9,6 @@
 # it, and TARGET to be a page of that section; a program, applet or call
 # with an alias counts as having a page.
 accept4 2 accept
-crysis.sh 1 rach2-game
 acpid 1 busybox-util-linux
 add-shell 8 busybox-loginutils
 addgroup 8 busybox-loginutils
@@ -69,6 +68,7 @@ crc32 1 busybox-coreutils
 creat 2 open
 crond 1 busybox-miscutils
 cryptpw 8 busybox-loginutils
+crysis.sh 1 rach2-game
 cttyhack 1 busybox-shell
 cut 1 busybox-coreutils
 date 1 busybox-coreutils
