@@ -5871,6 +5871,8 @@
         {"assertion_id": "renamed-mkdir", "checks": "A mkdir through the link to the renamed directory works.", "source": "program"},
         {"assertion_id": "renamed-chdir", "checks": "A chdir through the link enters the directory.", "source": "program"},
         {"assertion_id": "renamed-file-link", "checks": "A file opened through the link has a link naming its new path.", "source": "program"},
+        {"assertion_id": "moved-file-link", "checks": "An open file renamed into another directory has a /proc link naming its new path.", "source": "program"},
+        {"assertion_id": "deleted-file-link", "checks": "Once unlinked, the open file's /proc link names its last path and \" (deleted)\".", "source": "program"},
         {"assertion_id": "removed-lookup", "checks": "A directory removed while open has no names through its link.", "source": "program"},
         {"assertion_id": "removed-links", "checks": "The removed directory has no links.", "source": "program"},
         {"assertion_id": "removed-create", "checks": "The removed directory takes no new name.", "source": "program"},
