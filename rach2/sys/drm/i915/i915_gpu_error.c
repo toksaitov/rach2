@@ -203,6 +203,7 @@ struct i915_gpu_error *i915_gpu_coredump(struct drm_i915_private *i915, uint32_t
     copy_str(err->reason, sizeof(err->reason), reason ? reason : "");
     err->reset_count = i915->gt.reset_count;
     err->awake = i915->gt.awake;
+    err->params = i915->params;
     err->eir = i915_uncore_read(i915, EIR);
     err->pgtbl_er = i915_uncore_read(i915, PGTBL_ER);
     err->gtier = i915_uncore_read(i915, GTIER);

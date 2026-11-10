@@ -984,6 +984,24 @@ struct intel_display {
 #define to_intel_crtc(c) ((struct intel_crtc *)(c))
 
 /*
+ * The module parameters that debugfs's i915_params lets root change and
+ * the driver obeys, kept so that a structure of zeros holds Linux's
+ * defaults. `reset` is Linux's i915.reset, which counts once `reset_set`
+ * is set and is 3 until then: 0 for no reset, so that a hang wedges the
+ * GPU; 1 for the whole GPU's reset alone; 2 and above for an engine's
+ * reset first. `hangcheck_off` is i915.enable_hangcheck written false: no
+ * heartbeat finds a hang, and a new context is not persistent.
+ */
+struct i915_params {
+    uint32_t reset;
+    uint8_t reset_set;
+    uint8_t hangcheck_off;
+};
+
+/* The i915.reset parameter in force. */
+#define I915_RESET_PARAM(i915) ((i915)->params.reset_set ? (i915)->params.reset : 3u)
+
+/*
  * A bound device. `drm` is first, and its `driver_priv` points back here.
  * `pci` is the function as the probe found it. `hw` reaches its registers.
  * `mmio_phys` is BAR 0's physical address and `gmadr_phys` BAR 2's, the
@@ -997,7 +1015,8 @@ struct intel_display {
  * while it has none; `irqs` counts the interrupts taken on it. `opregion`
  * is the firmware's OpRegion and `vbt` the video BIOS table decoded
  * (intel_bios.h), Linux's defaults when the firmware gave none. `display`
- * is the display's state (intel_display.c). `attached`
+ * is the display's state (intel_display.c), and `params` the parameters
+ * root may change (`struct i915_params`). `attached`
  * is set once the device is registered and owns its backend, whose
  * `attach`, `detach` and `release` it then calls.
  */
@@ -1030,6 +1049,7 @@ struct drm_i915_private {
     struct i915_gem gem;
     struct i915_sseu sseu;
     struct intel_display display;
+    struct i915_params params;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -3109,8 +3129,9 @@ struct i915_error_engine {
  * The GPU's state at a hang, Linux's i915_gpu_coredump: when, in ticks,
  * which engines hung, why, the message Linux logs ("GPU HANG: ecode
  * 7:M:E", with the first hung request's process), empty for a state not
- * kept, the whole GPU's resets so far, whether the GT was awake, the GT's
- * error and interrupt registers, the fences, and each engine's state.
+ * kept, the whole GPU's resets so far, whether the GT was awake, the
+ * parameters in force, the GT's error and interrupt registers, the fences,
+ * and each engine's state.
  */
 struct i915_gpu_error {
     uint64_t ticks;
@@ -3119,6 +3140,7 @@ struct i915_gpu_error {
     char msg[96];
     uint32_t reset_count;
     uint8_t awake;
+    struct i915_params params;
     uint32_t eir, pgtbl_er, error_gen6, done_reg;
     uint32_t gtier, forcewake, err_int, derrmr;
     uint64_t fence[I915_NUM_FENCES];
