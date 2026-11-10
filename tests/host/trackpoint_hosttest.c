@@ -86,13 +86,15 @@ static int model_count;
 static uint8_t ctl_config;
 static uint8_t ctl_next;
 
-/* The touchpad: a plain mouse in its place; its capabilities, extended
- * capabilities and those of queries 0x0c and 0x10, its board and the last
- * byte of its model ID; how many knocks it leaves unanswered from now; the
- * command whose argument comes next; the byte the resolutions since the
- * last other command make, and their count; its mode byte, gesture mode
- * and reporting; and every byte it took. */
+/* The touchpad: a plain mouse in its place, and whether that mouse has a
+ * wheel, answering every read-ID with the IntelliMouse's 3; its
+ * capabilities, extended capabilities and those of queries 0x0c and 0x10,
+ * its board and the last byte of its model ID; how many knocks it leaves
+ * unanswered from now; the command whose argument comes next; the byte the
+ * resolutions since the last other command make, and their count; its mode
+ * byte, gesture mode and reporting; and every byte it took. */
 static int dev_plain;
+static int dev_wheel;
 static uint32_t pad_caps;
 static uint32_t pad_ext;
 static uint32_t pad_ext_0c;
@@ -448,7 +450,7 @@ static void dev_take(uint8_t b)
         }
         break;
     case 0xF2:
-        model_put(0x00);
+        model_put(dev_plain && dev_wheel ? 0x03 : 0x00);
         break;
     case 0xFF:
         model_put(0xAA);
@@ -841,6 +843,7 @@ static void model_reset(void)
     ctl_config = FIRMWARE_CONFIG;
     ctl_next = 0;
     dev_plain = 0;
+    dev_wheel = 0;
     pad_caps = 0xd00123;
     pad_ext = 0x840300;
     pad_ext_0c = 0x02a800;
@@ -1954,6 +1957,7 @@ static void late_pad_rows(void)
 static void announce_rows(void)
 {
     static const uint8_t good[] = {0x80, 0x00, 0x00, 0xC0, 0x00, 0x00};
+    struct evdev *dev;
     unsigned int losses;
 
     model_reset();
@@ -1990,14 +1994,65 @@ static void announce_rows(void)
     CHECK("its announcement asks for a reconnect",
           state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
     n_took = 0;
+    dev = mouse_dev;
     ps2mouse_reconnect();
-    CHECK("which probes it anew", n_took > 2 && took[0] == 0xFF && took[1] == 0xF6 &&
-                                      mouse_dev != NULL && pad_reporting && state == STATE_ACTIVE);
-    CHECK("with one event device", count_named("PS/2 Generic Mouse") == 1);
+    CHECK("which resets it and finds its protocol again",
+          n_took > 2 && took[0] == 0xFF && took[1] == 0xF6 && pad_reporting &&
+              state == STATE_ACTIVE && starts_with(last_info, "reconnect: the mouse reports"));
+    CHECK("and it keeps its event device, as Linux's psmouse_reconnect keeps it",
+          mouse_dev == dev && count_named("PS/2 Generic Mouse") == 1);
     irq_byte(0xAA);
     irq_byte(0x05);
     CHECK("a mouse's 0xAA with another byte is a packet's first byte",
           !bat_held && packet_index == 2);
+    irq_byte(0x00);
+    CHECK("and the packet is whole", packet_index == 0);
+}
+
+/** A plain mouse's bytes without the framing bit, counted as bad packets,
+ * and its reconnect when its protocol is another after the reset. */
+static void mouse_sync_rows(void)
+{
+    struct evdev *dev;
+    int i;
+
+    model_reset();
+    dev_plain = 1;
+    CHECK("a plain mouse is brought up", bring_up() == 0 && touchpad == 0 && mouse_dev != NULL);
+    for (i = 0; i < 4; i++) {
+        irq_byte(0x00);
+    }
+    CHECK("four first bytes without the framing bit are four bad packets",
+          out_of_sync == 4 && state == STATE_ACTIVE && !reconnect_wanted && packet_index == 0);
+    irq_bytes((const uint8_t[]){0x08, 0x01, 0x01}, 3);
+    CHECK("a whole packet ends the count", out_of_sync == 0 && packet_index == 0);
+    for (i = 0; i < 5; i++) {
+        irq_byte(0x00);
+    }
+    CHECK("the fifth in a row stops the port and asks for a reconnect",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT &&
+              starts_with(last_warning, "sync: %d bad packets in a row"));
+    irq_byte(0x08);
+    CHECK("the port then drops every byte", packet_index == 0);
+    dev = mouse_dev;
+    n_took = 0;
+    ps2mouse_reconnect();
+    CHECK("the mouse is reset and reports again with its event device",
+          n_took > 2 && took[0] == 0xFF && mouse_dev == dev && pad_reporting &&
+              state == STATE_ACTIVE && out_of_sync == 0);
+
+    for (i = 0; i < 5; i++) {
+        irq_byte(0x00);
+    }
+    dev_wheel = 1;
+    ps2mouse_reconnect();
+    CHECK("a mouse that answers the wheel's knock after its reset is probed anew",
+          protocol == PROTO_IMPS && packet_size == 4 &&
+              starts_with(last_warning, "reconnect: probing the port anew"));
+    CHECK("its old device gone and one of the wheel's in its place",
+          count_named("PS/2 Generic Mouse") == 0 &&
+              count_named("ImPS/2 Generic Wheel Mouse") == 1 && pad_reporting &&
+              state == STATE_ACTIVE);
 }
 
 /** The guest after its pad's reconnect, and after its own announcement. */
@@ -2140,6 +2195,7 @@ int main(void)
     reset_rows();
     late_pad_rows();
     announce_rows();
+    mouse_sync_rows();
     guest_reconnect_rows();
     guest_change_rows();
     newer_kind_reconnect_rows();

@@ -104,7 +104,7 @@
 #define STATE_CMD    1
 #define STATE_IGNORE 2
 
-/* Linux's `resetafter`: the bad packets in a row after which the pad is
+/* Linux's `resetafter`: the bad packets in a row after which the device is
  * reconnected. */
 #define RESET_AFTER 5
 
@@ -136,7 +136,7 @@ static int alps;
  * of a wheel's turn of more than 7 does not carry them. */
 static unsigned int extra_buttons;
 
-/* The port's state, STATE_*, which the handler reads; and the touchpad's
+/* The port's state, STATE_*, which the handler reads; and the device's
  * bad packets in a row. */
 static volatile int state = STATE_ACTIVE;
 static int out_of_sync;
@@ -798,42 +798,52 @@ void ps2mouse_guest_buttons(uint8_t buttons)
 }
 
 /**
- * Give the touchpad's byte to synaptics.c, counting its bad packets in a
- * row as Linux's `psmouse_handle_byte` does: the fifth puts the port in
- * STATE_IGNORE and asks for a reconnect, and a whole packet ends the count.
+ * Count a bad packet of the device, when `bad` is 1, or a whole one, as
+ * Linux's `psmouse_handle_byte` counts them: the fifth bad packet in a row
+ * puts the port in STATE_IGNORE and asks for a reconnect, and a whole
+ * packet ends the count.
  */
-static void touchpad_byte(uint8_t data)
+static void count_packet(int bad)
 {
-    int rc = synaptics_byte(data);
-
-    if (rc == SYNAPTICS_BAD) {
+    if (bad) {
         if (++out_of_sync == RESET_AFTER) {
             state = STATE_IGNORE;
             klog(KLOG_WARN, "mouse", "sync: %d bad packets in a row: reconnecting", RESET_AFTER);
             request_reconnect(RECONNECT_PORT);
         }
-    } else if (rc == SYNAPTICS_FULL && out_of_sync) {
+    } else if (out_of_sync) {
         out_of_sync = 0;
         klog(KLOG_INFO, "mouse", "sync: resynced");
     }
 }
 
-/** Take one byte of the device's packet: the touchpad's to synaptics.c,
- * a mouse's into the packet being assembled, which is reported once whole. */
+/**
+ * Take one byte of the device's packet: the touchpad's to synaptics.c, a
+ * mouse's into the packet being assembled, which is reported once whole.
+ * A touchpad's packet that synaptics.c refuses is a bad packet, and so is
+ * a mouse's byte dropped for its framing bit.
+ */
 static void take_byte(uint8_t data)
 {
+    int rc;
+
     if (touchpad == TOUCHPAD_SYNAPTICS) {
-        touchpad_byte(data);
+        rc = synaptics_byte(data);
+        if (rc != SYNAPTICS_GOOD) {
+            count_packet(rc == SYNAPTICS_BAD);
+        }
         return;
     }
     /* Byte 0 has the always-1 framing bit (bit 3). */
     if (packet_index == 0 && !(data & 0x08)) {
+        count_packet(1);
         return;
     }
     packet_bytes[packet_index++] = data;
     if (packet_index >= packet_size) {
         report_packet();
         packet_index = 0;
+        count_packet(0);
     }
 }
 
@@ -849,11 +859,11 @@ static void take_byte(uint8_t data)
  *
  * A packet is framed by byte 0, whose bit 3 is always 1: a byte expected as
  * byte 0 with that bit clear is out of step with the stream and is dropped,
- * which brings the stream back in step.
+ * which brings the stream back in step, and counts as a bad packet.
  *
  * During a run of commands the handler reads nothing, and after five bad
- * packets of the touchpad in a row it drops every byte until kpsmoused has
- * reconnected the pad.
+ * packets in a row it drops every byte until kpsmoused has reconnected the
+ * device.
  */
 static void mouse_irq_handler(isr_params_t *params)
 {
@@ -1105,6 +1115,27 @@ static void reconnect_guest(void)
     }
 }
 
+/**
+ * Set the mouse up again as Linux's `psmouse_reconnect` does for a protocol
+ * that has no reconnect of its own: the reset and the defaults, and its
+ * protocol found again, which must be the one found before. Returns 0 when
+ * it is, and the mouse keeps its event device; -1 when the mouse does not
+ * answer its reset or speaks another protocol now.
+ */
+static int mouse_reconnect(void)
+{
+    int old = protocol;
+
+    if (mouse_reset() < 0) {
+        return -1;
+    }
+    if (mouse_send_command(MOUSE_CMD_SET_DEFAULTS) < 0) {
+        klog(KLOG_WARN, "mouse", "the device refused the default settings");
+    }
+    detect_protocol();
+    return protocol == old ? 0 : -1;
+}
+
 void ps2mouse_reconnect(void)
 {
     int what;
@@ -1123,6 +1154,12 @@ void ps2mouse_reconnect(void)
             reconnect_guest();
         }
         klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again");
+    } else if (touchpad == 0 && mouse_dev && mouse_reconnect() == 0) {
+        packet_index = 0;
+        if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
+            klog(KLOG_WARN, "mouse", "the device did not enable reporting");
+        }
+        klog(KLOG_INFO, "mouse", "reconnect: the mouse reports again");
     } else {
         klog(KLOG_WARN, "mouse", "reconnect: probing the port anew");
         guest_forget();
