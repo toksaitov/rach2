@@ -9,7 +9,8 @@
 # `start`, as root, adds the session's groups with test in them, starts the
 # device services and then the session as test, and waits for Weston's
 # socket. `user` is the session itself, which `start` runs as test. `stop`
-# ends all three. The logs are under /tmp/80-12.
+# ends all three. The logs are under /tmp/80-12; a file pulse.args there
+# gives PulseAudio more arguments, such as -vvvv.
 set -eu
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 log=/tmp/80-12
@@ -71,8 +72,11 @@ set-default-source oss_input
 PA
     printf '[core]\nshell=kiosk-shell.so\nidle-time=0\nxwayland=true\n' \
         > "$log/weston.ini"
+    more=
+    [ ! -r "$log/pulse.args" ] || more=$(cat "$log/pulse.args")
+    # shellcheck disable=SC2086 # the file holds a list of arguments
     pulseaudio -n --daemonize=no --use-pid-file=no --exit-idle-time=-1 \
-        --disallow-exit --file="$log/rach2.pa" > "$log/pulse.log" 2>&1 &
+        --disallow-exit --file="$log/rach2.pa" $more > "$log/pulse.log" 2>&1 &
     pulse=$!
     # --debug lets weston-screenshooter read the output.
     weston --backend=drm --renderer=gl --socket=wayland-0 --debug \
