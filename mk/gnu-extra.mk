@@ -92,6 +92,33 @@ $(GNU_VENUS_STAMP): $(GNU_VENUS_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@$(GNU_ASSET_STEP) -n gnu-venus -t $@ $(STEP_INPUTS) -o venus \
 	    -- $(call GNU_STEP_RUN,vendor/gnu/debian/fetch_venus.sh)
 
+# The x86-64 root's i386 layer (vendor/gnu/Readme.md, The i386 layer), in one
+# step: the closure of debian/i386.list, with each package's Multi-Arch
+# field, and Mesa 26.1.6's i386 Venus driver in venus-i386/. The scripts run
+# as for the i686 root, whose Debian architecture is i386, and write the
+# x86-64 tree. The i686 root has no such layer, since its own packages are
+# i386's.
+GNU_I386_STAMP = $(GNU_OUT)/i386.stamp
+GNU_STEP_STAMPS += $(GNU_I386_STAMP)
+GNU_I386_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/fetch_asset.sh \
+                   vendor/gnu/debian/resolve_debs.py vendor/gnu/debian/multiarch.sh vendor/gnu/debian/i386.list \
+                   vendor/gnu/debian/venus.list vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+GNU_I386_RUN = RACH2_ARCH=i686 RACH2_GNU_OUT="$$ETUDE_STEP_ROOT"
+
+.PHONY: gnu-i386
+gnu-i386: $(GNU_I386_STAMP)
+
+$(GNU_I386_STAMP): $(GNU_I386_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@test "$(ARCH)" = x86_64 || { echo "gnu: i386: the i386 layer is the x86-64 root's; run make ARCH=x86_64 gnu-i386" >&2; exit 1; }
+	@rm -f $@
+	@$(GNU_ASSET_STEP) -n gnu-i386 -t $@ $(STEP_INPUTS) \
+	    -o debian/i386 -o work/debian/i386/files -o work/debian/i386/closure.txt \
+	    -o work/debian/i386/multiarch.txt -o venus-i386 \
+	    -- sh -c '$(GNU_I386_RUN) GNU_DEBIAN_LISTS=debian/i386.list ./vendor/gnu/debian/fetch_debs.sh i386 && \
+	        $(GNU_I386_RUN) ./vendor/gnu/debian/multiarch.sh i386 && \
+	        $(GNU_I386_RUN) ./vendor/gnu/debian/fetch_venus.sh venus-i386'
+	@test -L $(GNU_OUT)/debian/i386/usr/lib/ld-linux.so.2 || { echo "gnu: i386: the layer has no usr/lib/ld-linux.so.2" >&2; exit 1; }
+
 $(GNU_PROTON_STAMP): $(GNU_PROTON_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
 	@$(GNU_ASSET_STEP) -n gnu-proton -t $@ $(STEP_INPUTS) -o proton \
