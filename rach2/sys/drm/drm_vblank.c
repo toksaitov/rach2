@@ -7,6 +7,7 @@
 #include "drm.h"
 
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../proc/percpu.h"
@@ -193,10 +194,12 @@ int32_t drm_crtc_vblank_get(struct drm_crtc *crtc)
 {
     struct drm_vblank *v = &crtc->vblank;
     int32_t rc = 0;
+    uint32_t flags;
 
     if (!drm_crtc_has_vblank(crtc)) {
         return -EINVAL;
     }
+    flags = kirq_save();
     if (++v->refs == 1) {
         rc = vblank_enable(crtc);
         if (rc != 0) {
@@ -206,19 +209,19 @@ int32_t drm_crtc_vblank_get(struct drm_crtc *crtc)
         v->refs--;
         rc = -EINVAL;
     }
+    kirq_restore(flags);
     return rc;
 }
 
 void drm_crtc_vblank_put(struct drm_crtc *crtc)
 {
     struct drm_vblank *v = &crtc->vblank;
+    uint32_t flags = kirq_save();
 
-    if (v->refs == 0) {
-        return;
-    }
-    if (--v->refs == 0) {
+    if (v->refs != 0 && --v->refs == 0) {
         v->put_ns = vblank_now();
     }
+    kirq_restore(flags);
 }
 
 uint64_t drm_crtc_vblank_count_and_time(struct drm_crtc *crtc, int64_t *time_ns)
@@ -267,7 +270,8 @@ static void send_vblank_event(struct drm_pending_event *e, uint64_t seq, int64_t
 }
 
 /** Queue `e`, reserved, for the count `seq` of `crtc`, after those queued
- * before it; the caller's hold on the vblanks goes with it. */
+ * before it; the caller's hold on the vblanks goes with it. Interrupts
+ * masked, since the vblank interrupt sends and frees the queue's events. */
 static void queue_event(struct drm_crtc *crtc, struct drm_pending_event *e, uint64_t seq)
 {
     struct drm_vblank *v = &crtc->vblank;
@@ -283,7 +287,7 @@ static void queue_event(struct drm_crtc *crtc, struct drm_pending_event *e, uint
 }
 
 /** Send each queued event of `crtc` whose count has come, or every one
- * when `all`, letting go of the hold each kept. */
+ * when `all`, letting go of the hold each kept. Interrupts masked. */
 static void send_due_events(struct drm_crtc *crtc, int all)
 {
     struct drm_vblank *v = &crtc->vblank;
@@ -307,7 +311,34 @@ static void send_due_events(struct drm_crtc *crtc, int all)
 
 void drm_crtc_arm_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *e)
 {
+    uint32_t flags = kirq_save();
+
     queue_event(crtc, e, crtc->vblank.count + 1);
+    kirq_restore(flags);
+}
+
+/**
+ * Send `e`, reserved, now if the count `req_seq` of `crtc` has come, else
+ * queue it for that count, in one step against the vblank interrupt, as
+ * Linux does under its event lock; the caller's hold goes with the event.
+ * Returns the count reached, or `req_seq` when queued.
+ */
+static uint64_t send_or_queue(struct drm_crtc *crtc, struct drm_pending_event *e, uint64_t req_seq)
+{
+    uint64_t seq;
+    int64_t now;
+    uint32_t flags = kirq_save();
+
+    seq = drm_crtc_vblank_count_and_time(crtc, &now);
+    if (vblank_passed(seq, req_seq)) {
+        drm_crtc_vblank_put(crtc);
+        send_vblank_event(e, seq, now);
+    } else {
+        queue_event(crtc, e, req_seq);
+        seq = req_seq;
+    }
+    kirq_restore(flags);
+    return seq;
 }
 
 void drm_crtc_send_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *e)
@@ -347,6 +378,7 @@ int drm_crtc_handle_vblank(struct drm_crtc *crtc)
 void drm_crtc_vblank_off(struct drm_crtc *crtc)
 {
     struct drm_vblank *v = &crtc->vblank;
+    uint32_t flags = kirq_save();
 
     vblank_disable(crtc);
     wq_wake_all(&v->wait);
@@ -357,6 +389,7 @@ void drm_crtc_vblank_off(struct drm_crtc *crtc)
     /* Linux sends what was queued at once, "lest the natives grow
      * disquiet", with the count reached. */
     send_due_events(crtc, 1);
+    kirq_restore(flags);
 }
 
 void drm_crtc_vblank_on(struct drm_crtc *crtc)
@@ -364,6 +397,7 @@ void drm_crtc_vblank_on(struct drm_crtc *crtc)
     struct drm_vblank *v = &crtc->vblank;
     int64_t t;
     int precise;
+    uint32_t flags = kirq_save();
 
     if (v->inmodeset) {
         v->refs--;
@@ -381,6 +415,7 @@ void drm_crtc_vblank_on(struct drm_crtc *crtc)
     if (v->refs != 0 && drm_crtc_has_vblank(crtc)) {
         (void)vblank_enable(crtc);
     }
+    kirq_restore(flags);
 }
 
 void drm_vblank_unplug(struct drm_device *dev)
@@ -390,11 +425,13 @@ void drm_vblank_unplug(struct drm_device *dev)
 
     for (i = 0; i < dev->mode_config.num_crtc; i++) {
         struct drm_crtc *crtc = dev->mode_config.crtcs[i];
+        uint32_t flags = kirq_save();
 
         for (e = crtc->vblank.events; e; e = e->next) {
             dma_fence_set_error(e->fence, -ENODEV);
         }
         drm_crtc_vblank_off(crtc);
+        kirq_restore(flags);
         wq_wake_all(&crtc->vblank.wait);
         wq_wake_all(&crtc->crc.wait);
     }
@@ -402,13 +439,17 @@ void drm_vblank_unplug(struct drm_device *dev)
 
 void drm_crtc_vblank_cleanup(struct drm_crtc *crtc)
 {
-    struct drm_pending_event *e;
+    struct drm_pending_event *e, *queued;
+    uint32_t flags = kirq_save();
 
-    while ((e = crtc->vblank.events) != NULL) {
-        crtc->vblank.events = e->next;
+    queued = crtc->vblank.events;
+    crtc->vblank.events = NULL;
+    crtc->vblank.events_tail = NULL;
+    kirq_restore(flags);
+    while ((e = queued) != NULL) {
+        queued = e->next;
         drm_event_cancel_free(e);
     }
-    crtc->vblank.events_tail = NULL;
     kfree(crtc->crc.entries);
     crtc->crc.entries = NULL;
 }
@@ -503,8 +544,6 @@ static int32_t queue_vblank_event(struct drm_crtc *crtc, uint64_t req_seq,
                                   union drm_wait_vblank *vblwait, struct drm_file *file)
 {
     struct drm_pending_event *e = (struct drm_pending_event *)kzalloc(sizeof(*e));
-    uint64_t seq;
-    int64_t now;
     int32_t rc;
 
     if (!e) {
@@ -523,15 +562,7 @@ static int32_t queue_vblank_event(struct drm_crtc *crtc, uint64_t req_seq,
         drm_crtc_vblank_put(crtc);
         return rc;
     }
-    seq = drm_crtc_vblank_count_and_time(crtc, &now);
-    if (vblank_passed(seq, req_seq)) {
-        drm_crtc_vblank_put(crtc);
-        send_vblank_event(e, seq, now);
-        vblwait->reply.sequence = (unsigned int)seq;
-    } else {
-        queue_event(crtc, e, req_seq);
-        vblwait->reply.sequence = (unsigned int)req_seq;
-    }
+    vblwait->reply.sequence = (unsigned int)send_or_queue(crtc, e, req_seq);
     return 0;
 }
 
@@ -650,7 +681,6 @@ int32_t drm_crtc_queue_sequence_ioctl(struct drm_device *dev, void *data, struct
     struct drm_pending_event *e;
     struct drm_crtc *crtc;
     uint64_t seq, req_seq;
-    int64_t now;
     int32_t rc;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET) || !drm_dev_has_vblank(dev)) {
@@ -673,7 +703,7 @@ int32_t drm_crtc_queue_sequence_ioctl(struct drm_device *dev, void *data, struct
         kfree(e);
         return rc;
     }
-    seq = drm_crtc_vblank_count_and_time(crtc, &now);
+    seq = drm_crtc_vblank_count_and_time(crtc, NULL);
     req_seq = queue_seq->sequence;
     if (queue_seq->flags & DRM_CRTC_SEQUENCE_RELATIVE) {
         req_seq += seq;
@@ -691,14 +721,7 @@ int32_t drm_crtc_queue_sequence_ioctl(struct drm_device *dev, void *data, struct
         kfree(e);
         return rc;
     }
-    if (vblank_passed(seq, req_seq)) {
-        drm_crtc_vblank_put(crtc);
-        send_vblank_event(e, seq, now);
-        queue_seq->sequence = seq;
-    } else {
-        queue_event(crtc, e, req_seq);
-        queue_seq->sequence = req_seq;
-    }
+    queue_seq->sequence = send_or_queue(crtc, e, req_seq);
     return 0;
 }
 
