@@ -27,7 +27,9 @@
  * and madvise(MADV_DONTNEED_LOCKED) give a private anonymous mapping zero
  * pages again, MADV_COLD keeps its bytes, an advice Linux does not define is
  * EINVAL, and madvise and msync fail with EINVAL for a length that would round
- * up to 0. A write through
+ * up to 0; an i386 program on the x86-64 kernel cannot give such a length,
+ * and its 4 GiB less one is ENOMEM, as Linux's compat calls find no region
+ * past the program's 4 GiB. A write through
  * /proc/self/mem to a read-only page a fork shared leaves the page read-only.
  * On an ext2 root, through a shared mapping of a file the parent sees a
  * child's store, read(2) sees a store, the mapping sees a write(2) without
@@ -69,6 +71,7 @@
 #include <sys/resource.h>
 #include <sys/statfs.h>
 #include <sys/syscall.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -762,9 +765,23 @@ static int remaps(void)
 }
 
 /**
+ * The error of madvise and msync for a length of all ones: EINVAL where the
+ * kernel's size_t is the program's, since the length rounds up to 0, and
+ * ENOMEM for an i386 program on the x86-64 kernel, whose 64-bit size_t takes
+ * it as 4 GiB less one, past every region the program can have.
+ */
+static int all_ones_error(void)
+{
+    struct utsname u;
+
+    return sizeof(size_t) == 4 && uname(&u) == 0 && strcmp(u.machine, "x86_64") == 0 ? ENOMEM
+                                                                                     : EINVAL;
+}
+
+/**
  * Check madvise's advice over a private anonymous mapping, and madvise's and
- * msync's EINVAL for a length that rounds up to 0. Returns 0, or 1 once the
- * failure is reported.
+ * msync's error for a length of all ones (`all_ones_error`). Returns 0, or 1
+ * once the failure is reported.
  */
 static int advice(void)
 {
@@ -794,11 +811,11 @@ static int advice(void)
         return fail("madvise took an advice Linux does not define");
     }
     row_held();
-    if (madvise(m, (size_t)-1, MADV_DONTNEED) != -1 || errno != EINVAL) {
+    if (madvise(m, (size_t)-1, MADV_DONTNEED) != -1 || errno != all_ones_error()) {
         return fail("madvise took a length that rounds up to 0 for an empty range");
     }
     row_held();
-    if (msync(m, (size_t)-1, MS_SYNC) != -1 || errno != EINVAL) {
+    if (msync(m, (size_t)-1, MS_SYNC) != -1 || errno != all_ones_error()) {
         return fail("msync took a length that rounds up to 0 for an empty range");
     }
     row_held();
