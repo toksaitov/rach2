@@ -430,17 +430,6 @@ void poll_ms_deadline(int timeout_ms, struct poll_deadline *d)
     d->tick = tick_deadline(tick_span(timeout_ms / 1000, 0), (uint32_t)(timeout_ms % 1000) * 1000u);
 }
 
-/**
- * Whether the timeval `tv` is one the select calls take: seconds not
- * negative and microseconds from 0 to 999999. They refuse another with
- * -EINVAL, as Linux does, and the range keeps the conversions below free of
- * signed overflow.
- */
-static int tv_valid(const struct poll_timeval *tv)
-{
-    return tv->tv_sec >= 0 && tv->tv_usec >= 0 && tv->tv_usec < 1000000;
-}
-
 /** Whether the timespec `ts` is one ppoll and pselect6 take: seconds not
  * negative and nanoseconds from 0 to 999999999. */
 static int ts_valid(const struct poll_timespec *ts)
@@ -464,19 +453,27 @@ static void ts_deadline(const struct poll_timespec *ts, struct poll_deadline *d)
     d->tick = tick_deadline(tick_span(ts->tv_sec, 0), ((uint32_t)ts->tv_nsec + 999u) / 1000u);
 }
 
-/** In `d`, the deadline of the timeval `tv`, or none for a NULL `tv`, to
- * the nanosecond, as Linux's select takes it. */
-static void tv_deadline(const struct poll_timeval *tv, struct poll_deadline *d)
+/** Normalize `tv` to seconds and microseconds, as Linux's select does,
+ * and put its deadline in `d`, or none for a NULL `tv`. Return 0, or
+ * -EINVAL if the normalized seconds or fraction are negative. The sum
+ * wraps in the caller's native long width without signed overflow. */
+static int tv_deadline(struct poll_timeval *tv, struct poll_deadline *d)
 {
     struct poll_timespec ts;
 
     if (!tv) {
         ts_deadline(NULL, d);
-        return;
+        return 0;
     }
-    ts.tv_sec = tv->tv_sec;
-    ts.tv_nsec = tv->tv_usec * 1000L;
+    ts.tv_sec = (long)((unsigned long)tv->tv_sec + (unsigned long)(tv->tv_usec / 1000000L));
+    ts.tv_nsec = (tv->tv_usec % 1000000L) * 1000L;
+    if (!ts_valid(&ts)) {
+        return -EINVAL;
+    }
+    tv->tv_sec = ts.tv_sec;
+    tv->tv_usec %= 1000000L;
     ts_deadline(&ts, d);
+    return 0;
 }
 
 /* Linux's personality flag that keeps select's and ppoll's timeout as the
@@ -816,11 +813,10 @@ long sys__newselect(struct isr_params *params)
         if (copy_from_user(&tv, (const void __user *)utv, sizeof(tv)) != 0) {
             return -EFAULT;
         }
-        if (!tv_valid(&tv)) {
-            return -EINVAL;
-        }
     }
-    tv_deadline(utv ? &tv : NULL, &d);
+    if (tv_deadline(utv ? &tv : NULL, &d) != 0) {
+        return -EINVAL;
+    }
     return poll_finish(select_common(nfds, ur, uw, ue, &d), utv, &d, LEFT_TV,
                        tv.tv_sec == 0 && tv.tv_usec == 0);
 }
@@ -844,11 +840,10 @@ long sys_select(struct isr_params *params)
             if (copy_from_user(&tv, (const void __user *)a[4], sizeof(tv)) != 0) {
                 return -EFAULT;
             }
-            if (!tv_valid(&tv)) {
-                return -EINVAL;
-            }
         }
-        tv_deadline(a[4] ? &tv : NULL, &d);
+        if (tv_deadline(a[4] ? &tv : NULL, &d) != 0) {
+            return -EINVAL;
+        }
         return poll_finish(select_common((int)a[0], a[1], a[2], a[3], &d), a[4], &d, LEFT_TV,
                            tv.tv_sec == 0 && tv.tv_usec == 0);
     }

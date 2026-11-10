@@ -134,9 +134,11 @@ The raw
 .Nm select
 and
 .Nm newselect
-calls require nonnegative seconds and microseconds from 0 through 999999,
-and take the timeout to the microsecond.
-Musl normalizes excess microseconds before issuing the call.
+calls add the whole seconds of the microseconds field to the seconds
+field, then require nonnegative seconds and a nonnegative remainder,
+and take the timeout to the microsecond, as Linux does.
+For example, a timeval of 0 seconds and 1500000 microseconds is 1.5 seconds.
+A timeout refused by this check is left unchanged.
 .Pp
 The raw
 .Nm pselect6
