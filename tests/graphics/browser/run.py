@@ -380,7 +380,7 @@ def gpu(b, url):
     result["webgl_status"] = next((line.strip() for line in text.splitlines()
                                    if line.strip().startswith("WebGL:")), None)
     result["loader"] = [line for line in (b.out / "browser.log").read_text(errors="replace").splitlines()
-                        if "MESA-LOADER" in line or "using driver" in line]
+                        if any(word in line for word in ("MESA-LOADER", "pci id for fd", "using driver"))]
     assert result["gl_renderer"] and CROCUS in result["gl_renderer"], result["gl_renderer"]
     assert CROCUS in result["webgl"]["renderer"], result["webgl"]
     assert result["webgl_status"] == "WebGL: Hardware accelerated", result["webgl_status"]
