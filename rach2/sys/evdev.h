@@ -182,8 +182,9 @@ void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags);
 void evdev_set_version(struct evdev *dev, uint16_t version);
 
 /**
- * Give `dev` the event `code` of `type`, EV_KEY or EV_REL, to report, as
- * Linux's `input_set_capability` does: a button, or a relative axis. Called
+ * Give `dev` the event `code` of `type`, EV_KEY, EV_REL or EV_LED, to
+ * report, as Linux's `input_set_capability` does: a button, a relative
+ * axis, or an LED, which EVIOCGBIT lists beside a keyboard's three. Called
  * after `evdev_register`, before the device reports. A NULL `dev` is
  * ignored.
  */
