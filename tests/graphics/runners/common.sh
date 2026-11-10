@@ -37,6 +37,16 @@ runner_busy()
     awk '$1 == "cpu" { t = 0; for (i = 2; i <= NF; i++) t += $i; print t - $5 - $6, t; exit }' /proc/stat
 }
 
+# runner_mesa: the version of Debian's Mesa, from dpkg in a Debian guest and
+# from the package's changelog on Rach2's root, which has no dpkg database.
+runner_mesa()
+{
+    mesa_v=$(dpkg-query -W -f '${Version}' libgl1-mesa-dri 2>/dev/null) ||
+        mesa_v=$(gzip -dc /usr/share/doc/libgl1-mesa-dri/changelog.Debian.gz 2>/dev/null |
+            sed -n '1s/^mesa (\([^)]*\)).*/\1/p') || mesa_v=''
+    echo "${mesa_v:-unknown}"
+}
+
 # runner_start [plain]: begin the record with what the guest is: its system,
 # CPUs, memory, Mesa, the IOMMU's state, the caches' preparation and the
 # other processes that run beside the runner. `plain`, for a runner that
@@ -54,7 +64,7 @@ runner_start()
     runner_record "kernel $(uname -sr)"
     runner_record "cpus $(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo)"
     runner_record "memory_kib $(awk '$1 == "MemTotal:" { print $2 }' /proc/meminfo)"
-    runner_record "mesa $(dpkg-query -W -f '${Version}' libgl1-mesa-dri 2>/dev/null || echo unknown)"
+    runner_record "mesa $(runner_mesa)"
     runner_iommu
     runner_record "cache mesa $(find "${MESA_SHADER_CACHE_DIR:-/nonexistent}" -type f 2>/dev/null | wc -l) files in ${MESA_SHADER_CACHE_DIR:-none}, emptied at start: ${GRAPHICS_DONE:-0}"
     if [ "${1:-}" != plain ]; then
