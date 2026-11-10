@@ -184,6 +184,7 @@ static const char *const assertion_id[] = {"far-call",
                                            "ia32-altstack-frame",
                                            "ia32-altstack-return",
                                            "sleep-remainder",
+                                           "native-sleep-remainder",
                                            "seccomp-native-kept",
                                            "seccomp-i386-killed",
                                            "ptrace-arch",
@@ -611,7 +612,8 @@ static void run_ia32_signal(void)
     report_held();
 }
 
-/** Ignore SIGALRM so each interval can interrupt the sleeping call. */
+/** Catch SIGALRM and do nothing, so that each interval of the timer
+ * interrupts the sleeping call. */
 static void on_alarm(int sig, void *info, void *ucontext)
 {
     (void)sig;
@@ -619,15 +621,22 @@ static void on_alarm(int sig, void *info, void *ucontext)
     (void)ucontext;
 }
 
-/** Each compat sleep reports EFAULT when its interrupted remainder is lost. */
+/**
+ * Each compat sleep, and each native one beside it, reports EFAULT when its
+ * interrupted remainder is lost: nanosleep, clock_nanosleep on real time,
+ * and clock_nanosleep on the process CPU clock, which does not advance
+ * while the only thread sleeps. A native nanosleep that
+ * completes writes no remainder, so a bad address there is not EFAULT.
+ */
 static void run_sleep_remainder(void)
 {
     static const unsigned int req32[2] = {100000, 0};
     static const unsigned int req64[4] = {100000, 0, 0, 0};
+    static const unsigned long brief[2] = {0, 1000000};
     struct k_sigaction ka;
     const unsigned long timer[4] = {0, 10000, 0, 10000};
     const unsigned long off[4] = {0, 0, 0, 0};
-    long rc[3];
+    long rc[6];
 
     ka.handler = on_alarm;
     ka.flags = SA_SIGINFO | SA_RESTORER;
@@ -640,9 +649,21 @@ static void run_sleep_remainder(void)
     rc[0] = int80(162, (unsigned long)req32, 1, 0);
     rc[1] = int80_5(267, 1, 0, (unsigned long)req32, 1, 0);
     rc[2] = int80_5(407, 1, 0, (unsigned long)req64, 1, 0);
+    /* interval: a long sleep that the timer's signal ends */
+    rc[3] = syscall2(SYS_NANOSLEEP, (long)req64, 1);
+    /* interval: a long sleep that the timer's signal ends */
+    rc[4] = syscall4(SYS_CLOCK_NANOSLEEP, 0, 0, (long)req64, 1);
+    /* interval: a long sleep that the timer's signal ends */
+    rc[5] = syscall4(SYS_CLOCK_NANOSLEEP, 2, 0, (long)req64, 1);
     if (syscall3(SYS_SETITIMER, 0, (long)off, 0) != 0 || rc[0] != -14 || rc[1] != -14 ||
         rc[2] != -14) {
         fail("an interrupted compat sleep hid a failed remainder copy");
+    }
+    report_held();
+    /* interval: a sleep of a millisecond that completes */
+    rc[0] = syscall2(SYS_NANOSLEEP, (long)brief, 1);
+    if (rc[3] != -14 || rc[4] != -14 || rc[5] != -14 || rc[0] != 0) {
+        fail("a native sleep hid a failed remainder copy or wrote one on completion");
     }
     report_held();
 }
