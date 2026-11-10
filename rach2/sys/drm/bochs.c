@@ -410,7 +410,7 @@ static void bochs_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops bochs_vm_ops = {bochs_vm_page, bochs_vm_put};
+static const struct vm_device_ops bochs_vm_ops = {bochs_vm_page, bochs_vm_put, NULL};
 
 /** The `mmap` of a buffer: write-combining, as TTM maps video memory. */
 static int32_t bochs_bo_mmap(struct drm_gem_object *obj, vma_t *vma)

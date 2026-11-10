@@ -793,7 +793,7 @@ static void obj_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops vgpu_vm_ops = {obj_vm_page, obj_vm_put};
+static const struct vm_device_ops vgpu_vm_ops = {obj_vm_page, obj_vm_put, NULL};
 
 /** The `mmap` of an object: a device region over its frames, cached, as
  * Linux maps virtio-gpu's shmem objects. */

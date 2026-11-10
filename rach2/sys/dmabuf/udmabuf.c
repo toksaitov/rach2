@@ -34,7 +34,7 @@ static void udma_map_put(void *obj)
     dma_buf_put(obj);
 }
 
-static const struct vm_device_ops udma_vm_ops = {udma_page, udma_map_put};
+static const struct vm_device_ops udma_vm_ops = {udma_page, udma_map_put, NULL};
 
 /** Map the pinned pages shared, retaining the buffer for the mapping. */
 static int32_t udma_mmap(struct dma_buf *b, vma_t *vma)

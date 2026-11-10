@@ -183,6 +183,11 @@ of the tracee's memory into the word
 points to, or write
 .Fa data
 there.
+A word of a device's mapping, such as a GEM map of
+.Xr i915 4 ,
+is read or written through the object it maps, as on Linux, and is
+.Er EIO
+for a device whose objects do not allow it.
 Missing pages are brought in, and a write reaches a read-only private page,
 such as program text, through a copy of its own that stays read-only, so a
 breakpoint changes this process alone; a page of no mapping, of a

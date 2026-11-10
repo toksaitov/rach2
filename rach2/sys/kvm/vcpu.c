@@ -265,7 +265,7 @@ static void run_put(void *obj)
     kvm_vm_put(((struct kvm_vcpu *)obj)->vm);
 }
 
-static const struct vm_device_ops run_vm_ops = {run_page, run_put};
+static const struct vm_device_ops run_vm_ops = {run_page, run_put, NULL};
 
 /* A private mapping of a vCPU's run pages: the record its region names,
  * which holds a reference to the VM. */
