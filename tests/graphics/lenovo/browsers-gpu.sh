@@ -150,10 +150,11 @@ pixels=$out/d3d9/pixels.txt
 if [ ! -f "$pixels" ]; then
     why="the probe wrote no pixels: $(tail -n 2 "$out/d3d9.log" | head -n 1)"
 else
+    # The probe writes its lines through Wine with CR LF ends.
     grep '^adapter: ' "$pixels" | grep -q "$D3D_ID" || why="WineD3D's adapter is not the HD 4400"
     if [ -z "$fake" ]; then
-        grep -q '^D3D9 OK$' "$pixels" || why="$why${why:+; }the pixels are wrong"
-    elif ! grep -q -E '^center .* draw (OK|WRONG)$' "$pixels"; then
+        grep -q '^D3D9 OK' "$pixels" || why="$why${why:+; }the pixels are wrong"
+    elif ! grep -q -E '^center .* draw (OK|WRONG)' "$pixels"; then
         why="$why${why:+; }the probe stopped before its readback"
     fi
 fi
