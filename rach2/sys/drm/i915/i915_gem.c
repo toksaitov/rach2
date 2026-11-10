@@ -61,12 +61,19 @@ int32_t i915_gem_object_pin_pages(struct drm_i915_gem_object *obj)
     uint32_t i;
     int err;
 
-    if (obj->frames) {
+    if (obj->frames && !obj->userptr.stale) {
         obj->pages_pin_count++;
         return 0;
     }
     if (obj->base.dev->unplugged) {
         return -ENODEV;
+    }
+    if (obj->madv != I915_MADV_WILLNEED) {
+        /* As Linux: a purgeable object without pages gets none. */
+        return -EFAULT;
+    }
+    if (i915_gem_object_is_userptr(obj)) {
+        return i915_gem_userptr_get_pages(obj);
     }
     frames = (uintptr_t *)kmalloc((size_t)n * sizeof(*frames));
     if (!frames) {
@@ -82,9 +89,15 @@ int32_t i915_gem_object_pin_pages(struct drm_i915_gem_object *obj)
             }
         }
     } else {
+        /* As Linux's shmem_sg_alloc_table, memory is reclaimed for the
+         * pages, purging other objects, and once more after a failure. */
+        mem_balance();
         if (shmem_allocate(&obj->pages, 0, obj->base.size) != 0) {
-            kfree(frames);
-            return -ENOMEM;
+            (void)mem_reclaim();
+            if (shmem_allocate(&obj->pages, 0, obj->base.size) != 0) {
+                kfree(frames);
+                return -ENOMEM;
+            }
         }
         for (i = 0; i < n; i++) {
             frames[i] = shmem_resident(&obj->pages, i);
@@ -105,7 +118,37 @@ void i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj)
 {
     if (obj->pages_pin_count) {
         obj->pages_pin_count--;
+        if (obj->pages_pin_count == 0 && obj->userptr.stale) {
+            i915_gem_userptr_put_pages(obj);
+        }
     }
+}
+
+int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj)
+{
+    return obj->frames != 0 || obj->pages.held != 0;
+}
+
+/** Whether `f` is a fence that has not signalled. */
+static int fence_busy(struct dma_fence *f)
+{
+    return f && !dma_fence_is_signaled(f);
+}
+
+int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
+{
+    struct dma_resv *r = obj->base.resv;
+    uint32_t i;
+
+    if (fence_busy(r->write)) {
+        return 1;
+    }
+    for (i = 0; i < r->nreads; i++) {
+        if (fence_busy(r->reads[i])) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 uintptr_t i915_gem_object_frame(struct drm_i915_gem_object *obj, uint32_t pgoff)
@@ -115,6 +158,9 @@ uintptr_t i915_gem_object_frame(struct drm_i915_gem_object *obj, uint32_t pgoff)
     if ((uint64_t)pgoff >= obj->base.size >> PAGE_SHIFT) {
         return 0;
     }
+    if (i915_gem_object_is_userptr(obj)) {
+        return obj->frames && !obj->userptr.stale ? obj->frames[pgoff] : 0;
+    }
     if (obj->frames) {
         return obj->frames[pgoff];
     }
@@ -123,8 +169,11 @@ uintptr_t i915_gem_object_frame(struct drm_i915_gem_object *obj, uint32_t pgoff)
 
         return b->ops->page ? b->ops->page(b, pgoff) : 0;
     }
-    phys = shmem_resident(&obj->pages, pgoff);
-    if (!phys && shmem_allocate(&obj->pages, (uint64_t)pgoff << PAGE_SHIFT, PAGE_SIZE) == 0) {
+    /* A purgeable object is given no new page, and a purged one has
+     * none. */
+    phys = obj->madv == __I915_MADV_PURGED ? 0 : shmem_resident(&obj->pages, pgoff);
+    if (!phys && obj->madv == I915_MADV_WILLNEED &&
+        shmem_allocate(&obj->pages, (uint64_t)pgoff << PAGE_SHIFT, PAGE_SIZE) == 0) {
         phys = shmem_resident(&obj->pages, pgoff);
     }
     return phys;
@@ -177,13 +226,16 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int le
 
 /** The `free` of an object, once its last reference goes: every binding
  * undone, its mmap offsets taken out of the device's space, its pages
- * unpinned and freed. */
+ * unpinned and freed, a userptr object's range taken off. */
 static void i915_gem_object_free(struct drm_gem_object *base)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
     int i;
 
     (void)i915_gem_object_unbind(obj);
+    if (i915_gem_object_is_userptr(obj)) {
+        i915_gem_userptr_release(obj);
+    }
     for (i = 0; i < I915_MMAP_TYPES; i++) {
         drm_mmap_node_remove(&obj->mmo[i].node);
     }
@@ -625,7 +677,9 @@ static int32_t gtt_prepare(struct drm_i915_gem_object *obj, int write, struct i9
         err = 0;
     } else {
         *vma = 0;
-        err = i915_ggtt_reserve(i915, I915_GTT_PAGE_SIZE, I915_PIN_MAPPABLE, node);
+        /* As Linux's insert_mappable_node, which evicts nothing. */
+        err =
+            i915_ggtt_reserve(i915, I915_GTT_PAGE_SIZE, I915_PIN_MAPPABLE | I915_PIN_NOEVICT, node);
         if (err != 0) {
             return err;
         }
@@ -731,8 +785,9 @@ static int32_t gtt_rw(struct drm_i915_gem_object *obj, uint64_t offset, uint64_t
 /**
  * GEM_PREAD, as Linux's i915_gem_pread_ioctl: nothing for 0 bytes; EFAULT
  * for a buffer outside user space, ENOENT for no such object, EINVAL past
- * its end; the object's writes waited for, then read through the
- * processor's view, or through the aperture for an import. May sleep.
+ * its end or for a userptr object; the object's writes waited for, then
+ * read through the processor's view, or through the aperture for an
+ * import. May sleep.
  */
 int32_t i915_gem_pread_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
@@ -754,6 +809,9 @@ int32_t i915_gem_pread_ioctl(struct drm_device *dev, void *data, struct drm_file
         return -ENOENT;
     }
     if (args->offset > obj->base.size || args->size > obj->base.size - args->offset) {
+        err = -EINVAL;
+    } else if (i915_gem_object_is_userptr(obj)) {
+        /* As Linux's i915_gem_userptr_pread. */
         err = -EINVAL;
     } else {
         err = i915_gem_object_wait(obj, 0, -1);
@@ -795,6 +853,8 @@ int32_t i915_gem_pwrite_ioctl(struct drm_device *dev, void *data, struct drm_fil
         return -ENOENT;
     }
     if (args->offset > obj->base.size || args->size > obj->base.size - args->offset) {
+        err = -EINVAL;
+    } else if (i915_gem_object_is_userptr(obj)) {
         err = -EINVAL;
     } else {
         err = i915_gem_object_wait(obj, 1, -1);
@@ -842,7 +902,8 @@ int32_t i915_gem_create_ioctl(struct drm_device *dev, void *data, struct drm_fil
  * read domain, ENOENT for no such object; otherwise the object's work
  * waited for and
  * the object moved into the WC, GTT or CPU domain, the first of those the
- * read domains name. May sleep.
+ * read domains name; for a userptr object, its pages pinned and its work
+ * waited for, EFAULT when its memory is gone. May sleep.
  */
 int32_t i915_gem_set_domain_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
@@ -864,6 +925,18 @@ int32_t i915_gem_set_domain_ioctl(struct drm_device *dev, void *data, struct drm
     obj = i915_gem_object_lookup(file, args->handle);
     if (!obj) {
         return -ENOENT;
+    }
+    if (i915_gem_object_is_userptr(obj)) {
+        /* As Linux, for a userptr object, which Mesa asks whether its
+         * memory is still there: its pages pinned, and its work waited
+         * for, with no move of domain. */
+        err = i915_gem_object_pin_pages(obj);
+        if (err == 0) {
+            i915_gem_object_unpin_pages(obj);
+            err = i915_gem_object_wait(obj, write != 0, -1);
+        }
+        i915_gem_object_put(obj);
+        return err;
     }
     err = i915_gem_object_wait(obj, write != 0, -1);
     if (err == 0) {
@@ -926,9 +999,9 @@ int32_t i915_gem_get_caching_ioctl(struct drm_device *dev, void *data, struct dr
  * GEM_SET_CACHING, as Linux's i915_gem_set_caching_ioctl on an LLC part:
  * NONE uncached, CACHED in the LLC, DISPLAY write-through where the chip
  * has it, which Haswell's GT2 without eDRAM has not, so uncached; EINVAL
- * for another value, ENOENT for no such object. The object's work is
- * waited for and its bindings undone, so that the next takes the new
- * level. May sleep.
+ * for another value, ENOENT for no such object, ENXIO for a userptr object
+ * but for CACHED, which it is. The object's work is waited for and its
+ * bindings undone, so that the next takes the new level. May sleep.
  */
 int32_t i915_gem_set_caching_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
@@ -958,7 +1031,12 @@ int32_t i915_gem_set_caching_ioctl(struct drm_device *dev, void *data, struct dr
     if (!obj) {
         return -ENOENT;
     }
-    err = i915_gem_object_set_cache_level(obj, level);
+    if (i915_gem_object_is_userptr(obj)) {
+        /* As Linux: a userptr object stays cached, which may be asked. */
+        err = args->caching == I915_CACHING_CACHED ? 0 : -ENXIO;
+    } else {
+        err = i915_gem_object_set_cache_level(obj, level);
+    }
     i915_gem_object_put(obj);
     return err;
 }
@@ -1064,6 +1142,70 @@ int32_t i915_gem_wait_ioctl(struct drm_device *dev, void *data, struct drm_file 
 }
 
 /* ------------------------------------------------------------------------
+ * GET_APERTURE and MADVISE
+ */
+
+/**
+ * GEM_GET_APERTURE, as Linux's i915_gem_get_aperture_ioctl: the global
+ * GTT's bytes, and those left once the pinned bindings, the ranges the
+ * kernel reserved, the firmware's kept surfaces and the GT's own objects
+ * are taken away, which Linux counts as pinned or reserved too.
+ */
+int32_t i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_get_aperture *args = (struct drm_i915_gem_get_aperture *)data;
+    struct drm_i915_private *i915 = to_i915(dev);
+    struct i915_vma *v;
+    uint64_t pinned = i915->ggtt.total - i915->gt.ggtt_bottom;
+    int i;
+
+    (void)file;
+    for (i = 0; i < i915->ggtt.nkept; i++) {
+        pinned += i915->ggtt.kept[i].end - i915->ggtt.kept[i].start;
+    }
+    for (v = i915->gem.bound; v; v = v->ggtt_next) {
+        if (v->pin_count) {
+            pinned += v->node_size;
+        }
+    }
+    args->aper_size = i915->ggtt.total;
+    args->aper_available_size = pinned < args->aper_size ? args->aper_size - pinned : 0;
+    return 0;
+}
+
+/**
+ * GEM_MADVISE, as Linux's i915_gem_madvise_ioctl: EINVAL for a state other
+ * than WILLNEED and DONTNEED, ENOENT for no such object. The object takes
+ * the state unless it was purged; a DONTNEED object of its own pages that
+ * has none is purged at once, as Linux discards a shmem object's storage
+ * then. `retained` says whether its pages were not purged.
+ */
+int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_madvise *args = (struct drm_i915_gem_madvise *)data;
+    struct drm_i915_gem_object *obj;
+
+    (void)dev;
+    if (args->madv != I915_MADV_DONTNEED && args->madv != I915_MADV_WILLNEED) {
+        return -EINVAL;
+    }
+    obj = i915_gem_object_lookup(file, args->handle);
+    if (!obj) {
+        return -ENOENT;
+    }
+    if (obj->madv != __I915_MADV_PURGED) {
+        obj->madv = (uint8_t)args->madv;
+    }
+    if (obj->madv == I915_MADV_DONTNEED && !i915_gem_object_has_pages(obj) && !obj->base.import &&
+        !i915_gem_object_is_userptr(obj)) {
+        (void)i915_gem_object_truncate(obj);
+    }
+    args->retained = obj->madv != __I915_MADV_PURGED;
+    i915_gem_object_put(obj);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
  * The device's buffers
  */
 
@@ -1106,4 +1248,8 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
     {DRM_IOCTL_I915_GEM_SET_CACHING, DRM_RENDER_ALLOW, i915_gem_set_caching_ioctl,
      "I915_GEM_SET_CACHING"},
     {DRM_IOCTL_I915_GEM_GET_CACHING, DRM_RENDER_ALLOW, i915_gem_get_caching_ioctl,
-     "I915_GEM_GET_CACHING"}};
+     "I915_GEM_GET_CACHING"},
+    {DRM_IOCTL_I915_GEM_GET_APERTURE, DRM_RENDER_ALLOW, i915_gem_get_aperture_ioctl,
+     "I915_GEM_GET_APERTURE"},
+    {DRM_IOCTL_I915_GEM_MADVISE, DRM_RENDER_ALLOW, i915_gem_madvise_ioctl, "I915_GEM_MADVISE"},
+    {DRM_IOCTL_I915_GEM_USERPTR, DRM_RENDER_ALLOW, i915_gem_userptr_ioctl, "I915_GEM_USERPTR"}};

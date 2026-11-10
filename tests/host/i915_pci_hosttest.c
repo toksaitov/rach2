@@ -448,6 +448,16 @@ void i915_gem_unplug(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void i915_gem_shrinker_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void i915_gem_shrinker_unregister(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 /* A page of a backend that stands in for the aperture, which the chip's
  * backend here has not. */
 void *kmap_temp(uintptr_t phys)

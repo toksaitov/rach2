@@ -169,12 +169,13 @@ static void i915_unplug(struct drm_device *dev)
     i915_gem_unplug(i915);
 }
 
-/** The DRM core's release hook: unmap the aperture's windows, give the
- * scratch page back and free the record. */
+/** The DRM core's release hook: take the shrinker off, unmap the
+ * aperture's windows, give the scratch page back and free the record. */
 static void i915_release(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
+    i915_gem_shrinker_unregister(i915);
     i915_aperture_fini(&i915->gem.aperture);
     i915_ggtt_fini(i915);
     intel_bios_fini(&i915->vbt);
@@ -371,6 +372,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     klog(KLOG_INFO, "i915", "registered: i915 1.6.0 for %s on card %d", i915->drm.unique,
          i915->drm.index);
     i915_sysfs_register(i915);
+    i915_gem_shrinker_register(i915);
     i915->attached = 1;
     if (i915->hw.ops->attach) {
         i915->hw.ops->attach(&i915->hw, i915);

@@ -89,6 +89,9 @@ int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct 
         return -ENOENT;
     }
     obj = h->object;
+    if (!h->prime && obj->no_export) {
+        return -EINVAL;
+    }
     if (!h->prime) {
         buf = obj->import ? obj->import : obj->dma_buf;
         if (buf) {

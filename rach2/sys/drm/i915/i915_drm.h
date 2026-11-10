@@ -14,19 +14,22 @@
  * the driver adds the calls it serves, in the order of their numbers.
  */
 
-#define DRM_I915_GEM_BUSY        0x17
-#define DRM_I915_GEM_CREATE      0x1b
-#define DRM_I915_GEM_PREAD       0x1c
-#define DRM_I915_GEM_PWRITE      0x1d
-#define DRM_I915_GEM_MMAP        0x1e
-#define DRM_I915_GEM_SET_DOMAIN  0x1f
-#define DRM_I915_GEM_SW_FINISH   0x20
-#define DRM_I915_GEM_SET_TILING  0x21
-#define DRM_I915_GEM_GET_TILING  0x22
-#define DRM_I915_GEM_MMAP_GTT    0x24
-#define DRM_I915_GEM_WAIT        0x2c
-#define DRM_I915_GEM_SET_CACHING 0x2f
-#define DRM_I915_GEM_GET_CACHING 0x30
+#define DRM_I915_GEM_BUSY         0x17
+#define DRM_I915_GEM_CREATE       0x1b
+#define DRM_I915_GEM_PREAD        0x1c
+#define DRM_I915_GEM_PWRITE       0x1d
+#define DRM_I915_GEM_MMAP         0x1e
+#define DRM_I915_GEM_SET_DOMAIN   0x1f
+#define DRM_I915_GEM_SW_FINISH    0x20
+#define DRM_I915_GEM_SET_TILING   0x21
+#define DRM_I915_GEM_GET_TILING   0x22
+#define DRM_I915_GEM_GET_APERTURE 0x23
+#define DRM_I915_GEM_MMAP_GTT     0x24
+#define DRM_I915_GEM_MADVISE      0x26
+#define DRM_I915_GEM_WAIT         0x2c
+#define DRM_I915_GEM_SET_CACHING  0x2f
+#define DRM_I915_GEM_GET_CACHING  0x30
+#define DRM_I915_GEM_USERPTR      0x33
 
 /* GEM_CREATE: an object of `size` bytes, rounded up to pages, which the
  * call writes back, and its handle. */
@@ -152,6 +155,27 @@ struct drm_i915_gem_get_tiling {
     uint32_t phys_swizzle_mode;
 };
 
+/* GEM_GET_APERTURE: the bytes of the global GTT, and those no pinned
+ * binding holds. */
+struct drm_i915_gem_get_aperture {
+    uint64_t aper_size;
+    uint64_t aper_available_size;
+};
+
+/* GEM_MADVISE: whether the object's pages are needed, or may be discarded
+ * under memory pressure; `retained` says whether they still exist.
+ * __I915_MADV_PURGED is the state of an object whose pages went, which
+ * programs never pass. */
+#define I915_MADV_WILLNEED 0
+#define I915_MADV_DONTNEED 1
+#define __I915_MADV_PURGED 2
+
+struct drm_i915_gem_madvise {
+    uint32_t handle;
+    uint32_t madv;
+    uint32_t retained;
+};
+
 /* GEM_WAIT: wait for the object's work for `timeout_ns`, negative for
  * ever, 0 to ask; the time left is written back. */
 struct drm_i915_gem_wait {
@@ -168,6 +192,19 @@ struct drm_i915_gem_wait {
 struct drm_i915_gem_caching {
     uint32_t handle;
     uint32_t caching;
+};
+
+/* GEM_USERPTR: an object over `user_size` bytes of the caller's memory at
+ * `user_ptr`, both whole pages, and its handle. */
+#define I915_USERPTR_READ_ONLY      0x1u
+#define I915_USERPTR_PROBE          0x2u
+#define I915_USERPTR_UNSYNCHRONIZED 0x80000000u
+
+struct drm_i915_gem_userptr {
+    uint64_t user_ptr;
+    uint64_t user_size;
+    uint32_t flags;
+    uint32_t handle;
 };
 
 #define DRM_IOCTL_I915_GEM_BUSY \
@@ -192,11 +229,17 @@ struct drm_i915_gem_caching {
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_SET_TILING, struct drm_i915_gem_set_tiling)
 #define DRM_IOCTL_I915_GEM_GET_TILING \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_GET_TILING, struct drm_i915_gem_get_tiling)
+#define DRM_IOCTL_I915_GEM_GET_APERTURE \
+    DRM_IOR(DRM_COMMAND_BASE + DRM_I915_GEM_GET_APERTURE, struct drm_i915_gem_get_aperture)
+#define DRM_IOCTL_I915_GEM_MADVISE \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_MADVISE, struct drm_i915_gem_madvise)
 #define DRM_IOCTL_I915_GEM_WAIT \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_WAIT, struct drm_i915_gem_wait)
 #define DRM_IOCTL_I915_GEM_SET_CACHING \
     DRM_IOW(DRM_COMMAND_BASE + DRM_I915_GEM_SET_CACHING, struct drm_i915_gem_caching)
 #define DRM_IOCTL_I915_GEM_GET_CACHING \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_GET_CACHING, struct drm_i915_gem_caching)
+#define DRM_IOCTL_I915_GEM_USERPTR \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_USERPTR, struct drm_i915_gem_userptr)
 
 #endif /* _I915_DRM_H_ */

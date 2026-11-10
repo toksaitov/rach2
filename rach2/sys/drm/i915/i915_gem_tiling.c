@@ -236,7 +236,8 @@ static int32_t set_tiling(struct drm_i915_gem_object *obj, uint32_t tiling, uint
 
 /**
  * GEM_SET_TILING, as Linux's i915_gem_set_tiling_ioctl: ENOENT for no such
- * object, EINVAL for a layout the chip cannot fence; otherwise the swizzle
+ * object, ENXIO for a userptr object, EINVAL for a layout the chip cannot
+ * fence; otherwise the swizzle
  * programs must apply is returned with the layout. Linear takes stride 0.
  * The object's layout and stride are written back even on an error, as
  * Linux keeps that ABI.
@@ -250,6 +251,11 @@ int32_t i915_gem_set_tiling_ioctl(struct drm_device *dev, void *data, struct drm
 
     if (!obj) {
         return -ENOENT;
+    }
+    if (i915_gem_object_is_userptr(obj)) {
+        /* As Linux: a proxy object's layout is not the program's to set. */
+        i915_gem_object_put(obj);
+        return -ENXIO;
     }
     if (!tiling_ok(args->tiling_mode, args->stride)) {
         i915_gem_object_put(obj);
