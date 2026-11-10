@@ -504,29 +504,30 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
 {
     struct i915_hw *hw = &c->i915->hw;
     const struct drm_mode_modeinfo *m = &cfg->mode;
-    const int t = I915_TRANS_EDP;
     uint32_t vtotal = (uint32_t)(m->vdisplay - 1) | (uint32_t)(m->vtotal - 1) << 16;
 
-    i915_write(hw, PIPE_DATA_M1(t), TU_SIZE(cfg->tu) | cfg->data_m);
-    i915_write(hw, PIPE_DATA_N1(t), cfg->data_n);
-    i915_write(hw, PIPE_LINK_M1(t), cfg->link_m);
-    i915_write(hw, PIPE_LINK_N1(t), cfg->link_n);
+    i915_write(hw, PIPE_DATA_M1(I915_TRANS_EDP), TU_SIZE(cfg->tu) | cfg->data_m);
+    i915_write(hw, PIPE_DATA_N1(I915_TRANS_EDP), cfg->data_n);
+    i915_write(hw, PIPE_LINK_M1(I915_TRANS_EDP), cfg->link_m);
+    i915_write(hw, PIPE_LINK_N1(I915_TRANS_EDP), cfg->link_n);
     /* The second set, for a refresh rate switch Rach2 does not make:
      * zeroes, with the transfer unit's field of 0 less one. */
-    i915_write(hw, PIPE_DATA_M2(t), 0x3fu << TU_SIZE_SHIFT);
-    i915_write(hw, PIPE_DATA_N2(t), 0);
-    i915_write(hw, PIPE_LINK_M2(t), 0);
-    i915_write(hw, PIPE_LINK_N2(t), 0);
+    i915_write(hw, PIPE_DATA_M2(I915_TRANS_EDP), 0x3fu << TU_SIZE_SHIFT);
+    i915_write(hw, PIPE_DATA_N2(I915_TRANS_EDP), 0);
+    i915_write(hw, PIPE_LINK_M2(I915_TRANS_EDP), 0);
+    i915_write(hw, PIPE_LINK_N2(I915_TRANS_EDP), 0);
     /* Linux's intel_set_transcoder_timings: blanking spans the borders,
      * none here, and no interlace. */
-    i915_write(hw, TRANS_VSYNCSHIFT(t), 0);
-    i915_write(hw, TRANS_HTOTAL(t), (uint32_t)(m->hdisplay - 1) | (uint32_t)(m->htotal - 1) << 16);
-    i915_write(hw, TRANS_HBLANK(t), (uint32_t)(m->hdisplay - 1) | (uint32_t)(m->htotal - 1) << 16);
-    i915_write(hw, TRANS_HSYNC(t),
+    i915_write(hw, TRANS_VSYNCSHIFT(I915_TRANS_EDP), 0);
+    i915_write(hw, TRANS_HTOTAL(I915_TRANS_EDP),
+               (uint32_t)(m->hdisplay - 1) | (uint32_t)(m->htotal - 1) << 16);
+    i915_write(hw, TRANS_HBLANK(I915_TRANS_EDP),
+               (uint32_t)(m->hdisplay - 1) | (uint32_t)(m->htotal - 1) << 16);
+    i915_write(hw, TRANS_HSYNC(I915_TRANS_EDP),
                (uint32_t)(m->hsync_start - 1) | (uint32_t)(m->hsync_end - 1) << 16);
-    i915_write(hw, TRANS_VTOTAL(t), vtotal);
-    i915_write(hw, TRANS_VBLANK(t), vtotal);
-    i915_write(hw, TRANS_VSYNC(t),
+    i915_write(hw, TRANS_VTOTAL(I915_TRANS_EDP), vtotal);
+    i915_write(hw, TRANS_VBLANK(I915_TRANS_EDP), vtotal);
+    i915_write(hw, TRANS_VSYNC(I915_TRANS_EDP),
                (uint32_t)(m->vsync_start - 1) | (uint32_t)(m->vsync_end - 1) << 16);
     /* Pipe B or C feeding eDP takes the eDP transcoder's VTOTAL in its own
      * (TRANS_DDI_FUNC_CTL's eDP input select). */
@@ -534,12 +535,13 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
         i915_write(hw, TRANS_VTOTAL(c->pipe), vtotal);
     }
     /* Linux's hsw_set_frame_start_delay, a delay of one. */
-    i915_rmw(hw, CHICKEN_TRANS(t), HSW_FRAME_START_DELAY_MASK, HSW_FRAME_START_DELAY(0));
+    i915_rmw(hw, CHICKEN_TRANS(I915_TRANS_EDP), HSW_FRAME_START_DELAY_MASK,
+             HSW_FRAME_START_DELAY(0));
     /* Linux's hsw_set_transconf for a mode set: the pipe still off. */
-    i915_write(hw, TRANSCONF(t),
+    i915_write(hw, TRANSCONF(I915_TRANS_EDP),
                TRANSCONF_INTERLACE_PF_PD_ILK |
                    (cfg->dither ? TRANSCONF_DITHER_EN | TRANSCONF_DITHER_TYPE_SP : 0));
-    i915_posting_read(hw, TRANSCONF(t));
+    i915_posting_read(hw, TRANSCONF(I915_TRANS_EDP));
 }
 
 /** The link failed to train and a new mode set should try the link the
