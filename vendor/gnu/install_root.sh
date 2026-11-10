@@ -37,7 +37,8 @@
 #             installs (games/Readme.md)
 #   kvm       Debian's QEMU and the tests under /opt/kvm-unit-tests and
 #             /opt/kvm-selftests, which kvm/install_kvm.sh installs on x86-64
-#             (kvm/Readme.md)
+#             (kvm/Readme.md), and /usr/sbin/ivshmemd, the ivshmem server of
+#             the GPU test bed (bed/shm/Readme.md), built here
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
@@ -506,6 +507,7 @@ fi
 
 . "$DIR/games/install_games.sh"
 . "$DIR/kvm/install_kvm.sh"
+"$OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$OUT/root" -std=c99 -O2 -o "$TREE/usr/sbin/ivshmemd" "$REPO/bed/ivshmemd.c"
 
 for name in ${GNU_AGENTS:-}; do
     install_part "agents/$name"
