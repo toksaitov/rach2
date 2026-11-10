@@ -21,7 +21,7 @@ describes: the x86-64 kernel turns the keys on where the processor has
 them, and a program sees the OSPKE bit of CPUID leaf 7 set.
 .Pp
 .Fn pkey_alloc
-allocates the lowest free key from 1 to 15 and writes
+allocates the lowest free key from 0 to 15 and writes
 .Fa access_rights
 for it into the calling thread's PKRU:
 .Dv PKEY_DISABLE_ACCESS
@@ -35,7 +35,10 @@ must be 0.
 .Fn pkey_free
 frees a key that
 .Fn pkey_alloc
-gave, or key 0, which every address space starts with allocated.
+gave, or key 0, which every address space starts with allocated;
+once freed, key 0 is the first that
+.Fn pkey_alloc
+gives again, as on Linux.
 Pages that still carry the key keep it; a later
 .Fn pkey_alloc
 may give it again, and its new rights then apply to them.
