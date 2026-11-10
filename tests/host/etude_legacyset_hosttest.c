@@ -155,7 +155,8 @@
  * file. A second run at the same tree copies nothing to the store, and a
  * run whose disk changed copies the disk alone, and the store then keeps the
  * object of the changed disk and not that of the disk the preparation's
- * record no longer names. With the store emptied, a disk changed after its
+ * record no longer names, even where an earlier failure's kept overlay names
+ * it. With the store emptied, a disk changed after its
  * first copy is copied again for the next case: the first case is given its
  * first digest, and the next and those after it the changed disk's. With the
  * store emptied again, when the disk's first copy fails, its case ends
@@ -2377,17 +2378,15 @@ static int stored_text(const char *text)
 }
 
 /**
- * Keep in `evidence`, as an earlier run's failed member would, the overlay
- * `copies/disk` whose backing file is the store's object of `based`, and put
- * in the store that object and the object of `orphan`, which nothing names.
- * The overlay is a qcow2 header alone: the magic, version 3, and the backing
- * file's name at byte 128, as etude_store_overlay writes its offset and
- * length; 0 or -1.
+ * Write in `dir` the overlay `name` whose backing file is the store's object
+ * of `based`, as a failed member's disk is kept. The overlay is a qcow2 header
+ * alone: the magic, version 3, and the backing file's name at byte 128, as
+ * etude_store_overlay writes its offset and length; 0 or -1.
  */
-static int plant_evidence(const char *evidence, const char *based, const char *orphan)
+static int plant_overlay(const char *dir, const char *name, const char *based)
 {
     unsigned char head[128] = {'Q', 'F', 'I', 0xfb, 0, 0, 0, 3};
-    char dir[PATH_LEN], base[PATH_LEN + 80], path[PATH_LEN + 80];
+    char base[PATH_LEN + 80], path[PATH_LEN + 80];
     size_t n;
     FILE *f;
     int ok;
@@ -2397,16 +2396,32 @@ static int plant_evidence(const char *evidence, const char *based, const char *o
     head[15] = 128;
     head[18] = (unsigned char)(n >> 8);
     head[19] = (unsigned char)n;
+    fix_format(path, sizeof(path), "%s/%s", dir, name);
+    if ((f = fopen(path, "wb")) == NULL)
+        return -1;
+    ok = fwrite(head, 1, sizeof(head), f) == sizeof(head) && fwrite(base, 1, n, f) == n;
+    return fclose(f) == 0 && ok ? 0 : -1;
+}
+
+/**
+ * Keep in `evidence`, as an earlier run's failed member would, the overlay
+ * `copies/disk` whose backing file is the store's object of `based`, and
+ * `copies/old` whose backing file is that of `old`, the disk's content
+ * before it changed, which the store has; and put in the store the object of
+ * `based` and that of `orphan`, which nothing names; 0 or -1.
+ */
+static int plant_evidence(const char *evidence, const char *based, const char *old,
+                          const char *orphan)
+{
+    char dir[PATH_LEN], path[PATH_LEN + 80];
+
     fix_format(dir, sizeof(dir), "%s/earlier.fixture.machine.panic.r0", evidence);
     if (mkdir(evidence, 0755) != 0 || mkdir(dir, 0755) != 0)
         return -1;
     fix_format(dir, sizeof(dir), "%s/earlier.fixture.machine.panic.r0/copies", evidence);
-    fix_format(path, sizeof(path), "%s/disk", dir);
-    if (mkdir(dir, 0755) != 0 || (f = fopen(path, "wb")) == NULL)
-        return -1;
-    ok = fwrite(head, 1, sizeof(head), f) == sizeof(head) && fwrite(base, 1, n, f) == n;
-    ok = fclose(f) == 0 && ok;
-    return ok && write_text(base, based, 0444) == 0 &&
+    return mkdir(dir, 0755) == 0 && plant_overlay(dir, "disk", based) == 0 &&
+                   plant_overlay(dir, "old", old) == 0 &&
+                   write_text(text_object(path, sizeof(path), based), based, 0444) == 0 &&
                    write_text(text_object(path, sizeof(path), orphan), orphan, 0444) == 0
                ? 0
                : -1;
@@ -2645,9 +2660,10 @@ static void test_machine(void)
 /**
  * The tree's store kept between runs: a second run at one commit stores
  * nothing, and a run whose disk changed stores the disk alone and removes
- * the object of the disk the preparation's record no longer names, but keeps
- * an object that an overlay kept as an earlier failure's evidence names. The
- * store is then removed, so that the rows after it copy each artifact anew.
+ * the object of the disk the preparation's record no longer names, even
+ * where an overlay kept as an earlier failure's evidence names it, but keeps
+ * another object such an overlay names, which no file the record names was.
+ * The store is then removed, so that the rows after it copy each artifact anew.
  */
 static void test_objects(void)
 {
@@ -2680,7 +2696,7 @@ static void test_objects(void)
     CHECK(write_text(in(disk, sizeof(disk), DISK), disk_changed, 0644) == 0,
           "objects-changed: the disk changed");
     fix_format(evidence, sizeof(evidence), "%s/%s.evidence", fix_dir(), changed.name);
-    CHECK(plant_evidence(evidence, based, orphan) == 0,
+    CHECK(stored_text(disk_text) && plant_evidence(evidence, based, disk_text, orphan) == 0,
           "objects-changed: an earlier failure's overlay kept as evidence");
     set_run(&changed);
     CHECK(write_text(disk, disk_text, 0644) == 0, "objects-changed: the disk restored");
@@ -2691,7 +2707,7 @@ static void test_objects(void)
           "objects-changed: the changed disk alone is stored again, once");
     CHECK(stored_text(disk_changed) && !stored_text(disk_text),
           "objects-changed: the store keeps the changed disk, and not the disk the record no "
-          "longer names");
+          "longer names, though a kept overlay names it");
     CHECK(stored_text(based) && !stored_text(orphan),
           "objects-changed: the store keeps the base of a kept overlay, and not an object "
           "nothing names");

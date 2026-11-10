@@ -2954,41 +2954,193 @@ static int keep_evidence(const struct set *x, struct kept *k)
     return r;
 }
 
+/* An object of the tree's store and a file of the tree whose content it is
+ * or was: a `file` line of the preparation's record, or a line of the
+ * store's names file. */
+struct named {
+    char hex[ETUDE_DIGEST_HEX + 1];
+    char *path;
+};
+
+/* A list of them that grows. */
+struct names {
+    struct named *v;
+    size_t n, room;
+};
+
+/** Add the object `hex` and the file `path` to `l`; 0, or -1 when memory
+ * runs out. */
+static int names_add(struct names *l, const char *hex, const char *path)
+{
+    struct named *more;
+
+    if (l->n == l->room) {
+        l->room = l->room ? 2 * l->room : 256;
+        if ((more = realloc(l->v, l->room * sizeof(*l->v))) == NULL)
+            return -1;
+        l->v = more;
+    }
+    if ((l->v[l->n].path = malloc(strlen(path) + 1)) == NULL)
+        return -1;
+    strcpy(l->v[l->n].path, path);
+    memcpy(l->v[l->n].hex, hex, ETUDE_DIGEST_HEX);
+    l->v[l->n++].hex[ETUDE_DIGEST_HEX] = '\0';
+    return 0;
+}
+
+/** Free the list `l`. */
+static void names_free(struct names *l)
+{
+    size_t i;
+
+    for (i = 0; i < l->n; i++)
+        free(l->v[i].path);
+    free(l->v);
+}
+
+/** Give the digest that `l` gives the file `path`, or NULL when it gives
+ * none. */
+static const char *names_digest(const struct names *l, const char *path)
+{
+    size_t i;
+
+    for (i = 0; i < l->n; i++)
+        if (strcmp(l->v[i].path, path) == 0)
+            return l->v[i].hex;
+    return NULL;
+}
+
 /**
- * Remove from the tree's store each object whose digest no `file` line of the
- * preparation's record gives and no overlay kept as evidence names, so that
- * the store keeps the artifacts of the tree's last preparation and the bases
- * of the failures it kept, and not those of every commit it held. The run
- * holds the tree, so no other run uses an object meanwhile. An object that
- * cannot be removed is kept, and the run says so; when the record or the
- * evidence cannot be read, every object is kept.
+ * Read into `l` the lines `DIGEST PATH` of `path`, or, when `record` is
+ * nonzero, the `file DIGEST SIZE INODE MTIME PATH` lines of a preparation's
+ * record, leaving out any other line.
+ *
+ * @return 0, or -1 with errno set when the file cannot be read or memory
+ *         runs out.
+ */
+static int names_read(struct names *l, const char *path, int record)
+{
+    char *line = NULL, hex[ETUDE_DIGEST_HEX + 1];
+    unsigned long long bytes, inode;
+    long long mtime;
+    size_t room = 0;
+    FILE *f;
+    int at, r = 0;
+
+    if ((f = fopen(path, "r")) == NULL)
+        return -1;
+    while (r == 0 && getline(&line, &room, f) >= 0) {
+        line[strcspn(line, "\n")] = '\0';
+        at = -1;
+        if (record
+                ? sscanf(line, "file %64s %llu %llu %lld %n", hex, &bytes, &inode, &mtime, &at) == 4
+                : sscanf(line, "%64s %n", hex, &at) == 1)
+            if (at > 0 && line[at] != '\0' && strlen(hex) == ETUDE_DIGEST_HEX &&
+                strspn(hex, "0123456789abcdef") == ETUDE_DIGEST_HEX)
+                r = names_add(l, hex, line + at);
+    }
+    if (r == 0 && ferror(f))
+        r = -1;
+    free(line);
+    fclose(f);
+    return r;
+}
+
+/**
+ * Say whether object `hex` is an older copy of a file that the record names:
+ * whether `was`, the store's names, gives it as the content of a file to
+ * which `now`, the record, gives another digest.
+ */
+static int superseded(const struct names *now, const struct names *was, const char *hex)
+{
+    const char *d;
+    size_t i;
+
+    for (i = 0; i < was->n; i++)
+        if (strcmp(was->v[i].hex, hex) == 0 && (d = names_digest(now, was->v[i].path)) != NULL &&
+            strcmp(d, hex) != 0)
+            return 1;
+    return 0;
+}
+
+/**
+ * Write the store's names file `path` anew: a line `DIGEST PATH` for each
+ * file the record names, and for each other file of `was` whose object the
+ * store keeps, `k`, which is sorted by digest; through a new file renamed over
+ * the old one, so that a reader finds the old file or the new one whole.
+ *
+ * @return 0, or -1 with errno set.
+ */
+static int names_write(const char *path, const struct names *now, const struct names *was,
+                       const struct kept *k)
+{
+    char part[PATH_LEN + 80];
+    size_t i;
+    FILE *f;
+    int ok, saved;
+
+    if (fit(part, sizeof(part), "%s.new", path) != 0 || (f = fopen(part, "w")) == NULL)
+        return -1;
+    ok = 1;
+    for (i = 0; ok && i < now->n; i++)
+        ok = fprintf(f, "%s %s\n", now->v[i].hex, now->v[i].path) > 0;
+    for (i = 0; ok && i < was->n; i++)
+        if (names_digest(now, was->v[i].path) == NULL && k->n > 0 &&
+            bsearch(was->v[i].hex, k->hex, k->n, sizeof(*k->hex), by_digest) != NULL)
+            ok = fprintf(f, "%s %s\n", was->v[i].hex, was->v[i].path) > 0;
+    ok = fclose(f) == 0 && ok;
+    if (ok && rename(part, path) == 0)
+        return 0;
+    saved = errno;
+    (void)unlink(part);
+    errno = saved;
+    return -1;
+}
+
+/**
+ * Remove from the tree's store each object that the run no longer needs, so
+ * that the store keeps one copy of each artifact and not one for every
+ * commit or rebuild the tree has had. It keeps each object whose digest a
+ * `file` line of the preparation's record gives, and each that an overlay
+ * kept as evidence names, unless the store's names file, `names`, gives it
+ * as the content of a file to which the record now gives another digest:
+ * a failure's base is kept until a rebuild replaces its artifact. It then
+ * writes the names file anew, so that the next run knows which file each
+ * object it keeps was. The run holds the tree, so no other run uses an
+ * object meanwhile. An object that cannot be removed is kept, and the run
+ * says so; when the record or the evidence cannot be read, every object is
+ * kept, and when the names file cannot be read, every base of a kept
+ * overlay.
  */
 static void prune_objects(struct set *x)
 {
-    char line[PATH_LEN + 200], dir[PATH_LEN], path[PATH_LEN + 80];
-    struct kept k = {NULL, 0, 0};
+    char dir[PATH_LEN], path[PATH_LEN + 80], file[PATH_LEN + 80];
+    struct kept k = {NULL, 0, 0}, ev = {NULL, 0, 0};
+    struct names now = {NULL, 0, 0}, was = {NULL, 0, 0};
     struct dirent *e;
-    FILE *f;
+    size_t i;
     DIR *d;
 
-    if ((f = fopen(x->record, "r")) == NULL)
-        return;
-    while (fgets(line, sizeof(line), f) != NULL) {
-        if (strncmp(line, "file ", 5) != 0 || strspn(line + 5, "0123456789abcdef") != 64 ||
-            line[5 + 64] != ' ')
-            continue;
-        if (kept_add(&k, line + 5) != 0) {
-            fclose(f);
-            free(k.hex);
-            return;
-        }
-    }
-    fclose(f);
-    if (keep_evidence(x, &k) != 0) {
+    if (fit(file, sizeof(file), "%s/names", x->objects_dir) != 0 ||
+        names_read(&now, x->record, 1) != 0)
+        goto out;
+    for (i = 0; i < now.n; i++)
+        if (kept_add(&k, now.v[i].hex) != 0)
+            goto out;
+    if (keep_evidence(x, &ev) != 0) {
         say(x, "etude run: %s: objects kept: %s", x->o->evidence, strerror(errno));
-        free(k.hex);
-        return;
+        goto out;
     }
+    if (names_read(&was, file, 0) != 0) {
+        if (errno != ENOENT)
+            say(x, "etude run: %s: not read: %s", file, strerror(errno));
+        names_free(&was);
+        was.v = NULL;
+        was.n = was.room = 0;
+    }
+    for (i = 0; i < ev.n; i++)
+        if (!superseded(&now, &was, ev.hex[i]) && kept_add(&k, ev.hex[i]) != 0)
+            goto out;
     if (k.n > 0)
         qsort(k.hex, k.n, sizeof(*k.hex), by_digest);
     if (fit(dir, sizeof(dir), "%s/objects", x->objects_dir) == 0 && (d = opendir(dir)) != NULL) {
@@ -3001,7 +3153,13 @@ static void prune_objects(struct set *x)
         }
         closedir(d);
     }
+    if (names_write(file, &now, &was, &k) != 0)
+        say(x, "etude run: %s: not written: %s", file, strerror(errno));
+out:
+    names_free(&now);
+    names_free(&was);
     free(k.hex);
+    free(ev.hex);
 }
 
 /** Open the store of the guest and machine cases' artifacts, the tree's
