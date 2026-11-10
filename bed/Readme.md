@@ -1,6 +1,6 @@
 # The testbed
 
-`bed/` holds the testbed's own programs, with which Rach2 draws through a Linux virtual machine's GPU (milestone 83, [its plan](../dev-log/83-testbed/plan.md)). Its first rung needs no kernel code: [`vtestrelay.c`](vtestrelay.c) carries Mesa's vtest protocol from its local socket to virglrenderer's test server over TCP, and [`fixture/`](fixture/) keeps the Debian guest that serves vtest and the check that draws a triangle through the relay. The relay is POSIX C that builds for Linux and for Rach2's GNU root. [`nctx/`](nctx/Readme.md) builds the matched Mesa, virglrenderer and QEMU of the native-context rung.
+`bed/` holds the testbed's own programs, with which Rach2 draws through a Linux virtual machine's GPU (milestone 83, [its plan](../dev-log/83-testbed/plan.md)). Its first rung needs no kernel code: [`vtestrelay.c`](vtestrelay.c) carries Mesa's vtest protocol from its local socket to virglrenderer's test server over TCP, and [`fixture/`](fixture/) keeps the Debian guest that serves vtest and the check that draws a triangle through the relay. The relay is POSIX C that builds for Linux and for Rach2's GNU root. [`nctx/`](nctx/Readme.md) builds the matched Mesa, virglrenderer and QEMU of the native-context rung. [`shm/`](shm/Readme.md) is the shared-memory transport of the Venus rung, and [`vm/`](vm/Readme.md) the Linux VM whose backend serves it, renders through virglrenderer and shows the scanout on the VM's display.
 
 ## Running
 

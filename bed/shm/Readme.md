@@ -6,20 +6,25 @@ The test bed's transport carries virtio-gpu between Rach2's driver and a device 
 
     cc -std=c99 -O2 -o build/bed/peer bed/shm/peer.c
     build/bed/peer -l [-r STREAM] [-d DIR] [-s SIZE]
-    build/bed/peer -f PATH [-r STREAM] [-d DIR] [-t SECONDS]
+    build/bed/peer -f PATH [-r STREAM [-o] [-v]] [-d DIR] [-t SECONDS]
+    build/bed/peer -S SOCKET [-s SIZE] [-r STREAM [-o] [-v]] [-t SECONDS]
     build/bed/peer -c IMAGE...
-    build/bed/peer -w STREAM
+    build/bed/peer -w STREAM | -W STREAM
 
 * `-l` maps an anonymous region of `SIZE` bytes (32 KiB unless given), forks the loopback device and plays the driver against it: the handshake, `GET_DISPLAY_INFO`, then `RESOURCE_CREATE_2D`, `RESOURCE_ATTACH_BACKING`, `TRANSFER_TO_HOST_2D`, `SET_SCANOUT` and a fenced `RESOURCE_FLUSH` of a patterned 32 by 32 resource, the stream named by `-r` if any, the teardown, and a reset into a second epoch in which an id of the first must be refused.
 * `-f PATH` maps a file shared with QEMU and plays the same sequence, without the reset, against the backend in the VM, polling. QEMU maps the same file into the VM as an ivshmem device: `-object memory-backend-file,id=vgs,share=on,mem-path=/dev/shm/vgpu,size=32M -device ivshmem-plain,memdev=vgs`. A region already laid out keeps its epochs, so the device sees each run as a new connection.
-* `-r STREAM` replays a recorded virgl stream in a context of its own; it needs the device to offer `VIRTIO_GPU_F_VIRGL`.
+* `-S SOCKET` makes the region itself, a memfd of `SIZE` bytes, and serves QEMU's ivshmem protocol on the Unix socket `SOCKET` as its peer 0, with two doorbell vectors each way; QEMU connects as peer 1 with `-chardev socket,path=SOCKET,id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2`, and the peer plays the sequence of `-f` with doorbells, sleeping on its eventfds where `-f` polls. It serves one connection, and QEMU's leaving ends the run.
+* `-r STREAM` replays a recorded virgl stream in a context of its own; it needs the device to offer `VIRTIO_GPU_F_VIRGL`. Against a real device, each B8G8R8X8 resource the stream made is then read back with `TRANSFER_FROM_HOST_3D`.
+* `-o`, with `-r`, puts the first resource read back on scanout 0 and flushes it, whole and then its top-left quarter, for the device's display to show.
+* `-v`, with `-r`, accepts `VIRTIO_GPU_F_CONTEXT_INIT`, makes a Venus context and attaches every resource the stream made to it, then detaches them, so that the device hands each to its Venus renderer.
 * `-d DIR` writes a copy of the region before each step the driver takes, as a seed.
 * `-c` checks region images with the header's checks, as both sides would read them.
 * `-w STREAM` writes the built-in stream, `streams/clear.rec`: a 32 by 32 render target made, a surface on it bound as the framebuffer and cleared to one colour.
+* `-W STREAM` writes the display frame's stream: a 1024 by 768 render target that a display may scan out and share, cleared as `-w`'s, then with `CLEAR_TEXTURE` given an orange box of 256 by 128 at 64, 32, so that a frame shown upside down or mirrored has another CRC.
 
 ## Results
 
-The peer prints `peer: STEP: ok` for each command whose response is the one expected, `peer: flush: crc X matches` when the loopback device's scanout holds the bytes the driver wrote, and `peer: result: ok` at the end, and exits 0. The loopback device prints `responder: ...` lines for each epoch's offer, each submit's command count and any refusal. A wrong response, a fault in what the device wrote, the device's death or no answer within `-t` seconds (10 unless given) ends the peer with a message on stderr and status 1; usage errors exit 2. `-c` prints the rule each failing image breaks and `peer: check: N of M image(s) pass`, and exits 1 when one fails.
+The peer prints `peer: STEP: ok` for each command whose response is the one expected, `peer: flush: crc X matches` when the loopback device's scanout holds the bytes the driver wrote, or `peer: flush: sent crc X` without the loopback, and `peer: result: ok` at the end, and exits 0. CRCs are zlib's CRC-32 of the pixels, rows top first and the X byte of each pixel set to 0xff. A resource read back prints `peer: readback: resource ID, WxH, crc X`, the CRC of its rows as stored, then `shown crc Y` for a resource whose first row is the bottom one, as GL draws, which a display shows last row first, and the colour when every pixel has one. `-o` prints `peer: show: resource ID, WxH, crc X` for each rectangle it shows, the CRC the display should hold in its top-left corner; `-S` prints `peer: doorbells: rang N, woken M` at the end. The loopback device prints `responder: ...` lines for each epoch's offer, each submit's command count and any refusal. A wrong response, a fault in what the device wrote, the device's death or no answer within `-t` seconds (10 unless given) ends the peer with a message on stderr and status 1; usage errors exit 2. `-c` prints the rule each failing image breaks and `peer: check: N of M image(s) pass`, and exits 1 when one fails.
 
 ## Interfaces
 
@@ -59,12 +64,13 @@ These are the transport's rules; the header's functions enforce the ones a parse
 * Lifetimes and epochs live in the transport's tables, never in virtio-gpu's commands. Each side keeps its own `struct vgs_table` in its own memory: every resource and context, the epoch it was made in and the backing charged to it. A command finds its objects only in the current epoch; a new epoch ends every object of the old one, on both sides, and the driver fails every fence still pending in it. A virtio-gpu command carries only the ids it always carries.
 * Quotas: the device's limits bound live resources, live contexts, total backing bytes, entries in one `ATTACH_BACKING`, descriptors in one chain and bytes in one chain. The table refuses an object or a charge past them (`vgs_table_add`, `vgs_table_charge`), and the device answers with virtio-gpu's own `ERR_OUT_OF_MEMORY` or an invalid-id error; the driver's own allocations come from the heap, and a full heap is `ENOMEM`, never a fallback outside the region.
 * A fault in the transport, as opposed to a refused command, stops the side that meets it: the device stores `NEEDS_RESET`, and the driver starts a new epoch or detaches.
-* The other side's death ends the epoch: the driver learns of the VM's from the ivshmem server, or here from the loopback device's exit, and fails every wait.
+* The other side's death ends the epoch: the driver learns of the VM's from the ivshmem server, here from QEMU closing its connection under `-S` or from the loopback device's exit, and fails every wait.
+* Doorbells: with `VGS_TF_DOORBELL` accepted, the driver rings vector 0 after publishing a chain and vector 1 after each store of its state, and sleeps on its vectors instead of polling; the device rings vector 0 after publishing used entries, unless the avail ring asks for no interrupt, and vector 1 after each store of its state.
 
 ## Adding tests
 
-The seeds in `corpus/` are the images `peer -l -r streams/clear.rec -d corpus` writes, one before each step of the loopback run, 32 KiB each; the run is deterministic, so the same command makes the same files. `peer -c corpus/*` must pass every one. A fuzzer's minimised crash joins the corpus of the side whose parser it broke.
+The seeds in `corpus/` are the images `peer -l -r streams/clear.rec -d corpus` writes, one before each step of the loopback run, 32 KiB each; the run is deterministic, so the same command makes the same files. `peer -c corpus/*` must pass every one. The device's fuzzer, `tests/fuzz/vgpudev_fuzz.c`, takes them in order as one seed, `tests/fuzz/corpus/vgpudev/run`, which replays the whole run against `bed/vm/backend/device.c`. A fuzzer's minimised crash joins the corpus of the side whose parser it broke.
 
 ## Limits
 
-The committed stream is written by `peer -w` from virgl's protocol header, not captured from Mesa; a stream recorded at the virtio-gpu level replays the same way. The loopback device checks a submit's framing, not its meaning: it renders nothing in 3D. The peer keeps one command outstanding at a time and polls; doorbells come with Rach2's daemon.
+The committed stream is written by `peer -w` from virgl's protocol header, not captured from Mesa; a stream recorded at the virtio-gpu level replays the same way. The loopback device checks a submit's framing, not its meaning: it renders nothing in 3D. The peer keeps one command outstanding at a time. Under `-f` it polls; `-S` serves one QEMU and one peer of it, and has no reconnection.

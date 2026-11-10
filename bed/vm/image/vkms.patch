@@ -1,11 +1,11 @@
 vkms.patch: two fixes to Debian 6.12.115's vkms, which the VM's image
-builds; dev-log/83-testbed/upstream.md has both faults.
+builds and Linux's master has; dev-log/83-testbed/upstream.md has both faults.
 
 vkms_output.c: let the virtual and writeback encoders clone each other's
 crtc, so that a commit may attach the writeback connector to the crtc that
-drives the virtual display. Debian's kernel has the check of possible
-clones that Linux 6.14 added, which refuses that commit while vkms leaves
-possible_clones at each encoder alone.
+drives the virtual display. Linux 6.12's stable tree, Debian's kernel
+among it, checks possible clones in a modeset, which refuses that commit
+while vkms leaves possible_clones at each encoder alone.
 
 vkms_composer.c: write each composed row to the writeback buffer at its
 own row of the output, not at the row of the plane it was read from,

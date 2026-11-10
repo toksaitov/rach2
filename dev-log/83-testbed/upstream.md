@@ -45,3 +45,36 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing; 83-6c's fence-error check expects the delay.
 * Status: unreported.
 * Next: read Mesa's and virglrenderer's main branches for a change to either path; try `intel_ioctl` in `crocus_batch_check_for_reset`, which should make the notice come after one submission, and a host side that sets the context's bit when a fence of the context fails with an error, which should make it come at once; then report to Mesa, with iris's own query compared, and to virglrenderer.
+
+## vkms leaves its encoders' possible clones empty, so a writeback commit fails the clone check
+
+* Project: Linux 6.12.115 as Debian 13 builds it, `linux-source-6.12` 6.12.115-1 of Debian's snapshot of 2026-11-08, `drivers/gpu/drm/vkms/vkms_output.c`; the stable tree's v6.12.57 and v6.12.115 are the same. Rach2 keeps no copy.
+* Fails: an atomic commit that drives vkms's virtual connector and its writeback connector from one crtc fails with EINVAL and no message. `drm_atomic_helper_check_modeset` calls `drm_atomic_check_valid_clones` (`drm_atomic_helper.c`, lines 577 and 773), which refuses a crtc whose encoders are not each in the others' `possible_clones`, and `vkms_output_init` (`vkms_output.c`, lines 106-109) sets up the writeback connector without setting `possible_clones` on either encoder.
+* Found: 2026-11-10, the testing PC, milestone 83, task 83-4, when the VM's backend first asked vkms for a writeback copy of a frame.
+* Reproduction: load vkms with `enable_writeback=1`, set a mode on its connector, and commit the same crtc to the writeback connector with a framebuffer and an out-fence.
+* Evidence: `bed/vm/image/vkms.patch`; `bed/vm/backend/kms.c`, `commit`; `dev-log/83-testbed/83-4/check-module.txt`.
+* Rach2: the VM's image builds vkms with `bed/vm/image/vkms.patch`, which sets both encoders' possible clones when the writeback connector is set up.
+* Status: fixed in Linux's master as read on 2026-11-10, whose `vkms_output.c` sets `possible_clones` (lines 77-90); the version and the commit are missing.
+* Next: find the commit and whether it was sent to the 6.12 stable tree, and ask for a backport if not, since 6.12.y has the check without the fix.
+
+## vkms writes a reflected or rotated plane's frame to the writeback buffer at the plane's rows
+
+* Project: Linux 6.12.115 as Debian 13 builds it, `drivers/gpu/drm/vkms/vkms_composer.c`; the stable tree's v6.12.57 and v6.12.115 are the same. Rach2 keeps no copy.
+* Fails: with a plane whose rotation reflects it in y, vkms's writeback copy holds the plane's rows in the plane's order, unreflected, while its CRC is of the reflected output. `blend` composes output row `y` from the plane's row `y_pos = get_y_pos(...)` and then writes it with `vkms_writeback_row(wb, output_buffer, y_pos)` (line 212), at the plane's row where the output's is `y`; the two differ whenever the plane is reflected in y or rotated by 90 or 270 degrees.
+* Found: 2026-11-10, the testing PC, milestone 83, task 83-4, when the VM's backend scanned a bottom-up GL frame out through the plane's `reflect-y`.
+* Reproduction: scan out a 1024 by 768 frame with an asymmetric picture through the primary plane with rotation `rotate-0|reflect-y` and a writeback connector: the copy equals the framebuffer as stored, CRC 6e8e217c in the bed's frame, where the reflected frame's is f10af47a.
+* Evidence: `bed/vm/image/vkms.patch`; `dev-log/83-testbed/83-4/check-module.txt`, whose direct scanout writes back f10af47a with the patch.
+* Rach2: `bed/vm/image/vkms.patch` writes the row at `y`.
+* Status: fixed in Linux's master as read on 2026-11-10, whose `vkms_composer.c` writes the row at `y` (line 516); the version and the commit are missing.
+* Next: find the commit and whether 6.12.y has it queued, and ask for a backport if not.
+
+## QEMU's ivshmem routes its MSI-X vectors before the guest programs them, which interrupt remapping refuses
+
+* Project: QEMU 10.2.1, Ubuntu's `1:10.2.1+ds-1ubuntu3.3` on the testing PC's WSL, `hw/misc/ivshmem.c` with `hw/i386/intel_iommu.c`; Rach2 keeps no copy, and the source was not read.
+* Fails: an `ivshmem-doorbell` device behind `intel-iommu,intremap=on` with `kernel-irqchip=split` delivers no interrupt: QEMU prints `vtd_interrupt_remap_msi: MSI address low 32 bit invalid: 0x0` and `kvm_irqchip_add_msi_route failed` when the ivshmem server hands it the vectors, at boot, before the guest has programmed the MSI-X table, and the vectors stay unrouted after the guest enables MSI-X with remapped messages. Without remapping the same device delivers every doorbell. That the route is made from the unprogrammed vector is read from the messages, not from the source.
+* Found: 2026-11-10, the testing PC, milestone 83, task 83-4, when the VM's backend took the device through vfio-pci; the module took no interrupt either under the same IOMMU.
+* Reproduction: start an ivshmem server, boot a q35 guest with `-machine kernel-irqchip=split -device intel-iommu,intremap=on,caching-mode=on` before `-device ivshmem-doorbell,chardev=...,vectors=2`, enable MSI-X in the guest and ring the guest's vectors from the server: `/proc/interrupts` stays at 0 for both.
+* Evidence: `bed/vm/backend/main.c`, `open_vfio`; `dev-log/83-testbed/83-4/check-vfio.txt`, the passing run with `intremap=off`.
+* Rach2: `bed/vm/image/vm.sh check -V` runs the IOMMU with `intremap=off`, and the VM's vfio allows unremapped interrupts.
+* Status: unreported.
+* Next: read `ivshmem.c`'s `ivshmem_add_kvm_msi_virq` and its callers to confirm the order, repeat with QEMU's current release, and report with a patch that adds the route when the guest unmasks the vector.
