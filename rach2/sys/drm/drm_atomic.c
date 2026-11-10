@@ -1737,6 +1737,7 @@ static int32_t commit_worker_start(void)
 static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
 {
     struct commit_work **link;
+    uint32_t flags;
     int i;
 
     w->state = *state;
@@ -1756,12 +1757,19 @@ static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
             continue;
         }
         w->cbs[i].work = w;
+        /* A callback already added may decrement it from an interrupt. */
+        flags = kirq_save();
         w->waiting++;
+        kirq_restore(flags);
         if (dma_fence_add_callback(ps->fence, &w->cbs[i].cb, work_fence_done) != 0) {
+            flags = kirq_save();
             w->waiting--;
+            kirq_restore(flags);
         }
     }
+    flags = kirq_save();
     w->waiting--;
+    kirq_restore(flags);
     drm_dev_get(w->state.dev);
     for (link = &works; *link; link = &(*link)->next) {
     }
