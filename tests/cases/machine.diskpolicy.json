@@ -123,6 +123,11 @@
           "per_architecture": true
         },
         {
+          "name": "host-products",
+          "node": "images/gnu-host-products.tar",
+          "per_architecture": true
+        },
+        {
           "name": "kernel",
           "node": "rach2/kernel",
           "per_architecture": true
@@ -173,6 +178,12 @@
               {
                 "name": "products-files-disk",
                 "base": "products-files",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }

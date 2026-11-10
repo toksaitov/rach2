@@ -260,9 +260,11 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
     # The manifest assigns this disk-backed workspace to the test account.
     mkdir -p "$TREE/host-work"
     chmod 0700 "$TREE/host-work"
+    # The cases unpack the rest of the products here (mk/gnu-image.mk).
     mkdir "$TREE/host-products"
-    cp -a "$OUT/host-products/." "$TREE/host-products/"
-    chmod u+w "$TREE/host-products"
+    make --no-print-directory -C "$REPO" -f tests/cases/host/products.mk \
+        CC="$OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$OUT/root" \
+        PREFIX="$TREE/host-products" "$TREE/host-products/fstool"
     # Install only the isolated helper tools, without changing root/.
     for tool in mkfs.exfat fsck.exfat; do
         test -x "$OUT/fstools/usr/sbin/$tool"

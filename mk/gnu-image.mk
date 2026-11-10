@@ -100,11 +100,15 @@ $(GNU_TEST_MANIFEST): $(GNU_ROOT_MANIFEST) mk/gnu-image.mk
 	@$(GNU_TEST_MANIFEST_FILTER) $(GNU_ROOT_MANIFEST) > $@.new
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 
-# The GNU host checks of the x86-64 helper (mk/gnu-host-checks.mk) are not in
-# gnu-test.ext2 either: they compile the kernel's sources and every case's,
-# so they change with ordinary work. gnu-host-checks.tar holds their
-# directory, host-checks, which the cases of host_checks_scenario attach as a
-# raw disk and unpack into /host-products (tests/cases/host/Readme.md).
+# Nor are the helper's products (mk/gnu-host-products.mk), the cases' compiled
+# controllers, etude and the KRFFS tools, or the GNU host checks of the x86-64
+# helper (mk/gnu-host-checks.mk), which compile the kernel's sources and every
+# case's: both change with ordinary work. gnu-host-products.tar holds
+# the files of the products' directory, and gnu-host-checks.tar the checks'
+# directory, host-checks; the cases that read them attach each as a raw disk
+# and unpack it into /host-products (tests/cases/host/Readme.md). The image
+# has only fstool there, which install_root.sh compiles from its one source.
+GNU_HOST_PRODUCTS_TAR = $(IMAGES_DIR)/gnu-host-products.tar
 GNU_HOST_CHECKS_TAR = $(IMAGES_DIR)/gnu-host-checks.tar
 
 os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)
@@ -112,7 +116,7 @@ os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 
 ifeq ($(GNU_TOOLING),)
 $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_TEST_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
-    $(GNU_SANITIZERS_STAMP) $(GNU_HOST_PRODUCTS_STAMP) $(GNU_FSTOOLS_STAMP) \
+    $(GNU_SANITIZERS_STAMP) $(GNU_FSTOOLS_STAMP) tests/cases/host/fstool.c \
     $(if $(filter x86_64,$(ARCH)),$(GNU_VK_GL_CTS_STAMP)) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 GNU_I386=$(GNU_I386_ON) \
 	    GNU_VK_GL_CTS=$(if $(filter x86_64,$(ARCH)),1) \
@@ -131,8 +135,14 @@ $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AG
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_I386=$(GNU_I386_ON) sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 
-# The directory is a link into the step store; the archive takes what it
+# Each directory is a link into the step store; the archive takes what it
 # names, the store's own links kept as links, as cp -a kept them in the root.
+$(GNU_HOST_PRODUCTS_TAR): $(GNU_HOST_PRODUCTS_STAMP)
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	out=$$(pwd)/$@.tmp && cd $(GNU_OUT)/host-products/ && tar --format=ustar -cf "$$out" -- *
+	mv $@.tmp $@
+
 $(GNU_HOST_CHECKS_TAR): $(GNU_HOST_CHECKS_STAMP)
 	@mkdir -p $(@D)
 	rm -f $@.tmp
@@ -152,14 +162,21 @@ GNU_AGENTS_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(filter $(GNU
 GNU_AGENTS_ALL_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(GNU_AGENTS_ALL))
 
 $(GNU_TEST_EXT2): $(GNU_TOOLING_DEPS) $(GNU_TEST_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
-    $(GNU_SANITIZER_SOURCES) $(GNU_HOST_PRODUCTS_SOURCES) $(GNU_FSTOOLS_SOURCES) \
+    $(GNU_SANITIZER_SOURCES) $(GNU_FSTOOLS_SOURCES) tests/cases/host/fstool.c \
     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
 	    GNU_TEST_PRODUCTS=1 GNU_MANIFEST=$(GNU_TEST_MANIFEST) MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) \
 	    sh vendor/gnu/tooling_image.sh $@ 24576
 
-# The tooling machine writes the archive to a disk of 2048 MiB, and the rest
-# of the file is zeros, past the archive's end.
+# The tooling machine writes each archive to a disk of the size given, and the
+# rest of the file is zeros, past the archive's end.
+$(GNU_HOST_PRODUCTS_TAR): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
+    $(GNU_SANITIZER_SOURCES) $(GNU_HOST_PRODUCTS_SOURCES) \
+    $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
+	    GNU_TEST_PRODUCTS=1 MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) \
+	    sh vendor/gnu/tooling_image.sh $@ 256
+
 $(GNU_HOST_CHECKS_TAR): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
     $(GNU_SANITIZER_SOURCES) $(GNU_HOST_PRODUCTS_SOURCES) $(GNU_HOST_CHECKS_SOURCES) \
     build/tests/host-suite/tools/exfat_external/exfat_external.img \

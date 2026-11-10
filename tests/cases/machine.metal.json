@@ -109,6 +109,11 @@
           "name": "products-files",
           "node": "x86_64/images/gnu-test-products.tar",
           "per_architecture": false
+        },
+        {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -324,6 +329,12 @@
                 "base": "products-files",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
               }
             ],
             "cpu": "max",
@@ -443,6 +454,11 @@
           "name": "products-files",
           "node": "x86_64/images/gnu-test-products.tar",
           "per_architecture": false
+        },
+        {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -486,6 +502,12 @@
               {
                 "name": "products-files-disk",
                 "base": "products-files",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
