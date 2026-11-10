@@ -674,6 +674,14 @@ void input_set_repeat(int delay_ms, int period_ms)
     (void)period_ms;
 }
 
+/** No device of a row has keys the console takes. */
+void input_console_key(const void *device, unsigned int keycode, int value)
+{
+    (void)device;
+    (void)keycode;
+    (void)value;
+}
+
 void input_written(uint16_t type, uint16_t code, int32_t value)
 {
     (void)type;
