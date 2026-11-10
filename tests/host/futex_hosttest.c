@@ -590,6 +590,12 @@ static void restarts(void)
     CHECK(futex_wait_restart(&p) == -ETIMEDOUT && waits == 1 && armed == 3001u + TICK_HZ &&
               !self.restart.fn,
           "the resumed wait sleeps to the first deadline and clears the block");
+    kernel_ticks = 3000u + TICK_HZ;
+    self.restart.fn = futex_wait_restart;
+    waits = 0;
+    armed = 0;
+    CHECK(futex_wait_restart(&p) == -ETIMEDOUT && waits == 1 && armed == 3001u + TICK_HZ,
+          "a wait resumed one tick before its deadline still sleeps to it");
     kernel_ticks = 3001u + TICK_HZ;
     self.restart.fn = futex_wait_restart;
     waits = 0;

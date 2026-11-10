@@ -384,7 +384,7 @@ static long futex_wait_restart(isr_params_t *params)
     s.timed = 1;
     s.target = b->tick;
     return futex_wait_until(b->uaddr, b->val, b->bitset, (int)b->flags, &s,
-                            s.target > now + 1u ? s.target - now - 1u : 0);
+                            s.target > now ? s.target - now : 0);
 }
 
 /**
