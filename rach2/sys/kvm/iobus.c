@@ -21,7 +21,8 @@
 #define BUS_CCW  2 /* s390's virtio notifications: registered, never written */
 #define NR_BUSES 3
 
-/* The most devices on one bus, Linux's NR_IOBUS_DEVS. */
+/* The most devices on one bus other than ioeventfds, which Linux's
+ * kvm_io_bus_register_dev leaves out of NR_IOBUS_DEVS: here the zones. */
 #define MAX_BUS_DEVS 1000u
 
 /* One ioeventfd. `len` 0 matches any write at `addr`; otherwise a write of
@@ -45,12 +46,12 @@ struct zone {
     int bus;
 };
 
-/* iobus.c's share of a VM. `count` is of ioeventfds and zones together,
- * as they share Linux's bus. */
+/* iobus.c's share of a VM. `nzones` counts each bus's zones, which an
+ * ioeventfd's add is refused beside at MAX_BUS_DEVS, as Linux's is. */
 struct iobus {
     struct ioeventfd *list;
     struct zone *zones;
-    uint32_t count[NR_BUSES];
+    uint32_t nzones[NR_BUSES];
 };
 
 /** The VM's bus, made at first need, or NULL when memory is short. */
@@ -132,7 +133,7 @@ static int32_t assign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
             break;
         }
     }
-    if (err == 0 && b->count[p->bus] >= MAX_BUS_DEVS) {
+    if (err == 0 && b->nzones[p->bus] >= MAX_BUS_DEVS) {
         err = -ENOSPC;
     }
     if (err != 0) {
@@ -140,7 +141,6 @@ static int32_t assign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
         kfree(p);
         return err;
     }
-    b->count[p->bus]++;
     p->next = b->list;
     b->list = p;
     return 0;
@@ -170,7 +170,6 @@ static int32_t deassign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
             continue;
         }
         *pp = p->next;
-        b->count[bus]--;
         eventfd_put(p->ev);
         kfree(p);
         err = 0;
@@ -206,11 +205,11 @@ static int32_t zone_add(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zone 
     z->addr = a->addr;
     z->size = a->size;
     z->bus = a->pio ? BUS_PIO : BUS_MMIO;
-    if (b->count[z->bus] >= MAX_BUS_DEVS) {
+    if (b->nzones[z->bus] >= MAX_BUS_DEVS) {
         kfree(z);
         return -ENOSPC;
     }
-    b->count[z->bus]++;
+    b->nzones[z->bus]++;
     z->next = b->zones;
     b->zones = z;
     return 0;
@@ -237,7 +236,7 @@ static int32_t zone_remove(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zo
             continue;
         }
         *zp = z->next;
-        b->count[bus]--;
+        b->nzones[bus]--;
         kfree(z);
     }
     return 0;
@@ -319,6 +318,7 @@ static int coalesce(struct kvm_vm *vm, int bus, uint64_t addr, uint32_t len, con
     e->len = len;
     k_memcpy(e->data, data, len);
     e->pio = bus == BUS_PIO;
+    k_barrier(); /* the entry before the index another thread reads it by */
     ring->last = (insert + 1u) % KVM_COALESCED_MMIO_MAX;
     return 1;
 }

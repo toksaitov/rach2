@@ -1274,17 +1274,15 @@ static void ioeventfd_rows(void)
     CHECK(ioev() == 0 && out(0x520, 4, 1, 0xABCD) == 0, "the matching one deassigned");
     io.flags = KVM_IOEVENTFD_FLAG_PIO;
     io.len = 1;
-    for (i = 0; i < MAX_BUS_DEVS; i++) {
+    for (i = 0; i <= MAX_BUS_DEVS; i++) {
         io.addr = 0x1000 + i;
         if (ioev() != 0) {
             break;
         }
     }
-    CHECK(i == MAX_BUS_DEVS - 2, "the port bus holds 1000 devices");
-    io.addr = 0x9000;
-    CHECK(ioev() == -ENOSPC, "and no more");
+    CHECK(i == MAX_BUS_DEVS + 1, "ioeventfds count toward no bus's 1000, as on Linux");
     io.flags = 0;
-    CHECK(ioev() == 0, "the MMIO bus is another");
+    CHECK(ioev() == 0, "and take the MMIO bus too");
     kvm_iobus_free(&vm);
     CHECK(ev->refs == 1 && live == before, "the VM's end lets go of every ioeventfd");
     eventfd_close(&efd2_entry);
@@ -1401,7 +1399,17 @@ static void coalesced_rows(void)
     }
     CHECK(i == MAX_BUS_DEVS && coalesced(KVM_REGISTER_COALESCED_MMIO, 0x9000, 1, 1) == -ENOSPC,
           "the port bus holds 1000 zones and no more");
+    efd_open(&efd2_entry);
+    k_memset(&io, 0, sizeof(io));
+    io.fd = 5;
+    io.flags = KVM_IOEVENTFD_FLAG_PIO;
+    io.addr = 0x9100;
+    io.len = 1;
+    CHECK(ioev() == -ENOSPC, "nor an ioeventfd beside them");
+    io.flags = 0;
+    CHECK(ioev() == 0, "while the MMIO bus takes one");
     kvm_iobus_free(&vm);
+    eventfd_close(&efd2_entry);
     CHECK(live == before, "the VM's end frees every zone");
     vm.ring = NULL;
 }
