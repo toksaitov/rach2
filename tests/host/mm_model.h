@@ -520,6 +520,7 @@ static void model_start(const char *name)
 
     model_name = name;
     _frames = calloc(FRAMES, sizeof(uint32_t));
+    _frame_anon = calloc((FRAMES + 7u) / 8u, 1); /* init_paging's anonymous-frame bits */
     frame_mem = calloc(FRAMES, PAGE_SIZE);
     _frames_number = FRAMES;
     _window_frames = FRAMES;
@@ -568,6 +569,7 @@ static int model_end(void)
     for (i = 0; i < MODEL_TABLES; i++) {
         free(mmio_leaf[i]);
     }
+    free(_frame_anon);
     free(_frames);
     free(frame_mem);
     if (fails) {
