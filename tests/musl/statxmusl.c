@@ -11,15 +11,18 @@
  * followed and not, a pipe named by its descriptor with AT_EMPTY_PATH, and
  * the working directory named by AT_FDCWD and an empty path, and on x86-64 a
  * file whose times are 2^31 seconds, which statx reports whole. The mask
- * reports the basic set. Then the errors: a flag statx does not take, both
- * sync flags at once, the reserved mask bit, a missing file, and an empty
- * path without AT_EMPTY_PATH.
+ * reports the basic set. Then the mount id: a file in /tmp, a /proc file,
+ * /dev/null and the root each report STATX_MNT_ID, by path and by an O_PATH
+ * descriptor, with the id their /proc/self/fdinfo/N gives and that
+ * /proc/self/mountinfo gives the mount the path is on. Then the errors: a
+ * flag statx does not take, both sync flags at once, the reserved mask bit,
+ * a missing file, and an empty path without AT_EMPTY_PATH.
  *
  * Prints `STATXMUSL OK` and exits 0 on success, and prints
  * `STATXMUSL FAIL (detail)` and exits 1 otherwise. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each row in order: `file`, `wide-time` on x86-64 alone, `directory`,
- * `fifo`, `dev-null`, `proc-self`, `pipe`, `cwd`, `sync-flag`,
+ * `fifo`, `dev-null`, `proc-self`, `pipe`, `cwd`, `sync-flag`, `mount-id`,
  * `refused-flags` and `refused-paths`; the branch of the group `arch`,
  * `x86-64` or `i686`, says whether `wide-time` ran. The first failure fails
  * its assertion with the row and errno and leaves the rest not run.
@@ -90,6 +93,11 @@ typedef int32_t ksec_t;
 /* The statx flags a caller may pass that change nothing here. */
 #define AT_STATX_FORCE_SYNC 0x2000
 #define AT_STATX_DONT_SYNC  0x4000
+
+/* The mask bit of the mount id, and the id's place in struct statx, the
+ * first of the words musl's header leaves as padding. */
+#define STATX_MNT_ID_BIT 0x1000u
+#define STX_MNT_ID(sx)   ((sx)->__pad1[0])
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -242,13 +250,95 @@ static int kinds(void)
     return 0;
 }
 
+/** The id /proc/self/mountinfo gives the mount `path` is on: that of the
+ * longest mount point that is a prefix of it, the last of equal ones, which
+ * is mounted over the others; 0 for none. */
+static unsigned long long mountinfo_id(const char *path)
+{
+    FILE *f = fopen("/proc/self/mountinfo", "r");
+    char line[512], point[256];
+    unsigned long long id, best = 0;
+    size_t n, best_len = 0;
+
+    if (f == NULL) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (sscanf(line, "%llu %*u %*s %*s %255s", &id, point) != 2) {
+            continue;
+        }
+        n = strlen(point);
+        if (strncmp(path, point, n) == 0 &&
+            (point[n - 1] == '/' || path[n] == '/' || path[n] == '\0') && n >= best_len) {
+            best = id;
+            best_len = n;
+        }
+    }
+    fclose(f);
+    return best;
+}
+
+/** The mnt_id line of /proc/self/fdinfo/`fd`, or 0 for none. */
+static unsigned long long fdinfo_id(int fd)
+{
+    char path[64], line[128];
+    unsigned long long id = 0;
+    FILE *f;
+
+    snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (sscanf(line, "mnt_id: %llu", &id) == 1) {
+            break;
+        }
+    }
+    fclose(f);
+    return id;
+}
+
+/** Check the mount id of a file of /tmp, of /proc, of /dev and of the root
+ * against fdinfo and mountinfo. Returns 0, or 1 once the failure is
+ * reported. */
+static int mount_ids(void)
+{
+    static const char *const paths[] = {FILE_PATH, "/proc/self/status", "/dev/null", "/"};
+    struct statx by_path, by_fd;
+    unsigned i;
+
+    for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        unsigned long long want = mountinfo_id(paths[i]);
+        int fd = open(paths[i], O_PATH);
+
+        if (fd < 0 || raw_statx(AT_FDCWD, paths[i], 0, STATX_MNT_ID_BIT, &by_path) != 0 ||
+            raw_statx(fd, "", AT_EMPTY_PATH, STATX_MNT_ID_BIT, &by_fd) != 0) {
+            return fail(paths[i]);
+        }
+        printf("statxmusl: %s: statx %llu, by descriptor %llu, fdinfo %llu, mountinfo %llu\n",
+               paths[i], (unsigned long long)STX_MNT_ID(&by_path),
+               (unsigned long long)STX_MNT_ID(&by_fd), fdinfo_id(fd), want);
+        if (!(by_path.stx_mask & STATX_MNT_ID_BIT) || !(by_fd.stx_mask & STATX_MNT_ID_BIT) ||
+            want == 0 || STX_MNT_ID(&by_path) != want || STX_MNT_ID(&by_fd) != want ||
+            fdinfo_id(fd) != want) {
+            close(fd);
+            errno = 0;
+            return fail(paths[i]);
+        }
+        close(fd);
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report, with the branch of the architecture, and plan its
  * assertions. */
 static void plan(void)
 {
-    static const char *const ids[] = {"file",      "wide-time",     "directory",    "fifo",
-                                      "dev-null",  "proc-self",     "pipe",         "cwd",
-                                      "sync-flag", "refused-flags", "refused-paths"};
+    static const char *const ids[] = {"file",      "wide-time", "directory",     "fifo",
+                                      "dev-null",  "proc-self", "pipe",          "cwd",
+                                      "sync-flag", "mount-id",  "refused-flags", "refused-paths"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.statxmusl"));
@@ -270,7 +360,7 @@ static void plan(void)
 int main(void)
 {
     plan();
-    if (kinds()) {
+    if (kinds() || mount_ids()) {
         return 1;
     }
     if (!refused(FILE_PATH, 0x1, STATX_BASIC_STATS, EINVAL) ||

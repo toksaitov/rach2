@@ -5560,6 +5560,7 @@
         {"assertion_id": "pipe", "checks": "statx of a pipe by AT_EMPTY_PATH agrees with fstat.", "source": "program"},
         {"assertion_id": "cwd", "checks": "statx of the working directory by AT_FDCWD and an empty path agrees with fstatat.", "source": "program"},
         {"assertion_id": "sync-flag", "checks": "statx of a relative path with a sync flag succeeds.", "source": "program"},
+        {"assertion_id": "mount-id", "checks": "statx of a file in /tmp, a /proc file, /dev/null and the root, by path and by an O_PATH descriptor, reports STATX_MNT_ID with the id of its /proc/self/fdinfo/N and of the mount /proc/self/mountinfo puts the path on.", "source": "program"},
         {"assertion_id": "refused-flags", "checks": "statx refuses an unknown flag, both sync flags at once and the reserved mask bit.", "source": "program"},
         {"assertion_id": "refused-paths", "checks": "statx refuses a missing file, and an empty path without AT_EMPTY_PATH.", "source": "program"}
       ],

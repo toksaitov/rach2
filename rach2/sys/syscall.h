@@ -50,6 +50,13 @@ int fs_node_is_held(const struct krffs_node *node);
  */
 void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);
 
+/** The mount id and the inode number fstat gives descriptor `fd` of the
+ * process `pid`, for its /proc/PID/fdinfo/N: 0, -ENOENT for a descriptor
+ * that is not open, or the error of a mounted type's getattr, which may
+ * sleep. The id is 0 for an object on no mount of the table: a pipe, a
+ * socket or an anonymous descriptor. */
+int32_t fd_stat_ids(int pid, int fd, uint32_t *mnt_id, uint64_t *ino);
+
 /** The host and domain names of the caller's UTS namespace, which uname
  * gives as its node name and domain name, for /proc/sys/kernel/hostname and
  * domainname. */

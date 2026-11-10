@@ -3296,6 +3296,42 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
     return 0x10u + (uint32_t)i;
 }
 
+uint32_t procfs_mount_id(const struct vfs_mount *m)
+{
+    int j;
+
+    for (j = 0; m && j < vfs_mount_slots(); j++) {
+        if (vfs_mount_at(j) == m) {
+            return (uint32_t)j + 1u;
+        }
+    }
+    return 0;
+}
+
+uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
+{
+    const struct vfs_type *type = dev == DEVFS_FSID    ? &vfs_devfs_type
+                                  : dev == PROCFS_FSID ? &vfs_procfs_type
+                                  : dev == SYSFS_FSID  ? &vfs_sysfs_type
+                                                       : NULL;
+    int j;
+
+    if (!type) {
+        return 0;
+    }
+    if (hint && hint->type == type) {
+        return procfs_mount_id(hint);
+    }
+    for (j = 0; j < vfs_mount_slots(); j++) {
+        const struct vfs_mount *m = vfs_mount_at(j);
+
+        if (m && m->type == type && vfs_mount_seen(m)) {
+            return (uint32_t)j + 1u;
+        }
+    }
+    return 0;
+}
+
 /**
  * Render /proc/<pid>/mountinfo, the table util-linux's libmount reads, one
  * line for each mount of /proc/mounts in its order, which bubblewrap reads
@@ -7224,17 +7260,19 @@ static int procfs_open_sysctl(int entry, int flags)
 
 /**
  * The text of /proc/PID/fdinfo/N, descriptor `fd` of process `pid`: its
- * offset, and its flags in octal, the access mode with O_APPEND,
- * O_NONBLOCK, O_PATH and O_CLOEXEC, the first two lines Linux gives. Its
- * length, or -ENOENT for a descriptor that is not open. A dma-buf also
- * gives its supplied name, copied before appending text can sleep.
+ * offset, its flags in octal, the access mode with O_APPEND, O_NONBLOCK,
+ * O_PATH and O_CLOEXEC, the id of its mount, 0 for an object on none, and
+ * its inode number, the four lines Linux gives first. Its length, or
+ * -ENOENT for a descriptor that is not open. A dma-buf also gives its
+ * supplied name, copied before appending text or the stat can sleep.
  */
 static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 {
     process_t *p = get_process((uint32_t)pid);
     const fd_entry_t *e;
     char pos[24], name[DMA_BUF_NAME_LEN];
-    uint32_t rw, flags;
+    uint32_t rw, flags, mnt_id;
+    uint64_t ino;
     int named = 0;
 
     if (!p || p->state == PROC_UNUSED || fd < 0 || fd >= fd_table_cap(p->fds)) {
@@ -7269,6 +7307,15 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     ap_str(t, "\nflags:\t0");
     ap_num_width(t, (int32_t)flags, 0, 1);
     ap_ch(t, '\n');
+    /* The stat may sleep; `e` is not read past this point. */
+    if (fd_stat_ids(pid, fd, &mnt_id, &ino) == 0) {
+        ap_str(t, "mnt_id:\t");
+        ap_u32(t, mnt_id);
+        diskinfo_u64_dec(pos, (int)sizeof(pos), ino);
+        ap_str(t, "\nino:\t");
+        ap_str(t, pos);
+        ap_ch(t, '\n');
+    }
     if (named) {
         ap_str(t, "name:\t");
         ap_str(t, name);
