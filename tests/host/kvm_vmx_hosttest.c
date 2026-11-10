@@ -533,6 +533,13 @@ uint64_t kvm_tdp_root(struct kvm_vm *vm)
     return TDP_ROOT;
 }
 
+int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
+{
+    (void)vm;
+    (void)range;
+    return -ENOENT;
+}
+
 /** A frame of the slot is mapped; any other is MMIO. */
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
 {

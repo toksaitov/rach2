@@ -843,6 +843,17 @@ uint64_t kvm_tdp_frames(void);
  */
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write);
 
+/**
+ * KVM_PRE_FAULT_MEMORY's work, as Linux's kvm_vcpu_pre_fault_memory: map
+ * the frames of `range` as a read fault on each would, and move the range
+ * past what was mapped, a leaf at a time, until it is empty, a frame cannot
+ * be mapped or a signal is pending. May sleep. 0 when any frame was mapped;
+ * otherwise -EINVAL for flags, or a range not of whole pages, empty or
+ * wrapping, -ENOENT for a frame no slot holds, -EINTR for the signal, or
+ * `kvm_tdp_fault`'s error.
+ */
+int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range);
+
 /** Drop what the tables map of the `npages` frames from `gfn`, and get
  * every vCPU out of the guest with its translations to drop
  * (`kvm_tdp_flush`) when anything was mapped, before a table it emptied is

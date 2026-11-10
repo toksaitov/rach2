@@ -593,6 +593,20 @@ void kvm_tdp_free(struct kvm_vm *vm)
     (void)vm;
 }
 
+/* What the model's page tables say to KVM_PRE_FAULT_MEMORY: the first
+ * `pre_fault_pages` pages of a range are mapped, and the next has no slot. */
+static uint64_t pre_fault_pages;
+
+int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
+{
+    uint64_t n = range->size / 4096u < pre_fault_pages ? range->size / 4096u : pre_fault_pages;
+
+    (void)vm;
+    range->gpa += n * 4096u;
+    range->size -= n * 4096u;
+    return n ? 0 : -ENOENT;
+}
+
 int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
     (void)vm;
@@ -2256,6 +2270,36 @@ static void sync_rows(void)
     CHECK(live == 0, "the VM frees every allocation");
 }
 
+/** KVM_PRE_FAULT_MEMORY through a vCPU's descriptor: the range moves by
+ * what the page tables mapped, whatever the result. tdp.c's own rows are in
+ * kvm_slots_hosttest. */
+static void pre_fault_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), vcpu = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_pre_fault_memory range;
+
+    CHECK(sizeof(range) == 64 && KVM_PRE_FAULT_MEMORY == 0xC040AED5u,
+          "kvm_pre_fault_memory and KVM_PRE_FAULT_MEMORY are Linux's");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_PRE_FAULT_MEMORY) == 1 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_PRE_FAULT_MEMORY) == 1,
+          "KVM_CAP_PRE_FAULT_MEMORY");
+    k_memset(&range, 0, sizeof(range));
+    range.gpa = 0x200000;
+    range.size = 0x3000;
+    pre_fault_pages = 2;
+    CHECK(fdio(vcpu, KVM_PRE_FAULT_MEMORY, (uintptr_t)&range) == 0 && range.gpa == 0x202000 &&
+              range.size == 0x1000,
+          "a range mapped in part is 0, moved past what was mapped");
+    pre_fault_pages = 0;
+    CHECK(fdio(vcpu, KVM_PRE_FAULT_MEMORY, (uintptr_t)&range) == -ENOENT && range.gpa == 0x202000 &&
+              range.size == 0x1000,
+          "and -ENOENT, unmoved, with nothing mapped");
+    CHECK(fdio(vcpu, KVM_PRE_FAULT_MEMORY, 0) == -EFAULT, "a bad range is -EFAULT");
+    CHECK(fdio(vm, KVM_PRE_FAULT_MEMORY, (uintptr_t)&range) == -ENOTTY, "it is no ioctl of a VM");
+    fdclose(vcpu);
+    fdclose(vm);
+}
+
 /* The description a statistics descriptor is read through. */
 static struct open_file stats_ofd;
 
@@ -2435,6 +2479,7 @@ static void stats_rows(void)
 static void selftest_rows(void)
 {
     stats_rows();
+    pre_fault_rows();
     bound_rows();
     cr4_rows();
     vm_cap_rows();

@@ -25,14 +25,16 @@
  * 2 MiB-aligned contiguous RAM as one 2 MiB leaf, and
  * as 4 KiB leaves where the slot, the addresses or the frames do not allow one;
  * a device's frames uncached with the guest's PAT in charge, as a 2 MiB leaf
- * too; a read-only slot, a frame with no slot and an address the caller cannot
- * touch; each change of the caller's memory dropping what the tables map of it
- * and asking every vCPU to flush, a change to one page of a 2 MiB leaf dropping
- * the leaf; the end of the address space; dirty logging with KVM_GET_DIRTY_LOG
- * and, under KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, KVM_CLEAR_DIRTY_LOG, their
- * refusals, and no 2 MiB leaf in a slot that logs; a slot moved, its flags
- * changed and deleted with its leaves and tables gone; and every allocation and
- * frame given back.
+ * too; KVM_PRE_FAULT_MEMORY mapping a range a leaf at a time, moving it past
+ * what it mapped, and its refusals; the leaves counted by size as pages_4k
+ * and pages_2m; a read-only slot, a frame with no slot and an address the
+ * caller cannot touch; each change of the caller's memory dropping what the
+ * tables map of it and asking every vCPU to flush, a change to one page of a
+ * 2 MiB leaf dropping the leaf; the end of the address space; dirty logging
+ * with KVM_GET_DIRTY_LOG and, under KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2,
+ * KVM_CLEAR_DIRTY_LOG, their refusals, and no 2 MiB leaf in a slot that
+ * logs; a slot moved, its flags changed and deleted with its leaves and
+ * tables gone; and every allocation and frame given back.
  */
 #include "kvm/dirty.c"
 #include "kvm/slots.c"
@@ -546,6 +548,77 @@ static void large_rows(void)
           "and no leaf is counted with the slots gone");
 }
 
+/* Whether the caller has a signal pending. */
+static int sig_pending;
+
+int signal_pending(void)
+{
+    return sig_pending;
+}
+
+/** KVM_PRE_FAULT_MEMORY of `size` bytes at `gpa`: the result, with what is
+ * left of the range in `*left` and where it begins in `*at`. */
+static int32_t pre_fault(uint64_t gpa, uint64_t size, uint64_t *at, uint64_t *left)
+{
+    struct kvm_pre_fault_memory range;
+    int32_t r;
+
+    k_memset(&range, 0, sizeof(range));
+    range.gpa = gpa;
+    range.size = size;
+    r = kvm_tdp_pre_fault(&vm, &range);
+    *at = range.gpa;
+    *left = range.size;
+    return r;
+}
+
+/** KVM_PRE_FAULT_MEMORY over a 2 MiB leaf, 4 KiB leaves and a slot's end,
+ * as pre_fault_memory_test asks. */
+static void pre_fault_rows(void)
+{
+    uintptr_t a = HVA + 2 * MIB2;
+    uint64_t gpa = 0x400000, at, left;
+    struct kvm_pre_fault_memory range;
+    int level;
+
+    fill_block(a, phys_of(ram));
+    region(a + MIB2, 1, 1);
+    CHECK(set(3, 0, gpa, MIB2 + 4096u, a) == 0, "a slot of 2 MiB and a page");
+    CHECK(pre_fault(gpa, MIB2, &at, &left) == 0 && left == 0 && at == gpa + MIB2 &&
+              leaf_of(gpa / 4096u + 300, &level) != 0 && level == 2 &&
+              vm.stat[KVM_VM_STAT_PAGES_2M] == 1 && vm.stat[KVM_VM_STAT_PAGES_4K] == 0,
+          "2 MiB mapped whole by one leaf");
+    CHECK(pre_fault(gpa + 0x5000, 0x3000, &at, &left) == 0 && left == 0 && at == gpa + 0x8000,
+          "a range inside the leaf, mapped already");
+    CHECK(pre_fault(gpa + MIB2, 2 * 4096u, &at, &left) == 0 && left == 4096u &&
+              at == gpa + MIB2 + 4096u && leaf_of((gpa + MIB2) / 4096u, &level) != 0 && level == 1,
+          "a range past the slot's end is 0 with its last page left");
+    CHECK(pre_fault(at, left, &at, &left) == -ENOENT && left == 4096u && at == gpa + MIB2 + 4096u,
+          "and -ENOENT, unmoved, when its first page has no slot");
+    CHECK(pre_fault(gpa + MIB2 + 4096u, 4096u, &at, &left) == -ENOENT && left == 4096u,
+          "a page no slot holds");
+    CHECK(pre_fault(gpa + 1, 4096u, &at, &left) == -EINVAL &&
+              pre_fault(gpa, 4097u, &at, &left) == -EINVAL &&
+              pre_fault(gpa, 0, &at, &left) == -EINVAL &&
+              pre_fault(~0xFFFull, 0x2000, &at, &left) == -EINVAL,
+          "a range not of whole pages, empty or wrapping is -EINVAL");
+    k_memset(&range, 0, sizeof(range));
+    range.gpa = gpa;
+    range.size = 4096u;
+    range.flags = 1;
+    CHECK(kvm_tdp_pre_fault(&vm, &range) == -EINVAL, "a flag is -EINVAL");
+    range.flags = 0;
+    range.padding[0] = 1;
+    CHECK(kvm_tdp_pre_fault(&vm, &range) == 0 && range.size == 0, "the padding is not read");
+    sig_pending = 1;
+    CHECK(pre_fault(gpa, MIB2, &at, &left) == -EINTR && left == MIB2 && at == gpa,
+          "a signal pending is -EINTR with nothing mapped");
+    sig_pending = 0;
+    CHECK(set(3, 0, 0, 0, 0) == 0 && vm.stat[KVM_VM_STAT_PAGES_2M] == 0 &&
+              vm.stat[KVM_VM_STAT_PAGES_4K] == 0,
+          "deleted");
+}
+
 /** A slot over a device's frames. */
 static void device_rows(void)
 {
@@ -694,6 +767,7 @@ int main(void)
     small_rows();
     readonly_rows();
     large_rows();
+    pre_fault_rows();
     device_rows();
     dirty_rows();
     release_rows();
