@@ -597,6 +597,38 @@ static struct drm_gem_object *racing_import(struct drm_device *dev, struct dma_b
 }
 
 /** A sleeping driver import must recheck the file's cache before publishing. */
+static int unmappable_freed;
+
+/** The free of an object without `mmap`. */
+static void unmappable_free(struct drm_gem_object *obj)
+{
+    (void)obj;
+    unmappable_freed++;
+}
+
+static const struct drm_gem_object_funcs unmappable_funcs = {
+    unmappable_free, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+
+/** MAP_DUMB of an object without `mmap`, as i915's adopted firmware
+ * framebuffer is: ENODEV, as Linux's i915 refuses a stolen object. */
+static void unmappable(void)
+{
+    static struct drm_gem_object obj;
+    struct drm_mode_map_dumb m;
+    uint32_t h = 0;
+
+    drm_gem_object_init(&importer, &obj, PAGE_SIZE, &unmappable_funcs);
+    CHECK(drm_gem_handle_create(&c, &obj, &h) == 0, "a handle on an object without mmap");
+    drm_gem_object_put(&obj);
+    k_memset(&m, 0, sizeof(m));
+    m.handle = h;
+    CHECK(drm_mode_mmap_dumb_ioctl(&importer, &m, &c) == -ENODEV && m.offset == 0 &&
+              obj.mmap_offset == 0,
+          "MAP_DUMB refuses an object without mmap with ENODEV");
+    CHECK(drm_gem_handle_delete(&c, h) == 0 && unmappable_freed == 1,
+          "the object freed with its handle");
+}
+
 static void concurrent_import(void)
 {
     struct drm_driver custom = driver;
@@ -637,6 +669,7 @@ int main(void)
     udmabuf_import();
     failures_and_flags();
     concurrent_import();
+    unmappable();
     CHECK(exporter.refs == 1 && importer.refs == 1, "device references return to baseline");
     CHECK(!allocations && !frames_live, "all allocations and frames released");
     printf("drm-prime-test: %s\n", failures ? "failed" : "ok");

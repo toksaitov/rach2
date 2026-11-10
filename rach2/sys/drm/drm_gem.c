@@ -595,7 +595,8 @@ int32_t drm_mode_create_dumb_ioctl(struct drm_device *dev, void *data, struct dr
 
 /** MODE_MAP_DUMB: the object's mmap offset, made the first time. ENOSYS
  * for a driver without dumb buffers, ENOENT for no such handle, EINVAL for
- * an object made from a dma-buf. */
+ * an object made from a dma-buf, ENODEV for one without `mmap`, which
+ * nothing could map, as Linux's i915 refuses a stolen object. */
 int32_t drm_mode_mmap_dumb_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_mode_map_dumb *args = (struct drm_mode_map_dumb *)data;
@@ -609,7 +610,9 @@ int32_t drm_mode_mmap_dumb_ioctl(struct drm_device *dev, void *data, struct drm_
     if (!obj) {
         return -ENOENT;
     }
-    rc = obj->import ? -EINVAL : drm_gem_create_mmap_offset(obj);
+    rc = obj->import                        ? -EINVAL
+         : !obj->funcs || !obj->funcs->mmap ? -ENODEV
+                                            : drm_gem_create_mmap_offset(obj);
     if (rc == 0) {
         args->offset = obj->mmap_offset;
     }
