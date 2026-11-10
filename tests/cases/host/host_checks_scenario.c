@@ -14,27 +14,28 @@ static void case_progress(void *ctx, size_t n)
     etude_progress(ctx, "checks", n);
 }
 
-static int guest_run(struct etude_case_machine *m, const char *const argv[], const char *label)
+/* Run ARGV in the guest with standard input from the raw disk INPUT, or
+ * none, and say whether it exited 0 with its cleanup confirmed. */
+static int guest_run(struct etude_case_machine *m, const char *const argv[], const char *input,
+                     const char *label)
 {
     struct etude_guest_result result;
-    return etude_guest_command(m, argv, NULL, NULL, label, &result) == ETUDE_OK &&
-           result.complete && result.termination.end == ETUDE_END_EXITED &&
+    enum etude_status st = input ? etude_guest_command_file(m, argv, NULL, input, label, &result)
+                                 : etude_guest_command(m, argv, NULL, NULL, label, &result);
+    return st == ETUDE_OK && result.complete && result.termination.end == ETUDE_END_EXITED &&
            result.termination.value == 0 && result.cleanup == ETUDE_CLEANUP_CONFIRMED;
 }
 
-/* Begin the step `gnu` by unpacking the host checks, gnu-host-checks.tar on
- * the helper's raw disk1, into /host-products, where the image does not
- * carry them since they change with every kernel and case source
- * (mk/gnu-image.mk). */
+/* Begin the step `gnu` by unpacking into /host-products the host checks,
+ * gnu-host-checks.tar on the helper's raw disk1, and its products,
+ * gnu-host-products.tar on disk2, which the image does not carry since they
+ * change with every kernel and case source (mk/gnu-image.mk). */
 static int guest_stage(struct etude_case *c, struct etude_case_machine *m)
 {
     const char *argv[] = {"/bin/tar", "-x", "-o", "-f", "-", "-C", "/host-products", NULL};
-    struct etude_guest_result result;
     return etude_step(c, "gnu") == ETUDE_OK &&
-           etude_guest_command_file(m, argv, NULL, "/dev/disk1", "host-checks-unpack", &result) ==
-               ETUDE_OK &&
-           result.complete && result.termination.end == ETUDE_END_EXITED &&
-           result.termination.value == 0 && result.cleanup == ETUDE_CLEANUP_CONFIRMED;
+           guest_run(m, argv, "/dev/disk1", "host-checks-unpack") &&
+           guest_run(m, argv, "/dev/disk2", "host-products-unpack");
 }
 
 /* The unpacked tree and driver are immutable inputs of the helper's disk. */
@@ -42,7 +43,7 @@ static int guest_check(struct etude_case_machine *m, const char *group, const ch
                        const char *arch)
 {
     const char *argv[] = {"/host-products/host-checks/driver", group, id, arch, NULL};
-    return guest_run(m, argv, id);
+    return guest_run(m, argv, NULL, id);
 }
 
 /* Export failed scratch while the helper still owns its private disk. */
@@ -53,8 +54,8 @@ static int guest_evidence(struct etude_case_machine *m, const char *group, const
                           name,       NULL};
     const char *compress[] = {"/usr/bin/xz", "-9", "-T1", "/host-work/host-fixtures.tar", NULL};
     int n = snprintf(name, sizeof name, "host-checks.%s.%s/.checks", group, arch);
-    return n > 0 && n < (int)sizeof name && guest_run(m, args, "host-fixture-archive") &&
-           guest_run(m, compress, "host-fixture-compress") &&
+    return n > 0 && n < (int)sizeof name && guest_run(m, args, NULL, "host-fixture-archive") &&
+           guest_run(m, compress, NULL, "host-fixture-compress") &&
            etude_guest_get(m, "/host-work/host-fixtures.tar.xz", "host-fixtures.tar.xz") ==
                ETUDE_OK;
 }

@@ -32,9 +32,11 @@ ifneq ($(ARCH),x86_64)
 prepare-host-products-x86_64:
 	+$(MAKE) --no-print-directory ARCH=x86_64 rach2 rach2-recovery \
 	    build/x86_64/images/gnu-test.disk build/x86_64/images/gnu-test-products.tar \
-	    build/x86_64/images/gnu-host-checks.tar build/x86_64/images/etude-image.krffs
+	    build/x86_64/images/gnu-host-products.tar build/x86_64/images/gnu-host-checks.tar \
+	    build/x86_64/images/etude-image.krffs
 build/x86_64/rach2/kernel build/x86_64/images/gnu-test.disk build/x86_64/images/gnu-test-products.tar \
-build/x86_64/images/gnu-host-checks.tar build/x86_64/rach2-recovery/kernel \
+build/x86_64/images/gnu-host-products.tar build/x86_64/images/gnu-host-checks.tar \
+build/x86_64/rach2-recovery/kernel \
 build/x86_64/images/etude-image.krffs: | prepare-host-products-x86_64
 	@test -s $@
 endif

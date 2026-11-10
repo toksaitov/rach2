@@ -14,8 +14,9 @@
 # that one less /src, which mk/gnu-image.mk writes under build/. It stages the
 # tree as one tar archive: the files git tracks or would track, the manifest,
 # the products of this host that it names, and MUSL_CRYPT_SRC. An OUTPUT named
-# gnu-host-checks.tar is the archive of the GNU host checks' directory in place
-# of an image, padded with zeros to SIZE MiB (tooling_job.sh). It then runs
+# gnu-host-products.tar or gnu-host-checks.tar is the archive of the helper's
+# products or of the GNU host checks in place of an image, padded with zeros
+# to SIZE MiB (tooling_job.sh). It then runs
 # tooling_job.sh in the tooling machine (tools/etude/Readme.md, The tooling
 # machine), made first if it is not, with a
 # network and two raw disks: the layer's build disk, tooling.disk in the layer's

@@ -31,6 +31,7 @@ int host_assets_stage(struct etude_case *c, struct etude_case_machine *m)
 
     if (!archive || etude_digest_file(NULL, archive, &st, digest) != 0 ||
         !run(m, unpack, "/dev/disk1", "products-unpack") ||
+        !run(m, unpack, "/dev/disk2", "host-products-unpack") ||
         !run(m, args, NULL, "products-source-digest"))
         return 0;
     path = etude_evidence(c, "products-source-digest");

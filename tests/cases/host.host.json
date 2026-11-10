@@ -1543,6 +1543,11 @@
           "name": "host-checks",
           "node": "x86_64/images/gnu-host-checks.tar",
           "per_architecture": false
+        },
+        {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -1591,6 +1596,12 @@
               {
                 "name": "host-checks-disk",
                 "base": "host-checks",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -1875,6 +1886,11 @@
           "name": "host-checks",
           "node": "x86_64/images/gnu-host-checks.tar",
           "per_architecture": false
+        },
+        {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -1923,6 +1939,12 @@
               {
                 "name": "host-checks-disk",
                 "base": "host-checks",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -2072,6 +2094,11 @@
           "name": "host-checks",
           "node": "x86_64/images/gnu-host-checks.tar",
           "per_architecture": false
+        },
+        {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -2120,6 +2147,12 @@
               {
                 "name": "host-checks-disk",
                 "base": "host-checks",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -2471,6 +2504,11 @@
           "name": "host-checks",
           "node": "x86_64/images/gnu-host-checks.tar",
           "per_architecture": false
+        },
+        {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -2519,6 +2557,12 @@
               {
                 "name": "host-checks-disk",
                 "base": "host-checks",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -2703,6 +2747,11 @@
           "name": "host-checks",
           "node": "x86_64/images/gnu-host-checks.tar",
           "per_architecture": false
+        },
+        {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
         }
       ],
       "timing": [],
@@ -2751,6 +2800,12 @@
               {
                 "name": "host-checks-disk",
                 "base": "host-checks",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -3112,6 +3167,11 @@
           "per_architecture": false
         },
         {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
+        },
+        {
           "name": "scripts-assets",
           "node": "tests/host-suite/scripts-assets.tar",
           "per_architecture": false
@@ -3287,6 +3347,12 @@
               {
                 "name": "products-files-disk",
                 "base": "products-files",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -3511,6 +3577,11 @@
           "per_architecture": false
         },
         {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
+        },
+        {
           "name": "scripts-assets",
           "node": "tests/host-suite/scripts-assets.tar",
           "per_architecture": false
@@ -3667,6 +3738,12 @@
               {
                 "name": "products-files-disk",
                 "base": "products-files",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -3885,6 +3962,11 @@
           "per_architecture": false
         },
         {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
+        },
+        {
           "name": "scripts-assets",
           "node": "tests/host-suite/scripts-assets.tar",
           "per_architecture": false
@@ -4006,6 +4088,12 @@
               {
                 "name": "products-files-disk",
                 "base": "products-files",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
@@ -4169,6 +4257,11 @@
           "per_architecture": false
         },
         {
+          "name": "host-products",
+          "node": "x86_64/images/gnu-host-products.tar",
+          "per_architecture": false
+        },
+        {
           "name": "scripts-assets",
           "node": "tests/host-suite/scripts-assets.tar",
           "per_architecture": false
@@ -4268,6 +4361,12 @@
               {
                 "name": "products-files-disk",
                 "base": "products-files",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "host-products-disk",
+                "base": "host-products",
                 "cluster_bytes": 65536,
                 "bus": "ahci"
               }
