@@ -20,7 +20,19 @@
  * cannot be written is EFAULT, another code EINVAL, and a call with no process
  * ESRCH.
  */
+#include "arch/x86_64/percpu.h"
+
+static struct cpu model_cpu;
+
+/** Give TLS descriptor writes the model's GDT. */
+static struct cpu *model_cpu_self(void)
+{
+    return &model_cpu;
+}
+
+#define cpu_self model_cpu_self
 #include "arch/x86_64/tls.c"
+#undef cpu_self
 #include "lib/kstring.h"
 
 extern int printf(const char *format, ...);
@@ -31,6 +43,7 @@ static isr_params_t frame;
 static uint64_t fs_base, gs_base, kernel_gs_base;
 static unsigned int fs_sel, gs_sel, ds_sel, es_sel;
 static uint64_t stored;
+static struct user_desc stored_desc;
 static int failures;
 
 /* The base a selector load leaves in the model, and the selector a
@@ -135,10 +148,10 @@ void x86_64_es_load(unsigned int sel)
 /** Copy the model's user value, refusing BAD_ADDR and an oversized read. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
-    if ((unsigned long)src == BAD_ADDR || n > sizeof(stored)) {
+    if ((unsigned long)src == BAD_ADDR || n > sizeof(stored_desc)) {
         return -1;
     }
-    k_memcpy(dst, &stored, n);
+    k_memcpy(dst, n == sizeof(stored_desc) ? (void *)&stored_desc : (void *)&stored, n);
     return 0;
 }
 
@@ -146,10 +159,10 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
  * BAD_ADDR. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
-    if ((unsigned long)dst == BAD_ADDR || n != sizeof(stored)) {
+    if ((unsigned long)dst == BAD_ADDR || (n != sizeof(stored) && n != sizeof(uint32_t))) {
         return -1;
     }
-    k_memcpy(&stored, src, n);
+    k_memcpy(n == sizeof(uint32_t) ? (void *)&stored_desc.entry_number : (void *)&stored, src, n);
     return 0;
 }
 
@@ -262,10 +275,45 @@ static void run_other(void)
     check(fs_base == 0x401000ul && arch_tls_get() == 0x401000ul, "the thread pointer");
 }
 
+/** Compat clone needs an existing TLS slot, and LDT bases survive reads. */
+static void run_compat_tls(void)
+{
+    uint32_t entry = 99;
+    uint64_t desc = 0, ldt[2];
+    struct mm space;
+
+    setup();
+    k_memset(&stored_desc, 0, sizeof(stored_desc));
+    stored_desc.entry_number = (uint32_t)-1;
+    stored_desc.base_addr = 0x12345000u;
+    stored_desc.limit = 0xFFFFFu;
+    stored_desc.flags = 0x51u;
+    check(ia32_clone_tls(0x7000u, &entry, &desc) == -EINVAL &&
+              stored_desc.entry_number == (uint32_t)-1 && desc == 0,
+          "compat clone refuses entry -1 without allocating or writing it");
+    stored_desc.entry_number = GDT_TLS_MIN;
+    check(ia32_clone_tls(0x7000u, &entry, &desc) == 0 && entry == GDT_TLS_MIN,
+          "compat clone takes an explicit TLS entry");
+    ia32_clone_tls_set(&proc, entry, desc);
+    check(tls_selector_base(&proc, (entry << 3) | 3u) == 0x12345000u,
+          "TLS selector reads its descriptor base");
+    k_memset(&space, 0, sizeof(space));
+    ldt[0] = 0;
+    ldt[1] = desc;
+    space.ldt = ldt;
+    space.ldt_entries = 2;
+    proc.mm = &space;
+    check(tls_selector_base(&proc, 15) == 0x12345000u && tls_selector_base(&proc, 23) == 0,
+          "LDT selector reads its base and refuses an unwritten entry");
+    proc.mm = NULL;
+    check(tls_selector_base(&proc, 15) == 0, "an absent LDT has no base");
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     run_clone();
+    run_compat_tls();
     run_set();
     run_get();
     run_other();

@@ -15,6 +15,7 @@
  */
 #include "arch/x86_64/sigframe32.c"
 #include "arch/x86_64/ptrace.c"
+#include "arch/x86_64/ia32_core.c"
 #include "lib/kstring.h"
 
 extern int printf(const char *format, ...);
@@ -231,9 +232,9 @@ void fpu_reset(void)
 void fpu_env32_get(const void *area, uint8_t *env, uint32_t cs, uint32_t ds)
 {
     (void)area;
-    (void)cs;
-    (void)ds;
     k_memset(env, 0, FPU_ENV_SIZE);
+    k_memcpy(env + 16, &cs, sizeof(cs));
+    k_memcpy(env + 24, &ds, sizeof(ds));
 }
 
 void fpu_env32_set(void *area, const uint8_t *env)
@@ -334,11 +335,10 @@ uint32_t core_note_bytes(uint32_t descsz)
 
 void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc, uint32_t descsz)
 {
-    (void)p;
     (void)name;
     (void)type;
-    (void)desc;
-    (void)descsz;
+    k_memcpy(*p, desc, descsz);
+    *p += descsz;
 }
 
 int tls_desc_valid(const struct user_desc *u)
@@ -357,17 +357,25 @@ int tls_entry_get(const struct process *t, uint32_t entry, struct user_desc *u)
 
 int tls_entry_set(struct process *t, uint32_t entry, const struct user_desc *u)
 {
+    t->regs.tls[entry - GDT_TLS_MIN] = u->base_addr;
+    return 0;
+}
+
+/** No active TLS note in this model. */
+uint32_t ia32_tls_get(const process_t *t, struct user_desc *u)
+{
     (void)t;
-    (void)entry;
     (void)u;
     return 0;
 }
 
 uintptr_t tls_selector_base(const struct process *t, unsigned int sel)
 {
-    (void)t;
-    (void)sel;
-    return 0;
+    unsigned int entry = sel >> 3;
+
+    return entry >= GDT_TLS_MIN && entry <= GDT_TLS_MAX
+               ? (uintptr_t)t->regs.tls[entry - GDT_TLS_MIN]
+               : 0;
 }
 
 /* A size or offset and Linux's value of it. */
@@ -759,6 +767,36 @@ static void run_ptrace(void)
           "a 64-bit tracee's NT_PRSTATUS is user_regs_struct");
 }
 
+/** Ptrace writes SS and refreshes both bases when its TLS set changes. */
+static void run_ptrace_writes(void)
+{
+    struct user_desc u;
+    uint8_t notes[FPU_ENV_SIZE + FX_SIZE], *next = notes;
+    uint32_t word;
+
+    check(regs32_set(&tracee, R32_SS, 15) == 0 && tracee_frame.ss == 15 &&
+              regs32_set(&tracee, R32_SS, 0) == -EIO && tracee_frame.ss == 15,
+          "ptrace saves an LDT stack selector and refuses a null one");
+    check(regs32_set(&tracee, R32_COUNT, 0) == -EIO &&
+              regset32_set(&tracee, NT_PRSTATUS, notes, R32_COUNT * 4u + 4u) == -EINVAL,
+          "an oversized register set cannot index past the i386 register map");
+    k_memset(&u, 0, sizeof(u));
+    u.base_addr = 0x321000u;
+    tracee.regs.fs_sel = tracee.regs.gs_sel = (GDT_TLS_MIN << 3) | 3u;
+    tracee.tls_base = tracee.regs.gs_base = 0xBADu;
+    check(regset32_set(&tracee, NT_386_TLS, (const uint8_t *)&u, sizeof(u)) == 0 &&
+              tracee.tls_base == u.base_addr && tracee.regs.gs_base == u.base_addr,
+          "NT_386_TLS updates the saved FS and GS bases");
+    tracee_frame.cs = 15;
+    tracee.regs.ds_sel = 23;
+    ia32_core_fp_notes(&next, &tracee);
+    k_memcpy(&word, notes + 16, sizeof(word));
+    check(word == 15, "the i386 core x87 note uses the tracee's code selector");
+    k_memcpy(&word, notes + 24, sizeof(word));
+    check(word == 23 && next == notes + sizeof(notes),
+          "the i386 core x87 note uses the tracee's data selector");
+}
+
 int main(void)
 {
     run_layout();
@@ -768,6 +806,7 @@ int main(void)
     run_stacks();
     run_legacy_stack();
     run_ptrace();
+    run_ptrace_writes();
     if (failures) {
         printf("ia32-signal-hosttest: %d failures\n", failures);
         return failures > 255 ? 255 : failures;
