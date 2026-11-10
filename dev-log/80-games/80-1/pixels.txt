@@ -1,0 +1,5 @@
+adapter: llvmpipe (LLVM 19.1.7, 256 bits) driver wined3d.dll vendor 0xffffffff device 0xffffffff
+CreateDevice: hr=0x00000000
+caps: vs 3.0 ps 3.0 texture memory 4095 MiB
+center 255 128 0 255 corner 0 0 128 255 draw OK
+D3D9 OK
