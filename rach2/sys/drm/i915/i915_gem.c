@@ -17,11 +17,6 @@
 #include "../../mm/pin.h"
 #include "../../mm/usercopy.h"
 
-/* Whether the kernel flushes a range before or after it touches the pages
- * through the processor's cache (Linux's CLFLUSH_BEFORE and _AFTER). */
-#define I915_CLFLUSH_BEFORE 0x1u
-#define I915_CLFLUSH_AFTER  0x2u
-
 /* ------------------------------------------------------------------------
  * The driver's fences
  */
@@ -390,6 +385,15 @@ void i915_gem_object_flush_write_domain(struct drm_i915_gem_object *obj, uint32_
     obj->write_domain = 0;
 }
 
+void i915_gem_object_flush_for_gpu(struct drm_i915_gem_object *obj)
+{
+    i915_gem_object_flush_write_domain(obj, I915_GEM_DOMAIN_CPU | I915_GEM_DOMAIN_GTT |
+                                                I915_GEM_DOMAIN_WC);
+    if (obj->cache_dirty) {
+        i915_gem_clflush_object(obj, 0);
+    }
+}
+
 /** Begin a write by the processor: the object in the CPU's domains alone. */
 static void start_cpu_write(struct drm_i915_gem_object *obj)
 {
@@ -536,9 +540,7 @@ static int32_t prepare_read(struct drm_i915_gem_object *obj, uint32_t *needs_clf
     return 0;
 }
 
-/** The same for a write, as Linux's i915_gem_object_prepare_write: whether
- * lines must be flushed before (a partial line) and after. */
-static int32_t prepare_write(struct drm_i915_gem_object *obj, uint32_t *needs_clflush)
+int32_t i915_gem_object_prepare_write(struct drm_i915_gem_object *obj, uint32_t *needs_clflush)
 {
     int32_t err;
 
@@ -616,7 +618,7 @@ static int32_t shmem_pwrite(struct drm_i915_gem_object *obj, const struct drm_i9
     const uint8_t __user *user = (const uint8_t __user *)(uintptr_t)args->data_ptr;
     uint64_t remain = args->size, at = args->offset;
     uint32_t needs_clflush, partial = 0;
-    int32_t err = prepare_write(obj, &needs_clflush);
+    int32_t err = i915_gem_object_prepare_write(obj, &needs_clflush);
 
     if (err != 0) {
         return err;
@@ -1330,6 +1332,8 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
      "I915_GEM_SET_DOMAIN"},
     {DRM_IOCTL_I915_GEM_SW_FINISH, DRM_RENDER_ALLOW, i915_gem_sw_finish_ioctl,
      "I915_GEM_SW_FINISH"},
+    {DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, DRM_RENDER_ALLOW, i915_gem_execbuffer2_ioctl,
+     "I915_GEM_EXECBUFFER2"},
     {DRM_IOCTL_I915_GEM_SET_TILING, DRM_RENDER_ALLOW, i915_gem_set_tiling_ioctl,
      "I915_GEM_SET_TILING"},
     {DRM_IOCTL_I915_GEM_GET_TILING, DRM_RENDER_ALLOW, i915_gem_get_tiling_ioctl,

@@ -23,8 +23,7 @@
 /* How many extensions a chain may hold, Linux's i915_user_extensions. */
 #define I915_MAX_EXTENSIONS 512
 
-/** Whether the caller may do what Linux asks CAP_SYS_ADMIN for. */
-static int i915_capable(void)
+int i915_capable(void)
 {
     return current_proc && proc_privileged(current_proc);
 }
@@ -346,8 +345,6 @@ static int32_t lookup_user_engine(struct i915_gem_context *ctx, uint32_t flags,
  * Extensions
  */
 
-typedef int32_t (*i915_ext_fn)(uintptr_t ext, void *data);
-
 /** 0 when the `size` bytes at the user address `at` are zero, -EINVAL when
  * not, -EFAULT when they cannot be read, as Linux's check_user_mbz. */
 static int32_t check_user_mbz(uintptr_t at, size_t size)
@@ -372,15 +369,7 @@ static int32_t get_user_bytes(void *dst, uintptr_t at, size_t size)
     return copy_from_user(dst, I915_USER_PTR(at), size) != 0 ? -EFAULT : 0;
 }
 
-/**
- * Walk the chain of extensions from the user address `ext`, as Linux's
- * i915_user_extensions: each one's flags and reserved words must be 0,
- * and its name must have a handler in `tbl` of `count`.
- *
- * @return 0; -E2BIG past I915_MAX_EXTENSIONS; -EINVAL for a word that must
- *         be 0 or an unknown name; -EFAULT; or a handler's error.
- */
-static int32_t user_extensions(uint64_t ext, const i915_ext_fn *tbl, uint32_t count, void *data)
+int32_t i915_user_extensions(uint64_t ext, const i915_ext_fn *tbl, uint32_t count, void *data)
 {
     struct i915_user_extension e;
     uint32_t depth = I915_MAX_EXTENSIONS;
@@ -589,8 +578,9 @@ static int32_t set_engines(struct i915_gem_context *ctx,
     }
     err = get_user_bytes(&extensions, user, 8);
     if (err == 0) {
-        err = user_extensions(extensions, engines_extensions,
-                              sizeof(engines_extensions) / sizeof(engines_extensions[0]), &set);
+        err =
+            i915_user_extensions(extensions, engines_extensions,
+                                 sizeof(engines_extensions) / sizeof(engines_extensions[0]), &set);
     }
     if (err < 0) {
         kfree(set.map);
@@ -805,8 +795,8 @@ int32_t i915_gem_context_create_ioctl(struct drm_device *dev, void *data, struct
         return -ENOMEM;
     }
     if (args->flags & I915_CONTEXT_CREATE_FLAGS_USE_EXTENSIONS) {
-        err = user_extensions(args->extensions, create_extensions,
-                              sizeof(create_extensions) / sizeof(create_extensions[0]), &ext);
+        err = i915_user_extensions(args->extensions, create_extensions,
+                                   sizeof(create_extensions) / sizeof(create_extensions[0]), &ext);
         if (err < 0) {
             i915_gem_context_put(ext.ctx);
             return err;

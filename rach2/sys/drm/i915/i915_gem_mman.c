@@ -92,12 +92,15 @@ static int32_t gtt_fault_pin(struct drm_i915_gem_object *obj, uint32_t pgoff, st
     if (row > 1) {
         chunk = (chunk + row - 1) / row * row;
     }
+    /* A fault cannot be restarted, so its wait for the GPU to make room
+     * takes no signal. */
     if (chunk >= pages) {
-        return i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE, 0, vma);
+        return i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE | I915_PIN_NOINTR, 0, vma);
     }
     offset = pgoff / chunk * chunk;
     n = pages - offset < chunk ? pages - offset : chunk;
-    return i915_vma_pin(obj, offset, n == pages ? 0 : n, I915_PIN_MAPPABLE, 0, vma);
+    return i915_vma_pin(obj, offset, n == pages ? 0 : n, I915_PIN_MAPPABLE | I915_PIN_NOINTR, 0,
+                        vma);
 }
 
 /**
@@ -105,7 +108,8 @@ static int32_t gtt_fault_pin(struct drm_i915_gem_object *obj, uint32_t pgoff, st
  * the aperture and fenced for its tiling, and the aperture's page mapped,
  * the binding marked as mapped by programs so that unbinding it or moving
  * its fence revokes the mapping. A partial view evicts idle bindings for
- * its room; a failure, no room even so or no fence free, raises SIGBUS.
+ * its room, waiting for the GPU when only busy bindings stand in the way;
+ * a failure, no room even so or no fence free, raises SIGBUS.
  */
 static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
 {

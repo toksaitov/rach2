@@ -8,6 +8,7 @@
 #include "i915_drm.h"
 
 #include "../../lib/kerrno.h"
+#include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../mm/paging.h"
 
@@ -84,11 +85,11 @@ static int32_t ggtt_find_high(struct drm_i915_private *i915, uint64_t size, uint
 /* The lowest range is found in one pass over the bindings, which lie by
  * offset and never overlap: a binding that ends at or before the candidate
  * stays behind it however far it moves. */
-int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t hi,
-                       uint32_t flags, uint64_t *at)
+int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t lo,
+                       uint64_t hi, uint32_t flags, uint64_t *at)
 {
     struct i915_vma *v = i915->gem.bound;
-    uint64_t start = 0, a, b;
+    uint64_t start = align_up(lo, align), a, b;
 
     if (hi > i915->gt.ggtt_bottom) {
         hi = i915->gt.ggtt_bottom;
@@ -97,7 +98,10 @@ int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t al
         return -ENOSPC;
     }
     if (flags & I915_PIN_HIGH) {
-        return ggtt_find_high(i915, size, align, hi, at);
+        if (ggtt_find_high(i915, size, align, hi, at) != 0 || *at < lo) {
+            return -ENOSPC;
+        }
+        return 0;
     }
     for (;;) {
         if (start > hi || size > hi - start) {
@@ -177,20 +181,21 @@ static void lru_bump(struct drm_i915_private *i915, struct i915_vma *vma)
 }
 
 /**
- * Find room for `size` bytes aligned to `align` inside the aperture with
- * I915_PIN_MAPPABLE, anywhere in the GTT without, making room by eviction
- * once unless I915_PIN_NOEVICT: 0 with the offset in `*at`, or -ENOSPC.
+ * Find room from `lo` for `size` bytes aligned to `align` inside the
+ * aperture with I915_PIN_MAPPABLE, anywhere in the GTT without, making
+ * room by eviction once unless I915_PIN_NOEVICT: 0 with the offset in
+ * `*at`, -ENOSPC, or the eviction's -EINTR.
  */
-static int32_t ggtt_room(struct drm_i915_private *i915, uint64_t size, uint64_t align,
+static int32_t ggtt_room(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t lo,
                          uint32_t flags, uint64_t *at)
 {
     uint64_t hi = (flags & I915_PIN_MAPPABLE) ? i915->ggtt.mappable_end : i915->ggtt.total;
-    int32_t err = i915_ggtt_find(i915, size, align, hi, flags, at);
+    int32_t err = i915_ggtt_find(i915, size, align, lo, hi, flags, at);
 
     if (err == -ENOSPC && !(flags & I915_PIN_NOEVICT)) {
-        err = i915_gem_evict_something(i915, size, align, 0, hi, flags);
+        err = i915_gem_evict_something(i915, size, align, lo, hi, flags);
         if (err == 0) {
-            err = i915_ggtt_find(i915, size, align, hi, flags, at);
+            err = i915_ggtt_find(i915, size, align, lo, hi, flags, at);
         }
     }
     return err;
@@ -205,7 +210,7 @@ int32_t i915_ggtt_reserve(struct drm_i915_private *i915, uint64_t size, uint32_t
     if (!vma) {
         return -ENOMEM;
     }
-    err = ggtt_room(i915, size, I915_GTT_PAGE_SIZE, flags, &vma->start);
+    err = ggtt_room(i915, size, I915_GTT_PAGE_SIZE, 0, flags, &vma->start);
     if (err != 0) {
         kfree(vma);
         return err;
@@ -331,44 +336,48 @@ static int32_t vma_existing(struct drm_i915_gem_object *obj, uint32_t view_offse
     return 0;
 }
 
-int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
-                     uint32_t flags, uint32_t align, struct i915_vma **out)
+/*
+ * What `vma_create` makes: the view, the I915_PIN_ flags, the alignment, a
+ * power of two of at least a page, the least size of the node, and the
+ * lowest offset, or with I915_PIN_OFFSET_FIXED the offset.
+ */
+struct vma_place {
+    uint32_t view_offset;
+    uint32_t view_pages;
+    uint32_t flags;
+    uint64_t align;
+    uint64_t size;
+    uint64_t offset;
+};
+
+/**
+ * A new binding of the view `p` names, pinned, in `*out`: the object's
+ * pages pinned, room found, made by eviction or emptied at a fixed offset,
+ * and the entries written. 1 when, while an eviction slept, a binding of
+ * the view was made, which the caller then takes; or the errors of the
+ * pin, the room and the bind.
+ */
+static int32_t vma_create(struct drm_i915_gem_object *obj, const struct vma_place *p,
+                          struct i915_vma **out)
 {
     struct drm_i915_private *i915 = to_i915(obj->base.dev);
     uint32_t pages = (uint32_t)(obj->base.size >> PAGE_SHIFT);
-    struct i915_vma *vma;
-    uint64_t size;
+    uint64_t align = p->align, size;
+    struct i915_vma *vma = (struct i915_vma *)kzalloc(sizeof(*vma));
     int32_t err;
 
-    if (view_pages && ((uint64_t)view_offset + view_pages > pages || view_pages == pages)) {
-        return -EINVAL;
-    }
-    if (align < I915_GTT_PAGE_SIZE) {
-        align = I915_GTT_PAGE_SIZE;
-    }
-    err = vma_existing(obj, view_offset, view_pages, flags, align, &vma);
-    if (err != 0) {
-        return err;
-    }
-    if (vma) {
-        vma->pin_count++;
-        lru_bump(i915, vma);
-        *out = vma;
-        return 0;
-    }
-    vma = (struct i915_vma *)kzalloc(sizeof(*vma));
     if (!vma) {
         return -ENOMEM;
     }
     vma->obj = obj;
-    vma->view_offset = view_offset;
-    vma->view_pages = view_pages;
-    vma->size = size = (uint64_t)(view_pages ? view_pages : pages) << PAGE_SHIFT;
+    vma->view_offset = p->view_offset;
+    vma->view_pages = p->view_pages;
+    vma->size = size = (uint64_t)(p->view_pages ? p->view_pages : pages) << PAGE_SHIFT;
     vma->fence_size = i915_gem_fence_size(i915, (uint32_t)size, obj->tiling, obj->stride);
     vma->fence_alignment = i915_gem_fence_alignment(i915, obj->tiling);
-    vma->node_size = size;
-    if (flags & I915_PIN_MAPPABLE) {
-        if (vma->fence_size > size) {
+    vma->node_size = size < p->size ? p->size : size;
+    if (p->flags & I915_PIN_MAPPABLE) {
+        if (vma->fence_size > vma->node_size) {
             vma->node_size = vma->fence_size;
         }
         if (vma->fence_alignment > align) {
@@ -377,7 +386,15 @@ int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint
     }
     err = i915_gem_object_pin_pages(obj);
     if (err == 0) {
-        err = ggtt_room(i915, vma->node_size, align, flags, &vma->start);
+        if (p->flags & I915_PIN_OFFSET_FIXED) {
+            vma->start = p->offset;
+            err = i915_gem_evict_for_node(i915, p->offset, vma->node_size, p->flags);
+        } else {
+            err = ggtt_room(i915, vma->node_size, align, p->offset, p->flags, &vma->start);
+        }
+        if (err == 0 && vma_lookup(obj, p->view_offset, p->view_pages)) {
+            err = 1;
+        }
         if (err == 0) {
             err = vma_bind(i915, vma);
         }
@@ -397,6 +414,100 @@ int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint
     lru_bump(i915, vma);
     *out = vma;
     return 0;
+}
+
+int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
+                     uint32_t flags, uint32_t align, struct i915_vma **out)
+{
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
+    uint32_t pages = (uint32_t)(obj->base.size >> PAGE_SHIFT);
+    struct vma_place p;
+    struct i915_vma *vma;
+    int32_t err;
+
+    if (view_pages && ((uint64_t)view_offset + view_pages > pages || view_pages == pages)) {
+        return -EINVAL;
+    }
+    if (align < I915_GTT_PAGE_SIZE) {
+        align = I915_GTT_PAGE_SIZE;
+    }
+    k_memset(&p, 0, sizeof(p));
+    p.view_offset = view_offset;
+    p.view_pages = view_pages;
+    p.flags = flags & ~(I915_PIN_OFFSET_FIXED | I915_PIN_OFFSET_BIAS);
+    p.align = align;
+    do {
+        err = vma_existing(obj, view_offset, view_pages, flags, align, &vma);
+        if (err != 0) {
+            return err;
+        }
+        if (vma) {
+            vma->pin_count++;
+            lru_bump(i915, vma);
+            *out = vma;
+            return 0;
+        }
+        err = vma_create(obj, &p, out);
+    } while (err == 1);
+    return err;
+}
+
+/** Whether `vma` serves what `a` asks with its alignment `align`, as
+ * Linux's i915_vma_misplaced and eb_vma_misplaced ask the other way. */
+static int vma_placed(const struct i915_vma *vma, const struct i915_pin_args *a, uint64_t align)
+{
+    if (vma->node_size < a->size || (vma->start & (align - 1))) {
+        return 0;
+    }
+    if ((a->flags & I915_PIN_OFFSET_FIXED) && vma->start != a->offset) {
+        return 0;
+    }
+    if ((a->flags & I915_PIN_OFFSET_BIAS) && vma->start < a->offset) {
+        return 0;
+    }
+    return !(a->flags & I915_PIN_MAPPABLE) || vma->mappable;
+}
+
+int32_t i915_vma_pin_args(struct drm_i915_gem_object *obj, const struct i915_pin_args *a,
+                          struct i915_vma **out)
+{
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
+    uint64_t align = a->align < I915_GTT_PAGE_SIZE ? I915_GTT_PAGE_SIZE : a->align;
+    uint64_t hi = (a->flags & I915_PIN_MAPPABLE) ? i915->ggtt.mappable_end : i915->ggtt.total;
+    uint64_t size = obj->base.size < a->size ? a->size : obj->base.size;
+    struct vma_place p;
+    struct i915_vma *vma;
+    int32_t err;
+
+    if ((a->flags & I915_PIN_OFFSET_FIXED) &&
+        ((a->offset & (align - 1)) || a->offset > hi || size > hi - a->offset)) {
+        return -EINVAL;
+    }
+    k_memset(&p, 0, sizeof(p));
+    p.flags = a->flags;
+    p.align = align;
+    p.size = a->size;
+    p.offset = (a->flags & (I915_PIN_OFFSET_FIXED | I915_PIN_OFFSET_BIAS)) ? a->offset : 0;
+    do {
+        vma = vma_lookup(obj, 0, 0);
+        if (vma && (obj->userptr.stale || !vma_placed(vma, a, align))) {
+            /* Misplaced, or on the scratch page since a userptr object's
+             * pages changed: undone, unless held. */
+            err = i915_vma_unbind(vma);
+            if (err != 0) {
+                return obj->userptr.stale ? -EAGAIN : -ENOSPC;
+            }
+            vma = 0;
+        }
+        if (vma) {
+            vma->pin_count++;
+            lru_bump(i915, vma);
+            *out = vma;
+            return 0;
+        }
+        err = vma_create(obj, &p, out);
+    } while (err == 1);
+    return err;
 }
 
 void i915_vma_unpin(struct i915_vma *vma)
