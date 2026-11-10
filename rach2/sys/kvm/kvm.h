@@ -14,6 +14,7 @@
 #include "../io/anon.h"
 #include "../proc/wait_queue.h"
 
+struct eventfd;
 struct fd_entry;
 struct kvm_vm;
 struct kvm_vcpu;
@@ -350,6 +351,8 @@ struct kvm_vm {
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
     void *backend;                        /* the backend's */
+    void *gpamap;                         /* gpamap.c's: the maps of the guest's pages into programs */
+    struct kvm_vm *next_vm;               /* kvm.c's list of live VMs */
     uint64_t stat[KVM_VM_STATS];          /* by enum kvm_vm_stat */
     char stats_id[KVM_STATS_NAME_SIZE];   /* "kvm-PID", its maker's */
 };
@@ -565,6 +568,11 @@ void kvm_vm_get(struct kvm_vm *vm);
 /** Drop a reference to `vm`, freeing it, its vCPUs, its slots and the
  * backend's share with the last one. Under the big lock. */
 void kvm_vm_put(struct kvm_vm *vm);
+
+/** The live VM one of whose ioeventfds signals `ev`, the VM that rings a
+ * doorbell of a transport's (vgpu-shm(4)), or NULL. No reference is taken:
+ * the answer holds until the big lock is let go. Under the big lock. */
+struct kvm_vm *kvm_vm_by_eventfd(const struct eventfd *ev);
 
 /** The value KVM_CHECK_EXTENSION gives for `cap`, of /dev/kvm when `vm` is
  * NULL and of the VM `vm` otherwise; 0 for a capability not offered. */
@@ -1071,6 +1079,10 @@ int kvm_iobus_write(struct kvm_vcpu *v);
  * page offset in a vCPU's mapping, KVM_COALESCED_MMIO_PAGE_OFFSET. */
 int32_t kvm_iobus_check_extension(long cap);
 
+/** Whether an ioeventfd of `vm` signals `ev`, for the transport that finds
+ * its VM by the doorbell the VM rings. Under the big lock. */
+int kvm_iobus_has_eventfd(struct kvm_vm *vm, const struct eventfd *ev);
+
 /** Free iobus.c's share of `vm`. */
 void kvm_iobus_free(struct kvm_vm *vm);
 
@@ -1498,5 +1510,50 @@ int kvm_guest_pdptes(struct kvm_vcpu *v, uint64_t cr3, uint64_t pdpte[4]);
  */
 int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index, uint64_t next_rip,
                     int64_t error);
+
+/* gpamap.c: a guest's pages mapped into a program of the host. */
+
+struct kvm_gpamap;
+
+/* A run of guest-physical pages, as a guest's driver reports a buffer of
+ * its own: the first page's address, page-aligned, and the pages. */
+struct kvm_gpa_run {
+    uint64_t gpa;
+    uint64_t pages;
+};
+
+/**
+ * Hold the frames behind `n` runs of `vm`'s guest-physical pages, in the
+ * order the runs give, at most 2^31 - 1 pages in all: each page found
+ * through the slot that holds it in the caller's memory, the VM's maker's,
+ * as a RAM page that memory maps writable (`paging_user_ram_frame`), and
+ * held by a reference. The map is taken back, its frames let go of after
+ * `revoke(owner)` has stopped every use of them, when the caller's memory
+ * behind any of them changes or ends, when a slot over them moves or goes,
+ * and when the VM ends; `kvm_gpamap_frame` then answers 0. Under the big
+ * lock; does not sleep, so that no change can come between the slots'
+ * answer and the frames. 0 with the map in `*out`; -EINVAL for a run that
+ * is empty, not page-aligned or past the guest-physical width, or for too
+ * many pages; -EFAULT for a page in no slot, in a read-only one, not
+ * present or not ordinary RAM, which cannot be shared; -ENOMEM.
+ */
+int kvm_gpamap_new(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n,
+                   void (*revoke)(void *owner), void *owner, struct kvm_gpamap **out);
+
+/** The frame of page `i` of `m`, or 0 past its end or once it is taken
+ * back. */
+uintptr_t kvm_gpamap_frame(const struct kvm_gpamap *m, uint64_t i);
+
+/** Let go of `m`'s frames, if it still holds them, without its `revoke`,
+ * and free it: its owner's call, once nothing uses the frames. NULL is
+ * ignored. Under the big lock. */
+void kvm_gpamap_free(struct kvm_gpamap *m);
+
+/** Take back every map of `vm` with a page in the `npages` frames from
+ * `gfn`, for a slot over them that moves or goes. Under the big lock. */
+void kvm_gpamap_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
+
+/** Take back every map of `vm`, at the VM's end. */
+void kvm_gpamap_vm_end(struct kvm_vm *vm);
 
 #endif /* _KVM_H_ */

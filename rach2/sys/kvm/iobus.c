@@ -375,6 +375,19 @@ int32_t kvm_iobus_check_extension(long cap)
     }
 }
 
+int kvm_iobus_has_eventfd(struct kvm_vm *vm, const struct eventfd *ev)
+{
+    const struct iobus *b = (const struct iobus *)vm->iobus;
+    const struct ioeventfd *p;
+
+    for (p = b ? b->list : NULL; p; p = p->next) {
+        if (p->ev == ev) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void kvm_iobus_free(struct kvm_vm *vm)
 {
     struct iobus *b = (struct iobus *)vm->iobus;

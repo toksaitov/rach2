@@ -1790,6 +1790,24 @@ int paging_frame_is_device(uintptr_t phys)
     return frame >= _frames_number || _frames[frame] >= FRAME_REF_MAX;
 }
 
+uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va)
+{
+    const vma_t *vma = vm_find(&mm->vm, va);
+    pte_t *e = user_pte(mm->dir, va);
+    uintptr_t phys;
+
+    if (!vma || !region_allows(vma, 1) || (vma->prot & (VM_PROT_IO | VM_PROT_GUARD)) || !e ||
+        (*e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (*e & PTE_COW)) {
+        return 0;
+    }
+    phys = PTE_ADDR(*e);
+    if (paging_frame_is_device(phys) ||
+        (vma->type != VM_SHARED && frame_maps(phys / PAGE_SIZE) > 1)) {
+        return 0;
+    }
+    return phys;
+}
+
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pte(dir, va);

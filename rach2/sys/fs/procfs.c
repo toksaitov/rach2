@@ -3147,8 +3147,9 @@ static void procfs_entry_holds(struct procfs_text *t)
 static void procfs_kvm_counts(struct procfs_text *t)
 {
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
-    static const char *const names[KVM_COUNT_TOTAL] = {"kvm_vms ", "kvm_vcpus ", "kvm_slots ",
-                                                       "kvm_tdp_pages ", "kvm_run_mappings "};
+    static const char *const names[KVM_COUNT_TOTAL] = {
+        "kvm_vms ",          "kvm_vcpus ",    "kvm_slots ",        "kvm_tdp_pages ",
+        "kvm_run_mappings ", "kvm_gpa_maps ", "kvm_gpa_map_pages "};
     int i;
 
     for (i = 0; i < KVM_COUNT_TOTAL; i++) {

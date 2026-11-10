@@ -637,6 +637,18 @@ void kvm_iobus_free(struct kvm_vm *vm)
     (void)vm;
 }
 
+int kvm_iobus_has_eventfd(struct kvm_vm *vm, const struct eventfd *ev)
+{
+    (void)vm;
+    (void)ev;
+    return 0;
+}
+
+void kvm_gpamap_vm_end(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
 int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
 {
     (void)v;
