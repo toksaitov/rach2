@@ -1969,15 +1969,26 @@ static const char *procfs_global_fd_path(int origin)
 /**
  * Append the /proc/<pid>/fd/<fd> target of a file or directory descriptor to
  * `t`: the absolute path of a KRFFS node, "/memfd:NAME (deleted)" for a memfd
- * as Linux shows one, the path a node of another type was opened by, and "/"
+ * as Linux shows one, the present path of a node of another type, and "/"
  * for the root directory, a stale descriptor or a path the heap had no room
  * to record. A KRFFS path is rebuilt, in a heap buffer of VFS_PATH_MAX bytes,
  * only from a node still live and reachable, since the node of a stale
  * descriptor, unlinked or relocated, may be on the free list; a heap with no
  * room for the buffer sets `t`'s `nomem`.
+ *
+ * The present path of a node of a mounted type is what Linux's `d_path`
+ * gives: the entry the file was opened by as renames have moved it, or a
+ * directory's path as the type rebuilds it, from the reader's root, with
+ * " (deleted)" once the entry is gone (`exe_file_path`). A type that keeps
+ * neither gives the path the file was opened by. Reading the present path
+ * may sleep; `e` is not read after it.
  */
 static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
 {
+    struct open_file *file = e->ofd;
+    int deleted = 0;
+    char *now = NULL;
+
     if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
         char *path = kmalloc(VFS_PATH_MAX);
 
@@ -1995,8 +2006,15 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
         ap_str(t, "/memfd:");
         ap_str(t, tmpfs_label(e->ofd->vnode));
         ap_str(t, " (deleted)");
-    } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath) {
-        ap_str(t, e->ofd->dirpath);
+    } else if (file && file->vmnt && (file->name || file->vmnt->type->ops->path) &&
+               ((now = exe_file_path(file, &deleted)) != NULL || (deleted && file->dirpath))) {
+        ap_str(t, now ? now : file->dirpath);
+        if (deleted) {
+            ap_str(t, " (deleted)");
+        }
+        kfree(now);
+    } else if (file && file->vmnt && file->dirpath) {
+        ap_str(t, file->dirpath);
     } else {
         ap_ch(t, '/');
     }

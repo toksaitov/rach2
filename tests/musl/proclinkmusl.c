@@ -9,7 +9,9 @@
  * link are the directory and its parent. The directory is then renamed: the
  * names through the descriptor still reach it while its old path names
  * nothing, chdir through the descriptor enters it, and a file opened through
- * it has a /proc link that names the file by its new path. A directory
+ * it has a /proc link that names the file by its new path. An open file
+ * moved to another directory has a link that names its new path, and once
+ * unlinked that path and " (deleted)", as Linux's `d_path` gives. A directory
  * removed while open is still a directory with no names and no links, takes
  * no new name, and `..` climbs from it as the working directory. A child's
  * working directory and root are reached through /proc/PID/cwd and root, and
@@ -29,7 +31,8 @@
  * assertion for each row in order, a setup step joined to the row after it:
  * `fd-directory`, `lookup`, `dots`, `create`, `mkdir`, `rename`, `unlink`,
  * `renamed-lookup`,
- * `renamed-mkdir`, `renamed-chdir`, `renamed-file-link`, `removed-lookup`,
+ * `renamed-mkdir`, `renamed-chdir`, `renamed-file-link`, `moved-file-link`,
+ * `deleted-file-link`, `removed-lookup`,
  * `removed-links`, `removed-create`, `removed-cwd`, `file-notdir`,
  * `pipe-notdir`, `closed-enoent`, `dev-through`, `cwd-root-other`,
  * `cwd-root-self`, `fd-other-root`, `fd-other-same-uid`, `fd-other-eacces`,
@@ -191,6 +194,17 @@ static int through(int d)
     return 0;
 }
 
+/** Whether the /proc link of the descriptor `fd` reads `want`. */
+static int link_is(int fd, const char *want)
+{
+    char a[96], target[256];
+    ssize_t n;
+
+    snprintf(a, sizeof(a), "/proc/self/fd/%d", fd);
+    n = readlink(a, target, sizeof(target));
+    return n == (ssize_t)strlen(want) && memcmp(target, want, (size_t)n) == 0;
+}
+
 /**
  * Rename TOP/d, which `d` is open on, to TOP/d2, and check that the names
  * through `d` reach the directory while its old path names nothing; that
@@ -233,18 +247,22 @@ static int renamed(int d)
         return fail("the link of a file opened through a link");
     }
     report_held();
+    if (!put(TOP "/d2/named", "n") || (f = open(TOP "/d2/named", O_RDONLY)) < 0) {
+        return fail("the file to move");
+    }
+    if (!link_is(f, TOP "/d2/named") || rename(TOP "/d2/named", TOP "/moved") != 0 ||
+        !link_is(f, TOP "/moved")) {
+        close(f);
+        return fail("the link of an open file moved to another directory");
+    }
+    report_held();
+    if (unlink(TOP "/moved") != 0 || !link_is(f, TOP "/moved (deleted)")) {
+        close(f);
+        return fail("the link of an open file unlinked");
+    }
+    close(f);
+    report_held();
     return 0;
-}
-
-/** Whether the /proc link of the descriptor `fd` reads `want`. */
-static int link_is(int fd, const char *want)
-{
-    char a[96], target[256];
-    ssize_t n;
-
-    snprintf(a, sizeof(a), "/proc/self/fd/%d", fd);
-    n = readlink(a, target, sizeof(target));
-    return n == (ssize_t)strlen(want) && memcmp(target, want, (size_t)n) == 0;
 }
 
 /**
@@ -533,6 +551,8 @@ static void plan(void)
                                       "renamed-mkdir",
                                       "renamed-chdir",
                                       "renamed-file-link",
+                                      "moved-file-link",
+                                      "deleted-file-link",
                                       "removed-lookup",
                                       "removed-links",
                                       "removed-create",
