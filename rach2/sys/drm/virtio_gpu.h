@@ -720,6 +720,8 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
  * of shmem pages, or of host memory alone with `host`, one reference. */
 void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t size,
                    int host);
+/** Free `bo`'s frames, giving the transport's memory back first. */
+void vgpu_obj_pages_free(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
 /** The lowest free resource id, now taken, or 0; and its return. */
 uint32_t vgpu_res_id_get(struct virtio_gpu_device *vg);
 void vgpu_res_id_put(struct virtio_gpu_device *vg, uint32_t id);

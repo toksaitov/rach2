@@ -7,34 +7,55 @@
 #include "../mm/usercopy.h"
 
 /** Allocate payload pages and their scatter list before submitting a command.
- * The virtqueue's descriptor count bounds a single chain, including its header
- * and response; larger commands return E2BIG. Process context. */
+ * The pages are one block that the device sees as one segment where the
+ * transport gives more than a page at once (`dma_max`), and a page each
+ * otherwise; either way each page is freed alone. The virtqueue's
+ * descriptor count bounds a single chain, including its header and
+ * response; larger commands return E2BIG. Process context. */
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response)
 {
     uint32_t n, i, left = bytes, off = 0, here;
     struct virtio_sg *sg;
+    struct virtio_dev *vdev = cmd->vg->vdev;
+    uint8_t *block = NULL;
+    uint64_t addr = 0;
 
     n = bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0);
     if (!n) {
         return 0;
     }
-    if (n > (uint32_t)cmd->vq->size - 2) {
+    if (n > 1 && vdev->dma_max / PAGE_SIZE >= n) {
+        block = (uint8_t *)virtio_dma_alloc(vdev, n * PAGE_SIZE, &addr);
+    }
+    if (!block && n > (uint32_t)cmd->vq->size - 2) {
         return -E2BIG;
     }
     cmd->payload = kzalloc(n * sizeof(*cmd->payload));
     sg = kzalloc((n + 2) * sizeof(*sg));
     if (!cmd->payload || !sg) {
         kfree(sg);
+        if (block) {
+            for (i = 0; i < n; i++) {
+                virtio_dma_free(vdev, block + i * PAGE_SIZE, PAGE_SIZE);
+            }
+        }
         return -ENOMEM;
     }
     sg[0] = cmd->sg[0];
     cmd->segments = sg;
-    for (i = 0; i < n; i++) {
-        cmd->payload[i].page = virtio_dma_alloc(cmd->vg->vdev, PAGE_SIZE, &cmd->payload[i].addr);
-        if (!cmd->payload[i].page) {
-            return -ENOMEM;
-        }
+    for (i = 0; block && i < n; i++) {
+        cmd->payload[i].page = block + i * PAGE_SIZE;
+        cmd->payload[i].addr = addr + (uint64_t)i * PAGE_SIZE;
         cmd->npayload++;
+    }
+    for (i = 0; i < n; i++) {
+        if (!block) {
+            cmd->payload[i].page = virtio_dma_alloc(vdev, PAGE_SIZE, &cmd->payload[i].addr);
+            if (!cmd->payload[i].page) {
+                return -ENOMEM;
+            }
+            cmd->npayload++;
+        }
         here = left < PAGE_SIZE ? left : PAGE_SIZE;
         if (!response && copy_from_user(cmd->payload[i].page,
                                         (const void __user *)(uintptr_t)(user + off), here)) {

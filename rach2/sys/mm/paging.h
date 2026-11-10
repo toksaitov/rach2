@@ -403,6 +403,18 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache);
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache);
 
 /**
+ * Map the `count` frames of `frames`, in order and each a page, into one
+ * window of the kernel's MMIO region with the cache bits `cache`, 0 for
+ * write-back, and return its kernel address; 0, with a record, when
+ * `count` is 0 or no free run of the region holds it. The frames need not be
+ * adjacent: this is how a driver reaches a buffer of scattered pages, such
+ * as the shared memory a memfd holds, as one range. The caller keeps its
+ * references to the frames while the window is mapped, and gives the window
+ * to `mmio_unmap` with `count` pages. Under the big kernel lock.
+ */
+uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache);
+
+/**
  * Unmap the window `mmio_map` returned at `va` for `size` bytes, the same
  * size it was given, and give its room back to the region; every processor
  * drops its translations before it next takes the big lock. Nothing for a
