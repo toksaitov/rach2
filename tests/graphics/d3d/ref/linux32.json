@@ -1,0 +1,32 @@
+{
+  "source": "Debian 13 on lavapipe in the virtio-vga profile on the testing PC, Mesa 25.0.7 for both architectures with the root's i386 layer, GE-Proton11-12, 8 CPUs, 16 GiB; the i386 probes under WoW64 and in the default mode, twice",
+  "probe": {
+    "9-wow64": {
+      "exit": 0,
+      "adapter": "AMD Radeon RX 6700 XT driver aticfx32.dll"
+    },
+    "11-wow64": {
+      "exit": 0,
+      "adapter": "llvmpipe (LLVM 19.1.7, 256 bits)"
+    },
+    "12-wow64": {
+      "exit": 0,
+      "adapter": "llvmpipe (LLVM 19.1.7, 256 bits)"
+    },
+    "9-i386": {
+      "exit": 0,
+      "adapter": "AMD Radeon RX 6700 XT driver aticfx32.dll"
+    },
+    "11-i386": {
+      "exit": 0,
+      "adapter": "llvmpipe (LLVM 19.1.7, 256 bits)"
+    },
+    "12-i386": {
+      "exit": 0,
+      "adapter": "llvmpipe (LLVM 19.1.7, 256 bits)"
+    }
+  },
+  "wine": {},
+  "vkd3d": {},
+  "flakes": []
+}
