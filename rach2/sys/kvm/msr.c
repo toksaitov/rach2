@@ -55,15 +55,16 @@
 #define PLATFORM_INFO_CPUID_FAULT (1ull << 31)
 #define MISC_FEATURES_CPUID_FAULT 1ull
 
-/* The value of UCODE_REV a vCPU starts with under
- * KVM_X86_QUIRK_STUFF_FEATURE_MSRS, Linux's. */
-#define UCODE_REV_VAL 0x100000000ull
+/* The values of UCODE_REV a vCPU starts with under
+ * KVM_X86_QUIRK_STUFF_FEATURE_MSRS, Linux's for VMX and for SVM. */
+#define UCODE_REV_VMX 0x100000000ull
+#define UCODE_REV_SVM 0x01000065ull
 
 /* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores, the TSC
  * deadline among them, which the local APIC keeps (vlapic.c), Linux's list
- * of Hyper-V's, which hyperv.c keeps, KVM's own that pvclock.c keeps, and
- * the two of CPUID faulting. TSC_AUX is last, and listed only where the
- * host has RDTSCP. */
+ * of Hyper-V's, which hyperv.c keeps, KVM's own that pvclock.c keeps, the
+ * two of CPUID faulting, and the microcode revision. TSC_AUX is last, and
+ * listed only where the host has RDTSCP. */
 static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_SYSENTER_ESP,
                                       MSR_IA32_SYSENTER_EIP,
@@ -114,6 +115,7 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_KVM_POLL_CONTROL,
                                       MSR_PLATFORM_INFO,
                                       MSR_MISC_FEATURES,
+                                      MSR_IA32_UCODE_REV,
                                       MSR_TSC_AUX};
 
 static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV};
@@ -146,8 +148,13 @@ const uint32_t *kvm_msr_list(int feature, uint32_t *n)
 
 int kvm_msr_feature(uint32_t index, uint64_t *value)
 {
+    uint32_t lo = 0, hi = 0;
+
     if (index == MSR_IA32_UCODE_REV) {
-        *value = UCODE_REV_VAL;
+        /* The host's own revision, as Linux's kvm_get_feature_msr reads;
+         * a processor with VMX or SVM has the MSR. */
+        kcpu_rdmsr(MSR_IA32_UCODE_REV, &lo, &hi);
+        *value = ((uint64_t)hi << 32) | lo;
         return 0;
     }
     return -1;
@@ -238,7 +245,10 @@ void kvm_msr_reset(struct kvm_vcpu *v)
      * kvm_arch_vcpu_create. */
     v->platform_info =
         KVM_QUIRK(v->vm, KVM_X86_QUIRK_STUFF_FEATURE_MSRS) ? PLATFORM_INFO_CPUID_FAULT : 0;
-    v->ucode_rev = KVM_QUIRK(v->vm, KVM_X86_QUIRK_STUFF_FEATURE_MSRS) ? UCODE_REV_VAL : 0;
+    v->ucode_rev = 0;
+    if (KVM_QUIRK(v->vm, KVM_X86_QUIRK_STUFF_FEATURE_MSRS)) {
+        v->ucode_rev = kvm_backend == &kvm_svm ? UCODE_REV_SVM : UCODE_REV_VMX;
+    }
     v->misc_features = 0;
 }
 

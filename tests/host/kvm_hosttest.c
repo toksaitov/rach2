@@ -20,8 +20,9 @@
  * The rows: the structures' sizes and the ioctl numbers against Linux's;
  * /dev/kvm registered as 10:232 when the backend probes; QEMU 10's
  * start-up as its sources order it, from KVM_GET_API_VERSION through the
- * required capabilities, the MSR and feature lists, the supported CPUID
- * taken by doubling, the vCPU and its mapping, KVM_SET_CPUID2, the
+ * required capabilities, the MSR and feature lists, with the host's
+ * microcode revision, the supported CPUID taken by doubling, the vCPU and
+ * its mapping, KVM_SET_CPUID2, the
  * machine-check setup, the full put and get of the registers, to KVM_RUN,
  * where the refusing backend's error comes back; each exit kind through the
  * run page, with port and MMIO reads answered on the next KVM_RUN, a HLT
@@ -480,11 +481,12 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
+/** The model's MSRs: the Haswell's microcode revision 0x28 in
+ * UCODE_REV's high half, and 0x5 for every other. */
 void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 {
-    (void)msr;
-    *lo = 0x5;
-    *hi = 0;
+    *lo = msr == 0x8Bu ? 0 : 0x5;
+    *hi = msr == 0x8Bu ? 0x28 : 0;
 }
 
 /* The fake backend's mode: refuse every entry, or report the exits of
@@ -1068,6 +1070,7 @@ static void startup_caps(int vm)
 static void startup_msr_lists(void)
 {
     uint32_t i, nmsrs;
+    int ucode;
     int32_t r;
 
     buf.list.nmsrs = 0;
@@ -1077,9 +1080,12 @@ static void startup_msr_lists(void)
     r = dev(KVM_GET_MSR_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == nmsrs, "KVM_GET_MSR_INDEX_LIST with room");
     n_put = 0;
+    ucode = 0;
     for (i = 0; i < nmsrs; i++) {
         put_msr(MSR_INDICES[i]);
+        ucode |= MSR_INDICES[i] == 0x8B;
     }
+    CHECK(ucode, "the index list names UCODE_REV, as Linux's emulated_msrs");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == 1 && MSR_INDICES[0] == 0x8B,
@@ -1088,8 +1094,9 @@ static void startup_msr_lists(void)
     MSR_ENTRIES[0].index = 0x8B;
     MSR_ENTRIES[1].index = 0x10A;
     r = dev(KVM_GET_MSRS, (uintptr_t)&buf);
-    CHECK(r == 1 && MSR_ENTRIES[0].data == 0x100000000ull,
-          "KVM_GET_MSRS of /dev/kvm reads feature MSRs up to the first that is not");
+    CHECK(r == 1 && MSR_ENTRIES[0].data == 0x2800000000ull,
+          "KVM_GET_MSRS of /dev/kvm reads feature MSRs up to the first that is not, "
+          "UCODE_REV as the host's");
 }
 
 /** Check the offered CPUID entry `e` against the model's processor. */
@@ -2197,7 +2204,13 @@ static void feature_msr_rows(void)
     CHECK(get_msr(fd, 0xCE, &value) == 1 && value == 0x80000000u,
           "a new vCPU's PLATFORM_INFO offers CPUID faulting");
     CHECK(get_msr(fd, 0x8B, &value) == 1 && value == 0x100000000ull,
-          "and its UCODE_REV is Linux's 0x100000000");
+          "and its UCODE_REV is Linux's 0x100000000 for VMX");
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    kvm_backend = &kvm_svm;
+    kvm_msr_reset(v);
+    kvm_backend = &kvm_vmx;
+    CHECK(get_msr(fd, 0x8B, &value) == 1 && value == 0x01000065ull,
+          "and Linux's 0x01000065 for SVM");
     fdclose(fd);
     fdclose(vm);
 
