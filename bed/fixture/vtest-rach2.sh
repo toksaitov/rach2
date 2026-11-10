@@ -19,14 +19,17 @@
 # under ACCEL: `tcg`, the default, QEMU's emulator, or `kvm`, Rach2's KVM
 # with QEMU's split interrupt controller, the one Rach2's KVM has. QEMU's
 # user network forwards PORT (5555) on Rach2's loopback address to the
-# guest's vtest port. Once the guest reports its server ready on the serial
-# console, the runner starts vtestrelay for one client and draws the triangle
+# guest's vtest port, and QEMU's monitor, QMP, listens on PORT + 1 there.
+# Once the guest reports its server ready on the serial console, the runner
+# asks QMP for the guest's status over TCP with socat, which must answer
+# `running`, then starts vtestrelay for one client and draws the triangle
 # with virpipe through it. It passes when both pictures check and their
 # checksums are equal.
 #
-# The guest's console is read once a second; QEMU's end before the server is
-# ready, or SECONDS without a byte on it (600), fails the run. That bound is
-# on silence, not on the boot's length. Progress goes to standard output as
+# The guest's console is read once a second, and each 60 s its size and last
+# line are printed; QEMU's end before the server is ready, or SECONDS without
+# a byte on it (600), fails the run. That bound is on silence, not on the
+# boot's length. Progress goes to standard output as
 # `vtest-rach2: ACTION` lines, with the triangle's and the relay's lines and
 # the guest's record, and the last line is `vtest-rach2: result: pass: the
 # triangle through the relay equals llvmpipe's, CHECKSUM` or
@@ -134,7 +137,8 @@ qemu-system-x86_64 -nodefaults -no-reboot -display none -machine q35 \
     -drive "file=$work/run.qcow2,if=virtio,format=qcow2" \
     -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$port-:5555" \
     -device virtio-net-pci,netdev=net0 -device virtio-rng-pci -device VGA \
-    -serial "file:$work/console.log" -monitor none 2> "$work/qemu.err" < /dev/null &
+    -serial "file:$work/console.log" -monitor none \
+    -qmp "tcp:127.0.0.1:$((port + 1)),server,wait=off" 2> "$work/qemu.err" < /dev/null &
 qemu=$!
 
 # Read the console until the server is ready, the guest fails, QEMU ends or
@@ -162,8 +166,20 @@ while :; do
     [ "$quiet" -lt "$silence" ] || fail "the console was silent for $silence s"
     sleep 1
     waited=$((waited + 1))
+    if [ $((waited % 60)) -eq 0 ]; then
+        echo "vtest-rach2: boot: $waited s, console $size bytes: $(tr -d '\r' < "$work/console.log" |
+            grep -a . | tail -n 1 | cut -c1-120)"
+    fi
 done
 echo "vtest-rach2: the guest's server is ready after $waited s"
+
+# QEMU reads its monitor's socket with recvmsg; QMP must answer past its
+# greeting.
+qmp=$(printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"query-status"}' |
+    socat -t 5 - "TCP:127.0.0.1:$((port + 1))" 2>&1 | tr -d '\r')
+printf '%s\n' "$qmp" | sed 's/^/vtest-rach2: qmp: /'
+printf '%s\n' "$qmp" | grep -q '"status": *"running"' ||
+    fail "QMP over TCP did not answer query-status with running"
 {
     grep -a 'vtest-guest: version: ' "$work/console.log" | tr -d '\r' |
         sed 's/^.*vtest-guest: version: /guest /'
