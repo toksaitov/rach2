@@ -15,6 +15,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../fpu.h"
+#include "../klog.h"
 #include "../proc/smp.h"
 
 /* ---- the processor's numbers (Intel SDM Vol. 3C, appendices A to C) ---- */
@@ -802,12 +803,22 @@ static uint64_t vmcs_read(uint32_t field)
     return value;
 }
 
-/** VMWRITE `value` into `field`. A failure leaves an invalid field, which
- * the entry then refuses with VM_INSTRUCTION_ERROR, as on Linux, whose
- * vmcs_write reports and goes on. */
+/* The first VMWRITE that failed, which `vmx_exit` reports once, and
+ * whether one did. Only a field the processor lacks or a read-only one
+ * fails, so a failure is a fault of this file. */
+static uint32_t vmwrite_field, vmwrite_error;
+static int vmwrite_failed, vmwrite_told;
+
+/** VMWRITE `value` into `field`. A failure leaves the field as it was and
+ * is kept for `vmx_exit` to report, since this runs with interrupts off;
+ * the run goes on, as Linux's vmwrite_error warns once and goes on. */
 static void vmcs_write(uint32_t field, uint64_t value)
 {
-    (void)vmx_op->vmwrite(field, value);
+    if (vmx_op->vmwrite(field, value) != VMX_OK && !vmwrite_failed) {
+        vmwrite_field = field;
+        vmwrite_error = (uint32_t)vmcs_read(VM_INSTRUCTION_ERROR);
+        vmwrite_failed = 1;
+    }
 }
 
 /** The access rights of the segment `s`, as the VMCS keeps them: unusable
@@ -2165,16 +2176,22 @@ static int exit_reason(struct kvm_vcpu *v)
 }
 
 /**
- * The backend's `exit`, under the big lock with interrupts on: the exit
- * named, and an instruction the kernel stepped under the caller's single
- * step ended as KVM_EXIT_DEBUG with DR6.BS, as Linux's
- * kvm_vcpu_do_singlestep. 0, or -errno to end KVM_RUN.
+ * The backend's `exit`, under the big lock with interrupts on: the first
+ * failed VMWRITE reported, once, the exit named, and an instruction the
+ * kernel stepped under the caller's single step ended as KVM_EXIT_DEBUG
+ * with DR6.BS, as Linux's kvm_vcpu_do_singlestep. 0, or -errno to end
+ * KVM_RUN.
  */
 static int vmx_exit(struct kvm_vcpu *v)
 {
     struct kvm_run_debug *d = &v->exit.debug;
     int r;
 
+    if (vmwrite_failed && !vmwrite_told) {
+        vmwrite_told = 1;
+        klog(KLOG_WARN, "kvm", "vmx: vmwrite failed: field 0x%x error %u", vmwrite_field,
+             vmwrite_error);
+    }
     v->emul.step_trap = 0;
     r = exit_reason(v);
     if (r == 0 && v->emul.step_trap && v->exit.kind == KVM_X_AGAIN) {
