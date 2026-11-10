@@ -42,7 +42,8 @@ hardware: the fake answers as the Lenovo's HD 4400, so the function's
 entries report 8086:0a16, revision 0b, board 17aa:380c and class
 0x030000, and libdrm and Mesa find a Haswell GT2; its rings complete each
 command as it is handed over, without reading batches; its message is a
-real MSI of the edu function; it has no stolen memory; and its aperture is
+real MSI of the edu function; it has no stolen memory and no picture the
+firmware lit, so its eDP connector is disconnected; and its aperture is
 memory the fake fills from each page the GTT maps there and writes back
 when it syncs, detiled through the fence registers as the chip would.
 Its file
@@ -63,12 +64,15 @@ It has a card node and a render node, and the features
 .Dv DRIVER_RENDER ,
 .Dv DRIVER_SYNCOBJ
 and
-.Dv DRIVER_SYNCOBJ_TIMELINE .
-It does not yet set modes, so it has neither
+.Dv DRIVER_SYNCOBJ_TIMELINE ,
+and
 .Dv DRIVER_MODESET
-nor
-.Dv DRIVER_ATOMIC ,
-as Linux's i915 on a device without display.
+and
+.Dv DRIVER_ATOMIC
+once its display is made, as
+.Sx Display
+describes; a device whose display cannot be made has neither, as Linux's
+i915 on a device without display.
 .Pp
 At bind the driver maps the registers, the first 2 MiB of BAR 0,
 uncached; turns on memory decoding and bus mastering; masks, disables and
@@ -435,7 +439,82 @@ one, and to a privileged process the resets of the device.
 and its variants are not yet served and fail with
 .Er EINVAL .
 .Ss Display
-Mode setting is not yet served; see above.
+The device has three CRTCs, pipes A to C, each with a primary plane, a
+sprite and a cursor, Linux's planes for Haswell; a TMDS encoder on DDI A;
+and the eDP connector
+.Ql eDP-1 .
+At bind the driver reads out what the firmware left lit, without a write:
+on the Lenovo pipe A drives the panel through the eDP transcoder at
+.Dq 1366x768 :
+60 76300 1366 1374 1384 1558 768 771 772 816, 18 bits a pixel on one lane
+at 270 MHz.
+It adopts that pipe into the atomic state, on, with that mode, routed to
+the connector and showing the firmware's framebuffer, and logs
+.Dq i915: display: pipe A adopted
+with the mode, the link and the framebuffer.
+The connector is connected while a lit pipe feeds it, with that mode as
+its one mode, and disconnected otherwise.
+.Pp
+A CRTC takes only the mode the firmware left on it: a commit that keeps
+it changes the planes alone, without a mode set, and one with another
+mode, or that lights a pipe the firmware left dark, fails with
+.Er EINVAL .
+Turning a pipe off turns its planes and the panel's backlight off;
+turning it on again restores them.
+.Pp
+The primary plane takes C8, RGB565, XRGB8888, XBGR8888, XRGB2101010,
+XBGR2101010 and XBGR16161616F, the sprite XRGB8888, XBGR8888, the two
+2101010 formats, XRGB16161616F, XBGR16161616F, YUYV, YVYU, UYVY and VYUY,
+each linear or X-tiled
+.Pq Dv I915_FORMAT_MOD_X_TILED ,
+and the cursor ARGB8888 squares of 64, 128 or 256 pixels, linear.
+A commit fails with
+.Er EINVAL
+for C8, which needs a gamma table the CRTCs do not have; a modifier that
+does not match the object's tiling; a stride that is not a multiple of 64
+bytes, or of 512 X-tiled; one past 32 KiB on the primary plane or 16 KiB
+on the sprite; a YUV source that starts or ends on an odd pixel; scaling;
+and a primary plane that does not cover the CRTC.
+Each framebuffer shown is bound in the aperture at a multiple of 256 KiB.
+.Pp
+Vblanks are counted from the pipe's frame counter.
+A page flip's event comes at the vblank that shows the new framebuffer.
+.Dv DRM_MODE_PAGE_FLIP_ASYNC
+flips the primary plane between X-tiled framebuffers of the same format,
+stride and place without waiting for a vblank, and its event comes when
+the plane has taken the new surface.
+.Pp
+The pipe CRC is read through
+.Pa crc/control
+and
+.Pa crc/data ,
+as
+.Xr debugfs 5
+describes, from the sources
+.Ql plane1 ,
+the primary plane,
+.Ql plane2 ,
+the sprite, and
+.Ql pipe ,
+.Ql pf
+and
+.Ql auto ,
+the pipe's output after its panel fitter; on a pipe that feeds the eDP
+transcoder with its fitter off,
+.Ql auto
+is the primary plane and
+.Ql pipe
+and
+.Ql pf
+fail with
+.Er EINVAL .
+The first frame after a source is set is dropped.
+.Pp
+The panel's backlight,
+.Pa intel_backlight ,
+is taken over from the boot's driver, as
+.Xr backlight 4
+describes.
 .Sh FILES
 .Bl -tag -width /dev/dri/renderDM
 .It Pa /dev/dri/cardN

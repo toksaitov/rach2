@@ -50,7 +50,7 @@ saves it at shutdown and writes it back at boot.
 On a laptop whose Intel graphics and chipset are of the Haswell and
 Broadwell generation, the chipset a Lynx Point or Wildcat Point, the
 kernel drives the chipset's pulse-width modulator, which lights the panel,
-as Linux's i915 driver does, without a graphics driver.
+as Linux's i915 driver does, from boot.
 The backlight is
 .Pa intel_backlight ,
 and its levels are the modulator's period, the duty cycle being the level.
@@ -66,6 +66,16 @@ enable, as Linux's
 does, and keeps its level while it is off; otherwise it is off at a level
 of 0.
 On the Lenovo G50-70 the levels run from 0 to 937.
+.Pp
+When the
+.Xr i915 4
+driver binds the graphics device it takes
+.Pa intel_backlight
+over: the directory, its level and
+.Pa bl_power
+stay, and the driver then turns the backlight off while the panel's pipe
+is off and on again with it, as Linux's i915 does.
+When the device goes the boot's driver takes the backlight back.
 .Sh FILES
 .Bl -tag -width /sys/class/backlight/NAME
 .It Pa /sys/class/backlight/NAME
@@ -84,6 +94,13 @@ in place of the last part for a backlight with no switch, or, on an Intel machin
 .Bd -literal -offset indent
 backlight: intel: none: the firmware left the PWM off
 .Ed
+.Pp
+and, once
+.Xr i915 4
+takes it over:
+.Bd -literal -offset indent
+i915: backlight: intel_backlight: levels 0 to 937, at 937, off with the pipe
+.Ed
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EINVAL
@@ -99,4 +116,5 @@ A write by a user other than root.
 .El
 .Sh SEE ALSO
 .Xr console 4 ,
+.Xr i915 4 ,
 .Xr sysfs 5
