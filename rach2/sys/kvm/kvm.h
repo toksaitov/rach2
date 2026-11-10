@@ -455,6 +455,7 @@ struct kvm_emul {
     int step_trap;      /* an instruction was stepped under KVM_GUESTDBG_SINGLESTEP */
     struct kvm_pio pio; /* the port instruction */
     uint64_t out_rip;   /* the linear RIP of an OUT whose RIP is not yet stepped */
+    int fail;           /* EMUL_FAIL's: emulate.c's X_FAIL, or -EFAULT */
 };
 
 /*
@@ -1456,13 +1457,16 @@ int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p);
  * again; and an OUT that was written, in the kernel or by the caller,
  * steps RIP unless the caller moved it. A port instruction that ends
  * here under the caller's single step sets `v->emul.resume` for
- * `kvm_emul_resume` to report the step. 0. */
+ * `kvm_emul_resume` to report the step, and so does a string IN whose
+ * bytes cannot be written to guest memory, for it to report the internal
+ * error or -EFAULT, as `kvm_emul_pio` reports a string OUT's. 0. */
 int kvm_emul_complete(struct kvm_vcpu *v);
 
 /** The exit of the step `v->emul.resume` asked for, into `v->exit`, from
- * the backend's `exit` after an `enter` that entered no guest: the
- * instruction run again, its next MMIO write, or `v->emul.step_trap` set
- * for a port instruction stepped in `kvm_emul_complete`. 0, or -EFAULT. */
+ * the backend's `exit` with no guest entered: the instruction run again,
+ * its next MMIO write, `v->emul.step_trap` set for a port instruction
+ * stepped in `kvm_emul_complete`, or a string IN's failure. 0, or
+ * -EFAULT. */
 int kvm_emul_resume(struct kvm_vcpu *v);
 
 /** Read the four PAE PDPTEs at `cr3` of `v` into `pdpte`, as Linux's
