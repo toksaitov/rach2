@@ -65,7 +65,9 @@ static void irq_restore(uint32_t flags)
  * readable descriptor, so poll(stdout, POLLOUT) never drains serial input,
  * and POLLOUT for any descriptor, as a terminal answers on Linux whatever
  * the descriptor's mode, so that a caller polling a read-only one for output
- * is not left waiting; its write is then EBADF.
+ * is not left waiting; its write is then EBADF. A description of the console
+ * opened before a vhangup(2) answers TTY_HUNG_POLL whatever was asked, as
+ * Linux's hung_up_tty_poll does.
  */
 short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
