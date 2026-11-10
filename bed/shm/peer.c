@@ -1245,12 +1245,14 @@ static void hdr(void *cmd, size_t n, uint32_t type, uint32_t flags, uint32_t ctx
     h->ctx_id = ctx;
 }
 
-/** Require the loopback flush CRC to equal want; return 1, or exit. */
+/** Require the loopback flush CRC to equal want; return 1, or exit. Without
+ * the loopback, print want for a check of the device's display. */
 static uint32_t check_flush_report(struct drv *dr, uint32_t want)
 {
     uint32_t got = 0;
 
     if (dr->report < 0) {
+        printf("peer: flush: sent crc %08x\n", (unsigned)want);
         return 1;
     }
     if (read(dr->report, &got, sizeof(got)) != sizeof(got)) {
@@ -1379,6 +1381,7 @@ static uint8_t *slurp(const char *path, size_t *n)
 struct made {
     uint32_t id, format, width, height, flags;
     uint64_t backing;
+    uint8_t *px; /* its pixels as read back, X bytes 0xff, or 0 */
 };
 
 /** Create and back one recorded resource from data of len bytes, attach it
@@ -1427,21 +1430,24 @@ static void replay_resource(struct drv *dr, const uint8_t *data, uint32_t len, u
     m->height = create.height;
     m->flags = create.flags;
     m->backing = entry.addr;
+    m->px = 0;
 }
 
-/** Return the CRC-32 of an image of w by h pixels with its rows in reverse
- * order, as a display shows a resource whose row 0 is the bottom. */
-static uint32_t crc32_flipped(const uint8_t *px, uint32_t w, uint32_t h)
+/** Return the CRC-32 of the top-left w by h pixels of a read-back image as a
+ * display shows it: its last row at the top when its first row is the
+ * bottom one, as GL draws. */
+static uint32_t shown_crc(const struct made *m, uint32_t w, uint32_t h)
 {
-    size_t row = (size_t)w * 4;
+    size_t row = (size_t)w * 4, stride = (size_t)m->width * 4;
     uint8_t *f = malloc(row * h);
-    uint32_t y, crc;
+    uint32_t y, src, crc;
 
     if (f == NULL) {
-        die("%s", "cannot allocate the flipped readback");
+        die("%s", "cannot allocate the shown image");
     }
     for (y = 0; y < h; y++) {
-        memcpy(f + row * y, px + row * (h - 1 - y), row);
+        src = (m->flags & GPU_RESOURCE_Y_0_TOP) ? y : m->height - 1 - y;
+        memcpy(f + row * y, m->px + stride * src, row);
     }
     crc = crc32(f, row * h);
     free(f);
@@ -1449,14 +1455,14 @@ static uint32_t crc32_flipped(const uint8_t *px, uint32_t w, uint32_t h)
 }
 
 /**
- * Read a replayed B8G8R8X8 resource back from the device into its backing
- * and print its CRC-32, X bytes set to 0xff, and, when every pixel has one
- * colour, the colour, so that a check can compare what the stream drew. The
- * CRC is of the rows as stored; for a resource stored bottom row first it is
- * followed by the CRC of the rows as a display shows them. Other formats are
- * skipped.
+ * Read a replayed B8G8R8X8 resource back from the device into its backing,
+ * keep its pixels in m with X bytes set to 0xff, and print their CRC-32 and,
+ * when every pixel has one colour, the colour, so that a check can compare
+ * what the stream drew. The CRC is of the rows as stored; for a resource
+ * stored bottom row first it is followed by the CRC of the rows as a display
+ * shows them. Other formats are skipped.
  */
-static void readback(struct drv *dr, const struct made *m, uint32_t ctx)
+static void readback(struct drv *dr, struct made *m, uint32_t ctx)
 {
     struct gpu_transfer_3d t;
     struct gpu_hdr response;
@@ -1486,18 +1492,22 @@ static void readback(struct drv *dr, const struct made *m, uint32_t ctx)
     }
     printf("peer: readback: resource 0x%x, %ux%u, crc %08x", (unsigned)m->id, (unsigned)m->width,
            (unsigned)m->height, (unsigned)crc32(px, (size_t)n));
+    m->px = px;
     if ((m->flags & GPU_RESOURCE_Y_0_TOP) == 0) {
-        printf(", shown crc %08x", (unsigned)crc32_flipped(px, m->width, m->height));
+        printf(", shown crc %08x", (unsigned)shown_crc(m, m->width, m->height));
     }
     if (uniform) {
         printf(", every pixel b,g,r %u,%u,%u", px[0], px[1], px[2]);
     }
     printf("\n");
-    free(px);
 }
 
-/** Put a replayed resource on scanout 0 and flush it, fenced, so that the
- * device's display shows it. */
+/**
+ * Put a read-back resource on scanout 0 and flush it, fenced, whole and then
+ * its top-left quarter, and print the CRC-32 that the device's display
+ * should show for each: a display can scan the whole out from the resource's
+ * own buffer, while the quarter it must copy.
+ */
 static void show(struct drv *dr, const struct made *m)
 {
     union {
@@ -1505,22 +1515,28 @@ static void show(struct drv *dr, const struct made *m)
         struct gpu_flush fl;
     } u;
     struct gpu_hdr response;
+    uint32_t i, w, h;
 
-    hdr(&u, sizeof(u.ss), GPU_CMD_SET_SCANOUT, 0, 0);
-    u.ss.r.width = m->width;
-    u.ss.r.height = m->height;
-    u.ss.resource_id = m->id;
-    expect(send_cmd(dr, "show-scanout", &(struct gpu_message){&u, sizeof(u.ss), 0, 0}, &response,
-                    sizeof(response)),
-           GPU_RESP_OK_NODATA, "show-scanout");
-    hdr(&u, sizeof(u.fl), GPU_CMD_RESOURCE_FLUSH, GPU_FLAG_FENCE, 0);
-    u.fl.r.width = m->width;
-    u.fl.r.height = m->height;
-    u.fl.resource_id = m->id;
-    expect(send_cmd(dr, "show-flush", &(struct gpu_message){&u, sizeof(u.fl), 0, 0}, &response,
-                    sizeof(response)),
-           GPU_RESP_OK_NODATA, "show-flush");
-    printf("peer: show: resource 0x%x on scanout 0\n", (unsigned)m->id);
+    for (i = 1; i <= 2; i++) {
+        w = m->width / i;
+        h = m->height / i;
+        hdr(&u, sizeof(u.ss), GPU_CMD_SET_SCANOUT, 0, 0);
+        u.ss.r.width = w;
+        u.ss.r.height = h;
+        u.ss.resource_id = m->id;
+        expect(send_cmd(dr, "show-scanout", &(struct gpu_message){&u, sizeof(u.ss), 0, 0},
+                        &response, sizeof(response)),
+               GPU_RESP_OK_NODATA, "show-scanout");
+        hdr(&u, sizeof(u.fl), GPU_CMD_RESOURCE_FLUSH, GPU_FLAG_FENCE, 0);
+        u.fl.r.width = w;
+        u.fl.r.height = h;
+        u.fl.resource_id = m->id;
+        expect(send_cmd(dr, "show-flush", &(struct gpu_message){&u, sizeof(u.fl), 0, 0}, &response,
+                        sizeof(response)),
+               GPU_RESP_OK_NODATA, "show-flush");
+        printf("peer: show: resource 0x%x, %ux%u, crc %08x\n", (unsigned)m->id, (unsigned)w,
+               (unsigned)h, (unsigned)shown_crc(m, w, h));
+    }
 }
 
 /** Send a context's command of n bytes in u, which the device must take. */
@@ -1636,7 +1652,7 @@ static void replay(struct drv *dr, const char *path)
         readback(dr, &made[i], ctx);
     }
     for (i = 0; i < nmade && dr->show; i++) {
-        if (made[i].format == GPU_FORMAT_B8G8R8X8_UNORM) {
+        if (made[i].px) {
             show(dr, &made[i]);
             break;
         }
@@ -1660,6 +1676,9 @@ static void replay(struct drv *dr, const char *path)
     expect(send_cmd(dr, "ctx-destroy", &(struct gpu_message){&u, sizeof(struct gpu_hdr), 0, 0},
                     &resp, sizeof(struct gpu_hdr)),
            GPU_RESP_OK_NODATA, "ctx-destroy");
+    for (i = 0; i < nmade; i++) {
+        free(made[i].px);
+    }
     dr->brk = mark;
     free(rec);
 }
