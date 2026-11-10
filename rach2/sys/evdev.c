@@ -2100,7 +2100,9 @@ static int32_t keymap_in(uintptr_t arg, int v2, struct keymap_v2 *u, struct evde
  * Give the entry `ke` its key code in the keymap of `dev`, as Linux's
  * input_set_keycode: the new code becomes a key the device has, KEY_RESERVED
  * never, and the old one stops being one unless another entry has it, a
- * press of it held released first. The evdev lock is not held.
+ * press of it held released first: a keyboard's through input.c, so that
+ * its held keys, modifiers, repeat and the console see the release, another
+ * device's straight to its readers. The evdev lock is not held.
  */
 static int32_t keymap_set(struct evdev *dev, const struct evdev_keymap_entry *ke)
 {
@@ -2122,7 +2124,7 @@ static int32_t keymap_set(struct evdev *dev, const struct evdev_keymap_entry *ke
             old != ke->keycode && !dev->keymap.maps(dev->keymap.ctx, old) && bit_on(dev->down, old);
     }
     spin_unlock_irqrestore(&evdev_lock, flags);
-    if (release) {
+    if (release && !((dev->flags & EVDEV_KEYBOARD) && input_keyboard_release(dev, old))) {
         evdev_report(dev, EV_KEY, old, 0);
         evdev_report(dev, EV_SYN, SYN_REPORT, 0);
     }
@@ -2131,7 +2133,13 @@ static int32_t keymap_set(struct evdev *dev, const struct evdev_keymap_entry *ke
         dev->keys[old >> 3] &= (uint8_t)~(1u << (old & 7));
     }
     dev->keys[0] &= (uint8_t)~1u; /* KEY_RESERVED */
+    if (rc == 0 && old != ke->keycode) {
+        change_count++;
+    }
     spin_unlock_irqrestore(&evdev_lock, flags);
+    if (rc == 0 && old != ke->keycode) {
+        wq_wake_all(&change_wq);
+    }
     return rc;
 }
 

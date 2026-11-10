@@ -90,6 +90,17 @@ void input_keyboard_attach_dev(struct input_keyboard *kb, struct evdev *dev);
 void input_keyboard_detach(struct input_keyboard *kb);
 
 /**
+ * Release `keycode` on the keyboard whose event device is `dev`, as a key's
+ * release from the hardware goes: the held keys, the modifiers, the repeat,
+ * the event device and the console all see it. EVIOCSKEYCODE calls it when
+ * a held key's code leaves the keymap, as Linux's input_set_keycode passes
+ * that release to every handler. Returns 1 when the release went out, 0
+ * when no attached keyboard has `dev` or it does not hold the key. Any
+ * context; the evdev lock is not held.
+ */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode);
+
+/**
  * Take one key of `kb`, in interrupt context or from the tick: `keycode` is
  * Linux's key code and `down` nonzero for a press, 0 for a release; `scan`
  * is the code the keyboard sent, which the event device reports as MSC_SCAN.
