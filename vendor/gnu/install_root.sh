@@ -34,7 +34,9 @@
 #   va        the video layer's Debian closure, libva, Intel's i965 VA
 #             driver and vainfo (debian/Readme.md)
 #   games     the games layer's Debian closure, which games/install_games.sh
-#             installs (games/Readme.md)
+#             installs (games/Readme.md), and, when GNU_WESTON is 1, on
+#             x86-64, the rebuilt Weston of weston/ in place of the desktop
+#             closure's
 #   kvm       Debian's QEMU and the tests under /opt/kvm-unit-tests and
 #             /opt/kvm-selftests, which kvm/install_kvm.sh installs on x86-64
 #             (kvm/Readme.md), and /usr/sbin/ivshmemd, the ivshmem server of
@@ -117,6 +119,10 @@ if [ "${GNU_I386:-}" = 1 ]; then
         echo "gnu: install: no i386 layer in $OUT; run make ARCH=x86_64 gnu-i386" >&2
         exit 1
     fi
+fi
+if [ "${GNU_WESTON:-}" = 1 ] && [ ! -d "$OUT/weston" ]; then
+    echo "gnu: install: no $OUT/weston; run make ARCH=x86_64 gnu-weston" >&2
+    exit 1
 fi
 if [ "${GNU_VK_GL_CTS:-}" = 1 ] && [ ! -d "$OUT/vk-gl-cts" ]; then
     echo "gnu: install: no $OUT/vk-gl-cts; run make ARCH=x86_64 gnu-vk-gl-cts" >&2

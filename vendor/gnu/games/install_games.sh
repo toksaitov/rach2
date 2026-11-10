@@ -12,6 +12,8 @@
 # the root's library directories, since nothing resolved the layer's
 # libraries against the root. On x86-64 it adds the Proton launcher and the
 # native games' replays, and on a root with /usr/games puts it on the path.
+# With GNU_WESTON 1 it puts the rebuilt Weston in place of the desktop
+# closure's.
 #
 
 install_debian games
@@ -64,4 +66,27 @@ if [ "$RACH2_ARCH" = x86_64 ]; then
     mkdir -p "$TREE/usr/share/games/rach2"
     cp -R "$DIR/games/replays" "$TREE/usr/share/games/rach2/replays"
     chmod -R u=rwX,go=rX "$TREE/usr/share/games/rach2"
+fi
+
+# The rebuilt Weston (Readme.md, Weston): every file the desktop closure's
+# weston and libweston-14-0 installed goes, so that the weston part, built
+# from the same source package with Rach2's patches, comes in whole.
+if [ "${GNU_WESTON:-}" = 1 ]; then
+    for p in weston libweston-14-0; do
+        list="$OUT/work/debian/desktop/files/$p"
+        if [ ! -f "$list" ]; then
+            echo "gnu: games: refused: the desktop closure has no $p, which the weston part replaces" >&2
+            exit 1
+        fi
+        while read -r path; do
+            f="$TREE/${path#./}"
+            if [ -L "$f" ] || [ -f "$f" ]; then
+                rm "$f"
+            fi
+        done < "$list"
+    done
+    install_part weston
+    needs "the rebuilt weston" "$TREE/usr/bin/weston" lib usr/lib "usr/lib/$GNU_MULTIARCH"
+    needs "the rebuilt libweston" "$TREE/usr/lib/$GNU_MULTIARCH/libweston-14.so.0.0.2" \
+        lib usr/lib "usr/lib/$GNU_MULTIARCH"
 fi
