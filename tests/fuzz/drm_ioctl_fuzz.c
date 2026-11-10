@@ -413,6 +413,11 @@ int32_t virtio_gpu_probe(void)
     return -ENODEV;
 }
 
+int32_t vgem_probe(void)
+{
+    return -ENODEV;
+}
+
 int32_t udmabuf_start(void)
 {
     return 0;
