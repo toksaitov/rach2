@@ -297,12 +297,14 @@ static uint32_t gtt_load(struct chip *c, uint32_t addr)
 }
 
 /** The dwords of the command whose first is `dw`, as the chip parses
- * them: MI commands below 0x10 are one, the others and the 2D and 3D
- * commands carry their length less two. */
+ * them: MI commands below 0x10 are one and the others carry their length
+ * less two in their low six bits, above which MI_FLUSH_DW has the video
+ * ring's MI_INVALIDATE_BSD; the 2D and 3D commands carry theirs in their
+ * low byte. */
 static uint32_t command_dwords(uint32_t dw)
 {
-    if ((dw >> 29) == 0 && ((dw >> 23) & 0x3fu) < 0x10u) {
-        return 1;
+    if ((dw >> 29) == 0) {
+        return MI_OPCODE(dw) < 0x10u ? 1u : MI_LENGTH(dw);
     }
     return (dw & 0xffu) + 2u;
 }
