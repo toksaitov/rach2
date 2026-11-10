@@ -9,7 +9,8 @@
 
 /*
  * A driver of a panel's backlight registers it by name, such as
- * "intel_backlight", at boot; a backlight is never removed. Each is a
+ * "intel_backlight", at boot; a backlight is never removed, but another
+ * driver may take it over (`backlight_rebind`). Each is a
  * directory of /sys/class/backlight with five attribute files, which
  * procfs.c reads and writes through the calls below, the backlight known
  * by its index from 0 in the order of registration.
@@ -60,6 +61,17 @@ struct backlight_ops {
  * long. At boot, before any reader.
  */
 int backlight_register(const char *name, int max, const struct backlight_ops *ops, void *ctx);
+
+/**
+ * Drive the backlight `name` through `ops` and `ctx` from now on, with
+ * `max` its highest level, as a driver does that takes the panel over from
+ * the one that registered it: i915 from the boot's intelbl, and intelbl
+ * again when i915's device goes. The level and bl_power root set are kept,
+ * clamped to `max`, and nothing is written to the hardware. Returns the
+ * backlight's index, or -1 for no backlight of that name or a `max` that is
+ * not positive. Any context; it does not sleep.
+ */
+int backlight_rebind(const char *name, int max, const struct backlight_ops *ops, void *ctx);
 
 /** Probe the drivers of the panels' backlights, which register what they
  * find: `intelbl_init` on a PC. Once, at boot, after PCI and paging. */

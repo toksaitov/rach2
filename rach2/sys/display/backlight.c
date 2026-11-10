@@ -72,6 +72,30 @@ int backlight_register(const char *name, int max, const struct backlight_ops *op
     return i;
 }
 
+int backlight_rebind(const char *name, int max, const struct backlight_ops *ops, void *ctx)
+{
+    struct backlight *b;
+    uint32_t flags;
+    int i, len;
+
+    for (len = 0; name[len] != '\0'; len++) {
+    }
+    i = backlight_find(name, len);
+    if (i < 0 || max <= 0) {
+        return -1;
+    }
+    flags = spin_lock_irqsave(&lock);
+    b = &lights[i];
+    b->ops = ops;
+    b->ctx = ctx;
+    b->max = max;
+    if (b->level > max) {
+        b->level = max;
+    }
+    spin_unlock_irqrestore(&lock, flags);
+    return i;
+}
+
 void backlight_init(void)
 {
     intelbl_init();

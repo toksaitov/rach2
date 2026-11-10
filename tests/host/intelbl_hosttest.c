@@ -2,9 +2,9 @@
  * intelbl_hosttest.c: the Intel PCH backlight's register arithmetic, against
  * a model of the four PWM registers and the panel power sequencer's.
  *
- * intelbl.c is included whole, so that its static attach, get and set are
- * reached; the boot's probe, which maps BAR 0, is left out by
- * RACH2_HOSTTEST. The rows take the PWM as the firmware leaves it: the
+ * intelbl.c is included whole, with its attach, get and set, which i915
+ * also calls (intelbl.h); the boot's probe, which maps BAR 0, is left out
+ * by RACH2_HOSTTEST. The rows take the PWM as the firmware leaves it: the
  * Lenovo G50-70's 0x03A903A9, a period of 937 at full duty; one with the
  * polarity bit; one the firmware left off or without a period, which must
  * be refused untouched; and one the processor's PWM still drives, whose
