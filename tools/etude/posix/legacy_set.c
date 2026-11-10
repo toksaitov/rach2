@@ -4347,12 +4347,14 @@ static int case_paths(struct set *x, struct member *m)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "ARCH=%s", k->arch);
     if (k->scratch)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "TMPDIR=%s", m->work);
-    v = tree_vars(x, m, v);
 #ifdef _WIN32
+    v = tree_vars(x, m, v);
     snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_COLLECTION_ARCH=%s", item_arch(x, k));
     if (fit(m->vars[v++], sizeof(m->vars[0]), "PATH=%s/build/tools/etude/commands;%s", x->tree,
             getenv("PATH") != NULL ? getenv("PATH") : "") != 0)
         return -1;
+#else
+    (void)tree_vars(x, m, v);
 #endif
     return 0;
 }
