@@ -30,6 +30,8 @@
 #             when GNU_IGT is 1, on x86-64
 #   vk-gl-cts VK-GL-CTS 1.4.1.1 and 1.4.7.1 under /opt/vk-gl-cts-VERSION,
 #             when GNU_VK_GL_CTS is 1, on x86-64
+#   va        the video layer's Debian closure, libva, Intel's i965 VA
+#             driver and vainfo (debian/Readme.md)
 #   games     the games layer's Debian closure, which games/install_games.sh
 #             installs (games/Readme.md)
 #   kvm       Debian's QEMU and the tests under /opt/kvm-unit-tests and
@@ -388,6 +390,7 @@ install_debian()
 }
 
 install_debian desktop
+install_debian va
 
 # Debian's /usr/bin/chromium-headless-shell is a shell script that runs the
 # browser as its child, so a signal to the process a caller started reaches

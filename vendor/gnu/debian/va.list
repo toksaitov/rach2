@@ -1,0 +1,7 @@
+# VA-API: libva, its DRM backend, Intel's i965 driver, which decodes MPEG-2,
+# H.264, VC-1 and JPEG on Haswell, and vainfo, which lists what a driver
+# offers. The video layer's own list, installed after the desktop closure.
+libva2=2.22.0-3
+libva-drm2=2.22.0-3
+i965-va-driver=2.4.1+dfsg1-2
+vainfo=2.22.0+ds1-2

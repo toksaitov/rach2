@@ -148,6 +148,26 @@ $(GNU_GAMES_STAMP): $(GNU_GAMES_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" \
 	        GNU_DEBIAN_LISTS="$(GNU_GAMES_LISTS)" ./vendor/gnu/debian/fetch_debs.sh games'
 
+# The video layer (vendor/gnu/debian/Readme.md): libva, Intel's i965 VA
+# driver and vainfo, a Debian closure of its own from the desktop's
+# snapshot, which install_root.sh installs after the desktop's.
+GNU_VA_STAMP = $(GNU_OUT)/va.stamp
+GNU_STEP_STAMPS += $(GNU_VA_STAMP)
+GNU_VA_LISTS = debian/va.list
+GNU_VA_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
+                 vendor/gnu/debian/resolve_debs.py \
+                 $(addprefix vendor/gnu/,$(GNU_VA_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+
+.PHONY: gnu-va
+gnu-va: $(GNU_VA_STAMP)
+
+$(GNU_VA_STAMP): $(GNU_VA_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_ASSET_STEP) -n gnu-va -t $@ $(STEP_INPUTS) \
+	    -o debian/va -o work/debian/va/files -o work/debian/va/closure.txt \
+	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" \
+	        GNU_DEBIAN_LISTS="$(GNU_VA_LISTS)" ./vendor/gnu/debian/fetch_debs.sh va'
+
 # The KVM layer (vendor/gnu/kvm/Readme.md), for x86-64 alone: Debian's QEMU,
 # a closure of its own from the desktop's snapshot, and kvm-unit-tests and
 # Linux's KVM selftests, built with the cross toolchain, in one step.
