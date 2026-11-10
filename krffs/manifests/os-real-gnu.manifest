@@ -145,7 +145,7 @@ file 0600 /etc/shadow krffs/shadow
 # any user. `crontab` is the group crontab(1) runs as, which may write the
 # crontabs' directory; 63 is below the system accounts' 100, and no Debian
 # group has that number.
-text 0644 /etc/group root:x:0:\ntty:x:5:\nsudo:x:27:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\ndesktop:x:1001:\nseat:x:200:desktop\nvideo:x:44:desktop\nrender:x:104:desktop\ninput:x:105:desktop\naudio:x:29:desktop\npulse:x:201:\n
+text 0644 /etc/group root:x:0:\ntty:x:5:\nsudo:x:27:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\ndesktop:x:1001:\nseat:x:200:desktop\nvideo:x:44:desktop,test\nrender:x:104:desktop,test\ninput:x:105:desktop\naudio:x:29:desktop\npulse:x:201:\n
 text 0644 /etc/shells /bin/sh\n/bin/bash\n
 # sudo's rules, Debian's: root and the group sudo may run any command as any
 # user, with a clean environment and on a terminal of its own, and a file in
