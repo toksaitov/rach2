@@ -53,7 +53,8 @@ static const char *program(struct nc_attempt *a, const struct nc_config *c, cons
 {
     if (strstr(name, "..") || *name == '/')
         return NULL;
-    if (!strncmp(name, "native/", 7) || !strncmp(name, "system/", 7))
+    if (!strncmp(name, "native/", 7) || !strncmp(name, "system/", 7) ||
+        !strncmp(name, "graphics/", 9))
         return nc_text(a, "%s/tests/%s", c->tree, name);
     return nc_text(a, "%s/%s/tests/%s", c->tree,
                    !strcmp(c->arch, "x86_64") ? "build/x86_64" : "build", name);

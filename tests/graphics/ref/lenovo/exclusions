@@ -1,0 +1,6 @@
+# exclusions: the differences from Linux on the Lenovo that the owner has
+# approved, which judge.py does not count as worse in the Lenovo's GPU cases
+# (tests/native/gpu.cases). A line is `NAME REASON`: NAME an IGT or piglit
+# result's name, a dEQP case or a WebGL page's URL, as judge.py prints it,
+# and REASON why Rach2 differs and why the difference is accepted. A line
+# is added only with the owner's approval, named in its commit message.

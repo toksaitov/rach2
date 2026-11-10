@@ -191,11 +191,11 @@ static int auxiliary(struct nc_inventory *i, const struct nc_config *conf, int r
 }
 int nc_inventory_read(struct nc_inventory *out, const struct nc_config *conf, int with_roots)
 {
-    static const char *files[] = {"probes.cases", "musl.cases", "rows.cases"};
+    static const char *files[] = {"probes.cases", "musl.cases", "rows.cases", "gpu.cases"};
     char path[4096];
     unsigned n;
     memset(out, 0, sizeof(*out));
-    for (n = 0; n < 3; n++) {
+    for (n = 0; n < sizeof(files) / sizeof(files[0]); n++) {
         snprintf(path, sizeof(path), "%s/%s", conf->inventory, files[n]);
         if (!cases_file(out, path))
             return 0;

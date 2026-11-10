@@ -246,15 +246,16 @@ static int case_line(char *line, struct np_case **cases, size_t *n, const char *
 }
 
 /**
- * Read the cases of probes.cases, musl.cases and rows.cases, in order. A
+ * Read the cases of probes.cases, musl.cases, rows.cases and gpu.cases, in
+ * order. A
  * `#` begins a comment, and a line that ends in `\` continues on the next.
  */
 static int read_cases(const struct np_context *c, struct np_case **cases, size_t *n)
 {
-    static const char *const files[] = {"probes.cases", "musl.cases", "rows.cases"};
+    static const char *const files[] = {"probes.cases", "musl.cases", "rows.cases", "gpu.cases"};
     int bad = 0;
 
-    for (size_t f = 0; !bad && f < 3; f++) {
+    for (size_t f = 0; !bad && f < sizeof(files) / sizeof(files[0]); f++) {
         char path[8192], line[8192];
         struct jbuf pending = {0};
         snprintf(path, sizeof(path), "%s/tests/native/%s", c->tree, files[f]);
@@ -297,9 +298,12 @@ static int read_cases(const struct np_context *c, struct np_case **cases, size_t
 
 /* ---- The tree's inputs. ---- */
 
+/* The tree's path of a case's program or staged file: a script of tests/ for
+ * a name under native/, system/ or graphics/, else a program of the build. */
 static void program_path(const struct np_context *c, const char *name, char path[4096])
 {
-    if (!strncmp(name, "native/", 7) || !strncmp(name, "system/", 7))
+    if (!strncmp(name, "native/", 7) || !strncmp(name, "system/", 7) ||
+        !strncmp(name, "graphics/", 9))
         snprintf(path, 4096, "tests/%s", name);
     else
         snprintf(path, 4096, "%s/tests/%s", c->build, name);
@@ -371,6 +375,7 @@ static int copy_inputs(const struct np_context *c, const char *tree, const struc
                                         "tests/native/probes.cases",
                                         "tests/native/musl.cases",
                                         "tests/native/rows.cases",
+                                        "tests/native/gpu.cases",
                                         "tests/native/maps",
                                         "tests/native/Readme.md"};
 
