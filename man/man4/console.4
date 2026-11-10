@@ -236,6 +236,14 @@ which
 writes on Linux, sets it to N minutes, at most 60, and 0 for never,
 counts the time from then and shows a screen it blanked.
 .Pp
+The screen does not blank, and no backlight changes, while a program draws
+through
+.Pa /fb
+or a DRM master, such as a Wayland compositor, holds the display, as
+Linux leaves a console in graphics mode alone.
+A program that takes the screen shows a blank one first, and the time
+counts again from when the console has the screen back.
+.Pp
 Each blank and its end are recorded in the kernel's log, with their count
 since boot and their cause:
 .Ql console: blanked: 1, after the time without input

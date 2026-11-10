@@ -12,10 +12,11 @@
  * asked of them. The loader's screen is 1024x768.
  *
  * The rows: a device registered is taken and nothing is set on it; a first
- * open takes the screen, /fb and the keyboard from the console; a master
- * that sets its own mode and exits without dropping the role gives them
- * back, the console's buffer at the loader's size on the CRTC and the
- * console drawing there, the keyboard last; DROP_MASTER does the same on
+ * open unblanks the console and takes the screen, /fb and the keyboard from
+ * it; a master that sets its own mode and exits without dropping the role
+ * gives them back, the console's buffer at the loader's size on the CRTC
+ * and the console drawing there, the keyboard last, the blank's countdown
+ * started again first; DROP_MASTER does the same on
  * the same buffer; a master that comes while the console's commit runs
  * keeps the screen; `video=` and a hotplug move the console to a buffer of
  * the size named; a buffer that cannot be mapped when the master leaves is
@@ -91,6 +92,7 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
 
 static int locked, attaches, detaches, forgets, holds, unholds, moves, kd_holds, kd_unholds;
 static int unhold_locked, kd_unhold_after_attach;
+static int unblanks, unblank_before_detach, pokes, poke_before_unhold;
 static struct boot_framebuffer attached;
 static volatile uint8_t *attached_base;
 static struct boot_framebuffer loader;
@@ -205,6 +207,24 @@ void kd_unhold(void)
     CHECK(!locked, "the keyboard is given back outside the console's lock");
     kd_unhold_after_attach = attaches > 0;
     kd_unholds++;
+}
+
+/** Record the console's unblank, and whether it came before the hand-over's
+ * detach. */
+void console_unblank_now(void)
+{
+    CHECK(!locked, "the console is unblanked outside the console's lock");
+    unblank_before_detach = detaches == unblanks;
+    unblanks++;
+}
+
+/** Record a restart of the blank's countdown, and whether it came before
+ * /fb's release, which ends the hold the blank reads. */
+void console_poke(void)
+{
+    CHECK(!locked, "the countdown starts outside the console's lock");
+    poke_before_unhold = unholds == pokes;
+    pokes++;
 }
 
 /* ---- the fake device ---- */
@@ -387,6 +407,8 @@ static void row_master_exits(void)
     CHECK(dev.master == &fa, "the first open is the master");
     CHECK(detaches == 1 && holds == 1 && kd_holds == 1 && con.handed,
           "the screen, /fb and the keyboard go to the master");
+    CHECK(unblanks == 1 && unblank_before_detach,
+          "the console is unblanked before the master has the screen");
     k_memset(&r, 0, sizeof(r));
     r.width = 800;
     r.height = 600;
@@ -425,6 +447,8 @@ static void row_master_exits(void)
           "fbcon draws on the buffer, XRGB8888");
     CHECK(unholds == 1 && unhold_locked, "/fb comes back under the console's lock");
     CHECK(kd_unholds == 1 && kd_unhold_after_attach, "the keyboard comes back last");
+    CHECK(pokes == 1 && poke_before_unhold,
+          "the blank's countdown starts again before /fb comes back");
     CHECK(con.on_buffer, "the console is on its buffer");
 }
 
