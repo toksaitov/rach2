@@ -7,6 +7,19 @@
 
 #include "process.h"
 
+/* The scheduling policies, Linux's numbers. FIFO and RR run by their
+ * real-time priority, above every other thread; OTHER, BATCH and IDLE take
+ * their turns among the ordinary threads, and so does DEADLINE, which has
+ * no class of its own (syscall_proc.c). EXT is defined so that a call about
+ * it answers as a Linux without sched_ext does. */
+#define SCHED_OTHER    0
+#define SCHED_FIFO     1
+#define SCHED_RR       2
+#define SCHED_BATCH    3
+#define SCHED_IDLE     5
+#define SCHED_DEADLINE 6
+#define SCHED_EXT      7
+
 /** Effective real-time priority, including a PI futex's donation. */
 static __inline__ unsigned int sched_priority(const process_t *p)
 {

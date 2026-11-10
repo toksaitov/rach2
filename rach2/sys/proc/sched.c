@@ -346,7 +346,7 @@ static process_t *sched_select(int me, process_t *old)
     struct percpu *cpu = &cpu_table[me];
     if (old != cpu->idle && old->state == PROC_RUNNING && sched_priority(old) != 0 &&
         (!next || sched_priority(old) > sched_priority(next) ||
-         (sched_priority(old) == sched_priority(next) && old->sched_policy != 2 &&
+         (sched_priority(old) == sched_priority(next) && old->sched_policy != SCHED_RR &&
           !old->sched_yielded))) {
         old->sched_yielded = 0;
         return old;

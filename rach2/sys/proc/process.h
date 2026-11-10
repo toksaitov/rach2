@@ -421,6 +421,19 @@ struct process {
     uint8_t sched_yielded;       /* allow an equal FIFO peer at the next selection */
     uint8_t futex_exit_state;    /* 0 live, 1 releasing futexes, 2 released */
     struct futex_pi *pi_blocked; /* PI lock this thread waits for, or NULL */
+    /* SCHED_DEADLINE's runtime, deadline and period in nanoseconds, the
+     * period never 0, and its flags SCHED_FLAG_RECLAIM and
+     * SCHED_FLAG_DL_OVERRUN, as sched_setattr last set them; meaningful
+     * while sched_policy is SCHED_DEADLINE. */
+    uint64_t dl_runtime;
+    uint64_t dl_deadline;
+    uint64_t dl_period;
+    uint32_t dl_flags;
+    /* The slice an ordinary thread asked for in sched_setattr's
+     * sched_runtime, in nanoseconds, 100000 to 100000000, or 0 for the
+     * default one; sched_getattr reports it, and the scheduler, whose slice
+     * is a tick, does not read it. A fork passes it on. */
+    uint32_t sched_slice;
     /* Set once this thread has been through the stop in effect in its
      * process, which a tracer may then have resumed it from; cleared when
      * the process continues. */

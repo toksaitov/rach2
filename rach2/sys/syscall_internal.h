@@ -1047,6 +1047,10 @@ long sys_sched_getscheduler(isr_params_t *params);
 
 long sys_sched_getparam(isr_params_t *params);
 
+long sys_sched_setattr(isr_params_t *params);
+
+long sys_sched_getattr(isr_params_t *params);
+
 long sys_sched_get_priority_max(isr_params_t *params);
 
 long sys_sched_get_priority_min(isr_params_t *params);
