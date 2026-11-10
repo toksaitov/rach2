@@ -191,6 +191,8 @@ bool pci_nth(int nth, pci_device_t *out);
 #define PCI_CAP_ID_MSI          0x05
 #define PCI_CAP_ID_MSIX         0x11
 #define PCI_CAP_ID_PCIE         0x10
+#define PCI_CAP_ID_PM           0x01
+#define PCI_CAP_ID_AF           0x13 /* Advanced Features: a reset of its own */
 #define PCIE_LINK_CONTROL       0x10 /* offset within the PCIe capability */
 #define PCIE_LINK_CTL_ASPM_MASK 0x0003
 
@@ -270,9 +272,30 @@ int pci_msix_hold(const pci_device_t *dev);
  */
 int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector);
 
-/** Disable `dev`'s MSI-X, and give back the remapping entry of the entry
- * `pci_msix_enable` wrote, which is rewritten in the compatibility format. */
+/** Disable `dev`'s MSI-X, and give back the remapping entry of each entry
+ * `pci_msix_enable` or `pci_msix_entry_set` wrote, which is rewritten in the
+ * compatibility format. */
 void pci_msix_disable(const pci_device_t *dev);
+
+/**
+ * Program entry `index` of `dev`'s MSI-X table, which the caller has mapped
+ * at `table`, to send `vector` to this processor, and unmask it; MSI-X must
+ * be enabled (`pci_msix_hold`). While a remapper is in place the entry gets
+ * a remapping entry of its own. 0, or -1 for an index past the table, no
+ * MSI-X capability, or no record or remapping entry to give. For a driver
+ * of several vectors, as VFIO is.
+ */
+int pci_msix_entry_set(const pci_device_t *dev, uintptr_t table, unsigned int index,
+                       uint8_t vector);
+
+/** Mask entry `index` of `dev`'s MSI-X table, which `pci_msix_entry_set`
+ * programmed, and give its remapping entry back; nothing for an entry not
+ * programmed. */
+void pci_msix_entry_clear(const pci_device_t *dev, unsigned int index);
+
+/** Lift `dev`'s MSI-X function mask, which `pci_msix_hold` set, once its
+ * entries are programmed. */
+void pci_msix_unmask(const pci_device_t *dev);
 
 /*
  * An interrupt remapper's way to the messages devices send. `map` takes an
@@ -387,5 +410,70 @@ uintptr_t pci_bar_map(const pci_device_t *dev, int i, uint64_t offset, size_t si
 /** Take away the window `w` maps, if any, and give its room back to the
  * MMIO region; `w` maps nothing after. */
 void pci_bar_unmap(struct pci_window *w);
+
+/*
+ * The owner of each function, so that one driver has it at a time: the
+ * kernel's drivers, recorded as PCI_OWNER_KERNEL when one first turns on a
+ * function's decoding, bus mastering, line or messages through this file,
+ * or a driver that claims it by name, as vfio-pci does. A function is
+ * named by its bus and devfn, device << 3 | function. Called under the big
+ * kernel lock.
+ */
+#define PCI_OWNER_KERNEL "kernel"
+
+/** Record `owner`, a string that outlives the claim, as the function's: 0,
+ * also when `owner` has it already, -EBUSY when another has it, or -ENOSPC
+ * when the table of owners is full. */
+int pci_claim(uint8_t bus, uint8_t devfn, const char *owner);
+
+/** Give back the function `owner` has; nothing when another has it. A
+ * driver that hands its device on, as the GPU's to a VM, calls it with
+ * PCI_OWNER_KERNEL. */
+void pci_unclaim(uint8_t bus, uint8_t devfn, const char *owner);
+
+/** The function's owner, or NULL for none. */
+const char *pci_owner(uint8_t bus, uint8_t devfn);
+
+/*
+ * The function's reset, as Linux's pci_reset_function: the methods it can
+ * be reset by, in Linux's order, the state of its configuration space that
+ * a reset loses, and the reset with that state put back.
+ */
+#define PCI_RESET_NONE   0
+#define PCI_RESET_FLR    1 /* PCI Express's function-level reset */
+#define PCI_RESET_AF_FLR 2 /* the Advanced Features capability's, as the IGD's */
+#define PCI_RESET_PM     3 /* D3hot and back, unless No_Soft_Reset */
+
+/** The method `dev` is reset by: the first of PCI_RESET_FLR, _AF_FLR and
+ * _PM its capabilities offer, or PCI_RESET_NONE. */
+int pci_reset_method(const pci_device_t *dev);
+
+/* What a reset loses: the header's sixteen dwords and the PCI Express
+ * capability's control registers. */
+struct pci_saved_state {
+    uint32_t header[16];
+    uint16_t pcie[4];   /* device and link control, and their second ones */
+    uint8_t pcie_cap;   /* the PCI Express capability's offset, or 0 */
+    uint8_t pcie_count; /* the words of `pcie` saved: 0, 2 or 4 */
+};
+
+/** Read `dev`'s state into `st`. */
+void pci_save_state(const pci_device_t *dev, struct pci_saved_state *st);
+
+/** Write the state `st` back to `dev`. */
+void pci_restore_state(const pci_device_t *dev, const struct pci_saved_state *st);
+
+/* How the reset waits, `ms` milliseconds at least: a process sleeps. */
+typedef void (*pci_sleep_t)(unsigned int ms);
+
+/**
+ * Reset `dev` by its method, with its state saved before and restored
+ * after, its decoding, bus mastering and line off meanwhile, waiting
+ * through `msleep` for the function to answer again, up to 60 s as Linux
+ * does. 0; -ENOTTY for a function with no method; -ETIMEDOUT when it does
+ * not answer; -EIO when it answers with another identity. The caller has
+ * stopped its use of the function: its messages, its line and its DMA.
+ */
+int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep);
 
 #endif /* _PCI_H_ */
