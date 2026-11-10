@@ -332,9 +332,8 @@ int signal_pending(void)
     return sig_pending;
 }
 
-/** The run loop's offer of the processor: one thread here, nothing to
- * switch to. */
-void sched_service_point(void)
+/** The run loop's switch at a slice's end: one thread here, no slice ends. */
+void sched_take_preempt(void)
 {}
 
 void signal_set_blocked(uint64_t mask)
