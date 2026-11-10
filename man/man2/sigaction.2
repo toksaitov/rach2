@@ -373,6 +373,13 @@ A child made by
 inherits the stack, and
 .Xr execve 2
 removes it.
+.Pp
+.Xr execve 2
+gives each caught signal its default action and leaves each ignored one
+ignored, and every action loses its flags, restorer and mask, as on
+Linux, so that
+.Fn rt_sigaction
+then reports them as zero.
 .Ss System call interface
 Musl's
 .Vt sigset_t

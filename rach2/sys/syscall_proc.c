@@ -2156,11 +2156,14 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     exec_ambient(current_proc, s->secure);
     exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
     proc_set_comm(current_proc, s->script[0] ? s->script : s->path);
+    /* Linux's flush_signal_handlers: a caught signal reverts to its
+     * default, an ignored one stays ignored, and each loses its flags,
+     * restorer and mask, which rt_sigaction reports afterwards. */
     for (sig = 1; sig <= KSIG_MAX; sig++) {
-        if (current_proc->sigacts[sig].handler != KSIG_DFL &&
-            current_proc->sigacts[sig].handler != KSIG_IGN) {
-            k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
-        }
+        uintptr_t handler = current_proc->sigacts[sig].handler == KSIG_IGN ? KSIG_IGN : KSIG_DFL;
+
+        k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
+        current_proc->sigacts[sig].handler = handler;
     }
     current_proc->clear_child_tid = 0;
     rseq_exec(current_proc);
