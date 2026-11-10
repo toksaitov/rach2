@@ -1922,6 +1922,8 @@ build/tests/graphics/desktop.py: tests/graphics/desktop.py
 	@mkdir -p $(@D)
 	cp $< $@
 
+# `tests/run webgpu`: Chromium adapter answers on Venus, compared with Debian.
+
 # `tests/run browser`: HTTPS pages, browser sandbox diagnostics, WebGPU,
 # concurrent sound, GPU recovery, and the fixed WebGL and video comparisons.
 BROWSER_TEST_EXT2 = $(IMAGES_DIR)/browser-test.ext2

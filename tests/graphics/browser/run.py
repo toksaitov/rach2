@@ -127,6 +127,11 @@ class Browser:
                         "--autoplay-policy=no-user-gesture-required", "--ignore-gpu-blocklist"]
                 if self.mode == "webgpu":
                     args += ["--enable-unsafe-webgpu", "--use-webgpu-adapter=swiftshader"]
+                elif self.mode.startswith("webgpu-venus"):
+                    args += ["--enable-unsafe-webgpu", "--enable-logging=stderr", "--v=0",
+                             "--vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2"]
+                    if self.mode == "webgpu-venus-native":
+                        args += ["--use-vulkan=native"]
                 args += ["about:blank"]
                 prefs = {}
             else:
@@ -154,7 +159,7 @@ class Browser:
                  "version": subprocess.check_output([args[0], "--version"], text=True).strip(),
                  "certificate": "ephemeral local HTTPS certificate accepted by automation",
                  "environment": {k: v for k, v in os.environ.items() if k.startswith(
-                     ("MOZ_", "LP_", "MESA_", "GRAPHICS_", "WAYLAND_", "XDG_", "PULSE_"))}})
+                     ("MOZ_", "LP_", "MESA_", "GRAPHICS_", "WAYLAND_", "XDG_", "PULSE_", "VK_"))}})
             self.log = (self.out / "browser.log").open("w")
             env = dict(os.environ, MOZ_ENABLE_WAYLAND="1")
             self.child = subprocess.Popen(args, env=env, stdout=self.log, stderr=self.log,
@@ -366,6 +371,28 @@ def webgpu(b, url):
     return result
 
 
+def webgpu_venus(b, url):
+    """Record both adapter requests and count readbacks only on a named Venus adapter."""
+    assert b.name == "chromium"
+    with (b.out / "vulkaninfo.err").open("w") as err:
+        vulkan = subprocess.check_output(["vulkaninfo", "--summary"], text=True, stderr=err)
+    (b.out / "vulkaninfo.out").write_text(vulkan)
+    assert "Virtio-GPU Venus" in vulkan, "the guest has no Venus Vulkan device"
+    b.navigate(url + "/page.html")
+    result = b.script((HERE / "venus.js").read_text())
+    result["platform"] = "wayland"
+    save(b.out / "partial.json", result)
+    save(b.out / "gpu-info.json", b.client.call("SystemInfo.getInfo"))
+    b.navigate("chrome://gpu/")
+    text = """(() => { const read = root => Array.from(root.querySelectorAll('*')).filter(e => e.shadowRoot).map(e => e.shadowRoot.textContent + read(e.shadowRoot)).join('\\n'); return document.body.innerText + read(document); })()"""
+    diagnostic = b.until(lambda: (lambda s: s if "Vulkan backend" in s else None)(b.script(text)))
+    (b.out / "gpu.txt").write_text(diagnostic)
+    if b.mode == "webgpu-venus-native":
+        assert "Virtio-GPU Venus" in diagnostic, "Dawn did not enumerate Venus"
+    print("browser: adapters: " + json.dumps(result, sort_keys=True), flush=True)
+    return result
+
+
 def sound(b, url):
     """Play three tabs together until the loopback reader has its counted samples."""
     result = []
@@ -400,6 +427,8 @@ def main():
                 result = recovery(b, url)
             elif mode == "webgpu":
                 result = webgpu(b, url)
+            elif mode in ("webgpu-venus", "webgpu-venus-native"):
+                result = webgpu_venus(b, url)
             elif mode == "sound":
                 result = sound(b, url)
             else:

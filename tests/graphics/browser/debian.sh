@@ -6,7 +6,9 @@ tree=$(cd "$here/../../.." && pwd)
 [ "$#" -eq 3 ] || { echo 'usage: debian.sh BROWSER CASE OUT' >&2; exit 2; }
 browser=$1 mode=$2 out=$3
 case $browser in chromium|firefox) ;; *) exit 2 ;; esac
-case $mode in pages|sandbox|webgpu|recovery|sound|webgl|video-*) ;; *) exit 2 ;; esac
+case $mode in pages|sandbox|webgpu|webgpu-venus|webgpu-venus-native|recovery|sound|webgl|video-*) ;; *) exit 2 ;; esac
+profile=virtio-vga
+case $mode in webgpu-venus*) profile=venus ;; esac
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
@@ -42,7 +44,7 @@ fi
 ref=$here/../debian-ref/debian-ref.sh
 sh "$ref" prepare -n
 # shellcheck disable=SC2086 # ins contains a validated prepared artifact path
-sh "$ref" run -p virtio-vga -c 4 -m 8192 -g conformance -d -r "$out/machine" \
+sh "$ref" run -p "$profile" -c 4 -m 8192 -g conformance -d -r "$out/machine" \
     -i "$work/browser.tar.gz" $ins -o "$work/result.tar.gz" \
     "cd /tmp && tar -xzf browser.tar.gz && $prep mkdir browser-out &&
      { $command; echo \$? > browser-out/status; };
