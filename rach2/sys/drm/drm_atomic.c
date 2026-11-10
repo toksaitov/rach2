@@ -2144,19 +2144,59 @@ static struct dma_fence *crtc_create_fence(struct drm_crtc *crtc)
     return &f->base;
 }
 
-/** The out-fences of an ATOMIC call, by CRTC index: each fence, held, and
- * where its descriptor goes. */
+/** The out-fences of an ATOMIC call, by CRTC index: each fence, held,
+ * where its descriptor goes, and, once out_fence_setup has run, its sync
+ * file, not yet attached, and the descriptor reserved for it. */
 struct out_fences {
     struct dma_fence *fence[DRM_MAX_CRTCS];
     int32_t __user *ptr[DRM_MAX_CRTCS];
+    struct sync_file *file[DRM_MAX_CRTCS];
+    int32_t fd[DRM_MAX_CRTCS];
 };
+
+/**
+ * Linux's setup_out_fence for CRTC `i` of `out`: reserve the descriptor,
+ * write it where OUT_FENCE_PTR points, and make the sync file, named as
+ * Linux's sync_file_get_name names a file given no name, all before the
+ * commit, so that a commit that succeeds cannot then fail to give it. 0, or
+ * -EMFILE, -EFAULT or -ENOMEM with nothing reserved or made.
+ */
+static int32_t out_fence_setup(struct drm_crtc *crtc, struct out_fences *out, int i)
+{
+    struct dma_fence *f = out->fence[i];
+    char name[32];
+    uint32_t at = 0;
+    int32_t fd = fd_alloc(current_proc->fds);
+
+    if (fd < 0) {
+        return fd;
+    }
+    if (copy_to_user(out->ptr[i], &fd, sizeof(fd)) != 0) {
+        fd_free(current_proc->fds, fd);
+        return -EFAULT;
+    }
+    put_str(name, sizeof(name), &at, crtc->dev->driver->ident.name);
+    put_str(name, sizeof(name), &at, "-");
+    put_str(name, sizeof(name), &at, crtc_fence_timeline(f));
+    put_dec(name, sizeof(name), &at, f->context);
+    put_str(name, sizeof(name), &at, "-");
+    put_dec(name, sizeof(name), &at, f->seqno);
+    out->file[i] = sync_file_new(f, name);
+    if (!out->file[i]) {
+        fd_free(current_proc->fds, fd);
+        return -ENOMEM;
+    }
+    out->fd[i] = fd;
+    return 0;
+}
 
 /**
  * Give each CRTC of the commit its event when the caller asked for events
  * or an out-fence, Linux's prepare_signaling: a reserved FLIP_COMPLETE, and
  * for OUT_FENCE_PTR a new fence of the CRTC that the event signals, kept
- * in `out` too. -EINVAL when no CRTC would send an asked event, -ENOMEM, or
- * the reservation's error.
+ * in `out` too with its descriptor and sync file (out_fence_setup).
+ * -EINVAL when no CRTC would send an asked event, -ENOMEM, or the error of
+ * the reservation or of out_fence_setup.
  */
 static int32_t prepare_signaling(struct drm_atomic_state *state, const struct drm_mode_atomic *arg,
                                  struct drm_file *file, struct out_fences *out)
@@ -2201,6 +2241,10 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
             cs->event->fence = fence;
             out->fence[i] = dma_fence_get(fence);
             out->ptr[i] = cs->out_fence_ptr;
+            rc = out_fence_setup(cs->crtc, out, i);
+            if (rc != 0) {
+                return rc;
+            }
         }
     }
     if (crtcs == 0 && (arg->flags & DRM_MODE_PAGE_FLIP_EVENT)) {
@@ -2210,43 +2254,30 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
 }
 
 /**
- * Give the caller a sync file of each out-fence of a commit that `rc` says
- * succeeded, its descriptor written where OUT_FENCE_PTR points, as Linux's
- * complete_signaling installs them; drop the fences either way. A failed
- * commit leaves the -1 written when the property was set. Returns `rc`, or
- * the error of a sync file that could not be made or written.
+ * Linux's complete_signaling: attach the sync file of each out-fence of a
+ * commit that `rc` says succeeded to its reserved descriptor; for a failed
+ * one, drop the files, free the descriptors and write -1 where
+ * OUT_FENCE_PTR points. Drop the fences either way. Returns `rc`.
  */
-static int32_t complete_signaling(struct drm_crtc **crtcs, struct out_fences *out, int32_t rc)
+static int32_t complete_signaling(struct out_fences *out, int32_t rc)
 {
-    char name[32];
-    uint32_t at;
-    int32_t fd;
+    int32_t none = -1;
     int i;
 
     for (i = 0; i < DRM_MAX_CRTCS; i++) {
-        struct dma_fence *f = out->fence[i];
-
-        if (!f) {
+        if (!out->fence[i]) {
             continue;
         }
         if (rc == 0) {
-            /* Linux's sync_file_get_name of a file given no name. */
-            at = 0;
-            put_str(name, sizeof(name), &at, crtcs[i]->dev->driver->ident.name);
-            put_str(name, sizeof(name), &at, "-");
-            put_str(name, sizeof(name), &at, crtc_fence_timeline(f));
-            put_dec(name, sizeof(name), &at, f->context);
-            put_str(name, sizeof(name), &at, "-");
-            put_dec(name, sizeof(name), &at, f->seqno);
-            fd = sync_file_create(f, name);
-            if (fd < 0) {
-                rc = fd;
-            } else if (copy_to_user(out->ptr[i], &fd, sizeof(fd)) != 0) {
-                fd_free(current_proc->fds, fd);
-                rc = -EFAULT;
+            sync_file_attach(out->fd[i], out->file[i]);
+        } else {
+            if (out->file[i]) {
+                sync_file_drop(out->file[i]);
+                fd_free(current_proc->fds, out->fd[i]);
             }
+            (void)copy_to_user(out->ptr[i], &none, sizeof(none));
         }
-        dma_fence_put(f);
+        dma_fence_put(out->fence[i]);
     }
     return rc;
 }
@@ -2356,7 +2387,7 @@ int32_t drm_mode_atomic_ioctl(struct drm_device *dev, void *data, struct drm_fil
             rc = drm_atomic_commit(state);
         }
     }
-    rc = complete_signaling(dev->mode_config.crtcs, &out, rc);
+    rc = complete_signaling(&out, rc);
     /* A failed commit's events go back unsent with its states. */
     drm_atomic_state_free(state);
     drm_modeset_unlock(dev);

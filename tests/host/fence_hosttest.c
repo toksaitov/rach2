@@ -91,10 +91,12 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     k_memcpy(dst, src, n);
     return 0;
 }
+/* Set: every copy to the user faults, as to a read-only page. */
+static int to_user_faults;
 /** Copy to a real test address. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
-    if ((uintptr_t)dst < 4096)
+    if ((uintptr_t)dst < 4096 || to_user_faults)
         return -EFAULT;
     k_memcpy(dst, src, n);
     return 0;
@@ -116,16 +118,24 @@ fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
     return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
 }
-/** Release the object attached to a model descriptor. */
+/** Clear a model descriptor's slot, reserved or not, without closing its
+ * object, as the kernel's fd_free does. */
 int fd_free(fd_table_t *t, int fd)
+{
+    if (fd < 0 || fd >= 64 || (t->entries[fd].type == FD_TYPE_NONE && !t->entries[fd].ofd))
+        return -1;
+    k_memset(&t->entries[fd], 0, sizeof(t->entries[fd]));
+    return 0;
+}
+/** Close a model descriptor: its object's close, then its slot. */
+static int close_fd(fd_table_t *t, int fd)
 {
     fd_entry_t *e = fd_get(t, fd);
     if (!e)
         return -EBADF;
     if (e->ops && e->ops->close)
         e->ops->close(e);
-    k_memset(e, 0, sizeof(*e));
-    return 0;
+    return fd_free(t, fd);
 }
 /** Count one completion callback. */
 static void counted(struct dma_fence *f, struct dma_fence_cb *cb)
@@ -264,9 +274,9 @@ static void buffer_cases(void)
     data.fd = syncfd;
     data.flags = DMA_BUF_SYNC_READ;
     CHECK(!e->ops->ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&data), "import read fence");
-    fd_free(&table, merge.fence);
-    fd_free(&table, syncfd);
-    fd_free(&table, fd);
+    close_fd(&table, merge.fence);
+    close_fd(&table, syncfd);
+    close_fd(&table, fd);
     dma_buf_put(b);
     dma_buf_put(other);
     dma_fence_put(w);
@@ -303,9 +313,9 @@ static void import_cases(void)
     dma_fence_put(snapshot);
     dma_fence_signal(r);
     CHECK(buf_poll(e, 5, &q) == 5, "write ready only after every producer");
-    fd_free(&table, fa);
-    fd_free(&table, fc);
-    fd_free(&table, fd);
+    close_fd(&table, fa);
+    close_fd(&table, fc);
+    close_fd(&table, fd);
     dma_buf_put(b);
     dma_fence_put(a);
     dma_fence_put(c);
@@ -343,14 +353,65 @@ static void timeline_cases(void)
     CHECK(!dma_fence_status(f), "first increment below point");
     sw_ioctl(&timeline, SW_SYNC_IOC_INC, (uintptr_t)&step);
     CHECK(dma_fence_status(f) == 1, "second increment signals point");
-    fd_free(&table, fd);
+    close_fd(&table, fd);
     dma_fence_put(f);
     data.value = 4;
     sw_ioctl(&timeline, SW_SYNC_IOC_CREATE_FENCE, (uintptr_t)&data);
     f = sync_file_get_fence(data.fence);
     sw_close(&timeline);
     CHECK(dma_fence_status(f) == -ENOENT, "producer close signals error");
-    fd_free(&table, data.fence);
+    close_fd(&table, data.fence);
+    dma_fence_put(f);
+}
+/** Whether only descriptor `fd` is in use. */
+static int only_fd(int fd)
+{
+    int i;
+    for (i = 0; i < 64; i++)
+        if ((slots[i].type != FD_TYPE_NONE) != (i == fd))
+            return 0;
+    return 1;
+}
+/** A sync file whose descriptor cannot be copied out is not made: each
+ * call answers EFAULT and leaves no descriptor, and no sync file or fence
+ * reference, which the leak sanitizer would report at exit. */
+static void copy_out_cases(void)
+{
+    struct dma_fence *f = new_fence(dma_fence_context_alloc(1), 1);
+    struct dma_buf *b = dma_buf_export(4096, &model_ops, NULL, NULL);
+    struct dma_buf_export_sync_file exp;
+    struct sync_merge_data merge;
+    struct sw_sync_create_fence_data data;
+    fd_entry_t timeline;
+    int fd = sync_file_create(f, "one"), bfd;
+    k_memset(&merge, 0, sizeof(merge));
+    merge.fd2 = fd;
+    to_user_faults = 1;
+    CHECK(sync_ioctl(fd_get(&table, fd), SYNC_IOC_MERGE, (uintptr_t)&merge) == -EFAULT &&
+              only_fd(fd),
+          "a merge that cannot be copied out: EFAULT, nothing left");
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(!sw_sync_open(&timeline), "open software timeline");
+    k_memset(&data, 0, sizeof(data));
+    data.value = 1;
+    CHECK(sw_ioctl(&timeline, SW_SYNC_IOC_CREATE_FENCE, (uintptr_t)&data) == -EFAULT && only_fd(fd),
+          "a software fence that cannot be copied out: EFAULT, nothing left");
+    sw_close(&timeline);
+    to_user_faults = 0;
+    CHECK(!dma_resv_add_fence(b->resv, f, 1), "a writer on a buffer");
+    bfd = dma_buf_fd(b, 0);
+    k_memset(&exp, 0, sizeof(exp));
+    exp.flags = DMA_BUF_SYNC_WRITE;
+    to_user_faults = 1;
+    CHECK(fd_get(&table, bfd)
+                  ->ops->ioctl(fd_get(&table, bfd), DMA_BUF_IOCTL_EXPORT_SYNC_FILE,
+                               (uintptr_t)&exp) == -EFAULT,
+          "an export that cannot be copied out: EFAULT");
+    to_user_faults = 0;
+    close_fd(&table, bfd);
+    dma_buf_put(b);
+    CHECK(only_fd(fd), "and nothing left");
+    close_fd(&table, fd);
     dma_fence_put(f);
 }
 /** Run the model cases and fail on any assertion. */
@@ -366,6 +427,7 @@ int main(void)
     buffer_cases();
     import_cases();
     timeline_cases();
+    copy_out_cases();
     for (i = 0; i < 64; i++)
         CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");
     if (!failures)

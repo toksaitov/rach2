@@ -122,16 +122,11 @@ static int32_t sw_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     dma_fence_init(&point->fence, &sw_ops, t->context, data.value);
     k_memcpy(point->timeline, t->name, sizeof(point->timeline));
     data.name[31] = 0;
-    fd = sync_file_create(&point->fence, data.name);
+    fd = sync_file_copy_out(&point->fence, data.name, (void __user *)arg, &data, sizeof(data),
+                            &data.fence);
     if (fd < 0) {
         dma_fence_put(&point->fence);
         return fd;
-    }
-    data.fence = fd;
-    if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
-        fd_free(current_proc->fds, fd);
-        dma_fence_put(&point->fence);
-        return -EFAULT;
     }
     for (link = &t->points;
          *link && (int32_t)((uint32_t)(*link)->fence.seqno - (uint32_t)data.value) <= 0;
