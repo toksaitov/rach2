@@ -51,6 +51,11 @@ Its options are the release (`-v`, 1.4.7.1, the Lenovo's references, or 1.4.1.1,
 
 On Rach2 the `venus` suite, `tests/run venus`, runs the same lists through Venus, a case such as `machine.venus.smoke` or `machine.venus.fraction-3`, and kills the host's render server under it in `machine.venus.device-lost` ([Venus's dEQP](#venuss-deqp)).
 
+[`runners/vkcube.sh`](runners/vkcube.sh) presents vkcube to a Weston of its own on the guest's card, as root, holds it at two frames and reads each back inside the guest; `-i` names the Vulkan ICD file to use alone and `-o` the output. `debian.sh vkcube` runs it in the Debian guest, as the reference was made, and the `vkpresent` suite, `tests/run vkpresent`, on Rach2, as the case `machine.vkpresent.vkcube` ([vkcube presenting](#vkcube-presenting)):
+
+    sh tests/graphics/runners/debian.sh vkcube -p venus -c 8 OUT \
+        -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+
 ## Results
 
 Each Debian run writes a record, to the file `-r` names or to standard error as `debian-ref: record:` lines, one `NAME VALUE` a line: `profile`, `firmware` (`seabios` or `ovmf`), `accelerator`, `cpu` (QEMU's processor), `cpus`, `memory_mib`, `qemu` (its version line), `image` with its SHA-512, `snapshot`, and the guest's environment as `env NAME=VALUE` lines that `graphics_env` prints. A Rach2 case's history records its accelerator, and its QEMU profile, with the display and the CPUs, is in the profile's digest ([etude's Readme](../../tools/etude/Readme.md#the-history-store)).
@@ -81,6 +86,12 @@ The display and GL runners write the same record, without the browser's lines an
     deqp: result: gles2 1.4.7.1 cases 86 of 17165 every 200 jobs 4 pass 85 fail 0 notsupported 1 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
 
 `judge.py deqp` prints each change of status from the reference's as `judge: change: FROM -> TO N`, each worse case and `judge: result: pass` or `fail`.
+
+`vkcube.sh` writes the record, begun as `deqp.sh`'s, then the case, the `icd`, vkcube's version, the `compositor`, Weston's GL `renderer`, the `gpu` vkcube chose and the layer's `timing`. It writes `frames`, a line a held frame, `frame N WxH crc32 0xCRC`; `frame-N.png`, the shot that gave it; `timing`, the layer's line and `rate R`, the presents a second; `gpu`, vkcube's line that names the device; and the logs of Weston, vkcube, the screenshooter and the layer. It prints one line:
+
+    vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.502 s, 119.90 a second
+
+`judge.py vkcube` prints each frame that differs, `judge: rate:` with both rates and their ratio, and `judge: result: pass` or `fail`.
 
 The Debian references are stored in [`ref/debian`](ref/debian/Readme.md), a directory for each display profile, each run's directory with its `record`, `results` and the files above.
 
@@ -207,6 +218,14 @@ The four suites run these on Rach2 with the same `graphics_scenario.c`. An IGT c
 The sample is shared among 4 processes, each given every fourth case, as step 9 ran it. dEQP's own watchdog ends a case after 300 s, the limit step 9's runner set. 1.4.7.1 takes both its limits as options, and the runner sets the per-iteration limit to 300 s too, since a software renderer in a guest can spend more than the default 30 s in one iteration; 1.4.1.1 has no such options and keeps its fixed 300 s a case and 30 s an iteration, and the record's `options` line shows which applied. A process that ends in a case leaves that case `Crash`, or `Timeout` when its watchdog ended it, and a new process runs the cases it had left. A process that ends with cases left and none running has met cases its program does not have; when a new process then runs none of them, twice in a row, or once after a process that ended cleanly, they are `Missing`, which makes the runner exit 1. This is the runner's one use of the clock, and it is dEQP's.
 
 Every case that did not pass, Missing aside, then runs once more, in processes of its own. The first status is the result, as each case ran once in step 9, and a case that passes the second time is named in `flakes` as `rerun`; one that fails again and matches a line of the `-f` file is named as `named`. `judge.py deqp` does not count a named flake as worse. A case is worse when it passes in the reference, Pass or a warning, and does not pass here, NotSupported among the statuses that do not pass, since the system then offers less; when the reference does not support it and it fails here; or when the reference does not have it. It compares only the cases the run has, so a sample compares with a reference of the whole list.
+
+### vkcube presenting
+
+`vkcube.sh` shows a Vulkan program's frames on the display through the whole path a desktop uses: vkcube draws on Venus, Mesa's Wayland swapchain hands each image to Weston as a dma-buf, Weston composites it with its GL renderer on virgl, and the DRM backend flips the result onto virtio-gpu's scanout, which QEMU's egl-headless display takes. It ends any Weston that runs, Rach2's boot session among them, and starts its own on the card with its GL renderer, kiosk-shell, which gives vkcube the whole 1280x800 output, `--debug`, which offers the screenshot protocol, and `--no-config`, so that no guest's `weston.ini` adds to it, as root through libseat's noop backend, the same in both guests. vkcube presents 346 frames in FIFO, its default.
+
+The frames are read inside the guest, since QEMU's screen dump has no surface once the scanout is a dma-buf: `weston-screenshooter` asks Weston for its output, which Weston reads back from its renderer, and [`runners/frame.py`](runners/frame.py) checksums the PNG's pixels as `drmcapture` checksums a scanout. vkcube's picture changes every frame, so a frame is read only while vkcube is held: [`runners/vkhold.c`](runners/vkhold.c), a Vulkan layer that the runner builds with the guest's GCC, since root's `cc` on Rach2 is TinyCC, which makes no shared object, and enables with `VK_INSTANCE_LAYERS` and `VK_ADD_LAYER_PATH`, passes every call down but vkQueuePresentKHR, and after the 300th and the 345th present waits on a FIFO until the runner has read the screen; the shots are repeated until two in a row give one sum. vkcube turns its cube by a fixed angle each frame it draws, never by the clock, so the Nth frame is the same picture in every run, and its sum is the Debian guest's when Venus draws on the same host and Weston composites the same way. The layer declares the few Vulkan types it needs itself, as `drmcapture` declares Linux's, since neither guest has Vulkan's headers.
+
+The layer also times the first 300 presents, from the first call to the 300th return. The rate is the guest's whole presenting path at the pace of FIFO, which QEMU's display sets; it is recorded beside the Debian guest's and not judged ([`ref/venus-wsl`](ref/venus-wsl/Readme.md#results)).
 
 ### Venus's dEQP
 
