@@ -3859,7 +3859,8 @@ struct i915_gpu_error {
 
 /**
  * Capture the GPU's state now, as Linux's i915_gpu_coredump, with the
- * engines of `engine_mask` marked hung and `reason` kept, but no message
+ * engines of `engine_mask` that have an incomplete request on the chip
+ * marked hung and `reason` kept, but no message
  * made and nothing kept by the device. The caller owns the state and
  * frees it with `kfree`.
  *
