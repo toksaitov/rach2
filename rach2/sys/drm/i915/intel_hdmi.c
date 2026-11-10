@@ -243,7 +243,7 @@ static int hdmi_set_edid(struct intel_ddi_port *p)
     struct drm_connector *connector = &p->hdmi_connector;
     struct intel_i2c_bus *bus = intel_gmbus_bus(i915, hdmi->ddc_pin);
     uint32_t len = 0;
-    int32_t err = -EIO;
+    int32_t err;
 
     hdmi_unset_edid(hdmi);
     if (!connector->edid_override && bus) {
