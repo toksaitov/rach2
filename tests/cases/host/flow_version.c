@@ -931,11 +931,11 @@ static int version_real_verbs(struct version *v, const char *target, int rach2)
 static int version_real_native(struct version *v, const char *target)
 {
     char inventory[4096], path[4096];
-    const char *files[] = {"probes.cases", "musl.cases", "rows.cases", "maps"};
+    const char *files[] = {"probes.cases", "musl.cases", "rows.cases", "gpu.cases", "maps"};
     snprintf(inventory, sizeof inventory, "%s/native-inventory", v->f->work);
     if (!fx_mkdir(inventory))
         return 0;
-    for (unsigned i = 0; i < 4; i++) {
+    for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
         snprintf(path, sizeof path, "%s/native-inventory/%s", v->f->work, files[i]);
         if (!fx_text(path, i ? "" : "case fixture.version -- /bin/true\n"))
             return 0;

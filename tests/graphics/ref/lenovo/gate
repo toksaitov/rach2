@@ -1,0 +1,11 @@
+# gate: the speed gate of the Lenovo's GPU cases (tests/native/gpu.cases),
+# which `judge.py gate` reads: no measure may lose more than `loss` percent
+# against Linux on the same Lenovo, Debian 13.7 with the IOMMU's DMA
+# translation off (intel_iommu=off), i915 on stolen memory and 4 KiB pages,
+# the configuration nearest Rach2's (decision E of the graphics plan).
+# A line is `KEY VALUE higher|lower`: Linux's value and which way is better.
+loss 10
+# glmark2 2023.01's default benchmark, fullscreen 1366x768 under Weston 14.0.2
+# on the panel, step 9b of the second discovery run.
+glmark2-gl 1387 higher
+glmark2-es2 1379 higher

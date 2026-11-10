@@ -1,0 +1,231 @@
+# The Lenovo's GPU conformance cases (Readme.md): each runner of
+# tests/graphics on the machine's own HD 4400 and display, judged case by
+# case against Linux's run on the same machine, and the speed gate against
+# Linux with the IOMMU's translation off. A program named graphics/ is a
+# script of tests/graphics, which lenovo.sh runs with the files the case
+# names beside it; tests/graphics/Readme.md's Lenovo section says what each
+# case runs and where its reference came from. Every case runs alone, with
+# the kernel's records kept, the silent ones first and those that take the
+# panel last.
+
+# dEQP-GLES of VK-GL-CTS 1.4.7.1, as root on the render node.
+case gpu/deqp-gles2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/deqp.sh file:tests/graphics/ref/lenovo/deqp/gles2/results.csv.gz \
+    -- graphics/runners/lenovo.sh deqp gles2 1/1 results.csv.gz
+case gpu/deqp-gles3.1 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/deqp.sh file:tests/graphics/ref/lenovo/deqp/gles3/results.csv.gz \
+    -- graphics/runners/lenovo.sh deqp gles3 1/2 results.csv.gz
+case gpu/deqp-gles3.2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/deqp.sh file:tests/graphics/ref/lenovo/deqp/gles3/results.csv.gz \
+    -- graphics/runners/lenovo.sh deqp gles3 2/2 results.csv.gz
+case gpu/deqp-gles31.1 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/deqp.sh file:tests/graphics/ref/lenovo/deqp/gles31/results.csv.gz \
+    -- graphics/runners/lenovo.sh deqp gles31 1/3 results.csv.gz
+case gpu/deqp-gles31.2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/deqp.sh file:tests/graphics/ref/lenovo/deqp/gles31/results.csv.gz \
+    -- graphics/runners/lenovo.sh deqp gles31 2/3 results.csv.gz
+case gpu/deqp-gles31.3 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/deqp.sh file:tests/graphics/ref/lenovo/deqp/gles31/results.csv.gz \
+    -- graphics/runners/lenovo.sh deqp gles31 3/3 results.csv.gz
+
+# piglit's quick profile through GBM, as the desktop's user.
+case gpu/piglit-glsl1 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    -- graphics/runners/lenovo.sh piglit quick-glsl1 piglit-quick.rows.gz
+case gpu/piglit-glsl2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    -- graphics/runners/lenovo.sh piglit quick-glsl2 piglit-quick.rows.gz
+case gpu/piglit-arb1 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    -- graphics/runners/lenovo.sh piglit quick-arb1 piglit-quick.rows.gz
+case gpu/piglit-arb2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    -- graphics/runners/lenovo.sh piglit quick-arb2 piglit-quick.rows.gz
+case gpu/piglit-rest alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    -- graphics/runners/lenovo.sh piglit quick-rest piglit-quick.rows.gz
+
+# IGT's buffer and submission tests, as root.
+case gpu/igt-gem.1 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-gem.list file:tests/graphics/ref/lenovo/expect/igt-gem.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-gem.list gem-1 igt-gem.rows
+case gpu/igt-gem.2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-gem.list file:tests/graphics/ref/lenovo/expect/igt-gem.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-gem.list gem-2 igt-gem.rows
+
+# IGT's display tests, as root, with the desktop's compositor stopped.
+case gpu/igt-kms.1 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-1 igt-kms.rows
+case gpu/igt-kms.2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-2 igt-kms.rows
+case gpu/igt-kms.3 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-3 igt-kms.rows
+case gpu/igt-kms.4 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-4 igt-kms.rows
+case gpu/igt-kms.5 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-5 igt-kms.rows
+case gpu/igt-kms.6 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-6 igt-kms.rows
+case gpu/igt-kms.7 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-7 igt-kms.rows
+case gpu/igt-kms.8 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-8 igt-kms.rows
+case gpu/igt-kms.9 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/igt.sh file:tests/graphics/igt-lenovo-kms.list file:tests/graphics/ref/lenovo/expect/igt-kms.rows \
+    -- graphics/runners/lenovo.sh igt igt-lenovo-kms.list kms-9 igt-kms.rows
+
+# glmark2's scenes validated fullscreen on the desktop's compositor.
+case gpu/glmark2.gl alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/glmark2.sh file:tests/graphics/ref/lenovo/expect/glmark2-gl.validations \
+    -- graphics/runners/lenovo.sh glmark2 gl glmark2-gl.validations
+case gpu/glmark2.es2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/glmark2.sh file:tests/graphics/ref/lenovo/expect/glmark2-es2.validations \
+    -- graphics/runners/lenovo.sh glmark2 es2 glmark2-es2.validations
+
+# The WebGL 2.0.1 suite in chunks of 250 pages, on the desktop's compositor.
+case gpu/webgl-chromium.00 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 0 webgl-chromium.pages
+case gpu/webgl-chromium.01 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 1 webgl-chromium.pages
+case gpu/webgl-chromium.02 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 2 webgl-chromium.pages
+case gpu/webgl-chromium.03 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 3 webgl-chromium.pages
+case gpu/webgl-chromium.04 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 4 webgl-chromium.pages
+case gpu/webgl-chromium.05 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 5 webgl-chromium.pages
+case gpu/webgl-chromium.06 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 6 webgl-chromium.pages
+case gpu/webgl-chromium.07 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 7 webgl-chromium.pages
+case gpu/webgl-chromium.08 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 8 webgl-chromium.pages
+case gpu/webgl-chromium.09 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 9 webgl-chromium.pages
+case gpu/webgl-chromium.10 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 10 webgl-chromium.pages
+case gpu/webgl-chromium.11 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-chromium.pages \
+    -- graphics/runners/lenovo.sh webgl chromium 11 webgl-chromium.pages
+case gpu/webgl-firefox.00 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 0 webgl-firefox.pages
+case gpu/webgl-firefox.01 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 1 webgl-firefox.pages
+case gpu/webgl-firefox.02 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 2 webgl-firefox.pages
+case gpu/webgl-firefox.03 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 3 webgl-firefox.pages
+case gpu/webgl-firefox.04 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 4 webgl-firefox.pages
+case gpu/webgl-firefox.05 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 5 webgl-firefox.pages
+case gpu/webgl-firefox.06 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 6 webgl-firefox.pages
+case gpu/webgl-firefox.07 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 7 webgl-firefox.pages
+case gpu/webgl-firefox.08 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 8 webgl-firefox.pages
+case gpu/webgl-firefox.09 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 9 webgl-firefox.pages
+case gpu/webgl-firefox.10 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 10 webgl-firefox.pages
+case gpu/webgl-firefox.11 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/webgl.sh file:tests/graphics/runners/webgl.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/expect/webgl-firefox.pages \
+    -- graphics/runners/lenovo.sh webgl firefox 11 webgl-firefox.pages
+
+# The speed gate: glmark2's benchmark and the WebGL fill and ALU checks.
+case gpu/gate-glmark2.gl alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/glmark2.sh file:tests/graphics/ref/lenovo/gate \
+    -- graphics/runners/lenovo.sh gate glmark2 gl gate
+case gpu/gate-glmark2.es2 alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/glmark2.sh file:tests/graphics/ref/lenovo/gate \
+    -- graphics/runners/lenovo.sh gate glmark2 es2 gate
+case gpu/gate-probe.chromium alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/probe.sh file:tests/graphics/runners/probe.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/gate \
+    -- graphics/runners/lenovo.sh gate probe chromium gate
+case gpu/gate-probe.firefox alone log \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
+    file:tests/graphics/runners/probe.sh file:tests/graphics/runners/probe.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/gate \
+    -- graphics/runners/lenovo.sh gate probe firefox gate
