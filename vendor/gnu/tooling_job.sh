@@ -164,7 +164,7 @@ build_layer()
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n
     exec make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" GNU_AGENTS="$GNU_AGENTS" \
         DRY_RUN="$DRY_RUN" GNU_LINK="$GNU_LINK" \
-        gnu-ports gnu-native gnu-gdb gnu-js gnu-desktop gnu-proton gnu-webgl gnu-venus gnu-games gnu-agents "$@"
+        gnu-ports gnu-native gnu-gdb gnu-js gnu-desktop gnu-proton gnu-webgl gnu-venus gnu-va gnu-games gnu-agents "$@"
 }
 
 # build_image: as the build's account, make the image as mk/gnu-image.mk's
