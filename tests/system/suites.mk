@@ -1048,7 +1048,7 @@ build/tests/cases/graphics/%.ext2: build/tests/cases/graphics/%.tar
 KVM_GUEST_DIR = build/kvm/guests/debian
 $(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.txt \
                          tests/kvm/guests/debian-init vendor/gnu/debian/fetch_asset.sh \
-                         $(WIFI_MKCPIO) $(SHA256TOOL)
+                         build/tools/wifi/mkcpio $(SHA256TOOL)
 	MKCPIO=$(WIFI_MKCPIO) sh tests/kvm/guests/mkdebian.sh $(KVM_GUEST_DIR)
 $(KVM_GUEST_DIR)/vmlinuz: $(KVM_GUEST_DIR)/initrd
 KVM_FILES = tests/kvm/kvm-boot.sh tests/kvm/corpus.sh tests/kvm/unit-tests.list \
