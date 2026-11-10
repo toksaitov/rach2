@@ -96,7 +96,7 @@ limited()
 {
     { tail -n 2 "$1" |
         grep -E '"type":"result".*"is_error":true|"is_error":true.*"type":"result"|"type":"(error|turn\.failed)"'
-        tail -n 2 "$2"; } 2> /dev/null | grep -o 'hit your [a-z]* limit[^"\\]*' | head -n 1 | grep .
+        tail -n 2 "$2"; } 2> /dev/null | grep -o 'hit your [a-z0-9-]* limit[^"\\]*' | head -n 1 | grep .
 }
 
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
