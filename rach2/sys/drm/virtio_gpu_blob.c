@@ -219,7 +219,7 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
         req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
         req->resource_id = bo->res_id;
         req->offset = g.first;
-        rc = vgpu_cmd_send_wait_len(cmd, answer, VGPU_MAP_ANSWER, &got);
+        rc = vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_ANSWER, &got);
         if (rc == 0 || rc == -ETIMEDOUT) {
             bo->host_visible = 1; /* the device may hold the pages: UNMAP_BLOB at the free */
         }
@@ -280,7 +280,7 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
     req->resource_id = bo->res_id;
     req->offset = bo->hv_offset;
-    rc = vgpu_cmd_send_wait(cmd, &info, sizeof(info));
+    rc = vgpu_cmd_send_wait_map(cmd, &info, sizeof(info), NULL);
     if (rc == 0 && info.hdr.type != VIRTIO_GPU_RESP_OK_MAP_INFO) {
         rc = -EIO;
     }
