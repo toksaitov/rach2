@@ -890,7 +890,8 @@ static int pass_all(struct evdev *dev, uint16_t type, uint16_t code, int32_t val
 /**
  * `evdev_report`, which also says whether the event passed the filters and
  * went out, 1, or was dropped, 0, and in `*grabbed` whether an open held the
- * grab when it went out.
+ * grab when it went out. A SYN_REPORT that ends a packet of no events is
+ * dropped, for the handler as for the opens.
  */
 static int report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value, int *grabbed)
 {
@@ -910,6 +911,9 @@ static int report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
     read_clocks(sec, nsec);
     flags = spin_lock_irqsave(&evdev_lock);
     how = dev->gone ? DROP : accept_event(dev, type, code, &value);
+    if (type == EV_SYN && code == SYN_REPORT && !dev->stamped) {
+        how = DROP; /* an empty packet, which Linux passes to no handler */
+    }
     if (how == DROP) {
         spin_unlock_irqrestore(&evdev_lock, flags);
         return 0;
