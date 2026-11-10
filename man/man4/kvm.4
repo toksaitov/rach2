@@ -306,6 +306,27 @@ with
 .Dv KVM_IOEVENTFD_FLAG_DATAMATCH ,
 adds 1 to the counter and goes no further.
 A string OUT adds 1 for each element.
+.Ss Hypercalls
+A VMCALL, or VMMCALL on AMD, that is not Hyper-V's is one of Linux's KVM
+hypercalls: the number in RAX, the arguments in RBX, RCX, RDX and RSI, and
+the result in RAX.
+.Dv KVM_HC_VAPIC_POLL_IRQ
+and
+.Dv KVM_HC_SCHED_YIELD
+return 0.
+.Dv KVM_HC_KICK_CPU
+wakes the halted vCPU whose APIC id is in RCX.
+.Dv KVM_HC_SEND_IPI ,
+with the local APIC in the kernel, sends the interrupt command in RSI to the
+vCPUs that the bitmap in RBX and RCX names, bit 0 the APIC id in RDX, and
+returns the number that took it.
+.Dv KVM_HC_CLOCK_PAIRING
+returns
+.Er -KVM_EOPNOTSUPP ,
+any other number
+.Er -KVM_ENOSYS ,
+and a call from outside the guest's kernel
+.Er -KVM_EPERM .
 .Ss Hyper-V
 A vCPU whose CPUID, given by
 .Dv KVM_SET_CPUID2 ,

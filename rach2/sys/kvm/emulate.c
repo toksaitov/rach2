@@ -32,10 +32,21 @@
 #define RFLAGS_TF    0x0100ull
 #define RFLAGS_DF    0x0400ull
 #define RFLAGS_OF    0x0800ull
+#define RFLAGS_RF    0x10000ull
 #define RFLAGS_VM    0x20000ull
 #define RFLAGS_ARITH (RFLAGS_CF | RFLAGS_PF | RFLAGS_AF | RFLAGS_ZF | RFLAGS_SF | RFLAGS_OF)
 
 #define DR6_BS 0x4000ull
+
+/* Linux's KVM hypercalls and the errors they return. */
+#define KVM_HC_VAPIC_POLL_IRQ 1u
+#define KVM_HC_KICK_CPU       5u
+#define KVM_HC_CLOCK_PAIRING  9u
+#define KVM_HC_SEND_IPI       10u
+#define KVM_HC_SCHED_YIELD    11u
+#define KVM_EPERM             1
+#define KVM_EOPNOTSUPP        95
+#define KVM_ENOSYS            1000
 
 /* The page-table entry bits the walk reads. */
 #define GPTE_P    0x001ull
@@ -63,12 +74,19 @@
 #define MSR_IA32_PLATFORM_ID     0x017u
 #define MSR_EBL_CR_POWERON       0x02Au
 #define MSR_IA32_FEATURE_CONTROL 0x03Au
+#define MSR_IA32_TSC_ADJUST      0x03Bu
 #define MSR_IA32_UCODE_REV       0x08Bu
+#define MSR_P6_PERFCTR0          0x0C1u
+#define MSR_P6_EVNTSEL0          0x186u
+#define MSR_K7_EVNTSEL0          0xC0010000u
 
 /* IA32_FEATURE_CONTROL as a guest without VMX, SMX or LMCE reads it:
  * locked with nothing enabled, the state Linux's KVM reaches once such a
  * guest's firmware locks it. */
 #define FEATURE_CONTROL_LOCKED 0x1ull
+
+/* CPUID leaf 7's EBX bit for IA32_TSC_ADJUST. */
+#define CPUID_7_EBX_TSC_ADJUST 0x2u
 
 /* XCR0's components, for XSETBV's checks. */
 #define XFEATURE_X87    0x1ull
@@ -125,13 +143,68 @@ void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t
     kvm_vcpu_kick(v, KVM_REQ_EVENT);
 }
 
+uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
+{
+    uint64_t mask = kvm_emul_mode(v) == 64 ? ~0ull : 0xFFFFFFFFull;
+    uint64_t nr = v->regs.rax & mask, a0 = v->regs.rbx & mask, a1 = v->regs.rcx & mask;
+    uint64_t a2 = v->regs.rdx & mask, a3 = v->regs.rsi & mask;
+    struct kvm_lapic_irq irq;
+
+    if (kvm_emul_cpl(v) > 0) {
+        return (uint64_t)-(int64_t)KVM_EPERM;
+    }
+    switch (nr) {
+    case KVM_HC_VAPIC_POLL_IRQ:
+    case KVM_HC_SCHED_YIELD:
+        return 0;
+    case KVM_HC_KICK_CPU:
+        if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            irq.vector = 0;
+            irq.delivery_mode = KVM_APIC_DM_REMRD;
+            irq.dest_mode = 0;
+            irq.level = 0;
+            irq.trig_mode = 0;
+            irq.shorthand = 0;
+            irq.dest_id = (uint32_t)a1;
+            irq.redir_hint = 0;
+            (void)kvm_lapic_deliver(v->vm, NULL, &irq);
+        }
+        return 0;
+    case KVM_HC_CLOCK_PAIRING:
+        return (uint64_t)-(int64_t)KVM_EOPNOTSUPP;
+    case KVM_HC_SEND_IPI:
+        if (v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+            break;
+        }
+        return (uint64_t)kvm_lapic_pv_ipi(v->vm, a0, a1, (uint32_t)a2, a3,
+                                          mask == ~0ull ? 64u : 32u);
+    default:
+        break;
+    }
+    return (uint64_t)-(int64_t)KVM_ENOSYS;
+}
+
+void kvm_exception_rf(struct kvm_vcpu *v)
+{
+    uint32_t nr = v->events.exception.nr;
+
+    /* Every vector but #DB, NMI, #BP, #OF, #DF and #MC is a fault. */
+    if (v->events.exception.pending && nr < 32u && !((1ul << nr) & 0x4011Eul)) {
+        v->regs.rflags |= RFLAGS_RF;
+        v->dirty |= KVM_PART_REGS;
+    }
+}
+
 void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
 {
     uint64_t rip = v->regs.rip + len;
 
     v->regs.rip = kvm_emul_mode(v) == 64 ? rip : (rip & 0xFFFFFFFFull);
     if (v->events.interrupt.shadow) {
+        /* The backend read `irq_allowed` under the shadow this skip ends:
+         * after `sti; hlt` the halted vCPU takes an interrupt at once. */
         v->events.interrupt.shadow = 0;
+        v->irq_allowed = v->if_flag;
         v->dirty |= KVM_PART_EVENTS;
     }
     /* A trap flag set before the instruction raises #DB after it, as the
@@ -570,6 +643,48 @@ int kvm_emul_xsetbv(struct kvm_vcpu *v)
     return 0;
 }
 
+/** Whether `index` is a performance counter or event select of the P6's
+ * two or the K7's four, which a guest without a PMU reads as 0 and writes
+ * to no effect, as Linux's kvm_get_msr_common and kvm_set_msr_common have
+ * them; a guest's kernel clears them at boot whatever its CPUID says. */
+static int perf_msr(uint32_t index)
+{
+    return (index >= MSR_P6_PERFCTR0 && index < MSR_P6_PERFCTR0 + 2u) ||
+           (index >= MSR_P6_EVNTSEL0 && index < MSR_P6_EVNTSEL0 + 2u) ||
+           (index >= MSR_K7_EVNTSEL0 && index < MSR_K7_EVNTSEL0 + 8u);
+}
+
+/**
+ * A guest's write of `value` to IA32_TSC or IA32_TSC_ADJUST, as Linux's
+ * kvm_set_msr_common: a write of the adjustment moves the TSC by what it
+ * changes, and is ignored when the guest's CPUID lacks TSC_ADJUST; a write
+ * of the TSC moves the adjustment by what the TSC moved. 0, or -1 for #GP.
+ */
+static int tsc_write(struct kvm_vcpu *v, uint32_t index, uint64_t value)
+{
+    const struct kvm_cpuid_entry2 *e;
+    uint64_t adjust = 0, before = (uint64_t)v->tsc_offset;
+
+    (void)kvm_msr_get(v, MSR_IA32_TSC_ADJUST, &adjust);
+    if (index == MSR_IA32_TSC_ADJUST) {
+        e = kvm_cpuid_find(v, 7, 0);
+        if (!e || !(e->ebx & CPUID_7_EBX_TSC_ADJUST)) {
+            return 0;
+        }
+        if (kvm_msr_set(v, index, value) != 0) {
+            return -1;
+        }
+        v->tsc_offset = (int64_t)(before + (value - adjust));
+        v->dirty |= KVM_PART_TSC;
+        kvm_hv_clock_changed(v->vm);
+        return 0;
+    }
+    if (kvm_msr_set(v, index, value) != 0) {
+        return -1;
+    }
+    return kvm_msr_set(v, MSR_IA32_TSC_ADJUST, adjust + ((uint64_t)v->tsc_offset - before));
+}
+
 int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
 {
     int r;
@@ -603,6 +718,20 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
         return kvm_msr_feature(index, value) == 0 ? 0 : -1;
     default:
         break;
+    }
+    if (perf_msr(index)) {
+        if (!write) {
+            *value = 0;
+        }
+        return 0;
+    }
+    if (write && (index == MSR_IA32_TSC || index == MSR_IA32_TSC_ADJUST)) {
+        return tsc_write(v, index, *value);
+    }
+    /* A guest writes only 0 to a bank's STATUS, as Linux's set_msr_mce
+     * without AMD's McStatusWrEn, which no guest is given. */
+    if (write && *value != 0 && kvm_msr_mce_status(v, index)) {
+        return -1;
     }
     return write ? kvm_msr_set(v, index, *value) : kvm_msr_get(v, index, value);
 }
