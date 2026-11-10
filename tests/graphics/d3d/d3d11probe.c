@@ -46,7 +46,6 @@ int main(void)
     unsigned char *px;
 
     probe_output();
-    setvbuf(stdout, NULL, _IONBF, 0);
     if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory1, (void **)&f)) ||
         FAILED(IDXGIFactory1_EnumAdapters1(f, 0, &a))) {
         printf("d3d11probe: no DXGI adapter\n");
