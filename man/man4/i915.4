@@ -114,6 +114,13 @@ Each ring's user interrupt is enabled and stays masked except while the
 driver waits for that ring's work, the video enhancement ring's among the
 power management events as on Linux; every other source stays masked.
 A ring that does not start is logged, and the device takes no work.
+Before the rings start the driver writes Linux's workarounds for Haswell
+to the GT and to the render engine, and writes them again after a reset
+that loses them; it logs
+.Dq i915: workarounds: applied
+with their numbers, and
+.Dq i915: workarounds: NAME: lost
+for one the chip did not keep.
 .Pp
 With the rings comes the aliasing PPGTT, as Linux runs it on Haswell: one
 table of the GPU's addresses that every context of every program shares,
