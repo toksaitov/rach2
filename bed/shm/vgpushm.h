@@ -401,15 +401,22 @@ int vgs_check_layout(const struct vgs_layout *l, uint64_t mapped)
 /*
  * Copy n bytes, a multiple of 4, of a volatile block into private memory a
  * 32-bit word at a time, so that no word the other side stores is torn.
+ * Each word is stored as its four little-endian bytes: a store through a
+ * uint32_t pointer into a structure of other types breaks C's aliasing
+ * rule, and an optimizing compiler may then read the structure as unset.
  */
 static void vgs_copy_in(void *dst, volatile const void *src, uint32_t n)
 {
-    uint32_t *d = (uint32_t *)dst;
+    uint8_t *d = (uint8_t *)dst;
     volatile const uint32_t *s = (volatile const uint32_t *)src;
-    uint32_t i;
+    uint32_t i, w;
 
     for (i = 0; i < n / 4; i++) {
-        d[i] = s[i];
+        w = s[i];
+        d[4 * i] = (uint8_t)w;
+        d[4 * i + 1] = (uint8_t)(w >> 8);
+        d[4 * i + 2] = (uint8_t)(w >> 16);
+        d[4 * i + 3] = (uint8_t)(w >> 24);
     }
 }
 
