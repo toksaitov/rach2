@@ -14,6 +14,7 @@ ACPI_C_SRC = sys/acpi/boot.c \
     sys/acpi/ecio.c \
     sys/acpi/ideapad.c \
     sys/acpi/osl.c \
+    sys/acpi/pnp.c \
     sys/acpi/clib.c \
     sys/acpi/mapcache.c \
     sys/acpi/sleep.c \

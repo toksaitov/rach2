@@ -4091,8 +4091,6 @@ void kernel_main(const struct boot_info *boot)
     serial_enable_rx_irq(); /* COM1's bytes taken as they arrive, not at the tick */
     klog(KLOG_DEBUG, "boot", "keyboard: ready");
 
-    platform_mouse_init();
-
     init_syscall();
     klog(KLOG_DEBUG, "boot", "syscall: ready");
 
@@ -4114,6 +4112,9 @@ void kernel_main(const struct boot_info *boot)
     klog(KLOG_DEBUG, "boot", "scheduler: ready");
 
     platform_firmware_start();
+
+    /* After ACPICA, whose PNP IDs choose the touchpad's quirks. */
+    platform_mouse_init();
 
     kstack_overrun_test();
 

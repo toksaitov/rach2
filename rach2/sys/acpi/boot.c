@@ -125,6 +125,7 @@ void acpica_boot(uint64_t rsdp)
     acpi_buttons_start();
     acpi_video_start();
     acpi_ideapad_start();
+    acpi_pnp_i8042();
     status = AcpiUpdateAllGpes();
     if (ACPI_FAILURE(status)) {
         klog(KLOG_WARN, "acpi", "acpica: gpes: %s", AcpiFormatException(status));
