@@ -34,9 +34,12 @@
  * bytes back. Both calls refuse APPEND with NOAPPEND after vector import,
  * except for zero bytes, which return before flags. They refuse a descriptor
  * that is not open with EBADF whatever the flags, and only then a flag they
- * do not take with EOPNOTSUPP. sync_file_range flushes a range of the file,
- * and refuses a descriptor that is not open with EBADF before its flags
- * and /dev/null with ESPIPE.
+ * do not take with EOPNOTSUPP. On an append-only file (chattr +a), which a
+ * root of ext2 run as root lets the probe make, NOAPPEND is EPERM to both
+ * calls and F_SETFL may not change O_APPEND, as Linux 6.12's
+ * kiocb_set_rw_flags and setfl answer. sync_file_range flushes a range of
+ * the file, and refuses a descriptor that is not open with EBADF before its
+ * flags and /dev/null with ESPIPE.
  *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
@@ -48,6 +51,9 @@
  * with `preadv-high-half`, the fifth argument not read, and `i686` with
  * `mem-write-eio`, the write past 32 bits of /proc/self/mem, and
  * `preadv-high-word`, the fifth argument read as the offset's high half.
+ * The branch of the group `flags` is `append-only`, with the rows of an
+ * append-only file, when the probe runs as root on a root that keeps inode
+ * flags, and `none`, with no rows, on any other.
  */
 
 #define _GNU_SOURCE
@@ -57,6 +63,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -144,10 +151,21 @@ static const char *const assertion_id[] = {"make-file",
                                            "append-first-fault",
                                            "append-demand-buffer"};
 
-/** Begin the report, give the branch of `arch`, and plan the assertions. */
+/* chattr's requests and its append-only flag, which musl's headers do not
+ * name: _IOR and _IOW of 'f' with a long, whose argument is an int. */
+#define FS_IOC_GETFLAGS _IOR('f', 1, long)
+#define FS_IOC_SETFLAGS _IOW('f', 2, long)
+#define FS_APPEND_FL    0x20
+
+/* Whether the branch of `flags` is `append-only`, which adds its rows. */
+static int append_only;
+
+/** Begin the report, give the branches of `arch` and `flags`, and plan the
+ * assertions. */
 static void report_start(void)
 {
     unsigned int i;
+    int root = open("/", O_RDONLY | O_DIRECTORY), flags;
 
     report_begin(report_case(environ, "guest.default.preadmusl"));
 #if defined __x86_64__
@@ -155,8 +173,17 @@ static void report_start(void)
 #else
     report_branch("arch", "i686");
 #endif
+    append_only = geteuid() == 0 && root >= 0 && ioctl(root, FS_IOC_GETFLAGS, &flags) == 0;
+    if (root >= 0) {
+        close(root);
+    }
+    report_branch("flags", append_only ? "append-only" : "none");
     for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
         report_plan(assertion_id[i]);
+    }
+    if (append_only) {
+        report_plan("append-only-noappend");
+        report_plan("append-only-setfl");
     }
 }
 
@@ -688,6 +715,78 @@ static int noappend_seal_row(void)
     return 0;
 }
 
+/** Set or clear the append-only flag of the file `fd` is open on, as
+ * `on` says. Return 0, or -1 with errno set. */
+static int set_append_only(int fd, int on)
+{
+    int flags;
+
+    if (ioctl(fd, FS_IOC_GETFLAGS, &flags) != 0) {
+        return -1;
+    }
+    flags = on ? flags | FS_APPEND_FL : flags & ~FS_APPEND_FL;
+    return ioctl(fd, FS_IOC_SETFLAGS, &flags);
+}
+
+/** Check NOAPPEND and F_SETFL on an append-only file, the descriptor `fd`
+ * open on it for reading and writing with O_APPEND and `ro` for reading.
+ * Return a failure message or NULL, reporting each completed row. */
+static const char *append_only_checks(int fd, int ro)
+{
+    struct iovec out = {"Z", 1};
+    char back[8];
+    struct iovec in = {back, sizeof(back)};
+
+    if (!refused(RWV2(SYS_pwritev2, fd, &out, 1, 0LL, RWF_NOAPPEND), EPERM) ||
+        !refused(RWV2(SYS_pwritev2, fd, &out, 1, -1LL, RWF_NOAPPEND), EPERM) ||
+        !refused(RWV2(SYS_preadv2, fd, &in, 1, 0LL, RWF_NOAPPEND), EPERM) ||
+        RWV2(SYS_preadv2, ro, &in, 1, 0LL, RWF_NOAPPEND) != 3 ||
+        RWV2(SYS_pwritev2, fd, &out, 1, 0LL, 0) != 1 || pread(fd, back, sizeof(back), 0) != 4 ||
+        memcmp(back, "abcZ", 4) != 0) {
+        return "NOAPPEND on an append-only file is EPERM to both calls";
+    }
+    report_held();
+    if (!refused(fcntl(fd, F_SETFL, 0), EPERM) || (fcntl(fd, F_GETFL) & O_APPEND) == 0 ||
+        fcntl(fd, F_SETFL, O_APPEND | O_NONBLOCK) != 0 ||
+        (fcntl(fd, F_GETFL) & (O_APPEND | O_NONBLOCK)) != (O_APPEND | O_NONBLOCK) ||
+        !refused(fcntl(ro, F_SETFL, O_APPEND), EPERM) || (fcntl(ro, F_GETFL) & O_APPEND) != 0 ||
+        fcntl(ro, F_SETFL, O_NONBLOCK) != 0) {
+        return "F_SETFL may not change O_APPEND of an append-only file";
+    }
+    report_held();
+    return NULL;
+}
+
+/** Make the file append-only and run `append_only_checks` on it, in the
+ * branch `append-only` alone. Clear the flag and close both descriptors on
+ * every exit, so that main can remove the file. Return 0, or report a
+ * failure and return 1. */
+static int append_only_rows(void)
+{
+    const char *error = "make an append-only file";
+    int fd, ro = -1, marked = 0;
+
+    if (!append_only) {
+        return 0;
+    }
+    fd = open(FILE_PATH, O_RDWR | O_CREAT | O_TRUNC | O_APPEND, 0644);
+    if (fd >= 0 && write(fd, "abc", 3) == 3 && set_append_only(fd, 1) == 0) {
+        marked = 1;
+        ro = open(FILE_PATH, O_RDONLY);
+        error = ro >= 0 ? append_only_checks(fd, ro) : error;
+    }
+    if (marked && set_append_only(fd, 0) != 0 && !error) {
+        error = "clear the append-only flag";
+    }
+    if (ro >= 0) {
+        close(ro);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return error ? fail(error) : 0;
+}
+
 /** Check one kind of append buffer through writev, pwritev and pwritev2.
  * `pages` has one mapped page and an unmapped page after it. Each call must
  * retain its valid prefix, stop at the fault and keep a positioned offset.
@@ -884,7 +983,8 @@ int main(void)
     report_start();
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
         refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0 ||
-        vector_noappend_rows() != 0 || noappend_seal_row() != 0 || append_fault_rows() != 0) {
+        vector_noappend_rows() != 0 || noappend_seal_row() != 0 || append_fault_rows() != 0 ||
+        append_only_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }
