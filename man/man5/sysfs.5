@@ -79,11 +79,18 @@ for the others.
 A link to the bus,
 .Pa ../../../bus/pci .
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/config
-The function's configuration space, read-only, as Linux gives it: 4096
+The function's configuration space, mode 0644: 4096
 bytes when the ECAM window of the MCFG reaches the function's extended
 space, else 256, each dword read as the function answers it at the time
 of the read; to a process without privilege only the first 64, the
 header, since a few devices act on a read of their other registers.
+A privileged caller may open it for writing.
+Writes stop at the end of the function's configuration space and use
+accesses of their own width, so a byte or word write does not rewrite
+adjacent status bits.
+Every read reaches the current registers, including a
+.Xr pread 2
+at a nonzero offset.
 A driver that stands in for another chip may report its identity, which
 then replaces the IDs, revision, class and subsystem IDs of the header
 and of the files above; a reported function with no device behind it has

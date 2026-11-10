@@ -12,7 +12,7 @@ The machine has `intel-iommu,intremap=on,caching-mode=on`, a `virtio-net-pci,dis
 
 ## Interfaces
 
-`edu.c` uses Type1v2 VFIO and an eventfd. Its DMA control copies a sentinel into EDU and back, then unmaps the IOVA and requires a DMA fault without a change to the sentinel. Its interrupt control requires a delivered remapped MSI, then writes the real MSI configuration through x86's PCI configuration ports to send either an out-of-range remapping index or a compatibility-format message. Each must raise `iommu_irq_faults` without signalling the eventfd. The real MSI address is restored before VFIO releases the device.
+`edu.c` uses Type1v2 VFIO and an eventfd. Its DMA control copies a sentinel into EDU and back, then unmaps the IOVA and requires a DMA fault without a change to the sentinel. Its interrupt control requires a delivered remapped MSI, then writes the real MSI configuration through the privileged `/sys/bus/pci/devices/BDF/config` file to send either an out-of-range remapping index or a compatibility-format message. Each must raise `iommu_irq_faults` without signalling the eventfd. The real MSI address is restored before VFIO releases the device.
 
 The counters are the kernel's `/proc/stat` records, described in [vfio](../../rach2/sys/vfio/Readme.md#interfaces) and [VT-d](../../rach2/sys/arch/x86/iommu/Readme.md#use). The EDU register offsets and DMA commands follow [QEMU's EDU specification](https://www.qemu.org/docs/master/specs/edu.html). No elapsed time decides a result.
 

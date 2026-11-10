@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
-#include <sys/io.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -15,8 +14,8 @@
 #include "../../rach2/sys/vfio/vfio_abi.h"
 
 struct device {
-    int container, group, fd, event;
-    unsigned key, cap;
+    int container, group, fd, event, config;
+    unsigned cap;
     uint32_t msi[3];
     volatile uint32_t *bar;
     unsigned char *guard;
@@ -45,15 +44,22 @@ static unsigned long counter(const char *name)
 /** Read the real PCI configuration dword, bypassing VFIO's MSI shadow. */
 static uint32_t config_read(struct device *d, unsigned at)
 {
-    outl(0x80000000u | d->key << 8 | (at & ~3u), 0xcf8);
-    return inl(0xcfc);
+    uint32_t value = 0;
+
+    if (pread(d->config, &value, sizeof(value), at) != sizeof(value)) {
+        fprintf(stderr, "assign-edu: fail: raw configuration read: errno %d\n", errno);
+        exit(1);
+    }
+    return value;
 }
 
 /** Write the real PCI configuration dword for a deliberately forged MSI. */
 static void config_write(struct device *d, unsigned at, uint32_t value)
 {
-    outl(0x80000000u | d->key << 8 | (at & ~3u), 0xcf8);
-    outl(value, 0xcfc);
+    if (pwrite(d->config, &value, sizeof(value), at) != sizeof(value)) {
+        fprintf(stderr, "assign-edu: fail: raw configuration write: errno %d\n", errno);
+        exit(1);
+    }
 }
 
 /** Restore the real MSI before VFIO tears down its interrupt, then close. */
@@ -70,6 +76,8 @@ static void close_device(struct device *d)
         close(d->fd);
     if (d->event >= 0)
         close(d->event);
+    if (d->config >= 0)
+        close(d->config);
     if (d->group >= 0)
         close(d->group);
     if (d->container >= 0)
@@ -95,7 +103,10 @@ static int open_device(struct device *d, const char *bdf)
 
     if (sscanf(bdf, "0000:%x:%x.%x", &bus, &slot, &fn) != 3)
         return error("device name");
-    d->key = bus << 8 | slot << 3 | fn;
+    snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/config", bdf);
+    d->config = open(path, O_RDWR);
+    if (d->config < 0)
+        return error("raw configuration open");
     snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/iommu_group", bdf);
     n = readlink(path, link, sizeof(link) - 1);
     if (n < 0)
@@ -196,8 +207,8 @@ static int irq_fault(struct device *d, int compatibility)
     irq->index = VFIO_PCI_MSI_IRQ_INDEX;
     irq->count = 1;
     memcpy(request + sizeof(*irq), &d->event, sizeof(int32_t));
-    if (d->event < 0 || ioctl(d->fd, VFIO_DEVICE_SET_IRQS, irq) < 0 || iopl(3) < 0)
-        return error("MSI eventfd or raw configuration access");
+    if (d->event < 0 || ioctl(d->fd, VFIO_DEVICE_SET_IRQS, irq) < 0)
+        return error("MSI eventfd");
     cap = config_read(d, 0x34) & 0xff;
     for (i = 0; i < 48 && cap >= 0x40; i++) {
         uint32_t head = config_read(d, cap);
@@ -245,7 +256,7 @@ int main(int argc, char **argv)
 
     setvbuf(stdout, NULL, _IONBF, 0);
     memset(&d, 0, sizeof(d));
-    d.container = d.group = d.fd = d.event = -1;
+    d.container = d.group = d.fd = d.event = d.config = -1;
     d.bar = MAP_FAILED;
     d.guard = MAP_FAILED;
     if (argc != 3)

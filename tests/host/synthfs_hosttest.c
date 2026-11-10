@@ -686,6 +686,7 @@ static void sys_later(void)
               VNODE_SYS_FILE &&
           vp.procfile == SYSFS_PCI_SUBSYSTEM_DEVICE);
     CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/class/x", &vp) == VNODE_ENOTDIR);
+    CHECK(sysfs_attr_writable(SYSFS_PCI_DEVICE, SYSFS_PCI_CONFIG));
     CHECK(sysfs_attr_writable(SYSFS_PCI_DEVICE, SYSFS_PCI_UEVENT) &&
           sysfs_attr_writable(SYSFS_USB_DEVICE, 0) &&
           !sysfs_attr_writable(SYSFS_PCI_DEVICE, SYSFS_PCI_VENDOR));

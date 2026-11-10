@@ -6195,6 +6195,138 @@ static void procfs_close(fd_entry_t *e)
 static const struct file_ops procfs_file_ops = {
     procfs_read, procfs_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
+/** Read the PCI config file afresh at every offset, including pread. */
+static int32_t procfs_pciconfig_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    struct procfs_text t;
+    uint64_t off = e->ofd->offset;
+    uint32_t n = 0;
+    int rc;
+
+    procfs_text_init(&t);
+    rc = procfs_gen_pciconfig(&t, f->origin_pid);
+    if (rc >= 0 && !t.nomem && off < (uint32_t)t.len) {
+        n = count < (uint32_t)t.len - (uint32_t)off ? count : (uint32_t)t.len - (uint32_t)off;
+        if (copy_to_user(buf, t.buf + (uint32_t)off, n)) {
+            rc = -EFAULT;
+        }
+    }
+    kfree(t.buf);
+    if (rc < 0 || t.nomem) {
+        return t.nomem ? -ENOMEM : rc;
+    }
+    e->ofd->offset += n;
+    return (int32_t)n;
+}
+
+/** Write the range with aligned accesses of its own width. Never write
+ * back a dword read to merge a byte: status bits may clear on a one. */
+static void pciconfig_store(int key, uint32_t off, const uint8_t *data, uint32_t count)
+{
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
+    uint32_t n, value;
+
+    while (count) {
+        n = !(off & 3u) && count >= 4 ? 4u : !(off & 1u) && count >= 2 ? 2u : 1u;
+        value = data[0];
+        if (n >= 2) {
+            value |= (uint32_t)data[1] << 8;
+        }
+        if (n == 4) {
+            value |= (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24;
+            pci_write_config32_ext(bus, dev, fn, (uint16_t)off, value);
+        } else if (n == 2) {
+            pci_write_config16_ext(bus, dev, fn, (uint16_t)off, (uint16_t)value);
+        } else {
+            pci_write_config8_ext(bus, dev, fn, (uint16_t)off, (uint8_t)value);
+        }
+        off += n;
+        data += n;
+        count -= n;
+    }
+}
+
+/** Write raw PCI config, cut at the function's end as Linux does. The
+ * open checked privilege. Copy the range before touching any register. */
+static int32_t procfs_pciconfig_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    int key = f->origin_pid;
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
+    uint32_t size = 256, n;
+    uint64_t off = e->ofd->offset;
+    uint8_t *data;
+
+    if (!sysfs_pci_real(key)) {
+        return -ENODEV;
+    }
+    if (pci_read_config32_ext(bus, dev, fn, 0x100) != 0xFFFFFFFFu) {
+        size = 4096;
+    }
+    if (off >= size || !count) {
+        return 0;
+    }
+    n = count < size - (uint32_t)off ? count : size - (uint32_t)off;
+    data = kmalloc(n);
+    if (!data) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(data, buf, n)) {
+        kfree(data);
+        return -EFAULT;
+    }
+    pciconfig_store(key, (uint32_t)off, data, n);
+    kfree(data);
+    e->ofd->offset = off + n;
+    return (int32_t)n;
+}
+
+static const struct file_ops procfs_pciconfig_ops = {procfs_pciconfig_read,
+                                                     procfs_pciconfig_write,
+                                                     procfs_poll,
+                                                     procfs_ioctl,
+                                                     procfs_close,
+                                                     NULL,
+                                                     NULL};
+
+/** Open raw PCI config, writable only by a privileged caller. Each access
+ * reaches the current registers, including a read at a nonzero offset. */
+static int procfs_open_pciconfig(const struct vpath *vp, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3, fd;
+
+    if (acc == 3 || (acc && !proc_privileged(current_proc))) {
+        return -EACCES;
+    }
+    if (!sysfs_pci_present(vp->syskey)) {
+        return -ENOENT;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_file = SYNTH_SYS_UEVENT;
+    f->origin_task = SYSFS_PCI_DEVICE << 8 | SYSFS_PCI_CONFIG;
+    f->origin_pid = vp->syskey;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->ops = &procfs_pciconfig_ops;
+    e->priv = f;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : FD_FLAG_READ | FD_FLAG_WRITE;
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 /**
  * The address space a /proc/<pid>/mem descriptor may reach, with a user's
  * count taken for the caller, who drops it (`procfs_mm_put`), or NULL: the
@@ -7863,6 +7995,10 @@ int procfs_open(const struct vpath *vp, int flags)
     }
     if (vp->kind == VNODE_PROC_ACPI_CALL) {
         return procfs_open_acpicall(flags);
+    }
+    if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
+        vp->procfile == SYSFS_PCI_CONFIG) {
+        return procfs_open_pciconfig(vp, flags);
     }
     if (vp->kind == VNODE_SYS_FILE && sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) &&
         (flags & 3) != 0) {

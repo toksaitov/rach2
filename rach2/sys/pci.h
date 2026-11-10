@@ -122,6 +122,16 @@ uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, ui
 void pci_write_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
                             uint32_t value);
 
+/** Write a word of extended space as one 16-bit store, so adjacent
+ * write-one-to-clear bits are untouched. No write outside an ECAM window
+ * at offsets of 256 or more. `offset` must be even. */
+void pci_write_config16_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                            uint16_t value);
+
+/** Write one byte of extended space, with the same reach as the word. */
+void pci_write_config8_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                           uint8_t value);
+
 /**
  * Read or write a byte, a word or a dword at `port` of the bus's I/O space,
  * where a device's I/O base address register points: the architecture's

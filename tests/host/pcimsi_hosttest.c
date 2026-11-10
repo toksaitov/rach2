@@ -18,6 +18,7 @@
 
 #include "../../rach2/sys/pci.h"
 #include "../../rach2/sys/arch/x86/vector.h"
+#include "../../rach2/sys/arch/x86/pciconf.h"
 
 /* Where a PC writes a message, as arch/x86/pciconf.c builds it: the local
  * APIC's page, with the processor's identity in bits 12 to 19. */
@@ -447,6 +448,25 @@ static void halfword_rows(const pci_device_t *dev)
     check(cfg16(0x06) == 0x4010u, "and leaves the latched status beside it alone");
 }
 
+/** Extended byte and word writes preserve every neighboring ECAM byte. */
+static void ecam_width_rows(void)
+{
+    static uint32_t config[1024];
+    uint8_t *bytes = (uint8_t *)config;
+
+    config[64] = 0xA5A5A5A5u;
+    pci_ecam_set((uintptr_t)config, 0, 0);
+    pci_write_config8_ext(0, 0, 0, 0x101, 0x5a);
+    check(config[64] == 0xA5A55AA5u, "an extended byte write touches one byte");
+    pci_write_config16_ext(0, 0, 0, 0x102, 0x1234);
+    check(config[64] == 0x12345AA5u && bytes[0x100] == 0xa5,
+          "an extended word write leaves its neighboring word alone");
+    pci_ecam_set(0, 0, 0);
+    pci_write_config8_ext(0, 0, 0, 0x101, 0);
+    pci_write_config16_ext(0, 0, 0, 0x102, 0);
+    check(config[64] == 0x12345AA5u, "no extended write reaches a missing ECAM window");
+}
+
 /**
  * The pool of message vectors (vector.c): all 191 taken, past the sixteen
  * of the old pool, none of them 0x80 or outside 48 to 239, the 192nd
@@ -650,6 +670,7 @@ int main(void)
     check(nwrites == 0, "disabling a device with no MSI writes nothing");
 
     halfword_rows(&dev);
+    ecam_width_rows();
     msix_rows(&dev);
     vector_rows();
 
