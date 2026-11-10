@@ -1314,6 +1314,7 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
      "I915_GEM_CONTEXT_CREATE"},
     {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW, i915_gem_context_destroy_ioctl,
      "I915_GEM_CONTEXT_DESTROY"},
+    {DRM_IOCTL_I915_REG_READ, DRM_RENDER_ALLOW, i915_reg_read_ioctl, "I915_REG_READ"},
     {DRM_IOCTL_I915_GET_RESET_STATS, DRM_RENDER_ALLOW, i915_gem_context_reset_stats_ioctl,
      "I915_GET_RESET_STATS"},
     {DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, DRM_RENDER_ALLOW, i915_gem_context_getparam_ioctl,

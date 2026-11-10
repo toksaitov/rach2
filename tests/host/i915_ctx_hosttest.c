@@ -8,6 +8,7 @@
  * host-deps: rach2/sys/drm/i915/i915_gem_context.c
  * host-deps: rach2/sys/drm/i915/i915_request.c
  * host-deps: rach2/sys/drm/i915/i915_getparam.c
+ * host-deps: rach2/sys/drm/i915/i915_reg_read.c
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_irq.c
  * host-deps: rach2/sys/drm/i915/i915_ppgtt.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
@@ -34,7 +35,9 @@
  * refusals, and engine maps; requests (sequence numbers, the breadcrumbs,
  * fences signalled from the interrupt, retirement, the GT parked, waits
  * with timeouts, a lost interrupt, polling, refused commands taken back,
- * the unplug); GETPARAM and I915_QUERY row by row; GET_RESET_STATS.
+ * the unplug); GETPARAM and I915_QUERY row by row; GET_RESET_STATS; and
+ * 78-11a.2's REG_READ of the render ring's timestamp, which the model
+ * counts on at each read of a half.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1565,6 +1568,70 @@ static void row_reset_stats(void)
     done(&m);
 }
 
+/* ---- 78-11a.2: REG_READ ---- */
+
+/* The render ring's timestamp, which moves on by one at each read of a
+ * half, and the reads of it made without the kernel's forcewake. */
+static uint64_t timestamp;
+static int timestamp_unwoken;
+
+/** The model's answer for the timestamp's halves: the counter's, after it
+ * moves on. */
+static uint32_t timestamp_read(struct i915_model *m, uint32_t reg, uint32_t value)
+{
+    if (reg != RING_TIMESTAMP(RENDER_RING_BASE) && reg != RING_TIMESTAMP_UDW(RENDER_RING_BASE)) {
+        return value;
+    }
+    if (!(i915_model_peek(m, FORCEWAKE_ACK_HSW) & FORCEWAKE_KERNEL)) {
+        timestamp_unwoken++;
+    }
+    timestamp++;
+    return reg == RING_TIMESTAMP(RENDER_RING_BASE) ? (uint32_t)timestamp
+                                                   : (uint32_t)(timestamp >> 32);
+}
+
+/**
+ * 78-11a.2: REG_READ as Linux 6.12's i915_reg_read_ioctl answers it on
+ * Haswell: the render ring's timestamp under forcewake, whole across a
+ * carry with I915_REG_READ_8B_WA as Mesa asks, low half first without it;
+ * any other register or flag EINVAL; and the call's number Linux's.
+ */
+static void row_reg_read(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct drm_i915_reg_read r;
+
+    m.on_read = timestamp_read;
+    timestamp = 0x1fffffffeull;
+    timestamp_unwoken = 0;
+    memset(&r, 0, sizeof(r));
+    r.offset = 0x2358u | I915_REG_READ_8B_WA;
+    CHECK("reg read: the timestamp across a carry, read again as Mesa asks",
+          i915_reg_read_ioctl(&dev.drm, &r, &file_a) == 0 && r.val == 0x200000002ull);
+    CHECK("reg read: under forcewake, let go after",
+          timestamp_unwoken == 0 && i915->uncore.wake_count == 0);
+    timestamp = 0x1fffffffeull;
+    r.offset = 0x2358u;
+    CHECK("reg read: without the flag, the low half and then the high",
+          i915_reg_read_ioctl(&dev.drm, &r, &file_a) == 0 && r.val == 0x2ffffffffull);
+    r.offset = 0x2350u;
+    CHECK("reg read: another register EINVAL",
+          i915_reg_read_ioctl(&dev.drm, &r, &file_a) == -EINVAL);
+    r.offset = 0x235cu;
+    CHECK("reg read: the upper half alone EINVAL",
+          i915_reg_read_ioctl(&dev.drm, &r, &file_a) == -EINVAL);
+    r.offset = 0x2358u | 2u;
+    CHECK("reg read: another flag EINVAL", i915_reg_read_ioctl(&dev.drm, &r, &file_a) == -EINVAL);
+    r.offset = 0x100002358ull;
+    CHECK("reg read: an offset past 32 bits EINVAL",
+          i915_reg_read_ioctl(&dev.drm, &r, &file_a) == -EINVAL);
+    CHECK("reg read: no forcewake left held", i915->uncore.wake_count == 0);
+    CHECK("reg read: Linux's number, 0xc0106471", DRM_IOCTL_I915_REG_READ == 0xc0106471u);
+    m.on_read = 0;
+    done(&m);
+}
+
 int main(void)
 {
     row_contexts();
@@ -1576,6 +1643,7 @@ int main(void)
     row_getparam();
     row_query();
     row_reset_stats();
+    row_reg_read();
     CHECK("the heap: every record freed", heap_live == 0);
     if (fails) {
         printf("i915-ctx-test: %d failures\n", fails);

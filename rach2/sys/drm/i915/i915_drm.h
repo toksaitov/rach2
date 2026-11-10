@@ -36,6 +36,7 @@
 #define DRM_I915_GEM_CONTEXT_DESTROY  0x2e
 #define DRM_I915_GEM_SET_CACHING      0x2f
 #define DRM_I915_GEM_GET_CACHING      0x30
+#define DRM_I915_REG_READ             0x31
 #define DRM_I915_GET_RESET_STATS      0x32
 #define DRM_I915_GEM_USERPTR          0x33
 #define DRM_I915_GEM_CONTEXT_GETPARAM 0x34
@@ -235,6 +236,15 @@ struct drm_i915_gem_context_param_sseu {
 
 /* The most engines an engine map holds, Linux's I915_EXEC_RING_MASK + 1. */
 #define I915_CONTEXT_MAX_ENGINES 64u
+
+/* REG_READ: the register at `offset`, of which only the render ring's
+ * timestamp may be read, into `val`; I915_REG_READ_8B_WA in the offset
+ * reads its halves so that a carry between them is not seen half done. */
+struct drm_i915_reg_read {
+    uint64_t offset;
+    uint64_t val;
+};
+#define I915_REG_READ_8B_WA 1u
 
 /* GET_RESET_STATS: the resets seen, as root, and the context's batches
  * that were running at a hang and that were lost behind one. */
@@ -646,6 +656,8 @@ struct drm_i915_gem_userptr {
     DRM_IOW(DRM_COMMAND_BASE + DRM_I915_GEM_SET_CACHING, struct drm_i915_gem_caching)
 #define DRM_IOCTL_I915_GEM_GET_CACHING \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_GET_CACHING, struct drm_i915_gem_caching)
+#define DRM_IOCTL_I915_REG_READ \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_REG_READ, struct drm_i915_reg_read)
 #define DRM_IOCTL_I915_GET_RESET_STATS \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GET_RESET_STATS, struct drm_i915_reset_stats)
 #define DRM_IOCTL_I915_GEM_USERPTR \

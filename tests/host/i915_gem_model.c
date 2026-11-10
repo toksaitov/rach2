@@ -106,6 +106,16 @@ void i915_ppgtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint
 }
 #endif
 
+/** REG_READ, which the table names and i915_ctx_hosttest.c runs on its
+ * register model. */
+int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    (void)dev;
+    (void)data;
+    (void)file;
+    return -ENODEV;
+}
+
 /* ---- the chip ---- */
 
 /* The test's chip: a GTT of 64 MiB whose first 16 MiB are the aperture,

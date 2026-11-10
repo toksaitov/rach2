@@ -445,6 +445,18 @@ for memory that cannot be read.
 .Dv DRM_IOCTL_I915_GET_RESET_STATS
 gives a context's batches that were active at a hang and pending behind
 one, and to a privileged process the resets of the device.
+.Pp
+.Dv DRM_IOCTL_I915_REG_READ
+reads the render ring's timestamp, at offset 0x2358, the one register
+Linux allows on Haswell.
+With
+.Dv I915_REG_READ_8B_WA
+in the offset's low bits it reads the high half again until it does not
+change, so that a carry between the halves is never seen half done;
+without it the low half is read and then the high.
+It fails with
+.Er EINVAL
+for another register or flag.
 .Ss Submission
 .Dv DRM_IOCTL_I915_GEM_EXECBUFFER2
 and
