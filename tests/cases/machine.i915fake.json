@@ -1,16 +1,17 @@
 {
   "schema_version": 1,
   "family_id": "machine.i915fake",
-  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks, crocus's batches, the connector and planes modetest lists, and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back, the batches i915execprobe submits, and the hang i915resetprobe recovers from",
+  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks, crocus's batches, the profiles vainfo lists, the connector and planes modetest lists, and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back, the batches i915execprobe submits, and the hang i915resetprobe recovers from",
   "cases": [
     {
       "case_id": "machine.i915fake.crocus",
-      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo's surfaceless platform picks crocus for it, eglinfo -B exits 0 naming the HD 4400 once the render ring has run crocus's batches, goes on after EIO and aborts after ENOSPC, modetest lists eDP-1 disconnected and three planes a pipe with Haswell's formats, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo's surfaceless platform picks crocus for it, eglinfo -B exits 0 naming the HD 4400 once the render ring has run crocus's batches, goes on after EIO and aborts after ENOSPC, vainfo lists Haswell's decoding profiles through Intel's i965 driver, modetest lists eDP-1 disconnected and three planes a pipe with Haswell's formats, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
       "units": [
         "rach2/sys/drm/i915/i915_fake.c",
         "rach2/sys/drm/i915/i915_gem_execbuffer.c",
         "drmdevice",
         "eglinfo",
+        "vainfo",
         "modetest"
       ],
       "domain": "machine",
@@ -52,7 +53,7 @@
           "step_id": "probe",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run drmdevice, eglinfo -B -p surfaceless with EGL's debug log on, printing its exit status, the batches the fake's render ring ran for it and its last lines but the loader's log and the indented lists, eglinfo again under the submit fault and under the bind fault armed for good, modetest -c and -p on the card, and first light from /sys/kernel/debug/dri/DEVICE/i915_fake plain and under the submit, bind, irq and hang faults"
+          "does": "run drmdevice, eglinfo -B -p surfaceless with EGL's debug log on, printing its exit status, the batches the fake's render ring ran for it and its last lines but the loader's log and the indented lists, eglinfo again under the submit fault and under the bind fault armed for good, vainfo on the render node, modetest -c and -p on the card, and first light from /sys/kernel/debug/dri/DEVICE/i915_fake plain and under the submit, bind, irq and hang faults"
         }
       ],
       "machines": [
@@ -96,6 +97,11 @@
         {
           "assertion_id": "loader",
           "checks": "Mesa's loader logs the pci id 8086:0a16 with driver crocus",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "va",
+          "checks": "vainfo on the render node names Intel's i965 driver for Haswell and lists MPEG-2 Main, H.264 High, VC-1 Advanced and JPEG Baseline with VAEntrypointVLD",
           "source": "scenario"
         },
         {

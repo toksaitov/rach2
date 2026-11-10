@@ -16,8 +16,9 @@
  * got. Under `--- crocus` eglinfo runs again with a fault armed, the submit
  * fault and the bind fault for good, and gives its exit and the fault's
  * line: as on Linux, crocus makes a new context after EIO and goes on, and
- * aborts after ENOSPC. The hang goes last, since nothing in the file takes
- * a hung ring back.
+ * aborts after ENOSPC. Under `--- va` vainfo lists what libva's DRM
+ * backend finds on the render node, the driver it loaded and its profiles.
+ * The hang goes last, since nothing in the file takes a hung ring back.
  */
 static const char script[] =
     "drmdevice 2>&1\n"
@@ -38,6 +39,8 @@ static const char script[] =
     " grep -i -e crocus -e error /tmp/eglinfo.out | tail -n 5; }\n"
     "crocus submit 'submit 0'; crocus 'bind always' 'bind 0'\n"
     "rm -f /tmp/eglinfo.out\n"
+    "echo '--- va'\n"
+    "vainfo --display drm --device /dev/dri/renderD128 2>&1\n"
     "echo '--- kms'\n"
     "modetest -M i915 -c 2>&1 | grep -E 'connected'\n"
     "modetest -M i915 -p 2>&1 | grep -E 'formats:'\n"
@@ -77,6 +80,36 @@ static int kms_listed(const char *out)
            net_count(out, "formats: AR24") == 3;
 }
 
+/** Say whether vainfo's output `out` lists `profile` with the decoding
+ * entry point, VAEntrypointVLD, on one line. */
+static int va_decodes(const char *out, const char *profile)
+{
+    char line[256];
+    const char *p = out;
+
+    while ((p = strstr(p, profile)) != NULL) {
+        while (p > out && p[-1] != '\n')
+            p--;
+        net_copy_line(p, line, sizeof(line));
+        if (strstr(line, profile) && strstr(line, "VAEntrypointVLD"))
+            return 1;
+        p = strchr(p, '\n');
+        if (p == NULL)
+            break;
+    }
+    return 0;
+}
+
+/** Say whether vainfo's output `out` shows Intel's i965 driver on Haswell
+ * decoding MPEG-2, H.264, VC-1 and JPEG, the codecs Haswell's video ring
+ * runs. */
+static int va_listed(const char *out)
+{
+    return net_find(out, "Driver version: Intel i965 driver for Intel(R) Haswell") != NULL &&
+           va_decodes(out, "VAProfileMPEG2Main") && va_decodes(out, "VAProfileH264High") &&
+           va_decodes(out, "VAProfileVC1Advanced") && va_decodes(out, "VAProfileJPEGBaseline");
+}
+
 /** Boot with rach2.i915fake and judge the identity, the loader, the
  * display and faults. */
 int etude_scenario(struct etude_case *c)
@@ -113,6 +146,9 @@ int etude_scenario(struct etude_case *c)
                "drmdevice did not report 8086:0a16 on board 17aa:380c");
     net_assert(&u, "loader", net_find(r.out, "pci id for fd #: 8086:0a16, driver crocus") != NULL,
                "Mesa's loader did not pick crocus for 8086:0a16");
+    net_assert(&u, "va", va_listed(r.out),
+               "vainfo did not list the i965 driver decoding MPEG-2, H.264, VC-1 and JPEG on "
+               "Haswell");
     net_assert(&u, "kms", kms_listed(r.out),
                "modetest listed eDP-1 or not the planes' Haswell formats");
     net_assert(
