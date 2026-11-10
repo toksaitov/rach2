@@ -139,6 +139,11 @@ or
 copies its parent's, and
 .Xr execve 2
 empties them.
+An i386
+.Dv CLONE_SETTLS
+on x86-64 replaces the requested descriptor in the child.
+If the child's FS or GS selector names that entry, its saved base changes
+too, so the first context switch uses the child's thread pointer.
 .Pp
 .Nm get_thread_area
 reads the entry whose number the
