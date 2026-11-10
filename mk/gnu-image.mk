@@ -25,6 +25,20 @@
 # GNU_VK_GL_CTS are 1, and gnu-test.ext2, which the machine cases boot, has
 # VK-GL-CTS; the tooling machine cannot run the builder guest, so an image it
 # makes has neither.
+# The x86-64 root, the gnu-test image and the agents' root have the i386
+# layer (vendor/gnu/Readme.md, The i386 layer) unless GNU_I386 is 0, which
+# makes the root of the pure 64-bit profile; the i686 root has none to leave
+# out. GNU_I386_OPTION holds the choice, rewritten only when it changes, so
+# that an image made the other way is made again.
+GNU_I386 ?= 1
+GNU_I386_ON = $(if $(filter x86_64,$(ARCH)),$(filter-out 0,$(GNU_I386)))
+GNU_I386_OPTION = $(IMAGES_DIR)/gnu-i386.option
+.PHONY: gnu-i386-check
+$(GNU_I386_OPTION): gnu-i386-check
+	@case "$(GNU_I386)" in 0 | 1) ;; *) echo "gnu: GNU_I386=$(GNU_I386): not 0 or 1" >&2; exit 1 ;; esac
+	@mkdir -p $(@D)
+	@echo "$(if $(GNU_I386_ON),1,0)" > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 GNU_TOOLING ?= $(if $(filter Linux_x86_64,$(shell uname -s)_$(shell uname -m)),,yes)
 OS_REAL_GNU_EXT2 = $(IMAGES_DIR)/os-real-gnu.ext2
 OS_REAL_GNU_AGENTS_EXT2 = $(IMAGES_DIR)/os-real-gnu-agents.ext2
@@ -34,8 +48,8 @@ GNU_TEST_EXT2 = $(IMAGES_DIR)/gnu-test.ext2
 $(GNU_TEST_EXT2): build/tests/host-suite/scripts-assets.tar $(KERNEL) $(METAL_KERNEL)
 GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
                    $(GNU_JS_STAMP) $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP) \
-                   $(GNU_VENUS_STAMP)
-GNU_IMAGE_DEPS = mk/gnu-image.mk $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
+                   $(GNU_VENUS_STAMP) $(if $(GNU_I386_ON),$(GNU_I386_STAMP))
+GNU_IMAGE_DEPS = mk/gnu-image.mk $(GNU_I386_OPTION) $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  $(wildcard vendor/gnu/desktop/*) \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
@@ -74,7 +88,7 @@ ifeq ($(GNU_TOOLING),)
 $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
     $(GNU_SANITIZERS_STAMP) $(GNU_HOST_PRODUCTS_STAMP) $(GNU_FSTOOLS_STAMP) \
     $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_STAMP) $(GNU_VK_GL_CTS_STAMP)) | $(GNU_IMAGE_ORDER)
-	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 \
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 GNU_I386=$(GNU_I386_ON) \
 	    GNU_VK_GL_CTS=$(if $(filter x86_64,$(ARCH)),1) \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    krffs/manifests/os-real-gnu.manifest $@ 24576
@@ -82,18 +96,19 @@ $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
 GNU_IGT_ON = $(if $(filter x86_64,$(ARCH)),1)
 $(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
                      $(if $(GNU_IGT_ON),$(GNU_IGT_STAMP) $(GNU_VK_GL_CTS_STAMP)) tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
-	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_IGT=$(GNU_IGT_ON) GNU_VK_GL_CTS=$(GNU_IGT_ON) sh tools/image/mkext2.sh \
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_IGT=$(GNU_IGT_ON) GNU_VK_GL_CTS=$(GNU_IGT_ON) \
+	    GNU_I386=$(GNU_I386_ON) sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 	$(GNU_STAGE_LOGINS)
 
 $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_STAMPS) | $(GNU_IMAGE_ORDER)
-	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" sh tools/image/mkext2.sh \
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_I386=$(GNU_I386_ON) sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 else
 GNU_TOOLING_DEPS = $(filter-out $(GNU_IMAGE_STAMPS),$(GNU_IMAGE_DEPS)) \
                    $(sort $(GNU_TOOLCHAIN_SOURCES) $(GNU_PORTS_SOURCES) $(GNU_NATIVE_SOURCES) \
                           $(GNU_GDB_SOURCES) $(GNU_JS_SOURCES) $(GNU_DEBIAN_SOURCES) $(GNU_PROTON_SOURCES) \
-                          $(GNU_WEBGL_SOURCES) $(GNU_VENUS_SOURCES)) \
+                          $(GNU_WEBGL_SOURCES) $(GNU_VENUS_SOURCES) $(if $(GNU_I386_ON),$(GNU_I386_SOURCES))) \
                    $(GNU_PORTS_LINK) vendor/gnu/tooling_image.sh vendor/gnu/tooling_job.sh \
                    tools/setup/elfwrap.sh
 GNU_TOOLING_ORDER = $(GNU_IMAGE_ORDER) $(ETUDE) $(SHA256TOOL)
@@ -105,20 +120,20 @@ $(GNU_TEST_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
     $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_SOURCES) \
         build/tests/host-suite/tools/exfat_external/exfat_external.img) \
     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
-	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" \
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
 	    GNU_TEST_PRODUCTS=1 MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) \
 	    sh vendor/gnu/tooling_image.sh $@ 24576
 
 $(OS_REAL_GNU_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
                      $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) $(GNU_LOGINS_STAMP) \
                      tools/image/stage_logins.sh | $(GNU_TOOLING_ORDER)
-	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" \
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
 	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 16384
 	$(GNU_STAGE_LOGINS)
 
 $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_RECIPES) \
                             $(GNU_AGENTS_SOURCES) | $(GNU_TOOLING_ORDER)
-	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_LINK="$(GNU_LINK)" \
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_LINK="$(GNU_LINK)" GNU_I386=$(GNU_I386_ON) \
 	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 16384
 endif
 

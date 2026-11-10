@@ -6,10 +6,10 @@
 # The job runner of `etude provision tooling` (tools/etude/tooling/runner.sh)
 # runs it as root in the job's working directory, which holds two inputs:
 # tree.tar.gz, the tree the host staged, and job.env, the shell assignments of
-# RACH2_ARCH, GNU_AGENTS, GNU_LINK, RACH2_PATH_MAP, MUSL_CRYPT_SRC, IMAGE (the
-# image's file name), SIZE (its size in MiB), JOBS (make's jobs), DRY_RUN and
-# IMAGE_TIME, the host's commit date, which the staged tree, not a checkout,
-# does not have and mkext2.sh gives the image's nodes.
+# RACH2_ARCH, GNU_AGENTS, GNU_LINK, GNU_I386, RACH2_PATH_MAP, MUSL_CRYPT_SRC,
+# IMAGE (the image's file name), SIZE (its size in MiB), JOBS (make's jobs),
+# DRY_RUN and IMAGE_TIME, the host's commit date, which the staged tree, not
+# a checkout, does not have and mkext2.sh gives the image's nodes.
 # ETUDE_DISK1 is the layer's build disk, an ext4 volume labelled rach2-gnu
 # that persists between jobs; a disk on which blkid finds no signature, as a
 # new one, is formatted, and a disk with any other volume is refused. The
@@ -159,6 +159,7 @@ build_layer()
         set -- gnu-sanitizers gnu-host-products gnu-fstools
         [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-host-checks
     fi
+    [ "${GNU_I386:-}" != 1 ] || set -- "$@" gnu-i386
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n
     exec make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" GNU_AGENTS="$GNU_AGENTS" \
         DRY_RUN="$DRY_RUN" GNU_LINK="$GNU_LINK" \
@@ -174,7 +175,7 @@ build_image()
         exit 1
     [ -z "$RACH2_PATH_MAP" ] || export RACH2_PATH_MAP
     RACH2_ARCH=$RACH2_ARCH GNU_AGENTS="$GNU_AGENTS" GNU_TEST_PRODUCTS=${GNU_TEST_PRODUCTS:-} \
-        SOURCE_DATE_EPOCH=${IMAGE_TIME:-1} exec sh tools/image/mkext2.sh \
+        GNU_I386=${GNU_I386:-} SOURCE_DATE_EPOCH=${IMAGE_TIME:-1} exec sh tools/image/mkext2.sh \
         --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest "$MNT/out/$IMAGE" "$SIZE"
 }
 
