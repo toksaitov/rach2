@@ -66,10 +66,22 @@
  * fork and mremap keep it, MADV_DONTNEED leaves it, and munmap or a mapping
  * over it ends it. */
 #define VM_PROT_GUARD       0x800u
+/* Kept the same way: the region is sealed, as mseal makes it and Linux's
+ * VM_SEALED: munmap, mremap, mprotect, a mapping over it, a brk or shmdt
+ * that would remove it, and the madvise kinds that discard the pages of
+ * anonymous memory it may not write fail with EPERM. Nothing takes the
+ * seal away; a fork's child keeps it, and exec and exit end the region. */
+#define VM_PROT_SEALED      0x1000u
+/* Kept the same way: the region maps a file of memfd_secret, whose pages
+ * only the mappings of the file reach. It is never executable, so mprotect
+ * answers EACCES to PROT_EXEC as to write on VM_PROT_NOWRITE; ptrace,
+ * /proc/PID/mem, process_vm_readv, the pins of devices and KVM are refused
+ * its pages; and a core file leaves it out, as Linux's VM_DONTDUMP. */
+#define VM_PROT_SECRET      0x2000u
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
-     VM_PROT_GUARD)
+     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -361,18 +373,19 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
  * neighbours that then match. An empty range changes nothing. Returns 0; -1
  * for a gap, as Linux's mprotect answers ENOMEM; -2 when a split has no
  * room; -3 when `prot` has write and a region of the range has
- * VM_PROT_NOWRITE, as Linux answers EACCES. Of -1 and -3, the one met first
+ * VM_PROT_NOWRITE, or execute and a region has VM_PROT_SECRET, as Linux
+ * answers EACCES. Of -1 and -3, the one met first
  * in address order is the answer, and every error leaves the regions as
  * they were.
  */
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
 
 /**
- * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK and
- * VM_PROT_GUARD in the protection of each region of [start, end), which regions
- * must cover without a gap, splitting and merging as `vm_protect` does. Returns
- * 0; -1 for a gap; -2 when a split has no room. An error leaves the regions as
- * they were.
+ * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK,
+ * VM_PROT_GUARD and VM_PROT_SEALED in the protection of each region of
+ * [start, end), which regions must cover without a gap, splitting and merging
+ * as `vm_protect` does. Returns 0; -1 for a gap; -2 when a split has no room.
+ * An error leaves the regions as they were.
  */
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear);
 
@@ -398,6 +411,11 @@ uintptr_t vm_locked_in(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 /** Bytes the locked regions cover together: VmLck of /proc/PID/status and
  * what RLIMIT_MEMLOCK bounds for the mlock calls. */
 uintptr_t vm_locked(const vm_space_t *vm);
+
+/** The start of the first region of [start, end) with VM_PROT_SEALED,
+ * `start` when that region begins below it, or `end` when no sealed region
+ * meets the range. */
+uintptr_t vm_sealed_at(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /** Make room for `n` more regions now, so the changes after cannot fail;
  * 0 ok, -1 at the limit or with no memory. */

@@ -1018,6 +1018,16 @@ long sys_mremap(isr_params_t *params);
 
 long sys_madvise(isr_params_t *params);
 
+long sys_mseal(isr_params_t *params);
+
+long sys_pkey_mprotect(isr_params_t *params);
+
+long sys_pkey_alloc(isr_params_t *params);
+
+long sys_pkey_free(isr_params_t *params);
+
+long sys_map_shadow_stack(isr_params_t *params);
+
 long sys_msync(isr_params_t *params);
 
 long sys_clone(isr_params_t *params);
@@ -1094,9 +1104,19 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
 
 /** Unmap the System V attachment at `addr`: the regions from it on that map
  * the pages `sh` from the segment's start, within `size` bytes. -EINVAL
- * when no such region begins at `addr`, or -ENOMEM if removing the regions
- * fails. */
+ * when no such region begins at `addr`, -EPERM when one of them is sealed,
+ * or -ENOMEM if removing the regions fails. */
 int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size);
+
+/**
+ * Whether madvise's `advice` over [start, end), which regions of `vm` cover
+ * without a gap, is EINVAL for a region it meets: the dropping advice and
+ * MADV_DOFORK over device memory; MADV_DONTNEED, MADV_FREE, MADV_COLD and
+ * MADV_PAGEOUT over a locked region; and the guard advice over a region that
+ * may not hold a guard. 1 or 0. madvise and process_madvise ask it.
+ */
+struct vm_space;
+int madvise_refused(struct vm_space *vm, uintptr_t start, uintptr_t end, uint32_t advice);
 
 /** How many attachments the pages `sh` have, each address space's regions
  * that map them from the start counted once however many threads share it. */

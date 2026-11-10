@@ -6813,7 +6813,7 @@ long sys_brk(isr_params_t *params)
             return (long)req;
         }
     } else if (new_top < old_top) {
-        if (vm_remove(vm, new_top, old_top) != 0) {
+        if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
             return (long)vm->brk;
         }
         mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
@@ -7133,9 +7133,10 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
 
 /**
  * Put the region `src` describes, `len` bytes, where `mmap_place` finds for
- * `addr` and `flags`, replacing what a MAP_FIXED range held. The region
- * takes its own reference to the file, and the caller's is put here.
- * Returns the address, or -errno.
+ * `addr` and `flags`, replacing what a MAP_FIXED range held, or failing with
+ * EPERM when a region of that range is sealed (mseal). The region takes its
+ * own reference to the file, and the caller's is put here. Returns the
+ * address, or -errno.
  * Under MAP_FIXED the two entries that a split in the removal and the new
  * region take are reserved before the old mapping is removed, so that a
  * failure leaves the old mapping in place.
@@ -7146,6 +7147,9 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
     uintptr_t base = 0;
     int32_t rc = mmap_place(vm, addr, len, flags, &base);
 
+    if (rc == 0 && (flags & MAP_FIXED) && vm_sealed_at(vm, base, base + len) < base + len) {
+        rc = -EPERM;
+    }
     if (rc == 0 && (flags & MAP_FIXED)) {
         if (vm_reserve(vm, 2) == 0) {
             vm_remove(vm, base, base + len);
@@ -7350,6 +7354,9 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
         end = r->end;
         r = vm_find(vm, end);
     }
+    if (vm_sealed_at(vm, addr, end) < end) {
+        return -EPERM;
+    }
     if (vm_remove(vm, addr, end) != 0) {
         vma_exhausted("shmdt");
         return -ENOMEM;
@@ -7385,7 +7392,8 @@ uint32_t shm_attaches(const struct shmem *sh)
  * is a no-op, as on Linux. Returns 0; -EINVAL for a zero length, an unaligned
  * address, or a range that leaves user space or wraps, which is judged before
  * the end is rounded up so that the rounding cannot wrap to a smaller end;
- * -ENOMEM when a split finds no room for its region.
+ * -EPERM, with nothing unmapped, when a region of the range is sealed
+ * (mseal); -ENOMEM when a split finds no room for its region.
  */
 long sys_munmap(isr_params_t *params)
 {
@@ -7409,6 +7417,9 @@ long sys_munmap(isr_params_t *params)
     start = addr;
     end = PAGE_UP(addr + length);
 
+    if (vm_sealed_at(vm, start, end) < end) {
+        return -EPERM;
+    }
     if (vm_remove(vm, start, end) != 0) {
         vma_exhausted("munmap");
         return -ENOMEM;
@@ -7439,7 +7450,10 @@ static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
  * unaligned address or an unknown protection bit, ENOMEM when a page of the
  * range is not mapped or a split finds no room for its region, EACCES for write
  * asked of a shared mapping that may never be written (the VM_PROT_NOWRITE
- * `mmap_file` and `mmap_shm` give), with nothing changed. The regions take the
+ * `mmap_file` and `mmap_shm` give) or for execute asked of a mapping of
+ * memfd_secret, with nothing changed. A sealed region (mseal) is EPERM, and
+ * the regions below it in the range take the new protection first, as Linux
+ * changes region by region and stops at the sealed one. The regions take the
  * new protection first and the resident pages after, so a fault in between
  * reads the protection the call is setting.
  */
@@ -7448,7 +7462,7 @@ long sys_mprotect(isr_params_t *params)
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t length = SC_ARG(params, 1);
     uint32_t prot = (uint32_t)SC_ARG(params, 2);
-    uintptr_t end;
+    uintptr_t end, sealed;
     uint32_t vmprot;
     int rc;
 
@@ -7467,20 +7481,29 @@ long sys_mprotect(isr_params_t *params)
     }
     end = PAGE_UP(addr + length);
     vmprot = vm_prot_of(prot);
-    rc = vm_protect(&current_proc->mm->vm, addr, end, vmprot);
+    sealed = vm_sealed_at(&current_proc->mm->vm, addr, end);
+    rc = vm_protect(&current_proc->mm->vm, addr, sealed, vmprot);
+    if (rc == 0 && sealed < end) {
+        const vma_t *r = vm_find(&current_proc->mm->vm, sealed);
+
+        rc = ((vmprot & VM_PROT_WRITE) && (r->prot & VM_PROT_NOWRITE)) ||
+                     ((vmprot & VM_PROT_EXEC) && (r->prot & VM_PROT_SECRET))
+                 ? -3
+                 : -4;
+    }
     if (rc == -1) {
         return -ENOMEM;
     }
     if (rc == -3) {
         return -EACCES;
     }
-    if (rc != 0) {
+    if (rc != 0 && rc != -4) {
         vma_exhausted("mprotect");
         return -ENOMEM;
     }
-    mmn_notify(current_proc->mm, MMN_PROTECT, addr, end);
-    protect_resident(addr, end, vmprot);
-    return 0;
+    mmn_notify(current_proc->mm, MMN_PROTECT, addr, sealed);
+    protect_resident(addr, sealed, vmprot);
+    return rc == -4 ? -EPERM : 0;
 }
 
 #define MREMAP_MAYMOVE   1
@@ -7543,6 +7566,9 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
     if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > task_size() - new_len ||
         (to < addr + old_len && addr < to + new_len)) {
         return -EINVAL;
+    }
+    if (vm_sealed_at(vm, to, to + new_len) < to + new_len) {
+        return -EPERM;
     }
     rest = vm_total(vm) - vm_covered(vm, to, to + new_len) - old_len;
     if (new_len > limit || rest > limit - new_len) {
@@ -7624,21 +7650,22 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
 }
 
 /**
- * Resize a mapping, or move it (mremap(2)). Its arguments are old address,
- * old length, new length, flags and new address with MREMAP_FIXED. The old
- * range must lie in one region. With MREMAP_FIXED the mapping moves, pages
- * and all, to the new address, whatever was there going first
- * (`remap_fixed`). Otherwise a shrink cuts its end, and a growth takes the
- * range after it when that is free, or with MREMAP_MAYMOVE moves the whole
- * mapping to a free range of the new length. Returns the mapping's address,
- * or -errno: EINVAL for arguments that fail `remap_args_valid`, and for a
- * mapping of a file whose last page at the new length would not fit in 32
- * bits; EFAULT for a range not in one region, or for a growth of device
- * memory; ENOMEM when it cannot grow in place and may not move, when no range
- * is free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping
- * would take the locked pages past RLIMIT_MEMLOCK. The growth of a locked
- * mapping is locked and brought in, unless it was locked on fault, as on
- * Linux. MREMAP_DONTUNMAP is not implemented, and is EINVAL.
+ * Resize a mapping, or move it (mremap(2)). Its arguments are old address, old
+ * length, new length, flags and new address with MREMAP_FIXED. The old range
+ * must lie in one region. With MREMAP_FIXED the mapping moves, pages and all,
+ * to the new address, whatever was there going first (`remap_fixed`). Otherwise
+ * a shrink cuts its end, and a growth takes the range after it when that is
+ * free, or with MREMAP_MAYMOVE moves the whole mapping to a free range of the
+ * new length. Returns the mapping's address, or -errno: EINVAL for arguments
+ * that fail `remap_args_valid`, and for a mapping of a file whose last page at
+ * the new length would not fit in 32 bits; EFAULT for a range not in one
+ * region, or for a growth of device memory; EPERM when the region at the old
+ * address is sealed (mseal), or under MREMAP_FIXED a region of the new range
+ * is; ENOMEM when it cannot grow in place and may not move, when no range is
+ * free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping would
+ * take the locked pages past RLIMIT_MEMLOCK. The growth of a locked mapping is
+ * locked and brought in, unless it was locked on fault, as on Linux.
+ * MREMAP_DONTUNMAP is not implemented, and is EINVAL.
  */
 long sys_mremap(isr_params_t *params)
 {
@@ -7661,7 +7688,13 @@ long sys_mremap(isr_params_t *params)
     old_len = PAGE_UP(SC_ARG(params, 1));
     new_len = PAGE_UP(SC_ARG(params, 2));
     r = vm_find(vm, addr);
-    if (!r || addr + old_len > r->end) {
+    if (!r) {
+        return -EFAULT;
+    }
+    if (r->prot & VM_PROT_SEALED) {
+        return -EPERM;
+    }
+    if (addr + old_len > r->end) {
         return -EFAULT;
     }
     if (r->file && new_len / PAGE_SIZE > 0xFFFFFFFFu - (r->pgoff + (addr - r->start) / PAGE_SIZE)) {
@@ -7688,6 +7721,9 @@ long sys_mremap(isr_params_t *params)
 #define MADV_REMOVE          9
 #define MADV_DONTFORK        10
 #define MADV_DOFORK          11
+#define MADV_WIPEONFORK      18
+#define MADV_COLD            20
+#define MADV_PAGEOUT         21
 #define MADV_DONTNEED_LOCKED 24
 #define MADV_COLLAPSE        25
 #define MADV_GUARD_INSTALL   102
@@ -7720,16 +7756,10 @@ static int madvise_guard_allowed(const vma_t *r, int install)
            !(r->prot & VM_PROT_IO) && !(install && (r->prot & VM_PROT_LOCKED));
 }
 
-/**
- * Whether `advice` over [start, end), which regions of `vm` cover without a
- * gap, is EINVAL for a region it meets: the dropping advice and
- * MADV_DOFORK over device memory, MADV_DONTNEED and MADV_FREE over a
- * locked region, and the guard advice over a region that may not hold a
- * guard (`madvise_guard_allowed`).
- */
-static int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
+int madvise_refused(struct vm_space *vm, uintptr_t start, uintptr_t end, uint32_t advice)
 {
-    int drop = advice == MADV_DONTNEED || advice == MADV_FREE;
+    int drop = advice == MADV_DONTNEED || advice == MADV_FREE || advice == MADV_COLD ||
+               advice == MADV_PAGEOUT;
     int guard = advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE;
     uintptr_t at;
 
@@ -7748,6 +7778,33 @@ static int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint3
 }
 
 /**
+ * Where `advice` over [start, end), which regions of `vm` cover, must stop
+ * with EPERM, as Linux's can_modify_vma_madv has it: at the first sealed
+ * region (mseal) of anonymous, private memory without write, for the advice
+ * that would discard its pages, MADV_DONTNEED, MADV_DONTNEED_LOCKED,
+ * MADV_FREE, MADV_REMOVE, MADV_DONTFORK and MADV_WIPEONFORK. The start of
+ * that region, or `start` when it begins below, or `end` when the advice may
+ * go over the whole range. A region of a program's segment counts as a
+ * file's.
+ */
+static uintptr_t madvise_sealed_at(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
+{
+    const vma_t *r;
+
+    if (advice != MADV_DONTNEED && advice != MADV_DONTNEED_LOCKED && advice != MADV_FREE &&
+        advice != MADV_REMOVE && advice != MADV_DONTFORK && advice != MADV_WIPEONFORK) {
+        return end;
+    }
+    for (r = vm_lower(vm, start); r && r->start < end; r = vm_next(r)) {
+        if ((r->prot & VM_PROT_SEALED) && !(r->prot & VM_PROT_WRITE) && r->file == NULL &&
+            r->type != VM_SHARED && r->type != VM_CODE && r->type != VM_DATA) {
+            return r->start > start ? r->start : start;
+        }
+    }
+    return end;
+}
+
+/**
  * Advice about a range (madvise(2)). Its arguments are address, length and
  * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
  * pages go: a private anonymous page reads as zeros again, a private page of a
@@ -7755,28 +7812,32 @@ static int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint3
  * holds. Those three are EINVAL over device memory, which has no pages to read
  * again, as on Linux for VM_PFNMAP, and MADV_DONTNEED and MADV_FREE are EINVAL
  * over a locked region, whose pages MADV_DONTNEED_LOCKED alone drops, as on
- * Linux for VM_LOCKED. MADV_DONTFORK marks the regions so that a fork's child
- * does not get them, and MADV_DOFORK clears the mark; DOFORK is EINVAL over
- * device memory, as on Linux for VM_IO, and either is ENOMEM when a region
- * cannot be split. MADV_GUARD_INSTALL makes the range a guard (VM_PROT_GUARD,
- * vm.h), whose pages go and whose every access is SIGSEGV with SEGV_MAPERR, and
- * MADV_GUARD_REMOVE ends the guard, leaving pages that read as zeros; both are
- * EINVAL over a region that may not hold a guard (`madvise_guard_allowed`) and
- * ENOMEM when a region cannot be split. Linux marks a guard's pages in its page
- * tables and splits no region, so a guard shows in /proc/PID/maps here as a
- * region of its own, with the protection of the region it was cut from. Any
- * other advice `madvise_known` takes changes nothing, and the rest is EINVAL,
- * as Linux refuses an advice it does not define. A range with a page in no
- * region is ENOMEM, as in Linux. A range that runs past user space is EINVAL,
- * judged by the length as given: a length within a page of 4 GiB rounds up to
- * 0, which would pass for an empty range.
+ * Linux for VM_LOCKED; MADV_COLD and MADV_PAGEOUT, which change nothing here,
+ * are EINVAL over either, as Linux's can_madv_lru_vma refuses them. Over a
+ * sealed region of anonymous memory without write (mseal) the advice that
+ * discards pages stops with EPERM, the regions below it in the range advised
+ * first, as Linux advises region by region. MADV_DONTFORK marks the regions so
+ * that a fork's child does not get them, and MADV_DOFORK clears the mark;
+ * DOFORK is EINVAL over device memory, as on Linux for VM_IO, and either is
+ * ENOMEM when a region cannot be split. MADV_GUARD_INSTALL makes the range a
+ * guard (VM_PROT_GUARD, vm.h), whose pages go and whose every access is SIGSEGV
+ * with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard, leaving pages that
+ * read as zeros; both are EINVAL over a region that may not hold a guard
+ * (`madvise_guard_allowed`) and ENOMEM when a region cannot be split. Linux
+ * marks a guard's pages in its page tables and splits no region, so a guard
+ * shows in /proc/PID/maps here as a region of its own, with the protection of
+ * the region it was cut from. Any other advice `madvise_known` takes changes
+ * nothing, and the rest is EINVAL, as Linux refuses an advice it does not
+ * define. A range with a page in no region is ENOMEM, as in Linux. A range that
+ * runs past user space is EINVAL, judged by the length as given: a length
+ * within a page of 4 GiB rounds up to 0, which would pass for an empty range.
  */
 long sys_madvise(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t advice = (uint32_t)SC_ARG(params, 2);
     vm_space_t *vm;
-    uintptr_t len;
+    uintptr_t len, end;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -7793,7 +7854,8 @@ long sys_madvise(isr_params_t *params)
     if (vm_covered(vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
-    if (madvise_refused(vm, addr, addr + len, advice)) {
+    end = madvise_sealed_at(vm, addr, addr + len, advice);
+    if (madvise_refused(vm, addr, end, advice)) {
         return -EINVAL;
     }
     if (advice == MADV_DONTFORK || advice == MADV_DOFORK || advice == MADV_GUARD_INSTALL ||
@@ -7802,19 +7864,134 @@ long sys_madvise(isr_params_t *params)
             advice == MADV_DONTFORK || advice == MADV_DOFORK ? VM_PROT_DONTFORK : VM_PROT_GUARD;
         int set = advice == MADV_DONTFORK || advice == MADV_GUARD_INSTALL;
 
-        if (vm_advise(vm, addr, addr + len, set ? bit : 0u, set ? 0u : bit) != 0) {
+        if (vm_advise(vm, addr, end, set ? bit : 0u, set ? 0u : bit) != 0) {
             vma_exhausted("madvise");
             return -ENOMEM;
         }
         if (advice == MADV_GUARD_INSTALL) {
-            mmn_notify(current_proc->mm, MMN_DROP, addr, addr + len);
-            unmap_user_range(_curr_dir, addr, addr + len);
+            mmn_notify(current_proc->mm, MMN_DROP, addr, end);
+            unmap_user_range(_curr_dir, addr, end);
         }
     } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
-        mmn_notify(current_proc->mm, MMN_DROP, addr, addr + len);
-        unmap_user_range(_curr_dir, addr, addr + len);
+        mmn_notify(current_proc->mm, MMN_DROP, addr, end);
+        unmap_user_range(_curr_dir, addr, end);
+    }
+    return end < addr + len ? -EPERM : 0;
+}
+
+/**
+ * Seal a range (mseal(2)), as Linux 6.12's mm/mseal.c does. Its arguments are
+ * address, length and flags. Each region of the range takes VM_PROT_SEALED
+ * (vm.h), split at the range's ends; sealing a sealed region again is no
+ * error, and no call unseals. Returns 0, or -errno: EINVAL for flags that are
+ * not 0, an unaligned address, or a range that wraps; ENOMEM, with nothing
+ * sealed, for a range with a page in no region, or when a split finds no
+ * room. An empty range is 0. Linux has seals on 64-bit kernels alone: the
+ * i686 kernel answers EPERM to every call, as Linux's i386 kernel does, and
+ * the x86-64 kernel seals for an i386 program too.
+ */
+long sys_mseal(isr_params_t *params)
+{
+    uintptr_t start = SC_ARG(params, 0);
+    uintptr_t len_in = SC_ARG(params, 1);
+    vm_space_t *vm;
+    uintptr_t len;
+
+    if (sizeof(uintptr_t) < 8u) {
+        return -EPERM;
+    }
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    vm = &current_proc->mm->vm;
+    if (SC_ARG(params, 2) != 0 || (start & (PAGE_SIZE - 1)) != 0) {
+        return -EINVAL;
+    }
+    len = PAGE_UP(len_in);
+    if ((len_in != 0 && len == 0) || start + len < start) {
+        return -EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (vm_covered(vm, start, start + len) != len) {
+        return -ENOMEM;
+    }
+    if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
+        vma_exhausted("mseal");
+        return -ENOMEM;
     }
     return 0;
+}
+
+/* pkey_alloc's access rights, PKEY_DISABLE_ACCESS and PKEY_DISABLE_WRITE. */
+#define PKEY_ACCESS_MASK 3u
+
+/**
+ * Change the protection of a range under a protection key (pkey_mprotect(2)).
+ * Its arguments are mprotect's and the key. Rach2 does not turn the
+ * processor's keys on, so the call answers as Linux on x86-64 does where the
+ * processor has none or they are off: key -1 is mprotect itself, and any
+ * other key is EINVAL, no key but the default being allocated and the
+ * default not being one a program names, after mprotect's own checks of the
+ * address (EINVAL), an empty range (0) and a range that wraps (ENOMEM).
+ * Linux builds the keys' calls on x86-64 alone, so the i686 kernel has no
+ * row for this one and its two companions, and answers ENOSYS.
+ */
+long sys_pkey_mprotect(isr_params_t *params)
+{
+    uintptr_t addr = SC_ARG(params, 0);
+    uintptr_t len = SC_ARG(params, 1);
+
+    if ((int32_t)SC_ARG(params, 3) == -1) {
+        return sys_mprotect(params);
+    }
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
+        return -EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (PAGE_UP(len) == 0 || addr + PAGE_UP(len) <= addr) {
+        return -ENOMEM;
+    }
+    return -EINVAL;
+}
+
+/**
+ * Allocate a protection key (pkey_alloc(2)). Its arguments are flags, which
+ * must be 0, and the key's first access rights, of PKEY_ACCESS_MASK; either
+ * otherwise is EINVAL. With the processor's keys off there is no key to give,
+ * and the answer is ENOSPC, as Linux's.
+ */
+long sys_pkey_alloc(isr_params_t *params)
+{
+    if (SC_ARG(params, 0) != 0 || (SC_ARG(params, 1) & ~(uintptr_t)PKEY_ACCESS_MASK) != 0) {
+        return -EINVAL;
+    }
+    return -ENOSPC;
+}
+
+/** Free a protection key (pkey_free(2)): with the processor's keys off no
+ * key is allocated, and every key is EINVAL, as on Linux. */
+long sys_pkey_free(isr_params_t *params)
+{
+    (void)params;
+    return -EINVAL;
+}
+
+/**
+ * Map a shadow stack (map_shadow_stack(2)). Linux builds the call on x86-64
+ * with CONFIG_X86_USER_SHADOW_STACK, as the distributions do, and answers
+ * EOPNOTSUPP before any check of its arguments where the processor's shadow
+ * stacks for user mode are not enabled, which Rach2 never enables: to 64-bit
+ * and i386 programs alike. The i686 kernel has no row, as Linux cannot build
+ * the call there, and answers ENOSYS.
+ */
+long sys_map_shadow_stack(isr_params_t *params)
+{
+    (void)params;
+    return -EOPNOTSUPP;
 }
 
 /**

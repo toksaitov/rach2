@@ -1421,7 +1421,9 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long p
  * count the processes that map a page, so Pss is Rss, a page another process
  * also maps being counted whole to each; there is no swap and no huge page
  * of user memory, so those fields are 0. Locked is Rss for a locked region,
- * flagged `lo`, and `lf` when it is locked on fault.
+ * flagged `lo`, and `lf` when it is locked on fault; a mapping of
+ * memfd_secret is flagged `dd`, left out of a core file, and a sealed region
+ * `sl`, last, as Linux's highest bit.
  * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
@@ -1469,6 +1471,8 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_str(t, (r->prot & VM_PROT_IO) ? " io pf" : "");
         ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
         ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
+        ap_str(t, (r->prot & VM_PROT_SECRET) ? " dd" : "");
+        ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
         ap_ch(t, '\n');
     }
     return t->len;

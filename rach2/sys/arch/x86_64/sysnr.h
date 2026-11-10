@@ -294,6 +294,9 @@
 #define SYS_COPY_FILE_RANGE         326
 #define SYS_PREADV2                 327
 #define SYS_PWRITEV2                328
+#define SYS_PKEY_MPROTECT           329
+#define SYS_PKEY_ALLOC              330
+#define SYS_PKEY_FREE               331
 #define SYS_STATX                   332
 #define SYS_NAME_TO_HANDLE_AT       303
 #define SYS_OPEN_BY_HANDLE_AT       304
@@ -310,6 +313,12 @@
 #define SYS_FUTEX_WAIT              455
 #define SYS_FUTEX_REQUEUE           456
 #define SYS_FCHMODAT2               452
+#define SYS_PROCESS_MADVISE         440
+#define SYS_MEMFD_SECRET            447
+#define SYS_PROCESS_MRELEASE        448
+#define SYS_CACHESTAT               451
+#define SYS_MAP_SHADOW_STACK        453
+#define SYS_MSEAL                   462
 
 /* Rach2's own call, which Linux does not have: ping(2), the ICMP echo that
  * i386 reaches as socketcall's operations 0x1000 and 0x1001. x86-64 has no

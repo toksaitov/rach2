@@ -476,9 +476,9 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_COPY_FILE_RANGE] = sys_copy_file_range;
     table[SYS_PREADV2] = compat_sys_preadv2;
     table[SYS_PWRITEV2] = compat_sys_pwritev2;
-    table[SYS_PKEY_MPROTECT] = NULL;
-    table[SYS_PKEY_ALLOC] = NULL;
-    table[SYS_PKEY_FREE] = NULL;
+    table[SYS_PKEY_MPROTECT] = sys_pkey_mprotect;
+    table[SYS_PKEY_ALLOC] = sys_pkey_alloc;
+    table[SYS_PKEY_FREE] = sys_pkey_free;
     table[SYS_STATX] = sys_statx;
     table[SYS_ARCH_PRCTL] = compat_sys_arch_prctl;
     table[SYS_IO_PGETEVENTS] = compat_sys_io_pgetevents;
@@ -542,7 +542,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;
     table[SYS_CACHESTAT] = NULL;
     table[SYS_FCHMODAT2] = sys_fchmodat2;
-    table[SYS_MAP_SHADOW_STACK] = NULL;
+    table[SYS_MAP_SHADOW_STACK] = sys_map_shadow_stack;
     table[SYS_FUTEX_WAKE] = sys_futex_wake;
     table[SYS_FUTEX_WAIT] = sys_futex_wait;
     table[SYS_FUTEX_REQUEUE] = sys_futex_requeue;
@@ -551,7 +551,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_LSM_GET_SELF_ATTR] = NULL;
     table[SYS_LSM_SET_SELF_ATTR] = NULL;
     table[SYS_LSM_LIST_MODULES] = NULL;
-    table[SYS_MSEAL] = NULL;
+    table[SYS_MSEAL] = sys_mseal;
 }
 
 #endif /* RACH2_IA32 */

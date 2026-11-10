@@ -1,0 +1,109 @@
+.Dd November 11, 2026
+.Dt MSEAL 2
+.Os
+.Sh NAME
+.Nm mseal
+.Nd seal a range of mappings against change
+.Sh SYNOPSIS
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fn syscall SYS_mseal "void *addr" "size_t len" "unsigned long flags"
+.Sh DESCRIPTION
+.Fn mseal
+seals the mappings of the range of
+.Fa len
+bytes at
+.Fa addr ,
+as Linux's call does.
+.Fa addr
+must be page-aligned;
+.Fa len
+is rounded up to a page, and an empty range seals nothing.
+Every page of the range must be mapped.
+A mapping the range cuts is split at its ends, and each piece inside
+is sealed; sealing a sealed mapping again is no error, and no call
+takes a seal away.
+.Pp
+A sealed mapping keeps its place, size and protection for as long as
+the address space lasts.
+These are refused with
+.Er EPERM :
+.Bl -bullet
+.It
+.Xr munmap 2
+of a range that meets it, which unmaps nothing;
+.It
+.Xr mremap 2
+of it, and
+.Dv MREMAP_FIXED
+onto it;
+.It
+.Xr mmap 2
+with
+.Dv MAP_FIXED
+over it;
+.It
+.Xr mprotect 2
+and
+.Xr pkey_mprotect 2
+of it, which change the mappings below it in the range first;
+.It
+.Xr madvise 2
+advice that would discard its pages,
+.Dv MADV_DONTNEED ,
+.Dv MADV_DONTNEED_LOCKED ,
+.Dv MADV_FREE ,
+.Dv MADV_DONTFORK
+and
+.Dv MADV_WIPEONFORK ,
+when it is anonymous private memory without write, which advises the
+mappings below it first;
+.It
+a
+.Xr brk 2
+that would shrink the heap through it, which leaves the break as it was.
+.El
+.Pp
+.Xr shmdt 2
+of a sealed System V attachment leaves it and returns 0, as Linux does.
+The seal does not stop
+.Xr mlock 2 ,
+the stack's growth, or the end of the mapping at
+.Xr execve 2
+and exit; a child that
+.Xr fork 2
+makes has the mapping sealed too.
+.Pa /proc/ Ns Ar pid Ns Pa /smaps
+gives a sealed mapping the flag
+.Ql sl .
+.Pp
+.Fa flags
+must be 0.
+Linux seals on 64-bit kernels alone: on the i686 kernel every call
+fails with
+.Er EPERM ,
+and the x86-64 kernel seals for an i386 program as for a 64-bit one.
+.Sh RETURN VALUES
+0 on success.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[ENOMEM]"
+.It Bq Er EINVAL
+.Fa flags
+is not 0,
+.Fa addr
+is not page-aligned, or the range wraps.
+.It Bq Er ENOMEM
+A page of the range is not mapped, and nothing is sealed; or a split
+cannot obtain its entry.
+.It Bq Er EPERM
+The kernel is the i686 one.
+.El
+.Sh SEE ALSO
+.Xr brk 2 ,
+.Xr pkey_alloc 2
+.Sh STANDARDS
+Linux 6.10 added the call.

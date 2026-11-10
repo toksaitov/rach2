@@ -1,0 +1,39 @@
+.Dd November 11, 2026
+.Dt MAP_SHADOW_STACK 2
+.Os
+.Sh NAME
+.Nm map_shadow_stack
+.Nd map a shadow stack, which Rach2 never enables
+.Sh SYNOPSIS
+.In sys/syscall.h
+.In unistd.h
+.Ft void *
+.Fn syscall SYS_map_shadow_stack "void *addr" "unsigned long size" "unsigned int flags"
+.Sh DESCRIPTION
+Linux maps a shadow stack for a thread whose processor enforces return
+addresses against it, where the processor has shadow stacks for user mode
+and the kernel is built with
+.Dv CONFIG_X86_USER_SHADOW_STACK ,
+as the distributions build it.
+Rach2 does not enable the processor's shadow stacks, so on the x86-64
+kernel the call fails with
+.Er EOPNOTSUPP
+before it looks at its arguments, as Linux's does on such a processor,
+for a 64-bit and an i386 program alike.
+Linux cannot build the call for i386, and the i686 kernel has no entry
+for it: it fails with
+.Er ENOSYS .
+.Sh RETURN VALUES
+-1 with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EOPNOTSUPP
+Shadow stacks are not enabled, on the x86-64 kernel.
+.It Bq Er ENOSYS
+The kernel is the i686 one.
+.El
+.Sh SEE ALSO
+.Xr arch_prctl 2 ,
+.Xr pkey_alloc 2
