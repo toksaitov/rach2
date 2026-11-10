@@ -369,7 +369,10 @@ The kernel could not allocate the child's process record, page tables,
 user page state, kernel stack, memory region records, or descriptor table.
 .It Bq Er ENOSPC
 .Dv CLONE_NEWNS
-was given while 32 mount namespaces exist.
+was given while the mount namespaces of the caller's user, or of the owner of
+a user namespace above it, reach the limit in
+.Pa /proc/sys/user/max_mnt_namespaces
+of that user namespace.
 .It Bq Er EPERM
 A
 .Dv CLONE_NEW
