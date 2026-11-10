@@ -370,6 +370,7 @@ static const struct drm_crtc_funcs fbdrm_crtc_funcs = {fbdrm_crtc_check,
                                                        NULL,
                                                        NULL,
                                                        NULL,
+                                                       NULL,
                                                        NULL};
 static const struct drm_connector_funcs fbdrm_connector_funcs = {NULL, fbdrm_get_modes, NULL, NULL};
 static const uint64_t fbdrm_modifiers[] = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID};

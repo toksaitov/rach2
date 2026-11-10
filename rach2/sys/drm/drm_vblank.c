@@ -26,6 +26,62 @@ static int64_t vblank_now(void)
     return sec * 1000000000ll + nsec;
 }
 
+/* Linux's drm_timestamp_precision, in nanoseconds, and
+ * DRM_TIMESTAMP_MAXRETRIES: how long a scanout position's reading may take
+ * and how often it is tried. */
+#define VBLANK_MAX_ERROR_NS    20000
+#define VBLANK_TIMESTAMP_TRIES 3
+
+int64_t drm_vblank_ktime(void)
+{
+    return vblank_now();
+}
+
+int drm_crtc_vblank_helper_get_vblank_timestamp_internal(
+    struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq,
+    drm_vblank_get_scanout_position_func get_scanout_position, const struct drm_mode_modeinfo *mode)
+{
+    int64_t stime = 0, etime = 0, pixels;
+    int32_t vpos = 0, hpos = 0;
+    uint64_t delta;
+    int i;
+
+    if (!get_scanout_position || !mode || mode->clock == 0) {
+        return 0;
+    }
+    for (i = 0; i < VBLANK_TIMESTAMP_TRIES; i++) {
+        if (!get_scanout_position(crtc, in_vblank_irq, &vpos, &hpos, &stime, &etime, mode)) {
+            return 0;
+        }
+        if (etime - stime <= VBLANK_MAX_ERROR_NS) {
+            break;
+        }
+    }
+    /* Linux's div_s64, which rounds toward zero, on the magnitude. */
+    pixels = (int64_t)vpos * mode->htotal + hpos;
+    delta = drm_div64((uint64_t)(pixels < 0 ? -pixels : pixels) * 1000000u, mode->clock);
+    *time_ns = pixels < 0 ? etime + (int64_t)delta : etime - (int64_t)delta;
+    return 1;
+}
+
+/**
+ * The time of `crtc`'s latest vblank, Linux's drm_get_last_vbltimestamp:
+ * the driver's from where the CRTC scans when it can say, with `*precise`
+ * set, else the clock now.
+ */
+static int64_t vblank_timestamp(struct drm_crtc *crtc, int in_vblank_irq, int *precise)
+{
+    int64_t t;
+
+    if (crtc->funcs && crtc->funcs->get_vblank_timestamp &&
+        crtc->funcs->get_vblank_timestamp(crtc, &t, in_vblank_irq)) {
+        *precise = 1;
+        return t;
+    }
+    *precise = 0;
+    return vblank_now();
+}
+
 /** A monotonic time `ns`, not negative, as the seconds and microseconds of
  * an event or a reply, without the 64-bit division i686 has no routine
  * for. */
@@ -96,12 +152,19 @@ static uint32_t vblank_hw_diff(struct drm_crtc *crtc)
 static int32_t vblank_enable(struct drm_crtc *crtc)
 {
     int32_t rc;
+    uint32_t diff;
+    int64_t t;
+    int precise;
 
     if (crtc->vblank.enabled) {
         return 0;
     }
-    if (crtc->funcs->get_vblank_counter) {
-        crtc->vblank.count += vblank_hw_diff(crtc);
+    if (crtc->funcs->get_vblank_counter && (diff = vblank_hw_diff(crtc)) != 0) {
+        /* Linux's drm_update_vblank_count outside the interrupt: the time
+         * only from where the CRTC scans, else none until the next. */
+        crtc->vblank.count += diff;
+        t = vblank_timestamp(crtc, 0, &precise);
+        crtc->vblank.time_ns = precise ? t : 0;
     }
     rc = crtc->funcs->enable_vblank(crtc);
     if (rc == 0) {
@@ -264,13 +327,14 @@ int drm_crtc_handle_vblank(struct drm_crtc *crtc)
 {
     struct drm_vblank *v = &crtc->vblank;
     int64_t now;
+    int precise;
 
     if (!v->enabled) {
         return 0;
     }
     now = vblank_now();
     v->count += vblank_hw_diff(crtc);
-    v->time_ns = now;
+    v->time_ns = vblank_timestamp(crtc, 1, &precise);
     wq_wake_all(&v->wait);
     send_due_events(crtc, 0);
     if (v->refs == 0 && now - v->put_ns >= (int64_t)DRM_VBLANK_OFFDELAY_MS * 1000000) {
@@ -298,19 +362,22 @@ void drm_crtc_vblank_off(struct drm_crtc *crtc)
 void drm_crtc_vblank_on(struct drm_crtc *crtc)
 {
     struct drm_vblank *v = &crtc->vblank;
+    int64_t t;
+    int precise;
 
     if (v->inmodeset) {
         v->refs--;
         v->inmodeset = 0;
     }
-    /* Linux's drm_reset_vblank_timestamp without a precise timestamp: one
-     * more count, and no time until the next vblank; a hardware counter is
-     * taken in from here. */
+    /* Linux's drm_reset_vblank_timestamp: one more count, with the time
+     * from where the CRTC scans or none until the next vblank; a hardware
+     * counter is taken in from here. */
     v->count++;
-    v->time_ns = 0;
     if (crtc->funcs && crtc->funcs->get_vblank_counter) {
         v->last = crtc->funcs->get_vblank_counter(crtc);
     }
+    t = vblank_timestamp(crtc, 0, &precise);
+    v->time_ns = precise ? t : 0;
     if (v->refs != 0 && drm_crtc_has_vblank(crtc)) {
         (void)vblank_enable(crtc);
     }

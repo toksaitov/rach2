@@ -2575,6 +2575,10 @@ int32_t intel_enable_vblank(struct drm_crtc *crtc);
 void intel_disable_vblank(struct drm_crtc *crtc);
 /** The CRTC's `get_vblank_counter`: PIPE_FRMCOUNT. Any context. */
 uint32_t intel_get_vblank_counter(struct drm_crtc *crtc);
+/** The CRTC's `get_vblank_timestamp`, Linux's
+ * intel_crtc_get_vblank_timestamp: the end of the latest vertical blank
+ * from PIPEDSL. 1, or 0 for a pipe without a clock. Any context. */
+int intel_crtc_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq);
 
 /**
  * Hook the display's interrupts: each pipe's vblank and primary flip done,

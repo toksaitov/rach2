@@ -694,6 +694,8 @@
 #define PIPE_MISC_BPC_6               (2u << 5)
 #define PIPE_MISC_DITHER_ENABLE       (1u << 4)
 #define PIPE_FRMCOUNT_G4X(p)          (0x70040 + (p) * 0x1000)
+#define PIPEDSL(p)                    (0x70000 + (p) * 0x1000) /* the scanline */
+#define PIPEDSL_LINE_MASK             0x1fffu
 #define PIPE_FLIPCOUNT_G4X(p)         (0x70044 + (p) * 0x1000)
 
 /* A transcoder's DisplayPort M/N values: the data's, with the transfer

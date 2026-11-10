@@ -858,6 +858,11 @@ struct drm_plane {
  * the hardware's 32-bit frame counter, which advances at each vblank
  * whether or not the interrupt is on, so that the count takes in the
  * vblanks that came while it was off, as Linux's hook of that name does.
+ * `get_vblank_timestamp`, when given, sets `*time_ns` to the
+ * CLOCK_MONOTONIC time at which the latest vertical blank ends, from where
+ * the CRTC scans, and answers 1, or 0 when it cannot say, as Linux's hook
+ * of that name; the core then stamps a vblank with the clock when its
+ * handler runs.
  */
 struct drm_crtc_funcs {
     int32_t (*atomic_check)(struct drm_crtc *crtc, struct drm_atomic_state *state);
@@ -872,19 +877,20 @@ struct drm_crtc_funcs {
     int32_t (*verify_crc_source)(struct drm_crtc *crtc, const char *name, uint32_t *values_cnt);
     const char *const *(*get_crc_sources)(struct drm_crtc *crtc, uint32_t *count);
     uint32_t (*get_vblank_counter)(struct drm_crtc *crtc);
+    int (*get_vblank_timestamp)(struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq);
 };
 
 /*
  * A CRTC's vblanks, Linux's drm_vblank_crtc: the count of vblanks and the
- * CLOCK_MONOTONIC time of the last, 0 until one comes after the CRTC is
- * turned on. `refs` counts the holders that keep the interrupt on: each
- * waiter, each queued event, and while the CRTC is off (`inmodeset`) one
- * that keeps it off, since a hold taken then would never see a vblank.
- * `put_ns` is when the last holder let go, from which the off-delay runs.
- * `events` are the events waiting for a count, in the order queued. `wait`
- * wakes at each vblank, when vblanks stop, and when a commit's flip on the
- * CRTC completes. `last` is the hardware's frame counter when the count
- * last took it in, for a CRTC with `get_vblank_counter`.
+ * CLOCK_MONOTONIC time of the last, 0 until one comes after the CRTC is turned
+ * on unless `get_vblank_timestamp` gives it. `refs` counts the holders that
+ * keep the interrupt on: each waiter, each queued event, and while the CRTC is
+ * off (`inmodeset`) one that keeps it off, since a hold taken then would never
+ * see a vblank. `put_ns` is when the last holder let go, from which the
+ * off-delay runs. `events` are the events waiting for a count, in the order
+ * queued. `wait` wakes at each vblank, when vblanks stop, and when a commit's
+ * flip on the CRTC completes. `last` is the hardware's frame counter when the
+ * count last took it in, for a CRTC with `get_vblank_counter`.
  */
 struct drm_vblank {
     uint64_t count;
@@ -1559,6 +1565,32 @@ void drm_crtc_vblank_put(struct drm_crtc *crtc);
 /** The vblank count of `crtc`, and the time of the last vblank in
  * `*time_ns` when it is not NULL. */
 uint64_t drm_crtc_vblank_count_and_time(struct drm_crtc *crtc, int64_t *time_ns);
+/*
+ * A driver's scanout position, Linux's get_scanout_position of
+ * drm_crtc_helper_funcs: the line `*vpos` and pixel `*hpos` the CRTC
+ * scans for the timings `mode`, counted from the end of the vertical
+ * blank, so negative inside it, read between the CLOCK_MONOTONIC times
+ * `*stime` and `*etime` (drm_vblank_ktime); 1, or 0 when it cannot say.
+ */
+typedef int (*drm_vblank_get_scanout_position_func)(struct drm_crtc *crtc, int in_vblank_irq,
+                                                    int32_t *vpos, int32_t *hpos, int64_t *stime,
+                                                    int64_t *etime,
+                                                    const struct drm_mode_modeinfo *mode);
+/**
+ * A `get_vblank_timestamp` from a scanout position, Linux's
+ * drm_crtc_vblank_helper_get_vblank_timestamp_internal: the position read
+ * up to three times until the reading takes at most 20 us, Linux's
+ * drm_timestamp_precision, and `*time_ns` set to the end of that read less
+ * the lines and pixels since the end of the vertical blank at `mode`'s
+ * clock. 1, or 0 for a mode without a clock or a position not given.
+ */
+int drm_crtc_vblank_helper_get_vblank_timestamp_internal(
+    struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq,
+    drm_vblank_get_scanout_position_func get_scanout_position,
+    const struct drm_mode_modeinfo *mode);
+/** CLOCK_MONOTONIC in nanoseconds, Linux's ktime_get, which a scanout
+ * position's times are read from. Any context. */
+int64_t drm_vblank_ktime(void);
 /** Queue the commit event `e` for the next vblank of `crtc`, with the hold
  * the caller took, which the sending lets go. */
 void drm_crtc_arm_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *e);

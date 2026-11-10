@@ -695,13 +695,19 @@ static void row_flip(void)
           "flip: the surface written, the old one scanned");
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_EVENT, 0) == -EBUSY,
           "flip: a second flip before the vblank refused");
+    /* The vblank handled at its start: PIPEDSL gives line 767 of the
+     * panel's mode, 48 lines of 1558 pixels at 76.3 MHz before the
+     * vertical blank ends, as Linux's i915_get_crtc_scanoutpos counts. */
+    i915_model_pipes(&model)->pipe[0].us = 0;
     frame();
+    CHECK(pa->base.vblank.time_ns == model_now_ns + 980131,
+          "flip: the vblank stamped at the end of the vertical blank from PIPEDSL");
     CHECK(nsent == n0 + 1 && sent[n0].base.type == DRM_EVENT_FLIP_COMPLETE &&
               sent[n0].user_data == 0x1234 && sent[n0].crtc_id == pa->base.base.id,
           "flip: the event sent at the vblank");
     CHECK(sent[n0].sequence == (uint32_t)pa->base.vblank.count &&
               (int64_t)sent[n0].tv_sec * 1000000000ll + (int64_t)sent[n0].tv_usec * 1000ll ==
-                  model_now_ns / 1000 * 1000,
+                  (model_now_ns + 980131) / 1000 * 1000,
           "flip: the event's count and stamp are the vblank's");
     CHECK(pa->base.flip_pending == DRM_FLIP_NONE && !pa->event, "flip: nothing pending");
     CHECK(fw_obj->refs == 0, "flip: the firmware's framebuffer let go");

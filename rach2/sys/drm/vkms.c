@@ -779,6 +779,7 @@ static const struct drm_crtc_funcs vkms_crtc_funcs = {NULL,
                                                       vkms_set_crc_source,
                                                       vkms_verify_crc_source,
                                                       vkms_get_crc_sources,
+                                                      NULL,
                                                       NULL};
 static const struct drm_connector_funcs vkms_connector_funcs = {NULL, vkms_get_modes, NULL, NULL};
 

@@ -1267,7 +1267,7 @@ static void crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *state)
 
 static const struct drm_plane_funcs primary_funcs = {vgpu_plane_check, primary_update, NULL};
 static const struct drm_plane_funcs cursor_funcs = {vgpu_plane_check, cursor_update, NULL};
-static const struct drm_crtc_funcs crtc_funcs = {NULL, NULL, crtc_disable, NULL, NULL, NULL,
+static const struct drm_crtc_funcs crtc_funcs = {NULL, NULL, crtc_disable, NULL, NULL, NULL, NULL,
                                                  NULL, NULL, NULL,         NULL, NULL, NULL};
 
 /** A connector is connected while the device says its scanout is
