@@ -1999,8 +1999,9 @@ These fields start empty in a new thread and also appear in its
 .Pa /proc/PID/task/TID/status .
 .Pp
 CapPrm and CapEff are the capabilities the thread holds, those it has not
-given up when its effective user ID is 0, and none otherwise
-.Pq see Xr capget 2 ;
+given up when its effective user ID is 0, and none otherwise, with the
+capabilities of file access in CapEff by the file-system user ID
+.Pq see Xr capget 2 and Xr setfsuid 2 ;
 CapBnd is the bounding set, which
 .Dv PR_CAPBSET_DROP
 of

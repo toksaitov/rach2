@@ -21,6 +21,15 @@ A thread whose effective user ID is 0 has every capability it has not
 given up, and any other thread none.
 The kernel keeps one set for each thread as its effective and permitted
 sets, and keeps its inheritable and ambient sets as Linux does.
+The eight capabilities of file access, which
+.Xr setfsuid 2
+lists, are in the effective set by the file-system user ID instead: a
+thread has those it has not given up while that ID is 0, and none of
+them once
+.Xr setfsuid 2
+has taken it from 0, as on Linux.
+The permitted set reported is the capabilities the effective user ID
+gives together with the effective set.
 The ambient set, which
 .Dv PR_CAP_AMBIENT
 of
@@ -192,10 +201,13 @@ names no thread.
 .Sh SEE ALSO
 .Xr execve 2 ,
 .Xr prctl 2 ,
+.Xr setfsuid 2 ,
 .Xr proc 5
 .Sh STANDARDS
 Linux keeps the effective set apart from the permitted one and checks
 each capability on its own.
+The effective set differs from the permitted one here only in the
+capabilities of file access, which go by the file-system user ID.
 A thread whose user IDs are not root holds no capability here but those
 an exec gave it from the ambient set.
 .Dv PR_SET_KEEPCAPS

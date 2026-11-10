@@ -123,7 +123,7 @@ static int removed(const struct tmpfs_node *d)
 /** A new node of `mode` for the directory `dir`, or of no directory for the
  * root and a memfd, with no hold, no name, the next inode number and the
  * seal TMPFS_SEAL_SEAL; NULL when the heap has no room. It is owned as
- * Linux's `inode_init_owner` owns one: by the caller's effective ids, but
+ * Linux's `inode_init_owner` owns one: by the caller's file-system ids, but
  * with the group of a setgid directory, which passes the bit on to a new
  * directory. */
 static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_node *dir,
@@ -135,8 +135,8 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_nod
     if (!n) {
         return NULL;
     }
-    n->uid = current_proc ? current_proc->euid : 0u;
-    n->gid = current_proc ? current_proc->egid : 0u;
+    n->uid = current_proc ? proc_fsuid(current_proc) : 0u;
+    n->gid = current_proc ? proc_fsgid(current_proc) : 0u;
     if (dir && (dir->mode & T_ISGID)) {
         n->gid = dir->gid;
         if ((mode & T_IFMT) == T_IFDIR) {

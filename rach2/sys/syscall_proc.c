@@ -968,26 +968,57 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
     return rc < 0 ? rc : 1;
 }
 
+/** What a move of `p`'s effective or file-system ids undoes: its address
+ * space stops being dumpable, for every thread that shares it, and it loses
+ * its parent-death signal, so the parent it had cannot signal the identity
+ * it now has. */
+static void cred_undump(process_t *p)
+{
+    if (p->mm) {
+        p->mm->dumpable = 0;
+    }
+    p->pdeath_signal = 0;
+}
+
 /**
  * What a move of the effective ids undoes, as Linux's `commit_creds` undoes
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
- * its address space stops being dumpable, for every thread that shares it,
- * and it loses its parent-death signal, so the parent it had cannot signal
- * the identity it now has. A new effective uid also ends the capabilities
- * it was granted in its user namespace (`ns_granted`), where its privilege
- * is then its uid's.
+ * what `cred_undump` takes away. A new effective uid also ends the
+ * capabilities it was granted in its user namespace (`ns_granted`), where
+ * its privilege is then its uid's.
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
     if (p->euid != old_euid || p->egid != old_egid) {
-        if (p->mm) {
-            p->mm->dumpable = 0;
-        }
-        p->pdeath_signal = 0;
+        cred_undump(p);
     }
     if (p->euid != old_euid) {
         p->ns_granted = 0;
     }
+}
+
+/**
+ * Make `p`'s file-system user id its effective one again, as Linux does in
+ * every call that sets user ids, whether or not the call moved the effective
+ * id. An id setfsuid had set apart moves by that, which undoes what a move
+ * of the effective id does (`cred_undump`).
+ */
+static void fsuid_follow(process_t *p)
+{
+    if ((p->fs_own & PROC_FSUID_OWN) && p->fsuid != p->euid) {
+        cred_undump(p);
+    }
+    p->fs_own &= ~PROC_FSUID_OWN;
+}
+
+/** `fsuid_follow` for the file-system group id, in every call that sets
+ * group ids. */
+static void fsgid_follow(process_t *p)
+{
+    if ((p->fs_own & PROC_FSGID_OWN) && p->fsgid != p->egid) {
+        cred_undump(p);
+    }
+    p->fs_own &= ~PROC_FSGID_OWN;
 }
 
 /** Whether any of the caller's real, effective and saved user ids is root
@@ -1048,22 +1079,21 @@ static int32_t ids_named(uint32_t *v, int n, int gid)
 /**
  * What an exec's credentials change beside the ids, as Linux's exec does:
  * the new image's address space `mm` is dumpable unless the image runs with
- * ids its caller lacks (`secure`), its effective ids moved from `old_euid`
- * and `old_egid`, it is privileged where its caller was not
+ * ids its caller lacks (`secure`), its effective or file-system ids moved
+ * (`ids_moved`), it is privileged where its caller was not
  * (`was_privileged`), or an image it loaded is one the caller may not read
  * (`unreadable`), whose bytes a core file or a tracer's attach would give
  * the caller, as Linux's `would_dump` has it. A secure exec, or one that
- * moved the effective ids or made the caller privileged, clears the
+ * moved those ids or made the caller privileged, clears the
  * parent-death signal too, as Linux's `commit_creds` clears it; a secure
  * exec lowers a soft RLIMIT_STACK above 8 MiB to 8 MiB. The flag is set
  * before the address space is installed, so no other process sees the image
  * dumpable while it runs with new ids.
  */
-static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t old_euid,
-                            uint32_t old_egid, int was_privileged)
+static void exec_privileges(struct mm *mm, int secure, int unreadable, int ids_moved,
+                            int was_privileged)
 {
-    int moved = current_proc->euid != old_euid || current_proc->egid != old_egid ||
-                (!was_privileged && proc_privileged(current_proc));
+    int moved = ids_moved || (!was_privileged && proc_privileged(current_proc));
 
     mm->dumpable = secure || moved || unreadable ? 0u : 1u;
     if (secure || moved) {
@@ -2114,7 +2144,8 @@ static void exec_files(struct exec_state *s)
  * its descriptor table one of its own (`exec_files`) and drops the
  * close-on-exec descriptors; takes the new ids, the saved ids becoming the new
  * effective ones, which is the POSIX rule for every exec and what lets an image
- * shed acquired authority and take it back; resets what pointed into the old
+ * shed acquired authority and take it back, and the file-system ids the
+ * effective ones again; resets what pointed into the old
  * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
  * signals are kept, as POSIX says), the alternate signal stack, the TLS base
  * and the floating-point state, and deletes the POSIX timers, as POSIX says.
@@ -2130,8 +2161,8 @@ static void exec_files(struct exec_state *s)
 static void exec_commit(isr_params_t *params, struct exec_state *s)
 {
     struct mm *old = current_proc->mm;
-    uint32_t old_euid = current_proc->euid;
-    uint32_t old_egid = current_proc->egid;
+    int ids_moved = current_proc->euid != s->euid || current_proc->egid != s->egid ||
+                    proc_fsuid(current_proc) != s->euid || proc_fsgid(current_proc) != s->egid;
     int was_privileged = proc_privileged(current_proc);
     int sig;
 
@@ -2150,11 +2181,12 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->egid = s->egid;
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
+    current_proc->fs_own = 0;
     cap_store(current_proc, s->cap_lost[0], s->cap_lost[1]);
     current_proc->persona = s->persona;
     ns_exec(current_proc);
     exec_ambient(current_proc, s->secure);
-    exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
+    exec_privileges(s->mm, s->secure, s->unreadable, ids_moved, was_privileged);
     proc_set_comm(current_proc, s->script[0] ? s->script : s->path);
     /* Linux's flush_signal_handlers: a caught signal reverts to its
      * default, an ignored one stays ignored, and each loses its flags,
@@ -2695,6 +2727,9 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->rgid = parent->rgid;
     child->egid = parent->egid;
     child->sgid = parent->sgid;
+    child->fsuid = parent->fsuid;
+    child->fsgid = parent->fsgid;
+    child->fs_own = parent->fs_own;
     child->ngroups = parent->ngroups;
     k_memcpy(child->groups, parent->groups, sizeof(child->groups));
     k_memcpy(child->comm, parent->comm, sizeof(child->comm));
@@ -5998,12 +6033,14 @@ long sys_setuid(isr_params_t *params)
         }
         p->euid = uid;
         p->suid = uid;
+        fsuid_follow(p);
         cred_moved(p, old_euid, p->egid);
         ambient_uid_moved(p, had_root);
         return 0;
     }
     if (uid == p->ruid || uid == p->suid) {
         p->euid = uid;
+        fsuid_follow(p);
         cred_moved(p, old_euid, p->egid);
         ambient_uid_moved(p, had_root);
         return 0;
@@ -6025,11 +6062,13 @@ long sys_setgid(isr_params_t *params)
         p->rgid = gid;
         p->egid = gid;
         p->sgid = gid;
+        fsgid_follow(p);
         cred_moved(p, p->euid, old_egid);
         return 0;
     }
     if (gid == p->rgid || gid == p->sgid) {
         p->egid = gid;
+        fsgid_follow(p);
         cred_moved(p, p->euid, old_egid);
         return 0;
     }
@@ -6078,6 +6117,7 @@ long sys_setreuid(isr_params_t *params)
         p->suid = new_e;
     }
     p->euid = new_e;
+    fsuid_follow(p);
     cred_moved(p, old_euid, p->egid);
     ambient_uid_moved(p, had_root);
     return 0;
@@ -6113,6 +6153,7 @@ long sys_setregid(isr_params_t *params)
     }
     p->rgid = new_r;
     p->egid = new_e;
+    fsgid_follow(p);
     cred_moved(p, p->euid, old_egid);
     return 0;
 }
@@ -6159,6 +6200,7 @@ long sys_setresuid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->suid = s;
     }
+    fsuid_follow(p);
     cred_moved(p, old_euid, p->egid);
     ambient_uid_moved(p, had_root);
     return 0;
@@ -6199,8 +6241,90 @@ long sys_setresgid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->sgid = s;
     }
+    fsgid_follow(p);
     cred_moved(p, p->euid, old_egid);
     return 0;
+}
+
+/**
+ * setfsuid's work on the user ID `uid`, as the caller's user namespace
+ * names it: it becomes the caller's file-system user ID when it is the
+ * caller's real, effective, saved or file-system ID, or the caller is
+ * privileged in its user namespace (`id_privileged`). The call has no error,
+ * as on Linux: an ID that is refused, or that the namespace does not map, -1
+ * among them, changes nothing, and the previous file-system user ID comes
+ * back either way, as the namespace sees it, which is how a program reads
+ * it. The ID is the calling thread's alone and stays apart from the
+ * effective one until the next call that sets user IDs or an exec
+ * (`fsuid_follow`); a change undoes what `cred_undump` takes away.
+ */
+static long fsuid_set(uint32_t uid)
+{
+    process_t *p = current_proc;
+    uint32_t old = proc_fsuid(p);
+    int64_t k = uid == SC_ID_KEEP ? -1 : uid_named(uid);
+
+    uid = (uint32_t)k;
+    if (k >= 0 && uid != old &&
+        (uid == p->ruid || uid == p->euid || uid == p->suid || id_privileged())) {
+        p->fsuid = uid;
+        p->fs_own |= PROC_FSUID_OWN;
+        cred_undump(p);
+    }
+    return (long)uid_seen(old);
+}
+
+/** `fsuid_set` for the file-system group ID, which also decides the group
+ * class of the file access checks. */
+static long fsgid_set(uint32_t gid)
+{
+    process_t *p = current_proc;
+    uint32_t old = proc_fsgid(p);
+    int64_t k = gid == SC_ID_KEEP ? -1 : gid_named(gid);
+
+    gid = (uint32_t)k;
+    if (k >= 0 && gid != old &&
+        (gid == p->rgid || gid == p->egid || gid == p->sgid || id_privileged())) {
+        p->fsgid = gid;
+        p->fs_own |= PROC_FSGID_OWN;
+        cred_undump(p);
+    }
+    return (long)gid_seen(old);
+}
+
+/** The 32-bit ID of a 16-bit ID argument, as Linux's low2highuid: its low
+ * 16 bits, the 16-bit -1 becoming the 32-bit one. */
+static uint32_t id16_wide(unsigned long v)
+{
+    return (uint16_t)v == 0xFFFFu ? SC_ID_KEEP : (uint32_t)(uint16_t)v;
+}
+
+/** setfsuid (setfsuid32 on i386) takes a user ID and returns the previous
+ * file-system user ID (`fsuid_set`). */
+long sys_setfsuid(isr_params_t *params)
+{
+    return fsuid_set((uint32_t)SC_ARG(params, 0));
+}
+
+/** setfsgid (setfsgid32 on i386) takes a group ID and returns the previous
+ * file-system group ID (`fsgid_set`). */
+long sys_setfsgid(isr_params_t *params)
+{
+    return fsgid_set((uint32_t)SC_ARG(params, 0));
+}
+
+/** i386's setfsuid, call 138, with a 16-bit ID (`id16_wide`). The previous
+ * ID comes back whole, not cut to 16 bits, as Linux's setfsuid16 returns
+ * it. */
+long sys_setfsuid16(isr_params_t *params)
+{
+    return fsuid_set(id16_wide(SC_ARG(params, 0)));
+}
+
+/** i386's setfsgid, call 139, as `sys_setfsuid16`. */
+long sys_setfsgid16(isr_params_t *params)
+{
+    return fsgid_set(id16_wide(SC_ARG(params, 0)));
 }
 
 /** getresuid (getresuid32 on i686): the real, effective and saved user IDs, as
@@ -8881,8 +9005,10 @@ static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
  * capget takes header and the sets' words.
  *
  * The sets of the thread the header's pid names, the caller for 0: the
- * effective and permitted sets as `cap_word` gives them, and the
- * inheritable set capset stored (`cap_inh`). With a null
+ * effective set as `cap_eff_word` gives it, which has the capabilities of
+ * file access by the file-system user id, the permitted set as `cap_word`
+ * gives it with the effective set's capabilities, and the inheritable set
+ * capset stored (`cap_inh`). With a null
  * second argument the call is a query of the version alone, and returns 0 even
  * for an unknown version, over which the preferred one is written
  * (`cap_version_in`). -ESRCH for a pid that names no thread, -EINVAL for a
@@ -8914,8 +9040,10 @@ long sys_capget(isr_params_t *params)
         }
     }
     k_memset(d, 0, sizeof(d));
-    d[0].effective = d[0].permitted = cap_word(p, 0);
-    d[1].effective = d[1].permitted = cap_word(p, 1);
+    d[0].effective = cap_eff_word(p, 0);
+    d[1].effective = cap_eff_word(p, 1);
+    d[0].permitted = cap_word(p, 0) | d[0].effective;
+    d[1].permitted = cap_word(p, 1) | d[1].effective;
     d[0].inheritable = p->cap_inh[0];
     d[1].inheritable = p->cap_inh[1];
     if (copy_to_user((void __user *)SC_ARG(params, 1), d, words * sizeof(d[0])) != 0) {
@@ -8972,7 +9100,7 @@ long sys_capset(isr_params_t *params)
     }
     for (i = 0; i < 2; i++) {
         uint32_t valid = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
-        uint32_t held = cap_word(p, i);
+        uint32_t held = cap_word(p, i) | cap_eff_word(p, i);
         uint32_t inh_room = valid & ~p->bset_lost[i];
 
         d[i].effective &= valid;

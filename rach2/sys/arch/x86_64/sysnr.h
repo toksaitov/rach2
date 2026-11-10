@@ -134,6 +134,8 @@
 #define SYS_SETRESGID               119
 #define SYS_GETRESGID               120
 #define SYS_GETPGID                 121
+#define SYS_SETFSUID                122
+#define SYS_SETFSGID                123
 #define SYS_GETSID                  124
 #define SYS_CAPGET                  125
 #define SYS_CAPSET                  126

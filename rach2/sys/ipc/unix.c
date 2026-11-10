@@ -344,7 +344,7 @@ static struct unix_sock *unix_alloc(int type)
     s->ns = proc_netns(current_proc);
     s->state = US_UNCONNECTED;
     s->inode = socket_inode_next();
-    s->uid = current_proc->euid;
+    s->uid = proc_fsuid(current_proc); /* as Linux owns a socket's inode */
     s->sndbuf = UNIX_BUF;
     s->rcvbuf = UNIX_BUF;
     wait_queue_init(&s->wq);

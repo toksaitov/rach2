@@ -706,7 +706,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         sock->protocol =
             (uint16_t)(((uint32_t)protocol & 0xffu) << 8 | (((uint32_t)protocol >> 8) & 0xffu));
     }
-    sock->uid = current_proc->euid;
+    sock->uid = proc_fsuid(current_proc); /* as Linux owns a socket's inode */
 
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {

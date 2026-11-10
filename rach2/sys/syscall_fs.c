@@ -742,7 +742,7 @@ out:
         vfs_node_unlock(&state->file);
     }
     if (written > 0) {
-        if (!cred_privileged()) {
+        if (!cred_fs_privileged()) {
             if (entry->node) {
                 cred_kill_setid(entry->node);
             } else {
@@ -989,7 +989,7 @@ long ksys_ftruncate(int fd, long long length)
         return -EBUSY;
     }
     rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
-    if (rc == 0 && !cred_privileged()) {
+    if (rc == 0 && !cred_fs_privileged()) {
         if (entry->node) {
             cred_kill_setid(entry->node);
         } else {
@@ -2060,6 +2060,11 @@ int cred_privileged(void)
     return proc_privileged(current_proc);
 }
 
+int cred_fs_privileged(void)
+{
+    return proc_fs_privileged(current_proc);
+}
+
 /**
  * Setuid always goes: a file whose contents or owner just changed no longer
  * grants what its owner meant it to grant. Setgid goes only when the
@@ -2114,12 +2119,12 @@ static int cred_in_suppl(uint32_t gid)
     return 0;
 }
 
-/** Non-zero when `gid` is the caller's effective gid or in its supplementary
- * list: the set a file owner may chgrp to, and the group the access check
- * matches. */
+/** Non-zero when `gid` is the caller's file-system gid or in its
+ * supplementary list: the set a file owner may chgrp to, and the group the
+ * access check matches. */
 static int cred_in_group(uint32_t gid)
 {
-    return gid == current_proc->egid || cred_in_suppl(gid);
+    return gid == proc_fsgid(current_proc) || cred_in_suppl(gid);
 }
 
 /**
@@ -2128,15 +2133,17 @@ static int cred_in_group(uint32_t gid)
  * One identity class is chosen and judged alone, the classic rule. The owner
  * is judged by the owner bits, else a group match (primary or supplementary)
  * by the group bits, else the other bits; a uid of 0 passes everything,
- * unless the thread gave up its capabilities (`nocaps`). `use_real` judges
- * by the real ids instead of the effective ones, for access(2), the one call
- * that asks who the process really is, not who it is acting as.
+ * unless the thread gave up its capabilities (`nocaps`). The ids are the
+ * file-system ones (`proc_fsuid`, `proc_fsgid`), which are the effective
+ * ones unless setfsuid or setfsgid set them apart. `use_real` judges by the
+ * real ids instead, for access(2), the one call that asks who the process
+ * really is, not who it is acting as.
  */
 static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, int want,
                                 int use_real)
 {
     process_t *p = current_proc;
-    uint32_t uid = use_real ? p->ruid : p->euid;
+    uint32_t uid = use_real ? p->ruid : proc_fsuid(p);
     uint32_t bits;
 
     if (uid == 0 && !p->nocaps) {
@@ -2144,7 +2151,7 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, i
     }
     if (uid == owner) {
         bits = mode >> 6;
-    } else if ((use_real ? p->rgid : p->egid) == group || cred_in_suppl(group)) {
+    } else if ((use_real ? p->rgid : proc_fsgid(p)) == group || cred_in_suppl(group)) {
         bits = mode >> 3;
     } else {
         bits = mode;
@@ -2231,8 +2238,8 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
     if (!dir || dir == krffs_fs->node || !(dir->mode & KRFFS_MODE_STICKY)) {
         return 0;
     }
-    if (cred_privileged() || current_proc->euid == dir->uid ||
-        (victim && current_proc->euid == victim->uid)) {
+    if (cred_fs_privileged() || proc_fsuid(current_proc) == dir->uid ||
+        (victim && proc_fsuid(current_proc) == victim->uid)) {
         return 0;
     }
     return -EPERM;
@@ -2330,8 +2337,9 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
 /**
  * The descriptor the /proc/PID/fd/N link `vp` names, into `*src`, and the
  * process whose table has it, into `*owner`. Another process's descriptor
- * needs a privileged caller or one with the process's effective user ID.
- * 0, -ENOENT for no such process or descriptor, or -EACCES.
+ * needs a privileged caller or one whose file-system user ID is the
+ * process's effective one, which Linux's ptrace access check for a read of
+ * /proc compares. 0, -ENOENT for no such process or descriptor, or -EACCES.
  */
 static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry_t **src)
 {
@@ -2343,7 +2351,7 @@ static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry
         vp->procfd >= fd_table_cap(p->fds)) {
         return -ENOENT;
     }
-    if (p->fds != current_proc->fds && !cred_privileged() && p->euid != current_proc->euid) {
+    if (p->fds != current_proc->fds && !cred_privileged() && p->euid != proc_fsuid(current_proc)) {
         return -EACCES;
     }
     e = &p->fds->entries[vp->procfd];
@@ -2662,8 +2670,9 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
 
 /**
  * Stamp the KRFFS node `node`, new in the directory `parent`, with the
- * creating process's identity: owner and group from the effective ids, as
- * the V7 creation rule gives a file to whoever its creator acts as, and the
+ * creating process's identity: owner and group from the file-system ids,
+ * the effective ones unless setfsuid or setfsgid set them apart, as the V7
+ * creation rule gives a file to whoever its creator acts as, and the
  * permission bits of `mode` with the file-creation mask applied, the type
  * bits kept. A setgid parent gives its group instead, and its setgid bit to
  * a new directory, as Linux's `inode_init_owner` does.
@@ -2672,8 +2681,8 @@ static void krffs_stamp_new_node(krffs_node_t *node, const krffs_node_t *parent,
 {
     uint32_t perm = mode & 07777u & ~current_proc->fs->umask;
 
-    node->uid = current_proc->euid;
-    node->gid = current_proc->egid;
+    node->uid = proc_fsuid(current_proc);
+    node->gid = proc_fsgid(current_proc);
     if (parent->mode & 02000u) {
         node->gid = parent->gid;
         if ((node->mode & 0170000u) == 0040000u) {
@@ -3299,7 +3308,7 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
     int rc;
 
     rc = vfs_truncate(mnt, ofd->fhandle, 0);
-    if (rc == 0 && !cred_privileged()) {
+    if (rc == 0 && !cred_fs_privileged()) {
         if (mnt_is_root(mnt)) {
             cred_kill_setid(ofd->vnode);
         } else {
@@ -4033,11 +4042,11 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
     void *node;
     int rc = cred_access_ref(parent, CRED_W, 0);
 
-    if (rc != 0 || cred_privileged()) {
+    if (rc != 0 || cred_fs_privileged()) {
         return rc;
     }
     rc = vfs_getattr(parent->mnt, parent->node, &pst);
-    if (rc != 0 || !(pst.mode & 01000u) || pst.uid == current_proc->euid) {
+    if (rc != 0 || !(pst.mode & 01000u) || pst.uid == proc_fsuid(current_proc)) {
         return rc;
     }
     rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &node);
@@ -4051,7 +4060,7 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
     if (rc != 0) {
         return rc;
     }
-    return est.uid == current_proc->euid ? 0 : -EPERM;
+    return est.uid == proc_fsuid(current_proc) ? 0 : -EPERM;
 }
 
 /**
@@ -4649,10 +4658,10 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
     if (copy_from_user(&want, (const void __user *)arg, sizeof(want)) != 0) {
         return -EFAULT;
     }
-    if (!cred_privileged() && current_proc->euid != st.uid) {
+    if (!cred_fs_privileged() && proc_fsuid(current_proc) != st.uid) {
         return -EPERM;
     }
-    if (((want ^ st.flags) & (VFS_FL_IMMUTABLE | VFS_FL_APPEND)) && !cred_privileged()) {
+    if (((want ^ st.flags) & (VFS_FL_IMMUTABLE | VFS_FL_APPEND)) && !cred_fs_privileged()) {
         return -EPERM;
     }
     st.flags = want;
@@ -4809,7 +4818,7 @@ static int xattr_access(const struct vfs_ref *ref, const struct vfs_xattr *arg)
     if ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)
         return arg->op >= VFS_XATTR_SET ? -EPERM : -ENODATA;
     if (arg->op >= VFS_XATTR_SET && (st.mode & 01000u) && (st.mode & 0170000u) == 0040000u &&
-        current_proc->euid != st.uid && !proc_privileged(current_proc))
+        proc_fsuid(current_proc) != st.uid && !proc_fs_privileged(current_proc))
         return -EPERM;
     return cred_access_ref(ref, arg->op >= VFS_XATTR_SET ? CRED_W : CRED_R, 0);
 }
@@ -6125,7 +6134,7 @@ static int synth_dev_parent(const struct vfs_ref *parent)
  * Make `leaf` in the synthetic directory `parent`, as mkdir(2) and
  * symlink(2) do under /dev: a directory with the permission bits of `mode`
  * when `target` is NULL, else a link to the `target` text, owned by the
- * caller's effective ids (devtree.h). The caller has refused a name the
+ * caller's file-system ids (devtree.h). The caller has refused a name the
  * directory has; a directory of /dev's table that is absent now is -EEXIST
  * too, since its name is the table's. 0, -EROFS for a directory that takes
  * no entry
@@ -6145,7 +6154,8 @@ static int32_t synth_dev_make(const struct vfs_ref *parent, const char *leaf, ui
     }
     rc = cred_access_ref(parent, CRED_W, 0);
     if (rc == 0) {
-        rc = devtree_make(where, leaf, mode, target, current_proc->euid, current_proc->egid);
+        rc = devtree_make(where, leaf, mode, target, proc_fsuid(current_proc),
+                          proc_fsgid(current_proc));
     }
     return rc < 0 ? rc : 0;
 }
@@ -9363,7 +9373,7 @@ long sys_open_by_handle_at(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    if (!proc_privileged(current_proc)) {
+    if (!proc_fs_privileged(current_proc)) {
         return -EPERM;
     }
     m = kst.st_mnt_id ? vfs_mount_at((int)kst.st_mnt_id - 1) : NULL;
@@ -9708,13 +9718,13 @@ long sys_faccessat2(isr_params_t *params)
  */
 static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 {
-    if (!cred_privileged() && current_proc->euid != node->uid) {
+    if (!cred_fs_privileged() && proc_fsuid(current_proc) != node->uid) {
         return -EPERM;
     }
     if (node != krffs_fs->node) {
         uint32_t want = mode & 07777u;
 
-        if (!cred_privileged() && !KRFFS_IS_DIR(node->mode) && !cred_in_group(node->gid)) {
+        if (!cred_fs_privileged() && !KRFFS_IS_DIR(node->mode) && !cred_in_group(node->gid)) {
             want &= ~(uint32_t)KRFFS_MODE_SGID;
         }
         node->mode = (uint16_t)((node->mode & ~07777u) | want);
@@ -9744,11 +9754,11 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     int uid_changes = (uid != (uint32_t)-1 && uid != node->uid);
     int gid_changes = (gid != (uint32_t)-1 && gid != node->gid);
 
-    if (uid_changes && !cred_privileged()) {
+    if (uid_changes && !cred_fs_privileged()) {
         return -EPERM;
     }
-    if (gid_changes && !cred_privileged() &&
-        (current_proc->euid != node->uid || !cred_in_group(gid))) {
+    if (gid_changes && !cred_fs_privileged() &&
+        (proc_fsuid(current_proc) != node->uid || !cred_in_group(gid))) {
         return -EPERM;
     }
     if (uid != (uint32_t)-1) {
@@ -9779,7 +9789,7 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
  * only, which dropbear does before it hands the terminal to the user;
  * -ENOENT when the pty is gone. An entry root made under /dev keeps its
  * own (`chmod_made`). Every other /dev, /proc or /sys node has fixed
- * metadata: a caller whose effective uid is 0 succeeds without a change,
+ * metadata: a caller whose file-system uid is 0 succeeds without a change,
  * and anyone else is -EPERM.
  *
  * The walk takes the lock of the mount it ends on, where the type asks for
@@ -9801,10 +9811,10 @@ static int32_t chmod_made(int id, uint32_t mode)
     if (devtree_attr(id, &a) != 0) {
         return -ENOENT;
     }
-    if (!cred_privileged() && current_proc->euid != a.uid) {
+    if (!cred_fs_privileged() && proc_fsuid(current_proc) != a.uid) {
         return -EPERM;
     }
-    if (!cred_privileged() && !cred_in_group(a.gid)) {
+    if (!cred_fs_privileged() && !cred_in_group(a.gid)) {
         mode &= ~02000u;
     }
     return devtree_setattr(id, mode & 07777u, (uint32_t)-1, (uint32_t)-1);
@@ -9823,9 +9833,9 @@ static int32_t chown_made(int id, uint32_t uid, uint32_t gid)
     if (devtree_attr(id, &a) != 0) {
         return -ENOENT;
     }
-    if (!cred_privileged() && ((uid != (uint32_t)-1 && uid != a.uid) ||
-                               (gid != (uint32_t)-1 && gid != a.gid &&
-                                (current_proc->euid != a.uid || !cred_in_group(gid))))) {
+    if (!cred_fs_privileged() && ((uid != (uint32_t)-1 && uid != a.uid) ||
+                                  (gid != (uint32_t)-1 && gid != a.gid &&
+                                   (proc_fsuid(current_proc) != a.uid || !cred_in_group(gid))))) {
         return -EPERM;
     }
     return devtree_setattr(id, (uint32_t)-1, uid, gid);
@@ -9843,7 +9853,7 @@ static int32_t chmod_dev(const char *name, uint32_t mode)
     if (devfs_owner(name, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if (!cred_privileged() && current_proc->euid != uid) {
+    if (!cred_fs_privileged() && proc_fsuid(current_proc) != uid) {
         return -EPERM;
     }
     return devfs_setattr(name, mode & 0777u, (uint32_t)-1, (uint32_t)-1);
@@ -9862,9 +9872,9 @@ static int32_t chown_dev(const char *name, uint32_t uid, uint32_t gid)
     if (devfs_owner(name, &ouid, &ogid) != 0) {
         return -ENOENT;
     }
-    if (!cred_privileged() && ((uid != (uint32_t)-1 && uid != ouid) ||
-                               (gid != (uint32_t)-1 && gid != ogid &&
-                                (current_proc->euid != ouid || !cred_in_group(gid))))) {
+    if (!cred_fs_privileged() && ((uid != (uint32_t)-1 && uid != ouid) ||
+                                  (gid != (uint32_t)-1 && gid != ogid &&
+                                   (proc_fsuid(current_proc) != ouid || !cred_in_group(gid))))) {
         return -EPERM;
     }
     return devfs_setattr(name, (uint32_t)-1, uid, gid);
@@ -9887,7 +9897,7 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
         if (!pt) {
             return -ENOENT;
         }
-        if (!cred_privileged() && current_proc->euid != pt->uid) {
+        if (!cred_fs_privileged() && proc_fsuid(current_proc) != pt->uid) {
             return -EPERM;
         }
         pt->mode = (uint16_t)(mode & 0777u);
@@ -9906,7 +9916,7 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
 
         return rc != 0 ? rc : chmod_fd(src, mode);
     }
-    return current_proc->euid == 0 ? 0 : -EPERM; /* fixed metadata root owns */
+    return proc_fsuid(current_proc) == 0 ? 0 : -EPERM; /* fixed metadata root owns */
 }
 
 /**
@@ -9945,11 +9955,11 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
         if (rc == 0 && !follow && (vst.mode & 0170000u) == 0120000u) {
             rc = -EOPNOTSUPP;
         }
-        if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+        if (rc == 0 && !cred_fs_privileged() && proc_fsuid(current_proc) != vst.uid) {
             rc = -EPERM;
         }
         if (rc == 0) {
-            if (!cred_privileged() && !cred_in_group(vst.gid)) {
+            if (!cred_fs_privileged() && !cred_in_group(vst.gid)) {
                 mode &= ~02000u;
             }
             vst.mode = mode;
@@ -10010,8 +10020,9 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
     if (what == 0) {
         return 0;
     }
-    if (!cred_privileged() && (current_proc->euid != vst->uid || (what & VFS_SET_UID) != 0 ||
-                               ((what & VFS_SET_GID) != 0 && !cred_in_group(gid)))) {
+    if (!cred_fs_privileged() &&
+        (proc_fsuid(current_proc) != vst->uid || (what & VFS_SET_UID) != 0 ||
+         ((what & VFS_SET_GID) != 0 && !cred_in_group(gid)))) {
         return -EPERM;
     }
     if (what & VFS_SET_UID) {
@@ -10066,7 +10077,7 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
         }
         uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
         gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
-        if ((uid_changes || gid_changes) && !cred_privileged()) {
+        if ((uid_changes || gid_changes) && !cred_fs_privileged()) {
             return -EPERM;
         }
         if (uid != (uint32_t)-1) {
@@ -10267,7 +10278,7 @@ long sys_fchmodat2(isr_params_t *params)
  * keeps; 0 or a negative errno. A node of the KRFFS boot root or of a
  * mounted type stores the mode, a pty slave stores it on the pty, -EBADF
  * when the pty is gone, and every other descriptor has fixed metadata, as
- * its path has: a caller whose effective uid is 0 succeeds without a
+ * its path has: a caller whose file-system uid is 0 succeeds without a
  * change, and anyone else is -EPERM. A descriptor that is not open, or was
  * opened with O_PATH, is -EBADF, as on Linux.
  */
@@ -10294,13 +10305,13 @@ static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
         if (!pt) {
             return -EBADF;
         }
-        if (!cred_privileged() && current_proc->euid != pt->uid) {
+        if (!cred_fs_privileged() && proc_fsuid(current_proc) != pt->uid) {
             return -EPERM;
         }
         pt->mode = (uint16_t)(mode & 0777u);
         return 0;
     }
-    return current_proc->euid == 0 ? 0 : -EPERM;
+    return proc_fsuid(current_proc) == 0 ? 0 : -EPERM;
 }
 
 long sys_fchmod(isr_params_t *params)
@@ -10346,11 +10357,11 @@ static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
         file.node = entry->ofd->vnode;
         vfs_node_lock(&file);
         rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
-        if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+        if (rc == 0 && !cred_fs_privileged() && proc_fsuid(current_proc) != vst.uid) {
             rc = -EPERM;
         }
         if (rc == 0) {
-            if (!cred_privileged() && !cred_in_group(vst.gid)) {
+            if (!cred_fs_privileged() && !cred_in_group(vst.gid)) {
                 mode &= ~02000u;
             }
             vst.mode = mode;
@@ -10544,7 +10555,7 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         }
         uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
         gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
-        if ((uid_changes || gid_changes) && !cred_privileged()) {
+        if ((uid_changes || gid_changes) && !cred_fs_privileged()) {
             return -EPERM;
         }
         if (uid != (uint32_t)-1) {
@@ -10723,7 +10734,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     if (!loop_backs(desc->vmnt, desc->vnode)) {
         rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
     }
-    if (rc == 0 && !cred_privileged()) {
+    if (rc == 0 && !cred_fs_privileged()) {
         if (mnt_is_root(desc->vmnt)) {
             cred_kill_setid(desc->vnode);
         } else {
@@ -14089,7 +14100,7 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     } else {
         rc = cred_access_ref(&parent, CRED_W, 0);
     }
-    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && !cred_privileged()) {
+    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && !cred_fs_privileged()) {
         rc = -EPERM;
     }
     if (rc == 0) {
@@ -14768,7 +14779,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
         ref.node = node;
         vfs_node_lock(&ref);
         rc = vfs_getattr(mnt, node, &vst);
-        if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+        if (rc == 0 && !cred_fs_privileged() && proc_fsuid(current_proc) != vst.uid) {
             rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
         }
         if (rc == 0 && (times == NULL || times[0].tv_nsec != UTIME_OMIT)) {
@@ -14795,11 +14806,11 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
         return 0;
     }
     if (now_both) {
-        if (!cred_privileged() && current_proc->euid != kn->uid &&
+        if (!cred_fs_privileged() && proc_fsuid(current_proc) != kn->uid &&
             cred_access_node(kn, CRED_W, 0) != 0) {
             return -EACCES;
         }
-    } else if (!cred_privileged() && current_proc->euid != kn->uid) {
+    } else if (!cred_fs_privileged() && proc_fsuid(current_proc) != kn->uid) {
         return -EPERM;
     }
     if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {

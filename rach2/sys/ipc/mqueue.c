@@ -166,17 +166,18 @@ static void mq_unname(struct mqueue *q)
 }
 
 /** Whether the caller may open `q` for the access mode `acc`: the owner's,
- * the group's or the others' bits, or a privileged caller. */
+ * the group's or the others' bits, by its file-system ids as for any file,
+ * or a caller with privilege over files. */
 static int mq_may(const struct mqueue *q, int acc)
 {
     uint32_t want = acc == 0 ? 4u : acc == 1 ? 2u : 6u;
     uint32_t bits = q->mode;
     uint32_t i;
 
-    if (current_proc->euid == q->uid) {
+    if (proc_fsuid(current_proc) == q->uid) {
         bits >>= 6;
     } else {
-        int in = q->gid == current_proc->egid;
+        int in = q->gid == proc_fsgid(current_proc);
 
         for (i = 0; !in && i < current_proc->ngroups; i++) {
             in = current_proc->groups[i] == q->gid;
@@ -185,7 +186,7 @@ static int mq_may(const struct mqueue *q, int acc)
             bits >>= 3;
         }
     }
-    return (want & ~bits & 7u) == 0 || proc_privileged(current_proc);
+    return (want & ~bits & 7u) == 0 || proc_fs_privileged(current_proc);
 }
 
 static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count);
@@ -408,8 +409,8 @@ static int32_t mq_create(const char *name, uint32_t mode, const void __user *uat
 
         get_current_time(&q->ctime, &ns);
     }
-    q->uid = current_proc->euid;
-    q->gid = current_proc->egid;
+    q->uid = proc_fsuid(current_proc);
+    q->gid = proc_fsgid(current_proc);
     q->mode = mode & 0777u & ~current_proc->fs->umask;
     q->maxmsg = maxmsg;
     q->msgsize = msgsize;
@@ -545,7 +546,7 @@ long sys_mq_unlink(struct isr_params *params)
     if (!q) {
         return -ENOENT;
     }
-    if (q->uid != current_proc->euid && !proc_privileged(current_proc)) {
+    if (q->uid != proc_fsuid(current_proc) && !proc_fs_privileged(current_proc)) {
         return -EACCES;
     }
     mq_unname(q);
@@ -1151,7 +1152,7 @@ static int mqfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     if (!q) {
         return -ENOENT;
     }
-    if (current_proc->euid != q->uid && !proc_privileged(current_proc)) {
+    if (proc_fsuid(current_proc) != q->uid && !proc_fs_privileged(current_proc)) {
         return -EPERM;
     }
     mq_unname(q);

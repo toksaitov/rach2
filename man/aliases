@@ -393,6 +393,9 @@ set_tid_address 2 set_thread_area
 setarch 1 busybox-util-linux
 setdomainname 2 uname
 setfattr 1 busybox-miscutils
+setfsgid 2 setfsuid
+setfsgid32 2 setfsuid
+setfsuid32 2 setfsuid
 setgid32 2 setuid
 setgroups32 2 setuid
 sethostname 2 uname

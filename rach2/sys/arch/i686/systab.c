@@ -321,11 +321,16 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_LINKAT] = sys_linkat;
     table[SYS_SYMLINK] = sys_symlink;
     table[SYS_SYMLINKAT] = sys_symlinkat;
-    /* No 16-bit set-id numbers: their ids and their "keep" differ (sysnr.h). */
+    /* No 16-bit numbers of the four below: their ids and their "keep" differ
+     * (sysnr.h). setfsuid and setfsgid have both forms. */
     table[SYS_SETREUID32] = sys_setreuid;
     table[SYS_SETREGID32] = sys_setregid;
     table[SYS_SETRESUID32] = sys_setresuid;
     table[SYS_SETRESGID32] = sys_setresgid;
+    table[SYS_SETFSUID] = sys_setfsuid16;
+    table[SYS_SETFSGID] = sys_setfsgid16;
+    table[SYS_SETFSUID32] = sys_setfsuid;
+    table[SYS_SETFSGID32] = sys_setfsgid;
     table[SYS_CHMOD] = sys_chmod;
     table[SYS_FCHMODAT] = sys_fchmodat;
     table[SYS_FCHMOD] = sys_fchmod;

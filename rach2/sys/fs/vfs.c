@@ -284,7 +284,8 @@ static int in_groups(uint32_t gid)
  *
  * The rule is the nine-bit rule over the attributes the type reports: one
  * identity class is chosen and judged alone, and a uid of 0 passes unless
- * the thread gave up its capabilities (`nocaps`). `use_real` judges by the
+ * the thread gave up its capabilities (`nocaps`). The ids are the
+ * file-system ones (`proc_fsuid`, `proc_fsgid`); `use_real` judges by the
  * real ids, for access(2). A node of a type without `getattr` is
  * searchable, and so is every directory to the kernel when no process
  * runs.
@@ -308,13 +309,13 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
     if (!current_proc) {
         return 0;
     }
-    uid = use_real ? current_proc->ruid : current_proc->euid;
+    uid = use_real ? current_proc->ruid : proc_fsuid(current_proc);
     if (uid == 0 && !current_proc->nocaps) {
         return 0;
     }
     if (uid == st.uid) {
         bits = st.mode >> 6;
-    } else if ((use_real ? current_proc->rgid : current_proc->egid) == st.gid ||
+    } else if ((use_real ? current_proc->rgid : proc_fsgid(current_proc)) == st.gid ||
                in_groups(st.gid)) {
         bits = st.mode >> 3;
     } else {

@@ -5433,8 +5433,8 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
         }
         return rc;
     }
-    n->uid = current_proc ? current_proc->euid : 0;
-    n->gid = current_proc ? current_proc->egid : 0;
+    n->uid = current_proc ? proc_fsuid(current_proc) : 0;
+    n->gid = current_proc ? proc_fsgid(current_proc) : 0;
     if (dir->mode & S_ISGID_) {
         n->gid = dir->gid;
         if ((mode & S_IFMT_) == S_IFDIR_) {
