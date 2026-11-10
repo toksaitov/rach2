@@ -331,21 +331,64 @@ static struct intel_crtc *plane_slot(struct drm_i915_private *i915, const struct
     return NULL;
 }
 
+static void wait_next_vblank(struct drm_i915_private *i915, int pipe);
+
+/** Whether the frame count `a` is past `b`, across the counter's wrap. */
+static int frame_past(uint32_t a, uint32_t b)
+{
+    return (int32_t)(a - b) > 0;
+}
+
+/**
+ * Make `next` plane `slot`'s scanout on `c` after a commit that wrote it
+ * between the frame counts `from` and `to`, and let go what the chip reads
+ * no more. After a stall the flip before latched, so what the plane showed
+ * before it goes. A legacy cursor update has no stall, and its write only
+ * arms the plane for the next vblank, as Linux unpins the old cursor from
+ * a vblank work: with no vblank since the plane's last write began, what
+ * it shows was never latched and goes, while what it showed before is
+ * still read and stays; after a vblank during that write, the next one is
+ * waited for. May sleep.
+ */
+static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout next, uint32_t from,
+                           uint32_t to, int nostall)
+{
+    if (nostall && c->cfg.active) {
+        if (from == c->shown_from[slot]) {
+            scanout_put(&c->shown[slot]);
+            c->shown[slot] = next;
+            c->shown_to[slot] = to;
+            return;
+        }
+        if (!frame_past(from, c->shown_to[slot])) {
+            wait_next_vblank(c->i915, c->pipe);
+        }
+    }
+    scanout_put(&c->parked[slot]);
+    c->parked[slot] = c->shown[slot];
+    c->shown[slot] = next;
+    c->shown_from[slot] = from;
+    c->shown_to[slot] = to;
+}
+
 int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
 {
     struct drm_i915_private *i915 = to_i915(dev);
     struct i915_vma *pinned[DRM_MAX_PLANES];
     struct drm_framebuffer *fbs[DRM_MAX_PLANES];
     struct drm_plane *planes[DRM_MAX_PLANES];
+    uint32_t from[DRM_MAX_PLANES];
     int32_t err = 0;
     int i, slot = 0;
 
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = state->planes_new[i];
+        struct intel_crtc *c = ps ? plane_slot(i915, ps->plane, &slot) : NULL;
 
         pinned[i] = NULL;
         fbs[i] = NULL;
         planes[i] = ps ? ps->plane : NULL;
+        from[i] = c ? intel_get_vblank_counter(&c->base) : 0;
         if (ps && ps->fb && err == 0) {
             err = fb_pin(ps->fb, &pinned[i]);
             if (err == 0) {
@@ -367,11 +410,8 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
             scanout_put(&next);
             continue;
         }
-        /* The commit's stall let the flip before this one latch, so what
-         * the plane showed then is read no more. */
-        scanout_put(&c->parked[slot]);
-        c->parked[slot] = c->shown[slot];
-        c->shown[slot] = next;
+        scanout_rotate(c, slot, next, from[i], intel_get_vblank_counter(&c->base),
+                       state->legacy_cursor_update);
     }
     return err;
 }

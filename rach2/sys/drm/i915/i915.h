@@ -1166,7 +1166,8 @@ struct intel_wm_values {
  * where the firmware put it. A plane keeps two, what it shows and what it
  * showed before, which the hardware may read until the flip that replaced
  * it latches; that one is let go at the plane's next update, which comes
- * only after the flip (drm_atomic_helper_commit's stall).
+ * only after the flip (drm_atomic_helper_commit's stall), or, for a legacy
+ * cursor update, which has no stall, once a vblank has passed.
  */
 struct intel_scanout {
     struct drm_framebuffer *fb;
@@ -1190,7 +1191,10 @@ struct intel_scanout {
  * PIPE_CRC_RES_HSW as the error interrupt read it at the pipe's CRC done,
  * which latches a frame's CRC after its vblank, under the interrupt
  * mask's lock. `shown` and
- * `parked` are each plane's scanouts (`struct intel_scanout`).
+ * `parked` are each plane's scanouts (`struct intel_scanout`), and
+ * `shown_from` and `shown_to` the frame counts read before and after the
+ * commit that wrote `shown`, by which a commit without a stall, a legacy
+ * cursor update, tells whether the chip may still read `parked`.
  * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
  * `underrun_off` says its FIFO underruns are not reported, Linux's
  * cpu_fifo_underrun_disabled, and `inherited` that it shows what the
@@ -1219,6 +1223,7 @@ struct intel_crtc {
     uint8_t inherited;
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
+    uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
 };
 
 /*
