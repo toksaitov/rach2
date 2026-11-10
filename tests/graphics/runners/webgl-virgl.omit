@@ -1,0 +1,14 @@
+# webgl-virgl.omit: the WebGL pages that the virgl cases leave out, `BROWSER
+# PATH` a line, as webgl.sh -x takes them, in both guests alike.
+#
+# Firefox gives each WebGL context a GL context of its own, and under virgl
+# each is one of the host's; it frees them only when its collector runs.
+# These five pages make 17 to 54 contexts each, and after them the testing
+# PC's QEMU holds 240 and fails to make another, which ends it
+# (dev-log/77-vgpu/upstream.md). Chromium shares a few contexts among all
+# its pages and runs them.
+firefox conformance/context/context-creation-and-destruction.html
+firefox conformance/context/context-creation.html
+firefox conformance/context/context-eviction-with-garbage-collection.html
+firefox conformance/context/context-release-upon-reload.html
+firefox conformance/context/context-release-with-workers.html

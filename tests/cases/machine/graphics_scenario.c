@@ -56,11 +56,13 @@
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
 /* The virgl cases' references, the testing PC's: the renderer every record
  * names, glinfo's lines, piglit's results and its flakes, dEQP-GLES's
- * results by suite, the WebGL pages and what the reset left. */
+ * results by suite, the WebGL pages and what the reset left; and the WebGL
+ * pages both guests leave out. */
 #define VIRGL_REF          GRAPHICS_DIR "/ref/virgl-wsl"
 #define VIRGL_PIGLIT       GRAPHICS_DIR "/piglit-virgl.txt.gz"
 #define VIRGL_FLAKES       GRAPHICS_DIR "/piglit-virgl.flakes"
 #define VIRGL_DEQP         GRAPHICS_DIR "/deqp-gles-virgl.txt.gz"
+#define VIRGL_OMIT         GRAPHICS_DIR "/runners/webgl-virgl.omit"
 /* The parts the release runs the lists in, each in a boot of its own, and
  * the sample, every VIRGL_SAMPLEth test, that one case runs. */
 #define VIRGL_PIGLIT_PARTS 16
@@ -502,8 +504,8 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         } else {
             *pattern = "webgl: result: ";
             snprintf(runner, size,
-                     "sh " GRAPHICS_DIR "/runners/webgl.sh -g -b %s -v %s -o " GRAPHICS_DIR
-                     "/out %s",
+                     "sh " GRAPHICS_DIR "/runners/webgl.sh -g -b %s -v %s -x " VIRGL_OMIT
+                     " -o " GRAPHICS_DIR "/out %s",
                      s->browser, s->version, s->chunk);
         }
         return 0;
