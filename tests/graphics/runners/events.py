@@ -4,7 +4,7 @@ runners.
 Usage:
   python3 -I events.py wait EVENTS FROM PID SILENCE
   python3 -I events.py pages EVENTS FROM TO STATE
-  python3 -I events.py list EVENTS
+  python3 -I events.py list EVENTS [FROM TO]
   python3 -I events.py renderer EVENTS
   python3 -I events.py plays EVENTS FROM TO
 
@@ -17,7 +17,8 @@ runs, so SILENCE ends only a browser that has stopped.
 `pages` prints, for lines FROM to TO, one line a page of the WebGL suite,
 `INDEX STATUS PASSED FAILED SKIPPED TIMEOUTS URL`; a page that started and
 has no result is `crash` when STATE is `ended` and `hung` when `silent`.
-`list` prints the suite list's length and SHA-256; `renderer` the record's
+`list` prints the length and SHA-256 of the first suite list in EVENTS, or
+in its lines FROM to TO, `0 none` when there is none; `renderer` the record's
 renderer lines; `plays` one line a play of video.html, `REP WARM TOTAL
 DROPPED CORRUPTED SECONDS WIDTHxHEIGHT ERROR`.
 """
@@ -83,8 +84,8 @@ def pages(path, start, stop, state):
               running["url"])
 
 
-def first(path, kind):
-    events, _ = read(path)
+def first(path, kind, start=0, stop=None):
+    events, _ = read(path, start, stop)
     for e in events:
         if e.get("kind") == kind:
             return e
@@ -99,7 +100,7 @@ def main():
     elif cmd == "pages":
         pages(path, int(sys.argv[3]), int(sys.argv[4]), sys.argv[5])
     elif cmd == "list":
-        e = first(path, "list")
+        e = first(path, "list", *[int(a) for a in sys.argv[3:5]])
         print("%d %s" % (e["count"], e["sha256"]) if e else "0 none")
     elif cmd == "renderer":
         e = first(path, "renderer")
