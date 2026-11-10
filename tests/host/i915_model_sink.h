@@ -17,6 +17,10 @@ extern const unsigned char lenovo_panel_edid[128];
 #define LENOVO_SINK_MAX_RATE  0x0a
 #define LENOVO_SINK_MAX_LANES 0x81
 
+/* DP_TP_CTL of DDI A as the firmware leaves it: the dump has no value, so
+ * the model takes the one a trained SST link with enhanced framing has. */
+#define LENOVO_FW_DP_TP_CTL_A 0x80040300u
+
 /* How long the sink takes to answer an AUX message, and to time out. */
 #define SINK_AUX_US     80u
 #define SINK_TIMEOUT_US 400u

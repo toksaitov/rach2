@@ -88,9 +88,7 @@ static void sink_reset(struct i915_model *m, void *priv)
     s->normal = 1;
     s->trained_bw = DP_LINK_BW_2_7;
     s->trained_lanes = 1;
-    i915_model_poke(m, DP_TP_CTL(0),
-                    DP_TP_CTL_ENABLE | DP_TP_CTL_ENHANCED_FRAME_ENABLE |
-                        DP_TP_CTL_LINK_TRAIN_NORMAL);
+    i915_model_poke(m, DP_TP_CTL(0), LENOVO_FW_DP_TP_CTL_A);
     i915_model_poke(m, PCH_RAWCLK_FREQ, LENOVO_RAWCLK);
     i915_model_poke(m, MCH_SSKPD, LENOVO_SSKPD_LO);
     i915_model_poke(m, MCH_SSKPD_HI, LENOVO_SSKPD_HI);
