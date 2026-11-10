@@ -223,6 +223,47 @@ static void pi_requeue_rows(void)
     waiter_unfile();
 }
 
+/** The first requeue acquisition selects the source's top-priority waiter. */
+static void pi_requeue_priority_rows(void)
+{
+    struct futex_q *q;
+    int i;
+
+    pi_reset();
+    high.rt_priority = 80;
+    low.rt_priority = 20;
+    word_set(64, 9);
+    k_memset(&low_q, 0, sizeof(low_q));
+    k_memset(&high_q, 0, sizeof(high_q));
+    k_memset(&low_s, 0, sizeof(low_s));
+    k_memset(&high_s, 0, sizeof(high_s));
+    low_q.task = &low;
+    low_q.s = &low_s;
+    high_q.task = &high;
+    high_q.s = &high_s;
+    for (i = 0; i < 2; i++) {
+        q = i ? &high_q : &low_q;
+        q->space = q->target_space = self.page_dir;
+        q->uaddr = 64;
+        q->target_key = 32;
+        q->requeue = 1;
+        q->bitset = FUTEX_MATCH_ANY;
+        futex_enqueue(q);
+    }
+    CHECK(futex_cmp_requeue_pi(64, 1, 1, 32, 9, FUTEX_PRIVATE_FLAG) == 2,
+          "requeue transfers one acquisition and one blocked waiter");
+    CHECK(high_q.woken && !low_q.woken && high_q.pi->owner == &high,
+          "requeue acquisition selects priority before arrival order");
+    cpu_table[0].current = &high;
+    pi_unfile(&high_q);
+    CHECK(futex_unlock_pi(32, FUTEX_PRIVATE_FLAG) == 0 && low_q.woken,
+          "requeue target hands off to the remaining waiter");
+    cpu_table[0].current = &low;
+    pi_unfile(&low_q);
+    CHECK(futex_unlock_pi(32, FUTEX_PRIVATE_FLAG) == 0 && !pi_states,
+          "multi-waiter requeue releases all state");
+}
+
 /** Run the PI rows alone; ordinary futex rows have their own executable. */
 int main(void)
 {
@@ -231,6 +272,7 @@ int main(void)
     pi_priority_rows();
     pi_death_rows();
     pi_requeue_rows();
+    pi_requeue_priority_rows();
     CHECK(!pi_states, "all PI state released");
     if (!failures) {
         printf("futex-pi-test: pass\n");
