@@ -804,20 +804,17 @@ static int local_revision_rows(struct deploy *d)
 static int feature_rows(struct deploy *d)
 {
     struct fixture *f = d->f;
-    char source[4096], target[4096], *saved;
+    char target[4096];
     unsigned i;
     int ok = 1;
-    snprintf(source, sizeof(source), "%s/tools/etude/provision_machine.sh", d->tree);
-    saved = fx_read(source);
     for (i = 0; i < 3; i++) {
-        if (!state(d) || !fx_replace(source, source, "/dev/kvm", dp("kvm")))
+        if (!state(d))
             return 0;
         if (i == 0)
             fx_text(dp("kvm"), "device data\n");
         else if (i == 1)
             fx_mkdir(dp("kvm"));
         machine(d);
-        fx_text(source, saved);
         ok = fx_check(f,
                       deployed(d) &&
                           record(d, dp("home/.local/state/etude/machine"),
@@ -834,7 +831,6 @@ static int feature_rows(struct deploy *d)
         if (i == 2)
             ok = fx_check(f, !fx_exists(dp("kvm")), "missing KVM not created") && ok;
     }
-    free(saved);
     if (!state(d))
         return 0;
     flow_put(f, "share/qemu/edk2-x86_64-code.fd", "");
@@ -901,7 +897,8 @@ int flow_deploy(struct fixture *f)
 {
     struct deploy d;
     int ok = 1;
-    if (!setup(&d, f))
+    /* A row reads the KVM device it makes, never the machine's own. */
+    if (!setup(&d, f) || !fx_replace(d.script, d.script, "/dev/kvm", dp("kvm")))
         return 0;
     ok = basic_rows(&d) && ok;
     ok = prerequisite_rows(&d) && ok;
