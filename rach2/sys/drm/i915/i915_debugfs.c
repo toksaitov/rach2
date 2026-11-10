@@ -1,7 +1,11 @@
 /*
  * i915_debugfs.c: the Intel graphics driver's files in debugfs that IGT's
- * tests open, and the error state's file in /sys, in Linux 6.18's formats
- * from i915_debugfs.c, i915_gpu_error.c and display/intel_cdclk.c.
+ * tests open, and the error state's file in /sys, after Linux 6.12's
+ * i915_debugfs.c, i915_gpu_error.c and display/intel_cdclk.c in Linux
+ * 6.18's formats, which the Lenovo printed under Linux 6.18.58 and
+ * tests/fixtures/lenovo-gpu/debugfs holds: i915_capabilities without
+ * 6.12's "pch:" line and display parameters, and the error state without
+ * its "Driver:" line, with DERRMR among the display's registers.
  */
 
 #include <stdarg.h>
@@ -1458,8 +1462,9 @@ static int32_t param_file(struct drm_i915_private *i915, const char *dir, const 
     return debugfs_create_text(path, 0400u, &param_ops, (void *)(uintptr_t)line);
 }
 
-/** Make the device's i915_params directory, Linux 6.18's, which holds the
- * driver's and the display's parameters. 0, or the first error. */
+/** Make the device's i915_params directory, which holds the driver's and
+ * the display's parameters, Linux 6.18's set, which the Lenovo's fixture
+ * lists; 6.12's lacks enable_flipq. 0, or the first error. */
 static int32_t params_register(struct drm_i915_private *i915)
 {
     char dir[64];

@@ -1,6 +1,6 @@
 /*
  * i915_hangcheck.c: the Intel graphics driver's hang detection, a
- * heartbeat on each engine while the GT is awake, after Linux 6.18's
+ * heartbeat on each engine while the GT is awake, after Linux 6.12's
  * gt/intel_engine_heartbeat.c with ring submission on Haswell.
  */
 

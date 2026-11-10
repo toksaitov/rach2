@@ -1,6 +1,6 @@
 /*
  * i915_gpu_error.c: the Intel graphics driver's error state, the GPU's
- * registers, rings and requests captured at a hang, after Linux 6.18's
+ * registers, rings and requests captured at a hang, after Linux 6.12's
  * i915_gpu_error.c on Haswell.
  */
 

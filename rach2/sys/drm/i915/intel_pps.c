@@ -1,6 +1,6 @@
 /*
  * intel_pps.c: the eDP panel's power sequencer in the Lynx Point PCH,
- * after Linux 6.18's display/intel_pps.c for one panel on DDI: its delays
+ * after Linux 6.12's display/intel_pps.c for one panel on DDI: its delays
  * from the registers, the VBT and the eDP specification, the panel's VDD,
  * its power on and off, and the backlight's enable timed against them.
  */
@@ -15,7 +15,9 @@
 #include "../../proc/sched.h"
 
 /* How long the sequencer is given to finish, and how often it is read
- * meanwhile (Linux's wait_panel_status). */
+ * meanwhile, Linux 6.18's wait_panel_status. 6.12 reads with a backoff
+ * from 10 us to 1 ms; the sequencer's states take tens of milliseconds and
+ * the wait sleeps, so a read every 10 ms costs nothing and frees the CPU. */
 #define PPS_WAIT_MS 5000u
 #define PPS_POLL_MS 10u
 
@@ -163,11 +165,15 @@ static uint32_t max_u32(uint32_t a, uint32_t b)
 }
 
 /**
- * Choose the delays, Linux 6.18's pps_init_delays: for each, the larger
+ * Choose the delays, Linux 6.12's pps_init_delays: for each, the larger
  * of the firmware's registers and the VBT's, or the eDP 1.3 limit when
  * both are 0; then the backlight's two set to 1 in the registers, since
  * the driver times the backlight itself, and the power cycle rounded up
- * to the 100 ms the divisor counts in.
+ * to the 100 ms the divisor counts in. The power cycle's field is read
+ * and written as 6.18 does, as the delay in 100 ms plus one, which is how
+ * the hardware counts it; 6.12 reads the field whole and adds 100 ms to
+ * the VBT's and the specification's, and so waits 100 ms longer than the
+ * panel needs, 600 ms for the Lenovo's 500.
  */
 static void init_delays(struct drm_i915_private *i915)
 {
