@@ -88,7 +88,12 @@ void synaptics_pt_activate(int packet_size);
  */
 int synaptics_reconnect(void);
 
-/** Remove the pad's event device, before the port is probed anew. */
+/**
+ * Remove the pad's event device and put the pad back in relative mode with
+ * gestures on, as Linux's `synaptics_disconnect` does through
+ * `synaptics_reset`, before the port is probed anew or switched to another
+ * protocol. Inside a run of commands.
+ */
 void synaptics_disconnect(void);
 
 /**
