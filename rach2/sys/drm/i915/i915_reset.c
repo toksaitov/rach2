@@ -222,6 +222,52 @@ static void revoke_mmaps(struct drm_i915_private *i915)
     }
 }
 
+/**
+ * Stop every running ring by force and reset the whole GPU, as Linux's
+ * reset.prepare of each engine and __intel_gt_reset of all of them: the
+ * full domain's reset, and three more tries 10 ms more apart each time.
+ * The rings stay stopped. Under forcewake.
+ *
+ * @return 0, or -ETIMEDOUT when no try reset the GPU, which is logged.
+ */
+static int32_t gt_stop_and_reset(struct drm_i915_private *i915)
+{
+    struct i915_gt *gt = &i915->gt;
+    int32_t err;
+    int i;
+
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        if (gt->engine[i].running) {
+            i915_ring_reset_prepare(i915, &gt->engine[i]);
+        }
+    }
+    err = gdrst(i915, GEN6_GRDOM_FULL);
+    for (i = 0; err < 0 && i < I915_RESET_RETRIES; i++) {
+        i915_delay_us(&i915->hw, 10000u * (uint32_t)(i + 1));
+        err = gdrst(i915, GEN6_GRDOM_FULL);
+    }
+    if (err < 0) {
+        klog(KLOG_ERR, "i915", "reset: the chip did not reset: GDRST reads 0x%08x",
+             (unsigned)i915_read(&i915->hw, GEN6_GDRST));
+    }
+    return err;
+}
+
+int32_t i915_gt_quiesce(struct drm_i915_private *i915)
+{
+    int32_t err;
+
+    if (i915_forcewake_get(i915) < 0) {
+        return -EIO;
+    }
+    err = gt_stop_and_reset(i915);
+    i915_forcewake_put(i915);
+    if (err < 0) {
+        i915_gt_set_wedged(i915);
+    }
+    return err;
+}
+
 void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const char *msg)
 {
     struct i915_gt *gt = &i915->gt;
@@ -245,20 +291,8 @@ void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const c
         return;
     }
     fw = i915_forcewake_get(i915) == 0;
-    for (i = 0; i < I915_NUM_ENGINES; i++) {
-        if (gt->engine[i].running) {
-            i915_ring_reset_prepare(i915, &gt->engine[i]);
-        }
-    }
-    err = gdrst(i915, GEN6_GRDOM_FULL);
-    for (i = 0; err < 0 && i < I915_RESET_RETRIES; i++) {
-        i915_delay_us(&i915->hw, 10000u * (uint32_t)(i + 1));
-        err = gdrst(i915, GEN6_GRDOM_FULL);
-    }
-    if (err < 0) {
-        klog(KLOG_ERR, "i915", "reset: the chip did not reset: GDRST reads 0x%08x",
-             (unsigned)i915_read(&i915->hw, GEN6_GDRST));
-    } else {
+    err = gt_stop_and_reset(i915);
+    if (err == 0) {
         for (i = 0; i < I915_NUM_ENGINES; i++) {
             head[i] = 0;
             if (gt->engine[i].running) {

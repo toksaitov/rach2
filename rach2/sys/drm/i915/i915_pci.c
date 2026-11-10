@@ -149,16 +149,38 @@ static void i915_devices_remove(struct drm_i915_private *i915)
     }
 }
 
+/** Give back the MMIO backend's mapping of the GTT's entries (`gsm`);
+ * nothing for another backend, whose entries are its own memory. */
+static void i915_gsm_unmap(struct i915_hw *hw)
+{
+    if (i915_hw_is_mmio(hw) && hw->gsm) {
+        mmio_unmap((uintptr_t)hw->gsm, hw->gtt_entries * 4u);
+        hw->gsm = 0;
+    }
+}
+
+void i915_pci_unmap(struct i915_hw *hw)
+{
+    i915_gsm_unmap(hw);
+    if (i915_hw_is_mmio(hw) && hw->priv) {
+        mmio_unmap((uintptr_t)hw->priv, hw->size);
+        hw->priv = 0;
+    }
+    i915_hw_gone(hw);
+}
+
 /**
  * The DRM core's unplug hook: its requests fail and retire, RPS and RC6
  * turned off, the device stops interrupting, its message and vector are
  * given back, its rings stop and give their pages back, and programs' maps
- * of its buffers are revoked. The record stays until its last reference.
+ * of its buffers are revoked. /sys no longer shows the driver on the
+ * function. The record stays until its last reference.
  */
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
+    i915_handoff_unbound(i915);
     i915_requests_unplug(i915);
     i915_gt_pm_disable(i915);
     intel_display_fini(i915);
@@ -173,8 +195,8 @@ static void i915_unplug(struct drm_device *dev)
 }
 
 /** The DRM core's release hook: take the shrinker off, free the display's
- * objects, unmap the aperture's windows, give the scratch page back and
- * free the record. */
+ * objects, unmap the aperture's windows, give the scratch page back, give
+ * the backend and its mappings back, and free the record. */
 static void i915_release(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
@@ -185,10 +207,14 @@ static void i915_release(struct drm_device *dev)
     }
     i915_aperture_fini(&i915->gem.aperture);
     i915_ggtt_fini(i915);
+    i915_gsm_unmap(&i915->hw);
     intel_bios_fini(&i915->vbt);
     intel_opregion_fini(&i915->opregion);
-    if (i915->attached && i915->hw.ops->release) {
-        i915->hw.ops->release(&i915->hw);
+    if (i915->attached) {
+        if (i915->hw.ops->release) {
+            i915->hw.ops->release(&i915->hw);
+        }
+        i915_pci_unmap(&i915->hw);
     }
     kfree(i915);
 }
@@ -306,6 +332,16 @@ static void i915_display_bringup(struct drm_i915_private *i915)
     }
 }
 
+/** What a registered device adds outside the DRM core: its files of /sys
+ * and debugfs, the shrinker, and the driver's links on the function. */
+static void i915_registered(struct drm_i915_private *i915)
+{
+    i915_sysfs_register(i915);
+    i915_gem_shrinker_register(i915);
+    i915_debugfs_register(i915);
+    i915_handoff_bound(i915);
+}
+
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
 {
     const struct i915_id *id;
@@ -354,6 +390,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     }
     if (err < 0) {
         i915_ggtt_fini(i915);
+        i915_gsm_unmap(&i915->hw);
         intel_bios_fini(&i915->vbt);
         intel_opregion_fini(&i915->opregion);
         pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
@@ -400,9 +437,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     }
     klog(KLOG_INFO, "i915", "registered: i915 1.6.0 for %s on card %d", i915->drm.unique,
          i915->drm.index);
-    i915_sysfs_register(i915);
-    i915_gem_shrinker_register(i915);
-    i915_debugfs_register(i915);
+    i915_registered(i915);
     i915->attached = 1;
     if (i915->hw.ops->attach) {
         i915->hw.ops->attach(&i915->hw, i915);
@@ -410,12 +445,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     return 0;
 }
 
-/**
- * Bind one function the id table names: function 0 only, as Linux, since
- * early chips had a second function with the same id; BAR 0 must be set.
- * Its registers are mapped here.
- */
-static int32_t i915_pci_probe(const pci_device_t *pdev)
+int32_t i915_pci_probe(const pci_device_t *pdev)
 {
     struct i915_hw hw;
     uint64_t mmio;
@@ -436,7 +466,11 @@ static int32_t i915_pci_probe(const pci_device_t *pdev)
              (unsigned)pdev->device, (unsigned)pdev->function, (int)err);
         return err;
     }
-    return i915_driver_bind(pdev, &hw);
+    err = i915_driver_bind(pdev, &hw);
+    if (err < 0) {
+        i915_pci_unmap(&hw);
+    }
+    return err;
 }
 
 int32_t i915_probe(void)

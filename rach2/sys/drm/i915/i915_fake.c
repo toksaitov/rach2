@@ -1359,32 +1359,47 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
     return f;
 }
 
+int32_t i915_fake_bind(const pci_device_t *pdev)
+{
+    struct i915_hw hw;
+    struct i915_fake *f;
+    int32_t err;
+
+    if (pdev->vendor_id != FAKE_EDU_VENDOR || pdev->device_id != FAKE_EDU_DEVICE) {
+        return -ENODEV;
+    }
+    f = i915_fake_create(&hw);
+    if (!f) {
+        klog(KLOG_ERR, "i915", "fake: no memory for the registers");
+        return -ENOMEM;
+    }
+    f->pdev = *pdev;
+    f->raise = fake_raise_edu;
+    klog(KLOG_INFO, "i915", "fake: %02x:%02x.%x: edu stands in for 8086:0a16", (unsigned)pdev->bus,
+         (unsigned)pdev->device, (unsigned)pdev->function);
+    err = i915_driver_bind(pdev, &hw);
+    if (err < 0) {
+        klog(KLOG_ERR, "i915", "fake: %02x:%02x.%x: error %d", (unsigned)pdev->bus,
+             (unsigned)pdev->device, (unsigned)pdev->function, (int)err);
+        i915_fake_free(f);
+    }
+    return err;
+}
+
 int32_t i915_fake_probe(void)
 {
     pci_device_t pdev;
-    struct i915_hw hw;
-    struct i915_fake *f;
     int32_t err, bound = 0;
     int nth;
 
     for (nth = 0; pci_find_nth_by_id(FAKE_EDU_VENDOR, FAKE_EDU_DEVICE, nth, &pdev); nth++) {
-        f = i915_fake_create(&hw);
-        if (!f) {
-            klog(KLOG_ERR, "i915", "fake: no memory for the registers");
+        err = i915_fake_bind(&pdev);
+        if (err == -ENOMEM) {
             break;
         }
-        f->pdev = pdev;
-        f->raise = fake_raise_edu;
-        klog(KLOG_INFO, "i915", "fake: %02x:%02x.%x: edu stands in for 8086:0a16",
-             (unsigned)pdev.bus, (unsigned)pdev.device, (unsigned)pdev.function);
-        err = i915_driver_bind(&pdev, &hw);
-        if (err < 0) {
-            klog(KLOG_ERR, "i915", "fake: %02x:%02x.%x: error %d", (unsigned)pdev.bus,
-                 (unsigned)pdev.device, (unsigned)pdev.function, (int)err);
-            i915_fake_free(f);
-            continue;
+        if (err == 0) {
+            bound++;
         }
-        bound++;
     }
     if (nth == 0) {
         klog(KLOG_ERR, "i915", "fake: no edu device to stand on; QEMU's -device edu gives one");

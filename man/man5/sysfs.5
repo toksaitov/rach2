@@ -111,9 +111,45 @@ Root writes a name of up to 31 bytes, less a newline, or an empty line to
 clear it; a longer name is
 .Er EINVAL .
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F/driver
-A link to
+A link to the directory of the function's driver,
 .Pa /sys/bus/pci/drivers/vfio-pci
+or
+.Pa /sys/bus/pci/drivers/i915 ,
 while the function is bound to it.
+.It Pa /sys/bus/pci/drivers/i915/{bind,unbind}
+Write-only, mode 0200; the directory is there once the Intel graphics
+driver has bound a device, under
+.Ql rach2.i915
+or
+.Ql rach2.i915fake .
+A function's name written to
+.Pa unbind
+releases the device for another driver, vfio-pci above all: its display
+goes off, the GPU is reset, its interrupts and bus mastering go off, and
+programs that have the card open get
+.Er ENODEV
+from it, as after an unplug.
+The write is
+.Er ENODEV
+for a name the driver has no device of,
+.Er EBUSY
+while a program sleeps in a read or write through the aperture, and
+.Er ETIMEDOUT
+when the GPU does not reset; the device then stays bound.
+A name written to
+.Pa bind
+resets the function, waits out its panel's power cycle and binds it as
+at boot.
+It is
+.Er ENODEV
+for a name no function has, a function the driver does not drive, or one
+whose
+.Pa driver_override
+names another driver,
+.Er EBUSY
+while a driver holds the function, and otherwise the error of the reset
+or of the bind, which leaves the function without a driver.
+The directory has a link, named as the function, to each function bound.
 .It Pa /sys/bus/pci/drivers/vfio-pci/{bind,unbind}
 Write-only, mode 0200.
 A function's name written to
@@ -1108,6 +1144,8 @@ The platform devices.
 The IOMMU groups.
 .It Pa /sys/bus/pci/drivers/vfio-pci
 The vfio-pci driver's files.
+.It Pa /sys/bus/pci/drivers/i915
+The Intel graphics driver's files.
 .It Pa /sys/kernel/debug
 Where debugfs is mounted.
 .It Pa /sys/kernel/uevent_seqnum

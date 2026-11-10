@@ -10,7 +10,7 @@ echo 0000:00:02.0 > /sys/bus/pci/drivers/vfio-pci/bind
 readlink /sys/bus/pci/devices/0000:00:02.0/iommu_group
 ```
 
-The function must have no driver of the kernel's: bind is `EBUSY` while one holds it. Its group's node, `/dev/vfio/N`, can then be put in a container, and the function opened by name with `VFIO_GROUP_GET_DEVICE_FD`.
+The function must have no driver of the kernel's: bind is `EBUSY` while one holds it. The Intel graphics driver lets its chip go and takes it back through its own directory, `echo 0000:00:02.0 > /sys/bus/pci/drivers/i915/unbind` before the lines above and, once vfio-pci's `unbind` has the function and `driver_override` is cleared, the same name to `/sys/bus/pci/drivers/i915/bind` ([i915](../drm/i915/Readme.md)). Its group's node, `/dev/vfio/N`, can then be put in a container, and the function opened by name with `VFIO_GROUP_GET_DEVICE_FD`.
 
 ## Interfaces
 

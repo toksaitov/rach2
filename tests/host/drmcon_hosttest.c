@@ -23,8 +23,10 @@
  * forgotten until the next place, or, on a device whose framebuffers are
  * flushed, drawn through a shadow whose damaged rows a flush copies and
  * commits; the firmware's device is taken back with
- * its CRTC off and the console on the loader's framebuffer; and every
- * allocation and reference is given back.
+ * its CRTC off and the console on the loader's framebuffer; a loader's
+ * framebuffer that goes with its device is forgotten once and not drawn on
+ * again, and the next device is set at once; and every allocation and
+ * reference is given back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -581,6 +583,42 @@ static void row_firmware(void)
     CHECK(dev.refs == 0, "the device is let go");
 }
 
+/** The loader's framebuffer goes with its device while a master holds
+ * the device and the console is still on that screen: the console forgets
+ * it once, is not put back on it when the device leaves, and is set on
+ * the next device at once, where it keeps a buffer of its own. */
+static void row_screen_gone(void)
+{
+    int d, f, a, c = dumb_creates;
+
+    firmware = 0;
+    drm_client_dev_register(&dev);
+    open_as_self(&fa);
+    d = detaches;
+    f = forgets;
+    a = attaches;
+    CHECK(con.dev == &dev && con.handed && !con.on_buffer && !con.lost && dumb_creates == c,
+          "a native device under a master, the console still on the loader's screen");
+    drm_client_boot_screen_gone();
+    drm_client_boot_screen_gone();
+    CHECK(con.lost && detaches == d + 1 && forgets == f + 1,
+          "the console forgets the loader's framebuffer, once");
+    drm_client_dev_unregister(&dev);
+    CHECK(attaches == a && detaches == d + 1,
+          "the device leaves: the console is not put back on the screen that went");
+    drm_mode_file_release(&fa);
+    drm_master_release(&fa);
+    drm_client_dev_register(&dev);
+    CHECK(attaches == a + 1 && attached_base != NULL && dumb_creates == c + 1 && crtc_mode() &&
+              con.on_buffer && !con.lost,
+          "the next device gets the console's mode at once");
+    d = detaches;
+    drm_client_boot_screen_gone();
+    CHECK(detaches == d && con.on_buffer && !con.lost, "a console on a buffer of its own keeps it");
+    drm_client_dev_unregister(&dev);
+    CHECK(dev.refs == 0, "the device is let go");
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -609,6 +647,7 @@ int main(void)
     row_unmapped();
     row_shadow();
     row_firmware();
+    row_screen_gone();
     drm_mode_config_cleanup(&dev);
     CHECK(allocations == base, "every allocation freed");
     for (i = 0; i < MAX_GEM; i++) {

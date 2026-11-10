@@ -18,7 +18,7 @@
 
 uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
 {
-    if (reg > hw->size - 4u || (reg & 3u) != 0) {
+    if (hw->size < 4u || reg > hw->size - 4u || (reg & 3u) != 0) {
         return 0xffffffffu;
     }
     return hw->ops->read32(hw, reg);
@@ -26,7 +26,7 @@ uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
 
 void i915_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
 {
-    if (reg > hw->size - 4u || (reg & 3u) != 0) {
+    if (hw->size < 4u || reg > hw->size - 4u || (reg & 3u) != 0) {
         return;
     }
     hw->ops->write32(hw, reg, value);
@@ -242,6 +242,17 @@ static int32_t i915_mmio_gtt_map(struct i915_hw *hw, uint64_t phys, uint32_t siz
 static const struct i915_hw_ops i915_mmio_ops = {
     "mmio", i915_mmio_read, i915_mmio_write, i915_mmio_delay, i915_mmio_gtt_map, 0, 0, 0, 0, 0, 0,
     0};
+
+void i915_hw_gone(struct i915_hw *hw)
+{
+    hw->size = 0;
+    hw->gtt_entries = 0;
+}
+
+int i915_hw_is_mmio(const struct i915_hw *hw)
+{
+    return hw->ops == &i915_mmio_ops;
+}
 
 int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
 {
