@@ -1414,7 +1414,9 @@ static wait_queue_t work_wait;
 static wait_queue_t work_done_wait;
 
 /** A fence of a queued commit signalled: one fewer to wait for. In the
- * signaller's context, which may be an interrupt. */
+ * signaller's context, which may be an interrupt; dma_fence_signal runs
+ * it with interrupts masked, so that its decrement cannot fall inside
+ * another's. */
 static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
 {
     struct commit_work *w = ((struct commit_fence_cb *)cb)->work;

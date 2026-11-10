@@ -20,7 +20,7 @@ Open `/dev/udmabuf` and call `UDMABUF_CREATE` with a memfd, a page-aligned offse
 
 ## Design
 
-Every operation runs under the big kernel lock. A wait, a copy to or from user memory and an exporter operation may sleep; a completion callback may only signal, wake or queue work. A driver may signal a fence from its interrupt, so `dma_fence_signal` marks the fence with interrupts masked and then takes its callbacks off one at a time the same way, each just before it runs, and `dma_fence_add_callback` and `dma_fence_remove_callback` test and change the list the same way. A callback still waiting its turn can be removed, so one callback may free the owner of another. The ownership and device-loss rules in [`../drm/drm.h`](../drm/drm.h) apply to every exporter and fence producer.
+Every operation runs under the big kernel lock. A wait, a copy to or from user memory and an exporter operation may sleep; a completion callback may only signal, wake or queue work. A driver may signal a fence from its interrupt, so `dma_fence_signal` marks the fence and runs every callback with interrupts masked, as Linux runs them under the fence's lock with interrupts off, and `dma_fence_add_callback` and `dma_fence_remove_callback` test and change the list the same way. A callback is taken off the list just before it runs, and one still waiting its turn can be removed, so one callback may free the owner of another; no interrupt can free the owner of a callback taken off but not yet run. A callback runs with interrupts masked wherever the signal comes from, so it may not sleep. The ownership and device-loss rules in [`../drm/drm.h`](../drm/drm.h) apply to every exporter and fence producer.
 
 Udmabuf takes a frame reference for each page before publishing a descriptor. The frame remains pinned after the memfd closes. A shared device mapping holds the dma-buf, and its last region releases that reference at unmap, exec or exit; fork shares the mapping's backing record. Each buffer poll arms callbacks on a reservation snapshot; completion wakes the buffer's queue, and a later poll reads the reservation again. Explicit sync-file export takes a snapshot which later imports cannot change.
 
@@ -30,7 +30,7 @@ Udmabuf uses Linux's default bounds of 1,024 ranges and 64 MiB per export. It su
 
 ## Tests
 
-`tests/host/fence_hosttest.c` drives fences, context ranges, callback removal, timed and interrupted waits, flattened merges and errors, reservation snapshots, buffer size and inode identity, sync-file export, merge, info and import, buffer poll, software timeline completion, deadline hints and producer close, under the sanitizers. Its descriptor table and scheduler are models; the fence and buffer code is included whole.
+`tests/host/fence_hosttest.c` drives fences, context ranges, callback removal, an interrupt that frees two points of a chain while another fence's callbacks run, timed and interrupted waits, flattened merges and errors, reservation snapshots, buffer size and inode identity, sync-file export, merge, info and import, buffer poll, software timeline completion, deadline hints and producer close, under the sanitizers. Its descriptor table and scheduler are models; the fence and buffer code is included whole.
 
 `tests/host/syncobj_hosttest.c` drives fence chains through timeline syncobjs: points in and out of order, the leaves sync files list, and long chains freed without recursion.
 

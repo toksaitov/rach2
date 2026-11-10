@@ -7,16 +7,32 @@
 #include "dmabuf/sync_file.c"
 #include "dmabuf/sw_sync.c"
 
-/** No interrupts on the host: the fences' masking is a no-op. */
+/* The model's interrupt flag, and an interrupt that a row raises while
+ * interrupts are masked, taken when the flag comes on again, as a device's
+ * interrupt waits for a thread's masked section to end. */
+static int irq_on = 1;
+static void (*irq_pending)(void);
+
+/** Mask the model's interrupts; whether they were on. */
 uint32_t kirq_save(void)
 {
-    return 0;
+    uint32_t was = (uint32_t)irq_on;
+    irq_on = 0;
+    return was;
 }
 
-/** The pair of kirq_save. */
+/** Restore the model's interrupt flag, and take a pending interrupt, with
+ * interrupts masked as in a handler, once it is on. */
 void kirq_restore(uint32_t flags)
 {
-    (void)flags;
+    void (*handler)(void) = irq_pending;
+    irq_on = (int)flags;
+    if (irq_on && handler) {
+        irq_pending = NULL;
+        irq_on = 0;
+        handler();
+        irq_on = 1;
+    }
 }
 
 int printf(const char *format, ...);
@@ -196,6 +212,68 @@ static void fence_cases(void)
     CHECK(b->error == -EIO, "completion immutable");
     dma_fence_put(a);
     dma_fence_put(b);
+}
+/* The fences of `interrupt_cases`: f1 under the first point, f2 under the
+ * second. */
+static struct dma_fence *irq_f1, *irq_f2;
+
+/** The device's interrupt: f2 completes. */
+static void signal_f2(void)
+{
+    dma_fence_signal(irq_f2);
+}
+
+/** A callback on f1 that runs before the first point's: a device raises
+ * its interrupt while f1's signal is under way. */
+static void raise_f2(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+    (void)f;
+    (void)cb;
+    irq_pending = signal_f2;
+}
+
+/** The second point's waiter: drops the last reference to the point, which
+ * frees it and the first point with it. */
+static void drop_point(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+    (void)cb;
+    callbacks++;
+    dma_fence_put(f);
+}
+
+/**
+ * An interrupt that frees the owner of a callback already taken off the
+ * list but not yet called: point c2 on f2 follows point c1 on f1, and c2's
+ * waiter holds the only reference to c2, which holds the only one to c1.
+ * While f1 signals, after a callback that raises f2's interrupt and before
+ * c1's callback, the interrupt completes c2 and its waiter frees both
+ * points. dma_fence_signal runs f1's callbacks with interrupts masked, so
+ * the interrupt comes after c1's callback has returned; without that,
+ * c1's callback runs in freed storage, which the sanitizer reports.
+ */
+static void interrupt_cases(void)
+{
+    uint64_t context = dma_fence_context_alloc(2);
+    struct dma_fence_chain *c1 = dma_fence_chain_alloc(), *c2 = dma_fence_chain_alloc();
+    struct dma_fence_cb raise, waiter;
+    int before = callbacks;
+    irq_f1 = new_fence(context, 1);
+    irq_f2 = new_fence(context + 1, 1);
+    dma_fence_chain_init(c1, NULL, dma_fence_get(irq_f1), 1);
+    dma_fence_chain_init(c2, &c1->base, dma_fence_get(irq_f2), 2);
+    CHECK(!dma_fence_is_signaled(&c1->base) && !dma_fence_is_signaled(&c2->base),
+          "both points wait on their fences");
+    CHECK(!dma_fence_add_callback(&c2->base, &waiter, drop_point), "the second point's waiter");
+    CHECK(!dma_fence_add_callback(irq_f1, &raise, raise_f2), "the interrupt's trigger");
+    dma_fence_signal(irq_f1);
+    CHECK(irq_pending == NULL && irq_on, "the interrupt is taken once f1's callbacks end");
+    CHECK(dma_fence_is_signaled(irq_f2) && callbacks == before + 1,
+          "the interrupt completes the second point and its waiter runs");
+    CHECK(irq_f1->refs == 1 && irq_f2->refs == 1 && !irq_f1->cbs && !irq_f2->cbs,
+          "both points are freed with their fences' references and callbacks");
+    dma_fence_put(irq_f1);
+    dma_fence_put(irq_f2);
+    irq_f1 = irq_f2 = NULL;
 }
 /** Test merge flattening, duplicate timelines, errors and callback teardown. */
 static void merge_cases(void)
@@ -498,15 +576,21 @@ static void name_cases(void)
     dma_fence_put(f);
     sw_close(&timeline);
 }
-/** Run the model cases and fail on any assertion. */
-int main(void)
+/** Run the model cases, or with `--interrupt-only` the interrupt's alone,
+ * and fail on any assertion. */
+int main(int argc, char **argv)
 {
     int i;
     current_proc = &self;
     table.entries = slots;
     table.cap = 64;
     self.fds = &table;
+    if (argc == 2 && same(argv[1], "--interrupt-only")) {
+        interrupt_cases();
+        goto finish;
+    }
     fence_cases();
+    interrupt_cases();
     merge_cases();
     buffer_cases();
     import_cases();
@@ -514,6 +598,7 @@ int main(void)
     copy_out_cases();
     buffer_answers();
     name_cases();
+finish:
     for (i = 0; i < 64; i++)
         CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");
     if (!failures)
