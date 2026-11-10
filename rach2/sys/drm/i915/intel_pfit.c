@@ -14,7 +14,7 @@
 
 /** Linux's drm_calc_scale: `src` in 16.16 over `dst` pixels, rounded up
  * when it scales down. */
-static uint32_t calc_scale(uint32_t src, uint32_t dst)
+static uint32_t pf_scale(uint32_t src, uint32_t dst)
 {
     if (dst == 0) {
         return 0;
@@ -46,8 +46,8 @@ static int32_t pfit_check(int pipe, const struct drm_mode_modeinfo *m, int32_t s
     if (src_w > (pipe == I915_PIPE_A ? 4096 : 2048) || src_h > 4096) {
         return -EINVAL;
     }
-    if (calc_scale((uint32_t)src_w << 16, (uint32_t)w) > PF_MAX_DOWNSCALE ||
-        calc_scale((uint32_t)src_h << 16, (uint32_t)h) > PF_MAX_DOWNSCALE) {
+    if (pf_scale((uint32_t)src_w << 16, (uint32_t)w) > PF_MAX_DOWNSCALE ||
+        pf_scale((uint32_t)src_h << 16, (uint32_t)h) > PF_MAX_DOWNSCALE) {
         return -ERANGE;
     }
     if (m->vdisplay < 7) {
