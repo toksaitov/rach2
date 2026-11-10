@@ -1,0 +1,22 @@
+Skip the DirectInput worker's stop handshake during process shutdown.
+ExitProcess has already terminated the worker before DLL detach callbacks.
+
+--- a/dlls/dinput/dinput_main.c
++++ b/dlls/dinput/dinput_main.c
+@@ -28,6 +28,7 @@
+ #include "windef.h"
+ #include "winbase.h"
+ #include "winuser.h"
++#include "winternl.h"
+ #include "winerror.h"
+ #include "objbase.h"
+ #include "rpcproxy.h"
+@@ -477,6 +478,8 @@
+ 
+ void input_thread_remove_user(void)
+ {
++    if (RtlDllShutdownInProgress()) return;
++
+     EnterCriticalSection( &dinput_hook_crit );
+     if (!--input_thread_user_count && dinput_thread)
+     {

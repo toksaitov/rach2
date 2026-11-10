@@ -180,7 +180,7 @@ The x86-64 root has Debian's i386 libraries beside its own, laid out as Debian's
 
 ## Building
 
-The build host is an x86-64 Linux with the i386 glibc runtime, or an aarch64 Linux that runs i386 and x86-64 programs through QEMU's user-mode emulators, as the tooling machine on a Mac does, with a C and C++ compiler, GNU make, gawk, bison, flex, m4, Perl, Python 3, texinfo, xz, patch, gzip, and curl or wget. The subdirectories add `unshare` from util-linux, `chroot`, and a kernel that lets an ordinary user make user namespaces, for their checks; GnuPG, `ar` and tar for the Debian packages; and access to crates.io for cbindgen's dependencies. The root image needs mandoc and e2fsprogs, which [`tools/Readme.md`](../../tools/Readme.md) lists for every build.
+The build host is an x86-64 Linux with the i386 glibc runtime, or an aarch64 Linux that runs i386 and x86-64 programs through QEMU's user-mode emulators, as the tooling machine on a Mac does, with a C and C++ compiler, GNU make, gawk, bison, flex, m4, Perl, Python 3, texinfo, xz, patch, gzip, and curl or wget. The subdirectories add `unshare` from util-linux, `chroot`, and a kernel that lets an ordinary user make user namespaces, for their checks; GnuPG, `ar` and tar for the Debian packages; and access to crates.io for cbindgen's dependencies. Proton's DirectInput rebuild needs autoconf, clang 19 or later, LLVM and lld. The root image needs mandoc and e2fsprogs, which [`tools/Readme.md`](../../tools/Readme.md) lists for every build.
 
 Under make the scripts share the caller's jobs; alone they use every processor, or `GNU_JOBS` processors in the subdirectories' scripts.
 

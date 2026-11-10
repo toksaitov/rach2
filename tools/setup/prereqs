@@ -80,6 +80,10 @@ need cppcheck shellcheck clang clang-format
 probe @TOOL@ --version
 admin apt-get install -y cppcheck shellcheck clang clang-format
 
+need autoreconf llvm-dlltool ld.lld
+probe command -v @TOOL@
+admin apt-get install -y autoconf llvm lld
+
 need qemu-system-i386 qemu-system-x86_64
 probe @TOOL@ --version
 admin apt-get install -y qemu-system-x86

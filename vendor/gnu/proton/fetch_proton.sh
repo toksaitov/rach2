@@ -24,4 +24,5 @@ tar -xzf "$archive" -C "$ROOT/opt/proton" --strip-components=1
     echo "gnu: proton: release has no launcher or runtime" >&2
     exit 1
 }
+sh "$GNU/proton/fetch_dinput.sh"
 echo "gnu: proton: result: GE-Proton11-12 verified and staged"
