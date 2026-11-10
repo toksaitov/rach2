@@ -92,6 +92,24 @@ A resource the function lacks, the upper half of a 64-bit BAR, the SR-IOV
 resources and a bridge's windows are lines of zeros, and so is every line
 of a function a driver reports.
 libpciaccess reads a BAR's size from this file.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/resource0 No to Pa resource5
+One for each BAR the function has with a length, as Linux's pci-sysfs.c
+makes them, of mode 0600 and as long as the BAR; root alone opens one.
+A memory BAR's file has no read or write, and
+.Xr mmap 2
+maps its pages, shared and uncached, from the page offset, refusing a
+range past the BAR's end and a private mapping with
+.Er EINVAL .
+An I/O BAR's file reads and writes one port of the BAR at the file's
+offset, 1, 2 or 4 bytes at a time, little-endian, refusing another
+width or a port past the BAR's end with
+.Er EINVAL ;
+it is not mapped, as on x86 Linux, and
+.Xr mmap 2
+fails with
+.Er ENODEV .
+libpciaccess maps a BAR through its file, as IGT maps the GPU's
+registers.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/subsystem
 A link to the bus,
 .Pa ../../../bus/pci .

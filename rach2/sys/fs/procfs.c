@@ -5324,6 +5324,28 @@ int sysfs_pci_is_vga(int key)
     return sysfs_pci_ident(key, &id) == 0 && (id.class >> 8) == 0x0300u;
 }
 
+uint64_t sysfs_pci_bar_size(int key, int bar)
+{
+    struct pci_resource r;
+
+    if (bar < 0 || bar >= SYSFS_PCI_BARS || !sysfs_pci_real(key)) {
+        return 0;
+    }
+    pci_resource((uint8_t)(key >> 8), (uint8_t)((key >> 3) & 31), (uint8_t)(key & 7), bar, &r);
+    return r.flags ? r.end - r.start + 1u : 0;
+}
+
+int sysfs_pci_attr_present(int key, int attr)
+{
+    if (attr == SYSFS_PCI_BOOT_VGA) {
+        return sysfs_pci_is_vga(key);
+    }
+    if (attr >= SYSFS_PCI_RESOURCE0 && attr < SYSFS_PCI_RESOURCE0 + SYSFS_PCI_BARS) {
+        return sysfs_pci_bar_size(key, attr - SYSFS_PCI_RESOURCE0) != 0;
+    }
+    return 1;
+}
+
 int sysfs_device_key(int node, int n)
 {
     struct usb_sys_row r;
@@ -6712,6 +6734,199 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;
     e->ops = &procfs_pciconfig_ops;
+    e->priv = f;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : FD_FLAG_READ | FD_FLAG_WRITE;
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
+/* The resourceN files of a PCI function, Linux's pci-sysfs resource files:
+ * the descriptor's `procfs_file` has the function's key in `origin_pid` and
+ * the file's `procfile` in the low byte of `origin_task`. */
+
+/** The BAR of the resourceN descriptor `e` into `*r`, as `pci_resource`
+ * reads it now, and its function's key into `*key`: its number, or -1. */
+static int pcibar_of(fd_entry_t *e, struct pci_resource *r, int *key)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    int bar = (int)(f->origin_task & 0xFFu) - SYSFS_PCI_RESOURCE0;
+
+    *key = f->origin_pid;
+    r->flags = 0;
+    if (sysfs_pci_bar_size(*key, bar) == 0) {
+        return -1;
+    }
+    pci_resource((uint8_t)(*key >> 8), (uint8_t)((*key >> 3) & 31), (uint8_t)(*key & 7), bar, r);
+    return bar;
+}
+
+/**
+ * Read or write `count` bytes, 1, 2 or 4, at the description's offset in the
+ * I/O BAR of the resourceN descriptor `e`, one port access of that width, as
+ * Linux's pci_resource_io: from `*value` for a write, into it for a read.
+ * The count, or -EIO for a memory BAR, which has no read or write but its
+ * mapping, -ENODEV for a function or BAR that is gone, or -EINVAL for
+ * another width or a range past the BAR's end.
+ */
+static int32_t pcibar_io(fd_entry_t *e, uint32_t count, uint32_t *value, int write)
+{
+    struct pci_resource r;
+    uint64_t off = e->ofd->offset;
+    uint16_t port;
+    int key;
+
+    if (pcibar_of(e, &r, &key) < 0) {
+        return -ENODEV;
+    }
+    if (!(r.flags & PCI_IORESOURCE_IO)) {
+        return -EIO;
+    }
+    if ((count != 1 && count != 2 && count != 4) || off > r.end - r.start + 1u - count) {
+        return -EINVAL;
+    }
+    port = (uint16_t)(r.start + off);
+    if (write) {
+        if (count == 1) {
+            pci_io_write8(port, (uint8_t)*value);
+        } else if (count == 2) {
+            pci_io_write16(port, (uint16_t)*value);
+        } else {
+            pci_io_write32(port, *value);
+        }
+    } else {
+        *value = count == 1   ? pci_io_read8(port)
+                 : count == 2 ? pci_io_read16(port)
+                              : pci_io_read32(port);
+    }
+    e->ofd->offset += count;
+    return (int32_t)count;
+}
+
+/** read of a resourceN file (`pcibar_io`), its bytes little-endian. */
+static int32_t procfs_pcibar_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    uint32_t value = 0;
+    uint8_t bytes[4];
+    int32_t n = pcibar_io(e, count, &value, 0);
+
+    if (n > 0) {
+        bytes[0] = (uint8_t)value;
+        bytes[1] = (uint8_t)(value >> 8);
+        bytes[2] = (uint8_t)(value >> 16);
+        bytes[3] = (uint8_t)(value >> 24);
+        if (copy_to_user(buf, bytes, (uint32_t)n)) {
+            e->ofd->offset -= (uint32_t)n;
+            return -EFAULT;
+        }
+    }
+    return n;
+}
+
+/** write of a resourceN file (`pcibar_io`), its bytes little-endian. */
+static int32_t procfs_pcibar_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    uint8_t bytes[4] = {0, 0, 0, 0};
+    uint32_t value;
+
+    if (count <= 4 && copy_from_user(bytes, buf, count)) {
+        return -EFAULT;
+    }
+    value = (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 |
+            (uint32_t)bytes[3] << 24;
+    return pcibar_io(e, count, &value, 1);
+}
+
+/** The `page` of a resourceN mapping, whose object is the function's key
+ * shifted left by 3 with the BAR's number: the physical address of the
+ * BAR's page `pgoff` as the BAR reads now, or -1, and SIGBUS, once the
+ * function or the BAR is gone or for a page past its end. */
+static int pcibar_page(void *obj, uint32_t pgoff, uintptr_t *phys)
+{
+    uintptr_t v = (uintptr_t)obj;
+    int key = (int)(v >> 3), bar = (int)(v & 7u);
+    uint64_t size = sysfs_pci_bar_size(key, bar), at;
+    struct pci_resource r;
+
+    if ((uint64_t)pgoff * PAGE_SIZE >= size) {
+        return -1;
+    }
+    pci_resource((uint8_t)(key >> 8), (uint8_t)((key >> 3) & 31), (uint8_t)(key & 7), bar, &r);
+    at = r.start + (uint64_t)pgoff * PAGE_SIZE;
+    if (!(r.flags & PCI_IORESOURCE_MEM) || at != (uint64_t)(uintptr_t)at) {
+        return -1;
+    }
+    *phys = (uintptr_t)at;
+    return 0;
+}
+
+/** The `put` of a resourceN mapping: the mapping holds no reference. */
+static void pcibar_put(void *obj)
+{
+    (void)obj;
+}
+
+static const struct vm_device_ops pcibar_vm_ops = {pcibar_page, pcibar_put, NULL};
+
+/**
+ * mmap of a resourceN file, as Linux's pci_mmap_resource_uc: a shared
+ * mapping, uncached, of the memory BAR's pages from the page offset, mapped
+ * as they are touched. -ENODEV for an I/O BAR, which x86 does not map, or a
+ * function that is gone; -EINVAL for a range past the BAR's end, as
+ * pci_mmap_fits refuses it, or a private mapping; -ENOMEM.
+ */
+static int32_t procfs_pcibar_mmap(fd_entry_t *e, struct vma *vma)
+{
+    uint64_t pages = (vma->end - vma->start) / PAGE_SIZE, size;
+    struct pci_resource r;
+    int key, bar = pcibar_of(e, &r, &key);
+
+    if (bar < 0 || !(r.flags & PCI_IORESOURCE_MEM)) {
+        return -ENODEV;
+    }
+    size = (r.end - r.start) / PAGE_SIZE + 1u;
+    if (vma->pgoff >= size || size - vma->pgoff < pages) {
+        return -EINVAL;
+    }
+    return vm_device_map(vma, &pcibar_vm_ops,
+                         (void *)(uintptr_t)((uintptr_t)key << 3 | (uintptr_t)bar), VM_PROT_UC);
+}
+
+static const struct file_ops procfs_pcibar_ops = {
+    procfs_pcibar_read, procfs_pcibar_write, procfs_poll, procfs_ioctl,
+    procfs_close,       procfs_pcibar_mmap,  NULL};
+
+/** Open a resourceN file, of mode 0600 as Linux's: root's alone, for any
+ * access. -EACCES for another caller, -ENOENT for a BAR without a length or
+ * a function that is not there, -ENOMEM, or the descriptor's error. */
+static int procfs_open_pcibar(const struct vpath *vp, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3, fd;
+
+    if (acc == 3 || !proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    if (!sysfs_pci_attr_present(vp->syskey, vp->procfile)) {
+        return -ENOENT;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_file = SYNTH_SYS_UEVENT;
+    f->origin_task = SYSFS_PCI_DEVICE << 8 | vp->procfile;
+    f->origin_pid = vp->syskey;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->ops = &procfs_pcibar_ops;
     e->priv = f;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : FD_FLAG_READ | FD_FLAG_WRITE;
     if (flags & PROCFS_O_CLOEXEC) {
@@ -8444,8 +8659,9 @@ int procfs_open(const struct vpath *vp, int flags)
         return procfs_open_acpicall(flags);
     }
     if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
-        vp->procfile == SYSFS_PCI_CONFIG) {
-        return procfs_open_pciconfig(vp, flags);
+        (vp->procfile == SYSFS_PCI_CONFIG || vp->procfile >= SYSFS_PCI_RESOURCE0)) {
+        return vp->procfile == SYSFS_PCI_CONFIG ? procfs_open_pciconfig(vp, flags)
+                                                : procfs_open_pcibar(vp, flags);
     }
     if (vp->kind == VNODE_SYS_FILE && sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) &&
         (flags & 3) != 0) {

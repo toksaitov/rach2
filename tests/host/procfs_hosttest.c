@@ -5,8 +5,9 @@
  * paths of /proc/PID/maps, a read of a process's arguments while the process
  * is reaped, oom_score_adj, the cache, NUMA, clock source and DMI files of
  * /sys, and the /sys entries and uevents of a DRM device and of a
- * driver's own attributes, links, PCI identity and resources, and those of
- * a PS/2 keyboard and a USB mouse (evdev_sysfs.c).
+ * driver's own attributes, links, PCI identity and resources, a PCI
+ * function's resourceN files, and those of a PS/2 keyboard and a USB mouse
+ * (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
@@ -971,8 +972,12 @@ const char *pci_owner(uint8_t bus, uint8_t devfn)
     return pci_owner_name;
 }
 
+/* While set, the virtio display also has an I/O BAR 2 of 32 ports. */
+static int pci_io_bar;
+
 /** The resources of the virtio display: a prefetchable BAR 0 of 8 MiB and
- * a 64-bit BAR 4 of 16 KiB, as pci.c gives them from the walk's sizes. */
+ * a 64-bit BAR 4 of 16 KiB, as pci.c gives them from the walk's sizes, and
+ * BAR 2 while `pci_io_bar` is set. */
 void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r)
 {
     r->start = 0;
@@ -989,7 +994,73 @@ void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct p
         r->start = 0xFE800000u;
         r->end = 0xFE803FFFu;
         r->flags = 0x14220Cu;
+    } else if (i == 2 && pci_io_bar) {
+        r->start = 0xC000u;
+        r->end = 0xC01Fu;
+        r->flags = 0x40101u;
     }
+}
+
+/* The last port access of the resourceN rows: its port, width and value,
+ * and the value a read returns, the port's number with its width above. */
+static uint32_t port_at, port_width, port_value;
+
+uint8_t pci_io_read8(uint16_t port)
+{
+    port_at = port;
+    port_width = 1;
+    return (uint8_t)port;
+}
+
+uint16_t pci_io_read16(uint16_t port)
+{
+    port_at = port;
+    port_width = 2;
+    return (uint16_t)(0x2000u | port);
+}
+
+uint32_t pci_io_read32(uint16_t port)
+{
+    port_at = port;
+    port_width = 4;
+    return 0x40000000u | port;
+}
+
+void pci_io_write8(uint16_t port, uint8_t value)
+{
+    port_at = port;
+    port_width = 1;
+    port_value = value;
+}
+
+void pci_io_write16(uint16_t port, uint16_t value)
+{
+    port_at = port;
+    port_width = 2;
+    port_value = value;
+}
+
+void pci_io_write32(uint16_t port, uint32_t value)
+{
+    port_at = port;
+    port_width = 4;
+    port_value = value;
+}
+
+/* What the last `vm_device_map` was given, and its result. */
+static const struct vm_device_ops *mapped_ops;
+static void *mapped_obj;
+static uint32_t mapped_cache;
+
+int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache)
+{
+    if (vma->type != VM_SHARED) {
+        return -EINVAL;
+    }
+    mapped_ops = ops;
+    mapped_obj = obj;
+    mapped_cache = cache;
+    return 0;
 }
 
 /** The bus has no function to list. */
@@ -2179,6 +2250,128 @@ static void pci_config_rows(void)
     procfs_close(e);
 }
 
+/** Open the resourceN file `attr` of function 0x20 with `flags` into
+ * descriptor 0 as the rows' caller: the open's result. */
+static int bar_file_open(int attr, int flags)
+{
+    struct vpath vp;
+    fd_entry_t *e = &entries[0];
+
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = SYSFS_PCI_DEVICE;
+    vp.procfile = attr;
+    vp.syskey = 0x20;
+    process.fds = &table;
+    table.entries = entries;
+    table.cap = 1;
+    k_memset(e, 0, sizeof(*e));
+    k_memset(&mem_ofd, 0, sizeof(mem_ofd));
+    e->ofd = &mem_ofd;
+    return procfs_open_pcibar(&vp, flags);
+}
+
+/** Map `pages` pages of descriptor 0 from the page `pgoff`, shared. */
+static int bar_file_map(uint32_t pgoff, uint32_t pages)
+{
+    vma_t v;
+
+    k_memset(&v, 0, sizeof(v));
+    v.end = (uintptr_t)pages * PAGE_SIZE;
+    v.type = VM_SHARED;
+    v.pgoff = pgoff;
+    mapped_ops = NULL;
+    return procfs_pcibar_mmap(&entries[0], &v);
+}
+
+/** Which resourceN files a function has, one for each BAR with a length,
+ * each as long as its BAR, and that root alone opens them. */
+static void pci_bar_file_rows(void)
+{
+    check(sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 4) &&
+              !sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 1) &&
+              !sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 5) &&
+              !sysfs_pci_attr_present(0x28, SYSFS_PCI_RESOURCE0) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_CONFIG),
+          "a function has resource0 and resource4, its BARs with a length, and no others");
+    check(sysfs_pci_bar_size(0x20, 0) == 0x800000u && sysfs_pci_bar_size(0x20, 4) == 0x4000u &&
+              sysfs_pci_bar_size(0x20, 6) == 0,
+          "and each is as long as its BAR");
+    process.euid = 1000;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 0) == -EACCES,
+          "an unprivileged caller opens no resource file, even to read");
+    process.euid = 0;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0 + 1, 2) == -ENOENT, "nor anyone a BAR without one");
+}
+
+/**
+ * A memory BAR's resourceN file, as IGT's register access maps BAR 0
+ * through libpciaccess: mapped shared and uncached, page by page at the
+ * address the BAR holds, within its length, with no read or write.
+ */
+static void pci_bar_mem_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    uintptr_t phys = 0;
+    char got[4], put[2] = {0x34, 0x12};
+    vma_t v;
+
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 2 | PROCFS_O_CLOEXEC) == 0 &&
+              e->ops == &procfs_pcibar_ops &&
+              e->flags == (FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC),
+          "root opens resource0 for reading and writing, close-on-exec");
+    check(procfs_pcibar_read(e, got, 4) == -EIO && procfs_pcibar_write(e, put, 2) == -EIO,
+          "a memory BAR has no read or write");
+    check(bar_file_map(0, 512) == 0 && mapped_ops == &pcibar_vm_ops && mapped_cache == VM_PROT_UC,
+          "2 MiB of BAR 0 map shared and uncached, as IGT maps the registers");
+    check(mapped_ops && mapped_ops->page(mapped_obj, 1, &phys) == 0 && phys == 0xFE001000u &&
+              mapped_ops->page(mapped_obj, 2047, &phys) == 0 && phys == 0xFE7FF000u &&
+              mapped_ops->page(mapped_obj, 2048, &phys) == -1,
+          "a page of the mapping is the BAR's page, and past the BAR's end is none");
+    check(bar_file_map(2047, 2) == -EINVAL && bar_file_map(2048, 1) == -EINVAL &&
+              bar_file_map(2047, 1) == 0,
+          "a range past the BAR's end is refused, as pci_mmap_fits refuses it");
+    k_memset(&v, 0, sizeof(v));
+    v.end = PAGE_SIZE;
+    v.type = VM_FILE;
+    check(procfs_pcibar_mmap(e, &v) == -EINVAL, "and so is a private mapping");
+    procfs_close(e);
+    check(bar_file_open(SYSFS_PCI_RESOURCE0 + 4, 0) == 0 && bar_file_map(0, 4) == 0 &&
+              mapped_ops->page(mapped_obj, 3, &phys) == 0 && phys == 0xFE803000u,
+          "the 64-bit BAR 4 maps its four pages");
+    procfs_close(e);
+}
+
+/** An I/O BAR's resourceN file: read and written a port at a time, 1, 2 or
+ * 4 bytes, within the BAR, and not mapped, as on x86 Linux. */
+static void pci_bar_io_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    char got[4], put[2] = {0x34, 0x12};
+
+    pci_io_bar = 1;
+    check(sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 2) &&
+              bar_file_open(SYSFS_PCI_RESOURCE0 + 2, 2) == 0,
+          "an I/O BAR has its resource file");
+    e->ofd->offset = 0x10;
+    check(procfs_pcibar_read(e, got, 4) == 4 && port_at == 0xC010u && port_width == 4 &&
+              (uint8_t)got[0] == 0x10 && (uint8_t)got[1] == 0xC0 && got[2] == 0 &&
+              (uint8_t)got[3] == 0x40 && e->ofd->offset == 0x14,
+          "a read of 4 bytes is one dword from the BAR's port at the offset, little-endian");
+    e->ofd->offset = 0x4;
+    check(procfs_pcibar_write(e, put, 2) == 2 && port_at == 0xC004u && port_width == 2 &&
+              port_value == 0x1234u && e->ofd->offset == 0x6,
+          "a write of 2 bytes is one word to its port");
+    e->ofd->offset = 0x1E;
+    check(procfs_pcibar_read(e, got, 4) == -EINVAL && procfs_pcibar_read(e, got, 3) == -EINVAL &&
+              procfs_pcibar_read(e, got, 2) == 2 && port_at == 0xC01Eu,
+          "a width other than 1, 2 or 4 or an access past the BAR's end is refused");
+    check(bar_file_map(0, 1) == -ENODEV, "and an I/O BAR is not mapped, as on x86");
+    procfs_close(e);
+    pci_io_bar = 0;
+}
+
 /**
  * A write of a PCI function's uevent sends that action with the function's
  * variables, as udev's coldplug writes it: a bare action carries
@@ -2737,6 +2930,9 @@ int main(int argc, char **argv)
     drm_event_rows();
     drm_ident_rows();
     pci_config_rows();
+    pci_bar_file_rows();
+    pci_bar_mem_rows();
+    pci_bar_io_rows();
     pci_uevent_rows();
     sysfs_reg_rows();
     sysfs_bound_rows();
@@ -2748,8 +2944,9 @@ int main(int argc, char **argv)
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
                "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
                "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
-               "driver's attribute, link and PCI identity, writes of a PCI function's uevent, and "
-               "an input device's /sys entries, capability masks and uevents\n");
+               "driver's attribute, link and PCI identity, a PCI function's BARs mapped and read "
+               "through its resource files, writes of a PCI function's uevent, and an input "
+               "device's /sys entries, capability masks and uevents\n");
     }
     return failures != 0;
 }
