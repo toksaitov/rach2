@@ -549,7 +549,9 @@ static void fpu_child(int cpu)
 /**
  * Run a guest that reads its data slot and exits to port 0x10 without end,
  * on processor `cpu`, while a child restores x87 state on the other, for
- * `seconds`; fail on the first exit that is not the read's value.
+ * `seconds`; fail on the first exit that is not the read's value, and
+ * when the child has ended before the run does, as one that could not pin
+ * itself does, having loaded no x87 state.
  *
  * Under QEMU's multi-threaded TCG an x87 status load on any processor clears
  * IGNNE in processor 0's hflags2 by a plain read and write, which can undo
@@ -608,11 +610,18 @@ static int race_rows(struct guest *g, unsigned int seconds, int cpu)
         exits++;
     }
     alarm(0);
+    if (waitpid(child, &status, WNOHANG) != 0) {
+        child = -1;
+        if (result == 0)
+            result = fail("race child ended");
+    }
     if (result == 0)
         printf("svm-entry: race: pass: %lu exits in %u s on processor %d\n", exits, seconds, cpu);
 out:
-    kill(child, SIGKILL);
-    waitpid(child, &status, 0);
+    if (child > 0) {
+        kill(child, SIGKILL);
+        waitpid(child, &status, 0);
+    }
     return result;
 }
 

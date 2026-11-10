@@ -511,8 +511,9 @@ static void files_row(void)
     require(begins(last, "DERRMR: "), "files: i915_error_state read whole, to DERRMR");
     error_path();
     n = slurp(epath);
+    require(n > 0, "files: the card's error in /sys reads");
     copy_line(tail, (long)sizeof(tail), last_line(n));
-    require(n > 0 && begins(body, first) && begins(tail, last) && begins(last, tail),
+    require(begins(body, first) && begins(tail, last) && begins(last, tail),
             "files: the card's error in /sys, whole, from its message to DERRMR");
     report_held();
 }
