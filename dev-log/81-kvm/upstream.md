@@ -56,3 +56,14 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Rach2: nothing; nested paging's reserved bits are proven under nested KVM on the testing PC, and Rach2's tables set no reserved bit.
 * Status: unreported.
 * Next: read the reserved-bit masks of QEMU's nested page walk for TCG; then report it with the command.
+
+## QEMU's TCG leaves an intercepted interrupt pending while a nested guest runs
+
+* Project: QEMU's SVM emulation for TCG: Homebrew's QEMU 11.1.3 on an Apple M4 host, and Ubuntu's QEMU 10.2.1 (1:10.2.1+ds-1ubuntu3.3) on x86-64 under WSL.
+* Fails: with V_INTR_MASKING set and INTR intercepted, a guest of the emulated SVM that runs with its own IF clear is not ended with SVM_EXIT_INTR when the local APIC's timer raises its vector; the vector waits in the IRR while the guest runs on. AMD's manual makes the host's IF and GIF, not the guest's IF, gate a physical interrupt under V_INTR_MASKING, and an intercepted one exits at once. On the Mac it never exits in about one run of five, and the others pass in 1 s; under WSL every run takes the interrupts, at about 18 a second. The lines of QEMU's source that do it are not yet traced.
+* Found: 2026-11-10, on the Mac, in milestone 81, task 81-6c, while qualifying the `max-svm` processor profile under TCG on the Mac.
+* Reproduction: as the CR3 fault's, with `-append reg_corruption`; on the Mac, run it until one does not end within a few seconds, and read `info registers -a` and `info lapic` in its monitor.
+* Evidence: `dev-log/81-kvm/81-6c/mac-reg-corruption.txt`; `tests/kvm/ref/svm-max-svm-tcg-mac.status`, where the test's status is 2, QEMU stopped without the test's exit.
+* Rach2: Rach2's SVM backend sets V_INTR_MASKING and intercepts INTR as the test does, so a guest of Rach2's KVM that spins with its IF clear under TCG may wait on an interrupt QEMU does not deliver; 81-2's cases on `max-svm` meet it there, and nested KVM on the testing PC does not have it.
+* Status: unreported.
+* Next: read the interrupt check of QEMU's TCG loop for a guest in SVM (`svm_check_intercept` and the `CPU_INTERRUPT_HARD` test in `x86_cpu_exec_interrupt`) against the manual's rule, try a current QEMU, and report it with the command.
