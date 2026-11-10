@@ -1418,12 +1418,13 @@ static int sys_decode(struct kvm_vcpu *v, struct sys_insn *d)
     return 0;
 }
 
+static void exit_info(const struct kvm_vcpu *v, uint64_t info[5]);
+
 /** An instruction the backend could not read: the internal error of
  * Linux's handle_emulation_failure at CPL 0 and #UD above it, as for MMIO,
  * with the exit's code, qualifications and event. */
 static void emulation_failed(struct kvm_vcpu *v, const struct sys_insn *d)
 {
-    struct svm_exit *e = &sv(v)->ex;
     uint64_t info[5];
 
     if (kvm_emul_cpl(v) > 0) {
@@ -1431,11 +1432,7 @@ static void emulation_failed(struct kvm_vcpu *v, const struct sys_insn *d)
         v->exit.kind = KVM_X_AGAIN;
         return;
     }
-    info[0] = e->code;
-    info[1] = e->info1;
-    info[2] = e->info2;
-    info[3] = e->int_info;
-    info[4] = e->int_err;
+    exit_info(v, info);
     v->exit.kind = KVM_X_INTERNAL;
     kvm_decode_fail(&v->exit.internal, d ? d->bytes : NULL, d ? d->n : 0, info);
 }
@@ -2005,8 +2002,8 @@ static int exit_vmmcall(struct kvm_vcpu *v)
 }
 
 /** The exit's numbers for an internal error's report, as Linux's
- * svm_get_exit_info orders them: the code, EXITINFO1 and EXITINFO2, and
- * the event under delivery with its error code. */
+ * svm_get_exit_info gives them: the code, EXITINFO1 and EXITINFO2, and
+ * the event under delivery with its error code, 0 when it has none. */
 static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
 {
     const struct svm_exit *e = &sv(v)->ex;
@@ -2015,7 +2012,7 @@ static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
     info[1] = e->info1;
     info[2] = e->info2;
     info[3] = e->int_info;
-    info[4] = e->int_err;
+    info[4] = (e->int_info & EV_ERR) ? e->int_err : 0;
 }
 
 /** A nested page fault: EXITINFO2's guest-physical address, which
