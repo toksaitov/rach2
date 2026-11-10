@@ -127,6 +127,10 @@ static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
  * platform's counter (refclock.h), whose rate the firmware states, or, on a
  * machine with neither the HPET nor the PM timer, the time-stamp counter
  * where it runs at one rate, measured against the 8254 by `timer_calibrate`.
+ * Under `rach2.tscreliable` the TSC, which `platform_timer_start` has measured
+ * by then, comes first, as Linux's TSC does: under a hypervisor every read of
+ * the HPET or the PM timer is an exit, and the tick reads the reference at
+ * least once. `k_udelay` then waits on the TSC as well (`tsc_wait_us`).
  *
  * The tick's interrupt then only prompts the count. Each interrupt counts
  * the whole ticks of the reference since the last one counted: one for an
@@ -270,6 +274,35 @@ static uint64_t ref_count(uint32_t *raw)
     return ref_total + ((*raw - ref_raw) & refclock_mask());
 }
 
+/** The TSC's counts now as one 64-bit number. */
+static uint64_t tsc_now(void)
+{
+    uint32_t lo, hi;
+
+    tsc_read(&lo, &hi);
+    return ((uint64_t)hi << 32) | lo;
+}
+
+/**
+ * Wait `usec` microseconds on the TSC, 100 at a time so that the counts of a
+ * step stay inside 32 bits at any rate below 42 GHz; each step waits the
+ * counts that cover it at least. `k_udelay`'s wait once the TSC is the
+ * reference, as Linux's `delay_tsc`.
+ */
+static void tsc_wait_us(uint32_t usec)
+{
+    while (usec > 0) {
+        uint32_t step = usec > 100u ? 100u : usec;
+        uint32_t want = (step * tsc_per_tick + US_PER_TICK - 1u) / US_PER_TICK;
+        uint64_t start = tsc_now();
+
+        while (tsc_now() - start < want) {
+            arch_relax();
+        }
+        usec -= step;
+    }
+}
+
 /**
  * Start the reference at this tick, which the old count has counted, or
  * return 0 when none is ready. The tick in progress is put to have begun half
@@ -281,16 +314,19 @@ static int ref_start(void)
 {
     uint32_t raw, now_us;
 
-    if (refclock_name()) {
+    if (tsc_per_tick && (!refclock_name() || kcmdline_has("rach2.tscreliable"))) {
+        ref.mult = 1;
+        ref.tick = tsc_per_tick;
+        ref_kind = REF_TSC;
+        if (!udelay_wait) {
+            udelay_wait = tsc_wait_us;
+        }
+    } else if (refclock_name()) {
         ref.mult = TICKS_PER_SECOND;
         ref.tick = refclock_hz();
         ref_raw = refclock_read();
         ref_total = 0;
         ref_kind = REF_COUNTER;
-    } else if (tsc_per_tick) {
-        ref.mult = 1;
-        ref.tick = tsc_per_tick;
-        ref_kind = REF_TSC;
     } else {
         return 0;
     }
@@ -300,15 +336,6 @@ static int ref_start(void)
     ref.ticks = 0;
     ref_us_base = now_us - US_PER_TICK / 2u;
     return 1;
-}
-
-/** The TSC's counts now as one 64-bit number. */
-static uint64_t tsc_now(void)
-{
-    uint32_t lo, hi;
-
-    tsc_read(&lo, &hi);
-    return ((uint64_t)hi << 32) | lo;
 }
 
 /** Whether `cpuid` says the TSC runs at one rate whatever the processor's
