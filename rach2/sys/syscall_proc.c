@@ -7123,6 +7123,34 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
     return mmap_install(addr, PAGE_UP(len), places[place], &src);
 }
 
+long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *arg), void *arg)
+{
+    struct map_source src;
+    vma_t vma;
+    int32_t rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    if (len == 0 || len > task_size()) {
+        return len == 0 ? -EINVAL : -ENOMEM;
+    }
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = PAGE_UP(len);
+    vma.prot = prot;
+    vma.type = VM_SHARED;
+    rc = map(&vma, arg);
+    if (rc != 0) {
+        return rc;
+    }
+    src.file = vma.file;
+    src.type = vma.type;
+    src.prot = vma.prot;
+    src.pgoff = vma.pgoff;
+    mem_balance();
+    return mmap_install(0, PAGE_UP(len), MAP_SHARED, &src);
+}
+
 int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
 {
     vm_space_t *vm = &current_proc->mm->vm;

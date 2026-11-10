@@ -244,6 +244,19 @@ int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
  */
 int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache);
 
+/**
+ * Map `len` bytes that a driver backs into the calling process, shared,
+ * where the kernel finds room, as Linux's vm_mmap of a driver's own file
+ * does for an ioctl that maps on the caller's behalf. `map` is given a
+ * region not yet in the address space, from 0 to the length rounded up to
+ * pages, VM_SHARED with the VM_PROT_* protection `prot`, and gives it its
+ * file and page offset as a file's `mmap` does (vm_device_map), or an
+ * error, which is returned. Returns the address, or -errno as mmap does:
+ * EINVAL for a length of 0, ENOMEM for one past the address space or no
+ * room for it, ESRCH with no process. It is mmap(2)'s, in syscall_proc.c.
+ */
+long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *arg), void *arg);
+
 /** The object a device region's file `f` maps (`vm_device_map`), or NULL
  * when `f` is NULL or no device's. */
 void *vm_device_object(const struct vm_file *f);

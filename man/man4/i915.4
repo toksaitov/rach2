@@ -252,6 +252,25 @@ for WC and UC without PAT, for
 and for a map of an import's pages;
 .Er EINVAL
 for an extension, since none is defined.
+.It Dv DRM_IOCTL_I915_GEM_MMAP
+Map
+.Fa size
+bytes of the object's pages from
+.Fa offset
+into the caller, shared, readable and writable, and give the address in
+.Fa addr_ptr ,
+as Linux's call does: written back, or write-combining under
+.Dv I915_MMAP_WC .
+The map holds the object until it is unmapped.
+.Er EINVAL
+for another flag, and for an offset or size outside the object, an offset
+not a multiple of the page or a size of 0;
+.Er ENODEV
+for
+.Dv I915_MMAP_WC
+without PAT;
+.Er ENXIO
+for an import or a userptr object.
 .It Dv DRM_IOCTL_I915_GEM_SET_TILING , DRM_IOCTL_I915_GEM_GET_TILING
 Set or read the object's layout, linear, X or Y, its stride, and the
 swizzle of bit 6 programs must apply to address a tiled object's pages:

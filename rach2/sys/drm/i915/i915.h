@@ -1950,7 +1950,7 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 24
+#define I915_NUM_IOCTLS 25
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
@@ -2088,6 +2088,7 @@ int32_t i915_gem_wait_ioctl(struct drm_device *dev, void *data, struct drm_file 
 int32_t i915_gem_set_tiling_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_get_tiling_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_mmap_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
