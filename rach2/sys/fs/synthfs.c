@@ -117,6 +117,7 @@ static void synth_copy_name(struct vpath *vp, struct comp c)
 static const struct synth_dev_dir synth_dev_dirs[] = {
     {"input", 5u, 1},
     {"dri", 6u, 0},
+    {"vfio", 7u, 0},
 };
 
 #define SYNTH_DEV_DIRS ((int)(sizeof(synth_dev_dirs) / sizeof(synth_dev_dirs[0])))

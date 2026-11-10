@@ -81,6 +81,7 @@
 #include "sys/drm/drm.h"
 #if defined(__x86_64__)
 #include "sys/kvm/kvm.h"
+#include "sys/vfio/vfio.h"
 #endif
 
 /* The boot stack and the guard page below it, from the architecture's
@@ -4263,6 +4264,7 @@ void kernel_main(const struct boot_info *boot)
     drm_start();
 #if defined(__x86_64__)
     kvm_start();
+    vfio_start();
 #endif
 
     check_timing();
