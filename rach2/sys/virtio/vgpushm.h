@@ -239,6 +239,64 @@ struct vgs_table {
     struct vgs_limits limits;
 };
 
+/*
+ * Rach2's control node, /dev/vgpu-shm (vgpu-shm(4)): the calls by which the
+ * ivshmem server on Rach2, ivshmemd(8), hands the kernel's driver a region
+ * and its doorbells and takes them back. The numbers are Linux's ioctl
+ * encoding, type 'V', direction in the top two bits and size below them.
+ */
+#define VGS_IOC(dir, nr, size) \
+    ((((uint32_t)(dir)) << 30) | (((uint32_t)(size)) << 16) | (0x56u << 8) | (uint32_t)(nr))
+#define VGS_IOC_WRITE 1u /* the caller gives the argument */
+#define VGS_IOC_READ  2u /* the kernel fills it */
+
+/* The largest region the kernel attaches: its window of the kernel's MMIO
+ * area holds 128 MiB, which other drivers share. */
+#define VGS_ATTACH_MAX 0x4000000u
+
+/*
+ * VGS_IOC_ATTACH's argument. The region is a memfd of the caller's whose
+ * size is a power of two from VGS_REGION_MIN to VGS_ATTACH_MAX and which is
+ * sealed against shrinking; the kernel holds its pages until the detach.
+ * The eventfds are the caller's descriptors, by vector: `bell_in` those the
+ * device rings for the driver, `bell_out` those the driver rings for the
+ * device; -1 for none, and with any -1 the driver polls.
+ */
+struct vgs_attach {
+    int32_t memfd;
+    int32_t bell_in[2];
+    int32_t bell_out[2];
+    uint32_t peer;  /* the driver's ivshmem peer id, below 65536 */
+    uint32_t flags; /* 0 */
+    uint32_t reserved;
+};
+
+/* VGS_IOC_DETACH's argument, a uint32_t: how the device left. */
+#define VGS_DETACH_ORDERLY 0u /* the driver says GONE to a device still there */
+#define VGS_DETACH_LOST    1u /* the device's VM has died: fail what it held */
+
+/* VGS_IOC_INFO's answer: the transport as the kernel's driver has it. */
+struct vgs_info {
+    uint32_t attached;   /* 1 while a region is attached */
+    uint32_t bound;      /* 1 while virtio-gpu is bound over it */
+    uint32_t epoch;      /* the driver's epoch */
+    uint32_t drv_state;  /* VGS_DRV_*, as last stored */
+    uint32_t dev_state;  /* VGS_DEV_*, as last read for the epoch */
+    uint32_t dev_error;  /* VGS_E_*, the device's error field */
+    uint32_t doorbells;  /* 1 when both sides accepted VGS_TF_DOORBELL */
+    uint32_t binds;      /* times virtio-gpu was bound over this attach */
+    uint64_t rung[2];    /* doorbells the driver rang, by vector */
+    uint64_t woken[2];   /* doorbells the device rang, by vector */
+    uint64_t polls;      /* passes that found the device's work unannounced */
+    uint64_t heap_pages; /* pages in the heap */
+    uint64_t heap_used;  /* pages of it the driver holds */
+    uint64_t refused;    /* allocations refused for a full heap */
+};
+
+#define VGS_IOC_ATTACH VGS_IOC(VGS_IOC_WRITE, 1, sizeof(struct vgs_attach))
+#define VGS_IOC_DETACH VGS_IOC(VGS_IOC_WRITE, 2, sizeof(uint32_t))
+#define VGS_IOC_INFO   VGS_IOC(VGS_IOC_READ, 3, sizeof(struct vgs_info))
+
 /* The C89 compile-time check of the layout both architectures must share. */
 #define VGS_ASSERT(name, cond) typedef char vgs_assert_##name[(cond) ? 1 : -1]
 VGS_ASSERT(layout_size, sizeof(struct vgs_layout) == 64);
@@ -249,18 +307,24 @@ VGS_ASSERT(device_size, sizeof(struct vgs_device) == 80);
 VGS_ASSERT(desc_size, sizeof(struct vgs_desc) == 16);
 VGS_ASSERT(driver_fits, VGS_DRIVER_OFF + sizeof(struct vgs_driver) <= VGS_DEVICE_OFF);
 VGS_ASSERT(device_fits, VGS_DEVICE_OFF + sizeof(struct vgs_device) <= VGS_CTRL_SIZE);
+VGS_ASSERT(attach_size, sizeof(struct vgs_attach) == 32);
+VGS_ASSERT(info_size, sizeof(struct vgs_info) == 96);
 
 #ifndef VGS_MB
 #define VGS_MB() __sync_synchronize()
 #endif
 
-/* Pointers to the control area's blocks of a mapped region. */
-#define VGS_LAYOUT(base) \
-    ((volatile struct vgs_layout *)((volatile uint8_t *)(base) + VGS_LAYOUT_OFF))
-#define VGS_DRIVER(base) \
-    ((volatile struct vgs_driver *)((volatile uint8_t *)(base) + VGS_DRIVER_OFF))
-#define VGS_DEVICE(base) \
-    ((volatile struct vgs_device *)((volatile uint8_t *)(base) + VGS_DEVICE_OFF))
+/*
+ * Pointers to the control area's blocks of a mapped region, and the same for
+ * a region only read. Each goes through a pointer to void, so that a block's
+ * alignment, which the region's offsets give, is not taken from a byte
+ * pointer.
+ */
+#define VGS_BLOCK(base, off)  ((volatile void *)((volatile uint8_t *)(base) + (off)))
+#define VGS_CBLOCK(base, off) ((volatile const void *)((volatile const uint8_t *)(base) + (off)))
+#define VGS_LAYOUT(base)      ((volatile struct vgs_layout *)VGS_BLOCK(base, VGS_LAYOUT_OFF))
+#define VGS_DRIVER(base)      ((volatile struct vgs_driver *)VGS_BLOCK(base, VGS_DRIVER_OFF))
+#define VGS_DEVICE(base)      ((volatile struct vgs_device *)VGS_BLOCK(base, VGS_DEVICE_OFF))
 
 const char *vgs_strerror(int err);
 int vgs_layout_make(struct vgs_layout *l, uint64_t region_size, uint64_t ring_len);
@@ -301,9 +365,10 @@ uint32_t vgs_table_epoch(struct vgs_table *t, uint32_t epoch);
 #ifdef VGS_IMPLEMENTATION
 
 /* Ring parts' addresses, from offsets vgs_check_queue has passed. */
-#define VGS_AT(base, off)  ((volatile uint8_t *)(base) + (off))
-#define VGS_U16(base, off) (*(volatile uint16_t *)VGS_AT(base, off))
-#define VGS_U32(base, off) (*(volatile uint32_t *)VGS_AT(base, off))
+#define VGS_U16(base, off)  (*(volatile uint16_t *)VGS_BLOCK(base, off))
+#define VGS_U32(base, off)  (*(volatile uint32_t *)VGS_BLOCK(base, off))
+#define VGS_CU16(base, off) (*(volatile const uint16_t *)VGS_CBLOCK(base, off))
+#define VGS_CU32(base, off) (*(volatile const uint32_t *)VGS_CBLOCK(base, off))
 
 /** Return a short lowercase description of a VGS_E_* result. */
 const char *vgs_strerror(int err)
@@ -333,10 +398,10 @@ const char *vgs_strerror(int err)
     return msg[err];
 }
 
-/** Return nonzero when x is a nonzero power of two. */
-static int vgs_pow2(uint64_t x)
+/** Return nonzero when v is a nonzero power of two. */
+static int vgs_pow2(uint64_t v)
 {
-    return x != 0 && (x & (x - 1)) == 0;
+    return v != 0 && (v & (v - 1)) == 0;
 }
 
 /**
@@ -427,7 +492,7 @@ static void vgs_copy_in(void *dst, volatile const void *src, uint32_t n)
 int vgs_snap_layout(volatile const void *base, struct vgs_layout *l)
 {
     VGS_MB();
-    vgs_copy_in(l, VGS_LAYOUT(base), sizeof(*l));
+    vgs_copy_in(l, VGS_CBLOCK(base, VGS_LAYOUT_OFF), sizeof(*l));
     return l->magic == VGS_MAGIC ? VGS_OK : VGS_E_MAGIC;
 }
 
@@ -461,13 +526,13 @@ static int vgs_snap(volatile const void *blk, void *out, uint32_t n)
 /** Copy the driver's block out of a region; see vgs_snap. */
 int vgs_snap_driver(volatile const void *base, struct vgs_driver *d)
 {
-    return vgs_snap(VGS_DRIVER(base), d, sizeof(*d));
+    return vgs_snap(VGS_CBLOCK(base, VGS_DRIVER_OFF), d, sizeof(*d));
 }
 
 /** Copy the device's block out of a region; see vgs_snap. */
 int vgs_snap_device(volatile const void *base, struct vgs_device *d)
 {
-    return vgs_snap(VGS_DEVICE(base), d, sizeof(*d));
+    return vgs_snap(VGS_CBLOCK(base, VGS_DEVICE_OFF), d, sizeof(*d));
 }
 
 /**
@@ -710,7 +775,7 @@ int vgs_chain_read(volatile const void *base, const struct vgs_layout *l, const 
         if (i >= q->size || steps == max) {
             return VGS_E_CHAIN;
         }
-        vgs_copy_in(&d, VGS_AT(base, q->desc + 16 * (uint64_t)i), sizeof(d));
+        vgs_copy_in(&d, VGS_CBLOCK(base, q->desc + 16 * (uint64_t)i), sizeof(d));
         if ((d.flags & ~(VGS_DESC_F_NEXT | VGS_DESC_F_WRITE)) != 0) {
             return VGS_E_CHAIN;
         }
@@ -748,7 +813,7 @@ int vgs_chain_read(volatile const void *base, const struct vgs_layout *l, const 
 int vgs_avail_read(volatile const void *base, const struct vgs_queue *q, uint16_t last,
                    uint16_t *idx)
 {
-    uint16_t v = VGS_U16(base, q->avail + 2);
+    uint16_t v = VGS_CU16(base, q->avail + 2);
 
     VGS_MB();
     if ((uint16_t)(v - last) > q->size) {
@@ -761,14 +826,14 @@ int vgs_avail_read(volatile const void *base, const struct vgs_queue *q, uint16_
 /** Return the head the avail ring holds at pos; vgs_chain_read checks it. */
 uint32_t vgs_avail_head(volatile const void *base, const struct vgs_queue *q, uint16_t pos)
 {
-    return VGS_U16(base, q->avail + 4 + 2 * (uint64_t)(pos & (q->size - 1)));
+    return VGS_CU16(base, q->avail + 4 + 2 * (uint64_t)(pos & (q->size - 1)));
 }
 
 /** Read a queue's used index into idx, checked as vgs_avail_read does. */
 int vgs_used_read(volatile const void *base, const struct vgs_queue *q, uint16_t last,
                   uint16_t *idx)
 {
-    uint16_t v = VGS_U16(base, q->used + 2);
+    uint16_t v = VGS_CU16(base, q->used + 2);
 
     VGS_MB();
     if ((uint16_t)(v - last) > q->size) {
@@ -788,8 +853,8 @@ int vgs_used_elem(volatile const void *base, const struct vgs_queue *q, uint16_t
 {
     uint64_t e = q->used + 4 + 8 * (uint64_t)(pos & (q->size - 1));
 
-    *id = VGS_U32(base, e);
-    *len = VGS_U32(base, e + 4);
+    *id = VGS_CU32(base, e);
+    *len = VGS_CU32(base, e + 4);
     return *id < q->size ? VGS_OK : VGS_E_CHAIN;
 }
 
@@ -798,7 +863,7 @@ void vgs_desc_write(volatile void *base, const struct vgs_queue *q, uint32_t i,
                     const struct vgs_desc *d)
 {
     volatile struct vgs_desc *t =
-        (volatile struct vgs_desc *)VGS_AT(base, q->desc + 16 * (uint64_t)i);
+        (volatile struct vgs_desc *)VGS_BLOCK(base, q->desc + 16 * (uint64_t)i);
 
     t->addr = d->addr;
     t->len = d->len;

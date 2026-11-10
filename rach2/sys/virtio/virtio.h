@@ -437,4 +437,13 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out);
  * NULL for a device of another transport. */
 const pci_device_t *virtio_pci_function(const struct virtio_dev *d);
 
+/*
+ * The shared-memory transport (shmem.c).
+ */
+
+/** Register /dev/vgpu-shm, through which ivshmemd(8) attaches a region
+ * shared with a VM whose device serves virtio-gpu (vgpu-shm(4)); 0 or the
+ * registration's error. Called once from drm_start. */
+int32_t vgpu_shm_start(void);
+
 #endif /* _VIRTIO_H_ */

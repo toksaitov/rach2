@@ -6,6 +6,7 @@
  */
 
 #include "drm.h"
+#include "../virtio/virtio.h"
 #include "../dmabuf/dmabuf.h"
 
 #include "../arch/arch.h"
@@ -81,6 +82,10 @@ void drm_start(void)
     n = virtio_gpu_probe();
     if (n < 0 && n != -ENODEV) {
         klog(KLOG_WARN, "drm", "virtio_gpu: error %d", (int)n);
+    }
+    n = vgpu_shm_start();
+    if (n < 0) {
+        klog(KLOG_WARN, "drm", "vgpu-shm: error %d", (int)n);
     }
     arch_drm_probe(ARCH_DRM_FIRMWARE);
     n = vkms_probe();
