@@ -193,7 +193,7 @@
       "native": {
         "plan": "none",
         "class": "boot",
-        "reason": "the case boots the GNU root in QEMU, whose own QEMU runs the vtest guest under TCG; on the Mac the guest would run under TCG inside TCG, a Debian boot of tens of minutes, so the case runs on Linux alone"
+        "reason": "the case boots the GNU root in QEMU, whose own QEMU runs the vtest guest under TCG; on the Mac Rach2 itself runs under TCG, so the guest's whole Debian boot would be emulated twice, and the case runs on Linux alone"
       }
     },
     {
