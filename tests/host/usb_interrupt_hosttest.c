@@ -26,7 +26,7 @@ static struct xhci_ctrl controllers[XHCI_MAX_CONTROLLERS];
 static int controller_count;
 /* Whether each vector is given out, as `isr_alloc_vector` and
  * `isr_free_vector` keep it. */
-static int vector_taken[256];
+static int vector_held[256];
 /* How many handlers are registered on each vector. */
 static int vector_handlers[256];
 /* Whether the local APIC takes messages, as `isr_msi_ready` reports. */
@@ -170,8 +170,8 @@ int isr_alloc_vector(void)
     int vector;
 
     for (vector = ISR_MSI_FIRST; vector <= ISR_MSI_LAST; vector++) {
-        if (!vector_taken[vector]) {
-            vector_taken[vector] = 1;
+        if (!vector_held[vector]) {
+            vector_held[vector] = 1;
             return vector;
         }
     }
@@ -181,7 +181,7 @@ int isr_alloc_vector(void)
 /** Mark `vector` free for the next `isr_alloc_vector` and drop its handlers. */
 void isr_free_vector(int vector)
 {
-    vector_taken[vector] = 0;
+    vector_held[vector] = 0;
     vector_handlers[vector] = 0;
 }
 
@@ -401,7 +401,7 @@ static void reset(int count)
     }
     for (n = 0; n < 256; n++) {
         vector_queries[n] = 0;
-        vector_taken[n] = 0;
+        vector_held[n] = 0;
         vector_handlers[n] = 0;
     }
     for (n = 0; n < 16; n++) {
@@ -485,8 +485,8 @@ int main(void)
     check_sources();
     CHECK("a failed line enable is not inspected", irq_queries[11] == 0);
     CHECK("a failed MSI enable is not inspected", vector_queries[49] == 0);
-    CHECK("a working MSI enable keeps its vector", vector_taken[48]);
-    CHECK("a failed MSI enable gives its vector back", !vector_taken[49]);
+    CHECK("a working MSI enable keeps its vector", vector_held[48]);
+    CHECK("a failed MSI enable gives its vector back", !vector_held[49]);
     CHECK("and drops the handler registered on it", vector_handlers[49] == 0);
 
     reset(2);
