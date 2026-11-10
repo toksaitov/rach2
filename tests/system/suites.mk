@@ -1557,17 +1557,17 @@ LOGIN_TEST_SHELL  = $(IMAGES_DIR)/login-test-shell.krffs
 # pager's. The recovery image gives the pages it stages the same way. They are
 # the cases of tests/cases/machine.man.json, which etude runs, and have no
 # target here.
-# What the man cases count, from the rendered pages and the two tables: one
-# line each of the pages, the aliases and the recovery image's pages, and
-# rach2(7)'s first line and its last, which the case waits for under the
-# pager.
+# What the man cases count, from the rendered pages and the two tables less
+# their comments and blank lines, which the guest skips: one line each of the
+# pages, the aliases and the recovery image's pages, and rach2(7)'s first
+# line and its last, which the case waits for under the pager.
 MAN_SUMMARY = $(CASE_DIR)/man/summary
 $(MAN_SUMMARY): $(MAN_ALL) man/aliases man/recovery
 	@mkdir -p $(@D)
 	@set -e; { \
 	    printf 'pages %s\n' "`find build/man -path 'build/man/cat*' -type f | wc -l | tr -d ' '`"; \
-	    printf 'aliases %s\n' "`grep -cv '^#' man/aliases`"; \
-	    printf 'recovery %s\n' "`grep -cv '^#' man/recovery`"; \
+	    printf 'aliases %s\n' "`grep -cv -e '^#' -e '^$$' man/aliases`"; \
+	    printf 'recovery %s\n' "`grep -cv -e '^#' -e '^$$' man/recovery`"; \
 	    printf 'first %s\n' "`gunzip -c build/man/cat7/rach2.7 | head -n 1`"; \
 	    printf 'last %s\n' "`gunzip -c build/man/cat7/rach2.7 | tail -n 1`"; \
 	} > $@.tmp && mv $@.tmp $@
