@@ -434,6 +434,35 @@ void evdev_sysfs_serio_files(int port, int (*add)(int dir))
     (void)add;
 }
 
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
+}
+
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
 {
     (void)parent;
@@ -696,15 +725,26 @@ static void expect_mode(uint8_t m)
     expect(0x14);
 }
 
-/** Expect the bring-up's start, the reset and the defaults, and the
+/** Expect the bring-up's start, the reset and the defaults, a Kensington
+ * ThinkingMouse's rates and ID, which psmouse tries first, and the
  * Synaptics knock, Linux's `synaptics_detect`. */
 static void expect_start(void)
 {
+    static const uint8_t thinking[9] = {20, 60, 40, 20, 20, 60, 40, 20, 20};
     int i;
 
     n_want = 0;
     expect(0xFF);
     expect(0xF6);
+    expect(0xF3);
+    expect(10);
+    expect(0xE8);
+    expect(0x00);
+    for (i = 0; i < 9; i++) {
+        expect(0xF3);
+        expect(thinking[i]);
+    }
+    expect(0xF2);
     for (i = 0; i < 4; i++) {
         expect(0xE8);
         expect(0x00);
@@ -1080,6 +1120,12 @@ static void fallback_rows(void)
     CHECK("a plain mouse's bring-up succeeds", init_mouse() == 0);
     CHECK("a plain mouse is no touchpad", touchpad == 0 && pad == NULL);
     expect_start();
+    expect(0xE8); /* a Genius mouse's resolution, scalings and status */
+    expect(0x03);
+    expect(0xE6);
+    expect(0xE6);
+    expect(0xE6);
+    expect(0xE9);
     expect(0xE1); /* the TrackPoint's read-ID, then the IntelliMouse's knock */
     expect(0xF3);
     CHECK("a plain mouse is knocked as Linux's psmouse knocks", took_expected(n_want));
@@ -1161,14 +1207,15 @@ static void toshiba_rows(void)
     set_system("TOSHIBA", "Satellite A200", "PSAE0E");
     CHECK("a Satellite's touchpad is brought up", init_mouse() == 0 && touchpad == 1);
     CHECK("its mode is set at 80 packets a second, then at psmouse's 40",
-          modes_set >= 2 && first_mode == 0xC5 && pad_mode == 0x85 && rate_40 && reporting);
+          modes_set >= 2 && first_mode == 0xC5 && pad_mode == 0x85 && ps2mouse_port_rate() == 40 &&
+              reporting);
     synaptics_reconnect();
     CHECK("and its reconnect keeps 40", pad_mode == 0x85);
 
     model_reset(KIND_PAD);
     set_system("TOSHIBA", "Portable PC", "Version 2.0");
     CHECK("a Portable PC of another version keeps 80",
-          init_mouse() == 0 && pad_mode == 0xC5 && !rate_40);
+          init_mouse() == 0 && pad_mode == 0xC5 && ps2mouse_port_rate() == 80);
     set_system(NULL, NULL, NULL);
 }
 

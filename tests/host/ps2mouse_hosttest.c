@@ -33,7 +33,9 @@
  * at every return. The handler's rows read the packets it reports, of three
  * bytes and of each wheel's four. The probes for a Synaptics, an ALPS and an
  * Elantech touchpad, which synaptics_hosttest.c, alps_hosttest.c and
- * elantech_hosttest.c test against touchpads, find none here.
+ * elantech_hosttest.c test against touchpads, find none here, and the
+ * model answers neither a ThinkingMouse's rates nor a Genius mouse's
+ * status request as those mice do, so their probes find none either.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -67,7 +69,7 @@ static int fails;
 /* The model 8042: the bytes waiting in its output buffer, first at
  * `model_head`, the reads of its ports, and every port write in order. */
 #define MODEL_BYTES  16
-#define MODEL_WRITES 96
+#define MODEL_WRITES 160
 static uint8_t model_status[MODEL_BYTES];
 static uint8_t model_data[MODEL_BYTES];
 static int model_head;
@@ -444,6 +446,56 @@ void evdev_sysfs_serio_files(int port, int (*add)(int dir))
     (void)add;
 }
 
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return 0;
+}
+
+unsigned int synaptics_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
+}
+
+void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code)
+{
+    (void)dev;
+    (void)type;
+    (void)code;
+}
+
 void evdev_set_prop(struct evdev *dev, unsigned int prop)
 {
     (void)dev;
@@ -807,10 +859,35 @@ static void expect_knock(uint8_t a, uint8_t b, uint8_t c)
     expect_mouse(0xF2, 1);
 }
 
+/** Expect the probes of psmouse's order that come before the knocks: a
+ * Kensington ThinkingMouse's rates and ID, then a Genius mouse's
+ * resolution, three 1:1 scalings and status request. */
+static void expect_extensions(void)
+{
+    static const uint8_t thinking[9] = {20, 60, 40, 20, 20, 60, 40, 20, 20};
+    int i;
+
+    expect_mouse(0xF3, 1);
+    expect_mouse(10, 1);
+    expect_mouse(0xE8, 1);
+    expect_mouse(0, 1);
+    for (i = 0; i < 9; i++) {
+        expect_mouse(0xF3, 1);
+        expect_mouse(thinking[i], 1);
+    }
+    expect_mouse(0xF2, 1);
+    expect_mouse(0xE8, 1);
+    expect_mouse(3, 1);
+    expect_mouse(0xE6, 3);
+    expect_mouse(0xE9, 1);
+}
+
 /** Expect a plain mouse's protocol found and its settings made: the
- * IntelliMouse's knock unanswered, then rate 100, resolution 3 and 1:1. */
+ * probes before the knocks, the IntelliMouse's knock unanswered, then rate
+ * 100, resolution 3 and 1:1. */
 static void expect_plain(void)
 {
+    expect_extensions();
     expect_knock(200, 100, 80);
     expect_mouse(0xF3, 1);
     expect_mouse(100, 1);
@@ -961,6 +1038,7 @@ static void bringup_wheel_rows(void)
     expect_controller();
     expect_mouse(0xFF, 1);
     expect_mouse(0xF6, 1);
+    expect_extensions();
     expect_knock(200, 100, 80);
     expect_knock(200, 200, 80);
     expect_mouse(0xF3, 1);
@@ -984,6 +1062,7 @@ static void bringup_wheel_rows(void)
     expect_controller();
     expect_mouse(0xFF, 1);
     expect_mouse(0xF6, 1);
+    expect_extensions();
     expect_knock(200, 100, 80);
     expect_knock(200, 200, 80);
     expect_mouse(0xF3, 1);

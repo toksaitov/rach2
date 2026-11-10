@@ -675,6 +675,42 @@ void evdev_sysfs_serio_files(int port, int (*add)(int dir))
     (void)add;
 }
 
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return 0;
+}
+
+unsigned int synaptics_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
 /** The 10 ms a pass-through probe waits, which no ALPS row reaches. */
 void k_udelay(uint32_t usec)
 {
@@ -1583,6 +1619,11 @@ static void left_alone_rows(void)
     close_node(&n_bare);
 }
 
+/* The bytes of psmouse's ThinkingMouse probe, which comes first, and of a
+ * plain mouse's probes up to its knock. */
+#define THINKING 23
+#define TRIAL    53
+
 /** A plain mouse, a Synaptics pad, a pad whose set-up fails, and a pad
  * that answers the reports with a rate of 10. */
 static void probe_rows(void)
@@ -1590,21 +1631,26 @@ static void probe_rows(void)
     static const uint8_t v1[3] = {0x33, 0x02, 0x0a};
     static const uint8_t v2[3] = {0x20, 0x02, 0x0e};
     static const uint8_t ec[3] = {0x00, 0x00, 0x00};
-    static const uint8_t trial[24] = {0xFF, 0xF6, 0xF6, 0xE8, 0x00, 0xE6, 0xE6, 0xE6,
-                                      0xE9, 0xE8, 0x00, 0xE7, 0xE7, 0xE7, 0xE9, 0xE8,
-                                      0x00, 0xEC, 0xEC, 0xEC, 0xE9, 0xEA, 0xE1, 0xF3};
+    /* The reset and defaults, a ThinkingMouse's rates and ID, the three
+     * reports, a Genius mouse's status, a TrackPoint's ID, the knock. */
+    static const uint8_t trial[TRIAL] = {
+        0xFF, 0xF6, 0xF3, 0x0A, 0xE8, 0x00, 0xF3, 20,   0xF3, 60,   0xF3, 40,   0xF3, 20,
+        0xF3, 20,   0xF3, 60,   0xF3, 40,   0xF3, 20,   0xF3, 20,   0xF2, 0xF6, 0xE8, 0x00,
+        0xE6, 0xE6, 0xE6, 0xE9, 0xE8, 0x00, 0xE7, 0xE7, 0xE7, 0xE9, 0xE8, 0x00, 0xEC, 0xEC,
+        0xEC, 0xE9, 0xEA, 0xE8, 0x03, 0xE6, 0xE6, 0xE6, 0xE9, 0xE1, 0xF3};
     char name[64];
     int i;
 
     model_reset(KIND_PLAIN);
     CHECK("a plain mouse's bring-up succeeds", bring_up() == 0);
-    for (i = 0; i < 24 && i < n_took; i++) {
+    for (i = 0; i < TRIAL && i < n_took; i++) {
         if (took[i] != trial[i]) {
             break;
         }
     }
-    CHECK("it is asked the three reports and a TrackPoint's ID, and then knocked as a wheel mouse",
-          i == 24);
+    CHECK("it is asked the three reports, a Genius mouse's status and a TrackPoint's ID, and "
+          "then knocked as a wheel mouse",
+          i == TRIAL);
     CHECK("it is no ALPS pad", alps == 0 && pad == 0 && stick == 0);
     CHECK("and is asked for an Elantech pad after", elantech_asked == 1);
     CHECK("it is PS/2 Generic Mouse", open_named(&n_pad, "PS/2 Generic Mouse"));
@@ -1612,7 +1658,7 @@ static void probe_rows(void)
     alps_model(v1, ec, 0);
     synaptics_answer = -1;
     CHECK("a pad that answered Synaptics's knock is brought up", bring_up() == 0);
-    CHECK("and is not asked ALPS's reports", alps == 0 && n_took < 20 && pad == 0);
+    CHECK("and is not asked ALPS's reports", alps == 0 && n_took < THINKING + 20 && pad == 0);
     CHECK("nor Elantech's", elantech_asked == 0);
 
     alps_model(v1, ec, 0);
@@ -2340,9 +2386,10 @@ static void reconnect_pad(void)
  * `psmouse_initialize` and the enable. */
 static int took_reconnect(void)
 {
-    /* The reset and defaults, the trial identification and the CS19
-     * check's 0xE1, which the reconnect does not send. */
-    int skip = 3 + 19 + 1;
+    /* The reset and defaults, a ThinkingMouse's rates and ID, the trial
+     * identification and the CS19 check's 0xE1, which the reconnect does
+     * not send. */
+    int skip = 3 + THINKING + 19 + 1;
 
     n_want = 0;
     expect_n(bringup_took + skip, n_bringup_took - skip);
