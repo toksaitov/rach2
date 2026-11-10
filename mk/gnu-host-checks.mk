@@ -32,11 +32,16 @@ $(GNU_HOST_CHECKS_STAMP): $(GNU_HOST_CHECKS_SOURCES) $(GNU_HOST_PRODUCTS_STAMP) 
     $(GNU_SANITIZERS_STAMP) build/tests/host-suite/tools/exfat_external/exfat_external.img \
     gnu-host-check-inputs | $(ETUDE)
 # Keep the old stamp until publication so store expiry keeps the predecessor.
+# The phony prerequisite runs the step at every make, and etude writes the
+# stamp each time; a stamp whose text is unchanged is given back its time, so
+# that gnu-test.ext2, which depends on it, is not made again.
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
 	    previous=$$(python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); print(p.resolve() if p.is_symlink() and p.is_dir() else "")' "$(GNU_OUT)/host-checks"); \
+	    rm -f $@.was && { [ ! -f $@ ] || cp -p $@ $@.was; } && \
 	    RACH2_HOST_CHECKS_PREVIOUS="$$previous" $(GNU_STEP) -n gnu-host-checks -t $@ $(GNU_HOST_CHECKS_INPUTS) \
 	        $(foreach f,$(GNU_HOST_CHECKS_EXTRA),-i $(f)) \
 	        -u cross -u sysroot -u root -u sanitizers -u host-products -o host-checks \
-	        -- $(call GNU_STEP_RUN,vendor/gnu/build_host_inventory.sh); fi
+	        -- $(call GNU_STEP_RUN,vendor/gnu/build_host_inventory.sh) && \
+	    { ! cmp -s $@ $@.was || touch -r $@.was $@; } && rm -f $@.was; fi
 	@test -x $(GNU_OUT)/host-checks/driver && \
 	    test -f $(GNU_OUT)/host-checks/tree/build/tests/host-suite/etude.inventory.json
