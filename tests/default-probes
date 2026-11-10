@@ -16,6 +16,9 @@ tlsprobe i686
 fsbaseprobe
 wow64probe x86_64
 futexvprobe
+futex2probe
+schedattrprobe
+membarrierprobe
 errnoprobe
 vmprobe
 mmapdevprobe
