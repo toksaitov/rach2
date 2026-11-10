@@ -32,6 +32,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/synaptics.c \
     sys/arch/x86/alps.c \
     sys/arch/x86/elantech.c \
+    sys/arch/x86/trackpoint.c \
     sys/arch/x86/ps2kbd.c \
     sys/arch/x86/platform.c \
     sys/arch/x86/speaker.c \

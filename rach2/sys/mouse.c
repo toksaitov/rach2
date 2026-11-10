@@ -72,7 +72,9 @@ struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustyp
     evdev_describe(dev, phys, 0);
     evdev_set_capability(dev, EV_KEY, BTN_LEFT);
     evdev_set_capability(dev, EV_KEY, BTN_RIGHT);
-    evdev_set_capability(dev, EV_KEY, BTN_MIDDLE);
+    if (!(caps & MOUSE_NO_MIDDLE)) {
+        evdev_set_capability(dev, EV_KEY, BTN_MIDDLE);
+    }
     evdev_set_capability(dev, EV_REL, REL_X);
     evdev_set_capability(dev, EV_REL, REL_Y);
     if (caps & MOUSE_SIDE) {

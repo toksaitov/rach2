@@ -89,8 +89,9 @@ void platform_board_init(void);
 void platform_firmware_start(void);
 
 /**
- * Make the platform's kernel threads, on a PC ACPICA's and the wireless
- * worker's, once the first program has its pid, so that init is process 1.
+ * Make the platform's kernel threads, on a PC ACPICA's, the wireless
+ * worker's and the PS/2 mouse's, once the first program has its pid, so
+ * that init is process 1.
  */
 void platform_threads_start(void);
 

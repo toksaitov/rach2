@@ -16,14 +16,24 @@
  *   Byte 5: Y7..Y0
  *
  * W is the finger's width, 4 to 15, or a code below 4: 0 two fingers, 1
- * three or more, 2 an advanced gesture packet of the second finger. Y grows
- * upward and is turned over for the event device. A touchpad with an image
- * sensor tracks the fingers itself, and its first and second contacts go to
- * two slots; another one reports one contact and the finger count.
+ * three or more, 2 an advanced gesture packet of the second finger, 3 a
+ * packet of the pass-through port's device, whose bytes are bytes 1, 4, 5
+ * and, for a four-byte device, 2. Y grows upward and is turned over for the
+ * event device. A touchpad with an image sensor tracks the fingers itself,
+ * and its first and second contacts go to two slots; another one reports
+ * one contact and the finger count.
+ *
+ * What PS/2 does not tell, Linux takes from the PS/2 mouse's ACPI PNP ID
+ * (i8042.h): the true coordinates of some ThinkPads' pads, the strip of
+ * buttons at the top of others, and a ForcePad's click. A request to the
+ * pass-through port's device is sliced too, its byte the request's, ended
+ * by the sample rate 0x28; the device's answers come back one byte to a
+ * pass-through packet.
  */
 
 #include "synaptics.h"
 
+#include "i8042.h"
 #include "ps2mouse.h"
 #include "../../evdev.h"
 #include "../../klog.h"
@@ -35,6 +45,7 @@
 #define CMD_SET_SCALE11 0xE6
 #define CMD_SET_RES     0xE8
 #define CMD_GET_INFO    0xE9 /* three bytes after the ACK */
+#define CMD_GET_ID      0xF2 /* the ID after the ACK */
 #define CMD_SET_RATE    0xF3
 #define CMD_RESET       0xFF /* 0xAA and the ID 0x00 after the ACK */
 
@@ -56,9 +67,11 @@
 #define MODE_ABSOLUTE        0x80
 #define MODE_HIGH_RATE       0x40 /* 80 packets a second, not 40 */
 #define MODE_DISABLE_GESTURE 0x04
+#define MODE_FOUR_BYTE       0x02 /* the pass-through device's packets are four bytes */
 #define MODE_W               0x01
 #define RATE_SET_MODE2       0x14
 #define RATE_AGM             0xc8
+#define RATE_PASS_THROUGH    0x28 /* the sliced byte is for the pass-through device */
 
 /* The identify query: the model, the firmware's major and minor version,
  * and 0x47 in the middle byte, which says a Synaptics pad answered. */
@@ -91,6 +104,13 @@
 #define CAP_REDUCED_FILTER(c0c)  ((c0c) & 0x000400u)
 #define CAP_IMAGE_SENSOR(c0c)    ((c0c) & 0x000800u)
 #define CAP_EXT_BUTTONS_STICK(c) ((c) & 0x010000u)
+#define CAP_INTERTOUCH(c0c)      ((c0c) & 0x004000u)
+
+/* The extra buttons a pad wires to its stick, Linux's
+ * SYN_EXT_BUTTON_STICK_*: bits 0, 1 and 2, left, middle and right. */
+#define STICK_L(eb) ((eb) & 1u)
+#define STICK_M(eb) (((eb) >> 1) & 1u)
+#define STICK_R(eb) (((eb) >> 2) & 1u)
 
 /* The limits of the positions when the pad does not give its own, from the
  * Synaptics TouchPad Interfacing Guide as Linux has them; Y is turned over
@@ -113,6 +133,54 @@
  * contact moves between packets and keeps its slot, in millimetres. */
 #define REDUCED_FILTER_FUZZ 8
 #define DMAX                10
+
+/* How long a ForcePad's single finger must press before its click is the
+ * left button, in milliseconds. */
+#define FORCEPAD_PRESS_MS 50
+
+/* What Linux 6.12's synaptics.c chooses by the PS/2 mouse's PNP ID. The
+ * pads with buttons in a strip at the top, which Synaptics listed: */
+static const char *const topbuttonpad_pnp_ids[] = {
+    "LEN0017", "LEN0018", "LEN0019", "LEN0023", "LEN002A", "LEN002B", "LEN002C",
+    "LEN002D", "LEN002E", "LEN0033", "LEN0034", "LEN0035", "LEN0036", "LEN0037",
+    "LEN0038", "LEN0039", "LEN0041", "LEN0042", "LEN0045", "LEN0047", "LEN2000",
+    "LEN2001", "LEN2002", "LEN2003", "LEN2004", "LEN2005", "LEN2006", "LEN2007",
+    "LEN2008", "LEN2009", "LEN200A", "LEN200B", 0};
+
+/* The pads Linux moves to SMBus beside those, which Rach2 drives over PS/2
+ * as Linux does without its SMBus driver: */
+static const char *const smbus_pnp_ids[] = {
+    "LEN0048", "LEN0046", "LEN0049", "LEN004a", "LEN005b", "LEN005e", "LEN006c", "LEN007a",
+    "LEN0071", "LEN0072", "LEN0073", "LEN0091", "LEN0092", "LEN0093", "LEN0096", "LEN0097",
+    "LEN0099", "LEN009b", "LEN0402", "LEN040f", "LEN0411", "LEN200f", "LEN2044", "LEN2054",
+    "LEN2055", "LEN2068", "SYN3015", "SYN3052", "SYN3221", "SYN323d", "SYN3257", 0};
+
+/* The ForcePads, which give their click as a clickpad's but also for more
+ * than one finger: */
+static const char *const forcepad_pnp_ids[] = {"SYN300D", "SYN3014", 0};
+
+/*
+ * The pads whose coordinates Linux sets in place of what they report,
+ * Linux's `min_max_pnpid_table`: the IDs, the range of board IDs it holds
+ * for, 0 at either end for no limit, and the limits, X then Y. The first
+ * match wins.
+ */
+static const char *const len0033[] = {"LEN0033", 0};
+static const char *const len0042[] = {"LEN0042", 0};
+static const char *const len0034[] = {"LEN0034", "LEN0036", "LEN0037", "LEN0039",
+                                      "LEN2002", "LEN2004", 0};
+static const char *const len2000[] = {"LEN2000", 0};
+static const char *const len2001[] = {"LEN2001", 0};
+static const char *const len2006[] = {"LEN2006", 0};
+static const struct min_max_quirk {
+    const char *const *ids;
+    uint32_t board_min, board_max;
+    uint32_t x_min, x_max, y_min, y_max;
+} min_max_quirks[] = {
+    {len0033, 0, 0, 1024, 5052, 2258, 4832},    {len0042, 0, 0, 1232, 5710, 1156, 4696},
+    {len0034, 0, 2961, 1024, 5112, 2024, 4832}, {len2000, 0, 0, 1024, 5113, 2021, 4832},
+    {len2001, 0, 0, 1024, 5022, 2508, 4832},    {len2006, 2691, 2691, 1024, 5045, 2457, 4832},
+    {len2006, 0, 0, 1264, 5675, 1171, 4688},    {0, 0, 0, 0, 0, 0, 0}};
 
 /* The protocol's number in Linux's `enum psmouse_type`, which EVIOCGID
  * gives as the product, and the vendor psmouse gives every mouse. */
@@ -160,6 +228,10 @@ struct hw_state {
 static struct synaptics_info info;
 static uint8_t mode;           /* the mode byte set */
 static int pkt_type;           /* PKT_* */
+static int is_forcepad;        /* the PNP ID names a ForcePad */
+static int press;              /* a ForcePad's single finger presses */
+static int report_press;       /* and has pressed long enough to click */
+static uint32_t press_start;   /* the tick its press began */
 static struct evdev *pad;      /* the event device */
 static struct hw_state agm;    /* the second finger, from the last AGM packet */
 static unsigned int agm_count; /* the fingers an AGM contact packet counted */
@@ -273,30 +345,31 @@ static int detect(void)
 }
 
 /** The capabilities query and those it leads to, as Linux's
- * `synaptics_capability`. A failed extended query leaves its bits 0. */
-static int query_capabilities(void)
+ * `synaptics_capability`, into `in`. A failed extended query leaves its
+ * bits 0. */
+static int query_capabilities(struct synaptics_info *in)
 {
-    if (query_int(QUE_CAPABILITIES, &info.capabilities) < 0) {
+    if (query_int(QUE_CAPABILITIES, &in->capabilities) < 0) {
         return -1;
     }
-    info.ext_cap = info.ext_cap_0c = 0;
-    if (ID_FULL(info.identity) < 0x705 && CAP_SUBMODEL_ID(info.capabilities) != 0x47) {
+    in->ext_cap = in->ext_cap_0c = 0;
+    if (ID_FULL(in->identity) < 0x705 && CAP_SUBMODEL_ID(in->capabilities) != 0x47) {
         return -1; /* older firmware had the submodel fixed at 0x47 */
     }
-    if (!CAP_EXTENDED(info.capabilities)) {
-        info.capabilities = 0;
+    if (!CAP_EXTENDED(in->capabilities)) {
+        in->capabilities = 0;
     }
-    if (EXT_CAP_REQUESTS(info.capabilities) >= 1) {
-        if (query_int(QUE_EXT_CAPAB, &info.ext_cap) < 0) {
-            info.ext_cap = 0;
+    if (EXT_CAP_REQUESTS(in->capabilities) >= 1) {
+        if (query_int(QUE_EXT_CAPAB, &in->ext_cap) < 0) {
+            in->ext_cap = 0;
             klog(KLOG_WARN, "synaptics", "query: the extended capabilities would not read");
-        } else if (CAP_MULTI_BUTTON_NO(info.ext_cap) > 8) {
-            info.ext_cap &= ~CAP_MB_MASK;
+        } else if (CAP_MULTI_BUTTON_NO(in->ext_cap) > 8) {
+            in->ext_cap &= ~CAP_MB_MASK;
         }
     }
-    if (EXT_CAP_REQUESTS(info.capabilities) >= 4) {
-        if (query_int(QUE_EXT_CAPAB_0C, &info.ext_cap_0c) < 0) {
-            info.ext_cap_0c = 0;
+    if (EXT_CAP_REQUESTS(in->capabilities) >= 4) {
+        if (query_int(QUE_EXT_CAPAB_0C, &in->ext_cap_0c) < 0) {
+            in->ext_cap_0c = 0;
             klog(KLOG_WARN, "synaptics", "query: capability 0x0c would not read");
         }
     }
@@ -312,64 +385,96 @@ static void coords(const uint8_t *r, uint32_t *x, uint32_t *y)
 }
 
 /** The resolution and the coordinates' limits, as Linux's
- * `synaptics_resolution`; what a pad does not give stays 0. */
-static void query_resolution(void)
+ * `synaptics_resolution`, into `in`; what a pad does not give stays 0. */
+static void query_resolution(struct synaptics_info *in)
 {
     uint8_t r[3];
 
-    if (ID_MAJOR(info.identity) < 4) {
+    if (ID_MAJOR(in->identity) < 4) {
         return;
     }
     if (send_query(QUE_RESOLUTION, r) == 0 && r[0] != 0 && (r[1] & 0x80u) && r[2] != 0) {
-        info.x_res = r[0];
-        info.y_res = r[2];
+        in->x_res = r[0];
+        in->y_res = r[2];
     }
-    if (EXT_CAP_REQUESTS(info.capabilities) >= 5 && CAP_MAX_DIMENSIONS(info.ext_cap_0c)) {
+    if (EXT_CAP_REQUESTS(in->capabilities) >= 5 && CAP_MAX_DIMENSIONS(in->ext_cap_0c)) {
         if (send_query(QUE_EXT_MAX_COORDS, r) < 0) {
             klog(KLOG_WARN, "synaptics", "query: the maximum coordinates would not read");
         } else {
-            coords(r, &info.x_max, &info.y_max);
+            coords(r, &in->x_max, &in->y_max);
         }
     }
     /* Firmware 8.1 gives too few extended queries, and right minimums. */
-    if (CAP_MIN_DIMENSIONS(info.ext_cap_0c) &&
-        (EXT_CAP_REQUESTS(info.capabilities) >= 7 || ID_FULL(info.identity) == 0x801)) {
+    if (CAP_MIN_DIMENSIONS(in->ext_cap_0c) &&
+        (EXT_CAP_REQUESTS(in->capabilities) >= 7 || ID_FULL(in->identity) == 0x801)) {
         if (send_query(QUE_EXT_MIN_COORDS, r) < 0) {
             klog(KLOG_WARN, "synaptics", "query: the minimum coordinates would not read");
         } else {
-            coords(r, &info.x_min, &info.y_min);
+            coords(r, &in->x_min, &in->y_min);
         }
     }
 }
 
-/** Every query, as Linux's `synaptics_query_hardware`; -1 when one that
- * Linux needs failed or the pad is not a Synaptics pad after all. */
-static int query_hardware(void)
+/** Every query, as Linux's `synaptics_query_hardware`, into `in`; -1 when
+ * one that Linux needs failed or the pad is not a Synaptics pad after
+ * all. */
+static int query_hardware(struct synaptics_info *in)
 {
     uint8_t bid[3];
 
-    k_memset(&info, 0, sizeof(info));
-    if (query_int(QUE_IDENTIFY, &info.identity) < 0 || !ID_IS_SYNAPTICS(info.identity)) {
+    k_memset(in, 0, sizeof(*in));
+    if (query_int(QUE_IDENTIFY, &in->identity) < 0 || !ID_IS_SYNAPTICS(in->identity)) {
         return -1;
     }
-    if (query_int(QUE_MODEL, &info.model_id) < 0 ||
-        query_int(QUE_FIRMWARE_ID, &info.firmware_id) < 0) {
+    if (query_int(QUE_MODEL, &in->model_id) < 0 ||
+        query_int(QUE_FIRMWARE_ID, &in->firmware_id) < 0) {
         return -1;
     }
-    if (ID_FULL(info.identity) >= 0x705) { /* earlier firmware has no board */
+    if (ID_FULL(in->identity) >= 0x705) { /* earlier firmware has no board */
         if (send_query(QUE_MODES, bid) < 0) {
             return -1;
         }
-        info.board_id = (uint32_t)(bid[0] & 0xfcu) << 6 | bid[1];
-        if (MEXT_CAP_BIT(bid[0]) && query_int(QUE_MEXT_CAPAB_10, &info.ext_cap_10) < 0) {
+        in->board_id = (uint32_t)(bid[0] & 0xfcu) << 6 | bid[1];
+        if (MEXT_CAP_BIT(bid[0]) && query_int(QUE_MEXT_CAPAB_10, &in->ext_cap_10) < 0) {
             return -1;
         }
     }
-    if (query_capabilities() < 0) {
+    if (query_capabilities(in) < 0) {
         return -1;
     }
-    query_resolution();
+    query_resolution(in);
     return 0;
+}
+
+/** Set the coordinates of a pad whose PNP ID and board Linux's
+ * `min_max_pnpid_table` names, as `synaptics_apply_quirks` does. */
+static void apply_quirks(void)
+{
+    const struct min_max_quirk *q;
+
+    for (q = min_max_quirks; q->ids; q++) {
+        if (!i8042_matches_pnp_id(I8042_AUX_PORT, q->ids) ||
+            (q->board_min && info.board_id < q->board_min) ||
+            (q->board_max && info.board_id > q->board_max)) {
+            continue;
+        }
+        info.x_min = q->x_min;
+        info.x_max = q->x_max;
+        info.y_min = q->y_min;
+        info.y_max = q->y_max;
+        klog(KLOG_INFO, "synaptics", "quirk: min/max coordinates: x [%u..%u], y [%u..%u]",
+             info.x_min, info.x_max, info.y_min, info.y_max);
+        return;
+    }
+}
+
+/** Whether Linux 6.12, built with its SMBus driver, moves the pad to SMBus
+ * by its PNP ID: one of `topbuttonpad_pnp_ids` or `smbus_pnp_ids`, as
+ * `synaptics_setup_intertouch` asks. */
+static int smbus_listed(void)
+{
+    return i8042_matches_pnp_id(I8042_AUX_PORT, topbuttonpad_pnp_ids) ||
+           i8042_matches_pnp_id(I8042_AUX_PORT, smbus_pnp_ids);
 }
 
 /** Whether the pad sends advanced gesture packets of a second finger. */
@@ -488,8 +593,22 @@ static int register_pad(void)
     }
     if (CAP_CLICKPAD(info.ext_cap_0c)) {
         evdev_set_prop(pad, INPUT_PROP_BUTTONPAD);
+        if (i8042_matches_pnp_id(I8042_AUX_PORT, topbuttonpad_pnp_ids) &&
+            !CAP_EXT_BUTTONS_STICK(info.ext_cap_10)) {
+            evdev_set_prop(pad, INPUT_PROP_TOPBUTTONPAD);
+        }
     }
     return 0;
+}
+
+/** The rate, resolution and scaling that Linux's `psmouse_initialize` sets
+ * on the pad: the mode byte again for the rate of 100, which keeps 80
+ * packets a second, 200 dpi and 1:1. */
+static void initialize(void)
+{
+    mode_cmd(mode);
+    command_arg(CMD_SET_RES, 3);
+    command(CMD_SET_SCALE11);
 }
 
 int synaptics_init(void)
@@ -503,10 +622,22 @@ int synaptics_init(void)
     if (command(CMD_RESET) == 0) {
         receive(reply, 2);
     }
-    if (query_hardware() < 0) {
+    if (query_hardware(&info) < 0) {
         klog(KLOG_WARN, "synaptics", "query: the touchpad did not answer");
         goto relative;
     }
+    is_forcepad = i8042_matches_pnp_id(I8042_AUX_PORT, forcepad_pnp_ids);
+    if (CAP_INTERTOUCH(info.ext_cap_0c) && !is_forcepad) {
+        klog(KLOG_WARN, "synaptics",
+             smbus_listed()
+                 ? "smbus: the touchpad (%s) is one Linux drives on SMBus, which is not "
+                   "driven; it stays on PS/2"
+                 : "smbus: the touchpad (%s) says it can support a different bus; it stays on "
+                   "PS/2",
+             i8042_firmware_id(I8042_AUX_PORT));
+    }
+    apply_quirks();
+    press = report_press = 0;
     if (set_mode() < 0) {
         klog(KLOG_WARN, "synaptics", "mode: the touchpad refused absolute mode");
         goto relative;
@@ -522,10 +653,7 @@ int synaptics_init(void)
         klog(KLOG_WARN, "synaptics", "register: no event device for the touchpad");
         goto relative;
     }
-    /* psmouse_initialize: the rate, 200 dpi and 1:1 scaling. */
-    mode_cmd(mode);
-    command_arg(CMD_SET_RES, 3);
-    command(CMD_SET_SCALE11);
+    initialize();
     mouse_attach_touchpad(pad);
     pktcnt = 0;
     return 1;
@@ -616,9 +744,34 @@ static void parse_ext_buttons(struct hw_state *hw)
 }
 
 /**
- * Read the packet into `hw`, Linux's `synaptics_parse_hw_state` without the
- * ForcePad's press, which only a PNP ID names. Returns 1 for an advanced
- * gesture packet, which goes to `agm` and is not reported itself.
+ * A ForcePad's left button, Linux's: a ForcePad gives the middle button's
+ * bit for a press of one finger hard enough and also for more than one
+ * finger, so only a single finger's press held for FORCEPAD_PRESS_MS
+ * clicks, and the click stays until no finger touches.
+ */
+static int forcepad_left(const struct hw_state *hw)
+{
+    uint32_t now = (uint32_t)kernel_ticks;
+
+    if (hw->z == 0) {
+        press = report_press = 0;
+    } else if (hw->w >= 4 && ((packet[0] ^ packet[3]) & 0x01)) {
+        if (!press) {
+            press_start = now;
+            press = 1;
+        } else if ((int32_t)(now - (press_start + MS_TO_TICKS(FORCEPAD_PRESS_MS))) > 0) {
+            report_press = 1;
+        }
+    } else {
+        press = 0;
+    }
+    return report_press;
+}
+
+/**
+ * Read the packet into `hw`, Linux's `synaptics_parse_hw_state`. Returns 1
+ * for an advanced gesture packet, which goes to `agm` and is not reported
+ * itself.
  */
 static int parse_hw_state(struct hw_state *hw)
 {
@@ -636,7 +789,9 @@ static int parse_hw_state(struct hw_state *hw)
         hw->z = b[2];
         hw->left = b[0] & 0x01;
         hw->right = (b[0] & 0x02) >> 1;
-        if (CAP_CLICKPAD(info.ext_cap_0c)) {
+        if (is_forcepad) {
+            hw->left = forcepad_left(hw);
+        } else if (CAP_CLICKPAD(info.ext_cap_0c)) {
             /* A clickpad's click comes as the middle button. */
             hw->left = (b[0] ^ b[3]) & 0x01;
         } else if (CAP_MIDDLE_BUTTON(info.capabilities)) {
@@ -674,8 +829,8 @@ static int parse_hw_state(struct hw_state *hw)
 }
 
 /** Report the buttons of `hw`, Linux's `synaptics_report_buttons`; the
- * extra buttons of a pad that wires them to a pass-through port's stick are
- * not reported, since that port is not driven. */
+ * extra buttons of a pad that wires them to its pass-through port's stick
+ * go to the stick's device, as Linux sends them out of band. */
 static void report_buttons(const struct hw_state *hw)
 {
     unsigned int bits = (CAP_MULTI_BUTTON_NO(info.ext_cap) + 1) >> 1;
@@ -690,12 +845,20 @@ static void report_buttons(const struct hw_state *hw)
         evdev_report(pad, EV_KEY, BTN_FORWARD, hw->up);
         evdev_report(pad, EV_KEY, BTN_BACK, hw->down);
     }
-    if (!CAP_MULTI_BUTTON_NO(info.ext_cap) || CAP_EXT_BUTTONS_STICK(info.ext_cap_10)) {
+    if (!CAP_MULTI_BUTTON_NO(info.ext_cap)) {
         return;
     }
     /* Firmware 8.1 and 8.2 give the extra buttons only with the change bit. */
     if ((ID_FULL(info.identity) == 0x801 || ID_FULL(info.identity) == 0x802) &&
         !((packet[0] ^ packet[3]) & 0x02)) {
+        return;
+    }
+    if (CAP_EXT_BUTTONS_STICK(info.ext_cap_10)) {
+        if (CAP_PASS_THROUGH(info.capabilities)) {
+            ps2mouse_guest_buttons((uint8_t)(STICK_L(hw->ext_buttons) |
+                                             STICK_R(hw->ext_buttons) << 1 |
+                                             STICK_M(hw->ext_buttons) << 2));
+        }
         return;
     }
     for (i = 0; i < bits; i++) {
@@ -875,7 +1038,26 @@ static int pt_packet(void)
     return (packet[0] & 0xFC) == 0x84 && (packet[3] & 0xCC) == 0xC4;
 }
 
-void synaptics_byte(uint8_t data)
+/** Give the pass-through packet's bytes to the guest, as Linux's
+ * `synaptics_pass_pt_packet` gives them to the device that reports on the
+ * port: bytes 1, 4 and 5, and 2 when its packets are four bytes. */
+static void pass_pt_packet(void)
+{
+    uint8_t guest[4];
+
+    guest[0] = packet[1];
+    guest[1] = packet[4];
+    guest[2] = packet[5];
+    guest[3] = packet[2];
+    ps2mouse_guest_packet(guest);
+}
+
+int synaptics_packet_start(void)
+{
+    return pktcnt == 0;
+}
+
+int synaptics_byte(uint8_t data)
 {
     uint32_t now = (uint32_t)kernel_ticks;
 
@@ -889,16 +1071,120 @@ void synaptics_byte(uint8_t data)
         if (!valid_byte(pktcnt - 1, pkt_type)) {
             sync_losses++;
             pktcnt = 0;
+            return SYNAPTICS_BAD;
         }
-        return;
+        return SYNAPTICS_GOOD;
     }
     pktcnt = 0;
     if (pkt_type == PKT_NEWABS) {
         pkt_type = detect_pkt_type();
     }
-    /* A stick's packet on the pass-through port, which is not driven. */
     if (CAP_PASS_THROUGH(info.capabilities) && pt_packet()) {
-        return;
+        pass_pt_packet();
+    } else {
+        process_packet();
     }
-    process_packet();
+    return SYNAPTICS_FULL;
+}
+
+int synaptics_has_pass_through(void)
+{
+    return pad && CAP_PASS_THROUGH(info.capabilities);
+}
+
+/**
+ * Read the pass-through device's next byte: the next pass-through packet,
+ * read whole, gives it in byte 1, and a packet of the pad's own between is
+ * passed over, as Linux's handler passes it to the pad's device. Returns
+ * the byte, or -1 when no packet came.
+ */
+static int pt_receive(void)
+{
+    int tries;
+
+    for (tries = 0; tries < 8; tries++) {
+        if (receive(packet, 6) < 0) {
+            return -1;
+        }
+        if (pt_packet()) {
+            return packet[1];
+        }
+    }
+    return -1;
+}
+
+/** Send `cmd` to the pass-through device, Linux's `synaptics_pt_write`:
+ * the byte sliced and the rate 0x28; its reply comes in a pass-through
+ * packet. Returns the reply, or -1. */
+static int pt_send(uint8_t cmd)
+{
+    if (sliced(cmd) < 0 || command_arg(CMD_SET_RATE, RATE_PASS_THROUGH) < 0) {
+        return -1;
+    }
+    return pt_receive();
+}
+
+const struct ps2io synaptics_pt = {pt_send, pt_receive};
+
+void synaptics_pt_activate(int packet_size)
+{
+    if (packet_size == 4) {
+        mode |= MODE_FOUR_BYTE;
+    } else {
+        mode &= (uint8_t)~MODE_FOUR_BYTE;
+    }
+    if (mode_cmd(mode) < 0) {
+        klog(KLOG_WARN, "synaptics", "pass-through: the touchpad refused the guest's packet size");
+    }
+}
+
+int synaptics_reconnect(void)
+{
+    struct synaptics_info now;
+    uint8_t reply[2];
+    int retry = 0, error;
+
+    do {
+        if (command(CMD_RESET) == 0) {
+            receive(reply, 2);
+        }
+        if (retry) {
+            ps2mouse_msleep(1000); /* a pad may still be calibrating */
+        }
+        if (command(CMD_GET_ID) == 0) {
+            receive(reply, 1);
+        }
+        error = detect();
+    } while (error && ++retry < 3);
+    if (error) {
+        return -1;
+    }
+    if (query_hardware(&now) < 0) {
+        klog(KLOG_WARN, "synaptics", "reconnect: the touchpad did not answer its queries");
+        return -1;
+    }
+    if (set_mode() < 0) {
+        klog(KLOG_WARN, "synaptics", "reconnect: the touchpad refused its mode");
+        return -1;
+    }
+    if (now.identity != info.identity || now.model_id != info.model_id ||
+        now.capabilities != info.capabilities || now.ext_cap != info.ext_cap) {
+        klog(KLOG_WARN, "synaptics",
+             "reconnect: another touchpad: id %u-%u, model %u-%u, caps %x-%x, ext %x-%x",
+             info.identity, now.identity, info.model_id, now.model_id, info.capabilities,
+             now.capabilities, info.ext_cap, now.ext_cap);
+        return -1;
+    }
+    initialize();
+    pktcnt = 0;
+    return 0;
+}
+
+void synaptics_disconnect(void)
+{
+    if (pad) {
+        evdev_unregister(pad);
+        pad = 0;
+    }
+    pktcnt = 0;
 }
