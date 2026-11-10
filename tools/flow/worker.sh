@@ -40,6 +40,12 @@
 # reads at most DOC_BYTES of AGENTS.md, since its own limit, 32 KiB, cuts the
 # file short.
 #
+# STATE/model, if it exists, sets the model and effort of this loop's sessions
+# in place of the account's model, or CODEX_MODEL, and REASONING: one line,
+# `MODEL EFFORT [UNTIL]`, with UNTIL in seconds since the epoch. The loop reads
+# it before each session, so it takes effect at the next one, and removes it
+# once UNTIL has passed, which puts the loop back on its defaults by itself.
+#
 # A session that ends on the account's usage limit makes the loop wait fifteen
 # minutes. One shorter than two minutes for another reason, such as a lost
 # network or a lapsed login, doubles the wait before the next, from one minute
@@ -90,6 +96,35 @@ claim()
     done
 } 9>> "$flowdir/claim.lock"
 
+# choose: set `model` and `effort` for the next session: empty, for the
+# agent's default model, and REASONING, unless STATE/model names others, as
+# the header says. A line whose model or effort has a character outside
+# letters, digits, `.`, `_` and `-`, or whose UNTIL is not a number, is
+# ignored and logged.
+choose()
+{
+    model='' effort=$REASONING
+    [ -r "$state/model" ] || return 0
+    read -r m e until < "$state/model"
+    case "$m$e" in
+        ''|*[!A-Za-z0-9._-]*)
+            log "model: unusable line in $state/model"
+            return 0 ;;
+    esac
+    case $until in
+        *[!0-9]*)
+            log "model: unusable line in $state/model"
+            return 0 ;;
+    esac
+    if [ -n "$until" ] && [ "$(date +%s)" -ge "$until" ]; then
+        rm -f "$state/model"
+        log "model: $m ended; back to the default at $REASONING"
+        return 0
+    fi
+    model=$m effort=${e:-$REASONING}
+    log "model: $model at $effort"
+}
+
 # session ISSUE BRANCH: run one session on task ISSUE, whose milestone's
 # branch is BRANCH, with the agent's command.
 session()
@@ -97,21 +132,23 @@ session()
     t=$(date -u '+%m%d-%H%M%S')
     prompt=$(sed "s|@ISSUE@|$1|g; s|@BRANCH@|$2|g; s|@BOARD@|$state/run/board.sh|g" \
         "$state/run/worker.txt")
+    choose
     log "session $t on #$1 starts"
     started=$(date +%s)
     case $agent in
         claude)
             run_session "$state/s-$t.jsonl" "$state/s-$t.err" "$DEADLINE" \
                 env CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 \
-                CLAUDE_CODE_EFFORT_LEVEL="$REASONING" \
+                CLAUDE_CODE_EFFORT_LEVEL="$effort" \
                 CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 \
-                claude -p "$prompt" --permission-mode bypassPermissions \
+                claude ${model:+--model "$model"} \
+                -p "$prompt" --permission-mode bypassPermissions \
                 --disallowedTools ScheduleWakeup,Monitor \
                 --output-format stream-json --verbose ;;
         codex)
             run_session "$state/s-$t.jsonl" "$state/s-$t.err" "$DEADLINE" \
-                codex exec -m "$CODEX_MODEL" \
-                -c model_reasoning_effort="$REASONING" \
+                codex exec -m "${model:-$CODEX_MODEL}" \
+                -c model_reasoning_effort="$effort" \
                 -c project_doc_max_bytes="$DOC_BYTES" \
                 --dangerously-bypass-approvals-and-sandbox --json \
                 -C "$repo" "$prompt" ;;
