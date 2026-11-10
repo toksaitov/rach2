@@ -284,6 +284,7 @@ int32_t i915_gt_init(struct drm_i915_private *i915)
     int i;
 
     k_memset(gt, 0, sizeof(*gt));
+    gt->init_ticks = rtc_ticks_now();
     gt->ggtt_top = gt->ggtt_bottom = i915->ggtt.total;
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         struct i915_engine *e = &gt->engine[i];

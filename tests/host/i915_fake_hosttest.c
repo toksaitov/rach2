@@ -570,6 +570,11 @@ void i915_gem_shrinker_unregister(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void i915_debugfs_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 /* The contexts and requests, i915_gem_context.c and i915_request.c, which
  * the bind reaches only through the DRM core's hooks and the unplug. */
 int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)

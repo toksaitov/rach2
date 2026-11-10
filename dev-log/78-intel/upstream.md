@@ -45,3 +45,14 @@ Each entry follows [the upstream fault format](../upstream.md).
 * Rach2: `rach2/sys/drm/i915/i915_gem_execbuffer.c`, `eb_timeline_fence`, judges each entry by its own lookup, in the commit that adds the timeline fences. Mesa sets WAIT or SIGNAL on every entry, so no known program sees the difference.
 * Status: unreported.
 * Next: check current upstream's loop, show the refusal with the two-entry call above on a machine with i915, and propose moving `err` into the loop, initialised to 0.
+
+## Linux's i915_error_state answers a write with 0 when it holds no error
+
+* Project: Linux 6.12, `drivers/gpu/drm/i915/i915_gpu_error.c` from the upstream Git tag. No source archive is pinned by this task; 6.18's copy has not been read.
+* Fails: `i915_error_state_write`, at line 2447, returns 0 when the open found no error state (line 2454), where it clears the state and returns the count when one is held. A write of one byte or more that returns 0 has written nothing, so a writer that loops until its bytes are taken, as glibc's stdio and BusyBox's `full_write` do, loops for good. The sysfs card file `error`, `error_state_write` at line 2530 of the same file, returns the count either way.
+* Found: 2026-11-10 on the Mac, milestone 78, while porting the error state's debugfs file for task 78-13a.
+* Reproduction: not run on Linux. On a machine with i915 and no GPU hang since boot, or after the state was cleared, run `echo > /sys/kernel/debug/dri/0/i915_error_state` as root; the shell should spin in write(2).
+* Evidence: [Linux 6.12's i915_error_state_write](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/i915_gpu_error.c#L2447) and [its sysfs error_state_write](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/i915_gpu_error.c#L2530).
+* Rach2: `rach2/sys/drm/i915/i915_debugfs.c`, `error_state_write`, returns the count whether or not a state is held, as the sysfs file does, in the commit that adds the debugfs files.
+* Status: unreported.
+* Next: read 6.18's and current upstream's `i915_error_state_write`, show the spinning write on a machine with i915, and propose returning `cnt` when no state is held.
