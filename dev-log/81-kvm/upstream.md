@@ -12,3 +12,47 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Rach2: `kvm_task_switch` in `rach2/sys/kvm/emulate.c` queues each fault as the processor raises it. A fault found before the switch is committed leaves the old task as it was, with RIP at the instruction. A fault in loading the new task's state comes after TR, the busy bits, NT and the registers are the new task's, as the SDM's order of a task switch gives.
 * Status: unreported.
 * Next: run the reproduction on a current kernel under KVM, check whether a later release injects `ctxt->exception` in `kvm_task_switch`, and report it to the KVM list with the reproduction as a kvm-unit-tests case.
+
+## QEMU's TCG gives no exit for an intercepted CR3 read
+
+* Project: QEMU 10.2.1, Ubuntu's build 1:10.2.1+ds-1ubuntu3.3, its SVM emulation for TCG.
+* Fails: with INTERCEPT_CR3_READ set in the VMCB, a guest's `mov %cr3, %reg` completes in the guest with no #VMEXIT, where AMD's manual gives SVM_EXIT_READ_CR3, which Linux's nested KVM gives on the same test. The lines of QEMU's source that do it are not yet traced.
+* Found: 2026-11-10, on the testing PC under WSL, in milestone 81, task 81-6c, while qualifying the `max-svm` processor profile, `max` with `svm` and `npt`, by kvm-unit-tests' SVM tests under TCG.
+* Reproduction: `qemu-system-x86_64 -accel tcg -cpu max,svm=on,npt=on -smp 2 -m 4g -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -nodefaults -display none -serial stdio -kernel x86/svm.flat -append cr3_read_intercept`, with kvm-unit-tests at commit 5a221342; `cr3_read_intercept_emulate` fails the same way. `sh tests/kvm/qualify.sh tcg max-svm` runs it with the others.
+* Evidence: `dev-log/81-kvm/81-6c/tcg-failures/svm-cr3_read_intercept.log`, `svm-cr3_read_intercept_emulate.log`; `tests/kvm/ref/svm-max-svm-tcg.status` and `svm-host-svm-kvm.status`, where the test passes under KVM.
+* Rach2: nothing; Rach2's SVM backend is proven on the CR3 intercept under nested KVM on the testing PC, and its cases under TCG depend on no such exit.
+* Status: unreported.
+* Next: read QEMU's SVM intercept checks for CR reads in its TCG helpers and see whether a later release than 10.2.1 fixes it; then report it with the kvm-unit-tests command.
+
+## QEMU's TCG gives no selective CR0 write exit for LMSW
+
+* Project: QEMU 10.2.1, Ubuntu's build 1:10.2.1+ds-1ubuntu3.3, its SVM emulation for TCG.
+* Fails: with the selective CR0 write intercept set, an LMSW that changes CR0.MP completes in the guest with no SVM_EXIT_CR0_SEL_WRITE, which AMD's manual gives for LMSW and Linux's nested KVM gives on the same test; a MOV to CR0 that changes the same bit exits as it should under TCG. The lines of QEMU's source that do it are not yet traced.
+* Found: 2026-11-10, on the testing PC under WSL, in milestone 81, task 81-6c, with the first fault.
+* Reproduction: as the first fault's, with `-append sel_cr0_lmsw_intercept`.
+* Evidence: `dev-log/81-kvm/81-6c/tcg-failures/svm-sel_cr0_lmsw_intercept.log`; the status files of the first fault.
+* Rach2: nothing, as for the first fault.
+* Status: unreported.
+* Next: read QEMU's TCG LMSW helper for its intercept check; then report it with the command.
+
+## QEMU's TCG ends a VMRUN after a failed event injection in #UD
+
+* Project: QEMU 10.2.1, Ubuntu's build 1:10.2.1+ds-1ubuntu3.3, its SVM emulation for TCG.
+* Fails: kvm-unit-tests' `exc_inject` injects NMI as an exception, which VMRUN refuses with VMEXIT_INVALID as it should, then injects #DE and runs the guest again; under TCG the host then takes #UD at 0x4018af, two bytes into the first instruction of the test's `init_startup_check`, so the host's RIP after that VMRUN is wrong. Linux's nested KVM passes the test. The lines of QEMU's source that do it are not yet traced.
+* Found: 2026-11-10, on the testing PC under WSL, in milestone 81, task 81-6c, with the first fault.
+* Reproduction: as the first fault's, with `-append exc_inject`.
+* Evidence: `dev-log/81-kvm/81-6c/tcg-failures/svm-exc_inject.log`; the status files of the first fault.
+* Rach2: nothing, as for the first fault.
+* Status: unreported.
+* Next: trace the host's state that QEMU's VMEXIT_INVALID path saves and the next VMRUN loads, with QEMU's `-d int,cpu` log; then report it with the command.
+
+## QEMU's TCG raises no nested page fault for reserved bits
+
+* Project: QEMU 10.2.1, Ubuntu's build 1:10.2.1+ds-1ubuntu3.3, its SVM emulation for TCG.
+* Fails: with bit 8, reserved, set in a nested page table entry, the guest's access completes and the guest exits with its VMMCALL (exit 0x81), where AMD's manual gives #NPF (exit 0x400) with the error code 0x20000000f, present, write, user and reserved; with NX clear in the host's EFER, a set NX bit, reserved then, gives #NPF with 0x20000000e, without the present flag. 72 of the 128 checks of `svm_npt_rsvd_bits_test` fail; Linux's nested KVM passes all. The lines of QEMU's source that do it are not yet traced.
+* Found: 2026-11-10, on the testing PC under WSL, in milestone 81, task 81-6c, with the first fault.
+* Reproduction: as the first fault's, with `-kernel x86/svm_npt.flat -append svm_npt_rsvd_bits_test`.
+* Evidence: `dev-log/81-kvm/81-6c/tcg-failures/svm_npt-svm_npt_rsvd_bits_test.log`; the status files of the first fault.
+* Rach2: nothing; nested paging's reserved bits are proven under nested KVM on the testing PC, and Rach2's tables set no reserved bit.
+* Status: unreported.
+* Next: read the reserved-bit masks of QEMU's nested page walk for TCG; then report it with the command.
