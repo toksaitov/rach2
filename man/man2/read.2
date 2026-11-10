@@ -279,7 +279,11 @@ Both forms take
 .Dv RWF_APPEND
 and
 .Dv RWF_NOAPPEND ,
-which a read ignores, and refuse another flag with
+which a read ignores but on an
+.Dv O_APPEND
+descriptor of an append-only file, where it is
+.Er EPERM ,
+and refuse another flag with
 .Er EOPNOTSUPP .
 Combining
 .Dv RWF_APPEND
@@ -377,7 +381,13 @@ The descriptor is an ioctl-only socket, or
 .Nm preadv2
 was given a flag it does not take.
 .It Er EPERM
-A loop device node was read directly.
+A loop device node was read directly, or
+.Fn preadv2
+was given
+.Dv RWF_NOAPPEND
+on an
+.Dv O_APPEND
+descriptor of an append-only file.
 .It Er ESPIPE
 .Fn pread
 was given a descriptor that cannot seek.

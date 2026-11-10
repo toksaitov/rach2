@@ -4167,10 +4167,13 @@
         {"assertion_id": "append-later-fault", "checks": "writev, pwritev and pwritev2 on O_APPEND retain the bytes before a later unmapped buffer, and only writev advances the shared offset", "source": "program"},
         {"assertion_id": "append-buffer-fault", "checks": "each append vector call retains the bytes before a fault within its first buffer and writes no later buffer", "source": "program"},
         {"assertion_id": "append-first-fault", "checks": "each append vector call returns EFAULT with no file or offset change when its first buffer is unmapped", "source": "program"},
-        {"assertion_id": "append-demand-buffer", "checks": "each append vector call reads a valid untouched anonymous buffer and appends its zero bytes followed by the next buffer", "source": "program"}
+        {"assertion_id": "append-demand-buffer", "checks": "each append vector call reads a valid untouched anonymous buffer and appends its zero bytes followed by the next buffer", "source": "program"},
+        {"assertion_id": "append-only-noappend", "checks": "on an append-only file opened with O_APPEND, pwritev2 at an offset and at -1 and preadv2 with RWF_NOAPPEND fail with EPERM, preadv2 with it on a descriptor without O_APPEND reads, and a plain pwritev2 appends", "source": "program"},
+        {"assertion_id": "append-only-setfl", "checks": "F_SETFL that clears O_APPEND of an append-only file, or sets it on a read-only descriptor, fails with EPERM and leaves the flag; one that keeps it succeeds", "source": "program"}
       ],
       "branches": [
-        {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "x86-64", "when": null, "assertions": ["preadv-high-half"]}, {"alternative_id": "i686", "when": null, "assertions": ["mem-write-eio", "preadv-high-word"]}]}
+        {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "x86-64", "when": null, "assertions": ["preadv-high-half"]}, {"alternative_id": "i686", "when": null, "assertions": ["mem-write-eio", "preadv-high-word"]}]},
+        {"group_id": "flags", "decided_by": "report", "alternatives": [{"alternative_id": "append-only", "when": null, "assertions": ["append-only-noappend", "append-only-setfl"]}, {"alternative_id": "none", "when": null, "assertions": []}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],

@@ -317,6 +317,8 @@ and -1 uses and advances the shared offset.
 The description keeps
 .Dv O_APPEND
 for other calls.
+On an append-only file it fails with
+.Er EPERM .
 Combining
 .Dv RWF_APPEND
 and

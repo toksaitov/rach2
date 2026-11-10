@@ -941,6 +941,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 }
 
 static int size_guarded(struct vfs_mount *mnt, void *node);
+static int ofd_append_only(const struct open_file *ofd);
 
 /**
  * A change clears set-user-ID, and set-group-ID where group execute is set, for
@@ -2231,6 +2232,18 @@ static int size_guarded(struct vfs_mount *mnt, void *node)
 
     return !mnt_is_root(mnt) && vfs_getattr(mnt, node, &st) == 0 && st.flags_known &&
            (st.flags & (VFS_FL_IMMUTABLE | VFS_FL_APPEND)) != 0;
+}
+
+/** Whether the file of the description `ofd` is append-only (chattr +a),
+ * as Linux's IS_APPEND answers; never for one off a mount or on the KRFFS
+ * root, which keep no such flag. */
+static int ofd_append_only(const struct open_file *ofd)
+{
+    struct vfs_stat st;
+
+    return ofd && ofd->vmnt && ofd->vnode && !mnt_is_root(ofd->vmnt) &&
+           vfs_getattr(ofd->vmnt, ofd->vnode, &st) == 0 && st.flags_known &&
+           (st.flags & VFS_FL_APPEND) != 0;
 }
 
 int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
@@ -12532,10 +12545,12 @@ static long rwv2_transfer(isr_params_t *params, fd_entry_t *entry, uintptr_t add
  * cannot seek is -ESPIPE; then the wrong direction is -EBADF. Import the
  * vector next, return zero for no bytes, then refuse unsupported flags
  * with -EOPNOTSUPP. APPEND with NOAPPEND is -EINVAL, after unknown flags
- * but before known flags the file does not support, as Linux 6.12's
- * kiocb_set_rw_flags orders them. A data page is faulted in only afterward.
- * The vector is kept in the caller's layout and opened to the shared
- * readv/writev paths, so each reads the same copy across sleeping I/O.
+ * but before known flags the file does not support, and NOAPPEND on an
+ * O_APPEND description of an append-only file is -EPERM after those, as
+ * Linux 6.12's kiocb_set_rw_flags orders them. A data page is faulted in
+ * only afterward. The vector is kept in the caller's layout and opened to
+ * the shared readv/writev paths, so each reads the same copy across
+ * sleeping I/O.
  * The other arguments and errors are preadv's and pwritev's.
  */
 static long rwv2(isr_params_t *params, int write)
@@ -12577,6 +12592,11 @@ static long rwv2(isr_params_t *params, int write)
     }
     if (flags & (RWF_NOWAIT | RWF_ATOMIC)) {
         rc = -EOPNOTSUPP;
+        goto out;
+    }
+    if ((flags & RWF_NOAPPEND) && entry && entry->ofd && (entry->ofd->status_flags & OFD_APPEND) &&
+        ofd_append_only(entry->ofd)) {
+        rc = -EPERM;
         goto out;
     }
     user_window_open(iov, (uint32_t)((size_t)count * sizeof(*iov)));
@@ -13997,6 +14017,21 @@ long sys_flock(isr_params_t *params)
     return lock_flock(&key, e->ofd, op);
 }
 
+/** F_SETFL on the held descriptor `entry`: set the O_APPEND and O_NONBLOCK
+ * bits of `arg` on its description. 0, or -EPERM for a change of O_APPEND
+ * on an append-only file, which Linux's setfl refuses either way. */
+static long fcntl_setfl(fd_entry_t *entry, uintptr_t arg)
+{
+    if (!entry->ofd) {
+        return 0;
+    }
+    if (((arg ^ entry->ofd->status_flags) & OFD_APPEND) && ofd_append_only(entry->ofd)) {
+        return -EPERM;
+    }
+    entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
+    return 0;
+}
+
 /**
  * fcntl64(2) on i386 and fcntl(2) on x86-64: the descriptor, the command
  * and its argument. Returns what the command gives or a negative errno:
@@ -14008,7 +14043,9 @@ long sys_flock(isr_params_t *params)
  * O_WRONLY and O_RDWR, with O_APPEND and O_NONBLOCK, and O_PATH for an
  * O_PATH descriptor. F_SETFL sets O_APPEND and O_NONBLOCK, which belong to
  * the open file description a dup or a fork shares, and ignores the other
- * bits, the access mode and O_CLOEXEC among them, as POSIX allows.
+ * bits, the access mode and O_CLOEXEC among them, as POSIX allows; it is
+ * -EPERM when it would change O_APPEND of an append-only file, as Linux's
+ * setfl refuses either way.
  *
  * F_DUPFD and F_DUPFD_CLOEXEC duplicate onto the lowest free descriptor at
  * or above `arg`, as POSIX requires. The description the allocation gave
@@ -14084,10 +14121,7 @@ long sys_fcntl64(isr_params_t *params)
         return fl;
     }
     case F_SETFL:
-        if (entry->ofd) {
-            entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
-        }
-        return 0;
+        return fcntl_setfl(entry, arg);
     case F_DUPFD:
     case F_DUPFD_CLOEXEC: {
         int newfd;

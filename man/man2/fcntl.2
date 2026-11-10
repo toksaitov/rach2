@@ -75,6 +75,10 @@ and
 flags with those bits from the integer argument.
 Ignore other bits, including the access mode and
 .Dv O_CLOEXEC .
+A change of
+.Dv O_APPEND
+on an append-only file fails with
+.Er EPERM .
 .It Dv F_SETLK , F_SETLK64
 Set or remove the record lock the pointed-to
 .Vt struct flock
@@ -408,7 +412,12 @@ Linux does not make.
 .It Bq Er EPERM
 .Dv F_ADD_SEALS
 was given a descriptor not open for writing, or the file has
-.Dv F_SEAL_SEAL .
+.Dv F_SEAL_SEAL ;
+or
+.Dv F_SETFL
+would change
+.Dv O_APPEND
+of an append-only file.
 .It Bq Er EOVERFLOW
 A lock's range passes the largest offset, or
 .Dv F_GETLK
