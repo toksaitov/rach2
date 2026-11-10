@@ -497,6 +497,12 @@ void isr_line_release(int line, int level)
     }
 }
 
+/** Return the free message vectors under the big lock. */
+int isr_free_vector_count(void)
+{
+    return vector_free_count();
+}
+
 /**
  * The lowest message vector not yet given to a device, marked as given;
  * -1 with a record when every one is taken.

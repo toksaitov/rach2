@@ -24,6 +24,30 @@ int vfio_ndevices;
 struct vfio_group vfio_groups[VFIO_GROUPS_MAX];
 int vfio_ngroups;
 
+/** Count live assignment resources for /proc/stat under the big lock. */
+void vfio_resource_counts(uint32_t *counts)
+{
+    int i;
+    struct vfio_container *c;
+    struct vfio_dma *dma;
+
+    for (i = 0; i < 4; i++)
+        counts[i] = 0;
+    for (i = 0; i < vfio_ndevices; i++)
+        if (vfio_devices[i].refs != 0)
+            counts[1]++;
+    for (i = 0; i < vfio_ngroups; i++) {
+        counts[0] += vfio_groups[i].attached != 0;
+        c = vfio_groups[i].container;
+        if (c == NULL || c->groups != &vfio_groups[i])
+            continue;
+        counts[2] += c->ndma;
+        for (dma = c->dmas; dma != NULL; dma = dma->next)
+            if (pin_live(dma->pin))
+                counts[3] += pin_count(dma->pin);
+    }
+}
+
 /* The device ids vfio-pci takes beside driver_override, as new_id adds them. */
 #define VFIO_IDS_MAX 16
 static struct {
