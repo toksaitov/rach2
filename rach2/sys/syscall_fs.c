@@ -1056,15 +1056,21 @@ int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
                : 0;
 }
 
-/** Refuse a vector of `count` bytes that would grow a sealed tmpfs file,
- * before any element is written. `pos` is its start unless `append` asks
- * for the end. The caller holds the mount's namespace lock. Return 0,
- * -EPERM for growth, or getattr's error. Other file types have no seals. */
-static int32_t iov_seal_grow(const struct open_file *ofd, uint64_t pos, uint32_t count, int append)
+/** The bytes of a vector of `count` bytes that a tmpfs file sealed against
+ * growth lets in, into `*room`, before any element is written: the whole
+ * pages before its end once the vector would pass it (`tmpfs_grow_room`),
+ * as Linux writes a vector as one stream a page at a time. `pos` is its
+ * start unless `append` asks for the end. The caller holds the mount's
+ * namespace lock or takes the vector element by element. Return 0, -EPERM
+ * when no byte fits, or getattr's error. Other file types have no seals,
+ * and `*room` is `count` for them. */
+static int32_t iov_seal_grow(const struct open_file *ofd, uint64_t pos, uint32_t count, int append,
+                             uint32_t *room)
 {
     struct vfs_stat st;
     int rc;
 
+    *room = count;
     if (!count || ofd->vmnt->type != &vfs_tmpfs_type ||
         !(tmpfs_seals(ofd->vnode) & TMPFS_SEAL_GROW)) {
         return 0;
@@ -1076,21 +1082,23 @@ static int32_t iov_seal_grow(const struct open_file *ofd, uint64_t pos, uint32_t
     if (append) {
         pos = st.size;
     }
-    return pos > st.size || count > st.size - pos ? -EPERM : 0;
+    *room = tmpfs_grow_room(pos, count, st.size);
+    return *room == 0 ? -EPERM : 0;
 }
 
 /**
  * Before a writev to `fd` open for writing on a tmpfs file: take the
  * mount's namespace lock, which every write and size change of the file
- * takes, to hold across the elements, and refuse with EPERM, with nothing
- * written, a vector whose elements together would pass the end of a file
- * sealed against growth, as F_SEAL_GROW refuses one write that would
- * (tmpfs.h). The elements counted are those the writes would reach, up to
- * the first the loop refuses, and their bytes are faulted in before the lock
- * is taken, as one write's are. `*held` is the mount to unlock after the
- * elements, or NULL for a descriptor of anything else.
+ * takes, to hold across the elements, and put in `*cap` the bytes of the
+ * vector a file sealed against growth lets in (`iov_seal_grow`), refusing
+ * with EPERM, with nothing written, a vector of which no byte fits. The
+ * elements counted are those the writes would reach, up to the first the
+ * loop refuses, and their bytes are faulted in before the lock is taken,
+ * as one write's are. `*held` is the mount to unlock after the elements,
+ * or NULL for a descriptor of anything else, whose `*cap` is no limit.
  */
-static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_mount **held)
+static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_mount **held,
+                            uint32_t *cap)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     struct kernel_iovec iov;
@@ -1099,6 +1107,7 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
     int i, rc;
 
     *held = NULL;
+    *cap = 0xFFFFFFFFu;
     if (!entry || entry->type != FD_TYPE_FILE || !(entry->flags & FD_FLAG_WRITE) || !entry->ofd ||
         !entry->ofd->vmnt || entry->ofd->vmnt->type != &vfs_tmpfs_type) {
         return 0;
@@ -1114,10 +1123,12 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
     }
     vfs_ns_lock(ofd->vmnt);
     *held = ofd->vmnt;
-    rc = iov_seal_grow(ofd, ofd->offset, extent, (ofd->status_flags & OFD_APPEND) != 0);
+    rc = iov_seal_grow(ofd, ofd->offset, extent, (ofd->status_flags & OFD_APPEND) != 0, cap);
     if (rc != 0) {
         vfs_ns_unlock(ofd->vmnt);
         *held = NULL;
+    } else if (*cap == extent) {
+        *cap = 0xFFFFFFFFu;
     }
     return rc;
 }
@@ -1129,15 +1140,17 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
  * one that would carry the total past it (-EINVAL, as on Linux), or a failed
  * write ends the call too: with the error when nothing was written yet, and
  * otherwise with the bytes before it, as a short write does, since a caller
- * that retried after the error would write those bytes again.
+ * that retried after the error would write those bytes again. No more than
+ * `cap` bytes are written, which ends the call as a short write does.
  */
-static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
+static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt, uint32_t cap)
 {
     struct kernel_iovec iov;
     int32_t total = 0;
     int i;
 
-    for (i = 0; i < iovcnt; i++) {
+    for (i = 0; i < iovcnt && (uint32_t)total < cap; i++) {
+        uint32_t len;
         int32_t r;
 
         if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
@@ -1153,7 +1166,11 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
             return (total > 0) ? total : -EFAULT;
         }
 
-        r = write_fd(fd, (const char __user *)iov.iov_base, USER_LEN32(iov.iov_len));
+        len = USER_LEN32(iov.iov_len);
+        if (len > cap - (uint32_t)total) {
+            len = cap - (uint32_t)total;
+        }
+        r = write_fd(fd, (const char __user *)iov.iov_base, len);
         if (r < 0) {
             return (total > 0) ? total : r;
         }
@@ -1180,16 +1197,18 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
  * writev(2) takes fd, the vector and its count. An O_APPEND mounted file
  * uses iov_file_write's lock across the vector. Otherwise elements are written
  * in order (`writev_elements`); on a tmpfs file the mount's lock is held across
- * them, and a vector a seal refuses whole is refused before the first
- * (`writev_begin`). Returns the bytes written, or a negative errno: -EINVAL
- * for a count below 0 or past IOV_MAX_LOCAL, -EPERM for a vector the seal
- * refuses, or a transfer error when no byte was written. A buffer fault
- * after a positive transfer returns the bytes written before the fault.
+ * them, and a vector that would grow a sealed file is cut to the whole
+ * pages before its end (`writev_begin`). Returns the bytes written, or a
+ * negative errno: -EINVAL for a count below 0 or past IOV_MAX_LOCAL, -EPERM
+ * for a vector of which the seal lets no byte in, or a transfer error when
+ * no byte was written. A buffer fault after a positive transfer returns the
+ * bytes written before the fault.
  */
 static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
     fd_entry_t *entry;
     struct vfs_mount *held;
+    uint32_t cap;
     int32_t rc;
 
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
@@ -1198,13 +1217,13 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     if (!current_proc) {
         return -ESRCH;
     }
-    rc = writev_begin(fd, iov_user, iovcnt, &held);
+    rc = writev_begin(fd, iov_user, iovcnt, &held, &cap);
     if (rc == 0) {
         entry = fd_get(current_proc->fds, fd);
         if (iov_append_file(entry)) {
             rc = (int32_t)iov_file_write(entry, iov_user, iovcnt, -1, 1);
         } else {
-            rc = writev_elements(fd, iov_user, iovcnt);
+            rc = writev_elements(fd, iov_user, iovcnt, cap);
         }
     }
     if (held) {
@@ -12161,35 +12180,17 @@ static long long pos_from_hilo(unsigned long high, unsigned long low)
 }
 
 /**
- * The elements of the vector at `iov_user` read from or, with `write`,
- * written to `fd` at the position `pos`, which the descriptor's own offset
- * does not follow. An O_APPEND mounted file goes through iov_file_write, with
- * one lock across the vector. Other transfers go through `ksys_pread64` or
- * `ksys_pwrite64`, at the position the elements before it reached.
- * Their vector is checked whole first, as readv checks it, so a bad element
- * is refused before a byte
- * moves; a vector of no bytes still has the descriptor checked. A short
- * transfer ends the call, and an error after bytes moved returns those
- * bytes. Returns the bytes moved or a negative errno: -EINVAL for a
- * negative position, a count past IOV_MAX_LOCAL or below 0, or a vector of
- * 2 GiB or more; -EFAULT for a vector or a buffer the caller cannot reach;
- * or the first element's error.
+ * Check the `iovcnt` elements of the vector at `iov_user` for a positioned
+ * transfer, as readv checks them, without touching their bytes: 0 with
+ * their total in `*wanted`, -EFAULT for an element or a buffer the caller
+ * cannot reach, or -EINVAL for a total of 2 GiB or more.
  */
-static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
+static long iov_at_check(uintptr_t iov_user, int iovcnt, int write, uint32_t *wanted)
 {
     struct kernel_iovec iov;
-    fd_entry_t *entry;
-    uint32_t wanted = 0;
-    long total = 0;
     int i;
 
-    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL || pos < 0) {
-        return -EINVAL;
-    }
-    entry = write && current_proc ? fd_get(current_proc->fds, fd) : NULL;
-    if (iov_append_file(entry)) {
-        return iov_file_write(entry, iov_user, iovcnt, pos, 1);
-    }
+    *wanted = 0;
     for (i = 0; i < iovcnt; i++) {
         if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
             return -EFAULT;
@@ -12197,18 +12198,33 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
         if (iov.iov_len == 0) {
             continue;
         }
-        if (iov.iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov.iov_len) {
+        if (iov.iov_len > 0x7FFFFFFFu || *wanted > 0x7FFFFFFFu - iov.iov_len) {
             return -EINVAL;
         }
         if (!user_buffer_ok(iov.iov_base, iov.iov_len, !write)) {
             return -EFAULT;
         }
-        wanted += (uint32_t)iov.iov_len;
+        *wanted += (uint32_t)iov.iov_len;
     }
-    if (wanted == 0) {
-        return write ? ksys_pwrite64(fd, NULL, 0, pos) : ksys_pread64(fd, NULL, 0, pos);
-    }
-    for (i = 0; i < iovcnt; i++) {
+    return 0;
+}
+
+/**
+ * Move the first `wanted` bytes of the checked vector at `iov_user` from or,
+ * with `write`, to `fd` at `pos`, element by element through `ksys_pread64`
+ * or `ksys_pwrite64`, each at the position the ones before it reached. A
+ * short transfer ends the call, and an error after bytes moved returns
+ * those bytes. Returns the bytes moved or the first element's error.
+ */
+static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write,
+                        uint32_t wanted)
+{
+    struct kernel_iovec iov;
+    long total = 0;
+    int i;
+
+    for (i = 0; i < iovcnt && (uint32_t)total < wanted; i++) {
+        uint32_t len;
         long r;
 
         if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
@@ -12217,8 +12233,10 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
         if (iov.iov_len == 0) {
             continue;
         }
-        r = write ? ksys_pwrite64(fd, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len, pos)
-                  : ksys_pread64(fd, (char __user *)iov.iov_base, (uint32_t)iov.iov_len, pos);
+        len = (uint32_t)iov.iov_len < wanted - (uint32_t)total ? (uint32_t)iov.iov_len
+                                                               : wanted - (uint32_t)total;
+        r = write ? ksys_pwrite64(fd, (const char __user *)iov.iov_base, len, pos)
+                  : ksys_pread64(fd, (char __user *)iov.iov_base, len, pos);
         if (r < 0) {
             return total > 0 ? total : r;
         }
@@ -12229,6 +12247,49 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
         }
     }
     return total;
+}
+
+/**
+ * The elements of the vector at `iov_user` read from or, with `write`,
+ * written to `fd` at the position `pos`, which the descriptor's own offset
+ * does not follow. An O_APPEND mounted file goes through iov_file_write, with
+ * one lock across the vector. Other transfers check the vector whole first
+ * (`iov_at_check`), so a bad element is refused before a byte moves, and
+ * then move it (`iov_at_move`), a write cut to the whole pages a sealed
+ * tmpfs file lets in (`iov_seal_grow`); a vector of no bytes still has the
+ * descriptor checked. Returns the bytes moved or a negative errno: -EINVAL
+ * for a negative position, a count past IOV_MAX_LOCAL or below 0, a vector
+ * of 2 GiB or more, or one whose end would pass 2^63-1; -EFAULT for a
+ * vector or a buffer the caller cannot reach; or the first element's error.
+ */
+static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
+{
+    fd_entry_t *entry;
+    uint32_t wanted, room;
+    long rc;
+
+    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL || pos < 0) {
+        return -EINVAL;
+    }
+    entry = write && current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    if (iov_append_file(entry)) {
+        return iov_file_write(entry, iov_user, iovcnt, pos, 1);
+    }
+    rc = iov_at_check(iov_user, iovcnt, write, &wanted);
+    if (rc != 0) {
+        return rc;
+    }
+    if (wanted == 0) {
+        return write ? ksys_pwrite64(fd, NULL, 0, pos) : ksys_pread64(fd, NULL, 0, pos);
+    }
+    if ((uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+        return -EINVAL;
+    }
+    if (entry && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd && entry->ofd->vmnt &&
+        iov_seal_grow(entry->ofd, (uint64_t)pos, wanted, 0, &room) == 0) {
+        wanted = room;
+    }
+    return iov_at_move(fd, iov_user, iovcnt, pos, write, wanted);
 }
 
 /** preadv(2): the descriptor, the vector, its count and the position as two
@@ -12323,6 +12384,20 @@ static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uin
     return *wanted && iov_write_prefix(iov, count) == 0 ? -EFAULT : 0;
 }
 
+/** Cut the imported vector `iov` of `count` elements to its first `room`
+ * bytes, clearing the lengths after them. */
+static void iov_trim(struct kernel_iovec *iov, int count, uint32_t room)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (iov[i].iov_len > room) {
+            iov[i].iov_len = room;
+        }
+        room -= (uint32_t)iov[i].iov_len;
+    }
+}
+
 /** Write the imported vector with the description and file locks in
  * `state` held. An explicit `pos` advances only within this call; -1
  * advances the shared offset. Return the bytes written before a short
@@ -12362,10 +12437,13 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
  * descriptor is checked after those copies, which may sleep. The explicit
  * position `pos` is ignored when `append` requests end placement; otherwise
  * it is used even on an O_APPEND description. -1 alone uses and advances
- * the shared offset. The shared O_APPEND flag is never changed. Returns
+ * the shared offset. The shared O_APPEND flag is never changed. A vector
+ * that would grow a sealed tmpfs file is cut to the whole pages before its
+ * end (`iov_seal_grow`). Returns
  * the bytes written, including those before a bad data page, or an error
  * when no byte was written: -EINVAL for a count below 0 or past
- * IOV_MAX_LOCAL or a vector of 2 GiB or more, -EFAULT for a vector or a
+ * IOV_MAX_LOCAL, a vector of 2 GiB or more, or one whose end at `pos`
+ * would pass 2^63-1, -EFAULT for a vector or a
  * buffer the caller cannot reach, -EBADF for a descriptor that is not a
  * file of a mount open for writing, -EBUSY for a file that backs a loop
  * device, or the write's error.
@@ -12375,7 +12453,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     struct kernel_iovec *iov;
     struct open_file *ofd;
     struct file_write_state state;
-    uint32_t wanted = 0;
+    uint32_t wanted = 0, room = 0;
     long rc = 0;
 
     if (count < 0 || count > IOV_MAX_LOCAL) {
@@ -12398,6 +12476,10 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     if (wanted == 0) {
         goto out;
     }
+    if (pos >= 0 && (uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+        rc = -EINVAL; /* rw_verify_area's check, which O_APPEND does not skip */
+        goto out;
+    }
     fd_ofd_lock(ofd);
     state.own = file_lock(ofd, &state.file);
     if (!state.own) {
@@ -12406,7 +12488,10 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     state.append = append;
     rc = loop_backs(ofd->vmnt, ofd->vnode) ? -EBUSY : 0;
     if (rc == 0) {
-        rc = iov_seal_grow(ofd, pos == -1 ? ofd->offset : (uint64_t)pos, wanted, append);
+        rc = iov_seal_grow(ofd, pos == -1 ? ofd->offset : (uint64_t)pos, wanted, append, &room);
+    }
+    if (rc == 0 && room < wanted) {
+        iov_trim(iov, count, room);
     }
     if (rc == 0) {
         rc = iov_file_elements(entry, iov, count, pos, &state);

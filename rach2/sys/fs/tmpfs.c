@@ -578,7 +578,8 @@ static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32
  * its modification and change times; -EISDIR for a directory, -EINVAL for
  * any other node and for a file of memfd_secret. A write under
  * F_SEAL_WRITE or F_SEAL_FUTURE_WRITE is -EPERM, and one past the end under
- * F_SEAL_GROW is -EPERM whole, as on Linux. */
+ * F_SEAL_GROW writes the whole pages before the end (`tmpfs_grow_room`) and
+ * is -EPERM when none fits, as on Linux. */
 static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                            uint64_t offset)
 {
@@ -591,9 +592,14 @@ static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
     if ((n->mode & T_IFMT) != T_IFREG || n->secret) {
         return -EINVAL;
     }
-    if ((n->seals & (TMPFS_SEAL_WRITE | TMPFS_SEAL_FUTURE_WRITE)) ||
-        ((n->seals & TMPFS_SEAL_GROW) && offset + count > n->data.size)) {
+    if (n->seals & (TMPFS_SEAL_WRITE | TMPFS_SEAL_FUTURE_WRITE)) {
         return -EPERM;
+    }
+    if ((n->seals & TMPFS_SEAL_GROW) && count) {
+        count = tmpfs_grow_room(offset, count, n->data.size);
+        if (count == 0) {
+            return -EPERM;
+        }
     }
     stamp(n, STAMP_M | STAMP_C);
     return shmem_write(&n->data, buf, count, offset);
@@ -1297,6 +1303,16 @@ int tmpfs_secret(void *node)
 uint32_t tmpfs_seals(void *node)
 {
     return ((struct tmpfs_node *)node)->seals;
+}
+
+uint32_t tmpfs_grow_room(uint64_t pos, uint32_t count, uint64_t size)
+{
+    uint64_t end = size & ~(uint64_t)(PAGE_SIZE - 1u);
+
+    if (pos <= size && count <= size - pos) {
+        return count;
+    }
+    return end > pos ? (uint32_t)(end - pos) : 0u;
 }
 
 int tmpfs_add_seals(void *node, uint32_t seals)

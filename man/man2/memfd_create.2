@@ -65,10 +65,11 @@ or
 .Xr ftruncate 2
 to a smaller size.
 .It Dv F_SEAL_GROW
-Refuse a truncation to a larger size and a write that would pass the
-end; such a write fails whole, with nothing written, and so does a
+Refuse a truncation to a larger size, and cut a write that would pass
+the end to the whole pages before it, as Linux writes a page at a time; a
 .Xr writev 2
-whose elements together would pass the end.
+is cut the same way, its elements taken as one run of bytes.
+A write with no whole page before the end fails with nothing written.
 .It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
 Refuse a
 .Xr write 2 ,
