@@ -301,7 +301,7 @@ static void sys_rfkill(void)
     CHECK(synth_classify("sys/class/rfkill/rfkill3/state", &vp) == VNODE_SYS_FILE &&
           sysfs_attr_writable(vp.sysent, vp.procfile));
     CHECK(synth_classify("sys/class/rfkill/rfkill3/uevent", &vp) == VNODE_SYS_FILE &&
-          vp.procfile == RFKILL_ATTR_UEVENT && !sysfs_attr_writable(vp.sysent, vp.procfile));
+          vp.procfile == RFKILL_ATTR_UEVENT && sysfs_attr_writable(vp.sysent, vp.procfile));
     CHECK(synth_classify("sys/class/rfkill/rfkill3/hard_block_reasons", &vp) == VNODE_SYS_FILE &&
           vp.procfile == RFKILL_ATTR_REASONS);
     CHECK(synth_classify("sys/class/rfkill/rfkill3/device", &vp) == VNODE_SYS_LINK &&
@@ -689,6 +689,61 @@ static void sys_registry(void)
     CHECK(sysfs_node_count(drm_class) == 0 && sysfs_node_kind(cl) == 0);
 }
 
+/**
+ * VFIO's paths: /dev/vfio, its container and group nodes as devices of
+ * the directory, and the entries VFIO adds to /sys through the registry,
+ * as rach2/sys/vfio/group.c adds them: a group below
+ * /sys/kernel/iommu_groups, a function's iommu_group link and
+ * driver_override, and vfio-pci's directory below /sys/bus/pci/drivers
+ * with drivers_probe beside it.
+ */
+static void vfio_paths(void)
+{
+    static const struct sysfs_attr type = {"type", 0444u, 0, 0};
+    static const struct sysfs_attr over = {"driver_override", 0644u, 0, 0};
+    static const struct sysfs_attr bind = {"bind", 0200u, 0, 0};
+    static const struct sysfs_attr probe = {"drivers_probe", 0200u, 0, 0};
+    struct vpath vp;
+    char out[64];
+    int pci = sysfs_anchor(SYSFS_PCI_DEVICE, 0x10);
+    int groups = sysfs_add_dir(sysfs_anchor(SYSFS_KERNEL, 0), "iommu_groups");
+    int g0 = sysfs_add_dir(groups, "0"), t = sysfs_add_attr(g0, &type, 0, 0);
+    int devs = sysfs_add_link(sysfs_add_dir(g0, "devices"), "0000:00:02.0", pci);
+    int link = sysfs_add_link(pci, "iommu_group", g0), o = sysfs_add_attr(pci, &over, 0, 0);
+    int drv = sysfs_add_dir(sysfs_add_dir(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers"), "vfio-pci");
+    int b = sysfs_add_attr(drv, &bind, 0, 0);
+    int p = sysfs_add_attr(sysfs_anchor(SYSFS_BUS_PCI, 0), &probe, 0, 0);
+
+    CHECK(synth_classify("dev/vfio", &vp) == VNODE_DEV_SUBDIR &&
+          eq(synth_dev_dir_at(vp.devdir)->name, "vfio"));
+    CHECK(synth_classify("dev/vfio/vfio", &vp) == VNODE_DEV && eq(vp.name, "vfio/vfio"));
+    CHECK(synth_classify("dev/vfio/0", &vp) == VNODE_DEV && eq(vp.name, "vfio/0"));
+    CHECK(synth_dev_dir_find("vfio", 4) == 2 && synth_dev_dir_at(2)->ino == 7u);
+    synth_dir_path(VNODE_DEV_SUBDIR, synth_dev_dir_find("vfio", 4), 0, out, (int)sizeof(out));
+    CHECK(eq(out, "/dev/vfio"));
+    CHECK(t > 0 && devs > 0 && link > 0 && o > 0 && b > 0 && p > 0);
+    CHECK(synth_classify("sys/kernel/iommu_groups/0/type", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_REG && vp.syskey == t);
+    CHECK(synth_classify("sys/kernel/iommu_groups/0/devices/0000:00:02.0", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_PCI_DEVICE && vp.syskey == 0x10);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:02.0/iommu_group", &vp) == VNODE_SYS_LINK &&
+          vp.sysreg == link && vp.syskey == g0);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:02.0/iommu_group/type", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.syskey == t);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:02.0/driver_override", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.syskey == o);
+    CHECK(synth_classify("sys/bus/pci/drivers/vfio-pci/bind", &vp) == VNODE_SYS_FILE &&
+          vp.syskey == b);
+    CHECK(synth_classify("sys/bus/pci/drivers_probe", &vp) == VNODE_SYS_FILE && vp.syskey == p);
+    sysfs_remove(groups);
+    sysfs_remove(link);
+    sysfs_remove(o);
+    CHECK(synth_classify("sys/kernel/iommu_groups/0", &vp) == VNODE_ENOENT &&
+          synth_classify("sys/bus/pci/devices/0000:00:02.0/iommu_group", &vp) == VNODE_ENOENT);
+}
+
 int main(void)
 {
     struct vpath vp;
@@ -781,5 +836,6 @@ int main(void)
     sys_rfkill();
     sys_cpus();
     ipv6_conf();
+    vfio_paths();
     return fails > 255 ? 255 : fails;
 }
