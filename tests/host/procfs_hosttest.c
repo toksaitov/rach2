@@ -2366,6 +2366,26 @@ static void pci_bar_file_rows(void)
     check(bar_file_open(SYSFS_PCI_RESOURCE0, 0) == -EACCES,
           "an unprivileged caller opens no resource file, even to read");
     process.euid = 0;
+    process.fsuid = 1000;
+    process.fs_own = PROC_FSUID_OWN | PROC_FSCAPS_OFF;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 0) == -EACCES,
+          "nor root once setfsuid(1000) takes its file-system id and with it CAP_DAC_OVERRIDE");
+    process.fs_own = 0;
+    process.cap_lost[0] = 0xFFFFFFFFu;
+    process.cap_lost[1] = CAP_HIGH_WORD;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 2) == 0,
+          "but uid 0 opens it as its owner with every capability dropped");
+    procfs_close(&entries[0]);
+    process.cap_lost[0] = process.cap_lost[1] = 0;
+    process.euid = 1000;
+    process.fsuid = 0;
+    process.fs_own = PROC_FSUID_OWN;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 1) == 0,
+          "and so does a user whose file-system id is root's");
+    procfs_close(&entries[0]);
+    process.euid = 0;
+    process.fsuid = 0;
+    process.fs_own = 0;
     check(bar_file_open(SYSFS_PCI_RESOURCE0 + 1, 2) == -ENOENT, "nor anyone a BAR without one");
 }
 
@@ -2473,11 +2493,43 @@ static void pci_bar_io_rows(void)
     check(procfs_pcibar_write(e, put, 2) == 2 && port_at == 0xC004u && port_width == 2 &&
               port_value == 0x1234u && e->ofd->offset == 0x6,
           "a write of 2 bytes is one word to its port");
-    e->ofd->offset = 0x1E;
-    check(procfs_pcibar_read(e, got, 4) == -EINVAL && procfs_pcibar_read(e, got, 3) == -EINVAL &&
-              procfs_pcibar_read(e, got, 2) == 2 && port_at == 0xC01Eu,
-          "a width other than 1, 2 or 4 or an access past the BAR's end is refused");
+    e->ofd->offset = 0x10;
+    check(procfs_pcibar_read(e, got, 3) == -EINVAL && procfs_pcibar_read(e, got, 8) == -EINVAL &&
+              e->ofd->offset == 0x10,
+          "a width other than 1, 2 or 4 within the BAR is refused");
     check(bar_file_map(0, 1) == -ENODEV, "and an I/O BAR is not mapped, as on x86");
+    procfs_close(e);
+    pci_io_bar = 0;
+}
+
+/** An I/O BAR's resourceN file clips an access to the file before it
+ * judges the width, as Linux's sysfs does before pci_resource_io. */
+static void pci_bar_clip_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    char got[4], put[2] = {0x34, 0x12};
+
+    pci_io_bar = 1;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0 + 2, 2) == 0, "root opens the I/O BAR's file");
+    e->ofd->offset = 0x1E;
+    check(procfs_pcibar_read(e, got, 4) == 2 && port_at == 0xC01Eu && port_width == 2 &&
+              e->ofd->offset == 0x20,
+          "a read of 4 bytes 2 before the BAR's end is clipped to one word, as sysfs clips it");
+    e->ofd->offset = 0x1D;
+    check(procfs_pcibar_read(e, got, 4) == -EINVAL,
+          "and one clipped to 3 bytes is refused, as pci_resource_io refuses it");
+    e->ofd->offset = 0x1F;
+    check(procfs_pcibar_write(e, put, 4) == 1 && port_at == 0xC01Fu && port_width == 1 &&
+              port_value == 0x34u,
+          "a write of 4 bytes 1 before the end is clipped to its first byte");
+    e->ofd->offset = 0x20;
+    check(procfs_pcibar_read(e, got, 4) == 0 && procfs_pcibar_write(e, put, 2) == -EFBIG &&
+              procfs_pcibar_write(e, put, 0) == -EFBIG && e->ofd->offset == 0x20,
+          "at the end a read gives 0 and a write -EFBIG");
+    e->ofd->offset = 0x4;
+    check(procfs_pcibar_read(e, got, 0) == 0 && procfs_pcibar_write(e, put, 0) == 0 &&
+              e->ofd->offset == 0x4,
+          "and an access of no bytes within the BAR moves nothing");
     procfs_close(e);
     pci_io_bar = 0;
 }
@@ -3046,6 +3098,7 @@ int main(int argc, char **argv)
     pci_bar_mem_rows();
     pci_bar_wc_rows();
     pci_bar_io_rows();
+    pci_bar_clip_rows();
     pci_uevent_rows();
     sysfs_reg_rows();
     sysfs_bound_rows();

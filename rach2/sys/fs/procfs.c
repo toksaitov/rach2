@@ -6728,15 +6728,42 @@ static const struct file_ops procfs_pciconfig_ops = {procfs_pciconfig_read,
                                                      NULL,
                                                      NULL};
 
-/** Open raw PCI config, writable only by a privileged caller. Each access
- * reaches the current registers, including a read at a nonzero offset. */
+/**
+ * Whether the caller may open a PCI function's file, root's with the mode
+ * bits `mode`, for access `acc` (0 read, 1 write, 2 both), as Linux's
+ * generic_permission judges a sysfs file: by the owner's bits when its
+ * file-system user id is root's, else by the others' bits, which
+ * CAP_DAC_OVERRIDE passes, and for a read CAP_DAC_READ_SEARCH, while root's
+ * ids are mapped in its user namespace. Root's group is no help, since
+ * these files give it no more than the others.
+ */
+static int pci_file_may(uint32_t mode, int acc)
+{
+    uint32_t want = acc == 0 ? 4u : acc == 1 ? 2u : 6u;
+
+    if (proc_fsuid(current_proc) == 0) {
+        return (want & ~(mode >> 6) & 7u) == 0;
+    }
+    if ((want & ~mode & 7u) == 0) {
+        return 1;
+    }
+    if (!ns_ids_mapped(proc_userns(current_proc), 0, 0)) {
+        return 0;
+    }
+    return cap_holds(current_proc, CAP_DAC_OVERRIDE) ||
+           (acc == 0 && cap_holds(current_proc, CAP_DAC_READ_SEARCH));
+}
+
+/** Open raw PCI config, root's with mode 0644 as Linux's, which any caller
+ * reads and a write needs `pci_file_may` to allow. Each access reaches the
+ * current registers, including a read at a nonzero offset. */
 static int procfs_open_pciconfig(const struct vpath *vp, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || (acc && !proc_privileged(current_proc))) {
+    if (acc == 3 || !pci_file_may(0644, acc)) {
         return -EACCES;
     }
     if (!sysfs_pci_present(vp->syskey)) {
@@ -6788,30 +6815,61 @@ static int pcibar_of(fd_entry_t *e, struct pci_resource *r, int *key)
 }
 
 /**
- * Read or write `count` bytes, 1, 2 or 4, at the description's offset in the
- * I/O BAR of the resourceN descriptor `e`, one port access of that width, as
- * Linux's pci_resource_io: from `*value` for a write, into it for a read.
- * The count, or -EIO for a memory BAR, which has no read or write but its
- * mapping, -ENODEV for a function or BAR that is gone, or -EINVAL for
- * another width or a range past the BAR's end.
+ * The bytes a read or write of `count` bytes at the description's offset in
+ * the resourceN descriptor `e` reaches, as Linux's sysfs and pci_resource_io
+ * judge them together, with the BAR into `*r`. sysfs clips the access to the
+ * file, as long as the BAR: a read of none, or one at or past the end, gives
+ * 0, a write at or past it -EFBIG, and a write clipped to none 0. A memory
+ * BAR then has no read or write, -EIO, and pci_resource_io takes one port
+ * access of 1, 2 or 4 bytes within the BAR as it reads now, -EINVAL for
+ * another width or one past its end. The bytes to move, more than 0, or
+ * the call's result: 0, -ENODEV for a function or BAR that is gone, -EFBIG,
+ * -EIO or -EINVAL.
  */
-static int32_t pcibar_io(fd_entry_t *e, uint32_t count, uint32_t *value, int write)
+static int32_t pcibar_span(fd_entry_t *e, uint32_t count, int write, struct pci_resource *r)
 {
-    struct pci_resource r;
-    uint64_t off = e->ofd->offset;
-    uint16_t port;
-    int key;
+    uint64_t off = e->ofd->offset, size;
+    int key, bar = pcibar_of(e, r, &key);
 
-    if (pcibar_of(e, &r, &key) < 0) {
+    if (bar < 0) {
         return -ENODEV;
     }
-    if (!(r.flags & PCI_IORESOURCE_IO)) {
+    if (count == 0 && !write) {
+        return 0;
+    }
+    size = sysfs_pci_bar_size(key, bar);
+    if (off >= size) {
+        return write ? -EFBIG : 0;
+    }
+    if (count > size - off) {
+        count = (uint32_t)(size - off);
+    }
+    if (count == 0) {
+        return 0;
+    }
+    if (!(r->flags & PCI_IORESOURCE_IO)) {
         return -EIO;
     }
-    if ((count != 1 && count != 2 && count != 4) || off > r.end - r.start + 1u - count) {
+    if (off > r->end - r->start) {
+        return 0;
+    }
+    if (count - 1u > r->end - r->start - off || (count != 1 && count != 2 && count != 4)) {
         return -EINVAL;
     }
-    port = (uint16_t)(r.start + off);
+    return (int32_t)count;
+}
+
+/**
+ * Read or write `count` bytes, 1, 2 or 4, of the I/O BAR `r` at the
+ * offset of the resourceN descriptor `e`, which `pcibar_span` has judged,
+ * one port access of that width, as Linux's pci_resource_io: from `*value`
+ * for a write, into it for a read. Moves the offset past them.
+ */
+static void pcibar_io(fd_entry_t *e, const struct pci_resource *r, uint32_t count, uint32_t *value,
+                      int write)
+{
+    uint16_t port = (uint16_t)(r->start + e->ofd->offset);
+
     if (write) {
         if (count == 1) {
             pci_io_write8(port, (uint8_t)*value);
@@ -6826,41 +6884,51 @@ static int32_t pcibar_io(fd_entry_t *e, uint32_t count, uint32_t *value, int wri
                               : pci_io_read32(port);
     }
     e->ofd->offset += count;
-    return (int32_t)count;
 }
 
-/** read of a resourceN file (`pcibar_io`), its bytes little-endian. */
+/** read of a resourceN file, its bytes little-endian: the count, clipped
+ * to the file, or `pcibar_span`'s result. */
 static int32_t procfs_pcibar_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
+    struct pci_resource r;
     uint32_t value = 0;
     uint8_t bytes[4];
-    int32_t n = pcibar_io(e, count, &value, 0);
+    int32_t n = pcibar_span(e, count, 0, &r);
 
-    if (n > 0) {
-        bytes[0] = (uint8_t)value;
-        bytes[1] = (uint8_t)(value >> 8);
-        bytes[2] = (uint8_t)(value >> 16);
-        bytes[3] = (uint8_t)(value >> 24);
-        if (copy_to_user(buf, bytes, (uint32_t)n)) {
-            e->ofd->offset -= (uint32_t)n;
-            return -EFAULT;
-        }
+    if (n <= 0) {
+        return n;
+    }
+    pcibar_io(e, &r, (uint32_t)n, &value, 0);
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+    if (copy_to_user(buf, bytes, (uint32_t)n)) {
+        e->ofd->offset -= (uint32_t)n;
+        return -EFAULT;
     }
     return n;
 }
 
-/** write of a resourceN file (`pcibar_io`), its bytes little-endian. */
+/** write of a resourceN file, its bytes little-endian: the count, clipped
+ * to the file, `pcibar_span`'s result, or -EFAULT. */
 static int32_t procfs_pcibar_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
+    struct pci_resource r;
     uint8_t bytes[4] = {0, 0, 0, 0};
     uint32_t value;
+    int32_t n = pcibar_span(e, count, 1, &r);
 
-    if (count <= 4 && copy_from_user(bytes, buf, count)) {
+    if (n <= 0) {
+        return n;
+    }
+    if (copy_from_user(bytes, buf, (uint32_t)n)) {
         return -EFAULT;
     }
     value = (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 |
             (uint32_t)bytes[3] << 24;
-    return pcibar_io(e, count, &value, 1);
+    pcibar_io(e, &r, (uint32_t)n, &value, 1);
+    return n;
 }
 
 /** The `page` of a resourceN mapping, whose object is the function's key
@@ -6925,16 +6993,17 @@ static const struct file_ops procfs_pcibar_ops = {
     procfs_pcibar_read, procfs_pcibar_write, procfs_poll, procfs_ioctl,
     procfs_close,       procfs_pcibar_mmap,  NULL};
 
-/** Open a resourceN or resourceN_wc file, mode 0600: root's alone, for any
- * access. -EACCES for another caller, -ENOENT for a BAR without a length or
- * a function that is not there, -ENOMEM, or the descriptor's error. */
+/** Open a resourceN or resourceN_wc file, root's with mode 0600 as
+ * Linux's, for the access `pci_file_may` allows. -EACCES for another caller,
+ * -ENOENT for a BAR without a length or a function that is not there,
+ * -ENOMEM, or the descriptor's error. */
 static int procfs_open_pcibar(const struct vpath *vp, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || !proc_privileged(current_proc)) {
+    if (acc == 3 || !pci_file_may(0600, acc)) {
         return -EACCES;
     }
     if (!sysfs_pci_attr_present(vp->syskey, vp->procfile)) {

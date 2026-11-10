@@ -282,16 +282,19 @@ void ns_release(process_t *p);
 void ns_exec(process_t *p);
 
 /* The capabilities Linux names, 0 to CAP_LAST_CAP, in two words: the second
- * has the nine above 31. CAP_SETPCAP controls PR_CAPBSET_DROP,
- * CAP_SYS_CHROOT controls chroot, and CAP_SYS_ADMIN controls namespace
- * operations and global privilege (`nocaps` in process.h);
- * CAP_SYS_TTY_CONFIG controls vhangup. */
-#define CAP_LAST_CAP       40
-#define CAP_HIGH_WORD      0x1FFu
-#define CAP_SETPCAP        8
-#define CAP_SYS_CHROOT     18
-#define CAP_SYS_ADMIN      21
-#define CAP_SYS_TTY_CONFIG 26
+ * has the nine above 31. CAP_DAC_OVERRIDE and CAP_DAC_READ_SEARCH pass a
+ * file's mode bits where a check of them is written out, CAP_SETPCAP
+ * controls PR_CAPBSET_DROP, CAP_SYS_CHROOT controls chroot, and
+ * CAP_SYS_ADMIN controls namespace operations and global privilege
+ * (`nocaps` in process.h); CAP_SYS_TTY_CONFIG controls vhangup. */
+#define CAP_LAST_CAP        40
+#define CAP_HIGH_WORD       0x1FFu
+#define CAP_DAC_OVERRIDE    1
+#define CAP_DAC_READ_SEARCH 2
+#define CAP_SETPCAP         8
+#define CAP_SYS_CHROOT      18
+#define CAP_SYS_ADMIN       21
+#define CAP_SYS_TTY_CONFIG  26
 
 /**
  * Whether `p`'s ids give it the capabilities it has not lost: its
