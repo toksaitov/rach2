@@ -21,9 +21,15 @@
  * * eperm: a process of uid 1000, without CAP_SYS_TTY_CONFIG, gets EPERM.
  * * blocked-write: the writer, which was waiting for room in the ring, ends
  *   with the bytes it wrote, as Linux's n_tty_write.
- * * output-flush: unread output is discarded, and the master in packet
- *   mode has no status pending: its read is EAGAIN at once, as Linux's
- *   __tty_hangup clears pktstatus after its flush.
+ * * output-flush: the master in packet mode has no status pending, as
+ *   Linux's __tty_hangup clears pktstatus after its flush, and what is left
+ *   to read is at most a prefix of what was written. Linux's
+ *   pty_flush_buffer frees only the master's flip buffers, not its n_tty
+ *   read buffer (drivers/tty/pty.c, tty_buffer_flush with no ldisc), so
+ *   bytes flush_to_ldisc already moved there survive. The row takes either
+ *   answer: FIONREAD 0 and a read that is EAGAIN at once, or a count above
+ *   0 and a read of TIOCPKT_DATA followed by a prefix of "unread" and the
+ *   writer's bytes.
  * * cleanup: the child exits 0 and the master closes.
  *
  * The child reports through its exit status the first row that failed; the
@@ -97,6 +103,9 @@ struct pollfd {
 
 /* The bytes the writer writes, more than the master's ring holds. */
 #define WRITER_BYTES 65536
+
+/* The bytes the output-flush row reads from the master at most. */
+#define FLUSH_READ 64
 
 /* The master's ring is 4096 bytes; a writer under OPOST, which keeps room
  * for ONLCR's CR LF, waits once fewer than 2 are free. */
@@ -344,6 +353,37 @@ static int writer_asleep(long master, long pid)
     }
 }
 
+/**
+ * Whether what the master `master`, nonblocking and in packet mode, holds
+ * after the hangup is an answer Linux gives: nothing, with FIONREAD 0 and a
+ * read that is EAGAIN, or a count above 0 and a read of TIOCPKT_DATA, 0,
+ * followed by a prefix of "unread" and the writer's 'w' bytes.
+ */
+static int flushed(long master)
+{
+    static const char first[] = "unread";
+    char buf[FLUSH_READ];
+    int queued = -1;
+    long n, i;
+
+    if (syscall3(SYS_IOCTL, master, FIONREAD, (long)&queued) != 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, master, (long)buf, sizeof(buf));
+    if (n == -EAGAIN) {
+        return queued == 0;
+    }
+    if (n < 1 || queued <= 0 || buf[0] != 0) {
+        return 0;
+    }
+    for (i = 1; i < n; i++) {
+        if (buf[i] != (i - 1 < 6 ? first[i - 1] : 'w')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /** Hang up the slave and require both signals pending on its session leader. */
 static int hangup_signals(void)
 {
@@ -379,7 +419,6 @@ static int child_rows(int ptn, long uid, long master)
     struct pollfd pfd;
     char path[24], byte;
     long slave = child_setup(ptn, master), fd, writer;
-    int queued = -1;
 
     if (slave < 0) {
         return ROW_SETUP;
@@ -425,8 +464,7 @@ static int child_rows(int ptn, long uid, long master)
     if (!writer_done(writer)) {
         return ROW_WRITER;
     }
-    if (syscall3(SYS_IOCTL, master, FIONREAD, (long)&queued) != 0 || queued != 0 ||
-        syscall3(SYS_READ, master, (long)&byte, 1) != -EAGAIN) {
+    if (!flushed(master)) {
         return ROW_FLUSH;
     }
     return 0;
@@ -468,7 +506,7 @@ void probe_main(unsigned long *sp)
         "reopen-defaults: a new open did not have the default termios",
         "eperm: uid 1000 did not get EPERM",
         "blocked-write: the waiting writer did not end with the bytes it wrote",
-        "output-flush: unread output survived, or the master had packet status pending"};
+        "output-flush: the master held more than a prefix of the output, or a packet status"};
     int ptn = -1, unlock = 0, status = -1;
     long master, pid;
     int i;
