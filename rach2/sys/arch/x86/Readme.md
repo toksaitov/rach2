@@ -133,7 +133,7 @@ The clock is kept by a reference counter from the first tick on: the HPET's main
 
 `fpu_init` (`fpu.c`) chooses one format for every process at boot:
 
-* XSAVE, where the processor has XSAVE and SSE and `rach2.noxsave` is absent. `XCR0` has x87 and SSE, AVX where the processor has it, and AVX-512's three components where it has them all and AVX512F, each while the image stays within `FPU_AREA_MAX`, 4096 bytes. `xsave` writes every enabled component, so the area is a whole image that a signal frame, ptrace and a core file copy as it is.
+* XSAVE, where the processor has XSAVE and SSE and `rach2.noxsave` is absent. `XCR0` has x87 and SSE, AVX where the processor has it, AVX-512's three components where it has them all and AVX512F, and on x86-64 PKRU where it has protection keys, each while the image stays within `FPU_AREA_MAX`, 4096 bytes. With PKRU `fpu_cpu_setup` also sets CR4.PKE, which turns the keys on ([Protection keys](../../mm/Readme.md#protection-keys)); `fpu_pkru` and `fpu_pkru_set` read and write the running thread's PKRU with `rdpkru` and `wrpkru`, and the initial state holds `PKRU_INIT`, 0x55555554. `xsave` writes every enabled component, so the area is a whole image that a signal frame, ptrace and a core file copy as it is.
 * `fxsave`, 512 bytes of the x87 and XMM registers and MXCSR, where the processor has FXSR.
 * `fnsave`, the x87 state in 108 bytes, on i686 without FXSR or under `rach2.nofxsr`. `CR4.OSFXSR` is then clear, so an SSE instruction, whose registers would not be saved, is an invalid opcode.
 
@@ -191,7 +191,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 * The stops' waits are loop counts, not times.
 * The serial console is COM1 alone, at 115200 baud; the PS/2 mouse speaks the plain, IntelliMouse or IntelliMouse Explorer protocol, or the touchpad protocols of Synaptics, of ALPS, versions 1 to 8, and of Elantech, or a TrackPoint's, and no other vendor's, so an ALPS pad of version 9 or another vendor's touchpad works as a plain mouse; of Linux's Synaptics machine quirks only the Toshiba rate of 40 is taken, not the Cr-48's profile sensor; the serio port has none of Linux's psmouse files (`protocol`, `rate`, `resolution`, `resetafter`, `resync_time`) and an Elantech pad none of its register files; the speaker plays a square wave and no samples; of SMBIOS only the fields `/sys/class/dmi/id` shows are read, each string cut at 63 bytes.
 * The CMOS clock's century is taken as 2000, and the FADT's century register is logged but not used.
-* The floating-point state covers x87, SSE, AVX and AVX-512 alone, `XCR0` bits 0 to 2 and 5 to 7.
+* The extended state covers x87, SSE, AVX, AVX-512 and, on x86-64, PKRU alone, `XCR0` bits 0 to 2, 5 to 7 and 9. The i686 kernel turns no protection keys on, as Linux's 32-bit kernel does not.
 * On the Lenovo an expiry of the TCO watchdog does not bring the machine back: under Linux 6.12, which programs the TCO as `itco.c` does and leaves SMI_EN's TCO_EN set on version 2, the first stage's expiry left the machine down until it was powered on by hand. No hang experiment may count on the watchdog to return it.
 
 ## Tests

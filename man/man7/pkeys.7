@@ -1,0 +1,137 @@
+.Dd November 11, 2026
+.Dt PKEYS 7
+.Os
+.Sh NAME
+.Nm pkeys
+.Nd memory protection keys
+.Sh DESCRIPTION
+A protection key is a number from 0 to 15 that each page of user memory
+carries, in bits 59 to 62 of its page table entry.
+Each thread has a register, PKRU, with two bits for each key: bit 2k, the
+access-disable bit, denies every data access to the pages of key k, and
+bit 2k+1, the write-disable bit, denies writes to them.
+A thread changes its own PKRU with the unprivileged
+.Li wrpkru
+instruction and reads it with
+.Li rdpkru ,
+so a program can open and close a region far faster than
+.Xr mprotect 2
+can, and for one thread alone.
+The keys never refuse an instruction fetch.
+.Pp
+The x86-64 kernel turns the keys on at each processor's start where
+the CPUID instruction
+reports PKU, as Linux does: it sets CR4.PKE, so that the OSPKE bit of
+leaf 7 reads 1 to a program, adds PKRU to XCR0, and
+.Pa /proc/cpuinfo
+lists
+.Li pku
+and
+.Li ospke .
+QEMU's
+.Li max
+processor under its emulator has them.
+The i686 kernel never turns them on, as Linux's 32-bit kernel does not, and
+answers the three calls with
+.Er ENOSYS .
+Without them the x86-64 kernel gives no key and answers the calls as Linux
+does on such a processor; PKRU reads as 0.
+.Ss Allocation
+.Xr pkey_alloc 2
+gives the lowest free key and sets its rights in the caller's PKRU,
+.Xr pkey_free 2
+frees one, and
+.Xr pkey_mprotect 2
+gives a range of pages a key.
+Key 0 is the default of every page and starts allocated.
+.Xr mprotect 2
+and
+.Xr mmap 2
+with
+.Dv PROT_EXEC
+alone give the pages the execute-only key, which the kernel allocates the
+first time and denies all data access in the PKRU of the thread that asked,
+so the pages run but do not read.
+The keys belong to the address space: threads share them, the child of
+.Xr fork 2
+copies them, and
+.Xr execve 2
+frees all but key 0.
+.Ss PKRU
+PKRU is part of the thread's extended state, saved and loaded at every
+switch with the floating-point registers.
+A new thread and the child of
+.Xr fork 2
+start with their creator's PKRU, and a program that
+.Xr execve 2
+starts begins with 0x55555554: key 0 open and every other key denied all
+access.
+.Pp
+A signal handler runs with PKRU 0x55555554 as well.
+The signal frame's XSAVE image holds the PKRU of the interrupted code,
+with the PKRU bit of its XSTATE_BV set, and
+.Xr sigreturn 2
+loads it from there, so a handler may change it.
+The kernel writes the frame with every key open, so a signal stack under a
+denied key still takes the frame.
+.Xr ptrace 2
+reads and writes a tracee's PKRU in the
+.Dv NT_X86_XSTATE
+register set, and a core file's note of the same type holds it.
+.Ss Faults
+A data access that PKRU denies raises
+.Dv SIGSEGV
+with
+.Va si_code
+.Dv SEGV_PKUERR
+(4),
+.Va si_addr
+the address and
+.Va si_pkey
+the page's key, also for a page not yet backed.
+The key is checked before the page's protection, so a write to a
+read-only page under a denied key is
+.Dv SEGV_PKUERR
+and under an open key
+.Dv SEGV_ACCERR .
+.Pp
+The kernel honours the calling thread's PKRU when a system call reads or
+writes its memory: a
+.Xr read 2
+into, or a
+.Xr write 2
+from, a page whose key the caller denies fails with
+.Er EFAULT .
+An access on another address space's behalf ignores the keys, as Linux's
+does:
+.Xr ptrace 2 ,
+.Pa /proc/PID/mem
+and
+.Xr process_vm_readv 2
+reach a denied page, even of the caller's own address space.
+.Ss /proc
+Where the keys are on, each region of
+.Pa /proc/PID/smaps
+has a
+.Li ProtectionKey:
+line with its key, before its
+.Li VmFlags ;
+where they are off there is none.
+.Sh COMPATIBILITY
+An i386 program on the x86-64 kernel gets the keys as a 64-bit one does,
+as on Linux: the same calls, numbered 380 to 382, the same PKRU, and
+.Va si_pkey
+at its i386 offset.
+.Pp
+Guests of
+.Pa /dev/kvm
+are offered no keys: their CPUID lacks PKU, so CR4.PKE is reserved to
+them, and the host's PKRU is saved before a guest runs and loaded again
+after.
+.Sh SEE ALSO
+.Xr mmap 2 ,
+.Xr mprotect 2 ,
+.Xr pkey_alloc 2 ,
+.Xr ptrace 2 ,
+.Xr sigaction 2 ,
+.Xr proc 5
