@@ -13,7 +13,8 @@
 # svm-tests.list boots alone, as kvm-unit-tests' x86/run boots it, with two
 # processors and 4 GiB. A line `FILE:TEST STATUS` goes to standard output for
 # each, in the format of ref/svm-*.status, STATUS being the
-# test's: 0 a pass, 77 a skip, 3 a failure and 127 an unhandled exception;
+# test's: 0 a pass, 77 a skip, 3 a failure, 127 an unhandled exception and
+# 2 QEMU's end without the test's exit, as when QEMU is stopped after a hang;
 # a test's console goes to TMPDIR, kept when it did not pass. QEMU is the
 # program QEMU names, qemu-system-x86_64 by default. The exit status is 0.
 
@@ -45,8 +46,11 @@ grep -v '^#' "$DIR/svm-tests.list" | while read -r flat test; do
     # isa-debug-exit exits with the test's status shifted left and ORed with
     # 1: 1 for a pass, 3 for a failure and 155 for a skip, which x86/run
     # reports as 0, 3 and 77; an unhandled exception it reports as 127.
+    # QEMU's own end, by a signal or the guest's shutdown, exits 0.
     if grep -q 'Unhandled exception' "$out/$flat-$test.log"; then
         status=127
+    elif [ "$code" -eq 0 ]; then
+        status=2
     elif [ "$code" -eq 1 ]; then
         status=0
     elif [ "$code" -eq 155 ]; then
