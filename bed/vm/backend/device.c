@@ -824,11 +824,6 @@ static uint32_t cmd_map_blob(struct vd *d, const uint8_t *body, uint8_t *resp, u
         memcpy(resp + sizeof(struct vd_hdr), &p, sizeof(p));
         memcpy(resp + VGS_PAGES_OFF, q.runs, (size_t)q.count * sizeof(*q.runs));
         d->n.maps++;
-        if (d->verbose) {
-            fprintf(stderr, "backend: map: resource %u, pages %llu of %llu, %u runs, cache %u\n",
-                    (unsigned)q.id, (unsigned long long)p.first, (unsigned long long)p.total,
-                    (unsigned)q.count, (unsigned)q.map_info);
-        }
     }
     free(q.runs);
     *type = err == 0 ? VD_RESP_OK_MAP_INFO : (uint32_t)err;
