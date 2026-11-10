@@ -7827,7 +7827,8 @@ int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t adv
  * with EPERM, as Linux's can_modify_vma_madv has it: at the first sealed
  * region (mseal) of anonymous, private memory without write, for the advice
  * that would discard its pages, MADV_DONTNEED, MADV_DONTNEED_LOCKED,
- * MADV_FREE, MADV_REMOVE, MADV_DONTFORK and MADV_WIPEONFORK. The start of
+ * MADV_FREE, MADV_REMOVE, MADV_DONTFORK, MADV_WIPEONFORK and, as Linux 6.13
+ * adds, MADV_GUARD_INSTALL. The start of
  * that region, or `start` when it begins below, or `end` when the advice may
  * go over the whole range. A region of a program's segment counts as a
  * file's.
@@ -7837,7 +7838,8 @@ static uintptr_t madvise_sealed_at(vm_space_t *vm, uintptr_t start, uintptr_t en
     const vma_t *r;
 
     if (advice != MADV_DONTNEED && advice != MADV_DONTNEED_LOCKED && advice != MADV_FREE &&
-        advice != MADV_REMOVE && advice != MADV_DONTFORK && advice != MADV_WIPEONFORK) {
+        advice != MADV_REMOVE && advice != MADV_DONTFORK && advice != MADV_WIPEONFORK &&
+        advice != MADV_GUARD_INSTALL) {
         return end;
     }
     for (r = vm_lower(vm, start); r && r->start < end; r = vm_next(r)) {
