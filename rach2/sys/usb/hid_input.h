@@ -90,20 +90,16 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size);
 /**
  * Build the output report of `hid`'s LEDs in `out`, of `size` bytes, as
  * Linux's `hidinput_led_worker` builds it: the report that holds the first
- * LED field, each LED usage set from `leds`, a bit for each LED_* code,
- * and every other field of the report 0. `*value` is set to the wValue of
+ * LED field, and every other field of the report 0. Each LED usage is set
+ * from the input device that owns its field: the LEDs programs lit on its
+ * event device, and on a keyboard Num, Caps and Scroll Lock from `locks`,
+ * the console's, a bit 1 << LED_* each. `*value` is set to the wValue of
  * SET_REPORT, 0x0200 with the report's ID. Returns the report's bytes, its
  * ID byte first when it has one, or -1 when the device has no LED or the
  * report is longer than `size`.
  */
-int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value);
-
-/**
- * The LEDs of `hid` beyond Num, Caps and Scroll Lock that programs have lit
- * on its event devices, a bit 1 << LED_* each, for `hidinput_led_report`;
- * the first three are the console's, which every keyboard shares.
- */
-unsigned int hidinput_leds_lit(struct hid_dev *hid);
+int hidinput_led_report(struct hid_dev *hid, unsigned int locks, uint8_t *out, int size,
+                        int *value);
 
 /**
  * Build the Feature report that sets each Resolution Multiplier of `hid`

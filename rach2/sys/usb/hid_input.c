@@ -405,10 +405,12 @@ static uint8_t *bits_of(struct hid_input *in, unsigned type, unsigned *max)
 }
 
 /* What `configure_usage`'s cases decide: a mapping, with the code's bit
- * cleared first or not, or none. */
+ * cleared first or not, none, or a battery usage, which Linux types EV_PWR
+ * and gives its power supply instead of an event. */
 #define MAP_NONE  0
 #define MAP_SET   1
 #define MAP_CLEAR 2
+#define MAP_PWR   3
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -725,7 +727,7 @@ static int map_keys_page(struct hid_input *in, uint32_t page, uint32_t id, unsig
  * Decide what `u`, a usage of field `f` on input device `in`, maps to, as
  * the page cases of Linux's `hidinput_configure_usage`. Sets `*type` and
  * `*code`, and may add EV_REP or a second relative axis to `in`, or set
- * `u`'s hat. Returns MAP_SET, MAP_CLEAR or MAP_NONE.
+ * `u`'s hat. Returns MAP_SET, MAP_CLEAR, MAP_NONE or MAP_PWR.
  */
 static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field *f,
                      struct hid_usage *u, unsigned *type, unsigned *code)
@@ -749,7 +751,7 @@ static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field
          * Linux's power supply, which has no event; the rest are unknown. */
         if (u->hid == HID_DC_BATTERYSTRENGTH || u->hid == HID_BAT_ABSOLUTESTATEOFCHARGE ||
             u->hid == HID_BAT_CHARGING) {
-            return MAP_NONE;
+            return MAP_PWR;
         }
         return map_unknown(f, report_type, type, code);
     case HID_UP_KEYBOARD:
@@ -777,7 +779,8 @@ static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field
  * `in`, as Linux's `hidinput_configure_usage`: a constant field, an empty
  * one and a usage of an output field other than an LED map to nothing; a
  * code the input device has already is a duplicate and maps to nothing,
- * unless its case clears the bit first.
+ * unless its case clears the bit first; a battery usage is typed EV_PWR,
+ * which no event reports and the keymap skips.
  */
 static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field *f,
                             struct hid_usage *u)
@@ -799,6 +802,10 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
         return;
     }
     how = map_usage(hid, in, f, u, &type, &code);
+    if (how == MAP_PWR) {
+        u->type = EV_PWR;
+        return;
+    }
     if (how == MAP_NONE) {
         return;
     }
@@ -1137,35 +1144,59 @@ static void setup_multipliers(struct hid_dev *hid, int use_max)
 }
 
 /**
+ * The usage of report `r` of `hid` that keymap entry `ke` names, counting
+ * the places of the usages mapped to a key or to nothing in `*at` over the
+ * report's fields in turn. NULL when the report has none.
+ */
+static struct hid_usage *find_key_in(struct hid_dev *hid, uint32_t r,
+                                     const struct evdev_keymap_entry *ke, uint32_t *at)
+{
+    uint32_t i, j;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        struct hid_field *f = field_at(hid, i);
+
+        if (f->report != r) {
+            continue;
+        }
+        for (j = 0; j < f->maxusage; j++) {
+            struct hid_usage *u = &usages_of(hid, f)[j];
+
+            if (u->type != EV_KEY && u->type != 0) {
+                continue;
+            }
+            if (ke->by_index ? *at == ke->index : u->hid == ke->scancode) {
+                return u;
+            }
+            ++*at;
+        }
+    }
+    return NULL;
+}
+
+/**
  * The usage of `hid` that keymap entry `ke` names, as Linux's
- * hidinput_find_key finds it: over the fields of the input reports, then
- * of the output reports, the usages mapped to a key or to nothing are
+ * hidinput_find_key finds it: over the input reports, then the output
+ * reports, each in the order the descriptor first names it, and over each
+ * report's fields in turn, the usages mapped to a key or to nothing are
  * counted, and the one at place `ke->index`, or with usage `ke->scancode`,
  * is the entry, its place stored in `*index`. NULL for none.
  */
 static struct hid_usage *find_key(struct hid_dev *hid, const struct evdev_keymap_entry *ke,
                                   uint32_t *index)
 {
-    uint32_t type, i, j, at = 0;
+    struct hid_usage *u;
+    uint32_t type, r, at = 0;
 
     for (type = HID_INPUT_REPORT; type <= HID_OUTPUT_REPORT; type++) {
-        for (i = 0; i < hid->desc.nfields; i++) {
-            struct hid_field *f = field_at(hid, i);
-
-            if (hid->desc.reports[f->report].type != type) {
+        for (r = 0; r < hid->desc.nreports; r++) {
+            if (hid->desc.reports[r].type != type) {
                 continue;
             }
-            for (j = 0; j < f->maxusage; j++) {
-                struct hid_usage *u = &usages_of(hid, f)[j];
-
-                if (u->type != EV_KEY && u->type != 0) {
-                    continue;
-                }
-                if (ke->by_index ? at == ke->index : u->hid == ke->scancode) {
-                    *index = at;
-                    return u;
-                }
-                at++;
+            u = find_key_in(hid, r, ke, &at);
+            if (u) {
+                *index = at;
+                return u;
             }
         }
     }
@@ -1550,7 +1581,7 @@ static void hid_event(struct hid_dev *hid, struct hid_field *f, struct hid_usage
 {
     struct hid_input *in;
 
-    if (!u->type || f->input == HID_NO_INPUT) {
+    if (!u->type || u->type == EV_PWR || f->input == HID_NO_INPUT) {
         return;
     }
     in = &hid->inputs[f->input];
@@ -1728,12 +1759,13 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
 /** Write the elements of `f` into `data` from `value`, as Linux's
  * `hid_output_field`; a signed field's values are cut to its size. */
 static void output_field(struct hid_dev *hid, const struct hid_field *f, uint8_t *data,
-                         int (*value)(const struct hid_usage *, void *), void *arg)
+                         int (*value)(const struct hid_field *, const struct hid_usage *, void *),
+                         void *arg)
 {
     uint32_t n;
 
     for (n = 0; n < f->count; n++) {
-        int32_t v = value(&usages_of(hid, f)[n], arg);
+        int32_t v = value(f, &usages_of(hid, f)[n], arg);
         uint32_t bits;
 
         if (f->logical_minimum < 0 && f->size > 0 && f->size < 32) {
@@ -1755,7 +1787,8 @@ static void output_field(struct hid_dev *hid, const struct hid_field *f, uint8_t
  * given by `value`, as Linux's `hid_output_report`. Returns its bytes, or
  * -1 when it does not fit. */
 static int output_report(struct hid_dev *hid, const struct hid_report *r, uint8_t *out, int size,
-                         int (*value)(const struct hid_usage *, void *), void *arg)
+                         int (*value)(const struct hid_field *, const struct hid_usage *, void *),
+                         void *arg)
 {
     uint32_t len = hid_report_len(r);
     uint8_t *data = out;
@@ -1778,18 +1811,44 @@ static int output_report(struct hid_dev *hid, const struct hid_report *r, uint8_
     return (int)len;
 }
 
-/** An LED usage's value from the LED_* bits at `arg`; 0 for any other. */
-static int led_value(const struct hid_usage *u, void *arg)
-{
-    unsigned int leds = *(unsigned int *)arg;
+/* The console's locks, which a keyboard shows in place of its own. */
+#define LOCK_LEDS ((1u << LED_NUML) | (1u << LED_CAPSL) | (1u << LED_SCROLLL))
 
-    return u->type == EV_LED ? (int)((leds >> u->code) & 1u) : 0;
+/* What `led_value` reads: the device, and the console's locks as LED_*
+ * bits. */
+struct led_source {
+    struct hid_dev *hid;
+    unsigned int locks;
+};
+
+/** An LED usage's value from the LEDs of the input device that owns its
+ * field, as Linux sets each from its own input's `led` bits: those programs
+ * lit on its event device, and on a keyboard the console's three locks in
+ * place of its own. 0 for any other usage. */
+static int led_value(const struct hid_field *f, const struct hid_usage *u, void *arg)
+{
+    const struct led_source *src = (const struct led_source *)arg;
+    const struct hid_input *in;
+    unsigned int lit;
+
+    if (u->type != EV_LED || f->input == HID_NO_INPUT) {
+        return 0;
+    }
+    in = &src->hid->inputs[f->input];
+    lit = evdev_leds_lit(in->dev);
+    if (in->ev & (1u << EV_REP)) {
+        lit = (lit & ~LOCK_LEDS) | (src->locks & LOCK_LEDS);
+    }
+    return (int)((lit >> u->code) & 1u);
 }
 
-int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value)
+int hidinput_led_report(struct hid_dev *hid, unsigned int locks, uint8_t *out, int size, int *value)
 {
+    struct led_source src;
     uint32_t i, j;
 
+    src.hid = hid;
+    src.locks = locks;
     for (i = 0; i < hid->desc.nfields; i++) {
         struct hid_field *f = field_at(hid, i);
         struct hid_report *r = &hid->desc.reports[f->report];
@@ -1800,30 +1859,20 @@ int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, in
         for (j = 0; j < f->maxusage; j++) {
             if (usages_of(hid, f)[j].type == EV_LED) {
                 *value = (HID_OUTPUT_REPORT + 1) << 8 | r->id;
-                return output_report(hid, r, out, size, led_value, &leds);
+                return output_report(hid, r, out, size, led_value, &src);
             }
         }
     }
     return -1;
 }
 
-unsigned int hidinput_leds_lit(struct hid_dev *hid)
-{
-    unsigned int lit = 0;
-    uint32_t i;
-
-    for (i = 0; i < hid->ninputs; i++) {
-        lit |= evdev_leds_lit(hid->inputs[i].dev);
-    }
-    return lit & ~((1u << LED_NUML) | (1u << LED_CAPSL) | (1u << LED_SCROLLL));
-}
-
 /** A Resolution Multiplier's value, its field's logical maximum at `arg`'s
  * field; 0 for any other usage. */
-static int multiplier_value(const struct hid_usage *u, void *arg)
+static int multiplier_value(const struct hid_field *f, const struct hid_usage *u, void *arg)
 {
     const int32_t *max = (const int32_t *)arg;
 
+    (void)f;
     return u->hid == HID_GD_RESOLUTION ? *max : 0;
 }
 
