@@ -955,6 +955,95 @@ static void row_wedge(void)
     done(&m);
 }
 
+/**
+ * A wedge with a request the chip was never given, which waits for another
+ * driver's fence: its commands and its switch are taken back, so that the
+ * reset that ends the wedge runs none of them.
+ */
+static void row_wedge_queued(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = ready(&m);
+    struct i915_engine *e = &i915->gt.engine[I915_RCS0];
+    struct i915_model_reset *rs = i915_model_reset_state(&m);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct intel_context *r2 = engine_of(&file_a, make_context(&file_a), I915_RCS0);
+    struct i915_request *rq, *rq2 = 0;
+    struct dma_fence f;
+    uint32_t hung, *cs;
+    int was_valid = 0;
+
+    k_memset(&f, 0, sizeof(f));
+    dma_fence_init(&f, 0, dma_fence_context_alloc(1), 1);
+    rs->stuck = GEN6_GRDOM_RENDER | GEN6_GRDOM_FULL;
+    i915_model_ring_state(&m, 0)->stuck = 1;
+    rq = submit(r, 0, 0);
+    if (r2 && i915_request_create(r2, &rq2) == 0) {
+        cs = i915_request_begin(rq2, 4);
+        if (cs) {
+            cs[0] = MI_LOAD_REGISTER_IMM(1);
+            cs[1] = TEST_REG;
+            cs[2] = 0xbad;
+            cs[3] = MI_NOOP;
+        }
+        (void)i915_request_await_fence(rq2, &f, 0);
+        (void)i915_request_add(rq2);
+        was_valid = rq2->was_valid;
+    }
+    CHECK("wedge: a request waits for another driver's fence, its switch emitted",
+          rq && rq2 && !rq2->submitted && rq2->set_context && e->tail != e->hw_tail &&
+              e->last_ce == r2);
+    (void)beat_until_hung(10000, &hung);
+    CHECK("wedge: its commands and switch taken back, the tail at what the chip has",
+          i915->gt.wedged && ended(rq2, -EIO) && e->tail == e->hw_tail && e->reserved == 0 &&
+              e->last_ce == r && r2->image_valid == was_valid);
+    i915_request_put(rq);
+    i915_request_put(rq2);
+    rs->stuck = 0;
+    i915_reset_gt(i915, 0, "a test");
+    rq = submit(r, 0, 0);
+    CHECK("wedge: after the reset the ring runs none of the cancelled commands",
+          rq && i915_request_wait(rq, 0, 100000000) == 0 && i915_model_peek(&m, TEST_REG) != 0xbad);
+    i915_request_put(rq);
+    (void)dma_fence_signal(&f);
+    intel_context_put(r);
+    intel_context_put(r2);
+    done(&m);
+}
+
+/**
+ * A request that waits for another driver's fence that never signals runs
+ * after Linux's 10 s, its fence's error ETIMEDOUT, and not before.
+ */
+static void row_fence_timeout(void)
+{
+    struct i915_model m;
+    struct intel_context *r;
+    struct i915_request *rq = 0;
+    struct dma_fence f;
+
+    (void)ready(&m);
+    r = engine_of(&file_a, 0, I915_RCS0);
+    k_memset(&f, 0, sizeof(f));
+    dma_fence_init(&f, 0, dma_fence_context_alloc(1), 1);
+    if (r && i915_request_create(r, &rq) == 0) {
+        (void)i915_request_await_fence(rq, &f, 0);
+        (void)i915_request_add(rq);
+    }
+    run_ms(9990);
+    (void)i915_submit_work();
+    CHECK("fence timeout: held back for 10 s by another driver's fence",
+          rq && !rq->submitted && !rq->fence.base.error);
+    run_ms(20);
+    (void)i915_submit_work();
+    CHECK("fence timeout: then given to the chip with ETIMEDOUT, and run",
+          rq && rq->submitted && i915_request_wait(rq, 0, 100000000) == 0 && ended(rq, -ETIMEDOUT));
+    (void)dma_fence_signal(&f);
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
 /* ---- 78-6a.3: bans and counts ---- */
 
 /** Hang the render ring with a request of `ce`, then run the heartbeat
@@ -1082,6 +1171,8 @@ int main(void)
     row_wait_resets();
     row_full_reset();
     row_wedge();
+    row_wedge_queued();
+    row_fence_timeout();
     row_ban();
     CHECK("the heap: every record freed", heap_live == 0);
     if (fails) {

@@ -602,6 +602,9 @@ and gone is passed over, and a point marked
 is added to its timeline with the batch's fence.
 As on Linux, the batch is also ordered after the fence of a syncobj
 named with neither flag, and of one to signal.
+A fence of another driver is waited for 10 seconds at most, Linux's
+default; the batch then runs, and its own fence ends with
+.Er ETIMEDOUT .
 .Dv I915_EXEC_GEN7_SOL_RESET
 clears the four streamout write offsets on the render ring.
 .Pp

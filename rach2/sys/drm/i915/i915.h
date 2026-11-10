@@ -3417,6 +3417,7 @@ struct i915_await {
     struct dma_fence_cb cb; /* first, so that the callback finds its record */
     struct i915_request *rq;
     struct dma_fence *fence;
+    uint64_t deadline; /* the tick a wait for another driver's fence ends, or 0 */
     struct i915_request *src;
     struct i915_await *next;
     struct i915_await *exec_next;
@@ -3621,7 +3622,9 @@ void i915_request_set_error_once(struct i915_request *rq, int32_t err);
 void i915_request_skip(struct i915_request *rq);
 
 /** Every request of every engine fails with -EIO, its fence signalled,
- * and retires, as Linux's reset_cancel when the GPU is wedged. */
+ * and retires, as Linux's reset_cancel when the GPU is wedged; the
+ * commands and switches of those the chip was never given are taken back
+ * first, so that each ring's tail and state are again what the chip has. */
 void i915_requests_cancel(struct drm_i915_private *i915);
 
 /*
