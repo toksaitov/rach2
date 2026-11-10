@@ -32,6 +32,8 @@ static int failures;
 #define USER_BASE 0x40000000ul
 #define USER_LEN  0x10000ul
 static uint8_t user[USER_LEN];
+static uintptr_t memory_base = USER_BASE;
+static int ldt_loaded;
 
 /* The model's selectors, MSRs and floating-point calls. */
 static unsigned int fs_sel, gs_sel, ds_sel, es_sel;
@@ -55,10 +57,10 @@ static void check(int ok, const char *row)
 /** The model's byte at user address `a` for `n` bytes, or NULL. */
 static uint8_t *at(uintptr_t a, size_t n)
 {
-    if (a < USER_BASE || a + n > USER_BASE + USER_LEN || a + n < a) {
+    if (a < memory_base || a + n > memory_base + USER_LEN || a + n < a) {
         return NULL;
     }
-    return user + (a - USER_BASE);
+    return user + (a - memory_base);
 }
 
 int copy_from_user(void *dst, const void __user *src, size_t n)
@@ -166,6 +168,8 @@ void x86_64_es_load(unsigned int sel)
 unsigned int x86_64_lar(unsigned int sel)
 {
     switch (sel) {
+    case 15:
+        return ldt_loaded ? 0x00C0F300u : 0;
     case GDT_USER_DATA:
         return 0x00C0F300u;
     case GDT_USER_CODE32:
@@ -175,6 +179,13 @@ unsigned int x86_64_lar(unsigned int sel)
     default:
         return 0;
     }
+}
+
+/** Publish the modeled LDT before a non-faulting selector check. */
+void ldt_switch(const struct mm *mm)
+{
+    (void)mm;
+    ldt_loaded = 1;
 }
 
 uintptr_t fpu_frame32_place(uintptr_t sp)
@@ -507,6 +518,8 @@ static void run_siginfo(void)
  * EIP 0x08049100 with the stack at `sp`. */
 static void setup(isr_params_t *tf, uintptr_t sp)
 {
+    memory_base = USER_BASE;
+    ldt_loaded = 0;
     k_memset(&proc, 0, sizeof(proc));
     k_memset(tf, 0, sizeof(*tf));
     k_memset(user, 0, sizeof(user));
@@ -650,10 +663,46 @@ static void run_stacks(void)
               word_at(tf.rsp + 144 + 16) == 0x4000u,
           "uc_stack as sigaltstack read it where the signal came");
 
-    setup(&tf, 0xFFFFFF00u);
+    setup(&tf, LOW_4G + 0x1000u);
+    memory_base = LOW_4G - USER_LEN / 2u;
     sa.flags = SA_SIGINFO | SA_RESTORER;
-    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && tf.rsp == 0xFFFFFF00u,
-          "a frame that would reach 4 GiB is refused");
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && fpu_puts == 0,
+          "a frame above 4 GiB is refused before the modeled memory accepts it");
+    setup(&tf, 0xFFFFFF00u);
+    memory_base = LOW_4G - USER_LEN / 2u;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == 0 && tf.rsp < LOW_4G,
+          "a frame ending below 4 GiB is accepted");
+    memory_base = USER_BASE;
+}
+
+/** A non-flat stack uses the legacy restorer stack under Linux's conditions. */
+static void run_legacy_stack(void)
+{
+    isr_params_t tf;
+    struct k_sigaction sa;
+    struct k_siginfo info;
+
+    setup(&tf, 0x2000u);
+    tf.ss = 15;
+    proc.altstack_sp = USER_BASE + 0xA000u;
+    proc.altstack_size = 0x4000u;
+    proc.altstack_on = 1;
+    k_memset(&sa, 0, sizeof(sa));
+    k_memset(&info, 0, sizeof(info));
+    sa.handler = 0x08049000u;
+    sa.restorer = USER_BASE + 0xE000u;
+    sa.flags = SA_SIGINFO;
+    vdso_rt = 0x0F7F0400u;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == 0 && tf.rsp > USER_BASE + 0xA000u &&
+              tf.rsp < USER_BASE + 0xE000u && word_at(tf.rsp) == vdso_rt,
+          "the LDT stack switches to sa_restorer and returns through the vDSO");
+    check(!ldt_loaded && seg_from_frame(15) == 15 && ldt_loaded,
+          "the data selector check loads a newly published LDT before lar");
+    tf.rsp = 0x2000u;
+    tf.ss = 15;
+    sa.flags |= SA_RESTORER;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1,
+          "SA_RESTORER makes its pointer code rather than a legacy stack");
 }
 
 /** An i386 tracer's registers: user_regs_struct32 from PTRACE_GETREGS and
@@ -717,6 +766,7 @@ int main(void)
     run_rt_frame();
     run_plain_frame();
     run_stacks();
+    run_legacy_stack();
     run_ptrace();
     if (failures) {
         printf("ia32-signal-hosttest: %d failures\n", failures);
