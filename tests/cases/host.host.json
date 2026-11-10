@@ -576,6 +576,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_evict",
+          "checks": "tests/host/i915_evict_hosttest.c evicts, accounts, purges and pins the Intel graphics driver's buffers on the chip of i915_gem_model.c: a working set of 48 MiB written through GTT maps of a 16 MiB aperture reads back whole after its bindings were evicted least recently used first, pinned and busy bindings stay, GET_APERTURE counts the pinned, a DONTNEED object is purged by reclaim before an allocation fails and an allocation past memory gives ENOMEM, and a userptr object's pages are pinned on use and let go, its bindings revoked first, on an unmap, mprotect, fork, copy-on-write break and exit, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "intel_bios",
           "checks": "tests/host/intel_bios_hosttest.c finds the Lenovo's OpRegion through ASLS and refuses a bad one, and decodes the VBT it holds to the outputs and panel timings Linux reported, with Linux's defaults when there is no table, under ASan and UBSan and exits 0",
           "source": "scenario"
