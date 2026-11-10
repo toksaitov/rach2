@@ -517,6 +517,7 @@ struct kvm_vcpu {
     uint64_t mcg_cap, mcg_status, mcg_ctl;
     uint64_t platform_info;        /* MSR_PLATFORM_INFO, which only the caller writes */
     uint64_t misc_features;        /* MSR_MISC_FEATURES_ENABLES: bit 0, CPUID faults above CPL 0 */
+    uint64_t ucode_rev;            /* MSR_IA32_UCODE_REV, which only the caller writes */
     uint64_t stat[KVM_VCPU_STATS]; /* by enum kvm_vcpu_stat */
     char stats_id[KVM_STATS_NAME_SIZE];        /* "kvm-PID/vcpu-ID", its maker's */
     uint64_t mce_banks[KVM_MAX_MCE_BANKS * 4]; /* CTL, STATUS, ADDR, MISC of each */
