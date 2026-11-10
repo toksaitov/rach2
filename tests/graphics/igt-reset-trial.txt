@@ -1,0 +1,13 @@
+# igt-reset-trial.txt: the IGT subtests of the hang and parser trial on the
+# Lenovo's Haswell (78-6c), which runners/igt.sh runs with -l, on Rach2's
+# i915 and on Debian's Linux alike, as root.
+#
+# A line is `igt@TEST`, every subtest of the test program TEST, or
+# `igt@TEST@PATTERN`, its subtests that the shell pattern PATTERN matches in
+# the IGT stage's subtest-list.txt. gen7_exec_parse gives the command parser
+# batches it must pass, refuse or change; it hangs nothing and runs first.
+# gem_reset_stats hangs each engine in turn with a batch that never ends and
+# reads what GET_RESET_STATS counts for the guilty context, for a bystander,
+# for a banned one and for a child that has given up root.
+igt@gen7_exec_parse
+igt@gem_reset_stats
