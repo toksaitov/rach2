@@ -420,9 +420,10 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
         }
         vq->indirect_free &= ~(1u << t);
         tbl = vq->indirect + t * VIRTQ_INDIRECT_LEN;
-        for (k = 0, d = 0; k < total; k = j, d++) {
+        for (k = 0, d = 0; k < total; k = j) {
             j = virtqueue_run(sg, k, out, total, &len);
             virtqueue_fill(&tbl[d], &sg[k], k >= out, len, j < total, (uint16_t)(d + 1u));
+            d++;
         }
         vq->free_head = vq->next[head];
         vq->desc[head].addr =
@@ -521,11 +522,11 @@ int virtqueue_reap(struct virtqueue *vq)
             continue;
         }
         token = vq->token[id];
-        over = len > vq->inlen[id] ? vq->inlen[id] : len;
+        over = vq->inlen[id];
         virtqueue_release(vq, (uint16_t)id);
         vq->completed++;
         spin_unlock_irqrestore(&vq->lock, flags);
-        if (over != len) {
+        if (len > over) {
             klog(KLOG_ERR, "virtio", "queue: %s: %d: the device wrote %u bytes into head %d of %u",
                  vq->dev->name, vq->index, (unsigned)len, (int)id, (unsigned)over);
             len = over;

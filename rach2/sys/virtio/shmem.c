@@ -166,12 +166,12 @@ static int vshm_snap(struct vshm *vs)
  * the next epoch, never 0, in `state`, RESET or, at a detach, GONE. */
 static void vshm_epoch(struct vshm *vs, uint32_t state)
 {
-    uint32_t epoch = vs->me.epoch + 1u, peer = vs->me.peer;
+    uint32_t epoch = vs->me.epoch == 0xFFFFFFFFu ? 1u : vs->me.epoch + 1u, peer = vs->me.peer;
 
     k_memset((void *)(uintptr_t)(vs->base + vs->l.ring_off), 0, (size_t)vs->l.ring_len);
     k_memset(&vs->me, 0, sizeof(vs->me));
     k_memset(&vs->dev, 0, sizeof(vs->dev));
-    vs->me.epoch = epoch ? epoch : 1u;
+    vs->me.epoch = epoch;
     vs->me.state = state;
     vs->me.peer = peer;
     vs->doorbells = 0;
