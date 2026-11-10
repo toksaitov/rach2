@@ -1,0 +1,9 @@
+{
+	"name": "rach2-replay",
+	"version": "0.27.0",
+	"label": "Rach2 replay timing",
+	"url": "https://github.com/toksaitov/rach2",
+	"description": "Ends a visual replay at its last turn, for a run that times its frames.",
+	"dependencies": ["0ad=0.27.0"],
+	"ignoreInCompatibilityChecks": true
+}
