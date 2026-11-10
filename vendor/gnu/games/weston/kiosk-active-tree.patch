@@ -1,0 +1,36 @@
+Description: Forget an output's active surface tree when its root is destroyed
+ kiosk_shell_surface_destroy() frees a root surface whose surface_tree_list
+ an output may still name as its active tree, since desktop_surface_removed()
+ resets that tree only when the surface had the keyboard focus. The next root
+ mapped on the output then walks the freed list head in
+ kiosk_shell_output_set_active_surface_tree() and calls
+ weston_view_move_to_layer() on whatever it finds there. Wine through
+ Xwayland meets this when a program's window maps after another's went away.
+Author: Rach2
+Forwarded: no
+---
+--- a/kiosk-shell/kiosk-shell.c
++++ b/kiosk-shell/kiosk-shell.c
+@@ -456,9 +456,22 @@
+ static void
+ kiosk_shell_surface_destroy(struct kiosk_shell_surface *shsurf)
+ {
++	struct kiosk_shell_output *shoutput;
++
+ 	wl_signal_emit(&shsurf->destroy_signal, shsurf);
+ 	wl_list_remove(&shsurf->surface_tree_link);
+ 
++	/* An output whose active tree is rooted here would keep a pointer to
++	 * the list head inside the freed surface, and the next new root would
++	 * walk freed memory in kiosk_shell_output_set_active_surface_tree().
++	 * desktop_surface_removed() resets the tree only when the surface had
++	 * the focus; the parent destroy signal has already moved any children
++	 * to trees of their own. */
++	wl_list_for_each(shoutput, &shsurf->shell->output_list, link) {
++		if (shoutput->active_surface_tree == &shsurf->surface_tree_list)
++			shoutput->active_surface_tree = NULL;
++	}
++
+ 	weston_desktop_surface_set_user_data(shsurf->desktop_surface, NULL);
+ 	shsurf->desktop_surface = NULL;
+ 
