@@ -96,7 +96,8 @@ def show_logs(out):
     for log in sorted(out.glob("*.log")):
         if log.name.endswith(".proton.log"):
             continue
-        for line in log.read_text(errors="replace").splitlines()[-40:]:
+        lines = 120 if ".slr-" in log.name else 40
+        for line in log.read_text(errors="replace").splitlines()[-lines:]:
             say("%s: %s" % (log.name, line))
 
 
@@ -199,6 +200,8 @@ class Runner:
             return proc
         status = finish(proc)
         self.server_wait()
+        for slr in sorted((self.work / "slr").glob("slr-*.log")):
+            shutil.move(str(slr), str(self.out / ("%s.%s" % (name, slr.name))))
         log = self.work / "logs" / ("steam-%s.log" % GAME_ID)
         if log.exists():
             shutil.copy(log, self.out / (name + ".proton.log"))
@@ -362,8 +365,7 @@ class Runner:
                               "Downloading" in first, cache=downloads)
         self.server_wait()
         refused = []
-        for log in sorted((self.work / "slr").glob("slr-*.log")):
-            shutil.copy(log, self.out / log.name)
+        for log in sorted(self.out.glob("*.slr-*.log")):
             for line in log.read_text(errors="replace").splitlines():
                 if REFUSED.search(line):
                     refused.append(refusal(line))
