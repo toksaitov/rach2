@@ -1,0 +1,41 @@
+.Dd November 10, 2026
+.Dt WFLINFO 1
+.Os
+.Sh NAME
+.Nm wflinfo
+.Nd print the OpenGL or OpenGL ES context a platform makes
+.Sh SYNOPSIS
+.Nm
+.Fl p Ar platform
+.Fl a Ar api
+.Op Fl V Ar version
+.Op Fl Fl profile Ar profile
+.Op Fl v
+.Sh DESCRIPTION
+.Nm
+makes a context of
+.Ar api ,
+.Ql gl ,
+.Ql gles1 ,
+.Ql gles2
+or
+.Ql gles3 ,
+through Waffle on
+.Ar platform ,
+such as
+.Ql gbm
+or
+.Ql surfaceless_egl ,
+and prints its vendor, renderer and version strings, and with
+.Fl v
+its extensions.
+.Pp
+.Dl wflinfo -p gbm -a gl
+.Pp
+Piglit runs it to learn the versions and extensions a driver offers, and
+skips a test whose requirements it cannot read.
+The desktop layer supplies it from Debian's
+.Sy waffle-utils .
+.Sh SEE ALSO
+.Xr eglinfo 1 ,
+.Xr piglit 1

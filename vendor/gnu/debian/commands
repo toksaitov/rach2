@@ -164,6 +164,7 @@ weston-tablet weston /usr/bin/weston-tablet
 weston-terminal weston /usr/bin/weston-terminal
 weston-touch-calibrator weston /usr/bin/weston-touch-calibrator
 weston-transformed weston /usr/bin/weston-transformed
+wflinfo waffle-utils /usr/bin/wflinfo
 xdg-desktop-icon xdg-utils /usr/bin/xdg-desktop-icon
 xdg-desktop-menu xdg-utils /usr/bin/xdg-desktop-menu
 xdg-email xdg-utils /usr/bin/xdg-email
