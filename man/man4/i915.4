@@ -832,8 +832,10 @@ rectangle covers, as on Linux; a commit fails with
 when the framebuffer is linear and its stride is not a multiple of 4096
 bytes, or when the view's own stride, the source rectangle's width in
 whole tiles, still passes the plane's.
-Each framebuffer shown, or its view, is bound in the aperture at a
-multiple of 256 KiB.
+Each framebuffer shown, or its view, is bound in the GTT at a multiple
+of 256 KiB; a whole framebuffer goes inside the aperture when room
+there needs no wait and above it otherwise, as Linux binds it on a
+chip without a GMCH.
 .Pp
 Vblanks are counted from the pipe's frame counter.
 A page flip's event comes at the vblank that shows the new framebuffer.
