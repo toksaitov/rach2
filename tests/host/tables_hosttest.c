@@ -23,16 +23,36 @@
  *
  * gdt.c, tss.c and idt.c are included whole, the assembly they call is
  * stubbed, and each stub the IDT names is a function of its own here, so
- * that a gate's handler address says which stub it is. An address is the
- * kernel's 32-bit `uintptr_t` of the host's, cut as the tables cut it.
+ * that a gate's handler address says which stub it is, but the message
+ * vectors', 48 to 239, which are one run of 16-byte stubs as in
+ * isr_handler.s; their rows check that each gate names its own. An address
+ * is the kernel's 32-bit `uintptr_t` of the host's, cut as the tables cut
+ * it.
  * Returns 0 when every row passes, 1 otherwise.
  */
 
 #include "arch/i686/gdt.c"
 #include "arch/i686/tss.c"
+
+/* The run of message stubs, which isr_handler.s lays out 16 bytes apart:
+ * here one object, so that its end is where 192 stubs end. vector.h's
+ * declarations are read under other names first. */
+#define isr_msi_stubs     msi_stubs_declared
+#define isr_msi_stubs_end msi_stubs_end_declared
+#include "arch/x86/vector.h"
+#undef isr_msi_stubs
+#undef isr_msi_stubs_end
+static struct {
+    char stubs[(ISR_MSI_LAST - ISR_MSI_FIRST + 1) * ISR_MSI_STUB_BYTES];
+    char end[ISR_MSI_STUB_BYTES];
+} msi_run;
+#define isr_msi_stubs     (msi_run.stubs)
+#define isr_msi_stubs_end (msi_run.end)
+
 #include "arch/i686/idt.c"
 
 extern int printf(const char *format, ...);
+extern void exit(int status);
 
 static int fails;
 
@@ -68,6 +88,13 @@ void _load_idt(idt_ptr_t *idt)
 /** Nothing: the host has no interrupt controller. */
 void init_pic(void)
 {}
+
+/** A panic of `init_idt` fails the test at once. */
+void k_panic(const char *str)
+{
+    printf("tables-hosttest: fail: panic: %s\n", str);
+    exit(1);
+}
 
 /* Each stub is a function with a body that differs from every other's, so
  * that no two share an address. */
@@ -128,22 +155,6 @@ STUB(irq12, 44)
 STUB(irq13, 45)
 STUB(irq14, 46)
 STUB(irq15, 47)
-STUB(msi0, 48)
-STUB(msi1, 49)
-STUB(msi2, 50)
-STUB(msi3, 51)
-STUB(msi4, 52)
-STUB(msi5, 53)
-STUB(msi6, 54)
-STUB(msi7, 55)
-STUB(msi8, 56)
-STUB(msi9, 57)
-STUB(msi10, 58)
-STUB(msi11, 59)
-STUB(msi12, 60)
-STUB(msi13, 61)
-STUB(msi14, 62)
-STUB(msi15, 63)
 STUB(spurious_isr, 255)
 STUB(ipi_isr, 240)
 
@@ -185,6 +196,30 @@ static uint32_t gdt_limit(int index)
 {
     return (uint32_t)gdt_descriptors[0][index].limit_low |
            ((uint32_t)(gdt_descriptors[0][index].flags_and_limit_high & 0x0Fu) << 16);
+}
+
+/** The gates of the message vectors, the system call's and the local
+ * vectors', in the IDT `init_idt` built. */
+static void msi_gate_rows(void)
+{
+    int v, ok;
+
+    for (v = ISR_MSI_FIRST, ok = 1; v <= ISR_MSI_LAST; v++) {
+        if (v == ISR_SYSCALL_VECTOR) {
+            continue;
+        }
+        if (idt_descriptors[v].flags != 0x8E || idt_descriptors[v].segment_selector != 0x08 ||
+            gate_offset(v) != addr_of(msi_run.stubs + (v - ISR_MSI_FIRST) * ISR_MSI_STUB_BYTES)) {
+            ok = 0;
+        }
+    }
+    check(ok, "each message vector, 48 to 239, has a DPL 0 gate to its stub, 16 bytes on");
+    check(idt_descriptors[ISR_SYSCALL_VECTOR].flags == 0xEE &&
+              gate_offset(ISR_SYSCALL_VECTOR) == fn_addr(isr128),
+          "and 0x80 keeps the system call's DPL 3 gate");
+    check(idt_descriptors[0xF0].flags == 0x8E && gate_offset(0xF0) == fn_addr(ipi_isr) &&
+              gate_offset(0xFF) == fn_addr(spurious_isr) && idt_descriptors[0xF1].flags == 0,
+          "the IPI's and the spurious vector's gates are their own, and 0xF1 has none");
 }
 
 /** Build the tables and run every row; 0 when each passes, 1 otherwise. */
@@ -244,6 +279,7 @@ int main(void)
         }
     }
     check(others_ok, "every other exception gate is an interrupt gate to its own stub");
+    msi_gate_rows();
 
     check(kernel_tss[0].esp0 == boot_stack_top && kernel_tss[0].ss0 == KERNEL_DATA_SELECTOR &&
               kernel_tss[0].iomap_base == sizeof(tss_t),

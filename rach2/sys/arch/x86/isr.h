@@ -69,34 +69,13 @@ extern void irq13(void);
 extern void irq14(void);
 extern void irq15(void);
 
-/* The sixteen message-signalled vectors, 48 through 63. */
-extern void msi0(void);
-extern void msi1(void);
-extern void msi2(void);
-extern void msi3(void);
-extern void msi4(void);
-extern void msi5(void);
-extern void msi6(void);
-extern void msi7(void);
-extern void msi8(void);
-extern void msi9(void);
-extern void msi10(void);
-extern void msi11(void);
-extern void msi12(void);
-extern void msi13(void);
-extern void msi14(void);
-extern void msi15(void);
-
 /* The local APIC's spurious vector, raised for an interrupt that went away,
  * and the interprocessor interrupt's vector. */
 extern void spurious_isr(void);
 extern void ipi_isr(void);
 
-/* The vectors a device may be given for its messages: the sixteen above
- * the 8259's, which are the ones the IDT has entries for; a seventeenth
- * device is refused. */
-#define ISR_MSI_FIRST 48
-#define ISR_MSI_LAST  63
+/* The vectors a device may be given for its messages, and their stubs. */
+#include "vector.h"
 
 /* The i686 system call gate, `int $0x80`, vector 128. */
 extern void isr128(void);

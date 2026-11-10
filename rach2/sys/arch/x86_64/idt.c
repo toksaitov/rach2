@@ -11,6 +11,7 @@
 #include "../x86/pic.h"
 
 #include "../../lib/kstring.h"
+#include "../../panic.h"
 
 /*
  * A gate is 16 bytes in long mode (Intel SDM Vol. 3A, 6.14.1): the handler's
@@ -55,13 +56,11 @@ void _irq_router(isr_params_t *params);
 /* Called by the common entry and the debug entry (isr_handler.s). */
 void x86_64_route(isr_params_t *params);
 
-/** Point the gate of `vector` at `handler` through the kernel's code
- * selector, with the type and DPL of `flags` and the interrupt stack `ist`,
- * 0 for none. */
-static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t ist)
+/** Point the gate of `vector` at the code at `a` through the kernel's
+ * code selector, with the type and DPL of `flags` and the interrupt stack
+ * `ist`, 0 for none. */
+static void set_gate_at(int vector, uintptr_t a, uint8_t flags, uint8_t ist)
 {
-    uintptr_t a = (uintptr_t)handler;
-
     idt[vector].offset_low = (uint16_t)a;
     idt[vector].selector = GDT_KERNEL_CODE;
     idt[vector].ist = ist;
@@ -71,10 +70,16 @@ static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t i
     idt[vector].reserved = 0;
 }
 
+/** Point the gate of `vector` at `handler`, as `set_gate_at` does. */
+static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t ist)
+{
+    set_gate_at(vector, (uintptr_t)handler, flags, ist);
+}
+
 /**
  * Every vector of i686's IDT has an interrupt gate here, the double
  * fault's included: the 32 exceptions, the sixteen 8259 lines on 32 to 47,
- * the sixteen message vectors on 48 to 63, `int $0x80` at 0x80, the
+ * the message vectors on 48 to 239, `int $0x80` at 0x80, the
  * interprocessor interrupt at IPI_VECTOR and the APIC's spurious vector 255.
  * The breakpoint and overflow gates are DPL 3, so that `int3` reaches its
  * handler from user mode; `into` does not exist in 64-bit mode. So is the
@@ -94,6 +99,8 @@ static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t i
  */
 void init_idt(void)
 {
+    int v;
+
     k_memset(idt, 0, sizeof(idt));
 
     set_gate(0, isr0, GATE_KERNEL, 0);
@@ -148,22 +155,16 @@ void init_idt(void)
     set_gate(46, irq14, GATE_KERNEL, 0);
     set_gate(47, irq15, GATE_KERNEL, 0);
 
-    set_gate(48, msi0, GATE_KERNEL, 0);
-    set_gate(49, msi1, GATE_KERNEL, 0);
-    set_gate(50, msi2, GATE_KERNEL, 0);
-    set_gate(51, msi3, GATE_KERNEL, 0);
-    set_gate(52, msi4, GATE_KERNEL, 0);
-    set_gate(53, msi5, GATE_KERNEL, 0);
-    set_gate(54, msi6, GATE_KERNEL, 0);
-    set_gate(55, msi7, GATE_KERNEL, 0);
-    set_gate(56, msi8, GATE_KERNEL, 0);
-    set_gate(57, msi9, GATE_KERNEL, 0);
-    set_gate(58, msi10, GATE_KERNEL, 0);
-    set_gate(59, msi11, GATE_KERNEL, 0);
-    set_gate(60, msi12, GATE_KERNEL, 0);
-    set_gate(61, msi13, GATE_KERNEL, 0);
-    set_gate(62, msi14, GATE_KERNEL, 0);
-    set_gate(63, msi15, GATE_KERNEL, 0);
+    if (isr_msi_stubs_end - isr_msi_stubs !=
+        (ISR_MSI_LAST - ISR_MSI_FIRST + 1) * ISR_MSI_STUB_BYTES) {
+        k_panic("idt: a message vector's stub is not 16 bytes from the last");
+    }
+    for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
+        if (v != ISR_SYSCALL_VECTOR) {
+            set_gate_at(v, (uintptr_t)(isr_msi_stubs + (v - ISR_MSI_FIRST) * ISR_MSI_STUB_BYTES),
+                        GATE_KERNEL, 0);
+        }
+    }
 
 #if RACH2_IA32
     if (ia32_enabled()) {
@@ -193,7 +194,7 @@ void idt_load(void)
  * Hand the frame of `isr_common_handler`, or of a debug exception from user
  * mode, to its router: an exception, a vector below 32, and the i386 system
  * call, 0x80, to `_isr_router`, and an interrupt, a line on 32 to 47 or a
- * message on 48 to 63, to `_irq_router`. On i686 the two kinds have entries
+ * message on 48 to 239, to `_irq_router`. On i686 the two kinds have entries
  * of their own; here they share one, and the vector tells them apart.
  */
 void x86_64_route(isr_params_t *params)

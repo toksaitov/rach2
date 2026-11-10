@@ -878,104 +878,786 @@ irq15:
     pushq $47
     jmp isr_common_handler
 
-# Message-signalled interrupt stubs, vectors 48 through 63, which the
-# router ends at the local APIC after the handler chain.
+# Message-signalled interrupt stubs, vectors 48 through 239, which the
+# router ends at the local APIC after the handler chain. Each is 16 bytes
+# from isr_msi_stubs, so that idt.c finds vector V's at isr_msi_stubs +
+# (V - 48) * 16; a stub is at most 12 bytes, and idt.c checks that the run
+# ends where 192 of them would. Vector 128's is never installed, since
+# 0x80 is the i386 system call's gate.
 
-.globl msi0
-msi0:
+    .align 16
+.globl isr_msi_stubs
+isr_msi_stubs:
     pushq $0
     pushq $48
     jmp isr_common_handler
-
-.globl msi1
-msi1:
+    .align 16
     pushq $0
     pushq $49
     jmp isr_common_handler
-
-.globl msi2
-msi2:
+    .align 16
     pushq $0
     pushq $50
     jmp isr_common_handler
-
-.globl msi3
-msi3:
+    .align 16
     pushq $0
     pushq $51
     jmp isr_common_handler
-
-.globl msi4
-msi4:
+    .align 16
     pushq $0
     pushq $52
     jmp isr_common_handler
-
-.globl msi5
-msi5:
+    .align 16
     pushq $0
     pushq $53
     jmp isr_common_handler
-
-.globl msi6
-msi6:
+    .align 16
     pushq $0
     pushq $54
     jmp isr_common_handler
-
-.globl msi7
-msi7:
+    .align 16
     pushq $0
     pushq $55
     jmp isr_common_handler
-
-.globl msi8
-msi8:
+    .align 16
     pushq $0
     pushq $56
     jmp isr_common_handler
-
-.globl msi9
-msi9:
+    .align 16
     pushq $0
     pushq $57
     jmp isr_common_handler
-
-.globl msi10
-msi10:
+    .align 16
     pushq $0
     pushq $58
     jmp isr_common_handler
-
-.globl msi11
-msi11:
+    .align 16
     pushq $0
     pushq $59
     jmp isr_common_handler
-
-.globl msi12
-msi12:
+    .align 16
     pushq $0
     pushq $60
     jmp isr_common_handler
-
-.globl msi13
-msi13:
+    .align 16
     pushq $0
     pushq $61
     jmp isr_common_handler
-
-.globl msi14
-msi14:
+    .align 16
     pushq $0
     pushq $62
     jmp isr_common_handler
-
-.globl msi15
-msi15:
+    .align 16
     pushq $0
     pushq $63
     jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $64
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $65
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $66
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $67
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $68
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $69
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $70
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $71
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $72
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $73
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $74
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $75
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $76
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $77
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $78
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $79
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $80
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $81
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $82
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $83
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $84
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $85
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $86
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $87
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $88
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $89
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $90
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $91
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $92
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $93
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $94
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $95
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $96
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $97
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $98
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $99
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $100
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $101
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $102
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $103
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $104
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $105
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $106
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $107
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $108
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $109
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $110
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $111
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $112
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $113
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $114
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $115
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $116
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $117
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $118
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $119
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $120
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $121
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $122
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $123
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $124
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $125
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $126
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $127
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $128
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $129
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $130
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $131
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $132
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $133
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $134
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $135
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $136
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $137
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $138
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $139
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $140
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $141
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $142
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $143
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $144
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $145
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $146
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $147
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $148
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $149
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $150
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $151
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $152
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $153
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $154
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $155
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $156
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $157
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $158
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $159
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $160
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $161
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $162
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $163
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $164
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $165
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $166
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $167
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $168
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $169
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $170
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $171
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $172
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $173
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $174
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $175
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $176
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $177
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $178
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $179
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $180
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $181
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $182
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $183
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $184
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $185
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $186
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $187
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $188
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $189
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $190
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $191
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $192
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $193
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $194
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $195
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $196
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $197
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $198
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $199
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $200
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $201
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $202
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $203
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $204
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $205
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $206
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $207
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $208
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $209
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $210
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $211
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $212
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $213
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $214
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $215
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $216
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $217
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $218
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $219
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $220
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $221
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $222
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $223
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $224
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $225
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $226
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $227
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $228
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $229
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $230
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $231
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $232
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $233
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $234
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $235
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $236
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $237
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $238
+    jmp isr_common_handler
+    .align 16
+    pushq $0
+    pushq $239
+    jmp isr_common_handler
+    .align 16
+.globl isr_msi_stubs_end
+isr_msi_stubs_end:
 
 # The local vectors, which the processor's own APIC raises and which run
 # without the big lock (isr_local_router, isr.c): the interprocessor

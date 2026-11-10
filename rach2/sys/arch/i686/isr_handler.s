@@ -424,121 +424,979 @@ irq15:
     jmp irq_common_handler
 
 
-# Message-signalled interrupt stubs, vectors 48 through 63. A message has no
-# line to acknowledge at the 8259; the router sends the local APIC its
-# end-of-interrupt instead, after the handler chain.
+# Message-signalled interrupt stubs, vectors 48 through 239. A message has
+# no line to acknowledge at the 8259; the router sends the local APIC its
+# end-of-interrupt instead, after the handler chain. Each stub is 16 bytes
+# from isr_msi_stubs, so that idt.c finds vector V's at isr_msi_stubs +
+# (V - 48) * 16; a stub is at most 13 bytes, and idt.c checks that the run
+# ends where 192 of them would. Vector 128's is never installed, since
+# 0x80 is the system call's gate.
 
-.globl msi0
-msi0:
+    .align 16
+.globl isr_msi_stubs
+isr_msi_stubs:
     cli
     pushl $0
     pushl $48
     jmp irq_common_handler
-
-.globl msi1
-msi1:
+    .align 16
     cli
     pushl $0
     pushl $49
     jmp irq_common_handler
-
-.globl msi2
-msi2:
+    .align 16
     cli
     pushl $0
     pushl $50
     jmp irq_common_handler
-
-.globl msi3
-msi3:
+    .align 16
     cli
     pushl $0
     pushl $51
     jmp irq_common_handler
-
-.globl msi4
-msi4:
+    .align 16
     cli
     pushl $0
     pushl $52
     jmp irq_common_handler
-
-.globl msi5
-msi5:
+    .align 16
     cli
     pushl $0
     pushl $53
     jmp irq_common_handler
-
-.globl msi6
-msi6:
+    .align 16
     cli
     pushl $0
     pushl $54
     jmp irq_common_handler
-
-.globl msi7
-msi7:
+    .align 16
     cli
     pushl $0
     pushl $55
     jmp irq_common_handler
-
-.globl msi8
-msi8:
+    .align 16
     cli
     pushl $0
     pushl $56
     jmp irq_common_handler
-
-.globl msi9
-msi9:
+    .align 16
     cli
     pushl $0
     pushl $57
     jmp irq_common_handler
-
-.globl msi10
-msi10:
+    .align 16
     cli
     pushl $0
     pushl $58
     jmp irq_common_handler
-
-.globl msi11
-msi11:
+    .align 16
     cli
     pushl $0
     pushl $59
     jmp irq_common_handler
-
-.globl msi12
-msi12:
+    .align 16
     cli
     pushl $0
     pushl $60
     jmp irq_common_handler
-
-.globl msi13
-msi13:
+    .align 16
     cli
     pushl $0
     pushl $61
     jmp irq_common_handler
-
-.globl msi14
-msi14:
+    .align 16
     cli
     pushl $0
     pushl $62
     jmp irq_common_handler
-
-.globl msi15
-msi15:
+    .align 16
     cli
     pushl $0
     pushl $63
     jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $64
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $65
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $66
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $67
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $68
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $69
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $70
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $71
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $72
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $73
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $74
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $75
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $76
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $77
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $78
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $79
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $80
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $81
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $82
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $83
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $84
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $85
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $86
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $87
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $88
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $89
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $90
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $91
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $92
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $93
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $94
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $95
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $96
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $97
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $98
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $99
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $100
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $101
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $102
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $103
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $104
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $105
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $106
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $107
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $108
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $109
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $110
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $111
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $112
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $113
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $114
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $115
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $116
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $117
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $118
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $119
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $120
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $121
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $122
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $123
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $124
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $125
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $126
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $127
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $128
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $129
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $130
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $131
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $132
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $133
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $134
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $135
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $136
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $137
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $138
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $139
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $140
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $141
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $142
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $143
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $144
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $145
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $146
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $147
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $148
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $149
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $150
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $151
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $152
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $153
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $154
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $155
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $156
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $157
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $158
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $159
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $160
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $161
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $162
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $163
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $164
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $165
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $166
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $167
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $168
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $169
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $170
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $171
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $172
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $173
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $174
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $175
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $176
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $177
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $178
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $179
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $180
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $181
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $182
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $183
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $184
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $185
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $186
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $187
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $188
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $189
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $190
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $191
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $192
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $193
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $194
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $195
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $196
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $197
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $198
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $199
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $200
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $201
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $202
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $203
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $204
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $205
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $206
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $207
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $208
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $209
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $210
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $211
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $212
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $213
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $214
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $215
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $216
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $217
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $218
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $219
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $220
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $221
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $222
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $223
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $224
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $225
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $226
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $227
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $228
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $229
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $230
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $231
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $232
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $233
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $234
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $235
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $236
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $237
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $238
+    jmp irq_common_handler
+    .align 16
+    cli
+    pushl $0
+    pushl $239
+    jmp irq_common_handler
+    .align 16
+.globl isr_msi_stubs_end
+isr_msi_stubs_end:
 
 
 # The local vectors, which the processor's own APIC raises and which run
