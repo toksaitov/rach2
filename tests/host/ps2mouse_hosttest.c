@@ -31,8 +31,9 @@
  * protocol found and the event device registered for it, the vector of the
  * handler, and that interrupts are off for every port access and on again
  * at every return. The handler's rows read the packets it reports, of three
- * bytes and of each wheel's four. The probe for a Synaptics touchpad, which
- * synaptics_hosttest.c tests against a touchpad, finds none here.
+ * bytes and of each wheel's four. The probes for a Synaptics and an Elantech
+ * touchpad, which synaptics_hosttest.c and elantech_hosttest.c test against
+ * a touchpad, find none here.
  */
 
 #include "arch/x86/i8042.c"
@@ -353,6 +354,18 @@ int synaptics_init(void)
 
 /** No touchpad's bytes come, since `synaptics_init` found none. */
 void synaptics_byte(uint8_t data)
+{
+    (void)data;
+}
+
+/** No Elantech touchpad answers. */
+int elantech_init(void)
+{
+    return 0;
+}
+
+/** No Elantech touchpad's bytes come, since `elantech_init` found none. */
+void elantech_byte(uint8_t data)
 {
     (void)data;
 }

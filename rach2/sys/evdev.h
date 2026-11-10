@@ -82,6 +82,7 @@ struct evdev;
 #define ABS_TOOL_WIDTH     0x1c
 #define ABS_MT_SLOT        0x2f
 #define ABS_MT_FIRST       0x30
+#define ABS_MT_TOUCH_MAJOR 0x30 /* the contact's length, in the axes' units */
 #define ABS_MT_POSITION_X  0x35
 #define ABS_MT_POSITION_Y  0x36
 #define ABS_MT_TOOL_TYPE   0x37
@@ -94,12 +95,13 @@ struct evdev;
 #define MT_TOOL_FINGER 0
 
 /* The properties of EVIOCGPROP. */
-#define INPUT_PROP_POINTER      0x00 /* moves a pointer on a screen */
-#define INPUT_PROP_DIRECT       0x01 /* touches the screen it points at */
-#define INPUT_PROP_BUTTONPAD    0x02 /* a touchpad whose pad is its button */
-#define INPUT_PROP_SEMI_MT      0x03 /* its slots bound the contacts' box */
-#define INPUT_PROP_TOPBUTTONPAD 0x04 /* its buttons are a strip at the top */
-#define INPUT_PROP_CNT          0x20
+#define INPUT_PROP_POINTER        0x00 /* moves a pointer on a screen */
+#define INPUT_PROP_DIRECT         0x01 /* touches the screen it points at */
+#define INPUT_PROP_BUTTONPAD      0x02 /* a touchpad whose pad is its button */
+#define INPUT_PROP_SEMI_MT        0x03 /* its slots bound the contacts' box */
+#define INPUT_PROP_TOPBUTTONPAD   0x04 /* its buttons are a strip at the top */
+#define INPUT_PROP_POINTING_STICK 0x05 /* a stick, which reports force */
+#define INPUT_PROP_CNT            0x20
 
 /* A mouse's buttons, EV_KEY codes. */
 #define BTN_0       0x100

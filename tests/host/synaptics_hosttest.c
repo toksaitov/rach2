@@ -310,6 +310,19 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     registered_handler = handler;
 }
 
+/** No Elantech touchpad answers when no Synaptics pad does: its probe is
+ * elantech_hosttest.c's. */
+int elantech_init(void)
+{
+    return 0;
+}
+
+/** No Elantech touchpad's bytes come, since `elantech_init` found none. */
+void elantech_byte(uint8_t data)
+{
+    (void)data;
+}
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)subsystem;

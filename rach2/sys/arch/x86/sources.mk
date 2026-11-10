@@ -30,6 +30,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/i8042.c \
     sys/arch/x86/ps2mouse.c \
     sys/arch/x86/synaptics.c \
+    sys/arch/x86/elantech.c \
     sys/arch/x86/ps2kbd.c \
     sys/arch/x86/platform.c \
     sys/arch/x86/speaker.c \
