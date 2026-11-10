@@ -5,16 +5,18 @@
  * execute-only key, and what cpuid and /proc show.
  *
  * What it expects follows the kernel, whose architecture ETUDE_KERNEL in the
- * environment names, or the program's own where it is unset, and the
- * processor. On the x86-64 kernel with OSPKE in cpuid the keys are on, as on
- * Rach2's and Linux's x86-64 kernels under QEMU's max processor; on the
- * x86-64 kernel without it they are off, and the calls answer as on a
- * processor without keys; on the i686 kernel the three calls are ENOSYS and
- * no region has a key. An i386 program on the x86-64 kernel gets the 64-bit
- * kernel's answers, as on Linux. Each part is one assertion of etude's
- * report (probe_report.h), for the case ETUDE_CASE names, and runs in a
- * child of fork, so that the keys a part allocates and the PKRU it sets do
- * not reach the next. With the keys on:
+ * environment names, or the program's own where it is unset, and the processor.
+ * The processor has keys where cpuid reports PKU and XSAVE and leaf 0xD lists
+ * PKRU. On the x86-64 kernel on such a processor the keys must be on, with
+ * OSPKE in cpuid, as on Rach2's and Linux's x86-64 kernels under QEMU's max
+ * processor; on the x86-64 kernel on any other they are off, and the calls
+ * answer as on a processor without keys; on the i686 kernel the three calls are
+ * ENOSYS and no region has a key. The mode comes from the processor, not from
+ * OSPKE, so that a kernel which leaves the keys off where they exist fails. An
+ * i386 program on the x86-64 kernel gets the 64-bit kernel's answers, as on
+ * Linux. Each part is one assertion of etude's report (probe_report.h), for the
+ * case ETUDE_CASE names, and runs in a child of fork, so that the keys a part
+ * allocates and the PKRU it sets do not reach the next. With the keys on:
  *
  * `cpu`: cpuid has OSPKE, /proc/cpuinfo `pku` and `ospke`, XCR0 PKRU, the
  * XSAVE size for XCR0 reaches past PKRU, and PKRU starts as 0x55555554, key
@@ -34,13 +36,13 @@
  * keep the key, and the child may free it. With the keys off pkey_mprotect
  * is mprotect with key -1 and EINVAL with key 0, and smaps has no key.
  *
- * `fault`: a read of a page under a key PKRU denies, present or not, raises
- * SIGSEGV with SEGV_PKUERR, si_pkey the key and si_addr the address; the
- * handler runs with PKRU 0x55555554 and finds the interrupted PKRU in the
- * frame's XSAVE image, PKRU marked in use, and the access runs again on the
- * PKRU the handler writes there; a key denied writes alone faults a write and
- * not a read; a write to a read-only page under a denied key is SEGV_PKUERR
- * and under an open key SEGV_ACCERR.
+ * `fault`: a read of a present page and a write of one not yet present, each
+ * under a key PKRU denies, raise SIGSEGV with SEGV_PKUERR, si_pkey the key and
+ * si_addr the address; the handler runs with PKRU 0x55555554 and finds the
+ * interrupted PKRU in the frame's XSAVE image, PKRU marked in use, and the
+ * access runs again on the PKRU the handler writes there; a key denied writes
+ * alone faults a write and not a read; a write to a read-only page under a
+ * denied key is SEGV_PKUERR and under an open key SEGV_ACCERR.
  *
  * `signal`: a handler of SIGUSR1 runs with PKRU 0x55555554, the frame holds
  * the interrupted PKRU, and sigreturn gives that back, or what the handler
@@ -162,6 +164,28 @@ static unsigned xcr0_low(void)
 
     __asm__ __volatile__(".byte 0x0f, 0x01, 0xd0" : "=a"(lo), "=d"(hi) : "c"(0u));
     return lo;
+}
+
+/** Whether the processor has protection keys the kernel can turn on:
+ * cpuid's PKU and XSAVE, and PKRU among leaf 0xD's components. */
+static int processor_keys(void)
+{
+    unsigned r[4];
+
+    cpuid(0, 0, r);
+    if (r[0] < 0xD) {
+        return 0;
+    }
+    cpuid(1, 0, r);
+    if (!((r[2] >> 26) & 1u)) {
+        return 0;
+    }
+    cpuid(7, 0, r);
+    if (!((r[2] >> 3) & 1u)) {
+        return 0;
+    }
+    cpuid(0xD, 0, r);
+    return (r[0] & XFEATURE_PKRU) != 0;
 }
 
 /** PKRU: `rdpkru`. */
@@ -910,8 +934,7 @@ int main(int argc, char **argv)
 #else
     kernel_x86_64 = kernel != NULL && strcmp(kernel, "x86_64") == 0;
 #endif
-    cpuid(7, 0, r);
-    mode = !kernel_x86_64 ? NOCALLS : ((r[2] >> 4) & 1u) ? KEYS : NOKEYS;
+    mode = !kernel_x86_64 ? NOCALLS : processor_keys() ? KEYS : NOKEYS;
     if (mode == KEYS) {
         cpuid(0xD, 9, r);
         pkru_off = r[1];
