@@ -359,8 +359,18 @@ static int fbdrm_get_modes(struct drm_connector *connector)
 
 static const struct drm_plane_funcs fbdrm_plane_funcs = {fbdrm_plane_check, fbdrm_plane_update,
                                                          fbdrm_plane_disable};
-static const struct drm_crtc_funcs fbdrm_crtc_funcs = {
-    fbdrm_crtc_check, NULL, NULL, NULL, NULL, fbdrm_crtc_mode_valid, NULL, NULL, NULL, NULL, NULL};
+static const struct drm_crtc_funcs fbdrm_crtc_funcs = {fbdrm_crtc_check,
+                                                       NULL,
+                                                       NULL,
+                                                       NULL,
+                                                       NULL,
+                                                       fbdrm_crtc_mode_valid,
+                                                       NULL,
+                                                       NULL,
+                                                       NULL,
+                                                       NULL,
+                                                       NULL,
+                                                       NULL};
 static const struct drm_connector_funcs fbdrm_connector_funcs = {NULL, fbdrm_get_modes, NULL, NULL};
 static const uint64_t fbdrm_modifiers[] = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID};
 

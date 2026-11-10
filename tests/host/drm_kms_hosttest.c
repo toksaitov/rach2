@@ -148,6 +148,7 @@ static const struct drm_crtc_funcs crtc_funcs = {fake_crtc_check,
                                                  NULL,
                                                  NULL,
                                                  NULL,
+                                                 NULL,
                                                  NULL};
 static const struct drm_connector_funcs conn_funcs = {detect, get_modes, NULL, NULL};
 static const uint32_t formats0[] = {DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_RGB565};
