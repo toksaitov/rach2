@@ -1252,13 +1252,14 @@ static uint32_t ring_space(uint32_t head, uint32_t tail, uint32_t size)
 /**
  * Wait until `e`'s ring has I915_REQUEST_ROOM bytes free, as Linux's
  * wait_for_space: the oldest request whose end leaves the room once the
- * chip is past it is waited for, interruptibly, and the requests retired.
- * A request held back by its fences is waited for with them. 0 or -EINTR.
+ * chip is past it is waited for, interruptibly, and the requests retired,
+ * which moves the head to the end of each, as Linux's
+ * i915_request_retire_upto. A request held back by its fences is waited
+ * for with them. 0 or -EINTR.
  */
 static int32_t ring_wait_for_space(struct i915_engine *e)
 {
     struct i915_request *rq;
-    uint32_t postfix;
     int32_t err;
 
     /* The wait sleeps, and other callers may take the room meanwhile, so
@@ -1274,15 +1275,10 @@ static int32_t ring_wait_for_space(struct i915_engine *e)
             return 0;
         }
         (void)dma_fence_get(&rq->fence.base);
-        postfix = rq->postfix;
         err = i915_request_wait(rq, 1, -1);
         i915_request_put(rq);
         if (err != 0) {
             return err;
-        }
-        if (ring_space(postfix, e->tail, e->ring_size) >
-            ring_space(e->head, e->tail, e->ring_size)) {
-            e->head = postfix;
         }
     }
     return 0;
