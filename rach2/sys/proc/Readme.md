@@ -61,6 +61,7 @@ A file named without a directory is in `rach2/sys/proc/`; other paths are from t
 | `coredump.h`, `coredump.c` | Core files |
 | `suspend.h`, `suspend.c` | Suspend to idle |
 | `futex.h`, `futex.c` | [Futexes](futex.Readme.md) |
+| `membarrier.h`, `membarrier.c` | `membarrier`: the barriers on the processors that run a process's threads, and the serializing instruction at a switch to a thread registered for the sync-core barrier |
 | `ns.h`, `ns.c` | [Namespaces](ns.Readme.md) |
 | `pidfd.h`, `pidfd.c` | Descriptors that name a process, and `pidfd_open` and `pidfd_getfd` |
 | `ptrace.h`, `ptrace.c` | [ptrace](ptrace.Readme.md) |
@@ -85,7 +86,8 @@ The calls this document covers, each with the page that has its contract. [sysca
 | `capget`, `capset` | [capget(2)](../../../man/man2/capget.2) |
 | `prlimit64`, `getrlimit`, `setrlimit`, and `ugetrlimit` on i686 | [prlimit64(2)](../../../man/man2/prlimit64.2) |
 | `getrusage` | [getrusage(2)](../../../man/man2/getrusage.2) |
-| `sched_yield`, `sched_setscheduler`, `sched_getscheduler`, `sched_setparam`, `sched_getparam`, `sched_get_priority_max`, `sched_get_priority_min`, `sched_rr_get_interval`, `sched_setaffinity`, `sched_getaffinity`, `getcpu` | [sched_setscheduler(2)](../../../man/man2/sched_setscheduler.2) |
+| `sched_yield`, `sched_setscheduler`, `sched_getscheduler`, `sched_setparam`, `sched_getparam`, `sched_setattr`, `sched_getattr`, `sched_get_priority_max`, `sched_get_priority_min`, `sched_rr_get_interval`, `sched_setaffinity`, `sched_getaffinity`, `getcpu` | [sched_setscheduler(2)](../../../man/man2/sched_setscheduler.2) |
+| `membarrier` | [membarrier(2)](../../../man/man2/membarrier.2) |
 | `getpriority`, `setpriority` | [getpriority(2)](../../../man/man2/getpriority.2) |
 | `ioprio_set`, `ioprio_get` | [ioprio_set(2)](../../../man/man2/ioprio_set.2) |
 | `prctl`, `personality` | [prctl(2)](../../../man/man2/prctl.2) |
@@ -101,7 +103,7 @@ The rest of the kernel reaches processes through these headers:
 * `process.h`: `current_proc`, the running thread's record (`percpu.h`); `get_process`, a record by its id; `proc_privileged`, whether a thread has privilege over the whole system; `proc_in_syscall`; and the signal functions, `signal_post` and the rest, which [signals](signal.Readme.md) describes.
 * `sched.h`: `schedule`, `sched_make_ready`, which every wake goes through, `sched_preempt`, which an interrupt calls on its way out, `sched_service_point` for a long system call, and `idle_wait_irq_off` and `idle_wait_irq_on`, the only idle waits.
 * `wait_queue.h`: `wq_wait_event`, `wq_wait_event_nointr`, `wq_wait_event_idle`, `wq_wake`, `wq_wake_all`, `wq_wake_proc` for a waker that took a sleeper off its queues itself, and `wq_poll_add` and `wq_poll_remove` for `poll` and `epoll`.
-* `smp.h`: `bkl_enter` and `bkl_exit`, which the interrupt routers call (`rach2/sys/arch/x86/isr.c`); `smp_tlb_shootdown`, `smp_space_release` and `smp_kernel_mapping_changed`, which the page tables call; `smp_stop_others`, for a panic and a power off; and `smp_start`.
+* `smp.h`: `bkl_enter` and `bkl_exit`, which the interrupt routers call (`rach2/sys/arch/x86/isr.c`); `smp_tlb_shootdown`, `smp_space_release` and `smp_kernel_mapping_changed`, which the page tables call; `smp_barrier`, which `membarrier` calls; `smp_stop_others`, for a panic and a power off; and `smp_start`.
 * `seccomp.h`: `seccomp_permit`, which the system call dispatcher calls (`rach2/sys/syscall.c`).
 * `coredump.h`: `core_notes` and `core_write`, which `fs_core_file` in `rach2/sys/syscall_fs.c` writes through.
 * `suspend.h`: `suspend_to_idle`, which a write of `freeze` or `mem` to `/sys/power/state` calls, and `suspend_wake`, which the clock's alarm and the keyboard call.
@@ -198,7 +200,7 @@ An idle wait, a halt with interrupts on that expects to resume, goes through `id
 
 The tick charges the thread it interrupted with user time when the interrupted code was ring 3's and with system time otherwise, and a tick that found the processor in an idle wait to no one (`sched_account_tick`); a processor counts the global ticks it missed with its next. The same tick runs the process's `ITIMER_VIRTUAL` and `ITIMER_PROF` timers and the POSIX timers of processor time. Every five seconds and a tick, 5001 ticks, the boot processor folds the threads that are running or ready into the three load averages, as Linux's `calc_load` does (`sched_load_tick`). `times`, `getrusage`, `wait4`, `/proc/stat` and `/proc/PID/stat` report these counts.
 
-Each record keeps a nice value, from -20 to 19, and an I/O priority, which a fork passes on and an exec keeps; the scheduler reads neither. The scheduling calls keep `SCHED_OTHER`, `SCHED_BATCH` and `SCHED_IDLE` at priority 0, and `SCHED_FIFO` and `SCHED_RR` at priorities 1 to 99. A privileged caller may enter a real-time policy; an unprivileged caller may lower its existing real-time priority. Fork inherits the base priority, or resets a real-time child to `SCHED_OTHER` when `SCHED_RESET_ON_FORK` was set. PI donations are neither inherited nor included in `sched_getparam`.
+Each record keeps a nice value, from -20 to 19, the slice `sched_setattr` asked for (`sched_slice`, 0 for Linux's default), and an I/O priority, which a fork passes on and an exec keeps; the scheduler reads none of them. The scheduling calls keep `SCHED_OTHER`, `SCHED_BATCH` and `SCHED_IDLE` at priority 0, and `SCHED_FIFO` and `SCHED_RR` at priorities 1 to 99. `sched_setattr` and `sched_getattr` set and read every policy with its parameters, `SCHED_DEADLINE`'s runtime, deadline, period and flags among them (`dl_runtime` and the rest in the record), in Linux's order and with its errors (`sched_apply` in `rach2/sys/syscall_proc.c`). A caller without privilege is held to the target's `RLIMIT_NICE` and `RLIMIT_RTPRIO`, as Linux holds one without `CAP_SYS_NICE` (`sched_user_check`); both are 0 by default, which allows no lower nice value and no real-time policy, and such a caller may never set `SCHED_DEADLINE`. Deadline threads are admitted while their runtimes over their periods come to at most 95% of each processor started (`sched_dl_overflow`), and such a thread's affinity must have every processor. A `SCHED_DEADLINE` thread runs among the ordinary threads: the scheduler has no deadline class, and a real-time priority without Linux's throttling at the end of the runtime would let a thread that overran it starve the rest. Fork inherits the policy and its parameters; with `SCHED_RESET_ON_FORK` it gives a real-time or deadline child `SCHED_OTHER` at nice 0, and any child a nice value of 0 or more and the default slice, and a deadline thread without the flag may not fork. PI donations are neither inherited nor included in `sched_getparam`.
 
 ### Wait queues
 
@@ -219,6 +221,7 @@ A request is a word in the target's record and an interprocessor interrupt that 
 * A shootdown (`smp_tlb_shootdown`): after the entries of a range of user pages change, each other processor that translates through that page directory drops the range's translations, or every user translation, on one request, and the sender waits until each has cleared its word. `/proc/stat` counts the shootdowns that interrupted a processor as `tlb_shootdowns`, and the interrupts they sent as `tlb_shootdown_ipis`. A processor whose thread has no address space, an idle task or a kernel thread that kept the directory loaded, is not interrupted; the directory is marked stale there and loaded again at the switch to one of its threads.
 * A release (`smp_space_release`): before a directory that no thread uses is freed, each processor that still translates through it loads the kernel's.
 * A change of a kernel mapping (`smp_kernel_mapping_changed`) increments a count, and a processor whose count is behind drops all its translations when it next takes the big lock.
+* A barrier (`smp_barrier`), for `membarrier`: each processor named answers with a locked exchange, a full memory barrier, after an `iret` to the next instruction (`arch_sync_core`) for the sync-core barrier, and the sender waits for each answer. The sender holds the big lock, so the threads it found running stay there until the answers come. A thread that `MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ` reached has its rseq critical section aborted on the interrupt's return to user mode.
 * A stop (`smp_stop_others`), for a panic and a power off, is final. The sender waits up to a second for each processor to take it.
 
 ### Credentials
@@ -233,7 +236,7 @@ A thread holds Linux's 41 capabilities, numbered 0 to 40, but those it gave up (
 
 ### Resource limits
 
-A record has seven limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `fd_nr_open`, fs.nr_open, with `EPERM` even to root, as Linux does. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
+A record has nine limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `fd_nr_open`, fs.nr_open, with `EPERM` even to root, as Linux does. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
 
 | Limit | Default soft, hard | Enforced by |
 | --- | --- | --- |
@@ -244,6 +247,8 @@ A record has seven limits, `RLIM_COUNT` in `process.h`, each a soft value that i
 | `RLIMIT_CORE` | 0, none | a core file: none below one page, and the file stops at the soft value |
 | `RLIMIT_FSIZE` | none, none | a write, a truncation or an `fallocate` past it fails with `EFBIG` and sends `SIGXFSZ` (`fsize_refused` in `rach2/sys/syscall_fs.c`) |
 | `RLIMIT_MEMLOCK` | 8 MiB (`RLIM_MEMLOCK_DEFAULT`), 8 MiB | the `mlock` calls, `MAP_LOCKED`, the growth of locked memory under `MCL_FUTURE` and a driver's pins (`mem_lock_room` in `rach2/sys/mm/paging.c`); a privileged caller is exempt ([memory's Readme](../mm/Readme.md#locked-memory-and-pins)) |
+| `RLIMIT_NICE` | 0, 0 | the lowest nice value, as 20 less it, that `setpriority`, `sched_setattr` and the ia32 `nice` give without privilege, and the leaving of `SCHED_IDLE` (`proc_nice_allowed` in `rach2/sys/syscall_proc.c`) |
+| `RLIMIT_RTPRIO` | 0, 0 | the real-time priority `sched_setscheduler`, `sched_setparam` and `sched_setattr` give without privilege; at 0, no real-time policy (`sched_user_check`) |
 
 Init sets the machine's defaults from `/etc/rach2/limits` before its first child, as [limits(7)](../../../man/man7/limits.7) describes.
 
@@ -268,13 +273,14 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 ## Limits
 
 * One lock covers the kernel: kernel code runs on one processor at a time, and a long system call delays every other processor's entry to the kernel. The timed-wake measurements above include a 42.487 ms lock-wait subset of a 59.837 ms late return, against Debian's 4.637 ms largest whole lateness. The holder follow-up recorded a 65.118 ms acquisition across three holds, including `write` at 52.890 ms and COM1 receive at 12.248 ms. Console writes now offer the lock after each chunk; a single chunk and interrupt work still hold it. The owner assigned the change to the big lock and the Wine gap assertion to the following locking milestone, which must measure this load against Debian again.
-* Ordinary threads and equal-priority RR threads have a slice of one 1 ms tick; nice values and I/O priorities are kept and not read. The load averages count no sleeper, uninterruptible or not.
+* Ordinary threads and equal-priority RR threads have a slice of one 1 ms tick; nice values, the slices `sched_setattr` asks for and I/O priorities are kept and not read. The load averages count no sleeper, uninterruptible or not.
+* `SCHED_DEADLINE` threads are admitted by Linux's rule and run among the ordinary threads, where Linux runs them before every real-time thread by earliest deadline and stops each at the end of its runtime in a period. The utilization clamps are refused with `EOPNOTSUPP`, as by a Linux built without `CONFIG_UCLAMP_TASK`.
 * The kernel runs on at most 64 processors, and an affinity mask has 64 bits.
 * Privilege is `CAP_SYS_ADMIN` for every operation that asks for it, where Linux asks for the one capability each needs; the effective set is the permitted one. A thread whose ids are not root holds no capability but those an exec gave it from its ambient set.
 * A thread has at most 8 supplementary groups, where Linux allows 65536.
 * `clone` refuses `CLONE_SIGHAND` without `CLONE_THREAD`, an exit signal other than zero or `SIGCHLD` for a process, `CLONE_PIDFD`, and the cgroup and time namespaces. No descriptor refers to a process, so `waitid`'s `P_PIDFD` fails with `EBADF`.
 * `execve` follows one level of `#!`, and reads a first line of at most 128 bytes.
-* Seven resource limits are kept; `RLIMIT_NICE`, `RLIMIT_RTPRIO` and Linux's others read as unlimited.
+* Nine resource limits are kept; Linux's others read as unlimited.
 * `getrusage` and `wait4` report CPU time, resident memory, page faults and voluntary and involuntary context switches; the other resource counters are zero. Context switches include ended threads and reaped descendants. The resident memory peak is sampled when asked and where an address space ends, not at every fault.
 * `prctl` takes twelve options, the parent-death signal, the dumpable flag, the name, the child subreaper flag, `no_new_privs` and the seccomp mode, each set and read; any other is `EINVAL`.
 * seccomp has no user notification: a filter cannot be installed with a listener, and `SECCOMP_RET_USER_NOTIF` fails the call with `ENOSYS`. `SECCOMP_RET_LOG` allows the call and logs nothing.
@@ -295,6 +301,8 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `tests/credprobe.c`, `tests/suidprobe.c`, `tests/musl/suidmusl.c`, `tests/musl/capmusl.c` and `tests/musl/sandboxmusl.c`: the credential rules, a set-id exec, capabilities and the bounding set.
 * `tests/musl/threadscaling.c`: with 16, 64 and 256 blocked threads and two runnable threads, ready entries examined stay within eight per selection plus 64, by the kernel counters.
 * `tests/limitprobe.c`: `RLIMIT_NPROC`, `RLIMIT_NOFILE` and `RLIMIT_AS`.
+* `tests/schedattrprobe.c`: every policy set with `sched_setattr` and read back with `sched_getattr`, `sched_getscheduler` and `sched_getparam`, the structure's size rules, the slices, the deadline admission and affinity rules, a fork's reset, and what a caller without root is refused and what `RLIMIT_NICE` and `RLIMIT_RTPRIO` allow it.
+* `tests/membarrierprobe.c`: `membarrier`'s query, registrations and barriers with a second thread running, and its refusals.
 * `tests/musl/schedmusl.c`, `tests/musl/prctlmusl.c`, `tests/musl/seccompmusl.c`, `tests/musl/coremusl.c` and `tests/musl/callsmusl.c`: thread ids, nice values and the scheduling calls, `prctl`, seccomp filters, core files, and among other calls `getcpu`, `personality` and a suspend to idle.
 
 Other suites ([the suites](../../../tests/system/suites.md)):

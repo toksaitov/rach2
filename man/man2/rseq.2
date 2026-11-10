@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt RSEQ 2
 .Os
 .Sh NAME
@@ -69,7 +69,10 @@ from there to the instruction after the one that commits, and the address
 of its abort handler, which the 32-bit signature
 .Fa sig
 precedes in memory.
-When the thread is switched away from its processor, or takes a signal,
+When the thread is switched away from its processor, takes a signal, or
+is reached by
+.Xr membarrier 2 Ns 's
+.Dv MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ ,
 while its instruction pointer lies in
 .Bo Va start_ip ,
 .Va start_ip No + Va post_commit_offset
@@ -114,11 +117,6 @@ The auxiliary vector of a new program gives
 is the processor's number, which no two threads of an address space that
 run at once share and which is below the number of processors, as Linux's
 is; Linux also keeps it below the number of the address space's threads.
-The kernel has no
-.Fn membarrier ,
-whose
-.Dv MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ
-aborts the sections of the other threads of a process.
 .Ss System call interface
 The system call number is 386 on i386 and 334 on x86-64.
 The x86-64 kernel takes the i386 number from a 32-bit program, with the
@@ -151,4 +149,5 @@ The signature is not the one registered.
 .El
 .Sh SEE ALSO
 .Xr getcpu 2 ,
+.Xr membarrier 2 ,
 .Xr sched_setscheduler 2
