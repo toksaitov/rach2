@@ -1177,6 +1177,9 @@ uint32_t cap_eff_word(const process_t *p, uint32_t i)
     if (i > 1) {
         return 0;
     }
+    if (p->fs_own & PROC_FSCAPS_OFF) {
+        return held & ~fs;
+    }
     if (uid_root_in(p, proc_fsuid(p))) {
         return held | (fs & ~p->cap_lost[i]);
     }

@@ -20,7 +20,10 @@
  *   and the parent-death signal as they were; one that names the effective
  *   id makes the file-system id the effective one again.
  * * setuid-resets: setuid(0) and setgid(0) make the file-system ids the
- *   effective ones again, though the effective ids do not change.
+ *   effective ones again, though the effective ids do not change, and leave
+ *   CapEff without CAP_FS_SET, as Linux 6.12's cap_emulate_setxuid gives it
+ *   back only to an effective id that comes to 0; setfsuid(1000) and then
+ *   setfsuid(0) give it back.
  * * cleanup: the files and the directory are removed.
  *
  * The files are fsid.d, fsid.d/own and fsid.d/r600 in the working
@@ -425,6 +428,10 @@ void probe_main(unsigned long *sp)
     want(syscall1(SYS_SETFSUID, -1), 0, "setuid-resets: setuid(0) left the file-system user id");
     want(syscall1(SYS_SETGID, 0), 0, "setuid-resets: setgid(0) failed");
     want(syscall1(SYS_SETFSGID, -1), 0, "setuid-resets: setgid(0) left the file-system group id");
+    want(cap_eff() == (caps & ~CAP_FS_SET), 1, "setuid-resets: setuid(0) gave back CAP_FS_SET");
+    syscall1(SYS_SETFSUID, (long)id);
+    want(syscall1(SYS_SETFSUID, 0), (long)id, "setuid-resets: setfsuid(0) did not give 1000");
+    want(cap_eff() == caps, 1, "setuid-resets: setfsuid(0) did not give back CAP_FS_SET");
     report_held();
 
     if (cleanup() != 0) {

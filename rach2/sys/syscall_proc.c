@@ -987,7 +987,9 @@ static void cred_undump(process_t *p)
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
  * what `cred_undump` takes away. A new effective uid also ends the
  * capabilities it was granted in its user namespace (`ns_granted`), where
- * its privilege is then its uid's.
+ * its privilege is then its uid's; one that comes to root from another
+ * gives back the capabilities of CAP_FS_SET (PROC_FSCAPS_OFF), as Linux's
+ * `cap_emulate_setxuid` makes the effective set the permitted one.
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
@@ -996,6 +998,9 @@ static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
     }
     if (p->euid != old_euid) {
         p->ns_granted = 0;
+    }
+    if (uid_seen(old_euid) != 0 && uid_seen(p->euid) == 0) {
+        p->fs_own &= ~PROC_FSCAPS_OFF;
     }
 }
 
@@ -6311,7 +6316,11 @@ long sys_setresgid(isr_params_t *params)
  * back either way, as the namespace sees it, which is how a program reads
  * it. The ID is the calling thread's alone and stays apart from the
  * effective one until the next call that sets user IDs or an exec
- * (`fsuid_follow`); a change undoes what `cred_undump` takes away.
+ * (`fsuid_follow`); a change undoes what `cred_undump` takes away. A change
+ * from root takes the capabilities of CAP_FS_SET out of the effective set
+ * and one to root gives them back (PROC_FSCAPS_OFF), as Linux's
+ * `cap_task_fix_setuid` does; a call that sets user IDs and so brings the
+ * file-system ID back to root leaves them out.
  */
 static long fsuid_set(uint32_t uid)
 {
@@ -6322,6 +6331,11 @@ static long fsuid_set(uint32_t uid)
     uid = (uint32_t)k;
     if (k >= 0 && uid != old &&
         (uid == p->ruid || uid == p->euid || uid == p->suid || id_privileged())) {
+        if (uid_seen(old) == 0 && uid_seen(uid) != 0) {
+            p->fs_own |= PROC_FSCAPS_OFF;
+        } else if (uid_seen(old) != 0 && uid_seen(uid) == 0) {
+            p->fs_own &= ~PROC_FSCAPS_OFF;
+        }
         p->fsuid = uid;
         p->fs_own |= PROC_FSUID_OWN;
         cred_undump(p);
