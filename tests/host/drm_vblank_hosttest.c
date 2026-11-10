@@ -799,6 +799,26 @@ static void row_queued_off(void)
           "CRTC 1 on again");
 }
 
+/** An out-fence descriptor that cannot be written refuses the commit
+ * before it takes effect, as Linux's setup_out_fence, and leaves no sync
+ * file or descriptor and -1 where OUT_FENCE_PTR points. */
+static void row_out_fence_fault(void)
+{
+    struct req r;
+    uint32_t before = primary[0].state->fb->base.id;
+    int32_t out_fd = 77;
+    int at = nshown, made = allocations;
+
+    req_flip(&r, 0, before == fb_a ? fb_b : fb_a);
+    req_add(&r, &crtc[0].base, mc->prop_out_fence_ptr, UPTR(&out_fd));
+    copy_fault_after = 1; /* the -1 of the property passes; the descriptor faults */
+    CHECK(req_commit(&r, 0, 0) == -EFAULT, "an out-fence that cannot be written: EFAULT");
+    copy_fault_after = -1;
+    ticks(2);
+    CHECK(primary[0].state->fb->base.id == before && nshown == at, "and no flip");
+    CHECK(out_fd == -1 && allocations == made, "-1 written, and no sync file left");
+}
+
 /* ---- 76-5b.4: connector forcing, the EDID override and CRCs ---- */
 
 /** Force a connector off and back, as debugfs's `force` does. */
@@ -949,6 +969,7 @@ int main(void)
     row_off();
     row_fences();
     row_queued_off();
+    row_out_fence_fault();
     row_force();
     row_edid_override();
     row_crc();

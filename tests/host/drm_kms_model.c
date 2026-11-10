@@ -89,6 +89,9 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 /* Run once by the next copy_to_user before it copies: another thread's
  * work while the copy sleeps. */
 static void (*copy_hook)(void);
+/* The copies to let through before the next copy_to_user faults; -1 for
+ * none. */
+static int copy_fault_after = -1;
 
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
@@ -97,6 +100,9 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     copy_hook = NULL;
     if (hook) {
         hook();
+    }
+    if (copy_fault_after >= 0 && copy_fault_after-- == 0) {
+        return -EFAULT;
     }
     if ((uintptr_t)dst < 4096) {
         return -EFAULT;
@@ -409,6 +415,34 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name)
     (void)fence;
     (void)name;
     return -EMFILE;
+}
+
+/** No descriptor table: no descriptor can be reserved. */
+int fd_alloc(fd_table_t *table)
+{
+    (void)table;
+    return -EMFILE;
+}
+
+/** Never reached, since no descriptor can be reserved. */
+struct sync_file *sync_file_new(struct dma_fence *fence, const char *name)
+{
+    (void)fence;
+    (void)name;
+    return NULL;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_drop(struct sync_file *s)
+{
+    (void)s;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_attach(int32_t fd, struct sync_file *s)
+{
+    (void)fd;
+    (void)s;
 }
 
 /** Nothing to free. */

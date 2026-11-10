@@ -127,16 +127,10 @@ static int32_t sync_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     if (!merged)
         return -ENOMEM;
     data.name[31] = 0;
-    fd = sync_file_create(merged, data.name);
+    fd =
+        sync_file_copy_out(merged, data.name, (void __user *)arg, &data, sizeof(data), &data.fence);
     dma_fence_put(merged);
-    if (fd < 0)
-        return fd;
-    data.fence = fd;
-    if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
-        fd_free(current_proc->fds, fd);
-        return -EFAULT;
-    }
-    return 0;
+    return fd;
 }
 
 static const struct file_ops sync_ops = {NULL, NULL, sync_poll, sync_ioctl, sync_close, NULL, NULL};
@@ -150,25 +144,66 @@ struct dma_fence *sync_file_get_fence(int32_t fd)
                : NULL;
 }
 
+struct sync_file *sync_file_new(struct dma_fence *f, const char *name)
+{
+    struct sync_file *s = kzalloc(sizeof(*s));
+    if (!s)
+        return NULL;
+    s->anon.name = "sync_file";
+    s->fence = dma_fence_get(f);
+    sync_name(s->name, name ? name : "dma_fence");
+    return s;
+}
+
+void sync_file_drop(struct sync_file *s)
+{
+    if (s) {
+        dma_fence_put(s->fence);
+        kfree(s);
+    }
+}
+
+void sync_file_attach(int32_t fd, struct sync_file *s)
+{
+    fd_entry_t *e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_ANON;
+    e->ops = &sync_ops;
+    e->priv = s;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+}
+
 /** Make the descriptor `fd`, reserved and given no type, a sync file of
  * `f` with a reference of its own. */
 int32_t sync_file_install(int32_t fd, struct dma_fence *f, const char *name)
 {
     struct sync_file *s;
-    fd_entry_t *e;
     if (!f || !current_proc)
         return -EINVAL;
-    s = kzalloc(sizeof(*s));
+    s = sync_file_new(f, name);
     if (!s)
         return -ENOMEM;
-    s->anon.name = "sync_file";
-    s->fence = dma_fence_get(f);
-    sync_name(s->name, name ? name : "dma_fence");
-    e = &current_proc->fds->entries[fd];
-    e->type = FD_TYPE_ANON;
-    e->ops = &sync_ops;
-    e->priv = s;
-    e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    sync_file_attach(fd, s);
+    return 0;
+}
+
+int32_t sync_file_copy_out(struct dma_fence *f, const char *name, void __user *dst, void *src,
+                           uint32_t len, int32_t *fd_at)
+{
+    struct sync_file *s;
+    int32_t fd;
+    if (!f || !current_proc)
+        return -EINVAL;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0)
+        return fd;
+    s = sync_file_new(f, name);
+    *fd_at = fd;
+    if (!s || copy_to_user(dst, src, len)) {
+        sync_file_drop(s);
+        fd_free(current_proc->fds, fd);
+        return s ? -EFAULT : -ENOMEM;
+    }
+    sync_file_attach(fd, s);
     return 0;
 }
 

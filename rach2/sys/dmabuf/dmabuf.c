@@ -251,16 +251,9 @@ static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     f = dma_resv_snapshot(b->resv, (data.flags & DMA_BUF_SYNC_WRITE) != 0);
     if (!f)
         return -ENOMEM;
-    rc = sync_file_create(f, "dmabuf");
+    rc = sync_file_copy_out(f, "dmabuf", (void __user *)arg, &data, sizeof(data), &data.fd);
     dma_fence_put(f);
-    if (rc < 0)
-        return rc;
-    data.fd = rc;
-    if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
-        fd_free(current_proc->fds, rc);
-        return -EFAULT;
-    }
-    return 0;
+    return rc;
 }
 
 /** Drop the descriptor's buffer reference. */

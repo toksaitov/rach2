@@ -334,6 +334,34 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name)
 
 #endif
 
+/** No descriptor table: no descriptor can be reserved. */
+int fd_alloc(fd_table_t *table)
+{
+    (void)table;
+    return -EMFILE;
+}
+
+/** Never reached, since no descriptor can be reserved. */
+struct sync_file *sync_file_new(struct dma_fence *fence, const char *name)
+{
+    (void)fence;
+    (void)name;
+    return NULL;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_drop(struct sync_file *s)
+{
+    (void)s;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_attach(int32_t fd, struct sync_file *s)
+{
+    (void)fd;
+    (void)s;
+}
+
 /** Nothing to free. */
 int fd_free(fd_table_t *table, int fd)
 {

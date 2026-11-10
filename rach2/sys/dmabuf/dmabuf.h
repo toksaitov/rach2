@@ -82,6 +82,24 @@ int64_t dma_fence_now(void);
 /** Install a close-on-exec sync file with its own fence reference.
  * Return its descriptor or -errno. name may be NULL. */
 int32_t sync_file_create(struct dma_fence *fence, const char *name);
+struct sync_file;
+/** A sync file of `fence` with a reference of its own, named `name` (NULL:
+ * "dma_fence"), that no descriptor holds yet; NULL for no memory. */
+struct sync_file *sync_file_new(struct dma_fence *fence, const char *name);
+/** Free `s`, made by sync_file_new and never attached, and its fence
+ * reference; nothing for NULL. */
+void sync_file_drop(struct sync_file *s);
+/** Make `fd`, a descriptor of the caller's that `fd_alloc` reserved and
+ * gave no type, the close-on-exec descriptor of `s`, which it then owns.
+ * Does not fail, so that a call can attach after work it cannot undo. */
+void sync_file_attach(int32_t fd, struct sync_file *s);
+/** Give the caller a sync file of `fence`, as Linux's ioctls do: reserve
+ * a descriptor, put it in `*fd_at`, which lies in the `len` bytes at `src`,
+ * make the file, copy those bytes to `dst`, and only then attach it, so
+ * that a failure leaves no descriptor and no file. 0, -EINVAL, -EMFILE,
+ * -ENOMEM or -EFAULT. */
+int32_t sync_file_copy_out(struct dma_fence *fence, const char *name, void __user *dst, void *src,
+                           uint32_t len, int32_t *fd_at);
 /** Make `fd`, a descriptor of the caller's that `fd_alloc` reserved and
  * gave no type, a close-on-exec sync file of `fence` with a reference of
  * its own, so that a call reserves the descriptor before the work whose
