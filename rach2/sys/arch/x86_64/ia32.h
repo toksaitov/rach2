@@ -186,8 +186,6 @@ long compat_sys_setgroups16(isr_params_t *params);
 long compat_sys_fchown16(isr_params_t *params);
 long compat_sys_uname(isr_params_t *params);
 long compat_sys_sysinfo(isr_params_t *params);
-long compat_sys_setfsuid16(isr_params_t *params);
-long compat_sys_setfsgid16(isr_params_t *params);
 long compat_sys_sched_rr_get_interval_time32(isr_params_t *params);
 long compat_sys_setresuid16(isr_params_t *params);
 long compat_sys_getresuid16(isr_params_t *params);

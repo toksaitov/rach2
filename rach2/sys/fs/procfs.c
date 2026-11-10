@@ -1713,20 +1713,37 @@ static void ap_set(struct procfs_text *t, const char *name, uint64_t set)
     ap_ch(t, '\n');
 }
 
-/** Append "Name:\t" and four ids separated by tabs: the real, effective and
- * saved ones, and the effective one again as the file-system id. */
-static void ap_ids(struct procfs_text *t, const char *name, uint32_t r, uint32_t e, uint32_t s)
+/** Append "Name:" and the four ids of `ids`, a tab before each: the real,
+ * effective, saved and file-system ones. */
+static void ap_ids(struct procfs_text *t, const char *name, const uint32_t ids[4])
 {
+    int i;
+
     ap_str(t, name);
-    ap_str(t, ":\t");
-    ap_u32(t, r);
-    ap_ch(t, '\t');
-    ap_u32(t, e);
-    ap_ch(t, '\t');
-    ap_u32(t, s);
-    ap_ch(t, '\t');
-    ap_u32(t, e);
+    ap_ch(t, ':');
+    for (i = 0; i < 4; i++) {
+        ap_ch(t, '\t');
+        ap_u32(t, ids[i]);
+    }
     ap_ch(t, '\n');
+}
+
+/** The Uid and Gid lines of `p`: its real, effective, saved and
+ * file-system ids, as the reader's user namespace sees them. */
+static void ap_cred_ids(struct procfs_text *t, const process_t *p)
+{
+    uint32_t ids[4];
+
+    ids[0] = uid_seen(p->ruid);
+    ids[1] = uid_seen(p->euid);
+    ids[2] = uid_seen(p->suid);
+    ids[3] = uid_seen(proc_fsuid(p));
+    ap_ids(t, "Uid", ids);
+    ids[0] = gid_seen(p->rgid);
+    ids[1] = gid_seen(p->egid);
+    ids[2] = gid_seen(p->sgid);
+    ids[3] = gid_seen(proc_fsgid(p));
+    ap_ids(t, "Gid", ids);
 }
 
 /** `head`, then the numbers of `p` in each PID namespace from the reader's
@@ -1859,9 +1876,9 @@ static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
 /**
  * /proc/<pid>/status: the lines of Linux's that programs read, among them
  * the name, the state, the ids, the tracer, the memory in kilobytes, the
- * thread count and the signal sets. The file-system ids are the effective
- * ones. The capability sets are full for a process `proc_privileged` passes
- * and empty otherwise, since the kernel has no capabilities but that test.
+ * thread count and the signal sets. The fourth Uid and Gid columns are the
+ * file-system ids (`proc_fsuid`, `proc_fsgid`). The capability sets are
+ * those capget(2) reports (`cap_word`, `cap_eff_word`).
  * VmPeak is the present size, since the kernel keeps no peak of it; VmHWM
  * is the most pages the address space has had resident. RssAnon, RssFile
  * and RssShmem divide VmRSS as `rss_by_kind` says; Wine's working set and
@@ -1905,8 +1922,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nTracerPid:\t");
     ap_u32(t, p->ptrace ? pid_seen(p->tracer) : 0u);
     ap_ch(t, '\n');
-    ap_ids(t, "Uid", uid_seen(p->ruid), uid_seen(p->euid), uid_seen(p->suid));
-    ap_ids(t, "Gid", gid_seen(p->rgid), gid_seen(p->egid), gid_seen(p->sgid));
+    ap_cred_ids(t, p);
     ap_str(t, "FDSize:\t");
     ap_u32(t, (uint32_t)fd_table_cap(p->fds));
     ap_str(t, "\nGroups:\t");
@@ -1930,9 +1946,9 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, KSIG_MAX);
     ap_ch(t, '\n');
     ap_signal_sets(t, p);
-    caps = (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0);
+    caps = (uint64_t)cap_eff_word(p, 1) << 32 | cap_eff_word(p, 0);
     ap_set(t, "CapInh", (uint64_t)p->cap_inh[1] << 32 | p->cap_inh[0]);
-    ap_set(t, "CapPrm", caps);
+    ap_set(t, "CapPrm", caps | (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0));
     ap_set(t, "CapEff", caps);
     ap_set(t, "CapBnd", (uint64_t)(CAP_HIGH_WORD & ~p->bset_lost[1]) << 32 | ~p->bset_lost[0]);
     ap_set(t, "CapAmb", (uint64_t)p->cap_amb[1] << 32 | p->cap_amb[0]);
@@ -7181,7 +7197,8 @@ static int procfs_open_idmap(int file, int pid, int flags)
     if (procfs_oom_owner(pid, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if (file == SYNTH_PROC_COMM && !proc_privileged(current_proc) && current_proc->euid != uid) {
+    if (file == SYNTH_PROC_COMM && !proc_fs_privileged(current_proc) &&
+        proc_fsuid(current_proc) != uid) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -7232,7 +7249,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     if (procfs_oom_owner(pid, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if (acc != 0 && !proc_privileged(current_proc) && current_proc->euid != uid) {
+    if (acc != 0 && !proc_fs_privileged(current_proc) && proc_fsuid(current_proc) != uid) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));

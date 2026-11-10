@@ -251,6 +251,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SETRESGID] = sys_setresgid;
     table[SYS_GETRESGID] = sys_getresgid;
     table[SYS_GETPGID] = sys_getpgid;
+    table[SYS_SETFSUID] = sys_setfsuid;
+    table[SYS_SETFSGID] = sys_setfsgid;
     table[SYS_GETSID] = sys_getsid;
     table[SYS_CAPGET] = sys_capget;
     table[SYS_CAPSET] = sys_capset;

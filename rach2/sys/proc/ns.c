@@ -1163,9 +1163,29 @@ uint32_t cap_word(const process_t *p, uint32_t i)
     return p->amb_granted || cap_ids(p) ? full & ~p->cap_lost[i] : 0u;
 }
 
+/** Whether `uid` is root in `p`'s user namespace. */
+static int uid_root_in(const process_t *p, uint32_t uid)
+{
+    return p->userns ? ns_uid_from_kernel(p->userns, uid) == 0 : uid == 0;
+}
+
+uint32_t cap_eff_word(const process_t *p, uint32_t i)
+{
+    uint32_t fs = i == 0 ? CAP_FS_WORD0 : CAP_FS_WORD1;
+    uint32_t held = cap_word(p, i);
+
+    if (i > 1) {
+        return 0;
+    }
+    if (uid_root_in(p, proc_fsuid(p))) {
+        return held | (fs & ~p->cap_lost[i]);
+    }
+    return uid_root_in(p, p->euid) ? held & ~fs : held;
+}
+
 int cap_holds(const process_t *p, uint32_t cap)
 {
-    return cap <= CAP_LAST_CAP && (cap_word(p, cap >> 5) & (1u << (cap & 31u))) != 0;
+    return cap <= CAP_LAST_CAP && (cap_eff_word(p, cap >> 5) & (1u << (cap & 31u))) != 0;
 }
 
 void cap_store(process_t *p, uint32_t lost0, uint32_t lost1)

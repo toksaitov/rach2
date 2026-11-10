@@ -35,8 +35,6 @@
 
 /* The calls that answer ENOSYS, since Rach2 has them on neither kernel
  * (ia32.h). */
-IA32_STUB(compat_sys_setfsuid16)
-IA32_STUB(compat_sys_setfsgid16)
 IA32_STUB(compat_sys_kexec_load)
 IA32_STUB(compat_sys_keyctl)
 

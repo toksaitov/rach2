@@ -358,6 +358,12 @@ int fd_node_check(fd_entry_t *entry);
 /** Non-zero when the caller has appropriate privilege (`proc_privileged`). */
 int cred_privileged(void);
 
+/** Non-zero when the caller has privilege over files, which goes by its
+ * file-system user id (`proc_fs_privileged`): what lets it pass a file's
+ * permission bits, act as a file's owner, keep set-id bits across a write,
+ * make a device node and change the immutable and append-only flags. */
+int cred_fs_privileged(void);
+
 /**
  * Drop the set-id bits a modification must not leave standing on the KRFFS root
  * node `node`: a write or a truncation by a caller without privilege, or a
@@ -940,6 +946,16 @@ long sys_setregid(isr_params_t *params);
 long sys_setresuid(isr_params_t *params);
 
 long sys_setresgid(isr_params_t *params);
+
+/* The file-system ids: setfsuid and setfsgid return the previous id and
+ * have no error. The 16-bit forms are i386's calls 138 and 139. */
+long sys_setfsuid(isr_params_t *params);
+
+long sys_setfsgid(isr_params_t *params);
+
+long sys_setfsuid16(isr_params_t *params);
+
+long sys_setfsgid16(isr_params_t *params);
 
 long sys_getresuid(isr_params_t *params);
 

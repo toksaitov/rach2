@@ -25,7 +25,7 @@ typedef struct udp_binding {
     struct udp_binding *next;
     uint16_t port;
     struct socket *sock;
-    uint32_t owner; /* the effective uid that bound it */
+    uint32_t owner; /* the file-system uid that bound it */
 } udp_binding_t;
 
 static udp_binding_t *bindings;
@@ -72,7 +72,7 @@ int udp_bind(uint16_t port, struct socket *sock)
 {
     udp_binding_t *b;
     uint32_t flags;
-    uint32_t uid = current_proc ? current_proc->euid : 0;
+    uint32_t uid = current_proc ? proc_fsuid(current_proc) : 0;
     int met = 0, shared = sock && sock->reuseaddr;
 
     flags = net_lock();
@@ -99,7 +99,7 @@ int udp_bind(uint16_t port, struct socket *sock)
     }
     b->port = port;
     b->sock = sock;
-    b->owner = current_proc ? current_proc->euid : 0;
+    b->owner = uid;
     b->next = bindings;
     bindings = b;
     net_unlock(flags);

@@ -186,6 +186,15 @@ struct process {
     uint32_t rgid;
     uint32_t egid;
     uint32_t sgid;
+    /* The file-system ids, which the file access checks and the owner of a
+     * new file go by (`proc_fsuid`, `proc_fsgid`). While its bit of `fs_own`
+     * is clear an id is the effective one, and so follows every change of
+     * it; setfsuid and setfsgid store an id here and set its bit, and every
+     * call that sets user ids, or group ids, and an exec clear it, as Linux
+     * sets the id to the effective one there. */
+    uint32_t fsuid;
+    uint32_t fsgid;
+    uint32_t fs_own;              /* PROC_FSUID_OWN, PROC_FSGID_OWN */
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so
@@ -617,6 +626,24 @@ isr_params_t *proc_user_frame(const process_t *t);
  * (`ns_privileged`). A macro, so that the host tests that compile the
  * callers without this file's functions need no stub of it. */
 #define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps && !(p)->userns)
+
+/* The bits of `fs_own`: the file-system user or group id was set apart from
+ * the effective one. */
+#define PROC_FSUID_OWN 1u
+#define PROC_FSGID_OWN 2u
+
+/* The file-system user and group ids of thread `p`: the effective ones
+ * unless setfsuid or setfsgid set one apart. */
+#define proc_fsuid(p) (((p)->fs_own & PROC_FSUID_OWN) ? (p)->fsuid : (p)->euid)
+#define proc_fsgid(p) (((p)->fs_own & PROC_FSGID_OWN) ? (p)->fsgid : (p)->egid)
+
+/* Whether thread `p` has privilege over files: `proc_privileged` judged by
+ * the file-system user id, since the capabilities Linux checks for file
+ * access (CAP_FS_SET: CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH,
+ * CAP_FOWNER, CAP_FSETID, CAP_LINUX_IMMUTABLE, CAP_MKNOD and
+ * CAP_MAC_OVERRIDE) leave the effective set when that id leaves 0 and come
+ * back when it returns. */
+#define proc_fs_privileged(p) (proc_fsuid(p) == 0 && !(p)->nocaps && !(p)->userns)
 
 /* Whether [addr, addr + len) lies in the kernel buffer the thread `p` has
  * opened to the user-copy checks (`user_window_open`). A macro, so that

@@ -237,8 +237,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SYSFS] = NULL;
     table[SYS_PERSONALITY] = sys_personality;
     table[SYS_AFS_SYSCALL] = NULL;
-    table[SYS_SETFSUID] = compat_sys_setfsuid16;
-    table[SYS_SETFSGID] = compat_sys_setfsgid16;
+    table[SYS_SETFSUID] = sys_setfsuid16;
+    table[SYS_SETFSGID] = sys_setfsgid16;
     table[SYS_LLSEEK] = sys__llseek;
     table[SYS_GETDENTS] = compat_sys_getdents;
     table[SYS_NEWSELECT] = compat_sys_select;
@@ -314,8 +314,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_CHOWN32] = sys_chown;
     table[SYS_SETUID32] = sys_setuid;
     table[SYS_SETGID32] = sys_setgid;
-    table[SYS_SETFSUID32] = NULL;
-    table[SYS_SETFSGID32] = NULL;
+    table[SYS_SETFSUID32] = sys_setfsuid;
+    table[SYS_SETFSGID32] = sys_setfsgid;
     table[SYS_PIVOT_ROOT] = sys_pivot_root;
     table[SYS_MINCORE] = sys_mincore;
     table[SYS_MADVISE] = sys_madvise;

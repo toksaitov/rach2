@@ -1,0 +1,135 @@
+.Dd November 10, 2026
+.Dt SETFSUID 2
+.Os
+.Sh NAME
+.Nm setfsuid ,
+.Nm setfsgid ,
+.Nm setfsuid32 ,
+.Nm setfsgid32
+.Nd set the user and group IDs used for file access
+.Sh SYNOPSIS
+.In sys/fsuid.h
+.Ft int
+.Fn setfsuid "uid_t fsuid"
+.Ft int
+.Fn setfsgid "gid_t fsgid"
+.Sh DESCRIPTION
+Each thread has a file-system user ID and a file-system group ID beside
+its real, effective and saved IDs.
+They are the IDs every check of access to a file goes by: the
+permission bits at an open, a search of a directory, an exec, the owner
+tests of
+.Xr chmod 2 ,
+.Xr chown 2
+and
+.Xr utimensat 2 ,
+the sticky rule of a removal, and the owner and group a new file, FIFO,
+socket, message queue or pseudo-terminal gets.
+.Xr access 2
+alone judges by the real IDs.
+Signals, the System V IPC objects and every other check go by the
+effective IDs.
+.Pp
+A file-system ID is the effective ID unless one of these calls set it
+apart.
+Every call of
+.Xr setuid 2
+that sets user IDs makes the file-system user ID the effective one again,
+whether or not it changed the effective ID, and so does an exec; the
+calls that set group IDs do the same for the file-system group ID.
+A child of
+.Xr fork 2
+has its parent's.
+.Pp
+.Fn setfsuid
+makes
+.Fa fsuid
+the calling thread's file-system user ID when it is the thread's real,
+effective, saved or present file-system user ID, or the thread is
+privileged
+.Pq see Xr setuid 2 .
+.Fn setfsgid
+does the same with
+.Fa fsgid
+and the group IDs.
+A call that changes an ID clears the process's dumpable flag and its
+parent-death signal, as a change of an effective ID does; see
+.Xr prctl 2 .
+.Pp
+The capabilities that Linux checks for file access,
+.Dv CAP_CHOWN ,
+.Dv CAP_DAC_OVERRIDE ,
+.Dv CAP_DAC_READ_SEARCH ,
+.Dv CAP_FOWNER ,
+.Dv CAP_FSETID ,
+.Dv CAP_LINUX_IMMUTABLE ,
+.Dv CAP_MKNOD
+and
+.Dv CAP_MAC_OVERRIDE ,
+go by the file-system user ID: a thread whose file-system user ID leaves
+0 loses them from its effective set, though its effective user ID stays
+0, and one whose file-system user ID returns to 0 has again those it has
+not given up.
+A thread without them passes a file's permission bits, acts as a file's
+owner, keeps set-ID bits across a write, makes a device node and changes
+the immutable and append-only flags only as any other user may.
+.Xr capget 2
+and the CapEff line of
+.Pa /proc/PID/status
+show the set, and the fourth columns of that file's Uid and Gid lines
+the two IDs.
+.Ss System call numbers
+On i386 musl calls
+.Nm setfsuid32
+(215) and
+.Nm setfsgid32
+(216), which take 32-bit IDs.
+i386's
+.Nm setfsuid
+(138) and
+.Nm setfsgid
+(139) take a 16-bit ID, of which 0xFFFF is -1, and return the previous ID
+whole, as Linux's do.
+The i686 kernel has all four, and so has the x86-64 kernel for a program
+that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes.
+On x86-64 the calls are
+.Nm setfsuid
+(122) and
+.Nm setfsgid
+(123), with 32-bit IDs.
+.Sh RETURN VALUES
+Both calls return the previous file-system ID, as the caller's user
+namespace sees it, whether or not they changed it, and never an error.
+An ID the caller may not take, or one its user namespace does not map,
+-1 among them, changes nothing, so a call with -1 reads the present ID.
+A caller that must know whether a change took place calls again with -1
+and compares.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/fsidprobe.c
+sets the file-system IDs to 1000 as root, creates a file and reads its
+owner and group, checks that a file of mode 0600 owned by root no longer
+opens while
+.Xr access 2
+still allows it, reads the fourth columns of
+.Pa /proc/self/status
+and the CapEff line with the file-system user ID at 1000 and back at 0,
+and checks that
+.Xr setuid 2
+makes the file-system user ID the effective one again.
+.Sh SEE ALSO
+.Xr access 2 ,
+.Xr capget 2 ,
+.Xr getuid 2 ,
+.Xr setuid 2 ,
+.Xr proc 5
+.Sh STANDARDS
+The calls are Linux's, and their rules are those of Linux 6.12.
+The permitted set that
+.Xr capget 2
+reports is the capabilities the effective user ID gives and those of the
+effective set; Linux keeps it apart.

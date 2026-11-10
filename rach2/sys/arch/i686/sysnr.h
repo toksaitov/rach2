@@ -293,6 +293,12 @@
 #define SYS_SETREGID32  204
 #define SYS_SETRESUID32 208
 #define SYS_SETRESGID32 210
+/* setfsuid and setfsgid: the old numbers take 16-bit ids, whose -1 is
+ * 0xFFFF, and the *32 numbers whole ones. */
+#define SYS_SETFSUID    138
+#define SYS_SETFSGID    139
+#define SYS_SETFSUID32  215
+#define SYS_SETFSGID32  216
 /* The mode and owner calls; the 16-bit chown numbers take 32-bit ids here,
  * as their *32 forms do. */
 #define SYS_CHMOD       15
