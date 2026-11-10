@@ -112,6 +112,8 @@
 
 #define TCFLSH 0x540B /* Flush input and/or output queues */
 
+#define TCXONC 0x540A /* Stop or restart output or input: tcflow(3) */
+
 #define FIONREAD 0x541B /* Bytes available to read */
 
 #define FIONBIO 0x5421 /* Set or clear O_NONBLOCK */
@@ -1993,6 +1995,7 @@ static int tty_request(uint32_t request)
     case TCSETSW2:
     case TCSETSF2:
     case TCFLSH:
+    case TCXONC:
     case TIOCGWINSZ:
     case TIOCSWINSZ:
     case TIOCGPGRP:
@@ -2082,7 +2085,8 @@ static int32_t tty_flush_at(struct tty *t, uintptr_t which)
  * unread input. FIONREAD gives the bytes a read would return at once, a
  * complete cooked line or the queued count in raw mode, with a pending EOF
  * counted as 0; `tty_inq` drains the input source first, so input that has
- * just arrived is counted. TCFLSH discards the queues (`tty_flush_at`).
+ * just arrived is counted. TCFLSH discards the queues (`tty_flush_at`), and
+ * TCXONC stops and restarts output or sends VSTOP and VSTART (`tty_tcflow`).
  *
  * TIOCSPGRP needs the caller's session to be the one the terminal controls,
  * checked before the argument, as on Linux (-ENOTTY), and a group in that
@@ -2125,6 +2129,9 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
 
     case TCFLSH:
         return tty_flush_at(t, arg);
+
+    case TCXONC:
+        return arg > TTY_TCION ? -EINVAL : tty_tcflow(t, (int)arg);
 
     case TIOCGWINSZ:
         if (!arg) {

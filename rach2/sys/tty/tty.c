@@ -60,6 +60,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->sink_ctx = sink_ctx;
     t->pump = NULL;
     t->flush = NULL;
+    t->flow = NULL;
     t->sid = 0;
     t->fg_pgid = 0;
     t->hungup = 0;
@@ -128,17 +129,70 @@ int tty_console_owned_by_leader(int sid, int pid)
     return console_tty.sid != 0 && console_tty.sid == sid && sid == pid;
 }
 
-void tty_input_char(struct tty *t, unsigned char c)
+/**
+ * Tell `flow` that output stopped or restarted, when `stopped` differs from
+ * `was`, the discipline's state before; a restart wakes the writers and the
+ * pollers for POLLOUT on `input_wq`. Interrupts off.
+ */
+static void tty_flow_changed(struct tty *t, int was)
 {
-    unsigned int held = n_tty_held(&t->ldisc);
-    int signo = 0;
+    if (t->ldisc.stopped == was) {
+        return;
+    }
+    if (t->flow) {
+        t->flow(t, t->ldisc.stopped ? TTY_FLOW_STOP : TTY_FLOW_START);
+    }
+    if (!t->ldisc.stopped) {
+        wq_wake(&t->input_wq, WQ_ROOM);
+    }
+}
 
-    n_tty_receive(&t->ldisc, c, t->sink, t->sink_ctx, &signo);
-    if (n_tty_held(&t->ldisc) < held) {
-        wq_wake(t->space_wq, WQ_ROOM);
+/** Give the echo held to the sink, unless output is stopped, and tell
+ * `flow` when any went. Interrupts off. */
+static void tty_echo_out(struct tty *t)
+{
+    if (n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx) > 0 && t->flow) {
+        t->flow(t, TTY_FLOW_DATA);
+    }
+}
+
+/**
+ * Run `c` through the discipline with echo to `out`, `looked` nonzero for a
+ * byte `tty_lookahead` has seen, as Linux's n_tty_receive_char_special and
+ * isig: a signal goes to the foreground group, and without NOFLSH the output
+ * queued is discarded before the signal character's echo; then the echo the
+ * discipline holds goes to `out`, and a change of output flow to `flow`.
+ */
+static void tty_receive(struct tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int looked)
+{
+    int was = t->ldisc.stopped;
+    int signo = 0;
+    uint32_t flags = kirq_save();
+
+    if (looked) {
+        n_tty_receive_looked(&t->ldisc, c, out, ctx, &signo);
+    } else {
+        n_tty_receive(&t->ldisc, c, out, ctx, &signo);
     }
     if (signo != 0) {
         tty_deliver_signal(t, signo);
+        if (!(t->ldisc.tio.c_lflag & NOFLSH) && t->flush) {
+            t->flush(t, TTY_FLUSH_IN | TTY_FLUSH_OUT);
+        }
+    }
+    n_tty_echo_flush(&t->ldisc, out, ctx);
+    tty_flow_changed(t, was);
+    kirq_restore(flags);
+}
+
+/** `tty_input_char`, with `looked` as for `tty_receive`. */
+static void tty_input(struct tty *t, unsigned char c, int looked)
+{
+    unsigned int held = n_tty_held(&t->ldisc);
+
+    tty_receive(t, c, t->sink, t->sink_ctx, looked);
+    if (n_tty_held(&t->ldisc) < held) {
+        wq_wake(t->space_wq, WQ_ROOM);
     }
     if (n_tty_readable(&t->ldisc)) {
         if (t->ready_us == 0) {
@@ -149,6 +203,118 @@ void tty_input_char(struct tty *t, unsigned char c)
         /* Not readable to poll, but a read for fewer than VMIN bytes, or
          * one whose VTIME timer starts or restarts, needs to see it. */
         wq_wake(&t->input_wq, 0);
+    }
+}
+
+void tty_input_char(struct tty *t, unsigned char c)
+{
+    tty_input(t, c, 0);
+}
+
+void tty_input_looked(struct tty *t, unsigned char c)
+{
+    tty_input(t, c, 1);
+}
+
+void tty_lookahead(struct tty *t, unsigned char c)
+{
+    uint32_t flags = kirq_save();
+    int was = t->ldisc.stopped;
+
+    n_tty_lookahead(&t->ldisc, c);
+    tty_flow_changed(t, was);
+    kirq_restore(flags);
+}
+
+/**
+ * TCOOFF and TCOON set and clear `tco_stopped` around Linux's stop_tty and
+ * start_tty; a TCOON does not give the echo held to the sink, which the next
+ * input or write does, as on Linux. TCIOFF and TCION give their character
+ * to the sink without output processing, as the driver's write does, and
+ * restart and stop output again around it when VSTOP stopped it, which a
+ * pty's master in packet mode sees as TIOCPKT_START and TIOCPKT_STOP.
+ */
+int tty_tcflow(struct tty *t, int action)
+{
+    struct n_tty *ld = &t->ldisc;
+    uint32_t flags;
+    int was;
+    unsigned char c;
+
+    if (action < TTY_TCOOFF || action > TTY_TCION) {
+        return -EINVAL;
+    }
+    flags = kirq_save();
+    was = ld->stopped;
+    if (action == TTY_TCOOFF && !ld->tco_stopped) {
+        ld->tco_stopped = 1;
+        n_tty_stop(ld);
+    } else if (action == TTY_TCOON && ld->tco_stopped) {
+        ld->tco_stopped = 0;
+        n_tty_start(ld);
+    } else if (action == TTY_TCIOFF || action == TTY_TCION) {
+        c = ld->tio.c_cc[action == TTY_TCIOFF ? VSTOP : VSTART];
+        if (c != 0 && !ld->tco_stopped) {
+            if (was && t->flow) {
+                t->flow(t, TTY_FLOW_START);
+            }
+            t->sink(t->sink_ctx, c);
+            if (t->flow) {
+                t->flow(t, TTY_FLOW_DATA);
+            }
+            if (was && t->flow) {
+                t->flow(t, TTY_FLOW_STOP);
+            }
+        }
+    }
+    tty_flow_changed(t, was);
+    kirq_restore(flags);
+    return 0;
+}
+
+/* A writer's wait for stopped output to restart. */
+struct tty_out_wait {
+    struct tty *t;
+    uint32_t opened; /* the vhangups when the writer's description opened */
+};
+
+/** The writer's wait predicate: drain the pump, then whether output runs
+ * or the description has been hung up. Interrupts off. */
+static int tty_output_cond(void *arg)
+{
+    struct tty_out_wait *w = (struct tty_out_wait *)arg;
+
+    if (w->t->pump) {
+        w->t->pump(w->t);
+    }
+    return !w->t->ldisc.stopped || tty_desc_hung(w->t, w->opened);
+}
+
+int tty_wait_output(struct tty *t, int nonblock, uint32_t opened)
+{
+    struct tty_out_wait w;
+    uint32_t flags;
+    int go, rc;
+
+    w.t = t;
+    w.opened = opened;
+    for (;;) {
+        flags = kirq_save();
+        go = tty_output_cond(&w);
+        kirq_restore(flags);
+        if (tty_desc_hung(t, opened)) {
+            return -EIO;
+        }
+        if (go) {
+            return 0;
+        }
+        if (nonblock) {
+            return -EAGAIN;
+        }
+        rc = wq_wait_event(&t->input_wq, tty_output_cond, &w);
+        if (rc != 0) {
+            return rc;
+        }
     }
 }
 
@@ -358,37 +524,49 @@ static void console_answer(struct tty *t)
     kirq_restore(flags);
 }
 
+/**
+ * The echo held goes first, as Linux's n_tty_write begins with
+ * process_echoes, and the bytes then go one at a time while output runs: a
+ * VSTOP from the keyboard's interrupt stops the write between two bytes.
+ */
 int tty_write(struct tty *t, const unsigned char *kbuf, int count)
 {
+    uint32_t flags;
     int i;
 
     if (t->sink == console_sink) {
         console_write_begin();
     }
-    for (i = 0; i < count; i++) {
+    flags = kirq_save();
+    n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx);
+    kirq_restore(flags);
+    for (i = 0; i < count && !t->ldisc.stopped; i++) {
         n_tty_output(&t->ldisc, kbuf[i], t->sink, t->sink_ctx);
     }
     if (t->sink == console_sink) {
         console_write_end();
         console_answer(t);
     }
-    return count;
+    return i;
 }
 
+/** A poller for POLLOUT alone on stopped output waits on `input_wq` too,
+ * which a restart wakes, and drains the pump, so a VSTART from COM1 reaches
+ * the discipline while it waits. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq)
 {
     short revents = 0;
 
-    if (events & POLLIN) {
+    if ((events & POLLIN) || ((events & POLLOUT) && t->ldisc.stopped)) {
         *wq = &t->input_wq;
         if (t->pump) {
             t->pump(t);
         }
-        if (n_tty_readable(&t->ldisc)) {
-            revents = POLLIN;
-        }
     }
-    if (events & POLLOUT) {
+    if ((events & POLLIN) && n_tty_readable(&t->ldisc)) {
+        revents = POLLIN;
+    }
+    if ((events & POLLOUT) && !t->ldisc.stopped) {
         revents = (short)(revents | POLLOUT);
     }
     return revents;
@@ -408,20 +586,32 @@ int tty_inq(struct tty *t)
     return n;
 }
 
+/** Whether `tio` has IXON with ^S and ^Q, the flow control a packet-mode
+ * master is told of, as Linux's pty_set_termios tests it. */
+static int tty_std_flow(const struct ktermios *tio)
+{
+    return (tio->c_iflag & IXON) && tio->c_cc[VSTOP] == 023 && tio->c_cc[VSTART] == 021;
+}
+
 /**
  * Interrupts are off so an input IRQ feeding the discipline never reads a
  * half-written termios. A switch out of canonical mode can make a partial
  * line readable, so a reader parked on the tty is woken when the discipline
  * reports something to read. The console's flush also empties the serial
  * ring: input taken from the port but not yet in the discipline is input
- * the program asked to discard.
+ * the program asked to discard. `flow` hears of a change of IXON with ^S
+ * and ^Q before the restart that turning IXON off makes, which then gives
+ * the echo held to the sink, the order of Linux's tty_set_termios, which
+ * calls the driver's set_termios before the discipline's.
  */
 void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
 {
     uint32_t flags;
-    int readable;
+    int readable, was, old_flow;
 
     flags = kirq_save();
+    was = t->ldisc.stopped;
+    old_flow = tty_std_flow(&t->ldisc.tio);
     if (flush_input) {
         if (t->pump) {
             serial_rx_flush();
@@ -429,6 +619,13 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
         n_tty_flush(&t->ldisc);
     }
     readable = n_tty_set_termios(&t->ldisc, kt);
+    if (t->flow && old_flow != tty_std_flow(kt)) {
+        t->flow(t, old_flow ? TTY_FLOW_NOSTOP : TTY_FLOW_DOSTOP);
+    }
+    tty_flow_changed(t, was);
+    if (was && !t->ldisc.stopped) {
+        tty_echo_out(t);
+    }
     wq_wake(t->space_wq, WQ_ROOM);
     if (readable) {
         wq_wake(&t->input_wq, WQ_DATA);
@@ -485,6 +682,7 @@ void tty_vhangup(struct tty *t)
     tty_set_session(t, 0, 0);
     flags = kirq_save();
     t->vhangups++;
+    t->ldisc.echo_head = t->ldisc.echo_tail;
     kirq_restore(flags);
     n_tty_default_termios(&kt);
     tty_set_termios(t, &kt, 1);
@@ -493,6 +691,20 @@ void tty_vhangup(struct tty *t)
     }
     wq_wake_all(&t->input_wq);
     wq_wake(t->space_wq, WQ_ROOM);
+}
+
+void tty_console_hold(void)
+{
+    uint32_t flags = kirq_save();
+    int was = console_tty.ldisc.stopped;
+
+    if (was) {
+        n_tty_start(&console_tty.ldisc);
+    } else {
+        n_tty_stop(&console_tty.ldisc);
+    }
+    tty_flow_changed(&console_tty, was);
+    kirq_restore(flags);
 }
 
 uint32_t tty_console_vhangups(void)
@@ -518,18 +730,30 @@ static void console_sink(void *ctx, unsigned char c)
     console_putc_raw((char)c);
 }
 
+/** The console's change of output flow: a stop or a restart sets or clears
+ * the Scroll Lock flag and its LED (`kd_scroll_lock`), as Linux's con_stop
+ * and con_start. */
+static void console_flow(struct tty *t, int what)
+{
+    (void)t;
+    if (what & (TTY_FLOW_STOP | TTY_FLOW_START)) {
+        kd_scroll_lock((what & TTY_FLOW_STOP) != 0);
+    }
+}
+
 /** When the discipline has no room for a line, ordinary bytes wait in the
  * ring; a signal character behind them does not, since what it does first
  * is discard everything typed before it. The ring is searched for one, the
  * bytes before it are discarded as the character would have discarded them,
- * and it is fed. Returns 1 when a byte was fed. */
+ * and it is fed. Under NOFLSH a signal character discards nothing and waits
+ * its turn. Returns 1 when a byte was fed. */
 static int console_signal_through(struct tty *t, n_tty_out_fn out, void *ctx)
 {
     const struct ktermios *tio = &t->ldisc.tio;
     unsigned char set[3];
-    int at, ch, signo = 0;
+    int at, ch, looked;
 
-    if (!(tio->c_lflag & ISIG)) {
+    if (!(tio->c_lflag & ISIG) || (tio->c_lflag & NOFLSH)) {
         return 0;
     }
     set[0] = tio->c_cc[VINTR];
@@ -541,15 +765,32 @@ static int console_signal_through(struct tty *t, n_tty_out_fn out, void *ctx)
     }
     serial_rx_discard(at);
     t->ldisc.counters.flush_bytes += (unsigned int)at;
+    looked = serial_rx_looked();
     ch = serial_rx_take();
     if (ch < 0) {
         return 0;
     }
-    n_tty_receive(&t->ldisc, (unsigned char)ch, out, ctx, &signo);
-    if (signo != 0) {
-        tty_deliver_signal(t, signo);
-    }
+    tty_receive(t, (unsigned char)ch, out, ctx, looked);
     return 1;
+}
+
+/** When the discipline has no room for a line, act on the VSTOP and VSTART
+ * among the bytes that wait in the ring (`tty_lookahead`), so that a full
+ * console still stops and restarts its output, as Linux's
+ * n_tty_lookahead_flow_ctrl. Interrupts off. */
+static void console_lookahead(struct tty *t)
+{
+    unsigned char ahead[64];
+    int n, i;
+
+    if (!(t->ldisc.tio.c_iflag & IXON)) {
+        return;
+    }
+    while ((n = serial_rx_lookahead(ahead, (int)sizeof(ahead))) > 0) {
+        for (i = 0; i < n; i++) {
+            tty_lookahead(t, ahead[i]);
+        }
+    }
 }
 
 /* The kernel termios is the 36-byte TCGETS/TCSETS ABI prefix (see n_tty.h).
@@ -600,26 +841,25 @@ static void console_pump(struct tty *t)
         return;
     }
     for (;;) {
-        int ch, signo = 0;
+        int ch, looked;
 
         if (!n_tty_has_room(&t->ldisc)) {
             if (console_signal_through(t, echo ? t->sink : null_sink, echo ? t->sink_ctx : NULL)) {
                 continue;
             }
+            console_lookahead(t);
             break;
         }
+        looked = serial_rx_looked();
         ch = serial_rx_take();
         if (ch < 0) {
             break;
         }
         if (echo) {
-            tty_input_char(t, (unsigned char)ch);
+            tty_input(t, (unsigned char)ch, looked);
             continue;
         }
-        n_tty_receive(&t->ldisc, (unsigned char)ch, null_sink, NULL, &signo);
-        if (signo != 0) {
-            tty_deliver_signal(t, signo);
-        }
+        tty_receive(t, (unsigned char)ch, null_sink, NULL, looked);
     }
     if (!echo && n_tty_readable(&t->ldisc)) {
         if (t->ready_us == 0) {
@@ -650,23 +890,21 @@ static void console_pump_irq(struct tty *t)
         return;
     }
     while (budget-- > 0 && serial_data_available()) {
-        int ch, signo = 0;
+        int ch, looked;
 
         if (!n_tty_has_room(&t->ldisc)) {
             if (console_signal_through(t, null_sink, NULL)) {
                 continue;
             }
+            console_lookahead(t);
             break;
         }
+        looked = serial_rx_looked();
         ch = serial_rx_take();
-
         if (ch < 0) {
             break;
         }
-        n_tty_receive(&t->ldisc, (unsigned char)ch, null_sink, NULL, &signo);
-        if (signo != 0) {
-            tty_deliver_signal(t, signo);
-        }
+        tty_receive(t, (unsigned char)ch, null_sink, NULL, looked);
     }
 }
 
@@ -691,6 +929,7 @@ void tty_console_init(void)
     console_tty.winsize.ws_col = (uint16_t)cols;
     console_tty.winsize.ws_row = (uint16_t)rows;
     console_tty.pump = console_pump;
+    console_tty.flow = console_flow;
     serial_set_rx_notify(console_rx_notify);
     blank_init();
 }

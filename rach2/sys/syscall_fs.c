@@ -839,6 +839,73 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
 }
 
 /**
+ * Write `count` bytes of `buf` to the console through the console
+ * descriptor `entry`, for `write_fd`.
+ *
+ * The bytes go in pieces through a 256-byte kernel buffer and the
+ * terminal's output processing (OPOST and ONLCR, so a bare newline becomes
+ * CR LF on the screen and on the serial line). A fault on the user buffer
+ * returns the bytes already written, or -EFAULT when there are none. While
+ * output is stopped, by VSTOP under IXON or by TCOOFF, the write waits for it
+ * to restart (`tty_wait_output`), or returns the bytes written, or -EAGAIN
+ * when none, on a nonblocking description, as Linux's n_tty_write. A
+ * process of a background group of the console's session writes freely
+ * unless TOSTOP is set; with it set, the call is -EIO when SIGTTOU is
+ * blocked or ignored, and otherwise SIGTTOU goes to the process group and
+ * the call is -EINTR.
+ */
+static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t count)
+{
+    char kbuf[256];
+    uint32_t done = 0;
+    int nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
+    uint32_t opened = entry->ofd ? entry->ofd->tty_hangups : console_tty.vhangups;
+
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (fd_tty_hung(entry)) {
+        return -EIO;
+    }
+    if ((console_tty.ldisc.tio.c_lflag & TOSTOP) &&
+        tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
+        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
+            current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
+            return -EIO;
+        }
+        tty_signal_group((int)current_proc->pgid, SIGTTOU);
+        return -EINTR;
+    }
+    while (done < count) {
+        uint32_t chunk = count - done;
+        uint32_t put = 0;
+
+        if (chunk > sizeof(kbuf)) {
+            chunk = sizeof(kbuf);
+        }
+        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        for (;;) {
+            int32_t rc;
+
+            put += (uint32_t)tty_write(&console_tty, (const unsigned char *)kbuf + put,
+                                       (int)(chunk - put));
+            if (put == chunk) {
+                break;
+            }
+            rc = tty_wait_output(&console_tty, nonblock, opened);
+            if (rc < 0) {
+                return done + put > 0 ? (int32_t)(done + put) : rc;
+            }
+        }
+        done += chunk;
+        sched_service_point();
+    }
+    return (int32_t)count;
+}
+
+/**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
  *
  * The shared body of write(2) and of each element of writev(2). Returns the
@@ -853,16 +920,8 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
  * to the peer it connected to, -EDESTADDRREQ without one, and a datagram
  * past 65535 bytes is -EMSGSIZE; a socket of another type is -EOPNOTSUPP.
  * A file of a mount or of the KRFFS root is `file_write`'s. The framebuffer
- * has operations of its own (display/fbdev.c).
- *
- * The console takes the bytes in pieces through a 256-byte kernel buffer and
- * writes them through the terminal's output processing (OPOST and ONLCR, so
- * a bare newline becomes CR LF on the screen and on the serial line). A
- * fault on the user buffer returns the bytes already written, or -EFAULT
- * when there are none. A process of a background group of the console's
- * session writes freely unless TOSTOP is set; with it set, the call is -EIO
- * when SIGTTOU is blocked or ignored, and otherwise SIGTTOU goes to the
- * process group and the call is -EINTR.
+ * has operations of its own (display/fbdev.c), and the console is
+ * `console_write`'s.
  */
 static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 {
@@ -909,40 +968,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_CONSOLE) {
-        char kbuf[256];
-        uint32_t done = 0;
-
-        if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF;
-        }
-        if (fd_tty_hung(entry)) {
-            return -EIO;
-        }
-
-        if ((console_tty.ldisc.tio.c_lflag & TOSTOP) &&
-            tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
-            if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
-                current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
-                return -EIO;
-            }
-            tty_signal_group((int)current_proc->pgid, SIGTTOU);
-            return -EINTR;
-        }
-
-        while (done < count) {
-            uint32_t chunk = count - done;
-
-            if (chunk > sizeof(kbuf)) {
-                chunk = sizeof(kbuf);
-            }
-            if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
-                return (done > 0) ? (int32_t)done : -EFAULT;
-            }
-            tty_write(&console_tty, (const unsigned char *)kbuf, (int)chunk);
-            done += chunk;
-            sched_service_point();
-        }
-        return (int32_t)count;
+        return console_write(entry, buf, count);
     }
 
     if (entry->type == FD_TYPE_FILE) {

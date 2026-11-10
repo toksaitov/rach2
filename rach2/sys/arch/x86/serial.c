@@ -48,6 +48,9 @@ static struct serial_rx_counters _rx;
 static void (*_rx_notify)(void);
 static int _rx_irq_wanted; /* the receive interrupt was enabled */
 static int _rx_irq_masked; /* and is off from a full ring to a half-empty one */
+/* The ring position before which `serial_rx_lookahead` has given every
+ * byte; monotonic, as the head and tail are. */
+static uint32_t _rx_looked;
 
 /* Line control register bits */
 #define SERIAL_LCR_DLAB 0x80 /* Divisor latch access bit */
@@ -334,6 +337,26 @@ int serial_rx_find(const unsigned char *set, int n)
     }
     console_unlock(flags);
     return found;
+}
+
+int serial_rx_lookahead(unsigned char *buf, int max)
+{
+    uint32_t flags = console_lock();
+    uint32_t at = (int32_t)(_rx_looked - _rx_head) > 0 ? _rx_looked : _rx_head;
+    int n = 0;
+
+    while (at != _rx_tail && n < max) {
+        buf[n++] = _rx_ring[at & (SERIAL_RX_SIZE - 1)];
+        at++;
+    }
+    _rx_looked = at;
+    console_unlock(flags);
+    return n;
+}
+
+int serial_rx_looked(void)
+{
+    return (int32_t)(_rx_looked - _rx_head) > 0;
 }
 
 void serial_rx_discard(int count)

@@ -68,6 +68,18 @@ uint32_t serial_rx_pending(void);
  */
 int serial_rx_find(const unsigned char *set, int n);
 
+/**
+ * Copy into `buf`, at most `max` of them, the bytes of the ring no earlier
+ * call has given, oldest first, for a reader that acts on some bytes ahead
+ * of their turn (VSTOP and VSTART); the ring keeps them. Returns the count.
+ * Takes the console's lock.
+ */
+int serial_rx_lookahead(unsigned char *buf, int max);
+
+/** Whether the byte at the ring's head is one `serial_rx_lookahead` gave,
+ * whatever took bytes from the ring since. */
+int serial_rx_looked(void);
+
 /** Drop `count` bytes from the ring's head, or every byte it holds when it
  * holds fewer. */
 void serial_rx_discard(int count);
