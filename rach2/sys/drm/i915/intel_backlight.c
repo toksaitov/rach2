@@ -7,6 +7,7 @@
  */
 
 #include "i915.h"
+#include "i915_reg.h"
 
 #include "../../display/backlight.h"
 #include "../../klog.h"
@@ -100,7 +101,13 @@ void intel_backlight_pipe(struct drm_i915_private *i915, int on)
     d->bl_pipe_on = on != 0;
     if (d->bl_index >= 0 && d->bl.switched) {
         intelbl_power(&d->bl, on && d->bl_want_on);
+    } else {
+        /* No class switch to ask: the enable line follows the pipe, as
+         * Linux's intel_pps_backlight_on and _off set it. */
+        i915_rmw(&i915->hw, PP_CONTROL, PANEL_UNLOCK_MASK | EDP_BLC_ENABLE,
+                 PANEL_UNLOCK_REGS | (on ? EDP_BLC_ENABLE : 0));
     }
+    i915_posting_read(&i915->hw, PP_CONTROL);
 }
 
 void intel_backlight_fini(struct drm_i915_private *i915)

@@ -37,4 +37,7 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/intel_backlight.c \
     sys/drm/i915/i915_display_debugfs.c \
     sys/drm/i915/i915_gem_execbuffer.c \
-    sys/drm/i915/i915_cmd_parser.c
+    sys/drm/i915/i915_cmd_parser.c \
+    sys/drm/i915/intel_cdclk.c \
+    sys/drm/i915/intel_pps.c \
+    sys/drm/i915/intel_dp_aux.c
