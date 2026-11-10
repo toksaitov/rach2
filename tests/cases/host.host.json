@@ -4090,6 +4090,108 @@
           "helper": true
         }
       ]
+    },
+    {
+      "case_id": "host.host.pure64",
+      "behavior": "the x86-64 kernel built with IA32=0 links and has none of the i386 ABI's symbols that the default kernel has, and both keep the x86-64 calls of the descriptor tables and the entry that refuses a `syscall` from 32-bit code",
+      "units": [
+        "host",
+        "`tests/cases/host/pure64check.c`: the symbol tables of build/x86_64/rach2-pure64/kernel and build/x86_64/rach2/kernel"
+      ],
+      "domain": "host",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "pure64check",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "nothing; the program reads the two kernels and writes only its scratch directory, which it removes"
+      },
+      "assertions": [
+        {
+          "assertion_id": "linked",
+          "checks": "both kernels read as ELF64 x86-64 files with a symbol table that names init_syscall",
+          "source": "program"
+        },
+        {
+          "assertion_id": "no-compat",
+          "checks": "ia32_syscall_init, compat_sys_execve, ia32_sigframe_setup, vdso32_build and ia32_enabled are in the default kernel and not in the IA32=0 kernel",
+          "source": "program"
+        },
+        {
+          "assertion_id": "kept",
+          "checks": "sys_modify_ldt, sys_set_thread_area and syscall32_ignore are in both kernels",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "pure64check",
+          "node": "tests/cases/host/pure64check",
+          "per_architecture": false
+        },
+        {
+          "name": "pure64-kernel",
+          "node": "rach2-pure64/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "host"
+      }
     }
   ]
 }

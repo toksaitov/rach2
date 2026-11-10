@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.pure64",
+  "summary": "The x86-64 kernel without the i386 ABI, built with IA32=0 or booted with ia32_emulation=0, refuses an i386 program's exec with ENOEXEC and int $0x80 with SIGSEGV, as Linux does, and still runs 32-bit code in a 64-bit process; the program is tests/pure64probe.c",
+  "cases": [
+    {
+      "case_id": "guest.pure64.build",
+      "behavior": "the kernel built with IA32=0 refuses an i386 program's exec with ENOEXEC and kills a process that makes int $0x80 with SIGSEGV, and a 64-bit process still runs 32-bit code",
+      "units": [
+        "pure64",
+        "pure64probe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "pure64probe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes the program it wrote"
+      },
+      "assertions": [
+        {
+          "assertion_id": "exec-enoexec",
+          "checks": "the exec of an ELF32 EM_386 executable the probe writes, which a kernel with the i386 ABI runs to exit 42, fails with ENOEXEC",
+          "source": "program"
+        },
+        {
+          "assertion_id": "int80-sigsegv",
+          "checks": "int $0x80 with the i386 getpid number, 20, from 64-bit code ends the child that makes it with SIGSEGV",
+          "source": "program"
+        },
+        {
+          "assertion_id": "code32-runs",
+          "checks": "code entered by a far return to selector 0x23 still runs in 32-bit mode with CS 0x23, and a far jump to 0x33 comes back",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "pure64probe",
+          "node": "tests/pure64probe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2-pure64/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guest.pure64.boot",
+      "behavior": "the default x86-64 kernel booted with ia32_emulation=0 refuses an i386 program's exec with ENOEXEC and kills a process that makes int $0x80 with SIGSEGV, and a 64-bit process still runs 32-bit code",
+      "units": [
+        "pure64",
+        "pure64probe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "ia32_emulation=0"
+          ]
+        }
+      },
+      "execution": {
+        "program": "pure64probe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes the program it wrote"
+      },
+      "assertions": [
+        {
+          "assertion_id": "exec-enoexec",
+          "checks": "the exec of an ELF32 EM_386 executable the probe writes, which a kernel with the i386 ABI runs to exit 42, fails with ENOEXEC",
+          "source": "program"
+        },
+        {
+          "assertion_id": "int80-sigsegv",
+          "checks": "int $0x80 with the i386 getpid number, 20, from 64-bit code ends the child that makes it with SIGSEGV",
+          "source": "program"
+        },
+        {
+          "assertion_id": "code32-runs",
+          "checks": "code entered by a far return to selector 0x23 still runs in 32-bit mode with CS 0x23, and a far jump to 0x33 comes back",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "pure64probe",
+          "node": "tests/pure64probe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    }
+  ]
+}

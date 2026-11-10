@@ -144,6 +144,7 @@ crash|qemu|core
 pools|qemu|core
 diskfull|qemu|core
 fault|qemu|core
+pure64|qemu|full||128|x86_64
 imagerace|-|full
 krffscheck|python3|full
 codexapi|qemu|full||4096|x86_64

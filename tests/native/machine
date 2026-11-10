@@ -21,6 +21,7 @@ oomprobe the whole machine run out of frames
 orphanprobe grandchildren reaped by the designated init
 partsprobe four disks of crafted partition tables, booted with rach2.diskdiag
 persistprobe a second boot of the same disk
+pure64probe a kernel without the i386 ABI, built with IA32=0 or booted with ia32_emulation=0, which a running machine's kernel is not
 sockettest the count of the machine's UDP sockets, which no other process may change
 survivorprobe the designated init's exit and the debug shell's return
 tlsprobe set_thread_area and %gs of the i686 kernel
