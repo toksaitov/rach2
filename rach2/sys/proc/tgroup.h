@@ -69,11 +69,10 @@ struct tgroup {
     unsigned long nivcsw;
     unsigned long cnvcsw;
     unsigned long cnivcsw;
-    /* The most memory, in kilobytes, an address space of the process had in
-     * use when it ended, at an exec or at the end of the process, and the
-     * most any reaped child reports, which getrusage and wait4 give as
-     * `ru_maxrss`: Linux keeps the high-water mark at every fault, and this
-     * kernel samples the resident pages where an address space ends. */
+    /* The most memory, in kilobytes, an address space of the process that
+     * has ended had in use, at an exec or at the end of the process
+     * (`mm_resident_peak`), and the most any reaped child reports, which
+     * getrusage and wait4 give as `ru_maxrss`. */
     unsigned long maxrss_kb;
     unsigned long cmaxrss_kb;
     /* The interval timers of the process's processor time, setitimer's
