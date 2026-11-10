@@ -6,10 +6,13 @@
 
     sh bed/vm/image/vm.sh prepare [-n]
     sh bed/vm/image/vm.sh check [-V] [-c CPUS] [-m MIB]
+    sh bed/vm/image/vm.sh rach2 [-o RAW]
 
 `prepare` boots an overlay of the cloud image that [`tests/graphics/debian-ref/image`](../../tests/graphics/debian-ref/image) pins once with a cloud-init seed. [`image/setup.sh.in`](image/setup.sh.in) installs [`image/packages`](image/packages) from Debian's snapshot of the date that file names, rebuilds Debian's virglrenderer with GBM allocation, builds vkms with [`image/vkms.patch`](image/vkms.patch), adds `intel_iommu=on iommu=pt` to the kernel's command line and vfio's leave to take unremapped interrupts, and adds the service that writes the versions and `bed-vm: ready` to the serial console at each boot. The result is `prepared.qcow2`, read-only, in `build/cache/bed-vm` of the main clone, which its worktrees share, or in `BED_VM_CACHE`, with the key of the seed's files beside it; `-n` keeps an image of the same key, and `check` refuses one of another.
 
-`check` builds the peer into `build/bed/vm` and starts it as QEMU's ivshmem server with a region of 32 MiB, boots a new overlay with 4 CPUs and 4096 MiB (`-c`, `-m`) and the region on an `ivshmem-doorbell` of two vectors, copies the tree's `module/`, `backend/` and `../shm/vgpushm.h` into the VM and builds them there, and runs the backend as the device while the peer drives it. With `-V` the backend takes the device through vfio-pci under QEMU's emulated intel-iommu in place of the module. The accelerator is KVM where `/dev/kvm` opens, as [`rach2/qemu_devices.sh`](../../rach2/qemu_devices.sh) chooses.
+`check` builds the peer into `build/bed/vm` and starts it as QEMU's ivshmem server with a region of 32 MiB, boots a new overlay with 4 CPUs and 4096 MiB (`-c`, `-m`) and the region on an `ivshmem-doorbell` of two vectors, copies the tree's `module/`, `backend/` and `rach2/sys/virtio/vgpushm.h` into the VM and builds them there, and runs the backend as the device while the peer drives it. With `-V` the backend takes the device through vfio-pci under QEMU's emulated intel-iommu in place of the module. The accelerator is KVM where `/dev/kvm` opens, as [`rach2/qemu_devices.sh`](../../rach2/qemu_devices.sh) chooses.
+
+`rach2` makes the VM that Rach2 drives over its own transport under its own KVM: `rach2.qcow2` beside the prepared image, an overlay of it with the tree's module and backend built and installed and a service, `bed-vm-backend`, that at each boot loads the module and runs `vgpu-backend -v` surfaceless on the ivshmem device, writing each of its lines to the console after `bed-vm: `. With `-o` it also writes the image whole as the raw disk `RAW`, which `tests/run bed-shm` boots ([kvm](../../tests/kvm/Readme.md)).
 
 In the VM the backend runs as root, so that it can be the KMS device's master:
 
