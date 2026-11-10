@@ -18,7 +18,10 @@ if [ "${1:-}" = guest ]; then
     for target in x86_64:64 i686:32; do
         cc=${target%%:*}-w64-mingw32-gcc
         bits=${target#*:}
-        for probe in gl:-lopengl32 d3d9:-ld3d9 hold: full:-ld3d9 tone:-lwinmm \
+        # The fullscreen probe is a GUI program, as a game is: Wine opens a
+        # console window for a console program, and kiosk-shell would show
+        # that window and take the focus from the game's.
+        for probe in gl:-lopengl32 d3d9:-ld3d9 hold: full:-ld3d9,-mwindows tone:-lwinmm \
             dinput:-ldinput8,-ldxguid; do
             name=${probe%%:*}
             libs=$(echo "${probe#*:}" | tr , ' ')

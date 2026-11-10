@@ -94,6 +94,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 | Weston's kiosk-shell walks a freed surface tree when Wine maps a window | Weston 14.0.2 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#westons-kiosk-shell-walks-a-freed-surface-tree-when-wine-maps-a-window) |
 | virglrenderer gives the host's video memory in KiB where Mesa reads MiB | virglrenderer 1.2.0 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#virglrenderer-gives-the-hosts-video-memory-in-kib-where-mesa-reads-mib) |
 | SuperTuxKart's profile summary counts simulation steps as frames | SuperTuxKart 1.4 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#supertuxkarts-profile-summary-counts-simulation-steps-as-frames) |
+| Weston's Xwayland window manager resizes an emulated mode's window to the output | Weston 14.0.2 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#westons-xwayland-window-manager-resizes-an-emulated-modes-window-to-the-output) |
 | Linux's KVM drops the faults of an emulated task switch | Linux 6.12 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#linuxs-kvm-drops-the-faults-of-an-emulated-task-switch) |
 | QEMU's TCG gives no exit for an intercepted CR3 read | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-exit-for-an-intercepted-cr3-read) |
 | QEMU's TCG gives no selective CR0 write exit for LMSW | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-selective-cr0-write-exit-for-lmsw) |

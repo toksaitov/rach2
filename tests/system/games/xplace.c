@@ -542,6 +542,9 @@ int main(int argc, char **argv)
         return 0;
     }
     count_motion(dpy, win, gc, width, height, opcode);
+    /* The manager may still move the frame after the focus arrives; the
+     * place it holds by the key is the one that counts. */
+    report_place(dpy, root, win);
     XCloseDisplay(dpy);
     return 0;
 }
