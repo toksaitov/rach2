@@ -122,11 +122,16 @@ int etude_scenario(struct etude_case *c)
     net_assert(&u, "as-debian", judged,
                "the browser acceptance differs from Debian; see judge evidence");
     if (net_step(&u, "collect") == ETUDE_OK) {
-        argv[2] =
-            "cd /tmp/browser-out && "
-            "for f in result.json switches.json sound.json record *.pages *.plays *.decoders; "
-            "do if [ -f \"$f\" ]; then echo \"browser-evidence: $f\"; cat \"$f\"; fi; done; "
-            "tar -czf /tmp/browser-out.tar.gz -C /tmp/browser-out .";
+        snprintf(command, sizeof(command),
+                 "cd /tmp/browser-out && "
+                 "for f in result.json switches.json sound.json record %s "
+                 "*.pages *.plays *.decoders; "
+                 "do if [ -f \"$f\" ]; then echo \"browser-evidence: $f\"; cat \"$f\"; fi; done; "
+                 "tar -czf /tmp/browser-out.tar.gz -C /tmp/browser-out .",
+                 strncmp(mode, "webgpu-venus", 12) == 0
+                     ? "gpu.txt gpu-info.json vulkaninfo.out vulkaninfo.err browser.log"
+                     : "");
+        argv[2] = command;
         if (net_guest(&u, b.m, argv, NULL, NULL, "pack", &r) == ETUDE_OK && net_exited0(&r)) {
             fputs(r.out, stdout);
             if (etude_guest_get(b.m, "/tmp/browser-out.tar.gz", "browser-out.tar.gz") != ETUDE_OK)
