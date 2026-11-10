@@ -576,6 +576,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_edp",
+          "checks": "tests/host/i915_edp_hosttest.c drives the eDP panel of the HD 4400's host model: AUX messages with Linux's divider, precharge and timeout, DPCD reads and writes through timeouts, receive errors, DEFER and empty replies within Linux's bounds, VDD forced for a panel without power and let go five power cycles later, and the EDID read over I2C with bad blocks refused or dropped, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_power",
           "checks": "tests/host/i915_power_hosttest.c enables the Intel graphics driver's RC6 and frequency control on the HD 4400's host model, RC6 entered at idle with its residency read in milliseconds across the counter's wrap, the pcode mailbox bounded, every frequency request within the limits under the up and down interrupts, and the card's /sys files under Linux's names, under ASan and UBSan and exits 0",
           "source": "scenario"
