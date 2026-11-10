@@ -419,7 +419,7 @@ long sys_set_mempolicy(isr_params_t *params)
 {
     int mode = (int)SC_ARG(params, 0);
     unsigned long nodes[VM_NODES_WORDS];
-    struct vm_policy *pol;
+    struct vm_policy *pol = NULL;
     uint16_t mflags;
     int rc;
 

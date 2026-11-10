@@ -347,14 +347,17 @@ static const char *maps_line(long addr)
     char want[20];
     const char *p = maps_text;
     unsigned long v = (unsigned long)addr;
-    int digits = 8, n = 0, i;
+    unsigned long rest = v >> 16 >> 16;
+    int digits = 8, n, i;
 
-    while (digits < 16 && (v >> (4 * digits - 1) >> 1) != 0) {
+    for (; rest != 0; rest >>= 4) {
         digits++;
     }
     for (i = digits - 1; i >= 0; i--) {
-        want[n++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+        want[i] = "0123456789abcdef"[v & 15];
+        v >>= 4;
     }
+    n = digits;
     want[n++] = ' ';
     while (*p != '\0') {
         for (i = 0; i < n && p[i] == want[i]; i++) {
@@ -964,10 +967,12 @@ static void move_other(long v)
 {
     unsigned long page = (unsigned long)v;
     int status = 0x55;
-    int fds[2] = {-1, -1};
+    int fds[2];
     long other, user;
     char c = 0;
 
+    fds[0] = -1;
+    fds[1] = -1;
     check(syscall1(SYS_PIPE, (long)fds) == 0, "pipe");
     other = fork_child();
     if (other == 0) {
