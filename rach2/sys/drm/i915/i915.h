@@ -724,7 +724,10 @@ struct i915_gem {
  * clock in kHz the link's M/N give of `port_clock`, the link's symbol
  * clock in kHz as Linux reports it; `bpp` is the pipe's bits a pixel,
  * three times its bits a colour; `lanes` the link's lanes. `src_w` and
- * `src_h` are PIPESRC's size. The panel fitter's three registers are kept
+ * `src_h` are PIPESRC's size. `output` is the INTEL_OUTPUT_ the function
+ * control's mode names, `has_hdmi_sink` says its mode is HDMI rather than
+ * DVI, and `pixel_multiplier` is PIPE_MULT's, 1 for the eDP transcoder.
+ * The panel fitter's three registers are kept
  * as read, `pf_ctl` 0 when it is off. The primary plane: `plane_on`,
  * `format` (DRM_FORMAT_, 0 for one Linux does not read), `modifier`,
  * `surf` its GGTT address, `stride` in bytes, and `x`, `y` its offset.
@@ -734,6 +737,9 @@ struct intel_pipe_readout {
     uint8_t dither;
     int trans;
     int port;
+    int output;
+    uint8_t has_hdmi_sink;
+    uint32_t pixel_multiplier;
     struct drm_mode_modeinfo mode;
     uint32_t port_clock;
     uint32_t bpp;
@@ -781,8 +787,12 @@ struct intel_pps {
 #define INTEL_EDID_BLOCKS       4
 
 /*
- * The eDP panel on DDI A (intel_dp.c), Linux's intel_dp with its
- * connector's panel. `dpcd` is the sink's receiver capabilities and
+ * A DisplayPort sink on a DDI port (intel_dp.c), Linux's intel_dp: the
+ * eDP panel on DDI A, with its connector's panel, or a monitor on DDI B,
+ * C or D. `i915` is the device, `name` the log's prefix ("edp", "dp B"),
+ * `port` the DDI port, `aux_port` the AUX channel's port, which the VBT
+ * may set apart from it, and `edp` says the sink is the panel, whose AUX
+ * messages hold its VDD. `dpcd` is the sink's receiver capabilities and
  * `edp_dpcd` its eDP display control capabilities, 0 before eDP 1.x;
  * `sink_rates` the link rates in kHz of symbol clock it takes, highest
  * last, and `use_rate_select` says they came from eDP 1.4's table, set
@@ -793,17 +803,31 @@ struct intel_pps {
  * failed trainings (intel_dp_link_training.c), `use_max_params` says the
  * next mode set takes the sink's most instead of the least the mode
  * needs, `link_max_rate` and `link_max_lanes` bound the link, 0 for no
- * bound, and `train_failures` counts the failures in a row. `buf_ctl` is the
- * value DDI_BUF_CTL is built in, `saved_port_bits` the bits of the
- * firmware's kept across mode sets. `edid` holds `edid_len` bytes, 0
- * when the panel gave none, and `edid_bpc` is the bits a colour it names,
- * 0 for none; `fixed` the panel's modes, preferred first, `nfixed` of
- * them; `vbt` what the VBT says of the panel. `present` says the panel
- * answered at init, which makes its connector.
+ * bound, and `train_failures` counts the failures in a row. `buf_ctl` is
+ * the value DDI_BUF_CTL is built in, and `saved_port_bits` the bits of the
+ * firmware's kept across mode sets. `edid` holds `edid_len` bytes, 0 when
+ * the sink gave none, and `edid_bpc` is the bits a colour it names, 0 for
+ * none. Of the panel:
+ * `fixed` its modes, preferred first, `nfixed` of them, `vbt` what the
+ * VBT says of it, and `pps` its power sequencer. `present` says the
+ * panel answered at init, which makes its connector. Of a monitor:
+ * `connector` its connector; `downstream_ports` the DPCD's ports of a
+ * branch device and `sink_count` its sinks; `info` what its EDID says of
+ * it; the `dfp_` limits of a branch's first port, Linux's intel_dp->dfp,
+ * 0 for none: bits a colour, dot clock and TMDS clocks in kHz;
+ * `reset_link` says a long pulse asks the next probe to forget the
+ * fallback, and `retrain` that a short pulse found the link lost.
  */
+struct drm_i915_private;
 struct intel_dp {
+    struct drm_i915_private *i915;
+    const char *name;
     int port;
+    int aux_port;
+    uint8_t edp;
     uint8_t present;
+    uint8_t reset_link;
+    uint8_t retrain;
     uint8_t dpcd[16];
     uint8_t edp_dpcd[3];
     uint32_t sink_rates[8];
@@ -828,24 +852,248 @@ struct intel_dp {
     struct intel_vbt_panel vbt;
     uint32_t edid_bpc;
     struct intel_pps pps;
+    struct drm_connector *connector;
+    uint8_t downstream_ports[16];
+    uint8_t sink_count;
+    struct drm_edid_hdmi_info info;
+    uint32_t dfp_max_bpc, dfp_max_dotclock, dfp_min_tmds, dfp_max_tmds;
+};
+
+/* ---- The external outputs (78-10c) ---- */
+
+/* What a pipe drives, Linux's INTEL_OUTPUT_ types of a DDI port. */
+#define INTEL_OUTPUT_NONE 0
+#define INTEL_OUTPUT_EDP  1
+#define INTEL_OUTPUT_DP   2
+#define INTEL_OUTPUT_HDMI 3
+
+/*
+ * An I2C message, Linux's struct i2c_msg without its flags but one:
+ * `len` bytes of `buf` to or from the device at the 7-bit `addr`.
+ */
+struct intel_i2c_msg {
+    uint8_t addr;
+    uint8_t read;
+    uint32_t len;
+    uint8_t *buf;
 };
 
 /*
- * What a pipe is set to (intel_dp_compute_config and the fitter), Linux's
- * part of intel_crtc_state that 78-10b drives: `active`, the panel's
- * timings in `mode` with the pixel clock in kHz, the pipe's source size
- * `src_w` by `src_h`, the user's mode's, `bpp` and `dither`, the link's
- * `port_clock` (kHz of symbol clock) and `lanes`, the transcoder's M/N
- * and transfer unit, the fitter (`pfit`, its window `pf_pos` and
- * `pf_size` as PF_WIN_POS and PF_WIN_SZ take them, and `force_thru`, the
- * eDP input of pipe A that goes through the fitter's power well), the
- * pixel rate after the fitter, and the line times for WM_LINETIME.
+ * An I2C bus, Linux's i2c_adapter as the EDID's read uses it: `xfer` runs
+ * the `n` messages as one transaction, a repeated start between them and
+ * a stop at the end, and returns `n` or a negative error: -ENXIO when no
+ * device answered its address, -EIO for a NAK of data, -ETIMEDOUT and
+ * others for the bus. `ctx` is its own; `name` names it in the log.
+ */
+struct intel_i2c_bus {
+    int32_t (*xfer)(void *ctx, struct intel_i2c_msg *msgs, int n);
+    void *ctx;
+    const char *name;
+};
+
+/* The GMBUS pins of a Lynx Point PCH, Linux's GMBUS_PIN_ (the VBT's DDC
+ * pins on Haswell), and the most a pin's number may be. */
+#define GMBUS_PIN_DISABLED 0
+#define GMBUS_PIN_SSC      1
+#define GMBUS_PIN_VGADDC   2
+#define GMBUS_PIN_PANEL    3
+#define GMBUS_PIN_DPC      4
+#define GMBUS_PIN_DPB      5
+#define GMBUS_PIN_DPD      6
+#define GMBUS_NUM_PINS     7
+
+/*
+ * The I2C bus of one GMBUS pin (intel_gmbus.c), Linux's intel_gmbus.
+ * `reg0` is GMBUS0's value for it, the pin and the rate; `gpio_reg` the
+ * GPIO register its lines are bit-banged through. `force_bit` counts the
+ * callers that want bit-banging, as Linux's intel_gmbus_force_bit, and
+ * holds GMBUS_FORCE_BIT_RETRY besides when a GMBUS transfer timed out and
+ * the bus fell back to bit-banging, which it keeps while the bit-banged
+ * transfers succeed; the bus bit-bangs while it is not 0. The counts:
+ * transfers by GMBUS and by bit-banging, NAKs and timeouts. `bus` is its
+ * face as an I2C bus.
+ */
+struct intel_gmbus {
+    struct drm_i915_private *i915;
+    const char *name;
+    uint8_t pin;
+    uint8_t valid;
+    uint32_t force_bit;
+    uint32_t reg0;
+    uint32_t gpio_reg;
+    uint32_t xfers, bit_xfers, naks, timeouts;
+    struct intel_i2c_bus bus;
+};
+
+/* Linux's GMBUS_FORCE_BIT_RETRY. */
+#define GMBUS_FORCE_BIT_RETRY (1u << 31)
+
+/* The display PLLs of Haswell, Linux's enum intel_dpll_id. */
+#define DPLL_ID_NONE       (-1)
+#define DPLL_ID_WRPLL1     0
+#define DPLL_ID_WRPLL2     1
+#define DPLL_ID_SPLL       2
+#define DPLL_ID_LCPLL_810  3
+#define DPLL_ID_LCPLL_1350 4
+#define DPLL_ID_LCPLL_2700 5
+#define INTEL_NUM_DPLLS    6
+
+/*
+ * A display PLL (intel_dpll.c), Linux's intel_shared_dpll for Haswell:
+ * `hw` is the WRPLL_CTL or SPLL_CTL value it runs or last ran, `on`
+ * whether it runs, `pipes` the pipes whose configuration names it, a bit
+ * each, and `active` the pipes that have it enabled; a WRPLL or the SPLL
+ * runs while `active` is not 0. The LCPLL outputs are always on and only
+ * counted.
+ */
+struct intel_dpll {
+    const char *name;
+    int id;
+    uint32_t hw;
+    uint8_t on;
+    uint32_t pipes;
+    uint32_t active;
+};
+
+/*
+ * What the PLLs will run once a commit's pipes are set, Linux's shared
+ * DPLL state of an atomic state: the pipes that will name each PLL, a bit
+ * each, and the value each will run.
+ */
+struct intel_dpll_plan {
+    uint32_t pipes[INTEL_NUM_DPLLS];
+    uint32_t hw[INTEL_NUM_DPLLS];
+};
+
+/* The longest infoframe a DIP's data registers hold, Linux's
+ * VIDEO_DIP_DATA_SIZE, with the hole after the header Linux packs. */
+#define INTEL_DIP_DATA_SIZE 32
+
+/* The DP++ adaptors, Linux's enum drm_dp_dual_mode_type, in its order. */
+#define DP_DUAL_MODE_NONE       0
+#define DP_DUAL_MODE_UNKNOWN    1
+#define DP_DUAL_MODE_TYPE1_DVI  2
+#define DP_DUAL_MODE_TYPE1_HDMI 3
+#define DP_DUAL_MODE_TYPE2_DVI  4
+#define DP_DUAL_MODE_TYPE2_HDMI 5
+#define DP_DUAL_MODE_LSPCON     6
+
+/*
+ * An HDMI monitor on a DDI port (intel_hdmi.c), Linux's intel_hdmi with
+ * its connector's EDID. `ddc_pin` is the GMBUS pin of its DDC, `level`
+ * the buffer translation the VBT gives, `max_tmds` the most TMDS clock in
+ * kHz the port drives, the VBT's or Haswell's 300 MHz, and `dual_mode`
+ * the VBT's word that the port is DP++. From the last probe: `edid` and
+ * `edid_len`, `info` what the EDID, or the connector's override, says of
+ * the sink, and the DP++ adaptor found, `adaptor` (DP_DUAL_MODE_*) and
+ * its most TMDS clock in kHz, `adaptor_max_tmds`, 0 for no limit.
+ */
+struct intel_hdmi {
+    uint8_t ddc_pin;
+    int level;
+    uint32_t max_tmds;
+    uint8_t dual_mode;
+    uint8_t edid[128 * INTEL_EDID_BLOCKS];
+    uint32_t edid_len;
+    struct drm_edid_hdmi_info info;
+    int adaptor;
+    uint32_t adaptor_max_tmds;
+};
+
+/* The hotplug pins of the PCH's ports, Linux's HPD_PORT_B to D. */
+#define HPD_PORT_B   0
+#define HPD_PORT_C   1
+#define HPD_PORT_D   2
+#define HPD_NUM_PINS 3
+
+/*
+ * DDI B, C or D with its outputs (intel_display.c), Linux's
+ * intel_digital_port: the one encoder, a DisplayPort connector and an HDMI
+ * connector as the VBT says the port carries them, `has_dp` and
+ * `has_hdmi`, and their sinks. `hpd_pin` is its HPD_PORT_ pin. `present`
+ * says the port was made.
+ */
+struct intel_ddi_port {
+    int port;
+    uint8_t present;
+    uint8_t has_dp, has_hdmi;
+    int hpd_pin;
+    struct drm_encoder encoder;
+    struct drm_connector dp_connector, hdmi_connector;
+    struct intel_dp dp;
+    struct intel_hdmi hdmi;
+};
+
+/* An HPD pin's state, Linux's enum hpd_pin_state. */
+#define HPD_ENABLED       0
+#define HPD_DISABLED      1
+#define HPD_MARK_DISABLED 2
+
+/* Linux's bounds of a storm: more than 50 counts within 1000 ms, a long
+ * pulse counting 10 and a short one none on a part with DP MST, turns the
+ * pin off for two minutes, while its connectors are polled every 10 s; an
+ * output that did not change is probed once more 1 s later. */
+#define HPD_STORM_THRESHOLD   50
+#define HPD_STORM_DETECT_MS   1000u
+#define HPD_STORM_REENABLE_MS (2u * 60u * 1000u)
+#define HPD_POLL_MS           10000u
+#define HPD_RETRY_MS          1000u
+
+/*
+ * Hotplug (intel_hotplug.c), Linux's intel_hotplug for a Lynx Point PCH,
+ * the pins a bit each by HPD_PORT_. Under the interrupt mask's lock: the
+ * pulses the handler took on a port with DisplayPort, `long_mask` and
+ * `short_mask`, for its pulse handler, and the pins whose outputs are to be
+ * probed, `event_bits`; and each pin's state, `state` HPD_*, with its storm
+ * window's start `storm_start` (ms of rtc_ticks_now) and count
+ * `storm_count`. The work's own: `retry_bits`, the pins probed again at
+ * `retry_at`, and `retries`, how many times in a row each was; when the
+ * storm's pins come back, `reenable_at`, and when they are next polled,
+ * `poll_at`, all ms, 0 for none. `work` is the DRM core's deferred work
+ * that runs it in process context. `pulses` counts the interrupts taken
+ * and `storms` the storms; `ready` says the interrupts are hooked.
+ */
+struct intel_hotplug {
+    uint32_t long_mask, short_mask, event_bits;
+    uint8_t state[HPD_NUM_PINS];
+    uint64_t storm_start[HPD_NUM_PINS];
+    uint32_t storm_count[HPD_NUM_PINS];
+    uint32_t retry_bits;
+    uint8_t retries[HPD_NUM_PINS];
+    uint64_t retry_at, reenable_at, poll_at;
+    uint32_t pulses, storms;
+    struct drm_work work;
+    uint8_t ready;
+};
+
+/*
+ * What a pipe is set to (the outputs' compute_config and the fitter),
+ * Linux's part of intel_crtc_state that 78-10b and 78-10c drive:
+ * `active`; the output, `output` INTEL_OUTPUT_, on DDI `port` through
+ * transcoder `trans`, the eDP transcoder for eDP and the pipe's own for
+ * the rest; the timings in `mode` with the pixel clock in kHz, the pipe's
+ * source size `src_w` by `src_h`, the user's mode's, `bpp` and `dither`,
+ * the link's `port_clock` (kHz of symbol clock, for HDMI the TMDS clock
+ * the PLL gives) and `lanes`, the transcoder's M/N and transfer unit, the
+ * fitter (`pfit`, its window `pf_pos` and `pf_size` as PF_WIN_POS and
+ * PF_WIN_SZ take them, and `force_thru`, the eDP input of pipe A that goes
+ * through the fitter's power well), the pixel rate after the fitter, and
+ * the line times for WM_LINETIME. The PLL: `pll`, DPLL_ID_, and the value
+ * `pll_hw` it runs with. HDMI: `has_hdmi_sink`, `limited_range` (RGB
+ * 16-235, which the pipe's colour matrix makes), the infoframes enabled in
+ * `infoframes` (VIDEO_DIP_ENABLE_*_HSW) and their packed bytes, `avi`,
+ * `spd` and `vs` with `vs_len`, and GCP's value, `gcp`; and
+ * `pixel_multiplier`, 2 for a DBLCLK mode, 1 otherwise. `well` says the
+ * pipe holds a reference to the display power well.
  */
 struct intel_crtc_config {
     uint8_t active;
     uint8_t dither;
     uint8_t pfit;
     uint8_t force_thru;
+    int output;
+    int port;
+    int trans;
     struct drm_mode_modeinfo mode;
     uint32_t src_w, src_h;
     uint32_t bpp;
@@ -855,6 +1103,18 @@ struct intel_crtc_config {
     uint32_t pf_pos, pf_size;
     uint32_t pixel_rate;
     uint32_t linetime, ips_linetime;
+    int pll;
+    uint32_t pll_hw;
+    uint8_t has_hdmi_sink;
+    uint8_t limited_range;
+    uint32_t infoframes;
+    uint8_t avi[INTEL_DIP_DATA_SIZE];
+    uint8_t spd[INTEL_DIP_DATA_SIZE];
+    uint8_t vs[INTEL_DIP_DATA_SIZE];
+    uint32_t avi_len, spd_len, vs_len;
+    uint32_t gcp;
+    uint32_t pixel_multiplier;
+    uint8_t well;
 };
 
 /*
@@ -939,7 +1199,9 @@ struct intel_crtc {
 
 /*
  * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
- * `connector` its eDP panel, `dp` the panel. `pps` is the sequencer's
+ * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by
+ * port less one. `gmbus` are the PCH's GMBUS pins, by pin, and `dpll` the
+ * PLLs, by DPLL_ID_. `hotplug` is the ports' hotplug. `pps` is the sequencer's
  * readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most it
  * may be, both read at init (intel_cdclk.c). `wm_latency` are the memory
  * latencies of the watermark levels, level 0 in 0.1 us and the rest in
@@ -963,6 +1225,10 @@ struct intel_display {
     struct drm_encoder encoder;
     struct drm_connector connector;
     struct intel_dp dp;
+    struct intel_ddi_port ddi[3];
+    struct intel_gmbus gmbus[GMBUS_NUM_PINS];
+    struct intel_dpll dpll[INTEL_NUM_DPLLS];
+    struct intel_hotplug hotplug;
     struct intel_pps_readout pps;
     uint32_t cdclk, max_cdclk;
     uint16_t wm_latency[INTEL_WM_LEVELS];
@@ -2302,20 +2568,18 @@ struct intel_dp_aux_msg {
  * 16 bytes, -EINVAL for another request, or the channel's -EBUSY, -EIO or
  * -ETIMEDOUT.
  */
-int32_t intel_dp_aux_transfer(struct drm_i915_private *i915, struct intel_dp_aux_msg *msg);
+int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg);
 
 /** Read `size` bytes at DPCD `addr` into `buf`, as Linux's
  * drm_dp_dpcd_read: `size`, or the first error of 32 tries. */
-int32_t intel_dp_dpcd_read(struct drm_i915_private *i915, uint32_t addr, uint8_t *buf,
-                           uint32_t size);
+int32_t intel_dp_dpcd_read(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size);
 
 /** Write `size` bytes, 16 at most, of `buf` at DPCD `addr`: `size`, or the
  * first error of 32 tries. */
-int32_t intel_dp_dpcd_write(struct drm_i915_private *i915, uint32_t addr, const uint8_t *buf,
-                            uint32_t size);
+int32_t intel_dp_dpcd_write(struct intel_dp *dp, uint32_t addr, const uint8_t *buf, uint32_t size);
 
 /** Write one byte at DPCD `addr`. */
-int32_t intel_dp_dpcd_writeb(struct drm_i915_private *i915, uint32_t addr, uint8_t value);
+int32_t intel_dp_dpcd_writeb(struct intel_dp *dp, uint32_t addr, uint8_t value);
 
 /**
  * Read the sink's EDID over I2C over AUX into `buf`, `cap` bytes at most,
@@ -2324,8 +2588,14 @@ int32_t intel_dp_dpcd_writeb(struct drm_i915_private *i915, uint32_t addr, uint8
  * the bytes read in `*len`. 0, -EIO when the sink did not answer, or
  * -EINVAL for a base block never good.
  */
-int32_t intel_dp_read_edid(struct drm_i915_private *i915, uint8_t *buf, uint32_t cap,
-                           uint32_t *len);
+int32_t intel_dp_read_edid(struct intel_dp *dp, uint8_t *buf, uint32_t cap, uint32_t *len);
+
+/** Whether a sink answers on `dp`'s I2C over AUX, Linux's drm_probe_ddc
+ * of the AUX channel's DDC. */
+int intel_dp_probe_ddc(struct intel_dp *dp);
+
+/** `dp`'s I2C over AUX bus, for the DP++ adaptor's registers. */
+void intel_dp_i2c_bus(struct intel_dp *dp, struct intel_i2c_bus *bus);
 
 /*
  * The panel power sequencer (intel_pps.c), Linux's intel_pps.c for one
@@ -2404,36 +2674,36 @@ int32_t intel_cdclk_check(struct drm_i915_private *i915, uint32_t pixel_rate);
 /* The translations of DDI_BUF_TRANS a DisplayPort link uses on Haswell. */
 #define INTEL_DDI_DP_LEVELS 9
 
-/** Write DDI A's buffer translations for DisplayPort, Linux's
+/** Write `dp`'s port's buffer translations for DisplayPort, Linux's
  * hsw_prepare_dp_ddi_buffers. (intel_ddi.c) */
-void intel_ddi_prepare_buf_trans(struct drm_i915_private *i915);
+void intel_ddi_prepare_buf_trans(struct intel_dp *dp);
 
 /** The most swing the port drives, as DP_TRAINING_LANEx_SET codes it. */
 uint8_t intel_ddi_dp_voltage_max(void);
 
-/** Build the panel's DDI_BUF_CTL for `lanes` at the lowest levels, not yet
- * enabled, in `display.dp.buf_ctl`, Linux's intel_ddi_init_dp_buf_reg. */
-void intel_ddi_init_dp_buf_reg(struct drm_i915_private *i915, uint32_t lanes);
+/** Build `dp`'s DDI_BUF_CTL for `lanes` at the lowest levels, not yet
+ * enabled, in its `buf_ctl`, Linux's intel_ddi_init_dp_buf_reg. */
+void intel_ddi_init_dp_buf_reg(struct intel_dp *dp, uint32_t lanes);
 
-/** Drive the levels of lane 0's `train_set` on DDI A, Linux's
+/** Drive the levels of lane 0's `train_set` on `dp`'s port, Linux's
  * hsw_set_signal_levels. */
-void intel_ddi_set_signal_levels(struct drm_i915_private *i915);
+void intel_ddi_set_signal_levels(struct intel_dp *dp);
 
-/** Wait, 8 us at most, for DDI A's buffer to go idle; a timeout is
+/** Wait, 8 us at most, for `dp`'s port's buffer to go idle; a timeout is
  * logged. */
-void intel_ddi_wait_buf_idle(struct drm_i915_private *i915);
+void intel_ddi_wait_buf_idle(struct intel_dp *dp);
 
 /** Turn the transport off and on again on pattern 1, `enhanced` framing
  * or not, and enable the buffer, Linux's intel_ddi_prepare_link_retrain. */
-void intel_ddi_prepare_link_retrain(struct drm_i915_private *i915, int enhanced);
+void intel_ddi_prepare_link_retrain(struct intel_dp *dp, int enhanced);
 
 /** Drive the training pattern of DPCD code `dp_train_pat` on the
  * transport, the normal pattern for DP_TRAINING_PATTERN_DISABLE. */
-void intel_ddi_set_link_train(struct drm_i915_private *i915, uint8_t dp_train_pat);
+void intel_ddi_set_link_train(struct intel_dp *dp, uint8_t dp_train_pat);
 
 /** Put the transport on its idle pattern, Linux's
  * intel_ddi_set_idle_link_train. */
-void intel_ddi_set_idle_link_train(struct drm_i915_private *i915);
+void intel_ddi_set_idle_link_train(struct intel_dp *dp);
 
 /**
  * Train the eDP link at `display.dp`'s `link_rate` and `lane_count`, the
@@ -2445,40 +2715,251 @@ void intel_ddi_set_idle_link_train(struct drm_i915_private *i915);
  * retry; or -EIO when no link is left to try. Process context; sleeps.
  * (intel_dp_link_training.c)
  */
-int32_t intel_dp_start_link_train(struct drm_i915_private *i915, uint32_t mode_clock);
+int32_t intel_dp_start_link_train(struct intel_dp *dp, uint32_t mode_clock);
+
+/** Whether `dp`'s trained link still has channel equalization on every
+ * lane, Linux's intel_dp_link_ok for 8b/10b: 1, 0, or -EIO when the
+ * status does not read. */
+int intel_dp_link_ok(struct intel_dp *dp);
 
 /** End the training: the sink off its pattern and the port on the normal
  * one, Linux's intel_dp_stop_link_train. */
-void intel_dp_stop_link_train(struct drm_i915_private *i915);
+void intel_dp_stop_link_train(struct intel_dp *dp);
 
 /*
- * A mode set of the eDP pipe on DDI A, in Linux's order (intel_ddi.c):
- * the port's link up and trained before the pipe, the transcoder's
- * function and enable after it, and the reverse to turn it off. From the
- * CRTC's hooks; they sleep.
+ * A mode set of a pipe on a DDI port, in Linux's order (intel_ddi.c):
+ * the port's clock and link up before the pipe, the transcoder's function
+ * and enable after it, and the reverse to turn it off; `cfg->output`
+ * says which of eDP, DisplayPort or HDMI. From the CRTC's hooks; they
+ * sleep.
  */
 
 /**
- * Bring the link up for `cfg`, Linux's hsw_ddi_pre_enable_dp with
- * intel_ddi_set_dp_msa: the panel's power, the port's clock and buffer,
- * the sink in D0, the link trained, and the stream's attributes for the
- * transcoder. 0, or `intel_dp_start_link_train`'s error.
+ * Bring the port up for `cfg`, Linux's intel_ddi_pre_enable: for eDP and
+ * DisplayPort hsw_ddi_pre_enable_dp with intel_ddi_set_dp_msa (the panel's
+ * power, the port's clock and buffer, the sink in D0, the link trained,
+ * and the stream's attributes for the transcoder); for HDMI
+ * intel_ddi_pre_enable_hdmi (the port's clock, the sink's TMDS mode and
+ * the infoframes). 0, or `intel_dp_start_link_train`'s error.
  */
 int32_t intel_ddi_pre_enable(struct drm_i915_private *i915, const struct intel_crtc_config *cfg);
 
-/** Start the stream on pipe `pipe`, Linux's intel_enable_ddi for eDP:
- * the transcoder's function and enable, the link's normal pattern, the
- * backlight on and the infoframes off. */
+/** Start the stream on pipe `pipe`, Linux's intel_enable_ddi: the
+ * transcoder's function and enable, then for DisplayPort the link's normal
+ * pattern and for eDP the backlight, or for HDMI the port's buffer. */
 void intel_ddi_enable(struct drm_i915_private *i915, int pipe, const struct intel_crtc_config *cfg);
 
-/** The backlight off, Linux's intel_disable_ddi_dp. */
-void intel_ddi_disable(struct drm_i915_private *i915);
+/** The output's first step off, Linux's intel_disable_ddi: the backlight
+ * of eDP, nothing for the rest. */
+void intel_ddi_disable(struct drm_i915_private *i915, const struct intel_crtc_config *cfg);
 
-/** Stop the stream and the link, Linux's intel_ddi_post_disable for eDP:
- * vblanks off, the transcoder and its function off, the fitter off, the
- * sink in D3, the port's buffer, the panel's power and the clock off. */
+/** Stop the stream and the port, Linux's intel_ddi_post_disable: vblanks
+ * off, the transcoder and its function off, the fitter off, then for
+ * DisplayPort the sink in D3, the buffer, the panel's power of eDP and the
+ * clock off, or for HDMI the infoframes, the buffer and the clock off. */
 void intel_ddi_post_disable(struct drm_i915_private *i915, struct intel_crtc *crtc,
                             const struct intel_crtc_config *cfg);
+
+/** Write port `port`'s buffer translations for HDMI, the VBT's `level` as
+ * entry 9, Linux's hsw_prepare_hdmi_ddi_buffers. */
+void intel_ddi_prepare_hdmi_buf_trans(struct drm_i915_private *i915, int port, int level);
+
+/** The buffer translation an HDMI port drives by default on Haswell,
+ * Linux's hsw_ddi_hdmi_level default. */
+int intel_ddi_hdmi_default_level(void);
+
+/*
+ * The display PLLs (intel_dpll.c), Linux's intel_dpll_mgr.c for Haswell:
+ * WRPLL 1 and 2 for HDMI, SPLL at 1350 MHz, and the LCPLL's three outputs
+ * for DisplayPort, shared between pipes whose clocks agree.
+ */
+
+/** Set the PLLs up at the display's init and read out what the firmware
+ * left running, Linux's intel_shared_dpll_init and readout. */
+void intel_dpll_init(struct drm_i915_private *i915);
+
+/** The WRPLL's dividers for a clock of `clock` Hz, Linux's
+ * hsw_ddi_calculate_wrpll: `*r2`, `*n2` and `*p`. */
+void intel_dpll_calc_wrpll(uint32_t clock, uint32_t *r2, uint32_t *n2, uint32_t *p);
+
+/** The clock in kHz of symbol clock a WRPLL_CTL value `wrpll` gives,
+ * Linux's hsw_ddi_wrpll_get_freq on a ULT part: the LCPLL's 2.7 GHz or
+ * the PCH's 135 MHz SSC as reference; 0 for another reference. */
+uint32_t intel_dpll_wrpll_freq(uint32_t wrpll);
+
+/** The clock in kHz an SPLL_CTL value `spll` gives, Linux's
+ * hsw_ddi_spll_get_freq; 0 for a frequency it does not name. */
+uint32_t intel_dpll_spll_freq(uint32_t spll);
+
+/** Start `plan` from the PLLs as they run, without the pipes `leaving`, a
+ * bit each, which the commit sets again. */
+void intel_dpll_plan_init(struct drm_i915_private *i915, uint32_t leaving,
+                          struct intel_dpll_plan *plan);
+
+/**
+ * Choose the PLL of `cfg` for pipe `pipe` and reserve it in `plan`, Linux's
+ * hsw_compute_dpll and hsw_get_dpll: for HDMI the WRPLL whose value is the
+ * one the clock takes, else a free one, WRPLL 1 first, `cfg->port_clock`
+ * then the clock the PLL gives; for DisplayPort the LCPLL output of the
+ * link rate. 0, -EINVAL for a clock no PLL gives, or -EBUSY when both
+ * WRPLLs run other clocks.
+ */
+int32_t intel_dpll_compute(struct drm_i915_private *i915, struct intel_dpll_plan *plan, int pipe,
+                           struct intel_crtc_config *cfg);
+
+/** The SPLL_CTL value of a link of `port_clock` kHz, Linux's
+ * hsw_ddi_spll_compute_dpll: 1350 MHz from the muxed SSC, the one rate
+ * it takes; 0 for another rate. */
+uint32_t intel_dpll_spll_compute(uint32_t port_clock);
+
+/** Read out pipe `pipe`'s PLL from the clock select `sel` of its port into
+ * `cfg`: the PLL, its value and the link's clock, and count the pipe on
+ * it. 0, or -EINVAL for a PLL that does not run. */
+int32_t intel_dpll_readout(struct drm_i915_private *i915, int pipe, uint32_t sel,
+                           struct intel_crtc_config *cfg);
+
+/** Turn off a WRPLL or the SPLL that runs for no pipe, Linux's
+ * intel_sanitize_dplls. */
+void intel_dpll_sanitize(struct drm_i915_private *i915);
+
+/** Take `cfg`'s PLL for pipe `pipe` and turn it on if it is off, Linux's
+ * intel_reference_shared_dpll and intel_enable_shared_dpll; the WRPLL
+ * runs 20 us after its enable. */
+void intel_dpll_enable(struct drm_i915_private *i915, int pipe,
+                       const struct intel_crtc_config *cfg);
+
+/** Let pipe `pipe`'s PLL go, turning it off when no pipe has it, Linux's
+ * intel_disable_shared_dpll and intel_unreference_shared_dpll. */
+void intel_dpll_disable(struct drm_i915_private *i915, int pipe,
+                        const struct intel_crtc_config *cfg);
+
+/** The PORT_CLK_SEL value of a PLL id. */
+uint32_t intel_dpll_port_clk_sel(int id);
+
+/*
+ * GMBUS and the EDID (intel_gmbus.c), Linux's intel_gmbus.c with its
+ * bit-banging fallback, i2c-algo-bit's, and drm_edid.c's read of the
+ * EDID over an I2C bus. Process context; they sleep.
+ */
+
+/** Set the GMBUS pins up, Linux's intel_gmbus_setup: each valid pin's bus
+ * at 100 kHz, and the controller reset. */
+void intel_gmbus_setup(struct drm_i915_private *i915);
+
+/** Whether `pin` is a GMBUS pin of the PCH, Linux's
+ * intel_gmbus_is_valid_pin. */
+int intel_gmbus_is_valid_pin(int pin);
+
+/** The I2C bus of GMBUS pin `pin`, or NULL. */
+struct intel_i2c_bus *intel_gmbus_bus(struct drm_i915_private *i915, int pin);
+
+/** Make GMBUS pin `pin` bit-bang while `force` callers want it, Linux's
+ * intel_gmbus_force_bit: a call with `force` set adds one, without takes
+ * one away. */
+void intel_gmbus_force_bit(struct drm_i915_private *i915, int pin, int force);
+
+/** Whether GMBUS pin `pin` bit-bangs, Linux's intel_gmbus_is_forced_bit. */
+int intel_gmbus_is_forced_bit(struct drm_i915_private *i915, int pin);
+
+/**
+ * Read the EDID of the sink on `bus` into `buf`, `cap` bytes at most, as
+ * Linux's drm_edid_read_ddc: the base block four times at most until its
+ * header and sum are good, then each extension it counts that fits, four
+ * tries each, a bad one ending the read; the bytes read in `*len`. 0, -EIO
+ * when the sink did not answer, or -EINVAL for a base block never good.
+ */
+int32_t intel_edid_read(const struct intel_i2c_bus *bus, uint8_t *buf, uint32_t cap, uint32_t *len);
+
+/** Whether a sink answers a read of one byte of the EDID on `bus`, Linux's
+ * drm_probe_ddc. */
+int intel_i2c_probe_ddc(const struct intel_i2c_bus *bus);
+
+/*
+ * The HDMI outputs (intel_hdmi.c), Linux's intel_hdmi.c for Haswell's
+ * DDI ports B to D.
+ */
+
+/** Make DDI port `p`'s HDMI connector, Linux's intel_hdmi_init_connector:
+ * its DDC pin and level from the VBT, "max bpc" from 8 to 12. 0 or the
+ * DRM core's error. */
+int32_t intel_hdmi_connector_init(struct drm_i915_private *i915, struct intel_ddi_port *p);
+
+/**
+ * Compute what an HDMI output takes for `cfg`'s mode, Linux's
+ * intel_hdmi_compute_config for Haswell on pipe `pipe`'s transcoder: the
+ * bits a colour, 12 when the sink, "max bpc" and the clock allow, else 8;
+ * the TMDS clock, twice the pixel's for DBLCLK; an HDMI sink's limited
+ * range for a CEA mode but the first; and GCP and the AVI, SPD and HDMI
+ * vendor infoframes. 0, or -EINVAL for a mode the port cannot drive.
+ */
+int32_t intel_hdmi_compute_config(struct intel_ddi_port *p, int pipe,
+                                  const struct drm_connector_state *conn,
+                                  struct intel_crtc_config *cfg);
+
+/** Turn a DP++ adaptor's TMDS output on or off, Linux's
+ * intel_dp_dual_mode_set_tmds_output: for a type 2 adaptor alone. */
+void intel_hdmi_dual_mode_tmds(struct intel_ddi_port *p, int enable);
+
+/** Write and enable `cfg`'s infoframes on its transcoder, or turn them
+ * all off when `enable` is 0, Linux's hsw_set_infoframes. */
+void intel_hdmi_set_infoframes(struct drm_i915_private *i915, int enable,
+                               const struct intel_crtc_config *cfg);
+
+/*
+ * Hotplug (intel_hotplug.c), Linux's intel_hotplug.c and the PCH's part
+ * of intel_hotplug_irq.c for Lynx Point.
+ */
+
+/** Hook the ports' hotplug interrupts and enable their detection, Linux's
+ * intel_hpd_init and ibx_hpd_irq_setup. 0 or the interrupt's error. */
+int32_t intel_hotplug_init(struct drm_i915_private *i915);
+
+/** Unhook them and let the deferred work go. */
+void intel_hotplug_fini(struct drm_i915_private *i915);
+
+/** The deferred work: re-enable pins whose storm is over, then probe the
+ * outputs of the pins that pulsed, Linux's i915_digport_work_func and
+ * i915_hotplug_work_func, sending a hotplug event for each change. */
+void intel_hotplug_work(struct drm_work *work);
+
+/** Whether the sink of a PCH port's pin `pin` is there, Linux's
+ * lpt_digital_port_connected: SDEISR's hotplug bit. */
+int intel_hotplug_live(struct drm_i915_private *i915, int pin);
+
+/*
+ * The external DisplayPort outputs (intel_dp.c).
+ */
+
+/** Make DDI port `p`'s DisplayPort connector, Linux's
+ * intel_dp_init_connector for an external port: its AUX channel from the
+ * VBT, "max bpc" from 6 to 12. 0 or the DRM core's error. */
+int32_t intel_dp_ext_connector_init(struct drm_i915_private *i915, struct intel_ddi_port *p);
+
+/** Whether `dp`'s sink is there now: the panel always, a monitor by its
+ * hotplug pin's live status. */
+int intel_dp_connected(struct intel_dp *dp);
+
+/**
+ * Handle a pulse on `dp`'s pin, Linux's intel_dp_hpd_pulse: a long pulse
+ * forgets the link's fallback and asks for a probe (1); a short one reads
+ * the sink's DPCD and its service requests and, when the link lost its
+ * training, retrains it by a mode set of its pipe, Linux's
+ * intel_dp_retrain_link; 0 when handled, 1 when a probe should follow.
+ */
+int intel_dp_hpd_pulse(struct intel_dp *dp, int long_hpd);
+
+/** The pipe whose configuration drives `dp`'s port with a link, or NULL. */
+struct intel_crtc *intel_dp_active_crtc(struct intel_dp *dp);
+
+/** Set pipe `c` again as it is, a full mode set, Linux's
+ * intel_modeset_commit_pipes for one pipe. 0 or the commit's error. */
+int32_t intel_display_commit_pipe(struct intel_crtc *c);
+
+/** The device's power-well-backed parts a configuration needs, Linux's
+ * get_crtc_power_domains on Haswell: whether `cfg` uses the display well
+ * (pipe B or C, transcoder A to C, a fitter, a forced-through eDP input,
+ * or a DDI port B to D). */
+int intel_crtc_needs_well(int pipe, const struct intel_crtc_config *cfg);
 
 /*
  * The panel (intel_dp.c, intel_panel.c) and the fitter (intel_pfit.c).
@@ -2507,14 +2988,14 @@ int32_t intel_dp_connector_init(struct drm_i915_private *i915);
  * for a mode the panel or the link cannot take, or -ERANGE for a fitter's
  * scale past its limit.
  */
-int32_t intel_dp_compute_config(struct drm_i915_private *i915, int pipe,
+int32_t intel_dp_compute_config(struct intel_dp *dp, int pipe,
                                 const struct drm_connector_state *conn, int crc_wa,
                                 struct intel_crtc_config *cfg);
 
 /** Set the sink's power state to DP_SET_POWER_D0 or _D3, Linux's
  * intel_dp_set_power: D0 tried three times a millisecond apart, after the
  * source's OUI. */
-void intel_dp_set_power(struct drm_i915_private *i915, uint8_t mode);
+void intel_dp_set_power(struct intel_dp *dp, uint8_t mode);
 
 /** Choose the panel's fixed modes into `display.dp.fixed`, Linux's
  * intel_panel_add_edid_fixed_modes and intel_panel_add_vbt_lfp_fixed_mode:

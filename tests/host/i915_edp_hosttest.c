@@ -8,7 +8,7 @@
  * host-deps: tests/host/i915_model.c rach2/sys/display/backlight.c
  * host-deps: rach2/sys/display/intelbl.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
- * host-deps: rach2/sys/drm/i915/intel_bios.c
+ * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The model's clock moves only when the driver waits, and the monotonic
@@ -49,6 +49,10 @@
 #include "drm/i915/intel_cdclk.c"
 #include "drm/i915/intel_pps.c"
 #include "drm/i915/intel_dp_aux.c"
+#include "drm/i915/intel_gmbus.c"
+#include "drm/i915/intel_dpll.c"
+#include "drm/i915/intel_hdmi.c"
+#include "drm/i915/intel_hotplug.c"
 #include "drm/i915/intel_ddi.c"
 #include "drm/i915/intel_dp_link_training.c"
 #include "drm/i915/intel_dp.c"
@@ -274,7 +278,14 @@ static struct i915_model_sink *fresh(void)
     model.on_delay = follow_clock;
     gpu.pci = model.pci;
     gpu.hw = model.hw;
-    gpu.display.dp.port = 0;
+    /* The reference the bind's i915_power_init holds for its life. */
+    gpu.power.count = 1;
+    gpu.power.on = 1;
+    gpu.display.dp.i915 = &gpu;
+    gpu.display.dp.name = "edp";
+    gpu.display.dp.edp = 1;
+    gpu.display.dp.port = INTEL_PORT_A;
+    gpu.display.dp.aux_port = INTEL_PORT_A;
     gpu.display.dp.vbt.panel_type = -1;
     intel_bios_panel_init(&vbt, &gpu.display.dp.vbt, intel_bios_encoder_lookup(&vbt, INTEL_PORT_A),
                           lenovo_panel_edid, 1);
@@ -316,7 +327,8 @@ static void row_aux_dpcd(void)
 
     k_memset(dpcd, 0xaa, sizeof(dpcd));
     CHECK(gpu.display.cdclk == 450000, "aux: the CD clock is 450 MHz");
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, dpcd, DP_RECEIVER_CAP_SIZE) == DP_RECEIVER_CAP_SIZE,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, dpcd, DP_RECEIVER_CAP_SIZE) ==
+              DP_RECEIVER_CAP_SIZE,
           "aux: the receiver caps are read");
     CHECK(memcmp(dpcd, s->dpcd, DP_RECEIVER_CAP_SIZE) == 0 && dpcd[DP_RECEIVER_CAP_SIZE] == 0xaa,
           "aux: the caps are the sink's, and no byte more is written");
@@ -341,10 +353,10 @@ static void row_aux_dpcd(void)
           "aux: VDD is forced for the message, as Linux does, and let go later");
     CHECK(model.now_us - t0 < 5000u, "aux: without the power up delay of a panel with power");
 
-    CHECK(intel_dp_dpcd_writeb(&gpu, DP_SET_POWER, DP_SET_POWER_D3) == 1 &&
+    CHECK(intel_dp_dpcd_writeb(&gpu.display.dp, DP_SET_POWER, DP_SET_POWER_D3) == 1 &&
               s->dpcd[DP_SET_POWER] == DP_SET_POWER_D3,
           "aux: a write lands");
-    CHECK(intel_dp_dpcd_writeb(&gpu, DP_SET_POWER, DP_SET_POWER_D0) == 1 &&
+    CHECK(intel_dp_dpcd_writeb(&gpu.display.dp, DP_SET_POWER, DP_SET_POWER_D0) == 1 &&
               s->dpcd[DP_SET_POWER] == DP_SET_POWER_D0 && s->native_writes == 2,
           "aux: and the next");
     CHECK(gpu.hw.timeouts == 0, "aux: no wait timed out");
@@ -358,38 +370,38 @@ static void row_aux_retries(void)
     uint64_t t0;
 
     s->timeouts = 4;
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
           "retries: a read gets past four timeouts");
     CHECK(s->messages == 6, "retries: each timeout is sent again at once");
 
     s = fresh();
     s->rx_errors = 3;
     t0 = model.now_us;
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
           "retries: and past receive errors");
     CHECK(model.now_us - t0 >= 3u * 400u, "retries: each receive error costs 400 us");
 
     s = fresh();
     s->defers = 5;
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
           "retries: and past DEFER replies");
     CHECK(s->messages == 7, "retries: a DEFER is tried again");
 
     s = fresh();
     s->zero_replies = 2;
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
           "retries: and past empty replies");
 
     s = fresh();
     s->defers = 1000;
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == -EIO,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == -EIO,
           "retries: a sink that always defers is an I/O error");
     CHECK(s->messages == 32, "retries: after Linux's 32 tries");
 
     s = fresh();
     s->timeouts = 1000;
     t0 = model.now_us;
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == -ETIMEDOUT,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == -ETIMEDOUT,
           "retries: a sink that never answers times out");
     CHECK(s->messages == 32u * 5u, "retries: five sends of each of the 32 tries");
     CHECK(model.now_us - t0 < 200000u, "retries: in under 200 ms");
@@ -397,7 +409,7 @@ static void row_aux_retries(void)
     s = fresh();
     i915_model_poke(&model, DP_AUX_CH_CTL(0), DP_AUX_CH_CTL_SEND_BUSY);
     s->busy_us = 0xffffffffu;
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == -EBUSY,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == -EBUSY,
           "retries: a channel that stays busy is refused");
     CHECK(s->messages == 0, "retries: and nothing is sent on it");
     CHECK(logged("aux: not started"), "retries: the busy channel is logged");
@@ -417,7 +429,7 @@ static void row_aux_vdd(void)
     CHECK(!(reg(PP_CONTROL) & (PANEL_POWER_ON | EDP_FORCE_VDD)) && !p->on && !s->powered,
           "vdd: the panel is off");
     t0 = now_ms_model();
-    CHECK(intel_dp_dpcd_read(&gpu, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
+    CHECK(intel_dp_dpcd_read(&gpu.display.dp, DP_DPCD_REV, &rev, 1) == 1 && rev == 0x11,
           "vdd: the panel without power answers");
     CHECK(reg(PP_CONTROL) & EDP_FORCE_VDD, "vdd: through VDD forced on");
     CHECK(now_ms_model() - t0 >= 500u + 200u, "vdd: after the power cycle and the power up delay");
@@ -442,20 +454,20 @@ static void row_edid(void)
     uint32_t len = 0, i;
     uint8_t sum;
 
-    CHECK(intel_dp_read_edid(&gpu, edid, sizeof(edid), &len) == 0 && len == 128,
+    CHECK(intel_dp_read_edid(&gpu.display.dp, edid, sizeof(edid), &len) == 0 && len == 128,
           "edid: the base block is read");
     CHECK(memcmp(edid, lenovo_panel_edid, 128) == 0, "edid: the panel's bytes");
     CHECK(s->i2c_reads == 8, "edid: in eight pieces of 16 bytes");
 
     s = fresh();
     s->i2c_defers = 3;
-    CHECK(intel_dp_read_edid(&gpu, edid, sizeof(edid), &len) == 0 && len == 128 &&
+    CHECK(intel_dp_read_edid(&gpu.display.dp, edid, sizeof(edid), &len) == 0 && len == 128 &&
               memcmp(edid, lenovo_panel_edid, 128) == 0,
           "edid: through I2C DEFER replies");
 
     s = fresh();
     s->edid[20] ^= 1;
-    CHECK(intel_dp_read_edid(&gpu, edid, sizeof(edid), &len) == -EINVAL && len == 0,
+    CHECK(intel_dp_read_edid(&gpu.display.dp, edid, sizeof(edid), &len) == -EINVAL && len == 0,
           "edid: a base block that never sums to 0 is refused");
     CHECK(s->i2c_reads == 4u * 8u, "edid: after four reads of it");
 
@@ -469,11 +481,11 @@ static void row_edid(void)
     }
     s->edid[255] = (uint8_t)(0u - sum);
     s->edid_len = 256;
-    CHECK(intel_dp_read_edid(&gpu, edid, sizeof(edid), &len) == 0 && len == 256 &&
+    CHECK(intel_dp_read_edid(&gpu.display.dp, edid, sizeof(edid), &len) == 0 && len == 256 &&
               memcmp(edid + 128, s->edid + 128, 128) == 0,
           "edid: an extension block is read after the base");
     s->edid[255] ^= 1;
-    CHECK(intel_dp_read_edid(&gpu, edid, sizeof(edid), &len) == 0 && len == 128,
+    CHECK(intel_dp_read_edid(&gpu.display.dp, edid, sizeof(edid), &len) == 0 && len == 128,
           "edid: a bad extension is dropped");
     CHECK(logged("edp: EDID block 1 bad"), "edid: and logged");
     CHECK(gpu.hw.timeouts == 0, "edid: no wait timed out");
@@ -500,8 +512,8 @@ static struct i915_model_sink *link_setup(void)
     dp->link_rate = 270000;
     dp->lane_count = 1;
     dp->saved_port_bits = reg(DDI_BUF_CTL(0)) & (DDI_BUF_PORT_REVERSAL | DDI_A_4_LANES);
-    intel_ddi_prepare_buf_trans(&gpu);
-    intel_ddi_init_dp_buf_reg(&gpu, dp->lane_count);
+    intel_ddi_prepare_buf_trans(&gpu.display.dp);
+    intel_ddi_init_dp_buf_reg(&gpu.display.dp, dp->lane_count);
     return s;
 }
 
@@ -516,7 +528,7 @@ static void row_train(void)
     CHECK(reg(DDI_BUF_TRANS_LO(0, 8)) == 0x80d75fffu && reg(DDI_BUF_TRANS_HI(0, 8)) == 0x000b0000u,
           "train: DDI A's translations are Linux's");
     s->trained = s->normal = 0;
-    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == 0, "train: the link trains");
+    CHECK(intel_dp_start_link_train(&gpu.display.dp, PANEL_CLOCK) == 0, "train: the link trains");
     CHECK(s->trained && s->trained_bw == DP_LINK_BW_2_7 && s->trained_lanes == 1,
           "train: at 2.7 Gb/s on one lane");
     CHECK(s->levels_bad == 0, "train: the buffer drives the levels the sink was told");
@@ -541,7 +553,7 @@ static void row_train(void)
           "train: the firmware's link goes off, then pattern 1, then the buffer on one lane");
     CHECK((reg(DP_TP_CTL(0)) & DP_TP_CTL_LINK_TRAIN_MASK) == DP_TP_CTL_LINK_TRAIN_IDLE,
           "train: the port is left on its idle pattern");
-    intel_dp_stop_link_train(&gpu);
+    intel_dp_stop_link_train(&gpu.display.dp);
     CHECK(s->dpcd[DP_TRAINING_PATTERN_SET] == DP_TRAINING_PATTERN_DISABLE && s->normal &&
               gpu.display.dp.link_trained,
           "train: the end of training sends pictures on the trained link");
@@ -556,7 +568,7 @@ static void row_train_fail(void)
     struct intel_dp *dp = &gpu.display.dp;
 
     s->cr_swing = 3; /* more than Haswell's swing at any pre-emphasis */
-    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EAGAIN && !s->trained,
+    CHECK(intel_dp_start_link_train(&gpu.display.dp, PANEL_CLOCK) == -EAGAIN && !s->trained,
           "fail: a sink that never recovers its clock fails, for a retry");
     CHECK(s->cr_reads == 2u * 6u,
           "fail: each try ends after a read at swing 0 and the same swing asked 5 times");
@@ -564,21 +576,22 @@ static void row_train_fail(void)
           "fail: two failures in a row, then the sink's most is tried");
     CHECK(logged("edp: link training failed at 270000 kHz on 1 lanes"), "fail: and logged");
     log_clear();
-    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EAGAIN && dp->link_max_rate == 0,
+    CHECK(intel_dp_start_link_train(&gpu.display.dp, PANEL_CLOCK) == -EAGAIN &&
+              dp->link_max_rate == 0,
           "fail: then the same link, since the mode needs 2.7 Gb/s");
     CHECK(logged("same parameters"), "fail: and that is logged");
-    CHECK(intel_dp_start_link_train(&gpu, 50000) == -EAGAIN && dp->link_max_rate == 162000 &&
-              dp->link_max_lanes == 1,
+    CHECK(intel_dp_start_link_train(&gpu.display.dp, 50000) == -EAGAIN &&
+              dp->link_max_rate == 162000 && dp->link_max_lanes == 1,
           "fail: a mode that fits 1.62 Gb/s falls back to it");
 
     dp->link_rate = 162000;
     log_clear();
-    CHECK(intel_dp_start_link_train(&gpu, 50000) == -EIO && logged("can't reduce"),
+    CHECK(intel_dp_start_link_train(&gpu.display.dp, 50000) == -EIO && logged("can't reduce"),
           "fail: no link left below 1.62 Gb/s on one lane");
 
     s = link_setup();
     s->eq_preemph = 3; /* pre-emphasis 3 leaves no swing for the clock */
-    CHECK(intel_dp_start_link_train(&gpu, PANEL_CLOCK) == -EAGAIN && !s->trained,
+    CHECK(intel_dp_start_link_train(&gpu.display.dp, PANEL_CLOCK) == -EAGAIN && !s->trained,
           "fail: a sink that never equalizes fails");
     CHECK(logged("clock recovery lost in channel equalization"),
           "fail: when the clock is lost for the pre-emphasis");
@@ -619,7 +632,7 @@ static int32_t config(const struct drm_connector_state *conn, uint32_t src_w, ui
     cfg->mode = gpu.display.dp.fixed[0];
     cfg->src_w = src_w;
     cfg->src_h = src_h;
-    return intel_dp_compute_config(&gpu, I915_PIPE_A, conn, 0, cfg);
+    return intel_dp_compute_config(&gpu.display.dp, I915_PIPE_A, conn, 0, cfg);
 }
 
 /** The link and the M/N values of the panel's mode, the firmware's own;
@@ -726,6 +739,9 @@ static void row_pps_init(void)
     k_memset(&gpu, 0, sizeof(gpu));
     CHECK(i915_model_init(&model) == 0, "the model is made");
     gpu.hw = model.hw;
+    /* The reference the bind's i915_power_init holds for its life. */
+    gpu.power.count = 1;
+    gpu.power.on = 1;
     gpu.display.dp.vbt.panel_type = -1;
     intel_bios_panel_init(&vbt, &gpu.display.dp.vbt, intel_bios_encoder_lookup(&vbt, INTEL_PORT_A),
                           lenovo_panel_edid, 1);

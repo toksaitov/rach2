@@ -196,6 +196,18 @@
 #define SDE_ERROR_CPT         (1u << 16)
 #define PCH_PORT_HOTPLUG      0xc4030
 
+/* PCH_PORT_HOTPLUG, Linux's SHOTPLUG_CTL: each of ports B, C and D 8 bits
+ * apart, its enable, its short pulse's duration (reserved on Lynx Point,
+ * 0 for 2 ms) and its write-1-to-clear status of a short or long pulse. */
+#define PORT_HOTPLUG_SHIFT(pin)        ((pin) * 8)
+#define PORT_HOTPLUG_ENABLE(pin)       (1u << (4 + PORT_HOTPLUG_SHIFT(pin)))
+#define PORT_PULSE_DURATION_MASK(pin)  (3u << (2 + PORT_HOTPLUG_SHIFT(pin)))
+#define PORT_HOTPLUG_STATUS_MASK(pin)  (3u << PORT_HOTPLUG_SHIFT(pin))
+#define PORT_HOTPLUG_SHORT_DETECT(pin) (1u << PORT_HOTPLUG_SHIFT(pin))
+#define PORT_HOTPLUG_LONG_DETECT(pin)  (2u << PORT_HOTPLUG_SHIFT(pin))
+/* Port A's enable, which a Lynx Point LP sets for the eDP port. */
+#define PORTA_HOTPLUG_ENABLE           (1u << 28)
+
 /* ------------------------------------------------------------------------
  * Engines (i915_reg.h, gt/intel_engine_regs.h, gt/intel_gt_regs.h): each
  * engine's registers are at its base.
@@ -657,12 +669,14 @@
 #define TRANS_VBLANK(t)               I915_TRANS_REG(t, 0x60010)
 #define TRANS_VSYNC(t)                I915_TRANS_REG(t, 0x60014)
 #define TRANS_VSYNCSHIFT(t)           I915_TRANS_REG(t, 0x60028)
+#define PIPE_MULT(t)                  I915_TRANS_REG(t, 0x6002c) /* the multiplier less one */
 #define PIPESRC(p)                    (0x6001c + (p) * 0x1000)
 #define TRANSCONF(t)                  I915_TRANS2_REG(t, 0x70008)
 #define TRANSCONF_ENABLE              (1u << 31)
 #define TRANSCONF_STATE_ENABLE        (1u << 30)
 #define TRANSCONF_INTERLACE_MASK      (7u << 21)
 #define TRANSCONF_INTERLACE_PF_PD_ILK (0u << 21)
+#define TRANSCONF_INTERLACE_IF_ID_ILK (3u << 21)
 #define TRANSCONF_DITHER_EN           (1u << 4)
 #define TRANSCONF_DITHER_TYPE_SP      (0u << 2)
 #define PIPE_MISC(p)                  (0x70030 + (p) * 0x1000)
@@ -692,6 +706,7 @@
  * synchronous, and the colour depth in bits 7:5, 0 for 6 bits. */
 #define TRANS_MSA_MISC(t)   I915_TRANS2_REG(t, 0x60410)
 #define TRANS_MSA_SYNC_CLK  (1u << 0)
+#define TRANS_MSA_CEA_RGB   (1u << 3) /* RGB at CEA-861's limited range */
 #define TRANS_MSA_BPC_SHIFT 5
 
 /* A transcoder's chicken bits, eDP's at 0x420cc, and its frame start delay
@@ -822,6 +837,23 @@
 #define GAMMA_MODE_MODE_8BIT      0u
 #define PIPE_CSC_MODE(p)          (0x49028 + (p) * 0x100)
 #define CSC_POSITION_BEFORE_GAMMA (1u << 1)
+#define CSC_MODE_YUV_TO_RGB       (1u << 0)
+
+/* The pipe's colour matrix (display/intel_color_regs.h): its coefficients
+ * two to a register, the first in the high half, and its offsets before
+ * and after, each in 1.12 fixed point within 16 bits. */
+#define PIPE_CSC_COEFF_RY_GY(p) (0x49010 + (p) * 0x100)
+#define PIPE_CSC_COEFF_BY(p)    (0x49014 + (p) * 0x100)
+#define PIPE_CSC_COEFF_RU_GU(p) (0x49018 + (p) * 0x100)
+#define PIPE_CSC_COEFF_BU(p)    (0x4901c + (p) * 0x100)
+#define PIPE_CSC_COEFF_RV_GV(p) (0x49020 + (p) * 0x100)
+#define PIPE_CSC_COEFF_BV(p)    (0x49024 + (p) * 0x100)
+#define PIPE_CSC_PREOFF_HI(p)   (0x49030 + (p) * 0x100)
+#define PIPE_CSC_PREOFF_ME(p)   (0x49034 + (p) * 0x100)
+#define PIPE_CSC_PREOFF_LO(p)   (0x49038 + (p) * 0x100)
+#define PIPE_CSC_POSTOFF_HI(p)  (0x49040 + (p) * 0x100)
+#define PIPE_CSC_POSTOFF_ME(p)  (0x49044 + (p) * 0x100)
+#define PIPE_CSC_POSTOFF_LO(p)  (0x49048 + (p) * 0x100)
 
 #define WM_LINETIME(p)         (0x45270 + (p) * 4)
 #define HSW_LINETIME_MASK      0x1ffu
@@ -848,6 +880,13 @@
 #define DDI_BUF_EMP_MASK                (0xfu << 24)
 #define DDI_BUF_PORT_REVERSAL           (1u << 16)
 #define DDI_BUF_IS_IDLE                 (1u << 7)
+/* How long DDI_BUF_CTL takes to drive the lanes once enabled (Linux waits
+ * more than 518 us before Gen 10), and the most it takes to go idle. */
+#define DDI_BUF_ACTIVE_US               518u
+#define DDI_BUF_IDLE_US                 8u
+/* How long the pipe takes to stop once its transcoder is disabled, at
+ * most (Linux's intel_wait_for_pipe_off). */
+#define PIPE_OFF_US                     100000u
 #define DDI_A_4_LANES                   (1u << 4)
 #define DDI_PORT_WIDTH(width)           (((uint32_t)(width) - 1) << 1)
 #define DDI_PORT_WIDTH_MASK             (7u << 1)
@@ -891,22 +930,46 @@
 #define TRANS_DDI_PORT_WIDTH_MASK       (7u << 1)
 #define TRANS_DDI_PORT_WIDTH(w)         (((uint32_t)(w) - 1u) << 1)
 
-#define SPLL_CTL                0x46020
-#define SPLL_PLL_ENABLE         (1u << 31)
-#define WRPLL_CTL(pll)          (0x46040 + (pll) * 0x20)
-#define WRPLL_PLL_ENABLE        (1u << 31)
-#define PORT_CLK_SEL(port)      (0x46100 + (port) * 4)
-#define PORT_CLK_SEL_MASK       (7u << 29)
-#define PORT_CLK_SEL_LCPLL_2700 (0u << 29)
-#define PORT_CLK_SEL_LCPLL_1350 (1u << 29)
-#define PORT_CLK_SEL_LCPLL_810  (2u << 29)
-#define PORT_CLK_SEL_SPLL       (3u << 29)
-#define PORT_CLK_SEL_WRPLL1     (4u << 29)
-#define PORT_CLK_SEL_WRPLL2     (5u << 29)
-#define PORT_CLK_SEL_NONE       (7u << 29)
-#define TRANS_CLK_SEL(t)        (0x46140 + (t) * 4)
-#define TRANS_CLK_SEL_DISABLED  (0u << 29)
-#define TRANS_CLK_SEL_PORT(x)   (((uint32_t)(x) + 1) << 29)
+/* The SPLL and the two WRPLLs (i915_reg.h): their reference, the SPLL's
+ * frequency, and the WRPLL's dividers, R and P with a fixed point bit. */
+#define SPLL_CTL                   0x46020
+#define SPLL_PLL_ENABLE            (1u << 31)
+#define SPLL_REF_BCLK              (0u << 28)
+#define SPLL_REF_MUXED_SSC         (1u << 28)
+#define SPLL_REF_NON_SSC_HSW       (2u << 28)
+#define SPLL_REF_LCPLL             (3u << 28)
+#define SPLL_REF_MASK              (3u << 28)
+#define SPLL_FREQ_810MHz           (0u << 26)
+#define SPLL_FREQ_1350MHz          (1u << 26)
+#define SPLL_FREQ_2700MHz          (2u << 26)
+#define SPLL_FREQ_MASK             (3u << 26)
+#define WRPLL_CTL(pll)             (0x46040 + (pll) * 0x20)
+#define WRPLL_PLL_ENABLE           (1u << 31)
+#define WRPLL_REF_BCLK             (0u << 28)
+#define WRPLL_REF_PCH_SSC          (1u << 28)
+#define WRPLL_REF_SPECIAL_HSW      (2u << 28)
+#define WRPLL_REF_LCPLL            (3u << 28)
+#define WRPLL_REF_MASK             (3u << 28)
+#define WRPLL_DIVIDER_REFERENCE(x) ((uint32_t)(x) << 0)
+#define WRPLL_DIVIDER_REF_MASK     0xffu
+#define WRPLL_DIVIDER_POST(x)      ((uint32_t)(x) << 8)
+#define WRPLL_DIVIDER_POST_MASK    (0x3fu << 8)
+#define WRPLL_DIVIDER_POST_SHIFT   8
+#define WRPLL_DIVIDER_FEEDBACK(x)  ((uint32_t)(x) << 16)
+#define WRPLL_DIVIDER_FB_SHIFT     16
+#define WRPLL_DIVIDER_FB_MASK      (0xffu << 16)
+#define PORT_CLK_SEL(port)         (0x46100 + (port) * 4)
+#define PORT_CLK_SEL_MASK          (7u << 29)
+#define PORT_CLK_SEL_LCPLL_2700    (0u << 29)
+#define PORT_CLK_SEL_LCPLL_1350    (1u << 29)
+#define PORT_CLK_SEL_LCPLL_810     (2u << 29)
+#define PORT_CLK_SEL_SPLL          (3u << 29)
+#define PORT_CLK_SEL_WRPLL1        (4u << 29)
+#define PORT_CLK_SEL_WRPLL2        (5u << 29)
+#define PORT_CLK_SEL_NONE          (7u << 29)
+#define TRANS_CLK_SEL(t)           (0x46140 + (t) * 4)
+#define TRANS_CLK_SEL_DISABLED     (0u << 29)
+#define TRANS_CLK_SEL_PORT(x)      (((uint32_t)(x) + 1) << 29)
 
 /* The CD clock's source. */
 #define LCPLL_CTL                 0x130040
@@ -919,7 +982,10 @@
 #define LCPLL_CD_SOURCE_FCLK      (1u << 21)
 #define LCPLL_CD_SOURCE_FCLK_DONE (1u << 19)
 
-#define SFUSE_STRAP 0xc2014
+#define SFUSE_STRAP               0xc2014
+#define SFUSE_STRAP_DDIB_DETECTED (1u << 2)
+#define SFUSE_STRAP_DDIC_DETECTED (1u << 1)
+#define SFUSE_STRAP_DDID_DETECTED (1u << 0)
 
 /* The PCH's raw clock in MHz, bits 9:0, which the panel power sequencer's
  * divisor counts. */
@@ -929,6 +995,11 @@
 /* The HDMI infoframes of transcoder `t` (i915_reg.h). */
 #define HSW_TVIDEO_DIP_CTL(t)      I915_TRANS_REG(t, 0x60200)
 #define HSW_TVIDEO_DIP_AVI_DATA(t) I915_TRANS_REG(t, 0x60220)
+#define HSW_TVIDEO_DIP_VS_DATA(t)  I915_TRANS_REG(t, 0x60260)
+#define HSW_TVIDEO_DIP_SPD_DATA(t) I915_TRANS_REG(t, 0x602a0)
+#define HSW_TVIDEO_DIP_GCP(t)      I915_TRANS_REG(t, 0x60210)
+#define GCP_COLOR_INDICATION       (1u << 2)
+#define GCP_DEFAULT_PHASE_ENABLE   (1u << 1)
 #define VIDEO_DIP_ENABLE_VSC_HSW   (1u << 20)
 #define VIDEO_DIP_ENABLE_GCP_HSW   (1u << 16)
 #define VIDEO_DIP_ENABLE_AVI_HSW   (1u << 12)
@@ -1018,15 +1089,19 @@
 #define PCH_DISPLAY_BASE        0xc0000
 #define GPIO(pin)               (PCH_DISPLAY_BASE + 0x5010 + 4 * (pin))
 #define GPIO_CLOCK_DIR_MASK     (1u << 0)
+#define GPIO_CLOCK_DIR_IN       (0u << 1)
 #define GPIO_CLOCK_DIR_OUT      (1u << 1)
 #define GPIO_CLOCK_VAL_MASK     (1u << 2)
 #define GPIO_CLOCK_VAL_OUT      (1u << 3)
 #define GPIO_CLOCK_VAL_IN       (1u << 4)
+#define GPIO_CLOCK_PULLUP_DIS   (1u << 5)
 #define GPIO_DATA_DIR_MASK      (1u << 8)
+#define GPIO_DATA_DIR_IN        (0u << 9)
 #define GPIO_DATA_DIR_OUT       (1u << 9)
 #define GPIO_DATA_VAL_MASK      (1u << 10)
 #define GPIO_DATA_VAL_OUT       (1u << 11)
 #define GPIO_DATA_VAL_IN        (1u << 12)
+#define GPIO_DATA_PULLUP_DIS    (1u << 13)
 #define GMBUS0                  (PCH_DISPLAY_BASE + 0x5100)
 #define GMBUS_RATE_100KHZ       (0u << 8)
 #define GMBUS_HOLD_EXT          (1u << 7)
@@ -1043,6 +1118,7 @@
 #define GMBUS_SLAVE_INDEX_SHIFT 8
 #define GMBUS_SLAVE_ADDR_SHIFT  1
 #define GMBUS_SLAVE_READ        (1u << 0)
+#define GMBUS_SLAVE_WRITE       (0u << 0)
 #define GMBUS2                  (PCH_DISPLAY_BASE + 0x5108)
 #define GMBUS_INUSE             (1u << 15)
 #define GMBUS_HW_WAIT_PHASE     (1u << 14)
@@ -1054,5 +1130,6 @@
 #define GMBUS3                  (PCH_DISPLAY_BASE + 0x510c)
 #define GMBUS4                  (PCH_DISPLAY_BASE + 0x5110)
 #define GMBUS5                  (PCH_DISPLAY_BASE + 0x5120)
+#define GMBUS_2BYTE_INDEX_EN    (1u << 31)
 
 #endif /* _I915_REG_H_ */

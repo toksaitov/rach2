@@ -1,7 +1,8 @@
 /*
- * intel_dp_aux.c: the AUX channel of the eDP panel on DDI A, after Linux's
- * display/intel_dp_aux.c for Haswell, with the DPCD reads and writes and
- * the I2C over AUX of the EDID that Linux's drm_dp_helper.c builds on it.
+ * intel_dp_aux.c: the AUX channels of DisplayPort sinks, the eDP panel's on
+ * DDI A and the PCH's of DDI B to D, after Linux's display/intel_dp_aux.c
+ * for Haswell, with the DPCD reads and writes and the I2C over AUX of the
+ * EDID that Linux's drm_dp_helper.c builds on them.
  */
 
 #include "i915.h"
@@ -15,16 +16,14 @@
 /* Linux's bounds: three looks at a busy channel 1 ms apart, 10 ms for a
  * message to finish, five sends of each, and the DPCD's 32 tries 500 us
  * apart (drm_dp_dpcd_access). */
-#define AUX_BUSY_TRIES   3
-#define AUX_DONE_US      10000u
-#define AUX_SEND_TRIES   5
-#define AUX_RETRY_US     500u
-#define AUX_RX_ERROR_US  400u
-#define DPCD_TRIES       32
-#define I2C_TRIES        7
-#define I2C_DEFER_TRIES  7
-#define EDID_BLOCK_TRIES 4
-#define DDC_TRIES        5
+#define AUX_BUSY_TRIES  3
+#define AUX_DONE_US     10000u
+#define AUX_SEND_TRIES  5
+#define AUX_RETRY_US    500u
+#define AUX_RX_ERROR_US 400u
+#define DPCD_TRIES      32
+#define I2C_TRIES       7
+#define I2C_DEFER_TRIES 7
 
 /* The extra precharge of a message in 2 us units: Linux's sync length,
  * 16 us of precharge and 16 of preamble, less the 10 us and the preamble
@@ -42,8 +41,9 @@
  * workaround, 63 and 72 for the PCH's channels, does not apply to the
  * ULT's Lynx Point LP.
  */
-static uint32_t aux_divider(struct drm_i915_private *i915, int port, int index)
+static uint32_t aux_divider(struct intel_dp *dp, int port, int index)
 {
+    struct drm_i915_private *i915 = dp->i915;
     uint32_t freq;
 
     if (index != 0) {
@@ -78,9 +78,9 @@ static void aux_unpack(uint32_t v, uint8_t *dst, int n)
 }
 
 /**
- * Send `send_bytes` bytes of `send` on the panel's AUX channel and take up
+ * Send `send_bytes` bytes of `send` on the AUX channel of `dp` and take up
  * to `recv_size` bytes of the reply into `recv`, Linux's
- * intel_dp_aux_xfer: the panel's VDD held for the transfer, a channel
+ * intel_dp_aux_xfer: an eDP panel's VDD held for the transfer, a channel
  * still busy waited for three times, each send tried five times while it
  * times out or meets a receive error, which costs 400 us.
  *
@@ -88,22 +88,22 @@ static void aux_unpack(uint32_t v, uint8_t *dst, int n)
  *         send never done, or a reply of 0 or more than 20 bytes, -EIO for
  *         a receive error and -ETIMEDOUT when no sink answered.
  */
-static int32_t aux_xfer(struct drm_i915_private *i915, const uint8_t *send, int send_bytes,
-                        uint8_t *recv, int recv_size)
+static int32_t aux_xfer(struct intel_dp *dp, const uint8_t *send, int send_bytes, uint8_t *recv,
+                        int recv_size)
 {
-    struct i915_hw *hw = &i915->hw;
-    int port = i915->display.dp.port;
+    struct i915_hw *hw = &dp->i915->hw;
+    int port = dp->aux_port;
     uint32_t ctl = DP_AUX_CH_CTL(port), status = 0, divider, send_ctl;
     int32_t ret;
     int i, try, clock = 0, vdd, recv_bytes;
 
-    vdd = intel_pps_vdd_on_unlocked(i915);
+    vdd = dp->edp ? intel_pps_vdd_on_unlocked(dp->i915) : 0;
     for (try = 0; try < AUX_BUSY_TRIES; try++) {
         status = i915_read(hw, ctl);
         if (!(status & DP_AUX_CH_CTL_SEND_BUSY)) {
             break;
         }
-        intel_display_msleep(i915, 1);
+        intel_display_msleep(dp->i915, 1);
     }
     if (try == AUX_BUSY_TRIES) {
         klog(KLOG_WARN, "i915", "aux: not started: status 0x%08x", (unsigned)status);
@@ -114,7 +114,7 @@ static int32_t aux_xfer(struct drm_i915_private *i915, const uint8_t *send, int 
         ret = -E2BIG;
         goto out;
     }
-    while ((divider = aux_divider(i915, port, clock++)) != 0) {
+    while ((divider = aux_divider(dp, port, clock++)) != 0) {
         send_ctl = DP_AUX_CH_CTL_SEND_BUSY | DP_AUX_CH_CTL_DONE | DP_AUX_CH_CTL_INTERRUPT |
                    DP_AUX_CH_CTL_TIME_OUT_ERROR | DP_AUX_CH_CTL_TIME_OUT_400us |
                    DP_AUX_CH_CTL_RECEIVE_ERROR | DP_AUX_CH_CTL_MESSAGE_SIZE(send_bytes) |
@@ -172,12 +172,12 @@ done:
     ret = recv_bytes;
 out:
     if (vdd) {
-        intel_pps_vdd_off_unlocked(i915, 0);
+        intel_pps_vdd_off_unlocked(dp->i915, 0);
     }
     return ret;
 }
 
-int32_t intel_dp_aux_transfer(struct drm_i915_private *i915, struct intel_dp_aux_msg *msg)
+int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
 {
     uint8_t tx[20], rx[20];
     int txsize, rxsize;
@@ -199,7 +199,7 @@ int32_t intel_dp_aux_transfer(struct drm_i915_private *i915, struct intel_dp_aux
         if (msg->size) {
             k_memcpy(tx + AUX_HEADER_SIZE, msg->buffer, msg->size);
         }
-        ret = aux_xfer(i915, tx, txsize, rx, rxsize);
+        ret = aux_xfer(dp, tx, txsize, rx, rxsize);
         if (ret > 0) {
             msg->reply = (uint8_t)(rx[0] >> 4);
             ret = ret > 1 ? (rx[1] < msg->size ? rx[1] : (int32_t)msg->size) : (int32_t)msg->size;
@@ -212,7 +212,7 @@ int32_t intel_dp_aux_transfer(struct drm_i915_private *i915, struct intel_dp_aux
         if (rxsize > 20) {
             return -E2BIG;
         }
-        ret = aux_xfer(i915, tx, txsize, rx, rxsize);
+        ret = aux_xfer(dp, tx, txsize, rx, rxsize);
         if (ret > 0) {
             msg->reply = (uint8_t)(rx[0] >> 4);
             ret--;
@@ -231,8 +231,8 @@ int32_t intel_dp_aux_transfer(struct drm_i915_private *i915, struct intel_dp_aux
  * the tries otherwise: -EPROTO for a short reply, -EIO for a NAK or a
  * DEFER, or the transfer's.
  */
-static int32_t dpcd_access(struct drm_i915_private *i915, uint8_t request, uint32_t addr,
-                           uint8_t *buf, uint32_t size)
+static int32_t dpcd_access(struct intel_dp *dp, uint8_t request, uint32_t addr, uint8_t *buf,
+                           uint32_t size)
 {
     struct intel_dp_aux_msg msg;
     int32_t ret = 0, err = 0;
@@ -245,9 +245,9 @@ static int32_t dpcd_access(struct drm_i915_private *i915, uint8_t request, uint3
     msg.size = size;
     for (retry = 0; retry < DPCD_TRIES; retry++) {
         if (ret != 0 && ret != -ETIMEDOUT) {
-            i915_delay_us(&i915->hw, AUX_RETRY_US);
+            i915_delay_us(&dp->i915->hw, AUX_RETRY_US);
         }
-        ret = intel_dp_aux_transfer(i915, &msg);
+        ret = intel_dp_aux_transfer(dp, &msg);
         if (ret >= 0) {
             if ((msg.reply & DP_AUX_NATIVE_REPLY_MASK) == DP_AUX_NATIVE_REPLY_ACK) {
                 if (ret == (int32_t)size) {
@@ -265,23 +265,21 @@ static int32_t dpcd_access(struct drm_i915_private *i915, uint8_t request, uint3
     return err;
 }
 
-int32_t intel_dp_dpcd_read(struct drm_i915_private *i915, uint32_t addr, uint8_t *buf,
-                           uint32_t size)
+int32_t intel_dp_dpcd_read(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size)
 {
     uint8_t rev;
     int32_t ret;
 
     /* Linux reads DPCD_REV first: some sinks corrupt the first access
      * after they leave power saving. */
-    ret = dpcd_access(i915, DP_AUX_NATIVE_READ, DP_DPCD_REV, &rev, 1);
+    ret = dpcd_access(dp, DP_AUX_NATIVE_READ, DP_DPCD_REV, &rev, 1);
     if (ret < 0) {
         return ret;
     }
-    return dpcd_access(i915, DP_AUX_NATIVE_READ, addr, buf, size);
+    return dpcd_access(dp, DP_AUX_NATIVE_READ, addr, buf, size);
 }
 
-int32_t intel_dp_dpcd_write(struct drm_i915_private *i915, uint32_t addr, const uint8_t *buf,
-                            uint32_t size)
+int32_t intel_dp_dpcd_write(struct intel_dp *dp, uint32_t addr, const uint8_t *buf, uint32_t size)
 {
     uint8_t copy[DP_AUX_MAX_PAYLOAD_BYTES];
 
@@ -289,29 +287,21 @@ int32_t intel_dp_dpcd_write(struct drm_i915_private *i915, uint32_t addr, const 
         return -E2BIG;
     }
     k_memcpy(copy, buf, size);
-    return dpcd_access(i915, DP_AUX_NATIVE_WRITE, addr, copy, size);
+    return dpcd_access(dp, DP_AUX_NATIVE_WRITE, addr, copy, size);
 }
 
-int32_t intel_dp_dpcd_writeb(struct drm_i915_private *i915, uint32_t addr, uint8_t value)
+int32_t intel_dp_dpcd_writeb(struct intel_dp *dp, uint32_t addr, uint8_t value)
 {
-    return intel_dp_dpcd_write(i915, addr, &value, 1);
+    return intel_dp_dpcd_write(dp, addr, &value, 1);
 }
 
 /* ------------------------------------------------------------------------
  * I2C over AUX, Linux's drm_dp_i2c_xfer
  */
 
-/* An I2C message: `len` bytes of `buf` to or from the device at `addr`. */
-struct i2c_msg {
-    uint8_t addr;
-    uint8_t read;
-    uint32_t len;
-    uint8_t *buf;
-};
-
 /** The AUX request of `m`, with middle-of-transaction set, since no
  * message of the EDID's ends with a stop of its own. */
-static uint8_t i2c_request(const struct i2c_msg *m)
+static uint8_t i2c_request(const struct intel_i2c_msg *m)
 {
     return (uint8_t)((m->read ? DP_AUX_I2C_READ : DP_AUX_I2C_WRITE) | DP_AUX_I2C_MOT);
 }
@@ -323,13 +313,13 @@ static uint8_t i2c_request(const struct i2c_msg *m)
  * gave, or -EREMOTEIO for a NAK and too many defers, or the transfer's
  * error.
  */
-static int32_t i2c_do_msg(struct drm_i915_private *i915, struct intel_dp_aux_msg *msg)
+static int32_t i2c_do_msg(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
 {
     int retry, defer_i2c = 0;
     int32_t ret;
 
     for (retry = 0; retry < I2C_TRIES + defer_i2c; retry++) {
-        ret = intel_dp_aux_transfer(i915, msg);
+        ret = intel_dp_aux_transfer(dp, msg);
         if (ret < 0) {
             if (ret == -EBUSY) {
                 continue;
@@ -340,7 +330,7 @@ static int32_t i2c_do_msg(struct drm_i915_private *i915, struct intel_dp_aux_msg
         case DP_AUX_NATIVE_REPLY_ACK:
             break;
         case DP_AUX_NATIVE_REPLY_DEFER:
-            i915_delay_us(&i915->hw, AUX_RETRY_US);
+            i915_delay_us(&dp->i915->hw, AUX_RETRY_US);
             continue;
         default:
             return -EREMOTEIO;
@@ -356,7 +346,7 @@ static int32_t i2c_do_msg(struct drm_i915_private *i915, struct intel_dp_aux_msg
             if (defer_i2c < I2C_DEFER_TRIES) {
                 defer_i2c++;
             }
-            i915_delay_us(&i915->hw, AUX_RETRY_US);
+            i915_delay_us(&dp->i915->hw, AUX_RETRY_US);
             if ((msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_I2C_WRITE) {
                 msg->request =
                     (uint8_t)((msg->request & DP_AUX_I2C_MOT) | DP_AUX_I2C_WRITE_STATUS_UPDATE);
@@ -372,13 +362,13 @@ static int32_t i2c_do_msg(struct drm_i915_private *i915, struct intel_dp_aux_msg
 /** Send or take the whole of `orig`, a piece at a time while the sink
  * answers short, Linux's drm_dp_i2c_drain_msg: the shortest answer, or an
  * error. */
-static int32_t i2c_drain(struct drm_i915_private *i915, const struct intel_dp_aux_msg *orig)
+static int32_t i2c_drain(struct intel_dp *dp, const struct intel_dp_aux_msg *orig)
 {
     struct intel_dp_aux_msg msg = *orig;
     int32_t err, ret = (int32_t)orig->size;
 
     while (msg.size > 0) {
-        err = i2c_do_msg(i915, &msg);
+        err = i2c_do_msg(dp, &msg);
         if (err <= 0) {
             return err == 0 ? -EPROTO : err;
         }
@@ -398,8 +388,9 @@ static int32_t i2c_drain(struct drm_i915_private *i915, const struct intel_dp_au
  * transaction closed by a bare address without middle-of-transaction.
  * `n`, or the first error.
  */
-static int32_t i2c_xfer(struct drm_i915_private *i915, struct i2c_msg *msgs, int n)
+static int32_t i2c_xfer(void *ctx, struct intel_i2c_msg *msgs, int n)
 {
+    struct intel_dp *dp = (struct intel_dp *)ctx;
     struct intel_dp_aux_msg msg;
     uint32_t j, transfer;
     int32_t err = 0;
@@ -411,7 +402,7 @@ static int32_t i2c_xfer(struct drm_i915_private *i915, struct i2c_msg *msgs, int
         msg.request = i2c_request(&msgs[i]);
         msg.buffer = NULL;
         msg.size = 0;
-        err = i2c_do_msg(i915, &msg);
+        err = i2c_do_msg(dp, &msg);
         msg.request = i2c_request(&msgs[i]);
         if (err < 0) {
             break;
@@ -420,7 +411,7 @@ static int32_t i2c_xfer(struct drm_i915_private *i915, struct i2c_msg *msgs, int
         for (j = 0; j < msgs[i].len; j += msg.size) {
             msg.buffer = msgs[i].buf + j;
             msg.size = msgs[i].len - j < transfer ? msgs[i].len - j : transfer;
-            err = i2c_drain(i915, &msg);
+            err = i2c_drain(dp, &msg);
             msg.request = i2c_request(&msgs[i]);
             if (err < 0) {
                 break;
@@ -437,101 +428,29 @@ static int32_t i2c_xfer(struct drm_i915_private *i915, struct i2c_msg *msgs, int
     msg.request &= (uint8_t)~DP_AUX_I2C_MOT;
     msg.buffer = NULL;
     msg.size = 0;
-    (void)i2c_do_msg(i915, &msg);
+    (void)i2c_do_msg(dp, &msg);
     return err;
 }
 
-/**
- * Read EDID block `block` into `buf`, Linux's drm_do_probe_ddc_edid: the
- * segment pointer for blocks past the first two, the offset, and the
- * block's 128 bytes, five times at most. 0, or -EIO.
- */
-static int32_t ddc_block(struct drm_i915_private *i915, uint32_t block, uint8_t *buf)
+void intel_dp_i2c_bus(struct intel_dp *dp, struct intel_i2c_bus *bus)
 {
-    uint8_t start = (uint8_t)(block * 128u), segment = (uint8_t)(block >> 1);
-    int xfers = segment ? 3 : 2, retries = DDC_TRIES;
-    int32_t ret;
-
-    do {
-        struct i2c_msg msgs[3];
-
-        msgs[0].addr = DDC_SEGMENT_ADDR;
-        msgs[0].read = 0;
-        msgs[0].len = 1;
-        msgs[0].buf = &segment;
-        msgs[1].addr = DDC_ADDR;
-        msgs[1].read = 0;
-        msgs[1].len = 1;
-        msgs[1].buf = &start;
-        msgs[2].addr = DDC_ADDR;
-        msgs[2].read = 1;
-        msgs[2].len = 128;
-        msgs[2].buf = buf;
-        ret = i2c_xfer(i915, &msgs[3 - xfers], xfers);
-    } while (ret != xfers && --retries);
-    return ret == xfers ? 0 : -EIO;
+    bus->xfer = i2c_xfer;
+    bus->ctx = dp;
+    bus->name = dp->name;
 }
 
-/** Whether EDID block `b` sums to 0 and, for the base block, has the
- * EDID's header. */
-static int edid_block_ok(const uint8_t *b, int base)
+int32_t intel_dp_read_edid(struct intel_dp *dp, uint8_t *buf, uint32_t cap, uint32_t *len)
 {
-    static const uint8_t header[8] = {0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0};
-    uint8_t sum = 0;
-    int i;
+    struct intel_i2c_bus bus;
 
-    for (i = 0; i < 128; i++) {
-        sum = (uint8_t)(sum + b[i]);
-    }
-    for (i = 0; base && i < (int)sizeof(header); i++) {
-        if (b[i] != header[i]) {
-            return 0;
-        }
-    }
-    return sum == 0;
+    intel_dp_i2c_bus(dp, &bus);
+    return intel_edid_read(&bus, buf, cap, len);
 }
 
-int32_t intel_dp_read_edid(struct drm_i915_private *i915, uint8_t *buf, uint32_t cap, uint32_t *len)
+int intel_dp_probe_ddc(struct intel_dp *dp)
 {
-    uint32_t i, blocks;
-    int try;
+    struct intel_i2c_bus bus;
 
-    *len = 0;
-    if (cap < 128) {
-        return -EINVAL;
-    }
-    for (try = 0; try < EDID_BLOCK_TRIES; try++) {
-        if (ddc_block(i915, 0, buf) != 0) {
-            return -EIO;
-        }
-        if (edid_block_ok(buf, 1)) {
-            break;
-        }
-    }
-    if (try == EDID_BLOCK_TRIES) {
-        return -EINVAL;
-    }
-    blocks = 1u + buf[126];
-    if (blocks > cap / 128u) {
-        klog(KLOG_WARN, "i915", "edp: EDID of %u blocks, %u kept", (unsigned)blocks,
-             (unsigned)(cap / 128u));
-        blocks = cap / 128u;
-    }
-    for (i = 1; i < blocks; i++) {
-        for (try = 0; try < EDID_BLOCK_TRIES; try++) {
-            if (ddc_block(i915, i, buf + i * 128u) != 0) {
-                return -EIO;
-            }
-            if (edid_block_ok(buf + i * 128u, 0)) {
-                break;
-            }
-        }
-        if (try == EDID_BLOCK_TRIES) {
-            /* Linux drops a bad extension; the ones before it stand. */
-            klog(KLOG_WARN, "i915", "edp: EDID block %u bad, %u kept", (unsigned)i, (unsigned)i);
-            break;
-        }
-    }
-    *len = i * 128u;
-    return 0;
+    intel_dp_i2c_bus(dp, &bus);
+    return intel_i2c_probe_ddc(&bus);
 }

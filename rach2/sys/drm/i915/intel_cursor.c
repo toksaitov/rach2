@@ -111,6 +111,9 @@ static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *stat
     if (ps->rotation & DRM_MODE_ROTATE_180) {
         cntr |= MCURSOR_ROTATE_180;
     }
+    if (c->cfg.limited_range) {
+        cntr |= MCURSOR_PIPE_CSC_ENABLE;
+    }
     i915_write(hw, CURCNTR(c->pipe), cntr);
     i915_write(hw, CURPOS(c->pipe),
                cursor_coord(ps->crtc_y, CURSOR_POS_X_SIGN) << 16 |

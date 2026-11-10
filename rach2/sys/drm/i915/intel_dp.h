@@ -21,9 +21,17 @@
 #define DP_MAX_DOWNSPREAD_0_5                  (1 << 0)
 #define DP_TPS4_SUPPORTED                      (1 << 7)
 #define DP_DOWNSTREAMPORT_PRESENT              0x005
+#define DP_DWN_STRM_PORT_PRESENT               (1 << 0)
+#define DP_DWN_STRM_PORT_TYPE_MASK             0x06
+#define DP_DWN_STRM_PORT_TYPE_DP               (0 << 1)
+#define DP_DWN_STRM_PORT_TYPE_ANALOG           (1 << 1)
+#define DP_DWN_STRM_PORT_TYPE_TMDS             (2 << 1)
+#define DP_DWN_STRM_PORT_TYPE_OTHER            (3 << 1)
+#define DP_DETAILED_CAP_INFO_AVAILABLE         (1 << 4)
 #define DP_MAIN_LINK_CHANNEL_CODING            0x006
 #define DP_CAP_ANSI_8B10B                      (1 << 0)
 #define DP_DOWN_STREAM_PORT_COUNT              0x007
+#define DP_PORT_COUNT_MASK                     0x0f
 #define DP_OUI_SUPPORT                         (1 << 7)
 #define DP_EDP_CONFIGURATION_CAP               0x00d
 #define DP_TRAINING_AUX_RD_INTERVAL            0x00e
@@ -32,6 +40,24 @@
 #define DP_RECEIVER_CAP_SIZE                   0xf
 #define DP_SUPPORTED_LINK_RATES                0x010 /* eDP 1.4: 8 rates of 200 kHz */
 #define DP_MAX_SUPPORTED_RATES                 8
+
+/* ---- A branch device's downstream ports, DPCD 0x080 to 0x08f ---- */
+
+#define DP_DOWNSTREAM_PORT_0        0x080
+#define DP_MAX_DOWNSTREAM_PORTS     0x10
+#define DP_DS_PORT_TYPE_MASK        (7 << 0)
+#define DP_DS_PORT_TYPE_DP          0
+#define DP_DS_PORT_TYPE_VGA         1
+#define DP_DS_PORT_TYPE_DVI         2
+#define DP_DS_PORT_TYPE_HDMI        3
+#define DP_DS_PORT_TYPE_NON_EDID    4
+#define DP_DS_PORT_TYPE_DP_DUALMODE 5
+#define DP_DS_PORT_HPD              (1 << 3)
+#define DP_DS_MAX_BPC_MASK          (3 << 0)
+#define DP_DS_8BPC                  0
+#define DP_DS_10BPC                 1
+#define DP_DS_12BPC                 2
+#define DP_DS_16BPC                 3
 
 /* The link rates DP_MAX_LINK_RATE and DP_LINK_BW_SET name, in 0.27 Gb/s. */
 #define DP_LINK_BW_1_62 0x06
@@ -71,6 +97,12 @@
 
 /* ---- The link's status, DPCD 0x202 to 0x207 ---- */
 
+#define DP_SINK_COUNT                0x200
+#define DP_GET_SINK_COUNT(x)         ((((x) & 0x80) >> 1) | ((x) & 0x3f))
+#define DP_DEVICE_SERVICE_IRQ_VECTOR 0x201
+#define DP_AUTOMATED_TEST_REQUEST    (1 << 1)
+#define DP_CP_IRQ                    (1 << 2)
+#define DP_SINK_SPECIFIC_IRQ         (1 << 6)
 #define DP_LANE0_1_STATUS            0x202
 #define DP_LANE_CR_DONE              (1 << 0)
 #define DP_LANE_CHANNEL_EQ_DONE      (1 << 1)
@@ -82,14 +114,16 @@
 
 /* ---- The sink's power, the source's OUI, eDP's capabilities ---- */
 
-#define DP_SOURCE_OUI            0x300
-#define DP_SET_POWER             0x600
-#define DP_SET_POWER_D0          0x1
-#define DP_SET_POWER_D3          0x2
-#define DP_EDP_DPCD_REV          0x700
-#define DP_EDP_14                0x03
-#define EDP_DISPLAY_CTL_CAP_SIZE 3
-#define DP_DP13_DPCD_REV         0x2200 /* the extended receiver capabilities */
+#define DP_SOURCE_OUI                   0x300
+#define DP_SET_POWER                    0x600
+#define DP_SET_POWER_D0                 0x1
+#define DP_SET_POWER_D3                 0x2
+#define DP_EDP_DPCD_REV                 0x700
+#define DP_EDP_14                       0x03
+#define EDP_DISPLAY_CTL_CAP_SIZE        3
+#define DP_DP13_DPCD_REV                0x2200 /* the extended receiver capabilities */
+#define DP_LINK_SERVICE_IRQ_VECTOR_ESI0 0x2005
+#define HDMI_LINK_STATUS_CHANGED        (1 << 2)
 
 /* ---- The AUX channel's requests and replies ---- */
 
