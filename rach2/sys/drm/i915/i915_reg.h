@@ -786,8 +786,7 @@
 #define WM_LP_LATENCY_SHIFT        24
 #define WM_LP_FBC_ILK_SHIFT        20
 #define WM_LP_PRIMARY_SHIFT        8
-#define DISP_ARB_CTL               0x45000
-#define DISP_FBC_WM_DIS            (1u << 15)
+#define DISP_FBC_WM_DIS            (1u << 15) /* of DISP_ARB_CTL */
 
 /* A pipe's line time in eighths of a microsecond, at the pixel clock in
  * bits 8:0 and at the CD clock, for IPS, in bits 24:16. */

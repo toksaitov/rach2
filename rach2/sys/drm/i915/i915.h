@@ -835,15 +835,15 @@ struct intel_scanout {
  * or until the flip done of an async flip (`event_async`); NULL for none.
  * `cfg` is what the pipe is set to, from the readout until its first mode
  * set. `crc_wa` says a CRC source runs that needs Linux's force-through
- * of the fitter. The watermarks: `wm_active` those the hardware uses,
- * `wm_optimal` those of the last commit, written once the frame counter
- * passes `wm_frame` while `wm_pending`.
+ * of the fitter. The watermarks (intel_wm.c): `wm_active` those the
+ * registers hold for the pipe, `wm_optimal` those of the last commit's
+ * planes, made active once the frame counter passes `wm_frame` while
+ * `wm_pending`, which holds a vblank reference.
  * `vbl_on` says its vblank interrupt is unmasked. The CRC: `crc_ctl` is
  * PIPE_CRC_CTL's value while a source runs, 0 when none does, and
  * `crc_skip` the frames still to drop after it starts. `shown` and
- * `parked` are each plane's scanouts (`struct intel_scanout`). `wm` is the
- * level 0 watermark word last written. `planes_on` has bit
- * INTEL_PLANE_ for each plane the hardware shows.
+ * `parked` are each plane's scanouts (`struct intel_scanout`).
+ * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
  */
 struct intel_crtc {
     struct drm_crtc base;
@@ -863,7 +863,6 @@ struct intel_crtc {
     uint32_t crc_ctl;
     uint32_t crc_skip;
     uint32_t planes_on;
-    uint32_t wm;
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
 };
@@ -886,8 +885,7 @@ struct intel_crtc {
  * pipe's enable leaves it, `bl_level` is the level it shows then,
  * `bl_min` the least the VBT allows, and `bl_alt` says the PCH counts the
  * PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off` says the VGA
- * plane has been turned off. `lp_wm_off` says the low-power watermarks
- * are off, as they are once a sprite or a cursor is shown. `ready` is set
+ * plane has been turned off. `ready` is set
  * once the device's mode configuration is made, which its release frees.
  */
 struct intel_display {
@@ -910,7 +908,6 @@ struct intel_display {
     uint8_t bl_alt;
     int bl_level, bl_min;
     uint8_t vga_off;
-    uint8_t lp_wm_off;
     uint8_t ready;
 };
 
@@ -2033,13 +2030,45 @@ int32_t intel_planes_init(struct intel_crtc *crtc);
 /** Make the cursor plane of `crtc`, as `intel_planes_init` does. */
 int32_t intel_cursor_init(struct intel_crtc *crtc);
 
-/**
- * Write pipe `crtc`'s level 0 watermarks for the planes it shows, Linux's
- * ilk_compute_wm level 0 from the latencies Haswell's pcode gives, and
- * turn the low-power watermarks off the first time a sprite or a cursor
- * shows. Inside a commit's planes.
+/*
+ * The watermarks (intel_wm.c), Linux's i9xx_wm.c for Haswell.
  */
-void intel_update_wm(struct intel_crtc *crtc);
+
+/** Read the memory latencies from MCH_SSKPD and the watermark registers,
+ * the low-power levels turned off, each pipe the readout found on keeping
+ * the firmware's level 0, Linux's ilk_wm_get_hw_state. After the readout. */
+void intel_wm_init(struct drm_i915_private *i915);
+
+/**
+ * Compute `crtc`'s watermarks at the five levels into `wm` for `cfg` and
+ * the planes of `state` (their states now where `state` has none, or for
+ * NULL), Linux's ilk_compute_pipe_wm. 0, or -EINVAL when level 0 does not
+ * fit the pipe's share of the FIFO.
+ */
+int32_t intel_wm_compute(struct intel_crtc *crtc, struct drm_atomic_state *state,
+                         const struct intel_crtc_config *cfg, struct intel_pipe_wm *wm);
+
+/** Make `wm` safe for the planes of `old` as well, the larger of each
+ * value, Linux's ilk_compute_intermediate_wm. 0, or -EINVAL when level 0
+ * then does not fit. */
+int32_t intel_wm_intermediate(const struct intel_pipe_wm *old, struct intel_pipe_wm *wm);
+
+/**
+ * Program `crtc`'s watermarks for the commit `state`, Linux's
+ * ilk_initial_watermarks: for a mode set, those of its new configuration;
+ * else the intermediate of the old planes' and the new, made the new
+ * planes' alone once the vblank latched them (`intel_wm_vblank`). Inside
+ * the commit, before the planes are written; may take a vblank reference.
+ */
+void intel_wm_commit(struct intel_crtc *crtc, struct drm_atomic_state *state, int modeset);
+
+/** Program `crtc`'s new planes' watermarks once the frame counter passed
+ * the commit's frame, Linux's ilk_optimize_watermarks. From the deferred
+ * vblank work. */
+void intel_wm_vblank(struct intel_crtc *crtc);
+
+/** Let a pending `intel_wm_vblank` go, with its vblank reference. */
+void intel_wm_cancel(struct intel_crtc *crtc);
 
 /** Unmask the flip done of `crtc` when its new state in `state` is an
  * async flip with an event. From the CRTC's `atomic_begin`, before the

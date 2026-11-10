@@ -352,93 +352,6 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
 }
 
 /* ------------------------------------------------------------------------
- * Watermarks
- */
-
-/* The level 0 latency of each plane in tenths of a microsecond, which
- * Haswell's pcode gives for all three (i915_pri_wm_latency), and the
- * largest level 0 value of each field of WM0_PIPE. */
-#define WM0_LATENCY  20u
-#define WM0_PRI_MAX  127u
-#define WM0_SPR_MAX  127u
-#define WM0_CUR_MAX  63u
-#define WM_LP_ENABLE (1u << 31)
-
-/** Linux's ilk_wm_method1: the FIFO's cachelines the latency drains at
- * `rate` kHz and `cpp` bytes a pixel, plus two. */
-static uint32_t wm_method1(uint32_t rate, uint32_t cpp, uint32_t latency)
-{
-    uint64_t bytes = drm_div64((uint64_t)rate * cpp * latency + 9999u, 10000u);
-
-    return (uint32_t)((bytes + 63u) / 64u) + 2u;
-}
-
-/** Linux's ilk_wm_method2: the lines the latency spans, at `width` pixels
- * of `cpp` bytes, in cachelines plus two. */
-static uint32_t wm_method2(uint32_t rate, uint32_t htotal, uint32_t width, uint32_t cpp,
-                           uint32_t latency)
-{
-    uint32_t lines;
-
-    if (htotal == 0) {
-        return 0;
-    }
-    lines = (uint32_t)drm_div64((uint64_t)rate * latency + (uint64_t)htotal * 10000u - 1u,
-                                (uint64_t)htotal * 10000u);
-    return (lines * width * cpp + 63u) / 64u + 2u;
-}
-
-/** The smaller of `a` and `b`. */
-static uint32_t wm_min(uint32_t a, uint32_t b)
-{
-    return a < b ? a : b;
-}
-
-void intel_update_wm(struct intel_crtc *crtc)
-{
-    struct drm_i915_private *i915 = crtc->i915;
-    const struct drm_mode_modeinfo *m = &crtc->cfg.mode;
-    uint32_t rate = crtc->cfg.pixel_rate, pri = 0, spr = 0, cur = 0, wm;
-    struct drm_plane_state *ps;
-
-    if (crtc->cfg.active && rate != 0) {
-        ps = crtc->primary.state;
-        if (ps->visible && ps->fb) {
-            pri = wm_min(wm_method1(rate, ps->fb->info->cpp[0], WM0_LATENCY), WM0_PRI_MAX);
-        }
-        ps = crtc->sprite.state;
-        if (ps->visible && ps->fb) {
-            spr = wm_min(wm_min(wm_method1(rate, ps->fb->info->cpp[0], WM0_LATENCY),
-                                wm_method2(rate, m->htotal, (uint32_t)(ps->dst.x2 - ps->dst.x1),
-                                           ps->fb->info->cpp[0], WM0_LATENCY)),
-                         WM0_SPR_MAX);
-        }
-        ps = crtc->cursor.state;
-        if (ps->visible && ps->fb) {
-            cur = wm_min(wm_method2(rate, m->htotal, ps->fb->width, 4u, WM0_LATENCY), WM0_CUR_MAX);
-        }
-    }
-    if ((spr || cur) && !i915->display.lp_wm_off) {
-        /* Linux's ilk LP watermarks would take the new planes in; with them
-         * off the FIFO is filled at level 0 alone, which costs power only. */
-        i915_write(&i915->hw, WM3_LP_ILK, rd(i915, WM3_LP_ILK) & ~WM_LP_ENABLE);
-        i915_write(&i915->hw, WM2_LP_ILK, rd(i915, WM2_LP_ILK) & ~WM_LP_ENABLE);
-        i915_write(&i915->hw, WM1_LP_ILK, rd(i915, WM1_LP_ILK) & ~WM_LP_ENABLE);
-        i915->display.lp_wm_off = 1;
-    }
-    wm = pri << 16 | spr << 8 | cur;
-    if (!pri) {
-        /* The firmware's primary watermark stands while nothing replaces
-         * it, as on a pipe off. */
-        wm |= rd(i915, WM0_PIPE_ILK(crtc->pipe)) & (0x7fu << 16);
-    }
-    if (wm != crtc->wm) {
-        i915_write(&i915->hw, WM0_PIPE_ILK(crtc->pipe), wm);
-        crtc->wm = wm;
-    }
-}
-
-/* ------------------------------------------------------------------------
  * CRTCs
  */
 
@@ -504,21 +417,33 @@ static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state 
     return 0;
 }
 
-/** The CRTC's check: a mode set must configure, and an async flip comes
- * without one. 0, -EINVAL or -ERANGE. */
+/** The CRTC's check, Linux's intel_crtc_atomic_check: a mode set must
+ * configure, without an async flip, and the planes' watermarks must fit,
+ * the new alone and with the old. 0, -EINVAL or -ERANGE. */
 static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
     struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
     struct intel_crtc_config cfg;
+    struct intel_pipe_wm wm;
+    int modeset;
+    int32_t err;
 
-    if (!cs || !drm_atomic_crtc_needs_modeset(cs)) {
+    if (!cs) {
         return 0;
     }
-    if (cs->async_flip) {
+    modeset = drm_atomic_crtc_needs_modeset(cs);
+    if (modeset && cs->async_flip) {
         return -EINVAL;
     }
-    return compute_config(c, cs, edp_conn_state(c->i915, state), &cfg);
+    cfg = c->cfg;
+    if (modeset && (err = compute_config(c, cs, edp_conn_state(c->i915, state), &cfg)) != 0) {
+        return err;
+    }
+    if ((err = intel_wm_compute(c, state, &cfg, &wm)) != 0) {
+        return err;
+    }
+    return modeset || !cfg.active ? 0 : intel_wm_intermediate(&c->wm_optimal, &wm);
 }
 
 /** The modes a pipe drives, Linux's intel_mode_valid for Haswell: no
@@ -660,7 +585,7 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
     plane_off(c, INTEL_PLANE_PRIMARY);
     i915_write(hw, WM_LINETIME(c->pipe),
                cfg->linetime | cfg->ips_linetime << HSW_IPS_LINETIME_SHIFT);
-    intel_update_wm(c);
+    intel_wm_commit(c, state, 1);
     intel_ddi_enable(i915, c->pipe, cfg);
     if (err == -EAGAIN) {
         link_retry(i915);
@@ -685,16 +610,20 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     uint32_t flags;
     int slot;
 
-    (void)state;
     for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
         plane_off(c, slot);
     }
     i915_posting_read(&i915->hw, DSPSURF(c->pipe));
+    intel_wm_cancel(c);
     if (c->cfg.active) {
         intel_ddi_disable(i915);
         intel_ddi_post_disable(i915, c, &c->cfg);
     }
     k_memset(&c->cfg, 0, sizeof(c->cfg));
+    /* A pipe that stays off gives its share of the FIFO back. */
+    if (!state->crtcs_new[crtc->index]->active) {
+        intel_wm_commit(c, state, 1);
+    }
     flags = kirq_save();
     intel_crtc_send_event(c);
     kirq_restore(flags);
@@ -712,8 +641,8 @@ static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *sta
 
     if (cs && drm_atomic_crtc_needs_modeset(cs) && cs->active) {
         crtc_enable(c, state);
-    } else {
-        intel_update_wm(c);
+    } else if (cs && !drm_atomic_crtc_needs_modeset(cs)) {
+        intel_wm_commit(c, state, 0);
     }
     intel_crtc_arm_flip_done(c, state);
 }
@@ -942,7 +871,6 @@ static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
     drm_framebuffer_get(fb);
     c->shown[INTEL_PLANE_PRIMARY].fb = fb;
     c->planes_on |= 1u << INTEL_PLANE_PRIMARY;
-    c->wm = rd(i915, WM0_PIPE_ILK(c->pipe));
     klog(KLOG_INFO, "i915",
          "display: pipe %c adopted: %ux%u in %ux%u@%u, %u kHz, %u bpp, %u lane%s at %u kHz, "
          "the firmware's framebuffer at GTT 0x%x, stride %u",
@@ -983,6 +911,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->atomic_check = intel_atomic_check;
     mc->atomic_commit = intel_atomic_commit;
     intel_cdclk_init(i915);
+    intel_wm_init(i915);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &d->crtc[pipe];
 
@@ -1022,6 +951,9 @@ void intel_display_fini(struct drm_i915_private *i915)
 
     if (!d->ready) {
         return;
+    }
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        intel_wm_cancel(&d->crtc[pipe]);
     }
     intel_vblank_fini(i915);
     intel_backlight_fini(i915);
