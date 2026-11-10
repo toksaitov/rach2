@@ -166,3 +166,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `rach2-game` checks that a new prefix has `pfx/user.reg` after `wineboot`, on both routes, and exits 1 when it has none.
 * Status: unreported.
 * Next: report to Open-Wine-Components/umu-launcher with a patch that exits 1 after logging the exception.
+
+## Linux's move_pages reads a 32-bit program's addresses past the first 16 from the wrong place
+
+* Project: Linux 6.12.115, `mm/migrate.c`; the source is `linux-6.12.115.tar.xz`, SHA-256 `0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb`, which `vendor/gnu/kvm/sources.txt` pins.
+* Fails: a 32-bit program on a 64-bit kernel that calls `move_pages` with a null `nodes` and more than 16 addresses gets, from the 17th status on, the statuses of other addresses than the ones it gave. `do_pages_stat` (line 2463) works in chunks of `DO_PAGES_STAT_CHUNK_NR`, 16 (line 2467), and after each chunk steps the user array with `pages += chunk_nr` (line 2489), where `pages` is a `const void __user * __user *`, so a step is 16 pointers of 8 bytes, 128 bytes. For a compat caller `get_compat_pages_array` (line 2442) casts that pointer to `compat_uptr_t __user *` (line 2446) and reads 4-byte entries from it (line 2451). The second chunk therefore starts at the caller's entry 32 and not 16, the third at entry 64, and so on: entries 16 to 31 are never read, and the kernel reads past the end of an array of fewer than twice as many entries as it was told. The statuses are stepped by `status += chunk_nr` over ints, which is right, so status 16 holds the answer for entry 32.
+* Found: 2026-11-11, on the Mac, milestone 80, task 80-10d, by reading `mm/migrate.c` while writing Rach2's `move_pages` for 32-bit programs on the x86-64 kernel.
+* Reproduction: not yet run on Linux. Build `tests/numaprobe.c` for i686 and run it on an x86-64 Linux 6.12: its `move-many` row asks for the status of 20 addresses, 19 of a written page and one in no mapping, and should fail there, since entries 16 to 19 are answered from what lies at entries 32 to 35, past the array. A 64-bit build of the same program should pass.
+* Evidence: Linux's `mm/migrate.c` at 6.12.115, the lines named above; `tests/numaprobe.c`, the `move-many` row.
+* Rach2: nothing to work around. `sys_move_pages` in `rach2/sys/mm/mempolicy.c` reads each entry at its own index for a 32-bit program, so Rach2's x86-64 kernel answers such a program as a 32-bit Linux does and not as 64-bit Linux 6.12 does; `rach2/ia32.md` says so in the call's row.
+* Status: unreported.
+* Next: run the reproduction on Linux 6.12 and on the current mainline; whether a later version fixed it is missing from the records. Then report to linux-mm, with a patch that steps a compat caller's array by `compat_uptr_t`.
