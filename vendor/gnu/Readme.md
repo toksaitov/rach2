@@ -123,7 +123,7 @@ wpa_supplicant joins a Wi-Fi network through the kernel's nl80211: WPA, WPA2 and
 [`install_root.sh`](install_root.sh) refuses to replace a file the staged tree has, except the runtime's `libstdc++.so.6`, which the native compiler's copy replaces. It installs:
 
 * `root/`, `native/`, `gdb/` and `js/`.
-* The files of the desktop packages, including chromium-headless-shell, with paths under `/bin`, `/lib` and `/sbin` moved under `/usr`. Packages whose libraries the root already builds (`libc6`, GCC's, zlib, liblzma, PCRE2, util-linux's, libffi, SQLite, bzip2 and zstd) and the base packages the root supplies are left out; the list is `SKIP` in the script.
+* The files of the desktop packages, including chromium-headless-shell, with paths under `/bin`, `/lib` and `/sbin` moved under `/usr`. Packages whose libraries the root already builds (`libc6`, GCC's, zlib, liblzma, PCRE2, util-linux's, libffi, SQLite, bzip2, zstd and libnl) and the base packages the root supplies are left out; the list is `SKIP` in the script.
 * The video layer's closure, libva, Intel's i965 VA driver and vainfo, less the packages the desktop closure installed ([the video layer](debian/Readme.md#the-video-layer)).
 * Mesa 26.1.6's Venus driver from `venus/`, after Mesa 25.0.7's Venus ICD and library are removed ([Venus](#venus)).
 * The i386 layer, on x86-64 unless `GNU_I386` is 0 ([The i386 layer](#the-i386-layer)).

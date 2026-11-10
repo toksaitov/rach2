@@ -73,9 +73,11 @@ DEBIAN="$OUT/work/debian/desktop"
 
 # Libraries and programs already supplied by the GNU ports or image manifest
 # are kept out of Debian's search directory, which /etc/ld.so.conf puts
-# before /usr/lib, so that Debian's libcurl.so.4 there, curl 8.14.1's, would
-# replace the curl port's 8.22.0 for every program. Distinct sonames (OpenSSL
-# 3, FFmpeg 7 and Python 3.13) stay beside the ports' newer ABI versions.
+# before /usr/lib, so that Debian's copies there do not replace the ports'
+# for every program: libcurl.so.4 of curl 8.14.1 the curl port's 8.22.0, and
+# libnl 3.7 the 3.12 that wpa_supplicant was built against. Distinct sonames
+# (OpenSSL 3, FFmpeg 7 and Python 3.13) stay beside the ports' newer ABI
+# versions.
 SKIP="libc6 libgcc-s1 libstdc++6 libatomic1 libgomp1 zlib1g liblzma5 libpcre2-8-0
 libmount1 libblkid1 libuuid1 libsmartcols1 libfdisk1 libffi8 libsqlite3-0 libbz2-1.0
 libzstd1 libcrypt1 libcap2 libcap2-bin libevent-2.1-7t64 libgcrypt20 libgpg-error0
@@ -84,7 +86,7 @@ libreadline8t64 libncurses6 libncursesw6 libbrotli1 gcc-14-base debconf
 lsb-base sysvinit-utils base-files dpkg debianutils init-system-helpers systemd
 systemd-sysv dbus-user-session gawk mount procps tar tzdata netbase python3
 python3-minimal libpython3-stdlib readline-common libpam-modules
-libpam-modules-bin libpam-runtime"
+libpam-modules-bin libpam-runtime libnl-3-200 libnl-genl-3-200 libnl-route-3-200"
 
 TREE="$1"
 if [ -z "$TREE" ] || [ ! -d "$TREE" ]; then
