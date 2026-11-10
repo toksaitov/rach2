@@ -389,9 +389,9 @@ static const uint8_t gamepad[] = {
     0x01, 0x95, 0x04, 0x81, 0x02, 0x75, 0x04, 0x95, 0x01, 0x81, 0x03, 0xc0};
 
 /* Gamepads whose hat switch has a range of 0 to 0xFFFFFFFF, which Linux
- * stores backwards and takes for an axis, and of INT32_MIN to INT32_MAX,
- * whose width overflows Linux's arithmetic: one byte of buttons, then the
- * hat's four bytes. */
+ * stores backwards, and of INT32_MIN to INT32_MAX, which Linux's 16-bit
+ * hat_min and hat_max keep as 0 and -1, so that it takes each for an axis:
+ * one byte of buttons, then the hat's four bytes. */
 static const uint8_t hat_backwards[] = {0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x09, 0x19, 0x01,
                                         0x29, 0x08, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08,
                                         0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x27, 0xff,
@@ -1058,7 +1058,7 @@ static void rows_gamepad(void)
     static const uint8_t three[] = {0x00, 0x03, 0x00, 0x00, 0x00};
     struct hid_dev *hid;
     struct evdev *d;
-    int inputs, h;
+    int inputs;
 
     ndevs = 0;
     hid = connect(gamepad, sizeof(gamepad), "ACME Pad", &inputs);
@@ -1094,11 +1094,12 @@ static void rows_gamepad(void)
     ndevs = 0;
     hid = connect(hat_widest, sizeof(hat_widest), "ACME Widest", &inputs);
     d = &devs[0];
-    h = inputs == 1 && bit(d->abs, TEST_HAT0X) && bit(d->abs, TEST_HAT0Y);
-    CHECK("hat INT32_MIN to INT32_MAX: a hat", h);
+    CHECK("hat INT32_MIN to INT32_MAX: an axis, as Linux's 16-bit hat_min 0 and hat_max -1 make it",
+          inputs == 1 && bit(d->abs, TEST_HAT0X) && !bit(d->abs, TEST_HAT0Y));
     feed(hid, zero, sizeof(zero));
-    CHECK("hat INT32_MIN to INT32_MAX: 0, half way, is down, with no division by 0",
-          saw(EV_ABS, TEST_HAT0Y, 1) && saw(EV_ABS, TEST_HAT0X, 0) == 0);
+    feed(hid, three, sizeof(three));
+    CHECK("hat INT32_MIN to INT32_MAX: its values are reported with no division",
+          saw(EV_ABS, TEST_HAT0X, 3));
     drop(hid);
 
     ndevs = 0;
