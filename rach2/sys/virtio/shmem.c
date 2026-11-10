@@ -31,6 +31,15 @@
 #define VGS_IMPLEMENTATION
 #include "vgpushm.h"
 
+/* Blobs map from the VM's pages through Rach2's KVM, which the x86-64
+ * kernel alone has; elsewhere VGS_TF_PAGES is never accepted. */
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+#include "../kvm/kvm.h"
+#define VSHM_PAGES 1
+#else
+#define VSHM_PAGES 0
+#endif
+
 /* The ring area: a page for each queue, which holds the core's largest. */
 #define VSHM_RING_LEN (VGS_QUEUES * VGS_PAGE)
 
@@ -96,6 +105,23 @@ struct vshm {
     struct spinlock heap_lock;
     uint32_t binds, failures;
     uint64_t rung[2], woken[2], polls, refused;
+    uint64_t maps, map_pages, map_live, revoked; /* as struct vgs_info has them */
+};
+
+/*
+ * A blob of the VM's memory mapped from its pages: KVM's map of them, the
+ * record whose counts it moves, and its owner's revoke, which the map's
+ * taking back calls through `vshm_map_revoked`.
+ */
+struct virtio_map {
+#if VSHM_PAGES
+    struct kvm_gpamap *m;
+#endif
+    struct vshm *vs;
+    void (*revoke)(void *owner);
+    void *owner;
+    uint64_t pages;
+    int live;
 };
 
 static struct vshm *vshm_cur;         /* the region attached, or detaching */
@@ -462,6 +488,10 @@ static void vs_set_features(struct virtio_dev *d, uint64_t features)
 
     vs->me.features = features;
     vs->me.transport_features = vs->bells ? vs->dev.transport_features & VGS_TF_DOORBELL : 0;
+    if (VSHM_PAGES && vs->bells) {
+        vs->me.transport_features |= vs->dev.transport_features & VGS_TF_PAGES;
+    }
+    vs->vdev.pages = (vs->me.transport_features & VGS_TF_PAGES) != 0;
 }
 
 /** The configuration never changes within an epoch but for its events,
@@ -723,6 +753,113 @@ static int vs_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
     return 0;
 }
 
+#if VSHM_PAGES
+/** KVM took a map's frames back: count it, then tell its owner, which
+ * stops every use of them. Under the big lock; does not sleep. */
+static void vshm_map_revoked(void *owner)
+{
+    struct virtio_map *vm = (struct virtio_map *)owner;
+
+    if (vm->live) {
+        vm->live = 0;
+        vm->vs->map_live--;
+        vm->vs->map_pages -= vm->pages;
+        vm->vs->revoked++;
+    }
+    vm->revoke(vm->owner);
+}
+#endif
+
+/**
+ * Hold the frames behind runs of the VM's physical pages: the VM is the one
+ * whose KVM ioeventfd signals the doorbell the device rings for the queues,
+ * so a transport without doorbells has none; its slots and its maker's
+ * memory give the frames (`kvm_gpamap_new`). 0, -ENODEV without the VM, or
+ * the map's error.
+ */
+static int vs_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                        void (*revoke)(void *owner), void *owner, struct virtio_map **out)
+{
+#if VSHM_PAGES
+    struct vshm *vs = to_vs(d);
+    struct kvm_gpa_run *g;
+    struct virtio_map *vm;
+    struct kvm_vm *kvm;
+    uint32_t i;
+    int rc;
+
+    *out = NULL;
+    if (!vs->attached || !vs->bells || !vs->in[VGS_VEC_QUEUE].ev) {
+        return -ENODEV;
+    }
+    g = (struct kvm_gpa_run *)kmalloc((size_t)n * sizeof(*g));
+    vm = (struct virtio_map *)kzalloc(sizeof(*vm));
+    if (!g || !vm || n == 0) {
+        kfree(g);
+        kfree(vm);
+        return n == 0 ? -EINVAL : -ENOMEM;
+    }
+    for (i = 0; i < n; i++) {
+        g[i].gpa = runs[i].addr;
+        g[i].pages = runs[i].pages;
+        vm->pages += runs[i].pages; /* exact once the map takes them */
+    }
+    vm->vs = vs;
+    vm->revoke = revoke;
+    vm->owner = owner;
+    kvm = kvm_vm_by_eventfd(vs->in[VGS_VEC_QUEUE].ev);
+    rc = kvm ? kvm_gpamap_new(kvm, g, n, vshm_map_revoked, vm, &vm->m) : -ENODEV;
+    kfree(g);
+    if (rc != 0) {
+        kfree(vm);
+        return rc;
+    }
+    vm->live = 1;
+    vs->refs++;
+    vs->maps++;
+    vs->map_live++;
+    vs->map_pages += vm->pages;
+    *out = vm;
+    return 0;
+#else
+    (void)d;
+    (void)runs;
+    (void)n;
+    (void)revoke;
+    (void)owner;
+    *out = NULL;
+    return -ENODEV;
+#endif
+}
+
+/** The frame of page `i` of a map, or 0 once KVM took it back. */
+static uintptr_t vs_map_frame(struct virtio_map *vm, uint64_t i)
+{
+#if VSHM_PAGES
+    return vm->live ? kvm_gpamap_frame(vm->m, i) : 0;
+#else
+    (void)vm;
+    (void)i;
+    return 0;
+#endif
+}
+
+static void vs_put(struct virtio_dev *d);
+
+/** Let go of a map and its hold on the record. */
+static void vs_map_free(struct virtio_map *vm)
+{
+    if (vm->live) {
+        vm->vs->map_live--;
+        vm->vs->map_pages -= vm->pages;
+    }
+#if VSHM_PAGES
+    kvm_gpamap_free(vm->m);
+#endif
+    vs_put(&vm->vs->vdev);
+    kfree(vm);
+}
+
 static void vshm_free(struct vshm *vs);
 
 /** A driver's bind has let go: the record goes with its last reference. */
@@ -743,7 +880,8 @@ static const struct virtio_ops vshm_ops = {
     vs_irq_start,    vs_irq_release,     vs_dma_alloc,
     vs_dma_free,     vs_shm_region,      vs_ring_alloc,
     vs_backing_fill, vs_backing_release, vs_dma_addr,
-    vs_put};
+    vs_put,          vs_map_pages,       vs_map_frame,
+    vs_map_free};
 
 /* ------------------------------------------------------------------------
  * The doorbells the device rings
@@ -1060,6 +1198,10 @@ static void vshm_info(const struct vshm *vs, struct vgs_info *out)
     out->heap_pages = vs->heap_pages;
     out->heap_used = vs->heap_used;
     out->refused = vs->refused;
+    out->maps = vs->maps;
+    out->map_pages = vs->map_pages;
+    out->map_live = vs->map_live;
+    out->revoked = vs->revoked;
 }
 
 #ifndef RACH2_HOSTTEST

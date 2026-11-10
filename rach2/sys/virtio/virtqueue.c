@@ -291,6 +291,28 @@ void virtio_backing_release(struct virtio_dev *d, struct shmem *sh)
     }
 }
 
+int virtio_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out)
+{
+    *out = NULL;
+    if (!d->pages || !d->ops->map_pages) {
+        return -ENODEV;
+    }
+    return d->ops->map_pages(d, runs, n, revoke, owner, out);
+}
+
+uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t i)
+{
+    return m && d->ops->map_frame ? d->ops->map_frame(m, i) : 0;
+}
+
+void virtio_map_free(struct virtio_dev *d, struct virtio_map *m)
+{
+    if (m && d->ops->map_free) {
+        d->ops->map_free(m);
+    }
+}
+
 int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
 {
     if (d->ops->dma_addr) {

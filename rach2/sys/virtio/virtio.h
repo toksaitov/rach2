@@ -215,7 +215,31 @@ struct virtqueue {
  *     the physical address.
  * put: the driver has let go of `d` for good, after its removal (below);
  *     the transport may free its record.
+ *
+ * The last three are for a device whose buffers live in its own memory and
+ * reach the driver as lists of its pages, not through a shared memory
+ * region, as the shared region's VM gives them (VGS_TF_PAGES); a transport
+ * without them leaves all three NULL, and `pages` clear.
+ *
+ * map_pages: hold the frames behind `n` runs of the device's memory, in
+ *     order: 0 with the map in `*out`, or -EINVAL,
+ *     -EFAULT for memory that cannot be shared, -ENODEV, -ENOMEM. When the
+ *     transport must take the frames back before map_free, as when the
+ *     device's memory changes or its VM ends, it first calls
+ *     `revoke(owner)`, which stops every use of them and does not sleep.
+ * map_frame: the frame of page `i` of `m`, or 0 once it is taken back.
+ * map_free: let go of `m`, without its `revoke`, once nothing uses it.
  */
+/* A run of a device's own memory, as a device that maps its buffers from
+ * its pages reports one (`map_pages`): the first page's address as the
+ * device addresses its memory, page-aligned, and the pages. */
+struct virtio_run {
+    uint64_t addr;
+    uint64_t pages;
+};
+
+struct virtio_map;
+
 struct virtio_ops {
     const char *name;
     uint8_t (*get_status)(struct virtio_dev *d);
@@ -239,6 +263,10 @@ struct virtio_ops {
     void (*backing_release)(struct virtio_dev *d, struct shmem *sh);
     int (*dma_addr)(struct virtio_dev *d, uintptr_t phys, uint64_t *addr);
     void (*put)(struct virtio_dev *d);
+    int (*map_pages)(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out);
+    uintptr_t (*map_frame)(struct virtio_map *m, uint64_t i);
+    void (*map_free)(struct virtio_map *m);
 };
 
 /*
@@ -264,6 +292,9 @@ struct virtio_dev {
     /* The most bytes one dma_alloc gives, in whole pages that follow each
      * other in the device's addresses; 0 for one page, as on virtio-pci. */
     uint32_t dma_max;
+    /* The device maps its buffers from its own pages (`map_pages`), as
+     * the transport and the device have agreed; set by the transport. */
+    int pages;
     struct virtqueue *queues[VIRTIO_MAX_QUEUES];
     uint32_t config_events;
 };
@@ -360,6 +391,17 @@ void virtio_backing_release(struct virtio_dev *d, struct shmem *sh);
 
 /** The device's address of the frame at `phys`; see `dma_addr`. */
 int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr);
+
+/** Hold the frames behind runs of the device's memory; see `map_pages`.
+ * -ENODEV on a transport without it. Under the big lock; does not sleep. */
+int virtio_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out);
+
+/** The frame of page `i` of a map; see `map_frame`. */
+uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t i);
+
+/** Let go of a map; see `map_free`. NULL is ignored. */
+void virtio_map_free(struct virtio_dev *d, struct virtio_map *m);
 
 /** The driver lets go of a removed device; see `put`. */
 void virtio_put(struct virtio_dev *d);
