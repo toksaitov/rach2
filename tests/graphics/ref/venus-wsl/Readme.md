@@ -19,12 +19,14 @@ The run that took `vulkaninfo/`, from the top of the tree, with the outputs then
 
 * `deqp/smoke/` and `deqp/fraction/`, taken on 2026-11-10, are `debian.sh deqp`'s output for VK-GL-CTS 1.4.1.1's `deqp-vk` on Venus's ICD alone ([Venus's dEQP](../../Readme.md#venuss-deqp)): `smoke` the 9 cases of `deqp-vk-venus-smoke.txt`, all `Pass`, and `fraction` the 96,037 cases of `deqp-vk-lavapipe.txt.gz` whole, 37,012 `Pass`, 59,004 `NotSupported`, 15 `Crash` and 6 `Timeout`, 8 of the crashes and timeouts passing when run again, in 3009 s with 4 processes. Each has `results.csv.gz`, `flakes.out`, `summary.out`, `vulkaninfo.out`, `record.out`, the runner's `record`, and `log.out`, the command's output with QEMU's and the render server's lines.
 * `lost/`, taken on 2026-11-10, is `venus-lost.sh` with the host's render server killed under its four processes: `lost.out` the lines the case compares, each process ended by SIGABRT and `vulkaninfo` failing with VK_ERROR_OUT_OF_HOST_MEMORY; `deqp-N.out` each process's output; `vulkaninfo.out` vulkaninfo's; `kill.out` the host's kill, the server and the four processes it forked, one for each context; `record.out` the run's record; and `log.out` the command's output with QEMU's lines.
+* `vkcube/`, taken on 2026-11-10, is `debian.sh vkcube`'s output for vkcube 1.4.304.0 on Venus's ICD alone under Weston 14.0.2 ([vkcube presenting](../../Readme.md#vkcube-presenting)): `frames.out`, frame 300 `crc32 0x75d4ad32` and frame 345 `crc32 0x1a0d31d7`, both 1280x800, the same in each of three runs; `frame-300.png` and `frame-345.png`, the shots that gave them; `timing.out`, 300 presents in 2.959 s, 101.39 a second; `gpu.out`, vkcube's device line; `results.out` and `record.out`; and the logs of vkcube, the layer and Weston, and `log.out`, the command's output with QEMU's lines.
 * Rates, taken on 2026-11-10, each run in the same QEMU profile with 8 CPUs, 8 GiB, KVM and 4 dEQP processes, as each run's summary line gives them; the suite records rates and judges none, and only their ratio means anything, since the host runs other work beside them:
 
 | Cases | Debian guest | Rach2 | Rach2's rate of Linux's |
 | --- | --- | --- | --- |
 | part 1 of 8 of the fraction, 12,005 | 401 s, host load 15 | 512 s, host load 11 to 32; 513 s and 536 s in earlier runs | 0.78 |
 | every 500th case, 193 | 11 s | 17 s and 45 s in two runs | too short a run to say |
+| vkcube, 300 presents in FIFO | 101.39 a second, host load 29 to 37; 119.90 and 100.00 in earlier runs | 69.67 and 58.02 a second in two runs, with 11 and 15 of the host's 32 CPUs busy | 0.57 to 0.69 |
 
 The runs that took them, from the top of the tree, with each output's files then named as here:
 
@@ -46,7 +48,13 @@ and for `lost/`, with `cts.tar.gz` VK-GL-CTS 1.4.1.1 of the GNU layer's build, `
 
 The rates' Debian runs are the fraction's command with `-e 8 -s 1` and with `-e 500`, and Rach2's are its cases, as `RACH2_QEMU_ACCEL=kvm ARCH=x86_64 RACH2_CASES=machine.venus.fraction-1 tests/run venus` and the same with `machine.venus.sample`, whose summary lines the run's log has.
 
-vkcube's timings on Venus are stored here by the task that runs them on Rach2, and the Direct3D results in `../d3d-venus-wsl/`, each taken on this guest.
+`vkcube/` and the vkcube rates come from these, the first in the Debian guest, with the output's files then named as here, and the second on Rach2, whose result line gives the rate:
+
+    sh tests/graphics/runners/debian.sh vkcube -p venus -c 8 OUT \
+        -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+    RACH2_QEMU_ACCEL=kvm ARCH=x86_64 RACH2_CASES=machine.vkpresent.vkcube tests/run vkpresent
+
+The Direct3D results are stored in `../d3d-venus-wsl/` by the task that takes them on this guest.
 
 ## Updating
 
