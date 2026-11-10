@@ -932,14 +932,15 @@ int32_t drm_version(struct drm_device *dev, void *data, struct drm_file *file)
     return rc;
 }
 
-/** GET_UNIQUE: the bus name, copied whole when it fits the user's length,
- * which is set to its length either way. */
+/** GET_UNIQUE, as Linux 6.12: the bus name of the file's master record,
+ * empty until SET_VERSION gave it, copied whole when it fits the user's
+ * length, which is set to its length either way. libdrm's drmOpenByName
+ * takes only a card whose answer is empty. */
 int32_t drm_getunique(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_unique *u = (struct drm_unique *)data;
-    size_t n = k_strlen(dev->unique);
+    size_t n = file->set_busid ? k_strlen(dev->unique) : 0;
 
-    (void)file;
     if (u->unique_len >= n && copy_to_user(u->unique, dev->unique, n) != 0) {
         return -EFAULT;
     }
@@ -1107,10 +1108,24 @@ int32_t drm_setclientcap(struct drm_device *dev, void *data, struct drm_file *fi
     return 0;
 }
 
+/** Give the master record `master_id` of `dev` its bus name, by marking
+ * each of its files. */
+static void set_busid(struct drm_device *dev, uint32_t master_id)
+{
+    struct drm_file *f;
+
+    for (f = dev->files; f; f = f->dev_next) {
+        if (f->master_id == master_id) {
+            f->set_busid = 1;
+        }
+    }
+}
+
 /** SET_VERSION, as Linux 6.12: EINVAL for an interface or a driver version
  * this one is not; the versions it has go back either way. An interface of
- * 1.1 or later ties the master to its bus, Linux's drm_set_busid, which
- * debugfs's `name` shows. */
+ * 1.1 or later gives the master's record its bus name, Linux's
+ * drm_set_busid, which GET_UNIQUE and debugfs's `name` show to each file of
+ * the record. */
 int32_t drm_setversion(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_set_version *sv = (struct drm_set_version *)data;
@@ -1122,7 +1137,7 @@ int32_t drm_setversion(struct drm_device *dev, void *data, struct drm_file *file
         rc = -EINVAL;
     } else {
         if (sv->drm_di_major != -1 && sv->drm_di_minor >= 1) {
-            file->set_busid = 1;
+            set_busid(dev, file->master_id);
         }
         if (sv->drm_dd_major != -1 && (sv->drm_dd_major != id->major || sv->drm_dd_minor < 0 ||
                                        sv->drm_dd_minor > id->minor)) {

@@ -175,17 +175,7 @@ static void dev_path(char *path, const struct drm_device *dev, const char *rest)
  * which a file under that record set with SET_VERSION. */
 static int master_has_busid(const struct drm_device *dev)
 {
-    const struct drm_file *f;
-
-    if (!dev->master) {
-        return 0;
-    }
-    for (f = dev->files; f; f = f->dev_next) {
-        if (f->set_busid && f->master_id == dev->master->master_id) {
-            return 1;
-        }
-    }
-    return 0;
+    return dev->master && dev->master->set_busid;
 }
 
 /** `name`, Linux's drm_name_info: the driver, the parent device, the
