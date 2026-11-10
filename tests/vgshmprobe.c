@@ -495,6 +495,7 @@ static void measure(long bytes)
     struct drm_virtgpu_3d_wait w;
     struct drm_virtgpu_map m;
     long t0, at, i, k, made = 0, freed = 0;
+    char text[12];
     uint8_t *p;
 
     find_gpu();
@@ -547,9 +548,14 @@ static void measure(long bytes)
         b.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
         b.size = (uint64_t)bytes;
         zero(&m, sizeof(m));
-        if (call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB, &b) != 0 ||
-            (m.handle = b.bo_handle, call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m) != 0) ||
+        if ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB, &b)) != 0) {
+            probe_line("VGSHMPROBE MEASURE: region blob not made: error ", dec(text, at), 0);
+            fail("a blob in the region");
+        }
+        m.handle = b.bo_handle;
+        if ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m)) != 0 ||
             sys_failed(at = probe_mmap(0, bytes, 3, 1, gpu_fd, (long)m.offset))) {
+            probe_line("VGSHMPROBE MEASURE: region blob not mapped: error ", dec(text, at), 0);
             fail("a blob in the region");
         }
         p = (uint8_t *)at;
