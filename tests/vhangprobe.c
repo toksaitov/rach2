@@ -283,7 +283,8 @@ static long child_setup(int ptn, long master)
 static char state_of(long pid)
 {
     static const char head[] = "/proc/", tail[] = "/stat";
-    char path[32], text[256], digits[12];
+    static char path[32], text[256];
+    char digits[12];
     long fd, len;
     int n = 0, i = 0, j;
 
