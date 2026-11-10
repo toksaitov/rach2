@@ -4,7 +4,9 @@
 # `pass`; `skip`, the test's own skip for what the processor or QEMU lacks, as
 # Linux skips it there, with its reason; `fail`, where Linux fails and Rach2
 # is to fail as it does; or `excluded`, not run, for one of the reasons the
-# stack's approved plan allows. LINUX is the result of Linux 6.18.58, WSL's,
+# stack's approved plan allows. A test whose result is the processor's has
+# FLAG?A:B there: A on a processor whose `flags` in /proc/cpuinfo have FLAG
+# and B on one without it. LINUX is the result of Linux 6.18.58, WSL's,
 # with QEMU 10.2.1 and kernel-irqchip=split, as ref/linux-unit-tests.txt has
 # it: a row Linux failed there expects a pass unless its EXPECT is `fail`, and
 # names Linux's failure after `Linux:`.
@@ -50,7 +52,7 @@ rmap_chain pass pass
 s3 pass pass
 setjmp pass pass
 sieve pass pass
-smap pass pass
+smap smap?pass:skip pass SMAP not enabled, on a processor without it, as the Lenovo's i3-4030U
 smptest pass pass
 smptest3 pass pass
 svm excluded timeout nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
