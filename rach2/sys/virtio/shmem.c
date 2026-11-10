@@ -116,10 +116,10 @@ struct vshm {
 struct virtio_map {
 #if VSHM_PAGES
     struct kvm_gpamap *m;
-#endif
-    struct vshm *vs;
     void (*revoke)(void *owner);
     void *owner;
+#endif
+    struct vshm *vs;
     uint64_t pages;
     int live;
 };
