@@ -1687,9 +1687,9 @@ static void flush_type(struct evdev_client *c, uint16_t type)
     c->packet = c->tail;
     for (i = c->tail; i != c->head; i = (i + 1) & c->qmask) {
         struct input_event *ev = &c->queue[i];
-        int report = ev->type == EV_SYN && ev->code == SYN_REPORT;
+        int syn = ev->type == EV_SYN && ev->code == SYN_REPORT;
 
-        if (ev->type == type || (report && n == 0)) {
+        if (ev->type == type || (syn && n == 0)) {
             continue;
         }
         if (head != i) {
@@ -1697,7 +1697,7 @@ static void flush_type(struct evdev_client *c, uint16_t type)
         }
         n++;
         head = (head + 1) & c->qmask;
-        if (report) {
+        if (syn) {
             n = 0;
             c->packet = head;
         }
