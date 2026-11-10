@@ -414,6 +414,26 @@ static void copy_out_cases(void)
     close_fd(&table, fd);
     dma_fence_put(f);
 }
+/** SET_NAME of a name with no NUL in 32 bytes and mmap through an
+ * exporter without mmap both answer EINVAL, as Linux. */
+static void buffer_answers(void)
+{
+    struct dma_buf *b = dma_buf_export(4096, &model_ops, NULL, NULL);
+    char name[40];
+    vma_t vma;
+    int fd = dma_buf_fd(b, 0);
+    fd_entry_t *e = fd_get(&table, fd);
+    k_memset(name, 'x', sizeof(name));
+    CHECK(e->ops->ioctl(e, DMA_BUF_SET_NAME_A, (uintptr_t)name) == -EINVAL,
+          "a name of 32 bytes or more: EINVAL, as strndup_user");
+    name[31] = 0;
+    CHECK(!e->ops->ioctl(e, DMA_BUF_SET_NAME_A, (uintptr_t)name) && b->named, "a name of 31 bytes");
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = 4096;
+    CHECK(e->ops->mmap(e, &vma) == -EINVAL, "mmap through an exporter without mmap: EINVAL");
+    close_fd(&table, fd);
+    dma_buf_put(b);
+}
 /** Run the model cases and fail on any assertion. */
 int main(void)
 {
@@ -428,6 +448,7 @@ int main(void)
     import_cases();
     timeline_cases();
     copy_out_cases();
+    buffer_answers();
     for (i = 0; i < 64; i++)
         CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");
     if (!failures)

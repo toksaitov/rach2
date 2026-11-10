@@ -497,16 +497,14 @@ int32_t drm_gem_shmem_dumb_create_wc(struct drm_file *file, struct drm_device *d
  * The ioctls
  */
 
-/** GEM_CLOSE: drop a handle. EINVAL for a nonzero pad or no such handle. */
+/** GEM_CLOSE: drop a handle. EINVAL for no such handle; the pad is not
+ * read, as Linux. */
 int32_t drm_gem_close_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_gem_close *args = (struct drm_gem_close *)data;
 
     if (!drm_core_check_feature(dev, DRIVER_GEM)) {
         return -EOPNOTSUPP;
-    }
-    if (args->pad) {
-        return -EINVAL;
     }
     return drm_gem_handle_delete(file, args->handle);
 }

@@ -356,7 +356,7 @@ static void sharing_rows(void)
     for (i = 0; i < sizeof(long_name); i++) {
         long_name[i] = 'x';
     }
-    require(call(buffer, DMA_BUF_SET_NAME_A, long_name) == -36 &&
+    require(call(buffer, DMA_BUF_SET_NAME_A, long_name) == -22 &&
                 call(buffer, DMA_BUF_SET_NAME_B, 0) == -14,
             "invalid dma-buf names");
     name_row();

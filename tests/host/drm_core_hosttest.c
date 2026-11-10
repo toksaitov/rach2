@@ -1161,9 +1161,9 @@ static void test_dumb_names(void)
           ioc(&db, &user_b, DRM_IOCTL_MODE_MAP_DUMB, &md) == 0 && md.offset == doff + 8192);
     gc.handle = 1;
     gc.pad = 1;
-    CHECK("GEM_CLOSE with a pad", ioc(&db, &user_b, DRM_IOCTL_GEM_CLOSE, &gc) == -EINVAL);
+    CHECK("GEM_CLOSE with a pad, which Linux does not read",
+          ioc(&db, &user_b, DRM_IOCTL_GEM_CLOSE, &gc) == 0);
     gc.pad = 0;
-    CHECK("GEM_CLOSE", ioc(&db, &user_b, DRM_IOCTL_GEM_CLOSE, &gc) == 0);
     CHECK("GEM_CLOSE again", ioc(&db, &user_b, DRM_IOCTL_GEM_CLOSE, &gc) == -EINVAL);
     dd.handle = 2;
     CHECK("DESTROY_DUMB", ioc(&da, &user_a, DRM_IOCTL_MODE_DESTROY_DUMB, &dd) == 0);

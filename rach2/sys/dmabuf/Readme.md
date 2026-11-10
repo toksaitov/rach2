@@ -6,7 +6,7 @@
 
 Open `/dev/udmabuf` and call `UDMABUF_CREATE` with a memfd, a page-aligned offset and a page-aligned size, or `UDMABUF_CREATE_LIST` with ranges to concatenate. Each file must have `F_SEAL_SHRINK` and lack `F_SEAL_WRITE`. The resulting read/write descriptor maps the same pages shared, reports its size through `lseek(fd, 0, SEEK_END)` and `fstat`, and has an inode distinct from other exports. `/proc/PID/fd` names it `anon_inode:dmabuf`, and a sync file `anon_inode:sync_file`. [udmabuf(4)](../../../man/man4/udmabuf.4) and [dma-buf(7)](../../../man/man7/dma-buf.7) give the user contracts.
 
-`DMA_BUF_SET_NAME` stores a name of at most 31 bytes and its NUL, accepting both ABI encodings. A bad address returns EFAULT, and a name without a NUL in its first 32 bytes ENAMETOOLONG; a failure leaves the previous name. `/proc/PID/fdinfo/N` reports a supplied name, including an empty one, as `name:`.
+`DMA_BUF_SET_NAME` stores a name of at most 31 bytes and its NUL, accepting both ABI encodings. A bad address returns EFAULT, and a name without a NUL in its first 32 bytes EINVAL, as Linux's `strndup_user`; a failure leaves the previous name. `/proc/PID/fdinfo/N` reports a supplied name, including an empty one, as `name:`.
 
 ## Interfaces
 

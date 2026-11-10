@@ -43,7 +43,7 @@ Both the 32-bit and 64-bit request encodings are accepted.
 An inaccessible string is
 .Er EFAULT ;
 one with no NUL in its first 32 bytes is
-.Er ENAMETOOLONG .
+.Er EINVAL .
 The old name remains on failure.
 The name is reported as
 .Ql name:
