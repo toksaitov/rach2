@@ -67,3 +67,4 @@ drmfuzz dmabuf
 vgpuprobe vgpu
 i915gemprobe i915fake
 gpucompatprobe gpucompat
+i915execprobe i915fake

@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
   "family_id": "machine.i915fake",
-  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks, the connector and planes modetest lists, and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back",
+  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks, crocus's batches, the connector and planes modetest lists, and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back, and the batches i915execprobe submits",
   "cases": [
     {
       "case_id": "machine.i915fake.crocus",
-      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo's surfaceless platform picks crocus for it, modetest lists eDP-1 disconnected and three planes a pipe with Haswell's formats, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo's surfaceless platform picks crocus for it, eglinfo -B exits 0 naming the HD 4400 once the render ring has run crocus's batches, goes on after EIO and aborts after ENOSPC, modetest lists eDP-1 disconnected and three planes a pipe with Haswell's formats, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
       "units": [
         "rach2/sys/drm/i915/i915_fake.c",
+        "rach2/sys/drm/i915/i915_gem_execbuffer.c",
         "drmdevice",
         "eglinfo",
         "modetest"
@@ -51,7 +52,7 @@
           "step_id": "probe",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run drmdevice, eglinfo -p surfaceless with EGL's debug log on, printing its exit status and its last lines but the loader's log and the indented lists, an exit not judged while the driver serves no EXECBUFFER2, modetest -c and -p on the card, and first light from /sys/kernel/debug/dri/DEVICE/i915_fake plain and under the submit, bind, irq and hang faults"
+          "does": "run drmdevice, eglinfo -B -p surfaceless with EGL's debug log on, printing its exit status, the batches the fake's render ring ran for it and its last lines but the loader's log and the indented lists, eglinfo again under the submit fault and under the bind fault armed for good, modetest -c and -p on the card, and first light from /sys/kernel/debug/dri/DEVICE/i915_fake plain and under the submit, bind, irq and hang faults"
         }
       ],
       "machines": [
@@ -94,12 +95,17 @@
         },
         {
           "assertion_id": "loader",
-          "checks": "Mesa's loader logs the pci id 8086:0a16 with driver crocus, and eglinfo names crocus as the EGL driver",
+          "checks": "Mesa's loader logs the pci id 8086:0a16 with driver crocus",
           "source": "scenario"
         },
         {
           "assertion_id": "kms",
           "checks": "modetest lists eDP-1 disconnected, and three primary planes of C8, RG16, XR24, XB24, XR30, XB30 and XB4H, three sprites of XR24, XB24, XR30, XB30, XR4H, XB4H, YUYV, YVYU, UYVY and VYUY, and three cursors of AR24",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "crocus",
+          "checks": "eglinfo -B -p surfaceless exits 0 and names the renderer Mesa Intel(R) HD Graphics 4400 (HSW GT2), and the fake's render ring counts at least one batch for it; under the submit fault, injected once, eglinfo exits 0, crocus having made a new context after EIO, and under the bind fault armed for good it exits 134, crocus aborting after ENOSPC, as on Linux",
           "source": "scenario"
         },
         {
@@ -322,10 +328,144 @@
       }
     },
     {
+      "case_id": "machine.i915fake.exec",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and EXECBUFFER2 runs batches on the render and blitter rings whose out-fences signal, writes a relocation and gives its offset back, fails with EIO under the submit fault and ENOSPC under the bind fault, and leaves a batch on a hung ring busy, a bounded wait for it ending in ETIME",
+      "units": [
+        "rach2/sys/drm/i915/i915_gem_execbuffer.c",
+        "rach2/sys/drm/i915/i915_request.c",
+        "i915execprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "devices": [
+            "edu"
+          ],
+          "boot_options": [
+            "rach2.i915fake"
+          ]
+        }
+      },
+      "execution": {
+        "program": "i915execprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root, as etude-guest runs it, which the fake's debugfs file and a batch with a length need",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "the probe closes what it made; the hung ring ends with the machine"
+      },
+      "assertions": [
+        {
+          "assertion_id": "submit",
+          "checks": "a batch with a length on the render ring and one without on the blitter, each writing a 64 KiB object, give out-fences that signal, the fake's file counts one batch on each ring, and BUSY and WAIT find the objects idle",
+          "source": "program"
+        },
+        {
+          "assertion_id": "reloc",
+          "checks": "a relocation whose presumed offset is wrong is written into the batch as the target's offset plus the delta, which PREAD reads, and the target's offset comes back in the relocation's presumed offset",
+          "source": "program"
+        },
+        {
+          "assertion_id": "faults",
+          "checks": "under the submit fault EXECBUFFER2 fails with EIO and the next call's batch completes; under the bind fault armed for good a batch never bound fails with ENOSPC, and completes once the fault is disarmed",
+          "source": "program"
+        },
+        {
+          "assertion_id": "hang",
+          "checks": "under the hang fault a batch is accepted, WAIT with a timeout of 50 ms gives ETIME, BUSY reports its object busy, its out-fence stays active, and the fake's file reports rcs0 hung",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "i915execprobe",
+          "node": "tests/i915execprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs QEMU's edu device, which no installed machine has"
+      }
+    },
+    {
       "case_id": "machine.i915fake.memory",
-      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and 320 MiB of buffer objects written through GTT maps past the 256 MiB aperture read back whole after eviction, a userptr object over the probe's memory is pinned and refused once that memory is unmapped, and buffers given pages until memory gives out end in ENOMEM, a DONTNEED buffer purged on the way",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and 320 MiB of buffer objects written through GTT maps past the 256 MiB aperture read back whole after eviction, a GTT map's fault in an aperture full of the bindings of batches held behind a sw_sync point sleeps until they retire and then binds, a userptr object over the probe's memory is pinned and refused once that memory is unmapped, and buffers given pages until memory gives out end in ENOMEM, a DONTNEED buffer purged on the way",
       "units": [
         "rach2/sys/drm/i915/i915_gem_evict.c",
+        "rach2/sys/drm/i915/i915_gem_execbuffer.c",
         "rach2/sys/drm/i915/i915_gem_shrinker.c",
         "rach2/sys/drm/i915/i915_gem_userptr.c",
         "i915gemprobe"
@@ -366,7 +506,7 @@
         "program": "i915gemprobe",
         "stdin": null,
         "role": "ordinary",
-        "privileges": "an ordinary user",
+        "privileges": "root, as etude-guest runs it, which the sw_sync timeline in debugfs needs",
         "isolation": [],
         "children": "none",
         "cleanup": "the probe unmaps and closes what it made, which gives its memory back"
@@ -380,6 +520,11 @@
         {
           "assertion_id": "working-set",
           "checks": "20 objects of 16 MiB, each page's first dword written through a GTT map, read back whole through the maps after eviction rebinds them and through PREAD from memory",
+          "source": "program"
+        },
+        {
+          "assertion_id": "in-flight",
+          "checks": "17 objects of 16 MiB, each written by a render batch held behind one sw_sync point, are busy; a GTT map's first touch of a new 16 MiB object sleeps uninterruptibly, as /proc reads it, until a child signals the point, then binds and reads back what was written, and the batches are retired",
           "source": "program"
         },
         {

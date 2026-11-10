@@ -1,8 +1,10 @@
 /* i915gemprobe.c: the Intel driver's buffers on the fake chip in QEMU: an X
  * tiled object written through a GTT map reads back through a CPU map where
  * the tiling and the swizzle put each byte; with the argument `memory`, a
- * working set past the aperture, a userptr object and memory pressure that
- * purges a DONTNEED object and ends in ENOMEM. Runs under rach2.i915fake. */
+ * working set past the aperture, an aperture full of the bindings of batches
+ * the GPU has not run, a userptr object and memory pressure that purges a
+ * DONTNEED object and ends in ENOMEM. Runs under rach2.i915fake, as root
+ * for the memory rows, whose sw_sync timeline is in debugfs. */
 #include "probe.h"
 #include "probe_report.h"
 #include "../rach2/sys/drm/i915/i915_drm.h"
@@ -20,6 +22,12 @@
 #define PR_BYTES   0x1000000u
 #define PR_MAX     256u
 #define UP_BYTES   0x10000u
+
+/* The in-flight row: IF_OBJECTS objects of WS_BYTES, 272 MiB, each written
+ * by a batch held behind a sw_sync point, which fill the aperture; and
+ * MI_BATCH_BUFFER_END, which the fake does not read but a chip would. */
+#define IF_OBJECTS 17u
+#define BATCH_END  0x05000000u
 
 static int gpu_fd = -1;
 static uint32_t bo_handle;
@@ -364,6 +372,132 @@ static void working_set_row(void)
     report_held();
 }
 
+/** The state letter of /proc/PID/stat of `pid`, or 0 when unread. */
+static char proc_state(long pid)
+{
+    char path[32] = "/proc/", text[256];
+    char digits[24];
+    long n;
+    int fd, i = 6, k = 0;
+
+    do {
+        digits[k++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0);
+    while (k > 0) {
+        path[i++] = digits[--k];
+    }
+    for (n = 0; "/stat"[n]; n++) {
+        path[i++] = "/stat"[n];
+    }
+    path[i] = '\0';
+    fd = (int)syscall3(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (long)text, (long)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    /* The state follows the command's closing parenthesis and a space. */
+    for (i = (int)n - 1; i > 0 && text[i] != ')'; i--) {
+    }
+    return i > 0 && i + 2 < (int)n ? text[i + 2] : 0;
+}
+
+/** A sync file's status from SYNC_IOC_FILE_INFO: 1 signalled, 0 active. */
+static int fence_status(int fd)
+{
+    struct sync_file_info info;
+
+    zero(&info, sizeof(info));
+    if (syscall3(SYS_IOCTL, fd, SYNC_IOC_FILE_INFO, (long)&info) != 0) {
+        return -1;
+    }
+    return info.status;
+}
+
+/** BUSY of `handle`: its answer, or ~0 on failure. */
+static uint32_t busy(uint32_t handle)
+{
+    struct drm_i915_gem_busy b;
+
+    zero(&b, sizeof(b));
+    b.handle = handle;
+    return call(DRM_IOCTL_I915_GEM_BUSY, &b) == 0 ? b.busy : ~0u;
+}
+
+/**
+ * 272 MiB of objects, each written by a batch on the render ring that
+ * waits for one point of a sw_sync timeline, fill the 256 MiB aperture with
+ * bindings the GPU may still use. A GTT map's fault then finds no idle
+ * binding to evict, sleeps uninterruptibly until the GPU is idle, as
+ * Linux's eviction does, and binds once a child, seeing the probe asleep,
+ * signals the point and the batches retire.
+ */
+static void in_flight_row(void)
+{
+    struct sw_sync_create_fence_data pt;
+    struct drm_i915_gem_exec_object2 objs[2];
+    struct drm_i915_gem_execbuffer2 eb;
+    struct drm_i915_gem_pwrite w;
+    uint32_t n, data = 0, batch, end = BATCH_END, step = 1;
+    volatile uint32_t *m;
+    long parent = syscall0(SYS_GETPID), child;
+    int tl, status = -1;
+    char state;
+
+    tl = (int)syscall3(SYS_OPEN, (long)"/sys/kernel/debug/sync/sw_sync", 2, 0);
+    require(tl >= 0, "in-flight: a sw_sync timeline");
+    zero(&pt, sizeof(pt));
+    pt.value = 1;
+    pt.fence = -1;
+    require(syscall3(SYS_IOCTL, tl, SW_SYNC_IOC_CREATE_FENCE, (long)&pt) == 0 && pt.fence >= 0,
+            "in-flight: a sw_sync point");
+    for (n = 0; n < IF_OBJECTS; n++) {
+        data = make(WS_BYTES);
+        batch = make(4096);
+        zero(&w, sizeof(w));
+        w.handle = batch;
+        w.size = sizeof(end);
+        w.data_ptr = (uintptr_t)&end;
+        require(call(DRM_IOCTL_I915_GEM_PWRITE, &w) == 0, "in-flight: the batch written");
+        zero(objs, sizeof(objs));
+        objs[0].handle = data;
+        objs[0].flags = EXEC_OBJECT_WRITE;
+        objs[1].handle = batch;
+        zero(&eb, sizeof(eb));
+        eb.buffers_ptr = (uintptr_t)objs;
+        eb.buffer_count = 2;
+        eb.flags = I915_EXEC_RENDER | I915_EXEC_FENCE_IN;
+        eb.rsvd2 = (uint64_t)pt.fence;
+        require(call(DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, &eb) == 0,
+                "in-flight: a batch held behind the point");
+    }
+    require(busy(data) != 0 && busy(handles[0]) != 0, "in-flight: the objects busy");
+    ws_maps[0] = map_object(make(WS_BYTES), WS_BYTES, I915_MMAP_OFFSET_GTT);
+    child = syscall0(SYS_FORK);
+    require(child >= 0, "in-flight: fork");
+    if (child == 0) {
+        while ((state = proc_state(parent)) == 'R') {
+            syscall0(SYS_SCHED_YIELD);
+        }
+        syscall3(SYS_IOCTL, tl, SW_SYNC_IOC_INC, (long)&step);
+        syscall1(SYS_EXIT, state == 'D' ? 0 : 1);
+    }
+    m = (volatile uint32_t *)ws_maps[0];
+    m[0] = stamp(IF_OBJECTS, 0);
+    require(m[0] == stamp(IF_OBJECTS, 0), "in-flight: the fault bound the object");
+    require(syscall4(SYS_WAIT4, child, (long)&status, 0, 0) == child && status == 0,
+            "in-flight: the fault slept, uninterruptibly, until the point signalled");
+    require(fence_status((int)pt.fence) == 1 && busy(data) == 0 && busy(handles[0]) == 0,
+            "in-flight: the batches retired");
+    syscall2(SYS_MUNMAP, (long)ws_maps[0], WS_BYTES);
+    ws_maps[0] = 0;
+    syscall1(SYS_CLOSE, (long)pt.fence);
+    syscall1(SYS_CLOSE, tl);
+    close_from(0);
+    report_held();
+}
+
 /** A userptr object over 64 KiB of the probe's memory: UNSYNCHRONIZED
  * refused, its pages pinned by SET_DOMAIN, PREAD refused, and EFAULT once
  * the memory is unmapped. */
@@ -436,15 +570,16 @@ static void pressure_row(void)
 /** The rows of `memory`, under the case machine.i915fake.memory. */
 static void memory_rows(char **envp)
 {
-    const char *rows[] = {"aperture", "working-set", "userptr", "pressure"};
+    const char *rows[] = {"aperture", "working-set", "in-flight", "userptr", "pressure"};
     uint32_t i;
 
     report_begin(report_case(envp, "machine.i915fake.memory"));
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 5; i++) {
         report_plan(rows[i]);
     }
     aperture_row();
     working_set_row();
+    in_flight_row();
     userptr_row();
     pressure_row();
     report_end();
