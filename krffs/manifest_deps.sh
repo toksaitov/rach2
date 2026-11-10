@@ -6,6 +6,8 @@
 #
 # Usage: manifest_deps.sh MANIFEST
 #
+# A MANIFEST of `-` is read from the standard input.
+#
 # `file`, `optional-file`, `exec-dir` and `tree` lines name a host path in
 # their fourth field, which is read through RACH2_PATH_MAP the way the stager
 # reads it (stageimage.krffs.c, host_path): an x86-64 build maps build/... to
