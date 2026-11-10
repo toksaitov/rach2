@@ -70,13 +70,18 @@ cmd_state()
         done
         ls /dev/dri 2>&1
         echo "== kernel"; dmesg | grep -E '(fbdrm|drm|console|i915|vtd|synaptics|psmouse|ps2mouse|input):'
-        echo "== session"; cat /run/rach2-desktop.pid 2>&1; ps -o pid,user,args | grep -E '[w]eston|[s]eatd|[u]devd|[p]ulseaudio|[r]ach2-'
-        echo "== services"; grep -a -i -E 'weston|drm|output|renderer|mode|head|backend|seat' /var/log/services | tail -n 120
+        echo "== session"; cat /run/rach2-desktop.pid 2>&1
+        ps -e -o pid,user,args | grep -E '[w]eston|[s]eatd|[u]devd|[p]ulseaudio|[r]ach2-'
+        echo "== services"
+        grep -a -i -E 'weston|drm|output|renderer|mode|head|backend|seat|current' /var/log/services | tail -n 120
     } > "$out/state.txt" 2>&1
     cp /var/log/services "$out/services.log"
     dmesg > "$out/dmesg.txt"
     w=$(westons | tr '\n' ' ')
-    echo "desktop: result: weston ${w:-none}; $(grep -a -o -E 'Output [^ ]+ .*enabled|current|1366x768[^ ]*' /var/log/services | tail -n 3 | tr '\n' ' ')"
+    mode=$(grep -a -E '^ +[0-9]+x[0-9]+@.*current' /var/log/services | tail -n 1 | sed 's/^ *//')
+    owner=$(for p in $w; do stat -c %U "/proc/$p"; done | sort -u | tr '\n' ' ')
+    renderer=$(grep -a -o -E 'Using [A-Za-z]+ renderer' /var/log/services | tail -n 1)
+    echo "desktop: result: weston ${w:-none}as ${owner:-nobody}; ${renderer:-no renderer}; mode ${mode:-none}"
 }
 
 cmd_clips()
@@ -120,7 +125,7 @@ user_pref("app.update.auto", false);
 user_pref("media.ffmpeg.vaapi.enabled", false);
 user_pref("media.hardware-video-decoding.enabled", false);
 EOF
-            line="MOZ_ENABLE_WAYLAND=1 MOZ_LOG=PlatformDecoderModule:5 MOZ_LOG_FILE=$out/$n.moz \
+            line="MOZ_ENABLE_WAYLAND=1 MOZ_LOG=PlatformDecoderModule:5 \
 exec firefox-esr --new-instance --no-remote --profile $p --kiosk '$url'"
             ;;
         chromium)
@@ -161,7 +166,7 @@ print("desktop: result: %s: %s frames, %s dropped, %s corrupted, %sx%s, %.1f s p
         echo "desktop: result: $n: no result after $i s"
     fi
     case $b in
-        firefox) dec=$(grep -a -h -o 'description: [^,]*' "$out/$n".moz* 2> /dev/null | sort -u | tr '\n' ';') ;;
+        firefox) dec=$(grep -a -o 'has been initialized - description: [^,]*' "$out/$n.log" | sed 's/^.*description: //' | sort -u | tr '\n' ';') ;;
         chromium)
             dec=$(python3 -I -c '
 import json, sys
@@ -237,7 +242,7 @@ cmd_kill()
         for c in /sys/class/drm/card*-*; do
             [ -d "$c" ] && echo "$c enabled $(cat "$c/enabled" 2>/dev/null)"
         done
-        echo "== term"; ps -o pid,args | grep '[t]erm'
+        echo "== term"; ps -e -o pid,args | grep '[t]erm'
     } > "$out/kill.txt" 2>&1
     cat "$out/kill.txt"
     echo "desktop: result: weston ${left:-gone}; $(grep -c -E 'console: .*(taken back|firmware)' "$out/dmesg-after-kill.txt") console lines"
