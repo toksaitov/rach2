@@ -51,6 +51,40 @@ void arch_relax(void)
     __asm__ __volatile__("pause" : : : "memory");
 }
 
+/** An `iret` to the next instruction, which serializes on every x86, the
+ * ones without `cpuid` among them, as Linux's iret_to_self; it restores the
+ * flags it pushed, interrupts with them. */
+void arch_sync_core(void)
+{
+#if defined(__x86_64__)
+    unsigned long tmp;
+
+    __asm__ __volatile__("mov %%ss, %0\n\t"
+                         "pushq %0\n\t"
+                         "pushq %%rsp\n\t"
+                         "addq $8, (%%rsp)\n\t"
+                         "pushfq\n\t"
+                         "mov %%cs, %0\n\t"
+                         "pushq %0\n\t"
+                         "leaq 1f(%%rip), %0\n\t"
+                         "pushq %0\n\t"
+                         "iretq\n"
+                         "1:"
+                         : "=&r"(tmp)
+                         :
+                         : "cc", "memory");
+#else
+    __asm__ __volatile__("pushfl\n\t"
+                         "pushl %%cs\n\t"
+                         "pushl $1f\n\t"
+                         "iret\n"
+                         "1:"
+                         :
+                         :
+                         : "cc", "memory");
+#endif
+}
+
 /** `xchg` with a memory operand locks the bus by itself, and a locked
  * instruction is a full barrier on x86. */
 unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)

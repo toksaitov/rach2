@@ -703,6 +703,12 @@ void isr_leave(isr_params_t *params)
  * Take a local vector, without the big lock: the interprocessor interrupt,
  * whose request is in this processor's record (`smp_ipi`), and the APIC's
  * spurious vector, which needs no end-of-interrupt.
+ *
+ * An interprocessor interrupt that finds user mode with its thread's rseq
+ * marked, which only membarrier's RSEQ barrier does to a thread in user
+ * mode, returns through `isr_leave` with the big lock, after its end of
+ * interrupt, so that a critical section the thread is in is aborted before
+ * it runs on, as Linux's ipi_rseq has it.
  */
 void isr_local_router(isr_params_t *params)
 {
@@ -710,6 +716,10 @@ void isr_local_router(isr_params_t *params)
     if (params->vector == IPI_VECTOR) {
         smp_ipi();
         lapic_eoi();
+        if (FRAME_USER(params) && current_proc && current_proc->rseq_notify) {
+            bkl_enter();
+            isr_leave(params);
+        }
         return;
     }
     lapic_spurious();

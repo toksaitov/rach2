@@ -114,6 +114,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/kcmp.c \
     sys/proc/process_vm.c \
     sys/proc/rseq.c \
+    sys/proc/membarrier.c \
     sys/ipc/pipe.c \
     sys/ipc/pipe_ring.c \
     sys/ipc/unix.c \

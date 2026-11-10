@@ -158,6 +158,20 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
  * second. */
 uint32_t smp_tlb_count(int which);
 
+/* A barrier request's kinds: a full memory barrier, or one and a
+ * serializing instruction. */
+#define SMP_BARRIER      1u
+#define SMP_BARRIER_SYNC 2u
+
+/**
+ * Have each other processor started in `cpus`, a bit for each, pass a full
+ * memory barrier, and a serializing instruction as well with `sync_core`,
+ * and wait until each has, for membarrier(2). One in user mode passes them
+ * in the interrupt, and one in the kernel, which waits for the big lock,
+ * while it waits. The caller holds the big lock.
+ */
+void smp_barrier(uint64_t cpus, int sync_core);
+
 /**
  * Note that a kernel mapping changed, after the caller dropped its own
  * translation of it: every other processor drops all of its translations
