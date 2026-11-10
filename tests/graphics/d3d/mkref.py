@@ -6,16 +6,21 @@ usage: mkref.py SOURCE OUT.json DIR...
 Each DIR is a run of reference.sh; each of its numbered directories is one
 row of run.py -R, with its environment.json and results.json. A unit that
 several runs recorded keeps every failure count they gave, the fewest checks
-and the most skips, as linux.json keeps the discovery's runs. SOURCE is the
-reference's own description of where it was taken.
+and the most skips, as linux.json keeps the discovery's runs. A Wine unit
+that ends before its summary keeps the fewest test lines it printed, and its
+exit only when every run gave the same one, since a unit that crashes ends
+with an exit that varies from run to run. SOURCE is the reference's own
+description of where it was taken.
 """
 import json
 from pathlib import Path
+import re
 import signal
 import sys
 
 STALL = "dxgi.c:8040, d3d10 test 2, unexpected present count 1, expected 2; stop on this record"
 SEGV = (-signal.SIGSEGV, 128 + signal.SIGSEGV)
+TEST_LINE = r"^\w+\.c:\d+: "
 
 
 def fail(text):
@@ -69,14 +74,21 @@ def main():
                 if result["progress"]:
                     new = {"progress": STALL}
                 elif counts is None:
-                    new = {"exit": result["exit"], "summary": False, "failures": 0}
+                    lines = len(re.findall(TEST_LINE, (row_dir / "unit.log").read_text(errors="replace"), re.M))
+                    new = {"exit": result["exit"], "summary": False, "failures": 0, "min_lines": lines}
                 else:
                     new = {"exit": result["exit"], "summary": True, "failures": counts[3],
                            "min_checks": counts[0], "max_skipped": counts[4]}
                 if old is not None and ("progress" in old) != ("progress" in new):
                     fail("%s: %s stalled in one run and not in another" % (row_dir, row))
                 if old is not None and "progress" not in new:
-                    if (old["exit"], old["summary"], old["failures"]) != (new["exit"], new["summary"], new["failures"]):
+                    if old["summary"] != new["summary"]:
+                        fail("%s: %s ended in two ways, %s and %s" % (row_dir, row, old, new))
+                    if not new["summary"]:
+                        new["min_lines"] = min(old["min_lines"], new["min_lines"])
+                        if old["exit"] != new["exit"]:
+                            new["exit"] = None
+                    elif (old["exit"], old["failures"]) != (new["exit"], new["failures"]):
                         fail("%s: %s ended in two ways, %s and %s" % (row_dir, row, old, new))
                     if new["summary"]:
                         new["min_checks"] = min(old["min_checks"], new["min_checks"])

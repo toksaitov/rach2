@@ -15,6 +15,9 @@ import time
 
 HERE = Path(__file__).resolve().parent
 WINE_SUMMARY = r"%s: (\d+) tests executed \((\d+) marked as todo, (\d+) as flaky, (\d+) failures?\), (\d+) skipped"
+# A line a Wine test prints for one of its checks, the progress of a unit
+# that ends before its summary.
+TEST_LINE = r"^\w+\.c:\d+: "
 VK_SUMMARY = r"(\d+) tests executed \((\d+) failures, (\d+) successful todo, (\d+) skipped, (\d+) todo, (\d+) bugs\)"
 CHILDREN = set()
 
@@ -227,12 +230,16 @@ def main():
                 stall = expected.get("progress") or (record and path != "proton" and unit == "dxgi:dxgi")
                 rc, stopped = run_command(launch + ["runinprefix", str(HERE / "wine" / (exe + "_test.exe")), name],
                                           env, out / "unit.log", STALL if stall else None)
-                counts = summaries((out / "unit.log").read_text(errors="replace"), WINE_SUMMARY % re.escape(name))
-                actual = {"exit": rc, "summary": counts, "progress": stopped}
+                text = (out / "unit.log").read_text(errors="replace")
+                counts = summaries(text, WINE_SUMMARY % re.escape(name))
+                lines = len(re.findall(TEST_LINE, text, re.M))
+                actual = {"exit": rc, "summary": counts, "progress": stopped, "lines": lines}
+                # A null exit is one that Linux's runs did not agree on.
                 actual["matched"] = record or (stopped if expected.get("progress") else (
-                    rc == expected["exit"] and (counts is not None) == expected["summary"] and
-                    (counts is None or (counts[3] == expected["failures"] and
-                     counts[0] >= expected["min_checks"] and counts[4] <= expected["max_skipped"]))))
+                    expected["exit"] in (None, rc) and (counts is not None) == expected["summary"] and
+                    (lines >= expected.get("min_lines", 0) if counts is None else
+                     (counts[3] == expected["failures"] and
+                      counts[0] >= expected["min_checks"] and counts[4] <= expected["max_skipped"]))))
                 results[unit] = actual
         elif family == "vkd3d":
             env["LD_LIBRARY_PATH"] = str(HERE / "vkd3d") + ":" + env.get("LD_LIBRARY_PATH", "")
