@@ -52,19 +52,25 @@ def blocks(path):
 
 
 def delta(a, b):
-    """What changed from reading a to reading b."""
+    """
+    What changed from reading a to reading b. /proc/stat gives only the
+    sixteen entries with the largest hold totals, each a total since boot, so
+    an entry's growth is taken only when both readings have it: one that has
+    just entered the sixteen would otherwise charge its whole total to this
+    interval. The processors' split is kept in ticks, so that a group's split
+    weighs each reading by its length.
+    """
     dt = b['t'] - a['t']
-    ticks = (b['user'] - a['user']) + (b['sys'] - a['sys']) + (b['idle'] - a['idle'])
-    ticks = ticks or 1
     holds = {}
     for k, v in b['hold'].items():
-        holds[k] = v - a['hold'].get(k, 0)
+        if k in a['hold']:
+            holds[k] = v - a['hold'][k]
     return {
         'dt': dt,
         'wait': (b.get('bkl_wait_us', 0) - a.get('bkl_wait_us', 0)) / 1e6,
-        'user': (b['user'] - a['user']) / ticks,
-        'sys': (b['sys'] - a['sys']) / ticks,
-        'idle': (b['idle'] - a['idle']) / ticks,
+        'user': b['user'] - a['user'],
+        'sys': b['sys'] - a['sys'],
+        'idle': b['idle'] - a['idle'],
         'holds': holds,
         'cache': b.get('cache', 0) - a.get('cache', 0),
         'read': (b.get('read', 0) - a.get('read', 0)) / 2048.0,
@@ -88,9 +94,10 @@ def summary(name, ds):
     print(f'{name}: {n} readings over {dt:.1f} s, '
           f'{sum(d["frames"] for d in ds) / dt:.1f} frames a second')
     print(f'  big-lock wait: {sum(d["wait"] for d in ds) / dt:.2f} s a second')
+    ticks = sum(d['user'] + d['sys'] + d['idle'] for d in ds) or 1
     print('  processors: user {:.0%} system {:.0%} idle {:.0%}'.format(
-        sum(d['user'] for d in ds) / n, sum(d['sys'] for d in ds) / n,
-        sum(d['idle'] for d in ds) / n))
+        sum(d['user'] for d in ds) / ticks, sum(d['sys'] for d in ds) / ticks,
+        sum(d['idle'] for d in ds) / ticks))
     print('  holds: ' + ', '.join(f'{k} {v / 1e6 / dt:.3f} s/s' for k, v in top))
     print(f'  shader cache: +{sum(d["cache"] for d in ds)} KiB')
     print(f'  disk: {sum(d["read"] for d in ds):.1f} MiB read')
