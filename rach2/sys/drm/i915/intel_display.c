@@ -446,6 +446,24 @@ static struct drm_connector *crtc_connector(struct intel_crtc *c, struct drm_ato
     return NULL;
 }
 
+/** How many connectors `state` routes to pipe `c`, their states in
+ * `state` or their states now. */
+static uint32_t crtc_connectors(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    struct drm_mode_config *mc = &c->i915->drm.mode_config;
+    uint32_t i, n = 0;
+
+    for (i = 0; i < mc->num_connector; i++) {
+        const struct drm_connector_state *cs = state->connectors_new[mc->connectors[i]->index];
+
+        if (!cs) {
+            cs = mc->connectors[i]->state;
+        }
+        n += cs && cs->crtc == &c->base;
+    }
+    return n;
+}
+
 /** The DDI port of B to D whose connector `connector` is, or NULL. */
 static struct intel_ddi_port *connector_port(struct drm_i915_private *i915,
                                              const struct drm_connector *connector)
@@ -497,7 +515,9 @@ static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state 
         return 0;
     }
     connector = crtc_connector(c, state, &conn);
-    if (!connector) {
+    if (!connector || crtc_connectors(c, state) > 1) {
+        /* A DDI encoder clones with none, as Linux's encoder->cloneable
+         * of 0: its "rejecting invalid cloning configuration". */
         return -EINVAL;
     }
     cfg->active = cs->active != 0;
