@@ -1,5 +1,7 @@
 # The silent Lenovo install
 
+The task is blocked by the priority-inheritance futex implementation (80-10c). Keep this prepared root and its gzip on the testing host. When the dependency closes, use the kernel then, complete the QEMU save/cache proof, update the input identities and readiness note below, and hand the step back with `trial`. The manager has withheld the go for this snapshot because that kernel will change.
+
 These are the remaining install commands for task 2653, after the manager's go. They install and verify files; they start no game, desktop or sound. No notice is needed beyond the boots' own text. The save/cache check remains blocked separately as [the record](../80-6.md) says. Do not merge or close the task until both remaining subtasks pass.
 
 ## Inputs
