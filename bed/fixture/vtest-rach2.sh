@@ -12,23 +12,26 @@
 # name the prepared image gives it, and triangle.c. Nothing in DIR is
 # written, so it may be read-only.
 #
-# The runner compiles triangle.c with the root's cc and draws it on llvmpipe.
-# It then boots a new overlay of the prepared image, in a scratch directory
-# under TMPDIR, with CPUS processors (2) and MIB of memory (2048), under ACCEL:
-# `tcg`, the default, QEMU's emulator, or `kvm`, Rach2's KVM with QEMU's split
-# interrupt controller, the one Rach2's KVM has. QEMU's user network forwards
-# PORT (5555) on Rach2's loopback address to the guest's vtest port. Once the
-# guest reports its server ready on the serial console, the runner starts
-# vtestrelay for one client and draws the triangle with virpipe through it.
-# It passes when both pictures check and their checksums are equal.
+# The runner compiles triangle.c with the root's GCC, since the cc first on
+# root's path is TinyCC, which links only static programs, and draws it on
+# llvmpipe. It then boots a new overlay of the prepared image, in a scratch
+# directory under TMPDIR, with CPUS processors (2) and MIB of memory (2048),
+# under ACCEL: `tcg`, the default, QEMU's emulator, or `kvm`, Rach2's KVM
+# with QEMU's split interrupt controller, the one Rach2's KVM has. QEMU's
+# user network forwards PORT (5555) on Rach2's loopback address to the
+# guest's vtest port. Once the guest reports its server ready on the serial
+# console, the runner starts vtestrelay for one client and draws the triangle
+# with virpipe through it. It passes when both pictures check and their
+# checksums are equal.
 #
 # The guest's console is read once a second; QEMU's end before the server is
 # ready, or SECONDS without a byte on it (600), fails the run. That bound is
 # on silence, not on the boot's length. Progress goes to standard output as
 # `vtest-rach2: ACTION` lines, with the triangle's and the relay's lines and
-# the guest's record, and the last line is `vtest-rach2: result: pass:
-# CHECKSUM` or `vtest-rach2: result: fail: REASON`. On a failure the last 30
-# lines of the console and QEMU's messages come before it. The exit status is
+# the guest's record, and the last line is `vtest-rach2: result: pass: the
+# triangle through the relay equals llvmpipe's, CHECKSUM` or
+# `vtest-rach2: result: fail: REASON`. On a failure the last 30 lines of the
+# console and QEMU's messages come before it. The exit status is
 # 0 on a pass, 1 on a failure and 2 on a usage error.
 
 accel=tcg cpus=2 mib=2048 port=5555 silence=600
@@ -113,8 +116,8 @@ for f in prepared.qcow2 triangle.c; do
 done
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-vtest.XXXXXX") || fail "no scratch directory"
 
-echo "vtest-rach2: compile triangle.c"
-cc -O2 -o "$work/triangle" "$dir/triangle.c" -ldl 2>&1 | sed 's/^/vtest-rach2: cc: /'
+echo "vtest-rach2: compile triangle.c with gcc"
+gcc -O2 -o "$work/triangle" "$dir/triangle.c" -ldl 2>&1 | sed 's/^/vtest-rach2: gcc: /'
 [ -x "$work/triangle" ] || fail "triangle.c did not compile"
 echo "vtest-rach2: draw on llvmpipe"
 draw llvmpipe llvmpipe || fail "the llvmpipe triangle failed"

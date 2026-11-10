@@ -9,12 +9,22 @@ The guest is prepared once for each clone, and each run boots a new copy of it:
     sh bed/fixture/vtest-guest.sh prepare
     sh bed/fixture/vtest-guest.sh check
     sh bed/fixture/vtest-guest.sh run 'nc -z "$VTEST_HOST" "$VTEST_PORT"'
+    sh bed/fixture/vtest-guest.sh stage DIR
 
 `prepare` fetches the cloud image that [`tests/graphics/debian-ref/image`](../tests/graphics/debian-ref/image) pins, through `debian-ref.sh fetch`, which checks its size and SHA-512, and boots an overlay of it once with a cloud-init seed. [`fixture/setup.sh.in`](fixture/setup.sh.in) installs [`fixture/packages`](fixture/packages) from Debian's snapshot of the date that file names, adds the services that serve vtest and turns cloud-init off, so that every later boot is the same; the result is `prepared.qcow2`, read-only, in `build/cache/bed-vtest` of the main clone, which its worktrees share, or in `BED_VTEST_CACHE`.
 
 `run` boots an overlay of the prepared image with 4 CPUs and 4096 MiB (`-c`, `-m`), forwards the guest's vtest port, 5555, from a free port on the host's loopback address over QEMU's user network, waits for the guest to report its server ready on the serial console, runs the command in sh on the host with `VTEST_HOST` and `VTEST_PORT` set to that address, stops the guest and removes the overlay. It exits with the command's status. The accelerator is KVM where `/dev/kvm` opens and TCG elsewhere, or what `ACCEL` names, as [`rach2/qemu_devices.sh`](../rach2/qemu_devices.sh) chooses for the graphics runs.
 
 `check` builds the relay and [`fixture/triangle.c`](fixture/triangle.c) into `build/bed` with `CC`, `CFLAGS` and `LDLIBS` (`-ldl` by default; the triangle opens `libEGL.so.1` and takes every EGL and GLES function from its `eglGetProcAddress`, so it needs no development headers), draws the triangle on the host's llvmpipe, then boots the guest and draws it again with Mesa's `virpipe` through the relay, and passes when both pictures check and their checksums are equal.
+
+`stage DIR` makes the contents of the `bed-vtest` suite's data disk, which `make build/tests/cases/bed-vtest/bed-vtest.ext2` formats as ext2: the cloud image, a copy of the prepared image that names it as its backing file by its bare name, `triangle.c` and [`fixture/vtest-rach2.sh`](fixture/vtest-rach2.sh). `prepare` keeps the digest of the recipe's files and of the pins beside the image as `prepared.qcow2.key`, and `stage` prepares the guest again first when the image is missing or that digest differs.
+
+On Rach2, the x86-64 GNU root has the relay as `/usr/bin/vtestrelay`, which [`install_root.sh`](../vendor/gnu/install_root.sh) compiles. `vtest-rach2.sh` runs as root over the data disk, mounted read-only:
+
+    sh /tmp/bed-vtest/vtest-rach2.sh -a tcg /tmp/bed-vtest
+    sh /tmp/bed-vtest/vtest-rach2.sh -a kvm /tmp/bed-vtest
+
+It compiles the triangle with the root's GCC and draws it on llvmpipe, then boots a new overlay of the prepared image in the root's QEMU with 2 CPUs and 2048 MiB (`-s`, `-m`), under TCG or under Rach2's KVM with QEMU's split interrupt controller, the one Rach2's KVM has, its vtest port forwarded from port 5555 of Rach2's loopback address (`-p`). Once the guest reports its server ready it starts the relay for one client, draws the triangle with virpipe through it, and passes when both pictures check and their checksums are equal. A console silent for 600 s (`-w`) fails the boot; the bound is on silence, not on the boot's length. `tests/run bed-vtest` runs it under both accelerators, as the cases of [`machine.bed-vtest.json`](../tests/cases/machine.bed-vtest.json).
 
 [vtestrelay(1)](../man/man1/vtestrelay.1) is the relay's manual.
 
@@ -40,7 +50,7 @@ The listening process forks a child for each client, which connects to the serve
 
 ### The guest
 
-The guest is the reference guest's Debian 13 cloud image of 2026-11-03, with its packages from Debian's snapshot of 2026-11-08, as the [graphics tests](../tests/graphics/Readme.md#the-reference-guest) pin them, on q35 with QEMU's standard VGA and no window, a virtio disk, a virtio network card on QEMU's user network and a virtio random number generator. It has no login and no SSH key: three services start at boot. `vtest-server` runs `virgl_test_server --use-egl-surfaceless` as the user `vtest` on `/run/vtest/vtest.sock`, forking a child for each client, with `LIBGL_ALWAYS_SOFTWARE=1`, which keeps it on llvmpipe whatever GPU the guest has. `vtest-tcp` runs socat, which forks for each TCP connection to port 5555 and connects it to that socket. `vtest-ready` waits for the socket and the port and writes the versions and `vtest-guest: ready on port 5555` to the serial console, which `run` reads. The server's and socat's output goes to the console too.
+The guest is the reference guest's Debian 13 cloud image of 2026-11-03, with its packages from Debian's snapshot of 2026-11-08, as the [graphics tests](../tests/graphics/Readme.md#the-reference-guest) pin them, on q35 with QEMU's standard VGA and no window, a virtio disk, a virtio network card on QEMU's user network and a virtio random number generator. The cloud image does not boot without a display adapter: QEMU ends after GRUB's `Booting`. It has no login and no SSH key: three services start at boot. `vtest-server` runs `virgl_test_server --use-egl-surfaceless` as the user `vtest` on `/run/vtest/vtest.sock`, forking a child for each client, with `LIBGL_ALWAYS_SOFTWARE=1`, which keeps it on llvmpipe whatever GPU the guest has. `vtest-tcp` runs socat, which forks for each TCP connection to port 5555 and connects it to that socket. `vtest-ready` waits for the socket and the port and writes the versions and `vtest-guest: ready on port 5555` to the serial console, which `run` reads. The server's and socat's output goes to the console too.
 
 virglrenderer loads EGL and OpenGL at run time through libepoxy, and Debian's `virgl-server` depends on neither loader, so the package list names `libegl1` and `libopengl0`; without them the server's child fails with `Couldn't open libEGL.so.1` and drops the client unanswered.
 
@@ -52,4 +62,4 @@ virglrenderer loads EGL and OpenGL at run time through libepoxy, and Debian's `v
 
 ## Tests
 
-`sh bed/fixture/vtest-guest.sh check` is the relay's check between two Linux machines, the host and the guest; it runs no suite. 83-1b stages the relay in the GNU root and adds the `bed-vtest` family, which draws the triangle from Rach2 through the same guest.
+`sh bed/fixture/vtest-guest.sh check` is the relay's check between two Linux machines, the host and the guest; it runs no suite. `tests/run bed-vtest` is the check on Rach2: `triangle` boots the guest under TCG in the GNU root's QEMU, and `triangle-kvm` under Rach2's KVM on the `host-svm` processor profile, which only the testing PC gives, by nested KVM. Both run on Linux alone: on the Mac, Rach2 itself runs under TCG, so the guest's whole Debian boot would be emulated twice.
