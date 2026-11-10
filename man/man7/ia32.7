@@ -11,6 +11,11 @@ stack and auxiliary vector that
 .Xr execve 2
 describes, and maps them the 32-bit library of
 .Xr vdso 7 .
+The kernel starts an i386
+.Pa /sbin/init
+so, and the debug shell's
+.Ic exec
+an i386 program.
 Such a program starts with CS 0x23 and DS, ES and SS 0x2b, and its
 .Xr mmap 2 ,
 .Fn mmap2 ,
