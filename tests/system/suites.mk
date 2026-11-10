@@ -990,6 +990,12 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # the guest and judged against the Debian reference guest's checksums, its
 # rate recorded beside the Debian guest's, as the case of
 # tests/cases/machine.vkpresent.json.
+# `tests/run games-native`: SuperTuxKart's profile race and 0 A.D.'s visual
+# replay, the fixed replays the games layer installs, each played to its end
+# on llvmpipe under a headless Weston on the GNU root under the virtio-vga
+# profile, with every frame's time recorded, as the cases of
+# tests/cases/machine.games-native.json; their reference is Linux's run of
+# the same replays on the Lenovo, not the Debian guest's.
 # Etude runs them all with graphics_scenario (tests/graphics/Readme.md). Each
 # machine has graphics.ext2, the runners, the IGT list, the dEQP lists, the
 # guest's environment and the references, as a read-only data disk, and a

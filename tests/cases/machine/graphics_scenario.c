@@ -1,11 +1,14 @@
 /*
  * graphics_scenario.c: the graphics runners' cases (machine.webgl.json,
  * machine.video.json, machine.igt.json, machine.modetest.json,
- * machine.piglit.json, machine.glmark2.json, machine.venus.json and
- * machine.vkpresent.json). Each boots an overlay of the GNU root with a
- * display, runs one runner of tests/graphics/runners on its case, and judges
- * the result against the Debian reference guest's stored one, with judge.py
- * or, for the loss of Venus's render server, diff, in the guest.
+ * machine.piglit.json, machine.glmark2.json, machine.venus.json,
+ * machine.vkpresent.json and machine.games-native.json). Each boots an
+ * overlay of the GNU root with a display, runs one runner of
+ * tests/graphics/runners on its case, and judges the result against the
+ * Debian reference guest's stored one, with judge.py or, for the loss of
+ * Venus's render server, diff, in the guest. A native game's replay has no
+ * reference in QEMU, since Linux's is taken on the Lenovo: its case asserts
+ * that the replay ran to its end and keeps the frame times.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,7 +73,7 @@
 #define GRAPHICS_DATA "/tmp/graphics-data"
 
 /* The runners, by the family of the case's identity. */
-enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2, VENUS, VKPRESENT };
+enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2, VENUS, VKPRESENT, GAMES };
 
 /* What one attempt shares among its steps. */
 struct graphics_case {
@@ -82,7 +85,7 @@ struct graphics_case {
     char version[8];    /* the WebGL suite's version, 1.0.4 or 2.0.1 */
     char chunk[8];      /* the chunk's number, two digits */
     char clip[48];      /* the clip's file name */
-    char test[48];      /* IGT's test program, piglit's part or Venus's case */
+    char test[48];      /* IGT's test program, piglit's part, Venus's case or the game */
     int part;           /* the part of the lavapipe fraction, 1 to VENUS_PARTS */
     char password[128]; /* root's, at the console */
 };
@@ -164,13 +167,15 @@ static int parse_venus(struct graphics_case *s, const char *name)
  * webgl's and video's as parse_browser says; igt's TEST-PROFILE, IGT's test
  * program TEST, whose name has no dash, on PROFILE; modetest's PROFILE;
  * piglit's PART, on virtio-vga; glmark2's `wayland`, on virtio-vga;
- * venus's as parse_venus says; and vkpresent's `vkcube`, on venus. Give 0
- * for an identity of no such form.
+ * venus's as parse_venus says; vkpresent's `vkcube`, on venus; and
+ * games-native's `supertuxkart` or `0ad`, on virtio-vga. Give 0 for an
+ * identity of no such form.
  */
 static int parse(struct graphics_case *s, const char *id)
 {
-    static const char *const families[] = {".webgl.",  ".video.",   ".igt.",   ".modetest.",
-                                           ".piglit.", ".glmark2.", ".venus.", ".vkpresent."};
+    static const char *const families[] = {".webgl.",    ".video.",     ".igt.",
+                                           ".modetest.", ".piglit.",    ".glmark2.",
+                                           ".venus.",    ".vkpresent.", ".games-native."};
     const char *name = strrchr(id, '.'), *dash;
     size_t i, n;
 
@@ -209,6 +214,11 @@ static int parse(struct graphics_case *s, const char *id)
     case VKPRESENT:
         strcpy(s->profile, "venus");
         return strcmp(name, "vkcube") == 0;
+    case GAMES:
+        if (strcmp(name, "supertuxkart") != 0 && strcmp(name, "0ad") != 0)
+            return 0;
+        strcpy(s->test, name);
+        return set_profile(s, "virtio-vga");
     }
     return 0;
 }
@@ -299,8 +309,9 @@ static void stage(struct graphics_case *s)
 static int runner_line(struct graphics_case *s, char *runner, size_t size, const char **pattern)
 {
     static const char *const results[] = {
-        "webgl: result: ",  "video: result: ",   "igt: result: ",  "modetest: result: ",
-        "piglit: result: ", "glmark2: result: ", "deqp: result: ", "vkcube: result: "};
+        "webgl: result: ",    "video: result: ",  "igt: result: ",
+        "modetest: result: ", "piglit: result: ", "glmark2: result: ",
+        "deqp: result: ",     "vkcube: result: ", "games: result: "};
 
     *pattern = results[s->runner];
     switch (s->runner) {
@@ -346,6 +357,10 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
     case VKPRESENT:
         snprintf(runner, size, VKCUBE_RUN);
         return 1;
+    case GAMES:
+        snprintf(runner, size, "sh " GRAPHICS_DIR "/runners/games.sh -o " GRAPHICS_DIR "/out %s",
+                 s->test);
+        return 0;
     }
     return 0;
 }
@@ -353,9 +368,9 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
 /**
  * Run the runner, as root, once the desktop services have stopped
  * (END_DESKTOP) for IGT and modetest, or as the test account, with the
- * environment of a Done's run of its class, performance for glmark2 and
- * vkcube and conformance for the others, assert that it ran its whole case,
- * and print what it printed.
+ * environment of a Done's run of its class, performance for glmark2, vkcube
+ * and the games and conformance for the others, assert that it ran its
+ * whole case, and print what it printed.
  */
 static void run(struct graphics_case *s)
 {
@@ -367,7 +382,8 @@ static void run(struct graphics_case *s)
     snprintf(env, sizeof(env),
              "GRAPHICS_CLASS=%s GRAPHICS_DONE=1; export GRAPHICS_CLASS GRAPHICS_DONE; "
              ". " GRAPHICS_DIR "/guest-env.sh && graphics_env > /tmp/graphics.env && %s",
-             s->runner == GLMARK2 || s->runner == VKPRESENT ? "performance" : "conformance",
+             s->runner == GLMARK2 || s->runner == VKPRESENT || s->runner == GAMES ? "performance"
+                                                                                  : "conformance",
              runner);
     if (root)
         snprintf(command, sizeof(command), "%s%s",
@@ -477,6 +493,8 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
                  "vkcube " VKCUBE_REF "/frames.out " GRAPHICS_DIR "/out/frames " VKCUBE_REF
                  "/timing.out " GRAPHICS_DIR "/out/timing");
         break;
+    case GAMES:
+        break;
     case VENUS:
         if (strcmp(s->test, "device-lost") == 0) {
             /* What the guest saw of the loss is the Debian guest's. */
@@ -560,7 +578,8 @@ int etude_scenario(struct etude_case *c)
         run_lost(&s);
     else
         run(&s);
-    judge(&s);
+    if (s.runner != GAMES)
+        judge(&s);
     collect(&s);
     return net_end(&s.u);
 }

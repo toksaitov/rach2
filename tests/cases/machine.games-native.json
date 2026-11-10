@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.games-native",
+  "summary": "SuperTuxKart's profile race and 0 A.D.'s visual replay, the fixed replays of vendor/gnu/games/replays, each played to its end on llvmpipe under a headless Weston on the GNU root under the virtio-vga profile, with every frame's time recorded from Mesa's Gallium HUD; the runner is tests/graphics/runners/games.sh and the scenario tests/cases/machine/graphics_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.games-native.supertuxkart",
+      "behavior": "SuperTuxKart's profile race of supertuxkart.args, four AI karts on two laps of the lighthouse track, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, runs to the race's end, and the time of each frame of the race is recorded",
+      "units": [
+        "tests/graphics/runners/games.sh",
+        "vendor/gnu/games/replays/supertuxkart.args",
+        "SuperTuxKart",
+        "Weston",
+        "Mesa's llvmpipe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "replays": "vendor/gnu/games/replays"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "graphics_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as the guest's test account, an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners and the guest's environment, owned by the test account"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run games.sh supertuxkart as the test account with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output, the record, the game's log and the frame times, as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "virtio-vga"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "supertuxkart exits 0 after its profile summary, which gives the race's time, and the HUD's frame times of that time are written; games.sh prints its result line",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics_scenario",
+          "node": "tests/cases/machine/graphics_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case plays a replay in a QEMU guest on llvmpipe; the Lenovo's run of the same replays on Crocus, against Linux's on the same machine, is a step of its own (80-7b)"
+      }
+    },
+    {
+      "case_id": "machine.games-native.0ad",
+      "behavior": "0 A.D.'s visual replay of 0ad/commands.txt, a match of two AI players for 1,500 turns, drawn fullscreen at 1280x800 under a headless Weston on Mesa's llvmpipe, runs to its last turn, where the mod rach2-replay ends the game, and the time of each frame of the replay is recorded",
+      "units": [
+        "tests/graphics/runners/games.sh",
+        "vendor/gnu/games/replays/0ad",
+        "0 A.D.",
+        "Weston",
+        "Mesa's llvmpipe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "replays": "vendor/gnu/games/replays"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "graphics_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as the guest's test account, an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners and the guest's environment, owned by the test account"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run games.sh 0ad as the test account with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output, the record, the game's log and the frame times, as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "virtio-vga"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "pyrogenesis exits 0 after the mod printed the replay's last turn, the commands file's turn count, and the HUD's frame times of the replay are written; games.sh prints its result line",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics_scenario",
+          "node": "tests/cases/machine/graphics_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case plays a replay in a QEMU guest on llvmpipe; the Lenovo's run of the same replays on Crocus, against Linux's on the same machine, is a step of its own (80-7b)"
+      }
+    }
+  ]
+}
