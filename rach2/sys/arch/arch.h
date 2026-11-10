@@ -218,6 +218,13 @@ void ia32_syscall_init(syscall_fn_t *table);
  * 1 (x86_64/ia32_exec.c). */
 uint32_t ia32_hwcap(void);
 
+/** Whether the kernel runs i386 programs and calls, Linux's `ia32_enabled`:
+ * 1 unless the boot option `ia32_emulation=` turned them off. The second,
+ * Linux's `ia32_enabled_verbose`, which the loader asks of an i386 program,
+ * also logs the first refusal (x86_64/ia32_exec.c). */
+int ia32_enabled(void);
+int ia32_enabled_verbose(void);
+
 /** The address of __kernel_vsyscall in the 32-bit vDSO whose image is at
  * `base`, AT_SYSINFO (x86_64/vdso32.c). */
 uintptr_t vdso32_vsyscall_at(uintptr_t base);

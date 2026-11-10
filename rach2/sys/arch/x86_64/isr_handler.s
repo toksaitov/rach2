@@ -759,6 +759,15 @@ syscall32_entry:
     # sysretl, which TinyCC's assembler does not name.
     .byte 0x0f, 0x07
 
+# IA32_CSTAR's entry where the kernel runs no i386 call (`init_tss`), as
+# Linux's `entry_SYSCALL32_ignore`: -ENOSYS in EAX and back by `sysretl`
+# at once, with RCX and R11 as the processor left them, on the user's
+# stack and with interrupts off, touching no memory.
+.globl syscall32_ignore
+syscall32_ignore:
+    movl $-38, %eax
+    .byte 0x0f, 0x07
+
 # The i386 system call, the gate of vector 0x80 at DPL 3, from 32-bit code
 # or 64-bit: the frame of an interrupt, with SC_ENTRY_IA32 for its error
 # code, so that the dispatcher takes the number and the arguments from

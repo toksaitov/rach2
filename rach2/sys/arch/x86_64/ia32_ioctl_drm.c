@@ -10,6 +10,8 @@
 #include "../../mm/usercopy.h"
 #include "../../syscall.h"
 
+#if RACH2_IA32
+
 /* The numbers of the core's requests Linux translates, by which a request
  * of any size and direction is taken, as drm_compat_ioctl takes it. */
 #define NR_VERSION     0x00u
@@ -265,3 +267,5 @@ long ia32_ioctl_drm(unsigned int fd, unsigned int cmd, unsigned long arg)
         return ioctl_fd((int)fd, cmd, (uintptr_t)arg);
     }
 }
+
+#endif /* RACH2_IA32 */

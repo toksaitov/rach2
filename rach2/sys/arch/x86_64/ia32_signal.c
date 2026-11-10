@@ -27,6 +27,8 @@
 #include "../../proc/ptrace.h"
 #include "../../syscall_internal.h"
 
+#if RACH2_IA32
+
 /* Linux's `compat_old_sigaction` of sigaction (67), 16 bytes, and
  * `compat_sigaction` of rt_sigaction, 20, with 32-bit pointers. */
 struct old_sigaction32 {
@@ -337,3 +339,5 @@ long compat_sys_pidfd_send_signal(isr_params_t *params)
 {
     return sys_pidfd_send_signal(params);
 }
+
+#endif /* RACH2_IA32 */

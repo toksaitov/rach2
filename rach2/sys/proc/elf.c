@@ -138,7 +138,7 @@ bool elf_valid_exec(const void *ehdr, uint32_t len)
             return false;
         }
         k_memcpy(&e32, ehdr, sizeof(e32));
-        return elf_valid_ia32(&e32);
+        return elf_valid_ia32(&e32) && ia32_enabled_verbose();
     }
 #endif
     if (len < sizeof(Elf_Ehdr) || e->e_ident[EI_CLASS] != ELF_CLASS) {

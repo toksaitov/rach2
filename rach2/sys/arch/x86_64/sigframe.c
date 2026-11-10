@@ -260,9 +260,13 @@ static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, ui
 uintptr_t sigframe_stack_bytes(void)
 {
     uintptr_t native = fpu_frame_bytes() + sizeof(struct lx_rt_sigframe) + 15u + 8u;
+#if RACH2_IA32
     uintptr_t ia32 = ia32_sigframe_bytes();
 
     return native > ia32 ? native : ia32;
+#else
+    return native;
+#endif
 }
 
 /**
@@ -295,9 +299,11 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     uintptr_t sp = tf->rsp - RED_ZONE;
     uintptr_t fp_addr, frame_addr;
 
+#if RACH2_IA32
     if (sa->flags & SA_IA32_ABI) {
         return ia32_sigframe_setup(tf, signo, sa, info, oldmask);
     }
+#endif
     if (!(sa->flags & SA_RESTORER)) {
         return -1;
     }
@@ -377,9 +383,11 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     uintptr_t frame_addr = tf->rsp - 8u;
     uint64_t cs, ss;
 
+#if RACH2_IA32
     if (SC_COMPAT(tf)) {
         return ia32_sigframe_restore(tf, rt, mask);
     }
+#endif
     if (!rt) {
         return -1;
     }

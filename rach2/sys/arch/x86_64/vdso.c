@@ -332,7 +332,8 @@ static void symbols(uint32_t symoff, uint32_t veroff, uint32_t hashoff, uint32_t
  * definitions, the dynamic table, the code at VDSO_TEXT_OFFSET, then the
  * section names and the section headers, all inside the one page, whose
  * address is the image's base, so that every address in it is its offset.
- * The 32-bit image is built after it (`vdso32_build`).
+ * The 32-bit image is built after it (`vdso32_build`), on a kernel with the
+ * i386 ABI (RACH2_IA32).
  */
 int vdso_build(void)
 {
@@ -428,14 +429,22 @@ int vdso_build(void)
     section(shoff, SEC_SHSTRTAB, shname[SEC_SHSTRTAB], SHT_STRTAB, 0, shstr.off, shstr.len, 0, 0, 1,
             0);
     headers(dynoff, sizeof(dyn), shoff);
+#if RACH2_IA32
     return vdso32_build();
+#else
+    return 0;
+#endif
 }
 
 uint32_t vdso_image_pages(int abi)
 {
+#if RACH2_IA32
     if (abi == VDSO_IA32) {
         return vdso32_image_pages();
     }
+#else
+    (void)abi;
+#endif
     return image ? 1u : 0u;
 }
 
@@ -444,5 +453,10 @@ uintptr_t vdso_frame(int abi, uint32_t page)
     if (page == VDSO_DATA_PAGE) {
         return vdso_data_frame();
     }
+#if RACH2_IA32
     return abi == VDSO_IA32 ? vdso32_image_frame() : image_phys;
+#else
+    (void)abi;
+    return image_phys;
+#endif
 }

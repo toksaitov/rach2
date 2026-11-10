@@ -15,6 +15,8 @@
 #include "../../proc/process.h"
 #include "../../syscall.h"
 
+#if RACH2_IA32
+
 /* The fields of an ioctl number, Linux's asm-generic encoding: 2 bits of
  * direction from bit 30, 14 of size from bit 16, 8 of type, 8 of number. */
 #define IOC_DIR(c)  (((c) >> 30) & 3u)
@@ -772,3 +774,5 @@ long compat_sys_ioctl(isr_params_t *params)
     }
     return -ENOTTY;
 }
+
+#endif /* RACH2_IA32 */
