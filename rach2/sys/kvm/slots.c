@@ -99,6 +99,7 @@ int kvm_slots_init(struct kvm_vm *vm)
 /** Free `s`, off the notice. */
 static void slot_free(struct slot *s)
 {
+    kvm_count(KVM_COUNT_SLOT, -1);
     mmn_unregister(&s->note);
     kfree(s->dirty);
     kfree(s);
@@ -178,6 +179,7 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
         mmn_register(mm, &s->note, (uintptr_t)s->hva, (uintptr_t)(s->hva + r->memory_size),
                      &slot_ops, s);
     }
+    kvm_count(KVM_COUNT_SLOT, 1);
     t->by_id[id] = s;
     t->pages += s->npages;
     return 0;

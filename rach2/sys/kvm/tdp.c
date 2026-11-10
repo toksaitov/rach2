@@ -61,6 +61,7 @@ static uint64_t table_new(struct tdp *t)
     if (p) {
         k_memset(table_at(p), 0, 4096);
         t->tables++;
+        kvm_count(KVM_COUNT_TDP_PAGE, 1);
     }
     return p;
 }
@@ -70,6 +71,7 @@ static void table_free(struct tdp *t, uint64_t phys)
 {
     free_frame((uintptr_t)phys);
     t->tables--;
+    kvm_count(KVM_COUNT_TDP_PAGE, -1);
 }
 
 /** Whether the entry `e` maps or names anything. */

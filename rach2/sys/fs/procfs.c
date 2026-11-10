@@ -10,6 +10,10 @@
  * division here.
  */
 
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+#include "../kvm/stats.h"
+#endif
+
 #include "../klog.h"
 #include "../irq.h"
 #include "procfs.h"
@@ -2816,6 +2820,24 @@ static void procfs_wlan_refused(struct procfs_text *t)
     ap_u32(t, far);
 }
 
+/** Append live KVM objects on x86-64; every count is under the big lock. */
+static void procfs_kvm_counts(struct procfs_text *t)
+{
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    static const char *const names[KVM_COUNT_TOTAL] = {"kvm_vms ", "kvm_vcpus ", "kvm_slots ",
+                                                       "kvm_tdp_pages ", "kvm_run_mappings "};
+    int i;
+
+    for (i = 0; i < KVM_COUNT_TOTAL; i++) {
+        ap_str(t, names[i]);
+        ap_u32(t, kvm_resource_count((enum kvm_resource)i));
+        ap_ch(t, '\n');
+    }
+#else
+    (void)t;
+#endif
+}
+
 /** The counts of the kernel's own work for `/proc/stat`, from
  * `process_pid_steps` to `vdso_tsc`, each on a line of its own. */
 static void procfs_work_counts(struct procfs_text *t)
@@ -2921,6 +2943,7 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, process_sleeps_cut_short());
     ap_ch(t, '\n');
     procfs_work_counts(t);
+    procfs_kvm_counts(t);
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));
     ap_str(t, "\nlatency_disk_us ");
