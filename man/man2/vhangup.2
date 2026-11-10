@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt VHANGUP 2
 .Os
 .Sh NAME
@@ -14,10 +14,10 @@ hangs up the caller's controlling terminal, the console or a
 pseudo-terminal's slave, as if the line had dropped.
 A program such as
 .Xr login 1
-or a getty calls it before it opens the terminal again for a new user, so that no
-process of the old session keeps a working descriptor of it.
+or a getty calls it before it opens the terminal again for a new user, so
+that no process of the old session keeps a working descriptor of it.
 .Pp
-The hangup does these things, in this order:
+The hangup does these things:
 .Bl -bullet
 .It
 It posts
@@ -36,8 +36,8 @@ It discards input not yet read and a pseudo-terminal slave's output not
 yet read by its master.
 In packet mode the master receives
 .Dv TIOCPKT_FLUSHWRITE .
-It gives the terminal the termios a new terminal has, as Linux resets a pseudo-terminal's and a virtual
-console's:
+It gives the terminal the termios a new terminal has, as Linux resets a
+pseudo-terminal's and a virtual console's:
 .Dv ICRNL
 and
 .Dv IUTF8

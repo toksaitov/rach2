@@ -133,9 +133,9 @@ all : $(KERNEL_BIN)
 #
 # The kernel every loader reads has no debug sections and no local symbols.
 # The debug sections are more than half of the linked file, and the x86-64
-# kernel with its local symbols, 4,331,496 bytes at milestone 80, no longer
-# fit the 4 MiB kernel slot of a boot partition (tools/image/mkdisk_grub.sh,
-# utils/bootctl.c); without them it is 3,965,976. The linked file with both
+# kernel with its local symbols does not fit the 4 MiB kernel slot of a boot
+# partition (tools/image/mkdisk_grub.sh, utils/bootctl.c), which it fits
+# without them. The linked file with both
 # is kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB
 # and which `nm` reads for a static function's address. The kernel keeps its
 # global symbols, which the checker's `_end` test and `nm` read. A kernel

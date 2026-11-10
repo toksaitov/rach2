@@ -1912,11 +1912,12 @@ for a region
 sealed.
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
-Anonymous counts every page of a private region of no file, and the
-pages of a private file region whose frames have become anonymous.
+Anonymous counts every page of a private region of no file, and each
+page of a private file region once a write, or a private copy of the
+page, has made its frame anonymous; gdb's gcore leaves a file region
+with no such page out of a core.
 The frame keeps this classification across fork and copy-on-write,
-independently of the page-table dirty bit; gdb's gcore leaves the other regions of a file out of a
-core.
+independently of the page-table dirty bit.
 The kernel does not count the processes that map a page, so Pss is Rss.
 Swap and SwapPss read 0, and Locked is Rss for a locked region and 0
 for another.
@@ -1930,8 +1931,14 @@ it; what it maps, which is
 .Ql file=
 and the path
 .Pa maps
-gives it, with a space written as
-.Ql \e040 ,
+gives it, with a newline, a tab, a space and
+.Ql =
+written in octal, as
+.Ql \e012 ,
+.Ql \e011 ,
+.Ql \e040
+and
+.Ql \e075 ,
 or
 .Ql heap
 or
@@ -2009,9 +2016,12 @@ voluntary_ctxt_switches and nonvoluntary_ctxt_switches, the times the
 scheduler switched away from the thread while it slept or was stopped,
 and while it could still run.
 .Pp
-For user threads Rach2 also reports TimedWakeCount, the thread's completed timed wakes,
-and TimedWakeLast, TimedWakeWorst and TimedWakeSum, the last wake, the
-wake with the longest total delay, and the sums of all completed wakes.
+Rach2 also reports, for every thread, TimedWakeCount, the thread's
+completed timed wakes, and TimedWakeLast, TimedWakeWorst and
+TimedWakeSum, the last wake, the wake with the longest total delay, and
+the sums of all completed wakes.
+A wake is completed at the thread's return to user mode, so a kernel
+thread's lines stay 0.
 Each of the latter three has eight microsecond columns:
 expiry to the servicing timer interrupt, that interrupt's wait for the
 big kernel lock after expiry, remaining timer work, run-queue wait,
