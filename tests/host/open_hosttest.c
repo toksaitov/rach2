@@ -451,6 +451,14 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
     return 1;
 }
 
+/** Whether a range ends in user space, which in the model every range does. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    (void)addr;
+    (void)len;
+    return 1;
+}
+
 /** Take a path page from the model's four; every one must come back. */
 char *path_buf_get(void)
 {
