@@ -1098,12 +1098,14 @@ int32_t intel_display_commit_pipe(struct intel_crtc *c)
     struct drm_crtc_state *cs;
     int32_t rc;
 
+    drm_modeset_lock_nointr(dev);
     /* A blocking commit waits for a pending flip, which the worker this
-     * runs in may be the one to finish. */
+     * runs in may be the one to finish; tested under the lock, so that no
+     * flip is queued between the test and the commit. */
     if (c->base.flip_pending) {
+        drm_modeset_unlock(dev);
         return -EBUSY;
     }
-    drm_modeset_lock_nointr(dev);
     state = drm_atomic_state_alloc(dev);
     cs = state ? drm_atomic_get_crtc_state(state, &c->base) : NULL;
     rc = cs ? 0 : -ENOMEM;
@@ -1266,15 +1268,17 @@ static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
     struct drm_mode_modeinfo mode = c->hw.mode;
     struct drm_framebuffer *fb;
 
-    adopt_config(i915, c);
     /* Linux's intel_crtc_readout_derived_state: the mode a user set is
-     * the panel's timings at the pipe's source size. */
-    mode.hdisplay = (uint16_t)c->cfg.src_w;
-    mode.vdisplay = (uint16_t)c->cfg.src_h;
+     * the panel's timings at the pipe's source size. The configuration,
+     * which takes the power well's reference and the PLL, is taken only
+     * once the state holds the mode. */
+    mode.hdisplay = (uint16_t)c->hw.src_w;
+    mode.vdisplay = (uint16_t)c->hw.src_h;
     drm_mode_set_name(&mode);
     if (drm_atomic_set_mode_for_crtc(cs, &mode) != 0) {
         return;
     }
+    adopt_config(i915, c);
     cs->active = 1;
     /* Linux's intel_sanitize_fifo_underrun_reporting: an active pipe
      * starts with its underruns unreported, until its first commit. */
