@@ -134,11 +134,21 @@ nc() { VK_DRIVER_FILES=$icd "$out/nocopy" "$@"; }
 
 # figure COMMAND...: one measurement, its lines added to DIR/measure.txt
 # and printed, each as `bed-shm: figure: LINE`, after `bed-shm: measuring:
-# COMMAND`; ok=0 when it fails.
+# COMMAND`; ok=0 when it fails. Every 30 s while it runs, ivshmemd's
+# counts and the VM's last lines show how far it has got.
 figure()
 {
     echo "bed-shm: measuring: $*"
-    "$@" > "$out/figure.out" 2>&1 || ok=0
+    "$@" > "$out/figure.out" 2>&1 &
+    pid=$! s=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        s=$((s + 1))
+        [ $((s % 30)) -ne 0 ] && continue
+        echo "bed-shm: running: $s s: $(ivshmemd -i 2>&1 | tr '\n' ' ')"
+        tr -d '\r' < "$out/console.log" | tail -n 3 | sed 's/^/bed-shm: running: vm: /'
+    done
+    wait "$pid" || ok=0
     cat "$out/figure.out" >> "$out/measure.txt"
     sed 's/^/bed-shm: figure: /' "$out/figure.out"
 }
