@@ -17,14 +17,14 @@
 #define VGPUSHM_H
 
 /* "VGSH" as little-endian bytes; the region's first word once laid out. */
-#define VGS_MAGIC 0x48534756u
+#define VGS_MAGIC         0x48534756u
 #define VGS_VERSION_MAJOR 1
 #define VGS_VERSION_MINOR 0
 
-#define VGS_PAGE 4096u
-#define VGS_CTRL_SIZE 4096u
+#define VGS_PAGE             4096u
+#define VGS_CTRL_SIZE        4096u
 /* A region is a power of two from 32 KiB to 64 GiB. */
-#define VGS_REGION_MIN 32768u
+#define VGS_REGION_MIN       32768u
 #define VGS_REGION_MAX_SHIFT 36
 
 /* Offsets of the three blocks of the control area; each has one writer. */
@@ -33,10 +33,10 @@
 #define VGS_DEVICE_OFF 1024u
 
 /* The virtio-gpu queues, by index, and the largest size either may have. */
-#define VGS_QUEUES 2
+#define VGS_QUEUES        2
 #define VGS_QUEUE_CONTROL 0
-#define VGS_QUEUE_CURSOR 1
-#define VGS_QUEUE_MAX 256u
+#define VGS_QUEUE_CURSOR  1
+#define VGS_QUEUE_MAX     256u
 
 /* Descriptors one chain may hold; a device's max_chain is at most this. */
 #define VGS_CHAIN_MAX 16u
@@ -46,13 +46,13 @@
  * your queues", on VGS_VEC_CONTROL "look at the control area". The value
  * written to ivshmem's doorbell register names the peer rung and the vector.
  */
-#define VGS_VEC_QUEUE 0u
-#define VGS_VEC_CONTROL 1u
+#define VGS_VEC_QUEUE           0u
+#define VGS_VEC_CONTROL         1u
 #define VGS_DOORBELL(peer, vec) ((((uint32_t)(peer)) << 16) | (uint32_t)(vec))
 
 /* Transport features, negotiated apart from virtio's. */
 #define VGS_TF_DOORBELL 0x1u /* both sides ring doorbells instead of polling */
-#define VGS_TF_ALL VGS_TF_DOORBELL
+#define VGS_TF_ALL      VGS_TF_DOORBELL
 
 /*
  * Virtio feature bits the transport knows. Device-specific bits 0 to 23
@@ -60,51 +60,51 @@
  * required, may be accepted. Indirect descriptors, event indices and packed
  * rings are refused by this version.
  */
-#define VGS_F_DEVICE_MASK 0x0000000000ffffffULL
+#define VGS_F_DEVICE_MASK   0x0000000000ffffffULL
 #define VGS_F_INDIRECT_DESC (1ULL << 28)
-#define VGS_F_EVENT_IDX (1ULL << 29)
-#define VGS_F_VERSION_1 (1ULL << 32)
-#define VGS_F_RING_PACKED (1ULL << 34)
-#define VGS_F_ALLOWED (VGS_F_DEVICE_MASK | VGS_F_VERSION_1)
+#define VGS_F_EVENT_IDX     (1ULL << 29)
+#define VGS_F_VERSION_1     (1ULL << 32)
+#define VGS_F_RING_PACKED   (1ULL << 34)
+#define VGS_F_ALLOWED       (VGS_F_DEVICE_MASK | VGS_F_VERSION_1)
 
 /* Split virtqueue flags, as virtio 1.x defines them. */
-#define VGS_DESC_F_NEXT 1u
-#define VGS_DESC_F_WRITE 2u
-#define VGS_DESC_F_INDIRECT 4u
+#define VGS_DESC_F_NEXT          1u
+#define VGS_DESC_F_WRITE         2u
+#define VGS_DESC_F_INDIRECT      4u
 #define VGS_AVAIL_F_NO_INTERRUPT 1u
-#define VGS_USED_F_NO_NOTIFY 1u
+#define VGS_USED_F_NO_NOTIFY     1u
 
 /* The driver's states, in vgs_driver.state. */
-#define VGS_DRV_NONE 0u  /* no driver: the region is not laid out */
+#define VGS_DRV_NONE  0u /* no driver: the region is not laid out */
 #define VGS_DRV_RESET 1u /* layout and epoch set; waiting for the offer */
-#define VGS_DRV_OK 2u    /* features accepted and queues set: go */
-#define VGS_DRV_GONE 3u  /* the driver detached in order */
+#define VGS_DRV_OK    2u /* features accepted and queues set: go */
+#define VGS_DRV_GONE  3u /* the driver detached in order */
 
 /* The device's states, in vgs_device.state. */
-#define VGS_DEV_NONE 0u        /* no device */
-#define VGS_DEV_READY 1u       /* features, limits and config offered */
-#define VGS_DEV_RUNNING 2u     /* the driver's setup accepted */
-#define VGS_DEV_FAILED 3u      /* the driver's setup refused; see error */
+#define VGS_DEV_NONE        0u /* no device */
+#define VGS_DEV_READY       1u /* features, limits and config offered */
+#define VGS_DEV_RUNNING     2u /* the driver's setup accepted */
+#define VGS_DEV_FAILED      3u /* the driver's setup refused; see error */
 #define VGS_DEV_NEEDS_RESET 4u /* a fault while running; see error */
-#define VGS_DEV_GONE 5u        /* the device detached in order */
+#define VGS_DEV_GONE        5u /* the device detached in order */
 
 /* Results of the checks; 0 is success. */
-#define VGS_OK 0
-#define VGS_E_MAGIC 1    /* not a laid-out region */
-#define VGS_E_VERSION 2  /* a major version this code does not speak */
-#define VGS_E_LAYOUT 3   /* the control area, rings or heap misplaced */
-#define VGS_E_STATE 4    /* a state the step does not allow */
-#define VGS_E_EPOCH 5    /* the other side answers another epoch */
-#define VGS_E_ROLE 6     /* a peer id that cannot be the other side's */
-#define VGS_E_FEATURES 7 /* features outside the offer or refused */
-#define VGS_E_LIMITS 8   /* limits outside what the transport allows */
-#define VGS_E_QUEUE 9    /* a queue's size or placement wrong */
-#define VGS_E_RANGE 10   /* an offset and length outside the heap */
-#define VGS_E_CHAIN 11   /* a descriptor chain malformed or too long */
-#define VGS_E_RING 12    /* a ring index moved by more than the queue */
-#define VGS_E_ID 13      /* an object id zero, unknown or in use */
-#define VGS_E_QUOTA 14   /* an object or a byte past the limits */
-#define VGS_E_RACE 15    /* a block changed under every read of it */
+#define VGS_OK         0
+#define VGS_E_MAGIC    1  /* not a laid-out region */
+#define VGS_E_VERSION  2  /* a major version this code does not speak */
+#define VGS_E_LAYOUT   3  /* the control area, rings or heap misplaced */
+#define VGS_E_STATE    4  /* a state the step does not allow */
+#define VGS_E_EPOCH    5  /* the other side answers another epoch */
+#define VGS_E_ROLE     6  /* a peer id that cannot be the other side's */
+#define VGS_E_FEATURES 7  /* features outside the offer or refused */
+#define VGS_E_LIMITS   8  /* limits outside what the transport allows */
+#define VGS_E_QUEUE    9  /* a queue's size or placement wrong */
+#define VGS_E_RANGE    10 /* an offset and length outside the heap */
+#define VGS_E_CHAIN    11 /* a descriptor chain malformed or too long */
+#define VGS_E_RING     12 /* a ring index moved by more than the queue */
+#define VGS_E_ID       13 /* an object id zero, unknown or in use */
+#define VGS_E_QUOTA    14 /* an object or a byte past the limits */
+#define VGS_E_RACE     15 /* a block changed under every read of it */
 
 /* The region's layout, at VGS_LAYOUT_OFF; written once by the driver. */
 struct vgs_layout {
@@ -133,13 +133,13 @@ struct vgs_queue {
 
 /* The driver's block, at VGS_DRIVER_OFF; written only by the driver. */
 struct vgs_driver {
-    uint32_t epoch; /* the connection's epoch, never 0 once laid out */
-    uint32_t state; /* VGS_DRV_*, written after every other field */
-    uint32_t peer;  /* the driver's ivshmem peer id, below 65536 */
-    uint32_t error; /* VGS_E_* the driver last met, for the device's log */
+    uint32_t epoch;              /* the connection's epoch, never 0 once laid out */
+    uint32_t state;              /* VGS_DRV_*, written after every other field */
+    uint32_t peer;               /* the driver's ivshmem peer id, below 65536 */
+    uint32_t error;              /* VGS_E_* the driver last met, for the device's log */
     uint64_t transport_features; /* accepted VGS_TF_* */
     uint64_t features;           /* accepted virtio features */
-    uint32_t events_seen; /* the device's events_seq the driver has handled */
+    uint32_t events_seen;        /* the device's events_seq the driver has handled */
     uint32_t reserved[3];
     struct vgs_queue queue[VGS_QUEUES];
 };
@@ -155,17 +155,17 @@ struct vgs_limits {
     uint64_t max_backing;   /* bytes of backing over every resource */
     uint32_t max_entries;   /* memory entries in one ATTACH_BACKING */
     uint32_t max_chain;     /* descriptors in one chain, <= VGS_CHAIN_MAX */
-    uint32_t max_cmd; /* bytes one chain may carry each way, >= VGS_PAGE */
-    uint16_t max_queue; /* the largest queue size the device takes */
+    uint32_t max_cmd;       /* bytes one chain may carry each way, >= VGS_PAGE */
+    uint16_t max_queue;     /* the largest queue size the device takes */
     uint16_t reserved;
 };
 
 /* The device's block, at VGS_DEVICE_OFF; written only by the device. */
 struct vgs_device {
-    uint32_t epoch; /* the driver's epoch this block answers */
-    uint32_t state; /* VGS_DEV_*, written after every other field */
-    uint32_t peer;  /* the device's ivshmem peer id */
-    uint32_t error; /* VGS_E_* behind VGS_DEV_FAILED or NEEDS_RESET */
+    uint32_t epoch;              /* the driver's epoch this block answers */
+    uint32_t state;              /* VGS_DEV_*, written after every other field */
+    uint32_t peer;               /* the device's ivshmem peer id */
+    uint32_t error;              /* VGS_E_* behind VGS_DEV_FAILED or NEEDS_RESET */
     uint64_t transport_features; /* offered VGS_TF_* */
     uint64_t features;           /* offered virtio features */
     struct vgs_limits limits;
@@ -204,17 +204,17 @@ struct vgs_chain {
 
 /* Kinds of object a transport table holds. */
 #define VGS_OBJ_RESOURCE 0u
-#define VGS_OBJ_CONTEXT 1u
-#define VGS_OBJ_KINDS 2u
+#define VGS_OBJ_CONTEXT  1u
+#define VGS_OBJ_KINDS    2u
 
 /*
  * Object ids the driver makes: a slot in its low 24 bits and a generation
  * that moves each time the slot is reused in the high 8, so that an id kept
  * past its object's end names nothing live. The device treats ids as opaque.
  */
-#define VGS_ID_MAKE(slot, gen) ((((uint32_t)(gen)&0xffu) << 24) | ((uint32_t)(slot)&0xffffffu))
-#define VGS_ID_SLOT(id) ((uint32_t)(id)&0xffffffu)
-#define VGS_ID_GEN(id) (((uint32_t)(id) >> 24) & 0xffu)
+#define VGS_ID_MAKE(slot, gen) ((((uint32_t)(gen) & 0xffu) << 24) | ((uint32_t)(slot) & 0xffffffu))
+#define VGS_ID_SLOT(id)        ((uint32_t)(id) & 0xffffffu)
+#define VGS_ID_GEN(id)         (((uint32_t)(id) >> 24) & 0xffu)
 
 /* One live object in a side's own transport table; id 0 is a free entry. */
 struct vgs_obj {
@@ -255,9 +255,12 @@ VGS_ASSERT(device_fits, VGS_DEVICE_OFF + sizeof(struct vgs_device) <= VGS_CTRL_S
 #endif
 
 /* Pointers to the control area's blocks of a mapped region. */
-#define VGS_LAYOUT(base) ((volatile struct vgs_layout *)((volatile uint8_t *)(base) + VGS_LAYOUT_OFF))
-#define VGS_DRIVER(base) ((volatile struct vgs_driver *)((volatile uint8_t *)(base) + VGS_DRIVER_OFF))
-#define VGS_DEVICE(base) ((volatile struct vgs_device *)((volatile uint8_t *)(base) + VGS_DEVICE_OFF))
+#define VGS_LAYOUT(base) \
+    ((volatile struct vgs_layout *)((volatile uint8_t *)(base) + VGS_LAYOUT_OFF))
+#define VGS_DRIVER(base) \
+    ((volatile struct vgs_driver *)((volatile uint8_t *)(base) + VGS_DRIVER_OFF))
+#define VGS_DEVICE(base) \
+    ((volatile struct vgs_device *)((volatile uint8_t *)(base) + VGS_DEVICE_OFF))
 
 const char *vgs_strerror(int err);
 int vgs_layout_make(struct vgs_layout *l, uint64_t region_size, uint64_t ring_len);
@@ -268,21 +271,27 @@ int vgs_snap_device(volatile const void *base, struct vgs_device *d);
 int vgs_check_limits(const struct vgs_limits *lim);
 int vgs_check_offer(const struct vgs_device *dev, uint32_t epoch, uint32_t driver_peer);
 int vgs_check_queue(const struct vgs_layout *l, const struct vgs_queue *q, uint32_t max_queue);
-int vgs_check_accept(const struct vgs_layout *l, const struct vgs_driver *drv, const struct vgs_device *offer);
+int vgs_check_accept(const struct vgs_layout *l, const struct vgs_driver *drv,
+                     const struct vgs_device *offer);
 int vgs_check_range(const struct vgs_layout *l, uint64_t addr, uint64_t len);
 uint32_t vgs_queue_bytes(uint32_t size);
 uint64_t vgs_queue_place(struct vgs_queue *q, uint64_t off, uint32_t size);
 int vgs_chain_read(volatile const void *base, const struct vgs_layout *l, const struct vgs_queue *q,
                    const struct vgs_limits *lim, uint32_t head, struct vgs_chain *c);
-int vgs_avail_read(volatile const void *base, const struct vgs_queue *q, uint16_t last, uint16_t *idx);
+int vgs_avail_read(volatile const void *base, const struct vgs_queue *q, uint16_t last,
+                   uint16_t *idx);
 uint32_t vgs_avail_head(volatile const void *base, const struct vgs_queue *q, uint16_t pos);
-int vgs_used_read(volatile const void *base, const struct vgs_queue *q, uint16_t last, uint16_t *idx);
-int vgs_used_elem(volatile const void *base, const struct vgs_queue *q, uint16_t pos, uint32_t *id, uint32_t *len);
-void vgs_desc_write(volatile void *base, const struct vgs_queue *q, uint32_t i, const struct vgs_desc *d);
+int vgs_used_read(volatile const void *base, const struct vgs_queue *q, uint16_t last,
+                  uint16_t *idx);
+int vgs_used_elem(volatile const void *base, const struct vgs_queue *q, uint16_t pos, uint32_t *id,
+                  uint32_t *len);
+void vgs_desc_write(volatile void *base, const struct vgs_queue *q, uint32_t i,
+                    const struct vgs_desc *d);
 void vgs_avail_push(volatile void *base, const struct vgs_queue *q, uint16_t *idx, uint32_t head);
-void vgs_used_push(volatile void *base, const struct vgs_queue *q, uint16_t *idx, uint32_t id, uint32_t len);
-void vgs_table_init(struct vgs_table *t, struct vgs_obj *obj, uint32_t cap, const struct vgs_limits *lim,
-                    uint32_t epoch);
+void vgs_used_push(volatile void *base, const struct vgs_queue *q, uint16_t *idx, uint32_t id,
+                   uint32_t len);
+void vgs_table_init(struct vgs_table *t, struct vgs_obj *obj, uint32_t cap,
+                    const struct vgs_limits *lim, uint32_t epoch);
 int vgs_table_add(struct vgs_table *t, uint32_t kind, uint32_t id);
 struct vgs_obj *vgs_table_find(struct vgs_table *t, uint32_t kind, uint32_t id);
 int vgs_table_charge(struct vgs_table *t, struct vgs_obj *o, uint64_t bytes);
@@ -292,7 +301,7 @@ uint32_t vgs_table_epoch(struct vgs_table *t, uint32_t epoch);
 #ifdef VGS_IMPLEMENTATION
 
 /* Ring parts' addresses, from offsets vgs_check_queue has passed. */
-#define VGS_AT(base, off) ((volatile uint8_t *)(base) + (off))
+#define VGS_AT(base, off)  ((volatile uint8_t *)(base) + (off))
 #define VGS_U16(base, off) (*(volatile uint16_t *)VGS_AT(base, off))
 #define VGS_U32(base, off) (*(volatile uint32_t *)VGS_AT(base, off))
 
@@ -382,8 +391,8 @@ int vgs_check_layout(const struct vgs_layout *l, uint64_t mapped)
         l->ring_len >= l->region_size) {
         return VGS_E_LAYOUT;
     }
-    if (l->heap_off != l->ring_off + l->ring_len || l->heap_off >= l->region_size || l->heap_len == 0 || (l->heap_len & pm) != 0 ||
-        l->heap_len > l->region_size - l->heap_off) {
+    if (l->heap_off != l->ring_off + l->ring_len || l->heap_off >= l->region_size ||
+        l->heap_len == 0 || (l->heap_len & pm) != 0 || l->heap_len > l->region_size - l->heap_off) {
         return VGS_E_LAYOUT;
     }
     return VGS_OK;
@@ -461,7 +470,8 @@ int vgs_snap_device(volatile const void *base, struct vgs_device *d)
  */
 int vgs_check_limits(const struct vgs_limits *lim)
 {
-    if (lim->max_resources == 0 || lim->max_contexts == 0 || lim->max_backing == 0 || lim->max_entries == 0) {
+    if (lim->max_resources == 0 || lim->max_contexts == 0 || lim->max_backing == 0 ||
+        lim->max_entries == 0) {
         return VGS_E_LIMITS;
     }
     if (lim->max_chain < 2 || lim->max_chain > VGS_CHAIN_MAX || lim->max_cmd < VGS_PAGE) {
@@ -475,8 +485,8 @@ int vgs_check_limits(const struct vgs_limits *lim)
 
 /**
  * The driver's check of the device's offer for its epoch: the state READY,
- * or RUNNING once the setup is accepted, the epoch the driver's, a peer id other than the driver's, VERSION_1
- * offered, sane limits and 1 to 16 scanouts.
+ * or RUNNING once the setup is accepted, the epoch the driver's, a peer id other than the driver's,
+ * VERSION_1 offered, sane limits and 1 to 16 scanouts.
  */
 int vgs_check_offer(const struct vgs_device *dev, uint32_t epoch, uint32_t driver_peer)
 {
@@ -548,7 +558,8 @@ int vgs_check_queue(const struct vgs_layout *l, const struct vgs_queue *q, uint3
     dl = 16 * (uint64_t)q->size;
     al = 6 + 2 * (uint64_t)q->size;
     ul = 6 + 8 * (uint64_t)q->size;
-    if (!vgs_part_ok(l, q->desc, dl, 16) || !vgs_part_ok(l, q->avail, al, 2) || !vgs_part_ok(l, q->used, ul, 4)) {
+    if (!vgs_part_ok(l, q->desc, dl, 16) || !vgs_part_ok(l, q->avail, al, 2) ||
+        !vgs_part_ok(l, q->used, ul, 4)) {
         return VGS_E_QUEUE;
     }
     if (vgs_overlap(q->desc, dl, q->avail, al) || vgs_overlap(q->desc, dl, q->used, ul) ||
@@ -597,7 +608,8 @@ static int vgs_queues_overlap(const struct vgs_queue *a, const struct vgs_queue 
  * apart. Returns VGS_OK or the rule broken, which the device reports in its
  * error field with VGS_DEV_FAILED.
  */
-int vgs_check_accept(const struct vgs_layout *l, const struct vgs_driver *drv, const struct vgs_device *offer)
+int vgs_check_accept(const struct vgs_layout *l, const struct vgs_driver *drv,
+                     const struct vgs_device *offer)
 {
     int i, err;
 
@@ -610,7 +622,8 @@ int vgs_check_accept(const struct vgs_layout *l, const struct vgs_driver *drv, c
     if (drv->peer > 0xffffu || drv->peer == offer->peer) {
         return VGS_E_ROLE;
     }
-    if ((drv->features & ~(offer->features & VGS_F_ALLOWED)) != 0 || (drv->features & VGS_F_VERSION_1) == 0) {
+    if ((drv->features & ~(offer->features & VGS_F_ALLOWED)) != 0 ||
+        (drv->features & VGS_F_VERSION_1) == 0) {
         return VGS_E_FEATURES;
     }
     if ((drv->transport_features & ~(offer->transport_features & VGS_TF_ALL)) != 0) {
@@ -724,7 +737,8 @@ int vgs_chain_read(volatile const void *base, const struct vgs_layout *l, const 
  * Read a queue's avail index into idx. last is the index the reader has
  * consumed to; an index more than the queue's size ahead of it is a fault.
  */
-int vgs_avail_read(volatile const void *base, const struct vgs_queue *q, uint16_t last, uint16_t *idx)
+int vgs_avail_read(volatile const void *base, const struct vgs_queue *q, uint16_t last,
+                   uint16_t *idx)
 {
     uint16_t v = VGS_U16(base, q->avail + 2);
 
@@ -743,7 +757,8 @@ uint32_t vgs_avail_head(volatile const void *base, const struct vgs_queue *q, ui
 }
 
 /** Read a queue's used index into idx, checked as vgs_avail_read does. */
-int vgs_used_read(volatile const void *base, const struct vgs_queue *q, uint16_t last, uint16_t *idx)
+int vgs_used_read(volatile const void *base, const struct vgs_queue *q, uint16_t last,
+                  uint16_t *idx)
 {
     uint16_t v = VGS_U16(base, q->used + 2);
 
@@ -760,7 +775,8 @@ int vgs_used_read(volatile const void *base, const struct vgs_queue *q, uint16_t
  * VGS_E_CHAIN; the driver further checks that id is a head it has
  * outstanding and len no more than that chain's writable bytes.
  */
-int vgs_used_elem(volatile const void *base, const struct vgs_queue *q, uint16_t pos, uint32_t *id, uint32_t *len)
+int vgs_used_elem(volatile const void *base, const struct vgs_queue *q, uint16_t pos, uint32_t *id,
+                  uint32_t *len)
 {
     uint64_t e = q->used + 4 + 8 * (uint64_t)(pos & (q->size - 1));
 
@@ -770,9 +786,11 @@ int vgs_used_elem(volatile const void *base, const struct vgs_queue *q, uint16_t
 }
 
 /** Write descriptor i of a queue. */
-void vgs_desc_write(volatile void *base, const struct vgs_queue *q, uint32_t i, const struct vgs_desc *d)
+void vgs_desc_write(volatile void *base, const struct vgs_queue *q, uint32_t i,
+                    const struct vgs_desc *d)
 {
-    volatile struct vgs_desc *t = (volatile struct vgs_desc *)VGS_AT(base, q->desc + 16 * (uint64_t)i);
+    volatile struct vgs_desc *t =
+        (volatile struct vgs_desc *)VGS_AT(base, q->desc + 16 * (uint64_t)i);
 
     t->addr = d->addr;
     t->len = d->len;
@@ -791,7 +809,8 @@ void vgs_avail_push(volatile void *base, const struct vgs_queue *q, uint16_t *id
 }
 
 /** Publish a used element and advance the device's index *idx. */
-void vgs_used_push(volatile void *base, const struct vgs_queue *q, uint16_t *idx, uint32_t id, uint32_t len)
+void vgs_used_push(volatile void *base, const struct vgs_queue *q, uint16_t *idx, uint32_t id,
+                   uint32_t len)
 {
     uint64_t e = q->used + 4 + 8 * (uint64_t)(*idx & (q->size - 1));
 
@@ -804,8 +823,8 @@ void vgs_used_push(volatile void *base, const struct vgs_queue *q, uint16_t *idx
 }
 
 /** Start a side's table over cap entries for an epoch, under limits. */
-void vgs_table_init(struct vgs_table *t, struct vgs_obj *obj, uint32_t cap, const struct vgs_limits *lim,
-                    uint32_t epoch)
+void vgs_table_init(struct vgs_table *t, struct vgs_obj *obj, uint32_t cap,
+                    const struct vgs_limits *lim, uint32_t epoch)
 {
     uint32_t i;
 
