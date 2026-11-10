@@ -11,7 +11,9 @@
 # probe/proton/11, wine/wined3dvk/d3d9:visual or vkd3d/3, runs in turn as
 # `run.py -a ADAPTER -R FAMILY ROW`, ADAPTER being venus unless -a names
 # lavapipe, its output in OUT/N, N counting the rows from 1, with its exit
-# status in OUT/N.status. The runner's lines come out as they are written.
+# status in OUT/N.status. When a row is a probe's in Proton's default mode,
+# such as probe/proton/11-i386, i386.sh first gives the guest Rach2's i386
+# layer. The runner's lines come out as they are written.
 # mkref.py makes the reference from OUT's directories. OUT gets the guest's
 # record, and the host's half from common.sh host, as OUT/record.
 set -eu
@@ -51,13 +53,16 @@ make -s -C "$tree" ARCH=x86_64 build/tests/graphics/d3d/bundle.tar || die "the b
 proton=$(sh "$tree/vendor/gnu/fetch.sh" --path ge-proton) || die "GE-Proton could not be fetched"
 mkdir -p "${TMPDIR:-$tree/build/tmp}"
 work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/rach2-d3dref.XXXXXX")
-rows="" n=0
+rows="" n=0 i386=""
 for r in "$@"; do
     n=$((n + 1))
     family=${r%%/*} row=${r#*/}
     case $family in
         probe|wine|vkd3d) ;;
         *) die "$r: not probe/ROW, wine/ROW or vkd3d/ROW" ;;
+    esac
+    case $r in
+        probe/*-i386) i386="sudo sh /tmp/i386.sh /tmp/i386.list /tmp/venus.list &&" ;;
     esac
     rows="$rows python3 /var/tmp/d3d/run.py -a $adapter -R $family '$row' /tmp/out/$n;
         echo \$? > /tmp/out/$n.status;"
@@ -66,7 +71,8 @@ sh "$tree/tests/graphics/debian-ref/debian-ref.sh" prepare -n
 sh "$tree/tests/graphics/debian-ref/debian-ref.sh" run -p "$profile" -c "$cpus" -m "$mib" \
     -g conformance -d -r "$work/machine" \
     -i "$tree/build/tests/graphics/d3d/bundle.tar" -i "$proton" -o "$work/out.tar.gz" \
-    "mkdir -p /var/tmp/d3d /var/tmp/proton /tmp/out &&
+    -i "$here/i386.sh" -i "$tree/vendor/gnu/debian/i386.list" -i "$tree/vendor/gnu/debian/venus.list" \
+    "$i386 mkdir -p /var/tmp/d3d /var/tmp/proton /tmp/out &&
      tar -xf /tmp/bundle.tar -C /var/tmp/d3d && rm /tmp/bundle.tar &&
      tar -xzf /tmp/$(basename "$proton") -C /var/tmp/proton --strip-components=1 &&
      rm /tmp/$(basename "$proton") && export D3D_PROTON=/var/tmp/proton &&
