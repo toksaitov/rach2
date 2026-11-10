@@ -1701,18 +1701,21 @@ static int monitor_mode_write_reg(int addr, int value)
 }
 
 /** Enter monitor mode, EC E9 F5 F5 E7 E6 E7 E9, or leave it, EC, Linux's
- * `alps_monitor_mode`; the status requests' bytes are not read. */
+ * `alps_monitor_mode`; the status requests' three bytes are read and
+ * dropped. */
 static int monitor_mode(int enable)
 {
-    static const unsigned int enter[8] = {CMD_RESET_WRAP, 0x00e9,         0x00f5,         0x00f5,
-                                          CMD_SETSCALE21, CMD_SETSCALE11, CMD_SETSCALE21, 0x00e9};
+    static const unsigned int enter[8] = {CMD_RESET_WRAP, CMD_GETINFO,    CMD_DISABLE,
+                                          CMD_DISABLE,    CMD_SETSCALE21, CMD_SETSCALE11,
+                                          CMD_SETSCALE21, CMD_GETINFO};
+    uint8_t param[4];
     int i;
 
     if (!enable) {
         return ps2_command(0, CMD_RESET_WRAP) < 0 ? -1 : 0;
     }
     for (i = 0; i < 8; i++) {
-        if (ps2_command(0, enter[i]) < 0) {
+        if (ps2_command(param, enter[i]) < 0) {
             return -1;
         }
     }
