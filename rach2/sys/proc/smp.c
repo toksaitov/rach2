@@ -167,20 +167,23 @@ void bkl_note_entry(uint32_t vector, int32_t nr)
 
 /** Fill `out` with `pc` and the return addresses of the frames from `fp`,
  * 0 past the last. The kernel keeps frame pointers: each frame holds the
- * caller's frame pointer, then the return address. The walk stays within
- * 64 KiB above the first frame, on one stack. */
-static void sample_chain(uintptr_t out[BKL_SAMPLE_PCS], uintptr_t pc, uintptr_t fp)
+ * caller's frame pointer, then the return address. The walk reads only the
+ * interrupted thread's kernel stack, the KERNEL_STACK_SIZE bytes below
+ * `top`, and only upward, since the outermost kernel frame holds whatever
+ * the user left in the frame pointer; a `top` of 0 records `pc` alone. */
+static void sample_chain(uintptr_t out[BKL_SAMPLE_PCS], uintptr_t pc, uintptr_t fp, uintptr_t top)
 {
-    uintptr_t first = fp;
+    uintptr_t low = fp;
     int i;
 
     out[0] = pc;
     for (i = 1; i < BKL_SAMPLE_PCS; i++) {
-        if (fp < USER_ADDR_MAX || fp % sizeof(uintptr_t) != 0 || fp < first ||
-            fp - first > 0x10000u) {
+        if (top < KERNEL_STACK_SIZE || fp < top - KERNEL_STACK_SIZE ||
+            fp > top - 2 * sizeof(uintptr_t) || fp % sizeof(uintptr_t) != 0 || fp < low) {
             break;
         }
         out[i] = ((const uintptr_t *)fp)[1];
+        low = fp + 2 * sizeof(uintptr_t);
         fp = ((const uintptr_t *)fp)[0];
     }
     for (; i < BKL_SAMPLE_PCS; i++) {
@@ -192,21 +195,23 @@ void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
 {
     struct percpu *cpu = this_cpu();
     int c = arch_cpu_id(), m;
+    uintptr_t top;
     uint64_t held;
 
     if (cpu->bkl_depth < 2) {
         return;
     }
     held = arch_cycles() - cpu->bkl_since;
+    top = cpu->current ? cpu->current->kernel_stack : 0;
     for (m = 0; m < BKL_SAMPLE_MARKS; m++) {
         if (!bkl_early_cycles[c][m] && timer_cycles_us(held) >= 1000000u << m) {
             bkl_early_cycles[c][m] = held;
-            sample_chain(bkl_early_pc[c][m], pc, fp);
+            sample_chain(bkl_early_pc[c][m], pc, fp, top);
         }
     }
     if (held > bkl_seen_max_cycles) {
         bkl_seen_max_cycles = held;
-        sample_chain(bkl_seen_pc, pc, fp);
+        sample_chain(bkl_seen_pc, pc, fp, top);
     }
 }
 

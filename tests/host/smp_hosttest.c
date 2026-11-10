@@ -20,7 +20,10 @@
  * kernel's. A stop asks every other processor and waits a second for one
  * that does not stop. At boot the wait for a started processor ends at
  * `CPU_ONLINE_WAIT_US`, and a processor that comes after it stops,
- * neither online nor counted.
+ * neither online nor counted. The profiler's sample of a hold of the big
+ * lock walks the frames of the interrupted thread's kernel stack and stops
+ * at a saved frame pointer above it, the user's value that the outermost
+ * kernel frame holds.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -157,10 +160,13 @@ void k_udelay(uint32_t usec)
     waited_us += usec;
 }
 
-/** Zero: these rows do not measure a lock acquisition's duration. */
+/* The cycle counter, which only the profiler's row moves. */
+static uint64_t cycles_now;
+
+/** `cycles_now`: the other rows do not measure a lock's hold or wait. */
 uint64_t arch_cycles(void)
 {
-    return 0;
+    return cycles_now;
 }
 
 /** Zero: this model calibrates no invariant counter. */
@@ -280,6 +286,39 @@ static void place(int c, page_dir_t *dir, process_t *p)
     ipi_page[c] = 0;
 }
 
+/* A kernel stack with room above its top, where the user's frame pointer
+ * leads, and the word there that the walk must not read. */
+#define STACK_WORDS (KERNEL_STACK_SIZE / sizeof(uintptr_t))
+static uintptr_t kstack_model[STACK_WORDS + 4];
+#define ABOVE_SECRET 0x5ec2e7u
+
+/** Sample a hold through two frames whose outer one saved a frame pointer
+ * just above the stack, and check that the walk records both return
+ * addresses and stops there. */
+static void row_sample_stack(void)
+{
+    uintptr_t *k = kstack_model, pc[BKL_SAMPLE_PCS];
+    uint64_t age;
+
+    k[STACK_WORDS - 8] = (uintptr_t)&k[STACK_WORDS - 4];
+    k[STACK_WORDS - 7] = 0x1111u;
+    k[STACK_WORDS - 4] = (uintptr_t)&k[STACK_WORDS + 2];
+    k[STACK_WORDS - 3] = 0x2222u;
+    k[STACK_WORDS + 3] = ABOVE_SECRET;
+    self.kernel_stack = (uintptr_t)&k[STACK_WORDS];
+    cpu_table[0].current = &self;
+    cpu_table[0].bkl_depth = 2;
+    cpu_table[0].bkl_since = 0;
+    cycles_now = 100;
+    bkl_hold_sample(0x0aaau, (uintptr_t)&k[STACK_WORDS - 8]);
+    cycles_now = 0;
+    cpu_table[0].bkl_depth = 0;
+    smp_hold_sample(&age, pc);
+    check(pc[0] == 0x0aaau && pc[1] == 0x1111u && pc[2] == 0x2222u,
+          "a hold's sample records the pc and the return addresses on the kernel stack");
+    check(pc[3] == 0, "and stops at a saved frame pointer above the stack, reading nothing there");
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -334,6 +373,8 @@ int main(void)
     }
     check(!cpu_table[1].online && cpu_table[1].admit == CPU_REFUSED && cpus_online == 1,
           "and one that comes after the wait stops, neither online nor counted");
+
+    row_sample_stack();
 
     while (nguarded > 0) {
         free(guarded[--nguarded]);
