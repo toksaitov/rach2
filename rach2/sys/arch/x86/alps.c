@@ -58,6 +58,7 @@
 #define CMD_RESET_BAT  0x02ff
 #define CMD_NIBBLE_10  0x01f2 /* GETID, its one byte read */
 #define CMD_TP_READ_ID 0x02e1 /* a TrackPoint's identity */
+#define CMD_POLL       0x00eb /* a packet after the ACK, its size in bits 8 to 11 */
 
 /* The protocol versions, which Linux gives as the event devices' version. */
 #define PROTO_V1          0x100
@@ -2598,16 +2599,34 @@ const char *alps_mouse_name(const char *proto)
     return mouse_name;
 }
 
-/** Linux's `psmouse_initialize`: the rate, 200 dpi and 1:1 scaling. */
+/** Linux's `psmouse_initialize`: the port's rate, resolution and 1:1
+ * scaling. */
 static void psmouse_initialize(void)
 {
-    uint8_t param[1];
+    ps2mouse_initialize(NULL);
+}
 
-    param[0] = 100;
-    ps2_command(param, CMD_SETRATE);
-    param[0] = 3;
-    ps2_command(param, CMD_SETRES);
-    ps2_command(0, CMD_SETSCALE11);
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    uint8_t p[8];
+    int failed;
+
+    if (priv.flags & F_PASS) {
+        (void)passthrough_mode_v2(1);
+    }
+    failed = ps2_command(p, CMD_POLL | ((unsigned int)pktsize << 8)) < 0;
+    if (priv.flags & F_PASS) {
+        (void)passthrough_mode_v2(0);
+    }
+    if (failed || (p[0] & priv.mask0) != priv.byte0) {
+        return -1;
+    }
+    /* A first byte of the stick's form: the stick's packet is wanted. */
+    if ((badbyte & 0xc8) == 0x08 && ps2_command(p, CMD_POLL | (3u << 8)) < 0) {
+        return -1;
+    }
+    k_memcpy(buf, p, sizeof(p));
+    return pktsize;
 }
 
 int alps_reconnect(void)

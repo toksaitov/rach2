@@ -85,6 +85,17 @@ int alps_reconnect(void);
 void alps_disconnect(void);
 
 /**
+ * Poll the pad for a packet, as Linux's `alps_poll` does for psmouse's
+ * resync: the stick's port left for the pad's on a version 2 DualPoint, the
+ * packet of the pad's size, which must begin with the protocol's first
+ * byte, and when `badbyte`, the first byte of the packet the resync
+ * dropped, was the stick's, the stick's three bytes in its place. Returns
+ * the packet's size with its bytes in `buf`, of 8, or -1. Inside a run of
+ * `ps2mouse_cmd_begin`.
+ */
+int alps_poll(uint8_t badbyte, uint8_t *buf);
+
+/**
  * Report the last six-byte packet of a pad that interleaves a stick's PS/2
  * packets with its own, once 20 ms have passed with no byte after it, as
  * Linux's `alps_flush_packet` timer does. Called from the platform's tick,

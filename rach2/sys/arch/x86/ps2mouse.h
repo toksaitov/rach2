@@ -8,10 +8,12 @@
  * three bytes, or four with a wheel, which it reports through its event
  * device and the mouse queue (../../mouse.h), or a Synaptics touchpad's
  * packets, which synaptics.h reads, or an Elantech touchpad's, which
- * elantech.h reads. Behind a Synaptics touchpad's pass-through port may be
- * a second device, a pointing stick or a mouse, the guest, which is found
- * and reported here as Linux's psmouse finds and reports the device of a
- * serio port of type SERIO_PS_PSTHRU.
+ * elantech.h reads, or an ALPS touchpad's, which alps.h reads. Behind a
+ * Synaptics touchpad's pass-through port may be a second device, a pointing
+ * stick or a mouse, the guest, which is found and reported here as Linux's
+ * psmouse finds and reports the device of a serio port of type
+ * SERIO_PS_PSTHRU. Each port has Linux's psmouse files, `protocol`, `rate`,
+ * `resolution`, `resetafter` and `resync_time`.
  */
 
 /**
@@ -141,11 +143,68 @@ void ps2mouse_guest_change_end(void);
 void ps2mouse_msleep(unsigned int ms);
 
 /**
+ * Linux's `psmouse_set_rate` on the auxiliary port: the highest of the
+ * rates 200, 100, 80, 60, 40, 20, 10 and 0 that is not above `rate`, sent,
+ * a refusal ignored. Returns the rate sent, which the caller keeps as the
+ * port's. Inside a run of commands, or during the bring-up.
+ */
+unsigned int ps2mouse_set_rate(unsigned int rate);
+
+/**
+ * Linux's `psmouse_initialize` on the auxiliary port: the port's rate
+ * through `set_rate`, the protocol's own, or `ps2mouse_set_rate` for NULL,
+ * then its resolution and 1:1 scaling, keeping the rate and resolution
+ * sent as the port's, which its `rate` and `resolution` files show. Called
+ * by a protocol's set-up and reconnect, inside a run of commands or during
+ * the bring-up.
+ */
+void ps2mouse_initialize(unsigned int (*set_rate)(unsigned int));
+
+/** The auxiliary port's rate, which a protocol's set-up reads, and its
+ * setting to `rate`, as Linux's touchpads set `psmouse->rate`. */
+unsigned int ps2mouse_port_rate(void);
+void ps2mouse_port_rate_set(unsigned int rate);
+
+/**
+ * Begin a change through a file of the auxiliary port, as Linux's
+ * `psmouse_attr_set_helper` begins one: a run of commands, and the device
+ * disabled. Returns 0, or -ENODEV, having begun nothing, while the port
+ * waits for its reconnect. Process context; it may sleep.
+ */
+int ps2mouse_change_begin(void);
+
+/** End the change `ps2mouse_change_begin` began, whose result is `rc`: the
+ * device enabled again unless `rc` is -ENODEV, and the run ended. */
+void ps2mouse_change_end(int rc);
+
+/**
+ * Parse the `len` bytes at `buf` as Linux's `kstrtouint` and `kstrtou8`
+ * do: an optional '+', in base 16 an optional "0x", digits of `base`, 10
+ * or 16, and an optional newline, nothing after. Returns 0 with the value
+ * in `*out`, -EINVAL for text that is no number, or -ERANGE for one above
+ * `max`.
+ */
+int ps2mouse_parse_uint(const char *buf, uint32_t len, unsigned int base, uint32_t max,
+                        uint32_t *out);
+
+/**
+ * Resync what the handler asked kpsmoused to, as Linux's `psmouse_resync`
+ * does: the port's device after a pause of half a second inside a mouse's
+ * packet or a first byte after `resync_time` seconds idle, or the guest
+ * after its idle time; each is disabled, polled for a packet, which must
+ * have its protocol's form, and enabled again, and one that fails is
+ * reconnected. A resync a change of the port overtook is not done. The
+ * work of kpsmoused, in process context; the host tests call it directly.
+ */
+void ps2mouse_resync(void);
+
+/**
  * Make the kernel thread kpsmoused, which reconnects a touchpad or mouse
- * that sent five packets out of form in a row, and a device that announced
- * itself anew with 0xAA 0x00 after a reset of its own, as Linux's psmouse
- * asks `serio_reconnect` to. Called once, when the first program starts; a
- * reconnect asked before then waits for the thread.
+ * that sent `resetafter` packets out of form in a row, and a device that
+ * announced itself anew with 0xAA 0x00 after a reset of its own, as Linux's
+ * psmouse asks `serio_reconnect` to, and resyncs one as `ps2mouse_resync`
+ * says. Called once, when the first program starts; a reconnect asked
+ * before then waits for the thread.
  */
 void ps2mouse_thread_start(void);
 
