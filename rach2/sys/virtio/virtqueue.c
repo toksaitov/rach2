@@ -81,6 +81,9 @@ int virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues)
     virtio_status_add(d, VIRTIO_STATUS_ACKNOWLEDGE);
     virtio_status_add(d, VIRTIO_STATUS_DRIVER);
     offered = d->ops->get_features(d);
+    if (d->ops->get_status(d) & VIRTIO_STATUS_FAILED) {
+        return -ENODEV; /* the transport has no device to offer, and has said why */
+    }
     if (!(offered & VIRTIO_BIT(VIRTIO_F_VERSION_1))) {
         klog(KLOG_WARN, "virtio", "refused: %s: a legacy device, without VERSION_1", d->name);
         return virtio_fail(d, -ENODEV);
