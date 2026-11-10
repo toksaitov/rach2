@@ -103,8 +103,9 @@ try:
     cmd('tar xf - -C /opt/proton/files/lib/wine', (o / 'dinput-new.tar').read_bytes())
     say(cmd('ldconfig -X; sha256sum /opt/proton/files/lib/wine/x86_64-windows/dinput8.dll /data/crysis/saves/SaveGames/*; ls -la /data/crysis/saves/SaveGames', check=False).stdout.decode())
     if turn.startswith('probe'):
-        cmd('cat > /tmp/maxrss.c', (w / 'maxrss.c').read_bytes())
-        r = cmd('gcc -O2 -o /tmp/maxrss /tmp/maxrss.c && /tmp/maxrss', check=False)
+        probe = os.environ.get('VIEW_PROBE', 'maxrss')
+        cmd(f'cat > /tmp/{probe}.c', (w / f'{probe}.c').read_bytes())
+        r = cmd(f'gcc -O2 -o /tmp/{probe} /tmp/{probe}.c && /tmp/{probe} /{probe}.scratch', check=False)
         say('probe status', r.returncode)
         print(r.stdout.decode(errors='replace'), flush=True)
         cmd('sync; umount /tmp/runtime; umount /data', check=False)
