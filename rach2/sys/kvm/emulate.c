@@ -38,7 +38,9 @@
 #define RFLAGS_VM    0x20000ull
 #define RFLAGS_ARITH (RFLAGS_CF | RFLAGS_PF | RFLAGS_AF | RFLAGS_ZF | RFLAGS_SF | RFLAGS_OF)
 
-#define DR6_BS 0x4000ull
+#define DR6_BS         0x4000ull
+#define DR6_ACTIVE_LOW 0xFFFF0FF0ull /* the bits an event clears */
+#define DR7_GD         0x2000ull
 
 /* The page-table entry bits the walk reads. */
 #define GPTE_P    0x001ull
@@ -159,6 +161,21 @@ void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t
     v->events.exception.error_code = has_error ? error : 0;
     v->dirty |= KVM_PART_EVENTS;
     kvm_vcpu_kick(v, KVM_REQ_EVENT);
+}
+
+void kvm_queue_db(struct kvm_vcpu *v, uint64_t payload)
+{
+    uint64_t dr6 = v->debugregs.dr6;
+
+    dr6 &= ~0xFull;
+    dr6 |= DR6_ACTIVE_LOW;
+    dr6 |= payload;
+    dr6 ^= payload & DR6_ACTIVE_LOW;
+    dr6 &= ~(1ull << 12);
+    v->debugregs.dr6 = dr6;
+    v->debugregs.dr7 &= ~DR7_GD;
+    v->dirty |= KVM_PART_DEBUG;
+    kvm_queue_exception(v, DB_VECTOR, 0, 0);
 }
 
 uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
@@ -1989,14 +2006,15 @@ static uint32_t fx_word(const struct kvm_vcpu *v, uint32_t off)
 /**
  * Make the component `bit` of `v`'s XSAVE image, 1 for x87 or 2 for SSE,
  * one the image holds: a component its header leaves out is in its initial
- * state, which is written out and the header's bit set.
+ * state, which is written out and the header's bit set. On a host without
+ * XSAVE the image is FXSAVE's, which has no header and holds both.
  */
 static void fx_ready(struct kvm_vcpu *v, uint64_t bit)
 {
     uint8_t *img = v->xsave;
     uint64_t bv = bytes_value(img + XS_BV, 8);
 
-    if (bv & bit) {
+    if (kvm_xcr0_supported() == 0 || (bv & bit)) {
         return;
     }
     if (bit == 1u) {
@@ -3707,16 +3725,39 @@ static int h_sysexit(struct xc *x)
     return X_OK;
 }
 
+/**
+ * VMCALL or VMMCALL that the host's processor refused, as Linux's
+ * em_hypercall and emulator_fix_hypercall: the host's own of the two is
+ * written over the instruction, which then runs again, RIP left on it.
+ * VMCALL is #GP(0) above CPL 0, and VMMCALL #UD in real and virtual-8086
+ * mode, as Linux's table marks them.
+ */
+static int h_hypercall(struct xc *x)
+{
+    static const uint8_t vmcall[3] = {0x0F, 0x01, 0xC1}, vmmcall[3] = {0x0F, 0x01, 0xD9};
+    struct kvm_vcpu *v = x->v;
+
+    if (x->in->sub == 1 && !x_prot(x)) {
+        return x_fault(x, UD_VECTOR, 0, 0);
+    }
+    if (x->in->sub == 0 && x->cpl > 0) {
+        return x_fault(x, GP_VECTOR, 1, 0);
+    }
+    x->next = v->regs.rip;
+    return wq_add(v, v->sregs.cs.base + v->regs.rip, kvm_backend == &kvm_svm ? vmmcall : vmcall, 3,
+                  3);
+}
+
 /* The function that carries out each operation, by KVM_OP_*. */
 static int (*const handlers[KVM_OP_LAST + 1])(struct xc *) = {
-    0,          h_mov,       h_alu,       h_unary,    h_xchg,      h_shift,   h_muldiv,  h_imul,
-    h_bt,       h_bscan,     h_dshift,    h_cmpxchg,  h_cmpxchg8b, h_xadd,    h_cmov,    h_setcc,
-    h_movbe,    h_bswap,     h_lea,       h_nop,      h_push,      h_pop,     h_pusha,   h_popa,
-    h_pushf,    h_popf,      h_push_sreg, h_pop_sreg, h_enter,     h_leave,   h_jcc,     h_jmp,
-    h_jmp_abs,  h_jmp_far,   h_call,      h_call,     h_call_far,  h_ret,     h_ret_far, h_loop,
-    h_mov_sreg, h_store_seg, h_load_seg,  h_lseg,     h_store_dt,  h_load_dt, h_smsw,    h_lmsw,
-    h_flag,     h_cbw,       h_cwd,       h_sahf,     h_lahf,      h_bcd,     h_fnst,    h_fnst,
-    h_fninit,   h_fxsave,    h_fxrstor,   h_syscall,  h_sysenter,  h_sysexit};
+    0,          h_mov,       h_alu,       h_unary,    h_xchg,      h_shift,   h_muldiv,   h_imul,
+    h_bt,       h_bscan,     h_dshift,    h_cmpxchg,  h_cmpxchg8b, h_xadd,    h_cmov,     h_setcc,
+    h_movbe,    h_bswap,     h_lea,       h_nop,      h_push,      h_pop,     h_pusha,    h_popa,
+    h_pushf,    h_popf,      h_push_sreg, h_pop_sreg, h_enter,     h_leave,   h_jcc,      h_jmp,
+    h_jmp_abs,  h_jmp_far,   h_call,      h_call,     h_call_far,  h_ret,     h_ret_far,  h_loop,
+    h_mov_sreg, h_store_seg, h_load_seg,  h_lseg,     h_store_dt,  h_load_dt, h_smsw,     h_lmsw,
+    h_flag,     h_cbw,       h_cwd,       h_sahf,     h_lahf,      h_bcd,     h_fnst,     h_fnst,
+    h_fninit,   h_fxsave,    h_fxrstor,   h_syscall,  h_sysenter,  h_sysexit, h_hypercall};
 
 /**
  * Step the registers of a string instruction after one element: rSI and
@@ -3824,17 +3865,17 @@ static void emul_end(struct kvm_vcpu *v)
 
 /**
  * Refuse the instruction `bytes` of `n` bytes, as Linux's
- * handle_emulation_failure: #UD above CPL 0 and for one a #UD exit
- * brought, which the guest then takes as the processor raised it; at CPL
- * 0 the internal error, with the instruction's bytes and the exit's
- * numbers.
+ * x86_emulate_instruction and handle_emulation_failure: the guest takes
+ * #UD, and at CPL 0 the caller gets the internal error besides, with the
+ * instruction's bytes and the exit's numbers. One a #UD exit brought that
+ * was not decoded, `decoded` 0, or is none of those run after a #UD, is
+ * the guest's #UD alone, as the processor raised it.
  */
-static void emul_fail(struct kvm_vcpu *v, const uint8_t *bytes, uint32_t n)
+static void emul_fail(struct kvm_vcpu *v, const uint8_t *bytes, uint32_t n, int decoded)
 {
-    if (v->emul.ud || kvm_emul_cpl(v) > 0) {
-        v->exit.kind = KVM_X_AGAIN;
-        kvm_queue_exception(v, UD_VECTOR, 0, 0);
-    } else {
+    v->exit.kind = KVM_X_AGAIN;
+    kvm_queue_exception(v, UD_VECTOR, 0, 0);
+    if (kvm_emul_cpl(v) == 0 && (decoded || !v->emul.ud)) {
         v->exit.kind = KVM_X_INTERNAL;
         kvm_decode_fail(&v->exit.internal, bytes, n, v->emul.info);
     }
@@ -3843,11 +3884,11 @@ static void emul_fail(struct kvm_vcpu *v, const uint8_t *bytes, uint32_t n)
 
 /**
  * Run the instruction in `v->emul.insn` once more from its start. A pass
- * that needs an MMIO read leaves `v->exit` that read and the registers as
- * they were; one that faults leaves the exception queued; one that cannot
- * go on is refused; and one that ends keeps its registers, makes its
- * writes to RAM and gives `v->exit` its first write to device memory.
- * 0, or -EFAULT.
+ * that needs an MMIO read leaves `v->exit` that read and the registers,
+ * the x87 and SSE state among them, as they were; one that faults leaves
+ * the exception queued; one that cannot go on is refused; and one that
+ * ends keeps its registers, makes its writes to RAM and gives `v->exit`
+ * its first write to device memory. 0, or -EFAULT.
  */
 static int emul_run(struct kvm_vcpu *v)
 {
@@ -3869,6 +3910,7 @@ static int emul_run(struct kvm_vcpu *v)
     em->stage = EMUL_IDLE;
     em->resume = 0;
     v->exit.kind = KVM_X_AGAIN;
+    k_memcpy(em->fx, v->xsave, sizeof(em->fx));
     r = x_exec(&x);
     if (r == X_OK) {
         r = wq_commit(v);
@@ -3878,6 +3920,7 @@ static int emul_run(struct kvm_vcpu *v)
         cr2 = v->sregs.cr2;
         v->regs = regs;
         v->sregs = sregs;
+        k_memcpy(v->xsave, em->fx, sizeof(em->fx));
         if (r == X_IO) {
             em->stage = EMUL_READ;
             return 0;
@@ -3886,7 +3929,7 @@ static int emul_run(struct kvm_vcpu *v)
             v->sregs.cr2 = cr2;
         }
         if (r == X_FAIL) {
-            emul_fail(v, em->insn.bytes, em->insn.len);
+            emul_fail(v, em->insn.bytes, em->insn.len, 1);
         }
         emul_end(v);
         return r < X_FAULT ? r : 0;
@@ -3900,10 +3943,20 @@ static int emul_run(struct kvm_vcpu *v)
     return 0;
 }
 
+/** Whether Linux's emulator carries `in` out after a #UD, its
+ * EmulateOnUD: SYSCALL, SYSENTER, SYSEXIT, MOVBE, VMCALL and VMMCALL. */
+static int runs_on_ud(const struct kvm_insn *in)
+{
+    if (in->flags & KVM_INSN_UD) {
+        return 0;
+    }
+    return in->op == KVM_OP_SYSCALL || in->op == KVM_OP_SYSENTER || in->op == KVM_OP_SYSEXIT ||
+           in->op == KVM_OP_MOVBE || in->op == KVM_OP_HYPERCALL;
+}
+
 /**
  * Fetch the instruction at CS:RIP and decode it; for a #UD exit, `ud`,
- * keep only those Linux's emulator carries out after one, SYSCALL,
- * SYSENTER, SYSEXIT and MOVBE. Then run it.
+ * keep only those Linux's emulator carries out after one. Then run it.
  */
 static int emul_begin(struct kvm_vcpu *v, int ud)
 {
@@ -3921,12 +3974,10 @@ static int emul_begin(struct kvm_vcpu *v, int ud)
     }
     known = kvm_decode(bytes, (uint32_t)n, kvm_emul_mode(v), in) == 0;
     if (known && ud) {
-        known =
-            !(in->flags & KVM_INSN_UD) && (in->op == KVM_OP_SYSCALL || in->op == KVM_OP_SYSENTER ||
-                                           in->op == KVM_OP_SYSEXIT || in->op == KVM_OP_MOVBE);
+        known = runs_on_ud(in);
     }
     if (!known) {
-        emul_fail(v, bytes, (uint32_t)n);
+        emul_fail(v, bytes, (uint32_t)n, 0);
         return 0;
     }
     return emul_run(v);
@@ -3938,9 +3989,9 @@ int kvm_emul_mmio(struct kvm_vcpu *v, const uint64_t info[5])
     return emul_begin(v, 0);
 }
 
-int kvm_emul_ud(struct kvm_vcpu *v)
+int kvm_emul_ud(struct kvm_vcpu *v, const uint64_t info[5])
 {
-    k_memset(v->emul.info, 0, sizeof(v->emul.info));
+    k_memcpy(v->emul.info, info, sizeof(v->emul.info));
     return emul_begin(v, 1);
 }
 

@@ -79,7 +79,8 @@
 #define KVM_OP_SYSCALL   59
 #define KVM_OP_SYSENTER  60
 #define KVM_OP_SYSEXIT   61
-#define KVM_OP_LAST      61
+#define KVM_OP_HYPERCALL 62 /* VMCALL, or VMMCALL with `sub` 1 */
+#define KVM_OP_LAST      62
 
 /*
  * The operation of KVM_OP_ALU and KVM_OP_UNARY, `sub`. ADD to CMP are the

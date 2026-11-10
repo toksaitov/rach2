@@ -294,6 +294,7 @@ struct kvm_pio {
 #define KVM_EMUL_WRITES 8
 #define KVM_EMUL_CHUNKS 16
 #define KVM_EMUL_WBUF   4104 /* a page of INS's elements, and one across its end */
+#define KVM_EMUL_FX     576  /* an XSAVE image's legacy area and header */
 
 /* The answer of one MMIO read: `len` bytes at `gpa`, 8 at most. */
 struct kvm_emul_read {
@@ -326,10 +327,11 @@ struct kvm_emul_chunk {
  * enters no guest, and its `exit` gives `kvm_emul_resume`'s exit.
  */
 struct kvm_emul {
-    uint32_t stage;       /* emulate.c's EMUL_* */
-    int resume;           /* the next exit is the instruction's next step */
-    int ud;               /* a #UD exit brought the instruction */
-    struct kvm_insn insn; /* the instruction */
+    uint32_t stage;          /* emulate.c's EMUL_* */
+    int resume;              /* the next exit is the instruction's next step */
+    int ud;                  /* a #UD exit brought the instruction */
+    uint8_t fx[KVM_EMUL_FX]; /* the x87 and SSE state as the pass found it */
+    struct kvm_insn insn;    /* the instruction */
     struct kvm_emul_read rd[KVM_EMUL_READS];
     uint32_t rcount; /* the answers kept; the read that waits is the next */
     struct kvm_emul_write w[KVM_EMUL_WRITES];
@@ -1125,6 +1127,16 @@ uint64_t kvm_emul_hypercall(struct kvm_vcpu *v);
  * entry, replacing one queued, and ask for its injection. */
 void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t error);
 
+/**
+ * Queue the #DB the processor raised in the guest and the backend took,
+ * with `payload` its bits as DR6 names them, set for each event: fold them
+ * into the guest's DR6, as Linux's kvm_deliver_exception_payload, the
+ * breakpoint bits replaced, the bits active low cleared where the event
+ * cleared them, and bit 12 never set; and clear DR7.GD, which the
+ * processor clears when it delivers a #DB and an injection does not.
+ */
+void kvm_queue_db(struct kvm_vcpu *v, uint64_t payload);
+
 /** Step `v` past an instruction of `len` bytes it ran in the kernel, as
  * Linux's kvm_skip_emulated_instruction: RIP, the interrupt shadow cleared,
  * and #DB queued when RFLAGS.TF was set, or `emul.step_trap` set under the
@@ -1172,11 +1184,11 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
  * guest's own tables. `v->exit` becomes its first MMIO read, whose answer
  * `kvm_emul_complete` takes before the instruction runs again; or, the
  * instruction done, its first MMIO write, with `emul.resume` set while more
- * follow; or KVM_X_AGAIN, with an exception queued when it faulted; or
- * KVM_X_INTERNAL for an instruction the emulator does not know at CPL 0,
- * whose report carries `info`, the exit's reason, qualifications,
- * interrupt information and error code, where above CPL 0 the guest takes
- * #UD. 0, or -EFAULT.
+ * follow; or KVM_X_AGAIN, with an exception queued when it faulted; or,
+ * for an instruction the emulator does not know or cannot finish, #UD
+ * queued and, at CPL 0, KVM_X_INTERNAL, whose report carries `info`, the
+ * exit's reason, qualifications, interrupt information and error code.
+ * 0, or -EFAULT.
  */
 int kvm_emul_mmio(struct kvm_vcpu *v, const uint64_t info[5]);
 
@@ -1184,10 +1196,13 @@ int kvm_emul_mmio(struct kvm_vcpu *v, const uint64_t info[5]);
  * Carry out the instruction at CS:RIP of `v` that raised #UD on the
  * host's processor, when it is one Linux's emulator runs after a #UD:
  * SYSCALL, SYSENTER and SYSEXIT, which a processor of the other vendor
- * refuses in some modes, and MOVBE. Any other is given back to the guest
- * as the #UD it raised. `v->exit` as `kvm_emul_mmio`. 0, or -EFAULT.
+ * refuses in some modes; MOVBE; and VMCALL or VMMCALL, whichever the
+ * host's processor lacks, which is rewritten in the guest's memory as the
+ * one it has and left to run again. Any other is given back to the guest
+ * as the #UD it raised. `v->exit` and `info` as `kvm_emul_mmio`. 0, or
+ * -EFAULT.
  */
-int kvm_emul_ud(struct kvm_vcpu *v);
+int kvm_emul_ud(struct kvm_vcpu *v, const uint64_t info[5]);
 
 /**
  * `count` pages whose frames are consecutive, set to all ones, for a

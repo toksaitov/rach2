@@ -662,8 +662,10 @@ static void vmcb_build(struct kvm_vcpu *v)
     c->intercept_dr = 0x00FF00FFu;
     /* #DB and #AC always, so that a guest cannot hold the processor in an
      * endless loop of either, as Linux keeps them since CVE-2015-8104 and
-     * CVE-2015-5307; #MC, which is the host's. */
-    c->intercept_exc = (1u << DB_VECTOR) | (1u << AC_VECTOR) | (1u << MC_VECTOR);
+     * CVE-2015-5307; #UD, for the instructions emulate.c runs after one;
+     * #MC, which is the host's. */
+    c->intercept_exc =
+        (1u << DB_VECTOR) | (1u << UD_VECTOR) | (1u << AC_VECTOR) | (1u << MC_VECTOR);
     c->intercept3 = INTERCEPT3_INTR | INTERCEPT3_NMI | INTERCEPT3_SMI | INTERCEPT3_RDPMC |
                     INTERCEPT3_CPUID | INTERCEPT3_RSM | INTERCEPT3_INVD | INTERCEPT3_HLT |
                     INTERCEPT3_INVLPGA | INTERCEPT3_IOIO | INTERCEPT3_MSR | INTERCEPT3_TASK |
@@ -1959,6 +1961,20 @@ static int exit_vmmcall(struct kvm_vcpu *v)
     return 0;
 }
 
+/** The exit's numbers for an internal error's report, as Linux's
+ * svm_get_exit_info orders them: the code, EXITINFO1 and EXITINFO2, and
+ * the event under delivery with its error code. */
+static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
+{
+    const struct svm_exit *e = &sv(v)->ex;
+
+    info[0] = e->code;
+    info[1] = e->info1;
+    info[2] = e->info2;
+    info[3] = e->int_info;
+    info[4] = e->int_err;
+}
+
 /** A nested page fault: EXITINFO2's guest-physical address, which
  * `kvm_tdp_fault` maps, or an access to a frame no slot holds, MMIO, which
  * emulate.c carries out. */
@@ -1976,58 +1992,41 @@ static int exit_npf(struct kvm_vcpu *v)
         v->exit.kind = KVM_X_AGAIN;
         return 0;
     }
-    info[0] = e->code;
-    info[1] = e->info1;
-    info[2] = e->info2;
-    info[3] = e->int_info;
-    info[4] = e->int_err;
-    return kvm_emul_mmio(v, e->info2, info);
-}
-
-/** Fold a #DB's bits, which the processor left in the VMCB's DR6, into the
- * guest's DR6, as Linux's kvm_deliver_exception_payload: the breakpoint
- * bits replaced, the bits active low cleared where the event cleared them,
- * and bit 12 never set. */
-static void db_payload(struct kvm_vcpu *v)
-{
-    uint64_t payload = sv(v)->vmcb->s.dr6 ^ DR6_ACTIVE_LOW;
-    uint64_t dr6 = v->debugregs.dr6;
-
-    dr6 &= ~0xFull;
-    dr6 |= DR6_ACTIVE_LOW;
-    dr6 |= payload;
-    dr6 ^= payload & DR6_ACTIVE_LOW;
-    dr6 &= ~(1ull << 12);
-    v->debugregs.dr6 = dr6;
-    v->dirty |= KVM_PART_DEBUG;
+    exit_info(v, info);
+    return kvm_emul_mmio(v, info);
 }
 
 /**
  * An exception's intercept: the host's machine check, which `enter` passed
- * on; #AC given back to the guest; the #DB of the NMI window's step, which
- * ends it; the #DB or #BP the caller's debugging takes, which goes to the
- * caller as KVM_EXIT_DEBUG with the address, DR6 and DR7, as Linux's
- * db_interception and bp_interception give it; and the guest's own #DB,
- * given back with its bits in DR6.
+ * on; #AC given back to the guest; #UD, whose instruction emulate.c runs
+ * when it is one Linux's emulator runs after a #UD, as Linux's
+ * ud_interception; the #DB of the NMI window's step, which ends it; the
+ * #DB or #BP the caller's debugging takes, which goes to the caller as
+ * KVM_EXIT_DEBUG with the address, DR6 and DR7, as Linux's db_interception
+ * and bp_interception give it; and the guest's own #DB, given back with
+ * its bits, which the processor left in the VMCB's DR6, in the guest's.
  */
 static int exit_exception(struct kvm_vcpu *v, uint32_t vec)
 {
     struct svm_vcpu *s = sv(v);
     struct kvm_run_debug *d = &v->exit.debug;
+    uint64_t info[5];
     int caller;
 
     v->exit.kind = KVM_X_AGAIN;
     switch (vec) {
     case MC_VECTOR:
         return 0;
+    case UD_VECTOR:
+        exit_info(v, info);
+        return kvm_emul_ud(v, info);
     case AC_VECTOR:
         kvm_queue_exception(v, AC_VECTOR, 1, 0);
         return 0;
     case DB_VECTOR:
         caller = debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP);
         if (!caller && !s->nmi_ss) {
-            db_payload(v);
-            kvm_queue_exception(v, DB_VECTOR, 0, 0);
+            kvm_queue_db(v, s->vmcb->s.dr6 ^ DR6_ACTIVE_LOW);
             return 0;
         }
         if (s->nmi_ss) {
