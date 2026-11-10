@@ -381,7 +381,7 @@ long sys_process_madvise(isr_params_t *params)
                advice != PMADV_PAGEOUT && advice != PMADV_COLLAPSE) {
         rc = -EINVAL;
     }
-    mm = rc == 0 ? t->mm : NULL;
+    mm = rc == 0 && t ? t->mm : NULL;
     if (rc == 0 && !mm) {
         rc = -ESRCH;
     } else if (rc == 0 && !pvm_may_read(t)) {
