@@ -1,0 +1,688 @@
+kvm-corpus: x86_64/hyperv_svm_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX, which the test's nested half needs
+kvm-corpus: x86_64/nested_exceptions_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/pmu_counters_test: excluded: PMU: Rach2's KVM gives its guests no performance counters
+kvm-corpus: x86_64/pmu_event_filter_test: excluded: PMU: Rach2's KVM gives its guests no performance counters
+kvm-corpus: x86_64/svm_int_ctl_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/svm_nested_shutdown_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/svm_nested_soft_inject_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/svm_vmcall_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_apic_access_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_close_while_nested_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_dirty_log_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_exception_with_invalid_guest_state: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_invalid_nested_guest_state: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_msrs_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_nested_tsc_scaling_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_pmu_caps_test: excluded: PMU: Rach2's KVM gives its guests no performance counters
+kvm-corpus: x86_64/vmx_preemption_timer_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_set_nested_state_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: x86_64/vmx_tsc_adjust_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+Random seed: 0x6b8b4567
+1..0 # SKIP - CONFIG_IDLE_PAGE_TRACKING is not enabled
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_COALESCED_MMIO)
+Random seed: 0x6b8b4567
+Testing guest mode: PA-bits:ANY, VA-bits:48,  4K pages
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11260 tid=11260 errno=6 - No such device or address
+     1	0x0000000000407495: vm_create_irqchip at ??:?
+     2	0x0000000000411865: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408fa5: __vm_create at ??:?
+     4	0x0000000000409039: __vm_create_with_vcpus at ??:?
+     5	0x00000000004096ea: memstress_create_vm at ??:?
+     6	0x00000000004039c0: run_test at ??:?
+     7	0x00000000004046f4: for_each_guest_mode at ??:?
+     8	0x00000000004034b9: main at ??:?
+     9	0x000000000041b713: __libc_start_call_main at ??:?
+    10	0x000000000041d5dd: __libc_start_main_impl at ??:?
+    11	0x0000000000403660: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+Test iterations: 2
+Testing guest mode: PA-bits:ANY, VA-bits:48,  4K pages
+Random seed: 0x1
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11267 tid=11267 errno=6 - No such device or address
+     1	0x0000000000407615: vm_create_irqchip at ??:?
+     2	0x00000000004119e5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000409125: __vm_create at ??:?
+     4	0x00000000004091b9: __vm_create_with_vcpus at ??:?
+     5	0x000000000040986a: memstress_create_vm at ??:?
+     6	0x0000000000403ade: run_test at ??:?
+     7	0x0000000000404874: for_each_guest_mode at ??:?
+     8	0x0000000000403622: main at ??:?
+     9	0x000000000041b893: __libc_start_call_main at ??:?
+    10	0x000000000041d75d: __libc_start_main_impl at ??:?
+    11	0x00000000004036e0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+Test iterations: 32, interval: 10 (ms)
+Testing Log Mode 'dirty-log'
+Testing guest mode: PA-bits:ANY, VA-bits:48,  4K pages
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11274 tid=11274 errno=6 - No such device or address
+     1	0x00000000004083d5: vm_create_irqchip at ??:?
+     2	0x00000000004127a5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000409ee5: __vm_create at ??:?
+     4	0x0000000000404276: run_test at ??:?
+     5	0x0000000000405614: for_each_guest_mode at ??:?
+     6	0x000000000040353e: main at ??:?
+     7	0x000000000041c653: __libc_start_call_main at ??:?
+     8	0x000000000041e51d: __libc_start_main_impl at ??:?
+     9	0x00000000004036e0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_GUEST_MEMFD)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11285 tid=11285 errno=6 - No such device or address
+     1	0x0000000000407b95: vm_create_irqchip at ??:?
+     2	0x0000000000411f65: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004096a5: __vm_create at ??:?
+     4	0x00000000004097d6: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040325f: main at ??:?
+     6	0x000000000041be13: __libc_start_call_main at ??:?
+     7	0x000000000041dcdd: __libc_start_main_impl at ??:?
+     8	0x0000000000403500: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11293 tid=11293 errno=6 - No such device or address
+     1	0x0000000000406e55: vm_create_irqchip at ??:?
+     2	0x0000000000411225: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408965: __vm_create at ??:?
+     4	0x00000000004033bf: main at ??:?
+     5	0x000000000041b0d3: __libc_start_call_main at ??:?
+     6	0x000000000041cf9d: __libc_start_main_impl at ??:?
+     7	0x0000000000403640: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+TAP version 13
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_BINARY_STATS_FD)
+Random seed: 0x6b8b4567
+KVM_CAP_MAX_VCPU_ID: 256
+KVM_CAP_MAX_VCPUS: 64
+Testing creating 64 vCPUs, with IDs 0...63.
+Testing creating 64 vCPUs, with IDs 192...255.
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11308 tid=11308 errno=6 - No such device or address
+     1	0x0000000000407515: vm_create_irqchip at ??:?
+     2	0x00000000004118e5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000409025: __vm_create at ??:?
+     4	0x00000000004090b9: __vm_create_with_vcpus at ??:?
+     5	0x0000000000403a7c: run_test at ??:?
+     6	0x0000000000404774: for_each_guest_mode at ??:?
+     7	0x0000000000403402: main at ??:?
+     8	0x000000000041b793: __libc_start_call_main at ??:?
+     9	0x000000000041d65d: __libc_start_main_impl at ??:?
+    10	0x00000000004034c0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11315 tid=11315 errno=6 - No such device or address
+     1	0x00000000004075d5: vm_create_irqchip at ??:?
+     2	0x00000000004119a5: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004090e5: __vm_create at ??:?
+     4	0x0000000000409179: __vm_create_with_vcpus at ??:?
+     5	0x00000000004034e6: main at ??:?
+     6	0x000000000041b853: __libc_start_call_main at ??:?
+     7	0x000000000041d71d: __libc_start_main_impl at ??:?
+     8	0x0000000000403aa0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+Testing guest mode: PA-bits:ANY, VA-bits:48,  4K pages
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11322 tid=11322 errno=6 - No such device or address
+     1	0x0000000000407155: vm_create_irqchip at ??:?
+     2	0x0000000000411525: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408c65: __vm_create at ??:?
+     4	0x0000000000408cf9: __vm_create_with_vcpus at ??:?
+     5	0x00000000004093aa: memstress_create_vm at ??:?
+     6	0x00000000004037ed: run_test at ??:?
+     7	0x00000000004043b4: for_each_guest_mode at ??:?
+     8	0x000000000040346c: main at ??:?
+     9	0x000000000041b3d3: __libc_start_call_main at ??:?
+    10	0x000000000041d29d: __libc_start_main_impl at ??:?
+    11	0x00000000004035a0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+Testing map performance with 1 runs, 5 seconds each
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11329 tid=11329 errno=6 - No such device or address
+     1	0x0000000000408955: vm_create_irqchip at ??:?
+     2	0x0000000000412d25: kvm_arch_vm_post_create at ??:?
+     3	0x000000000040a465: __vm_create at ??:?
+     4	0x000000000040a596: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403822: main at ??:?
+     6	0x000000000041cbd3: __libc_start_call_main at ??:?
+     7	0x000000000041ea9d: __libc_start_main_impl at ??:?
+     8	0x00000000004040c0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_check_cap(KVM_CAP_PRE_FAULT_MEMORY)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11340 tid=11340 errno=6 - No such device or address
+     1	0x00000000004074d5: vm_create_irqchip at ??:?
+     2	0x00000000004118a5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408fe5: __vm_create at ??:?
+     4	0x0000000000409116: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403575: main at ??:?
+     6	0x000000000041b753: __libc_start_call_main at ??:?
+     7	0x000000000041d61d: __libc_start_main_impl at ??:?
+     8	0x0000000000403840: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+Testing KVM_RUN with zero added memory regions
+Allowed number of memory slots: 256
+Adding slots 0..255, each memory region with 2048K size
+Skipping tests for KVM_MEM_GUEST_MEMFD memory regions
+Testing MOVE of in-use region, 10 loops, slot zap quirk enabled
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11347 tid=11347 errno=6 - No such device or address
+     1	0x0000000000408055: vm_create_irqchip at ??:?
+     2	0x0000000000412425: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000409b65: __vm_create at ??:?
+     4	0x0000000000409c96: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000404186: spawn_vm at ??:?
+     6	0x000000000040378b: main at ??:?
+     7	0x000000000041c2d3: __libc_start_call_main at ??:?
+     8	0x000000000041e19d: __libc_start_main_impl at ??:?
+     9	0x0000000000403e00: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11354 tid=11354 errno=6 - No such device or address
+     1	0x00000000004076d5: vm_create_irqchip at ??:?
+     2	0x0000000000411aa5: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004091e5: __vm_create at ??:?
+     4	0x0000000000409279: __vm_create_with_vcpus at ??:?
+     5	0x0000000000403393: main at ??:?
+     6	0x000000000041b953: __libc_start_call_main at ??:?
+     7	0x000000000041d81d: __libc_start_main_impl at ??:?
+     8	0x0000000000403900: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11361 tid=11361 errno=6 - No such device or address
+     1	0x0000000000406d55: vm_create_irqchip at ??:?
+     2	0x0000000000411125: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408865: __vm_create at ??:?
+     4	0x0000000000408996: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040325f: main at ??:?
+     6	0x000000000041afd3: __libc_start_call_main at ??:?
+     7	0x000000000041ce9d: __libc_start_main_impl at ??:?
+     8	0x0000000000403340: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/x86_64/processor.c:806: rc == 0
+  pid=11368 tid=11368 errno=25 - Inappropriate ioctl for device
+     1	0x0000000000412896: __vm_xsave_require_permission at ??:?
+     2	0x000000000040325f: main at ??:?
+     3	0x000000000041bf13: __libc_start_call_main at ??:?
+     4	0x000000000041dddd: __libc_start_main_impl at ??:?
+     5	0x0000000000403a60: _start at ??:?
+  KVM_GET_DEVICE_ATTR(0, KVM_X86_XCOMP_GUEST_SUPP) error: -1
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_X86_APIC_BUS_CYCLES_NS)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11379 tid=11379 errno=6 - No such device or address
+     1	0x0000000000407415: vm_create_irqchip at ??:?
+     2	0x00000000004117e5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408f25: __vm_create at ??:?
+     4	0x0000000000409056: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403268: main at ??:?
+     6	0x000000000041b693: __libc_start_call_main at ??:?
+     7	0x000000000041d55d: __libc_start_main_impl at ??:?
+     8	0x0000000000403820: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11386 tid=11386 errno=6 - No such device or address
+     1	0x0000000000406f55: vm_create_irqchip at ??:?
+     2	0x0000000000411325: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408a65: __vm_create at ??:?
+     4	0x0000000000408b96: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403286: main at ??:?
+     6	0x000000000041b1d3: __libc_start_call_main at ??:?
+     7	0x000000000041d09d: __libc_start_main_impl at ??:?
+     8	0x0000000000403600: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_SET_GUEST_DEBUG)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: get_kvm_param_bool("eager_page_split")
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_EXIT_ON_EMULATION_FAILURE)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_check_cap(KVM_CAP_DISABLE_QUIRKS2) & KVM_X86_QUIRK_FIX_HYPERCALL_INSN
+Random seed: 0x6b8b4567
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11413 tid=11413 errno=6 - No such device or address
+     1	0x0000000000406b95: vm_create_irqchip at ??:?
+     2	0x0000000000410f65: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004086a5: __vm_create at ??:?
+     4	0x00000000004087d6: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040325f: main at ??:?
+     6	0x000000000041ae13: __libc_start_call_main at ??:?
+     7	0x000000000041ccdd: __libc_start_main_impl at ??:?
+     8	0x0000000000403340: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: sys_clocksource_is_based_on_tsc()
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11424 tid=11424 errno=6 - No such device or address
+     1	0x0000000000407095: vm_create_irqchip at ??:?
+     2	0x0000000000411465: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408ba5: __vm_create at ??:?
+     4	0x0000000000408cd6: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x00000000004032d2: main at ??:?
+     6	0x000000000041b313: __libc_start_call_main at ??:?
+     7	0x000000000041d1dd: __libc_start_main_impl at ??:?
+     8	0x0000000000403480: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11435 tid=11435 errno=6 - No such device or address
+     1	0x0000000000406e95: vm_create_irqchip at ??:?
+     2	0x0000000000411265: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004089a5: __vm_create at ??:?
+     4	0x0000000000408ad6: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040329a: main at ??:?
+     6	0x000000000041b113: __libc_start_call_main at ??:?
+     7	0x000000000041cfdd: __libc_start_main_impl at ??:?
+     8	0x0000000000403520: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+Testing access to Hyper-V specific MSRs
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11442 tid=11442 errno=6 - No such device or address
+     1	0x0000000000408315: vm_create_irqchip at ??:?
+     2	0x00000000004126e5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000409e25: __vm_create at ??:?
+     4	0x0000000000409f56: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040434b: guest_test_msrs_access at ??:?
+     6	0x0000000000403260: main at ??:?
+     7	0x000000000041c593: __libc_start_call_main at ??:?
+     8	0x000000000041e45d: __libc_start_main_impl at ??:?
+     9	0x0000000000403340: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11449 tid=11449 errno=6 - No such device or address
+     1	0x0000000000407e15: vm_create_irqchip at ??:?
+     2	0x00000000004121e5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000409925: __vm_create at ??:?
+     4	0x0000000000409a56: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040327b: main at ??:?
+     6	0x000000000041c093: __libc_start_call_main at ??:?
+     7	0x000000000041df5d: __libc_start_main_impl at ??:?
+     8	0x0000000000403720: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11456 tid=11456 errno=6 - No such device or address
+     1	0x0000000000409155: vm_create_irqchip at ??:?
+     2	0x0000000000413525: kvm_arch_vm_post_create at ??:?
+     3	0x000000000040ac65: __vm_create at ??:?
+     4	0x000000000040ad96: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403280: main at ??:?
+     6	0x000000000041d3d3: __libc_start_call_main at ??:?
+     7	0x000000000041f29d: __libc_start_main_impl at ??:?
+     8	0x0000000000403800: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: sys_clocksource_is_based_on_tsc()
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_ENFORCE_PV_FEATURE_CPUID)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  include/kvm_util.h:374: !ret
+  pid=11471 tid=11471 errno=22 - Invalid argument
+     1	0x00000000004033e9: main at ??:?
+     2	0x000000000041b113: __libc_start_call_main at ??:?
+     3	0x000000000041cfdd: __libc_start_main_impl at ??:?
+     4	0x0000000000403720: _start at ??:?
+  KVM_ENABLE_CAP failed, rc: -1 errno: 22 (Invalid argument)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_DISABLE_QUIRKS2)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_VM_DISABLE_NX_HUGE_PAGES)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_MSR_PLATFORM_INFO)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_SW_PROTECTED_VM)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_SW_PROTECTED_VM)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:380: nr_runnable_vcpus <= kvm_check_cap(KVM_CAP_MAX_VCPUS)
+  pid=11498 tid=11498 errno=0 - Success
+     1	0x000000000040877f: __vm_create at ??:?
+     2	0x0000000000408979: __vm_create_with_vcpus at ??:?
+     3	0x000000000040326c: main at ??:?
+     4	0x000000000041b053: __libc_start_call_main at ??:?
+     5	0x000000000041cf1d: __libc_start_main_impl at ??:?
+     6	0x00000000004035e0: _start at ??:?
+  nr_vcpus = 512 too large for host, max-vcpus = 64
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11505 tid=11505 errno=6 - No such device or address
+     1	0x0000000000407155: vm_create_irqchip at ??:?
+     2	0x0000000000411525: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408c65: __vm_create at ??:?
+     4	0x00000000004035f9: create_vm.constprop.0 at ??:?
+     5	0x0000000000403b5c: run_vm_bsp at ??:?
+     6	0x000000000040325a: main at ??:?
+     7	0x000000000041b3d3: __libc_start_call_main at ??:?
+     8	0x000000000041d29d: __libc_start_main_impl at ??:?
+     9	0x0000000000403380: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  x86_64/set_sregs_test.c:98: !rc
+  pid=11512 tid=11512 errno=22 - Invalid argument
+     1	0x0000000000403460: main at ??:?
+     2	0x000000000041be13: __libc_start_call_main at ??:?
+     3	0x000000000041dcdd: __libc_start_main_impl at ??:?
+     4	0x0000000000404360: _start at ??:?
+  Failed to set supported CR4 bits (0x1707ff)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: __kvm_has_device_attr(kvm_fd, KVM_X86_GRP_SEV, KVM_X86_SEV_VMSA_FEATURES) == 0
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_VM_MOVE_ENC_CONTEXT_FROM)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_SEV)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_SMALLER_MAXPHYADDR)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_X86_SMM)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11539 tid=11539 errno=6 - No such device or address
+     1	0x0000000000408dd5: vm_create_irqchip at ??:?
+     2	0x00000000004131a5: kvm_arch_vm_post_create at ??:?
+     3	0x000000000040a8e5: __vm_create at ??:?
+     4	0x000000000040aa16: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040327d: main at ??:?
+     6	0x000000000041d053: __libc_start_call_main at ??:?
+     7	0x000000000041ef1d: __libc_start_main_impl at ??:?
+     8	0x0000000000403ca0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: (cap & TEST_SYNC_FIELDS) == TEST_SYNC_FIELDS
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: has_vmx || has_svm
+Random seed: 0x6b8b4567
+TAP version 13
+1..5
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11554 tid=11554 errno=6 - No such device or address
+     1	0x0000000000407a95: vm_create_irqchip at ??:?
+     2	0x0000000000411e65: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004095a5: __vm_create at ??:?
+     4	0x00000000004096d6: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403325: main at ??:?
+     6	0x000000000041bd13: __libc_start_call_main at ??:?
+     7	0x000000000041dbdd: __libc_start_main_impl at ??:?
+     8	0x0000000000403b20: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_VM_TSC_CONTROL)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11565 tid=11565 errno=6 - No such device or address
+     1	0x0000000000407415: vm_create_irqchip at ??:?
+     2	0x00000000004117e5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408f25: __vm_create at ??:?
+     4	0x000000000040326d: main at ??:?
+     5	0x000000000041b693: __libc_start_call_main at ??:?
+     6	0x000000000041d55d: __libc_start_main_impl at ??:?
+     7	0x0000000000403580: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11572 tid=11572 errno=6 - No such device or address
+     1	0x0000000000406ed5: vm_create_irqchip at ??:?
+     2	0x00000000004112a5: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004089e5: __vm_create at ??:?
+     4	0x0000000000408b16: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040326b: main at ??:?
+     6	0x000000000041b153: __libc_start_call_main at ??:?
+     7	0x000000000041d01d: __libc_start_main_impl at ??:?
+     8	0x0000000000403680: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+TAP version 13
+1..4
+# Starting 4 tests from 1 test cases.
+#  RUN           user_msr.msr_filter_allow ...
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11581 tid=11581 errno=6 - No such device or address
+     1	0x000000000040a5d5: vm_create_irqchip at ??:?
+     2	0x00000000004149a5: kvm_arch_vm_post_create at ??:?
+     3	0x000000000040c0e5: __vm_create at ??:?
+     4	0x000000000040c216: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x000000000040663f: wrapper_user_msr_msr_filter_allow at ??:?
+     6	0x0000000000406fba: __run_test at ??:?
+     7	0x00000000004039b4: main at ??:?
+     8	0x000000000041e853: __libc_start_call_main at ??:?
+     9	0x000000000042071d: __libc_start_main_impl at ??:?
+    10	0x0000000000403b80: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+# msr_filter_allow: Test failed
+#          FAIL  user_msr.msr_filter_allow
+not ok 1 user_msr.msr_filter_allow
+#  RUN           user_msr.msr_filter_deny ...
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11586 tid=11586 errno=6 - No such device or address
+     1	0x000000000040a5d5: vm_create_irqchip at ??:?
+     2	0x00000000004149a5: kvm_arch_vm_post_create at ??:?
+     3	0x000000000040c0e5: __vm_create at ??:?
+     4	0x000000000040c216: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000405a9f: wrapper_user_msr_msr_filter_deny at ??:?
+     6	0x0000000000406fba: __run_test at ??:?
+     7	0x00000000004039b4: main at ??:?
+     8	0x000000000041e853: __libc_start_call_main at ??:?
+     9	0x000000000042071d: __libc_start_main_impl at ??:?
+    10	0x0000000000403b80: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+# msr_filter_deny: Test failed
+#          FAIL  user_msr.msr_filter_deny
+not ok 2 user_msr.msr_filter_deny
+#  RUN           user_msr.msr_permission_bitmap ...
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11591 tid=11591 errno=6 - No such device or address
+     1	0x000000000040a5d5: vm_create_irqchip at ??:?
+     2	0x00000000004149a5: kvm_arch_vm_post_create at ??:?
+     3	0x000000000040c0e5: __vm_create at ??:?
+     4	0x000000000040c216: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000406137: wrapper_user_msr_msr_permission_bitmap at ??:?
+     6	0x0000000000406fba: __run_test at ??:?
+     7	0x00000000004039b4: main at ??:?
+     8	0x000000000041e853: __libc_start_call_main at ??:?
+     9	0x000000000042071d: __libc_start_main_impl at ??:?
+    10	0x0000000000403b80: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+# msr_permission_bitmap: Test failed
+#          FAIL  user_msr.msr_permission_bitmap
+not ok 3 user_msr.msr_permission_bitmap
+#  RUN           user_msr.user_exit_msr_flags ...
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11596 tid=11596 errno=6 - No such device or address
+     1	0x000000000040a5d5: vm_create_irqchip at ??:?
+     2	0x00000000004149a5: kvm_arch_vm_post_create at ??:?
+     3	0x000000000040c0e5: __vm_create at ??:?
+     4	0x000000000040c216: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x00000000004050ef: wrapper_user_msr_user_exit_msr_flags at ??:?
+     6	0x0000000000406fba: __run_test at ??:?
+     7	0x00000000004039b4: main at ??:?
+     8	0x000000000041e853: __libc_start_call_main at ??:?
+     9	0x000000000042071d: __libc_start_main_impl at ??:?
+    10	0x0000000000403b80: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+# user_exit_msr_flags: Test failed
+#          FAIL  user_msr.user_exit_msr_flags
+not ok 4 user_msr.user_exit_msr_flags
+# FAILED: 0 / 4 tests passed.
+# Totals: pass:0 fail:4 xfail:0 xpass:0 skip:0 error:0
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11603 tid=11603 errno=6 - No such device or address
+     1	0x0000000000407595: vm_create_irqchip at ??:?
+     2	0x0000000000411965: kvm_arch_vm_post_create at ??:?
+     3	0x00000000004090a5: __vm_create at ??:?
+     4	0x00000000004091d6: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x00000000004032af: main at ??:?
+     6	0x000000000041b813: __libc_start_call_main at ??:?
+     7	0x000000000041d6dd: __libc_start_main_impl at ??:?
+     8	0x00000000004035e0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11610 tid=11610 errno=6 - No such device or address
+     1	0x0000000000407a15: vm_create_irqchip at ??:?
+     2	0x0000000000411de5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000409525: __vm_create at ??:?
+     4	0x0000000000409656: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403276: main at ??:?
+     6	0x000000000041bc93: __libc_start_call_main at ??:?
+     7	0x000000000041db5d: __libc_start_main_impl at ??:?
+     8	0x00000000004035c0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11617 tid=11617 errno=6 - No such device or address
+     1	0x0000000000407015: vm_create_irqchip at ??:?
+     2	0x00000000004113e5: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408b25: __vm_create at ??:?
+     4	0x0000000000408c56: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403282: main at ??:?
+     6	0x000000000041b293: __libc_start_call_main at ??:?
+     7	0x000000000041d15d: __libc_start_main_impl at ??:?
+     8	0x0000000000403400: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_SHARED_INFO
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/kvm_util.c:1636: !ret
+  pid=11632 tid=11632 errno=6 - No such device or address
+     1	0x0000000000406d55: vm_create_irqchip at ??:?
+     2	0x0000000000411125: kvm_arch_vm_post_create at ??:?
+     3	0x0000000000408865: __vm_create at ??:?
+     4	0x0000000000408996: __vm_create_shape_with_one_vcpu at ??:?
+     5	0x0000000000403265: main at ??:?
+     6	0x000000000041afd3: __libc_start_call_main at ??:?
+     7	0x000000000041ce9d: __libc_start_main_impl at ??:?
+     8	0x00000000004034c0: _start at ??:?
+  KVM_CREATE_IRQCHIP failed, rc: -1 errno: 6 (No such device or address)
+kvm-corpus: access_tracking_perf_test: skip: as expected
+kvm-corpus: coalesced_io_test: skip: expected pass
+kvm-corpus: demand_paging_test: fail: expected pass
+kvm-corpus: dirty_log_perf_test: fail: expected pass
+kvm-corpus: dirty_log_test: fail: expected pass
+kvm-corpus: guest_memfd_test: skip: expected pass
+kvm-corpus: guest_print_test: fail: expected pass
+kvm-corpus: hardware_disable_test: fail: expected pass
+kvm-corpus: kvm_binary_stats_test: skip: expected pass
+kvm-corpus: kvm_create_max_vcpus: pass: as expected
+kvm-corpus: kvm_page_table_test: fail: expected pass
+kvm-corpus: max_guest_memory_test: fail: expected pass
+kvm-corpus: memslot_modification_stress_test: fail: expected pass
+kvm-corpus: memslot_perf_test: fail: expected pass
+kvm-corpus: pre_fault_memory_test: skip: expected pass
+kvm-corpus: rseq_test: fail: expected pass
+kvm-corpus: set_memory_region_test: fail: expected pass
+kvm-corpus: steal_time: fail: expected pass
+kvm-corpus: system_counter_offset_test: fail: expected pass
+kvm-corpus: x86_64/amx_test: fail: expected skip
+kvm-corpus: x86_64/apic_bus_clock_test: skip: expected pass
+kvm-corpus: x86_64/cpuid_test: fail: expected pass
+kvm-corpus: x86_64/cr4_cpuid_sync_test: fail: expected pass
+kvm-corpus: x86_64/debug_regs: skip: expected pass
+kvm-corpus: x86_64/dirty_log_page_splitting_test: skip: as expected
+kvm-corpus: x86_64/exit_on_emulation_failure_test: skip: expected pass
+kvm-corpus: x86_64/fix_hypercall_test: skip: expected pass
+kvm-corpus: x86_64/get_msr_index_features: pass: as expected
+kvm-corpus: x86_64/hwcr_msr_test: fail: expected pass
+kvm-corpus: x86_64/hyperv_clock: skip: expected pass
+kvm-corpus: x86_64/hyperv_cpuid: fail: expected pass
+kvm-corpus: x86_64/hyperv_evmcs: skip: as expected
+kvm-corpus: x86_64/hyperv_extended_hypercalls: fail: expected pass
+kvm-corpus: x86_64/hyperv_features: fail: expected pass
+kvm-corpus: x86_64/hyperv_ipi: fail: expected pass
+kvm-corpus: x86_64/hyperv_tlb_flush: fail: expected pass
+kvm-corpus: x86_64/kvm_clock_test: skip: expected pass
+kvm-corpus: x86_64/kvm_pv_test: skip: expected pass
+kvm-corpus: x86_64/max_vcpuid_cap_test: fail: expected pass
+kvm-corpus: x86_64/monitor_mwait_test: skip: as expected
+kvm-corpus: x86_64/nx_huge_pages_test: skip: as expected
+kvm-corpus: x86_64/platform_info_test: skip: expected pass
+kvm-corpus: x86_64/private_mem_conversions_test: skip: as expected
+kvm-corpus: x86_64/private_mem_kvm_exits_test: skip: as expected
+kvm-corpus: x86_64/recalc_apic_map_test: fail: expected pass
+kvm-corpus: x86_64/set_boot_cpu_id: fail: expected pass
+kvm-corpus: x86_64/set_sregs_test: fail: expected pass
+kvm-corpus: x86_64/sev_init2_tests: skip: as expected
+kvm-corpus: x86_64/sev_migrate_tests: skip: as expected
+kvm-corpus: x86_64/sev_smoke_test: skip: as expected
+kvm-corpus: x86_64/smaller_maxphyaddr_emulation_test: skip: as expected
+kvm-corpus: x86_64/smm_test: skip: expected pass
+kvm-corpus: x86_64/state_test: fail: expected pass
+kvm-corpus: x86_64/sync_regs_test: skip: expected pass
+kvm-corpus: x86_64/triple_fault_event_test: skip: expected pass
+kvm-corpus: x86_64/tsc_msrs_test: fail: expected pass
+kvm-corpus: x86_64/tsc_scaling_sync: skip: expected pass
+kvm-corpus: x86_64/ucna_injection_test: fail: expected skip
+kvm-corpus: x86_64/userspace_io_test: fail: expected pass
+kvm-corpus: x86_64/userspace_msr_exit_test: fail: expected pass
+kvm-corpus: x86_64/xapic_ipi_test: fail: expected pass
+kvm-corpus: x86_64/xapic_state_test: fail: expected pass
+kvm-corpus: x86_64/xcr0_cpuid_test: fail: expected pass
+kvm-corpus: x86_64/xen_shinfo_test: skip: as expected
+kvm-corpus: x86_64/xen_vmcall_test: skip: as expected
+kvm-corpus: x86_64/xss_msr_test: fail: expected pass
+kvm-corpus: result: fail: 51 of 66: coalesced_io_test demand_paging_test dirty_log_perf_test dirty_log_test guest_memfd_test guest_print_test hardware_disable_test kvm_binary_stats_test kvm_page_table_test max_guest_memory_test memslot_modification_stress_test memslot_perf_test pre_fault_memory_test rseq_test set_memory_region_test steal_time system_counter_offset_test x86_64/amx_test x86_64/apic_bus_clock_test x86_64/cpuid_test x86_64/cr4_cpuid_sync_test x86_64/debug_regs x86_64/exit_on_emulation_failure_test x86_64/fix_hypercall_test x86_64/hwcr_msr_test x86_64/hyperv_clock x86_64/hyperv_cpuid x86_64/hyperv_extended_hypercalls x86_64/hyperv_features x86_64/hyperv_ipi x86_64/hyperv_tlb_flush x86_64/kvm_clock_test x86_64/kvm_pv_test x86_64/max_vcpuid_cap_test x86_64/platform_info_test x86_64/recalc_apic_map_test x86_64/set_boot_cpu_id x86_64/set_sregs_test x86_64/smm_test x86_64/state_test x86_64/sync_regs_test x86_64/triple_fault_event_test x86_64/tsc_msrs_test x86_64/tsc_scaling_sync x86_64/ucna_injection_test x86_64/userspace_io_test x86_64/userspace_msr_exit_test x86_64/xapic_ipi_test x86_64/xapic_state_test x86_64/xcr0_cpuid_test x86_64/xss_msr_test
