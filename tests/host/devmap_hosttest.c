@@ -28,7 +28,8 @@
  * reference goes with the last region, once; a zap unmaps a range of an
  * object's pages in every address space and no other object's, after which
  * a moved page faults in at its new frame and a revoked one raises SIGBUS
- * with BUS_ADRERR at the address, from the page fault handler.
+ * with BUS_ADRERR at the address, from the page fault handler; and
+ * paging_access reaches a device region through its object's `access`.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -385,6 +386,8 @@ struct obj {
     int refs;                   /* references the mappings hold */
     int puts;                   /* `put` calls */
     int revoked;
+    uint64_t access_at; /* the offset of the last `access` */
+    int accesses;       /* `access` calls */
 };
 
 /** The object's page `pgoff`, or -1 past its end or once revoked. */
@@ -408,7 +411,24 @@ static void obj_put(void *o)
     ob->puts++;
 }
 
-static const struct vm_device_ops obj_ops = {obj_page, obj_put};
+/** ptrace's reach into the object: a read gives 0x5a, a write is counted;
+ * the device range refuses with -ENXIO. */
+static int obj_access(void *o, uint64_t offset, void *buf, uint32_t len, int write)
+{
+    struct obj *ob = o;
+
+    ob->access_at = offset;
+    ob->accesses++;
+    if (ob->revoked) {
+        return -ENXIO;
+    }
+    if (!write) {
+        k_memset(buf, 0x5a, len);
+    }
+    return 0;
+}
+
+static const struct vm_device_ops obj_ops = {obj_page, obj_put, obj_access};
 
 static struct obj dev_obj, ram_obj;
 
@@ -514,6 +534,34 @@ static void fault_rows(void)
     vma.type = VM_FILE;
     check(vm_device_map(&vma, &obj_ops, &dev_obj, 0) == -EINVAL && vma.file == NULL,
           "a private mapping of device memory is refused");
+}
+
+/**
+ * paging_access, ptrace's and /proc/PID/mem's reach, goes through the
+ * object's `access` at the byte of the object, a page at a time, and its
+ * error is EIO.
+ */
+static void access_rows(void)
+{
+    uint8_t buf[16];
+    uint32_t i;
+    int ok = 1;
+
+    k_memset(buf, 0, sizeof(buf));
+    check(paging_access(&mm_a, VA_RAM + 2 * PAGE_SIZE + 8, buf, 8, 0) == 0 &&
+              ram_obj.accesses == 1 && ram_obj.access_at == 2 * PAGE_SIZE + 8,
+          "a peek at a device region asks its object at the byte of the object");
+    for (i = 0; i < 8; i++) {
+        ok &= buf[i] == 0x5a;
+    }
+    check(ok && buf[8] == 0, "the peek gives the object's bytes");
+    check(paging_access(&mm_a, VA_RAM + PAGE_SIZE - 4, buf, 8, 1) == 0 && ram_obj.accesses == 3 &&
+              ram_obj.access_at == PAGE_SIZE,
+          "a poke across a page asks once a page");
+    dev_obj.revoked = 1;
+    check(paging_access(&mm_a, VA_DEV, buf, 4, 0) == -EIO && dev_obj.accesses == 1,
+          "the object's refusal is EIO");
+    dev_obj.revoked = 0;
 }
 
 /**
@@ -654,6 +702,7 @@ int main(void)
     _kernel_dir = &dir_a;
 
     fault_rows();
+    access_rows();
     fork_rows();
     zap_rows();
     exit_rows();

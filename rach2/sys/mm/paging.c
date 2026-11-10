@@ -940,11 +940,28 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
     return 0;
 }
 
+/** `access_page` for the device region `vma`, whose page tables may not
+ * reach its bytes: through its object's `access`, as Linux's
+ * __access_remote_vm calls the region's, with the file held across it,
+ * since it may sleep. 0, -ENOMEM, or -EIO for any other refusal. */
+static int access_device(const vma_t *vma, uintptr_t addr, uint8_t *p, uint32_t len, int write)
+{
+    struct vm_file *f = vma->file;
+    int rc;
+
+    vm_file_get(f);
+    rc = vm_device_access(f, ((uint64_t)vma->pgoff << PAGE_SHIFT) + (uint64_t)(addr - vma->start),
+                          p, len, write);
+    vm_file_put(f);
+    return rc == 0 ? 0 : (rc == -ENOMEM ? -ENOMEM : -EIO);
+}
+
 /** One page's part of `paging_access`: `len` bytes at `addr`, within one
- * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. The
- * resolution and, for a write, the balance of memory before a copy may
- * sleep, so the region is looked up again after them, and the page must
- * still be present in a region that allows some access. */
+ * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. A
+ * device region's bytes go through `access_device`. The resolution and,
+ * for a write, the balance of memory before a copy may sleep, so the
+ * region is looked up again after them, and the page must still be present
+ * in a region that allows some access. */
 static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
 {
     const vma_t *vma = vm_find(&mm->vm, addr);
@@ -952,7 +969,13 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
 
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD))) {
+        (vma->prot & VM_PROT_GUARD)) {
+        return -EIO;
+    }
+    if (vm_device_object(vma->file)) {
+        return access_device(vma, addr, p, len, write);
+    }
+    if (vma->prot & VM_PROT_IO) {
         return -EIO;
     }
     if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {

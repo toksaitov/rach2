@@ -65,7 +65,7 @@ Other values that differ:
 * `paging.h`: frames (`alloc_frame`, `alloc_user_frame`, `alloc_kernel_frame` for the DMA pool, `frame_ref`, `frame_unref`, `frame_pin`, `frame_unpin`, `frame_free_count`), kernel mappings (`map_mmio`, `mmio_map`, `mmio_unmap`, `mmio_page_size`, `mmio_usage`, `map_kernel_frame`, `premap_kernel_window`, `kmap_temp`), `mem_lock_room`, the check against `RLIMIT_MEMLOCK`, and user pages (`map_user_frame`, `unmap_user_range`, `paging_protect_range`, `paging_fork_copy`, `vm_prefault_range`, `vm_resident`, `paging_access`, and `paging_zap_device`, which unmaps a device object's pages in every address space). [The architectures' Readme](../arch/Readme.md) lists what each `mmu.c` defines under this header.
 * `kheap.h`: `kmalloc`, `kzalloc` and `kfree`; `kalloc_pages`, `kalloc_cache_page` and `kfree_pages` for whole pages; `kalloc_guarded` and `kfree_guarded`.
 * `usercopy.h`: `copy_from_user`, `copy_to_user`, `strncpy_from_user`, `strnlen_user`, `get_user_u32` and `cmpxchg_user_u32`, through which a system call reaches a pointer marked `__user` (`sys/lib/kuser.h`), and `user_window_open` and `user_window_close`.
-* `mm.h` and `vm.h`: the address space, `struct mm`, and its regions, `vm_space_t`; `vm_device_map`, by which a driver's `mmap` operation gives a region a device object's pages, and `struct vm_device_ops`, what the object does for the mapping.
+* `mm.h` and `vm.h`: the address space, `struct mm`, and its regions, `vm_space_t`; `vm_device_map`, by which a driver's `mmap` operation gives a region a device object's pages, and `struct vm_device_ops`, what the object does for the mapping; `vm_device_access` reads and writes the object for `paging_access`.
 * `filemap.h` and `shmem.h`: the files `mmap` maps, the calls a file's descriptors make so that the file and its shared mappings agree, and a file's bytes kept in frames.
 * `pin.h`: `pin_user` and `pin_frames`, which hold a user range's frames or a driver's own for a device, and `unpin`.
 * `notify.h`: `mmn_register`, `mmn_unregister` and `mmn_notify`, the change notice a driver registers a range of an address space on.
@@ -190,7 +190,7 @@ A new frame is filled or zeroed before it is mapped, since a thread on another p
 
 `paging_protect_range` gives the resident pages of a range `mprotect`'s protection: no access makes a page `PTE_NONE`; read-only clears the write bit; write sets it on a page of a shared region or one this address space alone has, and makes any other page copy-on-write.
 
-`paging_access`, for ptrace and `/proc/PID/mem`, reaches another address space's pages through temporary mappings, bringing in a missing page as a fault would. A write to a private page another address space shares gives this one a copy with the same rights (`page_private`), so a breakpoint written into text leaves the text read-only, as Linux's `FOLL_FORCE` does.
+`paging_access`, for ptrace and `/proc/PID/mem`, reaches another address space's pages through temporary mappings, bringing in a missing page as a fault would. A write to a private page another address space shares gives this one a copy with the same rights (`page_private`), so a breakpoint written into text leaves the text read-only, as Linux's `FOLL_FORCE` does. A device region's bytes, which its page tables may not reach, go through its object's `access` (`vm_device_access`), as Linux's `__access_remote_vm` calls the region's `access`, and an object without one is EIO.
 
 ### The mapping calls
 

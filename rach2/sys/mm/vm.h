@@ -118,11 +118,16 @@ struct vm_file {
  * or -1 when the object has no page there now, past its end, revoked or
  * gone with its device, and the access then raises SIGBUS as on Linux. It
  * may sleep. `put` drops the reference to the object that the mapping
- * held. Called under the big kernel lock.
+ * held. `access`, or NULL, reads or writes `len` bytes at the byte
+ * `offset` of the object for ptrace and /proc/PID/mem, which cannot reach
+ * a device region's pages by its page tables, as Linux's
+ * vm_operations_struct's `access`; it returns 0 or a negative errno. Called
+ * under the big kernel lock.
  */
 struct vm_device_ops {
     int (*page)(void *obj, uint32_t pgoff, uintptr_t *phys);
     void (*put)(void *obj);
+    int (*access)(void *obj, uint64_t offset, void *buf, uint32_t len, int write);
 };
 
 /* A single virtual memory area: [start, end) page-aligned. A region that
@@ -260,6 +265,11 @@ long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *
 /** The object a device region's file `f` maps (`vm_device_map`), or NULL
  * when `f` is NULL or no device's. */
 void *vm_device_object(const struct vm_file *f);
+
+/** Read or write `len` bytes at the byte `offset` of the object a device
+ * region's file `f` maps, through its `access`: 0, its error, or -EIO when
+ * `f` is no device's or its object has no `access`. May sleep. */
+int vm_device_access(struct vm_file *f, uint64_t offset, void *buf, uint32_t len, int write);
 
 /** Take a reference to `f`; NULL is ignored. */
 void vm_file_get(struct vm_file *f);

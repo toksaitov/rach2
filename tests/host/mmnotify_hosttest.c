@@ -211,7 +211,7 @@ static void dev_put(void *obj)
     (void)obj;
 }
 
-static const struct vm_device_ops dev_ops = {dev_page, dev_put};
+static const struct vm_device_ops dev_ops = {dev_page, dev_put, NULL};
 
 /** A fork's write-protection, a write's copy and a device's taking back of
  * its pages are told. */

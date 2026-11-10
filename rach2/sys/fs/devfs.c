@@ -1180,7 +1180,7 @@ static void dev_mem_put(void *obj)
     (void)obj;
 }
 
-static const struct vm_device_ops dev_mem_vm_ops = {dev_mem_page, dev_mem_put};
+static const struct vm_device_ops dev_mem_vm_ops = {dev_mem_page, dev_mem_put, NULL};
 
 /**
  * mmap of /dev/mem: a shared mapping of the frames from the page offset,

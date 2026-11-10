@@ -200,7 +200,7 @@ static void host_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put};
+static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put, NULL};
 
 /**
  * The `mmap` of a blob of host memory, Linux's virtio_gpu_vram_mmap: the
