@@ -1863,7 +1863,10 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 # `tests/run large`: a file of 256 MiB on ext2 and on exFAT, written, read
 # back after a remount, sought, sized, truncated, appended and shared between
 # two descriptors, a mebibyte written astride the 4 GiB line of a sparse ext2
-# file, and a write past each format's limit refused by name. They are the
+# file, a write past each format's limit refused by name, and an ext2 file of
+# 256 MiB read twice with no disk read the second time, and a small file
+# changed every way a file can be between two reads that each see the
+# change. They are the
 # machine cases of tests/cases/machine.large.json, which etude runs, and have
 # no target here. The exFAT volume comes from the host's own formatter.
 # `tests/run punch`: large files freed on an ext2 volume beside allocation,
