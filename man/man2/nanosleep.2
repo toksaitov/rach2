@@ -35,7 +35,8 @@ read at the call, has advanced by the interval: a tick the timer lost
 while the processor could not take it leaves the tick count behind that
 clock, which keeps its last reading, and the sleep then waits for the count
 to catch up.
-A zero interval returns at once.
+A zero relative interval blocks until the next tick, giving other
+runnable threads time to execute, as Linux's timed wait does.
 .Pp
 Once the deadline tick has come, and the clock has advanced by the
 interval, the call returns 0 even if a signal is pending; a pending signal
