@@ -1,0 +1,219 @@
+[    5.208000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 523256 entries to the scratch page, 1032 kept
+[    5.222000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+[    5.230000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+[    5.244000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+[    5.252000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+[    5.252000] pci: msi: 0:2.0 on vector 53, remapped
+[    5.252000] i915: interrupts: messages on vector 53
+[    5.260000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+[    5.267000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fdf0000
+[    5.275000] i915: rings: rcs0 and bcs0 started: 16 KiB each at 0x7fffb000 and 0x7fff6000, status pages at 0x7ffff000 and 0x7fffa000
+[    5.292000] i915: pcode: read of command 0x5: error -6
+[    5.292000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+[    5.308000] i915: display: disabled by rach2.i915.disable_display; the firmware's framebuffer stays
+[    5.326000] drm: i915: card0
+[    5.334000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+[    5.343000] drm: simpledrm: card1
+[    5.351000] console: card1: the firmware's framebuffer
+[    5.359000] fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 1
+[    5.367000] kvm: ready: vmx
+[    5.376000] vfio: ready: 12 groups of 14 functions
+[    5.716000] timing: tick 1000 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2012 us
+[    5.725000] clock: reference: the hpet; a tick the timer misses or delays is counted
+[    5.745000] smp: cpu1: tsc: synchronized with cpu0
+[    5.770000] smp: cpu2: tsc: synchronized with cpu0
+[    5.794000] smp: cpu3: tsc: synchronized with cpu0
+[    5.806000] smp: processors: 4 online of 4
+[    5.816000] vdso: clock: the tsc, 1895613 counts a tick
+[    5.833000] boot: starting /sbin/init
+[    5.836000] acpi: thread: kacpid is pid 2
+[    5.836000] wlan: worker: kwlan is pid 3
+[    5.836000] mouse: worker: kpsmoused is pid 4
+[    5.838000] input: sysfs: worker: kinputd is pid 5
+[    8.136000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+[    9.098000] net: eth0: IPv4 192.168.0.106/24
+[    9.388000] vm: fault: killing pid 47: bad read at 0x58 (err 0x4)
+[   10.219000] net: eth0: IPv6 fd91:381e:e667:4a0c:21a0:ca08:6d76:a0d4/64 added
+[   10.219000] net: eth0: IPv6 fd91:381e:e667:4a0c:bee3:f704:21f3:2a6d/64 added
+[   12.470000] console: card1: handed to a master, the keyboard off
+[   14.404000] vm: fault: killing pid 116: bad read at 0x58 (err 0x4)
+[   19.414000] vm: fault: killing pid 122: bad read at 0x58 (err 0x4)
+[   24.424000] vm: fault: killing pid 139: bad read at 0x58 (err 0x4)
+[   29.436000] vm: fault: killing pid 140: bad read at 0x58 (err 0x4)
+[   34.449000] vm: fault: killing pid 141: bad read at 0x58 (err 0x4)
+[   39.461000] vm: fault: killing pid 142: bad read at 0x58 (err 0x4)
+[   41.750000] i915: worker: ki915 is pid 151
+[   44.474000] vm: fault: killing pid 160: bad read at 0x58 (err 0x4)
+[   49.485000] vm: fault: killing pid 161: bad read at 0x58 (err 0x4)
+[   54.494000] vm: fault: killing pid 172: bad read at 0x58 (err 0x4)
+[   59.504000] vm: fault: killing pid 184: bad read at 0x58 (err 0x4)
+[   64.514000] vm: fault: killing pid 221: bad read at 0x58 (err 0x4)
+[   69.526000] vm: fault: killing pid 285: bad read at 0x58 (err 0x4)
+[   74.538000] vm: fault: killing pid 286: bad read at 0x58 (err 0x4)
+[   79.551000] vm: fault: killing pid 360: bad read at 0x58 (err 0x4)
+[   84.562000] vm: fault: killing pid 487: bad read at 0x58 (err 0x4)
+[   89.574000] vm: fault: killing pid 542: bad read at 0x58 (err 0x4)
+[   94.585000] vm: fault: killing pid 543: bad read at 0x58 (err 0x4)
+[   99.607000] vm: fault: killing pid 604: bad read at 0x58 (err 0x4)
+[  104.619000] vm: fault: killing pid 706: bad read at 0x58 (err 0x4)
+[  109.648000] vm: fault: killing pid 713: bad read at 0x58 (err 0x4)
+[  112.344000] vm: fault: killing pid 718: bad read at 0x58 (err 0x4)
+[  114.658000] vm: fault: killing pid 721: bad read at 0x58 (err 0x4)
+[  119.667000] vm: fault: killing pid 722: bad read at 0x58 (err 0x4)
+[  160.726000] vm: fault: killing pid 881: bad read at 0x58 (err 0x4)
+[  160.740000] vm: fault: killing pid 883: bad read at 0x58 (err 0x4)
+[  165.800000] vm: fault: killing pid 930: bad read at 0x58 (err 0x4)
+[  170.866000] vm: fault: killing pid 936: bad read at 0x58 (err 0x4)
+[  175.889000] vm: fault: killing pid 941: bad read at 0x58 (err 0x4)
+[  180.900000] vm: fault: killing pid 961: bad read at 0x58 (err 0x4)
+[  186.393000] vm: fault: killing pid 1030: bad read at 0x58 (err 0x4)
+[  192.940000] vm: fault: killing pid 1073: bad read at 0x58 (err 0x4)
+[  200.177000] vm: fault: killing pid 1092: bad read at 0x58 (err 0x4)
+[  202.475000] vm: fault: killing pid 1097: bad read at 0x58 (err 0x4)
+[  204.996000] vm: fault: killing pid 1102: bad read at 0x58 (err 0x4)
+[  207.654000] vm: fault: killing pid 1107: bad read at 0x58 (err 0x4)
+[  210.359000] vm: fault: killing pid 1110: bad read at 0x58 (err 0x4)
+[  213.228000] vm: fault: killing pid 1113: bad read at 0x58 (err 0x4)
+[  213.301000] vm: fault: killing pid 1114: bad read at 0x58 (err 0x4)
+[  219.319000] vm: fault: killing pid 1157: bad read at 0x58 (err 0x4)
+[  225.518000] vm: fault: killing pid 1172: bad read at 0x58 (err 0x4)
+[  226.781000] vm: fault: killing pid 1176: bad read at 0x58 (err 0x4)
+[  231.954000] vm: fault: killing pid 1191: bad read at 0x58 (err 0x4)
+[  237.782000] vm: fault: killing pid 1192: bad read at 0x58 (err 0x4)
+[  243.934000] vm: fault: killing pid 1193: bad read at 0x58 (err 0x4)
+[  250.016000] vm: fault: killing pid 1195: bad read at 0x58 (err 0x4)
+[  255.570000] vm: fault: killing pid 1196: bad read at 0x58 (err 0x4)
+[  260.752000] vm: fault: killing pid 1204: bad read at 0x58 (err 0x4)
+[  265.948000] vm: fault: killing pid 1207: bad read at 0x58 (err 0x4)
+[  271.145000] vm: fault: killing pid 1208: bad read at 0x58 (err 0x4)
+[  276.262000] vm: fault: killing pid 1221: bad read at 0x58 (err 0x4)
+[  281.276000] vm: fault: killing pid 1229: bad read at 0x58 (err 0x4)
+[  286.288000] vm: fault: killing pid 1234: bad read at 0x58 (err 0x4)
+[  291.336000] vm: fault: killing pid 1239: bad read at 0x58 (err 0x4)
+[  296.355000] vm: fault: killing pid 1242: bad read at 0x58 (err 0x4)
+[  301.373000] vm: fault: killing pid 1255: bad read at 0x58 (err 0x4)
+[  306.386000] vm: fault: killing pid 1256: bad read at 0x58 (err 0x4)
+[  311.407000] vm: fault: killing pid 1257: bad read at 0x58 (err 0x4)
+[  316.433000] vm: fault: killing pid 1266: bad read at 0x58 (err 0x4)
+[  321.451000] vm: fault: killing pid 1267: bad read at 0x58 (err 0x4)
+[  326.777000] vm: fault: killing pid 1280: bad read at 0x58 (err 0x4)
+[  331.798000] vm: fault: killing pid 1281: bad read at 0x58 (err 0x4)
+[  336.812000] vm: fault: killing pid 1282: bad read at 0x58 (err 0x4)
+[  341.825000] vm: fault: killing pid 1283: bad read at 0x58 (err 0x4)
+[  346.840000] vm: fault: killing pid 1284: bad read at 0x58 (err 0x4)
+[  351.852000] vm: fault: killing pid 1285: bad read at 0x58 (err 0x4)
+[  356.921000] vm: fault: killing pid 1296: bad read at 0x58 (err 0x4)
+[  361.948000] vm: fault: killing pid 1301: bad read at 0x58 (err 0x4)
+[  366.962000] vm: fault: killing pid 1302: bad read at 0x58 (err 0x4)
+[  371.977000] vm: fault: killing pid 1303: bad read at 0x58 (err 0x4)
+[  376.992000] vm: fault: killing pid 1304: bad read at 0x58 (err 0x4)
+[  382.027000] vm: fault: killing pid 2157: bad read at 0x58 (err 0x4)
+[  387.080000] vm: fault: killing pid 2682: bad read at 0x58 (err 0x4)
+[  392.126000] vm: fault: killing pid 2999: bad read at 0x58 (err 0x4)
+[  397.156000] vm: fault: killing pid 4024: bad read at 0x58 (err 0x4)
+[  402.184000] vm: fault: killing pid 5095: bad read at 0x58 (err 0x4)
+[  407.195000] vm: fault: killing pid 5293: bad read at 0x58 (err 0x4)
+[  412.721000] vm: fault: killing pid 5712: bad read at 0x58 (err 0x4)
+[  417.863000] vm: fault: killing pid 6083: bad read at 0x58 (err 0x4)
+[  424.032000] vm: fault: killing pid 6084: bad read at 0x58 (err 0x4)
+[  432.837000] vm: fault: killing pid 6085: bad read at 0x58 (err 0x4)
+[  436.651000] vm: fault: killing pid 6086: bad read at 0x58 (err 0x4)
+[  441.391000] vm: fault: killing pid 6087: bad read at 0x58 (err 0x4)
+[  446.504000] vm: fault: killing pid 6088: bad read at 0x58 (err 0x4)
+[  450.010000] vm: fault: killing pid 6089: bad read at 0x58 (err 0x4)
+[  450.105000] vm: fault: killing pid 6090: bad read at 0x58 (err 0x4)
+[  477.791000] vm: fault: killing pid 6097: bad read at 0x58 (err 0x4)
+[  490.884000] vm: fault: killing pid 6099: bad read at 0x58 (err 0x4)
+[  546.524000] vm: fault: killing pid 6111: bad read at 0x58 (err 0x4)
+[  575.042000] vm: fault: killing pid 6113: bad read at 0x58 (err 0x4)
+[  611.761000] vm: fault: killing pid 6125: bad read at 0x58 (err 0x4)
+[  611.773000] vm: fault: killing pid 6126: bad read at 0x58 (err 0x4)
+[  616.955000] vm: fault: killing pid 6135: bad read at 0x58 (err 0x4)
+[  621.975000] vm: fault: killing pid 6152: bad read at 0x58 (err 0x4)
+[  626.988000] vm: fault: killing pid 6173: bad read at 0x58 (err 0x4)
+[  632.016000] vm: fault: killing pid 6183: bad read at 0x58 (err 0x4)
+[  637.050000] vm: fault: killing pid 6190: bad read at 0x58 (err 0x4)
+[  642.077000] vm: fault: killing pid 6191: bad read at 0x58 (err 0x4)
+[  647.098000] vm: fault: killing pid 6192: bad read at 0x58 (err 0x4)
+[  652.117000] vm: fault: killing pid 6193: bad read at 0x58 (err 0x4)
+[  657.132000] vm: fault: killing pid 6194: bad read at 0x58 (err 0x4)
+[  662.153000] vm: fault: killing pid 6204: bad read at 0x58 (err 0x4)
+[  667.168000] vm: fault: killing pid 6236: bad read at 0x58 (err 0x4)
+[  672.183000] vm: fault: killing pid 6263: bad read at 0x58 (err 0x4)
+[  677.194000] vm: fault: killing pid 6283: bad read at 0x58 (err 0x4)
+[  678.759000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 142 of 143, ACTHD 0x2226ae6c, was 0x2226a9f8
+[  678.759000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195551 of 195552, ACTHD 0x2a2e197c, was 0x2a2e1224
+[  678.759000] i915: hang: GPU HANG: ecode 7:1:fd57ffff, in gem_create [6281]
+[  678.759000] i915: reset: the chip for stopped heartbeat on rcs0
+[  678.759000] i915: reset: gem_create[6281] context reset due to GPU hang
+[  682.204000] vm: fault: killing pid 6284: bad read at 0x58 (err 0x4)
+[  683.759000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195551 of 195552, ACTHD 0x2a2e1d54, was 0x2a2e1ae4
+[  683.759000] i915: hang: GPU HANG: ecode 7:2:fffffff3, in gem_create [6281]
+[  683.759000] i915: reset: the chip for stopped heartbeat on bcs0
+[  683.759000] i915: reset: gem_create[6281] context reset due to GPU hang
+[  683.759000] i915: reset: client gem_create[6281]: gained 1 ban score, now 1
+[  687.217000] vm: fault: killing pid 6297: bad read at 0x58 (err 0x4)
+[  688.760000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 168 of 169, ACTHD 0x2d9406a0, was 0x2d9403c4
+[  688.760000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195577 of 195578, ACTHD 0x2a6a8aec, was 0x2a6a8c10
+[  688.760000] i915: hang: GPU HANG: ecode 7:1:fd57ffff, in gem_create [6281]
+[  688.760000] i915: reset: the chip for stopped heartbeat on rcs0
+[  688.760000] i915: reset: gem_create[6281] context reset due to GPU hang
+[  688.760000] i915: reset: context gem_create[6281]: guilty 3, banned
+[  688.760000] i915: reset: client gem_create[6281]: gained 4 ban score, now 5
+[  692.230000] vm: fault: killing pid 6298: bad read at 0x58 (err 0x4)
+[  693.761000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195577 of 195578, ACTHD 0x2a6a8244, was 0x2a6a8e80
+[  693.761000] i915: hang: GPU HANG: ecode 7:2:fffffff3, in gem_create [6281]
+[  693.761000] i915: reset: the chip for stopped heartbeat on bcs0
+[  693.761000] i915: reset: gem_create[6281] context reset due to GPU hang
+[  693.761000] i915: reset: context gem_create[6281]: guilty 4, banned
+[  693.761000] i915: reset: client gem_create[6281]: gained 4 ban score, now 9
+[  697.242000] vm: fault: killing pid 6301: bad read at 0x58 (err 0x4)
+[  699.011000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 194 of 195, ACTHD 0x2ae74ccc, was 0x2ae74e48
+[  699.011000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195603 of 195604, ACTHD 0x2ee9b920, was 0x2ee9ba68
+[  699.011000] i915: hang: GPU HANG: ecode 7:1:e757feff, in gem_create [6299]
+[  699.011000] i915: reset: the chip for stopped heartbeat on rcs0
+[  699.011000] i915: reset: gem_create[6299] context reset due to GPU hang
+[  702.255000] vm: fault: killing pid 6302: bad read at 0x58 (err 0x4)
+[  704.012000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195603 of 195604, ACTHD 0x2ee9bacc, was 0x2ee9b0a4
+[  704.012000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_create [6299]
+[  704.012000] i915: reset: the chip for stopped heartbeat on bcs0
+[  704.012000] i915: reset: gem_create[6299] context reset due to GPU hang
+[  704.012000] i915: reset: client gem_create[6299]: gained 1 ban score, now 1
+[  707.268000] vm: fault: killing pid 6303: bad read at 0x58 (err 0x4)
+[  709.014000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 220 of 221, ACTHD 0x2c1b9a00, was 0x2c1b9d14
+[  709.014000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195629 of 195630, ACTHD 0x26a1d844, was 0x26a1ddb8
+[  709.014000] i915: hang: GPU HANG: ecode 7:1:e757feff, in gem_create [6299]
+[  709.014000] i915: reset: the chip for stopped heartbeat on rcs0
+[  709.014000] i915: reset: gem_create[6299] context reset due to GPU hang
+[  709.014000] i915: reset: context gem_create[6299]: guilty 3, banned
+[  709.014000] i915: reset: client gem_create[6299]: gained 4 ban score, now 5
+[  712.281000] vm: fault: killing pid 6304: bad read at 0x58 (err 0x4)
+[  714.014000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 195629 of 195630, ACTHD 0x26a1d450, was 0x26a1d7b0
+[  714.014000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_create [6299]
+[  714.014000] i915: reset: the chip for stopped heartbeat on bcs0
+[  714.014000] i915: reset: gem_create[6299] context reset due to GPU hang
+[  714.014000] i915: reset: context gem_create[6299]: guilty 4, banned
+[  714.014000] i915: reset: client gem_create[6299]: gained 4 ban score, now 9
+[  717.294000] vm: fault: killing pid 6312: bad read at 0x58 (err 0x4)
+[  722.305000] vm: fault: killing pid 6313: bad read at 0x58 (err 0x4)
+[  727.315000] vm: fault: killing pid 6314: bad read at 0x58 (err 0x4)
+[  732.325000] vm: fault: killing pid 6315: bad read at 0x58 (err 0x4)
+[  737.337000] vm: fault: killing pid 6316: bad read at 0x58 (err 0x4)
+[  742.350000] vm: fault: killing pid 6317: bad read at 0x58 (err 0x4)
+[  747.360000] vm: fault: killing pid 6330: bad read at 0x58 (err 0x4)
+[  752.373000] vm: fault: killing pid 6331: bad read at 0x58 (err 0x4)
+[  757.386000] vm: fault: killing pid 6342: bad read at 0x58 (err 0x4)
+[  762.399000] vm: fault: killing pid 6343: bad read at 0x58 (err 0x4)
+[  767.416000] vm: fault: killing pid 6351: bad read at 0x58 (err 0x4)
+[  772.431000] vm: fault: killing pid 6357: bad read at 0x58 (err 0x4)
+[  777.489000] vm: fault: killing pid 6396: bad read at 0x58 (err 0x4)
+[  782.821000] vm: fault: killing pid 6446: bad read at 0x58 (err 0x4)
+[  787.932000] vm: fault: killing pid 6500: bad read at 0x58 (err 0x4)
+[  793.002000] vm: fault: killing pid 6562: bad read at 0x58 (err 0x4)
+[  798.044000] vm: fault: killing pid 6622: bad read at 0x58 (err 0x4)
+[  803.173000] vm: fault: killing pid 6689: bad read at 0x58 (err 0x4)
+[  808.186000] vm: fault: killing pid 6749: bad read at 0x58 (err 0x4)
+[  813.197000] vm: fault: killing pid 6750: bad read at 0x58 (err 0x4)
+[  818.208000] vm: fault: killing pid 6751: bad read at 0x58 (err 0x4)
+[  823.219000] vm: fault: killing pid 6758: bad read at 0x58 (err 0x4)
+[  828.230000] vm: fault: killing pid 6759: bad read at 0x58 (err 0x4)
