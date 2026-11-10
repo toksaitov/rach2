@@ -20,6 +20,14 @@ GAME_ID = "2733"
 REFUSED = re.compile(r"Operation not permitted|Function not implemented|Invalid argument|"
                      r"Permission denied|Operation not supported|Bad address|"
                      r"Inappropriate ioctl for device|No such device\b")
+
+
+def refusal(line):
+    """Return LINE of pressure-vessel's log without its time, process ids and
+    temporary names, so that Rach2's lines compare with Linux's."""
+    line = re.sub(r"^[0-9:.]+: ", "", line)
+    line = re.sub(r"\[\d+\]", "[]", line)
+    return re.sub(r"(tmp|\.rach2-game|rach2-games)[-.][A-Za-z0-9]{6}", r"\1-X", line)
 # Wine 11's preloader reserves these ranges for a 64-bit process, which a
 # WoW64 process is too (loader/preloader.c, preload_info): the DOS area, the
 # low memory area, the 32-bit top-down area with the shared user data, and
@@ -315,7 +323,7 @@ class Runner:
         Run the 64-bit Direct3D 9 probe through umu in the Steam Linux Runtime
         and directly, and compare Proton's settings and the pixels. The first
         launch unpacks the runtime; the second must download and unpack nothing.
-        The container's log must hold no refused call.
+        The container's log must hold no refused call that Linux's lacks.
         """
         self.umu = True
         self.make_prefix()
@@ -339,8 +347,10 @@ class Runner:
             shutil.copy(log, self.out / log.name)
             for line in log.read_text(errors="replace").splitlines():
                 if REFUSED.search(line):
-                    refused.append(line)
+                    refused.append(refusal(line))
         results["refused"] = refused
+        linux = set(ref.get("umu_refused", [])) if ref is not None else set()
+        refused = [line for line in refused if line not in linux]
         for line in refused:
             say("umu: refused: %s" % line)
         self.umu = False
@@ -349,7 +359,7 @@ class Runner:
         status, text = self.probe("d3d964", {"WINEDEBUG": "-all,err+all"})
         results["direct"] = dict(self.options("d3d964"), exit=status)
         u, d = results["umu"], results["direct"]
-        want = ref.get("d3d964") if ref is not None else None
+        want = ref["draw"].get("d3d964") if ref is not None else None
         say("umu: runtime %s exit %d crc32 %s linux %s adapter %s options %s fsync %s opengl %s" % (
             u["unpacked"], u["exit"], u["crc32"], want, u["adapter"], u["options"], u["fsync"],
             u["opengl"]))
@@ -400,7 +410,7 @@ def main():
         elif row == "maps":
             ok = runner.row_maps(results, None if ref is None else ref["maps"])
         elif row == "umu":
-            ok = runner.row_umu(results, None if ref is None else ref["draw"])
+            ok = runner.row_umu(results, ref)
         else:
             bits = row.split("-")[1]
             ok = runner.row_draw(bits, results, None if ref is None else ref["draw"])
