@@ -313,9 +313,15 @@ A vector append holds that lock across all its elements;
 another open's append cannot split a record between elements.
 .Dv RWF_HIPRI
 is also accepted.
-The descriptor is checked before the flags, as Linux checks it, and only
-then is another flag
+The descriptor is checked first, then the vector is imported, as Linux does:
+an unreadable list is
+.Er EFAULT ,
+an excessive count or a negative signed length is
+.Er EINVAL ,
+and a vector of no bytes returns zero before flags are checked.
+Only then is another flag
 .Er EOPNOTSUPP .
+The data pages are touched after the flags have been accepted.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes written.
 .Fn writev

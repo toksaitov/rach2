@@ -35,7 +35,7 @@
  * SC_COMPAT, whose registers carry whole 64-bit arguments, a kernel address
  * among them; `in_compat_syscall` still reads the real frame, so a shared
  * reader that picks the i386 layout for an i386 call (`iov_fetch`) does so
- * for the user's own structures, and no window holds such a structure.
+ * for the user's structures and for rwv2's retained copy of its vector.
  * The caller holds the big lock and owns `win` for the call; a null window
  * opens nothing. Returns the handler's result. The handler may sleep.
  */

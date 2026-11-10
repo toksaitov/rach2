@@ -1158,11 +1158,8 @@ static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long p
  * for a count below 0 or past IOV_MAX_LOCAL, -EPERM for a vector the seal
  * refuses, or the error of the first element.
  */
-long sys_writev(isr_params_t *params)
+static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
-    int fd = (int)SC_ARG(params, 0);
-    uintptr_t iov_user = SC_ARG(params, 1);
-    int iovcnt = (int)SC_ARG(params, 2);
     fd_entry_t *entry;
     struct vfs_mount *held;
     int32_t rc;
@@ -1187,6 +1184,12 @@ long sys_writev(isr_params_t *params)
         vfs_ns_unlock(held);
     }
     return rc;
+}
+
+/** writev(2): the descriptor, vector and count in the caller's registers. */
+long sys_writev(isr_params_t *params)
+{
+    return writev((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2));
 }
 
 /* Linux open flags */
@@ -5827,11 +5830,8 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
  * The call stops at the first buffer it does not fill. Returning less than
  * was asked is what a reader must handle, and musl's stdio loops.
  */
-long sys_readv(isr_params_t *params)
+static long readv(int fd, uintptr_t iov_user, int iovcnt)
 {
-    int fd = (int)SC_ARG(params, 0);
-    uintptr_t iov_user = SC_ARG(params, 1);
-    int iovcnt = (int)SC_ARG(params, 2);
     struct kernel_iovec iov;
     fd_entry_t *entry;
     uint32_t wanted = 0;
@@ -5900,6 +5900,12 @@ long sys_readv(isr_params_t *params)
     }
 
     return total;
+}
+
+/** readv(2): the descriptor, vector and count in the caller's registers. */
+long sys_readv(isr_params_t *params)
+{
+    return readv((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2));
 }
 
 /**
@@ -11796,9 +11802,10 @@ out:
 
 /**
  * The descriptor checks of preadv2 and pwritev2, which Linux makes before
- * it reads the flags: -EINVAL for a position below -1, -EBADF for a
- * descriptor `fd` that is not open or not open for the direction `write`
- * names, and at a position other than -1 `pio_entry`'s errors but
+ * it imports the vector: -EINVAL for a position below -1, -EBADF for a
+ * descriptor `fd` that is not open; at another position, -ESPIPE for one
+ * that cannot seek; then -EBADF for the wrong direction. At a position
+ * other than -1 these are `pio_entry`'s errors but
  * -EISDIR, which the read itself answers. 0 with the held entry in
  * `*entry`, NULL for a directory.
  */
@@ -11831,37 +11838,71 @@ static long rwv2_entry(int fd, long long pos, int write, fd_entry_t **entry)
 }
 
 /**
- * preadv2 or pwritev2: -1 uses the shared offset, APPEND places a write at
- * the file's end without changing O_APPEND, and SYNC or DSYNC flushes the
- * write. The descriptor is checked before the flags, as Linux checks it: a
- * position below -1 is -EINVAL, then a descriptor that is not open, or not
- * open for the call's direction, is -EBADF, a descriptor that cannot seek
- * with a position other than -1 is -ESPIPE, and only then is a flag outside
- * the supported set -EOPNOTSUPP. The flush goes to the open file the call
- * holds (`sync_entry`), so a close of the number by another thread while
- * the write sleeps does not lose it. The other arguments and errors are
- * preadv's and pwritev's.
+ * Import `count` vectors from `addr` into `iov`, which holds that many
+ * native elements. As Linux 6.12's import_iovec does, check every signed
+ * length, then every address range, cap the total at MAX_RW_COUNT, and
+ * leave faulting in the data pages to the transfer. Returns the byte count
+ * or -EFAULT/-EINVAL. The result keeps the caller's layout, packed back
+ * into 32-bit pairs for an i386 entry, for iov_fetch to read through a
+ * user-copy window. The caller checks count before allocating iov.
  */
-static long rwv2(isr_params_t *params, int write)
+static long rwv2_import(struct kernel_iovec *iov, uintptr_t addr, int count)
 {
+    uint32_t total = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (iov_fetch(&iov[i], addr, (uint32_t)i) != 0) {
+            return -EFAULT;
+        }
+        if ((long)iov[i].iov_len < 0 || (in_compat_syscall() && iov[i].iov_len > 0x7FFFFFFFu)) {
+            return -EINVAL;
+        }
+    }
+    for (i = 0; i < count; i++) {
+        if (count == 1) {
+            iov[i].iov_len = USER_RW_LEN(iov[i].iov_len);
+        }
+        if (!user_span_ok(iov[i].iov_base, iov[i].iov_len)) {
+            return -EFAULT;
+        }
+        if (iov[i].iov_len > USER_RW_MAX - total) {
+            iov[i].iov_len = USER_RW_MAX - total;
+        }
+        total += (uint32_t)iov[i].iov_len;
+    }
+    if (in_compat_syscall()) {
+        for (i = 0; i < count; i++) {
+            uint32_t pair[2];
+
+            pair[0] = (uint32_t)iov[i].iov_base;
+            pair[1] = (uint32_t)iov[i].iov_len;
+            k_memcpy((uint8_t *)iov + (size_t)i * sizeof(pair), pair, sizeof(pair));
+        }
+    }
+    return (long)total;
+}
+
+/** Transfer the copied vector at `addr`, opened to the user-copy checks,
+ * using the held descriptor `entry` and the arguments of `params`:
+ * APPEND ignores the position, -1 uses the shared position, and a
+ * positive write with SYNC or DSYNC flushes the
+ * description the call holds. Returns the byte count or -errno. */
+static long rwv2_transfer(isr_params_t *params, fd_entry_t *entry, uintptr_t addr, int count,
+                          int write)
+{
+    int fd = (int)SC_ARG(params, 0);
     long long pos = pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3));
     uint32_t flags = (uint32_t)SC_ARG(params, 5);
-    fd_entry_t *entry = NULL;
-    long rc = rwv2_entry((int)SC_ARG(params, 0), pos, write, &entry);
+    long rc;
 
-    if (rc != 0) {
-        return rc;
-    }
-    if (flags & ~(RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_APPEND)) {
-        return -EOPNOTSUPP;
-    }
     if (write && (flags & RWF_APPEND) && entry && entry->type == FD_TYPE_FILE && !entry->ops &&
         entry->ofd && entry->ofd->vmnt) {
-        rc = iov_append(entry, SC_ARG(params, 1), (int)SC_ARG(params, 2), pos);
+        rc = iov_append(entry, addr, count, pos);
     } else if (pos == -1) {
-        rc = write ? sys_writev(params) : sys_readv(params);
+        rc = write ? writev(fd, addr, count) : readv(fd, addr, count);
     } else {
-        rc = write ? sys_pwritev(params) : sys_preadv(params);
+        rc = iov_at(fd, addr, count, pos, write);
     }
     if (rc > 0 && write && entry && (flags & (RWF_DSYNC | RWF_SYNC))) {
         long synced = sync_entry(entry, (flags & RWF_SYNC) ? vfs_fsync : vfs_fdatasync);
@@ -11869,6 +11910,59 @@ static long rwv2(isr_params_t *params, int write)
         if (synced < 0) {
             return synced;
         }
+    }
+    return rc;
+}
+
+/**
+ * preadv2 or pwritev2 in Linux's order: a position below -1 is -EINVAL;
+ * a descriptor not open is -EBADF; at a position other than -1, one that
+ * cannot seek is -ESPIPE; then the wrong direction is -EBADF. Import the
+ * vector next, return zero for no bytes, then refuse unsupported flags
+ * with -EOPNOTSUPP. A data page is faulted in only after those checks.
+ * The vector is kept in the caller's layout and opened to the shared
+ * readv/writev paths, so each reads the same copy across sleeping I/O.
+ * The other arguments and errors are preadv's and pwritev's.
+ */
+static long rwv2(isr_params_t *params, int write)
+{
+    long long pos = pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3));
+    uint32_t flags = (uint32_t)SC_ARG(params, 5);
+    int fd = (int)SC_ARG(params, 0), count = (int)SC_ARG(params, 2);
+    struct kernel_iovec local[8], *iov = local;
+    fd_entry_t *entry = NULL;
+    long rc = rwv2_entry(fd, pos, write, &entry);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (SC_ARG(params, 2) > IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+    if (count > (int)(sizeof(local) / sizeof(local[0]))) {
+        iov = kmalloc((size_t)count * sizeof(*iov));
+        if (!iov) {
+            return -ENOMEM;
+        }
+    }
+    rc = rwv2_import(iov, SC_ARG(params, 1), count);
+    if (rc <= 0) {
+        goto out;
+    }
+    if (pos >= 0 && (uint64_t)rc > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+        rc = -EINVAL;
+        goto out;
+    }
+    if (flags & ~(RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_APPEND)) {
+        rc = -EOPNOTSUPP;
+        goto out;
+    }
+    user_window_open(iov, (uint32_t)((size_t)count * sizeof(*iov)));
+    rc = rwv2_transfer(params, entry, (uintptr_t)iov, count, write);
+    user_window_close();
+out:
+    if (iov != local) {
+        kfree(iov);
     }
     return rc;
 }

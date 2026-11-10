@@ -103,7 +103,7 @@ static const char *const assertion_id[] = {
     "preadv-high-word",
 #endif
     "pwritev-efault",   "vector-refusals", "pwritev2-append",   "preadv2-readback",
-    "rwv2-refusals",    "range-sync"};
+    "rwv2-refusals",    "rwv2-import",     "rwv2-zero",         "range-sync"};
 
 /** Begin the report, give the branch of `arch`, and plan the assertions. */
 static void report_start(void)
@@ -443,6 +443,39 @@ static int seek_refusal_rows(void)
 #define POS_HI(p)                      ((long)((unsigned long long)(p) >> 32))
 #define RWV2(nr, fd, iov, n, p, flags) syscall(nr, fd, iov, n, POS_LO(p), POS_HI(p), flags)
 
+/** Check vector import before an unknown flag, and zero bytes before the
+ * flag, for both directions and both position forms. Return 0 or report 1. */
+static int vector_flag_order(int fd)
+{
+    const long calls[2] = {SYS_preadv2, SYS_pwritev2};
+    struct iovec invalid = {(void *)1, (size_t)-1};
+    struct iovec unfaulted = {(void *)1, 1};
+    struct iovec empty = {0, 0};
+    int i, pos;
+
+    for (i = 0; i < 2; i++) {
+        for (pos = -1; pos <= 0; pos++) {
+            if (!refused(RWV2(calls[i], fd, (void *)1, 1, pos, 0x40), EFAULT) ||
+                !refused(RWV2(calls[i], fd, &empty, 1025, pos, 0x40), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &invalid, 1, pos, 0x40), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &unfaulted, 1, pos, 0x40), EOPNOTSUPP)) {
+                return fail("vector import precedes flags, but data faults follow flags");
+            }
+        }
+    }
+    report_held();
+    for (i = 0; i < 2; i++) {
+        for (pos = -1; pos <= 0; pos++) {
+            if (RWV2(calls[i], fd, (void *)1, 0, pos, 0x40) != 0 ||
+                RWV2(calls[i], fd, &empty, 1, pos, 0x40) != 0) {
+                return fail("zero bytes return before an unknown vector flag");
+            }
+        }
+    }
+    report_held();
+    return 0;
+}
+
 /**
  * Check pwritev2's RWF_APPEND, preadv2's read back, the two calls' refusals
  * and sync_file_range on a new copy of the file. Returns 0, or 1 once the
@@ -485,6 +518,9 @@ static int vector_flag_rows(void)
         return fail("preadv2 and pwritev2 refuse a bad descriptor before a bad flag");
     }
     report_held();
+    if (vector_flag_order(fd) != 0) {
+        return 1;
+    }
     null = open("/dev/null", O_RDWR);
     ok = sync_file_range(fd, 0, 5, SYNC_FILE_RANGE_WRITE) == 0 &&
          refused(sync_file_range(999, -1, 0, 0x100), EBADF) &&

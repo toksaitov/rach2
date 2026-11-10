@@ -3827,6 +3827,8 @@
         {"assertion_id": "pwritev2-append", "checks": "pwritev2 with RWF_APPEND on a description without O_APPEND writes at the end, moving the offset at offset -1 and leaving it at offset 0, and leaves O_APPEND clear", "source": "program"},
         {"assertion_id": "preadv2-readback", "checks": "preadv2 at offset 0 reads the five bytes the writes left and leaves the offset", "source": "program"},
         {"assertion_id": "rwv2-refusals", "checks": "preadv2 and pwritev2 of a descriptor not open fail with EBADF though a flag is unknown, and of an open one with the unknown flag with EOPNOTSUPP", "source": "program"},
+        {"assertion_id": "rwv2-import", "checks": "both calls at offset -1 and 0 check unreadable vectors, excessive counts and negative lengths before flags, and data faults after flags", "source": "program"},
+        {"assertion_id": "rwv2-zero", "checks": "both calls at offset -1 and 0 return zero for zero vectors or a zero-length buffer despite an unknown flag", "source": "program"},
         {"assertion_id": "range-sync", "checks": "sync_file_range with SYNC_FILE_RANGE_WRITE on the file returns 0, of a descriptor not open fails with EBADF though its flags and offset are bad, with an unknown flag fails with EINVAL, and of /dev/null with ESPIPE", "source": "program"}
       ],
       "branches": [

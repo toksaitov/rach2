@@ -261,10 +261,17 @@ reads as
 at offset -1 and as
 .Nm preadv
 at another.
-It checks the descriptor before its flags, as Linux does: a descriptor
+It checks the descriptor before the vector and flags, as Linux does: a descriptor
 that is not open is
 .Er EBADF
 whatever the flags.
+It then imports the vector, returning
+.Er EFAULT
+for an unreadable list and
+.Er EINVAL
+for an excessive count or a negative signed length.
+A vector of no bytes returns zero before flags are checked.
+The data pages are touched only after the flags have been accepted.
 Both forms take
 .Dv RWF_HIPRI ,
 .Dv RWF_DSYNC ,
