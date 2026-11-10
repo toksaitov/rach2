@@ -1,14 +1,14 @@
 # The silent Lenovo install
 
-The manager gave the go for this step on the task's issue on 2026-11-10, for the kernel, `bootctl` and root named below. The task's branch has since gained the resident-page count and the milestone's later work, so the kernel of the go is built from `be54ce312`, or taken from `build/runs/task2653/lenovo/kernel-cc53b51f` of the Mac's task checkout, where the session that rebuilt it kept it with `bootctl-b342aa2e`; the digests decide. Keep the prepared root and its gzip on the testing host until the task closes.
+This step ran and passed on 2026-11-10; [the record](../80-6.md) has its result and [the outputs](evidence/lenovo/) are kept. It stays here as it was run. The manager gave the go on the task's issue that day, for the kernel, `bootctl` and root named below. The task's branch had by then gained the resident-page count and the milestone's later work, so the kernel of the go was built from `be54ce312`, with `bootctl`, and kept by its digest; the digests decide.
 
-These are the remaining install commands for task 2653, after the manager's go. They install and verify files; they start no game, desktop or sound. No notice is needed beyond the boots' own text. The storage proof and the black view's cause are in [the record](../80-6.md). Do not merge or close the task until the Lenovo install passes.
+These are the install commands of task 2653. They install and verify files; they start no game, desktop or sound. No notice is needed beyond the boots' own text. The storage proof and the black view's cause are in [the record](../80-6.md).
 
 ## Inputs
 
 The trial root is a private copy of the GNU test root used in the QEMU proof, with the games layer's innoextract and three Boost libraries, their notices, the task's scripts and manifests, and an updated loader cache. It has init's SSH service and no automatic desktop. Its source marker is `/etc/rach2/task2653`. It is a trial image, not a release. Its original GE runtime is retained: this silent native install starts neither Wine nor the game, so the DirectInput DLL correction is not an input to it. The release build stages that correction normally.
 
-* Code: task/2653 at `f2ba8435e`, with the installer, context-switch counts, compat TLS, PI futexes, zero-sleep fix and DirectInput correction.
+* Code: task/2653 at `be54ce312`, whose kernel is that of `f2ba8435e`, with the installer, context-switch counts, compat TLS, PI futexes, zero-sleep fix and DirectInput correction.
 * Kernel: `build/x86_64/rach2/kernel`, 4,065,096 bytes, SHA-256 `cc53b51ff5fb24165844bfa16be1be8222e2eb257da72b5ee2db2016ef019006`.
 * Static bootctl: `build/x86_64/utils/sbin/bootctl`, 83,312 bytes, SHA-256 `b342aa2edc01ef6e0ec2e45080ef1f56d6de719292c6a32812680db4250fba49`.
 * Root: `/home/testing/rach2/build/worktrees/codex/build/runs/task2653/root-2961387c696576a3.img`, 24 GiB, SHA-256 `2961387c696576a3af5081f913a50aa94ecd491361b627d250caa8a1e0e3e371`. Its gzip is beside it, 2.1 GiB, SHA-256 `da87025a4070fc947085c9479eae6973933deab7fe4856bb516f4221f2a4710b`. Both are kept until this task closes.
@@ -30,7 +30,7 @@ The three digests must match above. A different kernel needs a new readiness rev
 
 This task adds no register sequence, MMIO access, interrupt handler or hardware wait. Its kernel changes report counters already kept by the scheduler and change the saved FS/GS base of an i386 clone whose selector names its new TLS descriptor. Those bases are 32-bit descriptor addresses and therefore canonical. The exact kernel passed the new zero-sleep probe with musl on x86-64 and the compat ABI. The matching i686 build passed on its native ABI. Each private RAM-image boot powered itself off. The earlier kernel with the same syscall change passed with glibc on x86-64, and the final DirectInput boot passed that glibc probe on the exact kernel. Every group of 16 zero sleeps reported 16 voluntary switches with a runnable thread on the same processor; before the fix all three groups reported 0, and Linux reported 16. The PI task's author recorded its musl and glibc probes on all three ABIs in that task. PI futexes use the existing wait queues and scheduler, and the zero sleep uses its existing interruptible timed wait. Neither adds a hardware register path. The installer is a native x86-64 process and ran to all 2,358 hashes in QEMU. The step starts no i386 game and no GPU client.
 
-The kernel is nevertheless newer than the Lenovo's installed release and needs the manager's go for the whole branch, including other tasks' changes. Boot with `intel_iommu=off intremap=off` and without `rach2.i915`, as the earlier data-partition trial did. This leaves translation off and uses the firmware framebuffer. No watchdog is opened. The TCO and touchpad paths are the already trialled ones, subject to the manager checking the exact branch delta. A new native hardware path not covered by those trials must be reviewed and tried by its owner first.
+The kernel is nevertheless newer than the Lenovo's installed release, and the manager's go covers the whole branch at that kernel, other tasks' changes included: read the first boot's log before arming the trial root, and stop on any fault. Boot with `intel_iommu=off intremap=off` and without `rach2.i915`, as the earlier data-partition trial did. This leaves translation off and uses the firmware framebuffer. No watchdog is opened. The TCO and touchpad paths are the already trialled ones, subject to the manager checking the exact branch delta. A new native hardware path not covered by those trials must be reviewed and tried by its owner first.
 
 The procedure assumes the installed release remains bb151e3ba, with kernel SHA-256 `0effe5acc26e1bf2f20b87b73e92ad8a9d769b708086b5ba700873f7e95e2cad`, 2,845,120 bytes, as the completed storage task recorded. Stop before a write if that identity or the table differs; update this procedure from the current release record first.
 
@@ -71,7 +71,7 @@ Require the released digest above in both slots. If only the fallback differs, r
 
 ```sh
 L 'mkdir -p /data; grep -q " /data " /proc/mounts || mount -t ext2 /dev/disk0p6 /data; grep " /data " /proc/mounts; grep "^part 0 6 " /proc/disk'
-L 'mkdir -p /data/trial2653/installers; mkdir -p /data/crysis; chown test:test /data/crysis'
+L 'mkdir -p /data/trial2653/installers; mkdir -p /data/crysis'
 L 'cat > /data/trial2653/release-kernel' < "$B/release-kernel"
 L 'cat > /data/trial2653/release-record' < "$B/release-record.txt"
 L 'cat > /data/trial2653/kernel' < build/x86_64/rach2/kernel
@@ -131,7 +131,10 @@ Require `rach2.slot=trialroot`, the exact `rootimage` operand, `/dev/loop0` on `
 
 ## Install, verify and return
 
+The installed release's `test` is user 60000 and the GNU root's is 1000, so the game's directory is given to its user here, in the root that installs and runs the game:
+
 ```sh
+L 'chown test:test /data/crysis; ls -ldn /data/crysis'
 L "su -s /bin/sh test -c \"crysis.sh install '/data/trial2653/installers/setup_crysis_2.0.0.7_(84418).exe'\"" > "$B/install.txt" 2>&1
 cat "$B/install.txt"
 L 'find /data/crysis/game -type f | wc -l; ls -ld /data/crysis; sync; (nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &)'

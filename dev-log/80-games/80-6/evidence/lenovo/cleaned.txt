@@ -1,0 +1,10 @@
+df110ac050c2f11ee1ccced8fca9bd313a4278e9d87a6c5c2a91034c522759d3  -
+total 28
+drwxr-xr-x 3 1000 1000  4096 Nov 10 17:24 crysis
+-rw-r--r-- 1    0    0    31 Nov  9 21:00 kept
+drwx------ 2    0    0 16384 Nov  9 20:57 lost+found
+drwxr-xr-x 6    0    0  4096 Nov 10 17:00 trial
+2358
+/dev/disk0p6   142831984 43505316  92156572  33% /data
+0
+ 17:32:40 up 0 min,  0 users,  load average: 0.37, 0.09, 0.03

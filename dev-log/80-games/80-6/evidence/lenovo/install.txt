@@ -1,0 +1,8 @@
+crysis: checking the three installer files
+'setup_crysis_2.0.0.7_(84418)-1.bin': OK
+'setup_crysis_2.0.0.7_(84418)-2.bin': OK
+'setup_crysis_2.0.0.7_(84418).exe': OK
+crysis: unpacking the installer
+crysis: checking the unpacked game
+crysis: result: installed, all 2358 files match
+install-exit 0
