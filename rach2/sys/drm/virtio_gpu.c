@@ -388,9 +388,11 @@ static int32_t answer_error(uint32_t type)
  * (`answer_error`), or -ETIMEDOUT when none came in five seconds; the
  * command is then left to the reaper, for the answer that may yet come.
  * A command with response pages stays with the caller after completion.
- * May sleep.
+ * With `got`, an answer shorter than `out_len` is copied as it is and its
+ * length put in `*got`; without, it is -EIO. May sleep.
  */
-int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len)
+int32_t vgpu_cmd_send_wait_len(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
+                               uint32_t *got)
 {
     struct virtio_gpu_device *vg = cmd->vg;
     int64_t deadline = dma_fence_now() + VGPU_WAIT_NS, next;
@@ -431,16 +433,27 @@ int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_l
     if (rc != 0 && cmd->resp_type) {
         klog(KLOG_WARN, "virtio_gpu", "command 0x%x: error 0x%x", type, cmd->resp_type);
     }
+    if (rc == 0 && out && got && out_len > cmd->response_len) {
+        out_len = cmd->response_len;
+    }
     if (rc == 0 && out && out_len > cmd->response_len) {
         rc = -EIO;
     }
     if (rc == 0 && out) {
         k_memcpy(out, cmd->page + VIRTIO_GPU_RESP_OFF, out_len);
     }
+    if (got) {
+        *got = rc == 0 && out ? out_len : 0;
+    }
     if (!cmd->response_size) {
         vgpu_cmd_free(cmd);
     }
     return rc;
+}
+
+int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len)
+{
+    return vgpu_cmd_send_wait_len(cmd, out, out_len, NULL);
 }
 
 /** Start `cmd` with nobody waiting; the reaper runs `complete`, if any, with
@@ -892,6 +905,8 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     struct virtio_gpu_cmd *cmd;
 
     vgpu_resource_detach(vg, bo);
+    /* The device's pages go before the UNMAP_BLOB that lets it unpin them. */
+    vgpu_blob_pages_drop(vg, bo);
     if (bo->res_id && !vg->dead) {
         cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNREF,
                            sizeof(struct virtio_gpu_resource_unref));
@@ -1844,6 +1859,7 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     }
     for (bo = vg->resources; bo; bo = bo->next) {
         bo->res_id = 0;
+        vgpu_blob_pages_drop(vg, bo);
         vgpu_obj_pages_free(vg, bo);
     }
     k_memset(vg->res_ids, 0, VIRTIO_GPU_MAX_RESOURCES / 8);

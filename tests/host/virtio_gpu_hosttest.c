@@ -1103,6 +1103,60 @@ static uint32_t exec_scanout(const struct virtio_gpu_set_scanout *s)
     return VIRTIO_GPU_RESP_OK_NODATA;
 }
 
+/* ---- page lists: the model's transport has none, so the driver never
+ * asks for one; these stand in for the transport's and the kernel's ---- */
+
+int virtio_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out)
+{
+    (void)d;
+    (void)runs;
+    (void)n;
+    (void)revoke;
+    (void)owner;
+    *out = NULL;
+    return -ENODEV;
+}
+
+uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t i)
+{
+    (void)d;
+    (void)m;
+    (void)i;
+    return 0;
+}
+
+void virtio_map_free(struct virtio_dev *d, struct virtio_map *m)
+{
+    (void)d;
+    (void)m;
+}
+
+int vgs_check_pages(const struct vgs_pages *p, uint32_t bytes, uint64_t total, uint64_t first,
+                    uint64_t *pages)
+{
+    (void)p;
+    (void)bytes;
+    (void)total;
+    (void)first;
+    (void)pages;
+    return VGS_E_PAGES;
+}
+
+int vgs_check_run(const struct vgs_run *r, uint64_t left)
+{
+    (void)r;
+    (void)left;
+    return VGS_E_PAGES;
+}
+
+void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
+{
+    (void)obj;
+    (void)pgoff;
+    (void)count;
+}
+
 #ifdef VGPU_3D_TEST
 #include "vgpu3d_model.h"
 #endif

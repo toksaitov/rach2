@@ -645,7 +645,8 @@ struct virtio_gpu_device {
     int has_blob;                         /* VIRTIO_GPU_F_RESOURCE_BLOB */
     int has_context_init;                 /* VIRTIO_GPU_F_CONTEXT_INIT */
     int has_uuid;                         /* VIRTIO_GPU_F_RESOURCE_UUID */
-    int has_host_visible;                 /* the region below is there and reachable */
+    int has_host_visible;                 /* the region below, or the pages, can be mapped */
+    int host_pages;                       /* blobs map from the device's own pages (VGS_TF_PAGES) */
     uint64_t hostmem_addr, hostmem_len;   /* the host-visible region */
     struct virtio_gpu_object *hostmem_bo; /* its pieces in use, by offset */
     uint32_t num_scanouts;
@@ -690,6 +691,10 @@ struct virtio_gpu_object {
     uint32_t map_info;
     uint64_t hv_offset;
     struct virtio_gpu_object *hv_next;
+    /* On a device that maps blobs from its own pages, the frames MAP_BLOB's
+     * page lists named, held by the transport, which takes them back first
+     * when the device's memory changes or its VM ends. */
+    struct virtio_map *pages_map;
     uintptr_t vmap;
     int uuid_ok; /* ASSIGN_UUID answered with `uuid` */
     uint8_t uuid[16];
@@ -716,6 +721,10 @@ void vgpu_cmd_send(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gp
                    void *arg);
 /** Send, wait, copy an inline response and free the command; 0 or -errno. */
 int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes);
+/** As vgpu_cmd_send_wait, taking a shorter answer as it is, its length in
+ * `*got`. */
+int32_t vgpu_cmd_send_wait_len(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes,
+                               uint32_t *got);
 /*
  * * Append user command bytes, or allocate response pages when response is
  * nonzero.
@@ -744,6 +753,9 @@ void vgpu_obj_free(struct drm_gem_object *obj);
 /** What a blob holds beyond an object: its piece of host-visible memory
  * and the kernel's window onto it, given back. */
 void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+/** Let go of the frames of a blob mapped from the device's pages, after
+ * taking every program's mapping of them away; nothing for another. */
+void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
 /** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
  * -ENOMEM. */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
