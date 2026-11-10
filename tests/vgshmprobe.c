@@ -21,8 +21,8 @@
 #define VIRGL_FORMAT_R8_UNORM            64u
 #define PIPE_BUFFER                      0u
 #define VIRGL_BIND_VERTEX_BUFFER         (1u << 4)
-#define VIRGL_RESOURCE_FLAG_MAP_PERSIST  1u
-#define VIRGL_RESOURCE_FLAG_MAP_COHERENT 2u
+#define VIRGL_RESOURCE_FLAG_MAP_PERSIST  (1u << 1)
+#define VIRGL_RESOURCE_FLAG_MAP_COHERENT (1u << 2)
 #define VIRGL_OBJECT_SURFACE             8u
 #define VIRGL_FORMAT_B8G8R8X8_UNORM      2u
 #define PIPE_TEXTURE_2D                  2u
