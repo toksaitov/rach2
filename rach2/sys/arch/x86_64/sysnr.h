@@ -298,6 +298,7 @@
 #define SYS_PIDFD_OPEN              434
 #define SYS_CLONE3                  435
 #define SYS_CLOSE_RANGE             436
+#define SYS_OPENAT2                 437
 #define SYS_PIDFD_GETFD             438
 #define SYS_FACCESSAT2              439
 #define SYS_EPOLL_PWAIT2            441

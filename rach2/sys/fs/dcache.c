@@ -276,6 +276,23 @@ int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **nod
     return rc;
 }
 
+int dcache_lookup_cached(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    uint32_t len, h;
+
+    if (dot_name(name)) {
+        return mnt->type->ops->lookup(mnt, dir, name, node);
+    }
+    if (!cacheable(mnt)) {
+        return mnt->dev ? -EAGAIN : mnt->type->ops->lookup(mnt, dir, name, node);
+    }
+    h = hash_of(dir ? dir : mnt->root, name, &len);
+    if (!find(mnt, dir ? dir : mnt->root, name, len, h)) {
+        return -EAGAIN;
+    }
+    return dcache_lookup(mnt, dir, name, node);
+}
+
 void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct dentry *e;

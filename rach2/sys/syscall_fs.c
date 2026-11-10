@@ -4265,6 +4265,365 @@ long sys_openat(isr_params_t *params)
                           (int)SC_ARG(params, 2), (uint32_t)SC_ARG(params, 3));
 }
 
+/* openat2(2)'s struct open_how, 24 bytes in both ABIs, and the flags it
+ * checks that open(2) passes over. */
+struct open_how {
+    uint64_t flags;
+    uint64_t mode;
+    uint64_t resolve;
+};
+
+#define OPEN_HOW_SIZE_VER0   24u
+#define O_ACCMODE            3
+#define O_LARGEFILE          0100000
+#define O_TMPFILE_BIT        020000000 /* Linux's __O_TMPFILE, which O_TMPFILE pairs with O_DIRECTORY */
+/* Every flag open(2) has, O_ACCMODE's two bits through __O_TMPFILE, and
+ * Linux 6.12's FMODE_NONOTIFY, which openat2 drops unseen. */
+#define OPENAT2_FLAGS        037777703ull
+#define OPENAT2_NONOTIFY     01000000000ull
+#define OPENAT2_PATH_FLAGS   (O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+#define OPENAT2_RESOLVE      0x3Full
+#define OPENAT2_RESOLVE_ROOT (VFS_RESOLVE_BENEATH | VFS_RESOLVE_IN_ROOT)
+
+/**
+ * Read the caller's struct open_how of `usize` bytes at `uhow` into `how`,
+ * as Linux's `copy_struct_from_user` does: -EINVAL for a size below the
+ * first version's 24 bytes, -E2BIG past a page or for a byte past the 24
+ * this kernel knows that is not zero, -EFAULT for memory the caller may not
+ * read.
+ */
+static int32_t open_how_read(uintptr_t uhow, unsigned long usize, struct open_how *how)
+{
+    uint8_t tail[64];
+    unsigned long at;
+
+    if (usize < OPEN_HOW_SIZE_VER0) {
+        return -EINVAL;
+    }
+    if (usize > PAGE_SIZE) {
+        return -E2BIG;
+    }
+    for (at = OPEN_HOW_SIZE_VER0; at < usize;) {
+        unsigned long n = usize - at < sizeof(tail) ? usize - at : sizeof(tail);
+        unsigned long i;
+
+        if (copy_from_user(tail, (const void __user *)(uhow + at), n) != 0) {
+            return -EFAULT;
+        }
+        for (i = 0; i < n; i++) {
+            if (tail[i] != 0) {
+                return -E2BIG;
+            }
+        }
+        at += n;
+    }
+    return copy_from_user(how, (const void __user *)uhow, sizeof(*how)) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * Check `how` as Linux's `build_open_flags` checks openat2's arguments, in
+ * its order, and return the open flags, or -EINVAL: for a flag open(2) does
+ * not have, a RESOLVE_ flag Linux does not have, BENEATH with IN_ROOT, a
+ * mode with a bit above 07777 or with neither O_CREAT nor O_TMPFILE, O_CREAT
+ * with O_DIRECTORY, O_TMPFILE without O_DIRECTORY or write access, and
+ * O_PATH with a flag but O_DIRECTORY, O_NOFOLLOW and O_CLOEXEC; -EAGAIN for
+ * RESOLVE_CACHED with O_CREAT, O_TRUNC or O_TMPFILE, which would write.
+ * Where Linux's 64-bit kernel adds O_LARGEFILE to an open but O_PATH's, so
+ * does the x86-64 kernel's, for a 32-bit program too.
+ */
+static int32_t open_how_flags(const struct open_how *how)
+{
+    uint64_t flags = how->flags & ~OPENAT2_NONOTIFY;
+
+#ifdef __x86_64__
+    if (!(flags & O_PATH)) {
+        flags |= O_LARGEFILE;
+    }
+#endif
+    if ((flags & ~OPENAT2_FLAGS) || (how->resolve & ~OPENAT2_RESOLVE) ||
+        (how->resolve & OPENAT2_RESOLVE_ROOT) == OPENAT2_RESOLVE_ROOT) {
+        return -EINVAL;
+    }
+    if ((flags & (O_CREAT | O_TMPFILE_BIT)) ? (how->mode & ~07777ull) != 0 : how->mode != 0) {
+        return -EINVAL;
+    }
+    if ((flags & (O_DIRECTORY | O_CREAT)) == (O_DIRECTORY | O_CREAT)) {
+        return -EINVAL;
+    }
+    if ((flags & O_TMPFILE_BIT) && (!(flags & O_DIRECTORY) || (flags & O_ACCMODE) == 0)) {
+        return -EINVAL;
+    }
+    if ((flags & O_PATH) && (flags & ~(uint64_t)OPENAT2_PATH_FLAGS)) {
+        return -EINVAL;
+    }
+    if ((how->resolve & VFS_RESOLVE_CACHED) && (flags & (O_TRUNC | O_CREAT | O_TMPFILE_BIT))) {
+        return -EAGAIN;
+    }
+    return (int32_t)flags;
+}
+
+/**
+ * The directory an openat2 path is walked from, into `out`: that of the
+ * descriptor `dirfd`, or the working directory for AT_FDCWD, with
+ * `*outside` set when it is outside the caller's root, as `copy_path_at`
+ * joins a relative name to it. 0, -EBADF, -ENOTDIR, or `fd_dir_path`'s
+ * errors.
+ */
+static int32_t openat2_dir(int dirfd, char *out, int *outside)
+{
+    fd_entry_t *entry;
+    int len;
+    int r;
+
+    *outside = 0;
+    if (dirfd == AT_FDCWD) {
+        const char *cwd = proc_cwd(current_proc);
+
+        if (k_strlen(cwd) + 1 > VFS_PATH_MAX) {
+            return -ENAMETOOLONG;
+        }
+        *outside = cwd_outside(cwd);
+        k_memcpy(out, cwd, k_strlen(cwd) + 1);
+    } else {
+        entry = fd_get(current_proc->fds, dirfd);
+        if (!entry) {
+            return -EBADF;
+        }
+        r = fd_dir_path(entry, out, VFS_PATH_MAX, outside);
+        if (r != 0) {
+            return r;
+        }
+    }
+    len = canonicalize_abs(out);
+    if (*outside) {
+        if ((uint32_t)len + 3 > VFS_PATH_MAX) {
+            return -ENAMETOOLONG;
+        }
+        k_memmove(out + 2, out, (uint32_t)len + 1);
+        out[1] = '/';
+    }
+    return 0;
+}
+
+/**
+ * Finish the path `real`, `len` bytes, that an openat2's walk reached: the
+ * missing name `leaf` the open may create after it when `rc` is
+ * VFS_MISSING, and "//" before it when the walk began `outside` the
+ * caller's root, as `copy_path_at` marks such a path. 0, or -ENAMETOOLONG.
+ */
+static int32_t openat2_real(char *real, uint32_t len, int rc, const char *leaf, int outside)
+{
+    uint32_t ll = (uint32_t)k_strlen(leaf);
+
+    if (real[0] == '\0') {
+        return -ENAMETOOLONG;
+    }
+    if (rc == VFS_MISSING) {
+        if (len + 1 + ll + 1 > VFS_PATH_MAX) {
+            return -ENAMETOOLONG;
+        }
+        if (len > 1) {
+            real[len++] = '/';
+        }
+        k_memcpy(real + len, leaf, ll + 1);
+        len += ll;
+    }
+    if (outside && len + 3 > VFS_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    if (outside) {
+        k_memmove(real + 2, real, len + 1);
+        real[1] = '/';
+    }
+    return 0;
+}
+
+/**
+ * Resolve the directory an openat2 path `name` under `resolve` starts at,
+ * as the anchor of `scope`, with its real path into the path page
+ * `anchor`: the directory `dirfd` names for a relative path or under
+ * BENEATH and IN_ROOT, `*outside` set as `openat2_dir` sets it, and the
+ * caller's root for any other absolute path. 0 with the anchor held, or an
+ * error.
+ */
+static int32_t openat2_anchor(int dirfd, const char *name, uint32_t resolve,
+                              struct vfs_scope *scope, char *anchor, int *outside)
+{
+    char *dir = path_buf_get();
+    int32_t rc = dir ? 0 : -ENOMEM;
+
+    if (rc == 0 && (name[0] != '/' || (resolve & OPENAT2_RESOLVE_ROOT))) {
+        rc = openat2_dir(dirfd, dir, outside);
+    } else if (rc == 0) {
+        dir[0] = '/';
+        dir[1] = '\0';
+    }
+    if (rc == 0) {
+        rc = vfs_resolve_real(path_name(dir), 0, &scope->anchor, anchor);
+    }
+    path_buf_put(dir);
+    if (rc == 0 && anchor[0] == '\0') {
+        vfs_ref_release(&scope->anchor);
+        rc = -ENAMETOOLONG;
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    scope->resolve = resolve;
+    scope->anchor_real = anchor;
+    scope->anchor_len = anchor[1] == '\0' ? 0 : (uint32_t)k_strlen(anchor);
+    scope->seq = vfs_tree_seq();
+    return 0;
+}
+
+/**
+ * The walk of an openat2 path `name` under `resolve` (`vfs_resolve_scoped`),
+ * from the directory `dirfd` names: the path it reaches, from the caller's
+ * root, into `real`, with the last name it may create after it, and in
+ * `*seq` the tree's sequence when the walk ended. `walk` has the walk's
+ * VFS_WALK_ flags. A link of /proc to an object at the end of the path,
+ * /proc/PID/fd/N or a namespace's, which the system call layer follows
+ * itself, is judged here as the walk judges one on the way. Returns 0, or
+ * the walk's error.
+ */
+static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int walk, char *real,
+                            uint32_t *seq)
+{
+    char leaf[VFS_NAME_MAX + 1];
+    struct vfs_scope scope;
+    struct vfs_ref ref;
+    char *anchor = path_buf_get();
+    const struct vpath *vp;
+    int outside = 0;
+    int32_t rc;
+
+    rc = anchor ? openat2_anchor(dirfd, name, resolve, &scope, anchor, &outside) : -ENOMEM;
+    if (rc != 0) {
+        path_buf_put(anchor);
+        return rc;
+    }
+    rc = vfs_resolve_scoped(&scope, name, walk, &ref, leaf, real);
+    *seq = vfs_tree_seq();
+    vfs_ref_release(&scope.anchor);
+    path_buf_put(anchor);
+    if (rc < 0) {
+        return rc;
+    }
+    vp = rc == 0 && !(walk & VFS_WALK_NOFOLLOW) ? vfs_synth_vpath(ref.mnt, ref.node) : NULL;
+    if (walk & VFS_WALK_LOCK) {
+        vfs_walk_unlock(ref.mnt);
+    }
+    vfs_ref_release(&ref);
+    if (vp && (vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_NS_LINK)) {
+        if (resolve & (VFS_RESOLVE_NO_SYMLINKS | VFS_RESOLVE_NO_MAGICLINKS)) {
+            return -ELOOP;
+        }
+        if (resolve & OPENAT2_RESOLVE_ROOT) {
+            return -EXDEV;
+        }
+    }
+    return openat2_real(real, (uint32_t)k_strlen(real), rc, leaf, outside);
+}
+
+#define OPENAT2_TRIES 4
+
+/**
+ * Open `name` from `dirfd` with the checked open flags `flags` and `how`'s
+ * mode and RESOLVE_ flags, `end` as `path_names_dir` gives it, using the
+ * path page `real`: walk it under its restrictions, then open the path the
+ * walk reached as a replay, and walk again while a rename or a mount races
+ * the replay, OPENAT2_TRIES times in all. Returns the descriptor or an
+ * error.
+ */
+static long openat2_named(int dirfd, const char *name, const struct open_how *how, int flags,
+                          int end, char *real)
+{
+    uint32_t resolve = (uint32_t)how->resolve;
+    int walk = (flags & O_NOFOLLOW) || (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)
+                   ? VFS_WALK_NOFOLLOW
+                   : 0;
+    uint32_t seq;
+    int tries;
+    long rc;
+
+    walk = end ? 0 : walk;
+    if ((flags & O_CREAT) && !(flags & O_PATH)) {
+        walk |= VFS_WALK_CREATE;
+    }
+    for (tries = 1;; tries++) {
+        rc = openat2_walk(dirfd, name, resolve, walk, real, &seq);
+        if (rc != 0) {
+            return rc;
+        }
+        if (end == PATH_END_DOT && k_strlen(real) + 3 <= VFS_PATH_MAX) {
+            path_put_dot(real, (int)k_strlen(real));
+        }
+        vfs_replay(!(resolve &
+                     (VFS_RESOLVE_NO_SYMLINKS | VFS_RESOLVE_NO_MAGICLINKS | OPENAT2_RESOLVE_ROOT)),
+                   seq);
+        rc = open_named(path_name(real), flags, (uint32_t)how->mode, end);
+        if (!vfs_replay_end() || rc != -EAGAIN || tries == OPENAT2_TRIES) {
+            break;
+        }
+    }
+    if (rc >= 0) {
+        open_done((int)rc, path_name(real), flags);
+    }
+    return rc;
+}
+
+/**
+ * openat2(2): dirfd, path, the caller's struct open_how and its size.
+ *
+ * The arguments are checked as Linux checks them (`open_how_read`,
+ * `open_how_flags`) before the path is read. With no RESOLVE_ flag the
+ * open is openat(2)'s. With one, the path is walked under its restrictions
+ * first (`openat2_walk`), which answer every refusal, and the open then
+ * takes the path that walk reached, which has no `..` and no link in it but
+ * a link of /proc to an object the walk allowed, as a replay
+ * (`vfs_replay`): the replay answers -EAGAIN when it meets a link or when a
+ * rename or a mount has changed the tree since the checked walk ended, so
+ * the open never reaches a file the checked walk did not. The call then
+ * walks again, OPENAT2_TRIES times in all, before it gives the caller
+ * -EAGAIN, which Linux gives only for a rename racing a scoped `..`.
+ */
+long sys_openat2(isr_params_t *params)
+{
+    struct open_how how;
+    const char __user *upath = (const char __user *)SC_ARG(params, 1);
+    char *name;
+    char *real;
+    int flags;
+    int len;
+    long rc;
+
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    rc = open_how_read(SC_ARG(params, 2), (unsigned long)SC_ARG(params, 3), &how);
+    if (rc == 0) {
+        rc = open_how_flags(&how);
+    }
+    if (rc < 0) {
+        return rc;
+    }
+    flags = (int)rc;
+    if (how.resolve == 0) {
+        return open_from_user((int)SC_ARG(params, 0), upath, flags, (uint32_t)how.mode);
+    }
+    name = path_buf_get();
+    real = path_buf_get();
+    len = !name || !real ? -ENOMEM : upath ? strncpy_from_user(name, upath, VFS_PATH_MAX) : -EFAULT;
+    rc = len < 0 ? len : len == 0 ? -ENOENT : !fd_can_alloc(current_proc->fds) ? -EMFILE : 0;
+    if (rc == 0) {
+        rc = openat2_named((int)SC_ARG(params, 0), name, &how, flags, path_names_dir(name, len),
+                           real);
+    }
+    path_buf_put(name);
+    path_buf_put(real);
+    return rc;
+}
+
 /** Whether a call of a thread other than the caller that shares `table`
  * holds descriptor `fd`: has looked it up since the call began. */
 static int fd_held_elsewhere(const fd_table_t *table, int fd)
@@ -14758,13 +15117,15 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         rc = (flags & RENAME_NOREPLACE) ? rename_on_mount(&opar, oleaf, &npar, nleaf) : -EBUSY;
         goto out;
     }
+    vfs_tree_changed();
     if (!mnt_is_root(vfs_mount_base(opar.mnt))) {
         rc = rename_mounted_names(&opar, oleaf, &npar, nleaf, flags, slash);
-        goto out;
+    } else {
+        vfs_ns_lock(opar.mnt);
+        rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);
+        vfs_ns_unlock(opar.mnt);
     }
-    vfs_ns_lock(opar.mnt);
-    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);
-    vfs_ns_unlock(opar.mnt);
+    vfs_tree_changed();
 out:
     vfs_ref_release(&npar);
     vfs_ref_release(&opar);

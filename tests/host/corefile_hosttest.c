@@ -77,6 +77,7 @@ static long sys_mount(isr_params_t *params);
 static long sys_umount2(isr_params_t *params);
 static long sys_open(isr_params_t *params);
 static long sys_openat(isr_params_t *params);
+static long sys_openat2(isr_params_t *params);
 static long sys_close(isr_params_t *params);
 static long sys_fsync(isr_params_t *params);
 static long sys_fdatasync(isr_params_t *params);

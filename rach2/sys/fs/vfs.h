@@ -425,14 +425,35 @@ struct vfs_ref {
 #define VFS_WALK_REAL_IDS 0x2
 #define VFS_WALK_NOFOLLOW 0x4
 #define VFS_WALK_LOCK     0x8
+/* A walk of `vfs_resolve_scoped` that may end at a last name that does not
+ * exist, as an open with O_CREAT may: it then returns VFS_MISSING with the
+ * parent directory held and the name in `leaf`, after following a link at
+ * the end to the name its target ends with, unless VFS_WALK_NOFOLLOW. */
+#define VFS_WALK_CREATE   0x10
+#define VFS_MISSING       1
+
+/* openat2(2)'s RESOLVE_ restrictions, with Linux's values, which
+ * `vfs_resolve_scoped` applies to its walk. BENEATH and IN_ROOT scope the
+ * walk to its anchor. */
+#define VFS_RESOLVE_NO_XDEV       0x01
+#define VFS_RESOLVE_NO_MAGICLINKS 0x02
+#define VFS_RESOLVE_NO_SYMLINKS   0x04
+#define VFS_RESOLVE_BENEATH       0x08
+#define VFS_RESOLVE_IN_ROOT       0x10
+#define VFS_RESOLVE_CACHED        0x20
+
+/* The bits of a process's `walk_replay` (`vfs_replay`). */
+#define VFS_REPLAY_ON      0x1
+#define VFS_REPLAY_MAGIC   0x2
+#define VFS_REPLAY_TRIPPED 0x4 /* a walk of the replay answered -EAGAIN */
 /* Symbolic links followed along one path before ELOOP. */
-#define VFS_LINK_MAX      40
+#define VFS_LINK_MAX       40
 /* A path, terminator included: Linux's PATH_MAX, one page. A path a caller
  * names may be this long, and so may the absolute path a relative one makes
  * with the directory it is resolved from, and a followed link's target with
  * the rest of the path after the link; ENAMETOOLONG past it. The kernel
  * copies paths into pages from fs/pathbuf.c, not onto its stack. */
-#define VFS_PATH_MAX      4096
+#define VFS_PATH_MAX       4096
 
 /**
  * Install the KRFFS root at entry zero and the other permanent mounts over
@@ -495,6 +516,77 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
  * `vfs_resolve` does.
  */
 int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real);
+
+/*
+ * The walk of an openat2(2) path. `anchor` is the directory the call names,
+ * held by the caller, where a relative path starts and, for BENEATH and
+ * IN_ROOT, the root of the walk; `anchor_real` is its path from the
+ * caller's root, `anchor_len` bytes, as `vfs_resolve_real` gives it, and
+ * `seq` the tree's sequence (`vfs_tree_seq`) when the call began.
+ */
+struct vfs_scope {
+    uint32_t resolve; /* VFS_RESOLVE_* */
+    struct vfs_ref anchor;
+    const char *anchor_real;
+    uint32_t anchor_len;
+    uint32_t seq;
+};
+
+/**
+ * Resolve `path` as openat2(2) does, with `scope`'s restrictions, and put in
+ * `real`, of VFS_PATH_MAX bytes, the path the walk took, as
+ * `vfs_resolve_real` does. A relative path starts at the anchor; an
+ * absolute one at the caller's root, or at the anchor under IN_ROOT, and is
+ * -EXDEV under BENEATH.
+ *
+ * Under BENEATH, `..` at the anchor and a link whose target is absolute are
+ * -EXDEV; under IN_ROOT, `..` at the anchor stays there and an absolute
+ * target starts at the anchor. A scoped walk's `..` is -EAGAIN once a
+ * rename or a mount has changed the tree since `seq`, since it may then
+ * have climbed past the anchor by a path that no longer exists, as Linux
+ * answers. NO_SYMLINKS makes every link the walk would follow -ELOOP,
+ * NO_MAGICLINKS every link of /proc to an object (a descriptor, a working
+ * directory, a root, a program or a namespace), and a scoped walk answers
+ * such a link -EXDEV. NO_XDEV is -EXDEV at any step onto another mount than
+ * the one the walk started on: a mount crossed downward or by `..`, a
+ * nameless mount entered, an absolute link to a root on another mount.
+ * CACHED is -EAGAIN for a name of a type that keeps its names in the name
+ * cache when the cache does not have it, or of a type on a device that does
+ * not. The checks run in Linux's order: ELOOP before EXDEV.
+ *
+ * `flags` takes VFS_WALK_NOFOLLOW, VFS_WALK_LOCK and VFS_WALK_CREATE, whose
+ * missing name goes in `leaf`, of VFS_NAME_MAX + 1 bytes.
+ * Returns 0 or VFS_MISSING with `out` held, or `vfs_resolve`'s errors and
+ * those above.
+ */
+int vfs_resolve_scoped(const struct vfs_scope *scope, const char *path, int flags,
+                       struct vfs_ref *out, char *leaf, char *real);
+
+/**
+ * A count that moves at every rename and every change of what is mounted
+ * where: Linux's rename and mount sequences in one, which a scoped walk's
+ * `..` and an openat2's replay compare.
+ */
+uint32_t vfs_tree_seq(void);
+
+/** Move the tree's sequence (`vfs_tree_seq`), before and after a rename. */
+void vfs_tree_changed(void);
+
+/**
+ * Make every walk of the calling thread a replay of the walk an openat2
+ * checked, until `vfs_replay_end`: the path it is given is the real path
+ * that walk took, with no `..` and no link but those of /proc to an object,
+ * which `magic` allows, so a replay that meets another link, or finds the
+ * tree's sequence moved from `seq`, answers -EAGAIN instead of going where
+ * the checked walk did not.
+ */
+void vfs_replay(int magic, uint32_t seq);
+
+/**
+ * End the calling thread's replay (`vfs_replay`). Returns 1 when a walk of
+ * the replay answered -EAGAIN, so the caller may walk again, and 0 if not.
+ */
+int vfs_replay_end(void);
 
 /* Resolve and capture the final regular-file entry in the same walk.
  * The returned name owns its parent and mount; the caller puts or transfers

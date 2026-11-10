@@ -194,7 +194,12 @@ struct process {
      * sets the id to the effective one there. */
     uint32_t fsuid;
     uint32_t fsgid;
-    uint32_t fs_own;              /* PROC_FSUID_OWN, PROC_FSGID_OWN */
+    uint32_t fs_own; /* PROC_FSUID_OWN, PROC_FSGID_OWN */
+    /* While an openat2 opens the path its checked walk found, the walks of
+     * the open replay that walk (`vfs_replay`): VFS_REPLAY_* bits, 0 at every
+     * other time, and the tree's sequence the replay must still see. */
+    uint32_t walk_replay;
+    uint32_t walk_replay_seq;
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so
