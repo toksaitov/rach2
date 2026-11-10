@@ -24,7 +24,7 @@ fail()
 }
 counts()
 {
-    awk '$1 ~ /^(vfio_(groups|devices|dma_mappings|dma_pages)|msi_vectors_free|kvm_(vms|vcpus|slots|tdp_pages|run_mappings))$/ { print }' /proc/stat
+    awk '$1 ~ /^(vfio_(groups|devices|dma_mappings|dma_pages|dma_io_pages)|msi_vectors_free|kvm_(vms|vcpus|slots|tdp_pages|run_mappings))$/ { print }' /proc/stat
 }
 bind()
 {
@@ -41,7 +41,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-assign.XXXXXX")
 bind "$nic"
 bind "$edu"
 before=$(counts)
-[ "$(printf '%s\n' "$before" | wc -l)" = 10 ] || fail 'missing assignment counters'
+[ "$(printf '%s\n' "$before" | wc -l)" = 11 ] || fail 'missing assignment counters'
 echo "assign: before: $before"
 awk '$1 == "iommu_dma_faults" || $1 == "iommu_irq_faults" { n++; if ($2 != 0) bad=1 }
      END { exit n != 2 || bad }' /proc/stat || fail 'IOMMU fault before injection'
@@ -93,6 +93,7 @@ case $mode in
         while kill -0 "$pid" 2>/dev/null; do
             if [ -n "$hold" ] && grep -q 'ASSIGNGUEST TRAFFIC' "$work/console"; then
                 awk '$1 == "vfio_dma_pages" && $2 > 0 { ok=1 } END { exit !ok }' /proc/stat || fail 'no live VFIO pins'
+                awk '$1 == "vfio_dma_io_pages" && $2 > 0 { ok=1 } END { exit !ok }' /proc/stat || fail 'no live VFIO BAR mapping'
                 echo "assign: live: $(counts)"
                 resets_before=$(dmesg | grep -c 'pci: reset: 1:0.0' || :)
                 kill -KILL "$pid"

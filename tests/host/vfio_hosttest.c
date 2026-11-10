@@ -622,7 +622,7 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     struct pin *p;
 
     (void)mm;
-    (void)flags;
+    CHECK((flags & PIN_IO) != 0, "VFIO accepts device pages beside pinned RAM");
     if (addr == 0) {
         return -EFAULT;
     }
@@ -648,6 +648,11 @@ int pin_live(const struct pin *pin)
 }
 
 uint32_t pin_count(const struct pin *pin)
+{
+    return pin->count;
+}
+
+uint32_t pin_ram_count(const struct pin *pin)
 {
     return pin->count;
 }

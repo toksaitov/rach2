@@ -119,11 +119,13 @@ leave out each function's reserved regions but the relaxable ones, and
 the count of mappings left.
 .Pp
 .Dv VFIO_IOMMU_MAP_DMA
-pins the caller's pages, charged against its
+pins the caller's RAM pages, charged against its
 .Dv RLIMIT_MEMLOCK
 as
 .Xr limits 7
 says, and maps them at the IOVA with the access its flags give.
+It also follows mappings of device memory, including PCI BARs, without
+charging them as locked RAM.
 Its addresses and size are multiples of 4 KiB, and its range lies within
 one valid range, or it fails with
 .Er EINVAL ;
@@ -134,6 +136,8 @@ over a mapping, and with
 at 65535 mappings.
 When the program unmaps the pinned memory, or its address space ends, the
 device can no longer reach those pages.
+A mapping containing device pages also loses its DMA access before a
+protection change or the device revokes its pages.
 .Dv VFIO_IOMMU_UNMAP_DMA
 removes the mappings of a range, or every one with
 .Dv VFIO_DMA_UNMAP_FLAG_ALL ;

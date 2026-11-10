@@ -1205,9 +1205,10 @@ KVM_RUN, on x86-64.
 Failed entries whose backend returns an error are excluded.
 .It Li iommu_dma_faults , iommu_irq_faults
 DMA and interrupt faults reported by VT-d since boot, on x86-64.
-.It Li vfio_groups , vfio_devices , vfio_dma_mappings , vfio_dma_pages
-Attached VFIO groups, referenced devices, DMA mappings and live pinned pages,
-on x86-64.
+.It Li vfio_groups , vfio_devices , vfio_dma_mappings , vfio_dma_pages , vfio_dma_io_pages
+Attached VFIO groups, referenced devices, DMA mappings, live pinned RAM pages
+and mapped device pages, on x86-64.
+Device pages do not count as locked RAM.
 A container shared by groups is counted once.
 .It Li msi_vectors_free
 Free message vectors in the host's interrupt pool, on x86-64.

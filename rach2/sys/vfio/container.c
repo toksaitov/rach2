@@ -488,7 +488,8 @@ static int32_t map_dma(struct vfio_container *c, uintptr_t arg)
     dma->holder.release = dma_released;
     dma->holder.owner = dma;
     r = pin_user(vfio_hw_mm(), (uintptr_t)m.vaddr, (uintptr_t)m.size,
-                 (m.flags & VFIO_DMA_MAP_FLAG_WRITE) ? PIN_WRITE : 0u, &dma->holder, &dma->pin);
+                 PIN_IO | ((m.flags & VFIO_DMA_MAP_FLAG_WRITE) ? PIN_WRITE : 0u), &dma->holder,
+                 &dma->pin);
     if (r == 0) {
         r = dma_map_pages(c, dma);
         if (r != 0) {

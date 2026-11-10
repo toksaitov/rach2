@@ -167,8 +167,8 @@ extern int vfio_ngroups;
 
 /* group.c */
 void vfio_start(void);
-/** Count attached groups, referenced devices, DMA mappings and live pinned
- * pages into `counts[4]`, under the big lock. */
+/** Count attached groups, referenced devices, DMA mappings, live pinned
+ * RAM pages and mapped device pages into `counts[5]`, under the big lock. */
 void vfio_resource_counts(uint32_t *counts);
 int vfio_groups_build(void);
 int vfio_group_viable(const struct vfio_group *g);

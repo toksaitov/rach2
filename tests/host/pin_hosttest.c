@@ -24,6 +24,8 @@
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
  * drop the frames and the charge, while a pin charged to no one stays.
+ * Device pages accepted by VFIO carry no RAM charge; mixed ranges,
+ * protection, revocation and cleanup preserve that distinction.
  * mlock's regions split and merge, count in VmLck, lose their lock in a
  * fork's copy, and a locked stack grows only within RLIMIT_MEMLOCK. The
  * MMIO rows map a display's BAR in windows and free them: on i686 a 16 MiB
@@ -327,6 +329,124 @@ static void release_rows(void)
           "unpin gives the rest back and tells no one");
 }
 
+/* A BAR mapped into user space; no RAM frame backs its normal address. */
+static struct {
+    uintptr_t phys;
+    int absent;
+    int puts;
+} io_object;
+
+/** The two pages of the model BAR, or a bus fault while it is revoked. */
+static int io_page(void *obj, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)obj;
+    if (io_object.absent || pgoff >= 2) {
+        return -1;
+    }
+    *phys = io_object.phys + pgoff * P;
+    return 0;
+}
+
+/** Record release of the mapping's one object reference. */
+static void io_put(void *obj)
+{
+    (void)obj;
+    io_object.puts++;
+}
+
+static const struct vm_device_ops io_ops = {io_page, io_put};
+
+/** Access refusals and each end of a device mapping release its holder. */
+static void io_lifetime(uintptr_t addr, uintptr_t phys, vma_t *vma)
+{
+    struct pin *p, *tmp;
+    uint32_t before = released;
+
+    io_object.phys = 7 * P;
+    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &tmp) == -EFAULT && mm_a.pinned == 0,
+          "a device mapping cannot bypass RAM accounting");
+    paging_zap_device(&io_object, 0, 2);
+    io_object.phys = phys;
+    vma->prot &= ~VM_PROT_WRITE;
+    check(pin_user(&mm_a, addr, P, PIN_IO | PIN_WRITE, &holder, &tmp) == -EFAULT,
+          "a write mapping of a read-only BAR is refused");
+    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &p) == 0,
+          "the same BAR permits a read mapping");
+    mmn_notify(&mm_a, MMN_PROTECT, addr, addr + P);
+    check(!pin_live(p) && released == before + 1, "a protection change drops device access");
+    unpin(p);
+    vma->prot |= VM_PROT_WRITE;
+    paging_zap_device(&io_object, 0, 2);
+    io_object.absent = 1;
+    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &tmp) == -EFAULT && mm_a.pinned == 0,
+          "a revoked BAR answers EFAULT without a charge");
+    io_object.absent = 0;
+    check(pin_user(&mm_a, addr, 3 * P, PIN_IO, &holder, &tmp) == -EFAULT && mm_a.pinned == 0,
+          "a device range extending into a hole pins nothing");
+    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &p) == 0, "a BAR pin before unmap");
+    mmn_notify(&mm_a, MMN_UNMAP, addr, addr + P);
+    check(!pin_live(p) && released == before + 2, "unmap drops the BAR pin once");
+    unpin(p);
+    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &p) == 0, "a BAR pin before exit");
+    mmn_release(&mm_a);
+    check(!pin_live(p) && released == before + 3 && mm_a.pinned == 0,
+          "exit drops the BAR pin without subtracting a RAM charge");
+    unpin(p);
+    vm_remove(&mm_a.vm, addr, addr + 2 * P);
+    unmap_user_range(&dir_a, addr, addr + 2 * P);
+    vm_file_reap();
+    check(io_object.puts == 1, "the last mapping releases the device reference");
+    memlock(0xFFFFFFFFu);
+}
+
+/** Device pages carry no RAM charge; mixed ranges charge only RAM, and a
+ * revoke, protection change, unmap or exit takes their DMA access back. */
+static void io_rows(void)
+{
+    uintptr_t addr = VA + 32 * P, phys;
+    struct pin *p, *mixed, *tmp;
+    vma_t *vma;
+    uint32_t before = released;
+
+#ifdef RACH2_HOST_X86_64
+    phys = (uintptr_t)14 << 40;
+#else
+    phys = 0xFD000000u;
+#endif
+    io_object.phys = phys;
+    check(vm_insert(&mm_a.vm, addr, addr + 2 * P, RW, VM_SHARED) == 0 &&
+              vm_insert(&mm_a.vm, addr - P, addr, RW, VM_ANON) == 0,
+          "a device range beside one RAM page");
+    vma = vm_find(&mm_a.vm, addr);
+    check(vm_device_map(vma, &io_ops, &io_object, VM_PROT_UC) == 0, "the BAR is mapped");
+    memlock(0);
+    check(pin_user(&mm_a, addr, 2 * P, PIN_IO | PIN_WRITE, &holder, &p) == 0 && pin_count(p) == 2 &&
+              pin_ram_count(p) == 0 && mm_a.pinned == 0 && pin_phys(p, 0) == phys &&
+              pin_phys(p, 1) == phys + P,
+          "device pages are followed without locked memory at a zero limit");
+    memlock(0xFFFFFFFFu);
+    check(pin_user(&mm_a, addr, P, PIN_WRITE, &holder, &tmp) == -EFAULT,
+          "ordinary pins still refuse device memory");
+    memlock(1);
+    check(pin_user(&mm_a, addr - P, 3 * P, PIN_IO | PIN_WRITE, &holder, &mixed) == 0 &&
+              pin_count(mixed) == 3 && pin_ram_count(mixed) == 1 && mm_a.pinned == 1,
+          "a mixed range charges only its RAM page");
+    memlock(0);
+    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &tmp) == 0 && mm_a.pinned == 1,
+          "device pages work when existing RAM pins exceed a reduced limit");
+    unpin(tmp);
+    check(pin_user(&mm_a, addr - P, 3 * P, PIN_IO, &holder, &tmp) == -ENOMEM && mm_a.pinned == 1 &&
+              frame_word(pin_phys(mixed, 0)) == 1 + FRAME_PIN_BIAS,
+          "a mixed range past the limit rolls back its RAM pin");
+    paging_zap_device(&io_object, 0, 2);
+    check(!pin_live(p) && !pin_live(mixed) && mm_a.pinned == 0 && released == before + 2 &&
+              pte_of(&dir_a, addr) == 0 && pte_of(&dir_a, addr + P) == 0,
+          "device revocation drops both holders before their pages go");
+    unpin(p);
+    unpin(mixed);
+    io_lifetime(addr, phys, vma);
+}
+
 /** mlock's regions split and merge, count in VmLck, lose their lock in a
  * fork's copy; RLIMIT_MEMLOCK's room. */
 static void lock_rows(void)
@@ -540,6 +660,7 @@ int main(void)
     frame_rows();
     fork_rows();
     release_rows();
+    io_rows();
     lock_rows();
     stack_rows();
     mmio_rows();

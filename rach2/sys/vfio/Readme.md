@@ -20,7 +20,7 @@ The function must have no driver of the kernel's: bind is `EBUSY` while one hold
 * A device's regions at index << 40 of its descriptor, read and written with `pread` and `pwrite`: the six BARs, the ROM, the configuration space, and for an Intel display the OpRegion (index 9) and the host and LPC bridges' configuration spaces (10 and 11), each read-only with a type capability. A memory BAR of a page or more is mapped with `mmap` at its region's offset, uncached.
 * `vfio_file_is_valid` identifies group and device descriptors for the [KVM bridge](../kvm/Readme.md#vfio-assignment), which holds their open file descriptions and applies the guest PAT while a device is assigned.
 * `vfio_start` (`kernel.c`) forms the groups and adds the nodes and entries at boot, after the PCI bus, the IOMMU and the display. It logs `vfio: ready: G groups of F functions`.
-* `/proc/stat` counts attached groups (`vfio_groups`), referenced devices (`vfio_devices`), DMA mappings (`vfio_dma_mappings`) and their live pinned pages (`vfio_dma_pages`), under the big lock. A container shared by groups is counted once. `msi_vectors_free` counts the free vectors of the host's message pool.
+* `/proc/stat` counts attached groups (`vfio_groups`), referenced devices (`vfio_devices`), DMA mappings (`vfio_dma_mappings`), their live pinned RAM pages (`vfio_dma_pages`) and mapped device pages (`vfio_dma_io_pages`), under the big lock. A container shared by groups is counted once. `msi_vectors_free` counts the free vectors of the host's message pool.
 * The boot option `vfio_iommu_type1.allow_unsafe_interrupts=1` ([cmdline](../../cmdline.md)).
 
 ## Sources and license
@@ -49,7 +49,7 @@ A group is viable, and goes into a container, while none of its functions but a 
 
 ### Type1
 
-`VFIO_SET_IOMMU` makes one IOMMU domain for the container and gives it every function of every group in it. `VFIO_IOMMU_MAP_DMA` pins the caller's pages (`mm/pin.h`), as Linux pins them, and maps each run of physically contiguous pages at once. A mapping must fall within one valid IOVA range: the domain's addresses less each function's reserved regions but the relaxable ones, as `GET_INFO`'s capability reports them. An unmap of the pinned memory, or the end of the address space, takes the pages back; the mapping's holder then unmaps the IOVA, so the device no longer reaches them, and the mapping goes at its UNMAP_DMA or with the container. Version 2 refuses an unmap that would split a mapping; version 1 removes each mapping the range touches.
+`VFIO_SET_IOMMU` makes one IOMMU domain for the container and gives it every function of every group in it. `VFIO_IOMMU_MAP_DMA` pins the caller's RAM pages and follows device-memory mappings without a RAM charge (`mm/pin.h`, `PIN_IO`), as Linux Type1 does, and maps each run of physically contiguous pages at once. A mapping must fall within one valid IOVA range: the domain's addresses less each function's reserved regions but the relaxable ones, as `GET_INFO`'s capability reports them. An unmap of the pinned memory, or the end of the address space, takes the pages back; the mapping's holder then unmaps the IOVA, so the device no longer reaches them, and the mapping goes at its UNMAP_DMA or with the container. Device revocation or a protection change also removes a mapping containing device pages, before they are revoked. Version 2 refuses an unmap that would split a mapping; version 1 removes each mapping the range touches.
 
 ### The device
 

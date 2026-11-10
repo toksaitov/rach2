@@ -31,6 +31,9 @@ struct pin;
 /* A flag of `pin_user`: the device writes the pages, which the range must
  * allow, so each is brought in for a write. */
 #define PIN_WRITE 0x1u
+/* Permit device pages outside the frame allocator, as VFIO's PFN mappings.
+ * They count neither in VmPin nor against RLIMIT_MEMLOCK. */
+#define PIN_IO    0x2u
 
 /*
  * The holder of a pin, a record of the driver's that lives as long as the
@@ -54,9 +57,12 @@ struct pin_holder {
  * `holder` is told when an unmap or the end of `mm` takes the pin back.
  * May sleep. 0 with the record in `*out`; -EINVAL for an empty
  * or wrapping range; -EFAULT for a page outside user space, in no region,
- * of device memory or without the access; -ENOMEM past RLIMIT_MEMLOCK, as
+ * of device memory without PIN_IO or without the access; -ENOMEM past
+ * RLIMIT_MEMLOCK, as
  * Linux's account_locked_vm answers, or when memory runs out. On an error
- * nothing is pinned.
+ * nothing is pinned. With PIN_IO, device pages outside the frame allocator
+ * are also accepted without a RAM pin or charge; a device revocation or
+ * protection change takes back a pin that includes such pages.
  */
 int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
              const struct pin_holder *holder, struct pin **out);
@@ -96,5 +102,14 @@ uintptr_t pin_phys(const struct pin *pin, uint32_t i);
  * 0, -EFAULT or -ENOMEM; on an error nothing is pinned.
  */
 int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames);
+
+/** As paging_pin_range, also accepting device pages outside the frame
+ * allocator. On success, `ram_pages` is the number of RAM frames pinned;
+ * the remaining entries in `frames` need no frame pin or memory charge. */
+int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames,
+                     uint32_t *ram_pages);
+
+/** The number of RAM pages in `pin`, excluding uncharged device pages. */
+uint32_t pin_ram_count(const struct pin *pin);
 
 #endif /* _PIN_H_ */

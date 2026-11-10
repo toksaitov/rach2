@@ -730,14 +730,29 @@ int vm_populate(uintptr_t start, uintptr_t end)
     return 0;
 }
 
-/** Whether a pin may hold the page at `page` of `mm` for the access:
- * it lies in a region that allows the access and is not device memory,
- * whose pages are a device's already. */
-static int pin_allows(struct mm *mm, uintptr_t page, int write)
+/** Whether the region allows the access and, with `io`, device memory. */
+static int pin_allows(struct mm *mm, uintptr_t page, int write, int io)
 {
     const vma_t *vma = vm_find(&mm->vm, page);
 
-    return vma && !(vma->prot & VM_PROT_IO) && region_allows(vma, write);
+    return vma && (io || !(vma->prot & VM_PROT_IO)) && region_allows(vma, write);
+}
+
+/** Resolve a pin's page, preserving the caller's pending SIGBUS detail. */
+static int pin_resolve(struct mm *mm, uintptr_t page, int write, uintptr_t as_limit)
+{
+    int saved = current_proc ? current_proc->bus_fault : 0;
+    int resolved, bus;
+
+    if (current_proc) {
+        current_proc->bus_fault = 0;
+    }
+    resolved = vm_resolve_in(mm, page, write, as_limit);
+    bus = current_proc ? current_proc->bus_fault : 0;
+    if (current_proc) {
+        current_proc->bus_fault = saved;
+    }
+    return resolved ? 0 : (bus ? -EFAULT : -ENOMEM);
 }
 
 /**
@@ -748,30 +763,46 @@ static int pin_allows(struct mm *mm, uintptr_t page, int write)
  * by a fork or as a file's page, is given a frame of its own with its
  * rights (`page_private`), so that a later write by the process reaches the
  * frame the device has, as Linux unshares a page it pins, and the frame is
- * pinned.
+ * pinned. With `io`, device pages outside the allocator are kept without
+ * pins; `ram_pages` counts only the RAM frames that were pinned.
  */
-int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames)
+static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames, uint32_t *ram_pages)
 {
     uintptr_t as_limit = current_proc ? current_proc->rlim[RLIM_AS].cur : RLIM_INFINITY;
     uintptr_t page;
-    uint32_t i = 0;
+    uint32_t i = 0, ram = 0;
+    int write = (flags & PIN_WRITE) != 0, io = (flags & PIN_IO) != 0;
+    int rc = -ENOMEM;
 
     do {
         for (page = start; page < end; page += PAGE_SIZE) {
-            if (!pin_allows(mm, page, write)) {
+            if (!pin_allows(mm, page, write, io)) {
                 return -EFAULT;
             }
-            if (!vm_resolve_in(mm, page, write, as_limit)) {
-                return pin_allows(mm, page, write) ? -ENOMEM : -EFAULT;
+            rc = pin_resolve(mm, page, write, as_limit);
+            if (rc != 0) {
+                return pin_allows(mm, page, write, io) ? rc : -EFAULT;
             }
         }
     } while (!range_ready(mm, start, end, write));
+    rc = -ENOMEM;
     for (page = start; page < end; page += PAGE_SIZE, i++) {
         const vma_t *vma = vm_find(&mm->vm, page);
         pte_t *e = user_pte(mm->dir, page);
 
-        if (!pin_allows(mm, page, write)) {
+        if (!pin_allows(mm, page, write, io)) {
             break;
+        }
+        if (vma->prot & VM_PROT_IO) {
+            uintptr_t phys = PTE_ADDR(*e), frame = phys / PAGE_SIZE;
+
+            if (frame < _frames_number && _frames[frame] < FRAME_REF_MAX) {
+                rc = -EFAULT;
+                break;
+            }
+            frames[i] = phys;
+            continue;
         }
         if (vma->type != VM_SHARED &&
             ((*e & PTE_COW) || frame_maps(PTE_ADDR(*e) / PAGE_SIZE) > 1) &&
@@ -782,14 +813,29 @@ int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, u
         if (frame_pin(frames[i]) != 0) {
             break;
         }
+        ram++;
     }
     if (page >= end) {
+        *ram_pages = ram;
         return 0;
     }
     while (i--) {
         frame_unpin(frames[i]);
     }
-    return -ENOMEM;
+    return rc;
+}
+
+int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames)
+{
+    uint32_t ram;
+
+    return pin_range(mm, start, end, write ? PIN_WRITE : 0u, frames, &ram);
+}
+
+int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames,
+                     uint32_t *ram_pages)
+{
+    return pin_range(mm, start, end, PIN_IO | (write ? PIN_WRITE : 0u), frames, ram_pages);
 }
 
 /**
