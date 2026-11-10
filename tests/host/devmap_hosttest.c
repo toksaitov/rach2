@@ -189,6 +189,13 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
 void smp_kernel_mapping_changed(void)
 {}
 
+/** Nothing: the test has no address space that counts its resident pages. */
+void mm_resident_add(const struct page_dir *dir, long pages)
+{
+    (void)dir;
+    (void)pages;
+}
+
 /** Nothing. */
 void arch_tlb_flush_page(uintptr_t va)
 {

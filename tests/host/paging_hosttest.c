@@ -350,6 +350,13 @@ void smp_kernel_mapping_changed(void)
     kernel_changes++;
 }
 
+/** Nothing: the test has no address space that counts its resident pages. */
+void mm_resident_add(const struct page_dir *dir, long pages)
+{
+    (void)dir;
+    (void)pages;
+}
+
 /** Nothing: the host has no TLB. */
 void arch_tlb_flush_page(uintptr_t va)
 {
