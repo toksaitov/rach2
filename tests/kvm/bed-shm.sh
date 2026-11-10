@@ -93,10 +93,13 @@ else
     fail attach "$(cat "$out/ivshmemd.out" "$out/refused1.out" | head -n 3 | tr '\n' ' ')"
 fi
 
-# The VM, under Rach2's KVM, with the region on its doorbell device.
+# The VM, under Rach2's KVM, with the region on its doorbell device. Its
+# disk takes no ioeventfd, and QEMU raises a disk's interrupts without an
+# irqfd, so that both counts are the doorbells'.
 TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
     -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
-    -drive file="$disk",if=virtio,format=raw,snapshot=on \
+    -drive file="$disk",if=none,id=vm,format=raw,snapshot=on \
+    -device virtio-blk-pci,drive=vm,ioeventfd=off \
     -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
     -serial file:"$out/console.log" > "$out/qemu.out" 2>&1 &
 qemu=$!

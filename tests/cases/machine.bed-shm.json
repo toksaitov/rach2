@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.bed-shm.virgl",
-      "behavior": "bed-shm.sh on the x86-64 GNU root attaches a region of 32 MiB to /dev/vgpu-shm with ivshmemd and has two more attaches refused, boots the test bed's VM under Rach2's KVM with the region on an ivshmem-doorbell of two vectors, draws the recorded display frame through virtio-gpu over the region with virgl in the VM and reads back llvmpipe's CRC, sees every doorbell carried by a KVM ioeventfd or irqfd, then stops the VM with four fenced submissions pending and kills it, and every fence and wait fails",
+      "behavior": "bed-shm.sh on the x86-64 GNU root attaches a region of 32 MiB to /dev/vgpu-shm with ivshmemd and has two more attaches refused, boots the test bed's VM under Rach2's KVM with the region on an ivshmem-doorbell of two vectors, draws the recorded display frame through virtio-gpu over the region with virgl in the VM and reads back llvmpipe's CRC, sees every doorbell carried by a KVM ioeventfd or irqfd, then stops the VM with four fenced submissions pending and kills it, and every fence fails, as does a wait after the death",
       "units": [
         "rach2/sys/virtio/shmem.c",
         "rach2/sys/virtio/virtqueue.c",
@@ -131,7 +131,7 @@
         },
         {
           "assertion_id": "death",
-          "checks": "bed-shm.sh prints bed-shm: death: pass: with the VM stopped and then killed, every one of vgshmprobe pending's four fences and its wait failed, and ivshmemd detached the region as lost",
+          "checks": "bed-shm.sh prints bed-shm: death: pass: with the VM stopped and then killed, every one of vgshmprobe pending's four fences failed, as did a wait after the death, and ivshmemd detached the region as lost",
           "source": "scenario"
         }
       ],
