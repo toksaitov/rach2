@@ -6,20 +6,29 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE
+#ifdef __linux__
+#define _GNU_SOURCE /* memfd_create */
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/eventfd.h>
+#endif
 
 #define VGS_IMPLEMENTATION
 #include "vgpushm.h"
@@ -40,6 +49,7 @@
 #define GPU_CMD_CTX_ATTACH_RESOURCE     0x0202
 #define GPU_CMD_CTX_DETACH_RESOURCE     0x0203
 #define GPU_CMD_RESOURCE_CREATE_3D      0x0204
+#define GPU_CMD_TRANSFER_FROM_HOST_3D   0x0206
 #define GPU_CMD_SUBMIT_3D               0x0207
 #define GPU_CMD_UPDATE_CURSOR           0x0300
 #define GPU_CMD_MOVE_CURSOR             0x0301
@@ -132,6 +142,13 @@ struct gpu_ctx_create {
 struct gpu_submit {
     struct gpu_hdr hdr;
     uint32_t size, padding;
+};
+
+struct gpu_transfer_3d {
+    struct gpu_hdr hdr;
+    uint32_t x, y, z, w, h, d;
+    uint64_t offset;
+    uint32_t resource_id, level, stride, layer_stride;
 };
 
 /* A recorded stream: this magic, then records of a kind, a length and bytes. */
@@ -883,7 +900,68 @@ struct drv {
     const char *dump;      /* directory for seeds, or 0 */
     int ndump;
     uint64_t fence;
+    struct bells *bells; /* the ivshmem server's doorbells, or 0 */
 };
+
+/*
+ * The doorbells of -S: the peer is QEMU's ivshmem server and its peer 0,
+ * QEMU's device peer 1. A vector of each peer is an eventfd; the server
+ * hands QEMU both sets, so that a write to vm[v] raises the VM's MSI-X
+ * vector v and the VM's doorbell for peer 0's vector v writes host[v].
+ */
+struct bells {
+    int host[2]; /* rung by the VM, read here */
+    int vm[2];   /* rung here, delivered by QEMU */
+    int conn;    /* QEMU's connection; its end is the VM's death */
+    uint64_t rung, woken;
+};
+
+/**
+ * Wait for the device: on the doorbells, up to 100 ms, when -S runs, or a
+ * moment otherwise. QEMU's closed connection is the VM's death.
+ */
+static void wait_bell(struct drv *dr)
+{
+    struct pollfd p[3];
+    uint64_t v;
+    int i;
+
+    if (dr->bells == 0) {
+        pause_briefly();
+        return;
+    }
+    for (i = 0; i < 2; i++) {
+        p[i].fd = dr->bells->host[i];
+        p[i].events = POLLIN;
+    }
+    p[2].fd = dr->bells->conn;
+    p[2].events = POLLIN;
+    if (poll(p, 3, 100) <= 0) {
+        return;
+    }
+    if (p[2].revents & (POLLIN | POLLHUP | POLLERR)) {
+        die("the device died: %s", "QEMU closed its ivshmem connection");
+    }
+    for (i = 0; i < 2; i++) {
+        if ((p[i].revents & POLLIN) && read(p[i].fd, &v, sizeof(v)) == sizeof(v)) {
+            dr->bells->woken++;
+        }
+    }
+}
+
+/** Ring the VM's vector when -S runs and, for the queue, doorbells are on. */
+static void ring(struct drv *dr, uint32_t vec)
+{
+    uint64_t one = 1;
+
+    if (dr->bells == 0 ||
+        (vec == VGS_VEC_QUEUE && (dr->me.transport_features & VGS_TF_DOORBELL) == 0)) {
+        return;
+    }
+    if (write(dr->bells->vm[vec], &one, sizeof(one)) == sizeof(one)) {
+        dr->bells->rung++;
+    }
+}
 
 /** Write a copy of the region as a seed when seeds are asked for. */
 static void dump(struct drv *dr, const char *name, const uint8_t *img)
@@ -955,7 +1033,7 @@ static void wait_device(struct drv *dr, uint32_t want, uint32_t want2)
         if (now() > end) {
             die("no answer from the device: %s", "timed out");
         }
-        pause_briefly();
+        wait_bell(dr);
     }
 }
 
@@ -1017,6 +1095,7 @@ static void handshake(struct drv *dr, int fresh, uint64_t want)
         VGS_LAYOUT(dr->base)->magic = VGS_MAGIC;
     }
     drv_store(dr->base, &dr->me);
+    ring(dr, VGS_VEC_CONTROL);
     printf("peer: reset: epoch %u\n", (unsigned)dr->me.epoch);
 
     wait_device(dr, VGS_DEV_READY, VGS_DEV_READY);
@@ -1024,7 +1103,7 @@ static void handshake(struct drv *dr, int fresh, uint64_t want)
         die("bad offer: %s", vgs_strerror(err));
     }
     dr->me.features = dr->dev.features & (VGS_F_VERSION_1 | want);
-    dr->me.transport_features = 0;
+    dr->me.transport_features = dr->bells ? dr->dev.transport_features & VGS_TF_DOORBELL : 0;
     off = vgs_queue_place(&dr->me.queue[VGS_QUEUE_CONTROL], dr->l.ring_off,
                           dr->dev.limits.max_queue < 64 ? dr->dev.limits.max_queue : 64);
     vgs_queue_place(&dr->me.queue[VGS_QUEUE_CURSOR], off,
@@ -1039,10 +1118,12 @@ static void handshake(struct drv *dr, int fresh, uint64_t want)
     free(img);
     region_zero(dr->base, dr->l.ring_off, dr->l.ring_len);
     drv_store(dr->base, &dr->me);
+    ring(dr, VGS_VEC_CONTROL);
     wait_device(dr, VGS_DEV_RUNNING, VGS_DEV_RUNNING);
     dr->avail = dr->used = 0;
     dr->brk = dr->l.heap_off;
-    printf("peer: running: features 0x%llx\n", (unsigned long long)dr->me.features);
+    printf("peer: running: features 0x%llx, transport 0x%llx\n",
+           (unsigned long long)dr->me.features, (unsigned long long)dr->me.transport_features);
 }
 
 /* One command's header and optional second readable buffer. */
@@ -1097,6 +1178,7 @@ static uint32_t send_cmd(struct drv *dr, const char *name, const struct gpu_mess
     dump(dr, name, img);
     free(img);
     vgs_avail_push(dr->base, q, &dr->avail, 0);
+    ring(dr, VGS_VEC_QUEUE);
 
     end = now() + timeout_s;
     for (;;) {
@@ -1113,7 +1195,7 @@ static uint32_t send_cmd(struct drv *dr, const char *name, const struct gpu_mess
         if (now() > end) {
             die("no answer to %s", name);
         }
-        pause_briefly();
+        wait_bell(dr);
     }
     if (vgs_used_elem(dr->base, q, dr->used, &id, &len) != VGS_OK || id != 0 || len > rlen ||
         len < sizeof(r)) {
@@ -1281,10 +1363,16 @@ static uint8_t *slurp(const char *path, size_t *n)
     return buf;
 }
 
+/* A recorded resource as the replay made it, for its readback. */
+struct made {
+    uint32_t id, format, width, height;
+    uint64_t backing;
+};
+
 /** Create and back one recorded resource from data of len bytes, attach it
- * to ctx and return its id. A malformed record in path ends the process. */
-static uint32_t replay_resource(struct drv *dr, const uint8_t *data, uint32_t len, uint32_t ctx,
-                                const char *path)
+ * to ctx and fill m. A malformed record in path ends the process. */
+static void replay_resource(struct drv *dr, const uint8_t *data, uint32_t len, uint32_t ctx,
+                            const char *path, struct made *m)
 {
     struct gpu_create_3d create;
     struct gpu_attach attach;
@@ -1321,7 +1409,52 @@ static uint32_t replay_resource(struct drv *dr, const uint8_t *data, uint32_t le
     expect(send_cmd(dr, "ctx-attach", &(struct gpu_message){&resource, sizeof(resource), 0, 0},
                     &response, sizeof(response)),
            GPU_RESP_OK_NODATA, "ctx-attach");
-    return create.resource_id;
+    m->id = create.resource_id;
+    m->format = create.format;
+    m->width = create.width;
+    m->height = create.height;
+    m->backing = entry.addr;
+}
+
+/**
+ * Read a replayed B8G8R8X8 resource back from the device into its backing
+ * and print its CRC-32 and, when every pixel has one colour, the colour, so
+ * that a check can compare what the stream drew. Other formats are skipped.
+ */
+static void readback(struct drv *dr, const struct made *m, uint32_t ctx)
+{
+    struct gpu_transfer_3d t;
+    struct gpu_hdr response;
+    uint64_t n = (uint64_t)m->width * m->height * 4, i;
+    uint8_t *px;
+    int uniform = 1;
+
+    if (m->format != GPU_FORMAT_B8G8R8X8_UNORM || m->width == 0 || m->height == 0) {
+        return;
+    }
+    hdr(&t, sizeof(t), GPU_CMD_TRANSFER_FROM_HOST_3D, GPU_FLAG_FENCE, ctx);
+    t.w = m->width;
+    t.h = m->height;
+    t.d = 1;
+    t.resource_id = m->id;
+    t.stride = m->width * 4;
+    expect(send_cmd(dr, "readback", &(struct gpu_message){&t, sizeof(t), 0, 0}, &response,
+                    sizeof(response)),
+           GPU_RESP_OK_NODATA, "readback");
+    if ((px = malloc((size_t)n)) == NULL) {
+        die("%s", "cannot allocate the readback");
+    }
+    region_get(dr->base, m->backing, px, (size_t)n);
+    for (i = 4; i < n && uniform; i += 4) {
+        uniform = memcmp(px, px + i, 3) == 0;
+    }
+    printf("peer: readback: resource 0x%x, %ux%u, crc %08x", (unsigned)m->id, (unsigned)m->width,
+           (unsigned)m->height, (unsigned)crc32(px, (size_t)n));
+    if (uniform) {
+        printf(", every pixel b,g,r %u,%u,%u", px[0], px[1], px[2]);
+    }
+    printf("\n");
+    free(px);
 }
 
 /**
@@ -1337,7 +1470,8 @@ static void replay(struct drv *dr, const char *path)
         struct gpu_submit sb;
         uint8_t raw[256];
     } u, resp;
-    uint32_t made[16], nmade = 0, i, ctx = VGS_ID_MAKE(1, 1);
+    struct made made[16];
+    uint32_t nmade = 0, i, ctx = VGS_ID_MAKE(1, 1);
     size_t n, pos = 8;
     uint8_t *rec = slurp(path, &n);
     uint64_t mark = dr->brk;
@@ -1370,7 +1504,7 @@ static void replay(struct drv *dr, const char *path)
             if (nmade == 16) {
                 die("too many resource records in %s", path);
             }
-            made[nmade++] = replay_resource(dr, rec + pos, len, ctx, path);
+            replay_resource(dr, rec + pos, len, ctx, path, &made[nmade++]);
         } else if (kind == REC_SUBMIT) {
             if (sizeof(u.sb) + len > dr->dev.limits.max_cmd) {
                 die("a submit in %s is larger than the device takes", path);
@@ -1386,14 +1520,17 @@ static void replay(struct drv *dr, const char *path)
         }
         pos += len;
     }
+    for (i = 0; i < nmade && dr->child == 0; i++) {
+        readback(dr, &made[i], ctx);
+    }
     for (i = 0; i < nmade; i++) {
         hdr(&u, sizeof(u.rs), GPU_CMD_CTX_DETACH_RESOURCE, 0, ctx);
-        u.rs.resource_id = made[i];
+        u.rs.resource_id = made[i].id;
         expect(send_cmd(dr, "ctx-detach", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, &resp,
                         sizeof(struct gpu_hdr)),
                GPU_RESP_OK_NODATA, "ctx-detach");
         hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
-        u.rs.resource_id = made[i];
+        u.rs.resource_id = made[i].id;
         expect(send_cmd(dr, "unref-3d", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, &resp,
                         sizeof(struct gpu_hdr)),
                GPU_RESP_OK_NODATA, "unref-3d");
@@ -1613,7 +1750,7 @@ static int check_files(int argc, char **argv)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: %s [-l | -f PATH] [-s SIZE] [-r STREAM] [-d DIR] [-t SECONDS]\n"
+            "usage: %s [-l | -f PATH | -S SOCKET] [-s SIZE] [-r STREAM] [-d DIR] [-t SECONDS]\n"
             "       %s -c IMAGE...\n"
             "       %s -w STREAM\n",
             prog, prog, prog);
@@ -1672,12 +1809,102 @@ static int map_region(struct drv *dr, const char *file, uint64_t size)
     return fresh;
 }
 
+#ifdef __linux__
+/** Send one message of ivshmem's server protocol, with fd unless it is -1. */
+static void ivshmem_send(int conn, int64_t v, int fd)
+{
+    char ctl[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = {&v, sizeof(v)};
+    struct msghdr m;
+    struct cmsghdr *c;
+
+    memset(&m, 0, sizeof(m));
+    memset(ctl, 0, sizeof(ctl));
+    m.msg_iov = &iov;
+    m.msg_iovlen = 1;
+    if (fd >= 0) {
+        m.msg_control = ctl;
+        m.msg_controllen = sizeof(ctl);
+        c = CMSG_FIRSTHDR(&m);
+        c->cmsg_level = SOL_SOCKET;
+        c->cmsg_type = SCM_RIGHTS;
+        c->cmsg_len = CMSG_LEN(sizeof(int));
+        memcpy(CMSG_DATA(c), &fd, sizeof(int));
+    }
+    if (sendmsg(conn, &m, 0) != (ssize_t)sizeof(v)) {
+        die("cannot write to QEMU: %s", strerror(errno));
+    }
+}
+
+/**
+ * Be QEMU's ivshmem server on the socket at path for one ivshmem-doorbell
+ * device of two vectors, and its peer 0: make the region, a memfd of size
+ * bytes, and both peers' eventfds, wait for QEMU to connect, and send it,
+ * as QEMU's docs/specs/ivshmem-spec.rst has the protocol, the version 0,
+ * its id 1, the region, peer 0's vectors and its own.
+ */
+static void serve_ivshmem(struct drv *dr, const char *path, uint64_t size)
+{
+    static struct bells b;
+    struct sockaddr_un a;
+    struct pollfd p;
+    int ls, fd, i;
+
+    if ((fd = memfd_create("vgpushm", MFD_CLOEXEC)) < 0 || ftruncate(fd, (off_t)size) != 0) {
+        die("cannot make the region: %s", strerror(errno));
+    }
+    dr->base = mmap(0, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (dr->base == MAP_FAILED) {
+        die("cannot map the region: %s", strerror(errno));
+    }
+    for (i = 0; i < 2; i++) {
+        b.host[i] = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        b.vm[i] = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if (b.host[i] < 0 || b.vm[i] < 0) {
+            die("cannot make an eventfd: %s", strerror(errno));
+        }
+    }
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    if (strlen(path) >= sizeof(a.sun_path)) {
+        die("socket path too long: %s", path);
+    }
+    strcpy(a.sun_path, path);
+    unlink(path);
+    if ((ls = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)) < 0 ||
+        bind(ls, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(ls, 1) != 0) {
+        die("cannot listen on %s", path);
+    }
+    printf("peer: ivshmem: listening on %s\n", path);
+    p.fd = ls;
+    p.events = POLLIN;
+    if (poll(&p, 1, (int)(timeout_s * 1000)) != 1 || (b.conn = accept(ls, 0, 0)) < 0) {
+        die("no ivshmem client on %s", path);
+    }
+    close(ls);
+    unlink(path);
+    ivshmem_send(b.conn, 0, -1);
+    ivshmem_send(b.conn, 1, -1);
+    ivshmem_send(b.conn, -1, fd);
+    for (i = 0; i < 2; i++) {
+        ivshmem_send(b.conn, 0, b.host[i]);
+    }
+    for (i = 0; i < 2; i++) {
+        ivshmem_send(b.conn, 1, b.vm[i]);
+    }
+    close(fd);
+    dr->size = size;
+    dr->bells = &b;
+    printf("peer: ivshmem: QEMU connected as peer 1\n");
+}
+#endif
+
 /** Parse the transport options, run the driver and reap its loopback device;
  * return 0 on success, or exit 1 for a failure and 2 for invalid options. */
 int main(int argc, char **argv)
 {
     struct drv dr;
-    const char *file = 0, *stream = 0;
+    const char *file = 0, *stream = 0, *sock = 0;
     uint64_t size = VGS_REGION_MIN, backing;
     uint32_t id = VGS_ID_MAKE(1, 1), one = 1;
     int loop = 0, opt, fresh;
@@ -1687,7 +1914,7 @@ int main(int argc, char **argv)
     }
     memset(&dr, 0, sizeof(dr));
     dr.report = -1;
-    while ((opt = getopt(argc, argv, "cd:f:lr:s:t:w:")) != -1) {
+    while ((opt = getopt(argc, argv, "cd:f:lr:s:S:t:w:")) != -1) {
         switch (opt) {
         case 'c':
             return check_files(argc - optind, argv + optind);
@@ -1706,6 +1933,9 @@ int main(int argc, char **argv)
         case 's':
             size = strtoull(optarg, 0, 0);
             break;
+        case 'S':
+            sock = optarg;
+            break;
         case 't':
             timeout_s = strtod(optarg, 0);
             break;
@@ -1716,11 +1946,20 @@ int main(int argc, char **argv)
             usage();
         }
     }
-    if (loop == (file != 0) || optind != argc) {
+    if (loop + (file != 0) + (sock != 0) != 1 || optind != argc) {
         usage();
     }
     setvbuf(stdout, 0, _IOLBF, 0);
-    fresh = map_region(&dr, file, size);
+    if (sock) {
+#ifdef __linux__
+        serve_ivshmem(&dr, sock, size);
+        fresh = 1;
+#else
+        die("%s", "-S needs Linux's memfd and eventfd");
+#endif
+    } else {
+        fresh = map_region(&dr, file, size);
+    }
 
     handshake(&dr, fresh, stream ? 1ULL << GPU_F_VIRGL : 0);
     run_2d(&dr, id, &backing);
@@ -1733,6 +1972,11 @@ int main(int argc, char **argv)
     }
     dr.me.state = VGS_DRV_GONE;
     drv_store(dr.base, &dr.me);
+    ring(&dr, VGS_VEC_CONTROL);
+    if (dr.bells) {
+        printf("peer: doorbells: rang %llu, woken %llu\n", (unsigned long long)dr.bells->rung,
+               (unsigned long long)dr.bells->woken);
+    }
     if (dr.child) {
         int st;
 
