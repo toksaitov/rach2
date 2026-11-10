@@ -14,8 +14,9 @@
  * low half's bits it sets. */
 static int ctx_masked(uint32_t reg)
 {
-    return reg == INSTPM || reg == CACHE_MODE_0_GEN7 || reg == CACHE_MODE_1 ||
-           reg == RING_PSMI_CTL(RENDER_RING_BASE) || reg == RING_PSMI_CTL(BLT_RING_BASE);
+    return reg == INSTPM || reg == RING_INSTPM(BLT_RING_BASE) || reg == CACHE_MODE_0_GEN7 ||
+           reg == CACHE_MODE_1 || reg == RING_PSMI_CTL(RENDER_RING_BASE) ||
+           reg == RING_PSMI_CTL(BLT_RING_BASE);
 }
 
 /* The context registers an image saves, in the order it keeps them. */
@@ -123,9 +124,14 @@ static int ring_ctx_command(struct i915_model *m, struct i915_model_ring *r, uin
         return 1;
     case 0x22: /* MI_LOAD_REGISTER_IMM: pairs of a register and a value */
         for (i = 1; i + 1u < len; i += 2u) {
-            i915_model_poke(m, d[i],
-                            ctx_masked(d[i]) ? ring_masked(i915_model_peek(m, d[i]), d[i + 1u])
-                                             : d[i + 1u]);
+            uint32_t v =
+                ctx_masked(d[i]) ? ring_masked(i915_model_peek(m, d[i]), d[i + 1u]) : d[i + 1u];
+
+            /* INSTPM's TLB invalidation is done at once. */
+            if (d[i] == INSTPM || d[i] == RING_INSTPM(BLT_RING_BASE)) {
+                v &= ~INSTPM_TLB_INVALIDATE;
+            }
+            i915_model_poke(m, d[i], v);
         }
         return 1;
     case 0x24: /* MI_STORE_REGISTER_MEM through the global GTT */

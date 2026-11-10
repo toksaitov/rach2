@@ -1250,7 +1250,7 @@ static void row_requests(void)
     rq = 0;
     CHECK("requests: a ring that refuses the first commands fails the request with EIO",
           i915_request_create(r, &rq) == -EIO && rcs->tail == tail && rcs->reserved == 0);
-    submit_after = 2;
+    submit_after = 6; /* the invalidation, the directory's load in four, the switch */
     CHECK("requests: one that refuses the breadcrumb", i915_request_create(r, &rq) == 0);
     CHECK("requests: fails the add with EIO, the fence signalled with it, the ring as it was",
           i915_request_add(rq) == -EIO && rq->fence.base.signaled && rq->fence.base.error == -EIO &&
