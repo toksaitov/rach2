@@ -393,6 +393,20 @@ The text is made at the open and again after each write, and a read gives
 it from the description's offset.
 The kernel logs each injection as
 .Dq i915: fake: injected: NAME .
+.It Pa dri/DEVICE/i915_gem_drop_caches
+Mode 0644.
+Present for each device of
+.Xr i915 4 .
+A read gives the flags a write takes,
+.Ql 0x000003ff
+and a newline.
+A write of a number, decimal, octal after a 0 or hexadecimal after 0x,
+with a newline at most after it, drops what its flags name, as Linux's
+file does, and fails with
+.Er EINVAL
+for other text and
+.Er ERANGE
+for a number past 64 bits.
 .El
 .Sh EXAMPLES
 As root:
