@@ -82,6 +82,7 @@
 
 #define E2BIG      7
 #define EAGAIN     11
+#define EINTR      4
 #define EPERM      1
 #define EACCES     13
 #define ESRCH      3
@@ -142,6 +143,9 @@ static void say(const char *s)
     syscall3(SYS_WRITE, 1, (long)s, (long)strlen(s));
 }
 
+/* The one child alive, for failure cleanup; 0 in the child and after reap. */
+static long child_pid;
+
 /* The assertions, a check each, in the order the probe makes them. */
 static const char *const assertion_id[] = {
     "size",         "einval",    "eopnotsupp", "esrch", "policies",    "slice", "keep",
@@ -155,6 +159,13 @@ static void fail(const char *why)
     say(why);
     say("\n");
     report_stop(why);
+    if (child_pid > 0) {
+        int status;
+
+        syscall2(SYS_KILL, child_pid, 9);
+        while (syscall3(SYS_WAITPID, child_pid, (long)&status, 0) == -EINTR) {
+        }
+    }
     sys_exit(1);
 }
 
@@ -414,8 +425,8 @@ static void run_policies(void)
                   "SCHED_OTHER at nice 5 did not read back as set, with the default slice");
     set_and_check(mk(SCHED_BATCH, 0, 3, 0), with_runtime(mk(SCHED_BATCH, 0, 3, 0), base_slice),
                   SCHED_BATCH, "SCHED_BATCH at nice 3 did not read back as set");
-    set_and_check(mk(SCHED_IDLE, 0, 0, 0), with_runtime(mk(SCHED_IDLE, 0, 0, 0), base_slice),
-                  SCHED_IDLE, "SCHED_IDLE did not read back as set");
+    set_and_check(mk(SCHED_IDLE, 0, 0, 0), with_runtime(mk(SCHED_IDLE, 0, 3, 0), base_slice),
+                  SCHED_IDLE, "SCHED_IDLE changed the nice value or slice");
     set_and_check(mk(SCHED_FIFO, 0, 0, 10), mk(SCHED_FIFO, 0, 0, 10), SCHED_FIFO,
                   "SCHED_FIFO at 10 did not read back as set");
     set_and_check(mk(SCHED_RR, 0, 0, 20), mk(SCHED_RR, 0, 0, 20), SCHED_RR,
@@ -544,9 +555,11 @@ static long forked(long scheduler, unsigned int priority, int nice)
                      ? 0
                      : 1);
     }
+    child_pid = pid;
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("a child could not be reaped");
     }
+    child_pid = 0;
     return status;
 }
 
@@ -646,9 +659,11 @@ static void run_eperm(void)
     if (pid == 0) {
         sys_exit(unprivileged(parent));
     }
+    child_pid = pid;
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("a child could not be reaped");
     }
+    child_pid = 0;
     if (status != 0) {
         fail("a child without root was not refused with EPERM a lower nice value, a real-time or "
              "deadline policy, another user's thread, or clearing the reset flag or SCHED_IDLE");
@@ -716,9 +731,11 @@ static void run_rlimits(void)
     if (pid == 0) {
         sys_exit(limited());
     }
+    child_pid = pid;
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("a child could not be reaped");
     }
+    child_pid = 0;
     if (status != 0) {
         fail("a child without root did not have the real-time priorities up to RLIMIT_RTPRIO and "
              "the nice values RLIMIT_NICE allows, and no more");

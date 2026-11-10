@@ -178,7 +178,11 @@ It takes each policy
 .Fn sched_setscheduler
 takes, with the same checks and result, and
 .Dv SCHED_DEADLINE .
-For the ordinary policies it sets the nice value, clamped to -20 to 19,
+For
+.Dv SCHED_OTHER
+and
+.Dv SCHED_BATCH
+it sets the nice value, clamped to -20 to 19,
 and a slice of
 .Fa sched_runtime
 nanoseconds, clamped to 0.1 to 100 ms, or the default for 0; lowering the
@@ -186,6 +190,8 @@ nice value past what the thread's
 .Dv RLIMIT_NICE
 allows, 20 less its soft value, needs privilege, and fails with
 .Er EPERM .
+.Dv SCHED_IDLE
+keeps the nice value and slice unchanged.
 .Dv SCHED_FLAG_RESET_ON_FORK
 (1) is
 .Dv SCHED_RESET_ON_FORK ;

@@ -34,14 +34,15 @@ With a null
 it reports where each page is: 0, its node, for a page of memory;
 .Er \-EFAULT
 for an address in no mapping, for a page that was only read, which is
-Linux's zero page, for device memory, and for a page of anonymous memory
-that is not there; and
+Linux's zero page; and
 .Er \-ENOENT
-for a page of a file or of shared memory that is not there.
+for an absent page of any mapping or for device memory.
 With
 .Fa nodes ,
 an int for each page, it moves each page to its node, which must be 0, and
-writes the same statuses, a page of memory being on its node already.
+writes the same statuses, except that device memory is
+.Er \-EFAULT .
+A page of memory is on its node already.
 The statuses of the pages before a failure are written.
 .Fa flags
 may hold

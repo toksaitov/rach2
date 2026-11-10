@@ -156,7 +156,7 @@ static void read_types(void)
 {
     long fd = syscall3(SYS_OPEN, (long)"/proc/filesystems", O_RDONLY, 0);
     int len = 0;
-    long n;
+    long n = 0;
     char *p, *line;
 
     if (fd < 0) {
@@ -167,8 +167,17 @@ static void read_types(void)
         len += (int)n;
     }
     syscall1(SYS_CLOSE, fd);
+    if (n < 0) {
+        fail("read /proc/filesystems");
+    }
+    if (len == (int)sizeof(text) - 1) {
+        fail("/proc/filesystems reached the probe's 2047-byte limit");
+    }
     text[len] = '\0';
-    for (line = text; *line && ntypes < MAX_TYPES; line = p + 1) {
+    for (line = text; *line; line = p + 1) {
+        if (ntypes == MAX_TYPES) {
+            fail("/proc/filesystems passed the probe's 32-type limit");
+        }
         for (p = line; *p && *p != '\t'; p++) {
         }
         if (!*p) {

@@ -688,14 +688,11 @@ long sys_migrate_pages(isr_params_t *params)
 
 /**
  * The status move_pages gives the page at `addr` of `mm`, as Linux's
- * follow_page gives it under FOLL_DUMP: node 0 for a page of memory;
- * -EFAULT for an address in no region, for a page a read brought in
- * zeroed, which is Linux's zero page, and for device memory, neither
- * being a page a node holds; and for a page that is not there -EFAULT in
- * anonymous memory, where it would read as zeros, and -ENOENT in a
- * mapping of a file or of shared memory. A call that would move the page
- * (`move`) gets -EFAULT for the whole of a region of device memory, which
- * Linux cannot migrate.
+ * folio_walk_start with FW_ZEROPAGE: node 0 for a resident RAM page;
+ * -EFAULT for an address in no region or the zero page; and -ENOENT for
+ * an absent page or device memory. A call that would move the page
+ * (`move`) gets -EFAULT for the whole of a region of device memory,
+ * which Linux cannot migrate.
  */
 static int32_t page_status(struct mm *mm, uintptr_t addr, int move)
 {
@@ -708,7 +705,9 @@ static int32_t page_status(struct mm *mm, uintptr_t addr, int move)
     case PAGING_PAGE_FRAME:
         return 0;
     case PAGING_PAGE_NONE:
-        return vma->file ? -ENOENT : -EFAULT;
+        return -ENOENT;
+    case PAGING_PAGE_DEVICE:
+        return move ? -EFAULT : -ENOENT;
     default:
         return -EFAULT;
     }
