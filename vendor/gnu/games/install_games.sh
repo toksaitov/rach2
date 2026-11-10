@@ -10,9 +10,11 @@
 # account for, refusing a file the root already has; then it refuses the root
 # when a library that a program or library of the layer needs is in none of
 # the root's library directories, since nothing resolved the layer's
-# libraries against the root. On x86-64 it adds the Proton launcher, the
-# native games' replays and umu-launcher with the Steam Linux Runtime's
-# archive, and on a root with /usr/games puts it on the path. With
+# libraries against the root. On x86-64 it adds the Proton launcher as
+# /usr/bin/rach2-game, Crysis's installer as /usr/bin/crysis.sh with its
+# checksum manifests in /usr/share/rach2/crysis, umu-launcher with the Steam
+# Linux Runtime's archive and the native games' replays; on a root with
+# /usr/games it puts that directory on the path. With
 # GNU_WESTON 1 it puts the rebuilt Weston in place of the desktop closure's.
 #
 
