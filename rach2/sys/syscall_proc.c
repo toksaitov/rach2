@@ -6764,6 +6764,12 @@ long sys_prlimit64(isr_params_t *params)
 
 #define PROT_EXEC 0x4
 
+#define PROT_SEM 0x8 /* accepted by mprotect and given no meaning, as on x86 Linux */
+
+#define PROT_GROWSDOWN 0x01000000 /* mprotect: widen the range down, below */
+
+#define PROT_GROWSUP 0x02000000 /* mprotect: refused, since no x86 region grows up */
+
 #define MAP_SHARED 0x01
 
 #define MAP_PRIVATE 0x02
@@ -7616,10 +7622,14 @@ static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
 }
 
 /** The checks of `mprotect_key` before it looks at the regions, in Linux's
- * order: 1 to go on, 0 for an empty range, or -errno. */
+ * order, of the `prot` it was given, PROT_GROWSDOWN or PROT_GROWSUP among
+ * its bits: 1 to go on, 0 for an empty range, or -errno. */
 static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t length, uint32_t prot,
                              int key)
 {
+    if ((prot & (PROT_GROWSDOWN | PROT_GROWSUP)) == (PROT_GROWSDOWN | PROT_GROWSUP)) {
+        return -EINVAL;
+    }
     if ((addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
@@ -7629,7 +7639,8 @@ static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t leng
     if (PAGE_UP(length) == 0 || addr + PAGE_UP(length) <= addr) {
         return -ENOMEM;
     }
-    if ((prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
+    if ((prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_SEM | PROT_GROWSDOWN |
+                            PROT_GROWSUP)) != 0 ||
         (key != -1 && !pkey_named(mm, key))) {
         return -EINVAL;
     }
@@ -7643,34 +7654,45 @@ static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t leng
  * Change the protection of a range under the protection key `key`, or -1
  * for mprotect's: the core of mprotect(2) and pkey_mprotect(2). Its
  * arguments are addr (page aligned), length and prot. The checks run in
- * Linux's order: EINVAL for an unaligned address, 0 for an empty range,
- * ENOMEM for one that wraps, EINVAL for an unknown protection bit or a
- * key the caller may not name (`pkey_named`), and ENOMEM when a page of
- * the range is not mapped or a split finds no room for its region. EACCES
- * for write asked of a shared mapping that may never be written (the
- * VM_PROT_NOWRITE `mmap_file` and `mmap_shm` give) or for execute asked of
- * a mapping of memfd_secret. A sealed region (mseal) is EPERM unless
- * its rights already require EACCES; the regions and pages below it take
- * the new protection and their notifiers run before either error is
- * returned, as Linux changes region by region and stops at the sealed one.
- * The regions take the new protection first and the resident pages after,
- * so a fault in between reads the protection the call is setting.
+ * Linux's order: EINVAL for PROT_GROWSDOWN and PROT_GROWSUP together, for
+ * an unaligned address, 0 for an empty range, ENOMEM for one that wraps,
+ * EINVAL for an unknown protection bit or a key the caller may not name
+ * (`pkey_named`), and ENOMEM when no region meets the range or the first
+ * begins above it. PROT_GROWSDOWN moves the start down to that of the
+ * first region, which must be the main stack (EINVAL otherwise), as
+ * glibc's _dl_make_stack_executable asks; PROT_GROWSUP is EINVAL, since no
+ * x86 region grows up. PROT_SEM is accepted and means nothing.
+ *
+ * The regions then change one after another, as Linux's do, and the first
+ * that cannot stops the call (`vm_protect_stop`): ENOMEM at a page that no
+ * region holds; EACCES for write asked of a shared mapping that may never
+ * be written (the VM_PROT_NOWRITE `mmap_file` and `mmap_shm` give) or for
+ * execute asked of a mapping of memfd_secret; EPERM at a sealed region
+ * (mseal). The regions and resident pages before the stop keep the new
+ * protection, and their notifiers run, before the error is returned; a
+ * split with no room for its region is ENOMEM with nothing changed. The
+ * regions take the new protection first and the resident pages after, so
+ * a fault in between reads the protection the call is setting.
  *
  * The regions take `key`; with -1, PROT_EXEC alone takes the execute-only
- * key where the keys are on (`pkey_exec_only`), any other protection moves
- * a region of that key back to key 0, and every other region keeps its
- * own, as Linux's arch_override_mprotect_pkey chooses.
+ * key where the keys are on (`pkey_exec_only`), once the range is known to
+ * begin in a region, any other protection moves a region of that key back
+ * to key 0, and every other region keeps its own, as Linux's
+ * arch_override_mprotect_pkey chooses.
  */
 static long mprotect_key(isr_params_t *params, int key)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t length = SC_ARG(params, 1);
     uint32_t prot = (uint32_t)SC_ARG(params, 2);
-    uintptr_t end, sealed;
+    uint32_t grows = prot & (PROT_GROWSDOWN | PROT_GROWSUP);
+    uintptr_t end, stop;
+    const vma_t *first;
     uint32_t vmprot;
     int exec_key = -1;
     struct mm *mm;
     long rc;
+    int why;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -7680,7 +7702,22 @@ static long mprotect_key(isr_params_t *params, int key)
     if (rc <= 0) {
         return rc;
     }
+    prot &= ~grows;
     end = PAGE_UP(addr + length);
+    first = vm_lower(&mm->vm, addr);
+    if (!first || first->start >= end) {
+        return -ENOMEM;
+    }
+    if (grows == PROT_GROWSDOWN) {
+        addr = first->start;
+        if (first->type != VM_STACK) {
+            return -EINVAL;
+        }
+    } else if (first->start > addr) {
+        return -ENOMEM;
+    } else if (grows == PROT_GROWSUP) {
+        return -EINVAL;
+    }
     vmprot = vm_prot_of(prot);
     if (key == -1 && prot == PROT_EXEC) {
         int xo = pkey_exec_only(mm);
@@ -7689,31 +7726,17 @@ static long mprotect_key(isr_params_t *params, int key)
     } else if (key == -1) {
         exec_key = mm->pkey_exec;
     }
-    sealed = vm_sealed_at(&mm->vm, addr, end);
-    rc = vm_protect_key(&mm->vm, addr, sealed, vmprot, key, exec_key);
-    if (rc == 0) {
-        mmn_notify(mm, MMN_PROTECT, addr, sealed);
-        protect_resident(addr, sealed, vmprot);
-    }
-    if (rc == 0 && sealed < end) {
-        const vma_t *r = vm_find(&mm->vm, sealed);
-
-        rc = ((vmprot & VM_PROT_WRITE) && (r->prot & VM_PROT_NOWRITE)) ||
-                     ((vmprot & VM_PROT_EXEC) && (r->prot & VM_PROT_SECRET))
-                 ? -3
-                 : -4;
-    }
-    if (rc == -1) {
-        return -ENOMEM;
-    }
-    if (rc == -3) {
-        return -EACCES;
-    }
-    if (rc != 0 && rc != -4) {
+    stop = vm_protect_stop(&mm->vm, addr, end, vmprot, &why);
+    rc = vm_protect_key(&mm->vm, addr, stop, vmprot, key, exec_key);
+    if (rc != 0) {
         vma_exhausted("mprotect");
         return -ENOMEM;
     }
-    return rc == -4 ? -EPERM : 0;
+    if (stop > addr) {
+        mmn_notify(mm, MMN_PROTECT, addr, stop);
+        protect_resident(addr, stop, vmprot);
+    }
+    return why == -1 ? -ENOMEM : why == -3 ? -EACCES : why == -4 ? -EPERM : 0;
 }
 
 /** Change the protection of a range (mprotect(2)): `mprotect_key` with no

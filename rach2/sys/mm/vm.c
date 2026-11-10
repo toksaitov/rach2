@@ -707,6 +707,35 @@ int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint
     return vm_change(vm, start, end, mask, set & mask, 0);
 }
 
+uintptr_t vm_protect_stop(const vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot,
+                          int *why)
+{
+    uintptr_t at = start;
+    const vma_t *r;
+
+    *why = 0;
+    for (r = vm_lower(vm, start); r && at < end; r = vm_next(r)) {
+        if (r->start > at) {
+            break;
+        }
+        if (((prot & VM_PROT_WRITE) && (r->prot & VM_PROT_NOWRITE)) ||
+            ((prot & VM_PROT_EXEC) && (r->prot & VM_PROT_SECRET))) {
+            *why = -3;
+            return at;
+        }
+        if (r->prot & VM_PROT_SEALED) {
+            *why = -4;
+            return at;
+        }
+        at = r->end;
+    }
+    if (at < end) {
+        *why = -1;
+        return at;
+    }
+    return end;
+}
+
 uintptr_t vm_sealed_at(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     const vma_t *r;
