@@ -509,9 +509,10 @@ advice that would discard its pages,
 .Dv MADV_DONTNEED ,
 .Dv MADV_DONTNEED_LOCKED ,
 .Dv MADV_FREE ,
-.Dv MADV_DONTFORK
-and
-.Dv MADV_WIPEONFORK ,
+.Dv MADV_DONTFORK ,
+.Dv MADV_WIPEONFORK
+and, as Linux 6.13 adds,
+.Dv MADV_GUARD_INSTALL ,
 stops with
 .Er EPERM ,
 the mappings below it in the range advised first, as on Linux.

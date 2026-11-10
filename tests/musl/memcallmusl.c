@@ -14,7 +14,8 @@
  * a hole are EINVAL, EINVAL and ENOMEM, and an empty range is 0; a sealed
  * page refuses munmap, which unmaps nothing, mremap, MAP_FIXED and
  * mprotect, which changes the page below it first, with EPERM, refuses
- * MADV_DONTNEED when it is read-only, shows `sl` in smaps, may be sealed
+ * MADV_DONTNEED when it is read-only, and MADV_GUARD_INSTALL, which keeps
+ * its bytes, as Linux 6.13 does, shows `sl` in smaps, may be sealed
  * again and stays sealed in a child of fork. On the i686 kernel every call
  * is EPERM, as Linux's 32-bit kernel answers.
  *
@@ -111,8 +112,11 @@
 /* madvise's advice of Linux 5.4 and 6.1, and fcntl's seal command. */
 #define ADV_COLD        20
 #define ADV_PAGEOUT     21
-#define ADV_DONTNEED    4
-#define FCNTL_GET_SEALS 1034
+#define ADV_DONTNEED      4
+#define ADV_WIPEONFORK    18
+#define ADV_KEEPONFORK    19
+#define ADV_GUARD_INSTALL 102
+#define FCNTL_GET_SEALS   1034
 
 #define PAGE 4096ul
 
@@ -243,13 +247,16 @@ static void no_core(void)
 static void seal_rows(void)
 {
     char *m = anon(3, PROT_READ | PROT_WRITE), *ro = anon(1, PROT_READ), *hole = anon(4, PROT_READ);
+    char *kept = anon(1, PROT_READ | PROT_WRITE);
     char line[512];
     pid_t pid;
 
-    if (m == NULL || ro == NULL || hole == NULL || munmap(hole + 3 * PAGE, PAGE) != 0) {
+    if (m == NULL || ro == NULL || hole == NULL || kept == NULL ||
+        munmap(hole + 3 * PAGE, PAGE) != 0) {
         miss("mmap of the regions");
         return;
     }
+    kept[0] = 'k';
     expect("mseal with a flag", syscall(NR_MSEAL, m, PAGE, 1ul), 0, EINVAL);
     expect("mseal of an unaligned start", syscall(NR_MSEAL, m + 1, PAGE, 0ul), 0, EINVAL);
     expect("mseal of an empty range", syscall(NR_MSEAL, m, 0ul, 0ul), 0, 0);
@@ -272,6 +279,13 @@ static void seal_rows(void)
            0);
     expect("mseal of a read-only page", syscall(NR_MSEAL, ro, PAGE, 0ul), 0, 0);
     expect("MADV_DONTNEED of the read-only sealed page", madvise(ro, PAGE, ADV_DONTNEED), 0, EPERM);
+    expect("mprotect of a written page to read-only", mprotect(kept, PAGE, PROT_READ), 0, 0);
+    expect("mseal of the written page", syscall(NR_MSEAL, kept, PAGE, 0ul), 0, 0);
+    expect("MADV_GUARD_INSTALL of the sealed page", madvise(kept, PAGE, ADV_GUARD_INSTALL), 0,
+           EPERM);
+    if (kept[0] != 'k') {
+        miss("MADV_GUARD_INSTALL dropped the sealed page's byte");
+    }
     if (!has_flag(m + PAGE, "sl")) {
         miss("smaps shows no sl for the sealed page");
     }

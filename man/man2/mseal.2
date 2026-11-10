@@ -54,9 +54,10 @@ advice that would discard its pages,
 .Dv MADV_DONTNEED ,
 .Dv MADV_DONTNEED_LOCKED ,
 .Dv MADV_FREE ,
-.Dv MADV_DONTFORK
+.Dv MADV_DONTFORK ,
+.Dv MADV_WIPEONFORK
 and
-.Dv MADV_WIPEONFORK ,
+.Dv MADV_GUARD_INSTALL ,
 when it is anonymous private memory without write, which advises the
 mappings below it first;
 .It
