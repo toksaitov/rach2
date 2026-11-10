@@ -16,6 +16,7 @@ keylatprobe a key typed on a USB keyboard, and rach2.usblatency on the boot line
 lagprobe rach2.blocklag and its companions on the boot line
 ldtprobe an i686 program run on the x86-64 kernel, which no native collection stages yet
 lockwaitprobe rach2.blocklag on the boot line, and the empty ext2 volume on the root disk's second partition
+mixprobe an i386 build at /ia32/mixprobe beside the x86-64 one, which only the x86-64 test image stages
 mouseprobe a movement of the mouse made after the open
 oomprobe the whole machine run out of frames
 orphanprobe grandchildren reaped by the designated init

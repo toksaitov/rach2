@@ -37,9 +37,11 @@
  * run. Prints "LDTPROBE OK" and exits 0, or "LDTPROBE FAIL: " and the
  * reason and exits 1. modify_ldt and __kernel_vsyscall are i386's
  * interfaces, so tests/Makefile builds the probe for i686 alone, and it
- * runs on the x86-64 kernel, which gives an i386 program both; the i686
- * kernel has neither, and the probe stops at once there with "LDTPROBE
- * SKIP", exit 0.
+ * runs on the x86-64 kernel, which gives an i386 program both. The i686
+ * kernel has neither: the probe reports the branch `kernel` of the kernel
+ * that ETUDE_KERNEL names, or of the one whose modify_ldt answers where it
+ * is unset, and on the i686 kernel checks only `absent`, that modify_ldt
+ * gives ENOSYS, and stops with "LDTPROBE SKIP", exit 0.
  */
 
 #include "probe.h"
@@ -304,8 +306,7 @@ static int in_child(int (*fn)(void))
     return status;
 }
 
-/** The reads of the default LDT and of one never written; stops with
- * "LDTPROBE SKIP" on a kernel without modify_ldt. */
+/** The reads of the default LDT and of one never written. */
 static void run_reads(void)
 {
     unsigned char buf[256];
@@ -313,14 +314,6 @@ static void run_reads(void)
 
     for (i = 0; i < sizeof(buf); i++) {
         buf[i] = 0xAA;
-    }
-    if (modify_ldt(2, buf, sizeof(buf)) == -ENOSYS) {
-        say("LDTPROBE SKIP: the kernel has no modify_ldt\n");
-        for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
-            report_skip("the kernel has no modify_ldt");
-        }
-        report_end();
-        sys_exit(0);
     }
     if (modify_ldt(2, buf, sizeof(buf)) != 128) {
         fail("the default LDT's read did not give 128 bytes");
@@ -644,6 +637,24 @@ static void run_vsyscall(void)
     report_held();
 }
 
+/** Whether the kernel is x86-64's: as ETUDE_KERNEL in the environment
+ * `envp` names it, or where it is unset, whether modify_ldt answers. */
+static int kernel_x86_64(char **envp)
+{
+    static const char name[] = "ETUDE_KERNEL=";
+    unsigned char buf[16];
+    int i, n;
+
+    for (i = 0; envp[i] != 0; i++) {
+        for (n = 0; name[n] != '\0' && envp[i][n] == name[n]; n++) {
+        }
+        if (name[n] == '\0') {
+            return envp[i][n] == 'x';
+        }
+    }
+    return modify_ldt(2, buf, sizeof(buf)) != -ENOSYS;
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -653,6 +664,7 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     char **envp = (char **)(sp + 1) + sp[0] + 1;
+    unsigned char none[16];
     unsigned long *aux;
     unsigned int i;
 
@@ -663,7 +675,19 @@ void probe_main(unsigned long *sp)
             vsyscall_at = aux[1];
         }
     }
-    report_begin(report_case(envp, "guest.default.ldtprobe"));
+    report_begin(report_case(envp, "guest.ia32.ldtprobe"));
+    if (!kernel_x86_64(envp)) {
+        report_branch("kernel", "i686");
+        report_plan("absent");
+        if (modify_ldt(2, none, sizeof(none)) != -ENOSYS) {
+            fail("the i686 kernel's modify_ldt did not fail with ENOSYS");
+        }
+        report_held();
+        report_end();
+        say("LDTPROBE SKIP: the kernel has no modify_ldt\n");
+        sys_exit(0);
+    }
+    report_branch("kernel", "x86-64");
     for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
         report_plan(assertion_id[i]);
     }

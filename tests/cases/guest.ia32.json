@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.ia32",
+  "summary": "i386 programs on the x86-64 kernel where no other family has a case of them: mixprobe's calls between an i386 and an x86-64 program on the x86-64 kernel, and the i686 probes of i386's own interfaces, ldtprobe and drmcompatprobe, which the ia32 profile runs on the x86-64 kernel; the i686 builds of the other probes are the cases of their own families, which the profile runs there too",
+  "cases": [
+    {
+      "case_id": "guest.ia32.mixprobe",
+      "behavior": "On the x86-64 kernel an i386 program and an x86-64 program exec each other, pass descriptors by SCM_RIGHTS, share a futex, trace each other, run under each other's seccomp filters and queue signals to each other, each seeing the other's calls and records in its own ABI's layout, as on Linux",
+      "units": ["ia32", "mixprobe"],
+      "domain": "guest",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "mixprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "exec-to-i386", "checks": "an execve of /ia32/mixprobe runs it in CS 0x23 with its argument and environment vectors whole", "source": "program"},
+        {"assertion_id": "exec-to-x86-64", "checks": "the i386 execve of /mixprobe runs it in CS 0x33 with its vectors whole", "source": "program"},
+        {"assertion_id": "execveat-to-x86-64", "checks": "the i386 execveat of mixprobe through a descriptor of the root runs it in CS 0x33 with its vectors whole", "source": "program"},
+        {"assertion_id": "rights-from-i386", "checks": "a pipe's read end that the i386 program sends by SCM_RIGHTS arrives in a control message of x86-64's layout, cmsg_len 20 and msg_controllen 24, and reads what the sender wrote", "source": "program"},
+        {"assertion_id": "rights-to-i386", "checks": "a pipe's read end that the x86-64 program sends by SCM_RIGHTS arrives in a control message of i386's layout, cmsg_len 16 and msg_controllen 16, and reads what the sender wrote", "source": "program"},
+        {"assertion_id": "futex-wake-i386", "checks": "an x86-64 FUTEX_WAKE of a word of a memfd page both map shared wakes one waiter, the i386 FUTEX_WAIT on that word with a 32-bit timespec, which returns 0", "source": "program"},
+        {"assertion_id": "futex-wake-x86-64", "checks": "an i386 futex_time64 FUTEX_WAKE of another word of the page wakes the x86-64 FUTEX_WAIT on it, which returns 0", "source": "program"},
+        {"assertion_id": "futex-timeouts-i386", "checks": "an i386 FUTEX_WAIT with a 32-bit timespec of 20 ms, and a futex_time64 FUTEX_WAIT of 20 ms whose tv_nsec has all ones in its upper half, each end with ETIMEDOUT", "source": "program"},
+        {"assertion_id": "ptrace-i386-tracee", "checks": "an x86-64 tracer reads CS 0x23 and an RIP in the i386 text at the i386 tracee's exec stop, and AUDIT_ARCH_I386 with number 20 from PTRACE_GET_SYSCALL_INFO and orig_rax 20 at its getpid's entry stop, and the tracee runs to its end", "source": "program"},
+        {"assertion_id": "ptrace-x86-64-tracee", "checks": "an i386 tracer, whose tracee the i386 clone3 makes, reads i386's 17-word registers of the x86-64 tracee at its exec stop, xcs 0x33 and eip in the x86-64 text, and AUDIT_ARCH_X86_64 with number 39 and orig_eax 39 at its getpid's entry stop, and the tracee runs to its end", "source": "program"},
+        {"assertion_id": "seccomp-x86-64-filter", "checks": "a filter an x86-64 process installs, judging the architecture and the number, returns errno 77 for the i386 getpid of the i386 program it then execs", "source": "program"},
+        {"assertion_id": "seccomp-i386-filter", "checks": "a filter an i386 process installs in a child of the i386 clone returns errno 78 for the x86-64 getpid of the x86-64 program the child then execs", "source": "program"},
+        {"assertion_id": "signal-to-i386", "checks": "SIGUSR1 that the x86-64 program queues by rt_sigqueueinfo reaches the i386 program's SA_SIGINFO handler with the sender's pid, SI_QUEUE and its value in i386's siginfo", "source": "program"},
+        {"assertion_id": "signal-to-x86-64", "checks": "SIGUSR1 that the i386 program queues by the i386 rt_sigqueueinfo reaches the x86-64 program's SA_SIGINFO handler with the sender's pid, SI_QUEUE and its value in x86-64's siginfo", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "mixprobe", "node": "tests/mixprobe", "per_architecture": true},
+        {"name": "mixprobe-i386", "node": "tests/ia32/mixprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the i386 build runs from /ia32/mixprobe, which only the test image stages"}
+    },
+    {
+      "case_id": "guest.ia32.ldtprobe",
+      "behavior": "An i386 program on the x86-64 kernel has modify_ldt and the 32-bit vDSO's __kernel_vsyscall as on Linux's 64-bit kernel; the i686 kernel has no modify_ldt",
+      "units": ["ia32", "ldtprobe"],
+      "domain": "guest",
+      "architectures": ["i686"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "ldtprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "absent", "checks": "on the i686 kernel modify_ldt fails with ENOSYS", "source": "program"},
+        {"assertion_id": "default-read", "checks": "modify_ldt's read of the default LDT gives 128 zero bytes", "source": "program"},
+        {"assertion_id": "empty-read", "checks": "a read before any write gives nothing", "source": "program"},
+        {"assertion_id": "refusals", "checks": "a write refuses a size other than a user_desc's and an entry past 8191 with EINVAL, a present conforming code segment with EINVAL in both modes, an argument it cannot read with EFAULT and another function with ENOSYS, and takes a conforming one not present and a 16-bit segment", "source": "program"},
+        {"assertion_id": "data-segment", "checks": "a 32-bit data segment written to entry 3 loads into FS and reads the block it covers", "source": "program"},
+        {"assertion_id": "read-back", "checks": "the read gives the entry back as Linux's fill_ldt makes it, with the entries around it zero", "source": "program"},
+        {"assertion_id": "old-mode", "checks": "the old mode clears the descriptor's AVL bit, which the new mode keeps, and clears the entry for a base and a limit of 0", "source": "program"},
+        {"assertion_id": "far-call", "checks": "a far call through a code segment of the LDT runs there with that CS, makes a system call and returns", "source": "program"},
+        {"assertion_id": "fork-copy", "checks": "a child has a copy of the LDT, in which its own write changes nothing of the parent's, and the parent's FS still reads its block after waiting for the child", "source": "program"},
+        {"assertion_id": "signal-return", "checks": "a signal's return puts back FS's LDT selector, which the handler cleared", "source": "program"},
+        {"assertion_id": "cleared-entry", "checks": "clearing an entry leaves ES that held it null at once, and FS null after a sleep", "source": "program"},
+        {"assertion_id": "bad-return", "checks": "a child whose far call clears its own code segment takes SIGSEGV at the return, and the kernel goes on", "source": "program"},
+        {"assertion_id": "vsyscall", "checks": "AT_SYSINFO names __kernel_vsyscall, through which getpid gives the pid and mmap2, with its page offset in EBP, the second page of a memfd", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["default-read", "empty-read", "refusals", "data-segment", "read-back", "old-mode", "far-call", "fork-copy", "signal-return", "cleared-entry", "bad-return", "vsyscall"]}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "ldtprobe", "node": "tests/ldtprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "architecture", "reason": "modify_ldt and __kernel_vsyscall are i386's, and the native machine runs the x86-64 build of its programs"},
+      "ia32": {"runs": true, "why": "the x86-64 kernel gives an i386 program modify_ldt and __kernel_vsyscall, as Linux's does, and the i686 kernel has neither; ldtprobe reports the group kernel from ETUDE_KERNEL, the kernel's architecture"}
+    },
+    {
+      "case_id": "guest.ia32.drmcompatprobe",
+      "behavior": "The DRM requests whose i386 layouts differ from x86-64's, made by an i386 program on QEMU's std-vga, are answered as Linux 6.12's drm_ioc32.c answers them on the x86-64 kernel and natively on the i686 kernel",
+      "units": ["ia32", "drmcompatprobe"],
+      "domain": "guest",
+      "architectures": ["i686"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139", "vga"], "boot_options": []}},
+      "execution": {"program": "drmcompatprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "open", "checks": "one of /dev/dri/card0 to card15 opens and answers GET_CAP with DRM_CAP_DUMB_BUFFER set", "source": "program"},
+        {"assertion_id": "version", "checks": "VERSION, with its lengths and pointers in 4 bytes, gives the driver's name, date and description, their lengths alone and then into buffers, touching no guard byte", "source": "program"},
+        {"assertion_id": "resources", "checks": "GETRESOURCES, whose 64-bit pointers carry 32-bit addresses, counts the CRTCs and connectors and then lists them, each of a nonzero id", "source": "program"},
+        {"assertion_id": "addfb2", "checks": "ADDFB2, with its modifiers at 68, adds a framebuffer on a dumb buffer of 64 by 64 pixels and gives its id, leaving the request as it was", "source": "program"},
+        {"assertion_id": "getfb2", "checks": "GETFB2 reads the framebuffer back, its modifiers at 68, and RMFB and DESTROY_DUMB remove it and its buffer", "source": "program"},
+        {"assertion_id": "vblank", "checks": "WAIT_VBLANK, relative 0, gives the count and time of the last vblank in its 16 bytes, or EOPNOTSUPP with the request copied back on a card with no vblank interrupt", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "drmcompatprobe", "node": "tests/drmcompatprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "architecture", "reason": "the requests' i386 layouts are i386's, and the native machine runs the x86-64 build of its programs"},
+      "ia32": {"runs": true, "why": "the x86-64 kernel translates the i386 layouts through its compat ioctl path, where the i686 kernel takes them natively; the probe expects the same answers of both"}
+    }
+  ]
+}

@@ -69,3 +69,6 @@ i915gemprobe i915fake
 gpucompatprobe gpucompat
 i915execprobe i915fake
 i915resetprobe i915fake
+mixprobe ia32
+ldtprobe ia32
+drmcompatprobe ia32

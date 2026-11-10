@@ -135,6 +135,7 @@ screen|qemu|core
 fpu|qemu|core
 limits|qemu|core
 vdso|qemu|core
+ia32|qemu|full
 dmabuf|qemu|core||512
 socket|qemu|core
 bootorder|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
