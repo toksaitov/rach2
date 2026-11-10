@@ -1,0 +1,18 @@
+# On the trial root after attempt 7, 2026-11-11 01:49 to 01:51 UTC+6: each
+# file read whole with cat, the data partition's sectors read from
+# /proc/diskstats before and after, and /proc/meminfo after.
+MemTotal:       16640008 kB
+MemFree:        15293904 kB
+Buffers:        1038336 kB
+Cached:         10788 kB
+-rw-r--r-- 1 test test 1665077255 Oct  6  2025 /data/crysis/game/Game/Objects.pak
+-rw-r--r-- 1 test test  569208809 Oct  6  2025 /data/crysis/game/Game/Music.pak
+pass 1: 538 MiB from disk in 6380 ms        (Music.pak)
+pass 2: 0 MiB from disk in 4761 ms          (Music.pak)
+pass 3: 0 MiB from disk in 4335 ms          (Music.pak)
+Objects.pak: 1594 MiB from disk in 18569 ms
+Objects.pak: 1611 MiB from disk in 18876 ms
+Music.pak: 546 MiB from disk in 6316 ms
+MemFree:        15293652 kB
+Buffers:        1038336 kB
+Cached:         10824 kB

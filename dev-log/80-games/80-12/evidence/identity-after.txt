@@ -1,0 +1,1 @@
+machine-identity: result: the machine runs the named kernel: slot candidate, sha256 0effe5acc26e1bf2f20b87b73e92ad8a9d769b708086b5ba700873f7e95e2cad, build/runs/task2653/lenovo/release-kernel; the fallback slot holds it too

@@ -1,0 +1,15 @@
+== attempt 6: kdrm before the session, after the run
+voluntary_ctxt_switches:	1
+nonvoluntary_ctxt_switches:	0
+voluntary_ctxt_switches:	11556
+nonvoluntary_ctxt_switches:	700
+== attempt 7: kdrm before the session, after the run
+voluntary_ctxt_switches:	11556
+nonvoluntary_ctxt_switches:	700
+voluntary_ctxt_switches:	22485
+nonvoluntary_ctxt_switches:	1487
+== attempt 8: kdrm before the session, after the run
+voluntary_ctxt_switches:	22485
+nonvoluntary_ctxt_switches:	1487
+voluntary_ctxt_switches:	33566
+nonvoluntary_ctxt_switches:	2198
