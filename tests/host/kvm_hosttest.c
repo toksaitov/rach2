@@ -2508,8 +2508,10 @@ static void tsc_unscaled_rows(void)
           "and the host's for 0");
     fd = fdio(vm, KVM_CREATE_VCPU, 0);
     v = entries[fd].priv;
-    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == -EINVAL && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000,
-          "but none once a vCPU exists, as Linux's x86.c refuses it after created_vcpus");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 1000000 &&
+              fdio(fd, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "and one once a vCPU exists, for later vCPUs only, as Linux's x86.c takes it");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 0) == 0, "and the host's again");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_TSC_CONTROL) == 0 &&
               fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 0,
           "no KVM_CAP_TSC_CONTROL and no KVM_CAP_VM_TSC_CONTROL without scaling");
