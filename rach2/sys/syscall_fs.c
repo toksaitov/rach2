@@ -6695,6 +6695,9 @@ struct kstat {
     uint32_t st_mtime_nsec;
     int64_t st_ctime;
     uint32_t st_ctime_nsec;
+    /* The id of the mount the file is on, as /proc/PID/mountinfo gives it,
+     * which statx reports; 0 for an object on no mount of the table. */
+    uint32_t st_mnt_id;
 };
 
 /**
@@ -6979,6 +6982,18 @@ static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
     rc = fstat_fill(&e, kst);
     if (held) {
         fd_ofd_unref(e.ofd);
+    }
+    return rc;
+}
+
+int32_t fd_stat_ids(int pid, int fd, uint32_t *mnt_id, uint64_t *ino)
+{
+    struct kstat kst;
+    int32_t rc = synth_fd_stat(pid, fd, &kst);
+
+    if (rc == 0) {
+        *mnt_id = kst.st_mnt_id;
+        *ino = kst.st_ino;
     }
     return rc;
 }
@@ -8353,7 +8368,7 @@ static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
  * 0620 once its pty is gone. Anything else, a pty master, the framebuffer
  * or the mouse, is a character device of mode 0666 and size 0.
  */
-static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
+static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
     stat64_boot_times(kst);
@@ -8479,6 +8494,32 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
 }
 
 /**
+ * Fill `kst` as `fstat_fill_attrs` does, with the id of the mount the
+ * object is on: the description's mount for a file or a directory of a
+ * mounted type, the root's for the KRFFS root and its nodes, the /dev,
+ * /proc or /sys mount for a synthetic node by its device, and none for a
+ * pipe, a socket or an anonymous descriptor, which Linux keeps on internal
+ * mounts that no mountinfo lists.
+ */
+static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
+{
+    int32_t rc = fstat_fill_attrs(entry, kst);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
+        entry->ofd->vmnt) {
+        kst->st_mnt_id = procfs_mount_id(entry->ofd->vmnt);
+    } else if (entry->node || (entry->type == FD_TYPE_DIR && entry->node == NULL)) {
+        kst->st_mnt_id = procfs_mount_id(vfs_root_mount());
+    } else {
+        kst->st_mnt_id = procfs_synth_mount_id(kst->st_dev, NULL);
+    }
+    return 0;
+}
+
+/**
  * fstat64(2), and fstat(2) on x86-64: copy out the attributes of what the
  * descriptor in argument 0 is open on (`fstat_fill`), an O_PATH
  * descriptor's included, to the user's buffer in argument 1, with the
@@ -8547,6 +8588,7 @@ static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         stat64_root_times(kst);
+        kst->st_mnt_id = procfs_mount_id(vfs_root_mount());
         return 0;
     }
     rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);
@@ -8555,11 +8597,17 @@ static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (svp) {
+        /* A followed /proc/PID/fd link has its file's mount already. */
         rc = synth_stat(svp, kst, follow);
+        if (rc == 0 && kst->st_mnt_id == 0) {
+            kst->st_mnt_id = procfs_synth_mount_id(kst->st_dev, ref.mnt);
+        }
     } else if (!mnt_is_root(ref.mnt)) {
         rc = vfs_fill_stat64(kst, &ref);
+        kst->st_mnt_id = procfs_mount_id(ref.mnt);
     } else {
         krffs_fill_stat64(kst, (krffs_node_t *)ref.node);
+        kst->st_mnt_id = procfs_mount_id(ref.mnt);
     }
     vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
@@ -8653,9 +8701,11 @@ long sys_fstatat64(isr_params_t *params)
  * answer, and both at once are EINVAL. */
 #define AT_STATX_SYNC_TYPE 0x6000
 
-/* The attributes statx reports, and the mask bit reserved for a larger
+/* The attributes statx reports, the mount id among them when the file is
+ * on a mount of the table, and the mask bit reserved for a larger
  * structure, which is EINVAL. */
 #define STATX_BASIC_STATS 0x7FFu
+#define STATX_MNT_ID      0x1000u
 #define STATX_RESERVED    0x80000000u
 
 /* struct statx as Linux writes it: 256 bytes, laid out the same on every
@@ -8687,7 +8737,8 @@ struct linux_statx {
     uint32_t stx_rdev_minor;
     uint32_t stx_dev_major;
     uint32_t stx_dev_minor;
-    uint64_t spare[14];
+    uint64_t stx_mnt_id;
+    uint64_t spare[13];
 };
 
 typedef char linux_statx_is_256_bytes[sizeof(struct linux_statx) == 256 ? 1 : -1];
@@ -8709,8 +8760,9 @@ static uint32_t dev_minor(uint64_t dev)
 /**
  * Put the attributes of `st` into `sx` as statx reports them: the basic
  * set, the owner and group the caller's user namespace sees, the device
- * numbers split into their major and minor numbers, and the times whole, as
- * the signed 64-bit seconds the file system stores, on i386 as on x86-64.
+ * numbers split into their major and minor numbers, the times whole, as
+ * the signed 64-bit seconds the file system stores, on i386 as on x86-64,
+ * and the mount id with STATX_MNT_ID when the file has one.
  */
 static void statx_from_kstat(struct linux_statx *sx, const struct kstat *st)
 {
@@ -8734,6 +8786,10 @@ static void statx_from_kstat(struct linux_statx *sx, const struct kstat *st)
     sx->stx_rdev_minor = dev_minor(st->st_rdev);
     sx->stx_dev_major = dev_major(st->st_dev);
     sx->stx_dev_minor = dev_minor(st->st_dev);
+    if (st->st_mnt_id != 0) {
+        sx->stx_mask |= STATX_MNT_ID;
+        sx->stx_mnt_id = st->st_mnt_id;
+    }
 }
 
 /**
@@ -8741,11 +8797,13 @@ static void statx_from_kstat(struct linux_statx *sx, const struct kstat *st)
  *
  * The attributes are fstatat64's, found by `stat_at` for the same path and
  * flags, in struct statx: the basic set of STATX_BASIC_STATS whatever `mask`
- * asks for, since the kernel may report more than it is asked, with no birth
- * time, no attributes and no mount id. The two sync flags are accepted and
- * change nothing; both at once, a flag fstatat64 does not take, or
- * STATX__RESERVED in `mask` is EINVAL. On i386 GNU libc and musl call this
- * first for every stat and fall back to the stat64 calls on ENOSYS alone.
+ * asks for, since the kernel may report more than it is asked, and the id of
+ * the file's mount, STATX_MNT_ID, as /proc/PID/mountinfo gives it, for a
+ * file on a mount of the table, with no birth time and no attributes. The
+ * two sync flags are accepted and change nothing; both at once, a flag
+ * fstatat64 does not take, or STATX__RESERVED in `mask` is EINVAL. On i386
+ * GNU libc and musl call this first for every stat and fall back to the
+ * stat64 calls on ENOSYS alone.
  */
 long sys_statx(isr_params_t *params)
 {

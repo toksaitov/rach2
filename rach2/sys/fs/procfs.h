@@ -204,6 +204,16 @@ struct vfs_mount;
  * 16 for any other mount. */
 uint32_t procfs_mount_dev(int i, const struct vfs_mount *m);
 
+/** The id /proc/PID/mountinfo gives the mount `m`, its entry's index plus
+ * one, which statx reports as STATX_MNT_ID; 0 for NULL or a mount not in
+ * the table. */
+uint32_t procfs_mount_id(const struct vfs_mount *m);
+
+/** The id of the /dev, /proc or /sys mount a file of device `dev`,
+ * DEVFS_FSID, PROCFS_FSID or SYSFS_FSID, is on: `hint`'s when it is of that
+ * type, else the first such mount the caller sees; 0 for another device. */
+uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint);
+
 /** The inode of /proc/net/stat. */
 uint32_t procfs_ino_netstatdir(void);
 /** The inodes of /proc/sysvipc and of its file of origin `origin`. */
