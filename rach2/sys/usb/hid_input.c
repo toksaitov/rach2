@@ -408,8 +408,9 @@ static uint8_t *bits_of(struct hid_input *in, unsigned type, unsigned *max)
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
-/** The code `id` has in `table` of `n` entries, or 0 when it has none. */
-static unsigned lookup(const struct usage_key *table, unsigned n, uint32_t id)
+/** The code `id` has in `table` of `n` entries, or -1 when it has none;
+ * a code may be 0, as LED_NUML is. */
+static int lookup(const struct usage_key *table, unsigned n, uint32_t id)
 {
     unsigned i;
 
@@ -418,20 +419,20 @@ static unsigned lookup(const struct usage_key *table, unsigned n, uint32_t id)
             return table[i].key;
         }
     }
-    return 0;
+    return -1;
 }
 
 /** The key `usage` of the consumer page maps to: one of the table's, 0
  * for usage 0, or KEY_UNKNOWN. */
 static unsigned consumer_key(uint32_t usage)
 {
-    unsigned key;
+    int key;
 
     if (usage == 0) {
         return 0;
     }
     key = lookup(consumer_keys, COUNT(consumer_keys), usage);
-    return key ? key : KEY_UNKNOWN;
+    return key >= 0 ? (unsigned)key : KEY_UNKNOWN;
 }
 
 /** Whether the collection of `f`'s first usage is a named array whose usage
@@ -545,6 +546,18 @@ static const struct usage_key hp_keys[] = {{0x021, 210}, {0x070, 211}, {0x071, 2
 static const struct usage_key hp2_keys[] = {
     {0x001, KEY_MICMUTE}, {0x003, KEY_BRIGHTNESSDOWN}, {0x004, KEY_BRIGHTNESSUP}};
 
+/** The key or axis `id` has in `table` as `*type`: MAP_CLEAR when it has
+ * one, else MAP_NONE. */
+static int map_table(const struct usage_key *table, unsigned n, uint32_t id, unsigned ev,
+                     unsigned *type, unsigned *code)
+{
+    int found = lookup(table, n, id);
+
+    *type = ev;
+    *code = found >= 0 ? (unsigned)found : 0;
+    return found >= 0 ? MAP_CLEAR : MAP_NONE;
+}
+
 /** The generic desktop page's System Control usages, 0x80 to 0xbf, as keys:
  * MAP_CLEAR with `*code` set, MAP_NONE for one Linux ignores, among them
  * the D-pad's 0x90 to 0x93, which Linux tests only after these, or -1 for
@@ -568,8 +581,11 @@ static int map_system(const struct hid_field *f, uint32_t usage, unsigned report
     if (low < 0x90 && !system[low & 0xf]) {
         return map_unknown(f, report_type, type, code);
     }
-    *code = low < 0x90 ? system[low & 0xf] : lookup(others, COUNT(others), low);
-    return *code ? MAP_CLEAR : MAP_NONE;
+    if (low < 0x90) {
+        *code = system[low & 0xf];
+        return MAP_CLEAR;
+    }
+    return map_table(others, COUNT(others), low, EV_KEY, type, code);
 }
 
 /** A generic desktop usage outside System Control: an axis, a wheel, a
@@ -658,16 +674,6 @@ static int map_consumer(struct hid_input *in, uint32_t id, unsigned *type, unsig
     }
     *type = EV_KEY;
     *code = consumer_key(id);
-    return *code ? MAP_CLEAR : MAP_NONE;
-}
-
-/** The key or axis `id` has in `table` as `*type`: MAP_CLEAR when it has
- * one, else MAP_NONE. */
-static int map_table(const struct usage_key *table, unsigned n, uint32_t id, unsigned ev,
-                     unsigned *type, unsigned *code)
-{
-    *type = ev;
-    *code = lookup(table, n, id);
     return *code ? MAP_CLEAR : MAP_NONE;
 }
 
