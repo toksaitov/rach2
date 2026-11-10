@@ -181,6 +181,15 @@ void input_set_leds(unsigned int mask);
  */
 void input_written(uint16_t type, uint16_t code, int32_t value);
 
+/**
+ * Give the console's keyboard and its raw view the key `keycode`, `value`
+ * KD_KEY_*, of `device`, an event device that is no keyboard but whose keys
+ * Linux's console takes, as a keyboard's key goes to them; `evdev_report`
+ * calls it once the key passed the input core's filters with no grab held.
+ * Any context.
+ */
+void input_console_key(const void *device, unsigned int keycode, int value);
+
 /** The LEDs every keyboard is to show, as `input_set_leds` last set them:
  * 0, all dark, until it is called. Any context. */
 unsigned int input_leds(void);

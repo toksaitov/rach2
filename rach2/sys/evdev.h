@@ -103,6 +103,12 @@ struct evdev;
 #define INPUT_PROP_POINTING_STICK 0x05 /* a stick, which reports force */
 #define INPUT_PROP_CNT            0x20
 
+/* The first code that is no key but a button, and the Braille keys, the
+ * bounds of the keys Linux's console takes from any device. */
+#define BTN_MISC      0x100
+#define KEY_BRL_DOT1  0x1f1
+#define KEY_BRL_DOT10 0x1fa
+
 /* A mouse's buttons, EV_KEY codes. */
 #define BTN_0       0x100
 #define BTN_1       0x101
@@ -310,9 +316,13 @@ void evdev_unregister(struct evdev *dev);
  * absolute value within the axis's fuzz of the last one. An open does not
  * get the events its masks leave out (EVIOCSMASK), nor a SYN_REPORT that
  * ends a packet it got nothing of; a SYN_REPORT that ends a packet of no
- * events reaches neither the opens nor the device's handler. Any context,
- * an interrupt handler among them; it does not sleep. A NULL `dev`, a
- * device whose registration failed, is ignored.
+ * events reaches neither the opens nor the device's handler. A key that
+ * passed, with no grab held, of a device that is no keyboard but can
+ * report a key below BTN_MISC or a Braille key goes on to the console
+ * (`input_console_key`), as Linux's console takes the keys of any such
+ * device: a power button, a hotkey device, a keypad. Any context, an
+ * interrupt handler among them; it does not sleep. A NULL `dev`, a device
+ * whose registration failed, is ignored.
  */
 void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value);
 

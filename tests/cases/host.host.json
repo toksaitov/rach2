@@ -396,6 +396,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "evdev64",
+          "checks": "tests/host/evdev64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "eventfd",
           "checks": "tests/host/eventfd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

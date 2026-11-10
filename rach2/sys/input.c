@@ -219,9 +219,8 @@ static void deliver(struct input_keyboard *kb, unsigned int keycode, int value, 
 void input_written(uint16_t type, uint16_t code, int32_t value)
 {
     static const unsigned int leds[3] = {LED_NUM, LED_CAP, LED_SCR};
-    uint8_t raw[3];
     unsigned int mask, now;
-    int delay, period, i, n;
+    int delay, period;
 
     switch (type) {
     case EV_LED:
@@ -245,15 +244,23 @@ void input_written(uint16_t type, uint16_t code, int32_t value)
         }
         return;
     case EV_KEY:
-        console_poke();
-        kd_key_event(NULL, code, value);
-        n = input_raw_bytes(code, value, raw);
-        for (i = 0; i < n; i++) {
-            kd_raw_code(raw[i]);
-        }
+        input_console_key(NULL, code, value);
         return;
     default:
         return;
+    }
+}
+
+void input_console_key(const void *device, unsigned int keycode, int value)
+{
+    uint8_t raw[3];
+    int i, n;
+
+    console_poke();
+    kd_key_event(device, keycode, value);
+    n = input_raw_bytes(keycode, value, raw);
+    for (i = 0; i < n; i++) {
+        kd_raw_code(raw[i]);
     }
 }
 

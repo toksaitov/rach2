@@ -29,6 +29,10 @@ gives it.
 A keyboard's keys reach its node beside the console, which every keyboard
 shares; see
 .Xr console 4 .
+So do the keys of any other device that can report a key below
+.Dv BTN_MISC
+or a Braille key, as Linux's console takes them: the power and sleep
+buttons, a hotkey device, a keypad.
 .Pp
 A USB human-interface device is read by its report descriptor, as Linux's
 usbhid and hid-generic read it, and has a node for each application of the
@@ -564,8 +568,8 @@ is ignored, as Linux's evdev takes a write.
 A type the device lacks is dropped.
 The other events go through the filters above to the device's opens, the
 writer's own among them, or to the open that holds the grab alone, and a
-keyboard's key that reaches them with no grab held also reaches the console
-as a key typed, and a mouse's motion and buttons reach
+key of a device whose keys the console takes that reaches them with no grab
+held also reaches the console as a key typed, and a mouse's motion and buttons reach
 .Pa /dev/mouse
 as a packet at each
 .Dv SYN_REPORT ,
@@ -675,7 +679,7 @@ request's length allow.
 .It Dv EVIOCGRAB
 With a nonzero argument, take the device for this open alone, so that no
 other open reads its events until it gives it back, with 0, or closes.
-A grabbed keyboard's keys do not reach the console either, nor a grabbed
+A grabbed device's keys do not reach the console either, nor a grabbed
 mouse's packets
 .Pa /dev/mouse ,
 as on Linux.
@@ -782,6 +786,3 @@ The touchpad drivers are Synaptics', ALPS's and Elantech's alone: another
 touchpad, or an ALPS pad of version 9, is driven as the PS/2 mouse it also
 is, and a Synaptics or Elantech pad that offers its SMBus bus is driven
 over PS/2.
-The keys of a device with keys that is no keyboard, such as the power
-button, reach no console, whether reported or written, while Linux's
-console takes them; it shows in Linux's raw keyboard modes alone.
