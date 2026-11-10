@@ -33,7 +33,7 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
 PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe evprobe \
         rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe frag6probe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe ldtprobe fsbaseprobe wow64probe pure64probe futexvprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe i915resetprobe drmprobe drmcompatprobe gpucompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
+        tlsprobe ldtprobe fsbaseprobe wow64probe pure64probe futexvprobe mixprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe i915resetprobe drmprobe drmcompatprobe gpucompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
         usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
@@ -68,12 +68,24 @@ endif
 # mk/build.mk). The image manifests stage the binaries from there.
 TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 
+# The i386 builds the x86-64 test image stages under /ia32, for the cases
+# that run an i386 program beside an x86-64 one on the x86-64 kernel:
+# mixprobe's i386 roles. The x86-64 compiler makes them with -m32, which a
+# probe can use, since it links no libgcc; they go to $(BUILD)/ia32/.
+IA32_PROGS = mixprobe
+ifeq ($(ARCH),x86_64)
+IA32_TARGETS = $(addprefix $(BUILD)/ia32/, $(IA32_PROGS))
+TARGETS += $(IA32_TARGETS)
+endif
+IA32_CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -Wl,--build-id=none \
+              $(DEPFLAGS) $(EXTRA)
+
 # The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
 # reinstalled compiler rebuilds every probe. The purge names only this
 # Makefile's products, since build/tests/musl belongs to tests/musl/build.sh,
 # which may be compiling there in a parallel build.
-CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS) $(UDMABUF_CFLAGS)
-CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d
+CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS) $(UDMABUF_CFLAGS) $(IA32_CFLAGS)
+CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d $(BUILD)/ia32/*.d
 include ../mk/fingerprint.mk
 
 .PHONY: all clean
@@ -86,6 +98,11 @@ $(TARGETS): $(CONFIG)
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(if $(filter udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe i915resetprobe gpucompatprobe,$*),$(UDMABUF_CFLAGS)) -MF $(BUILD)/$*.d -o $@ $<
+
+# An i386 build, from the same source as the probe of its name.
+$(BUILD)/ia32/%: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(IA32_CFLAGS) -MF $(BUILD)/ia32/$*.d -o $@ $<
 
 # The shared kernel ABI header uses C89's bool typedef.
 UDMABUF_CFLAGS = -std=c99
@@ -111,7 +128,7 @@ $(BUILD)/drmcapture: graphics/capture/drmcapture.c \
 	$(MUSL_CC) $(MUSL_CFLAGS) -std=c99 -MF $(BUILD)/drmcapture.d -o $@ \
 	    $(MUSL_PRE) graphics/capture/drmcapture.c $(MUSL_POST)
 
--include $(addprefix $(BUILD)/, $(PROGS:=.d))
+-include $(addprefix $(BUILD)/, $(PROGS:=.d)) $(IA32_TARGETS:=.d)
 
 clean:
 	rm -rf $(BUILD)

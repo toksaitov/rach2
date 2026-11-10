@@ -207,6 +207,13 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # one, as every clock call does on i686, which maps no vDSO. They are the
 # cases of tests/cases/guest.vdso.json, which etude runs, and have no target
 # here.
+# `tests/run ia32`: an i386 and an x86-64 program on the x86-64 kernel exec
+# each other, pass descriptors, share a futex, trace each other, run under
+# each other's seccomp filters and queue signals to each other, each in its
+# own ABI's layout, by mixprobe; and i386's modify_ldt, vDSO entry and DRM
+# layouts, by ldtprobe and drmcompatprobe, which the ia32 profile runs on the
+# x86-64 kernel. They are the cases of tests/cases/guest.ia32.json, which
+# etude runs, and have no target here.
 # `tests/run bigmem`: all of an x86-64 machine's eight gigabytes is counted,
 # and a program's pages fill memory past what lies below 4 GiB and read back
 # as written; without 1 GiB pages, 72 GiB is counted to the direct map's

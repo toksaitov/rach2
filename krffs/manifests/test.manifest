@@ -9,6 +9,11 @@
 
 exec-dir 0755 / build/tests
 
+# The i386 builds of probes that run beside their x86-64 builds on the
+# x86-64 kernel (tests/Makefile's IA32_PROGS); an i686 tree has none.
+dir 0755 /ia32
+optional-file 0755 /ia32/mixprobe build/tests/ia32/mixprobe
+
 # etude-guest, etude's helper inside Rach2 (tools/etude/guest/): the debug
 # shell starts it as the boot's designated init, and it runs the cases the
 # controller sends over the serial console.
