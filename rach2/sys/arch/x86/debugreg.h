@@ -86,4 +86,9 @@ void debugreg_deliver(void);
  * off. */
 void debugreg_resume(void);
 
+/** Whether this processor's DR7 has a breakpoint enabled. 0 means it holds
+ * DR7_ONE, which a hypervisor may take without reading the register, since
+ * a read can trap to the hypervisor beneath. Call with interrupts off. */
+int debugreg_loaded(void);
+
 #endif /* _X86_DEBUGREG_H_ */
