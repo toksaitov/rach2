@@ -301,7 +301,7 @@ A reference is made again whole when the guest's packages, a runner or a browser
 * `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded, and `/sys/module/udmabuf/parameters/size_limit_mb` must read 16384, as `load.sh` sets it.
 * On Rach2 `drmcapture` needs a DRM CRTC with a valid mode and a framebuffer; an output without a framebuffer has nothing to capture.
 * The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
-* IGT's tests are built for x86-64 alone, on an x86-64 Linux host, so the `igt` suite runs there alone ([IGT's tests](../../vendor/gnu/Readme.md#igts-tests)). Rach2 has no `dri/N/name` in debugfs, so its IGT records name no driver.
+* IGT's tests are built for x86-64 alone, on an x86-64 Linux host, so the `igt` suite runs there alone ([IGT's tests](../../vendor/gnu/Readme.md#igts-tests)).
 * Debian's sw_sync is Linux's code built as a module for the boot, not the kernel's built-in; it makes the same `sync/sw_sync` and `sync/info`.
 * The browser suites run on x86-64 and on Linux hosts alone: the references are the Debian guest's on the testing PC under KVM, and on the Mac an x86-64 guest runs under TCG.
 * The pages that time out at the harness's 20 s limit vary from run to run, and so do the frames dropped; the judge allows for both as Browser runners says.
