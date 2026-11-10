@@ -17,7 +17,6 @@
 #include "../mm/vm.h"
 #include "../proc/process.h"
 #include "../proc/smp.h"
-#include "../timer.h"
 
 /* The XSAVE image's header, after the 512 bytes of the legacy region. */
 #define XSAVE_HDR       512u
