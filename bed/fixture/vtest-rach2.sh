@@ -33,7 +33,8 @@
 # runner prints what tells where the guest waits: the KVM lines of
 # /proc/stat, the interrupt counts in the fdinfo of QEMU's VM descriptor,
 # and over QMP QEMU's interrupt controllers, each vCPU's local APIC and the
-# vCPUs' registers. Progress goes to standard output as
+# vCPUs' registers. Once the guest is ready it prints the counts and QEMU's
+# interrupt controllers alone. Progress goes to standard output as
 # `vtest-rach2: ACTION` lines, with the triangle's and the relay's lines and
 # the guest's record, and the last line is `vtest-rach2: result: pass: the
 # triangle through the relay equals llvmpipe's, CHECKSUM` or
@@ -100,12 +101,14 @@ fail()
     exit 1
 }
 
-# dump: print the KVM lines of /proc/stat, the interrupt counts of QEMU's
-# VM in Rach2's KVM, and QEMU's view of the interrupt controllers, the local
-# APICs and the vCPUs over QMP, each line led by its source.
+# dump [all]: print the KVM lines of /proc/stat, the interrupt counts of
+# QEMU's VM in Rach2's KVM and QEMU's `info pic`, and with `all` its `info
+# irq`, the vCPUs' registers and each local APIC too, over QMP, each line
+# led by its source.
 dump()
 {
     [ -n "$qemu" ] || return 0
+    all=$1
     grep -a '^kvm_' /proc/stat | sed 's/^/vtest-rach2: stat: /'
     for f in /proc/"$qemu"/fd/*; do
         [ "$(readlink "$f" 2>/dev/null)" = anon_inode:kvm-vm ] || continue
@@ -114,8 +117,9 @@ dump()
     {
         echo '{"execute":"qmp_capabilities"}'
         i=0
-        set -- 'info pic' 'info irq' 'info registers -a'
-        while [ "$i" -lt "$cpus" ]; do
+        set -- 'info pic'
+        [ -z "$all" ] || set -- "$@" 'info irq' 'info registers -a'
+        while [ -n "$all" ] && [ "$i" -lt "$cpus" ]; do
             set -- "$@" "info lapic $i"
             i=$((i + 1))
         done
@@ -194,12 +198,12 @@ while :; do
         quiet=$((quiet + 1))
     fi
     if [ "$quiet" -ge "$silence" ]; then
-        dump
+        dump all
         fail "the console was silent for $silence s"
     fi
     [ "$quiet" -eq 0 ] || [ $((quiet % 120)) -ne 0 ] || {
         echo "vtest-rach2: the console has been silent for $quiet s"
-        dump
+        dump all
     }
     sleep 1
     waited=$((waited + 1))
@@ -217,6 +221,7 @@ qmp=$(printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"query-status"}
 printf '%s\n' "$qmp" | sed 's/^/vtest-rach2: qmp: /'
 printf '%s\n' "$qmp" | grep -q '"status": *"running"' ||
     fail "QMP over TCP did not answer query-status with running"
+dump
 {
     grep -a 'vtest-guest: version: ' "$work/console.log" | tr -d '\r' |
         sed 's/^.*vtest-guest: version: /guest /'
