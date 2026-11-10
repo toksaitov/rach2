@@ -44,6 +44,8 @@
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
+# It builds the framed WebSocket fixture as /etude-wsclient and the
+# testbed's vtest relay as /usr/bin/vtestrelay with the layer's compiler.
 # Then it makes /usr/local and its directories, links
 # /usr/bin/chromium-headless-shell, in place of Debian's script, to the
 # browser, and links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis,
@@ -289,6 +291,8 @@ fi
 make --no-print-directory -C "$REPO" -f tests/cases/host/products.mk \
     CC="$OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$OUT/root" \
     PREFIX="$TREE" "$TREE/etude-wsclient"
+# The testbed's vtest relay (bed/Readme.md), with the same compiler.
+"$OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$OUT/root" -O2 -o "$TREE/usr/bin/vtestrelay" "$REPO/bed/vtestrelay.c"
 # The runtime's libstdc++.so.6 is a copy of the cross compiler's library,
 # and the native compiler has the same library of the same GCC with the links
 # and archives a link against it needs, so its copy replaces the runtime's.

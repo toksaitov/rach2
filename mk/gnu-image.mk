@@ -54,7 +54,7 @@ GNU_GAMES_REPLAYS = $(shell find vendor/gnu/games/replays -type f 2>/dev/null)
 GNU_IMAGE_DEPS = mk/gnu-image.mk $(GNU_I386_OPTION) $(DEMO_CREDS) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  $(wildcard vendor/gnu/desktop/*) $(wildcard vendor/gnu/games/*.sh) $(GNU_GAMES_REPLAYS) vendor/gnu/kvm/install_kvm.sh \
-                 tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
+                 tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk bed/vtestrelay.c \
                  bed/ivshmemd.c rach2/sys/virtio/vgpushm.h \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
 # LOGINS names a directory of logins laid out from the machine's root, as
