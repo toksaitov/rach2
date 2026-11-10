@@ -8,8 +8,8 @@
 #                     bootctl config, arm one boot with bootctl trial
 #                     recovery, and reboot into Debian
 #   wait-debian | wait-rach2   wait up to 6 min for the system to answer SSH
-#   push              the scripts to /root/ref80, the pinned sources to
-#                     /srv/ref80/cache
+#   push              the scripts and the games layer's replays to
+#                     /root/ref80, the pinned sources to /srv/ref80/cache
 #   run STEP ARGS     sh /root/ref80/STEP.sh ARGS on the target
 #   sh CMD            any command on the target
 #   fetch             the target's /srv/ref80/out into build/runs/80-2/
@@ -93,6 +93,8 @@ wait-rach2) waitfor rssh ;;
 push)
 	tssh 'mkdir -p /root/ref80 /srv/ref80/cache'
 	tar --no-xattrs --no-mac-metadata -cf - -C $D --exclude mac.sh --exclude rehearse.sh . | tssh 'tar xf - -C /root/ref80'
+	# The games' fixed replays are the games layer's, which Rach2 plays too.
+	tar --no-xattrs --no-mac-metadata -cf - -C $T/vendor/gnu/games replays | tssh 'tar xf - -C /root/ref80'
 	[ "${REHEARSE:-0}" = 1 ] && tssh 'touch /root/ref80/rehearse'
 	cut -d' ' -f3 $D/SHA256SUMS | while read -r f; do
 		tssh "test -s /srv/ref80/cache/$f" < /dev/null 2> /dev/null || cat $C/$f | tssh "cat > /srv/ref80/cache/$f"
