@@ -156,6 +156,7 @@ case ptyprobe -- ptyprobe
 # machine=native leaves out the sends for the capture checker.
 case rawprobe peer:network ids:1000 -- rawprobe machine=native
 case rebootprobe ids:1000 -- rebootprobe
+case restartprobe -- restartprobe
 case rmtest -- rmtest
 case rngprobe -- rngprobe
 case schedattrprobe ids:1000 -- schedattrprobe

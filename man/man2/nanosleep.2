@@ -209,6 +209,10 @@ sleeps until a time of each clock that can be slept on and checks that the
 clock reads it afterwards, has a signal end a relative and an absolute
 sleep, checks the clocks and requests that are refused, and sleeps on the
 process CPU clock while another thread of the process spins.
+.Pa tests/restartprobe.c
+stops and continues a sleep and checks that it ends at its first deadline
+with its remainder written, and that a handler ends it with
+.Er EINTR .
 .Sh ERRORS
 The kernel handlers return:
 .Bl -tag -width "[EOPNOTSUPP]"

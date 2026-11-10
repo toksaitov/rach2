@@ -25,6 +25,7 @@ mmapdevprobe
 forkro
 cowregrant
 numaprobe
+restartprobe
 usercopyfault
 fdstale
 dirgrow

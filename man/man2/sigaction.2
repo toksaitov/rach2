@@ -695,6 +695,16 @@ information.
 takes a blocked signal with
 .Fn sigtimedwait
 and times out with nothing pending.
+.Pa tests/restartprobe.c
+stops and continues a child in each call that waits, sends it ignored
+signals, and interrupts it with a handler with and without
+.Dv SA_RESTART ;
+it checks each result against Linux's, that a timed call that goes on ends
+at its first deadline, that
+.Nm restart_syscall
+made directly returns
+.Er EINTR ,
+and what a tracer reads at the stops of a restart.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT

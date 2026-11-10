@@ -10,6 +10,8 @@ tests/host/etude_watchdog_hosttest.c: silent for three seconds, past a gap of tw
 tests/host/etude_watchdog_hosttest.c: the caller stays away past the cases' bounds
 tests/host/etude_sched_hosttest.c: a job holds its claims so the workers' claims overlap
 tests/timeprobe.c: naps between looks; the parent's are the sleep tested
+tests/restartprobe.c: naps between looks at a child, and the stop's hold
+tests/restartprobe.c: the sleeps tested, timed against their deadlines
 tests/pipeprobe.c: a try that changed the heap is followed by a pause
 tests/host/etude_native_hosttest.c: a process or a group is looked at again every 20 ms
 tests/host/etude_legacyset_hosttest.c: the record is read again every 50 ms
