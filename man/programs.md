@@ -383,11 +383,14 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 
 ### Games packages
 
-The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands on both architectures, from its own Debian closure. On x86-64 it also stages `/usr/bin/rach2-game` ([rach2-game(1)](man1/rach2-game.1)), which runs a Windows game through Proton with WoW64, WineD3D on OpenGL and fsync.
+The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands from its own Debian closure: innoextract on both architectures, and SuperTuxKart and 0 A.D. on x86-64 alone. On x86-64 it also stages `/usr/bin/rach2-game` ([rach2-game(1)](man1/rach2-game.1)), which runs a Windows game through Proton with WoW64, WineD3D on OpenGL and fsync.
 
 | Program | Package | Path | Page |
 | --- | --- | --- | --- |
+| `0ad` | `0ad` | `/usr/games/0ad` | [0ad(1)](man1/0ad.1) |
 | `innoextract` | `innoextract` | `/usr/bin/innoextract` | [innoextract(1)](man1/innoextract.1) |
+| `pyrogenesis` | `0ad` | `/usr/games/pyrogenesis` | [0ad(1)](man1/0ad.1) |
+| `supertuxkart` | `supertuxkart` | `/usr/games/supertuxkart` | [supertuxkart(1)](man1/supertuxkart.1) |
 
 ### Video packages
 
