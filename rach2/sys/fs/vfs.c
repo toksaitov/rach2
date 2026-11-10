@@ -1180,6 +1180,23 @@ static int walk_record_move(struct walk_record *record, struct vfs_ref *cur, voi
     return rc;
 }
 
+/**
+ * Cross the mounts over the node the walk has just moved to (`walk_cross`).
+ * A file bound over the recorded entry is the bind's root, on another mount,
+ * which the entry does not name, so a crossing drops the record. 0, or
+ * `walk_cross`'s error.
+ */
+static int walk_record_cross(struct walk_record *record, struct vfs_ref *cur, int locked)
+{
+    struct vfs_mount *from = cur->mnt;
+    int rc = walk_cross(cur, locked);
+
+    if (rc == 0 && cur->mnt != from) {
+        walk_record_clear(record, 1);
+    }
+    return rc;
+}
+
 /** Release the current node before dropping its namespace lock and mount. */
 static void walk_release(struct vfs_ref *cur, int locked)
 {
@@ -1517,7 +1534,7 @@ begin:
             goto out_err;
         }
 
-        rc = walk_cross(&cur, locked);
+        rc = walk_record_cross(record, &cur, locked);
         if (rc != 0) {
             goto out_err;
         }
