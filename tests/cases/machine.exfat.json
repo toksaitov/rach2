@@ -294,7 +294,7 @@
       "assertions": [
         {
           "assertion_id": "writers",
-          "checks": "lagprobe writers exfat exits 0 after LAGPROBE OK: two children write a file each and two more append to one file through opens of their own, by O_APPEND and by pwritev2 with RWF_APPEND, while the parent syncs the volume twenty times; every sync returns 0, each written file reads back as its own bytes, the appended one holds all sixteen records of each appender whole, and the volume unmounts",
+          "checks": "lagprobe writers exfat exits 0 after LAGPROBE OK: two children write a file each and two more append to one file through opens of their own, by writev with O_APPEND and by pwritev2 with RWF_APPEND, each record in two elements, while the parent syncs the volume twenty times; every sync returns 0, each written file reads back as its own bytes, the appended one holds all sixteen records of each appender whole, and the volume unmounts",
           "source": "scenario"
         },
         {

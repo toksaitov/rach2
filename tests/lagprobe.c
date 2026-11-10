@@ -654,13 +654,14 @@ static void check_written(const char *path, unsigned char fill)
 #define APPEND_PATH   "/lw/append.bin"
 
 /** An appender of `lagprobe writers`: open APPEND_PATH, which the parent
- * made, and add APPEND_ROUNDS records of `fill`, with O_APPEND or, when
- * `flag`, with pwritev2's RWF_APPEND on a description without it; exit 0,
+ * made, and add APPEND_ROUNDS two-element records of `fill`, with writev
+ * and O_APPEND or, when `flag`, with pwritev2's RWF_APPEND on a description
+ * without it; exit 0,
  * 2 when the open fails and 3 when a write is short. */
 static void appender(unsigned char fill, int flag)
 {
     static unsigned char record[APPEND_RECORD];
-    unsigned long iov[2];
+    unsigned long iov[4];
     int fd, i;
     long n;
 
@@ -668,14 +669,16 @@ static void appender(unsigned char fill, int flag)
         record[i] = fill;
     }
     iov[0] = (unsigned long)record;
-    iov[1] = APPEND_RECORD;
+    iov[1] = APPEND_RECORD / 2;
+    iov[2] = (unsigned long)(record + APPEND_RECORD / 2);
+    iov[3] = APPEND_RECORD / 2;
     fd = syscall3(SYS_OPEN, (long)APPEND_PATH, flag ? O_WRONLY : O_WRONLY | O_APPEND, 0);
     if (fd < 0) {
         sys_exit(2);
     }
     for (i = 0; i < APPEND_ROUNDS; i++) {
-        n = flag ? syscall6(SYS_PWRITEV2, fd, (long)iov, 1, -1, -1, RWF_APPEND)
-                 : syscall3(SYS_WRITE, fd, (long)record, APPEND_RECORD);
+        n = flag ? syscall6(SYS_PWRITEV2, fd, (long)iov, 2, -1, -1, RWF_APPEND)
+                 : syscall3(SYS_WRITEV, fd, (long)iov, 2);
         if (n != APPEND_RECORD) {
             sys_exit(3);
         }
@@ -724,7 +727,8 @@ static void check_appended(unsigned char one, unsigned char other)
  * `lagprobe writers`, under the lag with the second partition mounted for
  * writing: two children each create a file and extend it eight times, two
  * more append records to one file through descriptions of their own, one
- * with O_APPEND and one with RWF_APPEND, and the parent syncs the volume
+ * with writev and O_APPEND and one with RWF_APPEND, each record in two
+ * elements, and the parent syncs the volume
  * twenty times while they do; every write sleeps in the lag, so the
  * requests interleave, and an append that read the end before another's
  * write and wrote after it would overwrite that record. Each file must read
