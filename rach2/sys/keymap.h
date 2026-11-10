@@ -69,7 +69,7 @@
 #define KM_BREAK       KM_K(KM_T_SPEC, 5)
 #define KM_CAPS        KM_K(KM_T_SPEC, 7)   /* Caps Lock */
 #define KM_NUM         KM_K(KM_T_SPEC, 8)   /* Num Lock */
-#define KM_HOLD        KM_K(KM_T_SPEC, 9)   /* Scroll Lock */
+#define KM_HOLD        KM_K(KM_T_SPEC, 9)   /* Scroll Lock: stop or restart output */
 #define KM_SCROLLFORW  KM_K(KM_T_SPEC, 10)  /* the console's scrollback, down */
 #define KM_SCROLLBACK  KM_K(KM_T_SPEC, 11)  /* and up */
 #define KM_CAPSON      KM_K(KM_T_SPEC, 13)  /* Caps Lock on, never off */

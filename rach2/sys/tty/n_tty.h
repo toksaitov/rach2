@@ -39,6 +39,8 @@ struct ktermios {
 #define VEOF    4
 #define VTIME   5
 #define VMIN    6
+#define VSTART  8
+#define VSTOP   9
 #define VSUSP   10
 #define VEOL    11
 #define VWERASE 14
@@ -49,6 +51,7 @@ struct ktermios {
 #define ECHO    0000010
 #define ECHOE   0000020
 #define ECHOK   0000040
+#define NOFLSH  0000200 /* a signal character flushes nothing */
 #define TOSTOP  0000400
 #define ECHOCTL 0001000
 
@@ -57,6 +60,9 @@ struct ktermios {
 #define INLCR  0000100
 #define IGNCR  0000200
 #define ICRNL  0000400
+#define IXON   0002000 /* VSTOP and VSTART stop and restart output */
+#define IXANY  0004000 /* with IXON, any character restarts output */
+#define IXOFF  0010000 /* kept; no terminal here sends VSTOP for its input */
 #define IUTF8  0040000 /* the input is UTF-8: an erase removes a whole character */
 
 /* c_cflag bits: the speed code 38400 and the character size, receiver and
@@ -85,6 +91,9 @@ struct ktermios {
 #define N_TTY_READ_MAX 8192
 #define N_TTY_READ_CHUNK \
     1024 /* what one read() copies through its stack bounce; the caller loops */
+/* The echo held while output is stopped: a power of two, Linux's echo
+ * buffer's size. When it is full the oldest byte gives way. */
+#define N_TTY_ECHO_MAX 4096
 
 /* What the discipline did with its input, for `/proc/console`: the bytes
  * it dropped and why, the bytes it handed to readers, and the most it held. */
@@ -115,6 +124,15 @@ struct n_tty {
     int rq_mid;           /* the last canonical read stopped inside a line */
     int eof;              /* a pending end-of-file: a VEOF on an empty line, or a hangup */
     unsigned int eof_pos; /* the rq stream position of the pending EOF */
+    /* Output is stopped, by VSTOP under IXON or by TCOOFF: writes wait and
+     * echo is held in `echo_buf` until it restarts. */
+    int stopped;
+    int tco_stopped; /* TCOOFF stopped it, and only TCOON restarts it */
+    /* Echo not yet given to the sink: held while output is stopped, and a
+     * signal character's own echo, which follows its flush of the output. */
+    unsigned char echo_buf[N_TTY_ECHO_MAX];
+    unsigned int echo_head; /* monotonic; slot = head & (SIZE-1) */
+    unsigned int echo_tail;
     struct n_tty_counters counters;
 };
 
@@ -126,26 +144,35 @@ void n_tty_init(struct n_tty *t);
 
 /**
  * Fill `tio` with the default canonical termios. The defaults are a
- * standard tty's: ICRNL input, OPOST and ONLCR
+ * standard tty's: ICRNL and IXON input, OPOST and ONLCR
  * output, IUTF8, since Rach2's text is UTF-8, as Linux's console has it in
  * its UTF-8 mode, 38400 baud with eight-bit characters, ISIG and ICANON with
  * ECHO, ECHOE, ECHOK and ECHOCTL, the conventional control characters (^C,
- * ^\, DEL, ^U, ^D, ^Z, ^W) and VMIN 1.
+ * ^\, DEL, ^U, ^D, ^Z, ^W, and ^Q and ^S for VSTART and VSTOP) and VMIN 1.
  */
 void n_tty_default_termios(struct ktermios *tio);
 
 /**
  * Process one received input byte.
  *
- * Applies the input flags (ISTRIP, IGNCR, ICRNL, INLCR), then the ISIG signal
- * characters, then either canonical line editing (ERASE, WERASE, KILL, EOF,
- * newline and EOL) or, in raw mode, queues the byte. Echo and any output go
- * through `out`. `*signo` is set to an NTTY_SIG* code when a signal character
- * fires, else 0.
+ * Applies ISTRIP, then IXON's VSTOP and VSTART, then the ISIG signal
+ * characters, then IXANY, then the input flags IGNCR, ICRNL and INLCR, then
+ * either canonical line editing (ERASE, WERASE, KILL, EOF, newline and EOL)
+ * or, in raw mode, queues the byte: Linux's order. Echo and any output go
+ * through `out`, or wait in `echo_buf` while output is stopped (`stopped`).
+ * `*signo` is set to an NTTY_SIG* code when a signal character fires, else 0.
  *
- * A signal character is echoed and discards all unread input (the line under
- * edit, committed lines and a pending EOF), so input typed before the signal
- * does not survive it, as Linux does without NOFLSH. A `c_cc` entry of 0 is
+ * Under IXON, VSTOP stops output and VSTART restarts it, unless TCOOFF
+ * stopped it; neither reaches the reader nor is echoed, and when both are
+ * the same byte it restarts. Under IXON with IXANY any other byte restarts
+ * output as well, and so does a signal character under IXON alone.
+ *
+ * A signal character without NOFLSH discards all unread input (the line
+ * under edit, committed lines and a pending EOF) and the echo held, so input
+ * typed before the signal does not survive it, as Linux's isig does; its own
+ * echo is then held in `echo_buf` for the caller, which discards its output
+ * queue first and then emits it (`n_tty_echo_flush`). With NOFLSH it
+ * discards nothing and is echoed as any byte. A `c_cc` entry of 0 is
  * disabled (the _POSIX_VDISABLE convention) and never matches a NUL byte.
  * VEOF commits the line so far; on an empty line it marks end of file at the
  * current stream position, so it is read back in order with the input around
@@ -153,6 +180,38 @@ void n_tty_default_termios(struct ktermios *tio);
  * is kept for the newline or VEOL that ends it.
  */
 void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo);
+
+/**
+ * Process a received byte that `n_tty_lookahead` has already seen, as
+ * `n_tty_receive` does, but leave out the stop or restart of a VSTOP or
+ * VSTART, which the look ahead made; the byte is still not passed on.
+ */
+void n_tty_receive_looked(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx,
+                          int *signo);
+
+/**
+ * Act now on a byte that waits for room ahead of the discipline, as Linux's
+ * n_tty_lookahead_flow_ctrl: under IXON, VSTOP stops output and VSTART
+ * restarts it, so a terminal whose input is full still obeys them. The
+ * byte is later given to `n_tty_receive_looked`. Returns nonzero when
+ * `stopped` changed.
+ */
+int n_tty_lookahead(struct n_tty *t, unsigned char c);
+
+/** Stop output, as Linux's stop_tty. Returns nonzero when it was running. */
+int n_tty_stop(struct n_tty *t);
+
+/** Restart output unless TCOOFF stopped it, as Linux's start_tty. Returns
+ * nonzero when it was stopped and now runs; the echo held waits for
+ * `n_tty_echo_flush`. */
+int n_tty_start(struct n_tty *t);
+
+/**
+ * Give the echo held in `echo_buf` to `out` unless output is stopped.
+ * Returns the bytes given. The caller has interrupts off, since a byte
+ * received from an interrupt may add to the echo meanwhile.
+ */
+int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx);
 
 /**
  * Whether the terminal is readable to poll(2): nonzero if so, 0 if not.
@@ -205,7 +264,8 @@ unsigned int n_tty_held(const struct n_tty *t);
 
 /** Install `tio`. Returns nonzero when a read would not block, so the caller
  * can wake a reader the change made ready: a partial canonical line is
- * readable once ICANON is off. */
+ * readable once ICANON is off. Turning IXON off restarts output that VSTOP
+ * stopped, as Linux's n_tty_set_termios does. */
 int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio);
 
 /** Discard every unread byte, the partial line and a pending EOF, counting

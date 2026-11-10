@@ -41,6 +41,10 @@ struct tty {
     /* A pty slave's flush (`TTY_FLUSH_*`); NULL for a terminal with no
      * master. */
     void (*flush)(struct tty *t, int what);
+    /* What a change of output flow does beyond the terminal (`TTY_FLOW_*`):
+     * a pty's packet status, the console's Scroll Lock LED; NULL for
+     * nothing. Called with interrupts off, from an interrupt as well. */
+    void (*flow)(struct tty *t, int what);
     int sid;     /* the session whose controlling terminal this is; 0 = none */
     int fg_pgid; /* foreground process group (ISIG target); 0 = none */
     int hungup;  /* tty_hangup ran: a read with nothing to take returns 0 */
@@ -59,6 +63,25 @@ struct tty {
 #define TTY_FLUSH_IN     1
 #define TTY_FLUSH_OUT    2
 #define TTY_FLUSH_HANGUP 4
+
+/* What a terminal's `flow` is told, as Linux's driver start and stop and
+ * pty_set_termios see it. TTY_FLOW_STOP and TTY_FLOW_START: output stopped or
+ * restarted (TIOCPKT_STOP, TIOCPKT_START). TTY_FLOW_DOSTOP and
+ * TTY_FLOW_NOSTOP: IXON with ^S and ^Q was turned on or off
+ * (TIOCPKT_DOSTOP, TIOCPKT_NOSTOP). TTY_FLOW_DATA: bytes reached the sink
+ * outside a write, the echo held while output was stopped or a TCIOFF or
+ * TCION character, and the reader of the output is to be woken. */
+#define TTY_FLOW_STOP   1
+#define TTY_FLOW_START  2
+#define TTY_FLOW_DOSTOP 4
+#define TTY_FLOW_NOSTOP 8
+#define TTY_FLOW_DATA   16
+
+/* tcflow(3)'s actions, the argument of TCXONC. */
+#define TTY_TCOOFF 0
+#define TTY_TCOON  1
+#define TTY_TCIOFF 2
+#define TTY_TCION  3
 
 /* Whether a description of `t` opened when its count of vhangups was
  * `opened` is hung up. */
@@ -151,12 +174,48 @@ void tty_console_poll(void);
  * Feed one input byte from an interrupt or a polled source: run it through
  * the discipline (editing, and echo through the sink), wake a waiting reader
  * once a line or byte is ready, and post the signal of a signal character to
- * the foreground process group. A byte that takes bytes out of the
- * discipline, the flush of a signal character or an erase, word erase or
- * kill, wakes `space_wq` for room. Safe with interrupts off and in interrupt
- * context.
+ * the foreground process group. A signal character without NOFLSH also
+ * discards the output queued (`flush`, TTY_FLUSH_IN and TTY_FLUSH_OUT) before
+ * its echo, as Linux's isig. A VSTOP or VSTART that stops or restarts output
+ * tells `flow`, and a restart wakes the writers. A byte that takes bytes out
+ * of the discipline, the flush of a signal character or an erase, word
+ * erase or kill, wakes `space_wq` for room. Safe with interrupts off and in
+ * interrupt context.
  */
 void tty_input_char(struct tty *t, unsigned char c);
+
+/**
+ * Feed a byte `tty_lookahead` has seen, as `tty_input_char` does, without
+ * acting again on its VSTOP or VSTART.
+ */
+void tty_input_looked(struct tty *t, unsigned char c);
+
+/**
+ * Act now on a byte that waits for room in `t`'s discipline: a VSTOP or
+ * VSTART under IXON (`n_tty_lookahead`), as Linux looks ahead in the bytes
+ * its discipline cannot take yet. The byte is later fed with
+ * `tty_input_looked`. Takes interrupts off itself.
+ */
+void tty_lookahead(struct tty *t, unsigned char c);
+
+/**
+ * tcflow(3), TCXONC with `action` one of TTY_TC*: TCOOFF stops output until
+ * TCOON, which nothing else restarts; TCOON restarts it; TCIOFF and TCION
+ * write VSTOP or VSTART, unless disabled, to the terminal's output past a
+ * stop that is not TCOOFF's, as Linux's tty_send_xchar. Returns 0, or
+ * -EINVAL for another action.
+ */
+int tty_tcflow(struct tty *t, int action);
+
+/**
+ * Wait until output stopped on `t` restarts, for a writer whose description
+ * was opened at `opened` vhangups. Returns 0 when it runs, -EAGAIN at once
+ * when it is stopped and `nonblock` is set, -EIO when a vhangup has hung the
+ * description up, or -EINTR when a signal ends the wait. The wait drains
+ * the pump, as a read's does, so a VSTART from COM1 restarts it. Thread
+ * context.
+ */
+int tty_wait_output(struct tty *t, int nonblock, uint32_t opened);
 
 /**
  * Wait until `t` has input a read can take, then copy up to `count` bytes of
@@ -187,7 +246,9 @@ int tty_read_rest(struct tty *t, unsigned char *kbuf, int count);
 
 /**
  * Write `count` bytes of `kbuf` through output processing (OPOST, ONLCR) to
- * the sink. Returns `count`: a tty write neither waits nor fails. On the
+ * the sink, after the echo held. Returns the bytes written, fewer than
+ * `count` when output is stopped, where the caller waits
+ * (`tty_wait_output`); a tty write does not wait itself. On the
  * console the write is bracketed by console_write_begin and
  * console_write_end, so a kernel log record raised during it waits and is not
  * printed inside the program's output, and the screen's answers to queries in
@@ -200,15 +261,17 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count);
  * the unread input first, on the console the serial ring too, and report the
  * flush through `flush` (TTY_FLUSH_IN) as TCSETSF does on Linux. Wakes
  * `space_wq` for room, and the readers when the change makes input readable.
- * Takes interrupts off itself.
+ * A change of whether IXON is on with ^S and ^Q tells `flow`
+ * (TTY_FLOW_DOSTOP, TTY_FLOW_NOSTOP), as Linux's pty_set_termios; turning
+ * IXON off restarts output VSTOP stopped. Takes interrupts off itself.
  */
 void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
 
 /**
- * poll(2) readiness: POLLIN when a read would not block, and POLLOUT, which
- * is always true. Only a query with POLLIN drains the polled source and sets
- * *wq to input_wq for the poll core to re-check on. Called by the poll core
- * with interrupts off.
+ * poll(2) readiness: POLLIN when a read would not block, and POLLOUT while
+ * output is not stopped. A query with POLLIN, or with POLLOUT on stopped
+ * output, drains the polled source and sets *wq to input_wq for the poll
+ * core to re-check on. Called by the poll core with interrupts off.
  */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq);
 
@@ -239,16 +302,23 @@ void tty_hangup(struct tty *t);
  * Hang `t` up as vhangup(2) does, Linux's `__tty_hangup` for a terminal that
  * a session leader's exit does not hang up: post SIGHUP and then SIGCONT to
  * the leader of the session `t` controls, take the terminal from that
- * session and its foreground group, discard unread input and queued output,
- * give `t` the
- * default termios (`n_tty_default_termios`), as Linux resets a pty's and a
- * virtual console's, and count the hangup, which makes every description
- * opened before it a hung-up one (`tty_desc_hung`). Every reader, writer
+ * session and its foreground group, discard unread input, queued output and
+ * the echo held, give `t` the default termios (`n_tty_default_termios`), as
+ * Linux resets a pty's and a virtual console's, and count the hangup, which
+ * makes every description opened before it a hung-up one (`tty_desc_hung`).
+ * A stop of output stays, as Linux's flow state does. Every reader, writer
  * and poller of `t` is woken; a read waiting then returns 0. A pty's master
- * is left no pending packet status (TTY_FLUSH_HANGUP). Thread
- * context; it takes interrupts off itself.
+ * is left no pending packet status (TTY_FLUSH_HANGUP). Thread context; it
+ * takes interrupts off itself.
  */
 void tty_vhangup(struct tty *t);
+
+/**
+ * The console keyboard's Hold, Scroll Lock in the US keymap: stop the
+ * console's output when it runs and restart it when it is stopped, unless
+ * TCOOFF stopped it, as Linux's fn_hold. Any context.
+ */
+void tty_console_hold(void);
 
 /** The console's count of vhangups, which a description of it opened now
  * records. */

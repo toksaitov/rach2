@@ -1584,8 +1584,10 @@ static void dead_key(struct keymap_state *st, const struct keymap *map, unsigned
 
 /**
  * Press a key of type KM_T_SPEC: Enter, Break and the scrolls are results,
- * and the locks and Compose change the state only on a press that is not a
- * repeat, which `fresh` says.
+ * Hold is one on a press that is not a repeat, which `fresh` says, as
+ * Linux's fn_hold, and the locks and Compose change the state only on such a
+ * press. Hold leaves the Scroll Lock flag to the console, which shows with it
+ * whether its output is stopped.
  */
 static void spec_key(struct keymap_state *st, const struct keymap *map, unsigned int entry,
                      int fresh, struct keymap_result *res)
@@ -1608,6 +1610,11 @@ static void spec_key(struct keymap_state *st, const struct keymap *map, unsigned
     if (!fresh) {
         return;
     }
+    if (entry == KM_HOLD) {
+        res->kind = KM_RESULT_SPECIAL;
+        res->key = entry;
+        return;
+    }
     switch (entry) {
     case KM_CAPS:
         st->ledflags ^= KM_LED_CAPS;
@@ -1618,9 +1625,6 @@ static void spec_key(struct keymap_state *st, const struct keymap *map, unsigned
     case KM_NUM:
     case KM_BARENUMLOCK:
         st->ledflags ^= KM_LED_NUM;
-        break;
-    case KM_HOLD:
-        st->ledflags ^= KM_LED_SCROLL;
         break;
     case KM_COMPOSE:
         st->diacr = 0;

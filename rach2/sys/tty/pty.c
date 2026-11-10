@@ -29,9 +29,14 @@
 #define TIOCSPTLCK         0x40045431 /* master: set/clear the slave lock (arg int*, 0 = unlock) */
 #define TIOCPKT_FLUSHREAD  1
 #define TIOCPKT_FLUSHWRITE 2
+#define TIOCPKT_STOP       4          /* the slave's output stopped */
+#define TIOCPKT_START      8          /* and restarted */
+#define TIOCPKT_NOSTOP     16         /* the slave's IXON with ^S and ^Q went off */
+#define TIOCPKT_DOSTOP     32         /* and came on */
 #define TIOCPKT            0x5420     /* master: packet mode on or off (arg int*) */
 #define TIOCGPKT           0x80045438 /* master: whether packet mode is on (arg int*) */
 #define TCFLSH             0x540B     /* flush the queues: arg 0 input, 1 output, 2 both */
+#define TCXONC             0x540A     /* tcflow(3): arg TCOOFF, TCOON, TCIOFF or TCION */
 
 /* O_* flags honored on open (mirror syscall.c / fd.h). */
 #define O_CLOEXEC_FLAG  02000000
@@ -77,13 +82,13 @@ static void pty_free(struct pty *p)
 }
 
 /** The bytes in the master ring that the master has not read. */
-static uint32_t pty_m_avail(struct pty *p)
+static uint32_t pty_m_avail(const struct pty *p)
 {
     return p->m_tail - p->m_head;
 }
 
 /** The bytes the master ring can still take. */
-static uint32_t pty_m_room(struct pty *p)
+static uint32_t pty_m_room(const struct pty *p)
 {
     return PTY_BUF_SIZE - pty_m_avail(p);
 }
@@ -171,6 +176,41 @@ static void pty_flush(struct tty *t, int what)
 }
 
 /**
+ * The slave `t`'s change of output flow, `what` a set of TTY_FLOW_* bits
+ * (tty.h), as Linux's pty_stop, pty_start and pty_set_termios: in packet
+ * mode TTY_FLOW_STOP sets TIOCPKT_STOP and clears TIOCPKT_START,
+ * TTY_FLOW_START the reverse, and TTY_FLOW_DOSTOP and TTY_FLOW_NOSTOP set
+ * their bit and clear the other, for the master's next read, whose readers
+ * are woken; TTY_FLOW_DATA wakes them for bytes put in `m_buf` outside a
+ * write. Takes interrupts off.
+ */
+static void pty_flow(struct tty *t, int what)
+{
+    struct pty *p = t->sink_ctx;
+    uint32_t flags = kirq_save();
+
+    if (p->packet &&
+        (what & (TTY_FLOW_STOP | TTY_FLOW_START | TTY_FLOW_DOSTOP | TTY_FLOW_NOSTOP))) {
+        if (what & TTY_FLOW_STOP) {
+            p->pktstatus = (uint8_t)((p->pktstatus & ~TIOCPKT_START) | TIOCPKT_STOP);
+        }
+        if (what & TTY_FLOW_START) {
+            p->pktstatus = (uint8_t)((p->pktstatus & ~TIOCPKT_STOP) | TIOCPKT_START);
+        }
+        if (what & TTY_FLOW_DOSTOP) {
+            p->pktstatus = (uint8_t)((p->pktstatus & ~TIOCPKT_NOSTOP) | TIOCPKT_DOSTOP);
+        }
+        if (what & TTY_FLOW_NOSTOP) {
+            p->pktstatus = (uint8_t)((p->pktstatus & ~TIOCPKT_DOSTOP) | TIOCPKT_NOSTOP);
+        }
+        wq_wake(&p->m_read_wq, WQ_DATA);
+    } else if (what & TTY_FLOW_DATA) {
+        wq_wake(&p->m_read_wq, WQ_DATA);
+    }
+    kirq_restore(flags);
+}
+
+/**
  * Allocate a pair at the lowest free index, or return NULL when the heap has
  * no room. One queue serves the master's readers, writers and pollers; the
  * slave's `space_wq` points at it, so a flush, a termios change, or a signal
@@ -194,6 +234,7 @@ static struct pty *pty_alloc(void)
     p->mode = 0620; /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p);
     p->slave.flush = pty_flush;
+    p->slave.flow = pty_flow;
     wait_queue_init(&p->m_read_wq);
     p->slave.space_wq = &p->m_read_wq;
     p->next = ptys;
@@ -297,21 +338,32 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)(lead + got);
 }
 
-/** Whether the slave's discipline can take a line: the master's write wait. */
-static int ptm_has_room(void *arg)
+/** Whether the master can feed the slave a byte: no TCOOFF stopped it, the
+ * slave's discipline can take a line, and a slave description is open, or
+ * none has opened yet. */
+static int ptm_can_feed(const struct pty *p)
 {
-    struct pty *p = (struct pty *)arg;
-
-    return n_tty_has_room(&p->slave.ldisc);
+    return !p->m_stopped && !p->hung_up && n_tty_has_room(&p->slave.ldisc);
 }
 
-/** The offset of the first signal character in `bytes`, or -1: VINTR, VQUIT
- * or VSUSP with ISIG on, a disabled (zero) one never matching. */
+/** Whether a master writer's wait ends: it can feed the slave
+ * (`ptm_can_feed`), or every slave description has closed, which ends the
+ * write with EIO. */
+static int ptm_has_room(void *arg)
+{
+    const struct pty *p = (const struct pty *)arg;
+
+    return ptm_can_feed(p) || p->hung_up;
+}
+
+/** The offset of the first signal character in `bytes` that flushes the
+ * input, or -1: VINTR, VQUIT or VSUSP with ISIG on and NOFLSH off, a
+ * disabled (zero) one never matching. */
 static int signal_char_at(const struct n_tty *ld, const uint8_t *bytes, int n)
 {
     int i;
 
-    if (!(ld->tio.c_lflag & ISIG)) {
+    if (!(ld->tio.c_lflag & ISIG) || (ld->tio.c_lflag & NOFLSH)) {
         return -1;
     }
     for (i = 0; i < n; i++) {
@@ -326,25 +378,77 @@ static int signal_char_at(const struct n_tty *ld, const uint8_t *bytes, int n)
     return -1;
 }
 
+/* A master write's place: the piece of it copied in and where it stands. */
+struct ptm_feed {
+    fd_entry_t *e;
+    struct pty *p;
+    const uint8_t *kbuf; /* the piece copied from the user */
+    uint32_t chunk;      /* its bytes */
+    uint32_t done;       /* the bytes of the write before it */
+    uint32_t pushed;     /* m_tail when the master's readers were last woken */
+};
+
+/**
+ * Wait until the master write `f` can feed byte `*i` of its piece
+ * (`ptm_can_feed`). While it cannot, a signal character that flushes is fed
+ * at once, the bytes before it discarded and `*i` moved past it, and the
+ * VSTOP and VSTART from `*ahead` on act at once (`tty_lookahead`), `*ahead`
+ * moving to the piece's end. Returns 0 to go on feeding, or what
+ * `ptm_write` returns: the bytes written, -EAGAIN, -EIO or -EINTR.
+ */
+static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i, uint32_t *ahead)
+{
+    struct pty *p = f->p;
+
+    while (!ptm_can_feed(p)) {
+        int at = p->m_stopped || p->hung_up
+                     ? -1
+                     : signal_char_at(&p->slave.ldisc, f->kbuf + *i, (int)(f->chunk - *i));
+
+        if (at >= 0) {
+            p->slave.ldisc.counters.flush_bytes += (unsigned int)at;
+            *i += (uint32_t)at;
+            tty_input_char(&p->slave, f->kbuf[*i]);
+            (*i)++;
+            continue;
+        }
+        if (!p->m_stopped) {
+            for (*ahead = *ahead > *i ? *ahead : *i; *ahead < f->chunk; (*ahead)++) {
+                tty_lookahead(&p->slave, f->kbuf[*ahead]);
+            }
+        }
+        wake_master(p, &f->pushed);
+        if (f->done + *i > 0 || p->hung_up || fd_is_nonblock(f->e)) {
+            return f->done + *i > 0 ? (int32_t)(f->done + *i) : p->hung_up ? -EIO : -EAGAIN;
+        }
+        if (wq_wait_event(&p->m_read_wq, ptm_has_room, p) < 0) {
+            return -EINTR;
+        }
+    }
+    return 0;
+}
+
 /**
  * Feed what the remote user typed to the slave's line discipline, which cooks
  * it, echoes into m_buf through the slave's sink, and wakes a slave reader
  * once a line is ready (tty_input_char).
  *
  * The discipline takes input only while a whole line more fits
- * (`n_tty_has_room`). A write that fills it returns short; one that has fed
- * nothing waits for the slave to read, or fails with -EAGAIN when
- * non-blocking. A signal character among the waiting bytes is fed at once and
- * the bytes before it are discarded, since the signal would discard them.
- * Master readers are woken before every return that fed bytes, a failed copy
- * included, so they see the echo.
+ * (`n_tty_has_room`), and none while TCOOFF on the master stops it. A write
+ * that fills it returns short; one that has fed nothing waits for the slave
+ * to read or for TCOON, or fails with -EAGAIN when non-blocking, and with
+ * -EIO once every slave description has closed, as Linux's n_tty_write. A
+ * signal character among the waiting bytes is fed at once and the bytes
+ * before it are discarded, since the signal would discard them, unless
+ * NOFLSH keeps them; a VSTOP or VSTART among them acts at once
+ * (`tty_lookahead`) and is fed later without acting again, as Linux looks
+ * ahead in its flip buffer. Master readers are woken before every return
+ * that fed bytes, a failed copy included, so they see the echo.
  */
 static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    struct pty *p = (struct pty *)e->priv;
+    struct ptm_feed f;
     uint8_t kbuf[256];
-    uint32_t done = 0;
-    uint32_t pushed = p->m_tail;
 
     if (count == 0) {
         return 0;
@@ -352,52 +456,48 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (!user_range_ok((__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
-    while (done < count) {
-        uint32_t chunk = count - done;
-        uint32_t i;
+    f.e = e;
+    f.p = (struct pty *)e->priv;
+    f.kbuf = kbuf;
+    f.done = 0;
+    f.pushed = f.p->m_tail;
+    while (f.done < count) {
+        uint32_t i, ahead = 0;
+        int32_t rc;
 
-        if (chunk > sizeof(kbuf)) {
-            chunk = sizeof(kbuf);
+        f.chunk = count - f.done;
+        if (f.chunk > sizeof(kbuf)) {
+            f.chunk = sizeof(kbuf);
         }
-        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
-            wake_master(p, &pushed);
-            return (done > 0) ? (int32_t)done : -EFAULT;
+        if (copy_from_user(kbuf, (const void __user *)(buf + f.done), f.chunk) != 0) {
+            wake_master(f.p, &f.pushed);
+            return (f.done > 0) ? (int32_t)f.done : -EFAULT;
         }
-        for (i = 0; i < chunk; i++) {
-            while (!n_tty_has_room(&p->slave.ldisc)) {
-                int at = signal_char_at(&p->slave.ldisc, kbuf + i, (int)(chunk - i));
-
-                if (at >= 0) {
-                    p->slave.ldisc.counters.flush_bytes += (unsigned int)at;
-                    i += (uint32_t)at;
-                    tty_input_char(&p->slave, kbuf[i]);
-                    i++;
-                    continue;
-                }
-                wake_master(p, &pushed);
-                if (done + i > 0 || (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK))) {
-                    return done + i > 0 ? (int32_t)(done + i) : -EAGAIN;
-                }
-                if (wq_wait_event(&p->m_read_wq, ptm_has_room, p) < 0) {
-                    return -EINTR;
-                }
+        for (i = 0; i < f.chunk; i++) {
+            rc = ptm_wait_feed(&f, &i, &ahead);
+            if (rc != 0) {
+                return rc;
             }
-            if (i >= chunk) {
+            if (i >= f.chunk) {
                 break;
             }
-            tty_input_char(&p->slave, kbuf[i]);
+            if (i < ahead) {
+                tty_input_looked(&f.p->slave, kbuf[i]);
+            } else {
+                tty_input_char(&f.p->slave, kbuf[i]);
+            }
         }
-        done += chunk;
+        f.done += f.chunk;
     }
-    wake_master(p, &pushed);
-    return (int32_t)done;
+    wake_master(f.p, &f.pushed);
+    return (int32_t)f.done;
 }
 
 /** Report the master's readiness, all on m_read_wq, as Linux's n_tty_poll:
  * POLLIN and POLLRDNORM when the ring has output or every slave has closed,
  * POLLHUP once every slave has closed, POLLIN, POLLRDNORM and POLLPRI for
  * pending packet status, and POLLOUT and POLLWRNORM while the slave's
- * discipline has room for a line. */
+ * discipline has room for a line and no TCOOFF stopped the master. */
 static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -415,7 +515,7 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (p->slave_opens == 0) {
         revents |= POLLHUP;
     }
-    if (n_tty_has_room(&p->slave.ldisc)) {
+    if (!p->m_stopped && n_tty_has_room(&p->slave.ldisc)) {
         revents |= (short)(events & (POLLOUT | POLLWRNORM));
     }
     return revents;
@@ -445,6 +545,39 @@ static int32_t ptm_flush(struct pty *p, unsigned long which)
     return 0;
 }
 
+/**
+ * tcflow(3) on the master, whose output is the slave's input: TCOOFF stops
+ * the master's writes until TCOON, and TCIOFF and TCION write ^S and ^Q, the
+ * master's VSTOP and VSTART, to the slave's input unless TCOOFF stopped it,
+ * as Linux's tty_send_xchar does through pty_write. Another action is
+ * -EINVAL.
+ */
+static int32_t ptm_tcflow(struct pty *p, unsigned long action)
+{
+    uint32_t pushed = p->m_tail;
+
+    switch (action) {
+    case TTY_TCOOFF:
+        p->m_stopped = 1;
+        return 0;
+    case TTY_TCOON:
+        if (p->m_stopped) {
+            p->m_stopped = 0;
+            wq_wake(&p->m_read_wq, WQ_ROOM);
+        }
+        return 0;
+    case TTY_TCIOFF:
+    case TTY_TCION:
+        if (!p->m_stopped) {
+            tty_input_char(&p->slave, action == TTY_TCIOFF ? 023 : 021);
+            wake_master(p, &pushed);
+        }
+        return 0;
+    default:
+        return -EINVAL;
+    }
+}
+
 /** Set or read packet mode (TIOCPKT, TIOCGPKT) through the int at `arg`. */
 static int32_t ptm_packet(struct pty *p, uint32_t request, uintptr_t arg)
 {
@@ -466,7 +599,7 @@ static int32_t ptm_packet(struct pty *p, uint32_t request, uintptr_t arg)
 /**
  * The master's ioctls: TIOCGPTN, TIOCSPTLCK, the window size (TIOCSWINSZ
  * sends SIGWINCH to the slave's foreground group), TIOCPKT and TIOCGPKT,
- * TCFLSH, and FIONREAD, the bytes of the ring not yet read. A bad user
+ * TCFLSH, TCXONC, and FIONREAD, the bytes of the ring not yet read. A bad user
  * pointer is -EFAULT, and any other request -ENOTTY.
  */
 static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
@@ -508,6 +641,8 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return ptm_packet(p, request, arg);
     case TCFLSH:
         return ptm_flush(p, arg);
+    case TCXONC:
+        return ptm_tcflow(p, arg);
     case FIONREAD: {
         int n = (int)pty_m_avail(p);
         if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {
@@ -632,14 +767,21 @@ static int pts_waiter_hung(const struct pts_waiter *w)
     return w->has_desc && tty_desc_hung(&w->p->slave, w->opened);
 }
 
-/** A slave writer `arg`, a struct pts_waiter, can go on: the ring has room
- * for a byte of output at its largest, the master has closed, or its
- * description has been hung up. */
+/** The bytes of slave output `p`'s ring can take now: none while output is
+ * stopped, and otherwise as many as fit at their largest (`pts_growth`). */
+static uint32_t pts_fit(const struct pty *p)
+{
+    return p->slave.ldisc.stopped ? 0u : pty_m_room(p) / pts_growth(p);
+}
+
+/** A slave writer `arg`, a struct pts_waiter, can go on: output runs and the
+ * ring has room for a byte of it at its largest, the master has closed, or
+ * its description has been hung up. */
 static int pts_has_room(void *arg)
 {
     const struct pts_waiter *w = (const struct pts_waiter *)arg;
 
-    return !w->p->master_open || pts_waiter_hung(w) || pty_m_room(w->p) >= pts_growth(w->p);
+    return !w->p->master_open || pts_waiter_hung(w) || pts_fit(w->p) > 0;
 }
 
 /** A slave writer `arg`, a struct pts_waiter, may begin: no other write is
@@ -654,8 +796,9 @@ static int pts_write_free(void *arg)
 /**
  * Copy `count` bytes of slave output into m_buf, through OPOST processing by
  * way of the slave's sink, a piece at a time that fits the ring at its
- * largest (`pts_growth`): a writer the ring has no room for waits until the
- * master reads, as on Linux, or takes -EAGAIN, or returns what it wrote, when
+ * largest (`pts_growth`): a writer the ring has no room for, or whose output
+ * is stopped (VSTOP or TCOOFF), waits until the master reads or output
+ * restarts, as on Linux, or takes -EAGAIN, or returns what it wrote, when
  * non-blocking. A vhangup(2) of the description of the writer `w`, before a
  * piece or during its wait, ends the write with EIO or the bytes written, as
  * Linux's n_tty_write does. Master readers are woken even if a later copy
@@ -676,7 +819,7 @@ static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __u
         uint32_t chunk = count - done;
         uint32_t fit;
 
-        while ((fit = pts_waiter_hung(w) ? 0u : pty_m_room(p) / pts_growth(p)) == 0) {
+        while ((fit = pts_waiter_hung(w) ? 0u : pts_fit(p)) == 0) {
             int32_t stop = !p->master_open || pts_waiter_hung(w) ? -EIO
                            : fd_is_nonblock(e)                   ? -EAGAIN
                                                                  : 0;
@@ -703,12 +846,11 @@ static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __u
             wake_master(p, &pushed);
             return (done > 0) ? (int32_t)done : -EIO;
         }
-        fit = pty_m_room(p) / pts_growth(p);
+        fit = pts_fit(p);
         if (chunk > fit) {
             chunk = fit;
         }
-        tty_write(&p->slave, kbuf, (int)chunk);
-        done += chunk;
+        done += (uint32_t)tty_write(&p->slave, kbuf, (int)chunk);
     }
     wake_master(p, &pushed); /* output pushed into m_buf: wake the master */
     p->mtime = pty_now();
@@ -774,8 +916,9 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 }
 
 /**
- * Report the slave's readiness, POLLOUT only while the master ring has room
- * for a byte of output, and POLLHUP once the master has closed.
+ * Report the slave's readiness, POLLOUT only while output runs and the
+ * master ring has room for a byte of it, and POLLHUP once the master has
+ * closed.
  *
  * tty_poll sets the wait queue only for a POLLIN query, but a master close
  * wakes that same input queue (tty_hangup), and a master read wakes it with
@@ -797,7 +940,7 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     }
     if (!p->master_open) {
         revents |= POLLHUP;
-    } else if (pty_m_room(p) < pts_growth(p)) {
+    } else if (pts_fit(p) == 0) {
         revents &= (short)~POLLOUT;
     }
     return revents;

@@ -286,8 +286,6 @@ rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, 
 rach2/sys/syscall_proc.c:do_fork lines 107 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:clone_with params 8 the parameters are the arguments of clone or clone3, passed through
 
-rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
-
 rach2/sys/usb/core.c:step_device complexity 78 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:step_device lines 404 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_core_step complexity 49 a state machine, one arm per state, read as a table
