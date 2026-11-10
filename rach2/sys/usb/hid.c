@@ -125,6 +125,7 @@ struct hid_state {
     int offer;                /* OFFER_*: what `hid_output_report` gave last */
     int multiplier;           /* a multiplier report is still to be sent */
     int leds_failed;          /* an LED report failed since it was taken */
+    int number;               /* its bInterfaceNumber, for messages */
     int shown_len;            /* the LED report last taken, -1 before one */
     /* The LED report last taken and the one offered, each of `out_cap`
      * bytes: a report-protocol device's in its tables (`hid_dev.outbuf`),
@@ -518,6 +519,7 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
     }
     state->hid = hid;
     state->mode = HID_REPORT;
+    state->number = ids->interface;
     state->offer = OFFER_NONE;
     state->multiplier = 1;
     state->leds_failed = 0;
@@ -545,6 +547,7 @@ int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
         return -ENOMEM;
     }
     state->mode = kind;
+    state->number = ids->interface;
     state->offer = OFFER_NONE;
     state->multiplier = 0;
     state->leds_failed = 0;
@@ -710,7 +713,7 @@ void hid_output_sent(int device, int iface, int ok)
         } else {
             if (!state->leds_failed) {
                 klog(KLOG_WARN, "usb", "hid: device %d interface %d: the LED report failed", device,
-                     iface);
+                     state->number);
             }
             state->leds_failed = 1;
         }

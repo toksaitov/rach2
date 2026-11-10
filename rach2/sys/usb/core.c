@@ -2714,14 +2714,11 @@ static const struct usb_interface_info *interface_of(const struct usb_device_sta
 {
     int k;
 
-    if (ifnum < 0) {
-        return &d->interface;
-    }
     if (!d->hid) {
-        return d->interface.number == ifnum ? &d->interface : 0;
+        return ifnum < 0 || d->interface.number == ifnum ? &d->interface : 0;
     }
     for (k = 0; k < d->hid->count; k++) {
-        if (d->hid->at[k].live && d->hid->info[k].number == ifnum) {
+        if (d->hid->at[k].live && (ifnum < 0 || d->hid->info[k].number == ifnum)) {
             return &d->hid->info[k];
         }
     }
