@@ -323,6 +323,7 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 | `weston-terminal` | `weston` | `/usr/bin/weston-terminal` | [weston-clients(1)](man1/weston-clients.1) |
 | `weston-touch-calibrator` | `weston` | `/usr/bin/weston-touch-calibrator` | [weston-clients(1)](man1/weston-clients.1) |
 | `weston-transformed` | `weston` | `/usr/bin/weston-transformed` | [weston-clients(1)](man1/weston-clients.1) |
+| `wflinfo` | `waffle-utils` | `/usr/bin/wflinfo` | [wflinfo(1)](man1/wflinfo.1) |
 | `xdg-desktop-icon` | `xdg-utils` | `/usr/bin/xdg-desktop-icon` | [xdg-desktop-icon(1)](man1/xdg-desktop-icon.1) |
 | `xdg-desktop-menu` | `xdg-utils` | `/usr/bin/xdg-desktop-menu` | [xdg-desktop-menu(1)](man1/xdg-desktop-menu.1) |
 | `xdg-email` | `xdg-utils` | `/usr/bin/xdg-email` | [xdg-email(1)](man1/xdg-email.1) |
