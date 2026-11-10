@@ -142,8 +142,9 @@ static int pvm_may_access(const process_t *t)
  * and `raddr` of `mm`: a read into the caller with `write` 0, a write into
  * `mm` otherwise. The remote page must lie in a region that allows the
  * access itself, since the copy has no tracer's force; one that does not,
- * and one `paging_access` cannot reach, a guard or device memory, are
- * -EFAULT, as is a fault in the caller's buffer. 0 or -errno.
+ * and one `paging_access` cannot reach, a guard, device memory or a
+ * mapping of memfd_secret, are -EFAULT, as is a fault in the caller's
+ * buffer. 0 or -errno.
  */
 static int32_t pvm_move(struct mm *mm, uintptr_t laddr, uintptr_t raddr, uint32_t n, int write)
 {

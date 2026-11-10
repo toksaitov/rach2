@@ -15,11 +15,15 @@
 /*
  * A count of the pages that files hold against a limit, which a tmpfs mount
  * keeps for its files; a limit of 0 is none. Both are as wide as the frame
- * counts, so a mount on x86-64 may hold more than 16 TiB of pages.
+ * counts, so a mount on x86-64 may hold more than 16 TiB of pages. A quota
+ * with `cap` reads its limit from it at each page taken instead, 0 then
+ * meaning no room: memfd_secret's count of a user's pages, against the
+ * RLIMIT_MEMLOCK of the process that touches one.
  */
 struct shmem_quota {
     size_t used;
     size_t limit;
+    size_t (*cap)(void);
 };
 
 /*
@@ -59,6 +63,10 @@ struct shmem {
     struct shmem_quota *quota; /* the count its pages are held against, or NULL */
     struct shmem_policy *policies;
 };
+
+/** Whether the quota of `sh` has no room for another page, which a mapping
+ * that touches a page it lacks answers with SIGBUS, as Linux does. */
+int shmem_quota_full(const struct shmem *sh);
 
 /** Read `count` bytes at `off` into `buf`, a hole as zeros: the bytes read,
  * fewer at the end of the data, or -EIO when no temporary mapping was free

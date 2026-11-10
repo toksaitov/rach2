@@ -265,6 +265,14 @@ static uintptr_t fresh(void)
 
 static int prefaults;
 
+/** The region of `addr`: none, so that no slot maps memfd_secret's. */
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
+{
+    (void)vm;
+    (void)addr;
+    return NULL;
+}
+
 /** A page brought in as a fault would: a fresh frame, writable where the
  * region is, and for a write to a copy-on-write page a new frame, told to
  * the notice first. */

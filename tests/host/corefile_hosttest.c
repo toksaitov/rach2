@@ -154,6 +154,8 @@ static long sys_getdents64(isr_params_t *params);
 static long sys_dup3(isr_params_t *params);
 static long sys_statx(isr_params_t *params);
 static long sys_memfd_create(isr_params_t *params);
+static long sys_memfd_secret(isr_params_t *params);
+static long sys_cachestat(isr_params_t *params);
 static long sys_flock(isr_params_t *params);
 static long sys_close_range(isr_params_t *params);
 static long sys_mknod(isr_params_t *params);
@@ -1353,17 +1355,6 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     (void)at;
     (void)size;
     return -EROFS;
-}
-
-/** cachestat's count, which no row asks for: no page. */
-void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
-                   struct vfs_cachestat *cs)
-{
-    (void)mnt;
-    (void)node;
-    (void)first;
-    (void)last;
-    k_memset(cs, 0, sizeof(*cs));
 }
 
 /** fallocate, which no row asks for: -EOPNOTSUPP. */

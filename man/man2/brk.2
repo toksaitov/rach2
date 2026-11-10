@@ -732,7 +732,9 @@ has an unknown bit;
 with
 .Dv MAP_FIXED ,
 .Fa addr
-is not page-aligned.
+is not page-aligned; or the mapping of a file of
+.Xr memfd_secret 2
+is private.
 For
 .Fn mprotect ,
 .Fa addr
@@ -838,6 +840,14 @@ range lies outside user space, or its split cannot obtain its entries;
 cannot grow a mapping in place without
 .Dv MREMAP_MAYMOVE ,
 or finds no free range.
+.Fn mlock
+and
+.Fn mlock2
+without
+.Dv MLOCK_ONFAULT
+meet a mapping of
+.Xr memfd_secret 2 ,
+whose pages Linux cannot bring in for them, after locking the range.
 Musl also rejects mapping lengths at least
 .Dv PTRDIFF_MAX
 and every public
@@ -852,8 +862,12 @@ memory do.
 .It Er EPERM
 A device object refuses the caller or the range, as
 .Pa /dev/mem
-refuses a caller without privilege and a frame of RAM; or the range meets
-a sealed mapping, as above.
+refuses a caller without privilege and a frame of RAM; the range meets
+a sealed mapping, as above; or an
+.Fn mmap
+of a file of
+.Xr memfd_secret 2
+asks for execute.
 .It Er ESRCH
 The kernel has no current process.
 .El

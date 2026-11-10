@@ -12753,7 +12753,8 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
  * F_ADD_SEALS and F_GET_SEALS on `entry`: the seals of a tmpfs file
  * (tmpfs.h), which a memfd made with MFD_ALLOW_SEALING starts without and
  * every other tmpfs file starts with F_SEAL_SEAL alone, which refuses more.
- * A descriptor of anything else is EINVAL; adding needs a descriptor open
+ * A descriptor of anything else, a file of memfd_secret among them, is
+ * EINVAL; adding needs a descriptor open
  * for writing (EPERM), then `arg` must be seals (EINVAL) and the file not
  * sealed against sealing (EPERM), in Linux's order. F_SEAL_WRITE does not
  * wait for writable shared mappings to go, as Linux's does, and is not
@@ -12763,7 +12764,7 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
 static int32_t fcntl_seals(const fd_entry_t *entry, int cmd, uint32_t arg)
 {
     if (entry->type != FD_TYPE_FILE || !entry->ofd || !entry->ofd->vmnt ||
-        entry->ofd->vmnt->type != &vfs_tmpfs_type) {
+        entry->ofd->vmnt->type != &vfs_tmpfs_type || tmpfs_secret(entry->ofd->vnode)) {
         return -EINVAL;
     }
     if (cmd == F_GET_SEALS) {
@@ -13641,6 +13642,36 @@ long sys_fallocate(isr_params_t *params)
                           (uint64_t)SC_ARG(params, 2), (uint64_t)SC_ARG(params, 3));
 }
 
+/**
+ * Open the file `node` of `mnt`, made with one hold for the caller, for
+ * reading and writing on a new descriptor of the current process,
+ * close-on-exec when `cloexec`: the descriptor, or a negative errno with the
+ * hold put back.
+ */
+static long memfd_open(struct vfs_mount *mnt, void *node, int cloexec)
+{
+    struct vfs_stat st;
+    fd_entry_t *e;
+    int fd = fd_alloc(current_proc->fds);
+
+    if (fd < 0 || vfs_open_node(mnt, node, 2, &current_proc->fds->entries[fd].ofd->fhandle) != 0) {
+        if (fd >= 0) {
+            fd_free(current_proc->fds, fd);
+        }
+        mnt->type->ops->put(mnt, node);
+        return fd < 0 ? fd : -ENOMEM;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_FILE;
+    e->node = NULL;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE | (cloexec ? FD_FLAG_CLOEXEC : 0u);
+    e->ofd->vmnt = mnt;
+    e->ofd->vnode = node;
+    e->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
+    vfs_desc_open(mnt);
+    return fd;
+}
+
 /* The longest memfd name: Linux's NAME_MAX less the "memfd:" of its link. */
 #define MFD_NAME_MAX 249
 
@@ -13665,11 +13696,8 @@ long sys_memfd_create(isr_params_t *params)
     struct vfs_mount *mnt = vfs_memfd_mount();
     uint32_t mode = 0777u, seals = TMPFS_SEAL_SEAL;
     char name[MFD_NAME_MAX + 2];
-    struct vfs_stat st;
-    fd_entry_t *e;
     void *node;
     int32_t rc;
-    int fd;
 
     if (!current_proc) {
         return -ESRCH;
@@ -13698,23 +13726,48 @@ long sys_memfd_create(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    fd = fd_alloc(current_proc->fds);
-    if (fd < 0 || vfs_open_node(mnt, node, 2, &current_proc->fds->entries[fd].ofd->fhandle) != 0) {
-        if (fd >= 0) {
-            fd_free(current_proc->fds, fd);
-        }
-        mnt->type->ops->put(mnt, node);
-        return fd < 0 ? fd : -ENOMEM;
+    return memfd_open(mnt, node, (flags & MFD_CLOEXEC) != 0);
+}
+
+/* memfd_secret's one flag, O_CLOEXEC. */
+#define SECRET_CLOEXEC 0x80000u
+
+/**
+ * memfd_secret(2) takes flags.
+ *
+ * A file in memory whose pages only its shared mappings reach, on the tmpfs
+ * `vfs_memfd_mount` has (`tmpfs_secret_file`), open for reading and writing
+ * on a new descriptor, close-on-exec with O_CLOEXEC; /proc/PID/fd names it
+ * "/secretmem (deleted)". Linux takes its pages out of the kernel's own
+ * mapping of memory; here the kernel's mapping keeps them, and only the
+ * paths that reach a page through another process or a device are refused.
+ * Returns the descriptor or a negative errno: another flag is EINVAL, a full
+ * descriptor table EMFILE, and the rest ENOMEM.
+ */
+long sys_memfd_secret(isr_params_t *params)
+{
+    uint32_t flags = (uint32_t)SC_ARG(params, 0);
+    struct vfs_mount *mnt = vfs_memfd_mount();
+    void *node;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
     }
-    e = &current_proc->fds->entries[fd];
-    e->type = FD_TYPE_FILE;
-    e->node = NULL;
-    e->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & MFD_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
-    e->ofd->vmnt = mnt;
-    e->ofd->vnode = node;
-    e->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
-    vfs_desc_open(mnt);
-    return fd;
+    if (flags & ~SECRET_CLOEXEC) {
+        return -EINVAL;
+    }
+    if (!mnt) {
+        return -ENOMEM;
+    }
+    if (!fd_can_alloc(current_proc->fds)) {
+        return -EMFILE;
+    }
+    rc = tmpfs_secret_file(mnt, &node);
+    if (rc != 0) {
+        return rc;
+    }
+    return memfd_open(mnt, node, (flags & SECRET_CLOEXEC) != 0);
 }
 
 /**

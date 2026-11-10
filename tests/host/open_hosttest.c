@@ -178,6 +178,8 @@ static long sys_getdents64(isr_params_t *params);
 static long sys_dup3(isr_params_t *params);
 static long sys_statx(isr_params_t *params);
 static long sys_memfd_create(isr_params_t *params);
+static long sys_memfd_secret(isr_params_t *params);
+static long sys_cachestat(isr_params_t *params);
 static long sys_flock(isr_params_t *params);
 static long sys_close_range(isr_params_t *params);
 static int32_t fs_core_file(int signo, unsigned long limit);
@@ -789,17 +791,6 @@ int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
     return 0;
 }
 
-/** cachestat's count, which no row asks for: no page. */
-void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
-                   struct vfs_cachestat *cs)
-{
-    (void)mnt;
-    (void)node;
-    (void)first;
-    (void)last;
-    k_memset(cs, 0, sizeof(*cs));
-}
-
 /** fallocate, which no row calls: EOPNOTSUPP. */
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
 {
@@ -1053,6 +1044,13 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     (void)offset;
     check(0, "unexpected write of a mapped file");
     return -EIO;
+}
+
+/** A quota with room, since no row maps a shared page. */
+int shmem_quota_full(const struct shmem *sh)
+{
+    (void)sh;
+    return 0;
 }
 
 /** Fail the row: no shared page is mapped. */

@@ -536,7 +536,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_LANDLOCK_CREATE_RULESET] = NULL;
     table[SYS_LANDLOCK_ADD_RULE] = NULL;
     table[SYS_LANDLOCK_RESTRICT_SELF] = NULL;
-    table[SYS_MEMFD_SECRET] = NULL;
+    table[SYS_MEMFD_SECRET] = sys_memfd_secret;
     table[SYS_PROCESS_MRELEASE] = sys_process_mrelease;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
     table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;

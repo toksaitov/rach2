@@ -6917,6 +6917,29 @@ static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
 }
 
 /**
+ * The rules of a mapping through `e` of a file whose memory is `sh`, when
+ * it is a file of memfd_secret: shared alone, else -EINVAL, and never
+ * executable, else -EPERM, as Linux's noexec mount of the files answers
+ * first; the region gets VM_PROT_SECRET in `src`. 0 or the error; 0 for
+ * any other file.
+ */
+static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
+                           struct map_source *src)
+{
+    if (!sh || !tmpfs_secret(e->ofd->vnode)) {
+        return 0;
+    }
+    if (src->prot & VM_PROT_EXEC) {
+        return -EPERM;
+    }
+    if (!shared) {
+        return -EINVAL;
+    }
+    src->prot |= VM_PROT_SECRET;
+    return 0;
+}
+
+/**
  * The file half of `mmap_backing`: the file the descriptor `e`, number `fd`, is
  * open on, mapped shared or not. A private mapping of it is VM_FILE, and a
  * shared mapping of a file in memory is VM_SHARED, the file's own pages; a
@@ -6933,7 +6956,8 @@ static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
  * read-only, which reads the same bytes, and fails with ENODEV when it may be
  * written. A shared mapping served as a private one, or made through a
  * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
- * cannot make it writable later. It may sleep, finding the file's path.
+ * cannot make it writable later. A file of memfd_secret maps as
+ * `mmap_secret` says. It may sleep, finding the file's path.
  */
 static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
 {
@@ -6945,6 +6969,10 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
         return rc;
     }
     sh = (e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode) : NULL;
+    rc = mmap_secret(e, sh, shared, src);
+    if (rc != 0) {
+        return rc;
+    }
     disk = e->ofd->vmnt->type == &vfs_ext2_type;
     if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {
         return -ENODEV;
@@ -9080,7 +9108,9 @@ static int32_t lock_range(uintptr_t addr, uintptr_t len, uintptr_t *start, uintp
 /**
  * Bring in the pages of the regions of [start, end) that are locked and not
  * on fault, region by region, so that a lock over a large reservation walks
- * only what is mapped. 0, or -1 when a page could not be had.
+ * only what is mapped. 0, -1 when a page could not be had, or -2 at a
+ * region of memfd_secret, whose pages Linux's populate cannot take, the
+ * regions before it brought in.
  */
 static int lock_populate(uintptr_t start, uintptr_t end)
 {
@@ -9097,6 +9127,9 @@ static int lock_populate(uintptr_t start, uintptr_t end)
             at = r->start;
         }
         stop = r->end < end ? r->end : end;
+        if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && (r->prot & VM_PROT_SECRET)) {
+            return -2;
+        }
         if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
             return -1;
         }
@@ -9113,7 +9146,9 @@ static int lock_populate(uintptr_t start, uintptr_t end)
  * privilege whose RLIMIT_MEMLOCK is 0, and ENOMEM when the pages the range
  * would add to those already locked pass it; the pages are then brought in
  * unless locked on fault, and EAGAIN tells that memory ran out first, with
- * the range locked. -ENOMEM for a gap, or when a split has no room.
+ * the range locked. -ENOMEM for a gap, when a split has no room, or, with
+ * the range locked, for a region of memfd_secret, as Linux's mlock fails
+ * on one.
  */
 static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
 {
@@ -9145,8 +9180,11 @@ static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
     if (rc != 0) {
         return -ENOMEM;
     }
-    if ((bits & VM_PROT_LOCKS) == VM_PROT_LOCKED && lock_populate(start, end) != 0) {
-        return -EAGAIN;
+    if ((bits & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
+        rc = lock_populate(start, end);
+        if (rc != 0) {
+            return rc == -2 ? -ENOMEM : -EAGAIN;
+        }
     }
     return 0;
 }

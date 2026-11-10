@@ -672,6 +672,7 @@ long sys_fcntl64(isr_params_t *params);
 long sys_flock(isr_params_t *params);
 
 long sys_memfd_create(isr_params_t *params);
+long sys_memfd_secret(isr_params_t *params);
 
 long sys_splice(isr_params_t *params);
 

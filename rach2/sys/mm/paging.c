@@ -716,8 +716,9 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
  * A region that is private and writable has its pages brought in for a write,
  * which gives each its own frame now, as Linux's populate breaks the sharing
  * of copy-on-write pages; any other for a read, so that a shared page is not
- * made dirty for nothing. A region with no access, a guard or device memory
- * is passed over, as Linux's populate passes a VM_IO region over. Each
+ * made dirty for nothing. A region with no access, a guard, device memory
+ * or memfd_secret's is passed over, as Linux's populate passes over a VM_IO
+ * region and one its get_user_pages refuses. Each
  * page brought in counts as a fault (`fault_count`), as Linux counts its
  * populate's.
  */
@@ -732,7 +733,8 @@ int vm_populate(uintptr_t start, uintptr_t end)
         const vma_t *vma = vm_find(&current_proc->mm->vm, page);
         int write;
 
-        if (!vma || !(vma->prot & VM_PROT_READ) || (vma->prot & (VM_PROT_IO | VM_PROT_GUARD))) {
+        if (!vma || !(vma->prot & VM_PROT_READ) ||
+            (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
             continue;
         }
         write = (vma->prot & VM_PROT_WRITE) && vma->type != VM_SHARED;
@@ -743,12 +745,14 @@ int vm_populate(uintptr_t start, uintptr_t end)
     return 0;
 }
 
-/** Whether the region allows the access and, with `io`, device memory. */
+/** Whether the region allows the access and, with `io`, device memory; a
+ * region of memfd_secret never does, as Linux's get_user_pages refuses one. */
 static int pin_allows(struct mm *mm, uintptr_t page, int write, int io)
 {
     const vma_t *vma = vm_find(&mm->vm, page);
 
-    return vma && (io || !(vma->prot & VM_PROT_IO)) && region_allows(vma, write);
+    return vma && (io || !(vma->prot & VM_PROT_IO)) && !(vma->prot & VM_PROT_SECRET) &&
+           region_allows(vma, write);
 }
 
 /** Resolve a pin's page, preserving the caller's pending SIGBUS detail. */
@@ -972,10 +976,11 @@ static int access_device(const vma_t *vma, uintptr_t addr, uint8_t *p, uint32_t 
 
 /** One page's part of `paging_access`: `len` bytes at `addr`, within one
  * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. A
- * device region's bytes go through `access_device`. The resolution and,
- * for a write, the balance of memory before a copy may sleep, so the
- * region is looked up again after them, and the page must still be present
- * in a region that allows some access. */
+ * device region's bytes go through `access_device`, and a region of
+ * memfd_secret is -EIO, as Linux's get_user_pages refuses one. The
+ * resolution and, for a write, the balance of memory before a copy may
+ * sleep, so the region is looked up again after them, and the page must
+ * still be present in a region that allows some access. */
 static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
 {
     const vma_t *vma = vm_find(&mm->vm, addr);
@@ -983,7 +988,7 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
 
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & VM_PROT_GUARD)) {
+        (vma->prot & (VM_PROT_GUARD | VM_PROT_SECRET))) {
         return -EIO;
     }
     if (vm_device_object(vma->file)) {
@@ -1000,7 +1005,8 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
     }
     vma = vm_find(&mm->vm, addr);
     if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD)) || !pte_present(mm->dir, addr)) {
+        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET)) ||
+        !pte_present(mm->dir, addr)) {
         return -EIO;
     }
     if (write &&
