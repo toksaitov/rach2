@@ -28,6 +28,7 @@
 
 #include "digest.h"
 #include "hosts.h"
+#include "etude/legacy.h"
 #include "etude/qemu.h"
 #include "legacy_cases.h"
 #include "posix.h"
@@ -208,6 +209,57 @@ static const char *runs_on(const struct json *c, const char *arch)
     const char *where = of_architecture(c, arch);
 
     return where != NULL && etude_case_runs_here(c) ? where : NULL;
+}
+
+/** Give the node of the artifact `name` of case `c`'s `prepare`, or NULL. */
+static const char *node_of(const struct json *c, const char *name)
+{
+    const struct json *prep = typed(c, "prepare", JSON_ARRAY);
+    const char *n;
+    size_t i;
+
+    for (i = 0; name != NULL && prep != NULL && i < prep->count; i++)
+        if ((n = json_text(prep->item[i], "name")) != NULL && strcmp(n, name) == 0)
+            return json_text(prep->item[i], "node");
+    return NULL;
+}
+
+/** Say whether QEMU profile `q` of case `c` boots the node `rach2/kernel` by
+ * direct firmware with no architecture of its own, which the ia32 profile
+ * boots as the x86-64 kernel. */
+static int boots_rach2(const struct json *c, const struct json *q)
+{
+    const char *firmware = json_text(q, "firmware"), *node;
+
+    if (q == NULL || json_member(q, "architecture") != NULL || firmware == NULL ||
+        strcmp(firmware, "direct") != 0)
+        return 0;
+    node = node_of(c, json_text(q, "kernel"));
+    return node != NULL && strcmp(node, "rach2/kernel") == 0;
+}
+
+int legacy_ia32_runs(const struct json *c, const char **why)
+{
+    const struct json *ia32 = typed(c, "ia32", JSON_OBJECT), *runs, *machines;
+    const char *domain = json_text(c, "domain");
+    size_t i;
+
+    runs = typed(ia32, "runs", JSON_BOOLEAN);
+    if (runs != NULL && !runs->integer) {
+        *why = json_text(ia32, "why");
+        return 0;
+    }
+    if (domain != NULL && strcmp(domain, "guest") == 0 &&
+        boots_rach2(c, typed(typed(c, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT)))
+        return 1;
+    machines = typed(c, "machines", JSON_ARRAY);
+    for (i = 0; domain != NULL && strcmp(domain, "machine") == 0 && machines != NULL &&
+                i < machines->count;
+         i++)
+        if (boots_rach2(c, typed(machines->item[i], "qemu", JSON_OBJECT)))
+            return 1;
+    *why = "it boots no rach2/kernel by direct firmware";
+    return 0;
 }
 
 /** Say whether a card of guest case `c`'s profile forwards a local port. */
@@ -414,7 +466,7 @@ static int stage_of(const char *name)
  * etude_qemu_memory reserves for its machine as its claim; 0, or -1 after a
  * refusal.
  */
-static int guest_of(struct legacy_manifest *m, struct legacy_case *k, const char *arch)
+static int guest_of(struct legacy_manifest *m, struct legacy_case *k)
 {
     const struct json *e = typed(k->json, "execution", JSON_OBJECT);
     const char *role = json_text(e, "role");
@@ -446,7 +498,7 @@ static int guest_of(struct legacy_manifest *m, struct legacy_case *k, const char
     if (disks_of(m, k, k->qemu) != 0)
         return -1;
     memset(&p, 0, sizeof(p));
-    p.architecture = arch;
+    p.architecture = k->boot_arch;
     p.cpu = json_text(k->qemu, "cpu");
     p.processors = (unsigned)count_of(k->qemu, "processors");
     p.memory_bytes = (uint64_t)count_of(k->qemu, "memory_bytes");
@@ -542,11 +594,54 @@ static int bounds_of(struct legacy_manifest *m, struct legacy_case *k)
     return 0;
 }
 
+/** Say whether artifact `name` is the kernel that a profile of case `k`
+ * boots as the ia32 profile's x86-64 kernel. */
+static int ia32_kernel(const struct legacy_case *k, const char *name)
+{
+    const struct json *machines = typed(k->json, "machines", JSON_ARRAY), *q;
+    size_t i;
+
+    q = typed(typed(k->json, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT);
+    if (k->guest && boots_rach2(k->json, q) && strcmp(json_text(q, "kernel"), name) == 0)
+        return 1;
+    for (i = 0; k->machine && machines != NULL && i < machines->count; i++) {
+        q = typed(machines->item[i], "qemu", JSON_OBJECT);
+        if (boots_rach2(k->json, q) && strcmp(json_text(q, "kernel"), name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/**
+ * Give the make goal of case `k`'s artifact `name` of the node `node` in
+ * the build tree `dir`, from malloc, or NULL: with `kernel`, the guest
+ * case's kernel of `rach2/kernel` as `rach2-KERNEL/kernel`, and with `ia32`
+ * each kernel of `rach2/kernel` it boots by direct firmware as
+ * ETUDE_KERNEL_IA32_PATH.
+ */
+static char *goal_of(const struct legacy_case *k, const char *node, const char *name,
+                     const char *dir, const char *kernel, int ia32)
+{
+    const char *boots = json_text(
+        typed(typed(k->json, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT), "kernel");
+
+    if (strcmp(node, "rach2/kernel") != 0)
+        return text_of("%s/%s", dir, node);
+    if (ia32 && ia32_kernel(k, name))
+        return text_of("%s", ETUDE_KERNEL_IA32_PATH);
+    if (kernel != NULL && !ETUDE_KERNEL_IS_IA32(kernel) && k->guest && boots != NULL &&
+        strcmp(name, boots) == 0)
+        return text_of("%s/rach2-%s/kernel", dir, kernel);
+    return text_of("%s/%s", dir, node);
+}
+
 /**
  * Take the artifacts of case `k`'s `prepare` as make goals of the tree on
  * the run's architecture `arch`, and find the one its program names; 0, or
  * -1 after a refusal. With `kernel`, the kernel a guest case boots from the
- * node `rach2/kernel` is the goal of the node `rach2-KERNEL/kernel`.
+ * node `rach2/kernel` is the goal of the node `rach2-KERNEL/kernel`; under
+ * the ia32 profile the kernel an i686 guest or machine case boots so is
+ * ETUDE_KERNEL_IA32_PATH, and a guest case's machine is x86-64's.
  */
 static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char *arch,
                     const char *kernel)
@@ -556,8 +651,13 @@ static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char
     const char *boots = json_text(
         typed(typed(k->json, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT), "kernel");
     const char *node, *name, *dir;
+    int ia32 = ETUDE_KERNEL_IS_IA32(kernel) && strcmp(arch, "i686") == 0;
     size_t i;
     int found = 0;
+
+    k->boot_arch = arch;
+    if (ia32 && k->guest && boots != NULL && ia32_kernel(k, boots))
+        k->boot_arch = "x86_64";
 
     if (prep == NULL || program == NULL)
         return refuse(m, "%s: the case lacks its prepare list or its program", k->case_id);
@@ -572,11 +672,7 @@ static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char
         if (node == NULL || name == NULL || per == NULL)
             return refuse(m, "%s: an artifact of the case is malformed", k->case_id);
         dir = per->integer && strcmp(arch, "x86_64") == 0 ? "build/x86_64" : "build";
-        if (kernel != NULL && k->guest && boots != NULL && strcmp(name, boots) == 0 &&
-            strcmp(node, "rach2/kernel") == 0)
-            k->goals[k->ngoals] = text_of("%s/rach2-%s/kernel", dir, kernel);
-        else
-            k->goals[k->ngoals] = text_of("%s/%s", dir, node);
+        k->goals[k->ngoals] = goal_of(k, node, name, dir, kernel, ia32);
         if (k->goals[k->ngoals] == NULL)
             return refuse(m, "memory ran out");
         k->names[k->ngoals] = name;
@@ -604,7 +700,7 @@ static int take_case(struct legacy_manifest *m, const struct json *c, const char
     if ((k->case_id = json_text(c, "case_id")) == NULL)
         return refuse(m, "a case has no identity");
     if (needs_of(m, k) != 0 || workload_of(m, k) != 0 || bounds_of(m, k) != 0 ||
-        goals_of(m, k, arch, kernel) != 0 || (k->guest && guest_of(m, k, arch) != 0))
+        goals_of(m, k, arch, kernel) != 0 || (k->guest && guest_of(m, k) != 0))
         return -1;
     workload_document(c, item_arch, &k->workload);
     inventory_document(c, &k->inventory);
@@ -616,7 +712,7 @@ int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char
                          const char *suite, const char *arch, const char *kernel)
 {
     const struct json *cases;
-    const char *where;
+    const char *where, *why;
     char err[200], *text;
     size_t len, i;
     int rc;
@@ -638,12 +734,17 @@ int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char
         return refuse(m, "its family %s is not of the suite %s", m->family, suite);
     if ((m->cases = calloc(cases->count + 1, sizeof(*m->cases))) == NULL)
         return refuse(m, "memory ran out");
+    if (ETUDE_KERNEL_IS_IA32(kernel) && strcmp(arch, "i686") != 0)
+        return refuse(m, "the ia32 profile runs the cases of i686 alone");
     for (i = 0; i < cases->count; i++)
         if ((where = runs_on(cases->item[i], arch)) != NULL &&
+            (!ETUDE_KERNEL_IS_IA32(kernel) || legacy_ia32_runs(cases->item[i], &why)) &&
             take_case(m, cases->item[i], where, arch, kernel) != 0)
             return -1;
     if (m->ncases == 0)
-        return refuse(m, "no case of it runs on %s", arch);
+        return ETUDE_KERNEL_IS_IA32(kernel)
+                   ? refuse(m, "no case of it runs on %s under the ia32 profile", arch)
+                   : refuse(m, "no case of it runs on %s", arch);
     return 0;
 }
 

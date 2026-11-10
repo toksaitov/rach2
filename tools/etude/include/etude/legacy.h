@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 /* The bound of one step of a preparation when the caller gives none, in
  * seconds: the GNU system's root takes over an hour to build from nothing. */
@@ -21,12 +22,26 @@
  * check and the set's store share across runs. */
 #define ETUDE_LEGACY_DIGESTS "build/tests/digests"
 
+/* The kernel name of the ia32 profile, `RACH2_KERNEL=ia32`: an i686 case
+ * that boots the node `rach2/kernel` by direct firmware boots the x86-64
+ * kernel, build/x86_64/rach2/kernel, on qemu-system-x86_64, with its i686
+ * images and programs (tests/Readme.md). */
+#define ETUDE_KERNEL_IA32 "ia32"
+
+/* The kernel the ia32 profile boots, from the tree's root. */
+#define ETUDE_KERNEL_IA32_PATH "build/x86_64/rach2/kernel"
+
+/* Say whether the kernel name `kernel`, as RACH2_KERNEL gives it, is the
+ * ia32 profile's. */
+#define ETUDE_KERNEL_IS_IA32(kernel) ((kernel) != NULL && strcmp((kernel), ETUDE_KERNEL_IA32) == 0)
+
 /* One preparation, as the caller asks for it. */
 struct etude_legacy_opts {
     const char *tree;   /* the root of the tree whose goals are built */
     const char *arch;   /* i686, x86_64, or both as i686,x86_64 */
     const char *kernel; /* NAME of the kernel rach2-NAME the suites boot, as
-                           RACH2_KERNEL names it, or NULL for rach2 */
+                           RACH2_KERNEL names it, ETUDE_KERNEL_IA32 for the
+                           ia32 profile, or NULL for rach2 */
     const char *work;   /* the work directory, which must not exist, or
                            NULL for a new one under TMPDIR */
     const char *record; /* the file the record is written to, or NULL */
@@ -56,7 +71,9 @@ struct etude_legacy_opts {
  * then those of x86_64, each with its own ARCH, the goals under
  * `build/x86_64/` being x86_64's and the others i686's, and writes one
  * record of both. An i686 request that includes a fixed `build/x86_64/`
- * artifact also prepares that architecture and records both. Shared goals
+ * artifact also prepares that architecture and records both, and so does an
+ * i686 request of the ia32 profile, whose kernel is x86-64's; the profile
+ * refuses any other architecture. Shared goals
  * a request for x86_64 alone still use ARCH=x86_64. The work directory is
  * removed after a success and after a stop, and kept after a failure.
  *
@@ -163,7 +180,10 @@ struct etude_legacy_set_opts {
  * with the suite's first architecture; each name of a case's files and its
  * label give its architecture. Their artifacts are preparation goals; with
  * `o->kernel`, the kernel that a guest case boots from the node
- * `rach2/kernel` is `rach2-KERNEL/kernel` in its place. The preparation is a
+ * `rach2/kernel` is `rach2-KERNEL/kernel` in its place; under the ia32
+ * profile a guest or machine case of i686 that boots that node by direct
+ * firmware boots ETUDE_KERNEL_IA32_PATH on qemu-system-x86_64, and the
+ * other cases are left out, as legacy_manifest_read says. The preparation is a
  * claim of every limited resource of the ledger, with the old runner's host
  * lock alone. Each case is then a claim of its own, of the case's
  * resources, each held within the limit. With `o->locks`, its claim also

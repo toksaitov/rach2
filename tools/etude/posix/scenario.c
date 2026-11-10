@@ -26,6 +26,7 @@
 #include "../serial.h"
 #include "../volume/volume.h"
 #include "etude/artifact.h"
+#include "etude/legacy.h"
 #include "etude/qemu.h"
 #include "etude/report.h"
 #include "etude/scenario.h"
@@ -1734,11 +1735,34 @@ static enum etude_firmware firmware_of(const char *firmware)
     return ETUDE_FIRMWARE_DIRECT;
 }
 
-/** Resolve a machine's explicit architecture, or the case architecture. */
+/**
+ * Say whether machine `d` boots the x86-64 kernel under the ia32 profile:
+ * RACH2_KERNEL is `ia32`, the case runs as i686's, and the machine boots the
+ * node `rach2/kernel` of the case's `prepare` by direct firmware with no
+ * architecture of its own, whose artifact the set driver made the x86-64
+ * kernel (tests/Readme.md).
+ */
+static int ia32_boot(const struct etude_case *c, const struct machine_decl *d)
+{
+    const struct eh_json *p, *prep = eh_json_get(c->kase, "prepare");
+    const char *name = jtext(d->qemu, "kernel"), *firmware = jtext(d->qemu, "firmware");
+
+    if (!ETUDE_KERNEL_IS_IA32(getenv("RACH2_KERNEL")) || c->arch == NULL ||
+        strcmp(c->arch, "i686") != 0 || eh_json_get(d->qemu, "architecture") != NULL ||
+        name == NULL || firmware == NULL || strcmp(firmware, "direct") != 0)
+        return 0;
+    for (p = prep != NULL ? prep->child : NULL; p != NULL; p = p->next)
+        if (jtext(p, "name") != NULL && strcmp(jtext(p, "name"), name) == 0)
+            return jtext(p, "node") != NULL && strcmp(jtext(p, "node"), "rach2/kernel") == 0;
+    return 0;
+}
+
+/** Resolve a machine's explicit architecture, the x86-64 one of the ia32
+ * profile's kernel, or the case architecture. */
 static const char *machine_architecture(const struct etude_case *c, const struct machine_decl *d)
 {
     const char *arch = jtext(d->qemu, "architecture");
-    return arch != NULL ? arch : c->arch;
+    return arch != NULL ? arch : ia32_boot(c, d) ? "x86_64" : c->arch;
 }
 
 /**
