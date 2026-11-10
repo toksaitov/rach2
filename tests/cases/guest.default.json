@@ -6125,7 +6125,7 @@
         {"assertion_id": "adjtimex", "checks": "adjtimex reads an unsynchronized clock with its 10 ms tick.", "source": "program"},
         {"assertion_id": "clock-adjtime", "checks": "clock_adjtime of CLOCK_MONOTONIC is EOPNOTSUPP.", "source": "program"},
         {"assertion_id": "listxattr", "checks": "listxattr of a regular file gives an empty list.", "source": "program"},
-        {"assertion_id": "getxattr", "checks": "getxattr of a regular file is EOPNOTSUPP.", "source": "program"},
+        {"assertion_id": "getxattr-absent", "checks": "getxattr of a missing user attribute is EOPNOTSUPP on an unsupported file system or ENODATA on ext2.", "source": "program"},
         {"assertion_id": "lsetxattr-enoent", "checks": "lsetxattr of a missing file is ENOENT.", "source": "program"},
         {"assertion_id": "readahead-fadvise", "checks": "readahead and posix_fadvise of a regular file return 0.", "source": "program"},
         {"assertion_id": "fadvise-espipe", "checks": "posix_fadvise of a pipe is ESPIPE.", "source": "program"},

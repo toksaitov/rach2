@@ -66,8 +66,8 @@
  * a mode Linux does not take before the check that the descriptor is open for
  * writing. adjtimex reads an unsynchronized clock with its 10 ms tick, and
  * clock_adjtime of CLOCK_MONOTONIC is EOPNOTSUPP. The extended attribute calls
- * find the file and answer as Linux does for a file system without attributes:
- * an empty list and EOPNOTSUPP to get one, and ENOENT for a missing file.
+ * find the file: an empty list, EOPNOTSUPP for an unsupported file system or
+ * ENODATA on ext2 for a missing user value, and ENOENT for a missing file.
  * readahead and posix_fadvise accept a regular file, and posix_fadvise fails on
  * a pipe with ESPIPE. setitimer's ITIMER_VIRTUAL and ITIMER_PROF post SIGVTALRM
  * and SIGPROF as the process spins, and getitimer reports the interval; so do
@@ -102,7 +102,7 @@
  * `splice-readers-once`, `pty-hangup-eio`,
  * `fallocate-krffs`, `fallocate-ebadf`, `fallocate-einval`, `fallocate-espipe`,
  * `fallocate-mode`, `fallocate-proc`, `fallocate-shm`, `adjtimex`,
- * `clock-adjtime`, `listxattr`, `getxattr`, `lsetxattr-enoent`,
+ * `clock-adjtime`, `listxattr`, `getxattr-absent`, `lsetxattr-enoent`,
  * `readahead-fadvise`, `fadvise-espipe`, `noctty-session`, `maxrss-self`,
  * `maxrss-child`, `udp-refused`, `setgid-file`, `setgid-dir`,
  * `privacy-other-root`, `privacy-own-maps`, `privacy-dumpable`,
@@ -1594,7 +1594,7 @@ static int adjusts(void)
 }
 
 /**
- * Check the extended attribute calls, which no file system here stores, and
+ * Check absent extended attributes on a regular file, and
  * the advice calls, which change nothing but check their descriptor, on
  * /bin/sh, or on this program's own file when it was started by an absolute
  * path, as in a native run's root, which has no /bin/sh. Returns 0, or 1
@@ -1614,8 +1614,8 @@ static int advises(void)
         return fail("listxattr of a regular file was not an empty list");
     }
     held();
-    if (getxattr(file, "user.x", v, sizeof v) != -1 || errno != EOPNOTSUPP) {
-        return fail("getxattr of a regular file was not EOPNOTSUPP");
+    if (getxattr(file, "user.x", v, sizeof v) != -1 || (errno != EOPNOTSUPP && errno != ENODATA)) {
+        return fail("getxattr of a missing attribute was not EOPNOTSUPP or ENODATA");
     }
     held();
     if (lsetxattr("/nonexistent", "user.x", "1", 1, 0) != -1 || errno != ENOENT) {
@@ -2170,7 +2170,7 @@ static void plan(void)
                                          "fallocate-proc",
                                          "fallocate-shm"};
     static const char *const after[] = {
-        "clock-adjtime",      "listxattr",         "getxattr",
+        "clock-adjtime",      "listxattr",         "getxattr-absent",
         "lsetxattr-enoent",   "readahead-fadvise", "fadvise-espipe",
         "noctty-session",     "maxrss-self",       "maxrss-child",
         "udp-refused",        "setgid-file",       "setgid-dir",

@@ -1074,7 +1074,7 @@ int etude_scenario(struct etude_case *c)
         return 1;
     }
     if (strcmp(name, "links") == 0 || strcmp(name, "cost") == 0 || strcmp(name, "names") == 0 ||
-        strcmp(name, "lookup") == 0) {
+        strcmp(name, "lookup") == 0 || strcmp(name, "xattr") == 0) {
         lc_begin(&l, c, strcmp(name, "links") == 0 ? links_ids : cost_ids);
         fixture(&l, name);
         return lc_finish(&l);
