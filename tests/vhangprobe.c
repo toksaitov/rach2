@@ -4,10 +4,11 @@
  * A child makes the slave of a new pair the controlling terminal of a new
  * session, clears ECHO on it, blocks SIGHUP and SIGCONT, starts a writer
  * that writes more to the slave than the master's ring holds, which nobody
- * reads, and calls vhangup:
+ * reads, waits until the ring is full and the writer asleep in its wait for
+ * room, and calls vhangup:
  *
  * * setup: the pair opens and the child's session takes the slave, whose
- *   echo it turns off.
+ *   echo it turns off, and the writer fills the ring and sleeps.
  * * vhangup: the call returns 0 and leaves SIGHUP and SIGCONT pending.
  * * old-read: a read of the descriptor opened before is end of input.
  * * old-write: a write of it is EIO.
@@ -18,10 +19,11 @@
  * * reopen-defaults: a new open of the slave works and has the default
  *   termios again, ECHO among them.
  * * eperm: a process of uid 1000, without CAP_SYS_TTY_CONFIG, gets EPERM.
- * * blocked-write: the writer, which waits for room in the ring or has not
- *   begun, ends with the bytes it wrote or EIO, as Linux's n_tty_write.
+ * * blocked-write: the writer, which was waiting for room in the ring, ends
+ *   with the bytes it wrote, as Linux's n_tty_write.
  * * output-flush: unread output is discarded, and the master in packet
- *   mode reads TIOCPKT_FLUSHWRITE alone, then EAGAIN.
+ *   mode has no status pending: its read is EAGAIN at once, as Linux's
+ *   __tty_hangup clears pktstatus after its flush.
  * * cleanup: the child exits 0 and the master closes.
  *
  * The child reports through its exit status the first row that failed; the
@@ -50,14 +52,14 @@
 #define EPERM      1
 #define ENOTTY     25
 
-#define TIOCPKT            0x5420
-#define TIOCPKT_FLUSHWRITE 2
-#define TIOCSCTTY          0x540E
-#define TIOCSPGRP          0x5410
-#define TIOCGPTN           0x80045430
-#define TIOCSPTLCK         0x40045431
-#define TCGETS             0x5401
-#define TCSETS             0x5402
+#define TIOCPKT    0x5420
+#define FIONREAD   0x541B
+#define TIOCSCTTY  0x540E
+#define TIOCSPGRP  0x5410
+#define TIOCGPTN   0x80045430
+#define TIOCSPTLCK 0x40045431
+#define TCGETS     0x5401
+#define TCSETS     0x5402
 
 #define ECHO      0x0008
 #define TIO_LFLAG 12
@@ -95,6 +97,10 @@ struct pollfd {
 
 /* The bytes the writer writes, more than the master's ring holds. */
 #define WRITER_BYTES 65536
+
+/* The master's ring is 4096 bytes; a writer under OPOST, which keeps room
+ * for ONLCR's CR LF, waits once fewer than 2 are free. */
+#define RING_FULL 4095
 
 /* The rows, in the order of the report and of the child's exit codes. */
 static const char *const plan[] = {"setup",     "vhangup",       "old-read",     "old-write",
@@ -215,7 +221,8 @@ static int eperm_row(long uid)
 }
 
 /** Start a process that writes WRITER_BYTES to the slave `slave` and exits
- * 0 when the write ends with fewer bytes or EIO: its pid, or -1. */
+ * 0 when the write ends with fewer bytes, as one the hangup ended in its
+ * wait does: its pid, or -1. */
 static long start_writer(long slave)
 {
     static char bytes[WRITER_BYTES];
@@ -228,7 +235,7 @@ static long start_writer(long slave)
         bytes[rc] = 'w';
     }
     rc = syscall3(SYS_WRITE, slave, (long)bytes, WRITER_BYTES);
-    leave((rc > 0 && rc < WRITER_BYTES) || rc == -EIO ? 0 : 1);
+    leave(rc > 0 && rc < WRITER_BYTES ? 0 : 1);
     return -1;
 }
 
@@ -270,6 +277,72 @@ static long child_setup(int ptn, long master)
     return slave;
 }
 
+/** The state letter of process `pid`, the field after the parenthesised
+ * name in its `/proc/<pid>/stat`: `S` for a sleep a signal ends. 0 when the
+ * file cannot be read or has no state. */
+static char state_of(long pid)
+{
+    static const char head[] = "/proc/", tail[] = "/stat";
+    char path[32], text[256], digits[12];
+    long fd, len;
+    int n = 0, i = 0, j;
+
+    do {
+        digits[n++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0 && n < 11);
+    for (j = 0; head[j]; j++) {
+        path[i++] = head[j];
+    }
+    while (n > 0) {
+        path[i++] = digits[--n];
+    }
+    for (j = 0; tail[j]; j++) {
+        path[i++] = tail[j];
+    }
+    path[i] = '\0';
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    len = syscall3(SYS_READ, fd, (long)text, (long)sizeof(text));
+    syscall1(SYS_CLOSE, fd);
+    for (i = 0; i + 2 < len; i++) {
+        if (text[i] == ')' && text[i + 1] == ' ') {
+            return text[i + 2];
+        }
+    }
+    return 0;
+}
+
+/**
+ * Wait until the writer `pid` sleeps in its wait for room: the master
+ * `master` counts RING_FULL bytes or more with FIONREAD, and the writer is
+ * `S`, which once the ring is full only that wait gives. Returns 1, or 0
+ * when FIONREAD fails or the writer has ended. The probe yields between
+ * looks, and their number decides nothing; the case's watchdog ends a run
+ * whose writer never sleeps.
+ */
+static int writer_asleep(long master, long pid)
+{
+    int queued = 0;
+    char state;
+
+    for (;;) {
+        if (syscall3(SYS_IOCTL, master, FIONREAD, (long)&queued) != 0) {
+            return 0;
+        }
+        state = state_of(pid);
+        if (state == 0 || state == 'Z') {
+            return 0;
+        }
+        if (queued >= RING_FULL && state == 'S') {
+            return 1;
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
+}
+
 /** Hang up the slave and require both signals pending on its session leader. */
 static int hangup_signals(void)
 {
@@ -305,6 +378,7 @@ static int child_rows(int ptn, long uid, long master)
     struct pollfd pfd;
     char path[24], byte;
     long slave = child_setup(ptn, master), fd, writer;
+    int queued = -1;
 
     if (slave < 0) {
         return ROW_SETUP;
@@ -315,6 +389,9 @@ static int child_rows(int ptn, long uid, long master)
         return ROW_SETUP;
     }
     writer_pid = writer;
+    if (!writer_asleep(master, writer)) {
+        return ROW_SETUP;
+    }
     if (!hangup_signals()) {
         return ROW_VHANGUP;
     }
@@ -347,7 +424,7 @@ static int child_rows(int ptn, long uid, long master)
     if (!writer_done(writer)) {
         return ROW_WRITER;
     }
-    if (syscall3(SYS_READ, master, (long)&byte, 1) != 1 || !(byte & TIOCPKT_FLUSHWRITE) ||
+    if (syscall3(SYS_IOCTL, master, FIONREAD, (long)&queued) != 0 || queued != 0 ||
         syscall3(SYS_READ, master, (long)&byte, 1) != -EAGAIN) {
         return ROW_FLUSH;
     }
@@ -379,7 +456,8 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     static const char *const why[] = {
-        "setup: the child's session did not take the slave and turn its echo off",
+        "setup: the child's session did not take the slave and turn its echo off, or the "
+        "writer did not fill the ring and sleep",
         "vhangup: the call failed or SIGHUP and SIGCONT were not pending",
         "old-read: a read of the old descriptor was not end of input",
         "old-write: a write of the old descriptor was not EIO",
@@ -388,8 +466,8 @@ void probe_main(unsigned long *sp)
         "no-ctty: /dev/tty was not ENXIO",
         "reopen-defaults: a new open did not have the default termios",
         "eperm: uid 1000 did not get EPERM",
-        "blocked-write: the waiting writer did not end with its bytes or EIO",
-        "output-flush: unread output survived, or packet status was not FLUSHWRITE"};
+        "blocked-write: the waiting writer did not end with the bytes it wrote",
+        "output-flush: unread output survived, or the master had packet status pending"};
     int ptn = -1, unlock = 0, status = -1;
     long master, pid;
     int i;
