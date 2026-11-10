@@ -18,7 +18,7 @@
  * the load fails. ARCH_GET_FS and ARCH_GET_GS read the registers, which a
  * selector the program loaded may have changed, not the record. An address that
  * cannot be written is EFAULT, another code EINVAL, and a call with no process
- * ESRCH.
+ * ESRCH. A change of a TLS entry reaches a selector of it at any RPL.
  */
 #include "arch/x86_64/percpu.h"
 
@@ -303,10 +303,54 @@ static void run_compat_tls(void)
     space.ldt = ldt;
     space.ldt_entries = 2;
     proc.mm = &space;
-    check(tls_selector_base(&proc, 15) == 0x12345000u && tls_selector_base(&proc, 23) == 0,
-          "LDT selector reads its base and refuses an unwritten entry");
+    check(tls_selector_base(&proc, 15) == 0x12345000u, "LDT selector 15 reads entry 1's base");
+    check(tls_selector_base(&proc, 7) == 0, "LDT selector 7 reads entry 0, unwritten, as 0");
+    check(tls_selector_base(&proc, 23) == 0, "LDT selector 23 reads entry 2, past the table, as 0");
     proc.mm = NULL;
     check(tls_selector_base(&proc, 15) == 0, "an absent LDT has no base");
+}
+
+/**
+ * A change of TLS entry 12 reaches a segment register or a saved selector
+ * that names the entry at any of the four RPLs: set_thread_area loads DS,
+ * ES, FS and GS again with the selector each holds, and FS's and GS's
+ * records take the load's base, and with an empty descriptor loads the null
+ * selector and base 0; compat clone's child takes the new base for each.
+ */
+static void run_tls_rpl(void)
+{
+    uint64_t desc;
+    unsigned int rpl, sel;
+
+    for (rpl = 0; rpl < 4; rpl++) {
+        sel = (GDT_TLS_MIN << 3) | rpl;
+        setup();
+        fs_sel = gs_sel = ds_sel = es_sel = sel;
+        k_memset(&stored_desc, 0, sizeof(stored_desc));
+        stored_desc.entry_number = GDT_TLS_MIN;
+        stored_desc.base_addr = 0x777000u;
+        stored_desc.limit = 0xFFFFFu;
+        stored_desc.flags = 0x51u;
+        frame.rdi = 0x7000ul;
+        check(sys_set_thread_area(&frame) == 0 && fs_sel == sel && gs_sel == sel && ds_sel == sel &&
+                  es_sel == sel && proc.tls_base == LOADED_BASE && proc.regs.gs_base == LOADED_BASE,
+              "set_thread_area loads a TLS selector again at each RPL");
+        k_memset(&stored_desc, 0, sizeof(stored_desc));
+        stored_desc.entry_number = GDT_TLS_MIN;
+        check(sys_set_thread_area(&frame) == 0 && fs_sel == 0 && gs_sel == 0 && ds_sel == 0 &&
+                  es_sel == 0 && proc.tls_base == 0 && proc.regs.gs_base == 0,
+              "set_thread_area of an empty entry loads null at each RPL");
+        stored_desc.base_addr = 0x12345000u;
+        stored_desc.limit = 0xFFFFFu;
+        stored_desc.flags = 0x51u;
+        desc = user_desc_fill(&stored_desc);
+        setup();
+        proc.regs.fs_sel = proc.regs.gs_sel = (uint16_t)sel;
+        proc.tls_base = proc.regs.gs_base = 0xBADul;
+        ia32_clone_tls_set(&proc, GDT_TLS_MIN, desc);
+        check(proc.tls_base == 0x12345000u && proc.regs.gs_base == 0x12345000u,
+              "compat clone's child takes the TLS base at each RPL");
+    }
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
@@ -314,6 +358,7 @@ int main(void)
 {
     run_clone();
     run_compat_tls();
+    run_tls_rpl();
     run_set();
     run_get();
     run_other();
