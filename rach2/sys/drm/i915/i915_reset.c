@@ -251,6 +251,12 @@ void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const c
     gt->wedged = 0;
     klog(KLOG_INFO, "i915", "reset: the chip for %s", msg);
     gt->reset_count++;
+    if (I915_RESET_PARAM(i915) == 0) {
+        /* i915.reset 0: no reset, so a hang wedges the GPU (intel_gt_reset). */
+        klog(KLOG_INFO, "i915", "reset: disabled");
+        i915_gt_set_wedged(i915);
+        return;
+    }
     fw = i915_forcewake_get(i915) == 0;
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if (gt->engine[i].running) {
@@ -296,7 +302,7 @@ void i915_handle_error(struct drm_i915_private *i915, uint32_t engine_mask, cons
     engine_mask &= (1u << I915_NUM_ENGINES) - 1u;
     i915_gpu_error_capture(i915, engine_mask, msg);
     clear_error_registers(i915, engine_mask);
-    if (i915->id->platform->has_reset_engine && !i915->gt.wedged) {
+    if (i915->id->platform->has_reset_engine && I915_RESET_PARAM(i915) >= 2 && !i915->gt.wedged) {
         for (i = 0; i < I915_NUM_ENGINES; i++) {
             if ((engine_mask & (1u << i)) &&
                 i915_reset_engine(i915, &i915->gt.engine[i], msg) == 0) {

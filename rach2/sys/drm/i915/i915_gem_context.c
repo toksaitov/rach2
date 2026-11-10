@@ -186,9 +186,12 @@ static struct i915_gem_context *context_alloc(struct drm_i915_private *i915)
             ctx->comm[i] = current_proc->comm[i];
         }
     }
-    /* Bannable and recoverable, and persistent since hangcheck is on, as
+    /* Bannable and recoverable, and persistent while hangcheck is on, as
      * Linux's proto_context_create. */
-    ctx->flags = I915_CTX_BANNABLE | I915_CTX_RECOVERABLE | I915_CTX_PERSISTENCE;
+    ctx->flags = I915_CTX_BANNABLE | I915_CTX_RECOVERABLE;
+    if (!i915->params.hangcheck_off) {
+        ctx->flags |= I915_CTX_PERSISTENCE;
+    }
     return ctx;
 }
 
@@ -621,8 +624,9 @@ static int32_t set_sseu(const struct drm_i915_gem_context_param *args)
 }
 
 /**
- * PERSISTENCE: on, since hangcheck is on, or off, which needs preemption
- * to cancel the context's work and so is -ENODEV, as Linux's
+ * PERSISTENCE: on, which needs hangcheck on to end a persistent request
+ * that hangs and is -EINVAL without it, or off, which needs preemption to
+ * cancel the context's work and so is -ENODEV, as Linux's
  * __context_set_persistence. A finalized context that is already as asked
  * is left alone.
  */
@@ -637,6 +641,9 @@ static int32_t set_persistence(struct i915_gem_context *ctx,
     }
     if (!args->value) {
         return -ENODEV;
+    }
+    if (ctx->i915->params.hangcheck_off) {
+        return -EINVAL;
     }
     ctx->flags |= I915_CTX_PERSISTENCE;
     return 0;

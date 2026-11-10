@@ -171,8 +171,11 @@ static int32_t device_param(struct drm_i915_private *i915, int32_t param, int *v
         *value = sseu->subslice_mask;
         return 0;
     case I915_PARAM_HAS_GPU_RESET:
-        /* Hangcheck on, a GPU reset, and an engine's own reset. */
-        *value = i915->id->platform->has_reset_engine ? 2 : 1;
+        /* Hangcheck on and a GPU reset, 2 with an engine's own reset. */
+        *value = !i915->params.hangcheck_off && I915_RESET_PARAM(i915) != 0;
+        if (*value && i915->id->platform->has_reset_engine && I915_RESET_PARAM(i915) >= 2) {
+            *value = 2;
+        }
         return 0;
     default:
         return -EINVAL;

@@ -58,7 +58,7 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
     uint64_t now = rtc_ticks_now();
     int i;
 
-    if (!gt->awake || gt->wedged || now < gt->hc_next) {
+    if (!gt->awake || gt->wedged || i915->params.hangcheck_off || now < gt->hc_next) {
         return 0;
     }
     gt->hc_next = now + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);

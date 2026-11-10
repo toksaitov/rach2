@@ -14,6 +14,7 @@
 #include "../../iommu.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
+#include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../mm/paging.h"
 #include "../../mm/usercopy.h"
@@ -179,6 +180,16 @@ static void emit_lines(struct emit *e, const char *const *lines, uint32_t n)
         emit_s(e, lines[i]);
         emit_c(e, '\n');
     }
+}
+
+/** Whether the `n` bytes at `s` are the NUL-terminated `word`. */
+static int is_word(const char *s, uint32_t n, const char *word)
+{
+    uint32_t i;
+
+    for (i = 0; i < n && word[i] == s[i]; i++) {
+    }
+    return i == n && word[n] == '\0';
 }
 
 /** "yes" or "no", Linux's str_yes_no. */
@@ -425,8 +436,9 @@ static void driver_caps(struct emit *e)
     emit_s(e, "Has logical contexts? yes\nscheduler: 0x0\n");
 }
 
-/* Linux's i915_params_dump: the module's parameters at their defaults,
- * which the driver follows and has no way to change. */
+/* The module's parameters at Linux's defaults, of a Linux built without a
+ * request timeout, which the driver lacks; reset and enable_hangcheck
+ * change in i915_params. */
 static const char *const i915_params[] = {"i915.modeset=-1",
                                           "i915.enable_guc=0",
                                           "i915.guc_log_level=-1",
@@ -438,13 +450,31 @@ static const char *const i915_params[] = {"i915.modeset=-1",
                                           "i915.reset=3",
                                           "i915.inject_probe_failure=0",
                                           "i915.force_probe=",
-                                          "i915.request_timeout_ms=20000",
+                                          "i915.request_timeout_ms=0",
                                           "i915.lmem_size=0",
                                           "i915.lmem_bar_size=0",
                                           "i915.enable_hangcheck=yes",
                                           "i915.error_capture=yes",
                                           "i915.enable_gvt=no",
                                           "i915.enable_debug_only_api=no"};
+
+/** Linux's i915_params_dump of the parameters `p`: the table's lines, with
+ * reset and enable_hangcheck as `p` has them. */
+static void emit_params(struct emit *e, const struct i915_params *p)
+{
+    uint32_t i;
+
+    for (i = 0; i < NELEM(i915_params); i++) {
+        if (is_word(i915_params[i], 10, "i915.reset")) {
+            emitf(e, "i915.reset=%u\n", p->reset_set ? p->reset : 3u);
+        } else if (is_word(i915_params[i], 21, "i915.enable_hangcheck")) {
+            emitf(e, "i915.enable_hangcheck=%s\n", yes_no(!p->hangcheck_off));
+        } else {
+            emit_s(e, i915_params[i]);
+            emit_c(e, '\n');
+        }
+    }
+}
 
 /* Linux's intel_display_device_info_print for Haswell's display, before
  * its raw clock. */
@@ -619,7 +649,7 @@ static void error_text(struct emit *e, struct drm_i915_private *i915,
     gt_info(e, i915, 1);
     device_info(e, i915);
     driver_caps(e);
-    emit_lines(e, i915_params, NELEM(i915_params));
+    emit_params(e, &err->params);
     emit_lines(e, display_info, NELEM(display_info));
     emitf(e, "rawclk rate: %u kHz\n",
           (i915_read(&i915->hw, PCH_RAWCLK_FREQ) & RAWCLK_FREQ_MASK) * 1000u);
@@ -823,7 +853,7 @@ static int32_t capabilities_show(void *data, char *buf, uint32_t cap)
     emitf(&e, "iommu: %s\n", vtd_active(i915) ? "enabled" : "disabled");
     gt_info(&e, i915, 0);
     driver_caps(&e);
-    emit_lines(&e, i915_params, NELEM(i915_params));
+    emit_params(&e, &i915->params);
     return emit_end(&e);
 }
 
@@ -1269,6 +1299,180 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
     return (int32_t)len;
 }
 
+/* ------------------------------------------------------------------------
+ * i915_params
+ */
+
+/** Parse the `len` bytes at `s` as Linux's kstrtobool: 1 in `*b` for a
+ * first character of y, t, e or 1, or "on"; 0 for n, f, d or 0, or "of".
+ * 0, or -EINVAL. */
+static int32_t parse_bool(const char *s, uint32_t len, int *b)
+{
+    char c = len > 0 ? s[0] : '\0', d = len > 1 ? s[1] : '\0';
+
+    if (c == 'y' || c == 'Y' || c == 't' || c == 'T' || c == 'e' || c == 'E' || c == '1') {
+        *b = 1;
+    } else if (c == 'n' || c == 'N' || c == 'f' || c == 'F' || c == 'd' || c == 'D' || c == '0') {
+        *b = 0;
+    } else if ((c == 'o' || c == 'O') && (d == 'n' || d == 'N' || d == 'f' || d == 'F')) {
+        *b = d == 'n' || d == 'N';
+    } else {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/** A parameter's file in i915_params, Linux's i915_param_*_show: the value
+ * of the "i915.NAME=VALUE" line `data` of the tables above, a bool as Y or
+ * N, and a newline. */
+static int32_t param_show(void *data, char *buf, uint32_t cap)
+{
+    const char *v = (const char *)data;
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    while (*v && *v++ != '=') {
+    }
+    emit_s(&e, is_word(v, 3, "yes") ? "Y" : is_word(v, 2, "no") ? "N" : v);
+    emit_c(&e, '\n');
+    return emit_end(&e);
+}
+
+/** i915_params/reset, an unsigned int. */
+static int32_t reset_show(void *data, char *buf, uint32_t cap)
+{
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emitf(&e, "%u\n", I915_RESET_PARAM((struct drm_i915_private *)data));
+    return emit_end(&e);
+}
+
+/**
+ * A write of i915_params/reset, Linux's i915_param_uint_write: a number in
+ * any base kstrtouint takes, or a boolean as 1 or 0. -EINVAL for anything
+ * else, as Linux, which tries the boolean when the number fails.
+ */
+static int32_t reset_store(void *data, const char __user *buf, uint32_t len)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    char text[24];
+    uint64_t val;
+    int32_t rc;
+    int b;
+
+    rc = copy_write(buf, len, text, sizeof(text));
+    if (rc < 0) {
+        return rc;
+    }
+    if (parse_u64(text, (uint32_t)rc, &val) < 0 || val > 0xffffffffu) {
+        if (parse_bool(text, (uint32_t)rc, &b) < 0) {
+            return -EINVAL;
+        }
+        val = (uint64_t)b;
+    }
+    i915->params.reset = (uint32_t)val;
+    i915->params.reset_set = 1;
+    return (int32_t)len;
+}
+
+/** i915_params/enable_hangcheck, a bool. */
+static int32_t hangcheck_show(void *data, char *buf, uint32_t cap)
+{
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emit_s(&e, ((struct drm_i915_private *)data)->params.hangcheck_off ? "N\n" : "Y\n");
+    return emit_end(&e);
+}
+
+/** A write of i915_params/enable_hangcheck, as debugfs's bool:
+ * kstrtobool's words, or -EINVAL. */
+static int32_t hangcheck_store(void *data, const char __user *buf, uint32_t len)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    char text[24];
+    int32_t rc;
+    int b;
+
+    rc = copy_write(buf, len, text, sizeof(text));
+    if (rc >= 0) {
+        rc = parse_bool(text, (uint32_t)rc, &b);
+    }
+    if (rc < 0) {
+        return rc;
+    }
+    i915->params.hangcheck_off = (uint8_t)!b;
+    return (int32_t)len;
+}
+
+static const struct debugfs_text_ops param_ops = {param_show, NULL};
+static const struct debugfs_text_ops reset_ops = {reset_show, reset_store};
+static const struct debugfs_text_ops hangcheck_ops = {hangcheck_show, hangcheck_store};
+
+/**
+ * Make one file of i915_params for the line `line` of a table above, as
+ * Linux's i915_debugfs_params: reset and enable_hangcheck, mode 0600, on
+ * the device's parameters, and the rest read-only at the table's value.
+ * The parameters Linux makes no file for, mode 0 in its list, have none.
+ * 0, or debugfs_create_text's error.
+ */
+static int32_t param_file(struct drm_i915_private *i915, const char *dir, const char *line)
+{
+    char path[96];
+    const char *name = line + 5;
+    uint32_t n = 0, d = 0;
+
+    while (name[n] && name[n] != '=') {
+        n++;
+    }
+    if (is_word(name, n, "inject_probe_failure") || is_word(name, n, "enable_debug_only_api") ||
+        is_word(name, n, "request_timeout_ms")) {
+        return 0;
+    }
+    while (dir[d] && d + 1u < sizeof(path)) {
+        path[d] = dir[d];
+        d++;
+    }
+    if (d + n + 2u > sizeof(path)) {
+        return -EINVAL;
+    }
+    path[d++] = '/';
+    k_memcpy(path + d, name, n);
+    path[d + n] = '\0';
+    if (is_word(name, n, "reset")) {
+        return debugfs_create_text(path, 0600u, &reset_ops, i915);
+    }
+    if (is_word(name, n, "enable_hangcheck")) {
+        return debugfs_create_text(path, 0600u, &hangcheck_ops, i915);
+    }
+    return debugfs_create_text(path, 0400u, &param_ops, (void *)(uintptr_t)line);
+}
+
+/** Make the device's i915_params directory, Linux 6.18's, which holds the
+ * driver's and the display's parameters. 0, or the first error. */
+static int32_t params_register(struct drm_i915_private *i915)
+{
+    char dir[64];
+    int32_t rc = 0;
+    unsigned i;
+
+    drm_debugfs_path(&i915->drm, "i915_params", dir, sizeof(dir));
+    for (i = 0; rc == 0 && i < NELEM(i915_params); i++) {
+        rc = param_file(i915, dir, i915_params[i]);
+    }
+    for (i = 0; rc == 0 && i < NELEM(display_params); i++) {
+        rc = param_file(i915, dir, display_params[i]);
+    }
+    return rc;
+}
+
 static const struct debugfs_text_ops capabilities_ops = {capabilities_show, NULL};
 static const struct debugfs_text_ops gem_objects_ops = {gem_objects_show, NULL};
 static const struct debugfs_text_ops frequency_ops = {frequency_show, NULL};
@@ -1301,6 +1505,9 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     for (i = 0; rc == 0 && i < NELEM(text_files); i++) {
         drm_debugfs_path(&i915->drm, text_files[i].name, path, sizeof(path));
         rc = debugfs_create_text(path, text_files[i].mode, text_files[i].ops, i915);
+    }
+    if (rc == 0) {
+        rc = params_register(i915);
     }
     if (rc == 0) {
         drm_debugfs_path(&i915->drm, "i915_error_state", path, sizeof(path));
