@@ -1,3 +1,12 @@
+# Where the record's other readings are kept
+# Mem=1332MB and 26.5 frames a second on kernel eb18a790: view-rach2-cave-mem.png
+# Mem=1326MB and 59.3 frames a second on Linux: view-linux-cave.png
+# Mem=0MB and 21.6 frames a second on kernel 2cdc3b3b: view-rach2-cave.png
+# The 293 user and 1756 system ticks of /proc/stat in five seconds of the
+# load, the 30 million getrusage calls in 378 seconds and the 29,700
+# comparisons of the count with the walk were read from the runs' consoles
+# in the testing host's copies, which are not committed; 80-6.md holds them.
+
 # Level load times, from each run's Game.log
 Game-rach2-3.log:*LOADING: Level island loading time: 29.43 seconds
 Game-rach2-2.log:*LOADING: Level island loading time: 26.79 seconds

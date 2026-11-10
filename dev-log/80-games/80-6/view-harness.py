@@ -1,6 +1,9 @@
 # Boot the GNU root under Rach2's kernel or under Debian's, restore Crysis's
 # island checkpoint there, and keep the guest up for screenshots until the
-# stop file appears.  Usage: 2653-view.py rach2|linux TURN [KERNEL]
+# stop file appears.  Usage: view-harness.py rach2|linux TURN [KERNEL]
+# The guest's key and frame helpers, 2653-key.py and 2653-screen.py, it
+# copies from O on the testing host, where the runs kept them; they are not
+# in this directory. ../80-12/key.py is the key helper's later form.
 import hashlib, os, pathlib, shlex, signal, socket, subprocess as S, sys, time
 
 w = pathlib.Path(__file__).resolve().parent
