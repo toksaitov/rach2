@@ -48,7 +48,9 @@ struct proc_rlimit {
 #define RLIM_CORE     4
 #define RLIM_FSIZE    5
 #define RLIM_MEMLOCK  6
-#define RLIM_COUNT    7
+#define RLIM_NICE     7 /* the lowest nice value as 20 less it, Linux's */
+#define RLIM_RTPRIO   8 /* the highest real-time priority */
+#define RLIM_COUNT    9
 #define RLIM_INFINITY (~0UL)
 
 /* RLIMIT_MEMLOCK a process starts with, soft and hard, 8 MiB, which is

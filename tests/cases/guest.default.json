@@ -494,7 +494,8 @@
         {"assertion_id": "affinity", "checks": "on more than one processor, a deadline thread's affinity to one fails with EBUSY, and SCHED_DEADLINE for a thread bound to one fails with EPERM", "source": "program"},
         {"assertion_id": "fork", "checks": "a fork keeps SCHED_FIFO at 10, and with the reset flag gives SCHED_OTHER at 0 and nice 0, keeps SCHED_BATCH at nice 4, fails with EAGAIN for a SCHED_DEADLINE thread without the flag and gives SCHED_OTHER with it", "source": "program"},
         {"assertion_id": "rr-interval", "checks": "sched_rr_get_interval gives 0 for SCHED_FIFO and SCHED_DEADLINE and a nonzero slice for SCHED_RR", "source": "program"},
-        {"assertion_id": "eperm", "checks": "a child without root may raise its nice value and is refused with EPERM a lower one, a real-time or deadline policy, another user's thread, and clearing SCHED_RESET_ON_FORK or leaving SCHED_IDLE", "source": "program"}
+        {"assertion_id": "eperm", "checks": "a child without root may raise its nice value and is refused with EPERM a lower one, a real-time or deadline policy, another user's thread, and clearing SCHED_RESET_ON_FORK or leaving SCHED_IDLE", "source": "program"},
+        {"assertion_id": "rlimits", "checks": "RLIMIT_NICE and RLIMIT_RTPRIO read 0, and a child without root whose RLIMIT_RTPRIO is 10 and RLIMIT_NICE 25 enters SCHED_FIFO at 5 and 10 and SCHED_RR at 3 but not SCHED_FIFO at 11, takes nice -5 but not -6 from sched_setattr and setpriority, which fails with EACCES, and leaves SCHED_IDLE at nice -5", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

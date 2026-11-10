@@ -248,9 +248,8 @@ long compat_sys_oldumount(isr_params_t *params)
 /**
  * nice (34): add the increment, clamped to 40 either way, to the caller's
  * nice value, which stays within -20 to 19, as Linux's sys_nice. A negative
- * increment needs privilege, -EPERM without it, since Rach2 keeps no
- * RLIMIT_NICE and Linux's default of 0 lets no one else lower the value.
- * The value is set by setpriority.
+ * increment past what RLIMIT_NICE allows needs privilege, -EPERM without it
+ * (`proc_nice_allowed`). The value is set by setpriority.
  */
 long compat_sys_nice(isr_params_t *params)
 {
@@ -270,7 +269,7 @@ long compat_sys_nice(isr_params_t *params)
     if (nice > NICE_HIGHEST) {
         nice = NICE_HIGHEST;
     }
-    if (inc < 0 && !cred_privileged()) {
+    if (inc < 0 && !proc_nice_allowed(current_proc, nice)) {
         return -EPERM;
     }
     return ia32_native(params, sys_setpriority, NULL, 0, 0, 0, SARG(nice), 0, 0, 0);

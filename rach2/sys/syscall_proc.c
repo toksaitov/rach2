@@ -6449,7 +6449,7 @@ long sys_getgroups(isr_params_t *params)
     return (int32_t)p->ngroups;
 }
 
-/* The resources: seven are kept in the record and enforced, and the rest
+/* The resources: nine are kept in the record and enforced, and the rest
  * are unlimited. */
 #define RLIMIT_FSIZE_RES 1
 
@@ -6464,6 +6464,10 @@ long sys_getgroups(isr_params_t *params)
 #define RLIMIT_MEMLOCK_RES 8
 
 #define RLIMIT_AS_RES 9
+
+#define RLIMIT_NICE_RES 13
+
+#define RLIMIT_RTPRIO_RES 14
 
 /* Linux's count of resources; a resource number at or past it is EINVAL. */
 #define RLIM_NLIMITS 16u
@@ -6486,6 +6490,10 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_FSIZE;
     case RLIMIT_MEMLOCK_RES:
         return RLIM_MEMLOCK;
+    case RLIMIT_NICE_RES:
+        return RLIM_NICE;
+    case RLIMIT_RTPRIO_RES:
+        return RLIM_RTPRIO;
     default:
         return -1;
     }
@@ -7952,14 +7960,20 @@ long sys_getpriority(isr_params_t *params)
     return best;
 }
 
+int proc_nice_allowed(const process_t *p, int32_t nice)
+{
+    return cred_privileged() || (unsigned long)(20 - nice) <= p->rlim[RLIM_NICE].cur;
+}
+
 /**
  * Set a priority (setpriority).
  *
  * Its arguments are which, who and the nice value, clamped to -20 through 19 as
  * Linux clamps it. Each target is changed on Linux's terms: a caller whose
  * effective uid is neither the target's real nor its effective uid gets -EPERM,
- * and one that would lower the target's nice value, raising its priority, gets
- * -EACCES, since `RLIMIT_NICE` is 0; effective uid 0 may do both. The targets
+ * and one that would lower the target's nice value, raising its priority,
+ * past what the target's `RLIMIT_NICE` allows gets -EACCES
+ * (`proc_nice_allowed`); effective uid 0 may do both. The targets
  * that pass are changed even when others fail, and the call returns the error
  * of the last that failed, 0 when none did, or -ESRCH when nothing matched;
  * -EINVAL for an unknown `which`. The value is kept and inherited, and the
@@ -7990,7 +8004,7 @@ long sys_setpriority(isr_params_t *params)
             rc = -EPERM;
             continue;
         }
-        if (nice < p->nice && !cred_privileged()) {
+        if (nice < p->nice && !proc_nice_allowed(p, nice)) {
             rc = -EACCES;
             continue;
         }
@@ -8363,22 +8377,28 @@ static int sched_dl_overflow(const process_t *p, int policy, const struct sched_
 }
 
 /**
- * Linux's checks of a caller without CAP_SYS_NICE, which RLIMIT_NICE and
- * RLIMIT_RTPRIO of 0 leave: no lower nice value, no entry to a real-time
- * policy or higher priority in one, no SCHED_DEADLINE, no leaving
- * SCHED_IDLE, which counts as nice 20, no target of another user, and no
- * clearing of SCHED_RESET_ON_FORK. 0, or -EPERM.
+ * Linux's checks of a caller without CAP_SYS_NICE
+ * (user_check_sched_setscheduler), by the target's RLIMIT_NICE and
+ * RLIMIT_RTPRIO: no nice value lower than the first allows; no entry to a
+ * real-time policy while the second is 0, and no priority past both the
+ * present one and the second; no SCHED_DEADLINE; no leaving SCHED_IDLE,
+ * unless the first allows the present nice value; no target of another
+ * user; and no clearing of SCHED_RESET_ON_FORK. 0, or -EPERM.
  */
 static int32_t sched_user_check(const process_t *p, const struct sched_req *a, int policy,
                                 int reset)
 {
-    if (sched_policy_fair(policy) && a->nice < p->nice) {
+    unsigned long rtprio = p->rlim[RLIM_RTPRIO].cur;
+
+    if (sched_policy_fair(policy) && a->nice < p->nice && !proc_nice_allowed(p, a->nice)) {
         return -EPERM;
     }
-    if (sched_policy_rt(policy) && (policy != p->sched_policy || a->priority > p->rt_priority)) {
+    if (sched_policy_rt(policy) && ((policy != p->sched_policy && rtprio == 0) ||
+                                    (a->priority > p->rt_priority && a->priority > rtprio))) {
         return -EPERM;
     }
-    if (policy == SCHED_DEADLINE || (p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE) ||
+    if (policy == SCHED_DEADLINE ||
+        (p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE && !proc_nice_allowed(p, p->nice)) ||
         !sched_may_change(p) || (p->sched_reset && !reset)) {
         return -EPERM;
     }
