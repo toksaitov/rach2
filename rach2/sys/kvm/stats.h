@@ -11,10 +11,13 @@ enum kvm_resource {
     KVM_COUNT_SLOT,
     KVM_COUNT_TDP_PAGE,
     KVM_COUNT_RUN_MAPPING,
+    KVM_COUNT_GPA_MAP,      /* maps of a guest's pages into programs (gpamap.c) */
+    KVM_COUNT_GPA_MAP_PAGE, /* the frames those maps hold */
     KVM_COUNT_TOTAL
 };
 
-/** Add change, 1 or -1, as a resource is made or finally released. */
+/** Add change as a resource is made or finally released: 1 or -1, or the
+ * frames a map takes or lets go of. */
 void kvm_count(enum kvm_resource resource, int change);
 
 /** The live count of resource; called under the big kernel lock. */

@@ -146,6 +146,7 @@ static int32_t slot_delete(struct kvm_vm *vm, struct slots *t, struct slot *s)
         t->last = NULL;
     }
     t->pages -= s->npages;
+    kvm_gpamap_zap(vm, s->base_gfn, s->npages);
     kvm_tdp_zap(vm, s->base_gfn, s->npages);
     slot_free(s);
     return 0;
@@ -199,6 +200,9 @@ static int32_t slot_change(struct kvm_vm *vm, struct slot *s, uint64_t gfn, uint
         }
     } else if (!(flags & KVM_MEM_LOG_DIRTY_PAGES)) {
         log = NULL;
+    }
+    if (gfn != s->base_gfn) {
+        kvm_gpamap_zap(vm, s->base_gfn, s->npages);
     }
     kvm_tdp_zap(vm, s->base_gfn, s->npages);
     if (log != s->dirty) {

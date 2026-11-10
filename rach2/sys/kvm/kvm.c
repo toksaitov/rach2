@@ -48,6 +48,9 @@ struct kvm_vm_rec {
 
 static uint32_t live_resources[KVM_COUNT_TOTAL];
 
+/* The live VMs, newest first, linked by `next_vm`. */
+static struct kvm_vm *live_vms;
+
 /** Count a resource at allocation or final release, under the big lock. */
 void kvm_count(enum kvm_resource resource, int change)
 {
@@ -89,13 +92,34 @@ void kvm_vm_get(struct kvm_vm *vm)
     vm->refs++;
 }
 
+struct kvm_vm *kvm_vm_by_eventfd(const struct eventfd *ev)
+{
+    struct kvm_vm *vm;
+
+    for (vm = live_vms; vm; vm = vm->next_vm) {
+        if (kvm_iobus_has_eventfd(vm, ev)) {
+            return vm;
+        }
+    }
+    return NULL;
+}
+
 void kvm_vm_put(struct kvm_vm *vm)
 {
+    struct kvm_vm **p;
     uint32_t i;
 
     if (--vm->refs != 0) {
         return;
     }
+    for (p = &live_vms; *p; p = &(*p)->next_vm) {
+        if (*p == vm) {
+            *p = vm->next_vm;
+            break;
+        }
+    }
+    /* The maps of guest pages into programs first, which reach the slots. */
+    kvm_gpamap_vm_end(vm);
     /* The irqfds first, whose hooks reach the vCPUs' APICs. */
     kvm_irq_free(vm);
     kvm_iobus_free(vm);
@@ -397,6 +421,8 @@ static int32_t create_vm(uintptr_t type)
         kvm_vm_put(vm);
         return r;
     }
+    vm->next_vm = live_vms;
+    live_vms = vm;
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;
     e->ops = &vm_ops;

@@ -515,6 +515,19 @@ struct paging_frame_counts {
 void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
                         struct paging_frame_counts *counts);
 
+struct mm;
+
+/**
+ * The frame of the RAM page `mm` maps at the user address `va`, for a
+ * mapping of it into another program that writes it, as KVM gives a
+ * guest's page to the transport over memory shared with the VM: present,
+ * writable and not copy-on-write in a writable region that is not a
+ * device's, a frame the allocator counts, and, in a private region, mapped
+ * by no other address space. 0 for any other page. It brings nothing in
+ * and does not sleep.
+ */
+uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va);
+
 /** Count the present pages of the user range [start, end) of `dir` into
  * `*present`, those the processor marked dirty into `*dirty`, and those
  * whose frames are marked anonymous into `*anon`,

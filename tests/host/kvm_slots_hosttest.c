@@ -208,6 +208,13 @@ struct mm *kvm_vm_mm(struct kvm_vm *v)
     return &the_mm;
 }
 
+void kvm_gpamap_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
+{
+    (void)vm;
+    (void)gfn;
+    (void)npages;
+}
+
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
 {
     v->requests |= request;
