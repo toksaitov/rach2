@@ -3287,6 +3287,7 @@ static const struct vfs_ops vfat_ops = {
     0,                           /* lock_node */
     0,                           /* unlock_node */
     0,                           /* shutdown */
+    0,                           /* xattr */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops, 0, 0, 0, 0};

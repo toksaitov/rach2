@@ -94,6 +94,20 @@
  * nameless mount entered by more than one, with the mount in its node. */
 #define VFS_ENTER 4
 
+#define VFS_XATTR_GET    0
+#define VFS_XATTR_LIST   1
+#define VFS_XATTR_SET    2
+#define VFS_XATTR_REMOVE 3
+
+/* One attribute operation in kernel memory; size zero queries GET or LIST. */
+struct vfs_xattr {
+    int op;           /* VFS_XATTR_* */
+    const char *name; /* full name, NULL for LIST */
+    void *value;      /* kernel input for SET, output for GET/LIST */
+    uint32_t size;    /* buffer capacity, or SET's value length */
+    int flags;        /* CREATE=1, REPLACE=2, or 0 */
+};
+
 struct vfs_mount;
 struct vfs_name;
 
@@ -305,6 +319,10 @@ struct vfs_ops {
      * marked in use; or the error of the write. NULL for any other type, whose
      * shutdown takes the namespace lock and calls `prepare_unmount`. */
     int (*shutdown)(struct vfs_mount *mnt, uint64_t deadline);
+    /* Extended attributes in kernel buffers: GET/LIST return bytes, SET/REMOVE
+     * return 0, or -errno. Size zero queries length. The caller checks access
+     * and holds the node lock; flags are Linux's CREATE=1 and REPLACE=2. */
+    int (*xattr)(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg);
 };
 
 /* One file-system kind: the name mount(2) takes and /proc/filesystems
@@ -1066,5 +1084,10 @@ extern const struct vfs_type vfs_debugfs_type;
 /** The tmpfs memfd_create makes its files on: no path reaches it, no
  * listing shows it, and it lasts as long as the kernel. */
 struct vfs_mount *vfs_memfd_mount(void);
+
+/** Extended attributes on a held node, in kernel buffers. The caller holds
+ * the node lock and checks permission; unsupported types list empty and
+ * return -EOPNOTSUPP otherwise. Enforces read-only and inode flags. */
+int vfs_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg);
 
 #endif /* _VFS_H_ */
