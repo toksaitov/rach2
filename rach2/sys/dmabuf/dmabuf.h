@@ -82,6 +82,11 @@ int64_t dma_fence_now(void);
 /** Install a close-on-exec sync file with its own fence reference.
  * Return its descriptor or -errno. name may be NULL. */
 int32_t sync_file_create(struct dma_fence *fence, const char *name);
+/** Make `fd`, a descriptor of the caller's that `fd_alloc` reserved and
+ * gave no type, a close-on-exec sync file of `fence` with a reference of
+ * its own, so that a call reserves the descriptor before the work whose
+ * fence it gives: 0, or -EINVAL or -ENOMEM with the slot left reserved. */
+int32_t sync_file_install(int32_t fd, struct dma_fence *fence, const char *name);
 /** The earliest deadline requested for a fence, or INT64_MAX. */
 int64_t dma_fence_deadline(struct dma_fence *fence);
 /** Record a deadline hint on every leaf; no wait or signal is implied. */
