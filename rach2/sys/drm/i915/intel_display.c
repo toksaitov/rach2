@@ -924,13 +924,19 @@ static void intel_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *sta
     intel_crtc_arm_event(c, state);
 }
 
-static const struct drm_crtc_funcs intel_crtc_funcs = {
-    intel_crtc_check,           intel_crtc_enable,
-    intel_crtc_disable,         intel_crtc_begin,
-    intel_crtc_flush,           intel_crtc_mode_valid,
-    intel_enable_vblank,        intel_disable_vblank,
-    intel_crtc_set_crc_source,  intel_crtc_verify_crc_source,
-    intel_crtc_get_crc_sources, intel_get_vblank_counter};
+static const struct drm_crtc_funcs intel_crtc_funcs = {intel_crtc_check,
+                                                       intel_crtc_enable,
+                                                       intel_crtc_disable,
+                                                       intel_crtc_begin,
+                                                       intel_crtc_flush,
+                                                       intel_crtc_mode_valid,
+                                                       intel_enable_vblank,
+                                                       intel_disable_vblank,
+                                                       intel_crtc_set_crc_source,
+                                                       intel_crtc_verify_crc_source,
+                                                       intel_crtc_get_crc_sources,
+                                                       intel_get_vblank_counter,
+                                                       intel_crtc_get_vblank_timestamp};
 
 /**
  * Choose the PLLs of the pipes `state` sets again, Linux's

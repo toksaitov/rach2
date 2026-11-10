@@ -42,6 +42,74 @@ uint32_t intel_get_vblank_counter(struct drm_crtc *crtc)
     return i915_read(&c->i915->hw, PIPE_FRMCOUNT_G4X(c->pipe));
 }
 
+/**
+ * The line `c` scans, Linux's __intel_get_crtc_scanline: PIPEDSL, read
+ * again for up to 100 us while it gives 0, which Haswell's may just before
+ * the vertical blank, then moved by Linux's intel_crtc_scanline_offset,
+ * since the counter runs a line behind, two on HDMI; 0 for a pipe that is
+ * off. `vtotal` is the frame's lines.
+ */
+static int32_t crtc_scanline(struct intel_crtc *c, int32_t vtotal)
+{
+    struct i915_hw *hw = &c->i915->hw;
+    int32_t position, temp;
+    int i;
+
+    if (!c->cfg.active) {
+        return 0;
+    }
+    position = (int32_t)(i915_read(hw, PIPEDSL(c->pipe)) & PIPEDSL_LINE_MASK);
+    for (i = 0; position == 0 && i < 100; i++) {
+        i915_delay_us(hw, 1);
+        temp = (int32_t)(i915_read(hw, PIPEDSL(c->pipe)) & PIPEDSL_LINE_MASK);
+        if (temp != position) {
+            position = temp;
+        }
+    }
+    return (position + vtotal + (c->cfg.output == INTEL_OUTPUT_HDMI ? 2 : 1)) % vtotal;
+}
+
+/**
+ * Where `crtc` scans, Linux's i915_get_crtc_scanoutpos with the scanline
+ * counter: the line from the end of the vertical blank of `mode`,
+ * negative inside it, read with interrupts off between `*stime` and
+ * `*etime`; Linux's intel_mode_vtotal and its kin halve an interlaced
+ * mode's lines to a field's. 1, or 0 for a mode without a clock.
+ */
+static int crtc_scanoutpos(struct drm_crtc *crtc, int in_vblank_irq, int32_t *vpos, int32_t *hpos,
+                           int64_t *stime, int64_t *etime, const struct drm_mode_modeinfo *mode)
+{
+    struct intel_crtc *c = to_intel_crtc(crtc);
+    int32_t vtotal = mode->vtotal, position;
+    int32_t vbl_start = mode->vsync_start < mode->vdisplay ? mode->vsync_start : mode->vdisplay;
+    int32_t vbl_end = mode->vsync_end > mode->vtotal ? mode->vsync_end : mode->vtotal;
+    uint32_t flags;
+
+    (void)in_vblank_irq;
+    if (mode->clock == 0 || vtotal == 0) {
+        return 0;
+    }
+    if (mode->flags & DRM_MODE_FLAG_INTERLACE) {
+        vtotal /= 2;
+        vbl_start = (vbl_start + 1) / 2;
+        vbl_end /= 2;
+    }
+    flags = kirq_save();
+    *stime = drm_vblank_ktime();
+    position = crtc_scanline(c, vtotal);
+    *etime = drm_vblank_ktime();
+    kirq_restore(flags);
+    *vpos = position >= vbl_start ? position - vbl_end : position + vtotal - vbl_end;
+    *hpos = 0;
+    return 1;
+}
+
+int intel_crtc_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq)
+{
+    return drm_crtc_vblank_helper_get_vblank_timestamp_internal(
+        crtc, time_ns, in_vblank_irq, crtc_scanoutpos, &to_intel_crtc(crtc)->cfg.mode);
+}
+
 int32_t intel_enable_vblank(struct drm_crtc *crtc)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);

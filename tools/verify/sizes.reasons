@@ -92,6 +92,8 @@ rach2/sys/drm/drm_mode.c:drm_universal_plane_init params 8 Linux's drm_universal
 
 rach2/sys/drm/i915/i915_vma.c:i915_ggtt_find params 7 the parameters are one search for a hole, its size, alignment, range and mode, as Linux's drm_mm_insert_node_in_range takes them
 
+rach2/sys/drm/i915/intel_vblank.c:crtc_scanoutpos params 7 the parameters are Linux's get_scanout_position's, the hook the DRM core's timestamp helper calls
+
 rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/dcache.c:keep params 7 the parameters are one lookup's directory, name, hash and answer, and the generation it was made under

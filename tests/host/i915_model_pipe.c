@@ -138,7 +138,27 @@ static void plane_take(struct i915_model *m, struct i915_model_plane *p, const s
     p->armed = 0;
 }
 
-/** The live surface registers answer from what the pipe scans out. */
+static uint64_t frame_us(struct i915_model *m, int pipe);
+
+/** PIPEDSL of a pipe that is on: the line the time since its vblank has
+ * reached, counted as the chip's counter is, from the line before the
+ * vertical blank's first; 0 for a pipe that is off. */
+static uint32_t pipe_dsl(struct i915_model *m, const struct i915_model_pipes *s, int pipe)
+{
+    uint64_t frame = frame_us(m, pipe);
+    int t = pipe_trans(m, pipe);
+    uint32_t vtotal, start;
+
+    if (frame == 0 || t < 0 || !i915_model_pipe_on(m, pipe)) {
+        return 0;
+    }
+    vtotal = (i915_model_peek(m, TRANS_VTOTAL(t)) >> 16) + 1u;
+    start = i915_model_peek(m, TRANS_VBLANK(t)) & 0x1fffu;
+    return (uint32_t)((start + s->pipe[pipe].us * vtotal / frame) % vtotal);
+}
+
+/** The live surface registers answer from what the pipe scans out, and
+ * PIPEDSL from the time since its vblank. */
 static uint32_t pipe_read(struct i915_model *m, void *priv, uint32_t reg)
 {
     struct i915_model_pipes *s = (struct i915_model_pipes *)priv;
@@ -147,6 +167,9 @@ static uint32_t pipe_read(struct i915_model *m, void *priv, uint32_t reg)
 
     if (reg >= 0x70000u && reg < 0x73000u) {
         pipe = reg_pipe(reg, &a);
+        if (a == PIPEDSL(0)) {
+            return pipe_dsl(m, s, pipe);
+        }
         if (a == DSPSURFLIVE(0)) {
             return s->pipe[pipe].primary.surf;
         }
