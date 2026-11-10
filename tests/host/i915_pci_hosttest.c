@@ -213,8 +213,15 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
+/* Set, the next frame is refused. */
+static int frame_refused;
+
 uintptr_t alloc_frame(void)
 {
+    if (frame_refused) {
+        frame_refused = 0;
+        return 0;
+    }
     frames++;
     return 0x12345000u;
 }
@@ -918,6 +925,21 @@ static void row_register_fails(void)
     done(&m);
 }
 
+/** A bind whose GTT gets no scratch page lets the display power well's
+ * reference go, and leaves the command word as found. */
+static void row_gtt_fails(void)
+{
+    struct i915_model m;
+
+    fresh(&m);
+    frame_refused = 1;
+    CHECK("gtt fails: ENOMEM", i915_driver_bind(&m.pci, &m.hw) == -ENOMEM);
+    CHECK("gtt fails: the driver's request for the power well dropped",
+          (i915_read(&m.hw, HSW_PWR_WELL_CTL2) & HSW_PWR_WELL_CTL_REQ(HSW_PW_CTL_IDX_GLOBAL)) == 0);
+    CHECK("gtt fails: no frame kept, no record released", frames == 0 && released == 0);
+    done(&m);
+}
+
 /* What the wait rows' hook does: set `reg`'s `bit` once the clock reaches
  * `when`. */
 static uint32_t hook_reg, hook_bit;
@@ -1055,6 +1077,7 @@ int main(void)
     row_refusals();
     row_no_messages();
     row_register_fails();
+    row_gtt_fails();
     row_boundary();
     free(map_buffer);
     free(gsm_buffer);
