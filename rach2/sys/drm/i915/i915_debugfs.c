@@ -1548,7 +1548,8 @@ static int32_t crtcs_register(struct drm_i915_private *i915, char *path, uint32_
     int32_t rc = 0;
     uint32_t n, i;
 
-    for (n = 0; rc == 0 && n < mc->num_crtc && n < 10u; n++) {
+    /* The array's 8 CRTCs keep the name's one digit. */
+    for (n = 0; rc == 0 && n < mc->num_crtc && n < NELEM(mc->crtcs); n++) {
         for (i = 0; rc == 0 && i < NELEM(files); i++) {
             k_strncpy(name, files[i], sizeof(name));
             name[5] = (char)('0' + n);
