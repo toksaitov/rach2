@@ -272,6 +272,7 @@ def cmd_browser(name):
         url = "http://127.0.0.1:%d/" % server.server_address[1]
         if name == "chromium":
             line = ("exec chromium --ozone-platform=wayland --kiosk --no-first-run "
+                    "--enable-logging=stderr "
                     "--user-data-dir=%s/profile %s" % (work, url))
         else:
             profile = Path(work) / "profile"
@@ -285,6 +286,9 @@ def cmd_browser(name):
         worker.start()
         log = Path(work) / "browser.log"
         player = None
+        # The scenario's cancel is SIGTERM, which then leaves the browser's
+        # log as the evidence's stderr.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
         try:
             with log.open("w") as out:
                 player = subprocess.Popen(desktop(line), stdout=out, stderr=out,
@@ -296,6 +300,10 @@ def cmd_browser(name):
                 assert player.poll() is None, (name + " exited", log.read_text()[-4000:])
             print("desktop: result: %s: keys %s, clicks %d" % (name, server.keys, server.clicks),
                   flush=True)
+        except BaseException:
+            sys.stderr.write(log.read_text(errors="replace")[-16000:] if log.exists() else "")
+            sys.stderr.flush()
+            raise
         finally:
             if player is not None and player.poll() is None:
                 os.killpg(player.pid, signal.SIGTERM)

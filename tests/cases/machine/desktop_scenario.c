@@ -246,22 +246,42 @@ static void display(struct net_case *u, struct net_boot *b, const char *renderer
     }
 }
 
+/** Press Ctrl+J, which ends any partial line, then the word and Ctrl+J
+ * again, so that the console's reader reads the word as a line of its
+ * own. */
+static void console_input(struct net_case *u, struct net_boot *b)
+{
+    static const char newline[] = "{\"keys\": [{\"type\": \"qcode\", \"data\": \"ctrl\"}, "
+                                  "{\"type\": \"qcode\", \"data\": \"j\"}]}";
+
+    qmp(u, b, "send-key", newline);
+    keys(u, b, console_keys, sizeof(console_keys) / sizeof(console_keys[0]));
+    qmp(u, b, "send-key", newline);
+}
+
 /** Kill Weston and compare the console's frames, then type a word and find
- * the console's shell received it, as step `console`. */
+ * the console's reader, etude-guest, received it, as step `console`. The
+ * word is typed while a guest command waits for it in etude-guest's log, a
+ * command that says nothing until then, so that no frame of the channel
+ * crosses the console while the keys come and the word's line stays whole;
+ * a frame sent among the keys mixes its bytes into the word's. */
 static void console(struct net_case *u, struct net_boot *b)
 {
-    const char *seen[] = {"/bin/grep", "-c", "not a frame: " CONSOLE_WORD,
-                          "/tmp/etude-guest/guest.log", NULL};
+    static const char *const seen[] = {"/bin/sh", "-c",
+                                       "w='not a frame: " CONSOLE_WORD
+                                       "'; l=/tmp/etude-guest/guest.log; "
+                                       "echo 'desktop: console: waiting for the word'; "
+                                       "until grep -q \"$w\" $l; do sleep 0.1; done; "
+                                       "echo \"desktop: result: keyboard: $(grep -c \"$w\" $l)\"",
+                                       NULL};
+    static const struct driven word = {"keyboard", seen, "desktop: console: waiting for the word",
+                                       "desktop: result: keyboard: 1", console_input};
 
     put(u, b, "drmcapture", DRMCAPTURE, "0755");
     if (net_step(u, "console") != ETUDE_OK)
         return;
     probe(u, b, "console", "console", DRMCAPTURE, "desktop: result: console: ");
-    keys(u, b, console_keys, sizeof(console_keys) / sizeof(console_keys[0]));
-    qmp(u, b, "send-key",
-        "{\"keys\": [{\"type\": \"qcode\", \"data\": \"ctrl\"}, "
-        "{\"type\": \"qcode\", \"data\": \"j\"}]}");
-    check(u, b, "keyboard", seen, "keyboard", "1");
+    driven(u, b, &word);
 }
 
 /** Weston at boot on bochs with Pixman, both browsers taking input from
