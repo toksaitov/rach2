@@ -179,6 +179,10 @@
 #define SYS_SET_ROBUST_LIST         311
 #define SYS_GET_ROBUST_LIST         312
 #define SYS_FUTEX_WAITV             449
+#define SYS_FUTEX_WAKE              454
+#define SYS_FUTEX_WAIT              455
+#define SYS_FUTEX_REQUEUE           456
+#define SYS_MEMBARRIER              375
 #define SYS_FCHMODAT2               452
 #define SYS_WAITID                  284
 #define SYS_UTIMENSAT               320
@@ -228,6 +232,8 @@
 #define SYS_SCHED_RR_GET_INTERVAL  161
 #define SYS_SCHED_SETAFFINITY      241
 #define SYS_SCHED_GETAFFINITY      242
+#define SYS_SCHED_SETATTR          351
+#define SYS_SCHED_GETATTR          352
 
 /* The clock calls with 64-bit times, and utimensat's, whose names are longer
  * than the column above. */

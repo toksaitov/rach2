@@ -1,0 +1,122 @@
+.Dd November 11, 2026
+.Dt MEMBARRIER 2
+.Os
+.Sh NAME
+.Nm membarrier
+.Nd a memory barrier on the processors that run a process's threads
+.Sh SYNOPSIS
+.In linux/membarrier.h
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fn syscall SYS_membarrier "int cmd" "unsigned int flags" "int cpu_id"
+.Sh DESCRIPTION
+.Fn membarrier
+makes each processor that runs a thread of the caller's process, or of
+any process, pass a full memory barrier before it returns, so that a
+program can leave the barrier out of its fast path and pay for it on the
+slow one.
+User-space RCU, garbage collectors and the .NET runtime issue it.
+It answers as Linux 6.12's call does on x86, which has the sync-core
+commands, with the rseq commands of a kernel that has
+.Xr rseq 2 .
+.Fa cmd
+is one of:
+.Bl -tag -width MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
+.It Dv MEMBARRIER_CMD_QUERY
+Return the mask of the commands, 0x3FF: every one below.
+.It Dv MEMBARRIER_CMD_GLOBAL
+Wait until every processor that runs a thread, of any process, has passed
+a barrier.
+.It Dv MEMBARRIER_CMD_GLOBAL_EXPEDITED
+The same, for the processors that run a thread of a process registered
+with
+.Dv MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED ;
+the caller needs no registration.
+.It Dv MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED
+Register the caller's process as a target of the command above.
+.It Dv MEMBARRIER_CMD_PRIVATE_EXPEDITED
+Wait until every processor that runs a thread of the caller's process has
+passed a barrier.
+.It Dv MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
+Register for the command above, which fails with
+.Er EPERM
+before.
+.It Dv MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
+The same, with a serializing instruction on each of those processors and
+the caller's, so code one thread wrote runs as written on the others.
+A thread of the process switched to later is serialized too.
+.It Dv MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE
+Register for the command above.
+.It Dv MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ
+The same as the private barrier, and each thread it reaches has the rseq
+critical section it is in aborted before it runs on.
+With
+.Dv MEMBARRIER_CMD_FLAG_CPU
+in
+.Fa flags
+it reaches processor
+.Fa cpu_id
+alone, the caller's included, and nothing when that processor is not
+started or runs no thread of the process.
+.It Dv MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_RSEQ
+Register for the command above.
+.It Dv MEMBARRIER_CMD_GET_REGISTRATIONS
+Return the registration commands the process has made, as a mask.
+The sync-core and rseq registrations count as
+.Dv MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
+too, as on Linux, though they do not allow the plain private barrier.
+.El
+.Pp
+The registrations belong to the address space: the threads of a process
+share them, a
+.Xr fork 2
+child takes its parent's, and an
+.Xr execve 2
+clears them.
+A private barrier of a process with one thread, or on a machine with one
+processor started, returns at once, but for the sync-core one.
+.Pp
+The caller's processor holds the big kernel lock through the call, so no
+processor switches threads meanwhile; each other processor the command
+names is sent an interprocessor interrupt and answers it with a locked
+exchange, a full barrier, after an
+.Ic iret
+to the next instruction for the sync-core command.
+A processor in the kernel or idle runs no thread of a process and passes a
+barrier when it next takes the lock.
+.Ss System call interface
+The call is number 375 on i386 and 324 on x86-64, and 375 for an i386
+program on the x86-64 kernel
+.Pq Xr ia32 7 .
+.Sh RETURN VALUES
+.Dv MEMBARRIER_CMD_QUERY
+and
+.Dv MEMBARRIER_CMD_GET_REGISTRATIONS
+return their masks and the other commands 0.
+The raw call returns a negative error number on failure;
+.Fn syscall
+instead returns -1 and sets
+.Va errno .
+.Sh EXAMPLES
+.Pa tests/membarrierprobe.c
+queries the commands, checks that each private barrier fails before its
+registration and passes after it, reads the registrations back, runs the
+barriers with a second thread spinning on another processor, and checks
+the refusals of an unknown command and of flags.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EINVAL
+.Fa cmd
+is not a command,
+.Fa flags
+is not 0, or, for
+.Dv MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ ,
+neither 0 nor
+.Dv MEMBARRIER_CMD_FLAG_CPU .
+.It Bq Er EPERM
+A private command came before the process registered for it.
+.El
+.Sh SEE ALSO
+.Xr futex 2 ,
+.Xr rseq 2

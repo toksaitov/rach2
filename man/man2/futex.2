@@ -4,6 +4,9 @@
 .Sh NAME
 .Nm futex ,
 .Nm futex_waitv ,
+.Nm futex_wake ,
+.Nm futex_wait ,
+.Nm futex_requeue ,
 .Nm set_robust_list ,
 .Nm get_robust_list
 .Nd wait on a word of memory and wake its waiters
@@ -15,6 +18,12 @@
 .Fn syscall "SYS_futex" "uint32_t *uaddr" "int op" "uint32_t val" "const struct timespec *timeout" "uint32_t *uaddr2" "uint32_t val3"
 .Ft long
 .Fn syscall "SYS_futex_waitv" "struct futex_waitv *waiters" "unsigned int nr_futexes" "unsigned int flags" "const struct __kernel_timespec *timeout" "clockid_t clockid"
+.Ft long
+.Fn syscall "SYS_futex_wake" "uint32_t *uaddr" "unsigned long mask" "int nr" "unsigned int flags"
+.Ft long
+.Fn syscall "SYS_futex_wait" "uint32_t *uaddr" "unsigned long val" "unsigned long mask" "unsigned int flags" "const struct __kernel_timespec *timeout" "clockid_t clockid"
+.Ft long
+.Fn syscall "SYS_futex_requeue" "struct futex_waitv *waiters" "unsigned int flags" "int nr_wake" "int nr_requeue"
 .Ft long
 .Fn syscall "SYS_set_robust_list" "struct robust_list_head *head" "size_t len"
 .Ft long
@@ -70,9 +79,64 @@ an absolute time on the monotonic clock, or on the real-time clock with
 Wake up to
 .Fa val
 waiters on the word, and return how many were woken.
+A
+.Fa val
+of 0, or one that is negative as an int, wakes one, as on Linux.
 .It Dv FUTEX_WAKE_BITSET
 The same, waking only waiters whose bits meet the nonzero
 .Fa val3 .
+.It Dv FUTEX_REQUEUE
+Wake up to
+.Fa val
+waiters on the word and move up to the fourth argument's value more to the
+futex at
+.Fa uaddr2 ,
+where a wake of that word wakes them, and return how many were woken and
+moved.
+A negative count fails with
+.Er EINVAL .
+.It Dv FUTEX_CMP_REQUEUE
+The same, while the word holds
+.Fa val3 ,
+compared in the same step; otherwise
+.Er EAGAIN .
+.It Dv FUTEX_WAKE_OP
+Change the word at
+.Fa uaddr2
+by the operation encoded in
+.Fa val3 ,
+in one atomic step, wake up to
+.Fa val
+waiters on the word at
+.Fa uaddr ,
+and, when the encoded comparison holds for the second word's old value,
+up to the fourth argument's value of its waiters; return how many were
+woken.
+.Fa val3
+has the operation in bits 28 to 30,
+.Dv FUTEX_OP_SET ,
+.Dv FUTEX_OP_ADD ,
+.Dv FUTEX_OP_OR ,
+.Dv FUTEX_OP_ANDN
+or
+.Dv FUTEX_OP_XOR ,
+0 to 4, with bit 31,
+.Dv FUTEX_OP_OPARG_SHIFT ,
+to take the argument as a bit number; the comparison in bits 24 to 27,
+.Dv FUTEX_OP_CMP_EQ ,
+.Dv _NE ,
+.Dv _LT ,
+.Dv _LE ,
+.Dv _GT
+or
+.Dv _GE ,
+0 to 5; the signed 12-bit argument in bits 12 to 23 and the signed 12-bit
+comparand in bits 0 to 11.
+An unknown operation fails with
+.Er ENOSYS
+and leaves the word; an unknown comparison fails with
+.Er ENOSYS
+after the change, as on Linux.
 .It Dv FUTEX_LOCK_PI
 Acquire the PI mutex, sleeping behind its owner if necessary.
 The timeout is absolute on the real-time clock.
@@ -124,8 +188,7 @@ A wait with a timeout is not restarted: it fails with
 .Er EINTR
 whatever the handler's flags, as on Linux, and also when no handler runs,
 where Linux restarts it with its first deadline.
-Ordinary requeue and wake-and-modify operations are not implemented,
-nor on i686 is i386's time64 form, number 422; x86-64 has no
+On i686 i386's time64 form, number 422, is not implemented; x86-64 has no
 such form of its own, and takes 422 from an i386 program, below.
 .Ss Priority inheritance
 A PI mutex word is 0 while unlocked; its low 30 bits hold its owner's
@@ -199,12 +262,89 @@ architectures, on the clock
 names,
 .Dv CLOCK_MONOTONIC
 or
-.Dv CLOCK_REALTIME ;
-nanoseconds out of range carry into the seconds, as Linux takes them.
+.Dv CLOCK_REALTIME .
+Negative seconds, or nanoseconds outside 0 to 999999999, fail with
+.Er EINVAL ;
+a 32-bit caller's nanoseconds have their high word ignored, as Linux's
+.Fn get_timespec64
+ignores it.
 A signal that ends the wait has it restarted when no handler runs or the
 handler has
 .Dv SA_RESTART ,
 since the deadline is absolute.
+.Ss The futex2 calls
+.Nm futex_wake ,
+.Nm futex_wait
+and
+.Nm futex_requeue ,
+numbers 454, 455 and 456 on i386 and on x86-64, are Linux 6.7's calls of
+the same operations as
+.Dv FUTEX_WAKE_BITSET ,
+.Dv FUTEX_WAIT_BITSET
+and
+.Dv FUTEX_CMP_REQUEUE ,
+with the flags of a
+.Vt struct futex_waitv
+entry in place of the operation's:
+.Dv FUTEX2_SIZE_U32 ,
+with
+.Dv FUTEX2_PRIVATE
+or without.
+Any other flag, the other sizes and
+.Dv FUTEX2_NUMA ,
+4, among them, fails with
+.Er EINVAL ,
+as on Linux 6.12.
+They share the queues of
+.Nm futex
+and
+.Nm futex_waitv ,
+so a
+.Nm futex_wake
+wakes a
+.Dv FUTEX_WAIT
+waiter and a
+.Dv FUTEX_WAKE
+a
+.Nm futex_wait
+one.
+.Pp
+.Nm futex_wake
+wakes up to
+.Fa nr
+waiters on the word whose bits meet
+.Fa mask ,
+none for an
+.Fa nr
+of 0 and one for a negative one.
+.Nm futex_wait
+sleeps while the word holds
+.Fa val ,
+until a wake whose bits meet
+.Fa mask ,
+a signal or the absolute
+.Fa timeout
+on
+.Fa clockid ,
+which it reads as
+.Nm futex_waitv
+does; a signal has it restarted as
+.Nm futex_waitv
+is.
+A
+.Fa mask
+of 0, or a value or mask past 32 bits, fails with
+.Er EINVAL .
+.Nm futex_requeue
+takes two entries, the futex to wake and its value and the futex to move
+waiters to, each with its own flags, and, while the first word holds the
+first entry's value, wakes up to
+.Fa nr_wake
+waiters of it and moves up to
+.Fa nr_requeue
+more to the second;
+.Fa flags
+must be 0.
 .Ss Robust lists
 .Nm set_robust_list ,
 number 311 on i386 and 273 on x86-64, records
@@ -276,7 +416,8 @@ by
 .Ql int $0x80
 reports it, its head and size as 32-bit words.
 .Sh RETURN VALUES
-A wait returns 0 when a wake ended it and a wake the number it woke.
+A wait returns 0 when a wake ended it, a wake the number it woke, and a
+requeue the number it woke and moved.
 .Nm futex_waitv
 returns the index of the woken futex.
 The raw call returns a negative error number on failure;
@@ -284,6 +425,20 @@ The raw call returns a negative error number on failure;
 instead returns -1 and sets
 .Va errno .
 .Sh EXAMPLES
+.Pa tests/futex2probe.c
+wakes a classic waiter with
+.Nm futex_wake
+and a
+.Nm futex_wait
+waiter with
+.Dv FUTEX_WAKE ,
+moves waiters with
+.Nm futex_requeue
+and
+.Dv FUTEX_CMP_REQUEUE ,
+changes and wakes with
+.Dv FUTEX_WAKE_OP ,
+and checks the refusals Linux 6.12 makes.
 .Pa tests/musl/clonemusl.c
 waits on a word that holds another value, waits out relative and
 absolute deadlines, wakes an address with no waiters, and has a handler
@@ -301,13 +456,19 @@ A PI trylock is busy, a requeue wait was woken before transfer or interrupted
 after it, a comparison or atomic exchange raced, or the word did not hold
 .Fa val ,
 or a word of
-.Nm futex_waitv
+.Nm futex_waitv ,
+.Nm futex_wait
+or
+.Nm futex_requeue
 did not hold its value.
 .It Er EFAULT
 .Fa uaddr ,
 .Fa timeout ,
 .Fa waiters
-or a word it names is not readable.
+or a word it names is not readable, an address is outside user space, or
+the word
+.Dv FUTEX_WAKE_OP
+changes is not writable.
 .It Er EINTR
 A signal ended a wait with a timeout, or one without a timeout that is not
 restarted.
@@ -320,7 +481,10 @@ is not 1, or
 is not aligned, a bitset operation was given a zero
 .Fa val3 ,
 .Fa timeout
-has a negative field or nanoseconds past 999999999, or
+has a negative field or nanoseconds past 999999999, a wake, wait or
+requeue found a PI waiter or one of
+.Dv FUTEX_WAIT_REQUEUE_PI
+where it may not, a requeue count is negative, or
 .Nm set_robust_list
 was given a length other than the head's size.
 For
@@ -337,6 +501,15 @@ is another clock with a
 or an entry's size is not 32 bits, its flags have an unknown bit, its
 reserved word is not 0, its value does not fit 32 bits or its address is
 not aligned to four bytes.
+For the futex2 calls: their flags are refused as an entry's are, a
+.Fa mask
+is 0 or past 32 bits, a value is past 32 bits, the
+.Fa flags
+of
+.Nm futex_requeue
+are not 0 or its
+.Fa waiters
+is NULL.
 .It Er ENOMEM
 .Nm futex_waitv
 could not have the memory for its waiters.
@@ -346,7 +519,9 @@ A PI unlock names another owner, a PI lock names a kernel thread, or
 named a thread of another user, or a privileged thread of another
 process when the caller is not privileged.
 .It Er ENOSYS
-The operation is not listed above, or
+The operation is not listed above,
+.Dv FUTEX_WAKE_OP
+was given an unknown operation or comparison, or
 .Dv FUTEX_CLOCK_REALTIME
 was given to an operation other than
 .Dv FUTEX_WAIT_BITSET ,

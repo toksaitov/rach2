@@ -159,6 +159,9 @@
 #define SYS_SCHED_GET_PRIORITY_MAX  146
 #define SYS_SCHED_GET_PRIORITY_MIN  147
 #define SYS_SCHED_RR_GET_INTERVAL   148
+#define SYS_SCHED_SETATTR           314
+#define SYS_SCHED_GETATTR           315
+#define SYS_MEMBARRIER              324
 #define SYS_MLOCK                   149
 #define SYS_MUNLOCK                 150
 #define SYS_MLOCKALL                151
@@ -303,6 +306,9 @@
 #define SYS_FACCESSAT2              439
 #define SYS_EPOLL_PWAIT2            441
 #define SYS_FUTEX_WAITV             449
+#define SYS_FUTEX_WAKE              454
+#define SYS_FUTEX_WAIT              455
+#define SYS_FUTEX_REQUEUE           456
 #define SYS_FCHMODAT2               452
 
 /* Rach2's own call, which Linux does not have: ping(2), the ICMP echo that
