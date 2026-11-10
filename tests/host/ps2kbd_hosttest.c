@@ -17,6 +17,8 @@
  * command at a time, 50 ms apart, each byte written again after a RESEND or
  * 100 ms without an answer and given up after three writes, and nothing
  * written while the controller's input buffer is full.
+ *
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 
 #include "arch/x86/i8042.c"

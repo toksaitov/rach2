@@ -34,6 +34,8 @@
  * bytes and of each wheel's four. The probes for a Synaptics, an ALPS and an
  * Elantech touchpad, which synaptics_hosttest.c, alps_hosttest.c and
  * elantech_hosttest.c test against touchpads, find none here.
+ *
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 
 #include "arch/x86/i8042.c"
@@ -353,9 +355,125 @@ int synaptics_init(void)
 }
 
 /** No touchpad's bytes come, since `synaptics_init` found none. */
-void synaptics_byte(uint8_t data)
+int synaptics_byte(uint8_t data)
 {
     (void)data;
+    return SYNAPTICS_GOOD;
+}
+
+/* The rest of synaptics.h and trackpoint.h, which a bring-up without a
+ * touchpad never calls; trackpoint_hosttest.c tests them. */
+int synaptics_packet_start(void)
+{
+    return 1;
+}
+
+int synaptics_has_pass_through(void)
+{
+    return 0;
+}
+
+/** A pass-through port that never answers. */
+static int no_send(uint8_t cmd)
+{
+    (void)cmd;
+    return -1;
+}
+
+/** Nothing comes from that port. */
+static int no_receive(void)
+{
+    return -1;
+}
+
+const struct ps2io synaptics_pt = {no_send, no_receive};
+
+void synaptics_pt_activate(int packet_size)
+{
+    (void)packet_size;
+}
+
+int synaptics_reconnect(void)
+{
+    return -1;
+}
+
+void synaptics_disconnect(void)
+{}
+
+int trackpoint_detect(const struct ps2io *io)
+{
+    (void)io;
+    return -1;
+}
+
+int trackpoint_identify(const struct ps2io *io)
+{
+    (void)io;
+    return -1;
+}
+
+const char *trackpoint_vendor(void)
+{
+    return "";
+}
+
+int trackpoint_buttons(void)
+{
+    return 3;
+}
+
+int trackpoint_reconnect(const struct ps2io *io)
+{
+    (void)io;
+    return -1;
+}
+
+int trackpoint_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+void evdev_sysfs_serio_files(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+void evdev_set_prop(struct evdev *dev, unsigned int prop)
+{
+    (void)dev;
+    (void)prop;
+}
+
+void evdev_unregister(struct evdev *dev)
+{
+    (void)dev;
+}
+
+/** The 10 ms a pass-through probe waits, which no row reaches. */
+void k_udelay(uint32_t usec)
+{
+    (void)usec;
+}
+
+/* The ticks of the kernel's clock, which `ps2mouse_msleep` moves. */
+volatile uint64_t kernel_ticks;
+
+/** Interrupts off around the auxiliary port's two-byte write, as the
+ * kernel's `kirq_save` turns them off, and back as they were. */
+uint32_t kirq_save(void)
+{
+    uint32_t flags = (uint32_t)irq_on;
+
+    irq_on = 0;
+    return flags;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    irq_on = (int)flags;
 }
 
 /** No Elantech touchpad answers. */
