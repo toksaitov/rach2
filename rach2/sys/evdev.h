@@ -309,9 +309,10 @@ void evdev_unregister(struct evdev *dev);
  * it is up (a repeat, value 2, passes), a relative motion of 0, and an
  * absolute value within the axis's fuzz of the last one. An open does not
  * get the events its masks leave out (EVIOCSMASK), nor a SYN_REPORT that
- * ends a packet it got nothing of. Any context, an interrupt handler among
- * them; it does not sleep. A NULL `dev`, a device whose registration
- * failed, is ignored.
+ * ends a packet it got nothing of; a SYN_REPORT that ends a packet of no
+ * events reaches neither the opens nor the device's handler. Any context,
+ * an interrupt handler among them; it does not sleep. A NULL `dev`, a
+ * device whose registration failed, is ignored.
  */
 void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value);
 
