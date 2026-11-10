@@ -179,6 +179,11 @@ static void pipe_write(struct i915_model *m, void *priv, uint32_t reg, uint32_t 
         value = (value & ~TRANSCONF_STATE_ENABLE) |
                 ((value & TRANSCONF_ENABLE) ? TRANSCONF_STATE_ENABLE : 0);
     }
+    for (pipe = 0; pipe < 3; pipe++) {
+        if (reg == PIPE_CRC_CTL(pipe) && (value & PIPE_CRC_ENABLE)) {
+            s->pipe[pipe].crc_started = 1;
+        }
+    }
     if (reg < 0x70000u || reg >= 0x73000u) {
         i915_model_poke(m, reg, value);
         return;
@@ -279,10 +284,26 @@ void i915_model_pipe_vblank(struct i915_model *m, int pipe)
     }
     ctl = i915_model_peek(m, PIPE_CRC_CTL(pipe));
     if (ctl & PIPE_CRC_ENABLE) {
-        i915_model_poke(m, PIPE_CRC_RES_HSW(pipe), i915_model_pipe_crc(m, pipe, ctl));
+        p->crc_frame = i915_model_pipe_crc(m, pipe, ctl) ^ (p->crc_started ? 0xa5a5a5a5u : 0);
+        p->crc_due = 1;
         p->crc_frames++;
     }
+    p->crc_started = 0;
     i915_model_irq_event(m, I915_IRQ_DE, DE_PIPE_VBLANK_IVB(pipe));
+}
+
+void i915_model_pipe_crc_done(struct i915_model *m, int pipe)
+{
+    struct i915_model_pipe *p = &pipes_of(m)->pipe[pipe];
+
+    if (!p->crc_due) {
+        return;
+    }
+    p->crc_due = 0;
+    i915_model_poke(m, PIPE_CRC_RES_HSW(pipe), p->crc_frame);
+    i915_model_poke(m, GEN7_ERR_INT,
+                    i915_model_peek(m, GEN7_ERR_INT) | ERR_INT_PIPE_CRC_DONE(pipe));
+    i915_model_irq_event(m, I915_IRQ_DE, DE_ERR_INT_IVB);
 }
 
 /** The microseconds of a frame of `pipe`'s transcoder: its total pixels
@@ -321,6 +342,7 @@ static void pipe_tick(struct i915_model *m, void *priv, uint32_t us)
         while (s->pipe[pipe].us >= frame) {
             s->pipe[pipe].us -= frame;
             i915_model_pipe_vblank(m, pipe);
+            i915_model_pipe_crc_done(m, pipe);
         }
     }
 }

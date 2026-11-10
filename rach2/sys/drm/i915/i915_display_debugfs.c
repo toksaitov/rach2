@@ -115,7 +115,8 @@ const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *c
  * source (`crc_workaround`), the control written and the first frame's CRC
  * dropped, which Haswell computes over a frame it did not see whole, and
  * the fitter let go after the source stops. A running source holds the
- * pipe's vblanks, whose deferred work enters each frame's CRC. 0, -EINVAL
+ * pipe's vblanks; the error interrupt reads each frame's CRC at its CRC
+ * done and the deferred work enters it. 0, -EINVAL
  * for a source the pipe does not have, or -EIO on a pipe that is off.
  * Takes the commit lock.
  */
@@ -153,7 +154,7 @@ int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name)
     return 0;
 }
 
-void intel_crtc_crc_frame(struct intel_crtc *c)
+void intel_crtc_crc_frame(struct intel_crtc *c, uint32_t crc0)
 {
     uint32_t crc[5] = {0, 0, 0, 0, 0};
 
@@ -164,6 +165,6 @@ void intel_crtc_crc_frame(struct intel_crtc *c)
         c->crc_skip--;
         return;
     }
-    crc[0] = i915_read(&c->i915->hw, PIPE_CRC_RES_HSW(c->pipe));
+    crc[0] = crc0;
     (void)drm_crtc_add_crc_entry(&c->base, 1, (uint32_t)c->base.vblank.count, crc);
 }

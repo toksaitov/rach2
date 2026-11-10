@@ -21,7 +21,8 @@
  * four smaller ones under each scaling mode, each by SETPROPERTY and
  * SETCRTC with the panel's timings, its fitter's window as Linux's
  * pch_panel_fitting computes it and the pipe CRC of "auto" read through
- * crc/data as the chip gives it; the backlight's levels through
+ * crc/data as the chip gives it at its CRC done, after the vblank, and
+ * IGT's read-crc, ten frames' lines in sequence; the backlight's levels through
  * intel_backlight as Linux's scale_user_to_hw maps them, level 0 dark; IGT's
  * kms_hdmi_inject, the eDP pipe off and HDMI-A-1 forced on with a 4K EDID
  * set on pipe A, with limited range through the colour matrix and no second
@@ -249,7 +250,7 @@ static void follow_clock(struct i915_model *m)
 }
 
 /** One frame, 16.67 ms: a vblank of each pipe that is on and the
- * messages they raise. */
+ * messages they raise, then each pipe's CRC done and those. */
 static void frame(void)
 {
     int pipe;
@@ -258,6 +259,10 @@ static void frame(void)
     follow_clock(&model);
     for (pipe = 0; pipe < 3; pipe++) {
         i915_model_pipe_vblank(&model, pipe);
+    }
+    take_messages();
+    for (pipe = 0; pipe < 3; pipe++) {
+        i915_model_pipe_crc_done(&model, pipe);
     }
     take_messages();
 }
@@ -815,6 +820,36 @@ static void row_modes(void)
     frame();
 }
 
+/**
+ * IGT's kms_pipe_crc_basic read-crc-frame-sequence: "auto" started on pipe
+ * A while it shows its frame; the frame the source started in, whose CRC
+ * the chip computes over part of it, dropped; then ten lines, each the
+ * chip's CRC of the frame and each frame one past the last, the CRC read
+ * at its CRC done, which comes after the vblank.
+ */
+static void row_read_crc(void)
+{
+    const uint32_t want_ctl = PIPE_CRC_ENABLE | PIPE_CRC_SOURCE_PF_IVB;
+    uint32_t fr = 0, crc = 0, last = 0;
+    int k, good = 0;
+
+    CHECK(drm_crtc_crc_set_source(&pa->base, "auto", 4) == 4 && drm_crtc_crc_open(&pa->base) == 0,
+          "read-crc: auto on pipe A");
+    frame();
+    CHECK(!drm_crtc_crc_ready(&pa->base), "read-crc: the frame the source started in dropped");
+    for (k = 0; k < 10; k++) {
+        frame();
+        if (crc_line(&fr, &crc) && crc == i915_model_pipe_crc(&model, 0, want_ctl) &&
+            (k == 0 || fr == last + 1u)) {
+            good++;
+        }
+        last = fr;
+    }
+    drm_crtc_crc_release(&pa->base);
+    CHECK(good == 10, "read-crc: ten lines, each the frame's CRC, each frame one past the last");
+    frame();
+}
+
 /* ---- FIFO underruns ---- */
 
 /** How many times the log holds `text`. */
@@ -1107,6 +1142,7 @@ int main(void)
     row_pipe_ids();
     row_desktop();
     row_modes();
+    row_read_crc();
     row_underrun();
     row_backlight();
     row_inject();

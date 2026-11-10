@@ -127,9 +127,10 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
 /** The error interrupt, Linux's ivb_err_int_handler and
  * intel_cpu_fifo_underrun_irq_handler: each pipe's underrun, while it is
  * reported, turns its reporting off and is left for the deferred work to
- * log; GEN7_ERR_INT is cleared of what it held, the pipes' CRC done among
- * it, which the vblank's work reads instead. Under the interrupt mask's
- * lock. */
+ * log; each pipe's CRC done, while a source runs, reads the frame's CRC
+ * for the deferred work to enter, as hsw_pipe_crc_irq_handler, before the
+ * next frame's replaces it; GEN7_ERR_INT is cleared of what it held.
+ * Under the interrupt mask's lock. */
 static void err_int(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
@@ -141,6 +142,10 @@ static void err_int(struct drm_i915_private *i915)
             d->crtc[pipe].underrun_off = 1;
             i915_irq_mask_locked(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
             d->underruns |= 1u << pipe;
+        }
+        if ((e & ERR_INT_PIPE_CRC_DONE(pipe)) && d->crtc[pipe].crc_ctl != 0) {
+            d->crtc[pipe].crc_res = i915_read(&i915->hw, PIPE_CRC_RES_HSW(pipe));
+            d->crc_done |= 1u << pipe;
         }
     }
     i915_write(&i915->hw, GEN7_ERR_INT, e);
@@ -186,7 +191,7 @@ void intel_fifo_underrun_reporting(struct intel_crtc *c, int on)
 void intel_display_irq_work(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
-    uint32_t flags, iir, underruns;
+    uint32_t flags, iir, underruns, crc_done, crc[I915_NUM_PIPES];
     int pipe;
 
     flags = spin_lock_irqsave(&i915->irq.lock);
@@ -194,13 +199,18 @@ void intel_display_irq_work(struct drm_i915_private *i915)
     d->de_iir = 0;
     underruns = d->underruns;
     d->underruns = 0;
+    crc_done = d->crc_done;
+    d->crc_done = 0;
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        crc[pipe] = d->crtc[pipe].crc_res;
+    }
     spin_unlock_irqrestore(&i915->irq.lock, flags);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         if (underruns & (1u << pipe)) {
             klog(KLOG_ERR, "i915", "display: CPU pipe %c FIFO underrun", 'A' + pipe);
         }
     }
-    if (iir == 0) {
+    if (iir == 0 && crc_done == 0) {
         return;
     }
     flags = kirq_save();
@@ -209,7 +219,6 @@ void intel_display_irq_work(struct drm_i915_private *i915)
 
         if (iir & DE_PIPE_VBLANK_IVB(pipe)) {
             (void)drm_crtc_handle_vblank(&c->base);
-            intel_crtc_crc_frame(c);
             intel_wm_vblank(c);
             /* The writes latch at the vblank that ends the frame they were
              * made in, so the event goes once the counter has moved past
@@ -221,6 +230,9 @@ void intel_display_irq_work(struct drm_i915_private *i915)
         }
         if ((iir & DE_PLANE_FLIP_DONE_IVB(pipe)) && c->event && c->event_async) {
             intel_crtc_send_event(c);
+        }
+        if (crc_done & (1u << pipe)) {
+            intel_crtc_crc_frame(c, crc[pipe]);
         }
     }
     kirq_restore(flags);

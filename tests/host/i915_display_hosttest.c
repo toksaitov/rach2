@@ -245,12 +245,15 @@ static void follow_clock(struct i915_model *m)
 }
 
 /** One frame of pipe A, 16.67 ms on the model's clock and the monotonic
- * one: its vblank and the messages it raises. */
+ * one: its vblank and the messages it raises, then its CRC done and
+ * those. */
 static void frame(void)
 {
     model.now_us += 16667u;
     follow_clock(&model);
     i915_model_pipe_vblank(&model, 0);
+    take_messages();
+    i915_model_pipe_crc_done(&model, 0);
     take_messages();
 }
 

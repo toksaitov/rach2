@@ -51,13 +51,18 @@ struct i915_model_plane {
  * (`vblanks`, beside the frame counter, which the firmware left at
  * LENOVO_FW_FRMCOUNT on pipe A), the async flips its primary plane took
  * (`flips`), and the time since its last vblank. `crc_frames` counts the
- * frames whose CRC it computed.
+ * frames whose CRC it computed; `crc_frame` is the last one's, which
+ * PIPE_CRC_RES_HSW takes at the CRC done while `crc_due`, and
+ * `crc_started` says PIPE_CRC_CTL was enabled since the last vblank, so
+ * that the frame's CRC covers part of it.
  */
 struct i915_model_pipe {
     struct i915_model_plane primary, sprite, cursor;
     uint32_t vblanks;
     uint32_t flips;
     uint32_t crc_frames;
+    uint32_t crc_frame;
+    int crc_due, crc_started;
     uint64_t us;
 };
 
@@ -77,10 +82,18 @@ int i915_model_pipe_on(struct i915_model *m, int pipe);
  * One vblank of `pipe`, as the chip has it at the start of the vertical
  * blank: nothing on a pipe that is off; else the frame counter counts, the
  * planes armed since the last take their new registers, the CRC of the
- * source PIPE_CRC_CTL names is computed into PIPE_CRC_RES_HSW, and the
- * vblank event is raised in the display engine's bank.
+ * source PIPE_CRC_CTL names is computed for i915_model_pipe_crc_done,
+ * another value for a frame the source started during, and the vblank
+ * event is raised in the display engine's bank.
  */
 void i915_model_pipe_vblank(struct i915_model *m, int pipe);
+
+/**
+ * The CRC done that follows a vblank with a source on: the frame's CRC in
+ * PIPE_CRC_RES_HSW, ERR_INT_PIPE_CRC_DONE in GEN7_ERR_INT and the error
+ * interrupt raised; nothing without a CRC computed since the last.
+ */
+void i915_model_pipe_crc_done(struct i915_model *m, int pipe);
 
 /** The CRC the model computes for `pipe`'s planes as scanned out now and
  * the PIPE_CRC_CTL source `ctl`: a hash of the registers of the planes
