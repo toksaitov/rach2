@@ -108,6 +108,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `pools` (core tier; needs qemu; 128 MiB): many pipes, ptys, sockets and processes live at once, and the kernel heap back where it started after a thousand each of pipes, ptys and sockets (see tests/poolprobe.c).
 * `diskfull` (core tier; needs qemu; 128 MiB): a file system with no room left.
 * `fault` (core tier; needs qemu; 128 MiB): the two probes whose whole claim is that the kernel killed them.
+* `pure64` (full tier; needs qemu; 128 MiB; x86_64 only): the x86-64 kernel without the i386 ABI, built with IA32=0 and booted with ia32_emulation=0, refusing an i386 program's exec with ENOEXEC and int $0x80 with SIGSEGV while 32-bit code still runs.
 * `imagerace` (full tier; needs nothing beyond the build; no machine): two builds of one image at the same moment, as a parallel run of the suites can make them, and builds stopped at each step of publishing one, none of which may leave an image mixed with another build's files or out of date.
 * `krffscheck` (full tier; needs python3; no machine): what the offline checker says about images broken on purpose.
 * `codexapi` (full tier; needs qemu; 4096 MiB; x86_64 only): OpenAI's Responses protocol in the C fake API service, proved against the pinned upstream Codex in a fresh home on an isolated GNU Rach2 machine: two turns over a WebSocket, a refused second WebSocket and three turns over HTTPS, with the file, commit, credentials and clean repository checked, and an incorrect tool result refused.

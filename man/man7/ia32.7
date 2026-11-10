@@ -300,6 +300,53 @@ by
 gets i386's words, siginfo and registers.
 The register sets of a tracee running 32-bit code are i386's for any
 tracer.
+.Ss Without the i386 ABI
+A kernel built with
+.Ql make ARCH=x86_64 IA32=0 ,
+as a Linux built without
+.Dv CONFIG_IA32_EMULATION ,
+or booted with
+.Ql ia32_emulation=0 ,
+as Linux 6.7 and later take that option, runs no i386 program and no i386
+call:
+.Bl -bullet
+.It
+.Xr execve 2
+of an i386 program fails with
+.Er ENOEXEC .
+A kernel booted with the option off logs
+.Ql exec: i386 program refused
+the first time.
+.It
+Vector 0x80 has no gate, so
+.Ql int $0x80
+raises a general protection fault and the process gets
+.Dv SIGSEGV .
+.It
+A
+.Ql syscall
+from 32-bit code returns
+.Er ENOSYS ,
+and a
+.Ql sysenter
+raises a general protection fault.
+.El
+.Pp
+The 32-bit code segment stays, as in Linux's GDT, so that a 64-bit process
+still runs 32-bit code of its own, which can make no system call; so do
+the x86-64 calls
+.Xr modify_ldt 2
+and
+.Xr set_thread_area 2 ,
+with
+.Fn get_thread_area .
+.Ql ia32_emulation=
+takes Linux's boolean: a value that begins with y, Y, t, T or 1, or with
+on, turns the ABI on, and one that begins with n, N, f, F or 0, or with
+of, turns it off; any other is ignored, and the last value read wins.
+The kernel built with
+.Ql IA32=0
+has no ABI to turn on and ignores the option.
 .Sh LIMITS
 An i386 frame without
 .Dv SA_RESTORER
@@ -320,6 +367,19 @@ LDT, loads and calls through them across a switch, a
 .Xr fork 2
 and a signal, and makes its calls through
 .Fn __kernel_vsyscall .
+The pure64 suite's
+.Pa tests/pure64probe.c ,
+on the kernel built with
+.Ql IA32=0
+and on the default kernel booted with
+.Ql ia32_emulation=0 ,
+writes an i386 program and has its exec fail with
+.Er ENOEXEC ,
+has a child killed with
+.Dv SIGSEGV
+for
+.Ql int $0x80 ,
+and runs 32-bit code.
 .Sh SEE ALSO
 .Xr arch_prctl 2 ,
 .Xr execve 2 ,
