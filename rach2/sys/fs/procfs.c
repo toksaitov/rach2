@@ -1421,24 +1421,6 @@ static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
     }
 }
 
-/**
- * /proc/<pid>/smaps: each region's maps line and Linux's fields for it, which
- * BusyBox's pmap and smemcap read. The pages in memory are the present pages
- * of the region's page tables, counted past the tables it lacks
- * (`paging_user_count`), clean or dirty by the entry's dirty bit, and
- * shared or private by the region's type. A private region read from a file,
- * a mapping or a segment of the image, has as anonymous memory the pages
- * written since, the ones Linux has copied from the file; gdb's gcore leaves
- * the others out of a core and reads them from the file. The kernel does not
- * count the processes that map a page, so Pss is Rss, a page another process
- * also maps being counted whole to each; there is no swap and no huge page
- * of user memory, so those fields are 0. Locked is Rss for a locked region,
- * flagged `lo`, and `lf` when it is locked on fault; a mapping of
- * memfd_secret is flagged `dd`, left out of a core file, and a sealed region
- * `sl`, last, as Linux's highest bit. Where the protection keys are on, the
- * region's key comes before the flags, as `ProtectionKey:`.
- * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
- */
 /** Append the VmFlags line of smaps for the region `r`, the names Linux's
  * show_smap_vma_flags gives the flags this kernel keeps, in Linux's order. */
 static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
@@ -1459,6 +1441,24 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
     ap_ch(t, '\n');
 }
 
+/**
+ * /proc/<pid>/smaps: each region's maps line and Linux's fields for it, which
+ * BusyBox's pmap and smemcap read. The pages in memory are the present pages
+ * of the region's page tables, counted past the tables it lacks
+ * (`paging_user_count`), clean or dirty by the entry's dirty bit, and
+ * shared or private by the region's type. A private region read from a file,
+ * a mapping or a segment of the image, has as anonymous memory the pages
+ * written since, the ones Linux has copied from the file; gdb's gcore leaves
+ * the others out of a core and reads them from the file. The kernel does not
+ * count the processes that map a page, so Pss is Rss, a page another process
+ * also maps being counted whole to each; there is no swap and no huge page
+ * of user memory, so those fields are 0. Locked is Rss for a locked region,
+ * flagged `lo`, and `lf` when it is locked on fault; a mapping of
+ * memfd_secret is flagged `dd`, left out of a core file, and a sealed region
+ * `sl`, last, as Linux's highest bit. Where the protection keys are on, the
+ * region's key comes before the flags, as `ProtectionKey:`.
+ * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
+ */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
