@@ -36,6 +36,8 @@ In Debian, the GL probe names `virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))`, O
 
 Wine 11's preloader reserves four ranges of a 64-bit process (`loader/preloader.c`, `preload_info`): the DOS area at 0x10000, 1 MiB; the low area at 0x110000, 0x67ef0000 bytes; the 32-bit top-down area with the shared user data at 0x7f000000, 0xff0000 bytes; and the 64-bit top-down area with the virtual heap at 0x7ffffe000000, 0x1ff0000 bytes. In Debian a WoW64 process keeps all four mapped whole. A 64-bit process keeps only the 64-bit top-down area whole: Wine gives the low ranges back and maps only what it places there, 987,136 bytes of the DOS area, 6,930,432 of the low area and 2,162,688 of the 32-bit top-down area, NLS tables, heaps and the shared user data among them ([`ref/linux-hold64.maps`](../../../tests/system/games/ref/linux-hold64.maps), [`ref/linux-hold32.maps`](../../../tests/system/games/ref/linux-hold32.maps)).
 
+Rach2 gives the same results under the same profile, 4 CPUs and 8 GiB: GL on virgl with the same renderer string, both probes at both widths with Linux's CRC-32s, and in each of the four ranges, for both programs, the bytes Linux maps. Its prefix gets `VideoMemorySize` 8173, its own `MemTotal`, and WineD3D reports that size. The `prefix` case took 165 s with its boot, and the other three, run at once, 173 s.
+
 ## Updating
 
 A package is a line of `layer.list` with its version, and the version changes when the Debian layer's snapshot does. The image depends on the list and on every script here, so `make os-real-gnu-ext2` rebuilds the root after an edit.
