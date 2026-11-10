@@ -1467,6 +1467,9 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     int pipe;
 
     d->bl_index = -1;
+    /* The PLLs first, as Linux's intel_shared_dpll_init comes before its
+     * readout: a WRPLL's port clock needs the non-SSC reference. */
+    intel_dpll_init(i915);
     intel_display_readout(i915);
     err = drm_mode_config_init(dev);
     if (err != 0) {
@@ -1493,7 +1496,6 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     intel_cdclk_init(i915);
     intel_wm_init(i915);
     intel_gmbus_setup(i915);
-    intel_dpll_init(i915);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &d->crtc[pipe];
 
