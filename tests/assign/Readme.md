@@ -1,6 +1,6 @@
 # Device assignment
 
-The assignment cases boot the GNU root on q35 with an emulated Intel VT-d unit. Its root has the GNU product layers, with no test inventories or staged personal logins, and is selected by the fixed MBR identity `82274701:1` so disk enumeration cannot select the payload. A virtio NIC goes to Debian through Rach2's VFIO, while Rach2 keeps its e1000, NVMe root, AHCI payload disk and virtio-gpu display. The EDU device forces DMA and interrupt faults through the same unit. Each case has its own root overlay and powers its nested guest off or kills and reaps it; etude stops the outer machine.
+The assignment cases boot the GNU root on q35 with an emulated Intel VT-d unit. Its root has the GNU product layers, with no test inventories or staged personal logins, and is selected by the fixed MBR identity `82274701,1` so disk enumeration cannot select the payload. A virtio NIC goes to Debian through Rach2's VFIO, while Rach2 keeps its e1000, NVMe root, AHCI payload disk and virtio-gpu display. The EDU device forces DMA and interrupt faults through the same unit. Each case has its own root overlay and powers its nested guest off or kills and reaps it; etude stops the outer machine.
 
 ## Running
 
