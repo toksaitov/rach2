@@ -596,6 +596,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_hdmi",
+          "checks": "tests/host/i915_hdmi_hosttest.c drives DDI B and C of the HD 4400's host model: an EDID read over GMBUS and by bit-banging once the controller hangs, the WRPLL's dividers for a table of clocks as Linux's, an HDMI monitor found by its hotplug pulse and set at 1920x1080 on pipe B with Linux's WRPLL, the VBT's buffer translation, the AVI and SPD infoframes and limited range, a DisplayPort monitor trained and shown on pipe C, connect, disconnect, a retry and a storm on the hotplug pin, and a 4K EDID override on a forced connector set at 3840x2160@30, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_power",
           "checks": "tests/host/i915_power_hosttest.c enables the Intel graphics driver's RC6 and frequency control on the HD 4400's host model, RC6 entered at idle with its residency read in milliseconds across the counter's wrap, the pcode mailbox bounded, every frequency request within the limits under the up and down interrupts, and the card's /sys files under Linux's names, under ASan and UBSan and exits 0",
           "source": "scenario"
