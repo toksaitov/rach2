@@ -73,6 +73,17 @@ static void i915_gem_detect_swizzle(struct drm_i915_private *i915)
     i915->gem.swizzle_y = y;
 }
 
+/** Have the GPU swizzle its tiles as the memory controller does, as
+ * Linux's intel_gt_init_swizzling on graphics 7, when it swizzles. */
+static void i915_gem_init_swizzling(struct drm_i915_private *i915)
+{
+    if (i915->gem.swizzle_x != I915_BIT_6_SWIZZLE_NONE) {
+        (void)i915_rmw(&i915->hw, DISP_ARB_CTL, 0, DISP_TILE_SURFACE_SWIZZLING);
+        (void)i915_rmw(&i915->hw, TILECTL, 0, TILECTL_SWZCTL);
+        i915_uncore_write(i915, ARB_MODE, I915_MASKED_ENABLE(ARB_MODE_SWIZZLE_IVB));
+    }
+}
+
 /**
  * Set the GEM state the hardware holds: read the swizzle, clear every fence
  * and have the GPU swizzle as the memory controller does. Called once the
@@ -94,15 +105,26 @@ void i915_gem_init_hw(struct drm_i915_private *i915)
         i915->gem.fences[i].dirty = 0;
         i915_fence_write(i915, i, 0, 0, 0, I915_TILING_NONE);
     }
-    /* The GPU swizzles its tiles as the controller does, as Linux's
-     * intel_gt_init_swizzling on graphics 7. */
-    if (i915->gem.swizzle_x != I915_BIT_6_SWIZZLE_NONE) {
-        (void)i915_rmw(&i915->hw, DISP_ARB_CTL, 0, DISP_TILE_SURFACE_SWIZZLING);
-        (void)i915_rmw(&i915->hw, TILECTL, 0, TILECTL_SWZCTL);
-        i915_uncore_write(i915, ARB_MODE, I915_MASKED_ENABLE(ARB_MODE_SWIZZLE_IVB));
-    }
+    i915_gem_init_swizzling(i915);
     klog(KLOG_INFO, "i915", "gem: %d fences, swizzle %s for X tiles and %s for Y", I915_NUM_FENCES,
          names[i915->gem.swizzle_x], names[i915->gem.swizzle_y]);
+}
+
+void i915_gem_restore_fences(struct drm_i915_private *i915)
+{
+    struct i915_vma *vma;
+    int i;
+
+    for (i = 0; i < I915_NUM_FENCES; i++) {
+        vma = i915->gem.fences[i].vma;
+        if (vma) {
+            i915_fence_write(i915, i, vma->start, vma->fence_size, vma->obj->stride,
+                             vma->obj->tiling);
+        } else {
+            i915_fence_write(i915, i, 0, 0, 0, I915_TILING_NONE);
+        }
+    }
+    i915_gem_init_swizzling(i915);
 }
 
 /** Bit `bit` of `v` moved down to bit 6, as Linux's selftest swizzle_bit. */

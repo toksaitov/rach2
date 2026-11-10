@@ -479,6 +479,18 @@
 #define GEN6_GRDOM_BLT    (1u << 3)
 #define GEN6_GRDOM_VECS   (1u << 4)
 
+/* The error registers a hang's state reads and its recovery clears
+ * (i915_reg.h, gt/intel_gt_regs.h): the GTT's errors, the render ring's
+ * instruction parser's, the legacy identity register's error bit, and each
+ * engine's fault register, whose valid bit is cleared. */
+#define PGTBL_ER                    0x2024
+#define IPEIR_I965                  0x2064
+#define GEN2_IIR                    0x20a4
+#define I915_MASTER_ERROR_INTERRUPT (1u << 15)
+#define RING_FAULT_REG_RCS          0x4094
+#define RING_FAULT_REG_BCS          0x4294
+#define RING_FAULT_VALID            (1u << 0)
+
 /* ------------------------------------------------------------------------
  * Fences and swizzling (i915_reg.h, gt/intel_gt_regs.h)
  */

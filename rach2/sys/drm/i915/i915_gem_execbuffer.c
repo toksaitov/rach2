@@ -1098,9 +1098,11 @@ static int32_t eb_emit(struct eb *eb, struct i915_request *rq)
         cs[9] = MI_NOOP;
     }
     if (!eb->shadow_vma) {
+        rq->batch = addr;
         return eb_emit_start(rq, addr, (eb->dispatch & EB_DISPATCH_SECURE) != 0);
     }
     addr = (uint32_t)eb->shadow_vma->start;
+    rq->batch = addr;
     err = eb_emit_start(rq, addr, 1);
     if (err == 0) {
         err = eb_emit_start(rq, addr + eb->batch_len, 0);
@@ -1113,7 +1115,9 @@ static int32_t eb_emit(struct eb *eb, struct i915_request *rq)
  * the context's engine map, the slot in I915_EXEC_RING_MASK; without, the
  * legacy ring, where the default ring and RENDER run on rcs0 and BLT on
  * bcs0, and BSD, VEBOX, BSD's flags with another ring and any other number
- * name no engine that runs. With a reference in `*out`; 0 or -EINVAL.
+ * name no engine that runs. With a reference in `*out`; 0, -EINVAL, or
+ * -EIO for a state a hang banned, which runs nothing more, as Linux's
+ * __eb_pin_engine refuses it.
  */
 static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
 {
@@ -1131,7 +1135,10 @@ static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
         return -EINVAL;
     }
     *out = i915_gem_context_engine(eb->ctx, idx);
-    return *out ? 0 : -EINVAL;
+    if (!*out) {
+        return -EINVAL;
+    }
+    return (*out)->banned ? -EIO : 0;
 }
 
 /**

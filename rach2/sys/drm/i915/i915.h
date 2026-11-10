@@ -12,6 +12,7 @@
 #include "../../fs/sysfs.h"
 #include "../../lib/spinlock.h"
 #include "../../proc/wait_queue.h"
+#include "../../timer.h"
 #include "../../display/intelbl.h"
 #include "i915_hw.h"
 #include "intel_bios.h"
@@ -254,6 +255,14 @@ struct i915_irq {
  * request. `reserved` is the bytes `i915_ring_begin` leaves free for the
  * breadcrumb of the request being built.
  *
+ * Hang detection and reset (i915_hangcheck.c, i915_reset.c). `hw_tail` is
+ * what RING_TAIL was last given, the end of what the chip may run, which a
+ * reset gives it again. `hc_armed` is set by a heartbeat that found the
+ * engine busy, and `hc_seqno` is then the last request given to the chip
+ * at that beat, which must complete before the next beat, as Linux's
+ * heartbeat request must; `hc_acthd` and `hc_hws` are ACTHD and the
+ * breadcrumb the last beat read.
+ *
  * Submission. RING_TAIL moves past a request only once every fence it
  * waits for has signalled and every request before it has gone, as the
  * one timeline of a legacy ring in Linux orders them: `queued` is the
@@ -264,6 +273,7 @@ struct i915_irq {
  */
 struct i915_request;
 struct intel_context;
+struct i915_gpu_error;
 
 struct i915_engine {
     const char *name;
@@ -292,6 +302,11 @@ struct i915_engine {
     void (*irq_notify)(struct drm_i915_private *i915, struct i915_engine *engine);
     struct i915_request *queued;
     uint8_t kick;
+    uint32_t hw_tail;
+    uint8_t hc_armed;
+    uint32_t hc_seqno;
+    uint32_t hc_acthd;
+    uint32_t hc_hws;
 };
 
 /* The aliasing PPGTT's shape (gt/intel_gtt.h): 512 directory entries, each
@@ -345,8 +360,14 @@ struct i915_ppgtt {
  * context starts from (Linux's engine->default_state). `ctx_ready` is set
  * once they are made. `awake` is set while any engine has requests, the
  * GT unparked. `wedged` is set when the GPU cannot run work, and new
- * requests and contexts fail with -EIO, as Linux's terminally wedged GT.
- * `reset_count` counts the GPU's resets, for GET_RESET_STATS.
+ * requests and contexts fail with -EIO, as Linux's wedged GT;
+ * `wedged_terminal` says no reset may undo it, as when the default state
+ * could not be recorded or the device is gone. `reset_count` counts the
+ * whole GPU's resets, which GET_RESET_STATS gives, and
+ * `reset_engine_count` the engine resets by the engine's class, as Linux's
+ * gpu_error counts them. `hc_next` is the tick of the next heartbeat while
+ * the GT is unparked (i915_hangcheck.c). `error` is the state captured at
+ * the first hang, kept until it is cleared (i915_gpu_error.c).
  * `submit_next` links the devices whose requests may wait for fences, for
  * the submission worker, and `submit_listed` says the device is on that
  * list. `ppgtt` is the aliasing PPGTT, made with the rings.
@@ -361,7 +382,11 @@ struct i915_gt {
     uint8_t ctx_ready;
     uint8_t awake;
     uint8_t wedged;
+    uint8_t wedged_terminal;
     uint32_t reset_count;
+    uint32_t reset_engine_count[I915_NUM_ENGINES];
+    uint64_t hc_next;
+    struct i915_gpu_error *error;
     uint8_t submit_listed;
     struct drm_i915_private *submit_next;
     struct i915_ppgtt ppgtt;
@@ -1344,6 +1369,30 @@ void i915_engine_irq_put(struct drm_i915_private *i915, struct i915_engine *engi
  */
 int32_t i915_engine_wait(struct drm_i915_private *i915, struct i915_engine *engine, uint32_t seqno,
                          uint32_t timeout_us);
+
+/**
+ * Start `engine`'s ring again with the chip to run from `head` to `tail`,
+ * as Linux's xcs_resume after a reset: stopped and emptied, the status
+ * page's address written and the TLB flushed, the ring's start and the
+ * PPGTT's registers, enabled empty at `head` with RING_VALID waited for,
+ * STOP_RING cleared, and then `tail` given. Every interrupt of the ring
+ * is masked in its RING_IMR. Under forcewake.
+ *
+ * @return 0, or -EIO when the ring would not stop or start, its registers
+ *         logged.
+ */
+int32_t i915_ring_resume(struct drm_i915_private *i915, struct i915_engine *engine, uint32_t head,
+                         uint32_t tail);
+
+/**
+ * Stop `engine`'s command streamer and empty its ring before a reset, as
+ * Linux's reset_prepare for ring submission: STOP_RING and a wait of
+ * 100 ms for MODE_IDLE, which a hung ring never reaches and which is not
+ * waited for again, then the head moved to the tail, the ring disabled
+ * and the head and tail cleared, twice if the head will not clear. Under
+ * forcewake.
+ */
+void i915_ring_reset_prepare(struct drm_i915_private *i915, struct i915_engine *engine);
 
 /* ---- i915_ppgtt.c ---- */
 
@@ -2532,6 +2581,14 @@ void i915_gem_object_flush_range(struct drm_i915_gem_object *obj, uint64_t start
  * at the bind. */
 void i915_gem_init_hw(struct drm_i915_private *i915);
 
+/**
+ * Give the hardware its GEM state again after a reset of the whole GPU, as
+ * Linux's intel_ggtt_restore_fences: every fence written from the binding
+ * it serves, and the GPU's swizzling set. The reset has revoked the
+ * programs' aperture maps through the fences first (i915_reset.c).
+ */
+void i915_gem_restore_fences(struct drm_i915_private *i915);
+
 /** Where byte `v` of a linear surface lies once tiled and swizzled, the
  * arithmetic a fence does (i915_fence.c). */
 uint32_t i915_tiled_offset(uint32_t tiling, uint32_t stride, uint32_t swizzle, uint32_t v);
@@ -2562,7 +2619,8 @@ struct i915_gem_context;
  * once the image holds state to restore (Linux's CONTEXT_VALID_BIT): the
  * default state, or what the chip will have saved before it next loads
  * it. `sseu` is the slices and EUs it asks for, the GT's on the render
- * ring and none elsewhere.
+ * ring and none elsewhere. `banned` is set when a hang it caused banned it
+ * (i915_reset.c): its requests fail with -EIO and EXECBUFFER2 refuses it.
  */
 struct intel_context {
     struct drm_i915_private *i915;
@@ -2576,6 +2634,7 @@ struct intel_context {
     uint8_t subslice_mask;
     uint8_t min_eus;
     uint8_t max_eus;
+    uint8_t banned;
 };
 
 /* A context's flags, Linux's UCONTEXT_ bits. */
@@ -2595,8 +2654,13 @@ struct intel_context {
  * `nmap` is -1 without a map. `ce` holds the `nce` states, NULL for an
  * empty slot. `guilty_count` and `active_count` are what GET_RESET_STATS
  * reports: the batches of this context that hung the GPU, and those lost
- * in a reset it did not cause, which the reset (78-6a) counts. `closed`
- * is set once DESTROY or the file's close took it from the file.
+ * in a reset it did not cause, which the reset counts
+ * (`i915_gem_context_mark_guilty` and `_innocent`). `hang_ticks` are the
+ * ticks of its last two hangs, 0 for none, by which a third within 120 s
+ * bans it. `file` is the file whose ban score its hangs raise, NULL once
+ * the context is closed, as Linux's file_priv. `pid` and `comm` name the
+ * process that made it, for the log. `closed` is set once DESTROY or the
+ * file's close took it from the file.
  */
 struct i915_gem_context {
     struct drm_i915_private *i915;
@@ -2611,22 +2675,36 @@ struct i915_gem_context {
     struct intel_context **ce;
     uint32_t guilty_count;
     uint32_t active_count;
+    uint64_t hang_ticks[2];
+    struct i915_file *file;
+    uint32_t pid;
+    char comm[16];
     struct i915_gem_context *next; /* the file's, by id */
 };
 
 /*
  * A file's state, Linux's drm_i915_file_private: its contexts by id, the
  * default context 0 first, and `ban_score`, the score of its contexts'
- * hangs and bans that 78-6a keeps, at which it may make no more
- * (I915_CLIENT_SCORE_BANNED).
+ * hangs and bans, at which it may make no more contexts
+ * (I915_CLIENT_SCORE_BANNED). `hang_ticks` is the tick of its last hang,
+ * 0 for none.
  */
 struct i915_file {
     struct drm_i915_private *i915;
     struct i915_gem_context *contexts;
     uint32_t ban_score;
+    uint64_t hang_ticks;
 };
 
-#define I915_CLIENT_SCORE_BANNED 9
+/* Linux's scores of a file's hangs (i915_file_private.h): a hang within a
+ * minute of the last scores 1, a context banned 3, and a file at 9 may
+ * make no more contexts; and a context's third hang within 120 s bans it
+ * (i915_gem_context_types.h). In ticks of the kernel's clock. */
+#define I915_CLIENT_SCORE_HANG_FAST   1
+#define I915_CLIENT_FAST_HANG_TICKS   MS_TO_TICKS(60000)
+#define I915_CLIENT_SCORE_CONTEXT_BAN 3
+#define I915_CLIENT_SCORE_BANNED      9
+#define I915_CONTEXT_FAST_HANG_TICKS  MS_TO_TICKS(120000)
 
 /*
  * A request: commands on one engine for one context, which a breadcrumb
@@ -2640,7 +2718,8 @@ struct i915_file {
  * loads `ce`'s image, and `was_valid` is whether the image was valid
  * before. `head`, `infix`, `postfix` and `tail` are its ring offsets: its
  * first command, its payload after the invalidation and the switch, its
- * breadcrumb, and past its end.
+ * breadcrumb, and past its end. `batch` is the GTT address of the batch
+ * its payload starts, 0 for none, for the error state.
  *
  * Submission. `awaits` counts what must happen before the chip may run it:
  * the fences it waits for that have not signalled, the requests on other
@@ -2677,6 +2756,7 @@ struct i915_request {
     uint32_t infix;
     uint32_t postfix;
     uint32_t tail;
+    uint32_t batch;
     uint8_t switched;
     uint8_t set_context;
     uint8_t was_valid;
@@ -2873,5 +2953,157 @@ void i915_retire_requests(struct drm_i915_private *i915);
  * all retire, and the GT's own states, scratch page and default state go.
  * Before the rings stop. */
 void i915_requests_unplug(struct drm_i915_private *i915);
+
+/** Set the error `err` on the request's fence unless it has signalled or
+ * holds a fatal error already, as Linux's i915_request_set_error_once. */
+void i915_request_set_error_once(struct i915_request *rq, int32_t err);
+
+/** Fill the request's payload in the ring with MI_NOOP, so that only its
+ * switch and breadcrumb run, as Linux's __i915_request_skip. */
+void i915_request_skip(struct i915_request *rq);
+
+/** Every request of every engine fails with -EIO, its fence signalled,
+ * and retires, as Linux's reset_cancel when the GPU is wedged. */
+void i915_requests_cancel(struct drm_i915_private *i915);
+
+/*
+ * Hang detection, reset and the error state (i915_hangcheck.c,
+ * i915_reset.c, i915_gpu_error.c), after Linux 6.18's
+ * gt/intel_engine_heartbeat.c, gt/intel_reset.c, gt/intel_ring_submission.c
+ * and i915_gpu_error.c on Haswell. Every call is made under the big kernel
+ * lock, in process context.
+ */
+
+/* Linux's heartbeat interval (CONFIG_DRM_I915_HEARTBEAT_INTERVAL), in ms. */
+#define I915_HEARTBEAT_INTERVAL_MS 2500u
+
+/** Start the heartbeat as the GT unparks: the first beat an interval
+ * away, every engine unarmed. */
+void i915_hangcheck_unpark(struct drm_i915_private *i915);
+
+/**
+ * Beat once if the heartbeat is due, as Linux's heartbeat worker on a
+ * legacy ring: an armed engine whose request of the last beat has not
+ * completed is hung, and each such engine is reset (`i915_handle_error`);
+ * an engine that has requests on the chip is armed with its last. The
+ * next beat is an interval away.
+ *
+ * @return the engines found hung, as a mask of 1 << index.
+ */
+uint32_t i915_hangcheck(struct drm_i915_private *i915);
+
+/**
+ * Recover the engines of `engine_mask` (1 << index) from a hang, as
+ * Linux's intel_gt_handle_error with I915_ERROR_CAPTURE: the error state
+ * captured and the error registers cleared, each engine reset alone, and
+ * the whole GPU reset for those whose reset failed. `msg` says why, for
+ * the log.
+ */
+void i915_handle_error(struct drm_i915_private *i915, uint32_t engine_mask, const char *msg);
+
+/**
+ * Reset `engine` alone through its domain of GEN6_GDRST, as Linux's
+ * __intel_engine_reset_bh: the ring stopped, the domain reset with a
+ * bounded wait, the first request not completed marked guilty, its payload
+ * skipped and its context perhaps banned, and the ring started again from
+ * that request's head, so that the requests behind it run.
+ *
+ * @return 0, also for an engine with nothing to run; -EIO for a ring that
+ *         is not running or would not start again; -ETIMEDOUT when the
+ *         domain's reset did not finish in 2 ms.
+ */
+int32_t i915_reset_engine(struct drm_i915_private *i915, struct i915_engine *engine,
+                          const char *msg);
+
+/**
+ * Reset the whole GPU through GEN6_GDRST's full domain, as Linux's
+ * intel_gt_reset: every ring stopped, the reset tried four times, the
+ * fences and the swizzle written again, each engine's first request not
+ * completed marked guilty when its bit is in `stalled_mask` and innocent
+ * otherwise, and every ring started again. A reset that fails wedges the
+ * GPU (`i915_gt_set_wedged`).
+ */
+void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const char *msg);
+
+/** Wedge the GPU, as Linux's __intel_gt_set_wedged: every ring stopped,
+ * every request failed with -EIO, and new requests and contexts refused
+ * with -EIO until a reset succeeds. */
+void i915_gt_set_wedged(struct drm_i915_private *i915);
+
+/* The requests of an engine the error state keeps, and the ring's dwords
+ * at its head. */
+#define I915_ERROR_REQUESTS 8
+#define I915_ERROR_RING_DW  16
+
+/*
+ * One engine in the error state, Linux's intel_engine_coredump: whether
+ * it hung, its registers as engine_record_registers reads them on graphics
+ * 7, the breadcrumb and the last sequence number emitted, the ring's
+ * I915_ERROR_RING_DW dwords from its head, and its requests on the chip
+ * not yet completed, oldest first, each with its context's id and
+ * process, its ring offsets and the batch it starts, the batch's head.
+ */
+struct i915_error_request {
+    uint32_t seqno;
+    uint32_t ctx_id;
+    uint32_t pid;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t batch;
+};
+
+struct i915_error_engine {
+    uint8_t hung;
+    uint32_t start, head, tail, ctl, mode;
+    uint32_t acthd, ipehr, ipeir, instdone, instps, instpm;
+    uint32_t esr, faddr, bbaddr, bbstate, ccid, rc_psmi, fault_reg, hws_pga;
+    uint32_t hws_seqno;
+    uint32_t seqno;
+    uint32_t ring[I915_ERROR_RING_DW];
+    uint32_t nrequests;
+    struct i915_error_request rq[I915_ERROR_REQUESTS];
+};
+
+/*
+ * The GPU's state at a hang, Linux's i915_gpu_coredump: when, which
+ * engines hung, why, the message Linux logs ("GPU HANG: ecode 7:M:E", with
+ * the first hung request's process), the GT's error registers, and each
+ * engine's state.
+ */
+struct i915_gpu_error {
+    uint64_t ticks;
+    uint32_t engine_mask;
+    char reason[80];
+    char msg[96];
+    uint32_t eir, pgtbl_er, error_gen6, done_reg;
+    struct i915_error_engine engine[I915_NUM_ENGINES];
+};
+
+/**
+ * Capture the GPU's state for a hang of the engines `engine_mask`, as
+ * Linux's i915_capture_error_state, and log its message. The device keeps
+ * the first state until `i915_gpu_error_clear`; a later one is logged and
+ * dropped.
+ */
+void i915_gpu_error_capture(struct drm_i915_private *i915, uint32_t engine_mask,
+                            const char *reason);
+
+/** Free the kept error state, as Linux's i915_reset_error_state. */
+void i915_gpu_error_clear(struct drm_i915_private *i915);
+
+/**
+ * Count a hang that `ce`'s request caused, at the tick `now`, as Linux's
+ * mark_guilty: the context's guilty count raised, and, when it is
+ * bannable, its hang recorded, the context banned when it is not
+ * recoverable or this is its third hang within 120 s, and its file's ban
+ * score raised. A closed context is banned at once and counts nothing.
+ *
+ * @return whether `ce` is to be banned.
+ */
+int i915_gem_context_mark_guilty(struct intel_context *ce, uint64_t now);
+
+/** Count a request of `ce` lost in a reset it did not cause, as Linux's
+ * mark_innocent. */
+void i915_gem_context_mark_innocent(struct intel_context *ce);
 
 #endif /* _I915_H_ */

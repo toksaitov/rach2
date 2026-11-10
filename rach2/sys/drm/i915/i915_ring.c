@@ -122,13 +122,14 @@ void i915_gt_pages_unmap(struct drm_i915_private *i915, void *vaddr, uint32_t np
  * Stop the command streamer of `e` and empty its ring, as Linux's
  * intel_engine_stop_cs and stop_ring: STOP_RING set and MODE_IDLE waited
  * for, a timeout forgiven when the head has reached the tail, as Linux
- * does; then the head moved to the tail, the ring disabled, and the head
- * and tail cleared. Under forcewake.
+ * does, or always when `force` is set, as before a reset, where a hung
+ * ring never idles; then the head moved to the tail, the ring disabled,
+ * and the head and tail cleared. Under forcewake.
  *
  * @return 0, or -EIO when the streamer did not stop or the head would not
  *         clear.
  */
-static int32_t i915_ring_stop(struct drm_i915_private *i915, struct i915_engine *e)
+static int32_t i915_ring_stop(struct drm_i915_private *i915, struct i915_engine *e, int force)
 {
     struct i915_hw *hw = &i915->hw;
     uint32_t base = e->mmio_base;
@@ -138,7 +139,8 @@ static int32_t i915_ring_stop(struct drm_i915_private *i915, struct i915_engine 
     if (i915_wait_for(hw, "ring stop", RING_MI_MODE(base), MODE_IDLE, MODE_IDLE, I915_STOP_US) <
             0 &&
         (i915_read(hw, RING_HEAD(base)) & HEAD_ADDR) !=
-            (i915_read(hw, RING_TAIL(base)) & TAIL_ADDR)) {
+            (i915_read(hw, RING_TAIL(base)) & TAIL_ADDR) &&
+        !force) {
         klog(KLOG_ERR, "i915", "%s: did not stop: head %08x tail %08x", e->name,
              (unsigned)i915_read(hw, RING_HEAD(base)), (unsigned)i915_read(hw, RING_TAIL(base)));
         return -EIO;
@@ -162,22 +164,14 @@ static int32_t i915_ring_stop(struct drm_i915_private *i915, struct i915_engine 
     return -EIO;
 }
 
-/**
- * Start the ring of `e`, as Linux's xcs_resume: stopped and emptied, every
- * write to the status page's interrupt dwords masked, the status page's
- * address written and the TLB flushed, the ring's start, the PPGTT's
- * registers, an empty ring enabled with RING_VALID and waited for, then
- * STOP_RING cleared. Under forcewake.
- *
- * @return 0, or -EIO with the wait that failed named.
- */
-static int32_t i915_ring_start(struct drm_i915_private *i915, struct i915_engine *e)
+int32_t i915_ring_resume(struct drm_i915_private *i915, struct i915_engine *e, uint32_t head,
+                         uint32_t tail)
 {
     struct i915_hw *hw = &i915->hw;
     uint32_t base = e->mmio_base;
     int32_t err;
 
-    err = i915_ring_stop(i915, e);
+    err = i915_ring_stop(i915, e, 0);
     if (err < 0) {
         return err;
     }
@@ -199,8 +193,8 @@ static int32_t i915_ring_start(struct drm_i915_private *i915, struct i915_engine
 
     i915_write(hw, RING_START(base), e->ring_ggtt);
     (void)i915_ppgtt_enable_ring(i915, e);
-    i915_write(hw, RING_HEAD(base), 0);
-    i915_write(hw, RING_TAIL(base), 0);
+    i915_write(hw, RING_HEAD(base), head);
+    i915_write(hw, RING_TAIL(base), head);
     i915_posting_read(hw, RING_TAIL(base));
     i915_write(hw, RING_CTL(base), (RING_CTL_SIZE(e->ring_size) & RING_NR_PAGES) | RING_VALID);
     if (i915_wait_for(hw, "ring start", RING_CTL(base), RING_VALID, RING_VALID, I915_START_US) <
@@ -213,9 +207,37 @@ static int32_t i915_ring_start(struct drm_i915_private *i915, struct i915_engine
         return -EIO;
     }
     i915_write(hw, RING_MI_MODE(base), I915_MASKED_DISABLE(STOP_RING));
-    e->head = e->tail = 0;
+    e->head = head;
+    e->hw_tail = head;
     e->running = 1;
+    if (tail != head) {
+        /* The commands reach memory before the chip reads the tail. */
+        arch_dma_fence();
+        i915_write(hw, RING_TAIL(base), tail);
+        i915_posting_read(hw, RING_TAIL(base));
+        e->hw_tail = tail;
+    }
     return 0;
+}
+
+void i915_ring_reset_prepare(struct drm_i915_private *i915, struct i915_engine *e)
+{
+    (void)i915_ring_stop(i915, e, 1);
+}
+
+/**
+ * Start the ring of `e` empty, as Linux's xcs_resume at load: stopped and
+ * emptied, every write to the status page's interrupt dwords masked, the
+ * status page's address written and the TLB flushed, the ring's start, the
+ * PPGTT's registers, an empty ring enabled with RING_VALID and waited for,
+ * then STOP_RING cleared. Under forcewake.
+ *
+ * @return 0, or -EIO with the wait that failed named.
+ */
+static int32_t i915_ring_start(struct drm_i915_private *i915, struct i915_engine *e)
+{
+    e->tail = 0;
+    return i915_ring_resume(i915, e, 0, 0);
 }
 
 /** The user interrupt of the engine `data`: counted, its requests'
@@ -321,7 +343,7 @@ void i915_gt_fini(struct drm_i915_private *i915)
         if (e->running) {
             i915_irq_unregister(i915, I915_IRQ_GT, e->irq_bit);
             i915_write(&i915->hw, RING_IMR(e->mmio_base), 0xffffffffu);
-            (void)i915_ring_stop(i915, e);
+            (void)i915_ring_stop(i915, e, 0);
             e->running = 0;
             e->irq_refs = 0;
         }
@@ -404,6 +426,7 @@ void i915_ring_advance(struct i915_engine *e, struct drm_i915_private *i915)
     /* The commands reach memory before the chip reads the tail. */
     arch_dma_fence();
     i915_uncore_write(i915, RING_TAIL(e->mmio_base), e->tail);
+    e->hw_tail = e->tail;
 }
 
 uint32_t i915_engine_emit_breadcrumb(struct drm_i915_private *i915, struct i915_engine *e)

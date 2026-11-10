@@ -167,7 +167,8 @@ struct fake_shadow {
 };
 
 /* One of the two rings the driver starts. `hung` is set from a hang until
- * a reset of `domain`; `commands` and `batches` count what it ran. */
+ * a reset of `domain`; `commands` and `batches` count what it ran, and
+ * `resets` the resets of its domain alone. */
 struct fake_ring {
     const char *name;
     uint32_t base;
@@ -177,6 +178,7 @@ struct fake_ring {
     uint8_t hung;
     uint32_t commands;
     uint32_t batches;
+    uint32_t resets;
 };
 
 /*
@@ -189,7 +191,7 @@ struct fake_ring {
  * the test's own in a host test. `i915` is the device once registered,
  * and `light` first light's last result, or 1 before it ran. `shadow`
  * holds the aperture's shadow pages, FAKE_SHADOW_DIR to a directory, each
- * made at its first use.
+ * made at its first use. `full_resets` counts the resets of the whole GPU.
  */
 struct i915_fake {
     struct spinlock lock;
@@ -209,6 +211,7 @@ struct i915_fake {
     struct drm_i915_private *i915;
     char path[64];
     int32_t light;
+    uint32_t full_resets;
 };
 
 /* ---- the register file ---- */
@@ -483,11 +486,17 @@ static void fake_reset(struct i915_fake *f, uint32_t domains)
 {
     int i;
 
+    if (domains & GEN6_GRDOM_FULL) {
+        f->full_resets++;
+    }
     for (i = 0; i < 2; i++) {
         struct fake_ring *r = &f->ring[i];
 
         if (!(domains & (GEN6_GRDOM_FULL | r->domain))) {
             continue;
+        }
+        if (!(domains & GEN6_GRDOM_FULL)) {
+            r->resets++;
         }
         r->hung = 0;
         R(f, RING_CTL(r->base)) = 0;
@@ -995,8 +1004,9 @@ static void text_num(struct fake_text *t, uint32_t n, int negative)
 /**
  * The file's text, one line each: `fault NAME armed N injected M` for each
  * fault, with `always` for N; `ring NAME commands N batches M hung 0|1` for
- * each ring; `messages N`; and `light never`, `light ok` or
- * `light error -E`.
+ * each ring; `resets rcs0 N bcs0 M full K`, the resets of each ring's
+ * domain alone and of the whole GPU; `messages N`; and `light never`,
+ * `light ok` or `light error -E`.
  */
 static void fake_text(struct i915_fake *f, struct fake_text *t)
 {
@@ -1027,6 +1037,13 @@ static void fake_text(struct i915_fake *f, struct fake_text *t)
         text_num(t, f->ring[i].batches, 0);
         text_put(t, f->ring[i].hung ? " hung 1\n" : " hung 0\n");
     }
+    text_put(t, "resets rcs0 ");
+    text_num(t, f->ring[0].resets, 0);
+    text_put(t, " bcs0 ");
+    text_num(t, f->ring[1].resets, 0);
+    text_put(t, " full ");
+    text_num(t, f->full_resets, 0);
+    text_put(t, "\n");
     text_put(t, "messages ");
     text_num(t, f->messages, 0);
     spin_unlock_irqrestore(&f->lock, flags);

@@ -18,6 +18,7 @@
 #include "../../mm/kheap.h"
 #include "../../proc/percpu.h"
 #include "../../timer.h"
+#include "../../rtc.h"
 #ifndef RACH2_HOSTTEST
 #include "../../arch/arch.h"
 #include "../../proc/process.h"
@@ -125,12 +126,27 @@ static void ring_noop(struct i915_engine *e, uint32_t from, uint32_t to)
     }
 }
 
+void i915_request_skip(struct i915_request *rq)
+{
+    ring_noop(rq->engine, rq->infix, rq->postfix);
+    rq->infix = rq->postfix;
+}
+
+void i915_request_set_error_once(struct i915_request *rq, int32_t err)
+{
+    if (!rq->fence.base.signaled && !fatal_error(rq->fence.base.error)) {
+        rq->fence.base.error = err;
+    }
+}
+
 /**
  * Give the chip the requests of `e` that wait for nothing more, oldest
  * first, up to the first that still waits, as Linux's ring submission
- * moves RING_TAIL: a request whose fence holds an error keeps only its
- * breadcrumb, and the requests that waited to see one given to the chip
- * are told. Under the big kernel lock.
+ * moves RING_TAIL: a request of a banned context fails with -EIO, as
+ * Linux's __i915_request_submit fails one whose context may not run, a
+ * request whose fence holds an error keeps only its breadcrumb, and the
+ * requests that waited to see one given to the chip are told. Under the
+ * big kernel lock.
  */
 static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
 {
@@ -149,8 +165,11 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
         return;
     }
     for (rq = first;; rq = rq->next) {
+        if (rq->ce && rq->ce->banned) {
+            i915_request_set_error_once(rq, -EIO);
+        }
         if (fatal_error(rq->fence.base.error)) {
-            ring_noop(e, rq->infix, rq->postfix);
+            i915_request_skip(rq);
         }
         for (w = rq->exec_waiters; w; w = next) {
             next = w->exec_next;
@@ -166,6 +185,7 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
     /* The commands reach memory before the chip reads the tail. */
     arch_dma_fence();
     i915_uncore_write(i915, RING_TAIL(e->mmio_base), last->tail);
+    e->hw_tail = last->tail;
 }
 
 int i915_submit_work(void)
@@ -192,25 +212,62 @@ int i915_submit_work(void)
     return n;
 }
 
+/* Whether a GT unparked since the worker last looked, so that it sleeps
+ * no longer than its first heartbeat. */
+static volatile int hangcheck_kicked;
+
 #ifndef RACH2_HOSTTEST
+/** The earliest heartbeat of the devices on the worker's list whose GT is
+ * awake, as a tick, or 0 for none. */
+static uint64_t hangcheck_deadline(void)
+{
+    struct drm_i915_private *i915;
+    uint64_t at = 0;
+
+    for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
+        if (i915->gt.awake && !i915->gt.wedged && (at == 0 || i915->gt.hc_next < at)) {
+            at = i915->gt.hc_next;
+        }
+    }
+    return at;
+}
+
 static process_t *submit_thread;
 
-/** Whether an engine has a request whose last fence signalled. */
+/* The tick the worker's sleep ends at for the next heartbeat, 0 for none. */
+static uint64_t submit_deadline;
+
+/** Whether an engine has a request whose last fence signalled, a GT has
+ * unparked, or a heartbeat is due. */
 static int submit_ready(void *arg)
 {
     (void)arg;
-    return submit_kicked;
+    return submit_kicked || hangcheck_kicked ||
+           (submit_deadline != 0 && rtc_ticks_now() >= submit_deadline);
 }
 
-/** The submission worker, ki915: sleep in an idle wait until a fence a
- * request waited for signals, then give the chip what is ready, holding
- * the big lock as kernel code does. */
+/**
+ * The submission worker, ki915: sleep in an idle wait until a fence a
+ * request waited for signals or the next heartbeat of an unparked GT is
+ * due, then give the chip what is ready and beat, holding the big lock as
+ * kernel code does. The heartbeat is the driver's hang detection, as
+ * Linux's heartbeat worker is (i915_hangcheck.c).
+ */
 static void submit_thread_main(void)
 {
+    struct drm_i915_private *i915;
+
     arch_irq_enable();
     for (;;) {
+        submit_deadline = hangcheck_deadline();
+        current_proc->wakeup_tick = submit_deadline;
         (void)wq_wait_event_idle(&submit_wait, submit_ready, 0);
+        current_proc->wakeup_tick = 0;
+        hangcheck_kicked = 0;
         (void)i915_submit_work();
+        for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
+            (void)i915_hangcheck(i915);
+        }
     }
 }
 
@@ -768,6 +825,11 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     if (!i915->gt.awake) {
         i915->gt.awake = 1;
         i915_gt_unpark(i915);
+        /* The worker beats while the GT is awake. */
+        i915_hangcheck_unpark(i915);
+        submit_device_add(i915);
+        hangcheck_kicked = 1;
+        wq_wake_all(&submit_wait);
     }
     if (!e->fence_context) {
         e->fence_context = dma_fence_context_alloc(1);
@@ -932,8 +994,10 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
             /* Without the interrupt the breadcrumb is polled. */
             request_poll(rq, tick_div((uint64_t)(slice - now), 1000u, (uint32_t *)0) + 1u);
         }
-        /* An interrupt may have been lost: the page is read again. */
+        /* An interrupt may have been lost: the page is read again; and a
+         * heartbeat may be due, which resets a hung engine. */
         i915_request_signal(i915, e);
+        (void)i915_hangcheck(i915);
     }
     i915_retire_requests(i915);
     return 0;
@@ -1042,6 +1106,7 @@ static int32_t gt_contexts_init(struct drm_i915_private *i915)
     err = record_defaults(i915);
     if (err < 0) {
         gt->wedged = 1;
+        gt->wedged_terminal = 1;
         klog(KLOG_ERR, "i915", "contexts: the default state was not recorded: error %d; wedged",
              (int)err);
         return -EIO;
@@ -1148,6 +1213,7 @@ void i915_requests_unplug(struct drm_i915_private *i915)
     int i;
 
     gt->wedged = 1;
+    gt->wedged_terminal = 1;
     submit_device_remove(i915);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         struct i915_engine *e = &gt->engine[i];
@@ -1168,4 +1234,20 @@ void i915_requests_unplug(struct drm_i915_private *i915)
     kfree(gt->default_state);
     gt->default_state = 0;
     gt->ctx_ready = 0;
+    i915_gpu_error_clear(i915);
+}
+
+void i915_requests_cancel(struct drm_i915_private *i915)
+{
+    struct i915_gt *gt = &i915->gt;
+    int i;
+
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        gt->engine[i].hc_armed = 0;
+        engine_retire(i915, &gt->engine[i], 1);
+    }
+    if (gt->awake) {
+        gt->awake = 0;
+        i915_gt_park(i915);
+    }
 }

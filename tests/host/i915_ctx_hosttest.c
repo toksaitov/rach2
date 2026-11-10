@@ -9,6 +9,9 @@
  * host-deps: rach2/sys/drm/i915/i915_request.c
  * host-deps: rach2/sys/drm/i915/i915_getparam.c
  * host-deps: rach2/sys/drm/i915/i915_reg_read.c
+ * host-deps: rach2/sys/drm/i915/i915_hangcheck.c
+ * host-deps: rach2/sys/drm/i915/i915_reset.c
+ * host-deps: rach2/sys/drm/i915/i915_gpu_error.c
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_irq.c
  * host-deps: rach2/sys/drm/i915/i915_ppgtt.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
@@ -402,6 +405,18 @@ void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset)
     (void)i915;
     (void)offset;
     ranges_held--;
+}
+
+/* GEM's part of a reset, i915_fence.c's and i915_vma.c's, which no row
+ * reaches. */
+void i915_gem_restore_fences(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void i915_vma_revoke_mmap(struct i915_vma *vma)
+{
+    (void)vma;
 }
 
 /* The driver's fences, i915_gem.c's. */
