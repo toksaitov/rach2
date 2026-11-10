@@ -1707,6 +1707,30 @@ static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long 
     }
 }
 
+/** Append the memory sizes of an address space to its status record. */
+static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
+{
+    unsigned long size = vm_total(&mm->vm);
+    unsigned long rss = mm_resident(mm) * PAGE_SIZE;
+    unsigned long anon, file, shmem;
+
+    rss_by_kind(mm, &anon, &file, &shmem);
+    ap_kb(t, "VmPeak", size);
+    ap_kb(t, "VmSize", size);
+    ap_kb(t, "VmLck", vm_locked(&mm->vm));
+    ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
+    ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
+    ap_kb(t, "VmRSS", rss);
+    ap_kb(t, "RssAnon", anon * PAGE_SIZE);
+    ap_kb(t, "RssFile", file * PAGE_SIZE);
+    ap_kb(t, "RssShmem", shmem * PAGE_SIZE);
+    ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
+    ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
+    ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
+    ap_kb(t, "VmLib", mm_bytes(mm, VM_FILE));
+    ap_kb(t, "VmSwap", 0);
+}
+
 /**
  * /proc/<pid>/status: the lines of Linux's that programs read, among them
  * the name, the state, the ids, the tracer, the memory in kilobytes, the
@@ -1773,25 +1797,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, pid_seen(p->sid));
     ap_ch(t, '\n');
     if (mm) {
-        unsigned long size = vm_total(&mm->vm);
-        unsigned long rss = mm_resident(mm) * PAGE_SIZE;
-        unsigned long anon, file, shmem;
-
-        rss_by_kind(mm, &anon, &file, &shmem);
-        ap_kb(t, "VmPeak", size);
-        ap_kb(t, "VmSize", size);
-        ap_kb(t, "VmLck", vm_locked(&mm->vm));
-        ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
-        ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
-        ap_kb(t, "VmRSS", rss);
-        ap_kb(t, "RssAnon", anon * PAGE_SIZE);
-        ap_kb(t, "RssFile", file * PAGE_SIZE);
-        ap_kb(t, "RssShmem", shmem * PAGE_SIZE);
-        ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
-        ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
-        ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
-        ap_kb(t, "VmLib", mm_bytes(mm, VM_FILE));
-        ap_kb(t, "VmSwap", 0);
+        procfs_status_memory(t, mm);
     }
     ap_str(t, "Threads:\t");
     ap_u32(t, p->tg->live);
