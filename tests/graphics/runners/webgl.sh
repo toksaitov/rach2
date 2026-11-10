@@ -2,19 +2,22 @@
 # webgl.sh: the WebGL conformance suite in chunks, each in a new browser,
 # inside a graphics guest, Rach2's or Debian's.
 #
-#   webgl.sh [-b BROWSER] [-v VERSION] [-k SIZE] [-s SUITE] [-o OUT] CHUNK|all
+#   webgl.sh [-g] [-b BROWSER] [-v VERSION] [-k SIZE] [-s SUITE] [-o OUT]
+#            CHUNK|all
 #
 # Runs chunk CHUNK, counted from 0, of SIZE pages (250) of the suite's list
 # for VERSION (2.0.1; or 1.0.4), or every chunk one after another with
 # `all`, in BROWSER (chromium; or firefox) under a headless Weston, the
 # suite served from SUITE (/usr/share/webgl/sdk/tests) on the loopback
-# address. Each chunk starts a new browser with a new profile, which
-# webgl.html drives through the suite's own harness. A browser that ends
-# before its chunk does, as Chromium did once in a whole 2.0.1 run of the
-# discovery run and failed 163 pages after it, is replaced by a new one for
-# the pages left, and the page it was running is `crash`. Each page that
-# does not pass is then run once more in a new browser, and its second
-# result is its verdict; the first is kept beside it.
+# address. Weston composites with Pixman, or with -g with its GL renderer,
+# as a guest with a GPU needs for both browsers to draw WebGL on it
+# (common.sh's runner_weston). Each chunk starts a new browser with a new
+# profile, which webgl.html drives through the suite's own harness. A
+# browser that ends before its chunk does, as Chromium did once in a whole
+# 2.0.1 run of the discovery run and failed 163 pages after it, is replaced
+# by a new one for the pages left, and the page it was running is `crash`.
+# Each page that does not pass is then run once more in a new browser, and
+# its second result is its verdict; the first is kept beside it.
 #
 # The harness ends a page after 20 s without a result, which webgl.html
 # reports as `timeout`, a status like any other, never a verdict on the run.
@@ -41,18 +44,20 @@ RUNNER_DIR=$(cd "$(dirname "$0")" && pwd)
 
 browser=chromium version=2.0.1 size=250 suite=/usr/share/webgl/sdk/tests out=.
 silence=120
-while getopts b:v:k:s:o: o; do
+# shellcheck disable=SC2034 # runner_weston reads RUNNER_RENDERER
+while getopts b:v:k:s:o:g o; do
     case $o in
         b) browser=$OPTARG ;;
         v) version=$OPTARG ;;
         k) size=$OPTARG ;;
         s) suite=$OPTARG ;;
         o) out=$OPTARG ;;
+        g) RUNNER_RENDERER=gl ;;
         *) exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
-[ $# -eq 1 ] || { echo "usage: webgl.sh [-b BROWSER] [-v VERSION] [-k SIZE] [-s SUITE] [-o OUT] CHUNK|all" >&2; exit 2; }
+[ $# -eq 1 ] || { echo "usage: webgl.sh [-g] [-b BROWSER] [-v VERSION] [-k SIZE] [-s SUITE] [-o OUT] CHUNK|all" >&2; exit 2; }
 which=$1
 case $browser in chromium|firefox) ;; *) echo "webgl: no browser $browser" >&2; exit 2 ;; esac
 case $version in 1.0.4|2.0.1) ;; *) echo "webgl: no version $version; 1.0.4 or 2.0.1" >&2; exit 2 ;; esac
