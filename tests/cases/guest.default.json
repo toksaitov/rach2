@@ -755,6 +755,41 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "ids", "count": 1}]}
     },
     {
+      "case_id": "guest.default.restartprobe",
+      "behavior": "A call that waits gives Linux 6.12's result when a stop and a continue, an ignored signal, or a handler with or without SA_RESTART reaches it, and a timed call that goes on ends at its first deadline.",
+      "units": ["default", "restartprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "restartprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "stop-timed", "checks": "After a stop and a continue, nanosleep, both clock_nanosleeps, poll, ppoll, select, pselect6 and the timed futex wait go on to their result and end at their first deadline, ppoll, select and pselect6 the stop's hold past it, and epoll_wait, semtimedop and rt_sigtimedwait return EINTR.", "source": "program"},
+        {"assertion_id": "stop-untimed", "checks": "After a stop and a continue, pause, rt_sigsuspend, poll, the futex wait, msgrcv and read without a timeout go on until they are woken, and semop returns EINTR.", "source": "program"},
+        {"assertion_id": "ignored-timed", "checks": "SIGWINCH, SIGCONT and an ignored SIGUSR2 leave each timed call to end at its deadline with its result, and write no remainder.", "source": "program"},
+        {"assertion_id": "ignored-untimed", "checks": "The ignored signals leave each untimed call to end when it is woken.", "source": "program"},
+        {"assertion_id": "restart-timed", "checks": "After a handler with SA_RESTART each timed call returns EINTR before its deadline, nanosleep and clock_nanosleep with the time left in their remainder and ppoll, select and pselect6 with it in their timeout.", "source": "program"},
+        {"assertion_id": "restart-untimed", "checks": "After a handler with SA_RESTART the read and the untimed futex wait go on until they are woken, and the other untimed calls return EINTR.", "source": "program"},
+        {"assertion_id": "plain-timed", "checks": "After a handler without SA_RESTART each timed call returns EINTR before its deadline, with the time left written as after one with it.", "source": "program"},
+        {"assertion_id": "plain-untimed", "checks": "After a handler without SA_RESTART each untimed call returns EINTR.", "source": "program"},
+        {"assertion_id": "direct", "checks": "restart_syscall made directly, and after a handler cut a nanosleep short, returns EINTR.", "source": "program"},
+        {"assertion_id": "trace", "checks": "A tracer reads -516 at the exit stop of a nanosleep that SIGWINCH cut short, then the signal's delivery stop, then the entry stop of restart_syscall, 0 on i386 and 219 on x86-64, and its exit stop with 0.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "restartprobe", "node": "tests/restartprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
       "case_id": "guest.default.usercopyfault",
       "behavior": "An open whose path runs from the end of a mapped page into an unmapped one fails with EFAULT, and the process survives it.",
       "units": ["default", "usercopyfault"],
