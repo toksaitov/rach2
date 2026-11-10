@@ -1165,9 +1165,12 @@ $(BED_FORWARD_DIR)/forward.ext2: bed/forward/forward.sh $(BED_FORWARD_SCENES) $(
 # `vm.sh prepare` makes when it is missing or stale: a download of the
 # pinned Debian cloud image and its packages, and a boot under the host's
 # KVM.
+# With ARCH=x86_64 the probe is the top Makefile's, which stages it.
 BED_SHM_PROBE = build/x86_64/tests/vgshmprobe
+ifneq ($(ARCH),x86_64)
 $(BED_SHM_PROBE): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C tests ARCH=x86_64 ../$(BED_SHM_PROBE)
+endif
 build/tests/cases/bed-shm/bed-shm.ext2: tests/kvm/bed-shm.sh $(BED_SHM_PROBE)
 	@set -e; work=; \
 	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
