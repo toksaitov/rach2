@@ -9,10 +9,12 @@
 # manifests and utils/programs.mk, the BusyBox applets from APPLETS, the
 # applet table of the BusyBox build (build/vendor/busybox/applet_tables-main.h
 # unless named), the pages from man/, the GNU ports and the packages of the
-# agents layer from their recipes, and the versions from the build scripts,
-# the GNU layer's source lists and the GRUB and keymap manifests. The licenses and the purposes of the five GNU programs that
-# are not ports, which no file states in a form a script can read, are the
-# tables LICENSES and GNU_TOOLS below, taken from the projects' Readmes.
+# agents layer from their recipes, the Debian layers' commands from their
+# commands lists, and the versions from the build scripts, the GNU layer's
+# source lists and the GRUB and keymap manifests. The licenses and the
+# purposes of the five GNU programs that are not ports, which no file states
+# in a form a script can read, are the tables LICENSES and GNU_TOOLS below,
+# taken from the projects' Readmes.
 # `make programs-md` runs this script into man/programs.md, and `tests/run
 # style` fails when the committed file differs from its output. The C locale
 # makes the order of the rows the same on every host.
@@ -436,6 +438,19 @@ BEGIN {
         printf "| `%s` | `%s` | `%s` | %s |\n", f[1], f[2], f[3], page(f[1])
     }
     close("vendor/gnu/debian/commands")
+    print ""
+    print "### Games packages"
+    print ""
+    print "The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands on both architectures, from its own Debian closure."
+    print ""
+    print "| Program | Package | Path | Page |"
+    print "| --- | --- | --- | --- |"
+    while ((getline line < "vendor/gnu/games/commands") > 0) {
+        if (line ~ /^#/) continue
+        split(line, f, " ")
+        printf "| `%s` | `%s` | `%s` | %s |\n", f[1], f[2], f[3], page(f[1])
+    }
+    close("vendor/gnu/games/commands")
     print ""
     print "GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos'"'"'s WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt). IGT'"'"'s tests, built from Debian'"'"'s intel-gpu-tools source in the Debian builder guest, are under `/usr/libexec/igt-gpu-tools` on x86-64, with its runner `igt_runner` ([igt_runner(1)](man1/igt_runner.1)), `igt_resume` and `igt_results` ([igt_resume(1)](man1/igt_resume.1)) and `igt_comms_decoder` in `/usr/bin`; the source is pinned in [igt/sources.txt](../vendor/gnu/igt/sources.txt). VK-GL-CTS 1.4.1.1 and 1.4.7.1, built in the same guest, are under `/opt/vk-gl-cts-VERSION` on x86-64, with `deqp-vk` and `glcts` ([deqp-vk(1)](man1/deqp-vk.1)); their sources are pinned in [vk-gl-cts/sources.txt](../vendor/gnu/vk-gl-cts/sources.txt)."
     print ""

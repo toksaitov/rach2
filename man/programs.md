@@ -381,6 +381,14 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 | `alsabat-test` | `alsa-utils` | `/usr/sbin/alsabat-test` | [alsa-utils(1)](man1/alsa-utils.1) |
 | `alsactl` | `alsa-utils` | `/usr/sbin/alsactl` | [alsa-utils(1)](man1/alsa-utils.1) |
 
+### Games packages
+
+The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands on both architectures, from its own Debian closure.
+
+| Program | Package | Path | Page |
+| --- | --- | --- | --- |
+| `innoextract` | `innoextract` | `/usr/bin/innoextract` | [innoextract(1)](man1/innoextract.1) |
+
 GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos's WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt). IGT's tests, built from Debian's intel-gpu-tools source in the Debian builder guest, are under `/usr/libexec/igt-gpu-tools` on x86-64, with its runner `igt_runner` ([igt_runner(1)](man1/igt_runner.1)), `igt_resume` and `igt_results` ([igt_resume(1)](man1/igt_resume.1)) and `igt_comms_decoder` in `/usr/bin`; the source is pinned in [igt/sources.txt](../vendor/gnu/igt/sources.txt). VK-GL-CTS 1.4.1.1 and 1.4.7.1, built in the same guest, are under `/opt/vk-gl-cts-VERSION` on x86-64, with `deqp-vk` and `glcts` ([deqp-vk(1)](man1/deqp-vk.1)); their sources are pinned in [vk-gl-cts/sources.txt](../vendor/gnu/vk-gl-cts/sources.txt).
 
 ### Compilers, debugger and browser
