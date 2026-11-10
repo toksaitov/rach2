@@ -243,6 +243,11 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach
 # tests/cases/guest.fault.json, which etude runs, each in a boot of its own, and
 # have no target here: each must end on signal 11 with the kernel's record of
 # the kill on the console and no panic.
+# `tests/run pure64`: the x86-64 kernel without the i386 ABI, built with
+# IA32=0 and booted with ia32_emulation=0, refusing an i386 program's exec
+# with ENOEXEC and int $0x80 with SIGSEGV while 32-bit code still runs. They
+# are the cases of tests/cases/guest.pure64.json, which etude runs, each in a
+# boot of its own, and have no target here.
 # `tests/run console`: the two probes that read from the console, which the
 # shared probe boot cannot run because they block until something is typed.
 # They are the cases of tests/cases/machine.console.json, which etude runs,
