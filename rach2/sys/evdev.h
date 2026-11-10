@@ -466,6 +466,24 @@ struct wait_queue *evdev_change_queue(void);
  */
 void evdev_sysfs_sync(void);
 
+/* The serio port of a touchpad's pass-through port, serio2, beside the
+ * i8042's keyboard port 0 and mouse port 1. */
+#define EVDEV_SERIO_PASS_THROUGH 2
+
+/** Give the serio port `port` the firmware ID `id`, which its
+ * `firmware_id` file and uevent show as Linux's serio core shows a port's
+ * PNP IDs; the string must stay. Defined in evdev_sysfs.c. */
+void evdev_sysfs_serio_firmware_id(int port, const char *id);
+
+/**
+ * Have `add` put a driver's own files below the directory of the serio
+ * port `port` when /sys makes it, as Linux's psmouse adds a protocol's
+ * attributes to its port: `add` gets the directory and returns 0 or
+ * -errno. NULL for none. Called by the driver when it binds, before the
+ * device's event device is published. Defined in evdev_sysfs.c.
+ */
+void evdev_sysfs_serio_files(int port, int (*add)(int dir));
+
 /** Start the worker that runs `evdev_sysfs_sync` at each change, kinputd,
  * after the first program has its pid, and sync the devices registered at
  * boot. Defined in evdev_sysfs.c. */

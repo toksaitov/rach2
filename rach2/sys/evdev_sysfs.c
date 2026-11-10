@@ -36,7 +36,9 @@
  *
  * The parent of a device is read from its EVIOCGPHYS, which each driver
  * writes as Linux's do: "isa0060/serioK/input0" is the i8042's port K,
- * under /sys/devices/platform/i8042/serioK, and "usb-N/input0" is the
+ * under /sys/devices/platform/i8042/serioK; "synaptics-pt/serio0/input0"
+ * is the touchpad's pass-through port, serio2 below serio1, as Linux
+ * numbers it after the i8042's two; and "usb-N/input0" is the
  * device of the USB stack's entry N - 1 (hid.c), whose interface directory
  * B-P:C.I is made below its device. Any other, the ACPI buttons', is a
  * device with no parent here, under /sys/devices/virtual/input, as Linux
@@ -48,8 +50,10 @@
 #define UEVENT_VARS_MAX     2048
 #define KEY_MIN_INTERESTING 113
 
-/* The i8042's ports: 0 the keyboard's, 1 the mouse's. */
-#define SERIO_PORTS 2
+/* The serio ports: the i8042's, 0 the keyboard's and 1 the mouse's, and
+ * the touchpad's pass-through port, EVDEV_SERIO_PASS_THROUGH. */
+#define SERIO_I8042_PORTS 2
+#define SERIO_PORTS       3
 
 /*
  * A device published: the registration whose entries these are, 0 for
@@ -84,6 +88,11 @@ static struct {
     int bus_serio, serio_devices;
     int serio[SERIO_PORTS];
 } parents;
+
+/* Each serio port's firmware ID, NULL for none, and the function that adds
+ * its driver's own files to its directory, NULL for none. */
+static const char *serio_firmware[SERIO_PORTS];
+static int (*serio_files[SERIO_PORTS])(int dir);
 
 /* What a show writes: the bytes so far, which may pass `cap`, so that the
  * show returns how many it needs; a `cap` of 0 counts alone. */
@@ -479,26 +488,36 @@ static int32_t show_event(void *obj, int arg, char *buf, uint32_t cap)
     return (int32_t)e.len;
 }
 
-/* The `arg` of a serio port's files: the port times 8 plus one of these. */
+/* The `arg` of a serio port's files: the port times 16 plus one of
+ * these. */
 #define SERIO_DESCRIPTION 0
 #define SERIO_MODALIAS    1
 #define SERIO_BIND_MODE   2
 #define SERIO_TYPE        3 /* to 6: id/type, proto, id and extra */
 #define SERIO_UEVENT      7
+#define SERIO_FIRMWARE_ID 8
+
+/** A serio port's type, Linux's SERIO_8042_XL for the keyboard's
+ * translated port, SERIO_8042 for the mouse's and SERIO_PS_PSTHRU for a
+ * pass-through port. */
+static uint32_t serio_type(int port)
+{
+    return port == 0 ? 0x06u : port == EVDEV_SERIO_PASS_THROUGH ? 0x05u : 0x01u;
+}
 
 /** Append a serio port's modalias, "serio:ty06pr00id00ex00", with its
- * type, 06 for the keyboard's translated port and 01 for the mouse's. */
+ * type. */
 static void emit_serio_alias(struct emit *e, int port)
 {
     emit_str(e, "serio:ty");
-    emit_hex(e, port == 0 ? 0x06u : 0x01u, 2, 1);
+    emit_hex(e, serio_type(port), 2, 1);
     emit_str(e, "pr00id00ex00");
 }
 
-/** A file of the i8042's port, as Linux's serio core writes it: its
- * description, modalias, bind mode, id/ files and uevent, with the driver
- * bound to it, atkbd or psmouse. The i8042's own uevent with a `arg` of
- * -1. */
+/** A file of a serio port, as Linux's serio core writes it: its
+ * description, modalias, bind mode, firmware ID, id/ files and uevent,
+ * with the driver bound to it, atkbd or psmouse. The i8042's own uevent
+ * with a `arg` of -1. */
 static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
 {
     int port, what;
@@ -510,11 +529,17 @@ static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
         emit_str(&e, "DRIVER=i8042\nMODALIAS=platform:i8042\n");
         return (int32_t)e.len;
     }
-    port = arg >> 3;
-    what = arg & 7;
+    port = arg >> 4;
+    what = arg & 15;
     switch (what) {
     case SERIO_DESCRIPTION:
-        emit_str(&e, port == 0 ? "i8042 KBD port\n" : "i8042 AUX port\n");
+        emit_str(&e, port == 0                          ? "i8042 KBD port\n"
+                     : port == EVDEV_SERIO_PASS_THROUGH ? "Synaptics pass-through\n"
+                                                        : "i8042 AUX port\n");
+        break;
+    case SERIO_FIRMWARE_ID:
+        emit_str(&e, serio_firmware[port] ? serio_firmware[port] : "");
+        emit_str(&e, "\n");
         break;
     case SERIO_MODALIAS:
         emit_serio_alias(&e, port);
@@ -524,17 +549,19 @@ static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
         emit_str(&e, "auto\n");
         break;
     case SERIO_UEVENT:
-        emit_str(&e, port == 0 ? "DRIVER=atkbd\nSERIO_TYPE=06" : "DRIVER=psmouse\nSERIO_TYPE=01");
+        emit_str(&e, port == 0 ? "DRIVER=atkbd\nSERIO_TYPE=" : "DRIVER=psmouse\nSERIO_TYPE=");
+        emit_hex(&e, serio_type(port), 2, 0);
         emit_str(&e, "\nSERIO_PROTO=00\nSERIO_ID=00\nSERIO_EXTRA=00\nMODALIAS=");
         emit_serio_alias(&e, port);
         emit_str(&e, "\n");
+        if (serio_firmware[port] && serio_firmware[port][0]) {
+            emit_str(&e, "SERIO_FIRMWARE_ID=");
+            emit_str(&e, serio_firmware[port]);
+            emit_str(&e, "\n");
+        }
         break;
     default:
-        emit_hex(&e,
-                 what == SERIO_TYPE && port == 0 ? 0x06u
-                 : what == SERIO_TYPE            ? 0x01u
-                                                 : 0u,
-                 2, 0);
+        emit_hex(&e, what == SERIO_TYPE ? serio_type(port) : 0u, 2, 0);
         emit_str(&e, "\n");
         break;
     }
@@ -702,13 +729,15 @@ static int serio_bus_devices(void)
     return parents.serio_devices;
 }
 
-/** The i8042's port `port`, serioK below the i8042, with its files and
- * links, made on its first use. */
+/** The serio port `port`, serioK below the i8042, or below serio1 for the
+ * pass-through port, with its files and links and its driver's, made on
+ * its first use. */
 static int serio_dir(int port)
 {
     static const struct sysfs_attr attrs[] = {{"description", 0444u, show_serio, NULL},
                                               {"modalias", 0444u, show_serio, NULL},
                                               {"bind_mode", 0444u, show_serio, NULL}};
+    static const struct sysfs_attr firmware = {"firmware_id", 0444u, show_serio, NULL};
     static const struct sysfs_attr ids[] = {{"type", 0444u, show_serio, NULL},
                                             {"proto", 0444u, show_serio, NULL},
                                             {"id", 0444u, show_serio, NULL},
@@ -720,13 +749,17 @@ static int serio_dir(int port)
         return parents.serio[port];
     }
     name_num(name, sizeof(name), "serio", (uint32_t)port);
-    h = bus < 0 ? bus : dir_at(i8042_dir(), name, &made);
+    h = bus < 0
+            ? bus
+            : dir_at(port == EVDEV_SERIO_PASS_THROUGH ? serio_dir(1) : i8042_dir(), name, &made);
     if (h > 0 && made) {
         id = sysfs_add_dir(h, "id");
-        if (add_attrs(h, attrs, 3, NULL, port * 8 + SERIO_DESCRIPTION) < 0 || id < 0 ||
-            add_attrs(id, ids, 4, NULL, port * 8 + SERIO_TYPE) < 0 ||
-            sysfs_add_uevent(h, show_serio, NULL, port * 8 + SERIO_UEVENT) < 0 ||
-            sysfs_add_link(h, "subsystem", parents.bus_serio) < 0) {
+        if (add_attrs(h, attrs, 3, NULL, port * 16 + SERIO_DESCRIPTION) < 0 ||
+            sysfs_add_attr(h, &firmware, NULL, port * 16 + SERIO_FIRMWARE_ID) < 0 || id < 0 ||
+            add_attrs(id, ids, 4, NULL, port * 16 + SERIO_TYPE) < 0 ||
+            sysfs_add_uevent(h, show_serio, NULL, port * 16 + SERIO_UEVENT) < 0 ||
+            sysfs_add_link(h, "subsystem", parents.bus_serio) < 0 ||
+            (serio_files[port] && serio_files[port](h) < 0)) {
             sysfs_remove(h);
             return -ENOMEM;
         }
@@ -813,7 +846,10 @@ static int parent_of(struct input_sys *r)
 
     if (starts(phys, "isa0060/serio")) {
         n = number_at(phys + 13);
-        return n >= 0 && n < SERIO_PORTS ? serio_dir(n) : 0;
+        return n >= 0 && n < SERIO_I8042_PORTS ? serio_dir(n) : 0;
+    }
+    if (starts(phys, "synaptics-pt/serio0/")) {
+        return serio_dir(EVDEV_SERIO_PASS_THROUGH);
     }
     if (starts(phys, "usb-")) {
         n = number_at(phys + 4);
@@ -1001,6 +1037,20 @@ static void withdraw(struct input_sys *r)
     unmake(r);
     k_memset(r, 0, sizeof(*r));
     r->failed = failed;
+}
+
+void evdev_sysfs_serio_firmware_id(int port, const char *id)
+{
+    if (port >= 0 && port < SERIO_PORTS) {
+        serio_firmware[port] = id;
+    }
+}
+
+void evdev_sysfs_serio_files(int port, int (*add)(int dir))
+{
+    if (port >= 0 && port < SERIO_PORTS) {
+        serio_files[port] = add;
+    }
 }
 
 void evdev_sysfs_sync(void)

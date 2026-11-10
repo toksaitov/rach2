@@ -38,11 +38,12 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy);
 
 /* What a mouse has beyond X, Y and its left, right and middle buttons, for
  * `mouse_register`. */
-#define MOUSE_WHEEL   0x01 /* a wheel, REL_WHEEL */
-#define MOUSE_HWHEEL  0x02 /* a horizontal wheel, REL_HWHEEL */
-#define MOUSE_HI_RES  0x04 /* each wheel's turn in 120ths as well, REL_*WHEEL_HI_RES */
-#define MOUSE_SIDE    0x08 /* the side and extra buttons, BTN_SIDE and BTN_EXTRA */
-#define MOUSE_POINTER 0x10 /* INPUT_PROP_POINTER, which Linux's PS/2 driver sets */
+#define MOUSE_WHEEL     0x01 /* a wheel, REL_WHEEL */
+#define MOUSE_HWHEEL    0x02 /* a horizontal wheel, REL_HWHEEL */
+#define MOUSE_HI_RES    0x04 /* each wheel's turn in 120ths as well, REL_*WHEEL_HI_RES */
+#define MOUSE_SIDE      0x08 /* the side and extra buttons, BTN_SIDE and BTN_EXTRA */
+#define MOUSE_POINTER   0x10 /* INPUT_PROP_POINTER, which Linux's PS/2 driver sets */
+#define MOUSE_NO_MIDDLE 0x20 /* no BTN_MIDDLE, as a TrackPoint of two buttons */
 
 /* The buttons of `mouse_report`, a bit each. */
 #define MOUSE_LEFT         0x01
@@ -54,9 +55,10 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy);
 /**
  * Register a mouse as an event device: `name`, `phys`, `bustype`, `vendor`
  * and `product` as `evdev_register` and `evdev_describe` take them, and
- * `caps` MOUSE_*. The device has REL_X, REL_Y, BTN_LEFT, BTN_RIGHT and
- * BTN_MIDDLE, and what `caps` adds. Any context. Returns the device, or
- * NULL when every node is taken, which `mouse_report` takes as well.
+ * `caps` MOUSE_*. The device has REL_X, REL_Y, BTN_LEFT, BTN_RIGHT and,
+ * without MOUSE_NO_MIDDLE, BTN_MIDDLE, and what `caps` adds. Any context.
+ * Returns the device, or NULL when every node is taken, which
+ * `mouse_report` takes as well.
  */
 struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustype, uint16_t vendor,
                              uint16_t product, unsigned int caps);

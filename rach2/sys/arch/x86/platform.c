@@ -19,6 +19,7 @@
 #include "board.h"
 #include "itco.h"
 #include "diag.h"
+#include "i8042.h"
 #include "ioapic.h"
 #include "ps2kbd.h"
 #include "lapic.h"
@@ -47,6 +48,7 @@
 #include "../../boot.h"
 #include "../../drm/i915/i915.h"
 #include "../../cmdline.h"
+#include "../../evdev.h"
 #include "../../input.h"
 #include "../../iommu.h"
 #include "../../klog.h"
@@ -427,11 +429,14 @@ void platform_board_init(void)
     itco_init();
 }
 
-/** ACPICA first, since the VT-d units are found through its tables; the
- * units only on x86-64, whose VMs are given devices. */
+/** ACPICA first, since the VT-d units are found through its tables, and
+ * the 8042's PNP IDs it found given to its serio ports in /sys; the units
+ * only on x86-64, whose VMs are given devices. */
 void platform_firmware_start(void)
 {
     acpica_boot(acpi_get()->found ? acpi_get()->rsdp : 0);
+    evdev_sysfs_serio_firmware_id(I8042_KBD_PORT, i8042_firmware_id(I8042_KBD_PORT));
+    evdev_sysfs_serio_firmware_id(I8042_AUX_PORT, i8042_firmware_id(I8042_AUX_PORT));
 #if defined(__x86_64__)
     iommu_boot();
 #endif
@@ -441,6 +446,7 @@ void platform_threads_start(void)
 {
     acpica_thread_start();
     wlan_work_threads_start();
+    ps2mouse_thread_start();
 }
 
 /**
