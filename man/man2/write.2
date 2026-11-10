@@ -79,9 +79,17 @@ and
 .Dv ONLCR
 set, a newline becomes carriage return followed by newline.
 The return value counts input bytes, before this conversion.
+Console writes give waiting processors and queued threads a turn after
+each block of at most 256 input bytes; one block and its serial waits
+still hold the kernel lock.
 Pseudoterminal slave output uses the same processing and enters the
-master's 4096-byte ring; bytes that arrive while the ring is full, echo
-included, are discarded and still counted as written.
+master's 4096-byte ring.
+A slave writer waits for room, or returns a short count or
+.Er EAGAIN
+when nonblocking; echo that arrives while the ring is full is discarded.
+One slave write reaches the ring before another begins, as
+.Xr console 4
+describes.
 Writing a slave whose master has closed fails with
 .Er EIO .
 Master writes supply input to the slave's line discipline and may wait

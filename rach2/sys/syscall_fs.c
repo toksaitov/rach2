@@ -925,6 +925,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             }
             tty_write(&console_tty, (const unsigned char *)kbuf, (int)chunk);
             done += chunk;
+            sched_service_point();
         }
         return (int32_t)count;
     }
