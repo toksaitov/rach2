@@ -1,0 +1,54 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran eight
+piglit tests at once, a process on each CPU:
+
+    PIGLIT_NO_FAST_SKIP=1 piglit run -c -o -p surfaceless_egl -l verbose --test-list LIST quick OUT
+
+with LIST these names:
+
+    shaders@glsl-fs-texturecube-2-bias
+    spec@!opengl 1.1@streaming-texture-leak
+    spec@arb_framebuffer_object@fbo-mipmap-copypix
+    spec@arb_map_buffer_range@map_invalidate_buffer_bit decrement-offset
+    spec@arb_query_buffer_object@qbo
+    spec@arb_sample_shading@builtin-gl-sample-mask-simple 6
+    spec@arb_shader_image_load_store@atomicity
+    spec@arb_shader_image_load_store@shader-mem-barrier
+
+QEMU 10.2.1 ended with SIGSEGV, exit status 139, 11 s after the tests
+began and before any had ended, in two runs of two. The second run's lines,
+each after the host's uptime in seconds, with the stack a signal handler
+preloaded into QEMU printed:
+
+    65301.46 D3D12: Removing Device.
+    65301.66 D3D12: Removing Device.
+    65301.68 qtrace: signal 11
+    65301.68 qtrace.so(+0x1326) [0x7c8fb9c67326]
+    65301.68 /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x48af7e) [0x7c8fad68af7e]
+    65301.68 /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x20f341) [0x7c8fad40f341]
+    65301.68 /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x39cd70) [0x7c8fad59cd70]
+    65301.69 qtrace: end
+    65301.76 Connection to 127.0.0.1 closed by remote host.
+    65301.90 qemu-shim: exit status 139
+
+The frames in libgallium, by Ubuntu's debug information for build ID
+b089ec2f62ded38e9327502246aa4ccfb7929b24:
+
+    0x48af7e st_upload_constants /usr/include/x86_64-linux-gnu/bits/string_fortified.h:29 (discriminator 1) st_upload_constants src/mesa/state_tracker/st_atom_constbuf.c:141 (discriminator 1)
+    0x20f341 st_prepare_draw src/mesa/state_tracker/st_util.h:137
+    0x39cd70 _mesa_draw_arrays.part.0 src/mesa/main/draw.c:1178
+
+The host's kernel logged, 6 s before the first line above:
+
+    [65295.508201] misc dxg: dxgk: dxgkio_make_resident: Ioctl failed: -22
+
+The first run printed "D3D12: Removing Device." three times and virglrenderer's
+"Map failed for element buffer" before QEMU ended. Earlier runs of piglit's
+list with a process on each CPU ended the same way after the same line,
+with "Pure virtual function called!", "realloc(): invalid pointer", a fault
+in d3d12_fence_finish (src/gallium/drivers/d3d12/d3d12_fence.cpp:148) or one
+in libnvwgf2umx.so, and the kernel's line before one of them was
+
+    misc dxg: dxgk: dxgkio_escape: Ioctl failed: -75
+
+Each of the eight tests passes or fails without ending QEMU when it runs
+alone, and so do the first four at once and the last four at once.

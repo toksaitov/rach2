@@ -1,0 +1,53 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran one case alone:
+
+    EGL_PLATFORM=surfaceless ./glcts --deqp-caselist-file=LIST --deqp-surface-type=pbuffer \
+        --deqp-gl-config-name=rgba8888d24s8ms0 --deqp-surface-width=256 --deqp-surface-height=256 \
+        --deqp-watchdog=enable
+
+of VK-GL-CTS 1.4.1.1, with LIST the one line
+
+    dEQP-GLES3.functional.transform_feedback.random.separate.points.1
+
+QEMU 10.2.1 ended with SIGSEGV, exit status 139. Its stack, printed by a
+signal handler preloaded into it:
+
+    /usr/lib/x86_64-linux-gnu/libc.so.6(+0x45cb0) [0x78dbbc245cb0]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0xe657a1) [0x78dbb20657a1]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0xe65901) [0x78dbb2065901]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x8c15d7) [0x78dbb1ac15d7]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x8c2c61) [0x78dbb1ac2c61]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x8c50c4) [0x78dbb1ac50c4]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x43ed6e) [0x78dbb163ed6e]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x43fdab) [0x78dbb163fdab]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x441087) [0x78dbb1641087]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x45a43) [0x78db8c500a43]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x25f11) [0x78db8c4e0f11]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x30ca4) [0x78db8c4ebca4]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu-gl.so(virtio_gpu_virgl_process_cmd+0x1aa6) [0x78dbb10e1046]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu.so(virtio_gpu_process_cmdq+0x8e) [0x78db8c56aa3e]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu-gl.so(+0x752c) [0x78dbb10e252c]
+    /usr/bin/qemu-system-x86_64(aio_bh_call+0x2e) [0x561a348e51fe]
+    /usr/bin/qemu-system-x86_64(aio_bh_poll+0xb6) [0x561a348e5326]
+    /usr/bin/qemu-system-x86_64(aio_dispatch+0x3b) [0x561a348d4a5b]
+    /usr/bin/qemu-system-x86_64(+0xba5396) [0x561a348e7396]
+    /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0(+0x60c1b) [0x78dbbd151c1b]
+    /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0(g_main_context_dispatch+0x40) [0x78dbbd151e90]
+    /usr/bin/qemu-system-x86_64(main_loop_wait+0x268) [0x561a348ebd48]
+    /usr/bin/qemu-system-x86_64(qemu_main_loop+0x182) [0x561a34502d02]
+    /usr/bin/qemu-system-x86_64(+0xadf5e8) [0x561a348215e8]
+    /usr/bin/qemu-system-x86_64(main+0x79) [0x561a34231a89]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(+0x2a601) [0x78dbbc22a601]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x88) [0x78dbbc22a718]
+    /usr/bin/qemu-system-x86_64(_start+0x25) [0x561a34235165]
+
+The frames in libgallium, by Ubuntu's debug information for build ID
+b089ec2f62ded38e9327502246aa4ccfb7929b24:
+
+    0xe657a1 d3d12_disable_fake_so_buffers(d3d12_context*) src/gallium/drivers/d3d12/d3d12_context_graphics.cpp:1929 (discriminator 1)
+    0xe65901 d3d12_set_stream_output_targets(pipe_context*, unsigned int, pipe_stream_output_target**, unsigned int const*, mesa_prim) src/gallium/drivers/d3d12/d3d12_context_graphics.cpp:1593 (discriminator 1)
+    0x8c15d7 tc_batch_execute src/gallium/auxiliary/util/u_threaded_context.c:2328 (discriminator 1)
+    0x8c2c61 _tc_sync.isra.0 src/gallium/auxiliary/util/u_threaded_context.c:763
+    0x8c50c4 tc_get_query_result src/gallium/auxiliary/util/u_threaded_context.c:1309 (discriminator 4)
+    0x43ed6e get_query_result src/mesa/main/queryobj.c:305 (discriminator 1)
+    0x43fdab get_query_object src/mesa/main/queryobj.c:405 (discriminator 1)
+    0x441087 _mesa_GetQueryObjectuiv src/mesa/main/queryobj.c:1273

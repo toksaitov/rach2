@@ -1,0 +1,60 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran one case alone:
+
+    EGL_PLATFORM=surfaceless ./glcts --deqp-caselist-file=LIST --deqp-surface-type=pbuffer \
+        --deqp-gl-config-name=rgba8888d24s8ms0 --deqp-surface-width=256 --deqp-surface-height=256 \
+        --deqp-watchdog=enable
+
+of VK-GL-CTS 1.4.1.1, with LIST the one line
+
+    dEQP-GLES31.functional.shaders.builtin_functions.common.abs.float_lowp_tess_eval
+
+QEMU 10.2.1 ended with SIGSEGV, exit status 139. Its stack, printed by a
+signal handler preloaded into it:
+
+    /usr/lib/x86_64-linux-gnu/libc.so.6(+0x45cb0) [0x737dc2c45cb0]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x6475e4) [0x737db98475e4]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0xe97c42) [0x737dba097c42]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0xea38e5) [0x737dba0a38e5]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0xe0b2cb) [0x737dba00b2cb]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0xe0def9) [0x737dba00def9]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0xe84c23) [0x737dba084c23]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x8c1c0c) [0x737db9ac1c0c]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x8c2c61) [0x737db9ac2c61]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x8c377a) [0x737db9ac377a]
+    /usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so(+0x457e52) [0x737db9657e52]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x46126) [0x737d8078b126]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu.so(virtio_gpu_process_cmdq+0x8e) [0x737da400ca3e]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu-gl.so(+0x752c) [0x737d9c00f52c]
+    /usr/bin/qemu-system-x86_64(aio_bh_call+0x2e) [0x58fa73a921fe]
+    /usr/bin/qemu-system-x86_64(aio_bh_poll+0xb6) [0x58fa73a92326]
+    /usr/bin/qemu-system-x86_64(aio_dispatch+0x3b) [0x58fa73a81a5b]
+    /usr/bin/qemu-system-x86_64(+0xba5396) [0x58fa73a94396]
+    /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0(+0x60c1b) [0x737dc3beac1b]
+    /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0(g_main_context_dispatch+0x40) [0x737dc3beae90]
+    /usr/bin/qemu-system-x86_64(main_loop_wait+0x268) [0x58fa73a98d48]
+    /usr/bin/qemu-system-x86_64(qemu_main_loop+0x182) [0x58fa736afd02]
+    /usr/bin/qemu-system-x86_64(+0xadf5e8) [0x58fa739ce5e8]
+    /usr/bin/qemu-system-x86_64(main+0x79) [0x58fa733dea89]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(+0x2a601) [0x737dc2c2a601]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x88) [0x737dc2c2a718]
+    /usr/bin/qemu-system-x86_64(_start+0x25) [0x58fa733e2165]
+
+The frames in libgallium, by Ubuntu's debug information for build ID
+b089ec2f62ded38e9327502246aa4ccfb7929b24:
+
+    0x6475e4 ralloc_free src/util/ralloc.c:307
+    0xe97c42 dxil_nir_fixup_tess_level_for_domain src/microsoft/compiler/dxil_nir_tess.c:362
+    0xea38e5 nir_to_dxil src/microsoft/compiler/nir_to_dxil.c:6687 (discriminator 43)
+    0xe0b2cb select_shader_variant(d3d12_selection_context*, d3d12_shader_selector*, d3d12_shader_selector*, d3d12_shader_selector*) src/gallium/drivers/d3d12/d3d12_compiler.cpp:140 (discriminator 2)
+    0xe0def9 d3d12_select_shader_variants src/gallium/drivers/d3d12/d3d12_compiler.cpp:1520
+    0xe84c23 d3d12_draw_vbo(pipe_context*, pipe_draw_info const*, unsigned int, pipe_draw_indirect_info const*, pipe_draw_start_count_bias const*, unsigned int) src/gallium/drivers/d3d12/d3d12_draw.cpp:973
+    0x8c1c0c tc_batch_execute src/gallium/auxiliary/util/u_threaded_context_calls.h:11
+    0x8c2c61 _tc_sync.isra.0 src/gallium/auxiliary/util/u_threaded_context.c:763
+    0x8c377a tc_flush src/gallium/auxiliary/util/u_threaded_context.c:3624
+    0x457e52 _mesa_fence_sync src/util/simple_mtx.h:109
+
+The same run of
+dEQP-GLES31.functional.shaders.builtin_functions.common.abs.vec4_lowp_geometry
+and of
+dEQP-GLES31.functional.shaders.builtin_functions.common.abs.float_mediump_compute
+passed, with QEMU's exit status 0.
