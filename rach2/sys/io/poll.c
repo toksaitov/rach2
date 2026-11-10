@@ -80,6 +80,9 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
     if (e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) {
         return (short)(events & (POLLIN | POLLOUT));
     }
+    if (e->type == FD_TYPE_CONSOLE && e->ofd && tty_desc_hung(&console_tty, e->ofd->tty_hangups)) {
+        return (short)TTY_HUNG_POLL;
+    }
     if (e->type == FD_TYPE_CONSOLE) {
         short want = 0;
         if (e->flags & FD_FLAG_READ) {

@@ -163,6 +163,7 @@
 #define SYS_MUNLOCK                 150
 #define SYS_MLOCKALL                151
 #define SYS_MUNLOCKALL              152
+#define SYS_VHANGUP                 153
 #define SYS_MODIFY_LDT              154
 #define SYS_PRCTL                   157
 #define SYS_ARCH_PRCTL              158

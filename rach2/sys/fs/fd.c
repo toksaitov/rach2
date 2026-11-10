@@ -502,7 +502,7 @@ int fd_table_reach(fd_table_t *table, int fd)
     return fd_table_grow(table, fd + 1);
 }
 
-int fd_init_stdio(fd_table_t *table)
+int fd_init_stdio(fd_table_t *table, uint32_t hangups)
 {
     int i;
 
@@ -519,6 +519,7 @@ int fd_init_stdio(fd_table_t *table)
             }
             return -1;
         }
+        ofd->tty_hangups = hangups;
         table->entries[i].type = FD_TYPE_CONSOLE;
         table->entries[i].node = NULL;
         table->entries[i].sock = NULL;

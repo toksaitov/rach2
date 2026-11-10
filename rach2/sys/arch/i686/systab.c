@@ -129,6 +129,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_RENAMEAT] = sys_renameat;
     table[SYS_RENAMEAT2] = sys_renameat2;
     table[SYS_IOCTL] = sys_ioctl;
+    table[SYS_VHANGUP] = sys_vhangup;
     table[SYS_DUP] = sys_dup;
     table[SYS_DUP2] = sys_dup2;
     table[SYS_PIPE] = sys_pipe;

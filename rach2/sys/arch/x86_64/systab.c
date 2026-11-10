@@ -145,6 +145,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask;
     table[SYS_RT_SIGRETURN] = sys_rt_sigreturn;
     table[SYS_IOCTL] = sys_ioctl;
+    table[SYS_VHANGUP] = sys_vhangup;
     table[SYS_PREAD64] = sys_pread64;
     table[SYS_PWRITE64] = sys_pwrite64;
     table[SYS_READV] = sys_readv;

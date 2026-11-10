@@ -496,6 +496,13 @@ static const struct file_ops ptm_ops = {ptm_read,  ptm_write, ptm_poll, ptm_ioct
 
 /* the slave end */
 
+/** Whether the slave description `e` of `p` is one a vhangup(2) since its
+ * open has hung up (`tty_desc_hung`). */
+static int pts_hung(const fd_entry_t *e, const struct pty *p)
+{
+    return e->ofd && tty_desc_hung(&p->slave, e->ofd->tty_hangups);
+}
+
 /**
  * Read slave input, draining queued bytes before the master's closing EOF.
  *
@@ -519,7 +526,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!(e->flags & FD_FLAG_READ)) {
         return -EBADF;
     }
-    if (count == 0) {
+    if (count == 0 || pts_hung(e, p)) {
         return 0;
     }
     want = count;
@@ -645,6 +652,9 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
     }
+    if (pts_hung(e, p)) {
+        return -EIO;
+    }
     if (count == 0) {
         return 0;
     }
@@ -690,7 +700,12 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
-    short revents = tty_poll(&p->slave, events, wq);
+    short revents;
+
+    if (pts_hung(e, p)) {
+        return (short)TTY_HUNG_POLL;
+    }
+    revents = tty_poll(&p->slave, events, wq);
 
     if (!*wq) {
         *wq = &p->slave.input_wq;
@@ -798,6 +813,9 @@ int pty_open_slave(int index, int flags)
     e->sock = NULL;
     e->ops = &pts_ops;
     e->priv = p;
+    if (e->ofd) {
+        e->ofd->tty_hangups = p->slave.vhangups;
+    }
     if ((flags & 3) == 1) {
         e->flags = FD_FLAG_WRITE;
     } else if ((flags & 3) == 2) {
@@ -842,6 +860,24 @@ int tty_controlling(int sid, uint32_t *dev, int *fg_pgid)
         }
     }
     return 0;
+}
+
+struct tty *tty_session_tty(int sid)
+{
+    struct pty *p;
+
+    if (sid == 0) {
+        return NULL;
+    }
+    if (console_tty.sid == sid) {
+        return &console_tty;
+    }
+    for (p = ptys; p; p = p->next) {
+        if (p->slave.sid == sid) {
+            return &p->slave;
+        }
+    }
+    return NULL;
 }
 
 int pty_session_slave(int sid)
