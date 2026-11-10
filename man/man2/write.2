@@ -264,20 +264,27 @@ describes, i386's
 and
 .Nm pwritev2
 (379), which adds flags in the sixth.
+.Pp
+The native x86-64
 .Nm pwritev2
-writes as
+call is 328, with a whole offset in its fourth argument and flags in its
+sixth; its fifth argument is ignored.
+Both forms write as
 .Nm writev
 at offset -1, and after a write with
 .Dv RWF_DSYNC
 or
 .Dv RWF_SYNC
-does what
+do what
 .Fn fdatasync
 or
 .Fn fsync
-does; another flag but
+does.
+.Dv RWF_APPEND
+writes at the file's end under its inode lock, moving the descriptor's
+offset only when the supplied offset is -1.
 .Dv RWF_HIPRI
-is
+is also accepted; another flag is
 .Er EOPNOTSUPP .
 .Sh RETURN VALUES
 On success, these functions return the number of bytes written.

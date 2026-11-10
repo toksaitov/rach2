@@ -45,7 +45,10 @@ static const unsigned char ia32_order[IA32_GREGS] = {
 #define NT_386_TLS  0x200u
 #define TLS_ENTRIES (GDT_TLS_MAX - GDT_TLS_MIN + 1)
 
-/** Write the low halves of `t`'s saved registers in i386's note order. */
+/**
+ * Write the low halves of `t`'s saved registers in i386's note order.
+ * The caller holds the big lock and supplies IA32_GREGS words at `regs`.
+ */
 void ia32_regs_get(const process_t *t, uint32_t *regs)
 {
     unsigned long r[ARCH_GREGS];
@@ -57,7 +60,7 @@ void ia32_regs_get(const process_t *t, uint32_t *regs)
     }
 }
 
-/** The maximum bytes of floating-point and TLS notes for one thread. */
+/** Return the maximum bytes of floating-point and TLS notes for one thread. */
 uint32_t ia32_core_fp_size(void)
 {
     uint32_t xstate = fpu_xstate_size();

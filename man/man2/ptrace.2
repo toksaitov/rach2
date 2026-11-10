@@ -219,6 +219,8 @@ at
 A tracer changes only the flags a program may change; the data segment
 registers take a null selector, the user data selector or the TLS entry's
 on i386, and CS and SS only the ones they have.
+On x86-64 CS takes either user code selector and SS takes a nonzero
+selector at privilege 3, including an LDT stack selector.
 On x86-64 DS, ES, FS and GS read the thread's selectors and take a null
 selector, 3, the user data selector, the user code selector, a TLS
 entry's or any of the LDT at privilege 3, which Linux also takes, and the
@@ -487,7 +489,8 @@ and
 of
 .Vt user_regs_struct32 ,
 68 bytes, the low halves of the tracee's registers, a write zero-extended
-and a selector written to FS or GS loading the base its TLS entry gives;
+and a selector written to FS or GS loading the base its TLS or LDT
+entry gives;
 .Dv PTRACE_GETFPREGS
 and
 .Dv PTRACE_SETFPREGS
