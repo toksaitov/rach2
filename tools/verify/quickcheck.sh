@@ -17,8 +17,9 @@
 # narrowed to the shared kernel files. A whole check of the tree runs when
 # its inputs changed: `check_sources.sh`, `probecheck.sh` and
 # `nativecheck.sh`, guestcheck, `linkcheck.sh`, mancheck and
-# rach2/syscalls.md, the dev-log index, and with a built etude the suite
-# inventory and `suitecheck.sh`.
+# rach2/syscalls.md, the dev-log index, and the suite inventory and
+# `suitecheck.sh`, with an etude that `make build/tools/etude/etude` brings
+# up to date in this clone first.
 #
 # The rough reading judges only the lines the change adds, since older code
 # does not all follow these rules: a C function whose block is missing, a new
@@ -29,10 +30,15 @@
 # Writing and Comments sections of AGENTS.md.
 #
 # With -p, for a push, it also runs cppcheck and the kernel's Clang warnings
-# when the versions tools/setup/judges records are here, and links the host
-# tests and fuzz harnesses that compile a changed kernel source, since a new
-# call in that source needs a stub there. Only an undefined symbol counts:
-# the compile is rougher than the suite's.
+# under the versions tools/setup/judges records, and links the host tests and
+# fuzz harnesses that compile a changed kernel source, since a new call in
+# that source needs a stub there. Only an undefined symbol counts: the
+# compile is rougher than the suite's. When the local cppcheck or clang is
+# not the recorded one, as on a Mac, that check runs on the testing host, or
+# the host RACH2_STYLE_HOST names, in one ssh call that sends the parts of
+# the tree the checks read, some 10 MB compressed, and brings the findings
+# back; -R is that run's side on the host. Only when no host answers, or an
+# empty RACH2_STYLE_HOST names none, is the check left out, with a warning.
 #
 # TREE is a whole copy of the tree as the change leaves it, FILES its changed
 # paths, CFILES those of them that are in-house C, one a line, and DIFF the
@@ -40,6 +46,8 @@
 #
 # Usage: quickcheck.sh [-p] TREE FILES CFILES DIFF
 #        quickcheck.sh -H SOURCE, which -p runs for each host test
+#        quickcheck.sh -R CHECKS TREE FILES CFILES, which -p runs on the host
+#            for CHECKS, `cppcheck`, `clang` or both
 #
 set -u
 
@@ -54,6 +62,12 @@ if [ "${1-}" = -H ]; then
     HOST=${2-}
     shift 2
     set -- '' '' '' ''
+fi
+REMOTE=
+if [ "${1-}" = -R ] && [ "$#" -eq 5 ]; then
+    REMOTE=$2
+    shift 2
+    set -- "$1" "$2" "$3" /dev/null
 fi
 [ "$#" -eq 4 ] || { echo 'quickcheck: usage: quickcheck.sh [-p] TREE FILES CFILES DIFF' >&2; exit 2; }
 TREE=$1
@@ -254,20 +268,17 @@ manual() {
         echo 'rach2/syscalls.md: not what make syscalls writes; run it' >>"$OUT"
 }
 
-# registry: the suites' list, and with an etude newer than its source, of this
-# tree or of the clone it is a worktree of, their inventory and their waits.
+# registry: the suites' list, their inventory and their waits, the last two
+# by an etude that make brings up to date in this clone, since the inventory
+# is what that etude prints.
 registry() {
     touched '^tests/' || return 0
     [ -f "$TREE/tests/registry" ] || return 0
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$TREE/tests/registry" | sort | uniq -d |
         sed 's|^|tests/registry: |' | found 'a suite is named twice'
-    _main=$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)/.." && pwd)
-    for _etude in "$REPO/build/tools/etude/etude" "$_main/build/tools/etude/etude" ''; do
-        [ -x "$_etude" ] || continue
-        [ -n "$(find "$REPO/tools/etude" -name '*.[ch]' -newer "$_etude" | head -n 1)" ] || break
-    done
-    if [ -z "$_etude" ]; then
-        warn 'no etude built from this source; the suites inventory and their waits were not judged'
+    _etude=$REPO/build/tools/etude/etude
+    if ! make --no-print-directory -s -C "$REPO" build/tools/etude/etude >"$WORK/etude.out" 2>&1; then
+        warn "make build/tools/etude/etude failed; the suites inventory and their waits were not judged: $(head -n 1 "$WORK/etude.out")"
         return 0
     fi
     ETUDE=$_etude SUITECHECK_ROOT=$TREE run sh "$REPO/tools/verify/suitecheck.sh"
@@ -441,15 +452,25 @@ cppcheck_list() {
         --template='{file}:{line}: {message} [{id}]' --file-list="$WORK/cpp.list" >>"$OUT" 2>&1
 }
 
+# recorded TOOL VERSION: say whether VERSION, the first line TOOL's version
+# option prints, is the one tools/setup/judges records. When it is not, TOOL
+# is added to ASK, the checks the host runs, or on the host itself (-R) to
+# MISSING, the checks it could not run.
+recorded() {
+    [ "$2" = "$(sed -n "s/^$1: //p" "$REPO/tools/setup/judges")" ] && return 0
+    if [ -n "$REMOTE" ]; then
+        MISSING="$MISSING $1"
+    else
+        ASK="$ASK $1"
+    fi
+    return 1
+}
+
 # cppcheck_files: the case `cppcheck`, on the changed files, under its
 # recorded version alone, since another finds other things.
 cppcheck_files() {
     [ -s "$CFILES" ] || return 0
-    _want=$(sed -n 's/^cppcheck: //p' "$REPO/tools/setup/judges")
-    [ "$(cppcheck --version 2>/dev/null)" = "$_want" ] || {
-        warn "cppcheck is not $_want here; it was left out"
-        return 0
-    }
+    recorded cppcheck "$(cppcheck --version 2>/dev/null)" || return 0
     # shellcheck source=tools/verify/srclists.sh
     . "$REPO/tools/verify/srclists.sh"
     cd "$TREE" || return 0
@@ -464,14 +485,10 @@ cppcheck_files() {
 # recorded version alone, on i686, as the case's first run reads them: the
 # files the i686 kernel builds (print-c-src), not x86-64's own.
 clang_warnings() {
-    _want=$(sed -n 's/^clang: //p' "$REPO/tools/setup/judges")
     make -s -C "$TREE/rach2" print-c-src | tr ' ' '\n' | sed 's|^|rach2/|' >"$WORK/kc2src"
     grep '^rach2/.*\.c$' "$FILES" | grep -v '^rach2/sys/acpi/' | grep -Fx -f "$WORK/kc2src" >"$WORK/kc2" ||
         return 0
-    [ "$(clang --version 2>/dev/null | head -n 1)" = "$_want" ] || {
-        warn "clang is not $_want here; its warnings were left out"
-        return 0
-    }
+    recorded clang "$(clang --version 2>/dev/null | head -n 1)" || return 0
     _res=$(clang -print-resource-dir)
     sed 's|^rach2/||' "$WORK/kc2" | (cd "$TREE/rach2" && xargs -P "$JOBS" -n 1 clang --target=i686-elf -m32 \
         -ansi -ffreestanding -nostdinc -isystem "$_res/include" -fsyntax-only -Wcast-align \
@@ -479,8 +496,84 @@ clang_warnings() {
         grep 'warning:' >>"$OUT"
 }
 
+# remote_script: write to standard output the script that remote_judges
+# sends: it unpacks the lists FILES and CFILES and, from a gzipped tar in
+# base64, the parts of TREE the checks read, the kernel, mk, tools, utils,
+# krffs, the C files under tests and the style cases' program, whose rules
+# this script reads, into a private directory, and runs -R there for the
+# checks ASK names.
+remote_script() {
+    printf "checks='%s'\n" "$ASK"
+    cat <<'EOF'
+set -u
+d=$(mktemp -d /tmp/rach2-quickcheck.XXXXXX) || exit 3
+trap 'rm -rf "$d"' EXIT
+mkdir "$d/tree" "$d/tmp" || exit 3
+EOF
+    for _l in files:"$FILES" cfiles:"$CFILES"; do
+        echo "cat >\"\$d/${_l%%:*}\" <<'QUICKCHECK-LIST-END'"
+        cat "${_l#*:}"
+        echo QUICKCHECK-LIST-END
+    done
+    echo "base64 -d <<'QUICKCHECK-TGZ-END' | tar -xzf - -C \"\$d/tree\" || exit 3"
+    (cd "$TREE" && {
+        find rach2 mk tools utils krffs -type f
+        find tests -type f -name '*.[ch]'
+        echo tests/cases/host/style.sh
+    } 2>/dev/null | COPYFILE_DISABLE=1 tar -c -f - -T -) | gzip -c | base64 | fold -w 76
+    echo QUICKCHECK-TGZ-END
+    cat <<'EOF'
+cd "$d/tree" && TMPDIR=$d/tmp sh tools/verify/quickcheck.sh -R "$checks" "$d/tree" "$d/files" "$d/cfiles"
+EOF
+}
+
+# remote_judges: run the checks ASK names on the testing host, which has the
+# recorded versions, in one ssh call, and add the findings it prints between
+# two marker lines. The host's sshd starts a Windows shell, so the command
+# enters WSL as hookcheck.sh's remote_format does. A check is left out, with
+# a warning, when no host answers or the host cannot run it.
+remote_judges() {
+    [ -n "$ASK" ] || return 0
+    _host=${RACH2_STYLE_HOST-testing}
+    _why="no host answered"
+    if [ -n "$_host" ]; then
+        remote_script >"$WORK/remote.sh"
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$_host" 'MSYS_NO_PATHCONV=1 wsl.exe -- sh -s' \
+            <"$WORK/remote.sh" >"$WORK/back.txt" 2>"$WORK/ssh.err"
+        _rc=$?
+        tr -d '\r' <"$WORK/back.txt" >"$WORK/back"
+        if grep -qx quickcheck-end "$WORK/back"; then
+            sed -n '/^quickcheck-begin$/,/^quickcheck-end$/p' "$WORK/back" | sed '1d;$d' >>"$OUT"
+            ASK=$(sed -n 's/^quickcheck-missing //p' "$WORK/back")
+            _why="nor on $_host"
+        elif [ "$_rc" -ne 255 ]; then
+            tr -d '\r' <"$WORK/ssh.err" | tail -n 5 >&2
+            _why="and it failed on $_host"
+        fi
+    fi
+    for _c in $ASK; do
+        warn "$_c is not $(sed -n "s/^$_c: //p" "$REPO/tools/setup/judges") here, $_why; it was left out"
+    done
+}
+
 if [ -n "$HOST" ]; then
     host_compile "$HOST"
+    exit 0
+fi
+
+ASK=
+MISSING=
+if [ -n "$REMOTE" ]; then
+    for _c in $REMOTE; do
+        case $_c in
+            cppcheck) cppcheck_files ;;
+            clang) clang_warnings ;;
+        esac
+    done
+    for _c in $MISSING; do echo "quickcheck-missing $_c"; done
+    echo quickcheck-begin
+    cat "$OUT"
+    echo quickcheck-end
     exit 0
 fi
 
@@ -500,6 +593,7 @@ if [ "$PUSH" = 1 ]; then
     host_links
     cppcheck_files
     clang_warnings
+    remote_judges
 fi
 
 [ -s "$OUT" ] || exit 0
