@@ -543,6 +543,42 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     handler_vector = vector;
 }
 
+/* The display, intel_display.c and the files beside it, which have their
+ * own test, i915_display_hosttest; here the display is made and adopts
+ * nothing. */
+int32_t intel_display_init(struct drm_i915_private *i915)
+{
+    (void)i915;
+    return 0;
+}
+
+void intel_display_fini(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void drm_mode_config_cleanup(struct drm_device *dev)
+{
+    (void)dev;
+}
+
+int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char *name)
+{
+    (void)base;
+    (void)size;
+    (void)name;
+    return 0;
+}
+
+int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
+                             struct drm_mode_create_dumb *args)
+{
+    (void)dev;
+    (void)file;
+    (void)args;
+    return -ENODEV;
+}
+
 void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
 {
     k_memset(dev, 0, sizeof(*dev));
