@@ -9,6 +9,7 @@
 #   desktop.sh video CLIPS OUT  76-17a.4's six clips, both browsers, video.sh -d
 #   desktop.sh kill OUT         Weston killed, then the console's state
 #   desktop.sh blit OUT [LOG]   fbdrm's copy checked and timed, blitcheck.py
+#   desktop.sh trace CLIPS OUT  Weston's ioctls timed while Chromium plays a clip
 #
 # The bundle, the tree's root three directories above this script, holds tools/lenovo/debian-ref's
 # video.html and probe-server.py and tests/graphics/runners as the tree has
@@ -48,6 +49,13 @@ westons()
     for p in /proc/[0-9]*; do
         [ "$(cat "$p/comm" 2>/dev/null)" = weston ] && echo "${p#/proc/}"
     done
+}
+
+# kstat: the kernel's processor times and the big lock's counts.
+kstat()
+{
+    head -n 1 /proc/stat
+    grep -E '^bkl' /proc/stat
 }
 
 # outdir DIR: make DIR, writable by the session's user.
@@ -214,9 +222,11 @@ cmd_video()
     status=0
     for b in chromium firefox; do
         outdir "$out/$b"
+        kstat > "$out/$b.stat0"
         as_desktop "TMPDIR=/tmp sh $runners/video.sh -d -b $b -c $clips -o $out/$b \
 h264-720p.mp4 h264-1080p.mp4 vp9-720p.webm vp9-1080p.webm av1-720p.webm av1-1080p.webm" \
             > "$out/$b.log" 2>&1 || status=1
+        kstat > "$out/$b.stat1"
         grep -a '^video: result:' "$out/$b.log" | sed 's/^video:/desktop: video:/'
     done
     echo "desktop: result: video status $status"
@@ -266,6 +276,42 @@ cmd_blit()
     echo "desktop: result: blit status $status"
 }
 
+# After the kill: a Weston of the session's user, started as rach2-session
+# starts it but under strace, which times each of its ioctls, while Chromium
+# plays one clip of CLIPS on it through video.sh -d; then that Weston ended.
+# The trace has the length of every commit and the gaps between them.
+cmd_trace()
+{
+    clips=$1 out=$2
+    outdir "$out"
+    [ -z "$(westons)" ] || die "weston runs; run kill first"
+    setsid su -s /bin/bash desktop -c "${ENV}export USER=desktop LOGNAME=desktop LIBSEAT_BACKEND=seatd \
+SEATD_SOCK=/run/seatd.sock; exec strace -f -T -tt -e trace=ioctl -o $out/weston.trace weston --backend=drm \
+--renderer=pixman --socket=wayland-0 --config=/etc/xdg/weston/weston.ini" < /dev/null > "$out/weston.log" 2>&1 &
+    i=0
+    while [ -z "$(westons)" ] && [ $i -lt 20 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    [ -n "$(westons)" ] || die "the traced weston did not start: $(tail -n 3 "$out/weston.log")"
+    sleep 8
+    kstat > "$out/stat0"
+    as_desktop "mkdir -p $out/chromium; TMPDIR=/tmp sh $runners/video.sh -d -b chromium -c $clips -o $out/chromium \
+h264-1080p.mp4" > "$out/chromium.log" 2>&1
+    kstat > "$out/stat1"
+    ps -e -o pid,user,time,args --sort=-time 2> /dev/null | head -n 16 > "$out/ps.txt"
+    # shellcheck disable=SC2046 # process IDs
+    kill -TERM $(westons) 2> /dev/null
+    sleep 5
+    left=$(westons | tr '\n' ' ')
+    grep -a '^video: result:' "$out/chromium.log" | sed 's/^video:/desktop: video:/'
+    awk '/DRM_IOCTL_MODE_ATOMIC/ && match($0, /<[0-9.]+>$/) {
+            d = substr($0, RSTART + 1, RLENGTH - 2); n++; s += d; if (d > m) m = d }
+        END { printf "desktop: result: trace: %d commits, mean %.3f ms, most %.3f ms\n",
+                     n, n ? 1000 * s / n : 0, 1000 * m }' "$out/weston.trace"
+    echo "desktop: result: traced weston ${left:-gone}"
+}
+
 [ "$(id -u)" = 0 ] || die "run as root"
 cmd=${1:-}
 [ $# -gt 0 ] && shift
@@ -276,5 +322,6 @@ case $cmd in
     video) [ $# -eq 2 ] || die "usage: desktop.sh video CLIPS OUT"; cmd_video "$1" "$2" ;;
     kill) [ $# -eq 1 ] || die "usage: desktop.sh kill OUT"; cmd_kill "$1" ;;
     blit) [ $# -eq 1 ] || [ $# -eq 2 ] || die "usage: desktop.sh blit OUT [LOG]"; cmd_blit "$@" ;;
-    *) die "usage: desktop.sh state|clips|debian|video|kill|blit ARG..." ;;
+    trace) [ $# -eq 2 ] || die "usage: desktop.sh trace CLIPS OUT"; cmd_trace "$1" "$2" ;;
+    *) die "usage: desktop.sh state|clips|debian|video|kill|blit|trace ARG..." ;;
 esac
