@@ -119,9 +119,10 @@ While it is 0,
 .Xr sched_setscheduler 2
 and
 .Xr sched_setattr 2
-refuse such a caller a real-time policy with
+refuse such a caller a real-time policy other than the present one with
 .Er EPERM ;
-otherwise they refuse a priority above both it and the present one.
+at any value they refuse a real-time priority above both it and the
+present one.
 .El
 .Ss Initial limits
 Init reads
