@@ -311,6 +311,11 @@ int signal_pending(void)
     return 0;
 }
 
+/** The run loop's offer of the processor: one thread here, nothing to
+ * switch to. */
+void sched_service_point(void)
+{}
+
 void signal_set_blocked(uint64_t mask)
 {
     current_proc->sig_blocked = mask;
