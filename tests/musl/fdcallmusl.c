@@ -21,8 +21,11 @@
  *
  * /dev/fd/N and /proc/self/fd/N open what descriptor N is open on: a pipe's
  * read end opened by its link reads what the pipe's writer wrote, as bash's
- * process substitution reads it, and a file opened by its link starts a
- * description of its own at offset 0; /dev/stdin is descriptor 0's file.
+ * process substitution reads it, a file opened by its link starts a
+ * description of its own at offset 0, and so does a device, whose new
+ * description may have more access and other status flags than the first,
+ * as a DRM program's second file of one device needs; /dev/stdin is
+ * descriptor 0's file.
  *
  * Prints `FDCALLMUSL OK` and exits 0 on success, and prints
  * `FDCALLMUSL FAIL (detail)` and exits 1 otherwise.
@@ -366,6 +369,16 @@ static int fd_link_rows(void)
     g = open(path, O_RDONLY);
     if (g < 0 || read(g, buf, 3) != 3 || memcmp(buf, "abc", 3) != 0 || lseek(f, 0, SEEK_CUR) != 3) {
         return fail("a file opened by /proc/self/fd/N was not a description of its own");
+    }
+    close(g);
+    close(f);
+    f = open("/dev/null", O_RDONLY);
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", f);
+    g = open(path, O_RDWR | O_NONBLOCK);
+    if (f < 0 || g < 0 || (fcntl(f, F_GETFL) & (O_ACCMODE | O_NONBLOCK)) != O_RDONLY ||
+        (fcntl(g, F_GETFL) & (O_ACCMODE | O_NONBLOCK)) != (O_RDWR | O_NONBLOCK) ||
+        write(g, "x", 1) != 1) {
+        return fail("a device opened by /proc/self/fd/N was not a description of its own");
     }
     close(g);
     close(f);
