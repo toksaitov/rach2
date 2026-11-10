@@ -513,18 +513,21 @@ struct evdev_desc {
  * slot with no device, or one whose device has gone. Any context. */
 int evdev_snapshot(int n, struct evdev_desc *out);
 
-/** The count of registrations and unregistrations so far; a worker that
- * has seen a count sleeps on `evdev_change_queue` until it moves. */
+/** The count of registrations, unregistrations and keymap changes so far;
+ * a worker that has seen a count sleeps on `evdev_change_queue` until it
+ * moves. */
 uint32_t evdev_changes(void);
 
-/** The wait queue every registration and unregistration wakes. */
+/** The wait queue every change `evdev_changes` counts wakes. */
 struct wait_queue *evdev_change_queue(void);
 
 /**
  * Bring /sys in line with the devices registered: add the directories of
  * each new device, /sys/class/input/inputN and its eventN with their links
- * and parents, and send their "add" uevents, and send "remove" for each
- * device that has gone and take its entries away. Under the big lock, in
+ * and parents, and send their "add" uevents, in the order the devices
+ * registered; send "remove" for each device that has gone and take its
+ * entries away; and renew the description, its key capabilities among
+ * them, that the files of each device still here show. Under the big lock, in
  * process context, since sysfs.h's entries take heap. Defined in
  * evdev_sysfs.c.
  */
