@@ -393,6 +393,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MEMFD_CREATE] = sys_memfd_create;
     table[SYS_MLOCK2] = sys_mlock2;
     table[SYS_STATX] = sys_statx;
+    table[SYS_NAME_TO_HANDLE_AT] = sys_name_to_handle_at;
+    table[SYS_OPEN_BY_HANDLE_AT] = sys_open_by_handle_at;
     table[SYS_CLONE3] = sys_clone3;
     table[SYS_PIDFD_OPEN] = sys_pidfd_open;
     table[SYS_PIDFD_SEND_SIGNAL] = sys_pidfd_send_signal;

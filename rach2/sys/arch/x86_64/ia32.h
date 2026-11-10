@@ -126,7 +126,6 @@ long compat_sys_ia32_fallocate(isr_params_t *params);
 long compat_sys_preadv(isr_params_t *params);
 long compat_sys_pwritev(isr_params_t *params);
 long compat_sys_fanotify_mark(isr_params_t *params);
-long compat_sys_open_by_handle_at(isr_params_t *params);
 long compat_sys_preadv2(isr_params_t *params);
 long compat_sys_pwritev2(isr_params_t *params);
 long compat_sys_io_pgetevents(isr_params_t *params);

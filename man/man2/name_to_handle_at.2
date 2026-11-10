@@ -1,0 +1,201 @@
+.Dd November 10, 2026
+.Dt NAME_TO_HANDLE_AT 2
+.Os
+.Sh NAME
+.Nm name_to_handle_at ,
+.Nm open_by_handle_at
+.Nd name a file by a handle, and open it by the handle
+.Sh SYNOPSIS
+.In fcntl.h
+.Ft int
+.Fn name_to_handle_at "int dirfd" "const char *path" "struct file_handle *handle" "int *mount_id" "int flags"
+.Ft int
+.Fn open_by_handle_at "int mount_fd" "struct file_handle *handle" "int flags"
+.Sh DESCRIPTION
+.Fn name_to_handle_at
+writes into
+.Fa handle
+a handle that identifies the file
+.Fa path
+names within its mount, and into
+.Fa mount_id
+the id
+.Pa /proc/PID/mountinfo
+gives that mount, which
+.Xr stat 2 Ns 's
+.Fn statx
+reports as
+.Dv STATX_MNT_ID .
+The path resolves as
+.Fn fstatat
+resolves it, from
+.Fa dirfd ,
+with a final symbolic link named itself unless
+.Fa flags
+has
+.Dv AT_SYMLINK_FOLLOW ;
+with
+.Dv AT_EMPTY_PATH
+and an empty path, the file is what
+.Fa dirfd
+refers to.
+.Pp
+A handle is a
+.Vt struct file_handle :
+.Bd -literal -offset indent
+struct file_handle {
+    unsigned int  handle_bytes; /* the size of f_handle */
+    int           handle_type;
+    unsigned char f_handle[];
+};
+.Ed
+.Pp
+The caller sets
+.Va handle_bytes
+to the room after the two fields, at most
+.Dv MAX_HANDLE_SZ ,
+128.
+Rach2's handles are Linux's
+.Dv FILEID_INO64_GEN ,
+type 0x51: twelve bytes, the file's inode number in 64 bits, least
+significant byte first, and a generation of 0.
+A
+.Va handle_bytes
+below 12 gets 12, and no handle, and the call fails with
+.Er EOVERFLOW
+after writing
+.Fa mount_id ,
+so that a caller can ask again with room, as on Linux.
+.Pp
+A handle of a file on ext2, tmpfs, vfat or KRFFS, the types Linux gives
+export operations, and Rach2's own, reopens the file.
+On any other mount,
+.Pa /proc ,
+.Pa /sys ,
+.Pa /dev ,
+exFAT, debugfs and the message queues among them, a handle only
+identifies the file, and
+.Fn name_to_handle_at
+gives one only with
+.Dv AT_HANDLE_FID
+in
+.Fa flags ,
+as Linux gives a type without export operations.
+libudev and systemd ask for a handle to learn a file's mount id, and
+read the mount id from
+.Pa /proc/self/fdinfo/N
+when the call fails.
+.Pp
+.Fn open_by_handle_at
+opens the file
+.Fa handle
+names on the mount of
+.Fa mount_fd ,
+any descriptor of a file of that mount, or the working directory for
+.Dv AT_FDCWD .
+.Fa flags
+are those of
+.Xr open 2 ,
+less
+.Dv O_CREAT
+and
+.Dv O_EXCL ,
+and with
+.Dv O_NOFOLLOW ,
+so that a symbolic link opens only with
+.Dv O_PATH .
+The file is found by its inode on the mount, below the mount's root,
+and opened by its present path, from the caller's root, with
+.Xr open 2 Ns 's
+checks; a file renamed since the handle was made is found under its new
+name.
+The caller must be privileged, as Linux asks
+.Dv CAP_DAC_READ_SEARCH .
+.Ss System call interface
+On i686 the calls are numbers 341 and 342, which the x86-64 kernel's
+compat table gives an i386 program too, and on x86-64 numbers 303 and
+304.
+The structure has one layout on both, and both kernels take the handle
+of either.
+.Sh RETURN VALUES
+.Fn name_to_handle_at
+returns 0, and
+.Fn open_by_handle_at
+the new descriptor.
+On failure they return -1 and set
+.Va errno .
+The kernel calls return negative error numbers on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/statxmusl.c
+asks for the handle of a file in
+.Pa /tmp
+with no room and then with room, compares the mount id with
+.Pa /proc/self/mountinfo ,
+asks for the handle of a
+.Pa /proc
+file with and without
+.Dv AT_HANDLE_FID ,
+and, as root, reopens the file by its handle and reads it.
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EBADF
+.Fa dirfd
+or
+.Fa mount_fd
+is not an open descriptor.
+.It Bq Er EFAULT
+A pointer cannot be accessed.
+.It Bq Er EINVAL
+.Fa flags
+of
+.Fn name_to_handle_at
+has a bit other than
+.Dv AT_SYMLINK_FOLLOW ,
+.Dv AT_EMPTY_PATH
+and
+.Dv AT_HANDLE_FID ;
+.Va handle_bytes
+is above
+.Dv MAX_HANDLE_SZ ,
+or 0 for
+.Fn open_by_handle_at ;
+or
+.Va handle_type
+is negative.
+.It Bq Er ENOENT
+A component of
+.Fa path
+does not exist.
+.It Bq Er ENOMEM
+The kernel could not allocate a path page.
+.It Bq Er EOPNOTSUPP
+The file's type reopens nothing and
+.Dv AT_HANDLE_FID
+was not given, or the object is on no mount of the table: a pipe, a
+socket or an anonymous descriptor.
+.It Bq Er EOVERFLOW
+.Va handle_bytes
+is below 12.
+.It Bq Er EPERM
+The caller of
+.Fn open_by_handle_at
+is not privileged.
+.It Bq Er ESTALE
+The handle is of another type or size, the mount's files do not reopen,
+or no file of the mount has the handle's inode, or the file is outside
+the caller's root.
+.El
+.Pp
+.Fn open_by_handle_at
+fails with the errors of
+.Xr open 2
+as well, and
+.Fn name_to_handle_at
+with those of
+.Xr stat 2
+for the path.
+.Sh SEE ALSO
+.Xr open 2 ,
+.Xr stat 2 ,
+.Xr proc 5

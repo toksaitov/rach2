@@ -1078,7 +1078,6 @@ IA32_STUB(compat_sys_io_setup)
 IA32_STUB(compat_sys_io_getevents_time32)
 IA32_STUB(compat_sys_io_submit)
 IA32_STUB(compat_sys_fanotify_mark)
-IA32_STUB(compat_sys_open_by_handle_at)
 IA32_STUB(compat_sys_io_pgetevents)
 IA32_STUB(compat_sys_io_pgetevents_time64)
 

@@ -280,6 +280,7 @@ nsenter 1 busybox-util-linux
 nslookup 1 busybox-networking
 ntpd 1 busybox-networking
 od 1 busybox-coreutils
+open_by_handle_at 2 name_to_handle_at
 openat 2 open
 paste 1 busybox-coreutils
 patch 1 busybox-editors
