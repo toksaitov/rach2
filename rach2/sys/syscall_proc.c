@@ -681,7 +681,7 @@ static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     struct exec_file *f = ctx;
     int page = count == PAGE_SIZE && off % PAGE_SIZE == 0;
-    uint32_t epoch = filecache_epoch();
+    uint32_t epoch;
     int32_t got;
 
     if (f->held != NULL) {
@@ -690,6 +690,7 @@ static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     if (f->ref.mnt == NULL) {
         return krffs_read(f->path, (char *)dst, count, off);
     }
+    epoch = page ? filecache_epoch(f->ref.mnt, f->ref.node) : 0;
     if (page && filecache_read_node(f->ref.mnt, f->ref.node, off / PAGE_SIZE, dst)) {
         return (int)count;
     }

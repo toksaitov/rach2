@@ -83,6 +83,7 @@
 #include "network/net.h"
 #include "io/inotify.h"
 #include "ipc/unix.h"
+#include "mm/filecache.h"
 #include "mm/filemap.h"
 #include "mm/mm.h"
 #include "proc/coredump.h"
@@ -6216,7 +6217,9 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
  * (`filemap_file_reading`), or the type's error. A read of a byte or more
  * reports IN_ACCESS to inotify.
  *
- * The file system writes straight into the user buffer, so its pages are
+ * A regular ext2 file is read through the file page cache
+ * (`filecache_file_read`), which keeps each page it reads. Otherwise the
+ * file system writes straight into the user buffer, so its pages are
  * range-checked and faulted in first. The description is held across the
  * operation: with dup or fork sharing the offset, a second reader sleeps
  * rather than reading the same bytes while the first is in a request, and a
@@ -6240,8 +6243,10 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
         return -EIO;
     }
     fd_ofd_lock(ofd);
-    bytes_read =
-        vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, at ? *at : ofd->offset);
+    if (!filecache_file_read(ofd, buf, count, at ? *at : ofd->offset, &bytes_read)) {
+        bytes_read =
+            vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, at ? *at : ofd->offset);
+    }
     if (bytes_read > 0 && !at) {
         ofd->offset += (uint64_t)bytes_read;
     }

@@ -124,7 +124,7 @@ static int32_t filemap_read(struct filemap *m, uint8_t *page, uint32_t pgoff)
 static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
     struct filemap *m = (struct filemap *)f;
-    uint32_t epoch = filecache_epoch();
+    uint32_t epoch = m->entry.ofd ? filecache_epoch(m->entry.ofd->vmnt, m->entry.ofd->vnode) : 0;
     uint8_t *page;
     int32_t got;
 
