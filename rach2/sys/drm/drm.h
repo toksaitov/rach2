@@ -1477,11 +1477,17 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
  * no flush (`fb_dirty` unset), or the commit's error. May sleep. */
 int32_t drm_framebuffer_dirty(struct drm_device *dev, struct drm_framebuffer *fb,
                               const struct drm_mode_rect *rect);
-/** Run every nonblocking commit whose in-fences have all signalled, in the
- * order they were made: its planes and CRTCs programmed and its events
- * armed for the next vblank. The commit worker's body, and the host tests'
- * stand-in for it; returns how many ran. May sleep in the drivers' hooks. */
+/** Send the queued hotplug events, then run every nonblocking commit
+ * whose in-fences have all signalled, in the order they were made: its
+ * planes and CRTCs programmed and its events armed for the next vblank. The
+ * commit worker's body, and the host tests' stand-in for it; returns how
+ * many events and commits ran. May sleep in the drivers' hooks. */
 int drm_atomic_commit_work(void);
+/** Have the commit worker send `connector`'s hotplug event, to user space
+ * and the console, as Linux's modeset retry work does after a link failed
+ * to train: for a driver's commit, which holds the commit lock the
+ * console's answer takes. Once while one waits; any context. */
+void drm_connector_hotplug_later(struct drm_connector *connector);
 
 /* ---- Vblanks, their events and CRCs, in drm_vblank.c ---- */
 

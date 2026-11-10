@@ -1357,11 +1357,71 @@ static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
     }
 }
 
+/* The connectors whose hotplug event waits for the worker, each with a
+ * hold on its device, under the interrupt flag; static storage starts it
+ * empty. */
+#define HOTPLUG_QUEUE 8
+static struct drm_connector *hotplugs[HOTPLUG_QUEUE];
+static int nhotplugs;
+
+static int32_t commit_worker_start(void);
+
+void drm_connector_hotplug_later(struct drm_connector *connector)
+{
+    uint32_t flags = kirq_save();
+    int i;
+
+    for (i = 0; i < nhotplugs; i++) {
+        if (hotplugs[i] == connector) {
+            kirq_restore(flags);
+            return;
+        }
+    }
+    if (nhotplugs == HOTPLUG_QUEUE) {
+        kirq_restore(flags);
+        klog(KLOG_WARN, "drm", "%s: hotplug event lost: the queue is full", connector->name);
+        return;
+    }
+    drm_dev_get(connector->dev);
+    hotplugs[nhotplugs++] = connector;
+    kirq_restore(flags);
+    if (commit_worker_start() == 0) {
+        wq_wake_all(&work_wait);
+    }
+}
+
+/** Send the queued hotplug events, Linux's
+ * drm_kms_helper_connector_hotplug_event for each; the number sent. */
+static int hotplug_work(void)
+{
+    struct drm_connector *connector;
+    uint32_t flags;
+    int n = 0;
+
+    for (;;) {
+        flags = kirq_save();
+        if (nhotplugs == 0) {
+            kirq_restore(flags);
+            return n;
+        }
+        connector = hotplugs[0];
+        nhotplugs--;
+        k_memmove(hotplugs, hotplugs + 1, (uint32_t)nhotplugs * sizeof(hotplugs[0]));
+        kirq_restore(flags);
+        if (!connector->dev->unplugged) {
+            drm_sysfs_connector_hotplug_event(connector);
+            drm_client_dev_hotplug(connector->dev);
+        }
+        drm_dev_put(connector->dev);
+        n++;
+    }
+}
+
 int drm_atomic_commit_work(void)
 {
     struct commit_work **link = &works, *w;
     struct drm_device *dev;
-    int n = 0;
+    int n = hotplug_work();
 
     while ((w = *link) != NULL) {
         if (w->waiting) {
@@ -1387,6 +1447,9 @@ static int work_ready(void *arg)
     const struct commit_work *w;
 
     (void)arg;
+    if (nhotplugs != 0) {
+        return 1;
+    }
     for (w = works; w; w = w->next) {
         if (!w->waiting) {
             return 1;
