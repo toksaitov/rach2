@@ -1,0 +1,24 @@
+vkms-clones.patch: let vkms's virtual and writeback encoders clone each
+other's crtc, so that a commit may attach the writeback connector to the
+crtc that drives the virtual display. Debian's 6.12.115 has the check of
+possible clones that Linux 6.14 added, which refuses that commit while
+vkms leaves possible_clones at each encoder alone; dev-log/83-testbed/
+upstream.md has the fault.
+
+--- a/vkms_output.c
++++ b/vkms_output.c
+@@ -105,8 +105,13 @@
+ 
+ 	if (vkmsdev->config->writeback) {
+ 		writeback = vkms_enable_writeback_connector(vkmsdev);
+-		if (writeback)
++		if (writeback) {
+ 			DRM_ERROR("Failed to init writeback connector\n");
++		} else {
++			encoder->possible_clones = drm_encoder_mask(encoder) |
++				drm_encoder_mask(&output->wb_connector.encoder);
++			output->wb_connector.encoder.possible_clones = encoder->possible_clones;
++		}
+ 	}
+ 
+ 	drm_mode_config_reset(dev);
