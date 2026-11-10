@@ -34,7 +34,7 @@ $(GNU_HOST_CHECKS_STAMP): $(GNU_HOST_CHECKS_SOURCES) $(GNU_HOST_PRODUCTS_STAMP) 
 # Keep the old stamp until publication so store expiry keeps the predecessor.
 # The phony prerequisite runs the step at every make, and etude writes the
 # stamp each time; a stamp whose text is unchanged is given back its time, so
-# that gnu-test.ext2, which depends on it, is not made again.
+# that gnu-host-checks.tar, which depends on it, is not made again.
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
 	    previous=$$(python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); print(p.resolve() if p.is_symlink() and p.is_dir() else "")' "$(GNU_OUT)/host-checks"); \
 	    rm -f $@.was && { [ ! -f $@ ] || cp -p $@ $@.was; } && \
