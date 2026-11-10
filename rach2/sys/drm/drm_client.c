@@ -9,6 +9,7 @@
 
 #include "../arch/arch.h"
 #include "../cmdline.h"
+#include "../display/blank.h"
 #include "../display/fb.h"
 #include "../display/fbcon.h"
 #include "../kd.h"
@@ -641,8 +642,10 @@ static void con_settle(void)
     }
 }
 
-/** A master of `dev`, the console's device, took the screen: hand the
- * screen, /fb and the keyboard over. Does not sleep. */
+/** A master of `dev`, the console's device, took the screen: unblank the
+ * console, as taking /fb does, so that the backlights light the master's
+ * picture, then hand the screen, /fb and the keyboard over. Does not
+ * sleep. */
 static void con_hand_over(struct drm_device *dev)
 {
     uint32_t flags;
@@ -651,6 +654,7 @@ static void con_hand_over(struct drm_device *dev)
         return;
     }
     con.handed = 1;
+    console_unblank_now();
     flags = console_lock();
     fbcon_detach(0);
     fb_hold();
@@ -659,8 +663,10 @@ static void con_hand_over(struct drm_device *dev)
     klog(KLOG_INFO, "console", "card%d: handed to a master, the keyboard off", dev->index);
 }
 
-/** No master holds `dev`, the console's device, now: take the screen back
- * on the console's own outputs, then /fb and the keyboard. Nothing if a
+/** No master holds `dev`, the console's device, now: start the countdown
+ * to the console's blank again (`console_poke`), before the tick can see
+ * the screen as the console's with the old count, then take the screen
+ * back on the console's own outputs, /fb and the keyboard. Nothing if a
  * master comes or the device goes while the commit sleeps. */
 static void con_take_back(struct drm_device *dev)
 {
@@ -674,6 +680,7 @@ static void con_take_back(struct drm_device *dev)
         return;
     }
     con.handed = 0;
+    console_poke();
     flags = console_lock();
     rc = con_attach(rc, &screen, base);
     fb_unhold();

@@ -342,6 +342,11 @@ void fb_unhold(void)
     wq_wake_all(&fb_wq);
 }
 
+int fb_is_held(void)
+{
+    return fb_held;
+}
+
 void fb_screen_moved(void)
 {
     if (fb_held || !fb_top) {

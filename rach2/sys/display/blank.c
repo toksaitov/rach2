@@ -49,16 +49,17 @@ void console_poke(void)
 
 /**
  * Blank the console, forced or not, and record it with `why`; nothing when
- * it is blank already or the screen is a program's. Interrupts may be on or
- * off; the console's lock must not be held by this processor's caller,
- * since the record is written after it is given back.
+ * it is blank already or the screen is a program's, through /fb or as a
+ * DRM master's, as Linux leaves a console in graphics mode alone. Interrupts
+ * may be on or off; the console's lock must not be held by this processor's
+ * caller, since the record is written after it is given back.
  */
 static void do_blank(int force, const char *why)
 {
     uint32_t flags = console_lock();
     int did = 0;
 
-    if (!blanked && !gfx_is_active()) {
+    if (!blanked && !gfx_is_active() && !fb_is_held()) {
         textcon_blank(1);
         blanked = 1;
         did = 1;

@@ -13,9 +13,12 @@
  * Blanking paints the screen black, keeping what it showed, and turns every
  * backlight off (backlight.h); the next key or mouse move restores both,
  * except after a blank that `console_blank_now` forced, which only
- * `console_unblank_now` undoes. While a program holds /fb the console does
- * not blank, and taking /fb unblanks it; a panic unblanks it too. Output
- * goes on while it is blank and is shown at the unblank.
+ * `console_unblank_now` undoes. While a program holds /fb, or a DRM master
+ * holds the screen (fb.h's `fb_hold`), the console does not blank and no
+ * backlight changes; taking /fb or the screen unblanks it, and the console
+ * that has the screen back counts the time again (`console_poke`); a panic
+ * unblanks it too. Output goes on while it is blank and is shown at the
+ * unblank.
  */
 
 /**
@@ -41,8 +44,8 @@ void blank_tick(void);
 void console_set_blank_time(unsigned int seconds);
 
 /** Blank the console now, to stay blank until `console_unblank_now`
- * (TIOCLINUX 14); nothing while a program holds /fb. Not from the tick or
- * with the console's lock held. */
+ * (TIOCLINUX 14); nothing while a program holds /fb or a DRM master the
+ * screen. Not from the tick or with the console's lock held. */
 void console_blank_now(void);
 
 /** Unblank the console now, if it is blank (TIOCLINUX 4), and restart the

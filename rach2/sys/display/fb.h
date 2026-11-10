@@ -145,6 +145,10 @@ void fb_hold(void);
  * writes go on. The caller holds the console lock. */
 void fb_unhold(void);
 
+/** Whether a DRM master holds the screen, from `fb_hold` to `fb_unhold`.
+ * The caller holds the console lock. */
+int fb_is_held(void);
+
 /** The console moved to another screen while it had the screen, as on a
  * new mode after a hotplug: the owner on top has its mode drawn again, and
  * at the native mode, whose pixels are gone, reads FB_EVENT_LOST and
