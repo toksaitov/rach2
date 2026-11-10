@@ -88,6 +88,7 @@
 #include "../serial.h"
 #include "../rtc.h"
 #include "../proc/sched.h"
+#include "../proc/smp.h"
 #include "../mm/paging.h"
 #include "../io/anon.h"
 #include "../io/inotify.h"
@@ -2839,9 +2840,12 @@ static void procfs_kvm_counts(struct procfs_text *t)
 }
 
 /** The counts of the kernel's own work for `/proc/stat`, from
- * `process_pid_steps` to `vdso_tsc`, each on a line of its own. */
+ * `process_pid_steps` to `bkl_wait_max_us`, each on a line of its own. */
 static void procfs_work_counts(struct procfs_text *t)
 {
+    uint64_t total, longest, shootdowns;
+
+    smp_wait_stats(&total, &longest, &shootdowns);
     ap_str(t, "process_pid_steps ");
     ap_u32(t, proc_work_count(0));
     ap_str(t, "\nprocess_uid_steps ");
@@ -2866,6 +2870,10 @@ static void procfs_work_counts(struct procfs_text *t)
     ap_u32(t, clock_calls());
     ap_str(t, "\nvdso_tsc ");
     ap_u32(t, (uint32_t)vclock_running());
+    ap_str(t, "\nbkl_wait_us ");
+    ap_u64(t, total);
+    ap_str(t, "\nbkl_wait_max_us ");
+    ap_u64(t, longest);
     ap_ch(t, '\n');
 }
 

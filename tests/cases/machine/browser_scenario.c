@@ -26,6 +26,31 @@ static void stage(struct net_case *u, struct net_boot *b, const char *mode)
     net_run_free(&r);
 }
 
+/** Retain the host load and live admission ledger before the browser runs. */
+static void host_record(struct net_case *u, struct net_boot *b)
+{
+    char *host[] = {"sh", NULL, "host", NULL};
+    const char *guest[] = {"/bin/sh", "-c", "cat > /tmp/graphics.host", NULL};
+    struct net_run h, r;
+
+    memset(&h, 0, sizeof(h));
+    memset(&r, 0, sizeof(r));
+    host[1] = (char *)etude_artifact(u->c, "common");
+    if (host[1] == NULL) {
+        net_fail(u, "the host record helper is absent");
+        return;
+    }
+    if (net_host(u, host, "host-record", &h) == ETUDE_OK) {
+        if (!net_exited0(&h))
+            net_fail(u, "the host record could not be read");
+        else if (net_guest(u, b->m, guest, NULL, h.out, "host-stage", &r) == ETUDE_OK &&
+                 !net_exited0(&r))
+            net_fail(u, "the host record could not be staged");
+    }
+    net_run_free(&h);
+    net_run_free(&r);
+}
+
 /**
  * Boot the case's root, run its ordinary browser and retain the result.
  * The guest channel stages files as root; the browser keeps its sandbox.
@@ -57,6 +82,7 @@ int etude_scenario(struct etude_case *c)
     if (net_login(&b, "root", password, "# ") == ETUDE_OK && etude_guest_open(b.m) != ETUDE_OK)
         net_fail(&u, "the browser guest command channel did not open");
     stage(&u, &b, mode);
+    host_record(&u, &b);
     snprintf(command, sizeof(command),
              "su -s /bin/sh desktop -c 'GRAPHICS_CLASS=conformance GRAPHICS_DONE=1; "
              "export GRAPHICS_CLASS GRAPHICS_DONE; . /tmp/graphics/guest-env.sh && "

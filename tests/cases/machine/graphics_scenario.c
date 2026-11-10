@@ -330,7 +330,7 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
     case VIDEO:
         snprintf(runner, size,
                  "sh " GRAPHICS_DIR "/runners/video.sh -b %s -c " GRAPHICS_DIR
-                 "/clips -o " GRAPHICS_DIR "/out %s",
+                 "/clips -o " GRAPHICS_DIR "/out -t %s",
                  s->browser, s->clip);
         return 0;
     case IGT:
