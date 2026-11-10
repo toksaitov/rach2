@@ -61,13 +61,14 @@ static void move(struct net_case *u, struct net_boot *b, int dx, int dy)
 
 /**
  * Run wm.py's ROW through the guest channel and act on each of its ready
- * lines in turn: move the pointer while xplace counts raw motion, and press
- * Escape to end the window. wm.py checks the screen itself, since QEMU's
- * screendump has no surface while virgl scans out a GL resource.
+ * lines in turn: move the pointer once so that Weston's seat has one, move
+ * it while xplace counts raw motion, and press Escape to end the window.
+ * wm.py checks the screen itself, since QEMU's screendump has no surface
+ * while virgl scans out a GL resource.
  */
 static void row(struct net_case *u, struct net_boot *b, const char *row)
 {
-    static const char *const place[] = {"xplace-1366", "full-1366", NULL};
+    static const char *const place[] = {"pointer", "xplace-1366", "full-1366", NULL};
     static const char *const scaled[] = {"xplace-800", "full-800", NULL};
     const char *const *readies = strcmp(row, "place") == 0    ? place
                                  : strcmp(row, "scaled") == 0 ? scaled
@@ -90,6 +91,12 @@ static void row(struct net_case *u, struct net_boot *b, const char *row)
         if (etude_guest_output_wait(b->m, ready) != ETUDE_OK) {
             net_fail(u, "wm.py never printed \"%s\"", ready);
             break;
+        }
+        if (strcmp(*readies, "pointer") == 0) {
+            /* Weston makes the seat's pointer at the mouse's first event;
+             * no window waits for a key yet. */
+            move(u, b, 8, 8);
+            continue;
         }
         if (strcmp(*readies, "xplace-1366") == 0) {
             /* wm.py's MOTION: -2000 on x, which pushes the pointer to the

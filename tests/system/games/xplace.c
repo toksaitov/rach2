@@ -473,6 +473,56 @@ static void count_motion(Display *dpy, Window win, GC gc, int width, int height,
     printf("xplace: pointer %d,%d in window %d,%d\n", x, y, wx, wy);
 }
 
+/**
+ * Wait until the server has an enabled pointer device of the seat's, a slave
+ * other than the XTEST one, print its name and return 0. Xwayland adds the
+ * device when the compositor's seat gains a pointer, and Weston's seat gains
+ * one only at a mouse's first event. Until then Xwayland has no wl_pointer,
+ * asks for no confinement on a grab and hears no motion, so a grab taken
+ * before the first move loses the moves that come before the device.
+ */
+static int wait_pointer(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    unsigned char bits[XIMaskLen(XI_LASTEVENT)];
+    XIEventMask mask;
+    XIDeviceInfo *info;
+    XEvent ev;
+    int opcode, event, error, major = 2, minor = 2, n, i, found = 0;
+
+    if (dpy == NULL)
+        die("cannot open the display");
+    if (!XQueryExtension(dpy, "XInputExtension", &opcode, &event, &error) ||
+        XIQueryVersion(dpy, &major, &minor) != Success)
+        die("no XInput 2.2");
+    memset(bits, 0, sizeof(bits));
+    XISetMask(bits, XI_HierarchyChanged);
+    mask.deviceid = XIAllDevices;
+    mask.mask_len = sizeof(bits);
+    mask.mask = bits;
+    if (XISelectEvents(dpy, DefaultRootWindow(dpy), &mask, 1) != Success)
+        die("cannot select hierarchy changes");
+    for (;;) {
+        info = XIQueryDevice(dpy, XIAllDevices, &n);
+        for (i = 0; info != NULL && i < n && !found; i++)
+            if (info[i].use == XISlavePointer && info[i].enabled &&
+                strstr(info[i].name, "XTEST") == NULL) {
+                printf("xplace: pointer device %s\n", info[i].name);
+                found = 1;
+            }
+        if (info != NULL)
+            XIFreeDeviceInfo(info);
+        if (found)
+            break;
+        /* Each change of the device list wakes the loop to look again. */
+        XNextEvent(dpy, &ev);
+        if (XGetEventData(dpy, &ev.xcookie))
+            XFreeEventData(dpy, &ev.xcookie);
+    }
+    XCloseDisplay(dpy);
+    return 0;
+}
+
 /** Report the place of the mapped client window named NAME; return 0. */
 static int query(const char *name)
 {
@@ -489,9 +539,10 @@ static int query(const char *name)
 }
 
 /**
- * Usage: xplace [-n] WIDTH HEIGHT, or xplace -q NAME. -q reports the place,
- * frame and focus of another client's mapped window named NAME, a Wine
- * program's, and exits. Map a WIDTH by HEIGHT window at 0,0 with
+ * Usage: xplace [-n] WIDTH HEIGHT, xplace -q NAME or xplace -p. -q reports
+ * the place, frame and focus of another client's mapped window named NAME, a
+ * Wine program's, and exits. -p waits until the server has the seat's pointer
+ * device, names it and exits. Map a WIDTH by HEIGHT window at 0,0 with
  * the hints Wine sets on a fullscreen window and no _NET_WM_STATE, after an
  * emulated mode of that size when the screen's is another, and wait for
  * focus. Report its place, its frame, its focus and a confined pointer grab,
@@ -511,13 +562,15 @@ int main(int argc, char **argv)
 
     if (argc == 3 && strcmp(argv[1], "-q") == 0)
         return query(argv[2]);
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    if (argc == 2 && strcmp(argv[1], "-p") == 0)
+        return wait_pointer();
     if (argc > 1 && strcmp(argv[1], "-n") == 0)
         nowait = 1, argc--, argv++;
     if (argc != 3)
-        die("usage: xplace [-n] WIDTH HEIGHT | xplace -q NAME");
+        die("usage: xplace [-n] WIDTH HEIGHT | xplace -q NAME | xplace -p");
     width = atoi(argv[1]);
     height = atoi(argv[2]);
-    setvbuf(stdout, NULL, _IOLBF, 0);
     if ((dpy = XOpenDisplay(NULL)) == NULL)
         die("cannot open the display");
     root = DefaultRootWindow(dpy);
