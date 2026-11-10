@@ -131,6 +131,7 @@ void kvm_vm_put(struct kvm_vm *vm)
     }
     kvm_hv_vm_free(vm);
     kvm_msr_free_filter(vm);
+    kvm_pmu_vm_free(vm);
     kvm_tdp_free(vm);
     kvm_slots_free(vm);
     if (kvm_backend && kvm_backend->vm_free) {
@@ -210,6 +211,8 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_CHECK_EXTENSION_VM:
     case KVM_CAP_GET_MSR_FEATURES:
     case KVM_CAP_SET_BOOT_CPU_ID:
+    case KVM_CAP_PMU_EVENT_FILTER:
+    case KVM_CAP_PMU_EVENT_MASKED_EVENTS:
     case KVM_CAP_GET_TSC_KHZ:
     case KVM_CAP_KVMCLOCK_CTRL:
     case KVM_CAP_ENFORCE_PV_FEATURE_CPUID:
@@ -222,6 +225,8 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
         /* PAUSE never exits here, and HLT need not; MWAIT is not offered,
          * and the C-state residency MSRs are not passed through. */
         return (int32_t)(KVM_X86_DISABLE_EXITS_PAUSE | KVM_X86_DISABLE_EXITS_HLT);
+    case KVM_CAP_PMU_CAPABILITY:
+        return KVM_PMU_CAP_DISABLE;
     case KVM_CAP_XSAVE:
     case KVM_CAP_XCRS:
         return kvm_xcr0_supported() != 0;
@@ -532,6 +537,9 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     if (cap.cap == KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) {
         return kvm_dirty_enable_manual(vm, &cap);
     }
+    if (cap.cap == KVM_CAP_PMU_CAPABILITY) {
+        return kvm_pmu_enable(vm, &cap);
+    }
     if (cap.cap == KVM_CAP_X86_DISABLE_EXITS) {
         if (cap.args[0] & ~(uint64_t)KVM_X86_DISABLE_VALID_EXITS) {
             return -EINVAL;
@@ -711,6 +719,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return 0;
     case KVM_ENABLE_CAP:
         return vm_enable_cap(vm, arg);
+    case KVM_SET_PMU_EVENT_FILTER:
+        return kvm_pmu_filter(vm, arg);
     case KVM_CREATE_IRQCHIP:
     case KVM_GET_IRQCHIP:
     case KVM_SET_IRQCHIP:
@@ -915,6 +925,7 @@ void kvm_start(void)
         klog(KLOG_INFO, "kvm", "none: the processor has neither VMX nor SVM");
         return;
     }
+    kvm_pmu_start();
     if (devfs_node_register(&kvm_node) != 0) {
         klog(KLOG_WARN, "kvm", "failed: /dev/kvm not registered");
         kvm_backend = NULL;

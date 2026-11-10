@@ -1062,7 +1062,9 @@ static int svm_enter(struct kvm_vcpu *v)
         tsc_ratio[cpu] = ratio;
     }
     svm_in_run[cpu] = 1;
+    kvm_pmu_svm_enter(v);
     (void)kvm_svm_vmrun(&v->regs, s->vmcb_pa, s->host_pa);
+    kvm_pmu_svm_exit(v);
     svm_in_run[cpu] = 0;
     if (caps.rdtscp && s->tsc_aux != host_aux[cpu]) {
         msr_write(MSR_TSC_AUX, host_aux[cpu]);
@@ -2228,8 +2230,9 @@ static int exit_insn(struct kvm_vcpu *v, uint64_t code)
         (void)skip(v);
         return 1;
     case EXIT_RDPMC:
-        /* No performance counter is offered, so every counter is #GP. */
-        gp(v);
+        if (kvm_pmu_rdpmc(v) == 0) {
+            (void)skip(v);
+        }
         return 1;
     case EXIT_XSETBV:
         if (kvm_emul_xsetbv(v) == 0) {

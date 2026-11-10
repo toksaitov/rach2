@@ -43,9 +43,9 @@ pcid-disabled pass fail Linux: FAIL: Test on INVPCID when disabled
 pcid-enabled pass pass
 pks skip skip PKS not enabled: the processor has no PKS
 pku skip skip PKU not enabled
-pmu excluded fail PMU: Rach2's KVM gives its guests no performance counters
-pmu_lbr excluded skip PMU: Rach2's KVM gives its guests no performance counters
-pmu_pebs excluded skip PMU: Rach2's KVM gives its guests no performance counters
+pmu pass fail PMU counters; without a host PMU the legacy AMD test fails as Linux does
+pmu_lbr skip skip LBR is not advertised
+pmu_pebs skip skip PEBS is not advertised
 rdpru pass pass
 realmode pass pass
 rmap_chain pass pass

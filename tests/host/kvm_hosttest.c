@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c rach2/sys/kvm/hyperv.c
  * host-deps: rach2/sys/kvm/pvclock.c rach2/sys/kvm/binstats.c
  * host-deps: rach2/sys/kvm/exitstat.c
+ * host-deps: rach2/sys/kvm/pmu.c
  * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
@@ -533,6 +534,36 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 {
     *lo = msr == 0x8Bu ? 0 : 0x5;
     *hi = msr == 0x8Bu ? 0x28 : 0;
+}
+
+/** Physical counter writes are unused by this model's fake backend. */
+void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
+{
+    (void)msr;
+    (void)lo;
+    (void)hi;
+}
+
+/** The model has no AMD PMU. */
+int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value)
+{
+    (void)msr;
+    (void)value;
+    return -1;
+}
+
+/** The model has no AMD PMU. */
+int kcpu_wrmsr_safe(uint32_t msr, uint64_t value)
+{
+    (void)msr;
+    (void)value;
+    return -1;
+}
+
+/** No virtual APIC is armed for a performance interrupt here. */
+void kvm_lapic_pmi(struct kvm_vcpu *v)
+{
+    (void)v;
 }
 
 /* The fake backend's mode: refuse every entry, or report the exits of
@@ -1213,8 +1244,8 @@ static void startup_msr_lists(void)
     CHECK(steal, "and MSR_KVM_STEAL_TIME");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
-    CHECK(r == 0 && buf.list.nmsrs == 1 && MSR_INDICES[0] == 0x8B,
-          "the feature list names UCODE_REV");
+    CHECK(r == 0 && buf.list.nmsrs == 2 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345,
+          "the feature list names UCODE_REV and PERF_CAPABILITIES");
     buf.msrs.nmsrs = 2;
     MSR_ENTRIES[0].index = 0x8B;
     MSR_ENTRIES[1].index = 0x10A;
@@ -1241,7 +1272,7 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
         CHECK(e->eax == 7 && e->ebx == 832, "leaf 0xD offers x87, SSE and AVX in 832 bytes");
     }
     if (e->function == 0xA) {
-        CHECK(e->eax == 0, "no performance counters");
+        CHECK(e->eax == 0x07300402u, "architectural performance counters capped at version two");
     }
     if (e->function == KVM_CPUID_SIGNATURE) {
         CHECK(e->eax == KVM_CPUID_FEATURES && e->ebx == 0x4B4D564Bu && e->ecx == 0x564B4D56u &&
