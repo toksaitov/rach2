@@ -43,7 +43,8 @@ static void host_record(struct net_case *u, struct net_boot *b)
     if (net_host(u, host, "host-record", &h) == ETUDE_OK) {
         if (!net_exited0(&h))
             net_fail(u, "the host record could not be read");
-        else if (net_guest(u, b->m, guest, NULL, h.out, "host-stage", &r) == ETUDE_OK &&
+        else if (net_guest(u, b->m, guest, NULL, etude_evidence(u->c, "host-record"), "host-stage",
+                           &r) == ETUDE_OK &&
                  !net_exited0(&r))
             net_fail(u, "the host record could not be staged");
     }
