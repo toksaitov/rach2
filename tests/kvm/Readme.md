@@ -9,6 +9,7 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 * `entry`: the small real-mode guest in `svm-entry.c` reads its memory slot, executes CPUID, reads CR0 and EFER, exits through port I/O and HLT, and reads a replacement frame after MAP_FIXED. It starts with XCR0 at its reset value, which also checks that the backend restores the full XSAVE image before applying the guest's XCR0.
 * `slots`: `svm-entry slots` repeats the read after fork, mprotect, discard and munmap with a replacement page. A guest then counts in another page while the caller forks, protects and replaces the data page; its first counter increment proves it was running before the changes, and it exits only after reading the replacement value. The same case reads VGA memory through a `/dev/mem` slot and the end of a 4 MiB GEM object through another slot, on std-vga.
 * `leak`: `leak.sh` kills QEMU after the Debian guest prints its kernel version. The five live KVM counts and `fs.file-nr` must return to their initial values, QEMU must have no pinned pages before the kill, and its address space must disappear after it is reaped.
+* `boot-debian-kvm` and `boot-rach2-kvm`: Debian and the small i686 Rach2 guest boot under Rach2's SVM on `max-svm`, on Linux and macOS. The `-nested` variants run on `host-svm`, on Linux alone.
 * `boot-debian-tcg`: `kvm-boot.sh -a tcg` boots the Debian guest in Rach2's QEMU under TCG to its token.
 * `unit-tests` and `selftests`: `corpus.sh` runs the corpus under Rach2's KVM, on the `max-svm` profile, on Linux and on macOS.
 * `unit-tests-nested` and `selftests-nested`: the same on the `host-svm` profile, on Linux alone.
@@ -47,6 +48,8 @@ The lists, [`unit-tests.list`](unit-tests.list) and [`selftests.list`](selftests
 | `selftests.list` | 51 | 15 | 0 | 19 |
 
 The Debian guest, which [`guests/mkdebian.sh`](guests/mkdebian.sh) makes, is trixie's cloud kernel, 6.12.107, and an initramfs of Debian's static BusyBox 1.37.0 whose [`/init`](guests/debian-init) prints the kernel's version, the processor count and the first processor's flags, then `KVMGUEST OK`, and powers off. Both packages are pinned in [`guests/debian.txt`](guests/debian.txt) by the SHA-256 that the Debian layer's signed snapshot index gives. The guest boots in seconds even under TCG inside Rach2 and needs no disk, so a failure to reach its token is the hypervisor's. Make writes it to `build/kvm/guests/debian`, and puts it with the runners and the lists into `build/tests/cases/kvm/kvm.ext2`, which every case mounts read-only and copies to `/tmp/kvm`.
+
+The i686 Rach2 guest is the ordinary kernel with a 1 MiB KRFFS root. Its shipped `init-shell` starts the first user program, `guests/rach2-init.c`, as `/bin/sh`; that program prints `KVMRACH2 OK` and powers off. It needs no disk, network or input from the controller.
 
 ## Adding tests
 

@@ -280,6 +280,13 @@ trusted file 0755:0:0 /sbin/init build/utils/sbin/init-shell
 sentinel /bin/doom 0755:0:0
 init init-shell
 
+# The KVM guest reaches the shipped init's shell, then powers off.
+manifest kvm-rach2
+trusted file 0755:0:0 /sbin/init build/utils/sbin/init-shell
+trusted file 0755:0:0 /bin/sh build/tests/kvm/rach2-init
+sentinel /bin/sh 0755:0:0
+init init-shell
+
 # The applets the main busybox must not have. The first six need the set-id
 # bit this binary is staged without, so an applet of that name would run in
 # place of the set-id build's copy and fail. `traceroute6` needs a raw
