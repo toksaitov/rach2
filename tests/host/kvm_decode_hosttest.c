@@ -417,6 +417,12 @@ static const struct trow rows[] = {
     {64, "0f 01 d9", 3, "hypercall:1 s4 a8"},
     {32, "0f 01 d9", 3, "hypercall:1 s4 a4"},
 
+    /* RDPID, group 9's register form under 0xF3. */
+    {64, "f3 0f c7 f8", 4, "rdpid ax.8 a8 wr rep"},
+    {64, "f3 41 0f c7 ff", 5, "rdpid r15.8 a8 wr rep"},
+    {32, "f3 0f c7 f9", 4, "rdpid cx.4 a4 wr rep"},
+    {16, "f3 0f c7 fa", 4, "rdpid dx.4 a2 wr rep"},
+
     /* Refused by the processor with #UD: LOCK where it is not taken,
      * an instruction 64-bit mode lacks, a group's undefined member. */
     {64, "f0 8b 07", 3, "mov ax.4, ds:[di].4 a8 wr lock ud"},
@@ -447,6 +453,9 @@ static const struct trow rows[] = {
     {64, "8d c0", 0, 0},
     {64, "0f 01 3f", 0, 0},
     {64, "0f 01 c2", 0, 0},
+    {64, "0f c7 f8", 0, 0},
+    {64, "66 f3 0f c7 f8", 0, 0},
+    {64, "f3 0f c7 f0", 0, 0},
     {64, "0f 01 d8", 0, 0},
     {64, "0f 01 c9", 0, 0},
     {64, "0f a2", 0, 0},
@@ -489,14 +498,14 @@ static const char *const regs[17] = {"ax", "cx",  "dx",  "bx",  "sp",  "bp",  "s
 static const char *const highs[4] = {"ah", "ch", "dh", "bh"};
 static const char *const segs[8] = {"es", "cs", "ss", "ds", "fs", "gs", "ldtr", "tr"};
 static const char *const ops[KVM_OP_LAST + 1] = {
-    "?",        "mov",       "alu",       "unary",    "xchg",      "shift",   "muldiv",   "imul",
-    "bt",       "bscan",     "dshift",    "cmpxchg",  "cmpxchg8b", "xadd",    "cmov",     "setcc",
-    "movbe",    "bswap",     "lea",       "nop",      "push",      "pop",     "pusha",    "popa",
-    "pushf",    "popf",      "push_sreg", "pop_sreg", "enter",     "leave",   "jcc",      "jmp",
-    "jmp_abs",  "jmp_far",   "call",      "call_abs", "call_far",  "ret",     "ret_far",  "loop",
-    "mov_sreg", "store_seg", "load_seg",  "lseg",     "store_dt",  "load_dt", "smsw",     "lmsw",
-    "flag",     "cbw",       "cwd",       "sahf",     "lahf",      "bcd",     "fnstcw",   "fnstsw",
-    "fninit",   "fxsave",    "fxrstor",   "syscall",  "sysenter",  "sysexit", "hypercall"};
+    "?",        "mov",       "alu",       "unary",    "xchg",      "shift",   "muldiv",    "imul",
+    "bt",       "bscan",     "dshift",    "cmpxchg",  "cmpxchg8b", "xadd",    "cmov",      "setcc",
+    "movbe",    "bswap",     "lea",       "nop",      "push",      "pop",     "pusha",     "popa",
+    "pushf",    "popf",      "push_sreg", "pop_sreg", "enter",     "leave",   "jcc",       "jmp",
+    "jmp_abs",  "jmp_far",   "call",      "call_abs", "call_far",  "ret",     "ret_far",   "loop",
+    "mov_sreg", "store_seg", "load_seg",  "lseg",     "store_dt",  "load_dt", "smsw",      "lmsw",
+    "flag",     "cbw",       "cwd",       "sahf",     "lahf",      "bcd",     "fnstcw",    "fnstsw",
+    "fninit",   "fxsave",    "fxrstor",   "syscall",  "sysenter",  "sysexit", "hypercall", "rdpid"};
 static const char *const alus[14] = {"add", "or",   "adc", "sbb", "and", "sub", "xor",
                                      "cmp", "test", "inc", "dec", "not", "neg", "cmpr"};
 static const char *const movs[3] = {"", "zx", "sx"};

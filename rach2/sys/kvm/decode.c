@@ -398,6 +398,10 @@ static const struct opc hypercalls[2] = {
     {KVM_OP_HYPERCALL, 1, 0, 0, 0, 0},
 };
 
+/* RDPID, 0xF3 0x0F 0xC7 /7 with a register, group 9's one register
+ * form: 8 bytes in 64-bit mode and 4 outside it. */
+static const struct opc rdpid = {KVM_OP_RDPID, 0, O_RM, 0, 0, T_MOV | T_NO16 | T_NEAR};
+
 /*
  * The decoder's state while it reads one instruction: the bytes it may
  * read, how many it has, and what the prefixes and the ModRM byte said.
@@ -725,6 +729,12 @@ static int member(const struct dec *d, struct opc *e)
     m = &groups[g][d->regf];
     if (g == G7R && (d->modrm == 0xC1 || d->modrm == 0xD9)) {
         m = &hypercalls[d->modrm == 0xD9];
+    }
+    if (g == G9 && d->mod == 3) {
+        if (d->regf != 7 || d->rep != 0xF3 || d->opsize) {
+            return -1;
+        }
+        m = &rdpid;
     }
     if (m->op == 0 && !(m->flags & T_UD)) {
         return -1;

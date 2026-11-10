@@ -1070,6 +1070,25 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
           "no paravirtual leaf but KVM's two");
 }
 
+/** KVM_GET_EMULATED_CPUID: Linux's three entries, for MOVBE and RDPID. */
+static void emulated_cpuid(void)
+{
+    const struct kvm_cpuid_entry2 *e = CPUID_ENTRIES;
+
+    buf.cpuid.nent = 2;
+    CHECK(dev(KVM_GET_EMULATED_CPUID, (uintptr_t)&buf) == -E2BIG,
+          "KVM_GET_EMULATED_CPUID into two entries is -E2BIG");
+    buf.cpuid.nent = 8;
+    CHECK(dev(KVM_GET_EMULATED_CPUID, (uintptr_t)&buf) == 0 && buf.cpuid.nent == 3,
+          "KVM_GET_EMULATED_CPUID gives three entries");
+    CHECK(e[0].function == 0 && e[0].eax == 7 && e[1].function == 1 && e[1].ecx == (1u << 22) &&
+              e[1].eax == 0 && e[1].edx == 0,
+          "leaf 0 with the highest leaf and leaf 1 with MOVBE alone");
+    CHECK(e[2].function == 7 && e[2].index == 0 && e[2].flags == KVM_CPUID_FLAG_SIGNIFCANT_INDEX &&
+              e[2].ecx == (1u << 22) && e[2].ebx == 0,
+          "and leaf 7 with RDPID alone, on a processor with RDTSCP");
+}
+
 /** try_get_cpuid: KVM_GET_SUPPORTED_CPUID from one entry, doubling while
  * it does not fit. Returns the entries, left in `buf`. */
 static uint32_t startup_cpuid(void)
@@ -1077,6 +1096,7 @@ static uint32_t startup_cpuid(void)
     uint32_t i, max, n;
     int32_t r;
 
+    emulated_cpuid();
     for (max = 1;; max *= 2) {
         buf.cpuid.nent = max;
         r = dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf);
