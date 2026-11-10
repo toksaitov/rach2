@@ -4058,15 +4058,19 @@ static void string_step(struct kvm_vcpu *v, int n, uint32_t size, uint32_t addr_
 }
 
 /** Count `done` elements of a REP string instruction off rCX: whether the
- * instruction is finished, with RIP stepped past it, or repeats. */
+ * instruction is finished, with RIP stepped past it, or repeats. RF stays
+ * set while it repeats and clears once it ends, as Linux's
+ * x86_emulate_insn leaves it. */
 static int string_done(struct kvm_vcpu *v, int rep, uint32_t addr_size, uint32_t done, uint32_t len)
 {
     if (rep) {
         reg_add(v, 1, (uint64_t)0 - done, addr_size);
         if ((v->regs.rcx & size_mask(addr_size)) != 0) {
+            v->regs.rflags |= RFLAGS_RF;
             return 0;
         }
     }
+    v->regs.rflags &= ~RFLAGS_RF;
     kvm_emul_skip(v, len);
     return 1;
 }
@@ -4134,6 +4138,7 @@ static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
         if (p->rep) {
             count = v->regs.rcx & m;
             if (count == 0) {
+                v->regs.rflags &= ~RFLAGS_RF;
                 kvm_emul_skip(v, p->len);
                 ex->kind = KVM_X_AGAIN;
                 return 0;
@@ -4145,7 +4150,7 @@ static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
         off = (p->in ? v->regs.rdi : v->regs.rsi) & m;
         la = linear(v, p->in ? KVM_SEG_ES : p->seg, off);
         room = (4096u - (la & 0xFFFu)) / p->size;
-        if (room > (m - off) / p->size + 1u) {
+        if (room != 0 && room - 1u > (m - off) / p->size) {
             room = (m - off) / p->size + 1u;
         }
         if (room == 0 || (v->regs.rflags & RFLAGS_DF)) {
