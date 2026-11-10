@@ -1,0 +1,80 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran the first
+58 pages of the WebGL 2.0.1 conformance list in Firefox 153.6.0esr under
+Weston's GL renderer, one after another in one browser:
+
+    sh runners/webgl.sh -g -b firefox -v 2.0.1 -k 58 0
+
+with QEMU 10.2.1 started with EGL_LOG_LEVEL=debug, a signal handler that
+prints the stack, and a library that wraps eglCreateContext and
+eglDestroyContext where libepoxy looks them up and prints each call with
+the number of contexts alive. QEMU ended with SIGABRT, exit status 134, in
+six runs of eight, and in three of four with Firefox's webgl.max-contexts
+and webgl.max-contexts-per-principal at 16, during page 56 or 57,
+conformance/context/context-release-with-workers.html or
+context-lost-restored.html. A whole WebGL 1.0.4 run ended the same way
+during context-release-with-workers.html. The lines of one run, from the failed creation:
+
+    libEGL debug: EGL user error 0x3003 (EGL_BAD_ALLOC) in eglCreateContext: dri2_create_context
+    egltrace: create failed error 0x0 alive 240 made 291 failed 1
+    Failed to complete framebuffer 0x0 Renderer
+    qemu-system-x86_64: ../src/dispatch_common.c:872: epoxy_get_proc_address: Assertion `0 && "Couldn't find current GLX or EGL context.\n"' failed.
+    qtrace: signal 6
+    qtrace.so(+0x1326) [0x77bfb7f78326]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(+0x45cb0) [0x77bfb6845cb0]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c) [0x77bfb68a61ac]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e) [0x77bfb6845b7e]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(abort+0x27) [0x77bfb68288ec]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29979) [0x77bfb6829979]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(__assert_fail+0xb5) [0x77bfb683bf75]
+    /usr/lib/x86_64-linux-gnu/libepoxy.so.0(+0x6025f) [0x77bfb51b025f]
+    /usr/lib/x86_64-linux-gnu/libepoxy.so.0(+0x7eb28) [0x77bfb51ceb28]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x4609f) [0x77bf7429609f]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x28107) [0x77bf74278107]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x3ae76) [0x77bf7428ae76]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x3b7fc) [0x77bf7428b7fc]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x185a9) [0x77bf742685a9]
+    /usr/lib/x86_64-linux-gnu/libvirglrenderer.so.1(+0x30ca4) [0x77bf74280ca4]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu-gl.so(virtio_gpu_virgl_process_cmd+0x1aa6) [0x77bf900a7046]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu.so(virtio_gpu_process_cmdq+0x8e) [0x77bf900b6a3e]
+    /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-gpu-gl.so(+0x752c) [0x77bf900a852c]
+    /usr/bin/qemu-system-x86_64(aio_bh_call+0x2e) [0x5de119fa81fe]
+    /usr/bin/qemu-system-x86_64(aio_bh_poll+0xb6) [0x5de119fa8326]
+    /usr/bin/qemu-system-x86_64(aio_dispatch+0x3b) [0x5de119f97a5b]
+    /usr/bin/qemu-system-x86_64(+0xba5396) [0x5de119faa396]
+    /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0(+0x60c1b) [0x77bfb7761c1b]
+    /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0(g_main_context_dispatch+0x40) [0x77bfb7761e90]
+    /usr/bin/qemu-system-x86_64(main_loop_wait+0x268) [0x5de119faed48]
+    /usr/bin/qemu-system-x86_64(qemu_main_loop+0x182) [0x5de119bc5d02]
+    /usr/bin/qemu-system-x86_64(+0xadf5e8) [0x5de119ee45e8]
+    /usr/bin/qemu-system-x86_64(main+0x79) [0x5de1198f4a89]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(+0x2a601) [0x77bfb682a601]
+    /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x88) [0x77bfb682a718]
+    /usr/bin/qemu-system-x86_64(_start+0x25) [0x5de1198f8165]
+    qtrace: end
+    Aborted
+
+In the two runs with the wrapper the failed creation came with 240
+contexts alive, after 291 and 275 made. The contexts that the pages of
+conformance/context/ made, by page, in the first:
+
+     51 made, 0 destroyed  conformance/context/context-eviction-with-garbage-collection.html
+     51 made, 0 destroyed  conformance/context/context-creation.html
+     49 made, 0 destroyed  conformance/context/context-creation-and-destruction.html
+     25 made, 0 destroyed  conformance/context/context-release-upon-reload.html
+     17 made, 0 destroyed  conformance/context/context-release-with-workers.html
+     17 made, 0 destroyed  conformance/context/context-attributes-alpha-depth-stencil-antialias.html
+      4 made, 0 destroyed  conformance/canvas/webgl-to-2d-canvas.html
+
+The frames in libvirglrenderer.so.1, by Ubuntu's debug information for
+build ID b89694d047dcc8f39579c288a82626d43147e708 (1.2.0-2ubuntu2), and in
+libepoxy.so.0 (1.5.10-2build1):
+
+    0x4609f vrend_link              src/vrend/vrend_renderer.c:1889
+    0x28107 add_shader_program      src/vrend/vrend_renderer.c:2092
+    0x3ae76 vrend_select_program    src/vrend/vrend_renderer.c:5762
+    0x3b7fc vrend_draw_vbo          src/vrend/vrend_renderer.c:5961
+    0x185a9 vrend_decode_draw_vbo   src/vrend/vrend_decode.c:502
+    0x30ca4 vrend_decode_ctx_submit_cmd  src/vrend/vrend_decode.c:2086
+    0x7eb28 epoxy_glGetProgramInfoLog_global_rewrite_ptr
+
+The page alone, and pages 48 to 55 alone in a new browser, end normally.
