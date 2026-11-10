@@ -448,6 +448,10 @@ int kvm_msr_feature(uint32_t index, uint64_t *value);
 /** Give `v` the MSRs of a vCPU at power-on. */
 void kvm_msr_reset(struct kvm_vcpu *v);
 
+/** Whether `index` is the STATUS register of a machine-check bank `v`
+ * has, which the guest itself may only clear. */
+int kvm_msr_mce_status(const struct kvm_vcpu *v, uint32_t index);
+
 /** Read the MSR `index` of `v` as the caller of KVM_GET_MSRS: 0, or -1
  * for an MSR it does not keep. */
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value);
@@ -645,6 +649,14 @@ struct kvm_lapic_irq {
     int redir_hint;
 };
 
+/** KVM_HC_SEND_IPI, as Linux's kvm_pv_send_ipi: the interrupt of `icr`'s
+ * vector, mode, level and trigger to each vCPU of `vm` whose physical
+ * APIC id is `min` plus a bit of `low`, or `min` plus `bits` plus a bit of
+ * `high`, `bits` being 64 or 32 by the caller's mode. How many took it, or
+ * -KVM_EINVAL for a logical destination or a shorthand. */
+int64_t kvm_lapic_pv_ipi(struct kvm_vm *vm, uint64_t low, uint64_t high, uint32_t min, uint64_t icr,
+                         uint32_t bits);
+
 /** Make the local APIC of `v`, a vCPU of a VM whose interrupt controller
  * is split, in the state of a reset: 0 or -ENOMEM. At KVM_CREATE_VCPU. */
 int kvm_lapic_create(struct kvm_vcpu *v);
@@ -840,6 +852,20 @@ int kvm_emul_mode(const struct kvm_vcpu *v);
 /** The privilege level of `v`: SS's DPL, 0 in real mode, 3 in virtual-8086
  * mode. */
 int kvm_emul_cpl(const struct kvm_vcpu *v);
+
+/** Set RFLAGS.RF in the frame of `v`'s pending exception when it is a
+ * fault, at its first injection, as Linux's kvm_check_and_inject_events:
+ * the handler's IRET then resumes past an instruction breakpoint. */
+void kvm_exception_rf(struct kvm_vcpu *v);
+
+/** The answer in RAX to the KVM hypercall `v`'s registers name, as
+ * Linux's kvm_emulate_hypercall gives it, before the caller cuts it to 32
+ * bits outside long mode: -KVM_EPERM above CPL 0; 0 for
+ * KVM_HC_VAPIC_POLL_IRQ and KVM_HC_SCHED_YIELD; KVM_HC_KICK_CPU's wake of
+ * the vCPU with the APIC id in RCX; KVM_HC_SEND_IPI's count;
+ * -KVM_EOPNOTSUPP for KVM_HC_CLOCK_PAIRING, as Linux without a host clock
+ * to pair; and -KVM_ENOSYS for any other. */
+uint64_t kvm_emul_hypercall(struct kvm_vcpu *v);
 
 /** Queue the exception `nr`, with `error` when `has_error`, for the next
  * entry, replacing one queued, and ask for its injection. */

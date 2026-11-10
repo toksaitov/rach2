@@ -118,7 +118,9 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     void *p = aligned_alloc(4096, 4096ul * count);
 
     live++;
-    *phys = (uintptr_t)p;
+    if (phys) {
+        *phys = (uintptr_t)p;
+    }
     return p;
 }
 
@@ -680,6 +682,30 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
     if (!write) {
         *value = 0;
     }
+    return 0;
+}
+
+/* What a KVM hypercall calls of vlapic.c: KVM_HC_KICK_CPU's wake, which
+ * finds no APIC, and KVM_HC_SEND_IPI's, which the VM without the split
+ * controller never reaches. */
+
+int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *irq)
+{
+    (void)vm;
+    (void)src;
+    (void)irq;
+    return 0;
+}
+
+int64_t kvm_lapic_pv_ipi(struct kvm_vm *vm, uint64_t low, uint64_t high, uint32_t min, uint64_t icr,
+                         uint32_t bits)
+{
+    (void)vm;
+    (void)low;
+    (void)high;
+    (void)min;
+    (void)icr;
+    (void)bits;
     return 0;
 }
 
@@ -1944,6 +1970,38 @@ static void insn_rows(int fd)
           "an exit reason the backend does not know is Linux's internal error");
 }
 
+/** Linux's rules for a guest's own MSR accesses and KVM's hypercalls. */
+static void linux_rows(int fd)
+{
+    uint32_t gpe = GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+
+    set_regs(fd, 0x1000, 0, 0x12345678u, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == gpe, "an unknown MSR is #GP");
+    CHECK((regs_of(fd).rflags & 0x10000u) != 0, "the fault's frame has RF set");
+    set_regs(fd, 0x1000, 5, 0xC0010000u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "WRMSR of a K7 event select is ignored without a PMU");
+    set_regs(fd, 0x1000, 5, 0xC1u, 7);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0 &&
+              regs_of(fd).rdx == 0,
+          "RDMSR of a P6 counter is 0 without a PMU");
+    set_regs(fd, 0x1000, 1, 0x401u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe,
+          "WRMSR of 1 to a machine-check bank's STATUS is #GP");
+    set_regs(fd, 0x1000, 0, 0x401u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "WRMSR of 0 to it clears it");
+    set_regs(fd, 0x1000, 11, 0, 0);
+    CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && (uint32_t)regs_of(fd).rax == 0,
+          "KVM_HC_SCHED_YIELD answers 0");
+    set_regs(fd, 0x1000, 9, 0, 0);
+    CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && (uint32_t)regs_of(fd).rax == (uint32_t)-95,
+          "KVM_HC_CLOCK_PAIRING answers -KVM_EOPNOTSUPP");
+    set_regs(fd, 0x1000, 10, 0, 0);
+    CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && (uint32_t)regs_of(fd).rax == (uint32_t)-1000,
+          "KVM_HC_SEND_IPI answers -KVM_ENOSYS without the local APIC in the kernel");
+}
+
 /** Set the interrupt shadow of the vCPU on `fd` to `shadow`. */
 static void set_shadow(int fd, uint8_t shadow)
 {
@@ -2594,6 +2652,7 @@ int main(void)
     ept_rows(fd);
     cr_rows(fd);
     insn_rows(fd);
+    linux_rows(fd);
     event_rows(fd);
     debug_rows(fd);
     host_rows(fd);
