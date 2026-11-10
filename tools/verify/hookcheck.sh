@@ -33,9 +33,11 @@
 # `push`, which tools/git-hooks/pre-push runs, judges what a push gives a
 # milestone branch in the same way, since a rebase runs no commit hook: the
 # files that differ are refused if unformatted, and quickcheck.sh also links
-# the host tests and runs cppcheck and Clang's warnings. A push to any other
-# branch passes, so that unfinished work can always be saved. `range BASE TIP`
-# judges the same by hand, as before a release's preparation.
+# the host tests and runs cppcheck and Clang's warnings under their recorded
+# versions, on the testing host when they are not here, as its header says.
+# A push to any other branch passes, so that unfinished work can always be
+# saved. `range BASE TIP` judges the same by hand, as before a release's
+# preparation.
 #
 # `format FILE ...` formats the files, relative to the root of the tree, in
 # place with the recorded version.
