@@ -685,6 +685,126 @@ struct intel_pps_readout {
 };
 
 /*
+ * The panel power sequencer of the eDP panel (intel_pps.c), Linux's
+ * intel_pps. The delays the sequencer is programmed with, the larger of
+ * the firmware's registers and the VBT's, in 100 us units as written
+ * (`power_up` to `power_cycle`), and the same in milliseconds for the
+ * driver's own waits. The times, in milliseconds of rtc_ticks_now, of the
+ * panel's last power off, its last power on and the backlight's last
+ * off. `want_vdd` says a caller holds the panel's VDD forced on;
+ * `vdd_off_due` is when VDD that no caller wants goes off, 0 when it is
+ * not pending. `sleep` is the queue the driver sleeps on in its waits.
+ */
+struct intel_pps {
+    uint32_t power_up, backlight_on, backlight_off, power_down, power_cycle;
+    uint32_t power_up_ms, backlight_on_ms, backlight_off_ms, power_down_ms, power_cycle_ms;
+    uint64_t power_off_time, last_power_on, last_backlight_off;
+    uint64_t vdd_off_due;
+    uint8_t want_vdd;
+    uint8_t ready;
+    wait_queue_t sleep;
+};
+
+/* The most fixed modes a panel has, its preferred one first. */
+#define INTEL_PANEL_FIXED_MODES 4
+/* The EDID blocks the eDP connector keeps. */
+#define INTEL_EDID_BLOCKS       4
+
+/*
+ * The eDP panel on DDI A (intel_dp.c), Linux's intel_dp with its
+ * connector's panel. `dpcd` is the sink's receiver capabilities and
+ * `edp_dpcd` its eDP display control capabilities, 0 before eDP 1.x;
+ * `sink_rates` the link rates in kHz of symbol clock it takes, highest
+ * last, and `use_rate_select` says they came from eDP 1.4's table, set
+ * by index through DP_LINK_RATE_SET. `max_lanes` the lanes it has. The
+ * link now: `link_rate` (kHz), `lane_count`, `train_set` per lane as
+ * DP_TRAINING_LANE0_SET has it, and `link_trained`. `buf_ctl` is the
+ * value DDI_BUF_CTL is built in, `saved_port_bits` the bits of the
+ * firmware's kept across mode sets. `edid` holds `edid_len` bytes;
+ * `fixed` the panel's modes, `nfixed` of them; `vbt` what the VBT says of
+ * the panel; `max_bpp` the bits a pixel the VBT allows, 0 for no limit.
+ * `present` says the panel answered at init.
+ */
+struct intel_dp {
+    int port;
+    uint8_t present;
+    uint8_t dpcd[16];
+    uint8_t edp_dpcd[3];
+    uint32_t sink_rates[8];
+    int nsink_rates;
+    uint8_t use_rate_select;
+    uint32_t max_lanes;
+    uint32_t link_rate;
+    uint32_t lane_count;
+    uint8_t train_set[4];
+    uint8_t link_trained;
+    uint32_t buf_ctl;
+    uint32_t saved_port_bits;
+    uint8_t edid[128 * INTEL_EDID_BLOCKS];
+    uint32_t edid_len;
+    struct drm_mode_modeinfo fixed[INTEL_PANEL_FIXED_MODES];
+    int nfixed;
+    struct intel_vbt_panel vbt;
+    uint32_t max_bpp;
+    struct intel_pps pps;
+};
+
+/*
+ * What a pipe is set to (intel_dp_compute_config and the fitter), Linux's
+ * part of intel_crtc_state that 78-10b drives: `active`, the panel's
+ * timings in `mode` with the pixel clock in kHz, the pipe's source size
+ * `src_w` by `src_h`, the user's mode's, `bpp` and `dither`, the link's
+ * `port_clock` (kHz of symbol clock) and `lanes`, the transcoder's M/N
+ * and transfer unit, the fitter (`pfit`, its window `pf_pos` and
+ * `pf_size` as PF_WIN_POS and PF_WIN_SZ take them, and `force_thru`, the
+ * eDP input of pipe A that goes through the fitter's power well), the
+ * pixel rate after the fitter, and the line times for WM_LINETIME.
+ */
+struct intel_crtc_config {
+    uint8_t active;
+    uint8_t dither;
+    uint8_t pfit;
+    uint8_t force_thru;
+    struct drm_mode_modeinfo mode;
+    uint32_t src_w, src_h;
+    uint32_t bpp;
+    uint32_t port_clock;
+    uint32_t lanes;
+    uint32_t data_m, data_n, link_m, link_n, tu;
+    uint32_t pf_pos, pf_size;
+    uint32_t pixel_rate;
+    uint32_t linetime, ips_linetime;
+};
+
+/*
+ * A level of a pipe's watermarks (intel_wm.c), Linux's intel_wm_level:
+ * the FIFO cachelines of each plane and the frame buffer compressor's
+ * lines, and whether the level may be used.
+ */
+struct intel_wm_level {
+    uint8_t enable;
+    uint32_t pri, spr, cur, fbc;
+};
+
+/* A pipe's watermarks at the five levels, and what the pipe shows that
+ * they depend on (Linux's intel_pipe_wm). */
+#define INTEL_WM_LEVELS 5
+struct intel_pipe_wm {
+    struct intel_wm_level wm[INTEL_WM_LEVELS];
+    uint8_t pipe_enabled, sprites_enabled, sprites_scaled, fbc_wm_enabled;
+};
+
+/* The watermark registers' values as last written (Linux's
+ * ilk_wm_values). */
+struct intel_wm_values {
+    uint32_t wm_pipe[3];
+    uint32_t wm_lp[3];
+    uint32_t wm_lp_spr[3];
+    uint8_t enable_fbc_wm;
+    uint8_t partition_5_6;
+};
+
+/*
  * A plane's framebuffer as the hardware scans it out: held, with the
  * binding `vma` pinned for scanout, NULL for the firmware's, which lies
  * where the firmware put it. A plane keeps two, what it shows and what it
@@ -702,6 +822,11 @@ struct intel_scanout {
  * bind. `event` is the commit's event the pipe holds until the frame
  * counter passes `event_frame`, the count read after the commit's writes,
  * or until the flip done of an async flip (`event_async`); NULL for none.
+ * `cfg` is what the pipe is set to, from the readout until its first mode
+ * set. `crc_wa` says a CRC source runs that needs Linux's force-through
+ * of the fitter. The watermarks: `wm_active` those the hardware uses,
+ * `wm_optimal` those of the last commit, written once the frame counter
+ * passes `wm_frame` while `wm_pending`.
  * `vbl_on` says its vblank interrupt is unmasked. The CRC: `crc_ctl` is
  * PIPE_CRC_CTL's value while a source runs, 0 when none does, and
  * `crc_skip` the frames still to drop after it starts. `shown` and
@@ -715,6 +840,11 @@ struct intel_crtc {
     struct drm_i915_private *i915;
     int pipe;
     struct intel_pipe_readout hw;
+    struct intel_crtc_config cfg;
+    uint8_t crc_wa;
+    struct intel_pipe_wm wm_active, wm_optimal;
+    uint8_t wm_pending;
+    uint32_t wm_frame;
     struct drm_pending_event *event;
     uint32_t event_frame;
     uint8_t event_async;
@@ -729,7 +859,11 @@ struct intel_crtc {
 
 /*
  * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
- * `connector` its eDP panel. `pps` is the sequencer's readout.
+ * `connector` its eDP panel, `dp` the panel. `pps` is the sequencer's
+ * readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most it
+ * may be, both read at init (intel_cdclk.c). `wm_latency` are the memory
+ * latencies of the watermark levels, level 0 in 0.1 us and the rest in
+ * 0.5 us, and `wm_hw` the watermark registers as written.
  * `fw_taken` says the firmware's framebuffer was made a framebuffer of the
  * device, whose object lies at `fw_ggtt` in the GGTT. `de_iir` holds the
  * display engine's events the interrupt latched and the deferred work has
@@ -745,7 +879,11 @@ struct intel_display {
     struct intel_crtc crtc[I915_NUM_PIPES];
     struct drm_encoder encoder;
     struct drm_connector connector;
+    struct intel_dp dp;
     struct intel_pps_readout pps;
+    uint32_t cdclk, max_cdclk;
+    uint16_t wm_latency[INTEL_WM_LEVELS];
+    struct intel_wm_values wm_hw;
     uint32_t fw_ggtt;
     uint8_t fw_taken;
     uint32_t de_iir;
@@ -1927,6 +2065,124 @@ void intel_crtc_send_event(struct intel_crtc *crtc);
  */
 void intel_display_irq_work(struct drm_i915_private *i915);
 
+/*
+ * The eDP panel's AUX channel (intel_dp_aux.c), under the big lock in
+ * process context; a transfer may sleep a millisecond while the channel
+ * is busy, and holds the panel's VDD while it runs.
+ */
+
+/* A message on the AUX channel, Linux's drm_dp_aux_msg: `request`
+ * DP_AUX_*, `address` in the DPCD or on the I2C bus, `size` bytes of
+ * `buffer`, and the sink's `reply`. */
+struct intel_dp_aux_msg {
+    uint32_t address;
+    uint8_t request;
+    uint8_t reply;
+    uint8_t *buffer;
+    uint32_t size;
+};
+
+/**
+ * Send `msg` once, Linux's intel_dp_aux_transfer: the bytes sent or
+ * received, with the sink's reply in `msg->reply`, -E2BIG for more than
+ * 16 bytes, -EINVAL for another request, or the channel's -EBUSY, -EIO or
+ * -ETIMEDOUT.
+ */
+int32_t intel_dp_aux_transfer(struct drm_i915_private *i915, struct intel_dp_aux_msg *msg);
+
+/** Read `size` bytes at DPCD `addr` into `buf`, as Linux's
+ * drm_dp_dpcd_read: `size`, or the first error of 32 tries. */
+int32_t intel_dp_dpcd_read(struct drm_i915_private *i915, uint32_t addr, uint8_t *buf,
+                           uint32_t size);
+
+/** Write `size` bytes, 16 at most, of `buf` at DPCD `addr`: `size`, or the
+ * first error of 32 tries. */
+int32_t intel_dp_dpcd_write(struct drm_i915_private *i915, uint32_t addr, const uint8_t *buf,
+                            uint32_t size);
+
+/** Write one byte at DPCD `addr`. */
+int32_t intel_dp_dpcd_writeb(struct drm_i915_private *i915, uint32_t addr, uint8_t value);
+
+/**
+ * Read the sink's EDID over I2C over AUX into `buf`, `cap` bytes at most,
+ * as Linux's drm_edid_read_ddc: the base block four times at most until
+ * its header and sum are good, then the extensions it counts that fit;
+ * the bytes read in `*len`. 0, -EIO when the sink did not answer, or
+ * -EINVAL for a base block never good.
+ */
+int32_t intel_dp_read_edid(struct drm_i915_private *i915, uint8_t *buf, uint32_t cap,
+                           uint32_t *len);
+
+/*
+ * The panel power sequencer (intel_pps.c), Linux's intel_pps.c for one
+ * panel on a Lynx Point PCH, under the big lock in process context. The
+ * waits sleep: on the panel's timings, at most the 500 ms of a power cycle
+ * and the 5 s the sequencer is given to finish.
+ */
+
+/** Sleep `ms` milliseconds, as Linux's msleep: on the scheduler's clock in
+ * a process, spun on the device's clock before there is one. */
+void intel_display_msleep(struct drm_i915_private *i915, uint32_t ms);
+
+/**
+ * Set the sequencer up, Linux's intel_pps_init: the delays chosen from its
+ * registers, the VBT and the eDP specification's limits and written back,
+ * and a VDD the firmware left on taken over.
+ */
+void intel_pps_init(struct drm_i915_private *i915);
+
+/**
+ * Force the panel's VDD on for a caller that needs the panel's logic, as
+ * Linux's intel_pps_vdd_on_unlocked: after the power cycle's wait and with
+ * the power up delay when the panel's power is off. 1 when this call
+ * turned it on, so that the caller turns it off again, 0 when it was.
+ */
+int intel_pps_vdd_on_unlocked(struct drm_i915_private *i915);
+
+/** Let VDD go: at once with `sync`, else once five power cycles pass
+ * without another caller, as Linux's delayed work does it. */
+void intel_pps_vdd_off_unlocked(struct drm_i915_private *i915, int sync);
+
+/** Turn off a VDD let go whose time has come; from each commit and probe,
+ * Linux's edp_panel_vdd_work. */
+void intel_pps_vdd_work(struct drm_i915_private *i915);
+
+/** Power the panel on, Linux's intel_pps_on: after the power cycle's wait,
+ * then wait for the sequencer to be idle on. */
+void intel_pps_on(struct drm_i915_private *i915);
+
+/** Power it off, with VDD and the backlight's enable, Linux's
+ * intel_pps_off, and wait for the sequencer to be idle off. */
+void intel_pps_off(struct drm_i915_private *i915);
+
+/** Set the backlight's enable once the backlight on delay has passed since
+ * the panel came on, Linux's intel_pps_backlight_on. */
+void intel_pps_backlight_on(struct drm_i915_private *i915);
+
+/** Clear it and wait the backlight off delay, Linux's
+ * intel_pps_backlight_off. */
+void intel_pps_backlight_off(struct drm_i915_private *i915);
+
+/** Whether the panel's power or its VDD is on. */
+int intel_pps_have_power_or_vdd(struct drm_i915_private *i915);
+
+/*
+ * The CD clock (intel_cdclk.c), which Haswell's driver reads and never
+ * changes.
+ */
+
+/** Read the CD clock into `display.cdclk` and `display.max_cdclk`, Linux's
+ * hsw_get_cdclk; from the display's init, before the AUX channel, whose
+ * clock divides it. */
+void intel_cdclk_init(struct drm_i915_private *i915);
+
+/** The fastest pixel clock in kHz a pipe may take, Linux's max_dotclk_freq. */
+uint32_t intel_max_dotclock(struct drm_i915_private *i915);
+
+/** 0 when a pipe's pixel rate of `pixel_rate` kHz fits the CD clock, Linux's
+ * fixed_modeset_calc_cdclk, -EINVAL otherwise. */
+int32_t intel_cdclk_check(struct drm_i915_private *i915, uint32_t pixel_rate);
+
 /** The CRC hooks of the CRTCs (i915_display_debugfs.c). */
 int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name);
 int32_t intel_crtc_verify_crc_source(struct drm_crtc *crtc, const char *name, uint32_t *values_cnt);
@@ -1945,8 +2201,9 @@ void intel_crtc_crc_frame(struct intel_crtc *crtc);
  */
 void intel_backlight_setup(struct drm_i915_private *i915);
 
-/** Turn the backlight's enable line with pipe A: off while the pipe is
- * off, and on again at the class's wish when it comes back. */
+/** Turn the backlight's enable line with the panel's pipe: off while the
+ * pipe is off, and on again at the class's wish when it comes back, or
+ * with the pipe when the class has no switch. */
 void intel_backlight_pipe(struct drm_i915_private *i915, int on);
 
 /** Give the backlight back to the boot's driver, from the unplug. */

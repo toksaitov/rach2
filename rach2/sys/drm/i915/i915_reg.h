@@ -624,36 +624,55 @@
 #define I915_TRANS2_REG(trans, a) \
     ((trans) == I915_TRANS_EDP ? (a) - 0x70000 + 0x7f000 : (a) + (trans) * 0x1000)
 
-#define TRANS_HTOTAL(t)          I915_TRANS_REG(t, 0x60000)
-#define TRANS_HBLANK(t)          I915_TRANS_REG(t, 0x60004)
-#define TRANS_HSYNC(t)           I915_TRANS_REG(t, 0x60008)
-#define TRANS_VTOTAL(t)          I915_TRANS_REG(t, 0x6000c)
-#define TRANS_VBLANK(t)          I915_TRANS_REG(t, 0x60010)
-#define TRANS_VSYNC(t)           I915_TRANS_REG(t, 0x60014)
-#define PIPESRC(p)               (0x6001c + (p) * 0x1000)
-#define TRANSCONF(t)             I915_TRANS2_REG(t, 0x70008)
-#define TRANSCONF_ENABLE         (1u << 31)
-#define TRANSCONF_STATE_ENABLE   (1u << 30)
-#define TRANSCONF_INTERLACE_MASK (7u << 21)
-#define TRANSCONF_DITHER_EN      (1u << 4)
-#define PIPE_MISC(p)             (0x70030 + (p) * 0x1000)
-#define PIPE_MISC_BPC_MASK       (7u << 5)
-#define PIPE_MISC_BPC_8          (0u << 5)
-#define PIPE_MISC_BPC_10         (1u << 5)
-#define PIPE_MISC_BPC_6          (2u << 5)
-#define PIPE_MISC_DITHER_ENABLE  (1u << 4)
-#define PIPE_FRMCOUNT_G4X(p)     (0x70040 + (p) * 0x1000)
-#define PIPE_FLIPCOUNT_G4X(p)    (0x70044 + (p) * 0x1000)
+#define TRANS_HTOTAL(t)               I915_TRANS_REG(t, 0x60000)
+#define TRANS_HBLANK(t)               I915_TRANS_REG(t, 0x60004)
+#define TRANS_HSYNC(t)                I915_TRANS_REG(t, 0x60008)
+#define TRANS_VTOTAL(t)               I915_TRANS_REG(t, 0x6000c)
+#define TRANS_VBLANK(t)               I915_TRANS_REG(t, 0x60010)
+#define TRANS_VSYNC(t)                I915_TRANS_REG(t, 0x60014)
+#define TRANS_VSYNCSHIFT(t)           I915_TRANS_REG(t, 0x60028)
+#define PIPESRC(p)                    (0x6001c + (p) * 0x1000)
+#define TRANSCONF(t)                  I915_TRANS2_REG(t, 0x70008)
+#define TRANSCONF_ENABLE              (1u << 31)
+#define TRANSCONF_STATE_ENABLE        (1u << 30)
+#define TRANSCONF_INTERLACE_MASK      (7u << 21)
+#define TRANSCONF_INTERLACE_PF_PD_ILK (0u << 21)
+#define TRANSCONF_DITHER_EN           (1u << 4)
+#define TRANSCONF_DITHER_TYPE_SP      (0u << 2)
+#define PIPE_MISC(p)                  (0x70030 + (p) * 0x1000)
+#define PIPE_MISC_BPC_MASK            (7u << 5)
+#define PIPE_MISC_BPC_8               (0u << 5)
+#define PIPE_MISC_BPC_10              (1u << 5)
+#define PIPE_MISC_BPC_6               (2u << 5)
+#define PIPE_MISC_DITHER_ENABLE       (1u << 4)
+#define PIPE_FRMCOUNT_G4X(p)          (0x70040 + (p) * 0x1000)
+#define PIPE_FLIPCOUNT_G4X(p)         (0x70044 + (p) * 0x1000)
 
 /* A transcoder's DisplayPort M/N values: the data's, with the transfer
  * unit's size in DATA_M1's bits 30:25, and the link's, which give the
  * pixel clock as M/N of the link's symbol clock. */
-#define PIPE_DATA_M1(t)    I915_TRANS_REG(t, 0x60030)
-#define TU_SIZE_SHIFT      25
-#define PIPE_DATA_N1(t)    I915_TRANS_REG(t, 0x60034)
-#define PIPE_LINK_M1(t)    I915_TRANS_REG(t, 0x60040)
-#define PIPE_LINK_N1(t)    I915_TRANS_REG(t, 0x60044)
-#define DATA_LINK_M_N_MASK 0xffffffu
+#define PIPE_DATA_M1(t) I915_TRANS_REG(t, 0x60030)
+#define TU_SIZE_SHIFT   25
+#define PIPE_DATA_N1(t) I915_TRANS_REG(t, 0x60034)
+#define PIPE_LINK_M1(t) I915_TRANS_REG(t, 0x60040)
+#define PIPE_LINK_N1(t) I915_TRANS_REG(t, 0x60044)
+#define PIPE_DATA_M2(t) I915_TRANS_REG(t, 0x60038)
+#define PIPE_DATA_N2(t) I915_TRANS_REG(t, 0x6003c)
+#define PIPE_LINK_M2(t) I915_TRANS_REG(t, 0x60048)
+#define PIPE_LINK_N2(t) I915_TRANS_REG(t, 0x6004c)
+#define TU_SIZE(x)      (((uint32_t)(x) - 1u) << TU_SIZE_SHIFT)
+
+/* The main stream attributes a DisplayPort transcoder sends: the clocks
+ * synchronous, and the colour depth in bits 7:5, 0 for 6 bits. */
+#define TRANS_MSA_MISC(t)   I915_TRANS2_REG(t, 0x60410)
+#define TRANS_MSA_SYNC_CLK  (1u << 0)
+#define TRANS_MSA_BPC_SHIFT 5
+
+/* A transcoder's chicken bits, eDP's at 0x420cc, and its frame start delay
+ * in bits 28:27, the delay less one. */
+#define CHICKEN_TRANS(t)           ((t) == I915_TRANS_EDP ? 0x420cc : 0x420c0 + (t) * 4)
+#define HSW_FRAME_START_DELAY_MASK (3u << 27)
+#define DATA_LINK_M_N_MASK         0xffffffu
 
 /* The legacy VGA plane, which scans out the VGA's text and modes in place
  * of the primary plane while bit 31 is clear. */
@@ -744,6 +763,11 @@
 #define PF_CTL(i)             (0x68080 + (i) * 0x800)
 #define PF_ENABLE             (1u << 31)
 #define PF_PIPE_SEL_IVB(pipe) ((uint32_t)(pipe) << 29)
+#define PF_FILTER_MED_3x3     (1u << 23)
+#define PF_WIN_XPOS(x)        ((uint32_t)(x) << 16)
+#define PF_WIN_YPOS(y)        ((uint32_t)(y))
+#define PF_WIN_XSIZE(w)       ((uint32_t)(w) << 16)
+#define PF_WIN_YSIZE(h)       ((uint32_t)(h))
 
 /* Watermarks: pipe C's level 0 is apart from A's and B's. */
 #define WM0_PIPE_ILK(p)            ((p) == I915_PIPE_C ? 0x45200 : 0x45100 + (p) * 4)
@@ -751,47 +775,88 @@
 #define WM2_LP_ILK                 0x4510c
 #define WM3_LP_ILK                 0x45110
 #define WM1S_LP_ILK                0x45120
+#define WM2S_LP_IVB                0x45124
+#define WM3S_LP_IVB                0x45128
 #define WM_MISC                    0x45260
 #define WM_MISC_DATA_PARTITION_5_6 (1u << 0)
+#define WM0_PIPE_PRIMARY_SHIFT     16
+#define WM0_PIPE_SPRITE_SHIFT      8
+#define WM_LP_ENABLE               (1u << 31)
+#define WM_LP_LATENCY_SHIFT        24
+#define WM_LP_FBC_ILK_SHIFT        20
+#define WM_LP_PRIMARY_SHIFT        8
+#define DISP_ARB_CTL               0x45000
+#define DISP_FBC_WM_DIS            (1u << 15)
+
+/* A pipe's line time in eighths of a microsecond, at the pixel clock in
+ * bits 8:0 and at the CD clock, for IPS, in bits 24:16. */
+#define WM_LINETIME(p)         (0x45270 + (p) * 4)
+#define HSW_LINETIME_MASK      0x1ffu
+#define HSW_IPS_LINETIME_SHIFT 16
+
+/* The memory latencies of the watermark levels, which the pcode leaves in
+ * the MCHBAR's mirror (intel_mchbar_regs.h): level 0 in 0.1 us in bits
+ * 63:56, or 3:0 when those are 0, levels 1 to 4 in 0.5 us in bits 11:4,
+ * 19:12, 28:20 and 40:32. Read as two dwords. */
+#define MCH_SSKPD    0x145d10
+#define MCH_SSKPD_HI 0x145d14
+
+/* The fuses: the CD clock held to 450 MHz. */
+#define FUSE_STRAP      0x42014
+#define HSW_CDCLK_LIMIT (1u << 24)
 
 /* ------------------------------------------------------------------------
  * DDI, its clocks and PLLs (i915_reg.h): ports A to E are 0 to 4.
  */
 
-#define DDI_BUF_CTL(port)            (0x64000 + (port) * 0x100)
-#define DDI_BUF_CTL_ENABLE           (1u << 31)
-#define DDI_BUF_IS_IDLE              (1u << 7)
-#define DDI_A_4_LANES                (1u << 4)
-#define DDI_PORT_WIDTH(width)        (((uint32_t)(width) - 1) << 1)
-#define DDI_PORT_WIDTH_MASK          (7u << 1)
-#define DDI_INIT_DISPLAY_DETECTED    (1u << 0)
-#define DDI_BUF_TRANS(port)          (0x64e00 + (port) * 0x60)
-#define DP_TP_CTL(port)              (0x64040 + (port) * 0x100)
-#define DP_TP_CTL_ENABLE             (1u << 31)
-#define DP_TP_STATUS(port)           (0x64044 + (port) * 0x100)
-#define DP_TP_STATUS_IDLE_DONE       (1u << 25)
-#define TRANS_DDI_FUNC_CTL(t)        I915_TRANS_REG(t, 0x60400)
-#define TRANS_DDI_FUNC_ENABLE        (1u << 31)
-#define TRANS_DDI_PORT_SHIFT         28
-#define TRANS_DDI_PORT_MASK          (7u << 28)
-#define TRANS_DDI_SELECT_PORT(x)     ((uint32_t)(x) << 28)
-#define TRANS_DDI_MODE_SELECT_MASK   (7u << 24)
-#define TRANS_DDI_MODE_SELECT_HDMI   (0u << 24)
-#define TRANS_DDI_MODE_SELECT_DVI    (1u << 24)
-#define TRANS_DDI_MODE_SELECT_DP_SST (2u << 24)
-#define TRANS_DDI_BPC_MASK           (7u << 20)
-#define TRANS_DDI_BPC_8              (0u << 20)
-#define TRANS_DDI_BPC_10             (1u << 20)
-#define TRANS_DDI_BPC_6              (2u << 20)
-#define TRANS_DDI_BPC_12             (3u << 20)
-#define TRANS_DDI_PVSYNC             (1u << 17)
-#define TRANS_DDI_PHSYNC             (1u << 16)
-#define TRANS_DDI_EDP_INPUT_MASK     (7u << 12)
-#define TRANS_DDI_EDP_INPUT_A_ON     (0u << 12)
-#define TRANS_DDI_EDP_INPUT_A_ONOFF  (4u << 12)
-#define TRANS_DDI_EDP_INPUT_B_ONOFF  (5u << 12)
-#define TRANS_DDI_EDP_INPUT_C_ONOFF  (6u << 12)
-#define TRANS_DDI_PORT_WIDTH_MASK    (7u << 1)
+#define DDI_BUF_CTL(port)               (0x64000 + (port) * 0x100)
+#define DDI_BUF_CTL_ENABLE              (1u << 31)
+#define DDI_BUF_TRANS_SELECT(n)         ((uint32_t)(n) << 24)
+#define DDI_BUF_EMP_MASK                (0xfu << 24)
+#define DDI_BUF_PORT_REVERSAL           (1u << 16)
+#define DDI_BUF_IS_IDLE                 (1u << 7)
+#define DDI_A_4_LANES                   (1u << 4)
+#define DDI_PORT_WIDTH(width)           (((uint32_t)(width) - 1) << 1)
+#define DDI_PORT_WIDTH_MASK             (7u << 1)
+#define DDI_INIT_DISPLAY_DETECTED       (1u << 0)
+#define DDI_BUF_TRANS(port)             (0x64e00 + (port) * 0x60)
+#define DDI_BUF_TRANS_LO(port, i)       (DDI_BUF_TRANS(port) + (i) * 8)
+#define DDI_BUF_TRANS_HI(port, i)       (DDI_BUF_TRANS(port) + (i) * 8 + 4)
+#define DP_TP_CTL(port)                 (0x64040 + (port) * 0x100)
+#define DP_TP_CTL_ENABLE                (1u << 31)
+#define DP_TP_CTL_MODE_SST              (0u << 27)
+#define DP_TP_CTL_ENHANCED_FRAME_ENABLE (1u << 18)
+#define DP_TP_CTL_LINK_TRAIN_MASK       (7u << 8)
+#define DP_TP_CTL_LINK_TRAIN_PAT1       (0u << 8)
+#define DP_TP_CTL_LINK_TRAIN_PAT2       (1u << 8)
+#define DP_TP_CTL_LINK_TRAIN_IDLE       (2u << 8)
+#define DP_TP_CTL_LINK_TRAIN_NORMAL     (3u << 8)
+#define DP_TP_CTL_LINK_TRAIN_PAT3       (4u << 8)
+#define DP_TP_STATUS(port)              (0x64044 + (port) * 0x100)
+#define DP_TP_STATUS_IDLE_DONE          (1u << 25)
+#define TRANS_DDI_FUNC_CTL(t)           I915_TRANS_REG(t, 0x60400)
+#define TRANS_DDI_FUNC_ENABLE           (1u << 31)
+#define TRANS_DDI_PORT_SHIFT            28
+#define TRANS_DDI_PORT_MASK             (7u << 28)
+#define TRANS_DDI_SELECT_PORT(x)        ((uint32_t)(x) << 28)
+#define TRANS_DDI_MODE_SELECT_MASK      (7u << 24)
+#define TRANS_DDI_MODE_SELECT_HDMI      (0u << 24)
+#define TRANS_DDI_MODE_SELECT_DVI       (1u << 24)
+#define TRANS_DDI_MODE_SELECT_DP_SST    (2u << 24)
+#define TRANS_DDI_BPC_MASK              (7u << 20)
+#define TRANS_DDI_BPC_8                 (0u << 20)
+#define TRANS_DDI_BPC_10                (1u << 20)
+#define TRANS_DDI_BPC_6                 (2u << 20)
+#define TRANS_DDI_BPC_12                (3u << 20)
+#define TRANS_DDI_PVSYNC                (1u << 17)
+#define TRANS_DDI_PHSYNC                (1u << 16)
+#define TRANS_DDI_EDP_INPUT_MASK        (7u << 12)
+#define TRANS_DDI_EDP_INPUT_A_ON        (0u << 12)
+#define TRANS_DDI_EDP_INPUT_A_ONOFF     (4u << 12)
+#define TRANS_DDI_EDP_INPUT_B_ONOFF     (5u << 12)
+#define TRANS_DDI_EDP_INPUT_C_ONOFF     (6u << 12)
+#define TRANS_DDI_PORT_WIDTH_MASK       (7u << 1)
+#define TRANS_DDI_PORT_WIDTH(w)         (((uint32_t)(w) - 1u) << 1)
 
 #define SPLL_CTL                0x46020
 #define SPLL_PLL_ENABLE         (1u << 31)
@@ -823,31 +888,57 @@
 
 #define SFUSE_STRAP 0xc2014
 
+/* The PCH's raw clock in MHz, bits 9:0, which the panel power sequencer's
+ * divisor counts. */
+#define PCH_RAWCLK_FREQ  0xc6204
+#define RAWCLK_FREQ_MASK 0x3ffu
+
 /* The HDMI infoframes of transcoder `t` (i915_reg.h). */
 #define HSW_TVIDEO_DIP_CTL(t)      I915_TRANS_REG(t, 0x60200)
 #define HSW_TVIDEO_DIP_AVI_DATA(t) I915_TRANS_REG(t, 0x60220)
+#define VIDEO_DIP_ENABLE_VSC_HSW   (1u << 20)
+#define VIDEO_DIP_ENABLE_GCP_HSW   (1u << 16)
+#define VIDEO_DIP_ENABLE_AVI_HSW   (1u << 12)
+#define VIDEO_DIP_ENABLE_VS_HSW    (1u << 8)
+#define VIDEO_DIP_ENABLE_GMP_HSW   (1u << 4)
+#define VIDEO_DIP_ENABLE_SPD_HSW   (1u << 0)
 
 /* ------------------------------------------------------------------------
  * The panel power sequencer and backlight (display/intel_pps_regs.h,
  * display/intel_backlight_regs.h), in the PCH's range on Haswell.
  */
 
-#define PCH_PPS_BASE          0xc7200
-#define PP_STATUS             (PCH_PPS_BASE + 0x00)
-#define PP_ON                 (1u << 31)
-#define PP_READY              (1u << 30)
-#define PP_SEQUENCE_MASK      (3u << 28)
-#define PP_CYCLE_DELAY_ACTIVE (1u << 27)
-#define PP_CONTROL            (PCH_PPS_BASE + 0x04)
-#define PANEL_UNLOCK_MASK     0xffff0000u
-#define PANEL_UNLOCK_REGS     0xabcd0000u
-#define EDP_FORCE_VDD         (1u << 3)
-#define EDP_BLC_ENABLE        (1u << 2)
-#define PANEL_POWER_RESET     (1u << 1)
-#define PANEL_POWER_ON        (1u << 0)
-#define PP_ON_DELAYS          (PCH_PPS_BASE + 0x08)
-#define PP_OFF_DELAYS         (PCH_PPS_BASE + 0x0c)
-#define PP_DIVISOR            (PCH_PPS_BASE + 0x10)
+#define PCH_PPS_BASE                 0xc7200
+#define PP_STATUS                    (PCH_PPS_BASE + 0x00)
+#define PP_ON                        (1u << 31)
+#define PP_READY                     (1u << 30)
+#define PP_SEQUENCE_MASK             (3u << 28)
+#define PP_SEQUENCE_NONE             (0u << 28)
+#define PP_SEQUENCE_POWER_UP         (1u << 28)
+#define PP_SEQUENCE_POWER_DOWN       (2u << 28)
+#define PP_CYCLE_DELAY_ACTIVE        (1u << 27)
+#define PP_SEQUENCE_STATE_MASK       0xfu
+#define PP_SEQUENCE_STATE_OFF_IDLE   0x0u
+#define PP_SEQUENCE_STATE_ON_IDLE    0x8u
+#define PP_CONTROL                   (PCH_PPS_BASE + 0x04)
+#define PANEL_UNLOCK_MASK            0xffff0000u
+#define PANEL_UNLOCK_REGS            0xabcd0000u
+#define EDP_FORCE_VDD                (1u << 3)
+#define EDP_BLC_ENABLE               (1u << 2)
+#define PANEL_POWER_RESET            (1u << 1)
+#define PANEL_POWER_ON               (1u << 0)
+#define PP_ON_DELAYS                 (PCH_PPS_BASE + 0x08)
+#define PP_OFF_DELAYS                (PCH_PPS_BASE + 0x0c)
+#define PP_DIVISOR                   (PCH_PPS_BASE + 0x10)
+/* The delays' fields, in 100 us units: power up and light on in
+ * PP_ON_DELAYS, power down and light off in PP_OFF_DELAYS; the reference
+ * divider and the power cycle delay, in 100 ms units plus one, in
+ * PP_DIVISOR. */
+#define PANEL_POWER_UP_DELAY_SHIFT   16
+#define PANEL_POWER_DOWN_DELAY_SHIFT 16
+#define PANEL_DELAY_FIELD_MASK       0x1fffu
+#define PP_REFERENCE_DIVIDER_SHIFT   8
+#define PANEL_POWER_CYCLE_DELAY_MASK 0x1fu
 
 #define BLC_PWM_CPU_CTL2          0x48250
 #define BLM_PWM_ENABLE            (1u << 31)
