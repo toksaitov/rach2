@@ -828,8 +828,22 @@ int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
 }
 
 /** No change counted. */
-uint32_t filecache_epoch(void)
+uint32_t filecache_epoch(struct vfs_mount *mnt, void *node)
 {
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
+/** Keep no file, so that read(2) goes to the file system. */
+int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
+                        int32_t *got)
+{
+    (void)ofd;
+    (void)buf;
+    (void)count;
+    (void)offset;
+    (void)got;
     return 0;
 }
 
