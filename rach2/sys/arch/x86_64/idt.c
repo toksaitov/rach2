@@ -155,8 +155,8 @@ void init_idt(void)
     set_gate(46, irq14, GATE_KERNEL, 0);
     set_gate(47, irq15, GATE_KERNEL, 0);
 
-    if (isr_msi_stubs_end - isr_msi_stubs !=
-        (ISR_MSI_LAST - ISR_MSI_FIRST + 1) * ISR_MSI_STUB_BYTES) {
+    if ((uintptr_t)isr_msi_stubs_end - (uintptr_t)isr_msi_stubs !=
+        (uintptr_t)(ISR_MSI_LAST - ISR_MSI_FIRST + 1) * ISR_MSI_STUB_BYTES) {
         k_panic("idt: a message vector's stub is not 16 bytes from the last");
     }
     for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {

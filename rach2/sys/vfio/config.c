@@ -164,8 +164,12 @@ uint16_t vfio_config_command(const struct vfio_device *d, uint16_t cmd)
  * with the BAR's kind; the upper half of a 64-bit BAR cut to its own. */
 static uint32_t vbar_value(const struct vfio_device *d, int i)
 {
-    uint64_t size = d->bar_size[i];
+    uint64_t size;
 
+    if (i < 0 || i > 5) {
+        return 0;
+    }
+    size = d->bar_size[i];
     if (size == 0 && i > 0 && (d->bar_flags[i - 1] & 0x7u) == 0x4u && d->bar_size[i - 1] != 0) {
         return d->vbar[i] & ~(uint32_t)((d->bar_size[i - 1] - 1) >> 32);
     }
