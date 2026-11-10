@@ -1,7 +1,7 @@
 /*
  * devices.h: the ACPI devices of the kernel's own on ACPICA, the embedded
- * controller, the buttons, the video bus and the IdeaPad's VPC2004, as
- * boot.c starts them.
+ * controller, the buttons, the video bus and the IdeaPad's VPC2004, and the
+ * PNP IDs of the 8042's devices, as boot.c starts them.
  */
 #ifndef _ACPI_DEVICES_H_
 #define _ACPI_DEVICES_H_
@@ -45,6 +45,15 @@ void acpi_video_start(void);
  * EC, in process context.
  */
 void acpi_ideapad_start(void);
+
+/**
+ * Find the 8042's keyboard and PS/2 mouse among the namespace's present
+ * devices with _CRS, as Linux's i8042 PNP driver finds them, and record
+ * their PNP IDs with `i8042_pnp_device`, so that the mouse's bring-up after
+ * this can match the touchpad's quirks by them. Called once ACPICA's
+ * objects are initialized and the EC runs, since a _STA may read it.
+ */
+void acpi_pnp_i8042(void);
 
 /** Report `code` pressed and then released on `dev`, each in a packet of
  * its own, as Linux's ACPI drivers report a button, and poke the console's
