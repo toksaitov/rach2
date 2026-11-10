@@ -759,6 +759,11 @@ each linear or X-tiled
 .Pq Dv I915_FORMAT_MOD_X_TILED ,
 and the cursor ARGB8888, linear, 64, 128 or 256 pixels wide and from 8
 lines to its width high, square when turned by 180 degrees.
+The planes have no
+.Ql FB_DAMAGE_CLIPS
+property, as on Linux before display version 12;
+.Dv DRM_IOCTL_MODE_DIRTYFB
+still flushes the rectangles it names.
 A commit fails with
 .Er EINVAL
 for C8, which needs a gamma table the CRTCs do not have; a modifier that
