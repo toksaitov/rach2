@@ -545,6 +545,41 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
+/** No ALPS pad answers where the Synaptics pad does not; the ALPS pad's
+ * own rows are alps_hosttest.c's. */
+int alps_init(void)
+{
+    return 0;
+}
+
+/** No ALPS pad's set-up fails, so no mouse takes its name. */
+const char *alps_mouse_name(const char *proto)
+{
+    return proto;
+}
+
+/** No ALPS pad's bytes come, since `alps_init` found none. */
+int alps_byte(uint8_t data)
+{
+    (void)data;
+    return ALPS_GOOD;
+}
+
+/* The rest of alps.h, which a port without an ALPS pad never calls;
+ * alps_hosttest.c tests it. */
+int alps_packet_start(void)
+{
+    return 1;
+}
+
+int alps_reconnect(void)
+{
+    return -1;
+}
+
+void alps_disconnect(void)
+{}
+
 /** No Elantech pad answers where the Synaptics pad does not; the
  * Elantech pad's own rows are elantech_hosttest.c's. */
 int elantech_init(void)
@@ -851,7 +886,7 @@ static void model_reset(void)
     }
     touchpad = 0;
     state = STATE_ACTIVE;
-    out_of_sync = 0;
+    bad_in_a_row = 0;
     cmd_busy = 0;
     reconnect_wanted = 0;
     bat_held = 0;
@@ -1896,7 +1931,7 @@ static void reset_rows(void)
         irq_byte(0x08);
     }
     CHECK("four bad packets in a row are counted",
-          out_of_sync == 4 && state == STATE_ACTIVE && !reconnect_wanted);
+          bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted);
     irq_byte(0x08);
     CHECK("the fifth stops the port and asks for a reconnect",
           state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT &&
@@ -1914,7 +1949,7 @@ static void reset_rows(void)
     expect(0xF4);
     CHECK("the reconnect is Linux's: reset, ID, knock, queries, mode, rate, reporting",
           pad_took_expected());
-    CHECK("the port reports again", state == STATE_ACTIVE && out_of_sync == 0 && pad_reporting &&
+    CHECK("the port reports again", state == STATE_ACTIVE && bad_in_a_row == 0 && pad_reporting &&
                                         !reconnect_wanted && pad != NULL);
     pad_packet(3000, 3000, 50, 8, 0, 0);
     take(&pad_w);
@@ -1928,12 +1963,12 @@ static void reset_rows(void)
     }
     irq_bytes(good, 6);
     CHECK("a whole packet ends the count",
-          out_of_sync == 0 && starts_with(last_info, "sync: resynced"));
+          bad_in_a_row == 0 && starts_with(last_info, "sync: resynced"));
     for (i = 0; i < 4; i++) {
         irq_byte(0x08);
     }
     CHECK("so four more ask nothing",
-          out_of_sync == 4 && state == STATE_ACTIVE && !reconnect_wanted);
+          bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted);
 }
 
 /** A pad that answers the reconnect late, and another pad in its place. */
@@ -2051,9 +2086,9 @@ static void mouse_sync_rows(void)
         irq_byte(0x00);
     }
     CHECK("four first bytes without the framing bit are four bad packets",
-          out_of_sync == 4 && state == STATE_ACTIVE && !reconnect_wanted && packet_index == 0);
+          bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted && packet_index == 0);
     irq_bytes((const uint8_t[]){0x08, 0x01, 0x01}, 3);
-    CHECK("a whole packet ends the count", out_of_sync == 0 && packet_index == 0);
+    CHECK("a whole packet ends the count", bad_in_a_row == 0 && packet_index == 0);
     for (i = 0; i < 5; i++) {
         irq_byte(0x00);
     }
@@ -2067,7 +2102,7 @@ static void mouse_sync_rows(void)
     ps2mouse_reconnect();
     CHECK("the mouse is reset and reports again with its event device",
           n_took > 2 && took[0] == 0xFF && mouse_dev == dev && pad_reporting &&
-              state == STATE_ACTIVE && out_of_sync == 0);
+              state == STATE_ACTIVE && bad_in_a_row == 0);
 
     for (i = 0; i < 5; i++) {
         irq_byte(0x00);

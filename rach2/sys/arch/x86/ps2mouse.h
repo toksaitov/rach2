@@ -151,7 +151,9 @@ void ps2mouse_thread_start(void);
  * pass-through port, whose guest is reconnected, or probed anew when its
  * reconnect fails or there was none; an Elantech touchpad's reset and
  * knock, which must find an Elantech pad, its absolute mode, rate and
- * resolution, and reporting again; a mouse's reset, its protocol found
+ * resolution, and reporting again; an ALPS touchpad's reset and
+ * identification, which must find a pad Linux drives, its set-up, rate
+ * and resolution, and reporting again; a mouse's reset, its protocol found
  * again, which must be the one found before, and reporting again. Each
  * keeps its event devices. When the device is not the same or does not
  * answer, its event devices are removed and the port is probed anew, as

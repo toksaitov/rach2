@@ -139,7 +139,7 @@ static unsigned int extra_buttons;
 /* The port's state, STATE_*, which the handler reads; and the device's
  * bad packets in a row. */
 static volatile int state = STATE_ACTIVE;
-static int out_of_sync;
+static int bad_in_a_row;
 
 /* What kpsmoused is asked to reconnect: the port, the touchpad or mouse
  * and the guest after it, or the guest alone. */
@@ -806,13 +806,13 @@ void ps2mouse_guest_buttons(uint8_t buttons)
 static void count_packet(int bad)
 {
     if (bad) {
-        if (++out_of_sync == RESET_AFTER) {
+        if (++bad_in_a_row == RESET_AFTER) {
             state = STATE_IGNORE;
             klog(KLOG_WARN, "mouse", "sync: %d bad packets in a row: reconnecting", RESET_AFTER);
             request_reconnect(RECONNECT_PORT);
         }
-    } else if (out_of_sync) {
-        out_of_sync = 0;
+    } else if (bad_in_a_row) {
+        bad_in_a_row = 0;
         klog(KLOG_INFO, "mouse", "sync: resynced");
     }
 }
@@ -826,14 +826,17 @@ static int packet_start(void)
     if (touchpad == TOUCHPAD_ELANTECH) {
         return elantech_packet_start();
     }
+    if (alps > 0) {
+        return alps_packet_start();
+    }
     return packet_index == 0;
 }
 
 /**
- * Take one byte of the device's packet: a touchpad's to synaptics.c or
- * elantech.c, a mouse's into the packet being assembled, which is reported
- * once whole. A touchpad's packet that its driver refuses is a bad packet,
- * and so is a mouse's byte dropped for its framing bit.
+ * Take one byte of the device's packet: a touchpad's to synaptics.c,
+ * elantech.c or alps.c, a mouse's into the packet being assembled, which
+ * is reported once whole. A touchpad's packet that its driver refuses is a
+ * bad packet, and so is a mouse's byte dropped for its framing bit.
  */
 static void take_byte(uint8_t data)
 {
@@ -850,6 +853,13 @@ static void take_byte(uint8_t data)
         rc = elantech_byte(data);
         if (rc != ELANTECH_GOOD) {
             count_packet(rc == ELANTECH_BAD);
+        }
+        return;
+    }
+    if (alps > 0) {
+        rc = alps_byte(data);
+        if (rc != ALPS_GOOD) {
+            count_packet(rc == ALPS_BAD);
         }
         return;
     }
@@ -899,10 +909,6 @@ static void mouse_irq_handler(isr_params_t *params)
     }
     data = inb(PS2_DATA_PORT);
     if (state == STATE_IGNORE) {
-        return;
-    }
-    if (alps > 0) {
-        alps_byte(data);
         return;
     }
     if (bat_held) {
@@ -1135,7 +1141,7 @@ static void reconnect_guest(void)
  * that has no reconnect of its own: the reset and the defaults, and its
  * protocol found again, which must be the one found before. Returns 0 when
  * it is, and the mouse keeps its event device; -1 when the mouse does not
- * answer its reset or speaks another protocol now.
+ * answer its reset, speaks another protocol now or is a touchpad.
  */
 static int mouse_reconnect(void)
 {
@@ -1148,7 +1154,7 @@ static int mouse_reconnect(void)
         klog(KLOG_WARN, "mouse", "the device refused the default settings");
     }
     detect_protocol();
-    return protocol == old ? 0 : -1;
+    return protocol == old && touchpad == 0 && alps == 0 ? 0 : -1;
 }
 
 void ps2mouse_reconnect(void)
@@ -1169,12 +1175,13 @@ void ps2mouse_reconnect(void)
             reconnect_guest();
         }
         klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again");
-    } else if (touchpad == TOUCHPAD_ELANTECH && elantech_reconnect() == 0) {
+    } else if ((touchpad == TOUCHPAD_ELANTECH && elantech_reconnect() == 0) ||
+               (alps > 0 && alps_reconnect() == 0)) {
         if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
             klog(KLOG_WARN, "mouse", "the device did not enable reporting");
         }
         klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again");
-    } else if (touchpad == 0 && mouse_dev && mouse_reconnect() == 0) {
+    } else if (touchpad == 0 && alps == 0 && mouse_dev && mouse_reconnect() == 0) {
         packet_index = 0;
         if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
             klog(KLOG_WARN, "mouse", "the device did not enable reporting");
@@ -1187,6 +1194,9 @@ void ps2mouse_reconnect(void)
         if (touchpad == TOUCHPAD_ELANTECH) {
             elantech_disconnect();
         }
+        if (alps > 0) {
+            alps_disconnect();
+        }
         if (mouse_dev) {
             evdev_unregister(mouse_dev);
             mouse_dev = NULL;
@@ -1197,7 +1207,7 @@ void ps2mouse_reconnect(void)
             klog(KLOG_WARN, "mouse", "the device did not enable reporting");
         }
     }
-    out_of_sync = 0;
+    bad_in_a_row = 0;
     ps2mouse_cmd_end();
 }
 

@@ -372,7 +372,8 @@ kpsmoused reconnects it as Linux's psmouse does: a Synaptics pad is
 reset, must give the identity, model and capabilities it gave before, and
 is set up again, then the device behind its port; an Elantech pad is
 reset, must answer Elantech's knock again, and is put back in absolute
-mode; a mouse is reset and must answer with the protocol it spoke before;
+mode; an ALPS pad is reset, must again be one Linux drives, and is set up
+again; a mouse is reset and must answer with the protocol it spoke before;
 and their nodes stay.
 A pad or a mouse that does not answer, or is another one, is probed anew,
 its nodes removed and registered again; so is a device behind the port
