@@ -16,6 +16,7 @@
  * `fd_ofd_repoint` has updated the description.
  */
 #include "fs/vfs.h"
+#include "compat/waketime_none.h"
 #include "lib/kerrno.h"
 #include "mm/kheap.h"
 #include "proc/process.c"

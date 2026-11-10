@@ -2,6 +2,34 @@
 
 The process subsystem, `rach2/sys/proc/` with the handlers in `rach2/sys/syscall_proc.c`, runs programs as processes. It keeps a record for each thread and a thread group that makes a process of several; makes processes and threads with `fork` and `clone`, loads programs with `execve`, and ends them with `exit` and reports their end to `wait`; schedules them on every processor under one big lock over the kernel; and keeps their credentials, resource limits and seccomp filters, writes their core files, and keeps them from running during a suspend to idle. A program sees Linux's process calls for its architecture, whose contracts are in section 2 of the manual. Four parts of this directory have documents of their own: [signals](signal.Readme.md), [ptrace](ptrace.Readme.md), [futexes](futex.Readme.md) and [namespaces](ns.Readme.md). The context switch and the entry to the kernel are [the architectures'](../arch/Readme.md), the thread pointer is [thread-local storage](../arch/tls.Readme.md), and the address space a process runs in is [memory's](../mm/Readme.md).
 
+## Results
+
+The timed-wake load reproduces long returns while the destination CPU waits for the big kernel lock. On 2026-11-10, the x86-64 test ran beside its Debian 13 reference on the testing PC's WSL, with QEMU 10.2.1, KVM, q35, std-vga, four CPUs (`host,invtsc=on`) and 512 MiB. Both ran the same static `wakelatmusl` binary, SHA-256 `9ffc56e207d32fe24452d42761fd16d0476d5e6448aedb5192e935d8f97c0e87`, with 64 waits per interface and the sleeper pinned to CPU 0. Debian's kernel was `6.12.115+deb13.1-amd64`. Rach2 booted its RAM test image directly; Debian booted its prepared disk through SeaBIOS. The runs were sequential on the shared host, without Wine or a compositor.
+
+Each row below covers 384 waits, six interfaces with 64 samples each. Lateness is the monotonic timestamp after the call minus the requested deadline, in milliseconds. These are measurements before a fix, not limits the test enforces.
+
+| Load on each CPU | Rach2 maximum, ms | Debian maximum, ms | Rach2 returns over 10 ms late | Debian returns over 10 ms late |
+| --- | ---: | ---: | ---: | ---: |
+| None | 43.996 | 2.379 | 9 | 0 |
+| One arithmetic thread | 199.802 | 3.817 | 16 | 0 |
+| One system-call thread | 73.508 | 1.023 | 40 | 0 |
+| One of each | 59.837 | 4.637 | 53 | 0 |
+
+The mixed load's percentiles and maxima, by interface:
+
+| Wait | Rach2 p95, ms | Debian p95, ms | Rach2 maximum, ms | Debian maximum, ms |
+| --- | ---: | ---: | ---: | ---: |
+| nanosleep | 2.749 | 0.086 | 9.953 | 0.130 |
+| absolute clock_nanosleep | 12.895 | 0.094 | 38.902 | 0.218 |
+| poll | 14.950 | 0.137 | 48.971 | 3.964 |
+| epoll_wait | 20.411 | 0.139 | 59.837 | 3.643 |
+| timerfd | 15.045 | 0.197 | 27.070 | 3.958 |
+| futex | 12.781 | 0.107 | 44.919 | 4.637 |
+
+The mixed load's 59.837 ms epoll sample accounts 0.338 ms before the servicing interrupt, 0 ms in that interrupt's big-lock acquisition, 0.130 ms in the timer work, 48.999 ms queued, 4.814 ms running toward user mode and 0 ms blocked again. Of the queue interval, 42.487 ms is the destination CPU's big-lock acquisition; the return interval includes another 0.088 ms acquiring it. A poll sample 48.971 ms late has 46.070 ms queued, including 36.178 ms acquiring the big lock. Thus even the lock-wait subset exceeds Debian's largest whole lateness under the same load. These intervals include time the hypervisor deschedules a virtual CPU; they do not identify which holder or host event delayed an acquisition. The user measurement also includes time before the wait is armed and after the kernel's return record, so it need not equal that record's total. All four modes completed their call and accounting checks on both systems; this establishes the reproduction, not that lateness is fixed.
+
+To repeat the Rach2 measurement on the testing host, use `ARCH=x86_64 RACH2_QEMU_ACCEL=kvm RACH2_WORKERS=1 tests/run wakelat`. The Debian reference runs the same executable with `tests/graphics/debian-ref/debian-ref.sh run -p std-vga -c 4 -m 512 -i build/x86_64/tests/musl/wakelatmusl`, `ACCEL=kvm`, and the guest command `/tmp/wakelatmusl 64 N` for load bits N from 0 to 3. The original complete output is kept under `build/runs/3405-profile.out`, `3405-debian.out` and `3405-debian.record` in the worker's Mac and testing-host copies. Changes to the big lock and the Wine gap check await the owner decision required by task 80-11.
+
 ## Interfaces
 
 ### The files
@@ -15,6 +43,7 @@ A file named without a directory is in `rach2/sys/proc/`; other paths are from t
 | `percpu.h` | Each processor's record, `struct percpu`, and `current_proc` |
 | `smp.h`, `smp.c` | The big lock, the requests one processor leaves another, the start of the other processors |
 | `sched.h`, `sched.c` | The run queues, `schedule`, preemption, the idle wait, CPU time and the load averages |
+| `waketime.h`, `waketime.c` | Each timed wake's interrupt, queue and return times, with big-lock wait subsets |
 | `wait_queue.h`, `wait_queue.c` | Wait queues |
 | `child_signal.c` | Child exit notification and parent exec generations |
 | `exit.c` | The end of a thread and of a process, `proc_exit_cleanup` |
@@ -153,6 +182,10 @@ Before the switch `schedule` saves the floating-point registers into the outgoin
 
 Each processor's timer interrupts it 1000 times a second (`TICK_HZ` in `rach2/sys/timer.h`; [the PC platform](../arch/x86/Readme.md)), and the tick's handler (`timer_handler` in `rach2/kernel.c`) and every device's interrupt end with `sched_preempt`. A thread interrupted in user mode, process 0 and a kernel thread are switched at once. A thread inside a system call is not, since the call's state may be half changed: the request is kept in the record (`need_resched`), and the dispatcher takes it at the call's exit (`sched_take_preempt`), so a process that is always inside a call still gives way once per call. A call that loops over a large buffer takes the switch between two pieces of its loop through `sched_service_point`. A processor's idle task is not switched from the interrupt either; its loop selects as soon as the handler returns.
 
+`waketime.c` accounts each blocked thread that a timed wait or a timerfd expiration wakes, from its deadline tick to `isr_leave` just before its return to user mode. The thread's `TimedWakeCount`, `TimedWakeLast`, `TimedWakeWorst` and `TimedWakeSum` in `/proc/PID/status`, or its task's `status`, report the completed count, last wake, longest wake and sums. The eight microsecond columns are expiry to the servicing timer interrupt, that interrupt's wait for the big lock after expiry, the remaining timer work, time queued, time running toward user mode, time blocked again, and two subsets: the queued CPU's waits for the big lock and the returning thread's waits for it. The first six sum to the accounted delay; the last two must not be added again. Queuing after a second preemption and moving to another CPU preserve the accounting. The first deadline stays until the return, even if the thread blocks again. Other sleeping locks appear in the blocked-again column. Spinning while running remains in the return column.
+
+The timestamps use the vDSO's checked, common TSC clock when available and the platform's monotonic microsecond clock otherwise. They include time a hypervisor deschedules a virtual CPU. Per-stage clocks and the completed count wrap at 2^32; sums have 64 bits. A stage must be shorter than half the microsecond clock's period, about 35 minutes. The interrupt columns describe the interrupt that actually made the timer pass; earlier ticks that bypassed the big lock are counted separately in `/proc/stat`. The deadline is rounded to the kernel's millisecond tick; time before the wait is armed and the final register restore and return instruction are outside this record. The probe measures those too in user space. A fork starts with empty records.
+
 An idle wait, a halt with interrupts on that expects to resume, goes through `idle_wait_irq_off` or `idle_wait_irq_on`. Each marks the processor idle for the tick to see, lets the big lock go for the halt and takes it again after. The first enters with interrupts off and returns with them off. An `sti` takes effect only after the instruction that follows it, so an interrupt that became pending while the caller tested its condition arrives once the `hlt` has begun, and ends it. An interrupt that ended the halt returns with interrupts off (`_irq_router`), so that the wait goes on before the next tick, however long the big lock takes. `tests/run style` refuses a `sti; hlt`, or a call of the architecture's halt, anywhere else ([style.sh](../../../tests/cases/host/style.sh)).
 
 The tick charges the thread it interrupted with user time when the interrupted code was ring 3's and with system time otherwise, and a tick that found the processor in an idle wait to no one (`sched_account_tick`); a processor counts the global ticks it missed with its next. The same tick runs the process's `ITIMER_VIRTUAL` and `ITIMER_PROF` timers and the POSIX timers of processor time. Every five seconds and a tick, 5001 ticks, the boot processor folds the threads that are running or ready into the three load averages, as Linux's `calc_load` does (`sched_load_tick`). `times`, `getrusage`, `wait4`, `/proc/stat` and `/proc/PID/stat` report these counts.
@@ -257,6 +290,7 @@ Other suites ([the suites](../../../tests/system/suites.md)):
 
 * `tests/run smp` boots one processor, four, and two of four, and on each runs `tests/musl/smpmusl.c`, which finds the processors and runs a stress of fork, exec, pipes, futexes and `munmap` across them. On two processors it also runs the debug shell's preemption test and ring-3 payload and raises an NMI, which must stop the machine, and it runs a parallel build on four whose every processor must count user time. Each boot is a machine case of [`tests/cases/machine.smp.json`](../../../tests/cases/machine.smp.json).
 * `tests/run fpu` checks that a process's floating-point state is its own across switches.
+* `tests/run wakelat` runs `wakelatmusl` on four CPUs, with idle, arithmetic, system-call and mixed loads. Each mode makes 64 waits through each of nanosleep, absolute clock_nanosleep, poll, epoll_wait, timerfd and a timed futex. Each busy CPU has one pinned thread of each selected kind; the system-call load maps, faults, protects and unmaps 128 pages per iteration. The probe prints lateness percentiles and the counts above for the eight latest-returning samples, checks the timeout results and accounting subsets, and joins every worker. Its arguments select the sample count, load bits (1 for arithmetic, 2 for system calls) and sleeper CPU. The same static executable runs on Linux, whose status file has no Rach2 counters. Times are printed for comparison, not judged against a fixed machine-dependent limit.
 * `tests/run exitline` checks that the plain process-exit line is printed under the debug shell and nowhere else.
 * `tests/run memory` includes the overrun of a kernel stack ([the architectures' Readme](../arch/Readme.md)).
 

@@ -101,6 +101,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/exit.c \
     sys/proc/child_signal.c \
     sys/proc/sched.c \
+    sys/proc/waketime.c \
     sys/proc/smp.c \
     sys/proc/suspend.c \
     sys/proc/wait_queue.c \

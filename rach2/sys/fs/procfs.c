@@ -1640,6 +1640,39 @@ static void ap_signal_sets(struct procfs_text *t, const process_t *p)
     ap_set(t, "SigCgt", caught);
 }
 
+/** Append the completed timed wakes and their stage times, in microseconds.
+ * The big lock keeps the record stable while this snapshot is built. */
+static void procfs_waketime(struct procfs_text *t, const process_t *p)
+{
+    const struct wake_record *w = &p->wake_time;
+    unsigned int i;
+
+    ap_str(t, "TimedWakeCount:\t");
+    ap_u32(t, w->count);
+    ap_str(t, "\nTimedWakeLast:\t");
+    for (i = 0; i < WAKE_FIELDS; i++) {
+        if (i) {
+            ap_ch(t, ' ');
+        }
+        ap_u32(t, w->last[i]);
+    }
+    ap_str(t, "\nTimedWakeWorst:\t");
+    for (i = 0; i < WAKE_FIELDS; i++) {
+        if (i) {
+            ap_ch(t, ' ');
+        }
+        ap_u32(t, w->worst[i]);
+    }
+    ap_str(t, "\nTimedWakeSum:\t");
+    for (i = 0; i < WAKE_FIELDS; i++) {
+        if (i) {
+            ap_ch(t, ' ');
+        }
+        ap_u64(t, w->sum[i]);
+    }
+    ap_ch(t, '\n');
+}
+
 /**
  * Count the resident pages of `mm` by Linux's three kinds, for the RssAnon,
  * RssFile and RssShmem of status, by the rule of smaps: a private region's
@@ -1788,6 +1821,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nnonvoluntary_ctxt_switches:\t");
     ap_ulong(t, p->nivcsw);
     ap_ch(t, '\n');
+    procfs_waketime(t, p);
     return t->len;
 }
 

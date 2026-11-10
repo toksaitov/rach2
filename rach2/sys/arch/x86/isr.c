@@ -694,6 +694,7 @@ void isr_leave(isr_params_t *params)
     if (FRAME_USER(params)) {
         rseq_return(params);
         debugreg_resume();
+        waketime_return();
     }
     bkl_exit();
 }
@@ -779,6 +780,7 @@ static void irq_dispatch(isr_params_t *params)
 void _irq_router(isr_params_t *params)
 {
     struct percpu *cpu = this_cpu();
+    uint32_t wake_irq = params->vector == IRQ_VECTOR(0) ? waketime_clock() : 0;
 
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
@@ -794,6 +796,10 @@ void _irq_router(isr_params_t *params)
             return;
         }
         bkl_enter();
+    }
+    if (params->vector == IRQ_VECTOR(0)) {
+        cpu->wake_irq_start = wake_irq;
+        cpu->wake_irq_locked = waketime_clock();
     }
     bkl_note_entry((uint32_t)params->vector, -1);
 #if defined(__x86_64__)

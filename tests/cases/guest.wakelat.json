@@ -1,0 +1,703 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.wakelat",
+  "summary": "Timed wakeup attribution under idle, user, system-call and mixed load on four CPUs",
+  "cases": [
+    {
+      "case_id": "guest.wakelat.idle",
+      "behavior": "Six 5 ms timed waits finish beside pinned idle load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "units": [
+        "wakelat",
+        "musl/wakelatmusl",
+        "proc/waketime.c",
+        "proc/sched.c"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "64",
+          "0"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 4,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "machine": "q35",
+          "display": "std-vga",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "rach2.rescue"
+          ]
+        }
+      },
+      "execution": {
+        "program": "wakelatmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "stop and join every worker, unmap each worker mapping, close the timerfd and epoll set and free the samples on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "setup",
+          "checks": "Every worker binds to its CPU and completes one unit before the measured waits start",
+          "source": "program"
+        },
+        {
+          "assertion_id": "nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "clock_nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "poll",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "epoll_wait",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "timerfd",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "futex",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "workers",
+          "checks": "All created workers stop and join",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "samples",
+          "kind": "counter",
+          "means": "timed waits completed across the six interfaces",
+          "limit": 384
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "transfer": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "wakelatmusl",
+          "node": "tests/musl/wakelatmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guest.wakelat.user",
+      "behavior": "Six 5 ms timed waits finish beside pinned user load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "units": [
+        "wakelat",
+        "musl/wakelatmusl",
+        "proc/waketime.c",
+        "proc/sched.c"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "64",
+          "1"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 4,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "machine": "q35",
+          "display": "std-vga",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "rach2.rescue"
+          ]
+        }
+      },
+      "execution": {
+        "program": "wakelatmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "stop and join every worker, unmap each worker mapping, close the timerfd and epoll set and free the samples on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "setup",
+          "checks": "Every worker binds to its CPU and completes one unit before the measured waits start",
+          "source": "program"
+        },
+        {
+          "assertion_id": "nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "clock_nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "poll",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "epoll_wait",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "timerfd",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "futex",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "workers",
+          "checks": "All created workers stop and join",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "samples",
+          "kind": "counter",
+          "means": "timed waits completed across the six interfaces",
+          "limit": 384
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "transfer": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "wakelatmusl",
+          "node": "tests/musl/wakelatmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guest.wakelat.kernel",
+      "behavior": "Six 5 ms timed waits finish beside pinned kernel load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "units": [
+        "wakelat",
+        "musl/wakelatmusl",
+        "proc/waketime.c",
+        "proc/sched.c"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "64",
+          "2"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 4,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "machine": "q35",
+          "display": "std-vga",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "rach2.rescue"
+          ]
+        }
+      },
+      "execution": {
+        "program": "wakelatmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "stop and join every worker, unmap each worker mapping, close the timerfd and epoll set and free the samples on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "setup",
+          "checks": "Every worker binds to its CPU and completes one unit before the measured waits start",
+          "source": "program"
+        },
+        {
+          "assertion_id": "nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "clock_nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "poll",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "epoll_wait",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "timerfd",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "futex",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "workers",
+          "checks": "All created workers stop and join",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "samples",
+          "kind": "counter",
+          "means": "timed waits completed across the six interfaces",
+          "limit": 384
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "transfer": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "wakelatmusl",
+          "node": "tests/musl/wakelatmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guest.wakelat.mixed",
+      "behavior": "Six 5 ms timed waits finish beside pinned mixed load; print lateness and per-thread timer, run-queue and lock accounting without a host-dependent time verdict",
+      "units": [
+        "wakelat",
+        "musl/wakelatmusl",
+        "proc/waketime.c",
+        "proc/sched.c"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "64",
+          "3"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 4,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "machine": "q35",
+          "display": "std-vga",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "rach2.rescue"
+          ]
+        }
+      },
+      "execution": {
+        "program": "wakelatmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "stop and join every worker, unmap each worker mapping, close the timerfd and epoll set and free the samples on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "setup",
+          "checks": "Every worker binds to its CPU and completes one unit before the measured waits start",
+          "source": "program"
+        },
+        {
+          "assertion_id": "nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "clock_nanosleep",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "poll",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "epoll_wait",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "timerfd",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "futex",
+          "checks": "The wait returns its expected timeout or timerfd count, and a completed timed wake is recorded with each big-lock subset no greater than its enclosing stage",
+          "source": "program"
+        },
+        {
+          "assertion_id": "workers",
+          "checks": "All created workers stop and join",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "samples",
+          "kind": "counter",
+          "means": "timed waits completed across the six interfaces",
+          "limit": 384
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "transfer": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "wakelatmusl",
+          "node": "tests/musl/wakelatmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    }
+  ]
+}

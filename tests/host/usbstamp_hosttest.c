@@ -7,6 +7,7 @@
  * argument emits one record for the USB suite's own AWK checker.
  */
 #include <stdarg.h>
+#include "compat/waketime_none.h"
 
 #include "usb/stamp.c"
 #include "proc/sched.c"

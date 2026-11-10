@@ -1904,6 +1904,25 @@ reports them, as a mask in words of 32 bits and as a list of ranges, and
 voluntary_ctxt_switches and nonvoluntary_ctxt_switches, the times the
 scheduler switched away from the thread while it slept or was stopped,
 and while it could still run.
+.Pp
+Rach2 also reports TimedWakeCount, the thread's completed timed wakes,
+and TimedWakeLast, TimedWakeWorst and TimedWakeSum, the last wake, the
+wake with the longest total delay, and the sums of all completed wakes.
+Each of the latter three has eight microsecond columns:
+expiry to the servicing timer interrupt, that interrupt's wait for the
+big kernel lock after expiry, remaining timer work, run-queue wait,
+running toward the return to user mode, blocked again before that return,
+the queued CPU's waits for the big lock, and the returning thread's waits
+for the big lock.
+The last two are subsets of the queue and return columns.
+Only the first six are added for the total.
+The record ends just before the final register restore and return to
+user mode, and begins at the rounded deadline tick, after the wait is armed.
+The count and individual times wrap at 2^32; sums have 64 bits.
+A stage must be shorter than about 35 minutes.
+These fields start empty in a new thread and also appear in its
+.Pa /proc/PID/task/TID/status .
+.Pp
 CapPrm and CapEff are the capabilities the thread holds, those it has not
 given up when its effective user ID is 0, and none otherwise
 .Pq see Xr capget 2 ;

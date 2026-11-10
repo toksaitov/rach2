@@ -12,6 +12,7 @@
 #include "../mm/vm.h"
 #include "../fpu.h"
 #include "percpu.h"
+#include "waketime.h"
 
 /* Policy: the threads one real user may have, each thread of a process
  * counting, unless `prlimit64` or `/etc/rach2/limits` says otherwise, and
@@ -145,9 +146,10 @@ struct process {
      * arch/i686/context.c has the same offsets and checks them against the
      * compiler's, at build time where the compiler can and at boot
      * (`arch_context_check`, from `init_proc`). */
-    uintptr_t tls_base;   /* The thread pointer (arch_tls_set) */
-    struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
-    uint64_t wakeup_tick; /* The tick a timed sleep ends at, 0 for none */
+    uintptr_t tls_base;           /* The thread pointer (arch_tls_set) */
+    struct mm *mm;                /* The address space, shared by CLONE_VM (mm/mm.h) */
+    uint64_t wakeup_tick;         /* The tick a timed sleep ends at, 0 for none */
+    struct wake_record wake_time; /* timed wakes through the return to user mode */
     /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
      * which are the thread group's (`tg->action`), and this thread's 64-bit
      * pending and blocked masks (bit signo-1). */

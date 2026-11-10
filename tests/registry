@@ -173,3 +173,4 @@ desktop|qemu,python3|full|desktop-test*|4096|
 vgpu|qemu|full||256
 browser|qemu|full|browser-test*|8192|x86_64
 gpucompat|qemu|full||640|i686
+wakelat|qemu|full||512|i686,x86_64|
