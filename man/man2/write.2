@@ -309,6 +309,21 @@ descriptor meanwhile.
 writes at the file's end, moving the descriptor's offset only when the
 supplied offset is -1, and fails with the file system's error when the
 end cannot be read.
+.Dv RWF_NOAPPEND
+ignores the description's
+.Dv O_APPEND
+for this call: an explicit offset is used without moving the shared offset,
+and -1 uses and advances the shared offset.
+The description keeps
+.Dv O_APPEND
+for other calls.
+Combining
+.Dv RWF_APPEND
+and
+.Dv RWF_NOAPPEND
+is
+.Er EINVAL
+for a nonempty vector.
 An append, by
 .Dv RWF_APPEND
 or by

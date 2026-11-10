@@ -674,7 +674,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_stat
         if (n != 0) {
             break;
         }
-        if (state->append || (ofd->status_flags & OFD_APPEND)) {
+        if (state->append) {
             struct vfs_stat vst;
 
             n = vfs_getattr(ofd->vmnt, ofd->vnode, &vst);
@@ -694,8 +694,8 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct file_write_stat
 
 /**
  * Write with the description and the locks in `state` already held. Its
- * `own` says the type uses a file lock; `append` requests end placement for
- * this operation without changing the shared O_APPEND flag. The caller
+ * `own` says the type uses a file lock; `append` is the operation's final
+ * end-placement choice, independent of the shared O_APPEND flag. The caller
  * has faulted in the buffer; a later fault may release and reacquire the
  * file lock through file_write_pieces. Return bytes or a negative errno,
  * the getattr's error among them when the end of an append cannot be read.
@@ -711,7 +711,7 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
                                  const uint64_t *at, const struct file_write_state *state)
 {
     struct open_file *ofd = entry->ofd;
-    int append = state->append || (ofd->status_flags & OFD_APPEND);
+    int append = state->append;
     int mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
     int held = !state->own && (append || mapped);
     uint64_t pos;
@@ -811,7 +811,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     }
     fd_ofd_lock(ofd);
     state.own = file_lock(ofd, &state.file);
-    state.append = 0;
+    state.append = (ofd->status_flags & OFD_APPEND) != 0;
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
         file_unlock(&state.file, state.own);
         fd_ofd_unlock(ofd);
@@ -1055,6 +1055,29 @@ int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
                : 0;
 }
 
+/** Refuse a vector of `count` bytes that would grow a sealed tmpfs file,
+ * before any element is written. `pos` is its start unless `append` asks
+ * for the end. The caller holds the mount's namespace lock. Return 0,
+ * -EPERM for growth, or getattr's error. Other file types have no seals. */
+static int32_t iov_seal_grow(const struct open_file *ofd, uint64_t pos, uint32_t count, int append)
+{
+    struct vfs_stat st;
+    int rc;
+
+    if (!count || ofd->vmnt->type != &vfs_tmpfs_type ||
+        !(tmpfs_seals(ofd->vnode) & TMPFS_SEAL_GROW)) {
+        return 0;
+    }
+    rc = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    if (append) {
+        pos = st.size;
+    }
+    return pos > st.size || count > st.size - pos ? -EPERM : 0;
+}
+
 /**
  * Before a writev to `fd` open for writing on a tmpfs file: take the
  * mount's namespace lock, which every write and size change of the file
@@ -1071,10 +1094,8 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     struct kernel_iovec iov;
     struct open_file *ofd;
-    struct vfs_stat st;
     uint32_t extent = 0;
-    uint64_t pos;
-    int i;
+    int i, rc;
 
     *held = NULL;
     if (!entry || entry->type != FD_TYPE_FILE || !(entry->flags & FD_FLAG_WRITE) || !entry->ofd ||
@@ -1092,17 +1113,12 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
     }
     vfs_ns_lock(ofd->vmnt);
     *held = ofd->vmnt;
-    if (extent == 0 || !(tmpfs_seals(ofd->vnode) & TMPFS_SEAL_GROW) ||
-        vfs_getattr(ofd->vmnt, ofd->vnode, &st) != 0) {
-        return 0;
-    }
-    pos = (ofd->status_flags & OFD_APPEND) ? st.size : ofd->offset;
-    if (pos + extent > st.size) {
+    rc = iov_seal_grow(ofd, ofd->offset, extent, (ofd->status_flags & OFD_APPEND) != 0);
+    if (rc != 0) {
         vfs_ns_unlock(ofd->vmnt);
         *held = NULL;
-        return -EPERM;
     }
-    return 0;
+    return rc;
 }
 
 /**
@@ -1156,12 +1172,12 @@ static int iov_append_file(const fd_entry_t *entry)
            (entry->ofd->status_flags & OFD_APPEND);
 }
 
-/** Append a copied user vector under the file's lock, as defined below. */
-static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long pos);
+/** Write a copied user vector under the file's lock, as defined below. */
+static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append);
 
 /**
  * writev(2) takes fd, the vector and its count. An O_APPEND mounted file
- * uses iov_append's lock across the vector. Otherwise elements are written
+ * uses iov_file_write's lock across the vector. Otherwise elements are written
  * in order (`writev_elements`); on a tmpfs file the mount's lock is held across
  * them, and a vector a seal refuses whole is refused before the first
  * (`writev_begin`). Returns the bytes written, or a negative errno: -EINVAL
@@ -1185,7 +1201,7 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     if (rc == 0) {
         entry = fd_get(current_proc->fds, fd);
         if (iov_append_file(entry)) {
-            rc = (int32_t)iov_append(entry, iov_user, iovcnt, -1);
+            rc = (int32_t)iov_file_write(entry, iov_user, iovcnt, -1, 1);
         } else {
             rc = writev_elements(fd, iov_user, iovcnt);
         }
@@ -12124,7 +12140,7 @@ static long long pos_from_hilo(unsigned long high, unsigned long low)
 /**
  * The elements of the vector at `iov_user` read from or, with `write`,
  * written to `fd` at the position `pos`, which the descriptor's own offset
- * does not follow. An O_APPEND mounted file goes through iov_append, with
+ * does not follow. An O_APPEND mounted file goes through iov_file_write, with
  * one lock across the vector. Other transfers go through `ksys_pread64` or
  * `ksys_pwrite64`, at the position the elements before it reached.
  * Their vector is checked whole first, as readv checks it, so a bad element
@@ -12149,7 +12165,7 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     }
     entry = write && current_proc ? fd_get(current_proc->fds, fd) : NULL;
     if (iov_append_file(entry)) {
-        return iov_append(entry, iov_user, iovcnt, pos);
+        return iov_file_write(entry, iov_user, iovcnt, pos, 1);
     }
     for (i = 0; i < iovcnt; i++) {
         if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
@@ -12272,7 +12288,7 @@ static uint32_t iov_write_prefix(struct kernel_iovec *iov, int count)
     return total;
 }
 
-/** Import an append vector and retain its accessible prefix before locking.
+/** Import a write vector and retain its accessible prefix before locking.
  * Return 0, an import error, or EFAULT when no requested byte is readable. */
 static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
 {
@@ -12284,15 +12300,46 @@ static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uin
     return *wanted && iov_write_prefix(iov, count) == 0 ? -EFAULT : 0;
 }
 
+/** Write the imported vector with the description and file locks in
+ * `state` held. An explicit `pos` advances only within this call; -1
+ * advances the shared offset. Return the bytes written before a short
+ * write or error, or the first error when no byte was written. */
+static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov, int count,
+                              long long pos, const struct file_write_state *state)
+{
+    uint64_t at = (uint64_t)pos;
+    long total = 0, rc = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (!iov[i].iov_len) {
+            continue;
+        }
+        rc = file_write_locked(entry, (const char __user *)iov[i].iov_base,
+                               (uint32_t)iov[i].iov_len, pos == -1 ? NULL : &at, state);
+        if (rc < 0) {
+            break;
+        }
+        total += rc;
+        at += (uint64_t)rc;
+        if ((unsigned long)rc < iov[i].iov_len) {
+            break;
+        }
+    }
+    return total > 0 ? total : rc;
+}
+
 /**
- * Append the vector of `count` elements at `addr` to the regular file of
+ * Write the vector of `count` elements at `addr` to the regular file of
  * the descriptor `entry`, which the caller holds, holding its description
  * and file locks across the elements (`file_write_locked`), or the mount's
  * namespace lock on a type without per-file locks. The vector is
  * copied and range-checked first, and its accessible prefix is brought in
  * before the locks, since a fault may need another file's lock. The
  * descriptor is checked after those copies, which may sleep. The explicit
- * position `pos` is ignored; -1 alone advances the shared offset. Returns
+ * position `pos` is ignored when `append` requests end placement; otherwise
+ * it is used even on an O_APPEND description. -1 alone uses and advances
+ * the shared offset. The shared O_APPEND flag is never changed. Returns
  * the bytes written, including those before a bad data page, or an error
  * when no byte was written: -EINVAL for a count below 0 or past
  * IOV_MAX_LOCAL or a vector of 2 GiB or more, -EFAULT for a vector or a
@@ -12300,15 +12347,13 @@ static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uin
  * file of a mount open for writing, -EBUSY for a file that backs a loop
  * device, or the write's error.
  */
-static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long pos)
+static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append)
 {
     struct kernel_iovec *iov;
     struct open_file *ofd;
     struct file_write_state state;
-    uint64_t at = 0;
     uint32_t wanted = 0;
-    long total = 0, rc = 0;
-    int i;
+    long rc = 0;
 
     if (count < 0 || count > IOV_MAX_LOCAL) {
         return -EINVAL;
@@ -12335,41 +12380,36 @@ static long iov_append(fd_entry_t *entry, uintptr_t addr, int count, long long p
     if (!state.own) {
         vfs_node_lock(&state.file);
     }
-    state.append = 1;
+    state.append = append;
     rc = loop_backs(ofd->vmnt, ofd->vnode) ? -EBUSY : 0;
-    for (i = 0; rc >= 0 && i < count; i++) {
-        if (!iov[i].iov_len) {
-            continue;
-        }
-        rc = file_write_locked(entry, (const char __user *)iov[i].iov_base,
-                               (uint32_t)iov[i].iov_len, pos == -1 ? NULL : &at, &state);
-        if (rc < 0) {
-            break;
-        }
-        total += rc;
-        if ((unsigned long)rc < iov[i].iov_len) {
-            break;
-        }
+    if (rc == 0) {
+        rc = iov_seal_grow(ofd, pos == -1 ? ofd->offset : (uint64_t)pos, wanted, append);
+    }
+    if (rc == 0) {
+        rc = iov_file_elements(entry, iov, count, pos, &state);
     }
     if (!state.own) {
         vfs_node_unlock(&state.file);
     }
     file_unlock(&state.file, state.own);
     fd_ofd_unlock(ofd);
-    if (total > 0 && inotify_watches) {
+    if (rc > 0 && inotify_watches) {
         inotify_desc(ofd, IN_MODIFY);
     }
-    rc = total > 0 ? total : rc;
 out:
     kfree(iov);
     return rc;
 }
 
-/* Linux's per-call read/write flags; NOWAIT is not supported here. */
-#define RWF_HIPRI  0x01u
-#define RWF_DSYNC  0x02u
-#define RWF_SYNC   0x04u
-#define RWF_APPEND 0x10u
+/* Linux 6.12's per-call read/write flags; NOWAIT and ATOMIC are unsupported. */
+#define RWF_HIPRI     0x01u
+#define RWF_DSYNC     0x02u
+#define RWF_SYNC      0x04u
+#define RWF_NOWAIT    0x08u
+#define RWF_APPEND    0x10u
+#define RWF_NOAPPEND  0x20u
+#define RWF_ATOMIC    0x40u
+#define RWF_SUPPORTED 0x7fu
 
 /**
  * The descriptor checks of preadv2 and pwritev2, which Linux makes before
@@ -12456,7 +12496,8 @@ static long rwv2_import(struct kernel_iovec *iov, uintptr_t addr, int count)
 
 /** Transfer the copied vector at `addr`, opened to the user-copy checks,
  * using the held descriptor `entry` and the arguments of `params`:
- * APPEND ignores the position, -1 uses the shared position, and a
+ * APPEND ignores the position, NOAPPEND overrides O_APPEND for this call,
+ * -1 uses the shared position, and a
  * positive write with SYNC or DSYNC flushes the
  * description the call holds. Returns the byte count or -errno. */
 static long rwv2_transfer(isr_params_t *params, fd_entry_t *entry, uintptr_t addr, int count,
@@ -12467,9 +12508,9 @@ static long rwv2_transfer(isr_params_t *params, fd_entry_t *entry, uintptr_t add
     uint32_t flags = (uint32_t)SC_ARG(params, 5);
     long rc;
 
-    if (write && (flags & RWF_APPEND) && entry && entry->type == FD_TYPE_FILE && !entry->ops &&
-        entry->ofd && entry->ofd->vmnt) {
-        rc = iov_append(entry, addr, count, pos);
+    if (write && (flags & (RWF_APPEND | RWF_NOAPPEND)) && entry && entry->type == FD_TYPE_FILE &&
+        !entry->ops && entry->ofd && entry->ofd->vmnt) {
+        rc = iov_file_write(entry, addr, count, pos, (flags & RWF_APPEND) != 0);
     } else if (pos == -1) {
         rc = write ? writev(fd, addr, count) : readv(fd, addr, count);
     } else {
@@ -12490,7 +12531,9 @@ static long rwv2_transfer(isr_params_t *params, fd_entry_t *entry, uintptr_t add
  * a descriptor not open is -EBADF; at a position other than -1, one that
  * cannot seek is -ESPIPE; then the wrong direction is -EBADF. Import the
  * vector next, return zero for no bytes, then refuse unsupported flags
- * with -EOPNOTSUPP. A data page is faulted in only after those checks.
+ * with -EOPNOTSUPP. APPEND with NOAPPEND is -EINVAL, after unknown flags
+ * but before known flags the file does not support, as Linux 6.12's
+ * kiocb_set_rw_flags orders them. A data page is faulted in only afterward.
  * The vector is kept in the caller's layout and opened to the shared
  * readv/writev paths, so each reads the same copy across sleeping I/O.
  * The other arguments and errors are preadv's and pwritev's.
@@ -12524,7 +12567,15 @@ static long rwv2(isr_params_t *params, int write)
         rc = -EINVAL;
         goto out;
     }
-    if (flags & ~(RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_APPEND)) {
+    if (flags & ~RWF_SUPPORTED) {
+        rc = -EOPNOTSUPP;
+        goto out;
+    }
+    if ((flags & RWF_APPEND) && (flags & RWF_NOAPPEND)) {
+        rc = -EINVAL;
+        goto out;
+    }
+    if (flags & (RWF_NOWAIT | RWF_ATOMIC)) {
         rc = -EOPNOTSUPP;
         goto out;
     }

@@ -275,11 +275,19 @@ The data pages are touched only after the flags have been accepted.
 Both forms take
 .Dv RWF_HIPRI ,
 .Dv RWF_DSYNC ,
-.Dv RWF_SYNC
+.Dv RWF_SYNC ,
+.Dv RWF_APPEND
 and
-.Dv RWF_APPEND ,
+.Dv RWF_NOAPPEND ,
 which a read ignores, and refuse another flag with
 .Er EOPNOTSUPP .
+Combining
+.Dv RWF_APPEND
+and
+.Dv RWF_NOAPPEND
+is
+.Er EINVAL
+for a nonempty vector.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes read.
 Zero denotes end of a file or stream, a zero-length request, an empty
