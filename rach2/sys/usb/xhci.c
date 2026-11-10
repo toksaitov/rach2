@@ -143,7 +143,8 @@
 /* The first address a controller whose AC64 is clear cannot reach. */
 #define XHCI_FOUR_GIB   0x100000000ULL
 /* The blocks a record holds: a 512 KiB buffer that starts within a page is
- * 129 pieces, a control transfer three blocks. */
+ * 129 pieces; a control transfer adds its setup and status stages to its
+ * pieces, so it may have XHCI_TD_TRBS - 2 of them. */
 #define XHCI_TD_TRBS    130
 /* The records per endpoint: a stick has a data transfer and a command
  * wrapper outstanding on one endpoint at most, and its driver lets a record
@@ -2811,7 +2812,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         if (chunk > transfer->length - off) {
             chunk = transfer->length - off;
         }
-        if (p.n == XHCI_TD_TRBS) {
+        if (p.n == (transfer->setup != 0 ? XHCI_TD_TRBS - 2 : XHCI_TD_TRBS)) {
             return -1;
         }
         p.phys[p.n] = td_phys(va);
