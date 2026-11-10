@@ -122,6 +122,11 @@ void arch_stop(void) K_NORETURN;
  * change. */
 void arch_relax(void);
 
+/** Serialize this processor: the instructions before finish, and those
+ * after are fetched again, so code another processor wrote runs as
+ * written, as Linux's sync_core. */
+void arch_sync_core(void);
+
 /** Store `value` at `*p` and return what was there, as one step no other
  * processor's access comes between, and as a full barrier: no load or store
  * of this processor's moves across it. */

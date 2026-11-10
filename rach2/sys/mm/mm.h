@@ -91,6 +91,10 @@ struct mm {
      * that its caller may not read, and once any sharer's effective ids
      * move; PR_SET_DUMPABLE sets it, and fork's copy takes it. */
     uint32_t dumpable;
+    /* The membarrier(2) commands the space registered for, as
+     * MEMBARRIER_STATE_ bits (proc/membarrier.h); 0 for a new space and
+     * for an image an exec builds, and a fork's copy takes them. */
+    uint32_t membarrier;
     /* The ranges drivers registered to hear of changes to the pages
      * (notify.h), among them those of the pins charged to the address
      * space (pin.h); a fork's copy has none. */

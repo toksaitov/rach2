@@ -384,7 +384,8 @@ int smp_cpu_count(void)
  * translation, or all of them, and then clearing the word, which is what
  * the sender waits for; the processor does not go on with a translation it
  * was asked to drop, since the sender frees the page once it sees the word
- * clear.
+ * clear. A barrier request is answered by the locked exchange that clears
+ * it, a full barrier, after a serializing instruction when it asks for one.
  */
 void smp_service(void)
 {
@@ -406,6 +407,12 @@ void smp_service(void)
             }
         }
         cpu->tlb_request = 0;
+    }
+    if (cpu->barrier_request) {
+        if (cpu->barrier_request == SMP_BARRIER_SYNC) {
+            arch_sync_core();
+        }
+        (void)arch_atomic_xchg(&cpu->barrier_request, 0);
     }
     if (cpu->space_drop) {
         if (cpu->space == cpu->space_drop) {
@@ -481,6 +488,25 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
 uint32_t smp_tlb_count(int which)
 {
     return which == 0 || which == 1 ? tlb_counts[which] : 0;
+}
+
+void smp_barrier(uint64_t cpus, int sync_core)
+{
+    int me = (int)arch_cpu_id();
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (c != me && (cpus & ((uint64_t)1 << c)) && cpu_table[c].online) {
+            cpu_table[c].barrier_request = sync_core ? SMP_BARRIER_SYNC : SMP_BARRIER;
+            platform_cpu_ipi(c);
+        }
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        while (cpu_table[c].barrier_request && cpu_table[c].online) {
+            smp_service();
+            arch_relax();
+        }
+    }
 }
 
 void smp_space_release(const struct page_dir *dir)

@@ -5,6 +5,7 @@
 #include "../arch/arch.h"
 #include "sched.h"
 #include "ptrace.h"
+#include "membarrier.h"
 #include "rseq.h"
 #include "suspend.h"
 #include "tgroup.h"
@@ -523,6 +524,7 @@ void schedule(void)
 
     switch_context(old, next);
 
+    membarrier_switch(old);
     bkl_yield();
     kirq_restore(saved_flags);
 }
