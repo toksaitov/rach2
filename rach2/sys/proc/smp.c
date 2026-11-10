@@ -36,6 +36,13 @@ static int32_t bkl_hold_nr = -1;              /* its entry's system call number,
 static uint64_t bkl_seen_max_cycles;          /* the oldest hold an interrupt has found */
 static uintptr_t bkl_seen_pc[BKL_SAMPLE_PCS]; /* that instruction, then its callers */
 
+/* Each processor's first sample a second into its hold under way, its age
+ * in cycles 0 until taken, and the longest hold's, kept at its end. */
+static uintptr_t bkl_early_pc[NR_CPUS][BKL_SAMPLE_PCS];
+static uint64_t bkl_early_cycles[NR_CPUS];
+static uintptr_t bkl_hold_early_pc[BKL_SAMPLE_PCS];
+static uint64_t bkl_hold_early_cycles;
+
 /* The spins after which a waiter claims the big lock, and the times a waiter
  * sees the lock free and unclaimed by it before it passes over the claim. The
  * second covers a claimant that does not run, since under a hypervisor a
@@ -101,6 +108,7 @@ static void bkl_acquire(struct percpu *cpu)
         (void)arch_atomic_cmpxchg(&bkl_claim, me, 0u);
     }
     cpu->bkl_since = arch_cycles();
+    bkl_early_cycles[arch_cpu_id()] = 0;
     waited = cpu->bkl_since - start;
     bkl_wait_cycles += waited;
     if (waited > bkl_wait_max_cycles) {
@@ -114,10 +122,16 @@ static void bkl_hold_end(struct percpu *cpu)
 {
     uint64_t held = arch_cycles() - cpu->bkl_since;
 
+    int c = arch_cpu_id(), i;
+
     if (held > bkl_hold_max_cycles) {
         bkl_hold_max_cycles = held;
         bkl_hold_vector = cpu->bkl_vector;
         bkl_hold_nr = cpu->bkl_nr;
+        bkl_hold_early_cycles = bkl_early_cycles[c];
+        for (i = 0; i < BKL_SAMPLE_PCS; i++) {
+            bkl_hold_early_pc[i] = bkl_early_cycles[c] ? bkl_early_pc[c][i] : 0;
+        }
     }
 }
 
@@ -131,34 +145,46 @@ void bkl_note_entry(uint32_t vector, int32_t nr)
     }
 }
 
-void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
+/** Fill `out` with `pc` and the return addresses of the frames from `fp`,
+ * 0 past the last. The kernel keeps frame pointers: each frame holds the
+ * caller's frame pointer, then the return address. The walk stays within
+ * 64 KiB above the first frame, on one stack. */
+static void sample_chain(uintptr_t out[BKL_SAMPLE_PCS], uintptr_t pc, uintptr_t fp)
 {
-    struct percpu *cpu = this_cpu();
     uintptr_t first = fp;
-    uint64_t held;
     int i;
 
-    if (cpu->bkl_depth < 2) {
-        return;
-    }
-    held = arch_cycles() - cpu->bkl_since;
-    if (held <= bkl_seen_max_cycles) {
-        return;
-    }
-    bkl_seen_max_cycles = held;
-    bkl_seen_pc[0] = pc;
-    /* The kernel keeps frame pointers: each frame holds the caller's frame
-     * pointer, then the return address. The walk stays on one stack. */
+    out[0] = pc;
     for (i = 1; i < BKL_SAMPLE_PCS; i++) {
         if (fp < USER_ADDR_MAX || fp % sizeof(uintptr_t) != 0 || fp < first ||
             fp - first > 0x10000u) {
             break;
         }
-        bkl_seen_pc[i] = ((const uintptr_t *)fp)[1];
+        out[i] = ((const uintptr_t *)fp)[1];
         fp = ((const uintptr_t *)fp)[0];
     }
     for (; i < BKL_SAMPLE_PCS; i++) {
-        bkl_seen_pc[i] = 0;
+        out[i] = 0;
+    }
+}
+
+void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
+{
+    struct percpu *cpu = this_cpu();
+    int c = arch_cpu_id();
+    uint64_t held;
+
+    if (cpu->bkl_depth < 2) {
+        return;
+    }
+    held = arch_cycles() - cpu->bkl_since;
+    if (!bkl_early_cycles[c] && timer_cycles_us(held) >= 1000000u) {
+        bkl_early_cycles[c] = held;
+        sample_chain(bkl_early_pc[c], pc, fp);
+    }
+    if (held > bkl_seen_max_cycles) {
+        bkl_seen_max_cycles = held;
+        sample_chain(bkl_seen_pc, pc, fp);
     }
 }
 
@@ -186,6 +212,16 @@ void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
     }
 }
 
+void smp_hold_early(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
+{
+    int i;
+
+    *age_us = timer_cycles_us(bkl_hold_early_cycles);
+    for (i = 0; i < BKL_SAMPLE_PCS; i++) {
+        pc[i] = bkl_hold_early_pc[i];
+    }
+}
+
 void bkl_enter(void)
 {
     uint32_t flags = kirq_save();
@@ -209,6 +245,7 @@ int bkl_try_enter(void)
             return 0;
         }
         cpu->bkl_since = arch_cycles();
+        bkl_early_cycles[arch_cpu_id()] = 0;
         cpu->bkl_vector = 0;
         cpu->bkl_nr = -1;
         bkl_flush(cpu);
