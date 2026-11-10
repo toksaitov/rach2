@@ -1288,8 +1288,9 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
  * order (`writev_elements`); on a tmpfs file the mount's lock is held across
  * them, and a vector that would grow a sealed file is cut to the whole 2 MiB
  * chunks before its end (`writev_begin`). The vector is checked whole first
- * (`iov_import`), and its total cut at MAX_RW_COUNT. Returns the bytes written,
- * or a negative errno: -EINVAL for a count below 0 or past IOV_MAX_LOCAL or a
+ * (`iov_import`), and its total cut at MAX_RW_COUNT; a vector of no bytes still
+ * has the descriptor checked (`write_fd`). Returns the bytes written, or a
+ * negative errno: -EINVAL for a count below 0 or past IOV_MAX_LOCAL or a
  * negative length, -EFAULT for a vector or a range outside user space, -EPERM
  * for a vector of which the seal lets no byte in, or a transfer error when no
  * byte was written. A buffer fault after a positive transfer returns the bytes
@@ -1312,6 +1313,9 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     wanted = iov_import(NULL, iov_user, iovcnt, -1);
     if (wanted < 0) {
         return wanted;
+    }
+    if (wanted == 0) {
+        return write_fd(fd, (const char __user *)0, 0);
     }
     rc = writev_begin(fd, iov_user, iovcnt, (uint32_t)wanted, &held, &cap);
     if (rc == 0) {
@@ -6473,9 +6477,9 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
  * MAX_RW_COUNT, as Linux's is. The buffers are checked by `user_buffer_ok`
  * with write access, which faults their pages in, so an address inside the
  * user window that is unmapped or read-only fails here and not half way
- * through. An array that asks for nothing
- * still checks the descriptor, so a closed one is -EBADF. Once a byte has
- * been read, a later failure ends the call with the total.
+ * through. An array that asks for nothing still checks the descriptor, so a
+ * closed one is -EBADF. Once a byte has been read, a later failure ends the
+ * call with the total.
  *
  * The buffers are filled in order, and how depends on what is behind the
  * descriptor, since a second read is not always reading on. A regular file
@@ -12448,14 +12452,15 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
  * across the vector. Other transfers check the vector whole first
  * (`iov_import`), so a bad element is refused before a byte moves, its total
  * cut at MAX_RW_COUNT, and then move it (`iov_at_move`), a write cut to the
- * whole 2 MiB chunks a sealed tmpfs file lets in (`iov_seal_grow`); a vector of
- * no bytes still has the descriptor checked. Returns the bytes moved or a
- * negative errno: -EINVAL for a negative position, a count past IOV_MAX_LOCAL
- * or below 0, a negative length, or a vector whose end would pass 2^63-1;
- * -EFAULT for a vector or a buffer the caller cannot reach; -EPERM, with
- * nothing written, for a write to a file sealed against growth of which no
- * whole 2 MiB chunk before the end fits, as Linux takes the vector as one
- * stream; or the first element's error.
+ * whole 2 MiB chunks a sealed tmpfs file lets in (`iov_seal_grow`) when the
+ * descriptor is open for writing; one that is not gets `ksys_pwrite64`'s EBADF,
+ * as Linux tests FMODE_WRITE before the vector. A vector of no bytes still has
+ * the descriptor checked. Returns the bytes moved or a negative errno: -EINVAL
+ * for a negative position, a count past IOV_MAX_LOCAL or below 0, a negative
+ * length, or a vector whose end would pass 2^63-1; -EFAULT for a vector or a
+ * buffer the caller cannot reach; -EPERM, with nothing written, for a write to
+ * a file sealed against growth of which no whole 2 MiB chunk before the end
+ * fits, as Linux takes the vector as one stream; or the first element's error.
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
@@ -12481,7 +12486,8 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     if ((uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
         return -EINVAL;
     }
-    if (entry && entry->type == FD_TYPE_FILE && !entry->ops && entry->ofd && entry->ofd->vmnt) {
+    if (entry && entry->type == FD_TYPE_FILE && (entry->flags & FD_FLAG_WRITE) &&
+        !(entry->flags & FD_FLAG_PATH) && !entry->ops && entry->ofd && entry->ofd->vmnt) {
         rc = iov_seal_grow(entry->ofd, (uint64_t)pos, wanted, 0, &room);
         if (rc != 0) {
             return rc;
