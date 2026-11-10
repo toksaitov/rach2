@@ -419,6 +419,7 @@ static uint32_t bo_new(int i, uint64_t size, uint32_t tiling, uint32_t stride)
     bo[i].base.dev = &gpu.drm;
     bo[i].base.size = size;
     bo[i].base.funcs = &i915_gem_object_funcs;
+    bo[i].base.resv = &bo[i].base.resv_own;
     bo[i].base.refs = 1;
     bo[i].tiling = tiling;
     bo[i].stride = stride;

@@ -1586,6 +1586,7 @@ static uint32_t bo_new(int i, uint64_t size)
     bo[i].base.dev = fa_dev;
     bo[i].base.size = size;
     bo[i].base.funcs = &i915_gem_object_funcs;
+    bo[i].base.resv = &bo[i].base.resv_own;
     bo[i].base.refs = 1;
     bo[i].tiling = I915_TILING_NONE;
     CHECK(drm_gem_handle_create(&fa, &bo[i].base, &h) == 0, "a handle is made");
