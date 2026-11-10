@@ -23,7 +23,7 @@ static int prepare(struct etude_case *c, struct etude_case_machine *m)
     const char *untar[] = {"/bin/tar",        "-xf", "/host-products/scripts-assets.tar", "-C",
                            "/host-work/tree", NULL};
     const char *modes[] = {"/bin/chmod", "-R", "a+rX", "/host-work/tree", NULL};
-    return host_assets_match(c, m) && execute(m, mkdir, "family-workspace") &&
+    return host_assets_stage(c, m) && execute(m, mkdir, "family-workspace") &&
            execute(m, untar, "family-assets") && execute(m, modes, "family-source-modes");
 }
 /** Compare the staged guest kernel with the exact declared artifact. */

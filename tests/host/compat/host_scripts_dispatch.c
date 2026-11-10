@@ -76,7 +76,7 @@ enum etude_status etude_guest_command(struct etude_case_machine *m, const char *
     r->cleanup = ETUDE_CLEANUP_CONFIRMED;
     return ETUDE_OK;
 }
-int host_assets_match(struct etude_case *c, struct etude_case_machine *m)
+int host_assets_stage(struct etude_case *c, struct etude_case_machine *m)
 {
     return m->owner == c;
 }

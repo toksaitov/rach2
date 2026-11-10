@@ -925,6 +925,25 @@ $(GNU_TEST_DISK): $(GNU_TEST_EXT2) $(MKMBR)
 	mv $@.tmp $@
 	rm -f $(GNU_TEST_EXT2)
 
+# The files of the GNU products helper that change in ordinary work: the
+# source archive and the two kernel profiles of this architecture, which
+# disk-policy checks. They are kept off gnu-test.disk, so that a change to a
+# test script or a kernel remakes this archive of some 20 MiB and leaves the
+# image of 24 GiB as it is. The helper's cases attach the archive as a raw
+# disk, disk1, and unpack it into /host-products before they read it
+# (tests/cases/host/Readme.md). A ustar archive ends in zero blocks, so tar
+# stops there, and its size is a whole number of sectors.
+GNU_TEST_PRODUCTS = $(IMAGES_DIR)/gnu-test-products.tar
+$(GNU_TEST_PRODUCTS): build/tests/host-suite/scripts-assets.tar $(KERNEL) $(METAL_KERNEL)
+	rm -rf $@.d $@.tmp && mkdir -p $@.d/diskpolicy/$(ARCH)
+	cp build/tests/host-suite/scripts-assets.tar $@.d/scripts-assets.tar
+	cp $(KERNEL) $@.d/diskpolicy/$(ARCH)/readwrite.kernel
+	cp $(METAL_KERNEL) $@.d/diskpolicy/$(ARCH)/readonly.kernel
+	chmod 0644 $@.d/scripts-assets.tar $@.d/diskpolicy/$(ARCH)/*.kernel
+	cd $@.d && COPYFILE_DISABLE=1 tar --format=ustar -cf ../$(@F).tmp scripts-assets.tar diskpolicy
+	rm -rf $@.d
+	mv $@.tmp $@
+
 # `tests/run wifi`: Wi-Fi above the radio, a station on the installed system
 # joining the access points of the Linux AP guest (tests/system/wifi) through
 # a wsim radio and the two relays, in each security the guest offers, and
