@@ -13,7 +13,9 @@
  * one. A write, a writev and a pwritev that would pass the end of a file
  * of 10000 bytes sealed against growth write the whole pages before it,
  * 8192 bytes from 0 and 3192 from 5000, as Linux writes a page at a time,
- * and one from 9000, with no whole page before the end, fails.
+ * and a write of 2000 bytes from 9000, and a writev and a pwritev there of
+ * two elements of 1000, with no whole page before the end, fail with
+ * nothing written, though a vector's first element alone would fit.
  *
  * A memfd made without MFD_ALLOW_SEALING starts with F_SEAL_SEAL, and
  * F_ADD_SEALS on it fails with EPERM. One made with MFD_NOEXEC_SEAL has mode
@@ -102,8 +104,9 @@ static int grow_pages(void)
          lseek(fd, 0, SEEK_CUR) == 8192 && pwritev(fd, stream, 2, 0) == 8192 &&
          pwrite(fd, big, 6000, 5000) == 3192 && refused(pwrite(fd, big, 2000, 9000), EPERM) &&
          lseek(fd, 9000, SEEK_SET) == 9000 && refused(writev(fd, small, 2), EPERM) &&
-         pread(fd, at, 1, 8191) == 1 && at[0] == 'b' && pread(fd, at, 1, 8192) == 1 &&
-         at[0] == '\0' && size_is(fd, 10000);
+         refused(pwritev(fd, small, 2, 9000), EPERM) && pread(fd, at, 1, 8191) == 1 &&
+         at[0] == 'b' && pread(fd, at, 1, 8192) == 1 && at[0] == '\0' &&
+         pread(fd, at, 1, 9000) == 1 && at[0] == '\0' && size_is(fd, 10000);
     if (fd >= 0) {
         close(fd);
     }
