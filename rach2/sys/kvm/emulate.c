@@ -805,7 +805,7 @@ static int tsc_write(struct kvm_vcpu *v, uint32_t index, uint64_t value)
         kvm_tsc_moved(v);
         return 0;
     }
-    v->tsc_offset = (int64_t)(value - arch_cycles());
+    v->tsc_offset = (int64_t)(value - kvm_tsc_scale(v, arch_cycles()));
     v->dirty |= KVM_PART_TSC;
     kvm_tsc_moved(v);
     return kvm_msr_set(v, MSR_IA32_TSC_ADJUST, adjust + ((uint64_t)v->tsc_offset - before));

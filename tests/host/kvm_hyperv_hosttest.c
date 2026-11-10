@@ -138,6 +138,18 @@ uint32_t timer_calibrate(void)
     return tsc_per_tick;
 }
 
+/* pvclock.c's guest TSC and its rate, which no vCPU here has scaled. */
+uint64_t kvm_tsc_read(const struct kvm_vcpu *v)
+{
+    return arch_cycles() + (uint64_t)v->tsc_offset;
+}
+
+uint64_t kvm_tsc_hz(const struct kvm_vcpu *v)
+{
+    (void)v;
+    return (uint64_t)tsc_per_tick * TICK_HZ;
+}
+
 /* The kvmclock with no master clock, as pvclock.c reads it. */
 uint64_t kvm_clock_ns(const struct kvm_vm *vm)
 {
@@ -303,6 +315,7 @@ static void vm_make(int none)
         vcpus[i].xsave = xsaves[i];
         vcpus[i].sregs.cr0 = 1;
         vcpus[i].tsc_offset = 1000 * (i + 1);
+        vcpus[i].tsc_khz = 2400000u;
         vm.vcpus[i] = &vcpus[i];
     }
     vm.nr_vcpus = NV;

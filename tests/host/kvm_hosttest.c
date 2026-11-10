@@ -35,7 +35,12 @@
  * TSCs matched under the master clock, which a write of another TSC stops,
  * the kvmclock in guest memory reading as KVM_GET_CLOCK does, its stop
  * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
- * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS.
+ * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; and
+ * what Linux's selftests ask for: the TSC's rate set on a VM and on a
+ * vCPU, on a processor that scales none and with SVM's and VMX's ratios,
+ * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
+ * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
+ * the VM's capabilities and quirks, and the synchronized registers.
  */
 #include "kvm/kvm.c"
 #include "kvm/vcpu.c"
@@ -539,9 +544,21 @@ static int32_t fake_backend_cap(long cap)
     return cap == KVM_CAP_X86_ROBUST_SINGLESTEP || cap == KVM_CAP_SET_GUEST_DEBUG;
 }
 
-const struct kvm_backend kvm_vmx = {"vmx",       fake_probe,       NULL,      NULL,          NULL,
-                                    NULL,        fake_enter,       fake_exit, fake_complete, NULL,
-                                    fake_inject, fake_backend_cap, NULL};
+/* The width of the fraction of the ratio the model's processor scales a
+ * TSC by, SVM's 32 or VMX's 48, and 0 for a processor that scales none. */
+static uint32_t scale_bits;
+
+/** The backend's tsc_scaling: the largest ratio of `scale_bits`. */
+static uint64_t fake_tsc_scaling(uint32_t *frac_bits)
+{
+    *frac_bits = scale_bits;
+    return scale_bits == 32 ? 0xFFFFFFFFFFull : scale_bits ? ~0ull : 0;
+}
+
+const struct kvm_backend kvm_vmx = {
+    "vmx",      fake_probe,      NULL,          NULL, NULL,        NULL,
+    fake_enter, fake_exit,       fake_complete, NULL, fake_inject, fake_backend_cap,
+    NULL,       fake_tsc_scaling};
 const struct kvm_backend kvm_svm = {"svm", fake_probe, NULL, NULL, NULL, NULL, NULL,
                                     NULL,  NULL,       NULL, NULL, NULL, NULL};
 
@@ -2418,6 +2435,121 @@ static void stats_count_rows(int vcpu, int vcpu_stats)
     v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST + 31] = 0;
 }
 
+/** The guest's TSC of the vCPU `fd`, as KVM_GET_MSRS reads it. */
+static uint64_t guest_tsc(int fd)
+{
+    uint64_t value = 0;
+
+    (void)get_msr(fd, MSR_IA32_TSC, &value);
+    return value;
+}
+
+/** KVM_SET_TSC_KHZ on a processor that scales no TSC, the model's at 2
+ * GHz: a rate within 250 parts in a million is the host's, a lower one
+ * is refused, and a higher one is kept by moving the TSC up before each
+ * entry, from the count and the moment its generation began at. */
+static void tsc_unscaled_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v = entries[fd].priv;
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_TSC_CONTROL) == 0 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 0,
+          "no KVM_CAP_TSC_CONTROL and no KVM_CAP_VM_TSC_CONTROL without scaling");
+    CHECK(fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000 && fdio(fd, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "KVM_GET_TSC_KHZ is the host's rate, of the VM and of a vCPU");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 2000500) == 0 && fdio(fd, KVM_SET_TSC_KHZ, 1999500) == 0 &&
+              !v->tsc_catchup && v->tsc_ratio == 0 && fdio(fd, KVM_GET_TSC_KHZ, 0) == 1999500,
+          "a rate within 250 parts in a million is taken, and runs at the host's");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 1999499) == -EINVAL && fdio(fd, KVM_GET_TSC_KHZ, 0) == 1999499,
+          "a lower rate is -EINVAL, and is recorded all the same, as Linux records it");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 0) == 0 && fdio(fd, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "0 kHz is the host's rate");
+    clock_pass(1000000);
+    CHECK(guest_tsc(fd) == 2000000, "the TSC counts at the host's rate");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 3000000) == 0 && v->tsc_catchup && v->tsc_ratio == 0,
+          "a higher rate is taken");
+    kvm_clock_prepare(v);
+    CHECK(guest_tsc(fd) == 3000000 && (v->dirty & KVM_PART_TSC),
+          "and the TSC is moved up to it before an entry");
+    clock_pass(1000000);
+    CHECK(guest_tsc(fd) == 5000000, "between entries it counts at the host's rate");
+    kvm_clock_prepare(v);
+    CHECK(guest_tsc(fd) == 6000000, "and is moved up again");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 1000000,
+          "the VM's KVM_SET_TSC_KHZ takes a rate no vCPU could have, as Linux's");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 0) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "and the host's for 0");
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/** KVM_SET_TSC_KHZ on a processor that scales the TSC by a ratio with
+ * `bits` of fraction, whose 2,345,678 kHz, tsc_scaling_sync's rate, is
+ * the ratio `ratio`, and whose rates end below `past`: the capabilities,
+ * Linux's bound on the rate, the VM's rate given to its new vCPUs, and
+ * the TSC counting at it. */
+static void tsc_scaled_rows(uint32_t bits, uint64_t ratio, uint32_t past)
+{
+    int vm, fd0, fd1;
+    struct kvm_vcpu *v0, *v1;
+    uint64_t t0;
+
+    scale_bits = bits;
+    vm = dev(KVM_CREATE_VM, 0);
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_TSC_CONTROL) == 1 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 1,
+          "KVM_CAP_TSC_CONTROL and KVM_CAP_VM_TSC_CONTROL with scaling");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, past) == -EINVAL && fdio(vm, KVM_SET_TSC_KHZ, past - 1u) == 0,
+          "the VM's rate is below what the largest ratio gives, at most 2^31 - 1");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 2345678) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2345678,
+          "the VM's KVM_SET_TSC_KHZ is read back");
+    fd0 = fdio(vm, KVM_CREATE_VCPU, 0);
+    v0 = entries[fd0].priv;
+    CHECK(fdio(fd0, KVM_GET_TSC_KHZ, 0) == 2345678 && v0->tsc_ratio == ratio &&
+              v0->tsc_frac_bits == bits && kvm_tsc_hz(v0) == 2345678000ull,
+          "a new vCPU has the VM's rate, and the ratio the processor is given");
+    t0 = guest_tsc(fd0);
+    clock_pass(1000000);
+    fd1 = fdio(vm, KVM_CREATE_VCPU, 1);
+    v1 = entries[fd1].priv;
+    CHECK(guest_tsc(fd0) - t0 >= 2345677 && guest_tsc(fd0) - t0 <= 2345678,
+          "its TSC counts at that rate");
+    CHECK(v1->tsc_offset == v0->tsc_offset && v1->tsc_ratio == ratio,
+          "a second vCPU takes the same TSC");
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, past) == -EINVAL && fdio(fd1, KVM_GET_TSC_KHZ, 0) == 2345678,
+          "a vCPU's rate has the same bound, and one past it changes nothing");
+    v1->dirty = 0;
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, 1000000) == 0 && v1->tsc_ratio == 1ull << (bits - 1u) &&
+              (v1->dirty & KVM_PART_TSC) && !v1->tsc_catchup,
+          "a rate below the host's is a ratio below 1, loaded before the next entry");
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, 2000100) == 0 && v1->tsc_ratio == 0 &&
+              fdio(fd1, KVM_GET_TSC_KHZ, 0) == 2000100,
+          "a rate within the tolerance is not scaled");
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, 0) == 0 && fdio(fd1, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "0 kHz is the host's rate");
+    fdclose(fd1);
+    fdclose(fd0);
+    fdclose(vm);
+    scale_bits = 0;
+}
+
+/** KVM_SET_TSC_KHZ and KVM_GET_TSC_KHZ of a VM and of a vCPU, with
+ * KVM_CAP_TSC_CONTROL and KVM_CAP_VM_TSC_CONTROL, as tsc_scaling_sync
+ * and Linux's kvm_set_tsc_khz have them: without scaling, with SVM's
+ * ratio and with VMX's. */
+static void tsc_rows(void)
+{
+    tick_counts = 2000000;
+    vclock_on = 1;
+    tsc_unscaled_rows();
+    tsc_scaled_rows(32, 0x12c3f2d3cull, 511999999u);
+    tsc_scaled_rows(48, 0x12c3f2d3c792dull, 0x7FFFFFFFu);
+    CHECK(live == 0, "the VMs free every allocation");
+    tick_counts = 0;
+    vclock_on = 0;
+}
+
 /** KVM_GET_STATS_FD of a VM and of a vCPU, as kvm_binary_stats_test reads
  * them: several files at once, read after the VM's own descriptors closed. */
 static void stats_rows(void)
@@ -2478,6 +2610,7 @@ static void stats_rows(void)
  * its own. */
 static void selftest_rows(void)
 {
+    tsc_rows();
     stats_rows();
     pre_fault_rows();
     bound_rows();

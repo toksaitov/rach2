@@ -21,9 +21,123 @@
  * TSC does not drift from the host's clock. */
 #define KVMCLOCK_SYNC_NS (300ull * NSEC_PER_SEC)
 
+/* The tolerance within which a rate is the host's, in parts in a million,
+ * Linux's tsc_tolerance_ppm. */
+#define TSC_TOLERANCE_PPM 250u
+
 uint64_t kvm_tsc_khz(void)
 {
     return (uint64_t)timer_calibrate() * TICK_HZ / 1000u;
+}
+
+/** The backend's largest TSC ratio, with its fraction's width in `*frac`,
+ * or 0 when the processor does not scale the TSC. */
+static uint64_t max_ratio(uint32_t *frac)
+{
+    *frac = 0;
+    return kvm_backend && kvm_backend->tsc_scaling ? kvm_backend->tsc_scaling(frac) : 0;
+}
+
+/** `a` times `b` over 2^`shift`, for a shift of 1 to 63, the product kept
+ * whole in between. */
+static uint64_t mul_shr(uint64_t a, uint64_t b, uint32_t shift)
+{
+    uint64_t a0 = a & 0xFFFFFFFFull, a1 = a >> 32, b0 = b & 0xFFFFFFFFull, b1 = b >> 32;
+    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0;
+    uint64_t mid = (p00 >> 32) + (p01 & 0xFFFFFFFFull) + (p10 & 0xFFFFFFFFull);
+    uint64_t lo = (p00 & 0xFFFFFFFFull) | (mid << 32);
+    uint64_t hi = a1 * b1 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
+
+    return (lo >> shift) | (hi << (64u - shift));
+}
+
+int kvm_tsc_control(void)
+{
+    uint32_t frac;
+
+    return max_ratio(&frac) != 0;
+}
+
+uint32_t kvm_tsc_max_khz(void)
+{
+    uint64_t max, top;
+    uint32_t frac;
+
+    max = max_ratio(&frac);
+    if (!max) {
+        return 0;
+    }
+    top = mul_shr(kvm_tsc_khz(), max, frac);
+    return top < 0x7FFFFFFFull ? (uint32_t)top : 0x7FFFFFFFu;
+}
+
+uint32_t kvm_tsc_khz_arg(uintptr_t arg)
+{
+    uint32_t khz = (uint32_t)arg;
+
+    if (kvm_tsc_control() && khz >= kvm_tsc_max_khz()) {
+        return 0;
+    }
+    return khz ? khz : (uint32_t)kvm_tsc_khz();
+}
+
+uint64_t kvm_tsc_scale(const struct kvm_vcpu *v, uint64_t tsc)
+{
+    return v->tsc_ratio ? mul_shr(tsc, v->tsc_ratio, v->tsc_frac_bits) : tsc;
+}
+
+uint64_t kvm_tsc_read(const struct kvm_vcpu *v)
+{
+    return kvm_tsc_scale(v, arch_cycles()) + (uint64_t)v->tsc_offset;
+}
+
+uint64_t kvm_tsc_hz(const struct kvm_vcpu *v)
+{
+    return v->tsc_ratio ? (uint64_t)v->tsc_khz * 1000u : kvm_tsc_khz() * 1000u;
+}
+
+int kvm_tsc_set_khz(struct kvm_vcpu *v, uint32_t khz)
+{
+    uint64_t host = kvm_tsc_khz(), max, ratio, rest;
+    uint32_t frac, done;
+
+    v->tsc_ratio = 0;
+    v->tsc_catchup = 0;
+    v->dirty |= KVM_PART_TSC;
+    if (khz == 0) {
+        return -1;
+    }
+    v->tsc_khz = khz;
+    if (khz >= host * (1000000u - TSC_TOLERANCE_PPM) / 1000000u &&
+        khz <= host * (1000000u + TSC_TOLERANCE_PPM) / 1000000u) {
+        return 0;
+    }
+    max = max_ratio(&frac);
+    if (!max) {
+        if (khz < host) {
+            return -1;
+        }
+        v->tsc_catchup = 1;
+        return 0;
+    }
+    if (host == 0) {
+        return -1;
+    }
+    /* 2^frac * khz / host by long division, 16 bits of the fraction at a
+     * time, since the remainder is below 2^32. */
+    ratio = (khz / host) << frac;
+    rest = khz % host;
+    for (done = 0; done < frac; done += 16u) {
+        rest <<= 16;
+        ratio += (rest / host) << (frac - 16u - done);
+        rest %= host;
+    }
+    if (ratio == 0 || ratio >= max) {
+        return -1;
+    }
+    v->tsc_ratio = ratio;
+    v->tsc_frac_bits = frac;
+    return 0;
 }
 
 /**
@@ -195,9 +309,9 @@ int32_t kvm_clock_set(struct kvm_vm *vm, uintptr_t arg)
 void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value)
 {
     struct kvm_vm *vm = v->vm;
-    uint64_t data = value ? *value : 0, khz = kvm_tsc_khz(), ns = kvm_host_ns();
+    uint64_t data = value ? *value : 0, khz = v->tsc_khz, ns = kvm_host_ns();
     uint64_t elapsed = ns - vm->tsc_last_ns, expect, hz;
-    int64_t offset = (int64_t)(data - arch_cycles());
+    int64_t offset = (int64_t)(data - kvm_tsc_scale(v, arch_cycles()));
     int synchronizing = 0, matched = 0, use;
 
     if (khz) {
@@ -221,7 +335,7 @@ void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value)
             offset = vm->tsc_cur_offset; /* the processors' TSCs agree */
         } else {
             data += ns_to_cycles(elapsed, khz);
-            offset = (int64_t)(data - arch_cycles());
+            offset = (int64_t)(data - kvm_tsc_scale(v, arch_cycles()));
         }
         matched = 1;
     }
@@ -232,12 +346,16 @@ void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value)
     v->dirty |= KVM_PART_TSC;
     if (!matched) {
         vm->tsc_gen++;
+        vm->tsc_cur_ns = ns;
+        vm->tsc_cur_write = data;
         vm->tsc_cur_offset = offset;
         vm->tsc_matched = 0;
     } else if (v->tsc_gen != vm->tsc_gen) {
         vm->tsc_matched++;
     }
     v->tsc_gen = vm->tsc_gen;
+    v->tsc_this_ns = vm->tsc_cur_ns;
+    v->tsc_this_write = vm->tsc_cur_write;
     /* As Linux's kvm_track_tsc_matching: a new generation takes a new
      * moment, after it, and so does the master clock turned on or off. */
     use = tsc_all_matched(vm) && vclock_running();
@@ -249,6 +367,8 @@ void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value)
 
 void kvm_tsc_moved(struct kvm_vcpu *v)
 {
+    v->tsc_this_ns = kvm_host_ns();
+    v->tsc_this_write = kvm_tsc_read(v);
     kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
     kvm_hv_clock_changed(v->vm);
 }
@@ -329,9 +449,9 @@ static void pvclock_write(struct kvm_vcpu *v)
         return;
     }
     k_memset(&pv, 0, sizeof(pv));
-    pv.tsc_timestamp = host_tsc + (uint64_t)v->tsc_offset;
+    pv.tsc_timestamp = kvm_tsc_scale(v, host_tsc) + (uint64_t)v->tsc_offset;
     pv.system_time = ns + (uint64_t)vm->clock_offset;
-    time_scale(NSEC_PER_SEC, khz * 1000u, &pv.tsc_shift, &pv.tsc_to_system_mul);
+    time_scale(NSEC_PER_SEC, kvm_tsc_hz(v), &pv.tsc_shift, &pv.tsc_to_system_mul);
     pv.flags = vm->master_clock ? PVCLOCK_TSC_STABLE_BIT : 0u;
     pv.flags |= (uint8_t)(guest.flags & PVCLOCK_GUEST_STOPPED);
     if (v->pv_stopped) {
@@ -352,10 +472,29 @@ static void pvclock_write(struct kvm_vcpu *v)
     v->clock_ns = kvm_host_ns();
 }
 
+/** Move `v`'s TSC up to where its rate would have it since its last match
+ * or move, when the host's has fallen behind that, as Linux's
+ * kvm_guest_time_update does under tsc_catchup. Whether it moved. */
+static int tsc_catch_up(struct kvm_vcpu *v)
+{
+    uint64_t want = v->tsc_this_write + ns_to_cycles(kvm_host_ns() - v->tsc_this_ns, v->tsc_khz);
+    uint64_t have = kvm_tsc_read(v);
+
+    if (want <= have) {
+        return 0;
+    }
+    v->tsc_offset += (int64_t)(want - have);
+    v->dirty |= KVM_PART_TSC;
+    return 1;
+}
+
 void kvm_clock_prepare(struct kvm_vcpu *v)
 {
     int update = kvm_vcpu_test_clear(v, KVM_REQ_CLOCK_UPDATE);
 
+    if (v->tsc_catchup && tsc_catch_up(v)) {
+        update = 1;
+    }
     if (!(v->pv_time & KVM_MSR_ENABLED)) {
         return;
     }
@@ -465,7 +604,7 @@ uint64_t kvm_clock_pairing(struct kvm_vcpu *v, uint64_t gpa, uint64_t type)
     k_memset(&p, 0, sizeof(p));
     p.sec = (int64_t)(real / NSEC_PER_SEC);
     p.nsec = (int64_t)(real % NSEC_PER_SEC);
-    p.tsc = tsc + (uint64_t)v->tsc_offset;
+    p.tsc = kvm_tsc_scale(v, tsc) + (uint64_t)v->tsc_offset;
     if (kvm_guest_phys_rw(v, gpa, &p, sizeof(p), 1) != 0) {
         return (uint64_t)-(int64_t)KVM_EFAULT;
     }

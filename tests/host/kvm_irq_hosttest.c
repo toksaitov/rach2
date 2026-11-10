@@ -200,6 +200,12 @@ uint64_t arch_cycles(void)
     return tsc_base + mono_ns * 2u;
 }
 
+/* pvclock.c's guest TSC, which no vCPU here has scaled. */
+uint64_t kvm_tsc_read(const struct kvm_vcpu *v)
+{
+    return arch_cycles() + (uint64_t)v->tsc_offset;
+}
+
 uint64_t tick_count(void)
 {
     return mono_ns / TICK_NS;
@@ -414,6 +420,7 @@ static void vm_make(int full)
         v->vm = &vm;
         v->id = (uint32_t)i;
         v->index = (uint32_t)i;
+        v->tsc_khz = 2000000u;
         v->run = &runs[i];
         v->sregs.apic_base = BASE | APIC_BASE_ENABLE | (i == 0 ? APIC_BASE_BSP : 0);
         v->mp_state = KVM_MP_STATE_RUNNABLE;

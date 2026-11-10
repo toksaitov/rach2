@@ -30,6 +30,7 @@
 #define MSR_SYSCALL_MASK      0xC0000084u
 #define MSR_KERNEL_GS_BASE    0xC0000102u
 #define MSR_TSC_AUX           0xC0000103u
+#define MSR_TSC_RATIO         0xC0000104u
 #define MSR_VM_CR             0xC0010114u
 #define MSR_VM_HSAVE_PA       0xC0010117u
 
@@ -37,10 +38,17 @@
 #define VM_CR_SVMDIS 0x10u
 
 /* Leaf 0x8000000A's EDX: nested paging, the next RIP saved at an exit,
- * and the flush of one ASID's translations. */
+ * the TSC ratio MSR, and the flush of one ASID's translations. */
 #define SVM_FEAT_NP          (1u << 0)
 #define SVM_FEAT_NRIPS       (1u << 3)
+#define SVM_FEAT_TSCRATE     (1u << 4)
 #define SVM_FEAT_FLUSHBYASID (1u << 6)
+
+/* The TSC ratio MSR, which scales the TSC a guest reads and no other: 8
+ * bits of integer over 32 of fraction, so 1 and the largest are these. */
+#define TSC_RATIO_BITS 32u
+#define TSC_RATIO_ONE  (1ull << TSC_RATIO_BITS)
+#define TSC_RATIO_MAX  0xFFFFFFFFFFull
 
 /* A segment as the VMCB keeps it: the attributes are the descriptor's
  * bits 8 to 15 and 20 to 23, packed into 12 bits. */
@@ -313,6 +321,7 @@ static struct {
     uint32_t max_asid; /* the highest ASID, one less than leaf 0x8000000A's count */
     int nrips;         /* the exit saves the next RIP */
     int flushbyasid;   /* TLB_FLUSH_ONE is offered */
+    int tscrate;       /* the TSC ratio MSR is there */
     int rdtscp;        /* the host has RDTSCP, and so TSC_AUX */
     uint64_t host_mce; /* the host's CR4.MCE, which the guest's CR4 keeps */
 } caps;
@@ -320,7 +329,8 @@ static struct {
 /* Each processor's host save area, which VM_HSAVE_PA names, made at the
  * first VM; whether EFER.SVME and VM_HSAVE_PA are set there; whether a
  * run is inside its section, for the panic hook; its ASIDs, handed out
- * from `asid_next` in the generation `asid_gen`; and its TSC_AUX. */
+ * from `asid_next` in the generation `asid_gen`; its TSC_AUX; and the TSC
+ * ratio its MSR holds. */
 static void *hsave[NR_CPUS];
 static uint64_t hsave_pa[NR_CPUS];
 static volatile int svm_live[NR_CPUS];
@@ -328,6 +338,7 @@ static volatile int svm_in_run[NR_CPUS];
 static uint32_t asid_next[NR_CPUS];
 static uint32_t asid_gen[NR_CPUS];
 static uint64_t host_aux[NR_CPUS];
+static uint64_t tsc_ratio[NR_CPUS];
 
 /* The I/O permission map, every port intercepted, and the MSR permission
  * map, every MSR intercepted but FS_BASE, GS_BASE and KERNEL_GS_BASE,
@@ -1003,7 +1014,7 @@ static void after_run(struct kvm_vcpu *v)
 static int svm_enter(struct kvm_vcpu *v)
 {
     struct svm_vcpu *s = sv(v);
-    uint64_t host_dr7 = 0, host_db[4] = {0, 0, 0, 0};
+    uint64_t host_dr7 = 0, host_db[4] = {0, 0, 0, 0}, ratio;
     int cpu = (int)arch_cpu_id(), tlb;
 
     if (v->emul.resume) {
@@ -1020,6 +1031,10 @@ static int svm_enter(struct kvm_vcpu *v)
         if (caps.rdtscp) {
             host_aux[cpu] = msr_read(MSR_TSC_AUX);
         }
+        if (caps.tscrate) {
+            msr_write(MSR_TSC_RATIO, TSC_RATIO_ONE);
+            tsc_ratio[cpu] = TSC_RATIO_ONE;
+        }
         svm_live[cpu] = 1;
     }
 #endif
@@ -1035,6 +1050,11 @@ static int svm_enter(struct kvm_vcpu *v)
     dr_load(v, &host_dr7, host_db);
     if (caps.rdtscp && s->tsc_aux != host_aux[cpu]) {
         msr_write(MSR_TSC_AUX, s->tsc_aux);
+    }
+    ratio = v->tsc_ratio ? v->tsc_ratio : TSC_RATIO_ONE;
+    if (caps.tscrate && ratio != tsc_ratio[cpu]) {
+        msr_write(MSR_TSC_RATIO, ratio);
+        tsc_ratio[cpu] = ratio;
     }
     svm_in_run[cpu] = 1;
     (void)kvm_svm_vmrun(&v->regs, s->vmcb_pa, s->host_pa);
@@ -2628,8 +2648,8 @@ static void svm_panic(void)
 /**
  * Whether the processor has SVM as this backend needs it and the firmware
  * left it on: SVM in leaf 0x80000001, VM_CR's SVMDIS clear, nested paging,
- * and at least two ASIDs. NRIPS and the flush by ASID are taken where they
- * are. 1 or 0.
+ * and at least two ASIDs. NRIPS, the flush by ASID and the TSC ratio are
+ * taken where they are. 1 or 0.
  */
 static int svm_probe(void)
 {
@@ -2656,11 +2676,20 @@ static int svm_probe(void)
     caps.max_asid = b - 1u;
     caps.nrips = (d & SVM_FEAT_NRIPS) != 0;
     caps.flushbyasid = (d & SVM_FEAT_FLUSHBYASID) != 0;
+    caps.tscrate = (d & SVM_FEAT_TSCRATE) != 0;
 #ifndef RACH2_HOSTTEST
     caps.host_mce = hw_read_cr4() & CR4_MCE;
 #endif
     k_panic_hook = svm_panic;
     return 1;
+}
+
+/** `kvm_backend`'s tsc_scaling: the TSC ratio MSR's largest value and its
+ * 32 bits of fraction, or 0 on a processor without the MSR. */
+static uint64_t svm_tsc_scaling(uint32_t *frac_bits)
+{
+    *frac_bits = TSC_RATIO_BITS;
+    return caps.tscrate ? TSC_RATIO_MAX : 0;
 }
 
 /** The bits of a memory type in a 4 KiB leaf: PCD and PWT for UC, PWT for
@@ -2675,6 +2704,7 @@ static uint64_t svm_cache(int type, int ignore_guest_pat)
 static const struct kvm_tdp_format svm_tdp = {
     0x1u, 0x1u, 0x2u, 0, 1ull << 63, 0x4u, 0x80u, 0x000FFFFFFFFFF000ull, 0x20u, 0x40u, svm_cache};
 
-const struct kvm_backend kvm_svm = {
-    "svm",    svm_probe,    svm_vm_init, NULL,       svm_vcpu_init,       svm_vcpu_free, svm_enter,
-    svm_exit, svm_complete, svm_save,    svm_inject, svm_check_extension, &svm_tdp};
+const struct kvm_backend kvm_svm = {"svm",         svm_probe,      svm_vm_init, NULL,
+                                    svm_vcpu_init, svm_vcpu_free,  svm_enter,   svm_exit,
+                                    svm_complete,  svm_save,       svm_inject,  svm_check_extension,
+                                    &svm_tdp,      svm_tsc_scaling};

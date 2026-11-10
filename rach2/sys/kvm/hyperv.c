@@ -352,15 +352,11 @@ static uint64_t mul_hi(uint64_t a, uint64_t b)
 
 /** The host's TSC in hertz, at the rate the kernel measured, or 0 when it
  * measured none. */
-static uint64_t tsc_hz(void)
-{
-    return (uint64_t)timer_calibrate() * TICK_HZ;
-}
 
 /** The guest's TSC of `v` now. */
 static uint64_t guest_tsc(const struct kvm_vcpu *v)
 {
-    return arch_cycles() + (uint64_t)v->tsc_offset;
+    return kvm_tsc_read(v);
 }
 
 /** HV_MSR_TIME_REF_COUNT of `vm`, in 100 ns, as Linux's
@@ -435,9 +431,12 @@ static void tsc_page_setup(struct kvm_vcpu *v)
     if (kvm_guest_phys_rw(v, gpa, page, 4, 1) != 0) {
         goto broken;
     }
-    hz = tsc_hz();
+    if (v->vm->nr_vcpus == 0) {
+        goto broken;
+    }
+    hz = kvm_tsc_hz(v->vm->vcpus[0]);
     h->tsc_scale = tsc_scale(hz);
-    if (h->tsc_scale == 0 || v->vm->nr_vcpus == 0) {
+    if (h->tsc_scale == 0) {
         goto broken;
     }
     tsc = guest_tsc(v->vm->vcpus[0]);
@@ -1321,7 +1320,7 @@ static int msr_vcpu(struct kvm_vcpu *v, uint32_t msr, int write, uint64_t *value
             return host ? 0 : -1;
         }
         /* The APIC timer counts a bus cycle of the VM's `apic_bus_ns`. */
-        *value = msr == HV_MSR_TSC_FREQUENCY ? tsc_hz() / 1000u * 1000u
+        *value = msr == HV_MSR_TSC_FREQUENCY ? (uint64_t)v->tsc_khz * 1000u
                                              : 1000000000ull / v->vm->apic_bus_ns;
         return 0;
     default:
