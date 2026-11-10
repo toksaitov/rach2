@@ -51,6 +51,16 @@ int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t
 uint32_t tmpfs_seals(void *node);
 
 /**
+ * The bytes of a write of `count` at `pos` that F_SEAL_GROW lets into a
+ * file of `size` bytes: all of them when the write ends at or before the
+ * end, and otherwise those before the last page boundary at or below the
+ * end, as Linux's generic_perform_write takes a write a page at a time and
+ * shmem_write_begin refuses the first page that would pass the end. 0 when
+ * no byte fits, which the write answers -EPERM.
+ */
+uint32_t tmpfs_grow_room(uint64_t pos, uint32_t count, uint64_t size);
+
+/**
  * Add `seals` to the tmpfs file `node`, as F_ADD_SEALS does: 0, -EINVAL for
  * a bit that is no seal, or -EPERM when the file has TMPFS_SEAL_SEAL. A
  * file with execute bits that is sealed against their change is sealed

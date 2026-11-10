@@ -7,9 +7,13 @@
  * seals start empty. Under F_SEAL_SHRINK a smaller ftruncate fails with EPERM
  * and a larger one succeeds. Under F_SEAL_GROW a write past the end and a
  * larger ftruncate fail and an overwrite succeeds, and a writev whose two
- * elements together pass the end fails whole, with nothing written. Under
- * F_SEAL_FUTURE_WRITE a write fails; after F_SEAL_SEAL a further seal fails;
- * F_GET_SEALS reports each one.
+ * elements together pass the end fails whole, with nothing written, since
+ * no whole page before the end fits. Under F_SEAL_FUTURE_WRITE a write
+ * fails; after F_SEAL_SEAL a further seal fails; F_GET_SEALS reports each
+ * one. A write, a writev and a pwritev that would pass the end of a file
+ * of 10000 bytes sealed against growth write the whole pages before it,
+ * 8192 bytes from 0 and 3192 from 5000, as Linux writes a page at a time,
+ * and one from 9000, with no whole page before the end, fails.
  *
  * A memfd made without MFD_ALLOW_SEALING starts with F_SEAL_SEAL, and
  * F_ADD_SEALS on it fails with EPERM. One made with MFD_NOEXEC_SEAL has mode
@@ -26,6 +30,7 @@
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each check in order: `descriptor`, `file`, `fd-link`, `seal-shrink`,
  * `seal-grow`, `writev-grow`, `seal-future-write`, `seal-seal`,
+ * `seal-grow-pages`,
  * `unsealable`, `noexec-seal`, `krffs-seals`, `tmpfs-seals` and `refused`.
  * The first failure fails its assertion with the check and errno and leaves
  * the rest not run.
@@ -73,6 +78,40 @@ static int size_is(int fd, off_t size)
     struct stat st;
 
     return fstat(fd, &st) == 0 && st.st_size == size;
+}
+
+/**
+ * Check that a sealed memfd of 10000 bytes takes the whole pages before its
+ * end of a write that would pass it, by write, writev and pwritev, and
+ * refuses a write with no whole page before the end. Returns 0, or 1 after
+ * the failure is printed.
+ */
+static int grow_pages(void)
+{
+    static char big[12000];
+    struct iovec halves[2] = {{big, 6000}, {big, 6000}};
+    struct iovec stream[2] = {{big, 9000}, {big, 3000}};
+    struct iovec small[2] = {{big, 1000}, {big, 1000}};
+    char at[2];
+    int fd = memfd_create("pages", MFD_ALLOW_SEALING);
+    int ok;
+
+    memset(big, 'b', sizeof(big));
+    ok = fd >= 0 && ftruncate(fd, 10000) == 0 && fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) == 0 &&
+         pwrite(fd, big, 12000, 0) == 8192 && writev(fd, halves, 2) == 8192 &&
+         lseek(fd, 0, SEEK_CUR) == 8192 && pwritev(fd, stream, 2, 0) == 8192 &&
+         pwrite(fd, big, 6000, 5000) == 3192 && refused(pwrite(fd, big, 2000, 9000), EPERM) &&
+         lseek(fd, 9000, SEEK_SET) == 9000 && refused(writev(fd, small, 2), EPERM) &&
+         pread(fd, at, 1, 8191) == 1 && at[0] == 'b' && pread(fd, at, 1, 8192) == 1 &&
+         at[0] == '\0' && size_is(fd, 10000);
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (!ok) {
+        return fail("a write past the end of a sealed file of whole pages");
+    }
+    report_held();
+    return 0;
 }
 
 /**
@@ -195,18 +234,18 @@ static int others(void)
 
 int main(void)
 {
-    static const char *const plan[] = {
-        "descriptor", "file",        "fd-link",           "seal-shrink",
-        "seal-grow",  "writev-grow", "seal-future-write", "seal-seal",
-        "unsealable", "noexec-seal", "krffs-seals",       "tmpfs-seals",
-        "refused"};
+    static const char *const plan[] = {"descriptor",        "file",        "fd-link",
+                                       "seal-shrink",       "seal-grow",   "writev-grow",
+                                       "seal-future-write", "seal-seal",   "seal-grow-pages",
+                                       "unsealable",        "noexec-seal", "krffs-seals",
+                                       "tmpfs-seals",       "refused"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.memfdmusl"));
     for (i = 0; i < sizeof(plan) / sizeof(plan[0]); i++) {
         report_plan(plan[i]);
     }
-    if (sealing() || others()) {
+    if (sealing() || grow_pages() || others()) {
         return 1;
     }
     report_end();

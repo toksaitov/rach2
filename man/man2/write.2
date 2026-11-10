@@ -455,8 +455,14 @@ The socket type does not support this write path.
 .It Er EPERM
 A whole-disk or partition node was written on the ordinary kernel,
 a raw write was attempted without effective user ID 0,
-a loop device node was written directly, or the frame-allocation test
-device was written without its boot option.
+a loop device node was written directly, the frame-allocation test
+device was written without its boot option,
+.Fn pwritev2
+was given
+.Dv RWF_NOAPPEND
+on an append-only file, or a write to a memfd sealed with
+.Dv F_SEAL_GROW
+would pass its end with no whole page before it.
 .It Er EPIPE
 A pipe has no reader, or a stream socket can no longer send and has
 no recorded error.
