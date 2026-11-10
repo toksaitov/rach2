@@ -358,6 +358,39 @@ static void motion_rows(void)
     evdev_unregister(dev);
 }
 
+/** The name, place and serial: copied at registration, cut to fit, and
+ * -ENODEV once the device has gone. */
+static void text_rows(void)
+{
+    uint8_t keys[EVDEV_KEY_BYTES];
+    char given[200], name[256];
+    struct evdev *dev;
+    struct opened a;
+
+    k_memset(keys, 0, sizeof(keys));
+    k_memset(given, 'n', sizeof(given) - 1);
+    given[sizeof(given) - 1] = '\0';
+    dev = evdev_register(given, EVDEV_BUS_USB, 1, 3, keys);
+    evdev_describe(dev, "usb-0000:00:14.0-1/input0", 0);
+    k_memset(given, 'x', 8);
+    open_dev(&a, 0);
+    CHECK("a long name is cut to 127 bytes and its terminator",
+          evdev_ioctl(&a.e, EVIOCGNAME(256), (uintptr_t)name) == EVDEV_NAME_MAX &&
+              strlen(name) == EVDEV_NAME_MAX - 1);
+    CHECK("the name is the device's copy, not the caller's buffer", name[0] == 'n');
+    CHECK("no serial is -ENOENT", evdev_ioctl(&a.e, EVIOCGUNIQ(64), (uintptr_t)name) == -ENOENT);
+    evdev_set_uniq(dev, "");
+    CHECK("an empty serial is one terminator",
+          evdev_ioctl(&a.e, EVIOCGUNIQ(64), (uintptr_t)name) == 1 && name[0] == '\0');
+    evdev_set_uniq(dev, "A1B2");
+    CHECK("a serial is given as set",
+          evdev_ioctl(&a.e, EVIOCGUNIQ(64), (uintptr_t)name) == 5 && strcmp(name, "A1B2") == 0);
+    evdev_unregister(dev);
+    CHECK("the name of a device gone is -ENODEV",
+          evdev_ioctl(&a.e, EVIOCGNAME(256), (uintptr_t)name) == -ENODEV);
+    evdev_close(&a.e);
+}
+
 /** EVIOCREVOKE: a revoked open reads -ENODEV while the others read on. */
 static void revoke_rows(void)
 {
@@ -926,6 +959,7 @@ int main(void)
 {
     motion_rows();
     revoke_rows();
+    text_rows();
     clock_rows();
     mask_rows();
     key_state_rows();

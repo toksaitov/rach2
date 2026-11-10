@@ -391,6 +391,11 @@ static void emit_uevent(struct emit *e, const struct input_sys *r)
         emit_str(e, r->d.phys);
         emit_str(e, "\"\n");
     }
+    if (r->d.has_uniq) {
+        emit_str(e, "UNIQ=\"");
+        emit_str(e, r->d.uniq);
+        emit_str(e, "\"\n");
+    }
     emit_str(e, "PROP=");
     emit_bitmap(e, r->d.prop, INPUT_PROP_CNT);
     emit_str(e, "\n");
@@ -428,6 +433,7 @@ static int32_t show_input(void *obj, int arg, char *buf, uint32_t cap)
         emit_str(&e, "\n");
         break;
     case IN_UNIQ:
+        emit_str(&e, r->d.uniq);
         emit_str(&e, "\n");
         break;
     case IN_MODALIAS:

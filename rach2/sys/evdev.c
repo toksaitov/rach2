@@ -162,8 +162,10 @@ struct evdev {
     int has_abs;          /* EV_ABS: `absinfo` answers EVIOCGABS */
     int stamped;          /* a packet has begun, at `stamp` */
     uint32_t gen;         /* the registration's number, `evdev_desc`'s */
-    const char *name;
-    const char *phys;                          /* NULL: EVIOCGPHYS answers -ENOENT */
+    char name[EVDEV_NAME_MAX];
+    char phys[EVDEV_TEXT_MAX];
+    char uniq[EVDEV_TEXT_MAX];
+    unsigned int texts;                        /* TEXT_*: those given; one not answers -ENOENT */
     uint16_t id[4];                            /* bustype, vendor, product, version */
     uint8_t keys[EVDEV_KEY_BYTES];             /* the keys it can report */
     uint8_t down[EVDEV_KEY_BYTES];             /* the keys down now, for EVIOCGKEY */
@@ -184,6 +186,11 @@ struct evdev {
     struct evdev_client *grab; /* the open that holds EVIOCGRAB, or NULL */
     wait_queue_t wq;           /* its readers and pollers */
 };
+
+/* The texts of a device that were given, `evdev.texts`. */
+#define TEXT_NAME 1u
+#define TEXT_PHYS 2u
+#define TEXT_UNIQ 4u
 
 static struct evdev devices[EVDEV_MAX];
 
@@ -227,6 +234,19 @@ static void read_clocks(int64_t *sec, int32_t *nsec)
     nsec[CLK_MONO] = nsec[CLK_BOOT] = (int32_t)ns;
 }
 
+/** Copy the string `s`, or "" for NULL, into `out` of `cap` bytes, cut to
+ * fit. */
+static void copy_text(char *out, const char *s, uint32_t cap)
+{
+    uint32_t i = 0;
+
+    while (s && s[i] && i < cap - 1) {
+        out[i] = s[i];
+        i++;
+    }
+    out[i] = '\0';
+}
+
 struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
                              const uint8_t *keys)
 {
@@ -244,7 +264,8 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
     if (dev) {
         k_memset(dev, 0, sizeof(*dev));
         dev->used = 1;
-        dev->name = name;
+        copy_text(dev->name, name, sizeof(dev->name));
+        dev->texts = name ? TEXT_NAME : 0;
         dev->id[0] = bustype;
         dev->id[1] = vendor;
         dev->id[2] = product;
@@ -262,9 +283,26 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
 
 void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
 {
+    uint32_t irq;
+
     if (dev) {
-        dev->phys = phys;
+        irq = spin_lock_irqsave(&evdev_lock);
+        copy_text(dev->phys, phys, sizeof(dev->phys));
+        dev->texts = phys ? dev->texts | TEXT_PHYS : dev->texts & ~TEXT_PHYS;
         dev->flags = flags;
+        spin_unlock_irqrestore(&evdev_lock, irq);
+    }
+}
+
+void evdev_set_uniq(struct evdev *dev, const char *uniq)
+{
+    uint32_t irq;
+
+    if (dev) {
+        irq = spin_lock_irqsave(&evdev_lock);
+        copy_text(dev->uniq, uniq, sizeof(dev->uniq));
+        dev->texts = uniq ? dev->texts | TEXT_UNIQ : dev->texts & ~TEXT_UNIQ;
+        spin_unlock_irqrestore(&evdev_lock, irq);
     }
 }
 
@@ -1276,16 +1314,34 @@ short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 /**
- * Copy the string `s` to the user's `arg`, its terminator among it, cut to
- * `len` bytes as Linux cuts it, without a terminator. Returns the bytes
- * copied, -ENOENT for no string, or -EFAULT.
+ * Copy the text `which`, TEXT_*, of `dev` to the user's `arg`, its
+ * terminator among it, cut to `len` bytes as Linux cuts it, without a
+ * terminator. The text is copied out of the device under the evdev lock
+ * first, so that an unplug during the user copy cannot change it. Returns
+ * the bytes copied, -ENOENT for a text never given, -ENODEV for a device
+ * gone, or -EFAULT.
  */
-static int32_t string_out(uintptr_t arg, uint32_t len, const char *s)
+static int32_t string_out(struct evdev *dev, unsigned int which, uintptr_t arg, uint32_t len)
 {
-    uint32_t n;
+    char s[EVDEV_NAME_MAX];
+    uint32_t n, flags;
+    int32_t rc = 0;
 
-    if (!s) {
-        return -ENOENT;
+    flags = spin_lock_irqsave(&evdev_lock);
+    if (dev->gone) {
+        rc = -ENODEV;
+    } else if (!(dev->texts & which)) {
+        rc = -ENOENT;
+    } else {
+        copy_text(s,
+                  which == TEXT_NAME   ? dev->name
+                  : which == TEXT_PHYS ? dev->phys
+                                       : dev->uniq,
+                  sizeof(s));
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (rc < 0) {
+        return rc;
     }
     n = (uint32_t)k_strlen(s) + 1;
     if (n > len) {
@@ -1662,19 +1718,6 @@ static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, 
     return n < 0 ? -EINVAL : bits_out(arg, len, bits, (uint32_t)n);
 }
 
-/** Copy the string `s`, or "" for NULL, into `out` of EVDEV_TEXT_MAX
- * bytes, cut to fit. */
-static void copy_text(char *out, const char *s)
-{
-    int i = 0;
-
-    while (s && s[i] && i < EVDEV_TEXT_MAX - 1) {
-        out[i] = s[i];
-        i++;
-    }
-    out[i] = '\0';
-}
-
 /** Store the bits of `type` of `dev` in `out`, of `cap` bytes, as
  * `type_bytes` gives them; the evdev lock is held. */
 static void type_copy(const struct evdev *dev, uint32_t type, uint8_t *out, uint32_t cap)
@@ -1700,8 +1743,10 @@ int evdev_snapshot(int n, struct evdev_desc *out)
     present = dev->used && !dev->gone;
     if (present) {
         out->gen = dev->gen;
-        copy_text(out->name, dev->name);
-        copy_text(out->phys, dev->phys);
+        copy_text(out->name, dev->name, sizeof(out->name));
+        copy_text(out->phys, dev->phys, sizeof(out->phys));
+        copy_text(out->uniq, dev->uniq, sizeof(out->uniq));
+        out->has_uniq = (dev->texts & TEXT_UNIQ) != 0;
         k_memcpy(out->id, dev->id, sizeof(out->id));
         type_copy(dev, 0, out->ev, sizeof(out->ev));
         type_copy(dev, EV_KEY, out->key, sizeof(out->key));
@@ -1834,11 +1879,11 @@ static int32_t read_ioctl(struct evdev_client *c, uint32_t nr, uintptr_t arg, ui
     }
     switch (nr) {
     case NR_GNAME:
-        return string_out(arg, len, dev->name);
+        return string_out(dev, TEXT_NAME, arg, len);
     case NR_GPHYS:
-        return string_out(arg, len, dev->phys);
+        return string_out(dev, TEXT_PHYS, arg, len);
     case NR_GUNIQ:
-        return string_out(arg, len, NULL);
+        return string_out(dev, TEXT_UNIQ, arg, len);
     case NR_GPROP:
         return bits_out(arg, len, dev->props, BITS_BYTES(INPUT_PROP_CNT));
     case NR_GMTSLOTS:
