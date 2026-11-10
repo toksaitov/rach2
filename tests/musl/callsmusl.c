@@ -57,7 +57,12 @@
  * copy_file_range of 100 KiB between ranges of one file that overlap, opened
  * through a directory and a bind of it, is EINVAL and leaves the file as it
  * was. Two readers of a pipe, one splicing it into a full socket and one
- * reading it, never both get a byte. A pty master
+ * reading it, never both get a byte. vmsplice into a pipe's write end from
+ * two buffers puts their bytes in it whole; out of its read end into three
+ * buffers it waits for the first byte and stops when the pipe is empty;
+ * with SPLICE_F_NONBLOCK it is EAGAIN on an empty pipe's read end and a
+ * full pipe's write end; on a descriptor that is not a pipe it is EBADF,
+ * and with more than IOV_MAX buffers EINVAL. A pty master
  * reads the slave's last output and then EIO once the slave has closed.
  * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
  * of the range, and answers EOPNOTSUPP for a file of KRFFS or of /proc open for
@@ -99,7 +104,8 @@
  * `splice-pipe-null`, `splice-file-pipe`, `tee-pipes`, `sendfile-socket`,
  * `sendfile-file`, `copy-file-range`, `seek-data-hole`, `ficlone-eopnotsupp`,
  * `faccessat2`, `splice-ebadf`, `copy-file-range-bind-overlap`,
- * `splice-readers-once`, `pty-hangup-eio`,
+ * `splice-readers-once`, `vmsplice-write`, `vmsplice-read`,
+ * `vmsplice-nonblock`, `vmsplice-ebadf`, `vmsplice-einval`, `pty-hangup-eio`,
  * `fallocate-krffs`, `fallocate-ebadf`, `fallocate-einval`, `fallocate-espipe`,
  * `fallocate-mode`, `fallocate-proc`, `fallocate-shm`, `adjtimex`,
  * `clock-adjtime`, `listxattr`, `getxattr-absent`, `lsetxattr-enoent`,
@@ -149,6 +155,7 @@
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/times.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -185,7 +192,7 @@
 
 /* The assertions of etude's report in the order they are checked, more than
  * probe_report.h's path holds, and how many are planned and reported. */
-static const char *rows[96];
+static const char *rows[112];
 static int rows_planned, rows_reported;
 
 /** Add the assertion `id` to the end of the planned rows. */
@@ -1532,9 +1539,122 @@ static int spliced_once(void)
  * a pipe that another process reads. Returns 0, or 1 after the failure is
  * printed.
  */
+
+/**
+ * Check vmsplice in both directions as Linux's on the pipe `p`: into its
+ * write end, the bytes of two buffers whole; out of its read end into three
+ * buffers, a wait for the first byte, which a child writes once it sees the
+ * caller asleep, and an end when the pipe is empty. On i686 each call passes
+ * i386's 8-byte iovec, which the x86-64 kernel translates. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int vmsplice_moves(const int *p)
+{
+    char one[4], two[4], three[4], got[16];
+    struct iovec iov[3];
+    pid_t child;
+    int status, n;
+
+    iov[0].iov_base = "vmsp";
+    iov[0].iov_len = 4;
+    iov[1].iov_base = "lice";
+    iov[1].iov_len = 4;
+    if (vmsplice(p[1], iov, 2, 0) != 8 || read(p[0], got, sizeof got) != 8 ||
+        memcmp(got, "vmsplice", 8) != 0) {
+        return fail("vmsplice of two buffers into a pipe did not put their 8 bytes in it");
+    }
+    held();
+    child = fork();
+    if (child < 0) {
+        return fail("fork");
+    }
+    if (child == 0) {
+        _exit(seen_asleep(getppid()) && write(p[1], "abcde", 5) == 5 ? 0 : 1);
+    }
+    iov[0].iov_base = one;
+    iov[0].iov_len = 4;
+    iov[1].iov_base = two;
+    iov[1].iov_len = 4;
+    iov[2].iov_base = three;
+    iov[2].iov_len = 4;
+    n = (int)vmsplice(p[0], iov, 3, 0);
+    if (waitpid(child, &status, 0) != child || status != 0 || n != 5 ||
+        memcmp(one, "abcd", 4) != 0 || two[0] != 'e') {
+        return fail("vmsplice out of a pipe into three buffers did not wait for its first byte "
+                    "and stop at 5");
+    }
+    held();
+    return 0;
+}
+
+/* The buffers of `vmsplices`' count past IOV_MAX, 1024 on Linux. */
+#define VMSPLICE_PAST_MAX 1025
+
+/**
+ * Check vmsplice's moves (`vmsplice_moves`) and its refusals as Linux's:
+ * SPLICE_F_NONBLOCK's EAGAIN on an empty pipe's read end and a full pipe's
+ * write end, the pipe itself blocking; EBADF for a descriptor that is not a
+ * pipe; and EINVAL for more than IOV_MAX buffers. Returns 0, or 1 after the
+ * failure is printed.
+ */
+static int vmsplices(void)
+{
+    static struct iovec many[VMSPLICE_PAST_MAX];
+    char got[16];
+    struct iovec iov[1];
+    int p[2], null, i;
+
+    null = open("/dev/null", O_WRONLY);
+    if (null < 0 || pipe(p) != 0) {
+        return fail("a pipe and /dev/null");
+    }
+    if (vmsplice_moves(p) != 0) {
+        return 1;
+    }
+    iov[0].iov_base = got;
+    iov[0].iov_len = sizeof got;
+    if (vmsplice(p[0], iov, 1, SPLICE_F_NONBLOCK) != -1 || errno != EAGAIN) {
+        return fail("vmsplice with SPLICE_F_NONBLOCK out of an empty pipe was not EAGAIN");
+    }
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    while (write(p[1], got, sizeof got) > 0) {
+    }
+    fcntl(p[1], F_SETFL, 0);
+    iov[0].iov_base = "x";
+    iov[0].iov_len = 1;
+    if (vmsplice(p[1], iov, 1, SPLICE_F_NONBLOCK) != -1 || errno != EAGAIN) {
+        return fail("vmsplice with SPLICE_F_NONBLOCK into a full pipe was not EAGAIN");
+    }
+    held();
+    if (vmsplice(null, iov, 1, 0) != -1 || errno != EBADF) {
+        return fail("vmsplice into /dev/null was not EBADF");
+    }
+    held();
+    close(p[0]);
+    close(p[1]);
+    for (i = 0; i < VMSPLICE_PAST_MAX; i++) {
+        many[i].iov_base = "x";
+        many[i].iov_len = 1;
+    }
+    if (pipe(p) != 0) {
+        return fail("a second pipe");
+    }
+    if (vmsplice(p[1], many, VMSPLICE_PAST_MAX, 0) != -1 || errno != EINVAL) {
+        return fail("vmsplice of more than IOV_MAX buffers was not EINVAL");
+    }
+    held();
+    close(p[0]);
+    close(p[1]);
+    close(null);
+    return 0;
+}
+
+/** The rows of copies between pipes and files past `copies`: those of
+ * `bind_overlap`, `spliced_once` and `vmsplices`. Returns 0, or 1 after the
+ * failure is printed. */
 static int overlaps(void)
 {
-    return bind_overlap() || spliced_once();
+    return bind_overlap() || spliced_once() || vmsplices();
 }
 
 /**
@@ -2161,6 +2281,11 @@ static void plan(void)
                                          "splice-ebadf",
                                          "copy-file-range-bind-overlap",
                                          "splice-readers-once",
+                                         "vmsplice-write",
+                                         "vmsplice-read",
+                                         "vmsplice-nonblock",
+                                         "vmsplice-ebadf",
+                                         "vmsplice-einval",
                                          "pty-hangup-eio",
                                          "fallocate-krffs",
                                          "fallocate-ebadf",
