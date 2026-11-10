@@ -118,7 +118,7 @@ Run on the Lenovo on 2026-11-10 from 20:17 to 21:07 UTC+6, by the step on the is
 | Chromium, VP9 | 1,693, 1,012 | 1,740, 0 | VpxVideoDecoder | 122 s |
 
   Chromium's drops fail the Done, and three of the four plays show fewer than 1,700 frames. The waits are `bkl_wait_us` from the play's `.stat0` to its `.stat1`, summed over four processors in 67 to 72 s.
-* 76-17a's six clips, 20:50 to 21:01: twelve lines, three counted plays of 300 frames each, `errors 0`, status 0. Dropped frames of 300, by play:
+* 76-17a's six clips, 20:50 to 21:01: twelve lines, three counted plays each, of 300 frames but Firefox's second play of `h264-720p.mp4`, of 302, `errors 0`, status 0. Dropped frames, by play:
 
 | Clip | Chromium | Firefox |
 |---|---|---|
@@ -149,7 +149,7 @@ e6159c7a3 copies each row from the pages to the screen with `k_memcpy`. Under QE
 
 ### The second trial
 
-Run on the Lenovo on 2026-11-10 from 22:00 to 23:01 UTC+6, by the second step on the issue, with the kernel 851e8698, the first trial's with e6159c7a3. The copy is fixed and every check passes but one: Chromium still drops more frames than Debian, 14 and 24 of 1,722 where the first trial dropped 1,023 and 1,012 and Debian none. Its evidence is in [`lenovo-desktop/trial-2/`](lenovo-desktop/trial-2/).
+Run on the Lenovo on 2026-11-10 from 22:00 to 23:01 UTC+6, by the second step on the issue, with the kernel 851e8698, the first trial's with e6159c7a3. The copy is fixed and every check passes but two: Chromium still drops more frames than Debian, 14 and 24 of 1,722 where the first trial dropped 1,023 and 1,012 and Debian none, and the repeated Firefox plays show 1,698 and 1,693 frames, under the 1,700 the check asks. Its evidence is in [`lenovo-desktop/trial-2/`](lenovo-desktop/trial-2/).
 
 * 22:12 to 22:16, the root image written again and read back as `07a02ae5...` (The trial's files).
 * 22:21, the trial kernel on the installed root. The line ends in `intel_iommu=off intremap=off`; `booted: candidate`, `saved_entry: fallback`, the trial consumed; fbdrm registered as card 0 with the first trial's line; `vtd: off by intel_iommu=off intremap=off: 2 units read`; `bkl_wait_us 1226846` and `bkl_hold_max_us 441252` in the boot's first minute. The log differs from the first trial kernel's on this root in the clock, two IPv6 addresses, one count of the vDSO's clock and the order of one USB line.
@@ -164,7 +164,7 @@ Run on the Lenovo on 2026-11-10 from 22:00 to 23:01 UTC+6, by the second step on
 | Chromium, VP9 | 1,722, 24 | 1,722, 27 | 1,693, 1,012 | 1,740, 0 | 33 s, 36 s |
 
   Chromium's drops over Debian's none fail the Done. The two repeated Firefox plays show fewer than 1,700 frames, by 2 and 7. Firefox's drops over Debian's are the limit the owner decided for it.
-* 76-17a's six clips, 22:38 to 22:48: twelve lines, three counted plays of 300 frames each, `errors 0`, status 0, each decoder the first trial's. Dropped frames of 300, by play, with the first trial's range:
+* 76-17a's six clips, 22:38 to 22:48: twelve lines, three counted plays each, of 300 frames but Firefox's second play of `h264-720p.mp4`, of 304, `errors 0`, status 0, each decoder the first trial's. Dropped frames, by play, with the first trial's range:
 
 | Clip | Chromium | In the first trial | Firefox | In the first trial |
 |---|---|---|---|---|
