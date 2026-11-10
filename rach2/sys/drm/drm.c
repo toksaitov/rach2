@@ -15,6 +15,7 @@
 #include "../io/poll.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -399,18 +400,22 @@ static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
  * senders, unattached. */
 static void events_release(struct drm_file *file)
 {
-    struct drm_pending_event *e;
+    struct drm_pending_event *e, *queued;
+    uint32_t flags = kirq_save();
 
     while ((e = file->pending) != NULL) {
         file->pending = e->pending_next;
         e->pending_next = NULL;
         e->file = NULL;
     }
-    while ((e = file->events) != NULL) {
-        file->events = e->next;
+    queued = file->events;
+    file->events = NULL;
+    file->events_tail = NULL;
+    kirq_restore(flags);
+    while ((e = queued) != NULL) {
+        queued = e->next;
         kfree(e);
     }
-    file->events_tail = NULL;
 }
 
 /**
@@ -457,7 +462,10 @@ static void drm_node_close(fd_entry_t *e)
 
 int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
 {
+    uint32_t flags = kirq_save();
+
     if (file->event_space < e->length) {
+        kirq_restore(flags);
         return -ENOMEM;
     }
     file->event_space -= e->length;
@@ -465,10 +473,11 @@ int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
     e->next = NULL;
     e->pending_next = file->pending;
     file->pending = e;
+    kirq_restore(flags);
     return 0;
 }
 
-/** Take `e` off its file's reserved events. */
+/** Take `e` off its file's reserved events. Interrupts masked. */
 static void pending_unlink(struct drm_pending_event *e)
 {
     struct drm_pending_event **link;
@@ -484,15 +493,19 @@ static void pending_unlink(struct drm_pending_event *e)
 
 void drm_send_event(struct drm_pending_event *e)
 {
-    struct drm_file *file = e->file;
+    struct drm_file *file;
     struct dma_fence *fence = e->fence;
+    uint32_t flags;
 
     e->fence = NULL;
     if (fence) {
         dma_fence_signal(fence);
         dma_fence_put(fence);
     }
+    flags = kirq_save();
+    file = e->file;
     if (!file) {
+        kirq_restore(flags);
         kfree(e);
         return;
     }
@@ -504,17 +517,22 @@ void drm_send_event(struct drm_pending_event *e)
         file->events = e;
     }
     file->events_tail = e;
+    kirq_restore(flags);
     wq_wake(&file->event_wait, WQ_DATA);
 }
 
 void drm_event_cancel_free(struct drm_pending_event *e)
 {
+    uint32_t flags;
+
     dma_fence_put(e->fence);
     e->fence = NULL;
+    flags = kirq_save();
     if (e->file) {
         pending_unlink(e);
         e->file->event_space += e->length;
     }
+    kirq_restore(flags);
     kfree(e);
 }
 
@@ -527,24 +545,68 @@ static int events_readable(void *arg)
 }
 
 /**
+ * Take the first queued event of `file` into `*out` if it fits in `room`
+ * bytes, giving its space back, as Linux's drm_read under its event lock:
+ * 1 taken, 0 none queued, -1 the first does not fit.
+ */
+static int event_take(struct drm_file *file, uint32_t room, struct drm_pending_event **out)
+{
+    struct drm_pending_event *ev;
+    uint32_t flags = kirq_save();
+    int rc = 1;
+
+    ev = file->events;
+    if (!ev) {
+        rc = 0;
+    } else if (ev->length > room) {
+        rc = -1;
+    } else {
+        file->events = ev->next;
+        if (!file->events) {
+            file->events_tail = NULL;
+        }
+        file->event_space += ev->length;
+        *out = ev;
+    }
+    kirq_restore(flags);
+    return rc;
+}
+
+/** Put `ev`, taken by event_take, back at the head of `file`'s queue. */
+static void event_put_back(struct drm_file *file, struct drm_pending_event *ev)
+{
+    uint32_t flags = kirq_save();
+
+    ev->next = file->events;
+    file->events = ev;
+    if (!file->events_tail) {
+        file->events_tail = ev;
+    }
+    file->event_space -= ev->length;
+    kirq_restore(flags);
+}
+
+/**
  * read of a node: the queued events that fit in `count` bytes, whole, as
  * Linux's drm_read; 0 when the first does not fit. Blocks for one unless
  * O_NONBLOCK, which answers EAGAIN. With none queued, ENODEV once the
  * device is unplugged; EINTR for a signal, EFAULT for a bad buffer before
- * any event was read.
+ * any event was read. Each event leaves the queue before its copy, which
+ * may sleep, so that another reader cannot free it meanwhile.
  */
 static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct drm_file *file = (struct drm_file *)e->priv;
+    struct drm_pending_event *ev = NULL;
     uint32_t done = 0;
+    int got;
 
     for (;;) {
-        struct drm_pending_event *ev = file->events;
-
-        if (!ev) {
-            if (done) {
-                return (int32_t)done;
-            }
+        got = event_take(file, count - done, &ev);
+        if (got < 0 || (got == 0 && done)) {
+            return (int32_t)done;
+        }
+        if (got == 0) {
             if (file->dev->unplugged) {
                 return -ENODEV;
             }
@@ -556,21 +618,10 @@ static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
             }
             continue;
         }
-        if (ev->length > count - done) {
-            return (int32_t)done;
-        }
-        /* The event stays queued while the copy may sleep. */
         if (copy_to_user(buf + done, &ev->event, ev->length) != 0) {
+            event_put_back(file, ev);
             return done ? (int32_t)done : -EFAULT;
         }
-        if (file->events != ev) {
-            continue; /* another reader took it meanwhile */
-        }
-        file->events = ev->next;
-        if (!file->events) {
-            file->events_tail = NULL;
-        }
-        file->event_space += ev->length;
         done += ev->length;
         kfree(ev);
     }
