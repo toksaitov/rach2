@@ -1,13 +1,14 @@
 """judge.py: compare a graphics runner's result with the Debian reference's.
 
 Usage:
-  python3 -I judge.py webgl REF GOT
+  python3 -I judge.py webgl REF GOT [-x EXCLUSIONS]
   python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]
-  python3 -I judge.py results REF GOT [SAMPLE [FLAKES]]
+  python3 -I judge.py results REF GOT [SAMPLE [FLAKES]] [-s SCOPE] [-x EXCLUSIONS]
   python3 -I judge.py modes REF GOT
   python3 -I judge.py glmark2 REF GOT
-  python3 -I judge.py deqp REF GOT [FLAKES]
+  python3 -I judge.py deqp REF GOT [FLAKES] [-x EXCLUSIONS]
   python3 -I judge.py vkcube REF GOT [TIMING-REF TIMING-GOT]
+  python3 -I judge.py gate GATE MEASURES
 
 `webgl` compares two pages files of webgl.sh, a chunk's, by page: the lists
 must name the same pages at the same indexes, and a page is worse here when
@@ -27,16 +28,21 @@ reference's most is printed as `judge: limit: ...` and is not worse, and
 every other check holds.
 
 `results` compares two results files of igt.sh or piglit.sh, `NAME RESULT`
-a line, by name: a test or subtest that passed in the reference must pass
-here, one the reference skipped must skip here, as Linux's skips are the
-guest's answers about its devices, and one that failed or crashed in the
-reference may end as it likes. A name the reference has and this run lacks
-is worse, and so is one this run alone has that neither passes nor skips.
-REF may be compressed with gzip. SAMPLE, the names a list's run of piglit.sh
-took, its NAME.sample, keeps of the reference those tests and their
-subtests, for a run of a part of the list the reference ran whole. FLAKES
-names the tests and subtests that are not judged, one extended regular
-expression a line, searched for in the name, `#` beginning a comment.
+a line, compressed with gzip when the name ends in .gz, by name: a test or
+subtest that passed in the reference must pass here, one the reference
+skipped must skip here, as Linux's skips are the guest's answers about its
+devices, and one that failed or crashed in the reference may end as it
+likes. A name the reference has and this run lacks is worse, and so is one
+this run alone has that neither passes nor skips. SAMPLE, the names a
+list's run of piglit.sh took, its NAME.sample, keeps of the reference those
+tests and their subtests, for a run of a part of the list the reference ran
+whole. FLAKES names the tests and subtests that are not judged, one
+extended regular expression a line, searched for in the name, `#` beginning
+a comment. SCOPE, when given, names the part of both files that the run
+covers, one line each: `=NAME`, the name and every name below it
+(NAME@...), `~RE`, the names that the Python regular expression RE matches,
+and `!RE`, names left out although another line takes them; a name in no
+line of a SCOPE is not compared.
 
 `modes` compares two modes files of modetest.sh by mode: the same modes in
 the same order, and each mode that the reference set and read back set here
@@ -63,6 +69,17 @@ R here, R in the reference, ratio Q`, which it does not judge, since the
 rate in FIFO measures the host's load and QEMU's display as much as the
 guest.
 
+`gate` compares MEASURES, `KEY VALUE` a line, with the speed gate's file
+GATE: a line `loss PERCENT`, the most a measure may lose against Linux's,
+and a line `KEY VALUE higher|lower` for each measure, Linux's value and
+whether a higher or a lower value is better. A measure that loses more than
+PERCENT of Linux's, or has no line in GATE, fails the gate.
+
+EXCLUSIONS, for webgl, results and deqp, is the owner's list of approved
+differences, `NAME REASON` a line, NAME a page's URL, a result's name or a
+case: a difference there is printed as `judge: excluded: ...` and is not
+worse.
+
 Each prints `judge: worse: ...` for each difference and one line, `judge:
 result: pass ...` or `judge: result: fail ...`, and exits 0 or 1.
 """
@@ -74,12 +91,40 @@ import statistics
 import sys
 
 
+def text(path):
+    """Open PATH for reading text, through gzip when its name ends in .gz."""
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, encoding="utf-8")
+
+
 def lines(path):
-    with open(path, encoding="utf-8") as f:
+    with text(path) as f:
         return [line.split() for line in f if line.strip() and not line.startswith("#")]
 
 
-def webgl(ref_path, got_path):
+def excluded(path):
+    """The names of the owner's exclusions file PATH, or none without one."""
+    if not path:
+        return set()
+    with text(path) as f:
+        return {line.split()[0] for line in f if line.strip() and not line.startswith("#")}
+
+
+def report(worse, exclusions, name_of):
+    """Split WORSE into the differences the exclusions take and the rest,
+    printing each; NAME_OF gives a difference's name."""
+    left = []
+    for w in worse:
+        if name_of(w) in exclusions:
+            print("judge: excluded: %s" % w[1])
+        else:
+            print("judge: worse: %s" % w[1])
+            left.append(w)
+    return left
+
+
+def webgl(ref_path, got_path, exclusions_path=None):
     ref = {int(f[0]): f for f in lines(ref_path)}
     got = {int(f[0]): f for f in lines(got_path)}
     worse = []
@@ -87,19 +132,18 @@ def webgl(ref_path, got_path):
         r = ref[i]
         g = got.get(i)
         if g is None:
-            worse.append("%s: not run here" % r[7])
+            worse.append((r[7], "%s: not run here" % r[7]))
             continue
         if g[7] != r[7] and g[7] != "-":
-            worse.append("page %d is %s here and %s in the reference" % (i, g[7], r[7]))
+            worse.append((r[7], "page %d is %s here and %s in the reference" % (i, g[7], r[7])))
             continue
         if g[1] == "pass" or (r[1] != "pass" and int(g[2]) >= int(r[2])):
             continue
         if r[1] == "skip" and g[1] == "skip":
             continue
-        worse.append("%s: debian %s, %s subtests passed; here %s, %s passed" %
-                     (r[7], r[1], r[2], g[1], g[2]))
-    for w in worse:
-        print("judge: worse: %s" % w)
+        worse.append((r[7], "%s: debian %s, %s subtests passed; here %s, %s passed" %
+                      (r[7], r[1], r[2], g[1], g[2])))
+    worse = report(worse, excluded(exclusions_path), lambda w: w[0])
     verdict = "fail" if worse else "pass"
     print("judge: result: %s webgl %d pages, %d worse than Debian's" % (verdict, len(ref), len(worse)))
     return not worse
@@ -160,8 +204,7 @@ def video(ref_path, got_path, ref_dec, got_dec, limits_path=None):
 def named(path):
     """The `NAME RESULT` lines of PATH, gzip's or plain, as a dictionary; a
     name may hold blanks."""
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8") as f:
+    with text(path) as f:
         return dict(line.rstrip("\n").rsplit(None, 1) for line in f
                     if line.strip() and not line.startswith("#"))
 
@@ -181,8 +224,35 @@ def sampled(ref, sample_path):
     return kept
 
 
-def results(ref_path, got_path, sample_path=None, flakes_path=None):
-    ref, got = named(ref_path), named(got_path)
+def scope(path):
+    """A function that says whether a name is in the SCOPE file PATH, or
+    takes every name without one."""
+    if not path:
+        return lambda name: True
+    exact, take, leave = set(), [], []
+    with text(path) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith("="):
+                exact.add(line[1:])
+            elif line.startswith("~"):
+                take.append(re.compile(line[1:]))
+            elif line.startswith("!"):
+                leave.append(re.compile(line[1:]))
+
+    def within(name):
+        parts = name.split("@")
+        taken = any("@".join(parts[:i]) in exact for i in range(1, len(parts) + 1))
+        taken = taken or any(r.search(name) for r in take)
+        return taken and not any(r.search(name) for r in leave)
+    return within
+
+
+def results(ref_path, got_path, sample_path=None, flakes_path=None,
+            scope_path=None, exclusions_path=None):
+    within = scope(scope_path)
+    ref = {k: v for k, v in named(ref_path).items() if within(k)}
+    got = {k: v for k, v in named(got_path).items() if within(k)}
     if sample_path:
         ref = sampled(ref, sample_path)
     flakes = []
@@ -195,14 +265,13 @@ def results(ref_path, got_path, sample_path=None, flakes_path=None):
     for name in sorted(set(ref) - flaky):
         r, g = ref[name], got.get(name)
         if g is None:
-            worse.append("%s: not run here, %s in the reference" % (name, r))
+            worse.append((name, "%s: not run here, %s in the reference" % (name, r)))
         elif r in ("pass", "skip") and g != r:
-            worse.append("%s: %s here, %s in the reference" % (name, g, r))
+            worse.append((name, "%s: %s here, %s in the reference" % (name, g, r)))
     for name in sorted(set(got) - set(ref) - flaky):
         if got[name] not in ("pass", "skip"):
-            worse.append("%s: %s here, not in the reference" % (name, got[name]))
-    for w in worse:
-        print("judge: worse: %s" % w)
+            worse.append((name, "%s: %s here, not in the reference" % (name, got[name])))
+    worse = report(worse, excluded(exclusions_path), lambda w: w[0])
     verdict = "fail" if worse or not got else "pass"
     print("judge: result: %s results %d in the reference, %d here, %d worse than Debian's%s" %
           (verdict, len(ref), len(got), len(worse),
@@ -250,15 +319,14 @@ def glmark2(ref_path, got_path):
 
 def statuses(path):
     """Map each case of a results.csv file, gzip's or plain, to its status."""
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8") as f:
+    with text(path) as f:
         return dict(line.strip().split(",", 1) for line in f if line.strip())
 
 
 DEQP_PASS = ("Pass", "QualityWarning", "CompatibilityWarning")
 
 
-def deqp(ref_path, got_path, flakes_path=None):
+def deqp(ref_path, got_path, flakes_path=None, exclusions_path=None):
     ref, got = statuses(ref_path), statuses(got_path)
     flakes = set()
     if flakes_path:
@@ -272,12 +340,11 @@ def deqp(ref_path, got_path, flakes_path=None):
         if g in DEQP_PASS or case in flakes:
             continue
         if r in DEQP_PASS or r == "Absent" or (r == "NotSupported" and g != "NotSupported"):
-            worse.append("%s: %s in the reference, %s here" % (case, r, g))
+            worse.append((case, "%s: %s in the reference, %s here" % (case, r, g)))
     for (r, g), n in sorted(moves.items()):
         if r != g:
             print("judge: change: %s -> %s %d" % (r, g, n))
-    for w in worse:
-        print("judge: worse: %s" % w)
+    worse = report(worse, excluded(exclusions_path), lambda w: w[0])
     ok = bool(got) and not worse
     print("judge: result: %s deqp %d cases, %d worse than the reference's, %d flakes named" %
           ("pass" if ok else "fail", len(got), len(worse), len(flakes & set(got))))
@@ -317,26 +384,73 @@ def vkcube(ref_path, got_path, ref_timing=None, got_timing=None):
     return bool(got) and not worse
 
 
-def main():
-    if len(sys.argv) == 4 and sys.argv[1] == "webgl":
-        ok = webgl(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) in (6, 7) and sys.argv[1] == "video":
-        ok = video(*sys.argv[2:])
-    elif len(sys.argv) in (4, 5, 6) and sys.argv[1] == "results":
-        ok = results(*sys.argv[2:])
-    elif len(sys.argv) == 4 and sys.argv[1] in ("modes", "glmark2"):
-        ok = {"modes": modes, "glmark2": glmark2}[sys.argv[1]](*sys.argv[2:4])
-    elif len(sys.argv) in (4, 5) and sys.argv[1] == "deqp":
-        ok = deqp(*sys.argv[2:])
-    elif len(sys.argv) in (4, 6) and sys.argv[1] == "vkcube":
-        ok = vkcube(*sys.argv[2:])
-    else:
-        sys.exit("usage: judge.py webgl REF GOT | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
-                 " | results REF GOT [SAMPLE [FLAKES]] | modes|glmark2 REF GOT"
-                 " | deqp REF GOT [FLAKES]"
-                 " | vkcube REF GOT [TIMING-REF TIMING-GOT]")
-    sys.exit(0 if ok else 1)
+def gate(gate_path, measures_path):
+    loss, linux = None, {}
+    for f in lines(gate_path):
+        if f[0] == "loss" and len(f) == 2:
+            loss = float(f[1]) / 100
+        elif len(f) == 3 and f[2] in ("higher", "lower"):
+            linux[f[0]] = (float(f[1]), f[2])
+        else:
+            sys.exit("judge: %s: a line that is neither `loss PERCENT` nor `KEY VALUE higher|lower`: %s"
+                     % (gate_path, " ".join(f)))
+    if loss is None:
+        sys.exit("judge: %s: no `loss` line" % gate_path)
+    measures = [f for f in lines(measures_path) if len(f) == 2]
+    worse = []
+    for key, value in measures:
+        value = float(value)
+        if key not in linux:
+            worse.append("%s: %g here, no value of Linux's in the gate" % (key, value))
+            continue
+        ref, better = linux[key]
+        ratio = value / ref if better == "higher" else (ref / value if value else 0.0)
+        line = "%s: %g here, %g on Linux, %.1f%% of Linux's" % (key, value, ref, 100 * ratio)
+        if ratio < 1 - loss:
+            worse.append(line)
+        else:
+            print("judge: within: %s" % line)
+    for w in worse:
+        print("judge: worse: %s" % w)
+    ok = bool(measures) and not worse
+    print("judge: result: %s gate %d measures, %d losing more than %g%% of Linux's" %
+          ("pass" if ok else "fail", len(measures), len(worse), 100 * loss))
+    return ok
 
+
+def main():
+    args, opts = [], {}
+    rest = sys.argv[1:]
+    while rest:
+        a = rest.pop(0)
+        if a in ("-s", "-x") and rest:
+            opts[a] = rest.pop(0)
+        else:
+            args.append(a)
+    x, s = opts.get("-x"), opts.get("-s")
+    kind = args[0] if args else ""
+    if len(args) == 3 and kind == "webgl" and not s:
+        ok = webgl(args[1], args[2], x)
+    elif len(args) in (5, 6) and kind == "video" and not opts:
+        ok = video(*args[1:])
+    elif len(args) in (3, 4, 5) and kind == "results":
+        ok = results(*args[1:], scope_path=s, exclusions_path=x)
+    elif len(args) == 3 and kind in ("modes", "glmark2") and not opts:
+        ok = {"modes": modes, "glmark2": glmark2}[kind](*args[1:3])
+    elif len(args) in (3, 4) and kind == "deqp" and not s:
+        ok = deqp(args[1], args[2], args[3] if len(args) == 4 else None, x)
+    elif len(args) in (3, 5) and kind == "vkcube" and not opts:
+        ok = vkcube(*args[1:])
+    elif len(args) == 3 and kind == "gate" and not opts:
+        ok = gate(args[1], args[2])
+    else:
+        sys.exit("usage: judge.py webgl REF GOT [-x EXCLUSIONS]"
+                 " | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
+                 " | results REF GOT [SAMPLE [FLAKES]] [-s SCOPE] [-x EXCLUSIONS]"
+                 " | modes|glmark2 REF GOT"
+                 " | deqp REF GOT [FLAKES] [-x EXCLUSIONS]"
+                 " | vkcube REF GOT [TIMING-REF TIMING-GOT] | gate GATE MEASURES")
+    sys.exit(0 if ok else 1)
 
 if __name__ == "__main__":
     main()
