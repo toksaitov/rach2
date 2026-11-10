@@ -1947,7 +1947,7 @@ build/tests/graphics/desktop.py: tests/graphics/desktop.py
 # concurrent sound, GPU recovery, and the fixed WebGL and video comparisons.
 BROWSER_TEST_EXT2 = $(IMAGES_DIR)/browser-test.ext2
 BROWSER_TEST_DISK = $(IMAGES_DIR)/browser-test.disk
-$(BROWSER_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
+$(BROWSER_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 16384
 $(BROWSER_TEST_DISK): $(BROWSER_TEST_EXT2) $(MKMBR)
@@ -2032,7 +2032,7 @@ $(ASSIGN_DIR)/assign.ext2: $(ASSIGN_DIR)/assign.tar
 # payload may be enumerated before the NVMe root.
 ASSIGN_ROOT = $(ARCH_BUILD)/tests/cases/assign/root.ext2
 ASSIGN_DISK = $(ARCH_BUILD)/tests/cases/assign/gnu.disk
-$(ASSIGN_ROOT): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
+$(ASSIGN_ROOT): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_I386=$(GNU_I386_ON) \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    krffs/manifests/os-real-gnu.manifest $@ 16384
