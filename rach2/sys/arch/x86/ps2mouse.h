@@ -145,17 +145,19 @@ void ps2mouse_thread_start(void);
 /**
  * Reconnect what kpsmoused was asked to, as Linux's serio core reconnects a
  * port and the ports below it. The auxiliary device, after the fifth bad
- * packet in a row or its announcement, or when nothing was asked: the
- * touchpad's reset and queries, which must find the same pad, its mode,
- * rate and resolution, and reporting again; then the pass-through port,
- * whose guest is reconnected, or probed anew when its reconnect fails or
- * there was none. A mouse: its reset, its protocol found again, which must
- * be the one found before, and reporting again; it keeps its event device.
- * When the pad or the mouse is not the same or does not answer, its event
- * devices are removed and the port is probed anew, as Linux's serio core
- * rescans a port whose reconnect failed. The
- * guest alone, after its announcement: the pass-through port as above. The
- * work of kpsmoused, in process context; the host tests call it directly.
+ * packet in a row or its announcement, or when nothing was asked: a
+ * Synaptics touchpad's reset and queries, which must find the same pad,
+ * its mode, rate and resolution, and reporting again, then the
+ * pass-through port, whose guest is reconnected, or probed anew when its
+ * reconnect fails or there was none; an Elantech touchpad's reset and
+ * knock, which must find an Elantech pad, its absolute mode, rate and
+ * resolution, and reporting again; a mouse's reset, its protocol found
+ * again, which must be the one found before, and reporting again. Each
+ * keeps its event devices. When the device is not the same or does not
+ * answer, its event devices are removed and the port is probed anew, as
+ * Linux's serio core rescans a port whose reconnect failed. The guest
+ * alone, after its announcement: the pass-through port as above. The work
+ * of kpsmoused, in process context; the host tests call it directly.
  */
 void ps2mouse_reconnect(void);
 

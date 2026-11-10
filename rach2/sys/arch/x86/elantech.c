@@ -40,6 +40,7 @@
 #define CMD_SET_RES     0xE8
 #define CMD_GET_INFO    0xE9 /* three bytes after the ACK */
 #define CMD_SET_RATE    0xF3
+#define CMD_ENABLE      0xF4
 #define CMD_DISABLE     0xF5
 #define CMD_RESET_DIS   0xF6
 #define CMD_CUSTOM      0xF8 /* the prefix of a query or register access */
@@ -800,6 +801,23 @@ static void etd_reset(void)
     }
 }
 
+/** Linux's `psmouse_initialize` with the pad's own `set_rate`: 100 reports
+ * a second, then this firmware's mode again, which a rate clears; 200 dpi
+ * and 1:1 scaling. */
+static void etd_initialize(void)
+{
+    if (etd_command(CMD_SET_RATE) == 0) {
+        etd_command(100);
+    }
+    if (etd_info.fw_version == 0x381f17u) {
+        etd_write_reg(0x07, etd_reg_07);
+    }
+    if (etd_command(CMD_SET_RES) == 0) {
+        etd_command(3);
+    }
+    etd_command(CMD_SET_SCALE11);
+}
+
 int elantech_init(void)
 {
     const struct elantech_info *info = &etd_info;
@@ -832,18 +850,7 @@ int elantech_init(void)
         klog(KLOG_WARN, "elantech", "register: no event device for the touchpad");
         goto relative;
     }
-    /* psmouse_initialize: 100 reports a second, then this firmware's mode
-     * again, which a rate clears; 200 dpi and 1:1 scaling. */
-    if (etd_command(CMD_SET_RATE) == 0) {
-        etd_command(100);
-    }
-    if (info->fw_version == 0x381f17u) {
-        etd_write_reg(0x07, etd_reg_07);
-    }
-    if (etd_command(CMD_SET_RES) == 0) {
-        etd_command(3);
-    }
-    etd_command(CMD_SET_SCALE11);
+    etd_initialize();
     mouse_attach_touchpad(etd_pad);
     etd_pktsize = info->hw_version > 1 ? 6 : 4;
     etd_pktcnt = 0;
@@ -1287,6 +1294,48 @@ static int etd_check_v4(void)
     }
 }
 
+int elantech_reconnect(void)
+{
+    etd_reset();
+    if (etd_detect() < 0) {
+        return -1;
+    }
+    /* Linux's elantech_needs_reenable: the Lenovo N24. */
+    if (smbios_system_is("LENOVO", "81AF")) {
+        if (etd_command(CMD_DISABLE) < 0) {
+            klog(KLOG_WARN, "elantech", "reconnect: the pad would not disable");
+        }
+        if (etd_command(CMD_ENABLE) < 0) {
+            klog(KLOG_WARN, "elantech", "reconnect: the pad would not enable");
+        }
+    }
+    if (etd_set_absolute_mode() < 0) {
+        klog(KLOG_WARN, "elantech", "reconnect: the pad would not go back to absolute mode");
+        return -1;
+    }
+    etd_initialize();
+    etd_pktcnt = 0;
+    return 0;
+}
+
+void elantech_disconnect(void)
+{
+    if (etd_pad) {
+        evdev_unregister(etd_pad);
+        etd_pad = 0;
+    }
+    if (etd_tp) {
+        evdev_unregister(etd_tp);
+        etd_tp = 0;
+    }
+    etd_pktcnt = 0;
+}
+
+int elantech_packet_start(void)
+{
+    return etd_pktcnt == 0;
+}
+
 /** Check and report a whole packet, Linux's `elantech_process_byte`.
  * Returns -1 for a packet out of form, which is dropped. */
 static int etd_process_packet(void)
@@ -1339,7 +1388,7 @@ static int etd_process_packet(void)
     return 0;
 }
 
-void elantech_byte(uint8_t data)
+int elantech_byte(uint8_t data)
 {
     uint32_t now = (uint32_t)kernel_ticks;
 
@@ -1350,10 +1399,12 @@ void elantech_byte(uint8_t data)
     etd_last_tick = now;
     etd_packet[etd_pktcnt++] = data;
     if (etd_pktcnt < etd_pktsize) {
-        return;
+        return ELANTECH_GOOD;
     }
     etd_pktcnt = 0;
     if (etd_process_packet() < 0) {
         etd_sync_losses++;
+        return ELANTECH_BAD;
     }
+    return ELANTECH_FULL;
 }
