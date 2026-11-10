@@ -19,7 +19,7 @@ GAME_ID = "2733"
 # of an errno a kernel without the call or the permission returns.
 REFUSED = re.compile(r"Operation not permitted|Function not implemented|Invalid argument|"
                      r"Permission denied|Operation not supported|Bad address|"
-                     r"Inappropriate ioctl for device|No such device\b")
+                     r"Inappropriate ioctl for device|No such device(?! or address)")
 
 
 def refusal(line):
