@@ -1,0 +1,67 @@
+bed-vm: record: libvirglrenderer1 1.1.0-2+rach21
+bed-vm: record: libgl1-mesa-dri 25.0.7-2+deb13u1
+bed-vm: record: mesa-vulkan-drivers 25.0.7-2+deb13u1
+bed-vm: record: vkms 6.12.115+deb13.1-amd64 SMP preempt mod_unload modversions 
+bed-vm: record: kernel 6.12.115+deb13.1-amd64
+bed-vm: record: accelerator kvm
+bed-vm: record: qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+bed-vm: record: image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+bed-vm: record: snapshot 20261108T000000Z
+bed-vm: record: device vgpushm
+bed-vm: backend: serving 33554432 bytes as peer 1, doorbells, 3 capsets, on the display
+bed-vm: backend: kms: mode 640x480 for a scanout of 32x32
+bed-vm: backend: kms: resource 16777217 is copied: it has no dma-buf
+bed-vm: backend: scanout: writeback 32x32 of mode 640x480, crc a9e0acd7
+bed-vm: backend: kms: mode 1024x768 for a scanout of 1024x768
+bed-vm: backend: scanout: writeback 1024x768 of mode 1024x768, crc f10af47a
+bed-vm: backend: kms: mode 640x480 for a scanout of 512x384
+bed-vm: backend: kms: resource 16777218 is copied: the scanout is not the whole buffer in the whole mode
+bed-vm: backend: scanout: writeback 512x384 of mode 640x480, crc faccd412
+bed-vm: backend: venus: imported resource 16777218, 1024x768, crc 6e8e217c
+bed-vm: backend: result: epochs 1, commands 26, errors 0, fenced 5, completed 26, notified 29, faults 0, wakes 26+2, polled 0
+bed-vm: backend: result: module irqs 26+3, signals 26+2, rings 29
+bed-vm: backend: result: kms flushes 3, copies 2, direct 1, modesets 3, flips 8, skipped 0, writebacks 3
+bed-vm: peer: ivshmem: listening on build/tmp/bed-vm.h4QI8S/ivs.sock
+bed-vm: peer: ivshmem: QEMU connected as peer 1
+bed-vm: peer: reset: epoch 1
+bed-vm: peer: running: features 0x100000011, transport 0x1
+bed-vm: peer: display-info: ok
+bed-vm: peer: create-2d: ok
+bed-vm: peer: attach-backing: ok
+bed-vm: peer: transfer-2d: ok
+bed-vm: peer: set-scanout: ok
+bed-vm: peer: flush: ok
+bed-vm: peer: flush: sent crc a9e0acd7
+bed-vm: peer: ctx-create: ok
+bed-vm: peer: create-3d: ok
+bed-vm: peer: attach-3d: ok
+bed-vm: peer: ctx-attach: ok
+bed-vm: peer: submit-3d: ok
+bed-vm: peer: readback: ok
+bed-vm: peer: readback: resource 0x1000002, 1024x768, crc 6e8e217c, shown crc f10af47a
+bed-vm: peer: show-scanout: ok
+bed-vm: peer: show-flush: ok
+bed-vm: peer: show: resource 0x1000002, 1024x768, crc f10af47a
+bed-vm: peer: show-scanout: ok
+bed-vm: peer: show-flush: ok
+bed-vm: peer: show: resource 0x1000002, 512x384, crc faccd412
+bed-vm: peer: venus-create: ok
+bed-vm: peer: venus-attach: ok
+bed-vm: peer: venus-detach: ok
+bed-vm: peer: venus-destroy: ok
+bed-vm: peer: venus: 1 resource(s) attached and detached
+bed-vm: peer: ctx-detach: ok
+bed-vm: peer: unref-3d: ok
+bed-vm: peer: ctx-destroy: ok
+bed-vm: peer: scanout-off: ok
+bed-vm: peer: detach-backing: ok
+bed-vm: peer: unref: ok
+bed-vm: peer: doorbells: rang 29, woken 28
+bed-vm: peer: result: ok
+bed-vm: frames written back: a9e0acd7 f10af47a faccd412 
+bed-vm: Venus's import: 6e8e217c
+bed-vm: direct scanouts: 1
+bed-vm: backend woken by the queue's doorbell: yes
+bed-vm: peer woken by the VM's doorbell: yes
+bed-vm: the peer's end: peer: result: ok
+bed-vm: result: the VM drew and showed the peer's frames
