@@ -457,12 +457,36 @@ static void error_path(void)
     epath[i] = '\0';
 }
 
+/** Copy into the `cap` bytes at `dst` the line of `body` that starts at
+ * `at`, without its newline. */
+static void copy_line(char *dst, long cap, long at)
+{
+    long i;
+
+    for (i = 0; i < cap - 1 && body[at + i] && body[at + i] != '\n'; i++) {
+        dst[i] = body[at + i];
+    }
+    dst[i] = '\0';
+}
+
+/** Where the last line of the `n` bytes read into `body` starts. */
+static long last_line(long n)
+{
+    long i = n > 0 && body[n - 1] == '\n' ? n - 1 : n;
+
+    while (i > 0 && body[i - 1] != '\n') {
+        i--;
+    }
+    return i;
+}
+
 /** Each of the driver's debugfs files reads with Linux's first line, and
- * the error state the hangs left reads the same in debugfs and in /sys. */
+ * the error state the hangs left reads the same in debugfs and in /sys,
+ * from its message to its last line, DERRMR, which a cut text lacks. */
 static void files_row(void)
 {
-    static char first[128];
-    long n, i;
+    static char first[128], last[64], tail[64];
+    long n;
 
     require(slurp(dfile("i915_capabilities")) > 0 && holds(body, "iommu: "),
             "files: i915_capabilities");
@@ -482,12 +506,14 @@ static void files_row(void)
     require(slurp(dfile("i915_gpu_info")) > 0 && holds(body, "Kernel: "), "files: i915_gpu_info");
     n = slurp(dfile("i915_error_state"));
     require(n > 0 && holds(body, "rcs0"), "files: i915_error_state after the hangs");
-    for (i = 0; i < (long)sizeof(first) - 1 && body[i] && body[i] != '\n'; i++) {
-        first[i] = body[i];
-    }
-    first[i] = '\0';
+    copy_line(first, (long)sizeof(first), 0);
+    copy_line(last, (long)sizeof(last), last_line(n));
+    require(begins(last, "DERRMR: "), "files: i915_error_state read whole, to DERRMR");
     error_path();
-    require(slurp(epath) > 0 && begins(body, first), "files: the card's error in /sys");
+    n = slurp(epath);
+    copy_line(tail, (long)sizeof(tail), last_line(n));
+    require(n > 0 && begins(body, first) && begins(tail, last) && begins(last, tail),
+            "files: the card's error in /sys, whole, from its message to DERRMR");
     report_held();
 }
 
