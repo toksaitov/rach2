@@ -444,7 +444,8 @@ A link for each input device,
 and for its event device,
 .Pa eventN ,
 to its directory.
-An input device's N is the lowest free from 0, as Linux numbers them;
+An input device's N counts up from 0 and is not used again after the
+device goes, as Linux numbers them;
 an event device's is the N of
 .Pa /dev/input/eventN
 .Pq Xr input 4 .
@@ -1001,6 +1002,9 @@ and
 with
 .Ql HOTPLUG=1
 on the card when its outputs change.
+A USB interface goes after every input device below it has sent its own
+.Ql remove ,
+as on Linux.
 A message is
 .Ql ACTION@DEVPATH
 and the variables
