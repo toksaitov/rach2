@@ -2,7 +2,7 @@
  * vfio.h: VFIO's own declarations, which group.c, container.c, pci.c,
  * igd.c and hw.c share: the groups of devices the IOMMU tells apart, the
  * containers of their DMA mappings, and the PCI devices given to vfio-pci.
- * The kernel's interface is `vfio_start` alone.
+ * The kernel starts it through `vfio_start`; KVM checks its descriptors.
  */
 
 #ifndef _VFIO_H_
@@ -21,6 +21,13 @@ struct mm;
 struct file_ops;
 struct devfs_node;
 struct fd_entry;
+
+/** Whether `e` is a live VFIO group or device descriptor. Under the big
+ * lock; the caller holds the descriptor or its open file description. */
+int vfio_file_is_valid(const struct fd_entry *e);
+
+/** Whether `e` is a VFIO device descriptor; used by group.c's classifier. */
+int vfio_device_file_is_valid(const struct fd_entry *e);
 
 #define VFIO_GROUPS_MAX  64
 #define VFIO_DEVICES_MAX 128

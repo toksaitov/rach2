@@ -6,6 +6,7 @@ KVM_ASM_SRC = sys/kvm/svm_run.s \
 
 KVM_C_SRC = sys/kvm/kvm.c \
     sys/kvm/vcpu.c \
+    sys/kvm/vfio.c \
     sys/kvm/cpuid.c \
     sys/kvm/msr.c \
     sys/kvm/svm.c \

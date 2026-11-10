@@ -217,6 +217,7 @@ struct kvm_vm {
     void *tdp;             /* tdp.c's */
     void *irq;             /* irq.c's */
     void *iobus;           /* iobus.c's */
+    void *vfio;            /* vfio.c's bridge; holds a VM reference */
     void *hv;              /* hyperv.c's */
     void *backend;         /* the backend's */
 };
@@ -369,6 +370,11 @@ void kvm_vm_put(struct kvm_vm *vm);
 /** The value KVM_CHECK_EXTENSION gives for `cap`, of /dev/kvm when `vm` is
  * NULL and of the VM `vm` otherwise; 0 for a capability not offered. */
 int32_t kvm_check_extension(struct kvm_vm *vm, long cap);
+
+/** Create the VFIO bridge of `vm`, from the user kvm_create_device at
+ * `arg`: 0 or a negative errno. Called under the big lock after checking
+ * the caller's address space. The descriptor holds a VM reference. */
+int32_t kvm_vfio_create(struct kvm_vm *vm, uintptr_t arg);
 
 /** The host's kvmclock in nanoseconds, the monotonic clock. */
 uint64_t kvm_host_ns(void);

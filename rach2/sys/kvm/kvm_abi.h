@@ -54,6 +54,12 @@
 #define KVM_SIGNAL_MSI             KVM_IOW(0xA5u, 32u)
 #define KVM_HYPERV_EVENTFD         KVM_IOW(0xBDu, 24u)
 #define KVM_CLEAR_DIRTY_LOG        KVM_IOWR(0xC0u, 24u)
+#define KVM_CREATE_DEVICE          KVM_IOWR(0xE0u, 12u)
+
+/* The ioctls of a device created by KVM_CREATE_DEVICE. */
+#define KVM_SET_DEVICE_ATTR KVM_IOW(0xE1u, 24u)
+#define KVM_GET_DEVICE_ATTR KVM_IOW(0xE2u, 24u)
+#define KVM_HAS_DEVICE_ATTR KVM_IOW(0xE3u, 24u)
 
 /* The ioctls of a vCPU. */
 #define KVM_RUN             KVM_IO(0x80u)
@@ -148,6 +154,7 @@
 #define KVM_CAP_SIGNAL_MSI                  77
 #define KVM_CAP_READONLY_MEM                81
 #define KVM_CAP_IRQFD_RESAMPLE              82
+#define KVM_CAP_DEVICE_CTRL                 89
 #define KVM_CAP_ENABLE_CAP_VM               98
 #define KVM_CAP_IOEVENTFD_NO_LENGTH         100
 #define KVM_CAP_VM_ATTRIBUTES               101
@@ -433,6 +440,26 @@ struct kvm_clear_dirty_log {
 /* The options of KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2. */
 #define KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE 1u
 #define KVM_DIRTY_LOG_INITIALLY_SET         2u
+
+/* The VFIO bridge is the one device type provided on x86. */
+#define KVM_DEV_TYPE_VFIO      4u
+#define KVM_CREATE_DEVICE_TEST 1u
+#define KVM_DEV_VFIO_FILE      1u
+#define KVM_DEV_VFIO_FILE_ADD  1u
+#define KVM_DEV_VFIO_FILE_DEL  2u
+
+struct kvm_create_device {
+    uint32_t type;
+    uint32_t fd; /* output, untouched with KVM_CREATE_DEVICE_TEST */
+    uint32_t flags;
+};
+
+struct kvm_device_attr {
+    uint32_t flags;
+    uint32_t group;
+    uint64_t attr;
+    uint64_t addr; /* user address of the attribute's value */
+};
 
 struct kvm_enable_cap {
     uint32_t cap;

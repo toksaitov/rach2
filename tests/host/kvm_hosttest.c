@@ -64,6 +64,14 @@ unsigned int host_cpu;
 /* The heap's live allocations, which the last put must bring back. */
 static int live;
 
+/** The device bridge is exercised by kvm_vfio_hosttest. */
+int32_t kvm_vfio_create(struct kvm_vm *vm, uintptr_t arg)
+{
+    (void)vm;
+    (void)arg;
+    return -ENODEV;
+}
+
 /** kmalloc over the host's allocator, counted. */
 void *kmalloc(size_t size)
 {
@@ -784,6 +792,8 @@ static void abi_rows(void)
           "kvm_run's union, valid registers and sync area are where Linux has them");
     CHECK(__builtin_offsetof(struct kvm_vcpu_events, exception_payload) == 56,
           "the exception payload is where Linux has it");
+    CHECK(KVM_CAP_DEVICE_CTRL == 89 && kvm_check_extension(NULL, KVM_CAP_DEVICE_CTRL) == 1,
+          "the VFIO device-control capability is present");
     CHECK(KVM_RUN == 0xAE80u && KVM_CREATE_VM == 0xAE01u, "KVM_RUN and KVM_CREATE_VM");
     CHECK(KVM_CAP_IMMEDIATE_EXIT == 136 && KVM_CAP_CHECK_EXTENSION_VM == 105 &&
               KVM_CAP_SPLIT_IRQCHIP == 121 && KVM_CAP_IOEVENTFD_ANY_LENGTH == 122,
@@ -1487,6 +1497,20 @@ static void table_rows(int fd)
     CHECK(MSR_ENTRIES[1].data == 5100, "the TSC runs from what was set");
     buf.msrs.nmsrs = 256;
     CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&buf) == -E2BIG, "256 MSRs at once");
+    buf.msrs.nmsrs = 2;
+    MSR_ENTRIES[0].index = 0xC0010010u;
+    MSR_ENTRIES[1].index = 0xC001001Fu;
+    CHECK(fdio(fd, KVM_GET_MSRS, (uintptr_t)&buf) == 2 && MSR_ENTRIES[0].data == 0 &&
+              MSR_ENTRIES[1].data == 0,
+          "AMD's SYSCFG and NB_CFG read zero as on Linux");
+    buf.msrs.nmsrs = 1;
+    MSR_ENTRIES[0].index = 0xC001001Fu;
+    MSR_ENTRIES[0].data = 1ull << 46;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&buf) == 1 &&
+              fdio(fd, KVM_GET_MSRS, (uintptr_t)&buf) == 1 && MSR_ENTRIES[0].data == 0,
+          "AMD's NB_CFG write is ignored as on Linux");
+    MSR_ENTRIES[0].index = 0xC0010010u;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&buf) == 0, "AMD's SYSCFG write is refused");
 }
 
 /** A machine check that ends the guest, and the ioctls a vCPU refuses, on

@@ -822,6 +822,12 @@ static void group_close(fd_entry_t *e);
 
 static const struct file_ops group_ops = {NULL, NULL, NULL, group_ioctl, group_close, NULL, NULL};
 
+int vfio_file_is_valid(const struct fd_entry *e)
+{
+    return e && ((e->type == FD_TYPE_DEVICE && e->ops == &group_ops && e->priv) ||
+                 vfio_device_file_is_valid(e));
+}
+
 /* The group's node, /dev/vfio/N, VFIO's major and minor N, 0600 as udev's
  * default rule gives it. */
 #define VFIO_GROUP_MAJOR 242
