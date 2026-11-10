@@ -8,6 +8,7 @@
 #   desktop.sh debian WEB OUT   80-2's path: each clip once, 58 s, both browsers
 #   desktop.sh video CLIPS OUT  76-17a.4's six clips, both browsers, video.sh -d
 #   desktop.sh kill OUT         Weston killed, then the console's state
+#   desktop.sh blit OUT [LOG]   fbdrm's copy checked and timed, blitcheck.py
 #
 # The bundle, the tree's root three directories above this script, holds tools/lenovo/debian-ref's
 # video.html and probe-server.py and tests/graphics/runners as the tree has
@@ -251,6 +252,20 @@ cmd_kill()
     echo "desktop: result: weston ${left:-gone}; $(grep -c -E 'console: .*(taken back|firmware)' "$out/dmesg-after-kill.txt") console lines"
 }
 
+# After the kill, with no master on the card: fbdrm's copy to the screen read
+# back byte for byte and timed. LOG is a kernel log kept while it still had
+# fbdrm's line, `state`'s dmesg.txt.
+cmd_blit()
+{
+    out=$1
+    outdir "$out"
+    [ -z "$(westons)" ] || die "weston runs; run kill first"
+    python3 -I "$here/blitcheck.py" 100 ${2:+"$2"} > "$out/blit.txt" 2>&1
+    status=$?
+    cat "$out/blit.txt"
+    echo "desktop: result: blit status $status"
+}
+
 [ "$(id -u)" = 0 ] || die "run as root"
 cmd=${1:-}
 [ $# -gt 0 ] && shift
@@ -260,5 +275,6 @@ case $cmd in
     debian) [ $# -eq 2 ] || die "usage: desktop.sh debian WEB OUT"; cmd_debian "$1" "$2" ;;
     video) [ $# -eq 2 ] || die "usage: desktop.sh video CLIPS OUT"; cmd_video "$1" "$2" ;;
     kill) [ $# -eq 1 ] || die "usage: desktop.sh kill OUT"; cmd_kill "$1" ;;
-    *) die "usage: desktop.sh state|clips|debian|video|kill ARG..." ;;
+    blit) [ $# -eq 1 ] || [ $# -eq 2 ] || die "usage: desktop.sh blit OUT [LOG]"; cmd_blit "$@" ;;
+    *) die "usage: desktop.sh state|clips|debian|video|kill|blit ARG..." ;;
 esac
