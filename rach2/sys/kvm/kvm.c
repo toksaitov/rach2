@@ -137,6 +137,7 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_CHECK_EXTENSION_VM:
     case KVM_CAP_GET_MSR_FEATURES:
     case KVM_CAP_SET_BOOT_CPU_ID:
+    case KVM_CAP_GET_TSC_KHZ:
         return 1;
     case KVM_CAP_XSAVE:
     case KVM_CAP_XCRS:

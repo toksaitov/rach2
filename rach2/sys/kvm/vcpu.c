@@ -17,6 +17,7 @@
 #include "../mm/vm.h"
 #include "../proc/process.h"
 #include "../proc/smp.h"
+#include "../timer.h"
 
 /* The XSAVE image's header, after the 512 bytes of the legacy region. */
 #define XSAVE_HDR       512u
@@ -1628,6 +1629,10 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return vcpu_enable_cap(v, arg);
     case KVM_GET_SUPPORTED_HV_CPUID:
         return kvm_hv_get_cpuid(v, arg);
+    case KVM_GET_TSC_KHZ:
+        /* The host's rate, which every guest's TSC runs at; 0 when the
+         * kernel measured none. */
+        return (int32_t)((uint64_t)timer_calibrate() * TICK_HZ / 1000u);
     default:
         return -EINVAL;
     }

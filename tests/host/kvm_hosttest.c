@@ -841,6 +841,7 @@ static void abi_rows(void)
           "KVM_SET_CPUID2 and KVM_GET_SUPPORTED_CPUID");
     CHECK(KVM_SET_USER_MEMORY_REGION == 0x4020AE46u && KVM_ENABLE_CAP == 0x4068AEA3u,
           "KVM_SET_USER_MEMORY_REGION and KVM_ENABLE_CAP");
+    CHECK(KVM_GET_TSC_KHZ == 0xAEA3u, "KVM_GET_TSC_KHZ");
     CHECK(KVM_SET_USER_MEMORY_REGION2 == 0x40A0AE49u &&
               sizeof(struct kvm_userspace_memory_region2) == 160,
           "KVM_SET_USER_MEMORY_REGION2");
