@@ -1,4 +1,4 @@
-"""Run a comparison beside three admitted eight-processor Debian guests."""
+"""Reserve a four-processor comparison and three eight-processor load guests."""
 import json
 import os
 from pathlib import Path
@@ -11,7 +11,12 @@ from run import stop
 
 
 def admit(here, fields):
-    """Claim the three load guests together before any of them starts."""
+    """Claim all 28 processors before any guest starts, inside the launcher."""
+    site = os.environ.get('ETUDE_SITE', '/etc/rach2/etude-site')
+    if os.environ.get('ETUDE_ADMITTED') != site:
+        launcher = fields['launcher']
+        os.execv(launcher, [launcher, 'legacy', sys.executable,
+                           str(Path(__file__).resolve())] + sys.argv[1:])
     claim = os.environ.get('BROWSER_LOAD_CLAIM')
     if claim:
         return claim
@@ -19,7 +24,7 @@ def admit(here, fields):
     etude = here.parents[2] / 'build/tools/etude/etude'
     args = [str(etude), 'admit', '-c', '-d', fields['locks'], '-w', fields['wait'],
             fields['ledger'], claim, subprocess.check_output(['id', '-un'], text=True).strip(),
-            'shared', '24000,6442450944,1', fields['capacity'], fields['seconds'],
+            'shared', '28000,6442450944,1', fields['capacity'], fields['seconds'],
             '/usr/bin/env', 'BROWSER_LOAD_CLAIM=' + claim, sys.executable,
             str(Path(__file__).resolve())] + sys.argv[1:]
     os.execv(etude, args)
@@ -61,7 +66,8 @@ def main():
             subprocess.run(['sh', str(here.parent / 'runners/common.sh'), 'host'],
                            stdout=record, check=True)
         print('browser-load: ready: three bound guests of eight processors', flush=True)
-        command = subprocess.Popen(sys.argv[3:], start_new_session=True)
+        command = subprocess.Popen(sys.argv[3:], start_new_session=True,
+                                   env=dict(os.environ, DEBIAN_REF_CLAIM=claim))
         while command.poll() is None:
             assert all(c.poll() is None for c in children), 'load guest exited; see load logs'
             time.sleep(1)  # Poll the command and its load guests until the command exits.
