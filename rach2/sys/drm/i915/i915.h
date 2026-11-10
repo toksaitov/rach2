@@ -1719,6 +1719,11 @@ int32_t intel_cursor_init(struct intel_crtc *crtc);
  */
 void intel_update_wm(struct intel_crtc *crtc);
 
+/** Unmask the flip done of `crtc` when its new state in `state` is an
+ * async flip with an event. From the CRTC's `atomic_begin`, before the
+ * planes are written. */
+void intel_crtc_arm_flip_done(struct intel_crtc *crtc, struct drm_atomic_state *state);
+
 /**
  * Hand the event of `crtc`'s new state in `state` to the vblank path: the
  * commit's flip armed and its event held until the frame counter passes

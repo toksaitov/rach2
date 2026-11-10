@@ -540,11 +540,13 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
 }
 
 /** Before the planes: the watermarks raised to cover the planes the
- * commit shows. */
+ * commit shows, and an async flip's flip done unmasked, since the chip
+ * latches only an unmasked event and the flip may be done as soon as the
+ * surface is written. */
 static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
-    (void)state;
     intel_update_wm(to_intel_crtc(crtc));
+    intel_crtc_arm_flip_done(to_intel_crtc(crtc), state);
 }
 
 /** After the planes: the commit's event handed to the vblank path. */
