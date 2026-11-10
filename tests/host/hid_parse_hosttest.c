@@ -357,6 +357,33 @@ static const uint8_t vendor_only[] = {0x06, 0x00, 0xff, 0x09, 0x01, 0xa1, 0x01,
 
 /* ---- the rows ---- */
 
+/* A gamepad of four buttons, a hat switch of eight directions with a null
+ * state, X and Y, and the D-pad's four usages: byte 0 the buttons and the
+ * hat, bytes 1 and 2 the axes, byte 3 the D-pad. */
+static const uint8_t gamepad[] = {
+    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x04, 0x15, 0x00, 0x25, 0x01,
+    0x75, 0x01, 0x95, 0x04, 0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x25, 0x07, 0x75, 0x04,
+    0x95, 0x01, 0x81, 0x42, 0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95,
+    0x02, 0x81, 0x02, 0x09, 0x90, 0x09, 0x91, 0x09, 0x92, 0x09, 0x93, 0x15, 0x00, 0x25, 0x01, 0x75,
+    0x01, 0x95, 0x04, 0x81, 0x02, 0x75, 0x04, 0x95, 0x01, 0x81, 0x03, 0xc0};
+
+/* Gamepads whose hat switch has a range of 0 to 0xFFFFFFFF, which Linux
+ * stores backwards and takes for an axis, and of INT32_MIN to INT32_MAX,
+ * whose width overflows Linux's arithmetic: one byte of buttons, then the
+ * hat's four bytes. */
+static const uint8_t hat_backwards[] = {0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x09, 0x19, 0x01,
+                                        0x29, 0x08, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08,
+                                        0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x27, 0xff,
+                                        0xff, 0xff, 0xff, 0x75, 0x20, 0x95, 0x01, 0x81, 0x02, 0xc0};
+static const uint8_t hat_widest[] = {
+    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x08, 0x17, 0x00, 0x00, 0x00,
+    0x80, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x17, 0x00, 0x00,
+    0x00, 0x80, 0x27, 0xff, 0xff, 0xff, 0x7f, 0x75, 0x20, 0x95, 0x01, 0x81, 0x02, 0xc0};
+
+/* Linux's ABS_HAT0X and ABS_HAT0Y, which hid_input.c defines for itself. */
+#define TEST_HAT0X 0x10
+#define TEST_HAT0Y 0x11
+
 static int fails;
 
 #define CHECK(what, cond)                 \
@@ -940,6 +967,75 @@ static void rows_multiplier(void)
     drop(hid);
 }
 
+/** Whether an event seen is `type`, `code`, `value`. */
+static int saw(unsigned type, unsigned code, int32_t value)
+{
+    int i;
+
+    for (i = 0; i < nseen; i++) {
+        if (is(i, type, code, value)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** A gamepad's hat switch and D-pad, and hat switches of degenerate
+ * ranges. */
+static void rows_gamepad(void)
+{
+    static const uint8_t up[] = {0x00, 0x80, 0x80, 0x00};
+    static const uint8_t right[] = {0x20, 0x80, 0x80, 0x00};
+    static const uint8_t centred[] = {0x80, 0x80, 0x80, 0x00};
+    static const uint8_t dpad_up[] = {0x80, 0x80, 0x80, 0x01};
+    static const uint8_t zero[] = {0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t three[] = {0x00, 0x03, 0x00, 0x00, 0x00};
+    struct hid_dev *hid;
+    struct evdev *d;
+    int inputs, h;
+
+    ndevs = 0;
+    hid = connect(gamepad, sizeof(gamepad), "ACME Pad", &inputs);
+    d = &devs[0];
+    CHECK("gamepad: one event device with ABS_HAT0X and ABS_HAT0Y over -1 to 1",
+          inputs == 1 && bit(d->abs, TEST_HAT0X) && bit(d->abs, TEST_HAT0Y) &&
+              d->absmin[TEST_HAT0X] == -1 && d->absmax[TEST_HAT0X] == 1 &&
+              d->absmin[TEST_HAT0Y] == -1 && d->absmax[TEST_HAT0Y] == 1);
+    CHECK("gamepad: the D-pad's usages map to nothing, as Linux 6.12's SystemControl case "
+          "ignores 0x90 to 0x9f before its D-pad case",
+          count_bits(d->abs, 8) == 4);
+    feed(hid, up, sizeof(up));
+    CHECK("gamepad: hat 0 is up", saw(EV_ABS, TEST_HAT0Y, -1) && !saw(EV_ABS, TEST_HAT0X, 1));
+    feed(hid, right, sizeof(right));
+    CHECK("gamepad: hat 2 is right", saw(EV_ABS, TEST_HAT0X, 1) && saw(EV_ABS, TEST_HAT0Y, 0));
+    feed(hid, centred, sizeof(centred));
+    CHECK("gamepad: the null state 8 is centred", saw(EV_ABS, TEST_HAT0X, 0));
+    feed(hid, dpad_up, sizeof(dpad_up));
+    CHECK("gamepad: a D-pad press gives nothing", nseen == 0);
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(hat_backwards, sizeof(hat_backwards), "ACME Backwards", &inputs);
+    d = &devs[0];
+    CHECK("hat 0 to 0xFFFFFFFF: an axis, as Linux's hat_min < hat_max makes it",
+          inputs == 1 && bit(d->abs, TEST_HAT0X) && !bit(d->abs, TEST_HAT0Y));
+    feed(hid, zero, sizeof(zero));
+    feed(hid, three, sizeof(three));
+    CHECK("hat 0 to 0xFFFFFFFF: its values are reported as they come, with no division",
+          saw(EV_ABS, TEST_HAT0X, 3));
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(hat_widest, sizeof(hat_widest), "ACME Widest", &inputs);
+    d = &devs[0];
+    h = inputs == 1 && bit(d->abs, TEST_HAT0X) && bit(d->abs, TEST_HAT0Y);
+    CHECK("hat INT32_MIN to INT32_MAX: a hat", h);
+    feed(hid, zero, sizeof(zero));
+    CHECK("hat INT32_MIN to INT32_MAX: 0, half way, is down, with no division by 0",
+          saw(EV_ABS, TEST_HAT0Y, 1) && saw(EV_ABS, TEST_HAT0X, 0) == 0);
+    drop(hid);
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -954,6 +1050,7 @@ int main(void)
     rows_map_media();
     rows_map_apps();
     rows_multiplier();
+    rows_gamepad();
     if (fails) {
         printf("hid_parse_hosttest: %d failed\n", fails);
         return 1;
