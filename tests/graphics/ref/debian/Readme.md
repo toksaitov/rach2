@@ -11,6 +11,8 @@ The Debian reference guest's results for the graphics runners, which the `webgl`
 * `virtio-vga/piglit/`: every part, `piglit.sh all`: `record`, `results`, `status` and `PART.results` for each part.
 * `virtio-vga/glmark2/`: `glmark2.sh`: `record`, `results`, `status`, `validations` and `scores`.
 
+The video references ran beside three bound Debian guests of eight processors each, each with eight busy CPU workers, through `browser/loaded.py`. Their records retain the live admission ledger: the load group's 24-processor reservation and the browser guest's four. The same load is used for the Rach2 video comparison.
+
 The formats are those of [the runners' results](../../Readme.md#results). The runners' logs, igt_runner's and piglit's whole JSON results and glmark2's output are left out.
 
 ## Updating
