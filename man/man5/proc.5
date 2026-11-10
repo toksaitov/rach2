@@ -1884,24 +1884,24 @@ and a VmFlags line of
 .Ql ex ,
 .Ql sh ,
 .Ql gd ,
-.Ql lo
-for a locked region,
-.Ql io
-and
 .Ql pf
 for a mapping of a device object,
+.Ql lo
+for a locked region,
+.Ql io ,
+again for a mapping of a device object,
 .Ql dc
 for a range
 .Xr madvise 2 Ns 's
 .Dv MADV_DONTFORK
 marked,
-.Ql wf
-for one
-.Dv MADV_WIPEONFORK
-marked, and
 .Ql lf
 for a region locked on fault
 .Pq see Xr mlock 2 ,
+.Ql wf
+for a range
+.Dv MADV_WIPEONFORK
+marked,
 .Ql dd
 for a mapping of
 .Xr memfd_secret 2 ,
@@ -1909,7 +1909,7 @@ which a core file leaves out, and
 .Ql sl
 for a region
 .Xr mseal 2
-sealed.
+sealed, in that order, the order of Linux's flag bits.
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
 Anonymous counts every page of a private region of no file, and each
