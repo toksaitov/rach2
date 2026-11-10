@@ -600,7 +600,8 @@ int main(int argc, char **argv)
     name_cases();
 finish:
     for (i = 0; i < 64; i++)
-        CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");
+        CHECK(slots[i].type == FD_TYPE_NONE && slots[i].ofd == NULL,
+              "all descriptors closed and none reserved");
     if (!failures)
         printf("fence-test: passed\n");
     return failures != 0;

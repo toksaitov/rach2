@@ -1745,9 +1745,9 @@ static void append_refault_limit(void)
     check(file_len == APPEND_FIRST, "and no other writer entered the call");
     row_end();
     row_begin();
-    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT, 0) == (int32_t)APPEND_FIRST,
-          "an append keeps its completed prefix");
-    check(file_len == APPEND_FIRST, "and holds the lock until it ends");
+    check(append_across_refault(0, APPEND_LIMIT - 4u, 0) == 4,
+          "an append that moved no byte resumes at the new end and writes what fits");
+    check(file_len == APPEND_LIMIT, "and stops at the limit");
     row_end();
     row_begin();
     check(append_across_refault(0, APPEND_LIMIT, 0) == -EFBIG,
