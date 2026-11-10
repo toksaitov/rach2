@@ -1,0 +1,98 @@
+.Dd November 10, 2026
+.Dt RACH2-GAME 1
+.Os Rach2
+.Sh NAME
+.Nm rach2-game
+.Nd run a Windows game through Proton and WineD3D on OpenGL
+.Sh SYNOPSIS
+.Nm
+.Op Fl -id Ar id
+.Op Fl -prefix Ar directory
+.Op Fl -print
+.Op Fl -
+.Op Ar program Op Ar argument ...
+.Sh DESCRIPTION
+.Nm
+runs
+.Ar program
+through the x86-64 GNU root's GE-Proton11-12 at
+.Pa /opt/proton/proton .
+It uses WoW64 and WineD3D's OpenGL renderer with fsync enabled.
+Steam is not required.
+The program's arguments and exit status pass through Proton.
+.Pp
+.Fl -id
+chooses a decimal game ID.
+The default is the inherited
+.Ev SteamGameId ,
+or 0.
+Give each game its own ID or compatibility directory.
+.Fl -prefix
+chooses that directory; Proton keeps the Wine prefix in its
+.Pa pfx
+child.
+It takes precedence over
+.Ev STEAM_COMPAT_DATA_PATH .
+With neither, the directory is
+.Pa $XDG_DATA_HOME/rach2/games/ID
+or
+.Pa $HOME/.local/share/rach2/games/ID .
+All directory paths must be absolute.
+.Pp
+.Fl -print
+prints the effective settings, one
+.Ar NAME=value
+per line, without creating directories or starting Proton.
+No program is needed in this mode.
+.Fl -help
+prints usage.
+.Fl -
+ends option processing.
+.Sh ENVIRONMENT
+.Nm
+sets these variables for Proton:
+.Bl -tag -width STEAM_COMPAT_CLIENT_INSTALL_PATH
+.It Ev PROTON_USE_WOW64
+1, selecting Wine's WoW64 mode.
+.It Ev PROTON_USE_WINED3D
+1, selecting WineD3D instead of DXVK and vkd3d-proton.
+.It Ev WINE_D3D_CONFIG
+.Li renderer=gl ,
+selecting OpenGL.
+.It Ev PROTON_NO_FSYNC
+0; Proton enables fsync and Wine checks the kernel's futex support.
+.It Ev SteamGameId , SteamAppId
+The chosen game ID.
+.It Ev PROTON_LOG
+1, enabling Proton's log and DLL load records.
+.El
+.Pp
+.Ev PROTON_LOG_DIR
+chooses the log directory; its default is
+.Pa logs
+in the compatibility directory.
+Proton writes
+.Pa steam-ID.log
+there, replacing the preceding launch's log.
+.Pp
+.Ev STEAM_COMPAT_CLIENT_INSTALL_PATH
+is kept when set; otherwise it names
+.Pa steam
+under the default
+.Pa rach2/games
+directory.
+The launcher creates this directory for Proton without installing Steam.
+.Ev DISPLAY
+and the desktop session's other variables pass through unchanged.
+.Sh EXIT STATUS
+Usage errors exit with status 2.
+Otherwise the exit status is Proton's.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+rach2-game --id 17300 --prefix /data/crysis/compat /data/crysis/Bin64/Crysis.exe -dx9
+rach2-game --id 17300 --print
+.Ed
+.Sh SEE ALSO
+.Xr innoextract 1 ,
+.Xr proton 1 ,
+.Xr desktop 7

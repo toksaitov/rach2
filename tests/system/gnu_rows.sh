@@ -133,6 +133,23 @@ row_names() {
         "65534:65534 65534"
 }
 
+# The game's fixed route, its chosen prefix and its side-effect-free print.
+row_game_launcher() {
+    output "the game launcher" env PROTON_USE_WOW64=0 PROTON_USE_WINED3D=0 \
+        WINE_D3D_CONFIG=renderer=vulkan PROTON_NO_FSYNC=1 PROTON_LOG=0 \
+        rach2-game --id 80 --prefix "$WORK/compat" --print
+    local setting
+    for setting in PROTON_USE_WOW64=1 PROTON_USE_WINED3D=1 \
+        WINE_D3D_CONFIG=renderer=gl PROTON_NO_FSYNC=0 SteamGameId=80 SteamAppId=80 \
+        PROTON_LOG=1 "STEAM_COMPAT_DATA_PATH=$WORK/compat"; do
+        same "the game's $setting" "$(printf '%s\n' "$OUT" | grep -Fx -- "$setting")" "$setting"
+    done
+    [ ! -e "$WORK/compat" ] || fail 'printing made a prefix'
+    if rach2-game --id ../bad --print > "$WORK/invalid" 2>&1; then
+        fail 'the launcher accepted a nonnumeric game id'
+    fi
+}
+
 # glibc, its databases of service, protocol and network names, which
 # Debian's netbase gives, and the zone the clock is kept in.
 row_glibc() {

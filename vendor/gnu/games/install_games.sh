@@ -24,3 +24,11 @@ while read -r path; do
     fi
     needs "the games layer's /${path#./}" "$f" lib usr/lib "usr/lib/$GNU_MULTIARCH"
 done < "$WORK/new"
+
+if [ "$RACH2_ARCH" = x86_64 ]; then
+    if [ -e "$TREE/usr/bin/rach2-game" ] || [ -L "$TREE/usr/bin/rach2-game" ]; then
+        echo 'gnu: games: /usr/bin/rach2-game already exists' >&2
+        exit 1
+    fi
+    install -m 0755 "$DIR/games/rach2-game.sh" "$TREE/usr/bin/rach2-game"
+fi

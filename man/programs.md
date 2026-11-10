@@ -383,7 +383,7 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 
 ### Games packages
 
-The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands on both architectures, from its own Debian closure.
+The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands on both architectures, from its own Debian closure. On x86-64 it also stages `/usr/bin/rach2-game` ([rach2-game(1)](man1/rach2-game.1)), which runs a Windows game through Proton with WoW64, WineD3D on OpenGL and fsync.
 
 | Program | Package | Path | Page |
 | --- | --- | --- | --- |
