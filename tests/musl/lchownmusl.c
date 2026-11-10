@@ -96,7 +96,7 @@ static const struct {
     {"flag-einval", "a flag Linux does not define, before the path"},
     {"empty-path-ebadf", "AT_EMPTY_PATH on a descriptor that is not open"},
     {"proc-self", "the /proc/self link"},
-    {"dev-null", "an O_PATH descriptor on /dev/null"},
+    {"dev-null", "an O_PATH descriptor on /dev/null changes the device's owner"},
     {"link-owner", "lchown changes the link and not its target"},
     {"chown-follows", "chown follows the link"},
     {"nofollow-link", "AT_SYMLINK_NOFOLLOW changes the link"},
@@ -254,8 +254,9 @@ static int file_rows(const char *dir)
 }
 
 /**
- * Check the errors of the flags, and the nodes whose owner is fixed at root.
- * Returns 0, or 1 once the failure is reported.
+ * Check the errors of the flags, /proc/self, whose owner is fixed at root,
+ * and /dev/null, whose owner root changes as udev does on Linux and sets
+ * back. Returns 0, or 1 once the failure is reported.
  */
 static int refusal_rows(void)
 {
@@ -275,8 +276,9 @@ static int refusal_rows(void)
         return fail(PROC_SELF);
     }
     fd = open("/dev/null", O_PATH);
-    ok = fd >= 0 && fchownat(fd, "", 0, 0, AT_EMPTY_PATH) == 0 &&
-         refused(fchownat(fd, "", 1000, (gid_t)-1, AT_EMPTY_PATH), EPERM);
+    ok = fd >= 0 && fchownat(fd, "", 1000, (gid_t)-1, AT_EMPTY_PATH) == 0 &&
+         owner_is("/dev/null", 1, 1000);
+    ok = fd >= 0 && fchownat(fd, "", 0, 0, AT_EMPTY_PATH) == 0 && ok;
     close(fd);
     if (!ok) {
         return fail(DEV_NULL);
