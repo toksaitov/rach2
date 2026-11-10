@@ -1,29 +1,26 @@
 /*
- * hid.c: a USB keyboard and mouse, in the protocol every firmware uses.
+ * hid.c: the USB HID class driver, Linux's usbhid with hid-generic, and its
+ * boot-protocol drivers, usbkbd and usbmouse, as the fallback.
  *
- * The boot protocol is two fixed report layouts, and taking it removes the
- * report-descriptor parser, which is the largest part of a HID stack and the
- * part with nothing to teach about USB.
+ * A HID device describes its own reports: its report descriptor says which
+ * bits of which report are which key, button or axis. The core reads the
+ * descriptor when it configures the device, and this driver parses it
+ * (`hid_parse.c`), maps its usages to event devices and reads each report
+ * through it (`hid_input.c`), as Linux does. A keyboard's or mouse's
+ * reports are then whatever its descriptor says, and a device that has no
+ * boot protocol, such as QEMU's tablet, works as well as one that has.
  *
- * The work here is the difference between what USB sends and what this kernel
- * already has. A HID report is a state: these keys are down now. A key event
- * is an event: this key went down, that one came up. So each report is
- * compared with the one before it, and the difference is what the input layer
- * is given, as Linux's key codes, the ones the PS/2 keyboard's set-1 codes
- * name. No code downstream has to tell the two kinds of keyboard apart, and
- * a held key repeats there, in software, as a PS/2 one does.
+ * A keyboard or mouse whose descriptor cannot be read or parsed is put in
+ * the boot protocol, whose two report layouts are fixed. There a HID report
+ * is a state, these keys are down now, and a key event is an event, this
+ * key went down; so each boot report is compared with the one before it,
+ * and the difference is what the input layer is given, as Linux's key
+ * codes, the ones the PS/2 keyboard's set-1 codes name.
  *
- * Each keyboard is an event device of its own too, "USB keyboard N", whose
- * keys are reported with the usage as MSC_SCAN, in the keyboard page 7, as
- * Linux's HID driver reports them.
- *
- * The other way, a keyboard's LEDs are its one output report, a byte the
+ * Either way a keyboard's keys go through the input layer, which repeats a
+ * held key in software as it does a PS/2 one's and gives the keys to the
+ * console; and the other way, a keyboard's LEDs are an output report the
  * core sends when it differs from what the keyboard was last sent.
- *
- * A mouse is an event device as Linux's boot-protocol driver, usbmouse.c,
- * makes one, "USB HIDBP Mouse VVVV:PPPP" with five buttons and a wheel, and
- * reports each turn of the wheel in 120ths too, REL_WHEEL_HI_RES, as Linux's
- * generic HID driver does.
  */
 
 #include "hid.h"
@@ -35,8 +32,13 @@
 #include "../kbd.h"
 #include "../kd.h"
 #include "../klog.h"
+#include "../lib/kerrno.h"
+#include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../mouse.h"
 #include "core.h"
+#include "hid_input.h"
+#include "hid_parse.h"
 
 /* A boot keyboard's report: one byte of modifiers, one reserved, and up to six
  * usages of keys that are down. A boot mouse's: one byte of buttons and two
@@ -50,6 +52,22 @@
 #define REPORT_NUM_LOCK    0x01
 #define REPORT_CAPS_LOCK   0x02
 #define REPORT_SCROLL_LOCK 0x04
+
+/* The wValue of SET_REPORT for the boot keyboard's output report: type 2,
+ * Output, and ID 0. */
+#define BOOT_OUTPUT 0x0200
+
+/* A device in the report protocol, `hid_state.mode`, beside HID_KEYBOARD and
+ * HID_MOUSE. */
+#define HID_REPORT 3
+
+/* The most bytes of an output report kept to compare with the next. */
+#define OUTPUT_MAX 16
+
+/* Which report `hid_output_report` gave last. */
+#define OFFER_NONE       0
+#define OFFER_LEDS       1
+#define OFFER_MULTIPLIER 2
 
 /*
  * The usages this kernel has a scancode for, from 0 to USAGES - 1, whose key
@@ -94,15 +112,21 @@ static const uint16_t modifier_scancode[8] = {0x1D,       0x2A, 0x38,       EXT 
 /* What each device was reporting last time, one per entry of the core's
  * device table, indexed from one. */
 struct hid_state {
+    int mode; /* 0 until taken, HID_KEYBOARD or HID_MOUSE, or HID_REPORT */
     uint8_t modifiers;
     uint8_t keys[KEYS_IN_REPORT];
-    struct input_keyboard kb; /* a keyboard's keys in the input layer */
-    int keyboard;             /* a keyboard is attached, from `hid_attach` to `hid_gone` */
-    int leds_shown;           /* the output report last taken, -1 before one */
-    int leds_failed;          /* a report failed since the keyboard was attached */
-    struct evdev *mouse;      /* a mouse's event device, or NULL */
-    char name[32];            /* its name, "USB keyboard N" or "USB HIDBP Mouse V:P" */
+    struct input_keyboard kb; /* a boot keyboard's keys in the input layer */
+    struct evdev *mouse;      /* a boot mouse's event device, or NULL */
+    struct hid_dev *hid;      /* a report-protocol device's tables, or NULL */
+    char name[HID_NAME_MAX];  /* a boot device's name */
     char phys[24];            /* its EVIOCGPHYS, "usb-N/input0" */
+    int offer;                /* OFFER_*: what `hid_output_report` gave last */
+    int multiplier;           /* a multiplier report is still to be sent */
+    int leds_failed;          /* an LED report failed since it was taken */
+    int shown_len;            /* the LED report last taken, -1 before one */
+    uint8_t shown[OUTPUT_MAX];
+    uint8_t offered[OUTPUT_MAX];
+    int offered_len;
 };
 
 static struct hid_state states[USB_MAX_DEVICES + 1];
@@ -156,48 +180,36 @@ static void name_phys(struct hid_state *state, int device)
     append(state->phys, sizeof(state->phys), "/input0");
 }
 
-/** Register the mouse `device` of `state` as its event device, once. */
-static void attach_mouse(struct hid_state *state, int device, uint16_t vendor, uint16_t product)
+/**
+ * Write a device's name into `out`, `size` bytes, as usbhid, usbkbd and
+ * usbmouse write it: the manufacturer and the product, a space between,
+ * or when the device has neither string, `fallback` and its vendor and
+ * product in hex.
+ */
+static void name_device(char *out, size_t size, const struct hid_ids *ids, const char *fallback)
 {
-    if (state->mouse) {
-        return;
+    out[0] = 0;
+    if (ids->manufacturer && ids->manufacturer[0]) {
+        append(out, size, ids->manufacturer);
     }
-    state->name[0] = 0;
-    append(state->name, sizeof(state->name), "USB HIDBP Mouse ");
-    append_hex4(state->name, sizeof(state->name), vendor);
-    append(state->name, sizeof(state->name), ":");
-    append_hex4(state->name, sizeof(state->name), product);
-    name_phys(state, device);
-    state->mouse = mouse_register(state->name, state->phys, EVDEV_BUS_USB, vendor, product,
-                                  MOUSE_WHEEL | MOUSE_HI_RES | MOUSE_SIDE);
+    if (ids->product_name && ids->product_name[0]) {
+        if (out[0]) {
+            append(out, size, " ");
+        }
+        append(out, size, ids->product_name);
+    }
+    if (!out[0]) {
+        append(out, size, fallback);
+        append_hex4(out, size, ids->vendor);
+        append(out, size, ":");
+        append_hex4(out, size, ids->product);
+    }
 }
 
-void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
+/** The state of `device`, or NULL for one out of range. */
+static struct hid_state *state_of(int device)
 {
-    struct hid_state *state;
-
-    if (device <= 0 || device > USB_MAX_DEVICES) {
-        return;
-    }
-    state = &states[device];
-    if (kind == HID_MOUSE) {
-        attach_mouse(state, device, vendor, product);
-        return;
-    }
-    if (kind != HID_KEYBOARD) {
-        return;
-    }
-    state->keyboard = 1;
-    state->leds_shown = -1;
-    state->leds_failed = 0;
-    if (state->kb.dev) {
-        return;
-    }
-    state->name[0] = 0;
-    append(state->name, sizeof(state->name), "USB keyboard ");
-    append_number(state->name, sizeof(state->name), device);
-    name_phys(state, device);
-    input_keyboard_attach(&state->kb, state->name, state->phys, EVDEV_BUS_USB, vendor, product);
+    return device > 0 && device <= USB_MAX_DEVICES ? &states[device] : 0;
 }
 
 /** The scancode of `usage`, 0 for one the table does not name. */
@@ -293,91 +305,304 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
     }
 }
 
-void hid_report(int device, int kind, const uint8_t *report, int length)
+/** Free the tables of `hid`, NULL accepted. */
+static void free_tables(struct hid_dev *hid)
 {
-    struct hid_state *state;
-
-    if (device <= 0 || device > USB_MAX_DEVICES) {
+    if (!hid) {
         return;
     }
-    state = &states[device];
+    kfree(hid->desc.fields);
+    kfree(hid->desc.usages);
+    kfree(hid->desc.collections);
+    kfree(hid->inbuf);
+    kfree(hid);
+}
 
-    if (kind == HID_KEYBOARD) {
-        if (length < KEYBOARD_REPORT) {
-            return;
+/**
+ * Parse `rdesc` into a new `struct hid_dev` with tables of the sizes the
+ * descriptor needs, counted by a first pass. Returns 0 with `*out` set, or
+ * the parser's error, or -ENOMEM.
+ */
+static int parse_tables(const uint8_t *rdesc, int length, struct hid_dev **out)
+{
+    struct hid_dev *hid = (struct hid_dev *)kzalloc(sizeof(*hid));
+    uint32_t i, insize = 0;
+    int err;
+
+    *out = 0;
+    if (!hid) {
+        return -ENOMEM;
+    }
+    err = hid_parse(&hid->desc, rdesc, length);
+    if (err) {
+        kfree(hid);
+        return err;
+    }
+    /* One spare entry each, so that an empty table is still a table. */
+    hid->desc.fields =
+        (struct hid_field *)kmalloc((hid->desc.max_fields + 1) * sizeof(struct hid_field));
+    hid->desc.usages =
+        (struct hid_usage *)kmalloc((hid->desc.max_usages + 1) * sizeof(struct hid_usage));
+    hid->desc.collections = (struct hid_collection *)kmalloc((hid->desc.max_collections + 1) *
+                                                             sizeof(struct hid_collection));
+    if (!hid->desc.fields || !hid->desc.usages || !hid->desc.collections) {
+        free_tables(hid);
+        return -ENOMEM;
+    }
+    err = hid_parse(&hid->desc, rdesc, length);
+    if (err) {
+        free_tables(hid);
+        return err;
+    }
+    for (i = 0; i < hid->desc.nreports; i++) {
+        const struct hid_report *r = &hid->desc.reports[i];
+
+        if (r->type == HID_INPUT_REPORT && hid_report_len(r) > insize) {
+            insize = hid_report_len(r);
         }
-        keyboard_report(state, report);
+    }
+    hid->insize = insize;
+    hid->inbuf = (uint8_t *)kzalloc(insize + 1);
+    if (!hid->inbuf) {
+        free_tables(hid);
+        return -ENOMEM;
+    }
+    *out = hid;
+    return 0;
+}
+
+int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int length)
+{
+    struct hid_state *state = state_of(device);
+    struct hid_dev *hid;
+    int err;
+
+    if (!state) {
+        return -ENODEV;
+    }
+    if (state->mode) {
+        return 0;
+    }
+    err = parse_tables(rdesc, length, &hid);
+    if (err) {
+        klog(KLOG_WARN, "usb", "hid: device %d: %x:%x: report descriptor refused: %s", device,
+             (int)ids->vendor, (int)ids->product,
+             err == -ENOMEM  ? "no memory for its tables"
+             : err == -E2BIG ? "past this kernel's tables"
+                             : "malformed");
+        return err;
+    }
+    name_device(hid->name, sizeof(hid->name), ids, "HID ");
+    name_phys(state, device);
+    hid->phys = state->phys;
+    hid->vendor = ids->vendor;
+    hid->product = ids->product;
+    hid->version = ids->version;
+    if (hidinput_connect(hid) < 0) {
+        klog(KLOG_INFO, "usb", "hid: device %d: %s: no input device in its descriptor", device,
+             hid->name);
+        free_tables(hid);
+        return -ENODEV;
+    }
+    state->hid = hid;
+    state->mode = HID_REPORT;
+    state->offer = OFFER_NONE;
+    state->multiplier = 1;
+    state->leds_failed = 0;
+    state->shown_len = -1;
+    klog(KLOG_INFO, "usb", "hid: device %d: %s on %s, %d input devices", device, hid->name,
+         state->phys, (int)hid->ninputs);
+    return 0;
+}
+
+void hid_attach_boot(int device, int kind, const struct hid_ids *ids)
+{
+    struct hid_state *state = state_of(device);
+
+    if (!state || state->mode || (kind != HID_KEYBOARD && kind != HID_MOUSE)) {
         return;
     }
-
+    state->mode = kind;
+    state->offer = OFFER_NONE;
+    state->multiplier = 0;
+    state->leds_failed = 0;
+    state->shown_len = -1;
+    name_phys(state, device);
     if (kind == HID_MOUSE) {
-        if (length < MOUSE_REPORT) {
-            return;
+        name_device(state->name, sizeof(state->name), ids, "USB HIDBP Mouse ");
+        state->mouse = mouse_register(state->name, state->phys, EVDEV_BUS_USB, ids->vendor,
+                                      ids->product, MOUSE_WHEEL | MOUSE_HI_RES | MOUSE_SIDE);
+        /* An open of `mouse` fails until a mouse of any kind is found. */
+        input_mouse_found();
+        return;
+    }
+    name_device(state->name, sizeof(state->name), ids, "USB HIDBP Keyboard ");
+    input_keyboard_attach(&state->kb, state->name, state->phys, EVDEV_BUS_USB, ids->vendor,
+                          ids->product);
+}
+
+int hid_report_size(int device)
+{
+    struct hid_state *state = state_of(device);
+
+    return state && state->mode == HID_REPORT ? (int)state->hid->insize : 0;
+}
+
+void hid_report(int device, const uint8_t *report, int length)
+{
+    struct hid_state *state = state_of(device);
+
+    if (!state || length < 0) {
+        return;
+    }
+    switch (state->mode) {
+    case HID_REPORT:
+        hid_input_report(state->hid, report, (uint32_t)length);
+        return;
+    case HID_KEYBOARD:
+        if (length >= KEYBOARD_REPORT) {
+            keyboard_report(state, report);
         }
-        /* A report's Y is positive toward the user, as REL_Y is. */
-        mouse_report(state->mouse, report[0] & 0x1Fu, (int)(int8_t)report[1],
-                     (int)(int8_t)report[2], length >= MOUSE_WHEELED ? (int)(int8_t)report[3] : 0,
-                     0);
+        return;
+    case HID_MOUSE:
+        if (length >= MOUSE_REPORT) {
+            /* A report's Y is positive toward the user, as REL_Y is. */
+            mouse_report(state->mouse, report[0] & 0x1Fu, (int)(int8_t)report[1],
+                         (int)(int8_t)report[2],
+                         length >= MOUSE_WHEELED ? (int)(int8_t)report[3] : 0, 0);
+        }
+        return;
+    default:
         return;
     }
 }
 
-int hid_led_report(int device)
+/** The LED_* bits of the LEDs the input layer wants lit. */
+static unsigned int leds_wanted(void)
 {
-    struct hid_state *state;
     unsigned int wanted = input_leds();
-    int report = 0;
+    unsigned int leds = 0;
 
-    if (device <= 0 || device > USB_MAX_DEVICES) {
-        return -1;
-    }
-    state = &states[device];
-    if (!state->keyboard || state->leds_failed) {
-        return -1;
-    }
     if (wanted & LED_NUM) {
-        report |= REPORT_NUM_LOCK;
+        leds |= 1u << LED_NUML;
     }
     if (wanted & LED_CAP) {
-        report |= REPORT_CAPS_LOCK;
+        leds |= 1u << LED_CAPSL;
     }
     if (wanted & LED_SCR) {
-        report |= REPORT_SCROLL_LOCK;
+        leds |= 1u << LED_SCROLLL;
     }
-    return report == state->leds_shown ? -1 : report;
+    return leds;
 }
 
-void hid_led_sent(int device, int report, int ok)
+/** Build the LED report of `state` in `out`, `size` bytes, with its wValue
+ * in `*value`; its bytes, or -1 when the device has no LEDs. */
+static int leds_report(struct hid_state *state, uint8_t *out, int size, int *value)
 {
-    struct hid_state *state;
+    unsigned int leds = leds_wanted();
 
-    if (device <= 0 || device > USB_MAX_DEVICES) {
-        return;
+    if (state->mode == HID_REPORT) {
+        return hidinput_led_report(state->hid, leds, out, size, value);
     }
-    state = &states[device];
-    if (!ok) {
-        if (!state->leds_failed) {
-            klog(KLOG_WARN, "usb", "hid: keyboard %d: the LED report failed", device);
+    if (state->mode != HID_KEYBOARD || size < 1) {
+        return -1;
+    }
+    out[0] = (uint8_t)(((leds >> LED_NUML) & 1u ? REPORT_NUM_LOCK : 0) |
+                       ((leds >> LED_CAPSL) & 1u ? REPORT_CAPS_LOCK : 0) |
+                       ((leds >> LED_SCROLLL) & 1u ? REPORT_SCROLL_LOCK : 0));
+    *value = BOOT_OUTPUT;
+    return 1;
+}
+
+/** Whether the `n` bytes at `a` and `b` are the same. */
+static int same_bytes(const uint8_t *a, const uint8_t *b, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return 0;
         }
-        state->leds_failed = 1;
+    }
+    return 1;
+}
+
+int hid_output_report(int device, uint8_t *out, int size, int *value)
+{
+    struct hid_state *state = state_of(device);
+    int n;
+
+    if (!state || !state->mode) {
+        return -1;
+    }
+    state->offer = OFFER_NONE;
+    if (state->multiplier) {
+        n = hidinput_multiplier_report(state->hid, out, size, value);
+        if (n >= 0) {
+            state->offer = OFFER_MULTIPLIER;
+            return n;
+        }
+        state->multiplier = 0;
+    }
+    if (state->leds_failed) {
+        return -1;
+    }
+    n = leds_report(state, state->offered, (int)sizeof(state->offered), value);
+    if (n < 0 || n > size) {
+        return -1;
+    }
+    if (n == state->shown_len && same_bytes(state->offered, state->shown, n)) {
+        return -1;
+    }
+    k_memcpy(out, state->offered, (size_t)n);
+    state->offered_len = n;
+    state->offer = OFFER_LEDS;
+    return n;
+}
+
+void hid_output_sent(int device, int ok)
+{
+    struct hid_state *state = state_of(device);
+
+    if (!state) {
         return;
     }
-    state->leds_shown = report;
+    if (state->offer == OFFER_MULTIPLIER) {
+        state->multiplier = 0;
+        hidinput_multiplier_set(state->hid, ok);
+    } else if (state->offer == OFFER_LEDS) {
+        if (ok) {
+            k_memcpy(state->shown, state->offered, (size_t)state->offered_len);
+            state->shown_len = state->offered_len;
+        } else {
+            if (!state->leds_failed) {
+                klog(KLOG_WARN, "usb", "hid: device %d: the LED report failed", device);
+            }
+            state->leds_failed = 1;
+        }
+    }
+    state->offer = OFFER_NONE;
 }
 
 void hid_gone(int device)
 {
-    struct hid_state *state;
+    struct hid_state *state = state_of(device);
     int i;
 
-    if (device <= 0 || device > USB_MAX_DEVICES) {
+    if (!state) {
         return;
     }
-    state = &states[device];
+    if (state->mode == HID_REPORT) {
+        hidinput_disconnect(state->hid);
+        free_tables(state->hid);
+    }
     input_keyboard_detach(&state->kb);
     evdev_unregister(state->mouse);
+    state->hid = 0;
     state->mouse = NULL;
-    state->keyboard = 0;
+    state->mode = 0;
+    state->offer = OFFER_NONE;
+    state->multiplier = 0;
     state->modifiers = 0;
     for (i = 0; i < KEYS_IN_REPORT; i++) {
         state->keys[i] = 0;

@@ -1,71 +1,96 @@
 /*
- * hid.h: the boot-protocol keyboard and mouse.
- *
- * A human-interface device describes its reports in a language of its own, and
- * a driver that reads that language is the largest part of a USB HID stack.
- * Every firmware skips it the same way this does: a keyboard and a mouse are
- * required to offer a boot protocol, whose two report layouts are fixed and
- * need no describing. A device that offers no boot protocol is refused, and
- * the Readme says so.
+ * hid.h: the USB HID class driver, which reads each device's report
+ * descriptor as Linux's usbhid and hid-generic do, and drives a keyboard or
+ * mouse whose descriptor it cannot read in the boot protocol.
  */
 #ifndef _USB_HID_H_
 #define _USB_HID_H_
 
 #include "../lib/kint.h"
 
-/** A device that reports as a boot keyboard. */
+/* A device in the boot protocol, by its interface's protocol. */
 #define HID_KEYBOARD 1
+#define HID_MOUSE    2
 
-/** A device that reports as a boot mouse. */
-#define HID_MOUSE 2
+/* What the core read of a device for the driver: its identity, bcdHID from
+ * its HID descriptor, and its manufacturer and product strings in UTF-8,
+ * empty when it has none. */
+struct hid_ids {
+    uint16_t vendor;
+    uint16_t product;
+    uint16_t version;
+    const char *manufacturer;
+    const char *product_name;
+};
 
 /**
- * Say that a device runs in the boot protocol, `device` numbered as for
- * `hid_report`: a keyboard is registered as the event device "USB keyboard
- * N", N being `device`, and a mouse as "USB HIDBP Mouse VVVV:PPPP", each
- * with its `vendor` and `product`. Nothing for a device registered
- * already.
+ * Take device `device`, the core's table entry plus one, 1 to
+ * USB_MAX_DEVICES, in the report protocol, with its report descriptor
+ * `rdesc` of `length` bytes, as Linux's usbhid and hid-generic take one:
+ * the descriptor is parsed (`hid_parse`), and each application of it that
+ * input handles becomes an event device named "MANUFACTURER PRODUCT", or
+ * "HID VVVV:PPPP" without strings (`hidinput_connect`). Returns 0; -EINVAL
+ * or -E2BIG for a descriptor refused, -ENOMEM when its tables cannot be
+ * had, and -ENODEV when it makes no input device, each logged; nothing is
+ * kept then, and the core may try the boot protocol.
  */
-void hid_attach(int device, int kind, uint16_t vendor, uint16_t product);
+int hid_attach(int device, const struct hid_ids *ids, const uint8_t *rdesc, int length);
 
 /**
- * Take one report from a device, in the USB pump.
+ * Take device `device`, numbered as for `hid_attach`, in the boot protocol,
+ * as Linux's usbkbd and usbmouse take one: `kind` HID_KEYBOARD is an event
+ * device of the keyboard's keys and HID_MOUSE one of five buttons, a wheel
+ * and its hi-res axis, each named "MANUFACTURER PRODUCT", or "USB HIDBP
+ * Keyboard VVVV:PPPP" or "USB HIDBP Mouse VVVV:PPPP" without strings.
+ * Nothing for a device taken already.
+ */
+void hid_attach_boot(int device, int kind, const struct hid_ids *ids);
+
+/**
+ * The bytes the core asks a report transfer of `device` for: its longest
+ * input report, with its ID byte, in the report protocol; 0 in the boot
+ * protocol or for a device not taken, for the core to ask for its
+ * endpoint's packet.
+ */
+int hid_report_size(int device);
+
+/**
+ * Take one report from `device`, numbered as for `hid_attach`, in the USB
+ * pump; `length` is how much arrived. In the report protocol it is read as
+ * Linux reads one (`hid_input_report`). In the boot protocol a keyboard's
+ * report goes to the input layer as the key events of the keys that went
+ * down or came up since its last report, and a mouse's as one packet of
+ * its buttons, movement and wheel (`mouse_report`); a boot report shorter
+ * than its layout is dropped. Any other `device` is ignored.
+ */
+void hid_report(int device, const uint8_t *report, int length);
+
+/**
+ * The next report the core is to send `device` with SET_REPORT on its
+ * control endpoint, built in `out` of `size` bytes, with the request's
+ * wValue, the report's type and ID, in `*value`. First a report that sets
+ * each Resolution Multiplier to its maximum, as Linux sends one when it
+ * connects a device; then the LEDs the input layer wants (`input_leds`),
+ * in the report of the device's LED field or a boot keyboard's one byte,
+ * when they differ from the report last sent. Returns the report's bytes,
+ * or -1 for none: nothing differs, the device has no LED, or its LED
+ * report failed since it was taken. Called from the USB stack's step.
+ */
+int hid_output_report(int device, uint8_t *out, int size, int *value);
+
+/**
+ * Say that the report `hid_output_report` gave last reached `device`, `ok`
+ * when the device took it. After an LED report fails the device is sent
+ * none until it is taken again; a failed multiplier report leaves its
+ * wheels as they were.
+ */
+void hid_output_sent(int device, int ok);
+
+/**
+ * Say that a device has gone, `device` numbered as for `hid_attach`.
  *
- * `device` is the core's table entry for the device plus one, 1 to
- * USB_MAX_DEVICES, so its previous report can be found; any other value is
- * ignored. `kind` is `HID_KEYBOARD` or `HID_MOUSE`, and `length` is how much
- * actually arrived. A keyboard's report goes to the input layer as the key
- * events of the keys that went down or came up since its last report; a
- * mouse's goes as one packet of its buttons, movement and wheel
- * (`mouse_report`). A report shorter than its
- * layout is dropped rather than read past.
- */
-void hid_report(int device, int kind, const uint8_t *report, int length);
-
-/**
- * The output report keyboard `device`, numbered as for `hid_report`, is to
- * be sent so that its LEDs show what the input layer wants (`input_leds`):
- * bit 0 Num Lock, bit 1 Caps Lock and bit 2 Scroll Lock, the boot
- * keyboard's layout. Returns the byte, or -1 when the keyboard shows it
- * already, has failed a report since it was attached, or is not an
- * attached keyboard. A keyboard just attached shows nothing known, so it is
- * sent the LEDs at once. Called from the USB stack's step.
- */
-int hid_led_report(int device);
-
-/**
- * Say that the output report `report` was sent to keyboard `device`, `ok`
- * when the keyboard took it. After a failure the keyboard is sent no report
- * until it is attached again.
- */
-void hid_led_sent(int device, int report, int ok);
-
-/**
- * Say that a device has gone, `device` numbered as for `hid_report`.
- *
- * Everything it was holding down is released, its repeat stops and its event
- * device is taken away (`input_keyboard_detach`, or a mouse's
- * `evdev_unregister`). Without this a key held
+ * Everything it was holding down is released, its repeat stops, its event
+ * devices are taken away and its tables freed. Without this a key held
  * while the keyboard is unplugged stays down for ever, because the release
  * that would have lifted it is on a device that is no longer there.
  */
