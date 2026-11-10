@@ -8466,6 +8466,132 @@ long sys_fstatfs64(isr_params_t *params)
     return ksys_fstatfs((int)SC_ARG(params, 0), (struct user_statfs __user *)SC_ARG(params, 2));
 }
 
+int ksys_ustat_counts(uint32_t dev, uint64_t *bfree, uint64_t *ffree)
+{
+    struct vfs_statfs vs;
+    int rc;
+    int i;
+
+    for (i = 0; i < vfs_mount_slots(); i++) {
+        struct vfs_mount *m = vfs_mount_at(i);
+
+        if (!m || vfs_mount_base(m) != m || procfs_mount_dev(i, m) != dev) {
+            continue;
+        }
+        *bfree = 0;
+        *ffree = 0;
+        if (mnt_is_root(m)) {
+            *bfree = krffs_free_bytes() / STATFS_BSIZE;
+            return 0;
+        }
+        if (!m->type->ops->statfs) {
+            return 0;
+        }
+        if (vfs_enter(m) != 0) {
+            continue;
+        }
+        rc = vfs_statfs(m, &vs);
+        vfs_leave(m);
+        if (rc != 0) {
+            return rc;
+        }
+        *bfree = vs.bfree;
+        *ffree = vs.ffree;
+        return 0;
+    }
+    return -EINVAL;
+}
+
+/* The struct ustat of the kernel's own ABI: 20 bytes on i686, 32 on x86-64,
+ * whose f_tinode is a long. */
+struct user_ustat {
+    int32_t f_tfree;
+    unsigned long f_tinode;
+    char f_fname[6];
+    char f_fpack[6];
+};
+
+/**
+ * ustat(2): the device number and the buffer. The free blocks and inodes
+ * of the file system on that device, truncated to the structure's fields
+ * as Linux truncates them, and empty names; -EINVAL for a device with no
+ * mounted file system (`ksys_ustat_counts`), -EFAULT for the buffer.
+ */
+long sys_ustat(isr_params_t *params)
+{
+    struct user_ustat u;
+    uint64_t bfree;
+    uint64_t ffree;
+    int rc = ksys_ustat_counts((uint32_t)SC_ARG(params, 0), &bfree, &ffree);
+
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(&u, 0, sizeof(u));
+    u.f_tfree = (int32_t)bfree;
+    u.f_tinode = (unsigned long)ffree;
+    return copy_to_user((void __user *)SC_ARG(params, 1), &u, sizeof(u)) != 0 ? -EFAULT : 0;
+}
+
+/* The longest type name sysfs(2) can match; a longer one matches none. */
+#define SYSFS_TYPE_NAME_MAX 31
+
+/**
+ * sysfs(2): option 1 gives the index of the type named by the string at
+ * the second argument, option 2 copies the name of the type whose index is
+ * the second argument into the buffer at the third, and option 3 gives the
+ * number of types, each in the order /proc/filesystems lists them
+ * (`procfs_filesystem_at`). -EINVAL for any other option, an unknown name
+ * or an index past the last; a name is read as a path is, so an empty one
+ * is -ENOENT and one with no NUL in 4096 bytes -ENAMETOOLONG. The index is
+ * an unsigned int, as Linux's `fs_name` takes it.
+ */
+long sys_sysfs(isr_params_t *params)
+{
+    char want[SYSFS_TYPE_NAME_MAX + 1];
+    const char *name;
+    int len;
+    int i;
+
+    switch ((int)SC_ARG(params, 0)) {
+    case 1:
+        len = strnlen_user((const char __user *)SC_ARG(params, 1), VFS_PATH_MAX);
+        if (len < 0) {
+            return len;
+        }
+        if (len == 0) {
+            return -ENOENT;
+        }
+        if (len > SYSFS_TYPE_NAME_MAX) {
+            return -EINVAL;
+        }
+        len = strncpy_from_user(want, (const char __user *)SC_ARG(params, 1), sizeof(want));
+        if (len < 0) {
+            return len == -ENAMETOOLONG ? -EINVAL : len;
+        }
+        for (i = 0; procfs_filesystem_at(i, &name) >= 0; i++) {
+            if (name_is(name, want)) {
+                return i;
+            }
+        }
+        return -EINVAL;
+    case 2:
+        if ((uint32_t)SC_ARG(params, 1) > 0x7FFFFFFFu ||
+            procfs_filesystem_at((int)SC_ARG(params, 1), &name) < 0) {
+            return -EINVAL;
+        }
+        return copy_to_user((void __user *)SC_ARG(params, 2), name, k_strlen(name) + 1) != 0
+                   ? -EFAULT
+                   : 0;
+    case 3:
+        for (i = 0; procfs_filesystem_at(i, &name) >= 0; i++) {
+        }
+        return i;
+    default:
+        return -EINVAL;
+    }
+}
+
 /**
  * Fill `kst`, which has the boot times, with the stat of the anonymous
  * descriptor `entry`, for `fstat_fill`: a message queue's is its file's, a

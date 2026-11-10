@@ -146,8 +146,10 @@
 #define SYS_SIGALTSTACK             131
 #define SYS_MKNOD                   133
 #define SYS_PERSONALITY             135
+#define SYS_USTAT                   136
 #define SYS_STATFS                  137
 #define SYS_FSTATFS                 138
+#define SYS_SYSFS                   139
 #define SYS_GETPRIORITY             140
 #define SYS_SETPRIORITY             141
 #define SYS_SCHED_SETPARAM          142

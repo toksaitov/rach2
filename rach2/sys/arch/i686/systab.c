@@ -150,6 +150,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_FSTAT64] = sys_fstat64;
     table[SYS_STATFS64] = sys_statfs64;
     table[SYS_FSTATFS64] = sys_fstatfs64;
+    table[SYS_USTAT] = sys_ustat;
+    table[SYS_SYSFS] = sys_sysfs;
     table[SYS_FSTATAT64] = sys_fstatat64;
     table[SYS_STATX] = sys_statx;
     table[SYS_NAME_TO_HANDLE_AT] = sys_name_to_handle_at;

@@ -204,6 +204,11 @@ struct vfs_mount;
  * 16 for any other mount. */
 uint32_t procfs_mount_dev(int i, const struct vfs_mount *m);
 
+/** The name of the `idx`-th file system type /proc/filesystems lists, in
+ * `*name`, which sysfs(2) numbers the types by: 1 when the type stands on
+ * no device, 0 when it does, or -1 past the last. */
+int procfs_filesystem_at(int idx, const char **name);
+
 /** The id /proc/PID/mountinfo gives the mount `m`, its entry's index plus
  * one, which statx reports as STATX_MNT_ID; 0 for NULL or a mount not in
  * the table. */

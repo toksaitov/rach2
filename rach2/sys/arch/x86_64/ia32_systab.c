@@ -234,7 +234,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_GETPGID] = sys_getpgid;
     table[SYS_FCHDIR] = sys_fchdir;
     table[SYS_BDFLUSH] = NULL;
-    table[SYS_SYSFS] = NULL;
+    table[SYS_SYSFS] = sys_sysfs;
     table[SYS_PERSONALITY] = sys_personality;
     table[SYS_AFS_SYSCALL] = NULL;
     table[SYS_SETFSUID] = sys_setfsuid16;
