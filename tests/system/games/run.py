@@ -90,6 +90,16 @@ def wait_for(path, pattern, proc):
         time.sleep(0.05)
 
 
+def show_logs(out):
+    """Print the last lines of each launcher, umu and container log in OUT,
+    which the guest keeps only until it powers off."""
+    for log in sorted(out.glob("*.log")):
+        if log.name.endswith(".proton.log"):
+            continue
+        for line in log.read_text(errors="replace").splitlines()[-40:]:
+            say("%s: %s" % (log.name, line))
+
+
 def mem_mib():
     """Return MemTotal of /proc/meminfo in MiB, as the launcher computes it."""
     for line in Path("/proc/meminfo").read_text().splitlines():
@@ -309,6 +319,13 @@ class Runner:
                     want.get(range_name) if want else None))
         return ok
 
+    @staticmethod
+    def steps(name, text):
+        """Print the launcher's and umu's own lines of the log text of NAME."""
+        for line in text.splitlines():
+            if re.match(r"(rach2-game:|INFO:|WARNING:|ERROR:|CRITICAL:)", line):
+                say("%s: %s" % (name, line))
+
     def options(self, name):
         """Return the Options set, fsync and renderer lines of NAME's Proton log."""
         path = self.out / (name + ".proton.log")
@@ -328,9 +345,11 @@ class Runner:
         self.umu = True
         self.make_prefix()
         first = (self.out / "prefix.log").read_text(errors="replace")
+        self.steps("prefix", first)
         unpacked = re.search(r"rach2-game: umu: unpacked the Steam Linux Runtime (\S+)", first)
         status, text = self.probe("d3d964", {"WINEDEBUG": "-all,err+all"})
         second = (self.out / "d3d964.log").read_text(errors="replace")
+        self.steps("d3d964", second)
         crc = re.search(r"pixels crc32 ([0-9a-f]{8})", text)
         adapter = re.search(r"^adapter: (.*)", text, re.M)
         cache = Path(self.env["XDG_CACHE_HOME"]) / "umu"
@@ -419,10 +438,14 @@ def main():
         if reference:
             Path(reference).write_text(json.dumps({row: results}, indent=2) + "\n")
         if not ok:
+            show_logs(out)
             say("result: %s differs; see %s" % (row, out))
             return 1
         print("GAMESROW OK %s" % row, flush=True)
         return 0
+    except BaseException:
+        show_logs(out)
+        raise
     finally:
         if runner is not None:
             runner.stop()
