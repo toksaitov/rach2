@@ -14,7 +14,7 @@ The guest is prepared once for each clone, and each run boots a new copy of it:
 
 `run` boots an overlay of the prepared image with 4 CPUs and 4096 MiB (`-c`, `-m`), forwards the guest's vtest port, 5555, from a free port on the host's loopback address over QEMU's user network, waits for the guest to report its server ready on the serial console, runs the command in sh on the host with `VTEST_HOST` and `VTEST_PORT` set to that address, stops the guest and removes the overlay. It exits with the command's status. The accelerator is KVM where `/dev/kvm` opens and TCG elsewhere, or what `ACCEL` names, as [`rach2/qemu_devices.sh`](../rach2/qemu_devices.sh) chooses for the graphics runs.
 
-`check` builds the relay and [`fixture/triangle.c`](fixture/triangle.c) into `build/bed` with `CC`, `CFLAGS` and `LDLIBS` (`-lEGL -lGLESv2` by default; the triangle needs the EGL and GLES 2 headers, Debian's and Ubuntu's `libegl-dev` and `libgles-dev`), draws the triangle on the host's llvmpipe, then boots the guest and draws it again with Mesa's `virpipe` through the relay, and passes when both pictures check and their checksums are equal.
+`check` builds the relay and [`fixture/triangle.c`](fixture/triangle.c) into `build/bed` with `CC`, `CFLAGS` and `LDLIBS` (`-ldl` by default; the triangle opens `libEGL.so.1` and takes every EGL and GLES function from its `eglGetProcAddress`, so it needs no development headers), draws the triangle on the host's llvmpipe, then boots the guest and draws it again with Mesa's `virpipe` through the relay, and passes when both pictures check and their checksums are equal.
 
 [vtestrelay(1)](../man/man1/vtestrelay.1) is the relay's manual.
 
