@@ -69,7 +69,9 @@ GNU_DEBIAN_LISTS = debian/mesa.list debian/desktop.list debian/browsers.list deb
 GNU_DEBIAN_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
                      vendor/gnu/debian/resolve_debs.py \
                      $(addprefix vendor/gnu/,$(GNU_DEBIAN_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
-GNU_PROTON_SOURCES = vendor/gnu/proton/fetch_proton.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+GNU_PROTON_SOURCES = vendor/gnu/proton/fetch_proton.sh vendor/gnu/proton/fetch_dinput.sh \
+                     vendor/gnu/proton/prepare_dinput.py vendor/gnu/proton/dinput-shutdown.patch \
+                     vendor/gnu/proton/sources.txt vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 GNU_VENUS_SOURCES = vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/debian/venus.list
 GNU_WEBGL_SOURCES = vendor/gnu/debian/fetch_webgl.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 
@@ -121,7 +123,7 @@ $(GNU_I386_STAMP): $(GNU_I386_SOURCES) | $(SHA256TOOL) $(ETUDE)
 
 $(GNU_PROTON_STAMP): $(GNU_PROTON_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
-	@$(GNU_ASSET_STEP) -n gnu-proton -t $@ $(STEP_INPUTS) -o proton \
+	+@$(GNU_ASSET_STEP) -c clang -n gnu-proton -t $@ $(STEP_INPUTS) -o proton \
 	    -- $(call GNU_STEP_RUN,vendor/gnu/proton/fetch_proton.sh)
 
 $(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
