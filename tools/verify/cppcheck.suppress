@@ -471,3 +471,7 @@ constVariable:*tests/auxvprobe.c
 # copy-on-write isolation are the subject of the check, not a constant
 # established by the preceding store that cppcheck propagates here.
 knownConditionTrueFalse:*tests/musl/privatefilemusl.c
+
+# The VMCB is the processor ABI: reserved bytes and disabled features still
+# occupy their specified offsets, even where C never names them after reset.
+unusedStructMember:*sys/kvm/svm.c
