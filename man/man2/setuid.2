@@ -114,8 +114,9 @@ The exception is a
 .Fn setresuid
 or
 .Fn setresgid
-that would change no ID: one whose every field is \-1 or the ID it
-already names, with an effective ID that equals the file-system one.
+that would change no ID: one whose every argument is \-1 or the ID
+already in its field, and whose effective ID, if given, equals the
+file-system one.
 It returns 0 at once, as on Linux, and changes nothing, the file-system
 ID, the dumpable flag and the parent-death signal included.
 .Pp
