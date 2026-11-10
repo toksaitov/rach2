@@ -652,12 +652,28 @@ static int vp_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint6
     return -ENOENT;
 }
 
-static const struct virtio_ops vp_ops = {"virtio-pci",    vp_get_status,   vp_set_status,
-                                         vp_get_features, vp_set_features, vp_config_generation,
-                                         vp_config_read,  vp_config_write, vp_queue_max,
-                                         vp_queue_enable, vp_notify,       vp_irq_setup,
-                                         vp_irq_start,    vp_irq_release,  vp_dma_alloc,
-                                         vp_dma_free,     vp_shm_region};
+static const struct virtio_ops vp_ops = {"virtio-pci",
+                                         vp_get_status,
+                                         vp_set_status,
+                                         vp_get_features,
+                                         vp_set_features,
+                                         vp_config_generation,
+                                         vp_config_read,
+                                         vp_config_write,
+                                         vp_queue_max,
+                                         vp_queue_enable,
+                                         vp_notify,
+                                         vp_irq_setup,
+                                         vp_irq_start,
+                                         vp_irq_release,
+                                         vp_dma_alloc,
+                                         vp_dma_free,
+                                         vp_shm_region,
+                                         NULL,
+                                         NULL,
+                                         NULL,
+                                         NULL,
+                                         NULL};
 
 /** The device type of virtio-pci function `p`, or 0 when it is none. */
 static uint16_t vp_type(const pci_device_t *p)

@@ -2000,6 +2000,11 @@ int32_t bochs_probe(void);
 int32_t fbdrm_probe(void);
 int32_t i915_probe(void);
 int32_t virtio_gpu_probe(void);
+struct virtio_dev;
+/** Bind virtio-gpu to `vdev`, a device of a transport other than virtio-pci,
+ * such as the shared-memory transport's (../virtio/shmem.c), once its device
+ * has answered; 0 or -errno. See virtio_gpu.c. */
+int32_t virtio_gpu_bind(struct virtio_dev *vdev);
 int32_t vkms_probe(void);
 int32_t vgem_probe(void);
 /** vkms's vblank timer, from the boot processor's tick with interrupts

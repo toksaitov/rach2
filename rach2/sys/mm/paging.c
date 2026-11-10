@@ -1326,6 +1326,31 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     return KVA_MMIO + first * PAGE_SIZE + (uintptr_t)(phys - start_page);
 }
 
+uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
+{
+    uintptr_t first, i, va;
+
+    if (count == 0 || count > MMIO_PAGES) {
+        klog(KLOG_ERR, "vm", "map_mmio: bad list of %lu frames", (unsigned long)count);
+        return 0;
+    }
+    first = mmio_find(count, 1, 0);
+    if (first >= MMIO_PAGES) {
+        klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
+             (unsigned long)count);
+        return 0;
+    }
+    mmio_mark(first, count, 1);
+    va = KVA_MMIO + first * PAGE_SIZE;
+    for (i = 0; i < count; i++) {
+        *kernel_pte(va + i * PAGE_SIZE) =
+            (pte_t)(frames[i] & ~(uintptr_t)(PAGE_SIZE - 1)) | PTE_P | PTE_W | PTE_NOEXEC | cache;
+    }
+    arch_space_load(arch_space_root());
+    smp_kernel_mapping_changed();
+    return va;
+}
+
 void mmio_unmap(uintptr_t va, size_t size)
 {
     uintptr_t lo = va & ~(uintptr_t)(PAGE_SIZE - 1);

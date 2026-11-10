@@ -1214,6 +1214,40 @@ int virtqueue_reap(struct virtqueue *vq)
     return deliver(mq(vq));
 }
 
+int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg, unsigned out,
+                         unsigned in)
+{
+    (void)vq;
+    (void)sg;
+    return out + in <= VIRTIO_GPU_CMD_SGS + 64u;
+}
+
+int virtio_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
+{
+    (void)d;
+    (void)sh;
+    (void)bytes;
+    return 0;
+}
+
+void virtio_backing_release(struct virtio_dev *d, struct shmem *sh)
+{
+    (void)d;
+    (void)sh;
+}
+
+int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
+{
+    (void)d;
+    *addr = (uint64_t)phys;
+    return 0;
+}
+
+void virtio_put(struct virtio_dev *d)
+{
+    (void)d;
+}
+
 int32_t virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues)
 {
     CHECK(nqueues == 2, "virtio-gpu has two queues");
@@ -1244,10 +1278,11 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     return 0;
 }
 
-void virtio_ready(struct virtio_dev *d)
+int virtio_ready(struct virtio_dev *d)
 {
     (void)d;
     gpu.ready = 1;
+    return 0;
 }
 
 void virtio_teardown(struct virtio_dev *d)

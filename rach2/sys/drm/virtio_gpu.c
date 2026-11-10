@@ -214,19 +214,28 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
     struct virtio_gpu_device *vg = cmd->vg;
     int q = cmd->vq == vg->ctrlq ? VIRTIO_GPU_QUEUE_CONTROL : VIRTIO_GPU_QUEUE_CURSOR;
     uint32_t flags;
-    int dead;
+    int dead, big;
 
     if (!cmd->response_size) {
         cmd->segments[cmd->nout].addr = cmd->addr + VIRTIO_GPU_RESP_OFF;
         cmd->segments[cmd->nout].len = PAGE_SIZE - VIRTIO_GPU_RESP_OFF;
+    }
+    big = !virtqueue_chain_fits(cmd->vq, cmd->segments, cmd->nout, cmd->nin);
+    if (big) {
+        klog(KLOG_WARN, "virtio_gpu", "command 0x%x: refused: %u segments do not fit one chain",
+             cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type, (unsigned)(cmd->nout + cmd->nin));
     }
     vgpu_cmd_prepare(cmd);
     flags = spin_lock_irqsave(&vg->lock);
     cmd->queued = 1;
     vg->commands++;
     dead = vg->dead;
-    if (dead) {
+    if (dead || big) {
         cmd->done = 1;
+        if (big) {
+            cmd->resp_type = VIRTIO_GPU_RESP_ERR_UNSPEC;
+            vg->errors++;
+        }
         if (!cmd->waited) {
             done_add(vg, cmd);
         }
@@ -241,8 +250,8 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
         pending_push(vg, q);
     }
     spin_unlock_irqrestore(&vg->lock, flags);
-    if (dead && cmd->fence) {
-        dma_fence_set_error(cmd->fence, -ENODEV);
+    if ((dead || big) && cmd->fence) {
+        dma_fence_set_error(cmd->fence, dead ? -ENODEV : -E2BIG);
         dma_fence_signal(cmd->fence);
     }
 }
@@ -659,24 +668,36 @@ static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint3
 
 /**
  * Follow the request of `cmd`, ATTACH_BACKING or CREATE_BLOB, with the
- * memory entries of `bo`'s pages, each page given now, runs of adjacent
- * frames as one entry, and set its segments; their count goes in *n. 0;
- * -ENOMEM, or -E2BIG for a chain of more segments than the queue takes.
+ * memory entries of `bo`'s pages, each page given now, from the memory the
+ * transport's device reaches where it has its own (`virtio_backing_fill`),
+ * runs of pages adjacent in the device's addresses as one entry, and set its
+ * segments; their count goes in *n. 0; -ENOMEM, -EINVAL for an imported
+ * page the device cannot reach, or -E2BIG for a chain of more segments than
+ * the queue takes.
  */
 int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_object *bo, uint32_t *n)
 {
     struct virtio_gpu_mem_entry *e = NULL;
     uint32_t pages = (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT), p, k, left;
     uint32_t req = cmd->sg[0].len, inl = VIRTIO_GPU_INLINE_ENTS(req);
+    struct virtio_dev *vdev = cmd->vg->vdev;
     uintptr_t phys;
+    uint64_t addr;
 
     *n = 0;
+    if (!bo->shmem.base.import && pages && !shmem_resident(&bo->shmem.pages, 0) &&
+        virtio_backing_fill(vdev, &bo->shmem.pages, bo->shmem.base.size) != 0) {
+        return -ENOMEM;
+    }
     for (p = 0; p < pages; p++) {
         phys = drm_gem_shmem_page(&bo->shmem, p);
         if (!phys) {
             return -ENOMEM;
         }
-        if (e && e->addr + e->length == (uint64_t)phys && e->length <= 0xFFFFFFFFu - PAGE_SIZE) {
+        if (virtio_dma_addr(vdev, phys, &addr) != 0) {
+            return -EINVAL;
+        }
+        if (e && e->addr + e->length == addr && e->length <= 0xFFFFFFFFu - PAGE_SIZE) {
             e->length += PAGE_SIZE;
             continue;
         }
@@ -684,7 +705,7 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
         if (!e) {
             return *n >= inl + VIRTIO_GPU_CMD_EXTRA * VIRTIO_GPU_PAGE_ENTS ? -E2BIG : -ENOMEM;
         }
-        e->addr = (uint64_t)phys;
+        e->addr = addr;
         e->length = PAGE_SIZE;
         e->padding = 0;
         (*n)++;
@@ -811,6 +832,16 @@ static uintptr_t obj_page(struct drm_gem_object *obj, uint32_t pgoff)
     return drm_gem_shmem_page(&((struct virtio_gpu_object *)obj)->shmem, pgoff);
 }
 
+/** Free an object's frames, after giving back to the transport what it
+ * gave for them (`virtio_backing_release`); the object stays, with none. */
+void vgpu_obj_pages_free(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    if (!bo->shmem.base.import) {
+        virtio_backing_release(vg->vdev, &bo->shmem.pages);
+    }
+    shmem_free(&bo->shmem.pages);
+}
+
 /** Free an object's frames, its piece of host-visible memory, its resource
  * id and its record. */
 static void obj_release(struct virtio_gpu_object *bo)
@@ -827,7 +858,7 @@ static void obj_release(struct virtio_gpu_object *bo)
     if (bo->res_id) {
         vgpu_res_id_put(to_vg(bo->shmem.base.dev), bo->res_id);
     }
-    shmem_free(&bo->shmem.pages);
+    vgpu_obj_pages_free(vg, bo);
     kfree(bo);
 }
 
@@ -1787,6 +1818,7 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     vg->dead = 1;
     spin_unlock_irqrestore(&vg->lock, flags);
     vg->vdev->config_changed = NULL;
+    vg->vdev->removed = NULL;
     virtio_teardown(vg->vdev);
     flags = spin_lock_irqsave(&vg->lock);
     vg->pending[0] = vg->pending[1] = NULL;
@@ -1819,7 +1851,7 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     }
     for (bo = vg->resources; bo; bo = bo->next) {
         bo->res_id = 0;
-        shmem_free(&bo->shmem.pages);
+        vgpu_obj_pages_free(vg, bo);
     }
     k_memset(vg->res_ids, 0, VIRTIO_GPU_MAX_RESOURCES / 8);
 }
@@ -1848,7 +1880,22 @@ static void vgpu_release(struct drm_device *dev)
     kfree(vg->outputs);
     kfree(vg->res_ids);
     kfree(vg->capsets);
+    virtio_put(vg->vdev);
     kfree(vg);
+}
+
+/** The transport's word that the device has gone for good, as when the VM
+ * that serves a shared-memory transport dies: the device is unplugged as a
+ * reset through debugfs unplugs it, every pending fence failing. Process
+ * context. */
+static void vgpu_removed(struct virtio_dev *vdev)
+{
+    struct virtio_gpu_device *vg = (struct virtio_gpu_device *)vdev->priv;
+
+    if (vg && !vg->drm.unplugged) {
+        klog(KLOG_WARN, "virtio_gpu", "%s: the device has gone", vdev->name);
+        drm_dev_unplug(&vg->drm);
+    }
 }
 
 /* What the driver says of itself: Linux's virtio_gpu, with its dumb buffers,
@@ -1914,6 +1961,7 @@ static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
     klog(KLOG_INFO, "virtio_gpu", "features: %ccontext_init", vg->has_context_init ? '+' : '-');
     vg->vdev->priv = vg;
     vg->vdev->config_changed = vgpu_config_changed;
+    vg->vdev->removed = vgpu_removed;
     rc = virtio_queue_setup(vg->vdev, VIRTIO_GPU_QUEUE_CONTROL, cmd_done, vg, &vg->ctrlq);
     if (rc == 0) {
         rc = virtio_queue_setup(vg->vdev, VIRTIO_GPU_QUEUE_CURSOR, cmd_done, vg, &vg->cursorq);
@@ -1925,22 +1973,55 @@ static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
 }
 
 /**
+ * Read the scanouts and capability sets the configuration gives and make
+ * the outputs; without a scanout, the device has no mode setting. 0, or
+ * -ENOMEM.
+ */
+static int32_t vgpu_config_init(struct virtio_gpu_device *vg)
+{
+    uint32_t n = 0;
+
+    virtio_config_read(vg->vdev, VIRTIO_GPU_CONFIG_NUM_SCANOUTS, &n, sizeof(n));
+    vg->num_scanouts = n < VIRTIO_GPU_MAX_SCANOUTS ? n : VIRTIO_GPU_MAX_SCANOUTS;
+    if (!vg->num_scanouts) {
+        klog(KLOG_INFO, "virtio_gpu", "KMS disabled");
+        vg->has_edid = 0;
+        vg->drm.features &= ~(DRIVER_MODESET | DRIVER_ATOMIC);
+    } else {
+        klog(KLOG_INFO, "virtio_gpu", "number of scanouts: %u", n);
+    }
+    virtio_config_read(vg->vdev, VIRTIO_GPU_CONFIG_NUM_CAPSETS, &vg->num_capsets,
+                       sizeof(vg->num_capsets));
+    klog(KLOG_INFO, "virtio_gpu", "number of cap sets: %u", vg->num_capsets);
+    if (vg->num_scanouts) {
+        vg->outputs = (struct virtio_gpu_output *)kzalloc(vg->num_scanouts *
+                                                          sizeof(struct virtio_gpu_output));
+        if (!vg->outputs) {
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+/**
  * Bind the virtio device `vdev`, Linux's virtio_gpu_probe and
  * virtio_gpu_init: the firmware's framebuffer removed under virtio-vga, the
  * features negotiated (EDID, virgl, resource UUIDs, blobs and context
  * initialization), the host-visible region found, both queues, the
  * display, DRIVER_OK, the EDIDs and the displays read, and the DRM device
- * registered. 0 or -errno, with the device reset.
+ * registered. 0 or -errno, with the device reset. The driver calls
+ * virtio_put once it is done with `vdev`: at once on an error, and at the
+ * device's release otherwise.
  */
-static int32_t vgpu_bind(struct virtio_dev *vdev)
+int32_t virtio_gpu_bind(struct virtio_dev *vdev)
 {
     struct virtio_gpu_device *vg;
     const pci_device_t *pci = virtio_pci_function(vdev);
-    uint32_t n = 0;
     int32_t rc;
 
     vg = (struct virtio_gpu_device *)kzalloc(sizeof(*vg));
     if (!vg) {
+        virtio_put(vdev);
         return -ENOMEM;
     }
     drm_dev_init(&vg->drm, &vgpu_driver);
@@ -1957,6 +2038,7 @@ static int32_t vgpu_bind(struct virtio_dev *vdev)
     vg->res_ids = (uint32_t *)kzalloc(VIRTIO_GPU_MAX_RESOURCES / 8);
     if (!vg->res_ids) {
         kfree(vg);
+        virtio_put(vdev);
         return -ENOMEM;
     }
     rc = virtio_init(vdev,
@@ -1968,6 +2050,7 @@ static int32_t vgpu_bind(struct virtio_dev *vdev)
     if (rc != 0) {
         kfree(vg->res_ids);
         kfree(vg);
+        virtio_put(vdev);
         return rc;
     }
     rc = vgpu_queues_init(vg);
@@ -1975,31 +2058,18 @@ static int32_t vgpu_bind(struct virtio_dev *vdev)
         goto fail;
     }
     vg->fence_context = dma_fence_context_alloc(1);
-    virtio_config_read(vdev, VIRTIO_GPU_CONFIG_NUM_SCANOUTS, &n, sizeof(n));
-    vg->num_scanouts = n < VIRTIO_GPU_MAX_SCANOUTS ? n : VIRTIO_GPU_MAX_SCANOUTS;
-    if (!vg->num_scanouts) {
-        klog(KLOG_INFO, "virtio_gpu", "KMS disabled");
-        vg->has_edid = 0;
-        vg->drm.features &= ~(DRIVER_MODESET | DRIVER_ATOMIC);
-    } else {
-        klog(KLOG_INFO, "virtio_gpu", "number of scanouts: %u", n);
-    }
-    virtio_config_read(vdev, VIRTIO_GPU_CONFIG_NUM_CAPSETS, &vg->num_capsets,
-                       sizeof(vg->num_capsets));
-    klog(KLOG_INFO, "virtio_gpu", "number of cap sets: %u", vg->num_capsets);
-    if (vg->num_scanouts) {
-        vg->outputs = (struct virtio_gpu_output *)kzalloc(vg->num_scanouts *
-                                                          sizeof(struct virtio_gpu_output));
-        if (!vg->outputs) {
-            rc = -ENOMEM;
-            goto fail;
-        }
+    rc = vgpu_config_init(vg);
+    if (rc != 0) {
+        goto fail;
     }
     rc = modeset_init(vg);
     if (rc != 0) {
         goto fail;
     }
-    virtio_ready(vdev);
+    rc = virtio_ready(vdev);
+    if (rc != 0) {
+        goto fail;
+    }
     rc = vgpu_capsets_read(vg);
     if (rc != 0) {
         goto fail;
@@ -2033,6 +2103,7 @@ fail:
     kfree(vg->res_ids);
     kfree(vg->capsets);
     kfree(vg);
+    virtio_put(vdev);
     return rc;
 }
 
@@ -2048,7 +2119,7 @@ int32_t virtio_gpu_probe(void)
             break;
         }
         if (rc == 0) {
-            rc = vgpu_bind(vdev);
+            rc = virtio_gpu_bind(vdev);
         }
         if (rc == 0) {
             bound++;
