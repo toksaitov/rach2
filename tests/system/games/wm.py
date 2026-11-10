@@ -57,7 +57,7 @@ ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 DISPLAY=
        "WINEDEBUG=-all,err+all; " % (WORK, WORK, WORK))
 # What the rebuilt Weston of vendor/gnu/games/weston prints for --version.
 REBUILT = ("(Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, "
-           "xwm-emulated-mode, xwm-mapped-managed)")
+           "xwm-emulated-mode, xwm-mapped-managed, pointer-constraint-view)")
 EV_SYN = 0
 EV_KEY = 1
 EV_REL = 2
