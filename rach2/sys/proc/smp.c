@@ -40,6 +40,10 @@ static volatile uint32_t kernel_gen;
 /* The processors online, the boot processor counted (`smp_cpu_count`). */
 static int cpus_online = 1;
 
+/* The shootdowns that interrupted a processor, and the interrupts they sent
+ * (`smp_tlb_count`); written under the big lock. */
+static uint32_t tlb_counts[2];
+
 /** Drop every translation of `cpu`, which has just taken the big lock, if a
  * kernel mapping changed since it last held it. */
 static void bkl_flush(struct percpu *cpu)
@@ -187,7 +191,9 @@ void smp_service(void)
         if (va == CPU_TLB_ALL) {
             arch_space_load(arch_space_root());
         } else {
-            arch_tlb_flush_page(va);
+            for (; va < cpu->tlb_end; va += PAGE_SIZE) {
+                arch_tlb_flush_page(va);
+            }
         }
         cpu->tlb_request = 0;
     }
@@ -226,10 +232,10 @@ void smp_kick(int cpu)
  * spares an idle processor a wake for each page that `fork` or `munmap`
  * changes in a process that last ran there.
  */
-void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
+void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
     int me = (int)arch_cpu_id();
-    int c;
+    int c, sent = 0;
 
     if (cpus_online < 2) {
         return;
@@ -244,9 +250,15 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
             other->space_stale = 1;
             continue;
         }
-        other->tlb_page = va;
+        other->tlb_page = start;
+        other->tlb_end = end;
         other->tlb_request = 1;
         platform_cpu_ipi(c);
+        sent++;
+    }
+    if (sent) {
+        tlb_counts[0]++;
+        tlb_counts[1] += (uint32_t)sent;
     }
     for (c = 0; c < NR_CPUS; c++) {
         while (cpu_table[c].tlb_request && cpu_table[c].online) {
@@ -254,6 +266,11 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
             arch_relax();
         }
     }
+}
+
+uint32_t smp_tlb_count(int which)
+{
+    return which == 0 || which == 1 ? tlb_counts[which] : 0;
 }
 
 void smp_space_release(const struct page_dir *dir)

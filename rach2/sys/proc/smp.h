@@ -78,13 +78,21 @@ void smp_ipi(void);
 void smp_kick(int cpu);
 
 /**
- * Drop the translation of the user page `va`, or every user translation
- * for CPU_TLB_ALL, on each other processor that translates through `dir`,
- * and wait until each has; a processor whose current thread has no address
- * space is marked to load `dir` again at its next switch instead. The
- * caller holds the big lock and has changed the page's entry.
+ * Drop the translations of the user pages [`start`, `end`), or every user
+ * translation when `start` is CPU_TLB_ALL, on each other processor that
+ * translates through `dir`, with one request to each, and wait until each
+ * has; a processor whose current thread has no address space is marked to
+ * load `dir` again at its next switch instead. The caller holds the big
+ * lock and has changed the pages' entries, and frees a frame they named
+ * only after this returns.
  */
-void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va);
+void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end);
+
+/** The shootdowns since boot that interrupted at least one processor, and
+ * the interrupts they sent, modulo 2^32, which `/proc/stat` gives as
+ * `tlb_shootdowns` and `tlb_shootdown_ipis`. `which` 0 is the first, 1 the
+ * second. */
+uint32_t smp_tlb_count(int which);
 
 /**
  * Note that a kernel mapping changed, after the caller dropped its own

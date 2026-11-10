@@ -1166,6 +1166,14 @@ list since boot, modulo 2^32.
 Untimed blocked threads are absent from the timer list.
 .It Li process_timer_passes
 Passes over the active timer list since boot, modulo 2^32.
+.It Li tlb_shootdowns , tlb_shootdown_ipis
+Requests since boot that had another processor drop user translations after
+a change of page table entries, and the interprocessor interrupts they sent,
+modulo 2^32.
+A request covers one page, a range of up to 33 pages, or every user
+translation, as Linux's
+.Va tlb_single_page_flush_ceiling
+has it; a page mapped where none was needs none.
 .It Li scheduler_picks , scheduler_steps
 Scheduler selection attempts and ready-list entries examined by local selection and
 stealing since boot, modulo 2^32.

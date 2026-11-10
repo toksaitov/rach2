@@ -1709,7 +1709,7 @@ void paging_flush_dir(const page_dir_t *dir, uintptr_t addr)
     if (dir == _curr_dir) {
         arch_tlb_flush_page(addr);
     }
-    smp_tlb_shootdown(dir, addr);
+    smp_tlb_shootdown(dir, addr, addr + PAGE_SIZE);
 }
 
 void frame_ref(uintptr_t phys)

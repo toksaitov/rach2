@@ -45,6 +45,7 @@
 #include "../proc/tgroup.h"
 #include "../proc/seccomp.h"
 #include "../proc/ns.h"
+#include "../proc/smp.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../io/poll.h"
@@ -2795,6 +2796,35 @@ static void procfs_wlan_refused(struct procfs_text *t)
     ap_u32(t, far);
 }
 
+/** The counts of the kernel's own work for `/proc/stat`, from
+ * `process_pid_steps` to `vdso_tsc`, each on a line of its own. */
+static void procfs_work_counts(struct procfs_text *t)
+{
+    ap_str(t, "process_pid_steps ");
+    ap_u32(t, proc_work_count(0));
+    ap_str(t, "\nprocess_uid_steps ");
+    ap_u32(t, proc_work_count(1));
+    ap_str(t, "\nprocess_timer_steps ");
+    ap_u32(t, proc_work_count(2));
+    ap_str(t, "\nprocess_timer_passes ");
+    ap_u32(t, proc_work_count(3));
+    ap_str(t, "\ntlb_shootdowns ");
+    ap_u32(t, smp_tlb_count(0));
+    ap_str(t, "\ntlb_shootdown_ipis ");
+    ap_u32(t, smp_tlb_count(1));
+    ap_str(t, "\nscheduler_picks ");
+    ap_u32(t, sched_work_count(0));
+    ap_str(t, "\nscheduler_steps ");
+    ap_u32(t, sched_work_count(1));
+    ap_str(t, "\nvm_gap_steps ");
+    ap_u32(t, vm_gap_steps());
+    ap_str(t, "\nclock_calls ");
+    ap_u32(t, clock_calls());
+    ap_str(t, "\nvdso_tsc ");
+    ap_u32(t, (uint32_t)vclock_running());
+    ap_ch(t, '\n');
+}
+
 /**
  * Render /proc/stat: the tick counters, the interrupt total, the boot epoch,
  * the process counts, and this kernel's own counters: the sleeps a signal
@@ -2868,25 +2898,7 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_str(t, "\nsleeps_interrupted ");
     ap_u32(t, process_sleeps_cut_short());
     ap_ch(t, '\n');
-    ap_str(t, "process_pid_steps ");
-    ap_u32(t, proc_work_count(0));
-    ap_str(t, "\nprocess_uid_steps ");
-    ap_u32(t, proc_work_count(1));
-    ap_str(t, "\nprocess_timer_steps ");
-    ap_u32(t, proc_work_count(2));
-    ap_str(t, "\nprocess_timer_passes ");
-    ap_u32(t, proc_work_count(3));
-    ap_str(t, "\nscheduler_picks ");
-    ap_u32(t, sched_work_count(0));
-    ap_str(t, "\nscheduler_steps ");
-    ap_u32(t, sched_work_count(1));
-    ap_str(t, "\nvm_gap_steps ");
-    ap_u32(t, vm_gap_steps());
-    ap_str(t, "\nclock_calls ");
-    ap_u32(t, clock_calls());
-    ap_str(t, "\nvdso_tsc ");
-    ap_u32(t, (uint32_t)vclock_running());
-    ap_ch(t, '\n');
+    procfs_work_counts(t);
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));
     ap_str(t, "\nlatency_disk_us ");

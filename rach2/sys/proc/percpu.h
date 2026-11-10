@@ -45,8 +45,9 @@ struct percpu {
     volatile int online;                        /* started, and taking work */
     volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
-    volatile unsigned int tlb_request;          /* drop `tlb_page`'s translation */
+    volatile unsigned int tlb_request;          /* drop the translations from `tlb_page` */
     volatile uintptr_t tlb_page;                /* a user page, or CPU_TLB_ALL */
+    volatile uintptr_t tlb_end;                 /* the end of the pages from `tlb_page` */
     volatile unsigned int stop_request;         /* stop for good */
     volatile unsigned int stopped;              /* it took the stop: no more writes */
     const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */

@@ -173,7 +173,7 @@ One lock covers the kernel. Every entry to it, a system call, a fault or an inte
 
 A request is a word in the target's record and an interprocessor interrupt that has it look (`smp_service`):
 
-* A shootdown (`smp_tlb_shootdown`): after a user page's entry changes, each other processor that translates through that page directory drops the page's translation, or every user translation, and the sender waits until each has cleared its word. A processor whose thread has no address space, an idle task or a kernel thread that kept the directory loaded, is not interrupted; the directory is marked stale there and loaded again at the switch to one of its threads.
+* A shootdown (`smp_tlb_shootdown`): after the entries of a range of user pages change, each other processor that translates through that page directory drops the range's translations, or every user translation, on one request, and the sender waits until each has cleared its word. `/proc/stat` counts the shootdowns that interrupted a processor as `tlb_shootdowns`, and the interrupts they sent as `tlb_shootdown_ipis`. A processor whose thread has no address space, an idle task or a kernel thread that kept the directory loaded, is not interrupted; the directory is marked stale there and loaded again at the switch to one of its threads.
 * A release (`smp_space_release`): before a directory that no thread uses is freed, each processor that still translates through it loads the kernel's.
 * A change of a kernel mapping (`smp_kernel_mapping_changed`) increments a count, and a processor whose count is behind drops all its translations when it next takes the big lock.
 * A stop (`smp_stop_others`), for a panic and a power off, is final. The sender waits up to a second for each processor to take it.

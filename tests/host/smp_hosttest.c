@@ -283,7 +283,7 @@ int main(void)
     place(2, DIR_A, &idle2);
     place(3, DIR_B, &user_b);
 
-    smp_tlb_shootdown(DIR_A, 0x400000u);
+    smp_tlb_shootdown(DIR_A, 0x400000u, 0x401000u);
     check(ipis[1] == 1 && ipi_page[1] == 0x400000u && !cpu_table[1].space_stale,
           "a processor that runs a thread of the directory is interrupted to drop the page");
     check(ipis[2] == 0 && cpu_table[2].space_stale,
