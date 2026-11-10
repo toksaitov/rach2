@@ -59,18 +59,24 @@ def log_size():
 def drm_output(offset):
     """Wait for the compositor started past `offset` to light an output on DRM.
 
-    Give its renderer, output name and current mode from Weston's log.
+    Give its renderer, output name and current mode from Weston's log. The
+    other services write the same log, so their lines may fall among the
+    output's modes; Weston's next line of its own, which begins with its
+    time, ends the list.
     """
     while True:
         text = log_from(offset)
         renderer = re.search(r"Using (Pixman|GL) renderer", text)
         if renderer is None and "Chosen EGL config details" in text:
             renderer = re.search(r"(GL)", "GL")
-        output = re.search(r"Output (\S+) \(crtc \d+\) video modes:\n((?:.*\n)*?)\S", text)
+        output = re.search(r"Output (\S+) \(crtc \d+\) video modes:\n", text)
         if renderer and output:
-            current = re.search(r"^\s*(\d+x\d+)@[\d.]+.*\bcurrent\b", output.group(2), re.M)
-            if current:
-                return renderer.group(1), output.group(1), current.group(1)
+            for line in text[output.end():].splitlines():
+                if re.match(r"\[\d\d:\d\d:\d\d\.\d+\]", line):
+                    break
+                current = re.match(r"\s+(\d+x\d+)@[\d.]+.*\bcurrent\b", line)
+                if current:
+                    return renderer.group(1), output.group(1), current.group(1)
         failed = re.search(r"fatal: .*|failed to create backend.*|Segmentation fault.*", text)
         assert failed is None, text[-4000:]
         time.sleep(0.2)
@@ -271,8 +277,11 @@ def cmd_browser(name):
         server.keys, server.clicks = "", 0
         url = "http://127.0.0.1:%d/" % server.server_address[1]
         if name == "chromium":
+            # A child of Chromium's that the browser has not reached in 15 s
+            # quits, and the network service's restart loses the first
+            # page's load; a loaded guest under TCG can take longer.
             line = ("exec chromium --ozone-platform=wayland --kiosk --no-first-run "
-                    "--enable-logging=stderr "
+                    "--enable-logging=stderr --ipc-connection-timeout=86400 "
                     "--user-data-dir=%s/profile %s" % (work, url))
         else:
             profile = Path(work) / "profile"
