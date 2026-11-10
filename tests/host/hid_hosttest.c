@@ -607,7 +607,9 @@ static void mouse_rows(void)
     CHECK("with a wheel in 120ths and the side buttons",
           mouse_caps == (MOUSE_WHEEL | MOUSE_HI_RES | MOUSE_SIDE));
     hid_attach_boot(3, 0, HID_MOUSE, &no_strings);
-    CHECK("a mouse attached again is not registered again", mouse_registrations == 1);
+    CHECK("a mouse attached again over a stale state has the old device taken away first",
+          mouse_registrations == 2 && mouse_unregistrations == 1);
+    mouse_unregistrations = 0;
 
     /* A USB report's Y is positive toward the user, as REL_Y is. */
     mouse[0] = 0x01;
@@ -681,6 +683,10 @@ static void two_interface_rows(void)
     wanted_leds = LED_NUM;
     CHECK("two: the LEDs go to the keyboard's interface",
           led_offer(4, &value) == 0x01 && hid_output_report(4, 1, consumer, 3, &value) == -1);
+    model_disconnects = 0;
+    CHECK("two: an interface attached again over a stale state disconnects that state first",
+          hid_attach(4, 1, &media1, rdesc, 4) == 0 && model_disconnects == 1 &&
+              hid_report_size(4, 1) == 8);
     CHECK("two: no interface past the room for them",
           hid_attach(4, USB_HID_INTERFACES, &media1, rdesc, 4) == -ENODEV &&
               hid_attach_boot(4, -1, HID_KEYBOARD, &keys0) == -ENODEV);

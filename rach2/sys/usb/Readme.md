@@ -184,9 +184,9 @@ The disk side's limits are in [`block/Readme.md`](../block/Readme.md).
 
 `tests/run host` runs these under AddressSanitizer and UndefinedBehaviorSanitizer; [`tests/host/Readme.md`](../../../tests/host/Readme.md) lists their rows:
 
-* `usb_hosttest.c`: the core without a controller, given descriptors no device would send in buffers of exactly their length, the endpoint quiesce over a controller stub, a HID interface's descriptor, a keyboard's LED report, and devices of two and three HID interfaces enumerated from their configuration to their running.
+* `usb_hosttest.c`: the core without a controller, given descriptors no device would send in buffers of exactly their length, the endpoint quiesce over a controller stub, a HID interface's descriptor, a keyboard's LED report and the control endpoint's recovery after an output report fails or times out, and devices of two, three and fifteen HID interfaces enumerated from their configuration to their running, or unplugged during the second interface's setup.
 * `xhci_hosttest.c`: the controller driver against a model controller reached through `struct xhci_io`, from discovery and the firmware handoff to commands, transfers, interrupts and the 32-bit address path.
-* `hid_hosttest.c`: boot reports in, key events out, the names, the protocol a device runs in, the order and retries of the output reports, and a keyboard whose consumer keys are its second interface.
+* `hid_hosttest.c`: boot reports in, key events out, the names, the protocol a device runs in, the order and retries of the output reports, an interface attached over a stale state, and a keyboard whose consumer keys are its second interface.
 * `hid_parse_hosttest.c`: the parser and the usage mapping, with QEMU's tablet, keyboard and mouse descriptors and made-up and malformed ones, checked against the capabilities and events Linux gives.
 * `hub_hosttest.c`: the core and the hub driver over a model of a tree of hubs.
 * `msc_hosttest.c`: the storage driver against a model stick that fails at any stage or is pulled.

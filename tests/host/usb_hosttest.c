@@ -1,8 +1,9 @@
 /*
  * usb_hosttest.c: the USB core, usb/core.c, with no controller: its walk of a
  * configuration's descriptors, the quiesce of an endpoint, the slot given
- * back, a keyboard's LED report, and a device of several HID interfaces
- * enumerated from its configuration to its running.
+ * back, a keyboard's LED report and the control endpoint's recovery after
+ * one fails, and a device of several HID interfaces, up to fifteen,
+ * enumerated from its configuration to its running or its unplugging.
  *
  * What a device says about itself arrives as a string of descriptors, each
  * giving its own length, and the walk has nothing but those lengths to go
@@ -673,10 +674,14 @@ void kfree(void *p)
     free(p);
 }
 
-/** Do nothing, as `hid_report` does. */
+/* The calls of `hid_gone`, and the device the last one named. */
+static int gone_count, gone_device;
+
+/** Count the call. */
 void hid_gone(int device)
 {
-    (void)device;
+    gone_device = device;
+    gone_count++;
 }
 
 /* The LED byte the rows have the HID driver offer, -1 for none, and the
@@ -1265,13 +1270,97 @@ static void control_done(struct usb_device_state *d, int status)
     d->have_control = 1;
 }
 
+/** Check the LED report's stall on `d`, whose report 0x05 is out: the
+ * halted control endpoint is reset and moved on before the next goes out. */
+static void leds_stall_rows(struct usb_device_state *d)
+{
+    control_done(d, USB_XFER_STALLED);
+    ring.ep_state = XHCI_EP_HALTED;
+    led_wanted = 0x01;
+    step_running(d);
+    CHECK("leds: a stall is a failure",
+          led_sent_count == 2 && led_sent_report == 0x05 && !led_sent_ok);
+    CHECK("leds: and the halted control endpoint is reset before another report goes out",
+          ring.count == 1 && ring.issued[0] == CMD_RESET && ring.endpoint[0] == 1 &&
+              ring.quiescing[1] && d->output_quiesce && ring.control_submits == 2);
+    step_running(d);
+    CHECK("leds: none goes out while the reset is awaited", ring.control_submits == 2);
+    ring.answer = 1;
+    step_running(d);
+    CHECK("leds: the reset's success moves the endpoint on",
+          ring.count == 2 && ring.issued[1] == CMD_DEQUEUE && ring.control_submits == 2);
+    ring.answer = 1;
+    step_running(d);
+    CHECK("leds: sent again once the endpoint is usable",
+          ring.retired_all == 1 && !d->output_quiesce && ring.control_submits == 3 &&
+              ring.data == 0x01);
+}
+
+/** Check the LED report on `d` that is never answered: its transfer is
+ * stopped and moved on before the next goes out, and a completion that
+ * comes meanwhile is told to nobody. */
+static void leds_timeout_rows(struct usb_device_state *d)
+{
+    core_ms += STEP_MS - 1;
+    step_running(d);
+    CHECK("leds: still out within STEP_MS", led_sent_count == 2 && ring.control_submits == 3);
+    core_ms += 1;
+    ring.ep_state = XHCI_EP_RUNNING;
+    led_wanted = 0x04;
+    step_running(d);
+    CHECK("leds: no completion in STEP_MS is a failure", led_sent_count == 3 && !led_sent_ok);
+    CHECK("leds: and the transfer is no longer out", d->output_out == 0 && d->output_quiesce);
+    step_running(d);
+    CHECK("leds: its transfer is stopped before another report reuses its buffer",
+          ring.count == 3 && ring.issued[2] == CMD_STOP && ring.endpoint[2] == 1 &&
+              ring.control_submits == 3);
+    control_done(d, USB_XFER_OK);
+    step_running(d);
+    CHECK("leds: a completion that comes meanwhile is told to nobody",
+          led_sent_count == 3 && ring.control_submits == 3);
+    ring.answer = 1;
+    step_running(d);
+    ring.answer = 1;
+    step_running(d);
+    CHECK("leds: the next report goes out once the endpoint is stopped and moved on",
+          ring.count == 4 && ring.issued[3] == CMD_DEQUEUE && ring.retired_all == 2 &&
+              ring.control_submits == 4 && ring.data == 0x04);
+    control_done(d, USB_XFER_OK);
+    led_wanted = -1;
+    step_running(d);
+    CHECK("leds: and its completion is told", led_sent_count == 4 && led_sent_ok);
+}
+
+/** Check that `d`, whose LED report 0x06 is out, fails when its control
+ * endpoint will not reset after that report stalls. */
+static void leds_unrecovered_rows(struct usb_device_state *d)
+{
+    int submits;
+
+    control_done(d, USB_XFER_STALLED);
+    ring.ep_state = XHCI_EP_HALTED;
+    led_wanted = -1;
+    step_running(d);
+    ring.answer = 1;
+    ring.status = USB_XFER_FAILED;
+    submits = ring.submits;
+    step_running(d);
+    CHECK("leds: a control endpoint that will not reset fails the device",
+          d->state == ST_CLOSING && !d->output_quiesce && ring.submits == submits);
+    ring.status = USB_XFER_OK;
+}
+
 /**
  * Check a running keyboard's LED report: SET_REPORT of the Output report to
  * its interface, a one-byte OUT data stage with the byte the HID driver
  * offers, one at a time, its outcome told to the HID driver on its
  * completion, as a failure on a stall and after STEP_MS with none, offered
  * again while the control endpoint refuses transfers, and asked of a
- * mouse's driver too.
+ * mouse's driver too. After a stall the halted control endpoint is reset,
+ * and after a report never answered its transfer is stopped, each moved on
+ * past what was queued, before another report goes out; a completion that
+ * comes meanwhile is told to nobody, and an endpoint that will not recover
+ * fails the device.
  */
 static void leds_rows(void)
 {
@@ -1305,31 +1394,18 @@ static void leds_rows(void)
     led_wanted = 0x05;
     step_running(d);
     CHECK("leds: a change is sent", ring.control_submits == 2 && ring.data == 0x05);
-    control_done(d, USB_XFER_STALLED);
-    led_wanted = -1;
-    step_running(d);
-    CHECK("leds: a stall is a failure",
-          led_sent_count == 2 && led_sent_report == 0x05 && !led_sent_ok);
+    leds_stall_rows(d);
+    leds_timeout_rows(d);
 
-    led_wanted = 0x01;
-    step_running(d);
-    CHECK("leds: sent again", ring.control_submits == 3 && ring.data == 0x01);
-    core_ms += STEP_MS - 1;
-    step_running(d);
-    CHECK("leds: still out within STEP_MS", led_sent_count == 2 && ring.control_submits == 3);
-    core_ms += 1;
-    led_wanted = -1;
-    step_running(d);
-    CHECK("leds: no completion in STEP_MS is a failure", led_sent_count == 3 && !led_sent_ok);
-    CHECK("leds: and the transfer is no longer out", d->output_out == 0);
-
-    led_wanted = 0x04;
+    led_wanted = 0x06;
     ring.quiescing[1] = 1;
     step_running(d);
-    CHECK("leds: a refused transfer is not out", d->output_out == 0 && led_sent_count == 3);
+    CHECK("leds: a refused transfer is not out", d->output_out == 0 && led_sent_count == 4);
     ring.quiescing[1] = 0;
     step_running(d);
-    CHECK("leds: and is tried at the next step", ring.control_submits == 4 && ring.data == 0x04);
+    CHECK("leds: and is tried at the next step", ring.control_submits == 5 && ring.data == 0x06);
+
+    leds_unrecovered_rows(d);
 
     usb_core_reset();
     ring_reset();
@@ -1345,11 +1421,14 @@ static void leds_rows(void)
 /**
  * Check a device whose reports pass 64 bytes: its input reports are asked
  * for and handed on whole, in a buffer of its longest report, as usbhid
- * sizes its buffer, and an output report of 100 bytes goes out whole.
+ * sizes its buffer, and an output report of 100 bytes goes out whole. A
+ * long output report never answered keeps its buffer until its transfer is
+ * stopped, and only then is the buffer given back for a longer one.
  */
 static void long_report_rows(void)
 {
     struct usb_device_state *d;
+    uint8_t *held;
 
     usb_core_reset();
     ring_reset();
@@ -1379,6 +1458,23 @@ static void long_report_rows(void)
     CHECK("long: and one of 5000 bytes, from a buffer of its length",
           ring.control_submits == 2 && ring.length == 5000 && ring.data == 0x09 && d->long_output &&
               d->long_output_cap == 5000);
+    held = d->long_output;
+    core_ms += STEP_MS;
+    ring.ep_state = XHCI_EP_RUNNING;
+    led_wanted = 0x0A;
+    led_length = 6000;
+    step_running(d);
+    step_running(d);
+    CHECK("long: one never answered keeps its buffer while its transfer is stopped",
+          d->long_output == held && d->long_output_cap == 5000 && ring.control_submits == 2 &&
+              ring.pending && ring.issued[0] == CMD_STOP);
+    ring.answer = 1;
+    step_running(d);
+    ring.answer = 1;
+    step_running(d);
+    CHECK("long: and a longer one goes out only after",
+          ring.control_submits == 3 && ring.length == 6000 && ring.data == 0x0A &&
+              d->long_output_cap == 6000);
     led_wanted = -1;
     led_length = 1;
     report_size_model = 0;
@@ -1469,6 +1565,10 @@ static int walk_all(const unsigned char *bytes, int length, struct usb_interface
     return kept;
 }
 
+/* The place of the interface whose setup `enumerate` stops at, once that
+ * setup has begun; -1 to go on to the end. */
+static int enumerate_stop_if = -1;
+
 /**
  * Enumerate the configuration `config` of `length` bytes on entry 0, from
  * its whole configuration read to its running or its failure, in at most
@@ -1501,7 +1601,8 @@ static struct usb_device_state *enumerate(const unsigned char *config, int lengt
     enumerating[0] = 0;
     d->control.residual = 0;
     control_done(d, USB_XFER_OK);
-    for (n = 0; n < 200 && d->state != ST_RUNNING && d->state != ST_CLOSING && d->state != ST_FREE;
+    for (n = 0; n < 200 && d->state != ST_RUNNING && d->state != ST_CLOSING &&
+                d->state != ST_FREE && !(d->state == ST_HIDSETUP && d->hid_if == enumerate_stop_if);
          n++) {
         if (ring.pending) {
             ring.answer = 1;
@@ -1551,6 +1652,53 @@ static void multi_walk_rows(void)
           walk_all(three_config, (int)sizeof(three_config), info, 2) == 2 && info[1].number == 1);
     CHECK("multi: the first alone with room for one",
           walk_all(two_config, (int)sizeof(two_config), info, 1) == 1 && info[0].number == 0);
+}
+
+/**
+ * Check on `d`, the running keyboard of `two_config` whose second interface
+ * was sent a report last, that one interface's stalled output report has
+ * the control endpoint every interface shares reset before the other's
+ * goes out, and that a report endpoint halting meanwhile waits for that
+ * reset; `completion` is a report completion on the second interface's
+ * endpoint.
+ */
+static void multi_shared_rows(struct usb_device_state *d, struct usb_completion *completion)
+{
+    led_wanted = 0x02;
+    step_running(d);
+    CHECK("multi: another output report to the second interface",
+          d->output_out && d->output_if == 1);
+    control_done(d, USB_XFER_STALLED);
+    ring.ep_state = XHCI_EP_HALTED;
+    led_iface = 0;
+    step_running(d);
+    CHECK("multi: its stall resets the control endpoint every interface shares",
+          d->output_quiesce && !d->output_out && ring.pending);
+    ring.answer = 1;
+    step_running(d);
+    ring.answer = 1;
+    step_running(d);
+    CHECK("multi: after which the first interface's report goes out",
+          !d->output_quiesce && d->output_out && d->output_if == 0 && ring.setup[4] == 0);
+
+    control_done(d, USB_XFER_STALLED);
+    ring.ep_state = XHCI_EP_HALTED;
+    led_wanted = -1;
+    step_running(d);
+    completion->status = USB_XFER_FAILED;
+    report_route(d->hid, completion);
+    step_running(d);
+    CHECK("multi: a report endpoint that halts meanwhile waits for the control endpoint",
+          d->state == ST_HALTED && d->hid_if == 1 && d->output_quiesce && d->quiesce_dci == 1);
+    ring.answer = 1;
+    step_device(d);
+    ring.answer = 1;
+    step_device(d);
+    CHECK("multi: whose recovery ends first, and then the report endpoint's begins",
+          !d->output_quiesce && d->quiesce_dci == 5 && d->quiesce_stage != 0);
+    ring.answer = 1;
+    step_device(d);
+    CHECK("multi: after which the device runs again", d->state == ST_RUNNING);
 }
 
 /**
@@ -1608,6 +1756,8 @@ static void multi_two_rows(void)
     step_running(d);
     CHECK("multi: and its completion is told to that interface",
           led_sent_iface == 1 && led_sent_ok && !d->output_out);
+
+    multi_shared_rows(d, &completion);
     led_iface = -1;
     usb_core_reset();
 }
@@ -1649,6 +1799,110 @@ static void multi_three_rows(void)
 }
 
 /**
+ * Check a device of two HID interfaces unplugged after its first interface
+ * was taken and while its second is being set up: the HID driver hears that
+ * it went, so the first interface's event devices and state go with it; and
+ * a device whose first interface is given up, whose /sys row names the
+ * second.
+ */
+static void multi_gone_rows(void)
+{
+    struct usb_sys_row row;
+    struct usb_device_state *d;
+    unsigned char first_off[sizeof(two_config)];
+    unsigned i;
+
+    enumerate_stop_if = 1;
+    d = enumerate(two_config, (int)sizeof(two_config), -1);
+    enumerate_stop_if = -1;
+    CHECK("multi: the first interface is taken before the second's setup ends",
+          d->state == ST_HIDSETUP && d->hid_if == 1 && attached == 1);
+    gone_count = 0;
+    gone_device = 0;
+    device_gone(0);
+    CHECK("multi: a device gone during its second interface's setup is told to the HID driver",
+          gone_count == 1 && gone_device == 1 && d->state == ST_CLOSING);
+    usb_core_reset();
+
+    for (i = 0; i < sizeof(first_off); i++) {
+        first_off[i] = two_config[i];
+    }
+    first_off[15] = 0; /* interface 0 with no boot protocol */
+    first_off[16] = 0;
+    d = enumerate(first_off, (int)sizeof(first_off), 0);
+    CHECK("multi: a device whose first interface is given up runs on its second",
+          d->state == ST_RUNNING && !d->hid->at[0].live && d->hid->at[1].live);
+    CHECK("multi: and /sys names the second as its first",
+          usb_core_row(0, &row) == 0 && row.ifnum == 1);
+    usb_core_reset();
+}
+
+/**
+ * Write in `out` a configuration of sixteen HID interfaces, numbered 0 to
+ * 15, each with a report descriptor of 25 bytes and an interrupt IN
+ * endpoint: 1 to 15 for the first fifteen, and 1 again for the last, which
+ * no configuration may have. Return its length.
+ */
+static int full_config(unsigned char *out)
+{
+    static const unsigned char iface[9] = {9, 4, 0, 0, 1, 3, 0, 0, 0};
+    static const unsigned char hid[9] = {9, 33, 0x11, 1, 0, 1, 34, 25, 0};
+    static const unsigned char ep[7] = {7, 5, 0x81, 3, 8, 0, 10};
+    int at = 9, k, i;
+
+    for (k = 0; k < 16; k++) {
+        for (i = 0; i < 9; i++) {
+            out[at + i] = iface[i];
+            out[at + 9 + i] = hid[i];
+        }
+        out[at + 2] = (unsigned char)k;
+        at += 18;
+        for (i = 0; i < 7; i++) {
+            out[at + i] = ep[i];
+        }
+        out[at + 2] = (unsigned char)(0x81 + (k < 15 ? k : 0));
+        at += 7;
+    }
+    out[0] = 9;
+    out[1] = 2;
+    out[2] = (unsigned char)(at & 0xFF);
+    out[3] = (unsigned char)(at >> 8);
+    out[4] = 16;
+    out[5] = 1;
+    out[6] = 0;
+    out[7] = 0xA0;
+    out[8] = 50;
+    return at;
+}
+
+/**
+ * Check a device of every HID interface a configuration can have: fifteen,
+ * one on each IN endpoint, each kept, opened, set up and driven, and a
+ * sixteenth on an endpoint another has passed over, as Linux drops it.
+ */
+static void multi_full_rows(void)
+{
+    unsigned char config[9 + 16 * 25];
+    struct usb_interface_info info[USB_HID_INTERFACES + 1];
+    struct usb_device_state *d;
+    uint32_t want = 0;
+    int length = full_config(config);
+    int k;
+
+    CHECK("multi: fifteen HID interfaces are kept, and one on a repeated endpoint is not",
+          walk_all(config, length, info, USB_HID_INTERFACES + 1) == 15 && info[14].number == 14 &&
+              info[14].ep_number == 15);
+    d = enumerate(config, length, -1);
+    for (k = 1; k <= 15; k++) {
+        want |= 1u << (2 * k + 1);
+    }
+    CHECK("multi: a device of fifteen runs with each one driven",
+          d->state == ST_RUNNING && d->hid->count == 15 && attached == 0x7FFFu &&
+              ring.opened == want && requested(request(6, 0x22, 14)));
+    usb_core_reset();
+}
+
+/**
  * Run the rows and print the result; return 1 when a row failed.
  *
  * The walk is given a boot keyboard's configuration, then copies with a
@@ -1672,6 +1926,8 @@ int main(void)
     multi_walk_rows();
     multi_two_rows();
     multi_three_rows();
+    multi_gone_rows();
+    multi_full_rows();
 
     /* A configuration as a device sends it. */
     walk(keyboard_config, (int)sizeof(keyboard_config), &info);
