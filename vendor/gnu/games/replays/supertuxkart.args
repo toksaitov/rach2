@@ -1,0 +1,10 @@
+# SuperTuxKart's profile race, its benchmark: four AI karts drive two laps of
+# the lighthouse track at intermediate difficulty from a fixed random seed,
+# and the game ends itself at the race's end with its profile summary, which
+# the verbose log level prints. Blank-separated words, read by games.sh.
+--profile-laps=2
+--track=lighthouse
+--numkarts=4
+--difficulty=1
+--seed=1
+--log=1

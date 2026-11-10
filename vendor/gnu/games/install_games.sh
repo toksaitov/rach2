@@ -10,8 +10,8 @@
 # account for, refusing a file the root already has; then it refuses the root
 # when a library that a program or library of the layer needs is in none of
 # the root's library directories, since nothing resolved the layer's
-# libraries against the root. On x86-64 it adds the Proton launcher, and on
-# a root with /usr/games it puts that directory on the path.
+# libraries against the root. On x86-64 it adds the Proton launcher and the
+# native games' replays, and on a root with /usr/games puts it on the path.
 #
 
 install_debian games
@@ -53,4 +53,13 @@ if [ "$RACH2_ARCH" = x86_64 ]; then
         exit 1
     fi
     install -m 0755 "$DIR/games/rach2-game.sh" "$TREE/usr/bin/rach2-game"
+    # The native games' fixed replays, which the games-native suite and the
+    # Lenovo's runs play.
+    if [ -e "$TREE/usr/share/games/rach2" ] || [ -L "$TREE/usr/share/games/rach2" ]; then
+        echo 'gnu: games: /usr/share/games/rach2 already exists' >&2
+        exit 1
+    fi
+    mkdir -p "$TREE/usr/share/games/rach2"
+    cp -R "$DIR/games/replays" "$TREE/usr/share/games/rach2/replays"
+    chmod -R u=rwX,go=rX "$TREE/usr/share/games/rach2"
 fi

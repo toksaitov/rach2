@@ -50,9 +50,11 @@ GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
                    $(GNU_JS_STAMP) $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP) \
                    $(GNU_VENUS_STAMP) $(GNU_VA_STAMP) $(GNU_GAMES_STAMP) $(if $(GNU_I386_ON),$(GNU_I386_STAMP)) \
                    $(if $(filter x86_64,$(ARCH)),$(GNU_KVM_STAMP))
+# The native games' replays, which install_games.sh copies into the root.
+GNU_GAMES_REPLAYS = $(shell find vendor/gnu/games/replays -type f 2>/dev/null)
 GNU_IMAGE_DEPS = mk/gnu-image.mk $(GNU_I386_OPTION) $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
-                 $(wildcard vendor/gnu/desktop/*) $(wildcard vendor/gnu/games/*.sh) vendor/gnu/kvm/install_kvm.sh \
+                 $(wildcard vendor/gnu/desktop/*) $(wildcard vendor/gnu/games/*.sh) $(GNU_GAMES_REPLAYS) vendor/gnu/kvm/install_kvm.sh \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
 # LOGINS names a directory of logins laid out from the machine's root, as
