@@ -688,29 +688,41 @@ static int32_t run_enter(struct kvm_vcpu *v)
 }
 
 /**
- * KVM_RUN's loop, as Linux's kvm_arch_vcpu_ioctl_run and vcpu_run: give
- * the backend the answer to the last exit's read, take CR8 from the run
- * page with no local APIC in the kernel, end at once under immediate_exit,
- * then enter until an exit the caller answers, a signal, or a request to
- * leave. With the local APIC in the kernel, `kvm_lapic_prepare` readies
- * each entry, and an exit the kernel took ends the call when the caller
- * asked for an interrupt window and may inject now. Before each entry the
- * loop takes a switch the tick asked for at a slice's end
- * (`sched_take_preempt`), as Linux's xfer_to_guest_mode_handle_work takes
- * TIF_NEED_RESCHED, since an exit the kernel answers never reaches the
- * system call's exit, where that switch is otherwise taken: without it a
- * guest that keeps the kernel busy keeps every other thread off its
- * processor. It takes no other, as `sched_service_point` would whenever a
- * thread is queued: a guest exits thousands of times a second, and giving
- * the processor away at each exit cost the vCPU up to a slice each time.
- * Returns 0 with `exit_reason` set, -EINTR with it KVM_EXIT_INTR for a
- * signal or a kick, or -errno.
+ * Finish the instruction an answered read left under way, as Linux's
+ * complete_userspace_io runs it before any event is chosen: while
+ * `v->emul.resume` is set the backend's `exit` takes the instruction's
+ * next step with no guest entered, and an exit the kernel takes is
+ * answered here. 1 when an exit goes to the caller, with the run page
+ * filled, 0 when the instruction is done, or -errno.
  */
-static int32_t run_loop(struct kvm_vcpu *v)
+static int32_t run_resume(struct kvm_vcpu *v)
+{
+    int32_t r;
+
+    while (v->emul.resume && kvm_backend->exit) {
+        r = kvm_backend->exit(v);
+        if (r != 0) {
+            return r;
+        }
+        r = run_exit(v);
+        if (r != 0) {
+            return r;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Begin KVM_RUN: take CR8 from the run page with no local APIC in the
+ * kernel, give the backend the answer to the last exit's read and finish
+ * the instruction it was for, then end at once under immediate_exit, as
+ * Linux's kvm_arch_vcpu_ioctl_run tests it only after
+ * complete_userspace_io. 1 to enter the guest, or what KVM_RUN returns:
+ * 0 with `exit_reason` set, -EINTR, or -errno.
+ */
+static int32_t run_begin(struct kvm_vcpu *v)
 {
     struct kvm_run *run = v->run;
-    int in_kernel = v->vm->irqchip != KVM_IRQCHIP_NONE;
-    uint32_t flags;
     int32_t r;
 
     if (v->vm->irqchip == KVM_IRQCHIP_NONE && run->cr8 != v->sregs.cr8) {
@@ -724,8 +736,40 @@ static int32_t run_loop(struct kvm_vcpu *v)
         run_complete(v);
     }
     kvm_hv_complete(v);
-    if (run->immediate_exit) {
-        return -EINTR;
+    r = run_resume(v);
+    if (r != 0) {
+        return r > 0 ? 0 : r;
+    }
+    return run->immediate_exit ? -EINTR : 1;
+}
+
+/**
+ * KVM_RUN's loop, as Linux's kvm_arch_vcpu_ioctl_run and vcpu_run: begin
+ * with `run_begin`, then enter until an exit the caller answers, a signal,
+ * or a request to leave. With the local APIC in the kernel,
+ * `kvm_lapic_prepare` readies each entry, and an exit the kernel took ends
+ * the call when the caller asked for an interrupt window and may inject
+ * now. Before each entry the loop takes a switch the tick asked for at a
+ * slice's end (`sched_take_preempt`), as Linux's
+ * xfer_to_guest_mode_handle_work takes TIF_NEED_RESCHED, since an exit the
+ * kernel answers never reaches the system call's exit, where that switch
+ * is otherwise taken: without it a guest that keeps the kernel busy keeps
+ * every other thread off its processor. It takes no other, as
+ * `sched_service_point` would whenever a thread is queued: a guest exits
+ * thousands of times a second, and giving the processor away at each exit
+ * cost the vCPU up to a slice each time. Returns 0 with `exit_reason` set,
+ * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
+ */
+static int32_t run_loop(struct kvm_vcpu *v)
+{
+    struct kvm_run *run = v->run;
+    int in_kernel = v->vm->irqchip != KVM_IRQCHIP_NONE;
+    uint32_t flags;
+    int32_t r;
+
+    r = run_begin(v);
+    if (r != 1) {
+        return r;
     }
     for (;;) {
         flags = kirq_save();
@@ -774,6 +818,10 @@ static int32_t run_loop(struct kvm_vcpu *v)
             return r;
         }
         r = run_exit(v);
+        if (r == 0) {
+            /* A read a device in the kernel answered. */
+            r = run_resume(v);
+        }
         if (r != 0) {
             return r > 0 ? 0 : r;
         }
