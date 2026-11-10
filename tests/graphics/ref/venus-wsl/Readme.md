@@ -19,6 +19,12 @@ The run that took `vulkaninfo/`, from the top of the tree, with the outputs then
 
 * `deqp/smoke/` and `deqp/fraction/`, taken on 2026-11-10, are `debian.sh deqp`'s output for VK-GL-CTS 1.4.1.1's `deqp-vk` on Venus's ICD alone ([Venus's dEQP](../../Readme.md#venuss-deqp)): `smoke` the 9 cases of `deqp-vk-venus-smoke.txt`, all `Pass`, and `fraction` the 96,037 cases of `deqp-vk-lavapipe.txt.gz` whole, 37,012 `Pass`, 59,004 `NotSupported`, 15 `Crash` and 6 `Timeout`, 8 of the crashes and timeouts passing when run again, in 3009 s with 4 processes. Each has `results.csv.gz`, `flakes.out`, `summary.out`, `vulkaninfo.out`, `record.out`, the runner's `record`, and `log.out`, the command's output with QEMU's and the render server's lines.
 * `lost/`, taken on 2026-11-10, is `venus-lost.sh` with the host's render server killed under its four processes: `lost.out` the lines the case compares, each process ended by SIGABRT and `vulkaninfo` failing with VK_ERROR_OUT_OF_HOST_MEMORY; `deqp-N.out` each process's output; `vulkaninfo.out` vulkaninfo's; `kill.out` the host's kill, the server and the four processes it forked, one for each context; `record.out` the run's record; and `log.out` the command's output with QEMU's lines.
+* Rates, taken on 2026-11-10, each run in the same QEMU profile with 8 CPUs, 8 GiB, KVM and 4 dEQP processes, as each run's summary line gives them; the suite records rates and judges none, and only their ratio means anything, since the host runs other work beside them:
+
+| Cases | Debian guest | Rach2 | Rach2's rate of Linux's |
+| --- | --- | --- | --- |
+| part 1 of 8 of the fraction, 12,005 | 401 s, host load 15 | 512 s, host load 11 to 32; 513 s and 536 s in earlier runs | 0.78 |
+| every 500th case, 193 | 11 s | 17 s and 45 s in two runs | too short a run to say |
 
 The runs that took them, from the top of the tree, with each output's files then named as here:
 
@@ -37,6 +43,8 @@ and for `lost/`, with `cts.tar.gz` VK-GL-CTS 1.4.1.1 of the GNU layer's build, `
          sh /tmp/venus-lost.sh start -l /tmp/deqp-vk-lavapipe.txt.gz -o /tmp/out &&
          echo devlost-go | sudo tee /dev/ttyS0 > /dev/null &&
          sh /tmp/venus-lost.sh after -o /tmp/out && tar -czf /tmp/lost.tar.gz -C /tmp/out .'
+
+The rates' Debian runs are the fraction's command with `-e 8 -s 1` and with `-e 500`, and Rach2's are its cases, as `RACH2_QEMU_ACCEL=kvm ARCH=x86_64 RACH2_CASES=machine.venus.fraction-1 tests/run venus` and the same with `machine.venus.sample`, whose summary lines the run's log has.
 
 vkcube's timings on Venus are stored here by the task that runs them on Rach2, and the Direct3D results in `../d3d-venus-wsl/`, each taken on this guest.
 
