@@ -1,0 +1,48 @@
+The software run of Crysis on the Lenovo, 2026-11-10 23:52 to 2026-11-11
+00:00 UTC+6. Kernel 2cdc3b3b (94830e6b9), the trial root 2961387c, 64-bit
+Crysis, Direct3D 9 through WineD3D on llvmpipe, four threads, Xvfb at
+640x480x24, the PulseAudio null sink.
+
+Game.log:
+*LOADING: Level island loading time: 45.36 seconds
+System:Quit
+
+Frames read from the X root window, with the game's own counters:
+frame time   scene            FPS   Tris     DP
+e     23:55  cave             10.2  20,867   96
+f     23:55  cave              9.5  24,047   97
+g     23:55  cave, lit         5.2  36,663  147
+h     23:56  white             5.3  37,512  160
+i     23:56  white             3.3  529,481 825
+j     23:56  island            7.9  374,611 525
+k     23:57  island            6.7  403,785 647
+l     23:59  cabin, dark       5.5  356,115 567
+m     23:59  cabin floor       4.3  212,453 283
+n     23:59  cabin, a face     3.0  300,296 355
+Every frame shows Mem=0MB.
+
+/proc/stat, the cpu line, ten seconds apart at 23:59:41:
+cpu  82241 0 37515 57453 0 0 0 0 0 0
+cpu  83385 0 37850 59977 0 0 0 0 0 0
+user 1144, system 335, idle 2524 of 4003 ticks: 28.6%, 8.4%, 63.0%.
+scheduler_picks 25805799, then 25914611.
+The file has no bkl line on this kernel.
+
+/proc/207/status of Crysis.exe at 23:59:
+VmPeak:	 3576764 kB
+VmHWM:	 1688860 kB
+VmRSS:	 1688860 kB
+voluntary_ctxt_switches:	18949
+nonvoluntary_ctxt_switches:	5298
+
+The kernel's log after the run:
+      1 syscall: 323: not implemented (asked for by wine)
+     11 syscall: 323: not implemented (asked for by wine64)
+
+The window was closed at 00:00:06; the game's process was gone at 00:00:10.
+After it: hda ready 1 playing 0, vol 1:1; sha256sum -c of game.sha256 in
+/data/crysis/game exits 0; the tree has 2,362 files, the 2,358 and the
+game's Game.log, AILog.log, AISignals.csv and Game_LevelLoadTime.log.
+The save is bf0f664d9d2efcb732aa57ed7f3440a0b0c351212cfc20d9a64605dd79260a37.
+dinput8.dll is 0bec4391168703f4d061935d16b31f064198b87a21dfef3ac1b5ec234189b872
+and dinput.dll efc45909587140889647138b7f6ae90524fa89d75ec46def1a9d5c2d4731d5ae.

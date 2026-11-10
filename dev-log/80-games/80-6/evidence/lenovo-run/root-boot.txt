@@ -1,0 +1,9 @@
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2653/root-2961387c696576a3.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term intel_iommu=off intremap=off rach2.trace=enosys
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2653/root-2961387c696576a3.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+ 17:52:28 up 0 min,  0 users,  load average: 0.00, 0.00, 0.00
+4
+               total        used        free      shared  buff/cache   available
+Mem:           16250          52       16161           0          36       16198

@@ -1,0 +1,12 @@
+commit bb151e3baa6810fe8a513ac02a19ace4d881cb27
+rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+part 0 6 134483968 286803968 62d5104e-990e-42db-9eba-36209f97fcd5 Rach2 data
+ 17:41:11 up 9 min,  0 users,  load average: 0.00, 0.00, 0.00
