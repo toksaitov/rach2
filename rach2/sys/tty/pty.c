@@ -643,8 +643,10 @@ static int pts_write_free(void *arg)
  * non-blocking. A vhangup(2) of the description of the writer `w`, before a
  * piece or during its wait, ends the write with EIO or the bytes written, as
  * Linux's n_tty_write does. Master readers are woken even if a later copy
- * fails. The piece is fitted again after the copy from the user, which may
- * sleep on a page fault while echo of the master's input fills the ring.
+ * fails. The copy from the user may sleep on a page fault, so after it the
+ * hangup and the master's close are tested again, as n_tty_write tests
+ * tty_hung_up_p just before it writes, and the piece is fitted again, since
+ * echo of the master's input may have filled the ring meanwhile.
  */
 static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __user *buf,
                              uint32_t count)
@@ -680,6 +682,10 @@ static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __u
         if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
             wake_master(p, &pushed);
             return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        if (!p->master_open || pts_waiter_hung(w)) {
+            wake_master(p, &pushed);
+            return (done > 0) ? (int32_t)done : -EIO;
         }
         fit = pty_m_room(p) / pts_growth(p);
         if (chunk > fit) {
