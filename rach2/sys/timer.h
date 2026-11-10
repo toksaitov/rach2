@@ -198,8 +198,12 @@ const char *timer_reference(void);
  * The `n`th clock source, from 0, by the name Linux gives it, best first as
  * Linux rates them: "tsc" when the counter under the tick is measured, then
  * the reference `refclock_init` found, "hpet" or "acpi_pm", or "jiffies"
- * when there is neither; NULL past the last. With `n` -1, the one that
- * keeps the clock now, as `timer_reference` names it, or "jiffies".
+ * when there is neither; NULL past the last. With `n` -1, the one the
+ * kernel's clock reads now, as Linux's timekeeping reads its current clock
+ * source: "tsc" while the clock runs from the TSC (`vclock_running`), which
+ * it does where the TSC runs at one rate and every processor's agrees,
+ * Linux's rule for a stable TSC; else the reference that keeps the clock,
+ * as `timer_reference` names it, or "jiffies".
  */
 const char *timer_clocksource(int n);
 

@@ -289,6 +289,13 @@ int tick_read_retry(uint32_t seq)
     return 0;
 }
 
+/** The clock does not run from the TSC here, so the clock source named is
+ * the reference's. */
+int vclock_running(void)
+{
+    return 0;
+}
+
 /* The calibrations, and the reference each is made against. */
 #define APIC_BY_PM  0
 #define APIC_BY_PIT 1

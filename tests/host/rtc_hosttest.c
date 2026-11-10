@@ -216,6 +216,12 @@ int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
     return 0;
 }
 
+/** Nor, so, is it the clock source pit.c names. */
+int vclock_running(void)
+{
+    return 0;
+}
+
 /** No vDSO page takes the offset here. */
 void vclock_set_offset(int64_t sec, int32_t nsec)
 {
