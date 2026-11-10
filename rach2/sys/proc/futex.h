@@ -10,15 +10,19 @@
 #include "../lib/kint.h"
 #include "../irq.h"
 
+/** Recompute PI donations after a base priority change, under the big lock. */
+void futex_pi_recalculate(void);
+
 /**
- * futex takes uaddr, op, val, timeout, uaddr2 and val3. It has FUTEX_WAIT,
- * FUTEX_WAKE and their BITSET forms, each with FUTEX_PRIVATE_FLAG, and
- * FUTEX_CLOCK_REALTIME with FUTEX_WAIT_BITSET alone; uaddr2 is not read. A
- * wait returns 0 when woken, -EAGAIN when the word does not hold val,
- * -ETIMEDOUT or -EINTR; a wake returns the number woken. -EFAULT for a word
- * or a timeout the caller cannot read, -EINVAL for an address not aligned
- * to four bytes, a bitset of 0 or a bad timeout, and -ENOSYS for another
- * op.
+ * futex takes uaddr, op, val, timeout, uaddr2 and val3. WAIT and WAKE,
+ * their BITSET forms, LOCK_PI, LOCK_PI2, TRYLOCK_PI, UNLOCK_PI and the
+ * WAIT_REQUEUE_PI/CMP_REQUEUE_PI pair have Linux's operation numbers and
+ * PRIVATE flag. CLOCK_REALTIME is accepted by WAIT_BITSET,
+ * WAIT_REQUEUE_PI and LOCK_PI2. LOCK_PI always uses a real-time deadline.
+ * Locks and waits return 0 on success; wakes and requeues return counts.
+ * Errors include EFAULT, EINVAL, EAGAIN, ETIMEDOUT, EINTR, EDEADLK for
+ * recursive or cyclic ownership, EPERM for a nonowner unlock or kernel
+ * thread owner, ESRCH for a missing owner, ENOMEM and ENOSYS.
  */
 long sys_futex(isr_params_t *params);
 

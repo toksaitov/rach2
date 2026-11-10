@@ -144,3 +144,5 @@ A probe is a C file at this directory's top, added to `PROGS` in `tests/Makefile
 Then give the program its place. Add it to `default-probes`, and give it a case of `cases/guest.default.json` with the assertions it reports, when it can run on the test image and must exit 0. Otherwise add it to a suite and list it in `probe-suites` with that suite's name, or, for a fixture or a program run by hand, list it in `probe-helpers` with its use. Then give it a native case in [`native/`](native/Readme.md), which runs it on a Rach2 that is already up, or a line of `native/machine` with the reason it needs a machine of QEMU's. A new suite is described in [the system tests' Readme](system/Readme.md#adding-tests).
 
 Run the new test's suite, `tests/run style` and `tests/run host` before committing.
+
+The default family's `pifutexmusl` probe exercises raw PI futex locks, deadlines and requeue, pthread PI mutexes, robust PI owner death, a condition variable over a PI mutex and process-shared recovery. Its i686 build also runs through the ia32 profile. The GNU family's `pi_futex` row compiles the same source against its guest's glibc.

@@ -18,6 +18,7 @@ case musl/clockidmusl -- musl/clockidmusl machine=native
 # date against a reference.
 case musl/clockmusl -- musl/clockmusl machine=native
 case musl/clonemusl -- musl/clonemusl
+case musl/pifutexmusl -- musl/pifutexmusl
 case musl/coremusl tmpfs:16M -- musl/coremusl dir=tmpfs/coremusl.d
 case musl/cowfork -- musl/cowfork
 case musl/cputimemusl -- musl/cputimemusl

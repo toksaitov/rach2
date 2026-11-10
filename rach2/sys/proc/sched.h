@@ -7,6 +7,16 @@
 
 #include "process.h"
 
+/** Effective real-time priority, including a PI futex's donation. */
+static __inline__ unsigned int sched_priority(const process_t *p)
+{
+    return p->pi_priority > p->rt_priority ? p->pi_priority : p->rt_priority;
+}
+
+/** Refresh a ready entry after its priority changes and request selection.
+ * The caller holds the big lock, with interrupts masked. */
+void sched_priority_changed(process_t *p);
+
 /** Initialize empty ready lists before any process is made ready, with the
  * scheduler off and the next selection allowed to prefer a woken process. */
 void init_sched(void);

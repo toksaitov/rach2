@@ -104,7 +104,7 @@ The cross compiler of `mk/arch.mk` compiles the kernel with `-ansi -nostdlib -no
 * The kernel calls no UEFI service, since GRUB leaves the firmware's boot services first ([the PC platform](sys/arch/x86/Readme.md)).
 * It has no swap and no loadable modules.
 * One lock covers the kernel, so kernel code runs on one processor at a time.
-* The scheduler has one policy and reads no nice value or I/O priority.
+* The scheduler reads real-time and inherited PI priorities, and no nice value or I/O priority.
 * The root is never a USB stick.
 * [limits(7)](../man/man7/limits.7) and each subsystem's Readme give the fixed capacities.
 

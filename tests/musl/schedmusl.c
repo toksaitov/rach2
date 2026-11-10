@@ -23,7 +23,8 @@
  * `sched_yield` returns 0. Every process starts with SCHED_OTHER at priority 0,
  * and asking for it, with SCHED_RESET_ON_FORK or not, succeeds, as do
  * SCHED_BATCH and SCHED_IDLE, which sched_getscheduler then reads back;
- * SCHED_FIFO and SCHED_RR fail with EPERM, and SCHED_DEADLINE, a priority that
+ * SCHED_FIFO and SCHED_RR keep their real-time priority, and SCHED_DEADLINE,
+ * a priority that
  * does not suit its policy, and an unknown policy with EINVAL. The priority
  * ranges are Linux's, and the time slice is one 1 ms tick. The affinity is the
  * processors /proc/cpuinfo lists, by their ids, which need not run without a
@@ -146,7 +147,7 @@ static const char *const assertion_id[] = {"gettid-pid",
                                            "other-accepted",
                                            "setparam-zero",
                                            "batch-idle-set",
-                                           "realtime-eperm",
+                                           "realtime-policy",
                                            "priority-einval",
                                            "policy-einval",
                                            "setparam-einval",
@@ -644,9 +645,12 @@ static int policy_refusals(void)
     struct sched_param sp;
     unsigned int i;
 
-    if (set_policy(0, SCHED_FIFO, 10) != -1 || errno != EPERM ||
-        set_policy(0, SCHED_RR, 99) != -1 || errno != EPERM) {
-        return fail("a real-time policy was not refused with EPERM");
+    if (set_policy(0, SCHED_FIFO, 10) != 0 || syscall(SYS_sched_getscheduler, 0L) != SCHED_FIFO ||
+        syscall(SYS_sched_getparam, 0L, &sp) != 0 || sp.sched_priority != 10 ||
+        set_policy(0, SCHED_RR, 99) != 0 || syscall(SYS_sched_getscheduler, 0L) != SCHED_RR ||
+        syscall(SYS_sched_getparam, 0L, &sp) != 0 || sp.sched_priority != 99 ||
+        set_policy(0, SCHED_OTHER, 0) != 0) {
+        return fail("real-time policies did not keep their priority");
     }
     row_held();
     if (set_policy(0, SCHED_FIFO, 0) != -1 || errno != EINVAL ||

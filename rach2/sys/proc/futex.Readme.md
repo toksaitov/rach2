@@ -11,7 +11,7 @@ A futex is a 32-bit word of user memory on which a thread sleeps until another w
 | `set_robust_list` | 311 | 273 | [futex(2)](../../../man/man2/futex.2) |
 | `get_robust_list` | 312 | 274 | [futex(2)](../../../man/man2/futex.2) |
 
-* `futex` takes four operations, `FUTEX_WAIT`, `FUTEX_WAKE`, `FUTEX_WAIT_BITSET` and `FUTEX_WAKE_BITSET`, each with `FUTEX_PRIVATE_FLAG`, and the bitset wait with `FUTEX_CLOCK_REALTIME`. The word's address must be aligned to four bytes, and a bitset must not be 0; either is `EINVAL`.
+* `futex` takes `FUTEX_WAIT`, `FUTEX_WAKE`, their bitset forms, `FUTEX_LOCK_PI`, `FUTEX_LOCK_PI2`, `FUTEX_TRYLOCK_PI`, `FUTEX_UNLOCK_PI`, `FUTEX_WAIT_REQUEUE_PI` and `FUTEX_CMP_REQUEUE_PI`, each with `FUTEX_PRIVATE_FLAG`; the bitset wait, requeue wait and `LOCK_PI2` accept `FUTEX_CLOCK_REALTIME`. The word's address must be aligned to four bytes, and a bitset must not be 0; either is `EINVAL`.
 * `futex_waitv` waits on 1 to 128 words at once, each named by a `struct futex_waitv` of Linux's layout, the same in both ABIs, with `FUTEX2_SIZE_U32` and optionally `FUTEX2_PRIVATE`, and an absolute timeout of 64-bit fields on `CLOCK_MONOTONIC` or `CLOCK_REALTIME`. It returns the index of the futex a wake ended it on. The compat table of the x86-64 kernel has the same handler at the same number.
 * `set_robust_list` takes the address of the list's head and its size, which must be the size of the head's three words: 12 bytes on i686 and 24 on x86-64.
 * `get_robust_list` gives the head of the caller's list or of another thread's, named by its id in the caller's PID namespace: a thread of the caller's process, any thread to a privileged caller, and a thread that is not privileged and whose real or effective user id is the caller's effective one.
@@ -38,20 +38,33 @@ A deadline is a tick of the kernel's clock, which counts `TICK_HZ` (`timer.h`) a
 
 A signal the process acts on ends a wait with `EINTR`. The dispatcher restarts a `futex` wait without a timeout, as it restarts a read, and every `futex_waitv`, whose deadline is absolute; it does not restart a timed `futex` wait (`futex_restartable`): a restart would measure the timeout again from the start, and a handler that ran often enough would keep the wait from ever ending.
 
+### Priority inheritance
+
+The PI operations follow Linux 6.12's `kernel/futex/pi.c` and `requeue.c`. An unlocked PI word is 0. Its low 30 bits name the owning thread in the caller's PID namespace; `FUTEX_WAITERS` forces an unlock through the kernel and `FUTEX_OWNER_DIED` reports an owner's death. A kernel state, `struct futex_pi`, identifies a contended word and its owner. Each waiter holds a reference until its wait returns, including while it repairs a handoff's word; the last reference deletes the state, so an uncontended mutex can again unlock entirely in user space.
+
+The lock first makes its word writable, then compares and exchanges it with interrupts masked. An atomic race restarts the acquisition. An owner id of 0 lets the caller acquire the word while keeping `OWNER_DIED`; another live user thread is recorded as the owner and the caller queues behind it. A recursive lock and a blocked-owner cycle are `EDEADLK`; a missing owner is `ESRCH`, a kernel thread is `EPERM`, and a busy trylock is `EAGAIN`. A thread releasing its futexes at exit is waited for before the acquisition is retried, with its id looked up anew after each sleep so no process pointer survives a reap. Ordinary and PI waiters on one key cannot be mixed: a PI attachment or ordinary wake that finds the other kind is `EINVAL`.
+
+An owner's effective real-time priority is the highest base or inherited priority of the waiters behind every PI mutex it holds. `futex_pi_recalculate` clears the owners' donations and propagates them over the acyclic blocked-owner graph until no value changes. A waiter of an owner that itself waits on another mutex therefore donates along the whole chain. Timeout, signal, handoff and exit remove the old donation and recalculate the remaining ones. The scheduler selects effective real-time priorities before ordinary threads, FIFO at equal priorities for `SCHED_FIFO` until a yield or block, and round-robin for `SCHED_RR`; a donation leaves the base policy and the priority reported by `sched_getparam` unchanged.
+
+An unlock checks the caller's id, atomically writes `WAITERS` and the highest-priority waiter's id, and transfers the state before waking that waiter; equal priorities keep queue order. With no waiter it clears the word. `LOCK_PI` takes an absolute deadline on the real-time clock; `LOCK_PI2` takes one on the monotonic clock unless `FUTEX_CLOCK_REALTIME` selects real time. Signals and deadlines remove a waiter and its donation, but a completed handoff wins over either. A requeued waiter interrupted after transfer returns `EAGAIN`, since retrying the condition wait would wait on the wrong word.
+
+`WAIT_REQUEUE_PI` compares the condition word and records the distinct destination key. `CMP_REQUEUE_PI` requires `val` 1, compares the condition word with `val3`, and transfers at most the fourth argument plus one waiters, acquiring a free target for the first waiter or attaching it behind the target's owner. Every transferred waiter must have asked for that destination. The pair has absolute deadlines, and a plain wake before transfer ends the condition wait with `EAGAIN`.
+
 ### Robust lists and a thread's end
 
 `proc_thread_gone` runs at a thread's end (`proc_exit_cleanup` in `exit.c`) and at its `execve`. An `execve` calls it before a thread that is not its process's leader takes the leader's id, so the id it compares is the one the thread locked its words with. It works in this order:
 
 1. It walks the thread's robust list, as glibc lays it out (`struct robust_head`): the first entry, the offset from an entry to its futex word, and the entry the thread was taking or giving back. At most `ROBUST_LIST_LIMIT`, 2048, entries are walked, so a list with a loop in it ends. Each word that still has the thread's id gets `FUTEX_OWNER_DIED` in its place, with `FUTEX_WAITERS` kept, and one waiter is woken when the word has waiters, as Linux's `handle_futex_death` does; the next owner learns from `EOWNERDEAD` that the state the lock guarded may be half made.
 2. It takes the pending entry last. When its word has no owner and it is not a priority-inheritance futex, the thread ended between an unlock and the unlock's wake, or between a wake and taking the lock; one waiter is woken, and the word is left as it is.
-3. When another thread shares the address space, it writes 0 to the word given with `CLONE_CHILD_CLEARTID` or `set_tid_address` and wakes one waiter on it, which is how `pthread_join` learns of the end.
+3. It transfers every contended PI mutex still owned by the ending thread to its top waiter. PI list entries are marked dead without an ordinary wake; the new owner repairs the word through its own mapping before returning, including when the former owner no longer has a usable mapping.
+4. When another thread shares the address space, it writes 0 to the word given with `CLONE_CHILD_CLEARTID` or `set_tid_address` and wakes one waiter on it, which is how `pthread_join` learns of the end.
 
 A word's page is made present and writable before the word is read. The read, the comparison and the write are then one step with interrupts off, and the write is a compare-and-exchange, read again when the word changed, so a thread on another processor that takes the lock or sets `FUTEX_WAITERS` meanwhile in user mode does not have its change written over.
 
 ## Limits
 
-* The requeue, wake-and-modify and priority-inheritance operations answer `ENOSYS`, the second address is ignored, and i686 has no `futex_time64`.
-* `FUTEX_CLOCK_REALTIME` is taken with `FUTEX_WAIT_BITSET` alone; with `FUTEX_WAIT` it is `ENOSYS`.
+* Ordinary requeue and wake-and-modify operations answer `ENOSYS`; i686 has no `futex_time64`.
+* `FUTEX_CLOCK_REALTIME` is taken with `FUTEX_WAIT_BITSET`, `FUTEX_WAIT_REQUEUE_PI` and `FUTEX_LOCK_PI2`; with `FUTEX_WAIT` or `FUTEX_LOCK_PI` it is `ENOSYS`.
 * A deadline is a whole number of the kernel's ticks.
 * A timed wait that a signal interrupts is not restarted, also when no handler runs; Linux restarts it then with its first deadline.
 * A thread's end walks at most 2048 entries of its robust list.
@@ -67,3 +80,5 @@ A word's page is made present and writable before the word is read. The read, th
 * `tests/musl/nsmusl.c` checks that the first process of a new PID namespace reads its own robust list as pid 1.
 
 In `tests/run smp`, two threads on two processors take turns through a futex word (`tests/musl/smpmusl.c`). `tests/run host` runs `tests/host/futex_hosttest.c` ([the host tests](../../../tests/host/Readme.md)), which checks what `futex.c` reads of a thread that may end while it works, the robust futexes a thread's end releases, a wait's deadline, and which interrupted calls are restarted.
+
+`futex_pi_hosttest.c` and `futex_pi64_hosttest.c` exercise the PI operations and the ownership graph over modeled user pages; `sched_pi_hosttest.c` checks actual ready-queue selection under base and inherited priorities. `tests/musl/pifutexmusl.c` checks raw PI operations and pthread PI and robust PI mutexes, a condition variable over a PI mutex and process-shared owner death. The default family runs it for each native architecture and the ia32 profile. The GNU family's `pi_futex` row compiles the same source against glibc inside its guest.
