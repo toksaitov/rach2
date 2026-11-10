@@ -88,16 +88,28 @@ static void host_leaf(struct kvm_cpuid_entry2 *e, uint32_t leaf, uint32_t sub, u
     kcpu_id_sub(leaf, sub, &e->eax, &e->ebx, &e->ecx, &e->edx);
 }
 
+/* The host's answer to `kvm_xcr0_supported` once `xcr0_known` is set. A
+ * CPUID traps to the hypervisor beneath a nested host, and each entry asks
+ * twice. Two processors that ask first store the same answer. */
+static volatile uint64_t xcr0_host;
+static volatile int xcr0_known;
+
 uint64_t kvm_xcr0_supported(void)
 {
     uint32_t a = 0, b = 0, c = 0, d = 0;
+    uint64_t mask = 0;
 
-    kcpu_id(1, &a, &b, &c, &d);
-    if (!(c & (1u << 26))) {
-        return 0;
+    if (xcr0_known) {
+        return xcr0_host;
     }
-    kcpu_id_sub(0xD, 0, &a, &b, &c, &d);
-    return ((uint64_t)a | ((uint64_t)d << 32)) & XCR0_KERNEL;
+    kcpu_id(1, &a, &b, &c, &d);
+    if (c & (1u << 26)) {
+        kcpu_id_sub(0xD, 0, &a, &b, &c, &d);
+        mask = ((uint64_t)a | ((uint64_t)d << 32)) & XCR0_KERNEL;
+    }
+    xcr0_host = mask;
+    xcr0_known = 1;
+    return mask;
 }
 
 /** The XSAVE area's bytes for the components `xcr0`, as the standard

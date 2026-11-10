@@ -261,6 +261,11 @@ void debugreg_resume(void)
     }
 }
 
+int debugreg_loaded(void)
+{
+    return dr7_live[arch_cpu_id()];
+}
+
 /**
  * Whether the DR7 value `v` sets what a tracer may set with the addresses
  * `t` has in DR0 to DR3: no general-detect or reserved bit, and for each

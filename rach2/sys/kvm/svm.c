@@ -3,6 +3,7 @@
 #include "kvm.h"
 
 #include "../arch/arch.h"
+#include "../arch/x86/debugreg.h"
 #include "../arch/x86/kcpu.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -885,7 +886,7 @@ static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
     struct svm_vcpu *s = sv(v);
     int i, hw = debugging(v, KVM_GUESTDBG_USE_HW_BP);
 
-    *host_dr7 = hw_read_dr(7);
+    *host_dr7 = debugreg_loaded() ? hw_read_dr(7) : DR7_ONE;
     s->guest_dr = (dr7_of(v) & DR7_ENABLES) != 0;
     if (!s->guest_dr) {
         return;
