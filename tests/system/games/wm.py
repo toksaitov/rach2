@@ -48,8 +48,8 @@ UID = 1001
 # CVT's 1366x768 at 60 Hz, which Weston sets when the EDID lists no such mode.
 MODELINE = "85.50 1366 1436 1579 1792 768 771 774 798 +hsync +vsync"
 # What the scenario sends while xplace waits, after the one move that gives
-# the seat its pointer: ten moves of -200 on x and five of +40 on y, then one
-# key.
+# the seat its pointer: ten moves of -200 on x and five of +40 on y, then a
+# click.
 MOTION = (-2000, 200)
 ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 "
        "PULSE_SERVER=unix:/run/user/1001/pulse/native XDG_DATA_HOME=%s/data "
@@ -193,9 +193,7 @@ def kernel_motion(stop, sums):
     sums, after each packet. The scenario sends its next move once the sums
     hold the last: QEMU's PS/2 mouse keeps what its queue of 16 bytes has no
     room for until its next event, so moves sent faster than the guest reads
-    them can leave the last one's rest unsent. It presses its key after the
-    last move's line, since the i8042 passes a key's bytes before the mouse's
-    that wait.
+    them can leave the last one's rest unsent.
     """
     fd = mouse(os.O_NONBLOCK)
     size = struct.calcsize("llHHi")
@@ -313,7 +311,7 @@ def screen(name, points=POINTS):
 def xplace(width, height):
     """
     Run xplace at WIDTH by HEIGHT, announce it once it is ready, and return
-    its report, which it ends when the scenario's key arrives.
+    its report, which it ends when the scenario's key or click arrives.
     """
     proc = start(desktop("exec %s %d %d" % (PROBES / "xplace", width, height)))
     lines, ready = [], False
@@ -336,7 +334,8 @@ def xplace(width, height):
 def placed(name, report, width, height):
     """
     Check that REPORT puts its window at 0,0, WIDTH by HEIGHT, unframed and
-    focused, by its last report: xplace reports again when its key arrives.
+    focused, by its last report: xplace reports again when its key or click
+    arrives.
     """
     report = report[report.rfind("xplace: window at"):]
     at = re.search(r"window at (-?\d+),(-?\d+) size (\d+)x(\d+)", report)
