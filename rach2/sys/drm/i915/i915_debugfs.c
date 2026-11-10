@@ -1176,7 +1176,7 @@ static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     char text[24], msg[48];
     struct emit e;
-    uint64_t val;
+    uint64_t val = 0;
     int32_t rc;
 
     rc = copy_write(buf, len, text, sizeof(text));
@@ -1259,7 +1259,7 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     char text[24];
-    uint64_t val;
+    uint64_t val = 0;
     int32_t rc;
 
     rc = copy_write(buf, len, text, sizeof(text));
@@ -1361,9 +1361,9 @@ static int32_t reset_store(void *data, const char __user *buf, uint32_t len)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     char text[24];
-    uint64_t val;
+    uint64_t val = 0;
     int32_t rc;
-    int b;
+    int b = 0;
 
     rc = copy_write(buf, len, text, sizeof(text));
     if (rc < 0) {
@@ -1399,7 +1399,7 @@ static int32_t hangcheck_store(void *data, const char __user *buf, uint32_t len)
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     char text[24];
     int32_t rc;
-    int b;
+    int b = 0;
 
     rc = copy_write(buf, len, text, sizeof(text));
     if (rc >= 0) {
