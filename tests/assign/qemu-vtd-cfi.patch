@@ -1,0 +1,27 @@
+--- a/hw/i386/intel_iommu.c
++++ b/hw/i386/intel_iommu.c
+@@ -2733,6 +2733,11 @@
+         /* Interrupt remap enable/disable */
+         vtd_handle_gcmd_ire(s, val & VTD_GCMD_IRE);
+     }
++    if ((changed & VTD_GCMD_CFI) &&
++        x86_iommu_ir_supported(x86_iommu)) {
++        vtd_set_clear_mask_long(s, DMAR_GSTS_REG, VTD_GSTS_CFIS,
++                               val & VTD_GCMD_CFI);
++    }
+ }
+ 
+ /* Handle write to Context Command Register */
+@@ -4291,6 +4296,12 @@
+ 
+     /* This is compatible mode. */
+     if (addr.addr.int_mode != VTD_IR_INT_FORMAT_REMAP) {
++        if (!(vtd_get_long_raw(iommu, DMAR_GSTS_REG) & VTD_GSTS_CFIS)) {
++            if (do_fault) {
++                vtd_report_ir_fault(iommu, sid, VTD_FR_IR_REQ_COMPAT, 0);
++            }
++            return -EINVAL;
++        }
+         memcpy(translated, origin, sizeof(*origin));
+         goto out;
+     }
