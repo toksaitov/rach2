@@ -411,6 +411,56 @@ static void cmd_sleep(struct virtio_gpu_cmd *cmd, int64_t until)
     current_proc->wakeup_tick = saved;
 }
 
+/* What a wait for the heap's pages watches: the device, and the count of
+ * its UNREFs in flight when the wait began. */
+struct unref_wait {
+    struct virtio_gpu_device *vg;
+    uint32_t seen;
+};
+
+/** Whether an UNREF has been answered, or an answer waits to be reaped,
+ * since `arg`'s count was taken, or the device has died. */
+static int unref_moved(void *arg)
+{
+    struct unref_wait *w = (struct unref_wait *)arg;
+
+    return w->vg->dead || w->vg->done_list || w->vg->unrefs != w->seen;
+}
+
+/**
+ * Give `bo` its pages from the transport (`virtio_backing_fill`), waiting
+ * while the transport's memory is full but objects freed before hold some
+ * of it until the device answers their UNREF: the shared region's heap is
+ * a few MiB, and a program that frees and makes buffers faster than the
+ * device answers would find it full of pages already let go, which an
+ * allocator waits for and does not refuse. 0, or -ENOMEM once no UNREF is
+ * in flight, or the device has died. May sleep.
+ */
+static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    struct unref_wait w;
+    uint64_t saved;
+
+    w.vg = vg;
+    for (;;) {
+        if (virtio_backing_fill(vg->vdev, &bo->shmem.pages, bo->shmem.base.size) == 0) {
+            return 0;
+        }
+        w.seen = vg->unrefs;
+        if (vg->dead || w.seen == 0 || !can_sleep() || !vgpu_wake_ready) {
+            return -ENOMEM;
+        }
+        vgpu_reap(vg);
+        if (vg->unrefs == w.seen) {
+            saved = current_proc->wakeup_tick;
+            current_proc->wakeup_tick = rtc_ticks_now() + VGPU_POLL_NS / 1000000 + 1;
+            (void)wq_wait_event_nointr(&vgpu_wake, unref_moved, &w);
+            current_proc->wakeup_tick = saved;
+            vgpu_reap(vg);
+        }
+    }
+}
+
 /**
  * Start `cmd`, wait for its answer, copy up to `out_len` bytes of the
  * answer to `out` (NULL for none) and free it. The wait sleeps until an
@@ -723,8 +773,8 @@ static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint3
 /**
  * Follow the request of `cmd`, ATTACH_BACKING or CREATE_BLOB, with the
  * memory entries of `bo`'s pages, each page given now, from the memory the
- * transport's device reaches where it has its own (`virtio_backing_fill`),
- * runs of pages adjacent in the device's addresses as one entry, and set its
+ * transport's device reaches where it has its own (`backing_fill`), runs of
+ * pages adjacent in the device's addresses as one entry, and set its
  * segments; their count goes in *n. 0; -ENOMEM, -EINVAL for an imported
  * page the device cannot reach, or -E2BIG for a chain of more segments than
  * the queue takes.
@@ -740,7 +790,7 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
 
     *n = 0;
     if (!bo->shmem.base.import && pages && !shmem_resident(&bo->shmem.pages, 0) &&
-        virtio_backing_fill(vdev, &bo->shmem.pages, bo->shmem.base.size) != 0) {
+        backing_fill(cmd->vg, bo) != 0) {
         return -ENOMEM;
     }
     for (p = 0; p < pages; p++) {
@@ -926,6 +976,7 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
     if (cmd->resp_type != VIRTIO_GPU_RESP_OK_NODATA && !cmd->vg->dead) {
         drm_dev_unplug(dev);
     }
+    cmd->vg->unrefs--;
     obj_release(bo);
     drm_dev_put(dev);
 }
@@ -958,6 +1009,7 @@ void vgpu_obj_free(struct drm_gem_object *obj)
         if (cmd) {
             cmd_req(cmd, struct virtio_gpu_resource_unref)->resource_id = bo->res_id;
             drm_dev_get(obj->dev);
+            vg->unrefs++;
             vgpu_cmd_send(cmd, unref_done, bo);
             return;
         }

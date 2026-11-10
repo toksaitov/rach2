@@ -639,6 +639,7 @@ struct virtio_gpu_device {
     struct vgpu_caps_cache *caps_cache;
     struct vgpu_context *contexts;
     struct virtio_gpu_object *resources; /* includes objects awaiting UNREF */
+    uint32_t unrefs;                     /* UNREFs sent and not yet answered */
     char reset_path[48];
     int has_edid;
     int has_indirect;
