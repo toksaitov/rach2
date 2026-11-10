@@ -908,7 +908,8 @@ int kvm_emul_xsetbv(struct kvm_vcpu *v);
 
 /** The guest's RDMSR or WRMSR, by `write`, of `index`, for the MSRs every
  * backend answers the same way: the local APIC's, Hyper-V's, the TSC, the
- * identity MSRs and those msr.c keeps. 0, or -1 for #GP. */
+ * identity MSRs, those of particular processors that Linux's KVM reads as
+ * zero or whose writes it drops, and those msr.c keeps. 0, or -1 for #GP. */
 int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value);
 
 /**
