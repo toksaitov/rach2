@@ -9,7 +9,8 @@
  * Run one row and require its exit and complete result token to agree.
  *
  * A d3dvenus case is probe-PATH-N, wine-PATH-EXE-UNIT or vkd3d-PART, run
- * with run.py's -a venus against the Linux guest's reference on Venus.
+ * with run.py's -a venus against the Linux guest's reference on Venus. A
+ * probe's N may end in -wow64 or -i386, its i386 build in that Proton mode.
  */
 int etude_scenario(struct etude_case *c)
 {
@@ -17,7 +18,7 @@ int etude_scenario(struct etude_case *c)
     struct net_boot b;
     struct net_run r;
     char password[128], mode[16], exe[32], unit[64];
-    char family[16], row[128], command[1024], marker[192], path[16], n[8];
+    char family[16], row[128], command[1024], marker[192], path[16], n[16];
     const char *id = etude_case_id(c), *tail = strrchr(id, '.');
     const char *argv[] = {"/bin/bash", "-c", command, NULL};
     const char *adapter = "lavapipe";
@@ -29,13 +30,13 @@ int etude_scenario(struct etude_case *c)
     tail = tail != NULL ? tail + 1 : id;
     if (strncmp(id, "machine.d3dvenus.", 17) == 0) {
         adapter = "venus";
-        if (sscanf(tail, "probe-%15[^-]-%7s", path, n) == 2) {
+        if (sscanf(tail, "probe-%15[^-]-%15s", path, n) == 2) {
             snprintf(family, sizeof(family), "probe");
             snprintf(row, sizeof(row), "%s/%s", path, n);
         } else if (sscanf(tail, "wine-%15[^-]-%31[^-]-%63s", mode, exe, unit) == 3) {
             snprintf(family, sizeof(family), "wine");
             snprintf(row, sizeof(row), "%s/%s:%s", mode, exe, unit);
-        } else if (sscanf(tail, "vkd3d-%7s", n) == 1) {
+        } else if (sscanf(tail, "vkd3d-%15s", n) == 1) {
             snprintf(family, sizeof(family), "vkd3d");
             snprintf(row, sizeof(row), "%s", n);
         } else {
