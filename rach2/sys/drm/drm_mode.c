@@ -1112,6 +1112,53 @@ int32_t drm_connector_attach_encoder(struct drm_connector *connector, struct drm
     return 0;
 }
 
+/* Linux's drm_scaling_mode_enum_list, by value. */
+static const struct drm_prop_enum_list scaling_mode_names[] = {
+    {DRM_MODE_SCALE_NONE, "None"},
+    {DRM_MODE_SCALE_FULLSCREEN, "Full"},
+    {DRM_MODE_SCALE_CENTER, "Center"},
+    {DRM_MODE_SCALE_ASPECT, "Full aspect"}};
+
+int32_t drm_connector_attach_scaling_mode_property(struct drm_connector *connector, uint32_t mask)
+{
+    struct drm_prop_enum_list list[4];
+    struct drm_property *prop;
+    uint32_t i, n = 0;
+
+    for (i = 0; i < 4; i++) {
+        if (mask & (1u << i)) {
+            list[n++] = scaling_mode_names[i];
+        }
+    }
+    if (n < 2 || (mask & ~0xfu)) {
+        return -EINVAL;
+    }
+    prop = drm_property_create_enum(connector->dev, 0, "scaling mode", list, n);
+    if (!prop) {
+        return -ENOMEM;
+    }
+    drm_object_attach_property(&connector->base, prop, 0);
+    connector->scaling_mode_property = prop;
+    return 0;
+}
+
+int32_t drm_connector_attach_max_bpc_property(struct drm_connector *connector, uint32_t min,
+                                              uint32_t max)
+{
+    struct drm_property *prop = connector->max_bpc_property;
+
+    if (!prop) {
+        prop = drm_property_create_range(connector->dev, 0, "max bpc", min, max);
+        if (!prop) {
+            return -ENOMEM;
+        }
+        connector->max_bpc_property = prop;
+    }
+    drm_object_attach_property(&connector->base, prop, max);
+    connector->state->max_requested_bpc = max;
+    return 0;
+}
+
 void drm_connector_attach_edid_property(struct drm_connector *connector)
 {
     drm_object_attach_property(&connector->base, connector->dev->mode_config.edid_property,

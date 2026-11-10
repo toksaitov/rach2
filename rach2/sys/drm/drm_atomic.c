@@ -500,6 +500,14 @@ static int32_t connector_set_property(struct drm_atomic_state *state, struct drm
         }
         return 0;
     }
+    if (prop == cs->connector->scaling_mode_property) {
+        cs->scaling_mode = (uint32_t)val;
+        return 0;
+    }
+    if (prop == cs->connector->max_bpc_property) {
+        cs->max_requested_bpc = (uint32_t)val;
+        return 0;
+    }
     /* DPMS is the legacy call's alone; the rest are not settable. */
     return -EINVAL;
 }
@@ -619,6 +627,10 @@ int32_t drm_atomic_get_property(struct drm_mode_object *obj, struct drm_property
             *value = (uint64_t)connector->dpms;
         } else if (prop == mc->link_status_property) {
             *value = connector->state->link_status;
+        } else if (prop == connector->scaling_mode_property) {
+            *value = connector->state->scaling_mode;
+        } else if (prop == connector->max_bpc_property) {
+            *value = connector->state->max_requested_bpc;
         } else {
             return -EINVAL;
         }
