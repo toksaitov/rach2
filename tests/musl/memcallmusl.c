@@ -43,10 +43,10 @@
  * EOPNOTSUPP, and ftruncate sets the size once and is EINVAL after.
  *
  * `secret-map`: a private mapping is EINVAL and one with PROT_EXEC EPERM; a
- * shared one reads what was stored, is named "/secretmem (deleted)" in
- * /proc/self/maps, shows `dd` in smaps, refuses mprotect to PROT_EXEC with
- * EACCES, raises SIGBUS past the size, and cachestat counts its touched page
- * as in memory and not dirty.
+ * second shared one reads what a first stored, which is named
+ * "/secretmem (deleted)" in /proc/self/maps, shows `dd` in smaps, refuses
+ * mprotect to PROT_EXEC with EACCES, raises SIGBUS past the size, and
+ * cachestat counts its touched page as in memory and not dirty.
  *
  * `secret-refused`: /proc/self/mem cannot read the mapping (EIO),
  * process_vm_readv cannot (EFAULT), and mlock fails with ENOMEM.
@@ -354,11 +354,12 @@ static void cachestat_rows(void)
     struct counts c;
     struct range r = {0, 0};
     int fd = memfd_create("memcallmusl", 0), opath = open("/", O_PATH);
+    char *gone = anon(1, PROT_READ);
     pid_t pid;
 
     report_part("cachestat");
-    if (fd < 0 || opath < 0 || pwrite(fd, &byte, 1, 0) != 1 ||
-        pwrite(fd, &byte, 1, 2 * PAGE) != 1) {
+    if (fd < 0 || opath < 0 || gone == NULL || munmap(gone, PAGE) != 0 ||
+        pwrite(fd, &byte, 1, 0) != 1 || pwrite(fd, &byte, 1, 2 * PAGE) != 1) {
         miss("a memfd of three pages");
         return;
     }
@@ -368,8 +369,7 @@ static void cachestat_rows(void)
     expect("cachestat of a closed descriptor", syscall(NR_CACHESTAT, 999, &r, &c, 0ul), 0, EBADF);
     expect("cachestat of an O_PATH descriptor", syscall(NR_CACHESTAT, opath, &r, &c, 0ul), 0,
            EBADF);
-    expect("cachestat of an unreadable range", syscall(NR_CACHESTAT, fd, (void *)8, &c, 0ul), 0,
-           EFAULT);
+    expect("cachestat of an unreadable range", syscall(NR_CACHESTAT, fd, gone, &c, 0ul), 0, EFAULT);
     expect("cachestat with a flag", syscall(NR_CACHESTAT, fd, &r, &c, 1ul), 0, EINVAL);
     close(fd);
     close(opath);
@@ -435,7 +435,7 @@ static void secret_map_rows(void)
     struct counts c;
     struct iovec local, remote;
     int fd = (int)syscall(NR_MEMFD_SECRET, 0ul), mem = open("/proc/self/mem", O_RDONLY);
-    char *m;
+    char *m, *twin;
     pid_t pid;
 
     report_part("secret-map");
@@ -448,13 +448,14 @@ static void secret_map_rows(void)
     expect("a mapping with PROT_EXEC",
            (long)(intptr_t)mmap(NULL, PAGE, PROT_READ | PROT_EXEC, MAP_SHARED, fd, 0), 0, EPERM);
     m = mmap(NULL, 3 * PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    twin = mmap(NULL, PAGE, PROT_READ, MAP_SHARED, fd, 0);
     if (m == MAP_FAILED) {
         miss("a shared mapping");
         return;
     }
     m[5] = 'y';
-    if (m[5] != 'y') {
-        miss("the mapping does not read what was stored");
+    if (twin == MAP_FAILED || twin[5] != 'y') {
+        miss("a second mapping does not read what the first stored");
     }
     if (region_line(m, 0, line, sizeof(line)) != 0 ||
         strstr(line, "/secretmem (deleted)") == NULL) {
@@ -485,6 +486,9 @@ static void secret_map_rows(void)
     expect("mlock", mlock(m, PAGE), 0, ENOMEM);
     munlock(m, PAGE);
     munmap(m, 3 * PAGE);
+    if (twin != MAP_FAILED) {
+        munmap(twin, PAGE);
+    }
     close(mem);
     close(fd);
 }
