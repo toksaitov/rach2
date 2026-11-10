@@ -1446,8 +1446,14 @@ The directory, of mode 0500, and each link in it are
 to a caller that may not read
 .Pa environ .
 A symbolic link for each open descriptor N, whose target names what the
-descriptor is open on: a file of the KRFFS root by its path now, a file
-of another type by the path it was opened by, a device by its
+descriptor is open on: a file by its path now, from the reader's root, as
+Linux's
+.Fn d_path
+gives it, so that a rename of the file or of a directory above it moves
+the link, with
+.Ql " (deleted)"
+once the file's last name is gone; a file of a type that keeps no names
+by the path it was opened by; a device by its
 .Pa /dev
 path, a pipe or a FIFO as
 .Ql pipe:[INODE] ,
@@ -1629,6 +1635,21 @@ file of the thread whose ID is the process ID lists every child of the
 process, and the file of any other thread is empty.
 .It Pa /proc/PID/comm
 The program name and a newline.
+.Pa /proc/PID/task/TID/comm
+is the thread's own name, which
+.Xr prctl 2 Ns 's
+.Dv PR_SET_NAME
+sets.
+A write to either names the thread, as Linux takes it: its first 15
+bytes, a newline among them kept, and the rest dropped.
+Only a thread of the writer's own thread group may be named so; another
+process's file is
+.Er EINVAL
+to write, as on Linux, and the open for writing is
+.Er EACCES
+to a caller that is neither privileged nor the process's owner.
+A thread that has ended is
+.Er ESRCH .
 .It Pa /proc/PID/oom_score_adj
 The adjustment Linux's out-of-memory killer adds to the process's score,
 from \-1000 to 1000, in decimal and a newline, read as it is at each read
@@ -1858,11 +1879,31 @@ in octal, the access mode with
 .Dv O_PATH
 and
 .Dv O_CLOEXEC .
+Then come two more, as on Linux:
+.Ql mnt_id: ,
+the id of the descriptor's mount, which
+.Pa /proc/PID/mountinfo
+gives it and
+.Xr stat 2 Ns 's
+.Fn statx
+reports as
+.Dv STATX_MNT_ID ,
+and
+.Ql ino: ,
+the inode number
+.Xr fstat 2
+reports.
+A file of
+.Pa /dev ,
+.Pa /proc
+or
+.Pa /sys
+has the id of that file system's mount.
 For a dma-buf with a name set by
 .Dv DMA_BUF_SET_NAME ,
 .Ql name:
 gives that name.
-Linux adds the mount, the inode number and lines of each kind of file.
+Linux adds lines of each kind of file.
 Another user's is
 .Er EACCES ,
 as
