@@ -280,6 +280,7 @@ long sys_set_thread_area(isr_params_t *params)
     return 0;
 }
 
+#if RACH2_IA32
 /**
  * clone's CLONE_SETTLS in an i386 call, whose TLS argument at `uptr` is a
  * `struct user_desc`, as Linux's `set_new_tls` takes it from a compat call:
@@ -310,6 +311,7 @@ uint32_t ia32_tls_get(const process_t *t, struct user_desc *u)
     }
     return set;
 }
+#endif /* RACH2_IA32 */
 
 /**
  * get_thread_area(2), i386's 244: EBX points at a `struct user_desc` whose

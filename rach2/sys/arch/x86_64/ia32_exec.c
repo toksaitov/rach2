@@ -1,7 +1,8 @@
 /*
  * ia32_exec.c: the i386 forms of execve, execveat, clone and the two mmap
- * calls, for the compat table (ia32_systab.c), and the processor's AT_HWCAP
- * an i386 program's auxiliary vector has.
+ * calls, for the compat table (ia32_systab.c), the processor's AT_HWCAP an
+ * i386 program's auxiliary vector has, and the boot option that turns the
+ * i386 ABI off.
  */
 
 #include "ia32.h"
@@ -14,6 +15,10 @@
 #include "../../network/socket/socket.h"
 #include "../../mm/usercopy.h"
 #include "../../syscall_internal.h"
+#include "../../cmdline.h"
+#include "../../klog.h"
+
+#if RACH2_IA32
 
 /**
  * execve(2) of an i386 call, 11: the path, argv[] and envp[], whose
@@ -90,3 +95,37 @@ uint32_t ia32_hwcap(void)
     kcpu_id(1, NULL, NULL, NULL, &edx);
     return edx;
 }
+
+/**
+ * `ia32_emulation=` is Linux's boolean, read once, on the first call, which
+ * `init_tss` makes on the boot processor before another starts and before
+ * `init_idt`, and kept. Off, as on Linux: the gate of `int $0x80` is left
+ * out of the IDT (idt.c), so that the instruction raises #GP and SIGSEGV;
+ * a `syscall` from 32-bit code returns ENOSYS and a `sysenter` raises #GP
+ * (`init_tss`); and the loader refuses an i386 program with ENOEXEC
+ * (`elf_valid_exec`).
+ */
+int ia32_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        enabled = kcmdline_bool("ia32_emulation", 1);
+    }
+    return enabled;
+}
+
+/** The record is Linux's notice, once a boot. */
+int ia32_enabled_verbose(void)
+{
+    static int told;
+
+    if (!ia32_enabled() && !told) {
+        told = 1;
+        klog(KLOG_INFO, "exec",
+             "i386 program refused: 32-bit emulation off, ia32_emulation=on enables it");
+    }
+    return ia32_enabled();
+}
+
+#endif /* RACH2_IA32 */

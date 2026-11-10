@@ -16,6 +16,8 @@
 #include "../../syscall.h"
 #include "../../syscall_internal.h"
 
+#if RACH2_IA32
+
 /*
  * An i386 call runs the shared socket code, as on Linux, whose message
  * calls pick i386's structures while `in_compat_syscall` is true: the
@@ -111,3 +113,5 @@ long compat_sys_socketcall(isr_params_t *params)
     }
     return socket_call(call, args);
 }
+
+#endif /* RACH2_IA32 */

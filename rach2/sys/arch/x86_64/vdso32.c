@@ -18,6 +18,8 @@
 #include "../../proc/smp.h"
 #include "../../vdso.h"
 
+#if RACH2_IA32
+
 /* The router of a system call's frame and the return after it (isr.c). */
 void _isr_router(isr_params_t *params);
 void isr_leave(isr_params_t *params);
@@ -534,3 +536,5 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
     return p->rip == landing && landing <= 0xFFFFFFFFu && p->cs == GDT_USER_CODE32 &&
            p->ss == GDT_USER_DATA && (p->rflags & (RFLAGS_TF | RFLAGS_RF)) == 0;
 }
+
+#endif /* RACH2_IA32 */

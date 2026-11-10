@@ -18,6 +18,8 @@
 #include "../../syscall.h"
 #include "../../syscall_internal.h"
 
+#if RACH2_IA32
+
 /*
  * Most calls here run the x86-64 handler (`ia32_native`) with the i386
  * arguments widened, and convert the structure it reads or writes in kernel
@@ -524,3 +526,5 @@ long compat_sys_futex_time32(isr_params_t *params)
                        (uint32_t)SC_ARG(params, 2), a3, UPTR(SC_ARG(params, 4)),
                        (uint32_t)SC_ARG(params, 5));
 }
+
+#endif /* RACH2_IA32 */

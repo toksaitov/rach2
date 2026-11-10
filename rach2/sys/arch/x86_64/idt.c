@@ -80,7 +80,10 @@ static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t i
  * handler from user mode; `into` does not exist in 64-bit mode. So is the
  * gate of 0x80, by which a program, 32-bit or 64-bit, makes an i386 system
  * call, as on a Linux with its 32-bit emulation; a 64-bit program's own
- * calls come by `syscall`.
+ * calls come by `syscall`. A kernel built without the i386 ABI
+ * (RACH2_IA32, cpu.h), or booted with it off (`ia32_enabled`), has no gate
+ * there, so that `int $0x80` raises #GP and the program SIGSEGV, as on
+ * Linux.
  *
  * Four exceptions run on interrupt stacks of their own (percpu.h): the
  * double fault, whose cause may be the stack in use; the NMI and the
@@ -162,7 +165,11 @@ void init_idt(void)
     set_gate(62, msi14, GATE_KERNEL, 0);
     set_gate(63, msi15, GATE_KERNEL, 0);
 
-    set_gate(INT80_VECTOR, int80_isr, GATE_USER, 0);
+#if RACH2_IA32
+    if (ia32_enabled()) {
+        set_gate(INT80_VECTOR, int80_isr, GATE_USER, 0);
+    }
+#endif
     set_gate(255, spurious_isr, GATE_KERNEL, 0);
     set_gate(IPI_VECTOR, ipi_isr, GATE_KERNEL, 0);
 

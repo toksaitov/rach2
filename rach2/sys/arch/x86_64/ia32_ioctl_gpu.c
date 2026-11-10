@@ -5,6 +5,8 @@
 
 #include "ia32.h"
 
+#if RACH2_IA32
+
 /** No command has a translation yet. */
 long ia32_ioctl_gpu(unsigned int fd, unsigned int cmd, unsigned long arg)
 {
@@ -13,3 +15,5 @@ long ia32_ioctl_gpu(unsigned int fd, unsigned int cmd, unsigned long arg)
     (void)arg;
     return -ENOTTY;
 }
+
+#endif /* RACH2_IA32 */

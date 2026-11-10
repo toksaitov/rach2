@@ -101,6 +101,18 @@ endif
 KEXTRA ?=
 CFLAGS += $(KEXTRA)
 
+# The pure 64-bit kernel (`make ARCH=x86_64 IA32=0`): RACH2_IA32=0 leaves out
+# the i386 ABI, as a Linux built without CONFIG_IA32_EMULATION, so that the
+# compat table, the gate of `int $0x80`, the i386 signal frames and the
+# ELF32 loader compile to nothing (sys/arch/x86_64/cpu.h). Every manifest
+# lists the same files under both settings. The top-level Makefile builds it
+# into a tree of its own, COMPONENT=rach2-pure64; the fingerprint below
+# rebuilds a tree that a build with the other setting left.
+IA32 ?= 1
+ifeq ($(IA32),0)
+CFLAGS += -DRACH2_IA32=0
+endif
+
 # General Rules
 
 .PHONY : all

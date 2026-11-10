@@ -23,6 +23,8 @@
 #include "../../syscall_internal.h"
 #include "../uabi.h"
 
+#if RACH2_IA32
+
 /*
  * The x86-64 handler with native arguments. Most compat handlers convert an
  * i386 structure into the x86-64 one in kernel memory, run the x86-64 handler
@@ -1079,3 +1081,5 @@ IA32_STUB(compat_sys_fanotify_mark)
 IA32_STUB(compat_sys_open_by_handle_at)
 IA32_STUB(compat_sys_io_pgetevents)
 IA32_STUB(compat_sys_io_pgetevents_time64)
+
+#endif /* RACH2_IA32 */

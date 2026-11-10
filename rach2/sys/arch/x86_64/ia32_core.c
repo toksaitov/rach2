@@ -12,6 +12,8 @@
 #include "../../proc/coredump.h"
 #include "../../proc/process.h"
 
+#if RACH2_IA32
+
 /* The words of x86-64's `user_regs_struct` that `arch_regs_get` fills,
  * by their index in Linux's layout. */
 enum {
@@ -89,3 +91,5 @@ void ia32_core_fp_notes(uint8_t **p, const process_t *t)
         core_note_put(p, "LINUX", NT_386_TLS, tls, sizeof(tls));
     }
 }
+
+#endif /* RACH2_IA32 */

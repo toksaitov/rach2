@@ -4,6 +4,7 @@
  */
 
 #include "percpu.h"
+#include "ia32.h"
 
 #include "../x86/kcpu.h"
 #include "../x86/smpboot.h"
@@ -49,8 +50,10 @@ static uint8_t debug_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16))
  * here; it keeps RSP a valid kernel address meanwhile, as Linux's entry
  * stack does.
  */
+#if RACH2_IA32
 #define SYSENTER_STACK_SIZE 64
 static uint8_t sysenter_stacks[NR_CPUS][SYSENTER_STACK_SIZE] __attribute__((aligned(16)));
+#endif
 
 /* The flags `syscall` clears on entry: TF, IF, DF, IOPL, NT and AC, so the
  * kernel starts with interrupts off and the direction flag clear. */
@@ -61,6 +64,7 @@ static uint8_t sysenter_stacks[NR_CPUS][SYSENTER_STACK_SIZE] __attribute__((alig
 extern void syscall_entry(void);
 extern void syscall32_entry(void);
 extern void sysenter_entry(void);
+extern void syscall32_ignore(void);
 
 /* The operand of `lgdt`, and the routine that loads it and reloads the
  * segment registers (switch.s). */
@@ -180,15 +184,17 @@ int cpu_ia32_entry(void)
  * which AMD's processors take and Intel's refuse with #UD. The `sysenter`
  * MSRs are written only where 32-bit code uses the instruction, as AMD's
  * keep 32 bits of them; their code selector is the kernel's, from which
- * the processor also takes SS, the data selector after it. The LDT
+ * the processor also takes SS, the data selector after it. A kernel that
+ * runs no i386 call (`ia32_enabled`, RACH2_IA32) sets them as Linux's
+ * `idt_syscall_init` then does: IA32_CSTAR to `syscall32_ignore`, which
+ * returns ENOSYS, and the `sysenter` MSRs to 0, whose null code selector
+ * makes the instruction raise #GP. The LDT
  * register is loaded with the null selector, as Linux's `cpu_init` clears
  * it, since its state from reset, base 0 and limit 0xFFFF, would let a
  * selector of an LDT read low memory until the first `ldt_switch` here.
  */
 void init_tss(uintptr_t kernel_stack)
 {
-    uint32_t id = cpu_self()->id;
-
     cpu_set_kernel_stack(kernel_stack);
     __asm__ __volatile__("ltr %w0" : : "r"(GDT_TSS));
     cpu_self()->ldt = NULL;
@@ -196,15 +202,38 @@ void init_tss(uintptr_t kernel_stack)
 
     msr_write(MSR_STAR, ((uint64_t)GDT_USER_CODE32 << 48) | ((uint64_t)GDT_KERNEL_CODE << 32));
     msr_write(MSR_LSTAR, (uint64_t)(uintptr_t)syscall_entry);
-    msr_write(MSR_CSTAR, (uint64_t)(uintptr_t)syscall32_entry);
     msr_write(MSR_FMASK, SYSCALL_FMASK);
     msr_write(MSR_EFER, msr_read(MSR_EFER) | EFER_SCE);
-    if (cpu_ia32_entry() == IA32_ENTRY_SYSENTER) {
-        msr_write(MSR_SYSENTER_CS, GDT_KERNEL_CODE);
-        msr_write(MSR_SYSENTER_ESP, (uint64_t)(uintptr_t)&sysenter_stacks[id][SYSENTER_STACK_SIZE]);
-        msr_write(MSR_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
+#if RACH2_IA32
+    if (ia32_enabled()) {
+        msr_write(MSR_CSTAR, (uint64_t)(uintptr_t)syscall32_entry);
+        if (cpu_ia32_entry() == IA32_ENTRY_SYSENTER) {
+            uint32_t id = cpu_self()->id;
+
+            msr_write(MSR_SYSENTER_CS, GDT_KERNEL_CODE);
+            msr_write(MSR_SYSENTER_ESP,
+                      (uint64_t)(uintptr_t)&sysenter_stacks[id][SYSENTER_STACK_SIZE]);
+            msr_write(MSR_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
+        }
+        return;
     }
+#endif
+    msr_write(MSR_CSTAR, (uint64_t)(uintptr_t)syscall32_ignore);
+    msr_write(MSR_SYSENTER_CS, 0);
+    msr_write(MSR_SYSENTER_ESP, 0);
+    msr_write(MSR_SYSENTER_EIP, 0);
 }
+
+#if !RACH2_IA32
+/** isr_handler.s's 32-bit entries call this, and a kernel without the i386
+ * ABI points no MSR at them (`init_tss`): the call answers ENOSYS. */
+int ia32_fast_syscall(isr_params_t *p, int sysenter)
+{
+    (void)sysenter;
+    p->rax = (uint64_t)(int64_t)-ENOSYS;
+    return 0;
+}
+#endif
 
 /**
  * The kernel's PML4 takes the place of the trampoline's first, and GS's

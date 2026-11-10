@@ -115,6 +115,52 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
     return 0;
 }
 
+int kcmdline_bool(const char *key, int dflt)
+{
+    size_t klen = k_strlen(key);
+    const char *p = kcmdline;
+    const char *tok;
+    size_t len;
+    int value = dflt;
+
+    while (next_token(&p, &tok, &len)) {
+        char c0, c1;
+
+        if (!token_has_key(tok, len, key, klen)) {
+            continue;
+        }
+        c0 = len > klen + 1 ? tok[klen + 1] : '\0';
+        c1 = len > klen + 2 ? tok[klen + 2] : '\0';
+        switch (c0) {
+        case 'y':
+        case 'Y':
+        case 't':
+        case 'T':
+        case '1':
+            value = 1;
+            break;
+        case 'n':
+        case 'N':
+        case 'f':
+        case 'F':
+        case '0':
+            value = 0;
+            break;
+        case 'o':
+        case 'O':
+            if (c1 == 'n' || c1 == 'N') {
+                value = 1;
+            } else if (c1 == 'f' || c1 == 'F') {
+                value = 0;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return value;
+}
+
 int kcmdline_count(const char *key)
 {
     size_t klen = k_strlen(key);

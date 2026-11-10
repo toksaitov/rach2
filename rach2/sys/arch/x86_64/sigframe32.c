@@ -22,6 +22,8 @@
 #include "../../proc/process.h"
 #include "../../proc/sigframe.h"
 
+#if RACH2_IA32
+
 /* The i386 `struct sigcontext`, Linux's `sigcontext_32`, 88 bytes, with
  * each 16-bit selector in the low half of a 32-bit slot. */
 struct sigcontext32 {
@@ -473,3 +475,5 @@ int ia32_sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     }
     return 0;
 }
+
+#endif /* RACH2_IA32 */

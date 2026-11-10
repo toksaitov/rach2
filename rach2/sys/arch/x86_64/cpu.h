@@ -9,6 +9,22 @@
  */
 
 /*
+ * RACH2_IA32, 1 unless the build says 0 (`make IA32=0`, rach2/Makefile):
+ * whether the kernel has the i386 ABI, as a Linux built with
+ * CONFIG_IA32_EMULATION. Under 0 the compat table, the gate of `int $0x80`,
+ * the 32-bit entries, the i386 signal frames and the ELF32 loader compile
+ * to nothing, and the names below that the shared code tests for them,
+ * SC_COMPAT and IA32_SYSCALL_TABLE_SIZE, are not defined. The user's 32-bit
+ * code segment stays, as in such a Linux's GDT, so that a 64-bit program
+ * may still run 32-bit code of its own, which can make no system call.
+ * Under 1 the boot option `ia32_emulation=` turns the ABI off at run time
+ * (`ia32_enabled`, ia32_exec.c).
+ */
+#ifndef RACH2_IA32
+#define RACH2_IA32 1
+#endif
+
+/*
  * The registers the common entry saves, in the order it pushes them: the
  * fifteen general registers, the vector and the error code, and the
  * processor's own frame, which in long mode always has the stack pointer
@@ -63,13 +79,17 @@ typedef struct cpu_regs cpu_regs_t;
  * table (ia32_systab.c). The result goes into RAX either way.
  */
 #define SC_ENTRY_IA32  0x80u
-#define SC_COMPAT(p)   ((p)->vector == 0x80u && (p)->error_code == SC_ENTRY_IA32)
 #define SC_NR(p)       ((p)->rax)
 #define SC_RET(p)      ((p)->rax)
 #define SC_ARG(p, n)   SC_ARG_N(p, n)
 #define SC_ARG_N(p, n) SC_ARG_##n(p)
+#if RACH2_IA32
+#define SC_COMPAT(p) ((p)->vector == 0x80u && (p)->error_code == SC_ENTRY_IA32)
 #define SC_ARG_X(p, r64, r32) \
     (SC_COMPAT(p) ? (unsigned long)(uint32_t)(p)->r32 : (unsigned long)(p)->r64)
+#else
+#define SC_ARG_X(p, r64, r32) ((unsigned long)(p)->r64)
+#endif
 #define SC_ARG_0(p) SC_ARG_X(p, rdi, rbx)
 #define SC_ARG_1(p) SC_ARG_X(p, rsi, rcx)
 #define SC_ARG_2(p) SC_ARG_X(p, rdx, rdx)
@@ -81,18 +101,22 @@ typedef struct cpu_regs cpu_regs_t;
  * ptrace's system call information see it: i386's for an i386 call or for
  * a frame of 32-bit code, its CS 0x23 (percpu.h), as Linux's
  * `syscall_get_arch`. */
-#define AUDIT_ARCH_I386  0x40000003u
+#define AUDIT_ARCH_I386 0x40000003u
+#if RACH2_IA32
 #define SC_AUDIT_ARCH(p) ((SC_COMPAT(p) || (p)->cs == 0x23u) ? AUDIT_ARCH_I386 : AUDIT_ARCH)
+#endif
 
 /* The compat table's size, one more than Linux i386's highest number, 462
  * (ia32_sysnr.h), and the calls seccomp's strict mode allows by i386's
  * numbers, as Linux's `mode1_syscalls_32`: read, write, exit and
  * sigreturn. */
+#if RACH2_IA32
 #define IA32_SYSCALL_TABLE_SIZE 463
 #define SECCOMP_NR32_READ       3u
 #define SECCOMP_NR32_WRITE      4u
 #define SECCOMP_NR32_EXIT       1u
 #define SECCOMP_NR32_SIGRETURN  119u
+#endif
 
 /* The length of the instruction a system call is made by, two bytes for
  * `syscall` and for `int $0x80`, which a restart rewinds the return address

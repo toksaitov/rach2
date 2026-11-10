@@ -93,6 +93,8 @@
 #include "../../ipc/mqueue.h"
 #include "../../syscall_internal.h"
 
+#if RACH2_IA32
+
 /** The rows, one for each i386 number Linux has; `init_syscall` cleared
  * the table first, so a NULL row only says so. */
 void ia32_syscall_init(syscall_fn_t *table)
@@ -550,3 +552,5 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_LSM_LIST_MODULES] = NULL;
     table[SYS_MSEAL] = NULL;
 }
+
+#endif /* RACH2_IA32 */

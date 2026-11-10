@@ -22,6 +22,8 @@
 #include "../../syscall.h"
 #include "../../syscall_internal.h"
 
+#if RACH2_IA32
+
 /*
  * Each call converts the i386 structure into the x86-64 one, a pair of longs
  * for each time, and runs the x86-64 handler on it (`ia32_native`), whose
@@ -516,3 +518,5 @@ int ia32_never_restarts(syscall_fn_t fn, const isr_params_t *params)
            fn == compat_sys_pselect6_time64 || fn == compat_sys_ppoll_time32 ||
            fn == compat_sys_ppoll_time64 || fn == compat_sys_epoll_pwait2;
 }
+
+#endif /* RACH2_IA32 */

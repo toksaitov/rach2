@@ -270,11 +270,13 @@ typedef struct {
  * or ET_DYN program this kernel loads: the checks of `elf_check` the header
  * alone can answer, with a program header table offset that fits in 32
  * bits. Under ELF_IA32 an ELF32 header of EM_386, whose program headers
- * are ELF32's, passes too. The table is not bounded against the file and
- * the entry point is not checked; the loader, which reads the rest of the
- * file on demand, fails a short read of the table and checks the entry
- * against the user image window. execve uses it to tell a program from a
- * script.
+ * are ELF32's, passes too, unless the boot option `ia32_emulation=` turned
+ * the i386 ABI off (`ia32_enabled_verbose`), when the exec of such a
+ * program fails with ENOEXEC, as on Linux. The table is not bounded against
+ * the file and the entry point is not checked; the loader, which reads the
+ * rest of the file on demand, fails a short read of the table and checks
+ * the entry against the user image window. execve uses it to tell a
+ * program from a script.
  */
 bool elf_valid_exec(const void *ehdr, uint32_t len);
 

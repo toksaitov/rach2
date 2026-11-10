@@ -23,9 +23,14 @@
 # them.
 #
 # Run from a writable copy of this tree: make -f guest.mk
+#
+# KEXTRA adds flags to every compile, as the host Makefile's does: on x86-64,
+# `make -f guest.mk KEXTRA=-DRACH2_IA32=0` builds the kernel without the i386
+# ABI, as the host's `make IA32=0` does, from the same list of sources.
 
 KCC = /bin/cc
-KCFLAGS = -Wall -Wunsupported -nostdlib $(ACPI_TCC_CFLAGS) $(ARCH_TCC_CFLAGS)
+KEXTRA =
+KCFLAGS = -Wall -Wunsupported -nostdlib $(ACPI_TCC_CFLAGS) $(ARCH_TCC_CFLAGS) $(KEXTRA)
 
 # ACPICA's core (sys/acpi/sources.mk), which the image stages beside the
 # kernel's sources as the archive vendor/acpica.tar.bz2, made by

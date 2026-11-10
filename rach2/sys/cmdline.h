@@ -54,6 +54,18 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen);
  */
 int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen);
 
+/**
+ * The value of the boolean option `key`, read as Linux's `kstrtobool` reads
+ * a kernel parameter: a value that begins with y, Y, t, T or 1, or with on
+ * in either case, is true; one that begins with n, N, f, F or 0, or with of
+ * in either case, is false; any other is ignored. Each `key=value` token is
+ * read in order, so the last one read wins, as Linux runs an early
+ * parameter once for each occurrence.
+ *
+ * @return the value, or `dflt` when no token gives one.
+ */
+int kcmdline_bool(const char *key, int dflt);
+
 /** How many `key=` tokens the line has. */
 int kcmdline_count(const char *key);
 
