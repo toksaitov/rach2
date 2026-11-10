@@ -547,6 +547,13 @@ A batch that does not finish is found by the driver's heartbeat, which
 beats every 2.5 seconds while the GPU is busy, and its engine is reset
 between 5 and 7.5 seconds after the batch reached it, or the whole GPU
 when the engine does not reset.
+The parameters
+.Pa reset
+and
+.Pa enable_hangcheck
+in debugfs change this, as
+.Xr debugfs 5
+describes.
 The batch's out-fence ends with
 .Er EIO ,
 and the batches behind it run; after a reset of the whole GPU those of
