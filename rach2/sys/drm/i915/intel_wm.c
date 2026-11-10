@@ -501,6 +501,29 @@ void intel_wm_commit(struct intel_crtc *c, struct drm_atomic_state *state, int m
     }
 }
 
+void intel_wm_sanitize(struct drm_i915_private *i915)
+{
+    struct intel_pipe_wm wm[I915_NUM_PIPES];
+    int pipe;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &i915->display.crtc[pipe];
+
+        if (intel_wm_compute(c, NULL, &c->cfg, &wm[pipe]) != 0) {
+            klog(KLOG_WARN, "i915", "wm: pipe %c: no valid watermarks for the inherited state",
+                 'A' + pipe);
+            return;
+        }
+    }
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &i915->display.crtc[pipe];
+
+        c->wm_optimal = wm[pipe];
+        c->wm_active = wm[pipe];
+    }
+    program(i915);
+}
+
 void intel_wm_cancel(struct intel_crtc *c)
 {
     if (c->wm_pending) {
@@ -547,8 +570,8 @@ void intel_wm_init(struct drm_i915_private *i915)
     d->wm_latency[2] = (uint16_t)((lo >> 12) & 0xffu);
     d->wm_latency[3] = (uint16_t)((lo >> 20) & 0x1ffu);
     d->wm_latency[4] = (uint16_t)(hi & 0x1ffu);
-    /* Linux's ilk_wm_get_hw_state: the low-power levels off until the
-     * first commit computes them. */
+    /* Linux's ilk_wm_get_hw_state: the low-power levels off until
+     * intel_wm_sanitize computes them. */
     lp_off(i915, WM3_LP_ILK);
     lp_off(i915, WM2_LP_ILK);
     lp_off(i915, WM1_LP_ILK);

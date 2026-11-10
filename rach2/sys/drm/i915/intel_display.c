@@ -1412,6 +1412,8 @@ int32_t intel_display_init(struct drm_i915_private *i915)
         }
     }
     intel_dpll_sanitize(i915);
+    /* After the firmware's framebuffer is the primary's, which it needs. */
+    intel_wm_sanitize(i915);
     if (d->dp.present) {
         intel_backlight_setup(i915);
     }

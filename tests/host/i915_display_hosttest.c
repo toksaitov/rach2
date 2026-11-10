@@ -557,6 +557,16 @@ static void row_readout(void)
 
 /* ---- 78-9.2: adoption and the takeover ---- */
 
+/** The bind's watermarks, Linux's ilk_wm_sanitize at the latencies 2, 2,
+ * 18, 45 and 80 us: level 0, and LP1 level 1, LP2 level 3 and LP3 level 4
+ * with each level's latency field, for the adopted plane of 1366 pixels. */
+static void row_adopt_wm(void)
+{
+    CHECK(reg(WM0_PIPE_ILK(0)) == 12u << 16 && reg(WM1_LP_ILK) == 0x82300c00u &&
+              reg(WM2_LP_ILK) == 0x8650d900u && reg(WM3_LP_ILK) == 0x88715800u,
+          "adopt: the watermarks computed for the adopted plane and written");
+}
+
 /** The bind's adoption: no register of the pipes, planes, transcoders,
  * DDI buffers, clocks or backlight written, the panel's sequencer given
  * Linux's delays and AUX messages sent; pipe A on in the atomic state with
@@ -567,7 +577,6 @@ static void row_adopt(void)
 
     CHECK(!wrote_range(0x60000u, 0x6400fu, log_at_init) &&
               !wrote_range(0x64028u, 0x7ffffu, log_at_init) &&
-              !wrote_range(0x45000u, 0x452ffu, log_at_init) &&
               !wrote_range(0x46100u, 0x46114u, log_at_init) &&
               !wrote_range(0xc7200u, 0xc7203u, log_at_init) &&
               !wrote_range(0xc8250u, 0xc8258u, log_at_init) &&
@@ -647,17 +656,12 @@ static void row_takeover(void)
     CHECK(!wrote_range(0x60000u, 0x6ffffu, from) && !wrote_range(0xc7200u, 0xc72ffu, from),
           "takeover: no transcoder, pipe or panel register written");
     CHECK(reg(CPU_VGACNTRL) & VGA_DISP_DISABLE, "takeover: the VGA plane off");
-    /* Linux's values at the latencies 2, 2, 18, 45 and 80 us: level 0, and
-     * LP1 level 1, LP2 level 3 and LP3 level 4 with each level's latency
-     * field, written off before the vblank the blocking commit waits for
-     * and on after it. */
+    /* A plane of the same 1366 pixels needs the watermarks the bind
+     * wrote, and Linux's ilk_write_wm_values writes only a change. */
     CHECK(reg(WM0_PIPE_ILK(0)) == 12u << 16 && !pa->wm_pending &&
-              i915_model_find_write(&model, WM1_LP_ILK, 0x02300c00u, from) >= 0 &&
-              i915_model_find_write(&model, WM1_LP_ILK, 0x82300c00u, from) >
-                  i915_model_find_write(&model, WM1_LP_ILK, 0x02300c00u, from) &&
-              reg(WM1_LP_ILK) == 0x82300c00u && reg(WM2_LP_ILK) == 0x8650d900u &&
-              reg(WM3_LP_ILK) == 0x88715800u,
-          "takeover: the watermarks of 1366 pixels, the low-power levels on after the vblank");
+              !wrote_range(0x45100u, 0x4512bu, from) && reg(WM1_LP_ILK) == 0x82300c00u &&
+              reg(WM2_LP_ILK) == 0x8650d900u && reg(WM3_LP_ILK) == 0x88715800u,
+          "takeover: the watermarks of 1366 pixels kept, none written");
     frame();
     CHECK(i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(0),
           "takeover: the plane scans the console's buffer after the vblank");
@@ -982,7 +986,8 @@ static void row_backlight(void)
 /** crc/data's next line as its frame and CRC. */
 static int crc_line(uint32_t *frame_no, uint32_t *crc)
 {
-    char buf[64];
+    /* A line and its NUL are 67 bytes; a shorter read is refused. */
+    char buf[96];
 
     if (drm_crtc_crc_read(&pa->base, buf, sizeof(buf), 1) <= 0) {
         return 0;
@@ -1185,6 +1190,7 @@ int main(void)
     CHECK(bring_up() == 0, "the display is made");
     row_readout();
     row_adopt();
+    row_adopt_wm();
     row_probe();
     row_formats();
     row_takeover();
