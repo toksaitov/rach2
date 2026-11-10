@@ -285,6 +285,9 @@
 #define HSW_SCRATCH1                      0xb038
 #define GEN7_ROW_INSTDONE                 0xe164
 #define BCS_SWCTRL                        0x22200
+/* The four stream-out buffers' write offsets, which I915_EXEC_GEN7_SOL_RESET
+ * clears before a batch (i915_reg.h). */
+#define GEN7_SO_WRITE_OFFSET(n)           (0x5280u + (uint32_t)(n) * 4u)
 
 /* ------------------------------------------------------------------------
  * Commands (gt/intel_gpu_commands.h): a command's first dword holds its
@@ -314,6 +317,15 @@
 #define MI_LOAD_REGISTER_IMM(n)    MI_INSTR(0x22, 2u * (n) - 1u)
 #define MI_STORE_REGISTER_MEM      MI_INSTR(0x24, 1)
 #define MI_SRM_LRM_GLOBAL_GTT      (1u << 22)
+/* MI_BATCH_BUFFER_START on graphics 6 and 7: the batch's address follows.
+ * Bit 8 is the address space, the PPGTT when set, which the blitter's
+ * gen6_emit_bb_start sets as MI_BATCH_NON_SECURE_I965 and Haswell's render
+ * ring as MI_BATCH_PPGTT_HSW; Haswell's render ring takes non-secure in bit
+ * 13 (gt/gen6_engine_cs.c). A secure batch sets neither. */
+#define MI_BATCH_BUFFER_START      MI_INSTR(0x31, 0)
+#define MI_BATCH_NON_SECURE_I965   (1u << 8)
+#define MI_BATCH_PPGTT_HSW         (1u << 8)
+#define MI_BATCH_NON_SECURE_HSW    (1u << 13)
 #define MI_FLUSH_DW                MI_INSTR(0x26, 1)
 #define MI_FLUSH_DW_STORE_INDEX    (1u << 21)
 #define MI_INVALIDATE_TLB          (1u << 18)

@@ -30,6 +30,7 @@
 #define DRM_I915_GEM_GET_APERTURE     0x23
 #define DRM_I915_GEM_MMAP_GTT         0x24
 #define DRM_I915_GEM_MADVISE          0x26
+#define DRM_I915_GEM_EXECBUFFER2      0x29
 #define DRM_I915_GEM_WAIT             0x2c
 #define DRM_I915_GEM_CONTEXT_CREATE   0x2d
 #define DRM_I915_GEM_CONTEXT_DESTROY  0x2e
@@ -402,6 +403,94 @@ struct drm_i915_gem_mmap_offset {
     (I915_GEM_DOMAIN_RENDER | I915_GEM_DOMAIN_SAMPLER | I915_GEM_DOMAIN_COMMAND | \
      I915_GEM_DOMAIN_INSTRUCTION | I915_GEM_DOMAIN_VERTEX)
 
+/*
+ * GEM_EXECBUFFER2: run a batch. `buffers_ptr` holds `buffer_count`
+ * objects, the batch the last of them or, with I915_EXEC_BATCH_FIRST, the
+ * first; the batch starts `batch_start_offset` bytes into its object and
+ * runs `batch_len` bytes, 0 for the rest of it. The low 32 bits of `rsvd1`
+ * name the context. With I915_EXEC_FENCE_IN or _SUBMIT the low 32 bits of
+ * `rsvd2` are a sync file to wait for, and with I915_EXEC_FENCE_OUT the
+ * call returns a sync file of the batch's fence in its high 32 bits. With
+ * I915_EXEC_FENCE_ARRAY `cliprects_ptr` holds `num_cliprects` syncobjs to
+ * wait on or to signal.
+ */
+struct drm_i915_gem_relocation_entry {
+    uint32_t target_handle;
+    uint32_t delta;
+    uint64_t offset;
+    uint64_t presumed_offset;
+    uint32_t read_domains;
+    uint32_t write_domain;
+};
+
+#define EXEC_OBJECT_NEEDS_FENCE          (1u << 0)
+#define EXEC_OBJECT_NEEDS_GTT            (1u << 1)
+#define EXEC_OBJECT_WRITE                (1u << 2)
+#define EXEC_OBJECT_SUPPORTS_48B_ADDRESS (1u << 3)
+#define EXEC_OBJECT_PINNED               (1u << 4)
+#define EXEC_OBJECT_PAD_TO_SIZE          (1u << 5)
+#define EXEC_OBJECT_ASYNC                (1u << 6)
+#define EXEC_OBJECT_CAPTURE              (1u << 7)
+#define __EXEC_OBJECT_UNKNOWN_FLAGS      (~(uint64_t)((EXEC_OBJECT_CAPTURE << 1) - 1u))
+
+struct drm_i915_gem_exec_object2 {
+    uint32_t handle;
+    uint32_t relocation_count;
+    uint64_t relocs_ptr;
+    uint64_t alignment;
+    uint64_t offset;
+    uint64_t flags;
+    uint64_t pad_to_size; /* Linux's union with rsvd1 */
+    uint64_t rsvd2;
+};
+
+#define I915_EXEC_FENCE_WAIT            (1u << 0)
+#define I915_EXEC_FENCE_SIGNAL          (1u << 1)
+#define __I915_EXEC_FENCE_UNKNOWN_FLAGS (~((I915_EXEC_FENCE_SIGNAL << 1) - 1u))
+
+struct drm_i915_gem_exec_fence {
+    uint32_t handle;
+    uint32_t flags;
+};
+
+#define I915_EXEC_RING_MASK         0x3fu
+#define I915_EXEC_DEFAULT           0u
+#define I915_EXEC_RENDER            1u
+#define I915_EXEC_BSD               2u
+#define I915_EXEC_BLT               3u
+#define I915_EXEC_VEBOX             4u
+#define I915_EXEC_CONSTANTS_MASK    (3u << 6)
+#define I915_EXEC_GEN7_SOL_RESET    (1u << 8)
+#define I915_EXEC_SECURE            (1u << 9)
+#define I915_EXEC_IS_PINNED         (1u << 10)
+#define I915_EXEC_NO_RELOC          (1u << 11)
+#define I915_EXEC_HANDLE_LUT        (1u << 12)
+#define I915_EXEC_BSD_SHIFT         13
+#define I915_EXEC_BSD_MASK          (3u << I915_EXEC_BSD_SHIFT)
+#define I915_EXEC_RESOURCE_STREAMER (1u << 15)
+#define I915_EXEC_FENCE_IN          (1u << 16)
+#define I915_EXEC_FENCE_OUT         (1u << 17)
+#define I915_EXEC_BATCH_FIRST       (1u << 18)
+#define I915_EXEC_FENCE_ARRAY       (1u << 19)
+#define I915_EXEC_FENCE_SUBMIT      (1u << 20)
+#define I915_EXEC_USE_EXTENSIONS    (1u << 21)
+#define __I915_EXEC_UNKNOWN_FLAGS   (~(uint64_t)((I915_EXEC_USE_EXTENSIONS << 1) - 1u))
+#define I915_EXEC_CONTEXT_ID_MASK   0xffffffffu
+
+struct drm_i915_gem_execbuffer2 {
+    uint64_t buffers_ptr;
+    uint32_t buffer_count;
+    uint32_t batch_start_offset;
+    uint32_t batch_len;
+    uint32_t DR1;
+    uint32_t DR4;
+    uint32_t num_cliprects;
+    uint64_t cliprects_ptr;
+    uint64_t flags;
+    uint64_t rsvd1;
+    uint64_t rsvd2;
+};
+
 struct drm_i915_gem_set_domain {
     uint32_t handle;
     uint32_t read_domains;
@@ -529,6 +618,10 @@ struct drm_i915_gem_userptr {
     DRM_IOR(DRM_COMMAND_BASE + DRM_I915_GEM_GET_APERTURE, struct drm_i915_gem_get_aperture)
 #define DRM_IOCTL_I915_GEM_MADVISE \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_MADVISE, struct drm_i915_gem_madvise)
+#define DRM_IOCTL_I915_GEM_EXECBUFFER2 \
+    DRM_IOW(DRM_COMMAND_BASE + DRM_I915_GEM_EXECBUFFER2, struct drm_i915_gem_execbuffer2)
+#define DRM_IOCTL_I915_GEM_EXECBUFFER2_WR \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_EXECBUFFER2, struct drm_i915_gem_execbuffer2)
 #define DRM_IOCTL_I915_GEM_WAIT \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_WAIT, struct drm_i915_gem_wait)
 #define DRM_IOCTL_I915_GEM_CONTEXT_CREATE \

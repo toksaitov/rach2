@@ -29,10 +29,6 @@ static const struct {
     {"rcs0", RENDER_RING_BASE, RENDER_HWS_PGA_GEN7, GT_RENDER_USER_INTERRUPT},
     {"bcs0", BLT_RING_BASE, BLT_HWS_PGA_GEN7, GT_BLT_USER_INTERRUPT}};
 
-/* The bytes between the tail and the head that stay free, so that a full
- * ring's tail never reaches its head (intel_ring.h, CACHELINE_BYTES). */
-#define I915_RING_GAP 64u
-
 /* Linux's bounds for the stop (1 ms fast and 100 ms slow, taken as one),
  * the TLB flush and the start (gt/intel_engine_cs.c, intel_ring_submission.c),
  * and the driver's own for the room in a ring. */

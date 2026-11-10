@@ -220,6 +220,9 @@ struct i915_irq {
 
 /* The bytes of a ring, Linux's legacy ring (SZ_16K). */
 #define I915_RING_SIZE 16384u
+/* The bytes between the tail and the head that stay free, so that a full
+ * ring's tail never reaches its head (intel_ring.h, CACHELINE_BYTES). */
+#define I915_RING_GAP  64u
 
 /*
  * An engine and its ring (i915_ring.c). `mmio_base` is the base of its
@@ -250,6 +253,14 @@ struct i915_irq {
  * with a reference, and `kernel_ce` the GT's own, made with the first
  * request. `reserved` is the bytes `i915_ring_begin` leaves free for the
  * breadcrumb of the request being built.
+ *
+ * Submission. RING_TAIL moves past a request only once every fence it
+ * waits for has signalled and every request before it has gone, as the
+ * one timeline of a legacy ring in Linux orders them: `queued` is the
+ * oldest request on the list not yet given to the chip, NULL when all
+ * are. `kick` is set, under `lock`, when a request's last fence signals
+ * outside the big kernel lock, and the submission worker then moves the
+ * tail (i915_request.c).
  */
 struct i915_request;
 struct intel_context;
@@ -279,6 +290,8 @@ struct i915_engine {
     struct intel_context *kernel_ce;
     uint32_t reserved;
     void (*irq_notify)(struct drm_i915_private *i915, struct i915_engine *engine);
+    struct i915_request *queued;
+    uint8_t kick;
 };
 
 /*
@@ -297,6 +310,9 @@ struct i915_engine {
  * GT unparked. `wedged` is set when the GPU cannot run work, and new
  * requests and contexts fail with -EIO, as Linux's terminally wedged GT.
  * `reset_count` counts the GPU's resets, for GET_RESET_STATS.
+ * `submit_next` links the devices whose requests may wait for fences, for
+ * the submission worker, and `submit_listed` says the device is on that
+ * list.
  */
 struct i915_gt {
     uint64_t ggtt_top;
@@ -309,6 +325,8 @@ struct i915_gt {
     uint8_t awake;
     uint8_t wedged;
     uint32_t reset_count;
+    uint8_t submit_listed;
+    struct drm_i915_private *submit_next;
 };
 
 /*
@@ -446,10 +464,18 @@ struct i915_fence_reg {
 #define I915_NUM_FENCES 32
 
 /* What `i915_vma_pin` is asked: the binding inside the aperture, from the
- * top of the space down, and no eviction to make room. */
-#define I915_PIN_MAPPABLE 0x1u
-#define I915_PIN_HIGH     0x2u
-#define I915_PIN_NOEVICT  0x4u
+ * top of the space down, no eviction to make room, and, with eviction, no
+ * wait for the GPU (Linux's PIN_NONBLOCK) or a wait no signal ends, which
+ * a page fault asks, since it cannot be restarted. `i915_vma_pin_args`
+ * adds a binding at the offset it names (PIN_OFFSET_FIXED) or above it
+ * (PIN_OFFSET_BIAS). */
+#define I915_PIN_MAPPABLE     0x1u
+#define I915_PIN_HIGH         0x2u
+#define I915_PIN_NOEVICT      0x4u
+#define I915_PIN_NONBLOCK     0x8u
+#define I915_PIN_OFFSET_FIXED 0x10u
+#define I915_PIN_OFFSET_BIAS  0x20u
+#define I915_PIN_NOINTR       0x40u
 
 /*
  * A binding of an object, or of a part of it, into the global GTT, Linux's
@@ -1337,7 +1363,7 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 22
+#define I915_NUM_IOCTLS 23
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
@@ -1406,6 +1432,27 @@ int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t t
  * the GPU to see it, as Linux's i915_gem_cpu_write_needs_clflush. */
 int i915_gem_cpu_write_needs_clflush(const struct drm_i915_gem_object *obj);
 
+/* Whether the kernel flushes a range before or after it touches the pages
+ * through the processor's cache (Linux's CLFLUSH_BEFORE and _AFTER). */
+#define I915_CLFLUSH_BEFORE 0x1u
+#define I915_CLFLUSH_AFTER  0x2u
+
+/**
+ * Get the object's pages ready for the processor to write through its
+ * cache, as Linux's i915_gem_object_prepare_write: its work waited for, its
+ * pages pinned, which the caller drops, its write domain flushed, and in
+ * `*needs_clflush` the I915_CLFLUSH_ bits the write needs.
+ *
+ * @return 0, -ENODEV for an import, or the wait's and the pin's errors.
+ */
+int32_t i915_gem_object_prepare_write(struct drm_i915_gem_object *obj, uint32_t *needs_clflush);
+
+/** Make what the processor wrote to the object reach memory before the GPU
+ * reads it, as Linux's execbuffer does for each object: the write domain
+ * of the CPU, the aperture or write-combining flushed, and a cache the
+ * GPU does not snoop flushed. */
+void i915_gem_object_flush_for_gpu(struct drm_i915_gem_object *obj);
+
 /** Make the writes of the object's write domain, if it is one of
  * `flush_domains`, reach memory, and leave it with none, as Linux's
  * flush_write_domain. */
@@ -1452,6 +1499,25 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
 void i915_gem_unplug(struct drm_i915_private *i915);
 
 /**
+ * GEM_EXECBUFFER2 and its _WR form, as Linux 6.18's
+ * i915_gem_execbuffer2_ioctl on a legacy ring (i915_gem_execbuffer.c): the
+ * objects bound and relocated, the batch started on the engine the flags
+ * or the context's map name, its fences awaited and signalled.
+ */
+int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+
+/**
+ * Check a batch of `len` bytes from `start` in `batch` before `engine`
+ * runs it, as Linux's intel_engine_cmd_parser will (i915_cmd_parser.c).
+ * A batch of a caller with privilege runs unparsed; until the parser is
+ * written every other is refused.
+ *
+ * @return 0 to run the batch, or -EACCES.
+ */
+int32_t i915_cmd_parser_check(struct i915_engine *engine, struct drm_i915_gem_object *batch,
+                              uint32_t start, uint32_t len, int privileged);
+
+/**
  * Reserve `size` bytes of the global GTT, inside the aperture with
  * I915_PIN_MAPPABLE, for the kernel's own use, as Linux's
  * i915_gem_gtt_reserve, into `*offset`. The entries are the caller's to
@@ -1479,6 +1545,34 @@ void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset);
  */
 int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
                      uint32_t flags, uint32_t align, struct i915_vma **out);
+
+/*
+ * Where `i915_vma_pin_args` binds a whole object: `flags` are I915_PIN_*,
+ * `align` a power of two or 0, `size` the least bytes its node takes
+ * (EXEC_OBJECT_PAD_TO_SIZE), 0 for the object's, and `offset` the offset
+ * of I915_PIN_OFFSET_FIXED or the lowest of I915_PIN_OFFSET_BIAS.
+ */
+struct i915_pin_args {
+    uint32_t flags;
+    uint64_t align;
+    uint64_t size;
+    uint64_t offset;
+};
+
+/**
+ * Bind the whole object where `a` says and pin the binding, as Linux's
+ * i915_vma_pin_ww for a program's batch: a binding that exists is reused
+ * unless it is misplaced (Linux's i915_vma_misplaced), when it is undone
+ * first. A fixed offset takes its range from the bindings there, each
+ * waited for while the GPU uses it unless I915_PIN_NONBLOCK, as Linux's
+ * i915_gem_evict_for_node. In `*out`.
+ *
+ * @return 0; -EINVAL for a fixed offset not aligned or past the GTT;
+ *         -ENOSPC without room, or when a binding in the way is pinned or
+ *         the firmware's or the GT's; -EINTR; or `i915_vma_pin`'s errors.
+ */
+int32_t i915_vma_pin_args(struct drm_i915_gem_object *obj, const struct i915_pin_args *a,
+                          struct i915_vma **out);
 
 /** Drop a pin `i915_vma_pin` took; the binding stays, but for a userptr
  * object's whose program's pages changed while it was pinned, which the
@@ -1514,27 +1608,53 @@ struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgo
 void i915_vma_update_fenceable(struct i915_vma *vma);
 
 /**
- * The range of `size` bytes aligned to `align` below `hi` of the global
+ * The range of `size` bytes aligned to `align` in [lo, hi) of the global
  * GTT that no binding, kept surface or object of the GT's touches, the
  * lowest, or with I915_PIN_HIGH the highest, in `*at`; a binding marked
  * `evict` counts as free. 0, or -ENOSPC.
  */
-int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t hi,
-                       uint32_t flags, uint64_t *at);
+int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t align, uint64_t lo,
+                       uint64_t hi, uint32_t flags, uint64_t *at);
 
 /**
  * Make room in [start, end) of the global GTT for `size` bytes aligned to
  * `align`, at the end `flags` names, as Linux's i915_gem_evict_something:
  * the bindings of objects are scanned least recently used first, each
  * unpinned one whose object is idle counted as free, until a range fits;
- * then those of the scanned that lie in the range are undone. A pinned
- * binding, one whose object the GPU may still use, and a range the kernel
- * reserved are never undone. Does not sleep.
+ * then those of the scanned that lie in the range are undone. When the
+ * idle bindings make no room, it waits for the GPU to finish its work and
+ * scans once more, as Linux's ggtt_flush, unless `flags` has
+ * I915_PIN_NONBLOCK. A pinned binding, one whose object the GPU may still
+ * use, and a range the kernel reserved are never undone. Sleeps only in
+ * that wait, which a signal ends.
  *
- * @return 0, or -ENOSPC when even the idle bindings make no room.
+ * @return 0, -ENOSPC when even the idle bindings make no room, or -EINTR.
  */
 int32_t i915_gem_evict_something(struct drm_i915_private *i915, uint64_t size, uint64_t align,
                                  uint64_t start, uint64_t end, uint32_t flags);
+
+/**
+ * Empty [start, start + size) of the global GTT for a binding at a fixed
+ * offset, as Linux's i915_gem_evict_for_node: each binding there undone,
+ * once the GPU has finished with its object, which is waited for unless
+ * `flags` has I915_PIN_NONBLOCK. With I915_PIN_NOEVICT nothing is undone.
+ *
+ * @return 0; -ENOSPC when a binding there is pinned or, with
+ *         I915_PIN_NOEVICT, is there at all, or when the range meets the
+ *         firmware's surfaces or the GT's own objects, or a binding is busy
+ *         under I915_PIN_NONBLOCK; or -EINTR.
+ */
+int32_t i915_gem_evict_for_node(struct drm_i915_private *i915, uint64_t start, uint64_t size,
+                                uint32_t flags);
+
+/**
+ * Undo every binding of an object that nothing pins, once the GPU is idle,
+ * as Linux's i915_gem_evict_vm, for a submission that found no room for
+ * its objects otherwise. May sleep.
+ *
+ * @return 0 or -EINTR.
+ */
+int32_t i915_gem_evict_vm(struct drm_i915_private *i915);
 
 /* ---- i915_gem_shrinker.c ---- */
 
@@ -1918,9 +2038,24 @@ struct i915_file {
  * the chip saves into its image until then; `switched` says so, since
  * `prev_ce` is NULL at the first switch. `set_context` is set when it
  * loads `ce`'s image, and `was_valid` is whether the image was valid
- * before. `head`, `postfix` and `tail` are its ring offsets: its first
- * command, its breadcrumb and past its end.
+ * before. `head`, `infix`, `postfix` and `tail` are its ring offsets: its
+ * first command, its payload after the invalidation and the switch, its
+ * breadcrumb, and past its end.
+ *
+ * Submission. `awaits` counts what must happen before the chip may run it:
+ * the fences it waits for that have not signalled, the requests on other
+ * engines it waits to see given to the chip, and one count held while it
+ * is built; each has a record on `await_list`. `exec_waiters` holds the
+ * records of the requests that wait for this one to be given to the chip
+ * (I915_EXEC_FENCE_SUBMIT). `added` is set once it is on its engine's
+ * list, `submitted` once RING_TAIL is past it. A request whose fence holds
+ * an error when it is given to the chip has its payload filled with
+ * MI_NOOP, so that only its breadcrumb runs, as Linux's
+ * __i915_request_skip. `awaits` and `added` change under the submission's
+ * lock in i915_request.c, since a fence may signal in an interrupt.
  */
+struct i915_await;
+
 struct i915_request {
     struct i915_fence fence;
     struct drm_i915_private *i915;
@@ -1929,13 +2064,51 @@ struct i915_request {
     struct intel_context *prev_ce;
     uint32_t seqno;
     uint32_t head;
+    uint32_t infix;
     uint32_t postfix;
     uint32_t tail;
     uint8_t switched;
     uint8_t set_context;
     uint8_t was_valid;
+    uint8_t added;
+    uint8_t submitted;
+    uint32_t awaits;
+    struct i915_await *await_list;
+    struct i915_await *exec_waiters;
     struct i915_request *next; /* the engine's, oldest first */
 };
+
+/*
+ * What a request waits for: a fence, with a reference, whose callback `cb`
+ * counts it done, or, with `fence` NULL, the request `src` on another
+ * engine, done when that one is given to the chip. `next` links the
+ * waiting request's records and `exec_next` those `src` holds.
+ */
+struct i915_await {
+    struct dma_fence_cb cb; /* first, so that the callback finds its record */
+    struct i915_request *rq;
+    struct dma_fence *fence;
+    struct i915_request *src;
+    struct i915_await *next;
+    struct i915_await *exec_next;
+};
+
+/** Whether the caller may do what Linux asks CAP_SYS_ADMIN for. */
+int i915_capable(void);
+
+/* A handler of one extension of a chain, given the extension's user
+ * address: 0 or -errno. */
+typedef int32_t (*i915_ext_fn)(uintptr_t ext, void *data);
+
+/**
+ * Walk the chain of extensions from the user address `ext`, as Linux's
+ * i915_user_extensions: each one's flags and reserved words must be 0,
+ * and its name must have a handler in `tbl` of `count`.
+ *
+ * @return 0; -E2BIG past 512 extensions; -EINVAL for a word that must be 0
+ *         or an unknown name; -EFAULT; or a handler's error.
+ */
+int32_t i915_user_extensions(uint64_t ext, const i915_ext_fn *tbl, uint32_t count, void *data);
 
 /** The driver's open hook: the file's state and its default context, 0.
  * 0 or -ENOMEM. */
@@ -2007,14 +2180,17 @@ uint16_t i915_engine_uabi_class(const struct i915_engine *engine);
 
 /**
  * Begin a request on the state `ce`, as Linux's i915_request_create on a
- * legacy ring: requests that completed retired, the GT unparked, the
- * GT's own objects and the default state made with the first, then the
- * caches and TLBs invalidated and the chip switched to `ce`'s state. Room
- * for the breadcrumb is kept until `i915_request_add`, which must follow
- * before the caller sleeps. In `*out`, with one reference, the caller's.
+ * legacy ring: the submission worker started, requests that completed
+ * retired, room in the ring waited for (Linux's wait_for_space), the GT
+ * unparked, the GT's own objects and the default state made with the
+ * first, then the caches and TLBs invalidated and the chip switched to
+ * `ce`'s state. Room for the breadcrumb is kept until `i915_request_add`,
+ * which must follow before the caller sleeps. In `*out`, with one
+ * reference, the caller's.
  *
  * @return 0; -EIO when the GPU is wedged or the ring refuses the commands;
- *         -ENOMEM; -ENOSPC without room in the GTT for an image.
+ *         -EINTR in the wait for room; -ENOMEM; -ENOSPC without room in
+ *         the GTT for an image.
  */
 int32_t i915_request_create(struct intel_context *ce, struct i915_request **out);
 
@@ -2047,6 +2223,34 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
 
 /** Drop a reference to a request. */
 void i915_request_put(struct i915_request *rq);
+
+/**
+ * Hold the request, which is being built, until `fence` has signalled, as
+ * Linux's i915_request_await_dma_fence: each leaf of an array or a chain
+ * that has not signalled and is not of the request's own engine, whose
+ * ring runs in order, is awaited. With `exec`, a leaf that is a request of
+ * this device on another engine is awaited only until it is given to the
+ * chip, as Linux's i915_request_await_execution; any other leaf until it
+ * signals. A leaf that signals with an error other than -EAGAIN and
+ * -ETIMEDOUT gives the request that error, and its payload is not run.
+ *
+ * @return 0, or -ENOMEM.
+ */
+int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fence, int exec);
+
+/**
+ * Wait for every request of the device to complete and retire them, as
+ * Linux's intel_gt_wait_for_idle with no timeout: interruptible by a
+ * signal when `intr` is set. A request held by a fence waits with it.
+ *
+ * @return 0, or -EINTR.
+ */
+int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr);
+
+/** Give the chip each request whose last fence signalled outside the big
+ * kernel lock, on every device: the submission worker's work, which a host
+ * test calls itself. Returns the engines it moved. */
+int i915_submit_work(void);
 
 /** Retire every request whose breadcrumb the chip has written, oldest
  * first on each engine, and park the GT once every engine is idle, as

@@ -13,10 +13,16 @@
 #include "../../dmabuf/dmabuf.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
+#include "../../lib/kirq.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../proc/percpu.h"
 #include "../../timer.h"
+#ifndef RACH2_HOSTTEST
+#include "../../arch/arch.h"
+#include "../../proc/process.h"
+#include "../../proc/sched.h"
+#endif
 
 /* The dwords of the commands a request takes: the render ring's flush
  * with its invalidation, Linux's gen7_emit_flush_rcs with gen7_stall_cs;
@@ -42,10 +48,377 @@
 #define I915_RECORD_TIMEOUT_NS 200000000ll
 #define I915_WAIT_SLICE_NS     1000000000ll
 
+/* The room a request is given in its ring before it begins, which holds
+ * the most the driver emits for one with its breadcrumb and a wrap, as
+ * Linux's intel_ring_begin waits for the requests ahead to free it. */
+#define I915_REQUEST_ROOM 2048u
+
 /** Whether `rq`'s breadcrumb has been written or its fence signalled. */
 int i915_request_completed(const struct i915_request *rq)
 {
     return rq->fence.base.signaled || i915_engine_passed(rq->engine, rq->seqno);
+}
+
+/* ------------------------------------------------------------------------
+ * Submission
+ */
+
+/* The lock of every request's `awaits` and `added` and every engine's
+ * `kick`, innermost of all, since a fence may signal in any interrupt and
+ * with an engine's lock held. */
+static struct spinlock submit_lock = SPINLOCK_INIT;
+
+/* The devices whose requests may wait for fences, by their GT's
+ * `submit_next`; and whether an engine has a request to give the chip,
+ * which the worker waits for. */
+static struct drm_i915_private *submit_devices;
+static volatile int submit_kicked;
+static wait_queue_t submit_wait;
+
+/** Whether a fence's error keeps a request that waits for it from running,
+ * as Linux's fatal_error: any but -EAGAIN, an innocent request's in a
+ * reset, and -ETIMEDOUT. */
+static int fatal_error(int32_t err)
+{
+    return err != 0 && err != -EAGAIN && err != -ETIMEDOUT;
+}
+
+/**
+ * One thing `rq` waited for is done, with the error `err` it brings: the
+ * last one done once the request is on its engine's list marks the engine
+ * for the worker. Any context, an interrupt among them.
+ */
+static void await_done(struct i915_request *rq, int32_t err)
+{
+    uint32_t flags = spin_lock_irqsave(&submit_lock);
+    int kick = 0;
+
+    if (fatal_error(err) && !rq->fence.base.error) {
+        dma_fence_set_error(&rq->fence.base, err);
+    }
+    if (--rq->awaits == 0 && rq->added) {
+        rq->engine->kick = 1;
+        submit_kicked = 1;
+        kick = 1;
+    }
+    spin_unlock_irqrestore(&submit_lock, flags);
+    if (kick) {
+        wq_wake_all(&submit_wait);
+    }
+}
+
+/** A fence a request waited for signalled. In the signaller's context. */
+static void await_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
+{
+    await_done(((struct i915_await *)cb)->rq, fence->error);
+}
+
+/** Fill [from, to) of `e`'s ring with MI_NOOP, across its end if need be. */
+static void ring_noop(struct i915_engine *e, uint32_t from, uint32_t to)
+{
+    while (from != to) {
+        e->ring[from / 4u] = MI_NOOP;
+        from = (from + 4u) & (e->ring_size - 1u);
+    }
+}
+
+/**
+ * Give the chip the requests of `e` that wait for nothing more, oldest
+ * first, up to the first that still waits, as Linux's ring submission
+ * moves RING_TAIL: a request whose fence holds an error keeps only its
+ * breadcrumb, and the requests that waited to see one given to the chip
+ * are told. Under the big kernel lock.
+ */
+static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
+{
+    struct i915_request *first, *last = 0, *rq;
+    struct i915_await *w, *next;
+    uint32_t flags = spin_lock_irqsave(&submit_lock);
+
+    first = e->queued;
+    while ((rq = e->queued) != 0 && rq->awaits == 0) {
+        rq->submitted = 1;
+        last = rq;
+        e->queued = rq->next;
+    }
+    spin_unlock_irqrestore(&submit_lock, flags);
+    if (!last) {
+        return;
+    }
+    for (rq = first;; rq = rq->next) {
+        if (fatal_error(rq->fence.base.error)) {
+            ring_noop(e, rq->infix, rq->postfix);
+        }
+        for (w = rq->exec_waiters; w; w = next) {
+            next = w->exec_next;
+            w->exec_next = 0;
+            w->src = 0;
+            await_done(w->rq, 0);
+        }
+        rq->exec_waiters = 0;
+        if (rq == last) {
+            break;
+        }
+    }
+    /* The commands reach memory before the chip reads the tail. */
+    arch_dma_fence();
+    i915_uncore_write(i915, RING_TAIL(e->mmio_base), last->tail);
+}
+
+int i915_submit_work(void)
+{
+    struct drm_i915_private *i915;
+    uint32_t flags;
+    int i, kicked, n = 0;
+
+    submit_kicked = 0;
+    for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
+        for (i = 0; i < I915_NUM_ENGINES; i++) {
+            struct i915_engine *e = &i915->gt.engine[i];
+
+            flags = spin_lock_irqsave(&submit_lock);
+            kicked = e->kick;
+            e->kick = 0;
+            spin_unlock_irqrestore(&submit_lock, flags);
+            if (kicked) {
+                engine_submit(i915, e);
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+#ifndef RACH2_HOSTTEST
+static process_t *submit_thread;
+
+/** Whether an engine has a request whose last fence signalled. */
+static int submit_ready(void *arg)
+{
+    (void)arg;
+    return submit_kicked;
+}
+
+/** The submission worker, ki915: sleep in an idle wait until a fence a
+ * request waited for signals, then give the chip what is ready, holding
+ * the big lock as kernel code does. */
+static void submit_thread_main(void)
+{
+    arch_irq_enable();
+    for (;;) {
+        (void)wq_wait_event_idle(&submit_wait, submit_ready, 0);
+        (void)i915_submit_work();
+    }
+}
+
+/** Start the worker the first time a request waits for a fence: 0, or
+ * -ENOMEM. */
+static int32_t submit_worker_start(void)
+{
+    process_t *p;
+    uintptr_t base;
+    uint32_t flags;
+
+    if (submit_thread) {
+        return 0;
+    }
+    flags = kirq_save();
+    base = kstack_alloc();
+    p = base ? alloc_process() : 0;
+    if (!p) {
+        if (base) {
+            kstack_free(base + KERNEL_STACK_SIZE);
+        }
+        kirq_restore(flags);
+        klog(KLOG_ERR, "i915", "worker: refused: no record or stack for it");
+        return -ENOMEM;
+    }
+    p->kernel_stack = base + KERNEL_STACK_SIZE;
+    p->space_root = 0;
+    p->page_dir = 0;
+    p->parent_pid = 0;
+    proc_set_comm(p, "ki915");
+    setup_process_stack(p, submit_thread_main);
+    submit_thread = p;
+    sched_make_ready(p);
+    kirq_restore(flags);
+    klog(KLOG_DEBUG, "i915", "worker: ki915 is pid %d", (int)p->pid);
+    return 0;
+}
+
+/** Whether the worker runs. */
+static int submit_worker_started(void)
+{
+    return submit_thread != 0;
+}
+#else
+/** The host tests run the worker's work themselves (`i915_submit_work`). */
+static int32_t submit_worker_start(void)
+{
+    return 0;
+}
+
+/** The host tests' worker is always there. */
+static int submit_worker_started(void)
+{
+    return 1;
+}
+#endif
+
+/** Put the device on the worker's list, once. */
+static void submit_device_add(struct drm_i915_private *i915)
+{
+    if (!i915->gt.submit_listed) {
+        i915->gt.submit_listed = 1;
+        i915->gt.submit_next = submit_devices;
+        submit_devices = i915;
+    }
+}
+
+/** Take the device off the worker's list. */
+static void submit_device_remove(struct drm_i915_private *i915)
+{
+    struct drm_i915_private **link;
+
+    for (link = &submit_devices; *link; link = &(*link)->gt.submit_next) {
+        if (*link == i915) {
+            *link = i915->gt.submit_next;
+            break;
+        }
+    }
+    i915->gt.submit_listed = 0;
+    i915->gt.submit_next = 0;
+}
+
+/** A new record of what `rq` waits for, on its list and counted; NULL
+ * without memory. */
+static struct i915_await *await_new(struct i915_request *rq)
+{
+    struct i915_await *w = (struct i915_await *)kzalloc(sizeof(*w));
+    uint32_t flags;
+
+    if (!w) {
+        return 0;
+    }
+    w->rq = rq;
+    w->next = rq->await_list;
+    rq->await_list = w;
+    flags = spin_lock_irqsave(&submit_lock);
+    rq->awaits++;
+    spin_unlock_irqrestore(&submit_lock, flags);
+    return w;
+}
+
+/** Wait for `src`, a request of the same device, to be given to the chip,
+ * as Linux's __i915_request_await_execution. 0 or -ENOMEM. */
+static int32_t await_submit(struct i915_request *rq, struct i915_request *src)
+{
+    struct i915_await *w;
+
+    if (src->engine == rq->engine || src->submitted) {
+        return 0;
+    }
+    w = await_new(rq);
+    if (!w) {
+        return -ENOMEM;
+    }
+    w->src = src;
+    w->exec_next = src->exec_waiters;
+    src->exec_waiters = w;
+    return 0;
+}
+
+int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fence, int exec)
+{
+    struct i915_await *w;
+    struct dma_fence *leaf;
+    uint32_t i, n, flags;
+    int32_t err;
+
+    if (dma_fence_is_signaled(fence)) {
+        return 0;
+    }
+    /* `i915_request_create` started the worker, whose start may sleep; the
+     * leaves stay put only while nothing does. */
+    if (!submit_worker_started()) {
+        return -ENOMEM;
+    }
+    submit_device_add(rq->i915);
+    n = dma_fence_count(fence);
+    for (i = 0; i < n; i++) {
+        leaf = dma_fence_at(fence, i);
+        if (!leaf || dma_fence_is_signaled(leaf) || leaf->context == rq->engine->fence_context) {
+            continue;
+        }
+        if (exec && leaf->ops == &i915_fence_ops &&
+            ((struct i915_request *)leaf)->i915 == rq->i915) {
+            err = await_submit(rq, (struct i915_request *)leaf);
+            if (err < 0) {
+                return err;
+            }
+            continue;
+        }
+        w = await_new(rq);
+        if (!w) {
+            return -ENOMEM;
+        }
+        w->fence = dma_fence_get(leaf);
+        flags = kirq_save();
+        err = dma_fence_add_callback(leaf, &w->cb, await_fence_done);
+        kirq_restore(flags);
+        if (err != 0) {
+            /* It signalled meanwhile, and is not waited for, as Linux
+             * passes over a fence already signalled. */
+            flags = spin_lock_irqsave(&submit_lock);
+            rq->awaits--;
+            spin_unlock_irqrestore(&submit_lock, flags);
+        }
+    }
+    return 0;
+}
+
+/**
+ * Take back what `rq` still waits for, which then never comes: the fences'
+ * callbacks removed and the requests it waited to see submitted told to
+ * forget it; then free every record. For a request that leaves without
+ * running, and for one that retired, whose records are all spent.
+ */
+static void awaits_release(struct i915_request *rq)
+{
+    struct i915_await *w, **link;
+    uint32_t flags;
+
+    while ((w = rq->await_list) != 0) {
+        rq->await_list = w->next;
+        if (w->fence) {
+            flags = kirq_save();
+            (void)dma_fence_remove_callback(w->fence, &w->cb);
+            kirq_restore(flags);
+            dma_fence_put(w->fence);
+        } else if (w->src) {
+            for (link = &w->src->exec_waiters; *link; link = &(*link)->exec_next) {
+                if (*link == w) {
+                    *link = w->exec_next;
+                    break;
+                }
+            }
+        }
+        kfree(w);
+    }
+}
+
+/** Tell the requests that wait to see `rq` submitted that it never will
+ * be: they forget it, and may then run. */
+static void exec_waiters_release(struct i915_request *rq)
+{
+    struct i915_await *w;
+
+    while ((w = rq->exec_waiters) != 0) {
+        rq->exec_waiters = w->exec_next;
+        w->exec_next = 0;
+        w->src = 0;
+        await_done(w->rq, 0);
+    }
 }
 
 /* ------------------------------------------------------------------------
@@ -72,10 +445,13 @@ static void i915_request_signal(struct drm_i915_private *i915, struct i915_engin
     spin_unlock_irqrestore(&e->lock, flags);
 }
 
-/** Give up what a request held once the chip is past it: the state it
- * switched from, its own, and the engine list's reference. */
+/** Give up what a request held once the chip is past it: what it waited
+ * for, the state it switched from, its own, and the engine list's
+ * reference. */
 static void request_release(struct i915_request *rq)
 {
+    awaits_release(rq);
+    exec_waiters_release(rq);
     intel_context_put(rq->prev_ce);
     rq->prev_ce = 0;
     intel_context_put(rq->ce);
@@ -94,6 +470,9 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
     uint32_t flags;
 
     flags = spin_lock_irqsave(&e->lock);
+    if (all) {
+        e->queued = 0;
+    }
     while ((rq = e->requests) != 0 && (all || i915_engine_passed(e, rq->seqno))) {
         e->requests = rq->next;
         rq->next = 0;
@@ -317,12 +696,14 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     rq->i915 = i915;
     rq->engine = e;
     rq->ce = intel_context_get(ce);
+    rq->awaits = 1; /* its own, until it is added */
     rq->head = e->tail;
     e->reserved = breadcrumb_bytes(i915, e);
     err = emit_invalidate(rq);
     if (err == 0) {
         err = request_switch(rq);
     }
+    rq->infix = e->tail;
     if (err < 0) {
         request_rewind(rq);
         dma_fence_set_error(&rq->fence.base, err);
@@ -347,6 +728,7 @@ int32_t i915_request_add(struct i915_request *rq)
     n = breadcrumb_bytes(i915, e) / 4u;
     cs = i915_ring_begin(e, i915, n);
     if (!cs) {
+        awaits_release(rq);
         request_rewind(rq);
         dma_fence_set_error(&rq->fence.base, -EIO);
         (void)dma_fence_signal(&rq->fence.base);
@@ -397,7 +779,16 @@ int32_t i915_request_add(struct i915_request *rq)
     }
     e->requests_tail = rq;
     spin_unlock_irqrestore(&e->lock, flags);
-    i915_ring_advance(e, i915);
+    /* On the list, it waits only for its fences; the chip takes it once
+     * they and every request before it are done. */
+    flags = spin_lock_irqsave(&submit_lock);
+    if (!e->queued) {
+        e->queued = rq;
+    }
+    rq->added = 1;
+    rq->awaits--;
+    spin_unlock_irqrestore(&submit_lock, flags);
+    engine_submit(i915, e);
     return 0;
 }
 
@@ -575,6 +966,67 @@ static int32_t gt_contexts_init(struct drm_i915_private *i915)
     return 0;
 }
 
+/** The free bytes of a ring of `size` between `tail` and `head`, the gap
+ * kept out, as Linux's __intel_ring_space. */
+static uint32_t ring_space(uint32_t head, uint32_t tail, uint32_t size)
+{
+    return (head - tail - I915_RING_GAP) & (size - 1u);
+}
+
+/**
+ * Wait until `e`'s ring has I915_REQUEST_ROOM bytes free, as Linux's
+ * wait_for_space: the oldest request whose end leaves the room once the
+ * chip is past it is waited for, interruptibly, and the requests retired.
+ * A request held back by its fences is waited for with them. 0 or -EINTR.
+ */
+static int32_t ring_wait_for_space(struct i915_engine *e)
+{
+    struct i915_request *rq;
+    int32_t err;
+
+    if (ring_space(e->head, e->tail, e->ring_size) >= I915_REQUEST_ROOM) {
+        return 0;
+    }
+    for (rq = e->requests; rq; rq = rq->next) {
+        if (ring_space(rq->postfix, e->tail, e->ring_size) >= I915_REQUEST_ROOM) {
+            break;
+        }
+    }
+    if (!rq) {
+        return 0;
+    }
+    (void)dma_fence_get(&rq->fence.base);
+    err = i915_request_wait(rq, 1, -1);
+    i915_request_put(rq);
+    if (err == 0) {
+        e->head = rq->postfix;
+    }
+    return err;
+}
+
+int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
+{
+    struct i915_request *rq;
+    int32_t err;
+    int i;
+
+    for (;;) {
+        i915_retire_requests(i915);
+        for (i = 0, rq = 0; i < I915_NUM_ENGINES && !rq; i++) {
+            rq = i915->gt.engine[i].requests_tail;
+        }
+        if (!rq) {
+            return 0;
+        }
+        (void)dma_fence_get(&rq->fence.base);
+        err = i915_request_wait(rq, intr, -1);
+        i915_request_put(rq);
+        if (err < 0) {
+            return err;
+        }
+    }
+}
+
 int32_t i915_request_create(struct intel_context *ce, struct i915_request **out)
 {
     struct drm_i915_private *i915 = ce->i915;
@@ -583,7 +1035,20 @@ int32_t i915_request_create(struct intel_context *ce, struct i915_request **out)
     if (i915->gt.wedged || !ce->engine->running) {
         return -EIO;
     }
+    /* What may sleep comes first: from the request's start to its add the
+     * ring is its alone. */
+    err = submit_worker_start();
+    if (err < 0) {
+        return err;
+    }
     i915_retire_requests(i915);
+    err = ring_wait_for_space(ce->engine);
+    if (err < 0) {
+        return err;
+    }
+    if (i915->gt.wedged) {
+        return -EIO;
+    }
     if (!i915->gt.ctx_ready) {
         err = gt_contexts_init(i915);
         if (err < 0) {
@@ -599,6 +1064,7 @@ void i915_requests_unplug(struct drm_i915_private *i915)
     int i;
 
     gt->wedged = 1;
+    submit_device_remove(i915);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         struct i915_engine *e = &gt->engine[i];
 

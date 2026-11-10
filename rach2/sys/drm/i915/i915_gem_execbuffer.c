@@ -1,0 +1,1167 @@
+/*
+ * i915_gem_execbuffer.c: EXECBUFFER2, a program's batch run on the render
+ * or blitter ring, after Linux 6.18's gem/i915_gem_execbuffer.c on a
+ * legacy ring: the objects looked up, bound and relocated, the batch
+ * checked, its request built behind its fences, and the objects' implicit
+ * fences and domains moved to it.
+ */
+
+#include "i915.h"
+#include "i915_drm.h"
+#include "i915_reg.h"
+
+#include "../../dmabuf/dmabuf.h"
+#include "../../fs/fd.h"
+#include "../../lib/kerrno.h"
+#include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
+#include "../../mm/paging.h"
+#include "../../mm/usercopy.h"
+#include "../../proc/percpu.h"
+#include "../../proc/process.h"
+
+/* The user address a 64-bit field of a call names. */
+#define EB_USER_PTR(v) ((void __user *)(uintptr_t)(v))
+
+/* In an object's offset as the call keeps it, below the page: the object
+ * is now there, and the offset goes back to the program (Linux's UPDATE). */
+#define EB_UPDATE 0x1u
+
+/* The lowest offset of a batch that has relocations and is not pinned, so
+ * that a negative delta still gives an address in the GTT, as Linux's
+ * BATCH_OFFSET_BIAS. */
+#define EB_BATCH_BIAS (256u * 1024u)
+
+/* The flags of an object beyond the user's EXEC_OBJECT_ bits: it is the
+ * batch with relocations (Linux's __EXEC_OBJECT_NEEDS_BIAS), it holds a pin
+ * of its binding (__EXEC_OBJECT_HAS_PIN), or it waits for room. */
+#define EB_NEEDS_BIAS 0x80000000u
+#define EB_HAS_PIN    0x40000000u
+#define EB_UNBOUND    0x20000000u
+
+/* The relocations copied from the program at once, 512 bytes, as Linux. */
+#define EB_RELOC_CHUNK 16u
+
+/* Where a relocation entry holds its presumed offset. */
+#define EB_PRESUMED_AT 16u
+
+/* How the batch starts: privileged, as Linux's I915_DISPATCH_SECURE. */
+#define EB_DISPATCH_SECURE 0x1u
+
+/* An object of the call: its entry, a reference to it, and its binding. */
+struct eb_vma {
+    struct drm_i915_gem_exec_object2 *exec;
+    struct drm_i915_gem_object *obj;
+    struct i915_vma *vma;
+    uint32_t flags; /* the entry's EXEC_OBJECT_ flags and the EB_ ones */
+};
+
+/* A syncobj of I915_EXEC_FENCE_ARRAY, with a reference: the fence it held,
+ * with a reference, to wait for, and whether to signal it. */
+struct eb_fence {
+    struct drm_syncobj *syncobj;
+    struct dma_fence *fence;
+    uint32_t flags;
+};
+
+/*
+ * The state of one call, Linux's i915_execbuffer. `lut` finds an object's
+ * index by its handle, open addressed with `lut_mask + 1` slots that hold
+ * index + 1, NULL with I915_EXEC_HANDLE_LUT, where relocations name the
+ * index itself. `has_reloc` is set while relocations must be applied and,
+ * once the objects are placed, while their offsets go back to the program.
+ */
+struct eb {
+    struct drm_i915_private *i915;
+    struct drm_file *file;
+    struct drm_i915_gem_execbuffer2 *args;
+    struct drm_i915_gem_exec_object2 *exec;
+    struct eb_vma *ev;
+    uint32_t count;
+    uint32_t *lut;
+    uint32_t lut_mask;
+    uint32_t batch;
+    uint32_t batch_start;
+    uint32_t batch_len;
+    uint32_t dispatch;
+    uint8_t has_reloc;
+    struct i915_gem_context *ctx;
+    struct intel_context *ce;
+    struct eb_fence *fences;
+    uint32_t nfences;
+};
+
+/* ------------------------------------------------------------------------
+ * The call's checks and objects
+ */
+
+/**
+ * The checks of the call's words before anything is looked up, as Linux's
+ * i915_gem_check_execbuffer: flags Linux does not know or Haswell's ring
+ * submission refuses, cliprects, which only DRI1 had, the DR1 and DR4 of
+ * that time, of which a DR4 of 0xffffffff is taken as 0 for old Mesa, and
+ * a batch's start or length that is not of whole quadwords. 0 or -EINVAL.
+ */
+static int32_t eb_check(struct drm_i915_gem_execbuffer2 *args)
+{
+    if (args->flags &
+        (__I915_EXEC_UNKNOWN_FLAGS | I915_EXEC_CONSTANTS_MASK | I915_EXEC_RESOURCE_STREAMER)) {
+        return -EINVAL;
+    }
+    if (!(args->flags & (I915_EXEC_FENCE_ARRAY | I915_EXEC_USE_EXTENSIONS)) &&
+        (args->num_cliprects != 0 || args->cliprects_ptr != 0)) {
+        return -EINVAL;
+    }
+    if (args->DR4 == 0xffffffffu) {
+        args->DR4 = 0;
+    }
+    if (args->DR1 || args->DR4) {
+        return -EINVAL;
+    }
+    if ((args->batch_start_offset | args->batch_len) & 7u) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/** The slot of `handle` in the call's table: where it is, or the empty slot
+ * where it would go. */
+static uint32_t eb_lut_slot(const struct eb *eb, uint32_t handle)
+{
+    uint32_t at = (handle * 0x9e3779b1u) & eb->lut_mask;
+
+    while (eb->lut[at] && eb->exec[eb->lut[at] - 1u].handle != handle) {
+        at = (at + 1u) & eb->lut_mask;
+    }
+    return at;
+}
+
+/** The table of handles, with twice as many slots as objects at least, for
+ * relocations that name their targets by handle. 0 or -ENOMEM. */
+static int32_t eb_lut_build(struct eb *eb)
+{
+    uint32_t slots = 16, i, at;
+
+    while (slots < 2u * eb->count && slots < 0x80000000u) {
+        slots <<= 1;
+    }
+    if ((uint64_t)slots * sizeof(uint32_t) > (size_t)-1) {
+        return -ENOMEM;
+    }
+    eb->lut = (uint32_t *)kzalloc((size_t)slots * sizeof(uint32_t));
+    if (!eb->lut) {
+        return -ENOMEM;
+    }
+    eb->lut_mask = slots - 1u;
+    for (i = 0; i < eb->count; i++) {
+        at = eb_lut_slot(eb, eb->exec[i].handle);
+        if (!eb->lut[at]) {
+            eb->lut[at] = i + 1u;
+        }
+    }
+    return 0;
+}
+
+/** The object a relocation names, by its index with I915_EXEC_HANDLE_LUT or
+ * by its handle, as Linux's eb_get_vma; NULL for none. */
+static struct eb_vma *eb_target(const struct eb *eb, uint32_t handle)
+{
+    uint32_t at;
+
+    if (!eb->lut) {
+        return handle < eb->count ? &eb->ev[handle] : 0;
+    }
+    at = eb->lut[eb_lut_slot(eb, handle)];
+    return at ? &eb->ev[at - 1u] : 0;
+}
+
+/**
+ * Check an object's entry, as Linux's eb_validate_vma: no flag Linux does
+ * not know, an alignment of a power of two, a pinned offset of whole pages
+ * in the canonical form, and a pad of whole pages, which is cleared without
+ * EXEC_OBJECT_PAD_TO_SIZE, since the field was once reserved. The offset
+ * is then kept in the GTT's own form, and EXEC_OBJECT_NEEDS_FENCE, which
+ * only chips before graphics 4 heed, is dropped. 0 or -EINVAL.
+ */
+static int32_t eb_validate(struct drm_i915_gem_exec_object2 *entry)
+{
+    uint64_t canonical;
+
+    if (entry->flags & __EXEC_OBJECT_UNKNOWN_FLAGS) {
+        return -EINVAL;
+    }
+    if (entry->alignment & (entry->alignment - 1u)) {
+        return -EINVAL;
+    }
+    if (entry->flags & EXEC_OBJECT_PINNED) {
+        canonical = entry->offset & ~(uint64_t)(I915_GTT_PAGE_SIZE - 1u);
+        if (canonical & ((uint64_t)1 << 47)) {
+            canonical |= ~(((uint64_t)1 << 48) - 1u);
+        } else {
+            canonical &= ((uint64_t)1 << 48) - 1u;
+        }
+        if (entry->offset != canonical) {
+            return -EINVAL;
+        }
+    }
+    if (entry->flags & EXEC_OBJECT_PAD_TO_SIZE) {
+        if (entry->pad_to_size & (I915_GTT_PAGE_SIZE - 1u)) {
+            return -EINVAL;
+        }
+    } else {
+        entry->pad_to_size = 0;
+    }
+    entry->offset &= ((uint64_t)1 << 48) - 1u;
+    entry->flags &= ~(uint64_t)EXEC_OBJECT_NEEDS_FENCE;
+    return 0;
+}
+
+/**
+ * Look up every object of the call and check its entry, then the batch, as
+ * Linux's eb_lookup_vmas and eb_add_vma: the batch the last object, or the
+ * first with I915_EXEC_BATCH_FIRST, which may not be written by its own
+ * run, must hold its start and length, and, with relocations and no fixed
+ * place, keeps above EB_BATCH_BIAS. An object may be named twice.
+ *
+ * @return 0; -ENOENT for a handle with no object of the driver's; -EINVAL.
+ */
+static int32_t eb_lookup(struct eb *eb)
+{
+    struct drm_i915_gem_exec_object2 *entry;
+    struct eb_vma *batch;
+    uint64_t size;
+    uint32_t i;
+    int32_t err;
+
+    for (i = 0; i < eb->count; i++) {
+        entry = &eb->exec[i];
+        eb->ev[i].exec = entry;
+        eb->ev[i].obj = i915_gem_object_lookup(eb->file, entry->handle);
+        if (!eb->ev[i].obj) {
+            return -ENOENT;
+        }
+        err = eb_validate(entry);
+        if (err < 0) {
+            return err;
+        }
+        eb->ev[i].flags = (uint32_t)entry->flags;
+    }
+    eb->batch = (eb->args->flags & I915_EXEC_BATCH_FIRST) ? 0 : eb->count - 1u;
+    batch = &eb->ev[eb->batch];
+    if (batch->exec->relocation_count && !(batch->flags & EXEC_OBJECT_PINNED)) {
+        batch->flags |= EB_NEEDS_BIAS;
+    }
+    if (batch->flags & EXEC_OBJECT_WRITE) {
+        return -EINVAL; /* a batch that modifies itself */
+    }
+    size = batch->obj->base.size;
+    if (eb->batch_start >= size || eb->args->batch_len > size - eb->batch_start) {
+        return -EINVAL;
+    }
+    eb->batch_len = eb->args->batch_len ? eb->args->batch_len : (uint32_t)(size - eb->batch_start);
+    return eb->batch_len ? 0 : -EINVAL;
+}
+
+/* ------------------------------------------------------------------------
+ * Placement
+ */
+
+/** The object's binding of the whole of it, or NULL. */
+static struct i915_vma *eb_binding(const struct drm_i915_gem_object *obj)
+{
+    struct i915_vma *v = obj->vmas;
+
+    while (v && v->view_pages) {
+        v = v->obj_next;
+    }
+    return v;
+}
+
+/** What the entry asks of its binding, as Linux's eb_pin_flags: its pad and
+ * alignment, and its pinned offset or the batch's bias. */
+static void eb_pin_args(const struct eb_vma *ev, struct i915_pin_args *a)
+{
+    k_memset(a, 0, sizeof(*a));
+    a->align = ev->exec->alignment;
+    a->size = ev->exec->pad_to_size;
+    if (ev->flags & EXEC_OBJECT_PINNED) {
+        a->flags = I915_PIN_OFFSET_FIXED;
+        a->offset = ev->exec->offset;
+    } else if (ev->flags & EB_NEEDS_BIAS) {
+        a->flags = I915_PIN_OFFSET_BIAS;
+        a->offset = EB_BATCH_BIAS;
+    }
+}
+
+/** Whether the entry's binding fails what it asks, as Linux's
+ * eb_vma_misplaced. */
+static int eb_misplaced(const struct eb_vma *ev)
+{
+    const struct i915_vma *vma = ev->vma;
+
+    if (vma->node_size < ev->exec->pad_to_size) {
+        return 1;
+    }
+    if (ev->exec->alignment && (vma->start & (ev->exec->alignment - 1u))) {
+        return 1;
+    }
+    if ((ev->flags & EXEC_OBJECT_PINNED) && vma->start != ev->exec->offset) {
+        return 1;
+    }
+    return (ev->flags & EB_NEEDS_BIAS) && vma->start < EB_BATCH_BIAS;
+}
+
+/** Drop the entry's pin of its binding, if it holds one. */
+static void eb_unpin(struct eb_vma *ev)
+{
+    if (ev->flags & EB_HAS_PIN) {
+        i915_vma_unpin(ev->vma);
+        ev->flags &= ~EB_HAS_PIN;
+    }
+}
+
+/**
+ * Pin the entry's binding where it lies, or else at the offset the program
+ * last saw, or else anywhere free that serves it, evicting nothing, as
+ * Linux's eb_pin_vma: 0, or -ENOSPC when the binding must move first or
+ * has no place yet, which the reservation's passes then give it, as Linux
+ * leaves every failure here to them.
+ */
+static int32_t eb_pin_first(struct eb_vma *ev)
+{
+    struct i915_vma *v = eb_binding(ev->obj);
+    struct i915_pin_args a;
+    int32_t err;
+
+    k_memset(&a, 0, sizeof(a));
+    a.flags = I915_PIN_NOEVICT | I915_PIN_OFFSET_FIXED;
+    a.offset = v ? v->start : ev->exec->offset & ~(uint64_t)(I915_GTT_PAGE_SIZE - 1u);
+    err = i915_vma_pin_args(ev->obj, &a, &ev->vma);
+    if (err != 0) {
+        if (ev->flags & EXEC_OBJECT_PINNED) {
+            return -ENOSPC;
+        }
+        eb_pin_args(ev, &a);
+        a.flags |= I915_PIN_NOEVICT;
+        if (i915_vma_pin_args(ev->obj, &a, &ev->vma) != 0) {
+            return -ENOSPC;
+        }
+    }
+    ev->flags |= EB_HAS_PIN;
+    if (eb_misplaced(ev)) {
+        eb_unpin(ev);
+        (void)i915_vma_unbind(ev->vma);
+        return -ENOSPC;
+    }
+    return 0;
+}
+
+/** Bind and pin the entry where it asks, as Linux's eb_reserve_vma, with
+ * the pass's `flags`: 0, or the errors of `i915_vma_pin_args`. */
+static int32_t eb_reserve_one(struct eb_vma *ev, uint32_t flags)
+{
+    struct i915_pin_args a;
+    int32_t err;
+
+    eb_pin_args(ev, &a);
+    a.flags |= flags;
+    err = i915_vma_pin_args(ev->obj, &a, &ev->vma);
+    if (err == 0) {
+        ev->flags = (ev->flags | EB_HAS_PIN) & ~EB_UNBOUND;
+    }
+    return err;
+}
+
+/** Give each object that waits a place, those with a fixed one first, as
+ * the passes of Linux's eb_reserve: 0 or the first error. */
+static int32_t eb_reserve_pass(struct eb *eb, uint32_t flags)
+{
+    uint32_t i;
+    int32_t err;
+    int sweep;
+
+    for (sweep = 0; sweep < 2; sweep++) {
+        for (i = 0; i < eb->count; i++) {
+            struct eb_vma *ev = &eb->ev[i];
+
+            if (!(ev->flags & EB_UNBOUND) || (sweep == 0) != !!(ev->flags & EXEC_OBJECT_PINNED)) {
+                continue;
+            }
+            err = eb_reserve_one(ev, flags);
+            if (err != 0) {
+                return err;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * Bind and pin every object of the call, as Linux's eb_validate_vmas and
+ * eb_reserve: each where it lies or was, if that serves; then those left
+ * without evicting what the GPU still uses; then all but the pinned ones
+ * placed again with eviction that waits; then all of them once the GPU is
+ * idle and every binding nothing pins is undone. An object that moved
+ * takes its new offset with EB_UPDATE, and relocations are then needed.
+ *
+ * @return 0; -ENOSPC; -EINVAL for a pinned offset outside the GTT or not
+ *         aligned; -EINTR; -EAGAIN for a userptr object whose pages
+ *         changed; or the errors of binding.
+ */
+static int32_t eb_reserve(struct eb *eb)
+{
+    uint32_t pass, i, unbound = 0;
+    int32_t err = 0;
+
+    for (i = 0; i < eb->count; i++) {
+        if (eb_pin_first(&eb->ev[i]) != 0) {
+            eb->ev[i].flags |= EB_UNBOUND;
+            unbound = 1;
+        }
+    }
+    for (pass = 0; unbound && pass <= 2; pass++) {
+        if (pass >= 1) {
+            for (i = 0; i < eb->count; i++) {
+                struct eb_vma *ev = &eb->ev[i];
+
+                if (pass == 1 && (ev->flags & EXEC_OBJECT_PINNED) && (ev->flags & EB_HAS_PIN)) {
+                    continue;
+                }
+                eb_unpin(ev);
+                ev->flags |= EB_UNBOUND;
+            }
+        }
+        if (pass == 2) {
+            err = i915_gem_evict_vm(eb->i915);
+            if (err != 0) {
+                return err;
+            }
+        }
+        err = eb_reserve_pass(eb, pass == 0 ? I915_PIN_NONBLOCK : 0);
+        if (err != -ENOSPC) {
+            break;
+        }
+    }
+    if (err != 0) {
+        return err;
+    }
+    for (i = 0; i < eb->count; i++) {
+        struct eb_vma *ev = &eb->ev[i];
+
+        if (ev->exec->offset != ev->vma->start) {
+            ev->exec->offset = ev->vma->start | EB_UPDATE;
+            eb->has_reloc = 1;
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
+ * Relocations
+ */
+
+/*
+ * Where the relocations of one object are written: through the
+ * processor's view, its pages pinned and its cache flushed as
+ * `i915_gem_object_prepare_write` says, or, for an import, which has no
+ * view of the processor's, through a page of the aperture taken for them,
+ * as Linux's reloc_kmap and reloc_iomap.
+ */
+struct eb_reloc_cache {
+    struct drm_i915_gem_object *obj;
+    uint32_t clflush;
+    uint8_t ready;
+    uint8_t gtt;
+    uint64_t node;
+};
+
+/** Make the cache ready to write `obj`: 0, or the errors of waiting for
+ * the GPU, of the pages and of taking a page of the aperture. */
+static int32_t eb_reloc_prepare(struct eb_reloc_cache *c, struct drm_i915_gem_object *obj)
+{
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
+    int32_t err;
+
+    c->obj = obj;
+    if (!obj->base.import) {
+        err = i915_gem_object_prepare_write(obj, &c->clflush);
+    } else {
+        err = i915_gem_object_set_to_gtt_domain(obj, 1);
+        if (err == 0) {
+            err = i915_ggtt_reserve(i915, I915_GTT_PAGE_SIZE, I915_PIN_MAPPABLE | I915_PIN_NOEVICT,
+                                    &c->node);
+        }
+        c->gtt = 1;
+    }
+    c->ready = err == 0;
+    return err;
+}
+
+/** Undo `eb_reloc_prepare`, the writes ordered before what follows. */
+static void eb_reloc_finish(struct eb_reloc_cache *c)
+{
+    struct drm_i915_private *i915;
+
+    if (!c->ready) {
+        return;
+    }
+    if (c->gtt) {
+        i915 = to_i915(c->obj->base.dev);
+        (void)i915_ggtt_clear_range(i915, c->node, I915_GTT_PAGE_SIZE);
+        i915_ggtt_release(i915, c->node);
+    } else {
+        if (c->clflush & I915_CLFLUSH_AFTER) {
+            arch_dma_fence();
+        }
+        i915_gem_object_unpin_pages(c->obj);
+    }
+    c->ready = 0;
+}
+
+/** Write the 32-bit `value` at `offset` of the cache's object: 0, -ENOMEM
+ * without a mapping, -ENOSPC without a window, or the bind's error. */
+static int32_t eb_reloc_write(struct eb_reloc_cache *c, uint64_t offset, uint32_t value)
+{
+    struct drm_i915_gem_object *obj = c->obj;
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
+    uint32_t pgoff = (uint32_t)(offset >> PAGE_SHIFT), in = (uint32_t)(offset & (PAGE_SIZE - 1));
+    uint64_t page = obj->frames[pgoff];
+    uint8_t *va;
+    uint32_t *p;
+    int32_t err;
+
+    if (c->gtt) {
+        err = i915_ggtt_insert(i915, c->node, &page, 1, I915_CACHE_NONE);
+        if (err != 0) {
+            return err;
+        }
+        va = (uint8_t *)i915_aperture_kmap(&i915->hw, &i915->gem.aperture, c->node);
+        if (!va) {
+            return -ENOSPC;
+        }
+        *(volatile uint32_t *)(void *)(va + in) = value;
+        arch_dma_fence();
+        i915_aperture_sync(&i915->hw, c->node, I915_GTT_PAGE_SIZE, 1);
+        i915_aperture_kunmap(&i915->hw, &i915->gem.aperture, va);
+        return 0;
+    }
+    va = (uint8_t *)kmap_temp(obj->frames[pgoff]);
+    if (!va) {
+        return -ENOMEM;
+    }
+    p = (uint32_t *)(void *)(va + in);
+    if (c->clflush & I915_CLFLUSH_BEFORE) {
+        arch_dma_flush(p, sizeof(*p));
+    }
+    *p = value;
+    if (c->clflush & I915_CLFLUSH_AFTER) {
+        arch_dma_flush(p, sizeof(*p));
+    }
+    kunmap_temp(va);
+    return 0;
+}
+
+/**
+ * Apply one relocation of `ev`'s object, as Linux's eb_relocate_entry and
+ * relocate_entry: its target found, given EXEC_OBJECT_WRITE when it has a
+ * write domain, and, unless the program presumed the target's offset
+ * right, the target's offset plus the signed delta written at the
+ * relocation's offset, the object kept out of EXEC_OBJECT_ASYNC, and the
+ * target's offset given in `*presumed` for the program.
+ *
+ * @return 1 when written, 0 when the presumed offset was right; -ENOENT for
+ *         no such target; -EINVAL for a write to more than one domain, to a
+ *         domain not the GPU's, or for an offset past the object or not of
+ *         whole dwords; or the errors of the write.
+ */
+static int32_t eb_relocate_entry(struct eb *eb, struct eb_vma *ev,
+                                 const struct drm_i915_gem_relocation_entry *r,
+                                 struct eb_reloc_cache *c, uint64_t *presumed)
+{
+    struct eb_vma *target = eb_target(eb, r->target_handle);
+    int32_t err;
+
+    if (!target) {
+        return -ENOENT;
+    }
+    if (r->write_domain & (r->write_domain - 1u)) {
+        return -EINVAL;
+    }
+    if ((r->write_domain | r->read_domains) & ~I915_GEM_GPU_DOMAINS) {
+        return -EINVAL;
+    }
+    if (r->write_domain) {
+        target->flags |= EXEC_OBJECT_WRITE;
+    }
+    if (target->vma->start == r->presumed_offset) {
+        return 0;
+    }
+    if (ev->vma->size < 4u || r->offset > ev->vma->size - 4u || (r->offset & 3u)) {
+        return -EINVAL;
+    }
+    ev->flags &= ~EXEC_OBJECT_ASYNC;
+    if (!c->ready) {
+        err = eb_reloc_prepare(c, ev->obj);
+        if (err != 0) {
+            return err;
+        }
+    }
+    err = eb_reloc_write(c, r->offset, (uint32_t)target->vma->start + r->delta);
+    if (err != 0) {
+        return err;
+    }
+    *presumed = target->vma->start;
+    return 1;
+}
+
+/**
+ * Apply the relocations of `ev`'s object, as Linux's eb_relocate_vma: read
+ * EB_RELOC_CHUNK at a time, each written one's presumed offset given back
+ * to the program, an error there ignored, as Linux ignores it.
+ *
+ * @return 0; -EINVAL for a count whose bytes pass the address space;
+ *         -EFAULT for an array outside user space; or a relocation's error.
+ */
+static int32_t eb_relocate_vma(struct eb *eb, struct eb_vma *ev)
+{
+    struct drm_i915_gem_relocation_entry r[EB_RELOC_CHUNK];
+    struct eb_reloc_cache c;
+    uint64_t user = ev->exec->relocs_ptr, bytes, presumed;
+    uint32_t remain = ev->exec->relocation_count, n, i;
+    int32_t err = 0;
+
+    bytes = (uint64_t)remain * sizeof(r[0]);
+    if (bytes > (uint64_t)(uintptr_t)-1) {
+        return -EINVAL;
+    }
+    if (user > (uint64_t)(uintptr_t)-1 || !user_range_ok((uintptr_t)user, (size_t)bytes)) {
+        return -EFAULT;
+    }
+    k_memset(&c, 0, sizeof(c));
+    while (remain && err == 0) {
+        n = remain < EB_RELOC_CHUNK ? remain : EB_RELOC_CHUNK;
+        if (copy_from_user(r, EB_USER_PTR(user), n * sizeof(r[0])) != 0) {
+            err = -EFAULT;
+            break;
+        }
+        for (i = 0; i < n && err == 0; i++) {
+            err = eb_relocate_entry(eb, ev, &r[i], &c, &presumed);
+            if (err == 1) {
+                err = 0;
+                (void)copy_to_user(EB_USER_PTR(user + i * sizeof(r[0]) + EB_PRESUMED_AT), &presumed,
+                                   sizeof(presumed));
+            }
+        }
+        remain -= n;
+        user += (uint64_t)n * sizeof(r[0]);
+    }
+    eb_reloc_finish(&c);
+    return err;
+}
+
+/** Apply every object's relocations once the objects are placed, unless
+ * none is needed: 0 or the first error. */
+static int32_t eb_relocate(struct eb *eb)
+{
+    uint32_t i;
+    int32_t err;
+
+    if (!eb->has_reloc) {
+        return 0;
+    }
+    for (i = 0; i < eb->count; i++) {
+        if (eb->ev[i].exec->relocation_count) {
+            err = eb_relocate_vma(eb, &eb->ev[i]);
+            if (err != 0) {
+                return err;
+            }
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------
+ * Fences
+ */
+
+/** Drop the call's syncobjs and the fences they held. */
+static void eb_fences_put(struct eb *eb)
+{
+    uint32_t i;
+
+    for (i = 0; i < eb->nfences; i++) {
+        dma_fence_put(eb->fences[i].fence);
+        drm_syncobj_put(eb->fences[i].syncobj);
+    }
+    kfree(eb->fences);
+    eb->fences = 0;
+    eb->nfences = 0;
+}
+
+/**
+ * Take the syncobjs of I915_EXEC_FENCE_ARRAY, as Linux's add_fence_array
+ * and add_timeline_fence at point 0: each must exist; one to wait for
+ * must hold a fence unless it is also signalled, and its fence is kept;
+ * one with neither flag is checked and then left.
+ *
+ * @return 0; -EINVAL for too many entries, an unknown flag or a fence to
+ *         wait for that is not there; -EFAULT; -ENOENT for no such
+ *         syncobj; -ENOMEM.
+ */
+static int32_t eb_fence_array(struct eb *eb)
+{
+    struct drm_i915_gem_exec_fence uf;
+    uint64_t user = eb->args->cliprects_ptr;
+    uint32_t n = eb->args->num_cliprects, i;
+    struct eb_fence *f;
+
+    if (!(eb->args->flags & I915_EXEC_FENCE_ARRAY) || n == 0) {
+        return 0;
+    }
+    if ((uint64_t)n * sizeof(uf) > (uint64_t)(uintptr_t)-1 ||
+        (uint64_t)n * sizeof(struct eb_fence) > (size_t)-1) {
+        return -EINVAL;
+    }
+    if (user > (uint64_t)(uintptr_t)-1 || !user_range_ok((uintptr_t)user, (size_t)n * sizeof(uf))) {
+        return -EFAULT;
+    }
+    eb->fences = (struct eb_fence *)kzalloc((size_t)n * sizeof(struct eb_fence));
+    if (!eb->fences) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < n; i++, user += sizeof(uf)) {
+        if (copy_from_user(&uf, EB_USER_PTR(user), sizeof(uf)) != 0) {
+            return -EFAULT;
+        }
+        if (uf.flags & __I915_EXEC_FENCE_UNKNOWN_FLAGS) {
+            return -EINVAL;
+        }
+        f = &eb->fences[eb->nfences];
+        f->syncobj = drm_syncobj_find(eb->file, uf.handle);
+        if (!f->syncobj) {
+            return -ENOENT;
+        }
+        f->flags = uf.flags;
+        if ((uf.flags & I915_EXEC_FENCE_WAIT) && f->syncobj->fence) {
+            f->fence = dma_fence_get(f->syncobj->fence);
+        }
+        eb->nfences++;
+        if ((uf.flags & I915_EXEC_FENCE_WAIT) && !(uf.flags & I915_EXEC_FENCE_SIGNAL) &&
+            !f->fence) {
+            return -EINVAL;
+        }
+        if (!(uf.flags & (I915_EXEC_FENCE_WAIT | I915_EXEC_FENCE_SIGNAL))) {
+            drm_syncobj_put(f->syncobj);
+            f->syncobj = 0;
+            eb->nfences--;
+        }
+    }
+    return 0;
+}
+
+/* The call's extensions, of which Linux has one, the timeline fences,
+ * which 78-11a brings; until then a chain that names it is refused. */
+static const i915_ext_fn eb_extensions[] = {0};
+
+/**
+ * Walk I915_EXEC_USE_EXTENSIONS's chain, which `cliprects_ptr` holds, as
+ * Linux's parse_execbuf2_extensions: not with a fence array or cliprects.
+ * 0, -EINVAL, -E2BIG or -EFAULT.
+ */
+static int32_t eb_parse_extensions(struct eb *eb)
+{
+    if (!(eb->args->flags & I915_EXEC_USE_EXTENSIONS)) {
+        return 0;
+    }
+    if ((eb->args->flags & I915_EXEC_FENCE_ARRAY) || eb->args->num_cliprects != 0) {
+        return -EINVAL;
+    }
+    return i915_user_extensions(eb->args->cliprects_ptr, eb_extensions, 0, eb);
+}
+
+/**
+ * Make the request wait for the call's fences, as Linux's eb_fences_add:
+ * the sync file of I915_EXEC_FENCE_IN until it signals, or of
+ * I915_EXEC_FENCE_SUBMIT until its work is given to the chip, then the
+ * fence array's. 0 or -ENOMEM.
+ */
+static int32_t eb_await_fences(struct eb *eb, struct i915_request *rq, struct dma_fence *in)
+{
+    uint32_t i;
+    int32_t err;
+
+    if (in) {
+        err = i915_request_await_fence(rq, in, !!(eb->args->flags & I915_EXEC_FENCE_SUBMIT));
+        if (err < 0) {
+            return err;
+        }
+    }
+    for (i = 0; i < eb->nfences; i++) {
+        if (eb->fences[i].fence) {
+            err = i915_request_await_fence(rq, eb->fences[i].fence, 0);
+            if (err < 0) {
+                return err;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Give each syncobj of the array to signal the request's fence, as
+ * Linux's signal_fence_array. */
+static void eb_signal_fences(struct eb *eb, struct i915_request *rq)
+{
+    uint32_t i;
+
+    for (i = 0; i < eb->nfences; i++) {
+        if (eb->fences[i].flags & I915_EXEC_FENCE_SIGNAL) {
+            drm_syncobj_replace_fence(eb->fences[i].syncobj, &rq->fence.base);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * Submission
+ */
+
+/**
+ * Move every object to the request, last first, as Linux's eb_move_to_gpu:
+ * what the processor wrote flushed for the GPU; unless EXEC_OBJECT_ASYNC,
+ * the request held until the object's writer, and for a write its readers
+ * too, are done; then the request's fence made the object's writer or a
+ * reader, and its domains the GPU's. A userptr object whose program's
+ * pages changed since it was bound fails the call, which the program runs
+ * again, as Linux's i915_gem_object_userptr_submit_done.
+ *
+ * @return 0, -ENOMEM, or -EAGAIN.
+ */
+static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
+{
+    struct dma_fence *f;
+    uint32_t i = eb->count;
+    int32_t err;
+
+    while (i--) {
+        struct eb_vma *ev = &eb->ev[i];
+        struct drm_i915_gem_object *obj = ev->obj;
+        int write = !!(ev->flags & EXEC_OBJECT_WRITE);
+
+        i915_gem_object_flush_for_gpu(obj);
+        if (!(ev->flags & EXEC_OBJECT_ASYNC)) {
+            f = dma_resv_snapshot(obj->base.resv, write);
+            if (!f) {
+                return -ENOMEM;
+            }
+            err = i915_request_await_fence(rq, f, 0);
+            dma_fence_put(f);
+            if (err < 0) {
+                return err;
+            }
+        }
+        err = dma_resv_add_fence(obj->base.resv, &rq->fence.base, write);
+        if (err < 0) {
+            return err;
+        }
+        if (write) {
+            obj->write_domain = I915_GEM_DOMAIN_RENDER;
+            obj->read_domains = 0;
+        }
+        obj->read_domains |= I915_GEM_GPU_DOMAINS;
+    }
+    for (i = 0; i < eb->count; i++) {
+        if (eb->ev[i].obj->userptr.stale) {
+            return -EAGAIN;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Emit the batch's start, as Linux's eb_request_submit: with
+ * I915_EXEC_GEN7_SOL_RESET first the four stream output write offsets
+ * zeroed, which only the render ring has (i915_reset_gen7_sol_offsets);
+ * then MI_BATCH_BUFFER_START, as hsw_emit_bb_start on the render ring and
+ * gen6_emit_bb_start on the blitter, unprivileged unless secure.
+ *
+ * @return 0; -EINVAL for the reset on the blitter; -EIO when the ring
+ *         refuses the commands.
+ */
+static int32_t eb_emit(struct eb *eb, struct i915_request *rq)
+{
+    struct i915_engine *rcs = &eb->i915->gt.engine[I915_RCS0];
+    uint32_t addr = (uint32_t)eb->ev[eb->batch].vma->start + eb->batch_start, *cs, i;
+
+    if (eb->args->flags & I915_EXEC_GEN7_SOL_RESET) {
+        if (rq->engine != rcs) {
+            return -EINVAL;
+        }
+        cs = i915_request_begin(rq, 10);
+        if (!cs) {
+            return -EIO;
+        }
+        cs[0] = MI_LOAD_REGISTER_IMM(4);
+        for (i = 0; i < 4; i++) {
+            cs[1 + 2 * i] = GEN7_SO_WRITE_OFFSET(i);
+            cs[2 + 2 * i] = 0;
+        }
+        cs[9] = MI_NOOP;
+    }
+    cs = i915_request_begin(rq, 2);
+    if (!cs) {
+        return -EIO;
+    }
+    if (eb->dispatch & EB_DISPATCH_SECURE) {
+        cs[0] = MI_BATCH_BUFFER_START;
+    } else if (rq->engine == rcs) {
+        cs[0] = MI_BATCH_BUFFER_START | MI_BATCH_PPGTT_HSW | MI_BATCH_NON_SECURE_HSW;
+    } else {
+        cs[0] = MI_BATCH_BUFFER_START | MI_BATCH_NON_SECURE_I965;
+    }
+    cs[1] = addr;
+    return 0;
+}
+
+/**
+ * The context's state the flags name, as Linux's eb_select_engine: with
+ * the context's engine map, the slot in I915_EXEC_RING_MASK; without, the
+ * legacy ring, where the default ring and RENDER run on rcs0 and BLT on
+ * bcs0, and BSD, VEBOX, BSD's flags with another ring and any other number
+ * name no engine that runs. With a reference in `*out`; 0 or -EINVAL.
+ */
+static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
+{
+    uint32_t ring = (uint32_t)(eb->args->flags & I915_EXEC_RING_MASK), idx;
+
+    if (eb->ctx->nmap >= 0) {
+        idx = ring;
+    } else if (ring != I915_EXEC_BSD && (eb->args->flags & I915_EXEC_BSD_MASK)) {
+        return -EINVAL;
+    } else if (ring == I915_EXEC_DEFAULT || ring == I915_EXEC_RENDER) {
+        idx = I915_RCS0;
+    } else if (ring == I915_EXEC_BLT) {
+        idx = I915_BCS0;
+    } else {
+        return -EINVAL;
+    }
+    *out = i915_gem_context_engine(eb->ctx, idx);
+    return *out ? 0 : -EINVAL;
+}
+
+/**
+ * Check the batch before it runs, as Linux's eb_parse on graphics 7, which
+ * parses only a batch whose length the call gives: a parsed batch then
+ * runs privileged, the way Linux runs its checked copy.
+ */
+static int32_t eb_parse(struct eb *eb)
+{
+    int32_t err;
+
+    if (eb->args->batch_len == 0) {
+        return 0;
+    }
+    err = i915_cmd_parser_check(eb->ce->engine, eb->ev[eb->batch].obj, eb->batch_start,
+                                eb->batch_len, i915_capable());
+    if (err == 0) {
+        eb->dispatch |= EB_DISPATCH_SECURE;
+    }
+    return err;
+}
+
+/**
+ * Build and add the call's request, as the second half of Linux's
+ * i915_gem_do_execbuffer: once the request exists it is added whatever
+ * happens, a failure set on its fence so that its batch does not run, and
+ * the fence array is signalled with it; the out-fence's sync file goes to
+ * the program only when all went well. Nothing between the request's
+ * creation and its add sleeps.
+ *
+ * @return 0; the errors of `i915_request_create`; -ENOMEM; -EAGAIN; -EINVAL
+ *         for I915_EXEC_GEN7_SOL_RESET on the blitter; -ENOENT for a
+ *         context destroyed meanwhile; -EIO.
+ */
+static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
+{
+    struct i915_request *rq;
+    int32_t err, err2;
+
+    err = i915_request_create(eb->ce, &rq);
+    if (err < 0) {
+        return err;
+    }
+    err = eb_await_fences(eb, rq, in);
+    if (err == 0) {
+        err = eb_move_to_gpu(eb, rq);
+    }
+    if (err == 0) {
+        err = eb_emit(eb, rq);
+    }
+    if (err == 0 && eb->ctx->closed) {
+        err = -ENOENT;
+    }
+    if (err != 0 && !rq->fence.base.error) {
+        dma_fence_set_error(&rq->fence.base, err);
+    }
+    err2 = i915_request_add(rq);
+    if (err == 0) {
+        err = err2;
+    }
+    eb_signal_fences(eb, rq);
+    if (err == 0 && out_fd >= 0) {
+        err = sync_file_install(out_fd, &rq->fence.base, "i915");
+        if (err == 0) {
+            eb->args->rsvd2 = (eb->args->rsvd2 & 0xffffffffu) | ((uint64_t)(uint32_t)out_fd << 32);
+        }
+    }
+    i915_request_put(rq);
+    return err;
+}
+
+/** Give back what the call took: the pins, the objects, the context and
+ * its state, the syncobjs and the table. */
+static void eb_release(struct eb *eb)
+{
+    uint32_t i;
+
+    for (i = 0; eb->ev && i < eb->count; i++) {
+        eb_unpin(&eb->ev[i]);
+        i915_gem_object_put(eb->ev[i].obj);
+    }
+    intel_context_put(eb->ce);
+    if (eb->ctx) {
+        i915_gem_context_put(eb->ctx);
+    }
+    eb_fences_put(eb);
+    kfree(eb->lut);
+}
+
+/**
+ * The call once its objects' entries are copied in, as Linux's
+ * i915_gem_do_execbuffer: secure batches, extensions, the fence array and
+ * the in-fence checked, the out-fence's descriptor kept, the context and
+ * its state on the engine found, the objects looked up, placed and
+ * relocated, the batch checked, and its request built and added. A
+ * failure before relocations are done clears `has_reloc`, since a program
+ * that presumes offsets must not see new ones in its entries.
+ */
+static int32_t eb_do(struct eb *eb)
+{
+    struct drm_i915_gem_execbuffer2 *args = eb->args;
+    struct dma_fence *in = 0;
+    int32_t err, out_fd = -1;
+
+    eb->has_reloc = !(args->flags & I915_EXEC_NO_RELOC);
+    eb->batch_start = args->batch_start_offset;
+    if (args->flags & I915_EXEC_SECURE) {
+        if (!drm_is_current_master(eb->file) || !i915_capable()) {
+            return -EPERM;
+        }
+        eb->dispatch |= EB_DISPATCH_SECURE;
+    }
+    err = eb_parse_extensions(eb);
+    if (err == 0) {
+        err = eb_fence_array(eb);
+    }
+    if (err == 0 && (args->flags & (I915_EXEC_FENCE_IN | I915_EXEC_FENCE_SUBMIT))) {
+        if ((args->flags & I915_EXEC_FENCE_IN) && (args->flags & I915_EXEC_FENCE_SUBMIT)) {
+            err = -EINVAL;
+        } else {
+            in = sync_file_get_fence((int32_t)(uint32_t)args->rsvd2);
+            err = in ? 0 : -EINVAL;
+        }
+    }
+    if (err == 0 && (args->flags & I915_EXEC_FENCE_OUT)) {
+        out_fd = current_proc ? fd_alloc(current_proc->fds) : -EBADF;
+        err = out_fd < 0 ? out_fd : 0;
+    }
+    if (err == 0 && !(args->flags & I915_EXEC_HANDLE_LUT)) {
+        err = eb_lut_build(eb);
+    }
+    if (err == 0) {
+        err = i915_gem_context_lookup(eb->file, (uint32_t)(args->rsvd1 & I915_EXEC_CONTEXT_ID_MASK),
+                                      &eb->ctx);
+    }
+    if (err == 0) {
+        err = eb_select_engine(eb, &eb->ce);
+    }
+    if (err == 0) {
+        err = eb_lookup(eb);
+    }
+    if (err == 0) {
+        err = eb_reserve(eb);
+    }
+    if (err == 0) {
+        err = eb_relocate(eb);
+    }
+    if (err == 0) {
+        err = eb_parse(eb);
+    }
+    if (err != 0) {
+        eb->has_reloc = 0;
+    } else {
+        err = eb_submit(eb, in, out_fd);
+        if (err == 0) {
+            out_fd = -1;
+        }
+    }
+    if (out_fd >= 0) {
+        (void)fd_free(current_proc->fds, out_fd);
+    }
+    dma_fence_put(in);
+    return err;
+}
+
+int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_execbuffer2 *args = (struct drm_i915_gem_execbuffer2 *)data;
+    const size_t each = sizeof(struct drm_i915_gem_exec_object2) + sizeof(struct eb_vma);
+    struct drm_i915_gem_exec_object2 __user *user;
+    struct eb eb;
+    uint64_t offset;
+    uint32_t i;
+    int32_t err;
+
+    if (args->buffer_count == 0 || args->buffer_count > 0x7fffffffu ||
+        ((uint64_t)args->buffer_count + 2u) * sizeof(struct drm_i915_gem_exec_object2) >
+            (size_t)-1) {
+        return -EINVAL;
+    }
+    err = eb_check(args);
+    if (err != 0) {
+        return err;
+    }
+    if ((uint64_t)args->buffer_count * each > (size_t)-1) {
+        return -ENOMEM;
+    }
+    k_memset(&eb, 0, sizeof(eb));
+    eb.i915 = to_i915(dev);
+    eb.file = file;
+    eb.args = args;
+    eb.count = args->buffer_count;
+    eb.exec = (struct drm_i915_gem_exec_object2 *)kmalloc((size_t)eb.count * each);
+    if (!eb.exec) {
+        return -ENOMEM;
+    }
+    eb.ev = (struct eb_vma *)(void *)(eb.exec + eb.count);
+    k_memset(eb.ev, 0, (size_t)eb.count * sizeof(struct eb_vma));
+    user = (struct drm_i915_gem_exec_object2 __user *)EB_USER_PTR(args->buffers_ptr);
+    if (args->buffers_ptr > (uint64_t)(uintptr_t)-1 ||
+        copy_from_user(eb.exec, user, (size_t)eb.count * sizeof(eb.exec[0])) != 0) {
+        kfree(eb.exec);
+        return -EFAULT;
+    }
+    err = eb_do(&eb);
+    eb_release(&eb);
+    /* The offsets of the objects that moved go back to the program, as
+     * Linux's, even when the request failed; a fault stops them. */
+    for (i = 0; eb.has_reloc && i < eb.count; i++) {
+        if (!(eb.exec[i].offset & EB_UPDATE)) {
+            continue;
+        }
+        offset = eb.exec[i].offset & ~(uint64_t)(I915_GTT_PAGE_SIZE - 1u);
+        if (copy_to_user(&user[i].offset, &offset, sizeof(offset)) != 0) {
+            break;
+        }
+    }
+    kfree(eb.exec);
+    return err;
+}
