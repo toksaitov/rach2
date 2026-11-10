@@ -56,3 +56,14 @@ Each entry follows [the upstream fault format](../upstream.md).
 * Rach2: `rach2/sys/drm/i915/i915_debugfs.c`, `error_state_write`, returns the count whether or not a state is held, as the sysfs file does, in the commit that adds the debugfs files.
 * Status: unreported.
 * Next: read 6.18's and current upstream's `i915_error_state_write`, show the spinning write on a machine with i915, and propose returning `cnt` when no state is held.
+
+## Debian's Chromium loads libpci.so.3 without asking for its package
+
+* Project: Debian 13's `chromium` 156.0.8078.79-1~deb13u1 and `chromium-common` of the same version, from trixie-security in the snapshot `vendor/gnu/debian/fetch_debs.sh` pins.
+* Fails: ANGLE in `/usr/lib/chromium/libGLESv2.so` loads `libpci.so.3` with dlopen for the GPU's PCI identity (its strings name `libpci.so.3` and `/sys/bus/pci/`), but neither package's Depends nor Recommends names `libpci3`. Without the library ANGLE reads no identity, and chrome://gpu gives `GPU0: VENDOR= 0x0000 ..., DEVICE=0x0000`, so Chromium's GPU blocklist and driver workarounds see no vendor; with it, the Debian reference guest, whose image has `pciutils`, gives virtio-vga's 0x1af4:0x1050.
+* Found: 2026-11-10 on the testing PC, milestone 78, while starting Chromium's GPU process on Crocus on the fake i915 chip for task 78-12a.
+* Reproduction: on Debian 13 without `libpci3`, run Chromium on any GPU and read GPU0 in chrome://gpu; install `libpci3` and read it again.
+* Evidence: `tests/graphics/browser/ref/chromium-sandbox/result.json`, Debian's chrome://gpu with the identity; the trixie-security Packages index in `build/cache/debian/amd64/`.
+* Rach2: `vendor/gnu/debian/browsers.list` stages `libpci3` beside the browsers, in the commit that stages it.
+* Status: unreported.
+* Next: check Debian's current `chromium` in unstable for the dependency, and on a clean Debian 13 without `libpci3` confirm the 0x0000 identity before reporting it to Debian's bug tracker.
