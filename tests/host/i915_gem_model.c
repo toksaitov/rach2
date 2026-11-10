@@ -606,6 +606,11 @@ int user_range_ok(uintptr_t addr, size_t len)
     return addr >= 4096 && addr + len >= addr;
 }
 
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    return addr + len >= addr;
+}
+
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     if ((uintptr_t)src < 4096) {

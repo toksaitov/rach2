@@ -158,10 +158,12 @@ static int32_t probe_range(struct mm *mm, uintptr_t addr, uintptr_t len)
  * caller's memory, cached in the LLC, with a handle. ENODEV on a part
  * without an LLC; EINVAL for an unknown flag, no bytes, or a pointer or
  * size not of whole pages; E2BIG for a size past what an object holds;
- * EFAULT for a range outside user space, or with PROBE one not wholly in
- * memory with pages; ENODEV for UNSYNCHRONIZED, which Linux 6.12 refuses
- * to everyone, and for READ_ONLY, since Haswell's GTT has no read-only
- * entries (Linux's has_read_only); ENOMEM. Its pages are pinned when it is
+ * EFAULT for a range that ends past user space, Linux's access_ok, which
+ * passes a pointer of 0 that the pin at the object's first use refuses, or
+ * with PROBE one not wholly in memory with pages; ENODEV for
+ * UNSYNCHRONIZED, which Linux 6.12 refuses to everyone, and for READ_ONLY,
+ * since Haswell's GTT has no read-only entries (Linux's has_read_only);
+ * ENOMEM. Its pages are pinned when it is
  * first used, by the address space that made it alone. PRIME does not
  * export it, as Linux's i915_gem_userptr_dmabuf_export.
  */
@@ -190,7 +192,7 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         return -EINVAL;
     }
     if (args->user_ptr > (uintptr_t)-1 ||
-        !user_range_ok((uintptr_t)args->user_ptr, (size_t)args->user_size) || !mm) {
+        !user_span_ok((uintptr_t)args->user_ptr, (size_t)args->user_size) || !mm) {
         return -EFAULT;
     }
     if (args->flags & (I915_USERPTR_UNSYNCHRONIZED | I915_USERPTR_READ_ONLY)) {
@@ -207,6 +209,7 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         return -ENOMEM;
     }
     obj->userptr.ptr = (uintptr_t)args->user_ptr;
+    obj->userptr.set = 1;
     obj->base.no_export = 1;
     mmn_register(mm, &obj->userptr.range, obj->userptr.ptr,
                  obj->userptr.ptr + (uintptr_t)args->user_size, &userptr_mmn_ops, obj);
