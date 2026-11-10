@@ -1,0 +1,61 @@
+.Dd November 10, 2026
+.Dt VAINFO 1
+.Os
+.Sh NAME
+.Nm vainfo
+.Nd display information from VA API driver
+.Sh SYNOPSIS
+.Nm
+.Op Fl a
+.Op Fl -display Ar x11 | wayland | drm | help
+.Op Fl -device Ar node
+.Nm
+.Fl -help
+.Sh DESCRIPTION
+.Ss "DESCRIPTION"
+.Bd -literal
+     This program displays information from about the VA API driver
+     installed in the system.
+.Ed
+.Pp
+.Nm
+opens a VA display, through Wayland, X11 or a DRM node in that order
+unless
+.Fl -display
+names one, loads the driver libva chooses for the device, and prints
+libva's version, the driver's name and version, and each profile the
+driver supports with its entry points:
+.Dv VAEntrypointVLD
+for decoding,
+.Dv VAEntrypointEncSlice
+for encoding and
+.Dv VAEntrypointVideoProc
+for video processing.
+.Bl -tag -width "--display display"
+.It Fl a , Fl -all
+Print every attribute of each profile and entry point as well.
+.It Fl -display Ar display
+Use the display named, or list the displays this build has with
+.Ar help .
+.It Fl -device Ar node
+Open the DRM node, such as
+.Pa /dev/dri/renderD128 ,
+with the drm display.
+.It Fl -help
+Print the usage.
+.El
+.Pp
+On Rach2 the GNU root has Intel's i965 driver, which libva loads for the
+i915 driver's render node after looking for Intel's media driver, which the
+root does not have; on Haswell it decodes MPEG-2, H.264, VC-1 and JPEG, as
+.Xr i915 4
+describes.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+vainfo --display drm --device /dev/dri/renderD128
+.Ed
+.Sh RACH2
+The description is Debian's manual, which has no other text, rendered
+from the pinned package; the rest is Rach2's.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/vainfo/copyright .
