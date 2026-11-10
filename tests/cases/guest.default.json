@@ -6930,6 +6930,7 @@
           "checks": "A robust PI mutex reports and recovers owner death",
           "source": "program"
         },
+        {"assertion_id": "robust-handoff", "checks": "A dying robust PI owner passes its mutex and OWNER_DIED to a queued waiter", "source": "program"},
         {
           "assertion_id": "condition",
           "checks": "A condition variable releases and reacquires a PI mutex",

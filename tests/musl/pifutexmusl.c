@@ -33,8 +33,8 @@ static pthread_cond_t condition = PTHREAD_COND_INITIALIZER;
 static int ready;
 static uint32_t pi_word, cond_word;
 static int thread_result;
-static const char *const rows[] = {"raw",   "timeouts", "signals",   "requeue",
-                                   "mutex", "robust",   "condition", "shared"};
+static const char *const rows[] = {"raw",    "timeouts",       "signals",   "requeue", "mutex",
+                                   "robust", "robust-handoff", "condition", "shared"};
 
 /* The native futex syscall's timespec uses longs, including on i386. */
 struct pi_timespec {
@@ -254,6 +254,73 @@ static void robust_rows(void)
     held();
 }
 
+/* The robust list's head and one PI-tagged entry, in native pointer width. */
+struct pi_robust_head {
+    uintptr_t next;
+    long offset;
+    uintptr_t pending;
+};
+struct pi_robust_node {
+    uintptr_t next;
+    uint32_t word;
+};
+static struct pi_robust_head death_head;
+static struct pi_robust_node death_node;
+static int death_ready, death_exit, death_result;
+
+/** Register a native robust PI list and end while holding its word. */
+static void *death_owner(void *arg)
+{
+    (void)arg;
+    death_head.next = (uintptr_t)&death_node | 1u;
+    death_head.offset = (long)((char *)&death_node.word - (char *)&death_node);
+    death_head.pending = 0;
+    death_node.next = (uintptr_t)&death_head;
+    death_result = (int)syscall(SYS_set_robust_list, &death_head, sizeof(death_head));
+    if (!death_result) {
+        death_result = (int)fx(&death_node.word, LOCK_PI | PRIVATE, 0, NULL, NULL, 0);
+    }
+    __atomic_store_n(&death_ready, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&death_exit, __ATOMIC_ACQUIRE)) {
+        sched_yield();
+    }
+    return NULL;
+}
+
+/** Acquire the dead owner's word and confirm the handoff carries OWNER_DIED. */
+static void *death_waiter(void *arg)
+{
+    (void)arg;
+    thread_result = (int)fx(&death_node.word, LOCK_PI | PRIVATE, 0, NULL, NULL, 0);
+    if (!thread_result && !(death_node.word & 0x40000000u)) {
+        thread_result = 1;
+    }
+    if (!thread_result) {
+        thread_result = (int)fx(&death_node.word, UNLOCK_PI | PRIVATE, 0, NULL, NULL, 0);
+    }
+    return NULL;
+}
+
+/** Force exit with a PI waiter queued on a native or compat robust list. */
+static void robust_handoff_rows(void)
+{
+    pthread_t owner_thread, waiter_thread;
+
+    require(pthread_create(&owner_thread, NULL, death_owner, NULL) == 0, "dying PI owner");
+    while (!__atomic_load_n(&death_ready, __ATOMIC_ACQUIRE)) {
+        sched_yield();
+    }
+    require(!death_result, "robust PI list registration and owner lock");
+    require(pthread_create(&waiter_thread, NULL, death_waiter, NULL) == 0, "death PI waiter");
+    while (!(__atomic_load_n(&death_node.word, __ATOMIC_ACQUIRE) & 0x80000000u)) {
+        sched_yield();
+    }
+    __atomic_store_n(&death_exit, 1, __ATOMIC_RELEASE);
+    require(pthread_join(owner_thread, NULL) == 0, "dying owner ends");
+    require(pthread_join(waiter_thread, NULL) == 0 && !thread_result, "robust PI exit handoff");
+    held();
+}
+
 /** Signal a condition while holding the associated PI mutex. */
 static void *condition_thread(void *arg)
 {
@@ -342,6 +409,7 @@ int main(void)
     requeue_rows();
     mutex_rows();
     robust_rows();
+    robust_handoff_rows();
     condition_rows();
     shared_rows();
 #ifndef PI_NO_REPORT
