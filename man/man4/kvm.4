@@ -383,9 +383,16 @@ the next
 .Dv KVM_RUN
 takes.
 .Sh FILES
-.Bl -tag -width /dev/kvm
+.Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm
 the interface
+.It Pa /sys/module/kvm/parameters
+the parameters Linux's KVM selftests read, and those of
+.Pa kvm_intel
+or
+.Pa kvm_amd
+beside it; see
+.Xr sysfs 5
 .El
 .Ss VFIO assignment
 .Dv KVM_CAP_DEVICE_CTRL
@@ -535,6 +542,7 @@ a signal or a request to stop.
 .Xr mprotect 2 ,
 .Xr mremap 2 ,
 .Xr munmap 2 ,
+.Xr sysfs 5 ,
 .Xr limits 7
 .Sh STANDARDS
 Linux's KVM API, version 12, for x86, as its
