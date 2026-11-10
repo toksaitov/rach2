@@ -73,7 +73,7 @@ int32_t i915_gem_evict_something(struct drm_i915_private *i915, uint64_t size, u
     if (err != -ENOSPC || (flags & I915_PIN_NONBLOCK)) {
         return err;
     }
-    err = i915_gt_wait_for_idle(i915, !(flags & I915_PIN_NOINTR));
+    err = i915_gt_wait_for_idle(i915, 1);
     if (err != 0) {
         return err;
     }

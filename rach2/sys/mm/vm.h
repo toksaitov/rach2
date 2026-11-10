@@ -95,9 +95,9 @@ typedef enum {
  * write. It returns 0 for a resident page, 1 after a file-system read,
  * -ENXIO past EOF, or another negative errno when no page can be had, and
  * may sleep. A device region's `device`, set by `vm_device_map` alone,
- * gives the physical address of page `pgoff` in `*phys` and returns 0, or
- * -1 when the object has no page there now, which raises SIGBUS; it may
- * sleep.
+ * gives the physical address of page `pgoff` in `*phys` and returns 0, -1
+ * when the object has no page there now, which raises SIGBUS, or 1 to run
+ * the access again, as `struct vm_device_ops`'s `page` says; it may sleep.
  */
 struct vm_file {
     uint32_t refs;
@@ -114,15 +114,18 @@ struct vm_file {
  * vm_operations_struct for a mapping of device memory. `page` gives the
  * physical address of the object's page `pgoff` in `*phys`: a frame of the
  * object's own, which it keeps at least until it zaps the mappings of the
- * page (`paging_zap_device`), or a frame of a device's range. It returns 0,
- * or -1 when the object has no page there now, past its end, revoked or
- * gone with its device, and the access then raises SIGBUS as on Linux. It
- * may sleep. `put` drops the reference to the object that the mapping
- * held. `access`, or NULL, reads or writes `len` bytes at the byte
- * `offset` of the object for ptrace and /proc/PID/mem, which cannot reach
- * a device region's pages by its page tables, as Linux's
- * vm_operations_struct's `access`; it returns 0 or a negative errno. Called
- * under the big kernel lock.
+ * page (`paging_zap_device`), or a frame of a device's range. It returns 0;
+ * -1 when the object has no page there now, past its end, revoked or gone
+ * with its device, and the access then raises SIGBUS as on Linux; or 1
+ * when the page cannot be had yet, a signal having ended its wait or room
+ * being short for now, and the access from user mode then runs again once
+ * the thread's signals are handled, as Linux's VM_FAULT_NOPAGE, while one
+ * of the kernel's copies fails with EFAULT. It may sleep. `put` drops
+ * the reference to the object that the mapping held. `access`, or NULL,
+ * reads or writes `len` bytes at the byte `offset` of the object for
+ * ptrace and /proc/PID/mem, which cannot reach a device region's pages by
+ * its page tables, as Linux's vm_operations_struct's `access`; it returns
+ * 0 or a negative errno. Called under the big kernel lock.
  */
 struct vm_device_ops {
     int (*page)(void *obj, uint32_t pgoff, uintptr_t *phys);

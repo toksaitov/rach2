@@ -165,6 +165,7 @@ static void pinned_and_active(void)
     struct drm_i915_gem_object *a = object(&file_a, big), *b = object(&file_a, busy);
     struct i915_vma *va = 0, *vb = 0, *v = 0;
     struct dma_fence *f;
+    vma_t gtt;
 
     CHECK(pin_whole(a, I915_PIN_MAPPABLE, &va) == 0 && pin_whole(b, I915_PIN_MAPPABLE, &vb) == 0,
           "pinned: two objects of 8 MiB fill the aperture");
@@ -176,6 +177,16 @@ static void pinned_and_active(void)
     CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE | I915_PIN_NONBLOCK, &v) == -ENOSPC &&
               whole(a) == va && whole(b) == vb && idle_waits == 0,
           "pinned: without a wait, a pinned binding and an active one stay, the bind ENOSPC");
+    CHECK(map(&file_a, h, I915_MMAP_OFFSET_GTT, SET_PAGES, &gtt) == 0, "pinned: a GTT map");
+    idle_intr = 1;
+    idle_waits = 0;
+    CHECK(fault_code(&gtt, 0) == 1 && idle_waits == 1 && !object(&file_a, h)->vmas &&
+              !dma_fence_is_signaled(f) && whole(b) == vb && whole(a) == va,
+          "pinned: a GTT fault's wait for the GPU ends at a signal, the access to run again as "
+          "Linux's, nothing moved");
+    idle_intr = 0;
+    idle_waits = 0;
+    unmap(&gtt);
     idle_signals = f;
     CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE, &v) == 0 && idle_waits == 1 &&
               dma_fence_is_signaled(f) && !b->vmas && whole(a) == va,

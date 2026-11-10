@@ -426,7 +426,9 @@ static pte_t device_cache(uint32_t prot)
  * `page` may sleep, so the file is held across it and the region is looked
  * up again after, as `shared_fault` does. 1 with the page mapped; 0 when the
  * object has no page there, with `bus_fault` set for the fault handler's
- * SIGBUS, or when no page table could be had; -1 to resolve again.
+ * SIGBUS, when it cannot give the page yet, with `fault_retry` set for the
+ * handler's return to user mode, or when no page table could be had; -1 to
+ * resolve again.
  */
 static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
 {
@@ -448,7 +450,11 @@ static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
     vm_file_put(f);
     if (got != 0) {
         if (current_proc) {
-            current_proc->bus_fault = 1;
+            if (got > 0) {
+                current_proc->fault_retry = 1;
+            } else {
+                current_proc->bus_fault = 1;
+            }
         }
         return 0;
     }
@@ -1129,8 +1135,12 @@ static void _page_fault_handler(isr_params_t *params)
     if (have_user_proc && in_user_range) {
         current_proc->frame_refused = 0;
         current_proc->bus_fault = 0;
+        current_proc->fault_retry = 0;
         if (!fetch_refused(fault_address, params) && vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
+        }
+        if (user_mode && current_proc->fault_retry) {
+            return; /* the signals are handled, then the instruction runs again */
         }
     }
 
