@@ -55,6 +55,8 @@ and
 .Dv KVM_CREATE_VCPU ,
 .Dv KVM_CHECK_EXTENSION ,
 .Dv KVM_SET_USER_MEMORY_REGION ,
+.Dv KVM_GET_DIRTY_LOG ,
+.Dv KVM_CLEAR_DIRTY_LOG ,
 .Dv KVM_SET_TSS_ADDR ,
 .Dv KVM_SET_IDENTITY_MAP_ADDR ,
 .Dv KVM_SET_NR_MMU_PAGES ,
@@ -99,9 +101,8 @@ and
 .Dv KVM_CHECK_EXTENSION
 answers 1, or a count, for each capability the kernel makes true, and 0
 for the rest.
-A capability turns on with the part of the kernel that gives it: those of
-the memory slots are not given yet, and neither is any that depends on the
-backend.
+A capability turns on with the part of the kernel that gives it: none that
+depends on the backend is given yet.
 .Pp
 A vCPU's descriptor maps
 .Dv KVM_GET_VCPU_MMAP_SIZE
@@ -142,6 +143,84 @@ The backends that run guests are not in this kernel yet:
 .Dv KVM_RUN
 otherwise fails with
 .Er EOPNOTSUPP .
+.Ss Memory
+.Dv KVM_SET_USER_MEMORY_REGION
+gives the guest a slot: the
+.Va memory_size
+bytes of the caller's memory from
+.Va userspace_addr
+at the guest-physical address
+.Va guest_phys_addr ,
+all three page-aligned, numbered
+.Va slot ,
+below 256, in address space 0.
+A size of 0 deletes the slot.
+A slot may move to another guest address or change its
+.Dv KVM_MEM_LOG_DIRTY_PAGES
+flag, and keeps its address in the caller, its size and its
+.Dv KVM_MEM_READONLY
+flag.
+No two slots share a guest address, but two may map the same memory of
+the caller.
+A guest's write to a
+.Dv KVM_MEM_READONLY
+slot, and any access where no slot is, ends
+.Dv KVM_RUN
+with
+.Dv KVM_EXIT_MMIO .
+A slot changes while vCPUs run: what the guest reached of one that moves,
+changes its flags or goes is taken from it before the call returns.
+.Pp
+Nothing is pinned.
+The guest reaches each page through the frame the caller's page has at
+the guest's first touch, brought in as the caller's own touch would bring
+it, and follows the caller's memory: a copy-on-write break, a fork,
+.Xr mprotect 2 ,
+.Xr madvise 2 ,
+.Xr munmap 2 ,
+.Xr mremap 2
+and the truncation of a file or device object behind a slot take the frame
+from the guest first, with every vCPU out of the guest, and the guest's
+next touch finds the page as the caller has it then.
+A page of a device's memory, such as a mapping of
+.Pa /dev/mem ,
+is uncached unless the guest's own page attributes ask for
+write-combining; the caller's RAM is write-back.
+Where 2 MiB of guest addresses in one slot lie over 2 MiB of the caller's
+pages that are 512 consecutive frames from a 2 MiB boundary, the guest
+gets one 2 MiB page.
+A guest's access to a page the caller cannot touch, outside its mappings
+or under
+.Dv PROT_NONE ,
+ends
+.Dv KVM_RUN
+with
+.Er EFAULT .
+.Pp
+A slot with
+.Dv KVM_MEM_LOG_DIRTY_PAGES
+logs each page the guest writes.
+.Dv KVM_GET_DIRTY_LOG
+copies the slot's log, a bit for each page in 64-bit words, to
+.Va dirty_bitmap ,
+clears it, and write-protects the pages it named, so that the next write
+to each is logged.
+After
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2
+with
+.Dv KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE ,
+.Dv KVM_GET_DIRTY_LOG
+leaves the log as it is, and
+.Dv KVM_CLEAR_DIRTY_LOG
+clears the bits its bitmap sets of
+.Va num_pages
+pages from
+.Va first_page ,
+a multiple of 64, and write-protects those pages; with
+.Dv KVM_DIRTY_LOG_INITIALLY_SET
+as well, a slot's log starts with every page set.
 .Ss Interrupts
 The interrupt controller in the kernel is Linux's split one.
 .Dv KVM_ENABLE_CAP
@@ -237,7 +316,15 @@ or a VM does not take.
 An ioctl that a vCPU does not take; an argument outside Linux's bounds,
 such as a machine type other than 0, a vCPU id of 256 or more, a TSS past
 4 GiB less three pages, register state the processor would refuse, an
-XSAVE image past the guest's XCR0, or a flag Linux does not define.
+XSAVE image past the guest's XCR0, or a flag Linux does not define;
+.Dv KVM_SET_USER_MEMORY_REGION
+of an address or size not page-aligned, a range past user space or the
+host's physical width, the deletion of no slot, or a change of a slot's
+address in the caller, size or
+.Dv KVM_MEM_READONLY
+flag;
+.Dv KVM_CLEAR_DIRTY_LOG
+of a range outside the slot or not on 64-page bounds.
 .It Bq Er E2BIG
 A list longer than the call takes, more than 256 CPUID entries or 256
 MSRs or more; or a buffer too small for the list asked for, whose count
@@ -254,6 +341,7 @@ a second time or once the VM has a vCPU;
 after it;
 .Dv KVM_INTERRUPT
 with the split controller while a vector waits;
+a memory slot at guest addresses another has;
 an ioeventfd that some write would match along with another.
 .It Bq Er EBUSY
 .Dv KVM_SET_IDENTITY_MAP_ADDR
@@ -277,7 +365,14 @@ or
 of a descriptor that is not open.
 .It Bq Er ENOENT
 .Dv KVM_IOEVENTFD_FLAG_DEASSIGN
-of no ioeventfd.
+of no ioeventfd;
+.Dv KVM_GET_DIRTY_LOG
+or
+.Dv KVM_CLEAR_DIRTY_LOG
+of a slot that does not log.
+.It Bq Er EFAULT
+.Dv KVM_RUN
+when the guest touches a page of a slot the caller cannot touch.
 .It Bq Er ENOSPC
 .Dv KVM_IOEVENTFD
 on a bus of 1000 ioeventfds.
@@ -298,7 +393,11 @@ until the backends run guests.
 .Sh SEE ALSO
 .Xr eventfd 2 ,
 .Xr ioctl 2 ,
+.Xr madvise 2 ,
 .Xr mmap 2 ,
+.Xr mprotect 2 ,
+.Xr mremap 2 ,
+.Xr munmap 2 ,
 .Xr limits 7
 .Sh STANDARDS
 Linux's KVM API, version 12, for x86, as its
