@@ -62,7 +62,7 @@ static int pic_level(struct kvm_pic_state *s, uint32_t pin, int level)
             s->irr &= (uint8_t)~bit;
         }
     }
-    return s->imr & bit ? -1 : result;
+    return (s->imr & bit) ? -1 : result;
 }
 
 /** Recompute the cascade and INT, waking a vCPU that accepts the PIC. */
