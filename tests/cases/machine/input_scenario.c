@@ -12,9 +12,10 @@
  * rest. */
 #define FAMILY "machine.input."
 
-/* The kernel's records of a configured USB keyboard and mouse. */
+/* The kernel's records of a configured USB keyboard, mouse and tablet. */
 #define KEYBOARD "class 3 protocol 1"
 #define MOUSE    "class 3 protocol 2"
+#define TABLET   "class 3 protocol 0"
 
 /* The keys evprobe reads first, as the monitor's sendkey names them, and
  * the twelve that overflow the queue of the reader that reads nothing. */
@@ -24,7 +25,7 @@
 /** Begin step `boot`, boot the machine `input` into `b`, wait for `record`
  * on its console when it is not NULL and then for the debug shell, and
  * report assertion `shell`, and `keyboard` with a keyboard's record or
- * `device` with a mouse's. */
+ * `device` with a mouse's or a tablet's. */
 static void booted(struct usb_case *u, struct usb_boot *b, const char *record)
 {
     usb_step(u, "boot");
@@ -34,7 +35,7 @@ static void booted(struct usb_case *u, struct usb_boot *b, const char *record)
     usb_wait(b, USB_SHELL);
     usb_assert(u, "shell", 1, "");
     if (record != NULL)
-        usb_assert(u, strcmp(record, MOUSE) == 0 ? "device" : "keyboard", 1, "");
+        usb_assert(u, strcmp(record, KEYBOARD) == 0 ? "keyboard" : "device", 1, "");
 }
 
 /** Run `command`, evprobe of a keyboard, press its keys when it asks for
@@ -88,6 +89,34 @@ static int mouse(struct usb_case *u, const char *record, const char *command)
              "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-down\"}}]");
     usb_finish(&b, from, &r);
     usb_probe(u, "mouse", &r, "EVPROBE");
+    free(r.text);
+    return usb_end(u);
+}
+
+/** Run evprobe of QEMU's tablet; when it asks, move the tablet to 10000
+ * and 20000, press and release the left button, and turn the wheel up and
+ * down, each a QMP command of its own so that each is a report; report
+ * assertion `tablet` of its run. */
+static int tablet(struct usb_case *u)
+{
+    struct usb_boot b;
+    struct usb_run r;
+    uint64_t from;
+
+    booted(u, &b, TABLET);
+    usb_step(u, "tablet");
+    from = usb_start(&b, "/evprobe usbtablet");
+    usb_wait(&b, "EVPROBE: move the tablet");
+    send(&b, "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 10000}}, "
+             "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 20000}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-up\"}}, "
+             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-up\"}}]");
+    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-down\"}}, "
+             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-down\"}}]");
+    usb_finish(&b, from, &r);
+    usb_probe(u, "tablet", &r, "EVPROBE");
     free(r.text);
     return usb_end(u);
 }
@@ -151,6 +180,7 @@ static const struct {
     {"usb", usb},
     {"mouse", ps2_mouse},
     {"usb-mouse", usb_mouse_case},
+    {"usb-tablet", tablet},
     {"mixer-hda", mixer_hda},
     {"mixer-sb16", mixer_sb16},
 };

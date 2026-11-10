@@ -258,10 +258,13 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach
 # own, and have no target here: each is judged by the kernel's records of its
 # blanks and unblanks and by QMP's screen dumps, black while the console is
 # blank and showing its text before and after.
-# `tests/run input`: the keyboards' event devices and OSS's mixer. QMP's keys
-# on the PS/2 keyboard and on a USB keyboard reach /dev/input/eventN as
-# Linux's key codes with their scan codes, and /dev/mixer reads and sets the
-# volume of the HDA and the SB16 driver, which a stream's start keeps. They
+# `tests/run input`: the keyboards', mice's and tablet's event devices and
+# OSS's mixer. QMP's keys on the PS/2 keyboard and on a USB keyboard reach
+# /dev/input/eventN as Linux's key codes with their scan codes, the mice's and
+# QEMU's tablet's moves, clicks and turns reach theirs as Linux gives them,
+# the tablet with Linux's numbers, bits and axes, and /dev/mixer reads and
+# sets the volume of the HDA and the SB16 driver, which a stream's start
+# keeps. They
 # are the cases of tests/cases/machine.input.json, which etude runs, each in a
 # boot of its own that tests/cases/machine/input_scenario.c drives.
 # `tests/run audio`: what the machine actually played and recorded. Its cases

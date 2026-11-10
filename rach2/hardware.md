@@ -124,8 +124,8 @@ There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RT
 | IDE disk | `-drive if=ide`, `ide-hd` | ATA | `persist`, `crash`, `bus` |
 | AHCI disk | `ich9-ahci` with `ide-hd` | AHCI | `parts`, `queue`, `stress-ahci` |
 | NVMe disk | `nvme` | NVMe | `uefi` |
-| USB controller and devices | `qemu-xhci`, `usb-kbd`, `usb-mouse`, `usb-hub`, `usb-storage`, `usb-bot` with `scsi-hd` | xHCI, HID, hub, mass storage | `usb`, `usbdisk` |
-| A USB device with no boot interface | `usb-tablet` | refused | `usb` |
+| USB controller and devices | `qemu-xhci`, `usb-kbd`, `usb-mouse`, `usb-tablet`, `usb-hub`, `usb-storage`, `usb-bot` with `scsi-hd` | xHCI, HID, hub, mass storage | `usb`, `usbdisk`, `input` |
+| A USB device of a class no driver takes | `usb-net` | refused | `usb` |
 | VT-d | `-machine q35 -device intel-iommu,intremap=on` | VT-d | none; checked by hand, as [VT-d](sys/arch/x86/iommu/Readme.md#tests) records |
 | Network cards | `rtl8139`, `e1000` | RTL8139, e1000 | `socket`, `e1000` |
 | A card of another model | `e1000e` | refused | `e1000` |

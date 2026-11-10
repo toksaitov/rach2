@@ -46,6 +46,13 @@
  * beside Debian's for the same pad, and requires the identity, bits and
  * coordinates Linux gives the Lenovo's pad in absolute mode.
  *
+ * `evprobe usbtablet` finds QEMU's USB tablet, "QEMU QEMU USB Tablet",
+ * requires its block in /proc/bus/input/devices's form and its axes to be
+ * what Linux gives it, prints "EVPROBE: move the tablet", and must read,
+ * record by record, what evtest prints on Linux when the suite moves it to
+ * 10000 and 20000 through QMP, clicks the left button and turns the wheel
+ * up and down.
+ *
  * Prints "EVPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).
  */
@@ -1122,7 +1129,7 @@ static int put_set(const char *label, const unsigned char *bits, int n, const ch
     return want[i] == text[i];
 }
 
-/** Print the touchpad's EVIOCGABS of `code` on `fd`; return whether its
+/** Print EVIOCGABS of `code` on the event device `fd`; return whether its
  * limits are `min` and `max`, or any when `max` is below `min`. */
 static int put_abs(int fd, int code, int min, int max)
 {
@@ -1236,6 +1243,126 @@ static void touchpad(void)
     }
 }
 
+/* The records `evprobe usbtablet` must read, in order, as evtest prints
+ * them for QEMU's tablet on Linux: the move to 10000 and 20000, the left
+ * button pressed and released, each with its MSC_SCAN, and the wheel turned
+ * up and down a detent. */
+static const struct {
+    unsigned short type;
+    unsigned short code;
+    int value;
+} tablet_events[] = {
+    {EV_ABS, ABS_X, 10000},          {EV_ABS, ABS_Y, 20000},
+    {EV_SYN, SYN_REPORT, 0},         {EV_MSC, MSC_SCAN, 0x90001},
+    {EV_KEY, BTN_LEFT, 1},           {EV_SYN, SYN_REPORT, 0},
+    {EV_MSC, MSC_SCAN, 0x90001},     {EV_KEY, BTN_LEFT, 0},
+    {EV_SYN, SYN_REPORT, 0},         {EV_REL, REL_WHEEL, 1},
+    {EV_REL, REL_WHEEL_HI_RES, 120}, {EV_SYN, SYN_REPORT, 0},
+    {EV_REL, REL_WHEEL, -1},         {EV_REL, REL_WHEEL_HI_RES, -120},
+    {EV_SYN, SYN_REPORT, 0},
+};
+
+/**
+ * Print the tablet's block on `fd` as /proc/bus/input/devices gives it and
+ * EVIOCGABS of its two axes; return whether they are what Linux gives QEMU's
+ * usb-tablet: USB 0627:0001 version 0001, five buttons, the wheel with its
+ * REL_WHEEL_HI_RES, MSC_SCAN, and X and Y from 0 to 32767.
+ */
+static int tablet_block(int fd)
+{
+    unsigned char bits[96];
+    unsigned short id[4];
+    char text[64];
+    long len;
+    int ok;
+
+    clear(id, sizeof(id));
+    if (ioctl(fd, EVIOCGID, (long)id) != 0) {
+        fail("the tablet's EVIOCGID failed");
+    }
+    puts("I: Bus=");
+    put_hex_width(id[0], 4);
+    puts(" Vendor=");
+    put_hex_width(id[1], 4);
+    puts(" Product=");
+    put_hex_width(id[2], 4);
+    puts(" Version=");
+    put_hex_width(id[3], 4);
+    puts("\n");
+    ok = id[0] == BUS_USB && id[1] == 0x0627 && id[2] == 1 && id[3] == 1;
+    len = ioctl(fd, EVIOCGPHYS(sizeof(text) - 1), (long)text);
+    text[len > 0 ? len : 0] = 0;
+    puts("P: Phys=");
+    puts(text);
+    puts("\n");
+    ok &= begins(text, "usb-");
+
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGPROP(8), (long)bits);
+    ok &= put_set("PROP", bits, 8, "0");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(0, 8), (long)bits);
+    ok &= put_set("EV", bits, 8, "1f");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), (long)bits);
+    ok &= put_set("KEY", bits, 96, "1f0000 0 0 0 0");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_REL, 8), (long)bits);
+    ok &= put_set("REL", bits, 8, "900");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_ABS, 8), (long)bits);
+    ok &= put_set("ABS", bits, 8, "3");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_MSC, 8), (long)bits);
+    ok &= put_set("MSC", bits, 8, "10");
+    ok &= put_abs(fd, ABS_X, 0, 32767);
+    ok &= put_abs(fd, ABS_Y, 0, 32767);
+    return ok;
+}
+
+/**
+ * The run of `evprobe usbtablet`: find QEMU's USB tablet, require its block
+ * to be Linux's, print "EVPROBE: move the tablet", and read the records the
+ * suite's moves, clicks and turns through QMP give, printing each as evtest
+ * does and requiring the run of tablet_events.
+ */
+static void tablet(void)
+{
+    const char *path = find_device("QEMU QEMU USB Tablet");
+    int n = (int)(sizeof(tablet_events) / sizeof(tablet_events[0]));
+    int fd, at = 0;
+
+    fd = open_or_fail(path, O_RDONLY, "the tablet did not open");
+    if (!tablet_block(fd)) {
+        fail("the tablet's capabilities are not what Linux gives it");
+    }
+    puts("EVPROBE: move the tablet\n");
+    while (at < n) {
+        struct input_event ev[16];
+        long got = syscall3(SYS_READ, fd, (long)ev, (long)sizeof(ev));
+        int i;
+
+        if (got <= 0 || got % (long)sizeof(ev[0]) != 0) {
+            fail_with("the tablet did not read whole records", 1, got);
+        }
+        for (i = 0; i < (int)(got / (long)sizeof(ev[0])) && at < n; i++, at++) {
+            puts("Event: type ");
+            put_dec(ev[i].type);
+            puts(", code ");
+            put_dec(ev[i].code);
+            puts(", value ");
+            put_dec(ev[i].value);
+            puts("\n");
+            if (ev[i].type != tablet_events[at].type || ev[i].code != tablet_events[at].code ||
+                ev[i].value != tablet_events[at].value) {
+                fail_with("the tablet read another record than Linux gives", 1, at);
+            }
+        }
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    puts("EVPROBE: tablet: read as Linux gives it\n");
+}
+
 /** The run of `evprobe button`. */
 static void button(void)
 {
@@ -1321,6 +1448,8 @@ void probe_main(unsigned long *sp)
 
     if (argc >= 2 && begins(argv[1], "ps2")) {
         keyboard(0);
+    } else if (argc >= 2 && begins(argv[1], "usbtablet")) {
+        tablet();
     } else if (argc >= 2 && begins(argv[1], "usbmouse")) {
         mouse(1);
     } else if (argc >= 2 && begins(argv[1], "usb")) {
@@ -1336,7 +1465,8 @@ void probe_main(unsigned long *sp)
     } else if (argc >= 2 && begins(argv[1], "touchpad")) {
         touchpad();
     } else {
-        fail("usage: evprobe ps2 | usb | mouse | usbmouse | mixer ID | button | video | touchpad");
+        fail("usage: evprobe ps2 | usb | mouse | usbmouse | usbtablet | mixer ID | button | video "
+             "| touchpad");
     }
     puts("EVPROBE OK\n");
     sys_exit(0);
