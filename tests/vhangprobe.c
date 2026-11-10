@@ -2,7 +2,9 @@
  * vhangprobe: vhangup(2) on a pseudo-terminal, as Linux 6.12 answers it.
  *
  * A child makes the slave of a new pair the controlling terminal of a new
- * session, clears ECHO on it, ignores SIGHUP and calls vhangup:
+ * session, clears ECHO on it, ignores SIGHUP, starts a writer of its own
+ * that writes more to the slave than the master's ring holds, which nobody
+ * reads, and calls vhangup:
  *
  * * setup: the pair opens and the child's session takes the slave, whose
  *   echo it turns off.
@@ -16,6 +18,8 @@
  * * reopen-defaults: a new open of the slave works and has the default
  *   termios again, ECHO among them.
  * * eperm: a process of uid 1000, without CAP_SYS_TTY_CONFIG, gets EPERM.
+ * * blocked-write: the writer, which waits for room in the ring or has not
+ *   begun, ends with the bytes it wrote or EIO, as Linux's n_tty_write.
  * * cleanup: the child exits 0 and the master closes.
  *
  * The child reports through its exit status the first row that failed; the
@@ -75,11 +79,15 @@ struct pollfd {
 #define ROW_NO_CTTY   7
 #define ROW_REOPEN    8
 #define ROW_EPERM     9
+#define ROW_WRITER    10
+
+/* The bytes the writer writes, more than the master's ring holds. */
+#define WRITER_BYTES 65536
 
 /* The rows, in the order of the report and of the child's exit codes. */
-static const char *const plan[] = {"setup",     "vhangup",  "old-read", "old-write",
-                                   "old-ioctl", "old-poll", "no-ctty",  "reopen-defaults",
-                                   "eperm",     "cleanup"};
+static const char *const plan[] = {"setup",     "vhangup",       "old-read", "old-write",
+                                   "old-ioctl", "old-poll",      "no-ctty",  "reopen-defaults",
+                                   "eperm",     "blocked-write", "cleanup"};
 
 /** The length of the string `s`. */
 static size_t strlen(const char *s)
@@ -186,6 +194,24 @@ static int eperm_row(long uid)
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+/** Start a process that writes WRITER_BYTES to the slave `slave` and exits
+ * 0 when the write ends with fewer bytes or EIO: its pid, or -1. */
+static long start_writer(long slave)
+{
+    static char bytes[WRITER_BYTES];
+    long pid = syscall0(SYS_FORK), rc;
+
+    if (pid != 0) {
+        return pid;
+    }
+    for (rc = 0; rc < WRITER_BYTES; rc++) {
+        bytes[rc] = 'w';
+    }
+    rc = syscall3(SYS_WRITE, slave, (long)bytes, WRITER_BYTES);
+    leave((rc > 0 && rc < WRITER_BYTES) || rc == -EIO ? 0 : 1);
+    return -1;
+}
+
 /**
  * The child's rows on the slave /dev/pts/`ptn`, with `uid` for the eperm
  * row; returns the ROW_ of the first that failed, or 0 when all held.
@@ -199,7 +225,8 @@ static int child_rows(int ptn, long uid)
     unsigned int lflag;
     struct pollfd pfd;
     char path[24], byte;
-    long slave, fd;
+    long slave, fd, writer;
+    int status = -1;
 
     clear(tio, sizeof(tio));
     pts_path(path, ptn);
@@ -218,6 +245,10 @@ static int child_rows(int ptn, long uid)
         return ROW_SETUP;
     }
     if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)action, 0, 8) != 0) {
+        return ROW_SETUP;
+    }
+    writer = start_writer(slave);
+    if (writer < 0) {
         return ROW_SETUP;
     }
     if (syscall0(SYS_VHANGUP) != 0) {
@@ -248,6 +279,10 @@ static int child_rows(int ptn, long uid)
     }
     if (!eperm_row(uid)) {
         return ROW_EPERM;
+    }
+    if (syscall3(SYS_WAITPID, writer, (long)&status, 0) != writer || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return ROW_WRITER;
     }
     return 0;
 }
@@ -285,7 +320,8 @@ void probe_main(unsigned long *sp)
         "old-poll: poll did not give the hung-up bits",
         "no-ctty: /dev/tty was not ENXIO",
         "reopen-defaults: a new open did not have the default termios",
-        "eperm: uid 1000 did not get EPERM"};
+        "eperm: uid 1000 did not get EPERM",
+        "blocked-write: the waiting writer did not end with its bytes or EIO"};
     int ptn = -1, unlock = 0, status = -1;
     long master, pid;
     int i;
@@ -316,7 +352,7 @@ void probe_main(unsigned long *sp)
     if (i != 0) {
         fail_at(0, "setup: the child exited with a status no row gives");
     }
-    for (i = 0; i < 9; i++) {
+    for (i = 0; i < (int)(sizeof(why) / sizeof(why[0])); i++) {
         report_held();
     }
     if (syscall1(SYS_CLOSE, master) != 0) {

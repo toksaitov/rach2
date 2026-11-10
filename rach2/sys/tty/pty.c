@@ -565,22 +565,39 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/** A slave writer can go on: the ring has room for a byte of output at its
- * largest, or the master has closed. */
-static int pts_has_room(void *arg)
-{
-    struct pty *p = (struct pty *)arg;
+/* A slave writer's wait: its pty and the count of vhangups its description
+ * was opened at, which a vhangup(2) since ends the wait, as Linux's
+ * n_tty_write looks at tty_hung_up_p on every turn. */
+struct pts_waiter {
+    struct pty *p;
+    int has_desc; /* the description keeps a count to compare */
+    uint32_t opened;
+};
 
-    return !p->master_open || pty_m_room(p) >= pts_growth(p);
+/** Whether the description of the writer `w` has been hung up since it was
+ * opened (`tty_desc_hung`). */
+static int pts_waiter_hung(const struct pts_waiter *w)
+{
+    return w->has_desc && tty_desc_hung(&w->p->slave, w->opened);
 }
 
-/** A slave writer may begin: no other write is in progress, or the master
- * has closed. */
+/** A slave writer `arg`, a struct pts_waiter, can go on: the ring has room
+ * for a byte of output at its largest, the master has closed, or its
+ * description has been hung up. */
+static int pts_has_room(void *arg)
+{
+    const struct pts_waiter *w = (const struct pts_waiter *)arg;
+
+    return !w->p->master_open || pts_waiter_hung(w) || pty_m_room(w->p) >= pts_growth(w->p);
+}
+
+/** A slave writer `arg`, a struct pts_waiter, may begin: no other write is
+ * in progress, the master has closed, or its description has been hung up. */
 static int pts_write_free(void *arg)
 {
-    const struct pty *p = (const struct pty *)arg;
+    const struct pts_waiter *w = (const struct pts_waiter *)arg;
 
-    return !p->writing || !p->master_open;
+    return !w->p->writing || !w->p->master_open || pts_waiter_hung(w);
 }
 
 /**
@@ -588,12 +605,16 @@ static int pts_write_free(void *arg)
  * way of the slave's sink, a piece at a time that fits the ring at its
  * largest (`pts_growth`): a writer the ring has no room for waits until the
  * master reads, as on Linux, or takes -EAGAIN, or returns what it wrote, when
- * non-blocking. Master readers are woken even if a later copy fails. The
- * piece is fitted again after the copy from the user, which may sleep on a
- * page fault while echo of the master's input fills the ring.
+ * non-blocking. A vhangup(2) of the description of the writer `w`, before a
+ * piece or during its wait, ends the write with EIO or the bytes written, as
+ * Linux's n_tty_write does. Master readers are woken even if a later copy
+ * fails. The piece is fitted again after the copy from the user, which may
+ * sleep on a page fault while echo of the master's input fills the ring.
  */
-static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *buf, uint32_t count)
+static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __user *buf,
+                             uint32_t count)
 {
+    struct pty *p = w->p;
     uint8_t kbuf[256];
     uint32_t done = 0;
     uint32_t pushed = p->m_tail;
@@ -602,11 +623,13 @@ static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *bu
         uint32_t chunk = count - done;
         uint32_t fit;
 
-        while ((fit = pty_m_room(p) / pts_growth(p)) == 0) {
-            int32_t stop = !p->master_open ? -EIO : fd_is_nonblock(e) ? -EAGAIN : 0;
+        while ((fit = pts_waiter_hung(w) ? 0u : pty_m_room(p) / pts_growth(p)) == 0) {
+            int32_t stop = !p->master_open || pts_waiter_hung(w) ? -EIO
+                           : fd_is_nonblock(e)                   ? -EAGAIN
+                                                                 : 0;
 
             wake_master(p, &pushed);
-            if (stop == 0 && wq_wait_event(&p->slave.input_wq, pts_has_room, p) < 0) {
+            if (stop == 0 && wq_wait_event(&p->slave.input_wq, pts_has_room, w) < 0) {
                 stop = -EINTR;
             }
             if (stop != 0) {
@@ -640,13 +663,15 @@ static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *bu
  * write before any other writer's, as Linux's `atomic_write_lock` keeps two
  * processes' lines apart: a writer that finds another write in progress
  * waits for it, or takes -EAGAIN when non-blocking. Once the master has
- * closed the write fails with EIO. With TOSTOP set, a background writer
+ * closed, or a vhangup(2) has hung up the description, the write fails with
+ * EIO. With TOSTOP set, a background writer
  * takes SIGTTOU, or EIO when SIGTTOU is blocked or ignored, as on the
  * console.
  */
 static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
+    struct pts_waiter w;
     int32_t rc;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
@@ -658,6 +683,9 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (count == 0) {
         return 0;
     }
+    w.p = p;
+    w.has_desc = e->ofd != NULL;
+    w.opened = e->ofd ? e->ofd->tty_hangups : 0u;
     if (!p->master_open) {
         return -EIO;
     }
@@ -671,18 +699,18 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         return -EINTR;
     }
     while (p->writing) {
-        if (!p->master_open) {
+        if (!p->master_open || pts_waiter_hung(&w)) {
             return -EIO;
         }
         if (fd_is_nonblock(e)) {
             return -EAGAIN;
         }
-        if (wq_wait_event(&p->slave.input_wq, pts_write_free, p) < 0) {
+        if (wq_wait_event(&p->slave.input_wq, pts_write_free, &w) < 0) {
             return -EINTR;
         }
     }
     p->writing = 1;
-    rc = pts_write_out(e, p, buf, count);
+    rc = pts_write_out(e, &w, buf, count);
     p->writing = 0;
     wq_wake(&p->slave.input_wq, WQ_ROOM);
     return rc;
