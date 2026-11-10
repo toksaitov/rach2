@@ -154,8 +154,10 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     if (d->bl_index < 0) {
         return;
     }
-    if (d->bl_level < d->bl_min) {
-        d->bl_level = d->bl_min;
+    /* Linux's __intel_backlight_enable: a level at or below the least
+     * comes on at the most. */
+    if (d->bl_level <= d->bl_min) {
+        d->bl_level = d->bl.max;
     }
     /* Linux's lpt_enable_backlight: a PWM left on is turned off first. */
     ctl1 = bl_rd(i915, BLC_PWM_PCH_CTL1);
