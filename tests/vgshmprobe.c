@@ -29,6 +29,10 @@
 #define FRAME_W 1024u
 #define FRAME_H 768u
 
+/* VIRTGPU_WAIT's answer while the buffer's fences are pending after its
+ * 15 s, as Linux gives it: the host is slow, and the wait goes on. */
+#define PROBE_EBUSY 16
+
 /* Fenced submissions the death row leaves pending, at most. */
 #define PENDING_MAX 16
 
@@ -257,7 +261,10 @@ static void draw(const char *want)
     probe_line("VGSHMPROBE STEP: read back", 0, 0);
     w.handle = bo;
     w.flags = 0;
-    if (call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w) != 0) {
+    while ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w)) == -PROBE_EBUSY) {
+        probe_line("VGSHMPROBE STEP: still waiting", 0, 0);
+    }
+    if (at != 0) {
         fail("wait for the readback");
     }
     probe_line("VGSHMPROBE STEP: waited", 0, 0);
