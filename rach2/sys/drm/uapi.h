@@ -1011,41 +1011,51 @@ struct drm_mode_closefb {
 #define fourcc_code(a, b, c, d) \
     ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
 
-#define DRM_FORMAT_BIG_ENDIAN   (1u << 31)
-#define DRM_FORMAT_INVALID      0
-#define DRM_FORMAT_C8           fourcc_code('C', '8', ' ', ' ')
-#define DRM_FORMAT_XRGB1555     fourcc_code('X', 'R', '1', '5')
-#define DRM_FORMAT_ARGB1555     fourcc_code('A', 'R', '1', '5')
-#define DRM_FORMAT_RGB565       fourcc_code('R', 'G', '1', '6')
-#define DRM_FORMAT_BGR565       fourcc_code('B', 'G', '1', '6')
-#define DRM_FORMAT_RGB888       fourcc_code('R', 'G', '2', '4')
-#define DRM_FORMAT_BGR888       fourcc_code('B', 'G', '2', '4')
-#define DRM_FORMAT_XRGB8888     fourcc_code('X', 'R', '2', '4')
-#define DRM_FORMAT_XBGR8888     fourcc_code('X', 'B', '2', '4')
-#define DRM_FORMAT_RGBX8888     fourcc_code('R', 'X', '2', '4')
-#define DRM_FORMAT_BGRX8888     fourcc_code('B', 'X', '2', '4')
-#define DRM_FORMAT_ARGB8888     fourcc_code('A', 'R', '2', '4')
-#define DRM_FORMAT_ABGR8888     fourcc_code('A', 'B', '2', '4')
-#define DRM_FORMAT_RGBA8888     fourcc_code('R', 'A', '2', '4')
-#define DRM_FORMAT_BGRA8888     fourcc_code('B', 'A', '2', '4')
-#define DRM_FORMAT_XRGB2101010  fourcc_code('X', 'R', '3', '0')
-#define DRM_FORMAT_XBGR2101010  fourcc_code('X', 'B', '3', '0')
-#define DRM_FORMAT_ARGB2101010  fourcc_code('A', 'R', '3', '0')
-#define DRM_FORMAT_ABGR2101010  fourcc_code('A', 'B', '3', '0')
-#define DRM_FORMAT_XRGB16161616 fourcc_code('X', 'R', '4', '8')
-#define DRM_FORMAT_ARGB16161616 fourcc_code('A', 'R', '4', '8')
-#define DRM_FORMAT_NV12         fourcc_code('N', 'V', '1', '2')
-#define DRM_FORMAT_NV21         fourcc_code('N', 'V', '2', '1')
-#define DRM_FORMAT_YUV420       fourcc_code('Y', 'U', '1', '2')
-#define DRM_FORMAT_YVU420       fourcc_code('Y', 'V', '1', '2')
+#define DRM_FORMAT_BIG_ENDIAN    (1u << 31)
+#define DRM_FORMAT_INVALID       0
+#define DRM_FORMAT_C8            fourcc_code('C', '8', ' ', ' ')
+#define DRM_FORMAT_XRGB1555      fourcc_code('X', 'R', '1', '5')
+#define DRM_FORMAT_ARGB1555      fourcc_code('A', 'R', '1', '5')
+#define DRM_FORMAT_RGB565        fourcc_code('R', 'G', '1', '6')
+#define DRM_FORMAT_BGR565        fourcc_code('B', 'G', '1', '6')
+#define DRM_FORMAT_RGB888        fourcc_code('R', 'G', '2', '4')
+#define DRM_FORMAT_BGR888        fourcc_code('B', 'G', '2', '4')
+#define DRM_FORMAT_XRGB8888      fourcc_code('X', 'R', '2', '4')
+#define DRM_FORMAT_XBGR8888      fourcc_code('X', 'B', '2', '4')
+#define DRM_FORMAT_RGBX8888      fourcc_code('R', 'X', '2', '4')
+#define DRM_FORMAT_BGRX8888      fourcc_code('B', 'X', '2', '4')
+#define DRM_FORMAT_ARGB8888      fourcc_code('A', 'R', '2', '4')
+#define DRM_FORMAT_ABGR8888      fourcc_code('A', 'B', '2', '4')
+#define DRM_FORMAT_RGBA8888      fourcc_code('R', 'A', '2', '4')
+#define DRM_FORMAT_BGRA8888      fourcc_code('B', 'A', '2', '4')
+#define DRM_FORMAT_XRGB2101010   fourcc_code('X', 'R', '3', '0')
+#define DRM_FORMAT_XBGR2101010   fourcc_code('X', 'B', '3', '0')
+#define DRM_FORMAT_ARGB2101010   fourcc_code('A', 'R', '3', '0')
+#define DRM_FORMAT_ABGR2101010   fourcc_code('A', 'B', '3', '0')
+#define DRM_FORMAT_XRGB16161616  fourcc_code('X', 'R', '4', '8')
+#define DRM_FORMAT_ARGB16161616  fourcc_code('A', 'R', '4', '8')
+#define DRM_FORMAT_XRGB16161616F fourcc_code('X', 'R', '4', 'H')
+#define DRM_FORMAT_XBGR16161616F fourcc_code('X', 'B', '4', 'H')
+#define DRM_FORMAT_YUYV          fourcc_code('Y', 'U', 'Y', 'V')
+#define DRM_FORMAT_YVYU          fourcc_code('Y', 'V', 'Y', 'U')
+#define DRM_FORMAT_UYVY          fourcc_code('U', 'Y', 'V', 'Y')
+#define DRM_FORMAT_VYUY          fourcc_code('V', 'Y', 'U', 'Y')
+#define DRM_FORMAT_NV12          fourcc_code('N', 'V', '1', '2')
+#define DRM_FORMAT_NV21          fourcc_code('N', 'V', '2', '1')
+#define DRM_FORMAT_YUV420        fourcc_code('Y', 'U', '1', '2')
+#define DRM_FORMAT_YVU420        fourcc_code('Y', 'V', '1', '2')
 
 /* A modifier is a vendor in the top byte and the vendor's layout below. */
-#define DRM_FORMAT_MOD_VENDOR_NONE 0
-#define DRM_FORMAT_RESERVED        ((1ULL << 56) - 1)
+#define DRM_FORMAT_MOD_VENDOR_NONE  0
+#define DRM_FORMAT_MOD_VENDOR_INTEL 0x01
+#define DRM_FORMAT_RESERVED         ((1ULL << 56) - 1)
 #define fourcc_mod_code(vendor, val) \
     ((((uint64_t)DRM_FORMAT_MOD_VENDOR_##vendor) << 56) | ((uint64_t)(val) & 0x00ffffffffffffffULL))
-#define DRM_FORMAT_MOD_INVALID fourcc_mod_code(NONE, DRM_FORMAT_RESERVED)
-#define DRM_FORMAT_MOD_LINEAR  fourcc_mod_code(NONE, 0)
+#define DRM_FORMAT_MOD_INVALID  fourcc_mod_code(NONE, DRM_FORMAT_RESERVED)
+#define DRM_FORMAT_MOD_LINEAR   fourcc_mod_code(NONE, 0)
+/* Intel's X tiles: 512 bytes by 8 rows, as the fences and planes of i915
+ * lay them out. */
+#define I915_FORMAT_MOD_X_TILED fourcc_mod_code(INTEL, 1)
 
 /* ------------------------------------------------------------------------
  * The DRM ioctl numbers, type 'd'. Numbers 0x40 to 0x9F are the driver's.

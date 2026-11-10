@@ -138,7 +138,7 @@ static int32_t vram_mode_valid(struct drm_crtc *c, const struct drm_mode_modeinf
 
 static const struct drm_connector_funcs sink_funcs = {sink_detect, sink_get_modes, NULL, NULL};
 static const struct drm_crtc_funcs crtc_funcs = {NULL, NULL, NULL, NULL, NULL, vram_mode_valid,
-                                                 NULL, NULL, NULL, NULL, NULL};
+                                                 NULL, NULL, NULL, NULL, NULL, NULL};
 static const uint32_t xrgb[] = {DRM_FORMAT_XRGB8888};
 
 /** Make the fake device with a connector of `type`. */

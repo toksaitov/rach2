@@ -841,7 +841,10 @@ struct drm_plane {
  * `verify_crc_source` answers 0 when `name` is one and sets how many values
  * each frame's entry has, without starting it, or -EINVAL; and
  * `get_crc_sources` lists them. A CRTC without `set_crc_source` and
- * `verify_crc_source` has no CRCs.
+ * `verify_crc_source` has no CRCs. `get_vblank_counter`, when given, reads
+ * the hardware's 32-bit frame counter, which advances at each vblank
+ * whether or not the interrupt is on, so that the count takes in the
+ * vblanks that came while it was off, as Linux's hook of that name does.
  */
 struct drm_crtc_funcs {
     int32_t (*atomic_check)(struct drm_crtc *crtc, struct drm_atomic_state *state);
@@ -855,6 +858,7 @@ struct drm_crtc_funcs {
     int32_t (*set_crc_source)(struct drm_crtc *crtc, const char *name);
     int32_t (*verify_crc_source)(struct drm_crtc *crtc, const char *name, uint32_t *values_cnt);
     const char *const *(*get_crc_sources)(struct drm_crtc *crtc, uint32_t *count);
+    uint32_t (*get_vblank_counter)(struct drm_crtc *crtc);
 };
 
 /*
@@ -866,10 +870,12 @@ struct drm_crtc_funcs {
  * `put_ns` is when the last holder let go, from which the off-delay runs.
  * `events` are the events waiting for a count, in the order queued. `wait`
  * wakes at each vblank, when vblanks stop, and when a commit's flip on the
- * CRTC completes.
+ * CRTC completes. `last` is the hardware's frame counter when the count
+ * last took it in, for a CRTC with `get_vblank_counter`.
  */
 struct drm_vblank {
     uint64_t count;
+    uint32_t last;
     int64_t time_ns;
     uint32_t refs;
     int enabled;   /* the driver's interrupt is on */

@@ -70,14 +70,38 @@ void drm_crtc_vblank_init(struct drm_crtc *crtc)
  * The interrupt and its holders
  */
 
-/** Turn the interrupt on, Linux's drm_vblank_enable: 0 or the driver's
- * error. */
+/**
+ * The vblanks the hardware's frame counter has counted since the count
+ * last took it in, which it now takes in, as Linux's
+ * drm_update_vblank_count with a counter of 32 bits; 1 for a CRTC without
+ * a counter, whose interrupt alone counts.
+ */
+static uint32_t vblank_hw_diff(struct drm_crtc *crtc)
+{
+    struct drm_vblank *v = &crtc->vblank;
+    uint32_t cur, diff;
+
+    if (!crtc->funcs->get_vblank_counter) {
+        return 1;
+    }
+    cur = crtc->funcs->get_vblank_counter(crtc);
+    diff = cur - v->last;
+    v->last = cur;
+    return diff;
+}
+
+/** Turn the interrupt on, Linux's drm_vblank_enable, the vblanks of a
+ * hardware counter that came while it was off counted first: 0 or the
+ * driver's error. */
 static int32_t vblank_enable(struct drm_crtc *crtc)
 {
     int32_t rc;
 
     if (crtc->vblank.enabled) {
         return 0;
+    }
+    if (crtc->funcs->get_vblank_counter) {
+        crtc->vblank.count += vblank_hw_diff(crtc);
     }
     rc = crtc->funcs->enable_vblank(crtc);
     if (rc == 0) {
@@ -86,11 +110,15 @@ static int32_t vblank_enable(struct drm_crtc *crtc)
     return rc;
 }
 
-/** Turn the interrupt off, Linux's drm_vblank_disable_and_save. */
+/** Turn the interrupt off, Linux's drm_vblank_disable_and_save, with a
+ * hardware counter's vblanks counted up to now. */
 static void vblank_disable(struct drm_crtc *crtc)
 {
     if (!crtc->vblank.enabled) {
         return;
+    }
+    if (crtc->funcs->get_vblank_counter && !crtc->vblank.inmodeset) {
+        crtc->vblank.count += vblank_hw_diff(crtc);
     }
     crtc->vblank.enabled = 0;
     if (crtc->funcs->disable_vblank) {
@@ -241,7 +269,7 @@ int drm_crtc_handle_vblank(struct drm_crtc *crtc)
         return 0;
     }
     now = vblank_now();
-    v->count++;
+    v->count += vblank_hw_diff(crtc);
     v->time_ns = now;
     wq_wake_all(&v->wait);
     send_due_events(crtc, 0);
@@ -276,9 +304,13 @@ void drm_crtc_vblank_on(struct drm_crtc *crtc)
         v->inmodeset = 0;
     }
     /* Linux's drm_reset_vblank_timestamp without a precise timestamp: one
-     * more count, and no time until the next vblank. */
+     * more count, and no time until the next vblank; a hardware counter is
+     * taken in from here. */
     v->count++;
     v->time_ns = 0;
+    if (crtc->funcs && crtc->funcs->get_vblank_counter) {
+        v->last = crtc->funcs->get_vblank_counter(crtc);
+    }
     if (v->refs != 0 && drm_crtc_has_vblank(crtc)) {
         (void)vblank_enable(crtc);
     }

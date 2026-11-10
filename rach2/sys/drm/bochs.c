@@ -658,6 +658,7 @@ static const struct drm_crtc_funcs bochs_crtc_funcs = {bochs_crtc_check,
                                                        NULL,
                                                        NULL,
                                                        NULL,
+                                                       NULL,
                                                        NULL};
 static const struct drm_connector_funcs bochs_connector_funcs = {NULL, bochs_get_modes, NULL, NULL};
 

@@ -322,7 +322,7 @@ static void fake_plane_update(struct drm_plane *plane, struct drm_atomic_state *
 
 static const struct drm_plane_funcs plane_funcs = {fake_plane_check, fake_plane_update, NULL};
 static const struct drm_crtc_funcs crtc_funcs = {NULL, NULL, NULL, NULL, NULL, NULL,
-                                                 NULL, NULL, NULL, NULL, NULL};
+                                                 NULL, NULL, NULL, NULL, NULL, NULL};
 static const struct drm_connector_funcs conn_funcs = {detect, get_modes, NULL, NULL};
 static const uint32_t xrgb[] = {DRM_FORMAT_XRGB8888};
 
