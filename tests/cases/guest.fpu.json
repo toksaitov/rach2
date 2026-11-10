@@ -159,7 +159,8 @@
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "boot", "reason": "the kernel saves the x87 state alone only when it boots with rach2.nofxsr"}
+      "native": {"plan": "none", "class": "boot", "reason": "the kernel saves the x87 state alone only when it boots with rach2.nofxsr"},
+      "ia32": {"runs": false, "why": "rach2.nofxsr is an option of the i686 kernel alone; the x86-64 kernel saves an i386 program's x87 state with FXSAVE or XSAVE, as x86-64 has them on every processor"}
     }
   ]
 }

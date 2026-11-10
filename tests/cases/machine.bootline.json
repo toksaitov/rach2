@@ -176,7 +176,8 @@
         {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "feature", "reason": "the case boots a processor that lacks what the kernel needs"}
+      "native": {"plan": "none", "class": "feature", "reason": "the case boots a processor that lacks what the kernel needs"},
+      "ia32": {"runs": false, "why": "it proves the i686 kernel's refusal of a 486, which has no long mode either, so the x86-64 kernel cannot boot on it; cpu-qemu32 proves the x86-64 kernel's refusal"}
     },
     {
       "case_id": "machine.bootline.cpu-pentium",
@@ -210,7 +211,8 @@
         {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "feature", "reason": "the case boots a processor that lacks what the kernel needs"}
+      "native": {"plan": "none", "class": "feature", "reason": "the case boots a processor that lacks what the kernel needs"},
+      "ia32": {"runs": false, "why": "it proves the i686 kernel's refusal of a Pentium, which has no long mode either, so the x86-64 kernel cannot boot on it; cpu-qemu32 proves the x86-64 kernel's refusal"}
     },
     {
       "case_id": "machine.bootline.cpu-qemu32",
