@@ -455,8 +455,10 @@ The `cpu` of a QEMU profile names a processor profile of [`processor.c`](process
 | `486` | `486` | | `rdrand`, `rdseed`, `xsave`, `avx` |
 | `pentium` | `pentium` | | `rdrand`, `rdseed`, `xsave`, `avx` |
 | `qemu32` | `qemu32` | | `rdrand`, `rdseed`, `xsave`, `avx` |
+| `max-svm` | `max` | `rdrand`, `rdseed`, `xsave`, `avx`, `svm`, `npt` | |
+| `host-svm` | `host` | `svm`, `npt`, `nrip-save`, `tsc-scale`, `vmcb-clean`, `flushbyasid`, `pause-filter` | `decodeassists`, `v-vmsave-vmload`, `vgif` |
 
-The last three lack what a kernel needs: the 486 has no time-stamp counter and the Pentium no `cmov`, which the i686 kernel needs, and `qemu32` has no long mode, which the x86-64 kernel needs; the cases of `tests/run bootline` boot them to see the kernel refuse them. A feature a case requires is one of those five. Its boot's profile declares it as the case requires it: present for `present`, absent for `absent`, and either way for `either`, so that under QEMU every group decided by the feature is decided. A native machine's features are its own, which the controller reads and gives the judge.
+`486`, `pentium` and `qemu32` lack what a kernel needs: the 486 has no time-stamp counter and the Pentium no `cmov`, which the i686 kernel needs, and `qemu32` has no long mode, which the x86-64 kernel needs; the cases of `tests/run bootline` boot them to see the kernel refuse them. `max-svm` and `host-svm` give Rach2 AMD's virtualization for its KVM, as [tests/kvm/Readme.md](../../tests/kvm/Readme.md) says: `max-svm` with nested paging, which TCG emulates and nested KVM gives, and `host-svm` with the SVM features that the testing PC's KVM under WSL gives its guest and without the three it lacks, which starts only under KVM, since TCG has no `host` model. The SVM features are QEMU's names; Linux's `/proc/cpuinfo` writes an underscore for each dash, and `pausefilter` for `pause-filter`. A feature a case requires is one of those the profiles declare. Its boot's profile declares it as the case requires it: present for `present`, absent for `absent`, and either way for `either`, so that under QEMU every group decided by the feature is decided. A native machine's features are its own, which the controller reads and gives the judge.
 
 ### Native runs
 

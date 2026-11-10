@@ -8,24 +8,45 @@
 #include "etude/processor.h"
 
 /* The features a profile may declare, by QEMU's names, which are those of
- * Linux's /proc/cpuinfo. */
+ * Linux's /proc/cpuinfo with a dash for each underscore, but for
+ * pause-filter, Linux's pausefilter. The SVM features after svm are bits of
+ * EDX of leaf 0x8000000a. */
 static const char *const features[] = {
-    "rdrand",  /* CPUID leaf 1, ECX bit 30 */
-    "rdseed",  /* leaf 7, EBX bit 18 */
-    "xsave",   /* leaf 1, ECX bit 26 */
-    "avx",     /* leaf 1, ECX bit 28 */
-    "pdpe1gb", /* leaf 0x80000001, EDX bit 26: 1 GiB pages */
+    "rdrand",          /* CPUID leaf 1, ECX bit 30 */
+    "rdseed",          /* leaf 7, EBX bit 18 */
+    "xsave",           /* leaf 1, ECX bit 26 */
+    "avx",             /* leaf 1, ECX bit 28 */
+    "pdpe1gb",         /* leaf 0x80000001, EDX bit 26: 1 GiB pages */
+    "svm",             /* leaf 0x80000001, ECX bit 2: AMD's virtualization */
+    "npt",             /* bit 0: nested paging */
+    "nrip-save",       /* bit 3: the next RIP saved on an exit */
+    "tsc-scale",       /* bit 4: the guest's TSC rate */
+    "vmcb-clean",      /* bit 5: the VMCB's clean bits */
+    "flushbyasid",     /* bit 6: a TLB flush of one ASID */
+    "decodeassists",   /* bit 7: the instruction's bytes on an exit */
+    "pause-filter",    /* bit 10: the PAUSE intercept's count */
+    "v-vmsave-vmload", /* bit 15: VMSAVE and VMLOAD without an exit */
+    "vgif",            /* bit 16: the virtual global interrupt flag */
     NULL,
 };
 
 static const char *const max_features[] = {"rdrand", "rdseed", "xsave", "avx", NULL};
 static const char *const no_1g[] = {"pdpe1gb", NULL};
 static const char *const none[] = {NULL};
+/* AMD's virtualization with nested paging, as QEMU's TCG emulates it. */
+static const char *const max_svm[] = {"rdrand", "rdseed", "xsave", "avx", "svm", "npt", NULL};
+/* The SVM features that the testing PC's KVM under WSL gives its guest, and
+ * those it lacks, which a guest of another host's KVM must not have
+ * either. */
+static const char *const host_svm[] = {"svm",        "npt",         "nrip-save",    "tsc-scale",
+                                       "vmcb-clean", "flushbyasid", "pause-filter", NULL};
+static const char *const host_no_svm[] = {"decodeassists", "v-vmsave-vmload", "vgif", NULL};
 
 static const struct etude_processor profiles[] = {
     {"max", "max", max_features, none},         {"max-nopdpe1gb", "max", max_features, no_1g},
     {"qemu64", "qemu64", none, max_features},   {"486", "486", none, max_features},
     {"pentium", "pentium", none, max_features}, {"qemu32", "qemu32", none, max_features},
+    {"max-svm", "max", max_svm, none},          {"host-svm", "host", host_svm, host_no_svm},
 };
 
 const struct etude_processor *etude_processor_find(const char *name)
