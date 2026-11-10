@@ -2,12 +2,14 @@
 # video.sh: play video clips in a browser inside a graphics guest, Rach2's or
 # Debian's, and count the frames it showed and dropped.
 #
-#   video.sh [-b BROWSER] [-c CLIPS] [-w WARMUP] [-r REPS] [-o OUT] [-t] CLIP...
+#   video.sh [-b BROWSER] [-c CLIPS] [-w WARMUP] [-r REPS] [-o OUT] [-t] [-d]
+#       CLIP...
 #   video.sh make DIR
 #
 # Plays each CLIP, a name of the table below found in CLIPS
 # (/usr/share/graphics-clips) and checked against clips.sha256, muted and
-# fullscreen in BROWSER (chromium; or firefox) under a headless Weston,
+# fullscreen in BROWSER (chromium; or firefox) under a headless Weston of
+# its own, or with -d on the caller's own Wayland display, as on the Lenovo,
 # WARMUP times (1) and then REPS times (3), each play to the clip's end in a
 # new video element, through video.html; each clip has a new browser. The
 # warm-up is played and kept but not counted: browser numbers in QEMU vary
@@ -80,8 +82,8 @@ fi
 . "$RUNNER_DIR/common.sh"
 
 browser=chromium clips=/usr/share/graphics-clips warmup=1 reps=3 out=. through=0
-silence=120
-while getopts b:c:w:r:o:t o; do
+own=1 silence=120
+while getopts b:c:w:r:o:td o; do
     case $o in
         b) browser=$OPTARG ;;
         c) clips=$OPTARG ;;
@@ -89,6 +91,7 @@ while getopts b:c:w:r:o:t o; do
         r) reps=$OPTARG ;;
         o) out=$OPTARG ;;
         t) through=1 ;;
+        d) own=0 ;;
         *) exit 2 ;;
     esac
 done
@@ -103,7 +106,7 @@ if [ "$through" -eq 1 ]; then
         [ "$name" != "$target" ] || break
     done
 fi
-[ $# -ge 1 ] || { echo "usage: video.sh [-b BROWSER] [-c CLIPS] [-w WARMUP] [-r REPS] [-o OUT] CLIP..." >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: video.sh [-b BROWSER] [-c CLIPS] [-w WARMUP] [-r REPS] [-o OUT] [-t] [-d] CLIP..." >&2; exit 2; }
 case $browser in chromium|firefox) ;; *) echo "video: no browser $browser" >&2; exit 2 ;; esac
 for name; do
     clip "$name" || { echo "video: no clip $name; one of $CLIPS" >&2; exit 2; }
@@ -113,13 +116,24 @@ for name; do
 done
 
 runner_init video "$out"
-runner_start
+if [ "$own" = 1 ]; then
+    runner_start
+else
+    runner_start plain
+    runner_record "cache browser a new profile for each browser started"
+    runner_record "size the caller's display"
+fi
 runner_record "case video $browser $*"
 runner_record "warmup $warmup"
 runner_record "repetitions $reps"
 runner_record "clips $clips"
 runner_browser_record "$browser"
-runner_weston
+if [ "$own" = 1 ]; then
+    runner_weston
+else
+    [ -n "${WAYLAND_DISPLAY:-}" ] || runner_die "-d needs WAYLAND_DISPLAY"
+    runner_record "compositor the caller's, $WAYLAND_DISPLAY"
+fi
 runner_server "$clips" "video-runner.html=$RUNNER_DIR/video.html"
 events=$RUNNER_WORK/events
 lines=0
