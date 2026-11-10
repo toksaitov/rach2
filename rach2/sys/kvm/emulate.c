@@ -1388,6 +1388,7 @@ int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index,
 #define EMUL_RUN      5 /* the instruction runs again at the next step */
 #define EMUL_PIO_RUN  6 /* the string OUT runs again at the next step */
 #define EMUL_PIO_OUT  7 /* an OUT's bytes are out, and RIP is still at it */
+#define EMUL_STEP     8 /* the caller's single step waits to be reported */
 
 /* How a pass or one of its steps ends; a negative errno ends KVM_RUN. */
 #define X_OK    0
@@ -4208,6 +4209,20 @@ static void pio_complete(struct kvm_vcpu *v)
     }
 }
 
+/** A port instruction ended outside the backend's `exit`, which reads
+ * `step_trap`: under the caller's single step the next step reports it,
+ * as Linux's kvm_skip_emulated_instruction does from a completion. */
+static void pio_stepped(struct kvm_vcpu *v)
+{
+    struct kvm_emul *em = &v->emul;
+
+    if (em->step_trap && em->stage == EMUL_IDLE) {
+        em->stage = EMUL_STEP;
+        em->resume = 1;
+    }
+    em->step_trap = 0;
+}
+
 int kvm_emul_complete(struct kvm_vcpu *v)
 {
     struct kvm_emul *em = &v->emul;
@@ -4215,6 +4230,7 @@ int kvm_emul_complete(struct kvm_vcpu *v)
 
     if (em->stage == EMUL_PIO && v->exit.kind == KVM_X_IO) {
         pio_complete(v);
+        pio_stepped(v);
         return 0;
     }
     if (em->stage == EMUL_PIO_OUT) {
@@ -4223,6 +4239,7 @@ int kvm_emul_complete(struct kvm_vcpu *v)
         emul_end(v);
         if (linear(v, KVM_SEG_CS, v->regs.rip) == em->out_rip) {
             kvm_emul_skip(v, em->pio.len);
+            pio_stepped(v);
         }
         return 0;
     }
@@ -4257,6 +4274,10 @@ int kvm_emul_resume(struct kvm_vcpu *v)
         if (!em->resume) {
             em->stage = EMUL_IDLE;
         }
+        return 0;
+    case EMUL_STEP:
+        em->stage = EMUL_IDLE;
+        em->step_trap = 1;
         return 0;
     default:
         return 0;

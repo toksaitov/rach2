@@ -3344,7 +3344,9 @@ static void quirk_rows(int vm, int fd)
 /** A plain OUT's RIP on the vCPU `fd`: at the instruction when the caller
  * sees the exit and stepped at the next KVM_RUN, as Linux's
  * complete_fast_pio_out steps it, unless the caller moved it meanwhile;
- * and port 0x7E's, stepped before the exit until its quirk is off. */
+ * the caller's single step over an OUT and an IN, reported once each has
+ * ended; and port 0x7E's OUT, stepped before the exit until its quirk is
+ * off. */
 static void out_rows(int vm, int fd)
 {
     struct kvm_run *rp = run_of(fd);
@@ -3356,6 +3358,19 @@ static void out_rows(int vm, int fd)
     set_regs(fd, 0x1800, 0, 0, 0);
     script(EXIT_HLT, 0, 1);
     CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1801, "a caller that moved RIP keeps its RIP");
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP, 0, 0);
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x3F8ull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO, "an OUT under the caller's single step");
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && regs_of(fd).rip == 0x1001 &&
+              (rp->u.debug.dr6 & 0x4000u),
+          "is KVM_EXIT_DEBUG at the next KVM_RUN, past it, with no guest entered");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    script(EXIT_IO, 8u | (0x60ull << 16), 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO, "an IN under the caller's single step");
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && regs_of(fd).rip == 0x1001,
+          "is KVM_EXIT_DEBUG once its answer is in");
+    guest_debug(fd, 0, 0, 0);
     set_regs(fd, 0x1000, 0x41, 0, 0);
     script(EXIT_IO, 0x7Eull << 16, 1);
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.port == 0x7E &&
