@@ -776,4 +776,32 @@ int kvm_emul_complete(struct kvm_vcpu *v);
  * the backend's `exit` after an `enter` that entered no guest. 0. */
 int kvm_emul_resume(struct kvm_vcpu *v);
 
+/** Read the four PAE PDPTEs at `cr3` of `v` into `pdpte`, as Linux's
+ * load_pdptrs: 0, or -1 for a table in no slot or a present PDPTE with a
+ * reserved bit, which a write of CR3 or CR4 takes as #GP. */
+int kvm_guest_pdptes(struct kvm_vcpu *v, uint64_t cr3, uint64_t pdpte[4]);
+
+/* The source of a task switch, as VMX's exit qualification gives it in
+ * bits 31:30: CALL, IRET, JMP, or a task gate in the IDT. */
+#define KVM_TS_CALL 0
+#define KVM_TS_IRET 1
+#define KVM_TS_JMP  2
+#define KVM_TS_GATE 3
+
+/**
+ * Carry out `v`'s hardware task switch to the TSS `sel`, from `reason`
+ * (KVM_TS_*), as Linux's kvm_task_switch, with the 16-bit and 32-bit TSS,
+ * the busy bits, NT and the back link, CR3, the LDT and the segments.
+ * `idt_index` is the vector of an INT n whose task gate the switch goes
+ * through, for the gate's DPL check, else -1; `next_rip` the EIP the old
+ * task saves; `error` the error code an exception through a task gate
+ * pushes, or -1 for none. The faults are the processor's: 0 with the
+ * switch made, and a fault in loading the new task's state queued in its
+ * context; -1 with a fault queued in the old task, whose registers have
+ * not changed; 1 when a table or TSS is in no slot, which the backend
+ * reports as Linux's internal error; -EFAULT.
+ */
+int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index, uint64_t next_rip,
+                    int64_t error);
+
 #endif /* _KVM_H_ */
