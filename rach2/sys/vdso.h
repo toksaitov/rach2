@@ -94,6 +94,15 @@ void vclock_tick(void);
  */
 int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec);
 
+/**
+ * The clock now in nanoseconds into `*ns`, real time when `real` is set and
+ * the monotonic clock otherwise, with the TSC count it was read at in
+ * `*cycles`, so that the two are one moment, as Linux's
+ * kvm_get_time_and_clockread pairs them for KVM's master clock. 1, or 0
+ * with nothing read when the clock does not run from the TSC.
+ */
+int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles);
+
 /** Make real time the monotonic clock plus `sec` seconds and `nsec`
  * nanoseconds, from 0 to 10^9 - 1, as clock.c's anchor and step give it. */
 void vclock_set_offset(int64_t sec, int32_t nsec);

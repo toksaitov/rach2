@@ -296,6 +296,34 @@ int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
     return 1;
 }
 
+int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+{
+    uint64_t base, c, delta;
+    uint32_t seq;
+
+    if (!running) {
+        return 0;
+    }
+    do {
+        while ((seq = data->seq) & 1u) {
+            __asm__ __volatile__("pause");
+        }
+        __asm__ __volatile__("" : : : "memory");
+        if (real) {
+            base = (uint64_t)data->real_sec * NSEC_PER_SEC + data->real_nsec;
+        } else {
+            base = (uint64_t)data->mono_sec * NSEC_PER_SEC + data->mono_nsec;
+        }
+        c = tsc_ordered();
+        delta = c >= data->cycle_base ? c - data->cycle_base : 0;
+        base += vclock_scale(delta, data->mult, data->shift);
+        __asm__ __volatile__("" : : : "memory");
+    } while (data->seq != seq);
+    *ns = base;
+    *cycles = c;
+    return 1;
+}
+
 void vclock_set_offset(int64_t sec, int32_t nsec)
 {
     uint32_t flags;

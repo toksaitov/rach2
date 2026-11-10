@@ -11,6 +11,7 @@
 #include "kcpu.h"
 #include "../arch.h"
 #include "../../cmdline.h"
+#include "../../vdso.h"
 #include "../../lib/kirq.h"
 #include "../../lib/spinlock.h"
 
@@ -472,6 +473,9 @@ const char *timer_clocksource(int n)
     const char *now = timer_reference();
 
     if (n < 0) {
+        if (vclock_running()) {
+            return "tsc";
+        }
         return now ? clocksource_name(now) : "jiffies";
     }
     if (tsc_per_tick && n-- == 0) {
