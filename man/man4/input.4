@@ -365,14 +365,17 @@ mouse protocol it answers,
 .Dq PS/2 Elantech Touchpad
 and the like.
 .Pp
-After five packets of the pad's in a row that break their form, or the
-bytes 0xAA 0x00 that a device sends when it has reset itself, the kernel
-thread kpsmoused reconnects it as Linux's psmouse does: the pad is reset,
-must give the identity, model and capabilities it gave before, and is set
-up again, then the device behind its port, and their nodes stay.
-A pad that does not answer, or is another one, is probed anew, its nodes
-removed and registered again; so is a device behind the port that no
-longer answers as it did.
+After five packets in a row that break their form, a pad's that it
+refuses or a mouse's first byte without its framing bit, or the bytes
+0xAA 0x00 that a device sends when it has reset itself, the kernel thread
+kpsmoused reconnects it as Linux's psmouse does: the pad is reset, must
+give the identity, model and capabilities it gave before, and is set up
+again, then the device behind its port, and their nodes stay; a mouse is
+reset and must answer with the protocol it spoke before, and its node
+stays.
+A pad or a mouse that does not answer, or is another one, is probed anew,
+its nodes removed and registered again; so is a device behind the port
+that no longer answers as it did.
 .Pp
 The ACPI devices of
 .Xr acpi 4

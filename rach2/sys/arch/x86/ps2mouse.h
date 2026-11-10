@@ -134,10 +134,10 @@ void ps2mouse_guest_change_end(void);
 void ps2mouse_msleep(unsigned int ms);
 
 /**
- * Make the kernel thread kpsmoused, which reconnects a touchpad that sent
- * five packets out of form in a row, and a device that announced itself
- * anew with 0xAA 0x00 after a reset of its own, as Linux's psmouse asks
- * `serio_reconnect` to. Called once, when the first program starts; a
+ * Make the kernel thread kpsmoused, which reconnects a touchpad or mouse
+ * that sent five packets out of form in a row, and a device that announced
+ * itself anew with 0xAA 0x00 after a reset of its own, as Linux's psmouse
+ * asks `serio_reconnect` to. Called once, when the first program starts; a
  * reconnect asked before then waits for the thread.
  */
 void ps2mouse_thread_start(void);
@@ -149,9 +149,11 @@ void ps2mouse_thread_start(void);
  * touchpad's reset and queries, which must find the same pad, its mode,
  * rate and resolution, and reporting again; then the pass-through port,
  * whose guest is reconnected, or probed anew when its reconnect fails or
- * there was none. When the pad is not the same or does not answer, or the
- * device is a mouse, its event devices are removed and the port is probed
- * anew, as Linux's serio core rescans a port whose reconnect failed. The
+ * there was none. A mouse: its reset, its protocol found again, which must
+ * be the one found before, and reporting again; it keeps its event device.
+ * When the pad or the mouse is not the same or does not answer, its event
+ * devices are removed and the port is probed anew, as Linux's serio core
+ * rescans a port whose reconnect failed. The
  * guest alone, after its announcement: the pass-through port as above. The
  * work of kpsmoused, in process context; the host tests call it directly.
  */
