@@ -1570,10 +1570,26 @@ int alps_init(void)
 }
 
 /** No ALPS pad's bytes come, since `alps_init` found none. */
-void alps_byte(uint8_t data)
+int alps_byte(uint8_t data)
 {
     (void)data;
+    return ALPS_GOOD;
 }
+
+/* The rest of alps.h, which a port without an ALPS pad never calls;
+ * alps_hosttest.c tests it. */
+int alps_packet_start(void)
+{
+    return 1;
+}
+
+int alps_reconnect(void)
+{
+    return -1;
+}
+
+void alps_disconnect(void)
+{}
 
 /** No ALPS pad's set-up fails, so no mouse takes its name. */
 const char *alps_mouse_name(const char *proto)
@@ -1808,7 +1824,7 @@ static void model_reset(int kind, int p)
     pad = NULL;
     touchpad = 0;
     state = STATE_ACTIVE;
-    out_of_sync = 0;
+    bad_in_a_row = 0;
     bat_held = 0;
     reconnect_wanted = 0;
     cmd_busy = 0;
@@ -2376,9 +2392,9 @@ static void reconnect_rows(void)
     stick_dev = etd_tp;
     irq_feed(NULL, 24);
     CHECK("four packets out of form are four bad packets",
-          out_of_sync == 4 && state == STATE_ACTIVE && !reconnect_wanted);
+          bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted);
     irq_feed(v3_finger, 6);
-    CHECK("a whole packet ends the count", out_of_sync == 0);
+    CHECK("a whole packet ends the count", bad_in_a_row == 0);
     irq_feed(NULL, 30);
     CHECK("the fifth in a row stops the port and asks for a reconnect",
           state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT && last_warning &&
@@ -2390,12 +2406,12 @@ static void reconnect_rows(void)
     expect_v3_reconnect();
     CHECK("the pad is reconnected with Linux's commands, in Linux's order", took_expected());
     CHECK("its absolute mode is set again and it reports",
-          regs[0x10] == 0x0b && reporting && state == STATE_ACTIVE && out_of_sync == 0);
+          regs[0x10] == 0x0b && reporting && state == STATE_ACTIVE && bad_in_a_row == 0);
     CHECK("it keeps its event devices", etd_pad == pad_dev && etd_tp == stick_dev &&
                                             count_named("ETPS/2 Elantech Touchpad") == 1 &&
                                             count_named("ETPS/2 Elantech TrackPoint") == 1);
     irq_feed(v3_finger, 6);
-    CHECK("and its packets are read", etd_pktcnt == 0 && out_of_sync == 0);
+    CHECK("and its packets are read", etd_pktcnt == 0 && bad_in_a_row == 0);
 
     irq_byte(0xAA);
     irq_byte(0x00);

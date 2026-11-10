@@ -1500,7 +1500,7 @@ void alps_tick(void)
     }
 }
 
-void alps_byte(uint8_t data)
+int alps_byte(uint8_t data)
 {
     uint32_t now = (uint32_t)kernel_ticks;
 
@@ -1519,14 +1519,19 @@ void alps_byte(uint8_t data)
     case BAD_DATA:
         out_of_sync++;
         pktcnt = 0;
-        break;
+        return ALPS_BAD;
     case FULL_PACKET:
         pktcnt = 0;
         out_of_sync = 0;
-        break;
+        return ALPS_FULL;
     default:
-        break;
+        return ALPS_GOOD;
     }
+}
+
+int alps_packet_start(void)
+{
+    return pktcnt == 0;
 }
 
 /* Command mode. */
@@ -2575,10 +2580,49 @@ const char *alps_mouse_name(const char *proto)
     return mouse_name;
 }
 
-int alps_init(void)
+/** Linux's `psmouse_initialize`: the rate, 200 dpi and 1:1 scaling. */
+static void psmouse_initialize(void)
 {
     uint8_t param[1];
 
+    param[0] = 100;
+    ps2_command(param, CMD_SETRATE);
+    param[0] = 3;
+    ps2_command(param, CMD_SETRES);
+    ps2_command(0, CMD_SETSCALE11);
+}
+
+int alps_reconnect(void)
+{
+    psmouse_reset();
+    if (identify(1) < 0) {
+        return -1;
+    }
+    if (priv.hw_init() < 0) {
+        klog(KLOG_WARN, "alps", "reconnect: the touchpad refused its set-up");
+        return -1;
+    }
+    psmouse_initialize();
+    pktsize = priv.proto_version == PROTO_V4 ? 8 : 6;
+    pktcnt = 0;
+    out_of_sync = 0;
+    flush_armed = 0;
+    return 0;
+}
+
+void alps_disconnect(void)
+{
+    psmouse_reset();
+    flush_armed = 0;
+    unregister_all();
+    evdev_unregister(bare);
+    bare = 0;
+    bare_failed = 0;
+    pktcnt = 0;
+}
+
+int alps_init(void)
+{
     k_memset(&priv, 0, sizeof(priv));
     priv.second_touch = -1;
     ps2_command(0, CMD_RESET_DIS);
@@ -2613,12 +2657,7 @@ int alps_init(void)
             goto failed;
         }
     }
-    /* psmouse_initialize: the rate, 200 dpi and 1:1 scaling. */
-    param[0] = 100;
-    ps2_command(param, CMD_SETRATE);
-    param[0] = 3;
-    ps2_command(param, CMD_SETRES);
-    ps2_command(0, CMD_SETSCALE11);
+    psmouse_initialize();
     if (register_pad() < 0) {
         klog(KLOG_WARN, "alps", "register: no event device for the touchpad");
         goto failed;

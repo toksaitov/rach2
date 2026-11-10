@@ -38,14 +38,40 @@ int alps_init(void);
  */
 const char *alps_mouse_name(const char *proto);
 
+/* What `alps_byte` made of a byte, Linux's `psmouse_ret_t`. */
+#define ALPS_BAD  -1 /* it broke the packet's form */
+#define ALPS_GOOD 0  /* the packet goes on */
+#define ALPS_FULL 1  /* it ended a packet */
+
 /**
  * Take the next byte from the touchpad, in interrupt context, as psmouse's
  * `psmouse_receive_byte` and `psmouse_handle_byte` frame it for Linux's
  * `alps_process_byte`: a byte more than half a second after the one before
  * starts the packet again, a byte that breaks the packet's form drops it,
- * and a whole packet is reported.
+ * and a whole packet is reported. Returns ALPS_*, which ps2mouse.c counts
+ * toward the reconnect after five bad packets in a row.
  */
-void alps_byte(uint8_t data);
+int alps_byte(uint8_t data);
+
+/** Whether the next byte begins a packet, which tells ps2mouse.c whether a
+ * byte 0xAA may begin a device's announcement. In interrupt context. */
+int alps_packet_start(void);
+
+/**
+ * Set the pad up again after five bad packets or its announcement, as
+ * Linux's `alps_reconnect` and psmouse's `psmouse_initialize` do: the
+ * reset, the identification, which must again find a pad Linux drives, the
+ * version's set-up, then the rate, resolution and scaling. Its event
+ * devices stay. Returns 0, or -1 when no such pad answers or it refuses its
+ * set-up, and the caller probes the port anew. Inside a run of
+ * `ps2mouse_cmd_begin`.
+ */
+int alps_reconnect(void);
+
+/** Reset the pad and remove its event devices, as Linux's
+ * `alps_disconnect` does, before the port is probed anew. Process
+ * context. */
+void alps_disconnect(void);
 
 /**
  * Report the last six-byte packet of a pad that interleaves a stick's PS/2
