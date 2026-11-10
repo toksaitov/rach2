@@ -1,0 +1,24 @@
+libc6 2.41-12+deb13u4
+libvulkan1 1.4.309.0-1
+mesa-vulkan-drivers 25.0.7-2+deb13u1
+dpkg-query: no path found matching pattern /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+{"ICD":{"api_version":"1.4.354","library_path":"/usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so"},"file_format_version":"1.0.1"}
+$ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json ./venus-tls 
+create 0
+enumerate 0, 1 devices
+device Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+before the destroy: 5 mappings of libvulkan_virtio
+after the destroy: 0 mappings of libvulkan_virtio
+the thread ended
+status 0
+$ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json ./venus-tls device
+create 0
+enumerate 0, 1 devices
+device Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+device create 0
+before the destroy: 5 mappings of libvulkan_virtio
+after the destroy: 0 mappings of libvulkan_virtio
+bash: line 5:   799 Segmentation fault      VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json ./venus-tls $a
+status 139
+$ dmesg | grep segfault
+[   17.225180] venus-tls[800]: segfault at 7f460dacb3c0 ip 00007f460dacb3c0 sp 00007f460e441e98 error 14 likely on CPU 4 (core 4, socket 0)
