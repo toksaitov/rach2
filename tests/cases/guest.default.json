@@ -383,9 +383,9 @@
         {"assertion_id": "low-hint", "checks": "an mmap without MAP_32BIT takes the free hint 0xC0000000, below 4 GiB", "source": "program"},
         {"assertion_id": "futexv-int80", "checks": "futex_waitv, i386 number 449, by int $0x80 fails with EAGAIN for a word that differs and ETIMEDOUT at a passed deadline on CLOCK_MONOTONIC, and a child's FUTEX_WAKE of the third of three words in a shared MAP_32BIT page ends it with index 2", "source": "program"},
         {"assertion_id": "sockstamp-int80", "checks": "the i386 ioctl, number 54, by int $0x80 on a UDP socket fails with ENOENT for SIOCGSTAMP before its first receive, and after it receives a datagram from itself on the loopback gives SIOCGSTAMP and SIOCGSTAMPNS in two 32-bit words, an old_timeval32 and old_timespec32, of the seconds the native SIOCGSTAMP_NEW gives, with the fraction in range and the next 8 bytes untouched", "source": "program"},
-        {"assertion_id": "directory-copy", "checks": "compat getdents and old readdir retain offsets after EFAULT; a partial record batch advances only past the delivered entry", "source": "program"},
-        {"assertion_id": "pselect-null-mask", "checks": "pselect6 uses a timespec without a mask and pselect6_time64 rejects a nanosecond field of one billion", "source": "program"},
-        {"assertion_id": "vector-flags", "checks": "native and compat pwritev2 append at the file end without setting O_APPEND, with only offset -1 moving the shared offset; both preadv2 forms and both range-sync forms reach their handlers", "source": "program"},
+        {"assertion_id": "directory-copy", "checks": "on /proc/self, which the process table lists, and on the root, which its file system lists, compat getdents and old readdir retain offsets after EFAULT, a retry reads the same entries byte for byte, and a partial record batch advances only past the delivered entry", "source": "program"},
+        {"assertion_id": "pselect-null-mask", "checks": "pselect6 and pselect6_time64 without a mask take 1,000,000 nanoseconds as a timespec, which a timeval would refuse, and return the ready pipe, and pselect6_time64 rejects a nanosecond field of one billion", "source": "program"},
+        {"assertion_id": "vector-flags", "checks": "native and compat pwritev2 each append at the file end at offset 0 and at offset -1 without setting O_APPEND, with only offset -1 moving the shared offset; native and compat preadv2 each read back every byte, the compat form into a cleared buffer; both range-sync forms reach their handlers", "source": "program"},
         {"assertion_id": "range-sync", "checks": "native and compat sync_file_range reject a character device with ESPIPE", "source": "program"}
       ],
       "branches": [],
@@ -468,7 +468,7 @@
     },
     {
       "case_id": "guest.default.vmprobe",
-      "behavior": "brk, an anonymous mmap and the stack grow, read zero and keep their bytes, brk does not grow over a mapping above the break, and a mapping goes below the break once the room above it is taken.",
+      "behavior": "brk, an anonymous mmap and the stack grow, read zero and keep their bytes, brk does not grow over a mapping above the break, a mapping goes below the break once the room above it is taken, and no mapping without MAP_FIXED reaches the guard gap below the stack's growth window.",
       "units": ["default", "vmprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -488,6 +488,8 @@
         {"assertion_id": "collision-above", "checks": "That page is placed above the break.", "source": "program"},
         {"assertion_id": "collision-refused", "checks": "brk refuses to grow across the page, returning the old break.", "source": "program"},
         {"assertion_id": "below-break", "checks": "Once reservations take the room between the break and the mmap base, an mmap without a hint is placed below the break.", "source": "program"},
+        {"assertion_id": "stack-gap-hint", "checks": "Under the default RLIMIT_STACK of 8 MiB, an mmap hint whose page ends 1 MiB below the stack's limit, 8 MiB below the top of [stack] in /proc/self/maps, is taken, and a hint at that place, in the guard gap, is not.", "source": "program"},
+        {"assertion_id": "stack-gap-fill", "checks": "PROT_NONE mappings without a hint, each the largest that still fits, fill every free range until a page no longer fits, and the highest of them ends at the guard gap, 1 MiB below the stack's limit.", "source": "program"},
         {"assertion_id": "stack", "checks": "64 levels of recursion with 1 KiB frames each keep their bytes.", "source": "program"}
       ],
       "branches": [],

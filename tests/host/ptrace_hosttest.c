@@ -51,18 +51,18 @@ process_t *get_process(uint32_t pid)
     return pid == self.pid ? &self : pid == tracee.pid ? &tracee : NULL;
 }
 
-/** Copy `len` bytes from the host address `src` and return 0; with
- * `resume_on_copy` set, resume the tracee once, as another thread of the
- * tracer could while the copy sleeps. */
+/** Copy `len` bytes from the host address `src` and return 0. The copy
+ * that brings `resume_on_copy` down to 0 resumes the tracee, as another
+ * thread of the tracer could while it sleeps, and the one that brings
+ * `resize_on_copy` down to 0 doubles the register set's size. */
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
     if (resize_on_copy && --resize_on_copy == 0) {
         register_bytes *= 2;
     }
-    if (resume_on_copy) {
+    if (resume_on_copy && --resume_on_copy == 0) {
         tracee.ptrace_status = 0;
-        resume_on_copy = 0;
     }
     return 0;
 }
@@ -297,7 +297,8 @@ static void clone_notifications(void)
 
 /**
  * Run every row; 0 when each passes, 1 otherwise. A register-set request
- * rechecks the tracee after its copy slept; PTRACE_INTERRUPT releases a
+ * rechecks the tracee after each copy that may sleep, the iovec's and a
+ * write's payload; PTRACE_INTERRUPT releases a
  * listening tracee; PTRACE_SETOPTIONS and PTRACE_SEIZE fail with -EINVAL
  * for an option above bit 31; a single step over a system call reports
  * TRAP_TRACE with no TRACESYSGOOD mark; the stops on the way back to user
@@ -323,6 +324,13 @@ int main(void)
                   register_reads == 0 && register_sizes == 0,
               "regset revalidates before reading the tracee to size the set");
     }
+    setup();
+    iov.iov_base = (uintptr_t)&word;
+    iov.iov_len = sizeof(word);
+    resume_on_copy = 2;
+    check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, 1) == -ESRCH &&
+              resume_on_copy == 0 && register_reads == 0 && register_sizes == 1,
+          "a register-set write finds the tracee resumed during its payload copy");
     setup();
     iov.iov_base = (uintptr_t)&word;
     iov.iov_len = sizeof(word);
