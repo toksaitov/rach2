@@ -1357,8 +1357,8 @@ static void test_unplug(void)
     CHECK("not found by index", drm_dev_at(0) == NULL);
     cap.capability = DRM_CAP_DUMB_BUFFER;
     CHECK("an ioctl answers ENODEV", ioc(&a, &user_a, DRM_IOCTL_GET_CAP, &cap) == -ENODEV);
-    CHECK("poll hangs up", a.ops->poll(&a, POLLIN, &wq) == (POLLERR | POLLHUP));
-    CHECK("read answers ENODEV", a.ops->read(&a, buf, sizeof(buf)) == -ENODEV);
+    CHECK("poll reports nothing", a.ops->poll(&a, POLLIN, &wq) == 0);
+    CHECK("read finds no event", a.ops->read(&a, buf, sizeof(buf)) == -EAGAIN);
     vma.file = NULL;
     vma.pgoff = (uint32_t)(md.offset >> PAGE_SHIFT);
     CHECK("mmap answers ENODEV", a.ops->mmap(&a, &vma) == -ENODEV);

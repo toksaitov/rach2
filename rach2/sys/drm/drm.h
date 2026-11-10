@@ -65,10 +65,12 @@ struct sysfs_pci_ident;
  * hangs past recovery or a firmware framebuffer whose aperture a native
  * driver takes, is unplugged (`drm_dev_unplug`): its nodes leave /dev at
  * once, every later ioctl and mmap of its open files fails with ENODEV,
- * reads give the events already queued and then ENODEV, poll answers
- * POLLERR | POLLHUP, every mapping of its buffers is revoked so that a
- * later access raises SIGBUS (76-2a), and the driver signals every fence
- * it still owes with the error -ENODEV. The records stay until their
+ * every mapping of its buffers is revoked so that a later access raises
+ * SIGBUS (76-2a), and the driver signals every fence it still owes with
+ * the error -ENODEV. read and poll do not change, as on Linux: they give
+ * the events already queued, and after them read waits and poll reports
+ * nothing, so that a compositor whose loop polls the node does not spin
+ * on a device that will never be readable. The records stay until their
  * last holder lets go. virtio-gpu's objects of guest memory are the
  * exception to the SIGBUS: a revoked mapping of one takes its pages again
  * at the next touch, as it does on Linux, where a program outlives the

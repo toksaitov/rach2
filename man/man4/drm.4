@@ -279,15 +279,17 @@ A file holds at most 4096 bytes of events and of events reserved for it.
 .Ss Unplug
 When a device goes, its nodes leave
 .Pa /dev/dri
-and its open files stay with it: their ioctls and reads answer
-.Er ENODEV ,
-.Xr poll 2
-reports
-.Dv POLLERR
-and
-.Dv POLLHUP ,
+and its open files stay with it: their ioctls answer
+.Er ENODEV
 and a touch of a mapping of its buffers raises
 .Dv SIGBUS .
+.Xr read 2
+and
+.Xr poll 2
+do not change, as on Linux: they give the events already queued, and after
+them a read waits and
+.Xr poll 2
+reports nothing.
 The device is freed when its last file and its last mapping go.
 .Sh FILES
 .Pa /dev/dri/cardN
