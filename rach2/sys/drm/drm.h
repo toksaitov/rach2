@@ -1783,6 +1783,76 @@ int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t fr
  * and add the modes it names to the probed modes; the number added. NULL
  * `edid` with no override clears the property. */
 int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len);
+
+/** The VIC of the CEA-861 mode `mode` is, Linux's drm_match_cea_mode: its
+ * timings, a clock of the same period in picoseconds as the table's or its
+ * 1000/1001 one, and its picture aspect when the mode names one; 0 for
+ * none. (drm_edid.c) */
+uint32_t drm_match_cea_mode(const struct drm_mode_modeinfo *mode);
+
+/** The HDMI VIC (1 to 4) of the 4K mode `mode` is, Linux's
+ * drm_match_hdmi_mode; 0 for none. */
+uint32_t drm_match_hdmi_mode(const struct drm_mode_modeinfo *mode);
+
+/* What a sink's EDID says of it as HDMI, Linux's drm_display_info as the
+ * Intel driver reads it: `is_hdmi` for an HDMI vendor block in a CTA
+ * extension, else DVI; `bpc` the bits a colour it takes, Linux's
+ * display_info.bpc, 0 for unknown; `dc_30` and `dc_36` for its 10 and 12
+ * bits a colour in RGB;
+ * `max_tmds_clock` its most TMDS clock in kHz, 0 when it names none;
+ * `has_audio` for basic audio; `digital` for a digital input;
+ * `has_hdmi_infoframe` for a sink that takes HDMI's vendor infoframe;
+ * `rgb_quant_selectable` for a Q bit the sink honours (its video
+ * capability block's QS); `hdmi2` for an HDMI 2.0 sink, one with SCDC or
+ * YCbCr 4:2:0; `vics` a bit for each VIC of its video data blocks. */
+struct drm_edid_hdmi_info {
+    int is_hdmi;
+    uint32_t bpc;
+    int dc_30;
+    int dc_36;
+    uint32_t max_tmds_clock;
+    int has_audio;
+    int digital;
+    int has_hdmi_infoframe;
+    int rgb_quant_selectable;
+    int hdmi2;
+    uint8_t vics[32];
+};
+
+/** Read `info` from the EDID `edid` of `len` bytes, or from `connector`'s
+ * override when it has one and `connector` is not NULL; all 0 for an EDID
+ * that is not valid. */
+void drm_edid_hdmi_info(const struct drm_connector *connector, const uint8_t *edid, uint32_t len,
+                        struct drm_edid_hdmi_info *info);
+
+/** Whether `mode` takes limited range RGB by default, Linux's
+ * drm_default_rgb_quant_range: every CEA mode but VIC 1. */
+int drm_default_rgb_quant_limited(const struct drm_mode_modeinfo *mode);
+
+/* The most bytes of an infoframe packed: the header of 3, the checksum and
+ * 27 of payload. */
+#define DRM_INFOFRAME_MAX 31
+
+/**
+ * Pack the AVI infoframe of `mode` for the sink `info` into `buf`, Linux's
+ * drm_hdmi_avi_infoframe_from_display_mode, its quantization range for RGB
+ * of `limited` range, and hdmi_avi_infoframe_pack: RGB, underscan, the
+ * picture's active aspect, graphics. The bytes packed, or 0 for a mode
+ * whose aspect the frame cannot carry.
+ */
+uint32_t drm_hdmi_avi_infoframe(const struct drm_edid_hdmi_info *info,
+                                const struct drm_mode_modeinfo *mode, int limited, uint8_t *buf);
+
+/** Pack HDMI's vendor infoframe of `mode` into `buf`, Linux's
+ * drm_hdmi_vendor_infoframe_from_display_mode and its pack: the HDMI VIC
+ * of a 4K mode; 0 bytes for a sink that takes no such frame. */
+uint32_t drm_hdmi_vendor_infoframe(const struct drm_edid_hdmi_info *info,
+                                   const struct drm_mode_modeinfo *mode, uint8_t *buf);
+
+/** Pack the source product infoframe of `vendor`, `product` and the
+ * source type `sdi` into `buf`, Linux's hdmi_spd_infoframe_init and its
+ * pack; the bytes packed. */
+uint32_t drm_hdmi_spd_infoframe(const char *vendor, const char *product, uint8_t sdi, uint8_t *buf);
 /** Tell user space that `dev`'s outputs changed: the uevent `change` of
  * its card with HOTPLUG=1, which compositors listen for, and the console
  * (`drm_client_dev_hotplug`). Process context; may sleep. (drm_sysfs.c) */
