@@ -31,9 +31,9 @@
  * protocol found and the event device registered for it, the vector of the
  * handler, and that interrupts are off for every port access and on again
  * at every return. The handler's rows read the packets it reports, of three
- * bytes and of each wheel's four. The probes for a Synaptics and an Elantech
- * touchpad, which synaptics_hosttest.c and elantech_hosttest.c test against
- * a touchpad, find none here.
+ * bytes and of each wheel's four. The probes for a Synaptics, an ALPS and an
+ * Elantech touchpad, which synaptics_hosttest.c, alps_hosttest.c and
+ * elantech_hosttest.c test against touchpads, find none here.
  */
 
 #include "arch/x86/i8042.c"
@@ -364,10 +364,28 @@ int elantech_init(void)
     return 0;
 }
 
+/** No ALPS touchpad answers. */
+int alps_init(void)
+{
+    return 0;
+}
+
 /** No Elantech touchpad's bytes come, since `elantech_init` found none. */
 void elantech_byte(uint8_t data)
 {
     (void)data;
+}
+
+/** No ALPS pad's bytes come, since `alps_init` found none. */
+void alps_byte(uint8_t data)
+{
+    (void)data;
+}
+
+/** No ALPS pad's set-up fails, so no mouse takes its name. */
+const char *alps_mouse_name(const char *proto)
+{
+    return proto;
 }
 
 /** Record the event device registered; its pointer is never followed. */

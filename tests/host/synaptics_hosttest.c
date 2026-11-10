@@ -27,7 +27,8 @@
  * The capabilities the event device must have are what Linux's
  * `set_input_params` and `input_mt_init_slots` give this pad, as Debian's
  * kernel lists them in /proc/bus/input/devices: the test prints the bits
- * EVIOCGBIT gives in that file's form and compares the strings.
+ * EVIOCGBIT gives in that file's form and compares the strings. The probe
+ * for an ALPS touchpad, which alps_hosttest.c tests, finds none here.
  */
 
 #include "arch/x86/i8042.c"
@@ -332,6 +333,24 @@ void klog(int level, const char *subsystem, const char *format, ...)
     } else if (level == KLOG_INFO) {
         last_info = format;
     }
+}
+
+/** No ALPS touchpad answers. */
+int alps_init(void)
+{
+    return 0;
+}
+
+/** No ALPS pad's bytes come, since `alps_init` found none. */
+void alps_byte(uint8_t data)
+{
+    (void)data;
+}
+
+/** No ALPS pad's set-up fails, so no mouse takes its name. */
+const char *alps_mouse_name(const char *proto)
+{
+    return proto;
 }
 
 /** The console's blanking is not modelled. */
