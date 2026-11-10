@@ -1,0 +1,85 @@
+access_tracking_perf_test 4 1..0 # SKIP - CONFIG_IDLE_PAGE_TRACKING is not enabled
+coalesced_io_test 0 Random seed: 0x6b8b4567
+demand_paging_test 0 Overall demand paging rate:	89592.928747 pgs/sec
+dirty_log_perf_test 0 Clear dirty log over 2 iterations took 0.013335548s. (Avg 0.006667774s/iteration)
+dirty_log_test 254   Set page 369 value 1 incorrect (iteration=3)
+guest_memfd_test 254   guest_memfd() with flag '0x1' should fail with EINVAL
+guest_print_test 0 Random seed: 0x6b8b4567
+hardware_disable_test 0 Random seed: 0x6b8b4567
+kvm_binary_stats_test 0 # Totals: pass:4 fail:0 xfail:0 xpass:0 skip:0 error:0
+kvm_create_max_vcpus 0 Testing creating 4096 vCPUs, with IDs 12288...16383.
+kvm_page_table_test 0 
+max_guest_memory_test 0 run1 = 31.487304725s, reset = 0.009654571s, run2 =  1.928257138s
+memslot_modification_stress_test 0 All vCPU threads joined
+memslot_perf_test 0 Best slot setup time for the whole test area was 1.946950682s
+pre_fault_memory_test 0 Skipping tests for vm_type 0x1
+rseq_test 0 Random seed: 0x6b8b4567
+set_memory_region_test 254   Unexpected exit mmio address = 0x180000
+steal_time 0 # Totals: pass:4 fail:0 xfail:0 xpass:0 skip:0 error:0
+system_counter_offset_test 0 system counter value: 83187748650818 expected range [83187748631372, 83187748677572]
+x86_64/amx_test 4 1..0 # SKIP - Required XSAVE feature 'XFEATURE_MASK_XTILE_DATA' not supported
+x86_64/apic_bus_clock_test 0 Random seed: 0x6b8b4567
+x86_64/cpuid_test 0 Random seed: 0x6b8b4567
+x86_64/cr4_cpuid_sync_test 0 Random seed: 0x6b8b4567
+x86_64/debug_regs 0 Random seed: 0x6b8b4567
+x86_64/dirty_log_page_splitting_test 4 HUGETLB is not enabled in /proc/sys/vm/nr_hugepages
+x86_64/exit_on_emulation_failure_test 0 Random seed: 0x6b8b4567
+x86_64/fix_hypercall_test 0 # Totals: pass:2 fail:0 xfail:0 xpass:0 skip:0 error:0
+x86_64/get_msr_index_features 0 Random seed: 0x6b8b4567
+x86_64/hwcr_msr_test 0 Random seed: 0x6b8b4567
+x86_64/hyperv_clock 0 Random seed: 0x6b8b4567
+x86_64/hyperv_cpuid 0 Enlightened VMCS is unsupported, skipping test
+x86_64/hyperv_evmcs 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/hyperv_extended_hypercalls 0 Random seed: 0x6b8b4567
+x86_64/hyperv_features 0 Testing access to Hyper-V hypercalls
+x86_64/hyperv_ipi 0 Random seed: 0x6b8b4567
+x86_64/hyperv_svm_test 0 Random seed: 0x6b8b4567
+x86_64/hyperv_tlb_flush 0 Random seed: 0x6b8b4567
+x86_64/kvm_clock_test 0 kvm-clock value: 5670 expected range [791, 12032]
+x86_64/kvm_pv_test 254   KVM_ENABLE_CAP failed, rc: -1 errno: 22 (Invalid argument)
+x86_64/max_vcpuid_cap_test 0 Random seed: 0x6b8b4567
+x86_64/monitor_mwait_test 4 1..0 # SKIP - Requirement not met: this_cpu_has(X86_FEATURE_MWAIT)
+x86_64/nested_exceptions_test 0 Random seed: 0x6b8b4567
+x86_64/nx_huge_pages_test 4 Running via nx_huge_pages_test.sh, which also handles environment setup, is strongly recommended.
+x86_64/platform_info_test 254   KVM_SET_MSRS failed on MSR_PLATFORM_INFO, value = 0x80000000
+x86_64/pmu_counters_test 4 1..0 # SKIP - Requirement not met: host_cpu_is_intel
+x86_64/pmu_event_filter_test 0 test_not_member_deny_list: Branch instructions retired = 1746 (expected 42)
+x86_64/private_mem_conversions_test 4 1..0 # SKIP - Requirement not met: kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_SW_PROTECTED_VM)
+x86_64/private_mem_kvm_exits_test 4 1..0 # SKIP - Requirement not met: kvm_check_cap(KVM_CAP_VM_TYPES) & BIT(KVM_X86_SW_PROTECTED_VM)
+x86_64/recalc_apic_map_test 0 Random seed: 0x6b8b4567
+x86_64/set_boot_cpu_id 0 Random seed: 0x6b8b4567
+x86_64/set_sregs_test 254   Failed to set supported CR4 bits (0x350fff)
+x86_64/sev_init2_tests 4 1..0 # SKIP - Requirement not met: __kvm_has_device_attr(kvm_fd, KVM_X86_GRP_SEV, KVM_X86_SEV_VMSA_FEATURES) == 0
+x86_64/sev_migrate_tests 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_SEV)
+x86_64/sev_smoke_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_SEV)
+x86_64/smaller_maxphyaddr_emulation_test 4 1..0 # SKIP - Requirement not met: kvm_has_cap(KVM_CAP_SMALLER_MAXPHYADDR)
+x86_64/smm_test 0 Random seed: 0x6b8b4567
+x86_64/state_test 0 Random seed: 0x6b8b4567
+x86_64/svm_int_ctl_test 0 Random seed: 0x6b8b4567
+x86_64/svm_nested_shutdown_test 0 Random seed: 0x6b8b4567
+x86_64/svm_nested_soft_inject_test 0 Running NMI test
+x86_64/svm_vmcall_test 0 Random seed: 0x6b8b4567
+x86_64/sync_regs_test 0 # Totals: pass:10 fail:0 xfail:0 xpass:0 skip:0 error:0
+x86_64/triple_fault_event_test 0 Random seed: 0x6b8b4567
+x86_64/tsc_msrs_test 0 # Totals: pass:5 fail:0 xfail:0 xpass:0 skip:0 error:0
+x86_64/tsc_scaling_sync 0 Random seed: 0x6b8b4567
+x86_64/ucna_injection_test 4 MCG_CMCI_P is not supported, skipping test
+x86_64/userspace_io_test 0 Random seed: 0x6b8b4567
+x86_64/userspace_msr_exit_test 1 # Totals: pass:3 fail:1 xfail:0 xpass:0 skip:0 error:0
+x86_64/vmx_apic_access_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_close_while_nested_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_dirty_log_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_exception_with_invalid_guest_state 4 1..0 # SKIP - Requirement not met: host_cpu_is_intel
+x86_64/vmx_invalid_nested_guest_state 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_msrs_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_nested_tsc_scaling_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_pmu_caps_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_PDCM)
+x86_64/vmx_preemption_timer_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_set_nested_state_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/vmx_tsc_adjust_test 4 1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_VMX)
+x86_64/xapic_ipi_test 0 Migrations completed: 0
+x86_64/xapic_state_test 0 Random seed: 0x6b8b4567
+x86_64/xcr0_cpuid_test 0 Random seed: 0x6b8b4567
+x86_64/xen_shinfo_test 4 1..0 # SKIP - Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_SHARED_INFO
+x86_64/xen_vmcall_test 4 1..0 # SKIP - Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+x86_64/xss_msr_test 0 Random seed: 0x6b8b4567

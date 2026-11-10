@@ -1,0 +1,13 @@
+#!/bin/busybox sh
+# debian-init: the Debian guest's /init. It prints the kernel's version and
+# the first processor's flags, then the token KVMGUEST OK, and powers the
+# machine off; a QEMU run with -no-reboot also ends if the power-off fails,
+# since the kernel's panic at init's end restarts the machine.
+/bin/busybox mkdir -p /proc /sys
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+echo "kvmguest: kernel: $(/bin/busybox uname -r)"
+echo "kvmguest: cpus: $(/bin/busybox grep -c '^processor' /proc/cpuinfo)"
+echo "kvmguest: flags:$(/bin/busybox sed -n 's/^flags[^:]*://p' /proc/cpuinfo | /bin/busybox head -n 1)"
+echo "KVMGUEST OK"
+/bin/busybox poweroff -f

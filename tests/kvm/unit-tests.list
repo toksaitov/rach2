@@ -1,0 +1,98 @@
+# unit-tests.list: kvm-unit-tests' tests in the KVM suite, one a line: the
+# test's name in x86/unittests.cfg, what corpus.sh requires of it under
+# Rach2's KVM, Linux's result on the testing PC, and the reason. EXPECT is
+# `pass`; `skip`, the test's own skip for what the processor or QEMU lacks,
+# as Linux skips it there, with its reason; or `excluded`, not run, for one
+# of the reasons the stack's approved plan allows. LINUX is the result of
+# Linux 6.18.58, WSL's, with QEMU 10.2.1 and kernel-irqchip=split, as
+# ref/linux-unit-tests.txt has it: a row Linux failed
+# there still expects a pass, its failure named after `Linux:`.
+#
+# NAME EXPECT LINUX REASON
+access pass pass
+access-reduced-maxphyaddr skip skip /sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y
+access_fep skip skip Forced emulation prefix (FEP) not available
+asyncpf pass pass
+cet skip skip No CET features supported
+cmpxchg8b excluded skip i386: built only for i386, and the staged tests are x86-64's
+debug pass fail Linux: unhandled #PF at ffff0ff0 and 404fb8
+emulator pass pass
+ept excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+ept-mbec excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+eventinj pass pass
+hypercall pass pass
+hyperv_clock excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+hyperv_connections excluded fail Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+hyperv_stimer excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+hyperv_stimer_direct excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+hyperv_synic excluded pass Hyper-V: Rach2's KVM has no Hyper-V enlightenments
+idt_test pass pass
+intel_iommu pass pass
+ioapic pass pass
+kvmclock_test pass pass
+la57 pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0
+lam pass pass
+memory pass pass
+msr pass pass
+msr64 pass pass
+pcid-asymmetric pass pass
+pcid-disabled pass fail Linux: FAIL: Test on INVPCID when disabled
+pcid-enabled pass pass
+pks skip skip PKS not enabled: the processor has no PKS
+pku skip skip PKU not enabled
+pmu excluded fail PMU: Rach2's KVM gives its guests no performance counters
+pmu_lbr excluded skip PMU: Rach2's KVM gives its guests no performance counters
+pmu_pebs excluded skip PMU: Rach2's KVM gives its guests no performance counters
+rdpru pass pass
+realmode pass pass
+rmap_chain pass pass
+s3 pass pass
+setjmp pass pass
+sieve pass pass
+smap pass pass
+smptest pass pass
+smptest3 pass pass
+svm excluded timeout nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+svm_no_npt excluded timeout nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+svm_npt excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+svm_pause_filter excluded pass nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+svm_unsupported_instruction_intercept_test excluded fail nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+syscall pass pass
+taskswitch excluded skip i386: built only for i386, and the staged tests are x86-64's
+taskswitch2 excluded skip i386: built only for i386, and the staged tests are x86-64's
+tsc pass pass
+tsc_adjust pass pass
+tsx-ctrl skip skip TSX not available
+umip pass pass
+vmexit_cpuid pass pass
+vmexit_cr0_wp pass pass
+vmexit_cr4_pge pass pass
+vmexit_inl_pmtimer pass pass
+vmexit_ipi pass pass
+vmexit_ipi_halt pass pass
+vmexit_mov_from_cr8 pass pass
+vmexit_mov_to_cr8 pass pass
+vmexit_ple_round_robin pass pass
+vmexit_tscdeadline pass pass
+vmexit_tscdeadline_immed pass pass
+vmexit_vmcall pass pass
+vmware_backdoors skip skip /sys/module/kvm/parameters/enable_vmware_backdoor not equal to Y
+vmx excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_apic_passthrough_thread excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_apic_passthrough_tpr_threshold_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_apicv_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_eoi_bitmap_ioapic_scan excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_hlt_with_rvi_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_init_signal_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_pf_exception_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_pf_exception_test_fep excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_pf_exception_test_reduced_maxphyaddr excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_pf_invvpid_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_pf_no_vpid_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_pf_vpid_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_posted_intr_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_sipi_signal_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+vmx_vmcs_shadow_test excluded skip nested virtualization: Rach2's KVM gives its guests neither SVM nor VMX
+x2apic pass timeout Linux: timeout; duration=30
+xapic pass timeout Linux: timeout; duration=60
+xsave pass pass
