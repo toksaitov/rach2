@@ -36,6 +36,19 @@ A fence names a point on a producer's timeline.
 It completes once, successfully or with a negative error.
 A reservation records a buffer's previous writer and readers.
 .Bl -tag -width DMA_BUF_IOCTL_EXPORT_SYNC_FILE
+.It Dv DMA_BUF_SET_NAME
+Set the buffer's name from the string at the argument address, at most
+31 bytes before its terminating NUL.
+Both the 32-bit and 64-bit request encodings are accepted.
+An inaccessible string is
+.Er EFAULT ;
+one with no NUL in its first 32 bytes is
+.Er ENAMETOOLONG .
+The old name remains on failure.
+The name is reported as
+.Ql name:
+in
+.Pa /proc/PID/fdinfo/N .
 .It Dv DMA_BUF_IOCTL_SYNC
 Read a
 .Vt struct dma_buf_sync .
