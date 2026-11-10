@@ -1415,14 +1415,15 @@ static int logged(uint32_t i, uint32_t type)
 }
 
 /** The fence ids of the log are 1, 2, 3 ... for the control queue, 0 for
- * the cursor queue. */
+ * the cursor queue and for UNMAP_BLOB, which goes unfenced. */
 static int fences_in_order(void)
 {
     uint32_t i, next = 1;
 
     for (i = 0; i < gpu.nlog; i++) {
         if (gpu.log[i] == VIRTIO_GPU_CMD_UPDATE_CURSOR ||
-            gpu.log[i] == VIRTIO_GPU_CMD_MOVE_CURSOR) {
+            gpu.log[i] == VIRTIO_GPU_CMD_MOVE_CURSOR ||
+            gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB) {
             if (gpu.fence[i]) {
                 return 0;
             }
