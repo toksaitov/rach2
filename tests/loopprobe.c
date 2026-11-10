@@ -9,7 +9,8 @@
  * empty datagram comes back as one, and a recvfrom given an address and no
  * length pointer fails with EFAULT and leaves the datagram for the next
  * receive. A receive with MSG_PEEK leaves a datagram and a stream's bytes
- * for the next one. A TCP connection to the probe's own listener completes
+ * for the next one, and recvmsg reads a stream into its buffers in order,
+ * peeking or taking. A TCP connection to the probe's own listener completes
  * its handshake, moves data both ways and reports the peer 127.0.0.1, and
  * one the server closes at once after accept still connects. A transfer
  * larger than the ring arrives whole with no datagram dropped, and no leg of
@@ -215,6 +216,12 @@ static const struct step {
     {"tcp write for the peek", "tcp-peek-copies"},
     {"a tcp peek of one byte did not copy it", "tcp-peek-copies"},
     {"a tcp read after a peek did not start at the byte peeked", "tcp-read-after-peek"},
+    {"tcp write for recvmsg", "tcp-recvmsg-peek"},
+    {"a tcp recvmsg peek did not fill both buffers in order", "tcp-recvmsg-peek"},
+    {"a tcp recvmsg gave an address, control data or flags", "tcp-recvmsg-header"},
+    {"a tcp recvmsg did not take the bytes the two buffers hold", "tcp-recvmsg-take"},
+    {"a nonblocking tcp recvmsg did not take the rest", "tcp-recvmsg-rest"},
+    {"a nonblocking tcp recvmsg of an empty stream was not EAGAIN", "tcp-recvmsg-empty"},
     {"tcp listener socket", "tcp-connect"},
     {"tcp bind", "tcp-connect"},
     {"tcp listen", "tcp-connect"},
@@ -904,9 +911,92 @@ static void udp_peek(void)
     sys_close(s);
 }
 
+/* The struct iovec and msghdr of the probe's ABI. */
+struct iovec_probe {
+    void *iov_base;
+    size_t iov_len;
+};
+
+struct msghdr_probe {
+    void *msg_name;
+    unsigned int msg_namelen;
+    struct iovec_probe *msg_iov;
+    size_t msg_iovlen;
+    void *msg_control;
+    size_t msg_controllen;
+    int msg_flags;
+};
+
+/* The two buffers `recvmsg2` reads into, and the header it gives back. */
+static char rm_a[16], rm_b[16];
+static struct msghdr_probe rm_msg;
+
+/** recvmsg on the stream `s` with `flags` into the first `alen` bytes of
+ * `rm_a` and the first `blen` of `rm_b`, the header given back in `rm_msg`:
+ * the bytes received, or a negated errno. The header offers an address and
+ * a control buffer, which a stream leaves unwritten. */
+static int recvmsg2(int s, int alen, int blen, int flags)
+{
+    static uint8_t name[16], control[32];
+    static struct iovec_probe iov[2];
+    unsigned long args[3];
+
+    iov[0].iov_base = rm_a;
+    iov[0].iov_len = (size_t)alen;
+    iov[1].iov_base = rm_b;
+    iov[1].iov_len = (size_t)blen;
+    rm_msg.msg_name = name;
+    rm_msg.msg_namelen = sizeof(name);
+    rm_msg.msg_iov = iov;
+    rm_msg.msg_iovlen = 2;
+    rm_msg.msg_control = control;
+    rm_msg.msg_controllen = sizeof(control);
+    rm_msg.msg_flags = -1;
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)&rm_msg;
+    args[2] = (uint32_t)flags;
+    return socketcall(SC_RECVMSG, args);
+}
+
+/** Whether `rm_a` begins with the `alen` bytes of `want` and `rm_b` with
+ * the `blen` after them. */
+static int recvmsg2_got(const char *want, int alen, int blen)
+{
+    return mem_eq((const uint8_t *)rm_a, (const uint8_t *)want, alen) &&
+           mem_eq((const uint8_t *)rm_b, (const uint8_t *)want + alen, blen);
+}
+
+/** recvmsg on a stream, as QEMU reads its monitor's socket: a peek fills two
+ * buffers in order and takes nothing, the header comes back with no
+ * address, no control data and no flags, a receive takes what its buffers
+ * hold and leaves the rest, a nonblocking one takes that rest, and one of an
+ * empty stream fails with EAGAIN. */
+static void tcp_recvmsg(int cs, int as)
+{
+    const char *msg = "recvmsg-tcp";
+    int n;
+
+    if (sys_write(as, msg, strlen(msg)) != (int)strlen(msg))
+        fail("tcp write for recvmsg");
+    n = recvmsg2(cs, 4, sizeof(rm_b), MSG_PEEK);
+    if (n != (int)strlen(msg) || !recvmsg2_got(msg, 4, n - 4))
+        fail("a tcp recvmsg peek did not fill both buffers in order");
+    if (rm_msg.msg_namelen != 0 || rm_msg.msg_controllen != 0 || rm_msg.msg_flags != 0)
+        fail("a tcp recvmsg gave an address, control data or flags");
+    n = recvmsg2(cs, 4, 4, 0);
+    if (n != 8 || !recvmsg2_got(msg, 4, 4))
+        fail("a tcp recvmsg did not take the bytes the two buffers hold");
+    n = recvmsg2(cs, 2, sizeof(rm_b), MSG_DONTWAIT);
+    if (n != 3 || !recvmsg2_got(msg + 8, 2, 1))
+        fail("a nonblocking tcp recvmsg did not take the rest");
+    if (recvmsg2(cs, 2, sizeof(rm_b), MSG_DONTWAIT) != -EAGAIN)
+        fail("a nonblocking tcp recvmsg of an empty stream was not EAGAIN");
+}
+
 /** A stream's bytes peeked at with MSG_PEEK stay in its ring: one byte
  * peeked, as Chromium checks a connection it keeps idle, and the read after
- * it gets the whole message from its first byte. */
+ * it gets the whole message from its first byte. recvmsg then reads the
+ * same connection (`tcp_recvmsg`). */
 static void tcp_peek(void)
 {
     unsigned long args[6];
@@ -952,6 +1042,7 @@ static void tcp_peek(void)
     n = sys_read(cs, rbuf, sizeof(rbuf));
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
         fail("a tcp read after a peek did not start at the byte peeked");
+    tcp_recvmsg(cs, as);
     sys_close(cs);
     sys_close(as);
     sys_close(ls);

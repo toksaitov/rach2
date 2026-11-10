@@ -915,6 +915,32 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
     return (int)copy_len;
 }
 
+/**
+ * Copy up to `len` queued stream bytes that lie `off` bytes past the next
+ * unread one into `buf`, leaving every byte queued: the second and later
+ * buffers of a recvmsg(2) with MSG_PEEK. Returns the bytes copied, 0 when
+ * none lie past `off` or the socket has no connection. Never waits.
+ */
+int socket_tcp_peek_at(struct socket *sock, uint32_t off, uint8_t *buf, int len)
+{
+    struct tcb *tcb;
+    uint32_t avail, copy_len;
+
+    if (!sock || !sock->tcb || len <= 0)
+        return 0;
+    tcb = sock->tcb;
+    if (tcb->state == TCP_LISTEN)
+        return 0;
+    avail = tcb->recv_tail - tcb->recv_head;
+    if (avail <= off)
+        return 0;
+    copy_len = avail - off;
+    if (copy_len > (uint32_t)len)
+        copy_len = (uint32_t)len;
+    recv_ring_get(buf, tcb, tcb->recv_head + off, copy_len);
+    return (int)copy_len;
+}
+
 void socket_tcp_fin(struct socket *sock)
 {
     if (!sock)

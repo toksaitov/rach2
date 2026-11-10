@@ -164,6 +164,10 @@ struct kernel_mmsghdr {
  * pass. */
 #define MSG_CMSG_COMPAT 0x80000000u
 
+/* recvmsg: close-on-exec for descriptors a control message passes, which
+ * Linux echoes in msg_flags. */
+#define MSG_CMSG_CLOEXEC 0x40000000u
+
 /* The creation flags socket(2) takes above the type's low four bits and
  * accept4(2) takes in its flags: the values of O_CLOEXEC and O_NONBLOCK,
  * as Linux defines them. */
@@ -3404,7 +3408,119 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
 }
 
 /**
- * Receive one datagram into a scatter list (recvmsg, socketcall 17).
+ * Check that the `iovlen` buffers at `iov_user` can all be written, before a
+ * receive takes what it will put in them. Returns 0, or -EFAULT for a list or
+ * a buffer that cannot be read or written, or for one past 2147483647 bytes.
+ */
+static int32_t iovs_writable(uintptr_t iov_user, uint32_t iovlen)
+{
+    struct kernel_iovec iov;
+    uint32_t i;
+
+    for (i = 0; i < iovlen; i++) {
+        if (iov_fetch(&iov, iov_user, i) != 0) {
+            return -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (iov.iov_len > 0x7FFFFFFFu || !user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
+            return -EFAULT;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Read a stream socket into the `iovlen` buffers at `iov_user` in order, as
+ * Linux's tcp_recvmsg: the first buffer that is not empty is read as recv(2)
+ * reads, waiting for a byte unless MSG_DONTWAIT or O_NONBLOCK, and each later
+ * one takes only what is queued already, stopping at the first that is left
+ * short. With MSG_PEEK the later buffers are filled from past the bytes the
+ * earlier ones were given, and nothing is taken from the queue. The buffers
+ * were checked by the caller (`iovs_writable`). Returns the bytes read, 0 at
+ * the end of input or for buffers that hold nothing, or -errno as recv(2):
+ * -EAGAIN, -ENOTCONN, -ECONNRESET, -EINTR or -EFAULT.
+ */
+static int32_t stream_readv(fd_entry_t *entry, uintptr_t iov_user, uint32_t iovlen, int flags)
+{
+    struct socket *sock = entry->sock;
+    struct kernel_iovec iov;
+    uint8_t *buf;
+    uint32_t i, total = 0;
+    int peek = (flags & MSG_PEEK) != 0;
+    int nonblock =
+        (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    int len;
+    int32_t r;
+
+    for (i = 0; i < iovlen; i++) {
+        if (iov_fetch(&iov, iov_user, i) != 0) {
+            return total ? (int32_t)total : -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        buf = (uint8_t __force *)(void __user *)iov.iov_base;
+        len = (int)iov.iov_len;
+        if (total == 0) {
+            r = nonblock ? socket_tcp_try_recv(sock, buf, len, peek)
+                         : socket_tcp_recv(sock, buf, len, peek);
+            if (r <= 0) {
+                return r;
+            }
+        } else if (peek) {
+            r = socket_tcp_peek_at(sock, total, buf, len);
+        } else {
+            r = socket_tcp_try_recv(sock, buf, len, 0);
+            if (r < 0) {
+                r = 0;
+            }
+        }
+        total += (uint32_t)r;
+        if (r < len) {
+            break;
+        }
+    }
+    if (total == 0 && i == iovlen) {
+        r = socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1);
+        return r == SOCK_EAGAIN ? 0 : r;
+    }
+    return (int32_t)total;
+}
+
+/**
+ * recvmsg(2) on the stream socket `entry` with the header `hdr` read from
+ * `msg_ptr`: the buffers checked, then read by `stream_readv`, and the header
+ * written back with no address and no control data, `msg_flags` keeping only
+ * MSG_CMSG_CLOEXEC, as Linux's do. Returns the bytes read, or -errno.
+ */
+static int32_t recvmsg_stream(fd_entry_t *entry, struct kernel_msghdr *hdr, uintptr_t msg_ptr,
+                              int flags)
+{
+    int32_t taken;
+
+    if (iovs_writable(hdr->msg_iov, (uint32_t)hdr->msg_iovlen) != 0) {
+        return -EFAULT;
+    }
+    taken = stream_readv(entry, hdr->msg_iov, (uint32_t)hdr->msg_iovlen, flags);
+    if (taken < 0) {
+        return taken;
+    }
+    hdr->msg_namelen = 0;
+    hdr->msg_controllen = 0;
+    hdr->msg_flags = (unsigned int)flags & MSG_CMSG_CLOEXEC;
+    return msghdr_put(msg_ptr, hdr) != 0 ? -EFAULT : taken;
+}
+
+/**
+ * Receive one datagram, or a stream's bytes, into a scatter list (recvmsg,
+ * socketcall 17).
+ *
+ * A connected stream socket is read as recv(2) reads it, the buffers filled
+ * in order by `recvmsg_stream`, with MSG_DONTWAIT, O_NONBLOCK and MSG_PEEK
+ * honoured, and no address or control data reported (`recvmsg_stream`).
+ * QEMU reads its socket channels, QMP's among them, this way.
  *
  * The DHCP client is what needs this: it reads its packet socket through
  * `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the control
@@ -3440,8 +3556,8 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
  * declared capacity would fail a call whose address fits.
  *
  * Returns the bytes taken, or with MSG_TRUNC the datagram's whole length, or
- * -errno: -EOPNOTSUPP on a socket that is neither a datagram nor a raw
- * socket, or on the raw descriptor that takes only ioctls, -EINVAL for
+ * -errno: -EOPNOTSUPP on a socket that is neither a stream, a datagram nor a
+ * raw socket, or on the raw descriptor that takes only ioctls, -EINVAL for
  * more than IOV_MAX_LOCAL buffers, -EFAULT, or the error of the receive.
  */
 static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
@@ -3454,7 +3570,6 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     uint32_t iovlen;
     net_addr_t src_ip = net_addr4(0);
     uint16_t src_port = 0;
-    uint32_t i;
     int32_t taken;
     int32_t whole = 0;
 
@@ -3465,7 +3580,8 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if ((entry->sock->type != SOCK_DGRAM && entry->sock->type != SOCK_RAW) ||
+    if ((entry->sock->type != SOCK_DGRAM && entry->sock->type != SOCK_RAW &&
+         entry->sock->type != SOCK_STREAM) ||
         sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
     }
@@ -3481,6 +3597,9 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (!user_buffer_ok(msg_ptr, msghdr_size(), 1)) {
         return -EFAULT;
     }
+    if (entry->sock->type == SOCK_STREAM) {
+        return recvmsg_stream(entry, &hdr, msg_ptr, flags);
+    }
     if (rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
         (hdr.msg_controllen > 0x7FFFFFFFu ||
          !user_buffer_ok(hdr.msg_control, (uint32_t)hdr.msg_controllen, 1))) {
@@ -3491,18 +3610,8 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
         return -EFAULT;
     }
-    for (i = 0; i < iovlen; i++) {
-        struct kernel_iovec iov;
-
-        if (iov_fetch(&iov, iov_user, i) != 0) {
-            return -EFAULT;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        if (iov.iov_len > 0x7FFFFFFFu || !user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
-            return -EFAULT;
-        }
+    if (iovs_writable(iov_user, iovlen) != 0) {
+        return -EFAULT;
     }
 
     if ((flags & MSG_DONTWAIT) && (taken = socket_dgram_nowait(entry->sock)) < 0) {
@@ -3534,7 +3643,8 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
         }
     }
     hdr.msg_namelen = (int)addr_len;
-    hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
+    hdr.msg_flags =
+        (whole > taken ? (unsigned int)MSG_TRUNC : 0u) | ((unsigned int)flags & MSG_CMSG_CLOEXEC);
     if (rx_control(entry->sock)) {
         uint32_t used;
 

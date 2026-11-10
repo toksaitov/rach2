@@ -185,16 +185,46 @@ of 32-bit words, and the call
 .Vt struct __kernel_timespec
 of 64-bit words instead, the high word of its nanoseconds ignored.
 .Pp
+On a TCP stream,
+.Fn recvmsg
+reads as
+.Fn recv
+does, with
+.Dv MSG_DONTWAIT ,
+.Dv O_NONBLOCK
+and
+.Dv MSG_PEEK
+honoured, and fills the buffers of
+.Fa msg Ns ->msg_iov
+in order: the first that is not empty waits for input as
+.Fn recv
+would, and each later one takes only what has already come, the call
+returning at the first buffer left short.
+With
+.Dv MSG_PEEK
+the later buffers receive the bytes that follow the earlier ones', and
+nothing is taken.
+No address and no control data are written:
+.Fa msg Ns ->msg_namelen
+and
+.Fa msg Ns ->msg_controllen
+are set to zero, and
+.Fa msg Ns ->msg_flags
+holds only
+.Dv MSG_CMSG_CLOEXEC
+when the call passed it, as on Linux.
+QEMU reads its socket channels, its monitor over TCP among them, this way.
+.Pp
 Among Internet and packet sockets,
 .Fn recvmsg
-takes
+also takes
 .Dv SOCK_DGRAM
 and
 .Dv SOCK_RAW
-sockets, packet sockets included, and rejects stream sockets and the
-raw descriptor of
+sockets, packet sockets included, and rejects the raw descriptor of
 .Dv IPPROTO_RAW
-that takes only ioctls; the rest of this section describes those.
+that takes only ioctls; the rest of this section describes the datagram
+and raw sockets.
 On an
 .Dv AF_UNIX
 socket of any type it receives data, the sender's name and the control
@@ -275,7 +305,9 @@ is set to zero, and
 .Fa msg Ns ->msg_flags
 is
 .Dv MSG_TRUNC
-when the datagram was longer than the buffers and zero otherwise.
+when the datagram was longer than the buffers and zero otherwise, with
+.Dv MSG_CMSG_CLOEXEC
+added when the call passed it.
 .Pp
 An AF_INET6 UDP or raw socket that asked for them with
 .Dv IPV6_RECVPKTINFO ,
@@ -412,9 +444,8 @@ A stream connection timed out while its local address was gone.
 .Fa fd
 does not refer to a socket.
 .It Er EOPNOTSUPP
-An ioctl-only socket was passed to kernel operation 10 or to recvfrom, or an IPv4 socket other than
-.Dv SOCK_DGRAM
-was passed to recvmsg.
+An ioctl-only socket was passed to kernel operation 10, to recvfrom or
+to recvmsg.
 .It Er ENOTCONN
 The stream is listening, or has no TCP control block and has not been shut down.
 .It Er ETIMEDOUT
