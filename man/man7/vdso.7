@@ -157,7 +157,9 @@ among them, reaches it, which answer
 and
 .Xr process_vm_readv 2
 of it answers
-.Er EFAULT .
+.Er EFAULT ,
+and so does
+.Xr vmsplice 2 .
 The library, unlike the data page, may be made writable, as on Linux:
 .Xr mprotect 2
 may add

@@ -13915,10 +13915,11 @@ static long vmsplice_read(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t wa
 
 /**
  * Copy the `iovcnt` buffers of the caller's vector at `uiov` into the pipe
- * of the write end `e`, in order, for vmsplice, each as a write of the pipe
- * does, waiting for room unless `nonblock`. A short write ends the call,
- * and so do `wanted` bytes, the vector's total cut at MAX_RW_COUNT.
- * Returns the bytes copied, or the first error when none were.
+ * of the write end `e`, in order, for vmsplice (`pipe_vmsplice_write`),
+ * waiting for room before the first byte unless `nonblock` and never after
+ * it, as Linux's `vmsplice_to_pipe` waits once and takes what fits. A short
+ * write ends the call, and so do `wanted` bytes, the vector's total cut at
+ * MAX_RW_COUNT. Returns the bytes copied, or the first error when none were.
  */
 static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t wanted, int nonblock)
 {
@@ -13938,8 +13939,8 @@ static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t w
         if (iov.iov_len == 0) {
             continue;
         }
-        r = pipe_splice_write(e, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len, nonblock,
-                              (uint32_t)(iov.iov_base & (PAGE_SIZE - 1)));
+        r = pipe_vmsplice_write(e, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len,
+                                nonblock || total > 0);
         if (r < 0) {
             return total > 0 ? total : r;
         }
@@ -13957,8 +13958,11 @@ static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t w
  * pipe, and from a read end the pipe into the buffers; a descriptor open
  * both ways writes, as Linux's does. Linux gives the pipe the caller's pages
  * where it can; this kernel copies the bytes, which is the same for a caller
- * that does not change a buffer after a SPLICE_F_GIFT. The pipe end waits
- * unless SPLICE_F_NONBLOCK or its description's O_NONBLOCK. Returns the bytes
+ * that does not change a buffer after a SPLICE_F_GIFT, and refuses a source
+ * page that Linux's get_user_pages refuses, such as `[vvar]`, with -EFAULT.
+ * The pipe end waits unless SPLICE_F_NONBLOCK or its description's
+ * O_NONBLOCK, a write end only before its first byte, so that the call
+ * returns what fitted in the pipe, as Linux's does. Returns the bytes
  * moved or a negative errno, in Linux's order: -EINVAL for an unknown flag,
  * -EBADF for a descriptor not open, -EINVAL for a count past IOV_MAX_LOCAL
  * or a buffer of a negative length (`iov_import`, which cuts the total at
