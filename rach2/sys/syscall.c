@@ -954,7 +954,7 @@ static void ntp_rtc_sync(void)
     if (sec < 946684800 || sec > 4102444799LL) {
         return; /* the CMOS clock's century: 2000 to 2099 */
     }
-    rtc_time_of_seconds((uint32_t)sec, &t);
+    rtc_time_of_seconds(sec, &t);
     if (rtc_write_clock(&t) == 0) {
         last = tick_count() + 1u;
     }

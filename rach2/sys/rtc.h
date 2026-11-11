@@ -127,13 +127,17 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
  */
 int rtc_read_clock(rtc_time_t *out);
 
-/** The day of the week of `*t`, 0 for Sunday, and of the year, from 0. */
+/** The day of the week of `*t`, 0 for Sunday, and of the year, from 0, for
+ * a valid date from 1970. */
 void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday);
 
-/** `*t` for `seconds` since 1970 in UTC, the calendar the clock keeps. */
-void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t);
+/** `*t` for `seconds` since 1970 in UTC, the calendar the clock keeps: 0,
+ * or -1 for a time before 1970 or with a year past 2^31 - 1, which leaves
+ * `*t` unchanged. */
+int rtc_time_of_seconds(int64_t seconds, rtc_time_t *t);
 
-/** The seconds since 1970 of `*t`, a time from 1970 in UTC. */
+/** The seconds since 1970 of `*t`, a valid time from 1970 in UTC, whose
+ * year may be any to 2^31 - 1. */
 int64_t rtc_seconds_of(const rtc_time_t *t);
 
 /**

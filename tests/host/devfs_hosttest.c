@@ -878,11 +878,12 @@ void krandom_bytes(void *buf, uint32_t count)
 }
 
 /** The clock time of a count of seconds, which no row converts. */
-void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
+int rtc_time_of_seconds(int64_t seconds, rtc_time_t *t)
 {
     (void)seconds;
     (void)t;
     unexpected();
+    return -1;
 }
 
 /** The seconds of a clock time, which no row converts. */
