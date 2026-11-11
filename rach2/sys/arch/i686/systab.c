@@ -123,6 +123,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MPROTECT] = sys_mprotect;
     table[SYS_CLONE] = sys_clone;
     table[SYS_FUTEX] = sys_futex;
+    table[SYS_FUTEX_TIME64] = sys_ia32_futex_time64;
     table[SYS_SIGALTSTACK] = sys_sigaltstack;
     table[SYS_RT_SIGPENDING] = sys_rt_sigpending;
     table[SYS_SIGPROCMASK] = sys_sigprocmask;
