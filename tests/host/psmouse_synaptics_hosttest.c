@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/park_host.c
  *
  * These are the reads and writes of the Lenovo's trial: each file read,
  * the rate set to 40 and 80, the resolution to 100 and 200, and a packet
@@ -31,6 +32,10 @@
 int printf(const char *format, ...);
 int sprintf(char *s, const char *format, ...);
 int strcmp(const char *a, const char *b);
+
+int park_run(void (*fn)(void));
+int park_resume(void);
+void park(void);
 
 static int fails;
 
@@ -557,11 +562,14 @@ void evdev_sysfs_serio_add(int port)
     fails++;
 }
 
-/** This model has no competing command caller. */
+/** Sleep a competing callback on its own stack until the command is free. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    return cond(arg) ? 0 : -EINTR;
+    while (!cond(arg)) {
+        park();
+    }
+    return 0;
 }
 
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
@@ -920,6 +928,50 @@ static void relative_reconnect_rows(void)
               pad_mode == 0xC5);
 }
 
+/* A write of `disable_gesture` that waits for the command lock, and what
+ * it returned. */
+static struct file parked_file;
+static int32_t parked_result;
+
+/** Enter the saved file's write, whose command wait parks it. */
+static void parked_gesture_write(void)
+{
+    parked_result = parked_file.attr.store(parked_file.obj, parked_file.arg, "0", 1);
+}
+
+/** A write of `disable_gesture` parked behind a write of `protocol` that
+ * selects absolute mode: it passes the check before the command lock, fails
+ * the one after it with ENODEV, and leaves the absolute mode byte. */
+static void relative_parked_rows(void)
+{
+    static const uint8_t resumed[] = {0xF5, 0xF4};
+    int done;
+
+    CHECK("synaptics-relative selects relative mode for the parked row",
+          store(1, "protocol", "synaptics-relative") == 18 && pad_mode == 0x45);
+    if (!file_of(1, "disable_gesture")) {
+        CHECK("relative mode has disable_gesture", 0);
+        return;
+    }
+    parked_file = *file_of(1, "disable_gesture");
+    parked_result = 0;
+    CHECK("a change of serio1 takes the command lock", ps2mouse_change_begin() == 0);
+    done = park_run(parked_gesture_write);
+    CHECK("the write of disable_gesture waits for it", done == 0 && cmd_busy);
+    CHECK("SynPS/2 selects absolute mode meanwhile", aux_set_protocol("SynPS/2", 7) == 0 && pad &&
+                                                         touchpad == TOUCHPAD_SYNAPTICS &&
+                                                         pad_mode == 0xC5);
+    ps2mouse_change_end(0);
+    n_took = 0;
+    if (!done) {
+        CHECK("the waiting write returns", park_resume() == 1);
+    }
+    CHECK("with ENODEV", parked_result == -ENODEV);
+    CHECK("sending no mode byte, only the change's disable and enable",
+          took_bytes(resumed, 2) && pad_mode == 0xC5);
+    CHECK("the pad reports with the lock free", !cmd_busy && state == STATE_ACTIVE && reporting);
+}
+
 /** A failed absolute setup leaves a relative mouse, and is retried when
  * the device reconnects. */
 static void relative_rows(void)
@@ -952,6 +1004,7 @@ int main(void)
     relative_mode_rows();
     relative_gesture_rows();
     relative_reconnect_rows();
+    relative_parked_rows();
     relative_rows();
     if (fails == 0) {
         printf("psmouse-synaptics-test: pass\n");

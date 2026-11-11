@@ -15,6 +15,7 @@
  * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/park_host.c
  *
  * The driver's files are included whole, so that their static state is
  * reachable. The model touchpad answers as the Lenovo's of
@@ -55,6 +56,10 @@
 int printf(const char *format, ...);
 int sprintf(char *s, const char *format, ...);
 int strcmp(const char *a, const char *b);
+
+int park_run(void (*fn)(void));
+int park_resume(void);
+void park(void);
 
 static int fails;
 
@@ -156,10 +161,13 @@ static int warnings;
 static const char *last_warning;
 static const char *last_info;
 
-/* The files a driver added to a serio port: the function it gave, and
- * each file `sysfs_add_attr` was asked for. */
+/* The files a driver added to a serio port: the function a protocol gave,
+ * the driver's own and the times the driver's were bound, and each file
+ * `sysfs_add_attr` was asked for. */
 static int (*files_add)(int dir);
 static int files_port;
+static int (*driver_add)(int dir);
+static int driver_binds;
 #define ATTRS_MAX 32
 static struct {
     int parent;
@@ -650,11 +658,14 @@ void evdev_sysfs_serio_add(int port)
     (void)port;
 }
 
-/** This model has no competing command caller. */
+/** Sleep a competing callback on its own stack until the command is free. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    return cond(arg) ? 0 : -EINTR;
+    while (!cond(arg)) {
+        park();
+    }
+    return 0;
 }
 
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
@@ -665,8 +676,10 @@ void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
 {
-    (void)port;
-    (void)add;
+    if (port == EVDEV_SERIO_PASS_THROUGH) {
+        driver_add = add;
+        driver_binds += add != NULL;
+    }
 }
 
 unsigned int elantech_set_rate(unsigned int rate)
@@ -1031,6 +1044,8 @@ static void model_reset(void)
     last_info = 0;
     files_add = 0;
     files_port = -1;
+    driver_add = 0;
+    driver_binds = 0;
     n_attrs = 0;
 }
 
@@ -1662,6 +1677,8 @@ static void kind_files(int kind, int n)
 
     sprintf(what, "%s: its files are given to the pass-through port", v);
     CHECK(what, files_port == EVDEV_SERIO_PASS_THROUGH && files_add == trackpoint_sysfs_add);
+    sprintf(what, "%s: beside psmouse's, which are the port's driver's", v);
+    CHECK(what, driver_add == guest_files);
     n_attrs = 0;
     ok = trackpoint_sysfs_add(7) == 0;
     if (kind == TP_VARIANT_IBM) {
@@ -1837,6 +1854,7 @@ static void mouse_rows(void)
           n >= 0 && strcmp(desc.name, "PS/2 Generic Mouse") == 0 && desc.id[2] == 1 &&
               has_bit(desc.key, BTN_MIDDLE) && !has_bit(desc.prop, INPUT_PROP_POINTING_STICK));
     CHECK("it has no files of its own", files_port == EVDEV_SERIO_PASS_THROUGH && files_add == 0);
+    CHECK("but psmouse's", driver_add == guest_files);
     CHECK("three-byte packets", (pad_mode & MODE_FOUR_BYTE) == 0);
 
     model_reset();
@@ -2017,6 +2035,64 @@ static void file_rows(void)
     guest_forget();
     CHECK("with no stick a write fails", store_file("sensitivity", "100", 3) == -ENODEV);
     CHECK("and sends nothing", n_took == 0 && n_gtook == 0);
+}
+
+/* A write of the stick's sensitivity that waits for the command lock, and
+ * what it returned. */
+static int parked_attr;
+static int32_t parked_result;
+
+/** Enter the saved file's write, whose command wait parks it. */
+static void parked_write(void)
+{
+    parked_result = attr_made[parked_attr].store(NULL, attr_made[parked_attr].arg, "100", 3);
+}
+
+/** A write of the stick's sensitivity parked behind a write of serio2's
+ * `protocol` that switches the guest to PS/2: the switch takes the stick's
+ * files away and keeps psmouse's, and the write fails with ENODEV and sends
+ * the guest nothing, as Linux's `trackpoint_disconnect` removes the
+ * stick's files under the switch. */
+static void parked_rows(void)
+{
+    uint8_t ram, kept;
+    int done, binds;
+
+    model_reset();
+    pad_caps |= PAD_PASS_THROUGH;
+    guest_kind = GUEST_TP;
+    CHECK("the parked row brings a pad and its stick up", bring_up() == 0 && guest.active);
+    n_attrs = 0;
+    (void)trackpoint_sysfs_add(7);
+    parked_attr = attr_named("sensitivity");
+    if (parked_attr < 0) {
+        CHECK("the stick has a sensitivity file", 0);
+        return;
+    }
+    binds = driver_binds;
+    kept = value[attr_made[parked_attr].arg];
+    parked_result = 0;
+    CHECK("a change of the guest takes the command lock",
+          ps2mouse_guest_change_begin() == &synaptics_pt);
+    done = park_run(parked_write);
+    CHECK("the stick's write waits for it", done == 0 && cmd_busy);
+    CHECK("bare switches the guest to PS/2",
+          guest_set_protocol("bare", 4) == 0 && guest.protocol == PROTO_PS2 && guest.active);
+    CHECK("which takes the stick's files away and keeps psmouse's",
+          files_add == 0 && driver_add == guest_files && driver_binds == binds);
+    ps2mouse_guest_change_end();
+    ram = tp_ram[0x4A];
+    n_took = 0;
+    n_gtook = 0;
+    if (!done) {
+        CHECK("the waiting write returns", park_resume() == 1);
+    }
+    CHECK("with ENODEV", parked_result == -ENODEV);
+    CHECK("sending the pad and the guest nothing", n_took == 0 && n_gtook == 0);
+    CHECK("and changing no value",
+          value[attr_made[parked_attr].arg] == kept && tp_ram[0x4A] == ram);
+    CHECK("the pad and the guest report with the lock free",
+          !cmd_busy && state == STATE_ACTIVE && pad_reporting && guest_reporting);
 }
 
 /** The reconnect after five bad packets in a row, as Linux's psmouse
@@ -2491,6 +2567,7 @@ int main(void)
     mouse_rows();
     packet_rows();
     file_rows();
+    parked_rows();
     reset_rows();
     late_pad_rows();
     announce_rows();
