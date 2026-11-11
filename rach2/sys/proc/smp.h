@@ -98,12 +98,13 @@ int smp_cpu_count(void);
 int smp_serialized(void);
 
 /** Read the sum and longest big-lock acquisition in microseconds
- * elapsed since boot, and the outer holds completed during that longest
+ * elapsed since boot, and the outer hold records completed during that longest
  * wait, modulo 2^32. The caller holds the big lock. Wait times are zero
- * without a calibrated invariant TSC. */
+ * without a calibrated invariant TSC. A record ends at a release or at
+ * bkl_thread_hold without a release. */
 void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint32_t *holds);
 
-/* The last outer holds completed during the longest big-lock acquisition. */
+/* The last outer hold records ended during the longest big-lock acquisition. */
 #define BKL_WAIT_HOLDS 32u
 
 /** Read retained hold `index`, below the smaller of BKL_WAIT_HOLDS and
@@ -119,7 +120,7 @@ void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int3
  * without the lock. Interrupts are off. */
 void bkl_note_entry(uint32_t vector, int32_t nr, int locked);
 
-/** Begin a kernel thread's own hold of the big lock, when the hold under
+/** Begin a kernel thread's own hold record of the big lock, when the hold under
  * way is an entry's that switched to the thread, an interrupt or a system
  * call on its way out: count that hold as ended and start a new one, as an
  * entry of none, without giving the lock up, so that the thread's work
@@ -128,10 +129,12 @@ void bkl_note_entry(uint32_t vector, int32_t nr, int locked);
  * return. The caller holds the big lock; any interrupt state. */
 void bkl_thread_hold(void);
 
-/** Read the longest hold of the big lock since boot, from its take to its
- * give-back or drop, in microseconds, with its entry's vector (0 for none,
- * a kernel thread's) and system call number (-1 for none). The caller holds
- * the big lock. The time is zero without a calibrated invariant TSC. */
+/** Read the longest completed hold record of the big lock since boot, in
+ * microseconds, with its entry's vector (0 for none) and system call number
+ * (-1 for none). A record begins at a take or bkl_thread_hold and ends at a
+ * give-back, drop or bkl_thread_hold that ends an entry's record without a
+ * release. The caller holds the big lock. The time is zero without a
+ * calibrated invariant TSC. */
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
 
 /* The keys of the holds by entry (`smp_entry_hold`): a system call's number
@@ -144,7 +147,7 @@ void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
 #define BKL_KEY_SWITCH     (BKL_KEY_IDLE + 1)
 #define BKL_ENTRY_KEYS     (BKL_KEY_SWITCH + 1)
 
-/** Read the holds of the big lock that entry `key` took since boot, the
+/** Read the hold records of the big lock charged to entry `key` since boot, the
  * boot processor's start-up left out: their sum in microseconds and their
  * number. A hold counts under the entry that took the lock, or under the
  * entry its thread is in for a take made without one (`bkl_entry_push`), up
@@ -163,8 +166,9 @@ void smp_entry_hold(int key, uint64_t *held_us, uint32_t *holds);
  * interrupts off is sampled only when it turns them on. */
 void bkl_hold_sample(uintptr_t pc, uintptr_t fp);
 
-/** Read the oldest hold an interrupt has found, in microseconds since its
- * take, and the instruction it stopped with its callers, 0 past the last.
+/** Read the oldest hold record an interrupt has found, in microseconds since
+ * its take or bkl_thread_hold, and the instruction it stopped with its
+ * callers, 0 past the last.
  * The caller holds the big lock. */
 void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
 

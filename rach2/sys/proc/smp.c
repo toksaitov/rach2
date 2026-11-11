@@ -33,17 +33,17 @@ static volatile unsigned int bkl_claim;
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
 static uint64_t bkl_wait_max_cycles;
-static volatile uint32_t bkl_releases; /* completed outer holds, modulo 2^32 */
-static uint32_t bkl_wait_max_holds;    /* holds completed during the longest wait */
-/* Keep the most recent releases and copy those of a new longest wait. */
+static volatile uint32_t bkl_releases; /* ended hold records, modulo 2^32 */
+static uint32_t bkl_wait_max_holds;    /* records ended during the longest wait */
+/* Keep recent hold records, including bkl_thread_hold's without a release. */
 struct bkl_hold_record {
-    uint64_t cycles; /* full hold duration in TSC cycles */
-    uint32_t vector; /* entry vector, 0 for a take after a drop */
+    uint64_t cycles; /* record's duration in TSC cycles */
+    uint32_t vector; /* entry vector, 0 for a record begun without an entry */
     int32_t nr;      /* entry system call number, -1 for none */
 };
 static struct bkl_hold_record bkl_recent[BKL_WAIT_HOLDS];
 static struct bkl_hold_record bkl_wait_hold[BKL_WAIT_HOLDS];
-static uint64_t bkl_hold_max_cycles;          /* the longest hold, from take to give back */
+static uint64_t bkl_hold_max_cycles;          /* longest completed hold record */
 static uint32_t bkl_hold_vector;              /* its entry's vector, 0 for none */
 static int32_t bkl_hold_nr = -1;              /* its entry's system call number, or -1 */
 static uint64_t bkl_seen_max_cycles;          /* the oldest hold an interrupt has found */

@@ -361,8 +361,9 @@ uint32_t timer_late_passes(void)
  *
  * Then the handler reschedules through `sched_preempt`: at once when the
  * current process is in user mode, and at the call's exit when it is
- * inside a system call, since timer IRQs stay enabled during a call so HDA
- * streaming keeps running, yet a switch in the middle of one is unsafe.
+ * inside a system call, since a switch in the middle of one is unsafe;
+ * timer IRQs stay enabled during a call to keep the clock, the timers and
+ * the HDA service's wake requests going.
  * A kernel thread defers the switch to its next sleep or service point
  * (`no_tick_switch`), as Linux without CONFIG_PREEMPTION does, since its
  * work changes state that only the big lock guards. Process 0 and the
