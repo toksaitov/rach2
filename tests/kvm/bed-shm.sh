@@ -425,6 +425,24 @@ glmark()
     su -s /bin/sh desktop -c "export $desktop_env; exec glmark2-wayland $*"
 }
 
+# drawn FILE ARGS...: glmark ARGS into FILE, killed once FILE has stayed the
+# same for 120 s, as a client of a compositor that no longer answers does.
+drawn()
+{
+    out_file=$1
+    shift
+    glmark "$@" > "$out_file" 2>&1 &
+    waiter=$!
+    last=-1 still=0
+    while kill -0 "$waiter" 2>/dev/null; do
+        quiet "$out_file" 120 || pkill -9 -x glmark2-wayland || kill -9 "$waiter" 2>/dev/null
+    done
+    drawn_status=0
+    wait "$waiter" || drawn_status=$?
+    waiter=''
+    return "$drawn_status"
+}
+
 # desk_rows: the desktop session on the VM's GPU, the VM killed under
 # glmark2, the session back on llvmpipe and, with -g, on Rach2's driver.
 desk_rows()
@@ -527,7 +545,7 @@ desk_rows()
     [ -z "$bdf" ] || which=any
     if started "$dead" "headless - gl" llvmpipe 300 &&
         grep -q "rach2-desktop: session: its display drm $card gl is gone" "$out/services.txt" &&
-        { [ -n "$bdf" ] || { glmark -b build:duration=2 > "$out/fallback.out" 2>&1 &&
+        { [ -n "$bdf" ] || { drawn "$out/fallback.out" -b build:duration=2 &&
             grep -q 'GL_RENDERER: *llvmpipe' "$out/fallback.out"; }; }; then
         drew=''
         [ -n "$bdf" ] || drew="; glmark2 build $(sed -n 's/^.*FPS: *\([0-9]*\).*/\1/p' "$out/fallback.out" | head -n 1) FPS"
