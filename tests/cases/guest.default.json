@@ -6413,7 +6413,7 @@
         {"assertion_id": "futex-wchan", "checks": "Its wchan file reads futex_wait_queue.", "source": "program"},
         {"assertion_id": "running", "checks": "With its thread made, a thread that spins has a syscall file of running and a newline.", "source": "program"},
         {"assertion_id": "running-wchan", "checks": "Its wchan file reads 0.", "source": "program"},
-        {"assertion_id": "refused-syscall", "checks": "After the fork, a child of user 1000 gets EACCES from an open of the root parent's syscall file.", "source": "program"},
+        {"assertion_id": "refused-syscall", "checks": "After the fork, and once the root parent's stat shows it asleep in its wait, a child of user 1000 gets EACCES from an open of the root parent's syscall file.", "source": "program"},
         {"assertion_id": "refused-wchan", "checks": "The child reads 0 from the parent's wchan file.", "source": "program"}
       ],
       "branches": [],

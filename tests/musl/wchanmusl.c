@@ -10,8 +10,8 @@
  * blocked in a FUTEX_WAIT_PRIVATE reads futex's number, the word's address,
  * the operation, the value and the null timeout, and futex_wait_queue. A
  * thread that spins reads "running" and 0. A child of user 1000 gets EACCES
- * from the root parent's syscall file and 0 from its wchan file, while the
- * parent sleeps in its wait for the child.
+ * from the root parent's syscall file and 0 from its wchan file, once the
+ * parent's stat shows it asleep in its wait for the child.
  *
  * Prints `WCHANMUSL OK` and exits 0 on success, and prints `WCHANMUSL FAIL
  * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
@@ -324,11 +324,19 @@ static int refused_rows(void)
 
     pid = fork();
     if (pid == 0) {
-        char path[64], buf[64];
+        char path[64], buf[512];
+        const char *state;
         int fd;
 
         if (setgid(OTHER_ID) != 0 || setuid(OTHER_ID) != 0) {
             _exit(3);
+        }
+        /* The parent's stat, which anyone may read, shows when it sleeps in
+         * its wait; a ready parent would read 0 from wchan by right. */
+        snprintf(path, sizeof(path), "/proc/%d/stat", (int)parent);
+        while (read_file(path, buf, (int)sizeof(buf)) <= 0 || !(state = strrchr(buf, ')')) ||
+               state[1] != ' ' || state[2] != 'S') {
+            sched_yield();
         }
         snprintf(path, sizeof(path), "/proc/%d/syscall", (int)parent);
         fd = open(path, O_RDONLY);
