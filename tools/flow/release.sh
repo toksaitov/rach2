@@ -22,14 +22,15 @@
 # each of which the record below lists once it is done:
 #
 # * full: `full.yml` of M's branch runs every suite on both architectures
-#   from clean at SHA, on a runner of the one machine that SHA's
+#   from clean at SHA, and then the i686 cases on the x86-64 kernel, the ia32
+#   profile of tests/Readme.md, on a runner of the one machine that SHA's
 #   `tools/ci/site` selects. The run is found by its title, `Release tests
 #   of SHORT for milestone M` with SHORT the first eight digits of SHA, and a
 #   start after the record was made, so a release started again does not
 #   start a second. A run that fails gives the failures of its artifact
-#   `failures`, `ARCH:ITEM` words, or `runner` when it has none. A run that
-#   is cancelled or does not finish is started again, at most three runs in
-#   all.
+#   `failures`, `ARCH:ITEM` words, ARCH being i686, x86_64 or ia32, or
+#   `runner` when it has none. A run that is cancelled or does not finish is
+#   started again, at most three runs in all.
 # * The other machines: tools/flow/machines names them and gives each run's
 #   settings. Each runs every case of both architectures but those of the
 #   style suite, which the full run checks once, and those of a suite none of
@@ -67,9 +68,9 @@
 #   then `release: failed: MACHINE run RUN: WORD...; ...`.
 # * -r: the new record keeps the passes of WSL, the Mac and Windows that the
 #   last record of M has, and runs again on each machine only what failed
-#   there, at SHA: the record says `again MACHINE WORD...`. A
-#   machine whose failures are not all `ARCH:SUITE`s of suites that SHA's
-#   tests/registry has for ARCH, or native cases, runs again what its own
+#   there, at SHA: the record says `again MACHINE WORD...`. A machine whose
+#   failures are not all `ARCH:SUITE`s of suites that SHA's tests/registry
+#   has for ARCH, i686 for ia32, or native cases, runs again what its own
 #   `again` line in that record named, or everything when it had none. A Mac
 #   or Windows run that the record started last and that has no result there,
 #   as a run of -a may not, is taken over: the new record keeps a Mac run that
@@ -463,7 +464,8 @@ refuse()
 # failure MACHINE RUN WORD...: record that the run RUN on MACHINE failed the
 # WORDs, once.
 # failed_in CONSOLE: print the suites that a machine's run in CONSOLE failed,
-# as ARCH:SUITE words, or nothing when it names none. The runner's line
+# as ARCH:SUITE words, ARCH being i686, x86_64 or ia32, or nothing when it
+# names none. The runner's line
 # `run: result: failed: SUITE...` gives them while each of its words is one.
 # On Windows the processes of a run share the console and can write into one
 # another's lines, so when the line is broken the suites come from the lines
@@ -475,13 +477,13 @@ failed_in()
     words=$(tr -d '\r' < "$1" 2> /dev/null | grep '^run: result: failed: ' |
         tail -n 1 | sed 's/^run: result: failed: //')
     # shellcheck disable=SC2086 # the suites are words
-    if [ -n "$words" ] && ! printf '%s\n' $words | grep -qvE '^(i686|x86_64):[a-z0-9-]+$'; then
+    if [ -n "$words" ] && ! printf '%s\n' $words | grep -qvE '^(i686|x86_64|ia32):[a-z0-9-]+$'; then
         # shellcheck disable=SC2086 # the suites are words
         echo $words
         return 0
     fi
     tr -d '\r' < "$1" 2> /dev/null |
-        sed -nE 's/^run: ((i686|x86_64):[a-z0-9-]+): ([^:]+: (failure|incomplete): |FAIL in |INCOMPLETE in ).*/\1/p' |
+        sed -nE 's/^run: ((i686|x86_64|ia32):[a-z0-9-]+): ([^:]+: (failure|incomplete): |FAIL in |INCOMPLETE in ).*/\1/p' |
         sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
@@ -586,16 +588,19 @@ plain()
 }
 
 # suites WORD...: succeed when each WORD is `ARCH:SUITE` of a suite that SHA's
-# tests/registry has for ARCH.
+# tests/registry has for ARCH, or `ia32:SUITE` of one it has for i686, which
+# the ia32 profile runs on the x86-64 kernel.
 suites()
 {
     registry=$(git -C "$repo" show "$sha:tests/registry" 2> /dev/null) || return 1
     for w in "$@"; do
         case $w in
-            i686:?*|x86_64:?*) ;;
+            i686:?*|x86_64:?*|ia32:?*) ;;
             *) return 1 ;;
         esac
-        printf '%s\n' "$registry" | awk -F'|' -v a="${w%%:*}" -v s="${w#*:}" '
+        sarch=${w%%:*}
+        [ "$sarch" != ia32 ] || sarch=i686
+        printf '%s\n' "$registry" | awk -F'|' -v a="$sarch" -v s="${w#*:}" '
             /^[a-z]/ && $1 == s && ($6 == "" || index("," $6 ",", "," a ",")) { found = 1 }
             END { exit !found }' || return 1
     done
