@@ -864,7 +864,10 @@ void klog_flush(void)
  * it, which go out first (`klog_flush`), and those kept while it was being
  * written go out after it. A record that finds others queued and no
  * delivery under way, as the panic's first does after it has let the
- * queue go (`klog_deliver_directly`), joins the queue behind them.
+ * queue go (`klog_deliver_directly`), writes them out first and then goes
+ * out itself, since behind a full queue it would be dropped, as Linux's
+ * panic writes out every record the consoles have not had
+ * (`console_flush_on_panic`, kernel/printk/printk.c:3449-3482).
  */
 void klog_v(int level, const char *subsystem, const char *format, va_list ap)
 {
@@ -884,6 +887,12 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
         defer_put(level, subsystem, format, ap);
         kirq_restore(flags);
         return;
+    }
+    if (!klog_delivering && !console_writing && pending_count > 0) {
+        klog_delivering = 1;
+        kirq_restore(flags);
+        klog_drain();
+        flags = kirq_save();
     }
     klog_build(&r, level, subsystem, format, ap);
     nested = klog_delivering || console_writing;

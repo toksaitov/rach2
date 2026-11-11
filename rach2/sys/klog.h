@@ -133,7 +133,8 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
  * record's delivery or a console write, where it would otherwise wait in the
  * queue: for a machine about to stop, which never comes back to write the
  * queue out. It clears what would have queued the record, which is safe only
- * because nothing after it is expected to run.
+ * because nothing after it is expected to run. The records it leaves in the
+ * queue go out ahead of the next record, which a full queue cannot drop.
  */
 void klog_deliver_directly(void);
 

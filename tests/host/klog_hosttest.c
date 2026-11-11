@@ -484,6 +484,30 @@ static void bracket_rows(void)
 }
 
 /**
+ * The panic's first record, made with the queue full of records a console
+ * write held back: the queue goes out first, and the record after it, not
+ * dropped behind it.
+ */
+static void panic_queue_rows(void)
+{
+    int i;
+
+    reset();
+    console_write_begin();
+    for (i = 0; i < KLOG_PENDING_MAX; i++) {
+        klog(KLOG_INFO, "usb", "gone: device %d", i);
+    }
+    CHECK("the console write holds the queue full", pending_count == KLOG_PENDING_MAX);
+    klog_deliver_directly();
+    klog(KLOG_CRIT, "panic", "stopped: with the queue full");
+    serial[serial_len] = '\0';
+    CHECK("the panic's record reaches the port after the queue",
+          has(serial, "usb: gone: device 63\r\n"
+                      "<2>[0.000000] panic: stopped: with the queue full\r\n"));
+    CHECK("and nothing is dropped or waits", pending_count == 0 && pending_lost == 0);
+}
+
+/**
  * The records kept for later, made in an NMI or by a processor without the
  * big lock: they reach the ring and the destinations in the order they were
  * made, ahead of a record made after them, inside another record's delivery
@@ -906,6 +930,7 @@ int main(void)
     kept_rows();
 
     kept_stuck_rows();
+    panic_queue_rows();
     bracket_rows();
 
     if (fails == 0) {
