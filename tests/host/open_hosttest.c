@@ -1350,6 +1350,14 @@ NO_PROC_INO(procfs_ino_acpicall)
 NO_PROC_INO(procfs_ino_fsdir)
 NO_PROC_INO(procfs_ino_lockwait)
 
+/** No kind is a system-wide file of /proc here, so the opens and stats
+ * that ask fall through to ENOENT. */
+uint32_t procfs_ino_global(int kind)
+{
+    (void)kind;
+    return 0;
+}
+
 /** Fail the row: no row stats a file of /proc. */
 uint32_t procfs_ino_sysvipc(int origin)
 {

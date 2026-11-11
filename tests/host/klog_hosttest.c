@@ -279,6 +279,15 @@ void arch_relax(void)
 void touch_nmi_watchdog(void)
 {}
 
+/** A clock that moves on at each read, so a bounded wait for klog's report
+ * lock ends; the lock is never held by another here. */
+uint64_t arch_cycles(void)
+{
+    static uint64_t now;
+
+    return now += 1000u;
+}
+
 /** One processor: the exchange cannot lose. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
