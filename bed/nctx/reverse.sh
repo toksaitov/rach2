@@ -50,6 +50,7 @@ case $mode in fallback|native) ;; *) die "usage: reverse.sh fallback|native ASSE
 assets=$(cd "$assets" && pwd)
 PATH=$assets:$PATH
 export PATH
+command -v glmark2-drm > /dev/null || die "the GNU root has no glmark2-drm"
 mkdir "$out" || die "the output directory must be new"
 made=1
 out=$(cd "$out" && pwd)
@@ -83,7 +84,7 @@ if [ "$mode" = native ]; then
     vm=$!
     console=$out/gpu/console
 else
-    qemu-system-x86_64 -accel kvm -cpu host -machine q35,kernel-irqchip=split \
+    qemu-system-x86_64 -accel tcg -cpu max -machine q35 \
         -smp 2 -m 4096 -nodefaults -display none -no-reboot -monitor none \
         -kernel "$assets/reverse-vmlinuz" -initrd "$assets/reverse-initrd.img" \
         -append "console=ttyS0 panic=-1 $args" -serial "file:$out/console" "$@" \
@@ -147,12 +148,18 @@ if [ "$mode" = native ]; then
     guest 'sudo /opt/rach2-nctx/relocations start' > "$out/profile-start.txt"
     profile=1
 fi
-glmark2-es2-drm --off-screen --winsys-options "drm-device=$card" -s 1280x800 \
-    -b build:use-vbo=true --validate > "$out/validate.txt" 2>&1
+if ! glmark2-drm --off-screen --winsys-options "drm-device=$card" -s 1280x800 \
+    -b build:use-vbo=true --validate > "$out/validate.txt" 2>&1; then
+    cat "$out/validate.txt"
+    die "glmark2 validation failed"
+fi
 cat "$out/validate.txt"
 grep -q 'Validation: Success' "$out/validate.txt" || die "glmark2 did not validate its pixels"
-glmark2-es2-drm --off-screen --winsys-options "drm-device=$card" -s 1280x800 \
-    -b build:use-vbo=true > "$out/glmark2.txt" 2>&1
+if ! glmark2-drm --off-screen --winsys-options "drm-device=$card" -s 1280x800 \
+    -b build:use-vbo=true > "$out/glmark2.txt" 2>&1; then
+    cat "$out/glmark2.txt"
+    die "glmark2 scene failed"
+fi
 cat "$out/glmark2.txt"
 grep -q "GL_RENDERER: *$want" "$out/glmark2.txt" || die "glmark2 selected another renderer"
 if [ "$profile" = 1 ]; then
