@@ -289,6 +289,7 @@ void ramoops_init(void)
     volatile uint8_t *mem;
     uintptr_t va;
     uint64_t dump_mem = 0, zone = 0;
+    size_t most;
     uint32_t i;
     struct pstore_record r;
     uint32_t hl;
@@ -313,6 +314,21 @@ void ramoops_init(void)
             return;
         }
         zone = tick_div(dump_mem, max_dump_cnt, (uint32_t *)0) & ~(uint64_t)1;
+        if (zone <= PRZ_HEADER) {
+            klog(KLOG_ERR, "ramoops", "refused: a dmesg zone of %lu bytes holds no data",
+                 (unsigned long)zone);
+            max_dump_cnt = 0;
+            return;
+        }
+        /* kcalloc's check of the product, ram.c:542: on i686 a small
+         * record_size makes enough zones to wrap a size_t. */
+        most = (size_t)-1 / sizeof(*dprzs);
+        if (max_dump_cnt > most) {
+            klog(KLOG_ERR, "ramoops", "refused: %lu dmesg zones are too many to track",
+                 (unsigned long)max_dump_cnt);
+            max_dump_cnt = 0;
+            return;
+        }
         dprzs = kzalloc(max_dump_cnt * sizeof(*dprzs));
         if (!dprzs) {
             max_dump_cnt = 0;
