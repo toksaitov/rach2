@@ -93,6 +93,26 @@ int get_user_u32(uint32_t *val, uintptr_t src);
 int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev);
 
 /**
+ * `get_user_u32` for a caller that holds the current address space's
+ * regions' lock to read and may not sleep, as under a spinlock: the word is
+ * read in one load only when its page is present and readable now
+ * (`vm_ready_held`), and nothing is brought in. 0, or -EFAULT for an address
+ * that is not aligned or not in user space, or whose page is not there, in
+ * which case the caller lets its locks go, brings the page in
+ * (`vm_prefault_range`) and tries again, as Linux's futex_get_value_locked
+ * asks of its callers (kernel/futex/core.c:466).
+ */
+int get_user_u32_nofault(uint32_t *val, uintptr_t src);
+
+/**
+ * `cmpxchg_user_u32` under the same conditions as `get_user_u32_nofault`,
+ * the page present and writable now, as Linux's futex_cmpxchg_value_locked
+ * (kernel/futex/core.c:455): 0, with what the word held in `*prev`, or
+ * -EFAULT, which leaves the word as it was.
+ */
+int cmpxchg_user_u32_nofault(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev);
+
+/**
  * Copy the NUL-terminated string at the user address `src` into `dst`, at
  * most `n` bytes. Each page is backed as the copy reaches it, so a string
  * that ends before a page outside every region is copied. Returns the

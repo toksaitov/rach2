@@ -5,13 +5,14 @@
 #   tools/ci/report.sh SHA DIR FILE
 #
 # DIR has one directory for each architecture, `full-ARCH`, written by
-# tools/ci/run.sh at the commit SHA. An architecture passed when its
-# directory has `done` and an empty `failed`, or `done` and `skipped`, where
-# it had nothing to run. FILE gets one line for each failure, `ARCH:ITEM`,
-# ITEM being a suite, `build`, `runner` or the name of the step that failed
-# without naming a suite, as run.sh writes them, or `unfinished` for an
-# architecture whose directory has no `done`. full.yml uploads FILE as the
-# artifact `failures`, which tools/flow/release.sh reads.
+# tools/ci/run.sh at the commit SHA, and `full-ia32` for the i686 cases on the
+# x86-64 kernel, which counts as an architecture here when DIR has it. An
+# architecture passed when its directory has `done` and an empty `failed`, or
+# `done` and `skipped`, where it had nothing to run. FILE gets one line for
+# each failure, `ARCH:ITEM`, ITEM being a suite, `build`, `runner` or the name
+# of the step that failed without naming a suite, as run.sh writes them, or
+# `unfinished` for an architecture whose directory has no `done`. full.yml
+# uploads FILE as the artifact `failures`, which tools/flow/release.sh reads.
 #
 # Native result directories have `native` and `suites`; their shared parent
 # has one history and store. The strict C verdict validates that complete
@@ -23,7 +24,7 @@
 #
 # Each architecture's result, with the first lines of `err` that name a
 # failure and the command that fetches the logs, also goes to the job's
-# summary, GITHUB_STEP_SUMMARY. The exit status is 0 when both architectures
+# summary, GITHUB_STEP_SUMMARY. The exit status is 0 when every architecture
 # passed and 1 otherwise.
 #
 set -u
@@ -95,7 +96,9 @@ read_history() { # read_history RESULT
 rc=0
 summarize "## Release tests of $short" ""
 [ -z "${SUITES:-}" ] || summarize "This run tested only these suites: $SUITES." ""
-for arch in i686 x86_64; do
+arches='i686 x86_64'
+[ ! -d "$dir/full-ia32" ] || arches="$arches ia32"
+for arch in $arches; do
     result="$dir/full-$arch"
     if [ -f "$result/done" ] && [ -f "$result/skipped" ]; then
         summarize "$arch had no suite to test." ""
@@ -133,6 +136,9 @@ done
 if [ "$rc" = 1 ]; then
     echo "ci: report: result: failed: $(tr '\n' ' ' < "$file" | sed 's/ $//')"
 else
-    echo "ci: report: result: passed on i686 and x86_64"
+    case $arches in
+        *ia32) echo "ci: report: result: passed on i686, x86_64 and ia32" ;;
+        *) echo "ci: report: result: passed on i686 and x86_64" ;;
+    esac
 fi
 exit "$rc"

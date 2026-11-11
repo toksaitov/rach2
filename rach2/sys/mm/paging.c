@@ -1083,6 +1083,20 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
     return ready;
 }
 
+int vm_ready_held(uintptr_t addr, uintptr_t len, int write)
+{
+    uintptr_t end = addr + len;
+
+    if (len == 0 || (current_proc && proc_window_covers(current_proc, addr, len))) {
+        return 1;
+    }
+    if (addr < USER_ADDR_MIN || end < addr || end > USER_ADDR_MAX || !current_proc ||
+        !current_proc->mm) {
+        return 0;
+    }
+    return range_ready(current_proc->mm, addr, end, write);
+}
+
 /** `vm_prefault_range`'s resolution of [addr, end) of `mm`, the current
  * process's, whose regions' lock the caller holds to read. */
 static int prefault_locked(struct mm *mm, uintptr_t addr, uintptr_t end, int write)

@@ -1,7 +1,8 @@
 #!/bin/sh
-# Run every suite of both architectures, or the ARCH:SUITE words of SUITES,
-# with the in-house code built from clean and the vendor and GNU builds taken
-# from the host's step store, and keep each architecture's results.
+# Run every suite of both architectures, then the i686 cases on the x86-64
+# kernel, the ia32 profile, or only the ARCH:SUITE and ia32:SUITE words of
+# SUITES, with the in-house code built from clean and the vendor and GNU
+# builds taken from the host's step store, and keep each one's results.
 # Native entry requires an installed immutable ETUDE and version-two site.
 # The lines entry remains active until native activation.
 set -u
@@ -46,6 +47,9 @@ export RACH2_FAILED
 : > "$out/failed"
 : > "$out/log"
 : > "$out/err"
+: > "$out/err-ia32"
+# The file that run_set copies tests/run's standard error to.
+errs=$out/err
 
 # End the run without `done`, as stopped.
 stop() {
@@ -111,14 +115,15 @@ step() {
 # standard output and standard error through pipes of their own, so the two
 # are not in order in the log. tests/run runs on the ARCH names, its failed
 # suites are `ARCH:SUITE` words, and each other name, `runner` and NAME among
-# them, is written as `ARCH:NAME` for each architecture it ran on.
+# them, is written as `ARCH:NAME` for each architecture it ran on. Under
+# RACH2_KERNEL=ia32 each is written as `ia32:NAME` instead.
 run_set() { # run_set NAME ARGS...
     name=$1; shift
     : > "$out/set.log"
     : > "$out/set.err"
     rm -f "$out/rc"
     { started tests/run "$@" 2>&1 1>&3 3>&- | copy "$out/set.err" |
-        copy -a "$out/err"; } 3>&1 | copy "$out/set.log" | copy -a "$out/log"
+        copy -a "$errs"; } 3>&1 | copy "$out/set.log" | copy -a "$out/log"
     ended
     [ "$rc" = 0 ] && return 0
     failed=$(grep '^run: ' "$out/set.err" | tail -n 1 |
@@ -129,8 +134,9 @@ run_set() { # run_set NAME ARGS...
     done
     [ -n "$failed" ] || failed=$name
     for f in $failed; do
-        case $f in
-            (*:*) echo "$f" ;;
+        case ${RACH2_KERNEL:-}:$f in
+            (ia32:*) echo "ia32:${f#*:}" ;;
+            (*:*:*) echo "$f" ;;
             (*) for a in $ARCH; do echo "$a:$f"; done ;;
         esac
     done >> "$out/failed"
@@ -167,23 +173,32 @@ full_names() {
 # lines of the other architecture's suites; the names that DIR/failed gives
 # as `ARCH:NAME`; the kept logs of its cases, those of no architecture and
 # those of no case going to both; and once the run has finished, `done`,
-# beside `skipped` for one that had nothing to run.
+# beside `skipped` for one that had nothing to run. The ia32 profile's
+# directory, DIR/full-ia32, has the log, the profile's own standard error and
+# kept logs, and the names that DIR/failed gives as `ia32:NAME`.
 share() { # share [finished]
-    for a in i686 x86_64; do
+    for a in i686 x86_64 ia32; do
         d=$out/full-$a
-        o=x86_64
-        [ "$a" = i686 ] || o=i686
         mkdir -p "$d/kept"
         cp "$out/log" "$d/log"
-        grep -v "^run: $o:" "$out/err" > "$d/err"
         sed -n "s/^$a://p" "$out/failed" > "$d/failed"
-        for k in "$out"/kept/*; do
-            [ -e "$k" ] || continue
-            case ${k##*/} in
-                tests.$o.* | *.$o.r[0-9]*) ;;
-                *) cp -R "$k" "$d/kept/" ;;
-            esac
-        done
+        if [ "$a" = ia32 ]; then
+            cp "$out/err-ia32" "$d/err"
+            for k in "$out"/kept-ia32/*; do
+                [ ! -e "$k" ] || cp -R "$k" "$d/kept/"
+            done
+        else
+            o=x86_64
+            [ "$a" = i686 ] || o=i686
+            grep -v "^run: $o:" "$out/err" > "$d/err"
+            for k in "$out"/kept/*; do
+                [ -e "$k" ] || continue
+                case ${k##*/} in
+                    tests.$o.* | *.$o.r[0-9]*) ;;
+                    *) cp -R "$k" "$d/kept/" ;;
+                esac
+            done
+        fi
         [ -n "${1:-}" ] || continue
         case " $tested " in *" $a "*) ;; *) : > "$d/skipped" ;; esac
         : > "$d/done"
@@ -192,9 +207,15 @@ share() { # share [finished]
 
 # Each architecture is cleaned, then each is built, and the suites of every
 # architecture that built run as one run of tests/run, `bigmem` after it as a
-# run of its own; a failure is `ARCH:build`. With SUITES, the run runs
-# `ARCH:SUITE` for each word, and an architecture that SUITES names nothing
-# of is not built and is `skipped`.
+# run of its own, and last, once both architectures have built, the ia32
+# profile's `all` as a run of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`, which
+# boots the i686 build's cases on the x86-64 build's kernel (tests/Readme.md,
+# The ia32 profile); a failure is `ARCH:build`, and `ia32:build` when the
+# profile could not run for want of a build. With SUITES, the run runs
+# `ARCH:SUITE` for each word and the SUITE of each `ia32:SUITE` word under the
+# profile. An architecture that SUITES names nothing of is `skipped`, and is
+# not built unless the profile needs it; the profile is `skipped` when SUITES
+# names nothing of it.
 echo "ci: full: architectures i686 and x86_64 at $(git rev-parse --short HEAD)"
 tested=""
 words=""
@@ -211,18 +232,49 @@ for a in i686 x86_64; do
     for n in $names; do words="$words $a:$n"; done
     tested="$tested $a"
 done
+# The suites of the ia32 profile: `all`, or each that an `ia32:SUITE` word of
+# SUITES names, which must be one of a full run of i686.
+ia32=""
+if [ -z "${SUITES:-}" ]; then
+    ia32=all
+else
+    ARCH=i686
+    names=$(full_names)
+    for w in $SUITES; do
+        case $w in
+            ia32:*) ;;
+            *) continue ;;
+        esac
+        echo "$names" | grep -qx "${w#ia32:}" || {
+            echo "ci: full: refused: SUITES names a suite that i686 does not run: $SUITES" | copy -a "$out/log"
+            exit 2
+        }
+        ia32="$ia32 ${w#ia32:}"
+    done
+    ia32=${ia32# }
+    [ -z "$ia32" ] || echo "ci: full: running again on ia32: $ia32" | copy -a "$out/log"
+fi
+builds=$tested
+[ -z "$ia32" ] || builds="i686 x86_64"
 built=""
-for a in $tested; do
+for a in $builds; do
     ARCH=$a
     step make clean || echo "$a:build" >> "$out/failed"
 done
-for a in $tested; do
+for a in $builds; do
     ARCH=$a
     grep -qx "$a:build" "$out/failed" || step make || echo "$a:build" >> "$out/failed"
     grep -qx "$a:build" "$out/failed" || built="$built $a"
 done
-ARCH=${built# }
-if [ -n "$built" ]; then
+# The architectures whose suites run: those of `tested` that built.
+ARCH=""
+for a in $built; do
+    case " $tested " in
+        *" $a "*) ARCH="$ARCH $a" ;;
+    esac
+done
+ARCH=${ARCH# }
+if [ -n "$ARCH" ]; then
     rest=""
     bigmem=""
     for w in $words; do
@@ -244,11 +296,26 @@ if [ -n "$built" ]; then
         run_set bigmem bigmem
     fi
 fi
+if [ -n "$ia32" ]; then
+    tested="$tested ia32"
+    if [ "${built# }" = 'i686 x86_64' ]; then
+        ARCH=i686
+        RACH2_KERNEL=ia32
+        RACH2_FAILED=$out/kept-ia32
+        export RACH2_KERNEL RACH2_FAILED
+        mkdir -p "$RACH2_FAILED"
+        errs=$out/err-ia32
+        # shellcheck disable=SC2086 # a suite name is one word by format
+        run_set all $ia32
+    else
+        echo ia32:build >> "$out/failed"
+    fi
+fi
 share finished
 : > "$out/done"
 if [ -s "$out/failed" ]; then
     echo "ci: full: result: failed: $(tr '\n' ' ' < "$out/failed")"
     exit 1
 fi
-echo "ci: full: result: passed on i686 and x86_64"
+echo "ci: full: result: passed on i686 and x86_64${ia32:+, and on ia32}"
 exit 0

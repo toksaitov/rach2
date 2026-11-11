@@ -265,11 +265,15 @@ static pte_t cache_bits(void)
 
 /** Copy the log so far into the console zone and let it take each record
  * after, with interrupts off between the two, as the pstore console
- * registered with CON_PRINTBUFFER prints the log it missed. */
+ * registered with CON_PRINTBUFFER prints the log it missed. Only the ring's
+ * newest bytes that fit the zone are copied: the zone keeps the same bytes as
+ * a copy of the whole ring, and the time with interrupts off is bounded by
+ * the zone's size, not the ring's. */
 static void console_start(void)
 {
     char chunk[128];
-    uint32_t flags = kirq_save(), at = klog_clamp(0), n;
+    uint32_t flags = kirq_save(), w = klog_written(), n;
+    uint32_t at = klog_clamp(w > cprz.buffer_size ? w - cprz.buffer_size : 0);
 
     while ((n = klog_read_from(chunk, sizeof(chunk), &at)) != 0) {
         prz_write(&cprz, chunk, n);

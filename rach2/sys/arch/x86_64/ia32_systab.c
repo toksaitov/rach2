@@ -112,11 +112,14 @@ static void ia32_unlock_file_calls(void)
 }
 
 /** Mark the i386 mmap calls to run without the big lock, as the native
- * mmap family does (syscall.c). */
+ * mmap family does, and the i386 futex with its 32-bit timespec, which
+ * converts it and calls the native handler, as the shared futex handlers
+ * do (syscall.c). */
 static void ia32_unlock_mm_calls(void)
 {
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ia32_mmap);
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_mmap_pgoff);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_futex_time32);
 }
 
 /** The rows, one for each i386 number Linux has; `init_syscall` cleared
