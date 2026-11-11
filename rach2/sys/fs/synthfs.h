@@ -362,6 +362,16 @@ int synth_sys_count(void);
  * panic.h's `panic_timeout` and `panic_on_oops`. */
 #define SYNTH_SYS_PANIC                57
 #define SYNTH_SYS_PANIC_ON_OOPS        58
+/* The entries of the lockup detectors' settings under kernel, from
+ * watchdog to hung_task_warnings in the table's order, whose values procfs
+ * reads from and writes to watchdog.h's variables; nmi_watchdog, and
+ * hung_task_timeout_secs and hung_task_check_interval_secs, whose writes
+ * procfs passes on. */
+#define SYNTH_SYS_WATCHDOG             59
+#define SYNTH_SYS_NMI_WATCHDOG         61
+#define SYNTH_SYS_HUNG_TASK_TIMEOUT    70
+#define SYNTH_SYS_HUNG_TASK_INTERVAL   71
+#define SYNTH_SYS_HUNG_TASK_WARNINGS   72
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the
