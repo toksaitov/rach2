@@ -1037,6 +1037,39 @@ static int32_t frequency_show(void *data, char *buf, uint32_t cap)
 }
 
 /**
+ * i915_rps_boost_info, Linux's i915_rps_boost_info: whether RPS runs and
+ * the GT is awake, the waitboosts outstanding and the flips pending, the
+ * requested and actual frequency with the limits, and the boosts counted.
+ */
+static int32_t rps_boost_show(void *data, char *buf, uint32_t cap)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    struct i915_rps *rps = &i915->rps;
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    if (gone(i915)) {
+        return -ENODEV;
+    }
+    emitf(&e, "RPS enabled? %s\n", yes_no(rps->enabled));
+    emitf(&e, "RPS active? %s\n", yes_no(rps->active));
+    emitf(&e, "GPU busy? %s\n", yes_no(i915->gt.awake));
+    emitf(&e, "Boosts outstanding? %d\n", rps->num_waiters);
+    emitf(&e, "Interactive? %d\n", rps->interactive);
+    emitf(&e, "Frequency requested %d, actual %u\n", rps->cur_freq * FREQ_MHZ,
+          i915_rps_read_actual_mhz(i915));
+    emitf(&e, "  min hard:%d, soft:%d; max soft:%d, hard:%d\n", rps->min_freq * FREQ_MHZ,
+          rps->min_freq_softlimit * FREQ_MHZ, rps->max_freq_softlimit * FREQ_MHZ,
+          rps->max_freq * FREQ_MHZ);
+    emitf(&e, "  idle:%d, efficient:%d, boost:%d\n", rps->idle_freq * FREQ_MHZ,
+          rps->efficient_freq * FREQ_MHZ, rps->boost_freq * FREQ_MHZ);
+    emitf(&e, "Wait boosts: %u\n", rps->boosts);
+    return emit_end(&e);
+}
+
+/**
  * Append the request `rq` of engine `en` as Linux's engine_dump_request:
  * i915_request_show's line after `prefix`, the ring's offsets, and the
  * request's commands in the ring. `started` says the chip has begun it,
@@ -1542,6 +1575,7 @@ static int32_t params_register(struct drm_i915_private *i915)
 static const struct debugfs_text_ops capabilities_ops = {capabilities_show, NULL};
 static const struct debugfs_text_ops gem_objects_ops = {gem_objects_show, NULL};
 static const struct debugfs_text_ops frequency_ops = {frequency_show, NULL};
+static const struct debugfs_text_ops rps_boost_ops = {rps_boost_show, NULL};
 static const struct debugfs_text_ops engine_info_ops = {engine_info_show, NULL};
 static const struct debugfs_text_ops cdclk_info_ops = {cdclk_info_show, NULL};
 static const struct debugfs_text_ops wedged_ops = {wedged_show, wedged_store};
@@ -1552,11 +1586,14 @@ static const struct {
     const char *name;
     uint32_t mode;
     const struct debugfs_text_ops *ops;
-} text_files[] = {
-    {"i915_capabilities", 0444u, &capabilities_ops},  {"i915_gem_objects", 0444u, &gem_objects_ops},
-    {"i915_frequency_info", 0444u, &frequency_ops},   {"i915_engine_info", 0444u, &engine_info_ops},
-    {"i915_cdclk_info", 0444u, &cdclk_info_ops},      {"i915_wedged", 0644u, &wedged_ops},
-    {"i915_gem_drop_caches", 0644u, &drop_caches_ops}};
+} text_files[] = {{"i915_capabilities", 0444u, &capabilities_ops},
+                  {"i915_gem_objects", 0444u, &gem_objects_ops},
+                  {"i915_frequency_info", 0444u, &frequency_ops},
+                  {"i915_engine_info", 0444u, &engine_info_ops},
+                  {"i915_cdclk_info", 0444u, &cdclk_info_ops},
+                  {"i915_wedged", 0644u, &wedged_ops},
+                  {"i915_gem_drop_caches", 0644u, &drop_caches_ops},
+                  {"i915_rps_boost_info", 0444u, &rps_boost_ops}};
 
 /** crtc-N/i915_pipe, Linux's intel_crtc_pipe_show: the pipe's letter, by
  * which IGT maps a CRTC to its pipe. */

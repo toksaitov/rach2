@@ -278,6 +278,12 @@ and a line for stolen memory when the device has it.
 Mode 0444.
 The GT's frequency registers and limits, as Linux's
 .Fn rps_frequency_dump .
+.It Pa dri/DEVICE/i915_rps_boost_info
+Mode 0444.
+Whether RPS runs and the GT is busy, the wait boosts outstanding, the page
+flips pending that hold RPS at high power, the requested and actual
+frequency with its limits, in MHz, and the wait boosts counted, as Linux's
+.Fn i915_rps_boost_info .
 .It Pa dri/DEVICE/i915_cdclk_info
 Mode 0444.
 The current and the highest CD clock and the highest dot clock, in kHz.
