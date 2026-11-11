@@ -64,6 +64,7 @@ tests/musl/fifomusl.c: a process's state is looked at again every 10 ms
 tests/musl/ipcmusl.c: the semaphore's waiters are counted again every 10 ms
 tests/musl/ipcmusl.c: a process's state is looked at again every 10 ms
 tests/musl/lockmusl.c: a task's state is looked at again every 10 ms
+tests/musl/lockstressmusl.c: the call is asleep when its descriptor goes
 tests/musl/pselectmusl.c: the probe's state is looked at again every 10 ms
 tests/musl/ptracemusl.c: a process's state is looked at again every 10 ms
 tests/musl/ptracemusl.c: the second thread's state is looked at again every 10 ms

@@ -44,6 +44,7 @@ case musl/kvmslotmusl -- musl/kvmslotmusl
 case musl/lchownmusl.ext2 -- musl/lchownmusl .
 case musl/lchownmusl.krffs root:krffs -- musl/lchownmusl
 case musl/lockmusl root:krffs -- musl/lockmusl
+case musl/lockstressmusl alone -- musl/lockstressmusl
 case musl/loginmusl root:ext2-dir ids:1000 stage:idreport -- musl/loginmusl
 case musl/mallocqsort -- musl/mallocqsort
 case musl/mapmusl.ext2 root:ext2-dir -- musl/mapmusl
