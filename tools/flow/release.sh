@@ -158,10 +158,14 @@
 #   a machine that a power cycle returns to them.
 # * transfer: the kernel and the root go to the recovery system's /dev/shm,
 #   the root decompressed on the way, and each is checked by SHA-256.
-# * kernel and install: `bootctl kernel` writes the kernel to the candidate
-#   slot, and `rach2-install --console term --update` writes the root, keeps
-#   the accounts and keys, sets term as its console and arms the candidate
-#   for one trial boot. The
+# * kernel and install: a build whose `rach2-install` has `--slots` moves a
+#   disk with kernel slots smaller than the build's to them first, since the
+#   build's bootctl refuses a kernel in a smaller slot; the move saves the
+#   machine to recovery while it runs, so a reset returns there, and the run
+#   again finishes it. Then `bootctl kernel` writes the kernel to the
+#   candidate slot, and `rach2-install --console term --update` writes the
+#   root, keeps the accounts and keys, sets term as its console and arms the
+#   candidate for one trial boot. The
 #   installer runs detached on the machine, with its log and its status in
 #   /dev/shm, so that a lost connection does not stop it; it is started once,
 #   and a release started again finds it by its log and waits for it. An
@@ -897,6 +901,11 @@ install()
     if [ -z "$started" ]; then
         if ! done_ kernel; then
             step=kernel
+            if lenovo 'grep -q -e "--slots DISK" /bin/rach2-install'; then
+                lenovo "rach2-install --slots /dev/disk$disk" > "$state/slots.log" 2>&1 ||
+                    fail kernel "rach2-install --slots: $(tr '\n' ' ' < "$state/slots.log")"
+                cat "$state/slots.log" >> "$state/log"
+            fi
             lenovo 'bootctl kernel /dev/shm/kernel' > "$state/kernel.log" 2>&1
             grep -q '^bootctl: installed:' "$state/kernel.log" ||
                 fail kernel "$(tr '\n' ' ' < "$state/kernel.log")"
