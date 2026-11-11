@@ -110,6 +110,12 @@ fails with
 .Er ENODEV .
 libpciaccess maps a BAR through its file, as IGT maps the GPU's
 registers.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/resource0_wc No to Pa resource5_wc
+One for each prefetchable memory BAR when the page attribute table
+provides write-combining, as on x86 Linux with PAT enabled.
+It has the same mode, length and mapping bounds as
+.Pa resourceN ,
+but maps the pages write-combining instead of uncached.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/subsystem
 A link to the bus,
 .Pa ../../../bus/pci .

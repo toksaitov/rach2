@@ -974,6 +974,13 @@ const char *pci_owner(uint8_t bus, uint8_t devfn)
 
 /* While set, the virtio display also has an I/O BAR 2 of 32 ports. */
 static int pci_io_bar;
+static int pci_no_prefetch, pci_no_wc;
+
+/** The model's PAT provides write-combining unless a row disables it. */
+pte_t arch_pte_wc(void)
+{
+    return pci_no_wc ? PTE_NOCACHE : PTE_WC;
+}
 
 /** The resources of the virtio display: a prefetchable BAR 0 of 8 MiB and
  * a 64-bit BAR 4 of 16 KiB, as pci.c gives them from the walk's sizes, and
@@ -998,6 +1005,9 @@ void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct p
         r->start = 0xC000u;
         r->end = 0xC01Fu;
         r->flags = 0x40101u;
+    }
+    if (pci_no_prefetch) {
+        r->flags &= ~PCI_IORESOURCE_PREFETCH;
     }
 }
 
@@ -1611,6 +1621,40 @@ static void image_paths(void)
     r.end = 0xaffc3000u;
     r.type = VM_DATA;
     check(maps_path(&space, &r) == interp_path, "one above it is the dynamic linker's");
+}
+
+/** Compare a region's VmFlags with `want`, including Linux's bit order. */
+static void smaps_flags_row(vm_type_t type, uint32_t prot, const char *want)
+{
+    struct procfs_text t;
+    vma_t r;
+
+    k_memset(&r, 0, sizeof(r));
+    r.type = type;
+    r.prot = prot;
+    procfs_text_init(&t);
+    ap_smaps_flags(&t, &r);
+    check(!t.nomem && t.buf && t.len == (int)__builtin_strlen(want) &&
+              __builtin_memcmp(t.buf, want, (size_t)t.len) == 0,
+          want);
+    kfree(t.buf);
+}
+
+/** Possible access respects the region's restrictions; device mappings
+ * cannot grow or enter a core, and each flag appears in Linux's order. */
+static void smaps_flags_rows(void)
+{
+    smaps_flags_row(VM_ANON, 0, "VmFlags: mr mw me\n");
+    smaps_flags_row(VM_STACK, VM_PROT_READ | VM_PROT_WRITE, "VmFlags: rd wr mr mw me gd\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, "VmFlags: rd sh mr me ms\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_IO | VM_PROT_DONTFORK,
+                    "VmFlags: rd wr sh mr mw me ms pf io dc de dd\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_SECRET | VM_PROT_LOCKED,
+                    "VmFlags: rd wr sh mr mw ms lo dd\n");
+    smaps_flags_row(VM_ANON,
+                    VM_PROT_READ | VM_PROT_LOCKED | VM_PROT_LOCKONFAULT | VM_PROT_WIPEONFORK |
+                        VM_PROT_SEALED,
+                    "VmFlags: rd mr mw me lo lf wf sl\n");
 }
 
 /* The descriptor the oom_score_adj rows read and write, on process 7. */
@@ -2343,6 +2387,52 @@ static void pci_bar_mem_rows(void)
     procfs_close(e);
 }
 
+/** Prefetchable BARs have write-combining aliases only while PAT supplies
+ * that type; the aliases keep the BAR's address, bounds and access rules. */
+static void pci_bar_wc_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    uintptr_t phys = 0;
+
+    check(sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC + 4) &&
+              !sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC + 1) &&
+              !sysfs_pci_attr_present(0x28, SYSFS_PCI_RESOURCE0_WC),
+          "prefetchable memory BARs alone have resourceN_wc files");
+    pci_no_prefetch = 1;
+    check(!sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0),
+          "a memory BAR without prefetch has only its uncached file");
+    pci_no_prefetch = 0;
+    pci_no_wc = 1;
+    check(!sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC) &&
+              bar_file_open(SYSFS_PCI_RESOURCE0_WC, 2) == -ENOENT &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0),
+          "without PAT write-combining, only the uncached file exists");
+    pci_no_wc = 0;
+    process.euid = 1000;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0_WC, 0) == -EACCES,
+          "an unprivileged caller cannot open the write-combining alias");
+    process.euid = 0;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0_WC, 2) == 0 && bar_file_map(1, 512) == 0 &&
+              mapped_cache == VM_PROT_WC && mapped_ops == &pcibar_vm_ops &&
+              mapped_ops->page(mapped_obj, 1, &phys) == 0 && phys == 0xFE001000u,
+          "resource0_wc maps BAR 0's pages write-combining");
+    check(bar_file_map(2047, 2) == -EINVAL && bar_file_map(2047, 1) == 0,
+          "the write-combining alias keeps the BAR's bounds");
+    procfs_close(e);
+    check(bar_file_open(SYSFS_PCI_RESOURCE0_WC + 4, 0) == 0 && bar_file_map(0, 4) == 0 &&
+              mapped_cache == VM_PROT_WC && mapped_ops->page(mapped_obj, 3, &phys) == 0 &&
+              phys == 0xFE803000u,
+          "resource4_wc names the 64-bit BAR 4");
+    procfs_close(e);
+    pci_io_bar = 1;
+    check(!sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC + 2) &&
+              bar_file_open(SYSFS_PCI_RESOURCE0_WC + 2, 0) == -ENOENT,
+          "an I/O BAR has no write-combining alias");
+    pci_io_bar = 0;
+}
+
 /** An I/O BAR's resourceN file: read and written a port at a time, 1, 2 or
  * 4 bytes, within the BAR, and not mapped, as on x86 Linux. */
 static void pci_bar_io_rows(void)
@@ -2919,6 +3009,7 @@ int main(int argc, char **argv)
     exe_chroot();
     exe_entries();
     image_paths();
+    smaps_flags_rows();
     reaped_during_read();
     system_rows();
     oom_values();
@@ -2932,6 +3023,7 @@ int main(int argc, char **argv)
     pci_config_rows();
     pci_bar_file_rows();
     pci_bar_mem_rows();
+    pci_bar_wc_rows();
     pci_bar_io_rows();
     pci_uevent_rows();
     sysfs_reg_rows();

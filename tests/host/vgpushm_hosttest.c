@@ -16,9 +16,9 @@
  * bytes it asked for. Rows check the handshake, the queues' place in the
  * ring area and their bounds, a round trip, segments merged into one
  * descriptor, a chain too long for the device, the heap filled to ENOMEM
- * and given back, resource backing from the heap, the doorbells' hooks, the
- * control node's report, a device that stops running, a refused setup and
- * the detach.
+ * and given back, backing in one run and in pieces, partial adoption, the
+ * doorbells' hooks, the control node's report, a device that stops running,
+ * a refused setup and the detach.
  */
 
 #define REGION_PAGES 16u
@@ -346,6 +346,116 @@ static void backing(void)
     check(vs->heap_used == 0 && frame_refs[page] == 0, "the backing given back");
 }
 
+/** Check the `n` pages adopted from the isolated gaps of the heap: distinct
+ * frames, each held once, zeroed and addressed at its region offset. */
+static void fragmented_frames(uint32_t n)
+{
+    uint8_t seen[REGION_PAGES] = {0};
+    uint64_t addr;
+    uint32_t i, page;
+    int ok = 1;
+
+    for (i = 0; i < n; i++) {
+        page = vshm_page_of(vs, sh_frames[i]);
+        if (page < heap_page(vs, 0) || page >= vs->npages) {
+            ok = 0;
+            continue;
+        }
+        ok = ok && !seen[page] && (page - heap_page(vs, 0)) % 2u == 0 && frame_refs[page] == 1 &&
+             heap_bit(vs, page - heap_page(vs, 0));
+        seen[page] = 1;
+        ok = ok && virtio_dma_addr(&vs->vdev, sh_frames[i], &addr) == 0 &&
+             addr == (uint64_t)page * VGS_PAGE && region[page][0] == 0;
+    }
+    check(ok, "fragmented backing: distinct zeroed heap frames, each held once at its offset");
+}
+
+/** Fill a backing from isolated free pages, refuse more than the heap has
+ * free, and give every page back without touching the command pages. */
+static void fragmented_backing(void)
+{
+    struct shmem sh;
+    uint8_t *heap;
+    uint64_t addr, refused = vs->refused;
+    uint32_t i, free_pages = (vs->heap_pages + 1u) / 2u;
+    int ok = 1;
+
+    heap = virtio_dma_alloc(&vs->vdev, vs->heap_pages * VGS_PAGE, &addr);
+    check(heap != NULL, "fragmented backing: reserve the whole heap");
+    if (!heap) {
+        return;
+    }
+    k_memset(heap, 0xa5, vs->heap_pages * VGS_PAGE);
+    for (i = 0; i < vs->heap_pages; i += 2) {
+        virtio_dma_free(&vs->vdev, heap + i * VGS_PAGE, VGS_PAGE);
+    }
+    k_memset(&sh, 0, sizeof(sh));
+    sh.size = (free_pages + 1u) * VGS_PAGE;
+    check(virtio_backing_fill(&vs->vdev, &sh, sh.size) == -ENOMEM && vs->refused == refused + 1u &&
+              vs->heap_used == vs->heap_pages - free_pages,
+          "fragmented backing: a request above the free pages takes nothing and counts once");
+    for (i = 0; i < SH_PAGES; i++) {
+        ok = ok && sh_frames[i] == 0;
+    }
+    for (i = 0; i < vs->heap_pages; i++) {
+        ok = ok && heap_bit(vs, i) == (i % 2u != 0) && frame_refs[heap_page(vs, i)] == 0;
+    }
+    check(ok, "fragmented backing: refusal keeps every heap bit and reference");
+    sh.size = free_pages * VGS_PAGE;
+    check(virtio_backing_fill(&vs->vdev, &sh, sh.size) == 0 && vs->heap_used == vs->heap_pages &&
+              vs->refused == refused + 1u,
+          "fragmented backing: every isolated free page taken, with no refusal");
+    fragmented_frames(free_pages);
+    virtio_backing_release(&vs->vdev, &sh);
+    shmem_free(&sh);
+    for (i = 0, ok = 1; i < vs->heap_pages; i++) {
+        ok = ok && heap_bit(vs, i) == (i % 2u != 0) && frame_refs[heap_page(vs, i)] == 0;
+        if (i % 2u) {
+            ok = ok && heap[i * VGS_PAGE] == 0xa5;
+        }
+    }
+    check(ok && vs->heap_used == vs->heap_pages - free_pages,
+          "fragmented backing: release restores the gaps and keeps the commands");
+    virtio_dma_free(&vs->vdev, heap, vs->heap_pages * VGS_PAGE);
+    check(vs->heap_used == 0, "fragmented backing: the whole heap free again");
+}
+
+/** Refuse adoption part way through the third piece: the model holds only
+ * eight pages, so its ninth fails after two pages of that piece. */
+static void partial_backing(void)
+{
+    struct shmem sh;
+    uint8_t *heap;
+    uint64_t addr, refused = vs->refused;
+    uint32_t i;
+    int ok = 1;
+
+    heap = virtio_dma_alloc(&vs->vdev, vs->heap_pages * VGS_PAGE, &addr);
+    check(heap != NULL, "partial backing: reserve the whole heap");
+    if (!heap) {
+        return;
+    }
+    for (i = 0; i < 11; i++) {
+        if (i % 4u != 3) {
+            virtio_dma_free(&vs->vdev, heap + i * VGS_PAGE, VGS_PAGE);
+        }
+    }
+    k_memset(&sh, 0, sizeof(sh));
+    sh.size = 9 * VGS_PAGE;
+    check(virtio_backing_fill(&vs->vdev, &sh, sh.size) == -ENOMEM && vs->refused == refused + 1u &&
+              vs->heap_used == vs->heap_pages - 9u,
+          "partial backing: failed adoption gives every piece back and counts once");
+    for (i = 0; i < SH_PAGES; i++) {
+        ok = ok && sh_frames[i] == 0;
+    }
+    for (i = 0; i < vs->heap_pages; i++) {
+        ok = ok && heap_bit(vs, i) == (i >= 11 || i % 4u == 3) && frame_refs[heap_page(vs, i)] == 0;
+    }
+    check(ok, "partial backing: no adopted frame or reference left, only the commands held");
+    virtio_dma_free(&vs->vdev, heap, vs->heap_pages * VGS_PAGE);
+    check(vs->heap_used == 0, "partial backing: the whole heap free again");
+}
+
 /** A doorbell rung: counted, noted for the thread and taken once; its
  * eventfd closed: the transport polls. And what VGS_IOC_INFO reports. */
 static void bells_and_info(void)
@@ -430,12 +540,15 @@ int main(void)
     full_region();
     backing();
     bells_and_info();
+    fragmented_backing();
+    partial_backing();
     device_lost();
     refused_setup();
     detach();
     if (!failures) {
         printf("vgpushm-hosttest: result: pass: layout, handshake, ring area, round trip, "
-               "merged and refused chains, a full region, backing, doorbells, info, a lost device, "
+               "merged and refused chains, a full region, backing in one run and in pieces, "
+               "partial adoption, doorbells, info, a lost device, "
                "a refused "
                "setup and the detach\n");
     }

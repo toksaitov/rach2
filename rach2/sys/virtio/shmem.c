@@ -74,11 +74,12 @@ struct vshm_rev {
 
 /*
  * The transport's record of one attached region. `refs` counts the attach
- * and each bind of virtio-gpu until that bind's virtio_put; the record is
- * freed with the last, and what the region holds is given back at the
- * detach, after which every operation is a no-op on a record left only for
- * a driver still letting go. `me` is the driver's block as last stored and
- * `dev` the device's as last read; both are this file's own copies.
+ * and each bind of virtio-gpu until that bind's virtio_put, and each map
+ * of the VM's pages until its map_free. The record is freed with the last;
+ * the detach gives back the region's pages and window, and the driver's
+ * and maps' remaining references keep the record until they let go.
+ * `me` is the driver's block as last stored and `dev` the device's as last
+ * read; both are this file's own copies.
  */
 struct vshm {
     struct virtio_dev vdev; /* first, so that the device is the record */
@@ -910,7 +911,8 @@ static void vs_map_free(struct virtio_map *vm)
 
 static void vshm_free(struct vshm *vs);
 
-/** A driver's bind has let go: the record goes with its last reference. */
+/** A driver's bind or a map has let go: free the record at its last
+ * reference. */
 static void vs_put(struct virtio_dev *d)
 {
     struct vshm *vs = to_vs(d);

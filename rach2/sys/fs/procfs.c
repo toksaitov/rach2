@@ -1423,8 +1423,9 @@ static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
 
 /** Append the VmFlags line of smaps for the region `r`, the names Linux's
  * show_smap_vma_flags gives the flags this kernel keeps, in the order of
- * Linux's VM_ bits: gd 0x100, pf 0x400, lo 0x2000, io 0x4000, dc 0x20000,
- * lf 0x80000, wf 0x2000000, dd 0x4000000, then sl. */
+ * Linux's VM_ bits: access and possible access, then gd 0x100, pf 0x400,
+ * lo 0x2000, io 0x4000, dc 0x20000, de 0x40000, lf 0x80000,
+ * wf 0x2000000, dd 0x4000000, then sl. */
 static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
 {
     ap_str(t, "VmFlags:");
@@ -1432,14 +1433,19 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
     ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
     ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
     ap_str(t, r->type == VM_SHARED ? " sh" : "");
+    ap_str(t, " mr");
+    ap_str(t, (r->prot & VM_PROT_NOWRITE) ? "" : " mw");
+    ap_str(t, (r->prot & VM_PROT_SECRET) ? "" : " me");
+    ap_str(t, r->type == VM_SHARED ? " ms" : "");
     ap_str(t, r->type == VM_STACK ? " gd" : "");
     ap_str(t, (r->prot & VM_PROT_IO) ? " pf" : "");
     ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
     ap_str(t, (r->prot & VM_PROT_IO) ? " io" : "");
     ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
+    ap_str(t, (r->prot & VM_PROT_IO) ? " de" : "");
     ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
     ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
-    ap_str(t, (r->prot & VM_PROT_SECRET) ? " dd" : "");
+    ap_str(t, (r->prot & (VM_PROT_SECRET | VM_PROT_IO)) ? " dd" : "");
     ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
     ap_ch(t, '\n');
 }
@@ -5340,11 +5346,25 @@ uint64_t sysfs_pci_bar_size(int key, int bar)
 
 int sysfs_pci_attr_present(int key, int attr)
 {
+    struct pci_resource r;
+    int bar;
+
     if (attr == SYSFS_PCI_BOOT_VGA) {
         return sysfs_pci_is_vga(key);
     }
-    if (attr >= SYSFS_PCI_RESOURCE0 && attr < SYSFS_PCI_RESOURCE0 + SYSFS_PCI_BARS) {
-        return sysfs_pci_bar_size(key, attr - SYSFS_PCI_RESOURCE0) != 0;
+    if (attr >= SYSFS_PCI_RESOURCE0 && attr < SYSFS_PCI_ATTRS) {
+        bar = (attr - SYSFS_PCI_RESOURCE0) % SYSFS_PCI_BARS;
+        if (sysfs_pci_bar_size(key, bar) == 0) {
+            return 0;
+        }
+        if (attr >= SYSFS_PCI_RESOURCE0_WC) {
+            pci_resource((uint8_t)(key >> 8), (uint8_t)((key >> 3) & 31), (uint8_t)(key & 7), bar,
+                         &r);
+            return arch_pte_wc() != PTE_NOCACHE &&
+                   (r.flags & (PCI_IORESOURCE_MEM | PCI_IORESOURCE_PREFETCH)) ==
+                       (PCI_IORESOURCE_MEM | PCI_IORESOURCE_PREFETCH);
+        }
+        return 1;
     }
     return 1;
 }
@@ -6745,7 +6765,7 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
     return fd;
 }
 
-/* The resourceN files of a PCI function, Linux's pci-sysfs resource files:
+/* The resourceN and resourceN_wc files of a PCI function, as in pci-sysfs:
  * the descriptor's `procfs_file` has the function's key in `origin_pid` and
  * the file's `procfile` in the low byte of `origin_task`. */
 
@@ -6754,11 +6774,13 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
 static int pcibar_of(fd_entry_t *e, struct pci_resource *r, int *key)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
-    int bar = (int)(f->origin_task & 0xFFu) - SYSFS_PCI_RESOURCE0;
+    int attr = (int)(f->origin_task & 0xFFu);
+    int bar = (attr - SYSFS_PCI_RESOURCE0) % SYSFS_PCI_BARS;
 
     *key = f->origin_pid;
     r->flags = 0;
-    if (sysfs_pci_bar_size(*key, bar) == 0) {
+    if (attr < SYSFS_PCI_RESOURCE0 || attr >= SYSFS_PCI_ATTRS ||
+        !sysfs_pci_attr_present(*key, attr)) {
         return -1;
     }
     pci_resource((uint8_t)(*key >> 8), (uint8_t)((*key >> 3) & 31), (uint8_t)(*key & 7), bar, r);
@@ -6873,14 +6895,16 @@ static void pcibar_put(void *obj)
 static const struct vm_device_ops pcibar_vm_ops = {pcibar_page, pcibar_put, NULL};
 
 /**
- * mmap of a resourceN file, as Linux's pci_mmap_resource_uc: a shared
- * mapping, uncached, of the memory BAR's pages from the page offset, mapped
- * as they are touched. -ENODEV for an I/O BAR, which x86 does not map, or a
+ * mmap of a resourceN or resourceN_wc file, as Linux's pci_mmap_resource:
+ * a shared mapping of the memory BAR's pages from the page offset,
+ * uncached for resourceN and write-combining for resourceN_wc, mapped as
+ * they are touched. -ENODEV for an I/O BAR, which x86 does not map, or a
  * function that is gone; -EINVAL for a range past the BAR's end, as
  * pci_mmap_fits refuses it, or a private mapping; -ENOMEM.
  */
 static int32_t procfs_pcibar_mmap(fd_entry_t *e, struct vma *vma)
 {
+    struct procfs_file *f = (struct procfs_file *)e->priv;
     uint64_t pages = (vma->end - vma->start) / PAGE_SIZE, size;
     struct pci_resource r;
     int key, bar = pcibar_of(e, &r, &key);
@@ -6892,15 +6916,16 @@ static int32_t procfs_pcibar_mmap(fd_entry_t *e, struct vma *vma)
     if (vma->pgoff >= size || size - vma->pgoff < pages) {
         return -EINVAL;
     }
-    return vm_device_map(vma, &pcibar_vm_ops,
-                         (void *)(uintptr_t)((uintptr_t)key << 3 | (uintptr_t)bar), VM_PROT_UC);
+    return vm_device_map(
+        vma, &pcibar_vm_ops, (void *)(uintptr_t)((uintptr_t)key << 3 | (uintptr_t)bar),
+        (f->origin_task & 0xFFu) >= SYSFS_PCI_RESOURCE0_WC ? VM_PROT_WC : VM_PROT_UC);
 }
 
 static const struct file_ops procfs_pcibar_ops = {
     procfs_pcibar_read, procfs_pcibar_write, procfs_poll, procfs_ioctl,
     procfs_close,       procfs_pcibar_mmap,  NULL};
 
-/** Open a resourceN file, of mode 0600 as Linux's: root's alone, for any
+/** Open a resourceN or resourceN_wc file, mode 0600: root's alone, for any
  * access. -EACCES for another caller, -ENOENT for a BAR without a length or
  * a function that is not there, -ENOMEM, or the descriptor's error. */
 static int procfs_open_pcibar(const struct vpath *vp, int flags)

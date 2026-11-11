@@ -1883,6 +1883,14 @@ and a VmFlags line of
 .Ql wr ,
 .Ql ex ,
 .Ql sh ,
+.Ql mr ,
+.Ql mw
+unless the region may not be made writable,
+.Ql me
+unless the region maps
+.Xr memfd_secret 2 ,
+.Ql ms
+for a shared region,
 .Ql gd ,
 .Ql pf
 for a mapping of a device object,
@@ -1895,6 +1903,8 @@ for a range
 .Xr madvise 2 Ns 's
 .Dv MADV_DONTFORK
 marked,
+.Ql de
+for a mapping of a device object, which cannot grow,
 .Ql lf
 for a region locked on fault
 .Pq see Xr mlock 2 ,
@@ -1903,7 +1913,7 @@ for a range
 .Dv MADV_WIPEONFORK
 marked,
 .Ql dd
-for a mapping of
+for a mapping of a device object or
 .Xr memfd_secret 2 ,
 which a core file leaves out, and
 .Ql sl
