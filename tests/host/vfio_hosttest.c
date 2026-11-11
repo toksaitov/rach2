@@ -565,6 +565,11 @@ uint64_t iommu_iova_to_phys(const struct iommu_domain *d, uint64_t iova)
     return ~0ull;
 }
 
+unsigned long iommu_dma_faults(void)
+{
+    return 0;
+}
+
 int iommu_attach(struct iommu_domain *d, uint8_t bus, uint8_t devfn)
 {
     (void)d;
