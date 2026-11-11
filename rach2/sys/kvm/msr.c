@@ -29,9 +29,8 @@
 #define MSR_IA32_MCG_CTL       0x17Bu
 #define MSR_IA32_MISC_ENABLE   0x1A0u
 #define MSR_IA32_DEBUGCTL      0x1D9u
-#define DEBUGCTL_LBR           0x1ull
-#define DEBUGCTL_BTF           0x2ull
-#define DEBUGCTL_PINS          0x3Cull /* bits 5:2, which Linux's SVM drops */
+#define MSR_LASTBRANCH_FROM    0x1DBu /* then LASTBRANCHTOIP, LASTINTFROMIP, LASTINTTOIP */
+#define N_LASTBRANCH           4u
 #define MSR_MTRR_PHYS_BASE0    0x200u
 #define MSR_MTRR_FIX_64K       0x250u
 #define MSR_MTRR_FIX_16K_80000 0x258u
@@ -183,8 +182,13 @@ const uint32_t *kvm_msr_list(int feature, uint32_t *n)
         list[i] = index_list[i];
     }
     /* Linux saves DEBUGCTL among msrs_to_save_base (arch/x86/kvm/x86.c:323)
-     * wherever the host reads it, as every host with VMX or SVM does. */
+     * wherever the host reads it, as every host with VMX or SVM does, and
+     * the four last-branch MSRs beside it (x86.c:324-325) wherever AMD's
+     * host has them. */
     list[(*n)++] = MSR_IA32_DEBUGCTL;
+    for (i = 0; kvm_backend == &kvm_svm && i < N_LASTBRANCH; i++) {
+        list[(*n)++] = MSR_LASTBRANCH_FROM + i;
+    }
     *n += kvm_pmu_msr_list(list + *n);
     return list;
 }
@@ -448,6 +452,11 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
     default:
         break;
     }
+    if (index - MSR_LASTBRANCH_FROM < N_LASTBRANCH && kvm_backend == &kvm_svm) {
+        /* Linux's svm_get_msr without lbrv (svm/svm.c:2969-2980). */
+        *value = 0;
+        return 0;
+    }
     r = mce_bank_msr(v, index, &bank, &reg);
     if (r != 0) {
         if (r < 0) {
@@ -641,12 +650,10 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
          * neither the MSRs to save nor the emulated ones. */
         return (host || guest_xsaves(v)) && value == 0 ? 0 : KVM_MSR_INVAL;
     case MSR_IA32_DEBUGCTL:
-        /* SVM's, reached by the caller and the guest alike, with the checks
-         * of Linux's svm_set_msr (arch/x86/kvm/svm/svm.c:3223-3258): bits
-         * 5:2 and BTF dropped, any bit but LBR refused. LBR is dropped too,
-         * since SVM here does not virtualize the LBR stack, and DEBUGCTL
-         * reads 0, as svm_get_msr without lbrv (svm.c:2966-2968). */
-        return (value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF | DEBUGCTL_PINS)) ? KVM_MSR_INVAL : 0;
+        /* SVM's, which does not virtualize the LBR stack: any write, the
+         * caller's or the guest's, is taken and ignored, as Linux's
+         * svm_set_msr without lbrv (arch/x86/kvm/svm/svm.c:3223-3227). */
+        return 0;
     case MSR_IA32_UCODE_REV:
         v->ucode_rev = value;
         break;
@@ -671,6 +678,12 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
         v->hwcr = value;
         break;
     default:
+        if (index - MSR_LASTBRANCH_FROM < N_LASTBRANCH && kvm_backend == &kvm_svm) {
+            /* svm_set_msr without lbrv has no such MSR, and Linux takes
+             * only the caller's 0 of a listed one (svm/svm.c:3259-3290,
+             * x86.c:508-518). */
+            return host && value == 0 ? 0 : KVM_MSR_INVAL;
+        }
         if (!table_msr(index)) {
             return KVM_MSR_UNKNOWN;
         }

@@ -952,8 +952,9 @@ IA32_DEBUGCTL also keeps BUS_LOCK_DETECT and RTM_DEBUG where the host
 has them and the guest's CPUID offers them, and
 .Dv KVM_GET_MSR_INDEX_LIST
 lists it on both vendors.
-On AMD, IA32_DEBUGCTL reads 0, and a write of a bit but LBR, BTF and
-bits 5:2, which are dropped, is refused.
+On AMD, IA32_DEBUGCTL reads 0 and takes and ignores any write, and
+LASTBRANCHFROMIP, LASTBRANCHTOIP, LASTINTFROMIP and LASTINTTOIP are
+listed too, read 0 and take only the caller's write of 0.
 PEBS is not advertised.
 .Pp
 .Dv KVM_CAP_PMU_EVENT_FILTER
