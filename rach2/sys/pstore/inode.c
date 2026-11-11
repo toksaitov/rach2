@@ -257,7 +257,7 @@ static int ps_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
 }
 
 /** The `unlink` of pstore: take the file off the list and erase its
- * record, as pstore_unlink (inode.c:200) with ramoops_pstore_erase. */
+ * record, as pstore_unlink (inode.c:182) with ramoops_pstore_erase. */
 static int ps_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct pstore_file **link, *f;
